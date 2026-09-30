@@ -32,6 +32,9 @@ const (
 	LabelJob       = "alice/job/v1"
 	LabelAuditHMAC = "alice/audit-hmac/v1"
 	LabelCSRF      = "alice/csrf/v1"
+	// LabelHWMEnc encrypts the time high-water mark record; its integrity comes from a MAC
+	// under LabelHWM (spec §16.5, R36).
+	LabelHWMEnc = "alice/hwm-enc/v1"
 )
 
 const keyCheckPlaintext = "alice-master-key-check-v1"
@@ -149,6 +152,32 @@ func (k *Keyring) Derive(label string) []byte {
 		panic("secrets: hkdf failed: " + err.Error()) // impossible for a 32-byte output
 	}
 	return out
+}
+
+// SealWith encrypts plaintext with AES-256-GCM under the sub-key HKDF(master, label) and
+// returns nonce || ciphertext. aad binds the value to its purpose.
+func (k *Keyring) SealWith(label string, aad, plaintext []byte) ([]byte, error) {
+	key := k.Derive(label)
+	defer clear(key)
+	ct, nonce, err := seal(key, plaintext, aad)
+	if err != nil {
+		return nil, err
+	}
+	return append(nonce, ct...), nil
+}
+
+// OpenWith reverses SealWith. Any mismatch (label, aad, master key, tampering) returns ErrDecrypt.
+func (k *Keyring) OpenWith(label string, aad, sealed []byte) ([]byte, error) {
+	if len(sealed) <= nonceSize {
+		return nil, ErrDecrypt
+	}
+	key := k.Derive(label)
+	defer clear(key)
+	pt, err := open(key, sealed[:nonceSize], sealed[nonceSize:], aad)
+	if err != nil {
+		return nil, ErrDecrypt
+	}
+	return pt, nil
 }
 
 func (k *Keyring) keyCheckAAD() []byte {
