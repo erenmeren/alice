@@ -120,3 +120,32 @@ func TestAdminResetMFACLI(t *testing.T) {
 	assert.Equal(t, 1, code)
 	assert.Contains(t, errOut, `no user named "nobody"`)
 }
+
+func TestAdminUnlockCLI(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	getenv := cliEnv(t, d)
+
+	id := insertUser(t, d, "bob", "admin")
+	_, err := d.Owner.Exec(ctx, `UPDATE users SET failed_logins = 10, locked_until = now() + interval '15 minutes' WHERE id = $1`, id)
+	require.NoError(t, err)
+
+	code, out, errOut := runCLI(t, getenv, "admin", "unlock", "BOB")
+	require.Equal(t, 0, code, errOut)
+	assert.Contains(t, out, "was unlocked")
+
+	var failed int
+	var locked bool
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT failed_logins, locked_until IS NOT NULL FROM users WHERE id = $1`, id).Scan(&failed, &locked))
+	assert.Equal(t, 0, failed)
+	assert.False(t, locked)
+	var audited int
+	require.NoError(t, d.Owner.QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE action = 'user.unlocked' AND actor_type = 'system' AND actor_name = 'cli' AND object_id = $1`,
+		id.String()).Scan(&audited))
+	assert.Equal(t, 1, audited)
+
+	code, _, errOut = runCLI(t, getenv, "admin", "unlock", "nobody")
+	assert.Equal(t, 1, code)
+	assert.Contains(t, errOut, `no user named "nobody"`)
+}

@@ -64,9 +64,9 @@ person or their scripts should lose access.
 Every local account must use an authenticator app. Each code works once. If a person loses their phone they sign
 in with one of their recovery codes (each works once) and then create new recovery codes on **My account**
 (**Create new recovery codes**; the old codes stop working).
-If they have no recovery codes left, an administrator resets their MFA on **Users**; if the only administrator is
-locked out, the server operator runs `alice admin reset-mfa <username>` (see
-[operator-guide.md](operator-guide.md)).
+If they have no recovery codes left, an administrator resets their MFA on **Users**; if the only administrator has
+lost both the authenticator and the recovery codes, the server operator runs `alice admin reset-mfa <username>`
+(see [operator-guide.md](operator-guide.md)). Resetting MFA does not end a sign-in block; see below.
 
 ## Sign-in protection
 
@@ -74,7 +74,11 @@ After 5 wrong attempts (password or code) in a row, Alice makes the account wait
 attempt (1, 2, 4, 8 and 16 seconds). After 10, the account is blocked for 15 minutes. During the wait the
 message stays "Incorrect username or password." even for the right password, so an attacker learns nothing.
 The count starts again only after a complete sign-in (password and code); a correct password on its own does not
-reset it. **Set a new password** clears the block at once.
+reset it. Because the count is still 10 or more when a block ends, one more wrong attempt starts a new 15-minute
+block. **Set a new password** on **Users** clears the block at once. If the blocked account is the only
+administrator (so nobody can open **Users**), the server operator runs `alice admin unlock <username>` (see
+[operator-guide.md](operator-guide.md)): it sets the count back to zero and ends the block, and is recorded in the
+audit log (`user.unlocked`, actor `cli`).
 Every sign-in, failure and block is in the audit log (`auth.lockout`). Email notification of blocks arrives in a
 later release.
 

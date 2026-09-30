@@ -298,6 +298,33 @@ func (s *Service) ResetMFAByUsername(ctx context.Context, username string) error
 	return s.adminChange(ctx, audit.SystemActor("cli"), id, "user.mfa_reset", map[string]string{"via": "cli"}, func(tx pgx.Tx) error { return resetMFA(ctx, tx, id) })
 }
 
+// UnlockByUsername is the host-root CLI path out of a login delay or lockout: it
+// clears the failure count and the block so the next sign-in is checked normally.
+// It changes nothing else; the counting rules of SEC-020 stay as they are.
+func (s *Service) UnlockByUsername(ctx context.Context, username string) error {
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, "SELECT id FROM users WHERE username = $1", username).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read user: %w", err)
+	}
+	details := map[string]string{"via": "cli"}
+	return s.adminChange(ctx, audit.SystemActor("cli"), id, "user.unlocked", details, func(tx pgx.Tx) error {
+		var failed int
+		if err := tx.QueryRow(ctx, "SELECT failed_logins FROM users WHERE id = $1", id).Scan(&failed); err != nil {
+			return fmt.Errorf("unlock user: %w", err)
+		}
+		if _, err := tx.Exec(ctx, "UPDATE users SET failed_logins = 0, locked_until = NULL, updated_at = $2 WHERE id = $1",
+			id, s.clock.Now().UTC()); err != nil {
+			return fmt.Errorf("unlock user: %w", err)
+		}
+		details["failed_logins"] = strconv.Itoa(failed)
+		return nil
+	})
+}
+
 // ResetPassword sets a new password chosen by an administrator, clears the lockout and ends sessions.
 func (s *Service) ResetPassword(ctx context.Context, p Principal, m Meta, id uuid.UUID, password string) error {
 	if err := CheckPasswordPolicy(password); err != nil {

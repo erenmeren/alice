@@ -87,6 +87,11 @@ e2e-up: ## Build and start the e2e variant (adds test-only /test endpoints; neve
 setup-token: ## Print a new one-time setup code for the /setup wizard (only before the first administrator exists)
 	$(COMPOSE) exec -T alice /usr/local/bin/alice setup-token --reset
 
+.PHONY: unlock
+unlock: ## End a sign-in delay or lockout: make unlock ACCOUNT=<username> (audited as cli)
+	@test -n "$(ACCOUNT)" || { echo "usage: make unlock ACCOUNT=<username>"; exit 2; }
+	$(COMPOSE) exec -T alice /usr/local/bin/alice admin unlock "$(ACCOUNT)"
+
 .PHONY: e2e
 e2e: ## Run Playwright tests against the e2e stack (make e2e-up first)
 	cd web && npx playwright install chromium && set -a && { [ ! -f ../deploy/.env ] || . ../deploy/.env; } && set +a && npx playwright test

@@ -14,7 +14,8 @@
 - Tamper-evident audit log with viewer, CSV/JSON export and integrity verification (`alice audit verify`).
 - Envelope encryption (AES-256-GCM, per-secret key) with a master key file; the application database role cannot
   change or delete audit entries.
-- CLI: `alice setup-token --reset`, `alice audit verify`, `alice admin reset-mfa <username>`.
+- CLI: `alice setup-token --reset`, `alice audit verify`, `alice admin reset-mfa <username>`,
+  `alice admin unlock <username>` (ends a sign-in block; `make unlock ACCOUNT=<username>`).
 - Guides: `docs/first-run.md`, `docs/admin-guide.md`, `docs/operator-guide.md`.
 
 ### Changed

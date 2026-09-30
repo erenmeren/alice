@@ -69,9 +69,12 @@ func runAudit(args []string, cfg config.Config, stdout, stderr io.Writer) int {
 }
 
 func runAdmin(args []string, cfg config.Config, stdout, stderr io.Writer) int {
-	if len(args) != 2 || args[0] != "reset-mfa" || args[1] == "" {
-		fmt.Fprintln(stderr, "usage: alice admin reset-mfa <username>")
+	if len(args) != 2 || args[1] == "" || (args[0] != "reset-mfa" && args[0] != "unlock") {
+		fmt.Fprintln(stderr, "usage: alice admin reset-mfa <username>\n       alice admin unlock <username>")
 		return 2
+	}
+	if args[0] == "unlock" {
+		return runAdminUnlock(args[1], cfg, stdout, stderr)
 	}
 	username := args[1]
 	return withServices(cfg, stderr, func(ctx context.Context, svc *services) int {
@@ -85,6 +88,24 @@ func runAdmin(args []string, cfg config.Config, stdout, stderr io.Writer) int {
 			return 1
 		}
 		fmt.Fprintf(stdout, "The authenticator app of %q was removed. They set up a new one at their next sign-in.\n", username)
+		return 0
+	})
+}
+
+// runAdminUnlock ends a sign-in delay or lockout (host-root break-glass for a
+// blocked administrator); it is audited as done by "cli".
+func runAdminUnlock(username string, cfg config.Config, stdout, stderr io.Writer) int {
+	return withServices(cfg, stderr, func(ctx context.Context, svc *services) int {
+		err := svc.auth.UnlockByUsername(ctx, username)
+		if errors.Is(err, auth.ErrNotFound) {
+			fmt.Fprintf(stderr, "There is no user named %q.\n", username)
+			return 1
+		}
+		if err != nil {
+			fmt.Fprintln(stderr, "could not unlock the account:", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "The account %q was unlocked. The failed sign-in count is back to zero.\n", username)
 		return 0
 	})
 }

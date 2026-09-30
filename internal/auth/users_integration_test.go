@@ -206,6 +206,32 @@ WHERE action = 'user.mfa_reset'`).Scan(&actorType, &actorName, &via))
 	assert.Equal(t, auth.StatusMFAEnrollmentRequired, lr.Status)
 }
 
+func TestUnlockByUsernameClearsTheLockoutAndIsAuditedAsCLI(t *testing.T) {
+	e := newEnv(t)
+	e.adminPrincipal(t)
+	e.setFailures(t, "admin", auth.LockThreshold-1)
+	_, err := e.svc.Login(e.ctx, "admin", "definitely not it", meta)
+	require.ErrorIs(t, err, auth.ErrInvalidCredentials)
+	require.Equal(t, auth.LockThreshold, e.failedLogins(t, "admin"))
+	_, err = e.svc.Login(e.ctx, "admin", adminPassword, meta)
+	require.ErrorIs(t, err, auth.ErrInvalidCredentials, "locked out before the unlock")
+
+	require.NoError(t, e.svc.UnlockByUsername(e.ctx, "ADMIN"))
+	require.ErrorIs(t, e.svc.UnlockByUsername(e.ctx, "nobody"), auth.ErrNotFound)
+
+	assert.Equal(t, 0, e.failedLogins(t, "admin"))
+	var lockedUntil *time.Time
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT locked_until FROM users WHERE username = 'admin'").Scan(&lockedUntil))
+	assert.Nil(t, lockedUntil)
+	var actorType, actorName, via, failed string
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT actor_type, actor_name, details->>'via', details->>'failed_logins' FROM audit_log
+WHERE action = 'user.unlocked'`).Scan(&actorType, &actorName, &via, &failed))
+	assert.Equal(t, []string{"system", "cli", "cli", "10"}, []string{actorType, actorName, via, failed})
+
+	_, err = e.svc.Login(e.ctx, "admin", adminPassword, meta)
+	require.NoError(t, err, "the right password works at once after the unlock")
+}
+
 func TestAdminSetPasswordsAreNormalized(t *testing.T) {
 	e := newEnv(t)
 	admin, _ := e.adminPrincipal(t)

@@ -38,6 +38,7 @@ Commands:
   setup-token --reset         Print a new one-time setup code (only before the first administrator exists)
   audit verify                Check the audit log hash chain (exit code 1 if it is broken)
   admin reset-mfa <username>  Remove a user's authenticator app; they set up a new one at next sign-in
+  admin unlock <username>     End a user's sign-in delay or lockout and reset the failed sign-in count
   version                     Print version information
   help                        Show this help
 `

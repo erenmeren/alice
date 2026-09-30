@@ -25,7 +25,7 @@ All commands run from the repository root. Integration tests (`-tags integration
 | 10 | Password policy X-06, Argon2id parameters, bounded Argon2 work (R-07) | `go test ./internal/auth -run 'TestPassword\|TestProductionParametersMatchSpec\|TestHashAndVerify\|TestVerify\|TestDummyVerify' -count=1` | ok |
 | 11 | TLS 1.2 minimum and curves (A-10, server side) | `go test ./internal/platform/tlscert -run TestServerConfig -count=1` | ok |
 | 12 | Release build has no `/test/*` endpoint or demo clock | `go test ./cmd/alice -run TestRelease -count=1` | ok |
-| 13 | Operator CLI (setup-token, audit verify, reset-mfa) | `go test -tags integration ./cmd/alice -run 'TestSetupTokenResetCLI\|TestAuditVerifyCLI\|TestAdminResetMFACLI' -count=1` | ok |
+| 13 | Operator CLI (setup-token, audit verify, reset-mfa, unlock) | `go test -tags integration ./cmd/alice -run 'TestSetupTokenResetCLI\|TestAuditVerifyCLI\|TestAdminResetMFACLI\|TestAdminUnlockCLI' -count=1` | ok |
 | 14 | Static analysis and dependencies | `make lint vuln secrets-scan fs-scan` | no findings |
 | 15 | E2E owner journey EN/TR incl. axe at 1280/1920 px, keyboard-only sign-in, CSP violations | `make e2e-up && make e2e` | all passed |
 | 16 | Container hardening incl. `ulimits: core: 0` | `make hardening-check` (running stack) | ok |
@@ -104,6 +104,10 @@ Product and operations:
 - API tokens have one scope (`read` or `operate`); in Phase 1 no route accepts `operate` beyond what `read`
   allows, because operate actions arrive with targets in Phase 3.
 - In-memory IP, API and setup-code rate limits reset on restart (R20); the per-account lockout survives restarts.
+- A block ends after 15 minutes, but the failed sign-in count stays at 10 or more until a complete sign-in, so one
+  more wrong attempt starts a new block. Someone who knows a username can keep that account blocked, within the
+  R33 caps (R35 addendum). Mitigation: an administrator's **Set a new password**, or for the only administrator
+  the host-root, audited `alice admin unlock <username>`.
 - PostgreSQL still runs with a writable root filesystem and default capabilities, and database passwords live in
   environment variables; container hardening of PostgreSQL and secret files arrive with packaging in Phase 8.
 - Development stacks created in Phase 0 must be recreated once with `make reset` (the `alice_app` role is created

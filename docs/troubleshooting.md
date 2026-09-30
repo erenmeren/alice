@@ -5,8 +5,11 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 ## Cannot sign in
 
 - **"Incorrect username or password." although the password is right.** After 5 wrong attempts Alice makes the
-  account wait a few seconds; after 10 it blocks the account for 15 minutes. Wait and try again. An administrator
-  can see `auth.lockout` in the audit log, and **Set a new password** on **Users** lifts the block at once.
+  account wait a few seconds; after 10 it blocks the account for 15 minutes. Wait and try again with care: until a
+  complete sign-in, one more wrong attempt starts a new 15-minute block. An administrator can see `auth.lockout`
+  in the audit log, and **Set a new password** on **Users** lifts the block at once. If you are the only
+  administrator, the server operator runs `alice admin unlock <username>` ([operator-guide.md](operator-guide.md));
+  `alice admin reset-mfa` does not end a block.
 - **Lost the phone with the authenticator app.** Choose **Use a recovery code** on the sign-in page. Without
   recovery codes, ask an administrator to reset your MFA (**Users**). If you are the only administrator, the
   server operator runs `alice admin reset-mfa <username>` ([operator-guide.md](operator-guide.md)).
