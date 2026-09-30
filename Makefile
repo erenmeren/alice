@@ -41,6 +41,7 @@ web-lint: ## Lint the web UI
 .PHONY: build
 build: web ## Build the alice binary with the embedded UI into bin/
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/alice ./cmd/alice
+	@! go version -m bin/alice | grep -q stretchr/testify || { echo "testify is linked into bin/alice"; exit 1; }
 
 COMPOSE := docker compose -f deploy/docker-compose.yml --env-file deploy/.env
 
@@ -68,3 +69,37 @@ hardening-check: ## Verify container hardening of the running stack
 .PHONY: e2e
 e2e: ## Run Playwright tests against the running stack (make up first)
 	cd web && npx playwright install chromium && npx playwright test
+
+GOLANGCI_LINT_VERSION ?= v2.14.0
+GOVULNCHECK_VERSION   ?= v1.8.0
+GITLEAKS_VERSION      ?= 8.30.1
+TRIVY_VERSION         ?= 0.74.0
+
+.PHONY: tools
+tools: ## Install pinned Go developer tools into $(HOME)/go/bin
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+
+.PHONY: lint
+lint: ## Run golangci-lint (gosec, forbidigo, ...)
+	golangci-lint run ./...
+
+.PHONY: vuln
+vuln: ## Check Go dependencies and code for known vulnerabilities
+	govulncheck ./...
+	cd web && npm audit --omit=dev --audit-level=high
+
+.PHONY: secrets-scan
+secrets-scan: ## Scan git history for committed secrets
+	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/repo" ghcr.io/gitleaks/gitleaks:v$(GITLEAKS_VERSION) git /repo --config /repo/.gitleaks.toml --redact
+
+.PHONY: fs-scan
+fs-scan: ## Scan the source tree for HIGH/CRITICAL vulnerabilities and secrets (trivy fs)
+	docker run --rm -v "$(CURDIR):/src:ro" -w /src aquasec/trivy:$(TRIVY_VERSION) fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 --skip-dirs node_modules,.superpowers,.git,web/playwright-report,web/test-results,bin .
+
+.PHONY: image-scan
+image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
+	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:$(TRIVY_VERSION) image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed alice:dev
+
+.PHONY: ci
+ci: lint test test-integration build i18n-check web-lint web-test vuln secrets-scan fs-scan up hardening-check e2e image-scan ## Run the full CI pipeline locally

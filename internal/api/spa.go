@@ -33,7 +33,7 @@ func (s *server) spa() http.Handler {
 				} else {
 					w.Header().Set("Cache-Control", "no-cache")
 				}
-				http.ServeFileFS(w, r, s.deps.UI, name)
+				http.ServeFileFS(w, r, s.deps.UI, name) //nolint:gosec // G703: fs.FS rooted at the UI, name cleaned and validated with fs.ValidPath
 				return
 			}
 			if strings.HasPrefix(name, "assets/") || path.Ext(name) != "" {
