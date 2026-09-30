@@ -15,6 +15,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"alice/internal/platform/clock"
@@ -87,6 +88,9 @@ func (c HWMCodec) Decode(raw []byte) (HWMRecord, error) {
 	if err := dec.Decode(&w); err != nil || w.V != 1 {
 		return HWMRecord{}, ErrHWMInvalid
 	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return HWMRecord{}, ErrHWMInvalid // trailing bytes after the object
+	}
 	sealed, err1 := base64.StdEncoding.DecodeString(w.Data)
 	mac, err2 := base64.StdEncoding.DecodeString(w.MAC)
 	if err1 != nil || err2 != nil {
@@ -149,10 +153,11 @@ type FileHWMStore struct{ Path string }
 // Name implements HWMStore.
 func (FileHWMStore) Name() string { return "file" }
 
-// Load implements HWMStore. It reads at most one byte more than a valid record can have,
-// so an oversized file is rejected by Decode without being read into memory.
+// Load implements HWMStore. Only a regular file is read: a symlink is not followed and a
+// FIFO or device is not waited on. It reads at most one byte more than a valid record
+// can have, so an oversized file is rejected by Decode without being read into memory.
 func (f FileHWMStore) Load(context.Context) ([]byte, error) {
-	file, err := os.Open(f.Path) //nolint:gosec // G304: the path comes from ALICE_STATE_DIR, not from a request
+	file, err := os.OpenFile(f.Path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // G304: the path comes from ALICE_STATE_DIR, not from a request
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -160,6 +165,13 @@ func (f FileHWMStore) Load(context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("read the time record: %w", err)
 	}
 	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("read the time record: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("read the time record: not a regular file")
+	}
 	b, err := io.ReadAll(io.LimitReader(file, maxHWMRecord+1))
 	if err != nil {
 		return nil, fmt.Errorf("read the time record: %w", err)

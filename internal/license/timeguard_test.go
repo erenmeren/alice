@@ -187,3 +187,49 @@ func TestGuardFixingARolledBackClockIsNotAJump(t *testing.T) {
 	assert.True(t, r.Jump.Expected.Equal(w0.Add(time.Hour)))
 	assert.True(t, r.Effective.Equal(w0.Add(time.Hour)))
 }
+
+// Restarts while a jump is held never freeze the license time: it keeps moving with
+// uptime even when the restored jump's expected time is behind the HWM.
+func TestGuardRestartsDuringAHeldJumpKeepTimeMoving(t *testing.T) {
+	g := guardAt(w0)
+	g.Observe(w0, 0)
+	wall := w0.Add(10 * 365 * day)
+	r, events := g.Observe(wall, time.Hour)
+	require.Equal(t, []license.ClockEvent{license.EventJumpDetected}, events)
+	last := r.Effective
+	for i := range 5 {
+		saved := g.NextRecord()
+		expected, detected, ok := g.PendingJump()
+		require.True(t, ok)
+		g = &license.Guard{} // a restart: SetHWM first, then RestoreJump
+		g.SetHWM(saved)
+		g.RestoreJump(expected, detected, 0)
+		wall = wall.Add(time.Minute)
+		r, _ = g.Observe(wall, 0)
+		require.NotNil(t, r.Jump, "restart %d", i)
+		assert.False(t, r.Effective.Before(last), "restart %d", i)
+		start := r.Effective
+		wall = wall.Add(23 * time.Hour)
+		r, _ = g.Observe(wall, 23*time.Hour)
+		require.NotNil(t, r.Jump, "restart %d", i)
+		assert.True(t, r.Effective.Equal(start.Add(23*time.Hour)), "restart %d: %s", i, r.Effective)
+		last = r.Effective
+	}
+	assert.True(t, last.Sub(w0) >= 5*23*time.Hour, "the uptime of every run counts")
+}
+
+// Frequent observations while the clock is behind do not lose time to rounding.
+func TestGuardSubSecondObservationsWhileBehind(t *testing.T) {
+	for _, step := range []time.Duration{500 * time.Millisecond, 1500 * time.Millisecond} {
+		g := guardAt(w0)
+		wall := w0.Add(-365 * day)
+		r, _ := g.Observe(wall, 0)
+		start := r.Effective
+		var up time.Duration
+		for up < time.Hour {
+			up += step
+			r, _ = g.Observe(wall.Add(up), up)
+		}
+		assert.InDelta(t, float64(up), float64(r.Effective.Sub(start)), float64(time.Second), "step %s", step)
+	}
+}

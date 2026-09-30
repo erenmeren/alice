@@ -58,7 +58,7 @@ type Guard struct {
 	jump       *heldJump
 }
 
-// SetHWM loads a persisted record (at start).
+// SetHWM loads a persisted record (at start, before RestoreJump).
 func (g *Guard) SetHWM(r HWMRecord) {
 	g.hwm, g.seq = r.At.UTC().Truncate(time.Second), r.Seq
 }
@@ -104,7 +104,9 @@ func (g *Guard) Observe(wall time.Time, uptime time.Duration) (Reading, []ClockE
 		if held < 0 {
 			held = 0
 		}
-		expected := g.jump.expected.Add(held)
+		// Never behind the HWM plus uptime: after a restart the restored expected time may
+		// lag the HWM, and license time must keep moving with uptime regardless.
+		expected := later(g.jump.expected.Add(held), g.hwm.Add(dUp))
 		switch {
 		case wall.Sub(expected) <= JumpThreshold:
 			g.jump = nil
@@ -113,9 +115,8 @@ func (g *Guard) Observe(wall time.Time, uptime time.Duration) (Reading, []ClockE
 			g.jump = nil
 			events = append(events, EventJumpAccepted)
 		default:
-			eff := later(expected, g.hwm)
-			g.hwm = eff.Truncate(time.Second)
-			r.Trusted, r.Effective = eff, eff
+			g.hwm = expected
+			r.Trusted, r.Effective = expected, expected
 			r.Jump = &Jump{Expected: expected, Detected: g.jump.detected, By: wall.Sub(expected)}
 			return r, events
 		}
@@ -126,8 +127,10 @@ func (g *Guard) Observe(wall time.Time, uptime time.Duration) (Reading, []ClockE
 	}
 	// While the wall clock is behind, the HWM advances with uptime, so time never stands
 	// still for a customer who set the clock back (only downtime is not counted).
+	// The HWM keeps full precision in memory (rounding at every observation would slow
+	// time down); Encode stores whole seconds.
 	trusted := later(wall, g.hwm.Add(dUp))
-	g.hwm = trusted.Truncate(time.Second)
+	g.hwm = trusted
 	r.Trusted, r.Effective = trusted, trusted
 	return r, events
 }
@@ -140,9 +143,10 @@ func (g *Guard) AcceptJump() bool {
 }
 
 // RestoreJump re-establishes a held jump after a restart. The 24 hours restart from
-// uptime, which favours the customer (downtime is not counted).
+// uptime, which favours the customer (downtime is not counted). Call SetHWM first:
+// expected is raised to the HWM, so the held time continues from where it stopped.
 func (g *Guard) RestoreJump(expected, detected time.Time, uptime time.Duration) {
-	g.jump = &heldJump{expected: expected.UTC(), baseUptime: uptime, detected: detected.UTC()}
+	g.jump = &heldJump{expected: later(expected.UTC(), g.hwm), baseUptime: uptime, detected: detected.UTC()}
 }
 
 // PendingJump returns the held jump's expected and detected times.

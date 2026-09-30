@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -62,6 +63,8 @@ func TestHWMRecordRejectsTampering(t *testing.T) {
 		"garbage":             []byte("not json"),
 		"empty object":        []byte("{}"),
 		"extra field":         []byte(`{"v":1,"data":"","mac":"","x":1}`),
+		"trailing bytes":      append(append([]byte(nil), raw...), []byte(" {}")...),
+		"trailing brace":      append(append([]byte(nil), raw...), '}'),
 	} {
 		_, err := c.Decode(bad)
 		assert.ErrorIs(t, err, license.ErrHWMInvalid, name)
@@ -117,4 +120,28 @@ func TestFileHWMStoreBoundsAndErrors(t *testing.T) {
 func TestHWMRecordRejectsTimesBefore1970(t *testing.T) {
 	_, err := license.NewHWMCodec(keyring(t, 1)).Encode(license.HWMRecord{At: time.Unix(-1, 0)})
 	require.Error(t, err)
+}
+
+// The record file must be a regular file: a symlink or a FIFO is refused, never followed
+// or waited on.
+func TestFileHWMStoreRefusesSpecialFiles(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "elsewhere")
+	require.NoError(t, os.WriteFile(target, []byte(`{"v":1}`), 0o600))
+	link := filepath.Join(dir, "link.dat")
+	require.NoError(t, os.Symlink(target, link))
+	_, err := license.FileHWMStore{Path: link}.Load(ctx)
+	require.Error(t, err, "symlink")
+
+	fifo := filepath.Join(dir, "fifo.dat")
+	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
+	done := make(chan error, 1)
+	go func() { _, err := license.FileHWMStore{Path: fifo}.Load(ctx); done <- err }()
+	select {
+	case err := <-done:
+		require.Error(t, err, "FIFO")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Load blocked on a FIFO")
+	}
 }
