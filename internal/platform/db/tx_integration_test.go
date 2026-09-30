@@ -5,6 +5,7 @@ package db_test
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 	"time"
 
@@ -136,4 +137,40 @@ func TestSettingsWorkInsideTransaction(t *testing.T) {
 	found, err := settings.Get(ctx, pool, "k", &v)
 	require.NoError(t, err)
 	assert.False(t, found)
+}
+
+func TestInTxRollsBackOnGoexit(t *testing.T) {
+	pool := migratedPool(t)
+	baseline := pool.Stat().AcquiredConns()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = db.InTx(context.Background(), pool, func(tx pgx.Tx) error {
+			_, err := tx.Exec(context.Background(), "INSERT INTO settings (key, value) VALUES ('a', '1')")
+			require.NoError(t, err)
+			runtime.Goexit()
+			return nil
+		})
+	}()
+	<-done
+	assert.Equal(t, baseline, pool.Stat().AcquiredConns(), "connection must be released")
+	assert.Equal(t, 0, countSettings(t, pool))
+}
+
+func TestInTxSurfacesCommitError(t *testing.T) {
+	pool := migratedPool(t)
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, `CREATE TABLE deferred_uniq (n int, CONSTRAINT n_uniq UNIQUE (n) DEFERRABLE INITIALLY DEFERRED)`)
+	require.NoError(t, err)
+
+	err = db.InTx(ctx, pool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, "INSERT INTO deferred_uniq (n) VALUES (1), (1)")
+		return err // succeeds now; the unique check runs at commit
+	})
+	require.Error(t, err)
+	assert.True(t, db.IsUniqueViolation(err))
+	assert.Contains(t, err.Error(), "commit transaction")
+	var n int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM deferred_uniq").Scan(&n))
+	assert.Equal(t, 0, n)
 }

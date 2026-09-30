@@ -1,5 +1,8 @@
 // Package logging builds Alice's structured logger. Every record passes a
 // redacting handler so secret values never reach stdout (SEC-050).
+//
+// Redaction is by attribute key only: struct and error values are NOT
+// inspected, so types that carry secrets must implement slog.LogValuer.
 package logging
 
 import (
@@ -70,10 +73,23 @@ func redact(a slog.Attr) slog.Attr {
 	return a
 }
 
-var secretParts = []string{"password", "secret", "token", "authorization", "cookie", "passphrase", "totp"}
+var secretParts = []string{
+	"password", "secret", "token", "authorization", "cookie", "passphrase", "totp",
+	"credential", "dek",
+}
+
+// notSecretCodes are keys that contain "code" but hold public error or status
+// codes (for example the API error code ALC-AUT-0001), which must stay visible.
+var notSecretCodes = []string{"error", "status", "http", "reason"}
 
 // secretKey matches on the ASCII-folded key (strings.ToLower is banned
-// repo-wide because of Turkish casing; keys are ASCII identifiers).
+// repo-wide because of Turkish casing; keys are ASCII identifiers). Rules:
+//   - any secretParts substring;
+//   - a "key" suffix in any case (master_key, masterKey, apiKey) or bare "key";
+//     keys_dir and similar path keys do not end in "key" and stay visible;
+//   - a "private" prefix;
+//   - "code" anywhere (recovery_code, setup_code) unless the key also names an
+//     error/status/http/reason code, and a bare "code" is left alone.
 func secretKey(key string) bool {
 	k := foldASCII(key)
 	for _, p := range secretParts {
@@ -81,7 +97,18 @@ func secretKey(key string) bool {
 			return true
 		}
 	}
-	return strings.HasPrefix(k, "private") || k == "key" || strings.HasSuffix(k, "_key")
+	if strings.HasPrefix(k, "private") || strings.HasSuffix(k, "key") {
+		return true
+	}
+	if k != "code" && strings.Contains(k, "code") {
+		for _, n := range notSecretCodes {
+			if strings.Contains(k, n) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func foldASCII(s string) string {

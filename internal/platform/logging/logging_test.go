@@ -68,3 +68,22 @@ func TestLevelIsRespected(t *testing.T) {
 	log.Warn("shown")
 	assert.Contains(t, buf.String(), "shown")
 }
+
+func TestKeyClassification(t *testing.T) {
+	secret := []string{"masterKey", "apiKey", "secretKey", "MASTER_KEY", "dek", "DEK", "wrapped_dek",
+		"credential", "credentials", "recovery_code", "setup_code", "recoveryCode", "setupCode", "totp_code"}
+	visible := []string{"keys_dir", "error_code", "status_code", "http_status_code", "code", "reason_code",
+		"username", "request_id", "index", "path"}
+	var buf bytes.Buffer
+	log := logging.New(&buf, slog.LevelInfo)
+	for _, k := range secret {
+		buf.Reset()
+		log.Info("x", k, canary)
+		assert.NotContains(t, buf.String(), canary, k)
+	}
+	for _, k := range visible {
+		buf.Reset()
+		log.Info("x", k, "v-visible")
+		assert.Contains(t, buf.String(), "v-visible", k)
+	}
+}

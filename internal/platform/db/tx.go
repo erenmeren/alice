@@ -34,13 +34,15 @@ func InTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) (er
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
+	committed := false
 	defer func() {
-		if p := recover(); p != nil {
+		p := recover()
+		if !committed {
+			// Covers errors, panics and runtime.Goexit (t.FailNow inside fn).
 			_ = tx.Rollback(context.WithoutCancel(ctx))
-			panic(p)
 		}
-		if err != nil {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
+		if p != nil {
+			panic(p)
 		}
 	}()
 	if err = fn(tx); err != nil {
@@ -49,6 +51,7 @@ func InTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) (er
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
+	committed = true
 	return nil
 }
 
