@@ -128,6 +128,12 @@ func TestParseRejectsMalformedFiles(t *testing.T) {
 		"bad key id":              {replaceOnce(t, raw, `"vk-2026-01"`, `"../../etc"`), "key_id"},
 		"short signature":         {[]byte(strings.Replace(string(raw), `"signature": "`, `"signature": "AAAA`, 1)), "signature_encoding"},
 		"explicit empty replaces": {replaceOnce(t, raw, `"features": []`, `"features": [], "replaces": ""`), "replaces"},
+		"explicit null replaces":  {replaceOnce(t, raw, `"features": []`, `"features": [], "replaces": null`), "replaces"},
+		"case-variant duplicate":  {replaceOnce(t, raw, `"max_targets": 10,`, `"max_targets": 10, "MAX_TARGETS": 1000,`), "fields"},
+		"case-variant only":       {replaceOnce(t, raw, `"max_targets"`, `"Max_Targets"`), "fields"},
+		"case-variant top-level":  {replaceOnce(t, raw, `"key_id"`, `"Key_id"`), "fields"},
+		"Kelvin sign key":         {replaceOnce(t, raw, `"key_id"`, "\"\u212aey_id\""), "fields"},
+		"long s key":              {replaceOnce(t, raw, `"signature"`, "\"\u017fignature\""), "fields"},
 		"deeply nested features":  {replaceOnce(t, raw, `"features": []`, `"features": [[[["x"]]]]`), "too_deep"},
 	}
 	for name, tc := range cases {
@@ -174,6 +180,11 @@ func TestValidatePayload(t *testing.T) {
 		"replaces itself":               {func(p *license.Payload) { p.Replaces = p.LicenseID }, "replaces"},
 		"bad feature":                   {func(p *license.Payload) { p.Features = []string{"Upper"} }, "features"},
 		"33 features":                   {func(p *license.Payload) { p.Features = make([]string, 33) }, "features"},
+		"invalid UTF-8 customer":        {func(p *license.Payload) { p.Customer = "Bank\xff" }, "customer"},
+		"bidi control in customer":      {func(p *license.Payload) { p.Customer = "Bank\u202eevil" }, "customer"},
+		"zero-width joiner in customer": {func(p *license.Payload) { p.Customer = "Ban\u200bk" }, "customer"},
+		"valid_until after year 9999":   {func(p *license.Payload) { p.ValidUntil = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC) }, "dates"},
+		"issued_at after year 9999":     {func(p *license.Payload) { p.IssuedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC) }, "dates"},
 		"format 2":                      {func(p *license.Payload) { p.Format = 2 }, "format"},
 	}
 	for name, tc := range cases {
@@ -209,4 +220,21 @@ func TestRejectReasonAndSuffix(t *testing.T) {
 	assert.Equal(t, "older_than_installed", license.RejectReason(license.ErrOlderThanInstalled))
 	assert.Equal(t, "B8TC00", license.IDSuffix("ALICE-7F3K-9Q2M-XD41-B8TC00"))
 	assert.ErrorIs(t, &license.TargetLimitError{Max: 10, Used: 10}, license.ErrTargetLimit)
+}
+
+func TestSignNormalizesTimes(t *testing.T) {
+	p := samplePayload(t)
+	p.IssuedAt = time.Date(2026, 9, 29, 12, 0, 0, 999_000_000, time.FixedZone("TRT", 3*3600))
+	f, err := license.Sign(fileTestKey, "vk-2026-01", p)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, 9, 29, 9, 0, 0, 0, time.UTC), f.Payload.IssuedAt)
+	assert.True(t, ed25519.Verify(fileTestKey.Public().(ed25519.PublicKey), license.SignedBytes(f.Payload), f.Signature))
+}
+
+func TestReplacesRoundTrips(t *testing.T) {
+	p := samplePayload(t)
+	p.Replaces = "LIC-2026-000100"
+	f, err := license.ParseFile(encodeSigned(t, p))
+	require.NoError(t, err)
+	assert.Equal(t, p, f.Payload)
 }

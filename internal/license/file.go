@@ -31,7 +31,16 @@ var (
 	idPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	featurePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	earliestDate   = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	byteOrderMark  = []byte{0xEF, 0xBB, 0xBF}
+	latestDate     = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+
+	// Exact key sets. encoding/json matches field names case-insensitively (with Unicode
+	// folding), so the structure walk compares bytes against these instead.
+	fileKeys    = map[string]bool{"format": true, "key_id": true, "payload": true, "signature": true}
+	payloadKeys = map[string]bool{
+		"license_id": true, "customer": true, "installation_id": true, "issued_at": true, "valid_from": true,
+		"valid_until": true, "max_targets": true, "features": true, "format": true, "replaces": true,
+	}
+	byteOrderMark = []byte{0xEF, 0xBB, 0xBF}
 )
 
 // Payload is the signed content of a license file (spec §16.2).
@@ -66,11 +75,15 @@ func Sign(priv ed25519.PrivateKey, keyID string, p Payload) (File, error) {
 	if !keyIDPattern.MatchString(keyID) {
 		return File{}, invalid("key_id")
 	}
+	p.IssuedAt, p.ValidFrom, p.ValidUntil = wholeSecondsUTC(p.IssuedAt), wholeSecondsUTC(p.ValidFrom), wholeSecondsUTC(p.ValidUntil)
 	if err := p.Validate(); err != nil {
 		return File{}, err
 	}
 	return File{Format: p.Format, KeyID: keyID, Payload: p, Signature: ed25519.Sign(priv, SignedBytes(p))}, nil
 }
+
+// wholeSecondsUTC is the instant as the file format stores it.
+func wholeSecondsUTC(t time.Time) time.Time { return t.UTC().Truncate(time.Second) }
 
 // EncodeFile renders f as the pretty-printed UTF-8 JSON file sent to customers.
 func EncodeFile(f File) ([]byte, error) {
@@ -98,16 +111,16 @@ type wireFile struct {
 }
 
 type wirePayload struct {
-	LicenseID      *string   `json:"license_id"`
-	Customer       *string   `json:"customer"`
-	InstallationID *string   `json:"installation_id"`
-	IssuedAt       *string   `json:"issued_at"`
-	ValidFrom      *string   `json:"valid_from"`
-	ValidUntil     *string   `json:"valid_until"`
-	MaxTargets     *int64    `json:"max_targets"`
-	Features       *[]string `json:"features"`
-	Format         *int64    `json:"format"`
-	Replaces       *string   `json:"replaces"`
+	LicenseID      *string         `json:"license_id"`
+	Customer       *string         `json:"customer"`
+	InstallationID *string         `json:"installation_id"`
+	IssuedAt       *string         `json:"issued_at"`
+	ValidFrom      *string         `json:"valid_from"`
+	ValidUntil     *string         `json:"valid_until"`
+	MaxTargets     *int64          `json:"max_targets"`
+	Features       *[]string       `json:"features"`
+	Format         *int64          `json:"format"`
+	Replaces       json.RawMessage `json:"replaces"`
 }
 
 // ParseFile parses a license file strictly (spec §16.3 step 1): at most 64 KiB, UTF-8
@@ -209,10 +222,12 @@ func (w wirePayload) payload() (Payload, error) {
 		Format:         int(*w.Format),
 	}
 	if w.Replaces != nil {
-		if *w.Replaces == "" { // canonical form omits it, so an explicit "" would be unsigned
+		// The canonical form omits an empty or null value, so writing one would be unsigned.
+		var s string
+		if string(w.Replaces) == "null" || json.Unmarshal(w.Replaces, &s) != nil || s == "" {
 			return Payload{}, invalid("replaces")
 		}
-		p.Replaces = *w.Replaces
+		p.Replaces = s
 	}
 	return p, nil
 }
@@ -226,6 +241,7 @@ func strictDecode(data []byte, v any) error {
 // frame is one open JSON object or array during checkStructure.
 type frame struct {
 	keys    map[string]bool // nil for arrays
+	allowed map[string]bool // exact key names accepted at this level
 	wantKey bool
 }
 
@@ -255,6 +271,9 @@ func checkStructure(raw []byte) error {
 			if stack[n-1].keys[key] {
 				return invalid("duplicate_key")
 			}
+			if !stack[n-1].allowed[key] {
+				return invalid("fields")
+			}
 			stack[n-1].keys[key] = true
 			stack[n-1].wantKey = false
 			continue
@@ -267,6 +286,10 @@ func checkStructure(raw []byte) error {
 			f := &frame{}
 			if tok == json.Delim('{') {
 				f.keys, f.wantKey = map[string]bool{}, true
+				f.allowed = fileKeys
+				if len(stack) > 0 {
+					f.allowed = payloadKeys
+				}
 			}
 			stack = append(stack, f)
 		case json.Delim(']'):
@@ -308,7 +331,8 @@ func (p Payload) Validate() error {
 		return invalid("customer")
 	case p.MaxTargets < 1 || p.MaxTargets > MaxTargetsLimit:
 		return invalid("max_targets")
-	case p.IssuedAt.Before(earliestDate) || p.ValidFrom.Before(earliestDate) || p.ValidUntil.Before(earliestDate):
+	case p.IssuedAt.Before(earliestDate) || p.ValidFrom.Before(earliestDate) || p.ValidUntil.Before(earliestDate) ||
+		p.IssuedAt.After(latestDate) || p.ValidFrom.After(latestDate) || p.ValidUntil.After(latestDate):
 		return invalid("dates")
 	case p.ValidUntil.Before(p.ValidFrom):
 		return invalid("validity")
@@ -329,11 +353,11 @@ func (p Payload) Validate() error {
 }
 
 func validCustomer(s string) bool {
-	if s == "" || strings.TrimSpace(s) != s || utf8.RuneCountInString(s) > maxCustomerRunes {
+	if s == "" || !utf8.ValidString(s) || strings.TrimSpace(s) != s || utf8.RuneCountInString(s) > maxCustomerRunes {
 		return false
 	}
 	for _, r := range s {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return false
 		}
 	}
