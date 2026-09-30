@@ -68,6 +68,17 @@ func TestRegeneratesOwnCertificateNearExpiry(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o400), st.Mode().Perm())
 }
 
+func TestRegeneratesExpiredOwnCertificate(t *testing.T) {
+	dir := t.TempDir()
+	first, err := tlscert.EnsureSelfSigned(dir, []string{"localhost"}, t0)
+	require.NoError(t, err)
+	later := t0.Add(100 * 24 * time.Hour) // 10 days after expiry
+	second, err := tlscert.EnsureSelfSigned(dir, []string{"localhost"}, later)
+	require.NoError(t, err)
+	assert.NotEqual(t, leaf(t, first).SerialNumber, leaf(t, second).SerialNumber)
+	assert.Equal(t, later.Add(90*24*time.Hour), leaf(t, second).NotAfter)
+}
+
 func TestNeverOverwritesUserCertificateEvenWhenExpired(t *testing.T) {
 	dir := t.TempDir()
 	// Simulate a user-supplied certificate: generate one, then re-sign it without the Alice marker.
@@ -94,10 +105,14 @@ func TestServerConfig(t *testing.T) {
 	cfg := tlscert.ServerConfig(c)
 	assert.Equal(t, uint16(tls.VersionTLS12), cfg.MinVersion)
 	assert.Equal(t, []tls.CurveID{tls.X25519MLKEM768, tls.X25519, tls.CurveP256}, cfg.CurvePreferences)
-	for _, id := range cfg.CipherSuites {
-		name := tls.CipherSuiteName(id)
-		assert.Regexp(t, `^TLS_ECDHE_(ECDSA|RSA)_WITH_(AES_\d+_GCM_SHA\d+|CHACHA20_POLY1305_SHA256)$`, name)
-	}
+	assert.Equal(t, []uint16{
+		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+	}, cfg.CipherSuites)
 	assert.Len(t, cfg.Certificates, 1)
 }
 
