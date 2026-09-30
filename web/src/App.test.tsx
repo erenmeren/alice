@@ -72,6 +72,19 @@ describe('application shell', () => {
     expect(localStorage.getItem('alice.lang')).toBe('tr');
   });
 
+  it('opens and closes the navigation with the menu button and closes it after navigating', async () => {
+    server.use(...sessionHandlers(sessionFor('admin')));
+    const { router } = await renderRoute('/');
+    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
+    const menu = screen.getByRole('button', { name: 'Open navigation' });
+    expect(menu).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(menu);
+    expect(screen.getByRole('button', { name: 'Close navigation' })).toHaveAttribute('aria-expanded', 'true');
+    await userEvent.click(within(screen.getByRole('navigation')).getByRole('link', { name: 'Users' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/users'));
+    expect(screen.getByRole('button', { name: 'Open navigation' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('shows the setup banner to an admin until the recovery passphrase is set', async () => {
     server.use(
       ...sessionHandlers(sessionFor('admin'), {

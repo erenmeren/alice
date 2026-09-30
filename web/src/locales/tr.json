@@ -11,6 +11,8 @@
   },
   "nav": {
     "label": "Ana gezinme",
+    "openMenu": "Gezinmeyi aç",
+    "closeMenu": "Gezinmeyi kapat",
     "home": "Ana sayfa",
     "users": "Kullanıcılar",
     "audit": "Denetim kaydı",

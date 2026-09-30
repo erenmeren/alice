@@ -11,6 +11,8 @@
   },
   "nav": {
     "label": "Main navigation",
+    "openMenu": "Open navigation",
+    "closeMenu": "Close navigation",
     "home": "Home",
     "users": "Users",
     "audit": "Audit log",
