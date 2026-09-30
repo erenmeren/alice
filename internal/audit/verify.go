@@ -112,6 +112,13 @@ func (s *Service) Iterate(ctx context.Context, fn func(Entry) error) error {
 	return Iterate(ctx, s.pool, fn)
 }
 
+// VerifyReadOnly recomputes and checks the chain like Verify but writes
+// nothing: no checkpoint and no audit.verified row. Exports use it so that
+// reading the log never changes it.
+func (s *Service) VerifyReadOnly(ctx context.Context) (Report, error) {
+	return Verify(ctx, s.pool)
+}
+
 // Verify checks the chain, stores a new checkpoint when it is intact, and
 // records "audit.verified" (success, or failure with the problem).
 func (s *Service) Verify(ctx context.Context, actor Actor) (Report, error) {

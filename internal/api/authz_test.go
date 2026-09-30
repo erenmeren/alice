@@ -280,6 +280,19 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 		"POST /api/v1/setup/recovery-passphrase",
 		"POST /api/v1/setup/complete",
 		"POST /api/v1/auth/recovery-codes",
+		"GET /api/v1/users",
+		"POST /api/v1/users",
+		"GET /api/v1/users/{id}",
+		"PATCH /api/v1/users/{id}",
+		"POST /api/v1/users/{id}/actions/reset-mfa",
+		"POST /api/v1/users/{id}/actions/reset-password",
+		"POST /api/v1/users/{id}/actions/revoke-sessions",
+		"GET /api/v1/tokens",
+		"POST /api/v1/tokens",
+		"DELETE /api/v1/tokens/{id}",
+		"GET /api/v1/audit",
+		"GET /api/v1/audit/export",
+		"POST /api/v1/audit/verify",
 	} {
 		assert.Contains(t, table, k)
 	}

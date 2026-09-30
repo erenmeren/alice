@@ -5,6 +5,7 @@ package audit_test
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"os"
@@ -399,4 +400,31 @@ func TestAppendNormalisesUnstorableInput(t *testing.T) {
 	rep, err := audit.Verify(ctx, d.App)
 	require.NoError(t, err)
 	assert.True(t, rep.Intact, "%+v", rep)
+}
+
+func TestServiceVerifyReadOnlyWritesNothing(t *testing.T) {
+	d := pgtest.New(t)
+	l := audit.New(clock.NewFake(start))
+	svc := audit.NewService(l, d.App)
+	ctx := context.Background()
+	appendN(t, d.App, l, 3)
+
+	rep, err := svc.VerifyReadOnly(ctx)
+	require.NoError(t, err)
+	assert.True(t, rep.Intact)
+	assert.Equal(t, int64(3), rep.HeadSeq)
+
+	var cp json.RawMessage
+	has, err := settings.Get(ctx, d.App, "audit.checkpoint", &cp)
+	require.NoError(t, err)
+	assert.False(t, has, "a read-only verification never stores a checkpoint")
+	var n int
+	require.NoError(t, d.App.QueryRow(ctx, "SELECT count(*) FROM audit_log").Scan(&n))
+	assert.Equal(t, 3, n, "and never appends an audit.verified row")
+
+	ownerExec(t, d, "UPDATE audit_log SET result = 'failure' WHERE seq = 2")
+	rep, err = svc.VerifyReadOnly(ctx)
+	require.NoError(t, err)
+	assert.False(t, rep.Intact)
+	assert.Equal(t, int64(2), rep.FirstBadSeq)
 }

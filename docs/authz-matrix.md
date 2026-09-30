@@ -29,3 +29,16 @@ must also allow the route). Step-up: a fresh verification code (5 minutes) is re
 | POST | `/api/v1/auth/password` | `session` | no | yes | yes | yes | no | no |
 | POST | `/api/v1/auth/recovery-codes` | `session.stepup` | no | yes | yes | yes | no | yes |
 | PUT | `/api/v1/auth/locale` | `session` | no | yes | yes | yes | no | no |
+| GET | `/api/v1/users` | `users.read` | no | yes | no | no | read | no |
+| POST | `/api/v1/users` | `users.manage` | no | yes | no | no | no | yes |
+| GET | `/api/v1/users/{id}` | `users.read` | no | yes | no | no | read | no |
+| PATCH | `/api/v1/users/{id}` | `users.manage` | no | yes | no | no | no | yes |
+| POST | `/api/v1/users/{id}/actions/reset-mfa` | `users.manage` | no | yes | no | no | no | yes |
+| POST | `/api/v1/users/{id}/actions/reset-password` | `users.manage` | no | yes | no | no | no | yes |
+| POST | `/api/v1/users/{id}/actions/revoke-sessions` | `users.manage` | no | yes | no | no | no | yes |
+| GET | `/api/v1/tokens` | `session` | no | yes | yes | yes | no | no |
+| POST | `/api/v1/tokens` | `session.stepup` | no | yes | yes | yes | no | yes |
+| DELETE | `/api/v1/tokens/{id}` | `session` | no | yes | yes | yes | no | no |
+| GET | `/api/v1/audit` | `audit.read` | no | yes | no | yes | read | no |
+| GET | `/api/v1/audit/export` | `audit.read` | no | yes | no | yes | read | no |
+| POST | `/api/v1/audit/verify` | `audit.read` | no | yes | no | yes | read | no |

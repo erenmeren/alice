@@ -274,6 +274,8 @@ type fakeAudit struct {
 	ListFn    func(ctx context.Context, f audit.Filter) ([]audit.Entry, int64, error)
 	IterateFn func(ctx context.Context, fn func(audit.Entry) error) error
 	VerifyFn  func(ctx context.Context, actor audit.Actor) (audit.Report, error)
+
+	VerifyReadOnlyFn func(ctx context.Context) (audit.Report, error)
 }
 
 func (f *fakeAudit) Write(_ context.Context, e audit.Event) error {
@@ -371,4 +373,11 @@ func identityAuth(now time.Time) *fakeAuth {
 			return auth.Principal{}, auth.ErrUnauthenticated
 		},
 	}
+}
+
+func (f *fakeAudit) VerifyReadOnly(ctx context.Context) (audit.Report, error) {
+	if f.VerifyReadOnlyFn != nil {
+		return f.VerifyReadOnlyFn(ctx)
+	}
+	return audit.Report{}, errNotConfigured
 }

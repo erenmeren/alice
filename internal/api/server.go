@@ -74,6 +74,8 @@ type AuditService interface {
 	List(ctx context.Context, f audit.Filter) ([]audit.Entry, int64, error)
 	Iterate(ctx context.Context, fn func(audit.Entry) error) error
 	Verify(ctx context.Context, actor audit.Actor) (audit.Report, error)
+	// VerifyReadOnly checks the chain without writing a checkpoint or an audit row (used by the export).
+	VerifyReadOnly(ctx context.Context) (audit.Report, error)
 }
 
 // Deps are the handler's dependencies, wired in cmd/alice.
@@ -230,6 +232,9 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.systemRoutes()...)
 	routes = append(routes, s.setupRoutes()...)
 	routes = append(routes, s.authRoutes()...)
+	routes = append(routes, s.userRoutes()...)
+	routes = append(routes, s.tokenRoutes()...)
+	routes = append(routes, s.auditRoutes()...)
 	return routes
 }
 

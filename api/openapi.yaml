@@ -356,7 +356,258 @@ paths:
       responses:
         "204": { description: Saved }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/users:
+    get:
+      operationId: listUsers
+      summary: All users (administrators only)
+      x-permission: users.read
+      responses:
+        "200":
+          description: Users ordered by username
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/User" } }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createUser
+      summary: Create a local user; they set up their authenticator app at first sign-in
+      x-permission: users.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, display_name, email, role, password]
+              properties:
+                username: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$" }
+                display_name: { type: string, minLength: 1, maxLength: 100 }
+                email: { type: string, maxLength: 254 }
+                role: { type: string, enum: [admin, operator, auditor] }
+                password: { type: string, minLength: 12, maxLength: 1024 }
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/users/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getUser
+      summary: One user
+      x-permission: users.read
+      responses:
+        "200":
+          description: The user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateUser
+      summary: Change name, email, role or disabled state; role changes and disabling end the user's sessions
+      x-permission: users.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                display_name: { type: string, minLength: 1, maxLength: 100 }
+                email: { type: string, maxLength: 254 }
+                role: { type: string, enum: [admin, operator, auditor] }
+                disabled: { type: boolean }
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/users/{id}/actions/reset-mfa:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: resetUserMFA
+      summary: Remove the user's authenticator app and recovery codes; ends their sessions
+      x-permission: users.manage
+      responses:
+        "204": { description: MFA reset }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/users/{id}/actions/reset-password:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: resetUserPassword
+      summary: Set a new password for the user; ends their sessions and clears a lockout
+      x-permission: users.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password]
+              properties:
+                password: { type: string, minLength: 12, maxLength: 1024 }
+      responses:
+        "204": { description: Password reset }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/users/{id}/actions/revoke-sessions:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: revokeUserSessions
+      summary: Sign the user out everywhere
+      x-permission: users.manage
+      responses:
+        "204": { description: Sessions ended }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/tokens:
+    get:
+      operationId: listTokens
+      summary: Own API tokens, or another user's with user_id (administrators only)
+      x-permission: session
+      parameters:
+        - { name: user_id, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Active (not revoked) tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/APIToken" } }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createToken
+      summary: Create an API token; the secret is returned once
+      x-permission: session.stepup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, scope, expires_in_days]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                scope: { type: string, enum: [read, operate] }
+                expires_in_days: { type: integer, minimum: 1, maximum: 365 }
+      responses:
+        "201":
+          description: Token created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, item]
+                properties:
+                  token: { type: string, description: "alice_ followed by 43 characters; store it now, it is never shown again" }
+                  item: { $ref: "#/components/schemas/APIToken" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/tokens/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    delete:
+      operationId: revokeToken
+      summary: Revoke a token (own, or any token for administrators)
+      x-permission: session
+      responses:
+        "204": { description: Token revoked }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/audit:
+    get:
+      operationId: listAudit
+      summary: Audit log entries, newest first (administrators and auditors)
+      x-permission: audit.read
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, required: false, schema: { type: string, pattern: "^[0-9]+$" }, description: next_cursor of the previous page }
+        - { name: action, in: query, required: false, schema: { type: string }, description: Action prefix, e.g. auth. }
+        - { name: actor, in: query, required: false, schema: { type: string }, description: Exact actor name }
+        - { name: result, in: query, required: false, schema: { type: string, enum: [success, failure, denied] } }
+      responses:
+        "200":
+          description: One page of entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AuditEntry" } }
+                  next_cursor: { type: [string, "null"] }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/audit/export:
+    get:
+      operationId: exportAudit
+      summary: Download the whole audit log with its verification result (read-only verification; the export itself is audited)
+      x-permission: audit.read
+      parameters:
+        - { name: format, in: query, required: true, schema: { type: string, enum: [csv, json] } }
+      responses:
+        "200":
+          description: The log. Header X-Alice-Audit-Intact tells whether the chain verified.
+          content:
+            text/csv:
+              schema: { type: string }
+            application/json:
+              schema:
+                type: object
+                required: [verification, entries]
+                properties:
+                  verification: { $ref: "#/components/schemas/AuditReport" }
+                  entries: { type: array, items: { $ref: "#/components/schemas/AuditEntry" } }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/audit/verify:
+    post:
+      operationId: verifyAudit
+      summary: Recompute the hash chain and record the result
+      x-permission: audit.read
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditReport" }
+        default: { $ref: "#/components/responses/Error" }
 components:
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   responses:
     StatusOK:
       description: OK
@@ -479,3 +730,42 @@ components:
               type: array
               items: { type: string }
               description: Present only right after MFA enrollment or administrator creation
+    APIToken:
+      type: object
+      required: [id, user_id, name, prefix, scope, expires_at, last_used_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        name: { type: string }
+        prefix: { type: string, examples: [alice_Xy12Ab] }
+        scope: { type: string, enum: [read, operate] }
+        expires_at: { type: string, format: date-time }
+        last_used_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+    AuditEntry:
+      type: object
+      required: [seq, at, actor_type, actor_id, actor_name, ip, action, object_type, object_id, result, details, request_id, hash]
+      properties:
+        seq: { type: integer, minimum: 1 }
+        at: { type: string, format: date-time }
+        actor_type: { type: string, enum: [user, api_token, system, oidc] }
+        actor_id: { type: [string, "null"], format: uuid }
+        actor_name: { type: string }
+        ip: { type: [string, "null"] }
+        action: { type: string, examples: [auth.login] }
+        object_type: { type: string }
+        object_id: { type: string }
+        result: { type: string, enum: [success, failure, denied] }
+        details: { type: object, additionalProperties: { type: string } }
+        request_id: { type: string }
+        hash: { type: string, description: Hex SHA-256 of this entry in the chain }
+    AuditReport:
+      type: object
+      required: [intact, checked, head_seq, head_hash, first_bad_seq, problem]
+      properties:
+        intact: { type: boolean }
+        checked: { type: integer }
+        head_seq: { type: integer }
+        head_hash: { type: string }
+        first_bad_seq: { type: [integer, "null"] }
+        problem: { type: [string, "null"], enum: [hash_mismatch, sequence_gap, tail_truncated, null] }
