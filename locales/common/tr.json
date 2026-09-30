@@ -20,5 +20,14 @@
         "action": "Tekrar deneyin. Yine olursa burada gösterilen istek kimliğini yöneticinize iletin."
       }
     }
+  },
+  "validation": {
+    "required": "Bu alan zorunludur.",
+    "too_short": "En az {{min}} karakter girin.",
+    "too_long": "En fazla {{max}} karakter girin.",
+    "pattern": "Bu değer izin verilmeyen karakterler içeriyor.",
+    "one_of": "Şunlardan birini seçin: {{values}}.",
+    "out_of_range": "{{min}} ile {{max}} arasında bir sayı girin.",
+    "email": "Geçerli bir e-posta adresi girin, örneğin ad@ornek.com."
   }
 }

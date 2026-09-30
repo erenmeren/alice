@@ -20,5 +20,14 @@
         "action": "Try again. If it happens again, give your administrator the request ID shown here."
       }
     }
+  },
+  "validation": {
+    "required": "This field is required.",
+    "too_short": "Enter at least {{min}} characters.",
+    "too_long": "Enter at most {{max}} characters.",
+    "pattern": "This value contains characters that are not allowed.",
+    "one_of": "Choose one of: {{values}}.",
+    "out_of_range": "Enter a number from {{min}} to {{max}}.",
+    "email": "Enter a valid email address, for example name@example.com."
   }
 }

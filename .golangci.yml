@@ -17,11 +17,16 @@ linters:
           msg: "Turkish dotted/dotless i: use strings.EqualFold for identifiers or golang.org/x/text/cases for user-visible text."
         - pattern: ^fmt\.Print(f|ln)?$
           msg: "Use the structured logger (log/slog) or write to an explicit io.Writer."
+        - pattern: ^time\.Now$
+          msg: "use the injected clock.Clock (time-dependent logic must be testable)"
   exclusions:
     presets: [std-error-handling, common-false-positives]
     rules:
       - path: _test\.go
         linters: [gosec, noctx]
+      - path: (_test\.go|internal/platform/clock/)
+        linters: [forbidigo]
+        text: "use the injected clock.Clock"
 formatters:
   enable:
     - gofmt
