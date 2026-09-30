@@ -298,7 +298,8 @@ function ConfirmModal({ kind, user, onClose }: { kind: 'resetMfa' | 'revoke' | '
           <Button variant="default" onClick={onClose}>
             {t('users.cancel')}
           </Button>
-          <Button color={kind === 'toggle' && !user.disabled ? 'red' : undefined} loading={busy} onClick={() => void perform(action)}>
+          {/* red 9: white text 5.4:1; the default red shade is below WCAG AA (4.5:1). */}
+          <Button color={kind === 'toggle' && !user.disabled ? 'red.9' : undefined} loading={busy} onClick={() => void perform(action)}>
             {button}
           </Button>
         </Group>

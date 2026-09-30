@@ -201,7 +201,8 @@ function RevokeTokenModal({ token, onClose, onDone }: { token: ApiToken; onClose
           <Button variant="default" onClick={onClose}>
             {t('tokens.cancel')}
           </Button>
-          <Button color="red" loading={busy} onClick={() => void confirm()}>
+          {/* red 9: white text 5.4:1; the default red shade is below WCAG AA (4.5:1). */}
+          <Button color="red.9" loading={busy} onClick={() => void confirm()}>
             {t('tokens.revokeConfirm')}
           </Button>
         </Group>
