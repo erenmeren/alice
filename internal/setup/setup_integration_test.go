@@ -411,3 +411,61 @@ func TestConcurrentPassphrasesSetExactlyOnce(t *testing.T) {
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT count(*) FROM audit_log WHERE action = 'setup.recovery_passphrase_set'").Scan(&links))
 	assert.Equal(t, 1, links)
 }
+
+// TestPassphraseAndCompleteRequireSettingsManage checks the service-level guard: only an
+// administrator's browser session inside its step-up window may set the passphrase or
+// finish the wizard, even if a route were misconfigured.
+func TestPassphraseAndCompleteRequireSettingsManage(t *testing.T) {
+	e := newEnv(t)
+	res, _ := e.createAdmin(t)
+	admin, err := e.auth.Authenticate(e.ctx, res.Token)
+	require.NoError(t, err)
+
+	// A real Operator session (inside its own step-up window).
+	_, err = e.auth.CreateUser(e.ctx, admin, ip1, auth.NewUser{Username: "operator1", DisplayName: "O", Role: rbac.Operator, Password: password})
+	require.NoError(t, err)
+	lr, err := e.auth.Login(e.ctx, "operator1", password, ip1)
+	require.NoError(t, err)
+	pending, err := e.auth.Authenticate(e.ctx, lr.SessionToken)
+	require.NoError(t, err)
+	enr, err := e.auth.EnrollMFA(e.ctx, pending, ip1)
+	require.NoError(t, err)
+	opCode, err := totp.GenerateCode(enr.Secret, e.clk.Now())
+	require.NoError(t, err)
+	opRes, err := e.auth.VerifyMFA(e.ctx, pending, auth.MFAInput{Code: opCode}, ip1)
+	require.NoError(t, err)
+	operator, err := e.auth.Authenticate(e.ctx, opRes.Token)
+	require.NoError(t, err)
+	require.Equal(t, rbac.Operator, operator.Role)
+
+	// An API token of the administrator.
+	bearer, _, err := e.auth.CreateToken(e.ctx, admin, ip1, auth.NewToken{Name: "ci", Scope: rbac.ScopeOperate, ExpiresInDays: 30})
+	require.NoError(t, err)
+	token, err := e.auth.AuthenticateToken(e.ctx, bearer)
+	require.NoError(t, err)
+	require.Equal(t, rbac.APIToken, token.Kind)
+
+	for name, p := range map[string]auth.Principal{"operator": operator, "api token": token} {
+		assert.ErrorIs(t, e.setup.SetRecoveryPassphrase(e.ctx, p, ip1, passphrase, passphrase), setup.ErrForbidden, name)
+	}
+	assert.Empty(t, e.settingRaw(t, "backup.key"), "nothing was stored")
+
+	require.NoError(t, e.setup.SetRecoveryPassphrase(e.ctx, admin, ip1, passphrase, passphrase))
+	for name, p := range map[string]auth.Principal{"operator": operator, "api token": token} {
+		_, err = e.setup.Complete(e.ctx, p, ip1)
+		assert.ErrorIs(t, err, setup.ErrForbidden, name)
+	}
+
+	e.clk.Advance(auth.StepUpWindow + time.Second)
+	stale, err := e.auth.Authenticate(e.ctx, res.Token)
+	require.NoError(t, err)
+	assert.ErrorIs(t, e.setup.SetRecoveryPassphrase(e.ctx, stale, ip1, passphrase, passphrase), setup.ErrForbidden,
+		"an administrator without a recent step-up is refused before anything else is checked")
+	_, err = e.setup.Complete(e.ctx, stale, ip1)
+	assert.ErrorIs(t, err, setup.ErrForbidden)
+	assert.Empty(t, e.settingRaw(t, "setup.completed_at"), "the wizard is not completed")
+
+	var completed int
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT count(*) FROM audit_log WHERE action = 'setup.completed'").Scan(&completed))
+	assert.Zero(t, completed)
+}

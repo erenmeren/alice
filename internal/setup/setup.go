@@ -30,6 +30,9 @@ var (
 	ErrPassphraseMismatch   = errors.New("setup: recovery passphrases differ")
 	ErrPassphraseAlreadySet = errors.New("setup: recovery passphrase already set")
 	ErrIncomplete           = errors.New("setup: recovery passphrase not set yet")
+	// ErrForbidden means the caller is not an administrator's browser session inside its
+	// step-up window (permission settings.manage).
+	ErrForbidden = errors.New("setup: not allowed")
 )
 
 // LockedError means too many wrong setup codes came from this address.
