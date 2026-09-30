@@ -375,3 +375,28 @@ func TestIterateIsAscending(t *testing.T) {
 	}))
 	assert.Equal(t, []int64{1, 2, 3}, seqs)
 }
+
+// Input PostgreSQL cannot store is normalised before hashing, so Append never fails on it.
+func TestAppendNormalisesUnstorableInput(t *testing.T) {
+	d := pgtest.New(t)
+	l := audit.New(clock.NewFake(start))
+	ctx := context.Background()
+	actor := audit.Actor{Type: audit.ActorUser, Name: "bad\x00name\xff", IP: netip.MustParseAddr("fe80::1%eth0"), RequestID: "r\x00"}
+	var written audit.Entry
+	require.NoError(t, db.InTx(ctx, d.App, func(tx pgx.Tx) error {
+		var err error
+		written, err = l.Append(ctx, tx, audit.Event{Actor: actor, Action: "x.y", ObjectID: "o\xc3", Result: audit.Success,
+			Details: map[string]string{"note": "a\x00b\xfe", "k\x00": "v"}})
+		return err
+	}))
+	assert.Equal(t, "fe80::1", written.IP)
+	items, _, err := audit.List(ctx, d.App, audit.Filter{})
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "bad�name�", items[0].ActorName)
+	assert.Equal(t, "a�b�", items[0].Details["note"])
+	assert.Equal(t, written.Hash, items[0].Hash)
+	rep, err := audit.Verify(ctx, d.App)
+	require.NoError(t, err)
+	assert.True(t, rep.Intact, "%+v", rep)
+}

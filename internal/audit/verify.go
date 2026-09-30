@@ -128,6 +128,15 @@ func (s *Service) Verify(ctx context.Context, actor Actor) (Report, error) {
 	}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if rep.Intact && rep.HeadSeq > 0 {
+			var stored checkpoint
+			has, err := settings.Get(ctx, tx, checkpointKey, &stored)
+			if err != nil {
+				return fmt.Errorf("audit: read checkpoint: %w", err)
+			}
+			if has && stored.Seq > rep.HeadSeq {
+				_, err := s.log.Append(ctx, tx, ev) // never move the checkpoint backwards
+				return err
+			}
 			cp := checkpoint{Seq: rep.HeadSeq, Hash: hex.EncodeToString(rep.HeadHash),
 				At: s.log.clock.Now().UTC().Format(time.RFC3339)}
 			if err := settings.Set(ctx, tx, checkpointKey, cp, s.log.clock.Now()); err != nil {

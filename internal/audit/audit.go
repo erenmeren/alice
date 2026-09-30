@@ -85,12 +85,7 @@ type Entry struct {
 // ErrForbiddenDetailKey is returned when a details key names something that may carry a secret.
 var ErrForbiddenDetailKey = errors.New("audit: details key may carry a secret")
 
-var forbiddenKeys = map[string]bool{
-	"password": true, "secret": true, "passphrase": true, "token": true, "code": true,
-	"totp_secret": true, "private_key": true, "recovery_code": true,
-}
-
-// lockKey is the pg_advisory_xact_lock key that serializes chain writes ("caudit" as bytes).
+// lockKey is the pg_advisory_xact_lock key that serializes chain writes (an arbitrary constant).
 const lockKey int64 = 7160927315633811300
 
 const timeLayout = "2006-01-02T15:04:05.000000Z07:00"
@@ -106,6 +101,7 @@ func New(c clock.Clock) *Log { return &Log{clock: c} }
 // Append writes e as the next chain link inside tx. The caller's business
 // change and its audit row therefore commit or roll back together.
 func (l *Log) Append(ctx context.Context, tx pgx.Tx, e Event) (Entry, error) {
+	e = normalize(e)
 	if err := checkDetails(e.Details); err != nil {
 		return Entry{}, err
 	}
@@ -133,7 +129,7 @@ func (l *Log) Append(ctx context.Context, tx pgx.Tx, e Event) (Entry, error) {
 		ObjectType: e.ObjectType,
 		ObjectID:   e.ObjectID,
 		Result:     e.Result,
-		Details:    copyDetails(e.Details),
+		Details:    e.Details,
 		RequestID:  e.Actor.RequestID,
 		PrevHash:   prev,
 	}
@@ -207,13 +203,89 @@ func ComputeHash(prev []byte, e Entry) []byte {
 	return h.Sum(nil)
 }
 
+// sensitiveSegments are key segments that mark a details key as possibly carrying a secret.
+var sensitiveSegments = map[string]bool{
+	"password": true, "passphrase": true, "secret": true, "private": true, "token": true, "code": true,
+	"totp": true, "otp": true, "key": true, "dek": true, "credential": true, "cookie": true, "session": true,
+}
+
+// checkDetails rejects details keys with a sensitive segment (case-insensitive; segments split on
+// '_', '-', '.' and camelCase boundaries). Keys ending in id, prefix or count, and error_code and
+// reason_code, are metadata about a secret rather than the secret and are allowed.
 func checkDetails(d map[string]string) error {
 	for k := range d {
-		if forbiddenKeys[k] || strings.HasPrefix(k, "private") {
-			return fmt.Errorf("%w: %q", ErrForbiddenDetailKey, k)
+		segs := keySegments(k)
+		if len(segs) == 0 {
+			continue
+		}
+		joined := strings.Join(segs, "_")
+		if joined == "error_code" || joined == "reason_code" {
+			continue
+		}
+		if len(segs) > 1 {
+			switch segs[len(segs)-1] {
+			case "id", "prefix", "count":
+				continue
+			}
+		}
+		for _, s := range segs {
+			if sensitiveSegments[s] || sensitiveSegments[strings.TrimSuffix(s, "s")] {
+				return fmt.Errorf("%w: %q", ErrForbiddenDetailKey, k)
+			}
 		}
 	}
 	return nil
+}
+
+// keySegments splits k into lower-case ASCII segments.
+func keySegments(k string) []string {
+	var segs []string
+	var cur []byte
+	flush := func() {
+		if len(cur) > 0 {
+			segs = append(segs, string(cur))
+			cur = cur[:0]
+		}
+	}
+	for i := 0; i < len(k); i++ {
+		c := k[i]
+		switch {
+		case c == '_' || c == '-' || c == '.':
+			flush()
+		case c >= 'A' && c <= 'Z':
+			prevLower := i > 0 && (k[i-1] >= 'a' && k[i-1] <= 'z' || k[i-1] >= '0' && k[i-1] <= '9')
+			nextLower := i+1 < len(k) && k[i+1] >= 'a' && k[i+1] <= 'z'
+			prevUpper := i > 0 && k[i-1] >= 'A' && k[i-1] <= 'Z'
+			if prevLower || (prevUpper && nextLower) {
+				flush()
+			}
+			cur = append(cur, c+'a'-'A')
+		default:
+			cur = append(cur, c)
+		}
+	}
+	flush()
+	return segs
+}
+
+// sanitize makes s storable in PostgreSQL text and jsonb: invalid UTF-8 and NUL become U+FFFD.
+func sanitize(s string) string {
+	return strings.ReplaceAll(strings.ToValidUTF8(s, "\uFFFD"), "\x00", "\uFFFD")
+}
+
+// normalize sanitizes every string of e so that the hash covers exactly what is stored.
+func normalize(e Event) Event {
+	e.Actor.Name = sanitize(e.Actor.Name)
+	e.Actor.RequestID = sanitize(e.Actor.RequestID)
+	e.Action = sanitize(e.Action)
+	e.ObjectType = sanitize(e.ObjectType)
+	e.ObjectID = sanitize(e.ObjectID)
+	d := make(map[string]string, len(e.Details))
+	for k, v := range e.Details {
+		d[sanitize(k)] = sanitize(v)
+	}
+	e.Details = d
+	return e
 }
 
 func copyDetails(d map[string]string) map[string]string {
@@ -228,7 +300,7 @@ func canonicalIP(a netip.Addr) string {
 	if !a.IsValid() {
 		return ""
 	}
-	return a.Unmap().String()
+	return a.Unmap().WithZone("").String()
 }
 
 // canonicalIPText canonicalizes an address read back with host(ip).

@@ -2,6 +2,7 @@ package audit_test
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 	"time"
 
@@ -76,4 +77,13 @@ func TestSystemActor(t *testing.T) {
 	assert.Equal(t, audit.ActorSystem, a.Type)
 	assert.Equal(t, "cli", a.Name)
 	assert.Equal(t, uuid.Nil, a.ID)
+}
+
+func TestComputeHashGoldenVectors(t *testing.T) {
+	zero := make([]byte, sha256.Size)
+	assert.Equal(t, "99757216d8d2ffa156577a306f64a92c2e124d629b6ccfb46184e337dfc2ac08", hex.EncodeToString(audit.ComputeHash(zero, sample())))
+	e := sample()
+	e.Action = "a<b>&c"
+	e.Details = map[string]string{"k": "<x>&y"}
+	assert.Equal(t, "d229a2213df1c5dce851b8700ea5dc765347940a209a708972b9debd5836a127", hex.EncodeToString(audit.ComputeHash(zero, e)))
 }
