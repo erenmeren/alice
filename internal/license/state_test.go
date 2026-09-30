@@ -316,12 +316,100 @@ func TestCorrectionChain(t *testing.T) {
 	assert.Nil(t, e.Pending)
 }
 
-// A correction of a license that is no longer in force must not displace the one that is.
-func TestStaleCorrectionIgnored(t *testing.T) {
+// Round-3 rule: a started correction supersedes its target directly; among the remaining
+// valid licenses the latest valid_from wins. So C (Replaces A, valid_from E+3d) is also
+// the latest active license at E+5d and takes over from B. This supersedes the round-2
+// expectation that B stays current; the controller's definitive rule decides.
+func TestStartedCorrectionOfOlderLicenseWinsByValidFrom(t *testing.T) {
 	b := lic(2, "LIC-B", expiry, expiry.Add(365*day), 10)
 	c := lic(3, "LIC-C", expiry.Add(3*day), expiry.Add(100*day), 10)
 	c.Payload.Replaces = "LIC-A"
 	e := license.Evaluate(expiry.Add(5*day), installedAt, append(baseline(), b, c))
 	assert.Equal(t, license.PhaseActive, e.Phase)
-	assert.Equal(t, "LIC-B", e.Key())
+	assert.Equal(t, "LIC-C", e.Key())
+}
+
+// N1: a correction of a not-yet-started renewal supersedes it once the correction has started.
+func TestN1CorrectionOfFutureRenewal(t *testing.T) {
+	b := lic(2, "LIC-B", expiry.Add(365*day), expiry.Add(730*day), 10)
+	c := lic(3, "LIC-C", expiry, expiry.Add(400*day), 10)
+	c.Payload.Replaces = "LIC-B"
+	for _, at := range []time.Time{expiry.Add(day), expiry.Add(8 * day)} {
+		e := license.Evaluate(at, installedAt, append(baseline(), b, c))
+		assert.Equal(t, license.PhaseActive, e.Phase, at.String())
+		assert.Equal(t, "LIC-C", e.Key(), at.String())
+		assert.Nil(t, e.Pending, at.String())
+	}
+}
+
+// N2: the replaced license was never uploaded; the correction stands on its own.
+func TestN2CorrectionOfUnknownLicense(t *testing.T) {
+	c := lic(1, "LIC-C", installedAt, installedAt.Add(365*day), 10)
+	c.Payload.Replaces = "LIC-A"
+	e := license.Evaluate(installedAt.Add(40*day), installedAt, []license.Installed{c})
+	assert.Equal(t, license.PhaseActive, e.Phase)
+	assert.Equal(t, "LIC-C", e.Key())
+}
+
+// N3: upload order A, C (replaces B), B (replaces A): C is current whatever the order.
+func TestN3OrderIndependence(t *testing.T) {
+	a := baseline()[0]
+	c := lic(2, "LIC-C", expiry.Add(-100*day), expiry.Add(200*day), 10)
+	c.Payload.Replaces = "LIC-B"
+	b := lic(3, "LIC-B", expiry.Add(-200*day), expiry.Add(2*day), 10)
+	b.Payload.Replaces = "LIC-A"
+	e := license.Evaluate(expiry.Add(5*day), installedAt, []license.Installed{a, c, b})
+	assert.Equal(t, license.PhaseActive, e.Phase)
+	assert.Equal(t, "LIC-C", e.Key())
+}
+
+// A longer license that started earlier is preferred once the later-starting one has ended.
+func TestLongerEarlierStartWinsAfterExpiry(t *testing.T) {
+	long := lic(2, "LIC-L", expiry.Add(-400*day), expiry.Add(100*day), 10)
+	e := license.Evaluate(expiry.Add(day), installedAt, append(baseline(), long))
+	assert.Equal(t, license.PhaseActive, e.Phase)
+	assert.Equal(t, "LIC-L", e.Key())
+}
+
+// With B (renewal from E) and C (replaces B, from E+20d) both unstarted, nothing is
+// superseded yet (only started uploads supersede), so the highest-Seq upload, C, is pending.
+// Once C starts, B is superseded and no longer pending or current.
+func TestPendingCorrectionOfPendingRenewal(t *testing.T) {
+	b := lic(2, "LIC-B", expiry, expiry.Add(365*day), 10)
+	c := lic(3, "LIC-C", expiry.Add(20*day), expiry.Add(385*day), 10)
+	c.Payload.Replaces = "LIC-B"
+	uploads := append(baseline(), b, c)
+	e := license.Evaluate(expiry.Add(-5*day), installedAt, uploads)
+	assert.Equal(t, "LIC-A", e.Key())
+	require.NotNil(t, e.Pending)
+	assert.Equal(t, "LIC-C", e.Pending.LicenseID)
+
+	e = license.Evaluate(expiry.Add(21*day), installedAt, uploads)
+	assert.Equal(t, "LIC-C", e.Key())
+	assert.Nil(t, e.Pending)
+}
+
+// Uploading an extra valid, unreplacing license never makes an active state worse.
+func TestMonotonicity(t *testing.T) {
+	b := lic(2, "LIC-B", expiry, expiry.Add(365*day), 10)
+	c := lic(3, "LIC-C", expiry.Add(3*day), expiry.Add(100*day), 10)
+	c.Payload.Replaces = "LIC-A"
+	scenarios := [][]license.Installed{
+		baseline(),
+		append(baseline(), b),
+		append(baseline(), b, c),
+		append(baseline(), lic(2, "LIC-L", expiry.Add(-400*day), expiry.Add(100*day), 10)),
+	}
+	for si, base := range scenarios {
+		for n := -70; n <= 400; n += 3 {
+			at := expiry.Add(time.Duration(n) * day)
+			before := license.Evaluate(at, installedAt, base)
+			if before.Phase != license.PhaseActive {
+				continue
+			}
+			extra := lic(99, "LIC-X", at.Add(-day), at.Add(50*day), 10)
+			after := license.Evaluate(at, installedAt, append(append([]license.Installed(nil), base...), extra))
+			assert.Equal(t, license.PhaseActive, after.Phase, "scenario %d day %d", si, n)
+		}
+	}
 }
