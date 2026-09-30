@@ -87,6 +87,31 @@ export const COPY = {
     userCreatedAction: 'User created',
     tokensHeading: 'API tokens',
     accountHeading: 'My account',
+    navLabel: 'Main navigation',
+    openNav: 'Open navigation',
+    closeNav: 'Close navigation',
+    createToken: 'Create token',
+    tokenName: 'Name',
+    tokenSubmit: 'Create',
+    tokenCreatedTitle: 'Your new token',
+    tokenDone: 'Done',
+    revokeNamed: (name: string) => `Revoke token ${name}`,
+    revokeTitle: (name: string) => `Revoke the token ${name}?`,
+    revokeConfirm: 'Revoke token',
+    manageNamed: (name: string) => `Manage ${name}`,
+    manageTitle: (name: string) => `Manage ${name}`,
+    edit: 'Edit',
+    editTitle: (name: string) => `Edit ${name}`,
+    setNewPassword: 'Set a new password',
+    setPasswordTitle: (name: string) => `Set a new password for ${name}`,
+    resetMfa: 'Reset two-factor sign-in',
+    resetMfaTitle: (name: string) => `Reset two-factor sign-in for ${name}?`,
+    cancel: 'Cancel',
+    newRecoveryCodes: 'Create new recovery codes',
+    recoveryCodesActive: 'Your new recovery codes are active.',
+    useRecovery: 'Use a recovery code',
+    recoveryCode: 'Recovery code',
+    notFoundTitle: 'Page not found',
   },
   tr: {
     wizardHeading: 'Alice kurulumu',
@@ -138,6 +163,31 @@ export const COPY = {
     userCreatedAction: 'Kullanıcı oluşturuldu',
     tokensHeading: 'API anahtarları',
     accountHeading: 'Hesabım',
+    navLabel: 'Ana gezinme',
+    openNav: 'Gezinmeyi aç',
+    closeNav: 'Gezinmeyi kapat',
+    createToken: 'Anahtar oluştur',
+    tokenName: 'Ad',
+    tokenSubmit: 'Oluştur',
+    tokenCreatedTitle: 'Yeni anahtarınız',
+    tokenDone: 'Tamam',
+    revokeNamed: (name: string) => `İptal et: ${name}`,
+    revokeTitle: (name: string) => `İptal edilecek anahtar: ${name}`,
+    revokeConfirm: 'Anahtarı iptal et',
+    manageNamed: (name: string) => `Yönet: ${name}`,
+    manageTitle: (name: string) => `Yönetilen kullanıcı: ${name}`,
+    edit: 'Düzenle',
+    editTitle: (name: string) => `Düzenlenen kullanıcı: ${name}`,
+    setNewPassword: 'Yeni parola belirle',
+    setPasswordTitle: (name: string) => `Yeni parola belirlenecek kullanıcı: ${name}`,
+    resetMfa: 'İki adımlı girişi sıfırla',
+    resetMfaTitle: (name: string) => `İki adımlı giriş sıfırlanacak kullanıcı: ${name}`,
+    cancel: 'Vazgeç',
+    newRecoveryCodes: 'Yeni kurtarma kodları oluştur',
+    recoveryCodesActive: 'Yeni kurtarma kodlarınız etkin.',
+    useRecovery: 'Kurtarma kodu kullan',
+    recoveryCode: 'Kurtarma kodu',
+    notFoundTitle: 'Sayfa bulunamadı',
   },
 } as const;
 
@@ -367,8 +417,9 @@ export async function signOut(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: c.signOut })).toHaveCount(0);
 }
 
-// AXE_WIDTHS are the desktop widths every screen must work at (spec §26.1 item 9).
-export const AXE_WIDTHS = [1280, 1920] as const;
+// AXE_WIDTHS are the widths every screen must work at: the desktop widths of spec §26.1 item 9,
+// plus 640 px (a narrow window or tablet), where the navigation collapses behind a menu button.
+export const AXE_WIDTHS = [640, 1280, 1920] as const;
 
 // expectAccessible checks the current screen at each width in AXE_WIDTHS and restores the viewport.
 export async function expectAccessible(page: Page, screen: string): Promise<void> {

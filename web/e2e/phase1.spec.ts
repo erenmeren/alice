@@ -23,7 +23,7 @@ import {
   type Copy,
   type Lang,
 } from './helpers';
-import type { Page, APIRequestContext } from '@playwright/test';
+import type { Page, APIRequestContext, Locator } from '@playwright/test';
 
 const OPERATOR: Account = { username: 'operator1', fullName: 'Oğuz Işık', password: 'operator-password-2026' };
 const AUDITOR: Account = { username: 'auditor1', fullName: 'Ayşe Denetçi', password: 'auditor-password-2026' };
@@ -66,6 +66,24 @@ async function createUser(
     await stepUp.getByRole('button', { name: c.stepUpConfirm }).click();
   }
   await expect(row).toBeVisible();
+}
+
+// confirmWithStepUp waits until done is visible, answering the step-up dialog with a fresh code if
+// the server asks for one first (the step-up window lasts 5 minutes).
+async function confirmWithStepUp(page: Page, request: APIRequestContext, c: Copy, totpSecret: string, done: Locator) {
+  const stepUp = page.getByRole('dialog', { name: c.stepUpHeading });
+  await expect(stepUp.or(done).first()).toBeVisible();
+  if (await stepUp.isVisible()) {
+    await field(stepUp, c.code).fill(await freshCode(request, totpSecret));
+    await stepUp.getByRole('button', { name: c.stepUpConfirm }).click();
+  }
+  await expect(done).toBeVisible();
+}
+
+// closeDialog closes an open dialog with Escape and waits until it is gone.
+async function closeDialog(page: Page, dialog: Locator) {
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
 }
 
 for (const lang of ['en', 'tr'] as Lang[]) {
@@ -239,6 +257,126 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       expect(await submitLogin(page, c, ADMIN.username, ADMIN.password)).toBe(200);
       await expect(page.getByRole('heading', { name: c.mfaHeading })).toBeVisible();
       await expectAccessible(page, 'verification code');
+    });
+
+    test('dialogs, recovery sign-in, not-found and no-access pages have no serious accessibility violations', async ({
+      page,
+      request,
+    }) => {
+      const { totpSecret } = await runWizard(page, request, lang);
+
+      // API tokens: create dialog, the one-time token alert and the revoke dialog.
+      await openNav(page, c.navTokens);
+      await expect(page.getByRole('heading', { name: c.tokensHeading })).toBeVisible();
+      await page.getByRole('button', { name: c.createToken }).click();
+      const create = page.getByRole('dialog', { name: c.createToken });
+      await field(create, c.tokenName).fill('deploy bot');
+      await expectAccessible(page, 'create token dialog');
+      await create.getByRole('button', { name: c.tokenSubmit }).click();
+      const created = page.getByTestId('new-token');
+      await confirmWithStepUp(page, request, c, totpSecret, created);
+      await expect(page.getByText(c.tokenCreatedTitle)).toBeVisible();
+      await expectAccessible(page, 'new token');
+      await page.getByRole('button', { name: c.tokenDone }).click();
+      await expect(created).toHaveCount(0);
+      await page.getByRole('button', { name: c.revokeNamed('deploy bot') }).click();
+      const revoke = page.getByRole('dialog', { name: c.revokeTitle('deploy bot') });
+      await expect(revoke).toBeVisible();
+      await expectAccessible(page, 'revoke token dialog');
+      await revoke.getByRole('button', { name: c.revokeConfirm }).click();
+      await expect(page.getByRole('button', { name: c.revokeNamed('deploy bot') })).toHaveCount(0);
+
+      // Users: manage, edit, set-password and confirmation dialogs.
+      await openNav(page, c.navUsers);
+      await expect(page.getByRole('heading', { name: c.usersHeading })).toBeVisible();
+      await createUser(page, request, c, OPERATOR, 'operator', totpSecret, { expectStepUp: false });
+      const manage = page.getByRole('dialog', { name: c.manageTitle(OPERATOR.username) });
+      const openManage = async () => {
+        await page.getByRole('button', { name: c.manageNamed(OPERATOR.username) }).click();
+        await expect(manage).toBeVisible();
+      };
+      await openManage();
+      await expectAccessible(page, 'manage user dialog');
+      await manage.getByRole('button', { name: c.edit }).click();
+      const edit = page.getByRole('dialog', { name: c.editTitle(OPERATOR.username) });
+      await expect(edit).toBeVisible();
+      await expectAccessible(page, 'edit user dialog');
+      await closeDialog(page, edit);
+      await openManage();
+      await manage.getByRole('button', { name: c.setNewPassword }).click();
+      const setPassword = page.getByRole('dialog', { name: c.setPasswordTitle(OPERATOR.username) });
+      await expect(setPassword).toBeVisible();
+      await expectAccessible(page, 'set password dialog');
+      await closeDialog(page, setPassword);
+      await openManage();
+      await manage.getByRole('button', { name: c.resetMfa }).click();
+      const confirm = page.getByRole('dialog', { name: c.resetMfaTitle(OPERATOR.username) });
+      await expect(confirm).toBeVisible();
+      await expectAccessible(page, 'confirm dialog');
+      await confirm.getByRole('button', { name: c.cancel }).click();
+      await expect(confirm).toHaveCount(0);
+
+      // My account: a new set of recovery codes.
+      await openNav(page, c.navAccount);
+      await expect(page.getByRole('heading', { name: c.accountHeading })).toBeVisible();
+      await page.getByRole('button', { name: c.newRecoveryCodes }).click();
+      const list = page.getByTestId('recovery-codes');
+      await confirmWithStepUp(page, request, c, totpSecret, list);
+      const recoveryCodes = ((await list.textContent()) ?? '').match(/[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}/g) ?? [];
+      expect(recoveryCodes).toHaveLength(10);
+      await expectAccessible(page, 'regenerated recovery codes');
+      await page.getByLabel(c.savedCodes).check();
+      await page.getByRole('button', { name: c.continue }).click();
+      await expect(page.getByText(c.recoveryCodesActive)).toBeVisible();
+
+      // Sign-in with a recovery code instead of the app.
+      await signOut(page);
+      expect(await submitLogin(page, c, ADMIN.username, ADMIN.password)).toBe(200);
+      await expect(page.getByRole('heading', { name: c.mfaHeading })).toBeVisible();
+      await page.getByRole('button', { name: c.useRecovery }).click();
+      await field(page, c.recoveryCode).fill(recoveryCodes[0] ?? '');
+      await expectAccessible(page, 'sign-in with a recovery code');
+      await page.getByRole('button', { name: c.verify }).click();
+      await expect(page.getByRole('heading', { name: c.welcome(ADMIN.fullName) })).toBeVisible();
+
+      await page.goto('/no-such-page');
+      await expect(page.getByRole('heading', { name: c.notFoundTitle })).toBeVisible();
+      await expectAccessible(page, 'not found');
+      await page.goto('/'); // the not-found page has no app shell and so no Sign out button
+      await expect(page.getByRole('heading', { name: c.welcome(ADMIN.fullName) })).toBeVisible();
+      await signOut(page);
+
+      // No-access page, as an operator.
+      await firstSignIn(page, request, OPERATOR);
+      await page.goto('/users');
+      await expect(page.getByText(either('noAccess'))).toBeVisible();
+      await expectAccessible(page, 'no access');
+    });
+
+    test('at 640 px the navigation opens from the menu button and never covers the page', async ({ page, request }) => {
+      await runWizard(page, request, lang);
+      await page.setViewportSize({ width: 640, height: 800 });
+      const nav = page.getByRole('navigation', { name: c.navLabel });
+      const usersLink = nav.getByRole('link', { name: c.navUsers, exact: true });
+      await expect(usersLink).not.toBeInViewport();
+
+      // The page content is reachable: a button in the main area takes the click.
+      await page.getByRole('button', { name: c.openNav }).click();
+      await expect(usersLink).toBeInViewport();
+      await usersLink.click();
+      await expect(page.getByRole('heading', { name: c.usersHeading })).toBeVisible();
+      await expect(usersLink).not.toBeInViewport();
+      await expect(page.getByRole('button', { name: c.openNav })).toHaveAttribute('aria-expanded', 'false');
+      await page.getByRole('button', { name: c.addUser }).click();
+      await expect(page.getByRole('dialog', { name: c.addUser })).toBeVisible();
+      await closeDialog(page, page.getByRole('dialog', { name: c.addUser }));
+
+      // Opening and closing the menu without choosing a page works too.
+      await page.getByRole('button', { name: c.openNav }).click();
+      await page.getByRole('button', { name: c.closeNav }).click();
+      await expect(usersLink).not.toBeInViewport();
+      await page.getByRole('button', { name: c.addUser }).click();
+      await expect(page.getByRole('dialog', { name: c.addUser })).toBeVisible();
     });
   });
 }
