@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -77,4 +78,42 @@ func TestConfigNeverRevealsDatabasePassword(t *testing.T) {
 func TestRedactionOfUnparseableURL(t *testing.T) {
 	c := config.Config{DatabaseURL: "::not a url s3cret-pw"}
 	assert.NotContains(t, c.String(), "s3cret-pw")
+}
+
+func TestRedactionOfPasswordForms(t *testing.T) {
+	for _, raw := range []string{
+		"postgres://a@h/db?password=s3cret-pw",
+		"postgresql://a@h/db?sslmode=disable&sslpassword=s3cret-pw",
+		"postgres://a@h/db?PGPassword=s3cret-pw",
+		"host=db user=a password=s3cret-pw dbname=x",
+		"mysql://a:s3cret-pw@h/db",
+		"postgres://a:s3cret-pw@h/db?x=%zz",
+	} {
+		c := config.Config{DatabaseURL: raw}
+		ptr := &c
+		var text bytes.Buffer
+		slog.New(slog.NewTextHandler(&text, nil)).Info("cfg", "config", c)
+		var js bytes.Buffer
+		require.NoError(t, json.NewEncoder(&js).Encode(c))
+		for _, out := range []string{c.String(), fmt.Sprintf("%v", ptr), fmt.Sprintf("%+v", c), fmt.Sprintf("%#v", c), text.String(), js.String()} {
+			assert.NotContains(t, out, "s3cret-pw", raw)
+		}
+	}
+}
+
+func TestRedactionKeepsNonSecretParts(t *testing.T) {
+	c := config.Config{DatabaseURL: "postgres://a@h:5432/db?password=s3cret-pw&sslmode=disable"}
+	assert.Contains(t, c.String(), "h:5432/db")
+	assert.Contains(t, c.String(), "sslmode=disable")
+}
+
+func TestJSONMarshalNeverRevealsDatabasePassword(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"ALICE_DATABASE_URL": dbURL}))
+	require.NoError(t, err)
+	for _, v := range []any{c, &c} {
+		b, err := json.Marshal(v)
+		require.NoError(t, err)
+		assert.NotContains(t, string(b), "s3cret-pw")
+		assert.Contains(t, string(b), "postgres:5432")
+	}
 }

@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -72,15 +73,55 @@ func (c Config) String() string {
 // GoString makes %#v safe as well.
 func (c Config) GoString() string { return c.String() }
 
+const redactedPlaceholder = "[redacted]"
+
+// redactURL is allowlist-based: only well-formed postgres URLs are rendered,
+// with every password masked. Anything else (key/value DSNs, other schemes,
+// parse failures) becomes a fixed placeholder.
+//
+// The url.Parse error must never be returned or logged: it echoes the input,
+// which may contain the password.
 func redactURL(raw string) string {
 	if raw == "" {
 		return ""
 	}
 	u, err := url.Parse(raw)
-	if err != nil {
-		return "[invalid URL]"
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
+		return redactedPlaceholder
 	}
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return redactedPlaceholder
+	}
+	for name := range q {
+		if containsFold(name, "password") {
+			q[name] = []string{"xxxxx"}
+		}
+	}
+	u.RawQuery = q.Encode()
 	return u.Redacted()
+}
+
+// containsFold reports whether s contains substr, ignoring ASCII case.
+func containsFold(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if strings.EqualFold(s[i:i+len(substr)], substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// MarshalJSON emits the configuration with secrets redacted.
+func (c Config) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		DatabaseURL string   `json:"database_url"`
+		ListenAddr  string   `json:"listen_addr"`
+		HealthAddr  string   `json:"health_addr"`
+		KeysDir     string   `json:"keys_dir"`
+		LogLevel    string   `json:"log_level"`
+		TLSHosts    []string `json:"tls_hosts"`
+	}{redactURL(c.DatabaseURL), c.ListenAddr, c.HealthAddr, c.KeysDir, c.LogLevel.String(), c.TLSHosts})
 }
 
 func withDefault(v, def string) string {
