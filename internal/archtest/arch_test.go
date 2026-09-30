@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -39,6 +40,48 @@ var rules = map[string][]string{
 }
 
 const platform = "alice/internal/platform/..."
+
+// denied lists imports that are forbidden even though a broader allow entry
+// covers them. Providers are pure adapters and have no database access (§5.4 rule 2).
+var denied = map[string][]string{
+	"alice/internal/providers":     {"alice/internal/platform/db/..."},
+	"alice/internal/providers/...": {"alice/internal/platform/db/..."},
+}
+
+// allowed decides whether package pkg may import imp. It is a pure function so
+// the rules can be tested with positive and negative cases.
+func allowed(pkg, imp string) error {
+	if !strings.HasPrefix(imp, "alice/") {
+		return nil // standard library and third-party packages are not governed here
+	}
+	if strings.HasPrefix(pkg, "alice/cmd/") {
+		return nil // the composition root may import everything
+	}
+	key, ok := ruleFor(pkg)
+	if !ok {
+		return fmt.Errorf("%s has no import rule; add it to internal/archtest", pkg)
+	}
+	for _, d := range denied[key] {
+		if covers(d, imp) {
+			return fmt.Errorf("%s must not import %s (denied by rule %q)", pkg, imp, key)
+		}
+	}
+	// A package may import its own subpackages. Provider implementations are
+	// siblings, so for them "own" means their own subtree, not the whole rule subtree.
+	if key == "alice/internal/providers/..." {
+		if imp == pkg || strings.HasPrefix(imp, pkg+"/") {
+			return nil
+		}
+	} else if covers(key, imp) {
+		return nil
+	}
+	for _, a := range rules[key] {
+		if covers(a, imp) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s must not import %s (rule %q)", pkg, imp, key)
+}
 
 func covers(pattern, pkg string) bool {
 	if base, ok := strings.CutSuffix(pattern, "/..."); ok {
@@ -83,26 +126,48 @@ func TestImportRules(t *testing.T) {
 		} else {
 			require.NoError(t, err)
 		}
-		key, ok := ruleFor(p.ImportPath)
-		if !ok {
-			t.Errorf("%s has no import rule; add it to internal/archtest", p.ImportPath)
-			continue
-		}
 		for _, imp := range p.Imports {
-			if !strings.HasPrefix(imp, "alice/") || covers(key, imp) {
-				continue
-			}
-			allowed := false
-			for _, a := range rules[key] {
-				if covers(a, imp) {
-					allowed = true
-					break
-				}
-			}
-			if !allowed {
-				t.Errorf("%s must not import %s (rule %q)", p.ImportPath, imp, key)
+			if err := allowed(p.ImportPath, imp); err != nil {
+				t.Error(err)
 			}
 		}
+	}
+}
+
+func TestAllowed(t *testing.T) {
+	const (
+		nginx   = "alice/internal/providers/nginx"
+		azurekv = "alice/internal/providers/azurekv"
+	)
+	tests := []struct {
+		name, pkg, imp string
+		ok             bool
+	}{
+		{"provider sibling denied", nginx, azurekv, false},
+		{"provider to platform/db denied", nginx, "alice/internal/platform/db", false},
+		{"provider interface pkg to platform/db denied", "alice/internal/providers", "alice/internal/platform/db", false},
+		{"provider to platform/clock allowed", nginx, "alice/internal/platform/clock", true},
+		{"provider to interface package allowed", nginx, "alice/internal/providers", true},
+		{"provider to linuxssh allowed", nginx, "alice/internal/providers/linuxssh", true},
+		{"provider to own subpackage allowed", nginx, nginx + "/internal", true},
+		{"platform to i18n denied", "alice/internal/platform/clock", "alice/internal/i18n", false},
+		{"platform to platform allowed", "alice/internal/platform/db", "alice/internal/platform/clock", true},
+		{"api to provider impl denied", "alice/internal/api", nginx, false},
+		{"api to provider interface allowed", "alice/internal/api", "alice/internal/providers", true},
+		{"api to platform/db allowed", "alice/internal/api", "alice/internal/platform/db", true},
+		{"cmd to provider impl allowed", "alice/cmd/alice", nginx, true},
+		{"third-party import ignored", nginx, "github.com/x/y", true},
+		{"unknown package rejected", "alice/internal/mystery", "alice/internal/version", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := allowed(tc.pkg, tc.imp)
+			if tc.ok {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
 	}
 }
 
