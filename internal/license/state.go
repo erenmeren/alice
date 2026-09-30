@@ -1,7 +1,6 @@
 package license
 
 import (
-	"sort"
 	"time"
 )
 
@@ -56,25 +55,36 @@ type Evaluation struct {
 
 // Evaluate computes the license state at now (the trusted, effective time) from the
 // installation timestamp and the verified uploads. The newest upload whose valid_from
-// has started is in force, even when it is shorter or is a correction with earlier dates:
-// the vendor's latest file is authoritative. Newer uploads that have not started yet are
-// pending; the previous license, or the evaluation, continues meanwhile (L-48).
+// has started, after dropping uploads named in a newer upload's Replaces, and whose
+// valid_from is latest (ties: higher Seq) is in force, even when it is shorter. The newest
+// surviving upload that has not started yet is pending whatever its Seq relative to the
+// current one; the current license, or the evaluation, continues meanwhile (L-48).
 func Evaluate(now, installedAt time.Time, installed []Installed) Evaluation {
 	now = now.UTC()
-	sorted := append([]Installed(nil), installed...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Seq > sorted[j].Seq })
+	replaced := map[string]int64{} // license ID -> highest Seq of an upload that replaces it
+	for _, in := range installed {
+		if r := in.Payload.Replaces; r != "" && in.Seq > replaced[r] {
+			replaced[r] = in.Seq
+		}
+	}
 	var current, pending *Payload
 	var currentSeq, pendingSeq int64
-	for i := range sorted {
-		p := sorted[i].Payload
+	for i := range installed {
+		in := installed[i]
+		if in.Seq < replaced[in.Payload.LicenseID] {
+			continue // superseded by a newer correction license (R7)
+		}
+		p := in.Payload
 		if p.ValidFrom.After(now) {
-			if pending == nil {
-				pending, pendingSeq = &p, sorted[i].Seq
+			if pendingSeq == 0 || in.Seq > pendingSeq {
+				pending, pendingSeq = &p, in.Seq
 			}
 			continue
 		}
-		current, currentSeq = &p, sorted[i].Seq
-		break
+		if current == nil || p.ValidFrom.After(current.ValidFrom) ||
+			(p.ValidFrom.Equal(current.ValidFrom) && in.Seq > currentSeq) {
+			current, currentSeq = &p, in.Seq
+		}
 	}
 
 	if current == nil {

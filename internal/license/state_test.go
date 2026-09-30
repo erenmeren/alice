@@ -195,7 +195,7 @@ func TestNewestStartedUploadWins(t *testing.T) {
 	assert.Equal(t, "LIC-C", e.Key())
 }
 
-// §23.7 target limit (pure part): L-70, L-71, L-73, L-75..L-78, L-04.
+// §23.7 target limit (pure part): L-70, L-71, L-75, L-77, L-78, L-04.
 func TestTargetLimit(t *testing.T) {
 	active := license.Evaluate(expiry.Add(-100*day), installedAt, baseline())
 	assert.True(t, active.CanAdd(9))   // L-70
@@ -211,6 +211,9 @@ func TestTargetLimit(t *testing.T) {
 	small := license.Evaluate(installedAt.Add(time.Hour), installedAt, []license.Installed{lic(1, "LIC-S", installedAt, installedAt.Add(365*day), 3)})
 	assert.True(t, small.OverLimit(5), "L-78")
 
+	big := license.Evaluate(expiry.Add(-100*day), installedAt, append(baseline(), lic(2, "LIC-BIG", expiry.Add(-150*day), expiry.Add(200*day), 100)))
+	assert.Equal(t, 100, big.MaxTargets, "L-77")
+
 	locked := license.Evaluate(expiry.Add(200*day), installedAt, baseline())
 	assert.False(t, locked.CanAdd(0), "nothing is added while locked")
 }
@@ -222,4 +225,64 @@ func TestClasses(t *testing.T) {
 	}
 	assert.False(t, license.Class(9).Valid())
 	assert.Equal(t, "read_only", license.ClassReadOnly.String())
+}
+
+// A correction uploaded after an early renewal must not hide the pending renewal.
+func TestCorrectionDoesNotHidePendingRenewal(t *testing.T) {
+	renewal := lic(2, "LIC-B", expiry, expiry.Add(365*day), 10)
+	correction := lic(3, "LIC-C", expiry.Add(-300*day), expiry, 10)
+	correction.Payload.Replaces = "LIC-A"
+	uploads := append(baseline(), renewal, correction)
+
+	e := license.Evaluate(expiry.Add(-5*day), installedAt, uploads)
+	assert.Equal(t, "LIC-C", e.Key())
+	require.NotNil(t, e.Pending)
+	assert.Equal(t, "LIC-B", e.Pending.LicenseID)
+	assert.Equal(t, int64(2), e.PendingSeq)
+
+	for _, at := range []time.Time{expiry.Add(time.Hour), expiry.Add(200 * time.Hour)} {
+		e = license.Evaluate(at, installedAt, uploads)
+		assert.Equal(t, license.PhaseActive, e.Phase, at.String())
+		assert.Equal(t, "LIC-B", e.Key(), at.String())
+		assert.Nil(t, e.Pending)
+	}
+}
+
+// Every boundary flips exactly at its instant: t-1s, t, t+1s.
+func TestBoundaries(t *testing.T) {
+	evalEnd := installedAt.Add(30 * day)
+	from := expiry.Add(20 * day)
+	started := append(baseline(), lic(2, "LIC-B", from, from.Add(365*day), 20))
+	type probe struct {
+		name          string
+		at            time.Time
+		installed     []license.Installed
+		before, after func(license.Evaluation) bool
+	}
+	thr := func(n int) func(license.Evaluation) bool {
+		return func(e license.Evaluation) bool { return e.Threshold == n }
+	}
+	phase := func(p license.Phase) func(license.Evaluation) bool {
+		return func(e license.Evaluation) bool { return e.Phase == p }
+	}
+	probes := []probe{
+		{"evaluation end", evalEnd, nil, phase(license.PhaseEvaluation), phase(license.PhaseEvaluationExpired)},
+		{"evaluation warning 7", installedAt.Add(23 * day), nil, thr(0), thr(7)},
+		{"evaluation warning 3", installedAt.Add(27 * day), nil, thr(7), thr(3)},
+		{"evaluation warning 1", installedAt.Add(29 * day), nil, thr(3), thr(1)},
+		{"expiry 60", expiry.Add(-60 * day), baseline(), thr(0), thr(60)},
+		{"expiry 30", expiry.Add(-30 * day), baseline(), thr(60), thr(30)},
+		{"expiry 14", expiry.Add(-14 * day), baseline(), thr(30), thr(14)},
+		{"expiry 7", expiry.Add(-7 * day), baseline(), thr(14), thr(7)},
+		{"expiry 1", expiry.Add(-1 * day), baseline(), thr(7), thr(1)},
+		{"expiry", expiry, baseline(), phase(license.PhaseActive), phase(license.PhaseGrace)},
+		{"lock", expiry.Add(168 * time.Hour), baseline(), phase(license.PhaseGrace), phase(license.PhaseLocked)},
+		{"valid_from", from, started, func(e license.Evaluation) bool { return e.Key() == "LIC-A" && e.Pending != nil },
+			func(e license.Evaluation) bool { return e.Key() == "LIC-B" && e.Pending == nil }},
+	}
+	for _, p := range probes {
+		assert.True(t, p.before(license.Evaluate(p.at.Add(-time.Second), installedAt, p.installed)), p.name+" t-1s")
+		assert.True(t, p.after(license.Evaluate(p.at, installedAt, p.installed)), p.name+" t")
+		assert.True(t, p.after(license.Evaluate(p.at.Add(time.Second), installedAt, p.installed)), p.name+" t+1s")
+	}
 }
