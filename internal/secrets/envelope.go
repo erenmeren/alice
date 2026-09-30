@@ -6,8 +6,11 @@ import (
 	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"strconv"
 )
 
@@ -73,6 +76,25 @@ func NewKeyring(version int, key []byte) (*Keyring, error) {
 	}
 	return &Keyring{version: version, key: append([]byte(nil), key...)}, nil
 }
+
+func (k Keyring) redacted() string {
+	return "secrets.Keyring{version:" + strconv.Itoa(k.version) + " key:" + redacted + "}"
+}
+
+// String implements fmt.Stringer; the master key is never printed.
+func (k Keyring) String() string { return k.redacted() }
+
+// GoString implements fmt.GoStringer.
+func (k Keyring) GoString() string { return k.redacted() }
+
+// Format implements fmt.Formatter so every verb hides the master key.
+func (k Keyring) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, k.redacted()) }
+
+// LogValue implements slog.LogValuer.
+func (k Keyring) LogValue() slog.Value { return slog.StringValue(k.redacted()) }
+
+// MarshalJSON implements json.Marshaler.
+func (k Keyring) MarshalJSON() ([]byte, error) { return json.Marshal(k.redacted()) }
 
 // Version returns the master key version used for new envelopes.
 func (k *Keyring) Version() int { return k.version }

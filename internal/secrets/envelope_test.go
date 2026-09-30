@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -167,4 +168,39 @@ func TestPlaintextZero(t *testing.T) {
 	p.Zero()
 	assert.Equal(t, make([]byte, len(raw)), raw)
 	assert.Equal(t, make([]byte, len(raw)), p.Bytes())
+}
+
+func TestKeyringIsRedactedEverywhere(t *testing.T) {
+	k, err := secrets.NewKeyring(1, bytes.Repeat([]byte{0x5a}, secrets.KeySize))
+	require.NoError(t, err)
+	leaks := func(s string) bool {
+		return strings.Contains(s, "90 90 90") || strings.Contains(s, "5a5a5a") || strings.Contains(s, "ZZZZ")
+	}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x"} {
+		assert.Equal(t, "secrets.Keyring{version:1 key:[redacted]}", fmt.Sprintf(verb, k), verb)
+		assert.Equal(t, "secrets.Keyring{version:1 key:[redacted]}", fmt.Sprintf(verb, *k), verb)
+	}
+	assert.False(t, leaks(fmt.Sprintf("%+v", struct{ K *secrets.Keyring }{k})))
+	assert.Contains(t, fmt.Sprintf("%+v", struct{ K *secrets.Keyring }{k}), "[redacted]")
+
+	b, err := json.Marshal(map[string]any{"k": k})
+	require.NoError(t, err)
+	assert.False(t, leaks(string(b)))
+	assert.Contains(t, string(b), "[redacted]")
+
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("x", "kr", k)
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("x", "kr", k)
+	assert.False(t, leaks(buf.String()))
+	assert.Contains(t, buf.String(), "[redacted]")
+}
+
+func TestWrapBoundToKeyVersion(t *testing.T) {
+	env, err := keyring(t).Seal(loc, []byte("x"))
+	require.NoError(t, err)
+	env.KeyVersion = 2
+	v2, err := secrets.NewKeyring(2, testKey(7))
+	require.NoError(t, err)
+	_, err = v2.Open(loc, env)
+	assert.ErrorIs(t, err, secrets.ErrDecrypt)
 }
