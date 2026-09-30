@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"sort"
 	"strings"
 
 	"golang.org/x/text/language"
@@ -99,7 +100,8 @@ func (c *Catalog) Negotiate(acceptLanguage string) string {
 }
 
 // T renders key in lang, falling back to the default locale and then to the key itself.
-// Placeholders use the i18next syntax {{name}}.
+// Placeholders use the i18next syntax {{name}}; a placeholder without a matching
+// param stays in the output as the literal {{name}}.
 func (c *Catalog) T(lang, key string, params map[string]string) string {
 	s, ok := c.msgs[lang][key]
 	if !ok {
@@ -108,10 +110,16 @@ func (c *Catalog) T(lang, key string, params map[string]string) string {
 	if !ok {
 		return key
 	}
-	for k, v := range params {
-		s = strings.ReplaceAll(s, "{{"+k+"}}", v)
+	if len(params) == 0 {
+		return s
 	}
-	return s
+	// One pass over s: substituted values are never rescanned, so the result
+	// does not depend on map order and a value cannot inject placeholders.
+	pairs := make([]string, 0, 2*len(params))
+	for k, v := range params {
+		pairs = append(pairs, "{{"+k+"}}", v)
+	}
+	return strings.NewReplacer(pairs...).Replace(s)
 }
 
 // Flatten converts nested JSON objects into dot-separated keys.
@@ -128,7 +136,13 @@ func Flatten(data []byte) (map[string]string, error) {
 }
 
 func flattenInto(out map[string]string, prefix string, node map[string]any) error {
-	for k, v := range node {
+	keys := make([]string, 0, len(node))
+	for k := range node {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // deterministic: the lexicographically first invalid key is reported
+	for _, k := range keys {
+		v := node[k]
 		key := k
 		if prefix != "" {
 			key = prefix + "." + k

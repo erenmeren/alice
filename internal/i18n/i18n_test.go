@@ -85,3 +85,25 @@ func TestRealCatalogLoads(t *testing.T) {
 	assert.NotEqual(t, "errors.system.not_found.title", c.T("tr", "errors.system.not_found.title", nil))
 	assert.Equal(t, "tr", c.Negotiate("tr-TR,tr;q=0.9,en;q=0.8"), "a Turkish browser must get Turkish")
 }
+
+func TestInterpolationIsSinglePass(t *testing.T) {
+	c, err := i18n.Load(fstest.MapFS{
+		"manifest.json":  {Data: []byte(`{"default":"en","locales":[{"code":"en","name":"English","direction":"ltr"}]}`)},
+		"common/en.json": {Data: []byte(`{"one":"{{a}}","two":"{{a}} and {{b}}","gone":"Hi {{name}}"}`)},
+	})
+	require.NoError(t, err)
+	for range 200 {
+		assert.Equal(t, "{{b}}", c.T("en", "one", map[string]string{"a": "{{b}}", "b": "X"}), "values are never rescanned")
+	}
+	assert.Equal(t, "{{b}} and X", c.T("en", "two", map[string]string{"a": "{{b}}", "b": "X"}))
+	assert.Equal(t, "{ {x}} }}{{", c.T("en", "one", map[string]string{"a": "{ {x}} }}{{"}), "braces are inserted verbatim")
+	assert.Equal(t, "Hi {{name}}", c.T("en", "gone", nil), "missing param stays literal")
+	assert.Equal(t, "Hi {{name}}", c.T("en", "gone", map[string]string{"other": "x"}))
+}
+
+func TestFlattenReportsFirstInvalidKeyDeterministically(t *testing.T) {
+	for range 50 {
+		_, err := i18n.Flatten([]byte(`{"z":1,"m":{"b":2,"a":3},"a":true}`))
+		assert.ErrorContains(t, err, "a: value")
+	}
+}
