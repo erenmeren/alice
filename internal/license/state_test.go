@@ -286,3 +286,42 @@ func TestBoundaries(t *testing.T) {
 		assert.True(t, p.after(license.Evaluate(p.at.Add(time.Second), installedAt, p.installed)), p.name+" t+1s")
 	}
 }
+
+// A future-dated correction leaves the license in force untouched until it starts.
+func TestFutureCorrectionWaits(t *testing.T) {
+	now := expiry.Add(-20 * day)
+	c := lic(2, "LIC-C", now.Add(time.Hour), expiry.Add(30*day), 10)
+	c.Payload.Replaces = "LIC-A"
+	uploads := append(baseline(), c)
+
+	e := license.Evaluate(now, installedAt, uploads)
+	assert.Equal(t, license.PhaseActive, e.Phase)
+	assert.Equal(t, "LIC-A", e.Key())
+	require.NotNil(t, e.Pending)
+	assert.Equal(t, "LIC-C", e.Pending.LicenseID)
+
+	e = license.Evaluate(now.Add(time.Hour), installedAt, uploads)
+	assert.Equal(t, "LIC-C", e.Key())
+	assert.Nil(t, e.Pending)
+}
+
+// C replaces B replaces A: the chain resolves to C.
+func TestCorrectionChain(t *testing.T) {
+	b := lic(2, "LIC-B", expiry.Add(-300*day), expiry.Add(10*day), 10)
+	b.Payload.Replaces = "LIC-A"
+	c := lic(3, "LIC-C", expiry.Add(-200*day), expiry.Add(20*day), 10)
+	c.Payload.Replaces = "LIC-B"
+	e := license.Evaluate(expiry.Add(-5*day), installedAt, append(baseline(), b, c))
+	assert.Equal(t, "LIC-C", e.Key())
+	assert.Nil(t, e.Pending)
+}
+
+// A correction of a license that is no longer in force must not displace the one that is.
+func TestStaleCorrectionIgnored(t *testing.T) {
+	b := lic(2, "LIC-B", expiry, expiry.Add(365*day), 10)
+	c := lic(3, "LIC-C", expiry.Add(3*day), expiry.Add(100*day), 10)
+	c.Payload.Replaces = "LIC-A"
+	e := license.Evaluate(expiry.Add(5*day), installedAt, append(baseline(), b, c))
+	assert.Equal(t, license.PhaseActive, e.Phase)
+	assert.Equal(t, "LIC-B", e.Key())
+}

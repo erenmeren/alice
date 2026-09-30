@@ -1,6 +1,8 @@
 package license
 
 import (
+	"cmp"
+	"slices"
 	"time"
 )
 
@@ -55,35 +57,46 @@ type Evaluation struct {
 
 // Evaluate computes the license state at now (the trusted, effective time) from the
 // installation timestamp and the verified uploads. The newest upload whose valid_from
-// has started, after dropping uploads named in a newer upload's Replaces, and whose
-// valid_from is latest (ties: higher Seq) is in force, even when it is shorter. The newest
-// surviving upload that has not started yet is pending whatever its Seq relative to the
-// current one; the current license, or the evaluation, continues meanwhile (L-48).
+// has started and is latest by valid_from (ties: higher Seq) is in force, even when it is
+// shorter; a correction (Replaces) takes effect only over the license it replaces. The newest
+// upload that has not started yet is pending whatever its Seq relative to the current one;
+// the current license, or the evaluation, continues meanwhile (L-48).
 func Evaluate(now, installedAt time.Time, installed []Installed) Evaluation {
 	now = now.UTC()
-	replaced := map[string]int64{} // license ID -> highest Seq of an upload that replaces it
+	var started []Installed
+	replaced := map[string]int64{} // license ID -> highest Seq of a started upload that replaces it
 	for _, in := range installed {
+		if in.Payload.ValidFrom.After(now) {
+			continue
+		}
+		started = append(started, in)
 		if r := in.Payload.Replaces; r != "" && in.Seq > replaced[r] {
 			replaced[r] = in.Seq
 		}
 	}
+	// Walk the started uploads in upload order. A renewal takes over when its valid_from is
+	// not earlier than the current license's; a correction takes over only from the license
+	// it replaces (R7), so it cannot displace a license that superseded its target.
+	slices.SortFunc(started, func(a, b Installed) int { return cmp.Compare(a.Seq, b.Seq) })
 	var current, pending *Payload
 	var currentSeq, pendingSeq int64
-	for i := range installed {
-		in := installed[i]
-		if in.Seq < replaced[in.Payload.LicenseID] {
-			continue // superseded by a newer correction license (R7)
-		}
-		p := in.Payload
-		if p.ValidFrom.After(now) {
-			if pendingSeq == 0 || in.Seq > pendingSeq {
-				pending, pendingSeq = &p, in.Seq
+	for i := range started {
+		p := started[i].Payload
+		switch {
+		case p.Replaces != "":
+			if current == nil || current.LicenseID != p.Replaces {
+				continue
 			}
+		case current != nil && p.ValidFrom.Before(current.ValidFrom):
 			continue
 		}
-		if current == nil || p.ValidFrom.After(current.ValidFrom) ||
-			(p.ValidFrom.Equal(current.ValidFrom) && in.Seq > currentSeq) {
-			current, currentSeq = &p, in.Seq
+		current, currentSeq = &p, started[i].Seq
+	}
+	// Pending: the newest upload that has not started, unless a started upload replaced it.
+	for _, in := range installed {
+		if in.Payload.ValidFrom.After(now) && in.Seq > replaced[in.Payload.LicenseID] && in.Seq > pendingSeq {
+			p := in.Payload
+			pending, pendingSeq = &p, in.Seq
 		}
 	}
 
