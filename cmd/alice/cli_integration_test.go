@@ -5,16 +5,23 @@ package main
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/audit"
+	"alice/internal/license"
 	"alice/internal/platform/clock"
+	"alice/internal/platform/config"
+	"alice/internal/platform/logging"
 	"alice/internal/testutil/pgtest"
 )
 
@@ -27,7 +34,7 @@ var setupCodeRE = regexp.MustCompile(`One-time setup code: [0-9A-Z]{6}-[0-9A-Z]{
 // cliEnv points the CLI at the test database as the application role.
 func cliEnv(t *testing.T, d *pgtest.DB) func(string) string {
 	t.Helper()
-	return env(map[string]string{"ALICE_DATABASE_URL": d.AppURL, "ALICE_KEYS_DIR": t.TempDir()})
+	return env(map[string]string{"ALICE_DATABASE_URL": d.AppURL, "ALICE_KEYS_DIR": t.TempDir(), "ALICE_STATE_DIR": t.TempDir()})
 }
 
 func runCLI(t *testing.T, getenv func(string) string, args ...string) (int, string, string) {
@@ -148,4 +155,78 @@ func TestAdminUnlockCLI(t *testing.T) {
 	code, _, errOut = runCLI(t, getenv, "admin", "unlock", "nobody")
 	assert.Equal(t, 1, code)
 	assert.Contains(t, errOut, `no user named "nobody"`)
+}
+
+func TestLicenseStatusCLI(t *testing.T) {
+	d := pgtest.New(t)
+	getenv := cliEnv(t, d)
+	code, _, errOut := runCLI(t, getenv, "license", "status")
+	assert.Equal(t, 1, code)
+	assert.Contains(t, errOut, "has not been started on this database yet")
+
+	id := license.NewInstallationID()
+	_, err := d.Owner.Exec(context.Background(), `INSERT INTO license (id, installation_id, installed_at, state, updated_at)
+VALUES (1, $1, now(), 'evaluation', now())`, id)
+	require.NoError(t, err)
+	code, out, errOut := runCLI(t, getenv, "license", "status")
+	require.Equal(t, 0, code, errOut)
+	assert.Contains(t, out, "Installation ID: "+id)
+	assert.Contains(t, out, "State: evaluation")
+	assert.Contains(t, out, "at most 5 targets")
+	assert.Zero(t, countRows(t, d, "SELECT count(*) FROM settings WHERE key = 'time.hwm'"), "status changes nothing")
+}
+
+func countRows(t *testing.T, d *pgtest.DB, sql string) int {
+	t.Helper()
+	var n int
+	require.NoError(t, d.Owner.QueryRow(context.Background(), sql).Scan(&n))
+	return n
+}
+
+// serve creates the installation and the time record (settings and the state volume) before
+// it listens, and saves the time record again at a graceful shutdown (spec §16.5).
+func TestServeStartsLicenseAndSavesTimeRecordAtShutdown(t *testing.T) {
+	d := pgtest.New(t)
+	stateDir := t.TempDir()
+	cfg, err := config.Load(env(map[string]string{
+		"ALICE_DATABASE_URL":         d.AppURL,
+		"ALICE_MIGRATE_DATABASE_URL": d.OwnerURL,
+		"ALICE_LISTEN_ADDR":          "127.0.0.1:0",
+		"ALICE_HEALTH_ADDR":          "127.0.0.1:0",
+		"ALICE_KEYS_DIR":             t.TempDir(),
+		"ALICE_STATE_DIR":            stateDir,
+	}))
+	require.NoError(t, err)
+	logs := &lockedBuffer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, cfg, logging.New(logs, slog.LevelInfo)) }()
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "alice is ready") },
+		30*time.Second, 20*time.Millisecond, "serve did not start: %s", logs.String())
+
+	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM license"), "the installation exists before any request")
+	hwmPath := filepath.Join(stateDir, license.HWMFileName)
+	fileAtStart, err := os.ReadFile(hwmPath)
+	require.NoError(t, err, "the time record is on the state volume")
+	settingAtStart := hwmSetting(t, d)
+
+	cancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("serve did not stop")
+	}
+	fileAtStop, err := os.ReadFile(hwmPath)
+	require.NoError(t, err)
+	assert.NotEqual(t, fileAtStart, fileAtStop, "the file copy was saved again at shutdown")
+	assert.NotEqual(t, settingAtStart, hwmSetting(t, d), "the settings copy was saved again at shutdown")
+	assert.NotContains(t, logs.String(), "could not save the license time record")
+}
+
+func hwmSetting(t *testing.T, d *pgtest.DB) string {
+	t.Helper()
+	var v string
+	require.NoError(t, d.Owner.QueryRow(context.Background(), "SELECT value::text FROM settings WHERE key = $1", license.HWMSettingKey).Scan(&v))
+	return v
 }

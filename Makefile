@@ -11,9 +11,10 @@ help: ## Show available targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
 .PHONY: test
-test: ## Run Go unit tests with the race detector (release build, plus the e2e build of cmd/alice)
+test: ## Run Go unit tests with the race detector (release build, plus the e2e and test-license builds of cmd/alice)
 	go test -race -count=1 ./...
-	go test -race -count=1 -tags e2e ./cmd/alice/
+	go test -race -count=1 -tags "e2e testlicense" ./cmd/alice/
+	go test -race -count=1 -tags testlicense ./cmd/alice/
 	go test -race -count=1 -tags testlicense ./internal/license/...
 
 .PHONY: test-integration
@@ -58,7 +59,7 @@ image: ## Build the alice container image
 .PHONY: up
 up: ## Build and start Alice with PostgreSQL (https://localhost)
 	./deploy/dev/init-env.sh
-	$(COMPOSE) up -d --build --wait
+	ALICE_BUILD_TIME=$(BUILD_TIME) $(COMPOSE) up -d --build --wait
 
 .PHONY: down
 down: ## Stop the stack (data volumes are kept)
@@ -82,7 +83,7 @@ COMPOSE_E2E := docker compose -f deploy/docker-compose.yml -f deploy/docker-comp
 .PHONY: e2e-up
 e2e-up: ## Build and start the e2e variant (adds test-only /test endpoints; never shipped)
 	./deploy/dev/init-env.sh
-	$(COMPOSE_E2E) up -d --build --wait
+	ALICE_BUILD_TIME=$(BUILD_TIME) $(COMPOSE_E2E) up -d --build --wait
 
 .PHONY: setup-token
 setup-token: ## Print a new one-time setup code for the /setup wizard (only before the first administrator exists)
@@ -111,6 +112,7 @@ tools: ## Install pinned Go developer tools into $(HOME)/go/bin
 lint: ## Run golangci-lint (gosec, forbidigo, ...) on the release and the e2e build
 	golangci-lint run ./...
 	golangci-lint run --build-tags e2e,testlicense ./cmd/...
+	golangci-lint run --build-tags integration,testlicense ./cmd/...
 	golangci-lint run --build-tags integration,testlicense ./internal/license/...
 
 .PHONY: vuln

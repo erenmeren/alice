@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"alice/internal/api"
+	"alice/internal/notify"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
 )
@@ -30,7 +31,9 @@ const maxClockAdvance = 10 * 365 * 24 * time.Hour
 // e2eClock is the server clock in the e2e build; POST /test/clock moves it.
 var e2eClock = clock.NewOffset(clock.Real{})
 
-func newClock() clock.Clock { return e2eClock }
+func newClock() serverClock { return e2eClock }
+
+var testMailer notify.Mailer // the test mailbox arrives with the e2e test API
 
 // resetTables are emptied by POST /test/reset. master_key_versions is kept
 // because the master key file on the volume stays the same.

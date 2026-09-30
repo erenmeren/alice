@@ -5,6 +5,7 @@ package main
 import (
 	"net/http"
 
+	"alice/internal/notify"
 	"alice/internal/platform/clock"
 )
 
@@ -12,7 +13,10 @@ import (
 const versionSuffix = ""
 
 // newClock returns the wall clock. Only the e2e build can shift time.
-func newClock() clock.Clock { return clock.Real{} }
+func newClock() serverClock { return clock.Real{} }
+
+// testMailer is nil: release builds send email only through ALICE_SMTP_*.
+var testMailer notify.Mailer
 
 // testHandler returns nil: release builds have no /test endpoints.
 func testHandler(testDeps) http.Handler { return nil }

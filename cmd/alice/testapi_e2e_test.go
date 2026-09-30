@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"alice/internal/license"
 )
 
 func clockNow(t *testing.T, h http.Handler) time.Time {
@@ -80,6 +82,8 @@ func TestE2EBuildIsMarkedInVersionAndWarnsAtStartup(t *testing.T) {
 	warnIfTestBuild(slog.New(slog.NewTextHandler(&logs, nil)), testHandler(testDeps{}))
 	assert.Contains(t, logs.String(), "e2e build: test-only /test endpoints are enabled; never use for real data")
 	assert.Contains(t, logs.String(), "level=WARN")
+	assert.Equal(t, license.TestKeyTrusted, strings.Contains(logs.String(), "test license key trusted"),
+		"the e2e image is built with testlicense and says so")
 }
 
 func TestE2EUnknownTestEndpointIs404(t *testing.T) {

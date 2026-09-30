@@ -17,6 +17,7 @@ import (
 
 	"alice/internal/api"
 	"alice/internal/i18n"
+	"alice/internal/jobs"
 	"alice/internal/platform/config"
 	"alice/internal/platform/db"
 	"alice/internal/platform/logging"
@@ -39,6 +40,8 @@ Commands:
   audit verify                Check the audit log hash chain (exit code 1 if it is broken)
   admin reset-mfa <username>  Remove a user's authenticator app; they set up a new one at next sign-in
   admin unlock <username>     End a user's sign-in delay or lockout and reset the failed sign-in count
+  license status              Show the installation ID and the license state
+  license keys                List the license verification keys built into this binary
   version                     Print version information
   help                        Show this help
 `
@@ -83,6 +86,8 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		return runAudit(args[1:], cfg, stdout, stderr)
 	case "admin":
 		return runAdmin(args[1:], cfg, stdout, stderr)
+	case "license":
+		return runLicense(args[1:], cfg, stdout, stderr)
 	case "version":
 		v := buildVersion()
 		fmt.Fprintf(stdout, "alice %s (commit %s, built %s)\n", v.Version, v.Commit, v.BuildTime)
@@ -159,10 +164,28 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	defer pool.Close()
 
 	clk := newClock()
-	svc, err := buildServices(ctx, pool, cfg.KeysDir, clk)
+	svc, err := buildServices(ctx, pool, cfg, clk, log)
 	if err != nil {
 		return err
 	}
+	// The installation ID, the time record and the first evaluation exist before any request.
+	if err := svc.license.Start(ctx); err != nil {
+		return err
+	}
+	sched := jobs.NewScheduler(clk, svc.license, log,
+		jobs.Task{Type: jobs.LicenseEvaluate, Every: time.Hour, Run: svc.license.Tick},
+		jobs.Task{Type: jobs.NotifySend, Every: time.Minute, Run: func(ctx context.Context) error {
+			_, err := svc.sender.Drain(ctx)
+			return err
+		}},
+	)
+	schedCtx, stopSched := context.WithCancel(ctx)
+	defer stopSched()
+	schedDone := make(chan struct{})
+	go func() {
+		sched.Run(schedCtx)
+		close(schedDone)
+	}()
 	health, err := db.NewHealthChecker(pool, migrations.FS)
 	if err != nil {
 		return err
@@ -182,9 +205,13 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 
 	var apiServer *api.Server
 	td := testDeps{
-		OwnerURL: cfg.MigrationURL(),
-		Setup:    svc.setup,
-		Log:      log,
+		OwnerURL:  cfg.MigrationURL(),
+		Setup:     svc.setup,
+		License:   svc.license,
+		Scheduler: sched,
+		Sender:    svc.sender,
+		StateDir:  cfg.StateDir,
+		Log:       log,
 		ResetLimits: func() {
 			if apiServer != nil {
 				apiServer.ResetLimits()
@@ -201,6 +228,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		Auth:           svc.auth,
 		Setup:          svc.setup,
 		Audit:          svc.audit,
+		License:        svc.license,
 		TrustedProxies: cfg.TrustedProxies,
 		TestHandler:    testHandler(td),
 	}
@@ -243,6 +271,11 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	defer cancelShutdown()
 	_ = public.Shutdown(shutdownCtx)
 	_ = internal.Shutdown(shutdownCtx)
+	stopSched()
+	<-schedDone
+	if err := svc.license.Shutdown(shutdownCtx); err != nil {
+		log.Error("could not save the license time record at shutdown", "error_type", fmt.Sprintf("%T", err))
+	}
 	return runErr
 }
 

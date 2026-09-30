@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -22,11 +23,31 @@ type Config struct {
 	ListenAddr         string
 	HealthAddr         string
 	KeysDir            string
-	LogLevel           slog.Level
-	TLSHosts           []string
+	// StateDir holds state that must survive restarts outside the database: the license
+	// time record (spec §16.5). It is a separate volume in the container.
+	StateDir string
+	LogLevel slog.Level
+	TLSHosts []string
 	// TrustedProxies are the reverse proxies whose X-Forwarded-For header is honoured.
 	TrustedProxies []netip.Prefix
+	// SMTP is the Phase 2 email configuration (R36; Settings replaces it in Phase 7).
+	SMTP SMTP
 }
+
+// SMTP configures the mail server. The password is read from PasswordFile at startup and
+// never held in Config.
+type SMTP struct {
+	Host         string
+	Port         int
+	From         string
+	Username     string
+	PasswordFile string
+	TLSMode      string // "starttls" or "tls"
+	CAFile       string // PEM file of a private CA; empty = the system roots
+}
+
+// Configured reports whether an SMTP server is set.
+func (s SMTP) Configured() bool { return s.Host != "" }
 
 // Load reads configuration using getenv (os.Getenv in production).
 func Load(getenv func(string) string) (Config, error) {
@@ -36,6 +57,7 @@ func Load(getenv func(string) string) (Config, error) {
 		ListenAddr:         withDefault(getenv("ALICE_LISTEN_ADDR"), ":8443"),
 		HealthAddr:         withDefault(getenv("ALICE_HEALTH_ADDR"), "127.0.0.1:8081"),
 		KeysDir:            withDefault(getenv("ALICE_KEYS_DIR"), "/opt/alice/keys"),
+		StateDir:           withDefault(getenv("ALICE_STATE_DIR"), "/opt/alice/state"),
 		LogLevel:           slog.LevelInfo,
 	}
 	if lvl := strings.TrimSpace(getenv("ALICE_LOG_LEVEL")); lvl != "" {
@@ -59,7 +81,41 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 		c.TrustedProxies = append(c.TrustedProxies, prefix)
 	}
+	smtpCfg, err := loadSMTP(getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	c.SMTP = smtpCfg
 	return c, nil
+}
+
+func loadSMTP(getenv func(string) string) (SMTP, error) {
+	s := SMTP{
+		Host:         strings.TrimSpace(getenv("ALICE_SMTP_HOST")),
+		From:         strings.TrimSpace(getenv("ALICE_SMTP_FROM")),
+		Username:     strings.TrimSpace(getenv("ALICE_SMTP_USERNAME")),
+		PasswordFile: strings.TrimSpace(getenv("ALICE_SMTP_PASSWORD_FILE")),
+		TLSMode:      withDefault(getenv("ALICE_SMTP_TLS"), "starttls"),
+		CAFile:       strings.TrimSpace(getenv("ALICE_SMTP_CA_FILE")),
+	}
+	if s.TLSMode != "starttls" && s.TLSMode != "tls" {
+		return SMTP{}, fmt.Errorf(`ALICE_SMTP_TLS must be "starttls" or "tls" (got %q)`, s.TLSMode)
+	}
+	s.Port = 587
+	if s.TLSMode == "tls" {
+		s.Port = 465
+	}
+	if p := strings.TrimSpace(getenv("ALICE_SMTP_PORT")); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return SMTP{}, fmt.Errorf("ALICE_SMTP_PORT must be a number from 1 to 65535 (got %q)", p)
+		}
+		s.Port = n
+	}
+	if s.Host != "" && s.From == "" {
+		return SMTP{}, errors.New("ALICE_SMTP_FROM must be set when ALICE_SMTP_HOST is set")
+	}
+	return s, nil
 }
 
 // parsePrefix accepts a CIDR ("10.0.0.0/8") or a single address ("10.0.0.1").
@@ -118,6 +174,8 @@ func (c Config) LogValue() slog.Value {
 		slog.String("listen_addr", c.ListenAddr),
 		slog.String("health_addr", c.HealthAddr),
 		slog.String("keys_dir", c.KeysDir),
+		slog.String("state_dir", c.StateDir),
+		slog.Group("smtp", "host", c.SMTP.Host, "port", c.SMTP.Port, "from", c.SMTP.From, "username", c.SMTP.Username, "tls", c.SMTP.TLSMode),
 		slog.String("log_level", c.LogLevel.String()),
 		slog.Any("tls_hosts", c.TLSHosts),
 		slog.Any("trusted_proxies", c.proxies()),
@@ -126,8 +184,8 @@ func (c Config) LogValue() slog.Value {
 
 // String renders the configuration with secrets redacted.
 func (c Config) String() string {
-	return fmt.Sprintf("Config{DatabaseURL:%s MigrateDatabaseURL:%s ListenAddr:%s HealthAddr:%s KeysDir:%s LogLevel:%s TLSHosts:%v TrustedProxies:%v}",
-		redactURL(c.DatabaseURL), redactURL(c.MigrateDatabaseURL), c.ListenAddr, c.HealthAddr, c.KeysDir, c.LogLevel, c.TLSHosts, c.proxies())
+	return fmt.Sprintf("Config{DatabaseURL:%s MigrateDatabaseURL:%s ListenAddr:%s HealthAddr:%s KeysDir:%s StateDir:%s LogLevel:%s TLSHosts:%v TrustedProxies:%v SMTP:%s:%d}",
+		redactURL(c.DatabaseURL), redactURL(c.MigrateDatabaseURL), c.ListenAddr, c.HealthAddr, c.KeysDir, c.StateDir, c.LogLevel, c.TLSHosts, c.proxies(), c.SMTP.Host, c.SMTP.Port)
 }
 
 // GoString makes %#v safe as well.
@@ -180,11 +238,13 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		ListenAddr         string   `json:"listen_addr"`
 		HealthAddr         string   `json:"health_addr"`
 		KeysDir            string   `json:"keys_dir"`
+		StateDir           string   `json:"state_dir"`
+		SMTPHost           string   `json:"smtp_host"`
 		LogLevel           string   `json:"log_level"`
 		TLSHosts           []string `json:"tls_hosts"`
 		TrustedProxies     []string `json:"trusted_proxies"`
 	}{redactURL(c.DatabaseURL), redactURL(c.MigrateDatabaseURL), c.ListenAddr, c.HealthAddr, c.KeysDir,
-		c.LogLevel.String(), c.TLSHosts, c.proxies()})
+		c.StateDir, c.SMTP.Host, c.LogLevel.String(), c.TLSHosts, c.proxies()})
 }
 
 func withDefault(v, def string) string {

@@ -31,6 +31,8 @@ services:
       dockerfile: deploy/Dockerfile
       args:
         VERSION: ${ALICE_VERSION:-dev}
+        # make up / make e2e-up pass the build time: the license clock never falls below it (§16.5).
+        BUILD_TIME: ${ALICE_BUILD_TIME:-unknown}
     restart: unless-stopped
     # Alice itself retries the database for up to 60 s, so a late PostgreSQL
     # (e.g. after a host reboot) does not crash it; depends_on only orders start.
@@ -43,10 +45,21 @@ services:
       ALICE_DATABASE_URL: postgres://alice_app:${ALICE_APP_DB_PASSWORD}@postgres:5432/alice?sslmode=disable
       ALICE_MIGRATE_DATABASE_URL: postgres://alice:${ALICE_DB_PASSWORD}@postgres:5432/alice?sslmode=disable
       ALICE_TLS_HOSTS: ${ALICE_TLS_HOSTS:-}
+      ALICE_STATE_DIR: /opt/alice/state
+      # Phase 2 email (R36): set these in deploy/.env to send license warnings. The password and
+      # a private CA are read from files; mount them with a compose override (see docs/operator-guide.md).
+      ALICE_SMTP_HOST: ${ALICE_SMTP_HOST:-}
+      ALICE_SMTP_PORT: ${ALICE_SMTP_PORT:-}
+      ALICE_SMTP_FROM: ${ALICE_SMTP_FROM:-}
+      ALICE_SMTP_USERNAME: ${ALICE_SMTP_USERNAME:-}
+      ALICE_SMTP_PASSWORD_FILE: ${ALICE_SMTP_PASSWORD_FILE:-}
+      ALICE_SMTP_TLS: ${ALICE_SMTP_TLS:-}
+      ALICE_SMTP_CA_FILE: ${ALICE_SMTP_CA_FILE:-}
     ports:
       - "${ALICE_PORT:-443}:8443"
     volumes:
       - alice-keys:/opt/alice/keys
+      - alice-state:/opt/alice/state
     networks: [frontend, backend]
     user: "10001:10001"
     read_only: true
@@ -73,3 +86,4 @@ networks:
 volumes:
   pgdata: {}
   alice-keys: {}
+  alice-state: {}

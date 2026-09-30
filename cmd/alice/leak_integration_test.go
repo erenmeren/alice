@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -84,24 +86,33 @@ func assertNoDBPassword(t *testing.T, where, text string, passwords ...string) {
 	for _, pw := range passwords {
 		for _, form := range []string{pw, url.QueryEscape(pw), hex.EncodeToString([]byte(pw))} {
 			if strings.Contains(text, form) {
-				t.Errorf("a database password leaked in %s", where)
+				t.Errorf("a password canary leaked in %s", where)
 			}
 		}
 	}
 }
 
-// A full start (migrations on the owner URL, the app pool, services, TLS) and
-// shutdown at DEBUG level log neither password.
+// A full start (migrations on the owner URL, the app pool, services, the SMTP mailer, the
+// license service and the scheduler, TLS) and shutdown at DEBUG level log neither database
+// password nor the SMTP password.
 func TestServeLogsNoDatabasePassword(t *testing.T) {
 	d := pgtest.New(t)
 	ownerURL, appURL, ownerPW, appPW := dbPasswordCanaries(t, d)
+	smtpPW := "CANARY-" + rand.Text() + "-smtp"
+	pwFile := filepath.Join(t.TempDir(), "smtp_password")
+	require.NoError(t, os.WriteFile(pwFile, []byte(smtpPW+"\n"), 0o600))
 	cfg, err := config.Load(env(map[string]string{
 		"ALICE_DATABASE_URL":         appURL,
 		"ALICE_MIGRATE_DATABASE_URL": ownerURL,
 		"ALICE_LISTEN_ADDR":          "127.0.0.1:0",
 		"ALICE_HEALTH_ADDR":          "127.0.0.1:0",
 		"ALICE_KEYS_DIR":             t.TempDir(),
+		"ALICE_STATE_DIR":            t.TempDir(),
 		"ALICE_LOG_LEVEL":            "debug",
+		"ALICE_SMTP_HOST":            "mail.example.invalid",
+		"ALICE_SMTP_FROM":            "alice@example.com",
+		"ALICE_SMTP_USERNAME":        "alice",
+		"ALICE_SMTP_PASSWORD_FILE":   pwFile,
 	}))
 	require.NoError(t, err)
 	logs := &lockedBuffer{}
@@ -119,7 +130,8 @@ func TestServeLogsNoDatabasePassword(t *testing.T) {
 		t.Fatal("serve did not stop")
 	}
 	assert.Contains(t, logs.String(), "starting alice", "the configuration (with both URLs) was logged")
-	assertNoDBPassword(t, "serve logs", logs.String(), ownerPW, appPW)
+	assert.Contains(t, logs.String(), "mail.example.invalid", "the SMTP configuration was logged")
+	assertNoDBPassword(t, "serve logs", logs.String(), ownerPW, appPW, smtpPW)
 }
 
 // Rejected passwords fail startup, migration and every CLI command with an
@@ -139,13 +151,14 @@ func TestFailedStartupAndCLINameNoDatabasePassword(t *testing.T) {
 	// uses has the wrong password, and its output never names a password.
 	commands := [][]string{
 		{"serve"}, {"migrate"}, {"setup-token", "--reset"}, {"audit", "verify"}, {"admin", "reset-mfa", "nobody"},
+		{"license", "status"},
 	}
 	for _, tc := range []struct {
 		name, owner, app string
 		fails            map[string]bool
 	}{
 		{"wrong owner password", wrongOwner, appURL, map[string]bool{"serve": true, "migrate": true}},
-		{"wrong app password", ownerURL, wrongApp, map[string]bool{"serve": true, "setup-token": true, "audit": true, "admin": true}},
+		{"wrong app password", ownerURL, wrongApp, map[string]bool{"serve": true, "setup-token": true, "audit": true, "admin": true, "license": true}},
 	} {
 		for _, args := range commands {
 			t.Run(tc.name+"/"+strings.Join(args, " "), func(t *testing.T) {
@@ -155,6 +168,7 @@ func TestFailedStartupAndCLINameNoDatabasePassword(t *testing.T) {
 					"ALICE_LISTEN_ADDR":          "127.0.0.1:0",
 					"ALICE_HEALTH_ADDR":          "127.0.0.1:0",
 					"ALICE_KEYS_DIR":             t.TempDir(),
+					"ALICE_STATE_DIR":            t.TempDir(),
 					"ALICE_LOG_LEVEL":            "debug",
 				})
 				code, out, errOut := runCLI(t, getenv, args...)

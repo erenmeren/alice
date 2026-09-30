@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -167,4 +169,61 @@ func TestTrustedProxies(t *testing.T) {
 	_, err = config.Load(env(map[string]string{"ALICE_TRUSTED_PROXIES": "10.0.0.0/8,proxy.local"}))
 	require.Error(t, err)
 	assert.Equal(t, `ALICE_TRUSTED_PROXIES entry "proxy.local" is not an IP address or CIDR`, err.Error())
+}
+
+func TestStateDirAndSMTPDefaults(t *testing.T) {
+	c, err := config.Load(env(nil))
+	require.NoError(t, err)
+	assert.Equal(t, "/opt/alice/state", c.StateDir)
+	assert.False(t, c.SMTP.Configured(), "no SMTP host: emails are recorded as skipped")
+	assert.Equal(t, 587, c.SMTP.Port)
+	assert.Equal(t, "starttls", c.SMTP.TLSMode)
+}
+
+func TestSMTPConfiguration(t *testing.T) {
+	c, err := config.Load(env(map[string]string{
+		"ALICE_STATE_DIR":          "/data/state",
+		"ALICE_SMTP_HOST":          " mail.example.com ",
+		"ALICE_SMTP_FROM":          "Alice <alice@example.com>",
+		"ALICE_SMTP_USERNAME":      "alice",
+		"ALICE_SMTP_PASSWORD_FILE": "/run/secrets/smtp_password",
+		"ALICE_SMTP_TLS":           "tls",
+		"ALICE_SMTP_CA_FILE":       "/opt/alice/keys/smtp-ca.pem",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "/data/state", c.StateDir)
+	assert.True(t, c.SMTP.Configured())
+	assert.Equal(t, config.SMTP{Host: "mail.example.com", Port: 465, From: "Alice <alice@example.com>", Username: "alice",
+		PasswordFile: "/run/secrets/smtp_password", TLSMode: "tls", CAFile: "/opt/alice/keys/smtp-ca.pem"}, c.SMTP)
+	assert.Contains(t, c.String(), "mail.example.com")
+
+	for name, vars := range map[string]map[string]string{
+		"port text":    {"ALICE_SMTP_HOST": "m", "ALICE_SMTP_FROM": "a@b.c", "ALICE_SMTP_PORT": "smtp"},
+		"port range":   {"ALICE_SMTP_HOST": "m", "ALICE_SMTP_FROM": "a@b.c", "ALICE_SMTP_PORT": "70000"},
+		"tls mode":     {"ALICE_SMTP_HOST": "m", "ALICE_SMTP_FROM": "a@b.c", "ALICE_SMTP_TLS": "none"},
+		"missing from": {"ALICE_SMTP_HOST": "m"},
+	} {
+		_, err := config.Load(env(vars))
+		assert.Error(t, err, name)
+	}
+}
+
+// The SMTP password stays in its file: no rendering of the configuration contains it.
+func TestConfigNeverRevealsSMTPPassword(t *testing.T) {
+	const canary = "CANARY-smtp-password-7Qx2"
+	pwFile := filepath.Join(t.TempDir(), "smtp_password")
+	require.NoError(t, os.WriteFile(pwFile, []byte(canary+"\n"), 0o600))
+	c, err := config.Load(env(map[string]string{
+		"ALICE_SMTP_HOST": "mail.example.com", "ALICE_SMTP_FROM": "alice@example.com",
+		"ALICE_SMTP_USERNAME": "alice", "ALICE_SMTP_PASSWORD_FILE": pwFile,
+	}))
+	require.NoError(t, err)
+	var logs bytes.Buffer
+	slog.New(slog.NewJSONHandler(&logs, nil)).Info("config loaded", "config", c)
+	js, err := json.Marshal(c)
+	require.NoError(t, err)
+	for _, out := range []string{logs.String(), string(js), fmt.Sprintf("%v", c), fmt.Sprintf("%+v", c), fmt.Sprintf("%#v", c), c.String()} {
+		assert.NotContains(t, out, canary)
+	}
+	assert.Contains(t, logs.String(), `"smtp":{"host":"mail.example.com"`)
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -130,7 +131,7 @@ func withPool(cfg config.Config, stderr io.Writer, fn func(ctx context.Context, 
 // withServices additionally loads the master key and wires the services.
 func withServices(cfg config.Config, stderr io.Writer, fn func(ctx context.Context, svc *services) int) int {
 	return withPool(cfg, stderr, func(ctx context.Context, pool *pgxpool.Pool) int {
-		svc, err := buildServices(ctx, pool, cfg.KeysDir, newClock())
+		svc, err := buildServices(ctx, pool, cfg, newClock(), slog.New(slog.DiscardHandler))
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1

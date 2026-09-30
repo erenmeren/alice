@@ -18,6 +18,13 @@ check "alice has no-new-privileges" "$(docker inspect -f '{{json .HostConfig.Sec
 check "alice has a pids limit" "$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$alice")" "256"
 check "alice has core dumps disabled" "$(docker inspect -f '{{json .HostConfig.Ulimits}}' "$alice")" '[{"Name":"core","Hard":0,"Soft":0}]'
 check "alice is healthy" "$(docker inspect -f '{{.State.Health.Status}}' "$alice")" "healthy"
+check "alice state volume is mounted read-write" \
+  "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/opt/alice/state"}}{{.Type}} {{.RW}}{{end}}{{end}}' "$alice")" "volume true"
+# docker cp streams a tar archive, which carries owner and mode (distroless has no shell or stat).
+check "alice state directory is owned by 10001 with mode 0700" \
+  "$(docker cp "$alice:/opt/alice/state" - | tar -tvf - | awk 'NR==1 {print $1, $2}')" "drwx------ 10001/10001"
+check "alice state volume holds the time record" \
+  "$(docker cp "$alice:/opt/alice/state" - | tar -tf - | grep -c '^state/hwm.dat$')" "1"
 check "postgres publishes no ports" "$(docker port "$pg" | wc -l | tr -d ' ')" "0"
 check "backend network is internal" "$(docker network inspect -f '{{.Internal}}' alice_backend)" "true"
 exit "$fail"

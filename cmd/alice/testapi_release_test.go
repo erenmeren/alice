@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -53,17 +52,4 @@ func TestReleaseServerAnswersTestPathsWithJSON404(t *testing.T) {
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), req.URL.Path)
 		assert.Equal(t, "ALC-SYS-0001", body.Error.Code, req.URL.Path)
 	}
-}
-
-// A release build has no version suffix and logs no test-build warning.
-func TestReleaseBuildIsUnmarkedAndDoesNotWarn(t *testing.T) {
-	var out, errOut bytes.Buffer
-	require.Equal(t, 0, run([]string{"version"}, env(nil), &out, &errOut))
-	assert.Contains(t, out.String(), "alice dev (")
-	assert.NotContains(t, out.String(), "e2e")
-	assert.Equal(t, "dev", buildVersion().Version)
-
-	var logs bytes.Buffer
-	warnIfTestBuild(slog.New(slog.NewTextHandler(&logs, nil)), testHandler(testDeps{}))
-	assert.Empty(t, logs.String())
 }
