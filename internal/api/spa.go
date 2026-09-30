@@ -36,13 +36,28 @@ func (s *server) spa() http.Handler {
 				http.ServeFileFS(w, r, s.deps.UI, name) //nolint:gosec // G703: fs.FS rooted at the UI, name cleaned and validated with fs.ValidPath
 				return
 			}
-			if strings.HasPrefix(name, "assets/") || path.Ext(name) != "" {
+			if isAssetPath(name) {
 				http.NotFound(w, r)
 				return
 			}
 		}
 		s.serveIndex(w)
 	})
+}
+
+// rootFiles are files a browser or crawler requests by convention. When they
+// are missing the answer is 404, not the SPA.
+var rootFiles = map[string]bool{
+	"favicon.ico":          true,
+	"favicon.svg":          true,
+	"robots.txt":           true,
+	"manifest.webmanifest": true,
+}
+
+// isAssetPath reports whether a missing file must be a 404. Everything else is
+// a client-side route (even with a dot in it, such as /users/a.b) and gets index.html.
+func isAssetPath(name string) bool {
+	return strings.HasPrefix(name, "assets/") || rootFiles[name]
 }
 
 func (s *server) serveIndex(w http.ResponseWriter) {

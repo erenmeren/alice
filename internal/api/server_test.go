@@ -255,3 +255,21 @@ func TestHealthHandlerExposesOnlyProbes(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, do(h, http.MethodGet, "/api/v1/version", nil).Code)
 	assert.False(t, strings.Contains(do(h, http.MethodGet, "/", nil).Body.String(), "root"))
 }
+
+func TestDeepLinksWithDotsServeIndex(t *testing.T) {
+	h := NewHandler(testDeps(t, nil))
+	for _, p := range []string{"/users/a.b", "/users/ali.veli", "/audit/2026.09.30"} {
+		rec := do(h, http.MethodGet, p, nil)
+		assert.Equal(t, http.StatusOK, rec.Code, p)
+		assert.Contains(t, rec.Body.String(), `<div id="root">`, p)
+	}
+}
+
+func TestMissingAssetsAndRootFilesAre404(t *testing.T) {
+	h := NewHandler(testDeps(t, nil))
+	for _, p := range []string{"/assets/x.js", "/assets/deep/y.css", "/favicon.ico", "/robots.txt", "/manifest.webmanifest"} {
+		rec := do(h, http.MethodGet, p, nil)
+		assert.Equal(t, http.StatusNotFound, rec.Code, p)
+		assert.NotContains(t, rec.Body.String(), `<div id="root">`, p)
+	}
+}

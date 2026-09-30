@@ -20,6 +20,10 @@ var (
 	ErrUnreachable = errors.New("database is not reachable")
 	// ErrMigrationsPending means the schema is older than this binary expects.
 	ErrMigrationsPending = errors.New("database migrations are pending")
+	// ErrAuthFailed means the server rejected the credentials; retrying cannot help.
+	ErrAuthFailed = errors.New("the database rejected the user name or password")
+	// ErrDatabaseMissing means the named database does not exist; retrying cannot help.
+	ErrDatabaseMissing = errors.New("the database does not exist")
 )
 
 const (
@@ -27,6 +31,11 @@ const (
 
 	// undefinedTable is the PostgreSQL SQLSTATE for a missing relation.
 	undefinedTable = "42P01"
+	// invalidPassword and invalidAuthorization are the SQLSTATEs for rejected credentials.
+	invalidPassword      = "28P01"
+	invalidAuthorization = "28000"
+	// invalidCatalogName is the SQLSTATE for a database that does not exist.
+	invalidCatalogName = "3D000"
 )
 
 // Open creates a pool and waits until the database answers a ping or ctx ends.
@@ -50,12 +59,34 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 		if err == nil {
 			return pool, nil
 		}
+		if fatal := classify(err, where); fatal != nil {
+			pool.Close()
+			return nil, fatal
+		}
 		select {
 		case <-ctx.Done():
 			pool.Close()
 			return nil, fmt.Errorf("could not connect to the database at %s: %w", where, ErrUnreachable)
 		case <-time.After(retryInterval):
 		}
+	}
+}
+
+// classify turns errors that retrying cannot fix into a clear, final error.
+// It returns nil for errors that may be transient (server starting, network).
+// The driver message is never included: it could echo connection details.
+func classify(err error, where string) error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return nil
+	}
+	switch pgErr.Code {
+	case invalidPassword, invalidAuthorization:
+		return fmt.Errorf("the database server at %s rejected the user name or password; check the database URL: %w", where, ErrAuthFailed)
+	case invalidCatalogName:
+		return fmt.Errorf("the database named in the database URL does not exist on %s: %w", where, ErrDatabaseMissing)
+	default:
+		return nil
 	}
 }
 

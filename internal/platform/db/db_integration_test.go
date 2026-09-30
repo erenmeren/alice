@@ -165,3 +165,38 @@ func TestHealthReportsUnreachableAfterPoolClosed(t *testing.T) {
 	pool.Close()
 	assert.True(t, errors.Is(hc.Check(ctx), db.ErrUnreachable))
 }
+
+func TestOpenFailsFastOnWrongPassword(t *testing.T) {
+	u, err := url.Parse(adminURL)
+	require.NoError(t, err)
+	u.User = url.UserPassword("alice", "wrong-pw-9f3a")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	pool, err := db.Open(ctx, u.String())
+	require.Error(t, err)
+	assert.Nil(t, pool)
+	assert.True(t, errors.Is(err, db.ErrAuthFailed), err.Error())
+	assert.False(t, errors.Is(err, db.ErrUnreachable))
+	assert.NotContains(t, err.Error(), "wrong-pw-9f3a")
+	assert.NotContains(t, err.Error(), "s3cret-pw")
+	assert.Contains(t, err.Error(), "rejected the user name or password")
+	assert.Less(t, time.Since(start), 5*time.Second, "a rejected password must not be retried")
+}
+
+func TestOpenFailsFastOnMissingDatabase(t *testing.T) {
+	u, err := url.Parse(adminURL)
+	require.NoError(t, err)
+	u.Path = "/no_such_database"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	_, err = db.Open(ctx, u.String())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, db.ErrDatabaseMissing), err.Error())
+	assert.NotContains(t, err.Error(), "s3cret-pw")
+	assert.Contains(t, err.Error(), "does not exist")
+	assert.Less(t, time.Since(start), 5*time.Second, "a missing database must not be retried")
+}

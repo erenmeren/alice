@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"regexp"
@@ -16,7 +18,16 @@ type Problem struct {
 	File, Key, Msg string
 }
 
-var placeholderRE = regexp.MustCompile(`\{\{\s*([A-Za-z0-9_.]+)\s*\}\}`)
+// allowListFile optionally lists keys whose translation may equal the base value
+// (brand names, technical terms). Files starting with "." are never catalogs.
+const allowListFile = ".i18n-identical.json"
+
+var (
+	// placeholderRE matches the only placeholder form the backend substitutes: {{name}}.
+	placeholderRE = regexp.MustCompile(`\{\{([A-Za-z0-9_.]+)\}\}`)
+	// spacedRE matches placeholders with inner whitespace, which i18n.T would not substitute.
+	spacedRE = regexp.MustCompile(`\{\{\s*[A-Za-z0-9_.]+\s*\}\}`)
+)
 
 // CheckDir compares every <code>.json in fsys against <base>.json.
 func CheckDir(fsys fs.FS, base string) ([]Problem, error) {
@@ -25,18 +36,20 @@ func CheckDir(fsys fs.FS, base string) ([]Problem, error) {
 	if err != nil {
 		return nil, err
 	}
+	allowed, err := loadAllowList(fsys)
+	if err != nil {
+		return nil, err
+	}
 	var problems []Problem
 	for k, v := range baseMsgs {
-		if strings.TrimSpace(v) == "" {
-			problems = append(problems, Problem{baseFile, k, "value is empty"})
-		}
+		problems = append(problems, valueProblems(baseFile, k, v)...)
 	}
 	files, err := fs.Glob(fsys, "*.json")
 	if err != nil {
 		return nil, err
 	}
 	for _, f := range files {
-		if f == baseFile {
+		if f == baseFile || strings.HasPrefix(f, ".") {
 			continue
 		}
 		code := strings.TrimSuffix(f, ".json")
@@ -46,13 +59,19 @@ func CheckDir(fsys fs.FS, base string) ([]Problem, error) {
 		}
 		for k, bv := range baseMsgs {
 			v, ok := msgs[k]
-			switch {
-			case !ok:
+			if !ok {
 				problems = append(problems, Problem{f, k, "missing key"})
-			case strings.TrimSpace(v) == "":
-				problems = append(problems, Problem{f, k, "value is empty"})
+				continue
+			}
+			if vp := valueProblems(f, k, v); len(vp) > 0 {
+				problems = append(problems, vp...)
+				continue
+			}
+			switch {
 			case !slices.Equal(placeholders(bv), placeholders(v)):
 				problems = append(problems, Problem{f, k, fmt.Sprintf("placeholders differ: %s has %v, %s has %v", base, placeholders(bv), code, placeholders(v))})
+			case v == bv && !allowed[k]:
+				problems = append(problems, Problem{f, k, "value is identical to " + base + "; translate it or allow-list the key in " + allowListFile})
 			}
 		}
 		for k := range msgs {
@@ -65,9 +84,45 @@ func CheckDir(fsys fs.FS, base string) ([]Problem, error) {
 		if problems[i].File != problems[j].File {
 			return problems[i].File < problems[j].File
 		}
-		return problems[i].Key < problems[j].Key
+		if problems[i].Key != problems[j].Key {
+			return problems[i].Key < problems[j].Key
+		}
+		return problems[i].Msg < problems[j].Msg
 	})
 	return problems, nil
+}
+
+// valueProblems reports problems that depend on one value only.
+func valueProblems(file, key, v string) []Problem {
+	if strings.TrimSpace(v) == "" {
+		return []Problem{{file, key, "value is empty"}}
+	}
+	var out []Problem
+	for _, m := range spacedRE.FindAllString(v, -1) {
+		if !placeholderRE.MatchString(m) {
+			out = append(out, Problem{file, key, "placeholder must not contain spaces: " + m})
+		}
+	}
+	return out
+}
+
+func loadAllowList(fsys fs.FS) (map[string]bool, error) {
+	data, err := fs.ReadFile(fsys, allowListFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return map[string]bool{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", allowListFile, err)
+	}
+	var keys []string
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return nil, fmt.Errorf("%s must be a JSON array of keys: %w", allowListFile, err)
+	}
+	out := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		out[k] = true
+	}
+	return out, nil
 }
 
 func load(fsys fs.FS, name string) (map[string]string, error) {

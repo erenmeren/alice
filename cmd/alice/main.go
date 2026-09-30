@@ -110,7 +110,10 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	pool, err := db.Open(openCtx, cfg.DatabaseURL)
 	cancel()
 	if err != nil {
-		return fmt.Errorf("database not ready after %s: %w", dbStartupBudget, err)
+		if errors.Is(err, db.ErrUnreachable) {
+			return fmt.Errorf("database not ready after %s: %w", dbStartupBudget, err)
+		}
+		return err
 	}
 	defer pool.Close()
 	if err := db.Migrate(ctx, pool, migrations.FS); err != nil {
