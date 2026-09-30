@@ -95,8 +95,12 @@ func NewHealthChecker(pool *pgxpool.Pool, fsys fs.FS) (*HealthChecker, error) {
 	return &HealthChecker{pool: pool, expected: expected}, nil
 }
 
+const checkTimeout = 2 * time.Second
+
 // Check returns nil, ErrUnreachable or ErrMigrationsPending. It only reads.
 func (h *HealthChecker) Check(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
 	if err := h.pool.Ping(ctx); err != nil {
 		return ErrUnreachable
 	}
