@@ -34,7 +34,8 @@ func newClock() clock.Clock { return e2eClock }
 
 // resetTables are emptied by POST /test/reset. master_key_versions is kept
 // because the master key file on the volume stays the same.
-const resetSQL = `TRUNCATE users, user_mfa, recovery_codes, sessions, api_tokens, setup_sessions, settings, audit_log`
+const resetSQL = `TRUNCATE users, user_mfa, recovery_codes, sessions, api_tokens, setup_sessions, settings, audit_log,
+license, license_files, license_history, notifications_outbox`
 
 // testHandler serves the test-only endpoints of the e2e build (never shipped).
 func testHandler(d testDeps) http.Handler {

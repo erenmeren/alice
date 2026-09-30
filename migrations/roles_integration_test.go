@@ -93,6 +93,11 @@ var explicitGrants = map[string][]string{
 	"public.audit_log":           {"INSERT", "SELECT"},
 	"public.master_key_versions": {"INSERT", "SELECT"},
 	"public.goose_db_version":    {"SELECT"},
+	// License data: uploaded files and their history are append-only for the application,
+	// so a compromised application cannot rewrite which licenses were installed (spec §16).
+	"public.license":         {"INSERT", "SELECT", "UPDATE"},
+	"public.license_files":   {"INSERT", "SELECT"},
+	"public.license_history": {"INSERT", "SELECT"},
 }
 
 var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}
@@ -170,6 +175,45 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	}
 	require.NoError(t, rows.Err())
 	return problems
+}
+
+func TestLicenseTablesAreAppendOnlyForTheApp(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	g := grants(t, d)
+	assert.Equal(t, []string{"INSERT", "SELECT", "UPDATE"}, g["license"])
+	assert.Equal(t, []string{"INSERT", "SELECT"}, g["license_files"])
+	assert.Equal(t, []string{"INSERT", "SELECT"}, g["license_history"])
+	assert.Equal(t, []string{"DELETE", "INSERT", "SELECT", "UPDATE"}, g["notifications_outbox"])
+
+	_, err := d.App.Exec(ctx, `INSERT INTO license (id, installation_id, installed_at, state, updated_at)
+		VALUES (1, 'ALICE-TEST', now(), 'evaluation', now())`)
+	require.NoError(t, err)
+	_, err = d.App.Exec(ctx, `INSERT INTO license (id, installation_id, installed_at, state, updated_at)
+		VALUES (2, 'ALICE-TWO', now(), 'evaluation', now())`)
+	require.Error(t, err, "the license row is a singleton")
+	_, err = d.App.Exec(ctx, `INSERT INTO license_files (id, seq, sha256, raw_file, uploaded_at)
+		VALUES (gen_random_uuid(), 1, '\x01', '{}', now())`)
+	require.NoError(t, err)
+	_, err = d.App.Exec(ctx, `INSERT INTO license_history (id, at, event, notice) VALUES (gen_random_uuid(), now(), 'notice', 'expiry:30')`)
+	require.NoError(t, err)
+	_, err = d.App.Exec(ctx, `INSERT INTO license_history (id, at, event, notice) VALUES (gen_random_uuid(), now(), 'notice', 'expiry:30')`)
+	require.Error(t, err, "a notice is recorded once per license")
+	_, err = d.App.Exec(ctx, `INSERT INTO license_history (id, at, event, notice) VALUES (gen_random_uuid(), now(), 'state_change', 'x')`)
+	require.Error(t, err, "only notices carry a notice key")
+
+	for _, stmt := range []string{
+		"UPDATE license_files SET raw_file = '{\"x\":1}'",
+		"DELETE FROM license_files",
+		"UPDATE license_history SET event = 'renewed'",
+		"DELETE FROM license_history",
+		"DELETE FROM license",
+	} {
+		_, err := d.App.Exec(ctx, stmt)
+		var pgErr *pgconn.PgError
+		require.True(t, errors.As(err, &pgErr), stmt)
+		assert.Equal(t, "42501", pgErr.Code, "%s must be denied by privileges", stmt)
+	}
 }
 
 func TestAppRoleIsNotSuperuser(t *testing.T) {
