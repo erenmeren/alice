@@ -32,19 +32,36 @@ async function openNav(page: Page, name: string) {
   await page.getByRole('link', { name, exact: true }).click();
 }
 
-// createUser adds a user on the Users page; a step-up prompt is answered when it appears.
-async function createUser(page: Page, request: APIRequestContext, c: Copy, account: Account, role: 'operator' | 'auditor', totpSecret: string) {
+// createUser adds a user on the Users page. With expectStepUp the server must ask for a fresh
+// authenticator code first (SEC-009: user administration needs step-up); without it a prompt is
+// answered only if it appears. With a11y, the Add user and step-up dialogs are checked with axe.
+async function createUser(
+  page: Page,
+  request: APIRequestContext,
+  c: Copy,
+  account: Account,
+  role: 'operator' | 'auditor',
+  totpSecret: string,
+  opts: { expectStepUp: boolean; a11y?: boolean },
+) {
   await page.getByRole('button', { name: c.addUser }).click();
   const dialog = page.getByRole('dialog', { name: c.addUser });
   await field(dialog, c.username).fill(account.username);
   await field(dialog, c.fullName).fill(account.fullName);
   await field(dialog, c.role).selectOption(role);
   await field(dialog, c.initialPassword).fill(account.password);
+  if (opts.a11y) await expectAccessible(page, 'add user dialog');
   await dialog.getByRole('button', { name: c.createUser }).click();
   const stepUp = page.getByRole('dialog', { name: c.stepUpHeading });
   const row = page.getByRole('row').filter({ hasText: account.username });
-  await expect(stepUp.or(row).first()).toBeVisible();
+  if (opts.expectStepUp) {
+    await expect(stepUp).toBeVisible();
+    await expect(row).toHaveCount(0); // nothing is created before the code is confirmed
+  } else {
+    await expect(stepUp.or(row).first()).toBeVisible();
+  }
   if (await stepUp.isVisible()) {
+    if (opts.a11y) await expectAccessible(page, 'step-up dialog');
     await field(stepUp, c.code).fill(await freshCode(request, totpSecret));
     await stepUp.getByRole('button', { name: c.stepUpConfirm }).click();
   }
@@ -126,8 +143,10 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await advanceClock(request, 6 * 60);
       await openNav(page, c.navUsers);
       await expect(page.getByRole('heading', { name: c.usersHeading })).toBeVisible();
-      await createUser(page, request, c, OPERATOR, 'operator', totpSecret);
-      await createUser(page, request, c, AUDITOR, 'auditor', totpSecret);
+      await createUser(page, request, c, OPERATOR, 'operator', totpSecret, { expectStepUp: true });
+      // The step-up window lasts 5 minutes; after it closes the next change asks again.
+      await advanceClock(request, 6 * 60);
+      await createUser(page, request, c, AUDITOR, 'auditor', totpSecret, { expectStepUp: true });
 
       await openNav(page, c.navAudit);
       await expect(page.getByRole('heading', { name: c.auditHeading })).toBeVisible();
@@ -191,12 +210,14 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(page.getByRole('heading', { name: c.wizardHeading })).toBeVisible();
       await expectAccessible(page, 'setup');
 
-      await runWizard(page, request, lang);
+      const { totpSecret } = await runWizard(page, request, lang, ADMIN, { a11y: true });
       await expectAccessible(page, 'home');
 
       await openNav(page, c.navUsers);
       await expect(page.getByRole('heading', { name: c.usersHeading })).toBeVisible();
       await expectAccessible(page, 'users');
+      await advanceClock(request, 6 * 60); // so the Add user dialog is followed by the step-up dialog
+      await createUser(page, request, c, OPERATOR, 'operator', totpSecret, { expectStepUp: true, a11y: true });
 
       await openNav(page, c.navTokens);
       await expect(page.getByRole('heading', { name: c.tokensHeading })).toBeVisible();
@@ -214,6 +235,10 @@ for (const lang of ['en', 'tr'] as Lang[]) {
 
       await signOut(page);
       await expectAccessible(page, 'login');
+
+      expect(await submitLogin(page, c, ADMIN.username, ADMIN.password)).toBe(200);
+      await expect(page.getByRole('heading', { name: c.mfaHeading })).toBeVisible();
+      await expectAccessible(page, 'verification code');
     });
   });
 }

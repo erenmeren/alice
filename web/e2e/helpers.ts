@@ -2,14 +2,28 @@ import { createHmac } from 'node:crypto';
 import AxeBuilder from '@axe-core/playwright';
 import { test as base, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 
-// test is Playwright's test with one automatic check: any "Content Security Policy" console
-// error on any page the test visits fails the test (the SPA must run under the strict CSP).
+declare global {
+  interface Window {
+    __aliceCspViolation?: (report: string) => void;
+  }
+}
+
+// test is Playwright's test with one automatic check: a Content Security Policy violation on any
+// page the test visits fails the test (the SPA must run under the strict CSP). It watches both the
+// console ("… violates the following Content Security Policy directive …") and the DOM
+// securitypolicyviolation event, which also fires for violations Chromium does not log.
 export const test = base.extend<{ cspGuard: void }>({
   cspGuard: [
     async ({ page }, use) => {
       const violations: string[] = [];
       page.on('console', (m) => {
-        if (m.type() === 'error' && /Content Security Policy/i.test(m.text())) violations.push(`${page.url()}: ${m.text()}`);
+        if (m.type() === 'error' && /Content Security Policy/i.test(m.text())) violations.push(`console on ${page.url()}: ${m.text()}`);
+      });
+      await page.exposeFunction('__aliceCspViolation', (report: string) => violations.push(`event: ${report}`));
+      await page.addInitScript(() => {
+        document.addEventListener('securitypolicyviolation', (e) => {
+          window.__aliceCspViolation?.(`${e.effectiveDirective} blocked ${e.blockedURI || 'inline'} on ${e.documentURI}`);
+        });
       });
       await use();
       expect(violations, 'CSP violations').toEqual([]);
@@ -212,9 +226,16 @@ export async function freshCode(request: APIRequestContext, secret: string): Pro
 }
 
 // enrollTotp completes the "Set up your authenticator app" and recovery-code screens.
-export async function enrollTotp(page: Page, request: APIRequestContext, c: Copy): Promise<{ totpSecret: string; recoveryCodes: string[] }> {
+// With a11y set, each screen is also checked with axe (expectAccessible).
+export async function enrollTotp(
+  page: Page,
+  request: APIRequestContext,
+  c: Copy,
+  a11y = false,
+): Promise<{ totpSecret: string; recoveryCodes: string[] }> {
   await expect(page.getByRole('heading', { name: c.totpHeading })).toBeVisible();
   await expect(page.locator('img[src^="data:image/png;base64,"]')).toBeVisible();
+  if (a11y) await expectAccessible(page, 'authenticator setup');
   const totpSecret = ((await page.getByTestId('totp-secret').textContent()) ?? '').replace(/\s/g, '');
   expect(totpSecret).toMatch(/^[A-Z2-7]{32}$/);
   await field(page, c.code).fill(totp(totpSecret, await serverNow(request)));
@@ -223,6 +244,7 @@ export async function enrollTotp(page: Page, request: APIRequestContext, c: Copy
   const text = (await page.getByTestId('recovery-codes').textContent()) ?? '';
   const recoveryCodes = text.match(/[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}/g) ?? [];
   expect(recoveryCodes).toHaveLength(10);
+  if (a11y) await expectAccessible(page, 'recovery codes');
   await page.getByLabel(c.savedCodes).check();
   await page.getByRole('button', { name: c.continue }).click();
   return { totpSecret, recoveryCodes };
@@ -238,11 +260,13 @@ export const ADMIN: Account = { username: 'admin', fullName: 'Ada Yılmaz', pass
 export const PASSPHRASE = 'kırmızı-kedi-mavi-deniz-2026';
 
 // runWizard installs Alice from scratch through the setup wizard (Phase 1 steps).
+// With opts.a11y, every wizard screen is also checked with axe (expectAccessible).
 export async function runWizard(
   page: Page,
   request: APIRequestContext,
   lang: Lang,
   admin: Account = ADMIN,
+  opts: { a11y?: boolean } = {},
 ): Promise<{ totpSecret: string; recoveryCodes: string[] }> {
   const c = COPY[lang];
   const code = await setupCode(request);
@@ -253,9 +277,11 @@ export async function runWizard(
   await page.getByRole('button', { name: c.continue }).click();
 
   await expect(page.getByRole('heading', { name: c.languageHeading })).toBeVisible();
+  if (opts.a11y) await expectAccessible(page, 'wizard language');
   await page.getByRole('button', { name: c.continue }).click(); // keeps the preselected (current) language
 
   await expect(page.getByRole('heading', { name: c.adminHeading })).toBeVisible();
+  if (opts.a11y) await expectAccessible(page, 'wizard administrator');
   await field(page, c.username).fill(admin.username);
   await field(page, c.fullName).fill(admin.fullName);
   await field(page, c.password).fill('too-short11');
@@ -265,19 +291,22 @@ export async function runWizard(
   await expect(page.getByRole('alert').or(page.locator('input[aria-invalid="true"]')).first()).toBeVisible();
   await expect(page.getByText(/\b12\b/).first()).toBeVisible();
   await expect(page.getByRole('heading', { name: c.totpHeading })).toHaveCount(0);
+  if (opts.a11y) await expectAccessible(page, 'wizard administrator with error');
 
   await field(page, c.password).fill(admin.password);
   await field(page, c.repeatPassword).fill(admin.password);
   await page.getByRole('button', { name: c.continue }).click();
-  const enrolled = await enrollTotp(page, request, c);
+  const enrolled = await enrollTotp(page, request, c, opts.a11y);
 
   await expect(page.getByRole('heading', { name: c.passphraseHeading })).toBeVisible();
+  if (opts.a11y) await expectAccessible(page, 'wizard passphrase');
   await field(page, c.passphrase).fill(PASSPHRASE);
   await field(page, c.repeatPassphrase).fill(PASSPHRASE);
   await page.getByLabel(c.storedPassphrase).check();
   await page.getByRole('button', { name: c.savePassphrase }).click();
 
   await expect(page.getByRole('heading', { name: c.doneHeading })).toBeVisible();
+  if (opts.a11y) await expectAccessible(page, 'wizard done');
   await page.getByRole('button', { name: c.toDashboard }).click();
   await expect(page.getByRole('heading', { name: c.welcome(admin.fullName) })).toBeVisible();
   return enrolled;
@@ -327,10 +356,15 @@ export async function tabTo(page: Page, target: Locator, maxPresses = 25): Promi
   await expect(target, `reachable with Tab within ${maxPresses} presses`).toBeFocused({ timeout: 1 });
 }
 
+// signOut signs out and proves the server session ended: reloading the app shows the sign-in page.
 export async function signOut(page: Page): Promise<void> {
   const c = COPY[await uiLang(page)];
   await page.getByRole('button', { name: c.signOut }).click();
   await expect(page.getByRole('heading', { name: either('loginHeading') })).toBeVisible();
+  await page.goto('/');
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole('heading', { name: either('loginHeading') })).toBeVisible();
+  await expect(page.getByRole('button', { name: c.signOut })).toHaveCount(0);
 }
 
 // AXE_WIDTHS are the desktop widths every screen must work at (spec §26.1 item 9).

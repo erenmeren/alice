@@ -4,8 +4,11 @@ import { COPY, expect, resetInstall, test } from './helpers';
 function collectProblems(page: Page): string[] {
   const problems: string[] = [];
   page.on('console', (m) => {
-    // A signed-out app gets 401 from /api/v1/auth/session; Chromium logs that as a failed resource.
-    if (m.type() === 'error' && !m.text().startsWith('Failed to load resource')) problems.push(m.text());
+    if (m.type() !== 'error') return;
+    // A signed-out app gets 401 from /api/v1/auth/session; Chromium logs exactly that as a failed resource.
+    const expected401 =
+      m.text().startsWith('Failed to load resource') && m.text().includes('401') && m.location().url.endsWith('/api/v1/auth/session');
+    if (!expected401) problems.push(`${m.text()} (${m.location().url})`);
   });
   page.on('pageerror', (e) => problems.push(e.message));
   return problems;
