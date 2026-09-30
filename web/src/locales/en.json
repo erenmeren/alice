@@ -6,7 +6,9 @@
     "serverVersion": "Server version: {{version}}",
     "serverUnreachable": "The server cannot be reached right now. Try reloading the page in a minute."
   },
-  "language": { "label": "Language" },
+  "language": {
+    "label": "Language"
+  },
   "nav": {
     "label": "Main navigation",
     "home": "Home",
@@ -48,6 +50,22 @@
       "expires_in_days": "Valid for (days)",
       "locale": "Language",
       "language": "Language"
+    },
+    "continue": "Continue",
+    "verify": "Verify",
+    "totp": {
+      "title": "Set up your authenticator app",
+      "help": "Scan this QR code with an authenticator app such as Microsoft Authenticator or Google Authenticator. Then type the 6-digit code the app shows.",
+      "qrAlt": "QR code for your authenticator app",
+      "manual": "Cannot scan the code? Type this key into the app instead:"
+    },
+    "recoveryCodes": {
+      "title": "Save your recovery codes",
+      "help": "If you lose your phone, each of these codes lets you sign in once. Keep them somewhere safe, such as a password manager or a printed copy.",
+      "saved": "I saved these codes in a safe place",
+      "copy": "Copy codes",
+      "copied": "Copied",
+      "download": "Download codes"
     }
   },
   "login": {
@@ -55,6 +73,49 @@
     "sessionEnded": "Your session ended. Please sign in again."
   },
   "setup": {
-    "title": "Set up Alice"
+    "title": "Set up Alice",
+    "code": {
+      "title": "Enter the setup code",
+      "help": "The one-time setup code was shown when Alice was installed on the server.",
+      "label": "Setup code",
+      "lost": "Lost the code? Someone with administrator rights on the Alice server can create a new one."
+    },
+    "language": {
+      "title": "Choose your language",
+      "label": "Language for Alice and its emails"
+    },
+    "admin": {
+      "title": "Create the administrator account",
+      "help": "This account can do everything in Alice. It always signs in with a password and a code from an authenticator app.",
+      "username": "Username",
+      "fullName": "Full name",
+      "email": "Email (optional)",
+      "password": "Password",
+      "passwordHelp": "At least 12 characters. A few unrelated words are easy to remember and hard to guess.",
+      "repeatPassword": "Repeat password",
+      "passwordMismatch": "The two passwords are different. Type the same password twice."
+    },
+    "passphrase": {
+      "title": "Choose a recovery passphrase",
+      "warning": "This passphrase protects your backups. If you lose it, backups cannot be opened and nobody, including the vendor, can help.",
+      "label": "Recovery passphrase",
+      "help": "At least 16 characters. Write it on paper and keep it somewhere safe, away from this server.",
+      "repeat": "Repeat the passphrase",
+      "mismatch": "The two passphrases are different. Type the same passphrase twice.",
+      "stored": "I stored the passphrase safely",
+      "save": "Save passphrase",
+      "strengthLabel": "Passphrase strength",
+      "strength": {
+        "tooShort": "Too short: use at least 16 characters.",
+        "fair": "Fair",
+        "good": "Good",
+        "strong": "Strong"
+      }
+    },
+    "done": {
+      "title": "Alice is ready",
+      "help": "Your administrator account and recovery passphrase are set. Next, add the people who will use Alice on the Users page.",
+      "button": "Go to the dashboard"
+    }
   }
 }

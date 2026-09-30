@@ -6,7 +6,9 @@
     "serverVersion": "Sunucu sürümü: {{version}}",
     "serverUnreachable": "Sunucuya şu anda ulaşılamıyor. Bir dakika sonra sayfayı yenilemeyi deneyin."
   },
-  "language": { "label": "Dil" },
+  "language": {
+    "label": "Dil"
+  },
   "nav": {
     "label": "Ana gezinme",
     "home": "Ana sayfa",
@@ -48,6 +50,22 @@
       "expires_in_days": "Geçerlilik (gün)",
       "locale": "Dil",
       "language": "Dil"
+    },
+    "continue": "Devam",
+    "verify": "Doğrula",
+    "totp": {
+      "title": "Doğrulama uygulamanızı kurun",
+      "help": "Bu QR kodunu Microsoft Authenticator veya Google Authenticator gibi bir doğrulama uygulamasıyla tarayın. Ardından uygulamanın gösterdiği 6 haneli kodu yazın.",
+      "qrAlt": "Doğrulama uygulamanız için QR kodu",
+      "manual": "Kodu tarayamıyor musunuz? Bunun yerine bu anahtarı uygulamaya yazın:"
+    },
+    "recoveryCodes": {
+      "title": "Kurtarma kodlarınızı kaydedin",
+      "help": "Telefonunuzu kaybederseniz bu kodların her biriyle bir kez giriş yapabilirsiniz. Onları parola yöneticisi veya basılı bir kopya gibi güvenli bir yerde saklayın.",
+      "saved": "Bu kodları güvenli bir yere kaydettim",
+      "copy": "Kodları kopyala",
+      "copied": "Kopyalandı",
+      "download": "Kodları indir"
     }
   },
   "login": {
@@ -55,6 +73,49 @@
     "sessionEnded": "Oturumunuz sona erdi. Lütfen yeniden giriş yapın."
   },
   "setup": {
-    "title": "Alice kurulumu"
+    "title": "Alice kurulumu",
+    "code": {
+      "title": "Kurulum kodunu girin",
+      "help": "Tek kullanımlık kurulum kodu, Alice sunucuya kurulurken gösterildi.",
+      "label": "Kurulum kodu",
+      "lost": "Kodu mu kaybettiniz? Alice sunucusunda yönetici yetkisi olan biri yeni bir kod oluşturabilir."
+    },
+    "language": {
+      "title": "Dilinizi seçin",
+      "label": "Alice'in ve e-postalarının dili"
+    },
+    "admin": {
+      "title": "Yönetici hesabını oluşturun",
+      "help": "Bu hesap Alice'te her işlemi yapabilir. Her zaman parola ve doğrulama uygulamasından alınan bir kodla giriş yapar.",
+      "username": "Kullanıcı adı",
+      "fullName": "Ad soyad",
+      "email": "E-posta (isteğe bağlı)",
+      "password": "Parola",
+      "passwordHelp": "En az 12 karakter. Birbiriyle ilgisiz birkaç kelime hem kolay hatırlanır hem de zor tahmin edilir.",
+      "repeatPassword": "Parolayı tekrar girin",
+      "passwordMismatch": "Girdiğiniz iki parola farklı. Aynı parolayı iki kez yazın."
+    },
+    "passphrase": {
+      "title": "Kurtarma parolası belirleyin",
+      "warning": "Bu parola yedeklerinizi korur. Kaybederseniz yedekler açılamaz ve üretici dahil hiç kimse yardımcı olamaz.",
+      "label": "Kurtarma parolası",
+      "help": "En az 16 karakter. Kâğıda yazın ve bu sunucudan uzakta, güvenli bir yerde saklayın.",
+      "repeat": "Kurtarma parolasını tekrar girin",
+      "mismatch": "Girdiğiniz iki kurtarma parolası farklı. Aynı parolayı iki kez yazın.",
+      "stored": "Kurtarma parolasını güvenli bir yerde sakladım",
+      "save": "Parolayı kaydet",
+      "strengthLabel": "Parola gücü",
+      "strength": {
+        "tooShort": "Çok kısa: en az 16 karakter kullanın.",
+        "fair": "Orta",
+        "good": "İyi",
+        "strong": "Güçlü"
+      }
+    },
+    "done": {
+      "title": "Alice hazır",
+      "help": "Yönetici hesabınız ve kurtarma parolanız ayarlandı. Şimdi Kullanıcılar sayfasından Alice'i kullanacak kişileri ekleyin.",
+      "button": "Ana sayfaya git"
+    }
   }
 }

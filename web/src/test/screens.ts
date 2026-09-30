@@ -14,5 +14,17 @@ export const SCREENS: Screen[] = [
   { path: '/', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Home', tr: 'Ana sayfa' } },
   { path: '/login', session: null, status: installedStatus, ready: { en: 'Sign in to Alice', tr: "Alice'e giriş yapın" } },
   { path: '/setup', session: null, status: freshStatus, ready: { en: 'Set up Alice', tr: 'Alice kurulumu' } },
+  {
+    path: '/setup',
+    session: sessionFor('admin'),
+    status: { ...installedStatus, completed: false, recovery_passphrase_set: false },
+    ready: { en: 'Choose a recovery passphrase', tr: 'Kurtarma parolası belirleyin' },
+  },
+  {
+    path: '/setup',
+    session: sessionFor('admin'),
+    status: { ...installedStatus, completed: false },
+    ready: { en: 'Alice is ready', tr: 'Alice hazır' },
+  },
   { path: '/missing', session: null, status: installedStatus, ready: { en: 'Page not found', tr: 'Sayfa bulunamadı' } },
 ];
