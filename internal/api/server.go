@@ -228,6 +228,8 @@ func (s *server) apiRoutes() []route {
 	var routes []route
 	routes = append(routes, s.probeRoutes()...)
 	routes = append(routes, s.systemRoutes()...)
+	routes = append(routes, s.setupRoutes()...)
+	routes = append(routes, s.authRoutes()...)
 	return routes
 }
 

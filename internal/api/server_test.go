@@ -20,6 +20,7 @@ import (
 
 	"alice/internal/i18n"
 	"alice/internal/platform/clock"
+	"alice/internal/setup"
 	"alice/internal/version"
 	"alice/locales"
 )
@@ -51,7 +52,9 @@ func testDeps(t *testing.T, health error) Deps {
 		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock: clock.NewFake(testNow),
 		Auth:  identityAuth(testNow),
-		Setup: &fakeSetup{},
+		Setup: &fakeSetup{StatusFn: func(context.Context) (setup.Status, error) {
+			return setup.Status{DefaultLocale: "en"}, nil // GET /setup/status is public; answer it by default
+		}},
 		Audit: &fakeAudit{},
 	}
 }

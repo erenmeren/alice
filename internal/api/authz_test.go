@@ -235,7 +235,9 @@ func under(pattern, prefix string) bool {
 // sensitive route groups: user administration and settings need an
 // administrator's browser session with step-up (SEC-009), token routes are
 // for browser sessions only and creating a token needs step-up (SEC-009,
-// SEC-025), and the audit log needs audit.read. No permission may accept API
+// SEC-025), settings and the setup steps after the administrator exists
+// (recovery passphrase, completion) need settings.manage, and the audit log
+// needs audit.read. No permission may accept API
 // tokens and require step-up at once (tokens can never step up).
 func routeRuleViolations(routes []route) []string {
 	var out []string
@@ -250,7 +252,7 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.SessionStepUp
 		case under(p, "/api/v1/tokens"):
 			want = rbac.Session
-		case under(p, "/api/v1/settings"), p == "/api/v1/setup/recovery-passphrase":
+		case under(p, "/api/v1/settings"), p == "/api/v1/setup/recovery-passphrase", p == "/api/v1/setup/complete":
 			want = rbac.SettingsManage
 		case under(p, "/api/v1/audit"):
 			want = rbac.AuditRead
@@ -267,7 +269,20 @@ func routeRuleViolations(routes []route) []string {
 }
 
 func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
-	assert.Empty(t, routeRuleViolations(newServer(Deps{}).apiRoutes()))
+	routes := newServer(Deps{}).apiRoutes()
+	assert.Empty(t, routeRuleViolations(routes))
+	// The rules must not pass vacuously: the sensitive routes that exist so far are in the table.
+	var table []string
+	for _, rt := range routes {
+		table = append(table, rt.method+" "+rt.pattern)
+	}
+	for _, k := range []string{
+		"POST /api/v1/setup/recovery-passphrase",
+		"POST /api/v1/setup/complete",
+		"POST /api/v1/auth/recovery-codes",
+	} {
+		assert.Contains(t, table, k)
+	}
 }
 
 func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
@@ -278,6 +293,7 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodDelete, pattern: "/api/v1/tokens/{id}", perm: rbac.Read},
 		{method: http.MethodPut, pattern: "/api/v1/settings/locale", perm: rbac.Session},
 		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", perm: rbac.SetupFinish},
+		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.SetupFinish},
 		{method: http.MethodGet, pattern: "/api/v1/audit/export", perm: rbac.Read},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))
@@ -287,6 +303,7 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodPost, pattern: "/api/v1/tokens", perm: rbac.SessionStepUp},
 		{method: http.MethodGet, pattern: "/api/v1/tokens", perm: rbac.Session},
 		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", perm: rbac.SettingsManage},
+		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.SettingsManage},
 		{method: http.MethodPost, pattern: "/api/v1/audit/verify", perm: rbac.AuditRead},
 		{method: http.MethodGet, pattern: "/api/v1/usersettings", perm: rbac.Session},
 	}

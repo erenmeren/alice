@@ -47,6 +47,315 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/LocaleList" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/setup/status:
+    get:
+      operationId: getSetupStatus
+      summary: Whether the first-run wizard is still needed
+      x-permission: public
+      responses:
+        "200":
+          description: Setup status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SetupStatus" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/setup/session:
+    post:
+      operationId: startSetupSession
+      summary: Exchange the one-time setup code for a wizard session (sets the __Host-alice_setup cookie)
+      x-permission: public
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: { type: string, maxLength: 64, examples: [K7QX2M-9TPD4R-WB5H8N-3VZC6A] }
+      responses:
+        "200":
+          description: Wizard session started
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CSRFToken" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/setup/language:
+    put:
+      operationId: setSetupLanguage
+      summary: Choose the default language
+      x-permission: setup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [language]
+              properties:
+                language: { type: string, enum: [en, tr] }
+      responses:
+        "204": { description: Saved }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/setup/admin/enrollment:
+    post:
+      operationId: startAdminEnrollment
+      summary: Validate the administrator details and create a TOTP secret to scan
+      x-permission: setup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, display_name, email, password]
+              properties:
+                username: { type: string, maxLength: 64 }
+                display_name: { type: string, maxLength: 100 }
+                email: { type: string, maxLength: 254 }
+                password: { type: string, maxLength: 1024 }
+      responses:
+        "200":
+          description: TOTP secret, shown once
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MFAEnrollment" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/setup/admin:
+    post:
+      operationId: createAdmin
+      summary: Confirm the first TOTP code, create the administrator and sign in
+      x-permission: setup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: { type: string, pattern: "^[0-9]{6}$" }
+      responses:
+        "200":
+          description: Administrator created; session cookie set, setup cookie cleared, recovery codes shown once
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionWithCodes" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/setup/recovery-passphrase:
+    post:
+      operationId: setRecoveryPassphrase
+      summary: Choose the recovery passphrase and create the backup key pair
+      x-permission: settings.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [passphrase, passphrase_confirm]
+              properties:
+                passphrase: { type: string, minLength: 16, maxLength: 1024 }
+                passphrase_confirm: { type: string, maxLength: 1024 }
+      responses:
+        "204": { description: Passphrase set }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/setup/complete:
+    post:
+      operationId: completeSetup
+      summary: Finish the wizard (needs the recovery passphrase)
+      x-permission: settings.manage
+      responses:
+        "200":
+          description: Setup status after completion
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SetupStatus" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      summary: Check username and password; sets a pending session cookie for the MFA step
+      x-permission: public
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, password]
+              properties:
+                username: { type: string, maxLength: 64 }
+                password: { type: string, maxLength: 1024 }
+      responses:
+        "200":
+          description: Password accepted; MFA is next
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, csrf_token]
+                properties:
+                  status: { type: string, enum: [mfa_required, mfa_enrollment_required] }
+                  csrf_token: { type: string, description: Send as X-CSRF-Token on the MFA enroll/verify requests }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/mfa/enroll:
+    post:
+      operationId: enrollMFA
+      summary: Create the TOTP secret for a user who has none yet
+      x-permission: mfa_pending
+      responses:
+        "200":
+          description: TOTP secret, shown once
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MFAEnrollment" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/mfa/verify:
+    post:
+      operationId: verifyMFA
+      summary: Complete sign-in with a TOTP code or a recovery code (new session cookie)
+      x-permission: mfa_pending
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                code: { type: string, pattern: "^[0-9]{6}$" }
+                recovery_code: { type: string, maxLength: 32 }
+      responses:
+        "200":
+          description: Signed in; recovery_codes present only after first enrollment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionWithCodes" }
+        "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/session:
+    get:
+      operationId: getSession
+      summary: The signed-in user, the CSRF token and session limits
+      x-permission: session
+      responses:
+        "200":
+          description: Current session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionInfo" }
+        "401": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/logout:
+    post:
+      operationId: logout
+      summary: End this session
+      x-permission: session
+      responses:
+        "204": { description: Signed out; cookie cleared }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/stepup:
+    post:
+      operationId: stepUp
+      summary: Confirm a TOTP code to allow sensitive actions for 5 minutes (session ID is regenerated)
+      x-permission: session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: { type: string, pattern: "^[0-9]{6}$" }
+      responses:
+        "200":
+          description: Step-up active
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionInfo" }
+        "401": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/password:
+    post:
+      operationId: changePassword
+      summary: Change the own password; ends every other session
+      x-permission: session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string, maxLength: 1024 }
+                new_password: { type: string, maxLength: 1024 }
+      responses:
+        "200":
+          description: Password changed; new session cookie
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionInfo" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/recovery-codes:
+    post:
+      operationId: regenerateRecoveryCodes
+      summary: Replace the own recovery codes (the old ones stop working)
+      x-permission: session.stepup
+      responses:
+        "200":
+          description: New recovery codes, shown once
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recovery_codes]
+                properties:
+                  recovery_codes: { type: array, items: { type: string } }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/locale:
+    put:
+      operationId: setMyLocale
+      summary: Save the own UI language
+      x-permission: session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [locale]
+              properties:
+                locale: { type: string, enum: [en, tr] }
+      responses:
+        "204": { description: Saved }
+        default: { $ref: "#/components/responses/Error" }
 components:
   responses:
     StatusOK:
@@ -117,3 +426,56 @@ components:
         params:
           type: object
           additionalProperties: { type: string }
+    CSRFToken:
+      type: object
+      required: [csrf_token]
+      properties:
+        csrf_token: { type: string, description: Send as X-CSRF-Token on state-changing requests }
+    SetupStatus:
+      type: object
+      required: [admin_exists, recovery_passphrase_set, completed, default_locale]
+      properties:
+        admin_exists: { type: boolean }
+        recovery_passphrase_set: { type: boolean }
+        completed: { type: boolean }
+        default_locale: { type: string, examples: [tr] }
+    MFAEnrollment:
+      type: object
+      required: [secret, otpauth_uri, qr_png]
+      properties:
+        secret: { type: string, description: Base32 TOTP secret }
+        otpauth_uri: { type: string }
+        qr_png: { type: string, contentEncoding: base64, description: PNG image of otpauth_uri }
+    User:
+      type: object
+      required: [id, username, display_name, email, role, locale, disabled, mfa_enrolled, last_login_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        display_name: { type: string }
+        email: { type: string }
+        role: { type: string, enum: [admin, operator, auditor] }
+        locale: { type: string }
+        disabled: { type: boolean }
+        mfa_enrolled: { type: boolean }
+        last_login_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+    SessionInfo:
+      type: object
+      required: [user, csrf_token, expires_at, idle_expires_at, stepup_until]
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        csrf_token: { type: string }
+        expires_at: { type: string, format: date-time }
+        idle_expires_at: { type: string, format: date-time }
+        stepup_until: { type: [string, "null"], format: date-time }
+    SessionWithCodes:
+      description: SessionInfo plus the one-time recovery codes (only from administrator creation and MFA verification)
+      allOf:
+        - { $ref: "#/components/schemas/SessionInfo" }
+        - type: object
+          properties:
+            recovery_codes:
+              type: array
+              items: { type: string }
+              description: Present only right after MFA enrollment or administrator creation
