@@ -134,7 +134,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 
 **Likely cause.** The enrollment page was opened twice.
 
-**What to do.** Enter a code from the app. If the device is lost, an administrator can reset it (Users, "Reset MFA"), or the host administrator can run `alice admin reset-mfa <username>`.
+**What to do.** Enter a code from the app. If the device is lost, an administrator can reset it (**Users**, **Manage**, **Reset two-factor sign-in**), or the host administrator can run `alice admin reset-mfa <username>`.
 
 ## ALC-AUTH-0008: Password too short
 
@@ -230,7 +230,8 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 
 **Likely cause.** The page was reloaded between the two steps after the wizard session was renewed.
 
-**What to do.** Go back one step and submit the administrator form again.
+**What to do.** Reload the page and enter the setup code again; the wizard then asks for the administrator
+details once more. (The wizard has no "Back" button yet.)
 
 ## ALC-SET-0005: Recovery passphrase too short
 

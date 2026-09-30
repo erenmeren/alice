@@ -30,6 +30,9 @@ All commands run from the repository root. Integration tests (`-tags integration
 | 15 | E2E owner journey EN/TR incl. axe at 1280/1920 px, keyboard-only sign-in, CSP violations | `make e2e-up && make e2e` | all passed |
 | 16 | Container hardening incl. `ulimits: core: 0` | `make hardening-check` (running stack) | ok |
 
+In the Command column, `\|` is how Markdown writes a `|` inside a table; type a plain `|` in the shell (for
+example `-run 'TestAuthzMatrix|TestRoutePermissionsMatchSpec'`).
+
 The whole set runs in `make ci`. On 2026-09-30 every command above passed on branch `phase-1` (base `c8091c0`
 plus the documentation-only commit that adds this note), together with a full `make ci`.
 
@@ -97,6 +100,9 @@ Product and operations:
   install time arrives in Phase 8 (§26.1.10 manual step accepted in R35).
 - The wizard ends after the recovery passphrase; HTTPS certificate upload, SMTP, license and first target are added
   by Phases 8, 7, 2 and 3. The temporary certificate is still renewed only at container start.
+- The wizard has no "Back" button (§18.5) and keeps no server-side position before the administrator exists: a
+  reload returns to the setup-code screen and the code is entered again. "Back" and full resume arrive with the
+  Phase 8 install wizard (R35 addendum).
 - Lockout and audit-integrity problems are recorded in the audit log but not emailed or forwarded to syslog
   (Phase 7), and there is no scheduled daily verification yet (Phase 3 jobs).
 - A person created by an administrator is not forced to change the initial password at first sign-in (R35); the
@@ -121,6 +127,13 @@ Security (see Findings for details):
 - Audit checkpoint in the same database; tail truncation by an owner-level attacker is undetected until external
   anchors arrive (P1-02, Medium, Phases 3 and 7).
 - R-04 statistical timing test deferred (P1-03).
+- `POST /audit/verify` is allowed for Auditors and read-scope API tokens (`audit.read`) by design: Auditors have
+  **Verify integrity**. Each call adds a checkpoint and an `audit.verified` entry and is bounded only by the
+  general request limit (see P1-10) (R35 addendum).
+- The sign-in limit groups IPv6 addresses by /64. A client that controls a larger range (for example a /48, which
+  holds 65,536 /64 networks) gets a separate 10-per-minute budget for each /64 and can keep the shared queue of
+  password checks busy, so other people's sign-ins wait or fail with "try again" (`ALC-AUTH-0012`). A coarser
+  prefix limit or a global sign-in budget is planned for a later phase.
 - Token-id existence visible through revoke timing (P1-04); login over a full session does not revoke the old
   session (P1-05); strict same-origin rules (P1-06); raw startup/CLI error text and minimal 500 logs (P1-07);
   passphrase strength checked in the browser only (P1-08).
@@ -168,12 +181,19 @@ Then in a browser at https://localhost (or https://localhost:$ALICE_PORT), follo
 3. Set the recovery passphrase; the wizard warns it cannot be recovered. Finish with **Go to the dashboard**.
 4. Sign out and sign in again: password, then the code from the app.
 5. **Users**: create one Operator and one Auditor. In private windows sign in as each (they enrol TOTP). The
-   Operator sees neither **Users** nor **Audit log**; the Auditor sees **Audit log** and no buttons that change
-   anything.
+   Operator sees neither **Users** nor **Audit log**. The Auditor sees **Audit log** (and may use **Verify
+   integrity**) but not **Users**. Like everyone, the Auditor can create and revoke their own API tokens, change
+   their own password and create new recovery codes on **My account**; only the actions that manage other people
+   are absent.
 6. As the admin open **Audit log**: the sign-ins and the two user creations are listed. Choose
    **Verify integrity**: it shows "The audit log is intact."
-7. Enter a wrong password five times for the Operator: Alice slows down; after ten attempts the account is blocked
-   for 15 minutes (the right password is refused with the same message meanwhile).
+7. Enter a wrong password for the Operator, leaving time between attempts. After the fifth failure Alice makes
+   each next attempt wait (1, 2, 4, 8, then 16 seconds); an attempt made during the wait is refused with the same
+   message and is **not counted**, so from the sixth attempt on wait about 20 seconds before each one. Sign-in is
+   also limited to 10 attempts per minute from one IP address: a "Too many requests in a short time." message
+   (HTTP 429) means wait a minute and go on. After the tenth counted failure the account is blocked for
+   15 minutes (the right password is refused with the same message meanwhile). Optional:
+   `alice admin unlock <operator username>` ends the block at once.
 
 Also run:
 
