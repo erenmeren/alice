@@ -6,11 +6,16 @@ const baseURL = process.env.ALICE_BASE_URL ?? (port === '443' ? 'https://localho
 
 export default defineConfig({
   testDir: './e2e',
+  // Every test resets the one shared server (POST /test/reset), so tests must never overlap.
+  workers: 1,
+  fullyParallel: false,
+  timeout: 180_000,
+  expect: { timeout: 15_000 },
   retries: process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL,
-    ignoreHTTPSErrors: true, // the Phase 0 stack uses a temporary self-signed certificate
+    ignoreHTTPSErrors: true, // the stack uses a temporary self-signed certificate
     trace: 'retain-on-failure',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
