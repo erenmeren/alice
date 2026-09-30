@@ -87,3 +87,38 @@ func TestE2EUnknownTestEndpointIs404(t *testing.T) {
 	testHandler(testDeps{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/test/nope", nil))
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
+
+// The test endpoints change server state, so a cross-site page must not be able to
+// drive them from a browser: unsafe methods get the same-origin check of the API guard.
+func TestE2ETestEndpointsRejectCrossSiteRequests(t *testing.T) {
+	t.Cleanup(e2eClock.Reset)
+	h := testHandler(testDeps{})
+	before := e2eClock.Now()
+	for name, hdr := range map[string][2]string{
+		"foreign Origin":         {"Origin", "https://evil.example"},
+		"cross-site fetch":       {"Sec-Fetch-Site", "cross-site"},
+		"same-site other origin": {"Sec-Fetch-Site", "same-site"},
+	} {
+		for _, path := range []string{"/test/clock", "/test/reset", "/test/setup-token"} {
+			req := httptest.NewRequest(http.MethodPost, "https://alice.test"+path, strings.NewReader(`{"advance_seconds":3600}`))
+			req.Header.Set(hdr[0], hdr[1])
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			assert.Equal(t, http.StatusForbidden, rec.Code, "%s %s", name, path)
+		}
+	}
+	assert.Less(t, e2eClock.Now().Sub(before), time.Minute, "a refused request never moves the clock")
+
+	req := httptest.NewRequest(http.MethodPost, "https://alice.test/test/clock", strings.NewReader(`{"advance_seconds":60}`))
+	req.Header.Set("Origin", "https://alice.test")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code, "a same-origin request is accepted")
+
+	req = httptest.NewRequest(http.MethodGet, "https://alice.test/test/clock", nil)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code, "reading the clock is a safe method")
+}

@@ -44,7 +44,7 @@ func (s *server) guard(rt route) http.HandlerFunc {
 			return
 		}
 		if !safeMethod(r.Method) && !hasBearer(r) {
-			if !sameOrigin(r) {
+			if !SameOrigin(r) {
 				s.writeError(w, r, ErrCSRF)
 				return
 			}
@@ -200,9 +200,10 @@ func hasBearer(r *http.Request) bool {
 	return strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ")
 }
 
-// sameOrigin rejects cross-site state-changing requests (defence in depth
-// next to SameSite=Strict cookies and the CSRF token).
-func sameOrigin(r *http.Request) bool {
+// SameOrigin reports whether a state-changing request may come from this site: it
+// rejects cross-site requests (defence in depth next to SameSite=Strict cookies and
+// the CSRF token). The e2e build's /test endpoints apply it too.
+func SameOrigin(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "", "same-origin", "none":
 	default:

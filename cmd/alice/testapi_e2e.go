@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"alice/internal/api"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
 )
@@ -83,7 +84,15 @@ func testHandler(d testDeps) http.Handler {
 	mux.HandleFunc("/test/", func(w http.ResponseWriter, _ *http.Request) {
 		writeTestJSON(w, http.StatusNotFound, map[string]string{"error": "unknown test endpoint"})
 	})
-	return mux
+	// The endpoints change server state, so a cross-site page must not reach them
+	// through a visitor's browser: unsafe methods get the API guard's same-origin check.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !api.SameOrigin(r) {
+			writeTestJSON(w, http.StatusForbidden, map[string]string{"error": "cross-site request refused"})
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // resetInstall empties every application table as the owner role. The audit
