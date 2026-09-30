@@ -1,0 +1,13 @@
+# Go
+/bin/
+/coverage.out
+# Web
+/web/node_modules/
+/web/test-results/
+/web/playwright-report/
+/internal/webui/dist/app/
+# Local environment
+/deploy/.env
+.DS_Store
+# Local tooling
+/.superpowers/
