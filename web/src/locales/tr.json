@@ -242,5 +242,62 @@
       "read": "Salt okunur",
       "operate": "Okuma ve işlem"
     }
+  },
+  "audit": {
+    "title": "Denetim kaydı",
+    "verify": "Bütünlüğü doğrula",
+    "intact": "Denetim kaydı sağlam.",
+    "broken": "Denetim kaydında {{seq}} numaralı kayıtta bütünlük sorunu var.",
+    "brokenHelp": "Birisi kayıtları değiştirmiş veya silmiş olabilir. Dışa aktarılan dosyanın bir kopyasını saklayın ve güvenlik ekibinizle iletişime geçin.",
+    "checked_one": "Kontrol edilen kayıt sayısı: {{formatted}}.",
+    "checked_other": "Kontrol edilen kayıt sayısı: {{formatted}}.",
+    "headHash": "Son kaydın parmak izi (sonraki değişiklikleri fark etmek için not edin):",
+    "exportCsv": "CSV olarak dışa aktar",
+    "exportJson": "JSON olarak dışa aktar",
+    "empty": "Bu filtrelere uyan kayıt yok.",
+    "loadMore": "Daha fazla yükle",
+    "systemActor": "Sistem ({{name}})",
+    "filters": {
+      "action": "İşlem şununla başlar",
+      "result": "Sonuç",
+      "anyResult": "Tüm sonuçlar",
+      "apply": "Filtreleri uygula"
+    },
+    "columns": {
+      "time": "Zaman",
+      "user": "Kullanıcı",
+      "action": "İşlem",
+      "result": "Sonuç",
+      "ip": "IP adresi"
+    },
+    "result": {
+      "success": "Başarılı",
+      "failure": "Başarısız",
+      "denied": "Reddedildi"
+    },
+    "actions": {
+      "setup_admin_created": "Kurulumda yönetici oluşturuldu",
+      "setup_recovery_passphrase_set": "Kurtarma parolası belirlendi",
+      "setup_completed": "Kurulum tamamlandı",
+      "auth_login": "Giriş",
+      "auth_mfa_verify": "Doğrulama kodu kontrol edildi",
+      "auth_mfa_enrolled": "Doğrulama uygulaması kuruldu",
+      "auth_lockout": "Hesap geçici olarak kilitlendi",
+      "auth_logout": "Çıkış",
+      "auth_stepup": "Kimlik yeniden doğrulandı",
+      "auth_password_changed": "Parola değiştirildi",
+      "auth_recovery_codes_regenerated": "Yeni kurtarma kodları oluşturuldu",
+      "auth_recovery_code_used": "Kurtarma kodu kullanıldı",
+      "authz_denied": "Erişim reddedildi",
+      "user_created": "Kullanıcı oluşturuldu",
+      "user_updated": "Kullanıcı değiştirildi",
+      "user_mfa_reset": "İki adımlı giriş sıfırlandı",
+      "user_password_reset": "Parola bir yönetici tarafından belirlendi",
+      "user_sessions_revoked": "Kullanıcının tüm oturumları kapatıldı",
+      "token_created": "API anahtarı oluşturuldu",
+      "token_revoked": "API anahtarı iptal edildi",
+      "audit_verified": "Denetim kaydının bütünlüğü kontrol edildi",
+      "audit_exported": "Denetim kaydı dışa aktarıldı"
+    }
   }
 }

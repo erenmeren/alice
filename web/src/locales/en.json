@@ -242,5 +242,62 @@
       "read": "Read only",
       "operate": "Read and operate"
     }
+  },
+  "audit": {
+    "title": "Audit log",
+    "verify": "Verify integrity",
+    "intact": "The audit log is intact.",
+    "broken": "Audit log integrity problem at entry {{seq}}.",
+    "brokenHelp": "Someone may have changed or deleted entries. Keep a copy of the export and contact your security team.",
+    "checked_one": "{{formatted}} entry checked.",
+    "checked_other": "{{formatted}} entries checked.",
+    "headHash": "Fingerprint of the latest entry (write it down to detect later changes):",
+    "exportCsv": "Export CSV",
+    "exportJson": "Export JSON",
+    "empty": "No entries match these filters.",
+    "loadMore": "Load more",
+    "systemActor": "System ({{name}})",
+    "filters": {
+      "action": "Action starts with",
+      "result": "Result",
+      "anyResult": "Any result",
+      "apply": "Apply filters"
+    },
+    "columns": {
+      "time": "Time",
+      "user": "User",
+      "action": "Action",
+      "result": "Result",
+      "ip": "IP address"
+    },
+    "result": {
+      "success": "Success",
+      "failure": "Failure",
+      "denied": "Denied"
+    },
+    "actions": {
+      "setup_admin_created": "Administrator created during setup",
+      "setup_recovery_passphrase_set": "Recovery passphrase set",
+      "setup_completed": "Setup completed",
+      "auth_login": "Sign-in",
+      "auth_mfa_verify": "Verification code checked",
+      "auth_mfa_enrolled": "Authenticator app set up",
+      "auth_lockout": "Account temporarily locked",
+      "auth_logout": "Sign-out",
+      "auth_stepup": "Identity confirmed again",
+      "auth_password_changed": "Password changed",
+      "auth_recovery_codes_regenerated": "New recovery codes created",
+      "auth_recovery_code_used": "Recovery code used",
+      "authz_denied": "Access denied",
+      "user_created": "User created",
+      "user_updated": "User changed",
+      "user_mfa_reset": "Two-factor sign-in reset",
+      "user_password_reset": "Password set by an administrator",
+      "user_sessions_revoked": "User signed out everywhere",
+      "token_created": "API token created",
+      "token_revoked": "API token revoked",
+      "audit_verified": "Audit log integrity checked",
+      "audit_exported": "Audit log exported"
+    }
   }
 }

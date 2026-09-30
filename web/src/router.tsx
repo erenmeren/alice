@@ -4,6 +4,7 @@ import { RequireAuth, RequireRole } from './auth/guards';
 import { StepUpProvider } from './components/StepUpProvider';
 import { AppLayout } from './layout/AppLayout';
 import { AccountPage } from './pages/AccountPage';
+import { AuditPage } from './pages/AuditPage';
 import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
@@ -48,6 +49,14 @@ export function routes(): RouteObject[] {
               ),
             },
             { path: 'tokens', element: <TokensPage /> },
+            {
+              path: 'audit',
+              element: (
+                <RequireRole roles={['admin', 'auditor']}>
+                  <AuditPage />
+                </RequireRole>
+              ),
+            },
           ],
         },
         { path: '*', element: <NotFoundPage /> },
