@@ -1,0 +1,10 @@
+{
+  "home": {
+    "title": "Welcome to Alice",
+    "subtitle": "Alice keeps track of your TLS certificates and SSH keys. The setup wizard arrives in the next version.",
+    "serverChecking": "Checking the server…",
+    "serverVersion": "Server version: {{version}}",
+    "serverUnreachable": "The server cannot be reached right now. Try reloading the page in a minute."
+  },
+  "language": { "label": "Language" }
+}

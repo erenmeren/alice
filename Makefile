@@ -20,4 +20,24 @@ test-integration: ## Run integration tests (needs Docker)
 
 .PHONY: i18n-check
 i18n-check: ## Verify EN/TR translation catalogs have identical keys and placeholders
-	go run ./tools/i18n-check locales/common
+	go run ./tools/i18n-check locales/common web/src/locales
+
+.PHONY: web-install
+web-install: ## Install web dependencies from the lockfile
+	cd web && npm ci
+
+.PHONY: web
+web: ## Build the web UI into internal/webui/dist/app
+	cd web && npm run build
+
+.PHONY: web-test
+web-test: ## Run web unit tests
+	cd web && npm test
+
+.PHONY: web-lint
+web-lint: ## Lint the web UI
+	cd web && npm run lint
+
+.PHONY: build
+build: web ## Build the alice binary with the embedded UI into bin/
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/alice ./cmd/alice

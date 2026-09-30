@@ -1,0 +1,10 @@
+{
+  "home": {
+    "title": "Alice'e hoş geldiniz",
+    "subtitle": "Alice, TLS sertifikalarınızı ve SSH anahtarlarınızı takip eder. Kurulum sihirbazı bir sonraki sürümde gelecek.",
+    "serverChecking": "Sunucu kontrol ediliyor…",
+    "serverVersion": "Sunucu sürümü: {{version}}",
+    "serverUnreachable": "Sunucuya şu anda ulaşılamıyor. Bir dakika sonra sayfayı yenilemeyi deneyin."
+  },
+  "language": { "label": "Dil" }
+}
