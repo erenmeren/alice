@@ -184,6 +184,41 @@
         "title": "Lisans süresi dolduğu için bu işlem kullanılamıyor.",
         "cause": "Lisans (veya deneme süresi) sona erdi; bu nedenle Alice sunucularınızda değişiklik yapmıyor. Verileriniz güvende.",
         "action": "Bir yönetici yenilenen lisansı Lisans sayfasından yükleyebilir. Her şey hemen yeniden çalışır."
+      },
+      "invalid": {
+        "title": "Bu dosya geçerli bir Alice lisansı değil.",
+        "cause": "Dosya bozulmuş veya değiştirilmiş olabilir ya da bir lisans dosyası değildir.",
+        "action": "Dosyayı satıcınızın e-postasından yeniden indirin ve o dosyayı yükleyin."
+      },
+      "wrong_installation": {
+        "title": "Bu lisans dosyası başka bir kurulum için hazırlanmış (sonu: {{got}}).",
+        "cause": "Lisans yalnızca kimliği içinde yazan kurulumda çalışır. Bu kurulumun kimliğinin sonu: {{expected}}.",
+        "action": "Satıcınızdan bu kurulum için lisans isteyin ve bu sayfada gösterilen Kurulum Kimliğini gönderin."
+      },
+      "unknown_key": {
+        "title": "Bu lisans, Alice'in bu sürümünün tanımadığı bir anahtarla düzenlenmiş.",
+        "cause": "Lisans Alice'in daha yeni bir sürümü için düzenlenmiş veya satıcınız tarafından düzenlenmemiş.",
+        "action": "Satıcınızın destek ekibiyle iletişime geçin."
+      },
+      "revoked_key": {
+        "title": "Bu lisans artık güvenilmeyen bir anahtarla imzalanmış.",
+        "cause": "Satıcınız imza anahtarını değiştirdi.",
+        "action": "Satıcınızdan yeni bir lisans dosyası isteyin; ücretsiz olarak düzenlenir."
+      },
+      "unsupported_format": {
+        "title": "Bu lisans için Alice'in daha yeni bir sürümü gerekiyor.",
+        "cause": "Dosya, Alice'in bu sürümünün okuyamadığı bir biçim kullanıyor.",
+        "action": "Alice'i güncelleyin, ardından dosyayı yeniden yükleyin. Bu sırada mevcut lisans kullanılmaya devam eder."
+      },
+      "older_than_installed": {
+        "title": "Daha yeni bir lisans zaten yüklü.",
+        "cause": "Bu dosya kullanılan lisanstan daha eski ve daha uzun süreli değil.",
+        "action": "Bu dosyayı yüklemeniz gerekmiyor. Satıcınız bunu düzeltme olarak gönderdiyse sizden bir düzeltme lisansı isteyin."
+      },
+      "target_limit_reached": {
+        "title": "Lisansınız en fazla {{max}} hedefe izin veriyor.",
+        "cause": "Kullanımdaki hedef sayısı {{used}}; bu nedenle yeni hedef eklenemez. Mevcut hedefler çalışmaya devam eder.",
+        "action": "Artık gerekmeyen bir hedefi kaldırın veya satıcınızdan lisansınızı artırmasını isteyin."
       }
     }
   },

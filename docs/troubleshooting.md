@@ -284,3 +284,67 @@ uploading a license, backups, the audit log, exports and user administration kee
 
 **What to do.** Ask your vendor for a renewed license (send the Installation ID shown on the **License** page) and
 upload it there. Everything works again immediately; work that was paused waits for an administrator's confirmation.
+
+## ALC-LIC-0002: Not a valid license file
+
+**Meaning.** The uploaded file is not a license Alice can accept (HTTP 422): it is not a license file, it is
+damaged, or a value in it was changed after the vendor signed it. Nothing was changed; the installed license stays.
+
+**Likely cause.** The file was opened and saved by an editor that changed it, only part of it was copied, or the
+wrong attachment was chosen.
+
+**What to do.** Save the attachment from the vendor's email again, without opening it, and upload that file.
+
+## ALC-LIC-0003: License for another installation
+
+**Meaning.** The license names a different Installation ID (HTTP 422). The message shows the last six characters of
+both IDs.
+
+**Likely cause.** The license was made for another Alice server, or the ID was mistyped when it was requested.
+
+**What to do.** Copy the Installation ID from the **License** page, send it to your vendor and upload the new file.
+Restoring a backup keeps the Installation ID, so a license keeps working after moving to new hardware.
+
+## ALC-LIC-0004: Unknown signing key
+
+**Meaning.** The license was signed with a key this Alice version does not contain (HTTP 422).
+
+**Likely cause.** The license is for a newer Alice release, or it was not issued by your vendor. A development build
+without the vendor's key refuses every license.
+
+**What to do.** Contact your vendor's support, quoting the request ID.
+
+## ALC-LIC-0005: Signing key no longer trusted
+
+**Meaning.** The license was signed with a vendor key that this Alice version marks as revoked (HTTP 422).
+
+**Likely cause.** The vendor replaced its signing key.
+
+**What to do.** Ask your vendor for a new license file; it is free of charge.
+
+## ALC-LIC-0006: Newer license format
+
+**Meaning.** The license uses a newer file format than this Alice version reads (HTTP 422). The current license
+stays in use.
+
+**Likely cause.** The vendor issued the license for a newer Alice release.
+
+**What to do.** Update Alice (see `docs/upgrade.md` when available), then upload the file again.
+
+## ALC-LIC-0007: A newer license is already installed
+
+**Meaning.** The file is older than the license in use and does not last longer (HTTP 409). Nothing was changed.
+
+**Likely cause.** An old license file was uploaded by mistake.
+
+**What to do.** Nothing, if the current license is right. If your vendor sent the older file on purpose, ask them
+for a correction license (it names the license it replaces and is always accepted).
+
+## ALC-LIC-0008: License target limit reached
+
+**Meaning.** Adding a target would exceed the number of targets the license allows (HTTP 409, `params.used`,
+`params.max`). Existing targets keep working; nothing is locked.
+
+**Likely cause.** All licensed targets are in use, or a renewal lowered the limit below the targets in use.
+
+**What to do.** Remove a target that is no longer needed, or ask your vendor to increase the license.

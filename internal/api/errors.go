@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"alice/internal/auth"
+	"alice/internal/license"
 	"alice/internal/platform/validate"
 	"alice/internal/setup"
 )
@@ -58,7 +59,14 @@ var (
 	ErrSetupIncomplete           = ErrorCode{Code: "ALC-SET-0008", Reason: "setup.incomplete", Status: http.StatusConflict}
 	ErrSetupLicenseChoiceMissing = ErrorCode{Code: "ALC-SET-0009", Reason: "setup.license_choice_missing", Status: http.StatusConflict}
 
-	ErrLicenseLocked = ErrorCode{Code: "ALC-LIC-0001", Reason: "license.locked", Status: http.StatusForbidden}
+	ErrLicenseLocked             = ErrorCode{Code: "ALC-LIC-0001", Reason: "license.locked", Status: http.StatusForbidden}
+	ErrLicenseInvalid            = ErrorCode{Code: "ALC-LIC-0002", Reason: "license.invalid", Status: http.StatusUnprocessableEntity}
+	ErrLicenseWrongInstallation  = ErrorCode{Code: "ALC-LIC-0003", Reason: "license.wrong_installation", Status: http.StatusUnprocessableEntity}
+	ErrLicenseUnknownKey         = ErrorCode{Code: "ALC-LIC-0004", Reason: "license.unknown_key", Status: http.StatusUnprocessableEntity}
+	ErrLicenseRevokedKey         = ErrorCode{Code: "ALC-LIC-0005", Reason: "license.revoked_key", Status: http.StatusUnprocessableEntity}
+	ErrLicenseUnsupportedFormat  = ErrorCode{Code: "ALC-LIC-0006", Reason: "license.unsupported_format", Status: http.StatusUnprocessableEntity}
+	ErrLicenseOlderThanInstalled = ErrorCode{Code: "ALC-LIC-0007", Reason: "license.older_than_installed", Status: http.StatusConflict}
+	ErrLicenseTargetLimit        = ErrorCode{Code: "ALC-LIC-0008", Reason: "license.target_limit_reached", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -71,6 +79,8 @@ func AllErrorCodes() []ErrorCode {
 		ErrSetupCodeInvalid, ErrSetupLocked, ErrSetupSessionExpired, ErrSetupEnrollmentMissing,
 		ErrPassphraseTooShort, ErrPassphraseMismatch, ErrPassphraseAlreadySet, ErrSetupIncomplete, ErrSetupLicenseChoiceMissing,
 		ErrLicenseLocked,
+		ErrLicenseInvalid, ErrLicenseWrongInstallation, ErrLicenseUnknownKey, ErrLicenseRevokedKey,
+		ErrLicenseUnsupportedFormat, ErrLicenseOlderThanInstalled, ErrLicenseTargetLimit,
 	}
 }
 
@@ -103,6 +113,13 @@ var errorMap = []struct {
 	{setup.ErrIncomplete, ErrSetupIncomplete, nil},
 	{setup.ErrLicenseChoiceMissing, ErrSetupLicenseChoiceMissing, nil},
 	{setup.ErrForbidden, ErrForbidden, nil},
+	{license.ErrInvalid, ErrLicenseInvalid, nil},
+	{license.ErrUnknownKey, ErrLicenseUnknownKey, nil},
+	{license.ErrRevokedKey, ErrLicenseRevokedKey, nil},
+	{license.ErrUnsupportedFormat, ErrLicenseUnsupportedFormat, nil},
+	{license.ErrOlderThanInstalled, ErrLicenseOlderThanInstalled, nil},
+	{license.ErrLocked, ErrLicenseLocked, nil},
+	{license.ErrNoInstallation, ErrUnavailable, nil},
 }
 
 type errorPayload struct {
@@ -157,6 +174,17 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		// The account lock was busy; nothing was verified or counted (auth.ErrTryAgain).
 		w.Header().Set("Retry-After", "1")
 		s.writeError(w, r, ErrTryAgain)
+		return
+	}
+	var wrong *license.WrongInstallationError
+	if errors.As(err, &wrong) {
+		// Only the six-character ID suffixes, never file content (L-43).
+		s.writeErrorWith(w, r, ErrLicenseWrongInstallation, map[string]string{"expected": wrong.Expected, "got": wrong.Got}, nil)
+		return
+	}
+	var limit *license.TargetLimitError
+	if errors.As(err, &limit) {
+		s.writeErrorWith(w, r, ErrLicenseTargetLimit, map[string]string{"used": strconv.Itoa(limit.Used), "max": strconv.Itoa(limit.Max)}, nil)
 		return
 	}
 	for _, m := range errorMap {

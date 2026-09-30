@@ -615,6 +615,67 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AuditReport" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/license/status:
+    get:
+      operationId: getLicenseStatus
+      summary: Whether the license has expired, and the license banners the caller sees
+      x-permission: read
+      responses:
+        "200":
+          description: License status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LicenseStatus" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/license:
+    get:
+      operationId: getLicense
+      summary: Installation ID, license in force, uploaded files and history
+      x-permission: license.read
+      responses:
+        "200":
+          description: License details
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LicenseDetail" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: installLicense
+      summary: Upload a license file; it takes effect at once
+      x-permission: license.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LicenseUpload" }
+      responses:
+        "200":
+          description: The license was installed (or was already installed)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LicenseUploadResult" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/license/preview:
+    post:
+      operationId: previewLicense
+      summary: Check a license file and show what uploading it would do, without storing it
+      x-permission: license.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LicenseUpload" }
+      responses:
+        "200":
+          description: The license could be installed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LicenseUploadResult" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
 components:
   parameters:
     ID:
@@ -705,6 +766,103 @@ components:
         license_chosen: { type: boolean, description: A license was uploaded or the evaluation was chosen }
         completed: { type: boolean }
         default_locale: { type: string, examples: [tr] }
+    LicenseBanner:
+      type: object
+      required: [kind, severity, params]
+      properties:
+        kind:
+          type: string
+          enum: [evaluation, evaluation_ended, expiry_warning, grace, locked, tampered, clock_behind, clock_jump, pending, over_limit, limit_reached]
+        severity: { type: string, enum: [info, warning, caution, danger] }
+        params: { type: object, additionalProperties: { type: string } }
+    LicenseStatus:
+      type: object
+      required: [expired, banners]
+      properties:
+        expired: { type: boolean, description: The license or the evaluation has ended (grace or lock) }
+        phase:
+          type: string
+          enum: [evaluation, evaluation_expired, active, grace, locked]
+          description: Only for Administrators and Auditors
+        banners: { type: array, items: { $ref: "#/components/schemas/LicenseBanner" } }
+    LicenseInfo:
+      type: object
+      required: [license_id, customer, issued_at, valid_from, valid_until, max_targets, features, replaces, key_id]
+      properties:
+        license_id: { type: string }
+        customer: { type: string }
+        issued_at: { type: string, format: date-time }
+        valid_from: { type: string, format: date-time }
+        valid_until: { type: string, format: date-time }
+        max_targets: { type: integer, minimum: 1, maximum: 100000 }
+        features: { type: array, items: { type: string } }
+        replaces: { type: string, description: License ID a correction license replaces; empty otherwise }
+        key_id: { type: string }
+    LicenseFile:
+      type: object
+      required: [status, uploaded_at, license]
+      properties:
+        status: { type: string, enum: [current, pending, superseded, invalid] }
+        uploaded_at: { type: string, format: date-time }
+        license:
+          oneOf:
+            - $ref: "#/components/schemas/LicenseInfo"
+            - type: "null"
+    LicenseHistoryEntry:
+      type: object
+      required: [at, event, license_id, from_state, to_state, notice]
+      properties:
+        at: { type: string, format: date-time }
+        event: { type: string, enum: [installed, renewed, state_change, clock_anomaly, rejected, notice] }
+        license_id: { type: string }
+        from_state: { type: string }
+        to_state: { type: string }
+        notice: { type: [string, "null"] }
+    LicenseDetail:
+      type: object
+      required: [installation_id, installed_at, phase, effective_time, current, pending, max_targets, targets_used,
+        ends_at, locks_at, days_left, grace_day, tampered, files, history]
+      properties:
+        installation_id: { type: string, examples: [ALICE-7F3K-9Q2M-XD41-B8TC] }
+        installed_at: { type: string, format: date-time }
+        phase: { type: string, enum: [evaluation, evaluation_expired, active, grace, locked] }
+        effective_time: { type: string, format: date-time, description: The trusted time license states are computed from }
+        current:
+          oneOf:
+            - $ref: "#/components/schemas/LicenseInfo"
+            - type: "null"
+        pending:
+          oneOf:
+            - $ref: "#/components/schemas/LicenseInfo"
+            - type: "null"
+        max_targets: { type: integer }
+        targets_used: { type: integer }
+        ends_at: { type: string, format: date-time }
+        locks_at: { type: string, format: date-time }
+        days_left: { type: integer }
+        grace_day: { type: integer }
+        tampered: { type: boolean }
+        files: { type: array, items: { $ref: "#/components/schemas/LicenseFile" } }
+        history: { type: array, items: { $ref: "#/components/schemas/LicenseHistoryEntry" } }
+    LicenseUpload:
+      type: object
+      additionalProperties: false
+      required: [license]
+      properties:
+        license:
+          type: string
+          maxLength: 65536
+          description: The license file content (UTF-8 JSON text). The whole request body is limited to 64 KiB (65536 bytes); a larger body is refused with ALC-SYS-0007 (413).
+    LicenseUploadResult:
+      type: object
+      required: [license, pending, already_expired, correction, duplicate, phase]
+      properties:
+        license: { $ref: "#/components/schemas/LicenseInfo" }
+        pending: { type: boolean, description: valid_from is still ahead; the previous license continues until then }
+        already_expired: { type: boolean }
+        correction: { type: boolean }
+        duplicate: { type: boolean, description: This license was already installed; nothing changed }
+        phase: { type: string, enum: [evaluation, evaluation_expired, active, grace, locked] }
     MFAEnrollment:
       type: object
       required: [secret, otpauth_uri, qr_png]

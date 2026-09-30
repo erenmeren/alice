@@ -391,11 +391,16 @@ func (f *fakeAudit) VerifyReadOnly(ctx context.Context) (audit.Report, error) {
 	return audit.Report{}, errNotConfigured
 }
 
-// fakeLicense implements LicenseService. Allow returns err and counts calls.
+// fakeLicense implements LicenseService. Allow returns err and counts calls; the other
+// methods call their function fields (errNotConfigured when nil).
 type fakeLicense struct {
-	mu    sync.Mutex
-	err   error
-	calls int
+	mu        sync.Mutex
+	err       error
+	calls     int
+	snap      license.Snapshot
+	DetailFn  func(ctx context.Context) (license.Detail, error)
+	PreviewFn func(ctx context.Context, raw []byte) (license.UploadResult, error)
+	InstallFn func(ctx context.Context, raw []byte, actor audit.Actor, by uuid.UUID) (license.UploadResult, error)
 }
 
 func (f *fakeLicense) Allow(license.Class) error {
@@ -403,6 +408,33 @@ func (f *fakeLicense) Allow(license.Class) error {
 	defer f.mu.Unlock()
 	f.calls++
 	return f.err
+}
+
+func (f *fakeLicense) Snapshot() license.Snapshot {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.snap
+}
+
+func (f *fakeLicense) Detail(ctx context.Context) (license.Detail, error) {
+	if f.DetailFn != nil {
+		return f.DetailFn(ctx)
+	}
+	return license.Detail{}, errNotConfigured
+}
+
+func (f *fakeLicense) Preview(ctx context.Context, raw []byte) (license.UploadResult, error) {
+	if f.PreviewFn != nil {
+		return f.PreviewFn(ctx, raw)
+	}
+	return license.UploadResult{}, errNotConfigured
+}
+
+func (f *fakeLicense) Install(ctx context.Context, raw []byte, actor audit.Actor, by uuid.UUID) (license.UploadResult, error) {
+	if f.InstallFn != nil {
+		return f.InstallFn(ctx, raw, actor, by)
+	}
+	return license.UploadResult{}, errNotConfigured
 }
 
 func (f *fakeLicense) set(err error) {

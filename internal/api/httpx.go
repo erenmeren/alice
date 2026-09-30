@@ -29,7 +29,12 @@ const (
 // trailing data and bodies over 1 MiB are rejected (SEC-061, SEC-023). On
 // failure it writes the error response and returns false.
 func (s *server) decode(w http.ResponseWriter, r *http.Request, dst any) bool {
-	body := http.MaxBytesReader(w, r.Body, maxBody)
+	return s.decodeLimit(w, r, dst, maxBody)
+}
+
+// decodeLimit is decode with a smaller body cap than maxBody.
+func (s *server) decodeLimit(w http.ResponseWriter, r *http.Request, dst any, limit int64) bool {
+	body := http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(body)
 	dec.DisallowUnknownFields()
 	err := dec.Decode(dst)

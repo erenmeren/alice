@@ -252,6 +252,12 @@ func routeRuleViolations(routes []route) []string {
 	for _, rt := range routes {
 		var want rbac.Permission
 		switch p := rt.pattern; {
+		case p == "/api/v1/license/status":
+			want = rbac.Read
+		case under(p, "/api/v1/license") && !safeMethod(rt.method):
+			want = rbac.LicenseManage
+		case under(p, "/api/v1/license"):
+			want = rbac.LicenseRead
 		case under(p, "/api/v1/users") && !safeMethod(rt.method):
 			want = rbac.UsersManage
 		case under(p, "/api/v1/users"):
@@ -302,6 +308,10 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 		"GET /api/v1/audit",
 		"GET /api/v1/audit/export",
 		"POST /api/v1/audit/verify",
+		"GET /api/v1/license/status",
+		"GET /api/v1/license",
+		"POST /api/v1/license/preview",
+		"POST /api/v1/license",
 	} {
 		assert.Contains(t, table, k)
 	}
@@ -318,6 +328,9 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.Session},
 		{method: http.MethodPost, pattern: "/api/v1/setup/evaluation", perm: rbac.Session},
 		{method: http.MethodGet, pattern: "/api/v1/audit/export", perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/license/status", perm: rbac.LicenseRead},
+		{method: http.MethodGet, pattern: "/api/v1/license", perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/license/preview", perm: rbac.LicenseRead},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))
 	good := []route{
@@ -330,6 +343,9 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodPost, pattern: "/api/v1/setup/evaluation", perm: rbac.SettingsManage},
 		{method: http.MethodPost, pattern: "/api/v1/audit/verify", perm: rbac.AuditRead},
 		{method: http.MethodGet, pattern: "/api/v1/usersettings", perm: rbac.Session},
+		{method: http.MethodGet, pattern: "/api/v1/license/status", perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/license", perm: rbac.LicenseRead},
+		{method: http.MethodPost, pattern: "/api/v1/license", perm: rbac.LicenseManage},
 	}
 	assert.Empty(t, routeRuleViolations(good))
 }

@@ -84,6 +84,10 @@ type AuditService interface {
 type LicenseService interface {
 	// Allow is the single lock-mode gate (spec §8.6, R9).
 	Allow(c license.Class) error
+	Snapshot() license.Snapshot
+	Detail(ctx context.Context) (license.Detail, error)
+	Preview(ctx context.Context, raw []byte) (license.UploadResult, error)
+	Install(ctx context.Context, raw []byte, actor audit.Actor, by uuid.UUID) (license.UploadResult, error)
 }
 
 // Deps are the handler's dependencies, wired in cmd/alice.
@@ -252,6 +256,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.userRoutes()...)
 	routes = append(routes, s.tokenRoutes()...)
 	routes = append(routes, s.auditRoutes()...)
+	routes = append(routes, s.licenseRoutes()...)
 	return routes
 }
 

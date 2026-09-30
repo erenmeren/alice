@@ -184,6 +184,41 @@
         "title": "Not available while the license is expired.",
         "cause": "The license (or the evaluation) has ended, so Alice makes no changes to your servers. Your data is safe.",
         "action": "An administrator can upload a renewed license on the License page. Everything works again at once."
+      },
+      "invalid": {
+        "title": "This file is not a valid Alice license.",
+        "cause": "The file may be damaged or edited, or it is not a license file.",
+        "action": "Download the file again from your vendor's email and upload that file."
+      },
+      "wrong_installation": {
+        "title": "This license file was made for a different installation (ending in {{got}}).",
+        "cause": "A license works only on the installation whose ID it names. This installation's ID ends in {{expected}}.",
+        "action": "Ask your vendor for a license for this installation and send them the Installation ID shown on this page."
+      },
+      "unknown_key": {
+        "title": "This license was issued with a key this version of Alice does not know.",
+        "cause": "The license is for a newer version of Alice, or it was not issued by your vendor.",
+        "action": "Contact your vendor's support."
+      },
+      "revoked_key": {
+        "title": "This license was signed with a key that is no longer trusted.",
+        "cause": "Your vendor replaced its signing key.",
+        "action": "Ask your vendor for a new license file; they issue it free of charge."
+      },
+      "unsupported_format": {
+        "title": "This license needs a newer version of Alice.",
+        "cause": "The file uses a format this version of Alice cannot read.",
+        "action": "Update Alice, then upload the file again. The current license stays in use meanwhile."
+      },
+      "older_than_installed": {
+        "title": "A newer license is already installed.",
+        "cause": "This file is older than the license in use and does not last longer.",
+        "action": "Uploading this file is not needed. If your vendor sent it as a correction, ask them for a correction license."
+      },
+      "target_limit_reached": {
+        "title": "Your license allows {{max}} targets.",
+        "cause": "{{used}} targets are in use, so no more can be added. Existing targets keep working.",
+        "action": "Remove a target you no longer need, or ask your vendor to increase your license."
       }
     }
   },

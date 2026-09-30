@@ -46,3 +46,7 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | GET | `/api/v1/audit` | `audit.read` | no | yes | no | yes | read | no | yes |
 | GET | `/api/v1/audit/export` | `audit.read` | no | yes | no | yes | read | no | yes |
 | POST | `/api/v1/audit/verify` | `audit.read` | no | yes | no | yes | read | no | yes |
+| GET | `/api/v1/license/status` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/license` | `license.read` | no | yes | no | yes | read | no | yes |
+| POST | `/api/v1/license/preview` | `license.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/license` | `license.manage` | no | yes | no | no | no | yes | yes |

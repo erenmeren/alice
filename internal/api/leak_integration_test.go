@@ -34,6 +34,7 @@ import (
 
 	apispec "alice/api"
 	"alice/internal/auth"
+	"alice/internal/license/licensetest"
 	"alice/internal/secrets"
 )
 
@@ -329,6 +330,14 @@ func TestSecretsNeverLeak(t *testing.T) {
 	requireStatus(t, browser.do(http.MethodPost, opPath+"/actions/revoke-sessions", nil), http.StatusNoContent)
 	requireStatus(t, browser.do(http.MethodDelete, "/api/v1/tokens/"+tokens[0]["id"].(string), nil), http.StatusNoContent)
 
+	// License endpoints: status, detail, preview, upload and a refused upload.
+	requireStatus(t, browser.do(http.MethodGet, "/api/v1/license/status", nil), http.StatusOK)
+	requireStatus(t, browser.do(http.MethodGet, "/api/v1/license", nil), http.StatusOK)
+	licFile := string(licensetest.Sign(licensetest.Payload(s.license.Snapshot().InstallationID, s.clock.Now(), s.clock.Now().AddDate(1, 0, 0), 10)))
+	requireStatus(t, browser.do(http.MethodPost, "/api/v1/license/preview", map[string]string{"license": licFile}), http.StatusOK)
+	requireStatus(t, browser.do(http.MethodPost, "/api/v1/license", map[string]string{"license": licFile}), http.StatusOK)
+	requireError(t, browser.do(http.MethodPost, "/api/v1/license", map[string]string{"license": junk}), http.StatusUnprocessableEntity, "ALC-LIC-0002")
+
 	// More failure paths: a revoked and a made-up bearer token, a wrong
 	// recovery code, a wrong step-up code.
 	requireError(t, api.do(http.MethodGet, "/api/v1/version", nil), http.StatusUnauthorized, "ALC-AUTH-0001")
@@ -359,6 +368,8 @@ func TestSecretsNeverLeak(t *testing.T) {
 		s.masterKeySecret(),
 		{name: "admin TOTP DEK", forms: binaryForms(adminDEK)},
 		{name: "operator TOTP DEK", forms: binaryForms(operatorDEK)},
+		{name: "HWM MAC key", forms: binaryForms(s.keyring.Derive(secrets.LabelHWM))},
+		{name: "HWM encryption key", forms: binaryForms(s.keyring.Derive(secrets.LabelHWMEnc))},
 	}
 	secretsUnderTest = append(secretsUnderTest, s.dbPasswords()...)
 	s.mu.Lock()

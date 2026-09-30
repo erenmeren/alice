@@ -28,6 +28,8 @@ import (
 	"alice/internal/auth"
 	"alice/internal/i18n"
 	"alice/internal/license"
+	"alice/internal/license/licensetest"
+	"alice/internal/notify"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
 	"alice/internal/platform/logging"
@@ -92,6 +94,8 @@ type stack struct {
 	auth      *auth.Service
 	setup     *setup.Service
 	auditSvc  *audit.Service
+	license   *license.Service
+	stateDir  string
 	handler   http.Handler
 	setupCode string
 
@@ -104,12 +108,13 @@ type stack struct {
 func newStack(t *testing.T, trusted ...netip.Prefix) *stack {
 	t.Helper()
 	s := &stack{
-		t:       t,
-		db:      pgtest.New(t),
-		clock:   clock.NewFake(stackStart),
-		keysDir: t.TempDir(),
-		logs:    &syncBuffer{},
-		trusted: trusted,
+		t:        t,
+		db:       pgtest.New(t),
+		clock:    clock.NewFake(stackStart),
+		keysDir:  t.TempDir(),
+		stateDir: t.TempDir(),
+		logs:     &syncBuffer{},
+		trusted:  trusted,
 	}
 	s.start()
 	return s
@@ -127,12 +132,18 @@ func (s *stack) start() {
 	auditLog := audit.New(s.clock)
 	hasher := auth.NewHasher(fastArgon, 4)
 	s.keyring = keyring
+	s.license = license.New(license.Config{
+		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Uptime: s.clock,
+		Keys: licensetest.KeySet(), StateDir: s.stateDir, Notifier: notify.AdminNotifier{Clock: s.clock},
+		Log: logging.New(s.logs, slog.LevelDebug),
+	})
+	require.NoError(t, s.license.Start(ctx))
 	s.auth = auth.NewService(auth.Config{
 		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Hasher: hasher, RecoveryHasher: hasher,
 	})
 	s.setup = setup.New(setup.Config{
 		Pool: s.db.App, Auth: s.auth, Keyring: keyring, Audit: auditLog, Clock: s.clock, Hasher: hasher,
-		BackupKDF: secrets.KDFParams{MemoryKiB: 64, Time: 1, Threads: 1},
+		BackupKDF: secrets.KDFParams{MemoryKiB: 64, Time: 1, Threads: 1}, License: s.license,
 	})
 	s.auditSvc = audit.NewService(auditLog, s.db.App)
 	s.handler = New(s.deps()).Handler()
@@ -157,7 +168,7 @@ func (s *stack) deps() Deps {
 		Auth:           s.auth,
 		Setup:          s.setup,
 		Audit:          s.auditSvc,
-		License:        allowAll{},
+		License:        s.license,
 		TrustedProxies: s.trusted,
 	}
 }
@@ -433,8 +444,3 @@ func (s *stack) count(table string) int {
 	require.NoError(s.t, s.db.Owner.QueryRow(context.Background(), "SELECT count(*) FROM "+table).Scan(&n))
 	return n
 }
-
-// allowAll is the license gate of stacks that do not test licensing (replaced in Task 14).
-type allowAll struct{}
-
-func (allowAll) Allow(license.Class) error { return nil }
