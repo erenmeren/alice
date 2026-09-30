@@ -1,0 +1,66 @@
+name: alice
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: alice
+      POSTGRES_USER: alice
+      POSTGRES_PASSWORD: ${ALICE_DB_PASSWORD:?run make up or deploy/dev/init-env.sh first}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alice -d alice"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: &logging
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  alice:
+    image: alice:${ALICE_VERSION:-dev}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        VERSION: ${ALICE_VERSION:-dev}
+    restart: unless-stopped
+    # Alice itself retries the database for up to 60 s, so a late PostgreSQL
+    # (e.g. after a host reboot) does not crash it; depends_on only orders start.
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      # sslmode=disable: the connection never leaves the internal "backend" network.
+      ALICE_DATABASE_URL: postgres://alice:${ALICE_DB_PASSWORD}@postgres:5432/alice?sslmode=disable
+      ALICE_TLS_HOSTS: ${ALICE_TLS_HOSTS:-}
+    ports:
+      - "${ALICE_PORT:-443}:8443"
+    volumes:
+      - alice-keys:/opt/alice/keys
+    networks: [frontend, backend]
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/alice", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    logging: *logging
+
+networks:
+  frontend: {}
+  backend:
+    internal: true
+
+volumes:
+  pgdata: {}
+  alice-keys: {}

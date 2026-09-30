@@ -41,3 +41,26 @@ web-lint: ## Lint the web UI
 .PHONY: build
 build: web ## Build the alice binary with the embedded UI into bin/
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/alice ./cmd/alice
+
+COMPOSE := docker compose -f deploy/docker-compose.yml --env-file deploy/.env
+
+.PHONY: image
+image: ## Build the alice container image
+	docker build -f deploy/Dockerfile --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t alice:$(VERSION) -t alice:dev .
+
+.PHONY: up
+up: ## Build and start Alice with PostgreSQL (https://localhost)
+	./deploy/dev/init-env.sh
+	$(COMPOSE) up -d --build --wait
+
+.PHONY: down
+down: ## Stop the stack (data volumes are kept)
+	$(COMPOSE) down
+
+.PHONY: logs
+logs: ## Follow the alice container logs
+	$(COMPOSE) logs -f alice
+
+.PHONY: hardening-check
+hardening-check: ## Verify container hardening of the running stack
+	./deploy/dev/check-hardening.sh
