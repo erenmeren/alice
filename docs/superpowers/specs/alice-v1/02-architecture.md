@@ -52,7 +52,7 @@ Single process; the same binary provides `alice serve` (API + workers + schedule
 | Frontend | React 18 + TypeScript + Vite, `react-router`, **TanStack Query**, `react-i18next` + `i18next`, **Mantine** (built-in accessibility, single UI dependency) | Small, well-known; TanStack Query handles caching/polling of job status. |
 | Tests | stdlib `testing`, `testcontainers-go` (Postgres, nginx+sshd), Playwright (E2E) | Matches decisions.md test strategy. |
 
-Runtime Go dependency budget: pgx, x/crypto, x/oauth2, go-oidc, Azure SDK modules, goose, oapi-codegen runtime, `pquerna/otp`, `go-pkcs12`. Anything else needs a written justification in the PR. `go mod vendor` is used for release builds so air-gapped/reproducible builds work.
+Runtime Go dependency budget: pgx, goose, `golang.org/x/text`, `google/uuid`, x/crypto, x/oauth2, go-oidc, Azure SDK modules, oapi-codegen runtime, `pquerna/otp`, `go-pkcs12`. Anything else needs a written justification in the PR. `go mod vendor` is used for release builds so air-gapped/reproducible builds work.
 
 ### 5.3 Repository layout
 
@@ -63,7 +63,9 @@ alice/
     alice-helper/     static Go binary installed root-owned on targets (nginx/linux sudoers profiles); see 6.6
     licensectl/       vendor-only CLI: keygen, issue, inspect, verify (never shipped to customers)
   internal/
-    api/              HTTP handlers, middleware, error mapping, OpenAPI glue, SPA embed
+    api/              HTTP handlers, middleware, error mapping, OpenAPI glue
+    webui/            embedded SPA build output (dist/app), so no Go package lives inside web/
+    archtest/         import-boundary tests (custom test instead of depguard)
     auth/             local login, Argon2id, TOTP, recovery codes, sessions, OIDC (Phase 7), API tokens, rate limiter
     rbac/             roles, permissions, policy checks (pure functions)
     audit/            append-only log writer, hash chain, verifier, syslog forwarder
@@ -83,7 +85,7 @@ alice/
   api/openapi.yaml
   locales/common/     shared catalog (en.json, tr.json) consumed by web and backend; CI parity check
   migrations/         goose SQL files (embedded via migrations/embed.go)
-  web/                Vite React app (Mantine); web/src/locales/{en,tr}.json; build output embedded into alice
+  web/                Vite React app (Mantine); web/src/locales/{en,tr}.json; build output goes to `internal/webui/dist/app` and is embedded into alice by `internal/webui`
   deploy/             docker-compose.yml, Dockerfile, install.sh, alice-update.sh, alicectl, systemd unit, air-gap bundler
   docs/               spec, admin guide, runbooks, SECURITY-REPORT.md, threat model
   test/               integration (testcontainers), e2e (Playwright), security (authz matrix, leak tests)

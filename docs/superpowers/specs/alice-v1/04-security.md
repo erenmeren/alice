@@ -242,10 +242,10 @@ OIDC SSO is delivered in Phase 7 ("Alerts, dashboard and SSO", R31); Phase 1 is 
 
 ### 15.6 TLS and headers
 
-- **SEC-030** The server listens on HTTPS only; HTTP port (if enabled) only redirects to HTTPS. [C]
-- **SEC-031** TLS config: `MinVersion` TLS 1.2, TLS 1.3 preferred; TLS 1.2 suites limited to ECDHE with AES-GCM/ChaCha20-Poly1305; curves X25519, P-256; no client renegotiation. [T via testssl.sh in CI]
+- **SEC-030** The server listens on HTTPS only; HTTP port (if enabled) only redirects to HTTPS. The one exception is a plain-HTTP health listener bound to container loopback (`127.0.0.1:8081`, never published) that serves only `/livez` and `/healthz` for the Docker healthcheck. [C]
+- **SEC-031** TLS config: `MinVersion` TLS 1.2, TLS 1.3 preferred; TLS 1.2 suites limited to ECDHE with AES-GCM/ChaCha20-Poly1305; curves X25519MLKEM768 (hybrid post-quantum), X25519, P-256; no client renegotiation. [T via testssl.sh in CI]
 - **SEC-032** Response headers on every response: `Strict-Transport-Security: max-age=31536000; includeSubDomains`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Resource-Policy: same-origin`, `Permissions-Policy` disabling camera, mic, geolocation. [T]
-- **SEC-033** CSP: `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`. No `unsafe-inline`/`unsafe-eval`; the SPA build must not emit inline scripts or styles. [T]
+- **SEC-033** CSP for the web UI: `default-src 'none'; script-src 'self'; style-src 'self' 'nonce-<per-request>'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`. The server injects a fresh 128-bit nonce into `index.html` for each request; Mantine applies it to the one `<style>` element it creates. No `unsafe-inline`/`unsafe-eval`; the build emits no inline scripts. API responses use `default-src 'none'; frame-ancestors 'none'`. [T]
 - **SEC-034** API responses use `Cache-Control: no-store`; static hashed assets may be cached. [T]
 - **SEC-035** The React app never uses `dangerouslySetInnerHTML`; ESLint rule enforced; translation strings are plain text with interpolation only; the UI kit is Mantine, built so no inline scripts or styles are emitted. [T]
 - **SEC-036** Alice's own HTTPS certificate: wizard offers self-signed (ECDSA P-256, 90 days, marked temporary in UI) or upload; certificate replacement is Admin-only and audited. [T]
