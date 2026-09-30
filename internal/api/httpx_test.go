@@ -197,7 +197,10 @@ func TestFailHidesUnknownErrorsButLogsThem(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.NotContains(t, rec.Body.String(), "relation")
 	assert.Equal(t, "ALC-SYS-0003", decodeErr(t, rec).Error.Code)
-	assert.Contains(t, logs.String(), "relation users does not exist")
+	// Logged with fixed labels only: the error text may carry column values (TestFailLogsNoErrorText).
+	assert.Contains(t, logs.String(), `"msg":"request failed"`)
+	assert.Contains(t, logs.String(), `"error_type":"*errors.errorString"`)
+	assert.NotContains(t, logs.String(), "relation users does not exist")
 	assert.Contains(t, logs.String(), rec.Header().Get("X-Request-Id"))
 }
 

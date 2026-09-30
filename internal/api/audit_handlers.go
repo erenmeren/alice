@@ -173,7 +173,7 @@ func (s *server) exportAudit(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Headers are already sent: log and abort so the client sees a broken
 		// download instead of a file that looks complete.
-		s.deps.Log.Error("audit export failed", "request_id", m.RequestID, "error", err.Error())
+		s.deps.Log.Error("audit export failed", append([]any{"request_id", m.RequestID}, errorAttrs(err)...)...)
 		panic(http.ErrAbortHandler)
 	}
 }

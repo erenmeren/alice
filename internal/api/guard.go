@@ -190,7 +190,7 @@ func (s *server) auditDenied(r *http.Request, rt route, p auth.Principal, reason
 		},
 	}
 	if err := s.deps.Audit.Write(r.Context(), ev); err != nil {
-		s.deps.Log.Error("audit write failed", "request_id", RequestID(r.Context()), "action", ev.Action, "error", err.Error())
+		s.deps.Log.Error("audit write failed", append([]any{"request_id", RequestID(r.Context()), "action", ev.Action}, errorAttrs(err)...)...)
 	}
 }
 

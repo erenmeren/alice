@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -158,8 +160,35 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 			return
 		}
 	}
-	s.deps.Log.Error("request failed", "request_id", RequestID(r.Context()), "path", r.URL.Path, "error", err.Error())
+	s.deps.Log.Error("request failed", append([]any{"request_id", RequestID(r.Context()), "path", r.URL.Path}, errorAttrs(err)...)...)
 	s.writeError(w, r, ErrUnexpected)
+}
+
+// errorAttrs describes err for the logs with fixed labels only: the type of
+// the innermost error and, for database errors, the SQLSTATE. The error text
+// is never logged, because driver messages and wrapped errors can carry column
+// values such as password or token hashes (SEC-052).
+func errorAttrs(err error) []any {
+	inner := err
+	for {
+		next := errors.Unwrap(inner)
+		if next == nil {
+			break
+		}
+		inner = next
+	}
+	attrs := []any{"error_type", fmt.Sprintf("%T", inner)}
+	var db interface{ SQLState() string }
+	if errors.As(err, &db) {
+		attrs = append(attrs, "sqlstate", db.SQLState())
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		attrs = append(attrs, "cause", "canceled")
+	case errors.Is(err, context.DeadlineExceeded):
+		attrs = append(attrs, "cause", "deadline_exceeded")
+	}
+	return attrs
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
