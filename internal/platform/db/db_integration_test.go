@@ -116,9 +116,14 @@ func TestHealthReportsPendingWhenNewerMigrationExists(t *testing.T) {
 	defer pool.Close()
 	require.NoError(t, db.Migrate(ctx, pool, migrations.FS))
 
+	// Every shipped migration plus one newer than any real one.
 	newer := fstest.MapFS{
-		"00001_init.sql": &fstest.MapFile{Data: mustRead(t, "00001_init.sql")},
-		"00002_more.sql": &fstest.MapFile{Data: []byte("-- +goose Up\nCREATE TABLE more (id int);\n-- +goose Down\nDROP TABLE more;\n")},
+		"99999_more.sql": &fstest.MapFile{Data: []byte("-- +goose Up\nCREATE TABLE more (id int);\n-- +goose Down\nDROP TABLE more;\n")},
+	}
+	entries, err := migrations.FS.ReadDir(".")
+	require.NoError(t, err)
+	for _, e := range entries {
+		newer[e.Name()] = &fstest.MapFile{Data: mustRead(t, e.Name())}
 	}
 	hc, err := db.NewHealthChecker(pool, newer)
 	require.NoError(t, err)

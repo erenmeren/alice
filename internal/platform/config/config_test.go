@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -116,4 +117,54 @@ func TestJSONMarshalNeverRevealsDatabasePassword(t *testing.T) {
 		assert.NotContains(t, string(b), "s3cret-pw")
 		assert.Contains(t, string(b), "postgres:5432")
 	}
+}
+
+const ownerURL = "postgres://alice:0wner-pw@postgres:5432/alice?sslmode=disable"
+
+func TestMigrationURLAndRoleSeparation(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"ALICE_DATABASE_URL": dbURL}))
+	require.NoError(t, err)
+	assert.Equal(t, dbURL, c.MigrationURL(), "without an owner URL the app URL migrates")
+	assert.False(t, c.SeparateMigrationRole())
+
+	c, err = config.Load(env(map[string]string{"ALICE_DATABASE_URL": dbURL, "ALICE_MIGRATE_DATABASE_URL": " " + ownerURL + " "}))
+	require.NoError(t, err)
+	assert.Equal(t, ownerURL, c.MigrationURL())
+	assert.True(t, c.SeparateMigrationRole())
+
+	c.MigrateDatabaseURL = dbURL
+	assert.False(t, c.SeparateMigrationRole(), "the same URL twice is not a separate role")
+}
+
+func TestConfigNeverRevealsMigrationPassword(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"ALICE_DATABASE_URL": dbURL, "ALICE_MIGRATE_DATABASE_URL": ownerURL}))
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("config loaded", "config", c)
+	js, err := json.Marshal(c)
+	require.NoError(t, err)
+	for _, out := range []string{buf.String(), fmt.Sprintf("%v", c), fmt.Sprintf("%#v", c), c.String(), string(js)} {
+		assert.NotContains(t, out, "0wner-pw")
+		assert.NotContains(t, out, "s3cret-pw")
+	}
+}
+
+func TestTrustedProxies(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"ALICE_TRUSTED_PROXIES": " 10.0.0.0/8, 192.168.1.10 ,,::ffff:172.16.0.1, 2001:db8::/32"}))
+	require.NoError(t, err)
+	assert.Equal(t, []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("192.168.1.10/32"),
+		netip.MustParsePrefix("172.16.0.1/32"),
+		netip.MustParsePrefix("2001:db8::/32"),
+	}, c.TrustedProxies)
+	assert.Contains(t, c.String(), "10.0.0.0/8")
+
+	c, err = config.Load(env(nil))
+	require.NoError(t, err)
+	assert.Empty(t, c.TrustedProxies, "no proxy is trusted by default")
+
+	_, err = config.Load(env(map[string]string{"ALICE_TRUSTED_PROXIES": "10.0.0.0/8,proxy.local"}))
+	require.Error(t, err)
+	assert.Equal(t, `ALICE_TRUSTED_PROXIES entry "proxy.local" is not an IP address or CIDR`, err.Error())
 }

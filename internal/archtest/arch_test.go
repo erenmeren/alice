@@ -34,9 +34,12 @@ var rules = map[string][]string{
 	"alice/internal/providers/...": {platform, "alice/internal/providers", "alice/internal/providers/linuxssh/..."},
 	"alice/internal/inventory/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers"},
 	"alice/internal/jobs/...":      {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/..."},
+	"alice/internal/setup/...":     {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/..."},
 	"alice/internal/api/...": {platform, "alice/internal/i18n/...", "alice/internal/version/...", "alice/internal/rbac/...",
 		"alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/notify/...",
-		"alice/internal/auth/...", "alice/internal/inventory/...", "alice/internal/jobs/...", "alice/internal/providers"},
+		"alice/internal/auth/...", "alice/internal/setup/...", "alice/internal/inventory/...", "alice/internal/jobs/...", "alice/internal/providers"},
+	// Test helpers (build tag integration) start PostgreSQL and apply the embedded migrations.
+	"alice/internal/testutil/...": {platform, "alice/migrations"},
 }
 
 const platform = "alice/internal/platform/..."
@@ -158,6 +161,12 @@ func TestAllowed(t *testing.T) {
 		{"cmd to provider impl allowed", "alice/cmd/alice", nginx, true},
 		{"third-party import ignored", nginx, "github.com/x/y", true},
 		{"unknown package rejected", "alice/internal/mystery", "alice/internal/version", false},
+		{"setup to auth allowed", "alice/internal/setup", "alice/internal/auth", true},
+		{"setup to api denied", "alice/internal/setup", "alice/internal/api", false},
+		{"api to setup allowed", "alice/internal/api", "alice/internal/setup", true},
+		{"auth to setup denied", "alice/internal/auth", "alice/internal/setup", false},
+		{"testutil to migrations allowed", "alice/internal/testutil/pgtest", "alice/migrations", true},
+		{"testutil to auth denied", "alice/internal/testutil/pgtest", "alice/internal/auth", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -58,6 +58,11 @@ up: ## Build and start Alice with PostgreSQL (https://localhost)
 down: ## Stop the stack (data volumes are kept)
 	$(COMPOSE) down
 
+.PHONY: reset
+reset: ## DELETE local data (database and key volumes) and start a fresh stack
+	$(COMPOSE) down -v
+	$(MAKE) up
+
 .PHONY: logs
 logs: ## Follow the alice container logs
 	$(COMPOSE) logs -f alice

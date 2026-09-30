@@ -8,8 +8,11 @@ services:
       POSTGRES_DB: alice
       POSTGRES_USER: alice
       POSTGRES_PASSWORD: ${ALICE_DB_PASSWORD:?run make up or deploy/dev/init-env.sh first}
+      # Read once by postgres/initdb/10-alice-app-role.sh on an empty volume.
+      ALICE_APP_DB_PASSWORD: ${ALICE_APP_DB_PASSWORD:?run make up or deploy/dev/init-env.sh first}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
     networks: [backend]
     security_opt: ["no-new-privileges:true"]
     healthcheck:
@@ -35,7 +38,9 @@ services:
       postgres: { condition: service_healthy }
     environment:
       # sslmode=disable: the connection never leaves the internal "backend" network.
-      ALICE_DATABASE_URL: postgres://alice:${ALICE_DB_PASSWORD}@postgres:5432/alice?sslmode=disable
+      # The app runs as alice_app (no UPDATE/DELETE on audit_log); migrations run as the owner.
+      ALICE_DATABASE_URL: postgres://alice_app:${ALICE_APP_DB_PASSWORD}@postgres:5432/alice?sslmode=disable
+      ALICE_MIGRATE_DATABASE_URL: postgres://alice:${ALICE_DB_PASSWORD}@postgres:5432/alice?sslmode=disable
       ALICE_TLS_HOSTS: ${ALICE_TLS_HOSTS:-}
     ports:
       - "${ALICE_PORT:-443}:8443"

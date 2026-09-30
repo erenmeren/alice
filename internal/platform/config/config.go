@@ -7,28 +7,36 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"net/url"
 	"strings"
 )
 
 // Config is the process configuration.
 type Config struct {
+	// DatabaseURL is the application role (alice_app) connection used at runtime.
 	DatabaseURL string
-	ListenAddr  string
-	HealthAddr  string
-	KeysDir     string
-	LogLevel    slog.Level
-	TLSHosts    []string
+	// MigrateDatabaseURL is the schema owner connection used only for migrations.
+	// Empty means DatabaseURL is used for both (single-role mode, warned at startup).
+	MigrateDatabaseURL string
+	ListenAddr         string
+	HealthAddr         string
+	KeysDir            string
+	LogLevel           slog.Level
+	TLSHosts           []string
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For header is honoured.
+	TrustedProxies []netip.Prefix
 }
 
 // Load reads configuration using getenv (os.Getenv in production).
 func Load(getenv func(string) string) (Config, error) {
 	c := Config{
-		DatabaseURL: getenv("ALICE_DATABASE_URL"),
-		ListenAddr:  withDefault(getenv("ALICE_LISTEN_ADDR"), ":8443"),
-		HealthAddr:  withDefault(getenv("ALICE_HEALTH_ADDR"), "127.0.0.1:8081"),
-		KeysDir:     withDefault(getenv("ALICE_KEYS_DIR"), "/opt/alice/keys"),
-		LogLevel:    slog.LevelInfo,
+		DatabaseURL:        getenv("ALICE_DATABASE_URL"),
+		MigrateDatabaseURL: strings.TrimSpace(getenv("ALICE_MIGRATE_DATABASE_URL")),
+		ListenAddr:         withDefault(getenv("ALICE_LISTEN_ADDR"), ":8443"),
+		HealthAddr:         withDefault(getenv("ALICE_HEALTH_ADDR"), "127.0.0.1:8081"),
+		KeysDir:            withDefault(getenv("ALICE_KEYS_DIR"), "/opt/alice/keys"),
+		LogLevel:           slog.LevelInfo,
 	}
 	if lvl := strings.TrimSpace(getenv("ALICE_LOG_LEVEL")); lvl != "" {
 		// slog.Level.UnmarshalText is case-insensitive.
@@ -41,7 +49,49 @@ func Load(getenv func(string) string) (Config, error) {
 			c.TLSHosts = append(c.TLSHosts, h)
 		}
 	}
+	for _, p := range strings.Split(getenv("ALICE_TRUSTED_PROXIES"), ",") {
+		if p = strings.TrimSpace(p); p == "" {
+			continue
+		}
+		prefix, err := parsePrefix(p)
+		if err != nil {
+			return Config{}, fmt.Errorf("ALICE_TRUSTED_PROXIES entry %q is not an IP address or CIDR", p)
+		}
+		c.TrustedProxies = append(c.TrustedProxies, prefix)
+	}
 	return c, nil
+}
+
+// parsePrefix accepts a CIDR ("10.0.0.0/8") or a single address ("10.0.0.1").
+func parsePrefix(s string) (netip.Prefix, error) {
+	if strings.Contains(s, "/") {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			return netip.Prefix{}, err
+		}
+		return p.Masked(), nil
+	}
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	a = a.Unmap()
+	return netip.PrefixFrom(a, a.BitLen()), nil
+}
+
+// MigrationURL is the connection used to apply migrations: the owner role when
+// configured, otherwise the application role.
+func (c Config) MigrationURL() string {
+	if c.MigrateDatabaseURL != "" {
+		return c.MigrateDatabaseURL
+	}
+	return c.DatabaseURL
+}
+
+// SeparateMigrationRole reports whether migrations run as a different database
+// role than the application (required for the append-only audit log, SEC-071).
+func (c Config) SeparateMigrationRole() bool {
+	return c.MigrateDatabaseURL != "" && c.MigrateDatabaseURL != c.DatabaseURL
 }
 
 // RequireDatabase reports a user-friendly error when no database is configured.
@@ -52,22 +102,32 @@ func (c Config) RequireDatabase() error {
 	return nil
 }
 
-// LogValue implements slog.LogValuer so the database password is never logged.
+func (c Config) proxies() []string {
+	out := make([]string, len(c.TrustedProxies))
+	for i, p := range c.TrustedProxies {
+		out[i] = p.String()
+	}
+	return out
+}
+
+// LogValue implements slog.LogValuer so database passwords are never logged.
 func (c Config) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("database_url", redactURL(c.DatabaseURL)),
+		slog.String("migrate_database_url", redactURL(c.MigrateDatabaseURL)),
 		slog.String("listen_addr", c.ListenAddr),
 		slog.String("health_addr", c.HealthAddr),
 		slog.String("keys_dir", c.KeysDir),
 		slog.String("log_level", c.LogLevel.String()),
 		slog.Any("tls_hosts", c.TLSHosts),
+		slog.Any("trusted_proxies", c.proxies()),
 	)
 }
 
 // String renders the configuration with secrets redacted.
 func (c Config) String() string {
-	return fmt.Sprintf("Config{DatabaseURL:%s ListenAddr:%s HealthAddr:%s KeysDir:%s LogLevel:%s TLSHosts:%v}",
-		redactURL(c.DatabaseURL), c.ListenAddr, c.HealthAddr, c.KeysDir, c.LogLevel, c.TLSHosts)
+	return fmt.Sprintf("Config{DatabaseURL:%s MigrateDatabaseURL:%s ListenAddr:%s HealthAddr:%s KeysDir:%s LogLevel:%s TLSHosts:%v TrustedProxies:%v}",
+		redactURL(c.DatabaseURL), redactURL(c.MigrateDatabaseURL), c.ListenAddr, c.HealthAddr, c.KeysDir, c.LogLevel, c.TLSHosts, c.proxies())
 }
 
 // GoString makes %#v safe as well.
@@ -115,13 +175,16 @@ func containsFold(s, substr string) bool {
 // MarshalJSON emits the configuration with secrets redacted.
 func (c Config) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		DatabaseURL string   `json:"database_url"`
-		ListenAddr  string   `json:"listen_addr"`
-		HealthAddr  string   `json:"health_addr"`
-		KeysDir     string   `json:"keys_dir"`
-		LogLevel    string   `json:"log_level"`
-		TLSHosts    []string `json:"tls_hosts"`
-	}{redactURL(c.DatabaseURL), c.ListenAddr, c.HealthAddr, c.KeysDir, c.LogLevel.String(), c.TLSHosts})
+		DatabaseURL        string   `json:"database_url"`
+		MigrateDatabaseURL string   `json:"migrate_database_url"`
+		ListenAddr         string   `json:"listen_addr"`
+		HealthAddr         string   `json:"health_addr"`
+		KeysDir            string   `json:"keys_dir"`
+		LogLevel           string   `json:"log_level"`
+		TLSHosts           []string `json:"tls_hosts"`
+		TrustedProxies     []string `json:"trusted_proxies"`
+	}{redactURL(c.DatabaseURL), redactURL(c.MigrateDatabaseURL), c.ListenAddr, c.HealthAddr, c.KeysDir,
+		c.LogLevel.String(), c.TLSHosts, c.proxies()})
 }
 
 func withDefault(v, def string) string {

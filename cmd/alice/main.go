@@ -91,12 +91,30 @@ func migrate(cfg config.Config) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	pool, err := db.Open(ctx, cfg.DatabaseURL)
+	return applyMigrations(ctx, cfg, 2*time.Minute)
+}
+
+// applyMigrations opens a short-lived pool as the migration (owner) role,
+// applies all migrations and closes it, so the running server never keeps an
+// owner connection (the app role cannot rewrite the audit log, SEC-071).
+func applyMigrations(ctx context.Context, cfg config.Config, openBudget time.Duration) error {
+	openCtx, cancel := context.WithTimeout(ctx, openBudget)
+	owner, err := db.Open(openCtx, cfg.MigrationURL())
+	cancel()
 	if err != nil {
-		return err
+		return dbStartupError(err, openBudget)
 	}
-	defer pool.Close()
-	return db.Migrate(ctx, pool, migrations.FS)
+	defer owner.Close()
+	return db.Migrate(ctx, owner, migrations.FS)
+}
+
+// dbStartupError adds the waiting time to "not reachable" errors only; a
+// rejected password or a missing database is reported as is (it is final).
+func dbStartupError(err error, budget time.Duration) error {
+	if errors.Is(err, db.ErrUnreachable) {
+		return fmt.Errorf("database not ready after %s: %w", budget, err)
+	}
+	return err
 }
 
 func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
@@ -105,20 +123,21 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	}
 	log.Info("starting alice", "version", version.Get().Version, "config", cfg)
 
+	if !cfg.SeparateMigrationRole() {
+		log.Warn("ALICE_MIGRATE_DATABASE_URL is not set: migrations and the application share one database role, " +
+			"so the audit log is protected by triggers only; configure a separate owner role")
+	}
 	// db.Open only honours its context, so the startup budget is enforced here.
+	if err := applyMigrations(ctx, cfg, dbStartupBudget); err != nil {
+		return err
+	}
 	openCtx, cancel := context.WithTimeout(ctx, dbStartupBudget)
 	pool, err := db.Open(openCtx, cfg.DatabaseURL)
 	cancel()
 	if err != nil {
-		if errors.Is(err, db.ErrUnreachable) {
-			return fmt.Errorf("database not ready after %s: %w", dbStartupBudget, err)
-		}
-		return err
+		return dbStartupError(err, dbStartupBudget)
 	}
 	defer pool.Close()
-	if err := db.Migrate(ctx, pool, migrations.FS); err != nil {
-		return err
-	}
 	health, err := db.NewHealthChecker(pool, migrations.FS)
 	if err != nil {
 		return err
