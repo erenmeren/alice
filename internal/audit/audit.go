@@ -98,6 +98,15 @@ type Log struct {
 // New returns a Log.
 func New(c clock.Clock) *Log { return &Log{clock: c} }
 
+// lockChain takes the transaction advisory lock that serializes chain writes and
+// checkpoint updates. Taking it again in the same transaction is harmless.
+func lockChain(ctx context.Context, tx pgx.Tx) error {
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", lockKey); err != nil {
+		return fmt.Errorf("audit: lock chain: %w", err)
+	}
+	return nil
+}
+
 // Append writes e as the next chain link inside tx. The caller's business
 // change and its audit row therefore commit or roll back together.
 func (l *Log) Append(ctx context.Context, tx pgx.Tx, e Event) (Entry, error) {
@@ -108,8 +117,8 @@ func (l *Log) Append(ctx context.Context, tx pgx.Tx, e Event) (Entry, error) {
 	if e.Action == "" || e.Result == "" || e.Actor.Type == "" {
 		return Entry{}, errors.New("audit: event needs an actor type, an action and a result")
 	}
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", lockKey); err != nil {
-		return Entry{}, fmt.Errorf("audit: lock chain: %w", err)
+	if err := lockChain(ctx, tx); err != nil {
+		return Entry{}, err
 	}
 	var lastSeq int64
 	prev := make([]byte, sha256.Size)

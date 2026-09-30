@@ -428,3 +428,48 @@ func TestServiceVerifyReadOnlyWritesNothing(t *testing.T) {
 	assert.False(t, rep.Intact)
 	assert.Equal(t, int64(2), rep.FirstBadSeq)
 }
+
+// Verify reads and moves the checkpoint only while it holds the chain lock, so two
+// verifications that overlap cannot move the checkpoint backwards: the one that saw the
+// longer chain always decides last or is seen by the other.
+func TestServiceVerifyTakesTheChainLockBeforeTheCheckpoint(t *testing.T) {
+	d := pgtest.New(t)
+	l := audit.New(clock.NewFake(start))
+	svc := audit.NewService(l, d.App)
+	ctx := context.Background()
+	appendN(t, d.App, l, 3)
+	_, err := svc.Verify(ctx, audit.SystemActor("cli")) // stores the checkpoint row (seq 3)
+	require.NoError(t, err)
+
+	// Another writer holds the chain lock in an open transaction.
+	holder, err := d.App.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = holder.Rollback(ctx) }()
+	_, err = l.Append(ctx, holder, audit.Event{Actor: userActor(), Action: "test.event", Result: audit.Success})
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.Verify(ctx, audit.SystemActor("cli"))
+		done <- err
+	}()
+	require.Eventually(t, func() bool {
+		var waiting int
+		err := d.Owner.QueryRow(ctx, `SELECT count(*) FROM pg_locks l JOIN pg_database db ON db.oid = l.database
+WHERE l.locktype = 'advisory' AND NOT l.granted AND db.datname = current_database()`).Scan(&waiting)
+		return err == nil && waiting == 1
+	}, 10*time.Second, 20*time.Millisecond, "the verification waits for the chain lock")
+
+	// While it waits, it has not read-then-written the checkpoint: the row is not locked.
+	err = db.InTx(ctx, d.Owner, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, "SELECT 1 FROM settings WHERE key = 'audit.checkpoint' FOR UPDATE NOWAIT")
+		return err
+	})
+	require.NoError(t, err, "the checkpoint must not be touched before the chain lock is held")
+
+	require.NoError(t, holder.Commit(ctx))
+	require.NoError(t, <-done)
+	rep, err := audit.Verify(ctx, d.App)
+	require.NoError(t, err)
+	assert.True(t, rep.Intact)
+}

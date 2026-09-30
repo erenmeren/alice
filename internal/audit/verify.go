@@ -134,6 +134,11 @@ func (s *Service) Verify(ctx context.Context, actor Actor) (Report, error) {
 		ev.Details["first_bad_seq"] = strconv.FormatInt(rep.FirstBadSeq, 10)
 	}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// The chain lock comes first, so concurrent verifications read and move the
+		// checkpoint one after another and it never moves backwards.
+		if err := lockChain(ctx, tx); err != nil {
+			return err
+		}
 		if rep.Intact && rep.HeadSeq > 0 {
 			var stored checkpoint
 			has, err := settings.Get(ctx, tx, checkpointKey, &stored)
