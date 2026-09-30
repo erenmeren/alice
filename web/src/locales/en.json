@@ -1,10 +1,59 @@
 {
   "home": {
-    "title": "Welcome to Alice",
-    "subtitle": "Alice keeps track of your TLS certificates and SSH keys. The setup wizard arrives in the next version.",
+    "title": "Welcome, {{name}}",
+    "subtitle": "Alice keeps track of your TLS certificates and SSH keys.",
     "serverChecking": "Checking the server…",
     "serverVersion": "Server version: {{version}}",
     "serverUnreachable": "The server cannot be reached right now. Try reloading the page in a minute."
   },
-  "language": { "label": "Language" }
+  "language": { "label": "Language" },
+  "nav": {
+    "label": "Main navigation",
+    "home": "Home",
+    "users": "Users",
+    "audit": "Audit log",
+    "tokens": "API tokens",
+    "account": "My account",
+    "signOut": "Sign out",
+    "setupBanner": "Finish setting up: choose a recovery passphrase.",
+    "setupBannerFinish": "Finish setting up: open the setup wizard to confirm the last step."
+  },
+  "ui": {
+    "loading": "Loading…",
+    "noAccess": "You do not have access to this page.",
+    "networkErrorTitle": "Alice cannot be reached.",
+    "networkErrorAction": "Check your network connection and try again.",
+    "unexpectedError": "Something went wrong.",
+    "fieldProblem": "{{field}}: {{problem}}",
+    "requestId": "Request ID: {{id}}",
+    "notFoundTitle": "Page not found",
+    "notFoundText": "The address may be mistyped, or the page was moved.",
+    "backHome": "Go to the home page",
+    "cancel": "Cancel",
+    "codeLabel": "6-digit code",
+    "stepUp": {
+      "title": "Confirm it's you",
+      "help": "For your security, enter the current code from your authenticator app.",
+      "confirm": "Confirm"
+    },
+    "fields": {
+      "username": "Username",
+      "display_name": "Full name",
+      "email": "Email",
+      "password": "Password",
+      "role": "Role",
+      "name": "Name",
+      "scope": "Access",
+      "expires_in_days": "Valid for (days)",
+      "locale": "Language",
+      "language": "Language"
+    }
+  },
+  "login": {
+    "title": "Sign in to Alice",
+    "sessionEnded": "Your session ended. Please sign in again."
+  },
+  "setup": {
+    "title": "Set up Alice"
+  }
 }

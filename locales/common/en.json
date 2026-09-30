@@ -1,5 +1,12 @@
 {
   "app": { "name": "Alice" },
+  "enum": {
+    "role": {
+      "admin": "Administrator",
+      "operator": "Operator",
+      "auditor": "Auditor"
+    }
+  },
   "errors": {
     "system": {
       "not_found": {

@@ -1,5 +1,12 @@
 {
   "app": { "name": "Alice" },
+  "enum": {
+    "role": {
+      "admin": "Yönetici",
+      "operator": "Operatör",
+      "auditor": "Denetçi"
+    }
+  },
   "errors": {
     "system": {
       "not_found": {

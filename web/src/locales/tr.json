@@ -1,10 +1,59 @@
 {
   "home": {
-    "title": "Alice'e hoş geldiniz",
-    "subtitle": "Alice, TLS sertifikalarınızı ve SSH anahtarlarınızı takip eder. Kurulum sihirbazı bir sonraki sürümde gelecek.",
+    "title": "Hoş geldiniz, {{name}}",
+    "subtitle": "Alice, TLS sertifikalarınızı ve SSH anahtarlarınızı takip eder.",
     "serverChecking": "Sunucu kontrol ediliyor…",
     "serverVersion": "Sunucu sürümü: {{version}}",
     "serverUnreachable": "Sunucuya şu anda ulaşılamıyor. Bir dakika sonra sayfayı yenilemeyi deneyin."
   },
-  "language": { "label": "Dil" }
+  "language": { "label": "Dil" },
+  "nav": {
+    "label": "Ana gezinme",
+    "home": "Ana sayfa",
+    "users": "Kullanıcılar",
+    "audit": "Denetim kaydı",
+    "tokens": "API anahtarları",
+    "account": "Hesabım",
+    "signOut": "Çıkış yap",
+    "setupBanner": "Kurulumu tamamlayın: bir kurtarma parolası belirleyin.",
+    "setupBannerFinish": "Kurulumu tamamlayın: son adımı onaylamak için kurulum sihirbazını açın."
+  },
+  "ui": {
+    "loading": "Yükleniyor…",
+    "noAccess": "Bu sayfaya erişim yetkiniz yok.",
+    "networkErrorTitle": "Alice'e ulaşılamıyor.",
+    "networkErrorAction": "Ağ bağlantınızı kontrol edip tekrar deneyin.",
+    "unexpectedError": "Bir sorun oluştu.",
+    "fieldProblem": "{{field}} alanı: {{problem}}",
+    "requestId": "İstek kimliği: {{id}}",
+    "notFoundTitle": "Sayfa bulunamadı",
+    "notFoundText": "Adres yanlış yazılmış olabilir ya da sayfa taşınmış olabilir.",
+    "backHome": "Ana sayfaya dön",
+    "cancel": "İptal",
+    "codeLabel": "6 haneli kod",
+    "stepUp": {
+      "title": "Kimliğinizi doğrulayın",
+      "help": "Güvenliğiniz için doğrulama uygulamanızdaki güncel kodu girin.",
+      "confirm": "Onayla"
+    },
+    "fields": {
+      "username": "Kullanıcı adı",
+      "display_name": "Ad soyad",
+      "email": "E-posta",
+      "password": "Parola",
+      "role": "Rol",
+      "name": "Ad",
+      "scope": "Erişim",
+      "expires_in_days": "Geçerlilik (gün)",
+      "locale": "Dil",
+      "language": "Dil"
+    }
+  },
+  "login": {
+    "title": "Alice'e giriş yapın",
+    "sessionEnded": "Oturumunuz sona erdi. Lütfen yeniden giriş yapın."
+  },
+  "setup": {
+    "title": "Alice kurulumu"
+  }
 }
