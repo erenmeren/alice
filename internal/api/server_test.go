@@ -13,11 +13,13 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/i18n"
+	"alice/internal/platform/clock"
 	"alice/internal/version"
 	"alice/locales"
 )
@@ -28,6 +30,11 @@ func (f fakeHealth) Check(context.Context) error { return f.err }
 
 const indexHTML = `<!doctype html><html><head><meta name="csp-nonce" content="__CSP_NONCE__"></head><body><div id="root"></div></body></html>`
 
+// testNow is the fake clock's start time in handler tests.
+var testNow = time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+
+// testDeps returns dependencies backed by fakes: identityAuth (see
+// fakes_test.go), a fakeSetup, a fakeAudit and a fake clock at testNow.
 func testDeps(t *testing.T, health error) Deps {
 	t.Helper()
 	cat, err := i18n.Load(locales.FS)
@@ -41,8 +48,47 @@ func testDeps(t *testing.T, health error) Deps {
 			"assets/app-1a2b.js": {Data: []byte("console.log(1)")},
 			"favicon.svg":        {Data: []byte("<svg/>")},
 		},
-		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock: clock.NewFake(testNow),
+		Auth:  identityAuth(testNow),
+		Setup: &fakeSetup{},
+		Audit: &fakeAudit{},
 	}
+}
+
+// as makes req come from a test identity: "" is anonymous, "setup" uses the
+// wizard cookie, "alice_*" is an API token, anything else is a session cookie
+// value understood by identityAuth. Cookie identities also send the matching
+// CSRF token and a same-origin Origin header.
+func as(req *http.Request, id string) *http.Request {
+	req.Header.Set("Origin", "https://"+req.Host)
+	switch {
+	case id == "":
+	case id == "setup":
+		req.AddCookie(&http.Cookie{Name: setupCookie, Value: "setup-ok"})
+		req.Header.Set("X-CSRF-Token", "csrf-setup-ok")
+	case strings.HasPrefix(id, "alice_"):
+		req.Header.Set("Authorization", "Bearer "+id)
+	default:
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: id})
+		req.Header.Set("X-CSRF-Token", "csrf-"+id)
+	}
+	return req
+}
+
+// call sends a request with an optional JSON body as the given identity.
+func call(h http.Handler, method, target, id, body string) *httptest.ResponseRecorder {
+	var rdr io.Reader
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req := as(httptest.NewRequest(method, target, rdr), id)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
 }
 
 func do(h http.Handler, method, target string, hdr map[string]string) *httptest.ResponseRecorder {
@@ -101,6 +147,9 @@ func TestHealthzUnavailableHidesCause(t *testing.T) {
 func TestVersionAndLocales(t *testing.T) {
 	h := NewHandler(testDeps(t, nil))
 	rec := do(h, http.MethodGet, "/api/v1/version", nil)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, "version needs a signed-in user or token")
+
+	rec = call(h, http.MethodGet, "/api/v1/version", "operator", "")
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.JSONEq(t, `{"version":"1.2.3","commit":"abc","build_time":"t"}`, rec.Body.String())
 	assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"))

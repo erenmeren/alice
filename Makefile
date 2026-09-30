@@ -22,6 +22,10 @@ test-integration: ## Run integration tests (needs Docker)
 i18n-check: ## Verify EN/TR translation catalogs have identical keys and placeholders
 	go run ./tools/i18n-check locales/common web/src/locales
 
+.PHONY: authz-doc
+authz-doc: ## Regenerate docs/authz-matrix.md from the route table
+	go test ./internal/api -run TestAuthzMatrixDocIsCurrent -count=1 -update
+
 .PHONY: web-install
 web-install: ## Install web dependencies from the lockfile
 	cd web && npm ci

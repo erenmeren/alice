@@ -27,7 +27,7 @@ paths:
     get:
       operationId: getVersion
       summary: Build information
-      x-permission: public
+      x-permission: read
       responses:
         "200":
           description: Build information
@@ -100,3 +100,20 @@ components:
             message: { type: string }
             request_id: { type: string }
             retryable: { type: boolean }
+            params:
+              type: object
+              additionalProperties: { type: string }
+              description: Values for the placeholders of message_key, e.g. {"min":"12"}
+            details:
+              type: array
+              description: Per-field problems for validation.failed
+              items: { $ref: "#/components/schemas/FieldError" }
+    FieldError:
+      type: object
+      required: [field, code]
+      properties:
+        field: { type: string, examples: [username] }
+        code: { type: string, examples: [validation.pattern] }
+        params:
+          type: object
+          additionalProperties: { type: string }

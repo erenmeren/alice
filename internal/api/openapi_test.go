@@ -8,14 +8,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	apispec "alice/api"
 )
 
 var (
-	pathKeyRE   = regexp.MustCompile(`^  (/[^:]*):\s*$`)
-	methodKeyRE = regexp.MustCompile(`^    (get|post|put|patch|delete):\s*$`)
+	pathKeyRE    = regexp.MustCompile(`^  (/[^:]*):\s*$`)
+	methodKeyRE  = regexp.MustCompile(`^    (get|post|put|patch|delete):\s*$`)
+	pathLevelRE  = regexp.MustCompile(`^    [^ ]`)
+	pathParamRE  = regexp.MustCompile(`\{[a-z_]+\}`)
+	permissionRE = regexp.MustCompile(`^\s*x-permission:\s*(\S+)\s*$`)
 )
 
 const errorDefaultRef = `default: { $ref: "#/components/responses/Error" }`
@@ -46,11 +51,23 @@ func (o operation) has(prefix string) bool {
 	return false
 }
 
+// permission returns the operation's x-permission value, or "".
+func (o operation) permission() string {
+	for _, l := range o.lines {
+		if m := permissionRE.FindStringSubmatch(l); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
 // parseOperations reads the paths section into operation blocks: a method key
 // at four spaces under a path key at two, up to the next sibling or path.
+// Other keys at four spaces (path-level "parameters:", "summary:", ...) end the
+// current operation, so their lines are never attributed to it.
 func parseOperations(yaml []byte) []operation {
 	var ops []operation
-	inPaths := false
+	inPaths, inOp := false, false
 	path := ""
 	sc := bufio.NewScanner(bytes.NewReader(yaml))
 	for sc.Scan() {
@@ -66,14 +83,19 @@ func parseOperations(yaml []byte) []operation {
 			break
 		}
 		if m := pathKeyRE.FindStringSubmatch(line); m != nil {
-			path = m[1]
+			path, inOp = m[1], false
 			continue
 		}
 		if m := methodKeyRE.FindStringSubmatch(line); m != nil {
 			ops = append(ops, operation{path: path, method: m[1]})
+			inOp = true
 			continue
 		}
-		if len(ops) > 0 {
+		if pathLevelRE.MatchString(line) {
+			inOp = false
+			continue
+		}
+		if inOp {
 			ops[len(ops)-1].lines = append(ops[len(ops)-1].lines, line)
 		}
 	}
@@ -101,31 +123,48 @@ func specKeys() []string {
 	return keys
 }
 
+func tableRoutes() []route { return newServer(Deps{}).apiRoutes() }
+
 // The route table and the spec must list exactly the same operations.
 // Excluded on purpose (not documented operations): the SPA fallback "/" and
 // the "/api/" and "/test/" JSON 404 catch-alls, registered outside the table.
 func TestRouteTableMatchesSpec(t *testing.T) {
 	var table []string
-	for _, r := range (&server{}).apiRoutes() {
+	for _, r := range tableRoutes() {
 		table = append(table, r.method+" "+r.pattern)
 	}
 	assert.NotEmpty(t, table)
 	assert.ElementsMatch(t, table, specKeys())
 }
 
-// Every documented operation must be served (not fall through to the SPA or the API 404).
+// Each route's permission in the table must equal its x-permission in the spec (SEC-016).
+func TestRoutePermissionsMatchSpec(t *testing.T) {
+	spec := map[string]string{}
+	for _, o := range specOps() {
+		spec[o.key()] = o.permission()
+	}
+	for _, r := range tableRoutes() {
+		k := r.method + " " + r.pattern
+		assert.Equal(t, string(r.perm), spec[k], "x-permission of %s", k)
+	}
+}
+
+// Every documented operation must be routed: an anonymous request gets a JSON
+// answer (401 for protected routes, 400 for public ones without a body) and
+// never the SPA or the catch-all 404.
 func TestEveryDocumentedPathIsServed(t *testing.T) {
 	h := NewHandler(testDeps(t, nil))
 	ops := specOps()
 	assert.NotEmpty(t, ops)
 	for _, o := range ops {
-		rec := do(h, httpMethod(o.method), o.path, nil)
-		assert.Equal(t, http.StatusOK, rec.Code, o.key())
+		target := pathParamRE.ReplaceAllString(o.path, uuid.NewString())
+		rec := do(h, httpMethod(o.method), target, nil)
+		assert.NotEqual(t, http.StatusNotFound, rec.Code, o.key())
 		assert.Equal(t, "application/json; charset=utf-8", rec.Header().Get("Content-Type"), o.key())
 	}
 }
 
-// Every operation must declare x-permission; Phase 1 turns this into the RBAC route table.
+// Every operation must declare x-permission.
 func TestEveryOperationDeclaresPermission(t *testing.T) {
 	ops := specOps()
 	assert.NotEmpty(t, ops)
@@ -166,4 +205,30 @@ components:
 	assert.Len(t, ops, 3)
 	assert.Equal(t, []string{"GET /b"}, missing(ops, errorDefaultRef))
 	assert.Empty(t, missing(ops, "x-permission:"))
+}
+
+// Path-level keys after an operation must not be attributed to that operation.
+func TestParseOperationsIgnoresPathLevelKeys(t *testing.T) {
+	snippet := `paths:
+  /items/{id}:
+    get:
+      x-permission: read
+      responses:
+        "200": { description: ok }
+    parameters:
+      - name: id
+        in: path
+        x-permission: public
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      x-permission: session
+      responses:
+        "204": { description: gone }
+`
+	ops := parseOperations([]byte(snippet))
+	require.Len(t, ops, 2)
+	assert.Equal(t, "read", ops[0].permission())
+	assert.Equal(t, "session", ops[1].permission())
+	assert.Equal(t, []string{"GET /items/{id}", "DELETE /items/{id}"}, missing(ops, errorDefaultRef),
+		"the default line under parameters belongs to no operation")
 }

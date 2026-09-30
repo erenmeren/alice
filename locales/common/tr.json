@@ -11,6 +11,16 @@
         "title": "Alice şu anda geçici olarak kullanılamıyor.",
         "cause": "Alice veritabanına ulaşamıyor ya da hâlâ başlatılıyor.",
         "action": "Bir dakika bekleyip tekrar deneyin. Sorun sürerse yöneticinizden Alice hizmetini kontrol etmesini isteyin."
+      },
+      "bad_request": {
+        "title": "Alice bu isteği okuyamadı.",
+        "cause": "İstek eksikti ya da Alice'in tanımadığı alanlar içeriyordu.",
+        "action": "Sayfayı yenileyip tekrar deneyin. API kullanıyorsanız isteği API belgelerine göre kontrol edin."
+      },
+      "body_too_large": {
+        "title": "İstek çok büyük.",
+        "cause": "Alice tek bir istekte en fazla 1 MiB veri kabul eder.",
+        "action": "Tek seferde daha az veri gönderin veya daha küçük bir dosya kullanın."
       }
     },
     "internal": {
@@ -18,6 +28,143 @@
         "title": "Bizim tarafımızda bir sorun oluştu.",
         "cause": "Alice isteğinizi işlerken beklenmeyen bir sorunla karşılaştı.",
         "action": "Tekrar deneyin. Yine olursa burada gösterilen istek kimliğini yöneticinize iletin."
+      }
+    },
+    "rate": {
+      "limited": {
+        "title": "Kısa sürede çok fazla istek yapıldı.",
+        "cause": "Alice, hesapları ve hizmeti korumak için tekrarlanan istekleri yavaşlatır.",
+        "action": "Biraz bekleyip tekrar deneyin."
+      }
+    },
+    "validation": {
+      "failed": {
+        "title": "Bazı alanları düzeltmeniz gerekiyor.",
+        "cause": "Bir veya daha fazla değer eksik ya da beklenen biçimde değil.",
+        "action": "İşaretli alanları düzeltip tekrar deneyin."
+      }
+    },
+    "auth": {
+      "unauthenticated": {
+        "title": "Oturumunuz sona erdi. Lütfen yeniden giriş yapın.",
+        "cause": "Çıkış yaptınız, 30 dakika işlem yapmadınız ya da 12 saatlik oturum süresi doldu.",
+        "action": "Devam etmek için yeniden giriş yapın."
+      },
+      "forbidden": {
+        "title": "Bu işlem için yetkiniz yok.",
+        "cause": "Rolünüz bu işlemi kapsamıyor.",
+        "action": "Erişime ihtiyacınız varsa bir yöneticiye başvurun."
+      },
+      "stepup_required": {
+        "title": "Lütfen kimliğinizi doğrulayın.",
+        "cause": "Bu hassas bir işlem olduğu için Alice yeni bir doğrulama kodu istiyor.",
+        "action": "Doğrulama uygulamanızdaki 6 haneli kodu girip tekrar deneyin."
+      },
+      "csrf_failed": {
+        "title": "Alice bu isteği güvenliğiniz için engelledi.",
+        "cause": "İstek Alice sayfasından gelmedi ya da sayfa güncel değil.",
+        "action": "Sayfayı yenileyip tekrar deneyin."
+      },
+      "invalid_credentials": {
+        "title": "Kullanıcı adı veya parola hatalı.",
+        "cause": "Kullanıcı adı veya parola yanlış ya da çok fazla denemeden sonra hesap geçici olarak engellendi.",
+        "action": "Bilgilerinizi kontrol edip tekrar deneyin. Birkaç başarısız denemeden sonra 15 dakika bekleyin."
+      },
+      "mfa_invalid": {
+        "title": "Doğrulama kodu hatalı.",
+        "cause": "Kod yanlış yazıldı, daha önce kullanıldı ya da cihazınızın saati yanlış.",
+        "action": "Doğrulama uygulamanızda yeni kodu bekleyip girin veya bir kurtarma kodu kullanın."
+      },
+      "mfa_already_enrolled": {
+        "title": "Doğrulama uygulamanız zaten kurulu.",
+        "cause": "Bu hesap için iki adımlı doğrulama daha önce tamamlandı.",
+        "action": "Doğrulama uygulamanızdaki kodu girin. Cihazınızı kaybettiyseniz bir yöneticiden sıfırlamasını isteyin."
+      },
+      "password_too_short": {
+        "title": "Parola çok kısa.",
+        "cause": "Parolalar en az {{min}} karakter olmalıdır.",
+        "action": "Daha uzun bir parola seçin. Kısa bir cümle hem kolay hatırlanır hem de zor tahmin edilir."
+      },
+      "password_too_long": {
+        "title": "Parola çok uzun.",
+        "cause": "Parolalar en fazla {{max}} karakter olabilir.",
+        "action": "Daha kısa bir parola seçin."
+      },
+      "password_breached": {
+        "title": "Bu parola çok yaygın.",
+        "cause": "Saldırganların ilk denediği parolalar listesinde yer alıyor.",
+        "action": "Başka hiçbir yerde kullanmadığınız farklı bir parola seçin."
+      },
+      "current_password_invalid": {
+        "title": "Mevcut parolanız hatalı.",
+        "cause": "Alice, parolanızı değiştirmeden önce mevcut parolanızı kontrol eder.",
+        "action": "Mevcut parolanızı yeniden girin."
+      },
+      "try_again": {
+        "title": "Alice bu hesapla ilgili başka bir işlemi yürütüyor. Lütfen tekrar deneyin.",
+        "cause": "Aynı hesap için başka bir giriş veya doğrulama hâlâ sürüyordu; Alice bu isteği zamanında kontrol edemedi. Bu deneme başarısız sayılmadı.",
+        "action": "Bir saniye bekleyip tekrar deneyin."
+      }
+    },
+    "user": {
+      "username_taken": {
+        "title": "Bu kullanıcı adı zaten kullanılıyor.",
+        "cause": "Kullanıcı adları benzersiz olmalıdır; büyük ve küçük harf aynı sayılır.",
+        "action": "Farklı bir kullanıcı adı seçin."
+      },
+      "last_admin": {
+        "title": "Alice'te en az bir etkin yönetici olmalıdır.",
+        "cause": "Bu değişiklik, giriş yapabilecek etkin bir yerel yönetici bırakmaz.",
+        "action": "Önce başka birine Yönetici rolü verin, sonra tekrar deneyin."
+      }
+    },
+    "token": {
+      "scope_not_allowed": {
+        "title": "Rolünüz bu anahtar erişimine izin vermiyor.",
+        "cause": "Bir anahtar, sahibinin rolünün izin verdiğinden fazlasını yapamaz.",
+        "action": "Salt okunur erişimi seçin."
+      }
+    },
+    "setup": {
+      "code_invalid": {
+        "title": "Kurulum kodu hatalı.",
+        "cause": "Kod yanlış yazıldı ya da yerine daha yeni bir kod oluşturuldu.",
+        "action": "Kodu kurulum programının yazdığı şekilde girin. Kaybettiyseniz sunucu yöneticisinden şu komutu çalıştırmasını isteyin: alice setup-token --reset"
+      },
+      "locked": {
+        "title": "Çok fazla hatalı kurulum kodu girildi.",
+        "cause": "Alice, 5 hatalı koddan sonra bu bilgisayardan kurulumu 15 dakika engeller.",
+        "action": "15 dakika bekleyip kodu yeniden girin."
+      },
+      "session_expired": {
+        "title": "Kurulum oturumunuz sona erdi.",
+        "cause": "Kurulum sayfası 60 dakika boyunca kullanılmadı ya da kurulum başka bir yerde tamamlandı.",
+        "action": "Devam etmek için kurulum kodunu yeniden girin."
+      },
+      "enrollment_missing": {
+        "title": "Lütfen önce yönetici bilgilerini doldurun.",
+        "cause": "Doğrulama kodu adımı, bir önceki adımdaki yönetici formuna ihtiyaç duyar.",
+        "action": "Bir adım geri gidip yönetici formunu yeniden gönderin."
+      },
+      "passphrase_too_short": {
+        "title": "Kurtarma parolası çok kısa.",
+        "cause": "Tüm yedeklerinizi koruduğu için en az {{min}} karakter olmalıdır.",
+        "action": "Daha uzun bir parola seçin; örneğin birbiriyle ilgisiz dört beş kelime."
+      },
+      "passphrase_mismatch": {
+        "title": "İki parola birbirinden farklı.",
+        "cause": "Kurtarma parolası ve tekrarı tamamen aynı olmalıdır.",
+        "action": "Her iki alana da aynı parolayı yazın."
+      },
+      "passphrase_already_set": {
+        "title": "Kurtarma parolası zaten belirlenmiş.",
+        "cause": "Kurtarma parolası kurulum sırasında yalnızca bir kez seçilebilir.",
+        "action": "Sonraki adımla devam edin."
+      },
+      "incomplete": {
+        "title": "Kurulum henüz tamamlanmadı.",
+        "cause": "Kurtarma parolası henüz seçilmedi.",
+        "action": "Bir kurtarma parolası seçip kurulumu tamamlayın."
       }
     }
   },

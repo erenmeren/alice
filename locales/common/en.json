@@ -11,6 +11,16 @@
         "title": "Alice is temporarily unavailable.",
         "cause": "Alice cannot reach its database, or it is still starting.",
         "action": "Wait a minute and try again. If this continues, ask your administrator to check the Alice service."
+      },
+      "bad_request": {
+        "title": "Alice could not read this request.",
+        "cause": "The request was incomplete or had fields Alice does not know.",
+        "action": "Reload the page and try again. If you use the API, check the request against the API documentation."
+      },
+      "body_too_large": {
+        "title": "The request is too large.",
+        "cause": "Alice accepts at most 1 MiB of data in one request.",
+        "action": "Send less data at once, or use a smaller file."
       }
     },
     "internal": {
@@ -18,6 +28,143 @@
         "title": "Something went wrong on our side.",
         "cause": "Alice hit an unexpected problem while handling your request.",
         "action": "Try again. If it happens again, give your administrator the request ID shown here."
+      }
+    },
+    "rate": {
+      "limited": {
+        "title": "Too many requests in a short time.",
+        "cause": "Alice slows down repeated requests to protect accounts and the service.",
+        "action": "Wait a moment and try again."
+      }
+    },
+    "validation": {
+      "failed": {
+        "title": "Some fields need your attention.",
+        "cause": "One or more values are missing or not in the expected format.",
+        "action": "Correct the highlighted fields and try again."
+      }
+    },
+    "auth": {
+      "unauthenticated": {
+        "title": "Your session ended. Please sign in again.",
+        "cause": "You signed out, stayed inactive for 30 minutes, or reached the 12-hour session limit.",
+        "action": "Sign in again to continue."
+      },
+      "forbidden": {
+        "title": "You do not have permission to do this.",
+        "cause": "Your role does not include this action.",
+        "action": "Ask an administrator if you need access."
+      },
+      "stepup_required": {
+        "title": "Please confirm it's you.",
+        "cause": "This is a sensitive action, so Alice asks for a fresh verification code.",
+        "action": "Enter the 6-digit code from your authenticator app, then try again."
+      },
+      "csrf_failed": {
+        "title": "Alice blocked this request for your safety.",
+        "cause": "The request did not come from the Alice page, or the page is out of date.",
+        "action": "Reload the page and try again."
+      },
+      "invalid_credentials": {
+        "title": "Incorrect username or password.",
+        "cause": "The username or password is wrong, or the account is temporarily blocked after too many attempts.",
+        "action": "Check your details and try again. After several failed attempts, wait 15 minutes."
+      },
+      "mfa_invalid": {
+        "title": "The verification code is not correct.",
+        "cause": "The code was mistyped, has already been used, or your device clock is wrong.",
+        "action": "Wait for a new code in your authenticator app and enter it, or use a recovery code."
+      },
+      "mfa_already_enrolled": {
+        "title": "Your authenticator app is already set up.",
+        "cause": "Two-step verification was already completed for this account.",
+        "action": "Enter a code from your authenticator app. If you lost the device, ask an administrator to reset it."
+      },
+      "password_too_short": {
+        "title": "The password is too short.",
+        "cause": "Passwords must have at least {{min}} characters.",
+        "action": "Choose a longer password. A short sentence is easy to remember and hard to guess."
+      },
+      "password_too_long": {
+        "title": "The password is too long.",
+        "cause": "Passwords can have at most {{max}} characters.",
+        "action": "Choose a shorter password."
+      },
+      "password_breached": {
+        "title": "This password is too common.",
+        "cause": "It appears in a list of passwords that attackers try first.",
+        "action": "Choose a different password that you do not use anywhere else."
+      },
+      "current_password_invalid": {
+        "title": "Your current password is not correct.",
+        "cause": "Alice checks your current password before changing it.",
+        "action": "Enter your current password again."
+      },
+      "try_again": {
+        "title": "Alice is busy with this account. Please try again.",
+        "cause": "Another sign-in or verification for the same account was still running, so Alice could not check this one in time. Nothing was counted as a failed attempt.",
+        "action": "Wait a second and try again."
+      }
+    },
+    "user": {
+      "username_taken": {
+        "title": "This username is already in use.",
+        "cause": "Usernames must be unique; upper and lower case count as the same.",
+        "action": "Choose a different username."
+      },
+      "last_admin": {
+        "title": "Alice needs at least one active administrator.",
+        "cause": "This change would leave no enabled local administrator who can sign in.",
+        "action": "Give another person the Administrator role first, then try again."
+      }
+    },
+    "token": {
+      "scope_not_allowed": {
+        "title": "Your role does not allow this token access.",
+        "cause": "A token can never do more than its owner's role allows.",
+        "action": "Choose read-only access."
+      }
+    },
+    "setup": {
+      "code_invalid": {
+        "title": "The setup code is not correct.",
+        "cause": "The code was mistyped or has been replaced by a newer one.",
+        "action": "Type the code exactly as the installer printed it. Lost it? Ask the server administrator to run: alice setup-token --reset"
+      },
+      "locked": {
+        "title": "Too many wrong setup codes.",
+        "cause": "Alice blocks setup from this computer for 15 minutes after 5 wrong codes.",
+        "action": "Wait 15 minutes, then enter the code again."
+      },
+      "session_expired": {
+        "title": "Your setup session ended.",
+        "cause": "The setup page was idle for 60 minutes, or setup was finished elsewhere.",
+        "action": "Enter the setup code again to continue."
+      },
+      "enrollment_missing": {
+        "title": "Please fill in the administrator details first.",
+        "cause": "The verification code step needs the administrator form from the previous step.",
+        "action": "Go back one step and submit the administrator form again."
+      },
+      "passphrase_too_short": {
+        "title": "The recovery passphrase is too short.",
+        "cause": "It must have at least {{min}} characters, because it protects all your backups.",
+        "action": "Choose a longer passphrase, for example four or five unrelated words."
+      },
+      "passphrase_mismatch": {
+        "title": "The two passphrases are different.",
+        "cause": "The passphrase and its repetition must match exactly.",
+        "action": "Type the same passphrase in both fields."
+      },
+      "passphrase_already_set": {
+        "title": "The recovery passphrase is already set.",
+        "cause": "It can be chosen only once during setup.",
+        "action": "Continue with the next step."
+      },
+      "incomplete": {
+        "title": "Setup is not finished yet.",
+        "cause": "The recovery passphrase has not been chosen.",
+        "action": "Choose a recovery passphrase, then finish setup."
       }
     }
   },
