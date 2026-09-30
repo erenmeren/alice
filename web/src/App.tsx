@@ -27,7 +27,7 @@ export function App() {
           <Stack gap="sm" mt="xl">
             <Title order={1}>{t('home.title')}</Title>
             <Text>{t('home.subtitle')}</Text>
-            <Text size="sm" c="dimmed" data-testid="server-status" aria-live="polite">
+            <Text size="sm" c="gray.7" data-testid="server-status" aria-live="polite">
               {status}
             </Text>
           </Stack>

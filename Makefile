@@ -64,3 +64,7 @@ logs: ## Follow the alice container logs
 .PHONY: hardening-check
 hardening-check: ## Verify container hardening of the running stack
 	./deploy/dev/check-hardening.sh
+
+.PHONY: e2e
+e2e: ## Run Playwright tests against the running stack (make up first)
+	cd web && npx playwright install chromium && npx playwright test
