@@ -115,6 +115,13 @@ func loadSMTP(getenv func(string) string) (SMTP, error) {
 	if s.Host != "" && s.From == "" {
 		return SMTP{}, errors.New("ALICE_SMTP_FROM must be set when ALICE_SMTP_HOST is set")
 	}
+	// Authentication needs both; one alone is a mistake, not "no authentication".
+	if s.Username != "" && s.PasswordFile == "" {
+		return SMTP{}, errors.New("ALICE_SMTP_USERNAME is set but ALICE_SMTP_PASSWORD_FILE is not: SMTP authentication needs both (or neither)")
+	}
+	if s.PasswordFile != "" && s.Username == "" {
+		return SMTP{}, errors.New("ALICE_SMTP_PASSWORD_FILE is set but ALICE_SMTP_USERNAME is not: SMTP authentication needs both (or neither)")
+	}
 	return s, nil
 }
 

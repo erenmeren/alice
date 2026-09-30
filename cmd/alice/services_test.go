@@ -162,12 +162,17 @@ func TestNewMailerConfigurationErrors(t *testing.T) {
 		out[k] = v
 		return out
 	}
+	withAuth := func(pwFile string) map[string]string {
+		out := with("ALICE_SMTP_PASSWORD_FILE", pwFile)
+		out["ALICE_SMTP_USERNAME"] = "alice"
+		return out
+	}
 	missing := filepath.Join(t.TempDir(), "missing")
 	for name, tc := range map[string]struct {
 		vars map[string]string
 		want string
 	}{
-		"password file missing": {with("ALICE_SMTP_PASSWORD_FILE", missing), "read ALICE_SMTP_PASSWORD_FILE " + missing},
+		"password file missing": {withAuth(missing), "read ALICE_SMTP_PASSWORD_FILE " + missing},
 		"CA file missing":       {with("ALICE_SMTP_CA_FILE", missing), "read ALICE_SMTP_CA_FILE " + missing},
 		"CA file not PEM":       {with("ALICE_SMTP_CA_FILE", writeFile(t, "ca.pem", []byte("not a certificate"))), "holds no PEM certificate"},
 		"sender not an address": {with("ALICE_SMTP_FROM", "alice.example.com"), "sender address is not valid"},

@@ -227,3 +227,27 @@ func TestConfigNeverRevealsSMTPPassword(t *testing.T) {
 	}
 	assert.Contains(t, logs.String(), `"smtp":{"host":"mail.example.com"`)
 }
+
+// SMTP authentication needs both a user name and a password file; one without the other is
+// a configuration mistake, not "no authentication".
+func TestSMTPCredentialsArePaired(t *testing.T) {
+	base := map[string]string{"ALICE_SMTP_HOST": "mail.example.com", "ALICE_SMTP_FROM": "alice@example.com"}
+	with := func(k, v string) map[string]string {
+		out := map[string]string{k: v}
+		for bk, bv := range base {
+			out[bk] = bv
+		}
+		return out
+	}
+	_, err := config.Load(env(with("ALICE_SMTP_USERNAME", "alice")))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ALICE_SMTP_USERNAME is set but ALICE_SMTP_PASSWORD_FILE is not")
+
+	_, err = config.Load(env(with("ALICE_SMTP_PASSWORD_FILE", "/run/secrets/smtp_password")))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ALICE_SMTP_PASSWORD_FILE is set but ALICE_SMTP_USERNAME is not")
+
+	c, err := config.Load(env(base))
+	require.NoError(t, err, "no authentication at all is allowed")
+	assert.Empty(t, c.SMTP.Username)
+}

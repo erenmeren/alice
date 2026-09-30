@@ -230,3 +230,37 @@ func hwmSetting(t *testing.T, d *pgtest.DB) string {
 	require.NoError(t, d.Owner.QueryRow(context.Background(), "SELECT value::text FROM settings WHERE key = $1", license.HWMSettingKey).Scan(&v))
 	return v
 }
+
+// The recovery commands do not need email: a missing SMTP password or CA file must not keep
+// an administrator from unlocking an account (only serve builds the mail sender).
+func TestRecoveryCommandsDoNotNeedTheEmailConfiguration(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	missing := filepath.Join(t.TempDir(), "missing")
+	getenv := env(map[string]string{
+		"ALICE_DATABASE_URL": d.AppURL, "ALICE_KEYS_DIR": t.TempDir(), "ALICE_STATE_DIR": t.TempDir(),
+		"ALICE_SMTP_HOST": "mail.example.com", "ALICE_SMTP_FROM": "alice@example.com",
+		"ALICE_SMTP_USERNAME": "alice", "ALICE_SMTP_PASSWORD_FILE": missing, "ALICE_SMTP_CA_FILE": missing,
+	})
+
+	code, out, errOut := runCLI(t, getenv, "setup-token", "--reset")
+	require.Equal(t, 0, code, errOut)
+	assert.Regexp(t, setupCodeRE, out)
+
+	id := insertUser(t, d, "bob", "admin")
+	_, err := d.Owner.Exec(ctx, `UPDATE users SET failed_logins = 10, locked_until = now() + interval '15 minutes' WHERE id = $1`, id)
+	require.NoError(t, err)
+	code, out, errOut = runCLI(t, getenv, "admin", "unlock", "bob")
+	require.Equal(t, 0, code, errOut)
+	assert.Contains(t, out, "was unlocked")
+
+	code, _, errOut = runCLI(t, getenv, "admin", "reset-mfa", "bob")
+	require.Equal(t, 0, code, errOut)
+
+	_, err = d.Owner.Exec(ctx, `INSERT INTO license (id, installation_id, installed_at, state, updated_at)
+VALUES (1, $1, now(), 'evaluation', now())`, license.NewInstallationID())
+	require.NoError(t, err)
+	code, out, errOut = runCLI(t, getenv, "license", "status")
+	require.Equal(t, 0, code, errOut)
+	assert.Contains(t, out, "State: evaluation")
+}

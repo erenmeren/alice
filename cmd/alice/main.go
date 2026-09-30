@@ -18,6 +18,7 @@ import (
 	"alice/internal/api"
 	"alice/internal/i18n"
 	"alice/internal/jobs"
+	"alice/internal/platform/clock"
 	"alice/internal/platform/config"
 	"alice/internal/platform/db"
 	"alice/internal/platform/logging"
@@ -168,29 +169,15 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	// The installation ID, the time record and the first evaluation exist before any request.
-	if err := svc.license.Start(ctx); err != nil {
-		return err
-	}
-	sched := jobs.NewScheduler(clk, svc.license, log,
-		jobs.Task{Type: jobs.LicenseEvaluate, Every: time.Hour, Run: svc.license.Tick},
-		jobs.Task{Type: jobs.NotifySend, Every: time.Minute, Run: func(ctx context.Context) error {
-			_, err := svc.sender.Drain(ctx)
-			return err
-		}},
-	)
-	schedCtx, stopSched := context.WithCancel(ctx)
-	defer stopSched()
-	schedDone := make(chan struct{})
-	go func() {
-		sched.Run(schedCtx)
-		close(schedDone)
-	}()
 	health, err := db.NewHealthChecker(pool, migrations.FS)
 	if err != nil {
 		return err
 	}
 	catalog, err := i18n.Load(locales.FS)
+	if err != nil {
+		return err
+	}
+	sender, err := buildSender(pool, cfg, catalog, clk, log)
 	if err != nil {
 		return err
 	}
@@ -202,6 +189,17 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// The installation ID, the time record and the first evaluation exist before any request.
+	if err := svc.license.Start(ctx); err != nil {
+		return err
+	}
+	sched := jobs.NewScheduler(clk, svc.license, log,
+		jobs.Task{Type: jobs.LicenseEvaluate, Every: time.Hour, Run: svc.license.Tick},
+		jobs.Task{Type: jobs.NotifySend, Every: time.Minute, Run: func(ctx context.Context) error {
+			_, err := sender.Drain(ctx)
+			return err
+		}},
+	)
 
 	var apiServer *api.Server
 	td := testDeps{
@@ -209,7 +207,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		Setup:     svc.setup,
 		License:   svc.license,
 		Scheduler: sched,
-		Sender:    svc.sender,
+		Sender:    sender,
 		StateDir:  cfg.StateDir,
 		Log:       log,
 		ResetLimits: func() {
@@ -218,20 +216,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			}
 		},
 	}
-	deps := api.Deps{
-		Health:         health,
-		Catalog:        catalog,
-		Version:        buildVersion(),
-		UI:             webui.UI(),
-		Log:            log,
-		Clock:          clk,
-		Auth:           svc.auth,
-		Setup:          svc.setup,
-		Audit:          svc.audit,
-		License:        svc.license,
-		TrustedProxies: cfg.TrustedProxies,
-		TestHandler:    testHandler(td),
-	}
+	deps := newAPIDeps(cfg, svc, health, catalog, clk, log, testHandler(td))
 	apiServer = api.New(deps)
 	warnIfTestBuild(log, deps.TestHandler)
 
@@ -256,6 +241,14 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		ErrorLog:          errLog,
 	}
 
+	// The scheduler starts last: nothing below can fail before the shutdown path runs.
+	schedCtx, stopSched := context.WithCancel(ctx)
+	defer stopSched()
+	schedDone := make(chan struct{})
+	go func() {
+		sched.Run(schedCtx)
+		close(schedDone)
+	}()
 	errCh := make(chan error, 2)
 	go func() { errCh <- ignoreClosed(public.ListenAndServeTLS("", "")) }()
 	go func() { errCh <- ignoreClosed(internal.ListenAndServe()) }()
@@ -272,11 +265,49 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	_ = public.Shutdown(shutdownCtx)
 	_ = internal.Shutdown(shutdownCtx)
 	stopSched()
-	<-schedDone
-	if err := svc.license.Shutdown(shutdownCtx); err != nil {
+	waitForScheduler(shutdownCtx, schedDone, log)
+	// A fresh context: the time record is saved even when the shutdown budget is used up.
+	saveCtx, cancelSave := context.WithTimeout(context.Background(), timeRecordSaveBudget)
+	defer cancelSave()
+	if err := svc.license.Shutdown(saveCtx); err != nil {
 		log.Error("could not save the license time record at shutdown", "error_type", fmt.Sprintf("%T", err))
 	}
 	return runErr
+}
+
+// timeRecordSaveBudget bounds the save of the license time record at shutdown.
+const timeRecordSaveBudget = 5 * time.Second
+
+// newAPIDeps hands the services serve built to the API. A test guards every service field:
+// without License every license-gated route fails closed.
+func newAPIDeps(cfg config.Config, svc *services, health api.HealthChecker, catalog *i18n.Catalog, clk clock.Clock,
+	log *slog.Logger, testHandler http.Handler) api.Deps {
+	return api.Deps{
+		Health:         health,
+		Catalog:        catalog,
+		Version:        buildVersion(),
+		UI:             webui.UI(),
+		Log:            log,
+		Clock:          clk,
+		Auth:           svc.auth,
+		Setup:          svc.setup,
+		Audit:          svc.audit,
+		License:        svc.license,
+		TrustedProxies: cfg.TrustedProxies,
+		TestHandler:    testHandler,
+	}
+}
+
+// waitForScheduler waits for running scheduled tasks to return, at most until ctx ends. It
+// reports whether they returned in time.
+func waitForScheduler(ctx context.Context, done <-chan struct{}, log *slog.Logger) bool {
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		log.Warn("scheduled tasks did not stop within the shutdown time; saving the license time record anyway")
+		return false
+	}
 }
 
 func healthcheck(cfg config.Config) int {

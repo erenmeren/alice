@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +13,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"alice/internal/audit"
+	"alice/internal/auth"
+	"alice/internal/license"
+	"alice/internal/platform/clock"
+	"alice/internal/platform/config"
 	"alice/internal/platform/db"
+	"alice/internal/setup"
 )
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
@@ -66,4 +74,34 @@ func TestDBStartupErrorMentionsWaitOnlyForUnreachable(t *testing.T) {
 	auth := fmt.Errorf("the database server at postgres:5432 rejected the user name or password; check the database URL: %w", db.ErrAuthFailed)
 	err = dbStartupError(auth, time.Minute)
 	assert.Equal(t, auth, err, "a rejected password is final and reported unchanged")
+}
+
+// Every service serve builds reaches the API; a missing License would make every gated
+// route fail closed (license.locked) instead of working.
+func TestAPIDepsCarryEveryService(t *testing.T) {
+	svc := &services{auth: &auth.Service{}, setup: &setup.Service{}, audit: &audit.Service{}, license: &license.Service{}}
+	d := newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil)
+	assert.Same(t, svc.license, d.License)
+	assert.Same(t, svc.setup, d.Setup)
+	assert.Same(t, svc.auth, d.Auth)
+	assert.Same(t, svc.audit, d.Audit)
+	assert.NotNil(t, d.Clock)
+	assert.NotNil(t, d.Log)
+}
+
+// At shutdown serve waits for running scheduled tasks only until the shutdown deadline.
+func TestWaitForSchedulerIsBounded(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+
+	done := make(chan struct{})
+	close(done)
+	assert.True(t, waitForScheduler(context.Background(), done, log))
+	assert.Empty(t, logs.String())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	assert.False(t, waitForScheduler(ctx, make(chan struct{}), log), "a task that never returns does not block shutdown")
+	assert.Contains(t, logs.String(), "level=WARN")
+	assert.Contains(t, logs.String(), "scheduled tasks did not stop")
 }

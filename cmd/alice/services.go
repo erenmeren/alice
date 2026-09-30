@@ -22,7 +22,6 @@ import (
 	"alice/internal/secrets"
 	"alice/internal/setup"
 	"alice/internal/version"
-	"alice/locales"
 )
 
 // Argon2id memory is 64 MiB per password hash, so at most two run at once
@@ -46,11 +45,11 @@ type services struct {
 	auth    *auth.Service
 	setup   *setup.Service
 	license *license.Service
-	sender  *notify.Sender
 }
 
 // buildServices loads (or, on a brand-new database, creates) the master key and wires the
-// services on the application pool. It starts nothing: serve calls license.Start.
+// services on the application pool. It starts nothing: serve calls license.Start. It does
+// not touch the email configuration, so the recovery commands work while it is broken.
 func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, clk serverClock, log *slog.Logger) (*services, error) {
 	keyring, err := secrets.LoadOrCreateMasterKey(ctx, pool, cfg.KeysDir, clk.Now())
 	if err != nil {
@@ -88,22 +87,23 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		BackupKDF: secrets.BackupKDF,
 		License:   lic,
 	})
-	mailer, err := newMailer(cfg, clk)
-	if err != nil {
-		return nil, err
-	}
-	catalog, err := i18n.Load(locales.FS)
-	if err != nil {
-		return nil, err
-	}
 	return &services{
 		keyring: keyring,
 		audit:   audit.NewService(auditLog, pool),
 		auth:    authSvc,
 		setup:   setupSvc,
 		license: lic,
-		sender:  &notify.Sender{Pool: pool, Mailer: mailer, Catalog: catalog, Clock: clk, Log: log},
 	}, nil
+}
+
+// buildSender builds the email sender of serve (notify.send). Only serve sends email, so
+// only serve reads ALICE_SMTP_PASSWORD_FILE and ALICE_SMTP_CA_FILE.
+func buildSender(pool *pgxpool.Pool, cfg config.Config, catalog *i18n.Catalog, clk clock.Clock, log *slog.Logger) (*notify.Sender, error) {
+	mailer, err := newMailer(cfg, clk)
+	if err != nil {
+		return nil, err
+	}
+	return &notify.Sender{Pool: pool, Mailer: mailer, Catalog: catalog, Clock: clk, Log: log}, nil
 }
 
 // buildTime is the link-time build timestamp; the license time never falls below it (§16.5).
