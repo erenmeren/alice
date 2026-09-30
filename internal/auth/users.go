@@ -161,9 +161,14 @@ func (s *Service) UpdateUser(ctx context.Context, p Principal, m Meta, id uuid.U
 	}
 	now := s.clock.Now().UTC()
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		admins, err := lockAdmins(ctx, tx)
-		if err != nil {
-			return err
+		// Only a role or enabled-state change can remove an administrator, so only those take
+		// the administrator set; profile-only edits lock just the target row.
+		var admins []uuid.UUID
+		if in.Role != nil || in.Disabled != nil {
+			var err error
+			if admins, err = lockAdmins(ctx, tx); err != nil {
+				return err
+			}
 		}
 		// The target row is locked after the administrator set, in the same order as every
 		// other change, and before any update; credential checks on this account (which hold
@@ -216,6 +221,15 @@ func (s *Service) UpdateUser(ctx context.Context, p Principal, m Meta, id uuid.U
 			if err := revokeUserSessions(ctx, tx, id); err != nil {
 				return err
 			}
+		}
+		if disable {
+			// Disabling revokes the user's API tokens for good: re-enabling does not bring
+			// them back. A role change keeps them; their scope is checked on every use.
+			tag, err := tx.Exec(ctx, "UPDATE api_tokens SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL", id, now)
+			if err != nil {
+				return fmt.Errorf("revoke tokens: %w", err)
+			}
+			details["revoked_tokens_count"] = strconv.FormatInt(tag.RowsAffected(), 10)
 		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: p.Actor(m), Action: "user.updated", ObjectType: "user", ObjectID: id.String(),
 			Result: audit.Success, Details: details})

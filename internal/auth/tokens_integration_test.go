@@ -158,3 +158,58 @@ func TestExpiredTokenIsRejected(t *testing.T) {
 	_, err = e.svc.AuthenticateToken(e.ctx, secret)
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 }
+
+func TestDisablingRevokesTokensForGood(t *testing.T) {
+	e := newEnv(t)
+	admin, _ := e.adminPrincipal(t)
+	op := e.createUser(t, admin, "op", rbac.Operator)
+	_, res := e.enroll(t, "op", adminPassword)
+	secret, tok, err := e.svc.CreateToken(e.ctx, e.principal(t, res.Token), meta, auth.NewToken{Name: "ci", Scope: rbac.ScopeRead, ExpiresInDays: 30})
+	require.NoError(t, err)
+
+	_, err = e.svc.UpdateUser(e.ctx, admin, meta, op.ID, auth.UserUpdate{Disabled: ptr(true)})
+	require.NoError(t, err)
+	var count string
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT details->>'revoked_tokens_count' FROM audit_log
+WHERE action = 'user.updated' ORDER BY seq DESC LIMIT 1`).Scan(&count))
+	assert.Equal(t, "1", count)
+
+	_, err = e.svc.UpdateUser(e.ctx, admin, meta, op.ID, auth.UserUpdate{Disabled: ptr(false)})
+	require.NoError(t, err)
+	_, err = e.svc.AuthenticateToken(e.ctx, secret)
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated, "re-enabling does not bring tokens back")
+	var revokedAt *time.Time
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT revoked_at FROM api_tokens WHERE id = $1", tok.ID).Scan(&revokedAt))
+	require.NotNil(t, revokedAt)
+	assert.True(t, e.clk.Now().Equal(*revokedAt), "revoked at the injected clock's time")
+	list, err := e.svc.ListTokens(e.ctx, admin, op.ID)
+	require.NoError(t, err)
+	assert.Empty(t, list, "revoked tokens are not listed")
+}
+
+func TestTokenUseIsRecordedAtMostOncePerMinute(t *testing.T) {
+	e := newEnv(t)
+	admin, _ := e.adminPrincipal(t)
+	secret, tok, err := e.svc.CreateToken(e.ctx, admin, meta, auth.NewToken{Name: "x", Scope: rbac.ScopeRead, ExpiresInDays: 1})
+	require.NoError(t, err)
+	lastUsed := func() time.Time {
+		var at *time.Time
+		require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT last_used_at FROM api_tokens WHERE id = $1", tok.ID).Scan(&at))
+		require.NotNil(t, at)
+		return at.UTC()
+	}
+	first := e.clk.Now()
+	_, err = e.svc.AuthenticateToken(e.ctx, secret)
+	require.NoError(t, err)
+	assert.Equal(t, first, lastUsed())
+
+	e.clk.Advance(30 * time.Second)
+	_, err = e.svc.AuthenticateToken(e.ctx, secret)
+	require.NoError(t, err)
+	assert.Equal(t, first, lastUsed(), "a second use within a minute does not write")
+
+	e.clk.Advance(31 * time.Second)
+	_, err = e.svc.AuthenticateToken(e.ctx, secret)
+	require.NoError(t, err)
+	assert.Equal(t, e.clk.Now(), lastUsed(), "a use more than a minute later is recorded")
+}

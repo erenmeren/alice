@@ -204,7 +204,9 @@ FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1`, tok
 	if revoked || disabled || !now.Before(expires) || !p.Role.AllowsScope(p.Scope) {
 		return Principal{}, ErrUnauthenticated
 	}
-	if _, err := s.pool.Exec(ctx, "UPDATE api_tokens SET last_used_at = $2 WHERE id = $1", p.TokenID, now); err != nil {
+	// Last use is recorded at minute granularity so a busy token does not write on every request.
+	if _, err := s.pool.Exec(ctx, `UPDATE api_tokens SET last_used_at = $2
+WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < $2::timestamptz - interval '1 minute')`, p.TokenID, now); err != nil {
 		return Principal{}, fmt.Errorf("touch token: %w", err)
 	}
 	return p, nil

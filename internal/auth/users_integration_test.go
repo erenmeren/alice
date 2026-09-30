@@ -3,8 +3,10 @@
 package auth_test
 
 import (
+	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -218,4 +220,30 @@ func TestAdminSetPasswordsAreNormalized(t *testing.T) {
 	require.NoError(t, e.svc.ResetPassword(e.ctx, admin, meta, id, "ａ brand new long password"))
 	_, err = e.svc.Login(e.ctx, "reset", "a brand new long password", meta)
 	require.NoError(t, err)
+}
+
+func TestProfileEditDoesNotWaitForTheAdministratorLocks(t *testing.T) {
+	e := newEnv(t)
+	admin, _ := e.adminPrincipal(t)
+	second := e.createUser(t, admin, "admin2", rbac.Admin)
+	op := e.createUser(t, admin, "op", rbac.Operator)
+
+	// Another transaction holds an unrelated administrator's row lock.
+	tx, err := e.db.Owner.Begin(e.ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(e.ctx) }()
+	_, err = tx.Exec(e.ctx, "SELECT 1 FROM users WHERE id = $1 FOR UPDATE", second.ID)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(e.ctx, 2*time.Second)
+	defer cancel()
+	u, err := e.svc.UpdateUser(ctx, admin, meta, op.ID, auth.UserUpdate{DisplayName: ptr("Ömer"), Email: ptr("omer@example.com")})
+	require.NoError(t, err, "a profile-only edit locks only the target row")
+	assert.Equal(t, "Ömer", u.DisplayName)
+
+	// A role change still takes the administrator set and therefore waits.
+	ctx, cancel = context.WithTimeout(e.ctx, 300*time.Millisecond)
+	defer cancel()
+	_, err = e.svc.UpdateUser(ctx, admin, meta, op.ID, auth.UserUpdate{Role: ptr(rbac.Auditor)})
+	require.Error(t, err, "a role change waits for the administrator locks")
 }
