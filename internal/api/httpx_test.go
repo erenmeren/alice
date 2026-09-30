@@ -201,12 +201,15 @@ func TestFailHidesUnknownErrorsButLogsThem(t *testing.T) {
 	assert.Contains(t, logs.String(), rec.Header().Get("X-Request-Id"))
 }
 
+// meta keeps at most maxUserAgent runes of valid UTF-8, like auth.truncateUA.
 func TestMetaTruncatesUserAgent(t *testing.T) {
 	s := newServer(testDeps(t, nil))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("User-Agent", strings.Repeat("ğ", 200)) // 2 bytes per rune
+	req.Header.Set("User-Agent", strings.Repeat("ğ", 300)) // 2 bytes per rune
 	m := s.meta(req)
-	assert.LessOrEqual(t, len(m.UserAgent), maxUserAgent)
-	assert.Equal(t, strings.Repeat("ğ", 128), m.UserAgent)
+	assert.Equal(t, strings.Repeat("ğ", maxUserAgent), m.UserAgent)
 	assert.Equal(t, "192.0.2.1", m.IP.String())
+
+	req.Header.Set("User-Agent", "Mozilla\xff/5.0 \xc4")
+	assert.Equal(t, "Mozilla/5.0 ", s.meta(req).UserAgent, "invalid UTF-8 is dropped")
 }

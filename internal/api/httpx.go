@@ -9,7 +9,6 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -22,7 +21,7 @@ const (
 
 	// maxBody caps JSON request bodies (SEC-023).
 	maxBody = 1 << 20
-	// maxUserAgent bounds the stored User-Agent header.
+	// maxUserAgent bounds the stored User-Agent header in runes (as auth.truncateUA does).
 	maxUserAgent = 256
 )
 
@@ -67,12 +66,9 @@ func cookieValue(r *http.Request, name string) string {
 
 // meta collects the request facts the services record in sessions and audit events.
 func (s *server) meta(r *http.Request) auth.Meta {
-	ua := r.Header.Get("User-Agent")
-	if len(ua) > maxUserAgent {
-		ua = ua[:maxUserAgent]
-		for !utf8.ValidString(ua) {
-			ua = ua[:len(ua)-1]
-		}
+	ua := strings.ToValidUTF8(r.Header.Get("User-Agent"), "")
+	if runes := []rune(ua); len(runes) > maxUserAgent {
+		ua = string(runes[:maxUserAgent])
 	}
 	return auth.Meta{IP: clientIP(r, s.deps.TrustedProxies), UserAgent: ua, RequestID: RequestID(r.Context())}
 }
@@ -110,7 +106,9 @@ func clientIP(r *http.Request, trusted []netip.Prefix) netip.Addr {
 	if !peer.IsValid() || !isTrusted(peer, trusted) {
 		return peer
 	}
-	hops := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	// Every header line counts: a proxy may add its own line instead of
+	// appending, and a client-supplied first line must not win.
+	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
 	for _, hop := range slices.Backward(hops) {
 		a, err := netip.ParseAddr(strings.TrimSpace(hop))
 		if err != nil {

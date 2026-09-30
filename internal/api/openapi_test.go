@@ -159,7 +159,7 @@ func TestEveryDocumentedPathIsServed(t *testing.T) {
 	for _, o := range ops {
 		target := pathParamRE.ReplaceAllString(o.path, uuid.NewString())
 		rec := do(h, httpMethod(o.method), target, nil)
-		assert.NotEqual(t, http.StatusNotFound, rec.Code, o.key())
+		assert.Contains(t, []int{http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized}, rec.Code, o.key())
 		assert.Equal(t, "application/json; charset=utf-8", rec.Header().Get("Content-Type"), o.key())
 	}
 }

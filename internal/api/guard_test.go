@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -10,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/auth"
 	"alice/internal/platform/clock"
 	"alice/internal/rbac"
 )
@@ -226,4 +229,89 @@ func TestPendingSessionIsNotASignedInUser(t *testing.T) {
 	}
 	h, _ := guardedHandler(t, testDeps(t, nil), rbac.MFAPending, limitDefault)
 	assert.Equal(t, http.StatusOK, call(h, http.MethodGet, "/api/v1/probe", "pending", "").Code)
+}
+
+// Several X-Forwarded-For header lines count as one list: a proxy that adds
+// its own line must not let a client-supplied first line pick the address.
+func TestForwardedForUsesEveryHeaderLine(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.0.2.10:5555"
+	req.Header.Add("X-Forwarded-For", "198.51.100.66")
+	req.Header.Add("X-Forwarded-For", " 203.0.113.9 ")
+	trusted := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
+	assert.Equal(t, "203.0.113.9", clientIP(req, trusted).String())
+}
+
+// A failing authentication backend is a 503, never an anonymous 401, and is
+// neither passed to the handler nor audited as a denial.
+func TestAuthenticationBackendErrorIsUnavailable(t *testing.T) {
+	down := errors.New("db down: password=s3cret-pw")
+	cases := map[string]struct {
+		id  string
+		set func(d Deps)
+	}{
+		"session": {"admin", func(d Deps) {
+			d.Auth.(*fakeAuth).AuthenticateFn = func(context.Context, string) (auth.Principal, error) { return auth.Principal{}, down }
+		}},
+		"token": {"alice_read_admin", func(d Deps) {
+			d.Auth.(*fakeAuth).AuthenticateTokenFn = func(context.Context, string) (auth.Principal, error) { return auth.Principal{}, down }
+		}},
+		"setup": {"setup", func(d Deps) {
+			d.Setup.(*fakeSetup).AuthenticateFn = func(context.Context, string) error { return down }
+		}},
+	}
+	for name, tc := range cases {
+		for _, perm := range []rbac.Permission{rbac.Read, rbac.Setup} {
+			d := testDeps(t, nil)
+			tc.set(d)
+			called := false
+			s := newServer(d)
+			h := s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/probe", perm: perm, handler: func(w http.ResponseWriter, _ *http.Request) {
+				called = true
+				w.WriteHeader(http.StatusOK)
+			}}})
+			rec := call(h, http.MethodGet, "/api/v1/probe", tc.id, "")
+			assert.Equal(t, http.StatusServiceUnavailable, rec.Code, "%s on %s", name, perm)
+			b := decodeErr(t, rec)
+			assert.Equal(t, "ALC-SYS-0002", b.Error.Code, name)
+			assert.True(t, b.Error.Retryable, name)
+			assert.Equal(t, "1", rec.Header().Get("Retry-After"), name)
+			assert.NotContains(t, rec.Body.String(), "s3cret-pw", name)
+			assert.False(t, called, name)
+			assert.Empty(t, d.Audit.(*fakeAudit).Events(), name)
+		}
+	}
+}
+
+func TestSetupCookieStateChangeWithoutCSRFTokenIsRejected(t *testing.T) {
+	h, _ := guardedHandler(t, testDeps(t, nil), rbac.Setup, limitDefault)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/probe", nil)
+	req.AddCookie(&http.Cookie{Name: setupCookie, Value: "setup-ok"})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, "ALC-AUTH-0004", decodeErr(t, rec).Error.Code)
+	assert.Equal(t, http.StatusNoContent, call(h, http.MethodPost, "/api/v1/probe", "setup", "").Code)
+}
+
+func TestPublicStateChangeFromForeignOriginIsRejected(t *testing.T) {
+	h, _ := guardedHandler(t, testDeps(t, nil), rbac.Public, limitDefault)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/probe", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, "ALC-AUTH-0004", decodeErr(t, rec).Error.Code)
+}
+
+// A request the client abandoned while authenticating gets no answer and no log noise.
+func TestCancelledAuthenticationWritesNothing(t *testing.T) {
+	d := testDeps(t, nil)
+	d.Auth.(*fakeAuth).AuthenticateFn = func(context.Context, string) (auth.Principal, error) {
+		return auth.Principal{}, context.Canceled
+	}
+	h, _ := guardedHandler(t, d, rbac.Session, limitDefault)
+	rec := call(h, http.MethodGet, "/api/v1/probe", "admin", "")
+	assert.Empty(t, rec.Body.String())
+	assert.Empty(t, rec.Header().Get("Content-Type"))
 }
