@@ -14,6 +14,7 @@ help: ## Show available targets
 test: ## Run Go unit tests with the race detector (release build, plus the e2e build of cmd/alice)
 	go test -race -count=1 ./...
 	go test -race -count=1 -tags e2e ./cmd/alice/
+	go test -race -count=1 -tags testlicense ./internal/license/...
 
 .PHONY: test-integration
 test-integration: ## Run integration tests (needs Docker)
@@ -109,7 +110,8 @@ tools: ## Install pinned Go developer tools into $(HOME)/go/bin
 .PHONY: lint
 lint: ## Run golangci-lint (gosec, forbidigo, ...) on the release and the e2e build
 	golangci-lint run ./...
-	golangci-lint run --build-tags e2e ./cmd/...
+	golangci-lint run --build-tags e2e,testlicense ./cmd/...
+	golangci-lint run --build-tags integration,testlicense ./internal/license/...
 
 .PHONY: vuln
 vuln: ## Check Go dependencies and code for known vulnerabilities
@@ -130,3 +132,11 @@ image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
 
 .PHONY: ci
 ci: lint test test-integration build i18n-check web-lint web-test vuln secrets-scan fs-scan e2e-up hardening-check e2e image-scan ## Run the full CI pipeline locally
+
+.PHONY: fuzz-license
+fuzz-license: ## Fuzz the license parser for 60 s (spec §25.6)
+	go test -count=1 -run '^$$' -fuzz FuzzParseLicense -fuzztime 60s ./internal/license/
+
+.PHONY: release-keycheck
+release-keycheck: ## Release gate: fails until the vendor's production license key is committed (R36)
+	go test -count=1 -tags releasecheck -run TestProductionKeySetIsReadyForRelease ./internal/license/
