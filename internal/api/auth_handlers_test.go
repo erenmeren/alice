@@ -58,6 +58,39 @@ func TestLoginRejectsUnknownFieldsAndHugeBodies(t *testing.T) {
 	assert.Equal(t, "ALC-SYS-0007", decodeErr(t, rec).Error.Code)
 }
 
+// The OpenAPI limits of the login body (username 64, password 1024 characters) are
+// enforced with the standard validation error before any credential is checked.
+func TestLoginEnforcesTheSpecLengthLimits(t *testing.T) {
+	d := testDeps(t, nil)
+	calls := 0
+	d.Auth.(*fakeAuth).LoginFn = func(context.Context, string, string, auth.Meta) (auth.LoginResult, error) {
+		calls++
+		return auth.LoginResult{Status: "mfa_required", SessionToken: "pending-token"}, nil
+	}
+	h := NewHandler(d)
+	body := func(u, p string) string {
+		b, err := json.Marshal(map[string]string{"username": u, "password": p})
+		require.NoError(t, err)
+		return string(b)
+	}
+
+	rec := call(h, http.MethodPost, "/api/v1/auth/login", "", body(strings.Repeat("ş", 64), strings.Repeat("ğ", 1024)))
+	require.Equal(t, http.StatusOK, rec.Code, "limits count characters, not bytes: %s", rec.Body.String())
+	require.Equal(t, 1, calls)
+
+	rec = call(h, http.MethodPost, "/api/v1/auth/login", "", body(strings.Repeat("a", 65), "password"))
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "ALC-SYS-0006", decodeErr(t, rec).Error.Code)
+	assert.Contains(t, rec.Body.String(), `"field":"username","code":"validation.too_long","params":{"max":"64"}`)
+
+	long := strings.Repeat("p", 1025)
+	rec = call(h, http.MethodPost, "/api/v1/auth/login", "", body("admin", long))
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"field":"password","code":"validation.too_long","params":{"max":"1024"}`)
+	assert.NotContains(t, rec.Body.String(), long)
+	assert.Equal(t, 1, calls, "an over-long request never reaches the credential check")
+}
+
 func TestEnrollMFAForPendingSession(t *testing.T) {
 	d := testDeps(t, nil)
 	d.Auth.(*fakeAuth).EnrollMFAFn = func(_ context.Context, p auth.Principal, _ auth.Meta) (auth.TOTPEnrollment, error) {

@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+	"strconv"
+	"unicode/utf8"
 
 	"alice/internal/auth"
 	"alice/internal/platform/validate"
@@ -24,12 +26,29 @@ func (s *server) authRoutes() []route {
 	}
 }
 
+// Login body limits, the maxLength values of the login request in api/openapi.yaml.
+const (
+	maxLoginUsername = 64
+	maxLoginPassword = 1024
+)
+
 func (s *server) authLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 	if !s.decode(w, r, &req) {
+		return
+	}
+	var v validate.Errors
+	if utf8.RuneCountInString(req.Username) > maxLoginUsername {
+		v.Add("username", validate.TooLong, map[string]string{"max": strconv.Itoa(maxLoginUsername)})
+	}
+	if utf8.RuneCountInString(req.Password) > maxLoginPassword {
+		v.Add("password", validate.TooLong, map[string]string{"max": strconv.Itoa(maxLoginPassword)})
+	}
+	if err := v.Err(); err != nil {
+		s.fail(w, r, err)
 		return
 	}
 	res, err := s.deps.Auth.Login(r.Context(), req.Username, req.Password, s.meta(r))

@@ -215,6 +215,7 @@ paths:
                   status: { type: string, enum: [mfa_required, mfa_enrollment_required] }
                   csrf_token: { type: string, description: Send as X-CSRF-Token on the MFA enroll/verify requests }
         "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/mfa/enroll:
