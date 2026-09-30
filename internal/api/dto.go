@@ -84,6 +84,7 @@ func enrollmentJSON(e auth.TOTPEnrollment) enrollmentDTO {
 type setupStatusDTO struct {
 	AdminExists           bool   `json:"admin_exists"`
 	RecoveryPassphraseSet bool   `json:"recovery_passphrase_set"`
+	LicenseChosen         bool   `json:"license_chosen"`
 	Completed             bool   `json:"completed"`
 	DefaultLocale         string `json:"default_locale"`
 }
@@ -92,6 +93,7 @@ func setupStatusJSON(st setup.Status) setupStatusDTO {
 	return setupStatusDTO{
 		AdminExists:           st.AdminExists,
 		RecoveryPassphraseSet: st.RecoveryPassphraseSet,
+		LicenseChosen:         st.LicenseChosen,
 		Completed:             st.Completed,
 		DefaultLocale:         st.DefaultLocale,
 	}

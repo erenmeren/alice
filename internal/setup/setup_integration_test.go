@@ -45,12 +45,18 @@ const (
 )
 
 type env struct {
-	ctx   context.Context
-	clk   *clock.Fake
-	db    *pgtest.DB
-	auth  *auth.Service
-	setup *setup.Service
+	ctx     context.Context
+	clk     *clock.Fake
+	db      *pgtest.DB
+	auth    *auth.Service
+	setup   *setup.Service
+	license *stubLicense
 }
+
+// stubLicense stands in for license.Service in the wizard tests.
+type stubLicense struct{ installed bool }
+
+func (s *stubLicense) Installed(context.Context) (bool, error) { return s.installed, nil }
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
@@ -61,8 +67,9 @@ func newEnv(t *testing.T) *env {
 	h := auth.NewHasher(fastParams, 4)
 	log := audit.New(clk)
 	a := auth.NewService(auth.Config{Pool: d.App, Keyring: kr, Audit: log, Clock: clk, Hasher: h, RecoveryHasher: h})
-	s := setup.New(setup.Config{Pool: d.App, Auth: a, Keyring: kr, Audit: log, Clock: clk, Hasher: h, BackupKDF: fastKDF})
-	return &env{ctx: context.Background(), clk: clk, db: d, auth: a, setup: s}
+	lic := &stubLicense{}
+	s := setup.New(setup.Config{Pool: d.App, Auth: a, Keyring: kr, Audit: log, Clock: clk, Hasher: h, BackupKDF: fastKDF, License: lic})
+	return &env{ctx: context.Background(), clk: clk, db: d, auth: a, setup: s, license: lic}
 }
 
 func (e *env) session(t *testing.T) string {
@@ -270,9 +277,18 @@ func TestRecoveryPassphraseAndCompletion(t *testing.T) {
 	assert.ErrorIs(t, err, secrets.ErrDecrypt)
 	require.ErrorIs(t, e.setup.SetRecoveryPassphrase(e.ctx, p, ip1, passphrase, passphrase), setup.ErrPassphraseAlreadySet)
 
-	st, err := e.setup.Complete(e.ctx, p, ip1)
+	_, err = e.setup.Complete(e.ctx, p, ip1)
+	require.ErrorIs(t, err, setup.ErrLicenseChoiceMissing, "the license step comes before Finish")
+	st, err := e.setup.ChooseEvaluation(e.ctx, p, ip1)
 	require.NoError(t, err)
-	assert.Equal(t, setup.Status{AdminExists: true, RecoveryPassphraseSet: true, Completed: true, DefaultLocale: "tr"}, st)
+	assert.True(t, st.LicenseChosen)
+	assert.False(t, st.Completed)
+	_, err = e.setup.ChooseEvaluation(e.ctx, p, ip1)
+	require.NoError(t, err, "choosing twice is harmless")
+
+	st, err = e.setup.Complete(e.ctx, p, ip1)
+	require.NoError(t, err)
+	assert.Equal(t, setup.Status{AdminExists: true, RecoveryPassphraseSet: true, LicenseChosen: true, Completed: true, DefaultLocale: "tr"}, st)
 	_, err = e.setup.Complete(e.ctx, p, ip1)
 	require.NoError(t, err, "completing twice is harmless")
 
@@ -285,7 +301,7 @@ func TestRecoveryPassphraseAndCompletion(t *testing.T) {
 		require.NoError(t, rows.Scan(&a))
 		actions = append(actions, a)
 	}
-	assert.Equal(t, []string{"setup.admin_created", "setup.recovery_passphrase_set", "setup.completed"}, actions)
+	assert.Equal(t, []string{"setup.admin_created", "setup.recovery_passphrase_set", "setup.evaluation_chosen", "setup.completed"}, actions)
 }
 
 func TestCodeLockoutGroupsIPv6By64(t *testing.T) {
@@ -454,6 +470,8 @@ func TestPassphraseAndCompleteRequireSettingsManage(t *testing.T) {
 	for name, p := range map[string]auth.Principal{"operator": operator, "api token": token} {
 		_, err = e.setup.Complete(e.ctx, p, ip1)
 		assert.ErrorIs(t, err, setup.ErrForbidden, name)
+		_, err = e.setup.ChooseEvaluation(e.ctx, p, ip1)
+		assert.ErrorIs(t, err, setup.ErrForbidden, name)
 	}
 
 	e.clk.Advance(auth.StepUpWindow + time.Second)
@@ -463,9 +481,58 @@ func TestPassphraseAndCompleteRequireSettingsManage(t *testing.T) {
 		"an administrator without a recent step-up is refused before anything else is checked")
 	_, err = e.setup.Complete(e.ctx, stale, ip1)
 	assert.ErrorIs(t, err, setup.ErrForbidden)
+	_, err = e.setup.ChooseEvaluation(e.ctx, stale, ip1)
+	assert.ErrorIs(t, err, setup.ErrForbidden)
+	assert.Empty(t, e.settingRaw(t, "setup.license_choice"))
 	assert.Empty(t, e.settingRaw(t, "setup.completed_at"), "the wizard is not completed")
 
 	var completed int
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT count(*) FROM audit_log WHERE action = 'setup.completed'").Scan(&completed))
 	assert.Zero(t, completed)
+}
+
+// An uploaded license completes the license step without the evaluation choice.
+func TestAnInstalledLicenseCompletesTheLicenseStep(t *testing.T) {
+	e := newEnv(t)
+	res, _ := e.createAdmin(t)
+	p, err := e.auth.Authenticate(e.ctx, res.Token)
+	require.NoError(t, err)
+	require.NoError(t, e.setup.SetRecoveryPassphrase(e.ctx, p, ip1, passphrase, passphrase))
+	st, err := e.setup.Status(e.ctx)
+	require.NoError(t, err)
+	assert.False(t, st.LicenseChosen)
+
+	e.license.installed = true
+	st, err = e.setup.Status(e.ctx)
+	require.NoError(t, err)
+	assert.True(t, st.LicenseChosen)
+	st, err = e.setup.Complete(e.ctx, p, ip1)
+	require.NoError(t, err)
+	assert.True(t, st.Completed)
+}
+
+func TestEvaluationChoiceNeedsThePassphraseFirst(t *testing.T) {
+	e := newEnv(t)
+	res, _ := e.createAdmin(t)
+	p, err := e.auth.Authenticate(e.ctx, res.Token)
+	require.NoError(t, err)
+	_, err = e.setup.ChooseEvaluation(e.ctx, p, ip1)
+	require.ErrorIs(t, err, setup.ErrIncomplete)
+	assert.Empty(t, e.settingRaw(t, "setup.license_choice"))
+}
+
+// An install that finished setup (also under Phase 1, before the license step existed)
+// stays finished: completing again answers as before, without asking for a license choice.
+func TestCompletingAFinishedInstallNeedsNoLicenseChoice(t *testing.T) {
+	e := newEnv(t)
+	res, _ := e.createAdmin(t)
+	p, err := e.auth.Authenticate(e.ctx, res.Token)
+	require.NoError(t, err)
+	require.NoError(t, e.setup.SetRecoveryPassphrase(e.ctx, p, ip1, passphrase, passphrase))
+	_, err = e.db.Owner.Exec(e.ctx, `INSERT INTO settings (key, value, updated_at) VALUES ('setup.completed_at', '"2026-09-01T00:00:00Z"', now())`)
+	require.NoError(t, err)
+
+	st, err := e.setup.Complete(e.ctx, p, ip1)
+	require.NoError(t, err, "no new 409 for a finished install")
+	assert.True(t, st.Completed)
 }

@@ -22,6 +22,7 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | POST | `/api/v1/setup/admin/enrollment` | `setup` | wizard | no | no | no | no | no | yes |
 | POST | `/api/v1/setup/admin` | `setup` | wizard | no | no | no | no | no | yes |
 | POST | `/api/v1/setup/recovery-passphrase` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/setup/evaluation` | `settings.manage` | no | yes | no | no | no | yes | yes |
 | POST | `/api/v1/setup/complete` | `settings.manage` | no | yes | no | no | no | yes | yes |
 | POST | `/api/v1/auth/login` | `public` | yes | yes | yes | yes | yes | no | yes |
 | POST | `/api/v1/auth/mfa/enroll` | `mfa_pending` | pending | no | no | no | no | no | yes |

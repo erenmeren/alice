@@ -174,10 +174,23 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/setup/evaluation:
+    post:
+      operationId: chooseEvaluation
+      summary: Complete the wizard's license step with the 30-day evaluation (it runs from the installation timestamp)
+      x-permission: settings.manage
+      responses:
+        "200":
+          description: Setup status after the choice
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SetupStatus" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/setup/complete:
     post:
       operationId: completeSetup
-      summary: Finish the wizard (needs the recovery passphrase)
+      summary: Finish the wizard (needs the recovery passphrase and a license choice)
       x-permission: settings.manage
       responses:
         "200":
@@ -685,10 +698,11 @@ components:
         csrf_token: { type: string, description: Send as X-CSRF-Token on state-changing requests }
     SetupStatus:
       type: object
-      required: [admin_exists, recovery_passphrase_set, completed, default_locale]
+      required: [admin_exists, recovery_passphrase_set, license_chosen, completed, default_locale]
       properties:
         admin_exists: { type: boolean }
         recovery_passphrase_set: { type: boolean }
+        license_chosen: { type: boolean, description: A license was uploaded or the evaluation was chosen }
         completed: { type: boolean }
         default_locale: { type: string, examples: [tr] }
     MFAEnrollment:

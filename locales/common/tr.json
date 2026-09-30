@@ -172,6 +172,11 @@
         "title": "Kurulum henüz tamamlanmadı.",
         "cause": "Kurtarma parolası henüz seçilmedi.",
         "action": "Bir kurtarma parolası seçip kurulumu tamamlayın."
+      },
+      "license_choice_missing": {
+        "title": "Kurulum henüz tamamlanmadı.",
+        "cause": "Lisans yüklenmedi ve deneme süresi başlatılmadı.",
+        "action": "Bir lisans dosyası yükleyin veya 30 günlük denemeyi başlatın, ardından kurulumu tamamlayın."
       }
     },
     "license": {

@@ -172,6 +172,11 @@
         "title": "Setup is not finished yet.",
         "cause": "The recovery passphrase has not been chosen.",
         "action": "Choose a recovery passphrase, then finish setup."
+      },
+      "license_choice_missing": {
+        "title": "Setup is not finished yet.",
+        "cause": "No license was uploaded and the evaluation was not started.",
+        "action": "Upload a license file or choose Start 30-day evaluation, then finish setup."
       }
     },
     "license": {

@@ -207,6 +207,7 @@ type fakeSetup struct {
 	CreateAdminFn           func(ctx context.Context, token, code string, m auth.Meta) (auth.SessionResult, error)
 	SetRecoveryPassphraseFn func(ctx context.Context, p auth.Principal, m auth.Meta, passphrase, confirm string) error
 	CompleteFn              func(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error)
+	ChooseEvaluationFn      func(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error)
 }
 
 func (f *fakeSetup) Status(ctx context.Context) (setup.Status, error) {
@@ -264,6 +265,13 @@ func (f *fakeSetup) SetRecoveryPassphrase(ctx context.Context, p auth.Principal,
 func (f *fakeSetup) Complete(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error) {
 	if f.CompleteFn != nil {
 		return f.CompleteFn(ctx, p, m)
+	}
+	return setup.Status{}, errNotConfigured
+}
+
+func (f *fakeSetup) ChooseEvaluation(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error) {
+	if f.ChooseEvaluationFn != nil {
+		return f.ChooseEvaluationFn(ctx, p, m)
 	}
 	return setup.Status{}, errNotConfigured
 }

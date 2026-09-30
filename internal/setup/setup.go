@@ -30,6 +30,8 @@ var (
 	ErrPassphraseMismatch   = errors.New("setup: recovery passphrases differ")
 	ErrPassphraseAlreadySet = errors.New("setup: recovery passphrase already set")
 	ErrIncomplete           = errors.New("setup: recovery passphrase not set yet")
+	// ErrLicenseChoiceMissing means Finish was asked before the license step was done.
+	ErrLicenseChoiceMissing = errors.New("setup: choose a license option first")
 	// ErrForbidden means the caller is not an administrator's browser session inside its
 	// step-up window (permission settings.manage).
 	ErrForbidden = errors.New("setup: not allowed")
@@ -57,7 +59,14 @@ const (
 	keyLocale      = "locale.default"
 	keyBackupKey   = "backup.key"
 	keyCompletedAt = "setup.completed_at"
+
+	keyLicenseChoice = "setup.license_choice"
 )
+
+// LicenseState tells the wizard whether a license file was installed (license.Service).
+type LicenseState interface {
+	Installed(ctx context.Context) (bool, error)
+}
 
 // Config holds the service dependencies.
 type Config struct {
@@ -68,6 +77,7 @@ type Config struct {
 	Clock     clock.Clock
 	Hasher    *auth.Hasher
 	BackupKDF secrets.KDFParams // zero value means secrets.BackupKDF
+	License   LicenseState      // nil: no license can be installed; the evaluation choice still completes the step
 }
 
 // Service is the setup wizard backend.
@@ -79,6 +89,7 @@ type Service struct {
 	clock   clock.Clock
 	hasher  *auth.Hasher
 	kdf     secrets.KDFParams
+	license LicenseState
 	lockout *ratelimit.Lockout
 
 	// codeMu makes "is this address locked, compare the code, count the failure" one step,
@@ -93,7 +104,7 @@ func New(c Config) *Service {
 		kdf = secrets.BackupKDF
 	}
 	return &Service{
-		pool: c.Pool, auth: c.Auth, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, hasher: c.Hasher, kdf: kdf,
+		pool: c.Pool, auth: c.Auth, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, hasher: c.Hasher, kdf: kdf, license: c.License,
 		lockout: ratelimit.NewLockout(c.Clock, MaxCodeFailures, CodeLockDuration, CodeLockDuration),
 	}
 }
@@ -102,6 +113,7 @@ func New(c Config) *Service {
 type Status struct {
 	AdminExists           bool
 	RecoveryPassphraseSet bool
+	LicenseChosen         bool
 	Completed             bool
 	DefaultLocale         string
 }
@@ -127,6 +139,9 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	if st.RecoveryPassphraseSet, err = hasSetting(ctx, s.pool, keyBackupKey); err != nil {
+		return Status{}, err
+	}
+	if st.LicenseChosen, err = s.licenseChosen(ctx, s.pool); err != nil {
 		return Status{}, err
 	}
 	if st.Completed, err = hasSetting(ctx, s.pool, keyCompletedAt); err != nil {

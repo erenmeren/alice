@@ -367,6 +367,8 @@ func (s *stack) setupAdmin(a *account, passphrase string, afterEnroll func()) *c
 	requireStatus(t, c.do(http.MethodPost, "/api/v1/setup/recovery-passphrase", map[string]string{
 		"passphrase": passphrase, "passphrase_confirm": passphrase,
 	}), http.StatusNoContent)
+	requireError(t, c.do(http.MethodPost, "/api/v1/setup/complete", nil), http.StatusConflict, "ALC-SET-0009")
+	requireStatus(t, c.do(http.MethodPost, "/api/v1/setup/evaluation", nil), http.StatusOK)
 	requireStatus(t, c.do(http.MethodPost, "/api/v1/setup/complete", nil), http.StatusOK)
 	return c
 }

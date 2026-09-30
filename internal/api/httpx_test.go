@@ -129,6 +129,7 @@ func TestFailMapsDomainErrors(t *testing.T) {
 		{setup.ErrCodeInvalid, 401, "ALC-SET-0001"},
 		{setup.ErrSessionInvalid, 401, "ALC-SET-0003"},
 		{setup.ErrIncomplete, 409, "ALC-SET-0008"},
+		{setup.ErrLicenseChoiceMissing, 409, "ALC-SET-0009"},
 		{setup.ErrForbidden, 403, "ALC-AUTH-0002"},
 		{fmt.Errorf("login: %w", auth.ErrTryAgain), 503, "ALC-AUTH-0012"},
 	}

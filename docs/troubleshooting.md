@@ -265,6 +265,15 @@ details once more. (The wizard has no "Back" button yet.)
 
 **What to do.** Choose the recovery passphrase in the wizard, then finish setup.
 
+## ALC-SET-0009: License step not done
+
+**Meaning.** Setup cannot be finished because the license step is open (HTTP 409).
+
+**Likely cause.** Neither a license file was uploaded nor **Start 30-day evaluation** was chosen.
+
+**What to do.** On the wizard's license step, upload the license file from your vendor or start the evaluation, then
+choose **Go to the dashboard**. The evaluation has been running since Alice was first started either way.
+
 ## ALC-LIC-0001: Not available while the license is expired
 
 **Meaning.** The action changes a managed server, key or certificate, and the license or the 30-day evaluation has

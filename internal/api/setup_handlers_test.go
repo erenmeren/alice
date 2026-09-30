@@ -65,7 +65,7 @@ func TestSetupStatus(t *testing.T) {
 	}
 	rec := call(NewHandler(d), http.MethodGet, "/api/v1/setup/status", "", "")
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.JSONEq(t, `{"admin_exists":true,"recovery_passphrase_set":false,"completed":false,"default_locale":"tr"}`, rec.Body.String())
+	assert.JSONEq(t, `{"admin_exists":true,"recovery_passphrase_set":false,"license_chosen":false,"completed":false,"default_locale":"tr"}`, rec.Body.String())
 }
 
 func TestSetupSessionSetsStrictCookieAndReturnsCSRFToken(t *testing.T) {
@@ -224,11 +224,11 @@ func TestSetupRecoveryPassphrase(t *testing.T) {
 func TestSetupComplete(t *testing.T) {
 	d := testDeps(t, nil)
 	d.Setup.(*fakeSetup).CompleteFn = func(context.Context, auth.Principal, auth.Meta) (setup.Status, error) {
-		return setup.Status{AdminExists: true, RecoveryPassphraseSet: true, Completed: true, DefaultLocale: "en"}, nil
+		return setup.Status{AdminExists: true, RecoveryPassphraseSet: true, LicenseChosen: true, Completed: true, DefaultLocale: "en"}, nil
 	}
 	rec := call(NewHandler(d), http.MethodPost, "/api/v1/setup/complete", "admin-stepup", "")
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.JSONEq(t, `{"admin_exists":true,"recovery_passphrase_set":true,"completed":true,"default_locale":"en"}`, rec.Body.String())
+	assert.JSONEq(t, `{"admin_exists":true,"recovery_passphrase_set":true,"license_chosen":true,"completed":true,"default_locale":"en"}`, rec.Body.String())
 
 	d.Setup.(*fakeSetup).CompleteFn = func(context.Context, auth.Principal, auth.Meta) (setup.Status, error) {
 		return setup.Status{}, setup.ErrIncomplete
@@ -278,4 +278,27 @@ func TestSetupCreateAdminAfterSetupIsNotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Equal(t, "ALC-SYS-0001", decodeErr(t, rec).Error.Code)
 	assert.Nil(t, cookieNamed(rec, sessionCookie))
+}
+
+func TestSetupEvaluation(t *testing.T) {
+	d := testDeps(t, nil)
+	var got auth.Principal
+	d.Setup.(*fakeSetup).ChooseEvaluationFn = func(_ context.Context, p auth.Principal, _ auth.Meta) (setup.Status, error) {
+		got = p
+		return setup.Status{AdminExists: true, RecoveryPassphraseSet: true, LicenseChosen: true, DefaultLocale: "en"}, nil
+	}
+	rec := call(NewHandler(d), http.MethodPost, "/api/v1/setup/evaluation", "admin-stepup", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"admin_exists":true,"recovery_passphrase_set":true,"license_chosen":true,"completed":false,"default_locale":"en"}`, rec.Body.String())
+	assert.Equal(t, "admin", got.Username)
+
+	rec = call(NewHandler(d), http.MethodPost, "/api/v1/setup/evaluation", "admin", "")
+	assert.Equal(t, "ALC-AUTH-0003", decodeErr(t, rec).Error.Code, "settings.manage needs step-up")
+
+	d.Setup.(*fakeSetup).CompleteFn = func(context.Context, auth.Principal, auth.Meta) (setup.Status, error) {
+		return setup.Status{}, setup.ErrLicenseChoiceMissing
+	}
+	rec = call(NewHandler(d), http.MethodPost, "/api/v1/setup/complete", "admin-stepup", "")
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Equal(t, "ALC-SET-0009", decodeErr(t, rec).Error.Code)
 }

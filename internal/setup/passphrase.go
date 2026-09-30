@@ -79,13 +79,19 @@ func (s *Service) SetRecoveryPassphrase(ctx context.Context, p auth.Principal, m
 	})
 }
 
-// Complete finishes the wizard. It requires the recovery passphrase and is idempotent.
+// Complete finishes the wizard. It requires the recovery passphrase and a license choice and is idempotent.
 func (s *Service) Complete(ctx context.Context, p auth.Principal, m auth.Meta) (Status, error) {
 	if err := s.authorize(p); err != nil {
 		return Status{}, err
 	}
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", passphraseLock); err != nil {
+			return err
+		}
+		// An install that already finished (also under Phase 1, before the license step)
+		// stays finished and answers as before.
+		done, err := hasSetting(ctx, tx, keyCompletedAt)
+		if err != nil || done {
 			return err
 		}
 		set, err := hasSetting(ctx, tx, keyBackupKey)
@@ -95,9 +101,12 @@ func (s *Service) Complete(ctx context.Context, p auth.Principal, m auth.Meta) (
 		if !set {
 			return ErrIncomplete
 		}
-		done, err := hasSetting(ctx, tx, keyCompletedAt)
-		if err != nil || done {
+		chosen, err := s.licenseChosen(ctx, tx)
+		if err != nil {
 			return err
+		}
+		if !chosen {
+			return ErrLicenseChoiceMissing
 		}
 		now := s.clock.Now().UTC()
 		if err := settings.Set(ctx, tx, keyCompletedAt, now.Format(time.RFC3339), now); err != nil {

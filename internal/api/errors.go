@@ -48,14 +48,15 @@ var (
 	ErrLastAdmin            = ErrorCode{Code: "ALC-USR-0002", Reason: "user.last_admin", Status: http.StatusConflict}
 	ErrTokenScopeNotAllowed = ErrorCode{Code: "ALC-TOK-0001", Reason: "token.scope_not_allowed", Status: http.StatusUnprocessableEntity}
 
-	ErrSetupCodeInvalid       = ErrorCode{Code: "ALC-SET-0001", Reason: "setup.code_invalid", Status: http.StatusUnauthorized}
-	ErrSetupLocked            = ErrorCode{Code: "ALC-SET-0002", Reason: "setup.locked", Status: http.StatusTooManyRequests, Retryable: true}
-	ErrSetupSessionExpired    = ErrorCode{Code: "ALC-SET-0003", Reason: "setup.session_expired", Status: http.StatusUnauthorized}
-	ErrSetupEnrollmentMissing = ErrorCode{Code: "ALC-SET-0004", Reason: "setup.enrollment_missing", Status: http.StatusConflict}
-	ErrPassphraseTooShort     = ErrorCode{Code: "ALC-SET-0005", Reason: "setup.passphrase_too_short", Status: http.StatusUnprocessableEntity}
-	ErrPassphraseMismatch     = ErrorCode{Code: "ALC-SET-0006", Reason: "setup.passphrase_mismatch", Status: http.StatusUnprocessableEntity}
-	ErrPassphraseAlreadySet   = ErrorCode{Code: "ALC-SET-0007", Reason: "setup.passphrase_already_set", Status: http.StatusConflict}
-	ErrSetupIncomplete        = ErrorCode{Code: "ALC-SET-0008", Reason: "setup.incomplete", Status: http.StatusConflict}
+	ErrSetupCodeInvalid          = ErrorCode{Code: "ALC-SET-0001", Reason: "setup.code_invalid", Status: http.StatusUnauthorized}
+	ErrSetupLocked               = ErrorCode{Code: "ALC-SET-0002", Reason: "setup.locked", Status: http.StatusTooManyRequests, Retryable: true}
+	ErrSetupSessionExpired       = ErrorCode{Code: "ALC-SET-0003", Reason: "setup.session_expired", Status: http.StatusUnauthorized}
+	ErrSetupEnrollmentMissing    = ErrorCode{Code: "ALC-SET-0004", Reason: "setup.enrollment_missing", Status: http.StatusConflict}
+	ErrPassphraseTooShort        = ErrorCode{Code: "ALC-SET-0005", Reason: "setup.passphrase_too_short", Status: http.StatusUnprocessableEntity}
+	ErrPassphraseMismatch        = ErrorCode{Code: "ALC-SET-0006", Reason: "setup.passphrase_mismatch", Status: http.StatusUnprocessableEntity}
+	ErrPassphraseAlreadySet      = ErrorCode{Code: "ALC-SET-0007", Reason: "setup.passphrase_already_set", Status: http.StatusConflict}
+	ErrSetupIncomplete           = ErrorCode{Code: "ALC-SET-0008", Reason: "setup.incomplete", Status: http.StatusConflict}
+	ErrSetupLicenseChoiceMissing = ErrorCode{Code: "ALC-SET-0009", Reason: "setup.license_choice_missing", Status: http.StatusConflict}
 
 	ErrLicenseLocked = ErrorCode{Code: "ALC-LIC-0001", Reason: "license.locked", Status: http.StatusForbidden}
 )
@@ -68,7 +69,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrMFAAlreadyEnrolled, ErrPasswordTooShort, ErrPasswordTooLong, ErrPasswordBreached, ErrCurrentPasswordInvalid, ErrTryAgain,
 		ErrUsernameTaken, ErrLastAdmin, ErrTokenScopeNotAllowed,
 		ErrSetupCodeInvalid, ErrSetupLocked, ErrSetupSessionExpired, ErrSetupEnrollmentMissing,
-		ErrPassphraseTooShort, ErrPassphraseMismatch, ErrPassphraseAlreadySet, ErrSetupIncomplete,
+		ErrPassphraseTooShort, ErrPassphraseMismatch, ErrPassphraseAlreadySet, ErrSetupIncomplete, ErrSetupLicenseChoiceMissing,
 		ErrLicenseLocked,
 	}
 }
@@ -100,6 +101,7 @@ var errorMap = []struct {
 	{setup.ErrPassphraseMismatch, ErrPassphraseMismatch, nil},
 	{setup.ErrPassphraseAlreadySet, ErrPassphraseAlreadySet, nil},
 	{setup.ErrIncomplete, ErrSetupIncomplete, nil},
+	{setup.ErrLicenseChoiceMissing, ErrSetupLicenseChoiceMissing, nil},
 	{setup.ErrForbidden, ErrForbidden, nil},
 }
 

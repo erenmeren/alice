@@ -260,7 +260,7 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.SessionStepUp
 		case under(p, "/api/v1/tokens"):
 			want = rbac.Session
-		case under(p, "/api/v1/settings"), p == "/api/v1/setup/recovery-passphrase", p == "/api/v1/setup/complete":
+		case under(p, "/api/v1/settings"), p == "/api/v1/setup/recovery-passphrase", p == "/api/v1/setup/complete", p == "/api/v1/setup/evaluation":
 			want = rbac.SettingsManage
 		case under(p, "/api/v1/audit"):
 			want = rbac.AuditRead
@@ -287,6 +287,7 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 	for _, k := range []string{
 		"POST /api/v1/setup/recovery-passphrase",
 		"POST /api/v1/setup/complete",
+		"POST /api/v1/setup/evaluation",
 		"POST /api/v1/auth/recovery-codes",
 		"GET /api/v1/users",
 		"POST /api/v1/users",
@@ -315,6 +316,7 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodPut, pattern: "/api/v1/settings/locale", perm: rbac.Session},
 		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", perm: rbac.Session},
 		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.Session},
+		{method: http.MethodPost, pattern: "/api/v1/setup/evaluation", perm: rbac.Session},
 		{method: http.MethodGet, pattern: "/api/v1/audit/export", perm: rbac.Read},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))
@@ -325,6 +327,7 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodGet, pattern: "/api/v1/tokens", perm: rbac.Session},
 		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", perm: rbac.SettingsManage},
 		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.SettingsManage},
+		{method: http.MethodPost, pattern: "/api/v1/setup/evaluation", perm: rbac.SettingsManage},
 		{method: http.MethodPost, pattern: "/api/v1/audit/verify", perm: rbac.AuditRead},
 		{method: http.MethodGet, pattern: "/api/v1/usersettings", perm: rbac.Session},
 	}

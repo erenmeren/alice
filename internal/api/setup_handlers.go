@@ -11,7 +11,7 @@ import (
 
 // setupRoutes serve the first-run wizard (spec §18.5). Until an administrator
 // exists only the setup session can use them; afterwards starting a session
-// answers 404 and the remaining steps (recovery passphrase, completion) need
+// answers 404 and the remaining steps (recovery passphrase, license choice, completion) need
 // the signed-in administrator with a fresh step-up: settings.manage, the same
 // check setup.Service repeats for both.
 func (s *server) setupRoutes() []route {
@@ -22,6 +22,7 @@ func (s *server) setupRoutes() []route {
 		{method: http.MethodPost, pattern: "/api/v1/setup/admin/enrollment", perm: rbac.Setup, lic: license.ClassAlways, handler: s.setupEnrollment},
 		{method: http.MethodPost, pattern: "/api/v1/setup/admin", perm: rbac.Setup, limit: limitMFA, lic: license.ClassAlways, handler: s.setupCreateAdmin},
 		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupRecoveryPassphrase},
+		{method: http.MethodPost, pattern: "/api/v1/setup/evaluation", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupEvaluation},
 		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupComplete},
 	}
 }
@@ -122,6 +123,15 @@ func (s *server) setupRecoveryPassphrase(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	noContent(w)
+}
+
+func (s *server) setupEvaluation(w http.ResponseWriter, r *http.Request) {
+	st, err := s.deps.Setup.ChooseEvaluation(r.Context(), principalFrom(r.Context()), s.meta(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, setupStatusJSON(st))
 }
 
 func (s *server) setupComplete(w http.ResponseWriter, r *http.Request) {

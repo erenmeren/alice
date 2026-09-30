@@ -66,6 +66,7 @@ type SetupService interface {
 	BeginAdminEnrollment(ctx context.Context, token string, in setup.AdminInput) (auth.TOTPEnrollment, error)
 	CreateAdmin(ctx context.Context, token, code string, m auth.Meta) (auth.SessionResult, error)
 	SetRecoveryPassphrase(ctx context.Context, p auth.Principal, m auth.Meta, passphrase, confirm string) error
+	ChooseEvaluation(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error)
 	Complete(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error)
 }
 
