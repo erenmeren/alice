@@ -70,7 +70,35 @@
   },
   "login": {
     "title": "Alice'e giriş yapın",
-    "sessionEnded": "Oturumunuz sona erdi. Lütfen yeniden giriş yapın."
+    "sessionEnded": "Oturumunuz sona erdi. Lütfen yeniden giriş yapın.",
+    "username": "Kullanıcı adı",
+    "password": "Parola",
+    "signIn": "Giriş yap",
+    "mfaTitle": "Doğrulama kodunuzu girin",
+    "useRecovery": "Kurtarma kodu kullan",
+    "useApp": "Uygulamadaki kodu kullan",
+    "recoveryCode": "Kurtarma kodu"
+  },
+  "account": {
+    "title": "Hesabım",
+    "summary": "Oturum açan: {{username}} ({{role}})",
+    "languageHelp": "Sayfanın üstündeki dil seçiciyi kullanın. Seçiminiz hesabınıza kaydedilir.",
+    "password": {
+      "title": "Parolayı değiştir",
+      "current": "Mevcut parola",
+      "new": "Yeni parola",
+      "newHelp": "En az 12 karakter.",
+      "repeat": "Yeni parolayı tekrar girin",
+      "submit": "Parolayı değiştir",
+      "mismatch": "Girdiğiniz iki yeni parola farklı. Aynı parolayı iki kez yazın.",
+      "changed": "Parolanız değiştirildi. Diğer oturumlarınız kapatıldı."
+    },
+    "recovery": {
+      "title": "Kurtarma kodları",
+      "help": "Kodlarınızın çoğunu kullandıysanız veya birinin gördüğünü düşünüyorsanız yeni bir set oluşturun. Eski kodlar çalışmaz hale gelir.",
+      "create": "Yeni kurtarma kodları oluştur",
+      "active": "Yeni kurtarma kodlarınız etkin."
+    }
   },
   "setup": {
     "title": "Alice kurulumu",

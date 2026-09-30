@@ -6,6 +6,8 @@ export function safeReturnPath(from: unknown): string {
   // eslint-disable-next-line no-control-regex -- control characters are never valid in a return path
   const unsafe = /[\\\u0000-\u001f\u007f]/.test(path) || path.includes('://');
   if (!path.startsWith('/') || path.startsWith('//') || unsafe) return '/';
+  // The sign-in page itself is never a destination: it would loop.
+  if (/^\/login\/?(?:[?#]|$)/.test(path)) return '/';
   return path;
 }
 

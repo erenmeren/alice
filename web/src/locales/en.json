@@ -70,7 +70,35 @@
   },
   "login": {
     "title": "Sign in to Alice",
-    "sessionEnded": "Your session ended. Please sign in again."
+    "sessionEnded": "Your session ended. Please sign in again.",
+    "username": "Username",
+    "password": "Password",
+    "signIn": "Sign in",
+    "mfaTitle": "Enter your verification code",
+    "useRecovery": "Use a recovery code",
+    "useApp": "Use the code from your app",
+    "recoveryCode": "Recovery code"
+  },
+  "account": {
+    "title": "My account",
+    "summary": "Signed in as {{username}} ({{role}})",
+    "languageHelp": "Use the language switcher at the top of the page. Your choice is saved on your account.",
+    "password": {
+      "title": "Change password",
+      "current": "Current password",
+      "new": "New password",
+      "newHelp": "At least 12 characters.",
+      "repeat": "Repeat new password",
+      "submit": "Change password",
+      "mismatch": "The two new passwords are different. Type the same password twice.",
+      "changed": "Your password was changed. Your other sessions were signed out."
+    },
+    "recovery": {
+      "title": "Recovery codes",
+      "help": "Create a new set if you used most of your codes or think someone saw them. The old codes stop working.",
+      "create": "Create new recovery codes",
+      "active": "Your new recovery codes are active."
+    }
   },
   "setup": {
     "title": "Set up Alice",

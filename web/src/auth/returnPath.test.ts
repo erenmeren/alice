@@ -17,6 +17,10 @@ describe('safeReturnPath', () => {
     'users',
     '',
     '/a\nb',
+    '/login',
+    '/login?ended=1',
+    '/login#x',
+    '/login/',
   ])('falls back to / for %j', (bad) => {
     expect(safeReturnPath(bad)).toBe('/');
   });

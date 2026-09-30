@@ -228,9 +228,15 @@ describe('setup wizard', () => {
 
 describe('setup wizard edge cases', () => {
   it('sends the user to sign-in when the server says setup is over (404)', async () => {
+    // Once the server answers 404 setup is over, so the status the page re-reads says installed.
+    let over = false;
     server.use(
-      ...sessionHandlers(null, freshStatus),
-      http.post('/api/v1/setup/session', () => errorResponse(404, 'ALC-GEN-0404', 'not_found')),
+      http.get('/api/v1/setup/status', () => HttpResponse.json(over ? installedStatus : freshStatus)),
+      http.get('/api/v1/auth/session', () => errorResponse(401, 'ALC-AUTH-0001', 'auth.unauthenticated')),
+      http.post('/api/v1/setup/session', () => {
+        over = true;
+        return errorResponse(404, 'ALC-GEN-0404', 'not_found');
+      }),
     );
     const { router } = await renderRoute('/setup');
     await enterCode();

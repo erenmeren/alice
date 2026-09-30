@@ -3,6 +3,7 @@ import { AuthProvider } from './auth/AuthProvider';
 import { RequireAuth } from './auth/guards';
 import { StepUpProvider } from './components/StepUpProvider';
 import { AppLayout } from './layout/AppLayout';
+import { AccountPage } from './pages/AccountPage';
 import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
@@ -33,7 +34,10 @@ export function routes(): RouteObject[] {
               <AppLayout />
             </RequireAuth>
           ),
-          children: [{ index: true, element: <HomePage /> }],
+          children: [
+            { index: true, element: <HomePage /> },
+            { path: 'account', element: <AccountPage /> },
+          ],
         },
         { path: '*', element: <NotFoundPage /> },
       ],
