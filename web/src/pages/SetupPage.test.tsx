@@ -173,6 +173,9 @@ describe('setup wizard', () => {
     await enterCode();
     await userEvent.click(await screen.findByRole('button', { name: 'Continue' }));
     await screen.findByRole('heading', { name: 'Create the administrator account' });
+    expect(screen.getByLabelText('Username')).toHaveAccessibleDescription(
+      '2 to 64 characters: English letters (A–Z), digits, dot, underscore or hyphen. Start with a letter or digit.',
+    );
     await userEvent.type(screen.getByLabelText('Password'), 'correct horse battery');
     await userEvent.type(screen.getByLabelText('Repeat password'), 'correct horse batterx');
     await userEvent.click(screen.getByRole('button', { name: 'Continue' }));

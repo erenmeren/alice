@@ -180,7 +180,14 @@ function CreateUserModal({ onClose }: { onClose: () => void }) {
     <AppModal opened onClose={onClose} title={t('users.add')}>
       <form onSubmit={submit}>
         <Stack gap="sm">
-          <TextInput label={t('users.fields.username')} value={username} onChange={(e) => setUsername(e.currentTarget.value)} required autoComplete="off" />
+          <TextInput
+            label={t('users.fields.username')}
+            description={t('ui.usernameHelp')}
+            value={username}
+            onChange={(e) => setUsername(e.currentTarget.value)}
+            required
+            autoComplete="off"
+          />
           <TextInput label={t('users.fields.name')} value={displayName} onChange={(e) => setDisplayName(e.currentTarget.value)} required />
           <TextInput label={t('users.fields.email')} type="email" value={email} onChange={(e) => setEmail(e.currentTarget.value)} />
           <RoleSelect value={role} onChange={setRole} />

@@ -35,6 +35,7 @@
     "cancel": "Cancel",
     "close": "Close",
     "codeLabel": "6-digit code",
+    "usernameHelp": "2 to 64 characters: English letters (A–Z), digits, dot, underscore or hyphen. Start with a letter or digit.",
     "stepUp": {
       "title": "Confirm it's you",
       "help": "For your security, enter the current code from your authenticator app.",
@@ -295,6 +296,7 @@
       "user_mfa_reset": "Two-factor sign-in reset",
       "user_password_reset": "Password set by an administrator",
       "user_sessions_revoked": "User signed out everywhere",
+      "user_unlocked": "Sign-in block lifted",
       "token_created": "API token created",
       "token_revoked": "API token revoked",
       "audit_verified": "Audit log integrity checked",

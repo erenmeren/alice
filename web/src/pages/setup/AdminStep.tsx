@@ -47,6 +47,7 @@ export function AdminStep({ onEnrolled, onGone }: { onEnrolled: (e: MfaEnrollmen
         )}
         <TextInput
           label={t('setup.admin.username')}
+          description={t('ui.usernameHelp')}
           value={username}
           onChange={(e) => setUsername(e.currentTarget.value)}
           autoComplete="username"

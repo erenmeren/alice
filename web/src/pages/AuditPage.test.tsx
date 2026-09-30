@@ -46,7 +46,10 @@ describe('AuditPage', () => {
         const cursor = new URL(request.url).searchParams.get('cursor');
         cursors.push(cursor);
         if (!cursor) {
-          return HttpResponse.json({ items: [entry(3, 'user.created'), entry(2, 'custom.future_action', 'denied')], next_cursor: '2' });
+          return HttpResponse.json({
+            items: [entry(4, 'user.unlocked'), entry(3, 'user.created'), entry(2, 'custom.future_action', 'denied')],
+            next_cursor: '2',
+          });
         }
         return HttpResponse.json({ items: [entry(1, 'setup.admin_created')], next_cursor: null });
       }),
@@ -54,6 +57,7 @@ describe('AuditPage', () => {
     await renderRoute('/audit');
     expect(await screen.findByRole('heading', { name: 'Audit log' })).toBeInTheDocument();
     expect(await screen.findByText('User created')).toBeInTheDocument();
+    expect(screen.getByText('Sign-in block lifted')).toBeInTheDocument();
     const raw = screen.getByText('custom.future_action').closest('tr')!;
     expect(within(raw).getByText('Denied')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Load more' }));

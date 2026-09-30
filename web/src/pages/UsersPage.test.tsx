@@ -69,6 +69,9 @@ describe('UsersPage', () => {
     await renderRoute('/users');
     await userEvent.click(await screen.findByRole('button', { name: 'Add user' }));
     const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByLabelText(/^Username/)).toHaveAccessibleDescription(
+      '2 to 64 characters: English letters (A–Z), digits, dot, underscore or hyphen. Start with a letter or digit.',
+    );
     await userEvent.type(within(dialog).getByLabelText(/^Username/), 'auditor1');
     await userEvent.type(within(dialog).getByLabelText(/^Full name/), 'Ayşe Denetçi');
     await userEvent.selectOptions(within(dialog).getByLabelText(/^Role/), 'auditor');

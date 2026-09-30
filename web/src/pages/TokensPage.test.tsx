@@ -91,4 +91,10 @@ describe('TokensPage', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Revoke token' }));
     await waitFor(() => expect(deleted).toBe(token.id));
   });
+
+  it('names the revoke button of each token in Turkish', async () => {
+    signedInAs(sessionFor('operator', 'tr'), [token]);
+    await renderRoute('/tokens', { languages: ['tr-TR'] });
+    expect(await screen.findByRole('button', { name: 'İptal et: backup script' })).toBeInTheDocument();
+  });
 });

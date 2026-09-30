@@ -28,7 +28,8 @@ export function RecoveryCodes({ codes, onContinue }: Props) {
     a.href = url;
     a.download = 'alice-recovery-codes.txt';
     a.click();
-    URL.revokeObjectURL(url);
+    // Some browsers read the blob only after click() returns, so release it on the next task.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   };
 
   return (
