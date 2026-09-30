@@ -158,3 +158,72 @@ func TestLockTimeoutGivesARetryableError(t *testing.T) {
 	assert.Less(t, time.Since(start), 2*time.Second)
 	assert.Equal(t, 0, e.failedLogins(t, "admin"), "an attempt that timed out is not counted")
 }
+
+// auditChainLockKey is audit.lockKey, the advisory lock that serializes audit appends.
+const auditChainLockKey int64 = 7160927315633811300
+
+// waitForBlockedAdvisoryLock waits until some session waits for an advisory lock.
+func (e *env) waitForBlockedAdvisoryLock(t *testing.T) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var n int
+		require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted").Scan(&n))
+		return n > 0
+	}, 5*time.Second, 5*time.Millisecond)
+}
+
+// TestLockTimeoutDoesNotCoverTheAuditChain: the lock timeout only bounds the wait for the
+// account lock. A wrong password that then waits longer than the timeout for the audit
+// chain is still counted and gets the ordinary error, so a slow chain is no oracle.
+func TestLockTimeoutDoesNotCoverTheAuditChain(t *testing.T) {
+	e := newEnv(t)
+	e.bootstrap(t)
+	auth.SetLockTimeout(e.svc, 100*time.Millisecond)
+	holder, err := e.db.Owner.Begin(e.ctx)
+	require.NoError(t, err)
+	defer func() { _ = holder.Rollback(e.ctx) }()
+	_, err = holder.Exec(e.ctx, "SELECT pg_advisory_xact_lock($1)", auditChainLockKey)
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.svc.Login(e.ctx, "admin", "definitely not it", meta)
+		done <- err
+	}()
+	e.waitForBlockedAdvisoryLock(t)
+	time.Sleep(300 * time.Millisecond) // well past the lock timeout
+	require.NoError(t, holder.Rollback(e.ctx))
+
+	require.ErrorIs(t, <-done, auth.ErrInvalidCredentials)
+	assert.Equal(t, 1, e.failedLogins(t, "admin"), "the evaluated guess is counted")
+}
+
+// TestLoginsForOneNameQueueWhetherOrNotItExists: every login first takes a per-name
+// advisory lock (case-insensitive), so guesses against an unknown name queue exactly
+// like guesses against a real account.
+func TestLoginsForOneNameQueueWhetherOrNotItExists(t *testing.T) {
+	e := newEnv(t)
+	e.bootstrap(t)
+	for _, c := range []struct{ name, typed string }{{"ghost", "Ghost"}, {"admin", "ADMIN"}} {
+		name := c.name
+		holder, err := e.db.Owner.Begin(e.ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = holder.Rollback(e.ctx) })
+		_, err = holder.Exec(e.ctx, "SELECT pg_advisory_xact_lock($1, hashtext(lower($2::text)))", auth.LoginNameLockNamespace, name)
+		require.NoError(t, err)
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := e.svc.Login(e.ctx, c.typed, "definitely not it", meta)
+			done <- err
+		}()
+		e.waitForBlockedAdvisoryLock(t) // the login waits for the name lock held above
+		select {
+		case err := <-done:
+			t.Fatalf("login for %q finished while its name lock was held: %v", name, err)
+		default:
+		}
+		require.NoError(t, holder.Rollback(e.ctx))
+		require.ErrorIs(t, <-done, auth.ErrInvalidCredentials, name)
+	}
+}

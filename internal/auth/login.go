@@ -64,6 +64,11 @@ func lockAccount(ctx context.Context, tx pgx.Tx, query string, arg any) (account
 	var a account
 	err := tx.QueryRow(ctx, query, arg).Scan(
 		&a.id, &a.name, &a.hash, &a.disabled, &a.lockedUntil, &a.enrolled)
+	if err == nil || errors.Is(err, pgx.ErrNoRows) {
+		if rerr := endLockWaitLimit(ctx, tx); rerr != nil {
+			return account{}, false, rerr
+		}
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return account{}, false, nil
 	}
@@ -84,6 +89,28 @@ func blockReason(a account, now time.Time) string {
 	default:
 		return ""
 	}
+}
+
+// endLockWaitLimit lifts the lock_timeout set by credentialTx once the account lock is
+// held. The timeout only bounds waiting for the account; later waits (the audit chain
+// lock above all) must not abort a transaction that has already evaluated a credential,
+// or a guess would be checked but not counted, and its outcome would show.
+func endLockWaitLimit(ctx context.Context, tx pgx.Tx) error {
+	if _, err := tx.Exec(ctx, "SELECT set_config('lock_timeout', '0', true)"); err != nil {
+		return fmt.Errorf("reset lock timeout: %w", err)
+	}
+	return nil
+}
+
+// lockLoginName takes a transaction advisory lock on the typed username, folded to
+// lower case in SQL like citext. Every Login takes it first, whether or not the account
+// exists, so guesses against unknown names queue exactly like guesses against real ones
+// and throughput does not reveal which names exist.
+func lockLoginName(ctx context.Context, tx pgx.Tx, username string) error {
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1, hashtext(lower($2::text)))", loginNameLockNamespace, username); err != nil {
+		return fmt.Errorf("lock login name: %w", err)
+	}
+	return nil
 }
 
 // lockAccountByID locks the account of an authenticated principal; a vanished user is unauthenticated.
@@ -135,6 +162,11 @@ func (s *Service) auditFailure(ctx context.Context, tx pgx.Tx, actor audit.Actor
 	return err
 }
 
+// loginNameLockNamespace is the first key of the per-name advisory lock Login takes
+// (pg_advisory_xact_lock(int4, int4)); the two-key form is a separate key space from
+// the audit chain's single bigint key.
+const loginNameLockNamespace int32 = 0x616c6331 // "alc1"
+
 // lockNotAvailable is the PostgreSQL SQLSTATE raised when lock_timeout expires.
 const lockNotAvailable = "55P03"
 
@@ -160,9 +192,11 @@ func (s *Service) withCredentialSlot(ctx context.Context, fn func() error) error
 	return fn()
 }
 
-// credentialTx runs fn in a transaction whose lock waits end after s.lockTimeout. A
-// lock timeout rolls everything back (nothing verified or counted) and becomes ErrTryAgain.
-// Callers hold a credential slot.
+// credentialTx runs fn in a transaction whose wait for the login-name and account locks
+// ends after s.lockTimeout; lockAccount lifts the limit as soon as the account lock is
+// held, before any credential is evaluated. A lock timeout therefore rolls back an
+// attempt that verified and counted nothing, and becomes ErrTryAgain. fn must start with
+// lockAccount (Login: lockLoginName, then lockAccount). Callers hold a credential slot.
 func (s *Service) credentialTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "SELECT set_config('lock_timeout', $1, true)", strconv.FormatInt(s.lockTimeout.Milliseconds(), 10)+"ms"); err != nil {
@@ -193,6 +227,9 @@ func (s *Service) Login(ctx context.Context, username, password string, m Meta) 
 	)
 	err := s.withCredentialSlot(ctx, func() error {
 		err := s.credentialTx(ctx, func(tx pgx.Tx) error {
+			if err := lockLoginName(ctx, tx, username); err != nil {
+				return err
+			}
 			now := s.clock.Now().UTC()
 			a, found, err := lockAccount(ctx, tx, lockAccountByNameSQL, username)
 			if err != nil {

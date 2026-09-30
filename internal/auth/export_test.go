@@ -11,3 +11,6 @@ func CredentialSlots(s *Service) int { return cap(s.credSlots) }
 
 // SetLockTimeout overrides how long a credential check waits for the account row lock.
 func SetLockTimeout(s *Service, d time.Duration) { s.lockTimeout = d }
+
+// LoginNameLockNamespace is the first key of Login's per-name advisory lock.
+const LoginNameLockNamespace = loginNameLockNamespace
