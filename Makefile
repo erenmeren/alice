@@ -17,3 +17,7 @@ test: ## Run Go unit tests with the race detector
 .PHONY: test-integration
 test-integration: ## Run integration tests (needs Docker)
 	go test -race -count=1 -tags integration ./...
+
+.PHONY: i18n-check
+i18n-check: ## Verify EN/TR translation catalogs have identical keys and placeholders
+	go run ./tools/i18n-check locales/common
