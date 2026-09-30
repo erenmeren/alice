@@ -38,7 +38,7 @@ func TestTokenLifecycle(t *testing.T) {
 	assert.Equal(t, tok.ID, p.TokenID)
 	assert.Equal(t, rbac.Admin, p.Role)
 
-	list, err := e.svc.ListTokens(e.ctx, admin, uuid.Nil)
+	list, err := e.svc.ListTokens(e.ctx, admin, meta, uuid.Nil)
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	require.NotNil(t, list[0].LastUsedAt, "use is recorded")
@@ -46,7 +46,7 @@ func TestTokenLifecycle(t *testing.T) {
 	require.NoError(t, e.svc.RevokeToken(e.ctx, admin, meta, tok.ID))
 	_, err = e.svc.AuthenticateToken(e.ctx, secret)
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
-	list, err = e.svc.ListTokens(e.ctx, admin, uuid.Nil)
+	list, err = e.svc.ListTokens(e.ctx, admin, meta, uuid.Nil)
 	require.NoError(t, err)
 	assert.Empty(t, list)
 	assert.ErrorIs(t, e.svc.RevokeToken(e.ctx, admin, meta, tok.ID), auth.ErrNotFound, "already revoked")
@@ -93,11 +93,25 @@ func TestTokenObjectLevelAccess(t *testing.T) {
 	_, opTok, err := e.svc.CreateToken(e.ctx, op, meta, auth.NewToken{Name: "b", Scope: rbac.ScopeOperate, ExpiresInDays: 1})
 	require.NoError(t, err)
 
-	_, err = e.svc.ListTokens(e.ctx, op, admin.UserID)
+	_, err = e.svc.ListTokens(e.ctx, op, meta, admin.UserID)
 	assert.ErrorIs(t, err, auth.ErrNotFound, "operators cannot see other users' tokens")
 	assert.ErrorIs(t, e.svc.RevokeToken(e.ctx, op, meta, adminTok.ID), auth.ErrNotFound)
+	assert.Equal(t, 2, e.countAction(t, "authz.denied", "denied"), "cross-user token access is audited as an authorization denial (SEC-070)")
+	assert.ErrorIs(t, e.svc.RevokeToken(e.ctx, op, meta, uuid.New()), auth.ErrNotFound)
+	assert.Equal(t, 2, e.countAction(t, "authz.denied", "denied"), "a token that does not exist is not a denial")
+	var denials []string
+	rows, err := e.db.Owner.Query(e.ctx, "SELECT object_type || ':' || object_id || ':' || (details->>'reason') FROM audit_log WHERE action = 'authz.denied' ORDER BY seq")
+	require.NoError(t, err)
+	for rows.Next() {
+		var s string
+		require.NoError(t, rows.Scan(&s))
+		denials = append(denials, s)
+	}
+	require.NoError(t, rows.Err())
+	rows.Close()
+	assert.Equal(t, []string{"user:" + admin.UserID.String() + ":not_owner", "api_token:" + adminTok.ID.String() + ":not_owner"}, denials)
 
-	list, err := e.svc.ListTokens(e.ctx, admin, op.UserID)
+	list, err := e.svc.ListTokens(e.ctx, admin, meta, op.UserID)
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	assert.Equal(t, opTok.ID, list[0].ID)
@@ -182,7 +196,7 @@ WHERE action = 'user.updated' ORDER BY seq DESC LIMIT 1`).Scan(&count))
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT revoked_at FROM api_tokens WHERE id = $1", tok.ID).Scan(&revokedAt))
 	require.NotNil(t, revokedAt)
 	assert.True(t, e.clk.Now().Equal(*revokedAt), "revoked at the injected clock's time")
-	list, err := e.svc.ListTokens(e.ctx, admin, op.ID)
+	list, err := e.svc.ListTokens(e.ctx, admin, meta, op.ID)
 	require.NoError(t, err)
 	assert.Empty(t, list, "revoked tokens are not listed")
 }

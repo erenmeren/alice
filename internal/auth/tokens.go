@@ -128,12 +128,16 @@ func scanToken(row pgx.Row) (Token, error) {
 }
 
 // ListTokens returns the non-revoked tokens of userID (uuid.Nil = the caller).
-// Only administrators may list another user's tokens; others get ErrNotFound.
-func (s *Service) ListTokens(ctx context.Context, p Principal, userID uuid.UUID) ([]Token, error) {
+// Only administrators may list another user's tokens; others get ErrNotFound,
+// and the attempt is audited as an authorization denial.
+func (s *Service) ListTokens(ctx context.Context, p Principal, m Meta, userID uuid.UUID) ([]Token, error) {
 	if userID == uuid.Nil {
 		userID = p.UserID
 	}
 	if userID != p.UserID && p.Role != rbac.Admin {
+		if err := s.auditNotOwner(ctx, p, m, "user", userID); err != nil {
+			return nil, err
+		}
 		return nil, ErrNotFound
 	}
 	rows, err := s.pool.Query(ctx, "SELECT "+tokenColumns+" FROM api_tokens WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC", userID)
@@ -156,12 +160,17 @@ func (s *Service) ListTokens(ctx context.Context, p Principal, userID uuid.UUID)
 }
 
 // RevokeToken revokes a token of the caller, or any token when the caller is an administrator.
+// Another user's token answers ErrNotFound like a missing one, and the attempt is audited as
+// an authorization denial.
 func (s *Service) RevokeToken(ctx context.Context, p Principal, m Meta, id uuid.UUID) error {
-	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var owner uuid.UUID
 		err := tx.QueryRow(ctx, "SELECT user_id FROM api_tokens WHERE id = $1 AND revoked_at IS NULL FOR UPDATE", id).Scan(&owner)
-		if errors.Is(err, pgx.ErrNoRows) || (err == nil && owner != p.UserID && p.Role != rbac.Admin) {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
+		}
+		if err == nil && owner != p.UserID && p.Role != rbac.Admin {
+			return errNotOwner
 		}
 		if err != nil {
 			return fmt.Errorf("read token: %w", err)
@@ -171,6 +180,26 @@ func (s *Service) RevokeToken(ctx context.Context, p Principal, m Meta, id uuid.
 		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: p.Actor(m), Action: "token.revoked", ObjectType: "api_token", ObjectID: id.String(),
 			Result: audit.Success, Details: map[string]string{"token_id": id.String(), "owner_id": owner.String()}})
+		return err
+	})
+	if errors.Is(err, errNotOwner) {
+		if aerr := s.auditNotOwner(ctx, p, m, "api_token", id); aerr != nil {
+			return aerr
+		}
+		return ErrNotFound
+	}
+	return err
+}
+
+// errNotOwner is RevokeToken's internal signal for another user's token; callers see ErrNotFound.
+var errNotOwner = errors.New("auth: token belongs to another user")
+
+// auditNotOwner records a refused access to another user's object as an authorization denial
+// (SEC-070). The caller still answers ErrNotFound, so the object's existence is not revealed.
+func (s *Service) auditNotOwner(ctx context.Context, p Principal, m Meta, objectType string, id uuid.UUID) error {
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: p.Actor(m), Action: "authz.denied", ObjectType: objectType, ObjectID: id.String(),
+			Result: audit.Denied, Details: map[string]string{"reason": "not_owner"}})
 		return err
 	})
 }
