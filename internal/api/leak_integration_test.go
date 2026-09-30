@@ -8,6 +8,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v3"
@@ -68,13 +70,23 @@ func only(keys ...string) map[string]bool {
 }
 
 // variants are the spellings of a secret that must not appear: as typed,
-// without dashes (recovery codes), and hex-encoded (bytea columns in to_jsonb).
+// without dashes (recovery codes), hex-encoded (bytea columns in to_jsonb) and
+// base64 in every alphabet (encoding/json and slog render []byte as base64).
 func variants(v string) []string {
-	out := []string{v, hex.EncodeToString([]byte(v))}
+	out := []string{v}
 	if stripped := strings.ReplaceAll(v, "-", ""); stripped != v {
 		out = append(out, stripped)
 	}
-	return out
+	return append(out, binaryForms([]byte(v))[1:]...)
+}
+
+// totpSeedForms are the spellings of the raw 20-byte seed behind a base32 TOTP secret.
+func totpSeedForms(t *testing.T, secret string) []string {
+	t.Helper()
+	seed, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.TrimRight(secret, "="))
+	require.NoError(t, err)
+	require.Len(t, seed, 20)
+	return binaryForms(seed)[1:]
 }
 
 // binaryForms are the text spellings of key material.
@@ -123,19 +135,26 @@ func assertNoSecret(t *testing.T, where, text string, secs []secretValue) {
 
 var privateKeyMarkers = []string{"PRIVATE KEY-----", "OPENSSH PRIVATE KEY", "PuTTY-User-Key-File"}
 
-var dumpTables = []string{
-	"settings", "users", "user_mfa", "recovery_codes", "sessions", "api_tokens",
-	"setup_sessions", "master_key_versions", "audit_log",
+// dumpTables lists every Alice table (all of schema public except goose's bookkeeping).
+func (s *stack) dumpTables() []string {
+	s.t.Helper()
+	rows, err := s.db.Owner.Query(context.Background(), `SELECT table_name::text FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name <> 'goose_db_version' ORDER BY 1`)
+	require.NoError(s.t, err)
+	tables, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	require.NoError(s.t, err)
+	require.Contains(s.t, tables, "audit_log")
+	return tables
 }
 
 // dump renders every row of every Alice table as JSON text (bytea as hex).
 func (s *stack) dump() string {
 	s.t.Helper()
 	var b strings.Builder
-	for _, table := range dumpTables {
+	for _, table := range s.dumpTables() {
 		var rows string
 		require.NoError(s.t, s.db.Owner.QueryRow(context.Background(),
-			"SELECT coalesce(string_agg(to_jsonb(t)::text, E'\\n'), '') FROM "+table+" t").Scan(&rows))
+			"SELECT coalesce(string_agg(to_jsonb(t)::text, E'\\n'), '') FROM "+pgx.Identifier{table}.Sanitize()+" t").Scan(&rows))
 		b.WriteString(table + ":\n" + rows + "\n")
 	}
 	return b.String()
@@ -286,6 +305,41 @@ func TestSecretsNeverLeak(t *testing.T) {
 
 	adminDEK := s.storedDEK(admin.id)
 	operatorDEK := s.storedDEK(operator.id)
+	// Taken before the operator's MFA is reset below.
+	var mfaRows, distinctDEKs, distinctCT int
+	require.NoError(t, s.db.Owner.QueryRow(ctx,
+		`SELECT count(*), count(DISTINCT totp_wrapped_dek), count(DISTINCT totp_secret_ct) FROM user_mfa`).Scan(&mfaRows, &distinctDEKs, &distinctCT))
+
+	// Every read endpoint that returns rows of secret-bearing tables, and the
+	// remaining mutations, so their responses are scanned too.
+	s.stepUp(browser, admin)
+	opPath := "/api/v1/users/" + operator.id
+	requireStatus(t, browser.do(http.MethodGet, "/api/v1/users", nil), http.StatusOK)
+	requireStatus(t, browser.do(http.MethodGet, opPath, nil), http.StatusOK)
+	rec = browser.do(http.MethodGet, "/api/v1/tokens", nil)
+	requireStatus(t, rec, http.StatusOK)
+	tokens := decodeBody[map[string][]map[string]any](t, rec)["items"]
+	require.Len(t, tokens, 1)
+	requireStatus(t, browser.do(http.MethodGet, "/api/v1/audit", nil), http.StatusOK)
+	requireStatus(t, browser.do(http.MethodGet, "/api/v1/audit/export?format=csv", nil), http.StatusOK)
+	requireStatus(t, browser.do(http.MethodGet, "/api/v1/audit/export?format=json", nil), http.StatusOK)
+	requireStatus(t, browser.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK)
+	requireStatus(t, browser.do(http.MethodPatch, opPath, map[string]string{"display_name": "Otto Operator"}), http.StatusOK)
+	requireStatus(t, browser.do(http.MethodPost, opPath+"/actions/reset-mfa", nil), http.StatusNoContent)
+	requireStatus(t, browser.do(http.MethodPost, opPath+"/actions/revoke-sessions", nil), http.StatusNoContent)
+	requireStatus(t, browser.do(http.MethodDelete, "/api/v1/tokens/"+tokens[0]["id"].(string), nil), http.StatusNoContent)
+
+	// More failure paths: a revoked and a made-up bearer token, a wrong
+	// recovery code, a wrong step-up code.
+	requireError(t, api.do(http.MethodGet, "/api/v1/version", nil), http.StatusUnauthorized, "ALC-AUTH-0001")
+	forged := s.client("198.51.100.15")
+	forged.bearer = "alice_" + strings.ReplaceAll(junk, "-", "")
+	requireError(t, forged.do(http.MethodGet, "/api/v1/version", nil), http.StatusUnauthorized, "ALC-AUTH-0001")
+	pending := s.freshClient()
+	requireStatus(t, pending.do(http.MethodPost, "/api/v1/auth/login", map[string]string{"username": "ada", "password": newAdminPW}), http.StatusOK)
+	requireError(t, pending.do(http.MethodPost, "/api/v1/auth/mfa/verify", map[string]string{"recovery_code": junk}), http.StatusUnauthorized, "ALC-AUTH-0006")
+	requireError(t, browser.do(http.MethodPost, "/api/v1/auth/stepup", map[string]string{"code": "000000"}), http.StatusUnauthorized, "ALC-AUTH-0006")
+	requireStatus(t, browser.do(http.MethodPost, "/api/v1/auth/logout", nil), http.StatusNoContent)
 	secretsUnderTest := []secretValue{
 		{name: "admin password", value: adminPW},
 		{name: "admin new password", value: newAdminPW},
@@ -297,6 +351,8 @@ func TestSecretsNeverLeak(t *testing.T) {
 		{name: "setup code", value: s.setupCode},
 		{name: "admin TOTP secret", value: admin.secret, allowed: only("POST /api/v1/setup/admin/enrollment")},
 		{name: "operator TOTP secret", value: operator.secret, allowed: only("POST /api/v1/auth/mfa/enroll")},
+		{name: "admin TOTP seed bytes", forms: totpSeedForms(t, admin.secret), allowed: only("POST /api/v1/setup/admin/enrollment")},
+		{name: "operator TOTP seed bytes", forms: totpSeedForms(t, operator.secret), allowed: only("POST /api/v1/auth/mfa/enroll")},
 		{name: "API token", value: token, allowed: only("POST /api/v1/tokens")},
 		{name: "API token hash", forms: sha256Forms(token), storedHashed: true},
 		{name: "Argon2id hash", forms: []string{"$argon2id$"}, storedHashed: true},
@@ -410,9 +466,6 @@ func TestSecretsNeverLeak(t *testing.T) {
 		assert.Equal(t, hashes, distinct)
 		assert.Equal(t, s.count("recovery_codes"), hashes, "every recovery code is stored as an Argon2id hash")
 
-		var mfaRows, distinctDEKs, distinctCT int
-		require.NoError(t, s.db.Owner.QueryRow(ctx,
-			`SELECT count(*), count(DISTINCT totp_wrapped_dek), count(DISTINCT totp_secret_ct) FROM user_mfa`).Scan(&mfaRows, &distinctDEKs, &distinctCT))
 		assert.Equal(t, 2, mfaRows)
 		assert.Equal(t, mfaRows, distinctDEKs, "every secret has its own DEK")
 		assert.Equal(t, mfaRows, distinctCT)

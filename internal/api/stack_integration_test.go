@@ -359,6 +359,9 @@ func (s *stack) setupAdmin(a *account, passphrase string, afterEnroll func()) *c
 	require.NotEmpty(t, c.cookies[sessionCookie])
 	require.Empty(t, c.cookies[setupCookie], "the wizard cookie is cleared once the admin exists")
 
+	requireError(t, c.do(http.MethodPost, "/api/v1/setup/recovery-passphrase", map[string]string{
+		"passphrase": passphrase, "passphrase_confirm": passphrase + "-mismatch",
+	}), http.StatusUnprocessableEntity, "ALC-SET-0006")
 	requireStatus(t, c.do(http.MethodPost, "/api/v1/setup/recovery-passphrase", map[string]string{
 		"passphrase": passphrase, "passphrase_confirm": passphrase,
 	}), http.StatusNoContent)

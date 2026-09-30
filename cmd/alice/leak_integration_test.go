@@ -62,6 +62,13 @@ func dbPasswordCanaries(t *testing.T, d *pgtest.DB) (ownerURL, appURL, ownerPW, 
 			role.name, role.options, role.password).Scan(&ddl))
 		_, err := d.Owner.Exec(ctx, ddl)
 		require.NoError(t, err)
+		// Roles are cluster-wide: drop them (and their grants in this database) when the test ends.
+		t.Cleanup(func() {
+			var drop string
+			require.NoError(t, d.Owner.QueryRow(ctx, `SELECT format('DROP OWNED BY %1$I; DROP ROLE %1$I', $1::text)`, role.name).Scan(&drop))
+			_, err := d.Owner.Exec(ctx, drop)
+			require.NoError(t, err)
+		})
 	}
 	withUser := func(raw, user, pw string) string {
 		u, err := url.Parse(raw)
