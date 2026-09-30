@@ -12,7 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/audit"
 	"alice/internal/auth"
+	"alice/internal/license"
 	"alice/internal/platform/clock"
 	"alice/internal/rbac"
 )
@@ -26,7 +28,7 @@ func guardedHandler(t *testing.T, d Deps, perm rbac.Permission, limit limitClass
 		{method: http.MethodGet, pattern: "/api/v1/probe", perm: perm, limit: limit, handler: func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"user": principalFrom(r.Context()).Username})
 		}},
-		{method: http.MethodPost, pattern: "/api/v1/probe", perm: perm, limit: limit, handler: func(w http.ResponseWriter, _ *http.Request) {
+		{method: http.MethodPost, pattern: "/api/v1/probe", perm: perm, limit: limit, lic: license.ClassAlways, handler: func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		}},
 	})
@@ -314,4 +316,83 @@ func TestCancelledAuthenticationWritesNothing(t *testing.T) {
 	rec := call(h, http.MethodGet, "/api/v1/probe", "admin", "")
 	assert.Empty(t, rec.Body.String())
 	assert.Empty(t, rec.Header().Get("Content-Type"))
+}
+
+func gatedHandler(d Deps, class license.Class) http.Handler {
+	s := newServer(d)
+	return s.handler([]route{{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Session, lic: class,
+		handler: func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }}})
+}
+
+// R9, §9.6: while locked, infrastructure changes are refused with license.locked, audited,
+// and never reach the handler; after a renewal they work at once.
+func TestLicenseGateRefusesChangesWhileLocked(t *testing.T) {
+	d := testDeps(t, nil)
+	fl := d.License.(*fakeLicense)
+	fa := d.Audit.(*fakeAudit)
+	h := gatedHandler(d, license.ClassChange)
+
+	fl.set(license.ErrLocked)
+	rec := call(h, http.MethodPost, "/api/v1/targets", "admin", `{}`)
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	body := decodeErr(t, rec)
+	assert.Equal(t, "ALC-LIC-0001", body.Error.Code)
+	assert.Equal(t, "license.locked", body.Error.Reason)
+	assert.Equal(t, 1, fa.Count("request.denied_license"))
+
+	fl.set(nil)
+	assert.Equal(t, http.StatusNoContent, call(h, http.MethodPost, "/api/v1/targets", "admin", `{}`).Code)
+}
+
+func TestLicenseGateOrderAndScope(t *testing.T) {
+	d := testDeps(t, nil)
+	fl := d.License.(*fakeLicense)
+	fl.set(license.ErrLocked)
+
+	before := fl.count()
+	assert.Equal(t, http.StatusUnauthorized, call(gatedHandler(d, license.ClassChange), http.MethodPost, "/api/v1/targets", "", `{}`).Code,
+		"authentication and authorization come first")
+	assert.Equal(t, before, fl.count(), "the gate is not consulted for a request that is not allowed anyway")
+
+	assert.Equal(t, http.StatusNoContent, call(gatedHandler(d, license.ClassAlways), http.MethodPost, "/api/v1/targets", "admin", `{}`).Code,
+		"ClassAlways routes work in lock")
+	assert.Equal(t, before, fl.count(), "and do not consult the gate")
+
+	d.License = nil
+	assert.Equal(t, http.StatusForbidden, call(gatedHandler(d, license.ClassChange), http.MethodPost, "/api/v1/targets", "admin", `{}`).Code,
+		"no license service: fail closed")
+}
+
+// The refusal is audited with the operation and its class, so an administrator can see
+// what lock mode stopped (L-26).
+func TestLicenseDenialAuditDetails(t *testing.T) {
+	d := testDeps(t, nil)
+	d.License.(*fakeLicense).set(license.ErrLocked)
+	fa := d.Audit.(*fakeAudit)
+	call(gatedHandler(d, license.ClassChange), http.MethodPost, "/api/v1/targets", "admin", `{}`)
+	var got []audit.Event
+	for _, ev := range fa.Events() {
+		if ev.Action == "request.denied_license" {
+			got = append(got, ev)
+		}
+	}
+	require.Len(t, got, 1)
+	assert.Equal(t, audit.Denied, got[0].Result)
+	assert.Equal(t, audit.ActorUser, got[0].Actor.Type)
+	assert.Equal(t, map[string]string{"method": "POST", "path": "/api/v1/targets", "class": "change"}, got[0].Details)
+}
+
+// Default deny (SEC-016): a state-changing route without a license class never starts,
+// like a route with an unknown permission.
+func TestRegisterRefusesUnclassifiedStateChangingRoute(t *testing.T) {
+	s := newServer(testDeps(t, nil))
+	noop := func(http.ResponseWriter, *http.Request) {}
+	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		assert.Panics(t, func() {
+			s.handler([]route{{method: m, pattern: "/api/v1/x", perm: rbac.Session, handler: noop}})
+		}, m)
+	}
+	assert.NotPanics(t, func() {
+		s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/x", perm: rbac.Session, handler: noop}})
+	}, "reads need no class")
 }

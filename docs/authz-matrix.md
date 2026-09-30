@@ -7,38 +7,41 @@ Anonymous: no sign-in needed. Wizard: only with a setup-wizard session. Pending:
 password and verification code. Token columns: minimum API token access (the token owner's role
 must also allow the route). Step-up: a fresh verification code (5 minutes) is required.
 
-| Method | Path | Permission | Anonymous | Admin | Operator | Auditor | API token | Step-up |
-|---|---|---|---|---|---|---|---|---|
-| GET | `/livez` | `public` | yes | yes | yes | yes | yes | no |
-| GET | `/healthz` | `public` | yes | yes | yes | yes | yes | no |
-| GET | `/api/v1/version` | `read` | no | yes | yes | yes | read | no |
-| GET | `/api/v1/i18n/locales` | `public` | yes | yes | yes | yes | yes | no |
-| GET | `/api/v1/setup/status` | `public` | yes | yes | yes | yes | yes | no |
-| POST | `/api/v1/setup/session` | `public` | yes | yes | yes | yes | yes | no |
-| PUT | `/api/v1/setup/language` | `setup` | wizard | no | no | no | no | no |
-| POST | `/api/v1/setup/admin/enrollment` | `setup` | wizard | no | no | no | no | no |
-| POST | `/api/v1/setup/admin` | `setup` | wizard | no | no | no | no | no |
-| POST | `/api/v1/setup/recovery-passphrase` | `settings.manage` | no | yes | no | no | no | yes |
-| POST | `/api/v1/setup/complete` | `settings.manage` | no | yes | no | no | no | yes |
-| POST | `/api/v1/auth/login` | `public` | yes | yes | yes | yes | yes | no |
-| POST | `/api/v1/auth/mfa/enroll` | `mfa_pending` | pending | no | no | no | no | no |
-| POST | `/api/v1/auth/mfa/verify` | `mfa_pending` | pending | no | no | no | no | no |
-| GET | `/api/v1/auth/session` | `session` | no | yes | yes | yes | no | no |
-| POST | `/api/v1/auth/logout` | `session` | no | yes | yes | yes | no | no |
-| POST | `/api/v1/auth/stepup` | `session` | no | yes | yes | yes | no | no |
-| POST | `/api/v1/auth/password` | `session` | no | yes | yes | yes | no | no |
-| POST | `/api/v1/auth/recovery-codes` | `session.stepup` | no | yes | yes | yes | no | yes |
-| PUT | `/api/v1/auth/locale` | `session` | no | yes | yes | yes | no | no |
-| GET | `/api/v1/users` | `users.read` | no | yes | no | no | read | no |
-| POST | `/api/v1/users` | `users.manage` | no | yes | no | no | no | yes |
-| GET | `/api/v1/users/{id}` | `users.read` | no | yes | no | no | read | no |
-| PATCH | `/api/v1/users/{id}` | `users.manage` | no | yes | no | no | no | yes |
-| POST | `/api/v1/users/{id}/actions/reset-mfa` | `users.manage` | no | yes | no | no | no | yes |
-| POST | `/api/v1/users/{id}/actions/reset-password` | `users.manage` | no | yes | no | no | no | yes |
-| POST | `/api/v1/users/{id}/actions/revoke-sessions` | `users.manage` | no | yes | no | no | no | yes |
-| GET | `/api/v1/tokens` | `session` | no | yes | yes | yes | no | no |
-| POST | `/api/v1/tokens` | `session.stepup` | no | yes | yes | yes | no | yes |
-| DELETE | `/api/v1/tokens/{id}` | `session` | no | yes | yes | yes | no | no |
-| GET | `/api/v1/audit` | `audit.read` | no | yes | no | yes | read | no |
-| GET | `/api/v1/audit/export` | `audit.read` | no | yes | no | yes | read | no |
-| POST | `/api/v1/audit/verify` | `audit.read` | no | yes | no | yes | read | no |
+In lock: whether the operation still works after the license (or the evaluation) has expired;
+changes to managed systems are refused with ALC-LIC-0001 (spec R9).
+
+| Method | Path | Permission | Anonymous | Admin | Operator | Auditor | API token | Step-up | In lock |
+|---|---|---|---|---|---|---|---|---|---|
+| GET | `/livez` | `public` | yes | yes | yes | yes | yes | no | yes |
+| GET | `/healthz` | `public` | yes | yes | yes | yes | yes | no | yes |
+| GET | `/api/v1/version` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/i18n/locales` | `public` | yes | yes | yes | yes | yes | no | yes |
+| GET | `/api/v1/setup/status` | `public` | yes | yes | yes | yes | yes | no | yes |
+| POST | `/api/v1/setup/session` | `public` | yes | yes | yes | yes | yes | no | yes |
+| PUT | `/api/v1/setup/language` | `setup` | wizard | no | no | no | no | no | yes |
+| POST | `/api/v1/setup/admin/enrollment` | `setup` | wizard | no | no | no | no | no | yes |
+| POST | `/api/v1/setup/admin` | `setup` | wizard | no | no | no | no | no | yes |
+| POST | `/api/v1/setup/recovery-passphrase` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/setup/complete` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/auth/login` | `public` | yes | yes | yes | yes | yes | no | yes |
+| POST | `/api/v1/auth/mfa/enroll` | `mfa_pending` | pending | no | no | no | no | no | yes |
+| POST | `/api/v1/auth/mfa/verify` | `mfa_pending` | pending | no | no | no | no | no | yes |
+| GET | `/api/v1/auth/session` | `session` | no | yes | yes | yes | no | no | yes |
+| POST | `/api/v1/auth/logout` | `session` | no | yes | yes | yes | no | no | yes |
+| POST | `/api/v1/auth/stepup` | `session` | no | yes | yes | yes | no | no | yes |
+| POST | `/api/v1/auth/password` | `session` | no | yes | yes | yes | no | no | yes |
+| POST | `/api/v1/auth/recovery-codes` | `session.stepup` | no | yes | yes | yes | no | yes | yes |
+| PUT | `/api/v1/auth/locale` | `session` | no | yes | yes | yes | no | no | yes |
+| GET | `/api/v1/users` | `users.read` | no | yes | no | no | read | no | yes |
+| POST | `/api/v1/users` | `users.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/users/{id}` | `users.read` | no | yes | no | no | read | no | yes |
+| PATCH | `/api/v1/users/{id}` | `users.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/users/{id}/actions/reset-mfa` | `users.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/users/{id}/actions/reset-password` | `users.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/users/{id}/actions/revoke-sessions` | `users.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/tokens` | `session` | no | yes | yes | yes | no | no | yes |
+| POST | `/api/v1/tokens` | `session.stepup` | no | yes | yes | yes | no | yes | yes |
+| DELETE | `/api/v1/tokens/{id}` | `session` | no | yes | yes | yes | no | no | yes |
+| GET | `/api/v1/audit` | `audit.read` | no | yes | no | yes | read | no | yes |
+| GET | `/api/v1/audit/export` | `audit.read` | no | yes | no | yes | read | no | yes |
+| POST | `/api/v1/audit/verify` | `audit.read` | no | yes | no | yes | read | no | yes |

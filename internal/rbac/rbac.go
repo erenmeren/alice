@@ -87,6 +87,8 @@ const (
 	UsersRead      Permission = "users.read"
 	UsersManage    Permission = "users.manage"
 	SettingsManage Permission = "settings.manage"
+	LicenseRead    Permission = "license.read"   // license status and history: Admin and Auditor (R3)
+	LicenseManage  Permission = "license.manage" // license upload: Admin with step-up (§25.1)
 )
 
 // Policy describes who may use a permission.
@@ -112,6 +114,8 @@ var policies = map[Permission]Policy{
 	UsersRead:      {Roles: []Role{Admin}, TokenScope: ScopeRead},
 	UsersManage:    {Roles: []Role{Admin}, StepUp: true},
 	SettingsManage: {Roles: []Role{Admin}, StepUp: true},
+	LicenseRead:    {Roles: []Role{Admin, Auditor}, TokenScope: ScopeRead},
+	LicenseManage:  {Roles: []Role{Admin}, StepUp: true},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.

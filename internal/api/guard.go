@@ -12,6 +12,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/auth"
 	"alice/internal/auth/ratelimit"
+	"alice/internal/license"
 	"alice/internal/rbac"
 	"alice/internal/setup"
 )
@@ -26,8 +27,10 @@ func principalFrom(ctx context.Context) auth.Principal {
 }
 
 // guard wraps a route handler with, in order: authentication, rate limiting,
-// the same-origin check, the CSRF check and the permission decision (SEC-016,
-// SEC-017, SEC-021, SEC-024). Nothing reaches rt.handler unless rbac allows it.
+// the same-origin check, the CSRF check, the permission decision (SEC-016,
+// SEC-017, SEC-021, SEC-024) and the license lock gate (R9). Nothing reaches
+// rt.handler unless rbac allows it and, for ClassChange/ClassReadOnly routes,
+// license.Service.Allow does.
 func (s *server) guard(rt route) http.HandlerFunc {
 	policy, _ := rbac.PolicyFor(rt.perm) // register has checked the permission exists
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +58,11 @@ func (s *server) guard(rt route) http.HandlerFunc {
 		}
 		switch rbac.Decide(rt.perm, p.Subject(s.deps.Clock.Now())) {
 		case rbac.Allow:
+			if (rt.lic == license.ClassChange || rt.lic == license.ClassReadOnly) && !s.licenseAllows(rt.lic) {
+				s.auditLicenseDenied(r, rt, p)
+				s.writeError(w, r, ErrLicenseLocked)
+				return
+			}
 			rt.handler(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
 		case rbac.DenyUnauthenticated:
 			if policy.Setup {
@@ -188,6 +196,28 @@ func (s *server) auditDenied(r *http.Request, rt route, p auth.Principal, reason
 			"path":       rt.pattern,
 			"reason":     reason,
 		},
+	}
+	if err := s.deps.Audit.Write(r.Context(), ev); err != nil {
+		s.deps.Log.Error("audit write failed", append([]any{"request_id", RequestID(r.Context()), "action", ev.Action}, errorAttrs(err)...)...)
+	}
+}
+
+// licenseAllows asks the single lock gate (license.Service.Allow). Without a license
+// service the answer is no: a misconfigured server fails closed.
+func (s *server) licenseAllows(c license.Class) bool {
+	return s.deps.License != nil && s.deps.License.Allow(c) == nil
+}
+
+// auditLicenseDenied records a request refused because the license has expired (L-26).
+func (s *server) auditLicenseDenied(r *http.Request, rt route, p auth.Principal) {
+	if p.Kind != rbac.UserSession && p.Kind != rbac.APIToken {
+		return
+	}
+	ev := audit.Event{
+		Actor:   p.Actor(s.meta(r)),
+		Action:  "request.denied_license",
+		Result:  audit.Denied,
+		Details: map[string]string{"method": rt.method, "path": rt.pattern, "class": rt.lic.String()},
 	}
 	if err := s.deps.Audit.Write(r.Context(), ev); err != nil {
 		s.deps.Log.Error("audit write failed", append([]any{"request_id", RequestID(r.Context()), "action", ev.Action}, errorAttrs(err)...)...)

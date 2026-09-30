@@ -264,3 +264,14 @@ details once more. (The wizard has no "Back" button yet.)
 **Likely cause.** The recovery passphrase has not been chosen.
 
 **What to do.** Choose the recovery passphrase in the wizard, then finish setup.
+
+## ALC-LIC-0001: Not available while the license is expired
+
+**Meaning.** The action changes a managed server, key or certificate, and the license or the 30-day evaluation has
+ended (HTTP 403). Alice is in lock mode: automatic tasks are paused and such changes are refused. Signing in,
+uploading a license, backups, the audit log, exports and user administration keep working. Nothing was changed.
+
+**Likely cause.** The license expired more than 7 days ago (168 hours), or the evaluation ended.
+
+**What to do.** Ask your vendor for a renewed license (send the Installation ID shown on the **License** page) and
+upload it there. Everything works again immediately; work that was paused waits for an administrator's confirmation.

@@ -56,6 +56,8 @@ var (
 	ErrPassphraseMismatch     = ErrorCode{Code: "ALC-SET-0006", Reason: "setup.passphrase_mismatch", Status: http.StatusUnprocessableEntity}
 	ErrPassphraseAlreadySet   = ErrorCode{Code: "ALC-SET-0007", Reason: "setup.passphrase_already_set", Status: http.StatusConflict}
 	ErrSetupIncomplete        = ErrorCode{Code: "ALC-SET-0008", Reason: "setup.incomplete", Status: http.StatusConflict}
+
+	ErrLicenseLocked = ErrorCode{Code: "ALC-LIC-0001", Reason: "license.locked", Status: http.StatusForbidden}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -67,6 +69,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrUsernameTaken, ErrLastAdmin, ErrTokenScopeNotAllowed,
 		ErrSetupCodeInvalid, ErrSetupLocked, ErrSetupSessionExpired, ErrSetupEnrollmentMissing,
 		ErrPassphraseTooShort, ErrPassphraseMismatch, ErrPassphraseAlreadySet, ErrSetupIncomplete,
+		ErrLicenseLocked,
 	}
 }
 

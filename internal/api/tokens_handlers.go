@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"alice/internal/auth"
+	"alice/internal/license"
 	"alice/internal/platform/validate"
 	"alice/internal/rbac"
 )
@@ -16,8 +17,8 @@ import (
 func (s *server) tokenRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/tokens", perm: rbac.Session, handler: s.listTokens},
-		{method: http.MethodPost, pattern: "/api/v1/tokens", perm: rbac.SessionStepUp, handler: s.createToken},
-		{method: http.MethodDelete, pattern: "/api/v1/tokens/{id}", perm: rbac.Session, handler: s.revokeToken},
+		{method: http.MethodPost, pattern: "/api/v1/tokens", perm: rbac.SessionStepUp, lic: license.ClassAlways, handler: s.createToken},
+		{method: http.MethodDelete, pattern: "/api/v1/tokens/{id}", perm: rbac.Session, lic: license.ClassAlways, handler: s.revokeToken},
 	}
 }
 

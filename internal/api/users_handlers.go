@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"alice/internal/auth"
+	"alice/internal/license"
 	"alice/internal/platform/validate"
 	"alice/internal/rbac"
 )
@@ -14,12 +15,12 @@ import (
 func (s *server) userRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/users", perm: rbac.UsersRead, handler: s.listUsers},
-		{method: http.MethodPost, pattern: "/api/v1/users", perm: rbac.UsersManage, handler: s.createUser},
+		{method: http.MethodPost, pattern: "/api/v1/users", perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.createUser},
 		{method: http.MethodGet, pattern: "/api/v1/users/{id}", perm: rbac.UsersRead, handler: s.getUser},
-		{method: http.MethodPatch, pattern: "/api/v1/users/{id}", perm: rbac.UsersManage, handler: s.updateUser},
-		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/reset-mfa", perm: rbac.UsersManage, handler: s.resetUserMFA},
-		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/reset-password", perm: rbac.UsersManage, handler: s.resetUserPassword},
-		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/revoke-sessions", perm: rbac.UsersManage, handler: s.revokeUserSessions},
+		{method: http.MethodPatch, pattern: "/api/v1/users/{id}", perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.updateUser},
+		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/reset-mfa", perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.resetUserMFA},
+		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/reset-password", perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.resetUserPassword},
+		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/revoke-sessions", perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.revokeUserSessions},
 	}
 }
 

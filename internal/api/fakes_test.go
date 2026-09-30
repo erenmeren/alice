@@ -10,6 +10,7 @@ import (
 
 	"alice/internal/audit"
 	"alice/internal/auth"
+	"alice/internal/license"
 	"alice/internal/rbac"
 	"alice/internal/setup"
 )
@@ -380,4 +381,30 @@ func (f *fakeAudit) VerifyReadOnly(ctx context.Context) (audit.Report, error) {
 		return f.VerifyReadOnlyFn(ctx)
 	}
 	return audit.Report{}, errNotConfigured
+}
+
+// fakeLicense implements LicenseService. Allow returns err and counts calls.
+type fakeLicense struct {
+	mu    sync.Mutex
+	err   error
+	calls int
+}
+
+func (f *fakeLicense) Allow(license.Class) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	return f.err
+}
+
+func (f *fakeLicense) set(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
+func (f *fakeLicense) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
 }

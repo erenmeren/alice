@@ -27,6 +27,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/auth"
 	"alice/internal/i18n"
+	"alice/internal/license"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
 	"alice/internal/platform/logging"
@@ -156,6 +157,7 @@ func (s *stack) deps() Deps {
 		Auth:           s.auth,
 		Setup:          s.setup,
 		Audit:          s.auditSvc,
+		License:        allowAll{},
 		TrustedProxies: s.trusted,
 	}
 }
@@ -429,3 +431,8 @@ func (s *stack) count(table string) int {
 	require.NoError(s.t, s.db.Owner.QueryRow(context.Background(), "SELECT count(*) FROM "+table).Scan(&n))
 	return n
 }
+
+// allowAll is the license gate of stacks that do not test licensing (replaced in Task 14).
+type allowAll struct{}
+
+func (allowAll) Allow(license.Class) error { return nil }

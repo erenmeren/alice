@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/license"
 	"alice/internal/rbac"
 )
 
@@ -54,6 +55,8 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 	rbac.UsersRead:      row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, allw, forb, forb),
 	rbac.UsersManage:    row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb),
 	rbac.SettingsManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb),
+	rbac.LicenseRead:    row(unau, unau, unau, unau, unau, allw, forb, allw, allw, forb, allw, allw, forb, allw),
+	rbac.LicenseManage:  row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {
@@ -145,8 +148,10 @@ func authzMatrixDoc() string {
 	b.WriteString("Anonymous: no sign-in needed. Wizard: only with a setup-wizard session. Pending: only between\n")
 	b.WriteString("password and verification code. Token columns: minimum API token access (the token owner's role\n")
 	b.WriteString("must also allow the route). Step-up: a fresh verification code (5 minutes) is required.\n\n")
-	b.WriteString("| Method | Path | Permission | Anonymous | Admin | Operator | Auditor | API token | Step-up |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("In lock: whether the operation still works after the license (or the evaluation) has expired;\n")
+	b.WriteString("changes to managed systems are refused with ALC-LIC-0001 (spec R9).\n\n")
+	b.WriteString("| Method | Path | Permission | Anonymous | Admin | Operator | Auditor | API token | Step-up | In lock |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, rt := range newServer(Deps{}).apiRoutes() {
 		pol, _ := rbac.PolicyFor(rt.perm)
 		anon := yesNo(pol.Anonymous)
@@ -163,8 +168,12 @@ func authzMatrixDoc() string {
 		} else if pol.TokenScope != "" {
 			token = string(pol.TokenScope)
 		}
-		fmt.Fprintf(&b, "| %s | `%s` | `%s` | %s | %s | %s | %s | %s | %s |\n",
-			rt.method, rt.pattern, rt.perm, anon, role(rbac.Admin), role(rbac.Operator), role(rbac.Auditor), token, yesNo(pol.StepUp))
+		inLock := "yes"
+		if rt.lic == license.ClassChange || rt.lic == license.ClassReadOnly {
+			inLock = "no"
+		}
+		fmt.Fprintf(&b, "| %s | `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s |\n",
+			rt.method, rt.pattern, rt.perm, anon, role(rbac.Admin), role(rbac.Operator), role(rbac.Auditor), token, yesNo(pol.StepUp), inLock)
 	}
 	return b.String()
 }
@@ -320,4 +329,106 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodGet, pattern: "/api/v1/usersettings", perm: rbac.Session},
 	}
 	assert.Empty(t, routeRuleViolations(good))
+}
+
+// Route groups and how lock mode treats their state-changing operations (R9, R36 item 6).
+var (
+	lockAvailable = []string{"/api/v1/auth", "/api/v1/setup", "/api/v1/license", "/api/v1/users", "/api/v1/tokens",
+		"/api/v1/audit", "/api/v1/backup", "/api/v1/backups", "/api/v1/settings"}
+	lockRefused = []string{"/api/v1/targets", "/api/v1/certificates", "/api/v1/locations", "/api/v1/deployments",
+		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault"}
+)
+
+func underAny(pattern string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if under(pattern, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// lockRuleViolations: reads are never refused in lock; every state-changing route declares
+// a license class; infrastructure changes are ClassChange; platform administration is ClassAlways.
+func lockRuleViolations(routes []route) []string {
+	var out []string
+	for _, rt := range routes {
+		key := rt.method + " " + rt.pattern
+		if safeMethod(rt.method) {
+			if rt.lic != license.ClassUnset && rt.lic != license.ClassAlways {
+				out = append(out, key+": reads stay available in lock")
+			}
+			continue
+		}
+		switch {
+		case !rt.lic.Valid():
+			out = append(out, key+": declares no license class")
+		case underAny(rt.pattern, lockRefused) && rt.lic != license.ClassChange:
+			out = append(out, key+": infrastructure changes must be ClassChange")
+		case underAny(rt.pattern, lockAvailable) && rt.lic != license.ClassAlways:
+			out = append(out, key+": platform administration must stay available (ClassAlways)")
+		}
+	}
+	return out
+}
+
+func TestEveryStateChangingRouteDeclaresALicenseClass(t *testing.T) {
+	assert.Empty(t, lockRuleViolations(newServer(Deps{}).apiRoutes()))
+}
+
+func TestLockRuleViolationsCatchesMistakes(t *testing.T) {
+	bad := []route{
+		{method: http.MethodPost, pattern: "/api/v1/users", perm: rbac.UsersManage},
+		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Read, lic: license.ClassAlways},
+		{method: http.MethodDelete, pattern: "/api/v1/ssh-keys/{id}", perm: rbac.Read, lic: license.ClassReadOnly},
+		{method: http.MethodPost, pattern: "/api/v1/license", perm: rbac.LicenseManage, lic: license.ClassChange},
+		{method: http.MethodGet, pattern: "/api/v1/targets", perm: rbac.Read, lic: license.ClassChange},
+	}
+	assert.Len(t, lockRuleViolations(bad), len(bad))
+	good := []route{
+		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Read, lic: license.ClassChange},
+		{method: http.MethodPost, pattern: "/api/v1/users", perm: rbac.UsersManage, lic: license.ClassAlways},
+		{method: http.MethodGet, pattern: "/api/v1/targets", perm: rbac.Read},
+	}
+	assert.Empty(t, lockRuleViolations(good))
+}
+
+// TestRouteTableInLock sends every route in the table while the license is locked, as the
+// first matrix identity that is allowed to use it: platform administration, sign-in and all
+// reads still reach their handler (R9, R36 item 6); only ClassChange/ClassReadOnly routes are
+// refused with license.locked.
+func TestRouteTableInLock(t *testing.T) {
+	d := testDeps(t, nil)
+	d.License.(*fakeLicense).set(license.ErrLocked)
+	s := newServer(d)
+	routes := s.apiRoutes()
+	var called bool
+	for i := range routes {
+		routes[i].handler = func(w http.ResponseWriter, _ *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusOK)
+		}
+	}
+	h := s.handler(routes)
+	for _, rt := range routes {
+		id := ""
+		for _, candidate := range identities {
+			if expectedMatrix[rt.perm][candidate] == allw {
+				id = candidate
+				break
+			}
+		}
+		name := fmt.Sprintf("%s %s as %q", rt.method, rt.pattern, id)
+		(&Server{s: s}).ResetLimits()
+		called = false
+		rec := call(h, rt.method, pathParamRE.ReplaceAllString(rt.pattern, uuid.NewString()), id, "")
+		if rt.lic == license.ClassChange || rt.lic == license.ClassReadOnly {
+			assert.Equal(t, http.StatusForbidden, rec.Code, name)
+			assert.Equal(t, "license.locked", decodeErr(t, rec).Error.Reason, name)
+			assert.False(t, called, name)
+			continue
+		}
+		assert.Equal(t, http.StatusOK, rec.Code, name)
+		assert.True(t, called, name)
+	}
 }

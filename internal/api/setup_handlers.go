@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"alice/internal/license"
 	"alice/internal/rbac"
 	"alice/internal/setup"
 )
@@ -16,12 +17,12 @@ import (
 func (s *server) setupRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/setup/status", perm: rbac.Public, handler: s.setupStatus},
-		{method: http.MethodPost, pattern: "/api/v1/setup/session", perm: rbac.Public, limit: limitLogin, handler: s.setupStartSession},
-		{method: http.MethodPut, pattern: "/api/v1/setup/language", perm: rbac.Setup, handler: s.setupLanguage},
-		{method: http.MethodPost, pattern: "/api/v1/setup/admin/enrollment", perm: rbac.Setup, handler: s.setupEnrollment},
-		{method: http.MethodPost, pattern: "/api/v1/setup/admin", perm: rbac.Setup, limit: limitMFA, handler: s.setupCreateAdmin},
-		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", perm: rbac.SettingsManage, handler: s.setupRecoveryPassphrase},
-		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.SettingsManage, handler: s.setupComplete},
+		{method: http.MethodPost, pattern: "/api/v1/setup/session", perm: rbac.Public, limit: limitLogin, lic: license.ClassAlways, handler: s.setupStartSession},
+		{method: http.MethodPut, pattern: "/api/v1/setup/language", perm: rbac.Setup, lic: license.ClassAlways, handler: s.setupLanguage},
+		{method: http.MethodPost, pattern: "/api/v1/setup/admin/enrollment", perm: rbac.Setup, lic: license.ClassAlways, handler: s.setupEnrollment},
+		{method: http.MethodPost, pattern: "/api/v1/setup/admin", perm: rbac.Setup, limit: limitMFA, lic: license.ClassAlways, handler: s.setupCreateAdmin},
+		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupRecoveryPassphrase},
+		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupComplete},
 	}
 }
 

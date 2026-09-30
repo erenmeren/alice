@@ -17,6 +17,7 @@ import (
 	"alice/internal/auth"
 	"alice/internal/auth/ratelimit"
 	"alice/internal/i18n"
+	"alice/internal/license"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
 	"alice/internal/rbac"
@@ -78,6 +79,12 @@ type AuditService interface {
 	VerifyReadOnly(ctx context.Context) (audit.Report, error)
 }
 
+// LicenseService is the part of license.Service the HTTP layer uses.
+type LicenseService interface {
+	// Allow is the single lock-mode gate (spec §8.6, R9).
+	Allow(c license.Class) error
+}
+
 // Deps are the handler's dependencies, wired in cmd/alice.
 type Deps struct {
 	Health         HealthChecker
@@ -89,6 +96,7 @@ type Deps struct {
 	Auth           AuthService
 	Setup          SetupService
 	Audit          AuditService
+	License        LicenseService
 	TrustedProxies []netip.Prefix
 	TestHandler    http.Handler // nil in release builds; mounted at "/test/" by the e2e build
 }
@@ -111,6 +119,10 @@ type route struct {
 	pattern string
 	perm    rbac.Permission
 	limit   limitClass
+	// lic is how lock mode treats this operation. Every non-GET route declares it: ClassAlways
+	// for platform administration, ClassChange for changes to managed systems or inventory
+	// (refused while the license is expired, R9). GET routes leave it unset (reads stay available).
+	lic     license.Class
 	handler http.HandlerFunc
 }
 
@@ -142,7 +154,8 @@ type Server struct {
 }
 
 // New builds the public HTTPS handler. It panics if a route declares an
-// unknown permission, so a misconfigured route table never starts (SEC-016).
+// unknown permission or a state-changing route declares no license class, so a
+// misconfigured route table never starts (SEC-016, R9).
 func New(d Deps) *Server {
 	s := newServer(d)
 	return &Server{s: s, h: s.handler(s.apiRoutes())}
@@ -189,6 +202,9 @@ func (s *server) register(mux *http.ServeMux, routes []route) {
 	for _, r := range routes {
 		if _, ok := rbac.PolicyFor(r.perm); !ok {
 			panic(fmt.Sprintf("api: route %s %s has unknown permission %q", r.method, r.pattern, r.perm))
+		}
+		if !safeMethod(r.method) && !r.lic.Valid() {
+			panic(fmt.Sprintf("api: state-changing route %s %s declares no license class", r.method, r.pattern))
 		}
 		mux.HandleFunc(r.method+" "+r.pattern, s.guard(r))
 	}

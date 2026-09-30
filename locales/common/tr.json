@@ -173,6 +173,13 @@
         "cause": "Kurtarma parolası henüz seçilmedi.",
         "action": "Bir kurtarma parolası seçip kurulumu tamamlayın."
       }
+    },
+    "license": {
+      "locked": {
+        "title": "Lisans süresi dolduğu için bu işlem kullanılamıyor.",
+        "cause": "Lisans (veya deneme süresi) sona erdi; bu nedenle Alice sunucularınızda değişiklik yapmıyor. Verileriniz güvende.",
+        "action": "Bir yönetici yenilenen lisansı Lisans sayfasından yükleyebilir. Her şey hemen yeniden çalışır."
+      }
     }
   },
   "validation": {

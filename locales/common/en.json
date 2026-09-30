@@ -173,6 +173,13 @@
         "cause": "The recovery passphrase has not been chosen.",
         "action": "Choose a recovery passphrase, then finish setup."
       }
+    },
+    "license": {
+      "locked": {
+        "title": "Not available while the license is expired.",
+        "cause": "The license (or the evaluation) has ended, so Alice makes no changes to your servers. Your data is safe.",
+        "action": "An administrator can upload a renewed license on the License page. Everything works again at once."
+      }
     }
   },
   "validation": {
