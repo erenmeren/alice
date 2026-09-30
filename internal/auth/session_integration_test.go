@@ -3,6 +3,7 @@
 package auth_test
 
 import (
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -145,4 +146,18 @@ func TestSetLocale(t *testing.T) {
 	info, err := e.svc.SessionInfo(e.ctx, p, res.Token)
 	require.NoError(t, err)
 	assert.Equal(t, "en", info.User.Locale)
+}
+
+func TestSessionStoresAZonedIPv6AddressWithoutItsZone(t *testing.T) {
+	e := newEnv(t)
+	e.bootstrap(t)
+	m := meta
+	m.IP = netip.MustParseAddr("fe80::1%eth0")
+
+	lr, err := e.svc.Login(e.ctx, "admin", adminPassword, m)
+	require.NoError(t, err, "a link-local client address with a zone must not break sign-in")
+	var ip string
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT host(ip) FROM sessions WHERE user_id = (SELECT id FROM users WHERE username = 'admin') AND kind = 'pending'").Scan(&ip))
+	assert.Equal(t, "fe80::1", ip)
+	assert.NotEmpty(t, lr.SessionToken)
 }

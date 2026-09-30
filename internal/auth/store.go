@@ -45,12 +45,13 @@ func getUser(ctx context.Context, q db.Querier, id uuid.UUID) (User, error) {
 	return scanUser(q.QueryRow(ctx, "SELECT "+userColumns+" FROM users u WHERE u.id = $1", id))
 }
 
-// ipParam returns a value for an inet parameter ($n::inet): NULL when unknown.
+// ipParam returns a value for an inet parameter ($n::inet): NULL when unknown. The
+// IPv6 zone is dropped because inet cannot hold it (like the audit log does).
 func ipParam(a netip.Addr) any {
 	if !a.IsValid() {
 		return nil
 	}
-	return a.Unmap().String()
+	return a.Unmap().WithZone("").String()
 }
 
 // truncateUA bounds the stored user agent.
