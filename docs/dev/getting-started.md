@@ -63,8 +63,8 @@ The compose stack reads `deploy/.env`:
   internal Docker network `backend`, which has no route outside the host.
 - In Phase 0 the DB password lives inside `ALICE_DATABASE_URL` and TLS files in the keys directory;
   secret-file packaging arrives in Phase 8.
-- Alice creates a temporary self-signed certificate (valid 90 days, renewed automatically 7 days
-  before expiry). A certificate you place in the keys directory yourself is never modified.
+- Alice creates a temporary self-signed certificate (valid 90 days, checked on every start and renewed
+  when it is expired or within 7 days of expiry; restart the container to renew it, runtime renewal is planned for a later phase). A certificate you place in the keys directory yourself is never modified.
 - **Deleting `deploy/.env` requires `down -v`.** PostgreSQL keeps the password it was first
   initialised with in the `pgdata` volume, so a new random password in a regenerated `.env` will not
   match. Reset with `docker compose -p alice -f deploy/docker-compose.yml --env-file deploy/.env down -v`

@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE EXTENSION IF NOT EXISTS citext;
 
--- Key/value application settings. Later phases add secret settings in a sibling table.
+-- Key/value application settings. Rows with secret = true hold sensitive values.
 CREATE TABLE settings (
     key        text PRIMARY KEY,
     value      jsonb NOT NULL,
