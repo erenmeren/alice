@@ -1,4 +1,4 @@
-import { DEFAULT_THEME, mergeMantineTheme } from '@mantine/core';
+import { DEFAULT_THEME, defaultVariantColorsResolver, mergeMantineTheme } from '@mantine/core';
 import { DANGER_HOVER, theme } from './theme';
 
 // WCAG 2.x relative luminance of a #rrggbb color.
@@ -25,8 +25,11 @@ describe('theme', () => {
     expect(contrast('#ffffff', full.colors.red[9])).toBeGreaterThanOrEqual(4.5);
   });
 
-  it('needs the override: Mantine hovers red 9 with the lighter red 8, which has no safety margin', () => {
-    // Exact WCAG math gives 4.513:1 for #e03131; axe measured 4.48:1 on the rendered hover.
+  it('needs the override: Mantine itself hovers red 9 with red 8, which has no safety margin', () => {
+    const base = defaultVariantColorsResolver({ color: 'red.9', theme: full, variant: 'filled' });
+    expect(base.hover).toBe('var(--mantine-color-red-8)'); // the variable resolves to full.colors.red[8]
+    // Exact WCAG math gives 4.513:1 for #e03131, but axe measures 4.48:1 on the rendered hover,
+    // which fails AA. That is why the override exists.
     expect(contrast('#ffffff', full.colors.red[8])).toBeLessThan(4.6);
   });
 
