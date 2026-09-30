@@ -219,36 +219,90 @@ func TestA05LogoutRevocationRoleChangeAndPasswordChange(t *testing.T) {
 }
 
 func TestA06CSRFAndOriginChecks(t *testing.T) {
-	s, c, _ := installed(t)
-	sessions := s.count("sessions")
+	s, c, admin := installed(t)
+	other := s.client("198.51.100.23") // a second, valid session of the same user
+	s.signIn(other, admin)
+	require.NotEmpty(t, other.csrf)
+	require.NotEqual(t, c.csrf, other.csrf)
 
-	requireError(t, c.do(http.MethodPost, "/api/v1/auth/logout", nil, withoutHeader("X-CSRF-Token")), http.StatusForbidden, "ALC-AUTH-0004")
-	requireError(t, c.do(http.MethodPost, "/api/v1/auth/logout", nil, withHeader("X-CSRF-Token", "forged")), http.StatusForbidden, "ALC-AUTH-0004")
-	requireError(t, c.do(http.MethodPost, "/api/v1/auth/logout", nil, withHeader("Origin", "https://evil.example")), http.StatusForbidden, "ALC-AUTH-0004")
-	requireError(t, c.do(http.MethodPost, "/api/v1/auth/logout", nil, withHeader("Sec-Fetch-Site", "cross-site")), http.StatusForbidden, "ALC-AUTH-0004")
-	assert.Equal(t, sessions, s.count("sessions"), "no refused logout reached the handler")
-	requireStatus(t, c.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK)
-
-	// Login CSRF: a cross-site form cannot sign the victim in either.
-	for name, opt := range map[string]reqOpt{
-		"foreign Origin":        withHeader("Origin", "https://evil.example"),
-		"cross-site fetch mode": withHeader("Sec-Fetch-Site", "cross-site"),
-	} {
-		rec := s.freshClient().do(http.MethodPost, "/api/v1/auth/login", loginBody("ada", adminPassword), opt)
-		requireError(t, rec, http.StatusForbidden, "ALC-AUTH-0004")
-		assert.Empty(t, rec.Header().Values("Set-Cookie"), name)
+	// Every cookie-authenticated state change is refused without this
+	// session's own token: missing, forged, or valid for another session.
+	forged := func() map[string]reqOpt {
+		return map[string]reqOpt{
+			"missing token":         withoutHeader("X-CSRF-Token"),
+			"wrong token":           withHeader("X-CSRF-Token", "forged"),
+			"other session's token": withHeader("X-CSRF-Token", other.csrf),
+		}
 	}
-	assert.Equal(t, sessions, s.count("sessions"), "no pending session was opened cross-site")
+	refused := func(t *testing.T, cl *client, method, path string, body any) {
+		t.Helper()
+		for name, opt := range forged() {
+			rec := cl.do(method, path, body, opt)
+			assert.Equal(t, http.StatusForbidden, rec.Code, "%s %s with %s: %s", method, path, name, rec.Body.String())
+			assert.Contains(t, rec.Body.String(), `"ALC-AUTH-0004"`, "%s %s with %s", method, path, name)
+		}
+	}
+
+	t.Run("POST logout", func(t *testing.T) {
+		sessions := s.count("sessions")
+		refused(t, c, http.MethodPost, "/api/v1/auth/logout", nil)
+		requireError(t, c.do(http.MethodPost, "/api/v1/auth/logout", nil, withHeader("Origin", "https://evil.example")), http.StatusForbidden, "ALC-AUTH-0004")
+		requireError(t, c.do(http.MethodPost, "/api/v1/auth/logout", nil, withHeader("Sec-Fetch-Site", "cross-site")), http.StatusForbidden, "ALC-AUTH-0004")
+		assert.Equal(t, sessions, s.count("sessions"), "no refused logout reached the handler")
+		requireStatus(t, c.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK)
+	})
+
+	t.Run("PATCH user", func(t *testing.T) {
+		s.stepUp(c, admin) // so that only the CSRF token stands between the request and the change
+		refused(t, c, http.MethodPatch, "/api/v1/users/"+admin.id, map[string]string{"display_name": "Forged Name"})
+		assert.Zero(t, s.countWhere("users", "display_name = 'Forged Name'"))
+		requireStatus(t, c.do(http.MethodPatch, "/api/v1/users/"+admin.id, map[string]string{"display_name": "Ada Lovelace"}), http.StatusOK)
+	})
+
+	t.Run("DELETE token", func(t *testing.T) {
+		_, tokenID := createToken(t, s, c, admin, "read", 1)
+		refused(t, c, http.MethodDelete, "/api/v1/tokens/"+tokenID, nil)
+		assert.Zero(t, s.countWhere("api_tokens", "revoked_at IS NOT NULL"))
+		requireStatus(t, c.do(http.MethodDelete, "/api/v1/tokens/"+tokenID, nil), http.StatusNoContent)
+	})
+
+	t.Run("POST MFA verify with a pending session", func(t *testing.T) {
+		p := s.client("198.51.100.24")
+		s.clock.Advance(31 * time.Second)
+		requireStatus(t, p.do(http.MethodPost, "/api/v1/auth/login", loginBody("ada", adminPassword)), http.StatusOK)
+		require.NotEmpty(t, p.csrf)
+		code := s.totpNow(admin.secret)
+		refused(t, p, http.MethodPost, "/api/v1/auth/mfa/verify", map[string]string{"code": code})
+		requireStatus(t, p.do(http.MethodPost, "/api/v1/auth/mfa/verify", map[string]string{"code": code}), http.StatusOK)
+	})
+
+	t.Run("login from a cross-site form", func(t *testing.T) {
+		sessions := s.count("sessions")
+		for name, opt := range map[string]reqOpt{
+			"foreign Origin":        withHeader("Origin", "https://evil.example"),
+			"cross-site fetch mode": withHeader("Sec-Fetch-Site", "cross-site"),
+		} {
+			rec := s.freshClient().do(http.MethodPost, "/api/v1/auth/login", loginBody("ada", adminPassword), opt)
+			requireError(t, rec, http.StatusForbidden, "ALC-AUTH-0004")
+			assert.Empty(t, rec.Header().Values("Set-Cookie"), name)
+		}
+		assert.Equal(t, sessions, s.count("sessions"), "no pending session was opened cross-site")
+	})
 }
 
-// rowsChecksum is an order-independent digest of every row of table. The
-// sliding idle timeout of sessions (last_seen_at, idle_expires_at) is the one
-// write an authenticated GET is allowed to make, so it is left out.
+// rowsChecksum is an order-independent digest of the rows of table matching
+// where. The sliding idle timeout of sessions (last_seen_at, idle_expires_at)
+// is the one write an authenticated GET is allowed to make, so those two
+// session columns are left out; every column of every other table counts.
 func (s *stack) rowsChecksum(table, where string) string {
 	s.t.Helper()
+	row := "to_jsonb(t)"
+	if table == "sessions" {
+		row = "(to_jsonb(t) - 'last_seen_at' - 'idle_expires_at')"
+	}
 	var sum string
 	require.NoError(s.t, s.db.Owner.QueryRow(context.Background(), `SELECT md5(coalesce(string_agg(r, E'\n' ORDER BY r), ''))
-FROM (SELECT (to_jsonb(t) - 'last_seen_at' - 'idle_expires_at')::text AS r FROM `+pgx.Identifier{table}.Sanitize()+` t WHERE `+where+`) x`).Scan(&sum))
+FROM (SELECT `+row+`::text AS r FROM `+pgx.Identifier{table}.Sanitize()+` t WHERE `+where+`) x`).Scan(&sum))
 	return sum
 }
 
@@ -420,44 +474,68 @@ func lockOut(t *testing.T, s *stack, username string) {
 }
 
 func TestR01R02ProgressiveDelayAndLockout(t *testing.T) {
+	// The limits of SEC-020 / R33, pinned as literals.
+	require.Equal(t, 5, auth.DelayThreshold)
+	require.Equal(t, 10, auth.LockThreshold)
+	require.Equal(t, 15*time.Minute, auth.LockDuration)
+	require.Equal(t, 60*time.Second, auth.MaxDelay)
+	delayAfter := map[int]time.Duration{ // failure number -> progressive delay
+		5: 1 * time.Second, 6: 2 * time.Second, 7: 4 * time.Second, 8: 8 * time.Second, 9: 16 * time.Second,
+	}
+
 	s, olga := installedWithOperator(t)
-	wrong := func() *httptest.ResponseRecorder {
-		rec := s.login("olga", wrongPassword)
-		requireError(t, rec, http.StatusUnauthorized, "ALC-AUTH-0005")
-		return rec
+	wrong := func(n int) {
+		t.Helper()
+		requireError(t, s.login("olga", wrongPassword), http.StatusUnauthorized, "ALC-AUTH-0005")
+		require.Equal(t, 1, s.countWhere("users", "username = 'olga' AND failed_logins = "+strconv.Itoa(n)), "failure %d was counted", n)
 	}
 	right := func() *httptest.ResponseRecorder { return s.login("olga", olga.password) }
-
-	normal := errorWithoutRequestID(t, wrong())
-	for i := 2; i <= auth.DelayThreshold; i++ {
-		wrong()
+	// The correct password passes the password step (a pending session). It
+	// does not reset the failure counter: only a completed MFA sign-in does, so
+	// one account can walk the whole sequence and nothing needs signing out.
+	accepted := func(msg string, args ...any) {
+		t.Helper()
+		rec := right()
+		require.Equal(t, http.StatusOK, rec.Code, append([]any{msg + ": %s"}, append(args, rec.Body.String())...)...)
+		require.Equal(t, "mfa_required", decodeBody[map[string]string](t, rec)["status"])
 	}
-	// Five consecutive failures: the next attempt within 1 s fails even with
-	// the right password, and looks exactly like a normal failure.
-	delayed := right()
-	requireError(t, delayed, http.StatusUnauthorized, "ALC-AUTH-0005")
-	assert.Equal(t, normal, errorWithoutRequestID(t, delayed))
-	s.clock.Advance(time.Second)
-	requireStatus(t, right(), http.StatusOK) // the password step alone does not reset the counter
 
-	// Failures 6..9 double the delay (2, 4, 8, 16 s); failure 10 locks for 15 minutes.
-	for n, wait := 6, time.Second; n <= auth.LockThreshold; n++ {
-		if n > 6 {
-			// Inside the delay of the previous failure even the right password fails.
-			s.clock.Advance(wait - time.Second)
+	first := s.login("olga", wrongPassword)
+	requireError(t, first, http.StatusUnauthorized, "ALC-AUTH-0005")
+	normal := errorWithoutRequestID(t, first)
+	for n := 2; n <= 4; n++ {
+		wrong(n)
+	}
+	// Up to four failures: no delay at all.
+	accepted("after failure 4, no delay")
+
+	// Failures 5..9: blocked for exactly 1, 2, 4, 8, 16 s. Refused (looking like
+	// any other failure) up to the last second of the window, accepted at its end.
+	for n := auth.DelayThreshold; n < auth.LockThreshold; n++ {
+		wrong(n)
+		d := delayAfter[n]
+		refused := right()
+		requireError(t, refused, http.StatusUnauthorized, "ALC-AUTH-0005")
+		assert.Equal(t, normal, errorWithoutRequestID(t, refused))
+		if d > time.Second {
+			s.clock.Advance(d - time.Second) // the window's last second
 			requireError(t, right(), http.StatusUnauthorized, "ALC-AUTH-0005")
-			s.clock.Advance(time.Second)
 		}
-		wrong()
-		wait = time.Duration(1<<(n-auth.DelayThreshold)) * time.Second
+		s.clock.Advance(time.Second) // exactly d after failure n
+		accepted("after failure %d, once its %s delay is over", n, d)
+		require.Equal(t, 1, s.countWhere("users", "username = 'olga' AND failed_logins = "+strconv.Itoa(n)), "the password step reset nothing")
 	}
+	assert.Zero(t, s.countWhere("audit_log", "action = 'auth.lockout'"), "no lockout before failure 10")
+
+	// Failure 10 locks for exactly 15 minutes.
+	wrong(auth.LockThreshold)
 	locked := right()
 	requireError(t, locked, http.StatusUnauthorized, "ALC-AUTH-0005")
 	assert.Equal(t, normal, errorWithoutRequestID(t, locked))
-	s.clock.Advance(14 * time.Minute)
+	s.clock.Advance(15*time.Minute - time.Second)
 	requireError(t, right(), http.StatusUnauthorized, "ALC-AUTH-0005")
-	s.clock.Advance(61 * time.Second)
-	requireStatus(t, right(), http.StatusOK)
+	s.clock.Advance(time.Second)
+	accepted("15 minutes after the lockout")
 
 	assert.Equal(t, 1, s.countWhere("audit_log", "action = 'auth.lockout'"))
 }
