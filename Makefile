@@ -68,7 +68,7 @@ hardening-check: ## Verify container hardening of the running stack
 
 .PHONY: e2e
 e2e: ## Run Playwright tests against the running stack (make up first)
-	cd web && npx playwright install chromium && npx playwright test
+	cd web && npx playwright install chromium && set -a && { [ ! -f ../deploy/.env ] || . ../deploy/.env; } && set +a && npx playwright test
 
 GOLANGCI_LINT_VERSION ?= v2.14.0
 GOVULNCHECK_VERSION   ?= v1.8.0

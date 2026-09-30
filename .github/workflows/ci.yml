@@ -62,7 +62,7 @@ jobs:
       - run: ./deploy/dev/init-env.sh && sed -i 's/^ALICE_PORT=.*/ALICE_PORT=8443/' deploy/.env
       - run: make up
       - run: make hardening-check
-      - run: cd web && npx playwright install --with-deps chromium && ALICE_BASE_URL=https://localhost:8443 npx playwright test
+      - run: cd web && npx playwright install --with-deps chromium && set -a && . ../deploy/.env && set +a && npx playwright test
       - run: make image-scan
       - if: failure()
         run: docker compose -f deploy/docker-compose.yml --env-file deploy/.env logs
