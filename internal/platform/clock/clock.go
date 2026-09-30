@@ -3,6 +3,7 @@
 package clock
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
@@ -23,6 +24,12 @@ type Ticker interface {
 	Stop()
 }
 
+// Monotonic measures elapsed process time ("uptime"). It never decreases and is not
+// affected when someone changes the wall clock (spec R26 compares the two).
+type Monotonic interface {
+	Elapsed() time.Duration
+}
+
 // Real is the production clock.
 type Real struct{}
 
@@ -36,6 +43,12 @@ func (Real) After(d time.Duration) <-chan time.Time {
 	go func() { out <- (<-src).UTC() }()
 	return out
 }
+
+// processStart carries Go's monotonic clock reading, so Real.Elapsed ignores wall-clock changes.
+var processStart = time.Now()
+
+// Elapsed returns the monotonic time since the process started.
+func (Real) Elapsed() time.Duration { return time.Since(processStart) }
 
 // NewTicker returns a Ticker backed by time.Ticker.
 func (Real) NewTicker(d time.Duration) Ticker {
@@ -69,10 +82,12 @@ func (r *realTicker) C() <-chan time.Time { return r.c }
 func (r *realTicker) Stop()               { r.stop() }
 
 // Fake is a manually controlled clock for tests. It is safe for concurrent
-// use. Set and Advance fire due timers and tickers deterministically.
+// use. Set and Advance fire due timers and tickers deterministically; forward
+// moves also count as uptime (Elapsed), JumpWall moves only the wall clock.
 type Fake struct {
 	mu      sync.Mutex
 	now     time.Time
+	elapsed time.Duration
 	timers  []*fakeTimer
 	tickers []*fakeTicker
 }
@@ -116,6 +131,28 @@ func (f *Fake) Advance(d time.Duration) {
 	f.moveTo(f.now.Add(d))
 }
 
+// Elapsed returns the fake uptime: the sum of all forward moves made by Set and Advance.
+func (f *Fake) Elapsed() time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.elapsed
+}
+
+// JumpWall moves only the wall clock by d, like an administrator setting the system
+// time: Elapsed does not change, nothing fires, and pending timers and tickers keep
+// their remaining durations (Go timers use the monotonic clock too).
+func (f *Fake) JumpWall(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.now = f.now.Add(d)
+	for _, tm := range f.timers {
+		tm.at = tm.at.Add(d)
+	}
+	for _, tk := range f.tickers {
+		tk.next = tk.next.Add(d)
+	}
+}
+
 // After returns a channel that receives the fake time once d has elapsed on
 // the fake clock. A non-positive d fires immediately.
 func (f *Fake) After(d time.Duration) <-chan time.Time {
@@ -157,49 +194,41 @@ func (t *fakeTicker) Stop() {
 	}
 }
 
-// moveTo sets now to target, firing due events in chronological order.
-// The caller must hold f.mu.
+// moveTo sets now to target. Moving forward counts as uptime, fires every due
+// timer once (in deadline order) and gives every due ticker one tick carrying its
+// latest due time: like time.Ticker with a slow receiver, missed ticks are dropped.
+// The ticker schedule is advanced arithmetically, so the cost does not depend on
+// how many periods the move spans. The caller must hold f.mu.
 func (f *Fake) moveTo(target time.Time) {
 	if !target.After(f.now) {
 		f.now = target
 		return
 	}
-	for {
-		var at time.Time
-		found := false
-		for _, tm := range f.timers {
-			if !tm.at.After(target) && (!found || tm.at.Before(at)) {
-				at, found = tm.at, true
-			}
+	f.elapsed += target.Sub(f.now)
+	sort.SliceStable(f.timers, func(i, j int) bool { return f.timers[i].at.Before(f.timers[j].at) })
+	n := len(f.timers)
+	remaining := f.timers[:0]
+	for _, tm := range f.timers {
+		if tm.at.After(target) {
+			remaining = append(remaining, tm)
+			continue
 		}
-		for _, tk := range f.tickers {
-			if !tk.next.After(target) && (!found || tk.next.Before(at)) {
-				at, found = tk.next, true
-			}
+		tm.ch <- tm.at // buffered (1) and fires once, never blocks
+	}
+	for i := len(remaining); i < n; i++ {
+		f.timers[i] = nil // drop references to fired timers
+	}
+	f.timers = remaining
+	for _, tk := range f.tickers {
+		if tk.next.After(target) {
+			continue
 		}
-		if !found {
-			break
+		last := tk.next.Add(target.Sub(tk.next) / tk.period * tk.period)
+		select {
+		case tk.ch <- last:
+		default: // the receiver has not taken the previous tick yet
 		}
-		f.now = at
-		remaining := f.timers[:0]
-		for _, tm := range f.timers {
-			if tm.at.After(at) {
-				remaining = append(remaining, tm)
-				continue
-			}
-			tm.ch <- at // buffered (1) and fires once, never blocks
-		}
-		f.timers = remaining
-		for _, tk := range f.tickers {
-			if tk.next.After(at) {
-				continue
-			}
-			select {
-			case tk.ch <- at:
-			default: // drop, like time.Ticker with a slow receiver
-			}
-			tk.next = tk.next.Add(tk.period)
-		}
+		tk.next = last.Add(tk.period)
 	}
 	f.now = target
 }
