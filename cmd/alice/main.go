@@ -13,11 +13,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"alice/internal/api"
 	"alice/internal/i18n"
-	"alice/internal/platform/clock"
 	"alice/internal/platform/config"
 	"alice/internal/platform/db"
+	"alice/internal/platform/logging"
 	"alice/internal/platform/tlscert"
 	"alice/internal/version"
 	"alice/internal/webui"
@@ -31,11 +33,14 @@ const dbStartupBudget = 60 * time.Second
 const usage = `Usage: alice <command>
 
 Commands:
-  serve        Start the Alice server (default)
-  migrate      Apply database migrations and exit
-  healthcheck  Exit 0 if the local server reports healthy (used by Docker)
-  version      Print version information
-  help         Show this help
+  serve                       Start the Alice server (default)
+  migrate                     Apply database migrations and exit
+  healthcheck                 Exit 0 if the local server reports healthy (used by Docker)
+  setup-token --reset         Print a new one-time setup code (only before the first administrator exists)
+  audit verify                Check the audit log hash chain (exit code 1 if it is broken)
+  admin reset-mfa <username>  Remove a user's authenticator app; they set up a new one at next sign-in
+  version                     Print version information
+  help                        Show this help
 `
 
 func main() {
@@ -52,7 +57,7 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "configuration error:", err)
 		return 1
 	}
-	log := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	log := logging.New(stderr, cfg.LogLevel)
 
 	switch cmd {
 	case "serve":
@@ -72,6 +77,12 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		return 0
 	case "healthcheck":
 		return healthcheck(cfg)
+	case "setup-token":
+		return runSetupToken(args[1:], cfg, stdout, stderr)
+	case "audit":
+		return runAudit(args[1:], cfg, stdout, stderr)
+	case "admin":
+		return runAdmin(args[1:], cfg, stdout, stderr)
 	case "version":
 		v := version.Get()
 		fmt.Fprintf(stdout, "alice %s (commit %s, built %s)\n", v.Version, v.Commit, v.BuildTime)
@@ -85,31 +96,22 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	}
 }
 
-func migrate(cfg config.Config) error {
-	if err := cfg.RequireDatabase(); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+// openDB opens a pool and waits up to budget for the database. Only an
+// unreachable database is worth the "not ready" wording; a wrong password or
+// a missing database is reported as it is (db.ErrAuthFailed, db.ErrDatabaseMissing).
+func openDB(ctx context.Context, url string, budget time.Duration) (*pgxpool.Pool, error) {
+	openCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	return applyMigrations(ctx, cfg, 2*time.Minute)
-}
-
-// applyMigrations opens a short-lived pool as the migration (owner) role,
-// applies all migrations and closes it, so the running server never keeps an
-// owner connection (the app role cannot rewrite the audit log, SEC-071).
-func applyMigrations(ctx context.Context, cfg config.Config, openBudget time.Duration) error {
-	openCtx, cancel := context.WithTimeout(ctx, openBudget)
-	owner, err := db.Open(openCtx, cfg.MigrationURL())
-	cancel()
+	pool, err := db.Open(openCtx, url)
 	if err != nil {
-		return dbStartupError(err, openBudget)
+		return nil, dbStartupError(err, budget)
 	}
-	defer owner.Close()
-	return db.Migrate(ctx, owner, migrations.FS)
+	return pool, nil
 }
 
 // dbStartupError adds the waiting time to "not reachable" errors only; a
 // rejected password or a missing database is reported as is (it is final).
+// (Kept from Task 3; TestDBStartupErrorMentionsWaitOnlyForUnreachable covers it.)
 func dbStartupError(err error, budget time.Duration) error {
 	if errors.Is(err, db.ErrUnreachable) {
 		return fmt.Errorf("database not ready after %s: %w", budget, err)
@@ -117,27 +119,50 @@ func dbStartupError(err error, budget time.Duration) error {
 	return err
 }
 
+// migrateWith applies migrations through a short-lived pool on the owner role and
+// closes it, so the running server never keeps an owner connection (the app role
+// cannot rewrite the audit log, SEC-071).
+func migrateWith(ctx context.Context, url string, budget time.Duration) error {
+	pool, err := openDB(ctx, url, budget)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	return db.Migrate(ctx, pool, migrations.FS)
+}
+
+func migrate(cfg config.Config) error {
+	if err := cfg.RequireDatabase(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	return migrateWith(ctx, cfg.MigrationURL(), time.Minute)
+}
+
 func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if err := cfg.RequireDatabase(); err != nil {
 		return err
 	}
 	log.Info("starting alice", "version", version.Get().Version, "config", cfg)
-
 	if !cfg.SeparateMigrationRole() {
-		log.Warn("ALICE_MIGRATE_DATABASE_URL is not set: migrations and the application share one database role, " +
-			"so the audit log is protected by triggers only; configure a separate owner role")
+		log.Warn("ALICE_MIGRATE_DATABASE_URL is not set, so migrations and the application share one database role; " +
+			"the audit log is then protected by database triggers only. Set ALICE_MIGRATE_DATABASE_URL to the owner role.")
 	}
-	// db.Open only honours its context, so the startup budget is enforced here.
-	if err := applyMigrations(ctx, cfg, dbStartupBudget); err != nil {
+	if err := migrateWith(ctx, cfg.MigrationURL(), dbStartupBudget); err != nil {
 		return err
 	}
-	openCtx, cancel := context.WithTimeout(ctx, dbStartupBudget)
-	pool, err := db.Open(openCtx, cfg.DatabaseURL)
-	cancel()
+	pool, err := openDB(ctx, cfg.DatabaseURL, dbStartupBudget)
 	if err != nil {
-		return dbStartupError(err, dbStartupBudget)
+		return err
 	}
 	defer pool.Close()
+
+	clk := newClock()
+	svc, err := buildServices(ctx, pool, cfg.KeysDir, clk)
+	if err != nil {
+		return err
+	}
 	health, err := db.NewHealthChecker(pool, migrations.FS)
 	if err != nil {
 		return err
@@ -150,16 +175,41 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if h, err := os.Hostname(); err == nil {
 		hosts = append(hosts, h)
 	}
-	cert, err := tlscert.EnsureSelfSigned(cfg.KeysDir, hosts, clock.Real{}.Now())
+	cert, err := tlscert.EnsureSelfSigned(cfg.KeysDir, hosts, clk.Now())
 	if err != nil {
 		return err
 	}
 
-	deps := api.Deps{Health: health, Catalog: catalog, Version: version.Get(), UI: webui.UI(), Log: log}
+	var apiServer *api.Server
+	td := testDeps{
+		OwnerURL: cfg.MigrationURL(),
+		Setup:    svc.setup,
+		Log:      log,
+		ResetLimits: func() {
+			if apiServer != nil {
+				apiServer.ResetLimits()
+			}
+		},
+	}
+	deps := api.Deps{
+		Health:         health,
+		Catalog:        catalog,
+		Version:        version.Get(),
+		UI:             webui.UI(),
+		Log:            log,
+		Clock:          clk,
+		Auth:           svc.auth,
+		Setup:          svc.setup,
+		Audit:          svc.audit,
+		TrustedProxies: cfg.TrustedProxies,
+		TestHandler:    testHandler(td),
+	}
+	apiServer = api.New(deps)
+
 	errLog := slog.NewLogLogger(log.Handler(), slog.LevelWarn)
 	public := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.NewHandler(deps),
+		Handler:           apiServer.Handler(),
 		TLSConfig:         tlscert.ServerConfig(cert),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,

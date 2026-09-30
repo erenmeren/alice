@@ -17,7 +17,9 @@ COPY --from=web /src/internal/webui/dist/app internal/webui/dist/app
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_TIME=unknown
-RUN CGO_ENABLED=0 go build -trimpath \
+# GO_TAGS is empty for release images; deploy/docker-compose.e2e.yml sets "e2e".
+ARG GO_TAGS=""
+RUN CGO_ENABLED=0 go build -trimpath -tags "${GO_TAGS}" \
     -ldflags "-s -w -X alice/internal/version.Version=${VERSION} -X alice/internal/version.Commit=${COMMIT} -X alice/internal/version.BuildTime=${BUILD_TIME}" \
     -o /out/alice ./cmd/alice \
  && mkdir -p /out/keys && chmod 0700 /out/keys

@@ -39,6 +39,7 @@ services:
     environment:
       # sslmode=disable: the connection never leaves the internal "backend" network.
       # The app runs as alice_app (no UPDATE/DELETE on audit_log); migrations run as the owner.
+      # Known limitation (Phase 8 fix): the owner "alice" is the PostgreSQL superuser.
       ALICE_DATABASE_URL: postgres://alice_app:${ALICE_APP_DB_PASSWORD}@postgres:5432/alice?sslmode=disable
       ALICE_MIGRATE_DATABASE_URL: postgres://alice:${ALICE_DB_PASSWORD}@postgres:5432/alice?sslmode=disable
       ALICE_TLS_HOSTS: ${ALICE_TLS_HOSTS:-}
@@ -54,6 +55,8 @@ services:
     security_opt: ["no-new-privileges:true"]
     mem_limit: 512m
     pids_limit: 256
+    # No core dumps: a crash must never write key material to disk.
+    ulimits: { core: 0 }
     healthcheck:
       test: ["CMD", "/usr/local/bin/alice", "healthcheck"]
       interval: 10s

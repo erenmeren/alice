@@ -16,6 +16,7 @@ check "alice root filesystem is read-only" "$(docker inspect -f '{{.HostConfig.R
 check "alice drops all capabilities" "$(docker inspect -f '{{json .HostConfig.CapDrop}}' "$alice")" '["ALL"]'
 check "alice has no-new-privileges" "$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$alice")" '["no-new-privileges:true"]'
 check "alice has a pids limit" "$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$alice")" "256"
+check "alice has core dumps disabled" "$(docker inspect -f '{{json .HostConfig.Ulimits}}' "$alice")" '[{"Name":"core","Hard":0,"Soft":0}]'
 check "alice is healthy" "$(docker inspect -f '{{.State.Health.Status}}' "$alice")" "healthy"
 check "postgres publishes no ports" "$(docker port "$pg" | wc -l | tr -d ' ')" "0"
 check "backend network is internal" "$(docker network inspect -f '{{.Internal}}' alice_backend)" "true"

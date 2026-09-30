@@ -75,8 +75,19 @@ logs: ## Follow the alice container logs
 hardening-check: ## Verify container hardening of the running stack
 	./deploy/dev/check-hardening.sh
 
+COMPOSE_E2E := docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.e2e.yml --env-file deploy/.env
+
+.PHONY: e2e-up
+e2e-up: ## Build and start the e2e variant (adds test-only /test endpoints; never shipped)
+	./deploy/dev/init-env.sh
+	$(COMPOSE_E2E) up -d --build --wait
+
+.PHONY: setup-token
+setup-token: ## Print a new one-time setup code for the /setup wizard (only before the first administrator exists)
+	$(COMPOSE) exec -T alice /usr/local/bin/alice setup-token --reset
+
 .PHONY: e2e
-e2e: ## Run Playwright tests against the running stack (make up first)
+e2e: ## Run Playwright tests against the e2e stack (make e2e-up first)
 	cd web && npx playwright install chromium && set -a && { [ ! -f ../deploy/.env ] || . ../deploy/.env; } && set +a && npx playwright test
 
 GOLANGCI_LINT_VERSION ?= v2.14.0
@@ -90,8 +101,9 @@ tools: ## Install pinned Go developer tools into $(HOME)/go/bin
 	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 
 .PHONY: lint
-lint: ## Run golangci-lint (gosec, forbidigo, ...)
+lint: ## Run golangci-lint (gosec, forbidigo, ...) on the release and the e2e build
 	golangci-lint run ./...
+	golangci-lint run --build-tags e2e ./cmd/...
 
 .PHONY: vuln
 vuln: ## Check Go dependencies and code for known vulnerabilities
@@ -111,4 +123,4 @@ image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
 	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:$(TRIVY_VERSION) image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed alice:dev
 
 .PHONY: ci
-ci: lint test test-integration build i18n-check web-lint web-test vuln secrets-scan fs-scan up hardening-check e2e image-scan ## Run the full CI pipeline locally
+ci: lint test test-integration build i18n-check web-lint web-test vuln secrets-scan fs-scan e2e-up hardening-check e2e image-scan ## Run the full CI pipeline locally

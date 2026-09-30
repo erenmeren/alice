@@ -1,0 +1,9 @@
+# Test-only overlay: builds the e2e variant of alice (build tag "e2e"), which adds
+# the /test/clock, /test/reset and /test/setup-token endpoints used by Playwright.
+# Never use this file for a real installation; release images are built without it.
+services:
+  alice:
+    image: alice:e2e
+    build:
+      args:
+        GO_TAGS: e2e
