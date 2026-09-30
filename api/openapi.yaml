@@ -1,0 +1,102 @@
+openapi: 3.1.0
+info:
+  title: Alice API
+  version: 0.1.0
+  description: Self-hosted SSH key and TLS certificate management. All timestamps are UTC RFC 3339.
+servers:
+  - url: /
+paths:
+  /livez:
+    get:
+      operationId: getLivez
+      summary: Process liveness (no dependencies checked)
+      x-permission: public
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+        default: { $ref: "#/components/responses/Error" }
+  /healthz:
+    get:
+      operationId: getHealthz
+      summary: Readiness (database reachable and migrations current)
+      x-permission: public
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/version:
+    get:
+      operationId: getVersion
+      summary: Build information
+      x-permission: public
+      responses:
+        "200":
+          description: Build information
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionInfo" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/i18n/locales:
+    get:
+      operationId: listLocales
+      summary: Supported UI languages
+      x-permission: public
+      responses:
+        "200":
+          description: Supported locales
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LocaleList" }
+        default: { $ref: "#/components/responses/Error" }
+components:
+  responses:
+    StatusOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [status]
+            properties:
+              status: { type: string, const: ok }
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    VersionInfo:
+      type: object
+      required: [version, commit, build_time]
+      properties:
+        version: { type: string }
+        commit: { type: string }
+        build_time: { type: string }
+    Locale:
+      type: object
+      required: [code, name, direction]
+      properties:
+        code: { type: string, examples: [tr] }
+        name: { type: string, examples: [Türkçe] }
+        direction: { type: string, enum: [ltr, rtl] }
+    LocaleList:
+      type: object
+      required: [default, locales]
+      properties:
+        default: { type: string }
+        locales:
+          type: array
+          items: { $ref: "#/components/schemas/Locale" }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, reason, message_key, message, request_id, retryable]
+          properties:
+            code: { type: string, pattern: "^ALC-[A-Z]{2,5}-[0-9]{4}$", examples: [ALC-SYS-0001] }
+            reason: { type: string, examples: [system.not_found] }
+            message_key: { type: string }
+            message: { type: string }
+            request_id: { type: string }
+            retryable: { type: boolean }
