@@ -1,0 +1,24 @@
+{
+  "app": { "name": "Alice" },
+  "errors": {
+    "system": {
+      "not_found": {
+        "title": "This page or item does not exist.",
+        "cause": "The address may be mistyped, or the item was removed.",
+        "action": "Check the address, or go back to the home page."
+      },
+      "unavailable": {
+        "title": "Alice is temporarily unavailable.",
+        "cause": "Alice cannot reach its database, or it is still starting.",
+        "action": "Wait a minute and try again. If this continues, ask your administrator to check the Alice service."
+      }
+    },
+    "internal": {
+      "unexpected": {
+        "title": "Something went wrong on our side.",
+        "cause": "Alice hit an unexpected problem while handling your request.",
+        "action": "Try again. If it happens again, give your administrator the request ID shown here."
+      }
+    }
+  }
+}

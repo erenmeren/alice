@@ -1,0 +1,24 @@
+{
+  "app": { "name": "Alice" },
+  "errors": {
+    "system": {
+      "not_found": {
+        "title": "Bu sayfa veya öğe bulunamadı.",
+        "cause": "Adres yanlış yazılmış olabilir ya da öğe kaldırılmış olabilir.",
+        "action": "Adresi kontrol edin veya ana sayfaya dönün."
+      },
+      "unavailable": {
+        "title": "Alice şu anda geçici olarak kullanılamıyor.",
+        "cause": "Alice veritabanına ulaşamıyor ya da hâlâ başlatılıyor.",
+        "action": "Bir dakika bekleyip tekrar deneyin. Sorun sürerse yöneticinizden Alice hizmetini kontrol etmesini isteyin."
+      }
+    },
+    "internal": {
+      "unexpected": {
+        "title": "Bizim tarafımızda bir sorun oluştu.",
+        "cause": "Alice isteğinizi işlerken beklenmeyen bir sorunla karşılaştı.",
+        "action": "Tekrar deneyin. Yine olursa burada gösterilen istek kimliğini yöneticinize iletin."
+      }
+    }
+  }
+}

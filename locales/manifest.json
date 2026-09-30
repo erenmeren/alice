@@ -1,0 +1,7 @@
+{
+  "default": "en",
+  "locales": [
+    { "code": "en", "name": "English", "direction": "ltr" },
+    { "code": "tr", "name": "Türkçe", "direction": "ltr" }
+  ]
+}
