@@ -72,7 +72,8 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env exec alice /u
 build serves `GET/POST /test/clock` (read or move the server clock forward), `POST /test/reset` (empty
 all tables) and `POST /test/setup-token` (issue a setup code). Release images are built without the tag;
 a unit test in `cmd/alice` fails if the release build ever contains a test endpoint or the demo clock.
-Never run the e2e build for real data.
+The e2e build reports its version with a `+e2e` suffix and logs a warning at startup. Never run it
+for real data.
 
 ## Configuration
 

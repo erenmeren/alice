@@ -11,8 +11,9 @@ help: ## Show available targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
 .PHONY: test
-test: ## Run Go unit tests with the race detector
+test: ## Run Go unit tests with the race detector (release build, plus the e2e build of cmd/alice)
 	go test -race -count=1 ./...
+	go test -race -count=1 -tags e2e ./cmd/alice/
 
 .PHONY: test-integration
 test-integration: ## Run integration tests (needs Docker)

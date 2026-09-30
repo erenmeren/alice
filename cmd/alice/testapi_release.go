@@ -8,6 +8,9 @@ import (
 	"alice/internal/platform/clock"
 )
 
+// versionSuffix marks the build variant in the reported version (none for release builds).
+const versionSuffix = ""
+
 // newClock returns the wall clock. Only the e2e build can shift time.
 func newClock() clock.Clock { return clock.Real{} }
 

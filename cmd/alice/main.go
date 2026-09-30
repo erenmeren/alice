@@ -21,7 +21,6 @@ import (
 	"alice/internal/platform/db"
 	"alice/internal/platform/logging"
 	"alice/internal/platform/tlscert"
-	"alice/internal/version"
 	"alice/internal/webui"
 	"alice/locales"
 	"alice/migrations"
@@ -84,7 +83,7 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	case "admin":
 		return runAdmin(args[1:], cfg, stdout, stderr)
 	case "version":
-		v := version.Get()
+		v := buildVersion()
 		fmt.Fprintf(stdout, "alice %s (commit %s, built %s)\n", v.Version, v.Commit, v.BuildTime)
 		return 0
 	case "help", "-h", "--help":
@@ -144,7 +143,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if err := cfg.RequireDatabase(); err != nil {
 		return err
 	}
-	log.Info("starting alice", "version", version.Get().Version, "config", cfg)
+	log.Info("starting alice", "version", buildVersion().Version, "config", cfg)
 	if !cfg.SeparateMigrationRole() {
 		log.Warn("ALICE_MIGRATE_DATABASE_URL is not set, so migrations and the application share one database role; " +
 			"the audit log is then protected by database triggers only. Set ALICE_MIGRATE_DATABASE_URL to the owner role.")
@@ -194,7 +193,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	deps := api.Deps{
 		Health:         health,
 		Catalog:        catalog,
-		Version:        version.Get(),
+		Version:        buildVersion(),
 		UI:             webui.UI(),
 		Log:            log,
 		Clock:          clk,
@@ -205,6 +204,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		TestHandler:    testHandler(td),
 	}
 	apiServer = api.New(deps)
+	warnIfTestBuild(log, deps.TestHandler)
 
 	errLog := slog.NewLogLogger(log.Handler(), slog.LevelWarn)
 	public := &http.Server{

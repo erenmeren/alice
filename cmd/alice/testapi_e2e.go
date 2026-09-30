@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -14,6 +15,16 @@ import (
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
 )
+
+// versionSuffix marks the e2e build in "alice version" and /api/v1/version.
+const versionSuffix = "+e2e"
+
+// maxTestBody is the request body limit of the API (SEC-023), applied to /test too.
+const maxTestBody = 1 << 20
+
+// maxClockAdvance bounds one POST /test/clock step (10 years of 365 days), so the
+// offset stays far from the time.Duration limit (about 292 years).
+const maxClockAdvance = 10 * 365 * 24 * time.Hour
 
 // e2eClock is the server clock in the e2e build; POST /test/clock moves it.
 var e2eClock = clock.NewOffset(clock.Real{})
@@ -34,8 +45,17 @@ func testHandler(d testDeps) http.Handler {
 		var body struct {
 			AdvanceSeconds float64 `json:"advance_seconds"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.AdvanceSeconds < 0 {
-			writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "advance_seconds must be a number >= 0"})
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxTestBody)).Decode(&body); err != nil {
+			var tooBig *http.MaxBytesError
+			if errors.As(err, &tooBig) {
+				writeTestJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
+				return
+			}
+			writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "body must be JSON {\"advance_seconds\": n}"})
+			return
+		}
+		if body.AdvanceSeconds < 0 || body.AdvanceSeconds > maxClockAdvance.Seconds() {
+			writeTestJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "advance_seconds must be between 0 and 315360000 (10 years)"})
 			return
 		}
 		e2eClock.Advance(time.Duration(body.AdvanceSeconds * float64(time.Second)))
