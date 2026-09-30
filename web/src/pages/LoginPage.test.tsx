@@ -204,6 +204,17 @@ describe('sign-in page safety', () => {
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeEnabled();
   });
 
+  it('starts again when the pending sign-in expires during authenticator setup', async () => {
+    server.use(...loginHandlers('mfa_enrollment_required', () => errorResponse(401, 'ALC-AUTH-0001', 'auth.unauthenticated')));
+    await renderRoute('/login');
+    await signIn();
+    await userEvent.type(await screen.findByLabelText('6-digit code'), '123456');
+    await userEvent.click(screen.getByRole('button', { name: 'Verify' }));
+    expect(await screen.findByLabelText('Username')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Your session ended. Please sign in again.');
+    expect(screen.getByLabelText('Password')).toHaveValue('');
+  });
+
   it('has a language switcher', async () => {
     await renderRoute('/login');
     expect(await screen.findByRole('radio', { name: 'Türkçe' })).toBeInTheDocument();

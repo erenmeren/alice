@@ -153,7 +153,18 @@ export function LoginPage() {
   };
 
   const verifyEnrollment = async (code: string) => {
-    const res = await verifyMfa({ code });
+    let res: SessionWithCodes;
+    try {
+      res = await verifyMfa({ code });
+    } catch (e) {
+      // The pending sign-in expired while the user set up the app: start again, like the MFA step.
+      if (isApiError(e, 'auth.unauthenticated')) {
+        setError(e);
+        setPhase('password');
+        return;
+      }
+      throw e;
+    }
     if (res.recovery_codes && res.recovery_codes.length > 0) {
       setWithCodes(res);
       setPhase('codes');

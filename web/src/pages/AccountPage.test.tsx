@@ -39,6 +39,9 @@ describe('account page', () => {
     await fillPasswords('old password here', 'a much longer new one', 'a much longer new one');
     expect(await screen.findByText('Your password was changed. Your other sessions were signed out.')).toBeInTheDocument();
     expect(body).toEqual({ current_password: 'old password here', new_password: 'a much longer new one' });
+    expect(screen.getByLabelText('Current password')).toHaveValue('');
+    expect(screen.getByLabelText('New password')).toHaveValue('');
+    expect(screen.getByLabelText('Repeat new password')).toHaveValue('');
     await userEvent.click(screen.getByRole('button', { name: 'Create new recovery codes' }));
     await waitFor(() => expect(csrfAfter).toBe('csrf-renewed'));
   });
