@@ -33,6 +33,7 @@
     "notFoundText": "The address may be mistyped, or the page was moved.",
     "backHome": "Go to the home page",
     "cancel": "Cancel",
+    "close": "Close",
     "codeLabel": "6-digit code",
     "stepUp": {
       "title": "Confirm it's you",

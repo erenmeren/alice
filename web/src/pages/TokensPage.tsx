@@ -5,7 +5,6 @@ import {
   Code,
   CopyButton,
   Group,
-  Modal,
   NativeSelect,
   NumberInput,
   Stack,
@@ -22,6 +21,7 @@ import { useAuth } from '../auth/AuthProvider';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { useStepUp } from '../components/StepUpProvider';
 import { formatDateTime } from '../datetime';
+import { AppModal } from '../components/AppModal';
 
 export function TokensPage() {
   const { t, i18n } = useTranslation();
@@ -147,7 +147,7 @@ function CreateTokenModal({ onClose, onCreated }: { onClose: () => void; onCreat
   };
 
   return (
-    <Modal opened onClose={onClose} title={t('tokens.create')}>
+    <AppModal opened onClose={onClose} title={t('tokens.create')}>
       <form onSubmit={(e) => void submit(e)}>
         <Stack gap="sm">
           <TextInput label={t('tokens.fields.name')} value={name} onChange={(e) => setName(e.currentTarget.value)} required maxLength={100} />
@@ -172,7 +172,7 @@ function CreateTokenModal({ onClose, onCreated }: { onClose: () => void; onCreat
           </Button>
         </Stack>
       </form>
-    </Modal>
+    </AppModal>
   );
 }
 
@@ -193,7 +193,7 @@ function RevokeTokenModal({ token, onClose, onDone }: { token: ApiToken; onClose
     }
   };
   return (
-    <Modal opened onClose={onClose} title={t('tokens.revokeTitle', { name: token.name })}>
+    <AppModal opened onClose={onClose} title={t('tokens.revokeTitle', { name: token.name })}>
       <Stack gap="sm">
         <Text size="sm">{t('tokens.revokeText')}</Text>
         <ErrorAlert error={error} />
@@ -206,6 +206,6 @@ function RevokeTokenModal({ token, onClose, onDone }: { token: ApiToken; onClose
           </Button>
         </Group>
       </Stack>
-    </Modal>
+    </AppModal>
   );
 }

@@ -1,10 +1,11 @@
-import { Button, Group, Modal, Stack, Text, TextInput } from '@mantine/core';
+import { Button, Group, Stack, Text, TextInput } from '@mantine/core';
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isApiError } from '../api/client';
 import { stepUp } from '../api/endpoints';
 import { useAuth } from '../auth/AuthProvider';
 import { ErrorAlert } from './ErrorAlert';
+import { AppModal } from './AppModal';
 
 interface StepUpApi {
   // run calls fn; when the server answers auth.stepup_required it asks for a fresh
@@ -95,7 +96,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
     <StepUpContext.Provider value={api}>
       {children}
       {/* zIndex above page modals (default 200): step-up often opens on top of an open form dialog. */}
-      <Modal opened={opened} onClose={cancel} title={t('ui.stepUp.title')} centered zIndex={1000} transitionProps={{ duration: 0 }}>
+      <AppModal opened={opened} onClose={cancel} title={t('ui.stepUp.title')} centered zIndex={1000} transitionProps={{ duration: 0 }}>
         <form onSubmit={submit}>
           <Stack>
             <Text size="sm">{t('ui.stepUp.help')}</Text>
@@ -119,7 +120,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
             </Group>
           </Stack>
         </form>
-      </Modal>
+      </AppModal>
     </StepUpContext.Provider>
   );
 }

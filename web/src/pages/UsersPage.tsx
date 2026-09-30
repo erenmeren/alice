@@ -3,7 +3,6 @@ import {
   Badge,
   Button,
   Group,
-  Modal,
   NativeSelect,
   PasswordInput,
   Stack,
@@ -27,6 +26,7 @@ import type { Role, User } from '../api/types';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { useStepUp } from '../components/StepUpProvider';
 import { formatDateTime } from '../datetime';
+import { AppModal } from '../components/AppModal';
 
 const ROLES: Role[] = ['admin', 'operator', 'auditor'];
 
@@ -108,7 +108,7 @@ export function UsersPage() {
 function ManageModal({ user, onChoose, onClose }: { user: User; onChoose: (d: Dialog) => void; onClose: () => void }) {
   const { t } = useTranslation();
   return (
-    <Modal opened onClose={onClose} title={t('users.manageTitle', { name: user.username })}>
+    <AppModal opened onClose={onClose} title={t('users.manageTitle', { name: user.username })}>
       <Stack gap="xs">
         <Button variant="default" onClick={() => onChoose({ kind: 'edit', user })}>
           {t('users.actions.edit')}
@@ -126,7 +126,7 @@ function ManageModal({ user, onChoose, onClose }: { user: User; onChoose: (d: Di
           {user.disabled ? t('users.actions.enable') : t('users.actions.disable')}
         </Button>
       </Stack>
-    </Modal>
+    </AppModal>
   );
 }
 
@@ -177,7 +177,7 @@ function CreateUserModal({ onClose }: { onClose: () => void }) {
     void perform(() => createUser({ username, display_name: displayName, email, role, password }));
   };
   return (
-    <Modal opened onClose={onClose} title={t('users.add')}>
+    <AppModal opened onClose={onClose} title={t('users.add')}>
       <form onSubmit={submit}>
         <Stack gap="sm">
           <TextInput label={t('users.fields.username')} value={username} onChange={(e) => setUsername(e.currentTarget.value)} required autoComplete="off" />
@@ -198,7 +198,7 @@ function CreateUserModal({ onClose }: { onClose: () => void }) {
           </Button>
         </Stack>
       </form>
-    </Modal>
+    </AppModal>
   );
 }
 
@@ -213,7 +213,7 @@ function EditUserModal({ user, onClose }: { user: User; onClose: () => void }) {
     void perform(() => updateUser(user.id, { display_name: displayName, email, role }));
   };
   return (
-    <Modal opened onClose={onClose} title={t('users.editTitle', { name: user.username })}>
+    <AppModal opened onClose={onClose} title={t('users.editTitle', { name: user.username })}>
       <form onSubmit={submit}>
         <Stack gap="sm">
           <TextInput label={t('users.fields.name')} value={displayName} onChange={(e) => setDisplayName(e.currentTarget.value)} required />
@@ -225,7 +225,7 @@ function EditUserModal({ user, onClose }: { user: User; onClose: () => void }) {
           </Button>
         </Stack>
       </form>
-    </Modal>
+    </AppModal>
   );
 }
 
@@ -238,7 +238,7 @@ function ResetPasswordModal({ user, onClose }: { user: User; onClose: () => void
     void perform(() => resetUserPassword(user.id, password));
   };
   return (
-    <Modal opened onClose={onClose} title={t('users.resetPasswordTitle', { name: user.username })}>
+    <AppModal opened onClose={onClose} title={t('users.resetPasswordTitle', { name: user.username })}>
       <form onSubmit={submit}>
         <Stack gap="sm">
           <Text size="sm">{t('users.resetPasswordText')}</Text>
@@ -249,7 +249,7 @@ function ResetPasswordModal({ user, onClose }: { user: User; onClose: () => void
           </Button>
         </Stack>
       </form>
-    </Modal>
+    </AppModal>
   );
 }
 
@@ -283,7 +283,7 @@ function ConfirmModal({ kind, user, onClose }: { kind: 'resetMfa' | 'revoke' | '
     action = () => updateUser(user.id, { disabled: true });
   }
   return (
-    <Modal opened onClose={onClose} title={title}>
+    <AppModal opened onClose={onClose} title={title}>
       <Stack gap="sm">
         <Text size="sm">{text}</Text>
         <ErrorAlert error={error} />
@@ -296,6 +296,6 @@ function ConfirmModal({ kind, user, onClose }: { kind: 'resetMfa' | 'revoke' | '
           </Button>
         </Group>
       </Stack>
-    </Modal>
+    </AppModal>
   );
 }
