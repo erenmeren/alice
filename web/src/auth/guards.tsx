@@ -1,7 +1,7 @@
 import { Center, Loader, Text } from '@mantine/core';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Navigate } from 'react-router';
+import { Navigate, useLocation } from 'react-router';
 import type { Role } from '../api/types';
 import { useAuth } from './AuthProvider';
 
@@ -17,9 +17,13 @@ export function PageLoader() {
 // RequireAuth sends visitors to the setup wizard (fresh install) or the sign-in page.
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { session, setupStatus, loading, sessionEnded } = useAuth();
+  const location = useLocation();
   if (loading) return <PageLoader />;
   if (setupStatus && !setupStatus.admin_exists) return <Navigate to="/setup" replace />;
-  if (!session) return <Navigate to={sessionEnded ? '/login?ended=1' : '/login'} replace />;
+  if (!session) {
+    // The sign-in page returns the user to `from` (through safeReturnPath) after sign-in.
+    return <Navigate to={sessionEnded ? '/login?ended=1' : '/login'} replace state={{ from: location }} />;
+  }
   return <>{children}</>;
 }
 

@@ -14,6 +14,7 @@
     "audit": "Denetim kaydı",
     "tokens": "API anahtarları",
     "account": "Hesabım",
+    "signOutFailed": "Oturumunuz kapatılamadı. Tekrar deneyin.",
     "signOut": "Çıkış yap",
     "setupBanner": "Kurulumu tamamlayın: bir kurtarma parolası belirleyin.",
     "setupBannerFinish": "Kurulumu tamamlayın: son adımı onaylamak için kurulum sihirbazını açın."

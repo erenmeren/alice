@@ -1,7 +1,11 @@
 // A translation key rendered as text means a missing translation (spec §22.3).
-const RAW_KEY = /(?:^|\s)(?:home|language|nav|ui|login|setup|account|users|tokens|audit|errors|enum|validation)\.[a-z][A-Za-z_.]*/;
+// Any dotted lowercase token ("nav.home", "stepup.title") counts. The token must start after
+// whitespace or an opening bracket, which leaves out e-mail addresses ("a@b.com") and URLs
+// ("https://docs.example.com"); segments have two or more characters, which leaves out "e.g.".
+const RAW_KEY = /(?:^|[\s(])[a-z][a-z0-9]+(?:\.[a-z][A-Za-z0-9_]+)+(?=$|[\s.,:;)!?])/;
 
-// visibleText joins the text nodes outside <style> and <script>, separated by spaces.
+// visibleText joins the text nodes outside <style> and <script> and the attributes that
+// assistive technology or tooltips show, separated by spaces.
 function visibleText(root: HTMLElement): string {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const parts: string[] = [];
@@ -9,6 +13,12 @@ function visibleText(root: HTMLElement): string {
     const tag = n.parentElement?.tagName;
     if (tag !== 'STYLE' && tag !== 'SCRIPT') parts.push(n.textContent ?? '');
   }
+  root.querySelectorAll('[aria-label],[placeholder],[title]').forEach((el) => {
+    for (const attr of ['aria-label', 'placeholder', 'title']) {
+      const v = el.getAttribute(attr);
+      if (v) parts.push(v);
+    }
+  });
   return parts.join(' ');
 }
 

@@ -52,4 +52,27 @@ describe('ErrorAlert', () => {
     await renderApp(<ErrorAlert error={new TypeError('Failed to fetch')} />);
     expect(screen.getByRole('alert')).toHaveTextContent('Alice cannot be reached.');
   });
+
+  it('shows a generic message for an error without a body', async () => {
+    await renderApp(<ErrorAlert error={new ApiError(502, null)} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong.');
+    expect(screen.getByRole('alert')).not.toHaveTextContent('request failed');
+  });
+
+  it('shows the generic message for an error with no message key', async () => {
+    await renderApp(<ErrorAlert error={apiError('x', { message_key: '' })} />, ['tr-TR']);
+    expect(screen.getByRole('alert')).toHaveTextContent('Bir sorun oluştu.');
+  });
+
+  it('does not claim the network is down for other exceptions', async () => {
+    await renderApp(<ErrorAlert error={new Error('boom')} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong.');
+    expect(screen.getByRole('alert')).not.toHaveTextContent('cannot be reached');
+  });
+
+  it('never prints an unknown field problem code', async () => {
+    const err = apiError('validation.failed', { details: [{ field: 'username', code: 'validation.brand_new' }] });
+    await renderApp(<ErrorAlert error={err} />);
+    expect(screen.getByRole('alert')).not.toHaveTextContent('validation.brand_new');
+  });
 });

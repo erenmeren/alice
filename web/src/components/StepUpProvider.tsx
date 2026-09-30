@@ -21,6 +21,7 @@ export function useStepUp(): StepUpApi {
 }
 
 interface Pending {
+  promise: Promise<void>;
   resolve: () => void;
   reject: (e: unknown) => void;
   original: unknown;
@@ -36,13 +37,21 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
   const pending = useRef<Pending | null>(null);
 
   const askForCode = useCallback(
-    (original: unknown) =>
-      new Promise<void>((resolve, reject) => {
-        pending.current = { resolve, reject, original };
-        setCode('');
-        setError(null);
-        setOpened(true);
-      }),
+    (original: unknown) => {
+      // Concurrent calls share one dialog and one promise, so none is orphaned.
+      if (pending.current) return pending.current.promise;
+      let resolve!: () => void;
+      let reject!: (e: unknown) => void;
+      const promise = new Promise<void>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      pending.current = { promise, resolve, reject, original };
+      setCode('');
+      setError(null);
+      setOpened(true);
+      return promise;
+    },
     [],
   );
 

@@ -14,6 +14,7 @@
     "audit": "Audit log",
     "tokens": "API tokens",
     "account": "My account",
+    "signOutFailed": "Could not sign you out. Try again.",
     "signOut": "Sign out",
     "setupBanner": "Finish setting up: choose a recovery passphrase.",
     "setupBannerFinish": "Finish setting up: open the setup wizard to confirm the last step."

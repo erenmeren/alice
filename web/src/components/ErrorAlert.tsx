@@ -8,16 +8,25 @@ export function ErrorAlert({ error }: { error: unknown }) {
   if (!error) return null;
 
   if (!(error instanceof ApiError)) {
-    return (
-      <Alert color="red" role="alert" title={t('ui.networkErrorTitle')}>
-        {t('ui.networkErrorAction')}
-      </Alert>
-    );
+    // fetch() rejects with a TypeError when the network or the server is unreachable.
+    if (error instanceof TypeError) {
+      return (
+        <Alert color="red" role="alert" title={t('ui.networkErrorTitle')}>
+          {t('ui.networkErrorAction')}
+        </Alert>
+      );
+    }
+    return <Alert color="red" role="alert" title={t('ui.unexpectedError')} />;
   }
 
   const base = error.messageKey;
   const known = base !== '' && i18n.exists(`${base}.title`);
-  const title = known ? t(`${base}.title`, error.params) : error.message || t('ui.unexpectedError');
+  // An unknown key still has the server's own text; with no key or no text there is only the generic message.
+  const title = known
+    ? t(`${base}.title`, error.params)
+    : base !== '' && error.message
+      ? error.message
+      : t('ui.unexpectedError');
   const action = known && i18n.exists(`${base}.action`) ? t(`${base}.action`, error.params) : '';
 
   return (
@@ -29,7 +38,7 @@ export function ErrorAlert({ error }: { error: unknown }) {
             <List.Item key={`${d.field}-${d.code}`}>
               {t('ui.fieldProblem', {
                 field: i18n.exists(`ui.fields.${d.field}`) ? t(`ui.fields.${d.field}`) : d.field,
-                problem: t(d.code, d.params),
+                problem: i18n.exists(d.code) ? t(d.code, d.params) : t('ui.unexpectedError'),
               })}
             </List.Item>
           ))}

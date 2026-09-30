@@ -131,4 +131,63 @@ describe('application shell', () => {
     await renderRoute('/no/such.page');
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
   });
+
+  it('keeps the intended location when redirecting to sign-in', async () => {
+    const { router } = await renderRoute('/');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/login'));
+    expect((router.state.location.state as { from: { pathname: string } }).from.pathname).toBe('/');
+  });
+
+  it('drops cached data on sign-out', async () => {
+    server.use(...sessionHandlers(sessionFor('admin')));
+    const { router, client } = await renderRoute('/');
+    await waitFor(() => expect(screen.getByTestId('server-status')).toHaveTextContent('Server version: 1.2.3'));
+    expect(client.getQueryData(['version'])).toBeDefined();
+    await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/login'));
+    expect(client.getQueryData(['version'])).toBeUndefined();
+    expect(client.getQueryCache().getAll()).toHaveLength(0);
+  });
+
+  it('drops cached data when the session ends', async () => {
+    let calls = 0;
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.get('/api/v1/version', () => {
+        calls++;
+        return calls === 1
+          ? HttpResponse.json({ version: '1.2.3', commit: 'abc', build_time: 't' })
+          : errorResponse(401, 'ALC-AUTH-0001', 'auth.unauthenticated');
+      }),
+    );
+    const { router, client } = await renderRoute('/');
+    await waitFor(() => expect(screen.getByTestId('server-status')).toHaveTextContent('Server version: 1.2.3'));
+    await client.fetchQuery({ queryKey: ['other'], queryFn: () => Promise.resolve(1) });
+    await client.invalidateQueries({ queryKey: ['version'] });
+    await waitFor(() => expect(router.state.location.pathname).toBe('/login'));
+    expect(client.getQueryData(['other'])).toBeUndefined();
+    expect(client.getQueryData(['version'])).toBeUndefined();
+  });
+
+  it('signs out locally when the session is already gone (401 on logout)', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.post('/api/v1/auth/logout', () => errorResponse(401, 'ALC-AUTH-0001', 'auth.unauthenticated')),
+    );
+    const { router } = await renderRoute('/');
+    await userEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/login'));
+  });
+
+  it('stays signed in and says so when logout fails for another reason', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.post('/api/v1/auth/logout', () => errorResponse(500, 'ALC-SYS-0001', 'system.internal')),
+    );
+    const { router } = await renderRoute('/');
+    await userEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    expect(await screen.findByTestId('signout-error')).toHaveTextContent('Could not sign you out. Try again.');
+    expect(router.state.location.pathname).toBe('/');
+    expect(screen.getByTestId('current-user')).toHaveTextContent('Ayşe Yılmaz');
+  });
 });

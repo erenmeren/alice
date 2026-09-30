@@ -38,7 +38,7 @@ function SetupBanner() {
 
 export function AppLayout() {
   const { t } = useTranslation();
-  const { session, signOut } = useAuth();
+  const { session, signOut, signOutFailed } = useAuth();
   const location = useLocation();
   if (!session) return null;
   const items = NAV_ITEMS.filter((i) => i.roles.includes(session.user.role));
@@ -75,6 +75,11 @@ export function AppLayout() {
         ))}
       </AppShell.Navbar>
       <AppShell.Main>
+        {signOutFailed && (
+          <Alert color="red" role="alert" mb="md" data-testid="signout-error">
+            {t('nav.signOutFailed')}
+          </Alert>
+        )}
         <SetupBanner />
         <Outlet />
       </AppShell.Main>

@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
-import { onUnauthorized, setCsrfToken } from '../api/client';
+import { isApiError, onUnauthorized, setCsrfToken } from '../api/client';
 import { getSession, getSetupStatus, logout } from '../api/endpoints';
 import type { SessionInfo, SetupStatus } from '../api/types';
 import { isSupported, setLanguage } from '../i18n';
@@ -12,6 +13,8 @@ export interface AuthState {
   loading: boolean;
   // sessionEnded is true after the server said the session expired or was revoked.
   sessionEnded: boolean;
+  // signOutFailed is true when the server could not end the session; the user stays signed in.
+  signOutFailed: boolean;
   refresh: () => Promise<void>;
   refreshSetupStatus: () => Promise<SetupStatus | null>;
   setSession: (s: SessionInfo | null) => void;
@@ -45,10 +48,12 @@ async function loadSetupStatus(): Promise<SetupStatus | null> {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const { i18n } = useTranslation();
+  const queryClient = useQueryClient();
   const [session, setSessionState] = useState<SessionInfo | null>(null);
   const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [sessionEnded, setSessionEnded] = useState(false);
+  const [signOutFailed, setSignOutFailed] = useState(false);
 
   const setSession = useCallback((s: SessionInfo | null) => {
     setCsrfToken(s?.csrf_token ?? null);
@@ -96,26 +101,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       onUnauthorized(() => {
         // RequireAuth sees the missing session and sends the user to /login?ended=1.
         setCsrfToken(null);
+        appliedLocale.current = null;
+        queryClient.clear(); // nothing fetched for this user may be shown to the next one
         setSessionState(null);
         setSessionEnded(true);
       }),
-    [],
+    [queryClient],
   );
 
   const signOut = useCallback(async () => {
+    setSignOutFailed(false);
     try {
       await logout();
-    } catch {
-      // The session may already be gone; signing out locally is still correct.
+    } catch (e) {
+      // 401 means the session is already gone, so signing out locally is correct.
+      // Anything else means the server session may still be alive: stay signed in.
+      if (!isApiError(e) || e.status !== 401) {
+        setSignOutFailed(true);
+        return;
+      }
     }
     appliedLocale.current = null;
+    queryClient.clear();
     setSession(null);
     navigate('/login', { replace: true });
-  }, [navigate, setSession]);
+  }, [navigate, queryClient, setSession]);
 
   const value = useMemo<AuthState>(
-    () => ({ session, setupStatus, loading, sessionEnded, refresh, refreshSetupStatus, setSession, signOut }),
-    [session, setupStatus, loading, sessionEnded, refresh, refreshSetupStatus, setSession, signOut],
+    () => ({ session, setupStatus, loading, sessionEnded, signOutFailed, refresh, refreshSetupStatus, setSession, signOut }),
+    [session, setupStatus, loading, sessionEnded, signOutFailed, refresh, refreshSetupStatus, setSession, signOut],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

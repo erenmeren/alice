@@ -7,8 +7,11 @@ import type { ReactElement } from 'react';
 import { createI18n } from '../i18n';
 import { routes } from '../router';
 
-function providers(ui: ReactElement, i18n: Awaited<ReturnType<typeof createI18n>>) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function newClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+}
+
+function providers(ui: ReactElement, i18n: Awaited<ReturnType<typeof createI18n>>, client: QueryClient) {
   return (
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={client}>
@@ -21,12 +24,14 @@ function providers(ui: ReactElement, i18n: Awaited<ReturnType<typeof createI18n>
 // renderApp renders a single component with the app providers (no router).
 export async function renderApp(ui: ReactElement, languages: readonly string[] = ['en-US']) {
   const i18n = await createI18n(languages);
-  return { ...render(providers(ui, i18n)), i18n };
+  const client = newClient();
+  return { ...render(providers(ui, i18n, client)), i18n, client };
 }
 
 // renderRoute renders the whole application at path, using the real route table.
 export async function renderRoute(path: string, opts: { languages?: readonly string[] } = {}) {
   const i18n = await createI18n(opts.languages ?? ['en-US']);
   const router = createMemoryRouter(routes(), { initialEntries: [path] });
-  return { ...render(providers(<RouterProvider router={router} />, i18n)), i18n, router };
+  const client = newClient();
+  return { ...render(providers(<RouterProvider router={router} />, i18n, client)), i18n, router, client };
 }

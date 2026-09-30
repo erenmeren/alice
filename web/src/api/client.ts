@@ -10,9 +10,12 @@ export class ApiError extends Error {
   readonly details: FieldError[];
   readonly requestId: string;
   readonly retryable: boolean;
+  // retryAfter is the Retry-After header in seconds, or null when absent.
+  readonly retryAfter: number | null;
 
-  constructor(status: number, body: ApiErrorBody['error'] | null) {
-    super(body?.message ?? `request failed with status ${status}`);
+  constructor(status: number, body: ApiErrorBody['error'] | null, retryAfter: number | null = null) {
+    // No body means no localized text; the UI then shows its own generic message.
+    super(body?.message ?? '');
     this.name = 'ApiError';
     this.status = status;
     this.code = body?.code ?? '';
@@ -22,6 +25,7 @@ export class ApiError extends Error {
     this.details = body?.details ?? [];
     this.requestId = body?.request_id ?? '';
     this.retryable = body?.retryable ?? false;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -60,6 +64,11 @@ export interface FetchOptions {
   quietUnauthorized?: boolean;
 }
 
+function parseRetryAfter(value: string | null): number | null {
+  if (value === null || !/^\d+$/.test(value.trim())) return null;
+  return Number(value.trim());
+}
+
 function parseErrorBody(text: string): ApiErrorBody['error'] | null {
   try {
     const parsed = JSON.parse(text) as Partial<ApiErrorBody>;
@@ -85,7 +94,7 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   if (!res.ok) {
-    const err = new ApiError(res.status, parseErrorBody(text));
+    const err = new ApiError(res.status, parseErrorBody(text), parseRetryAfter(res.headers.get('Retry-After')));
     if (err.status === 401 && err.reason === 'auth.unauthenticated' && !opts.quietUnauthorized) {
       unauthorizedListeners.forEach((l) => l());
     }
