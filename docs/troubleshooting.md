@@ -2,6 +2,25 @@
 
 Every error returned by the Alice API carries a stable code in the form `ALC-<AREA>-<NNNN>`. Quote the code and the `request_id` when asking for help.
 
+## Cannot sign in
+
+- **"Incorrect username or password." although the password is right.** After 5 wrong attempts Alice makes the
+  account wait a few seconds; after 10 it blocks the account for 15 minutes. Wait and try again. An administrator
+  can see `auth.lockout` in the audit log, and **Set a new password** on **Users** lifts the block at once.
+- **Lost the phone with the authenticator app.** Choose **Use a recovery code** on the sign-in page. Without
+  recovery codes, ask an administrator to reset your MFA (**Users**). If you are the only administrator, the
+  server operator runs `alice admin reset-mfa <username>` ([operator-guide.md](operator-guide.md)).
+- **"Your session ended. Please sign in again."** Sessions end after 30 minutes without activity and always after
+  12 hours. Sign in again.
+- **The setup wizard says the setup code is wrong or the session expired.** Create a new code with
+  `alice setup-token --reset` (development: `make setup-token`). After five wrong codes the wizard waits
+  15 minutes (`ALC-SET-0002`). Once an administrator exists the wizard no longer accepts codes: sign in instead.
+- **Alice does not start: "the master key file is missing" / "does not match this database".** See
+  [operator-guide.md](operator-guide.md#master-key).
+- **Alice does not start: "the database server … rejected the user name or password".** The database password in
+  the configuration is wrong, or (development) a Phase 0 database volume lacks the new `alice_app` role: run
+  `make reset`.
+
 ## ALC-SYS-0001: Not found
 
 **Meaning.** The requested API path does not exist (HTTP 404).

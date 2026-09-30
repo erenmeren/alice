@@ -6,7 +6,7 @@
 - **Coordinator:** main session (final decisions and integration)
 - **Section authors (virtual team):** Product Manager, Backend Engineer, Azure/Nginx Integration Engineer, Security Architect, DevOps/Release Engineer + Technical Writer, QA Engineer
 
-This document is the entry point. It summarises the eight initial deliverables and links to the detailed sections. When a detailed section and [`alice-v1/00-decisions.md`](alice-v1/00-decisions.md) disagree, the decisions file (including coordinator rulings R1–R33) wins.
+This document is the entry point. It summarises the eight initial deliverables and links to the detailed sections. When a detailed section and [`alice-v1/00-decisions.md`](alice-v1/00-decisions.md) disagree, the decisions file (including coordinator rulings R1–R35) wins.
 
 | # | Detailed section | Contents |
 |---|---|---|
