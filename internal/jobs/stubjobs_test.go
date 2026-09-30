@@ -1,7 +1,10 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -43,49 +46,107 @@ func (s *stubStore) snapshot() (rows, deleted int, commands, events []string) {
 	return s.rows, s.deleted, append([]string(nil), s.commands...), append([]string(nil), s.events...)
 }
 
-// L-29: in lock the integrity verification runs and deletes nothing, revokes nothing and
-// runs no remote command; scheduled external-read work stays paused.
+// countingGate wraps fakeGate and reports every Allow call, so a test can wait until ticks
+// were really evaluated before it asserts that nothing ran.
+type countingGate struct {
+	fakeGate
+	mu    sync.Mutex
+	calls map[license.Class]int
+}
+
+func (g *countingGate) Allow(c license.Class) error {
+	err := g.fakeGate.Allow(c)
+	g.mu.Lock()
+	if g.calls == nil {
+		g.calls = map[license.Class]int{}
+	}
+	g.calls[c]++
+	g.mu.Unlock()
+	return err
+}
+
+func (g *countingGate) count(c license.Class) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.calls[c]
+}
+
+// tickUntilAllows moves the fake clock by every until the gate has been asked n times for
+// class c (the loops may not have created their tickers on the first moves).
+func tickUntilAllows(t *testing.T, clk *clock.Fake, every time.Duration, g *countingGate, c license.Class, n int) {
+	t.Helper()
+	for range 500 {
+		if g.count(c) >= n {
+			return
+		}
+		clk.Advance(every)
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("the gate was asked %d times for %v, want %d", g.count(c), c, n)
+}
+
+// sideEffects is stub work with real effects: a read-only job that deletes a row and runs a
+// remote command when it is allowed to run.
+func (s *stubStore) sideEffects(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rows--
+	s.deleted++
+	s.commands = append(s.commands, "nginx -t")
+	return nil
+}
+
+// L-29: in lock the integrity verification runs; scheduled and manual runs of work with
+// side effects are refused, so nothing is deleted and no remote command is executed.
 func TestLockDeletesNothing(t *testing.T) {
 	clk := clock.NewFake(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
 	store := &stubStore{rows: 5}
-	gate := &fakeGate{locked: true}
-	var polled atomic.Int32
+	gate := &countingGate{fakeGate: fakeGate{locked: true}}
 	s := NewScheduler(clk, gate, quiet,
-		Task{Type: testVerify, Every: time.Hour, Run: func(context.Context) error { store.event("verified"); return nil }},
-		Task{Type: testPoll, Every: time.Minute, Run: func(context.Context) error { polled.Add(1); return nil }},
+		Task{Type: testVerify, Every: time.Minute, Run: func(context.Context) error { store.event("verified"); return nil }},
+		Task{Type: testPoll, Every: time.Minute, Run: store.sideEffects},
 	)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go s.Run(ctx)
-	require.NoError(t, s.RunNow(ctx, "test.verify"))
+	done := make(chan struct{})
+	go func() { s.Run(ctx); close(done) }()
+	tickUntilAllows(t, clk, time.Minute, gate, license.ClassReadOnly, 3)
 	assert.ErrorIs(t, s.RunNow(ctx, "test.kvpoll"), license.ErrLocked)
+	require.NoError(t, s.RunNow(ctx, "test.verify"))
+	cancel()
+	<-done
 	rows, deleted, commands, events := store.snapshot()
 	assert.Equal(t, 5, rows)
 	assert.Zero(t, deleted)
 	assert.Empty(t, commands, "no remote command while locked")
-	assert.Equal(t, []string{"verified"}, events)
-	assert.Zero(t, polled.Load())
+	assert.NotEmpty(t, events, "verification still runs in lock")
+
+	// Control: the same stub does act when the gate allows it.
+	gate.set(false)
+	require.NoError(t, s.RunNow(context.Background(), "test.kvpoll"))
+	_, deleted, commands, _ = store.snapshot()
+	assert.Equal(t, 1, deleted)
+	assert.Len(t, commands, 1)
 }
 
-// L-81 (scheduler part): work that is due at lock time is not started and stays unstarted
-// after the renewal until something starts it again; the scheduler never queues a missed
-// run. External-change work cannot be scheduled at all (R29: confirmation needs the queue).
-func TestDueWorkIsNotStartedInLockAndNotReplayedAfterRenewal(t *testing.T) {
+// L-81 (scheduler part): work that is due at lock time is not started. After the renewal
+// the scheduler starts it again only by its normal schedule; external-change work cannot be
+// scheduled at all (R29: confirmation needs the queue).
+func TestDueWorkIsNotStartedInLockAndResumesOnNextTickAfterRenewal(t *testing.T) {
 	clk := clock.NewFake(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
-	gate := &fakeGate{locked: true}
+	gate := &countingGate{fakeGate: fakeGate{locked: true}}
 	var runs atomic.Int32
 	s := NewScheduler(clk, gate, quiet, Task{Type: testPoll, Every: time.Minute, Run: func(context.Context) error { runs.Add(1); return nil }})
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go s.Run(ctx)
-	for range 5 {
-		clk.Advance(time.Minute)
-		time.Sleep(10 * time.Millisecond)
-	}
-	assert.Zero(t, runs.Load(), "paused: nothing started")
+	done := make(chan struct{})
+	go func() { s.Run(ctx); close(done) }()
+	tickUntilAllows(t, clk, time.Minute, gate, license.ClassReadOnly, 5)
+	assert.Zero(t, runs.Load(), "five ticks evaluated by the gate, none ran")
 	gate.set(false)
-	time.Sleep(30 * time.Millisecond)
-	assert.Zero(t, runs.Load(), "missed ticks are not replayed on renewal")
+	n := gate.count(license.ClassReadOnly)
+	tickUntilAllows(t, clk, time.Minute, gate, license.ClassReadOnly, n+2)
+	require.Eventually(t, func() bool { return runs.Load() > 0 }, 2*time.Second, 5*time.Millisecond)
+	cancel()
+	<-done
 	assert.Panics(t, func() {
 		NewScheduler(clk, gate, quiet, Task{Type: testDeploy, Every: time.Minute, Run: func(context.Context) error { return nil }})
 	})
@@ -124,22 +185,28 @@ func TestInFlightRunFinishesItsStepsAndRollbackDespiteLock(t *testing.T) {
 // nothing; always-class work keeps running on the same clock.
 func TestLockedTicksPauseWorkWhileAlwaysClassContinues(t *testing.T) {
 	clk := clock.NewFake(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
-	gate := &fakeGate{locked: true}
-	store := &stubStore{}
-	ran := make(chan struct{}, 50)
+	gate := &countingGate{fakeGate: fakeGate{locked: true}}
+	store := &stubStore{rows: 1}
+	var mails atomic.Int32
 	s := NewScheduler(clk, gate, quiet,
-		Task{Type: testRotation, Every: time.Hour, Run: func(context.Context) error { store.event("overlap-removal-or-notice"); return nil }},
-		Task{Type: NotifySend, Every: time.Minute, Run: func(context.Context) error { ran <- struct{}{}; return nil }},
+		Task{Type: testRotation, Every: time.Minute, Run: func(ctx context.Context) error {
+			store.event("overlap-removal-or-notice")
+			return store.sideEffects(ctx)
+		}},
+		Task{Type: NotifySend, Every: time.Minute, Run: func(context.Context) error { mails.Add(1); return nil }},
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { s.Run(ctx); close(done) }()
-	advanceUntil(t, clk, time.Hour, ran) // an hour passes: the rotation task is due, the mail task runs
-	time.Sleep(30 * time.Millisecond)
-	_, _, _, events := store.snapshot()
-	assert.Empty(t, events, "nothing removed or sent by paused work")
+	tickUntilAllows(t, clk, time.Minute, gate, license.ClassReadOnly, 4)
+	require.Eventually(t, func() bool { return mails.Load() >= 1 }, 2*time.Second, 5*time.Millisecond, "always-class work runs in lock")
 	cancel()
 	<-done
+	rows, deleted, commands, events := store.snapshot()
+	assert.Equal(t, 1, rows)
+	assert.Zero(t, deleted)
+	assert.Empty(t, commands)
+	assert.Empty(t, events, "nothing removed or sent by paused work")
 }
 
 // L-87: a read-only request in flight at lock finishes and stores its result; the lock
@@ -179,3 +246,99 @@ func TestGateRefusalOtherThanLockAlsoStopsTheRun(t *testing.T) {
 type refuseAll struct{}
 
 func (refuseAll) Allow(license.Class) error { return license.ErrUnclassified }
+
+// A running task makes RunNow wait; cancelling its context ends the wait with ctx.Err().
+func TestRunNowOnABusyTaskHonoursContext(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	started, release := make(chan struct{}), make(chan struct{})
+	s := NewScheduler(clk, &fakeGate{}, quiet, Task{Type: NotifySend, Every: time.Minute, Run: func(context.Context) error {
+		close(started)
+		<-release
+		return nil
+	}})
+	first := make(chan error, 1)
+	go func() { first <- s.RunNow(context.Background(), "notify.send") }()
+	<-started
+	ctx, cancel := context.WithCancel(context.Background())
+	second := make(chan error, 1)
+	go func() { second <- s.RunNow(ctx, "notify.send") }()
+	cancel()
+	select {
+	case err := <-second:
+		assert.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunNow did not return after its context was cancelled")
+	}
+	close(release)
+	require.NoError(t, <-first)
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// A panic or an error on the scheduled path is contained: later ticks still run and the log
+// holds neither the panic value nor the error text (they may carry data from the task).
+func TestScheduledPanicsAndErrorsAreContainedAndNotLogged(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	var buf lockedBuffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	var panicRuns, errRuns atomic.Int32
+	s := NewScheduler(clk, &fakeGate{}, log,
+		Task{Type: NotifySend, Every: time.Minute, Run: func(context.Context) error {
+			if panicRuns.Add(1) == 1 {
+				panic("PANIC-VALUE-CANARY")
+			}
+			return nil
+		}},
+		Task{Type: LicenseEvaluate, Every: time.Minute, Run: func(context.Context) error {
+			errRuns.Add(1)
+			return errors.New("ERROR-TEXT-CANARY")
+		}},
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { s.Run(ctx); close(done) }()
+	for range 500 {
+		if panicRuns.Load() >= 2 && errRuns.Load() >= 2 {
+			break
+		}
+		clk.Advance(time.Minute)
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	assert.GreaterOrEqual(t, panicRuns.Load(), int32(2), "a tick after the panic still runs")
+	assert.GreaterOrEqual(t, errRuns.Load(), int32(2))
+	out := buf.String()
+	assert.Contains(t, out, "panicked")
+	assert.NotContains(t, out, "PANIC-VALUE-CANARY")
+	assert.NotContains(t, out, "ERROR-TEXT-CANARY")
+}
+
+// A tick that races with cancellation starts no run.
+func TestCancelledContextStartsNoRun(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	var runs atomic.Int32
+	s := NewScheduler(clk, &fakeGate{}, quiet, Task{Type: NotifySend, Every: time.Minute, Run: func(context.Context) error { runs.Add(1); return nil }})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	task := s.tasks["notify.send"]
+	ticks := make(chan time.Time, 1)
+	ticks <- clk.Now()
+	s.loopWith(ctx, task, ticks)
+	assert.Zero(t, runs.Load())
+}

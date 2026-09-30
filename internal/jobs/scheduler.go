@@ -26,7 +26,7 @@ type Task struct {
 
 type task struct {
 	Task
-	mu sync.Mutex // one run at a time
+	sem chan struct{} // capacity 1: one run at a time
 }
 
 // Scheduler runs periodic tasks in-process. Every run passes the license gate first
@@ -57,7 +57,7 @@ func NewScheduler(clk clock.Clock, gate Gate, log *slog.Logger, tasks ...Task) *
 		if _, dup := s.tasks[t.Type.Name]; dup {
 			panic(fmt.Sprintf("jobs: task %q is scheduled twice", t.Type.Name))
 		}
-		tk := &task{Task: t}
+		tk := &task{Task: t, sem: make(chan struct{}, 1)}
 		s.tasks[t.Type.Name] = tk
 		s.order = append(s.order, tk)
 	}
@@ -81,14 +81,23 @@ func (s *Scheduler) Run(ctx context.Context) {
 func (s *Scheduler) loop(ctx context.Context, t *task) {
 	ticker := s.clock.NewTicker(t.Every)
 	defer ticker.Stop()
+	s.loopWith(ctx, t, ticker.C())
+}
+
+func (s *Scheduler) loopWith(ctx context.Context, t *task, ticks <-chan time.Time) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C():
-			if t.mu.TryLock() {
+		case <-ticks:
+			if ctx.Err() != nil {
+				return
+			}
+			select {
+			case t.sem <- struct{}{}:
 				_ = s.run(ctx, t)
-				t.mu.Unlock()
+				<-t.sem
+			default: // still running: skip this tick
 			}
 		}
 	}
@@ -101,8 +110,12 @@ func (s *Scheduler) RunNow(ctx context.Context, name string) error {
 	if !ok {
 		return fmt.Errorf("jobs: no task %q", name)
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	select {
+	case t.sem <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-t.sem }()
 	return s.run(ctx, t)
 }
 
