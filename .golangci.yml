@@ -1,0 +1,29 @@
+version: "2"
+linters:
+  default: standard
+  enable:
+    - gosec
+    - forbidigo
+    - errorlint
+    - bodyclose
+    - misspell
+    - noctx
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: ^strings\.(ToUpper|ToLower|Title)$
+          msg: "Turkish dotted/dotless i: use strings.EqualFold for identifiers or golang.org/x/text/cases for user-visible text."
+        - pattern: ^fmt\.Print(f|ln)?$
+          msg: "Use the structured logger (log/slog) or write to an explicit io.Writer."
+  exclusions:
+    presets: [std-error-handling, common-false-positives]
+    rules:
+      - path: _test\.go
+        linters: [gosec, noctx]
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes: [alice]
