@@ -13,3 +13,7 @@ help: ## Show available targets
 .PHONY: test
 test: ## Run Go unit tests with the race detector
 	go test -race -count=1 ./...
+
+.PHONY: test-integration
+test-integration: ## Run integration tests (needs Docker)
+	go test -race -count=1 -tags integration ./...
