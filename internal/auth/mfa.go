@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -26,26 +27,28 @@ func (s *Service) EnrollMFA(ctx context.Context, p Principal, m Meta) (TOTPEnrol
 	if err != nil {
 		return TOTPEnrollment{}, err
 	}
-	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		a, err := lockAccountByID(ctx, tx, p.UserID)
-		if err != nil {
-			return err
-		}
-		if a.enrolled {
-			return ErrMFAAlreadyEnrolled
-		}
-		tag, err := tx.Exec(ctx, `INSERT INTO user_mfa (user_id, totp_secret_ct, totp_nonce, totp_wrapped_dek, totp_key_version, enrolled_at, last_used_step, created_at)
+	err = s.withCredentialSlot(ctx, func() error {
+		return s.credentialTx(ctx, func(tx pgx.Tx) error {
+			a, err := lockAccountByID(ctx, tx, p.UserID)
+			if err != nil {
+				return err
+			}
+			if a.enrolled {
+				return ErrMFAAlreadyEnrolled
+			}
+			tag, err := tx.Exec(ctx, `INSERT INTO user_mfa (user_id, totp_secret_ct, totp_nonce, totp_wrapped_dek, totp_key_version, enrolled_at, last_used_step, created_at)
 VALUES ($1, $2, $3, $4, $5, NULL, 0, $6)
 ON CONFLICT (user_id) DO UPDATE SET totp_secret_ct = EXCLUDED.totp_secret_ct, totp_nonce = EXCLUDED.totp_nonce,
   totp_wrapped_dek = EXCLUDED.totp_wrapped_dek, totp_key_version = EXCLUDED.totp_key_version, last_used_step = 0
 WHERE user_mfa.enrolled_at IS NULL`, p.UserID, env.Ciphertext, env.Nonce, env.WrappedDEK, env.KeyVersion, s.clock.Now().UTC())
-		if err != nil {
-			return fmt.Errorf("store TOTP secret: %w", err)
-		}
-		if tag.RowsAffected() != 1 {
-			return ErrMFAAlreadyEnrolled
-		}
-		return nil
+			if err != nil {
+				return fmt.Errorf("store TOTP secret: %w", err)
+			}
+			if tag.RowsAffected() != 1 {
+				return ErrMFAAlreadyEnrolled
+			}
+			return nil
+		})
 	})
 	if err != nil {
 		return TOTPEnrollment{}, err
@@ -144,13 +147,13 @@ func (s *Service) replaceRecoveryCodes(ctx context.Context, tx pgx.Tx, userID uu
 	return nil
 }
 
-// pendingSessionExists reports whether the pending session is still stored. Attempts on
+// pendingSessionExists reports whether the pending session is still stored and unexpired at now. Attempts on
 // one account are serialized by the account lock, so a session consumed by a concurrent
 // successful VerifyMFA is seen as gone.
-func pendingSessionExists(ctx context.Context, tx pgx.Tx, p Principal) (bool, error) {
+func pendingSessionExists(ctx context.Context, tx pgx.Tx, p Principal, now time.Time) (bool, error) {
 	var ok bool
-	err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM sessions WHERE id_hash = $1 AND user_id = $2 AND kind = 'pending')",
-		p.SessionHash, p.UserID).Scan(&ok)
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM sessions WHERE id_hash = $1 AND user_id = $2 AND kind = 'pending'
+AND revoked_at IS NULL AND expires_at > $3 AND idle_expires_at > $3)`, p.SessionHash, p.UserID, now).Scan(&ok)
 	if err != nil {
 		return false, fmt.Errorf("read pending session: %w", err)
 	}
@@ -172,80 +175,82 @@ func (s *Service) VerifyMFA(ctx context.Context, p Principal, in MFAInput, m Met
 		codes  []string
 		failed bool
 	)
-	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		a, err := lockAccountByID(ctx, tx, p.UserID)
-		if err != nil {
-			return err
-		}
-		exists, err := pendingSessionExists(ctx, tx, p)
-		if err != nil {
-			return err
-		}
-		if !exists {
-			return ErrUnauthenticated
-		}
-		if a.disabled || a.blocked(s.clock.Now()) {
-			failed = true
-			return s.auditFailure(ctx, tx, actor, "auth.mfa_verify", p.UserID.String(), "locked")
-		}
-		row, found, err := loadMFA(ctx, tx, p.UserID)
-		if err != nil {
-			return err
-		}
-		method := "totp"
-		ok := false
-		switch {
-		case !found:
-		case in.RecoveryCode != "":
-			method = "recovery_code"
-			if row.enrolled {
-				ok, err = s.useRecoveryCode(ctx, tx, p.UserID, in.RecoveryCode)
-			}
-		default:
-			ok, err = s.checkTOTP(ctx, tx, p.UserID, row, in.Code, !row.enrolled)
-		}
-		if err != nil {
-			return err
-		}
-		if !ok {
-			failed = true
-			return s.recordFailure(ctx, tx, actor, p.UserID, "auth.mfa_verify", "bad_"+method)
-		}
-		enrolledNow := !row.enrolled
-		if enrolledNow {
-			codes = GenerateRecoveryCodes()
-			hashes, err := s.hashRecoveryCodes(ctx, codes)
+	err := s.withCredentialSlot(ctx, func() error {
+		return s.credentialTx(ctx, func(tx pgx.Tx) error {
+			a, err := lockAccountByID(ctx, tx, p.UserID)
 			if err != nil {
 				return err
 			}
-			if err := s.replaceRecoveryCodes(ctx, tx, p.UserID, hashes); err != nil {
+			exists, err := pendingSessionExists(ctx, tx, p, s.clock.Now().UTC())
+			if err != nil {
 				return err
 			}
-		}
-		if _, err := tx.Exec(ctx, "DELETE FROM sessions WHERE id_hash = $1", p.SessionHash); err != nil {
-			return fmt.Errorf("delete pending session: %w", err)
-		}
-		if _, err := tx.Exec(ctx, "UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = $2, updated_at = $2 WHERE id = $1",
-			p.UserID, s.clock.Now().UTC()); err != nil {
-			return fmt.Errorf("reset failures: %w", err)
-		}
-		if token, err = s.startFullSession(ctx, tx, p.UserID, m); err != nil {
+			if !exists {
+				return ErrUnauthenticated
+			}
+			if reason := blockReason(a, s.clock.Now()); reason != "" {
+				failed = true
+				return s.auditFailure(ctx, tx, actor, "auth.mfa_verify", p.UserID.String(), reason)
+			}
+			row, found, err := loadMFA(ctx, tx, p.UserID)
+			if err != nil {
+				return err
+			}
+			method := "totp"
+			ok := false
+			switch {
+			case !found:
+			case in.RecoveryCode != "":
+				method = "recovery_code"
+				if row.enrolled {
+					ok, err = s.useRecoveryCode(ctx, tx, p.UserID, in.RecoveryCode)
+				}
+			default:
+				ok, err = s.checkTOTP(ctx, tx, p.UserID, row, in.Code, !row.enrolled)
+			}
+			if err != nil {
+				return err
+			}
+			if !ok {
+				failed = true
+				return s.recordFailure(ctx, tx, actor, p.UserID, "auth.mfa_verify", "bad_"+method)
+			}
+			enrolledNow := !row.enrolled
+			if enrolledNow {
+				codes = GenerateRecoveryCodes()
+				hashes, err := s.hashRecoveryCodes(ctx, codes)
+				if err != nil {
+					return err
+				}
+				if err := s.replaceRecoveryCodes(ctx, tx, p.UserID, hashes); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.Exec(ctx, "DELETE FROM sessions WHERE id_hash = $1", p.SessionHash); err != nil {
+				return fmt.Errorf("delete pending session: %w", err)
+			}
+			if _, err := tx.Exec(ctx, "UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = $2, updated_at = $2 WHERE id = $1",
+				p.UserID, s.clock.Now().UTC()); err != nil {
+				return fmt.Errorf("reset failures: %w", err)
+			}
+			if token, err = s.startFullSession(ctx, tx, p.UserID, m); err != nil {
+				return err
+			}
+			// Audit rows last, after every row lock of this transaction.
+			if enrolledNow {
+				if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "auth.mfa_enrolled", ObjectType: "user", ObjectID: p.UserID.String(), Result: audit.Success}); err != nil {
+					return err
+				}
+			}
+			if method == "recovery_code" {
+				if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "auth.recovery_code_used", ObjectType: "user", ObjectID: p.UserID.String(), Result: audit.Success}); err != nil {
+					return err
+				}
+			}
+			_, err = s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "auth.login", ObjectType: "user", ObjectID: p.UserID.String(),
+				Result: audit.Success, Details: map[string]string{"method": method}})
 			return err
-		}
-		// Audit rows last, after every row lock of this transaction.
-		if enrolledNow {
-			if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "auth.mfa_enrolled", ObjectType: "user", ObjectID: p.UserID.String(), Result: audit.Success}); err != nil {
-				return err
-			}
-		}
-		if method == "recovery_code" {
-			if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "auth.recovery_code_used", ObjectType: "user", ObjectID: p.UserID.String(), Result: audit.Success}); err != nil {
-				return err
-			}
-		}
-		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "auth.login", ObjectType: "user", ObjectID: p.UserID.String(),
-			Result: audit.Success, Details: map[string]string{"method": method}})
-		return err
+		})
 	})
 	if err != nil {
 		return SessionResult{}, err
@@ -267,38 +272,40 @@ func (s *Service) StepUp(ctx context.Context, p Principal, code string, m Meta) 
 		token  string
 		failed bool
 	)
-	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		a, err := lockAccountByID(ctx, tx, p.UserID)
-		if err != nil {
-			return err
-		}
-		if a.disabled || a.blocked(s.clock.Now()) {
-			failed = true
-			return s.auditFailure(ctx, tx, actor, "auth.stepup", p.UserID.String(), "locked")
-		}
-		row, found, err := loadMFA(ctx, tx, p.UserID)
-		if err != nil {
-			return err
-		}
-		ok := false
-		if found && row.enrolled {
-			if ok, err = s.checkTOTP(ctx, tx, p.UserID, row, code, false); err != nil {
+	err := s.withCredentialSlot(ctx, func() error {
+		return s.credentialTx(ctx, func(tx pgx.Tx) error {
+			a, err := lockAccountByID(ctx, tx, p.UserID)
+			if err != nil {
 				return err
 			}
-		}
-		if !ok {
-			failed = true
-			return s.recordFailure(ctx, tx, actor, p.UserID, "auth.stepup", "bad_totp")
-		}
-		stepUp := s.clock.Now().UTC().Add(StepUpWindow)
-		if token, err = s.rotateSession(ctx, tx, p.SessionHash, p.UserID, &stepUp, m); err != nil {
+			if reason := blockReason(a, s.clock.Now()); reason != "" {
+				failed = true
+				return s.auditFailure(ctx, tx, actor, "auth.stepup", p.UserID.String(), reason)
+			}
+			row, found, err := loadMFA(ctx, tx, p.UserID)
+			if err != nil {
+				return err
+			}
+			ok := false
+			if found && row.enrolled {
+				if ok, err = s.checkTOTP(ctx, tx, p.UserID, row, code, false); err != nil {
+					return err
+				}
+			}
+			if !ok {
+				failed = true
+				return s.recordFailure(ctx, tx, actor, p.UserID, "auth.stepup", "bad_totp")
+			}
+			stepUp := s.clock.Now().UTC().Add(StepUpWindow)
+			if token, err = s.rotateSession(ctx, tx, p.SessionHash, p.UserID, &stepUp, m); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, "UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1", p.UserID); err != nil {
+				return fmt.Errorf("reset failures: %w", err)
+			}
+			_, err = s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "auth.stepup", ObjectType: "user", ObjectID: p.UserID.String(), Result: audit.Success})
 			return err
-		}
-		if _, err := tx.Exec(ctx, "UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1", p.UserID); err != nil {
-			return fmt.Errorf("reset failures: %w", err)
-		}
-		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "auth.stepup", ObjectType: "user", ObjectID: p.UserID.String(), Result: audit.Success})
-		return err
+		})
 	})
 	if err != nil {
 		return SessionResult{}, err

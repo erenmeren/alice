@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/auth"
+	"alice/internal/rbac"
 )
 
 // These tests fire many wrong guesses at one account at the same moment. The lock
@@ -183,4 +184,55 @@ func TestConcurrentReplayOfOneCodeSucceedsOnce(t *testing.T) {
 		return err
 	})
 	assert.Equal(t, 1, succeeded(errs), "a recovery code is accepted once (SEC-008)")
+}
+
+func TestDisabledAfterPasswordStepCannotCompleteMFA(t *testing.T) {
+	e := newEnv(t)
+	e.bootstrap(t)
+	e.insertUser(t, "op", rbac.Operator, adminPassword)
+	opSecret, _ := e.enroll(t, "op", adminPassword)
+	e.clk.Advance(30 * time.Second)
+	lr, err := e.svc.Login(e.ctx, "op", adminPassword, meta)
+	require.NoError(t, err)
+	pending := e.principal(t, lr.SessionToken)
+	_, err = e.db.Owner.Exec(e.ctx, "UPDATE users SET disabled_at = now() WHERE username = 'op'")
+	require.NoError(t, err)
+
+	fullSessions := func() int {
+		var n int
+		require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT count(*) FROM sessions s JOIN users u ON u.id = s.user_id
+WHERE u.username = 'op' AND s.kind = 'full'`).Scan(&n))
+		return n
+	}
+	before := fullSessions()
+
+	_, err = e.svc.VerifyMFA(e.ctx, pending, auth.MFAInput{Code: code(t, opSecret, e.clk.Now())}, meta)
+	require.ErrorIs(t, err, auth.ErrMFAInvalid)
+	assert.Equal(t, 1, e.reasons(t, "auth.mfa_verify")["disabled"])
+	assert.Equal(t, before, fullSessions(), "no new full session is issued")
+}
+
+func TestDisabledAccountStepUpIsAuditedAsDisabled(t *testing.T) {
+	e := newEnv(t)
+	secret, _ := e.bootstrap(t)
+	res := e.signIn(t, "admin", adminPassword, secret)
+	p := e.principal(t, res.Token)
+	_, err := e.db.Owner.Exec(e.ctx, "UPDATE users SET disabled_at = now() WHERE username = 'admin'")
+	require.NoError(t, err)
+	e.clk.Advance(30 * time.Second)
+	_, err = e.svc.StepUp(e.ctx, p, code(t, secret, e.clk.Now()), meta)
+	require.ErrorIs(t, err, auth.ErrMFAInvalid)
+	assert.Equal(t, 1, e.reasons(t, "auth.stepup")["disabled"])
+}
+
+func TestExpiredPendingSessionCannotCompleteMFA(t *testing.T) {
+	e := newEnv(t)
+	secret, _ := e.bootstrap(t)
+	e.clk.Advance(30 * time.Second)
+	lr, err := e.svc.Login(e.ctx, "admin", adminPassword, meta)
+	require.NoError(t, err)
+	pending := e.principal(t, lr.SessionToken)
+	e.clk.Advance(auth.PendingLifetime)
+	_, err = e.svc.VerifyMFA(e.ctx, pending, auth.MFAInput{Code: code(t, secret, e.clk.Now())}, meta)
+	require.ErrorIs(t, err, auth.ErrUnauthenticated, "the pending session expired before MFA")
 }

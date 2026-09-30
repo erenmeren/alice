@@ -23,6 +23,9 @@ var (
 	ErrCurrentPasswordInvalid = errors.New("auth: current password invalid")
 	ErrAdminExists            = errors.New("auth: an administrator already exists")
 	ErrNotFound               = errors.New("auth: not found")
+	// ErrTryAgain means a credential check could not get the account lock in time
+	// (lock_timeout); nothing was verified or counted and the caller may retry.
+	ErrTryAgain = errors.New("auth: account busy, try again")
 )
 
 // Session and lockout limits (SEC-019, SEC-020).
@@ -35,6 +38,9 @@ const (
 	LockThreshold   = 10
 	LockDuration    = 15 * time.Minute
 	MaxDelay        = 60 * time.Second
+
+	// credentialLockTimeout bounds how long a credential check waits for the account row lock.
+	credentialLockTimeout = 5 * time.Second
 )
 
 // unknownUserName is recorded in the audit log instead of a username that does not
@@ -60,6 +66,14 @@ type Service struct {
 	hasher   *Hasher
 	recovery *Hasher
 	csrfKey  []byte
+
+	// credSlots bounds concurrent credential checks (password, TOTP, recovery code) to the
+	// password hasher's concurrency. A check takes a slot before it takes a pool connection,
+	// so a burst cannot exhaust the pool, and unknown, blocked and real accounts all wait
+	// in this one queue.
+	credSlots   chan struct{}
+	lockTimeout time.Duration
+	slotHook    func(acquired bool) // tests only
 }
 
 // NewService builds the service.
@@ -72,6 +86,9 @@ func NewService(c Config) *Service {
 		hasher:   c.Hasher,
 		recovery: c.RecoveryHasher,
 		csrfKey:  c.Keyring.Derive(secrets.LabelCSRF),
+
+		credSlots:   make(chan struct{}, c.Hasher.concurrency()),
+		lockTimeout: credentialLockTimeout,
 	}
 }
 

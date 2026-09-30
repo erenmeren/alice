@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/audit"
-	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
 	"alice/internal/rbac"
 )
@@ -27,6 +26,9 @@ func (s *Service) ChangePassword(ctx context.Context, p Principal, current, next
 	if p.Kind != rbac.UserSession {
 		return SessionResult{}, ErrUnauthenticated
 	}
+	if err := CheckPasswordPolicy(next); err != nil {
+		return SessionResult{}, err
+	}
 	actor := p.Actor(m)
 	cur := NormalizePassword(current)
 	var (
@@ -34,58 +36,58 @@ func (s *Service) ChangePassword(ctx context.Context, p Principal, current, next
 		failed      bool
 		dummyVerify bool
 	)
-	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		a, err := lockAccountByID(ctx, tx, p.UserID)
-		if err != nil {
+	err := s.withCredentialSlot(ctx, func() error {
+		err := s.credentialTx(ctx, func(tx pgx.Tx) error {
+			a, err := lockAccountByID(ctx, tx, p.UserID)
+			if err != nil {
+				return err
+			}
+			if a.hash == nil {
+				return ErrUnauthenticated
+			}
+			now := s.clock.Now().UTC()
+			if a.blocked(now) {
+				failed, dummyVerify = true, true
+				return s.auditFailure(ctx, tx, actor, "auth.password_changed", p.UserID.String(), "locked")
+			}
+			ok, _, err := s.hasher.Verify(ctx, *a.hash, cur)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				failed = true
+				return s.recordFailure(ctx, tx, actor, p.UserID, "auth.password_changed", "current_password_invalid")
+			}
+			newHash, err := s.hasher.Hash(ctx, NormalizePassword(next))
+			if err != nil {
+				return err
+			}
+			var createdAt, expiresAt time.Time
+			err = tx.QueryRow(ctx, "SELECT created_at, expires_at FROM sessions WHERE id_hash = $1 AND user_id = $2", p.SessionHash, p.UserID).Scan(&createdAt, &expiresAt)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrUnauthenticated
+			}
+			if err != nil {
+				return fmt.Errorf("read session: %w", err)
+			}
+			if _, err := tx.Exec(ctx, "UPDATE users SET password_hash = $2, password_changed_at = $3, updated_at = $3 WHERE id = $1", p.UserID, newHash, now); err != nil {
+				return fmt.Errorf("update password: %w", err)
+			}
+			if err := revokeUserSessions(ctx, tx, p.UserID); err != nil {
+				return err
+			}
+			token, err = s.insertSession(ctx, tx, newSession{userID: p.UserID, kind: "full", createdAt: createdAt.UTC(), expiresAt: expiresAt.UTC()}, m)
+			if err != nil {
+				return err
+			}
+			_, err = s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "auth.password_changed", ObjectType: "user", ObjectID: p.UserID.String(), Result: audit.Success})
 			return err
+		})
+		if dummyVerify {
+			s.hasher.DummyVerify(ctx, cur)
 		}
-		if a.hash == nil {
-			return ErrUnauthenticated
-		}
-		now := s.clock.Now().UTC()
-		if a.blocked(now) {
-			failed, dummyVerify = true, true
-			return s.auditFailure(ctx, tx, actor, "auth.password_changed", p.UserID.String(), "locked")
-		}
-		ok, _, err := s.hasher.Verify(ctx, *a.hash, cur)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			failed = true
-			return s.recordFailure(ctx, tx, actor, p.UserID, "auth.password_changed", "current_password_invalid")
-		}
-		if err := CheckPasswordPolicy(next); err != nil {
-			return err
-		}
-		newHash, err := s.hasher.Hash(ctx, NormalizePassword(next))
-		if err != nil {
-			return err
-		}
-		var createdAt, expiresAt time.Time
-		err = tx.QueryRow(ctx, "SELECT created_at, expires_at FROM sessions WHERE id_hash = $1 AND user_id = $2", p.SessionHash, p.UserID).Scan(&createdAt, &expiresAt)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrUnauthenticated
-		}
-		if err != nil {
-			return fmt.Errorf("read session: %w", err)
-		}
-		if _, err := tx.Exec(ctx, "UPDATE users SET password_hash = $2, password_changed_at = $3, updated_at = $3 WHERE id = $1", p.UserID, newHash, now); err != nil {
-			return fmt.Errorf("update password: %w", err)
-		}
-		if err := revokeUserSessions(ctx, tx, p.UserID); err != nil {
-			return err
-		}
-		token, err = s.insertSession(ctx, tx, newSession{userID: p.UserID, kind: "full", createdAt: createdAt.UTC(), expiresAt: expiresAt.UTC()}, m)
-		if err != nil {
-			return err
-		}
-		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "auth.password_changed", ObjectType: "user", ObjectID: p.UserID.String(), Result: audit.Success})
 		return err
 	})
-	if dummyVerify {
-		s.hasher.DummyVerify(ctx, cur)
-	}
 	if err != nil {
 		return SessionResult{}, err
 	}

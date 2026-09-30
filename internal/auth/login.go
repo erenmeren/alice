@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"alice/internal/audit"
 	"alice/internal/platform/db"
@@ -72,6 +73,19 @@ func lockAccount(ctx context.Context, tx pgx.Tx, query string, arg any) (account
 	return a, true, nil
 }
 
+// blockReason returns why an MFA or step-up attempt is refused without checking the
+// code ("disabled" or "locked"), or "" when it may proceed.
+func blockReason(a account, now time.Time) string {
+	switch {
+	case a.disabled:
+		return "disabled"
+	case a.blocked(now):
+		return "locked"
+	default:
+		return ""
+	}
+}
+
 // lockAccountByID locks the account of an authenticated principal; a vanished user is unauthenticated.
 func lockAccountByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (account, error) {
 	a, found, err := lockAccount(ctx, tx, lockAccountByIDSQL, id)
@@ -121,70 +135,116 @@ func (s *Service) auditFailure(ctx context.Context, tx pgx.Tx, actor audit.Actor
 	return err
 }
 
+// lockNotAvailable is the PostgreSQL SQLSTATE raised when lock_timeout expires.
+const lockNotAvailable = "55P03"
+
+// withCredentialSlot runs fn while holding one of the service's credential slots. The
+// slot is taken before any pool connection, so at most cap(credSlots) credential checks
+// hold connections at once, however many requests queue (each waits here, holding
+// nothing). fn must not take another slot.
+func (s *Service) withCredentialSlot(ctx context.Context, fn func() error) error {
+	select {
+	case s.credSlots <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if s.slotHook != nil {
+		s.slotHook(true)
+	}
+	defer func() {
+		if s.slotHook != nil {
+			s.slotHook(false)
+		}
+		<-s.credSlots
+	}()
+	return fn()
+}
+
+// credentialTx runs fn in a transaction whose lock waits end after s.lockTimeout. A
+// lock timeout rolls everything back (nothing verified or counted) and becomes ErrTryAgain.
+// Callers hold a credential slot.
+func (s *Service) credentialTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT set_config('lock_timeout', $1, true)", strconv.FormatInt(s.lockTimeout.Milliseconds(), 10)+"ms"); err != nil {
+			return fmt.Errorf("set lock timeout: %w", err)
+		}
+		return fn(tx)
+	})
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == lockNotAvailable {
+		return fmt.Errorf("%w: %w", ErrTryAgain, err)
+	}
+	return err
+}
+
 // Login verifies username and password and opens a pending session that can only
 // complete MFA. Every failure returns ErrInvalidCredentials (SEC-004).
 //
 // The whole attempt runs in one transaction holding the account's row lock (see
 // lockAccount), including the Argon2 verification: attempts on one account are
-// serialized, attempts on different accounts are not.
+// serialized, attempts on different accounts are not. Every attempt, for a known,
+// unknown or blocked account, first waits for a credential slot.
 func (s *Service) Login(ctx context.Context, username, password string, m Meta) (LoginResult, error) {
-	now := s.clock.Now().UTC()
 	pw := NormalizePassword(password)
 	var (
 		res         LoginResult
 		failed      bool
 		dummyVerify bool
 	)
-	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		a, found, err := lockAccount(ctx, tx, lockAccountByNameSQL, username)
-		if err != nil {
-			return err
-		}
-		if !found || a.hash == nil {
-			failed, dummyVerify = true, true
-			return s.auditFailure(ctx, tx, audit.Actor{Type: audit.ActorUser, Name: unknownUserName, IP: m.IP, RequestID: m.RequestID}, "auth.login", "", "unknown_user")
-		}
-		actor := userActor(a.id, a.name, m)
-		if a.blocked(now) {
-			// Not counted and the password is not checked; the dummy run after the
-			// transaction keeps the timing identical without holding the lock.
-			failed, dummyVerify = true, true
-			return s.auditFailure(ctx, tx, actor, "auth.login", a.id.String(), "locked")
-		}
-		ok, rehash, err := s.hasher.Verify(ctx, *a.hash, pw)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			failed = true
-			return s.recordFailure(ctx, tx, actor, a.id, "auth.login", "bad_password")
-		}
-		if a.disabled {
-			failed = true
-			return s.auditFailure(ctx, tx, actor, "auth.login", a.id.String(), "disabled")
-		}
-		if rehash {
-			newHash, err := s.hasher.Hash(ctx, pw)
+	err := s.withCredentialSlot(ctx, func() error {
+		err := s.credentialTx(ctx, func(tx pgx.Tx) error {
+			now := s.clock.Now().UTC()
+			a, found, err := lockAccount(ctx, tx, lockAccountByNameSQL, username)
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, "UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1", a.id, newHash, now); err != nil {
-				return fmt.Errorf("upgrade password hash: %w", err)
+			if !found || a.hash == nil {
+				failed, dummyVerify = true, true
+				return s.auditFailure(ctx, tx, audit.Actor{Type: audit.ActorUser, Name: unknownUserName, IP: m.IP, RequestID: m.RequestID}, "auth.login", "", "unknown_user")
 			}
+			actor := userActor(a.id, a.name, m)
+			if a.blocked(now) {
+				// Not counted and the password is not checked; the dummy run after the
+				// transaction keeps the timing identical without holding the lock.
+				failed, dummyVerify = true, true
+				return s.auditFailure(ctx, tx, actor, "auth.login", a.id.String(), "locked")
+			}
+			ok, rehash, err := s.hasher.Verify(ctx, *a.hash, pw)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				failed = true
+				return s.recordFailure(ctx, tx, actor, a.id, "auth.login", "bad_password")
+			}
+			if a.disabled {
+				failed = true
+				return s.auditFailure(ctx, tx, actor, "auth.login", a.id.String(), "disabled")
+			}
+			if rehash {
+				newHash, err := s.hasher.Hash(ctx, pw)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, "UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1", a.id, newHash, now); err != nil {
+					return fmt.Errorf("upgrade password hash: %w", err)
+				}
+			}
+			token, err := s.insertSession(ctx, tx, newSession{userID: a.id, kind: "pending", createdAt: now, expiresAt: now.Add(PendingLifetime)}, m)
+			if err != nil {
+				return err
+			}
+			res = LoginResult{Status: StatusMFARequired, SessionToken: token}
+			if !a.enrolled {
+				res.Status = StatusMFAEnrollmentRequired
+			}
+			return nil
+		})
+		if dummyVerify {
+			s.hasher.DummyVerify(ctx, pw) // SEC-004: unknown and blocked accounts cost the same as a real check
 		}
-		token, err := s.insertSession(ctx, tx, newSession{userID: a.id, kind: "pending", createdAt: now, expiresAt: now.Add(PendingLifetime)}, m)
-		if err != nil {
-			return err
-		}
-		res = LoginResult{Status: StatusMFARequired, SessionToken: token}
-		if !a.enrolled {
-			res.Status = StatusMFAEnrollmentRequired
-		}
-		return nil
+		return err
 	})
-	if dummyVerify {
-		s.hasher.DummyVerify(ctx, pw) // SEC-004: unknown and blocked accounts cost the same as a real check
-	}
 	if err != nil {
 		return LoginResult{}, err
 	}

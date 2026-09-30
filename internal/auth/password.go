@@ -57,6 +57,9 @@ func (h *Hasher) acquire(ctx context.Context) error {
 
 func (h *Hasher) release() { <-h.sem }
 
+// concurrency is how many hashes may run at once.
+func (h *Hasher) concurrency() int { return cap(h.sem) }
+
 // Hash returns the PHC string "$argon2id$v=19$m=<KiB>,t=<time>,p=<threads>$<salt>$<key>"
 // with unpadded standard base64 for salt and key.
 func (h *Hasher) Hash(ctx context.Context, secret string) (string, error) {
