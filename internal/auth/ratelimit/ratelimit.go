@@ -4,6 +4,7 @@
 package ratelimit
 
 import (
+	"net/netip"
 	"sync"
 	"time"
 
@@ -12,6 +13,26 @@ import (
 
 // maxKeys bounds memory: at most this many keys are tracked per limiter.
 const maxKeys = 10_000
+
+// IPKey is the per-address key for limiters and lockouts. IPv4-mapped IPv6
+// addresses count as IPv4, and IPv6 addresses are grouped by /64, the
+// smallest block a single customer usually controls, so rotating through one
+// network's addresses does not escape a limit. An invalid address maps to
+// "unknown".
+func IPKey(ip netip.Addr) string {
+	if !ip.IsValid() {
+		return "unknown"
+	}
+	ip = ip.Unmap().WithZone("")
+	if ip.Is4() {
+		return ip.String()
+	}
+	p, err := ip.Prefix(64)
+	if err != nil {
+		return "unknown"
+	}
+	return p.String()
+}
 
 // Limiter is a set of token buckets, one per key. Each bucket holds up to
 // limit tokens and refills at limit per period.

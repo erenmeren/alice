@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"fmt"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -138,4 +139,18 @@ func TestLockoutBoundsMemory(t *testing.T) {
 		l.Fail(fmt.Sprintf("ip:%d", i))
 	}
 	assert.LessOrEqual(t, len(l.entries), maxKeys)
+}
+
+func TestIPKeyGroupsIPv6By64(t *testing.T) {
+	tests := []struct{ ip, want string }{
+		{"192.0.2.7", "192.0.2.7"},
+		{"::ffff:192.0.2.7", "192.0.2.7"},
+		{"2001:db8:1:2::1", "2001:db8:1:2::/64"},
+		{"2001:db8:1:2:ffff:ffff:ffff:ffff", "2001:db8:1:2::/64"},
+		{"fe80::1%eth0", "fe80::/64"},
+	}
+	for _, tc := range tests {
+		assert.Equal(t, tc.want, IPKey(netip.MustParseAddr(tc.ip)), tc.ip)
+	}
+	assert.Equal(t, "unknown", IPKey(netip.Addr{}))
 }
