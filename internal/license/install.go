@@ -106,8 +106,10 @@ func (s *Service) Install(ctx context.Context, raw []byte, actor audit.Actor, by
 		return UploadResult{}, err
 	}
 	if !res.Duplicate {
+		// The upload has committed; the next hourly evaluation repeats what this one misses.
 		if err := s.Tick(ctx); err != nil {
-			return res, err
+			s.log.Error("the evaluation after a license upload failed; the license is stored and the next evaluation applies it",
+				"license_id", res.Payload.LicenseID, "error_type", fmt.Sprintf("%T", err))
 		}
 	}
 	return res, nil
@@ -128,18 +130,19 @@ func (s *Service) install(ctx context.Context, raw []byte, actor audit.Actor, by
 		return UploadResult{}, err
 	}
 	var res UploadResult
-	var acceptJump bool
+	s.evalMu.Lock()
+	defer s.evalMu.Unlock()
+	g := s.working()
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := loadInstallation(ctx, tx, true); err != nil {
 			return err
 		}
 		// Under the row lock: a correction license accepts a held jump (L-61), and the
 		// upload is judged at the time that applies once it is accepted, so the reported
-		// phase is the one Allow enforces afterwards.
-		s.mu.Lock()
-		_, _, jumpHeld := s.guard.PendingJump()
-		s.mu.Unlock()
-		acceptJump = jumpHeld && f.Payload.Replaces != ""
+		// phase is the one Allow enforces afterwards. The jump is accepted on the working
+		// copy of the guard, which is published only once this transaction has committed.
+		_, _, jumpHeld := g.PendingJump()
+		acceptJump := jumpHeld && f.Payload.Replaces != ""
 		reading := s.peek(acceptJump)
 		c, err := s.compute(ctx, tx, reading, false)
 		if err != nil {
@@ -193,6 +196,7 @@ clock_jump = CASE WHEN $3 THEN NULL ELSE clock_jump END WHERE id = 1`, string(re
 			return err
 		}
 		if acceptJump {
+			g.AcceptJump() // L-61: the vendor confirmed the new time
 			_, err := s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "clock.jump_accepted", ObjectType: "license",
 				ObjectID: p.LicenseID, Result: audit.Success, Details: map[string]string{"reason": "correction_license"}})
 			return err
@@ -202,11 +206,7 @@ clock_jump = CASE WHEN $3 THEN NULL ELSE clock_jump END WHERE id = 1`, string(re
 	if err != nil {
 		return UploadResult{}, err
 	}
-	if acceptJump && !res.Duplicate {
-		s.mu.Lock()
-		s.guard.AcceptJump() // L-61: the vendor confirmed the new time
-		s.mu.Unlock()
-	}
+	s.publishGuard(g)
 	return res, nil
 }
 

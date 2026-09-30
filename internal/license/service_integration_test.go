@@ -36,11 +36,15 @@ type recordingNotifier struct {
 	mu    sync.Mutex
 	sent  []string
 	calls []map[string]string
+	fail  error // returned instead of recording, to make the evaluation's transaction fail
 }
 
 func (r *recordingNotifier) NotifyAdmins(_ context.Context, _ pgx.Tx, template string, params map[string]string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.fail != nil {
+		return r.fail
+	}
 	r.sent = append(r.sent, template)
 	r.calls = append(r.calls, params)
 	return nil
@@ -61,6 +65,7 @@ type env struct {
 	stateDir  string
 	buildTime time.Time
 	notices   *recordingNotifier
+	noMail    bool
 	targets   license.TargetCounter
 	svc       *license.Service
 }
@@ -78,9 +83,24 @@ func newEnv(t *testing.T) *env {
 func (e *env) newService() *license.Service {
 	return license.New(license.Config{
 		Pool: e.db.App, Keyring: e.keyring, Audit: audit.New(e.clk), Clock: e.clk, Uptime: e.clk,
-		Keys: licensetest.KeySet(), StateDir: e.stateDir, BuildTime: e.buildTime, Notifier: e.notices,
+		Keys: licensetest.KeySet(), StateDir: e.stateDir, BuildTime: e.buildTime, Notifier: e.notifier(),
 		Targets: e.targets, Log: slog.New(slog.DiscardHandler),
 	})
+}
+
+// notifier returns the recording notifier, or none when the test runs without email (L-18).
+func (e *env) notifier() license.Notifier {
+	if e.noMail {
+		return nil
+	}
+	return e.notices
+}
+
+// tickAt moves the fake clock to at (counting the time as uptime) and runs the hourly evaluation.
+func (e *env) tickAt(at time.Time) {
+	e.t.Helper()
+	e.clk.Set(at)
+	require.NoError(e.t, e.svc.Tick(e.ctx))
 }
 
 // restart builds a new Service on the same database, state directory and clock (a process restart).
@@ -681,7 +701,9 @@ func TestShutdownSavesTheTimeRecord(t *testing.T) {
 	e.clk.Advance(2 * time.Hour)
 	require.NoError(t, e.svc.Shutdown(e.ctx))
 	for _, file := range []bool{false, true} {
-		assert.True(t, e.loadHWM(file).At.Equal(installedAt.Add(2*time.Hour)))
+		rec := e.loadHWM(file)
+		assert.True(t, rec.At.Equal(installedAt.Add(2*time.Hour)))
+		assert.Positive(t, rec.Seq)
 	}
 }
 

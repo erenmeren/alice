@@ -74,8 +74,8 @@ type Snapshot struct {
 }
 
 // Service is the license module. Every path that changes the license state (upload, Tick,
-// Shutdown) holds the license row lock, so evaluations, snapshot updates and time record
-// saves happen in one order.
+// Shutdown) holds evalMu and then the license row lock, so evaluations, snapshot updates and
+// time record saves happen in one order, within this process and across processes.
 type Service struct {
 	pool      *pgxpool.Pool
 	keyring   *secrets.Keyring
@@ -90,7 +90,12 @@ type Service struct {
 	codec     HWMCodec
 	hwmFile   *FileHWMStore // nil without a state directory
 
-	mu    sync.Mutex
+	// evalMu is held by Tick, uploads and Shutdown from before their transaction until the
+	// guard and the snapshot are published after the commit, so no other evaluation in this
+	// process sees a guard its transaction may still roll back.
+	evalMu sync.Mutex
+
+	mu    sync.Mutex // guards guard and snap
 	guard Guard
 	snap  Snapshot
 }
@@ -130,10 +135,26 @@ func (s *Service) Snapshot() Snapshot {
 	return s.snap
 }
 
-func (s *Service) setSnapshot(snap Snapshot) {
+// working returns a copy of the guard for one evaluation. The caller holds evalMu and
+// publishes the copy with publishGuard once its transaction has committed.
+func (s *Service) working() Guard {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.snap = snap
+	return s.guard
+}
+
+// publishGuard installs the guard of a committed evaluation. The caller holds evalMu.
+func (s *Service) publishGuard(g Guard) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.guard = g
+}
+
+// publish installs the guard and the snapshot of a committed evaluation. The caller holds evalMu.
+func (s *Service) publish(g Guard, snap Snapshot) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.guard, s.snap = g, snap
 }
 
 // Allow is the single lock-mode gate (spec §8.6, R9): the API guard calls it for routes of
@@ -199,13 +220,14 @@ func (s *Service) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.guard = Guard{}
-	s.guard.SetHWM(s.floor(hwm))
+	var g Guard
+	g.SetHWM(s.floor(hwm))
 	if j, ok := decodeJump(row.ClockJump); ok {
-		s.guard.RestoreJump(j.Expected, j.Detected, s.uptime.Elapsed())
+		g.RestoreJump(j.Expected, j.Detected, s.uptime.Elapsed())
 	}
-	s.mu.Unlock()
+	s.evalMu.Lock()
+	s.publishGuard(g)
+	s.evalMu.Unlock()
 	if !fresh && (len(damaged) > 0 || hwm.best == nil) {
 		if err := s.recordTimeRecordProblem(ctx, damaged, hwm.best == nil); err != nil {
 			return err
@@ -220,13 +242,21 @@ func (s *Service) Start(ctx context.Context) error {
 
 // Shutdown observes the clock and saves the time record (spec §16.5: also on graceful shutdown).
 func (s *Service) Shutdown(ctx context.Context) error {
-	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+	s.evalMu.Lock()
+	defer s.evalMu.Unlock()
+	g := s.working()
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := loadInstallation(ctx, tx, true); err != nil {
 			return err
 		}
-		s.observe()
-		return s.persistHWM(ctx, tx)
+		g.Observe(s.clock.Now(), s.uptime.Elapsed())
+		return s.persistHWM(ctx, tx, &g)
 	})
+	if err != nil {
+		return err
+	}
+	s.publishGuard(g)
+	return nil
 }
 
 // Inspect computes the current state without writing anything (alice license status).
@@ -346,13 +376,11 @@ func (s *Service) recordTimeRecordProblem(ctx context.Context, damaged []string,
 	})
 }
 
-// persistHWM saves the next record to every store; q carries the settings copy. A failing
-// settings store is an error; a failing file is logged (the settings copy still protects
-// the license). The caller holds the license row lock, so records are saved in order.
-func (s *Service) persistHWM(ctx context.Context, q db.Querier) error {
-	s.mu.Lock()
-	rec := s.guard.NextRecord()
-	s.mu.Unlock()
+// persistHWM saves the next record of g to every store; q carries the settings copy. A
+// failing settings store is an error; a failing file is logged (the settings copy still
+// protects the license). The caller holds the license row lock, so records are saved in order.
+func (s *Service) persistHWM(ctx context.Context, q db.Querier, g *Guard) error {
+	rec := g.NextRecord()
 	raw, err := s.codec.Encode(rec)
 	if err != nil {
 		return err
@@ -367,13 +395,6 @@ func (s *Service) persistHWM(ctx context.Context, q db.Querier) error {
 		}
 	}
 	return nil
-}
-
-// observe advances the guard with the current clock readings.
-func (s *Service) observe() (Reading, []ClockEvent) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.guard.Observe(s.clock.Now(), s.uptime.Elapsed())
 }
 
 // peek computes a reading without changing the guard. With acceptJump, a held jump is
@@ -504,6 +525,13 @@ type computed struct {
 	row       installationRow
 	files     []storedFile
 	installed []Installed
+	damaged   []damagedFile // stored files whose content no longer verifies
+}
+
+// damagedFile is a stored file that fails verification because its content changed.
+type damagedFile struct {
+	file storedFile
+	err  error
 }
 
 // compute reads the installation and the files, re-verifies every file and evaluates the
@@ -519,11 +547,13 @@ func (s *Service) compute(ctx context.Context, q db.Querier, reading Reading, fo
 		return computed{}, err
 	}
 	var installed []Installed
-	tampered := false
+	var damaged []damagedFile
 	for _, f := range files {
 		in, err := s.verifyStored(f, row.ID)
 		if err != nil {
-			tampered = tampered || tamperedBy(err)
+			if tamperedBy(err) {
+				damaged = append(damaged, damagedFile{file: f, err: err})
+			}
 			continue
 		}
 		installed = append(installed, in)
@@ -538,11 +568,11 @@ func (s *Service) compute(ctx context.Context, q db.Querier, reading Reading, fo
 			InstalledAt:    row.InstalledAt,
 			Eval:           Evaluate(reading.Effective, row.InstalledAt, installed),
 			Reading:        reading,
-			Tampered:       tampered,
+			Tampered:       len(damaged) > 0,
 			Targets:        targets,
 			Ready:          true,
 		},
-		row: row, files: files, installed: installed,
+		row: row, files: files, installed: installed, damaged: damaged,
 	}, nil
 }
 
