@@ -29,7 +29,8 @@ The full list of which role may call which API operation is in [authz-matrix.md]
 Expected: the person appears in the list; the **Two-factor sign-in** column shows "Not set up yet" until their
 first sign-in.
 
-Usernames use the letters A–Z, digits, dot, underscore and dash (2 to 64 characters). They are compared without
+Usernames use the letters A–Z, digits, dot, underscore and dash (2 to 64 characters) and must start with a letter
+or digit. They are compared without
 regard to case ("Admin" and "admin" are the same account). Letters such as "İ" or "ş" are refused so nobody can
 create a lookalike account; full names may use any letters.
 

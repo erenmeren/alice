@@ -62,7 +62,7 @@ To recompute the chain yourself, for each entry in `seq` order:
    `actor_name`, `ip`, `action`, `object_type`, `object_id`, `result`, `details`, `request_id`. Write `null`
    `actor_id` and `ip` as `""`, write `at` in UTC with exactly six fractional digits
    (`2026-09-30T08:15:02.120000Z`), sort the `details` keys, use no spaces, and escape `<`, `>`, `&`, U+2028 and U+2029
-   as `<`, `>`, `&`, ` ` and ` ` (Go `encoding/json` rules); other non-ASCII characters stay
+   as `\u003c`, `\u003e`, `\u0026`, `\u2028` and `\u2029` (Go `encoding/json` rules); other non-ASCII characters stay
    as UTF-8.
 2. `hash = SHA-256(previous hash || that JSON)`, where the previous hash of the first entry is 32 zero bytes.
 3. Compare with the entry's `hash` (hex).
