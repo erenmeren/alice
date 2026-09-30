@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { errorResponse, freshStatus, sessionFor, sessionHandlers } from './test/fixtures';
@@ -83,6 +83,23 @@ describe('application shell', () => {
     await userEvent.click(within(screen.getByRole('navigation')).getByRole('link', { name: 'Users' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/users'));
     expect(screen.getByRole('button', { name: 'Open navigation' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('closes the navigation after any navigation, not only a menu link', async () => {
+    server.use(...sessionHandlers(sessionFor('admin')));
+    const { router } = await renderRoute('/');
+    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
+    await userEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+    expect(screen.getByRole('button', { name: 'Close navigation' })).toHaveAttribute('aria-expanded', 'true');
+    await act(() => router.navigate('/account'));
+    expect(await screen.findByRole('heading', { name: 'My account' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open navigation' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('hides the user name below the small breakpoint so the header fits phones', async () => {
+    server.use(...sessionHandlers(sessionFor('admin')));
+    await renderRoute('/');
+    expect(await screen.findByTestId('current-user')).toHaveClass('mantine-visible-from-sm');
   });
 
   it('shows the setup banner to an admin until the recovery passphrase is set', async () => {

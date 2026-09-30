@@ -1,10 +1,18 @@
 import { InputWrapper, createTheme, defaultVariantColorsResolver, type VariantColorsResolver } from '@mantine/core';
 
+// Mantine hovers a filled button of shade 9 with the lighter shade 8; for red that is #e03131,
+// and white text on it is about 4.5:1 (axe measured 4.48:1, below WCAG AA). The danger buttons
+// (color "red.9") hover a darker red instead: #a51d1d is 7.5:1.
+export const DANGER_HOVER = '#a51d1d';
+
 // Mantine's "light" and "subtle" variants draw shade-6 text on a pale tint of the
 // same color (for example green 2.2:1, indigo 3.8:1), below WCAG AA (4.5:1).
 // Keep the tint as the color cue and use black text instead.
 const variantColorResolver: VariantColorsResolver = (input) => {
   const colors = defaultVariantColorsResolver(input);
+  if (input.variant === 'filled' && input.color === 'red.9') {
+    return { ...colors, hover: DANGER_HOVER };
+  }
   if (input.variant === 'light' || input.variant === 'subtle') {
     return { ...colors, color: 'var(--mantine-color-black)', hoverColor: 'var(--mantine-color-black)' };
   }

@@ -53,7 +53,7 @@ func TestAppRoleGrants(t *testing.T) {
 }
 
 // A later migration that adds a table without grants, grants too much, adds a view or a
-// granted sequence, or opens another schema to alice_app fails TestAppRoleGrants.
+// granted sequence, opens another schema to alice_app, or adds a column-level grant fails TestAppRoleGrants.
 func TestGrantGuardCatchesUnlistedRelations(t *testing.T) {
 	d := pgtest.New(t)
 	ctx := context.Background()
@@ -70,16 +70,20 @@ func TestGrantGuardCatchesUnlistedRelations(t *testing.T) {
 		"CREATE SCHEMA phase_x",
 		"GRANT USAGE ON SCHEMA phase_x TO alice_app",
 		"CREATE TABLE phase_x.hidden (id int)",
+		// Column-level grants on relations whose table-level grants are correct.
+		"GRANT UPDATE (action) ON audit_log TO alice_app",
+		"GRANT REFERENCES (key) ON settings TO alice_app",
 	} {
 		_, err := d.Owner.Exec(ctx, stmt)
 		require.NoError(t, err, stmt)
 	}
 	problems := grantProblems(t, d)
 	for _, rel := range []string{"public.phase_x_no_grants", "public.phase_x_too_much", "public.phase_x_columns_only",
-		"public.phase_x_view", "public.phase_x_seq", "schema phase_x", "phase_x.hidden"} {
+		"public.phase_x_view", "public.phase_x_seq", "schema phase_x", "phase_x.hidden",
+		"public.audit_log", "public.settings"} {
 		assert.Contains(t, problems, rel)
 	}
-	assert.Len(t, problems, 7, "%v", problems)
+	assert.Len(t, problems, 9, "%v", problems)
 }
 
 // Explicit grant sets of alice_app. A normal table in public gets appTableGrants unless it
@@ -129,7 +133,12 @@ SELECT n.nspname || '.' || c.relname, c.relkind::text,
          CASE WHEN has_table_privilege('alice_app', c.oid, 'TRUNCATE') THEN 'TRUNCATE' END,
          CASE WHEN has_table_privilege('alice_app', c.oid, 'REFERENCES') THEN 'REFERENCES' END,
          CASE WHEN has_table_privilege('alice_app', c.oid, 'TRIGGER') THEN 'TRIGGER' END] END, NULL),
-       has_any_column_privilege('alice_app', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')
+       CASE WHEN c.relkind = 'S' THEN false ELSE
+         (has_any_column_privilege('alice_app', c.oid, 'SELECT') AND NOT has_table_privilege('alice_app', c.oid, 'SELECT'))
+         OR (has_any_column_privilege('alice_app', c.oid, 'INSERT') AND NOT has_table_privilege('alice_app', c.oid, 'INSERT'))
+         OR (has_any_column_privilege('alice_app', c.oid, 'UPDATE') AND NOT has_table_privilege('alice_app', c.oid, 'UPDATE'))
+         OR (has_any_column_privilege('alice_app', c.oid, 'REFERENCES') AND NOT has_table_privilege('alice_app', c.oid, 'REFERENCES'))
+       END
 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, schemas)
 	require.NoError(t, err)
@@ -138,9 +147,9 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 		var (
 			name, kind string
 			privs      []string
-			anyColumn  bool
+			columnOnly bool
 		)
-		require.NoError(t, rows.Scan(&name, &kind, &privs, &anyColumn))
+		require.NoError(t, rows.Scan(&name, &kind, &privs, &columnOnly))
 		sort.Strings(privs)
 		want, listed := explicitGrants[name]
 		switch {
@@ -153,7 +162,9 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			problems = append(problems, name) // views, granted sequences, other schemas: list them explicitly
 			continue
 		}
-		if !slices.Equal(want, privs) || (len(privs) == 0 && anyColumn) {
+		// A column-level privilege without the table-level one is a hidden extra grant
+		// (for example UPDATE on one audit_log column), even when the table-level set matches.
+		if !slices.Equal(want, privs) || columnOnly {
 			problems = append(problems, name)
 		}
 	}

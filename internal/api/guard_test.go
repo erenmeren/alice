@@ -222,7 +222,7 @@ func TestGeneralLimitIsPerToken(t *testing.T) {
 
 // A pending (MFA-incomplete) session is never treated as a signed-in user.
 func TestPendingSessionIsNotASignedInUser(t *testing.T) {
-	for _, perm := range []rbac.Permission{rbac.Session, rbac.Read, rbac.SetupFinish} {
+	for _, perm := range []rbac.Permission{rbac.Session, rbac.Read, rbac.UsersRead} {
 		h, _ := guardedHandler(t, testDeps(t, nil), perm, limitDefault)
 		rec := call(h, http.MethodGet, "/api/v1/probe", "pending", "")
 		assert.Equal(t, http.StatusUnauthorized, rec.Code, perm)

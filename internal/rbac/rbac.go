@@ -75,7 +75,7 @@ func (have Scope) satisfies(want Scope) bool {
 // Permission is the value of a route's x-permission.
 type Permission string
 
-// Every permission used by the Phase 1 route table.
+// Every permission used by the route table.
 const (
 	Public         Permission = "public"
 	Setup          Permission = "setup"
@@ -87,7 +87,6 @@ const (
 	UsersRead      Permission = "users.read"
 	UsersManage    Permission = "users.manage"
 	SettingsManage Permission = "settings.manage"
-	SetupFinish    Permission = "setup.finish"
 )
 
 // Policy describes who may use a permission.
@@ -113,7 +112,6 @@ var policies = map[Permission]Policy{
 	UsersRead:      {Roles: []Role{Admin}, TokenScope: ScopeRead},
 	UsersManage:    {Roles: []Role{Admin}, StepUp: true},
 	SettingsManage: {Roles: []Role{Admin}, StepUp: true},
-	SetupFinish:    {Roles: []Role{Admin}},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.

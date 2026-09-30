@@ -54,7 +54,6 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 	rbac.UsersRead:      row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, allw, forb, forb),
 	rbac.UsersManage:    row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb),
 	rbac.SettingsManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb),
-	rbac.SetupFinish:    row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {
@@ -305,8 +304,8 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodPost, pattern: "/api/v1/tokens", perm: rbac.Session},
 		{method: http.MethodDelete, pattern: "/api/v1/tokens/{id}", perm: rbac.Read},
 		{method: http.MethodPut, pattern: "/api/v1/settings/locale", perm: rbac.Session},
-		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", perm: rbac.SetupFinish},
-		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.SetupFinish},
+		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", perm: rbac.Session},
+		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.Session},
 		{method: http.MethodGet, pattern: "/api/v1/audit/export", perm: rbac.Read},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))

@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Alert, Anchor, AppShell, Burger, Button, Group, NavLink, Text } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useTranslation } from 'react-i18next';
@@ -44,6 +45,12 @@ export function AppLayout() {
   // Below the "sm" breakpoint the navigation covers the page, so it starts closed and the
   // menu button opens it; choosing a page closes it again.
   const [navOpened, nav] = useDisclosure(false);
+  const closeNav = nav.close;
+  // Every navigation closes the mobile menu, including redirects and buttons that navigate
+  // (a menu link also closes it in its onClick, before the new page renders).
+  useEffect(() => {
+    closeNav();
+  }, [location.pathname, closeNav]);
   if (!session) return null;
   const items = NAV_ITEMS.filter((i) => i.roles.includes(session.user.role));
 
@@ -67,7 +74,7 @@ export function AppLayout() {
           </Group>
           <Group wrap="nowrap">
             <LanguageSwitcher signedIn />
-            <Text size="sm" data-testid="current-user">
+            <Text size="sm" data-testid="current-user" visibleFrom="sm">
               {session.user.display_name}
             </Text>
             <Button variant="default" onClick={() => void signOut()}>
