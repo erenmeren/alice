@@ -27,5 +27,7 @@ export const SCREENS: Screen[] = [
     ready: { en: 'Alice is ready', tr: 'Alice hazır' },
   },
   { path: '/account', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Change password', tr: 'Parolayı değiştir' } },
+  { path: '/users', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Operator', tr: 'Operatör' } },
+  { path: '/tokens', session: sessionFor('operator'), status: installedStatus, ready: { en: 'Read only', tr: 'Salt okunur' } },
   { path: '/missing', session: null, status: installedStatus, ready: { en: 'Page not found', tr: 'Sayfa bulunamadı' } },
 ];

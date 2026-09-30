@@ -1,6 +1,6 @@
 import { Outlet, type RouteObject } from 'react-router';
 import { AuthProvider } from './auth/AuthProvider';
-import { RequireAuth } from './auth/guards';
+import { RequireAuth, RequireRole } from './auth/guards';
 import { StepUpProvider } from './components/StepUpProvider';
 import { AppLayout } from './layout/AppLayout';
 import { AccountPage } from './pages/AccountPage';
@@ -8,6 +8,8 @@ import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { SetupPage } from './pages/SetupPage';
+import { TokensPage } from './pages/TokensPage';
+import { UsersPage } from './pages/UsersPage';
 
 function Root() {
   return (
@@ -37,6 +39,15 @@ export function routes(): RouteObject[] {
           children: [
             { index: true, element: <HomePage /> },
             { path: 'account', element: <AccountPage /> },
+            {
+              path: 'users',
+              element: (
+                <RequireRole roles={['admin']}>
+                  <UsersPage />
+                </RequireRole>
+              ),
+            },
+            { path: 'tokens', element: <TokensPage /> },
           ],
         },
         { path: '*', element: <NotFoundPage /> },

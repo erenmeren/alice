@@ -145,5 +145,102 @@
       "help": "Yönetici hesabınız ve kurtarma parolanız ayarlandı. Şimdi Kullanıcılar sayfasından Alice'i kullanacak kişileri ekleyin.",
       "button": "Ana sayfaya git"
     }
+  },
+  "users": {
+    "title": "Kullanıcılar",
+    "add": "Kullanıcı ekle",
+    "create": "Kullanıcıyı oluştur",
+    "save": "Değişiklikleri kaydet",
+    "cancel": "Vazgeç",
+    "setPassword": "Parolayı belirle",
+    "never": "Hiç",
+    "manage": "Yönet",
+    "manageNamed": "Yönet: {{name}}",
+    "manageTitle": "Yönetilen kullanıcı: {{name}}",
+    "editTitle": "Düzenlenen kullanıcı: {{name}}",
+    "resetPasswordTitle": "Yeni parola belirlenecek kullanıcı: {{name}}",
+    "resetPasswordText": "Kişinin tüm oturumları kapatılır ve bir sonraki girişte bu parolayı kullanması gerekir. Parolayı kişiye güvenli bir yolla iletin.",
+    "columns": {
+      "username": "Kullanıcı adı",
+      "name": "Ad soyad",
+      "role": "Rol",
+      "status": "Durum",
+      "mfa": "İki adımlı giriş",
+      "lastLogin": "Son giriş",
+      "actions": "İşlemler"
+    },
+    "fields": {
+      "username": "Kullanıcı adı",
+      "name": "Ad soyad",
+      "email": "E-posta (isteğe bağlı)",
+      "role": "Rol",
+      "initialPassword": "İlk parola",
+      "initialPasswordHelp": "En az 12 karakter. Kişi ilk girişte doğrulama uygulamasını kurar.",
+      "newPassword": "Yeni parola"
+    },
+    "status": {
+      "active": "Etkin",
+      "disabled": "Devre dışı"
+    },
+    "mfa": {
+      "enrolled": "Kuruldu",
+      "notEnrolled": "Henüz kurulmadı"
+    },
+    "actions": {
+      "edit": "Düzenle",
+      "resetMfa": "İki adımlı girişi sıfırla",
+      "resetPassword": "Yeni parola belirle",
+      "revokeSessions": "Tüm oturumları kapat",
+      "disable": "Devre dışı bırak",
+      "enable": "Etkinleştir"
+    },
+    "confirm": {
+      "resetMfaTitle": "İki adımlı giriş sıfırlanacak kullanıcı: {{name}}",
+      "resetMfaText": "Kişinin oturumları kapatılır ve bir sonraki girişte doğrulama uygulamasını yeniden kurması gerekir.",
+      "revokeTitle": "Tüm oturumları kapatılacak kullanıcı: {{name}}",
+      "revokeText": "Bu kişinin açık oturumlarının hepsi şimdi sona erer. Kişi yeniden giriş yapabilir.",
+      "disableTitle": "Devre dışı bırakılacak kullanıcı: {{name}}",
+      "disableText": "Kişinin oturumları kapatılır ve hesabı yeniden etkinleştirene kadar giriş yapamaz.",
+      "disableButton": "Kullanıcıyı devre dışı bırak",
+      "enableTitle": "Etkinleştirilecek kullanıcı: {{name}}",
+      "enableText": "Kişi parolası ve doğrulama uygulamasıyla yeniden giriş yapabilir.",
+      "enableButton": "Kullanıcıyı etkinleştir"
+    }
+  },
+  "tokens": {
+    "title": "API anahtarları",
+    "intro": "API anahtarları, betiklerin ve diğer araçların Alice'i sizin adınıza kullanmasını sağlar. Bir anahtar hiçbir zaman sizin rolünüzden fazla yetkiye sahip olmaz.",
+    "create": "Anahtar oluştur",
+    "submit": "Oluştur",
+    "cancel": "Vazgeç",
+    "empty": "Hiç API anahtarınız yok.",
+    "never": "Hiç",
+    "createdTitle": "Yeni anahtarınız",
+    "createdText": "Bu anahtarı şimdi kopyalayın. Bir daha gösterilmeyecek.",
+    "copy": "Kopyala",
+    "copied": "Kopyalandı",
+    "done": "Tamam",
+    "revoke": "İptal et",
+    "revokeNamed": "İptal edilecek anahtar: {{name}}",
+    "revokeTitle": "İptal edilecek anahtar: {{name}}",
+    "revokeText": "Bu anahtarı kullanan betikler hemen çalışmayı durdurur.",
+    "revokeConfirm": "Anahtarı iptal et",
+    "columns": {
+      "name": "Ad",
+      "prefix": "Başlangıcı",
+      "access": "Erişim",
+      "expires": "Bitiş",
+      "lastUsed": "Son kullanım",
+      "actions": "İşlemler"
+    },
+    "fields": {
+      "name": "Ad",
+      "access": "Erişim",
+      "days": "Geçerlilik (gün)"
+    },
+    "scope": {
+      "read": "Salt okunur",
+      "operate": "Okuma ve işlem"
+    }
   }
 }

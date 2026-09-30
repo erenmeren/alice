@@ -145,5 +145,102 @@
       "help": "Your administrator account and recovery passphrase are set. Next, add the people who will use Alice on the Users page.",
       "button": "Go to the dashboard"
     }
+  },
+  "users": {
+    "title": "Users",
+    "add": "Add user",
+    "create": "Create user",
+    "save": "Save changes",
+    "cancel": "Cancel",
+    "setPassword": "Set password",
+    "never": "Never",
+    "manage": "Manage",
+    "manageNamed": "Manage {{name}}",
+    "manageTitle": "Manage {{name}}",
+    "editTitle": "Edit {{name}}",
+    "resetPasswordTitle": "Set a new password for {{name}}",
+    "resetPasswordText": "The person is signed out everywhere and must use this password at the next sign-in. Give it to them in a safe way.",
+    "columns": {
+      "username": "Username",
+      "name": "Full name",
+      "role": "Role",
+      "status": "Status",
+      "mfa": "Two-factor sign-in",
+      "lastLogin": "Last sign-in",
+      "actions": "Actions"
+    },
+    "fields": {
+      "username": "Username",
+      "name": "Full name",
+      "email": "Email (optional)",
+      "role": "Role",
+      "initialPassword": "Initial password",
+      "initialPasswordHelp": "At least 12 characters. The person sets up their authenticator app at the first sign-in.",
+      "newPassword": "New password"
+    },
+    "status": {
+      "active": "Active",
+      "disabled": "Disabled"
+    },
+    "mfa": {
+      "enrolled": "Set up",
+      "notEnrolled": "Not set up yet"
+    },
+    "actions": {
+      "edit": "Edit",
+      "resetMfa": "Reset two-factor sign-in",
+      "resetPassword": "Set a new password",
+      "revokeSessions": "Sign out everywhere",
+      "disable": "Disable",
+      "enable": "Enable"
+    },
+    "confirm": {
+      "resetMfaTitle": "Reset two-factor sign-in for {{name}}?",
+      "resetMfaText": "The person is signed out and must set up their authenticator app again at the next sign-in.",
+      "revokeTitle": "Sign {{name}} out everywhere?",
+      "revokeText": "All open sessions of this person end now. They can sign in again.",
+      "disableTitle": "Disable {{name}}?",
+      "disableText": "The person is signed out and cannot sign in until you enable the account again.",
+      "disableButton": "Disable user",
+      "enableTitle": "Enable {{name}}?",
+      "enableText": "The person can sign in again with their password and authenticator app.",
+      "enableButton": "Enable user"
+    }
+  },
+  "tokens": {
+    "title": "API tokens",
+    "intro": "API tokens let scripts and other tools use Alice on your behalf. A token never has more rights than your own role.",
+    "create": "Create token",
+    "submit": "Create",
+    "cancel": "Cancel",
+    "empty": "You have no API tokens.",
+    "never": "Never",
+    "createdTitle": "Your new token",
+    "createdText": "Copy this token now. It will not be shown again.",
+    "copy": "Copy",
+    "copied": "Copied",
+    "done": "Done",
+    "revoke": "Revoke",
+    "revokeNamed": "Revoke token {{name}}",
+    "revokeTitle": "Revoke the token {{name}}?",
+    "revokeText": "Scripts that use this token stop working immediately.",
+    "revokeConfirm": "Revoke token",
+    "columns": {
+      "name": "Name",
+      "prefix": "Starts with",
+      "access": "Access",
+      "expires": "Expires",
+      "lastUsed": "Last used",
+      "actions": "Actions"
+    },
+    "fields": {
+      "name": "Name",
+      "access": "Access",
+      "days": "Valid for (days)"
+    },
+    "scope": {
+      "read": "Read only",
+      "operate": "Read and operate"
+    }
   }
 }
