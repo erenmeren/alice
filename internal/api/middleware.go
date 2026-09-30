@@ -45,8 +45,33 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// startedWriter records whether the response has begun. Unwrap keeps
+// http.ResponseController (Flush, deadlines) working through the wrapper.
+type startedWriter struct {
+	http.ResponseWriter
+	started bool
+}
+
+func (w *startedWriter) WriteHeader(code int) {
+	w.started = true
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *startedWriter) Write(b []byte) (int, error) {
+	w.started = true
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *startedWriter) Flush() {
+	w.started = true
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+func (w *startedWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (s *server) recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sw := &startedWriter{ResponseWriter: w}
 		defer func() {
 			if v := recover(); v != nil {
 				if err, ok := v.(error); ok && errors.Is(err, http.ErrAbortHandler) {
@@ -54,9 +79,14 @@ func (s *server) recoverer(next http.Handler) http.Handler {
 				}
 				// The panic value is not logged: it may contain request data or secrets.
 				s.deps.Log.Error("request handler panicked", "request_id", RequestID(r.Context()), "path", r.URL.Path)
+				if sw.started {
+					// Headers are gone; appending a JSON error would corrupt the body.
+					// Abort so net/http drops the connection and the client sees a truncated response.
+					panic(http.ErrAbortHandler)
+				}
 				s.writeError(w, r, ErrUnexpected)
 			}
 		}()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(sw, r)
 	})
 }

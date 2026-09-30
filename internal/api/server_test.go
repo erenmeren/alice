@@ -222,11 +222,30 @@ func TestUINotBuiltShowsHelpfulPage(t *testing.T) {
 
 func TestPanicBecomesUnexpectedError(t *testing.T) {
 	s := &server{deps: testDeps(t, nil)}
-	h := s.requestID(s.recoverer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom s3cret-pw") })))
+	h := s.requestID(securityHeaders(s.recoverer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom s3cret-pw") }))))
 	rec := do(h, http.MethodGet, "/x", nil)
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.NotContains(t, rec.Body.String(), "s3cret-pw")
 	assert.Equal(t, "ALC-SYS-0003", decodeErr(t, rec).Error.Code)
+	assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
+	assert.Equal(t, "max-age=31536000; includeSubDomains", rec.Header().Get("Strict-Transport-Security"))
+	assert.NotEmpty(t, rec.Header().Get("Content-Security-Policy"))
+}
+
+func TestPanicAfterPartialResponseDoesNotAppendJSON(t *testing.T) {
+	s := &server{deps: testDeps(t, nil)}
+	h := s.requestID(securityHeaders(s.recoverer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("<partial>"))
+		panic("boom")
+	}))))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL)
+	if err == nil {
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		assert.NotContains(t, string(body), "ALC-SYS-0003")
+	}
 }
 
 func TestHealthHandlerExposesOnlyProbes(t *testing.T) {
