@@ -7,9 +7,11 @@ import { I18nextProvider } from 'react-i18next';
 import { createBrowserRouter, RouterProvider } from 'react-router';
 import { queryDefaults } from './api/retry';
 import { createI18n } from './i18n';
-import { readCspNonce } from './csp';
+import { readCspNonce, shareCspNonce } from './csp';
 import { routes } from './router';
 import { theme } from './theme';
+
+shareCspNonce(readCspNonce());
 
 const queryClient = new QueryClient({ defaultOptions: queryDefaults });
 const router = createBrowserRouter(routes());
