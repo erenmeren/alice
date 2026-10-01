@@ -54,6 +54,12 @@ build: web ## Build the alice binary with the embedded UI into bin/
 licensectl: ## Build the vendor's offline license tool into bin/ (never shipped to customers)
 	CGO_ENABLED=0 go build -trimpath -o bin/licensectl ./cmd/licensectl
 
+.PHONY: helper
+helper: ## Build the static alice-helper for Linux amd64 and arm64 into bin/ with SHA-256 checksums (installed root-owned on targets)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o bin/alice-helper-linux-amd64 ./cmd/alice-helper
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o bin/alice-helper-linux-arm64 ./cmd/alice-helper
+	cd bin && sha256sum alice-helper-linux-amd64 alice-helper-linux-arm64 > alice-helper.sha256
+
 COMPOSE := docker compose -f deploy/docker-compose.yml --env-file deploy/.env
 
 .PHONY: image
