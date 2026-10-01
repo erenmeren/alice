@@ -50,6 +50,10 @@ build: web ## Build the alice binary with the embedded UI into bin/
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/alice ./cmd/alice
 	@! go version -m bin/alice | grep -q stretchr/testify || { echo "testify is linked into bin/alice"; exit 1; }
 
+.PHONY: licensectl
+licensectl: ## Build the vendor's offline license tool into bin/ (never shipped to customers)
+	CGO_ENABLED=0 go build -trimpath -o bin/licensectl ./cmd/licensectl
+
 COMPOSE := docker compose -f deploy/docker-compose.yml --env-file deploy/.env
 
 .PHONY: image

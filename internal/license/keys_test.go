@@ -135,6 +135,9 @@ func TestKeySetFileRoundTripAndErrors(t *testing.T) {
 		"unknown status":       `{"keys":[{"key_id":"vk-2026-01","public_key":"` + b64(licensetest.PublicKey()) + `","status":"retired"}]}`,
 		"duplicate id":         `{"keys":[` + good + `,` + good + `]}`,
 		"cutoff on active key": `{"keys":[{"key_id":"vk-2026-01","public_key":"` + b64(licensetest.PublicKey()) + `","status":"active","revoked_from":"2027-01-01T00:00:00Z"}]}`,
+		"test key id":          `{"keys":[{"key_id":"` + licensetest.KeyID + `","public_key":"` + b64(licensetest.PublicKey()) + `","status":"active"}]}`,
+		"other test key id":    `{"keys":[{"key_id":"vk-test-02","public_key":"` + b64(otherKey.Public().(ed25519.PublicKey)) + `","status":"active"}]}`,
+		"non-canonical base64": `{"keys":[{"key_id":"vk-2026-01","public_key":"` + nonCanonical(b64(licensetest.PublicKey())) + `","status":"active"}]}`,
 	} {
 		_, err := license.ParseKeySet([]byte(bad))
 		assert.Error(t, err, name)
@@ -142,3 +145,38 @@ func TestKeySetFileRoundTripAndErrors(t *testing.T) {
 }
 
 func b64(k ed25519.PublicKey) string { return base64.StdEncoding.EncodeToString(k) }
+
+// nonCanonical sets the unused low bits of the last base64 symbol of a 32-byte key: a lenient
+// decoder still reads the same key, so the key set file would have two spellings of one key.
+func nonCanonical(s string) string {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	i := strings.IndexByte(alphabet, s[42])
+	return s[:42] + string(alphabet[i&^3|1]) + s[43:]
+}
+
+func TestRevokedKeyWithoutCutoffRoundTrips(t *testing.T) {
+	raw, err := license.EncodeKeySet(license.PublicKey{ID: "vk-2025-01", Key: otherKey.Public().(ed25519.PublicKey), Status: license.KeyRevoked})
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "revoked_from")
+	ks, err := license.ParseKeySet(raw)
+	require.NoError(t, err)
+	require.Equal(t, 1, ks.Len())
+	k := ks.Keys()[0]
+	assert.Equal(t, license.KeyRevoked, k.Status)
+	assert.True(t, k.RevokedFrom.IsZero(), "no cutoff: nothing signed with the key is trusted")
+	again, err := license.EncodeKeySet(k)
+	require.NoError(t, err)
+	assert.Equal(t, raw, again)
+}
+
+// A key of the wrong length (only possible through NewKeySet) is an unknown key, not a panic
+// inside ed25519.Verify.
+func TestVerifyWithMalformedKeyIsUnknownKey(t *testing.T) {
+	f, err := license.ParseFile(signedTestFile(t))
+	require.NoError(t, err)
+	for _, key := range []ed25519.PublicKey{nil, licensetest.PublicKey()[:31], append(licensetest.PublicKey(), 0)} {
+		ks := license.NewKeySet(license.PublicKey{ID: licensetest.KeyID, Key: key, Status: license.KeyActive})
+		assert.NotPanics(t, func() { err = license.Verify(f, ks) })
+		assert.ErrorIs(t, err, license.ErrUnknownKey)
+	}
+}

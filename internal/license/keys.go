@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -75,7 +76,12 @@ type keyEntry struct {
 	RevokedFrom string `json:"revoked_from,omitempty"`
 }
 
-// ParseKeySet reads the embedded key set file {"keys": [...]}.
+// testKeyIDPrefix is reserved for publicly derivable test keys (licensetest.KeyID): a key set
+// file is a production key set, so it never lists one.
+const testKeyIDPrefix = "vk-test-"
+
+// ParseKeySet reads the embedded key set file {"keys": [...]}. Key IDs starting with
+// "vk-test-" are refused, and public keys must be canonical standard base64.
 func ParseKeySet(data []byte) (KeySet, error) {
 	var f keySetFile
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -91,10 +97,13 @@ func ParseKeySet(data []byte) (KeySet, error) {
 		if !keyIDPattern.MatchString(e.KeyID) {
 			return KeySet{}, fmt.Errorf("license: key set: key ID %q is not valid", e.KeyID)
 		}
+		if strings.HasPrefix(e.KeyID, testKeyIDPrefix) {
+			return KeySet{}, fmt.Errorf("license: key set: key ID %q is reserved for test keys", e.KeyID)
+		}
 		if _, dup := ks.keys[e.KeyID]; dup {
 			return KeySet{}, fmt.Errorf("license: key set: key ID %q appears twice", e.KeyID)
 		}
-		raw, err := base64.StdEncoding.DecodeString(e.PublicKey)
+		raw, err := base64.StdEncoding.Strict().DecodeString(e.PublicKey)
 		if err != nil || len(raw) != ed25519.PublicKeySize {
 			return KeySet{}, fmt.Errorf("license: key set: key %q is not a base64 Ed25519 public key", e.KeyID)
 		}
@@ -142,7 +151,7 @@ func EncodeKeySet(keys ...PublicKey) ([]byte, error) {
 // license from a revoked key (issued at or after its cutoff) ErrRevokedKey.
 func Verify(f File, keys KeySet) error {
 	pk, ok := keys.keys[f.KeyID]
-	if !ok {
+	if !ok || len(pk.Key) != ed25519.PublicKeySize {
 		return ErrUnknownKey
 	}
 	if !ed25519.Verify(pk.Key, SignedBytes(f.Payload), f.Signature) {

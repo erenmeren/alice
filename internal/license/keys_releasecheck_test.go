@@ -21,6 +21,7 @@ func TestProductionKeySetIsReadyForRelease(t *testing.T) {
 	require.Positive(t, ks.Len(), "internal/license/keys/production.json lists no key; see docs/vendor/licensing-vendor.md")
 	active := 0
 	for _, k := range ks.Keys() {
+		assert.NotEqual(t, licensetest.KeyID, k.ID, "the test key ID must never be a production key ID")
 		assert.NotEqual(t, licensetest.PublicKey(), k.Key, "the test key must never be a production key")
 		if k.Status == license.KeyActive {
 			active++
