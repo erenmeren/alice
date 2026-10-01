@@ -11,10 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/audit"
 	"alice/internal/license"
+	"alice/internal/platform/db"
 	"alice/internal/secrets"
 )
 
@@ -287,7 +290,7 @@ func TestInstallationSealFaults(t *testing.T) {
 func (e *env) installationNotices() []string {
 	e.t.Helper()
 	rows, err := e.db.Owner.Query(e.ctx, `SELECT notice FROM license_history
-WHERE event = 'notice' AND (notice LIKE 'installation\_tampered:%' OR notice LIKE 'installation\_restored:%') ORDER BY id`)
+WHERE event = 'notice' AND (notice LIKE 'installation\_tampered:%' OR notice LIKE 'installation\_restored:%') ORDER BY at, id`)
 	require.NoError(e.t, err)
 	defer rows.Close()
 	var out []string
@@ -348,32 +351,69 @@ func TestInstallationTamperEpisodes(t *testing.T) {
 	}, e.installationNotices())
 }
 
-// An installation tampered under Phase 2 has the notice without an episode number: it counts as
-// the open episode 1, so it is not reported again, and restoring the record closes it.
-func TestPhase2TamperNoticeCountsAsEpisodeOne(t *testing.T) {
+// appendAudit appends an audit event through the audit log, as the application role would.
+func (e *env) appendAudit(action string, result audit.Result, details map[string]string) {
+	e.t.Helper()
+	require.NoError(e.t, db.InTx(e.ctx, e.db.App, func(tx pgx.Tx) error {
+		_, err := audit.New(e.clk).Append(e.ctx, tx, audit.Event{Actor: audit.Actor{Type: audit.ActorSystem, Name: "system"},
+			Action: action, ObjectType: "license", ObjectID: e.installation(), Result: result, Details: details})
+		return err
+	}))
+}
+
+// An installation tampered under Phase 2 has an audit event without an episode number: it counts
+// as the open episode 1, so it is not reported again, and restoring the record closes it with
+// the upgrade reason.
+func TestPhase2TamperAuditCountsAsEpisodeOne(t *testing.T) {
 	e := newEnv(t)
 	id := e.installation()
 	original := e.svc.Snapshot().InstalledAt
-	e.ownerExec(`INSERT INTO license_history (id, at, event, license_id, notice, details)
-VALUES (gen_random_uuid(), now(), 'notice', '', $1, '{}')`, "installation_tampered:"+id)
+	e.appendAudit("license.installation_tampered", audit.Failure, map[string]string{"problem": "seal_mismatch", "installation_id": id})
 	e.ownerExec("UPDATE license SET installed_at = $1", original.Add(20*day))
 	e.restart()
 	e.requireTamperedLock()
-	assert.Zero(t, e.auditCount("license.installation_tampered"), "episode 1 was already recorded by Phase 2")
+	assert.Equal(t, 1, e.auditCount("license.installation_tampered"), "episode 1 was already recorded by Phase 2")
 
 	e.ownerExec("UPDATE license SET installed_at = $1", original)
 	e.tickAt(installedAt.Add(time.Hour))
 	assert.Equal(t, []string{"1"}, e.auditEpisodes("license.installation_restored"))
+	assert.Equal(t, map[string]string{"installation_id": id, "episode": "1", "reason": "upgrade"}, e.auditDetails("license.installation_restored"))
 	assert.Contains(t, e.installationNotices(), "installation_restored:"+id+":1")
 }
 
-// The episode prefix is matched exactly: a notice of another installation whose ID starts with
-// this one's characters never counts.
-func TestInstallationEpisodesIgnoreOtherInstallations(t *testing.T) {
+// The "record removed" event of a new installation is not an episode of the new installation.
+func TestInstallationMissingEventIsNotAnEpisode(t *testing.T) {
+	e := newEnv(t)
+	e.appendAudit("license.installation_tampered", audit.Failure, map[string]string{"problem": "installation_missing", "installation_id": e.installation()})
+	e.tickAt(installedAt.Add(time.Hour))
+	assert.Zero(t, e.auditCount("license.installation_restored"))
+}
+
+// Forged notices written as the application role (it may insert into license_history) never
+// suppress the audit: the episode state comes from the audit log.
+func TestForgedNoticesDoNotSuppressTheAudit(t *testing.T) {
+	e := newEnv(t)
+	id := e.installation()
+	for _, n := range []string{
+		"installation_tampered:" + id, "installation_tampered:" + id + ":1",
+		"installation_tampered:" + id + ":2", "installation_restored:" + id + ":2",
+	} {
+		_, err := e.db.App.Exec(e.ctx, `INSERT INTO license_history (id, at, event, license_id, notice, details)
+VALUES (gen_random_uuid(), now(), 'notice', '', $1, '{}')`, n)
+		require.NoError(t, err)
+	}
+	e.ownerExec("UPDATE license SET installed_at = installed_at + interval '1 day'")
+	e.restart()
+	e.requireTamperedLock()
+	assert.Equal(t, []string{"1"}, e.auditEpisodes("license.installation_tampered"), "the forged notices did not suppress the audit")
+}
+
+// A notice with a license ID is not an installation notice; it changes nothing either.
+func TestInstallationNoticeWithLicenseIDIsIgnored(t *testing.T) {
 	e := newEnv(t)
 	id := e.installation()
 	e.ownerExec(`INSERT INTO license_history (id, at, event, license_id, notice, details)
-VALUES (gen_random_uuid(), now(), 'notice', '', $1, '{}')`, "installation_tampered:"+id+"X:1")
+VALUES (gen_random_uuid(), now(), 'notice', 'LIC-X', $1, '{}')`, "installation_tampered:"+id+":1")
 	e.ownerExec("UPDATE license SET installed_at = installed_at + interval '1 day'")
 	e.restart()
 	assert.Equal(t, []string{"1"}, e.auditEpisodes("license.installation_tampered"))

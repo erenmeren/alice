@@ -52,4 +52,8 @@ VALUES (1, 'ALICE-TEST', now(), 'evaluation', now())`)
 
 	_, err = p.Up(ctx)
 	require.NoError(t, err, "the schema migrates up again")
+	assert.True(t, appColumnPrivilege(t, d, "installation_seal", "UPDATE"), "the seal is writable again")
+	assert.False(t, appColumnPrivilege(t, d, "installed_at", "UPDATE"))
+	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT has_table_privilege('alice_app', 'license', 'UPDATE')").Scan(&tableUpdate))
+	assert.False(t, tableUpdate, "no table-wide UPDATE after migrating up again")
 }

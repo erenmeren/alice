@@ -200,49 +200,59 @@ func (s *Service) sealUnsealed(ctx context.Context) error {
 	})
 }
 
-// Notice kinds of the installation record episodes: "<kind>:<installation id>:<n>". Phase 2 wrote
-// "installation_tampered:<installation id>" without a number; it counts as episode 1.
+// Notice kinds of the installation record episodes: "<kind>:<installation id>:<n>". They only feed
+// the license page; the episode state comes from the audit log (see lastEpisode).
 const (
 	noticeInstallationTampered = "installation_tampered"
 	noticeInstallationRestored = "installation_restored"
 )
 
-// episodes counts the notices of kind for installation id: the Phase 2 key "<kind>:<id>" and every
-// "<kind>:<id>:<n>". The prefix is compared exactly (no LIKE), so another ID never matches.
-func episodes(ctx context.Context, tx pgx.Tx, kind, id string) (int, error) {
-	prefix := kind + ":" + id
-	var n int
-	err := tx.QueryRow(ctx, `SELECT count(*) FROM license_history
-WHERE event = 'notice' AND license_id = '' AND (notice = $1::text OR left(notice, length($1::text) + 1) = $1::text || ':')`,
-		prefix).Scan(&n)
-	if err != nil {
-		return 0, fmt.Errorf("read the installation notices: %w", err)
+// lastEpisode reads the latest tamper or restore audit event of installation id from the
+// append-only, hash-chained audit log and returns whether an episode is open and its number
+// (0 when there is none). The license_history notices are not used: the application role can
+// insert there, so a forged notice must never suppress an audit. An event without an episode
+// number was written by Phase 2 and counts as episode 1. The "record removed" event of a new
+// installation is not an episode.
+func lastEpisode(ctx context.Context, tx pgx.Tx, id string) (open bool, n int, legacy bool, err error) {
+	var action string
+	var episode *string
+	err = tx.QueryRow(ctx, `SELECT action, details->>'episode' FROM audit_log
+WHERE object_type = 'license' AND object_id = $1
+  AND action IN ('license.installation_tampered', 'license.installation_restored')
+  AND details->>'problem' IS DISTINCT FROM $2::text
+ORDER BY seq DESC LIMIT 1`, id, problemInstallationMissing).Scan(&action, &episode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, 0, false, nil
 	}
-	return n, nil
+	if err != nil {
+		return false, 0, false, fmt.Errorf("read the installation episodes: %w", err)
+	}
+	n = 1
+	legacy = episode == nil
+	if episode != nil {
+		if v, perr := strconv.Atoi(*episode); perr == nil && v > 0 {
+			n = v
+		}
+	}
+	return action == "license.installation_tampered", n, legacy, nil
 }
 
 // recordInstallationEpisode audits each tamper episode of the installation row once: an untrusted
 // row with no open episode opens the next one (license.installation_tampered); a trusted row with
 // an open episode closes it (license.installation_restored). The caller holds the license row
-// lock, so two evaluations cannot both open the same episode; the unique notice index makes it
-// exactly-once even across processes.
+// lock, so two evaluations cannot both decide the same episode. The audit event is always
+// written; the history notice (display only) may already exist, which is logged and ignored.
 func (s *Service) recordInstallationEpisode(ctx context.Context, tx pgx.Tx, c computed, now time.Time) ([]audit.Event, error) {
 	id := c.row.ID
-	tampered, err := episodes(ctx, tx, noticeInstallationTampered, id)
+	open, last, legacy, err := lastEpisode(ctx, tx, id)
 	if err != nil {
 		return nil, err
 	}
-	restored, err := episodes(ctx, tx, noticeInstallationRestored, id)
-	if err != nil {
-		return nil, err
-	}
-	open := tampered > restored
 	switch {
 	case c.row.Tampered != "" && !open:
-		n := strconv.Itoa(tampered + 1)
+		n := strconv.Itoa(last + 1)
 		d := map[string]string{"problem": c.row.Tampered, "installation_id": id, "episode": n}
-		inserted, err := insertHistory(ctx, tx, now, "notice", "", "", "", noticeInstallationTampered+":"+id+":"+n, d)
-		if err != nil || !inserted {
+		if err := s.insertEpisodeNotice(ctx, tx, now, noticeInstallationTampered, id, n, d); err != nil {
 			return nil, err
 		}
 		s.log.Error("the installation record was changed outside Alice; the evaluation counts as ended and no license "+
@@ -250,10 +260,14 @@ func (s *Service) recordInstallationEpisode(ctx context.Context, tx pgx.Tx, c co
 		return []audit.Event{{Actor: systemActor, Action: "license.installation_tampered", ObjectType: "license",
 			ObjectID: id, Result: audit.Failure, Details: d}}, nil
 	case c.row.Tampered == "" && open:
-		n := strconv.Itoa(tampered)
+		n := strconv.Itoa(last)
 		d := map[string]string{"installation_id": id, "episode": n}
-		inserted, err := insertHistory(ctx, tx, now, "notice", "", "", "", noticeInstallationRestored+":"+id+":"+n, d)
-		if err != nil || !inserted {
+		if legacy {
+			// The episode was opened by Phase 2 (no episode number); closing it on the first tick
+			// after the upgrade is marked so the audit trail shows why it closed at once.
+			d["reason"] = "upgrade"
+		}
+		if err := s.insertEpisodeNotice(ctx, tx, now, noticeInstallationRestored, id, n, d); err != nil {
 			return nil, err
 		}
 		s.log.Info("the installation record matches its seal again; licenses count again", "episode", n)
@@ -261,6 +275,19 @@ func (s *Service) recordInstallationEpisode(ctx context.Context, tx pgx.Tx, c co
 			ObjectID: id, Result: audit.Success, Details: d}}, nil
 	}
 	return nil, nil
+}
+
+// insertEpisodeNotice writes the display notice of an episode. An existing notice (a forged or
+// repeated one) is logged and does not stop the audit event.
+func (s *Service) insertEpisodeNotice(ctx context.Context, tx pgx.Tx, now time.Time, kind, id, n string, d map[string]string) error {
+	inserted, err := insertHistory(ctx, tx, now, "notice", "", "", "", kind+":"+id+":"+n, d)
+	if err != nil {
+		return err
+	}
+	if !inserted {
+		s.log.Warn("the installation notice already exists; the audit event is written anyway", "kind", kind, "episode", n)
+	}
+	return nil
 }
 
 // evaluateInstallation is Evaluate for the stored installation. An untrusted row counts as an
