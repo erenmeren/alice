@@ -208,6 +208,7 @@ type lazyAuth struct {
 	mu        sync.Mutex
 	attempted bool
 	err       error
+	signer    ssh.Signer
 	release   func()
 }
 
@@ -215,12 +216,15 @@ func (l *lazyAuth) signers() ([]ssh.Signer, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.attempted = true
+	if l.signer != nil { // a second round (AuthenticationMethods publickey,publickey) reuses the key
+		return []ssh.Signer{l.signer}, nil
+	}
 	signer, release, err := l.cred.SSHSigner(l.ctx)
 	if err != nil {
 		l.err = err
 		return nil, err
 	}
-	l.release = release
+	l.signer, l.release = signer, release
 	return []ssh.Signer{signer}, nil
 }
 
@@ -307,8 +311,13 @@ func (d *Dialer) Dial(ctx context.Context, target uuid.UUID, cfg Config, cred pr
 			return nil, providers.NewError("ssh.timeout", true, r.err, nil)
 		case havePin && !called:
 			return nil, d.probeChanged(ctx, target, cfg, pinned, r.err)
-		case called && attempted:
-			return nil, providers.NewError("ssh.auth_failed", false, r.err, nil)
+		case called:
+			// The host key matched, so a later failure is the authentication phase.
+			reason := "key_rejected"
+			if !attempted {
+				reason = "publickey_not_offered"
+			}
+			return nil, providers.NewError("ssh.auth_failed", false, r.err, map[string]string{"reason": reason})
 		default:
 			return nil, providers.NewError("ssh.unreachable", true, r.err, nil)
 		}
@@ -333,7 +342,9 @@ func (d *Dialer) probeChanged(ctx context.Context, target uuid.UUID, cfg Config,
 		HostKeyAlgorithms: allHostKeyAlgorithms,
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			hk := HostKeyOf(key)
+			mu.Lock()
 			seenRaw = &hk
+			mu.Unlock()
 			return errHostKeyRefused
 		},
 	}

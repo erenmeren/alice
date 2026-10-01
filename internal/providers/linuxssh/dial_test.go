@@ -329,3 +329,30 @@ func TestHelperKilledBySignalIsNotHelperMissing(t *testing.T) {
 func TestCleanValueDropsControlAndFormatCharacters(t *testing.T) {
 	assert.Equal(t, "Ubuntu 22.04", cleanValue("\"Ubu\u0085ntu\u202e 22\u200b.04\u0007\"", 200))
 }
+
+func TestServerWithoutPublicKeyAuthIsAuthFailed(t *testing.T) {
+	srv, cfg, cred := testServer(t, okHandler)
+	srv.DisablePublicKeyAuth()
+	hk := &memHostKeys{}
+	hk.pin(srv.HostKey())
+	_, err := newDialer(hk).Dial(context.Background(), testTarget, cfg, cred)
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.auth_failed", pe.Code)
+	assert.False(t, pe.Retryable)
+	assert.Equal(t, "publickey_not_offered", pe.Params["reason"])
+}
+
+func TestLazyAuthFetchesAndReleasesOnce(t *testing.T) {
+	cred := newFakeCred(t)
+	a := &lazyAuth{cred: cred, ctx: context.Background()}
+	s1, err := a.signers()
+	require.NoError(t, err)
+	s2, err := a.signers()
+	require.NoError(t, err)
+	assert.Equal(t, s1[0].PublicKey().Marshal(), s2[0].PublicKey().Marshal())
+	attempted, err := a.done()
+	require.NoError(t, err)
+	assert.True(t, attempted)
+	assert.Equal(t, 1, cred.fetches())
+	assert.Equal(t, 1, cred.releases())
+}

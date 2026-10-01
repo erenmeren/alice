@@ -51,6 +51,14 @@ type Server struct {
 	attempts   int
 	commands   []string
 	conns      map[net.Conn]struct{}
+	noPubkey   bool
+}
+
+// DisablePublicKeyAuth makes the server offer password authentication only (never accepted).
+func (s *Server) DisablePublicKeyAuth() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noPubkey = true
 }
 
 // NewServer starts a server with a random Ed25519 host key. It stops when the test ends.
@@ -210,6 +218,12 @@ func (s *Server) handleConn(c net.Conn) {
 	s.mu.Lock()
 	for _, k := range s.signers {
 		cfg.AddHostKey(k)
+	}
+	if s.noPubkey {
+		cfg.PublicKeyCallback = nil
+		cfg.PasswordCallback = func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
+			return nil, errors.New("linuxsshtest: password not accepted")
+		}
 	}
 	s.mu.Unlock()
 	sc, chans, reqs, err := ssh.NewServerConn(c, cfg)
