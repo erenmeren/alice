@@ -101,6 +101,13 @@ var explicitGrants = map[string][]string{
 	"public.license":         {"INSERT", "SELECT"},
 	"public.license_files":   {"INSERT", "SELECT"},
 	"public.license_history": {"INSERT", "SELECT"},
+	// Phase 3 (R37): credentials are append-only for the application; inventory rows are never
+	// deleted (soft delete, missing_since) so their history stays.
+	"public.credentials":       {"INSERT", "SELECT"},
+	"public.targets":           {"INSERT", "SELECT", "UPDATE"},
+	"public.host_keys":         {"INSERT", "SELECT", "UPDATE"},
+	"public.ssh_keys":          {"INSERT", "SELECT", "UPDATE"},
+	"public.ssh_key_locations": {"INSERT", "SELECT", "UPDATE"},
 }
 
 // Column-level grants of alice_app (a privilege it holds on some columns but not on the

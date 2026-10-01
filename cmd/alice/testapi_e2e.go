@@ -76,9 +76,11 @@ var e2eMailbox = &testMailbox{}
 var testMailer notify.Mailer = e2eMailbox
 
 // resetSQL empties every application table. master_key_versions is kept because the master
-// key file on the volume stays the same.
+// key file on the volume stays the same. Every table that references users (targets, host_keys,
+// jobs) must be in the same TRUNCATE.
 const resetSQL = `TRUNCATE users, user_mfa, recovery_codes, sessions, api_tokens, setup_sessions, settings, audit_log,
-license, license_files, license_history, notifications_outbox`
+license, license_files, license_history, notifications_outbox,
+target_locks, job_attempts, jobs, ssh_key_locations, ssh_keys, host_keys, targets, credentials`
 
 // decodeTest reads a JSON body strictly; an empty body is an empty object.
 func decodeTest(w http.ResponseWriter, r *http.Request, dst any) bool {
