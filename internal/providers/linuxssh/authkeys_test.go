@@ -376,7 +376,7 @@ func TestUnknownOrControlOptionsAreUnreadable(t *testing.T) {
 
 func TestAddLineRefusesUnsafeText(t *testing.T) {
 	k, _ := edKey(t)
-	for _, bad := range []string{k + " c\u0085x", k + " c‮x", k + " c⁦x", k + " c\xff"} {
+	for _, bad := range []string{k + " c\u0085x", k + " c\u202ex", k + " c\u2066x", k + " c\xff"} {
 		_, _, err := mustParse(t, "").AddLine(bad)
 		require.ErrorIs(t, err, ErrInvalidKeyLine, "%q", bad)
 	}
