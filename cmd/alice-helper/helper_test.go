@@ -153,7 +153,7 @@ func (f *fixture) write(guest, content string, mode os.FileMode) {
 	require.NoError(f.t, os.Chmod(f.host(guest), mode))
 }
 
-func (f *fixture) read(guest string) string { //nolint:unused // used by the authkeys-write tests (Task 7)
+func (f *fixture) read(guest string) string {
 	f.t.Helper()
 	b, err := os.ReadFile(f.host(guest))
 	require.NoError(f.t, err)

@@ -44,40 +44,20 @@ func useFallback(err error) bool {
 // returned for fileOK; the caller checks the file with fstat too.
 func (s *sys) openCandidate(c candidate) (*os.File, unix.Stat_t, error) {
 	var parent unix.Stat_t
-	rel := strings.TrimPrefix(strings.TrimPrefix(c.real, c.dir), "/")
-	if !within(c.real, c.dir) || rel == "" {
-		return nil, parent, errEscaped
+	dirRel, base, err := splitCandidate(c)
+	if err != nil {
+		return nil, parent, err
 	}
-	dirRel, base := "", rel
-	if i := strings.LastIndex(rel, "/"); i >= 0 {
-		dirRel, base = rel[:i], rel[i+1:]
-	}
-	dirfd, err := unix.Open(s.host(c.dir), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	dirfd, err := s.openAllowed(c)
 	if err != nil {
 		return nil, parent, err
 	}
 	defer func() { _ = unix.Close(dirfd) }()
-	parentfd := dirfd
-	if dirRel != "" {
-		pfd := -1
-		if useOpenat2 {
-			pfd, err = openat2(dirfd, dirRel, &unix.OpenHow{
-				Flags:   unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC,
-				Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV,
-			})
-			if errors.Is(err, unix.EXDEV) {
-				return nil, parent, errEscaped
-			}
-		}
-		if !useOpenat2 || (err != nil && useFallback(err)) {
-			pfd, err = walkDirs(dirfd, dirRel)
-		}
-		if err != nil {
-			return nil, parent, err
-		}
-		defer func() { _ = unix.Close(pfd) }()
-		parentfd = pfd
+	parentfd, err := openBeneath(dirfd, dirRel)
+	if err != nil {
+		return nil, parent, err
 	}
+	defer func() { _ = unix.Close(parentfd) }()
 	if err := unix.Fstat(parentfd, &parent); err != nil {
 		return nil, parent, err
 	}
@@ -86,6 +66,50 @@ func (s *sys) openCandidate(c candidate) (*os.File, unix.Stat_t, error) {
 		return nil, parent, err
 	}
 	return os.NewFile(uintptr(fd), "authorized_keys"), parent, nil
+}
+
+// splitCandidate splits the resolved path of c into the directory part below the allowed
+// directory ("" when the file sits directly in it) and the file name.
+func splitCandidate(c candidate) (dirRel, base string, err error) {
+	rel := strings.TrimPrefix(strings.TrimPrefix(c.real, c.dir), "/")
+	if !within(c.real, c.dir) || rel == "" {
+		return "", "", errEscaped
+	}
+	if i := strings.LastIndex(rel, "/"); i >= 0 {
+		return rel[:i], rel[i+1:], nil
+	}
+	return "", rel, nil
+}
+
+// openAllowed opens the allowed directory of c (its last element is never a symlink).
+func (s *sys) openAllowed(c candidate) (int, error) {
+	return unix.Open(s.host(c.dir), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+}
+
+// openBeneath opens the directory dirRel beneath dirfd (openat2 with RESOLVE_BENEATH, or the
+// component-wise walk where openat2 is unavailable). An empty dirRel returns a duplicate of dirfd.
+// The caller closes the returned descriptor.
+func openBeneath(dirfd int, dirRel string) (int, error) {
+	if dirRel == "" {
+		return unix.FcntlInt(uintptr(dirfd), unix.F_DUPFD_CLOEXEC, 0) //nolint:gosec // G115: a descriptor is never negative
+	}
+	pfd, err := -1, error(nil)
+	if useOpenat2 {
+		pfd, err = openat2(dirfd, dirRel, &unix.OpenHow{
+			Flags:   unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC,
+			Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV,
+		})
+		if errors.Is(err, unix.EXDEV) {
+			return -1, errEscaped
+		}
+	}
+	if !useOpenat2 || (err != nil && useFallback(err)) {
+		pfd, err = walkDirs(dirfd, dirRel)
+	}
+	if err != nil {
+		return -1, err
+	}
+	return pfd, nil
 }
 
 // walkDirs opens a directory path one component at a time without following any symlink.

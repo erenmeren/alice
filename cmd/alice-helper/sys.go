@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -24,6 +25,12 @@ type sys struct {
 	stdin    io.Reader
 	stdout   io.Writer
 	syslog   func(subcommand, path string)
+	// chown sets the owner of a file or directory the helper created, through its descriptor
+	// (tests record instead: they do not run as root).
+	chown func(f *os.File, uid, gid int) error
+	// beforeRename runs just before a staged file replaces the real one (nil in production; tests
+	// inject failures and races).
+	beforeRename func() error
 }
 
 // host returns the real path of an absolute guest path.

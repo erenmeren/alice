@@ -30,6 +30,7 @@ func productionSys() *sys {
 		runSSHD:  runSSHD,
 		stdin:    os.Stdin,
 		stdout:   os.Stdout,
+		chown:    func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) },
 	}
 	s.syslog = func(subcommand, path string) { writeSyslog(s.sudoUserName(), subcommand, path) }
 	return s

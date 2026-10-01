@@ -52,6 +52,9 @@ const (
 	CodeSSHDFailed          = "SSHD_FAILED"
 	CodeIOError             = "IO_ERROR"
 	CodeUnsafeFile          = "UNSAFE_FILE" // hard-linked, or owned by neither its user nor root
+	// CodeAuthorizedKeysCommand refuses a write for a user whose keys sshd takes from an
+	// AuthorizedKeysCommand: the files are not the whole truth, keys are managed elsewhere.
+	CodeAuthorizedKeysCommand = "AUTHORIZED_KEYS_COMMAND"
 )
 
 // Warning codes in AuthKeysListResponse.Warnings; they equal the web catalog keys warnings.<code>.

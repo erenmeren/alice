@@ -41,11 +41,13 @@ type command struct {
 }
 
 var commands = map[string]command{
-	helperproto.SubVersion:      {handle: cmdVersion},
-	helperproto.SubSSHDDump:     {privileged: true, handle: cmdSSHDDump},
-	helperproto.SubHostKeys:     {privileged: true, handle: cmdHostKeys},
-	helperproto.SubAuthKeysList: {privileged: true, handle: cmdAuthKeysList},
-	helperproto.SubAuthKeysRead: {privileged: true, handle: cmdAuthKeysRead},
+	helperproto.SubVersion:       {handle: cmdVersion},
+	helperproto.SubSSHDDump:      {privileged: true, handle: cmdSSHDDump},
+	helperproto.SubHostKeys:      {privileged: true, handle: cmdHostKeys},
+	helperproto.SubAuthKeysList:  {privileged: true, handle: cmdAuthKeysList},
+	helperproto.SubAuthKeysRead:  {privileged: true, handle: cmdAuthKeysRead},
+	helperproto.SubAuthKeysWrite: {privileged: true, handle: cmdAuthKeysWrite},
+	helperproto.SubCleanup:       {privileged: true, handle: cmdCleanup},
 }
 
 // commandBudget bounds one call; Alice gives up after 30–60 s (R37 item 17).
@@ -65,6 +67,9 @@ func run(args []string, s *sys) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), commandBudget)
 	defer cancel()
+	if c.privileged {
+		s.sweepBackups()
+	}
 	out, err := c.handle(ctx, s, args[1:])
 	return reply(s, out, err)
 }
