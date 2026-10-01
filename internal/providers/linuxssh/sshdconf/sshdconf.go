@@ -118,6 +118,8 @@ func splitKeyword(line string) (string, string) {
 }
 
 // fields splits on spaces and tabs; double quotes group (an unterminated quote runs to the end).
+// Backslash escapes are not handled: this reader only serves the fallback path of plain sshd_config
+// text, while the helper normally parses "sshd -T" output.
 func fields(s string) []string {
 	var out []string
 	var cur strings.Builder
@@ -163,6 +165,9 @@ func foldASCII(s string) string {
 // token, a ".." path element or a result that is not absolute is refused with ErrInvalidPattern.
 func Expand(pattern, user, home string, uid int) (string, error) {
 	if pattern == "" || strings.ContainsAny(pattern+user+home, "\x00\n\r") {
+		return "", ErrInvalidPattern
+	}
+	if user == "" || strings.Contains(user, "/") || !strings.HasPrefix(home, "/") {
 		return "", ErrInvalidPattern
 	}
 	var b strings.Builder

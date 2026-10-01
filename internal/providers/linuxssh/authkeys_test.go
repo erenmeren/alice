@@ -7,6 +7,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -291,6 +292,9 @@ func FuzzParseAuthorizedKeys(f *testing.F) {
 		for _, l := range a.Lines {
 			switch l.Kind {
 			case LineKey:
+				if (len(l.Options) > 0) != (l.OptionsText != "") || strings.Join(l.Options, ",") != l.OptionsText {
+					t.Fatalf("options and OptionsText disagree: %q", l.Raw)
+				}
 				again, err := ParseAuthorizedKeys([]byte(l.Raw))
 				if err != nil || len(again.Lines) != 1 || again.Lines[0].Fingerprint != l.Fingerprint ||
 					again.Lines[0].OptionsText != l.OptionsText || again.Lines[0].PublicKey != l.PublicKey {
@@ -301,7 +305,16 @@ func FuzzParseAuthorizedKeys(f *testing.F) {
 			}
 		}
 		if len(a.Lines) > 0 && a.Lines[0].Kind == LineKey {
-			out, _ := a.RemoveFingerprint(a.Lines[0].Fingerprint)
+			fp := a.Lines[0].Fingerprint
+			out, n := a.RemoveFingerprint(fp)
+			if out.CountKeys() != a.CountKeys()-n {
+				t.Fatalf("removal count %d does not match key count %d -> %d", n, a.CountKeys(), out.CountKeys())
+			}
+			for _, l := range out.Lines {
+				if l.Kind == LineKey && l.Fingerprint == fp {
+					t.Fatalf("fingerprint still present after removal")
+				}
+			}
 			var kept []string
 			for _, l := range out.Lines {
 				if l.Kind == LineInvalid {
@@ -313,4 +326,61 @@ func FuzzParseAuthorizedKeys(f *testing.F) {
 			}
 		}
 	})
+}
+
+// Fix round 1: OptionsText is the verbatim options field even when the blob also occurs in an option.
+func TestOptionsTextWhenBlobRepeatsInOption(t *testing.T) {
+	k, _ := edKey(t)
+	blob := strings.Split(k, " ")[1]
+	line := `from="*",command="sh ` + blob + `" ` + k + " c"
+	a := mustParse(t, line)
+	require.Equal(t, LineKey, a.Lines[0].Kind)
+	assert.Equal(t, `from="*",command="sh `+blob+`"`, a.Lines[0].OptionsText)
+	assert.Equal(t, strings.Join(a.Lines[0].Options, ","), a.Lines[0].OptionsText)
+	assert.Equal(t, "c", a.Lines[0].Comment)
+}
+
+func TestNonCanonicalBlobIsUnreadable(t *testing.T) {
+	k, _ := ecdsaKey(t) // 104-byte blob: the base64 ends in one "=" with two spare bits
+	parts := strings.Split(k, " ")
+	b := parts[1]
+	require.True(t, strings.HasSuffix(b, "="))
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	idx := strings.IndexByte(alphabet, b[len(b)-2])
+	require.Zero(t, idx&3)
+	alt := b[:len(b)-2] + string(alphabet[idx|1]) + "="
+	_, err := base64.StdEncoding.DecodeString(alt)
+	require.NoError(t, err, "Go's decoder accepts the non-canonical form")
+	a := mustParse(t, parts[0]+" "+alt+" c\n")
+	assert.Equal(t, LineInvalid, a.Lines[0].Kind)
+	a = mustParse(t, `no-pty `+parts[0]+" "+alt+"\n")
+	assert.Equal(t, LineInvalid, a.Lines[0].Kind)
+}
+
+func TestUnknownOrControlOptionsAreUnreadable(t *testing.T) {
+	k, _ := edKey(t)
+	for _, in := range []string{
+		"bogus-option " + k, `command="x",frobnicate ` + k, "from=\"a\tb\" " + k + "\n",
+		"NO-PTY,From=\"10.0.0.1\" " + k, // valid, case-insensitive: handled below
+	} {
+		a := mustParse(t, in)
+		want := LineInvalid
+		if strings.HasPrefix(in, "NO-PTY") {
+			want = LineKey
+		}
+		assert.Equal(t, want, a.Lines[0].Kind, "%q", in)
+	}
+	a := mustParse(t, "command=\"a\x01b\" "+k)
+	assert.Equal(t, LineInvalid, a.Lines[0].Kind)
+}
+
+func TestAddLineRefusesUnsafeText(t *testing.T) {
+	k, _ := edKey(t)
+	for _, bad := range []string{k + " c\u0085x", k + " c‮x", k + " c⁦x", k + " c\xff"} {
+		_, _, err := mustParse(t, "").AddLine(bad)
+		require.ErrorIs(t, err, ErrInvalidKeyLine, "%q", bad)
+	}
+	_, added, err := mustParse(t, "").AddLine(k + " kullanıcı")
+	require.NoError(t, err)
+	assert.True(t, added)
 }

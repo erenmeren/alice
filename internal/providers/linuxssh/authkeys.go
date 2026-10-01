@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/ssh"
 
@@ -103,6 +104,24 @@ func parseKeyLine(l *Line) {
 	if err != nil || len(rest) != 0 {
 		return
 	}
+	// The blob must be canonical base64 (Go's decoder tolerates nonzero padding bits, OpenSSH
+	// would read the same key from a different text) and every option must be one OpenSSH knows.
+	optText, afterOpts := splitOptions(l.Raw)
+	if len(options) > 0 && (optText == "" || strings.Join(options, ",") != optText) {
+		return
+	}
+	if len(options) == 0 && optText != "" {
+		return
+	}
+	for _, o := range options {
+		if !knownOption(o) {
+			return
+		}
+	}
+	f := strings.Fields(afterOpts)
+	if len(f) < 2 || f[1] != base64.StdEncoding.EncodeToString(key.Marshal()) {
+		return
+	}
 	l.Kind = LineKey
 	l.Options = options
 	l.KeyType = key.Type()
@@ -110,23 +129,56 @@ func parseKeyLine(l *Line) {
 	l.Fingerprint = ssh.FingerprintSHA256(key)
 	l.Bits = keyBits(key)
 	l.Comment = comment
-	l.OptionsText = optionsText(l.Raw, key)
+	l.OptionsText = optText
 }
 
-// optionsText returns the verbatim text before the key type field: the part of the line between
-// its start and the type token that precedes the base64 blob.
-func optionsText(raw string, key ssh.PublicKey) string {
-	blob := base64.StdEncoding.EncodeToString(key.Marshal())
-	idx := strings.Index(raw, blob)
-	if idx <= 0 {
-		return ""
+// splitOptions returns the verbatim options field (the left-trimmed line up to the first unquoted
+// space or tab, with \" as an escape inside quotes, like OpenSSH's sshkey_advance_past_options)
+// and the remainder. A line that starts with a key type has no options field: it returns "".
+func splitOptions(raw string) (string, string) {
+	t := strings.TrimLeft(raw, " \t")
+	if strings.HasPrefix(t, "ssh-") || strings.HasPrefix(t, "sk-") || strings.HasPrefix(t, "ecdsa-") {
+		if i := strings.IndexAny(t, " \t"); i > 0 && !strings.ContainsAny(t[:i], `",=`) {
+			return "", t
+		}
 	}
-	prefix := strings.TrimRight(raw[:idx], " \t")
-	i := strings.LastIndexAny(prefix, " \t")
-	if i < 0 {
-		return ""
+	inQuote := false
+	for i := 0; i < len(t); i++ {
+		switch c := t[i]; {
+		case c == '\\' && inQuote && i+1 < len(t) && t[i+1] == '"':
+			i++
+		case c == '"':
+			inQuote = !inQuote
+		case (c == ' ' || c == '\t') && !inQuote:
+			return t[:i], t[i:]
+		}
 	}
-	return strings.TrimSpace(prefix[:i])
+	return "", t
+}
+
+var knownOptions = []string{"agent-forwarding", "cert-authority", "command", "environment", "expiry-time", "from",
+	"no-agent-forwarding", "no-port-forwarding", "no-pty", "no-user-rc", "no-X11-forwarding", "no-touch-required",
+	"permitlisten", "permitopen", "port-forwarding", "principals", "pty", "restrict", "tunnel", "user-rc",
+	"verify-required", "X11-forwarding"}
+
+// knownOption reports whether o is an OpenSSH authorized_keys option (names are case-insensitive;
+// strings.EqualFold avoids the banned ToLower) without control characters.
+func knownOption(o string) bool {
+	for i := 0; i < len(o); i++ {
+		if o[i] < 0x20 {
+			return false
+		}
+	}
+	name := o
+	if i := strings.IndexByte(o, '='); i >= 0 {
+		name = o[:i]
+	}
+	for _, k := range knownOptions {
+		if strings.EqualFold(name, k) {
+			return true
+		}
+	}
+	return false
 }
 
 // keyBits is the RSA modulus size, the ECDSA curve size or 256 for Ed25519 (also for FIDO keys).
@@ -241,8 +293,11 @@ func hasOption(opts []string, name string) bool {
 // unchanged and false when a line with the same fingerprint exists. line must be exactly one
 // valid key line without control characters. A file whose lines all end in CRLF keeps CRLF.
 func (a AuthorizedKeys) AddLine(line string) (AuthorizedKeys, bool, error) {
+	if !utf8.ValidString(line) {
+		return a, false, ErrInvalidKeyLine
+	}
 	for _, r := range line {
-		if r < 0x20 || r == 0x7f {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) {
 			return a, false, ErrInvalidKeyLine
 		}
 	}

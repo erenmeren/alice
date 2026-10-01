@@ -1,6 +1,7 @@
 package sshdconf
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -118,6 +119,9 @@ func TestExpandRefusesEscapesAndUnknownTokens(t *testing.T) {
 		{".ssh/authorized_keys", "dep\x00loy", "/home/deploy"},
 		{".ssh/authorized_keys", "deploy", "home/deploy"},
 		{"/keys/%u", "..", "/home/deploy"},
+		{"/keys/%u", "a/b", "/home/deploy"},
+		{"/keys/%u", "", "/home/deploy"},
+		{"/keys/%u", "deploy", ""},
 	} {
 		_, err := Expand(tc.pattern, tc.user, tc.home, 1001)
 		require.ErrorIs(t, err, ErrInvalidPattern, "%q user %q home %q", tc.pattern, tc.user, tc.home)
@@ -154,6 +158,35 @@ func FuzzParseSSHDConfig(f *testing.F) {
 			if !strings.HasPrefix(got, "/") || strings.Contains(got, "/../") || strings.HasSuffix(got, "/..") ||
 				strings.ContainsAny(got, "\x00\n\r") {
 				t.Fatalf("Expand(%q) = %q escapes or is not absolute", p, got)
+			}
+		}
+	})
+}
+
+// FuzzExpand: a successful expansion is a clean absolute path without "..", control characters,
+// and a relative pattern without '%' stays under the home directory.
+func FuzzExpand(f *testing.F) {
+	for _, s := range [][3]string{{".ssh/authorized_keys", "u", "/home/u"}, {"%h/../x", "u", "/h"}, {"/k/%u/%U/%%", "u", "/"},
+		{"a/./b//c", "u", "/home/u/"}, {"%", "u", "/h"}, {"..", "u", "/h"}} {
+		f.Add(s[0], s[1], s[2])
+	}
+	f.Fuzz(func(t *testing.T, pattern, user, home string) {
+		got, err := Expand(pattern, user, home, 1000)
+		if err != nil {
+			return
+		}
+		if !strings.HasPrefix(got, "/") || got != filepath.Clean(got) || strings.ContainsAny(got, "\x00\r\n") {
+			t.Fatalf("Expand(%q,%q,%q) = %q", pattern, user, home, got)
+		}
+		for _, p := range strings.Split(got, "/") {
+			if p == ".." {
+				t.Fatalf("Expand(%q,%q,%q) = %q has ..", pattern, user, home, got)
+			}
+		}
+		if !strings.HasPrefix(pattern, "/") && !strings.Contains(pattern, "%") {
+			h := filepath.Clean(home)
+			if h != "/" && got != h && !strings.HasPrefix(got, h+"/") {
+				t.Fatalf("relative %q escaped home %q: %q", pattern, home, got)
 			}
 		}
 	})
