@@ -1,7 +1,7 @@
 // Package jobs runs Alice's background work. Every job type declares its license class
-// (spec §8.6, X-01), and every scheduled run passes the license gate first. Phase 2 has
-// the periodic in-process scheduler; the durable PostgreSQL job queue (§8.1) arrives with
-// targets in Phase 3 and uses the same registry and gate.
+// (spec §8.6, X-01), and every run passes the license gate first: the periodic in-process
+// scheduler before each tick, the durable PostgreSQL queue (§8.1, queue.go and runner.go)
+// before and right after every claim.
 package jobs
 
 import (
@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 
+	"alice/internal/inventory"
 	"alice/internal/license"
 )
 
@@ -63,3 +64,51 @@ var (
 	LicenseEvaluate = Register("license.evaluate", license.ClassAlways)
 	NotifySend      = Register("notify.send", license.ClassAlways)
 )
+
+// Phase 3 queue job types (spec §8.2, §8.6): connection tests and discovery are read-only work
+// (paused in lock); removing a key changes a managed server (refused in lock, R9).
+var (
+	TargetTestConnection = Register(inventory.JobTestConnection, license.ClassReadOnly)
+	TargetDiscover       = Register(inventory.JobDiscover, license.ClassReadOnly)
+	SSHKeyRemove         = Register(inventory.JobSSHKeyRemove, license.ClassChange)
+)
+
+// Kind says who asked for a job (jobs.kind).
+type Kind string
+
+// Job kinds.
+const (
+	KindUser      Kind = "user"
+	KindScheduled Kind = "scheduled"
+	KindSystem    Kind = "system"
+)
+
+func (k Kind) valid() bool { return k == KindUser || k == KindScheduled || k == KindSystem }
+
+// Status is a job's state (jobs.status).
+type Status string
+
+// Job statuses. StatusBlocked: external-change work that was due while the license was
+// expired; it runs only after an Administrator confirms it (R29, L-81).
+const (
+	StatusQueued    Status = "queued"
+	StatusRunning   Status = "running"
+	StatusSucceeded Status = "succeeded"
+	StatusFailed    Status = "failed"
+	StatusCancelled Status = "cancelled"
+	StatusDead      Status = "dead"
+	StatusBlocked   Status = "blocked_license"
+)
+
+// MaxAttemptsFor is the default number of attempts of a job type (spec §8.4): a connection
+// test is shown to the user at once and not retried; discovery tolerates a flaky network.
+func MaxAttemptsFor(t Type) int {
+	switch t.Name {
+	case inventory.JobTestConnection:
+		return 1
+	case inventory.JobDiscover:
+		return 5
+	default:
+		return 3
+	}
+}
