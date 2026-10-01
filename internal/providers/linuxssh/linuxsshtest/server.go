@@ -50,6 +50,7 @@ type Server struct {
 	handler    Handler
 	attempts   int
 	commands   []string
+	sessionIDs [][]byte
 	conns      map[net.Conn]struct{}
 	noPubkey   bool
 	noAuth     bool
@@ -152,6 +153,18 @@ func (s *Server) Commands() []string {
 	return append([]string(nil), s.commands...)
 }
 
+// SessionIDs returns the SSH session identifier (the key-exchange hash) of every connection that
+// completed its handshake, so leak tests can look for session material in Alice's output.
+func (s *Server) SessionIDs() [][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([][]byte, 0, len(s.sessionIDs))
+	for _, id := range s.sessionIDs {
+		out = append(out, append([]byte(nil), id...))
+	}
+	return out
+}
+
 // SetHandler replaces the command handler.
 func (s *Server) SetHandler(h Handler) {
 	s.mu.Lock()
@@ -239,6 +252,9 @@ func (s *Server) handleConn(c net.Conn) {
 	if err != nil {
 		return
 	}
+	s.mu.Lock()
+	s.sessionIDs = append(s.sessionIDs, append([]byte(nil), sc.SessionID()...))
+	s.mu.Unlock()
 	go ssh.DiscardRequests(reqs)
 	closed := make(chan struct{})
 	go func() {
