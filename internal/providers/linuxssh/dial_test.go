@@ -231,6 +231,22 @@ func TestRunHonoursContextCancellation(t *testing.T) {
 	assert.False(t, c.Healthy())
 }
 
+// A context cancelled before the call runs nothing (no random pick against a fast answer) and
+// leaves the connection usable.
+func TestRunWithACancelledContextRunsNothing(t *testing.T) {
+	srv, c := pinnedConn(t, okHandler)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 20; i++ {
+		_, err := c.Run(ctx, CmdVersion())
+		pe := providerCode(t, err)
+		assert.Equal(t, "ssh.timeout", pe.Code)
+		assert.ErrorIs(t, err, context.Canceled)
+	}
+	assert.Empty(t, srv.Commands())
+	assert.True(t, c.Healthy())
+}
+
 func TestOSReleaseIsParsedAndCleaned(t *testing.T) {
 	srv, c := pinnedConn(t, func(cmd string, _ []byte) linuxsshtest.Response {
 		if cmd != OSReleaseCommand {
@@ -267,6 +283,10 @@ func TestDecodeHelper(t *testing.T) {
 		{"failed", Result{ExitCode: 4, Stdout: []byte(`{"ok":false,"code":"IO_ERROR","message":"no"}`)}, "ssh.helper_refused", "IO_ERROR", false},
 		{"hash mismatch", Result{ExitCode: 3, Stdout: []byte(`{"ok":false,"code":"HASH_MISMATCH","message":"x"}`)}, "ssh.file_changed", "HASH_MISMATCH", true},
 		{"not found", Result{ExitCode: 3, Stdout: []byte(`{"ok":false,"code":"NOT_FOUND","message":"x"}`)}, "ssh.helper_refused", "NOT_FOUND", false},
+		{"keys managed elsewhere", Result{ExitCode: 2, Stdout: []byte(`{"ok":false,"code":"AUTHORIZED_KEYS_COMMAND","message":"x"}`)}, "ssh.keys_managed_elsewhere", "AUTHORIZED_KEYS_COMMAND", false},
+		{"sshd failed", Result{ExitCode: 3, Stdout: []byte(`{"ok":false,"code":"SSHD_FAILED","message":"x"}`)}, "ssh.helper_refused", "SSHD_FAILED", false},
+		{"unsafe file", Result{ExitCode: 2, Stdout: []byte(`{"ok":false,"code":"UNSAFE_FILE","message":"x"}`)}, "ssh.helper_refused", "UNSAFE_FILE", false},
+		{"hash mismatch on the wrong exit", Result{ExitCode: 2, Stdout: []byte(`{"ok":false,"code":"HASH_MISMATCH","message":"x"}`)}, "ssh.helper_refused", "HASH_MISMATCH", false},
 		{"hostile code", Result{ExitCode: 2, Stdout: []byte(`{"ok":false,"code":"X; rm -rf /","message":"x"}`)}, "ssh.protocol_error", "", false},
 		{"error with ok true", Result{ExitCode: 2, Stdout: []byte(`{"ok":true,"code":"USAGE"}`)}, "ssh.protocol_error", "", false},
 		{"sudo refused", Result{ExitCode: 1, Stdout: nil}, "ssh.helper_missing", "", false},
@@ -355,4 +375,20 @@ func TestLazyAuthFetchesAndReleasesOnce(t *testing.T) {
 	assert.True(t, attempted)
 	assert.Equal(t, 1, cred.fetches())
 	assert.Equal(t, 1, cred.releases())
+}
+
+// Every helper error code maps to a reason of the provider catalog (global constraints).
+func TestEveryHelperCodeHasAReason(t *testing.T) {
+	catalog := map[string]bool{"ssh.helper_refused": true, "ssh.file_changed": true, "ssh.keys_managed_elsewhere": true}
+	codes := []string{helperproto.CodeUsage, helperproto.CodeUnknownSubcommand, helperproto.CodeNotRoot,
+		helperproto.CodeInvalidArgument, helperproto.CodePathNotAllowed, helperproto.CodeNotRegularFile,
+		helperproto.CodeInsecurePermissions, helperproto.CodeTooLarge, helperproto.CodeHashMismatch,
+		helperproto.CodeNotFound, helperproto.CodeSSHDFailed, helperproto.CodeIOError, helperproto.CodeUnsafeFile,
+		helperproto.CodeAuthorizedKeysCommand}
+	for _, code := range codes {
+		for _, exit := range []int{helperproto.ExitRefused, helperproto.ExitPrecondition, helperproto.ExitFailed} {
+			reason, _ := helperReason(exit, code)
+			assert.True(t, catalog[reason], "%s (exit %d) -> %s", code, exit, reason)
+		}
+	}
 }

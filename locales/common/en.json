@@ -1,5 +1,15 @@
 {
   "app": { "name": "Alice" },
+  "provider": {
+    "linuxssh": {
+      "name": "Linux server (SSH)",
+      "fields": {
+        "host": { "label": "Address", "help": "Host name or IP address of the server." },
+        "port": { "label": "SSH port", "help": "Usually 22." },
+        "username": { "label": "User name on the server", "help": "The service user the setup commands create, normally alice-svc." }
+      }
+    }
+  },
   "enum": {
     "role": {
       "admin": "Administrator",

@@ -23,6 +23,7 @@ var testTarget = uuid.MustParse("0190f5a0-0000-7000-8000-0000000000a1")
 // fakeCred hands out one client key and counts releases.
 type fakeCred struct {
 	signer   ssh.Signer
+	priv     ed25519.PrivateKey
 	mu       sync.Mutex
 	released int
 	fetched  int
@@ -34,7 +35,7 @@ func newFakeCred(t testing.TB) *fakeCred {
 	require.NoError(t, err)
 	s, err := ssh.NewSignerFromKey(priv)
 	require.NoError(t, err)
-	return &fakeCred{signer: s}
+	return &fakeCred{signer: s, priv: priv}
 }
 
 func (f *fakeCred) SSHSigner(context.Context) (ssh.Signer, func(), error) {

@@ -3,9 +3,15 @@
 package providertest
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
+	"time"
 
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
@@ -72,4 +78,188 @@ func CheckUnsupported(t testing.TB, s providers.Session, caps providers.Capabili
 		_, err = s.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{}, nil)
 		expect("RemoveAuthorizedKey", err)
 	}
+}
+
+// SessionHarness opens sessions of one provider against a working counterpart (a fake server,
+// a container) for CheckSession.
+type SessionHarness struct {
+	// Capabilities is what the provider advertises.
+	Capabilities providers.CapabilitySet
+	// Open opens a fresh session; ctx is the context Provider.Open receives.
+	Open func(ctx context.Context) (providers.Session, error)
+	// Secrets must never appear in any result, error, JSON or log line (private key material,
+	// a canary planted in the credential).
+	Secrets []string
+	// CancelBound is how long a call with a cancelled context may take (default 5 s).
+	CancelBound time.Duration
+}
+
+type sessionOp struct {
+	name string
+	cap  providers.Capability
+	call func(ctx context.Context, s providers.Session) (any, error)
+}
+
+var sessionOps = []sessionOp{
+	{"TestConnection", providers.CapTestConnection, func(ctx context.Context, s providers.Session) (any, error) {
+		return s.TestConnection(ctx)
+	}},
+	{"Discover", providers.CapDiscoverSSHKeys, func(ctx context.Context, s providers.Session) (any, error) {
+		return s.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+	}},
+	{"ListAuthorizedKeys", providers.CapAuthorizedKeys, func(ctx context.Context, s providers.Session) (any, error) {
+		return s.ListAuthorizedKeys(ctx)
+	}},
+	{"AddAuthorizedKey", providers.CapAuthorizedKeys, func(ctx context.Context, s providers.Session) (any, error) {
+		return s.AddAuthorizedKey(ctx, providers.AuthKeyChange{}, nil)
+	}},
+	{"RemoveAuthorizedKey", providers.CapAuthorizedKeys, func(ctx context.Context, s providers.Session) (any, error) {
+		return s.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{}, nil)
+	}},
+}
+
+// CheckSession runs the session conformance checks of spec §6.5 item 5 against a live
+// counterpart: every advertised capability's methods are implemented (never ErrUnsupported) and
+// return only *providers.Error; the others answer ErrUnsupported (CheckUnsupported); Open and
+// every advertised method honour a cancelled context promptly with an error that wraps
+// context.Canceled; and no secret appears in any result or error, however it is rendered.
+func CheckSession(t testing.TB, h SessionHarness) {
+	t.Helper()
+	bound := h.CancelBound
+	if bound <= 0 {
+		bound = 5 * time.Second
+	}
+	var seen []any
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var openErr error
+	if !within(bound, func() {
+		s, err := h.Open(cancelled)
+		if err == nil {
+			_ = s.Close()
+		}
+		openErr = err
+	}) {
+		t.Errorf("Open with a cancelled context did not return within %s", bound)
+	} else {
+		checkCancelled(t, "Open", openErr)
+		seen = append(seen, openErr)
+	}
+
+	for _, op := range sessionOps {
+		if !h.Capabilities.Has(op.cap) {
+			continue
+		}
+		s, err := h.Open(context.Background())
+		if err != nil {
+			t.Errorf("Open: %v", err)
+			return
+		}
+		out, err := op.call(context.Background(), s)
+		_ = s.Close()
+		seen = append(seen, out, err)
+		switch {
+		case errors.Is(err, providers.ErrUnsupported):
+			t.Errorf("%s answers ErrUnsupported although %s is advertised", op.name, op.cap)
+		case err != nil && !isProviderError(err):
+			t.Errorf("%s returned %T, want *providers.Error", op.name, err)
+		}
+
+		s, err = h.Open(context.Background())
+		if err != nil {
+			t.Errorf("Open: %v", err)
+			return
+		}
+		var cerr error
+		if !within(bound, func() { out, cerr = op.call(cancelled, s) }) {
+			t.Errorf("%s with a cancelled context did not return within %s", op.name, bound)
+		} else {
+			checkCancelled(t, op.name, cerr)
+			seen = append(seen, out, cerr)
+		}
+		_ = s.Close()
+	}
+
+	s, err := h.Open(context.Background())
+	if err != nil {
+		t.Errorf("Open: %v", err)
+		return
+	}
+	CheckUnsupported(t, s, h.Capabilities)
+	_ = s.Close()
+	CheckNoSecrets(t, h.Secrets, seen...)
+}
+
+func isProviderError(err error) bool {
+	var pe *providers.Error
+	return errors.As(err, &pe)
+}
+
+func checkCancelled(t testing.TB, name string, err error) {
+	t.Helper()
+	switch {
+	case err == nil:
+		t.Errorf("%s with a cancelled context succeeded", name)
+	case !errors.Is(err, context.Canceled):
+		t.Errorf("%s with a cancelled context: got %v, want an error wrapping context.Canceled", name, err)
+	case !isProviderError(err):
+		t.Errorf("%s with a cancelled context returned %T, want *providers.Error", name, err)
+	}
+}
+
+// within runs fn and reports whether it returned within d (fn keeps running otherwise).
+func within(d time.Duration, fn func()) bool {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+// CheckNoSecrets fails when a secret appears in any value as JSON, as %+v, as an error message
+// or as a structured log line.
+func CheckNoSecrets(t testing.TB, secrets []string, values ...any) {
+	t.Helper()
+	for _, v := range values {
+		if v == nil {
+			continue
+		}
+		if leaks(renderings(v), secrets) {
+			t.Errorf("a secret appears in the output of %T", v)
+		}
+	}
+}
+
+func leaks(texts, secrets []string) bool {
+	for _, text := range texts {
+		for _, s := range secrets {
+			if s != "" && strings.Contains(text, s) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func renderings(v any) []string {
+	var out []string
+	if b, err := json.Marshal(v); err == nil {
+		out = append(out, string(b))
+	}
+	out = append(out, fmt.Sprintf("%+v", v))
+	if err, ok := v.(error); ok {
+		out = append(out, err.Error())
+	}
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("check", slog.Any("value", v))
+	return append(out, buf.String())
 }

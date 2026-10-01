@@ -473,6 +473,11 @@ func (c *Conn) Run(ctx context.Context, cmd HelperCommand) (Result, error) {
 	if line == "" {
 		return Result{}, providers.NewError("ssh.protocol_error", false, ErrInvalidArgument, params)
 	}
+	if err := ctx.Err(); err != nil {
+		// Checked first: a select below would pick between a finished command and the context at
+		// random. Nothing ran, so the connection stays usable.
+		return Result{}, providers.NewError("ssh.timeout", true, err, params)
+	}
 	if !c.Healthy() {
 		return Result{}, providers.NewError("ssh.unreachable", true, errConnClosed, params)
 	}
@@ -633,6 +638,20 @@ func decodeOne(b []byte, dst any) error {
 	return nil
 }
 
+// helperReason maps a helper error code to a provider reason. Codes Alice acts on have their own
+// reason; every other code (USAGE, NOT_ROOT, PATH_NOT_ALLOWED, UNSAFE_FILE, SSHD_FAILED, IO_ERROR,
+// …) is ssh.helper_refused, and its helper_code parameter tells the UI which one.
+func helperReason(exit int, code string) (reason string, retryable bool) {
+	switch {
+	case code == helperproto.CodeHashMismatch && exit == helperproto.ExitPrecondition:
+		return "ssh.file_changed", true // the file changed between read and write (F-38)
+	case code == helperproto.CodeAuthorizedKeysCommand:
+		return "ssh.keys_managed_elsewhere", false // sshd takes this user's keys from a program (F-35)
+	default:
+		return "ssh.helper_refused", false
+	}
+}
+
 // DecodeHelper turns a helper Result into its typed answer or a *providers.Error. Exit 0 must carry
 // {"ok": true, …}; exits 2, 3 and 4 carry the helper's error code (only a fixed-format code is
 // kept: remote text never reaches messages); any other exit means sudo or the helper itself is
@@ -668,10 +687,8 @@ func DecodeHelper[T any](r Result, sub string) (T, error) {
 			return protocol(errors.New("linuxssh: malformed helper error"))
 		}
 		params["helper_code"] = e.Code
-		if r.ExitCode == helperproto.ExitPrecondition && e.Code == helperproto.CodeHashMismatch {
-			return zero, providers.NewError("ssh.file_changed", true, nil, params)
-		}
-		return zero, providers.NewError("ssh.helper_refused", false, nil, params)
+		reason, retryable := helperReason(r.ExitCode, e.Code)
+		return zero, providers.NewError(reason, retryable, nil, params)
 	default:
 		params["exit_code"] = strconv.Itoa(r.ExitCode)
 		return zero, providers.NewError("ssh.helper_missing", false, nil, params)

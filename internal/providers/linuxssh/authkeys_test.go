@@ -19,9 +19,9 @@ import (
 	"alice/internal/providers/linuxssh/helperproto"
 )
 
-// keyLine returns "type base64" for pub and its SHA-256 fingerprint. Key material is generated
+// pubKeyLine returns "type base64" for pub and its SHA-256 fingerprint. Key material is generated
 // at test time; no private key is ever committed (spec §22.6).
-func keyLine(t testing.TB, pub any) (string, string) {
+func pubKeyLine(t testing.TB, pub any) (string, string) {
 	t.Helper()
 	k, err := ssh.NewPublicKey(pub)
 	require.NoError(t, err)
@@ -32,21 +32,21 @@ func edKey(t testing.TB) (string, string) {
 	t.Helper()
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
-	return keyLine(t, pub)
+	return pubKeyLine(t, pub)
 }
 
 func rsaKey(t testing.TB, bits int) (string, string) {
 	t.Helper()
 	priv, err := rsa.GenerateKey(rand.Reader, bits) //nolint:gosec // G403: a weak test key on purpose (flag "weak")
 	require.NoError(t, err)
-	return keyLine(t, &priv.PublicKey)
+	return pubKeyLine(t, &priv.PublicKey)
 }
 
 func ecdsaKey(t testing.TB) (string, string) {
 	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
-	return keyLine(t, &priv.PublicKey)
+	return pubKeyLine(t, &priv.PublicKey)
 }
 
 // skKey builds an sk-ssh-ed25519@openssh.com (FIDO) public key from its wire form.

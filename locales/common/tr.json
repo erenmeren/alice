@@ -1,5 +1,15 @@
 {
   "app": { "name": "Alice" },
+  "provider": {
+    "linuxssh": {
+      "name": "Linux sunucu (SSH)",
+      "fields": {
+        "host": { "label": "Adres", "help": "Sunucunun ana bilgisayar adı veya IP adresi." },
+        "port": { "label": "SSH bağlantı noktası", "help": "Genellikle 22." },
+        "username": { "label": "Sunucudaki kullanıcı adı", "help": "Kurulum komutlarının oluşturduğu hizmet kullanıcısı, normalde alice-svc." }
+      }
+    }
+  },
   "enum": {
     "role": {
       "admin": "Yönetici",
