@@ -204,6 +204,9 @@ func (p *Pool) takeIdle(ctx context.Context, target uuid.UUID, cfg Config) *Conn
 		_ = found.Close()
 		return nil
 	}
+	if !found.alive(ctx) { // the server dropped it while idle (a restart or a reinstall): dial again
+		return nil
+	}
 	return found
 }
 

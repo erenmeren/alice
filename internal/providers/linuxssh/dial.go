@@ -26,6 +26,9 @@ import (
 	"alice/internal/providers/linuxssh/helperproto"
 )
 
+// KeepaliveTimeout bounds the liveness probe of an idle connection before it is reused.
+const KeepaliveTimeout = 5 * time.Second
+
 // Budgets of one connection and one command (R37 item 17).
 const (
 	DefaultDialTimeout      = 10 * time.Second
@@ -482,6 +485,32 @@ func (c *Conn) markBroken() {
 	c.broken = true
 	c.mu.Unlock()
 	_ = c.client.Close()
+}
+
+// alive probes the connection with OpenSSH's keepalive global request before it is reused. Any
+// reply, even a refusal, proves the server still holds the connection. A connection the server
+// dropped while idle must never run the next command: it would fail as unreachable, and the dial
+// that would have shown a changed host key would not happen. A probe without an answer within
+// KeepaliveTimeout, or cut short by ctx, closes the connection.
+func (c *Conn) alive(ctx context.Context) bool {
+	if !c.Healthy() {
+		return false
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := c.client.SendRequest("keepalive@openssh.com", true, nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			return true
+		}
+	case <-ctx.Done():
+	case <-c.clock.After(KeepaliveTimeout):
+	}
+	c.markBroken() // closing the client also ends a probe still waiting for its reply
+	return false
 }
 
 // Close closes the connection.

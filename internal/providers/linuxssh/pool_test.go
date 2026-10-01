@@ -142,6 +142,36 @@ func TestPoolDropsIdleConnectionAfterRepin(t *testing.T) {
 	assert.False(t, c1.Healthy())
 }
 
+// A server that dropped the connection while it sat idle (a restart, a reinstall) is dialed again:
+// the stale connection is never handed out, so the next command neither fails as unreachable nor
+// misses a changed host key.
+func TestPoolDoesNotHandOutAConnectionTheServerClosed(t *testing.T) {
+	e := newPoolEnv(t, clock.Real{}, 2, 1)
+	key := linuxsshtest.NewHostKey(t)
+	e.srv.SetHostKey(key)
+	e.hk.pin(key.PublicKey())
+	ctx := context.Background()
+	c1, rel1, err := e.pool.Acquire(ctx, testTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	rel1(true)
+	attempts := e.srv.AuthAttempts()
+
+	e.srv.SetHostKey(key) // same key, but every open connection is dropped
+	c2, rel2, err := e.pool.Acquire(ctx, testTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	defer rel2(true)
+	assert.NotSame(t, c1, c2)
+	assert.False(t, c1.Healthy())
+	assert.Greater(t, e.srv.AuthAttempts(), attempts, "a new connection was opened")
+	_, err = c2.Run(ctx, CmdVersion())
+	require.NoError(t, err)
+
+	e.srv.SetHostKey(linuxsshtest.NewHostKey(t)) // reinstalled: the next acquire sees the new key
+	rel2(true)
+	_, _, err = e.pool.Acquire(ctx, testTarget, e.cfg, e.cred)
+	assert.Equal(t, "target.host_key_changed", providerCode(t, err).Code)
+}
+
 func TestPoolCloseClosesIdleConnectionsAndRefusesAcquire(t *testing.T) {
 	e := newPoolEnv(t, clock.Real{}, 2, 1)
 	c1, rel1, err := e.pool.Acquire(context.Background(), testTarget, e.cfg, e.cred)
