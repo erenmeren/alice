@@ -68,6 +68,14 @@ func TestInventoryTablesGrantOnlyWhatTheAppNeeds(t *testing.T) {
 		"DELETE FROM host_keys",
 		"DELETE FROM ssh_keys",
 		"DELETE FROM ssh_key_locations",
+		"UPDATE host_keys SET public_key = '\\x01'",
+		"UPDATE host_keys SET target_id = target_id",
+		"UPDATE targets SET config = '{}'",
+		"UPDATE targets SET credential_id = credential_id",
+		"UPDATE ssh_keys SET public_key = 'x'",
+		"UPDATE ssh_keys SET fingerprint_sha256 = 'x'",
+		"UPDATE ssh_key_locations SET file_path = 'x'",
+		"UPDATE ssh_key_locations SET target_id = target_id",
 	} {
 		assert.Equal(t, "42501", sqlState(exec(t, d.App, stmt)), "%s must be refused for alice_app", stmt)
 	}
@@ -160,4 +168,89 @@ VALUES ($1, $2, 'target.discover', 'w', now(), now() + interval '45 seconds')`, 
 	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT (SELECT count(*) FROM job_attempts), (SELECT count(*) FROM target_locks)").Scan(&attempts, &locks))
 	assert.Zero(t, attempts)
 	assert.Zero(t, locks)
+}
+
+func TestAliceKeyLocationCannotBeUnprotectedByEditingIt(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	target := seedTarget(t, d, "web-01", "web-01.example.com")
+	other := seedTarget(t, d, "web-02", "web-02.example.com")
+	require.NoError(t, exec(t, d.Owner, `UPDATE credentials SET public_info = '{"fingerprint": "SHA256:alice"}'`))
+	var key, otherKey string
+	require.NoError(t, d.App.QueryRow(ctx, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, public_key, first_seen_at, created_at)
+VALUES (gen_random_uuid(), 'SHA256:alice', 'ssh-ed25519', 'ssh-ed25519 AAAA', now(), now()) RETURNING id::text`).Scan(&key))
+	require.NoError(t, d.App.QueryRow(ctx, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, public_key, first_seen_at, created_at)
+VALUES (gen_random_uuid(), 'SHA256:bob', 'ssh-ed25519', 'ssh-ed25519 BBBB', now(), now()) RETURNING id::text`).Scan(&otherKey))
+	insert := func(flag bool, user string) string {
+		var id string
+		require.NoError(t, d.App.QueryRow(ctx, `INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, first_seen_at, last_seen_at, is_alice_connection_key)
+VALUES (gen_random_uuid(), $1, $2, $3, '/home/x/.ssh/authorized_keys', 1, now(), now(), $4) RETURNING id::text`, key, target, user, flag).Scan(&id))
+		return id
+	}
+	own := insert(true, "alice-svc")
+	for _, set := range []string{
+		"is_alice_connection_key = false",
+		"ssh_key_id = '" + otherKey + "'",
+		"target_id = '" + other + "'",
+		"os_user = 'someone'",
+		"file_path = '/elsewhere'",
+	} {
+		// The owner role is not limited by column grants; the trigger still refuses it.
+		assert.Equal(t, "P0001", sqlState(exec(t, d.Owner, "UPDATE ssh_key_locations SET "+set+" WHERE id = $1", own)), set)
+	}
+
+	// An unflagged location of the platform key's fingerprint is protected too.
+	unflagged := insert(false, "deploy")
+	assert.Equal(t, "P0001", sqlState(exec(t, d.App, "UPDATE ssh_key_locations SET removed_by_alice_at = now() WHERE id = $1", unflagged)))
+	assert.Equal(t, "P0001", sqlState(exec(t, d.Owner, "DELETE FROM ssh_key_locations WHERE id = $1", unflagged)))
+	assert.Equal(t, "P0001", sqlState(exec(t, d.Owner, "UPDATE ssh_key_locations SET ssh_key_id = $2, removed_by_alice_at = now() WHERE id = $1", unflagged, otherKey)),
+		"repointing in the same statement does not help")
+	// Setting the flag is allowed; after that the row is the platform key's location.
+	require.NoError(t, exec(t, d.App, "UPDATE ssh_key_locations SET is_alice_connection_key = true WHERE id = $1", unflagged))
+	assert.Equal(t, "P0001", sqlState(exec(t, d.App, "UPDATE ssh_key_locations SET is_alice_connection_key = false WHERE id = $1", unflagged)))
+}
+
+func TestInventoryConstraints(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	target := seedTarget(t, d, "web-01", "web-01.example.com")
+	job, err := seedJob(t, d, nil, "running")
+	require.NoError(t, err)
+	lock := func(target string) error {
+		return exec(t, d.App, `INSERT INTO target_locks (target_id, job_id, operation, locked_by, heartbeat_at, lease_until)
+VALUES ($1, $2, 'target.discover', 'w', now(), now())`, target, job)
+	}
+	require.NoError(t, lock(target))
+	assert.Equal(t, "23505", sqlState(lock(target)), "one lock per target")
+
+	var cred string
+	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT id::text FROM credentials").Scan(&cred))
+	cols := `(id, purpose, kind, ciphertext, nonce, wrapped_dek, key_version, created_at)`
+	assert.Equal(t, "23505", sqlState(exec(t, d.App, `INSERT INTO credentials `+cols+`
+VALUES (gen_random_uuid(), 'platform_ssh', 'ssh_private_key', '\x01', decode(repeat('00', 12), 'hex'), '\x02', 1, now())`)), "one platform key")
+	assert.Equal(t, "23514", sqlState(exec(t, d.Owner, `INSERT INTO credentials `+cols+`
+VALUES (gen_random_uuid(), 'platform_ssh', 'ssh_private_key', '\x01', '\x00', '\x02', 1, now())`)), "nonce length")
+
+	assert.Equal(t, "23514", sqlState(exec(t, d.App, `INSERT INTO jobs (id, type, class, kind, payload_mac, status, run_at, max_attempts, created_at)
+VALUES (gen_random_uuid(), 't', 'always', 'system', '\x00', 'queued', now(), 5, now())`)), "payload_mac length")
+	assert.Equal(t, "23514", sqlState(exec(t, d.App, "UPDATE jobs SET attempts = -1 WHERE id = $1", job)))
+	assert.Equal(t, "23514", sqlState(exec(t, d.App, "UPDATE jobs SET priority = 0 WHERE id = $1", job)))
+	assert.Equal(t, "23514", sqlState(exec(t, d.App, "UPDATE jobs SET priority = 10 WHERE id = $1", job)))
+
+	// A running job holds its dedupe key.
+	key := "k"
+	require.NoError(t, exec(t, d.App, "UPDATE jobs SET dedupe_key = $2 WHERE id = $1", job, key))
+	_, err = seedJob(t, d, &key, "queued")
+	assert.Equal(t, "23505", sqlState(err), "a running job is live")
+
+	// Targets: host and port are required except for Key Vault, and the address is case-insensitive.
+	ins := func(typ, cfg string) error {
+		return exec(t, d.App, `INSERT INTO targets (id, name, type, config, credential_id, status, created_at, updated_at)
+VALUES (gen_random_uuid(), gen_random_uuid()::text, $1, $2::jsonb, $3, 'ok', now(), now())`, typ, cfg, cred)
+	}
+	assert.Equal(t, "23514", sqlState(ins("linux", `{"host": "a"}`)))
+	assert.Equal(t, "23514", sqlState(ins("nginx", `{"port": 22}`)))
+	assert.Equal(t, "23505", sqlState(ins("linux", `{"host": "WEB-01.example.com", "port": 22}`)), "host compares case-insensitively")
+	require.NoError(t, ins("linux", `{"host": "web-01.example.com", "port": 2222}`))
+	require.NoError(t, ins("azure_key_vault", `{"vault": "v"}`))
 }

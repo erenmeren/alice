@@ -104,10 +104,10 @@ var explicitGrants = map[string][]string{
 	// Phase 3 (R37): credentials are append-only for the application; inventory rows are never
 	// deleted (soft delete, missing_since) so their history stays.
 	"public.credentials":       {"INSERT", "SELECT"},
-	"public.targets":           {"INSERT", "SELECT", "UPDATE"},
-	"public.host_keys":         {"INSERT", "SELECT", "UPDATE"},
-	"public.ssh_keys":          {"INSERT", "SELECT", "UPDATE"},
-	"public.ssh_key_locations": {"INSERT", "SELECT", "UPDATE"},
+	"public.targets":           {"INSERT", "SELECT"},
+	"public.host_keys":         {"INSERT", "SELECT"},
+	"public.ssh_keys":          {"INSERT", "SELECT"},
+	"public.ssh_key_locations": {"INSERT", "SELECT"},
 }
 
 // Column-level grants of alice_app (a privilege it holds on some columns but not on the
@@ -116,6 +116,14 @@ var explicitColumnGrants = map[string]map[string][]string{
 	// The cached state, a held clock jump and the one-time seal of an installation created
 	// before the seal existed; never installation_id or installed_at (B1, spec §16.1).
 	"public.license": {"UPDATE": {"clock_jump", "installation_seal", "state", "updated_at"}},
+	// Phase 3: only the columns the services write; identity columns (key material, fingerprints,
+	// target and credential references, the host key bytes) are never updated.
+	"public.targets": {"UPDATE": {"deleted_at", "discovery_interval_seconds", "facts", "keys_managed_elsewhere",
+		"last_discovery_at", "last_error_code", "last_success_at", "name", "status", "updated_at", "version"}},
+	"public.host_keys": {"UPDATE": {"confirmed_at", "confirmed_by", "observed_at", "status", "superseded_at"}},
+	"public.ssh_keys":  {"UPDATE": {"is_platform_key", "weak"}},
+	"public.ssh_key_locations": {"UPDATE": {"comment", "flags", "is_alice_connection_key", "last_seen_at", "line_no",
+		"missing_since", "options", "removed_by_alice_at"}},
 }
 
 var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}

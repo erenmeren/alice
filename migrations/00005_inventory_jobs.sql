@@ -34,10 +34,11 @@ CREATE TABLE targets (
     created_by                 uuid REFERENCES users (id),
     created_at                 timestamptz NOT NULL,
     updated_at                 timestamptz NOT NULL,
-    deleted_at                 timestamptz
+    deleted_at                 timestamptz,
+    CHECK (type = 'azure_key_vault' OR (config ? 'host' AND config ? 'port'))
 );
 CREATE UNIQUE INDEX targets_name_live ON targets (name) WHERE deleted_at IS NULL;
-CREATE UNIQUE INDEX targets_endpoint_live ON targets (type, (config->>'host'), (config->>'port')) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX targets_endpoint_live ON targets (type, lower(config->>'host'), ((config->>'port')::int)) WHERE deleted_at IS NULL;
 CREATE INDEX targets_live_created ON targets (created_at, id) WHERE deleted_at IS NULL;
 
 CREATE TABLE host_keys (
@@ -91,17 +92,36 @@ CREATE INDEX ssh_key_locations_target ON ssh_key_locations (target_id);
 
 -- The platform's own key can never be marked removed or deleted (spec §7.3, SEC-081). The
 -- service layer and the provider refuse first; this trigger holds even if both had a bug.
+-- A location is Alice's own when its flag is set or when its key's fingerprint is the one in the
+-- platform_ssh credential, so clearing the flag or repointing the row does not unprotect it.
+-- It runs as the invoking role (alice_app can read credentials and ssh_keys).
+-- Replacing the platform key is an owner procedure that disables this trigger (R37 #11).
 -- +goose StatementBegin
 CREATE FUNCTION ssh_key_locations_protect_alice_key() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    platform_fp text;
+    is_own boolean;
 BEGIN
+    SELECT public_info->>'fingerprint' INTO platform_fp FROM credentials WHERE purpose = 'platform_ssh';
     IF TG_OP = 'DELETE' THEN
-        IF OLD.is_alice_connection_key THEN
+        SELECT OLD.is_alice_connection_key OR EXISTS (
+            SELECT 1 FROM ssh_keys WHERE id = OLD.ssh_key_id AND fingerprint_sha256 = platform_fp) INTO is_own;
+        IF is_own THEN
             RAISE EXCEPTION 'the location of Alice''s own connection key cannot be deleted' USING ERRCODE = 'P0001';
         END IF;
         RETURN OLD;
     END IF;
-    IF OLD.is_alice_connection_key AND NEW.removed_by_alice_at IS NOT NULL THEN
-        RAISE EXCEPTION 'Alice''s own connection key cannot be removed' USING ERRCODE = 'P0001';
+    IF OLD.is_alice_connection_key AND (NOT NEW.is_alice_connection_key
+            OR NEW.ssh_key_id <> OLD.ssh_key_id OR NEW.target_id <> OLD.target_id
+            OR NEW.os_user <> OLD.os_user OR NEW.file_path <> OLD.file_path) THEN
+        RAISE EXCEPTION 'the identity of Alice''s own connection key location cannot change' USING ERRCODE = 'P0001';
+    END IF;
+    IF NEW.removed_by_alice_at IS NOT NULL THEN
+        SELECT OLD.is_alice_connection_key OR NEW.is_alice_connection_key OR EXISTS (
+            SELECT 1 FROM ssh_keys WHERE id IN (OLD.ssh_key_id, NEW.ssh_key_id) AND fingerprint_sha256 = platform_fp) INTO is_own;
+        IF is_own THEN
+            RAISE EXCEPTION 'Alice''s own connection key cannot be removed' USING ERRCODE = 'P0001';
+        END IF;
     END IF;
     RETURN NEW;
 END $$;
@@ -119,9 +139,9 @@ CREATE TABLE jobs (
     target_id       uuid REFERENCES targets (id),
     dedupe_key      text,
     status          text NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'dead', 'blocked_license')),
-    priority        smallint NOT NULL DEFAULT 5,
+    priority        smallint NOT NULL DEFAULT 5 CHECK (priority BETWEEN 1 AND 9),
     run_at          timestamptz NOT NULL,
-    attempts        integer NOT NULL DEFAULT 0,
+    attempts        integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     max_attempts    integer NOT NULL CHECK (max_attempts >= 1),
     locked_by       text,
     locked_until    timestamptz,
@@ -161,11 +181,18 @@ CREATE TABLE target_locks (
     heartbeat_at timestamptz NOT NULL,
     lease_until  timestamptz NOT NULL
 );
+CREATE INDEX target_locks_job ON target_locks (job_id);
 
 -- Credentials are append-only for the application; inventory rows are never deleted (soft delete
 -- and missing_since keep the history); jobs, attempts and target locks are working tables.
 GRANT SELECT, INSERT ON credentials TO alice_app;
-GRANT SELECT, INSERT, UPDATE ON targets, host_keys, ssh_keys, ssh_key_locations TO alice_app;
+GRANT SELECT, INSERT ON targets, host_keys, ssh_keys, ssh_key_locations TO alice_app;
+GRANT UPDATE (name, discovery_interval_seconds, version, updated_at, deleted_at, status, last_error_code, facts,
+    last_success_at, last_discovery_at, keys_managed_elsewhere) ON targets TO alice_app;
+GRANT UPDATE (status, observed_at, confirmed_by, confirmed_at, superseded_at) ON host_keys TO alice_app;
+GRANT UPDATE (is_platform_key, weak) ON ssh_keys TO alice_app;
+GRANT UPDATE (line_no, options, comment, flags, last_seen_at, missing_since, removed_by_alice_at, is_alice_connection_key)
+    ON ssh_key_locations TO alice_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON jobs, job_attempts, target_locks TO alice_app;
 
 -- +goose Down
