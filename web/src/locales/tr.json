@@ -16,6 +16,7 @@
     "home": "Ana sayfa",
     "users": "Kullanıcılar",
     "audit": "Denetim kaydı",
+    "license": "Lisans",
     "tokens": "API anahtarları",
     "account": "Hesabım",
     "signOutFailed": "Oturumunuz kapatılamadı. Tekrar deneyin.",
@@ -322,6 +323,83 @@
       "pending": "Yeni bir lisans ({{license_id}}) şu tarihte başlıyor: {{valid_from}}. O zamana kadar mevcut lisans kullanılır.",
       "over_limit": "Kullanımdaki hedef sayısı {{used}}, lisanslı hedef sayısı {{max}}. Sınırın altına inene kadar yeni hedef eklenemez.",
       "limit_reached": "Lisanslı {{max}} hedefin tamamını kullanıyorsunuz. Daha fazla hedef için satıcınızdan lisansınızı artırmasını isteyin."
+    },
+    "title": "Lisans",
+    "change": "{{from}} → {{to}}",
+    "installation": {
+      "title": "Kurulum Kimliği",
+      "help": "Satıcınız bu kurulum için lisans hazırlamak üzere bu kimliğe ihtiyaç duyar. Kimliği kopyalayın ve e-postayla satıcınıza gönderin.",
+      "copy": "Kopyala",
+      "copied": "Kopyalandı"
+    },
+    "phase": {
+      "evaluation": "Deneme",
+      "evaluation_expired": "Deneme sona erdi",
+      "active": "Etkin",
+      "grace": "Süresi doldu, ek süre",
+      "locked": "Süresi doldu, kilitli"
+    },
+    "current": {
+      "title": "Geçerli lisans",
+      "summary_one": "Geçerlilik sonu {{date}}, {{count}} hedef",
+      "summary_other": "Geçerlilik sonu {{date}}, {{count}} hedef",
+      "customer": "Lisans sahibi: {{customer}} (lisans {{id}})",
+      "evaluation_one": "Deneme: {{count}} gün kaldı, en fazla {{max}} hedef.",
+      "evaluation_other": "Deneme: {{count}} gün kaldı, en fazla {{max}} hedef.",
+      "usage": "Kullanımdaki hedef: {{used}} / {{max}}",
+      "usageLabel": "Kullanılan hedefler",
+      "pending": "Yeni bir lisans ({{id}}) şu tarihte başlıyor: {{date}}.",
+      "tampered": "Kayıtlı bir lisans dosyası Alice dışında değiştirildi ve yok sayılıyor."
+    },
+    "upload": {
+      "title": "Lisans yükle",
+      "label": "Lisans dosyası",
+      "help": "Satıcınızın e-postasındaki dosya, örneğin alice-license-sirketiniz-20261001.alicelic.",
+      "check": "Dosyayı denetle",
+      "previewTitle": "Lisansı onaylayın",
+      "previewSummary": "Lisans sahibi: {{customer}}. En fazla {{max}} yönetilen hedef. Geçerlilik: {{from}} – {{until}}.",
+      "alreadyExpired": "Bu lisansın süresi zaten dolmuş. Yine de yüklenir; Alice'in ek sürede mi yoksa kilitli mi olacağına lisansın kendi tarihleri karar verir.",
+      "pending": "Bu lisans şu tarihte başlıyor: {{from}}. O zamana kadar mevcut lisans kullanılır.",
+      "correction": "Bu lisans, {{replaces}} lisansını düzeltir.",
+      "duplicate": "Bu lisans zaten yüklü.",
+      "confirm": "Lisansı yükle",
+      "cancel": "Vazgeç",
+      "activated": "Lisans etkinleştirildi. Tüm özellikler yeniden kullanılabilir.",
+      "installedExpired": "Bu lisansın süresi zaten dolmuş.",
+      "installedPending": "Lisans yüklendi; şu tarihte başlıyor: {{from}}.",
+      "tooLarge": "Bu dosya bir lisans olamayacak kadar büyük."
+    },
+    "files": {
+      "title": "Yüklenen lisanslar",
+      "columns": {
+        "license": "Lisans",
+        "customer": "Müşteri",
+        "validUntil": "Geçerlilik sonu",
+        "status": "Durum"
+      }
+    },
+    "fileStatus": {
+      "current": "Kullanımda",
+      "pending": "Daha sonra başlıyor",
+      "superseded": "Yerine yenisi geldi",
+      "invalid": "Bozuk"
+    },
+    "history": {
+      "title": "Geçmiş",
+      "columns": {
+        "time": "Zaman",
+        "event": "Olay",
+        "license": "Lisans",
+        "change": "Değişiklik"
+      }
+    },
+    "event": {
+      "installed": "Lisans yüklendi",
+      "renewed": "Lisans yenilendi",
+      "state_change": "Durum değişti",
+      "clock_anomaly": "Saat sorunu",
+      "rejected": "Yükleme reddedildi",
+      "notice": "Bildirim gönderildi"
     }
   }
 }

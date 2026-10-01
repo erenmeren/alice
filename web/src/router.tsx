@@ -6,6 +6,7 @@ import { AppLayout } from './layout/AppLayout';
 import { AccountPage } from './pages/AccountPage';
 import { AuditPage } from './pages/AuditPage';
 import { HomePage } from './pages/HomePage';
+import { LicensePage } from './pages/LicensePage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { SetupPage } from './pages/SetupPage';
@@ -54,6 +55,14 @@ export function routes(): RouteObject[] {
               element: (
                 <RequireRole roles={['admin', 'auditor']}>
                   <AuditPage />
+                </RequireRole>
+              ),
+            },
+            {
+              path: 'license',
+              element: (
+                <RequireRole roles={['admin', 'auditor']}>
+                  <LicensePage />
                 </RequireRole>
               ),
             },

@@ -21,6 +21,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/', labelKey: 'nav.home', roles: ALL },
   { to: '/users', labelKey: 'nav.users', roles: ['admin'] },
   { to: '/audit', labelKey: 'nav.audit', roles: ['admin', 'auditor'] },
+  { to: '/license', labelKey: 'nav.license', roles: ['admin', 'auditor'] },
   { to: '/tokens', labelKey: 'nav.tokens', roles: ALL },
   { to: '/account', labelKey: 'nav.account', roles: ALL },
 ];

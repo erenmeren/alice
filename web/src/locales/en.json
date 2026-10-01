@@ -16,6 +16,7 @@
     "home": "Home",
     "users": "Users",
     "audit": "Audit log",
+    "license": "License",
     "tokens": "API tokens",
     "account": "My account",
     "signOutFailed": "Could not sign you out. Try again.",
@@ -322,6 +323,83 @@
       "pending": "A new license ({{license_id}}) starts on {{valid_from}}. The current license stays in use until then.",
       "over_limit": "You use {{used}} of {{max}} licensed targets. You cannot add more until you are within the limit.",
       "limit_reached": "You are using all {{max}} licensed targets. To add more, ask your vendor to increase your license."
+    },
+    "title": "License",
+    "change": "{{from}} → {{to}}",
+    "installation": {
+      "title": "Installation ID",
+      "help": "Your vendor needs this ID to make a license for this installation. Copy it and email it to your vendor.",
+      "copy": "Copy",
+      "copied": "Copied"
+    },
+    "phase": {
+      "evaluation": "Evaluation",
+      "evaluation_expired": "Evaluation ended",
+      "active": "Active",
+      "grace": "Expired, grace period",
+      "locked": "Expired, locked"
+    },
+    "current": {
+      "title": "Current license",
+      "summary_one": "Valid until {{date}}, {{count}} target",
+      "summary_other": "Valid until {{date}}, {{count}} targets",
+      "customer": "Licensed to {{customer}} (license {{id}})",
+      "evaluation_one": "Evaluation: {{count}} day left, up to {{max}} targets.",
+      "evaluation_other": "Evaluation: {{count}} days left, up to {{max}} targets.",
+      "usage": "{{used}} of {{max}} targets used",
+      "usageLabel": "Targets used",
+      "pending": "A new license ({{id}}) starts on {{date}}.",
+      "tampered": "A stored license file was changed outside Alice and is ignored."
+    },
+    "upload": {
+      "title": "Upload a license",
+      "label": "License file",
+      "help": "The file from your vendor's email, for example alice-license-yourcompany-20261001.alicelic.",
+      "check": "Check the file",
+      "previewTitle": "Confirm the license",
+      "previewSummary": "Licensed to {{customer}}. Up to {{max}} managed targets. Valid from {{from}} to {{until}}.",
+      "alreadyExpired": "This license has already expired. It is installed anyway; its own dates decide whether Alice is in the grace period or locked.",
+      "pending": "This license starts on {{from}}. The current license stays in use until then.",
+      "correction": "This license corrects license {{replaces}}.",
+      "duplicate": "This license is already installed.",
+      "confirm": "Install license",
+      "cancel": "Cancel",
+      "activated": "License activated. All features are available again.",
+      "installedExpired": "This license has already expired.",
+      "installedPending": "The license is installed and starts on {{from}}.",
+      "tooLarge": "This file is too large to be a license."
+    },
+    "files": {
+      "title": "Uploaded licenses",
+      "columns": {
+        "license": "License",
+        "customer": "Customer",
+        "validUntil": "Valid until",
+        "status": "Status"
+      }
+    },
+    "fileStatus": {
+      "current": "In use",
+      "pending": "Starts later",
+      "superseded": "Replaced",
+      "invalid": "Damaged"
+    },
+    "history": {
+      "title": "History",
+      "columns": {
+        "time": "Time",
+        "event": "Event",
+        "license": "License",
+        "change": "Change"
+      }
+    },
+    "event": {
+      "installed": "License installed",
+      "renewed": "License renewed",
+      "state_change": "State changed",
+      "clock_anomaly": "Clock problem",
+      "rejected": "Upload refused",
+      "notice": "Notice sent"
     }
   }
 }
