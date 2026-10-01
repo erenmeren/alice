@@ -305,3 +305,18 @@ func TestFailFiltersProviderParams(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "remote text")
 	assert.NotContains(t, rec.Body.String(), "AAAA")
 }
+
+// ssh.helper_outdated names the helper's protocol and the one Alice needs, so the UI can say which
+// helper to install.
+func TestFailKeepsHelperProtocolParams(t *testing.T) {
+	err := providers.NewError("ssh.helper_outdated", false, nil, map[string]string{
+		"helper_protocol": "1", "required_protocol": "2", "stderr": "remote text",
+	})
+	rec := failRecorder(t, err, nil)
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	var body map[string]map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "ALC-SSH-0005", body["error"]["code"])
+	assert.Equal(t, map[string]any{"helper_protocol": "1", "required_protocol": "2"}, body["error"]["params"])
+	assert.NotContains(t, rec.Body.String(), "remote text")
+}

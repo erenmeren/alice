@@ -55,6 +55,28 @@ func TestJobJSONMapsTheErrorReason(t *testing.T) {
 	assert.Contains(t, string(raw), `"target_id":null`)
 }
 
+// A job's stored error params pass the same allowlist as a provider error answered directly: a
+// handler that ever stored remote text or a key line in them cannot leak it through the API.
+func TestJobJSONFiltersStoredErrorParams(t *testing.T) {
+	v := sampleView(jobs.Status("failed"), "ssh.helper_outdated")
+	v.ErrorParams = map[string]string{"helper_protocol": "1", "required_protocol": "2", "stderr": "remote text",
+		"line": "ssh-ed25519 AAAA"}
+	v.Result = map[string]any{"steps": []any{}, "error_params": map[string]any{"stderr": "remote text", "line": "ssh-ed25519 AAAA"}}
+	raw, err := json.Marshal(jobJSON(v))
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	assert.Equal(t, map[string]any{"helper_protocol": "1", "required_protocol": "2"}, m["error"].(map[string]any)["params"])
+	assert.NotContains(t, string(raw), "remote text")
+	assert.NotContains(t, string(raw), "AAAA")
+	assert.Equal(t, map[string]any{"steps": []any{}}, m["result"], "the raw params are not repeated in the result")
+
+	v.ErrorParams = map[string]string{"stderr": "remote text"}
+	raw, err = json.Marshal(jobJSON(v))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), `"params"`, "nothing allowlisted: no params at all")
+}
+
 func TestListJobsValidatesAndFilters(t *testing.T) {
 	d, fj := jobsDeps(t)
 	var got jobs.ListFilter

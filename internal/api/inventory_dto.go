@@ -283,18 +283,23 @@ type jobDTO struct {
 	FinishedAt  *time.Time     `json:"finished_at"`
 }
 
+// jobJSON maps a job. Its stored error params pass the provider param allowlist (they are shown
+// as error.params only, never again under result.error_params), so a handler that ever stored
+// remote text in them cannot leak it through the API.
 func jobJSON(v jobs.View) jobDTO {
 	d := jobDTO{
 		ID: v.ID.String(), Type: v.Type, Kind: v.Kind, Status: string(v.Status), Attempts: v.Attempts, MaxAttempts: v.MaxAttempts,
-		Error: errorRef(v.LastErrorCode, v.ErrorParams), Result: v.Result, CreatedAt: v.CreatedAt.UTC(), RunAt: v.RunAt.UTC(),
-		StartedAt: utcPtr(v.StartedAt), FinishedAt: utcPtr(v.FinishedAt),
+		Error: errorRef(v.LastErrorCode, providerParams(v.ErrorParams)), Result: map[string]any{}, CreatedAt: v.CreatedAt.UTC(),
+		RunAt: v.RunAt.UTC(), StartedAt: utcPtr(v.StartedAt), FinishedAt: utcPtr(v.FinishedAt),
+	}
+	for k, val := range v.Result {
+		if k != "error_params" {
+			d.Result[k] = val
+		}
 	}
 	if v.TargetID != uuid.Nil {
 		id := v.TargetID.String()
 		d.TargetID = &id
-	}
-	if d.Result == nil {
-		d.Result = map[string]any{}
 	}
 	return d
 }

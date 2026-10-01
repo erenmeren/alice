@@ -286,6 +286,7 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 var providerParamKeys = map[string]bool{
 	"helper_code": true, "subcommand": true, "exit_code": true, "reason": true, "field": true, "attempts": true,
 	"wait": true, "fingerprint": true, "old_fingerprint": true, "new_fingerprint": true,
+	"helper_protocol": true, "required_protocol": true, // ssh.helper_outdated
 }
 
 // providerParams returns the allowlisted params of a provider error (nil when none remain).
