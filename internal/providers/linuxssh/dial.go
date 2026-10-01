@@ -238,6 +238,16 @@ func (l *lazyAuth) done() (attempted bool, err error) {
 	return l.attempted, l.err
 }
 
+// credentialError hides the text of a credential source's error (it may name key material or a
+// vault path) but keeps errors.Is working for the caller. It has no Unwrap, so nothing that walks
+// the chain to render it ever reaches the original message.
+type credentialError struct{ err error }
+
+func (credentialError) Error() string { return "linuxssh: the platform key could not be used" }
+
+// Is reports whether the hidden error is target.
+func (c credentialError) Is(target error) bool { return errors.Is(c.err, target) }
+
 // observe records a presented key through the store within the handshake budget. The store call
 // runs in its own goroutine so a store that ignores its context cannot hang Dial.
 func (d *Dialer) observe(ctx context.Context, target uuid.UUID, k providers.HostKey, changed bool) error {
@@ -297,7 +307,7 @@ func (d *Dialer) Dial(ctx context.Context, target uuid.UUID, cfg Config, cred pr
 	if r.err != nil {
 		switch {
 		case credErr != nil:
-			return nil, providers.NewError("internal.unexpected", false, credErr, nil)
+			return nil, providers.NewError("internal.unexpected", false, credentialError{credErr}, nil)
 		case refused:
 			if err := d.observe(ctx, target, presented, havePin); err != nil {
 				return nil, providers.NewError("internal.unexpected", true, err, nil)

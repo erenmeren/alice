@@ -450,5 +450,8 @@
       "installation_tampered": "Installation record changed",
       "installation_restored": "Installation record restored"
     }
+  },
+  "warnings": {
+    "file_unparseable": "Alice could not read the authorized_keys file {{path}} of {{user}}; its keys are not listed."
   }
 }

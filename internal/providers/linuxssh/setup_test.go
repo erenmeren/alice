@@ -57,20 +57,29 @@ func TestSudoersProfilesMatchTheSpec(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// wantOptions is SEC-082 plus no-pty and no-user-rc.
+const wantOptions = "no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-pty,no-user-rc"
+
 func TestAuthorizedKeysLine(t *testing.T) {
 	const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform"
-	assert.Equal(t, "no-agent-forwarding,no-port-forwarding,no-X11-forwarding "+key, AuthorizedKeysLine(key, ""))
-	assert.Equal(t, `from="10.0.0.5",no-agent-forwarding,no-port-forwarding,no-X11-forwarding `+key,
-		AuthorizedKeysLine(key, "10.0.0.5"))
-	assert.Equal(t, `from="10.0.0.0/8,2001:db8::/32",no-agent-forwarding,no-port-forwarding,no-X11-forwarding `+key,
+	assert.Equal(t, wantOptions+" "+key, AuthorizedKeysLine(key, ""))
+	assert.Equal(t, `from="10.0.0.5",`+wantOptions+" "+key, AuthorizedKeysLine(key, "10.0.0.5"))
+	assert.Equal(t, `from="10.0.0.0/8,2001:db8::/32",`+wantOptions+" "+key,
 		AuthorizedKeysLine(key, "10.0.0.0/8,2001:db8::/32"))
-	// A from value that could break out of the quotes is dropped, never embedded.
-	assert.Equal(t, "no-agent-forwarding,no-port-forwarding,no-X11-forwarding "+key,
-		AuthorizedKeysLine(key, `1.2.3.4",command="sh`))
+	// A from value that could break out of the quotes is refused: no line at all, never a line
+	// without the restriction the administrator asked for.
+	for _, bad := range []string{`1.2.3.4",command="sh`, "alice.example.com", "10.0.0.1 ", strings.Repeat("1", 513)} {
+		assert.Error(t, ValidateFrom(bad), "%q", bad)
+		assert.Empty(t, AuthorizedKeysLine(key, bad), "%q", bad)
+	}
+	assert.NoError(t, ValidateFrom(""))
+	assert.NoError(t, ValidateFrom("!10.0.0.9,10.0.0.*"))
+	_, err := SetupScript("linux", AuthorizedKeysLine(key, "bad host"))
+	assert.Error(t, err, "the script refuses the empty line of a refused from=")
 }
 
 func TestSetupScriptLinux(t *testing.T) {
-	line := `from="10.0.0.5",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform`
+	line := `from="10.0.0.5",` + wantOptions + ` ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform`
 	script, err := SetupScript("linux", line)
 	require.NoError(t, err)
 	want := `#!/bin/sh
@@ -91,11 +100,19 @@ install -m 0755 -o root -g root ./alice-helper /usr/local/libexec/alice-helper
 if ! id alice-svc >/dev/null 2>&1; then
     useradd --system --create-home --home-dir /var/lib/alice-svc --shell /bin/bash alice-svc
 fi
+if [ "$(getent passwd alice-svc | cut -d: -f6)" != /var/lib/alice-svc ]; then
+    echo "The user alice-svc exists with a home directory other than /var/lib/alice-svc. Fix or remove it first." >&2
+    exit 1
+fi
 usermod -p '*' alice-svc
-install -d -m 0700 -o alice-svc -g alice-svc /var/lib/alice-svc/.ssh
-printf '%s\n' '` + line + `' > /var/lib/alice-svc/.ssh/authorized_keys
-chown alice-svc:alice-svc /var/lib/alice-svc/.ssh/authorized_keys
-chmod 0600 /var/lib/alice-svc/.ssh/authorized_keys
+chown -h root:root /var/lib/alice-svc
+chmod 0755 /var/lib/alice-svc
+rm -rf /var/lib/alice-svc/.ssh
+install -d -m 0755 -o root -g root /var/lib/alice-svc/.ssh
+t=$(mktemp /var/lib/alice-svc/.ssh/.ak.XXXXXX)
+printf '%s\n' '` + line + `' >"$t"
+chmod 0644 "$t"
+mv -f "$t" /var/lib/alice-svc/.ssh/authorized_keys
 cat > /etc/sudoers.d/.alice.tmp <<'ALICE_SUDOERS'
 ` + goldenSudoersLinux + `ALICE_SUDOERS
 chmod 0440 /etc/sudoers.d/.alice.tmp
@@ -197,5 +214,36 @@ func TestSudoersMatchesEveryBuiltCommand(t *testing.T) {
 		for _, p := range patterns {
 			assert.False(t, sudoGlob(p, bad), "%q must not match %q", bad, p)
 		}
+	}
+}
+
+// A re-run must not let alice-svc redirect root's writes (a symlink planted in its own home): the
+// home and .ssh become root's, .ssh is recreated rather than reused (rm never follows links), the
+// key is written to a fresh mktemp file and renamed into place, and nothing is ever handed to
+// alice-svc with chown.
+func TestSetupScriptNeverWritesThroughTheServiceUser(t *testing.T) {
+	for _, profile := range []string{"linux", "nginx"} {
+		script, err := SetupScript(profile, wantOptions+" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform")
+		require.NoError(t, err)
+		assert.NotContains(t, script, "chown alice-svc")
+		assert.NotContains(t, script, "-o alice-svc")
+		assert.NotContains(t, script, "> /var/lib/alice-svc", "no redirection onto a path alice-svc controlled")
+		order := []string{
+			"chown -h root:root /var/lib/alice-svc\n",
+			"chmod 0755 /var/lib/alice-svc\n",
+			"rm -rf /var/lib/alice-svc/.ssh\n",
+			"install -d -m 0755 -o root -g root /var/lib/alice-svc/.ssh\n",
+			"t=$(mktemp /var/lib/alice-svc/.ssh/.ak.XXXXXX)\n",
+			`>"$t"` + "\n",
+			"mv -f \"$t\" /var/lib/alice-svc/.ssh/authorized_keys\n",
+		}
+		last := -1
+		for _, step := range order {
+			i := strings.Index(script, step)
+			require.GreaterOrEqual(t, i, 0, "%q missing", step)
+			assert.Greater(t, i, last, "%q out of order", step)
+			last = i
+		}
+		assert.Contains(t, script, "getent passwd alice-svc | cut -d: -f6")
 	}
 }

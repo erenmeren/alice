@@ -163,3 +163,40 @@ func TestPoolReleaseIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	rel2(true)
 }
+
+// Idle connections expire on their own: nothing has to acquire or release for the sweep to run.
+func TestPoolSweepsIdleConnectionsInTheBackground(t *testing.T) {
+	fake := clock.NewFake(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC))
+	e := newPoolEnv(t, fake, 2, 1)
+	c1, rel1, err := e.pool.Acquire(context.Background(), testTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	rel1(true)
+	require.True(t, c1.Healthy())
+	fake.Advance(IdleTimeout)
+	assert.Eventually(t, func() bool { return !c1.Healthy() }, 2*time.Second, 10*time.Millisecond)
+}
+
+// An Acquire that was waiting for a slot when the pool closed does not dial afterwards.
+func TestPoolAcquireWaitingDuringCloseDoesNotDial(t *testing.T) {
+	e := newPoolEnv(t, clock.Real{}, 1, 1)
+	_, rel1, err := e.pool.Acquire(context.Background(), testTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	before := e.srv.AuthAttempts()
+	errc := make(chan error, 1)
+	go func() {
+		_, _, err := e.pool.Acquire(context.Background(), otherTarget, e.cfg, e.cred)
+		errc <- err
+	}()
+	time.Sleep(100 * time.Millisecond) // let it block on the global slot
+	e.pool.Close()
+	rel1(true)
+	select {
+	case err := <-errc:
+		pe := providerCode(t, err)
+		assert.Equal(t, "ssh.unreachable", pe.Code)
+		assert.ErrorIs(t, err, errPoolClosed)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the waiting Acquire never returned")
+	}
+	assert.Equal(t, before, e.srv.AuthAttempts(), "no connection was opened after Close")
+}

@@ -107,9 +107,11 @@ func TestCheckNoSecretsLooksAtEveryRendering(t *testing.T) {
 	type result struct{ Note string }
 	r := &recorder{TB: t}
 	providertest.CheckNoSecrets(r, []string{canary},
-		result{Note: "x" + canary},                                          // JSON and %+v
-		providers.NewError("x", false, errors.New(canary), nil),             // the cause is never rendered
-		providers.NewError("x", false, nil, map[string]string{"p": canary}), // params are
+		result{Note: "x" + canary},                                                                        // JSON and %+v
+		providers.NewError("x", false, errors.New(canary), nil),                                           // the cause chain is rendered too
+		providers.NewError("x", false, nil, map[string]string{"p": canary}),                               // params are
+		providers.NewError("x", false, fmt.Errorf("a: %w", fmt.Errorf("b: %w", errors.New(canary))), nil), // deep in the chain
+		providers.NewError("x", false, errors.New("harmless"), nil),
 	)
-	assert.Len(t, r.failures, 2, "%v", r.failures)
+	assert.Len(t, r.failures, 4, "%v", r.failures)
 }

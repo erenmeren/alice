@@ -450,5 +450,8 @@
       "installation_tampered": "Kurulum kaydı değiştirildi",
       "installation_restored": "Kurulum kaydı geri yüklendi"
     }
+  },
+  "warnings": {
+    "file_unparseable": "Alice, {{user}} kullanıcısının {{path}} authorized_keys dosyasını okuyamadı; dosyadaki anahtarlar listelenmedi."
   }
 }

@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -556,4 +557,41 @@ func TestSessionCloseReturnsTheConnection(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = s2.Close() }()
 	assert.Equal(t, attempts, e.srv.AuthAttempts(), "the idle connection was reused")
+}
+
+// A closed session runs nothing: its connection may already serve another session.
+func TestSessionMethodsAfterCloseFail(t *testing.T) {
+	e := newProvEnv(t)
+	s, err := e.prov.Open(context.Background(), e.ref, e.cred, providers.Env{})
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+	n := len(e.srv.Commands())
+	_, err = s.TestConnection(context.Background())
+	assert.Equal(t, "ssh.unreachable", providerCode(t, err).Code)
+	_, err = s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	assert.Equal(t, "ssh.unreachable", providerCode(t, err).Code)
+	assert.Len(t, e.srv.Commands(), n, "nothing ran")
+}
+
+func TestFileWarningSeparatesSizeFromParseFailures(t *testing.T) {
+	assert.Equal(t, "file_too_large", fileWarning(ErrAuthorizedKeysTooLarge))
+	assert.Equal(t, "file_too_large", fileWarning(fmt.Errorf("wrapped: %w", ErrAuthorizedKeysTooLarge)))
+	assert.Equal(t, "file_unparseable", fileWarning(errors.New("something else")))
+}
+
+var errNoKey = errors.New("no platform key")
+
+type sentinelCred struct{}
+
+func (sentinelCred) SSHSigner(context.Context) (ssh.Signer, func(), error) {
+	return nil, nil, fmt.Errorf("vault /secret/CANARY-path: %w", errNoKey)
+}
+
+// The credential error's text is hidden, but callers can still recognise it.
+func TestCredentialErrorKeepsErrorsIs(t *testing.T) {
+	e := newProvEnv(t)
+	_, err := e.prov.Open(context.Background(), e.ref, sentinelCred{}, providers.Env{})
+	assert.Equal(t, "internal.unexpected", providerCode(t, err).Code)
+	assert.ErrorIs(t, err, errNoKey)
+	providertest.CheckNoSecrets(t, []string{"CANARY-path"}, err)
 }

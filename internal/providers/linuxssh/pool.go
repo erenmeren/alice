@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/platform/clock"
 	"alice/internal/providers"
 )
 
@@ -26,15 +27,22 @@ type idleConn struct {
 	since time.Time
 }
 
-// Pool bounds SSH connections: at most maxConns in use (and at most maxConns idle), at most perTarget in use
-// per target. An idle connection is reused for at most idle time, and only while the target's
-// pinned key is still the key the connection was opened with.
+// Pool bounds SSH connections: at most maxConns in use, at most perTarget in use per target. An
+// idle connection is reused for at most the idle time, only with the same Config and only while
+// the target's pinned key is still the key it was opened with.
+//
+// Idle connections do not count against the in-use limit: they hold no slot, and at most maxConns
+// of them are kept, so the pool holds at most 2×maxConns sockets. A background sweep (every half
+// idle time, stopped by Close) closes idle connections that reached the idle time, including
+// those whose target configuration changed and so will never be taken again.
 type Pool struct {
 	dialer    *Dialer
 	idleFor   time.Duration
 	perTarget int
 	maxIdle   int
 	global    chan struct{}
+	done      chan struct{} // closed by Close: wakes waiting Acquire calls, stops the sweep
+	closeOnce sync.Once
 
 	mu      sync.Mutex
 	closed  bool
@@ -57,23 +65,47 @@ func NewPool(d *Dialer, maxConns, perTarget int, idle time.Duration) *Pool {
 	if idle <= 0 {
 		idle = IdleTimeout
 	}
-	return &Pool{
+	p := &Pool{
 		dialer: d, idleFor: idle, perTarget: perTarget, maxIdle: maxConns,
 		global:  make(chan struct{}, maxConns),
+		done:    make(chan struct{}),
 		targets: map[uuid.UUID]chan struct{}{},
 		idle:    map[uuid.UUID][]idleConn{},
 	}
+	go p.sweepLoop(d.clk().NewTicker(idle / 2))
+	return p
 }
 
-func waitSlot(ctx context.Context, ch chan struct{}) error {
+// sweepLoop closes expired idle connections until the pool is closed.
+func (p *Pool) sweepLoop(t clock.Ticker) {
+	defer t.Stop()
+	for {
+		select {
+		case <-p.done:
+			return
+		case <-t.C():
+			now := p.dialer.clk().Now()
+			p.mu.Lock()
+			stale := p.sweepLocked(now)
+			p.mu.Unlock()
+			for _, c := range stale {
+				_ = c.Close()
+			}
+		}
+	}
+}
+
+func (p *Pool) waitSlot(ctx context.Context, ch chan struct{}) error {
 	if err := ctx.Err(); err != nil {
-		return err // a free slot never wins over a cancelled context
+		return slotError(err) // a free slot never wins over a cancelled context
 	}
 	select {
 	case ch <- struct{}{}:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return slotError(ctx.Err())
+	case <-p.done:
+		return closedError()
 	}
 }
 
@@ -81,11 +113,15 @@ func slotError(err error) error {
 	return providers.NewError("ssh.timeout", true, err, map[string]string{"wait": "connection_slot"})
 }
 
+func closedError() error {
+	return providers.NewError("ssh.unreachable", false, errPoolClosed, nil)
+}
+
 func (p *Pool) targetSlots(target uuid.UUID) (chan struct{}, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
-		return nil, providers.NewError("ssh.unreachable", false, errPoolClosed, nil)
+		return nil, closedError()
 	}
 	ch, ok := p.targets[target]
 	if !ok {
@@ -102,16 +138,23 @@ func (p *Pool) Acquire(ctx context.Context, target uuid.UUID, cfg Config, cred p
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := waitSlot(ctx, tsem); err != nil {
-		return nil, nil, slotError(err)
+	if err := p.waitSlot(ctx, tsem); err != nil {
+		return nil, nil, err
 	}
-	if err := waitSlot(ctx, p.global); err != nil {
+	if err := p.waitSlot(ctx, p.global); err != nil {
 		<-tsem
-		return nil, nil, slotError(err)
+		return nil, nil, err
 	}
 	slots := func() {
 		<-p.global
 		<-tsem
+	}
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed { // closed while this call waited for its slots: never dial after Close
+		slots()
+		return nil, nil, closedError()
 	}
 	if c := p.takeIdle(ctx, target, cfg); c != nil {
 		return c, p.releaser(target, c, slots), nil
@@ -213,6 +256,7 @@ func (p *Pool) releaser(target uuid.UUID, c *Conn, slots func()) func(bool) {
 // Close closes every idle connection; connections in use are closed when released, and later
 // Acquire calls fail.
 func (p *Pool) Close() {
+	p.closeOnce.Do(func() { close(p.done) })
 	p.mu.Lock()
 	p.closed = true
 	var all []*Conn

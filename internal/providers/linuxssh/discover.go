@@ -126,6 +126,14 @@ func isHelperCode(err error, code string) bool {
 	return errors.As(err, &pe) && pe.Code == "ssh.helper_refused" && pe.Params["helper_code"] == code
 }
 
+// fileWarning is the warning code of a file ParseAuthorizedKeys refused.
+func fileWarning(err error) string {
+	if errors.Is(err, ErrAuthorizedKeysTooLarge) {
+		return "file_too_large"
+	}
+	return "file_unparseable"
+}
+
 // fileUnreadable reports whether a read error affects only that file: the helper refused it on a
 // healthy connection and the caller has not given up. Anything else (a timeout, a broken
 // connection, a cancelled context, a garbled answer) fails the whole discovery.
@@ -139,6 +147,9 @@ func (s *session) fileUnreadable(ctx context.Context, err error) bool {
 // marks keys missing from files it did not read); skipped files are only reported. A listed file
 // that does not exist counts as read: it holds no keys, so its former keys may be marked missing.
 func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (providers.DiscoveryResult, error) {
+	if err := s.open(); err != nil {
+		return providers.DiscoveryResult{}, err
+	}
 	var res providers.DiscoveryResult
 	hk, err := runHelper[helperproto.HostKeysResponse](ctx, s.conn, CmdHostKeys())
 	if err != nil {
@@ -219,7 +230,7 @@ func (s *session) discoverFile(ctx context.Context, u helperproto.UserFiles, f h
 	}
 	ak, err := ParseAuthorizedKeys(content)
 	if err != nil {
-		res.Warnings = append(res.Warnings, warn("file_too_large", "user", u.User, "path", f.Path))
+		res.Warnings = append(res.Warnings, warn(fileWarning(err), "user", u.User, "path", f.Path))
 		return nil
 	}
 	keys, bad := ak.Keys(u.User, f.Path)

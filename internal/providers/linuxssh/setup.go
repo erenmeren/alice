@@ -52,14 +52,35 @@ func Sudoers(profile string) (string, error) {
 }
 
 // fromPattern is the address-list vocabulary of the from= option (addresses, CIDR, wildcards,
-// negation); anything else is dropped rather than embedded in quotes.
+// negation). Nothing outside it is ever embedded in the quotes.
 var fromPattern = regexp.MustCompile(`^[0-9A-Fa-f.:/,*?!]{1,512}$`)
 
+// ErrInvalidFrom means a from= value is outside the address-list vocabulary.
+var ErrInvalidFrom = errors.New("linuxssh: from= accepts only IP addresses, CIDR ranges, * ? wildcards and ! negation, comma separated")
+
+// ValidateFrom checks a from= value for AuthorizedKeysLine; "" (no restriction) is valid.
+func ValidateFrom(from string) error {
+	if from == "" || fromPattern.MatchString(from) {
+		return nil
+	}
+	return ErrInvalidFrom
+}
+
+// keyOptions restrict the platform key (SEC-082). Alice only opens exec channels, so it needs no
+// agent, port or X11 forwarding, no pty and no ~/.ssh/rc. "restrict" is not used: it would also
+// need explicit re-enabling and is not in SEC-082's list.
+const keyOptions = "no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-pty,no-user-rc"
+
 // AuthorizedKeysLine is the line that authorizes Alice's key for alice-svc (SEC-082). from limits
-// the source addresses and is optional (NAT, HA).
+// the source addresses and is optional (NAT, HA). An invalid from (see ValidateFrom) gives "":
+// the caller asked for a restriction, so a line without it is never produced (SetupScript refuses
+// the empty line).
 func AuthorizedKeysLine(publicKey, from string) string {
-	opts := "no-agent-forwarding,no-port-forwarding,no-X11-forwarding"
-	if from != "" && fromPattern.MatchString(from) {
+	if ValidateFrom(from) != nil {
+		return ""
+	}
+	opts := keyOptions
+	if from != "" {
 		opts = `from="` + from + `",` + opts
 	}
 	return opts + " " + publicKey
@@ -83,11 +104,19 @@ install -m 0755 -o root -g root ./alice-helper /usr/local/libexec/alice-helper
 if ! id alice-svc >/dev/null 2>&1; then
     useradd --system --create-home --home-dir /var/lib/alice-svc --shell /bin/bash alice-svc
 fi
+if [ "$(getent passwd alice-svc | cut -d: -f6)" != /var/lib/alice-svc ]; then
+    echo "The user alice-svc exists with a home directory other than /var/lib/alice-svc. Fix or remove it first." >&2
+    exit 1
+fi
 usermod -p '*' alice-svc
-install -d -m 0700 -o alice-svc -g alice-svc /var/lib/alice-svc/.ssh
-printf '%s\n' '__LINE__' > /var/lib/alice-svc/.ssh/authorized_keys
-chown alice-svc:alice-svc /var/lib/alice-svc/.ssh/authorized_keys
-chmod 0600 /var/lib/alice-svc/.ssh/authorized_keys
+chown -h root:root /var/lib/alice-svc
+chmod 0755 /var/lib/alice-svc
+rm -rf /var/lib/alice-svc/.ssh
+install -d -m 0755 -o root -g root /var/lib/alice-svc/.ssh
+t=$(mktemp /var/lib/alice-svc/.ssh/.ak.XXXXXX)
+printf '%s\n' '__LINE__' >"$t"
+chmod 0644 "$t"
+mv -f "$t" /var/lib/alice-svc/.ssh/authorized_keys
 cat > /etc/sudoers.d/.alice.tmp <<'ALICE_SUDOERS'
 __SUDOERS__ALICE_SUDOERS
 chmod 0440 /etc/sudoers.d/.alice.tmp
@@ -102,6 +131,13 @@ var errBadKeyLine = errors.New("linuxssh: the authorized_keys line cannot be emb
 // SetupScript is the root script of spec §12.2 for a profile. "usermod -p '*'" leaves alice-svc
 // without a password but not locked, so sshd also accepts its key with UsePAM no. The sudoers file
 // is installed only after visudo accepted it (a file name with a dot is ignored by sudo).
+//
+// Running it again must be safe even if alice-svc is compromised: root never writes, chowns or
+// chmods a path inside a directory alice-svc can change (it could plant a symlink to
+// /etc/ld.so.preload there). The home and .ssh become root's (0755; sshd's StrictModes accepts
+// root-owned key files), .ssh is removed and recreated (rm never follows links), and the key is
+// written to a fresh mktemp file in the root-owned .ssh and renamed into place. A pre-existing
+// alice-svc with another home is refused rather than reconfigured.
 func SetupScript(profile, authorizedKeysLine string) (string, error) {
 	sudoers, err := Sudoers(profile)
 	if err != nil {

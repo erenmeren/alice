@@ -2,8 +2,10 @@ package linuxssh
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
@@ -111,17 +113,35 @@ type session struct {
 	version helperproto.VersionResponse
 	release func(bool)
 	once    sync.Once
+	closed  atomic.Bool
 }
+
+var errSessionClosed = errors.New("linuxssh: session closed")
 
 // Close returns the connection to the pool (closed when it is no longer healthy).
 func (s *session) Close() error {
-	s.once.Do(func() { s.release(s.conn.Healthy()) })
+	s.once.Do(func() {
+		s.closed.Store(true)
+		s.release(s.conn.Healthy())
+	})
+	return nil
+}
+
+// open fails once the session is closed: its connection may already serve another session.
+// Every exported session method calls it first.
+func (s *session) open() error {
+	if s.closed.Load() {
+		return providers.NewError("ssh.unreachable", false, errSessionClosed, nil)
+	}
 	return nil
 }
 
 // TestConnection proves SSH, sudo and the helper work: os-release, then sshd-dump through sudo
 // (spec §6.6: no "sudo -l"; a refused sudo shows as ssh.helper_missing).
 func (s *session) TestConnection(ctx context.Context) (providers.ConnectionReport, error) {
+	if err := s.open(); err != nil {
+		return providers.ConnectionReport{}, err
+	}
 	osr, err := s.conn.OSRelease(ctx)
 	if err != nil {
 		return providers.ConnectionReport{}, err
@@ -145,6 +165,9 @@ func (s *session) TestConnection(ctx context.Context) (providers.ConnectionRepor
 func (s *session) ListAuthorizedKeys(ctx context.Context) ([]providers.DiscoveredSSHKey, error) {
 	if !s.caps.Has(providers.CapAuthorizedKeys) {
 		return nil, providers.ErrUnsupported
+	}
+	if err := s.open(); err != nil {
+		return nil, err
 	}
 	res, err := s.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
 	if err != nil {

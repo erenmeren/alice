@@ -226,17 +226,48 @@ func within(d time.Duration, fn func()) bool {
 }
 
 // CheckNoSecrets fails when a secret appears in any value as JSON, as %+v, as an error message
-// or as a structured log line.
+// or as a structured log line. For an error, every error in its Unwrap chain is rendered too: a
+// cause may reach a log through a wrapper the provider does not control.
 func CheckNoSecrets(t testing.TB, secrets []string, values ...any) {
 	t.Helper()
 	for _, v := range values {
 		if v == nil {
 			continue
 		}
-		if leaks(renderings(v), secrets) {
+		var texts []string
+		if err, ok := v.(error); ok {
+			for _, e := range chain(err) {
+				texts = append(texts, renderings(e)...)
+			}
+		} else {
+			texts = renderings(v)
+		}
+		if leaks(texts, secrets) {
 			t.Errorf("a secret appears in the output of %T", v)
 		}
 	}
+}
+
+// chain returns err and every error it wraps (Unwrap() error and Unwrap() []error), depth first.
+func chain(err error) []error {
+	var out []error
+	var walk func(error, int)
+	walk = func(e error, depth int) {
+		if e == nil || depth > 32 {
+			return
+		}
+		out = append(out, e)
+		switch u := e.(type) { //nolint:errorlint // walking the chain by hand, one level at a time
+		case interface{ Unwrap() error }:
+			walk(u.Unwrap(), depth+1)
+		case interface{ Unwrap() []error }:
+			for _, x := range u.Unwrap() {
+				walk(x, depth+1)
+			}
+		}
+	}
+	walk(err, 0)
+	return out
 }
 
 func leaks(texts, secrets []string) bool {
