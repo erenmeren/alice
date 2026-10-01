@@ -3,6 +3,7 @@ package license
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Errors returned by the license module. The API maps each to a stable ALC-LIC code.
@@ -51,9 +52,11 @@ func (e *TargetLimitError) Error() string {
 // Is makes every TargetLimitError match ErrTargetLimit.
 func (e *TargetLimitError) Is(target error) bool { return target == ErrTargetLimit }
 
-// IDSuffix returns the last six characters of an installation ID (shown in messages
-// so an administrator can compare IDs without reading the whole value aloud).
+// IDSuffix returns the last six characters of an installation ID, not counting the group
+// separators (shown in messages so an administrator can compare IDs without reading the
+// whole value aloud, L-43).
 func IDSuffix(id string) string {
+	id = strings.ReplaceAll(id, "-", "")
 	if len(id) <= 6 {
 		return id
 	}

@@ -218,7 +218,9 @@ func TestRejectReasonAndSuffix(t *testing.T) {
 	assert.Equal(t, "wrong_installation", license.RejectReason(&license.WrongInstallationError{Expected: "a", Got: "b"}))
 	assert.Equal(t, "unsupported_format", license.RejectReason(license.ErrUnsupportedFormat))
 	assert.Equal(t, "older_than_installed", license.RejectReason(license.ErrOlderThanInstalled))
-	assert.Equal(t, "B8TC00", license.IDSuffix("ALICE-7F3K-9Q2M-XD41-B8TC00"))
+	// The last six characters of the ID itself: group separators are not counted (L-43).
+	assert.Equal(t, "41B8TC", license.IDSuffix("ALICE-7F3K-9Q2M-XD41-B8TC"))
+	assert.Equal(t, "ABC", license.IDSuffix("ABC"))
 	assert.ErrorIs(t, &license.TargetLimitError{Max: 10, Used: 10}, license.ErrTargetLimit)
 }
 
