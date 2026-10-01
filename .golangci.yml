@@ -19,6 +19,8 @@ linters:
           msg: "Use the structured logger (log/slog) or write to an explicit io.Writer."
         - pattern: ^time\.Now$
           msg: "use the injected clock.Clock (time-dependent logic must be testable)"
+        - pattern: ^ssh\.InsecureIgnoreHostKey$
+          msg: "never accept any host key: connect through linuxssh.Dialer and its pinned-key callback (SEC-080)"
   exclusions:
     presets: [std-error-handling, common-false-positives]
     rules:
