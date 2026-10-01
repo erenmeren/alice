@@ -246,6 +246,16 @@
   },
   "email": {
     "footer": "Bu ileti Alice tarafından otomatik olarak gönderildi. Lütfen yanıtlamayın.",
+    "target": {
+      "host_key_changed": {
+        "subject": "Alice, kimliği değişen bir sunucudaki işleri durdurdu: {{target_name}}",
+        "body": "Şu sunucunun SSH ana bilgisayar anahtarı artık onayladığınız anahtar değil: {{target_name}}\n\nOnaylanan parmak izi: {{old_fingerprint}}\nSunucunun şimdi gösterdiği parmak izi: {{new_fingerprint}}\n\nAlice bu sunucudaki tüm işleri durdurdu. Sunucu yeniden kurulduysa veya anahtarları bilerek değiştirildiyse, bir yönetici Alice'te sunucunun sayfasında yeni parmak izini inceleyip kabul edebilir. Sunucuyu kimse değiştirmediyse bunu olası bir saldırı olarak değerlendirin ve güvenlik ekibinize başvurun."
+      },
+      "auth_failed": {
+        "subject": "Alice bir sunucuda oturum açamıyor: {{target_name}}",
+        "body": "Şu sunucu Alice'in SSH anahtarını reddetti: {{target_name}}\n\nalice-svc kullanıcısının sunucuda hâlâ bulunduğunu ve Alice'in açık anahtarının bu kullanıcının authorized_keys dosyasında olduğunu denetleyin. Anahtar ve kurulum komutları Alice'teki Sunucular sayfasındadır. Alice bir sonraki taramada yeniden dener."
+      }
+    },
     "license": {
       "expiry_warning": {
         "subject": "Alice lisansının süresi doluyor: {{ends_at}}",

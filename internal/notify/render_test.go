@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/i18n"
+	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/notify"
 	"alice/locales"
@@ -43,4 +44,26 @@ func TestRenderKeepsParamsOnOneLine(t *testing.T) {
 		map[string]string{"ends_at": "tomorrow\r\nBcc: evil@example.com"})
 	assert.NotContains(t, m.Subject, "\n")
 	assert.NotContains(t, m.Body, "\nBcc:")
+}
+
+// Every inventory template exists in English and Turkish and shows the server and the
+// fingerprints it is given (R37 item 14).
+func TestEveryInventoryTemplateRendersInBothLanguages(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	params := map[string]string{"target_name": "web-01 (İzmir)", "old_fingerprint": "SHA256:oldOLDold", "new_fingerprint": "SHA256:newNEWnew"}
+	for _, tpl := range inventory.Templates() {
+		for _, lang := range []string{"en", "tr"} {
+			m := s.Render("ada@example.com", tpl, lang, params)
+			assert.NotContains(t, m.Subject, "{{", "%s %s", tpl, lang)
+			assert.NotContains(t, m.Body, "{{", "%s %s", tpl, lang)
+			assert.NotContains(t, m.Subject, "email.", "%s %s: the key itself means a missing text", tpl, lang)
+			assert.Contains(t, m.Subject, "web-01 (İzmir)", "%s %s", tpl, lang)
+			assert.Contains(t, m.Body, "web-01 (İzmir)", "%s %s", tpl, lang)
+		}
+		m := s.Render("ada@example.com", inventory.TemplateHostKeyChanged, "en", params)
+		assert.Contains(t, m.Body, "SHA256:oldOLDold")
+		assert.Contains(t, m.Body, "SHA256:newNEWnew")
+	}
 }

@@ -246,6 +246,16 @@
   },
   "email": {
     "footer": "This message was sent automatically by Alice. Do not reply to it.",
+    "target": {
+      "host_key_changed": {
+        "subject": "Alice stopped work on a server whose identity changed: {{target_name}}",
+        "body": "The SSH host key of the server {{target_name}} is no longer the one you confirmed.\n\nConfirmed fingerprint: {{old_fingerprint}}\nFingerprint the server shows now: {{new_fingerprint}}\n\nAlice stopped all work on this server. If the server was reinstalled or its keys were replaced on purpose, an administrator can review the new fingerprint on the server's page in Alice and accept it. If nobody changed the server, treat this as a possible attack and contact your security team."
+      },
+      "auth_failed": {
+        "subject": "Alice cannot sign in to a server: {{target_name}}",
+        "body": "The server {{target_name}} refused Alice's SSH key.\n\nCheck that the user alice-svc still exists on the server and that Alice's public key is in its authorized_keys file. The key and the setup commands are on the Servers page in Alice. Alice tries again at the next scan."
+      }
+    },
     "license": {
       "expiry_warning": {
         "subject": "Alice license expires on {{ends_at}}",
