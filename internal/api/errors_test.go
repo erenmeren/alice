@@ -89,6 +89,22 @@ var reasonCalls = map[string]int{"Fail": 0, "Attention": 0, "Retry": 0, "NewErro
 // error that a person cannot act on (contract: target.invalid_config maps to ALC-SYS-0003).
 var unregisteredReasons = map[string]bool{"target.invalid_config": true, "license.unclassified": true}
 
+// reasonShapeRE matches the stored reasons of the Phase 3 areas.
+var reasonShapeRE = regexp.MustCompile(`^(ssh|sshkey|target|job|hostkey)\.[a-z_]+$`)
+
+// notReasons are reason-shaped literals that are audit actions, job types or email templates.
+var notReasons = map[string]bool{
+	// audit actions
+	"target.created": true, "target.updated": true, "target.deleted": true, "target.status_changed": true,
+	"target.discovered": true, "hostkey.pinned": true, "hostkey.changed": true, "hostkey.repinned": true,
+	"hostkey.change_dismissed": true, "hostkey.observed": true, "sshkey.remove_requested": true, "sshkey.removed": true, "sshkey.remove_failed": true,
+	"job.recovered": true, "job.dead": true, "job.blocked_license": true, "job.confirmed": true, "job.discarded": true,
+	// job types
+	"target.test_connection": true, "target.discover": true, "sshkey.remove": true,
+	// email templates (target.host_key_changed is also a reason and stays checked)
+	"target.auth_failed": true,
+}
+
 // storedReasons collects the literal reasons (and package string constants) passed to reasonCalls
 // in the non-test sources of dir.
 func storedReasons(t *testing.T, dir string) map[string]string {
@@ -125,6 +141,14 @@ func storedReasons(t *testing.T, dir string) map[string]string {
 	out := map[string]string{}
 	for _, f := range parsed {
 		ast.Inspect(f, func(n ast.Node) bool {
+			// Any reason-shaped literal (returned, assigned or passed on) counts, unless it names an
+			// audit action, a job type or an email template.
+			if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if v, err := strconv.Unquote(lit.Value); err == nil && reasonShapeRE.MatchString(v) && !notReasons[v] {
+					out[v] = fset.Position(lit.Pos()).String()
+				}
+				return true
+			}
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true

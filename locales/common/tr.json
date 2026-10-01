@@ -272,7 +272,7 @@
       "unreachable": {
         "title": "Alice sunucuya ulaşamıyor.",
         "cause": "Sunucu kapalı, adres veya bağlantı noktası yanlış ya da bir güvenlik duvarı bağlantıyı engelliyor.",
-        "action": "Sunucunun çalıştığını ve Alice sunucusunun SSH bağlantı noktasına ulaşabildiğini kontrol edin, sonra bağlantıyı yeniden sınayın."
+        "action": "Sunucunun çalıştığını ve Alice'in çalıştığı makinenin sunucunun SSH bağlantı noktasına erişebildiğini kontrol edin, sonra bağlantıyı yeniden sınayın."
       },
       "auth_failed": {
         "title": "Sunucu Alice'in anahtarını reddetti.",
@@ -333,7 +333,7 @@
       },
       "not_removable": {
         "title": "Alice bu dosyadaki bu anahtarı değiştiremez.",
-        "cause": "Anahtar artık dosyada değil ya da zaten kaldırılmış, Alice'in yalnızca listelediği bir sertifika yetkilisi satırı ya da dosya Alice'in okuduğu boyuttan (1 MiB) büyük.",
+        "cause": "Anahtarın satırı artık dosyada değil ya da zaten kaldırılmış, Alice'in yalnızca listelediği bir sertifika yetkilisi satırı ya da dosya Alice'in okuduğu boyuttan (1 MiB) büyük.",
         "action": "Güncel anahtarları görmek için sunucuyu yeniden tarayın ve sunucudaki dosyanın boyutunu kontrol edin."
       },
       "sshd_unreadable": {
@@ -350,7 +350,7 @@
     "job": {
       "not_waiting": {
         "title": "Bu görev bir onay beklemiyor.",
-        "cause": "Görev zaten çalıştı, vazgeçildi ya da lisans nedeniyle duraklatılmadı.",
+        "cause": "Görev zaten çalıştı, iptal edildi ya da lisans nedeniyle duraklatılmadı.",
         "action": "Görevin güncel durumunu görmek için sayfayı yeniden yükleyin."
       },
       "lease_expired": {

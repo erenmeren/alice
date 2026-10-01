@@ -154,7 +154,7 @@ func (s *server) removeKeyLocation(w http.ResponseWriter, r *http.Request) {
 		ConfirmLastRootKey bool `json:"confirm_last_root_key"`
 	}
 	// The body is optional: an empty POST removes the key without the root confirmation.
-	if r.ContentLength != 0 && !s.decode(w, r, &req) {
+	if !s.decodeOptional(w, r, &req) {
 		return
 	}
 	jobID, err := s.deps.Inventory.RequestKeyRemoval(r.Context(), s.actor(r), id, req.ConfirmLastRootKey)

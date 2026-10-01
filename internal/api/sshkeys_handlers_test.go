@@ -3,7 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -175,4 +178,27 @@ func TestPlatformKeyGuide(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "private")
 
 	assert.Equal(t, http.StatusForbidden, call(h, http.MethodGet, "/api/v1/ssh-keys/platform-key", "operator", "").Code)
+}
+
+// A chunked request has no Content-Length: an empty chunked body is the same as no body, and a
+// chunked JSON body is read.
+func TestRemoveAcceptsAChunkedBody(t *testing.T) {
+	d, inv := inventoryDeps(t)
+	var confirms []bool
+	inv.RequestKeyRemovalFn = func(_ context.Context, _ inventory.Actor, _ uuid.UUID, confirm bool) (uuid.UUID, error) {
+		confirms = append(confirms, confirm)
+		return jobID, nil
+	}
+	h := NewHandler(d)
+	path := "/api/v1/ssh-keys/locations/" + keyID.String() + "/actions/remove"
+	for _, body := range []string{"", `{"confirm_last_root_key":true}`} {
+		req := as(httptest.NewRequest(http.MethodPost, path, nil), "operator")
+		req.Body = io.NopCloser(strings.NewReader(body))
+		req.ContentLength = -1
+		req.TransferEncoding = []string{"chunked"}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusAccepted, rec.Code, "body %q: %s", body, rec.Body.String())
+	}
+	assert.Equal(t, []bool{false, true}, confirms)
 }

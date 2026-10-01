@@ -703,6 +703,9 @@ paths:
     post:
       operationId: createTarget
       summary: Add a server; counts against the license and starts a connection test that fetches its fingerprint
+      description: >-
+        A 409 answer is ALC-TGT-0001 (another server has this name, or this address and port) or
+        ALC-LIC-0008 (the license's target limit is reached). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: targets.manage
       requestBody:
         required: true
@@ -741,6 +744,11 @@ paths:
     patch:
       operationId: updateTarget
       summary: Rename a server or change its discovery interval (If-Match with the ETag is required)
+      description: >-
+        If-Match must be a single strong validator with the current version, for example "3". A missing or
+        malformed If-Match, a weak validator (W/"3"), a list or * answers 412 ALC-SYS-0008, as does a version
+        that is no longer current. 404 when the server does not exist; 409 ALC-TGT-0001 when the new name is
+        taken. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: targets.manage
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
@@ -757,15 +765,21 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Target" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
         "412": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteTarget
       summary: Remove a server from Alice (frees a license slot; nothing changes on the server)
+      description: >-
+        Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: targets.manage
       responses:
         "204": { description: Removed }
+        "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/targets/{id}/actions/test:
@@ -774,6 +788,8 @@ paths:
     post:
       operationId: testTarget
       summary: Test the SSH connection (runs as a job)
+      description: >-
+        Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: inventory.operate
       responses:
         "202":
@@ -781,6 +797,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Accepted" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/targets/{id}/actions/discover:
@@ -789,6 +807,8 @@ paths:
     post:
       operationId: discoverTarget
       summary: Scan the server's authorized_keys files and host keys (runs as a job)
+      description: >-
+        Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: inventory.operate
       responses:
         "202":
@@ -796,6 +816,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Accepted" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/targets/{id}/host-keys:
@@ -819,6 +841,8 @@ paths:
     post:
       operationId: confirmHostKey
       summary: Pin the fingerprint the server presented on first contact (TOFU with human confirmation)
+      description: >-
+        Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: hostkeys.confirm
       requestBody:
         required: true
@@ -831,6 +855,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Accepted" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/targets/{id}/host-keys/{key_id}/actions/repin:
@@ -840,6 +866,9 @@ paths:
     post:
       operationId: repinHostKey
       summary: Accept a changed fingerprint (step-up and a reason required; the old one is kept as superseded)
+      description: >-
+        Re-pinning the key that is already pinned dismisses the change instead: the server is unblocked with
+        its confirmed fingerprint and the audit log records hostkey.change_dismissed. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: hostkeys.repin
       requestBody:
         required: true
@@ -852,6 +881,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Accepted" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
@@ -928,6 +959,8 @@ paths:
     post:
       operationId: removeKeyLocation
       summary: Remove this key from this file on the server (runs as a job; Alice's own key is refused)
+      description: >-
+        Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: inventory.operate
       requestBody:
         required: false
@@ -940,6 +973,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Accepted" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/jobs:
@@ -984,6 +1019,7 @@ paths:
       description: >-
         Refused while the license still refuses the task's class. The administrator is stored in confirmed_by
         and confirmed_at and recorded in the job.confirmed audit entry.
+        Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: jobs.confirm
       responses:
         "200":
@@ -991,6 +1027,13 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Job" }
+        "202":
+          description: The action was done, but the task could not be read back; poll status_url
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/jobs/{id}/actions/discard:
@@ -1003,6 +1046,7 @@ paths:
         The task is cancelled. The administrator who discarded it is stored in the task's confirmed_by and
         confirmed_at columns (the same columns as a confirmation); the job.discarded audit entry is the record
         of who did it and when.
+        Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: jobs.confirm
       responses:
         "200":
@@ -1010,6 +1054,13 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Job" }
+        "202":
+          description: The action was done, but the task could not be read back; poll status_url
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
 components:

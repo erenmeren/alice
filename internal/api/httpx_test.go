@@ -291,3 +291,17 @@ func TestCodeForReason(t *testing.T) {
 	assert.Equal(t, ErrUnexpected, codeForReason(""))
 	assert.Equal(t, ErrLicenseLocked, codeForReason("license.locked"), "jobs cancelled in lock carry this reason")
 }
+
+// Only the allowlisted provider params reach the client; any other key is dropped.
+func TestFailFiltersProviderParams(t *testing.T) {
+	err := providers.NewError("ssh.protocol_error", false, nil, map[string]string{
+		"subcommand": "authkeys-read", "exit_code": "3", "helper_code": "IO_ERROR", "stderr": "remote text", "line": "ssh-ed25519 AAAA",
+	})
+	rec := failRecorder(t, err, nil)
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	var body map[string]map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, map[string]any{"subcommand": "authkeys-read", "exit_code": "3", "helper_code": "IO_ERROR"}, body["error"]["params"])
+	assert.NotContains(t, rec.Body.String(), "remote text")
+	assert.NotContains(t, rec.Body.String(), "AAAA")
+}

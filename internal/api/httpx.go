@@ -34,10 +34,23 @@ func (s *server) decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 
 // decodeLimit is decode with a smaller body cap than maxBody.
 func (s *server) decodeLimit(w http.ResponseWriter, r *http.Request, dst any, limit int64) bool {
+	return s.decodeBody(w, r, dst, limit, false)
+}
+
+// decodeOptional is decode for an optional body: an empty body (with or without a
+// Content-Length, e.g. an empty chunked body) leaves dst unchanged.
+func (s *server) decodeOptional(w http.ResponseWriter, r *http.Request, dst any) bool {
+	return s.decodeBody(w, r, dst, maxBody, true)
+}
+
+func (s *server) decodeBody(w http.ResponseWriter, r *http.Request, dst any, limit int64, optional bool) bool {
 	body := http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(body)
 	dec.DisallowUnknownFields()
 	err := dec.Decode(dst)
+	if optional && errors.Is(err, io.EOF) {
+		return true // no JSON value at all
+	}
 	if err == nil {
 		if _, tail := dec.Token(); !errors.Is(tail, io.EOF) {
 			err = errors.New("trailing data after JSON value")

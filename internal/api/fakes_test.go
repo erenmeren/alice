@@ -370,6 +370,7 @@ func identityAuth(now time.Time) *fakeAuth {
 		"alice_read_admin":       token(adminID, "admin", rbac.Admin, rbac.ScopeRead),
 		"alice_operate_operator": token(operatorID, "operator", rbac.Operator, rbac.ScopeOperate),
 		"alice_read_auditor":     token(auditorID, "auditor", rbac.Auditor, rbac.ScopeRead),
+		"alice_operate_admin":    token(adminID, "admin", rbac.Admin, rbac.ScopeOperate),
 	}
 	return &fakeAuth{
 		AuthenticateFn: func(_ context.Context, t string) (auth.Principal, error) {

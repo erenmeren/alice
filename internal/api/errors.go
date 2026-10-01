@@ -266,7 +266,7 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		// Only the stable reason and its allowlisted primitive params reach the client; the
 		// provider's cause (remote output, driver text) is never shown nor logged as text.
 		if ec := codeForReason(perr.Code); ec != ErrUnexpected {
-			s.writeErrorWith(w, r, ec, perr.Params, nil)
+			s.writeErrorWith(w, r, ec, providerParams(perr.Params), nil)
 			return
 		}
 	}
@@ -278,6 +278,28 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	s.deps.Log.Error("request failed", append([]any{"request_id", RequestID(r.Context()), "path", r.URL.Path}, errorAttrs(err)...)...)
 	s.writeError(w, r, ErrUnexpected)
+}
+
+// providerParamKeys are the provider error params a client may see: fixed labels, numbers and
+// fingerprints (which are not secret). Any other key is dropped, so a provider that ever puts
+// remote text or a key line into its params cannot leak it through the API.
+var providerParamKeys = map[string]bool{
+	"helper_code": true, "subcommand": true, "exit_code": true, "reason": true, "field": true, "attempts": true,
+	"wait": true, "fingerprint": true, "old_fingerprint": true, "new_fingerprint": true,
+}
+
+// providerParams returns the allowlisted params of a provider error (nil when none remain).
+func providerParams(in map[string]string) map[string]string {
+	var out map[string]string
+	for k, v := range in {
+		if providerParamKeys[k] {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // errorAttrs describes err for the logs with fixed labels only: the type of

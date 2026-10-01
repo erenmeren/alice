@@ -13,11 +13,10 @@ import (
 	"alice/internal/rbac"
 )
 
-// targetRoutes manage servers and their host keys (spec §9.6 "targets", R37 items 8 and 12). Every
-// state-changing route under /targets is ClassChange: adding, changing and removing a server and
-// confirming a fingerprint change the managed inventory, and a person's request to test or scan a
-// server starts work on it; all of them are refused in lock (R9). The jobs they queue keep their
-// own classes (test and discovery are ClassReadOnly jobs, §8.6).
+// targetRoutes manage servers and their host keys (spec §9.6 "targets", R37 items 8 and 12). Adding,
+// changing and removing a server and confirming a fingerprint are infrastructure changes
+// (ClassChange); test and discovery are recurring read-only work (ClassReadOnly, §8.6). Both
+// classes are refused in lock (R9).
 func (s *server) targetRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/targets", perm: rbac.Read, handler: s.listTargets},
@@ -25,8 +24,8 @@ func (s *server) targetRoutes() []route {
 		{method: http.MethodGet, pattern: "/api/v1/targets/{id}", perm: rbac.Read, handler: s.getTarget},
 		{method: http.MethodPatch, pattern: "/api/v1/targets/{id}", perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.updateTarget},
 		{method: http.MethodDelete, pattern: "/api/v1/targets/{id}", perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.deleteTarget},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.testTarget},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/discover", perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.discoverTarget},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", perm: rbac.InventoryOperate, lic: license.ClassReadOnly, handler: s.testTarget},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/discover", perm: rbac.InventoryOperate, lic: license.ClassReadOnly, handler: s.discoverTarget},
 		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/host-keys", perm: rbac.Read, handler: s.listHostKeys},
 		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/confirm", perm: rbac.HostKeysConfirm, lic: license.ClassChange, handler: s.confirmHostKey},
 		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/repin", perm: rbac.HostKeysRepin, lic: license.ClassChange, handler: s.repinHostKey},

@@ -369,16 +369,26 @@ func TestListTargetKeysPassesMissingFlag(t *testing.T) {
 	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodGet, base+"?missing=yes", "operator", "").Code)
 }
 
-// Every state-changing route of the server, SSH key and job groups is ClassChange, so the lock
-// refuses it at request time (R9, §13.4; the Task 13 and 15 rulings).
-func TestInfrastructureRoutesAreClassChange(t *testing.T) {
+// Every state-changing route of the server, SSH key and job groups is refused in lock (R9, §13.4):
+// asking for a connection test or a scan is recurring read-only work (ClassReadOnly, R37 item 8),
+// everything else changes the managed inventory or servers (ClassChange).
+func TestInfrastructureRoutesAreGated(t *testing.T) {
+	readOnly := map[string]bool{
+		"POST /api/v1/targets/{id}/actions/test":     true,
+		"POST /api/v1/targets/{id}/actions/discover": true,
+	}
 	n := 0
 	for _, rt := range newServer(Deps{}).apiRoutes() {
 		if safeMethod(rt.method) || !underAny(rt.pattern, []string{"/api/v1/targets", "/api/v1/ssh-keys", "/api/v1/jobs"}) {
 			continue
 		}
 		n++
-		assert.Equal(t, license.ClassChange, rt.lic, "%s %s", rt.method, rt.pattern)
+		want := license.ClassChange
+		if readOnly[rt.method+" "+rt.pattern] {
+			want = license.ClassReadOnly
+		}
+		assert.Equal(t, want, rt.lic, "%s %s", rt.method, rt.pattern)
+		assert.True(t, gated(rt.lic), "%s %s", rt.method, rt.pattern)
 	}
 	assert.Equal(t, 10, n)
 }
@@ -399,4 +409,11 @@ func TestTargetActionsAreRefusedInLock(t *testing.T) {
 		assert.Equal(t, "ALC-LIC-0001", decodeErr(t, rec).Error.Code, action)
 	}
 	assert.False(t, called)
+	var classes []string
+	for _, e := range d.Audit.(*fakeAudit).Events() {
+		if e.Action == "request.denied_license" {
+			classes = append(classes, e.Details["class"])
+		}
+	}
+	assert.Equal(t, []string{"read_only", "read_only"}, classes)
 }

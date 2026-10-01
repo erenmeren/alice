@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -102,7 +103,7 @@ func TestConfirmAndDiscardJobs(t *testing.T) {
 
 	// Only an Administrator's browser session may run or discard paused work (R29): not an
 	// Operator, and not an API token of either scope.
-	for _, id := range []string{"operator", "operator-stepup", "auditor", "alice_operate_operator", "alice_read_admin"} {
+	for _, id := range []string{"operator", "operator-stepup", "auditor", "alice_operate_operator", "alice_read_admin", "alice_operate_admin"} {
 		for _, action := range []string{"confirm", "discard"} {
 			rec := call(h, http.MethodPost, "/api/v1/jobs/"+jobID.String()+"/actions/"+action, id, "")
 			assert.Equal(t, http.StatusForbidden, rec.Code, "%s as %s", action, id)
@@ -139,4 +140,19 @@ func TestProvidersList(t *testing.T) {
 		"capabilities":["authorized_keys","test_connection"],
 		"config_schema":{"fields":[{"name":"host","type":"host","required":true,"default":null,
 		"label_key":"provider.linuxssh.fields.host.label","help_key":"","pattern":"","min":0,"max":253,"values":[]}]}}]}`, rec.Body.String())
+}
+
+// The action succeeded even if reading the job back fails: the answer is 202 with the job's
+// address, never an error that would invite a second confirmation.
+func TestJobActionAnswersAcceptedWhenTheReadBackFails(t *testing.T) {
+	d, fj := jobsDeps(t)
+	fj.ConfirmFn = func(context.Context, audit.Actor, uuid.UUID, uuid.UUID) error { return nil }
+	fj.DiscardFn = func(context.Context, audit.Actor, uuid.UUID, uuid.UUID) error { return nil }
+	fj.GetFn = func(context.Context, uuid.UUID) (jobs.View, error) { return jobs.View{}, errors.New("database gone") }
+	h := NewHandler(d)
+	for _, action := range []string{"confirm", "discard"} {
+		rec := call(h, http.MethodPost, "/api/v1/jobs/"+jobID.String()+"/actions/"+action, "admin", "")
+		require.Equal(t, http.StatusAccepted, rec.Code, action)
+		assert.JSONEq(t, `{"job_id":"`+jobID.String()+`","status_url":"/api/v1/jobs/`+jobID.String()+`"}`, rec.Body.String())
+	}
 }

@@ -333,7 +333,7 @@
       },
       "not_removable": {
         "title": "Alice cannot change this key in this file.",
-        "cause": "The key is no longer in the file or was already removed, it is a certificate authority line that Alice only lists, or the file is larger than Alice reads (1 MiB).",
+        "cause": "The key's line is no longer in the file or was already removed, it is a certificate authority line that Alice only lists, or the file is larger than Alice reads (1 MiB).",
         "action": "Scan the server again to see its current keys, and check the size of the file on the server."
       },
       "sshd_unreadable": {

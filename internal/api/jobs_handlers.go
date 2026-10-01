@@ -86,7 +86,9 @@ func (s *server) discardJob(w http.ResponseWriter, r *http.Request) {
 	s.jobAction(w, r, s.deps.Jobs.Discard)
 }
 
-// jobAction runs confirm or discard as the caller and answers with the job's new state.
+// jobAction runs confirm or discard as the caller and answers with the job's new state. When the
+// action succeeded but the job cannot be read back, it answers 202 with the job's address: the
+// action happened, and an error would invite a second, refused attempt.
 func (s *server) jobAction(w http.ResponseWriter, r *http.Request, act func(ctx context.Context, actor audit.Actor, by, id uuid.UUID) error) {
 	id, ok := pathUUID(r, "id")
 	if !ok {
@@ -100,7 +102,8 @@ func (s *server) jobAction(w http.ResponseWriter, r *http.Request, act func(ctx 
 	}
 	jv, err := s.deps.Jobs.Get(r.Context(), id)
 	if err != nil {
-		s.fail(w, r, err)
+		s.deps.Log.Warn("job read back failed after an action", append([]any{"request_id", RequestID(r.Context()), "job_id", id.String()}, errorAttrs(err)...)...)
+		writeJSON(w, http.StatusAccepted, accepted(id))
 		return
 	}
 	writeJSON(w, http.StatusOK, jobJSON(jv))

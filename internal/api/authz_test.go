@@ -29,6 +29,7 @@ var identities = []string{
 	"admin", "operator", "auditor",
 	"admin-stepup", "operator-stepup", "auditor-stepup",
 	"alice_read_admin", "alice_operate_operator", "alice_read_auditor",
+	"alice_operate_admin",
 }
 
 const (
@@ -44,25 +45,25 @@ const (
 var expectedMatrix = map[rbac.Permission]map[string]int{
 	// columns: anonymous, expired, disabled, pending, setup, admin, operator, auditor,
 	// admin+step-up, operator+step-up, auditor+step-up, token read (admin),
-	// token operate (operator), token read (auditor)
-	rbac.Public:         row(allw, allw, allw, allw, allw, allw, allw, allw, allw, allw, allw, allw, allw, allw),
-	rbac.Setup:          row(unau, unau, unau, forb, allw, forb, forb, forb, forb, forb, forb, forb, forb, forb),
-	rbac.MFAPending:     row(unau, unau, unau, allw, forb, forb, forb, forb, forb, forb, forb, forb, forb, forb),
-	rbac.Session:        row(unau, unau, unau, unau, unau, allw, allw, allw, allw, allw, allw, forb, forb, forb),
-	rbac.SessionStepUp:  row(unau, unau, unau, unau, unau, step, step, step, allw, allw, allw, forb, forb, forb),
-	rbac.Read:           row(unau, unau, unau, unau, unau, allw, allw, allw, allw, allw, allw, allw, allw, allw),
-	rbac.AuditRead:      row(unau, unau, unau, unau, unau, allw, forb, allw, allw, forb, allw, allw, forb, allw),
-	rbac.UsersRead:      row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, allw, forb, forb),
-	rbac.UsersManage:    row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb),
-	rbac.SettingsManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb),
-	rbac.LicenseRead:    row(unau, unau, unau, unau, unau, allw, forb, allw, allw, forb, allw, allw, forb, allw),
-	rbac.LicenseManage:  row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb),
+	// token operate (operator), token read (auditor), token operate (admin)
+	rbac.Public:         row(allw, allw, allw, allw, allw, allw, allw, allw, allw, allw, allw, allw, allw, allw, allw),
+	rbac.Setup:          row(unau, unau, unau, forb, allw, forb, forb, forb, forb, forb, forb, forb, forb, forb, forb),
+	rbac.MFAPending:     row(unau, unau, unau, allw, forb, forb, forb, forb, forb, forb, forb, forb, forb, forb, forb),
+	rbac.Session:        row(unau, unau, unau, unau, unau, allw, allw, allw, allw, allw, allw, forb, forb, forb, forb),
+	rbac.SessionStepUp:  row(unau, unau, unau, unau, unau, step, step, step, allw, allw, allw, forb, forb, forb, forb),
+	rbac.Read:           row(unau, unau, unau, unau, unau, allw, allw, allw, allw, allw, allw, allw, allw, allw, allw),
+	rbac.AuditRead:      row(unau, unau, unau, unau, unau, allw, forb, allw, allw, forb, allw, allw, forb, allw, allw),
+	rbac.UsersRead:      row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, allw, forb, forb, allw),
+	rbac.UsersManage:    row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+	rbac.SettingsManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+	rbac.LicenseRead:    row(unau, unau, unau, unau, unau, allw, forb, allw, allw, forb, allw, allw, forb, allw, allw),
+	rbac.LicenseManage:  row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 
-	rbac.TargetsManage:    row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb),
-	rbac.HostKeysConfirm:  row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb),
-	rbac.HostKeysRepin:    row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb),
-	rbac.InventoryOperate: row(unau, unau, unau, unau, unau, allw, allw, forb, allw, allw, forb, forb, allw, forb),
-	rbac.JobsConfirm:      row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb),
+	rbac.TargetsManage:    row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb, allw),
+	rbac.HostKeysConfirm:  row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+	rbac.HostKeysRepin:    row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+	rbac.InventoryOperate: row(unau, unau, unau, unau, unau, allw, allw, forb, allw, allw, forb, forb, allw, forb, allw),
+	rbac.JobsConfirm:      row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {
