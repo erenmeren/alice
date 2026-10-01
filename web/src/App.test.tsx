@@ -107,6 +107,7 @@ describe('application shell', () => {
       ...sessionHandlers(sessionFor('admin'), {
         admin_exists: true,
         recovery_passphrase_set: false,
+        license_chosen: false,
         completed: false,
         default_locale: 'en',
       }),
@@ -122,6 +123,7 @@ describe('application shell', () => {
       ...sessionHandlers(sessionFor('operator'), {
         admin_exists: true,
         recovery_passphrase_set: false,
+        license_chosen: false,
         completed: false,
         default_locale: 'en',
       }),
@@ -219,5 +221,19 @@ describe('application shell', () => {
     expect(await screen.findByTestId('signout-error')).toHaveTextContent('Could not sign you out. Try again.');
     expect(router.state.location.pathname).toBe('/');
     expect(screen.getByTestId('current-user')).toHaveTextContent('Ayşe Yılmaz');
+  });
+
+  it('reminds the admin of the license step', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin'), {
+        admin_exists: true,
+        recovery_passphrase_set: true,
+        license_chosen: false,
+        completed: false,
+        default_locale: 'en',
+      }),
+    );
+    await renderRoute('/');
+    expect(await screen.findByTestId('setup-banner')).toHaveTextContent('Finish setting up: add a license or start the evaluation.');
   });
 });

@@ -22,7 +22,8 @@
     "signOutFailed": "Could not sign you out. Try again.",
     "signOut": "Sign out",
     "setupBanner": "Finish setting up: choose a recovery passphrase.",
-    "setupBannerFinish": "Finish setting up: open the setup wizard to confirm the last step."
+    "setupBannerFinish": "Finish setting up: open the setup wizard to confirm the last step.",
+    "setupBannerLicense": "Finish setting up: add a license or start the evaluation."
   },
   "ui": {
     "loading": "Loading…",
@@ -149,6 +150,14 @@
       "title": "Alice is ready",
       "help": "Your administrator account and recovery passphrase are set. Next, add the people who will use Alice on the Users page.",
       "button": "Go to the dashboard"
+    },
+    "license": {
+      "title": "Add a license",
+      "help": "Send this Installation ID to your vendor to get a license file, then upload it here. You can also start with the 30-day evaluation and add the license later on the License page.",
+      "uploadTitle": "Upload the license file",
+      "or": "or",
+      "evaluate": "Start 30-day evaluation (up to 5 targets)",
+      "evaluateHelp": "The evaluation started when Alice was installed. After 30 days, Alice pauses automatic tasks and changes to your servers until a license is uploaded. Your data is kept."
     }
   },
   "users": {

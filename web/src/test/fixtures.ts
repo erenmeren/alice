@@ -33,6 +33,7 @@ export const auditorSession = sessionFor('auditor');
 export const installedStatus: SetupStatus = {
   admin_exists: true,
   recovery_passphrase_set: true,
+  license_chosen: true,
   completed: true,
   default_locale: 'en',
 };
@@ -40,6 +41,7 @@ export const installedStatus: SetupStatus = {
 export const freshStatus: SetupStatus = {
   admin_exists: false,
   recovery_passphrase_set: false,
+  license_chosen: false,
   completed: false,
   default_locale: 'en',
 };

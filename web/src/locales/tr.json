@@ -22,7 +22,8 @@
     "signOutFailed": "Oturumunuz kapatılamadı. Tekrar deneyin.",
     "signOut": "Çıkış yap",
     "setupBanner": "Kurulumu tamamlayın: bir kurtarma parolası belirleyin.",
-    "setupBannerFinish": "Kurulumu tamamlayın: son adımı onaylamak için kurulum sihirbazını açın."
+    "setupBannerFinish": "Kurulumu tamamlayın: son adımı onaylamak için kurulum sihirbazını açın.",
+    "setupBannerLicense": "Kurulumu tamamlayın: bir lisans ekleyin veya denemeyi başlatın."
   },
   "ui": {
     "loading": "Yükleniyor…",
@@ -149,6 +150,14 @@
       "title": "Alice hazır",
       "help": "Yönetici hesabınız ve kurtarma parolanız ayarlandı. Şimdi Kullanıcılar sayfasından Alice'i kullanacak kişileri ekleyin.",
       "button": "Ana sayfaya git"
+    },
+    "license": {
+      "title": "Lisans ekleyin",
+      "help": "Lisans dosyası almak için bu Kurulum Kimliğini satıcınıza gönderin, ardından dosyayı buraya yükleyin. İsterseniz 30 günlük denemeyle başlayıp lisansı daha sonra Lisans sayfasından ekleyebilirsiniz.",
+      "uploadTitle": "Lisans dosyasını yükleyin",
+      "or": "veya",
+      "evaluate": "30 günlük denemeyi başlat (en fazla 5 hedef)",
+      "evaluateHelp": "Deneme süresi Alice kurulduğunda başladı. 30 gün sonra, bir lisans yüklenene kadar Alice otomatik işleri ve sunucularınızdaki değişiklikleri duraklatır. Verileriniz korunur."
     }
   },
   "users": {

@@ -17,8 +17,14 @@ export const SCREENS: Screen[] = [
   {
     path: '/setup',
     session: sessionFor('admin'),
-    status: { ...installedStatus, completed: false, recovery_passphrase_set: false },
+    status: { ...installedStatus, completed: false, recovery_passphrase_set: false, license_chosen: false },
     ready: { en: 'Choose a recovery passphrase', tr: 'Kurtarma parolası belirleyin' },
+  },
+  {
+    path: '/setup',
+    session: sessionFor('admin'),
+    status: { ...installedStatus, completed: false, license_chosen: false },
+    ready: { en: 'Add a license', tr: 'Lisans ekleyin' },
   },
   {
     path: '/setup',

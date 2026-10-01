@@ -30,7 +30,11 @@ function SetupBanner() {
   const { t } = useTranslation();
   const { session, setupStatus } = useAuth();
   if (session?.user.role !== 'admin' || !setupStatus || setupStatus.completed) return null;
-  const text = setupStatus.recovery_passphrase_set ? t('nav.setupBannerFinish') : t('nav.setupBanner');
+  const text = !setupStatus.recovery_passphrase_set
+    ? t('nav.setupBanner')
+    : !setupStatus.license_chosen
+      ? t('nav.setupBannerLicense')
+      : t('nav.setupBannerFinish');
   return (
     <Alert color="red" mb="md" data-testid="setup-banner">
       <Anchor component={Link} to="/setup">

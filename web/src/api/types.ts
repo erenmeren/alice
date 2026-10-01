@@ -50,6 +50,7 @@ export type MfaInput = { code: string } | { recovery_code: string };
 export interface SetupStatus {
   admin_exists: boolean;
   recovery_passphrase_set: boolean;
+  license_chosen: boolean;
   completed: boolean;
   default_locale: string;
 }

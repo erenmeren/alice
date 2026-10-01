@@ -49,6 +49,8 @@ export const setRecoveryPassphrase = (passphrase: string, passphraseConfirm: str
     body: { passphrase, passphrase_confirm: passphraseConfirm },
   });
 
+export const chooseEvaluation = () => apiFetch<SetupStatus>(`${v1}/setup/evaluation`, { method: 'POST' });
+
 export const completeSetup = () => apiFetch<SetupStatus>(`${v1}/setup/complete`, { method: 'POST' });
 
 // Authentication

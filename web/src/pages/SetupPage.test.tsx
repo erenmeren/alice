@@ -1,8 +1,8 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { SetupStatus } from '../api/types';
-import { errorResponse, freshStatus, installedStatus, sessionFor, sessionHandlers } from '../test/fixtures';
+import { errorResponse, freshStatus, installedStatus, licenseInfoFixture, sessionFor, sessionHandlers } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
@@ -46,6 +46,11 @@ describe('setup wizard', () => {
         bodies.passphrase = await request.json();
         status = { ...status, recovery_passphrase_set: true };
         return new HttpResponse(null, { status: 204 });
+      }),
+      http.post('/api/v1/setup/evaluation', () => {
+        csrfSeen.push('evaluation');
+        status = { ...status, license_chosen: true };
+        return HttpResponse.json(status);
       }),
       http.post('/api/v1/setup/complete', () => {
         status = { ...installedStatus };
@@ -107,12 +112,16 @@ describe('setup wizard', () => {
       passphrase_confirm: 'correct horse battery staple',
     });
 
+    expect(await screen.findByRole('heading', { name: 'Add a license' })).toBeInTheDocument();
+    expect(screen.getByTestId('installation-id')).toHaveTextContent('ALICE-7F3K-9Q2M-XD41-B8TC');
+    await userEvent.click(screen.getByRole('button', { name: 'Start 30-day evaluation (up to 5 targets)' }));
+
     expect(await screen.findByRole('heading', { name: 'Alice is ready' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Go to the dashboard' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
     expect(await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' })).toBeInTheDocument();
     // The setup session CSRF token is used before the admin exists, the admin session token after.
-    expect(csrfSeen).toEqual(['setup-csrf', 'csrf-admin']);
+    expect(csrfSeen).toEqual(['setup-csrf', 'csrf-admin', 'evaluation']);
   });
 
   it('explains a wrong setup code', async () => {
@@ -189,6 +198,7 @@ describe('setup wizard', () => {
       ...sessionHandlers(sessionFor('admin'), {
         admin_exists: true,
         recovery_passphrase_set: false,
+        license_chosen: false,
         completed: false,
         default_locale: 'en',
       }),
@@ -210,7 +220,7 @@ describe('setup wizard', () => {
     expect(await screen.findByRole('dialog', { name: "Confirm it's you" })).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText('6-digit code'), '654321');
     await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
-    expect(await screen.findByRole('heading', { name: 'Alice is ready' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Add a license' })).toBeInTheDocument();
     expect(attempts).toBe(2);
   });
 
@@ -248,7 +258,7 @@ describe('setup wizard edge cases', () => {
 
   it('never keeps the setup code or passphrase in browser storage', async () => {
     server.use(
-      ...sessionHandlers(sessionFor('admin'), { admin_exists: true, recovery_passphrase_set: false, completed: false, default_locale: 'en' }),
+      ...sessionHandlers(sessionFor('admin'), { admin_exists: true, recovery_passphrase_set: false, license_chosen: false, completed: false, default_locale: 'en' }),
       http.post('/api/v1/setup/recovery-passphrase', () => new HttpResponse(null, { status: 204 })),
     );
     await renderRoute('/setup');
@@ -257,7 +267,7 @@ describe('setup wizard edge cases', () => {
     await userEvent.type(screen.getByLabelText('Repeat the passphrase'), 'correct horse battery staple');
     await userEvent.click(screen.getByLabelText('I stored the passphrase safely'));
     await userEvent.click(screen.getByRole('button', { name: 'Save passphrase' }));
-    await screen.findByRole('heading', { name: 'Alice is ready' });
+    await screen.findByRole('heading', { name: 'Add a license' });
     const stored = JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage });
     expect(stored).not.toContain('correct horse');
   });
@@ -265,7 +275,7 @@ describe('setup wizard edge cases', () => {
   it('asks for a code again when finishing needs a fresh step-up', async () => {
     let attempts = 0;
     server.use(
-      ...sessionHandlers(sessionFor('admin'), { admin_exists: true, recovery_passphrase_set: true, completed: false, default_locale: 'en' }),
+      ...sessionHandlers(sessionFor('admin'), { admin_exists: true, recovery_passphrase_set: true, license_chosen: true, completed: false, default_locale: 'en' }),
       http.post('/api/v1/setup/complete', () => {
         attempts += 1;
         return attempts === 1 ? errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required') : HttpResponse.json(installedStatus);
@@ -280,6 +290,54 @@ describe('setup wizard edge cases', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
     expect(attempts).toBe(2);
   });
+
+  it('uploads a license in the wizard instead of starting the evaluation', async () => {
+    let status = { admin_exists: true, recovery_passphrase_set: true, license_chosen: false, completed: false, default_locale: 'en' };
+    const upload = {
+      license: { ...licenseInfoFixture, customer: 'Test Company' },
+      pending: false,
+      already_expired: false,
+      correction: false,
+      duplicate: false,
+      phase: 'active',
+    };
+    server.use(
+      http.get('/api/v1/setup/status', () => HttpResponse.json(status)),
+      http.get('/api/v1/auth/session', () => HttpResponse.json(sessionFor('admin'))),
+      http.post('/api/v1/license/preview', () => HttpResponse.json(upload)),
+      http.post('/api/v1/license', () => {
+        status = { ...status, license_chosen: true };
+        return HttpResponse.json(upload);
+      }),
+    );
+    await renderRoute('/setup');
+    await screen.findByRole('heading', { name: 'Add a license' });
+    await userEvent.upload(screen.getByLabelText('License file'), new File(['{}'], 'l.alicelic', { type: 'application/json' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Check the file' }));
+    await userEvent.click(within(await screen.findByRole('dialog', { name: 'Confirm the license' })).getByRole('button', { name: 'Install license' }));
+    expect(await screen.findByRole('heading', { name: 'Alice is ready' })).toBeInTheDocument();
+  });
+
+  it('asks for a code before starting the evaluation when the step-up expired', async () => {
+    let attempts = 0;
+    server.use(
+      ...sessionHandlers(sessionFor('admin'), { admin_exists: true, recovery_passphrase_set: true, license_chosen: false, completed: false, default_locale: 'en' }),
+      http.post('/api/v1/setup/evaluation', () => {
+        attempts += 1;
+        return attempts === 1
+          ? errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required')
+          : HttpResponse.json({ ...installedStatus, completed: false });
+      }),
+      http.post('/api/v1/auth/stepup', () => HttpResponse.json(sessionFor('admin'))),
+    );
+    await renderRoute('/setup');
+    await userEvent.click(await screen.findByRole('button', { name: 'Start 30-day evaluation (up to 5 targets)' }));
+    await screen.findByRole('dialog', { name: "Confirm it's you" });
+    await userEvent.type(screen.getByLabelText('6-digit code'), '654321');
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    expect(await screen.findByRole('heading', { name: 'Alice is ready' })).toBeInTheDocument();
+    expect(attempts).toBe(2);
+  });
 });
 
 describe('startOf', () => {
@@ -289,7 +347,8 @@ describe('startOf', () => {
     expect(startOf(freshStatus, null)).toBe('code');
     expect(startOf(installedStatus, null)).toBe('login');
     expect(startOf(installedStatus, admin)).toBe('home');
-    expect(startOf({ ...installedStatus, completed: false, recovery_passphrase_set: false }, admin)).toBe('passphrase');
+    expect(startOf({ ...installedStatus, completed: false, recovery_passphrase_set: false, license_chosen: false }, admin)).toBe('passphrase');
+    expect(startOf({ ...installedStatus, completed: false, license_chosen: false }, admin)).toBe('license');
     expect(startOf({ ...installedStatus, completed: false }, admin)).toBe('done');
     expect(startOf({ ...installedStatus, completed: false }, sessionFor('operator'))).toBe('home');
   });

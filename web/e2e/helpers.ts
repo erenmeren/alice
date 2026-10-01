@@ -58,6 +58,12 @@ export const COPY = {
     repeatPassphrase: 'Repeat the passphrase',
     storedPassphrase: 'I stored the passphrase safely',
     savePassphrase: 'Save passphrase',
+    licenseHeading: 'Add a license',
+    startEvaluation: 'Start 30-day evaluation (up to 5 targets)',
+    licenseFile: 'License file',
+    checkFile: 'Check the file',
+    confirmLicense: 'Confirm the license',
+    installLicense: 'Install license',
     doneHeading: 'Alice is ready',
     toDashboard: 'Go to the dashboard',
     loginHeading: 'Sign in to Alice',
@@ -134,6 +140,12 @@ export const COPY = {
     repeatPassphrase: 'Kurtarma parolasını tekrar girin',
     storedPassphrase: 'Kurtarma parolasını güvenli bir yerde sakladım',
     savePassphrase: 'Parolayı kaydet',
+    licenseHeading: 'Lisans ekleyin',
+    startEvaluation: '30 günlük denemeyi başlat (en fazla 5 hedef)',
+    licenseFile: 'Lisans dosyası',
+    checkFile: 'Dosyayı denetle',
+    confirmLicense: 'Lisansı onaylayın',
+    installLicense: 'Lisansı yükle',
     doneHeading: 'Alice hazır',
     toDashboard: 'Ana sayfaya git',
     loginHeading: "Alice'e giriş yapın",
@@ -303,6 +315,7 @@ export async function enrollTotp(
 export interface Account {
   username: string;
   fullName: string;
+  email?: string;
   password: string;
 }
 
@@ -316,7 +329,7 @@ export async function runWizard(
   request: APIRequestContext,
   lang: Lang,
   admin: Account = ADMIN,
-  opts: { a11y?: boolean } = {},
+  opts: { a11y?: boolean; license?: 'evaluation' | string } = {},
 ): Promise<{ totpSecret: string; recoveryCodes: string[] }> {
   const c = COPY[lang];
   const code = await setupCode(request);
@@ -334,6 +347,7 @@ export async function runWizard(
   if (opts.a11y) await expectAccessible(page, 'wizard administrator');
   await field(page, c.username).fill(admin.username);
   await field(page, c.fullName).fill(admin.fullName);
+  if (admin.email) await field(page, c.email).fill(admin.email);
   await field(page, c.password).fill('too-short11');
   await field(page, c.repeatPassword).fill('too-short11');
   await page.getByRole('button', { name: c.continue }).click();
@@ -355,11 +369,32 @@ export async function runWizard(
   await page.getByLabel(c.storedPassphrase).check();
   await page.getByRole('button', { name: c.savePassphrase }).click();
 
+  await expect(page.getByRole('heading', { name: c.licenseHeading })).toBeVisible();
+  await expect(page.getByTestId('installation-id')).toHaveText(/^ALICE(-[0-9A-Z]{4}){4}$/);
+  if (opts.a11y) await expectAccessible(page, 'wizard license');
+  if (opts.license && opts.license !== 'evaluation') {
+    await uploadLicense(page, c, opts.license);
+  } else {
+    await page.getByRole('button', { name: c.startEvaluation }).click();
+  }
+
   await expect(page.getByRole('heading', { name: c.doneHeading })).toBeVisible();
   if (opts.a11y) await expectAccessible(page, 'wizard done');
   await page.getByRole('button', { name: c.toDashboard }).click();
   await expect(page.getByRole('heading', { name: c.welcome(admin.fullName) })).toBeVisible();
   return enrolled;
+}
+
+// uploadLicense chooses a license file, checks it and confirms the preview dialog. The caller
+// answers a step-up prompt first if one may appear (see confirmWithStepUp in the specs).
+export async function uploadLicense(page: Page, c: Copy, fileText: string, a11y = false): Promise<void> {
+  await field(page, c.licenseFile).setInputFiles({ name: 'alice-license.alicelic', mimeType: 'application/json', buffer: Buffer.from(fileText) });
+  await page.getByRole('button', { name: c.checkFile }).click();
+  const dialog = page.getByRole('dialog', { name: c.confirmLicense });
+  await expect(dialog).toBeVisible();
+  if (a11y) await expectAccessible(page, 'license preview dialog');
+  await dialog.getByRole('button', { name: c.installLicense }).click();
+  await expect(dialog).toHaveCount(0);
 }
 
 // submitLogin fills the sign-in form and returns the HTTP status of POST /auth/login.
