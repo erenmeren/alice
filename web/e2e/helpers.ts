@@ -35,7 +35,7 @@ export { expect };
 
 export type Lang = 'en' | 'tr';
 
-// UI copy from the Phase 1 plan (exact strings shown by the web app).
+// UI copy from the Phase 1 and Phase 2 plans (exact strings shown by the web app).
 export const COPY = {
   en: {
     wizardHeading: 'Set up Alice',
@@ -322,7 +322,8 @@ export interface Account {
 export const ADMIN: Account = { username: 'admin', fullName: 'Ada Yılmaz', password: 'correct-horse-battery-2026' };
 export const PASSPHRASE = 'kırmızı-kedi-mavi-deniz-2026';
 
-// runWizard installs Alice from scratch through the setup wizard (Phase 1 steps).
+// runWizard installs Alice from scratch through every setup wizard step, including the Phase 2
+// license step: it starts the evaluation, or uploads opts.license (a license file's text).
 // With opts.a11y, every wizard screen is also checked with axe (expectAccessible).
 export async function runWizard(
   page: Page,

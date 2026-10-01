@@ -312,7 +312,32 @@
       "token_created": "API token created",
       "token_revoked": "API token revoked",
       "audit_verified": "Audit log integrity checked",
-      "audit_exported": "Audit log exported"
+      "audit_exported": "Audit log exported",
+      "license_activated": "License activated",
+      "license_renewed": "License renewed",
+      "license_expired": "License expired, grace period started",
+      "license_locked": "License expired, changes paused",
+      "license_evaluation_ended": "Evaluation period ended",
+      "license_state_changed": "License state changed",
+      "license_warning_sent": "License notice sent",
+      "license_tampered": "Stored license file changed outside Alice",
+      "license_installation_tampered": "Installation record changed outside Alice",
+      "license_installation_sealed": "Installation record protected",
+      "license_upload_invalid": "License upload refused: not a valid license",
+      "license_upload_invalid_signature": "License upload refused: signature does not match",
+      "license_upload_unsupported_format": "License upload refused: newer file format",
+      "license_upload_unknown_key": "License upload refused: unknown signing key",
+      "license_upload_revoked_key": "License upload refused: signing key no longer trusted",
+      "license_upload_wrong_installation": "License upload refused: issued for another installation",
+      "license_upload_older_than_installed": "License upload refused: a newer license is installed",
+      "clock_rollback_detected": "Server clock set back",
+      "clock_forward_jump": "Server clock jumped forward",
+      "clock_hwm_damaged": "Time record damaged",
+      "clock_time_reference_reset": "Time reference reset",
+      "clock_jump_accepted": "Clock jump accepted",
+      "clock_jump_cleared": "Clock jump ended, the clock was corrected",
+      "setup_evaluation_chosen": "Evaluation chosen during setup",
+      "request_denied_license": "Change refused: license expired"
     }
   },
   "license": {
@@ -400,7 +425,8 @@
         "event": "Event",
         "license": "License",
         "change": "Change"
-      }
+      },
+      "evaluation": "Evaluation"
     },
     "event": {
       "installed": "License installed",
@@ -409,6 +435,18 @@
       "clock_anomaly": "Clock problem",
       "rejected": "Upload refused",
       "notice": "Notice sent"
+    },
+    "notice": {
+      "evaluation_one": "Evaluation warning: {{count}} day left",
+      "evaluation_other": "Evaluation warning: {{count}} days left",
+      "evaluation_ended": "Evaluation ended",
+      "expiry_one": "Expiry warning: {{count}} day left",
+      "expiry_other": "Expiry warning: {{count}} days left",
+      "grace": "Grace day {{day}} of 7",
+      "locked": "License locked",
+      "clock_behind": "Server clock behind ({{date}})",
+      "tampered": "Changed license file",
+      "installation_tampered": "Installation record changed"
     }
   }
 }

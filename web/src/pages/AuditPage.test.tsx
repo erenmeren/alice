@@ -2,6 +2,9 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { auditExportUrl } from '../api/endpoints';
+import en from '../locales/en.json';
+import tr from '../locales/tr.json';
+import { actionKey } from './AuditPage';
 import type { AuditEntry, SessionInfo } from '../api/types';
 import { adminSession, sessionFor } from '../test/fixtures';
 import { renderRoute } from '../test/render';
@@ -35,8 +38,54 @@ function signedInAs(session: SessionInfo) {
   );
 }
 
+// Every audit action Phase 2 writes (licensing, clock, wizard license step, lock gate).
+const PHASE2_ACTIONS = [
+  'license.activated',
+  'license.renewed',
+  'license.expired',
+  'license.locked',
+  'license.evaluation_ended',
+  'license.state_changed',
+  'license.warning.sent',
+  'license.tampered',
+  'license.installation_tampered',
+  'license.installation_sealed',
+  'license.upload.invalid',
+  'license.upload.invalid_signature',
+  'license.upload.unsupported_format',
+  'license.upload.unknown_key',
+  'license.upload.revoked_key',
+  'license.upload.wrong_installation',
+  'license.upload.older_than_installed',
+  'clock.rollback_detected',
+  'clock.forward_jump',
+  'clock.hwm_damaged',
+  'clock.time_reference_reset',
+  'clock.jump_accepted',
+  'clock.jump_cleared',
+  'setup.evaluation_chosen',
+  'request.denied_license',
+];
+
 describe('AuditPage', () => {
   beforeEach(() => localStorage.clear());
+
+  it('labels every Phase 2 audit action in English and Turkish', async () => {
+    for (const action of PHASE2_ACTIONS) {
+      const key = actionKey(action).replace('audit.actions.', '');
+      expect(en.audit.actions, action).toHaveProperty([key]);
+      expect(tr.audit.actions, action).toHaveProperty([key]);
+    }
+    signedInAs(adminSession);
+    server.use(
+      http.get('/api/v1/audit', () =>
+        HttpResponse.json({ items: [entry(2, 'license.installation_tampered', 'failure'), entry(1, 'license.upload.invalid_signature', 'failure')], next_cursor: null }),
+      ),
+    );
+    await renderRoute('/audit');
+    expect(await screen.findByText('Installation record changed outside Alice')).toBeInTheDocument();
+    expect(screen.getByText('License upload refused: signature does not match')).toBeInTheDocument();
+  });
 
   it('shows localized actions, falls back to the raw action and pages with the cursor', async () => {
     signedInAs(adminSession);

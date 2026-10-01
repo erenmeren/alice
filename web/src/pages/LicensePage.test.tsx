@@ -219,6 +219,64 @@ describe("license page", () => {
     ).toBeInTheDocument();
   });
 
+  it("names the notices in the history and the ended evaluation (W4, W7)", async () => {
+    const notice = (license_id: string, n: string) => ({
+      at: "2026-10-31T09:00:00Z",
+      event: "notice" as const,
+      license_id,
+      from_state: "",
+      to_state: "",
+      notice: n,
+    });
+    server.use(
+      ...sessionHandlers(sessionFor("admin")),
+      http.get("/api/v1/license", () =>
+        HttpResponse.json({
+          ...licenseDetailFixture,
+          phase: "evaluation_expired",
+          current: null,
+          max_targets: 5,
+          days_left: 0,
+          files: [],
+          history: [
+            notice("evaluation", "evaluation_ended"),
+            notice("evaluation", "evaluation:1"),
+            notice("evaluation", "evaluation:7"),
+            notice("LIC-1", "expiry:30"),
+            notice("LIC-1", "grace:2"),
+            notice("LIC-1", "locked"),
+            notice("", "clock_behind:2026-10-20"),
+            notice("", "tampered:0192a000-0000-7000-8000-0000000000f1"),
+            notice("", "installation_tampered:ALICE-7F3K-9Q2M-XD41-B8TC"),
+            notice("", "something_new:1"),
+          ],
+        }),
+      ),
+    );
+    await renderRoute("/license");
+    const summary = await screen.findByTestId("license-summary");
+    expect(summary).toHaveTextContent("Evaluation ended");
+    expect(summary).not.toHaveTextContent("0 days");
+    const history = screen.getByRole("table", { name: "History" });
+    expect(within(history).getAllByText("Evaluation")).toHaveLength(3);
+    expect(within(history).queryByText("evaluation")).not.toBeInTheDocument();
+    for (const text of [
+      "Evaluation ended",
+      "Evaluation warning: 1 day left",
+      "Evaluation warning: 7 days left",
+      "Expiry warning: 30 days left",
+      "Grace day 2 of 7",
+      "License locked",
+      "Server clock behind (2026-10-20)",
+      "Changed license file",
+      "Installation record changed",
+      "something_new:1",
+    ]) {
+      expect(within(history).getByText(text)).toBeInTheDocument();
+    }
+    expectNoRawKeys();
+  });
+
   it("shows the evaluation and is translated into Turkish", async () => {
     server.use(
       ...sessionHandlers(sessionFor("admin", "tr")),

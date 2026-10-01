@@ -312,7 +312,32 @@
       "token_created": "API anahtarı oluşturuldu",
       "token_revoked": "API anahtarı iptal edildi",
       "audit_verified": "Denetim kaydının bütünlüğü kontrol edildi",
-      "audit_exported": "Denetim kaydı dışa aktarıldı"
+      "audit_exported": "Denetim kaydı dışa aktarıldı",
+      "license_activated": "Lisans etkinleştirildi",
+      "license_renewed": "Lisans yenilendi",
+      "license_expired": "Lisansın süresi doldu, ek süre başladı",
+      "license_locked": "Lisansın süresi doldu, değişiklikler duraklatıldı",
+      "license_evaluation_ended": "Deneme süresi sona erdi",
+      "license_state_changed": "Lisans durumu değişti",
+      "license_warning_sent": "Lisans bildirimi gönderildi",
+      "license_tampered": "Kayıtlı lisans dosyası Alice dışında değiştirildi",
+      "license_installation_tampered": "Kurulum kaydı Alice dışında değiştirildi",
+      "license_installation_sealed": "Kurulum kaydı koruma altına alındı",
+      "license_upload_invalid": "Lisans yüklemesi reddedildi: geçerli bir lisans değil",
+      "license_upload_invalid_signature": "Lisans yüklemesi reddedildi: imza eşleşmiyor",
+      "license_upload_unsupported_format": "Lisans yüklemesi reddedildi: daha yeni bir dosya biçimi",
+      "license_upload_unknown_key": "Lisans yüklemesi reddedildi: bilinmeyen imza anahtarı",
+      "license_upload_revoked_key": "Lisans yüklemesi reddedildi: imza anahtarına artık güvenilmiyor",
+      "license_upload_wrong_installation": "Lisans yüklemesi reddedildi: başka bir kurulum için düzenlenmiş",
+      "license_upload_older_than_installed": "Lisans yüklemesi reddedildi: daha yeni bir lisans yüklü",
+      "clock_rollback_detected": "Sunucu saati geri alındı",
+      "clock_forward_jump": "Sunucu saati ileri atladı",
+      "clock_hwm_damaged": "Zaman kaydı bozuk",
+      "clock_time_reference_reset": "Zaman referansı sıfırlandı",
+      "clock_jump_accepted": "Saat atlaması kabul edildi",
+      "clock_jump_cleared": "Saat atlaması sona erdi, saat düzeltildi",
+      "setup_evaluation_chosen": "Kurulumda deneme seçildi",
+      "request_denied_license": "Değişiklik reddedildi: lisansın süresi doldu"
     }
   },
   "license": {
@@ -400,7 +425,8 @@
         "event": "Olay",
         "license": "Lisans",
         "change": "Değişiklik"
-      }
+      },
+      "evaluation": "Deneme"
     },
     "event": {
       "installed": "Lisans yüklendi",
@@ -409,6 +435,18 @@
       "clock_anomaly": "Saat sorunu",
       "rejected": "Yükleme reddedildi",
       "notice": "Bildirim gönderildi"
+    },
+    "notice": {
+      "evaluation_one": "Deneme uyarısı: {{count}} gün kaldı",
+      "evaluation_other": "Deneme uyarısı: {{count}} gün kaldı",
+      "evaluation_ended": "Deneme sona erdi",
+      "expiry_one": "Süre sonu uyarısı: {{count}} gün kaldı",
+      "expiry_other": "Süre sonu uyarısı: {{count}} gün kaldı",
+      "grace": "Ek süre günü: {{day}} / 7",
+      "locked": "Lisans kilitlendi",
+      "clock_behind": "Sunucu saati geride ({{date}})",
+      "tampered": "Değiştirilmiş lisans dosyası",
+      "installation_tampered": "Kurulum kaydı değiştirildi"
     }
   }
 }

@@ -54,6 +54,20 @@ export function LicensePage() {
   const fmt = (iso: string) => formatDateTime(iso, i18n.language);
   const phase = (p: string) =>
     i18n.exists(`license.phase.${p}`) ? t(`license.phase.${p}`) : p;
+  // The history names the evaluation "evaluation" in place of a license ID.
+  const licenseName = (id: string) =>
+    id === "evaluation" ? t("license.history.evaluation") : id;
+  // noticeText names a one-time notice from its stored key ("expiry:30", "grace:2",
+  // "clock_behind:2026-10-20", "tampered:<file id>", …); an unknown key is shown as stored.
+  const noticeText = (notice: string) => {
+    const sep = notice.indexOf(":");
+    const kind = sep < 0 ? notice : notice.slice(0, sep);
+    const arg = sep < 0 ? "" : notice.slice(sep + 1);
+    const key = `license.notice.${kind}`;
+    if (!i18n.exists(key) && !i18n.exists(`${key}_other`)) return notice;
+    const n = Number(arg);
+    return t(key, { count: Number.isInteger(n) ? n : 0, day: arg, date: arg });
+  };
   const d = detail.data;
 
   let installedText = "";
@@ -118,10 +132,12 @@ export function LicensePage() {
                 </>
               ) : (
                 <Text data-testid="license-summary">
-                  {t("license.current.evaluation", {
-                    count: d.days_left,
-                    max: d.max_targets,
-                  })}
+                  {d.phase === "evaluation"
+                    ? t("license.current.evaluation", {
+                        count: d.days_left,
+                        max: d.max_targets,
+                      })
+                    : phase(d.phase)}
                 </Text>
               )}
               <Text size="sm">
@@ -212,14 +228,16 @@ export function LicensePage() {
                     <Table.Tr key={`${h.at}-${i}`}>
                       <Table.Td>{fmt(h.at)}</Table.Td>
                       <Table.Td>{t(`license.event.${h.event}`)}</Table.Td>
-                      <Table.Td>{h.license_id}</Table.Td>
+                      <Table.Td>{licenseName(h.license_id)}</Table.Td>
                       <Table.Td>
                         {h.from_state && h.to_state
                           ? t("license.change", {
                               from: phase(h.from_state),
                               to: phase(h.to_state),
                             })
-                          : ""}
+                          : h.notice
+                            ? noticeText(h.notice)
+                            : ""}
                       </Table.Td>
                     </Table.Tr>
                   ))}
