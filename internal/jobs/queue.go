@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -145,20 +146,28 @@ func uuidText(u uuid.UUID) string {
 	return u.String()
 }
 
-// payloadMAC is HMAC-SHA256 over everything that decides what a job does.
-func payloadMAC(key []byte, id uuid.UUID, typ string, target uuid.UUID, payload []byte, createdBy uuid.UUID) []byte {
+// payloadMAC is HMAC-SHA256 over everything that decides what a job does and on whose
+// authority: id, type, kind, target, payload, creator, the creator's role and the attempt
+// budget. Every field is length-prefixed, so no two field lists encode alike.
+func payloadMAC(key []byte, id uuid.UUID, typ, kind string, target uuid.UUID, payload []byte, createdBy uuid.UUID,
+	role string, maxAttempts int) []byte {
 	m := hmac.New(sha256.New, key)
-	m.Write([]byte("alice-job-v1\n" + id.String() + "\n" + typ + "\n" + uuidText(target) + "\n"))
-	m.Write(payload)
-	m.Write([]byte("\n" + uuidText(createdBy)))
+	for _, f := range [][]byte{[]byte("alice-job-v1"), []byte(id.String()), []byte(typ), []byte(kind), []byte(uuidText(target)),
+		payload, []byte(uuidText(createdBy)), []byte(role), []byte(strconv.Itoa(maxAttempts))} {
+		var n [8]byte
+		binary.BigEndian.PutUint64(n[:], uint64(len(f)))
+		m.Write(n[:])
+		m.Write(f)
+	}
 	return m.Sum(nil)
 }
 
 // mac derives the key for one computation and clears it afterwards.
-func (q *Queue) mac(id uuid.UUID, typ string, target uuid.UUID, payload []byte, createdBy uuid.UUID) []byte {
+func (q *Queue) mac(id uuid.UUID, typ, kind string, target uuid.UUID, payload []byte, createdBy uuid.UUID, role string,
+	maxAttempts int) []byte {
 	key := q.keyring.Derive(payloadMACLabel)
 	defer clear(key)
-	return payloadMAC(key, id, typ, target, payload, createdBy)
+	return payloadMAC(key, id, typ, kind, target, payload, createdBy, role, maxAttempts)
 }
 
 func nullUUID(u uuid.UUID) *uuid.UUID {
@@ -202,28 +211,36 @@ func (q *Queue) Add(ctx context.Context, tx pgx.Tx, s Spec) (uuid.UUID, bool, er
 		runAt = now
 	}
 	payload := canonicalPayload(s.Payload)
-	id := uuid.Must(uuid.NewV7())
-	var inserted uuid.UUID
-	err := tx.QueryRow(ctx, `INSERT INTO jobs (id, type, class, kind, payload, payload_mac, target_id, dedupe_key, status,
+	// The job holding the dedupe key may finish between the INSERT and the SELECT; then the key
+	// is free again and the INSERT is tried once more.
+	for range 2 {
+		id := uuid.Must(uuid.NewV7())
+		var inserted uuid.UUID
+		err := tx.QueryRow(ctx, `INSERT INTO jobs (id, type, class, kind, payload, payload_mac, target_id, dedupe_key, status,
     priority, run_at, max_attempts, created_by, created_by_role, created_at)
 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'queued', $9, $10, $11, $12, $13, $14)
 ON CONFLICT (dedupe_key) WHERE status IN `+liveStatuses+` DO NOTHING
 RETURNING id`,
-		id, s.Type.Name, s.Type.Class.String(), string(s.Kind), string(payload), q.mac(id, s.Type.Name, s.TargetID, payload, s.CreatedBy),
-		nullUUID(s.TargetID), nullString(s.DedupeKey), priority, runAt, maxAttempts, nullUUID(s.CreatedBy), s.CreatedByRole, now,
-	).Scan(&inserted)
-	if err == nil {
-		return inserted, false, nil
+			id, s.Type.Name, s.Type.Class.String(), string(s.Kind), string(payload),
+			q.mac(id, s.Type.Name, string(s.Kind), s.TargetID, payload, s.CreatedBy, s.CreatedByRole, maxAttempts),
+			nullUUID(s.TargetID), nullString(s.DedupeKey), priority, runAt, maxAttempts, nullUUID(s.CreatedBy), s.CreatedByRole, now,
+		).Scan(&inserted)
+		if err == nil {
+			return inserted, false, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, fmt.Errorf("jobs: enqueue %s: %w", s.Type.Name, err)
+		}
+		var existing uuid.UUID
+		err = tx.QueryRow(ctx, `SELECT id FROM jobs WHERE dedupe_key = $1 AND status IN `+liveStatuses, s.DedupeKey).Scan(&existing)
+		if err == nil {
+			return existing, true, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, fmt.Errorf("jobs: read the job holding the dedupe key: %w", err)
+		}
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, false, fmt.Errorf("jobs: enqueue %s: %w", s.Type.Name, err)
-	}
-	var existing uuid.UUID
-	if err := tx.QueryRow(ctx, `SELECT id FROM jobs WHERE dedupe_key = $1 AND status IN `+liveStatuses,
-		s.DedupeKey).Scan(&existing); err != nil {
-		return uuid.Nil, false, fmt.Errorf("jobs: read the job holding the dedupe key: %w", err)
-	}
-	return existing, true, nil
+	return uuid.Nil, false, fmt.Errorf("jobs: enqueue %s: the dedupe key keeps changing hands", s.Type.Name)
 }
 
 // Enqueue is Add in its own transaction.

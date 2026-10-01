@@ -53,7 +53,7 @@ type RunnerConfig struct {
 	Heartbeat     time.Duration  // default 15 s
 	Poll          time.Duration  // default 1 s
 	ReapEvery     time.Duration  // default 60 s
-	ShutdownGrace time.Duration  // default 60 s
+	ShutdownGrace time.Duration  // default 60 s, in total: jobs are cancelled after half of it
 	Jitter        func() float64 // in [-0.2, 0.2]; default crypto/rand
 }
 
@@ -63,6 +63,9 @@ type Runner struct {
 	mu       sync.Mutex
 	handlers map[string]HandlerFunc
 	stopping atomic.Bool // Run is shutting down: interrupted jobs are released, not failed
+
+	sweepMu   sync.Mutex
+	lastSweep time.Time // the last lock-mode sweep (sweepIfDue)
 }
 
 const (
@@ -165,6 +168,7 @@ func (r *Runner) jobEvent(action string, result audit.Result, id uuid.UUID, deta
 // claimed is a job this worker holds the lease of.
 type claimed struct {
 	id          uuid.UUID
+	token       string // this claim's lease owner: "<WorkerID>/<uuid>", in jobs.locked_by and target_locks.locked_by
 	typ         string
 	kind        string
 	payload     []byte
@@ -176,15 +180,28 @@ type claimed struct {
 	role        string
 }
 
+// mine is the WHERE clause that makes a job update apply only to this claim of the job: its
+// token and attempt number, while it runs. A run whose lease expired and whose job was claimed
+// again (even by the same process) matches nothing. Its parameters are $1..$3 (fence); the
+// statement's own parameters start at $4.
+const mine = `WHERE id = $1 AND locked_by = $2 AND attempts = $3 AND status = 'running'`
+
+// fence returns the parameters of mine followed by args.
+func (c *claimed) fence(args ...any) []any {
+	return append([]any{c.id, c.token, c.attempts}, args...)
+}
+
 var allClasses = []string{license.ClassAlways.String(), license.ClassReadOnly.String(), license.ClassChange.String()}
 
 // maxCandidates bounds how many busy-target jobs one claim skips before it gives up.
 const maxCandidates = 10
 
 // claim takes the next due job in one transaction: the job row (SKIP LOCKED), the target lock
-// and the attempt row commit together, so a target never runs two jobs. In lock it first moves
-// queued external-change jobs to blocked_license and cancels queued read-only jobs (§8.6, in a
-// transaction of its own), then claims only always-class work.
+// and the attempt row commit together, so a target never runs two jobs. An expired target lock
+// is taken over only when no job of that target is running any more, i.e. after the reaper
+// re-queued it (§8.1). In lock it first moves queued external-change jobs to blocked_license and
+// cancels queued read-only jobs (§8.6, in a transaction of its own), then claims only
+// always-class work.
 func (r *Runner) claim(ctx context.Context) (*claimed, error) {
 	types := r.handled()
 	if len(types) == 0 {
@@ -193,14 +210,12 @@ func (r *Runner) claim(ctx context.Context) (*claimed, error) {
 	now := r.cfg.Clock.Now().UTC()
 	classes := allClasses
 	if errors.Is(r.cfg.Gate.Allow(license.ClassChange), license.ErrLocked) {
-		if err := r.sweepLocked(ctx, now); err != nil {
-			return nil, err
-		}
+		r.sweepIfDue(ctx, now)
 		classes = []string{license.ClassAlways.String()}
 	}
 	var c *claimed
 	err := db.InTx(ctx, r.cfg.Pool, func(tx pgx.Tx) error {
-		skip := []string{} // never nil: ANY(NULL) would exclude every row
+		skip := []uuid.UUID{} // never nil: ANY(NULL) would exclude every row
 		for range maxCandidates {
 			var (
 				cand             claimed
@@ -209,9 +224,11 @@ func (r *Runner) claim(ctx context.Context) (*claimed, error) {
 			)
 			err := tx.QueryRow(ctx, `SELECT id, type, kind, payload, payload_mac, target_id, attempts, max_attempts, created_by, created_by_role
 FROM jobs j
-WHERE status = 'queued' AND run_at <= $1 AND class = ANY($2) AND type = ANY($3) AND NOT (id::text = ANY($4::text[]))
-  AND (target_id IS NULL OR NOT EXISTS (
-        SELECT 1 FROM target_locks l WHERE l.target_id = j.target_id AND l.lease_until > $1))
+WHERE status = 'queued' AND run_at <= $1 AND class = ANY($2) AND type = ANY($3) AND NOT (id = ANY($4::uuid[]))
+  AND attempts < max_attempts
+  AND (target_id IS NULL OR (
+        NOT EXISTS (SELECT 1 FROM target_locks l WHERE l.target_id = j.target_id AND l.lease_until > $1)
+    AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.target_id = j.target_id AND o.status = 'running')))
 ORDER BY priority, run_at, id
 FOR UPDATE SKIP LOCKED
 LIMIT 1`, now, classes, types, skip).Scan(&cand.id, &cand.typ, &cand.kind, &cand.payload, &cand.mac, &target,
@@ -222,6 +239,7 @@ LIMIT 1`, now, classes, types, skip).Scan(&cand.id, &cand.typ, &cand.kind, &cand
 			if err != nil {
 				return fmt.Errorf("jobs: select a job: %w", err)
 			}
+			cand.token = r.cfg.WorkerID + "/" + uuid.Must(uuid.NewV7()).String()
 			if target != nil {
 				cand.target = *target
 				var got uuid.UUID
@@ -230,9 +248,10 @@ VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (target_id) DO UPDATE SET job_id = EXCLUDED.job_id, operation = EXCLUDED.operation,
     locked_by = EXCLUDED.locked_by, heartbeat_at = EXCLUDED.heartbeat_at, lease_until = EXCLUDED.lease_until
 WHERE target_locks.lease_until <= $5
-RETURNING target_id`, cand.target, cand.id, cand.typ, r.cfg.WorkerID, now, now.Add(r.cfg.Lease)).Scan(&got)
+  AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.target_id = target_locks.target_id AND o.status = 'running')
+RETURNING target_id`, cand.target, cand.id, cand.typ, cand.token, now, now.Add(r.cfg.Lease)).Scan(&got)
 				if errors.Is(err, pgx.ErrNoRows) {
-					skip = append(skip, cand.id.String()) // another job holds the target (§12.5)
+					skip = append(skip, cand.id) // another job holds the target (§12.5)
 					continue
 				}
 				if err != nil {
@@ -244,12 +263,12 @@ RETURNING target_id`, cand.target, cand.id, cand.typ, r.cfg.WorkerID, now, now.A
 			}
 			if _, err := tx.Exec(ctx, `UPDATE jobs SET status = 'running', locked_by = $2, locked_until = $3, heartbeat_at = $4,
     attempts = attempts + 1, started_at = coalesce(started_at, $4)
-WHERE id = $1`, cand.id, r.cfg.WorkerID, now.Add(r.cfg.Lease), now); err != nil {
+WHERE id = $1`, cand.id, cand.token, now.Add(r.cfg.Lease), now); err != nil {
 				return fmt.Errorf("jobs: mark running: %w", err)
 			}
 			cand.attempts, cand.maxAttempts = attempts+1, maxAtt
 			if _, err := tx.Exec(ctx, `INSERT INTO job_attempts (id, job_id, attempt, worker_id, started_at) VALUES ($1, $2, $3, $4, $5)`,
-				uuid.Must(uuid.NewV7()), cand.id, cand.attempts, r.cfg.WorkerID, now); err != nil {
+				uuid.Must(uuid.NewV7()), cand.id, cand.attempts, cand.token, now); err != nil {
 				return fmt.Errorf("jobs: record the attempt: %w", err)
 			}
 			c = &cand
@@ -261,6 +280,21 @@ WHERE id = $1`, cand.id, r.cfg.WorkerID, now.Add(r.cfg.Lease), now); err != nil 
 		return nil, err
 	}
 	return c, nil
+}
+
+// sweepIfDue runs the lock-mode sweep at most once per Poll interval for the whole runner (not
+// once per worker). A failed sweep is logged; always-class work is still claimed.
+func (r *Runner) sweepIfDue(ctx context.Context, now time.Time) {
+	r.sweepMu.Lock()
+	if !r.lastSweep.IsZero() && now.Sub(r.lastSweep) < r.cfg.Poll {
+		r.sweepMu.Unlock()
+		return
+	}
+	r.lastSweep = now
+	r.sweepMu.Unlock()
+	if err := r.sweepLocked(ctx, now); err != nil && ctx.Err() == nil {
+		r.cfg.Log.Error("holding queued work in lock failed", "error_type", fmt.Sprintf("%T", err))
+	}
 }
 
 // sweepLocked holds queued external-change work for an Administrator's confirmation and
@@ -304,10 +338,10 @@ WHERE status = 'queued' AND class = 'read_only'`, now); err != nil {
 
 var errLeaseLost = errors.New("jobs: the lease was lost")
 
-// settle ends this worker's run of c in one transaction: set changes the job row (and must
-// match it only while this worker still holds it), then the attempt is closed, the target lock
-// released and the audit events written. It reports false when the lease was lost: another
-// worker or the reaper owns the job now, and nothing is written.
+// settle ends this claim of c in one transaction: set changes the job row (its WHERE is mine,
+// so it matches only while this claim still holds the job), then the attempt is closed, this
+// claim's target lock released and the audit events written. It reports false when the lease
+// was lost: another claim or the reaper owns the job now, and nothing is written.
 func (r *Runner) settle(ctx context.Context, c *claimed, errorCode string,
 	set func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error), events ...audit.Event) bool {
 	err := db.InTx(ctx, r.cfg.Pool, func(tx pgx.Tx) error {
@@ -323,7 +357,7 @@ func (r *Runner) settle(ctx context.Context, c *claimed, errorCode string,
 			c.id, c.attempts, now, errorCode); err != nil {
 			return fmt.Errorf("jobs: close the attempt: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM target_locks WHERE job_id = $1`, c.id); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM target_locks WHERE job_id = $1 AND locked_by = $2`, c.id, c.token); err != nil {
 			return fmt.Errorf("jobs: release the target: %w", err)
 		}
 		for _, ev := range events {
@@ -344,14 +378,11 @@ func (r *Runner) settle(ctx context.Context, c *claimed, errorCode string,
 	return true
 }
 
-// mine is the WHERE clause that makes a job update apply only while this worker holds it.
-const mine = `WHERE id = $1 AND locked_by = $2 AND status = 'running'`
-
-// terminate ends c without running it (unknown type, tampered payload).
+// terminate ends c without running it (unknown type, tampered payload, unclassified type).
 func (r *Runner) terminate(ctx context.Context, c *claimed, reason, action string) {
 	r.settle(ctx, c, reason, func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
-		return tx.Exec(ctx, `UPDATE jobs SET status = 'dead', last_error_code = $3, finished_at = $4, locked_by = NULL,
-    locked_until = NULL `+mine, c.id, r.cfg.WorkerID, reason, now)
+		return tx.Exec(ctx, `UPDATE jobs SET status = 'dead', last_error_code = $4, finished_at = $5, locked_by = NULL,
+    locked_until = NULL `+mine, c.fence(reason, now)...)
 	}, r.jobEvent(action, audit.Failure, c.id, map[string]string{"type": c.typ, "reason": reason, "attempt": strconv.Itoa(c.attempts)}))
 }
 
@@ -371,14 +402,14 @@ func (r *Runner) revert(ctx context.Context, c *claimed, t Type) {
 	if t.Class == license.ClassChange {
 		r.settle(ctx, c, "license.locked", func(tx pgx.Tx, _ time.Time) (pgconn.CommandTag, error) {
 			tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'blocked_license', attempts = attempts - 1, locked_by = NULL,
-    locked_until = NULL `+mine, c.id, r.cfg.WorkerID)
+    locked_until = NULL `+mine, c.fence()...)
 			return unclaim(tx, tag, err)
 		}, r.jobEvent("job.blocked_license", audit.Denied, c.id, map[string]string{"type": c.typ}))
 		return
 	}
 	r.settle(ctx, c, "license.locked", func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
-		tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'cancelled', last_error_code = 'license.locked', finished_at = $3,
-    attempts = attempts - 1, locked_by = NULL, locked_until = NULL `+mine, c.id, r.cfg.WorkerID, now)
+		tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'cancelled', last_error_code = 'license.locked', finished_at = $4,
+    attempts = attempts - 1, locked_by = NULL, locked_until = NULL `+mine, c.fence(now)...)
 		return unclaim(tx, tag, err)
 	})
 }
@@ -416,9 +447,37 @@ func (r *Runner) call(ctx context.Context, h HandlerFunc, j Job, steps StepRecor
 	return h(ctx, j, steps)
 }
 
-// heartbeat extends the lease every Heartbeat until stop is called. When the job row is no
-// longer this worker's (the reaper took it), it cancels the handler's context.
-func (r *Runner) heartbeat(c *claimed, cancel context.CancelFunc) (stop func()) {
+// beat extends this claim's job lease and target lock in one transaction. It returns
+// errLeaseLost when either no longer belongs to this claim.
+func (r *Runner) beat(ctx context.Context, c *claimed) error {
+	return db.InTx(ctx, r.cfg.Pool, func(tx pgx.Tx) error {
+		now := r.cfg.Clock.Now().UTC()
+		tag, err := tx.Exec(ctx, `UPDATE jobs SET locked_until = $4, heartbeat_at = $5 `+mine, c.fence(now.Add(r.cfg.Lease), now)...)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return errLeaseLost
+		}
+		if c.target == uuid.Nil {
+			return nil
+		}
+		tag, err = tx.Exec(ctx, `UPDATE target_locks SET heartbeat_at = $3, lease_until = $4 WHERE job_id = $1 AND locked_by = $2`,
+			c.id, c.token, now, now.Add(r.cfg.Lease))
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return errLeaseLost
+		}
+		return nil
+	})
+}
+
+// heartbeat extends the lease every Heartbeat until stop is called. When the job row or the
+// target lock is no longer this claim's (the reaper took it), it sets lost and cancels the
+// handler's context.
+func (r *Runner) heartbeat(c *claimed, cancel context.CancelFunc, lost *atomic.Bool) (stop func()) {
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -432,20 +491,14 @@ func (r *Runner) heartbeat(c *claimed, cancel context.CancelFunc) (stop func()) 
 				return
 			case <-t.C():
 				ctx, cancelBeat := context.WithTimeout(context.Background(), 5*time.Second)
-				now := r.cfg.Clock.Now().UTC()
-				tag, err := r.cfg.Pool.Exec(ctx, `UPDATE jobs SET locked_until = $3, heartbeat_at = $4 `+mine,
-					c.id, r.cfg.WorkerID, now.Add(r.cfg.Lease), now)
-				if err == nil && tag.RowsAffected() == 0 {
-					cancelBeat()
+				err := r.beat(ctx, c)
+				cancelBeat()
+				if errors.Is(err, errLeaseLost) {
 					r.cfg.Log.Warn("job lease lost; stopping the handler", "job_id", c.id.String(), "job_type", c.typ)
+					lost.Store(true)
 					cancel()
 					return
 				}
-				if err == nil {
-					_, err = r.cfg.Pool.Exec(ctx, `UPDATE target_locks SET heartbeat_at = $3, lease_until = $4 WHERE job_id = $1 AND locked_by = $2`,
-						c.id, r.cfg.WorkerID, now, now.Add(r.cfg.Lease))
-				}
-				cancelBeat()
 				if err != nil {
 					r.cfg.Log.Warn("job heartbeat failed", "job_id", c.id.String(), "error_type", fmt.Sprintf("%T", err))
 				}
@@ -468,14 +521,14 @@ func (r *Runner) execute(jobCtx context.Context, c *claimed) {
 	}
 	var payload map[string]string
 	if err := json.Unmarshal(c.payload, &payload); err != nil ||
-		!hmac.Equal(c.mac, r.cfg.Queue.mac(c.id, c.typ, c.target, canonicalPayload(payload), c.createdBy)) {
+		!hmac.Equal(c.mac, r.cfg.Queue.mac(c.id, c.typ, c.kind, c.target, canonicalPayload(payload), c.createdBy, c.role, c.maxAttempts)) {
 		r.cfg.Log.Error("job payload does not match its MAC; the job is not run", "job_id", c.id.String(), "job_type", c.typ)
 		r.terminate(ctx, c, "job.tampered", "job.tampered")
 		return
 	}
 	if err := r.cfg.Gate.Allow(t.Class); err != nil {
 		if !errors.Is(err, license.ErrLocked) {
-			r.terminate(ctx, c, "job.unknown_type", "job.dead")
+			r.terminate(ctx, c, "license.unclassified", "job.dead")
 			return
 		}
 		r.revert(ctx, c, t)
@@ -489,11 +542,16 @@ func (r *Runner) execute(jobCtx context.Context, c *claimed) {
 	j := Job{ID: c.id, Type: t, Kind: Kind(c.kind), TargetID: c.target, Payload: payload, Attempt: c.attempts,
 		MaxAttempts: c.maxAttempts, CreatedBy: c.createdBy, CreatedByRole: c.role}
 	hctx, cancel := context.WithCancel(jobCtx)
-	stop := r.heartbeat(c, cancel)
+	var lost atomic.Bool
+	stop := r.heartbeat(c, cancel, &lost)
 	steps := &stepLog{}
 	res, err := r.call(hctx, h, j, steps)
 	stop()
 	cancel()
+	if lost.Load() {
+		r.release(ctx, c) // writes nothing when the job row is no longer this claim's
+		return
+	}
 	r.finish(ctx, jobCtx, c, res, steps.list(), err)
 }
 
@@ -525,8 +583,8 @@ func (r *Runner) finish(ctx, jobCtx context.Context, c *claimed, res map[string]
 			err = Retry("internal.unexpected", nil, encErr)
 		} else {
 			r.settle(ctx, c, "", func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
-				return tx.Exec(ctx, `UPDATE jobs SET status = 'succeeded', result = $3::jsonb, last_error_code = '', finished_at = $4,
-    locked_by = NULL, locked_until = NULL `+mine, c.id, r.cfg.WorkerID, result, now)
+				return tx.Exec(ctx, `UPDATE jobs SET status = 'succeeded', result = $4::jsonb, last_error_code = '', finished_at = $5,
+    locked_by = NULL, locked_until = NULL `+mine, c.fence(result, now)...)
 			})
 			return
 		}
@@ -547,28 +605,35 @@ func (r *Runner) finish(ctx, jobCtx context.Context, c *claimed, res map[string]
 	case f.Class == Retryable && c.attempts < c.maxAttempts:
 		next := Backoff(c.attempts, r.cfg.Jitter())
 		r.settle(ctx, c, f.Reason, func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
-			return tx.Exec(ctx, `UPDATE jobs SET status = 'queued', run_at = $3, last_error_code = $4, result = $5::jsonb,
-    locked_by = NULL, locked_until = NULL `+mine, c.id, r.cfg.WorkerID, now.Add(next), f.Reason, result)
+			return tx.Exec(ctx, `UPDATE jobs SET status = 'queued', run_at = $4, last_error_code = $5, result = $6::jsonb,
+    locked_by = NULL, locked_until = NULL `+mine, c.fence(now.Add(next), f.Reason, result)...)
 		})
 	case f.Class == Retryable:
 		r.settle(ctx, c, f.Reason, func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
-			return tx.Exec(ctx, `UPDATE jobs SET status = 'dead', last_error_code = $3, result = $4::jsonb, finished_at = $5,
-    locked_by = NULL, locked_until = NULL `+mine, c.id, r.cfg.WorkerID, f.Reason, result, now)
+			return tx.Exec(ctx, `UPDATE jobs SET status = 'dead', last_error_code = $4, result = $5::jsonb, finished_at = $6,
+    locked_by = NULL, locked_until = NULL `+mine, c.fence(f.Reason, result, now)...)
 		}, r.jobEvent("job.dead", audit.Failure, c.id, map[string]string{"type": c.typ, "reason": f.Reason, "attempt": strconv.Itoa(c.attempts)}))
 	default:
 		r.settle(ctx, c, f.Reason, func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
-			return tx.Exec(ctx, `UPDATE jobs SET status = 'failed', last_error_code = $3, result = $4::jsonb, finished_at = $5,
-    locked_by = NULL, locked_until = NULL `+mine, c.id, r.cfg.WorkerID, f.Reason, result, now)
+			return tx.Exec(ctx, `UPDATE jobs SET status = 'failed', last_error_code = $4, result = $5::jsonb, finished_at = $6,
+    locked_by = NULL, locked_until = NULL `+mine, c.fence(f.Reason, result, now)...)
 		})
 	}
 }
 
-// release hands an unfinished job back to the queue (graceful shutdown). The attempt counts:
-// users see it like an expired lease.
+// release hands an unfinished run back (graceful shutdown, lost target lock). The attempt
+// counts, as with an expired lease: a job without attempts left is dead.
 func (r *Runner) release(ctx context.Context, c *claimed) {
+	if c.attempts >= c.maxAttempts {
+		r.settle(ctx, c, "job.lease_expired", func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
+			return tx.Exec(ctx, `UPDATE jobs SET status = 'dead', last_error_code = 'job.lease_expired', finished_at = $4,
+    locked_by = NULL, locked_until = NULL `+mine, c.fence(now)...)
+		}, r.jobEvent("job.dead", audit.Failure, c.id, map[string]string{"type": c.typ, "reason": "job.lease_expired", "attempt": strconv.Itoa(c.attempts)}))
+		return
+	}
 	r.settle(ctx, c, "job.lease_expired", func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
-		return tx.Exec(ctx, `UPDATE jobs SET status = 'queued', run_at = $3, last_error_code = 'job.lease_expired',
-    locked_by = NULL, locked_until = NULL `+mine, c.id, r.cfg.WorkerID, now)
+		return tx.Exec(ctx, `UPDATE jobs SET status = 'queued', run_at = $4, last_error_code = 'job.lease_expired',
+    locked_by = NULL, locked_until = NULL `+mine, c.fence(now)...)
 	})
 }
 
@@ -584,6 +649,67 @@ func (r *Runner) runOnce(claimCtx, jobCtx context.Context) (bool, error) {
 	return true, nil
 }
 
+// requeued is a job that the reaper or the shutdown took back from its worker.
+type requeued struct {
+	id       uuid.UUID
+	typ      string
+	attempts int
+	status   string
+}
+
+// takeBack re-queues (or, without attempts left, kills) the running jobs that the UPDATE in sql
+// selects, closes their attempts, releases their target locks and audits them last.
+// sql's parameters are $1 = now plus args; it must RETURN id, type, attempts, status.
+func (r *Runner) takeBack(ctx context.Context, tx pgx.Tx, now time.Time, sql string, args ...any) ([]requeued, error) {
+	rows, err := tx.Query(ctx, sql, append([]any{now}, args...)...)
+	if err != nil {
+		return nil, err
+	}
+	var all []requeued
+	for rows.Next() {
+		var x requeued
+		if err := rows.Scan(&x.id, &x.typ, &x.attempts, &x.status); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		all = append(all, x)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ids := make([]uuid.UUID, 0, len(all))
+	for _, x := range all {
+		ids = append(ids, x.id)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE job_attempts SET finished_at = $2, error_code = 'job.lease_expired'
+WHERE job_id = ANY($1::uuid[]) AND finished_at IS NULL`, ids, now); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM target_locks WHERE job_id = ANY($1::uuid[])`, ids); err != nil {
+		return nil, err
+	}
+	// The audit rows come last: the chain lock is held as briefly as possible.
+	for _, x := range all {
+		details := map[string]string{"type": x.typ, "attempt": strconv.Itoa(x.attempts), "reason": "job.lease_expired"}
+		action, result := "job.recovered", audit.Success
+		if x.status == string(StatusDead) {
+			action, result = "job.dead", audit.Failure
+		}
+		if _, err := r.cfg.Audit.Append(ctx, tx, r.jobEvent(action, result, x.id, details)); err != nil {
+			return nil, err
+		}
+	}
+	return all, nil
+}
+
+// takeBackSet is the SET list shared by Reap and releaseAll: re-queue, or dead without attempts left.
+const takeBackSet = `UPDATE jobs SET
+    status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'queued' END,
+    finished_at = CASE WHEN attempts >= max_attempts THEN $1::timestamptz ELSE NULL END,
+    locked_by = NULL, locked_until = NULL, run_at = $1, last_error_code = 'job.lease_expired'
+`
+
 // Reap re-queues jobs whose lease expired (their worker stopped: crash, kill, lost database
 // connection; spec §8.8). The attempt that was cut off counts; a job without attempts left is
 // dead. Expired target locks are released.
@@ -591,55 +717,15 @@ func (r *Runner) Reap(ctx context.Context) (int, error) {
 	n := 0
 	err := db.InTx(ctx, r.cfg.Pool, func(tx pgx.Tx) error {
 		now := r.cfg.Clock.Now().UTC()
-		rows, err := tx.Query(ctx, `UPDATE jobs SET
-    status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'queued' END,
-    finished_at = CASE WHEN attempts >= max_attempts THEN $1::timestamptz ELSE NULL END,
-    locked_by = NULL, locked_until = NULL, run_at = $1, last_error_code = 'job.lease_expired'
-WHERE status = 'running' AND locked_until < $1
-RETURNING id, type, attempts, status`, now)
-		if err != nil {
-			return fmt.Errorf("jobs: reap: %w", err)
-		}
-		type reaped struct {
-			id       uuid.UUID
-			typ      string
-			attempts int
-			status   string
-		}
-		var all []reaped
-		for rows.Next() {
-			var x reaped
-			if err := rows.Scan(&x.id, &x.typ, &x.attempts, &x.status); err != nil {
-				rows.Close()
-				return fmt.Errorf("jobs: reap: %w", err)
-			}
-			all = append(all, x)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("jobs: reap: %w", err)
-		}
-		ids := make([]string, 0, len(all))
-		for _, x := range all {
-			ids = append(ids, x.id.String())
-		}
-		if _, err := tx.Exec(ctx, `UPDATE job_attempts SET finished_at = $2, error_code = 'job.lease_expired'
-WHERE job_id::text = ANY($1::text[]) AND finished_at IS NULL`, ids, now); err != nil {
-			return fmt.Errorf("jobs: reap: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM target_locks WHERE lease_until < $1 OR job_id::text = ANY($2::text[])`, now, ids); err != nil {
+		// Locks first (no audit row yet): expired target locks whose job no longer runs.
+		if _, err := tx.Exec(ctx, `DELETE FROM target_locks l WHERE lease_until < $1
+  AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.id = l.job_id AND o.status = 'running' AND o.locked_until >= $1)`, now); err != nil {
 			return fmt.Errorf("jobs: release expired target locks: %w", err)
 		}
-		// The audit rows come last: the chain lock is held as briefly as possible.
-		for _, x := range all {
-			details := map[string]string{"type": x.typ, "attempt": strconv.Itoa(x.attempts), "reason": "job.lease_expired"}
-			action, result := "job.recovered", audit.Success
-			if x.status == string(StatusDead) {
-				action, result = "job.dead", audit.Failure
-			}
-			if _, err := r.cfg.Audit.Append(ctx, tx, r.jobEvent(action, result, x.id, details)); err != nil {
-				return err
-			}
+		all, err := r.takeBack(ctx, tx, now, takeBackSet+`WHERE status = 'running' AND locked_until < $1
+RETURNING id, type, attempts, status`)
+		if err != nil {
+			return fmt.Errorf("jobs: reap: %w", err)
 		}
 		n = len(all)
 		return nil
@@ -658,9 +744,10 @@ func (r *Runner) Recover(ctx context.Context) (int, error) {
 	return n, err
 }
 
-// Run runs Workers workers and the reaper until ctx ends. Then it stops claiming, waits up to
-// ShutdownGrace for running jobs, cancels them, waits up to ShutdownGrace again and finally
-// releases the leases of jobs that still have not returned, so they resume after a restart.
+// Run runs Workers workers and the reaper until ctx ends. Then it stops claiming and gives
+// running jobs ShutdownGrace in total: the first half to finish on their own; then they are
+// cancelled and get the second half to return. Jobs that still have not returned are handed
+// back (re-queued, or dead without attempts left), so they resume after a restart.
 func (r *Runner) Run(ctx context.Context) {
 	jobsCtx, cancelJobs := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelJobs()
@@ -703,48 +790,28 @@ func (r *Runner) Run(ctx context.Context) {
 		workers.Wait()
 		close(done)
 	}()
+	deadline := r.cfg.Clock.After(r.cfg.ShutdownGrace)
 	select {
 	case <-done:
-	case <-r.cfg.Clock.After(r.cfg.ShutdownGrace):
+	case <-r.cfg.Clock.After(r.cfg.ShutdownGrace / 2):
 		r.stopping.Store(true)
 		cancelJobs()
 		select {
 		case <-done:
-		case <-r.cfg.Clock.After(r.cfg.ShutdownGrace):
+		case <-deadline:
 		}
 	}
 	<-reaperDone
 	r.releaseAll(context.WithoutCancel(ctx))
 }
 
-// releaseAll hands every job this worker still holds back to the queue.
+// releaseAll hands every job a claim of this worker still holds back to the queue (or kills it
+// when it has no attempts left).
 func (r *Runner) releaseAll(ctx context.Context) {
 	err := db.InTx(ctx, r.cfg.Pool, func(tx pgx.Tx) error {
 		now := r.cfg.Clock.Now().UTC()
-		rows, err := tx.Query(ctx, `UPDATE jobs SET status = 'queued', run_at = $2, last_error_code = 'job.lease_expired',
-    locked_by = NULL, locked_until = NULL
-WHERE locked_by = $1 AND status = 'running' RETURNING id`, r.cfg.WorkerID, now)
-		if err != nil {
-			return err
-		}
-		ids := []string{}
-		for rows.Next() {
-			var id uuid.UUID
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return err
-			}
-			ids = append(ids, id.String())
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE job_attempts SET finished_at = $2, error_code = 'job.lease_expired'
-WHERE job_id::text = ANY($1::text[]) AND finished_at IS NULL`, ids, now); err != nil {
-			return err
-		}
-		_, err = tx.Exec(ctx, `DELETE FROM target_locks WHERE locked_by = $1`, r.cfg.WorkerID)
+		_, err := r.takeBack(ctx, tx, now, takeBackSet+`WHERE status = 'running' AND left(locked_by, length($2) + 1) = $2 || '/'
+RETURNING id, type, attempts, status`, r.cfg.WorkerID)
 		return err
 	})
 	if err != nil {

@@ -25,17 +25,24 @@ func TestPayloadMACCoversEveryField(t *testing.T) {
 	key := bytes.Repeat([]byte{3}, 32)
 	id, target, by := uuid.New(), uuid.New(), uuid.New()
 	payload := canonicalPayload(map[string]string{"location_id": "a"})
-	base := payloadMAC(key, id, "sshkey.remove", target, payload, by)
+	mac := func(key []byte, id uuid.UUID, typ, kind string, target uuid.UUID, payload []byte, by uuid.UUID, role string, maxAttempts int) []byte {
+		return payloadMAC(key, id, typ, kind, target, payload, by, role, maxAttempts)
+	}
+	base := mac(key, id, "sshkey.remove", "user", target, payload, by, "operator", 3)
 	require.Len(t, base, 32)
-	assert.Equal(t, base, payloadMAC(key, id, "sshkey.remove", target, payload, by), "deterministic")
+	assert.Equal(t, base, mac(key, id, "sshkey.remove", "user", target, payload, by, "operator", 3), "deterministic")
 	for name, other := range map[string][]byte{
-		"key":        payloadMAC(bytes.Repeat([]byte{4}, 32), id, "sshkey.remove", target, payload, by),
-		"id":         payloadMAC(key, uuid.New(), "sshkey.remove", target, payload, by),
-		"type":       payloadMAC(key, id, "target.discover", target, payload, by),
-		"target":     payloadMAC(key, id, "sshkey.remove", uuid.New(), payload, by),
-		"no target":  payloadMAC(key, id, "sshkey.remove", uuid.Nil, payload, by),
-		"payload":    payloadMAC(key, id, "sshkey.remove", target, canonicalPayload(map[string]string{"location_id": "b"}), by),
-		"created by": payloadMAC(key, id, "sshkey.remove", target, payload, uuid.Nil),
+		"key":          mac(bytes.Repeat([]byte{4}, 32), id, "sshkey.remove", "user", target, payload, by, "operator", 3),
+		"id":           mac(key, uuid.New(), "sshkey.remove", "user", target, payload, by, "operator", 3),
+		"type":         mac(key, id, "target.discover", "user", target, payload, by, "operator", 3),
+		"kind":         mac(key, id, "sshkey.remove", "system", target, payload, by, "operator", 3),
+		"target":       mac(key, id, "sshkey.remove", "user", uuid.New(), payload, by, "operator", 3),
+		"no target":    mac(key, id, "sshkey.remove", "user", uuid.Nil, payload, by, "operator", 3),
+		"payload":      mac(key, id, "sshkey.remove", "user", target, canonicalPayload(map[string]string{"location_id": "b"}), by, "operator", 3),
+		"created by":   mac(key, id, "sshkey.remove", "user", target, payload, uuid.Nil, "operator", 3),
+		"role":         mac(key, id, "sshkey.remove", "user", target, payload, by, "admin", 3),
+		"max attempts": mac(key, id, "sshkey.remove", "user", target, payload, by, "operator", 30),
+		"field shift":  mac(key, id, "sshkey.remove", "useroperator", target, payload, by, "", 3),
 	} {
 		assert.NotEqual(t, base, other, name)
 	}
