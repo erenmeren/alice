@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -113,9 +115,14 @@ func TestIssuedLicenseVerifiesWithItsKeyOnly(t *testing.T) {
 	_, err = license.Check(raw, keysetOf(t, otherDir))
 	assert.ErrorIs(t, err, license.ErrInvalid, "same key ID, different key")
 
+	head, err := issuer.VerifyLedgerHead(filepath.Join(dir, issuer.LedgerFile), keysetOf(t, dir).Keys()[0].Key)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "Ledger rows: 1\nChain head:  "+head.Chain+"\n", "the vendor writes the head down")
+
 	code, stdout, _ = ctl(t, "", nil, "ledger-verify", "--pub", filepath.Join(dir, issuer.PublicKeyFile))
 	require.Equal(t, 0, code)
 	assert.Contains(t, stdout, "Ledger OK: 1 license")
+	assert.Contains(t, stdout, "Chain head:  "+head.Chain)
 }
 
 // Review Focus 4: a mistyped installation ID is refused before the key is even opened.
@@ -277,6 +284,161 @@ func TestIssueWritesNothingWithoutALedgerRow(t *testing.T) {
 	code, _, errOut := ctl(t, "yes\n", answers(t, testWords),
 		issueArgs(dir, license.NewInstallationID(), out, "--ledger", filepath.Join(ledgerDir, issuer.LedgerFile))...)
 	assert.Equal(t, 1, code)
-	assert.Contains(t, errOut, "ledger could not be updated")
+	assert.Contains(t, errOut, "lock the ledger")
 	assert.NoFileExists(t, out)
+}
+
+// Fix round 1: two licensectl runs issuing at the same time both end up in a valid ledger, and
+// the same license ID issued twice at the same time is recorded once; the other run fails cleanly.
+func TestConcurrentIssuing(t *testing.T) {
+	dir := t.TempDir()
+	makeKey(t, dir)
+	id := license.NewInstallationID()
+	files := t.TempDir()
+	issueBoth := func(ids ...string) []int {
+		codes := make([]int, len(ids))
+		var wg sync.WaitGroup
+		for i, licID := range ids {
+			wg.Go(func() {
+				var out, errOut bytes.Buffer
+				codes[i] = run(issueArgs(dir, id, filepath.Join(files, licID+".alicelic"), "--license-id", licID),
+					strings.NewReader("yes\n"), &out, &errOut, func(string) ([]byte, error) { return []byte(testWords), nil }, testClock)
+				if codes[i] != 0 {
+					assert.Contains(t, errOut.String(), "already issued", "the only acceptable failure")
+				}
+			})
+		}
+		wg.Wait()
+		return codes
+	}
+	assert.Equal(t, []int{0, 0}, issueBoth("LIC-2026-000001", "LIC-2026-000002"))
+	n, err := issuer.VerifyLedger(filepath.Join(dir, issuer.LedgerFile), keysetOf(t, dir).Keys()[0].Key)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+
+	codes := issueBoth("LIC-2026-000003", "LIC-2026-000003")
+	assert.ElementsMatch(t, []int{0, 1}, codes, "one run wins, the other is refused")
+	n, err = issuer.VerifyLedger(filepath.Join(dir, issuer.LedgerFile), keysetOf(t, dir).Keys()[0].Key)
+	require.NoError(t, err)
+	assert.Equal(t, 3, n)
+}
+
+// hookReader runs hook once, on the first read (while licensectl waits for "yes").
+type hookReader struct {
+	hook func()
+	r    io.Reader
+}
+
+func (h *hookReader) Read(p []byte) (int, error) {
+	if h.hook != nil {
+		h.hook()
+		h.hook = nil
+	}
+	return h.r.Read(p)
+}
+
+// The check against the ledger is repeated under the lock after "yes": a row another run added
+// while this one waited for confirmation (the same license ID) makes it refuse to record.
+func TestIssueRechecksTheLedgerAfterConfirmation(t *testing.T) {
+	dir := t.TempDir()
+	makeKey(t, dir)
+	keyPEM, err := os.ReadFile(filepath.Join(dir, issuer.PrivateKeyFile))
+	require.NoError(t, err)
+	k, err := issuer.OpenKey(keyPEM, []byte(testWords))
+	require.NoError(t, err)
+	id := license.NewInstallationID()
+	ledger := filepath.Join(dir, issuer.LedgerFile)
+	stdin := &hookReader{r: strings.NewReader("yes\n"), hook: func() {
+		require.NoError(t, issuer.AppendLedger(ledger, k, issuer.LedgerEntry{LicenseID: "LIC-2026-000777", Customer: "Other",
+			InstallationID: id, IssuedAt: testClock.Now(), ValidFrom: testClock.Now(), ValidUntil: testClock.Now(), MaxTargets: 1}))
+	}}
+	out := filepath.Join(t.TempDir(), "x.alicelic")
+	var stdout, stderr bytes.Buffer
+	code := run(issueArgs(dir, id, out, "--license-id", "LIC-2026-000777"), stdin, &stdout, &stderr, answers(t, testWords), testClock)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr.String(), "already issued")
+	assert.NoFileExists(t, out)
+	n, err := issuer.VerifyLedger(ledger, k.Public())
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "only the other run's row")
+}
+
+// inspect reads an unsigned file: control characters in it never reach the terminal raw, and
+// the payload rules are reported.
+func TestInspectEscapesControlCharacters(t *testing.T) {
+	dir := t.TempDir()
+	makeKey(t, dir)
+	out := filepath.Join(t.TempDir(), "x.alicelic")
+	code, _, errOut := ctl(t, "yes\n", answers(t, testWords), issueArgs(dir, license.NewInstallationID(), out)...)
+	require.Equal(t, 0, code, errOut)
+	code, stdout, _ := ctl(t, "", nil, "inspect", out)
+	require.Equal(t, 0, code)
+	assert.Contains(t, stdout, "payload rules:   OK")
+
+	raw, err := os.ReadFile(out)
+	require.NoError(t, err)
+	evil := bytes.Replace(raw, []byte(`"customer": "Test Company"`), []byte(`"customer": "\u001b]0;owned\u0007\u001b[2JTest\u202e"`), 1)
+	require.NotEqual(t, raw, evil)
+	path := filepath.Join(t.TempDir(), "evil.alicelic")
+	require.NoError(t, os.WriteFile(path, evil, 0o600))
+	code, stdout, _ = ctl(t, "", nil, "inspect", path)
+	require.Equal(t, 0, code)
+	assert.NotContains(t, stdout, "\x1b")
+	assert.NotContains(t, stdout, "\a")
+	assert.NotContains(t, stdout, "\u202e")
+	assert.Contains(t, stdout, `customer:        "\x1b]0;owned\a\x1b[2JTest\u202e"`)
+	assert.Contains(t, stdout, "payload rules:   NOT VALID")
+
+	big := filepath.Join(t.TempDir(), "big.alicelic")
+	require.NoError(t, os.WriteFile(big, bytes.Repeat([]byte(" "), license.MaxFileSize+10), 0o600))
+	code, _, errOut = ctl(t, "", nil, "inspect", big)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, errOut, "too_large")
+	code, stdout, _ = ctl(t, "", nil, "verify", "--pub", filepath.Join(dir, issuer.PublicKeyFile), big)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stdout, "SIGNATURE INVALID")
+}
+
+func TestLedgerVerifyNeedsALedger(t *testing.T) {
+	dir := t.TempDir()
+	makeKey(t, dir)
+	pub := filepath.Join(dir, issuer.PublicKeyFile)
+	code, stdout, errOut := ctl(t, "", nil, "ledger-verify", "--pub", pub)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, errOut+stdout, "no ledger")
+	assert.NotContains(t, stdout, "Ledger OK")
+	code, _, _ = ctl(t, "", nil, "ledger-verify", "--pub", pub, "--ledger", filepath.Join(dir, "other.csv"))
+	assert.Equal(t, 1, code)
+}
+
+func TestIssueRefusesAnOpenKeyFileAndZeroMonths(t *testing.T) {
+	dir := t.TempDir()
+	makeKey(t, dir)
+	id := license.NewInstallationID()
+	out := filepath.Join(t.TempDir(), "x.alicelic")
+	keyPath := filepath.Join(dir, issuer.PrivateKeyFile)
+	require.NoError(t, os.Chmod(keyPath, 0o644))
+	code, _, errOut := ctl(t, "yes\n", answers(t), issueArgs(dir, id, out)...)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, errOut, "chmod 600")
+	assert.NoFileExists(t, out)
+	require.NoError(t, os.Chmod(keyPath, 0o600))
+
+	code, _, errOut = ctl(t, "yes\n", answers(t), issueArgs(dir, id, out, "--months", "0")...)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, errOut, "--months")
+	assert.NoFileExists(t, out)
+}
+
+func TestCorrectionForAnotherInstallationIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	makeKey(t, dir)
+	files := t.TempDir()
+	code, _, errOut := ctl(t, "yes\n", answers(t, testWords),
+		issueArgs(dir, license.NewInstallationID(), filepath.Join(files, "a.alicelic"), "--license-id", "LIC-2026-000001")...)
+	require.Equal(t, 0, code, errOut)
+	code, _, errOut = ctl(t, "yes\n", answers(t, testWords),
+		issueArgs(dir, license.NewInstallationID(), filepath.Join(files, "b.alicelic"), "--replaces", "LIC-2026-000001")...)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, errOut, "another installation")
 }

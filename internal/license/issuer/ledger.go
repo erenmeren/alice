@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"syscall"
 	"time"
 
 	"alice/internal/license"
@@ -27,6 +28,7 @@ var (
 	ErrShortensTerm       = errors.New("issuer: the correction ends earlier than the license it replaces; use --shorten if that is intended")
 	ErrReplaceCycle       = errors.New("issuer: the replaced licenses would form a cycle")
 	ErrDuplicateLicenseID = errors.New("issuer: a license with this ID was already issued")
+	ErrOtherInstallation  = errors.New("issuer: the replaced license is for another installation")
 )
 
 var ledgerHeader = []string{"license_id", "customer", "installation_id", "issued_at", "valid_from", "valid_until",
@@ -151,32 +153,124 @@ func readChain(path string, pub ed25519.PublicKey) ([]LedgerEntry, []byte, error
 	return entries, prev, nil
 }
 
-// VerifyLedger checks every row's chain and signature and returns the number of licenses.
-func VerifyLedger(path string, pub ed25519.PublicKey) (int, error) {
-	entries, err := ReadLedger(path, pub)
-	return len(entries), err
+// LedgerHead identifies a ledger's state: its row count and last chain value. The chain
+// detects edited, removed or reordered rows, but not rows cut from the end or an older backup
+// put back; the vendor writes the head down after each issue and compares it later.
+type LedgerHead struct {
+	Rows  int
+	Chain string // hex; "" for an empty ledger
 }
 
-// AppendLedger appends e after verifying the whole ledger with k's public key, so a changed
-// ledger is never extended. Every row carries the chain value and an Ed25519 signature of
-// "ALICE-LEDGER-v1\n" || chain, so an edited, removed or reordered row is detected (§16.7).
+// VerifyLedger checks every row's chain and signature and returns the number of licenses.
+func VerifyLedger(path string, pub ed25519.PublicKey) (int, error) {
+	head, err := VerifyLedgerHead(path, pub)
+	return head.Rows, err
+}
+
+// VerifyLedgerHead checks the ledger like VerifyLedger and returns its head.
+func VerifyLedgerHead(path string, pub ed25519.PublicKey) (LedgerHead, error) {
+	if len(pub) != ed25519.PublicKeySize {
+		return LedgerHead{}, fmt.Errorf("%w: no valid public key", ErrLedgerBroken)
+	}
+	entries, chain, err := readChain(path, pub)
+	if err != nil {
+		return LedgerHead{}, err
+	}
+	return headOf(entries, chain), nil
+}
+
+func headOf(entries []LedgerEntry, chain []byte) LedgerHead {
+	if len(entries) == 0 {
+		return LedgerHead{}
+	}
+	return LedgerHead{Rows: len(entries), Chain: hex.EncodeToString(chain)}
+}
+
+// Ledger is a ledger held under an exclusive advisory lock (flock on "<ledger>.lock"), so two
+// licensectl runs on the same machine cannot interleave their rows or both pass a check
+// against the same old state.
+type Ledger struct {
+	path string
+	lock *os.File
+}
+
+// LockLedger waits for and takes the exclusive lock of the ledger at path. The ledger itself
+// need not exist yet; its directory must.
+func LockLedger(path string) (*Ledger, error) {
+	f, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // G304: vendor CLI path from its own flags
+	if err != nil {
+		return nil, fmt.Errorf("lock the ledger: %w", err)
+	}
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX) //nolint:gosec // G115: a file descriptor always fits in int
+		if !errors.Is(err, syscall.EINTR) {
+			break
+		}
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("lock the ledger: %w", err)
+	}
+	return &Ledger{path: path, lock: f}, nil
+}
+
+// Unlock releases the lock (closing the file releases the flock).
+func (l *Ledger) Unlock() error { return l.lock.Close() }
+
+// Read verifies the ledger with pub and returns its entries.
+func (l *Ledger) Read(pub ed25519.PublicKey) ([]LedgerEntry, error) { return ReadLedger(l.path, pub) }
+
+// Record re-checks p against the ledger (CheckAgainstLedger, under the lock) and appends the
+// row of the signed license file raw. It returns the new head.
+func (l *Ledger) Record(k *SigningKey, p license.Payload, raw []byte, allowShorten bool) (LedgerHead, error) {
+	entries, err := l.Read(k.Public())
+	if err != nil {
+		return LedgerHead{}, err
+	}
+	if err := CheckAgainstLedger(entries, p, allowShorten); err != nil {
+		return LedgerHead{}, err
+	}
+	sum := sha256.Sum256(raw)
+	return l.Append(k, LedgerEntry{
+		LicenseID: p.LicenseID, Customer: p.Customer, InstallationID: p.InstallationID, IssuedAt: p.IssuedAt,
+		ValidFrom: p.ValidFrom, ValidUntil: p.ValidUntil, MaxTargets: p.MaxTargets, Replaces: p.Replaces,
+		FileSHA256: hex.EncodeToString(sum[:]),
+	})
+}
+
+// AppendLedger takes the ledger lock and appends e (see Ledger.Append).
 func AppendLedger(path string, k *SigningKey, e LedgerEntry) error {
-	entries, prev, err := readChain(path, k.Public())
+	l, err := LockLedger(path)
 	if err != nil {
 		return err
+	}
+	_, err = l.Append(k, e)
+	if uerr := l.Unlock(); err == nil {
+		err = uerr
+	}
+	return err
+}
+
+// Append appends e after verifying the whole ledger with k's public key, so a changed
+// ledger is never extended. Every row carries the chain value and an Ed25519 signature of
+// "ALICE-LEDGER-v1\n" || chain, so an edited, removed or reordered row is detected (§16.7).
+func (l *Ledger) Append(k *SigningKey, e LedgerEntry) (LedgerHead, error) {
+	entries, prev, err := readChain(l.path, k.Public())
+	if err != nil {
+		return LedgerHead{}, err
 	}
 	fields := e.fields()
 	chain := ledgerChain(prev, fields)
 	sig := ed25519.Sign(k.priv, append([]byte(ledgerPrefix), chain...))
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600) //nolint:gosec // G304: vendor CLI path from its own flags
+	f, err := os.OpenFile(l.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600) //nolint:gosec // G304: vendor CLI path from its own flags
 	if err != nil {
-		return err
+		return LedgerHead{}, err
 	}
 	w := csv.NewWriter(f)
 	if entries == nil {
 		if err := truncateEmpty(f); err != nil {
 			_ = f.Close()
-			return err
+			return LedgerHead{}, err
 		}
 		_ = w.Write(ledgerHeader)
 	}
@@ -184,13 +278,16 @@ func AppendLedger(path string, k *SigningKey, e LedgerEntry) error {
 	w.Flush()
 	if err := w.Error(); err != nil {
 		_ = f.Close()
-		return err
+		return LedgerHead{}, err
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		return err
+		return LedgerHead{}, err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return LedgerHead{}, err
+	}
+	return LedgerHead{Rows: len(entries) + 1, Chain: hex.EncodeToString(chain)}, nil
 }
 
 // truncateEmpty makes sure a ledger without a header has no content (an empty file or one
@@ -207,7 +304,8 @@ func truncateEmpty(f *os.File) error {
 }
 
 // CheckAgainstLedger refuses a license that conflicts with the ledger (R7 corrections): its
-// license ID must be new; a correction must name a license in the ledger, may not end earlier
+// license ID must be new; a correction must name a license in the ledger for the same
+// installation, may not end earlier
 // than that license unless allowShorten, and may not close a cycle of replaced licenses (in
 // the server every license of a cycle is superseded, leaving none in force).
 func CheckAgainstLedger(entries []LedgerEntry, p license.Payload, allowShorten bool) error {
@@ -224,6 +322,9 @@ func CheckAgainstLedger(entries []LedgerEntry, p license.Payload, allowShorten b
 	replaced, ok := byID[p.Replaces]
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrUnknownReplaced, p.Replaces)
+	}
+	if replaced.InstallationID != p.InstallationID {
+		return fmt.Errorf("%w: %s is for %s", ErrOtherInstallation, replaced.LicenseID, replaced.InstallationID)
 	}
 	seen := map[string]bool{}
 	for id := p.Replaces; id != "" && !seen[id]; id = byID[id].Replaces {

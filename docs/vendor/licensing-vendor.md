@@ -65,16 +65,23 @@ bin/licensectl verify --pub ~/alice-vendor/alice-license-public.pem alice-licens
 - A mistyped Installation ID is refused (it ends with a check character) before the key is opened.
 - `issue` asks for the passphrase, shows a summary and signs only after you type `yes`.
 - Customer names are normalized to Unicode NFC before signing.
+- `issue` refuses a private key file that others can read or write (run `chmod 600` on it).
 - Every license is appended to the ledger `issued.csv` next to the key. Each row is chained to the
   previous one and signed with the license key, so an edited, removed or reordered row is detected.
-  `issue` refuses to sign while the ledger does not verify; check it any time with
-  `licensectl ledger-verify --pub ~/alice-vendor/alice-license-public.pem`. Back the ledger up with
-  the key.
+  `issue` refuses to sign while the ledger does not verify. Two `licensectl issue` runs on the same
+  machine take turns (a lock file `issued.csv.lock` sits next to the ledger), and the checks are
+  repeated just before the row is written.
+- **The chain alone does not detect rows cut from the end of the ledger, or an older backup of the
+  ledger put back**: both still verify. After every issue, `licensectl` prints the ledger row count
+  and the chain head. Write both down (paper log kept with the key) and compare them with the output
+  of `licensectl ledger-verify --pub ~/alice-vendor/alice-license-public.pem` before the next issue.
+  A missing ledger file is reported as an error, not as an empty ledger. Back the ledger up with the
+  key.
 
 ### Correction licenses (R7)
 
 Use `--replaces <license_id>` (and `--from` for an earlier start, for example after a customer clock
-jump). The replaced license must be in the ledger. A correction that ends **earlier** than the license
+jump). The replaced license must be in the ledger and belong to the same installation. A correction that ends **earlier** than the license
 it replaces is refused unless you add `--shorten`; replacing licenses in a cycle is always refused,
 and a license ID is never issued twice.
 

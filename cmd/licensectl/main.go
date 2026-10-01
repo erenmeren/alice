@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -156,6 +157,10 @@ func issue(args []string, stdin io.Reader, stdout, stderr io.Writer, ask prompte
 		_, _ = fmt.Fprint(stderr, usage)
 		return 2
 	}
+	if *months == 0 {
+		_, _ = fmt.Fprintln(stderr, "--months must be between 1 and 60")
+		return 1
+	}
 	p, err := issuer.BuildPayload(issuer.Request{
 		Installation: *installation, Customer: *customer, Targets: *targets, From: *from, Months: *months,
 		Features: strings.Split(*features, ","), Replaces: *replaces, LicenseID: *licenseID,
@@ -168,9 +173,9 @@ func issue(args []string, stdin io.Reader, stdout, stderr io.Writer, ask prompte
 		_, _ = fmt.Fprintln(stderr, *out, "already exists; choose another --out file.")
 		return 1
 	}
-	keyPEM, err := os.ReadFile(*keyPath) //nolint:gosec // G304: vendor CLI path from its own flags
+	keyPEM, err := readKeyFile(*keyPath)
 	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "cannot read the key file:", err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
 	pass, err := ask("Key passphrase: ")
@@ -190,12 +195,7 @@ func issue(args []string, stdin io.Reader, stdout, stderr io.Writer, ask prompte
 	if ledgerPath == "" {
 		ledgerPath = filepath.Join(filepath.Dir(*keyPath), issuer.LedgerFile)
 	}
-	entries, err := issuer.ReadLedger(ledgerPath, k.Public())
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "Nothing was signed:", err)
-		return 1
-	}
-	if err := issuer.CheckAgainstLedger(entries, p, *shorten); err != nil {
+	if err := precheck(ledgerPath, k, p, *shorten); err != nil {
 		_, _ = fmt.Fprintln(stderr, "Nothing was signed:", err)
 		return 1
 	}
@@ -215,13 +215,16 @@ func issue(args []string, stdin io.Reader, stdout, stderr io.Writer, ask prompte
 		_, _ = fmt.Fprintln(stderr, "signing failed:", err)
 		return 1
 	}
-	// The ledger row comes first: no signed license leaves licensectl without being recorded.
-	sum := sha256.Sum256(raw)
-	err = issuer.AppendLedger(ledgerPath, k, issuer.LedgerEntry{
-		LicenseID: p.LicenseID, Customer: p.Customer, InstallationID: p.InstallationID, IssuedAt: p.IssuedAt,
-		ValidFrom: p.ValidFrom, ValidUntil: p.ValidUntil, MaxTargets: p.MaxTargets, Replaces: p.Replaces,
-		FileSHA256: hex.EncodeToString(sum[:]),
-	})
+	// Under the ledger lock: re-check against the ledger as it is now (another licensectl may
+	// have issued while this one waited for "yes"), record the row, then write the file, so no
+	// signed license leaves licensectl without being recorded.
+	l, err := issuer.LockLedger(ledgerPath)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "Nothing was written:", err)
+		return 1
+	}
+	defer func() { _ = l.Unlock() }()
+	head, err := l.Record(k, p, raw, *shorten)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "Nothing was written: the ledger could not be updated:", err)
 		return 1
@@ -231,8 +234,63 @@ func issue(args []string, stdin io.Reader, stdout, stderr io.Writer, ask prompte
 		_, _ = fmt.Fprintln(stderr, "Issue again with a new license ID.")
 		return 1
 	}
-	_, _ = fmt.Fprintf(stdout, "\nWritten: %s\nSHA-256: %s\nLedger:  %s\n", *out, hex.EncodeToString(sum[:]), ledgerPath)
+	sum := sha256.Sum256(raw)
+	_, _ = fmt.Fprintf(stdout, "\nWritten: %s\nSHA-256: %s\nLedger:  %s\nLedger rows: %d\nChain head:  %s\n", *out,
+		hex.EncodeToString(sum[:]), ledgerPath, head.Rows, head.Chain)
+	_, _ = fmt.Fprintln(stdout, "Write the ledger rows and chain head down: they show later whether rows were cut off or an old copy restored.")
 	return 0
+}
+
+// readKeyFile reads the private key file and refuses one that others can read or write.
+func readKeyFile(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the key file: %w", err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return nil, fmt.Errorf("the key file %s has mode %04o; others must not have access: run chmod 600 %s", path, perm, path)
+	}
+	keyPEM, err := os.ReadFile(path) //nolint:gosec // G304: vendor CLI path from its own flags
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the key file: %w", err)
+	}
+	return keyPEM, nil
+}
+
+// precheck verifies the ledger and checks p against it before the vendor is asked to sign.
+// Issue repeats the check under the lock before recording.
+func precheck(ledgerPath string, k *issuer.SigningKey, p license.Payload, shorten bool) error {
+	l, err := issuer.LockLedger(ledgerPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = l.Unlock() }()
+	entries, err := l.Read(k.Public())
+	if err != nil {
+		return err
+	}
+	return issuer.CheckAgainstLedger(entries, p, shorten)
+}
+
+// readLicenseFile reads at most one byte more than a license may have; ParseFile refuses it.
+func readLicenseFile(path string) ([]byte, error) {
+	f, err := os.Open(path) //nolint:gosec // G304: operator-supplied path on the vendor's offline machine
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(io.LimitReader(f, license.MaxFileSize+1))
+}
+
+// safe returns s for printing to a terminal: unchanged when every character is printable,
+// otherwise Go-quoted, so escape sequences in an unsigned file are shown, not executed.
+func safe(s string) string {
+	for _, r := range s {
+		if !strconv.IsPrint(r) {
+			return strconv.Quote(s)
+		}
+	}
+	return s
 }
 
 func inspect(args []string, stdout, stderr io.Writer) int {
@@ -240,7 +298,7 @@ func inspect(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprint(stderr, usage)
 		return 2
 	}
-	raw, err := os.ReadFile(args[0]) //nolint:gosec // G703: operator-supplied path on the vendor's offline machine
+	raw, err := readLicenseFile(args[0])
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
@@ -251,11 +309,19 @@ func inspect(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	p := f.Payload
+	features := make([]string, 0, len(p.Features))
+	for _, feat := range p.Features {
+		features = append(features, safe(feat))
+	}
+	rules := "OK"
+	if err := p.Validate(); err != nil {
+		rules = "NOT VALID (" + err.Error() + ")"
+	}
 	_, _ = fmt.Fprintf(stdout, "license_id:      %s\ncustomer:        %s\ninstallation_id: %s\nissued_at:       %s\n"+
 		"valid_from:      %s\nvalid_until:     %s\nmax_targets:     %d\nfeatures:        %s\nreplaces:        %s\n"+
-		"format:          %d\nkey_id:          %s\nsignature:       not checked (use licensectl verify)\n",
-		p.LicenseID, p.Customer, p.InstallationID, p.IssuedAt.Format(time.RFC3339), p.ValidFrom.Format(time.RFC3339),
-		p.ValidUntil.Format(time.RFC3339), p.MaxTargets, strings.Join(p.Features, ","), p.Replaces, p.Format, f.KeyID)
+		"format:          %d\nkey_id:          %s\npayload rules:   %s\nsignature:       not checked (use licensectl verify)\n",
+		safe(p.LicenseID), safe(p.Customer), safe(p.InstallationID), p.IssuedAt.Format(time.RFC3339), p.ValidFrom.Format(time.RFC3339),
+		p.ValidUntil.Format(time.RFC3339), p.MaxTargets, strings.Join(features, ","), safe(p.Replaces), p.Format, safe(f.KeyID), rules)
 	return 0
 }
 
@@ -284,7 +350,7 @@ func verify(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 1
 	}
-	raw, err := os.ReadFile(fs.Arg(0))
+	raw, err := readLicenseFile(fs.Arg(0))
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
@@ -333,15 +399,21 @@ func ledgerVerify(args []string, stdout, stderr io.Writer) int {
 	if path == "" {
 		path = filepath.Join(filepath.Dir(*pubPath), issuer.LedgerFile)
 	}
-	n, err := issuer.VerifyLedger(path, pub.Key)
+	// A missing ledger is not an empty one: deleting the file must not pass the check.
+	if _, err := os.Stat(path); err != nil {
+		_, _ = fmt.Fprintf(stderr, "There is no ledger at %s (%v); name it with --ledger.\n", path, err)
+		return 1
+	}
+	head, err := issuer.VerifyLedgerHead(path, pub.Key)
 	if err != nil {
 		_, _ = fmt.Fprintln(stdout, "LEDGER BROKEN:", err)
 		return 1
 	}
 	noun := "licenses"
-	if n == 1 {
+	if head.Rows == 1 {
 		noun = "license"
 	}
-	_, _ = fmt.Fprintf(stdout, "Ledger OK: %d %s\n", n, noun)
+	_, _ = fmt.Fprintf(stdout, "Ledger OK: %d %s\nChain head:  %s\n", head.Rows, noun, head.Chain)
+	_, _ = fmt.Fprintln(stdout, "Compare the rows and chain head with the ones written down after the last issue.")
 	return 0
 }

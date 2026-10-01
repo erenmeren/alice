@@ -54,7 +54,7 @@ const (
 	privatePEMType = "ALICE LICENSE SIGNING KEY"
 	publicPEMType  = "PUBLIC KEY"
 	keyAAD         = "alice/license-signing-key/v1"
-	maxKDFMemory   = 4 * 1024 * 1024 // KiB: a hostile key file cannot exhaust memory
+	maxKDFMemory   = 1024 * 1024 // KiB (1 GiB): a hostile key file cannot exhaust memory
 	maxKDFTime     = 64
 	saltSize       = 16
 )

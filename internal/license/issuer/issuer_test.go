@@ -1,12 +1,15 @@
 package issuer_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,6 +54,7 @@ func TestKeyFileRoundTripAndProtection(t *testing.T) {
 		"other key id": strings.Replace(string(priv), "Key-Id: vk-2026-01", "Key-Id: vk-2026-02", 1),
 		"weaker kdf":   strings.Replace(string(priv), "Kdf-Params: m=64,t=1,p=1", "Kdf-Params: m=64,t=1,p=2", 1),
 		"huge kdf":     strings.Replace(string(priv), "Kdf-Params: m=64,t=1,p=1", "Kdf-Params: m=99999999,t=1,p=1", 1),
+		"over 1 GiB":   strings.Replace(string(priv), "Kdf-Params: m=64,t=1,p=1", "Kdf-Params: m=1048577,t=1,p=1", 1),
 		"trailing":     string(priv) + "x",
 	} {
 		_, err := issuer.OpenKey([]byte(bad), []byte(testWords))
@@ -238,7 +242,7 @@ func TestCheckAgainstLedger(t *testing.T) {
 		entry("LIC-B", "LIC-FUTURE", year), // names an ID that was never issued (only possible by hand)
 	}
 	pay := func(id, replaces string, until time.Time) license.Payload {
-		return license.Payload{LicenseID: id, Replaces: replaces, ValidFrom: now, ValidUntil: until}
+		return license.Payload{LicenseID: id, Replaces: replaces, InstallationID: "ALICE-X", ValidFrom: now, ValidUntil: until}
 	}
 	assert.NoError(t, issuer.CheckAgainstLedger(ledger, pay("LIC-N", "", year), false))
 	assert.NoError(t, issuer.CheckAgainstLedger(ledger, pay("LIC-N", "LIC-A", year), false), "same term")
@@ -248,6 +252,10 @@ func TestCheckAgainstLedger(t *testing.T) {
 	assert.ErrorIs(t, issuer.CheckAgainstLedger(ledger, pay("LIC-N", "LIC-NOPE", year), true), issuer.ErrUnknownReplaced)
 	assert.ErrorIs(t, issuer.CheckAgainstLedger(ledger, pay("LIC-A", "", year), false), issuer.ErrDuplicateLicenseID)
 	assert.ErrorIs(t, issuer.CheckAgainstLedger(ledger, pay("LIC-FUTURE", "LIC-B", year), true), issuer.ErrReplaceCycle)
+	other := pay("LIC-N", "LIC-A", year)
+	other.InstallationID = "ALICE-Y"
+	assert.ErrorIs(t, issuer.CheckAgainstLedger(ledger, other, true), issuer.ErrOtherInstallation,
+		"a correction is valid for the same installation only (§19.2 step 4)")
 
 	// A cycle already in a hand-edited ledger does not hang the walk.
 	loop := []issuer.LedgerEntry{entry("LIC-C", "LIC-D", year), entry("LIC-D", "LIC-C", year)}
@@ -353,4 +361,53 @@ func TestLedgerErrorPaths(t *testing.T) {
 	n, err := issuer.VerifyLedger(blank, k.Public())
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
+}
+
+// Fix round 1: concurrent appends are serialized by the ledger lock, so the chain stays intact.
+func TestConcurrentAppendsAreSerialized(t *testing.T) {
+	k := openTestKey(t)
+	path := filepath.Join(t.TempDir(), issuer.LedgerFile)
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			assert.NoError(t, issuer.AppendLedger(path, k, entry(fmt.Sprintf("LIC-%d", i), "", now)))
+		})
+	}
+	wg.Wait()
+	head, err := issuer.VerifyLedgerHead(path, k.Public())
+	require.NoError(t, err)
+	assert.Equal(t, 8, head.Rows)
+}
+
+// Record re-checks the license against the ledger while holding the lock, so a row another
+// licensectl added after the first check (here: the same license ID) is never duplicated.
+func TestRecordRechecksUnderTheLock(t *testing.T) {
+	k := openTestKey(t)
+	path := filepath.Join(t.TempDir(), issuer.LedgerFile)
+	p, err := issuer.BuildPayload(issuer.Request{Installation: license.NewInstallationID(), Customer: "C", Targets: 1, LicenseID: "LIC-1"}, now)
+	require.NoError(t, err)
+	raw, err := k.Issue(p)
+	require.NoError(t, err)
+
+	l, err := issuer.LockLedger(path)
+	require.NoError(t, err)
+	head, err := l.Record(k, p, raw, false)
+	require.NoError(t, err)
+	assert.Equal(t, 1, head.Rows)
+	assert.Regexp(t, `^[0-9a-f]{64}$`, head.Chain)
+	_, err = l.Record(k, p, raw, false)
+	assert.ErrorIs(t, err, issuer.ErrDuplicateLicenseID)
+	require.NoError(t, l.Unlock())
+
+	entries, err := issuer.ReadLedger(path, k.Public())
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	sum := sha256.Sum256(raw)
+	assert.Equal(t, hex.EncodeToString(sum[:]), entries[0].FileSHA256)
+	got, err := issuer.VerifyLedgerHead(path, k.Public())
+	require.NoError(t, err)
+	assert.Equal(t, head, got)
+
+	_, err = issuer.LockLedger(filepath.Join(t.TempDir(), "missing", issuer.LedgerFile))
+	assert.Error(t, err)
 }
