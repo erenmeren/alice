@@ -43,6 +43,11 @@ func mailTime(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC"
 func (s *Service) Tick(ctx context.Context) error {
 	s.evalMu.Lock()
 	defer s.evalMu.Unlock()
+	return s.tickLocked(ctx)
+}
+
+// tickLocked is Tick with evalMu held by the caller.
+func (s *Service) tickLocked(ctx context.Context) error {
 	g := s.working()
 	var snap Snapshot
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {

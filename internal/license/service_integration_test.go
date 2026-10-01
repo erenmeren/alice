@@ -6,11 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,9 +39,18 @@ type recordingNotifier struct {
 	sent  []string
 	calls []map[string]string
 	fail  error // returned instead of recording, to make the evaluation's transaction fail
+
+	// entered and release hold an evaluation inside its transaction: the notifier signals
+	// entered, then waits for release (both nil = never wait).
+	entered chan struct{}
+	release chan struct{}
 }
 
 func (r *recordingNotifier) NotifyAdmins(_ context.Context, _ pgx.Tx, template string, params map[string]string) error {
+	if r.entered != nil {
+		r.entered <- struct{}{}
+		<-r.release
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.fail != nil {
@@ -717,4 +728,50 @@ func TestTickSurvivesAnUnwritableTimeFile(t *testing.T) {
 	e.clk.Advance(3 * day)
 	require.NoError(t, e.svc.Tick(e.ctx))
 	assert.True(t, e.loadHWM(false).At.Equal(installedAt.Add(3*day)), "the settings copy is saved")
+}
+
+// Task 16 ruling: a full reset waits for an evaluation that is in flight, so the evaluation
+// cannot write the old time record back after the reset removed it.
+func TestRestartWaitsForAnInFlightTick(t *testing.T) {
+	e := newEnv(t)
+	oldInstallation := e.installation()
+	e.clk.Set(installedAt.Add(23 * day)) // an evaluation warning is due
+	e.notices.entered, e.notices.release = make(chan struct{}), make(chan struct{})
+	tickErr := make(chan error, 1)
+	go func() { tickErr <- e.svc.Tick(e.ctx) }()
+	<-e.notices.entered // the tick is inside its transaction
+
+	var called atomic.Bool
+	var savedBy time.Time
+	restartErr := make(chan error, 1)
+	go func() {
+		restartErr <- e.svc.Restart(e.ctx, func(ctx context.Context) error {
+			called.Store(true)
+			savedBy = e.loadHWM(true).At // what the finished tick left behind
+			if _, err := e.db.Owner.Exec(ctx, "TRUNCATE license, license_files, license_history, settings"); err != nil {
+				return err
+			}
+			e.clk.Set(installedAt)
+			return os.Remove(filepath.Join(e.stateDir, license.HWMFileName))
+		})
+	}()
+	time.Sleep(200 * time.Millisecond)
+	assert.False(t, called.Load(), "the reset waits while a tick holds the evaluation lock")
+
+	close(e.notices.release)
+	require.NoError(t, <-tickErr)
+	require.NoError(t, <-restartErr)
+	assert.True(t, called.Load())
+	assert.False(t, savedBy.Before(installedAt.Add(23*day)), "the tick saved its record before the reset ran")
+	assert.True(t, e.loadHWM(true).At.Before(installedAt.Add(day)), "the old time record did not come back")
+	assert.NotEqual(t, oldInstallation, e.installation(), "a fresh installation exists after the reset")
+	assert.Equal(t, 1, e.countWhere("license", "true"))
+	assert.True(t, e.svc.Snapshot().Ready)
+}
+
+func TestRestartKeepsTheStateWhenTheResetFails(t *testing.T) {
+	e := newEnv(t)
+	before := e.installation()
+	require.Error(t, e.svc.Restart(e.ctx, func(context.Context) error { return errors.New("boom") }))
+	assert.Equal(t, before, e.installation())
 }

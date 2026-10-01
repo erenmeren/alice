@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/license"
+	"alice/internal/notify"
 )
 
 func clockNow(t *testing.T, h http.Handler) time.Time {
@@ -49,11 +51,11 @@ func TestE2EClockRejectsMalformedInput(t *testing.T) {
 	h := testHandler(testDeps{})
 	big := `{"advance_seconds":1,"pad":"` + strings.Repeat("x", 1<<20) + `"}`
 	for body, want := range map[string]int{
-		`not json`:                      http.StatusBadRequest,
-		big:                             http.StatusRequestEntityTooLarge,
-		`{"advance_seconds":-5}`:        http.StatusUnprocessableEntity,
-		`{"advance_seconds":1e300}`:     http.StatusUnprocessableEntity,
-		`{"advance_seconds":315360001}`: http.StatusUnprocessableEntity, // just over 10 years (365-day years)
+		`not json`:                       http.StatusBadRequest,
+		big:                              http.StatusRequestEntityTooLarge,
+		`{"advance_seconds":-315360001}`: http.StatusUnprocessableEntity,
+		`{"advance_seconds":1e300}`:      http.StatusUnprocessableEntity,
+		`{"advance_seconds":315360001}`:  http.StatusUnprocessableEntity, // just over 10 years (365-day years)
 	} {
 		t.Cleanup(e2eClock.Reset)
 		before := e2eClock.Now()
@@ -125,4 +127,60 @@ func TestE2ETestEndpointsRejectCrossSiteRequests(t *testing.T) {
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code, "reading the clock is a safe method")
+}
+
+func postTest(t *testing.T, h http.Handler, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+	return rec
+}
+
+// Owner step 5: the demo clock can move back; a wall-only jump adds no uptime.
+func TestE2EClockMovesBackAndJumps(t *testing.T) {
+	t.Cleanup(e2eClock.Reset)
+	h := testHandler(testDeps{})
+	before, up := e2eClock.Now(), e2eClock.Elapsed()
+
+	require.Equal(t, http.StatusOK, postTest(t, h, "/test/clock", `{"advance_seconds":-86400}`).Code)
+	assert.Less(t, e2eClock.Now().Sub(before), -23*time.Hour)
+	assert.GreaterOrEqual(t, e2eClock.Elapsed(), up, "uptime never decreases")
+
+	up = e2eClock.Elapsed()
+	require.Equal(t, http.StatusOK, postTest(t, h, "/test/clock", `{"advance_seconds":864000,"wall_only":true}`).Code)
+	assert.Less(t, e2eClock.Elapsed()-up, time.Second, "a wall-only jump is not uptime")
+
+	assert.Equal(t, http.StatusBadRequest, postTest(t, h, "/test/clock", `{"advance_seconds":1,"extra":true}`).Code)
+}
+
+// Only the testlicense build trusts what /test/license signs.
+func TestE2ETestLicenseIsSignedWithTheTestKey(t *testing.T) {
+	h := testHandler(testDeps{})
+	id := license.NewInstallationID()
+	rec := postTest(t, h, "/test/license", `{"installation_id":"`+id+`","max_targets":7,"valid_days":30,"customer":"Örnek A.Ş."}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var body struct {
+		License   string `json:"license"`
+		LicenseID string `json:"license_id"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	f, err := license.Check([]byte(body.License), license.EmbeddedKeys())
+	require.NoError(t, err)
+	assert.Equal(t, id, f.Payload.InstallationID)
+	assert.Equal(t, 7, f.Payload.MaxTargets)
+	assert.Equal(t, "Örnek A.Ş.", f.Payload.Customer)
+	assert.Equal(t, body.LicenseID, f.Payload.LicenseID)
+	assert.Equal(t, 30*24*time.Hour, f.Payload.ValidUntil.Sub(f.Payload.ValidFrom))
+
+	assert.Equal(t, http.StatusConflict, postTest(t, h, "/test/license", `{}`).Code, "no running license service: the installation is unknown")
+	assert.Equal(t, http.StatusUnprocessableEntity, postTest(t, h, "/test/license", `{"installation_id":"`+id+`","max_targets":0}`).Code)
+}
+
+func TestE2EMailboxListsSentEmail(t *testing.T) {
+	t.Cleanup(e2eMailbox.reset)
+	require.NoError(t, testMailer.Send(context.Background(), notify.Message{To: "ada@example.com", Subject: "Hi", Body: "Body"}))
+	rec := httptest.NewRecorder()
+	testHandler(testDeps{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/test/mail", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"messages":[{"to":"ada@example.com","subject":"Hi","body":"Body"}]}`, rec.Body.String())
 }

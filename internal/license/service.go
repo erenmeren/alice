@@ -208,6 +208,26 @@ func (s *Service) Installed(ctx context.Context) (bool, error) {
 // §16.4), loads the time record from both stores, restores a held clock jump, and runs the
 // first evaluation. Problems with the time record of an existing installation are audited.
 func (s *Service) Start(ctx context.Context) error {
+	s.evalMu.Lock()
+	defer s.evalMu.Unlock()
+	return s.startLocked(ctx)
+}
+
+// Restart runs reset while no evaluation, upload or shutdown is in flight, then starts the
+// service again (a fresh installation if reset emptied the license tables). It exists for
+// the e2e full reset: an evaluation in flight could otherwise write the old time record back
+// after reset removed it. Nothing else may evaluate between reset and the restart.
+func (s *Service) Restart(ctx context.Context, reset func(context.Context) error) error {
+	s.evalMu.Lock()
+	defer s.evalMu.Unlock()
+	if err := reset(ctx); err != nil {
+		return err
+	}
+	return s.startLocked(ctx)
+}
+
+// startLocked is Start with evalMu held by the caller.
+func (s *Service) startLocked(ctx context.Context) error {
 	fresh, err := s.ensureInstallation(ctx)
 	if err != nil {
 		return err
@@ -225,9 +245,7 @@ func (s *Service) Start(ctx context.Context) error {
 	if j, ok := decodeJump(row.ClockJump); ok {
 		g.RestoreJump(j.Expected, j.Detected, s.uptime.Elapsed())
 	}
-	s.evalMu.Lock()
 	s.publishGuard(g)
-	s.evalMu.Unlock()
 	if !fresh && (len(damaged) > 0 || hwm.best == nil) {
 		if err := s.recordTimeRecordProblem(ctx, damaged, hwm.best == nil); err != nil {
 			return err
@@ -237,7 +255,7 @@ func (s *Service) Start(ctx context.Context) error {
 		s.log.Error("this build embeds no license verification key, so no license file can be installed; " +
 			"the evaluation still works (see docs/vendor/licensing-vendor.md)")
 	}
-	return s.Tick(ctx)
+	return s.tickLocked(ctx)
 }
 
 // Shutdown observes the clock and saves the time record (spec §16.5: also on graceful shutdown).
