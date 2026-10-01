@@ -100,3 +100,34 @@ func TestStaleUnconfirmedReportAfterPinKeepsStatus(t *testing.T) {
 	require.NoError(t, h.svc.RecordConnectionFailure(h.ctx, tg.ID, "target.host_key_unconfirmed"))
 	assert.Equal(t, inventory.StatusChecking, statusOf(t, h, tg.ID))
 }
+
+// Review fixes: a failure that has no status of its own does not leave a target in checking; a
+// disabled target stays disabled.
+func TestCheckingAndDisabledStatuses(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	k := ed25519HostKey(t)
+	tg := h.add(admin, "web-01", "web-01.example.com")
+	require.NoError(t, h.svc.HostKeyStore().Observed(h.ctx, tg.ID, k, false))
+	_, err := h.svc.ConfirmHostKey(h.ctx, admin, tg.ID, keyID(t, h, tg.ID, k.Fingerprint), k.Fingerprint)
+	require.NoError(t, err)
+	require.NoError(t, h.svc.RecordConnectionFailure(h.ctx, tg.ID, "ssh.helper_missing"))
+	got, err := h.svc.GetTarget(h.ctx, tg.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.StatusUnreachable, got.Status)
+	assert.Equal(t, "ssh.helper_missing", got.LastErrorCode)
+
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE targets SET status = 'disabled' WHERE id = $1", tg.ID)
+	require.NoError(t, err)
+	for _, reason := range []string{"ssh.auth_failed", "ssh.timeout", "target.host_key_unconfirmed"} {
+		require.NoError(t, h.svc.RecordConnectionFailure(h.ctx, tg.ID, reason))
+		assert.Equal(t, inventory.StatusDisabled, statusOf(t, h, tg.ID), reason)
+	}
+	require.NoError(t, h.svc.RecordConnectionOK(h.ctx, tg.ID, providers.ConnectionReport{HostKey: k}))
+	assert.Equal(t, inventory.StatusDisabled, statusOf(t, h, tg.ID))
+	assert.Equal(t, 0, h.count("SELECT count(*) FROM notifications_outbox WHERE template_key = 'target.auth_failed'"))
+
+	// A key change still blocks a disabled target (the safe side).
+	require.NoError(t, h.svc.HostKeyStore().Observed(h.ctx, tg.ID, ed25519HostKey(t), true))
+	assert.Equal(t, inventory.StatusHostKeyChanged, statusOf(t, h, tg.ID))
+}

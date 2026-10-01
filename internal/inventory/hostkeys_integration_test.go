@@ -222,8 +222,7 @@ func TestRepinKeepsHistory(t *testing.T) {
 	tg := pinned(t, h, admin, k1)
 	id2 := func() uuid.UUID { return keyID(t, h, tg.ID, k2.Fingerprint) }
 
-	require.NoError(t, h.svc.HostKeyStore().Observed(h.ctx, tg.ID, k2, false))
-	_, err := h.svc.RepinHostKey(h.ctx, admin, tg.ID, id2(), k2.Fingerprint, "Server reinstalled, ticket CHG-1042")
+	_, err := h.svc.RepinHostKey(h.ctx, admin, tg.ID, keyID(t, h, tg.ID, k1.Fingerprint), k1.Fingerprint, "Server reinstalled, ticket CHG-1042")
 	require.ErrorIs(t, err, inventory.ErrHostKeyState, "no re-pin unless the identity changed")
 
 	require.NoError(t, h.svc.HostKeyStore().Observed(h.ctx, tg.ID, k2, true))
@@ -387,5 +386,145 @@ func TestRepinBackToSupersededKey(t *testing.T) {
 			assert.Equal(t, "superseded", r.Status)
 			assert.NotNil(t, r.SupersededAt)
 		}
+	}
+}
+
+// Review fix: the store decides what a change is. A key other than the pinned one blocks the
+// target even when the caller says it is not a change.
+func TestObservedBlocksWhateverTheCallerSays(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "ada@example.com")
+	k1, k2 := ed25519HostKey(t), ed25519HostKey(t)
+	tg := pinned(t, h, admin, k1)
+	require.NoError(t, h.svc.HostKeyStore().Observed(h.ctx, tg.ID, k2, false))
+	got, err := h.svc.GetTarget(h.ctx, tg.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.StatusHostKeyChanged, got.Status)
+	assert.Equal(t, "target.host_key_changed", got.LastErrorCode)
+	assert.Equal(t, 1, h.audits("hostkey.changed"))
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM notifications_outbox WHERE template_key = 'target.host_key_changed'"))
+
+	// The block reason survives later reports.
+	require.NoError(t, h.svc.RecordConnectionFailure(h.ctx, tg.ID, "ssh.timeout"))
+	require.NoError(t, h.svc.RecordConnectionOK(h.ctx, tg.ID, providers.ConnectionReport{}))
+	got, err = h.svc.GetTarget(h.ctx, tg.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.StatusHostKeyChanged, got.Status)
+	assert.Equal(t, "target.host_key_changed", got.LastErrorCode)
+}
+
+// Review fix: another new key while the target is already blocked is audited (no email); the
+// same key again is not.
+func TestNewKeyWhileBlockedIsAuditedWithoutEmail(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "ada@example.com")
+	k1, k2, k3 := ed25519HostKey(t), ed25519HostKey(t), ecdsaHostKey(t)
+	tg := pinned(t, h, admin, k1)
+	store := h.svc.HostKeyStore()
+	require.NoError(t, store.Observed(h.ctx, tg.ID, k2, true))
+	require.NoError(t, store.Observed(h.ctx, tg.ID, k2, true))
+	assert.Equal(t, 0, h.audits("hostkey.observed"))
+	require.NoError(t, store.Observed(h.ctx, tg.ID, k3, true))
+	require.NoError(t, store.Observed(h.ctx, tg.ID, k3, true))
+	assert.Equal(t, []map[string]string{{"old_fingerprint": k1.Fingerprint, "new_fingerprint": k3.Fingerprint, "target_name": "web-01"}},
+		h.auditDetails("hostkey.observed"))
+	assert.Equal(t, 1, h.audits("hostkey.changed"))
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM notifications_outbox WHERE template_key = 'target.host_key_changed'"))
+}
+
+// Review fix (safe exit from host_key_changed): when the server presents the pinned key again,
+// the candidates it stopped presenting can no longer be accepted; an Administrator dismisses the
+// change by re-pinning the pinned key (step-up and reason), which resumes work through a test.
+func TestDismissChangeWhenServerShowsPinnedKeyAgain(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "ada@example.com")
+	k1, k2 := ed25519HostKey(t), ed25519HostKey(t)
+	tg := pinned(t, h, admin, k1)
+	require.NoError(t, h.svc.HostKeyStore().Observed(h.ctx, tg.ID, k2, true))
+	id1, id2 := keyID(t, h, tg.ID, k1.Fingerprint), keyID(t, h, tg.ID, k2.Fingerprint)
+
+	require.NoError(t, h.svc.RecordConnectionOK(h.ctx, tg.ID, providers.ConnectionReport{HostKey: k1}))
+	assert.Equal(t, inventory.StatusHostKeyChanged, statusOf(t, h, tg.ID), "the block stays until an Administrator acts")
+	_, err := h.svc.RepinHostKey(h.ctx, admin, tg.ID, id2, k2.Fingerprint, "Server reinstalled, ticket CHG-1042")
+	require.ErrorIs(t, err, inventory.ErrHostKeyStale, "a key the server stopped presenting is never pinned")
+
+	_, err = h.svc.RepinHostKey(h.ctx, admin, tg.ID, id1, k2.Fingerprint, "False alarm, load balancer, CHG-1044")
+	require.ErrorIs(t, err, inventory.ErrHostKeyStale, "the fingerprint must be the pinned one")
+	_, err = h.svc.RepinHostKey(h.ctx, admin, tg.ID, id1, k1.Fingerprint, "short")
+	var verrs validate.Errors
+	require.ErrorAs(t, err, &verrs)
+
+	before := len(h.jobs.requests())
+	jobID, err := h.svc.RepinHostKey(h.ctx, admin, tg.ID, id1, k1.Fingerprint, "False alarm, load balancer, CHG-1044")
+	require.NoError(t, err)
+	assert.NotZero(t, jobID)
+	require.Len(t, h.jobs.requests(), before+1)
+	assert.Equal(t, inventory.StatusChecking, statusOf(t, h, tg.ID))
+	got, err := h.svc.HostKeyStore().Pinned(h.ctx, tg.ID)
+	require.NoError(t, err)
+	assert.Equal(t, k1, got)
+	assert.Equal(t, []map[string]string{{"old_fingerprint": k1.Fingerprint, "new_fingerprint": k1.Fingerprint,
+		"reason": "False alarm, load balancer, CHG-1044", "target_id": tg.ID.String()}}, h.auditDetails("hostkey.change_dismissed"))
+	assert.Equal(t, 0, h.audits("hostkey.repinned"))
+	recs, err := h.svc.ListHostKeys(h.ctx, tg.ID)
+	require.NoError(t, err)
+	statuses := map[string]string{}
+	for _, r := range recs {
+		statuses[r.Fingerprint] = r.Status
+	}
+	assert.Equal(t, map[string]string{k1.Fingerprint: "pinned", k2.Fingerprint: "rejected"}, statuses)
+
+	require.NoError(t, h.svc.RecordConnectionOK(h.ctx, tg.ID, providers.ConnectionReport{HostKey: k1}))
+	assert.Equal(t, inventory.StatusOK, statusOf(t, h, tg.ID))
+}
+
+// Dismissal also works while a candidate is still outstanding (no connection report yet): it is
+// rejected in the same transaction.
+func TestDismissRejectsOutstandingCandidate(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	k1, k2 := ed25519HostKey(t), ed25519HostKey(t)
+	tg := pinned(t, h, admin, k1)
+	require.NoError(t, h.svc.HostKeyStore().Observed(h.ctx, tg.ID, k2, true))
+	_, err := h.svc.RepinHostKey(h.ctx, admin, tg.ID, keyID(t, h, tg.ID, k1.Fingerprint), k1.Fingerprint, "False alarm, load balancer, CHG-1044")
+	require.NoError(t, err)
+	_, err = h.svc.RepinHostKey(h.ctx, admin, tg.ID, keyID(t, h, tg.ID, k2.Fingerprint), k2.Fingerprint, "Server reinstalled, ticket CHG-1042")
+	require.ErrorIs(t, err, inventory.ErrHostKeyState)
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM host_keys WHERE target_id = $1 AND status = 'rejected'", tg.ID))
+}
+
+// A target sent back to pending_host_key while a key is pinned cannot be confirmed again.
+func TestConfirmRefusesPendingTargetWithPin(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	k1, k2 := ed25519HostKey(t), ed25519HostKey(t)
+	tg := pinned(t, h, admin, k1)
+	_, err := h.db.Owner.Exec(h.ctx, "UPDATE targets SET status = 'pending_host_key' WHERE id = $1", tg.ID)
+	require.NoError(t, err)
+	_, err = h.db.Owner.Exec(h.ctx, `INSERT INTO host_keys (id, target_id, key_type, public_key, fingerprint_sha256, status, observed_at)
+VALUES ($1, $2, $3, $4, $5, 'observed', $6)`, uuid.New(), tg.ID, k2.Type, k2.PublicKey, k2.Fingerprint, h.clock.Now())
+	require.NoError(t, err)
+	_, err = h.svc.ConfirmHostKey(h.ctx, admin, tg.ID, keyID(t, h, tg.ID, k2.Fingerprint), k2.Fingerprint)
+	require.ErrorIs(t, err, inventory.ErrHostKeyState)
+	got, err := h.svc.HostKeyStore().Pinned(h.ctx, tg.ID)
+	require.NoError(t, err)
+	assert.Equal(t, k1, got)
+}
+
+// Review fix: a reason with control or invisible format characters is refused.
+func TestRepinReasonRefusesControlAndFormatCharacters(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	k1, k2 := ed25519HostKey(t), ed25519HostKey(t)
+	tg := pinned(t, h, admin, k1)
+	require.NoError(t, h.svc.HostKeyStore().Observed(h.ctx, tg.ID, k2, true))
+	id2 := keyID(t, h, tg.ID, k2.Fingerprint)
+	for _, reason := range []string{"Server reinstalled\nCHG-1042", "Server reinstalled\tCHG-1042",
+		"Server reinstalled \u202eCHG-1042", "Server reinstalled\u200bCHG-1042", "Server reinstalled\x7fCHG-1042"} {
+		_, err := h.svc.RepinHostKey(h.ctx, admin, tg.ID, id2, k2.Fingerprint, reason)
+		var verrs validate.Errors
+		require.ErrorAs(t, err, &verrs, "%q", reason)
+		assert.Equal(t, "reason", verrs[0].Field)
+		assert.Equal(t, validate.Pattern, verrs[0].Code)
 	}
 }

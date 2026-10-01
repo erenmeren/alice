@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -32,7 +33,8 @@ const (
 	maxReasonRunes = 500
 )
 
-// HostKeyRecord is one row of a target's host-key history.
+// HostKeyRecord is one row of a target's host-key history. Status is authoritative; SupersededAt
+// may be set on an observed row (a replaced key the server presents again).
 type HostKeyRecord struct {
 	ID              uuid.UUID
 	KeyType         string
@@ -95,12 +97,14 @@ func checkHostKey(k providers.HostKey) error {
 // Observed records a key the server presented that is not pinned; it never pins anything (R37
 // item 6). The newest such key is the only candidate an Administrator can confirm; older
 // candidates become rejected. Repeated or late reports of the same key update its one row
-// (unique per target and fingerprint). When changed is true and another key is pinned, the target
-// is blocked; only the transition into host_key_changed is audited and mailed to every
-// Administrator, in the transaction that makes it, so however often and however late the change
-// is reported it is announced once (F-31, Review Focus 5). Every call locks the target row first,
+// (unique per target and fingerprint). Whenever another key is pinned the target is blocked,
+// whatever the caller's changed flag says (the store, not the caller, decides what a change is);
+// only the transition into host_key_changed is audited and mailed to every Administrator, in the
+// transaction that makes it, so however often and however late the change is reported it is
+// announced once (F-31, Review Focus 5). A further new key seen while the target is already
+// blocked is audited (hostkey.observed) without an email. Every call locks the target row first,
 // so concurrent reports serialize. The pinned key is never replaced here.
-func (h hostKeyStore) Observed(ctx context.Context, target uuid.UUID, key providers.HostKey, changed bool) error {
+func (h hostKeyStore) Observed(ctx context.Context, target uuid.UUID, key providers.HostKey, _ bool) error {
 	if err := checkHostKey(key); err != nil {
 		return err
 	}
@@ -122,6 +126,12 @@ func (h hostKeyStore) Observed(ctx context.Context, target uuid.UUID, key provid
 		if old == key.Fingerprint {
 			return nil // the pinned key itself (a late report of a sighting since accepted): nothing to record
 		}
+		var prev string
+		err = tx.QueryRow(ctx, "SELECT status FROM host_keys WHERE target_id = $1 AND fingerprint_sha256 = $2", target, key.Fingerprint).Scan(&prev)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("inventory: read host key: %w", err)
+		}
+		newCandidate := prev != keyObserved
 		_, err = tx.Exec(ctx, `INSERT INTO host_keys (id, target_id, key_type, public_key, fingerprint_sha256, status, observed_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (target_id, fingerprint_sha256) DO UPDATE SET observed_at = EXCLUDED.observed_at,
@@ -134,7 +144,7 @@ ON CONFLICT (target_id, fingerprint_sha256) DO UPDATE SET observed_at = EXCLUDED
 WHERE target_id = $1 AND status = $4 AND fingerprint_sha256 <> $2`, target, key.Fingerprint, keyRejected, keyObserved); err != nil {
 			return fmt.Errorf("inventory: retire older host key candidates: %w", err)
 		}
-		if !changed || old == "" {
+		if old == "" {
 			return nil // nothing pinned: a candidate, not a change
 		}
 		tag, err := tx.Exec(ctx, `UPDATE targets SET status = $2, last_error_code = 'target.host_key_changed', updated_at = $3
@@ -142,8 +152,15 @@ WHERE id = $1 AND status <> $2`, target, StatusHostKeyChanged, now)
 		if err != nil {
 			return fmt.Errorf("inventory: block target: %w", err)
 		}
+		details := map[string]string{"old_fingerprint": old, "new_fingerprint": key.Fingerprint, "target_name": t.Name}
 		if tag.RowsAffected() == 0 {
-			return nil // already blocked: announced at the transition
+			if !newCandidate {
+				return nil // already blocked and already the candidate: announced before
+			}
+			// Already blocked (and mailed at the transition): another key is recorded, not mailed.
+			_, err = s.audit.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("ssh"), Action: "hostkey.observed",
+				ObjectType: "target", ObjectID: target.String(), Result: audit.Failure, Details: details})
+			return err
 		}
 		if s.notifier != nil {
 			if err := s.notifier.NotifyAdmins(ctx, tx, TemplateHostKeyChanged, map[string]string{
@@ -152,13 +169,14 @@ WHERE id = $1 AND status <> $2`, target, StatusHostKeyChanged, now)
 			}
 		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("ssh"), Action: "hostkey.changed",
-			ObjectType: "target", ObjectID: target.String(), Result: audit.Failure,
-			Details: map[string]string{"old_fingerprint": old, "new_fingerprint": key.Fingerprint, "target_name": t.Name}})
+			ObjectType: "target", ObjectID: target.String(), Result: audit.Failure, Details: details})
 		return err
 	})
 }
 
-// ListHostKeys returns the host-key history of a live target, newest first.
+// ListHostKeys returns the host-key history of a live target, newest first. Status is
+// authoritative: a key that was superseded and later presented again is a candidate (observed)
+// that still carries the time it was superseded (SupersededAt) until it is pinned again.
 func (s *Service) ListHostKeys(ctx context.Context, targetID uuid.UUID) ([]HostKeyRecord, error) {
 	if _, err := s.GetTarget(ctx, targetID); err != nil {
 		return nil, err
@@ -254,6 +272,10 @@ func (s *Service) ConfirmHostKey(ctx context.Context, a Actor, targetID, keyID u
 // RepinHostKey accepts a changed host key (F-32): an Administrator with a fresh step-up (route
 // permission hostkeys.repin) and a reason. The old key stays in the history as superseded; the
 // supersede and the pin happen in one transaction, so a target never has two pinned keys.
+// keyID may also name the pinned key itself: the Administrator then dismisses the change (the
+// server shows its confirmed key again), every outstanding candidate is rejected, nothing is
+// superseded, and the change is audited as hostkey.change_dismissed. Either way the target
+// resumes work through a new connection test.
 func (s *Service) RepinHostKey(ctx context.Context, a Actor, targetID, keyID uuid.UUID, fingerprint, reason string) (uuid.UUID, error) {
 	reason = strings.TrimSpace(reason)
 	if errs := validateReason(reason); len(errs) > 0 {
@@ -268,10 +290,14 @@ func (s *Service) RepinHostKey(ctx context.Context, a Actor, targetID, keyID uui
 		if t.Status != StatusHostKeyChanged {
 			return ErrHostKeyState
 		}
+		now := s.clock.Now().UTC()
+		var dismissed bool
+		if jobID, dismissed, err = s.dismissChange(ctx, tx, a, targetID, keyID, fingerprint, reason, now); err != nil || dismissed {
+			return err
+		}
 		if _, err := candidate(ctx, tx, targetID, keyID, fingerprint); err != nil {
 			return err
 		}
-		now := s.clock.Now().UTC()
 		var old string
 		err = tx.QueryRow(ctx, `UPDATE host_keys SET status = $3, superseded_at = $2
 WHERE target_id = $1 AND status = $4 RETURNING fingerprint_sha256`, targetID, now, keySuperseded, keyPinned).Scan(&old)
@@ -295,8 +321,51 @@ WHERE target_id = $1 AND status = $4 RETURNING fingerprint_sha256`, targetID, no
 	return jobID, err
 }
 
-// validateReason: 10 to 500 characters, never a PEM block (S-05: people paste secrets into
-// reason fields).
+// dismissChange handles a re-pin of the pinned key itself (see RepinHostKey). dismissed is false
+// when keyID is not the pinned row (an ordinary re-pin). The fingerprint must be the pinned one.
+func (s *Service) dismissChange(ctx context.Context, tx pgx.Tx, a Actor, targetID, keyID uuid.UUID, fingerprint, reason string,
+	now time.Time) (jobID uuid.UUID, dismissed bool, err error) {
+	var fp string
+	err = tx.QueryRow(ctx, "SELECT fingerprint_sha256 FROM host_keys WHERE id = $1 AND target_id = $2 AND status = $3",
+		keyID, targetID, keyPinned).Scan(&fp)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, nil
+	}
+	if err != nil {
+		return uuid.Nil, false, fmt.Errorf("inventory: read pinned host key: %w", err)
+	}
+	if fp != strings.TrimSpace(fingerprint) {
+		return uuid.Nil, false, ErrHostKeyStale
+	}
+	if err := rejectCandidates(ctx, tx, targetID); err != nil {
+		return uuid.Nil, false, err
+	}
+	if err := setChecking(ctx, tx, targetID, now); err != nil {
+		return uuid.Nil, false, err
+	}
+	if jobID, err = s.enqueueTest(ctx, tx, a, targetID); err != nil {
+		return uuid.Nil, false, err
+	}
+	_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "hostkey.change_dismissed", ObjectType: "host_key",
+		ObjectID: keyID.String(), Result: audit.Success, Details: map[string]string{
+			"old_fingerprint": fp, "new_fingerprint": fp, "reason": reason, "target_id": targetID.String()}})
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	return jobID, true, nil
+}
+
+// rejectCandidates marks every outstanding candidate of the target rejected: the server no longer
+// presents it, so it can never be confirmed.
+func rejectCandidates(ctx context.Context, tx pgx.Tx, targetID uuid.UUID) error {
+	if _, err := tx.Exec(ctx, "UPDATE host_keys SET status = $2 WHERE target_id = $1 AND status = $3", targetID, keyRejected, keyObserved); err != nil {
+		return fmt.Errorf("inventory: reject host key candidates: %w", err)
+	}
+	return nil
+}
+
+// validateReason: 10 to 500 characters on one line, no control, invisible format or bidi
+// characters (as validName), never a PEM block (S-05: people paste secrets into reason fields).
 func validateReason(reason string) validate.Errors {
 	var errs validate.Errors
 	n := utf8.RuneCountInString(reason)
@@ -305,7 +374,9 @@ func validateReason(reason string) validate.Errors {
 		errs.Add("reason", validate.TooShort, map[string]string{"min": strconv.Itoa(minReasonRunes)})
 	case n > maxReasonRunes:
 		errs.Add("reason", validate.TooLong, map[string]string{"max": strconv.Itoa(maxReasonRunes)})
-	case strings.Contains(reason, "-----BEGIN") || strings.ContainsRune(reason, 0):
+	case strings.Contains(reason, "-----BEGIN") || strings.ContainsFunc(reason, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Bidi_Control, r)
+	}):
 		errs.Add("reason", validate.Pattern, nil)
 	}
 	return errs

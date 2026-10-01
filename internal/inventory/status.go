@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 
@@ -18,7 +19,10 @@ import (
 // internal.unexpected so no provider text ever reaches the database or the UI.
 var reasonRE = regexp.MustCompile(`^[a-z][a-z_]{0,40}(\.[a-z][a-z_]{0,40}){1,3}$`)
 
-const reasonUnconfirmed = "target.host_key_unconfirmed"
+const (
+	reasonUnconfirmed = "target.host_key_unconfirmed"
+	reasonChanged     = "target.host_key_changed"
+)
 
 // TargetRef returns what a provider needs to open a session to a live target.
 func (s *Service) TargetRef(ctx context.Context, id uuid.UUID) (providers.TargetRef, Target, error) {
@@ -34,19 +38,23 @@ func (s *Service) TargetRef(ctx context.Context, id uuid.UUID) (providers.Target
 		Config: providers.TargetConfig{"host": t.Host, "port": t.Port, "username": t.Username}}, t, nil
 }
 
-// hasPinnedKey reports whether the target has a confirmed host key.
-func hasPinnedKey(ctx context.Context, tx pgx.Tx, id uuid.UUID) (bool, error) {
-	var ok bool
-	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM host_keys WHERE target_id = $1 AND status = $2)", id, keyPinned).Scan(&ok); err != nil {
-		return false, fmt.Errorf("inventory: read pinned host key: %w", err)
+// pinnedFingerprint returns the fingerprint of the target's confirmed host key ("" = none).
+func pinnedFingerprint(ctx context.Context, tx pgx.Tx, id uuid.UUID) (string, error) {
+	var fp string
+	err := tx.QueryRow(ctx, "SELECT fingerprint_sha256 FROM host_keys WHERE target_id = $1 AND status = $2", id, keyPinned).Scan(&fp)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("inventory: read pinned host key: %w", err)
 	}
-	return ok, nil
+	return fp, nil
 }
 
 // RecordConnectionOK stores a successful connection test: status ok, operating system and helper
-// facts, last success time. Only a re-pin leaves host_key_changed and only a confirmation leaves
-// pending_host_key, so neither a late report nor one for a target without a pinned key changes
-// those statuses.
+// facts, last success time. Only a re-pin leaves host_key_changed (its block reason is kept), only
+// a confirmation leaves pending_host_key, and disabled stays disabled, so neither a late report
+// nor one for a target without a pinned key changes those statuses. A blocked target whose server
+// presented the pinned key again has its outstanding candidates rejected: the server stopped
+// presenting them, so they can never be accepted; the Administrator dismisses the change by
+// re-pinning the pinned key (RepinHostKey).
 func (s *Service) RecordConnectionOK(ctx context.Context, id uuid.UUID, r providers.ConnectionReport) error {
 	now := s.clock.Now().UTC()
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -54,15 +62,22 @@ func (s *Service) RecordConnectionOK(ctx context.Context, id uuid.UUID, r provid
 		if err != nil {
 			return err
 		}
-		pinned, err := hasPinnedKey(ctx, tx, id)
+		pinned, err := pinnedFingerprint(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		to := StatusOK
+		to, errorCode := StatusOK, ""
 		switch {
 		case t.Status == StatusHostKeyChanged:
+			to, errorCode = t.Status, t.LastErrorCode
+			if r.HostKey.Fingerprint != "" && r.HostKey.Fingerprint == pinned {
+				if err := rejectCandidates(ctx, tx, id); err != nil {
+					return err
+				}
+			}
+		case t.Status == StatusDisabled:
 			to = t.Status
-		case !pinned:
+		case pinned == "":
 			to = StatusPendingHostKey
 		}
 		f := t.Facts
@@ -71,8 +86,8 @@ func (s *Service) RecordConnectionOK(ctx context.Context, id uuid.UUID, r provid
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE targets SET status = $2, facts = $3, last_success_at = $4, last_error_code = '', updated_at = $4
-WHERE id = $1`, id, to, raw, now); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE targets SET status = $2, facts = $3, last_success_at = $4, last_error_code = $5, updated_at = $4
+WHERE id = $1`, id, to, raw, now, errorCode); err != nil {
 			return fmt.Errorf("inventory: record connection: %w", err)
 		}
 		return s.auditStatus(ctx, tx, t, to, "connection_ok")
@@ -81,10 +96,12 @@ WHERE id = $1`, id, to, raw, now); err != nil {
 
 // statusFor maps a failure reason to the target status (contract "Reason strings"; a permanent
 // failure such as ssh.auth_failed marks the target, §8.4, R37 item 13). Only a re-pin leaves
-// host_key_changed, which only HostKeyStore.Observed enters (with its alert); a report that the
-// key is unconfirmed is stale once a key is pinned. Other reasons keep the status.
+// host_key_changed, which only HostKeyStore.Observed enters (with its alert), and disabled stays
+// disabled. Host-key reasons are owned by the store and the confirmation: a report that the key is
+// unconfirmed is stale once a key is pinned. Any other failure of a target in checking makes it
+// unreachable (it never stays checking); in other statuses it keeps the status.
 func statusFor(reason, current string, pinned bool) string {
-	if current == StatusHostKeyChanged {
+	if current == StatusHostKeyChanged || current == StatusDisabled {
 		return current
 	}
 	switch reason {
@@ -97,7 +114,12 @@ func statusFor(reason, current string, pinned bool) string {
 			return current
 		}
 		return StatusPendingHostKey
+	case reasonChanged:
+		return current
 	default:
+		if current == StatusChecking {
+			return StatusUnreachable
+		}
 		return current
 	}
 }
@@ -105,7 +127,7 @@ func statusFor(reason, current string, pinned bool) string {
 // RecordConnectionFailure stores why a connection failed. Entering auth_failed mails every
 // Administrator once per transition (F-34, R37 item 14): the email is queued in the transaction
 // that changes the status, under the target's row lock, so repeated failures and retries of the
-// same state send nothing.
+// same state send nothing. A blocked target keeps its block reason.
 func (s *Service) RecordConnectionFailure(ctx context.Context, id uuid.UUID, reason string) error {
 	if !reasonRE.MatchString(reason) {
 		reason = "internal.unexpected"
@@ -116,15 +138,19 @@ func (s *Service) RecordConnectionFailure(ctx context.Context, id uuid.UUID, rea
 		if err != nil {
 			return err
 		}
-		pinned := false
+		pinned := ""
 		if reason == reasonUnconfirmed {
-			if pinned, err = hasPinnedKey(ctx, tx, id); err != nil {
+			if pinned, err = pinnedFingerprint(ctx, tx, id); err != nil {
 				return err
 			}
 		}
-		to := statusFor(reason, t.Status, pinned)
+		to := statusFor(reason, t.Status, pinned != "")
+		errorCode := reason
+		if to == StatusHostKeyChanged {
+			errorCode = t.LastErrorCode // the block reason stays until the re-pin
+		}
 		if _, err := tx.Exec(ctx, "UPDATE targets SET status = $2, last_error_code = $3, updated_at = $4 WHERE id = $1",
-			id, to, reason, now); err != nil {
+			id, to, errorCode, now); err != nil {
 			return fmt.Errorf("inventory: record connection failure: %w", err)
 		}
 		if to == StatusAuthFailed && t.Status != StatusAuthFailed && s.notifier != nil {
