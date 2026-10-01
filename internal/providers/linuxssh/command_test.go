@@ -17,10 +17,18 @@ func TestQuoteArgIsTheOnlyQuoting(t *testing.T) {
 	q, err := quoteArg("/home/deploy/.ssh/authorized_keys")
 	require.NoError(t, err)
 	assert.Equal(t, "'/home/deploy/.ssh/authorized_keys'", q)
-	for _, bad := range []string{"a'b", "a b", "", "-x", "a\nb", "$(id)"} {
+	for _, bad := range []string{"a'b", "a b", "", "-x", "--", "a\nb", "$(id)", "?", "[a]", "{a,b}", "!x", "a\\b", "%", "a\tb",
+		"a;b", "a|b", "a&b", "a<b", "a>b", "a`b", "a\"b", "a*b", "a~b", "a#b", "a=b", "a,b", "ç"} {
 		_, err := quoteArg(bad)
 		assert.ErrorIs(t, err, ErrInvalidArgument, "%q", bad)
 	}
+}
+
+func TestQuoteArgLengthLimit(t *testing.T) {
+	_, err := quoteArg(strings.Repeat("a", 4096))
+	assert.NoError(t, err)
+	_, err = quoteArg(strings.Repeat("a", 4097))
+	assert.ErrorIs(t, err, ErrInvalidArgument)
 }
 
 func TestCommandLinesAreExact(t *testing.T) {

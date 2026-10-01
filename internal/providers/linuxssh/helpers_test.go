@@ -25,6 +25,7 @@ type fakeCred struct {
 	signer   ssh.Signer
 	mu       sync.Mutex
 	released int
+	fetched  int
 }
 
 func newFakeCred(t testing.TB) *fakeCred {
@@ -37,11 +38,20 @@ func newFakeCred(t testing.TB) *fakeCred {
 }
 
 func (f *fakeCred) SSHSigner(context.Context) (ssh.Signer, func(), error) {
+	f.mu.Lock()
+	f.fetched++
+	f.mu.Unlock()
 	return f.signer, func() {
 		f.mu.Lock()
 		f.released++
 		f.mu.Unlock()
 	}, nil
+}
+
+func (f *fakeCred) fetches() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fetched
 }
 
 func (f *fakeCred) releases() int {
@@ -61,6 +71,8 @@ type memHostKeys struct {
 	pinned   *providers.HostKey
 	observed []observation
 	fail     error
+	// blockObserved, when set, makes Observed wait for it to close (a hung database).
+	blockObserved chan struct{}
 }
 
 func (m *memHostKeys) Pinned(context.Context, uuid.UUID) (providers.HostKey, error) {
@@ -76,6 +88,9 @@ func (m *memHostKeys) Pinned(context.Context, uuid.UUID) (providers.HostKey, err
 }
 
 func (m *memHostKeys) Observed(_ context.Context, _ uuid.UUID, k providers.HostKey, changed bool) error {
+	if m.blockObserved != nil {
+		<-m.blockObserved
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.observed = append(m.observed, observation{key: k, changed: changed})

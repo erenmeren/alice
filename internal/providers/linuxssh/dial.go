@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -176,20 +177,84 @@ var (
 	errOutputTooLarge = errors.New("linuxssh: command output too large")
 )
 
-// hostKeyDecision is what the host-key callback saw; it is read after the handshake returns, so
-// the outcome never depends on how x/crypto wraps the callback's error.
+// hostKeyDecision is what the host-key callback saw. The callback runs on x/crypto's key-exchange
+// goroutine, so it does no I/O and only records the presented key under a mutex; Dial reads the
+// record after the handshake returned and calls the store from its own goroutine.
 type hostKeyDecision struct {
+	mu        sync.Mutex
 	called    bool
 	refused   bool
-	changed   bool
 	presented providers.HostKey
+}
+
+func (h *hostKeyDecision) record(k providers.HostKey, refused bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.called, h.refused, h.presented = true, refused, k
+}
+
+func (h *hostKeyDecision) snapshot() (called, refused bool, presented providers.HostKey) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.called, h.refused, h.presented
+}
+
+// lazyAuth fetches the client key only when the server asks for public-key authentication, i.e.
+// after the host key matched its pin; an unknown or changed server never causes a decryption.
+type lazyAuth struct {
+	cred providers.CredentialSource
+	ctx  context.Context
+
+	mu        sync.Mutex
+	attempted bool
+	err       error
+	release   func()
+}
+
+func (l *lazyAuth) signers() ([]ssh.Signer, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.attempted = true
+	signer, release, err := l.cred.SSHSigner(l.ctx)
+	if err != nil {
+		l.err = err
+		return nil, err
+	}
+	l.release = release
+	return []ssh.Signer{signer}, nil
+}
+
+func (l *lazyAuth) done() (attempted bool, err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.release != nil {
+		l.release()
+		l.release = nil
+	}
+	return l.attempted, l.err
+}
+
+// observe records a presented key through the store within the handshake budget. The store call
+// runs in its own goroutine so a store that ignores its context cannot hang Dial.
+func (d *Dialer) observe(ctx context.Context, target uuid.UUID, k providers.HostKey, changed bool) error {
+	ctx, cancel := context.WithTimeout(ctx, d.handshakeTimeout())
+	defer cancel()
+	res := make(chan error, 1)
+	go func() { res <- d.HostKeys.Observed(ctx, target, k, changed) }()
+	select {
+	case err := <-res:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Dial connects to target. Without a pinned key the presented key is recorded as observed and the
 // connection stops before authentication (target.host_key_unconfirmed); a key other than the
 // pinned one, or a server that no longer offers the pinned algorithm, is recorded as changed and
 // the connection stops before authentication (target.host_key_changed). Background work can never
-// pin a key: only the inventory's confirmation does.
+// pin a key: only the inventory's confirmation does. The client key is decrypted only once the
+// host key matched.
 func (d *Dialer) Dial(ctx context.Context, target uuid.UUID, cfg Config, cred providers.CredentialSource) (*Conn, error) {
 	if d.HostKeys == nil {
 		return nil, providers.NewError("internal.unexpected", false, errors.New("linuxssh: dialer has no host key store"), nil)
@@ -199,14 +264,8 @@ func (d *Dialer) Dial(ctx context.Context, target uuid.UUID, cfg Config, cred pr
 	if err != nil && !errors.Is(err, providers.ErrNoPinnedKey) {
 		return nil, providers.NewError("internal.unexpected", true, err, nil)
 	}
-	signer, release, err := cred.SSHSigner(ctx)
-	if err != nil {
-		return nil, providers.NewError("internal.unexpected", false, err, nil)
-	}
-	defer release()
-
 	var dec hostKeyDecision
-	var observeErr error
+	auth := &lazyAuth{cred: cred, ctx: ctx}
 	algorithms := allHostKeyAlgorithms
 	if havePin {
 		algorithms = hostKeyAlgorithmsFor(pinned.Type)
@@ -214,43 +273,47 @@ func (d *Dialer) Dial(ctx context.Context, target uuid.UUID, cfg Config, cred pr
 	conf := &ssh.ClientConfig{
 		Config:            sshConfig(),
 		User:              cfg.Username,
-		Auth:              []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		Auth:              []ssh.AuthMethod{ssh.PublicKeysCallback(auth.signers)},
 		HostKeyAlgorithms: algorithms,
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
-			dec.called = true
-			dec.presented = HostKeyOf(key)
-			if havePin && subtle.ConstantTimeCompare(key.Marshal(), pinned.PublicKey) == 1 {
+			match := havePin && subtle.ConstantTimeCompare(key.Marshal(), pinned.PublicKey) == 1
+			dec.record(HostKeyOf(key), !match)
+			if match {
 				return nil
 			}
-			dec.refused, dec.changed = true, havePin
-			observeErr = d.HostKeys.Observed(ctx, target, dec.presented, havePin)
 			return errHostKeyRefused
 		},
 	}
 	r := d.handshake(ctx, cfg.addr(), conf)
+	attempted, credErr := auth.done()
+	called, refused, presented := dec.snapshot()
 	if r.dialErr != nil {
 		return nil, providers.NewError("ssh.unreachable", true, r.dialErr, nil)
 	}
 	if r.err != nil {
 		switch {
-		case observeErr != nil:
-			return nil, providers.NewError("internal.unexpected", true, observeErr, nil)
-		case dec.refused && dec.changed:
-			return nil, changedError(pinned, dec.presented)
-		case dec.refused:
+		case credErr != nil:
+			return nil, providers.NewError("internal.unexpected", false, credErr, nil)
+		case refused:
+			if err := d.observe(ctx, target, presented, havePin); err != nil {
+				return nil, providers.NewError("internal.unexpected", true, err, nil)
+			}
+			if havePin {
+				return nil, changedError(pinned, presented)
+			}
 			return nil, providers.NewError("target.host_key_unconfirmed", false, nil,
-				map[string]string{"fingerprint": dec.presented.Fingerprint})
+				map[string]string{"fingerprint": presented.Fingerprint})
 		case r.timedOut:
 			return nil, providers.NewError("ssh.timeout", true, r.err, nil)
-		case havePin && !dec.called:
+		case havePin && !called:
 			return nil, d.probeChanged(ctx, target, cfg, pinned, r.err)
-		case dec.called && strings.Contains(r.err.Error(), "unable to authenticate"):
+		case called && attempted:
 			return nil, providers.NewError("ssh.auth_failed", false, r.err, nil)
 		default:
 			return nil, providers.NewError("ssh.unreachable", true, r.err, nil)
 		}
 	}
-	return &Conn{client: r.client, target: target, cfg: cfg, hostKey: dec.presented, clock: d.clk()}, nil
+	return &Conn{client: r.client, target: target, cfg: cfg, hostKey: presented, clock: d.clk()}, nil
 }
 
 func changedError(old, presented providers.HostKey) error {
@@ -262,14 +325,15 @@ func changedError(old, presented providers.HostKey) error {
 // presented: it asks once for any host key (and always aborts before authentication). A key other
 // than the pinned one means the server's identity changed.
 func (d *Dialer) probeChanged(ctx context.Context, target uuid.UUID, cfg Config, pinned providers.HostKey, cause error) error {
-	var seen *providers.HostKey
+	var mu sync.Mutex
+	var seenRaw *providers.HostKey
 	conf := &ssh.ClientConfig{
 		Config:            sshConfig(),
 		User:              cfg.Username,
 		HostKeyAlgorithms: allHostKeyAlgorithms,
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			hk := HostKeyOf(key)
-			seen = &hk
+			seenRaw = &hk
 			return errHostKeyRefused
 		},
 	}
@@ -277,6 +341,9 @@ func (d *Dialer) probeChanged(ctx context.Context, target uuid.UUID, cfg Config,
 	if r.client != nil {
 		_ = r.client.Close() // cannot happen: the callback always refuses
 	}
+	mu.Lock()
+	seen := seenRaw
+	mu.Unlock()
 	switch {
 	case seen == nil && r.dialErr != nil:
 		return providers.NewError("ssh.unreachable", true, r.dialErr, nil)
@@ -285,7 +352,7 @@ func (d *Dialer) probeChanged(ctx context.Context, target uuid.UUID, cfg Config,
 	case seen == nil, subtle.ConstantTimeCompare(seen.PublicKey, pinned.PublicKey) == 1:
 		return providers.NewError("ssh.protocol_error", false, cause, nil)
 	}
-	if err := d.HostKeys.Observed(ctx, target, *seen, true); err != nil {
+	if err := d.observe(ctx, target, *seen, true); err != nil {
 		return providers.NewError("internal.unexpected", true, err, nil)
 	}
 	return changedError(pinned, *seen)
@@ -305,7 +372,9 @@ func (d *Dialer) handshake(ctx context.Context, addr string, conf *ssh.ClientCon
 	if dial == nil {
 		dial = (&net.Dialer{Timeout: d.dialTimeout()}).DialContext
 	}
-	nc, err := dial(ctx, "tcp", addr)
+	dctx, cancelDial := context.WithTimeout(ctx, d.dialTimeout())
+	defer cancelDial()
+	nc, err := dial(dctx, "tcp", addr)
 	if err != nil {
 		return handshakeResult{dialErr: err}
 	}
@@ -433,6 +502,8 @@ func (c *Conn) Run(ctx context.Context, cmd HelperCommand) (Result, error) {
 	switch {
 	case runErr == nil:
 		return Result{Stdout: stdout.bytes()}, nil
+	case errors.As(runErr, &exitErr) && (exitErr.Signal() != "" || exitErr.ExitStatus() < 0):
+		return Result{}, providers.NewError("ssh.protocol_error", false, runErr, params)
 	case errors.As(runErr, &exitErr):
 		return Result{Stdout: stdout.bytes(), ExitCode: exitErr.ExitStatus()}, nil
 	case errors.As(runErr, &missing):
@@ -479,7 +550,7 @@ func cleanValue(v string, limit int) string {
 	}
 	v = strings.ToValidUTF8(v, "")
 	v = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return -1
 		}
 		return r

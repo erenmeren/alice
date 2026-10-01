@@ -26,6 +26,9 @@ type Response struct {
 	Stderr []byte
 	// Exit is the exit status; a negative value closes the channel without an exit status.
 	Exit int
+	// Signal, when set, ends the command with an exit-signal request (a killed helper) instead of an
+	// exit status.
+	Signal string
 	// Delay is waited before answering (a slow host, F-39). The wait ends early when the client
 	// closes the connection.
 	Delay time.Duration
@@ -276,7 +279,15 @@ func (s *Server) serveSession(ch ssh.Channel, reqs <-chan *ssh.Request, closed <
 		}
 		_, _ = ch.Write(resp.Stdout)
 		_, _ = ch.Stderr().Write(resp.Stderr)
-		if resp.Exit >= 0 {
+		if resp.Signal != "" {
+			sig := struct {
+				Signal     string
+				CoreDumped bool
+				Error      string
+				Lang       string
+			}{Signal: resp.Signal}
+			_, _ = ch.SendRequest("exit-signal", false, ssh.Marshal(sig))
+		} else if resp.Exit >= 0 {
 			status := struct{ Status uint32 }{uint32(resp.Exit)} //nolint:gosec // G115: test exit codes are small non-negative numbers
 			_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(status))
 		}

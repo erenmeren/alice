@@ -43,7 +43,7 @@ func TestFirstContactStopsBeforeAuthentication(t *testing.T) {
 	assert.False(t, obs[0].changed)
 	assert.Equal(t, srv.HostKey().Marshal(), obs[0].key.PublicKey)
 	assert.Equal(t, "ssh-ed25519", obs[0].key.Type)
-	assert.Equal(t, 1, cred.releases(), "the decrypted key is released after the handshake")
+	assert.Zero(t, cred.fetches(), "the client key is never decrypted for an unconfirmed server")
 
 	// After an administrator pins the key, the same server is reachable.
 	hk.pin(srv.HostKey())
@@ -72,6 +72,7 @@ func TestChangedHostKeyStopsBeforeAuthentication(t *testing.T) {
 	assert.Equal(t, ssh.FingerprintSHA256(old), pe.Params["old_fingerprint"])
 	assert.Equal(t, ssh.FingerprintSHA256(newKey.PublicKey()), pe.Params["new_fingerprint"])
 	assert.Zero(t, srv.AuthAttempts())
+	assert.Zero(t, cred.fetches(), "the client key is never decrypted for a changed server")
 	assert.Empty(t, srv.Commands())
 	obs := hk.observations()
 	require.Len(t, obs, 1)
@@ -125,6 +126,7 @@ func TestAuthenticationFailure(t *testing.T) {
 	assert.Equal(t, "ssh.auth_failed", pe.Code)
 	assert.False(t, pe.Retryable)
 	assert.Positive(t, srv.AuthAttempts())
+	assert.Equal(t, cred.releases(), cred.fetches(), "every decrypted key is released")
 	assert.Empty(t, srv.Commands())
 }
 
@@ -301,4 +303,29 @@ func TestParseConfig(t *testing.T) {
 		fields[e.Field] = e.Code
 	}
 	assert.Equal(t, map[string]string{"host": validate.Pattern, "port": validate.OutOfRange}, fields)
+}
+
+// A host-key store that hangs must not hang Dial past its handshake budget (the callback does no I/O).
+func TestHungHostKeyStoreDoesNotHangDial(t *testing.T) {
+	_, cfg, cred := testServer(t, okHandler)
+	release := make(chan struct{})
+	defer close(release)
+	d := newDialer(&memHostKeys{blockObserved: release})
+	d.HandshakeTimeout = 300 * time.Millisecond
+	start := time.Now()
+	_, err := d.Dial(context.Background(), testTarget, cfg, cred)
+	assert.Less(t, time.Since(start), 600*time.Millisecond+time.Second/2)
+	assert.Equal(t, "internal.unexpected", providerCode(t, err).Code)
+}
+
+func TestHelperKilledBySignalIsNotHelperMissing(t *testing.T) {
+	_, c := pinnedConn(t, func(string, []byte) linuxsshtest.Response {
+		return linuxsshtest.Response{Signal: "KILL"}
+	})
+	_, err := c.Run(context.Background(), CmdVersion())
+	assert.Equal(t, "ssh.protocol_error", providerCode(t, err).Code)
+}
+
+func TestCleanValueDropsControlAndFormatCharacters(t *testing.T) {
+	assert.Equal(t, "Ubuntu 22.04", cleanValue("\"Ubu\u0085ntu\u202e 22\u200b.04\u0007\"", 200))
 }

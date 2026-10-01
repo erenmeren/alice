@@ -37,7 +37,7 @@ func TestOnlyDialCreatesSessions(t *testing.T) {
 				return true
 			}
 			switch sel.Sel.Name {
-			case "NewSession", "Shell", "RequestPty":
+			case "NewSession", "Shell", "RequestPty", "Setenv", "RequestAgentForwarding", "ForwardToAgent":
 				if name != "dial.go" || sel.Sel.Name != "NewSession" {
 					t.Errorf("%s: %s outside dial.go's Conn.Run", fset.Position(call.Pos()), sel.Sel.Name)
 				}
