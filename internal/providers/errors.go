@@ -1,6 +1,10 @@
 package providers
 
-import "errors"
+import (
+	"encoding/json"
+	"errors"
+	"log/slog"
+)
 
 // ErrUnsupported is returned by sessions for capabilities the provider does not have.
 var ErrUnsupported = errors.New("providers: operation not supported by this provider")
@@ -28,4 +32,22 @@ func NewError(code string, retryable bool, cause error, params map[string]string
 		params = map[string]string{}
 	}
 	return &Error{Code: code, Params: params, Retryable: retryable, Cause: cause}
+}
+
+// MarshalJSON emits only Code and Params; the cause and the retry flag never leave the process
+// through serialisation.
+func (e *Error) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Code   string            `json:"code"`
+		Params map[string]string `json:"params"`
+	}{e.Code, e.Params})
+}
+
+// LogValue implements slog.LogValuer: only Code and Params are logged, never the cause.
+func (e *Error) LogValue() slog.Value {
+	attrs := []slog.Attr{slog.String("code", e.Code)}
+	for k, v := range e.Params {
+		attrs = append(attrs, slog.String("param."+k, v))
+	}
+	return slog.GroupValue(attrs...)
 }

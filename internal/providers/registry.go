@@ -32,6 +32,11 @@ func (r *Registry) Register(p Provider) {
 	case len(p.Capabilities()) == 0:
 		panic(fmt.Sprintf("providers: %s advertises no capabilities", k))
 	}
+	for c := range p.Capabilities() {
+		if !knownCapabilities.Has(c) {
+			panic(fmt.Sprintf("providers: %s advertises unknown capability %q", k, c))
+		}
+	}
 	if err := checkFields(p.ConfigSchema().Fields); err != nil {
 		panic(fmt.Sprintf("providers: %s config schema: %v", k, err))
 	}

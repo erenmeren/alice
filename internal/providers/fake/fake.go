@@ -5,6 +5,7 @@ package fake
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 
 	"github.com/google/uuid"
@@ -66,7 +67,11 @@ func (p *Provider) Configure(fn func(c *Config)) {
 func (p *Provider) Calls() []Call {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]Call(nil), p.calls...)
+	out := slices.Clone(p.calls)
+	for i := range out {
+		out[i].Change.ProtectedFingerprints = slices.Clone(out[i].Change.ProtectedFingerprints)
+	}
+	return out
 }
 
 // Count returns how many calls of method were recorded.
@@ -83,8 +88,21 @@ func (p *Provider) Count(method string) int {
 func (p *Provider) record(c Call) Config {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	c.Change.ProtectedFingerprints = slices.Clone(c.Change.ProtectedFingerprints)
 	p.calls = append(p.calls, c)
-	return p.cfg
+	return p.cfg.clone()
+}
+
+// clone copies the slices so a caller of the returned Config cannot race with Configure.
+func (c Config) clone() Config {
+	c.Keys = slices.Clone(c.Keys)
+	c.Discovery.SSHKeys = slices.Clone(c.Discovery.SSHKeys)
+	c.Discovery.HostKeys = slices.Clone(c.Discovery.HostKeys)
+	c.Discovery.UnreadableLines = slices.Clone(c.Discovery.UnreadableLines)
+	c.Discovery.Warnings = slices.Clone(c.Discovery.Warnings)
+	c.Discovery.ReadFiles = slices.Clone(c.Discovery.ReadFiles)
+	c.Report.Warnings = slices.Clone(c.Report.Warnings)
+	return c
 }
 
 // Kind implements providers.Provider.
@@ -94,7 +112,7 @@ func (p *Provider) Kind() providers.Kind { return p.kind }
 func (p *Provider) DisplayNameKey() string { return "provider.fake.name" }
 
 // Capabilities implements providers.Provider.
-func (p *Provider) Capabilities() providers.CapabilitySet { return p.caps }
+func (p *Provider) Capabilities() providers.CapabilitySet { return p.caps.Clone() }
 
 // ConfigSchema implements providers.Provider.
 func (p *Provider) ConfigSchema() providers.ConfigSchema {
@@ -128,14 +146,14 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 		switch {
 		case errors.Is(err, providers.ErrNoPinnedKey):
 			if err := env.HostKeys.Observed(ctx, t.ID, presented, false); err != nil {
-				return nil, err
+				return nil, providers.NewError("target.hostkey_store", true, err, nil)
 			}
 			return nil, providers.NewError("target.host_key_unconfirmed", false, nil, map[string]string{"fingerprint": presented.Fingerprint})
 		case err != nil:
-			return nil, err
+			return nil, providers.NewError("target.hostkey_store", true, err, nil)
 		case pinned.Fingerprint != presented.Fingerprint:
 			if err := env.HostKeys.Observed(ctx, t.ID, presented, true); err != nil {
-				return nil, err
+				return nil, providers.NewError("target.hostkey_store", true, err, nil)
 			}
 			return nil, providers.NewError("target.host_key_changed", false, nil,
 				map[string]string{"old_fingerprint": pinned.Fingerprint, "new_fingerprint": presented.Fingerprint})
@@ -144,7 +162,7 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 	if cred != nil {
 		_, release, err := cred.SSHSigner(ctx)
 		if err != nil {
-			return nil, err
+			return nil, providers.NewError("ssh.credential", false, err, nil)
 		}
 		release()
 	}

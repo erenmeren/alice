@@ -1,9 +1,13 @@
 package providers_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -73,17 +77,30 @@ func TestRegistryRegistersFreezesAndLists(t *testing.T) {
 
 func TestRegistryRefusesBrokenProviders(t *testing.T) {
 	cases := map[string]func(s *stub){
-		"empty kind":         func(s *stub) { s.kind = "" },
-		"no display name":    func(s *stub) { s.name = "" },
-		"no capabilities":    func(s *stub) { s.caps = providers.NewCapabilitySet() },
-		"bad field name":     func(s *stub) { s.config.Fields[0].Name = "Host" },
-		"field name digit":   func(s *stub) { s.config.Fields[0].Name = "1host" },
-		"duplicate field":    func(s *stub) { s.config.Fields[1].Name = "host" },
-		"bad field type":     func(s *stub) { s.config.Fields[0].Type = "url" },
-		"empty label key":    func(s *stub) { s.config.Fields[0].LabelKey = "" },
-		"bad pattern":        func(s *stub) { s.config.Fields[2].Pattern = `^[a` },
-		"enum without value": func(s *stub) { s.config.Fields[2].Values = nil },
-		"min above max":      func(s *stub) { s.config.Fields[1].Min = 70000 },
+		"empty kind":               func(s *stub) { s.kind = "" },
+		"no display name":          func(s *stub) { s.name = "" },
+		"no capabilities":          func(s *stub) { s.caps = providers.NewCapabilitySet() },
+		"bad field name":           func(s *stub) { s.config.Fields[0].Name = "Host" },
+		"field name digit":         func(s *stub) { s.config.Fields[0].Name = "1host" },
+		"duplicate field":          func(s *stub) { s.config.Fields[1].Name = "host" },
+		"bad field type":           func(s *stub) { s.config.Fields[0].Type = "url" },
+		"empty label key":          func(s *stub) { s.config.Fields[0].LabelKey = "" },
+		"bad pattern":              func(s *stub) { s.config.Fields[2].Pattern = `^[a` },
+		"enum without value":       func(s *stub) { s.config.Fields[2].Values = nil },
+		"min above max":            func(s *stub) { s.config.Fields[1].Min = 70000 },
+		"int default is a string":  func(s *stub) { s.config.Fields[1].Default = "22" },
+		"string default is an int": func(s *stub) { s.config.Fields[0].Default = 5 },
+		"bool default is a string": func(s *stub) {
+			s.config.Fields = append(s.config.Fields, providers.Field{Name: "flag", Type: providers.FieldBool, Default: "true", LabelKey: "x"})
+		},
+		"enum default not a value": func(s *stub) { s.config.Fields[2].Default = "c" },
+		"int default below min":    func(s *stub) { s.config.Fields[1].Default = 0 },
+		"int default above max":    func(s *stub) { s.config.Fields[1].Default = 70000 },
+		"negative min":             func(s *stub) { s.config.Fields[1].Min = -1 },
+		"negative max":             func(s *stub) { s.config.Fields[1].Max = -1 },
+		"pattern without ^":        func(s *stub) { s.config.Fields[2].Pattern = `[ab]$` },
+		"pattern without $":        func(s *stub) { s.config.Fields[2].Pattern = `^[ab]` },
+		"unknown capability":       func(s *stub) { s.caps = providers.NewCapabilitySet("teleport") },
 		"bad credential field": func(s *stub) {
 			s.creds = providers.CredentialSchema{Fields: []providers.Field{{Name: "secret", Type: "blob", LabelKey: "x"}}}
 		},
@@ -166,4 +183,60 @@ func TestUnsupportedSession(t *testing.T) {
 	assert.ErrorIs(t, err, providers.ErrUnsupported)
 	_, err = s.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{}, nil)
 	assert.ErrorIs(t, err, providers.ErrUnsupported)
+}
+
+func TestRegistryAcceptsValidDefaultsAndOpenEndedMax(t *testing.T) {
+	s := validStub(providers.KindLinuxSSH)
+	s.config.Fields[2].Default = "a"
+	// Max == 0 is unbounded, so a positive Min alone is a valid lower bound.
+	s.config.Fields = append(s.config.Fields,
+		providers.Field{Name: "retries", Type: providers.FieldInt, Min: 3, Default: 5, LabelKey: "x"},
+		providers.Field{Name: "flag", Type: providers.FieldBool, Default: true, LabelKey: "x"})
+	assert.NotPanics(t, func() { providers.NewRegistry().Register(s) })
+}
+
+func TestCapabilitySetCloneIsIndependent(t *testing.T) {
+	c := providers.NewCapabilitySet(providers.CapTestConnection)
+	d := c.Clone()
+	d[providers.CapAuthorizedKeys] = struct{}{}
+	assert.False(t, c.Has(providers.CapAuthorizedKeys))
+}
+
+func TestErrorSerialisationNeverShowsItsCause(t *testing.T) {
+	cause := errors.New("password=CANARY-hunter2")
+	err := providers.NewError("ssh.auth_failed", true, cause, map[string]string{"host": "web-01"})
+
+	raw, mErr := json.Marshal(err)
+	require.NoError(t, mErr)
+	assert.JSONEq(t, `{"code":"ssh.auth_failed","params":{"host":"web-01"}}`, string(raw))
+
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("failed", "err", err)
+	assert.NotContains(t, buf.String(), "CANARY")
+	assert.Contains(t, buf.String(), "ssh.auth_failed")
+	assert.Contains(t, buf.String(), "web-01")
+}
+
+// Run with -race: the registry is used concurrently while providers are still being registered.
+func TestRegistryConcurrentUseBeforeFreeze(t *testing.T) {
+	r := providers.NewRegistry()
+	kinds := []providers.Kind{providers.KindLinuxSSH, providers.KindNginx, providers.KindAzureKV}
+	var wg sync.WaitGroup
+	for _, k := range kinds {
+		wg.Add(1)
+		go func() { defer wg.Done(); r.Register(validStub(k)) }()
+	}
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_, _ = r.Get(providers.KindLinuxSSH)
+				_ = r.List()
+			}
+		}()
+	}
+	wg.Wait()
+	r.Freeze()
+	assert.Len(t, r.List(), 3)
 }

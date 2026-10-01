@@ -3,6 +3,7 @@ package fake_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
+	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/providers/fake"
 	"alice/internal/providers/providertest"
@@ -157,28 +159,219 @@ func TestFakeValidatesItsConfig(t *testing.T) {
 	assert.Empty(t, p.ValidateConfig(providers.TargetConfig{"host": "web-01"}))
 }
 
-// recorder captures Errorf calls so the conformance checks can be shown to fail.
+// recorder keeps the formatted failure messages so the conformance checks can be shown to fail
+// for exactly the reason under test.
 type recorder struct {
 	testing.TB
 	failures []string
 }
 
-func (r *recorder) Helper()               {}
-func (r *recorder) Errorf(string, ...any) { r.failures = append(r.failures, "x") }
+func (r *recorder) Helper() {}
+func (r *recorder) Errorf(format string, args ...any) {
+	r.failures = append(r.failures, fmt.Sprintf(format, args...))
+}
 
-// lying claims no capabilities in CheckUnsupported but answers everything.
-type lying struct{ providers.UnsupportedSession }
+// liar answers the session methods it is given a function for and ErrUnsupported otherwise.
+type liar struct {
+	providers.UnsupportedSession
+	test     func() error
+	discover func() error
+	list     func() error
+	add      func() error
+	remove   func() error
+}
 
-func (lying) TestConnection(context.Context) (providers.ConnectionReport, error) {
-	return providers.ConnectionReport{}, nil
+func (l liar) TestConnection(ctx context.Context) (providers.ConnectionReport, error) {
+	if l.test != nil {
+		return providers.ConnectionReport{}, l.test()
+	}
+	return l.UnsupportedSession.TestConnection(ctx)
+}
+
+func (l liar) Discover(ctx context.Context, r providers.DiscoverRequest) (providers.DiscoveryResult, error) {
+	if l.discover != nil {
+		return providers.DiscoveryResult{}, l.discover()
+	}
+	return l.UnsupportedSession.Discover(ctx, r)
+}
+
+func (l liar) ListAuthorizedKeys(ctx context.Context) ([]providers.DiscoveredSSHKey, error) {
+	if l.list != nil {
+		return nil, l.list()
+	}
+	return l.UnsupportedSession.ListAuthorizedKeys(ctx)
+}
+
+func (l liar) AddAuthorizedKey(ctx context.Context, c providers.AuthKeyChange, s providers.StepLogger) (providers.AuthKeyResult, error) {
+	if l.add != nil {
+		return providers.AuthKeyResult{}, l.add()
+	}
+	return l.UnsupportedSession.AddAuthorizedKey(ctx, c, s)
+}
+
+func (l liar) RemoveAuthorizedKey(ctx context.Context, c providers.AuthKeyChange, s providers.StepLogger) (providers.AuthKeyResult, error) {
+	if l.remove != nil {
+		return providers.AuthKeyResult{}, l.remove()
+	}
+	return l.UnsupportedSession.RemoveAuthorizedKey(ctx, c, s)
+}
+
+// noValidation has a required field but never reports it.
+type noValidation struct{ *fake.Provider }
+
+func (noValidation) ValidateConfig(providers.TargetConfig) []validate.FieldError { return nil }
+
+func TestConformanceChecksFailOnBrokenSessions(t *testing.T) {
+	ok := func() error { return nil }
+	other := func() error { return errors.New("boom") }
+	cases := []struct {
+		name string
+		s    liar
+		want string
+	}{
+		{"TestConnection", liar{test: ok}, "TestConnection without its capability"},
+		{"Discover", liar{discover: ok}, "Discover without its capability"},
+		{"ListAuthorizedKeys", liar{list: ok}, "ListAuthorizedKeys without its capability"},
+		{"AddAuthorizedKey", liar{add: ok}, "AddAuthorizedKey without its capability"},
+		{"RemoveAuthorizedKey", liar{remove: ok}, "RemoveAuthorizedKey without its capability"},
+		{"wrong error", liar{test: other}, "TestConnection without its capability: got boom"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &recorder{TB: t}
+			providertest.CheckUnsupported(r, tc.s, providers.NewCapabilitySet())
+			require.Len(t, r.failures, 1, "exactly one check fires: %v", r.failures)
+			assert.Contains(t, r.failures[0], tc.want)
+		})
+	}
+
+	t.Run("capabilities present are not checked", func(t *testing.T) {
+		r := &recorder{TB: t}
+		all := providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys)
+		providertest.CheckUnsupported(r, liar{test: ok, discover: ok, list: ok, add: ok, remove: ok}, all)
+		assert.Empty(t, r.failures)
+	})
 }
 
 func TestConformanceChecksFailOnBrokenProviders(t *testing.T) {
-	r := &recorder{TB: t}
-	providertest.CheckUnsupported(r, lying{}, providers.NewCapabilitySet())
-	assert.Len(t, r.failures, 1, "TestConnection answered without the capability")
+	t.Run("no kind", func(t *testing.T) {
+		r := &recorder{TB: t}
+		providertest.CheckProvider(r, fake.New(""))
+		require.Len(t, r.failures, 2, "%v", r.failures)
+		assert.Contains(t, r.failures[0], "no kind")
+		assert.Contains(t, r.failures[1], "a registry refuses it")
+	})
+	t.Run("required field never reported", func(t *testing.T) {
+		r := &recorder{TB: t}
+		providertest.CheckProvider(r, noValidation{fake.New(providers.KindLinuxSSH)})
+		require.Len(t, r.failures, 1, "%v", r.failures)
+		assert.Contains(t, r.failures[0], `does not report the required field "host"`)
+	})
+	t.Run("a good provider passes", func(t *testing.T) {
+		r := &recorder{TB: t}
+		providertest.CheckProvider(r, fake.New(providers.KindLinuxSSH))
+		assert.Empty(t, r.failures)
+	})
+}
 
-	r = &recorder{TB: t}
-	providertest.CheckProvider(r, fake.New(""))
-	assert.GreaterOrEqual(t, len(r.failures), 2, "no kind, and a registry refuses it")
+func TestFakeCapabilitiesAreACopy(t *testing.T) {
+	p := fake.New(providers.KindLinuxSSH)
+	c := p.Capabilities()
+	delete(c, providers.CapTestConnection)
+	c[providers.CapDeployCertificate] = struct{}{}
+	assert.True(t, p.Capabilities().Has(providers.CapTestConnection))
+	assert.False(t, p.Capabilities().Has(providers.CapDeployCertificate))
+}
+
+func TestFakeWrapsStoreAndCredentialErrors(t *testing.T) {
+	ctx := context.Background()
+	p := fake.New(providers.KindLinuxSSH)
+	p.Configure(func(c *fake.Config) { c.PresentedKey = keyA })
+	storeErr := errors.New("db down password=CANARY")
+	_, err := p.Open(ctx, providers.TargetRef{ID: uuid.New()}, nil, providers.Env{HostKeys: failingStore{storeErr}})
+	var pe *providers.Error
+	require.True(t, errors.As(err, &pe))
+	assert.Equal(t, "target.hostkey_store", pe.Code)
+	assert.True(t, pe.Retryable)
+	assert.ErrorIs(t, err, storeErr)
+	assert.NotContains(t, err.Error(), "CANARY")
+
+	p.Configure(func(c *fake.Config) { c.SkipHostKeyCheck = true })
+	credErr := errors.New("decrypt failed")
+	_, err = p.Open(ctx, providers.TargetRef{ID: uuid.New()}, failingCreds{credErr}, providers.Env{})
+	require.True(t, errors.As(err, &pe))
+	assert.Equal(t, "ssh.credential", pe.Code)
+	assert.ErrorIs(t, err, credErr)
+}
+
+type failingStore struct{ err error }
+
+func (f failingStore) Pinned(context.Context, uuid.UUID) (providers.HostKey, error) {
+	return providers.HostKey{}, f.err
+}
+
+func (f failingStore) Observed(context.Context, uuid.UUID, providers.HostKey, bool) error {
+	return f.err
+}
+
+type failingCreds struct{ err error }
+
+func (f failingCreds) SSHSigner(context.Context) (ssh.Signer, func(), error) { return nil, nil, f.err }
+
+func TestFakeCallsAreDeepCopies(t *testing.T) {
+	ctx := context.Background()
+	p := fake.New(providers.KindLinuxSSH)
+	keys := []providers.DiscoveredSSHKey{{Fingerprint: "SHA256:K"}}
+	p.Configure(func(c *fake.Config) { c.Keys = keys })
+	s, err := p.Open(ctx, providers.TargetRef{ID: uuid.New()}, nil, providers.Env{})
+	require.NoError(t, err)
+	protected := []string{"SHA256:P"}
+	_, err = s.AddAuthorizedKey(ctx, providers.AuthKeyChange{ProtectedFingerprints: protected}, nil)
+	require.NoError(t, err)
+	protected[0] = "mutated"
+	assert.Equal(t, []string{"SHA256:P"}, p.Calls()[1].Change.ProtectedFingerprints)
+	p.Calls()[1].Change.ProtectedFingerprints[0] = "mutated"
+	assert.Equal(t, []string{"SHA256:P"}, p.Calls()[1].Change.ProtectedFingerprints)
+
+	got, err := s.ListAuthorizedKeys(ctx)
+	require.NoError(t, err)
+	got[0].Fingerprint = "mutated"
+	got2, _ := s.ListAuthorizedKeys(ctx)
+	assert.Equal(t, "SHA256:K", got2[0].Fingerprint, "callers cannot change the scripted keys")
+}
+
+// Run with -race: scripting the fake while sessions run must not race.
+func TestFakeConfigureWhileSessionsRun(t *testing.T) {
+	ctx := context.Background()
+	p := fake.New(providers.KindLinuxSSH)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				p.Configure(func(c *fake.Config) {
+					c.Keys = []providers.DiscoveredSSHKey{{Fingerprint: "SHA256:K"}}
+					c.Discovery = providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{{}}}
+				})
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			s, err := p.Open(ctx, providers.TargetRef{ID: uuid.New()}, nil, providers.Env{})
+			if err != nil {
+				return
+			}
+			for j := 0; j < 50; j++ {
+				_, _ = s.ListAuthorizedKeys(ctx)
+				_, _ = s.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+				_, _ = s.AddAuthorizedKey(ctx, providers.AuthKeyChange{ProtectedFingerprints: []string{"x"}}, nil)
+				_ = p.Calls()
+				_ = p.Count("Open")
+			}
+			_ = s.Close()
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, 8, p.Count("Open"))
 }

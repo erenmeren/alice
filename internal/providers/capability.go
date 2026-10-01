@@ -1,6 +1,9 @@
 package providers
 
-import "sort"
+import (
+	"maps"
+	"sort"
+)
 
 // Capability is one thing a provider can do (spec §6.1).
 type Capability string
@@ -45,3 +48,11 @@ func (c CapabilitySet) Sorted() []Capability {
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
+
+// Clone returns an independent copy of the set.
+func (c CapabilitySet) Clone() CapabilitySet { return maps.Clone(c) }
+
+var knownCapabilities = NewCapabilitySet(
+	CapTestConnection, CapDiscoverCerts, CapDiscoverSSHKeys, CapDiscoverKVKeys, CapDiscoverKVSecrets,
+	CapDeployCertificate, CapImportCertificate, CapAuthorizedKeys, CapVerifyDeployment,
+)
