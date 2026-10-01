@@ -6,6 +6,9 @@ import type {
   AuditQuery,
   AuditReport,
   CreatedToken,
+  LicenseDetail,
+  LicenseStatus,
+  LicenseUploadResult,
   LoginResponse,
   MfaEnrollment,
   MfaInput,
@@ -126,3 +129,14 @@ export function listAudit(q: AuditQuery = {}): Promise<AuditPage> {
 export const verifyAudit = () => apiFetch<AuditReport>(`${v1}/audit/verify`, { method: 'POST' });
 
 export const auditExportUrl = (format: 'csv' | 'json') => `${v1}/audit/export?format=${format}`;
+
+// License
+export const getLicenseStatus = () => apiFetch<LicenseStatus>(`${v1}/license/status`);
+
+export const getLicense = () => apiFetch<LicenseDetail>(`${v1}/license`);
+
+export const previewLicense = (license: string) =>
+  apiFetch<LicenseUploadResult>(`${v1}/license/preview`, { method: 'POST', body: { license } });
+
+export const installLicense = (license: string) =>
+  apiFetch<LicenseUploadResult>(`${v1}/license`, { method: 'POST', body: { license } });

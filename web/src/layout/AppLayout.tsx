@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Link, Outlet, useLocation } from 'react-router';
 import type { Role } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { LicenseBanners } from '../components/LicenseBanners';
 import { LanguageSwitcher } from '../LanguageSwitcher';
 
 interface NavItem {
@@ -103,6 +104,7 @@ export function AppLayout() {
             {t('nav.signOutFailed')}
           </Alert>
         )}
+        <LicenseBanners />
         <SetupBanner />
         <Outlet />
       </AppShell.Main>

@@ -160,3 +160,72 @@ export interface ApiErrorBody {
     details?: FieldError[];
   };
 }
+
+export type LicensePhase = 'evaluation' | 'evaluation_expired' | 'active' | 'grace' | 'locked';
+export type BannerSeverity = 'info' | 'warning' | 'caution' | 'danger';
+
+export interface LicenseBanner {
+  kind: string;
+  severity: BannerSeverity;
+  params: Record<string, string>;
+}
+
+export interface LicenseStatus {
+  expired: boolean;
+  phase?: LicensePhase; // Administrators and Auditors only
+  banners: LicenseBanner[];
+}
+
+export interface LicenseInfo {
+  license_id: string;
+  customer: string;
+  issued_at: string;
+  valid_from: string;
+  valid_until: string;
+  max_targets: number;
+  features: string[];
+  replaces: string;
+  key_id: string;
+}
+
+export interface LicenseFileEntry {
+  status: 'current' | 'pending' | 'superseded' | 'invalid';
+  uploaded_at: string;
+  license: LicenseInfo | null;
+}
+
+export interface LicenseHistoryEntry {
+  at: string;
+  event: 'installed' | 'renewed' | 'state_change' | 'clock_anomaly' | 'rejected' | 'notice';
+  license_id: string;
+  from_state: string;
+  to_state: string;
+  notice: string | null;
+}
+
+export interface LicenseDetail {
+  installation_id: string;
+  installed_at: string;
+  phase: LicensePhase;
+  effective_time: string;
+  current: LicenseInfo | null;
+  pending: LicenseInfo | null;
+  max_targets: number;
+  targets_used: number;
+  ends_at: string;
+  locks_at: string;
+  days_left: number;
+  grace_day: number;
+  tampered: boolean;
+  files: LicenseFileEntry[];
+  history: LicenseHistoryEntry[];
+}
+
+export interface LicenseUploadResult {
+  license: LicenseInfo;
+  pending: boolean;
+  already_expired: boolean;
+  correction: boolean;
+  duplicate: boolean;
+  phase: LicensePhase;
+}

@@ -304,5 +304,24 @@
       "audit_verified": "Audit log integrity checked",
       "audit_exported": "Audit log exported"
     }
+  },
+  "license": {
+    "banner": {
+      "open": "Open the License page",
+      "evaluation_one": "Evaluation mode: {{count}} day left, up to {{max_targets}} targets. To continue after that, an administrator adds a license on the License page.",
+      "evaluation_other": "Evaluation mode: {{count}} days left, up to {{max_targets}} targets. To continue after that, an administrator adds a license on the License page.",
+      "evaluation_ended": "The evaluation period has ended. Alice is now read-only for changes. Administrators can upload a license on the License page.",
+      "expiry_warning_one": "Your license expires in {{count}} day ({{valid_until}}). Send your Installation ID to your vendor to renew.",
+      "expiry_warning_other": "Your license expires in {{count}} days ({{valid_until}}). Send your Installation ID to your vendor to renew.",
+      "grace": "Your license expired on {{valid_until}}. Alice will stop automatic work on {{locks_at}} (168 hours after expiry). Contact your vendor now. Grace day {{grace_day}} of 7.",
+      "locked": "License expired. Automatic tasks are paused. Your data is safe and certificate expiry alerts still arrive by email. Administrators: upload a new license on the License page.",
+      "tampered": "License data was changed outside Alice, so Alice ignores the changed file. Upload the license file from your vendor again.",
+      "clock_behind": "The server clock changed unexpectedly (it says {{system_time}}, but Alice last saw {{last_seen}}). Alice is using the later date for license checks. Please correct the server time or contact your vendor.",
+      "clock_jump_one": "The server clock jumped forward by {{count}} day. For 24 hours Alice keeps using the previous time for license checks. Confirm the time is correct, or contact your vendor.",
+      "clock_jump_other": "The server clock jumped forward by {{count}} days. For 24 hours Alice keeps using the previous time for license checks. Confirm the time is correct, or contact your vendor.",
+      "pending": "A new license ({{license_id}}) starts on {{valid_from}}. The current license stays in use until then.",
+      "over_limit": "You use {{used}} of {{max}} licensed targets. You cannot add more until you are within the limit.",
+      "limit_reached": "You are using all {{max}} licensed targets. To add more, ask your vendor to increase your license."
+    }
   }
 }

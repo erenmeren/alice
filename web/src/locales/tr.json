@@ -304,5 +304,24 @@
       "audit_verified": "Denetim kaydının bütünlüğü kontrol edildi",
       "audit_exported": "Denetim kaydı dışa aktarıldı"
     }
+  },
+  "license": {
+    "banner": {
+      "open": "Lisans sayfasını aç",
+      "evaluation_one": "Deneme modu: {{count}} gün kaldı, en fazla {{max_targets}} hedef. Sonrasında devam etmek için bir yönetici Lisans sayfasından lisans ekler.",
+      "evaluation_other": "Deneme modu: {{count}} gün kaldı, en fazla {{max_targets}} hedef. Sonrasında devam etmek için bir yönetici Lisans sayfasından lisans ekler.",
+      "evaluation_ended": "Deneme süresi sona erdi. Alice artık değişikliklere kapalı. Yöneticiler Lisans sayfasından lisans yükleyebilir.",
+      "expiry_warning_one": "Lisansınızın süresi {{count}} gün sonra doluyor ({{valid_until}}). Yenilemek için Kurulum Kimliğinizi satıcınıza gönderin.",
+      "expiry_warning_other": "Lisansınızın süresi {{count}} gün sonra doluyor ({{valid_until}}). Yenilemek için Kurulum Kimliğinizi satıcınıza gönderin.",
+      "grace": "Lisansınızın süresi şu tarihte doldu: {{valid_until}}. Alice otomatik işleri şu tarihte durduracak: {{locks_at}} (süre dolduktan 168 saat sonra). Hemen satıcınızla iletişime geçin. Ek süre günü: {{grace_day}} / 7.",
+      "locked": "Lisans süresi doldu. Otomatik işler duraklatıldı. Verileriniz güvende; sertifika süresi uyarıları e-postayla gelmeye devam ediyor. Yöneticiler: Lisans sayfasından yeni bir lisans yükleyin.",
+      "tampered": "Lisans verileri Alice dışında değiştirildi; Alice değiştirilen dosyayı yok sayıyor. Satıcınızdan gelen lisans dosyasını yeniden yükleyin.",
+      "clock_behind": "Sunucu saati beklenmedik biçimde değişti (şu anda {{system_time}} gösteriyor, ancak Alice en son {{last_seen}} zamanını gördü). Alice lisans denetimlerinde sonraki tarihi kullanıyor. Lütfen sunucu saatini düzeltin veya satıcınızla iletişime geçin.",
+      "clock_jump_one": "Sunucu saati {{count}} gün ileri atladı. Alice 24 saat boyunca lisans denetimlerinde önceki zamanı kullanır. Saatin doğru olduğunu doğrulayın veya satıcınızla iletişime geçin.",
+      "clock_jump_other": "Sunucu saati {{count}} gün ileri atladı. Alice 24 saat boyunca lisans denetimlerinde önceki zamanı kullanır. Saatin doğru olduğunu doğrulayın veya satıcınızla iletişime geçin.",
+      "pending": "Yeni bir lisans ({{license_id}}) şu tarihte başlıyor: {{valid_from}}. O zamana kadar mevcut lisans kullanılır.",
+      "over_limit": "Kullanımdaki hedef sayısı {{used}}, lisanslı hedef sayısı {{max}}. Sınırın altına inene kadar yeni hedef eklenemez.",
+      "limit_reached": "Lisanslı {{max}} hedefin tamamını kullanıyorsunuz. Daha fazla hedef için satıcınızdan lisansınızı artırmasını isteyin."
+    }
   }
 }
