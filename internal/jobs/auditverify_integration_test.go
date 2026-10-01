@@ -16,6 +16,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/notify"
 	"alice/internal/platform/db"
+	"alice/internal/platform/settings"
 )
 
 // tamperAudit changes an audit row as the table owner with the append-only triggers disabled.
@@ -111,4 +112,67 @@ func TestScheduledAuditVerifyLogsABrokenChainAsAnError(t *testing.T) {
 	assert.ErrorIs(t, s.RunNow(context.Background(), AuditVerify.Name), ErrAuditChainBroken)
 	assert.Contains(t, logs.String(), "level=ERROR")
 	assert.Contains(t, logs.String(), "scheduled task failed")
+}
+
+// appendAudit writes n test entries to the audit chain.
+func (e *qenv) appendAudit(t *testing.T, n int) {
+	t.Helper()
+	require.NoError(t, db.InTx(e.ctx, e.d.App, func(tx pgx.Tx) error {
+		for range n {
+			if _, err := e.audit.Append(e.ctx, tx, audit.Event{Actor: audit.SystemActor("test"), Action: "test.event",
+				ObjectType: "test", Result: audit.Success}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+}
+
+// A truncated tail is reported at head+1, and every failing run appends an audit.verified row,
+// so the reported sequence moves on each tick: it is still the same break and is announced
+// once, until the problem changes.
+func TestAuditVerifyTaskAnnouncesATruncatedTailOnce(t *testing.T) {
+	e := newQEnv(t)
+	e.adminWithEmail(t)
+	e.appendAudit(t, 10)
+	task := e.auditVerifyTask()
+	require.NoError(t, task.Run(e.ctx)) // checkpoint at seq 10, audit.verified is seq 11
+	e.tamperAudit(t, `DELETE FROM audit_log WHERE seq >= 4`)
+
+	e.fake.Advance(23 * time.Hour)
+	for range 6 { // tail_truncated at seq 4, 5, …, 9: the head has not reached the checkpoint yet
+		require.ErrorIs(t, task.Run(e.ctx), ErrAuditChainBroken)
+		e.fake.Advance(time.Hour)
+	}
+	emails := e.emails(t, TemplateAuditBroken, "first_bad_seq")
+	require.Len(t, emails, 1, "one email for the truncated tail, not one per tick")
+	assert.Equal(t, map[string]string{"first_bad_seq": "4", "problem": audit.ProblemTailTruncated}, emails["4"])
+
+	// When the head reaches the checkpoint's sequence number the new row's hash differs from the
+	// checkpoint: another problem, another email.
+	byProblem := func() map[string]int {
+		out := map[string]int{}
+		for _, p := range e.emails(t, TemplateAuditBroken, "first_bad_seq") {
+			out[p["problem"]]++
+		}
+		return out
+	}
+	for i := 0; i < 5 && byProblem()[audit.ProblemHashMismatch] == 0; i++ {
+		require.ErrorIs(t, task.Run(e.ctx), ErrAuditChainBroken)
+		e.fake.Advance(time.Hour)
+	}
+	assert.Equal(t, map[string]int{audit.ProblemTailTruncated: 1, audit.ProblemHashMismatch: 1}, byProblem())
+	require.ErrorIs(t, task.Run(e.ctx), ErrAuditChainBroken)
+	assert.Equal(t, map[string]int{audit.ProblemTailTruncated: 1, audit.ProblemHashMismatch: 1}, byProblem(),
+		"the hash mismatch is announced once too")
+}
+
+// A last intact verification in the future (a clock set back, an edited row) is not "recent":
+// the task verifies.
+func TestAuditVerifyTaskTreatsAFutureLastVerificationAsDue(t *testing.T) {
+	e := newQEnv(t)
+	require.NoError(t, settings.Set(e.ctx, e.d.App, auditVerifyStateKey,
+		auditVerifyState{LastIntactAt: e.clk.Now().Add(48 * time.Hour)}, e.clk.Now()))
+	require.NoError(t, e.auditVerifyTask().Run(e.ctx))
+	assert.Equal(t, 1, e.audits(t, "audit.verified"))
 }

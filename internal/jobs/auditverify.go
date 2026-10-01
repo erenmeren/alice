@@ -67,8 +67,13 @@ func auditBrokenParams(rep audit.Report) map[string]string {
 // AuditVerifyTask is the periodic audit.verify task (spec §8.2, R37 item 15). It ticks hourly
 // and verifies the chain when the last intact verification is at least 23 hours old; a broken
 // chain is verified again on every tick until it is repaired. A broken chain makes the run
-// fail with ErrAuditChainBroken and queues one audit.broken email per break (per first bad
-// sequence number and problem), in the transaction that records it.
+// fail with ErrAuditChainBroken and queues one audit.broken email per break: when no break is
+// announced yet, when the new one lies further back, or when its problem changes.
+//
+// The email is queued in the transaction that records the alert state (auditVerifyState), not
+// in the one that writes the audit.verified row (audit.Service.Verify commits that first). A
+// crash between the two only delays the email to the next tick, which verifies again because
+// the state still shows no intact verification.
 func AuditVerifyTask(c AuditVerifyConfig) Task {
 	return Task{Type: AuditVerify, Every: auditVerifyTick, Run: func(ctx context.Context) error {
 		return runAuditVerify(ctx, c)
@@ -81,7 +86,9 @@ func runAuditVerify(ctx context.Context, c AuditVerifyConfig) error {
 		return fmt.Errorf("jobs: read the audit verification state: %w", err)
 	}
 	now := c.Clock.Now().UTC()
-	if !st.LastIntactAt.IsZero() && st.LastBrokenAt.Before(st.LastIntactAt) && now.Sub(st.LastIntactAt) < auditVerifyDue {
+	// A last intact verification in the future (a clock set back, an edited row) is due.
+	if !st.LastIntactAt.IsZero() && st.LastBrokenAt.Before(st.LastIntactAt) && !now.Before(st.LastIntactAt) &&
+		now.Sub(st.LastIntactAt) < auditVerifyDue {
 		return nil // verified within the day
 	}
 	rep, err := c.Verifier.Verify(ctx, audit.SystemActor("scheduler"))
@@ -101,7 +108,11 @@ func runAuditVerify(ctx context.Context, c AuditVerifyConfig) error {
 			st.AlertedBadSeq, st.AlertedProblem = 0, ""
 		} else {
 			st.LastBrokenAt = now
-			if st.AlertedBadSeq != rep.FirstBadSeq || st.AlertedProblem != rep.Problem {
+			// A truncated tail is reported at head+1, and every failing run appends an
+			// audit.verified row, so the same break moves forward on each run: announce a break
+			// only when none is announced yet, when it lies further back, or when its problem
+			// changes.
+			if st.AlertedBadSeq == 0 || rep.FirstBadSeq < st.AlertedBadSeq || rep.Problem != st.AlertedProblem {
 				if c.Notifier != nil {
 					if err := c.Notifier.NotifyAdmins(ctx, tx, TemplateAuditBroken, auditBrokenParams(rep)); err != nil {
 						return fmt.Errorf("jobs: queue the audit.broken email: %w", err)
