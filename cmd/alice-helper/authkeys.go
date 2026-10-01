@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -27,9 +28,19 @@ type candidate struct {
 	dir  string // the resolved directory real must stay in: the home, or the directory of an absolute pattern
 }
 
+// scanItem is one expanded AuthorizedKeysFile entry: a candidate, or (ok false) a path that is a
+// valid helper path but is refused (it leaves its directory).
+type scanItem struct {
+	path string
+	c    candidate
+	ok   bool
+}
+
 type userScan struct {
-	acct  account
-	cands []candidate
+	acct       account
+	items      []scanItem
+	command    string // the user's effective AuthorizedKeysCommand
+	unreadable bool   // "sshd -T -C user=…" failed for this user
 }
 
 type scanResult struct {
@@ -48,9 +59,9 @@ func (r *scanResult) warn(code string) {
 // find returns the candidate whose listed path is exactly path.
 func (r scanResult) find(path string) (candidate, bool) {
 	for _, u := range r.users {
-		for _, c := range u.cands {
-			if c.path == path {
-				return c, true
+		for _, it := range u.items {
+			if it.ok && it.path == path {
+				return it.c, true
 			}
 		}
 	}
@@ -59,6 +70,7 @@ func (r scanResult) find(path string) (candidate, bool) {
 
 // scan computes every candidate file from /etc/passwd and sshd -T. It is the only source of
 // paths for authkeys-read and authkeys-write: a path from the caller is only ever compared to it.
+// The files themselves are opened later through openCandidate, which re-checks containment.
 func (s *sys) scan(ctx context.Context) (scanResult, error) {
 	accts, err := s.accounts()
 	if err != nil {
@@ -74,50 +86,60 @@ func (s *sys) scan(ctx context.Context) (scanResult, error) {
 	if s.directoryUsers() {
 		r.warn(helperproto.WarnDirectoryUsers)
 	}
-	for _, a := range s.toScan(accts) {
-		files := global.AuthorizedKeysFile
+	selected, truncated := s.toScan(accts)
+	if truncated {
+		r.warn(helperproto.WarnTooManyUsers)
+	}
+	for _, a := range selected {
+		cfg := global
+		us := userScan{acct: a}
 		if gerr == nil {
-			if cfg, _, err := s.sshdConfig(ctx, "-C", "user="+a.name+",host=localhost,addr=127.0.0.1"); err == nil {
-				files = cfg.AuthorizedKeysFile
+			uc, _, err := s.sshdConfig(ctx, "-C", "user="+a.name+",host=localhost,addr=127.0.0.1")
+			if err != nil {
+				us.unreadable = true
+				r.warn(helperproto.WarnSSHDUnreadable)
+			} else {
+				cfg = uc
 			}
 		}
-		us := userScan{acct: a}
-		for _, pattern := range files {
-			c, ok := s.candidateFor(a, pattern)
-			if !ok {
+		us.command = cfg.AuthorizedKeysCommand
+		for _, pattern := range cfg.AuthorizedKeysFile {
+			p, c, valid, ok := s.candidateFor(a, pattern)
+			switch {
+			case !valid:
 				r.warn(helperproto.WarnUnsupportedPath)
 				continue
+			case slices.ContainsFunc(us.items, func(x scanItem) bool { return x.path == p }):
+				continue
 			}
-			if !slices.ContainsFunc(us.cands, func(x candidate) bool { return x.path == c.path }) {
-				us.cands = append(us.cands, c)
-			}
+			us.items = append(us.items, scanItem{path: p, c: c, ok: ok})
 		}
 		r.users = append(r.users, us)
 	}
 	return r, nil
 }
 
-// candidateFor expands one AuthorizedKeysFile pattern for a. The result must be a valid helper
-// path, and after resolving symlinks it must stay inside the user's home, or inside the directory
+// candidateFor expands one AuthorizedKeysFile pattern for a. valid reports that the expansion is a
+// valid helper path (p); ok that it is also a candidate: after resolving symlinks it must stay inside the user's home, or inside the directory
 // of an absolute pattern (/etc/ssh/keys/%u stays in /etc/ssh/keys).
-func (s *sys) candidateFor(a account, pattern string) (candidate, bool) {
+func (s *sys) candidateFor(a account, pattern string) (p string, c candidate, valid, ok bool) {
 	p, err := sshdconf.Expand(pattern, a.name, a.home, a.uid)
 	if err != nil || !helperproto.ValidPath(p) {
-		return candidate{}, false
+		return "", candidate{}, false, false
 	}
 	allowed := a.home
 	if strings.HasPrefix(pattern, "/") {
 		allowed = filepath.Dir(p)
 	}
-	dir, ok := s.resolveNearest(allowed)
-	if !ok {
-		return candidate{}, false
+	dir, found := s.resolveNearest(allowed)
+	if !found {
+		return p, candidate{}, true, false
 	}
-	real, ok := s.resolveNearest(p)
-	if !ok || !within(real, dir) {
-		return candidate{}, false
+	real, found := s.resolveNearest(p)
+	if !found || !within(real, dir) {
+		return p, candidate{}, true, false
 	}
-	return candidate{acct: a, path: p, real: real, dir: dir}, true
+	return p, candidate{acct: a, path: p, real: real, dir: dir}, true, true
 }
 
 func cmdAuthKeysList(ctx context.Context, s *sys, args []string) (any, error) {
@@ -131,21 +153,37 @@ func cmdAuthKeysList(ctx context.Context, s *sys, args []string) (any, error) {
 	}
 	resp := helperproto.AuthKeysListResponse{OK: true, Users: []helperproto.UserFiles{}, AuthorizedKeysCommand: r.command, Warnings: r.warnings}
 	for _, u := range r.users {
-		uf := helperproto.UserFiles{User: u.acct.name, UID: u.acct.uid, Home: u.acct.home, Files: []helperproto.FileInfo{}}
-		for _, c := range u.cands {
-			uf.Files = append(uf.Files, s.fileInfo(c, r.owners))
+		uf := helperproto.UserFiles{User: u.acct.name, UID: u.acct.uid, Home: u.acct.home, Files: []helperproto.FileInfo{},
+			SSHDUnreadable: u.unreadable, AuthorizedKeysCommand: u.command}
+		for _, it := range u.items {
+			if !it.ok {
+				uf.Files = append(uf.Files, helperproto.FileInfo{Path: it.path, Exists: true, Unsupported: true})
+				continue
+			}
+			uf.Files = append(uf.Files, s.fileInfo(it.c, r.owners))
 		}
 		resp.Users = append(resp.Users, uf)
 	}
 	return resp, nil
 }
 
-// fileInfo describes a candidate without returning its content.
+// fileInfo describes a candidate without returning its content. Everything comes from one opened
+// descriptor (fstat), never from a second look at the path.
 func (s *sys) fileInfo(c candidate, names map[int]string) helperproto.FileInfo {
 	fi := helperproto.FileInfo{Path: c.path}
-	st, err := os.Lstat(s.host(c.real))
-	if err != nil {
+	f, err := s.openCandidate(c)
+	if errors.Is(err, fs.ErrNotExist) {
 		fi.StrictModesOK = s.strictModes(c, nil)
+		return fi
+	}
+	if err != nil {
+		fi.Exists, fi.Unsupported = true, true
+		return fi
+	}
+	defer func() { _ = f.Close() }()
+	st, err := f.Stat()
+	if err != nil {
+		fi.Exists, fi.Unsupported = true, true
 		return fi
 	}
 	fi.Exists, fi.Size, fi.Mode = true, st.Size(), fmt.Sprintf("%04o", st.Mode().Perm())
@@ -154,12 +192,13 @@ func (s *sys) fileInfo(c candidate, names map[int]string) helperproto.FileInfo {
 	if fi.Owner == "" {
 		fi.Owner = strconv.Itoa(uid)
 	}
-	if !st.Mode().IsRegular() {
+	if fileOK(st, c.acct) != nil {
+		fi.Unsupported = true
 		return fi
 	}
 	if st.Size() > helperproto.MaxAuthorizedKeysSize {
 		fi.TooLarge = true
-	} else if data, err := s.readRegular(c.real, helperproto.MaxAuthorizedKeysSize); err == nil {
+	} else if data, err := io.ReadAll(io.LimitReader(f, helperproto.MaxAuthorizedKeysSize+1)); err == nil && len(data) <= helperproto.MaxAuthorizedKeysSize {
 		fi.SHA256 = hexSHA(data)
 	}
 	fi.StrictModesOK = s.strictModes(c, st)
@@ -204,12 +243,16 @@ func cmdAuthKeysRead(ctx context.Context, s *sys, args []string) (any, error) {
 	if !ok {
 		return nil, refused(helperproto.CodePathNotAllowed, "the path is not an authorized_keys file of a listed user")
 	}
-	data, err := s.readRegular(c.real, helperproto.MaxAuthorizedKeysSize)
+	data, err := s.readCandidate(c)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return nil, precondition(helperproto.CodeNotFound, "the file does not exist")
 	case errors.Is(err, errTooLarge):
 		return nil, refused(helperproto.CodeTooLarge, "the file is too large")
+	case errors.Is(err, errEscaped):
+		return nil, refused(helperproto.CodePathNotAllowed, "the path leaves its allowed directory")
+	case errors.Is(err, errUnsafe):
+		return nil, refused(helperproto.CodeUnsafeFile, "the file is hard-linked or owned by another user")
 	case errors.Is(err, errNotRegular), errors.Is(err, syscall.ELOOP):
 		return nil, refused(helperproto.CodeNotRegularFile, "the path is not a regular file")
 	case err != nil:

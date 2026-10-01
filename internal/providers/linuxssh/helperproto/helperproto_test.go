@@ -139,7 +139,7 @@ func TestWireNames(t *testing.T) {
 			Owner: "deploy", StrictModesOK: true}}}}, AuthorizedKeysCommand: "none", Warnings: []string{WarnSSHDUnreadable}})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"ok":true,"users":[{"user":"deploy","uid":1001,"home":"/home/deploy","files":[{"path":"/home/deploy/.ssh/authorized_keys",
-		"exists":true,"size":3,"sha256":"x","mode":"0600","owner":"deploy","strict_modes_ok":true,"too_large":false}]}],
+		"exists":true,"size":3,"sha256":"x","mode":"0600","owner":"deploy","strict_modes_ok":true,"too_large":false,"unsupported":false}],"sshd_unreadable":false,"authorized_keys_command":""}],
 		"authorized_keys_command":"none","warnings":["sshd_unreadable"]}`, string(b))
 	b, err = json.Marshal(ErrorResponse{Code: CodePathNotAllowed, Message: "m"})
 	require.NoError(t, err)

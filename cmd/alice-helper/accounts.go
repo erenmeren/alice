@@ -51,7 +51,7 @@ func (s *sys) accounts() ([]account, error) {
 // toScan selects the accounts whose keys are inventoried (spec §13.1): root, every normal account
 // (uid >= 1000, not nobody) with an existing home and a login shell, and the account that runs the
 // helper through sudo (alice-svc, a system account) so Alice's own key appears in the inventory.
-func (s *sys) toScan(accts []account) []account {
+func (s *sys) toScan(accts []account) ([]account, bool) {
 	sudo := s.sudoUserName()
 	seen := map[string]bool{}
 	var out []account
@@ -74,9 +74,9 @@ func (s *sys) toScan(accts []account) []account {
 		return out[i].name < out[j].name
 	})
 	if len(out) > maxUsers {
-		out = out[:maxUsers]
+		return out[:maxUsers], true
 	}
-	return out
+	return out, false
 }
 
 func loginShell(shell string) bool {

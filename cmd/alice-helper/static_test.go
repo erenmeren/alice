@@ -43,6 +43,7 @@ func TestHelperIsStatic(t *testing.T) {
 	mods, err := exec.Command(goBin, "version", "-m", out).CombinedOutput()
 	require.NoError(t, err, string(mods))
 	assert.Contains(t, string(mods), "\tmod\talice")
+	assert.Contains(t, string(mods), "build\tCGO_ENABLED=0", "the build info records a cgo-free build")
 	deps := 0
 	for _, line := range strings.Split(string(mods), "\n") {
 		fields := strings.Fields(line)
@@ -52,4 +53,22 @@ func TestHelperIsStatic(t *testing.T) {
 		}
 	}
 	assert.Positive(t, deps, "the build info lists golang.org/x/crypto")
+
+	// The arm64 build is just as static.
+	arm := filepath.Join(t.TempDir(), "alice-helper-arm64")
+	buildArm := exec.Command(goBin, "build", "-trimpath", "-ldflags", "-s -w", "-o", arm, ".")
+	buildArm.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=arm64")
+	msg, err = buildArm.CombinedOutput()
+	require.NoError(t, err, string(msg))
+	af, err := elf.Open(arm)
+	require.NoError(t, err)
+	defer func() { _ = af.Close() }()
+	assert.Equal(t, elf.EM_AARCH64, af.Machine)
+	for _, p := range af.Progs {
+		assert.NotEqual(t, elf.PT_INTERP, p.Type)
+	}
+	needed, err := af.DynString(elf.DT_NEEDED)
+	if err == nil {
+		assert.Empty(t, needed, "no DT_NEEDED entries")
+	}
 }

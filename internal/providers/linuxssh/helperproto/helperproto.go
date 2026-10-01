@@ -51,6 +51,7 @@ const (
 	CodeNotFound            = "NOT_FOUND"
 	CodeSSHDFailed          = "SSHD_FAILED"
 	CodeIOError             = "IO_ERROR"
+	CodeUnsafeFile          = "UNSAFE_FILE" // hard-linked, or owned by neither its user nor root
 )
 
 // Warning codes in AuthKeysListResponse.Warnings; they equal the web catalog keys warnings.<code>.
@@ -58,6 +59,7 @@ const (
 	WarnSSHDUnreadable  = "sshd_unreadable"
 	WarnDirectoryUsers  = "directory_users_not_listed"
 	WarnUnsupportedPath = "unsupported_path"
+	WarnTooManyUsers    = "too_many_users" // more accounts than the helper lists
 )
 
 // Size limits and markers.
@@ -112,6 +114,7 @@ type FileInfo struct {
 	Owner         string `json:"owner"`
 	StrictModesOK bool   `json:"strict_modes_ok"`
 	TooLarge      bool   `json:"too_large"`
+	Unsupported   bool   `json:"unsupported"` // a candidate the helper refuses to read or write (escapes its directory, hard link, foreign owner)
 }
 
 // UserFiles is one account and its candidate files.
@@ -120,6 +123,11 @@ type UserFiles struct {
 	UID   int        `json:"uid"`
 	Home  string     `json:"home"`
 	Files []FileInfo `json:"files"`
+	// SSHDUnreadable is true when "sshd -T -C user=…" failed for this user: Files then come from the
+	// global configuration and may be wrong, so write operations must refuse.
+	SSHDUnreadable bool `json:"sshd_unreadable"`
+	// AuthorizedKeysCommand is this user's effective AuthorizedKeysCommand ("none" when unset).
+	AuthorizedKeysCommand string `json:"authorized_keys_command"`
 }
 
 // AuthKeysListResponse answers "authkeys-list".

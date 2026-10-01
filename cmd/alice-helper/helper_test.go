@@ -70,6 +70,8 @@ type fixture struct {
 	global    string
 	perUser   map[string]string
 	sshdFails bool
+	cFails    bool // only "sshd -T -C user=…" fails
+	onSSHD    func(args []string)
 	uid       int
 }
 
@@ -118,7 +120,10 @@ broken line
 
 func (f *fixture) runSSHD(_ context.Context, args ...string) ([]byte, error) {
 	f.sshdCalls.Add(1)
-	if f.sshdFails {
+	if f.onSSHD != nil {
+		f.onSSHD(args)
+	}
+	if f.sshdFails || (f.cFails && len(args) == 3) {
 		return nil, errors.New("exit status 255")
 	}
 	if len(args) == 3 && args[0] == "-T" && args[1] == "-C" {
@@ -306,7 +311,7 @@ func TestAuthKeysListUsersAndFiles(t *testing.T) {
 	require.Len(t, deploy, 2)
 	assert.Equal(t, map[string]any{"path": "/home/deploy/.ssh/authorized_keys", "exists": true, "size": float64(31),
 		"sha256": hexOf("ssh-ed25519 AAAA deploy@laptop\n"), "mode": "0600", "owner": owner, "strict_modes_ok": true,
-		"too_large": false}, deploy[0])
+		"too_large": false, "unsupported": false}, deploy[0])
 	assert.Equal(t, "/etc/ssh/keys/deploy", deploy[1]["path"])
 	assert.Equal(t, true, deploy[1]["exists"])
 	assert.Equal(t, "0644", deploy[1]["mode"])
@@ -366,10 +371,11 @@ func TestEscapingSymlinkIsNotACandidate(t *testing.T) {
 	require.NoError(t, os.Symlink("../../../etc/shadow", f.host("/home/deploy/.ssh/authorized_keys2")))
 
 	_, m := f.run("authkeys-list")
-	assert.Equal(t, []any{helperproto.WarnUnsupportedPath}, m["warnings"])
-	for _, fi := range filesOf(listUser(t, m, "deploy")) {
-		assert.NotEqual(t, "/home/deploy/.ssh/authorized_keys2", fi["path"])
-	}
+	assert.Equal(t, []any{}, m["warnings"], "a valid path that is refused is flagged on the file, not globally")
+	files := filesOf(listUser(t, m, "deploy"))
+	require.Len(t, files, 2)
+	assert.Equal(t, map[string]any{"path": "/home/deploy/.ssh/authorized_keys2", "exists": true, "size": float64(0), "sha256": "",
+		"mode": "", "owner": "", "strict_modes_ok": false, "too_large": false, "unsupported": true}, files[1])
 
 	for _, p := range []string{"/home/deploy/.ssh/authorized_keys2", "/etc/shadow", "/root/.ssh/../../etc/shadow"} {
 		code, m := f.run("authkeys-read", p)
@@ -445,4 +451,147 @@ func TestArgumentsOutsideTheVocabularyAreRefused(t *testing.T) {
 	}
 	assert.Zero(t, f.sshdCalls.Load(), "nothing ran")
 	assert.Empty(t, f.loggedLines(), "nothing was logged with a hostile path")
+}
+
+// addZed adds a user that sorts after "deploy", so its sshd call runs between the scan's
+// resolution of deploy's files and the read.
+func (f *fixture) addZed() {
+	f.t.Helper()
+	f.mkdir("/home/zed", 0o755)
+	f.write("/etc/passwd", f.read("/etc/passwd")+"zed:x:2000:2000::/home/zed:/bin/bash\n", 0o644)
+}
+
+// C-1: after the scan resolved ~/.ssh/authorized_keys, ~/.ssh becomes a symlink to a directory that
+// holds a secret. Both openat2 and the component-wise fallback must refuse.
+func TestAttackSwapRace(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		openat2 bool
+		target  func(f *fixture) string
+	}{
+		{"openat2 absolute", true, func(f *fixture) string { return f.host("/etc/evil") }},
+		{"openat2 relative", true, func(*fixture) string { return "../../etc/evil" }},
+		{"fallback absolute", false, func(f *fixture) string { return f.host("/etc/evil") }},
+		{"fallback relative", false, func(*fixture) string { return "../../etc/evil" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useOpenat2 = tc.openat2
+			t.Cleanup(func() { useOpenat2 = true })
+			f := newFixture(t)
+			f.addZed()
+			f.write("/home/deploy/.ssh/authorized_keys", "mine\n", 0o600)
+			f.mkdir("/etc/evil", 0o755)
+			f.write("/etc/evil/authorized_keys", "SECRET-HASH\n", 0o600)
+			swapped := false
+			f.onSSHD = func(args []string) {
+				if len(args) == 3 && strings.HasPrefix(args[2], "user=zed") && !swapped {
+					swapped = true
+					require.NoError(t, os.Rename(f.host("/home/deploy/.ssh"), f.host("/home/deploy/.ssh.orig")))
+					require.NoError(t, os.Symlink(tc.target(f), f.host("/home/deploy/.ssh")))
+				}
+			}
+			code, m := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys")
+			require.True(t, swapped, "the swap happened between scan and read")
+			assert.Equal(t, helperproto.ExitRefused, code)
+			assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
+			assert.NotContains(t, f.out.String(), "SECRET")
+			assert.NotContains(t, f.out.String(), hexOf("SECRET-HASH\n"))
+
+			// The same swap during authkeys-list: the file is flagged and never hashed.
+			require.NoError(t, os.Remove(f.host("/home/deploy/.ssh")))
+			require.NoError(t, os.Rename(f.host("/home/deploy/.ssh.orig"), f.host("/home/deploy/.ssh")))
+			swapped = false
+			_, m = f.run("authkeys-list")
+			require.True(t, swapped)
+			fi := filesOf(listUser(t, m, "deploy"))[0]
+			assert.Equal(t, true, fi["unsupported"])
+			assert.Equal(t, "", fi["sha256"])
+			assert.NotContains(t, f.out.String(), hexOf("SECRET-HASH\n"))
+		})
+	}
+}
+
+func TestFallbackRefusesSymlinkComponentsButOpenat2FollowsInside(t *testing.T) {
+	f := newFixture(t)
+	f.write("/home/deploy/.ssh/authorized_keys", "real\n", 0o600)
+	require.NoError(t, os.Symlink("authorized_keys", f.host("/home/deploy/.ssh/authorized_keys2")))
+	code, _ := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys2")
+	assert.Equal(t, 0, code, "openat2 follows a symlink that stays beneath the home (A-13)")
+	// The scan resolves the link first, so the fallback opens the real file and also succeeds.
+	useOpenat2 = false
+	t.Cleanup(func() { useOpenat2 = true })
+	code, _ = f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys2")
+	assert.Equal(t, 0, code)
+}
+
+// I-1: a hard link to a file outside the home is refused (spec §13.3).
+func TestAttackHardLink(t *testing.T) {
+	skipOddUID(t)
+	f := newFixture(t)
+	f.write("/etc/shadow", "root:SECRET-HASH:19000::::::\n", 0o600)
+	require.NoError(t, os.Link(f.host("/etc/shadow"), f.host("/home/deploy/.ssh/authorized_keys")))
+	code, m := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys")
+	assert.Equal(t, helperproto.ExitRefused, code)
+	assert.Equal(t, helperproto.CodeUnsafeFile, m["code"])
+	assert.NotContains(t, f.out.String(), "SECRET")
+	_, m = f.run("authkeys-list")
+	fi := filesOf(listUser(t, m, "deploy"))[0]
+	assert.Equal(t, true, fi["unsupported"])
+	assert.Equal(t, "", fi["sha256"])
+}
+
+func TestAttackForeignOwner(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("a root-owned file is accepted; the test needs a non-root owner")
+	}
+	f := newFixture(t)
+	f.write("/etc/passwd", strings.Replace(f.read("/etc/passwd"), fmt.Sprintf("deploy:x:%d:%d", f.uid, f.uid), "deploy:x:7777:7777", 1), 0o644)
+	f.write("/home/deploy/.ssh/authorized_keys", "x\n", 0o600)
+	code, m := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys")
+	assert.Equal(t, helperproto.ExitRefused, code)
+	assert.Equal(t, helperproto.CodeUnsafeFile, m["code"])
+}
+
+// I-2: a failing per-user "sshd -T -C" is flagged, not silently replaced by the global answer.
+func TestPerUserSSHDFailureIsFlagged(t *testing.T) {
+	f := newFixture(t)
+	f.cFails = true
+	_, m := f.run("authkeys-list")
+	assert.Equal(t, []any{helperproto.WarnSSHDUnreadable}, m["warnings"])
+	assert.Equal(t, true, listUser(t, m, "deploy")["sshd_unreadable"])
+
+	f.cFails = false
+	f.perUser[deployCtx] = "authorizedkeysfile .ssh/authorized_keys\nauthorizedkeyscommand /usr/bin/x %u\n"
+	_, m = f.run("authkeys-list")
+	d := listUser(t, m, "deploy")
+	assert.Equal(t, false, d["sshd_unreadable"])
+	assert.Equal(t, "/usr/bin/x %u", d["authorized_keys_command"])
+	assert.Equal(t, "none", listUser(t, m, "root")["authorized_keys_command"])
+	assert.Equal(t, "none", m["authorized_keys_command"])
+}
+
+func TestTooManyUsers(t *testing.T) {
+	f := newFixture(t)
+	var b strings.Builder
+	for i := 0; i < 205; i++ {
+		fmt.Fprintf(&b, "u%d:x:%d:%d::/home/deploy:/bin/bash\n", i, 3000+i, 3000+i)
+	}
+	f.write("/etc/passwd", f.read("/etc/passwd")+b.String(), 0o644)
+	_, m := f.run("authkeys-list")
+	assert.Equal(t, []any{helperproto.WarnTooManyUsers}, m["warnings"])
+	assert.Len(t, m["users"], 200)
+}
+
+// D13: an expansion that is a valid path but is refused is listed as unsupported; one that is not
+// a valid path only raises the global warning.
+func TestUnsupportedPatterns(t *testing.T) {
+	f := newFixture(t)
+	f.global = "authorizedkeysfile .ssh/authorized_keys /outside/%u .ssh/with%20space\n"
+	_, m := f.run("authkeys-list")
+	var paths []any
+	for _, fi := range filesOf(listUser(t, m, "deploy")) {
+		paths = append(paths, fi["path"])
+	}
+	assert.Equal(t, []any{"/home/deploy/.ssh/authorized_keys", "/outside/deploy"}, paths)
+	assert.Equal(t, []any{helperproto.WarnUnsupportedPath}, m["warnings"])
 }

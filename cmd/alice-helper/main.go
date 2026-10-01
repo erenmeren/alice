@@ -14,8 +14,6 @@ import (
 	"os/exec"
 	"syscall"
 	"time"
-
-	"alice/internal/providers/linuxssh/helperproto"
 )
 
 func main() {
@@ -25,15 +23,16 @@ func main() {
 
 // productionSys is the real environment: the whole filesystem, the real user IDs and sshd.
 func productionSys() *sys {
-	return &sys{
+	s := &sys{
 		euid:     os.Geteuid,
 		sudoUser: func() string { return os.Getenv("SUDO_USER") },
 		now:      time.Now, //nolint:forbidigo // the helper is a separate binary; its clock is injected through sys.now
 		runSSHD:  runSSHD,
 		stdin:    os.Stdin,
 		stdout:   os.Stdout,
-		syslog:   writeSyslog,
 	}
+	s.syslog = func(subcommand, path string) { writeSyslog(s.sudoUserName(), subcommand, path) }
+	return s
 }
 
 // sshdPath is the OpenSSH server binary on every supported distribution (spec §12.1).
@@ -73,14 +72,13 @@ func (w *capWriter) Write(p []byte) (int, error) {
 
 // writeSyslog records the call in the authpriv log (spec §12.3): the calling user, the subcommand
 // and the normalized path, never contents. Failures are ignored (the answer to Alice still counts).
-func writeSyslog(subcommand, path string) {
+func writeSyslog(user, subcommand, path string) {
 	w, err := syslog.New(syslog.LOG_AUTHPRIV|syslog.LOG_INFO, "alice-helper")
 	if err != nil {
 		return
 	}
 	defer func() { _ = w.Close() }()
-	user := os.Getenv("SUDO_USER")
-	if !helperproto.ValidUser(user) {
+	if user == "" {
 		user = "unknown"
 	}
 	_ = w.Info("user=" + user + " subcommand=" + subcommand + " path=" + path)
