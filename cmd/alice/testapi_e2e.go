@@ -32,6 +32,12 @@ import (
 // versionSuffix marks the e2e build in "alice version" and /api/v1/version.
 const versionSuffix = "+e2e"
 
+// startJobWorkers is false in the e2e build: serve does not run the job workers, so a queued job
+// stays queued until a test runs it with POST /test/jobs/drain (the scheduler still enqueues
+// periodic work). The journeys then see every job state deterministically instead of racing a
+// background worker.
+const startJobWorkers = false
+
 // maxTestBody is the request body limit of the API (SEC-023), applied to /test too.
 const maxTestBody = 1 << 20
 
@@ -277,9 +283,15 @@ func testHandler(d testDeps) http.Handler {
 			writeTestJSON(w, http.StatusConflict, map[string]string{"error": "no job runner"})
 			return
 		}
+		// The deadline stays below the server's 60 s WriteTimeout, so the answer always arrives.
+		ctx, cancel := context.WithTimeout(r.Context(), drainBudget)
+		defer cancel()
 		ran := 0
-		for ran < maxDrain {
-			ok, err := d.Runner.RunOnce(r.Context())
+		for ran < maxDrain && ctx.Err() == nil {
+			ok, err := d.Runner.RunOnce(ctx)
+			if ctx.Err() != nil {
+				break // the job that was cut off is retried like any interrupted job
+			}
 			if err != nil {
 				d.Log.Error("test job drain failed", "error_type", fmt.Sprintf("%T", err))
 				writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "drain failed"})
@@ -335,9 +347,13 @@ func writeTestJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// maxDrain bounds one POST /test/jobs/drain (a handler that enqueues follow-up jobs, such as a
-// connection test that enqueues discovery, must not loop forever).
-const maxDrain = 50
+// maxDrain and drainBudget bound one POST /test/jobs/drain: a handler that enqueues follow-up
+// jobs (a connection test enqueues discovery) must not loop forever, and the answer must come
+// before the server's 60 s WriteTimeout. A test that needs more calls drain again.
+const (
+	maxDrain    = 20
+	drainBudget = 30 * time.Second
+)
 
 var (
 	errNoLicenseFile = errors.New("no stored license file")

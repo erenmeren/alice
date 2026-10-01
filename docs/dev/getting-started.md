@@ -80,13 +80,20 @@ that build serves `GET/POST /test/clock` (read the clock, move it forward or bac
 sender run right after every move), `POST /test/reset` (empty all tables, the license time record and the
 mailbox, then create a new installation), `POST /test/setup-token`, `POST /test/license` (a license for this
 installation signed with the test key, which only this build trusts; fields `valid_days`, `max_targets`,
-`valid_from`, `replaces`, …) and `GET /test/mail` (emails the build would have sent). Release images are built
+`valid_from`, `replaces`, …), `GET /test/mail` (emails the build would have sent), `POST /test/license/tamper`
+(damage the newest stored license file so the "changed outside Alice" banner appears) and `POST /test/jobs/drain`
+(run due jobs now, at most 20 per call). The e2e build starts no job workers: queued jobs (connection tests,
+discovery, key removals, and the discovery the scheduler enqueues) run only when a test calls
+`/test/jobs/drain`, so every job state is reproducible. Release images are built
 without the tags; unit tests in `cmd/alice` fail if the release build has a test endpoint, the demo clock, the
 test key or the test signer. The e2e build reports its version with a `+e2e` suffix and logs a warning at
 startup. A build with `testlicense` but without `e2e` logs "test license key trusted" and reports `+testlicense`.
 Never run either for real data.
 
-The e2e stack uses the same development database as `make up`, and every Playwright run empties it. `make up`
+The e2e stack is a separate compose project, `alice-e2e` (its own database, volumes and networks), because every
+Playwright run empties its database; it never touches the `make up` stack. It also starts the SSH test target
+`sshtarget` (internal network only, no published port). `make e2e-hardening-check` checks it, `make e2e-down`
+removes it with its volumes. Both stacks publish `ALICE_PORT`, so stop one before starting the other. `make up`
 rebuilds the Go layer on every run because the build time is passed to the image (it is the floor of the license
 clock, L-53).
 

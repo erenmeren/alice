@@ -53,3 +53,8 @@ func TestReleaseServerAnswersTestPathsWithJSON404(t *testing.T) {
 		assert.Equal(t, "ALC-SYS-0001", body.Error.Code, req.URL.Path)
 	}
 }
+
+// The release build runs the job workers; only the e2e build drives jobs through /test/jobs/drain.
+func TestReleaseBuildStartsJobWorkers(t *testing.T) {
+	assert.True(t, startJobWorkers)
+}

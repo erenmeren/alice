@@ -211,7 +211,11 @@ func TestServeStartsLicenseAndSavesTimeRecordAtShutdown(t *testing.T) {
 	var first string
 	require.NoError(t, d.Owner.QueryRow(context.Background(), "SELECT action FROM audit_log ORDER BY seq LIMIT 1").Scan(&first))
 	assert.Equal(t, "platform_key.created", first, "a fresh installation's audit chain starts with the platform key")
-	assert.Contains(t, logs.String(), "job workers started")
+	if startJobWorkers {
+		assert.Contains(t, logs.String(), "job workers started")
+	} else {
+		assert.Contains(t, logs.String(), "job workers are not started in the e2e build")
+	}
 	hwmPath := filepath.Join(stateDir, license.HWMFileName)
 	fileAtStart, err := os.ReadFile(hwmPath)
 	require.NoError(t, err, "the time record is on the state volume")
@@ -224,9 +228,12 @@ func TestServeStartsLicenseAndSavesTimeRecordAtShutdown(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("serve did not stop")
 	}
-	assert.Contains(t, logs.String(), "job workers stopped")
-	assert.Less(t, strings.Index(logs.String(), "job workers stopped"), strings.Index(logs.String(), "ssh connections closed"),
-		"workers stop before the SSH pool closes")
+	if startJobWorkers {
+		assert.Contains(t, logs.String(), "job workers stopped")
+		assert.Less(t, strings.Index(logs.String(), "job workers stopped"), strings.Index(logs.String(), "ssh connections closed"),
+			"workers stop before the SSH pool closes")
+	}
+	assert.Contains(t, logs.String(), "ssh connections closed")
 	fileAtStop, err := os.ReadFile(hwmPath)
 	require.NoError(t, err)
 	assert.NotEqual(t, fileAtStart, fileAtStop, "the file copy was saved again at shutdown")

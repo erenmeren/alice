@@ -79,7 +79,7 @@ func TestAuthorizedKeysLine(t *testing.T) {
 	}
 	assert.NoError(t, ValidateFrom(""))
 	assert.NoError(t, ValidateFrom("!10.0.0.9,10.0.0.*"))
-	_, err := SetupScript("linux", AuthorizedKeysLine(key, "bad host"))
+	_, err := SetupScript("linux", AuthorizedKeysLine(key, "bad host"), true)
 	assert.Error(t, err, "the script refuses the empty line of a refused from=")
 }
 
@@ -91,7 +91,7 @@ echo "Warning: this Alice build cannot verify alice-helper (development build wi
 
 func TestSetupScriptLinux(t *testing.T) {
 	line := `from="10.0.0.5",` + wantOptions + ` ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform`
-	script, err := SetupScript("linux", line)
+	script, err := SetupScript("linux", line, true)
 	require.NoError(t, err)
 	want := `#!/bin/sh
 # Prepares this server for Alice (profile: linux). Run it as root in the directory that
@@ -134,7 +134,7 @@ echo "This server is ready for Alice."
 `
 	assert.Equal(t, want, script)
 
-	nginx, err := SetupScript("nginx", line)
+	nginx, err := SetupScript("nginx", line, true)
 	require.NoError(t, err)
 	assert.Contains(t, nginx, "(profile: nginx)")
 	assert.Contains(t, nginx, goldenSudoersNginx)
@@ -142,10 +142,10 @@ echo "This server is ready for Alice."
 
 func TestSetupScriptRefusesLinesThatCouldBreakTheScript(t *testing.T) {
 	for _, bad := range []string{"", "ssh-ed25519 AAAA x'; rm -rf / #", "ssh-ed25519 AAAA\nrm -rf /", "ssh-ed25519 AAAA \x00"} {
-		_, err := SetupScript("linux", bad)
+		_, err := SetupScript("linux", bad, true)
 		assert.Error(t, err, "%q", bad)
 	}
-	_, err := SetupScript("windows", "ssh-ed25519 AAAA x")
+	_, err := SetupScript("windows", "ssh-ed25519 AAAA x", true)
 	assert.Error(t, err)
 	assert.False(t, strings.Contains(goldenSudoersLinux, "ALICE_SUDOERS"), "the here-document marker never appears in sudoers")
 }
@@ -234,7 +234,7 @@ func TestSudoersMatchesEveryBuiltCommand(t *testing.T) {
 // alice-svc with chown.
 func TestSetupScriptNeverWritesThroughTheServiceUser(t *testing.T) {
 	for _, profile := range []string{"linux", "nginx"} {
-		script, err := SetupScript(profile, wantOptions+" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform")
+		script, err := SetupScript(profile, wantOptions+" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform", true)
 		require.NoError(t, err)
 		assert.NotContains(t, script, "chown alice-svc")
 		assert.NotContains(t, script, "-o alice-svc")
@@ -273,9 +273,10 @@ func withHelperSums(t *testing.T, amd64, arm64 string) {
 func TestSetupScriptVerifiesTheHelperChecksum(t *testing.T) {
 	amd64, arm64 := strings.Repeat("a1", 32), strings.Repeat("b2", 32)
 	withHelperSums(t, amd64, arm64)
-	script, err := SetupScript("linux", wantOptions+" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform")
-	require.NoError(t, err)
+	script, err := SetupScript("linux", wantOptions+" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform", false)
+	require.NoError(t, err, "a build with checksums needs no permission to skip the check")
 	assert.NotContains(t, script, "cannot verify")
+	assert.Contains(t, script, `command -v sha256sum >/dev/null || { echo "sha256sum (coreutils) is required." >&2; exit 1; }`+"\n")
 	assert.Contains(t, script, "    x86_64) helper_sha256="+amd64+" ;;\n")
 	assert.Contains(t, script, "    aarch64) helper_sha256="+arm64+" ;;\n")
 	assert.Contains(t, script, `printf '%s  ./alice-helper\n' "$helper_sha256" | sha256sum -c - >/dev/null 2>&1`)
@@ -285,7 +286,8 @@ func TestSetupScriptVerifiesTheHelperChecksum(t *testing.T) {
 }
 
 // A checksum that is not 64 lower-case hex digits (a broken build) is never embedded in a
-// root script: the script says it cannot verify instead.
+// root script. A release build then has no script at all; only a development build gets one
+// that says it cannot verify the helper.
 func TestSetupScriptIgnoresMalformedChecksums(t *testing.T) {
 	for _, bad := range [][2]string{
 		{"", strings.Repeat("b2", 32)},
@@ -294,7 +296,9 @@ func TestSetupScriptIgnoresMalformedChecksums(t *testing.T) {
 		{strings.Repeat("a1", 32) + "; rm -rf /", strings.Repeat("b2", 32)},
 	} {
 		withHelperSums(t, bad[0], bad[1])
-		script, err := SetupScript("linux", wantOptions+" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform")
+		_, err := SetupScript("linux", wantOptions+" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform", false)
+		assert.ErrorIs(t, err, ErrHelperUnverified, "%q: only a development build may skip the check", bad)
+		script, err := SetupScript("linux", wantOptions+" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform", true)
 		require.NoError(t, err)
 		assert.Contains(t, script, goldenUnverified, "%q", bad)
 		assert.NotContains(t, script, "rm -rf /;")

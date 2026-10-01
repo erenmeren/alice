@@ -176,7 +176,7 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	pool := linuxssh.NewPool(&linuxssh.Dialer{Clock: clock.Real{}, HostKeys: s.inv.HostKeyStore()},
 		linuxssh.MaxConnections, linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)
 	t.Cleanup(pool.Close)
-	s.registry.Register(linuxssh.New(linuxssh.Options{Pool: pool}))
+	s.registry.Register(linuxssh.New(linuxssh.Options{Pool: pool, AllowUnverifiedHelper: true}))
 	s.registry.Freeze()
 	_, err := s.inv.EnsurePlatformKey(context.Background())
 	require.NoError(t, err)

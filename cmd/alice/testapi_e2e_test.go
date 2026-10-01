@@ -193,6 +193,7 @@ func TestE2EPhase3EndpointsNeedTheirServices(t *testing.T) {
 		assert.Equal(t, http.StatusConflict, rec.Code, path)
 		assert.Contains(t, rec.Body.String(), `"error"`, path)
 	}
+	assert.Less(t, drainBudget, 60*time.Second, "a drain answers before the server's WriteTimeout")
 }
 
 // damageLicenseFile changes the signed customer name and nothing else, so the file still parses
@@ -204,4 +205,10 @@ func TestDamageLicenseFileChangesOnlyTheCustomer(t *testing.T) {
 	assert.Equal(t, strings.Replace(string(raw), `"customer": "Test Company"`, `"customer": "tampered-Test Company"`, 1), string(out))
 	_, err = damageLicenseFile([]byte(`{"payload":{}}`))
 	assert.Error(t, err, "a file without a customer field cannot be damaged this way")
+}
+
+// I-4: the e2e build starts no job workers, so jobs run only when a test drains them
+// (POST /test/jobs/drain) and the journeys see every state deterministically.
+func TestE2EBuildStartsNoJobWorkers(t *testing.T) {
+	assert.False(t, startJobWorkers)
 }

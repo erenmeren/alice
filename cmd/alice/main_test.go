@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"alice/internal/audit"
 	"alice/internal/auth"
@@ -97,22 +98,55 @@ func TestAPIDepsCarryEveryService(t *testing.T) {
 	assert.NotNil(t, d.Log)
 }
 
-// At shutdown serve waits for running jobs only until the job budget ends (spec §8.8: up to
-// 60 s; the runner then releases the leases of unfinished jobs itself).
+// At shutdown serve waits for the job runner only until the shutdown deadline (spec §8.8: the
+// runner itself releases the leases of jobs that did not end within its grace).
 func TestWaitForJobsIsBounded(t *testing.T) {
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, nil))
 
 	done := make(chan struct{})
 	close(done)
-	assert.True(t, waitForJobs(done, time.Second, log))
+	assert.True(t, waitForJobs(context.Background(), done, log))
 	assert.Empty(t, logs.String())
 
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
 	start := time.Now()
-	assert.False(t, waitForJobs(make(chan struct{}), 20*time.Millisecond, log), "workers that never stop do not block shutdown")
+	assert.False(t, waitForJobs(ctx, make(chan struct{}), log), "workers that never stop do not block shutdown")
 	assert.Less(t, time.Since(start), 5*time.Second)
 	assert.Contains(t, logs.String(), "level=WARN")
 	assert.Contains(t, logs.String(), "background jobs did not stop")
+}
+
+// closeWithin gives up on a close that hangs (a stuck job holding a database connection) so the
+// process still exits before Docker kills it.
+func TestCloseWithinIsBounded(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	closed := false
+	closeWithin("quick", func() { closed = true }, time.Second, log)
+	assert.True(t, closed)
+	assert.Empty(t, logs.String())
+
+	block := make(chan struct{})
+	defer close(block)
+	start := time.Now()
+	closeWithin("the database pool", func() { <-block }, 20*time.Millisecond, log)
+	assert.Less(t, time.Since(start), 5*time.Second)
+	assert.Contains(t, logs.String(), "level=WARN")
+	assert.Contains(t, logs.String(), "the database pool")
+}
+
+// Every shutdown step is bounded and together they end before Docker's stop_grace_period sends
+// SIGKILL (I-2): the HTTP drain, scheduler and job wait share one deadline from the signal, which
+// also covers the runner's own grace; the leader, SSH pool, time record and database pool each
+// have a small budget after it.
+func TestShutdownFitsTheStopGracePeriod(t *testing.T) {
+	grace, err := time.ParseDuration(readCompose(t, "../../deploy/docker-compose.yml").Services["alice"].StopGracePeriod)
+	require.NoError(t, err)
+	total := serveShutdownBudget + leaderCloseBudget + sshPoolCloseBudget + timeRecordSaveBudget + dbCloseBudget
+	assert.Less(t, total, grace, "worst-case shutdown %s must end before stop_grace_period %s", total, grace)
+	assert.Less(t, jobsShutdownGrace, serveShutdownBudget, "running jobs get their grace inside the shutdown deadline")
 }
 
 // At shutdown serve waits for running scheduled tasks only until the shutdown deadline.

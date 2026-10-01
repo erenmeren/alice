@@ -140,7 +140,7 @@ const jobRetention = 90 * 24 * time.Hour
 // the Administrators.
 func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.Logger) *jobs.Runner {
 	runner := jobs.NewRunner(jobs.RunnerConfig{Pool: pool, Queue: svc.queue, Gate: svc.license, Audit: svc.auditLog,
-		Clock: clk, Log: log, Notifier: notify.AdminNotifier{Clock: clk}})
+		Clock: clk, Log: log, Notifier: notify.AdminNotifier{Clock: clk}, ShutdownGrace: jobsShutdownGrace})
 	targetjobs.Register(runner, targetjobs.Deps{Inventory: svc.inventory, Registry: svc.registry, Clock: clk, Log: log})
 	return runner
 }

@@ -15,12 +15,16 @@ import (
 // Options are the provider's dependencies.
 type Options struct {
 	Pool *Pool
+	// AllowUnverifiedHelper lets a development build (version "dev") offer a setup script that
+	// cannot check alice-helper because the build has no helper checksums (SetupScript).
+	AllowUnverifiedHelper bool
 }
 
 // Provider is the linuxssh provider (spec §6.6, §13). It also prepares hosts (providers.SetupGuide).
 type Provider struct {
-	pool *Pool
-	caps providers.CapabilitySet
+	pool            *Pool
+	caps            providers.CapabilitySet
+	allowUnverified bool
 }
 
 var (
@@ -31,7 +35,8 @@ var (
 
 // New returns the provider.
 func New(o Options) *Provider {
-	return &Provider{pool: o.Pool, caps: providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys)}
+	return &Provider{pool: o.Pool, caps: providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys),
+		allowUnverified: o.AllowUnverifiedHelper}
 }
 
 // Kind implements providers.Provider.
@@ -65,12 +70,12 @@ func (p *Provider) ValidateConfig(cfg providers.TargetConfig) []validate.FieldEr
 }
 
 // SetupSnippets implements providers.SetupGuide. A profile's Script is "" when the line cannot be
-// embedded in a shell script (SetupScript refuses it).
+// embedded in a shell script or the build cannot verify the helper (SetupScript refuses both).
 func (p *Provider) SetupSnippets(authorizedKeysLine string) map[string]providers.SetupSnippet {
 	out := map[string]providers.SetupSnippet{}
 	for _, profile := range []string{"linux", "nginx"} {
 		sudoers, _ := Sudoers(profile)
-		script, _ := SetupScript(profile, authorizedKeysLine)
+		script, _ := SetupScript(profile, authorizedKeysLine, p.allowUnverified)
 		out[profile] = providers.SetupSnippet{Profile: profile, Sudoers: sudoers, Script: script}
 	}
 	return out

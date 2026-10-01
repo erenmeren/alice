@@ -18,5 +18,8 @@ func newClock() serverClock { return clock.Real{} }
 // testMailer is nil: release builds send email only through ALICE_SMTP_*.
 var testMailer notify.Mailer
 
+// startJobWorkers is true: serve runs the job workers (runner.Run).
+const startJobWorkers = true
+
 // testHandler returns nil: release builds have no /test endpoints.
 func testHandler(testDeps) http.Handler { return nil }

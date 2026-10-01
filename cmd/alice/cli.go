@@ -136,6 +136,7 @@ func withServices(cfg config.Config, stderr io.Writer, fn func(ctx context.Conte
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
+		defer svc.sshPool.Close()
 		return fn(ctx, svc)
 	})
 }

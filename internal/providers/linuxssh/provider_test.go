@@ -62,7 +62,7 @@ func newProvEnv(t *testing.T) *provEnv {
 	t.Cleanup(pool.Close)
 	host, port := srv.Addr()
 	return &provEnv{
-		srv: srv, emu: emu, cred: cred, hk: hk, pool: pool, prov: New(Options{Pool: pool}),
+		srv: srv, emu: emu, cred: cred, hk: hk, pool: pool, prov: New(Options{Pool: pool, AllowUnverifiedHelper: true}),
 		ref: providers.TargetRef{ID: testTarget, Name: "web-01", Kind: providers.KindLinuxSSH,
 			Config: providers.TargetConfig{"host": host, "port": port, "username": "alice-svc"}},
 	}
@@ -206,7 +206,7 @@ func TestSetupSnippetsForBothProfiles(t *testing.T) {
 		want, err := Sudoers(profile)
 		require.NoError(t, err)
 		assert.Equal(t, want, s.Sudoers)
-		script, err := SetupScript(profile, line)
+		script, err := SetupScript(profile, line, true)
 		require.NoError(t, err)
 		assert.Equal(t, script, s.Script)
 	}
@@ -591,4 +591,17 @@ func TestCredentialErrorKeepsErrorsIs(t *testing.T) {
 	assert.Equal(t, "internal.unexpected", providerCode(t, err).Code)
 	assert.ErrorIs(t, err, errNoKey)
 	providertest.CheckNoSecrets(t, []string{"CANARY-path"}, err)
+}
+
+// Outside a development build the provider offers no setup script without the helper checksums:
+// the guide fails instead of telling an administrator to install an unchecked helper as root.
+func TestSetupSnippetsNeedTheHelperChecksumsInARelease(t *testing.T) {
+	line := AuthorizedKeysLine("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform", "")
+	for _, s := range New(Options{}).SetupSnippets(line) {
+		assert.Empty(t, s.Script, s.Profile)
+	}
+	withHelperSums(t, strings.Repeat("a1", 32), strings.Repeat("b2", 32))
+	for _, s := range New(Options{}).SetupSnippets(line) {
+		assert.Contains(t, s.Script, "sha256sum -c", s.Profile)
+	}
 }

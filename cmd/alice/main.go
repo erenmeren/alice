@@ -162,7 +162,14 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
+	// The pool closes last, within dbCloseBudget (closeWithin below); this covers a start that
+	// fails before the workers run, when nothing can hold a connection.
+	poolClosed := false
+	defer func() {
+		if !poolClosed {
+			pool.Close()
+		}
+	}()
 
 	clk := newClock()
 	svc, err := buildServices(ctx, pool, cfg, clk, log)
@@ -267,11 +274,16 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	runnerCtx, stopRunner := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopRunner()
 	runnerDone := make(chan struct{})
-	go func() {
-		runner.Run(runnerCtx)
+	if startJobWorkers {
+		go func() {
+			runner.Run(runnerCtx)
+			close(runnerDone)
+		}()
+		log.Info("job workers started")
+	} else {
 		close(runnerDone)
-	}()
-	log.Info("job workers started")
+		log.Info("job workers are not started in the e2e build; POST /test/jobs/drain runs due jobs")
+	}
 	errCh := make(chan error, 2)
 	go func() { errCh <- ignoreClosed(public.ListenAndServeTLS("", "")) }()
 	go func() { errCh <- ignoreClosed(internal.ListenAndServe()) }()
@@ -283,21 +295,24 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		log.Info("shutting down")
 	case runErr = <-errCh:
 	}
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
+	// One deadline from the signal covers the HTTP drain, the scheduler and the job workers; the
+	// steps after it have small budgets of their own, so the whole shutdown ends before Docker's
+	// stop_grace_period (TestShutdownFitsTheStopGracePeriod). The workers stop claiming at once
+	// and their running jobs get the runner's grace while HTTP drains.
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), serveShutdownBudget)
 	defer cancelShutdown()
+	stopRunner()
 	_ = public.Shutdown(shutdownCtx)
 	_ = internal.Shutdown(shutdownCtx)
 	stopSched()
 	waitForScheduler(shutdownCtx, schedDone, log)
-	// Shutdown order (§8.8): HTTP, scheduler, workers (Run gives running jobs its own grace and
-	// releases the leases of unfinished ones), the scheduling lock, the SSH connections; the
-	// database pool closes last (deferred above).
-	stopRunner()
-	if waitForJobs(runnerDone, jobsShutdownBudget, log) {
+	// Wait order (§8.8): HTTP, scheduler, workers (Run releases the leases of jobs that did not
+	// end), the scheduling lock, the SSH connections, the time record, the database pool.
+	if waitForJobs(shutdownCtx, runnerDone, log) && startJobWorkers {
 		log.Info("job workers stopped")
 	}
-	leader.Close()
-	svc.sshPool.Close()
+	closeWithin("the scheduling lock", leader.Close, leaderCloseBudget, log)
+	closeWithin("the SSH connections", svc.sshPool.Close, sshPoolCloseBudget, log)
 	log.Info("ssh connections closed")
 	// A fresh context: the time record is saved even when the shutdown budget is used up.
 	saveCtx, cancelSave := context.WithTimeout(context.Background(), timeRecordSaveBudget)
@@ -305,11 +320,47 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if err := svc.license.Shutdown(saveCtx); err != nil {
 		log.Error("could not save the license time record at shutdown", "error_type", fmt.Sprintf("%T", err))
 	}
+	poolClosed = true
+	closeWithin("the database pool", pool.Close, dbCloseBudget, log)
 	return runErr
 }
 
-// timeRecordSaveBudget bounds the save of the license time record at shutdown.
-const timeRecordSaveBudget = 5 * time.Second
+// Shutdown budgets. docker-compose.yml gives Alice stop_grace_period 90s; their sum stays below
+// it (TestShutdownFitsTheStopGracePeriod).
+const (
+	// serveShutdownBudget is the deadline from the signal for the HTTP drain, the scheduler and
+	// the job workers. It covers jobsShutdownGrace.
+	serveShutdownBudget = 70 * time.Second
+	// jobsShutdownGrace is the runner's total grace for running jobs (§8.8: up to 60 s; after it
+	// the runner releases their leases).
+	jobsShutdownGrace = 60 * time.Second
+	// leaderCloseBudget bounds the release of the scheduling lock.
+	leaderCloseBudget = 3 * time.Second
+	// sshPoolCloseBudget bounds closing the idle SSH connections.
+	sshPoolCloseBudget = 2 * time.Second
+	// timeRecordSaveBudget bounds the save of the license time record at shutdown.
+	timeRecordSaveBudget = 5 * time.Second
+	// dbCloseBudget bounds closing the database pool: pgxpool waits for every borrowed
+	// connection, and a stuck job may never return its connection.
+	dbCloseBudget = 3 * time.Second
+)
+
+// closeWithin runs closeFn and waits at most limit for it; a close that hangs is left behind
+// with a warning, because the process exits right afterwards.
+func closeWithin(what string, closeFn func(), limit time.Duration, log *slog.Logger) {
+	done := make(chan struct{})
+	go func() {
+		closeFn()
+		close(done)
+	}()
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		log.Warn("closing did not finish within the shutdown time; exiting anyway", "resource", what)
+	}
+}
 
 // newAPIDeps hands the services serve built to the API. A test guards every service field:
 // without License every license-gated route fails closed.
@@ -346,18 +397,13 @@ func waitForScheduler(ctx context.Context, done <-chan struct{}, log *slog.Logge
 	}
 }
 
-// jobsShutdownBudget bounds the wait for the job workers at shutdown: the runner itself lets
-// running jobs finish for up to 60 s (§8.8) and then releases their leases.
-const jobsShutdownBudget = 75 * time.Second
-
-// waitForJobs waits for the job runner to return, at most limit. It reports whether it did.
-func waitForJobs(done <-chan struct{}, limit time.Duration, log *slog.Logger) bool {
-	timer := time.NewTimer(limit)
-	defer timer.Stop()
+// waitForJobs waits for the job runner to return, at most until ctx ends. It reports whether it
+// did; jobs it gave up on resume after the restart when their leases expire.
+func waitForJobs(ctx context.Context, done <-chan struct{}, log *slog.Logger) bool {
 	select {
 	case <-done:
 		return true
-	case <-timer.C:
+	case <-ctx.Done():
 		log.Warn("background jobs did not stop within the shutdown time; their leases expire and they resume after the restart")
 		return false
 	}

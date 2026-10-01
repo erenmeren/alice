@@ -142,7 +142,8 @@ const helperUnverified = `# This Alice build has no alice-helper checksums (it w
 echo "Warning: this Alice build cannot verify alice-helper (development build without checksums)." >&2
 `
 
-const helperVerify = `case "$(uname -m)" in
+const helperVerify = `command -v sha256sum >/dev/null || { echo "sha256sum (coreutils) is required." >&2; exit 1; }
+case "$(uname -m)" in
     x86_64) helper_sha256=__AMD64__ ;;
     aarch64) helper_sha256=__ARM64__ ;;
     *) echo "alice-helper is built for x86_64 and aarch64 only." >&2; exit 1 ;;
@@ -153,6 +154,14 @@ if ! printf '%s  ./alice-helper\n' "$helper_sha256" | sha256sum -c - >/dev/null 
     exit 1
 fi
 `
+
+// ErrHelperUnverified means this build has no alice-helper checksums and is not a development
+// build: it offers no setup script rather than one that installs an unchecked helper as root.
+var ErrHelperUnverified = errors.New("linuxssh: this Alice build has no alice-helper checksums; build it with make build or the image build")
+
+func helperSumsKnown() bool {
+	return sha256Hex.MatchString(helperSHA256LinuxAMD64) && sha256Hex.MatchString(helperSHA256LinuxARM64)
+}
 
 // helperCheck is the part of the setup script that checks ./alice-helper against the checksum of
 // this Alice version for the server's architecture (R37 item 2). Unless both checksums are well
@@ -178,10 +187,16 @@ var errBadKeyLine = errors.New("linuxssh: the authorized_keys line cannot be emb
 // root-owned key files), .ssh is removed and recreated (rm never follows links), and the key is
 // written to a fresh mktemp file in the root-owned .ssh and renamed into place. A pre-existing
 // alice-svc with another home is refused rather than reconfigured.
-func SetupScript(profile, authorizedKeysLine string) (string, error) {
+//
+// Without the helper checksums only a development build (allowUnverified) gets a script, and it
+// says that it cannot verify the helper; any other build gets ErrHelperUnverified.
+func SetupScript(profile, authorizedKeysLine string, allowUnverified bool) (string, error) {
 	sudoers, err := Sudoers(profile)
 	if err != nil {
 		return "", err
+	}
+	if !allowUnverified && !helperSumsKnown() {
+		return "", ErrHelperUnverified
 	}
 	if authorizedKeysLine == "" || !utf8.ValidString(authorizedKeysLine) || strings.ContainsRune(authorizedKeysLine, '\'') ||
 		strings.ContainsFunc(authorizedKeysLine, func(r rune) bool { return r < 0x20 || r == 0x7f }) {

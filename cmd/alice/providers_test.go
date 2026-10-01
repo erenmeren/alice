@@ -10,6 +10,7 @@ import (
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/providertest"
+	"alice/internal/version"
 )
 
 func newTestPool() *linuxssh.Pool {
@@ -40,4 +41,26 @@ func TestRegisterProvidersShipsExactlyLinuxSSH(t *testing.T) {
 	assert.True(t, isGuide, "the setup snippets come from the linuxssh provider")
 
 	assert.Panics(t, func() { reg.Register(linuxssh.New(linuxssh.Options{Pool: pool})) }, "the registry is frozen")
+}
+
+// Only a development build ("dev", what go build and go test produce) may offer a setup script
+// that cannot verify alice-helper; any versioned build without the helper checksums offers none
+// (R37 item 2).
+func TestOnlyADevelopmentBuildSkipsTheHelperCheck(t *testing.T) {
+	line := "no-pty ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform"
+	script := func() string {
+		pool := newTestPool()
+		t.Cleanup(pool.Close)
+		reg := providers.NewRegistry()
+		registerProviders(reg, pool)
+		p, ok := reg.Get(providers.KindLinuxSSH)
+		require.True(t, ok)
+		return p.(providers.SetupGuide).SetupSnippets(line)["linux"].Script
+	}
+	require.Equal(t, "dev", version.Version)
+	assert.Contains(t, script(), "cannot verify alice-helper")
+
+	version.Version = "1.0.0"
+	t.Cleanup(func() { version.Version = "dev" })
+	assert.Empty(t, script(), "a release build without the checksums has no setup script")
 }

@@ -2,7 +2,12 @@
 # Verifies the running containers match the hardening rules in the design spec.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-compose=(docker compose -f docker-compose.yml --env-file .env)
+# ALICE_PROJECT is the compose project (default "alice", the make up stack; make e2e-hardening-check
+# passes "alice-e2e"); ALICE_COMPOSE_FILES are the compose files relative to deploy/.
+project="${ALICE_PROJECT:-alice}"
+files=()
+for f in ${ALICE_COMPOSE_FILES:-docker-compose.yml}; do files+=(-f "$f"); done
+compose=(docker compose -p "$project" "${files[@]}" --env-file .env)
 alice="$("${compose[@]}" ps -q alice)"
 pg="$("${compose[@]}" ps -q postgres)"
 [[ -n "$alice" && -n "$pg" ]] || { echo "FAIL: stack is not running (run make up)"; exit 1; }
@@ -26,5 +31,16 @@ check "alice state directory is owned by 10001 with mode 0700" \
 check "alice state volume holds the time record" \
   "$(docker cp "$alice:/opt/alice/state" - | tar -tf - | grep -c '^state/hwm.dat$')" "1"
 check "postgres publishes no ports" "$(docker port "$pg" | wc -l | tr -d ' ')" "0"
-check "backend network is internal" "$(docker network inspect -f '{{.Internal}}' alice_backend)" "true"
+check "backend network is internal" "$(docker network inspect -f '{{.Internal}}' "${project}_backend")" "true"
+# The e2e overlay adds the SSH test target: it must publish nothing and sit only on the internal network.
+if "${compose[@]}" config --services | grep -qx sshtarget; then
+  target="$("${compose[@]}" ps -q sshtarget)"
+  if [[ -z "$target" ]]; then
+    echo "FAIL: the e2e SSH target is not running"; fail=1
+  else
+    check "sshtarget publishes no ports" "$(docker port "$target" | wc -l | tr -d ' ')" "0"
+    check "sshtarget is only on the internal backend network" \
+      "$(docker inspect -f '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}' "$target")" "${project}_backend "
+  fi
+fi
 exit "$fail"

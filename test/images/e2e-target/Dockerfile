@@ -11,7 +11,7 @@ COPY internal/providers/linuxssh/helperproto/ internal/providers/linuxssh/helper
 COPY internal/providers/linuxssh/sshdconf/ internal/providers/linuxssh/sshdconf/
 # Built exactly as "make helper" and deploy/Dockerfile build it, so its checksum is the one the
 # e2e Alice image embeds and the setup script accepts it (R37 item 2).
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags "-s -w" -o /out/alice-helper ./cmd/alice-helper
+RUN CGO_ENABLED=0 GOOS=linux GOAMD64=v1 GOARM64=v8.0 go build -trimpath -buildvcs=false -ldflags "-s -w" -o /out/alice-helper ./cmd/alice-helper
 
 FROM ubuntu:22.04
 RUN apt-get update \

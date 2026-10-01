@@ -52,8 +52,24 @@ HELPER_LDFLAGS = -X alice/internal/providers/linuxssh.helperSHA256LinuxAMD64=$(c
 
 .PHONY: build
 build: web helper ## Build the alice binary with the embedded UI (and the helper checksums) into bin/
+	@for sum in '$(call HELPER_SUM,amd64)' '$(call HELPER_SUM,arm64)'; do \
+	  echo "$$sum" | grep -Eqx '[0-9a-f]{64}' || { echo "bin/alice-helper.sha256 lacks a helper checksum; run make helper"; exit 1; }; \
+	done
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS) $(HELPER_LDFLAGS)" -o bin/alice ./cmd/alice
 	@! go version -m bin/alice | grep -q stretchr/testify || { echo "testify is linked into bin/alice"; exit 1; }
+
+# Release symbol guard: the release build (no tags) links no e2e-only code. The e2e build is the
+# positive control: if it lacks the symbols, the names here are stale and the guard proves nothing.
+E2E_SYMBOLS := main\.(damageLicenseFile|tamperNewestLicenseFile|resetInstall|e2eClock|e2eMailbox)$$
+
+.PHONY: release-symcheck
+release-symcheck: ## Fail if the release build of alice links e2e-only test code
+	CGO_ENABLED=0 go build -trimpath -o bin/.symcheck-release ./cmd/alice
+	CGO_ENABLED=0 go build -trimpath -tags "e2e testlicense" -o bin/.symcheck-e2e ./cmd/alice
+	@go tool nm bin/.symcheck-e2e | grep -E ' $(E2E_SYMBOLS)' >/dev/null || { echo "release-symcheck: the e2e build lacks the guarded symbols; update E2E_SYMBOLS"; exit 1; }
+	@! go tool nm bin/.symcheck-release | grep -E ' $(E2E_SYMBOLS)' || { echo "release-symcheck: the release build links e2e-only code"; exit 1; }
+	@rm -f bin/.symcheck-release bin/.symcheck-e2e
+	@echo "release-symcheck: ok"
 
 .PHONY: licensectl
 licensectl: ## Build the vendor's offline license tool into bin/ (never shipped to customers)
@@ -61,8 +77,8 @@ licensectl: ## Build the vendor's offline license tool into bin/ (never shipped 
 
 .PHONY: helper
 helper: ## Build the static alice-helper for Linux amd64 and arm64 into bin/ with SHA-256 checksums (reproducible: no VCS stamp)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/alice-helper-linux-amd64 ./cmd/alice-helper
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/alice-helper-linux-arm64 ./cmd/alice-helper
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/alice-helper-linux-amd64 ./cmd/alice-helper
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GOARM64=v8.0 go build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/alice-helper-linux-arm64 ./cmd/alice-helper
 	cd bin && sha256sum alice-helper-linux-amd64 alice-helper-linux-arm64 > alice-helper.sha256
 
 COMPOSE := docker compose -f deploy/docker-compose.yml --env-file deploy/.env
@@ -77,8 +93,8 @@ up: ## Build and start Alice with PostgreSQL (https://localhost)
 	ALICE_BUILD_TIME=$(BUILD_TIME) $(COMPOSE) up -d --build --wait
 
 .PHONY: down
-down: ## Stop the stack (data volumes are kept; also removes the e2e SSH target)
-	$(COMPOSE) down --remove-orphans
+down: ## Stop the stack (data volumes are kept)
+	$(COMPOSE) down
 
 .PHONY: reset
 reset: ## DELETE local data (database, key and state volumes) and start a fresh stack
@@ -93,12 +109,24 @@ logs: ## Follow the alice container logs
 hardening-check: ## Verify container hardening of the running stack
 	./deploy/dev/check-hardening.sh
 
-COMPOSE_E2E := docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.e2e.yml --env-file deploy/.env
+# The e2e stack is its own compose project: its database, volumes and networks never touch the
+# make up stack (project "alice"), because every Playwright run empties the database.
+E2E_PROJECT := alice-e2e
+E2E_FILES   := docker-compose.yml docker-compose.e2e.yml
+COMPOSE_E2E := docker compose -p $(E2E_PROJECT) -f deploy/docker-compose.yml -f deploy/docker-compose.e2e.yml --env-file deploy/.env
 
 .PHONY: e2e-up
-e2e-up: ## Build and start the e2e variant (adds test-only /test endpoints; never shipped)
+e2e-up: ## Build and start the e2e variant as project alice-e2e (adds test-only /test endpoints; never shipped)
 	./deploy/dev/init-env.sh
 	ALICE_BUILD_TIME=$(BUILD_TIME) $(COMPOSE_E2E) up -d --build --wait
+
+.PHONY: e2e-down
+e2e-down: ## Stop the e2e stack and DELETE its volumes (never touches the make up stack)
+	$(COMPOSE_E2E) down -v --remove-orphans
+
+.PHONY: e2e-hardening-check
+e2e-hardening-check: ## Verify container hardening of the running e2e stack, including the SSH test target
+	ALICE_PROJECT=$(E2E_PROJECT) ALICE_COMPOSE_FILES="$(E2E_FILES)" ./deploy/dev/check-hardening.sh
 
 .PHONY: setup-token
 setup-token: ## Print a new one-time setup code for the /setup wizard (only before the first administrator exists)
@@ -111,7 +139,7 @@ unlock: ## End a sign-in delay or lockout: make unlock ACCOUNT=<username> (audit
 
 .PHONY: e2e
 e2e: ## Run Playwright tests against the e2e stack (make e2e-up first)
-	cd web && npx playwright install chromium && set -a && { [ ! -f ../deploy/.env ] || . ../deploy/.env; } && set +a && npx playwright test
+	cd web && npx playwright install chromium && set -a && { [ ! -f ../deploy/.env ] || . ../deploy/.env; } && set +a && ALICE_E2E_PROJECT=$(E2E_PROJECT) npx playwright test
 
 GOLANGCI_LINT_VERSION ?= v2.14.0
 GOVULNCHECK_VERSION   ?= v1.8.0
@@ -148,7 +176,7 @@ image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
 	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:$(TRIVY_VERSION) image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed alice:dev
 
 .PHONY: ci
-ci: lint test coverage build i18n-check web-lint web-test vuln secrets-scan fs-scan e2e-up hardening-check e2e image-scan ## Run the full CI pipeline locally
+ci: lint test coverage build release-symcheck i18n-check web-lint web-test vuln secrets-scan fs-scan e2e-up e2e-hardening-check e2e image-scan ## Run the full CI pipeline locally
 
 .PHONY: fuzz-license
 fuzz-license: ## Fuzz the license parser for 60 s (spec §25.6)
