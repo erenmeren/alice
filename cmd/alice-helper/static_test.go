@@ -67,8 +67,7 @@ func TestHelperIsStatic(t *testing.T) {
 	for _, p := range af.Progs {
 		assert.NotEqual(t, elf.PT_INTERP, p.Type)
 	}
-	needed, err := af.DynString(elf.DT_NEEDED)
-	if err == nil {
-		assert.Empty(t, needed, "no DT_NEEDED entries")
-	}
+	armLibs, err := af.ImportedLibraries()
+	require.NoError(t, err)
+	assert.Empty(t, armLibs, "no DT_NEEDED entries")
 }

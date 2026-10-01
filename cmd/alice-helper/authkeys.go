@@ -92,7 +92,7 @@ func (s *sys) scan(ctx context.Context) (scanResult, error) {
 	}
 	for _, a := range selected {
 		cfg := global
-		us := userScan{acct: a}
+		us := userScan{acct: a, unreadable: gerr != nil}
 		if gerr == nil {
 			uc, _, err := s.sshdConfig(ctx, "-C", "user="+a.name+",host=localhost,addr=127.0.0.1")
 			if err != nil {
@@ -171,7 +171,7 @@ func cmdAuthKeysList(ctx context.Context, s *sys, args []string) (any, error) {
 // descriptor (fstat), never from a second look at the path.
 func (s *sys) fileInfo(c candidate, names map[int]string) helperproto.FileInfo {
 	fi := helperproto.FileInfo{Path: c.path}
-	f, err := s.openCandidate(c)
+	f, parent, err := s.openCandidate(c)
 	if errors.Is(err, fs.ErrNotExist) {
 		fi.StrictModesOK = s.strictModes(c, nil)
 		return fi
@@ -192,7 +192,7 @@ func (s *sys) fileInfo(c candidate, names map[int]string) helperproto.FileInfo {
 	if fi.Owner == "" {
 		fi.Owner = strconv.Itoa(uid)
 	}
-	if fileOK(st, c.acct) != nil {
+	if fileOK(st, parent, c.acct) != nil {
 		fi.Unsupported = true
 		return fi
 	}

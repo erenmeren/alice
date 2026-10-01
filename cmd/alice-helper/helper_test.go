@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sys/unix"
 
 	"alice/internal/providers/linuxssh/helperproto"
 )
@@ -511,16 +512,81 @@ func TestAttackSwapRace(t *testing.T) {
 	}
 }
 
-func TestFallbackRefusesSymlinkComponentsButOpenat2FollowsInside(t *testing.T) {
+// N-3: a symlink to a sibling directory inside the home appears after the scan. openat2 accepts
+// it (it stays beneath the home), the walk refuses it.
+func TestIntermediateSymlinkAfterScan(t *testing.T) {
+	for _, openat2OK := range []bool{true, false} {
+		t.Run(fmt.Sprintf("openat2=%v", openat2OK), func(t *testing.T) {
+			useOpenat2 = openat2OK
+			t.Cleanup(func() { useOpenat2 = true })
+			f := newFixture(t)
+			f.addZed()
+			f.write("/home/deploy/.ssh/authorized_keys", "real\n", 0o600)
+			swapped := false
+			f.onSSHD = func(args []string) {
+				if len(args) == 3 && strings.HasPrefix(args[2], "user=zed") && !swapped {
+					swapped = true
+					require.NoError(t, os.Rename(f.host("/home/deploy/.ssh"), f.host("/home/deploy/.ssh.orig")))
+					require.NoError(t, os.Symlink(".ssh.orig", f.host("/home/deploy/.ssh")))
+				}
+			}
+			code, m := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys")
+			require.True(t, swapped)
+			if openat2OK {
+				assert.Equal(t, 0, code, "openat2 follows a symlink that stays beneath the home (A-13)")
+			} else {
+				assert.Equal(t, helperproto.ExitRefused, code)
+				assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
+			}
+		})
+	}
+}
+
+// N-2: openat2 errors that mean "not supported here" fall back to the walk; refusals do not.
+func TestOpenat2ErrorsAndFallback(t *testing.T) {
+	orig := openat2
+	t.Cleanup(func() { openat2 = orig })
+	for _, tc := range []struct {
+		err      error
+		wantCode int
+	}{
+		{unix.ENOSYS, 0}, {unix.EPERM, 0}, {unix.EINVAL, 0},
+		{unix.EXDEV, helperproto.ExitRefused}, {unix.ELOOP, helperproto.ExitRefused}, {unix.EAGAIN, helperproto.ExitFailed},
+	} {
+		openat2 = func(int, string, *unix.OpenHow) (int, error) { return -1, tc.err }
+		f := newFixture(t)
+		f.write("/home/deploy/.ssh/authorized_keys", "real\n", 0o600)
+		code, _ := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys")
+		assert.Equal(t, tc.wantCode, code, "%v", tc.err)
+	}
+}
+
+// N-1: root-owned files are accepted only where root controls the directory.
+func TestOwnerRules(t *testing.T) {
+	user := account{name: "deploy", uid: 1000}
+	const writable, locked = 0o40775, 0o40755
+	assert.NoError(t, ownerOK(1000, 1000, writable, user), "the user's own file")
+	assert.NoError(t, ownerOK(0, 0, locked, user), "root-owned file in a root-owned 0755 directory")
+	assert.ErrorIs(t, ownerOK(0, 1000, locked, user), errUnsafe, "stale root inode in the user's directory")
+	assert.ErrorIs(t, ownerOK(0, 0, writable, user), errUnsafe, "root-owned file in a group-writable directory")
+	assert.ErrorIs(t, ownerOK(2000, 0, locked, user), errUnsafe, "another user's file")
+	assert.NoError(t, ownerOK(0, 1000, writable, account{name: "root", uid: 0}), "root's own files")
+}
+
+// N-1 end to end (needs root to create a root-owned file in a user-owned directory).
+func TestStaleRootInodeInUserDirIsRefused(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("needs root to chown; TestOwnerRules covers the rule")
+	}
 	f := newFixture(t)
-	f.write("/home/deploy/.ssh/authorized_keys", "real\n", 0o600)
-	require.NoError(t, os.Symlink("authorized_keys", f.host("/home/deploy/.ssh/authorized_keys2")))
-	code, _ := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys2")
-	assert.Equal(t, 0, code, "openat2 follows a symlink that stays beneath the home (A-13)")
-	// The scan resolves the link first, so the fallback opens the real file and also succeeds.
-	useOpenat2 = false
-	t.Cleanup(func() { useOpenat2 = true })
-	code, _ = f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys2")
+	f.write("/home/deploy/.ssh/authorized_keys", "stale shadow\n", 0o600)
+	require.NoError(t, os.Chown(f.host("/home/deploy/.ssh"), f.uid, f.uid))
+	code, m := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys")
+	assert.Equal(t, helperproto.ExitRefused, code)
+	assert.Equal(t, helperproto.CodeUnsafeFile, m["code"])
+	// Root-owned file in a root-owned directory is fine.
+	require.NoError(t, os.Chown(f.host("/home/deploy/.ssh"), 0, 0))
+	code, _ = f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys")
 	assert.Equal(t, 0, code)
 }
 
@@ -559,6 +625,13 @@ func TestPerUserSSHDFailureIsFlagged(t *testing.T) {
 	_, m := f.run("authkeys-list")
 	assert.Equal(t, []any{helperproto.WarnSSHDUnreadable}, m["warnings"])
 	assert.Equal(t, true, listUser(t, m, "deploy")["sshd_unreadable"])
+
+	f.cFails, f.sshdFails = false, true // the global call fails: every user is unreadable (N-4)
+	_, m = f.run("authkeys-list")
+	for _, u := range m["users"].([]any) {
+		assert.Equal(t, true, u.(map[string]any)["sshd_unreadable"], u.(map[string]any)["user"])
+	}
+	f.sshdFails, f.cFails = false, true
 
 	f.cFails = false
 	f.perUser[deployCtx] = "authorizedkeysfile .ssh/authorized_keys\nauthorizedkeyscommand /usr/bin/x %u\n"
