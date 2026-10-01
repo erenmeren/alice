@@ -31,6 +31,9 @@ type sys struct {
 	// beforeRename runs just before a staged file replaces the real one (nil in production; tests
 	// inject failures and races).
 	beforeRename func() error
+	// afterMkdirSSH runs between creating a missing .ssh and opening it (nil in production; tests
+	// inject races).
+	afterMkdirSSH func()
 }
 
 // host returns the real path of an absolute guest path.

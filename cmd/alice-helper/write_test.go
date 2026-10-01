@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,6 +78,26 @@ func (f *fixture) dirEntries(guest string) []string {
 		names = append(names, e.Name())
 	}
 	return names
+}
+
+// asUser gives the paths to the deploy user when the tests run as root (the fixture's files are
+// then root's); as a normal user they already belong to deploy.
+func (f *fixture) asUser(guests ...string) {
+	f.t.Helper()
+	if os.Getuid() != 0 {
+		return
+	}
+	for _, g := range guests {
+		require.NoError(f.t, os.Lchown(f.host(g), f.uid, f.uid))
+	}
+}
+
+// lockFile is the root-private lock of a key directory.
+func (f *fixture) lockFile(keyDir string) string {
+	f.t.Helper()
+	var st unix.Stat_t
+	require.NoError(f.t, unix.Stat(f.host(keyDir), &st))
+	return fmt.Sprintf("/var/lib/alice-helper/locks/%d-%d.lock", st.Dev, st.Ino)
 }
 
 func (f *fixture) exists(guest string) bool {
@@ -153,6 +174,7 @@ func TestWriteRefusesAStaleHash(t *testing.T) {
 
 func TestWriteCreatesAMissingFileAndSSHDirectory(t *testing.T) {
 	f, chowns := newWriteFixture(t)
+	f.asUser("/home/deploy")
 	require.NoError(t, os.RemoveAll(f.host("/home/deploy/.ssh")))
 	code, m := f.runWith("ssh-ed25519 AAAA new\n", writeArgs(keysPath, helperproto.AbsentSHA256, op1)...)
 	require.Equal(t, 0, code, "%v", m)
@@ -161,14 +183,15 @@ func TestWriteCreatesAMissingFileAndSSHDirectory(t *testing.T) {
 	dst, err := os.Stat(f.host("/home/deploy/.ssh"))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o700), dst.Mode().Perm())
+	dirUID, dirGID := owner(dst)
+	assert.Equal(t, []int{f.uid, f.uid}, []int{dirUID, dirGID}, "the new .ssh is made with the user's credentials")
 	fst, err := os.Stat(f.host(keysPath))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), fst.Mode().Perm())
 	calls := chowns()
-	require.Len(t, calls, 2)
-	assert.Equal(t, chownCall{name: ".ssh", uid: f.uid, gid: f.uid}, calls[0], "the new .ssh belongs to the user")
-	assert.Equal(t, f.uid, calls[1].uid, "the new file belongs to the user")
-	assert.Equal(t, f.uid, calls[1].gid)
+	require.Len(t, calls, 1, "root never chowns the new .ssh")
+	assert.Equal(t, f.uid, calls[0].uid, "the new file belongs to the user")
+	assert.Equal(t, f.uid, calls[0].gid)
 
 	var meta map[string]any
 	require.NoError(t, json.Unmarshal([]byte(f.read(helperproto.BackupRoot+"/"+op1+"/1.json")), &meta))
@@ -202,7 +225,14 @@ func TestWriteAbsolutePattern(t *testing.T) {
 	require.Equal(t, 0, code, "%v", m)
 	assert.Equal(t, "x\n", f.read("/etc/ssh/keys/deploy"))
 	require.Len(t, chowns(), 1)
-	assert.Equal(t, f.uid, chowns()[0].uid)
+	wantUID, wantMode := f.uid, os.FileMode(0o600)
+	if os.Getuid() == 0 {
+		wantUID, wantMode = 0, 0o644 // a new file in a root-owned key directory stays root's
+	}
+	assert.Equal(t, wantUID, chowns()[0].uid)
+	st, err := os.Stat(f.host("/etc/ssh/keys/deploy"))
+	require.NoError(t, err)
+	assert.Equal(t, wantMode, st.Mode().Perm())
 
 	require.NoError(t, os.Chmod(f.host("/etc"), 0o777))
 	code, m = f.runWith("y\n", writeArgs("/etc/ssh/keys/deploy", hexOf("x\n"), op1)...)
@@ -221,6 +251,7 @@ func TestWriteIsAtomicWhenInterrupted(t *testing.T) {
 	assert.Equal(t, helperproto.CodeIOError, m["code"])
 	assert.Equal(t, "old\n", f.read(keysPath))
 	assert.Equal(t, []string{"authorized_keys"}, f.sshDirEntries())
+	assert.Empty(t, f.dirEntries(helperproto.BackupRoot+"/"+op1), "the backup of a write that did not happen is removed")
 }
 
 // Two writers that read the same content: the directory lock serializes them, exactly one wins
@@ -246,22 +277,112 @@ func TestConcurrentWritersSerialize(t *testing.T) {
 	assert.Contains(t, []string{"first\n", "second\n"}, f.read(keysPath))
 }
 
-// A directory lock that is never released (the user holds a flock on their .ssh) makes the write
-// fail after lockWait instead of hanging.
-func TestWriteGivesUpOnAHeldLock(t *testing.T) {
+// A flock any user can take on the key directory itself no longer blocks the write: the helper
+// locks a root-private file instead.
+func TestWriteIgnoresAFlockOnTheKeyDirectory(t *testing.T) {
 	f, _ := newWriteFixture(t)
 	f.write(keysPath, "old\n", 0o600)
 	orig := lockWait
-	lockWait = 50 * time.Millisecond
+	lockWait = 200 * time.Millisecond
 	t.Cleanup(func() { lockWait = orig })
 	d, err := os.Open(f.host("/home/deploy/.ssh"))
 	require.NoError(t, err)
 	defer func() { _ = d.Close() }()
 	require.NoError(t, unix.Flock(int(d.Fd()), unix.LOCK_EX))
 	code, m := f.runWith("new\n", writeArgs(keysPath, hexOf("old\n"), op1)...)
+	require.Equal(t, 0, code, "%v", m)
+	assert.Equal(t, "new\n", f.read(keysPath))
+	st, err := os.Stat(f.host(f.lockFile("/home/deploy/.ssh")))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), st.Mode().Perm())
+	dst, err := os.Stat(f.host("/var/lib/alice-helper/locks"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), dst.Mode().Perm())
+}
+
+// A helper lock that is never released makes the write fail after lockWait instead of hanging.
+func TestWriteGivesUpOnAHeldLock(t *testing.T) {
+	f, _ := newWriteFixture(t)
+	f.write(keysPath, "old\n", 0o600)
+	orig := lockWait
+	lockWait = 50 * time.Millisecond
+	t.Cleanup(func() { lockWait = orig })
+	f.mkdir("/var/lib/alice-helper/locks", 0o700)
+	lock := f.lockFile("/home/deploy/.ssh")
+	f.write(lock, "", 0o600)
+	l, err := os.Open(f.host(lock))
+	require.NoError(t, err)
+	defer func() { _ = l.Close() }()
+	require.NoError(t, unix.Flock(int(l.Fd()), unix.LOCK_EX))
+	code, m := f.runWith("new\n", writeArgs(keysPath, hexOf("old\n"), op1)...)
 	assert.Equal(t, helperproto.ExitFailed, code)
 	assert.Equal(t, helperproto.CodeIOError, m["code"])
 	assert.Equal(t, "old\n", f.read(keysPath))
+}
+
+// A lock file planted as a symlink is refused, never followed.
+func TestWriteRefusesASymlinkedLockFile(t *testing.T) {
+	f, _ := newWriteFixture(t)
+	f.write(keysPath, "old\n", 0o600)
+	f.mkdir("/var/lib/alice-helper/locks", 0o700)
+	f.write("/etc/target", "keep\n", 0o600)
+	require.NoError(t, os.Symlink(f.host("/etc/target"), f.host(f.lockFile("/home/deploy/.ssh"))))
+	code, m := f.runWith("new\n", writeArgs(keysPath, hexOf("old\n"), op1)...)
+	assert.Equal(t, helperproto.ExitFailed, code)
+	assert.Equal(t, helperproto.CodeIOError, m["code"])
+	assert.Equal(t, "keep\n", f.read("/etc/target"))
+	assert.Equal(t, "old\n", f.read(keysPath))
+}
+
+// Writers of one operation on different key directories (not serialized by a lock) each get
+// their own backup number.
+func TestConcurrentWritersOfOneOperationGetDistinctBackups(t *testing.T) {
+	f, _ := newWriteFixture(t)
+	if os.Getuid() == 0 {
+		f.s.chown = productionSys().chown // later rounds need the replacements to stay the user's
+	}
+	const n = 6
+	var patterns []string
+	for i := range n {
+		dir := fmt.Sprintf("/home/deploy/k%d", i)
+		f.mkdir(dir, 0o700)
+		f.write(dir+"/keys", fmt.Sprintf("old %d\n", i), 0o600)
+		f.asUser(dir, dir+"/keys")
+		patterns = append(patterns, fmt.Sprintf("k%d/keys", i))
+	}
+	f.perUser[deployCtx] = "authorizedkeysfile " + strings.Join(patterns, " ") + "\n"
+	for round := range 5 {
+		op := fmt.Sprintf("0190f5a0-0000-7000-8000-%012d", round)
+		codes := make([]int, n)
+		outs := make([]strings.Builder, n)
+		var wg sync.WaitGroup
+		for i := range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				s := *f.s
+				s.stdout = &outs[i]
+				s.stdin = strings.NewReader(fmt.Sprintf("round %d\n", round))
+				path := fmt.Sprintf("/home/deploy/k%d/keys", i)
+				prev := fmt.Sprintf("old %d\n", i)
+				if round > 0 {
+					prev = fmt.Sprintf("round %d\n", round-1)
+				}
+				codes[i] = run(writeArgs(path, hexOf(prev), op), &s)
+			}()
+		}
+		wg.Wait()
+		for i := range n {
+			require.Equal(t, 0, codes[i], "round %d writer %d: %s", round, i, outs[i].String())
+		}
+		var baks []string
+		for _, e := range f.dirEntries(helperproto.BackupRoot + "/" + op) {
+			if strings.HasSuffix(e, ".bak") {
+				baks = append(baks, e)
+			}
+		}
+		assert.Len(t, baks, n, "round %d", round)
+	}
 }
 
 func TestWriteRefusesBadRequests(t *testing.T) {
@@ -322,6 +443,7 @@ func TestWriteRefusesHardLinkedAndNonRegularFiles(t *testing.T) {
 func TestWriteThroughSymlinkReplacesTheTarget(t *testing.T) {
 	f, _ := newWriteFixture(t)
 	f.write(keysPath, "old\n", 0o600)
+	f.asUser("/home/deploy/.ssh", keysPath)
 	require.NoError(t, os.Symlink("authorized_keys", f.host("/home/deploy/.ssh/authorized_keys2")))
 	code, _ := f.runWith("new\n", writeArgs("/home/deploy/.ssh/authorized_keys2", hexOf("old\n"), op1)...)
 	require.Equal(t, 0, code)
@@ -481,6 +603,7 @@ func TestAttackWriteFileChangedBeforeRename(t *testing.T) {
 			for _, n := range f.sshDirEntries() {
 				assert.False(t, strings.HasPrefix(n, ".authorized_keys.alice-"), "staging file removed")
 			}
+			assert.Empty(t, f.dirEntries(helperproto.BackupRoot+"/"+op1), "the late mismatch removes its backup")
 		})
 	}
 
@@ -544,22 +667,48 @@ func TestAttackWriteHardLink(t *testing.T) {
 	assert.False(t, f.exists(helperproto.BackupRoot))
 }
 
-// The .ssh directory is created, but the user swaps in a symlink before the helper uses it.
+// The .ssh directory is created, but the user swaps in a symlink before the helper opens it.
 func TestAttackSSHDirCreationRace(t *testing.T) {
 	f, _ := newWriteFixture(t)
+	f.asUser("/home/deploy")
 	require.NoError(t, os.RemoveAll(f.host("/home/deploy/.ssh")))
 	f.mkdir("/etc/evil", 0o755)
-	f.s.chown = func(file *os.File, _, _ int) error {
-		if file.Name() == ".ssh" {
-			require.NoError(t, os.Rename(f.host("/home/deploy/.ssh"), f.host("/home/deploy/.ssh.orig")))
-			require.NoError(t, os.Symlink(f.host("/etc/evil"), f.host("/home/deploy/.ssh")))
-		}
-		return nil
+	f.s.afterMkdirSSH = func() {
+		require.NoError(t, os.Rename(f.host("/home/deploy/.ssh"), f.host("/home/deploy/.ssh.orig")))
+		require.NoError(t, os.Symlink(f.host("/etc/evil"), f.host("/home/deploy/.ssh")))
 	}
 	code, m := f.runWith("x\n", writeArgs(keysPath, helperproto.AbsentSHA256, op1)...)
 	assert.Equal(t, helperproto.ExitRefused, code, "%v", m)
-	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
+	assert.Equal(t, helperproto.CodeNotRegularFile, m["code"])
 	assert.Empty(t, f.dirEntries("/etc/evil"))
+	st, err := os.Stat(f.host("/etc/evil"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o755), st.Mode().Perm(), "the symlink target is never chmodded")
+}
+
+// I-1 (root only): the user swaps a root-owned directory of their home in as .ssh between the
+// helper's mkdir and its open. The helper must refuse, not chown or chmod root's directory.
+func TestAttackSSHDirSwappedForARootDirectory(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("needs root: the swapped-in directory must belong to root")
+	}
+	f, _ := newWriteFixture(t)
+	f.asUser("/home/deploy")
+	require.NoError(t, os.RemoveAll(f.host("/home/deploy/.ssh")))
+	f.mkdir("/home/deploy/rootdir", 0o755) // root-owned, inside the user's home
+	f.s.afterMkdirSSH = func() {
+		require.NoError(t, os.Rename(f.host("/home/deploy/.ssh"), f.host("/home/deploy/x")))
+		require.NoError(t, os.Rename(f.host("/home/deploy/rootdir"), f.host("/home/deploy/.ssh")))
+	}
+	code, m := f.runWith("x\n", writeArgs(keysPath, helperproto.AbsentSHA256, op1)...)
+	assert.Equal(t, helperproto.ExitRefused, code, "%v", m)
+	assert.Equal(t, helperproto.CodeUnsafeFile, m["code"])
+	st, err := os.Stat(f.host("/home/deploy/.ssh"))
+	require.NoError(t, err)
+	uid, gid := owner(st)
+	assert.Equal(t, []int{0, 0}, []int{uid, gid}, "root's directory keeps its owner")
+	assert.Equal(t, os.FileMode(0o755), st.Mode().Perm(), "and its mode")
+	assert.False(t, f.exists(keysPath))
 }
 
 func TestWriteFailurePaths(t *testing.T) {
@@ -586,15 +735,6 @@ func TestWriteFailurePaths(t *testing.T) {
 		assert.Equal(t, helperproto.CodeIOError, m["code"])
 		assert.Equal(t, "old\n", f.read(keysPath))
 		assert.Equal(t, []string{"authorized_keys"}, f.sshDirEntries())
-	})
-	t.Run("chown of the new .ssh", func(t *testing.T) {
-		f, _ := newWriteFixture(t)
-		require.NoError(t, os.RemoveAll(f.host("/home/deploy/.ssh")))
-		f.s.chown = func(*os.File, int, int) error { return errors.New("EPERM") }
-		code, m := f.runWith("new\n", writeArgs(keysPath, helperproto.AbsentSHA256, op1)...)
-		assert.Equal(t, helperproto.ExitFailed, code)
-		assert.Equal(t, helperproto.CodeIOError, m["code"])
-		assert.False(t, f.exists(keysPath))
 	})
 	t.Run(".ssh is a file", func(t *testing.T) {
 		f, _ := newWriteFixture(t)
@@ -725,6 +865,33 @@ func TestWriteAsRoot(t *testing.T) {
 		assert.Equal(t, helperproto.CodeInsecurePermissions, m["code"])
 		assert.Equal(t, "x\n", f.read(keysPath))
 	})
+	t.Run("a symlink in the home is not written through into a root directory", func(t *testing.T) {
+		f := setup(t)
+		f.mkdir("/home/deploy/rootdir", 0o755) // root's directory inside the home
+		f.write("/home/deploy/rootdir/keys", "admin\n", 0o644)
+		require.NoError(t, os.Symlink("../rootdir/keys", f.host("/home/deploy/.ssh/authorized_keys2")))
+		code, m := f.runWith("pwned\n", writeArgs("/home/deploy/.ssh/authorized_keys2", hexOf("admin\n"), op1)...)
+		assert.Equal(t, helperproto.ExitRefused, code, "%v", m)
+		assert.Equal(t, helperproto.CodeUnsafeFile, m["code"])
+		assert.Equal(t, "admin\n", f.read("/home/deploy/rootdir/keys"))
+	})
+	t.Run("a new file in a root-owned .ssh is root's", func(t *testing.T) {
+		f := setup(t)
+		require.NoError(t, os.Chown(f.host("/home/deploy/.ssh"), 0, 0))
+		code, m := f.runWith("x\n", writeArgs(keysPath, helperproto.AbsentSHA256, op1)...)
+		require.Equal(t, 0, code, "%v", m)
+		uid, gid, mode := statOf(t, f, keysPath)
+		assert.Equal(t, []any{uint32(0), uint32(0), os.FileMode(0o644)}, []any{uid, gid, mode})
+	})
+	t.Run("a new file in a root key directory is root's", func(t *testing.T) {
+		f := setup(t)
+		f.perUser[deployCtx] = "authorizedkeysfile /etc/ssh/keys/%u\n"
+		f.mkdir("/etc/ssh/keys", 0o755)
+		code, m := f.runWith("x\n", writeArgs("/etc/ssh/keys/deploy", helperproto.AbsentSHA256, op1)...)
+		require.Equal(t, 0, code, "%v", m)
+		uid, gid, mode := statOf(t, f, "/etc/ssh/keys/deploy")
+		assert.Equal(t, []any{uint32(0), uint32(0), os.FileMode(0o644)}, []any{uid, gid, mode})
+	})
 	t.Run("a root file in a root directory stays root's", func(t *testing.T) {
 		f := setup(t)
 		f.perUser[deployCtx] = "authorizedkeysfile /etc/ssh/keys/%u\n"
@@ -851,10 +1018,9 @@ func TestWriteUsesAConcurrentlyCreatedSSHDir(t *testing.T) {
 	assert.NotEqual(t, ".ssh", chowns()[0].name)
 }
 
+// .ssh is made with the user's credentials: a home the user cannot write gets no .ssh (also as
+// root, where the fixture's home belongs to root).
 func TestWriteFailsWhenSSHDirCannotBeCreated(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("root ignores directory permissions")
-	}
 	f, _ := newWriteFixture(t)
 	require.NoError(t, os.RemoveAll(f.host("/home/deploy/.ssh")))
 	require.NoError(t, os.Chmod(f.host("/home/deploy"), 0o555))

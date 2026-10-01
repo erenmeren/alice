@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -132,10 +133,15 @@ func (s *sys) writeCandidate(ctx context.Context, c candidate, expect, op string
 		return nil, writeError(err)
 	}
 	defer d.close()
-	if err := lockDir(ctx, d.fd); err != nil {
+	lock, err := s.lockKeyDir(ctx, d)
+	if err != nil {
 		return nil, failed(helperproto.CodeIOError, "the key directory is locked by another process")
 	}
+	defer func() { _ = lock.Close() }()
 	if err := s.secureDirs(d, c.acct.uid, inHome); err != nil {
+		return nil, writeError(err)
+	}
+	if err := writeThroughOK(c, d, inHome); err != nil {
 		return nil, writeError(err)
 	}
 	cur, err := readCurrent(d, c.acct)
@@ -146,14 +152,35 @@ func (s *sys) writeCandidate(ctx context.Context, c candidate, expect, op string
 	if cur.sha256() != expect {
 		return nil, precondition(helperproto.CodeHashMismatch, "the file changed since it was read")
 	}
-	backup, err := s.backup(op, c.path, cur)
+	b, err := s.backup(op, c.path, cur)
 	if err != nil {
 		return nil, failed(helperproto.CodeIOError, "the backup cannot be written")
 	}
-	if err := s.replace(c, d, cur, content); err != nil {
+	defer b.close()
+	if replaced, err := s.replace(c, d, cur, content); err != nil {
+		if !replaced {
+			b.discard() // the file is unchanged: the backup describes nothing
+		}
 		return nil, err
 	}
-	return helperproto.AuthKeysWriteResponse{OK: true, SHA256: hexSHA(content), Backup: backup}, nil
+	return helperproto.AuthKeysWriteResponse{OK: true, SHA256: hexSHA(content), Backup: b.path()}, nil
+}
+
+// writeThroughOK refuses a file in the home reached through a symlink (the scan resolved the
+// listed path elsewhere) when the directory that really holds it is not the user's: a link the
+// user planted must not make root rewrite a file in a directory root or another user controls.
+func writeThroughOK(c candidate, d keyDir, inHome bool) error {
+	if !inHome || c.real == c.path || c.acct.uid == 0 {
+		return nil
+	}
+	var parent unix.Stat_t
+	if err := unix.Fstat(d.fd, &parent); err != nil {
+		return err
+	}
+	if int(parent.Uid) != c.acct.uid {
+		return errUnsafe
+	}
+	return nil
 }
 
 // openKeyDir opens the allowed directory and, beneath it, the directory of the file. A missing
@@ -187,32 +214,105 @@ func (s *sys) openKeyDir(c candidate, inHome bool) (keyDir, error) {
 	return keyDir{allowed: allowed, fd: fd, base: base}, nil
 }
 
-// makeSSHDir creates .ssh in the home (0700, owned by the user). An existing entry is left alone:
-// it is then opened and checked like any other directory.
+// makeSSHDir creates .ssh in the home, owned by the user and 0700. The directory is made with
+// the user's filesystem credentials, so it is born theirs and root never chowns a name the user
+// could have swapped in the meantime; it is then opened without following symlinks and must be a
+// directory owned by the user before its mode is set. An existing entry is left alone: it is
+// opened and checked like any other directory.
 func (s *sys) makeSSHDir(home int, acct account) error {
-	if err := unix.Mkdirat(home, ".ssh", 0o700); err != nil {
-		if errors.Is(err, unix.EEXIST) {
-			return nil
-		}
+	err := mkdirAs(home, ".ssh", acct.uid, acct.gid)
+	if errors.Is(err, unix.EEXIST) {
+		return nil
+	}
+	if err != nil {
 		return err
+	}
+	if s.afterMkdirSSH != nil {
+		s.afterMkdirSSH()
 	}
 	fd, err := unix.Openat(home, ".ssh", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return err
 	}
-	f := os.NewFile(uintptr(fd), ".ssh")
-	defer func() { _ = f.Close() }()
-	if err := s.chown(f, acct.uid, acct.gid); err != nil {
-		return failed(helperproto.CodeIOError, "the key directory owner cannot be set")
+	defer func() { _ = unix.Close(fd) }()
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return err
 	}
-	if err := unix.Fchmod(fd, 0o700); err != nil {
-		return failed(helperproto.CodeIOError, "the key directory mode cannot be set")
+	if st.Mode&unix.S_IFMT != unix.S_IFDIR || int(st.Uid) != acct.uid {
+		return errUnsafe
 	}
-	return nil
+	return unix.Fchmod(fd, 0o700)
 }
 
-// lockDir takes an exclusive flock on the key directory, giving up after lockWait.
-func lockDir(ctx context.Context, fd int) error {
+// errCredentials means the thread's filesystem credentials could not be switched or restored.
+var errCredentials = errors.New("filesystem credentials not switched")
+
+// mkdirAs runs mkdirat with the filesystem uid and gid of a user on a dedicated, locked OS thread
+// (setfsuid and setfsgid are per thread). When the original credentials cannot be restored the
+// goroutine exits with the thread still locked, so the runtime discards that thread.
+func mkdirAs(dirfd int, name string, uid, gid int) error {
+	done := make(chan error, 1)
+	go func() {
+		runtime.LockOSThread()
+		origUID, _ := unix.SetfsuidRetUid(-1) // an invalid id changes nothing and returns the current one
+		origGID, _ := unix.SetfsgidRetGid(-1)
+		_, _ = unix.SetfsgidRetGid(gid)
+		_, _ = unix.SetfsuidRetUid(uid)
+		err := errCredentials
+		if fsUID, _ := unix.SetfsuidRetUid(-1); fsUID == uid {
+			if fsGID, _ := unix.SetfsgidRetGid(-1); fsGID == gid {
+				err = unix.Mkdirat(dirfd, name, 0o700)
+			}
+		}
+		_, _ = unix.SetfsuidRetUid(origUID)
+		_, _ = unix.SetfsgidRetGid(origGID)
+		fsUID, _ := unix.SetfsuidRetUid(-1)
+		fsGID, _ := unix.SetfsgidRetGid(-1)
+		if fsUID != origUID || fsGID != origGID {
+			done <- errCredentials
+			return // still locked: the thread dies with the goroutine
+		}
+		runtime.UnlockOSThread()
+		done <- err
+	}()
+	return <-done
+}
+
+// lockKeyDir serializes helper writers of one key directory. The lock is a root-private file
+// <state>/locks/<dev>-<ino>.lock, never the key directory itself: any user who can open a 0755
+// directory could hold a flock on it and block every write there. The wait is bounded by
+// lockWait. Closing the returned file releases the lock.
+func (s *sys) lockKeyDir(ctx context.Context, d keyDir) (*os.File, error) {
+	var st unix.Stat_t
+	if err := unix.Fstat(d.fd, &st); err != nil {
+		return nil, err
+	}
+	locks, err := s.openStateDir(lockDirName, true)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = locks.Close() }()
+	name := fmt.Sprintf("%d-%d.lock", st.Dev, st.Ino)
+	fd, err := unix.Openat(int(locks.Fd()), name, unix.O_RDWR|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0o600) //nolint:gosec // G115: a descriptor fits an int
+	if err != nil {
+		return nil, err
+	}
+	f := os.NewFile(uintptr(fd), name)
+	var lst unix.Stat_t
+	if err := unix.Fstat(fd, &lst); err != nil || lst.Mode&unix.S_IFMT != unix.S_IFREG || int(lst.Uid) != unix.Geteuid() || lst.Nlink != 1 {
+		_ = f.Close()
+		return nil, errUnsafe
+	}
+	if err := flockWait(ctx, fd); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// flockWait takes an exclusive flock, giving up after lockWait.
+func flockWait(ctx context.Context, fd int) error {
 	ctx, cancel := context.WithTimeout(ctx, lockWait)
 	defer cancel()
 	for {
@@ -379,22 +479,53 @@ type backupMeta struct {
 	SHA256 string `json:"sha256"`
 }
 
+// maxBackupTries bounds the search for a free backup number (concurrent writers of one operation
+// on different key directories race for the same number).
+const maxBackupTries = 64
+
+// savedBackup is one backup written for a write: <BackupRoot>/<op>/<n>.bak and <n>.json.
+type savedBackup struct {
+	dir *os.File // the operation directory
+	op  string
+	n   string
+}
+
+func (b savedBackup) path() string { return helperproto.BackupRoot + "/" + b.op + "/" + b.n + ".bak" }
+
+func (b savedBackup) close() { _ = b.dir.Close() }
+
+// discard removes the backup again (the file was not replaced).
+func (b savedBackup) discard() {
+	dfd := int(b.dir.Fd()) //nolint:gosec // G115: a descriptor fits an int
+	_ = unix.Unlinkat(dfd, b.n+".bak", 0)
+	_ = unix.Unlinkat(dfd, b.n+".json", 0)
+	_ = b.dir.Sync()
+}
+
 // backup stores the old content as <BackupRoot>/<op>/<n>.bak with metadata in <n>.json, both 0600
-// in 0700 root-only directories. It returns the guest path of the .bak file.
-func (s *sys) backup(op, path string, cur current) (string, error) {
+// in 0700 root-only directories. The caller closes it.
+func (s *sys) backup(op, path string, cur current) (savedBackup, error) {
 	root, err := s.openBackupRoot(true)
 	if err != nil {
-		return "", err
+		return savedBackup{}, err
 	}
 	defer func() { _ = root.Close() }()
 	dir, err := subdir(root, op, true)
 	if err != nil {
-		return "", err
+		return savedBackup{}, err
 	}
-	defer func() { _ = dir.Close() }()
+	b, err := writeBackup(dir, op, path, cur)
+	if err != nil {
+		_ = dir.Close()
+		return savedBackup{}, err
+	}
+	return b, nil
+}
+
+func writeBackup(dir *os.File, op, path string, cur current) (savedBackup, error) {
 	names, err := dir.Readdirnames(-1)
 	if err != nil {
-		return "", err
+		return savedBackup{}, err
 	}
 	n := 1
 	for _, name := range names {
@@ -408,19 +539,28 @@ func (s *sys) backup(op, path string, cur current) (string, error) {
 	}
 	raw, err := json.Marshal(meta)
 	if err != nil {
-		return "", err
+		return savedBackup{}, err
 	}
-	name := strconv.Itoa(n)
-	if err := writeNewAt(dir, name+".bak", cur.data); err != nil {
-		return "", err
+	b := savedBackup{dir: dir, op: op}
+	for i := 0; ; i++ {
+		b.n = strconv.Itoa(n + i)
+		err = writeNewAt(dir, b.n+".bak", cur.data)
+		if !errors.Is(err, unix.EEXIST) || i == maxBackupTries {
+			break
+		}
 	}
-	if err := writeNewAt(dir, name+".json", raw); err != nil {
-		return "", err
+	if err != nil {
+		return savedBackup{}, err
+	}
+	if err := writeNewAt(dir, b.n+".json", raw); err != nil {
+		b.discard()
+		return savedBackup{}, err
 	}
 	if err := dir.Sync(); err != nil {
-		return "", err
+		b.discard()
+		return savedBackup{}, err
 	}
-	return helperproto.BackupRoot + "/" + op + "/" + name + ".bak", nil
+	return b, nil
 }
 
 // writeNewAt creates a new 0600 file in dir (never over an existing one or through a symlink)
@@ -444,15 +584,16 @@ func writeNewAt(dir *os.File, name string, data []byte) error {
 
 // replace stages content next to the real file, copies owner, mode and SELinux label, syncs, and
 // renames it over the real file; then it syncs the directory. Before the rename any failure
-// removes the staging file, so the real file is always the old or the new version. Everything
+// removes the staging file, so the real file is always the old or the new version. It reports
+// whether the rename happened. Everything
 // happens through d.fd and the staging file's descriptor.
-func (s *sys) replace(c candidate, d keyDir, cur current, content []byte) error {
+func (s *sys) replace(c candidate, d keyDir, cur current, content []byte) (bool, error) {
 	var rnd [8]byte
 	_, _ = rand.Read(rnd[:])
 	tmp := ".authorized_keys.alice-" + hex.EncodeToString(rnd[:])
 	fd, err := unix.Openat(d.fd, tmp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if err != nil {
-		return failed(helperproto.CodeIOError, "the staging file cannot be created")
+		return false, failed(helperproto.CodeIOError, "the staging file cannot be created")
 	}
 	f := os.NewFile(uintptr(fd), tmp)
 	renamed := false
@@ -462,44 +603,61 @@ func (s *sys) replace(c candidate, d keyDir, cur current, content []byte) error 
 			_ = unix.Unlinkat(d.fd, tmp, 0)
 		}
 	}()
-	uid, gid, mode := c.acct.uid, c.acct.gid, uint32(0o600)
-	if !cur.absent {
-		uid, gid, mode = int(cur.st.Uid), int(cur.st.Gid), cur.st.Mode&0o777
+	uid, gid, mode, err := newOwner(c, d, cur)
+	if err != nil {
+		return false, failed(helperproto.CodeIOError, "the directory cannot be checked")
 	}
 	if _, err := f.Write(content); err != nil {
-		return failed(helperproto.CodeIOError, "the staging file cannot be written")
+		return false, failed(helperproto.CodeIOError, "the staging file cannot be written")
 	}
 	if err := s.chown(f, uid, gid); err != nil {
-		return failed(helperproto.CodeIOError, "the owner cannot be set")
+		return false, failed(helperproto.CodeIOError, "the owner cannot be set")
 	}
 	if err := unix.Fchmod(fd, mode); err != nil {
-		return failed(helperproto.CodeIOError, "the mode cannot be set")
+		return false, failed(helperproto.CodeIOError, "the mode cannot be set")
 	}
 	if !cur.absent {
 		copySELinux(int(cur.f.Fd()), fd) //nolint:gosec // G115: a descriptor fits an int
 	}
 	if err := f.Sync(); err != nil {
-		return failed(helperproto.CodeIOError, "the staging file cannot be synced")
+		return false, failed(helperproto.CodeIOError, "the staging file cannot be synced")
 	}
 	if s.beforeRename != nil {
 		if err := s.beforeRename(); err != nil {
-			return failed(helperproto.CodeIOError, "the file cannot be replaced")
+			return false, failed(helperproto.CodeIOError, "the file cannot be replaced")
 		}
 	}
 	if !cur.unchanged(d) {
-		return precondition(helperproto.CodeHashMismatch, "the file changed since it was read")
+		return false, precondition(helperproto.CodeHashMismatch, "the file changed since it was read")
 	}
 	if err := renameInto(d, tmp, cur.absent); err != nil {
 		if errors.Is(err, unix.EEXIST) {
-			return precondition(helperproto.CodeHashMismatch, "the file changed since it was read")
+			return false, precondition(helperproto.CodeHashMismatch, "the file changed since it was read")
 		}
-		return failed(helperproto.CodeIOError, "the file cannot be replaced")
+		return false, failed(helperproto.CodeIOError, "the file cannot be replaced")
 	}
 	renamed = true
 	if err := unix.Fsync(d.fd); err != nil {
-		return failed(helperproto.CodeIOError, "the directory cannot be synced")
+		return true, failed(helperproto.CodeIOError, "the directory cannot be synced")
 	}
-	return nil
+	return true, nil
+}
+
+// newOwner is the owner and mode of the replacement: an existing file keeps its own; a new file
+// belongs to the user (0600), except in a root-owned directory (an administrator-managed key
+// directory such as /etc/ssh/keys or a root-owned .ssh), where it is root's (0644).
+func newOwner(c candidate, d keyDir, cur current) (uid, gid int, mode uint32, err error) {
+	if !cur.absent {
+		return int(cur.st.Uid), int(cur.st.Gid), cur.st.Mode & 0o777, nil
+	}
+	var parent unix.Stat_t
+	if err := unix.Fstat(d.fd, &parent); err != nil {
+		return 0, 0, 0, err
+	}
+	if parent.Uid == 0 && c.acct.uid != 0 {
+		return 0, 0, 0o644, nil
+	}
+	return c.acct.uid, c.acct.gid, 0o600, nil
 }
 
 // renameInto moves the staging file over the real one. When the file was absent it must still be

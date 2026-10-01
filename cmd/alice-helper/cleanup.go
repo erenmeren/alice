@@ -75,17 +75,26 @@ func (s *sys) sweepBackups() {
 	}
 }
 
-// openBackupRoot opens BackupRoot one component at a time below its grandparent (/var/lib),
-// never following a symlink. With create, the two helper-owned levels are created 0700 when
-// missing. Both must belong to the helper's user (root).
+// lockDirName is the directory of the key directory locks, next to the backups.
+const lockDirName = "locks"
+
+// openBackupRoot opens BackupRoot (with create: making it when missing).
 func (s *sys) openBackupRoot(create bool) (*os.File, error) {
-	parent := filepath.Dir(helperproto.BackupRoot)
-	cur, err := os.OpenFile(s.host(filepath.Dir(parent)), os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	return s.openStateDir(filepath.Base(helperproto.BackupRoot), create)
+}
+
+// openStateDir opens <state>/name, where <state> is the directory of BackupRoot
+// (/var/lib/alice-helper), one component at a time below /var/lib, never following a symlink.
+// With create, both helper-owned levels are created 0700 when missing. Both must belong to the
+// helper's user (root).
+func (s *sys) openStateDir(name string, create bool) (*os.File, error) {
+	state := filepath.Dir(helperproto.BackupRoot)
+	cur, err := os.OpenFile(s.host(filepath.Dir(state)), os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
-	for _, name := range []string{filepath.Base(parent), filepath.Base(helperproto.BackupRoot)} {
-		next, err := subdir(cur, name, create)
+	for _, n := range []string{filepath.Base(state), name} {
+		next, err := subdir(cur, n, create)
 		_ = cur.Close()
 		if err != nil {
 			return nil, err
