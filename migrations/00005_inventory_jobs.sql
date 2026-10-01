@@ -35,7 +35,9 @@ CREATE TABLE targets (
     created_at                 timestamptz NOT NULL,
     updated_at                 timestamptz NOT NULL,
     deleted_at                 timestamptz,
-    CHECK (type = 'azure_key_vault' OR (config ? 'host' AND config ? 'port'))
+    -- coalesce: a missing key makes the comparisons NULL, which a CHECK would accept
+    CHECK (type = 'azure_key_vault' OR coalesce(jsonb_typeof(config->'host') = 'string' AND config->>'host' <> ''
+                                                AND jsonb_typeof(config->'port') = 'number', false))
 );
 CREATE UNIQUE INDEX targets_name_live ON targets (name) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX targets_endpoint_live ON targets (type, lower(config->>'host'), ((config->>'port')::int)) WHERE deleted_at IS NULL;
@@ -94,18 +96,31 @@ CREATE INDEX ssh_key_locations_target ON ssh_key_locations (target_id);
 -- service layer and the provider refuse first; this trigger holds even if both had a bug.
 -- A location is Alice's own when its flag is set or when its key's fingerprint is the one in the
 -- platform_ssh credential, so clearing the flag or repointing the row does not unprotect it.
--- It runs as the invoking role (alice_app can read credentials and ssh_keys).
+-- It runs as the invoking role (alice_app can read credentials and ssh_keys), so every name is
+-- schema-qualified and the search path is pinned with pg_temp last: a temporary table of the same
+-- name created by the application role must not shadow the real one.
 -- Replacing the platform key is an owner procedure that disables this trigger (R37 #11).
 -- +goose StatementBegin
-CREATE FUNCTION ssh_key_locations_protect_alice_key() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION ssh_key_locations_protect_alice_key() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
     platform_fp text;
     is_own boolean;
 BEGIN
-    SELECT public_info->>'fingerprint' INTO platform_fp FROM credentials WHERE purpose = 'platform_ssh';
+    SELECT public_info->>'fingerprint' INTO platform_fp FROM public.credentials WHERE purpose = 'platform_ssh';
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.removed_by_alice_at IS NOT NULL THEN
+            SELECT NEW.is_alice_connection_key OR EXISTS (
+                SELECT 1 FROM public.ssh_keys WHERE id = NEW.ssh_key_id AND fingerprint_sha256 = platform_fp) INTO is_own;
+            IF is_own THEN
+                RAISE EXCEPTION 'Alice''s own connection key cannot be recorded as removed' USING ERRCODE = 'P0001';
+            END IF;
+        END IF;
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'DELETE' THEN
         SELECT OLD.is_alice_connection_key OR EXISTS (
-            SELECT 1 FROM ssh_keys WHERE id = OLD.ssh_key_id AND fingerprint_sha256 = platform_fp) INTO is_own;
+            SELECT 1 FROM public.ssh_keys WHERE id = OLD.ssh_key_id AND fingerprint_sha256 = platform_fp) INTO is_own;
         IF is_own THEN
             RAISE EXCEPTION 'the location of Alice''s own connection key cannot be deleted' USING ERRCODE = 'P0001';
         END IF;
@@ -118,7 +133,7 @@ BEGIN
     END IF;
     IF NEW.removed_by_alice_at IS NOT NULL THEN
         SELECT OLD.is_alice_connection_key OR NEW.is_alice_connection_key OR EXISTS (
-            SELECT 1 FROM ssh_keys WHERE id IN (OLD.ssh_key_id, NEW.ssh_key_id) AND fingerprint_sha256 = platform_fp) INTO is_own;
+            SELECT 1 FROM public.ssh_keys WHERE id IN (OLD.ssh_key_id, NEW.ssh_key_id) AND fingerprint_sha256 = platform_fp) INTO is_own;
         IF is_own THEN
             RAISE EXCEPTION 'Alice''s own connection key cannot be removed' USING ERRCODE = 'P0001';
         END IF;
@@ -126,7 +141,7 @@ BEGIN
     RETURN NEW;
 END $$;
 -- +goose StatementEnd
-CREATE TRIGGER ssh_key_locations_protect BEFORE UPDATE OR DELETE ON ssh_key_locations
+CREATE TRIGGER ssh_key_locations_protect BEFORE INSERT OR UPDATE OR DELETE ON ssh_key_locations
     FOR EACH ROW EXECUTE FUNCTION ssh_key_locations_protect_alice_key();
 
 CREATE TABLE jobs (

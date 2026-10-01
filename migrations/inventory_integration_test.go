@@ -205,6 +205,19 @@ VALUES (gen_random_uuid(), $1, $2, $3, '/home/x/.ssh/authorized_keys', 1, now(),
 	assert.Equal(t, "P0001", sqlState(exec(t, d.Owner, "DELETE FROM ssh_key_locations WHERE id = $1", unflagged)))
 	assert.Equal(t, "P0001", sqlState(exec(t, d.Owner, "UPDATE ssh_key_locations SET ssh_key_id = $2, removed_by_alice_at = now() WHERE id = $1", unflagged, otherKey)),
 		"repointing in the same statement does not help")
+	// Setting the flag and removing in one statement is refused for any key.
+	var plain string
+	require.NoError(t, d.App.QueryRow(ctx, `INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, first_seen_at, last_seen_at)
+VALUES (gen_random_uuid(), $1, $2, 'bob', '/home/bob/.ssh/authorized_keys', 1, now(), now()) RETURNING id::text`, otherKey, target).Scan(&plain))
+	assert.Equal(t, "P0001", sqlState(exec(t, d.App, "UPDATE ssh_key_locations SET is_alice_connection_key = true, removed_by_alice_at = now() WHERE id = $1", plain)))
+	// A location cannot be created already removed when it is Alice's own.
+	insRemoved := func(keyID string, flag bool) error {
+		return exec(t, d.App, `INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, first_seen_at, last_seen_at, removed_by_alice_at, is_alice_connection_key)
+VALUES (gen_random_uuid(), $1, $2, 'ins', '/home/ins/.ssh/authorized_keys', 1, now(), now(), now(), $3)`, keyID, target, flag)
+	}
+	assert.Equal(t, "P0001", sqlState(insRemoved(otherKey, true)))
+	assert.Equal(t, "P0001", sqlState(insRemoved(key, false)), "platform fingerprint")
+	require.NoError(t, insRemoved(otherKey, false))
 	// Setting the flag is allowed; after that the row is the platform key's location.
 	require.NoError(t, exec(t, d.App, "UPDATE ssh_key_locations SET is_alice_connection_key = true WHERE id = $1", unflagged))
 	assert.Equal(t, "P0001", sqlState(exec(t, d.App, "UPDATE ssh_key_locations SET is_alice_connection_key = false WHERE id = $1", unflagged)))
@@ -250,7 +263,38 @@ VALUES (gen_random_uuid(), gen_random_uuid()::text, $1, $2::jsonb, $3, 'ok', now
 	}
 	assert.Equal(t, "23514", sqlState(ins("linux", `{"host": "a"}`)))
 	assert.Equal(t, "23514", sqlState(ins("nginx", `{"port": 22}`)))
+	for _, cfg := range []string{`{"host": null, "port": 22}`, `{"host": "", "port": 22}`, `{"host": "a", "port": "22"}`, `{"host": 5, "port": 22}`} {
+		assert.Equal(t, "23514", sqlState(ins("linux", cfg)), cfg)
+	}
 	assert.Equal(t, "23505", sqlState(ins("linux", `{"host": "WEB-01.example.com", "port": 22}`)), "host compares case-insensitively")
 	require.NoError(t, ins("linux", `{"host": "web-01.example.com", "port": 2222}`))
 	require.NoError(t, ins("azure_key_vault", `{"vault": "v"}`))
+}
+
+// The trigger runs as the invoking role, so it must not resolve credentials or ssh_keys through
+// the session's search path: alice_app can create temporary tables that would shadow them.
+func TestAliceKeyProtectionIgnoresShadowingTempTables(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	target := seedTarget(t, d, "web-01", "web-01.example.com")
+	require.NoError(t, exec(t, d.Owner, `UPDATE credentials SET public_info = '{"fingerprint": "SHA256:alice"}'`))
+	var loc string
+	require.NoError(t, d.App.QueryRow(ctx, `WITH k AS (INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, public_key, first_seen_at, created_at)
+VALUES (gen_random_uuid(), 'SHA256:alice', 'ssh-ed25519', 'ssh-ed25519 AAAA', now(), now()) RETURNING id)
+INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, first_seen_at, last_seen_at)
+SELECT gen_random_uuid(), k.id, $1, 'deploy', '/home/deploy/.ssh/authorized_keys', 1, now(), now() FROM k RETURNING id::text`, target).Scan(&loc))
+
+	conn, err := d.App.Acquire(ctx)
+	require.NoError(t, err)
+	defer conn.Release()
+	for _, stmt := range []string{
+		"CREATE TEMP TABLE credentials (purpose text, public_info jsonb)",
+		"CREATE TEMP TABLE ssh_keys (id uuid, fingerprint_sha256 text)",
+	} {
+		_, err := conn.Exec(ctx, stmt)
+		require.NoError(t, err, stmt)
+	}
+	_, err = conn.Exec(ctx, "UPDATE ssh_key_locations SET removed_by_alice_at = now() WHERE id = $1", loc)
+	assert.Equal(t, "P0001", sqlState(err), "shadow tables must not hide the platform fingerprint")
+	_, _ = conn.Exec(ctx, "DROP TABLE pg_temp.credentials, pg_temp.ssh_keys")
 }
