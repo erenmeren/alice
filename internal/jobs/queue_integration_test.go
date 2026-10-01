@@ -23,7 +23,13 @@ import (
 	"alice/internal/testutil/pgtest"
 )
 
-func TestMain(m *testing.M) { os.Exit(pgtest.Main(m)) }
+func TestMain(m *testing.M) {
+	if os.Getenv(crashChildEnv) == "1" {
+		// The child of TestKilledWorkerJobIsRecoveredOnce uses its parent's database.
+		os.Exit(m.Run())
+	}
+	os.Exit(pgtest.Main(m))
+}
 
 // Test job types of the queue suites.
 var (
@@ -336,4 +342,36 @@ func TestTwentyWorkersRunThousandJobsExactlyOnce(t *testing.T) {
 	}
 	assert.Equal(t, 1000, e.count(t, `SELECT count(*) FROM job_attempts`))
 	assert.Equal(t, 1000, e.count(t, `SELECT count(*) FROM jobs WHERE attempts = 1`))
+}
+
+func TestPruneDeletesOnlyOldFinishedJobs(t *testing.T) {
+	e := newQEnv(t)
+	old := map[string]uuid.UUID{}
+	for _, status := range []string{"succeeded", "failed", "cancelled", "dead"} {
+		id := e.enqueue(t, Spec{Type: testQueueJob})
+		_, err := e.d.Owner.Exec(e.ctx, `UPDATE jobs SET status = $2, finished_at = $3 WHERE id = $1`,
+			id, status, queueStart.Add(-91*24*time.Hour))
+		require.NoError(t, err)
+		_, err = e.d.Owner.Exec(e.ctx, `INSERT INTO job_attempts (id, job_id, attempt, worker_id, started_at) VALUES ($1, $2, 1, 'w', $3)`,
+			uuid.New(), id, queueStart.Add(-91*24*time.Hour))
+		require.NoError(t, err)
+		old[status] = id
+	}
+	recent := e.enqueue(t, Spec{Type: testQueueJob})
+	_, err := e.d.Owner.Exec(e.ctx, `UPDATE jobs SET status = 'succeeded', finished_at = $2 WHERE id = $1`, recent, queueStart.Add(-89*24*time.Hour))
+	require.NoError(t, err)
+	queued := e.enqueue(t, Spec{Type: testQueueJob, RunAt: queueStart.Add(-100 * 24 * time.Hour)})
+
+	n, err := e.q.Prune(e.ctx, 90*24*time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 4, n)
+	for status, id := range old {
+		_, err := e.q.Get(e.ctx, id)
+		assert.ErrorIs(t, err, ErrNotFound, status)
+	}
+	_, err = e.q.Get(e.ctx, recent)
+	assert.NoError(t, err, "finished less than 90 days ago")
+	_, err = e.q.Get(e.ctx, queued)
+	assert.NoError(t, err, "unfinished jobs are never pruned")
+	assert.Zero(t, e.count(t, `SELECT count(*) FROM job_attempts`), "attempts go with their job")
 }

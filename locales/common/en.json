@@ -268,6 +268,12 @@
         "subject": "Alice: the server clock jumped forward",
         "body": "The clock of the Alice server jumped forward by {{jump_days}} days (it now shows {{system_time}}). For the next 24 hours Alice keeps using the previous time for license checks.\n\nIf the new time is wrong, correct the server clock. If it is right, nothing needs to be done; you may ask your vendor for a correction license. Your Installation ID is {{installation_id}}."
       }
+    },
+    "job": {
+      "dead": {
+        "subject": "Alice: a background job failed for good ({{type}})",
+        "body": "The background job {{job_id}} ({{type}}) failed after {{attempts}} attempts and will not be retried. The last error code was {{reason}}.\n\nYou can see its steps and its error in Alice at /api/v1/jobs/{{job_id}}. If the job was meant to change a server, check that server before you start the work again."
+      }
     }
   }
 }

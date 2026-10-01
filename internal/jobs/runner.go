@@ -13,6 +13,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -55,6 +56,33 @@ type RunnerConfig struct {
 	ReapEvery     time.Duration  // default 60 s
 	ShutdownGrace time.Duration  // default 60 s, in total: jobs are cancelled after half of it
 	Jitter        func() float64 // in [-0.2, 0.2]; default crypto/rand
+	Notifier      Notifier       // emails the Administrators about dead jobs; nil = no email
+}
+
+// Notifier queues an email to every Administrator inside tx; notify.AdminNotifier implements it.
+type Notifier interface {
+	NotifyAdmins(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error
+}
+
+// TemplateJobDead is the email sent when a job is out of attempts (spec §8.4 "exhausted jobs
+// raise an alert"; until the Phase 7 alert engine the alert is this email). Its params are
+// those of deadAlertParams.
+const TemplateJobDead = "job.dead"
+
+func deadAlertParams(id uuid.UUID, typ, reason string, attempts int) map[string]string {
+	return map[string]string{"job_id": id.String(), "type": typ, "reason": reason, "attempts": strconv.Itoa(attempts)}
+}
+
+// alertDead queues the job.dead email in the transaction that kills the job: a job dies once
+// (its status is final and every write is fenced), so each dead job is announced exactly once.
+func (r *Runner) alertDead(ctx context.Context, tx pgx.Tx, id uuid.UUID, typ, reason string, attempts int) error {
+	if r.cfg.Notifier == nil {
+		return nil
+	}
+	if err := r.cfg.Notifier.NotifyAdmins(ctx, tx, TemplateJobDead, deadAlertParams(id, typ, reason, attempts)); err != nil {
+		return fmt.Errorf("jobs: queue the dead-job email: %w", err)
+	}
+	return nil
 }
 
 // Runner claims and runs queued jobs (spec §8.1, §8.4, §8.5, §8.8).
@@ -102,13 +130,17 @@ func defaultWorkerID() string {
 	return host + "-" + strconv.Itoa(os.Getpid()) + "-" + rand.Text()[:8]
 }
 
-// NewRunner applies the defaults of RunnerConfig.
+// NewRunner applies the defaults of RunnerConfig. It panics on a WorkerID that contains "/":
+// claim tokens are "<WorkerID>/<uuid>" and the shutdown finds its own claims by that prefix.
 func NewRunner(c RunnerConfig) *Runner {
 	if c.Workers <= 0 {
 		c.Workers = 8
 	}
 	if c.WorkerID == "" {
 		c.WorkerID = defaultWorkerID()
+	}
+	if strings.Contains(c.WorkerID, "/") {
+		panic(fmt.Sprintf("jobs: worker id %q must not contain %q", c.WorkerID, "/"))
 	}
 	for _, d := range []struct {
 		v   *time.Duration
@@ -359,6 +391,13 @@ func (r *Runner) settle(ctx context.Context, c *claimed, errorCode string,
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM target_locks WHERE job_id = $1 AND locked_by = $2`, c.id, c.token); err != nil {
 			return fmt.Errorf("jobs: release the target: %w", err)
+		}
+		for _, ev := range events {
+			if ev.Action == "job.dead" {
+				if err := r.alertDead(ctx, tx, c.id, c.typ, ev.Details["reason"], c.attempts); err != nil {
+					return err
+				}
+			}
 		}
 		for _, ev := range events {
 			if _, err := r.cfg.Audit.Append(ctx, tx, ev); err != nil {
@@ -689,6 +728,13 @@ WHERE job_id = ANY($1::uuid[]) AND finished_at IS NULL`, ids, now); err != nil {
 	if _, err := tx.Exec(ctx, `DELETE FROM target_locks WHERE job_id = ANY($1::uuid[])`, ids); err != nil {
 		return nil, err
 	}
+	for _, x := range all {
+		if x.status == string(StatusDead) {
+			if err := r.alertDead(ctx, tx, x.id, x.typ, "job.lease_expired", x.attempts); err != nil {
+				return nil, err
+			}
+		}
+	}
 	// The audit rows come last: the chain lock is held as briefly as possible.
 	for _, x := range all {
 		details := map[string]string{"type": x.typ, "attempt": strconv.Itoa(x.attempts), "reason": "job.lease_expired"}
@@ -713,21 +759,25 @@ const takeBackSet = `UPDATE jobs SET
 // Reap re-queues jobs whose lease expired (their worker stopped: crash, kill, lost database
 // connection; spec §8.8). The attempt that was cut off counts; a job without attempts left is
 // dead. Expired target locks are released.
+//
+// Row locks are taken in the order every other writer uses (claim, beat, settle): jobs first,
+// then target_locks, so a reaper and a worker cannot deadlock.
 func (r *Runner) Reap(ctx context.Context) (int, error) {
 	n := 0
 	err := db.InTx(ctx, r.cfg.Pool, func(tx pgx.Tx) error {
 		now := r.cfg.Clock.Now().UTC()
-		// Locks first (no audit row yet): expired target locks whose job no longer runs.
-		if _, err := tx.Exec(ctx, `DELETE FROM target_locks l WHERE lease_until < $1
-  AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.id = l.job_id AND o.status = 'running' AND o.locked_until >= $1)`, now); err != nil {
-			return fmt.Errorf("jobs: release expired target locks: %w", err)
-		}
+		// takeBack also deletes the target locks of the jobs it takes back.
 		all, err := r.takeBack(ctx, tx, now, takeBackSet+`WHERE status = 'running' AND locked_until < $1
 RETURNING id, type, attempts, status`)
 		if err != nil {
 			return fmt.Errorf("jobs: reap: %w", err)
 		}
 		n = len(all)
+		// Then the remaining expired target locks whose job no longer runs.
+		if _, err := tx.Exec(ctx, `DELETE FROM target_locks l WHERE lease_until < $1
+  AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.id = l.job_id AND o.status = 'running' AND o.locked_until >= $1)`, now); err != nil {
+			return fmt.Errorf("jobs: release expired target locks: %w", err)
+		}
 		return nil
 	})
 	return n, err
@@ -735,7 +785,8 @@ RETURNING id, type, attempts, status`)
 
 // Recover is the startup pass of spec §8.8: before the workers start, jobs whose lease expired
 // are re-queued. Leases that have not expired may belong to a live process (F-69) and are left
-// to the reaper.
+// to the reaper. Run calls it before it starts its workers; calling it before Run as well is
+// harmless (a second pass finds nothing).
 func (r *Runner) Recover(ctx context.Context) (int, error) {
 	n, err := r.Reap(ctx)
 	if err == nil && n > 0 {
@@ -744,11 +795,16 @@ func (r *Runner) Recover(ctx context.Context) (int, error) {
 	return n, err
 }
 
-// Run runs Workers workers and the reaper until ctx ends. Then it stops claiming and gives
-// running jobs ShutdownGrace in total: the first half to finish on their own; then they are
-// cancelled and get the second half to return. Jobs that still have not returned are handed
-// back (re-queued, or dead without attempts left), so they resume after a restart.
+// Run first runs Recover (spec §8.8: before any worker starts), then Workers workers and the
+// reaper until ctx ends. Then it stops claiming and gives running jobs ShutdownGrace in total:
+// the first half to finish on their own; then they are cancelled and get the second half to
+// return. Jobs that still have not returned are handed back (re-queued, or dead without
+// attempts left), so they resume after a restart.
 func (r *Runner) Run(ctx context.Context) {
+	if _, err := r.Recover(ctx); err != nil && ctx.Err() == nil {
+		// Not fatal: the reaper repeats the pass every ReapEvery.
+		r.cfg.Log.Error("recovering jobs of stopped workers failed", "error_type", fmt.Sprintf("%T", err))
+	}
 	jobsCtx, cancelJobs := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelJobs()
 	var workers sync.WaitGroup

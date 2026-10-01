@@ -65,6 +65,14 @@ var (
 	NotifySend      = Register("notify.send", license.ClassAlways)
 )
 
+// Phase 3 periodic tasks (spec §8.2): the daily audit chain verification and the cleanup run in
+// every license state; scheduling discovery is read-only work and pauses in lock (L-27).
+var (
+	AuditVerify        = Register("audit.verify", license.ClassAlways)
+	MaintenanceCleanup = Register("maintenance.cleanup", license.ClassAlways)
+	DiscoverySchedule  = Register("discovery.schedule", license.ClassReadOnly)
+)
+
 // Phase 3 queue job types (spec §8.2, §8.6): connection tests and discovery are read-only work
 // (paused in lock); removing a key changes a managed server (refused in lock, R9).
 var (

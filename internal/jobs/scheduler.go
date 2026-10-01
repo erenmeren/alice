@@ -32,11 +32,20 @@ type task struct {
 // Scheduler runs periodic tasks in-process. Every run passes the license gate first
 // (spec §8.6); a run that has started is never cancelled by the lock (§8.7).
 type Scheduler struct {
-	clock clock.Clock
-	gate  Gate
-	log   *slog.Logger
-	tasks map[string]*task
-	order []*task
+	clock  clock.Clock
+	gate   Gate
+	log    *slog.Logger
+	tasks  map[string]*task
+	order  []*task
+	leader *Leader // nil: always run (tests, single process)
+}
+
+// WithLeader makes ticks run only while this process holds the scheduling lock, so two
+// processes against one database never both run periodic work (P2-06). RunNow is an explicit
+// request (the e2e demo clock, an operator command) and runs regardless. Call it before Run.
+func (s *Scheduler) WithLeader(l *Leader) *Scheduler {
+	s.leader = l
+	return s
 }
 
 // NewScheduler validates tasks. External-change work (ClassChange) is refused: after a
@@ -92,6 +101,9 @@ func (s *Scheduler) loopWith(ctx context.Context, t *task, ticks <-chan time.Tim
 		case <-ticks:
 			if ctx.Err() != nil {
 				return
+			}
+			if s.leader != nil && !s.leader.IsLeader(ctx) {
+				continue // another process schedules (P2-06)
 			}
 			select {
 			case t.sem <- struct{}{}:

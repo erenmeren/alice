@@ -11,10 +11,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/license"
+	"alice/internal/notify"
 	"alice/internal/providers"
 	"alice/internal/secrets"
+	"alice/locales"
 )
 
 func TestPayloadMACLabelIsTheSecretsLabel(t *testing.T) {
@@ -138,5 +141,43 @@ func TestNewRunnerDefaults(t *testing.T) {
 	for range 100 {
 		j := r.cfg.Jitter()
 		assert.True(t, j >= -0.2 && j <= 0.2, "jitter %v", j)
+	}
+}
+
+func TestScheduledTaskTypesDeclareTheirLicenseClass(t *testing.T) {
+	assert.Equal(t, Type{Name: "audit.verify", Class: license.ClassAlways}, AuditVerify)
+	assert.Equal(t, Type{Name: "maintenance.cleanup", Class: license.ClassAlways}, MaintenanceCleanup)
+	assert.Equal(t, Type{Name: "discovery.schedule", Class: license.ClassReadOnly}, DiscoverySchedule)
+	// The periodic scheduler accepts all three (it refuses only ClassChange tasks).
+	assert.NotPanics(t, func() {
+		NewScheduler(nil, &fakeGate{}, quiet,
+			Task{Type: AuditVerify, Every: time.Hour, Run: func(context.Context) error { return nil }},
+			Task{Type: MaintenanceCleanup, Every: time.Hour, Run: func(context.Context) error { return nil }},
+			Task{Type: DiscoverySchedule, Every: time.Minute, Run: func(context.Context) error { return nil }})
+	})
+}
+
+// releaseAll finds this runner's claims by the "<WorkerID>/" prefix of their token: a slash in
+// the worker id would let one runner release another's jobs ("a" and "a/b").
+func TestNewRunnerRefusesASlashInTheWorkerID(t *testing.T) {
+	assert.PanicsWithValue(t, `jobs: worker id "a/b" must not contain "/"`, func() { NewRunner(RunnerConfig{WorkerID: "a/b"}) })
+	assert.NotPanics(t, func() { NewRunner(RunnerConfig{WorkerID: "host-1-abc"}) })
+	assert.NotContains(t, NewRunner(RunnerConfig{}).cfg.WorkerID, "/", "the default id has no slash")
+}
+
+// The job.dead email exists in English and Turkish and uses only the params the runner sends.
+func TestJobDeadTemplateRendersInBothLanguages(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	params := deadAlertParams(uuid.MustParse("0190f5a0-0000-7000-8000-0000000000aa"), "sshkey.remove", "ssh.timeout", 3)
+	for _, lang := range []string{"en", "tr"} {
+		m := s.Render("ada@example.com", TemplateJobDead, lang, params)
+		assert.NotContains(t, m.Subject, "{{", lang)
+		assert.NotContains(t, m.Body, "{{", lang)
+		assert.NotContains(t, m.Subject, "email.", "%s: the key itself means a missing text", lang)
+		assert.Contains(t, m.Body, "0190f5a0-0000-7000-8000-0000000000aa", lang)
+		assert.Contains(t, m.Body, "ssh.timeout", lang)
+		assert.Contains(t, m.Subject, "sshkey.remove", lang)
 	}
 }
