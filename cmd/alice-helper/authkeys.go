@@ -258,5 +258,5 @@ func cmdAuthKeysRead(ctx context.Context, s *sys, args []string) (any, error) {
 	case err != nil:
 		return nil, failed(helperproto.CodeIOError, "the file cannot be read")
 	}
-	return helperproto.AuthKeysReadResponse{OK: true, Path: path, SHA256: hexSHA(data), ContentB64: base64.StdEncoding.EncodeToString(data)}, nil
+	return helperproto.AuthKeysReadResponse{OK: true, Path: path, SHA256: hexSHA(data), ContentB64: base64.StdEncoding.EncodeToString(data), Owner: c.acct.name}, nil
 }

@@ -102,6 +102,7 @@ type AuthKeyResult struct {
 	OldSHA256 string
 	NewSHA256 string
 	Verified  bool
+	Backup    string // the helper's backup of the previous file (for restoring), when a write happened
 }
 
 // StepStatus is the state of one externally visible step.

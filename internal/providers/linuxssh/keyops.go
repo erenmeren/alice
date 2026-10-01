@@ -59,6 +59,21 @@ func writeRefused(err error) bool {
 	return false
 }
 
+// transformFailed logs the refusal of the in-memory change as a failed precheck step.
+func transformFailed(log providers.StepLogger, attempt int, err error) (providers.AuthKeyResult, bool, error) {
+	step(log, "precheck", "failed", failParams(attempt, err))
+	return providers.AuthKeyResult{}, false, err
+}
+
+// checkOwner refuses a file the helper resolved to another account than the request names: the
+// last-key and root guards depend on OSUser being the file's real owner.
+func checkOwner(owner, osUser string) error {
+	if owner != osUser {
+		return refusedRequest("os_user")
+	}
+	return nil
+}
+
 func hexSHA256(b []byte) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
@@ -67,6 +82,19 @@ func hexSHA256(b []byte) string {
 // precheck validates the request locally (nothing outside the helper vocabulary is sent), refuses
 // a protected key before any remote command, and refuses hosts whose keys come from
 // AuthorizedKeysCommand (spec §13.2, §13.4 step 1).
+// checkAddLine refuses, before any remote command, a line that is not exactly one plain key line
+// (AddLine rejects controls, bidi overrides and non-UTF-8) or that declares a certificate authority.
+func checkAddLine(line string) error {
+	ak, _, err := AuthorizedKeys{}.AddLine(line)
+	if err != nil || len(ak.Lines) != 1 {
+		return refusedRequest("line")
+	}
+	if hasOption(ak.Lines[0].Options, "cert-authority") {
+		return refusedRequest("line")
+	}
+	return nil
+}
+
 func (s *session) precheck(ctx context.Context, req providers.AuthKeyChange, remove bool) error {
 	switch {
 	case req.OperationID == uuid.Nil:
@@ -81,11 +109,18 @@ func (s *session) precheck(ctx context.Context, req providers.AuthKeyChange, rem
 		return refusedRequest("line")
 	}
 	if remove {
+		// Alice's own key is refused whatever the caller passes (spec §6.6): the connection knows
+		// the key it authenticated with.
+		if own := s.conn.ClientFingerprint(); own != "" && own == req.Fingerprint {
+			return providers.NewError("sshkey.own_key_protected", false, nil, map[string]string{"reason": "protected_fingerprint"})
+		}
 		for _, p := range req.ProtectedFingerprints {
 			if p != "" && p == req.Fingerprint {
 				return providers.NewError("sshkey.own_key_protected", false, nil, map[string]string{"reason": "protected_fingerprint"})
 			}
 		}
+	} else if err := checkAddLine(req.Line); err != nil {
+		return err
 	}
 	sum, _, err := s.sshd(ctx)
 	if err != nil {
@@ -133,7 +168,7 @@ func (s *session) RemoveAuthorizedKey(ctx context.Context, req providers.AuthKey
 
 func (s *session) removeOnce(ctx context.Context, req providers.AuthKeyChange, log providers.StepLogger, attempt int) (providers.AuthKeyResult, bool, error) {
 	step(log, "read", "started", attemptParams(attempt))
-	content, h0, exists, err := s.readFile(ctx, req.FilePath)
+	content, h0, owner, exists, err := s.readFileOwner(ctx, req.FilePath)
 	if err != nil {
 		step(log, "read", "failed", failParams(attempt, err))
 		return providers.AuthKeyResult{}, false, err
@@ -142,15 +177,18 @@ func (s *session) removeOnce(ctx context.Context, req providers.AuthKeyChange, l
 	if !exists {
 		return providers.AuthKeyResult{OldSHA256: helperproto.AbsentSHA256, NewSHA256: helperproto.AbsentSHA256}, false, nil
 	}
+	if err := checkOwner(owner, req.OSUser); err != nil {
+		return transformFailed(log, attempt, err)
+	}
 	ak, err := ParseAuthorizedKeys(content)
 	if err != nil {
-		return providers.AuthKeyResult{}, false, providers.NewError("sshkey.not_removable", false, err,
-			map[string]string{"reason": "file_too_large"})
+		return transformFailed(log, attempt, providers.NewError("sshkey.not_removable", false, err,
+			map[string]string{"reason": "file_too_large"}))
 	}
 	for _, l := range ak.Lines {
 		if l.Kind == LineKey && l.Fingerprint == req.Fingerprint && hasOption(l.Options, "cert-authority") {
-			return providers.AuthKeyResult{}, false, providers.NewError("sshkey.not_removable", false, nil,
-				map[string]string{"reason": "cert_authority"})
+			return transformFailed(log, attempt, providers.NewError("sshkey.not_removable", false, nil,
+				map[string]string{"reason": "cert_authority"}))
 		}
 	}
 	next, removed := ak.RemoveFingerprint(req.Fingerprint)
@@ -159,11 +197,11 @@ func (s *session) removeOnce(ctx context.Context, req providers.AuthKeyChange, l
 	}
 	if next.CountKeys() == 0 {
 		if req.OSUser == s.cfg.Username {
-			return providers.AuthKeyResult{}, false, providers.NewError("sshkey.own_key_protected", false, nil,
-				map[string]string{"reason": "last_key_of_connection_account"})
+			return transformFailed(log, attempt, providers.NewError("sshkey.own_key_protected", false, nil,
+				map[string]string{"reason": "last_key_of_connection_account"}))
 		}
 		if req.OSUser == "root" && !req.AllowLastRootKey {
-			return providers.AuthKeyResult{}, false, providers.NewError("sshkey.last_root_key", false, nil, nil)
+			return transformFailed(log, attempt, providers.NewError("sshkey.last_root_key", false, nil, nil))
 		}
 	}
 	return s.writeAndVerify(ctx, req, log, attempt, h0, next.Bytes(), removed)
@@ -193,20 +231,25 @@ func (s *session) AddAuthorizedKey(ctx context.Context, req providers.AuthKeyCha
 
 func (s *session) addOnce(ctx context.Context, req providers.AuthKeyChange, log providers.StepLogger, attempt int) (providers.AuthKeyResult, bool, error) {
 	step(log, "read", "started", attemptParams(attempt))
-	content, h0, _, err := s.readFile(ctx, req.FilePath)
+	content, h0, owner, exists, err := s.readFileOwner(ctx, req.FilePath)
 	if err != nil {
 		step(log, "read", "failed", failParams(attempt, err))
 		return providers.AuthKeyResult{}, false, err
 	}
 	step(log, "read", "ok", attemptParams(attempt))
+	if exists {
+		if err := checkOwner(owner, req.OSUser); err != nil {
+			return transformFailed(log, attempt, err)
+		}
+	}
 	ak, err := ParseAuthorizedKeys(content)
 	if err != nil {
-		return providers.AuthKeyResult{}, false, providers.NewError("sshkey.not_removable", false, err,
-			map[string]string{"reason": "file_too_large"})
+		return transformFailed(log, attempt, providers.NewError("sshkey.not_removable", false, err,
+			map[string]string{"reason": "file_too_large"}))
 	}
 	next, added, err := ak.AddLine(req.Line)
 	if err != nil {
-		return providers.AuthKeyResult{}, false, refusedRequest("line")
+		return transformFailed(log, attempt, refusedRequest("line"))
 	}
 	if !added {
 		return providers.AuthKeyResult{OldSHA256: h0, NewSHA256: h0}, false, nil
@@ -221,13 +264,14 @@ func (s *session) writeAndVerify(ctx context.Context, req providers.AuthKeyChang
 	step(log, "write", "started", attemptParams(attempt))
 	cmd, err := CmdAuthKeysWrite(req.FilePath, h0, req.OperationID, newContent)
 	if err != nil {
-		step(log, "write", "failed", attemptParams(attempt))
-		return providers.AuthKeyResult{}, false, refusedRequest("content")
+		err = refusedRequest("content")
+		step(log, "write", "failed", failParams(attempt, err))
+		return providers.AuthKeyResult{}, false, err
 	}
 	if beforeAuthKeysWrite != nil {
 		beforeAuthKeysWrite(req.FilePath)
 	}
-	_, err = runHelper[helperproto.AuthKeysWriteResponse](ctx, s.conn, cmd)
+	wr, err := runHelper[helperproto.AuthKeysWriteResponse](ctx, s.conn, cmd)
 	var pe *providers.Error
 	if errors.As(err, &pe) && pe.Code == "ssh.file_changed" {
 		step(log, "write", "failed", failParams(attempt, err))
@@ -241,6 +285,14 @@ func (s *session) writeAndVerify(ctx context.Context, req providers.AuthKeyChang
 			return providers.AuthKeyResult{}, false, err // the helper refused: nothing was written
 		}
 		// The outcome is uncertain (the write may have happened): the caller must not retry blindly.
+		return res, false, err
+	}
+	res.Backup = cleanValue(wr.Backup, 200)
+	if wr.SHA256 != want {
+		// The helper wrote something else than asked: the outcome is uncertain, never retried.
+		err := providers.NewError("ssh.protocol_error", false, errors.New("linuxssh: written hash differs from the requested one"),
+			map[string]string{"subcommand": helperproto.SubAuthKeysWrite})
+		step(log, "write", "failed", failParams(attempt, err))
 		return res, false, err
 	}
 	step(log, "write", "ok", attemptParams(attempt))

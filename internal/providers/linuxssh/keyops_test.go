@@ -255,6 +255,7 @@ func TestAddRefusesALineThatIsNotOneKey(t *testing.T) {
 			providers.AuthKeyChange{OperationID: keyOp, OSUser: "deploy", FilePath: deployFile, Line: bad}, nil)
 		assert.Equal(t, "ssh.helper_refused", providerCode(t, err).Code, "%q", bad)
 	}
+	assert.Equal(t, []string{"/usr/local/libexec/alice-helper version"}, e.srv.Commands(), "refused before any remote command")
 	assert.Empty(t, e.emu.Writes())
 }
 
@@ -355,4 +356,92 @@ func TestWriteRefusalsAreMapped(t *testing.T) {
 			assert.Empty(t, e.emu.Writes())
 		})
 	}
+}
+
+// SEC-081: the connector knows its own key; the caller's protected list is not the only guard.
+func TestRemoveRefusesTheConnectionsOwnKeyWithoutAProtectedList(t *testing.T) {
+	e := newProvEnv(t)
+	own, ownFP := platformLine(e, "", "alice")
+	e.emu.SetFile(deployFile, []byte(own+"\n"))
+	_, err := e.open(t).RemoveAuthorizedKey(context.Background(), removeReq("deploy", deployFile, ownFP), nil)
+	pe := providerCode(t, err)
+	assert.Equal(t, "sshkey.own_key_protected", pe.Code)
+	assert.Equal(t, "protected_fingerprint", pe.Params["reason"])
+	assert.Equal(t, []string{"/usr/local/libexec/alice-helper version"}, e.srv.Commands())
+	assert.Empty(t, e.emu.Writes())
+}
+
+func TestAddRefusesCertAuthorityAndHostileRequests(t *testing.T) {
+	e := newProvEnv(t)
+	s := e.open(t)
+	ca, _ := keyLine(t, "ed25519", "cert-authority", "ca@corp")
+	k, _ := keyLine(t, "ed25519", "", "x@y")
+	for name, req := range map[string]providers.AuthKeyChange{
+		"cert-authority": {OperationID: keyOp, OSUser: "deploy", FilePath: deployFile, Line: ca},
+		"empty line":     {OperationID: keyOp, OSUser: "deploy", FilePath: deployFile},
+		"bad path":       {OperationID: keyOp, OSUser: "deploy", FilePath: "/home/deploy/.ssh/authorized_keys; id", Line: k},
+		"no operation":   {OSUser: "deploy", FilePath: deployFile, Line: k},
+	} {
+		_, err := s.AddAuthorizedKey(context.Background(), req, nil)
+		pe := providerCode(t, err)
+		assert.Equal(t, "ssh.helper_refused", pe.Code, name)
+		assert.Equal(t, "INVALID_ARGUMENT", pe.Params["helper_code"], name)
+	}
+	assert.Equal(t, []string{"/usr/local/libexec/alice-helper version"}, e.srv.Commands())
+}
+
+// The file the helper resolves must belong to the user the request names.
+func TestKeyOperationsRefuseAFileOfAnotherAccount(t *testing.T) {
+	e := newProvEnv(t)
+	k, fp := keyLine(t, "ed25519", "", "x@y")
+	e.emu.SetFile(deployFile, []byte(k+"\n"))
+	s := e.open(t)
+	_, err := s.RemoveAuthorizedKey(context.Background(), removeReq("root", deployFile, fp), nil)
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.helper_refused", pe.Code)
+	assert.Equal(t, "INVALID_ARGUMENT", pe.Params["helper_code"])
+	assert.Equal(t, "os_user", pe.Params["field"])
+	add, _ := keyLine(t, "ed25519", "", "n@y")
+	_, err = s.AddAuthorizedKey(context.Background(),
+		providers.AuthKeyChange{OperationID: keyOp, OSUser: "root", FilePath: deployFile, Line: add}, nil)
+	assert.Equal(t, "os_user", providerCode(t, err).Params["field"])
+	assert.Empty(t, e.emu.Writes())
+}
+
+// A CA line and a plain line may share a fingerprint; the CA line is never removed, so the whole
+// removal is refused.
+func TestRemoveRefusesWhenACertAuthorityLineSharesTheFingerprint(t *testing.T) {
+	e := newProvEnv(t)
+	ca, fp := keyLine(t, "ed25519", "cert-authority", "ca@corp")
+	plain := strings.TrimPrefix(ca, "cert-authority ")
+	e.emu.SetFile(deployFile, []byte(plain+"\n"+ca+"\n"))
+	log := &stepLog{}
+	_, err := e.open(t).RemoveAuthorizedKey(context.Background(), removeReq("deploy", deployFile, fp), log)
+	assert.Equal(t, "cert_authority", providerCode(t, err).Params["reason"])
+	assert.Empty(t, e.emu.Writes())
+	assert.Contains(t, log.all(), "precheck:failed", "a transform refusal is a failed step")
+}
+
+// An IO_ERROR on the write may have changed the file: the result says so and the error is returned.
+func TestAmbiguousWriteFailureKeepsThePartialResult(t *testing.T) {
+	e := newProvEnv(t)
+	k, fp := keyLine(t, "ed25519", "", "a@x")
+	keep, _ := keyLine(t, "ed25519", "", "b@x")
+	e.emu.SetFile(deployFile, []byte(k+"\n"+keep+"\n"))
+	e.emu.FailWrite(deployFile)
+	res, err := e.open(t).RemoveAuthorizedKey(context.Background(), removeReq("deploy", deployFile, fp), nil)
+	pe := providerCode(t, err)
+	assert.Equal(t, "IO_ERROR", pe.Params["helper_code"])
+	assert.True(t, res.Changed)
+	assert.NotEmpty(t, res.NewSHA256)
+}
+
+func TestWriteResultCarriesTheBackup(t *testing.T) {
+	e := newProvEnv(t)
+	k, fp := keyLine(t, "ed25519", "", "a@x")
+	keep, _ := keyLine(t, "ed25519", "", "b@x")
+	e.emu.SetFile(deployFile, []byte(k+"\n"+keep+"\n"))
+	res, err := e.open(t).RemoveAuthorizedKey(context.Background(), removeReq("deploy", deployFile, fp), nil)
+	require.NoError(t, err)
+	assert.Contains(t, res.Backup, keyOp.String())
 }

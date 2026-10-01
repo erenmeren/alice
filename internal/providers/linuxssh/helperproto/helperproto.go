@@ -147,6 +147,9 @@ type AuthKeysReadResponse struct {
 	Path       string `json:"path"`
 	SHA256     string `json:"sha256"`
 	ContentB64 string `json:"content_b64"`
+	// Owner is the account the helper resolved the file to; Alice refuses a change whose request
+	// names another user (it would defeat the last-key guards).
+	Owner string `json:"owner"`
 }
 
 // AuthKeysWriteResponse answers "authkeys-write".

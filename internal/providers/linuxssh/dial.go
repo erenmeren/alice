@@ -228,6 +228,16 @@ func (l *lazyAuth) signers() ([]ssh.Signer, error) {
 	return []ssh.Signer{signer}, nil
 }
 
+// fingerprint is the SHA256 fingerprint of the client key that was offered ("" if none was).
+func (l *lazyAuth) fingerprint() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.signer == nil {
+		return ""
+	}
+	return ssh.FingerprintSHA256(l.signer.PublicKey())
+}
+
 func (l *lazyAuth) done() (attempted bool, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -332,7 +342,7 @@ func (d *Dialer) Dial(ctx context.Context, target uuid.UUID, cfg Config, cred pr
 			return nil, providers.NewError("ssh.unreachable", true, r.err, nil)
 		}
 	}
-	return &Conn{client: r.client, target: target, cfg: cfg, hostKey: presented, clock: d.clk()}, nil
+	return &Conn{client: r.client, target: target, cfg: cfg, hostKey: presented, clientFP: auth.fingerprint(), clock: d.clk()}, nil
 }
 
 func changedError(old, presented providers.HostKey) error {
@@ -432,7 +442,9 @@ type Conn struct {
 	target  uuid.UUID
 	cfg     Config
 	hostKey providers.HostKey
-	clock   clock.Clock
+	// clientFP is the fingerprint of the key this connection authenticated with: Alice's own key.
+	clientFP string
+	clock    clock.Clock
 
 	mu     sync.Mutex
 	broken bool
@@ -444,6 +456,9 @@ type Result struct {
 	Stdout   []byte
 	ExitCode int
 }
+
+// ClientFingerprint is the fingerprint of the key the connection authenticated with.
+func (c *Conn) ClientFingerprint() string { return c.clientFP }
 
 // HostKey is the (pinned) key the server presented.
 func (c *Conn) HostKey() providers.HostKey { return c.hostKey }

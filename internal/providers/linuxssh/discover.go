@@ -94,30 +94,36 @@ func (s *session) sshd(ctx context.Context) (providers.SSHDSummary, []providers.
 // not exist (helper code NOT_FOUND; the hash is then helperproto.AbsentSHA256); the content's
 // SHA-256 is checked against the helper's.
 func (s *session) readFile(ctx context.Context, path string) ([]byte, string, bool, error) {
+	content, sum, _, exists, err := s.readFileOwner(ctx, path)
+	return content, sum, exists, err
+}
+
+// readFileOwner is readFile that also returns the account the helper resolved the file to.
+func (s *session) readFileOwner(ctx context.Context, path string) (content []byte, sum, owner string, exists bool, err error) {
 	cmd, err := CmdAuthKeysRead(path)
 	if err != nil {
-		return nil, "", false, providers.NewError("ssh.helper_refused", false, err,
+		return nil, "", "", false, providers.NewError("ssh.helper_refused", false, err,
 			map[string]string{"subcommand": helperproto.SubAuthKeysRead, "helper_code": helperproto.CodeInvalidArgument})
 	}
 	r, err := runHelper[helperproto.AuthKeysReadResponse](ctx, s.conn, cmd)
 	if isHelperCode(err, helperproto.CodeNotFound) {
-		return nil, helperproto.AbsentSHA256, false, nil
+		return nil, helperproto.AbsentSHA256, "", false, nil
 	}
 	if err != nil {
-		return nil, "", false, err
+		return nil, "", "", false, err
 	}
-	content, err := base64.StdEncoding.DecodeString(r.ContentB64)
+	content, err = base64.StdEncoding.DecodeString(r.ContentB64)
 	if err != nil {
-		return nil, "", false, providers.NewError("ssh.protocol_error", false, err,
+		return nil, "", "", false, providers.NewError("ssh.protocol_error", false, err,
 			map[string]string{"subcommand": helperproto.SubAuthKeysRead})
 	}
 	h := sha256.Sum256(content)
-	sum := hex.EncodeToString(h[:])
+	sum = hex.EncodeToString(h[:])
 	if sum != r.SHA256 {
-		return nil, "", false, providers.NewError("ssh.protocol_error", false, errors.New("linuxssh: content does not match its hash"),
+		return nil, "", "", false, providers.NewError("ssh.protocol_error", false, errors.New("linuxssh: content does not match its hash"),
 			map[string]string{"subcommand": helperproto.SubAuthKeysRead})
 	}
-	return content, sum, true, nil
+	return content, sum, r.Owner, true, nil
 }
 
 // isHelperCode reports whether err is the helper refusing with code.

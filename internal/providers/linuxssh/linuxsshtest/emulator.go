@@ -51,6 +51,7 @@ type Emulator struct {
 	insecure    map[string]bool
 	unsupported map[string]bool
 	failRead    map[string]bool
+	failWrite   map[string]bool
 	hostKeys    []helperproto.HostKeyInfo
 	beforeWrite func(path string)
 	writes      []string
@@ -74,6 +75,7 @@ func NewEmulator() *Emulator {
 		insecure:    map[string]bool{},
 		unsupported: map[string]bool{},
 		failRead:    map[string]bool{},
+		failWrite:   map[string]bool{},
 		backups:     map[string]int{},
 		hostKeys: []helperproto.HostKeyInfo{{
 			Type: "ssh-ed25519", Bits: 256, Fingerprint: "SHA256:emulatedHostKey00000000000000000000000000000",
@@ -155,6 +157,13 @@ func (e *Emulator) SetUnsupported(path string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.unsupported[path] = true
+}
+
+// FailWrite makes authkeys-write of path fail with IO_ERROR (the outcome is then uncertain).
+func (e *Emulator) FailWrite(path string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.failWrite[path] = true
 }
 
 // FailRead makes authkeys-read of path fail with IO_ERROR.
@@ -433,7 +442,7 @@ func (e *Emulator) read(args []string) Response {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	_, listed := e.findLocked(path)
+	us, listed := e.findLocked(path)
 	c, exists := e.files[path]
 	switch {
 	case !listed:
@@ -447,7 +456,7 @@ func (e *Emulator) read(args []string) Response {
 	case len(c) > helperproto.MaxAuthorizedKeysSize:
 		return refuse(helperproto.ExitRefused, helperproto.CodeTooLarge)
 	default:
-		return answer(helperproto.AuthKeysReadResponse{OK: true, Path: path, SHA256: sum(c), ContentB64: base64.StdEncoding.EncodeToString(c)})
+		return answer(helperproto.AuthKeysReadResponse{OK: true, Path: path, SHA256: sum(c), ContentB64: base64.StdEncoding.EncodeToString(c), Owner: us.user.name})
 	}
 }
 
@@ -465,7 +474,7 @@ func (e *Emulator) write(args []string, stdin []byte) Response {
 	e.mu.Lock()
 	hook := e.beforeWrite
 	us, listed := e.findLocked(path)
-	unsupported, insecure := e.unsupported[path], e.insecure[path]
+	unsupported, insecure, failW := e.unsupported[path], e.insecure[path], e.failWrite[path]
 	e.mu.Unlock()
 	switch {
 	case !listed:
@@ -478,6 +487,8 @@ func (e *Emulator) write(args []string, stdin []byte) Response {
 		return refuse(helperproto.ExitRefused, helperproto.CodeUnsafeFile)
 	case insecure:
 		return refuse(helperproto.ExitRefused, helperproto.CodeInsecurePermissions)
+	case failW:
+		return refuse(helperproto.ExitFailed, helperproto.CodeIOError)
 	}
 	if hook != nil {
 		hook(path)
