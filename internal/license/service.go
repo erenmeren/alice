@@ -205,9 +205,10 @@ func (s *Service) CheckCanAddTarget(ctx context.Context, tx pgx.Tx) error {
 }
 
 // Installed reports whether any license file was ever accepted (the wizard's license step).
-func (s *Service) Installed(ctx context.Context) (bool, error) {
+// It reads through q, so the caller's transaction covers the answer.
+func (s *Service) Installed(ctx context.Context, q db.Querier) (bool, error) {
 	var ok bool
-	if err := s.pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM license_files)").Scan(&ok); err != nil {
+	if err := q.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM license_files)").Scan(&ok); err != nil {
 		return false, fmt.Errorf("read license files: %w", err)
 	}
 	return ok, nil

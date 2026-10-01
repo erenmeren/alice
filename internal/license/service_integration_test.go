@@ -544,15 +544,28 @@ func TestInspectChangesNothing(t *testing.T) {
 
 func TestInstalledReportsAnyStoredLicense(t *testing.T) {
 	e := newEnv(t)
-	ok, err := e.svc.Installed(e.ctx)
+	ok, err := e.svc.Installed(e.ctx, e.db.App)
 	require.NoError(t, err)
 	assert.False(t, ok)
 	now := e.clk.Now()
 	_, err = e.upload(e.payload("LIC-A", now, now.AddDate(1, 0, 0), 10))
 	require.NoError(t, err)
-	ok, err = e.svc.Installed(e.ctx)
+	ok, err = e.svc.Installed(e.ctx, e.db.App)
 	require.NoError(t, err)
 	assert.True(t, ok)
+
+	// B4: it reads through the caller's transaction (here it sees the transaction's own row).
+	blank := newEnv(t)
+	err = db.InTx(e.ctx, blank.db.App, func(tx pgx.Tx) error {
+		_, err := tx.Exec(e.ctx, `INSERT INTO license_files (id, seq, sha256, raw_file, uploaded_at)
+VALUES (gen_random_uuid(), 1, '\x01', '{}', now())`)
+		require.NoError(t, err)
+		ok, err := blank.svc.Installed(e.ctx, tx)
+		require.NoError(t, err)
+		assert.True(t, ok)
+		return errors.New("roll back")
+	})
+	require.Error(t, err)
 }
 
 // Pre-flight ruling (Task 8): an upload reports the phase the gate enforces, also when a

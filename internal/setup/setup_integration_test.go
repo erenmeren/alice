@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,6 +24,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/auth"
 	"alice/internal/platform/clock"
+	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
 	"alice/internal/rbac"
 	"alice/internal/secrets"
@@ -53,10 +55,18 @@ type env struct {
 	license *stubLicense
 }
 
-// stubLicense stands in for license.Service in the wizard tests.
-type stubLicense struct{ installed bool }
+// stubLicense stands in for license.Service in the wizard tests. It records whether it was
+// asked inside a transaction.
+type stubLicense struct {
+	installed bool
+	inTx      []bool
+}
 
-func (s *stubLicense) Installed(context.Context) (bool, error) { return s.installed, nil }
+func (s *stubLicense) Installed(_ context.Context, q db.Querier) (bool, error) {
+	_, tx := q.(pgx.Tx)
+	s.inTx = append(s.inTx, tx)
+	return s.installed, nil
+}
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
@@ -506,9 +516,12 @@ func TestAnInstalledLicenseCompletesTheLicenseStep(t *testing.T) {
 	st, err = e.setup.Status(e.ctx)
 	require.NoError(t, err)
 	assert.True(t, st.LicenseChosen)
+	e.license.inTx = nil
 	st, err = e.setup.Complete(e.ctx, p, ip1)
 	require.NoError(t, err)
 	assert.True(t, st.Completed)
+	require.NotEmpty(t, e.license.inTx)
+	assert.True(t, e.license.inTx[0], "Complete asks inside its transaction (B4): no second connection under the advisory lock")
 }
 
 func TestEvaluationChoiceNeedsThePassphraseFirst(t *testing.T) {

@@ -13,7 +13,8 @@ import (
 )
 
 // licenseChosen reports whether the license step is done: the evaluation was chosen or a
-// license file was installed (spec §18.5 step 6).
+// license file was installed (spec §18.5 step 6). Both are read through q, so Complete asks
+// inside its transaction and takes no second connection under the advisory lock.
 func (s *Service) licenseChosen(ctx context.Context, q db.Querier) (bool, error) {
 	set, err := hasSetting(ctx, q, keyLicenseChoice)
 	if err != nil || set {
@@ -22,7 +23,7 @@ func (s *Service) licenseChosen(ctx context.Context, q db.Querier) (bool, error)
 	if s.license == nil {
 		return false, nil
 	}
-	return s.license.Installed(ctx)
+	return s.license.Installed(ctx, q)
 }
 
 // ChooseEvaluation completes the license step with the 30-day evaluation. Nothing starts

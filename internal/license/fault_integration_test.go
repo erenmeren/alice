@@ -318,7 +318,7 @@ func TestReadFaults(t *testing.T) {
 	t.Run("license files unreadable", func(t *testing.T) {
 		e := newEnv(t)
 		e.revoke("SELECT", "license_files")
-		_, err := e.svc.Installed(e.ctx)
+		_, err := e.svc.Installed(e.ctx, e.db.App)
 		require.Error(t, err)
 		_, err = e.svc.Detail(e.ctx)
 		require.Error(t, err)

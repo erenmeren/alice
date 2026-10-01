@@ -63,9 +63,10 @@ const (
 	keyLicenseChoice = "setup.license_choice"
 )
 
-// LicenseState tells the wizard whether a license file was installed (license.Service).
+// LicenseState tells the wizard whether a license file was installed (license.Service). It
+// reads through q, so a caller's transaction covers the answer.
 type LicenseState interface {
-	Installed(ctx context.Context) (bool, error)
+	Installed(ctx context.Context, q db.Querier) (bool, error)
 }
 
 // Config holds the service dependencies.
