@@ -90,6 +90,20 @@ func TestUpdateTargetNeedsTheCurrentVersion(t *testing.T) {
 	assert.Equal(t, "discovery_interval_hours", verrs[0].Field)
 }
 
+func TestEmptyPatchIsRefusedWithoutAChange(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	tg := h.add(admin, "web-01", "web-01.example.com")
+	_, err := h.svc.UpdateTarget(h.ctx, admin, tg.ID, tg.Version, inventory.TargetPatch{})
+	var verrs validate.Errors
+	require.ErrorAs(t, err, &verrs)
+	assert.Equal(t, validate.Required, verrs[0].Code)
+	got, err := h.svc.GetTarget(h.ctx, tg.ID)
+	require.NoError(t, err)
+	assert.Equal(t, tg.Version, got.Version, "nothing changed")
+	assert.Equal(t, 0, h.audits("target.updated"))
+}
+
 func TestDeleteTargetIsSoftAndHidesIt(t *testing.T) {
 	h := newHarness(t)
 	admin := h.user("ada", rbac.Admin, "")

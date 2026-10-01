@@ -171,15 +171,19 @@ func authorizedKeysLine(publicKey, from string) string {
 }
 
 // SetupGuide returns the platform key and the setup snippets for both sudoers profiles. from is an
-// optional IP address that the authorized_keys line restricts Alice's key to (§12.2).
+// optional IP address that the authorized_keys line restricts Alice's key to (§12.2). It is
+// placed in the line in its canonical form (an IPv6 address in lower case), so the text inside the
+// quoted from="…" option is always exactly an address. Zones and IPv4-mapped IPv6 addresses are
+// refused: sshd matches the client's address as it sees it, and a mapped form would never match.
 func (s *Service) SetupGuide(ctx context.Context, from string) (Guide, error) {
 	if from != "" {
 		a, err := netip.ParseAddr(from)
-		if err != nil || a.Zone() != "" || a.String() != from {
+		if err != nil || a.Zone() != "" || a.Is4In6() {
 			var errs validate.Errors
 			errs.Add("from", validate.Pattern, nil)
 			return Guide{}, errs
 		}
+		from = a.String()
 	}
 	pk, err := s.EnsurePlatformKey(ctx)
 	if err != nil {

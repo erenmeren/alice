@@ -152,7 +152,13 @@ func TestSetupGuide(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, `from="10.0.0.9",no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-pty,no-user-rc `+pk.PublicKey, guide.AuthorizedKeysLine)
 
-	for _, bad := range []string{"web-01", `10.0.0.9",command="id`, "10.0.0.0/8", "fe80::1%eth0", " 10.0.0.9"} {
+	guide, err = h.svc.SetupGuide(h.ctx, "2001:DB8::9")
+	require.NoError(t, err)
+	assert.Equal(t, `from="2001:db8::9",no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-pty,no-user-rc `+pk.PublicKey,
+		guide.AuthorizedKeysLine, "an IPv6 address is stored in its canonical form")
+
+	for _, bad := range []string{"web-01", `10.0.0.9",command="id`, "10.0.0.0/8", "fe80::1%eth0", " 10.0.0.9",
+		"::ffff:10.0.0.9", "::FFFF:10.0.0.9", "010.0.0.9"} {
 		_, err := h.svc.SetupGuide(h.ctx, bad)
 		var verrs validate.Errors
 		require.ErrorAs(t, err, &verrs, bad)

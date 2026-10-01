@@ -3,6 +3,7 @@
 package inventory_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -10,11 +11,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/inventory"
 	"alice/internal/license"
+	"alice/internal/platform/db"
 	"alice/internal/rbac"
 )
 
@@ -74,6 +77,47 @@ func TestL70L71TargetLimit(t *testing.T) {
 	require.NoError(t, h.lic.Allow(license.ClassChange))
 	_, err = h.svc.RequestTest(h.ctx, admin, mustList(t, h)[0].ID)
 	require.NoError(t, err, "existing targets keep working")
+
+	// The 11th is refused whatever its type: the gate counts every type and decides before the
+	// insert. Phase 3 can only create linux targets, so the other types are checked at the gate.
+	for _, typ := range []string{"linux", "nginx", "azure_key_vault"} {
+		err := db.InTx(h.ctx, h.db.App, func(tx pgx.Tx) error { return h.lic.CheckCanAddTarget(h.ctx, tx) })
+		require.ErrorIs(t, err, license.ErrTargetLimit, typ)
+		_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "eleven-" + typ, Type: typ, Host: "eleven.example.com"})
+		require.Error(t, err, typ)
+	}
+	assert.Equal(t, 10, liveTargets(h))
+}
+
+// L-73 under concurrency: while a delete is still uncommitted its slot is not free; once it
+// commits the add succeeds.
+func TestDeleteAndAddRacingAtTheLimit(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	addN(h, admin, 1, 5)
+	victim := mustList(t, h)[0]
+	tx, err := h.db.App.Begin(h.ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(h.ctx) }()
+	_, err = tx.Exec(h.ctx, "UPDATE targets SET deleted_at = $2, version = version + 1, updated_at = $2 WHERE id = $1", victim.ID, h.clock.Now())
+	require.NoError(t, err)
+
+	_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "web-06", Type: "linux", Host: "web-06.example.com"})
+	require.ErrorIs(t, err, license.ErrTargetLimit, "the uncommitted delete does not free the slot")
+	require.NoError(t, tx.Commit(h.ctx))
+	h.add(admin, "web-06", "web-06.example.com")
+	assert.Equal(t, 5, liveTargets(h))
+}
+
+// A refused add is audited even when the request's context ends right after the refusal.
+func TestLicenseDenialIsAuditedAfterCancel(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	ctx, cancel := context.WithCancel(h.ctx)
+	cancel()
+	h.svc.AuditLicenseDenial(ctx, admin, "web-09", &license.TargetLimitError{Max: 5, Used: 5})
+	assert.Equal(t, []map[string]string{{"reason": "target_limit", "used": "5", "max": "5", "name": "web-09"}},
+		h.auditDetails("target.add.denied_license"))
 }
 
 // L-72 (counting part): 200 keys on existing targets at 10 of 10 do not count. Task 15 repeats

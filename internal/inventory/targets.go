@@ -134,11 +134,16 @@ func (s *Service) CreateTarget(ctx context.Context, a Actor, in NewTarget) (Targ
 	}
 	id := uuid.Must(uuid.NewV7())
 	var jobID uuid.UUID
+	var created Target
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := s.insertTarget(ctx, tx, id, n, cfg, pk.ID, caps, a.UserID); err != nil {
 			return err
 		}
-		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "target.created", ObjectType: "target",
+		var err error
+		if created, err = getTarget(ctx, tx, id, false); err != nil {
+			return err
+		}
+		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "target.created", ObjectType: "target",
 			ObjectID: id.String(), Result: audit.Success, Details: map[string]string{
 				"name": n.Name, "type": n.Type, "host": n.Host, "port": strconv.Itoa(n.Port), "username": n.Username}})
 		if err != nil {
@@ -153,8 +158,7 @@ func (s *Service) CreateTarget(ctx context.Context, a Actor, in NewTarget) (Targ
 		return Target{}, uuid.Nil, err
 	}
 	s.refreshLicense(ctx)
-	t, err := s.GetTarget(ctx, id)
-	return t, jobID, err
+	return created, jobID, nil
 }
 
 // insertTarget checks the license limit and inserts the row in the same transaction: the check
@@ -183,8 +187,10 @@ created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 
 }
 
 // auditLicenseDenial records an add refused by the license (L-04) in its own transaction: the
-// add's transaction was rolled back. Other errors are not audited here.
+// add's transaction was rolled back. Other errors are not audited here. The record does not
+// depend on the request: a client that disconnects right after the refusal does not erase it.
 func (s *Service) auditLicenseDenial(ctx context.Context, a Actor, name string, cause error) {
+	ctx = context.WithoutCancel(ctx)
 	var limit *license.TargetLimitError
 	d := map[string]string{"name": name}
 	switch {
@@ -207,8 +213,9 @@ func (s *Service) auditLicenseDenial(ctx context.Context, a Actor, name string, 
 
 // refreshLicense re-evaluates the license after a committed add or delete, so the snapshot's
 // target count and the limit banners are current (L-76). A failure is logged: the next hourly
-// evaluation repeats it.
+// evaluation repeats it. It runs for a committed change even if the request has ended.
 func (s *Service) refreshLicense(ctx context.Context) {
+	ctx = context.WithoutCancel(ctx)
 	if err := s.license.Tick(ctx); err != nil {
 		s.log.Error("license evaluation after a target change failed", "error_type", fmt.Sprintf("%T", err))
 	}
@@ -226,12 +233,18 @@ func (s *Service) UpdateTarget(ctx context.Context, a Actor, id uuid.UUID, ifVer
 		}
 		name = n
 	}
+	if p.Name == nil && p.DiscoveryIntervalHours == nil {
+		// Nothing to change: refused, so an empty edit neither bumps the version nor is audited.
+		errs.Add("name", validate.Required, nil)
+		errs.Add("discovery_interval_hours", validate.Required, nil)
+	}
 	if p.DiscoveryIntervalHours != nil && (*p.DiscoveryIntervalHours < 1 || *p.DiscoveryIntervalHours > 720) {
 		errs.Add("discovery_interval_hours", validate.OutOfRange, map[string]string{"min": "1", "max": "720"})
 	}
 	if len(errs) > 0 {
 		return Target{}, errs
 	}
+	var updated Target
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		cur, err := getTarget(ctx, tx, id, true)
 		if err != nil {
@@ -260,6 +273,9 @@ WHERE id = $1`, id, cur.Name, int(cur.DiscoveryInterval/time.Second), s.clock.No
 		if err != nil {
 			return fmt.Errorf("inventory: update target: %w", err)
 		}
+		if updated, err = getTarget(ctx, tx, id, false); err != nil {
+			return err
+		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "target.updated", ObjectType: "target",
 			ObjectID: id.String(), Result: audit.Success, Details: details})
 		return err
@@ -267,7 +283,7 @@ WHERE id = $1`, id, cur.Name, int(cur.DiscoveryInterval/time.Second), s.clock.No
 	if err != nil {
 		return Target{}, err
 	}
-	return s.GetTarget(ctx, id)
+	return updated, nil
 }
 
 // DeleteTarget soft-deletes a target: its license slot is free at once and nothing is changed on

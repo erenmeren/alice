@@ -57,6 +57,24 @@ func TestNormalizeHostTable(t *testing.T) {
 		{"fe80::1", "", CodeHostNotAllowed},
 		{"255.255.255.255", "", CodeHostNotAllowed},
 		{"::ffff:169.254.169.254", "", CodeHostNotAllowed},
+		{"10.0.0.5.", "10.0.0.5", ""},
+		{"[::ffff:169.254.169.254]", "", CodeHostNotAllowed},
+		{"[::1]", "::1", ""},
+		{"LOCALHOST.", "localhost", ""},
+		{"web..", "", validate.Pattern},
+		{"web-01:", "", validate.Pattern},
+		{"\u00a0web-01\u00a0", "web-01", ""},
+		{"64:ff9b::a9fe:a9fe", "", CodeHostNotAllowed},
+		{"64:ff9b::e000:1", "", CodeHostNotAllowed},
+		{"64:ff9b::", "", CodeHostNotAllowed},
+		{"64:ff9b::ffff:ffff", "", CodeHostNotAllowed},
+		{"64:ff9b::a00:5", "64:ff9b::a00:5", ""},
+		{"2002:a9fe:a9fe::1", "", CodeHostNotAllowed},
+		{"[2002:a9fe:a9fe::1]", "", CodeHostNotAllowed},
+		{"2002:a00:5::1", "2002:a00:5::1", ""},
+		{"fd00:ec2::254", "", CodeHostNotAllowed},
+		{"[FD00:EC2::254]", "", CodeHostNotAllowed},
+		{"fd00:ec2::253", "fd00:ec2::253", ""},
 		{"10.0.0", "", validate.Pattern},
 		{"2852039166", "", validate.Pattern},
 		{"0251.0376.0251.0376", "", validate.Pattern},
@@ -95,6 +113,10 @@ func TestValidateNewTarget(t *testing.T) {
 	assert.Equal(t, "Çağrı Merkezi Sunucusu", n.Name, "names keep Turkish letters and are trimmed")
 	assert.Equal(t, 2222, n.Port)
 
+	n, errs = validateNewTarget(NewTarget{Name: "C\u0327ag\u0306r\u0131 Merkezi", Type: "linux", Host: "web-01"})
+	require.Empty(t, errs)
+	assert.Equal(t, "\u00c7a\u011fr\u0131 Merkezi", n.Name, "names are stored in NFC")
+
 	bad := []struct {
 		in    NewTarget
 		field string
@@ -104,6 +126,10 @@ func TestValidateNewTarget(t *testing.T) {
 		{NewTarget{Name: strings.Repeat("ş", 101), Type: "linux", Host: "web"}, "name", validate.TooLong},
 		{NewTarget{Name: "web\x00", Type: "linux", Host: "web"}, "name", validate.Pattern},
 		{NewTarget{Name: "web\u202e", Type: "linux", Host: "web"}, "name", validate.Pattern},
+		{NewTarget{Name: "web\u200b-01", Type: "linux", Host: "web"}, "name", validate.Pattern},
+		{NewTarget{Name: "\u2060", Type: "linux", Host: "web"}, "name", validate.Pattern},
+		{NewTarget{Name: "\ufeff", Type: "linux", Host: "web"}, "name", validate.Pattern},
+		{NewTarget{Name: "web\u00ad01", Type: "linux", Host: "web"}, "name", validate.Pattern},
 		{NewTarget{Name: "web", Type: "linux", Host: "web", Port: 70000}, "port", validate.OutOfRange},
 		{NewTarget{Name: "web", Type: "linux", Host: "web", Port: -1}, "port", validate.OutOfRange},
 		{NewTarget{Name: "web", Type: "linux", Host: "web", Username: "Root"}, "username", validate.Pattern},

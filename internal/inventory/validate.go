@@ -8,6 +8,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/text/unicode/norm"
+
 	"alice/internal/platform/validate"
 )
 
@@ -65,7 +67,8 @@ func NormalizeHost(raw string) (string, *validate.FieldError) {
 		}
 		return checkAddr(a)
 	}
-	if a, err := netip.ParseAddr(s); err == nil {
+	// One trailing dot is dropped from addresses as from names ("10.0.0.5." is 10.0.0.5).
+	if a, err := netip.ParseAddr(strings.TrimSuffix(s, ".")); err == nil {
 		if a.Zone() != "" {
 			return "", hostProblem(validate.Pattern, nil)
 		}
@@ -103,32 +106,59 @@ func NormalizeHost(raw string) (string, *validate.FieldError) {
 // for 169.254.169.254, which would slip past checkAddr. No real host name ends like this.
 var numericLabelRE = regexp.MustCompile(`^([0-9]+|0x[0-9a-f]*)$`)
 
+var (
+	nat64Prefix  = netip.MustParsePrefix("64:ff9b::/96") // RFC 6052 well-known prefix
+	sixToFour    = netip.MustParsePrefix("2002::/16")    // RFC 3056
+	awsIMDSv6    = netip.MustParseAddr("fd00:ec2::254")  // AWS instance metadata over IPv6
+	ipv4Broadcst = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+)
+
 // checkAddr refuses addresses that are never a managed server: link-local (including the cloud
-// metadata address 169.254.169.254, SEC-065), multicast, unspecified and the IPv4 broadcast
-// address. Loopback and private addresses are allowed.
+// metadata address 169.254.169.254, SEC-065, and its IPv6 forms: IPv4-mapped, NAT64 64:ff9b::/96,
+// 6to4 2002::/16 and AWS's fd00:ec2::254), multicast, unspecified and the IPv4 broadcast address.
+// Loopback and private addresses are allowed.
 func checkAddr(a netip.Addr) (string, *validate.FieldError) {
 	u := a.Unmap()
-	if u.IsLinkLocalUnicast() || u.IsLinkLocalMulticast() || u.IsInterfaceLocalMulticast() ||
-		u.IsMulticast() || u.IsUnspecified() || u == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
+	if notAServer(u) || u == awsIMDSv6 {
 		return "", hostProblem(CodeHostNotAllowed, nil)
+	}
+	if u.Is6() {
+		b := u.As16()
+		var embedded netip.Addr
+		switch {
+		case nat64Prefix.Contains(u):
+			embedded = netip.AddrFrom4([4]byte(b[12:16]))
+		case sixToFour.Contains(u):
+			embedded = netip.AddrFrom4([4]byte(b[2:6]))
+		}
+		if embedded.IsValid() && notAServer(embedded) {
+			return "", hostProblem(CodeHostNotAllowed, nil)
+		}
 	}
 	return u.String(), nil
 }
 
-// validName checks a display name: 1..100 characters, no control or bidirectional override
-// characters (they could disguise a name in the UI and the audit log).
+func notAServer(u netip.Addr) bool {
+	return u.IsLinkLocalUnicast() || u.IsLinkLocalMulticast() || u.IsInterfaceLocalMulticast() ||
+		u.IsMulticast() || u.IsUnspecified() || u == ipv4Broadcst
+}
+
+// validName checks a display name: 1..100 characters in NFC, no control or format characters
+// (bidirectional overrides, zero-width characters, soft hyphens, BOM: they could disguise a name
+// in the UI and the audit log). The stored form is NFC, so two spellings of one name are equal.
 func validName(field, raw string) (string, *validate.FieldError) {
-	s := strings.TrimSpace(raw)
+	if !utf8.ValidString(raw) {
+		return "", &validate.FieldError{Field: field, Code: validate.Pattern}
+	}
+	s := norm.NFC.String(strings.TrimSpace(raw))
 	switch {
 	case s == "":
 		return "", &validate.FieldError{Field: field, Code: validate.Required}
-	case !utf8.ValidString(s):
-		return "", &validate.FieldError{Field: field, Code: validate.Pattern}
 	case utf8.RuneCountInString(s) > maxNameRunes:
 		return "", &validate.FieldError{Field: field, Code: validate.TooLong, Params: map[string]string{"max": strconv.Itoa(maxNameRunes)}}
 	}
 	for _, r := range s {
-		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Bidi_Control, r) {
 			return "", &validate.FieldError{Field: field, Code: validate.Pattern}
 		}
 	}
