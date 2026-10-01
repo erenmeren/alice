@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,7 +31,8 @@ type Mailer interface {
 	Send(ctx context.Context, m Message) error
 }
 
-// Retry policy: 30 s, then doubling up to 30 min, at most MaxAttempts sends (about 2.5 hours).
+// Retry policy: 30 s, then doubling up to 30 min, at most MaxAttempts sends (about 2 hours
+// from the first to the last attempt).
 const (
 	MaxAttempts = 10
 	baseBackoff = 30 * time.Second
@@ -103,10 +105,13 @@ WHERE id = $1`, id, now, attempts)
 			return err
 		}
 		code := ErrorCode(sendErr)
-		s.log().Warn("email not sent; it will be retried", "outbox_id", id.String(), "attempt", attempts, "reason", code)
 		status := "pending"
 		if attempts >= MaxAttempts {
 			status = "failed"
+			s.log().Error("email not sent after "+strconv.Itoa(MaxAttempts)+" attempts; giving up",
+				"outbox_id", id.String(), "attempt", attempts, "reason", code)
+		} else {
+			s.log().Warn("email not sent; it will be retried", "outbox_id", id.String(), "attempt", attempts, "reason", code)
 		}
 		_, err = tx.Exec(ctx, `UPDATE notifications_outbox SET status = $2, attempts = $3, next_attempt_at = $4, last_error_code = $5
 WHERE id = $1`, id, status, attempts, now.Add(backoff(attempts)), code)

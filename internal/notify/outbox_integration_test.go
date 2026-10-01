@@ -3,9 +3,12 @@
 package notify_test
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -163,18 +166,33 @@ func TestDrainRetriesWithBackoff(t *testing.T) {
 	assert.Len(t, m.sent, 1)
 }
 
+// The retries span about 2 hours; the log says "retried" only when the email will be retried
+// and says so when Alice gives up (B5).
 func TestDrainGivesUpAfterMaxAttempts(t *testing.T) {
 	d := pgtest.New(t)
 	clk := clock.NewFake(start)
 	addUser(t, d, "ayse", "admin", "ayse@example.com", "en", false)
 	queue(t, d, clk, license.TemplateLocked)
 	s := sender(t, d, clk, &fakeMailer{fail: 1000})
+	var logs bytes.Buffer
+	s.Log = slog.New(slog.NewTextHandler(&logs, nil))
 	for range notify.MaxAttempts {
 		_, err := s.Drain(context.Background())
 		require.NoError(t, err)
-		clk.Advance(time.Hour)
+		var next time.Time
+		require.NoError(t, d.Owner.QueryRow(context.Background(), "SELECT next_attempt_at FROM notifications_outbox").Scan(&next))
+		if statuses(t, d)["pending"] == 1 {
+			clk.Set(next) // the next attempt as early as allowed
+		}
 	}
 	assert.Equal(t, map[string]int{"failed": 1}, statuses(t, d))
+	span := clk.Now().Sub(start)
+	assert.True(t, span > 115*time.Minute && span < 125*time.Minute, "first to last attempt: %s", span)
+
+	assert.Equal(t, notify.MaxAttempts-1, strings.Count(logs.String(), "it will be retried"))
+	assert.Equal(t, 1, strings.Count(logs.String(), "email not sent after "+strconv.Itoa(notify.MaxAttempts)+" attempts; giving up"))
+	assert.Equal(t, notify.MaxAttempts-1, strings.Count(logs.String(), "level=WARN"))
+	assert.Equal(t, 1, strings.Count(logs.String(), "level=ERROR"))
 }
 
 // Two drains at once (for example during an update) never send an email twice.
