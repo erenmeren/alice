@@ -31,7 +31,7 @@ var (
 
 // New returns the provider.
 func New(o Options) *Provider {
-	return &Provider{pool: o.Pool, caps: providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverSSHKeys)}
+	return &Provider{pool: o.Pool, caps: providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys)}
 }
 
 // Kind implements providers.Provider.
@@ -160,8 +160,7 @@ func (s *session) TestConnection(ctx context.Context) (providers.ConnectionRepor
 }
 
 // ListAuthorizedKeys returns the keys a full discovery finds. It belongs to the authorized_keys
-// capability (list/add/remove, spec §6.1) and answers ErrUnsupported until the provider
-// advertises it (Task 10).
+// capability (list/add/remove, spec §6.1).
 func (s *session) ListAuthorizedKeys(ctx context.Context) ([]providers.DiscoveredSSHKey, error) {
 	if !s.caps.Has(providers.CapAuthorizedKeys) {
 		return nil, providers.ErrUnsupported

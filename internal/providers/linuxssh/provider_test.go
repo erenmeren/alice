@@ -114,7 +114,7 @@ func TestProviderDescribesItself(t *testing.T) {
 	p := e.prov
 	assert.Equal(t, providers.KindLinuxSSH, p.Kind())
 	assert.Equal(t, "provider.linuxssh.name", p.DisplayNameKey())
-	assert.Equal(t, []providers.Capability{providers.CapDiscoverSSHKeys, providers.CapTestConnection}, p.Capabilities().Sorted())
+	assert.Equal(t, []providers.Capability{providers.CapAuthorizedKeys, providers.CapDiscoverSSHKeys, providers.CapTestConnection}, p.Capabilities().Sorted())
 	assert.Empty(t, p.CredentialSchema().Fields, "targets use the platform key; no per-target secret")
 	path, protocol := p.HelperInfo()
 	assert.Equal(t, helperproto.HelperPath, path)
@@ -529,17 +529,11 @@ func TestDiscoverWarnsAboutStrictModes(t *testing.T) {
 	assert.Len(t, res.SSHKeys, 1, "the file is still read and listed")
 }
 
-// ListAuthorizedKeys belongs to the authorized_keys capability (Task 10 advertises it); until
-// then it answers ErrUnsupported, and once advertised it equals discovery.
+// ListAuthorizedKeys belongs to the authorized_keys capability and equals discovery.
 func TestListAuthorizedKeysEqualsDiscovery(t *testing.T) {
 	e := newProvEnv(t)
 	k, fp := keyLine(t, "ed25519", "", "deploy@laptop")
 	e.emu.SetFile(deployFile, []byte(k+"\n"))
-	_, err := e.open(t).ListAuthorizedKeys(context.Background())
-	require.ErrorIs(t, err, providers.ErrUnsupported)
-
-	e.prov.caps = e.prov.Capabilities()
-	e.prov.caps[providers.CapAuthorizedKeys] = struct{}{}
 	keys, err := e.open(t).ListAuthorizedKeys(context.Background())
 	require.NoError(t, err)
 	require.Len(t, keys, 1)
