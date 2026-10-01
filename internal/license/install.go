@@ -106,8 +106,13 @@ func (s *Service) Install(ctx context.Context, raw []byte, actor audit.Actor, by
 		return UploadResult{}, err
 	}
 	if !res.Duplicate {
-		// The upload has committed; the next hourly evaluation repeats what this one misses.
-		if err := s.Tick(ctx); err != nil {
+		if s.uploadCommitted != nil {
+			s.uploadCommitted()
+		}
+		// The upload has committed, so its evaluation no longer depends on the request: a
+		// client that disconnects now must not leave the gate on the old state for an hour.
+		// The next hourly evaluation repeats what this one misses.
+		if err := s.Tick(context.WithoutCancel(ctx)); err != nil {
 			s.log.Error("the evaluation after a license upload failed; the license is stored and the next evaluation applies it",
 				"license_id", res.Payload.LicenseID, "error_type", fmt.Sprintf("%T", err))
 		}

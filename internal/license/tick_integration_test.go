@@ -3,16 +3,19 @@
 package license_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/license"
+	"alice/internal/license/licensetest"
 )
 
 func repeat(s string, n int) []string {
@@ -348,4 +351,23 @@ func TestFailedTickDoesNotLoseAClockJump(t *testing.T) {
 func TestTemplatesListsEveryEmail(t *testing.T) {
 	assert.ElementsMatch(t, []string{"license.expiry_warning", "license.evaluation_warning", "license.evaluation_ended",
 		"license.grace", "license.locked", "license.clock_jump"}, license.Templates())
+}
+
+// B2: the evaluation that follows a committed upload does not depend on the request, so a
+// browser that disconnects right after the commit does not leave the gate on the old state
+// until the next hourly evaluation.
+func TestFollowUpTickOutlivesTheRequest(t *testing.T) {
+	e := newEnv(t)
+	e.tickAt(installedAt.Add(31 * day))
+	require.Equal(t, license.PhaseEvaluationExpired, e.svc.Snapshot().Eval.Phase)
+
+	ctx, cancel := context.WithCancel(e.ctx)
+	defer cancel()
+	license.SetUploadCommittedHook(e.svc, cancel) // the client goes away right after the commit
+	now := e.clk.Now()
+	res, err := e.svc.Install(ctx, licensetest.Sign(e.payload("LIC-A", now, now.AddDate(1, 0, 0), 10)), uploader, uuid.Nil)
+	require.NoError(t, err)
+	assert.Equal(t, license.PhaseActive, res.Phase)
+	assert.Equal(t, license.PhaseActive, e.svc.Snapshot().Eval.Phase, "the follow-up evaluation ran")
+	require.NoError(t, e.svc.Allow(license.ClassChange))
 }

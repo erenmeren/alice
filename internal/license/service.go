@@ -101,6 +101,8 @@ type Service struct {
 	mu    sync.Mutex // guards guard and snap
 	guard Guard
 	snap  Snapshot
+
+	uploadCommitted func() // tests only: runs between an upload's commit and its evaluation
 }
 
 // New builds the service. Call Start before using it.
