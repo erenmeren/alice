@@ -69,8 +69,11 @@ type Snapshot struct {
 	Eval           Evaluation
 	Reading        Reading
 	Tampered       bool // a stored file no longer verifies (L-49)
-	Targets        int
-	Ready          bool // Start has completed
+	// InstallationTampered: the installation row does not match its seal, so it is not
+	// trusted: the evaluation counts as ended and no license file counts (B1, spec §16.1).
+	InstallationTampered bool
+	Targets              int
+	Ready                bool // Start has completed
 }
 
 // Service is the license module. Every path that changes the license state (upload, Tick,
@@ -232,7 +235,10 @@ func (s *Service) startLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	row, err := loadInstallation(ctx, s.pool, false)
+	if err := s.sealUnsealed(ctx); err != nil {
+		return err
+	}
+	row, err := s.loadInstallation(ctx, s.pool, false)
 	if err != nil {
 		return err
 	}
@@ -264,7 +270,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	defer s.evalMu.Unlock()
 	g := s.working()
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, err := loadInstallation(ctx, tx, true); err != nil {
+		if _, err := s.loadInstallation(ctx, tx, true); err != nil {
 			return err
 		}
 		g.Observe(s.clock.Now(), s.uptime.Elapsed())
@@ -279,7 +285,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 // Inspect computes the current state without writing anything (alice license status).
 func (s *Service) Inspect(ctx context.Context) (Snapshot, error) {
-	if _, err := loadInstallation(ctx, s.pool, false); err != nil {
+	if _, err := s.loadInstallation(ctx, s.pool, false); err != nil {
 		return Snapshot{}, err
 	}
 	hwm, _, err := s.readHWM(ctx)
@@ -294,23 +300,6 @@ func (s *Service) Inspect(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	return c.snap, nil
-}
-
-func (s *Service) ensureInstallation(ctx context.Context) (bool, error) {
-	now := later(s.clock.Now().UTC(), s.buildTime).Truncate(time.Microsecond)
-	if now.IsZero() {
-		return false, errors.New("license: the system clock is not set")
-	}
-	tag, err := s.pool.Exec(ctx, `INSERT INTO license (id, installation_id, installed_at, state, updated_at)
-VALUES (1, $1, $2, 'evaluation', $2) ON CONFLICT (id) DO NOTHING`, NewInstallationID(), now)
-	if err != nil {
-		return false, fmt.Errorf("create the installation: %w", err)
-	}
-	if tag.RowsAffected() == 1 {
-		s.log.Info("new installation created; the 30-day evaluation starts now")
-		return true, nil
-	}
-	return false, nil
 }
 
 // storedHWM is what the stores hold: the best valid record and the highest sequence seen.
@@ -428,40 +417,6 @@ func (s *Service) peek(acceptJump bool) Reading {
 	return r
 }
 
-type installationRow struct {
-	ID          string
-	InstalledAt time.Time
-	State       Phase
-	ClockJump   []byte
-}
-
-// loadInstallation reads the installation row. forUpdate takes the license row lock that
-// serializes uploads, evaluations and time record saves. A stored ID that is not in
-// canonical form, or a zero installation time, is refused rather than used.
-func loadInstallation(ctx context.Context, q db.Querier, forUpdate bool) (installationRow, error) {
-	sql := "SELECT installation_id, installed_at, state, clock_jump FROM license WHERE id = 1"
-	if forUpdate {
-		sql += " FOR UPDATE"
-	}
-	var r installationRow
-	var state string
-	err := q.QueryRow(ctx, sql).Scan(&r.ID, &r.InstalledAt, &state, &r.ClockJump)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return installationRow{}, ErrNoInstallation
-	}
-	if err != nil {
-		return installationRow{}, fmt.Errorf("read the installation: %w", err)
-	}
-	if id, err := ParseInstallationID(r.ID); err != nil || id != r.ID {
-		return installationRow{}, errors.New("license: the stored installation ID is damaged")
-	}
-	if r.InstalledAt.IsZero() {
-		return installationRow{}, errors.New("license: the stored installation time is damaged")
-	}
-	r.State, r.InstalledAt = Phase(state), r.InstalledAt.UTC()
-	return r, nil
-}
-
 // jumpRecord is the persisted form of a held clock jump (license.clock_jump).
 type jumpRecord struct {
 	Expected time.Time `json:"expected"`
@@ -554,9 +509,10 @@ type damagedFile struct {
 
 // compute reads the installation and the files, re-verifies every file and evaluates the
 // state at reading.Effective. Files that fail verification are left out; changed content
-// (not a key this build no longer trusts) marks the snapshot as tampered.
+// (not a key this build no longer trusts) marks the snapshot as tampered. An installation row
+// that does not match its seal is evaluated as an ended evaluation without any file.
 func (s *Service) compute(ctx context.Context, q db.Querier, reading Reading, forUpdate bool) (computed, error) {
-	row, err := loadInstallation(ctx, q, forUpdate)
+	row, err := s.loadInstallation(ctx, q, forUpdate)
 	if err != nil {
 		return computed{}, err
 	}
@@ -567,6 +523,9 @@ func (s *Service) compute(ctx context.Context, q db.Querier, reading Reading, fo
 	var installed []Installed
 	var damaged []damagedFile
 	for _, f := range files {
+		if row.Tampered != "" {
+			break // no file counts for an untrusted installation, and none is reported as changed
+		}
 		in, err := s.verifyStored(f, row.ID)
 		if err != nil {
 			if tamperedBy(err) {
@@ -582,13 +541,14 @@ func (s *Service) compute(ctx context.Context, q db.Querier, reading Reading, fo
 	}
 	return computed{
 		snap: Snapshot{
-			InstallationID: row.ID,
-			InstalledAt:    row.InstalledAt,
-			Eval:           Evaluate(reading.Effective, row.InstalledAt, installed),
-			Reading:        reading,
-			Tampered:       len(damaged) > 0,
-			Targets:        targets,
-			Ready:          true,
+			InstallationID:       row.ID,
+			InstalledAt:          row.InstalledAt,
+			Eval:                 evaluateInstallation(reading.Effective, row, installed),
+			Reading:              reading,
+			Tampered:             len(damaged) > 0,
+			InstallationTampered: row.Tampered != "",
+			Targets:              targets,
+			Ready:                true,
 		},
 		row: row, files: files, installed: installed, damaged: damaged,
 	}, nil

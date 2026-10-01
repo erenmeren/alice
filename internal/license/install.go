@@ -65,7 +65,7 @@ func judge(f File, c computed, reading Reading) (UploadResult, error) {
 		return UploadResult{}, ErrOlderThanInstalled
 	}
 	all := append(append([]Installed(nil), c.installed...), Installed{Seq: nextSeq(c.files), KeyID: f.KeyID, Payload: f.Payload})
-	res.Phase = Evaluate(now, c.row.InstalledAt, all).Phase
+	res.Phase = evaluateInstallation(now, c.row, all).Phase
 	return res, nil
 }
 
@@ -134,7 +134,7 @@ func (s *Service) install(ctx context.Context, raw []byte, actor audit.Actor, by
 	defer s.evalMu.Unlock()
 	g := s.working()
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, err := loadInstallation(ctx, tx, true); err != nil {
+		if _, err := s.loadInstallation(ctx, tx, true); err != nil {
 			return err
 		}
 		// Under the row lock: a correction license accepts a held jump (L-61), and the

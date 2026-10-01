@@ -35,6 +35,9 @@ const (
 	// LabelHWMEnc encrypts the time high-water mark record; its integrity comes from a MAC
 	// under LabelHWM (spec §16.5, R36).
 	LabelHWMEnc = "alice/hwm-enc/v1"
+	// LabelInstallation MACs the installation ID and timestamp, so the installation row cannot
+	// be changed or recreated to restart the evaluation (spec §16.1).
+	LabelInstallation = "alice/installation/v1"
 )
 
 const keyCheckPlaintext = "alice-master-key-check-v1"

@@ -51,7 +51,7 @@ func (s *Service) tickLocked(ctx context.Context) error {
 	g := s.working()
 	var snap Snapshot
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, err := loadInstallation(ctx, tx, true); err != nil {
+		if _, err := s.loadInstallation(ctx, tx, true); err != nil {
 			return err
 		}
 		reading, clockEvents := g.Observe(s.clock.Now(), s.uptime.Elapsed())
@@ -66,6 +66,7 @@ func (s *Service) tickLocked(ctx context.Context) error {
 			func() ([]audit.Event, error) { return s.sendNotices(ctx, tx, c, now) },
 			func() ([]audit.Event, error) { return s.recordClockEvents(ctx, tx, c, reading, clockEvents, now) },
 			func() ([]audit.Event, error) { return s.recordTampered(ctx, tx, c, now) },
+			func() ([]audit.Event, error) { return s.recordInstallationTampered(ctx, tx, c, now) },
 		} {
 			evs, err := step()
 			if err != nil {

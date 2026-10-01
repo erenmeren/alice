@@ -57,7 +57,7 @@ func (s *Service) Detail(ctx context.Context) (Detail, error) {
 		info := FileInfo{ID: f.ID, Seq: f.Seq, UploadedAt: f.UploadedAt, Status: "superseded"}
 		in, err := s.verifyStored(f, snap.InstallationID)
 		switch {
-		case err != nil:
+		case err != nil, snap.InstallationTampered: // no file counts for an untrusted installation
 			info.Status = "invalid"
 		case f.Seq == snap.Eval.CurrentSeq:
 			info.Status = "current"

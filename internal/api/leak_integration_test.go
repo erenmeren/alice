@@ -349,6 +349,17 @@ func TestSecretsNeverLeak(t *testing.T) {
 	requireError(t, pending.do(http.MethodPost, "/api/v1/auth/mfa/verify", map[string]string{"recovery_code": junk}), http.StatusUnauthorized, "ALC-AUTH-0006")
 	requireError(t, browser.do(http.MethodPost, "/api/v1/auth/stepup", map[string]string{"code": "000000"}), http.StatusUnauthorized, "ALC-AUTH-0006")
 	requireStatus(t, browser.do(http.MethodPost, "/api/v1/auth/logout", nil), http.StatusNoContent)
+
+	// The installation seal paths (B1): the one-time upgrade seal, then a changed seal. Their
+	// logs, history and audit rows are scanned for the installation MAC key below.
+	_, err := s.db.Owner.Exec(ctx, "UPDATE license SET installation_seal = NULL")
+	require.NoError(t, err)
+	require.NoError(t, s.license.Restart(ctx, func(context.Context) error { return nil }))
+	_, err = s.db.Owner.Exec(ctx, "UPDATE license SET installation_seal = decode(repeat('00', 32), 'hex')")
+	require.NoError(t, err)
+	require.NoError(t, s.license.Tick(ctx))
+	require.True(t, s.license.Snapshot().InstallationTampered)
+
 	secretsUnderTest := []secretValue{
 		{name: "admin password", value: adminPW},
 		{name: "admin new password", value: newAdminPW},
@@ -370,6 +381,7 @@ func TestSecretsNeverLeak(t *testing.T) {
 		{name: "operator TOTP DEK", forms: binaryForms(operatorDEK)},
 		{name: "HWM MAC key", forms: binaryForms(s.keyring.Derive(secrets.LabelHWM))},
 		{name: "HWM encryption key", forms: binaryForms(s.keyring.Derive(secrets.LabelHWMEnc))},
+		{name: "installation MAC key", forms: binaryForms(s.keyring.Derive(secrets.LabelInstallation))},
 	}
 	secretsUnderTest = append(secretsUnderTest, s.dbPasswords()...)
 	s.mu.Lock()

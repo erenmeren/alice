@@ -73,6 +73,8 @@ func TestGrantGuardCatchesUnlistedRelations(t *testing.T) {
 		// Column-level grants on relations whose table-level grants are correct.
 		"GRANT UPDATE (action) ON audit_log TO alice_app",
 		"GRANT REFERENCES (key) ON settings TO alice_app",
+		// One column more than the listed column-level set.
+		"GRANT UPDATE (installed_at) ON license TO alice_app",
 	} {
 		_, err := d.Owner.Exec(ctx, stmt)
 		require.NoError(t, err, stmt)
@@ -80,10 +82,10 @@ func TestGrantGuardCatchesUnlistedRelations(t *testing.T) {
 	problems := grantProblems(t, d)
 	for _, rel := range []string{"public.phase_x_no_grants", "public.phase_x_too_much", "public.phase_x_columns_only",
 		"public.phase_x_view", "public.phase_x_seq", "schema phase_x", "phase_x.hidden",
-		"public.audit_log", "public.settings"} {
+		"public.audit_log", "public.settings", "public.license"} {
 		assert.Contains(t, problems, rel)
 	}
-	assert.Len(t, problems, 9, "%v", problems)
+	assert.Len(t, problems, 10, "%v", problems)
 }
 
 // Explicit grant sets of alice_app. A normal table in public gets appTableGrants unless it
@@ -95,9 +97,18 @@ var explicitGrants = map[string][]string{
 	"public.goose_db_version":    {"SELECT"},
 	// License data: uploaded files and their history are append-only for the application,
 	// so a compromised application cannot rewrite which licenses were installed (spec §16).
-	"public.license":         {"INSERT", "SELECT", "UPDATE"},
+	// The installation row's ID and timestamp are never updated (UPDATE is column-level, below).
+	"public.license":         {"INSERT", "SELECT"},
 	"public.license_files":   {"INSERT", "SELECT"},
 	"public.license_history": {"INSERT", "SELECT"},
+}
+
+// Column-level grants of alice_app (a privilege it holds on some columns but not on the
+// table). Every other column-level grant is a problem.
+var explicitColumnGrants = map[string]map[string][]string{
+	// The cached state, a held clock jump and the one-time seal of an installation created
+	// before the seal existed; never installation_id or installed_at (B1, spec §16.1).
+	"public.license": {"UPDATE": {"clock_jump", "installation_seal", "state", "updated_at"}},
 }
 
 var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}
@@ -137,24 +148,18 @@ SELECT n.nspname || '.' || c.relname, c.relkind::text,
          CASE WHEN has_table_privilege('alice_app', c.oid, 'DELETE') THEN 'DELETE' END,
          CASE WHEN has_table_privilege('alice_app', c.oid, 'TRUNCATE') THEN 'TRUNCATE' END,
          CASE WHEN has_table_privilege('alice_app', c.oid, 'REFERENCES') THEN 'REFERENCES' END,
-         CASE WHEN has_table_privilege('alice_app', c.oid, 'TRIGGER') THEN 'TRIGGER' END] END, NULL),
-       CASE WHEN c.relkind = 'S' THEN false ELSE
-         (has_any_column_privilege('alice_app', c.oid, 'SELECT') AND NOT has_table_privilege('alice_app', c.oid, 'SELECT'))
-         OR (has_any_column_privilege('alice_app', c.oid, 'INSERT') AND NOT has_table_privilege('alice_app', c.oid, 'INSERT'))
-         OR (has_any_column_privilege('alice_app', c.oid, 'UPDATE') AND NOT has_table_privilege('alice_app', c.oid, 'UPDATE'))
-         OR (has_any_column_privilege('alice_app', c.oid, 'REFERENCES') AND NOT has_table_privilege('alice_app', c.oid, 'REFERENCES'))
-       END
+         CASE WHEN has_table_privilege('alice_app', c.oid, 'TRIGGER') THEN 'TRIGGER' END] END, NULL)
 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, schemas)
 	require.NoError(t, err)
 	defer rows.Close()
+	columns := columnGrants(t, d, schemas)
 	for rows.Next() {
 		var (
 			name, kind string
 			privs      []string
-			columnOnly bool
 		)
-		require.NoError(t, rows.Scan(&name, &kind, &privs, &columnOnly))
+		require.NoError(t, rows.Scan(&name, &kind, &privs))
 		sort.Strings(privs)
 		want, listed := explicitGrants[name]
 		switch {
@@ -168,8 +173,8 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			continue
 		}
 		// A column-level privilege without the table-level one is a hidden extra grant
-		// (for example UPDATE on one audit_log column), even when the table-level set matches.
-		if !slices.Equal(want, privs) || columnOnly {
+		// (for example UPDATE on one audit_log column) unless it is listed exactly.
+		if !slices.Equal(want, privs) || !equalColumnGrants(explicitColumnGrants[name], columns[name]) {
 			problems = append(problems, name)
 		}
 	}
@@ -177,11 +182,56 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	return problems
 }
 
+// columnGrants returns relation -> privilege -> sorted columns on which alice_app holds the
+// privilege without holding it on the whole relation.
+func columnGrants(t *testing.T, d *pgtest.DB, schemas []string) map[string]map[string][]string {
+	t.Helper()
+	rows, err := d.Owner.Query(context.Background(), `
+SELECT n.nspname || '.' || c.relname, p.priv, a.attname::text
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']) AS p(priv)
+WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+  AND has_column_privilege('alice_app', c.oid, a.attnum, p.priv)
+  AND NOT has_table_privilege('alice_app', c.oid, p.priv)`, schemas)
+	require.NoError(t, err)
+	defer rows.Close()
+	out := map[string]map[string][]string{}
+	for rows.Next() {
+		var rel, priv, col string
+		require.NoError(t, rows.Scan(&rel, &priv, &col))
+		if out[rel] == nil {
+			out[rel] = map[string][]string{}
+		}
+		out[rel][priv] = append(out[rel][priv], col)
+	}
+	require.NoError(t, rows.Err())
+	for _, byPriv := range out {
+		for p := range byPriv {
+			sort.Strings(byPriv[p])
+		}
+	}
+	return out
+}
+
+func equalColumnGrants(want, got map[string][]string) bool {
+	if len(want) != len(got) {
+		return false
+	}
+	for p, cols := range want {
+		if !slices.Equal(cols, got[p]) {
+			return false
+		}
+	}
+	return true
+}
+
 func TestLicenseTablesAreAppendOnlyForTheApp(t *testing.T) {
 	d := pgtest.New(t)
 	ctx := context.Background()
 	g := grants(t, d)
-	assert.Equal(t, []string{"INSERT", "SELECT", "UPDATE"}, g["license"])
+	assert.Equal(t, []string{"INSERT", "SELECT"}, g["license"], "UPDATE on license is column-level only")
 	assert.Equal(t, []string{"INSERT", "SELECT"}, g["license_files"])
 	assert.Equal(t, []string{"INSERT", "SELECT"}, g["license_history"])
 	assert.Equal(t, []string{"DELETE", "INSERT", "SELECT", "UPDATE"}, g["notifications_outbox"])
@@ -192,6 +242,10 @@ func TestLicenseTablesAreAppendOnlyForTheApp(t *testing.T) {
 	_, err = d.App.Exec(ctx, `INSERT INTO license (id, installation_id, installed_at, state, updated_at)
 		VALUES (2, 'ALICE-TWO', now(), 'evaluation', now())`)
 	require.Error(t, err, "the license row is a singleton")
+	_, err = d.App.Exec(ctx, `UPDATE license SET state = 'active', clock_jump = NULL, updated_at = now(), installation_seal = decode(repeat('01', 32), 'hex')`)
+	require.NoError(t, err, "the cached state, the clock jump and the seal stay writable")
+	_, err = d.App.Exec(ctx, `SELECT 1 FROM license WHERE id = 1 FOR UPDATE`)
+	require.NoError(t, err, "the license row lock needs UPDATE on some column")
 	_, err = d.App.Exec(ctx, `INSERT INTO license_files (id, seq, sha256, raw_file, uploaded_at)
 		VALUES (gen_random_uuid(), 1, '\x01', '{}', now())`)
 	require.NoError(t, err)
@@ -208,6 +262,9 @@ func TestLicenseTablesAreAppendOnlyForTheApp(t *testing.T) {
 		"UPDATE license_history SET event = 'renewed'",
 		"DELETE FROM license_history",
 		"DELETE FROM license",
+		// The installation ID and timestamp are fixed once written (B1, spec §16.1).
+		"UPDATE license SET installed_at = now()",
+		"UPDATE license SET installation_id = 'ALICE-OTHER'",
 	} {
 		_, err := d.App.Exec(ctx, stmt)
 		var pgErr *pgconn.PgError
