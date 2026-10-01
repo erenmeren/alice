@@ -38,6 +38,11 @@
         "title": "İstek çok büyük.",
         "cause": "Alice tek bir istekte en fazla 1 MiB veri kabul eder.",
         "action": "Tek seferde daha az veri gönderin veya daha küçük bir dosya kullanın."
+      },
+      "precondition_failed": {
+        "title": "Siz düzenlerken bu öğe değiştirildi.",
+        "cause": "Öğe siz açtıktan sonra değişti, bu yüzden değişikliğiniz kaydedilmedi.",
+        "action": "Sayfayı yeniden yükleyin, güncel değerleri kontrol edin ve değişikliğinizi yeniden yapın."
       }
     },
     "internal": {
@@ -229,6 +234,144 @@
         "title": "Lisansınız en fazla {{max}} hedefe izin veriyor.",
         "cause": "Kullanımdaki hedef sayısı {{used}}; bu nedenle yeni hedef eklenemez. Mevcut hedefler çalışmaya devam eder.",
         "action": "Artık gerekmeyen bir hedefi kaldırın veya satıcınızdan lisansınızı artırmasını isteyin."
+      }
+    },
+    "target": {
+      "duplicate": {
+        "title": "Bu ada veya adrese sahip bir sunucu zaten var.",
+        "cause": "Her sunucunun kendi adı olmalıdır; aynı adres ve bağlantı noktası yalnızca bir kez eklenebilir.",
+        "action": "Başka bir ad seçin ya da var olan sunucuyu açın."
+      },
+      "host_key_unconfirmed": {
+        "title": "Sunucunun parmak izi henüz onaylanmadı.",
+        "cause": "Alice bir sunucuyla ancak bir yönetici parmak izinin doğru olduğunu onayladıktan sonra çalışır.",
+        "action": "Sunucuyu açın, parmak izini sunucunun gösterdiği parmak iziyle karşılaştırın ve onaylayın."
+      },
+      "host_key_stale": {
+        "title": "Bu, sunucunun sunduğu parmak izi değil.",
+        "cause": "Sayfa yüklendikten sonra sunucu başka bir parmak izi sundu ya da parmak izi yanlış yazıldı.",
+        "action": "Sayfayı yeniden yükleyin ve şimdi gösterilen parmak izini sunucudakiyle karşılaştırın."
+      },
+      "host_key_changed": {
+        "title": "Sunucunun kimliği değişti, bu yüzden Alice sistemlerinizi korumak için durdu.",
+        "cause": "Sunucu, onayladığınız parmak izinden farklı bir parmak izi sundu. Bu bir yeniden kurulumdan sonra olur, ama birinin sunucunun yerine geçmeye çalıştığı anlamına da gelebilir.",
+        "action": "Değişikliği güvenlik ekibinize doğrulatın. Ardından bir yönetici sunucunun sayfasında yeni parmak izini inceleyebilir."
+      },
+      "host_key_state": {
+        "title": "Bu parmak izi şu anda kabul edilemez.",
+        "cause": "İlk parmak izi yalnızca sunucu onay beklerken onaylanabilir; yeni bir parmak izi ise yalnızca sunucunun kimliği değiştikten sonra kabul edilebilir.",
+        "action": "Güncel durumu görmek için sunucunun sayfasını yeniden yükleyin."
+      },
+      "disabled": {
+        "title": "Bu sunucu devre dışı, bu yüzden Alice onun üzerinde çalışmıyor.",
+        "cause": "Sunucu devre dışı bırakıldı, bu yüzden onun görevleri çalıştırılmıyor.",
+        "action": "Neden devre dışı olduğunu görmek için sunucuyu açın, sonra bağlantıyı yeniden sınayın."
+      }
+    },
+    "ssh": {
+      "unreachable": {
+        "title": "Alice sunucuya ulaşamıyor.",
+        "cause": "Sunucu kapalı, adres veya bağlantı noktası yanlış ya da bir güvenlik duvarı bağlantıyı engelliyor.",
+        "action": "Sunucunun çalıştığını ve Alice sunucusunun SSH bağlantı noktasına ulaşabildiğini kontrol edin, sonra bağlantıyı yeniden sınayın."
+      },
+      "auth_failed": {
+        "title": "Sunucu Alice'in anahtarını reddetti.",
+        "cause": "Alice'in açık anahtarı sunucudaki alice-svc hesabında yok ya da hesap kilitli.",
+        "action": "Sunucular sayfasındaki hazırlık komutlarını sunucuda yeniden çalıştırın, sonra bağlantıyı sınayın."
+      },
+      "timeout": {
+        "title": "Sunucunun yanıt vermesi çok uzun sürdü.",
+        "cause": "Sunucu veya ağ çok yavaş ya da sunucudaki bir komut zamanında bitmedi.",
+        "action": "Daha sonra yeniden deneyin. Sorun sürerse sunucunun yükünü ve ağını kontrol edin."
+      },
+      "helper_missing": {
+        "title": "Bu sunucudaki Alice hesabının yardımcı programı çalıştırma izni yok.",
+        "cause": "alice-helper /usr/local/libexec içine kurulmamış ya da alice-svc için sudoers dosyası eksik veya hatalı.",
+        "action": "Sunucular sayfasındaki hazırlık komutlarını sunucuda root olarak yeniden çalıştırın."
+      },
+      "helper_outdated": {
+        "title": "Bu sunucudaki alice-helper eski.",
+        "cause": "Sunucudaki yardımcı program, Alice'in bu sürümünün beklediğinden daha eski.",
+        "action": "Güncel Alice paketindeki alice-helper dosyasını sunucuya kopyalayın ve hazırlık komutlarını yeniden çalıştırın."
+      },
+      "helper_refused": {
+        "title": "Sunucudaki yardımcı program isteği reddetti.",
+        "cause": "Yardımcı program her isteği denetler ve bunu reddetti; örneğin bir dosya, okuyabileceği veya değiştirebileceği yerlerin dışında olabilir.",
+        "action": "Sunucuyu yeniden tarayın. Sorun sürerse istek kimliğini belirterek destek ekibine başvurun."
+      },
+      "file_changed": {
+        "title": "Alice çalışırken dosya değişti. Lütfen yeniden deneyin.",
+        "cause": "Aynı anda başka biri ya da başka bir program authorized_keys dosyasını değiştirdi.",
+        "action": "Yeniden deneyin. Alice dosyayı yeniden okur ve yalnızca kendi değişikliğini uygular."
+      },
+      "keys_managed_elsewhere": {
+        "title": "Bu sunucu SSH anahtarlarını bir programdan (AuthorizedKeysCommand) alıyor, bu yüzden Alice burada anahtarları değiştirmez.",
+        "cause": "SSH sunucusu anahtarları başka bir programdan istiyor; bu yüzden bir anahtar dosyasındaki değişiklik beklediğiniz etkiyi göstermez.",
+        "action": "Bu sunucunun anahtarlarını, anahtarları sağlayan sistemde yönetin. Alice dosyalarda bulduğu anahtarları listelemeye devam eder."
+      },
+      "output_too_large": {
+        "title": "Sunucu, Alice'in kabul ettiğinden fazla veri gönderdi.",
+        "cause": "Sunucudaki bir dosya veya komut olağandışı büyük bir yanıt üretti.",
+        "action": "Sunucudaki authorized_keys dosyalarını ve SSH sunucusu ayarlarını olağandışı büyük içerik için kontrol edin."
+      },
+      "protocol_error": {
+        "title": "Alice sunucunun yanıtını anlayamadı.",
+        "cause": "Sunucudaki yardımcı program beklenmeyen bir biçimde yanıt verdi; başka bir program onun yerini almış olabilir.",
+        "action": "alice-helper programını hazırlık komutlarıyla yeniden kurun, sonra bağlantıyı sınayın."
+      }
+    },
+    "sshkey": {
+      "own_key_protected": {
+        "title": "Alice bu sunucuya bağlanmak için bu anahtara ihtiyaç duyar ve onu kaldırmaz.",
+        "cause": "Onu kaldırmak Alice'in sunucuya erişimini keser. Alice kendi anahtarını açıklamasından değil, anahtarın kendisinden tanır.",
+        "action": "Bu anahtarı yerinde bırakın. Sunucuyu yönetmeyi bırakmak için sunucuyu Alice'ten kaldırın."
+      },
+      "last_root_key": {
+        "title": "Bu, bu sunucudaki root hesabının son anahtarı.",
+        "cause": "Onu kaldırmak root hesabını anahtarsız bırakır ve yöneticilerinizin erişimini kesebilir.",
+        "action": "Önce root için başka bir anahtar ekleyin ya da kaldırmayı bilerek bir yöneticiye onaylatın."
+      },
+      "not_removable": {
+        "title": "Alice bu dosyadaki bu anahtarı değiştiremez.",
+        "cause": "Anahtar artık dosyada değil ya da zaten kaldırılmış, Alice'in yalnızca listelediği bir sertifika yetkilisi satırı ya da dosya Alice'in okuduğu boyuttan (1 MiB) büyük.",
+        "action": "Güncel anahtarları görmek için sunucuyu yeniden tarayın ve sunucudaki dosyanın boyutunu kontrol edin."
+      },
+      "sshd_unreadable": {
+        "title": "Alice SSH sunucusu ayarlarını okuyamadı, bu yüzden burada anahtarları değiştirmez.",
+        "cause": "Son tarama bu sunucu veya bu kullanıcı için SSH sunucusu ayarlarını okuyamadı; bu yüzden Alice SSH sunucusunun hangi anahtar dosyalarını kullandığını bilmiyor.",
+        "action": "Sunucuda sshd -T komutunun çalıştığını kontrol edin, sunucuyu yeniden tarayın ve yeniden deneyin."
+      },
+      "verify_failed": {
+        "title": "Alice anahtar dosyasını değiştirdi ama sonucu doğrulayamadı.",
+        "cause": "Değişiklikten sonra sunucudaki dosya beklendiği gibi okunmadı. Alice önceki dosyanın bir yedeğini tuttu ve değişikliği kaydetmedi.",
+        "action": "Sunucudaki authorized_keys dosyasını kontrol edin ve görevin belirttiği yedekle karşılaştırın, sonra sunucuyu yeniden tarayın."
+      }
+    },
+    "job": {
+      "not_waiting": {
+        "title": "Bu görev bir onay beklemiyor.",
+        "cause": "Görev zaten çalıştı, vazgeçildi ya da lisans nedeniyle duraklatılmadı.",
+        "action": "Görevin güncel durumunu görmek için sayfayı yeniden yükleyin."
+      },
+      "lease_expired": {
+        "title": "Görev yarıda kaldı ve yeniden çalışacak.",
+        "cause": "Görev çalışırken Alice durdu ya da veritabanı bağlantısını kaybetti.",
+        "action": "Yapmanız gereken bir şey yok: Alice görevi yeniden çalıştırır. Bu sık oluyorsa Alice'in neden yeniden başladığını kontrol edin."
+      },
+      "tampered": {
+        "title": "Alice, kendisi dışında değiştirilmiş bir görevi çalıştırmayı reddetti.",
+        "cause": "Saklanan görev artık korumasıyla eşleşmiyor; bu, birinin veritabanını doğrudan düzenlediği anlamına gelir.",
+        "action": "Veritabanına kimlerin erişebildiğini kontrol edin, sonra görevi kendi sayfasından yeniden başlatın."
+      },
+      "unknown_type": {
+        "title": "Alice bu tür bir görevi tanımıyor.",
+        "cause": "Görev, Alice'in başka bir sürümü tarafından oluşturuldu.",
+        "action": "Bu veritabanıyla yalnızca tek bir Alice sürümünün çalıştığından emin olun."
+      },
+      "conflict": {
+        "title": "Aynı görev başka seçeneklerle zaten bekliyor.",
+        "cause": "Bu öğe için bu türde bir görev zaten kuyrukta ve farklı seçeneklerle istendi.",
+        "action": "Kuyruktaki görev bitene kadar bekleyin, sonra yeniden deneyin."
       }
     }
   },

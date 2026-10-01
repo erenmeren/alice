@@ -10,7 +10,10 @@ import (
 
 	"alice/internal/audit"
 	"alice/internal/auth"
+	"alice/internal/inventory"
+	"alice/internal/jobs"
 	"alice/internal/license"
+	"alice/internal/providers"
 	"alice/internal/rbac"
 	"alice/internal/setup"
 )
@@ -448,3 +451,169 @@ func (f *fakeLicense) count() int {
 	defer f.mu.Unlock()
 	return f.calls
 }
+
+// fakeInventory implements InventoryService. Each method calls its function field when set;
+// otherwise it returns zero values and errNotConfigured.
+type fakeInventory struct {
+	ListTargetsFn       func(ctx context.Context) ([]inventory.Target, error)
+	GetTargetFn         func(ctx context.Context, id uuid.UUID) (inventory.Target, error)
+	CreateTargetFn      func(ctx context.Context, a inventory.Actor, in inventory.NewTarget) (inventory.Target, uuid.UUID, error)
+	UpdateTargetFn      func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, p inventory.TargetPatch) (inventory.Target, error)
+	DeleteTargetFn      func(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+	RequestTestFn       func(ctx context.Context, a inventory.Actor, id uuid.UUID) (uuid.UUID, error)
+	RequestDiscoveryFn  func(ctx context.Context, a inventory.Actor, id uuid.UUID) (uuid.UUID, error)
+	ListHostKeysFn      func(ctx context.Context, targetID uuid.UUID) ([]inventory.HostKeyRecord, error)
+	ConfirmHostKeyFn    func(ctx context.Context, a inventory.Actor, targetID, keyID uuid.UUID, fingerprint string) (uuid.UUID, error)
+	RepinHostKeyFn      func(ctx context.Context, a inventory.Actor, targetID, keyID uuid.UUID, fingerprint, reason string) (uuid.UUID, error)
+	ListTargetKeysFn    func(ctx context.Context, targetID uuid.UUID, includeMissing bool) ([]inventory.KeyLocation, error)
+	ListSSHKeysFn       func(ctx context.Context, f inventory.KeyFilter) (inventory.KeyPage, error)
+	GetSSHKeyFn         func(ctx context.Context, id uuid.UUID) (inventory.SSHKey, error)
+	SetupGuideFn        func(ctx context.Context, from string) (inventory.Guide, error)
+	RequestKeyRemovalFn func(ctx context.Context, a inventory.Actor, locationID uuid.UUID, confirmLastRootKey bool) (uuid.UUID, error)
+}
+
+func (f *fakeInventory) ListTargets(ctx context.Context) ([]inventory.Target, error) {
+	if f.ListTargetsFn != nil {
+		return f.ListTargetsFn(ctx)
+	}
+	return nil, errNotConfigured
+}
+
+func (f *fakeInventory) GetTarget(ctx context.Context, id uuid.UUID) (inventory.Target, error) {
+	if f.GetTargetFn != nil {
+		return f.GetTargetFn(ctx, id)
+	}
+	return inventory.Target{}, errNotConfigured
+}
+
+func (f *fakeInventory) CreateTarget(ctx context.Context, a inventory.Actor, in inventory.NewTarget) (inventory.Target, uuid.UUID, error) {
+	if f.CreateTargetFn != nil {
+		return f.CreateTargetFn(ctx, a, in)
+	}
+	return inventory.Target{}, uuid.Nil, errNotConfigured
+}
+
+func (f *fakeInventory) UpdateTarget(ctx context.Context, a inventory.Actor, id uuid.UUID, v int, p inventory.TargetPatch) (inventory.Target, error) {
+	if f.UpdateTargetFn != nil {
+		return f.UpdateTargetFn(ctx, a, id, v, p)
+	}
+	return inventory.Target{}, errNotConfigured
+}
+
+func (f *fakeInventory) DeleteTarget(ctx context.Context, a inventory.Actor, id uuid.UUID) error {
+	if f.DeleteTargetFn != nil {
+		return f.DeleteTargetFn(ctx, a, id)
+	}
+	return errNotConfigured
+}
+
+func (f *fakeInventory) RequestTest(ctx context.Context, a inventory.Actor, id uuid.UUID) (uuid.UUID, error) {
+	if f.RequestTestFn != nil {
+		return f.RequestTestFn(ctx, a, id)
+	}
+	return uuid.Nil, errNotConfigured
+}
+
+func (f *fakeInventory) RequestDiscovery(ctx context.Context, a inventory.Actor, id uuid.UUID) (uuid.UUID, error) {
+	if f.RequestDiscoveryFn != nil {
+		return f.RequestDiscoveryFn(ctx, a, id)
+	}
+	return uuid.Nil, errNotConfigured
+}
+
+func (f *fakeInventory) ListHostKeys(ctx context.Context, targetID uuid.UUID) ([]inventory.HostKeyRecord, error) {
+	if f.ListHostKeysFn != nil {
+		return f.ListHostKeysFn(ctx, targetID)
+	}
+	return nil, errNotConfigured
+}
+
+func (f *fakeInventory) ConfirmHostKey(ctx context.Context, a inventory.Actor, targetID, keyID uuid.UUID, fp string) (uuid.UUID, error) {
+	if f.ConfirmHostKeyFn != nil {
+		return f.ConfirmHostKeyFn(ctx, a, targetID, keyID, fp)
+	}
+	return uuid.Nil, errNotConfigured
+}
+
+func (f *fakeInventory) RepinHostKey(ctx context.Context, a inventory.Actor, targetID, keyID uuid.UUID, fp, reason string) (uuid.UUID, error) {
+	if f.RepinHostKeyFn != nil {
+		return f.RepinHostKeyFn(ctx, a, targetID, keyID, fp, reason)
+	}
+	return uuid.Nil, errNotConfigured
+}
+
+func (f *fakeInventory) ListTargetKeys(ctx context.Context, targetID uuid.UUID, includeMissing bool) ([]inventory.KeyLocation, error) {
+	if f.ListTargetKeysFn != nil {
+		return f.ListTargetKeysFn(ctx, targetID, includeMissing)
+	}
+	return nil, errNotConfigured
+}
+
+func (f *fakeInventory) ListSSHKeys(ctx context.Context, fl inventory.KeyFilter) (inventory.KeyPage, error) {
+	if f.ListSSHKeysFn != nil {
+		return f.ListSSHKeysFn(ctx, fl)
+	}
+	return inventory.KeyPage{}, errNotConfigured
+}
+
+func (f *fakeInventory) GetSSHKey(ctx context.Context, id uuid.UUID) (inventory.SSHKey, error) {
+	if f.GetSSHKeyFn != nil {
+		return f.GetSSHKeyFn(ctx, id)
+	}
+	return inventory.SSHKey{}, errNotConfigured
+}
+
+func (f *fakeInventory) SetupGuide(ctx context.Context, from string) (inventory.Guide, error) {
+	if f.SetupGuideFn != nil {
+		return f.SetupGuideFn(ctx, from)
+	}
+	return inventory.Guide{}, errNotConfigured
+}
+
+func (f *fakeInventory) RequestKeyRemoval(ctx context.Context, a inventory.Actor, id uuid.UUID, confirm bool) (uuid.UUID, error) {
+	if f.RequestKeyRemovalFn != nil {
+		return f.RequestKeyRemovalFn(ctx, a, id, confirm)
+	}
+	return uuid.Nil, errNotConfigured
+}
+
+// fakeJobs implements JobsService with the same conventions.
+type fakeJobs struct {
+	GetFn     func(ctx context.Context, id uuid.UUID) (jobs.View, error)
+	ListFn    func(ctx context.Context, f jobs.ListFilter) ([]jobs.View, string, error)
+	ConfirmFn func(ctx context.Context, actor audit.Actor, by, id uuid.UUID) error
+	DiscardFn func(ctx context.Context, actor audit.Actor, by, id uuid.UUID) error
+}
+
+func (f *fakeJobs) Get(ctx context.Context, id uuid.UUID) (jobs.View, error) {
+	if f.GetFn != nil {
+		return f.GetFn(ctx, id)
+	}
+	return jobs.View{}, errNotConfigured
+}
+
+func (f *fakeJobs) List(ctx context.Context, fl jobs.ListFilter) ([]jobs.View, string, error) {
+	if f.ListFn != nil {
+		return f.ListFn(ctx, fl)
+	}
+	return nil, "", errNotConfigured
+}
+
+func (f *fakeJobs) Confirm(ctx context.Context, actor audit.Actor, by, id uuid.UUID) error {
+	if f.ConfirmFn != nil {
+		return f.ConfirmFn(ctx, actor, by, id)
+	}
+	return errNotConfigured
+}
+
+func (f *fakeJobs) Discard(ctx context.Context, actor audit.Actor, by, id uuid.UUID) error {
+	if f.DiscardFn != nil {
+		return f.DiscardFn(ctx, actor, by, id)
+	}
+	return errNotConfigured
+}
+
+// fakeProviders implements ProviderCatalog.
+type fakeProviders struct{ items []providers.Descriptor }
+
+func (f fakeProviders) List() []providers.Descriptor { return f.items }

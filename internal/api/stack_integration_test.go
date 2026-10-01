@@ -27,12 +27,17 @@ import (
 	"alice/internal/audit"
 	"alice/internal/auth"
 	"alice/internal/i18n"
+	"alice/internal/inventory"
+	"alice/internal/jobs"
+	"alice/internal/jobs/targetjobs"
 	"alice/internal/license"
 	"alice/internal/license/licensetest"
 	"alice/internal/notify"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
 	"alice/internal/platform/logging"
+	"alice/internal/providers"
+	"alice/internal/providers/linuxssh"
 	"alice/internal/secrets"
 	"alice/internal/setup"
 	"alice/internal/testutil/pgtest"
@@ -95,6 +100,10 @@ type stack struct {
 	setup     *setup.Service
 	auditSvc  *audit.Service
 	license   *license.Service
+	inv       *inventory.Service
+	queue     *jobs.Queue
+	runner    *jobs.Runner
+	registry  *providers.Registry
 	stateDir  string
 	handler   http.Handler
 	setupCode string
@@ -135,7 +144,7 @@ func (s *stack) start() {
 	s.license = license.New(license.Config{
 		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Uptime: s.clock,
 		Keys: licensetest.KeySet(), StateDir: s.stateDir, Notifier: notify.AdminNotifier{Clock: s.clock},
-		Log: logging.New(s.logs, slog.LevelDebug),
+		Log: logging.New(s.logs, slog.LevelDebug), Targets: inventory.Counter{},
 	})
 	require.NoError(t, s.license.Start(ctx))
 	s.auth = auth.NewService(auth.Config{
@@ -146,7 +155,36 @@ func (s *stack) start() {
 		BackupKDF: secrets.KDFParams{MemoryKiB: 64, Time: 1, Threads: 1}, License: s.license,
 	})
 	s.auditSvc = audit.NewService(auditLog, s.db.App)
+	s.startInventory(keyring, auditLog)
 	s.handler = New(s.deps()).Handler()
+}
+
+// startInventory builds the Phase 3 services the way cmd/alice does: the job queue, the inventory
+// with the platform key, the linuxssh provider over a real dialer (pinned against the inventory's
+// host-key store) and a job runner with the target handlers. Tests drive the runner with RunOnce.
+// The dialer uses the real clock: it only measures network timeouts.
+func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
+	t := s.t
+	t.Helper()
+	log := logging.New(s.logs, slog.LevelDebug)
+	s.queue = jobs.NewQueue(jobs.QueueConfig{Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Gate: s.license})
+	s.registry = providers.NewRegistry()
+	s.inv = inventory.New(inventory.Config{
+		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, License: s.license, Registry: s.registry,
+		Jobs: s.queue, Notifier: notify.AdminNotifier{Clock: s.clock}, Log: log,
+	})
+	pool := linuxssh.NewPool(&linuxssh.Dialer{Clock: clock.Real{}, HostKeys: s.inv.HostKeyStore()},
+		linuxssh.MaxConnections, linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)
+	t.Cleanup(pool.Close)
+	s.registry.Register(linuxssh.New(linuxssh.Options{Pool: pool}))
+	s.registry.Freeze()
+	_, err := s.inv.EnsurePlatformKey(context.Background())
+	require.NoError(t, err)
+	s.runner = jobs.NewRunner(jobs.RunnerConfig{
+		Pool: s.db.App, Queue: s.queue, Gate: s.license, Audit: auditLog, Clock: s.clock, Log: log,
+		Jitter: func() float64 { return 0 },
+	})
+	targetjobs.Register(s.runner, targetjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})
 }
 
 // deps are the handler dependencies of the current services. Tests that need
@@ -169,6 +207,9 @@ func (s *stack) deps() Deps {
 		Setup:          s.setup,
 		Audit:          s.auditSvc,
 		License:        s.license,
+		Inventory:      s.inv,
+		Jobs:           s.queue,
+		Providers:      s.registry,
 		TrustedProxies: s.trusted,
 	}
 }

@@ -57,6 +57,12 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 	rbac.SettingsManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb),
 	rbac.LicenseRead:    row(unau, unau, unau, unau, unau, allw, forb, allw, allw, forb, allw, allw, forb, allw),
 	rbac.LicenseManage:  row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb),
+
+	rbac.TargetsManage:    row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb),
+	rbac.HostKeysConfirm:  row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb),
+	rbac.HostKeysRepin:    row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb),
+	rbac.InventoryOperate: row(unau, unau, unau, unau, unau, allw, allw, forb, allw, allw, forb, forb, allw, forb),
+	rbac.JobsConfirm:      row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {
@@ -245,8 +251,10 @@ func under(pattern, prefix string) bool {
 // for browser sessions only and creating a token needs step-up (SEC-009,
 // SEC-025), settings and the setup steps after the administrator exists
 // (recovery passphrase, completion) need settings.manage, and the audit log
-// needs audit.read. No permission may accept API
-// tokens and require step-up at once (tokens can never step up).
+// needs audit.read. Servers need targets.manage to change, host-key confirmation and re-pinning
+// have their own permissions, test/discovery/key removal need inventory.operate, confirming or
+// discarding paused jobs needs jobs.confirm, and every other read of these groups is read. No
+// permission may accept API tokens and require step-up at once (tokens can never step up).
 func routeRuleViolations(routes []route) []string {
 	var out []string
 	for _, rt := range routes {
@@ -258,6 +266,22 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.LicenseManage
 		case under(p, "/api/v1/license"):
 			want = rbac.LicenseRead
+		case strings.HasSuffix(p, "/host-keys/{key_id}/actions/confirm"):
+			want = rbac.HostKeysConfirm
+		case strings.HasSuffix(p, "/host-keys/{key_id}/actions/repin"):
+			want = rbac.HostKeysRepin
+		case under(p, "/api/v1/targets") && (strings.HasSuffix(p, "/actions/test") || strings.HasSuffix(p, "/actions/discover")):
+			want = rbac.InventoryOperate
+		case under(p, "/api/v1/targets") && !safeMethod(rt.method):
+			want = rbac.TargetsManage
+		case p == "/api/v1/ssh-keys/platform-key":
+			want = rbac.TargetsManage
+		case under(p, "/api/v1/ssh-keys") && !safeMethod(rt.method):
+			want = rbac.InventoryOperate
+		case under(p, "/api/v1/jobs") && !safeMethod(rt.method):
+			want = rbac.JobsConfirm
+		case under(p, "/api/v1/targets"), under(p, "/api/v1/ssh-keys"), under(p, "/api/v1/jobs"), under(p, "/api/v1/providers"):
+			want = rbac.Read
 		case under(p, "/api/v1/users") && !safeMethod(rt.method):
 			want = rbac.UsersManage
 		case under(p, "/api/v1/users"):
@@ -312,6 +336,26 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 		"GET /api/v1/license",
 		"POST /api/v1/license/preview",
 		"POST /api/v1/license",
+		"GET /api/v1/providers",
+		"GET /api/v1/targets",
+		"POST /api/v1/targets",
+		"GET /api/v1/targets/{id}",
+		"PATCH /api/v1/targets/{id}",
+		"DELETE /api/v1/targets/{id}",
+		"POST /api/v1/targets/{id}/actions/test",
+		"POST /api/v1/targets/{id}/actions/discover",
+		"GET /api/v1/targets/{id}/host-keys",
+		"POST /api/v1/targets/{id}/host-keys/{key_id}/actions/confirm",
+		"POST /api/v1/targets/{id}/host-keys/{key_id}/actions/repin",
+		"GET /api/v1/targets/{id}/ssh-keys",
+		"GET /api/v1/ssh-keys",
+		"GET /api/v1/ssh-keys/platform-key",
+		"GET /api/v1/ssh-keys/{id}",
+		"POST /api/v1/ssh-keys/locations/{id}/actions/remove",
+		"GET /api/v1/jobs",
+		"GET /api/v1/jobs/{id}",
+		"POST /api/v1/jobs/{id}/actions/confirm",
+		"POST /api/v1/jobs/{id}/actions/discard",
 	} {
 		assert.Contains(t, table, k)
 	}
@@ -331,6 +375,18 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodGet, pattern: "/api/v1/license/status", perm: rbac.LicenseRead},
 		{method: http.MethodGet, pattern: "/api/v1/license", perm: rbac.Read},
 		{method: http.MethodPost, pattern: "/api/v1/license/preview", perm: rbac.LicenseRead},
+		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.InventoryOperate},
+		{method: http.MethodDelete, pattern: "/api/v1/targets/{id}", perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", perm: rbac.TargetsManage},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/confirm", perm: rbac.TargetsManage},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/repin", perm: rbac.HostKeysConfirm},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/host-keys", perm: rbac.TargetsManage},
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/platform-key", perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/locations/{id}/actions/remove", perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/confirm", perm: rbac.InventoryOperate},
+		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/discard", perm: rbac.InventoryOperate},
+		{method: http.MethodGet, pattern: "/api/v1/jobs", perm: rbac.JobsConfirm},
+		{method: http.MethodGet, pattern: "/api/v1/providers", perm: rbac.Session},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))
 	good := []route{
@@ -346,6 +402,12 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodGet, pattern: "/api/v1/license/status", perm: rbac.Read},
 		{method: http.MethodGet, pattern: "/api/v1/license", perm: rbac.LicenseRead},
 		{method: http.MethodPost, pattern: "/api/v1/license", perm: rbac.LicenseManage},
+		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.TargetsManage},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/discover", perm: rbac.InventoryOperate},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/repin", perm: rbac.HostKeysRepin},
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/{id}", perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/platform-key", perm: rbac.TargetsManage},
+		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/discard", perm: rbac.JobsConfirm},
 	}
 	assert.Empty(t, routeRuleViolations(good))
 }

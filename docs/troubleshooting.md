@@ -377,3 +377,246 @@ for a correction license (it names the license it replaces and is always accepte
 **Likely cause.** All licensed targets are in use, or a renewal lowered the limit below the targets in use.
 
 **What to do.** Remove a target that is no longer needed, or ask your vendor to increase the license.
+
+## ALC-SYS-0008: Changed while you were editing
+
+**Meaning.** The item was changed by someone else after you opened it (HTTP 412). Your change was not saved.
+
+**Likely cause.** Two people edited the same server at the same time, or the page was open for a long time.
+
+**What to do.** Reload the page, check the current values and make your change again.
+
+## ALC-TGT-0001: Server already exists
+
+**Meaning.** Another server already has this name, or the same address and SSH port (HTTP 409). Names are compared
+without regard to upper and lower case.
+
+**Likely cause.** The server was added before, perhaps under another name.
+
+**What to do.** Choose another name, or open the existing server on the **Servers** page.
+
+## ALC-TGT-0002: Fingerprint not confirmed yet
+
+**Meaning.** Alice does nothing on a server until an administrator confirms its SSH host-key fingerprint (HTTP 409).
+
+**Likely cause.** The server was just added and nobody has clicked **Yes, this is my server** yet.
+
+**What to do.** Open the server, run the shown `ssh-keygen -lf …` command on the server, compare the fingerprints and
+confirm.
+
+## ALC-TGT-0003: Not the fingerprint the server presented
+
+**Meaning.** The fingerprint you confirmed is not the one the server presented (HTTP 409). Nothing was pinned.
+
+**Likely cause.** The page was open while the server presented another key, or the fingerprint was edited.
+
+**What to do.** Reload the page and compare again. If the server keeps presenting different keys, stop and ask your
+security team: something may be intercepting the connection.
+
+## ALC-TGT-0004: Server identity changed
+
+**Meaning.** The server presented another host key than the confirmed one. Alice stopped every operation on it
+(HTTP 409) and emailed the administrators.
+
+**Likely cause.** The server was reinstalled or its SSH host keys were regenerated, or someone is impersonating it.
+
+**What to do.** Ask your security team to confirm the change on the server itself. Then an administrator opens the
+server, chooses **Review the new fingerprint**, confirms with the authenticator code and gives a reason. The previous
+fingerprint stays in the history.
+
+## ALC-TGT-0005: Fingerprint cannot be accepted now
+
+**Meaning.** The confirmation does not fit the server's state (HTTP 409): a first fingerprint can be confirmed only
+while the server waits for it, a new one only after the identity changed.
+
+**Likely cause.** Another administrator already confirmed it, or the page is outdated.
+
+**What to do.** Reload the server's page.
+
+## ALC-TGT-0006: Server disabled
+
+**Meaning.** The server is disabled, so Alice runs no task on it (shown on the task, HTTP 409 when returned directly).
+
+**Likely cause.** The server was disabled while the task waited in the queue.
+
+**What to do.** Open the server to see why it is disabled, then click **Test connection**.
+
+## ALC-SSH-0001: Server cannot be reached
+
+**Meaning.** Alice could not open an SSH connection (HTTP 502 when returned directly; usually shown on the server and its
+tasks).
+
+**Likely cause.** The server is off, the address or port is wrong, or a firewall blocks the Alice host.
+
+**What to do.** Check the server and the network path to its SSH port, then click **Test connection**.
+
+## ALC-SSH-0002: Server refused Alice's key
+
+**Meaning.** The server rejected the sign-in of the `alice-svc` account with Alice's key. The server is marked "Sign-in
+refused" and administrators get an email. Alice does not retry on its own more often than the discovery interval.
+
+**Likely cause.** The preparation commands were not run, the key line was removed from
+`/var/lib/alice-svc/.ssh/authorized_keys`, or the account is locked.
+
+**What to do.** Run the preparation commands from the **Servers** page again as root on the server, then test the
+connection.
+
+## ALC-SSH-0003: Server answered too slowly
+
+**Meaning.** A connection or a command took longer than its time limit (10 s to connect, 30–60 s per command).
+
+**Likely cause.** A very slow network or an overloaded server.
+
+**What to do.** Try again later; check the server's load.
+
+## ALC-SSH-0004: Helper not allowed or not installed
+
+**Meaning.** `sudo -n /usr/local/libexec/alice-helper …` failed on the server.
+
+**Likely cause.** `alice-helper` is missing, or `/etc/sudoers.d/alice` is missing or was changed.
+
+**What to do.** Copy `alice-helper` from the Alice bundle to the server and run the preparation commands again as root.
+
+## ALC-SSH-0005: Helper outdated
+
+**Meaning.** The helper on the server speaks an older protocol than this Alice version needs.
+
+**Likely cause.** Alice was updated but the helper on the server was not.
+
+**What to do.** Copy the helper from the current Alice bundle and run the preparation commands again.
+
+## ALC-SSH-0006: Helper refused the request
+
+**Meaning.** The helper checked the request and refused it (`params.helper_code` names the rule, for example
+`PATH_NOT_ALLOWED`).
+
+**Likely cause.** A key file is outside the places the helper may read or change (for example a symbolic link that
+leaves the user's home), or the file is not a regular file.
+
+**What to do.** Scan the server again. If the refusal stays, check the named file on the server; contact support with
+the request ID if needed.
+
+## ALC-SSH-0007: File changed during the operation
+
+**Meaning.** The `authorized_keys` file changed between Alice's read and write, three times in a row (HTTP 409). Alice
+wrote nothing.
+
+**Likely cause.** Another tool or person edited the file at the same time.
+
+**What to do.** Try again.
+
+## ALC-SSH-0008: Keys managed elsewhere
+
+**Meaning.** The server's SSH daemon uses `AuthorizedKeysCommand`, so Alice lists the file keys but does not change keys
+there (HTTP 409).
+
+**Likely cause.** Keys come from a directory service or another program.
+
+**What to do.** Manage those keys in the system that provides them.
+
+## ALC-SSH-0009: Answer too large
+
+**Meaning.** The server sent more than Alice accepts (8 MiB per command, 1 MiB per key file).
+
+**Likely cause.** An unusually large key file or SSH configuration.
+
+**What to do.** Inspect the server's `authorized_keys` files and `sshd -T` output.
+
+## ALC-SSH-0010: Unexpected answer from the server
+
+**Meaning.** The helper's answer could not be read.
+
+**Likely cause.** The file at `/usr/local/libexec/alice-helper` is not Alice's helper, or it is damaged.
+
+**What to do.** Install the helper again from the Alice bundle and compare its checksum with `alice-helper.sha256`.
+
+## ALC-KEY-0001: Alice's own key is protected
+
+**Meaning.** Alice refuses to remove its own connection key (HTTP 409), in any file and whatever its comment says. The
+refusal is recorded in the audit log.
+
+**Likely cause.** The key that Alice uses to sign in was chosen for removal.
+
+**What to do.** Keep the key. To stop managing a server, remove the server from Alice instead.
+
+## ALC-KEY-0002: Last key of root
+
+**Meaning.** Removing this key would leave the root account without any key (HTTP 409).
+
+**Likely cause.** The key is the only line in root's `authorized_keys`.
+
+**What to do.** Add another key for root first, or let an administrator confirm the removal on purpose.
+
+## ALC-KEY-0003: Key cannot be changed in this file
+
+**Meaning.** Alice cannot remove (or add) this key in this file (HTTP 409 when returned directly; on a task,
+`params.reason` names the cause: `cert_authority` or `file_too_large`).
+
+**Likely cause.** The key location no longer exists or was already removed, the line is a `cert-authority` line that
+Alice only lists, or the `authorized_keys` file is larger than 1 MiB.
+
+**What to do.** Click **Scan for SSH keys** on the server and try again; check the size of the file on the server.
+
+## ALC-KEY-0004: SSH server settings could not be read
+
+**Meaning.** The last scan could not read the SSH server's effective settings (`sshd -T`) for the server or for the
+key's user, so Alice refuses to change keys there (HTTP 409). The refusal is recorded in the audit log.
+
+**Likely cause.** `sshd -T` fails on the server, for example because of a broken `sshd_config` or a `Match` block it
+cannot evaluate for that user.
+
+**What to do.** Run `sshd -T` as root on the server and fix the reported problem, scan the server again, then retry.
+
+## ALC-KEY-0005: Change could not be verified
+
+**Meaning.** Alice wrote the `authorized_keys` file but reading it back did not show the expected result. The task
+stops for a person ("needs attention"); Alice did not record the key as removed. The task's result names the backup of
+the previous file.
+
+**Likely cause.** Another program changed the file right after Alice's write, or the file system did not keep the write.
+
+**What to do.** Compare the file on the server with the backup named on the task, restore it if needed, then scan the
+server again.
+
+## ALC-JOB-0001: Task is not waiting
+
+**Meaning.** Only tasks paused by an expired license ("Waiting for an administrator") can be run, and only those and
+tasks that have not started yet can be discarded (HTTP 409).
+
+**Likely cause.** The task already ran or was discarded by someone else.
+
+**What to do.** Reload the page.
+
+## ALC-JOB-0002: Task interrupted
+
+**Meaning.** A task's lease ran out because Alice stopped while running it; Alice queued it again (shown on the task).
+
+**Likely cause.** A restart, an update or a lost database connection.
+
+**What to do.** Nothing; if it happens often, find out why Alice restarts.
+
+## ALC-JOB-0003: Task changed outside Alice
+
+**Meaning.** A stored task failed its integrity check (HMAC), so Alice did not run it and recorded `job.tampered`.
+
+**Likely cause.** Someone wrote to the `jobs` table directly.
+
+**What to do.** Review database access; start the work again from its page.
+
+## ALC-JOB-0004: Unknown task type
+
+**Meaning.** A stored task has a type this Alice version does not know; it was not run.
+
+**Likely cause.** Two Alice versions use the same database.
+
+**What to do.** Run only one Alice version per database.
+
+## ALC-JOB-0005: Same task already queued with other options
+
+**Meaning.** A task of this kind is already queued for the same item with different options, so the new request was not
+queued (HTTP 409).
+
+**Likely cause.** Two people asked for the same work at almost the same time, for example removing the same key with
+and without the confirmation for root's last key.
+
+**What to do.** Wait until the queued task has finished, then try again.

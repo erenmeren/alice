@@ -55,8 +55,11 @@ func testDeps(t *testing.T, health error) Deps {
 		Setup: &fakeSetup{StatusFn: func(context.Context) (setup.Status, error) {
 			return setup.Status{DefaultLocale: "en"}, nil // GET /setup/status is public; answer it by default
 		}},
-		Audit:   &fakeAudit{},
-		License: &fakeLicense{},
+		Audit:     &fakeAudit{},
+		License:   &fakeLicense{},
+		Inventory: &fakeInventory{},
+		Jobs:      &fakeJobs{},
+		Providers: fakeProviders{},
 	}
 }
 

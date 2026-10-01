@@ -676,10 +676,351 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/providers:
+    get:
+      operationId: listProviders
+      summary: Compiled-in providers with their capabilities and configuration schema (add-server form)
+      x-permission: read
+      responses:
+        "200":
+          description: Providers
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderList" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/targets:
+    get:
+      operationId: listTargets
+      summary: Managed servers (metadata only, never credentials)
+      x-permission: read
+      responses:
+        "200":
+          description: Servers
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TargetList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createTarget
+      summary: Add a server; counts against the license and starts a connection test that fetches its fingerprint
+      x-permission: targets.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TargetCreate" }
+      responses:
+        "201":
+          description: The server was added; job_id is the connection test
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TargetCreated" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/targets/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getTarget
+      summary: One server
+      x-permission: read
+      responses:
+        "200":
+          description: The server
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Target" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateTarget
+      summary: Rename a server or change its discovery interval (If-Match with the ETag is required)
+      x-permission: targets.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TargetPatch" }
+      responses:
+        "200":
+          description: The changed server
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Target" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteTarget
+      summary: Remove a server from Alice (frees a license slot; nothing changes on the server)
+      x-permission: targets.manage
+      responses:
+        "204": { description: Removed }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/targets/{id}/actions/test:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: testTarget
+      summary: Test the SSH connection (runs as a job)
+      x-permission: inventory.operate
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/targets/{id}/actions/discover:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: discoverTarget
+      summary: Scan the server's authorized_keys files and host keys (runs as a job)
+      x-permission: inventory.operate
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/targets/{id}/host-keys:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: listHostKeys
+      summary: The server's pinned, observed and superseded host keys
+      x-permission: read
+      responses:
+        "200":
+          description: Host keys, newest first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HostKeyList" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/targets/{id}/host-keys/{key_id}/actions/confirm:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+      - { $ref: "#/components/parameters/KeyID" }
+    post:
+      operationId: confirmHostKey
+      summary: Pin the fingerprint the server presented on first contact (TOFU with human confirmation)
+      x-permission: hostkeys.confirm
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HostKeyConfirm" }
+      responses:
+        "202":
+          description: Pinned; job_id is the next connection test
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/targets/{id}/host-keys/{key_id}/actions/repin:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+      - { $ref: "#/components/parameters/KeyID" }
+    post:
+      operationId: repinHostKey
+      summary: Accept a changed fingerprint (step-up and a reason required; the old one is kept as superseded)
+      x-permission: hostkeys.repin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HostKeyRepin" }
+      responses:
+        "202":
+          description: Pinned; job_id is the next connection test
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/targets/{id}/ssh-keys:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: listTargetKeys
+      summary: The SSH keys found on one server, with their users and files
+      x-permission: read
+      parameters:
+        - { name: missing, in: query, required: false, schema: { type: boolean } }
+      responses:
+        "200":
+          description: Key locations
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KeyLocationList" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ssh-keys:
+    get:
+      operationId: listSSHKeys
+      summary: SSH key inventory with filters
+      x-permission: read
+      parameters:
+        - { name: target_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: os_user, in: query, required: false, schema: { type: string, maxLength: 32 } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
+        - { name: flag, in: query, required: false, schema: { type: string, enum: [weak, command, root_without_from, duplicate, cert_authority, security_key] } }
+        - { name: missing, in: query, required: false, schema: { type: boolean } }
+        - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page of keys
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SSHKeyPage" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ssh-keys/platform-key:
+    get:
+      operationId: getPlatformKey
+      summary: Alice's public key, its authorized_keys line and the setup snippets per sudoers profile
+      x-permission: targets.manage
+      parameters:
+        - { name: from, in: query, required: false, schema: { type: string, description: IP address for the from= option } }
+      responses:
+        "200":
+          description: Platform key and setup snippets
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlatformKeyInfo" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ssh-keys/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getSSHKey
+      summary: One SSH key and every place it is used
+      x-permission: read
+      responses:
+        "200":
+          description: The key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SSHKey" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ssh-keys/locations/{id}/actions/remove:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: removeKeyLocation
+      summary: Remove this key from this file on the server (runs as a job; Alice's own key is refused)
+      x-permission: inventory.operate
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KeyRemove" }
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/jobs:
+    get:
+      operationId: listJobs
+      summary: Background tasks, newest first
+      x-permission: read
+      parameters:
+        - { name: status, in: query, required: false, schema: { type: string, enum: [queued, running, succeeded, failed, cancelled, dead, blocked_license] } }
+        - { name: target_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page of tasks
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobPage" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/jobs/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getJob
+      summary: One background task
+      x-permission: read
+      responses:
+        "200":
+          description: The task
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/jobs/{id}/actions/confirm:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: confirmJob
+      summary: Run a task that the license paused (R29)
+      description: >-
+        Refused while the license still refuses the task's class. The administrator is stored in confirmed_by
+        and confirmed_at and recorded in the job.confirmed audit entry.
+      x-permission: jobs.confirm
+      responses:
+        "200":
+          description: The task, queued again
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/jobs/{id}/actions/discard:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: discardJob
+      summary: Discard a task that waits for a confirmation or for its turn
+      description: >-
+        The task is cancelled. The administrator who discarded it is stored in the task's confirmed_by and
+        confirmed_at columns (the same columns as a confirmation); the job.discarded audit entry is the record
+        of who did it and when.
+      x-permission: jobs.confirm
+      responses:
+        "200":
+          description: The cancelled task
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
 components:
   parameters:
     ID:
       name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    KeyID:
+      name: key_id
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -942,3 +1283,281 @@ components:
         head_hash: { type: string }
         first_bad_seq: { type: [integer, "null"] }
         problem: { type: [string, "null"], enum: [hash_mismatch, sequence_gap, tail_truncated, null] }
+    ErrorRef:
+      type: [object, "null"]
+      required: [code, reason]
+      properties:
+        code: { type: string, examples: [ALC-SSH-0002] }
+        reason: { type: string, examples: [ssh.auth_failed] }
+        params: { type: object, additionalProperties: { type: string } }
+    Accepted:
+      type: object
+      required: [job_id, status_url]
+      properties:
+        job_id: { type: string, format: uuid }
+        status_url: { type: string, examples: [/api/v1/jobs/0192b000-0000-7000-8000-0000000000b1] }
+    TargetCreate:
+      type: object
+      required: [name, host]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        type: { type: string, enum: [linux], default: linux }
+        host: { type: string, maxLength: 253, description: Host name or IP address; no scheme and no port }
+        port: { type: integer, minimum: 0, maximum: 65535, description: 0 or absent means 22 }
+        username: { type: string, maxLength: 32, description: Absent means alice-svc }
+    TargetPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        discovery_interval_hours: { type: integer, minimum: 1, maximum: 720 }
+    TargetFacts:
+      type: object
+      required: [os, helper_version, helper_protocol, sshd, host_keys, warnings, unreadable]
+      properties:
+        os:
+          type: object
+          required: [id, version_id, pretty_name]
+          properties:
+            id: { type: string }
+            version_id: { type: string }
+            pretty_name: { type: string }
+        helper_version: { type: string }
+        helper_protocol: { type: integer }
+        sshd:
+          type: [object, "null"]
+          properties:
+            read: { type: boolean }
+            pubkey_authentication: { type: string }
+            password_authentication: { type: string }
+            permit_root_login: { type: string }
+            authorized_keys_file: { type: array, items: { type: string } }
+            authorized_keys_command: { type: string }
+            keys_managed_elsewhere: { type: boolean }
+            certificates_in_use: { type: boolean }
+        host_keys:
+          type: array
+          items:
+            type: object
+            required: [key_type, bits, fingerprint, weak]
+            properties:
+              key_type: { type: string }
+              bits: { type: integer }
+              fingerprint: { type: string }
+              weak: { type: boolean }
+        warnings:
+          type: array
+          items:
+            type: object
+            required: [code, params]
+            properties:
+              code: { type: string, examples: [keys_managed_elsewhere] }
+              params: { type: object, additionalProperties: { type: string } }
+        unreadable:
+          type: array
+          items:
+            type: object
+            required: [os_user, file_path, line_no]
+            properties:
+              os_user: { type: string }
+              file_path: { type: string }
+              line_no: { type: integer }
+    Target:
+      type: object
+      required: [id, name, type, host, port, username, status, last_error, last_success_at, last_discovery_at,
+        discovery_interval_hours, keys_managed_elsewhere, capabilities, facts, version, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        type: { type: string, enum: [nginx, linux, azure_key_vault] }
+        host: { type: string }
+        port: { type: integer }
+        username: { type: string }
+        status: { type: string, enum: [pending_host_key, checking, ok, unreachable, host_key_changed, auth_failed, disabled] }
+        last_error: { $ref: "#/components/schemas/ErrorRef" }
+        last_success_at: { type: [string, "null"], format: date-time }
+        last_discovery_at: { type: [string, "null"], format: date-time }
+        discovery_interval_hours: { type: integer }
+        keys_managed_elsewhere: { type: boolean }
+        capabilities: { type: array, items: { type: string } }
+        facts: { $ref: "#/components/schemas/TargetFacts" }
+        version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TargetList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Target" } }
+        next_cursor: { type: "null" }
+    TargetCreated:
+      type: object
+      required: [target, job_id, status_url]
+      properties:
+        target: { $ref: "#/components/schemas/Target" }
+        job_id: { type: string, format: uuid }
+        status_url: { type: string }
+    HostKey:
+      type: object
+      required: [id, key_type, fingerprint, status, observed_at, confirmed_at, confirmed_by_name, superseded_at, verify_command]
+      properties:
+        id: { type: string, format: uuid }
+        key_type: { type: string, examples: [ssh-ed25519] }
+        fingerprint: { type: string, examples: ["SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8"] }
+        status: { type: string, enum: [observed, pinned, superseded, rejected] }
+        observed_at: { type: string, format: date-time }
+        confirmed_at: { type: [string, "null"], format: date-time }
+        confirmed_by_name: { type: string }
+        superseded_at: { type: [string, "null"], format: date-time }
+        verify_command: { type: string, examples: [ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub] }
+    HostKeyList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/HostKey" } }
+    HostKeyConfirm:
+      type: object
+      required: [fingerprint]
+      additionalProperties: false
+      properties:
+        fingerprint: { type: string }
+    HostKeyRepin:
+      type: object
+      required: [fingerprint, reason]
+      additionalProperties: false
+      properties:
+        fingerprint: { type: string }
+        reason: { type: string, minLength: 10, maxLength: 500 }
+    KeyLocation:
+      type: object
+      required: [id, ssh_key_id, fingerprint, key_type, target_id, target_name, os_user, file_path, line_no, options,
+        comment, flags, first_seen_at, last_seen_at, missing_since, removed_at, is_alice_connection_key]
+      properties:
+        id: { type: string, format: uuid }
+        ssh_key_id: { type: string, format: uuid }
+        fingerprint: { type: string }
+        key_type: { type: string }
+        target_id: { type: string, format: uuid }
+        target_name: { type: string }
+        os_user: { type: string }
+        file_path: { type: string }
+        line_no: { type: integer }
+        options: { type: string }
+        comment: { type: string }
+        flags: { type: array, items: { type: string } }
+        first_seen_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        missing_since: { type: [string, "null"], format: date-time }
+        removed_at: { type: [string, "null"], format: date-time }
+        is_alice_connection_key: { type: boolean }
+    KeyLocationList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/KeyLocation" } }
+    SSHKey:
+      type: object
+      required: [id, fingerprint, key_type, bits, public_key, managed, is_platform_key, weak, comment, location_count,
+        target_count, first_seen_at]
+      properties:
+        id: { type: string, format: uuid }
+        fingerprint: { type: string }
+        key_type: { type: string }
+        bits: { type: integer }
+        public_key: { type: string, description: Public key only (type and base64); never private material }
+        managed: { type: boolean }
+        is_platform_key: { type: boolean }
+        weak: { type: boolean }
+        comment: { type: string }
+        location_count: { type: integer }
+        target_count: { type: integer }
+        first_seen_at: { type: string, format: date-time }
+        locations: { type: array, items: { $ref: "#/components/schemas/KeyLocation" }, description: "Only on GET /ssh-keys/{id}" }
+    SSHKeyPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/SSHKey" } }
+        next_cursor: { type: [string, "null"] }
+    KeyRemove:
+      type: object
+      additionalProperties: false
+      properties:
+        confirm_last_root_key: { type: boolean, default: false }
+    SetupSnippet:
+      type: object
+      required: [sudoers, script]
+      properties:
+        sudoers: { type: string }
+        script: { type: string }
+    PlatformKeyInfo:
+      type: object
+      required: [public_key, fingerprint, authorized_keys_line, helper_path, helper_protocol, profiles]
+      properties:
+        public_key: { type: string }
+        fingerprint: { type: string }
+        authorized_keys_line: { type: string }
+        helper_path: { type: string }
+        helper_protocol: { type: integer }
+        profiles:
+          type: object
+          required: [linux, nginx]
+          properties:
+            linux: { $ref: "#/components/schemas/SetupSnippet" }
+            nginx: { $ref: "#/components/schemas/SetupSnippet" }
+    Job:
+      type: object
+      required: [id, type, kind, status, target_id, attempts, max_attempts, error, result, created_at, run_at, started_at, finished_at]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, examples: [target.test_connection] }
+        kind: { type: string, enum: [scheduled, user, system] }
+        status: { type: string, enum: [queued, running, succeeded, failed, cancelled, dead, blocked_license] }
+        target_id: { type: [string, "null"], format: uuid }
+        attempts: { type: integer }
+        max_attempts: { type: integer }
+        error: { $ref: "#/components/schemas/ErrorRef" }
+        result: { type: object }
+        created_at: { type: string, format: date-time }
+        run_at: { type: string, format: date-time }
+        started_at: { type: [string, "null"], format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+    JobPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Job" } }
+        next_cursor: { type: [string, "null"] }
+    Provider:
+      type: object
+      required: [kind, display_name_key, capabilities, config_schema]
+      properties:
+        kind: { type: string, enum: [linuxssh, nginx, azurekv] }
+        display_name_key: { type: string }
+        capabilities: { type: array, items: { type: string } }
+        config_schema:
+          type: object
+          required: [fields]
+          properties:
+            fields:
+              type: array
+              items:
+                type: object
+                required: [name, type, required, default, label_key, help_key, pattern, min, max, values]
+                properties:
+                  name: { type: string }
+                  type: { type: string, enum: [string, int, bool, enum, path, host] }
+                  required: { type: boolean }
+                  default: {}
+                  label_key: { type: string }
+                  help_key: { type: string }
+                  pattern: { type: string }
+                  min: { type: integer }
+                  max: { type: integer }
+                  values: { type: array, items: { type: string } }
+    ProviderList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Provider" } }

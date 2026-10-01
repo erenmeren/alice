@@ -10,8 +10,11 @@ import (
 	"time"
 
 	"alice/internal/auth"
+	"alice/internal/inventory"
+	"alice/internal/jobs"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
+	"alice/internal/providers"
 	"alice/internal/setup"
 )
 
@@ -24,13 +27,14 @@ type ErrorCode struct {
 }
 
 var (
-	ErrNotFound     = ErrorCode{Code: "ALC-SYS-0001", Reason: "system.not_found", Status: http.StatusNotFound}
-	ErrUnavailable  = ErrorCode{Code: "ALC-SYS-0002", Reason: "system.unavailable", Status: http.StatusServiceUnavailable, Retryable: true}
-	ErrUnexpected   = ErrorCode{Code: "ALC-SYS-0003", Reason: "internal.unexpected", Status: http.StatusInternalServerError}
-	ErrBadRequest   = ErrorCode{Code: "ALC-SYS-0004", Reason: "system.bad_request", Status: http.StatusBadRequest}
-	ErrRateLimited  = ErrorCode{Code: "ALC-SYS-0005", Reason: "rate.limited", Status: http.StatusTooManyRequests, Retryable: true}
-	ErrValidation   = ErrorCode{Code: "ALC-SYS-0006", Reason: "validation.failed", Status: http.StatusUnprocessableEntity}
-	ErrBodyTooLarge = ErrorCode{Code: "ALC-SYS-0007", Reason: "system.body_too_large", Status: http.StatusRequestEntityTooLarge}
+	ErrNotFound           = ErrorCode{Code: "ALC-SYS-0001", Reason: "system.not_found", Status: http.StatusNotFound}
+	ErrUnavailable        = ErrorCode{Code: "ALC-SYS-0002", Reason: "system.unavailable", Status: http.StatusServiceUnavailable, Retryable: true}
+	ErrUnexpected         = ErrorCode{Code: "ALC-SYS-0003", Reason: "internal.unexpected", Status: http.StatusInternalServerError}
+	ErrBadRequest         = ErrorCode{Code: "ALC-SYS-0004", Reason: "system.bad_request", Status: http.StatusBadRequest}
+	ErrRateLimited        = ErrorCode{Code: "ALC-SYS-0005", Reason: "rate.limited", Status: http.StatusTooManyRequests, Retryable: true}
+	ErrValidation         = ErrorCode{Code: "ALC-SYS-0006", Reason: "validation.failed", Status: http.StatusUnprocessableEntity}
+	ErrBodyTooLarge       = ErrorCode{Code: "ALC-SYS-0007", Reason: "system.body_too_large", Status: http.StatusRequestEntityTooLarge}
+	ErrPreconditionFailed = ErrorCode{Code: "ALC-SYS-0008", Reason: "system.precondition_failed", Status: http.StatusPreconditionFailed}
 
 	ErrUnauthenticated        = ErrorCode{Code: "ALC-AUTH-0001", Reason: "auth.unauthenticated", Status: http.StatusUnauthorized}
 	ErrForbidden              = ErrorCode{Code: "ALC-AUTH-0002", Reason: "auth.forbidden", Status: http.StatusForbidden}
@@ -67,12 +71,44 @@ var (
 	ErrLicenseUnsupportedFormat  = ErrorCode{Code: "ALC-LIC-0006", Reason: "license.unsupported_format", Status: http.StatusUnprocessableEntity}
 	ErrLicenseOlderThanInstalled = ErrorCode{Code: "ALC-LIC-0007", Reason: "license.older_than_installed", Status: http.StatusConflict}
 	ErrLicenseTargetLimit        = ErrorCode{Code: "ALC-LIC-0008", Reason: "license.target_limit_reached", Status: http.StatusConflict}
+
+	// Phase 3: servers, SSH, keys and jobs (R37). The SSH and job reasons are mostly carried by job
+	// records and target statuses; the API answers with them when a request fails for that reason.
+	ErrTargetDuplicate    = ErrorCode{Code: "ALC-TGT-0001", Reason: "target.duplicate", Status: http.StatusConflict}
+	ErrHostKeyUnconfirmed = ErrorCode{Code: "ALC-TGT-0002", Reason: "target.host_key_unconfirmed", Status: http.StatusConflict}
+	ErrHostKeyStale       = ErrorCode{Code: "ALC-TGT-0003", Reason: "target.host_key_stale", Status: http.StatusConflict}
+	ErrHostKeyChanged     = ErrorCode{Code: "ALC-TGT-0004", Reason: "target.host_key_changed", Status: http.StatusConflict}
+	ErrHostKeyState       = ErrorCode{Code: "ALC-TGT-0005", Reason: "target.host_key_state", Status: http.StatusConflict}
+	ErrTargetDisabled     = ErrorCode{Code: "ALC-TGT-0006", Reason: "target.disabled", Status: http.StatusConflict}
+
+	ErrSSHUnreachable       = ErrorCode{Code: "ALC-SSH-0001", Reason: "ssh.unreachable", Status: http.StatusBadGateway, Retryable: true}
+	ErrSSHAuthFailed        = ErrorCode{Code: "ALC-SSH-0002", Reason: "ssh.auth_failed", Status: http.StatusBadGateway}
+	ErrSSHTimeout           = ErrorCode{Code: "ALC-SSH-0003", Reason: "ssh.timeout", Status: http.StatusGatewayTimeout, Retryable: true}
+	ErrHelperMissing        = ErrorCode{Code: "ALC-SSH-0004", Reason: "ssh.helper_missing", Status: http.StatusBadGateway}
+	ErrHelperOutdated       = ErrorCode{Code: "ALC-SSH-0005", Reason: "ssh.helper_outdated", Status: http.StatusBadGateway}
+	ErrHelperRefused        = ErrorCode{Code: "ALC-SSH-0006", Reason: "ssh.helper_refused", Status: http.StatusBadGateway}
+	ErrFileChanged          = ErrorCode{Code: "ALC-SSH-0007", Reason: "ssh.file_changed", Status: http.StatusConflict, Retryable: true}
+	ErrKeysManagedElsewhere = ErrorCode{Code: "ALC-SSH-0008", Reason: "ssh.keys_managed_elsewhere", Status: http.StatusConflict}
+	ErrOutputTooLarge       = ErrorCode{Code: "ALC-SSH-0009", Reason: "ssh.output_too_large", Status: http.StatusBadGateway}
+	ErrSSHProtocol          = ErrorCode{Code: "ALC-SSH-0010", Reason: "ssh.protocol_error", Status: http.StatusBadGateway}
+
+	ErrOwnKeyProtected = ErrorCode{Code: "ALC-KEY-0001", Reason: "sshkey.own_key_protected", Status: http.StatusConflict}
+	ErrLastRootKey     = ErrorCode{Code: "ALC-KEY-0002", Reason: "sshkey.last_root_key", Status: http.StatusConflict}
+	ErrKeyNotRemovable = ErrorCode{Code: "ALC-KEY-0003", Reason: "sshkey.not_removable", Status: http.StatusConflict}
+	ErrSSHDUnreadable  = ErrorCode{Code: "ALC-KEY-0004", Reason: "sshkey.sshd_unreadable", Status: http.StatusConflict}
+	ErrKeyVerifyFailed = ErrorCode{Code: "ALC-KEY-0005", Reason: "sshkey.verify_failed", Status: http.StatusBadGateway}
+
+	ErrJobNotWaiting   = ErrorCode{Code: "ALC-JOB-0001", Reason: "job.not_waiting", Status: http.StatusConflict}
+	ErrJobLeaseExpired = ErrorCode{Code: "ALC-JOB-0002", Reason: "job.lease_expired", Status: http.StatusInternalServerError, Retryable: true}
+	ErrJobTampered     = ErrorCode{Code: "ALC-JOB-0003", Reason: "job.tampered", Status: http.StatusInternalServerError}
+	ErrJobUnknownType  = ErrorCode{Code: "ALC-JOB-0004", Reason: "job.unknown_type", Status: http.StatusInternalServerError}
+	ErrJobConflict     = ErrorCode{Code: "ALC-JOB-0005", Reason: "job.conflict", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
 func AllErrorCodes() []ErrorCode {
 	return []ErrorCode{
-		ErrNotFound, ErrUnavailable, ErrUnexpected, ErrBadRequest, ErrRateLimited, ErrValidation, ErrBodyTooLarge,
+		ErrNotFound, ErrUnavailable, ErrUnexpected, ErrBadRequest, ErrRateLimited, ErrValidation, ErrBodyTooLarge, ErrPreconditionFailed,
 		ErrUnauthenticated, ErrForbidden, ErrStepUpRequired, ErrCSRF, ErrInvalidCredentials, ErrMFAInvalid,
 		ErrMFAAlreadyEnrolled, ErrPasswordTooShort, ErrPasswordTooLong, ErrPasswordBreached, ErrCurrentPasswordInvalid, ErrTryAgain,
 		ErrUsernameTaken, ErrLastAdmin, ErrTokenScopeNotAllowed,
@@ -81,7 +117,23 @@ func AllErrorCodes() []ErrorCode {
 		ErrLicenseLocked,
 		ErrLicenseInvalid, ErrLicenseWrongInstallation, ErrLicenseUnknownKey, ErrLicenseRevokedKey,
 		ErrLicenseUnsupportedFormat, ErrLicenseOlderThanInstalled, ErrLicenseTargetLimit,
+		ErrTargetDuplicate, ErrHostKeyUnconfirmed, ErrHostKeyStale, ErrHostKeyChanged, ErrHostKeyState, ErrTargetDisabled,
+		ErrSSHUnreachable, ErrSSHAuthFailed, ErrSSHTimeout, ErrHelperMissing, ErrHelperOutdated, ErrHelperRefused,
+		ErrFileChanged, ErrKeysManagedElsewhere, ErrOutputTooLarge, ErrSSHProtocol,
+		ErrOwnKeyProtected, ErrLastRootKey, ErrKeyNotRemovable, ErrSSHDUnreadable, ErrKeyVerifyFailed,
+		ErrJobNotWaiting, ErrJobLeaseExpired, ErrJobTampered, ErrJobUnknownType, ErrJobConflict,
 	}
+}
+
+// codeForReason returns the registered code of a stable reason (job records and target statuses
+// store reasons). An unknown reason is ErrUnexpected, so a client always gets a documented code.
+func codeForReason(reason string) ErrorCode {
+	for _, ec := range AllErrorCodes() {
+		if ec.Reason == reason {
+			return ec
+		}
+	}
+	return ErrUnexpected
 }
 
 // errorMap translates domain errors into API codes. Order matters only for
@@ -124,6 +176,24 @@ var errorMap = []struct {
 	{license.ErrTargetLimit, ErrLicenseTargetLimit, nil},
 	{license.ErrWrongInstallation, ErrLicenseWrongInstallation, nil},
 	{license.ErrNoInstallation, ErrUnavailable, nil},
+	{inventory.ErrNotFound, ErrNotFound, nil},
+	{inventory.ErrNoPlatformKey, ErrUnavailable, nil}, // EnsurePlatformKey runs before serving; only a broken start reaches this
+	{inventory.ErrDuplicateTarget, ErrTargetDuplicate, nil},
+	{inventory.ErrVersionMismatch, ErrPreconditionFailed, nil},
+	{inventory.ErrHostKeyUnconfirmed, ErrHostKeyUnconfirmed, nil},
+	{inventory.ErrHostKeyStale, ErrHostKeyStale, nil},
+	{inventory.ErrHostKeyChanged, ErrHostKeyChanged, nil},
+	{inventory.ErrHostKeyState, ErrHostKeyState, nil},
+	{inventory.ErrOwnKeyProtected, ErrOwnKeyProtected, nil},
+	{inventory.ErrLastRootKey, ErrLastRootKey, nil},
+	{inventory.ErrNotRemovable, ErrKeyNotRemovable, nil},
+	{inventory.ErrKeysManagedElsewhere, ErrKeysManagedElsewhere, nil},
+	{inventory.ErrSSHDUnreadable, ErrSSHDUnreadable, nil},
+	{inventory.ErrJobConflict, ErrJobConflict, nil},
+	{jobs.ErrNotFound, ErrNotFound, nil},
+	{jobs.ErrNotWaiting, ErrJobNotWaiting, nil},
+	{jobs.ErrBadCursor, ErrBadRequest, nil}, // a cursor that does not decode
+	{jobs.ErrUnknownType, ErrJobUnknownType, nil},
 }
 
 type errorPayload struct {
@@ -190,6 +260,15 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.As(err, &limit) {
 		s.writeErrorWith(w, r, ErrLicenseTargetLimit, map[string]string{"used": strconv.Itoa(limit.Used), "max": strconv.Itoa(limit.Max)}, nil)
 		return
+	}
+	var perr *providers.Error
+	if errors.As(err, &perr) {
+		// Only the stable reason and its allowlisted primitive params reach the client; the
+		// provider's cause (remote output, driver text) is never shown nor logged as text.
+		if ec := codeForReason(perr.Code); ec != ErrUnexpected {
+			s.writeErrorWith(w, r, ec, perr.Params, nil)
+			return
+		}
 	}
 	for _, m := range errorMap {
 		if errors.Is(err, m.err) {

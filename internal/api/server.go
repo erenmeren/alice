@@ -17,9 +17,12 @@ import (
 	"alice/internal/auth"
 	"alice/internal/auth/ratelimit"
 	"alice/internal/i18n"
+	"alice/internal/inventory"
+	"alice/internal/jobs"
 	"alice/internal/license"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
+	"alice/internal/providers"
 	"alice/internal/rbac"
 	"alice/internal/setup"
 	"alice/internal/version"
@@ -90,6 +93,38 @@ type LicenseService interface {
 	Install(ctx context.Context, raw []byte, actor audit.Actor, by uuid.UUID) (license.UploadResult, error)
 }
 
+// InventoryService is the part of inventory.Service the HTTP layer uses.
+type InventoryService interface {
+	ListTargets(ctx context.Context) ([]inventory.Target, error)
+	GetTarget(ctx context.Context, id uuid.UUID) (inventory.Target, error)
+	CreateTarget(ctx context.Context, a inventory.Actor, in inventory.NewTarget) (inventory.Target, uuid.UUID, error)
+	UpdateTarget(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, p inventory.TargetPatch) (inventory.Target, error)
+	DeleteTarget(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+	RequestTest(ctx context.Context, a inventory.Actor, id uuid.UUID) (uuid.UUID, error)
+	RequestDiscovery(ctx context.Context, a inventory.Actor, id uuid.UUID) (uuid.UUID, error)
+	ListHostKeys(ctx context.Context, targetID uuid.UUID) ([]inventory.HostKeyRecord, error)
+	ConfirmHostKey(ctx context.Context, a inventory.Actor, targetID, keyID uuid.UUID, fingerprint string) (uuid.UUID, error)
+	RepinHostKey(ctx context.Context, a inventory.Actor, targetID, keyID uuid.UUID, fingerprint, reason string) (uuid.UUID, error)
+	ListTargetKeys(ctx context.Context, targetID uuid.UUID, includeMissing bool) ([]inventory.KeyLocation, error)
+	ListSSHKeys(ctx context.Context, f inventory.KeyFilter) (inventory.KeyPage, error)
+	GetSSHKey(ctx context.Context, id uuid.UUID) (inventory.SSHKey, error)
+	SetupGuide(ctx context.Context, from string) (inventory.Guide, error)
+	RequestKeyRemoval(ctx context.Context, a inventory.Actor, locationID uuid.UUID, confirmLastRootKey bool) (uuid.UUID, error)
+}
+
+// JobsService is the part of jobs.Queue the HTTP layer uses.
+type JobsService interface {
+	Get(ctx context.Context, id uuid.UUID) (jobs.View, error)
+	List(ctx context.Context, f jobs.ListFilter) ([]jobs.View, string, error)
+	Confirm(ctx context.Context, actor audit.Actor, by uuid.UUID, id uuid.UUID) error
+	Discard(ctx context.Context, actor audit.Actor, by uuid.UUID, id uuid.UUID) error
+}
+
+// ProviderCatalog lists the compiled-in providers (providers.Registry).
+type ProviderCatalog interface {
+	List() []providers.Descriptor
+}
+
 // Deps are the handler's dependencies, wired in cmd/alice.
 type Deps struct {
 	Health         HealthChecker
@@ -102,6 +137,9 @@ type Deps struct {
 	Setup          SetupService
 	Audit          AuditService
 	License        LicenseService
+	Inventory      InventoryService
+	Jobs           JobsService
+	Providers      ProviderCatalog
 	TrustedProxies []netip.Prefix
 	TestHandler    http.Handler // nil in release builds; mounted at "/test/" by the e2e build
 }
@@ -257,6 +295,10 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.tokenRoutes()...)
 	routes = append(routes, s.auditRoutes()...)
 	routes = append(routes, s.licenseRoutes()...)
+	routes = append(routes, s.providerRoutes()...)
+	routes = append(routes, s.targetRoutes()...)
+	routes = append(routes, s.sshKeyRoutes()...)
+	routes = append(routes, s.jobRoutes()...)
 	return routes
 }
 

@@ -17,8 +17,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/auth"
+	"alice/internal/inventory"
+	"alice/internal/jobs"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
+	"alice/internal/providers"
 	"alice/internal/rbac"
 	"alice/internal/setup"
 )
@@ -135,6 +138,30 @@ func TestFailMapsDomainErrors(t *testing.T) {
 		// Carry 2: the bare sentinels (without the typed error that carries the numbers).
 		{license.ErrTargetLimit, 409, "ALC-LIC-0008"},
 		{fmt.Errorf("add target: %w", license.ErrWrongInstallation), 422, "ALC-LIC-0003"},
+		{inventory.ErrNotFound, 404, "ALC-SYS-0001"},
+		{fmt.Errorf("create: %w", inventory.ErrDuplicateTarget), 409, "ALC-TGT-0001"},
+		{inventory.ErrVersionMismatch, 412, "ALC-SYS-0008"},
+		{inventory.ErrHostKeyUnconfirmed, 409, "ALC-TGT-0002"},
+		{inventory.ErrHostKeyStale, 409, "ALC-TGT-0003"},
+		{inventory.ErrHostKeyChanged, 409, "ALC-TGT-0004"},
+		{inventory.ErrHostKeyState, 409, "ALC-TGT-0005"},
+		{inventory.ErrOwnKeyProtected, 409, "ALC-KEY-0001"},
+		{inventory.ErrLastRootKey, 409, "ALC-KEY-0002"},
+		{inventory.ErrNotRemovable, 409, "ALC-KEY-0003"},
+		{inventory.ErrKeysManagedElsewhere, 409, "ALC-SSH-0008"},
+		{inventory.ErrNoPlatformKey, 503, "ALC-SYS-0002"},
+		{fmt.Errorf("remove: %w", inventory.ErrSSHDUnreadable), 409, "ALC-KEY-0004"},
+		{fmt.Errorf("enqueue: %w", inventory.ErrJobConflict), 409, "ALC-JOB-0005"},
+		{jobs.ErrNotFound, 404, "ALC-SYS-0001"},
+		{jobs.ErrNotWaiting, 409, "ALC-JOB-0001"},
+		{jobs.ErrBadCursor, 400, "ALC-SYS-0004"},
+		{fmt.Errorf("%w: %q", jobs.ErrUnknownType, "x"), 500, "ALC-JOB-0004"},
+		{fmt.Errorf("job: %w", providers.NewError("ssh.auth_failed", false, nil, nil)), 502, "ALC-SSH-0002"},
+		{providers.NewError("ssh.unreachable", true, nil, nil), 502, "ALC-SSH-0001"},
+		{providers.NewError("target.host_key_changed", false, nil, nil), 409, "ALC-TGT-0004"},
+		{providers.NewError("sshkey.verify_failed", false, nil, nil), 502, "ALC-KEY-0005"},
+		{providers.NewError("target.disabled", false, nil, nil), 409, "ALC-TGT-0006"},
+		{providers.NewError("no.such_reason", false, nil, nil), 500, "ALC-SYS-0003"},
 	}
 	for _, tc := range cases {
 		rec := failRecorder(t, tc.err, nil)
@@ -236,4 +263,31 @@ func TestFailMapsBareLicenseErrorsWithoutParams(t *testing.T) {
 	var raw map[string]map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
 	assert.Equal(t, map[string]any{"used": "5", "max": "5"}, raw["error"]["params"])
+}
+
+func TestFailPassesProviderParams(t *testing.T) {
+	err := providers.NewError("ssh.helper_refused", false, errors.New("helper said: secret text"), map[string]string{"helper_code": "PATH_NOT_ALLOWED"})
+	rec := failRecorder(t, err, nil)
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	var body map[string]map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "ALC-SSH-0006", body["error"]["code"])
+	assert.Equal(t, map[string]any{"helper_code": "PATH_NOT_ALLOWED"}, body["error"]["params"])
+	assert.NotContains(t, rec.Body.String(), "secret text", "a provider's cause is never shown")
+}
+
+func TestFailLogsUnknownProviderReasons(t *testing.T) {
+	var logs bytes.Buffer
+	rec := failRecorder(t, providers.NewError("no.such_reason", false, nil, nil), &logs)
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, logs.String(), "request failed")
+}
+
+func TestCodeForReason(t *testing.T) {
+	for _, ec := range AllErrorCodes() {
+		assert.Equal(t, ec, codeForReason(ec.Reason), ec.Reason)
+	}
+	assert.Equal(t, ErrUnexpected, codeForReason("no.such_reason"))
+	assert.Equal(t, ErrUnexpected, codeForReason(""))
+	assert.Equal(t, ErrLicenseLocked, codeForReason("license.locked"), "jobs cancelled in lock carry this reason")
 }

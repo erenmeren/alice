@@ -4,6 +4,8 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,11 +16,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 
 	"alice/internal/auth"
+	"alice/internal/inventory"
+	"alice/internal/providers"
 )
 
 // Session, CSRF and rate-limit suite (spec §25.3 R-01..R-10, §25.4 A-01..A-09).
@@ -315,6 +321,10 @@ func (s *stack) maxAuditSeq() int64 {
 
 func TestA06GETRoutesNeverChangeState(t *testing.T) {
 	s, c, admin := installed(t)
+	// One server (with its first job) and one discovered SSH key, so every GET of an item answers
+	// 200 with a real record (Phase 3, preflight D8).
+	ids := phase3Records(t, s, c)
+	ids["/api/v1/users/"] = admin.id
 	// Store an audit checkpoint first, so a GET that moved it would be caught.
 	requireStatus(t, c.do(http.MethodPost, "/api/v1/audit/verify", nil), http.StatusOK)
 	require.Equal(t, 1, s.countWhere("settings", "key = 'audit.checkpoint'"))
@@ -340,7 +350,17 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 			continue
 		}
 		gets++
-		path := strings.ReplaceAll(op.path, "{id}", admin.id)
+		path := op.path
+		if strings.Contains(path, "{id}") {
+			id := ""
+			for prefix, v := range ids {
+				if strings.HasPrefix(path, prefix) {
+					id = v
+				}
+			}
+			require.NotEmpty(t, id, "no record for %s", op.path)
+			path = strings.ReplaceAll(path, "{id}", id)
+		}
 		// The export is audited (SEC-075): exactly one audit.exported row is its only write.
 		wantAudit := 0
 		if op.path == "/api/v1/audit/export" {
@@ -359,6 +379,44 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 		history = s.rowsChecksum("audit_log", "true")
 	}
 	assert.GreaterOrEqual(t, gets, 10)
+}
+
+// phase3Records adds one server through the API (which queues its connection test) and stores one
+// discovered SSH key for it, and returns the IDs to substitute per path prefix.
+func phase3Records(t *testing.T, s *stack, c *client) map[string]string {
+	t.Helper()
+	rec := c.do(http.MethodPost, "/api/v1/targets", map[string]any{"name": "web-01", "host": "127.0.0.1", "port": 2222})
+	requireStatus(t, rec, http.StatusCreated)
+	var created struct {
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+		JobID string `json:"job_id"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
+	targetID := uuid.MustParse(created.Target.ID)
+
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	sshPub, err := ssh.NewPublicKey(pub)
+	require.NoError(t, err)
+	fp := ssh.FingerprintSHA256(sshPub)
+	_, err = s.inv.Reconcile(context.Background(), targetID, providers.DiscoveryResult{
+		SSHKeys: []providers.DiscoveredSSHKey{{OSUser: "deploy", FilePath: "/home/deploy/.ssh/authorized_keys", LineNo: 1,
+			PublicKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub))), Fingerprint: fp, KeyType: sshPub.Type(), Bits: 256,
+			Comment: "deploy@laptop"}},
+		SSHD:      providers.SSHDSummary{Read: true, AuthorizedKeysCommand: "none"},
+		ReadFiles: []string{"/home/deploy/.ssh/authorized_keys"},
+	})
+	require.NoError(t, err)
+	page, err := s.inv.ListSSHKeys(context.Background(), inventory.KeyFilter{TargetID: targetID})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	return map[string]string{
+		"/api/v1/targets/":  created.Target.ID,
+		"/api/v1/jobs/":     created.JobID,
+		"/api/v1/ssh-keys/": page.Items[0].ID.String(),
+	}
 }
 
 func TestA07NoCrossOriginResourceSharing(t *testing.T) {

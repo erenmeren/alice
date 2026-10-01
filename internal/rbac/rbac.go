@@ -89,6 +89,13 @@ const (
 	SettingsManage Permission = "settings.manage"
 	LicenseRead    Permission = "license.read"   // license status and history: Admin and Auditor (R3)
 	LicenseManage  Permission = "license.manage" // license upload: Admin with step-up (§25.1)
+
+	// Phase 3 (R37 item 12, §15.4).
+	TargetsManage    Permission = "targets.manage"    // add, change and remove servers; the platform key and setup snippets: Admin
+	HostKeysConfirm  Permission = "hostkeys.confirm"  // pin a server's first fingerprint: Admin in a browser session
+	HostKeysRepin    Permission = "hostkeys.repin"    // accept a changed fingerprint: Admin with step-up (SEC-080, F-32)
+	InventoryOperate Permission = "inventory.operate" // test connection, discovery, key removal: Admin and Operator
+	JobsConfirm      Permission = "jobs.confirm"      // run or discard work paused by the license: Admin (R29)
 )
 
 // Policy describes who may use a permission.
@@ -116,6 +123,12 @@ var policies = map[Permission]Policy{
 	SettingsManage: {Roles: []Role{Admin}, StepUp: true},
 	LicenseRead:    {Roles: []Role{Admin, Auditor}, TokenScope: ScopeRead},
 	LicenseManage:  {Roles: []Role{Admin}, StepUp: true},
+
+	TargetsManage:    {Roles: []Role{Admin}, TokenScope: ScopeOperate},
+	HostKeysConfirm:  {Roles: []Role{Admin}},
+	HostKeysRepin:    {Roles: []Role{Admin}, StepUp: true},
+	InventoryOperate: {Roles: []Role{Admin, Operator}, TokenScope: ScopeOperate},
+	JobsConfirm:      {Roles: []Role{Admin}},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.

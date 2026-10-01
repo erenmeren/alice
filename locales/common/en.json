@@ -38,6 +38,11 @@
         "title": "The request is too large.",
         "cause": "Alice accepts at most 1 MiB of data in one request.",
         "action": "Send less data at once, or use a smaller file."
+      },
+      "precondition_failed": {
+        "title": "Someone changed this item while you were editing it.",
+        "cause": "The item was changed after you opened it, so your change was not saved.",
+        "action": "Reload the page, check the current values and make your change again."
       }
     },
     "internal": {
@@ -229,6 +234,144 @@
         "title": "Your license allows {{max}} targets.",
         "cause": "{{used}} targets are in use, so no more can be added. Existing targets keep working.",
         "action": "Remove a target you no longer need, or ask your vendor to increase your license."
+      }
+    },
+    "target": {
+      "duplicate": {
+        "title": "A server with this name or address already exists.",
+        "cause": "Every server needs its own name, and the same address and port can be added only once.",
+        "action": "Choose another name, or open the server that already exists."
+      },
+      "host_key_unconfirmed": {
+        "title": "The server's fingerprint has not been confirmed yet.",
+        "cause": "Alice works with a server only after an administrator confirms that its fingerprint is the right one.",
+        "action": "Open the server, compare the fingerprint with the one the server shows, then confirm it."
+      },
+      "host_key_stale": {
+        "title": "This is not the fingerprint the server presented.",
+        "cause": "The server presented another fingerprint after the page was loaded, or the fingerprint was mistyped.",
+        "action": "Reload the page and compare the fingerprint shown now with the one on the server."
+      },
+      "host_key_changed": {
+        "title": "The server's identity has changed, so Alice stopped to keep your systems safe.",
+        "cause": "The server presented another fingerprint than the one you confirmed. This happens after a reinstall, but it can also mean that someone is impersonating the server.",
+        "action": "Ask your security team to confirm the change. Then an administrator can review the new fingerprint on the server's page."
+      },
+      "host_key_state": {
+        "title": "This fingerprint cannot be accepted right now.",
+        "cause": "A first fingerprint can be confirmed only while the server waits for confirmation, and a new one can be accepted only after the server's identity changed.",
+        "action": "Reload the server's page to see its current state."
+      },
+      "disabled": {
+        "title": "This server is disabled, so Alice does not work on it.",
+        "cause": "The server was disabled, so tasks for it are not run.",
+        "action": "Open the server to see why it is disabled, then test the connection again."
+      }
+    },
+    "ssh": {
+      "unreachable": {
+        "title": "Alice cannot reach the server.",
+        "cause": "The server is turned off, the address or port is wrong, or a firewall blocks the connection.",
+        "action": "Check that the server is running and that the Alice host can reach its SSH port, then test the connection again."
+      },
+      "auth_failed": {
+        "title": "The server refused Alice's key.",
+        "cause": "Alice's public key is missing from the alice-svc account on the server, or the account is locked.",
+        "action": "Run the preparation commands from the Servers page on the server again, then test the connection."
+      },
+      "timeout": {
+        "title": "The server took too long to answer.",
+        "cause": "The server or the network is very slow, or a command on the server did not finish in time.",
+        "action": "Try again later. If it keeps happening, check the load and the network of the server."
+      },
+      "helper_missing": {
+        "title": "The Alice account on this server is not allowed to run the helper.",
+        "cause": "alice-helper is not installed in /usr/local/libexec, or the sudoers file for alice-svc is missing or wrong.",
+        "action": "Run the preparation commands from the Servers page again as root on the server."
+      },
+      "helper_outdated": {
+        "title": "The alice-helper on this server is outdated.",
+        "cause": "The helper on the server is older than this version of Alice expects.",
+        "action": "Copy alice-helper from the current Alice bundle to the server and run the preparation commands again."
+      },
+      "helper_refused": {
+        "title": "The helper on the server refused the request.",
+        "cause": "The helper checks every request and refused this one, for example because a file is outside the places it may read or change.",
+        "action": "Scan the server again. If it keeps happening, contact support and quote the request ID."
+      },
+      "file_changed": {
+        "title": "The file changed while Alice was working. Please try again.",
+        "cause": "Someone or another program changed the authorized_keys file at the same time.",
+        "action": "Try again. Alice reads the file again and applies only its own change."
+      },
+      "keys_managed_elsewhere": {
+        "title": "This server gets its SSH keys from a program (AuthorizedKeysCommand), so Alice will not change keys here.",
+        "cause": "The SSH server asks another program for keys, so a change to a key file would not have the effect you expect.",
+        "action": "Manage the keys of this server in the system that provides them. Alice still lists the keys it finds in files."
+      },
+      "output_too_large": {
+        "title": "The server sent more data than Alice accepts.",
+        "cause": "A file or a command on the server produced an unusually large answer.",
+        "action": "Check the authorized_keys files and the SSH server settings on the server for unusually large content."
+      },
+      "protocol_error": {
+        "title": "Alice could not understand the server's answer.",
+        "cause": "The helper on the server answered in an unexpected way, possibly because another program replaced it.",
+        "action": "Install alice-helper again with the preparation commands, then test the connection."
+      }
+    },
+    "sshkey": {
+      "own_key_protected": {
+        "title": "Alice needs this key to connect to this server and will not remove it.",
+        "cause": "Removing it would lock Alice out of the server. Alice recognizes its key by the key itself, not by its comment.",
+        "action": "Leave this key in place. To stop managing the server, remove the server from Alice instead."
+      },
+      "last_root_key": {
+        "title": "This is the last key of the root account on this server.",
+        "cause": "Removing it leaves root without any key, which can lock your administrators out.",
+        "action": "Add another key for root first, or have an administrator confirm the removal on purpose."
+      },
+      "not_removable": {
+        "title": "Alice cannot change this key in this file.",
+        "cause": "The key is no longer in the file or was already removed, it is a certificate authority line that Alice only lists, or the file is larger than Alice reads (1 MiB).",
+        "action": "Scan the server again to see its current keys, and check the size of the file on the server."
+      },
+      "sshd_unreadable": {
+        "title": "Alice could not read the SSH server settings, so it will not change keys here.",
+        "cause": "The last scan could not read the SSH server settings for this server or this user, so Alice does not know which key files the SSH server uses.",
+        "action": "Check that sshd -T works on the server, scan the server again, then try again."
+      },
+      "verify_failed": {
+        "title": "Alice changed the key file but could not confirm the result.",
+        "cause": "After the change, the file on the server did not read back as expected. Alice kept a backup of the previous file and did not record the change.",
+        "action": "Check the authorized_keys file on the server and compare it with the backup that the task names, then scan the server again."
+      }
+    },
+    "job": {
+      "not_waiting": {
+        "title": "This task is not waiting for a confirmation.",
+        "cause": "It already ran, was discarded, or was not paused because of the license.",
+        "action": "Reload the page to see the current state of the task."
+      },
+      "lease_expired": {
+        "title": "The task was interrupted and will run again.",
+        "cause": "Alice stopped or lost its database connection while the task was running.",
+        "action": "Nothing to do: Alice runs the task again. If this keeps happening, check why Alice restarts."
+      },
+      "tampered": {
+        "title": "Alice refused to run a task that was changed outside Alice.",
+        "cause": "The stored task no longer matches its protection, which means that someone edited the database directly.",
+        "action": "Check who has access to the database, then start the task again from its page."
+      },
+      "unknown_type": {
+        "title": "Alice does not know this kind of task.",
+        "cause": "The task was created by another version of Alice.",
+        "action": "Make sure that only one version of Alice runs against this database."
+      },
+      "conflict": {
+        "title": "The same task is already waiting with other options.",
+        "cause": "A task of this kind is already queued for this item, and it was requested with different options.",
+        "action": "Wait until the queued task has finished, then try again."
       }
     }
   },
