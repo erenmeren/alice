@@ -411,3 +411,48 @@ func TestRecordRechecksUnderTheLock(t *testing.T) {
 	_, err = issuer.LockLedger(filepath.Join(t.TempDir(), "missing", issuer.LedgerFile))
 	assert.Error(t, err)
 }
+
+// Files the vendor's account may not read or write are reported, never skipped.
+func TestPermissionFaults(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores file permissions")
+	}
+	k := openTestKey(t)
+
+	unreadable := filepath.Join(t.TempDir(), issuer.LedgerFile)
+	require.NoError(t, issuer.AppendLedger(unreadable, k, entry("LIC-1", "", now)))
+	require.NoError(t, os.Chmod(unreadable, 0o000))
+	_, err := issuer.VerifyLedgerHead(unreadable, k.Public())
+	require.ErrorContains(t, err, "read the ledger")
+
+	readOnly := filepath.Join(t.TempDir(), issuer.LedgerFile)
+	require.NoError(t, issuer.AppendLedger(readOnly, k, entry("LIC-1", "", now)))
+	require.NoError(t, os.Chmod(readOnly, 0o400))
+	require.Error(t, issuer.AppendLedger(readOnly, k, entry("LIC-2", "", now)))
+	n, err := issuer.VerifyLedger(readOnly, k.Public())
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "nothing was appended")
+
+	dir := t.TempDir()
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	_, _, err = issuer.WriteKeyPair(dir, "vk-2026-01", []byte(testWords), fastKDF)
+	require.Error(t, err, "the key directory is not writable")
+	assert.NoFileExists(t, filepath.Join(dir, issuer.PublicKeyFile))
+}
+
+func TestLedgerChecksNeedAValidKeyAndLedger(t *testing.T) {
+	k := openTestKey(t)
+	_, err := issuer.VerifyLedgerHead(filepath.Join(t.TempDir(), issuer.LedgerFile), nil)
+	require.ErrorIs(t, err, issuer.ErrLedgerBroken)
+
+	broken := filepath.Join(t.TempDir(), issuer.LedgerFile)
+	require.NoError(t, os.WriteFile(broken, []byte("not,a,ledger\n"), 0o600))
+	l, err := issuer.LockLedger(broken)
+	require.NoError(t, err)
+	defer func() { _ = l.Unlock() }()
+	p, err := issuer.BuildPayload(issuer.Request{Installation: license.NewInstallationID(), Customer: "C", Targets: 1}, now)
+	require.NoError(t, err)
+	_, err = l.Record(k, p, []byte("file"), false)
+	require.ErrorIs(t, err, issuer.ErrLedgerBroken, "a broken ledger is never extended")
+}

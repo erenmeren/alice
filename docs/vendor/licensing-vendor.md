@@ -1,100 +1,165 @@
-# Licensing: vendor guide
+# Licensing: vendor guide (not shipped to customers)
 
-This guide is for the Alice vendor (the person who signs licenses). Customers never see it and
-never get `licensectl`. Spec references: §16.7, §19.2, R8. Task 22 of Phase 2 completes this guide;
-this version holds the rules that must be followed from the first key on.
+This guide is for the Alice vendor, the person who signs licenses. It covers `licensectl`, the signing key, the
+issuance ledger, correction licenses and key rotation (spec §16.7, §19.2, R8, R36). Customers never see this guide
+and never get `licensectl`. `licensectl` never uses the network.
 
 ## Rules that never change
 
-- The production license signing key is created and used **only on an offline machine** (a freshly
-  installed machine or live USB with no network). It is never on a laptop connected to the
-  internet, in CI, in cloud storage, in a password manager sync, or in this repository.
-- No script, test, agent or CI job ever creates, stores or prints the production key or its
-  passphrase. Tests use throw-away keys in temporary directories.
+- The production license signing key is created and used **only on an offline machine** (a freshly installed
+  laptop without network, or a live USB system). It is never on a computer connected to the internet, in CI, in
+  cloud storage, in e-mail, in a password manager that syncs, or in this repository.
+- No script, test, assistant or CI job ever creates, stores or prints the production key or its passphrase. The
+  repository's tests use throw-away keys in temporary directories, and the test key is trusted only by the e2e
+  build.
 - Only the **public** key goes into Alice builds, through `internal/license/keys/production.json`.
+- Until that file lists a key, release builds accept **no** license (every upload is refused as an unknown key;
+  the evaluation still works) and `make release-keycheck` fails.
 
-## 1. Create the signing key (once per key)
+## Build licensectl
 
-On the offline machine:
+On a trusted build machine: `make licensectl` (or `go build -trimpath -o bin/licensectl ./cmd/licensectl`) gives
+`bin/licensectl`. Copy the binary to the offline machine with a clean USB stick. `licensectl` runs on Linux and
+macOS (the ledger lock uses `flock`); Windows is not supported. `licensectl help` lists the commands.
 
-```
-make licensectl                       # or: go build -trimpath -o bin/licensectl ./cmd/licensectl
-bin/licensectl keygen --out ~/alice-vendor --key-id vk-2026-01
-```
+## 1. Create the signing key (once per key, offline)
 
-- Choose a passphrase of **at least 6 random Diceware words** (licensectl refuses fewer than 6 words
-  or 24 characters). It is read from the terminal without echo, asked twice, and never printed.
-- The private key file `alice-license-private.pem` is encrypted with Argon2id (256 MiB, 4 passes)
-  and AES-256-GCM, written with mode 0600. `keygen` never overwrites an existing key.
-- Write down the printed **fingerprint** (`SHA256:…`). The release process compares the embedded
-  key with this recorded fingerprint.
+1. Choose a passphrase of **at least 6 random Diceware words**, for example with physical dice and the English
+   Diceware list. `licensectl` refuses fewer than 6 words or fewer than 24 characters. Use only lower-case ASCII
+   letters and spaces: the passphrase is used byte for byte, so an accented letter typed on another keyboard or
+   operating system can produce different bytes and the key would not open. Write the passphrase on paper.
+2. Run:
+
+       bin/licensectl keygen --out /media/offline/alice-vendor --key-id vk-2026-01
+
+   and type the passphrase twice (it is not shown and never printed).
+   Expected: `Private key (encrypted): …/alice-license-private.pem`, `Public key: …/alice-license-public.pem`,
+   `Key ID: vk-2026-01` and `Fingerprint: SHA256:…`. Write the fingerprint on the paper too.
+
+   The private key file is encrypted with Argon2id (256 MiB, 4 passes) and AES-256-GCM and written with mode 0600.
+   `keygen` never overwrites an existing key. Key IDs have the form `vk-YYYY-NN`; IDs starting with `vk-test-` are
+   reserved for test keys and are refused in a production key set.
 
 ### Backups (R8)
 
-1. Copy `alice-license-private.pem` to **two hardware-encrypted USB drives**. Keep one in a
-   fireproof safe on the vendor premises and the other in a second place (bank safe deposit box or
-   notary).
-2. Make a **paper backup**: print the (encrypted) private key file and keep it in a safe.
-3. Write the **passphrase on paper** and store it **separately** from the drives and the printout.
-4. Check that each drive's copy opens: run `licensectl issue --key <copy> …` up to the summary
-   and answer `no` (nothing is signed and nothing is written).
+3. Copy the whole `alice-vendor` directory (private key, public key, and later the ledger) to **two
+   hardware-encrypted USB drives**.
+4. Print the private key file `alice-license-private.pem` (it is encrypted) on paper as the third copy.
+5. Store USB drive 1 in the fireproof safe on your premises; USB drive 2 and the printout in a bank safe deposit
+   box or with a notary; the passphrase paper **separately** from both drives. When a second trusted person
+   exists, give them a sealed copy of the passphrase.
+6. Check that each drive's copy opens: run `licensectl issue --key <copy> …` up to the summary and answer `no`
+   (nothing is signed and nothing is written).
 
-If the key is lost, no new licenses can be issued for shipped binaries. If it leaks, anyone can
-forge licenses: follow "Key compromise" below at once.
+If the key is lost, no new licenses can be issued that shipped builds accept. If it leaks, anyone can forge
+licenses: follow "Key compromise" below at once.
 
-## 2. Put the public key into Alice
+## 2. Put the public key into Alice builds (once per key)
 
-```
-bin/licensectl keyset --pub ~/alice-vendor/alice-license-public.pem
-```
+1. On the offline machine:
 
-Copy the printed `{"keys": [...]}` entry into `internal/license/keys/production.json`, compare the
-fingerprint with the recorded one, commit, and run `make release-keycheck` (it fails while the file
-lists no key, and it refuses test keys such as `vk-test-01`).
+       bin/licensectl keyset --pub /media/offline/alice-vendor/alice-license-public.pem
 
-## 3. Issue, inspect and verify licenses
+   Expected: a JSON block `{"keys": [{"key_id": "vk-2026-01", "public_key": "…", "status": "active"}]}` and
+   `Fingerprint: SHA256:…`, the same fingerprint as on your paper.
+2. Carry only that output (the public key; it is not secret) to your development machine and write it into
+   `internal/license/keys/production.json`, replacing `{"keys": []}`. Commit it yourself, for example
+   `git commit -m "chore(license): embed vendor license key vk-2026-01"`.
+3. Run `make release-keycheck`.
+   Expected: `ok  alice/internal/license`. It fails while the file lists no key, and it refuses a test key such as
+   `vk-test-01`. The release pipeline runs it.
+4. After building a release image, run `alice license keys` in it and compare the fingerprint with your paper.
+   Publish the fingerprint on your website and in license emails (R20), so customers can compare it too.
 
-```
-bin/licensectl issue --key ~/alice-vendor/alice-license-private.pem \
-    --installation ALICE-7F3K-92QD-M4XT-A81P --customer "Example Bank A.S." --targets 100 \
-    --out alice-license-examplebank-20261001.alicelic
-bin/licensectl inspect alice-license-examplebank-20261001.alicelic
-bin/licensectl verify --pub ~/alice-vendor/alice-license-public.pem alice-license-examplebank-20261001.alicelic
-```
+## 3. Issue a license
 
-- A mistyped Installation ID is refused (it ends with a check character) before the key is opened.
-- `issue` asks for the passphrase, shows a summary and signs only after you type `yes`.
-- Customer names are normalized to Unicode NFC before signing.
-- `issue` refuses a private key file that others can read or write (run `chmod 600` on it).
-- Every license is appended to the ledger `issued.csv` next to the key. Each row is chained to the
-  previous one and signed with the license key, so an edited, removed or reordered row is detected.
-  `issue` refuses to sign while the ledger does not verify. Two `licensectl issue` runs on the same
-  machine take turns (a lock file `issued.csv.lock` sits next to the ledger), and the checks are
-  repeated just before the row is written.
-- **The chain alone does not detect rows cut from the end of the ledger, or an older backup of the
-  ledger put back**: both still verify. After every issue, `licensectl` prints the ledger row count
-  and the chain head. Write both down (paper log kept with the key) and compare them with the output
-  of `licensectl ledger-verify --pub ~/alice-vendor/alice-license-public.pem` before the next issue.
-  A missing ledger file is reported as an error, not as an empty ledger. Back the ledger up with the
-  key.
+Checklist: confirm the paid order; check the Installation ID the customer sent; issue; verify; record the ledger
+head; send.
 
-### Correction licenses (R7)
+1. Mount USB drive 1 on the offline machine.
+2. Run:
 
-Use `--replaces <license_id>` (and `--from` for an earlier start, for example after a customer clock
-jump). The replaced license must be in the ledger and belong to the same installation. A correction that ends **earlier** than the license
-it replaces is refused unless you add `--shorten`; replacing licenses in a cycle is always refused,
-and a license ID is never issued twice.
+       bin/licensectl issue --key /media/offline/alice-vendor/alice-license-private.pem \
+           --installation ALICE-7F3K-9Q2M-XD41-B8TC --customer "Example Bank A.S." --targets 100 \
+           --out alice-license-examplebank-20261001.alicelic
 
-## Key compromise
+   Options: `--from 2026-10-01` (first valid day; default today; at most one day in the past except for a
+   correction; for an early renewal use the old expiry date), `--months 12` (1 to 60), `--features a,b` (unused in
+   v1), `--license-id` (default `LIC-<year>-<6 digits>`), `--ledger` (default `issued.csv` next to the key).
+3. Type the passphrase, read the summary, type `yes`.
+   Expected: `Written: …`, `SHA-256: …`, `Ledger: …/issued.csv`, `Ledger rows: N` and `Chain head: …`.
+4. **Write the ledger rows and the chain head in the paper log** kept with the key (see "The ledger").
+5. `bin/licensectl verify --pub /media/offline/alice-vendor/alice-license-public.pem alice-license-examplebank-20261001.alicelic`
+   Expected: `OK`.
+6. Copy the license file to a clean USB stick and email it to the customer together with the key fingerprint.
 
-If the private key or its passphrase may have leaked:
+`licensectl` refuses before anything is signed: a mistyped Installation ID (it ends with a check character, so a
+wrong or swapped character is detected; lower case, spaces, `O` for `0` and `I`/`L` for `1` are corrected), an
+existing `--out` file, a private key file that others can read or write (run `chmod 600` on it), and a ledger that
+does not verify. Customer names and other text are normalized to Unicode NFC before signing.
+`licensectl inspect FILE` shows what a license file says without checking its signature; text that could control
+the terminal is shown quoted.
 
-1. Create a new key with the next key ID (`vk-YYYY-NN`) as in step 1.
-2. In the next release, mark the leaked key `"status": "revoked"` in
-   `internal/license/keys/production.json` **with no `revoked_from` cutoff**. `issued_at` is chosen
-   by whoever signs, so an attacker holding the key can backdate a license before any cutoff; only a
-   revocation without a cutoff rejects every license signed with that key.
-3. Reissue every customer's license under the new key, free of charge, and send them with the
-   release that revokes the old key.
+## 4. Correction licenses (R7)
 
-`revoked_from` (a cutoff) is only for retiring a key that was **not** compromised.
+Use `--replaces <license ID>` when a customer's clock jumped, the customer name was wrong, or targets were added
+mid-term. A correction may start earlier than one day ago (its issue date is then set to its start date), Alice
+accepts it even though it is older than the installed license, and uploading it ends a held clock jump at once.
+
+- The replaced license must be in **this key's ledger** and belong to the **same installation**.
+- A correction that ends **earlier** than the license it replaces is refused unless you add `--shorten`. Use it
+  only when the customer agreed to a shorter term: Alice uses the correction in place of the replaced license.
+- Replacing licenses in a cycle is refused, and a license ID is never issued twice.
+
+## 5. The ledger
+
+`issued.csv` next to the key records every license: ID, customer, installation, dates, targets, replaced license
+and the SHA-256 of the file. Every row is chained to the previous one (SHA-256) and signed with the license key, so
+an edited, removed or reordered row is detected:
+
+    bin/licensectl ledger-verify --pub /media/offline/alice-vendor/alice-license-public.pem
+
+Expected: `Ledger OK: N licenses` and `Chain head: …`. A missing ledger file is an error, never an empty ledger.
+
+- **The chain cannot detect rows cut from the end, or an older copy of the ledger put back**: both still verify.
+  That is why you write the row count and the chain head down after every issue. Before the next issue, run
+  `ledger-verify` and compare both values with the last line of the paper log. If they differ, stop and find out
+  why before signing anything.
+- Two `licensectl issue` runs on the same machine take turns: a lock file `issued.csv.lock` sits next to the
+  ledger, and the checks are repeated under the lock just before the row is written. Do not run `ledger-verify`
+  while an `issue` is in progress (it reads without the lock and can report a half-written row).
+- Copy the ledger to both USB drives after every issue, and compare the two copies during the yearly recovery
+  test.
+
+## 6. Yearly recovery test
+
+Once a year, on a clean offline machine: copy the key from USB drive 2, open it with the passphrase from the paper,
+issue a test license for a test installation with `--customer "Recovery test"` and a separate `--ledger` file,
+and check it with `licensectl verify`. Compare the ledgers on both drives (`ledger-verify` on each: the same row
+count and chain head as the paper log). Record the date in the paper log.
+
+## 7. Key rotation
+
+1. Create the next key (`vk-YYYY-NN`) ahead of time in its own directory, as in step 1, with its own backups.
+2. Add it to `production.json` (both keys `"active"`) at least one release before you sign with it, so customers
+   who update late already trust it.
+3. Every key has **its own ledger** (`issued.csv` next to that key). A correction can only replace a license from
+   the same key's ledger: to replace a license signed with an older key, issue a normal license with the new key
+   (not `--replaces`).
+4. Remove an old key, or mark it `"revoked"` with a `"revoked_from"` cutoff (the first issue date no longer
+   trusted), only after every license signed with it has expired or been reissued. A cutoff is only for retiring
+   a key that was **not** compromised.
+
+## 8. Key compromise
+
+If the private key **or** its passphrase may have leaked:
+
+1. Create a new key offline with the next key ID, as in step 1.
+2. Ship an emergency release whose `production.json` adds the new key and marks the leaked key
+   `"status": "revoked"` **with no `revoked_from` cutoff**. `issued_at` is chosen by whoever signs, so an attacker
+   holding the key can backdate a forged license to before any cutoff; only a revocation without a cutoff rejects
+   every license signed with that key (a test proves this).
+3. Reissue every customer's active license with the new key, free of charge, and send them with the release that
+   revokes the old key. Customers see "This license was signed with a key that is no longer trusted." until they
+   upload the new file.
+4. Notify customers (spec §17.4) and start a new ledger and paper log for the new key.

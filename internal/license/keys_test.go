@@ -180,3 +180,29 @@ func TestVerifyWithMalformedKeyIsUnknownKey(t *testing.T) {
 		assert.ErrorIs(t, err, license.ErrUnknownKey)
 	}
 }
+
+// Task 22 ruling: after a key compromise the vendor revokes the key with no cutoff, because
+// whoever holds the key chooses issued_at. A cutoff would still trust a forged license that
+// is backdated before it; no cutoff refuses it.
+func TestCompromisedKeyRevokedWithoutCutoffRejectsBackdatedLicenses(t *testing.T) {
+	compromisedAt := t0.AddDate(0, 6, 0)
+	p := licensetest.Payload(testInstallation, compromisedAt, compromisedAt.AddDate(1, 0, 0), 100000)
+	p.IssuedAt = t0.AddDate(-1, 0, 0) // backdated by the attacker
+	p.ValidFrom = p.IssuedAt
+	forged := licensetest.Sign(p)
+	key := license.PublicKey{ID: licensetest.KeyID, Key: licensetest.PublicKey(), Status: license.KeyRevoked}
+
+	withCutoff := key
+	withCutoff.RevokedFrom = compromisedAt
+	_, err := license.Check(forged, license.NewKeySet(withCutoff))
+	require.NoError(t, err, "a cutoff cannot stop a backdated forgery")
+
+	_, err = license.Check(forged, license.NewKeySet(key))
+	require.ErrorIs(t, err, license.ErrRevokedKey)
+}
+
+func TestKeySetRejectsAMalformedCutoff(t *testing.T) {
+	_, err := license.ParseKeySet([]byte(`{"keys":[{"key_id":"vk-2025-01","public_key":"` +
+		base64.StdEncoding.EncodeToString(otherKey.Public().(ed25519.PublicKey)) + `","status":"revoked","revoked_from":"yesterday"}]}`))
+	require.ErrorContains(t, err, "revoked_from")
+}

@@ -33,4 +33,7 @@ func TestCanonicalPayloadIsRFC8785(t *testing.T) {
 		`"max_targets":100,"replaces":"LIC-2026-000100","valid_from":"2026-09-29T00:00:00Z","valid_until":"2027-09-29T00:00:00Z"}`
 	assert.Equal(t, want, string(license.CanonicalPayload(p)))
 	assert.Equal(t, "ALICE-LICENSE-v1\n"+want, string(license.SignedBytes(p)))
+
+	p.Customer = "a\bb\fc\rd\u001f"
+	assert.Contains(t, string(license.CanonicalPayload(p)), `"customer":"a\bb\fc\rd\u001f"`, "the short escapes of RFC 8785")
 }

@@ -1,0 +1,11 @@
+{
+  "alice/internal/license": 95,
+  "alice/internal/license/issuer": 93,
+  "alice/internal/rbac": 95,
+  "alice/internal/auth": 84,
+  "alice/internal/auth/ratelimit": 95,
+  "alice/internal/audit": 89,
+  "alice/internal/secrets": 81,
+  "alice/internal/notify": 80,
+  "alice/internal/jobs": 80
+}

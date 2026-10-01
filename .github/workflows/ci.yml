@@ -21,7 +21,7 @@ jobs:
       - run: make tools
       - run: make lint
       - run: make test
-      - run: make test-integration
+      - run: make coverage
       - run: make i18n-check
       - run: govulncheck ./...
       # build embeds the web UI and fails if testify is linked into the binary

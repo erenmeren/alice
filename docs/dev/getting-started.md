@@ -38,7 +38,7 @@ creates when its data volume is new. Run `make reset` once (this deletes the dev
 | `make test-integration` | Go integration tests (starts PostgreSQL in Docker) |
 | `make web-test` | Web unit tests (Vitest) |
 | `make up` / `make down` | Start / stop the release build of the stack (data is kept) |
-| `make reset` | Delete the development database and keys and start again (asks nothing; development only) |
+| `make reset` | Delete the development database, keys and license state (a new Installation ID) and start again (asks nothing; development only) |
 | `make setup-token` | Print a new one-time setup code for the wizard |
 | `make e2e-up` | Start the **e2e build** of the stack (adds test-only `/test/*` endpoints) |
 | `make e2e` | Browser tests against the e2e build (run `make e2e-up` first) |
@@ -68,12 +68,25 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env exec alice /u
 
 ### The e2e build
 
-`make e2e-up` builds the image with the Go build tag `e2e` (`deploy/docker-compose.e2e.yml`). Only that
-build serves `GET/POST /test/clock` (read or move the server clock forward), `POST /test/reset` (empty
-all tables) and `POST /test/setup-token` (issue a setup code). Release images are built without the tag;
-a unit test in `cmd/alice` fails if the release build ever contains a test endpoint or the demo clock.
-The e2e build reports its version with a `+e2e` suffix and logs a warning at startup. Never run it
-for real data.
+`make e2e-up` builds the image with the Go build tags `e2e testlicense` (`deploy/docker-compose.e2e.yml`). Only
+that build serves `GET/POST /test/clock` (read the clock, move it forward or back by `advance_seconds`, at most
+10 years either way, or jump only the wall clock with `"wall_only": true`; the license evaluation and the email
+sender run right after every move), `POST /test/reset` (empty all tables, the license time record and the
+mailbox, then create a new installation), `POST /test/setup-token`, `POST /test/license` (a license for this
+installation signed with the test key, which only this build trusts; fields `valid_days`, `max_targets`,
+`valid_from`, `replaces`, …) and `GET /test/mail` (emails the build would have sent). Release images are built
+without the tags; unit tests in `cmd/alice` fail if the release build has a test endpoint, the demo clock, the
+test key or the test signer. The e2e build reports its version with a `+e2e` suffix and logs a warning at
+startup. A build with `testlicense` but without `e2e` logs "test license key trusted" and reports `+testlicense`.
+Never run either for real data.
+
+The e2e stack uses the same development database as `make up`, and every Playwright run empties it. `make up`
+rebuilds the Go layer on every run because the build time is passed to the image (it is the floor of the license
+clock, L-53).
+
+The release key gate `make release-keycheck` fails until the vendor's public key is committed to
+`internal/license/keys/production.json` (see `docs/vendor/licensing-vendor.md`); it is not part of `make ci`.
+`make coverage` runs every Go test with the integration tag under coverage and enforces `coverage-floors.json`.
 
 ## Configuration
 
@@ -86,6 +99,8 @@ Alice reads these environment variables (`internal/platform/config`):
 | `ALICE_LISTEN_ADDR` | `:8443` | Public HTTPS listener |
 | `ALICE_HEALTH_ADDR` | `127.0.0.1:8081` | Container-local plain HTTP listener for `/livez` and `/healthz` |
 | `ALICE_KEYS_DIR` | `/opt/alice/keys` | Directory for the HTTPS certificate and the master key (`master.key`, mode 0400) |
+| `ALICE_STATE_DIR` | `/opt/alice/state` | Directory for the license time record (`hwm.dat`); the `alice-state` volume |
+| `ALICE_SMTP_HOST`, `_PORT`, `_FROM`, `_USERNAME`, `_PASSWORD_FILE`, `_TLS`, `_CA_FILE` | empty | Email for license warnings; see `docs/operator-guide.md#email` |
 | `ALICE_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 | `ALICE_TLS_HOSTS` | empty | Extra host names or IPs for the temporary certificate, comma-separated |
 | `ALICE_TRUSTED_PROXIES` | empty | Comma-separated IPs or CIDRs of reverse proxies whose `X-Forwarded-For` is believed. Empty means the header is ignored. |

@@ -3,6 +3,7 @@ package license_test
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -135,6 +136,10 @@ func TestParseRejectsMalformedFiles(t *testing.T) {
 		"Kelvin sign key":         {replaceOnce(t, raw, `"key_id"`, "\"\u212aey_id\""), "fields"},
 		"long s key":              {replaceOnce(t, raw, `"signature"`, "\"\u017fignature\""), "fields"},
 		"deeply nested features":  {replaceOnce(t, raw, `"features": []`, `"features": [[[["x"]]]]`), "too_deep"},
+		"no payload":              {[]byte(`{"format":1,"key_id":"vk-2026-01","signature":"AA"}`), "missing_field"},
+		"null key id":             {replaceOnce(t, raw, `"key_id": "vk-2026-01"`, `"key_id": null`), "fields"},
+		"negative max_targets":    {replaceOnce(t, raw, `"max_targets": 10`, `"max_targets": -1`), "max_targets"},
+		"absurd inner format":     {replaceOnce(t, raw, `"format": 1,`+"\n    \"installation_id\"", `"format": 1001,`+"\n    \"installation_id\""), "format"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) { requireInvalid(t, tc.raw, tc.problem) })
@@ -239,4 +244,15 @@ func TestReplacesRoundTrips(t *testing.T) {
 	f, err := license.ParseFile(encodeSigned(t, p))
 	require.NoError(t, err)
 	assert.Equal(t, p, f.Payload)
+}
+
+// Some encoders pad base64; a padded signature is the same signature.
+func TestParseAcceptsAPaddedSignature(t *testing.T) {
+	raw := encodeSigned(t, samplePayload(t))
+	f, err := license.ParseFile(raw)
+	require.NoError(t, err)
+	padded := bytes.Replace(raw, []byte(base64.RawURLEncoding.EncodeToString(f.Signature)), []byte(base64.URLEncoding.EncodeToString(f.Signature)), 1)
+	g, err := license.ParseFile(padded)
+	require.NoError(t, err)
+	assert.Equal(t, f.Signature, g.Signature)
 }

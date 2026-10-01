@@ -13,6 +13,8 @@ This guide walks you through the Alice setup wizard. Allow 10 minutes.
   run `sudo docker compose exec alice /usr/local/bin/alice setup-token --reset` in the Alice directory. The code
   looks like `K7QX2M-9TPD4R-WB5H8N-3VZC6A` and stops working as soon as the administrator exists. Creating a new
   code makes the previous one invalid.
+- Optional: a license file from your vendor. Without one, start the 30-day evaluation and add the license later on
+  the **License** page ([licensing.md](licensing.md)).
 
 ## Steps
 
@@ -38,14 +40,18 @@ This guide walks you through the Alice setup wizard. Allow 10 minutes.
 7. Type the recovery passphrase twice, tick **I stored the passphrase safely** and choose **Save passphrase**.
    If more than five minutes passed since you last typed a code, Alice first asks for a new 6-digit code
    (**Confirm it's you**).
+   Expected: **Add a license**, with your Installation ID.
+8. Either upload the license file from your vendor (**Check the file**, then **Install license**), or choose
+   **Start 30-day evaluation (up to 5 targets)**. The evaluation has been running since Alice was installed.
    Expected: **Alice is ready**.
-8. Choose **Go to the dashboard**. Here too, Alice may ask for a new 6-digit code if more than five minutes
+9. Choose **Go to the dashboard**. Here too, Alice may ask for a new 6-digit code if more than five minutes
    passed.
-   Expected: the home page **Welcome, <your name>**.
+   Expected: the home page **Welcome, <your name>**, with a blue evaluation banner if you started the evaluation.
 
 If you close the browser after step 6, sign in normally (password, then the code from your app). Alice shows a
-red banner **Finish setting up: choose a recovery passphrase.** until you complete step 7, and
-**Finish setting up: open the setup wizard to confirm the last step.** until you complete step 8. The banner
+red banner **Finish setting up: choose a recovery passphrase.** until you complete step 7,
+**Finish setting up: add a license or start the evaluation.** until you complete step 8, and
+**Finish setting up: open the setup wizard to confirm the last step.** until you complete step 9. The banner
 links back to the wizard.
 
 ## If something goes wrong

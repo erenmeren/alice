@@ -24,6 +24,27 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   the configuration is wrong, or (development) a Phase 0 database volume lacks the new `alice_app` role: run
   `make reset`.
 
+## License messages
+
+- **"The server clock changed unexpectedly …"** The server's clock is behind the latest time Alice has seen. Alice
+  keeps using the later time (and keeps counting while the clock is behind), so nothing is extended or locked
+  because of it. Correct the server time (NTP). The warning is recorded in the audit log once a day
+  (`clock.rollback_detected`).
+- **"The server clock jumped forward by N days"** Alice keeps the previous time for 24 hours. If the new time is
+  wrong, correct it (the warning then ends); otherwise wait, or ask the vendor for a correction license, which
+  accepts the new time at once.
+- **"License data was changed outside Alice"** A stored license file no longer matches its signature (the database
+  was edited or damaged). Alice ignores it. Upload the license file from the vendor again.
+- **Everyone sees "The evaluation period has ended" or "License expired"** An administrator uploads a license on
+  the **License** page; everything works again at once.
+- **Every upload says "This license was issued with a key this version of Alice does not know."** If this happens
+  with every file from your vendor, the build has no vendor key (`alice license keys` says so): install the
+  vendor's release build.
+- **No warning emails arrive.** Check `ALICE_SMTP_*` ([operator-guide.md](operator-guide.md#email)) and that the
+  administrators have an email address on **Users**. The container log shows a reason code for each failed attempt.
+- **Alice logs "this build embeds no license verification key".** A development or pre-release build: only the
+  evaluation works. See `alice license keys`.
+
 ## ALC-SYS-0001: Not found
 
 **Meaning.** The requested API path does not exist (HTTP 404).

@@ -114,10 +114,24 @@ chain.
   example in a ticket) from time to time: a later fingerprint that does not continue from it shows that entries
   were removed. Syslog forwarding and a daily automatic check arrive in a later release.
 
+## License
+
+**License** (administrators and auditors) shows the Installation ID with **Copy**, the state ("Evaluation",
+"Evaluation ended", "Active", "Expired, grace period" or "Expired, locked"), "Valid until <date>, N targets", how many targets
+are in use, a license that starts later, the uploaded licenses and the history. Administrators upload a license
+under **Upload a license**: **Check the file**, read **Confirm the license**, then **Install license** (a new
+6-digit code may be asked first). Every upload, refused or accepted, is recorded in the audit log. The full guide,
+including what lock mode does and how clock changes are handled, is [licensing.md](licensing.md).
+
+License banners appear at the top of every page: the evaluation, the grace period and lock mode for everyone;
+warnings 60/30/14/7/1 days before the end, clock problems, damaged license data, a license that starts later and
+the target limit for administrators only. Administrators with an email address also get the warnings by email when
+the server operator has set up email ([operator-guide.md](operator-guide.md#email)).
+
 ## For auditors
 
 Auditors sign in like everyone else (password and authenticator app). They see **Home**, **Audit log**,
-**API tokens** and **My account**, and no button that changes anything except their own password, recovery codes,
+**License** (read only), **API tokens** and **My account**, and no button that changes anything except their own password, recovery codes,
 language and read-only API tokens. On **Audit log** they can filter, **Verify integrity** and export. A read-only
 API token lets a script fetch `GET /api/v1/audit` or `GET /api/v1/audit/export?format=json` for regular
 collection.

@@ -116,6 +116,7 @@ Coverage gates (advisory then enforced from Phase 2): Go statement coverage 80% 
 - State names: `EVAL`, `EVAL_EXPIRED`, `ACTIVE`, `WARN(n)`, `EXPIRED_GRACE(n)` (n=1..7), `LOCK`.
 - Rule used by the tests (R25): `ACTIVE` while now < E; `EXPIRED_GRACE` while E <= now < E+168h (red banner, everything works); `LOCK` when now >= E+168h. `EXPIRED_GRACE(n)` is the n-th 24-hour period after E (n = 1..7). Warnings at 60/30/14/7/1 days remaining are computed from E.
 - Baseline: valid license, `max_targets=10`, 4 targets, installation ID matches, HWM store empty.
+- Phase 2 status codes and names follow R36: `license.locked` is 403 (`ALC-LIC-0001`), the target limit 409 (`ALC-LIC-0008`); an unknown signing key has its own message (`ALC-LIC-0004`, R36 addendum c); banner severities follow §19.3 (R36 addendum d); grace day n follows L-22 (R36 item 11).
 
 ### 23.2 Evaluation mode
 

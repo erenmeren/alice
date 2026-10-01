@@ -70,7 +70,7 @@ down: ## Stop the stack (data volumes are kept)
 	$(COMPOSE) down
 
 .PHONY: reset
-reset: ## DELETE local data (database and key volumes) and start a fresh stack
+reset: ## DELETE local data (database, key and state volumes) and start a fresh stack
 	$(COMPOSE) down -v
 	$(MAKE) up
 
@@ -137,7 +137,7 @@ image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
 	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:$(TRIVY_VERSION) image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed alice:dev
 
 .PHONY: ci
-ci: lint test test-integration build i18n-check web-lint web-test vuln secrets-scan fs-scan e2e-up hardening-check e2e image-scan ## Run the full CI pipeline locally
+ci: lint test coverage build i18n-check web-lint web-test vuln secrets-scan fs-scan e2e-up hardening-check e2e image-scan ## Run the full CI pipeline locally
 
 .PHONY: fuzz-license
 fuzz-license: ## Fuzz the license parser for 60 s (spec §25.6)
@@ -146,3 +146,8 @@ fuzz-license: ## Fuzz the license parser for 60 s (spec §25.6)
 .PHONY: release-keycheck
 release-keycheck: ## Release gate: fails until the vendor's production license key is committed (R36)
 	go test -count=1 -tags releasecheck -run TestProductionKeySetIsReadyForRelease ./internal/license/
+
+.PHONY: coverage
+coverage: ## Run all Go tests (with integration) under coverage and enforce coverage-floors.json (R36)
+	go test -race -count=1 -tags integration -coverprofile=coverage.out ./...
+	go run ./tools/covercheck -profile coverage.out -floors coverage-floors.json
