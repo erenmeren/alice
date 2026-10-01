@@ -52,6 +52,7 @@ type Emulator struct {
 	unsupported map[string]bool
 	failRead    map[string]bool
 	failWrite   map[string]bool
+	owners      map[string]string
 	hostKeys    []helperproto.HostKeyInfo
 	beforeWrite func(path string)
 	writes      []string
@@ -76,6 +77,7 @@ func NewEmulator() *Emulator {
 		unsupported: map[string]bool{},
 		failRead:    map[string]bool{},
 		failWrite:   map[string]bool{},
+		owners:      map[string]string{},
 		backups:     map[string]int{},
 		hostKeys: []helperproto.HostKeyInfo{{
 			Type: "ssh-ed25519", Bits: 256, Fingerprint: "SHA256:emulatedHostKey00000000000000000000000000000",
@@ -157,6 +159,21 @@ func (e *Emulator) SetUnsupported(path string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.unsupported[path] = true
+}
+
+// SetOwner makes read and write answers for path name owner instead of the resolved account
+// ("" simulates a helper that leaves the owner out).
+func (e *Emulator) SetOwner(path, owner string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.owners[path] = owner
+}
+
+func (e *Emulator) ownerLocked(path, resolved string) string {
+	if o, ok := e.owners[path]; ok {
+		return o
+	}
+	return resolved
 }
 
 // FailWrite makes authkeys-write of path fail with IO_ERROR (the outcome is then uncertain).
@@ -456,7 +473,7 @@ func (e *Emulator) read(args []string) Response {
 	case len(c) > helperproto.MaxAuthorizedKeysSize:
 		return refuse(helperproto.ExitRefused, helperproto.CodeTooLarge)
 	default:
-		return answer(helperproto.AuthKeysReadResponse{OK: true, Path: path, SHA256: sum(c), ContentB64: base64.StdEncoding.EncodeToString(c), Owner: us.user.name})
+		return answer(helperproto.AuthKeysReadResponse{OK: true, Path: path, SHA256: sum(c), ContentB64: base64.StdEncoding.EncodeToString(c), Owner: e.ownerLocked(path, us.user.name)})
 	}
 }
 
@@ -474,6 +491,10 @@ func (e *Emulator) write(args []string, stdin []byte) Response {
 	e.mu.Lock()
 	hook := e.beforeWrite
 	us, listed := e.findLocked(path)
+	owner := us.user.name
+	if o, ok := e.owners[path]; ok {
+		owner = o
+	}
 	unsupported, insecure, failW := e.unsupported[path], e.insecure[path], e.failWrite[path]
 	e.mu.Unlock()
 	switch {
@@ -506,7 +527,7 @@ func (e *Emulator) write(args []string, stdin []byte) Response {
 	e.writes = append(e.writes, path)
 	e.backups[op]++
 	return answer(helperproto.AuthKeysWriteResponse{OK: true, SHA256: sum(stdin),
-		Backup: helperproto.BackupRoot + "/" + op + "/" + strconv.Itoa(e.backups[op]) + ".bak"})
+		Backup: helperproto.BackupRoot + "/" + op + "/" + strconv.Itoa(e.backups[op]) + ".bak", Owner: owner})
 }
 
 func (e *Emulator) cleanup(args []string) Response {

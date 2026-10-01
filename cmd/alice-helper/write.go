@@ -163,7 +163,7 @@ func (s *sys) writeCandidate(ctx context.Context, c candidate, expect, op string
 		}
 		return nil, err
 	}
-	return helperproto.AuthKeysWriteResponse{OK: true, SHA256: hexSHA(content), Backup: b.path()}, nil
+	return helperproto.AuthKeysWriteResponse{OK: true, SHA256: hexSHA(content), Backup: b.path(), Owner: c.acct.name}, nil
 }
 
 // writeThroughOK refuses a file in the home reached through a symlink (the scan resolved the

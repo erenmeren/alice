@@ -59,6 +59,27 @@ func writeRefused(err error) bool {
 	return false
 }
 
+// checkListedFor refuses a file that does not exist yet unless the helper lists it among the
+// candidate files of the requested user: the missing file has no owner to compare, and the write
+// would otherwise create another account's file labelled with the wrong user.
+func (s *session) checkListedFor(ctx context.Context, req providers.AuthKeyChange) error {
+	list, err := runHelper[helperproto.AuthKeysListResponse](ctx, s.conn, CmdAuthKeysList())
+	if err != nil {
+		return err
+	}
+	for _, u := range list.Users {
+		if u.User != req.OSUser {
+			continue
+		}
+		for _, f := range u.Files {
+			if f.Path == req.FilePath {
+				return nil
+			}
+		}
+	}
+	return refusedRequest("os_user")
+}
+
 // transformFailed logs the refusal of the in-memory change as a failed precheck step.
 func transformFailed(log providers.StepLogger, attempt int, err error) (providers.AuthKeyResult, bool, error) {
 	step(log, "precheck", "failed", failParams(attempt, err))
@@ -79,9 +100,6 @@ func hexSHA256(b []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// precheck validates the request locally (nothing outside the helper vocabulary is sent), refuses
-// a protected key before any remote command, and refuses hosts whose keys come from
-// AuthorizedKeysCommand (spec §13.2, §13.4 step 1).
 // checkAddLine refuses, before any remote command, a line that is not exactly one plain key line
 // (AddLine rejects controls, bidi overrides and non-UTF-8) or that declares a certificate authority.
 func checkAddLine(line string) error {
@@ -95,6 +113,9 @@ func checkAddLine(line string) error {
 	return nil
 }
 
+// precheck validates the request locally (nothing outside the helper vocabulary is sent), refuses
+// a protected key before any remote command, and refuses hosts whose keys come from
+// AuthorizedKeysCommand (spec §13.2, §13.4 step 1).
 func (s *session) precheck(ctx context.Context, req providers.AuthKeyChange, remove bool) error {
 	switch {
 	case req.OperationID == uuid.Nil:
@@ -241,6 +262,8 @@ func (s *session) addOnce(ctx context.Context, req providers.AuthKeyChange, log 
 		if err := checkOwner(owner, req.OSUser); err != nil {
 			return transformFailed(log, attempt, err)
 		}
+	} else if err := s.checkListedFor(ctx, req); err != nil {
+		return transformFailed(log, attempt, err)
 	}
 	ak, err := ParseAuthorizedKeys(content)
 	if err != nil {
@@ -288,6 +311,14 @@ func (s *session) writeAndVerify(ctx context.Context, req providers.AuthKeyChang
 		return res, false, err
 	}
 	res.Backup = cleanValue(wr.Backup, 200)
+	if wr.Owner != req.OSUser {
+		// The file now belongs to another account than the request named: report it as a partial
+		// result, never retried.
+		err := providers.NewError("ssh.protocol_error", false, errors.New("linuxssh: the helper wrote another account's file"),
+			map[string]string{"subcommand": helperproto.SubAuthKeysWrite, "field": "owner"})
+		step(log, "write", "failed", failParams(attempt, err))
+		return res, false, err
+	}
 	if wr.SHA256 != want {
 		// The helper wrote something else than asked: the outcome is uncertain, never retried.
 		err := providers.NewError("ssh.protocol_error", false, errors.New("linuxssh: written hash differs from the requested one"),

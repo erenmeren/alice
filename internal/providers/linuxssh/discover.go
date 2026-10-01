@@ -123,6 +123,10 @@ func (s *session) readFileOwner(ctx context.Context, path string) (content []byt
 		return nil, "", "", false, providers.NewError("ssh.protocol_error", false, errors.New("linuxssh: content does not match its hash"),
 			map[string]string{"subcommand": helperproto.SubAuthKeysRead})
 	}
+	if r.Owner == "" {
+		return nil, "", "", false, providers.NewError("ssh.protocol_error", false, errors.New("linuxssh: helper answered without an owner"),
+			map[string]string{"subcommand": helperproto.SubAuthKeysRead})
+	}
 	return content, sum, r.Owner, true, nil
 }
 

@@ -115,7 +115,7 @@ func TestWriteReplacesWithCompareAndSwap(t *testing.T) {
 	code, m := f.runWith("new\n", writeArgs(keysPath, hexOf("old\n"), op1)...)
 	require.Equal(t, 0, code, "%v", m)
 	assert.Equal(t, map[string]any{"ok": true, "sha256": hexOf("new\n"),
-		"backup": "/var/lib/alice-helper/backups/" + op1 + "/1.bak"}, m)
+		"backup": "/var/lib/alice-helper/backups/" + op1 + "/1.bak", "owner": "deploy"}, m)
 	assert.Equal(t, "new\n", f.read(keysPath))
 	st, err = os.Stat(f.host(keysPath))
 	require.NoError(t, err)

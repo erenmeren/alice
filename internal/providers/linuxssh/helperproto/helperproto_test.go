@@ -150,7 +150,7 @@ func TestWireNames(t *testing.T) {
 	b, err = json.Marshal(HostKeysResponse{OK: true, Keys: []HostKeyInfo{{Type: "ssh-ed25519", Bits: 256, Fingerprint: "SHA256:x", Path: "/k.pub"}}})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"ok":true,"keys":[{"type":"ssh-ed25519","bits":256,"fingerprint":"SHA256:x","path":"/k.pub"}]}`, string(b))
-	assert.Equal(t, 1, Protocol)
+	assert.Equal(t, 2, Protocol)
 	assert.Equal(t, "/usr/local/libexec/alice-helper", HelperPath)
 	assert.Equal(t, 1<<20, MaxAuthorizedKeysSize)
 }

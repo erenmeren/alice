@@ -12,13 +12,13 @@ import (
 
 // Protocol and file locations.
 const (
-	Protocol   = 1
-	Version    = "1.0.0"
+	Protocol   = 2 // 2: authkeys-read and authkeys-write answer with the resolved owner
+	Version    = "1.1.0"
 	HelperPath = "/usr/local/libexec/alice-helper"
 	BackupRoot = "/var/lib/alice-helper/backups"
 )
 
-// Subcommands of protocol 1 (R37 item 3).
+// Subcommands of protocol 2 (R37 item 3).
 const (
 	SubVersion       = "version"
 	SubSSHDDump      = "sshd-dump"
@@ -157,6 +157,8 @@ type AuthKeysWriteResponse struct {
 	OK     bool   `json:"ok"`
 	SHA256 string `json:"sha256"`
 	Backup string `json:"backup"`
+	// Owner is the account the helper resolved the file to (protocol 2).
+	Owner string `json:"owner"`
 }
 
 // CleanupResponse answers "cleanup".

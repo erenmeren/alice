@@ -52,6 +52,7 @@ type Server struct {
 	commands   []string
 	conns      map[net.Conn]struct{}
 	noPubkey   bool
+	noAuth     bool
 }
 
 // DisablePublicKeyAuth makes the server offer password authentication only (never accepted).
@@ -59,6 +60,13 @@ func (s *Server) DisablePublicKeyAuth() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.noPubkey = true
+}
+
+// AcceptNoAuth makes the server accept every client without authentication.
+func (s *Server) AcceptNoAuth() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noAuth = true
 }
 
 // NewServer starts a server with a random Ed25519 host key. It stops when the test ends.
@@ -225,6 +233,7 @@ func (s *Server) handleConn(c net.Conn) {
 			return nil, errors.New("linuxsshtest: password not accepted")
 		}
 	}
+	cfg.NoClientAuth = s.noAuth
 	s.mu.Unlock()
 	sc, chans, reqs, err := ssh.NewServerConn(c, cfg)
 	if err != nil {

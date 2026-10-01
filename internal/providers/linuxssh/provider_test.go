@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -245,12 +246,14 @@ func TestOpenHelperMissing(t *testing.T) {
 
 func TestOpenHelperOutdated(t *testing.T) {
 	e := newProvEnv(t)
-	e.emu.SetProtocol(0)
-	_, err := e.prov.Open(context.Background(), e.ref, e.cred, providers.Env{})
-	pe := providerCode(t, err)
-	assert.Equal(t, "ssh.helper_outdated", pe.Code)
-	assert.Equal(t, "0", pe.Params["helper_protocol"])
-	assert.Equal(t, "1", pe.Params["required_protocol"])
+	for _, old := range []int{0, 1} { // protocol 1 answers without an owner
+		e.emu.SetProtocol(old)
+		_, err := e.prov.Open(context.Background(), e.ref, e.cred, providers.Env{})
+		pe := providerCode(t, err)
+		assert.Equal(t, "ssh.helper_outdated", pe.Code)
+		assert.Equal(t, strconv.Itoa(old), pe.Params["helper_protocol"])
+		assert.Equal(t, "2", pe.Params["required_protocol"])
+	}
 }
 
 func TestOpenRefusesAnInvalidStoredConfig(t *testing.T) {

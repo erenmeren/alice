@@ -445,3 +445,49 @@ func TestWriteResultCarriesTheBackup(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, res.Backup, keyOp.String())
 }
+
+// Authentication that never used Alice's key would leave her own key unprotectable.
+func TestDialRefusesAServerThatAcceptsWithoutTheClientKey(t *testing.T) {
+	e := newProvEnv(t)
+	e.srv.AcceptNoAuth()
+	_, err := e.prov.Open(context.Background(), e.ref, e.cred, providers.Env{})
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.auth_failed", pe.Code)
+	assert.Equal(t, "publickey_not_offered", pe.Params["reason"])
+}
+
+// A missing file has no owner to compare: the helper must list it for the requested user.
+func TestAddToAMissingFileOfAnotherUserIsRefused(t *testing.T) {
+	e := newProvEnv(t)
+	add, _ := keyLine(t, "ed25519", "", "n@x")
+	_, err := e.open(t).AddAuthorizedKey(context.Background(),
+		providers.AuthKeyChange{OperationID: keyOp, OSUser: "deploy", FilePath: rootFile, Line: add}, nil)
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.helper_refused", pe.Code)
+	assert.Equal(t, "os_user", pe.Params["field"])
+	assert.Empty(t, e.emu.Writes())
+}
+
+// A write whose answer names another account is reported with the partial result.
+func TestWriteAnsweredForAnotherAccountIsPartial(t *testing.T) {
+	e := newProvEnv(t)
+	e.emu.SetOwner(deployFile, "root")
+	add, _ := keyLine(t, "ed25519", "", "n@x")
+	res, err := e.open(t).AddAuthorizedKey(context.Background(),
+		providers.AuthKeyChange{OperationID: keyOp, OSUser: "deploy", FilePath: deployFile, Line: add}, nil)
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.protocol_error", pe.Code)
+	assert.Equal(t, "owner", pe.Params["field"])
+	assert.True(t, res.Changed)
+}
+
+// A helper claiming protocol 2 must name the owner.
+func TestReadWithoutOwnerIsAProtocolError(t *testing.T) {
+	e := newProvEnv(t)
+	k, fp := keyLine(t, "ed25519", "", "a@x")
+	e.emu.SetFile(deployFile, []byte(k+"\n"))
+	e.emu.SetOwner(deployFile, "")
+	_, err := e.open(t).RemoveAuthorizedKey(context.Background(), removeReq("deploy", deployFile, fp), nil)
+	assert.Equal(t, "ssh.protocol_error", providerCode(t, err).Code)
+	assert.Empty(t, e.emu.Writes())
+}

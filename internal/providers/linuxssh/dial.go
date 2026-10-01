@@ -342,6 +342,13 @@ func (d *Dialer) Dial(ctx context.Context, target uuid.UUID, cfg Config, cred pr
 			return nil, providers.NewError("ssh.unreachable", true, r.err, nil)
 		}
 	}
+	if auth.fingerprint() == "" {
+		// Authenticated without offering Alice's key (e.g. the server accepted "none"): Alice's own
+		// key could not be protected, so the connection is refused.
+		_ = r.client.Close()
+		return nil, providers.NewError("ssh.auth_failed", false, errors.New("linuxssh: server accepted the connection without the client key"),
+			map[string]string{"reason": "publickey_not_offered"})
+	}
 	return &Conn{client: r.client, target: target, cfg: cfg, hostKey: presented, clientFP: auth.fingerprint(), clock: d.clk()}, nil
 }
 
