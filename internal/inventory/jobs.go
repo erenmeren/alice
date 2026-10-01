@@ -1,6 +1,6 @@
-// Package inventory owns targets, credentials, pinned host keys and the SSH key inventory
-// (spec §7.2, §7.3). This file holds what the job queue needs before the rest exists.
 package inventory
+
+// This file holds what the job queue needs from inventory: job types, JobRequest and Enqueuer.
 
 import (
 	"context"

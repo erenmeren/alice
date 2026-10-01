@@ -239,7 +239,10 @@
     "pattern": "This value contains characters that are not allowed.",
     "one_of": "Choose one of: {{values}}.",
     "out_of_range": "Enter a number from {{min}} to {{max}}.",
-    "email": "Enter a valid email address, for example name@example.com."
+    "email": "Enter a valid email address, for example name@example.com.",
+    "host_port": "Enter only the server's name or address here. Put the port in the SSH port field.",
+    "host_not_allowed": "This address cannot be a managed server (it is a link-local, group or broadcast address, or no address at all).",
+    "host_ascii": "Use the server's plain host name (for international names, the form that starts with xn--) or its IP address."
   },
   "email": {
     "footer": "This message was sent automatically by Alice. Do not reply to it.",
