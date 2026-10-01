@@ -69,18 +69,27 @@ type Notifier interface {
 // those of deadAlertParams.
 const TemplateJobDead = "job.dead"
 
+// TemplateJobTampered is the email sent when a job's stored data fails its integrity check
+// (threat J-1): the job was changed outside Alice and is never run. Its params are those of
+// tamperedAlertParams.
+const TemplateJobTampered = "job.tampered"
+
 func deadAlertParams(id uuid.UUID, typ, reason string, attempts int) map[string]string {
 	return map[string]string{"job_id": id.String(), "type": typ, "reason": reason, "attempts": strconv.Itoa(attempts)}
 }
 
-// alertDead queues the job.dead email in the transaction that kills the job: a job dies once
-// (its status is final and every write is fenced), so each dead job is announced exactly once.
-func (r *Runner) alertDead(ctx context.Context, tx pgx.Tx, id uuid.UUID, typ, reason string, attempts int) error {
+func tamperedAlertParams(id uuid.UUID, typ string) map[string]string {
+	return map[string]string{"job_id": id.String(), "type": typ}
+}
+
+// alert queues an email to the Administrators in the transaction that stops the job: a job
+// stops once (its status is final and every write is fenced), so each one is announced once.
+func (r *Runner) alert(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error {
 	if r.cfg.Notifier == nil {
 		return nil
 	}
-	if err := r.cfg.Notifier.NotifyAdmins(ctx, tx, TemplateJobDead, deadAlertParams(id, typ, reason, attempts)); err != nil {
-		return fmt.Errorf("jobs: queue the dead-job email: %w", err)
+	if err := r.cfg.Notifier.NotifyAdmins(ctx, tx, template, params); err != nil {
+		return fmt.Errorf("jobs: queue the %s email: %w", template, err)
 	}
 	return nil
 }
@@ -393,10 +402,15 @@ func (r *Runner) settle(ctx context.Context, c *claimed, errorCode string,
 			return fmt.Errorf("jobs: release the target: %w", err)
 		}
 		for _, ev := range events {
-			if ev.Action == "job.dead" {
-				if err := r.alertDead(ctx, tx, c.id, c.typ, ev.Details["reason"], c.attempts); err != nil {
-					return err
-				}
+			var err error
+			switch ev.Action {
+			case "job.dead":
+				err = r.alert(ctx, tx, TemplateJobDead, deadAlertParams(c.id, c.typ, ev.Details["reason"], c.attempts))
+			case "job.tampered":
+				err = r.alert(ctx, tx, TemplateJobTampered, tamperedAlertParams(c.id, c.typ))
+			}
+			if err != nil {
+				return err
 			}
 		}
 		for _, ev := range events {
@@ -730,7 +744,7 @@ WHERE job_id = ANY($1::uuid[]) AND finished_at IS NULL`, ids, now); err != nil {
 	}
 	for _, x := range all {
 		if x.status == string(StatusDead) {
-			if err := r.alertDead(ctx, tx, x.id, x.typ, "job.lease_expired", x.attempts); err != nil {
+			if err := r.alert(ctx, tx, TemplateJobDead, deadAlertParams(x.id, x.typ, "job.lease_expired", x.attempts)); err != nil {
 				return nil, err
 			}
 		}

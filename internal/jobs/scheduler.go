@@ -43,6 +43,11 @@ type Scheduler struct {
 // WithLeader makes ticks run only while this process holds the scheduling lock, so two
 // processes against one database never both run periodic work (P2-06). RunNow is an explicit
 // request (the e2e demo clock, an operator command) and runs regardless. Call it before Run.
+//
+// Leadership is checked once per tick, before the run starts: a run that has started finishes
+// even when the lock is lost meanwhile, and the new leader may start the same task then. Tasks
+// must therefore tolerate an occasional overlap with another process (make their writes
+// idempotent or serialize them in the database).
 func (s *Scheduler) WithLeader(l *Leader) *Scheduler {
 	s.leader = l
 	return s

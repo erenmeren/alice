@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/audit"
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/license"
@@ -165,19 +166,40 @@ func TestNewRunnerRefusesASlashInTheWorkerID(t *testing.T) {
 	assert.NotContains(t, NewRunner(RunnerConfig{}).cfg.WorkerID, "/", "the default id has no slash")
 }
 
-// The job.dead email exists in English and Turkish and uses only the params the runner sends.
-func TestJobDeadTemplateRendersInBothLanguages(t *testing.T) {
+// The admin emails of the jobs package exist in English and Turkish and use only the params
+// the package sends.
+func TestJobsEmailTemplatesRenderInBothLanguages(t *testing.T) {
 	cat, err := i18n.Load(locales.FS)
 	require.NoError(t, err)
 	s := &notify.Sender{Catalog: cat}
-	params := deadAlertParams(uuid.MustParse("0190f5a0-0000-7000-8000-0000000000aa"), "sshkey.remove", "ssh.timeout", 3)
-	for _, lang := range []string{"en", "tr"} {
-		m := s.Render("ada@example.com", TemplateJobDead, lang, params)
-		assert.NotContains(t, m.Subject, "{{", lang)
-		assert.NotContains(t, m.Body, "{{", lang)
-		assert.NotContains(t, m.Subject, "email.", "%s: the key itself means a missing text", lang)
-		assert.Contains(t, m.Body, "0190f5a0-0000-7000-8000-0000000000aa", lang)
-		assert.Contains(t, m.Body, "ssh.timeout", lang)
-		assert.Contains(t, m.Subject, "sshkey.remove", lang)
+	id := uuid.MustParse("0190f5a0-0000-7000-8000-0000000000aa")
+	for _, c := range []struct {
+		template string
+		params   map[string]string
+		subject  []string
+		body     []string
+	}{
+		{TemplateJobDead, deadAlertParams(id, "sshkey.remove", "ssh.timeout", 3),
+			[]string{"sshkey.remove"}, []string{id.String(), "ssh.timeout", "3"}},
+		{TemplateJobTampered, tamperedAlertParams(id, "sshkey.remove"),
+			[]string{"sshkey.remove"}, []string{id.String()}},
+		{TemplateAuditBroken, auditBrokenParams(audit.Report{FirstBadSeq: 4711, Problem: audit.ProblemHashMismatch}),
+			nil, []string{"4711", audit.ProblemHashMismatch}},
+	} {
+		for _, lang := range []string{"en", "tr"} {
+			m := s.Render("ada@example.com", c.template, lang, c.params)
+			assert.NotContains(t, m.Subject, "{{", "%s %s", c.template, lang)
+			assert.NotContains(t, m.Body, "{{", "%s %s", c.template, lang)
+			assert.NotContains(t, m.Subject, "email.", "%s %s: the key itself means a missing text", c.template, lang)
+			assert.NotContains(t, m.Body, "email.", "%s %s: the key itself means a missing text", c.template, lang)
+			for _, want := range c.subject {
+				assert.Contains(t, m.Subject, want, "%s %s", c.template, lang)
+			}
+			for _, want := range c.body {
+				assert.Contains(t, m.Body, want, "%s %s", c.template, lang)
+			}
+		}
 	}
+	en := s.Render("ada@example.com", TemplateJobTampered, "en", tamperedAlertParams(id, "sshkey.remove"))
+	assert.NotContains(t, en.Body, "attempts", "a tampered job is not an exhausted one")
 }

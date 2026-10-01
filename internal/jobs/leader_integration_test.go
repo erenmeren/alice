@@ -60,6 +60,7 @@ func TestOnlyOneSchedulerLeads(t *testing.T) {
 	e := newQEnv(t)
 	clk := clock.NewFake(queueStart)
 	l1, l2 := NewLeader(e.d.App, quiet), NewLeader(e.d.App, quiet)
+	t.Cleanup(l1.Close)
 	t.Cleanup(l2.Close)
 	var runs1, runs2 atomic.Int32
 	s1 := NewScheduler(clk, &fakeGate{}, quiet, Task{Type: testLeaderTask, Every: time.Minute,

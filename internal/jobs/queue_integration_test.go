@@ -375,3 +375,21 @@ func TestPruneDeletesOnlyOldFinishedJobs(t *testing.T) {
 	assert.NoError(t, err, "unfinished jobs are never pruned")
 	assert.Zero(t, e.count(t, `SELECT count(*) FROM job_attempts`), "attempts go with their job")
 }
+
+// Prune deletes in batches (no long lock on a large jobs table) and repeats until done.
+func TestPruneDeletesInBatchesUntilDone(t *testing.T) {
+	e := newQEnv(t)
+	old := pruneBatch
+	pruneBatch = 2
+	t.Cleanup(func() { pruneBatch = old })
+	for i := range 5 {
+		id := e.enqueue(t, Spec{Type: testQueueJob})
+		_, err := e.d.Owner.Exec(e.ctx, `UPDATE jobs SET status = 'succeeded', finished_at = $2 WHERE id = $1`,
+			id, queueStart.Add(-time.Duration(91+i)*24*time.Hour))
+		require.NoError(t, err)
+	}
+	n, err := e.q.Prune(e.ctx, 90*24*time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 5, n)
+	assert.Zero(t, e.count(t, `SELECT count(*) FROM jobs`))
+}

@@ -273,6 +273,16 @@
       "dead": {
         "subject": "Alice: a background job failed for good ({{type}})",
         "body": "The background job {{job_id}} ({{type}}) failed after {{attempts}} attempts and will not be retried. The last error code was {{reason}}.\n\nYou can see its steps and its error in Alice at /api/v1/jobs/{{job_id}}. If the job was meant to change a server, check that server before you start the work again."
+      },
+      "tampered": {
+        "subject": "Alice: a background job was changed outside Alice and was not run ({{type}})",
+        "body": "The background job {{job_id}} ({{type}}) was not run: its stored data failed the integrity check, so it was changed in the database outside Alice. The job is stopped and will not run.\n\nFind out who had direct access to the Alice database. You can see the job at /api/v1/jobs/{{job_id}}."
+      }
+    },
+    "audit": {
+      "broken": {
+        "subject": "Alice: the audit log failed its integrity check",
+        "body": "The daily check of the Alice audit log found a problem at entry {{first_bad_seq}} ({{problem}}). Entries of the audit log may have been changed or deleted outside Alice.\n\nKeep the database as it is, find out who had direct access to it, and compare the audit log with your latest backup and audit export. Alice keeps recording new entries and checks the log again every hour until it is intact."
       }
     }
   }

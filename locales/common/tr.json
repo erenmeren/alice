@@ -273,6 +273,16 @@
       "dead": {
         "subject": "Alice: bir arka plan işi kalıcı olarak başarısız oldu ({{type}})",
         "body": "{{job_id}} numaralı arka plan işi ({{type}}) {{attempts}} denemenin ardından başarısız oldu ve yeniden denenmeyecek. Son hata kodu: {{reason}}.\n\nİşin adımlarını ve hatasını Alice'te /api/v1/jobs/{{job_id}} adresinde görebilirsiniz. İş bir sunucuda değişiklik yapacaktıysa, işi yeniden başlatmadan önce o sunucuyu kontrol edin."
+      },
+      "tampered": {
+        "subject": "Alice: bir arka plan işi Alice dışında değiştirildi ve çalıştırılmadı ({{type}})",
+        "body": "{{job_id}} numaralı arka plan işi ({{type}}) çalıştırılmadı: kayıtlı verileri bütünlük denetiminden geçemedi, yani veritabanında Alice dışında değiştirildi. İş durduruldu ve çalıştırılmayacak.\n\nAlice veritabanına kimlerin doğrudan erişimi olduğunu araştırın. İşi /api/v1/jobs/{{job_id}} adresinde görebilirsiniz."
+      }
+    },
+    "audit": {
+      "broken": {
+        "subject": "Alice: denetim kaydı bütünlük denetiminden geçemedi",
+        "body": "Alice denetim kaydının günlük denetimi {{first_bad_seq}} numaralı kayıtta bir sorun buldu ({{problem}}). Denetim kaydındaki kayıtlar Alice dışında değiştirilmiş ya da silinmiş olabilir.\n\nVeritabanını olduğu gibi bırakın, kimlerin doğrudan erişimi olduğunu araştırın ve denetim kaydını en son yedeğiniz ve denetim dışa aktarımınızla karşılaştırın. Alice yeni kayıtları tutmaya devam eder ve kayıt yeniden bütün olana kadar her saat yeniden denetler."
       }
     }
   }

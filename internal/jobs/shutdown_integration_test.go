@@ -4,11 +4,13 @@ package jobs
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"alice/internal/platform/clock"
 )
@@ -82,8 +84,10 @@ func TestShutdownReleasesJobsWhoseHandlerIgnoresCancellation(t *testing.T) {
 	e := newQEnvWith(t, clock.Real{})
 	id := e.enqueue(t, Spec{Type: testQueueJob})
 	started, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	logs := &syncBuffer{}
 	r := e.runner(t, "w1", func(c *RunnerConfig) {
 		c.Workers, c.Poll, c.ShutdownGrace = 1, 5*time.Millisecond, 100*time.Millisecond
+		c.Log = slogTo(logs)
 	})
 	r.Handle(testQueueJob, func(context.Context, Job, StepRecorder) (map[string]any, error) {
 		close(started)
@@ -99,7 +103,9 @@ func TestShutdownReleasesJobsWhoseHandlerIgnoresCancellation(t *testing.T) {
 	assert.Equal(t, "queued", e.row(t, id).status)
 	close(release)
 	waitClosed(t, returned, 5*time.Second, "the stuck handler returning")
-	time.Sleep(100 * time.Millisecond) // let its finish attempt reach the database
+	// The late finish attempt has reached the database and been refused by the fence.
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "job lease lost before the job finished") },
+		5*time.Second, 5*time.Millisecond)
 	got := e.row(t, id)
 	assert.Equal(t, "queued", got.status, "a late result of a released job is not written")
 	assert.Empty(t, got.lockedBy)
@@ -113,10 +119,10 @@ func TestRunRecoversExpiredLeasesBeforeItsWorkersStart(t *testing.T) {
 	id := e.enqueue(t, Spec{Type: testQueueJob, TargetID: target})
 	past := time.Now().UTC().Add(-time.Minute)
 	_, err := e.d.Owner.Exec(e.ctx, `UPDATE jobs SET status = 'running', locked_by = 'dead/1', attempts = 1, locked_until = $2 WHERE id = $1`, id, past)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	_, err = e.d.Owner.Exec(e.ctx, `INSERT INTO target_locks (target_id, job_id, operation, locked_by, heartbeat_at, lease_until)
 VALUES ($1, $2, 'test.queue', 'dead/1', $3, $3)`, target, id, past)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	var runs atomic.Int32
 	r := e.runner(t, "w1", func(c *RunnerConfig) { c.Workers, c.Poll, c.ReapEvery = 1, 5*time.Millisecond, time.Hour })
 	r.Handle(testQueueJob, func(context.Context, Job, StepRecorder) (map[string]any, error) { runs.Add(1); return nil, nil })

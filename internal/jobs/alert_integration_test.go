@@ -17,7 +17,13 @@ import (
 // deadEmails returns the params of the queued job.dead emails, by job id.
 func (e *qenv) deadEmails(t *testing.T) map[string]map[string]string {
 	t.Helper()
-	rows, err := e.d.Owner.Query(e.ctx, `SELECT params FROM notifications_outbox WHERE template_key = $1`, TemplateJobDead)
+	return e.emails(t, TemplateJobDead, "job_id")
+}
+
+// emails returns the params of the queued emails of template, by the param by.
+func (e *qenv) emails(t *testing.T, template, by string) map[string]map[string]string {
+	t.Helper()
+	rows, err := e.d.Owner.Query(e.ctx, `SELECT params FROM notifications_outbox WHERE template_key = $1`, template)
 	require.NoError(t, err)
 	defer rows.Close()
 	out := map[string]map[string]string{}
@@ -26,7 +32,7 @@ func (e *qenv) deadEmails(t *testing.T) map[string]map[string]string {
 		require.NoError(t, rows.Scan(&raw))
 		var p map[string]string
 		require.NoError(t, json.Unmarshal(raw, &p))
-		out[p["job_id"]] = p
+		out[p[by]] = p
 	}
 	require.NoError(t, rows.Err())
 	return out
@@ -36,8 +42,7 @@ func (e *qenv) deadEmails(t *testing.T) map[string]map[string]string {
 // one email to the Administrators per dead job, queued in the transaction that kills the job.
 func TestDeadJobsAlertTheAdministratorsOncePerJob(t *testing.T) {
 	e := newQEnv(t)
-	_, err := e.d.Owner.Exec(e.ctx, `UPDATE users SET email = 'admin@example.com' WHERE id = $1`, admin.ID)
-	require.NoError(t, err)
+	e.adminWithEmail(t)
 	r := e.runner(t, "w1", func(c *RunnerConfig) { c.Notifier = notify.AdminNotifier{Clock: e.clk} })
 	r.Handle(testQueueJob, func(context.Context, Job, StepRecorder) (map[string]any, error) {
 		return nil, Retry("ssh.timeout", nil, nil)
@@ -45,7 +50,7 @@ func TestDeadJobsAlertTheAdministratorsOncePerJob(t *testing.T) {
 
 	// Exhausted retries.
 	retried := e.enqueue(t, Spec{Type: testQueueJob, MaxAttempts: 2})
-	_, err = r.RunOnce(e.ctx)
+	_, err := r.RunOnce(e.ctx)
 	require.NoError(t, err)
 	assert.Empty(t, e.deadEmails(t), "a job with attempts left raises nothing")
 	e.fake.Advance(30 * time.Second)
@@ -79,4 +84,40 @@ func TestDeadJobsAlertTheAdministratorsOncePerJob(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ran)
 	assert.Len(t, e.deadEmails(t), 2)
+}
+
+// adminWithEmail gives the test Administrator an address, so admin emails are queued.
+func (e *qenv) adminWithEmail(t *testing.T) {
+	t.Helper()
+	_, err := e.d.Owner.Exec(e.ctx, `UPDATE users SET email = 'admin@example.com' WHERE id = $1`, admin.ID)
+	require.NoError(t, err)
+}
+
+// J-1: a job whose stored data fails its integrity check is never run, and the Administrators
+// are told once, in the transaction that stops the job.
+func TestTamperedJobsAlertTheAdministratorsOnce(t *testing.T) {
+	e := newQEnv(t)
+	e.adminWithEmail(t)
+	r := e.runner(t, "w1", func(c *RunnerConfig) { c.Notifier = notify.AdminNotifier{Clock: e.clk} })
+	r.Handle(testQueueJob, succeed)
+	id := e.enqueue(t, Spec{Type: testQueueJob})
+	_, err := e.d.Owner.Exec(e.ctx, `UPDATE jobs SET payload_mac = $2 WHERE id = $1`, id, make([]byte, 32))
+	require.NoError(t, err)
+
+	ran, err := r.RunOnce(e.ctx)
+	require.NoError(t, err)
+	require.True(t, ran)
+	require.Equal(t, "dead", e.row(t, id).status)
+	got := e.emails(t, TemplateJobTampered, "job_id")
+	require.Len(t, got, 1)
+	assert.Equal(t, map[string]string{"job_id": id.String(), "type": testQueueJob.Name}, got[id.String()])
+	assert.Empty(t, e.deadEmails(t), "a tampered job is announced as tampered, not as exhausted")
+
+	e.fake.Advance(time.Hour)
+	_, err = r.Reap(e.ctx)
+	require.NoError(t, err)
+	ran, err = r.RunOnce(e.ctx)
+	require.NoError(t, err)
+	assert.False(t, ran)
+	assert.Len(t, e.emails(t, TemplateJobTampered, "job_id"), 1, "a second pass adds none")
 }

@@ -24,7 +24,9 @@ type Leader struct {
 	closed bool
 }
 
-// NewLeader returns a Leader that has not tried to lead yet.
+// NewLeader returns a Leader that has not tried to lead yet. While it leads it permanently
+// holds one connection of pool (until Close or a lost session): size the pool's MaxConns with
+// that connection in mind.
 func NewLeader(pool *pgxpool.Pool, log *slog.Logger) *Leader {
 	return &Leader{pool: pool, log: log}
 }

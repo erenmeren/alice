@@ -460,13 +460,28 @@ WHERE id = $1`, id, now, nullUUID(by)); err != nil {
 	})
 }
 
+// pruneBatch is how many jobs one Prune statement deletes: short statements, no long lock on
+// a large table. A variable so a test can make it small.
+var pruneBatch = 5000
+
 // Prune deletes finished jobs (and, through the foreign key, their attempts) that ended more
-// than olderThan ago (maintenance.cleanup, spec §8.2: 90 days). Unfinished jobs are kept.
+// than olderThan ago (maintenance.cleanup, spec §8.2: 90 days), oldest first, in batches of
+// pruneBatch until a batch comes back short. Unfinished jobs are kept. On an error it returns
+// the number deleted so far.
 func (q *Queue) Prune(ctx context.Context, olderThan time.Duration) (int, error) {
 	cutoff := q.clock.Now().UTC().Add(-olderThan)
-	tag, err := q.pool.Exec(ctx, `DELETE FROM jobs WHERE finished_at < $1 AND status IN ('succeeded', 'failed', 'cancelled', 'dead')`, cutoff)
-	if err != nil {
-		return 0, fmt.Errorf("jobs: prune: %w", err)
+	total := 0
+	for {
+		tag, err := q.pool.Exec(ctx, `DELETE FROM jobs WHERE id IN (
+    SELECT id FROM jobs WHERE finished_at < $1 AND status IN ('succeeded', 'failed', 'cancelled', 'dead')
+    ORDER BY finished_at LIMIT $2)`, cutoff, pruneBatch)
+		if err != nil {
+			return total, fmt.Errorf("jobs: prune: %w", err)
+		}
+		n := int(tag.RowsAffected())
+		total += n
+		if n < pruneBatch {
+			return total, nil
+		}
 	}
-	return int(tag.RowsAffected()), nil
 }
