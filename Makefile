@@ -143,6 +143,11 @@ ci: lint test coverage build i18n-check web-lint web-test vuln secrets-scan fs-s
 fuzz-license: ## Fuzz the license parser for 60 s (spec §25.6)
 	go test -count=1 -run '^$$' -fuzz FuzzParseLicense -fuzztime 60s ./internal/license/
 
+.PHONY: fuzz-ssh
+fuzz-ssh: ## Fuzz the authorized_keys and sshd configuration parsers for 60 s each (spec §25.6)
+	go test -count=1 -run '^$$' -fuzz FuzzParseAuthorizedKeys -fuzztime 60s ./internal/providers/linuxssh/
+	go test -count=1 -run '^$$' -fuzz FuzzParseSSHDConfig -fuzztime 60s ./internal/providers/linuxssh/sshdconf/
+
 .PHONY: release-keycheck
 release-keycheck: ## Release gate: fails until the vendor's production license key is committed (R36)
 	go test -count=1 -tags releasecheck -run TestProductionKeySetIsReadyForRelease ./internal/license/
