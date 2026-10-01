@@ -146,7 +146,7 @@ func (e *env) confirmed(k providers.HostKey, keys ...providers.DiscoveredSSHKey)
 	e.prov.Configure(func(c *fake.Config) {
 		c.PresentedKey = k
 		c.Report = providers.ConnectionReport{HostKey: k, HelperVersion: "1.0.0", HelperProtocol: 1}
-		c.Discovery = providers.DiscoveryResult{SSHKeys: keys, ReadFiles: files}
+		c.Discovery = providers.DiscoveryResult{SSHKeys: keys, ReadFiles: files, SSHD: providers.SSHDSummary{Read: true, AuthorizedKeysCommand: "none"}}
 	})
 	tg, firstJob, err := e.inv.CreateTarget(e.ctx, e.admin, inventory.NewTarget{Name: "web-01", Type: "linux", Host: "web-01.example.com"})
 	require.NoError(e.t, err)
@@ -398,8 +398,9 @@ func TestRemoveWithAnUncertainOutcomeIsNeverRetried(t *testing.T) {
 	assert.Equal(t, inventory.StatusUnreachable, e.status(tg.ID), "a connection reason marks the target")
 }
 
-// A write whose re-read shows other content is recorded as removed but unverified, not retried.
-func TestRemoveUnverifiedIsRecorded(t *testing.T) {
+// §13.4 step 5: a write whose re-read shows other content is not a removal. Until a restore
+// exists the job stops for a person with the helper's backup; the key is not recorded as removed.
+func TestRemoveUnverifiedStopsForAPerson(t *testing.T) {
 	e := newEnv(t, nil)
 	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep"))
 	e.prov.Configure(func(c *fake.Config) {
@@ -409,11 +410,40 @@ func TestRemoveUnverifiedIsRecorded(t *testing.T) {
 	require.NoError(t, err)
 	e.drain()
 	v := e.job(jobID)
-	require.Equal(t, jobs.StatusSucceeded, v.Status)
+	require.Equal(t, jobs.StatusFailed, v.Status)
+	assert.Equal(t, "sshkey.verify_failed", v.LastErrorCode)
+	assert.Equal(t, true, v.Result["needs_attention"])
+	assert.Equal(t, true, v.Result["changed"])
+	assert.Equal(t, float64(1), v.Result["removed"])
 	assert.Equal(t, false, v.Result["verified"])
 	assert.Equal(t, "/var/lib/alice-helper/backup/2", v.Result["backup"])
-	assert.NotNil(t, locationOf(t, e, tg.ID, "SHA256:dep").RemovedAt)
-	assert.Equal(t, 1, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'sshkey.removed' AND details->>'verified' = 'false'"))
+	assert.Nil(t, locationOf(t, e, tg.ID, "SHA256:dep").RemovedAt)
+	assert.Zero(t, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'sshkey.removed'"))
+	assert.Equal(t, 1, countRows(t, e,
+		"SELECT count(*) FROM audit_log WHERE action = 'sshkey.remove_failed' AND details->>'reason' = 'sshkey.verify_failed'"))
+	assert.Equal(t, inventory.StatusOK, e.status(tg.ID))
+}
+
+// A disabled target runs no job at all.
+func TestDisabledTargetRunsNoJob(t *testing.T) {
+	e := newEnv(t, nil)
+	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep"))
+	loc := locationOf(t, e, tg.ID, "SHA256:dep")
+	removal, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, loc.ID, false)
+	require.NoError(t, err)
+	test, err := e.inv.RequestTest(e.ctx, e.admin, tg.ID)
+	require.NoError(t, err)
+	scan, err := e.inv.RequestDiscovery(e.ctx, e.admin, tg.ID)
+	require.NoError(t, err)
+	_, err = e.db.Owner.Exec(e.ctx, "UPDATE targets SET status = 'disabled' WHERE id = $1", tg.ID)
+	require.NoError(t, err)
+	opens := e.prov.Count("Open")
+	e.drain()
+	for _, id := range []uuid.UUID{removal, test, scan} {
+		assert.Equal(t, jobs.StatusFailed, e.job(id).Status)
+		assert.Equal(t, "target.disabled", e.job(id).LastErrorCode)
+	}
+	assert.Equal(t, opens, e.prov.Count("Open"))
 }
 
 // A refusal of the operation is audited on the key and leaves the target alone; an

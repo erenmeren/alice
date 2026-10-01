@@ -73,7 +73,8 @@ var connectionReasons = []string{"ssh.auth_failed", "ssh.unreachable", "ssh.time
 // open returns a session after the target checks. needConfirmed refuses a target whose host key
 // is not confirmed yet (discovery, removal); a connection test may run on it: that is how the
 // fingerprint is shown in the first place. A changed host key refuses everything without
-// connecting (F-31); only a re-pin (or a dismissal) leaves that status.
+// connecting (F-31); only a re-pin (or a dismissal) leaves that status. A disabled target runs
+// nothing.
 func (h *handlers) open(ctx context.Context, id uuid.UUID, needConfirmed bool) (providers.Session, inventory.Target, error) {
 	ref, t, err := h.d.Inventory.TargetRef(ctx, id)
 	switch {
@@ -83,6 +84,8 @@ func (h *handlers) open(ctx context.Context, id uuid.UUID, needConfirmed bool) (
 		return nil, t, jobs.Retry("internal.unexpected", nil, err)
 	case t.Status == inventory.StatusHostKeyChanged:
 		return nil, t, jobs.Fail("target.host_key_changed", nil, nil)
+	case t.Status == inventory.StatusDisabled:
+		return nil, t, jobs.Fail("target.disabled", nil, nil)
 	case needConfirmed && t.Status == inventory.StatusPendingHostKey:
 		return nil, t, jobs.Fail("target.host_key_unconfirmed", nil, nil)
 	}
@@ -247,15 +250,29 @@ func (h *handlers) removeKey(ctx context.Context, j jobs.Job, steps jobs.StepRec
 	if err != nil {
 		return h.removeFailed(ctx, j, locID, actor, rec.wrote, res, err)
 	}
+	if res.Changed && !res.Verified {
+		// §13.4 step 5: the re-read after the write shows other content, so the removal is not
+		// confirmed. Until a restore exists a person looks at it, with the helper's backup.
+		h.removalFailed(ctx, locID, actor, reasonVerifyFailed)
+		return uncertain(res), jobs.Attention(reasonVerifyFailed, nil, nil)
+	}
 	if err := h.d.Inventory.MarkKeyRemoved(ctx, locID, actor, res); err != nil {
 		// The remote change is done; a retry finds the key absent (idempotent) and records it.
 		return nil, jobs.Retry("internal.unexpected", nil, err)
 	}
-	out := map[string]any{"changed": res.Changed, "removed": res.Removed, "verified": res.Verified}
-	if res.Changed && !res.Verified && res.Backup != "" {
-		out["backup"] = res.Backup // the re-read showed other content: where the previous file is kept
+	return map[string]any{"changed": res.Changed, "removed": res.Removed, "verified": res.Verified}, nil
+}
+
+// reasonVerifyFailed: the file read back after a removal is not the content that was written.
+const reasonVerifyFailed = "sshkey.verify_failed"
+
+// uncertain is the result of a removal whose outcome a person must check.
+func uncertain(res providers.AuthKeyResult) map[string]any {
+	out := map[string]any{"changed": res.Changed, "removed": res.Removed, "verified": false}
+	if res.Backup != "" {
+		out["backup"] = res.Backup // where the helper kept the previous file
 	}
-	return out, nil
+	return out
 }
 
 // removeFailed handles a provider failure of a removal. Before the write a failure is classified
@@ -273,15 +290,13 @@ func (h *handlers) removeFailed(ctx context.Context, j jobs.Job, locID uuid.UUID
 	if !wrote && !res.Changed {
 		return nil, jobs.FromProvider(err)
 	}
-	out := map[string]any{"changed": res.Changed, "removed": res.Removed, "verified": false}
-	if res.Backup != "" {
-		out["backup"] = res.Backup
-	}
-	return out, jobs.Attention(reason, params, err)
+	return uncertain(res), jobs.Attention(reason, params, err)
 }
 
+// removalFailed audits a failed removal; the record does not depend on the job's context (a lost
+// lease or a shutdown must not erase it).
 func (h *handlers) removalFailed(ctx context.Context, locID uuid.UUID, actor audit.Actor, reason string) {
-	if err := h.d.Inventory.RecordRemovalFailure(ctx, locID, actor, reason); err != nil {
+	if err := h.d.Inventory.RecordRemovalFailure(context.WithoutCancel(ctx), locID, actor, reason); err != nil {
 		h.d.Log.Error("could not audit a failed key removal", "error_type", fmt.Sprintf("%T", err))
 	}
 }

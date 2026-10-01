@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -255,17 +256,33 @@ func (q *Queue) Enqueue(ctx context.Context, s Spec) (uuid.UUID, bool, error) {
 	return id, dup, err
 }
 
-// EnqueueTx implements inventory.Enqueuer.
+// EnqueueTx implements inventory.Enqueuer. A live job that holds the dedupe key answers the
+// request only when its payload is the same; other options (a removal now confirmed for root's
+// last key) answer inventory.ErrJobConflict instead of silently dropping them.
 func (q *Queue) EnqueueTx(ctx context.Context, tx pgx.Tx, r inventory.JobRequest) (uuid.UUID, error) {
 	t, ok := lookup(r.Type)
 	if !ok {
 		return uuid.Nil, fmt.Errorf("%w: %q", ErrUnknownType, r.Type)
 	}
-	id, _, err := q.Add(ctx, tx, Spec{
+	id, dup, err := q.Add(ctx, tx, Spec{
 		Type: t, TargetID: r.TargetID, Payload: r.Payload, Kind: Kind(r.Kind), DedupeKey: r.DedupeKey,
 		CreatedBy: r.CreatedBy, CreatedByRole: r.CreatedByRole,
 	})
-	return id, err
+	if err != nil || !dup {
+		return id, err
+	}
+	var raw []byte
+	if err := tx.QueryRow(ctx, "SELECT payload FROM jobs WHERE id = $1", id).Scan(&raw); err != nil {
+		return uuid.Nil, fmt.Errorf("jobs: read the job holding the dedupe key: %w", err)
+	}
+	var existing map[string]string
+	if err := json.Unmarshal(raw, &existing); err != nil {
+		return uuid.Nil, fmt.Errorf("jobs: decode the payload of the job holding the dedupe key: %w", err)
+	}
+	if !maps.Equal(existing, r.Payload) {
+		return uuid.Nil, inventory.ErrJobConflict
+	}
+	return id, nil
 }
 
 const viewColumns = `id, type, kind, status, target_id, attempts, max_attempts, last_error_code, result, created_by,

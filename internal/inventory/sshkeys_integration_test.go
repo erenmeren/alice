@@ -4,6 +4,7 @@ package inventory_test
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -342,4 +343,64 @@ func TestListTargetKeysOfDeletedTargetIsNotFound(t *testing.T) {
 	require.NoError(t, h.svc.DeleteTarget(h.ctx, admin, tg.ID))
 	_, err := h.svc.ListTargetKeys(h.ctx, tg.ID, true)
 	require.ErrorIs(t, err, inventory.ErrNotFound)
+}
+
+// Concurrent scans of two servers that share keys (the platform key, an admin's key) upsert the
+// shared ssh_keys rows in one order, so they never deadlock whatever order each server lists them in.
+func TestConcurrentReconcilesWithSharedKeysDoNotDeadlock(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	a := okTarget(t, h, admin, "web-01")
+	b := okTarget(t, h, admin, "web-02")
+	for round := range 5 {
+		keys := make([]providers.DiscoveredSSHKey, 40)
+		for i := range keys {
+			keys[i] = dk("deploy", deployFile, i+1, fmt.Sprintf("SHA256:r%d-%02d", round, i), "")
+		}
+		reversed := make([]providers.DiscoveredSSHKey, len(keys))
+		for i, k := range keys {
+			k.LineNo = len(keys) - i
+			reversed[len(keys)-1-i] = k
+		}
+		errs := make(chan error, 2)
+		var wg sync.WaitGroup
+		for _, run := range []struct {
+			id   uuid.UUID
+			keys []providers.DiscoveredSSHKey
+		}{{a.ID, keys}, {b.ID, reversed}} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := h.svc.Reconcile(h.ctx, run.id, providers.DiscoveryResult{SSHKeys: run.keys, ReadFiles: []string{deployFile}})
+				errs <- err
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			require.NoError(t, err, "round %d", round)
+		}
+	}
+	assert.Equal(t, 200, h.count("SELECT count(*) FROM ssh_keys"))
+	assert.Equal(t, 400, h.count("SELECT count(*) FROM ssh_key_locations"))
+}
+
+// A scan whose sshd settings could not be read (defaults assumed) does not clear F-35.
+func TestUnreadSSHDKeepsKeysManagedElsewhere(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	tg := okTarget(t, h, admin, "web-01")
+	_, err := h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{
+		SSHD: providers.SSHDSummary{Read: true, AuthorizedKeysCommand: "/usr/bin/sss_ssh_authorizedkeys", KeysManagedElsewhere: true}})
+	require.NoError(t, err)
+	_, err = h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{SSHD: providers.SSHDSummary{AuthorizedKeysCommand: "none"}})
+	require.NoError(t, err)
+	got, err := h.svc.GetTarget(h.ctx, tg.ID)
+	require.NoError(t, err)
+	assert.True(t, got.KeysManagedElsewhere)
+	_, err = h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{SSHD: providers.SSHDSummary{Read: true, AuthorizedKeysCommand: "none"}})
+	require.NoError(t, err)
+	got, err = h.svc.GetTarget(h.ctx, tg.ID)
+	require.NoError(t, err)
+	assert.False(t, got.KeysManagedElsewhere, "a scan that read sshd decides")
 }

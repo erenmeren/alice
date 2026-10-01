@@ -15,6 +15,9 @@ import (
 	"alice/internal/rbac"
 )
 
+// sshdRead is a scan that read sshd's settings (removals need one, R37 item 9).
+var sshdRead = providers.SSHDSummary{Read: true, AuthorizedKeysCommand: "none", AuthorizedKeysFile: []string{".ssh/authorized_keys"}}
+
 type removalFixture struct {
 	h        *harness
 	admin    inventory.Actor
@@ -38,7 +41,7 @@ func newRemovalFixture(t *testing.T) removalFixture {
 		dk("deploy", deployFile, 1, "SHA256:dep", "deploy@laptop"),
 		dk("deploy", deployFile, 2, "SHA256:ca", "", providers.FlagCertAuthority),
 		dk("root", rootFile, 1, "SHA256:root", "root@bastion"),
-	}, ReadFiles: []string{aliceFile, deployFile, rootFile}})
+	}, SSHD: sshdRead, ReadFiles: []string{aliceFile, deployFile, rootFile}})
 	require.NoError(t, err)
 	locs := locations(t, h, f.target.ID, false)
 	f.own, f.deploy = locs["alice-svc "+pk.Fingerprint].ID, locs["deploy SHA256:dep"].ID
@@ -145,7 +148,7 @@ func TestRequestKeyRemovalRefusesAUserWhoseKeysAreManagedElsewhere(t *testing.T)
 		dk("root", rootFile, 1, "SHA256:root", "root@bastion"),
 		dk("root", rootFile, 2, "SHA256:root2", "root@backup"),
 	}, Warnings: []providers.Warning{{Code: "keys_managed_elsewhere", Params: map[string]string{"user": "deploy"}}},
-		ReadFiles: []string{deployFile, rootFile}})
+		SSHD: sshdRead, ReadFiles: []string{deployFile, rootFile}})
 	require.NoError(t, err)
 	_, err = h.svc.RequestKeyRemoval(h.ctx, f.admin, f.deploy, false)
 	require.ErrorIs(t, err, inventory.ErrKeysManagedElsewhere)
@@ -192,4 +195,36 @@ func TestRemovalBookkeepingOfUnknownLocations(t *testing.T) {
 	d := h.auditDetails("sshkey.remove_failed")
 	require.Len(t, d, 1)
 	assert.Equal(t, "internal.unexpected", d[0]["reason"], "only stable reasons are stored")
+}
+
+// When the last scan could not read sshd's settings, globally or for the user (a Match block),
+// the files Alice sees may not be the ones sshd uses: removals are refused and audited.
+func TestRequestKeyRemovalRefusesWhenSSHDWasNotRead(t *testing.T) {
+	f := newRemovalFixture(t)
+	h := f.h
+	scan := func(sshd providers.SSHDSummary, warnings ...providers.Warning) {
+		t.Helper()
+		_, err := h.svc.Reconcile(h.ctx, f.target.ID, providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{
+			dk("deploy", deployFile, 1, "SHA256:dep", "deploy@laptop"),
+			dk("root", rootFile, 1, "SHA256:root", "root@bastion"),
+			dk("root", rootFile, 2, "SHA256:root2", "root@backup"),
+		}, SSHD: sshd, Warnings: warnings, ReadFiles: []string{deployFile, rootFile}})
+		require.NoError(t, err)
+	}
+	scan(providers.SSHDSummary{AuthorizedKeysCommand: "none"}, providers.Warning{Code: "sshd_unreadable", Params: map[string]string{}})
+	_, err := h.svc.RequestKeyRemoval(h.ctx, f.admin, f.deploy, false)
+	require.ErrorIs(t, err, inventory.ErrSSHDUnreadable)
+
+	scan(providers.SSHDSummary{Read: true, AuthorizedKeysCommand: "none"},
+		providers.Warning{Code: "sshd_unreadable", Params: map[string]string{"user": "deploy"}})
+	_, err = h.svc.RequestKeyRemoval(h.ctx, f.admin, f.deploy, false)
+	require.ErrorIs(t, err, inventory.ErrSSHDUnreadable)
+	_, err = h.svc.RequestKeyRemoval(h.ctx, f.admin, f.root, false)
+	require.NoError(t, err, "another user's settings were read")
+
+	reasons := []string{}
+	for _, d := range h.auditDetails("sshkey.remove.denied") {
+		reasons = append(reasons, d["reason"])
+	}
+	assert.Equal(t, []string{"sshd_unreadable", "sshd_unreadable"}, reasons)
 }

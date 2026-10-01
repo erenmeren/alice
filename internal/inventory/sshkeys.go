@@ -121,14 +121,22 @@ func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.Dis
 		}
 		type tuple struct{ fp, user, path string }
 		done := map[tuple]bool{}
-		seen := []uuid.UUID{}
+		var entries []providers.DiscoveredSSHKey
 		for _, k := range res.SSHKeys {
 			tp := tuple{k.Fingerprint, k.OSUser, k.FilePath}
 			if done[tp] || k.Fingerprint == "" || k.LineNo < 1 {
 				continue
 			}
 			done[tp] = true
-			locID, inserted, err := upsertLocation(ctx, tx, id, k, platformFP, now)
+			entries = append(entries, k)
+		}
+		keyIDs, err := upsertKeys(ctx, tx, entries, platformFP, now)
+		if err != nil {
+			return err
+		}
+		seen := []uuid.UUID{}
+		for _, k := range entries {
+			locID, inserted, err := upsertLocation(ctx, tx, id, keyIDs[clean(k.Fingerprint)], k, platformFP, now)
 			if err != nil {
 				return err
 			}
@@ -156,8 +164,10 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE targets SET facts = $2, keys_managed_elsewhere = $3, last_discovery_at = $4, updated_at = $4
-WHERE id = $1`, id, raw, res.SSHD.KeysManagedElsewhere, now); err != nil {
+		// Only a scan that read sshd's settings decides F-35: the defaults assumed otherwise say nothing.
+		if _, err := tx.Exec(ctx, `UPDATE targets SET facts = $2,
+    keys_managed_elsewhere = CASE WHEN $5 THEN $3 ELSE keys_managed_elsewhere END, last_discovery_at = $4, updated_at = $4
+WHERE id = $1`, id, raw, res.SSHD.KeysManagedElsewhere, now, res.SSHD.Read); err != nil {
 			return fmt.Errorf("inventory: store discovery facts: %w", err)
 		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("jobs"), Action: "target.discovered",
@@ -169,25 +179,54 @@ WHERE id = $1`, id, raw, res.SSHD.KeysManagedElsewhere, now); err != nil {
 	return sum, err
 }
 
-func upsertLocation(ctx context.Context, tx pgx.Tx, target uuid.UUID, k providers.DiscoveredSSHKey, platformFP string, now time.Time) (uuid.UUID, bool, error) {
-	isPlatform := platformFP != "" && k.Fingerprint == platformFP
-	var keyID uuid.UUID
-	err := tx.QueryRow(ctx, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, bits, public_key, is_platform_key, weak, first_seen_at, created_at)
+// upsertKeys stores one ssh_keys row per fingerprint and returns their ids by (cleaned)
+// fingerprint. The rows are upserted in fingerprint order: scans of different servers that share
+// keys (the platform key, an administrator's key) lock the shared rows in the same order and so
+// never deadlock, whatever order each server lists its keys in.
+func upsertKeys(ctx context.Context, tx pgx.Tx, entries []providers.DiscoveredSSHKey, platformFP string, now time.Time) (map[string]uuid.UUID, error) {
+	byFP := map[string]providers.DiscoveredSSHKey{}
+	newIDs := map[string]uuid.UUID{} // allocated in discovery order: keys first seen together list in that order
+	weak := map[string]bool{}
+	for _, k := range entries {
+		fp := clean(k.Fingerprint)
+		if _, ok := byFP[fp]; !ok {
+			byFP[fp] = k
+			newIDs[fp] = uuid.Must(uuid.NewV7())
+		}
+		weak[fp] = weak[fp] || slices.Contains(k.Flags, providers.FlagWeak)
+	}
+	fps := make([]string, 0, len(byFP))
+	for fp := range byFP {
+		fps = append(fps, fp)
+	}
+	slices.Sort(fps)
+	ids := make(map[string]uuid.UUID, len(fps))
+	for _, fp := range fps {
+		k := byFP[fp]
+		var keyID uuid.UUID
+		err := tx.QueryRow(ctx, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, bits, public_key, is_platform_key, weak, first_seen_at, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
 ON CONFLICT (fingerprint_sha256) DO UPDATE SET is_platform_key = ssh_keys.is_platform_key OR EXCLUDED.is_platform_key,
     weak = EXCLUDED.weak
-RETURNING id`, uuid.Must(uuid.NewV7()), clean(k.Fingerprint), clean(k.KeyType), k.Bits, clean(k.PublicKey), isPlatform,
-		slices.Contains(k.Flags, providers.FlagWeak), now).Scan(&keyID)
-	if err != nil {
-		return uuid.Nil, false, fmt.Errorf("inventory: store ssh key: %w", err)
+RETURNING id`, newIDs[fp], fp, clean(k.KeyType), k.Bits, clean(k.PublicKey), platformFP != "" && k.Fingerprint == platformFP,
+			weak[fp], now).Scan(&keyID)
+		if err != nil {
+			return nil, fmt.Errorf("inventory: store ssh key: %w", err)
+		}
+		ids[fp] = keyID
 	}
+	return ids, nil
+}
+
+func upsertLocation(ctx context.Context, tx pgx.Tx, target, keyID uuid.UUID, k providers.DiscoveredSSHKey, platformFP string, now time.Time) (uuid.UUID, bool, error) {
+	isPlatform := platformFP != "" && k.Fingerprint == platformFP
 	flags := make([]string, 0, len(k.Flags))
 	for _, f := range k.Flags {
 		flags = append(flags, clean(f))
 	}
 	var locID uuid.UUID
 	var inserted bool
-	err = tx.QueryRow(ctx, `INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, options, comment, flags,
+	err := tx.QueryRow(ctx, `INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, options, comment, flags,
     first_seen_at, last_seen_at, is_alice_connection_key)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11)
 ON CONFLICT (ssh_key_id, target_id, os_user, file_path) DO UPDATE SET line_no = EXCLUDED.line_no, options = EXCLUDED.options,

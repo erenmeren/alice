@@ -16,6 +16,11 @@ var (
 	ErrLastRootKey          = errors.New("inventory: this is the last key of root")
 	ErrKeysManagedElsewhere = errors.New("inventory: keys on this server are managed by AuthorizedKeysCommand")
 	ErrNotRemovable         = errors.New("inventory: this key location cannot be removed")
+	// ErrSSHDUnreadable: the last scan could not read sshd's settings (for the server or the
+	// key's user), so the files Alice sees may not be the ones sshd uses.
+	ErrSSHDUnreadable = errors.New("inventory: the server's sshd settings could not be read")
+	// ErrJobConflict: the same job is already queued with other options (EnqueueTx).
+	ErrJobConflict = errors.New("inventory: the same job is already queued with other options")
 	// ErrNoPlatformKey means EnsurePlatformKey has not run on this database yet.
 	ErrNoPlatformKey = errors.New("inventory: the platform SSH key does not exist yet")
 )

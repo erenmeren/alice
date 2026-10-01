@@ -38,6 +38,7 @@ type stubInventory struct {
 	markErr      error
 	removalErr   error
 	removals     []string
+	removalCtx   []error // ctx.Err() at each RecordRemovalFailure
 }
 
 func (s *stubInventory) TargetRef(_ context.Context, id uuid.UUID) (providers.TargetRef, inventory.Target, error) {
@@ -75,8 +76,9 @@ func (s *stubInventory) KeyLocation(context.Context, uuid.UUID) (inventory.KeyLo
 func (s *stubInventory) MarkKeyRemoved(context.Context, uuid.UUID, audit.Actor, providers.AuthKeyResult) error {
 	return s.markErr
 }
-func (s *stubInventory) RecordRemovalFailure(_ context.Context, _ uuid.UUID, _ audit.Actor, reason string) error {
+func (s *stubInventory) RecordRemovalFailure(ctx context.Context, _ uuid.UUID, _ audit.Actor, reason string) error {
 	s.removals = append(s.removals, reason)
+	s.removalCtx = append(s.removalCtx, ctx.Err())
 	return s.removalErr
 }
 
@@ -396,3 +398,27 @@ func TestWriteTrackerForwardsSteps(t *testing.T) {
 type stepFunc func(name string, s providers.StepStatus)
 
 func (f stepFunc) Step(name string, s providers.StepStatus, _ map[string]string) { f(name, s) }
+
+// The failure audit is written even when the job's context ended (lost lease, shutdown).
+func TestRemovalFailureIsAuditedAfterCancel(t *testing.T) {
+	u, j := removalUnit(t)
+	u.inv.location.IsAliceConnectionKey = true
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := u.h.removeKey(ctx, j, nil)
+	require.Error(t, err)
+	assert.Equal(t, []string{"sshkey.own_key_protected"}, u.inv.removals)
+	assert.Equal(t, []error{nil}, u.inv.removalCtx)
+}
+
+func TestRemoveUnverifiedIsNotRecordedAsRemoved(t *testing.T) {
+	u, j := removalUnit(t)
+	u.inv.markErr = errors.New("must not be called")
+	u.prov.Configure(func(c *fake.Config) { c.RemoveResult = providers.AuthKeyResult{Changed: true, Removed: 1} })
+	out, err := u.h.removeKey(context.Background(), j, nil)
+	r, c := reason(t, err)
+	assert.Equal(t, "sshkey.verify_failed", r)
+	assert.Equal(t, jobs.NeedsAttention, c)
+	assert.Equal(t, map[string]any{"changed": true, "removed": 1, "verified": false}, out)
+	assert.Equal(t, []string{"sshkey.verify_failed"}, u.inv.removals)
+}

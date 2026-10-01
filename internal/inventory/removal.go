@@ -31,19 +31,36 @@ func (d *denial) Unwrap() error { return d.err }
 // AuthorizedKeysCommand for (F-35, per user through a Match block; param user).
 const warnKeysManagedElsewhere = "keys_managed_elsewhere"
 
+// warnSSHDUnreadable is the provider's warning that sshd's settings could not be read: without
+// param user for the whole server (defaults were assumed), with it for one user's Match block.
+const warnSSHDUnreadable = "sshd_unreadable"
+
+// warnedFor reports whether the last discovery gave the warning code for user.
+func warnedFor(f Facts, code, user string) bool {
+	return slices.ContainsFunc(f.Warnings, func(w providers.Warning) bool {
+		return w.Code == code && w.Params["user"] == user
+	})
+}
+
 // managedElsewhereFor reports whether the last discovery found that sshd asks a program for
 // user's keys (the target-wide case is Target.KeysManagedElsewhere).
 func managedElsewhereFor(f Facts, user string) bool {
-	return slices.ContainsFunc(f.Warnings, func(w providers.Warning) bool {
-		return w.Code == warnKeysManagedElsewhere && w.Params["user"] == user
-	})
+	return warnedFor(f, warnKeysManagedElsewhere, user)
+}
+
+// sshdUnreadFor reports whether the last discovery could not read sshd's settings for the server
+// or for user: the files Alice sees may then not be the ones sshd uses for that user.
+func sshdUnreadFor(f Facts, user string) bool {
+	return f.SSHD == nil || !f.SSHD.Read || warnedFor(f, warnSSHDUnreadable, user)
 }
 
 // RequestKeyRemoval validates and queues the removal of one key location (§13.4, R37 item 9).
 // Alice's own key, unconfirmed or changed servers, AuthorizedKeysCommand servers and users
-// (F-35), cert-authority lines, keys no longer present and root's last key without an
-// Administrator's confirmation are refused before anything is queued; refusals that protect
-// access are audited. The job's user and file are those of the location row.
+// (F-35), servers and users whose sshd settings the last scan could not read, cert-authority
+// lines, keys no longer present and root's last key without an Administrator's confirmation are
+// refused before anything is queued; refusals that protect access are audited. The job's user
+// and file are those of the location row. The same removal already queued with another root
+// confirmation answers ErrJobConflict.
 func (s *Service) RequestKeyRemoval(ctx context.Context, a Actor, locationID uuid.UUID, confirmLastRootKey bool) (uuid.UUID, error) {
 	allowLastRoot := confirmLastRootKey && a.Role == rbac.Admin
 	var jobID uuid.UUID
@@ -85,6 +102,8 @@ WHERE l.id = $1 AND l.target_id = $2 FOR UPDATE OF l`, locationID, targetID), &i
 			return ErrHostKeyChanged
 		case t.KeysManagedElsewhere || managedElsewhereFor(t.Facts, loc.OSUser):
 			return &denial{reason: "keys_managed_elsewhere", err: ErrKeysManagedElsewhere, loc: loc}
+		case sshdUnreadFor(t.Facts, loc.OSUser):
+			return &denial{reason: "sshd_unreadable", err: ErrSSHDUnreadable, loc: loc}
 		}
 		if loc.OSUser == "root" && !allowLastRoot {
 			var others int
