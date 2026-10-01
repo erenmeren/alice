@@ -247,7 +247,8 @@ describe("license page", () => {
             notice("LIC-1", "locked"),
             notice("", "clock_behind:2026-10-20"),
             notice("", "tampered:0192a000-0000-7000-8000-0000000000f1"),
-            notice("", "installation_tampered:ALICE-7F3K-9Q2M-XD41-B8TC"),
+            notice("", "installation_tampered:ALICE-7F3K-9Q2M-XD41-B8TC:2"),
+            notice("", "installation_restored:ALICE-7F3K-9Q2M-XD41-B8TC:1"),
             notice("", "something_new:1"),
           ],
         }),
@@ -270,6 +271,7 @@ describe("license page", () => {
       "Server clock behind (2026-10-20)",
       "Changed license file",
       "Installation record changed",
+      "Installation record restored",
       "something_new:1",
     ]) {
       expect(within(history).getByText(text)).toBeInTheDocument();

@@ -323,6 +323,7 @@
       "license_tampered": "Kayıtlı lisans dosyası Alice dışında değiştirildi",
       "license_installation_tampered": "Kurulum kaydı Alice dışında değiştirildi",
       "license_installation_sealed": "Kurulum kaydı koruma altına alındı",
+      "license_installation_restored": "Kurulum kaydı geri yüklendi",
       "license_upload_invalid": "Lisans yüklemesi reddedildi: geçerli bir lisans değil",
       "license_upload_invalid_signature": "Lisans yüklemesi reddedildi: imza eşleşmiyor",
       "license_upload_unsupported_format": "Lisans yüklemesi reddedildi: daha yeni bir dosya biçimi",
@@ -446,7 +447,8 @@
       "locked": "Lisans kilitlendi",
       "clock_behind": "Sunucu saati geride ({{date}})",
       "tampered": "Değiştirilmiş lisans dosyası",
-      "installation_tampered": "Kurulum kaydı değiştirildi"
+      "installation_tampered": "Kurulum kaydı değiştirildi",
+      "installation_restored": "Kurulum kaydı geri yüklendi"
     }
   }
 }

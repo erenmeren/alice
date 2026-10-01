@@ -50,6 +50,7 @@ const PHASE2_ACTIONS = [
   'license.tampered',
   'license.installation_tampered',
   'license.installation_sealed',
+  'license.installation_restored',
   'license.upload.invalid',
   'license.upload.invalid_signature',
   'license.upload.unsupported_format',

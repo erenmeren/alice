@@ -78,7 +78,7 @@ func TestChangedInstallationTimeLocks(t *testing.T) {
 	e.restart()
 	e.requireTamperedLock()
 	assert.Equal(t, 1, e.auditCount("license.installation_tampered"))
-	assert.Equal(t, map[string]string{"problem": "seal_mismatch", "installation_id": e.installation()},
+	assert.Equal(t, map[string]string{"problem": "seal_mismatch", "installation_id": e.installation(), "episode": "1"},
 		e.auditDetails("license.installation_tampered"), "the details name the problem, never the seal")
 
 	e.tickAt(installedAt.Add(29*day + time.Hour))
@@ -281,4 +281,100 @@ func TestInstallationSealFaults(t *testing.T) {
 		e.revoke("SELECT", "license")
 		require.ErrorContains(t, e.newService().Start(e.ctx), "read the installation")
 	})
+}
+
+// notices returns the installation notices of the history in the order they were written.
+func (e *env) installationNotices() []string {
+	e.t.Helper()
+	rows, err := e.db.Owner.Query(e.ctx, `SELECT notice FROM license_history
+WHERE event = 'notice' AND (notice LIKE 'installation\_tampered:%' OR notice LIKE 'installation\_restored:%') ORDER BY id`)
+	require.NoError(e.t, err)
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		require.NoError(e.t, rows.Scan(&n))
+		out = append(out, n)
+	}
+	require.NoError(e.t, rows.Err())
+	return out
+}
+
+func (e *env) auditEpisodes(action string) []string {
+	e.t.Helper()
+	rows, err := e.db.Owner.Query(e.ctx, "SELECT details->>'episode' FROM audit_log WHERE action = $1 ORDER BY seq", action)
+	require.NoError(e.t, err)
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		require.NoError(e.t, rows.Scan(&n))
+		out = append(out, n)
+	}
+	require.NoError(e.t, rows.Err())
+	return out
+}
+
+// Carry 4a: every tamper episode is audited once; restoring the original record closes the
+// episode, and a later change opens a new one.
+func TestInstallationTamperEpisodes(t *testing.T) {
+	e := newEnv(t)
+	id := e.installation()
+	original := e.svc.Snapshot().InstalledAt
+
+	e.ownerExec("UPDATE license SET installed_at = $1", original.Add(20*day))
+	e.tickAt(installedAt.Add(time.Hour))
+	e.requireTamperedLock()
+	e.tickAt(installedAt.Add(2 * time.Hour))
+	assert.Equal(t, []string{"1"}, e.auditEpisodes("license.installation_tampered"), "one episode, audited once")
+
+	e.ownerExec("UPDATE license SET installed_at = $1", original)
+	e.tickAt(installedAt.Add(3 * time.Hour))
+	assert.False(t, e.svc.Snapshot().InstallationTampered, "the original record is trusted again")
+	assert.Equal(t, license.PhaseEvaluation, e.svc.Snapshot().Eval.Phase)
+	assert.Equal(t, []string{"1"}, e.auditEpisodes("license.installation_restored"))
+	assert.Equal(t, map[string]string{"installation_id": id, "episode": "1"}, e.auditDetails("license.installation_restored"))
+	e.tickAt(installedAt.Add(4 * time.Hour))
+	assert.Equal(t, 1, e.auditCount("license.installation_restored"), "a clean record closes an episode once")
+
+	e.ownerExec("UPDATE license SET installation_seal = decode(repeat('ab', 32), 'hex')")
+	e.restart()
+	e.requireTamperedLock()
+	assert.Equal(t, []string{"1", "2"}, e.auditEpisodes("license.installation_tampered"), "the second tampering is recorded")
+	assert.Equal(t, []string{
+		"installation_tampered:" + id + ":1",
+		"installation_restored:" + id + ":1",
+		"installation_tampered:" + id + ":2",
+	}, e.installationNotices())
+}
+
+// An installation tampered under Phase 2 has the notice without an episode number: it counts as
+// the open episode 1, so it is not reported again, and restoring the record closes it.
+func TestPhase2TamperNoticeCountsAsEpisodeOne(t *testing.T) {
+	e := newEnv(t)
+	id := e.installation()
+	original := e.svc.Snapshot().InstalledAt
+	e.ownerExec(`INSERT INTO license_history (id, at, event, license_id, notice, details)
+VALUES (gen_random_uuid(), now(), 'notice', '', $1, '{}')`, "installation_tampered:"+id)
+	e.ownerExec("UPDATE license SET installed_at = $1", original.Add(20*day))
+	e.restart()
+	e.requireTamperedLock()
+	assert.Zero(t, e.auditCount("license.installation_tampered"), "episode 1 was already recorded by Phase 2")
+
+	e.ownerExec("UPDATE license SET installed_at = $1", original)
+	e.tickAt(installedAt.Add(time.Hour))
+	assert.Equal(t, []string{"1"}, e.auditEpisodes("license.installation_restored"))
+	assert.Contains(t, e.installationNotices(), "installation_restored:"+id+":1")
+}
+
+// The episode prefix is matched exactly: a notice of another installation whose ID starts with
+// this one's characters never counts.
+func TestInstallationEpisodesIgnoreOtherInstallations(t *testing.T) {
+	e := newEnv(t)
+	id := e.installation()
+	e.ownerExec(`INSERT INTO license_history (id, at, event, license_id, notice, details)
+VALUES (gen_random_uuid(), now(), 'notice', '', $1, '{}')`, "installation_tampered:"+id+"X:1")
+	e.ownerExec("UPDATE license SET installed_at = installed_at + interval '1 day'")
+	e.restart()
+	assert.Equal(t, []string{"1"}, e.auditEpisodes("license.installation_tampered"))
 }

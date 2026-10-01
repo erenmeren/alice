@@ -12,5 +12,7 @@ GRANT UPDATE (state, clock_jump, updated_at, installation_seal) ON license TO al
 
 -- +goose Down
 REVOKE UPDATE (state, clock_jump, updated_at, installation_seal) ON license FROM alice_app;
-GRANT UPDATE ON license TO alice_app;
+-- A downgrade keeps the installation ID and timestamp read-only for the application (carry 4b):
+-- it gets back only the columns it may write, never table-wide UPDATE.
+GRANT UPDATE (state, clock_jump, updated_at) ON license TO alice_app;
 ALTER TABLE license DROP COLUMN installation_seal;

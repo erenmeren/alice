@@ -200,20 +200,67 @@ func (s *Service) sealUnsealed(ctx context.Context) error {
 	})
 }
 
-// recordInstallationTampered audits an untrusted installation row once per installation ID.
-func (s *Service) recordInstallationTampered(ctx context.Context, tx pgx.Tx, c computed, now time.Time) ([]audit.Event, error) {
-	if c.row.Tampered == "" {
-		return nil, nil
+// Notice kinds of the installation record episodes: "<kind>:<installation id>:<n>". Phase 2 wrote
+// "installation_tampered:<installation id>" without a number; it counts as episode 1.
+const (
+	noticeInstallationTampered = "installation_tampered"
+	noticeInstallationRestored = "installation_restored"
+)
+
+// episodes counts the notices of kind for installation id: the Phase 2 key "<kind>:<id>" and every
+// "<kind>:<id>:<n>". The prefix is compared exactly (no LIKE), so another ID never matches.
+func episodes(ctx context.Context, tx pgx.Tx, kind, id string) (int, error) {
+	prefix := kind + ":" + id
+	var n int
+	err := tx.QueryRow(ctx, `SELECT count(*) FROM license_history
+WHERE event = 'notice' AND license_id = '' AND (notice = $1::text OR left(notice, length($1::text) + 1) = $1::text || ':')`,
+		prefix).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("read the installation notices: %w", err)
 	}
-	d := map[string]string{"problem": c.row.Tampered, "installation_id": c.row.ID}
-	inserted, err := insertHistory(ctx, tx, now, "notice", "", "", "", "installation_tampered:"+c.row.ID, d)
-	if err != nil || !inserted {
+	return n, nil
+}
+
+// recordInstallationEpisode audits each tamper episode of the installation row once: an untrusted
+// row with no open episode opens the next one (license.installation_tampered); a trusted row with
+// an open episode closes it (license.installation_restored). The caller holds the license row
+// lock, so two evaluations cannot both open the same episode; the unique notice index makes it
+// exactly-once even across processes.
+func (s *Service) recordInstallationEpisode(ctx context.Context, tx pgx.Tx, c computed, now time.Time) ([]audit.Event, error) {
+	id := c.row.ID
+	tampered, err := episodes(ctx, tx, noticeInstallationTampered, id)
+	if err != nil {
 		return nil, err
 	}
-	s.log.Error("the installation record was changed outside Alice; the evaluation counts as ended and no license "+
-		"file is used until the original record is restored", "problem", c.row.Tampered)
-	return []audit.Event{{Actor: systemActor, Action: "license.installation_tampered", ObjectType: "license",
-		ObjectID: c.row.ID, Result: audit.Failure, Details: d}}, nil
+	restored, err := episodes(ctx, tx, noticeInstallationRestored, id)
+	if err != nil {
+		return nil, err
+	}
+	open := tampered > restored
+	switch {
+	case c.row.Tampered != "" && !open:
+		n := strconv.Itoa(tampered + 1)
+		d := map[string]string{"problem": c.row.Tampered, "installation_id": id, "episode": n}
+		inserted, err := insertHistory(ctx, tx, now, "notice", "", "", "", noticeInstallationTampered+":"+id+":"+n, d)
+		if err != nil || !inserted {
+			return nil, err
+		}
+		s.log.Error("the installation record was changed outside Alice; the evaluation counts as ended and no license "+
+			"file is used until the original record is restored", "problem", c.row.Tampered, "episode", n)
+		return []audit.Event{{Actor: systemActor, Action: "license.installation_tampered", ObjectType: "license",
+			ObjectID: id, Result: audit.Failure, Details: d}}, nil
+	case c.row.Tampered == "" && open:
+		n := strconv.Itoa(tampered)
+		d := map[string]string{"installation_id": id, "episode": n}
+		inserted, err := insertHistory(ctx, tx, now, "notice", "", "", "", noticeInstallationRestored+":"+id+":"+n, d)
+		if err != nil || !inserted {
+			return nil, err
+		}
+		s.log.Info("the installation record matches its seal again; licenses count again", "episode", n)
+		return []audit.Event{{Actor: systemActor, Action: "license.installation_restored", ObjectType: "license",
+			ObjectID: id, Result: audit.Success, Details: d}}, nil
+	}
+	return nil, nil
 }
 
 // evaluateInstallation is Evaluate for the stored installation. An untrusted row counts as an

@@ -66,7 +66,7 @@ func (s *Service) tickLocked(ctx context.Context) error {
 			func() ([]audit.Event, error) { return s.sendNotices(ctx, tx, c, now) },
 			func() ([]audit.Event, error) { return s.recordClockEvents(ctx, tx, c, reading, clockEvents, now) },
 			func() ([]audit.Event, error) { return s.recordTampered(ctx, tx, c, now) },
-			func() ([]audit.Event, error) { return s.recordInstallationTampered(ctx, tx, c, now) },
+			func() ([]audit.Event, error) { return s.recordInstallationEpisode(ctx, tx, c, now) },
 		} {
 			evs, err := step()
 			if err != nil {

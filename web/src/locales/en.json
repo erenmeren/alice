@@ -323,6 +323,7 @@
       "license_tampered": "Stored license file changed outside Alice",
       "license_installation_tampered": "Installation record changed outside Alice",
       "license_installation_sealed": "Installation record protected",
+      "license_installation_restored": "Installation record restored",
       "license_upload_invalid": "License upload refused: not a valid license",
       "license_upload_invalid_signature": "License upload refused: signature does not match",
       "license_upload_unsupported_format": "License upload refused: newer file format",
@@ -446,7 +447,8 @@
       "locked": "License locked",
       "clock_behind": "Server clock behind ({{date}})",
       "tampered": "Changed license file",
-      "installation_tampered": "Installation record changed"
+      "installation_tampered": "Installation record changed",
+      "installation_restored": "Installation record restored"
     }
   }
 }
