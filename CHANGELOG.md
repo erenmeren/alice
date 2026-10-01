@@ -18,6 +18,8 @@
   administration and tokens keep working. Nothing is deleted.
 - Clock protection: a server clock set back never extends a license; a forward jump of more than 48 hours waits
   24 hours before it can start the grace period or the lock.
+- The installation record (Installation ID and evaluation start) is protected by a key derived from the master key:
+  a changed or deleted record never starts a new evaluation (audited as `license.installation_tampered`).
 - `licensectl` (vendor only, never shipped): `keygen`, `issue`, `inspect`, `verify`, `keyset`, `ledger-verify`,
   with an encrypted key file and a signed issuance ledger.
 - CLI: `alice license status`, `alice license keys`.
