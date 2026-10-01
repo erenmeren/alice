@@ -37,6 +37,14 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   was edited or damaged). Alice ignores it. Upload the license file from the vendor again.
 - **Everyone sees "The evaluation period has ended" or "License expired"** An administrator uploads a license on
   the **License** page; everything works again at once.
+- **"The evaluation period has ended" right after a database change, and the Audit log lists "Installation record
+  changed outside Alice" (`license.installation_tampered`).** The Installation ID or the evaluation start in the
+  database no longer matches its protection (problem `seal_mismatch` or `seal_missing`), or the record was deleted
+  (`installation_missing`). Alice does not trust a changed record and ignores every license until the original
+  record is restored, for example from a backup. After a deleted record, Alice created a new Installation ID: send
+  it to your vendor for a license.
+- **Alice logs "this build has no build time".** The image was built without `ALICE_BUILD_TIME` (for example with a
+  plain `docker compose build`). Rebuild with `make up` or `make image`; see `docs/dev/getting-started.md`.
 - **Every upload says "This license was issued with a key this version of Alice does not know."** If this happens
   with every file from your vendor, the build has no vendor key (`alice license keys` says so): install the
   vendor's release build.

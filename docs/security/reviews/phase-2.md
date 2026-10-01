@@ -57,11 +57,12 @@ All commands run from the repository root; integration tests (`-tags integration
 | P2-02 | Low | A forward clock jump that happens while Alice is stopped is not detected (downtime and a jump look the same), and the first observation after a start never detects a jump: a start with a far-future clock goes straight to the phase of that time. | Accepted: a forward jump can only shorten a license; a correction license (which also ends a held jump) covers it. |
 | P2-03 | Low | The SMTP password is read from a file on the host (`ALICE_SMTP_PASSWORD_FILE`). | Accepted for Phase 2; Phase 7 stores it envelope-encrypted in `setting_secrets`. |
 | P2-04 | Low | Removing the last rows of the vendor ledger, or putting an older copy back, is not detectable from the ledger alone. | Accepted: `licensectl` prints the row count and chain head after every issue for the vendor's paper log; both USB copies are compared during the yearly recovery test. |
-| P2-05 | Low | A clock set back more than about 30 s makes TOTP codes fail until the clock catches up (Phase 1 replay protection uses the wall clock). | Accepted; documented in `docs/licensing.md`; `alice admin reset-mfa` recovers the only administrator. |
+| P2-05 | Low | A server clock set back more than about 30 s rejects the codes of phone authenticators (which follow the real time) until the server clock is corrected; it does not catch up by itself. Phase 1 replay protection also refuses codes for steps before the last used one. | Accepted; documented in `docs/licensing.md`; correct the clock (NTP); `alice admin reset-mfa` recovers the only administrator. |
 | P2-06 | Low | The periodic scheduler has no cross-process lock (§8.3); two processes during an update both evaluate. | Accepted: evaluations serialize on the license row and notices are unique per license. Phase 3's queue adds the advisory lock. |
 | P2-07 | Low | `replaces` is honored for any license ID, even one never uploaded, both for the "older license" rule and for accepting a held clock jump; an expired correction still supersedes its target and an A↔B replace cycle supersedes both. | Accepted: only the vendor can sign such a file and license time only moves forward; `licensectl` refuses shortening corrections without `--shorten`, cycles and corrections across installations or keys. |
 | P2-08 | Info | Until the owner commits the production key, release builds accept no license. | Intended (R36); `make release-keycheck` blocks a release. |
 | P2-09 | Info | `licensectl` is Unix-only (`flock`), opens the lock file without `O_NOFOLLOW`, and `ledger-verify` reads without the lock (it can report a half-written row during a concurrent `issue`). | Accepted: the vendor machine is a single-user offline Linux or macOS system; the vendor guide says not to verify during an issue. |
+| P2-10 | Medium | Final review B1: the installation row (ID and timestamp) was not authenticated, so editing it restarted the evaluation or bound a license issued for another installation, and deleting it created a fresh evaluation. | Fixed: the row is sealed (HMAC under `alice/installation/v1`); a mismatch, a removed seal or a removed row with a valid time record or completed setup is audited (`license.installation_tampered`) and evaluated as an ended evaluation; `alice_app` can no longer update the ID or the timestamp. Remaining accepted bypasses (R36 addendum j): whoever holds the master key can compute a valid seal; a patched binary skips every check; a database emptied of every trace (installation row, both time record copies, setup completion) is indistinguishable from a new one; and the owner role can clear the seal of an installation that was never sealed by the one-time upgrade step, which then seals the edited row once (audited as `license.installation_sealed`). |
 
 No High finding is open.
 
@@ -90,6 +91,10 @@ No High finding is open.
   A fresh database next to a leftover damaged `hwm.dat` is not audited. Validation runs before the installation
   binding, so a foreign file with impossible dates is reported as invalid rather than as foreign.
 - **Clock.** P2-02 and P2-05 above.
+- **Installation record.** P2-10's remaining bypasses. An installation whose record was changed outside Alice stays
+  in "evaluation ended" until the original record is restored (for example from a backup); a removed record gets a
+  new Installation ID whose evaluation has already ended, so the customer needs a license for the new ID. The License
+  page shows the phase but no dedicated banner for this; the audit log names it.
 - **Deferred small items.** `licensectl keygen --split` (Shamir, §16.7, only with a second trusted person); the
   "Download request file" button (§19.1); a native-speaker tone review of the Turkish texts; Windows vendor
   machines. The Phase 1 findings still open (P1-01..P1-10) stay as recorded in `docs/security/reviews/phase-1.md`.
@@ -145,7 +150,7 @@ everywhere below, including the `Origin` header.
 3. **An edited file is refused.** Open `test.alicelic` in a text editor, change any number (for example
    `"max_targets": 10` to `"max_targets": 11`), save it as `edited.alicelic` and upload it.
    Expected: "This file is not a valid Alice license." and the page still shows "Valid until <date>, 10 targets".
-   **Audit log** lists `license.upload.invalid_signature`.
+   **Audit log** lists "License upload refused: signature does not match" (`license.upload.invalid_signature`).
 
 ### Steps with the test build (4–5)
 
@@ -160,18 +165,27 @@ h=hmac.new(base64.b32decode(sys.argv[1].replace(" ","").upper()),struct.pack(">Q
 print("%06d"%((struct.unpack(">I",h[o:o+4])[0]&0x7fffffff)%1000000))' <YOUR KEY>
 ```
 
-`<YOUR KEY>` is the key shown below the QR code when you set up the authenticator in the wizard (write it down
-then). A code works once: wait 30 seconds before the next sign-in at the same clock time.
+`<YOUR KEY>` is the authenticator key of the administrator you create in step 4's wizard (the reset at the start
+of step 4 removes every earlier administrator, so an older key no longer works). Capture it on the wizard's
+**Set up your authenticator app** screen: below the QR code, under "Cannot scan the code? Type this key into the
+app instead:", Alice shows the key as one line of capital letters and digits. Write it down (or copy it into a
+text file on your development machine) before you continue, and also add it to your phone's authenticator as usual.
+A code works once: wait 30 seconds before the next sign-in at the same clock time.
 
-4. **Warnings, grace, lock and renewal.**
+4. **Warnings, grace, lock and renewal.** Start the test build and **reset it first. The reset erases everything
+   steps 1–3 created** (the administrator, the real license, the audit log and the Installation ID), because the
+   test build uses the same development database; finish steps 1–3 and write their results down before this.
 
    ```bash
    make e2e-up         # the test build, on the development database (see the warning above)
+   curl -sk -X POST -H 'Origin: https://localhost' https://localhost/test/reset   # empties every table: a fresh installation
    make setup-token
    ```
 
+   Instead of the `curl` line you can run `make reset && make e2e-up` (it also deletes the key and state volumes).
    Open `https://localhost` and finish the wizard with **an email address for the administrator** and
-   **Start 30-day evaluation (up to 5 targets)**. Create a test license that ends in 61 days and save it as a file:
+   **Start 30-day evaluation (up to 5 targets)**. On the authenticator screen write down the key as described
+   above. Create a test license that ends in 61 days and save it as a file:
 
    ```bash
    curl -sk -X POST -H 'Origin: https://localhost' https://localhost/test/license -d '{"valid_days":61}' \
@@ -212,17 +226,18 @@ then). A code works once: wait 30 seconds before the next sign-in at the same cl
 
    Expected after **Install license**: "License activated. All features are available again." and the red banner
    is gone at once.
-5. **A clock set back does not extend the license.** Still signed in, note the days left on **License**
-   ("Valid until <date>"), then move the clock five days back and reload the page (do not sign out: with the clock
-   set back, new sign-in codes are refused until it catches up, see P2-05):
+5. **A clock set back does not extend the license.** Still signed in, note the date on **License**
+   ("Valid until <date>"), then move the clock five days back and reload the page (do not sign out: with the test
+   clock set back, sign-in codes are refused until it passes the last code used; on a real server phone codes are
+   refused until the clock is corrected, see P2-05):
 
    ```bash
    curl -sk -X POST -H 'Origin: https://localhost' https://localhost/test/clock -d '{"advance_seconds":-432000}'
    ```
 
    Expected: the orange banner "The server clock changed unexpectedly (it says …, but Alice last saw …)" and the
-   valid-until date and days left are unchanged (not five days more). **Audit log** lists
-   `clock.rollback_detected` once.
+   "Valid until <date>" is the same date as before (not five days later). **Audit log** lists
+   "Server clock set back" (`clock.rollback_detected`) once.
 
 When you are done, run `make down`. The next `make up` builds the release image again; its data is what the test
 left behind, so run `make reset` (which deletes it) before using the stack for anything else.

@@ -49,7 +49,8 @@ macOS (the ledger lock uses `flock`); Windows is not supported. `licensectl help
    box or with a notary; the passphrase paper **separately** from both drives. When a second trusted person
    exists, give them a sealed copy of the passphrase.
 6. Check that each drive's copy opens: run `licensectl issue --key <copy> …` up to the summary and answer `no`
-   (nothing is signed and nothing is written).
+   (nothing is signed and no license file or ledger row is written; the only file that may appear is an empty
+   lock file `issued.csv.lock` next to the copy, which is harmless and can stay).
 
 If the key is lost, no new licenses can be issued that shipped builds accept. If it leaks, anyone can forge
 licenses: follow "Key compromise" below at once.
@@ -150,6 +151,25 @@ count and chain head as the paper log). Record the date in the paper log.
    trusted), only after every license signed with it has expired or been reissued. A cutoff is only for retiring
    a key that was **not** compromised.
 
+`licensectl keyset` prints one key. To trust several, merge the `"keys"` entries of each output into the one
+`"keys"` list of `production.json` by hand (one entry per key ID, never two with the same ID), then run
+`make release-keycheck` and `alice license keys` in the built image and compare every fingerprint with your paper.
+For example, after a rotation that retires `vk-2026-01` for licenses issued from 2028 on (the public keys are
+shortened here):
+
+```json
+{
+  "keys": [
+    {"key_id": "vk-2026-01", "public_key": "q1Xr…=", "status": "revoked", "revoked_from": "2028-01-01T00:00:00Z"},
+    {"key_id": "vk-2027-01", "public_key": "Z8bT…=", "status": "active"}
+  ]
+}
+```
+
+After a compromise (step 8) the leaked key's entry has **no** `revoked_from`:
+`{"key_id": "vk-2026-01", "public_key": "q1Xr…=", "status": "revoked"}`. An `"active"` key may not have
+`revoked_from`; Alice refuses to start with such a key set, so `make release-keycheck` fails first.
+
 ## 8. Key compromise
 
 If the private key **or** its passphrase may have leaked:
@@ -159,7 +179,10 @@ If the private key **or** its passphrase may have leaked:
    `"status": "revoked"` **with no `revoked_from` cutoff**. `issued_at` is chosen by whoever signs, so an attacker
    holding the key can backdate a forged license to before any cutoff; only a revocation without a cutoff rejects
    every license signed with that key (a test proves this).
-3. Reissue every customer's active license with the new key, free of charge, and send them with the release that
-   revokes the old key. Customers see "This license was signed with a key that is no longer trusted." until they
-   upload the new file.
+3. Reissue every customer's active license with the new key, free of charge, and make sure every customer **has
+   the new file before, or together with, the release** that revokes the old key. As soon as a customer runs that
+   release, every stored license signed with the leaked key stops counting: with no other license, Alice is in
+   "evaluation ended" (lock mode, usually at once, because the 30-day evaluation ran out long ago), the License page
+   lists the old file as **Damaged**, and only uploading the new file ends the lock. Uploading an old file again
+   shows "This license was signed with a key that is no longer trusted."
 4. Notify customers (spec §17.4) and start a new ledger and paper log for the new key.

@@ -81,9 +81,10 @@ Alice remembers the latest time it has seen, in the database and in a protected 
 - A jump that happens while Alice is stopped is counted like normal downtime: it can only make the license end
   sooner, never later. If that happens by mistake, ask the vendor for a correction license.
 
-Keep the server time synchronised (NTP). A clock set back by more than about 30 seconds also makes sign-in codes
-fail until the clock catches up with the last code that was used (Alice never accepts a code twice); if the only
-administrator is affected, the server operator runs `alice admin reset-mfa <username>`.
+Keep the server time synchronised (NTP). A server clock set back by more than about 30 seconds also makes sign-in
+codes from phone authenticators fail: the phone follows the real time, the server does not, so the codes are
+refused **until the server clock is corrected** (it does not catch up by itself). Correct the clock first; if the
+only administrator still cannot sign in, the server operator runs `alice admin reset-mfa <username>`.
 
 ## Frequently asked questions
 
@@ -93,6 +94,11 @@ administrator is affected, the server operator runs `alice admin reset-mfa <user
   decide whether that is allowed.
 - **Which build accepts our license?** Every release from your vendor. `alice license keys` shows the vendor key
   fingerprints the build trusts; compare them with the fingerprint in the vendor's email.
+- **Can someone restart the evaluation by editing or deleting the installation record in the database?** No. The
+  Installation ID and the evaluation start are protected with a key derived from the master key. A changed record
+  is ignored: Alice treats the evaluation as ended (lock mode) until the original record is restored, and the audit
+  log lists "Installation record changed outside Alice". A deleted record gets a new Installation ID whose
+  evaluation has already ended, so a license for the new ID is needed.
 - **Can someone edit the license file to get more targets?** No. The file is signed; any change makes it "not a
   valid Alice license". An edited file already stored in the database is ignored, and administrators see "License
   data was changed outside Alice …".
