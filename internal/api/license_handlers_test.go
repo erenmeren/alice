@@ -212,3 +212,18 @@ func TestLicenseUploadErrors(t *testing.T) {
 		}
 	}
 }
+
+// Carry 2: before the first evaluation the snapshot holds no state; answering "not expired"
+// would be a guess, so the status is unavailable (retryable) until Start has completed.
+func TestLicenseStatusBeforeTheFirstEvaluationIsUnavailable(t *testing.T) {
+	d := testDeps(t, nil) // fakeLicense{}: Snapshot().Ready is false
+	h := NewHandler(d)
+	rec := call(h, http.MethodGet, "/api/v1/license/status", "admin", "")
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Equal(t, "ALC-SYS-0002", decodeErr(t, rec).Error.Code)
+	assert.Equal(t, "1", rec.Header().Get("Retry-After"))
+	assert.NotContains(t, rec.Body.String(), `"expired"`)
+
+	d.License.(*fakeLicense).snap = licenseSnapshot(licenseEnd.Add(-90 * 24 * time.Hour))
+	assert.Equal(t, http.StatusOK, call(NewHandler(d), http.MethodGet, "/api/v1/license/status", "admin", "").Code)
+}

@@ -132,6 +132,9 @@ func TestFailMapsDomainErrors(t *testing.T) {
 		{setup.ErrLicenseChoiceMissing, 409, "ALC-SET-0009"},
 		{setup.ErrForbidden, 403, "ALC-AUTH-0002"},
 		{fmt.Errorf("login: %w", auth.ErrTryAgain), 503, "ALC-AUTH-0012"},
+		// Carry 2: the bare sentinels (without the typed error that carries the numbers).
+		{license.ErrTargetLimit, 409, "ALC-LIC-0008"},
+		{fmt.Errorf("add target: %w", license.ErrWrongInstallation), 422, "ALC-LIC-0003"},
 	}
 	for _, tc := range cases {
 		rec := failRecorder(t, tc.err, nil)
@@ -217,4 +220,20 @@ func TestMetaTruncatesUserAgent(t *testing.T) {
 
 	req.Header.Set("User-Agent", "Mozilla\xff/5.0 \xc4")
 	assert.Equal(t, "Mozilla/5.0 ", s.meta(req).UserAgent, "invalid UTF-8 is dropped")
+}
+
+// A bare license sentinel has no numbers to show, so the answer carries no params (the typed
+// errors keep theirs, see TestLicenseUploadErrors and the target-limit tests).
+func TestFailMapsBareLicenseErrorsWithoutParams(t *testing.T) {
+	for _, err := range []error{license.ErrTargetLimit, license.ErrWrongInstallation} {
+		rec := failRecorder(t, err, nil)
+		var raw map[string]map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+		_, hasParams := raw["error"]["params"]
+		assert.False(t, hasParams, err.Error())
+	}
+	rec := failRecorder(t, &license.TargetLimitError{Max: 5, Used: 5}, nil)
+	var raw map[string]map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	assert.Equal(t, map[string]any{"used": "5", "max": "5"}, raw["error"]["params"])
 }

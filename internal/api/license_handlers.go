@@ -23,6 +23,13 @@ func (s *server) licenseRoutes() []route {
 func (s *server) licenseStatus(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())
 	snap := s.deps.License.Snapshot()
+	if !snap.Ready {
+		// Nothing has been evaluated yet (the service starts before the listener, so this is a
+		// short window or a failed start): say "try again" rather than guess "not expired".
+		w.Header().Set("Retry-After", "1")
+		s.writeError(w, r, ErrUnavailable)
+		return
+	}
 	out := licenseStatusDTO{Expired: snap.Eval.Expired(), Banners: bannersJSON(snap.Banners(p.Role == rbac.Admin))}
 	if p.Role == rbac.Admin || p.Role == rbac.Auditor {
 		phase := string(snap.Eval.Phase)

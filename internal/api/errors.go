@@ -119,6 +119,10 @@ var errorMap = []struct {
 	{license.ErrUnsupportedFormat, ErrLicenseUnsupportedFormat, nil},
 	{license.ErrOlderThanInstalled, ErrLicenseOlderThanInstalled, nil},
 	{license.ErrLocked, ErrLicenseLocked, nil},
+	// The typed errors (*TargetLimitError, *WrongInstallationError) are matched above with their
+	// params; a bare sentinel still gets its own code instead of a 500.
+	{license.ErrTargetLimit, ErrLicenseTargetLimit, nil},
+	{license.ErrWrongInstallation, ErrLicenseWrongInstallation, nil},
 	{license.ErrNoInstallation, ErrUnavailable, nil},
 }
 

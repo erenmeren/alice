@@ -169,7 +169,7 @@ func authzMatrixDoc() string {
 			token = string(pol.TokenScope)
 		}
 		inLock := "yes"
-		if rt.lic == license.ClassChange || rt.lic == license.ClassReadOnly {
+		if gated(rt.lic) {
 			inLock = "no"
 		}
 		fmt.Fprintf(&b, "| %s | `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s |\n",
@@ -355,7 +355,7 @@ var (
 	lockAvailable = []string{"/api/v1/auth", "/api/v1/setup", "/api/v1/license", "/api/v1/users", "/api/v1/tokens",
 		"/api/v1/audit", "/api/v1/backup", "/api/v1/backups", "/api/v1/settings"}
 	lockRefused = []string{"/api/v1/targets", "/api/v1/certificates", "/api/v1/locations", "/api/v1/deployments",
-		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault"}
+		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs"}
 )
 
 func underAny(pattern string, prefixes []string) bool {
@@ -367,8 +367,11 @@ func underAny(pattern string, prefixes []string) bool {
 	return false
 }
 
-// lockRuleViolations: reads are never refused in lock; every state-changing route declares
-// a license class; infrastructure changes are ClassChange; platform administration is ClassAlways.
+// lockRuleViolations: reads are never refused in lock; every state-changing route declares a
+// license class and belongs to exactly one of the two lock lists; infrastructure routes are
+// gated (ClassChange or ClassReadOnly); platform administration is ClassAlways; a route that
+// has no signed-in user (public, setup session, pending sign-in) is never gated, because the
+// gate's refusal is audited per user and would lock everyone out of it.
 func lockRuleViolations(routes []route) []string {
 	var out []string
 	for _, rt := range routes {
@@ -379,13 +382,21 @@ func lockRuleViolations(routes []route) []string {
 			}
 			continue
 		}
+		if pol, ok := rbac.PolicyFor(rt.perm); ok && (pol.Anonymous || pol.Setup || pol.Pending) && gated(rt.lic) {
+			out = append(out, key+": a route without a signed-in user is never refused by the license gate")
+		}
+		refused, available := underAny(rt.pattern, lockRefused), underAny(rt.pattern, lockAvailable)
 		switch {
 		case !rt.lic.Valid():
 			out = append(out, key+": declares no license class")
-		case underAny(rt.pattern, lockRefused) && rt.lic != license.ClassChange:
-			out = append(out, key+": infrastructure changes must be ClassChange")
-		case underAny(rt.pattern, lockAvailable) && rt.lic != license.ClassAlways:
+		case refused && available:
+			out = append(out, key+": route group is in both lock lists")
+		case refused && !gated(rt.lic):
+			out = append(out, key+": infrastructure work must be refused in lock (ClassChange or ClassReadOnly)")
+		case available && rt.lic != license.ClassAlways:
 			out = append(out, key+": platform administration must stay available (ClassAlways)")
+		case !refused && !available:
+			out = append(out, key+": route group is in neither lock list")
 		}
 	}
 	return out
@@ -399,15 +410,25 @@ func TestLockRuleViolationsCatchesMistakes(t *testing.T) {
 	bad := []route{
 		{method: http.MethodPost, pattern: "/api/v1/users", perm: rbac.UsersManage},
 		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Read, lic: license.ClassAlways},
-		{method: http.MethodDelete, pattern: "/api/v1/ssh-keys/{id}", perm: rbac.Read, lic: license.ClassReadOnly},
+		{method: http.MethodDelete, pattern: "/api/v1/ssh-keys/{id}", perm: rbac.Read, lic: license.ClassAlways},
 		{method: http.MethodPost, pattern: "/api/v1/license", perm: rbac.LicenseManage, lic: license.ClassChange},
 		{method: http.MethodGet, pattern: "/api/v1/targets", perm: rbac.Read, lic: license.ClassChange},
+		// Carry 1: a group in neither list, a gated public route, an ungated infrastructure route.
+		{method: http.MethodPost, pattern: "/api/v1/widgets", perm: rbac.Read, lic: license.ClassAlways},
+		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Public, lic: license.ClassChange},
+		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/confirm", perm: rbac.Read, lic: license.ClassAlways},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", perm: rbac.Setup, lic: license.ClassReadOnly},
 	}
-	assert.Len(t, lockRuleViolations(bad), len(bad))
+	for _, rt := range bad {
+		assert.Len(t, lockRuleViolations([]route{rt}), 1, "%s %s", rt.method, rt.pattern)
+	}
 	good := []route{
 		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Read, lic: license.ClassChange},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", perm: rbac.Read, lic: license.ClassReadOnly},
 		{method: http.MethodPost, pattern: "/api/v1/users", perm: rbac.UsersManage, lic: license.ClassAlways},
+		{method: http.MethodPost, pattern: "/api/v1/setup/session", perm: rbac.Public, lic: license.ClassAlways},
 		{method: http.MethodGet, pattern: "/api/v1/targets", perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/widgets", perm: rbac.Read},
 	}
 	assert.Empty(t, lockRuleViolations(good))
 }
@@ -441,7 +462,7 @@ func TestRouteTableInLock(t *testing.T) {
 		(&Server{s: s}).ResetLimits()
 		called = false
 		rec := call(h, rt.method, pathParamRE.ReplaceAllString(rt.pattern, uuid.NewString()), id, "")
-		if rt.lic == license.ClassChange || rt.lic == license.ClassReadOnly {
+		if gated(rt.lic) {
 			assert.Equal(t, http.StatusForbidden, rec.Code, name)
 			assert.Equal(t, "license.locked", decodeErr(t, rec).Error.Reason, name)
 			assert.False(t, called, name)

@@ -58,7 +58,7 @@ func (s *server) guard(rt route) http.HandlerFunc {
 		}
 		switch rbac.Decide(rt.perm, p.Subject(s.deps.Clock.Now())) {
 		case rbac.Allow:
-			if (rt.lic == license.ClassChange || rt.lic == license.ClassReadOnly) && !s.licenseAllows(rt.lic) {
+			if gated(rt.lic) && !s.licenseAllows(rt.lic) {
 				s.auditLicenseDenied(r, rt, p)
 				s.writeError(w, r, ErrLicenseLocked)
 				return
@@ -207,6 +207,11 @@ func (s *server) auditDenied(r *http.Request, rt route, p auth.Principal, reason
 func (s *server) licenseAllows(c license.Class) bool {
 	return s.deps.License != nil && s.deps.License.Allow(c) == nil
 }
+
+// gated reports whether lock mode refuses work of class c: changes to managed systems and
+// recurring read-only work on them (R9, §8.6). The guard and the route-table tests share this
+// one definition, so a new class cannot be gated in one place and not in the other.
+func gated(c license.Class) bool { return c == license.ClassChange || c == license.ClassReadOnly }
 
 // auditLicenseDenied records a request refused because the license has expired (L-26).
 func (s *server) auditLicenseDenied(r *http.Request, rt route, p auth.Principal) {

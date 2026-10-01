@@ -396,3 +396,36 @@ func TestRegisterRefusesUnclassifiedStateChangingRoute(t *testing.T) {
 		s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/x", perm: rbac.Session, handler: noop}})
 	}, "reads need no class")
 }
+
+// gated is the single definition of "refused while the license is locked" (R9, §8.6):
+// changes to managed systems and recurring read-only work on them.
+func TestGatedClasses(t *testing.T) {
+	assert.True(t, gated(license.ClassChange))
+	assert.True(t, gated(license.ClassReadOnly))
+	assert.False(t, gated(license.ClassAlways))
+	assert.False(t, gated(license.ClassUnset))
+}
+
+// Read-only work on managed systems (discovery, a connection test) is refused in lock exactly
+// like a change, audited with its class, and works again after a renewal.
+func TestLicenseGateRefusesReadOnlyWorkWhileLocked(t *testing.T) {
+	d := testDeps(t, nil)
+	fl := d.License.(*fakeLicense)
+	fa := d.Audit.(*fakeAudit)
+	h := gatedHandler(d, license.ClassReadOnly)
+
+	fl.set(license.ErrLocked)
+	rec := call(h, http.MethodPost, "/api/v1/targets", "admin", `{}`)
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, "license.locked", decodeErr(t, rec).Error.Reason)
+	var classes []string
+	for _, ev := range fa.Events() {
+		if ev.Action == "request.denied_license" {
+			classes = append(classes, ev.Details["class"])
+		}
+	}
+	assert.Equal(t, []string{"read_only"}, classes)
+
+	fl.set(nil)
+	assert.Equal(t, http.StatusNoContent, call(h, http.MethodPost, "/api/v1/targets", "admin", `{}`).Code)
+}
