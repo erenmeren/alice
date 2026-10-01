@@ -360,7 +360,7 @@ func TestNonCanonicalBlobIsUnreadable(t *testing.T) {
 func TestUnknownOrControlOptionsAreUnreadable(t *testing.T) {
 	k, _ := edKey(t)
 	for _, in := range []string{
-		"bogus-option " + k, `command="x",frobnicate ` + k, "from=\"a\tb\" " + k + "\n",
+		"bogus-option " + k, `command="x",frobnicate ` + k,
 		"NO-PTY,From=\"10.0.0.1\" " + k, // valid, case-insensitive: handled below
 	} {
 		a := mustParse(t, in)
@@ -383,4 +383,27 @@ func TestAddLineRefusesUnsafeText(t *testing.T) {
 	_, added, err := mustParse(t, "").AddLine(k + " kullanıcı")
 	require.NoError(t, err)
 	assert.True(t, added)
+}
+
+// Fix round 2: lines OpenSSH accepts stay keys; lines it rejects become unreadable.
+func TestOpenSSHAcceptedOptionForms(t *testing.T) {
+	k, fp := edKey(t)
+	for _, in := range []string{"no-pty, " + k + " c", "command=\"echo\ta\" " + k + " c"} {
+		a := mustParse(t, in+"\n")
+		require.Equal(t, LineKey, a.Lines[0].Kind, "%q", in)
+		assert.Equal(t, strings.Join(a.Lines[0].Options, ","), a.Lines[0].OptionsText)
+		assert.Equal(t, fp, a.Lines[0].Fingerprint)
+		out, n := a.RemoveFingerprint(fp)
+		assert.Equal(t, 1, n)
+		assert.Zero(t, out.CountKeys())
+	}
+}
+
+func TestOpenSSHRejectedOptionForms(t *testing.T) {
+	k, _ := edKey(t)
+	for _, in := range []string{`principal` + "ſ" + `="x" ` + k, "no-pty=x " + k, `command=x ` + k, `from ` + k,
+		"no-pty,, " + k, "command=\"a\x01b\" " + k, "no-pty\t" + "," + k} {
+		a := mustParse(t, in+"\n")
+		assert.Equal(t, LineInvalid, a.Lines[0].Kind, "%q", in)
+	}
 }

@@ -167,7 +167,7 @@ func Expand(pattern, user, home string, uid int) (string, error) {
 	if pattern == "" || strings.ContainsAny(pattern+user+home, "\x00\n\r") {
 		return "", ErrInvalidPattern
 	}
-	if user == "" || strings.Contains(user, "/") || !strings.HasPrefix(home, "/") {
+	if user == "" || user == "." || user == ".." || strings.Contains(user, "/") || !strings.HasPrefix(home, "/") {
 		return "", ErrInvalidPattern
 	}
 	var b strings.Builder

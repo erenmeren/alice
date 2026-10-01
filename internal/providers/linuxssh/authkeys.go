@@ -107,6 +107,11 @@ func parseKeyLine(l *Line) {
 	// The blob must be canonical base64 (Go's decoder tolerates nonzero padding bits, OpenSSH
 	// would read the same key from a different text) and every option must be one OpenSSH knows.
 	optText, afterOpts := splitOptions(l.Raw)
+	// OpenSSH tolerates one trailing comma before the key ("no-pty, ssh-ed25519 ..."); OptionsText
+	// is then the options field without that comma, so it always equals Join(Options, ",").
+	if strings.HasSuffix(optText, ",") && !strings.HasSuffix(optText, ",,") {
+		optText = optText[:len(optText)-1]
+	}
 	if len(options) > 0 && (optText == "" || strings.Join(options, ",") != optText) {
 		return
 	}
@@ -156,29 +161,49 @@ func splitOptions(raw string) (string, string) {
 	return "", t
 }
 
-var knownOptions = []string{"agent-forwarding", "cert-authority", "command", "environment", "expiry-time", "from",
-	"no-agent-forwarding", "no-port-forwarding", "no-pty", "no-user-rc", "no-X11-forwarding", "no-touch-required",
-	"permitlisten", "permitopen", "port-forwarding", "principals", "pty", "restrict", "tunnel", "user-rc",
-	"verify-required", "X11-forwarding"}
+// Option names of OpenSSH's authorized_keys: flags take no value, valued options need name="...".
+var (
+	flagOptions = []string{"agent-forwarding", "cert-authority", "no-agent-forwarding", "no-port-forwarding", "no-pty",
+		"no-user-rc", "no-X11-forwarding", "no-touch-required", "port-forwarding", "pty", "restrict", "user-rc",
+		"verify-required", "X11-forwarding"}
+	valueOptions = []string{"command", "environment", "expiry-time", "from", "permitlisten", "permitopen", "principals",
+		"tunnel"}
+)
 
-// knownOption reports whether o is an OpenSSH authorized_keys option (names are case-insensitive;
-// strings.EqualFold avoids the banned ToLower) without control characters.
+// knownOption reports whether o is an OpenSSH authorized_keys option. Names are case-insensitive
+// (ASCII only, like OpenSSH; strings.EqualFold would fold "ſ" to "s"). Control characters are
+// refused, except a tab inside a quoted value.
 func knownOption(o string) bool {
+	name, value, hasValue := strings.Cut(o, "=")
 	for i := 0; i < len(o); i++ {
-		if o[i] < 0x20 {
+		if o[i] < 0x20 && (o[i] != '\t' || !hasValue || i <= len(name)) {
 			return false
 		}
 	}
-	name := o
-	if i := strings.IndexByte(o, '='); i >= 0 {
-		name = o[:i]
+	if !hasValue {
+		return inFold(flagOptions, name)
 	}
-	for _, k := range knownOptions {
-		if strings.EqualFold(name, k) {
+	return inFold(valueOptions, name) && len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"'
+}
+
+func inFold(set []string, name string) bool {
+	for _, k := range set {
+		if len(k) == len(name) && foldASCII(k) == foldASCII(name) {
 			return true
 		}
 	}
 	return false
+}
+
+// foldASCII lowercases ASCII letters only (strings.ToLower is banned).
+func foldASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
 }
 
 // keyBits is the RSA modulus size, the ECDSA curve size or 256 for Ed25519 (also for FIDO keys).

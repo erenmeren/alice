@@ -121,6 +121,8 @@ func TestExpandRefusesEscapesAndUnknownTokens(t *testing.T) {
 		{"/keys/%u", "..", "/home/deploy"},
 		{"/keys/%u", "a/b", "/home/deploy"},
 		{"/keys/%u", "", "/home/deploy"},
+		{"/keys/%u", ".", "/home/deploy"},
+		{"/keys/%u", "..", "/home/deploy"},
 		{"/keys/%u", "deploy", ""},
 	} {
 		_, err := Expand(tc.pattern, tc.user, tc.home, 1001)
