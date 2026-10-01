@@ -20,11 +20,13 @@ import (
 
 	"alice/internal/audit"
 	"alice/internal/i18n"
+	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/license"
 	"alice/internal/notify"
 	"alice/internal/platform/config"
 	"alice/internal/platform/logging"
+	"alice/internal/rbac"
 	"alice/internal/testutil/pgtest"
 	"alice/locales"
 )
@@ -58,15 +60,14 @@ func newE2EStack(t *testing.T) *e2eStack {
 	require.NoError(t, err)
 	sender, err := buildSender(d.App, cfg, catalog, newClock(), log)
 	require.NoError(t, err)
-	sched := jobs.NewScheduler(newClock(), svc.license, log,
-		jobs.Task{Type: jobs.LicenseEvaluate, Every: time.Hour, Run: svc.license.Tick},
-		jobs.Task{Type: jobs.NotifySend, Every: time.Minute, Run: func(ctx context.Context) error {
-			_, err := sender.Drain(ctx)
-			return err
-		}})
+	_, err = svc.inventory.EnsurePlatformKey(ctx)
+	require.NoError(t, err)
+	t.Cleanup(svc.sshPool.Close)
+	sched := buildScheduler(svc, sender, newClock(), log)
+	runner := buildRunner(d.App, svc, newClock(), log)
 	return &e2eStack{t: t, d: d, stateDir: stateDir, svc: svc, h: testHandler(testDeps{
 		OwnerURL: d.OwnerURL, Setup: svc.setup, License: svc.license, Scheduler: sched, Sender: sender,
-		StateDir: stateDir, Log: log, ResetLimits: func() {},
+		StateDir: stateDir, Log: log, ResetLimits: func() {}, Inventory: svc.inventory, Runner: runner,
 	})}
 }
 
@@ -134,4 +135,73 @@ func TestE2EResetStartsAFreshInstallation(t *testing.T) {
 	require.NoError(t, err, "the time record was written again by the restart")
 	assert.NotEmpty(t, raw)
 	assert.True(t, strings.HasPrefix(snap.InstallationID, "ALICE-"), "installation id format: %s", snap.InstallationID)
+}
+
+// The reset empties the Phase 3 tables and creates a new platform key at once, so the next
+// test can prepare its SSH target with the key the wizard shows.
+func TestE2EResetCreatesANewPlatformKey(t *testing.T) {
+	s := newE2EStack(t)
+	ctx := context.Background()
+	before, err := s.svc.inventory.PlatformKey(ctx)
+	require.NoError(t, err)
+
+	require.Equal(t, http.StatusNoContent, s.post("/test/reset", ``).Code)
+
+	after, err := s.svc.inventory.PlatformKey(ctx)
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Fingerprint, after.Fingerprint, "a new key for the new installation")
+	assert.Equal(t, 1, s.count("SELECT count(*) FROM credentials"))
+	assert.Equal(t, 1, s.count("SELECT count(*) FROM audit_log WHERE action = 'platform_key.created'"))
+	assert.Zero(t, s.count("SELECT count(*) FROM targets"))
+}
+
+// Carry 5: /test/license/tamper makes the "License data was changed outside Alice" banner reachable.
+func TestE2ELicenseTamperShowsTheBanner(t *testing.T) {
+	s := newE2EStack(t)
+	ctx := context.Background()
+	assert.Equal(t, http.StatusConflict, s.post("/test/license/tamper", ``).Code, "no stored file yet")
+
+	rec := s.post("/test/license", `{}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var lic struct{ License string }
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &lic))
+	_, err := s.svc.license.Install(ctx, []byte(lic.License), audit.SystemActor("test"), uuid.Nil)
+	require.NoError(t, err)
+	require.False(t, s.svc.license.Snapshot().Tampered)
+
+	rec = s.post("/test/license/tamper", ``)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"tampered_seq":1}`, rec.Body.String())
+
+	snap := s.svc.license.Snapshot()
+	assert.True(t, snap.Tampered, "the evaluation ran at once")
+	var kinds []string
+	for _, b := range snap.Banners(true) {
+		kinds = append(kinds, b.Kind)
+	}
+	assert.Contains(t, kinds, "tampered")
+	assert.Equal(t, 1, s.count("SELECT count(*) FROM audit_log WHERE action = 'license.tampered'"))
+}
+
+// /test/jobs/drain runs due jobs at once: a connection test to an address that does not
+// resolve ends as dead (a retryable failure on its only attempt) with ssh.unreachable, and a
+// second drain finds nothing.
+func TestE2EJobsDrainRunsDueJobs(t *testing.T) {
+	s := newE2EStack(t)
+	ctx := context.Background()
+	admin := insertUser(t, s.d, "admin", "admin")
+	_, jobID, err := s.svc.inventory.CreateTarget(ctx,
+		inventory.Actor{Audit: audit.Actor{Type: audit.ActorUser, ID: admin, Name: "admin"}, UserID: admin, Role: rbac.Admin},
+		inventory.NewTarget{Name: "nowhere", Type: "linux", Host: "nowhere.invalid"})
+	require.NoError(t, err)
+
+	rec := s.post("/test/jobs/drain", ``)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"ran":1}`, rec.Body.String())
+	v, err := s.svc.queue.Get(ctx, jobID)
+	require.NoError(t, err)
+	assert.Equal(t, jobs.StatusDead, v.Status)
+	assert.Equal(t, "ssh.unreachable", v.LastErrorCode)
+
+	assert.JSONEq(t, `{"ran":0}`, s.post("/test/jobs/drain", ``).Body.String())
 }

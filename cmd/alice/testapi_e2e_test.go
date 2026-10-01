@@ -105,7 +105,7 @@ func TestE2ETestEndpointsRejectCrossSiteRequests(t *testing.T) {
 		"cross-site fetch":       {"Sec-Fetch-Site", "cross-site"},
 		"same-site other origin": {"Sec-Fetch-Site", "same-site"},
 	} {
-		for _, path := range []string{"/test/clock", "/test/reset", "/test/setup-token"} {
+		for _, path := range []string{"/test/clock", "/test/reset", "/test/setup-token", "/test/license/tamper", "/test/jobs/drain"} {
 			req := httptest.NewRequest(http.MethodPost, "https://alice.test"+path, strings.NewReader(`{"advance_seconds":3600}`))
 			req.Header.Set(hdr[0], hdr[1])
 			rec := httptest.NewRecorder()
@@ -183,4 +183,25 @@ func TestE2EMailboxListsSentEmail(t *testing.T) {
 	testHandler(testDeps{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/test/mail", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.JSONEq(t, `{"messages":[{"to":"ada@example.com","subject":"Hi","body":"Body"}]}`, rec.Body.String())
+}
+
+// Without a database or a job runner the new endpoints refuse instead of panicking.
+func TestE2EPhase3EndpointsNeedTheirServices(t *testing.T) {
+	h := testHandler(testDeps{})
+	for _, path := range []string{"/test/license/tamper", "/test/jobs/drain"} {
+		rec := postTest(t, h, path, ``)
+		assert.Equal(t, http.StatusConflict, rec.Code, path)
+		assert.Contains(t, rec.Body.String(), `"error"`, path)
+	}
+}
+
+// damageLicenseFile changes the signed customer name and nothing else, so the file still parses
+// but no longer verifies (L-49).
+func TestDamageLicenseFileChangesOnlyTheCustomer(t *testing.T) {
+	raw := []byte("{\n  \"payload\": {\n    \"customer\": \"Test Company\",\n    \"max_targets\": 10\n  }\n}\n")
+	out, err := damageLicenseFile(raw)
+	require.NoError(t, err)
+	assert.Equal(t, strings.Replace(string(raw), `"customer": "Test Company"`, `"customer": "tampered-Test Company"`, 1), string(out))
+	_, err = damageLicenseFile([]byte(`{"payload":{}}`))
+	assert.Error(t, err, "a file without a customer field cannot be damaged this way")
 }

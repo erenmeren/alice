@@ -45,9 +45,14 @@ web-test: ## Run web unit tests
 web-lint: ## Lint the web UI
 	cd web && npm run lint
 
+# The setup script checks alice-helper against these checksums (R37 item 2). Expanded when the
+# build recipe runs, after the helper prerequisite wrote bin/alice-helper.sha256.
+HELPER_SUM = $(shell awk '$$2 == "alice-helper-linux-$(1)" { print $$1 }' bin/alice-helper.sha256 2>/dev/null)
+HELPER_LDFLAGS = -X alice/internal/providers/linuxssh.helperSHA256LinuxAMD64=$(call HELPER_SUM,amd64) -X alice/internal/providers/linuxssh.helperSHA256LinuxARM64=$(call HELPER_SUM,arm64)
+
 .PHONY: build
-build: web ## Build the alice binary with the embedded UI into bin/
-	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/alice ./cmd/alice
+build: web helper ## Build the alice binary with the embedded UI (and the helper checksums) into bin/
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS) $(HELPER_LDFLAGS)" -o bin/alice ./cmd/alice
 	@! go version -m bin/alice | grep -q stretchr/testify || { echo "testify is linked into bin/alice"; exit 1; }
 
 .PHONY: licensectl
@@ -55,9 +60,9 @@ licensectl: ## Build the vendor's offline license tool into bin/ (never shipped 
 	CGO_ENABLED=0 go build -trimpath -o bin/licensectl ./cmd/licensectl
 
 .PHONY: helper
-helper: ## Build the static alice-helper for Linux amd64 and arm64 into bin/ with SHA-256 checksums (installed root-owned on targets)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o bin/alice-helper-linux-amd64 ./cmd/alice-helper
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o bin/alice-helper-linux-arm64 ./cmd/alice-helper
+helper: ## Build the static alice-helper for Linux amd64 and arm64 into bin/ with SHA-256 checksums (reproducible: no VCS stamp)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/alice-helper-linux-amd64 ./cmd/alice-helper
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/alice-helper-linux-arm64 ./cmd/alice-helper
 	cd bin && sha256sum alice-helper-linux-amd64 alice-helper-linux-arm64 > alice-helper.sha256
 
 COMPOSE := docker compose -f deploy/docker-compose.yml --env-file deploy/.env
@@ -72,8 +77,8 @@ up: ## Build and start Alice with PostgreSQL (https://localhost)
 	ALICE_BUILD_TIME=$(BUILD_TIME) $(COMPOSE) up -d --build --wait
 
 .PHONY: down
-down: ## Stop the stack (data volumes are kept)
-	$(COMPOSE) down
+down: ## Stop the stack (data volumes are kept; also removes the e2e SSH target)
+	$(COMPOSE) down --remove-orphans
 
 .PHONY: reset
 reset: ## DELETE local data (database, key and state volumes) and start a fresh stack

@@ -99,7 +99,7 @@ if [ ! -f ./alice-helper ]; then
     echo "Copy alice-helper from the Alice bundle into this directory first." >&2
     exit 1
 fi
-install -d -m 0755 -o root -g root /usr/local/libexec
+__HELPER_CHECK__install -d -m 0755 -o root -g root /usr/local/libexec
 install -m 0755 -o root -g root ./alice-helper /usr/local/libexec/alice-helper
 if ! id alice-svc >/dev/null 2>&1; then
     useradd --system --create-home --home-dir /var/lib/alice-svc --shell /bin/bash alice-svc
@@ -126,11 +126,51 @@ install -d -m 0700 -o root -g root /var/lib/alice-helper /var/lib/alice-helper/b
 echo "This server is ready for Alice."
 `
 
+// The SHA-256 checksums of the alice-helper binaries that belong to this Alice build: the lines
+// of bin/alice-helper.sha256 that "make helper" writes, set at link time by "make build" and the
+// image build (-X alice/internal/providers/linuxssh.helperSHA256LinuxAMD64=...). Empty in a build
+// without them (go build, go test): the setup script then says that it cannot verify the helper.
+var (
+	helperSHA256LinuxAMD64 string
+	helperSHA256LinuxARM64 string
+)
+
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+const helperUnverified = `# This Alice build has no alice-helper checksums (it was built without "make helper"),
+# so the helper below is installed without checking it.
+echo "Warning: this Alice build cannot verify alice-helper (development build without checksums)." >&2
+`
+
+const helperVerify = `case "$(uname -m)" in
+    x86_64) helper_sha256=__AMD64__ ;;
+    aarch64) helper_sha256=__ARM64__ ;;
+    *) echo "alice-helper is built for x86_64 and aarch64 only." >&2; exit 1 ;;
+esac
+if ! printf '%s  ./alice-helper\n' "$helper_sha256" | sha256sum -c - >/dev/null 2>&1; then
+    echo "./alice-helper is not the alice-helper of this Alice version (its SHA-256 checksum differs)." >&2
+    echo "Copy alice-helper-linux-amd64 or alice-helper-linux-arm64 from the bundle of this Alice version as ./alice-helper." >&2
+    exit 1
+fi
+`
+
+// helperCheck is the part of the setup script that checks ./alice-helper against the checksum of
+// this Alice version for the server's architecture (R37 item 2). Unless both checksums are well
+// formed it embeds neither and warns instead: a value that is not plain hex never reaches a root
+// script.
+func helperCheck(amd64, arm64 string) string {
+	if !sha256Hex.MatchString(amd64) || !sha256Hex.MatchString(arm64) {
+		return helperUnverified
+	}
+	return strings.NewReplacer("__AMD64__", amd64, "__ARM64__", arm64).Replace(helperVerify)
+}
+
 var errBadKeyLine = errors.New("linuxssh: the authorized_keys line cannot be embedded in the setup script")
 
 // SetupScript is the root script of spec §12.2 for a profile. "usermod -p '*'" leaves alice-svc
 // without a password but not locked, so sshd also accepts its key with UsePAM no. The sudoers file
-// is installed only after visudo accepted it (a file name with a dot is ignored by sudo).
+// is installed only after visudo accepted it (a file name with a dot is ignored by sudo). The helper
+// is checked against the checksum of this Alice version before it is installed (helperCheck).
 //
 // Running it again must be safe even if alice-svc is compromised: root never writes, chowns or
 // chmods a path inside a directory alice-svc can change (it could plant a symlink to
@@ -147,6 +187,7 @@ func SetupScript(profile, authorizedKeysLine string) (string, error) {
 		strings.ContainsFunc(authorizedKeysLine, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 		return "", errBadKeyLine
 	}
-	return strings.NewReplacer("__PROFILE__", profile, "__LINE__", authorizedKeysLine, "__SUDOERS__", sudoers).
+	return strings.NewReplacer("__PROFILE__", profile, "__LINE__", authorizedKeysLine, "__SUDOERS__", sudoers,
+		"__HELPER_CHECK__", helperCheck(helperSHA256LinuxAMD64, helperSHA256LinuxARM64)).
 		Replace(scriptTemplate), nil
 }

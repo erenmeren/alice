@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/license"
 	"alice/internal/notify"
@@ -21,6 +22,8 @@ type testDeps struct {
 	StateDir    string
 	Log         *slog.Logger
 	ResetLimits func()
+	Inventory   *inventory.Service // the reset creates a new platform key
+	Runner      *jobs.Runner       // POST /test/jobs/drain
 }
 
 // testLicenseSuffix marks a build that trusts the test license key but is not the e2e

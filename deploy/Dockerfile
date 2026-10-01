@@ -19,8 +19,17 @@ ARG COMMIT=unknown
 ARG BUILD_TIME=unknown
 # GO_TAGS is empty for release images; deploy/docker-compose.e2e.yml sets "e2e testlicense".
 ARG GO_TAGS=""
-RUN CGO_ENABLED=0 go build -trimpath -tags "${GO_TAGS}" \
-    -ldflags "-s -w -X alice/internal/version.Version=${VERSION} -X alice/internal/version.Commit=${COMMIT} -X alice/internal/version.BuildTime=${BUILD_TIME}" \
+# alice-helper is built exactly as "make helper" builds it (reproducible), only for its checksums:
+# the setup script checks the helper an administrator copies onto a server against them (R37
+# item 2). The helper itself is not part of the image (Phase 8 ships it in the release bundle).
+RUN for arch in amd64 arm64; do \
+      CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -buildvcs=false -ldflags "-s -w" \
+        -o /out/helper/alice-helper-linux-$arch ./cmd/alice-helper || exit 1; \
+    done \
+ && cd /out/helper && sha256sum alice-helper-linux-amd64 alice-helper-linux-arm64 > alice-helper.sha256
+RUN sum() { awk -v f="alice-helper-linux-$1" '$2 == f { print $1 }' /out/helper/alice-helper.sha256; } \
+ && CGO_ENABLED=0 go build -trimpath -tags "${GO_TAGS}" \
+    -ldflags "-s -w -X alice/internal/version.Version=${VERSION} -X alice/internal/version.Commit=${COMMIT} -X alice/internal/version.BuildTime=${BUILD_TIME} -X alice/internal/providers/linuxssh.helperSHA256LinuxAMD64=$(sum amd64) -X alice/internal/providers/linuxssh.helperSHA256LinuxARM64=$(sum arm64)" \
     -o /out/alice ./cmd/alice \
  && mkdir -p /out/keys /out/opt-alice/state && chmod 0700 /out/keys /out/opt-alice/state
 

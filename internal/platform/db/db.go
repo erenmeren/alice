@@ -38,6 +38,12 @@ const (
 	invalidCatalogName = "3D000"
 )
 
+// MaxConns is the size of the application pool: up to 16 for the 8 job workers (a job's own
+// queries next to its lease heartbeat), 1 held for good by the scheduling leader (jobs.Leader),
+// up to 6 for the reaper and the periodic tasks, and the rest for HTTP requests. PostgreSQL
+// allows 100 connections by default.
+const MaxConns = 32
+
 // Open creates a pool and waits until the database answers a ping or ctx ends.
 // Errors never include the connection string, because it contains the password.
 func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
@@ -45,7 +51,7 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, errors.New("the database URL is not valid; check ALICE_DATABASE_URL")
 	}
-	cfg.MaxConns = 20
+	cfg.MaxConns = MaxConns
 	where := fmt.Sprintf("%s:%d", cfg.ConnConfig.Host, cfg.ConnConfig.Port)
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)

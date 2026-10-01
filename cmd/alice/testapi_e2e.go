@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
 
@@ -217,6 +218,12 @@ func testHandler(d testDeps) http.Handler {
 			e2eMailbox.reset()
 			d.Setup.ResetLockouts()
 			d.ResetLimits()
+			if d.Inventory != nil {
+				// The credentials table was emptied: the new installation gets a new platform key.
+				if _, err := d.Inventory.EnsurePlatformKey(ctx); err != nil {
+					return fmt.Errorf("create the platform key: %w", err)
+				}
+			}
 			return nil
 		}
 		// The license service runs the reset while no evaluation is in flight (an in-flight
@@ -242,6 +249,48 @@ func testHandler(d testDeps) http.Handler {
 			return
 		}
 		writeTestJSON(w, http.StatusOK, map[string]string{"code": code})
+	})
+	mux.HandleFunc("POST /test/license/tamper", func(w http.ResponseWriter, r *http.Request) {
+		if d.OwnerURL == "" {
+			writeTestJSON(w, http.StatusConflict, map[string]string{"error": "no database"})
+			return
+		}
+		seq, err := tamperNewestLicenseFile(r.Context(), d.OwnerURL)
+		if errors.Is(err, errNoLicenseFile) {
+			writeTestJSON(w, http.StatusConflict, map[string]string{"error": "no stored license file"})
+			return
+		}
+		if err != nil {
+			d.Log.Error("test license tamper failed", "error_type", fmt.Sprintf("%T", err))
+			writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "tamper failed"})
+			return
+		}
+		if d.Scheduler != nil {
+			if err := d.Scheduler.RunNow(r.Context(), jobs.LicenseEvaluate.Name); err != nil && !errors.Is(err, license.ErrLocked) {
+				d.Log.Error("test license tamper: evaluation failed", "error_type", fmt.Sprintf("%T", err))
+			}
+		}
+		writeTestJSON(w, http.StatusOK, map[string]int64{"tampered_seq": seq})
+	})
+	mux.HandleFunc("POST /test/jobs/drain", func(w http.ResponseWriter, r *http.Request) {
+		if d.Runner == nil {
+			writeTestJSON(w, http.StatusConflict, map[string]string{"error": "no job runner"})
+			return
+		}
+		ran := 0
+		for ran < maxDrain {
+			ok, err := d.Runner.RunOnce(r.Context())
+			if err != nil {
+				d.Log.Error("test job drain failed", "error_type", fmt.Sprintf("%T", err))
+				writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "drain failed"})
+				return
+			}
+			if !ok {
+				break
+			}
+			ran++
+		}
+		writeTestJSON(w, http.StatusOK, map[string]int{"ran": ran})
 	})
 	mux.HandleFunc("/test/", func(w http.ResponseWriter, _ *http.Request) {
 		writeTestJSON(w, http.StatusNotFound, map[string]string{"error": "unknown test endpoint"})
@@ -284,4 +333,53 @@ func writeTestJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// maxDrain bounds one POST /test/jobs/drain (a handler that enqueues follow-up jobs, such as a
+// connection test that enqueues discovery, must not loop forever).
+const maxDrain = 50
+
+var (
+	errNoLicenseFile = errors.New("no stored license file")
+	customerField    = regexp.MustCompile(`"customer"\s*:\s*"`)
+)
+
+// damageLicenseFile prefixes the signed customer name with "tampered-": the file still parses,
+// but its signature no longer matches (spec L-49).
+func damageLicenseFile(raw []byte) ([]byte, error) {
+	loc := customerField.FindIndex(raw)
+	if loc == nil {
+		return nil, errors.New("the license file has no customer field")
+	}
+	out := append([]byte{}, raw[:loc[1]]...)
+	out = append(out, "tampered-"...)
+	return append(out, raw[loc[1]:]...), nil
+}
+
+// tamperNewestLicenseFile damages the newest stored license file as the owner role (the
+// application role cannot update license_files) and returns its sequence number.
+func tamperNewestLicenseFile(ctx context.Context, ownerURL string) (int64, error) {
+	pool, err := pgxpool.New(ctx, ownerURL)
+	if err != nil {
+		return 0, err
+	}
+	defer pool.Close()
+	var seq int64
+	err = db.InTx(ctx, pool, func(tx pgx.Tx) error {
+		var raw []byte
+		err := tx.QueryRow(ctx, "SELECT seq, raw_file FROM license_files ORDER BY seq DESC LIMIT 1 FOR UPDATE").Scan(&seq, &raw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errNoLicenseFile
+		}
+		if err != nil {
+			return err
+		}
+		damaged, err := damageLicenseFile(raw)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, "UPDATE license_files SET raw_file = $1 WHERE seq = $2", damaged, seq)
+		return err
+	})
+	return seq, err
 }

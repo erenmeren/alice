@@ -1,6 +1,11 @@
 package linuxssh
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -78,6 +83,12 @@ func TestAuthorizedKeysLine(t *testing.T) {
 	assert.Error(t, err, "the script refuses the empty line of a refused from=")
 }
 
+// goldenUnverified is the helper check of a build without checksums (tests, go build without make).
+const goldenUnverified = `# This Alice build has no alice-helper checksums (it was built without "make helper"),
+# so the helper below is installed without checking it.
+echo "Warning: this Alice build cannot verify alice-helper (development build without checksums)." >&2
+`
+
 func TestSetupScriptLinux(t *testing.T) {
 	line := `from="10.0.0.5",` + wantOptions + ` ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform`
 	script, err := SetupScript("linux", line)
@@ -95,7 +106,7 @@ if [ ! -f ./alice-helper ]; then
     echo "Copy alice-helper from the Alice bundle into this directory first." >&2
     exit 1
 fi
-install -d -m 0755 -o root -g root /usr/local/libexec
+` + goldenUnverified + `install -d -m 0755 -o root -g root /usr/local/libexec
 install -m 0755 -o root -g root ./alice-helper /usr/local/libexec/alice-helper
 if ! id alice-svc >/dev/null 2>&1; then
     useradd --system --create-home --home-dir /var/lib/alice-svc --shell /bin/bash alice-svc
@@ -246,4 +257,71 @@ func TestSetupScriptNeverWritesThroughTheServiceUser(t *testing.T) {
 		}
 		assert.Contains(t, script, "getent passwd alice-svc | cut -d: -f6")
 	}
+}
+
+// withHelperSums sets the link-time helper checksums for one test.
+func withHelperSums(t *testing.T, amd64, arm64 string) {
+	t.Helper()
+	oldAMD64, oldARM64 := helperSHA256LinuxAMD64, helperSHA256LinuxARM64
+	helperSHA256LinuxAMD64, helperSHA256LinuxARM64 = amd64, arm64
+	t.Cleanup(func() { helperSHA256LinuxAMD64, helperSHA256LinuxARM64 = oldAMD64, oldARM64 })
+}
+
+// R37 item 2: a build that knows the checksums of its helpers (make build after make helper)
+// makes the setup script refuse a helper that is not the one of this Alice version, before it
+// installs anything.
+func TestSetupScriptVerifiesTheHelperChecksum(t *testing.T) {
+	amd64, arm64 := strings.Repeat("a1", 32), strings.Repeat("b2", 32)
+	withHelperSums(t, amd64, arm64)
+	script, err := SetupScript("linux", wantOptions+" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform")
+	require.NoError(t, err)
+	assert.NotContains(t, script, "cannot verify")
+	assert.Contains(t, script, "    x86_64) helper_sha256="+amd64+" ;;\n")
+	assert.Contains(t, script, "    aarch64) helper_sha256="+arm64+" ;;\n")
+	assert.Contains(t, script, `printf '%s  ./alice-helper\n' "$helper_sha256" | sha256sum -c - >/dev/null 2>&1`)
+	check, install := strings.Index(script, "sha256sum -c"), strings.Index(script, "install -m 0755 -o root -g root ./alice-helper")
+	require.GreaterOrEqual(t, check, 0)
+	assert.Less(t, check, install, "the helper is checked before it is installed")
+}
+
+// A checksum that is not 64 lower-case hex digits (a broken build) is never embedded in a
+// root script: the script says it cannot verify instead.
+func TestSetupScriptIgnoresMalformedChecksums(t *testing.T) {
+	for _, bad := range [][2]string{
+		{"", strings.Repeat("b2", 32)},
+		{strings.Repeat("a1", 32), ""},
+		{strings.Repeat("A1", 32), strings.Repeat("b2", 32)},
+		{strings.Repeat("a1", 32) + "; rm -rf /", strings.Repeat("b2", 32)},
+	} {
+		withHelperSums(t, bad[0], bad[1])
+		script, err := SetupScript("linux", wantOptions+" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform")
+		require.NoError(t, err)
+		assert.Contains(t, script, goldenUnverified, "%q", bad)
+		assert.NotContains(t, script, "rm -rf /;")
+		assert.NotContains(t, script, "sha256sum -c")
+	}
+}
+
+// The check runs in a real shell: the right helper passes, any other file stops the script.
+func TestHelperCheckRunsInAShell(t *testing.T) {
+	if _, err := exec.LookPath("sha256sum"); err != nil {
+		t.Skip("sha256sum is not installed")
+	}
+	dir := t.TempDir()
+	helper := []byte("#!/bin/sh\necho helper\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "alice-helper"), helper, 0o600))
+	sum := sha256.Sum256(helper)
+	good := hex.EncodeToString(sum[:])
+	run := func(amd64, arm64 string) error {
+		block := helperCheck(amd64, arm64)
+		cmd := exec.Command("sh", "-c", "set -eu\n"+block+"echo checked\n")
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			assert.Contains(t, string(out), "checked")
+		}
+		return err
+	}
+	assert.NoError(t, run(good, good))
+	assert.Error(t, run(strings.Repeat("0", 64), strings.Repeat("0", 64)), "a different helper is refused")
 }

@@ -169,6 +169,9 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// Closed in order at shutdown below; this covers a start that fails before then (Close is
+	// idempotent).
+	defer svc.sshPool.Close()
 	health, err := db.NewHealthChecker(pool, migrations.FS)
 	if err != nil {
 		return err
@@ -193,13 +196,21 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if err := svc.license.Start(ctx); err != nil {
 		return err
 	}
-	sched := jobs.NewScheduler(clk, svc.license, log,
-		jobs.Task{Type: jobs.LicenseEvaluate, Every: time.Hour, Run: svc.license.Tick},
-		jobs.Task{Type: jobs.NotifySend, Every: time.Minute, Run: func(ctx context.Context) error {
-			_, err := sender.Drain(ctx)
-			return err
-		}},
-	)
+	// The platform SSH key exists before the wizard or a target needs it (R37 item 1). On a
+	// fresh installation its platform_key.created entry starts the audit chain.
+	if _, err := svc.inventory.EnsurePlatformKey(ctx); err != nil {
+		return err
+	}
+	runner := buildRunner(pool, svc, clk, log)
+	// Jobs whose worker died with the previous process are queued again before any request
+	// can list them (§8.8); Run repeats the pass before its workers start.
+	if _, err := runner.Recover(ctx); err != nil {
+		return err
+	}
+	// While it leads, the leader holds one connection of the pool for good (db.Open sizes the
+	// pool for it).
+	leader := jobs.NewLeader(pool, log)
+	sched := buildScheduler(svc, sender, clk, log).WithLeader(leader)
 
 	var apiServer *api.Server
 	td := testDeps{
@@ -208,6 +219,8 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		License:   svc.license,
 		Scheduler: sched,
 		Sender:    sender,
+		Inventory: svc.inventory,
+		Runner:    runner,
 		StateDir:  cfg.StateDir,
 		Log:       log,
 		ResetLimits: func() {
@@ -241,7 +254,9 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		ErrorLog:          errLog,
 	}
 
-	// The scheduler starts last: nothing below can fail before the shutdown path runs.
+	// The scheduler and the workers start last: nothing below can fail before the shutdown path
+	// runs. The workers get their own context so a signal stops the HTTP servers and the
+	// scheduler first and the workers only afterwards (§8.8: stop claiming, let running jobs end).
 	schedCtx, stopSched := context.WithCancel(ctx)
 	defer stopSched()
 	schedDone := make(chan struct{})
@@ -249,6 +264,14 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		sched.Run(schedCtx)
 		close(schedDone)
 	}()
+	runnerCtx, stopRunner := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopRunner()
+	runnerDone := make(chan struct{})
+	go func() {
+		runner.Run(runnerCtx)
+		close(runnerDone)
+	}()
+	log.Info("job workers started")
 	errCh := make(chan error, 2)
 	go func() { errCh <- ignoreClosed(public.ListenAndServeTLS("", "")) }()
 	go func() { errCh <- ignoreClosed(internal.ListenAndServe()) }()
@@ -266,6 +289,16 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	_ = internal.Shutdown(shutdownCtx)
 	stopSched()
 	waitForScheduler(shutdownCtx, schedDone, log)
+	// Shutdown order (§8.8): HTTP, scheduler, workers (Run gives running jobs its own grace and
+	// releases the leases of unfinished ones), the scheduling lock, the SSH connections; the
+	// database pool closes last (deferred above).
+	stopRunner()
+	if waitForJobs(runnerDone, jobsShutdownBudget, log) {
+		log.Info("job workers stopped")
+	}
+	leader.Close()
+	svc.sshPool.Close()
+	log.Info("ssh connections closed")
 	// A fresh context: the time record is saved even when the shutdown budget is used up.
 	saveCtx, cancelSave := context.WithTimeout(context.Background(), timeRecordSaveBudget)
 	defer cancelSave()
@@ -293,6 +326,9 @@ func newAPIDeps(cfg config.Config, svc *services, health api.HealthChecker, cata
 		Setup:          svc.setup,
 		Audit:          svc.audit,
 		License:        svc.license,
+		Inventory:      svc.inventory,
+		Jobs:           svc.queue,
+		Providers:      svc.registry,
 		TrustedProxies: cfg.TrustedProxies,
 		TestHandler:    testHandler,
 	}
@@ -306,6 +342,23 @@ func waitForScheduler(ctx context.Context, done <-chan struct{}, log *slog.Logge
 		return true
 	case <-ctx.Done():
 		log.Warn("scheduled tasks did not stop within the shutdown time; saving the license time record anyway")
+		return false
+	}
+}
+
+// jobsShutdownBudget bounds the wait for the job workers at shutdown: the runner itself lets
+// running jobs finish for up to 60 s (§8.8) and then releases their leases.
+const jobsShutdownBudget = 75 * time.Second
+
+// waitForJobs waits for the job runner to return, at most limit. It reports whether it did.
+func waitForJobs(done <-chan struct{}, limit time.Duration, log *slog.Logger) bool {
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		log.Warn("background jobs did not stop within the shutdown time; their leases expire and they resume after the restart")
 		return false
 	}
 }

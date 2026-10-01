@@ -15,10 +15,13 @@ import (
 
 	"alice/internal/audit"
 	"alice/internal/auth"
+	"alice/internal/inventory"
+	"alice/internal/jobs"
 	"alice/internal/license"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/config"
 	"alice/internal/platform/db"
+	"alice/internal/providers"
 	"alice/internal/setup"
 )
 
@@ -77,16 +80,39 @@ func TestDBStartupErrorMentionsWaitOnlyForUnreachable(t *testing.T) {
 }
 
 // Every service serve builds reaches the API; a missing License would make every gated
-// route fail closed (license.locked) instead of working.
+// route fail closed (license.locked) instead of working, and a missing Inventory, Jobs or
+// Providers would answer every Phase 3 route with a 500.
 func TestAPIDepsCarryEveryService(t *testing.T) {
-	svc := &services{auth: &auth.Service{}, setup: &setup.Service{}, audit: &audit.Service{}, license: &license.Service{}}
+	svc := &services{auth: &auth.Service{}, setup: &setup.Service{}, audit: &audit.Service{}, license: &license.Service{},
+		inventory: &inventory.Service{}, queue: &jobs.Queue{}, registry: providers.NewRegistry()}
 	d := newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil)
 	assert.Same(t, svc.license, d.License)
 	assert.Same(t, svc.setup, d.Setup)
 	assert.Same(t, svc.auth, d.Auth)
 	assert.Same(t, svc.audit, d.Audit)
+	assert.Same(t, svc.inventory, d.Inventory)
+	assert.Same(t, svc.queue, d.Jobs)
+	assert.Same(t, svc.registry, d.Providers)
 	assert.NotNil(t, d.Clock)
 	assert.NotNil(t, d.Log)
+}
+
+// At shutdown serve waits for running jobs only until the job budget ends (spec §8.8: up to
+// 60 s; the runner then releases the leases of unfinished jobs itself).
+func TestWaitForJobsIsBounded(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+
+	done := make(chan struct{})
+	close(done)
+	assert.True(t, waitForJobs(done, time.Second, log))
+	assert.Empty(t, logs.String())
+
+	start := time.Now()
+	assert.False(t, waitForJobs(make(chan struct{}), 20*time.Millisecond, log), "workers that never stop do not block shutdown")
+	assert.Less(t, time.Since(start), 5*time.Second)
+	assert.Contains(t, logs.String(), "level=WARN")
+	assert.Contains(t, logs.String(), "background jobs did not stop")
 }
 
 // At shutdown serve waits for running scheduled tasks only until the shutdown deadline.

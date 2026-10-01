@@ -1,0 +1,7 @@
+#!/bin/sh
+# Test only: give the server new host keys and make the listening sshd load them (owner step 5).
+# SIGHUP makes sshd re-execute itself with the new keys; open sessions keep running.
+set -eu
+rm -f /etc/ssh/ssh_host_*
+ssh-keygen -A >/dev/null
+pkill -HUP -o -x sshd

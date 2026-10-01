@@ -15,10 +15,15 @@ import (
 	"alice/internal/audit"
 	"alice/internal/auth"
 	"alice/internal/i18n"
+	"alice/internal/inventory"
+	"alice/internal/jobs"
+	"alice/internal/jobs/targetjobs"
 	"alice/internal/license"
 	"alice/internal/notify"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/config"
+	"alice/internal/providers"
+	"alice/internal/providers/linuxssh"
 	"alice/internal/secrets"
 	"alice/internal/setup"
 	"alice/internal/version"
@@ -40,11 +45,17 @@ type serverClock interface {
 
 // services are the module services shared by serve and the CLI commands.
 type services struct {
-	keyring *secrets.Keyring
-	audit   *audit.Service
-	auth    *auth.Service
-	setup   *setup.Service
-	license *license.Service
+	pool      *pgxpool.Pool // the application pool the services were built on
+	keyring   *secrets.Keyring
+	auditLog  *audit.Log
+	audit     *audit.Service
+	auth      *auth.Service
+	setup     *setup.Service
+	license   *license.Service
+	queue     *jobs.Queue
+	inventory *inventory.Service
+	registry  *providers.Registry
+	sshPool   *linuxssh.Pool
 }
 
 // buildServices loads (or, on a brand-new database, creates) the master key and wires the
@@ -75,8 +86,27 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		StateDir:  cfg.StateDir,
 		BuildTime: buildTime(log),
 		Notifier:  notify.AdminNotifier{Clock: clk},
+		Targets:   inventory.Counter{},
 		Log:       log,
 	})
+	queue := jobs.NewQueue(jobs.QueueConfig{Pool: pool, Keyring: keyring, Audit: auditLog, Clock: clk, Gate: lic})
+	// The registry is a pointer: inventory gets it empty, the dialer gets inventory's host-key
+	// store, and registerProviders fills and freezes it before anything reads it.
+	registry := providers.NewRegistry()
+	inv := inventory.New(inventory.Config{
+		Pool:     pool,
+		Keyring:  keyring,
+		Audit:    auditLog,
+		Clock:    clk,
+		License:  lic,
+		Registry: registry,
+		Jobs:     queue,
+		Notifier: notify.AdminNotifier{Clock: clk},
+		Log:      log,
+	})
+	sshPool := linuxssh.NewPool(&linuxssh.Dialer{Clock: clk, HostKeys: inv.HostKeyStore()},
+		linuxssh.MaxConnections, linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)
+	registerProviders(registry, sshPool)
 	setupSvc := setup.New(setup.Config{
 		Pool:      pool,
 		Auth:      authSvc,
@@ -88,12 +118,54 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		License:   lic,
 	})
 	return &services{
-		keyring: keyring,
-		audit:   audit.NewService(auditLog, pool),
-		auth:    authSvc,
-		setup:   setupSvc,
-		license: lic,
+		pool:      pool,
+		keyring:   keyring,
+		auditLog:  auditLog,
+		audit:     audit.NewService(auditLog, pool),
+		auth:      authSvc,
+		setup:     setupSvc,
+		license:   lic,
+		queue:     queue,
+		inventory: inv,
+		registry:  registry,
+		sshPool:   sshPool,
 	}, nil
+}
+
+// jobRetention is how long finished jobs are kept before maintenance.cleanup prunes them (§8.2).
+const jobRetention = 90 * 24 * time.Hour
+
+// buildRunner builds the job workers with every Phase 3 handler (spec §8.1–§8.8). Every claim
+// passes the license gate; a job that runs out of attempts or fails its integrity check emails
+// the Administrators.
+func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.Logger) *jobs.Runner {
+	runner := jobs.NewRunner(jobs.RunnerConfig{Pool: pool, Queue: svc.queue, Gate: svc.license, Audit: svc.auditLog,
+		Clock: clk, Log: log, Notifier: notify.AdminNotifier{Clock: clk}})
+	targetjobs.Register(runner, targetjobs.Deps{Inventory: svc.inventory, Registry: svc.registry, Clock: clk, Log: log})
+	return runner
+}
+
+// buildScheduler is the periodic work of serve (spec §8.2, R37 item 15); every run passes the
+// license gate. The audit verification ticks hourly and verifies when the last intact
+// verification is 23 hours old (jobs.AuditVerifyTask). The e2e tests use the same tasks.
+func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *slog.Logger) *jobs.Scheduler {
+	return jobs.NewScheduler(clk, svc.license, log,
+		jobs.Task{Type: jobs.LicenseEvaluate, Every: time.Hour, Run: svc.license.Tick},
+		jobs.Task{Type: jobs.NotifySend, Every: time.Minute, Run: func(ctx context.Context) error {
+			_, err := sender.Drain(ctx)
+			return err
+		}},
+		jobs.AuditVerifyTask(jobs.AuditVerifyConfig{Pool: svc.pool, Verifier: svc.audit, Notifier: notify.AdminNotifier{Clock: clk}, Clock: clk}),
+		jobs.Task{Type: jobs.MaintenanceCleanup, Every: time.Hour, Run: func(ctx context.Context) error {
+			_, sessionsErr := svc.auth.PruneExpired(ctx)
+			_, jobsErr := svc.queue.Prune(ctx, jobRetention)
+			return errors.Join(sessionsErr, jobsErr)
+		}},
+		jobs.Task{Type: jobs.DiscoverySchedule, Every: time.Minute, Run: func(ctx context.Context) error {
+			_, err := svc.inventory.ScheduleDiscovery(ctx)
+			return err
+		}},
+	)
 }
 
 // buildSender builds the email sender of serve (notify.send). Only serve sends email, so

@@ -27,6 +27,9 @@ jobs:
       # build embeds the web UI and fails if testify is linked into the binary
       - run: make web-install
       - run: make build
+      # alice-helper is a static Linux binary for amd64 and arm64 (R21, spec §12.2); make build
+      # already built it for the checksums it embeds, this step keeps the artifact step explicit.
+      - run: make helper
 
   licensectl:
     # Spec §26.4: licensectl is tested on Linux and macOS (the vendor's machines).

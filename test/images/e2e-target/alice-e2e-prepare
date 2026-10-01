@@ -1,0 +1,6 @@
+#!/bin/sh
+# Test only: run the setup script that Alice shows (read from stdin) as root, next to the
+# alice-helper copy of the bundle, exactly as an administrator would (owner step 1).
+set -eu
+cd /opt/alice-bundle
+exec sh -s

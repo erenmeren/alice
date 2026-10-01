@@ -36,6 +36,9 @@ services:
         # every start; build through make, or see docs/dev/getting-started.md.
         BUILD_TIME: ${ALICE_BUILD_TIME:-unknown}
     restart: unless-stopped
+    # Running jobs may finish for up to 60 s after SIGTERM (spec §8.8); give Alice that time
+    # before Docker kills it (Docker's default is 10 s).
+    stop_grace_period: 90s
     # Alice itself retries the database for up to 60 s, so a late PostgreSQL
     # (e.g. after a host reboot) does not crash it; depends_on only orders start.
     depends_on:

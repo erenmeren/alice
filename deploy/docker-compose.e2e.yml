@@ -8,3 +8,20 @@ services:
     build:
       args:
         GO_TAGS: e2e testlicense
+  # Test-only SSH target for the Phase 3 journeys (web/e2e/phase3.spec.ts): Ubuntu 22.04 with
+  # OpenSSH, sudo, fixture users and keys generated at image build time, and alice-helper built
+  # from this repository in /opt/alice-bundle. Playwright prepares it with the setup script Alice
+  # shows (alice-e2e-prepare) and rotates its host key (alice-e2e-rotate-hostkey) through
+  # "docker compose exec". Alice reaches it as sshtarget:22 on the internal backend network.
+  sshtarget:
+    image: alice-e2e-sshtarget
+    build:
+      context: ..
+      dockerfile: test/images/e2e-target/Dockerfile
+    init: true
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "pgrep", "-x", "sshd"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
