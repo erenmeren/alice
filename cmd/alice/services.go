@@ -73,7 +73,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		Uptime:    clk,
 		Keys:      license.EmbeddedKeys(),
 		StateDir:  cfg.StateDir,
-		BuildTime: buildTime(),
+		BuildTime: buildTime(log),
 		Notifier:  notify.AdminNotifier{Clock: clk},
 		Log:       log,
 	})
@@ -106,11 +106,15 @@ func buildSender(pool *pgxpool.Pool, cfg config.Config, catalog *i18n.Catalog, c
 	return &notify.Sender{Pool: pool, Mailer: mailer, Catalog: catalog, Clock: clk, Log: log}, nil
 }
 
-// buildTime is the link-time build timestamp; the license time never falls below it (§16.5).
-// Development builds have none.
-func buildTime() time.Time {
+// buildTime is the link-time build timestamp; the license time never falls below it (§16.5,
+// L-53). A build without one (go build without the Makefile, or docker compose build without
+// ALICE_BUILD_TIME) starts with a warning: after a lost time record the license clock then
+// has no floor.
+func buildTime(log *slog.Logger) time.Time {
 	t, err := time.Parse(time.RFC3339, version.BuildTime)
 	if err != nil {
+		log.Warn("this build has no build time, so the license clock has no lower bound if its time record is lost; "+
+			"build with make (or set ALICE_BUILD_TIME for docker compose build)", "build_time", version.BuildTime)
 		return time.Time{}
 	}
 	return t.UTC()

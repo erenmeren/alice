@@ -31,7 +31,9 @@ services:
       dockerfile: deploy/Dockerfile
       args:
         VERSION: ${ALICE_VERSION:-dev}
-        # make up / make e2e-up pass the build time: the license clock never falls below it (§16.5).
+        # make up / make e2e-up pass the build time: the license clock never falls below it (§16.5,
+        # L-53). Without ALICE_BUILD_TIME the image has none ("unknown") and Alice logs a warning at
+        # every start; build through make, or see docs/dev/getting-started.md.
         BUILD_TIME: ${ALICE_BUILD_TIME:-unknown}
     restart: unless-stopped
     # Alice itself retries the database for up to 60 s, so a late PostgreSQL

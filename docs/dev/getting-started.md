@@ -23,6 +23,12 @@ Open https://localhost (accept the temporary certificate warning). Alice opens t
 `make up` is the development equivalent of `docker compose up`. It generates `deploy/.env` with random
 database passwords on first use and keeps an existing file (adding any password that is missing).
 
+Always build the image through `make up`, `make e2e-up` or `make image`: they pass the build time
+(`ALICE_BUILD_TIME`), which is the lowest time the license clock ever uses when its time record is lost
+(spec §16.5, L-53). A plain `docker compose build` without `ALICE_BUILD_TIME` builds an image without one;
+Alice then starts with the warning "this build has no build time, …". To build with Compose directly, run
+`ALICE_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose -f deploy/docker-compose.yml --env-file deploy/.env build`.
+
 The setup code works only while no administrator exists. `make setup-token` always issues a new code and
 invalidates the previous one. After the first administrator is created, sign in with the username,
 password and the 6-digit code from your authenticator app.

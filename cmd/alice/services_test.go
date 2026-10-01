@@ -13,6 +13,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"log/slog"
 	"math/big"
 	"net"
 	"os"
@@ -185,11 +186,21 @@ func TestNewMailerConfigurationErrors(t *testing.T) {
 
 // The build time set at link time is the floor of the license clock; a development build
 // has none.
+// A build without one (a plain docker compose build, B6) starts with a warning, because the
+// time record then has no floor after its loss (L-53).
 func TestBuildTime(t *testing.T) {
 	saved := version.BuildTime
 	t.Cleanup(func() { version.BuildTime = saved })
+	var logs strings.Builder
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+
 	version.BuildTime = "unknown"
-	assert.True(t, buildTime().IsZero())
+	assert.True(t, buildTime(log).IsZero())
+	assert.Contains(t, logs.String(), "level=WARN")
+	assert.Contains(t, logs.String(), "this build has no build time")
+
+	logs.Reset()
 	version.BuildTime = "2026-09-30T12:00:00Z"
-	assert.Equal(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), buildTime())
+	assert.Equal(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), buildTime(log))
+	assert.Empty(t, logs.String())
 }
