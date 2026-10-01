@@ -166,14 +166,16 @@ func (s *Service) publish(g Guard, snap Snapshot) {
 // ClassChange, the scheduler before every task, and CheckCanAddTarget before every target
 // insert. It returns ErrLocked while the license or the evaluation has ended,
 // ErrUnclassified for work without a class, and fails closed before Start has completed.
-func (s *Service) Allow(c Class) error {
+func (s *Service) Allow(c Class) error { return allowIn(s.Snapshot(), c) }
+
+// allowIn is the gate decision for one snapshot.
+func allowIn(snap Snapshot, c Class) error {
 	if !c.Valid() {
 		return ErrUnclassified
 	}
 	if c == ClassAlways {
 		return nil
 	}
-	snap := s.Snapshot()
 	if !snap.Ready || snap.Eval.Locked() {
 		return ErrLocked
 	}
@@ -181,20 +183,22 @@ func (s *Service) Allow(c Class) error {
 }
 
 // CheckCanAddTarget must be called in the transaction that inserts a target, before the
-// insert (spec L-74, L-79): it serializes concurrent adds, asks Allow, counts the targets
-// and refuses with ErrLocked or a *TargetLimitError. Exceeding the limit never locks (R30).
+// insert (spec L-74, L-79): it serializes concurrent adds, counts the targets and then
+// decides from one snapshot, read after the count: ErrLocked through the gate, or a
+// *TargetLimitError. Exceeding the limit never locks (R30).
 func (s *Service) CheckCanAddTarget(ctx context.Context, tx pgx.Tx) error {
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", targetLimitLock); err != nil {
 		return fmt.Errorf("lock the target count: %w", err)
-	}
-	if err := s.Allow(ClassChange); err != nil {
-		return err
 	}
 	n, err := s.targets.CountTargets(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("count targets: %w", err)
 	}
-	if limit := s.Snapshot().Eval.MaxTargets; n >= limit {
+	snap := s.Snapshot()
+	if err := allowIn(snap, ClassChange); err != nil {
+		return err
+	}
+	if limit := snap.Eval.MaxTargets; n >= limit {
 		return &TargetLimitError{Max: limit, Used: n}
 	}
 	return nil

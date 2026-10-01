@@ -433,3 +433,36 @@ func (c *switchCounter) CountTargets(context.Context, db.Querier) (int, error) {
 	}
 	return 0, nil
 }
+
+// hookCounter counts n targets and runs during once, the first time it counts.
+type hookCounter struct {
+	n      int
+	during func()
+}
+
+func (c *hookCounter) CountTargets(context.Context, db.Querier) (int, error) {
+	if f := c.during; f != nil {
+		c.during = nil
+		f()
+	}
+	return c.n, nil
+}
+
+// B3: CheckCanAddTarget decides from one evaluation. When the license locks while the
+// targets are counted, the lock check and the limit come from the same (new) state, so a
+// target is never added in lock because the lock check saw the state before.
+func TestCheckCanAddTargetDecidesFromOneEvaluation(t *testing.T) {
+	e := newEnv(t)
+	now := e.clk.Now()
+	_, err := e.upload(e.payload("LIC-A", now, now.Add(10*day), 10))
+	require.NoError(t, err)
+	counter := &hookCounter{n: 7}
+	e.targets = counter
+	e.restart()
+	require.Equal(t, license.PhaseActive, e.svc.Snapshot().Eval.Phase)
+
+	counter.during = func() { e.tickAt(now.Add(10*day + license.GracePeriod + time.Hour)) } // locks
+	err = db.InTx(e.ctx, e.db.App, func(tx pgx.Tx) error { return e.svc.CheckCanAddTarget(e.ctx, tx) })
+	require.ErrorIs(t, err, license.ErrLocked)
+	assert.Equal(t, license.PhaseLocked, e.svc.Snapshot().Eval.Phase)
+}
