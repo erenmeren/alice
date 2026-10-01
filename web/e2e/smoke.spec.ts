@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import { COPY, expect, resetInstall, test } from './helpers';
+import { COPY, advanceClock, expect, resetInstall, serverNow, test } from './helpers';
 
 function collectProblems(page: Page): string[] {
   const problems: string[] = [];
@@ -65,9 +65,21 @@ test('the session cookie is never readable by scripts', async ({ page }) => {
   expect(await page.evaluate(() => document.cookie)).not.toContain('alice');
 });
 
-test('the test clock only moves forward', async ({ request }) => {
-  const back = await request.post('/test/clock', { data: { advance_seconds: -1 } });
-  expect(back.status()).toBe(422);
-  const tooFar = await request.post('/test/clock', { data: { advance_seconds: 10 * 365 * 24 * 3600 + 1 } });
-  expect(tooFar.status()).toBe(422);
+test('the test clock moves both ways by at most ten years', async ({ request }) => {
+  const tenYears = 10 * 365 * 24 * 3600;
+  const before = await serverNow(request);
+  for (const advance of [-(tenYears + 1), tenYears + 1, 1e300]) {
+    const res = await request.post('/test/clock', { data: { advance_seconds: advance } });
+    expect(res.status(), `advance_seconds ${advance}`).toBe(422);
+  }
+  const notJson = await request.post('/test/clock', { data: 'not json', headers: { 'Content-Type': 'application/json' } });
+  expect(notJson.status()).toBe(400);
+  // A refused move leaves the clock alone (only real time passed).
+  expect((await serverNow(request)) - before).toBeLessThan(60_000);
+
+  // An in-range move backwards works (the rolled-back clock journeys rely on it).
+  await advanceClock(request, -3600);
+  const back = (await serverNow(request)) - before;
+  expect(back).toBeLessThan(-3500_000);
+  expect(back).toBeGreaterThan(-3600_000 - 60_000);
 });

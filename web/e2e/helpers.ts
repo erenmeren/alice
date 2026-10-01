@@ -473,6 +473,16 @@ export async function expectAccessible(page: Page, screen: string): Promise<void
 }
 
 export async function seriousViolations(page: Page): Promise<string[]> {
+  // Let opening dialogs finish their fade-in first: axe measures colors mid-transition as
+  // too pale. Endless animations (loaders) never finish, so they are not waited for.
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
   const results = await new AxeBuilder({ page }).analyze();
   return results.violations
     .filter((v) => v.impact === 'serious' || v.impact === 'critical')
