@@ -28,8 +28,10 @@ Cmnd_Alias ALICE_COMMON = \
 // The Nginx lines (profile "nginx", spec §12.3 / A-12). sudo matches arguments with fnmatch and
 // no FNM_PATHNAME, so '*' also matches spaces and further words: the helper's own argument check is
 // the real gate. Each line is still as narrow as sudo's grammar allows: flags are literal and in the
-// helper's order, a command that takes no arguments ends right after its subcommand (sudo refuses
-// any further word), and the operation id and the two hashes are fixed-length '?' runs, so nothing
+// helper's order, a command that takes no arguments ends right after its subcommand (the
+// real-OpenSSH container matrix on ubuntu22, debian12 and rocky9 shows sudo itself refusing a
+// further word, with its own text; TestRealOpenSSH asserts it), and the operation id and the two
+// hashes are fixed-length '?' runs, so nothing
 // can follow them. Only the two certificate paths are open-ended. tls-probe is unprivileged and has
 // no line.
 const (

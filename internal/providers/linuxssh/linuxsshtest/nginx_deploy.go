@@ -115,6 +115,39 @@ func (h *nginxHost) point(name string) {
 	}
 }
 
+// killedResponse is what a killed helper leaves for the client: nothing on stdout and a signal, or
+// (KillAtWithExit137) the status 137 of a shell that did not exec it.
+func (h *nginxHost) killedResponse() Response {
+	if h.killExit137 {
+		return Response{Exit: 137}
+	}
+	return Response{Signal: "KILL"}
+}
+
+// killedFrom turns the panic of a kill point into the killed answer and re-panics anything else.
+func (h *nginxHost) killedFrom(r any) Response {
+	if _, ok := r.(emuKilled); !ok {
+		panic(r)
+	}
+	h.hangedUp = false
+	return h.killedResponse()
+}
+
+// recoverKill is the deferred form of killedFrom for a command's answer.
+func (h *nginxHost) recoverKill(resp *Response) {
+	if r := recover(); r != nil {
+		*resp = h.killedFrom(r)
+	}
+}
+
+// consumeFaults ends the faults armed for one transaction (KillAt, KillAtWithExit137, HangupAfter,
+// InterfereAt, FailJournalWrite): each applies to the next nginx-deploy, nginx-restore or
+// cleanup of an Nginx operation, fired or not, and is gone after it.
+func (h *nginxHost) consumeFaults() {
+	h.killAt, h.killExit137, h.hangupAt, h.failJournal = "", false, "", ""
+	h.interfere = nil
+}
+
 // writeJournal replaces the operation's journal (the helper's writeJournal): the new one is staged
 // (a kill there leaves the old one), then renamed in.
 func (h *nginxHost) writeJournal(op *opDir, j *emuJournal) error {
@@ -345,10 +378,7 @@ func (h *nginxHost) configTest() (string, error) { return h.testConfig(true) }
 // reload is systemctl reload plus is-active (the helper's reload): a failure leaves Nginx serving
 // what it served; a success makes it serve the files now on disk (unless NoopReload).
 func (h *nginxHost) reload() error {
-	h.reloads++
-	if !h.installed || h.nginxKilled {
-		return errNginxMissing
-	}
+	h.reloads++ // systemctl: independent of the nginx binary (SetNginxKilled does not touch it)
 	if h.failReload > 0 {
 		h.failReload--
 		return errors.New("reload failed")
@@ -612,15 +642,8 @@ func (e *Emulator) nginxDeploy(args []string, stdin []byte) (resp Response) {
 	defer e.mu.Unlock()
 	h := e.nginx()
 	h.stdins = append(h.stdins, newSecret(stdin))
-	defer func() {
-		if r := recover(); r != nil {
-			if _, ok := r.(emuKilled); !ok {
-				panic(r)
-			}
-			h.hangedUp = false
-			resp = Response{Signal: "KILL"}
-		}
-	}()
+	defer h.consumeFaults()
+	defer h.recoverKill(&resp)
 	h.hangedUp = false
 	resp = h.deployCommand(args, stdin)
 	if h.hangedUp {
@@ -855,14 +878,8 @@ func (e *Emulator) nginxRestore(args []string) (resp Response) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	h := e.nginx()
-	defer func() {
-		if r := recover(); r != nil {
-			if _, ok := r.(emuKilled); !ok {
-				panic(r)
-			}
-			resp = Response{Signal: "KILL"}
-		}
-	}()
+	defer h.consumeFaults()
+	defer h.recoverKill(&resp)
 	op := args[1]
 	if h.locked {
 		return refuse(helperproto.ExitFailed, helperproto.CodeBusy)
@@ -919,11 +936,17 @@ func (e *Emulator) nginxStatus(args []string) Response {
 // while the lock is held, or while the operation is kept for recovery. ok is false for an
 // operation the Nginx model does not know (the authorized_keys cleanup answers). The caller holds
 // e.mu.
-func (h *nginxHost) cleanupOp(op string) (Response, bool) {
+func (h *nginxHost) cleanupOp(op string) (resp Response, known bool) {
 	dir := h.ops[op]
 	if dir == nil {
 		return Response{}, false
 	}
+	defer h.consumeFaults()
+	defer func() {
+		if r := recover(); r != nil {
+			resp, known = h.killedFrom(r), true
+		}
+	}()
 	if h.locked {
 		return refuse(helperproto.ExitFailed, helperproto.CodeBusy), true
 	}

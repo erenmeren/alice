@@ -879,6 +879,17 @@ func TestFailedDeployRunDoesNotLeakTheKey(t *testing.T) {
 	c, _ := code(err)
 	assert.Equal(t, "ssh.protocol_error", c)
 	check("killed", res, resp, err)
+	// A killed helper that ends by status 137 without a signal is "helper_missing" to DecodeHelper:
+	// never a helper refusal (the Nginx provider treats it as uncertain).
+	e = newEnv(t)
+	e.emu.KillAtWithExit137(helperproto.StepWriteKey)
+	res, resp, err = run(t, e, oldSHA, context.Background())
+	require.Error(t, err)
+	assert.Empty(t, res.Stdout)
+	c, hc := code(err)
+	assert.Equal(t, "ssh.helper_missing", c)
+	assert.Empty(t, hc, "no helper code: the helper never answered")
+	check("killed with exit 137", res, resp, err)
 	e = newEnv(t)
 	e.emu.HangupAfter(helperproto.StepWriteCert)
 	res, resp, err = run(t, e, oldSHA, context.Background())

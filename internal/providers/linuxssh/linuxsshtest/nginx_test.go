@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -62,6 +63,7 @@ type world struct {
 	e        *Emulator
 	old, nw  pki.Leaf
 	other    pki.Leaf
+	sameKey  pki.Leaf // another certificate for the old key (a file that changed but still loads)
 	ca       *pki.CA
 	oldSHA   string
 	deployIn []byte
@@ -75,6 +77,7 @@ func newWorld(t *testing.T) *world {
 		nw:    ca.Issue(pki.Opts{CommonName: "www.example.test"}, testNow),
 		other: ca.Issue(pki.Opts{CommonName: "other.example.test"}, testNow),
 	}
+	w.sameKey = ca.Issue(pki.Opts{CommonName: "www.example.test", Key: w.old.Key}, testNow)
 	w.e.EnableNginx("1.22.1")
 	w.e.AddSite(NginxSite{Names: []string{"www.example.test"}, Port: 443, CertPath: crt, KeyPath: key}, w.old.FullchainPEM, w.old.KeyPEM)
 	w.oldSHA = hexSum(w.old.FullchainPEM)
@@ -118,6 +121,11 @@ func (w *world) assertPair(t *testing.T, leaf pki.Leaf) {
 	t.Helper()
 	assert.Equal(t, string(leaf.FullchainPEM), string(w.e.NginxFile(crt)))
 	assert.Equal(t, string(leaf.KeyPEM), string(w.e.NginxFile(key)))
+}
+
+// padded is a certificate file over the size limit that still loads (text outside PEM blocks is ignored).
+func padded(pem []byte) []byte {
+	return append(append([]byte{}, pem...), []byte(strings.Repeat("\n", helperproto.MaxCertFileSize))...)
 }
 
 func TestEmulatedNginxDeployAndRollback(t *testing.T) {
@@ -182,6 +190,10 @@ func TestEmulatedNginxConfigTestChecksEveryPair(t *testing.T) {
 	assert.Equal(t, 1, w.e.Reloads(), "only the rollback reloaded")
 }
 
+// changedFiles are the refusal cases that leave a file other than the old pair on disk.
+var changedFiles = []string{"file changed", "cert missing", "cert garbled", "key does not match", "cert missing after nginx -T", "cert too large", "cert changed before the key is replaced",
+	"cert hard linked", "special file system"}
+
 func TestEmulatedNginxRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -194,13 +206,18 @@ func TestEmulatedNginxRefusals(t *testing.T) {
 		{"nginx missing", func(w *world) { w.e.nx.installed = false }, helperproto.ExitPrecondition, helperproto.CodeNginxNotFound},
 		{"nginx killed", func(w *world) { w.e.SetNginxKilled(true) }, helperproto.ExitFailed, helperproto.CodeIOError},
 		{"pair not in the configuration", func(w *world) { w.e.nx.servers = nil }, helperproto.ExitPrecondition, helperproto.CodeConfigChanged},
-		{"file changed", func(w *world) { w.e.SetNginxFile(crt, []byte("x")) }, helperproto.ExitPrecondition, helperproto.CodeHashMismatch},
-		{"cert missing", func(w *world) { w.e.RemoveNginxFile(crt) }, helperproto.ExitPrecondition, helperproto.CodeNotFound},
+		{"file changed", func(w *world) { w.e.SetNginxFile(crt, w.sameKey.FullchainPEM) }, helperproto.ExitPrecondition, helperproto.CodeHashMismatch},
+		// Real nginx -T loads the pair files: a missing or garbled one is a configuration error.
+		{"cert missing", func(w *world) { w.e.RemoveNginxFile(crt) }, helperproto.ExitPrecondition, helperproto.CodeConfigInvalid},
+		{"cert garbled", func(w *world) { w.e.SetNginxFile(crt, []byte("x")) }, helperproto.ExitPrecondition, helperproto.CodeConfigInvalid},
+		{"key does not match", func(w *world) { w.e.SetNginxFile(key, w.other.KeyPEM) }, helperproto.ExitPrecondition, helperproto.CodeConfigInvalid},
+		// The race the helper guards against: the files changed after nginx -T (a forged dump).
+		{"cert missing after nginx -T", func(w *world) { w.e.SetNginxDump(w.e.NginxDumpText()); w.e.RemoveNginxFile(crt) }, helperproto.ExitPrecondition, helperproto.CodeNotFound},
 		{"cert hard linked", func(w *world) { w.e.SetFileProblem(crt, helperproto.FileHardLinked) }, helperproto.ExitRefused, helperproto.CodeUnsafeFile},
 		{"key not regular", func(w *world) { w.e.SetFileProblem(key, helperproto.FileNotRegular) }, helperproto.ExitRefused, helperproto.CodeNotRegularFile},
 		{"walk not root controlled", func(w *world) { w.e.SetFileProblem(key, helperproto.FileNotRootControlled) }, helperproto.ExitRefused, helperproto.CodePathNotAllowed},
 		{"special file system", func(w *world) { w.e.SetFileProblem(crt, helperproto.FileSpecialFS) }, helperproto.ExitRefused, helperproto.CodePathNotAllowed},
-		{"cert too large", func(w *world) { w.e.SetNginxFile(crt, make([]byte, helperproto.MaxCertFileSize+1)) }, helperproto.ExitRefused, helperproto.CodeTooLarge},
+		{"cert too large", func(w *world) { w.e.SetNginxFile(crt, padded(w.old.FullchainPEM)) }, helperproto.ExitRefused, helperproto.CodeTooLarge},
 		{"no space", func(w *world) { w.e.SetFreeBytes(1) }, helperproto.ExitPrecondition, helperproto.CodeNoSpace},
 		{"too many operations", func(w *world) { w.e.SetMaxNginxOps(1); w.e.nx.ops[emuOp3] = &opDir{j: &emuJournal{op: emuOp3}} }, helperproto.ExitPrecondition, helperproto.CodeNoSpace},
 		{"busy", func(w *world) { w.e.HoldLock(true) }, helperproto.ExitFailed, helperproto.CodeBusy},
@@ -219,8 +236,7 @@ func TestEmulatedNginxRefusals(t *testing.T) {
 				assert.Equal(t, "", w.e.NginxPhase(emuOp), "a refusal leaves no operation behind")
 			}
 			assert.Equal(t, 0, w.e.Reloads())
-			if tc.name != "file changed" && tc.name != "cert missing" && tc.name != "cert too large" && tc.name != "cert changed before the key is replaced" &&
-				tc.name != "cert hard linked" && tc.name != "special file system" {
+			if !slices.Contains(changedFiles, tc.name) {
 				w.assertPair(t, w.old)
 			}
 		})
@@ -807,7 +823,9 @@ func TestEmulatedNginxDumpFilesAndWarnings(t *testing.T) {
 	assert.Equal(t, []string{}, d.Warnings)
 	assert.Equal(t, []string{}, d.Writable)
 
-	// Problems.
+	// Problems. What real nginx -T would refuse (a pair file that is missing or not a certificate)
+	// shows only in a dump forged from the files as they were.
+	forge := func() { w.e.SetNginxDump(w.e.NginxDumpText()) }
 	for _, tc := range []struct {
 		name    string
 		setup   func()
@@ -815,14 +833,14 @@ func TestEmulatedNginxDumpFilesAndWarnings(t *testing.T) {
 		problem string
 		exists  bool
 	}{
-		{"missing cert", func() { w.e.RemoveNginxFile(crt) }, "cert", helperproto.FileMissing, false},
-		{"missing key", func() { w.e.RemoveNginxFile(key) }, "key", helperproto.FileMissing, false},
+		{"missing cert", func() { forge(); w.e.RemoveNginxFile(crt) }, "cert", helperproto.FileMissing, false},
+		{"missing key", func() { forge(); w.e.RemoveNginxFile(key) }, "key", helperproto.FileMissing, false},
 		{"special file system", func() { w.e.SetFileProblem(crt, helperproto.FileSpecialFS) }, "cert", helperproto.FileSpecialFS, true},
 		{"not root controlled", func() { w.e.SetFileProblem(key, helperproto.FileNotRootControlled) }, "key", helperproto.FileNotRootControlled, true},
 		{"not regular cert", func() { w.e.SetFileProblem(crt, helperproto.FileNotRegular) }, "cert", helperproto.FileNotRegular, true},
 		{"hard linked key", func() { w.e.SetFileProblem(key, helperproto.FileHardLinked) }, "key", helperproto.FileHardLinked, true},
-		{"too large cert", func() { w.e.SetNginxFile(crt, make([]byte, helperproto.MaxCertFileSize+1)) }, "cert", helperproto.FileTooLarge, true},
-		{"not a certificate", func() { w.e.SetNginxFile(crt, []byte("hello")) }, "cert", helperproto.FileNotACertificate, true},
+		{"too large cert", func() { w.e.SetNginxFile(crt, padded(w.old.FullchainPEM)) }, "cert", helperproto.FileTooLarge, true},
+		{"not a certificate", func() { forge(); w.e.SetNginxFile(crt, []byte("hello")) }, "cert", helperproto.FileNotACertificate, true},
 	} {
 		w = newWorld(t)
 		tc.setup()
@@ -842,6 +860,7 @@ func TestEmulatedNginxDumpFilesAndWarnings(t *testing.T) {
 	w.e.SetNginxFileMode(key, "root", "root", 0o644)
 	assert.Equal(t, []string{helperproto.WarnKeyGroupOpen}, dump().Warnings)
 	w = newWorld(t)
+	w.e.SetNginxDump(w.e.NginxDumpText())
 	w.e.SetNginxFile(crt, append(append([]byte{}, w.old.FullchainPEM...), []byte("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")...))
 	d = dump()
 	assert.Equal(t, []string{helperproto.WarnCertificateBlockDropped}, d.Warnings)
@@ -967,4 +986,100 @@ func TestEmulatedResentInterruptedDeployHasNoFailedStep(t *testing.T) {
 	assert.Empty(t, resp.CauseStep)
 	w.assertPair(t, w.old)
 	assert.Equal(t, pki.Fingerprint(w.old.Cert), w.e.Served(443, "www.example.test"))
+}
+
+// Real nginx -T loads the pair files, so a host left with a mixed pair by a killed deployment
+// answers nginx-dump with an invalid configuration and refuses a NEW deployment (CONFIG_INVALID);
+// nginx-restore of the interrupted operation does not need nginx -T and repairs the pair.
+func TestEmulatedMixedPairIsAConfigurationError(t *testing.T) {
+	w := newWorld(t)
+	w.e.KillAt(helperproto.StepWriteKey)
+	require.Equal(t, "KILL", w.deploy(emuOp).Signal)
+	d := decode[helperproto.NginxDumpResponse](t, w.run(line(true, helperproto.SubNginxDump), nil))
+	assert.False(t, d.ConfigValid)
+	assert.Equal(t, helperproto.ConfigErrKeyMismatch, d.ConfigError)
+	assert.Equal(t, "1.22.1", d.Version)
+	assert.Empty(t, d.Servers)
+	inB := input(w.other.FullchainPEM, w.other.KeyPEM)
+	r := w.run(deployLineFor(emuOp2, crt, key, w.oldSHA, inB), inB)
+	assert.Equal(t, helperproto.CodeConfigInvalid, codeOf(t, r))
+	assert.Equal(t, "", w.e.NginxPhase(emuOp2))
+	assert.Equal(t, helperproto.PhaseWriting, w.status(emuOp).Phase)
+	r = w.restore(emuOp)
+	require.Equal(t, 0, r.Exit, string(r.Stdout))
+	assert.Equal(t, helperproto.PhaseRestored, decode[helperproto.NginxRestoreResponse](t, r).Phase)
+	w.assertPair(t, w.old)
+	d = decode[helperproto.NginxDumpResponse](t, w.run(line(true, helperproto.SubNginxDump), nil))
+	assert.True(t, d.ConfigValid)
+	assert.Equal(t, helperproto.PhaseRestored, decode[helperproto.NginxDeployResponse](t, w.deploy(emuOp)).Phase, "a re-send answers from the journal")
+}
+
+// The kill switch of the nginx binary does not stop the reload (systemctl); a failing reload is
+// FailReload.
+func TestEmulatedNginxKilledDoesNotFailTheReload(t *testing.T) {
+	w := newWorld(t)
+	w.e.KillNginxAt(helperproto.StepConfigTest) // after the test passed, before the reload
+	r := w.deploy(emuOp)
+	require.Equal(t, 0, r.Exit, string(r.Stdout))
+	assert.Equal(t, helperproto.PhaseCommitted, decode[helperproto.NginxDeployResponse](t, r).Phase)
+	assert.Equal(t, 1, w.e.Reloads())
+	assert.Equal(t, pki.Fingerprint(w.nw.Cert), w.e.Served(443, "www.example.test"))
+	assert.Equal(t, helperproto.CodeIOError, codeOf(t, w.run(line(true, helperproto.SubNginxTest), nil)), "but nginx -t is killed")
+}
+
+func TestEmulatedFaultKnobs(t *testing.T) {
+	// FailJournalWrite is for the phases the helper answers an error for.
+	e := NewEmulator()
+	assert.Panics(t, func() { e.FailJournalWrite(helperproto.PhaseUnchanged) })
+	assert.Panics(t, func() { e.FailJournalWrite(helperproto.PhaseRestoring) })
+
+	// Armed transaction faults are consumed by the next transaction command, fired or not.
+	w := newWorld(t)
+	w.e.KillAt(helperproto.StepWriteKey)
+	w.e.HangupAfter(helperproto.StepReload)
+	w.e.InterfereAt(helperproto.StepBackup, crt, []byte("x"))
+	w.e.FailJournalWrite(helperproto.PhaseCommitted)
+	w.e.HoldLock(true)
+	assert.Equal(t, helperproto.CodeBusy, codeOf(t, w.deploy(emuOp)), "a refusal before the transaction")
+	w.e.HoldLock(false)
+	r := w.deploy(emuOp)
+	require.Equal(t, 0, r.Exit, string(r.Stdout))
+	assert.Equal(t, helperproto.PhaseCommitted, decode[helperproto.NginxDeployResponse](t, r).Phase, "nothing fired in the later call")
+	assert.False(t, r.Hangup)
+	w.assertPair(t, w.nw)
+
+	// A kill reached inside the cleanup of a no-op operation does not crash the server: it is the
+	// killed answer, with the operation and the record untouched.
+	w = newWorld(t)
+	require.Equal(t, 0, w.deploy(emuOp).Exit)
+	inB := input(w.other.FullchainPEM, w.other.KeyPEM)
+	w.e.KillAt("pair record renamed") // B took the record and changed nothing
+	require.Equal(t, "KILL", w.run(deployLineFor(emuOp2, crt, key, hexSum(w.nw.FullchainPEM), inB), inB).Signal)
+	cleanup := func() Response { return w.run(line(true, helperproto.SubCleanup, "--op", emuOp2), nil) }
+	w.e.KillAt("pair record staged") // handing the record back to A
+	r = cleanup()
+	assert.Equal(t, "KILL", r.Signal)
+	assert.Equal(t, helperproto.PhasePrepared, w.e.NginxPhase(emuOp2))
+	assert.Equal(t, 1, decode[helperproto.CleanupResponse](t, cleanup()).Removed, "the kill was consumed")
+	assert.Equal(t, helperproto.PhaseRestored, decode[helperproto.NginxRestoreResponse](t, w.restore(emuOp)).Phase, "A is the latest again")
+}
+
+// A killed helper that ends by status 137 without a signal: nothing on stdout.
+func TestEmulatedKillWithExit137(t *testing.T) {
+	w := newWorld(t)
+	w.e.KillAtWithExit137(helperproto.StepWriteCert)
+	r := w.deploy(emuOp)
+	assert.Equal(t, 137, r.Exit)
+	assert.Empty(t, r.Stdout)
+	assert.Empty(t, r.Signal)
+	assert.Equal(t, helperproto.PhaseWriting, w.status(emuOp).Phase)
+	w.e.KillAt(helperproto.StepRestore)
+	assert.Equal(t, "KILL", w.restore(emuOp).Signal, "the style is not sticky")
+}
+
+func TestEmulatedToWireCleansNames(t *testing.T) {
+	assert.Equal(t, "ab", clean("a\x00b\n", 10))
+	assert.Equal(t, "ab", clean("a\xffb", 10))
+	assert.Equal(t, "aé", clean("aéé", 3))
+	assert.Equal(t, "abc", cleanRunes("abcdef", 3))
 }

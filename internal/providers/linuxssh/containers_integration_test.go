@@ -413,7 +413,7 @@ func TestRealOpenSSH(t *testing.T) {
 			opS, urlA, urlK := nginxOp.String(), "/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key"
 			deployArgs := "nginx-deploy --op " + opS + " --cert " + urlA + " --key " + urlK + " --expect-cert-sha256 " + sha64 + " --content-sha256 " + sha64
 			for _, bad := range []string{
-				"nginx-dump -c /tmp/x", "nginx-dump extra", "nginx-test -c /tmp/x", "nginx-test " + opS,
+				"nginx-dump -c /tmp/x", "nginx-dump extra", "nginx-test -c /tmp/x", "nginx-test extra", "nginx-test " + opS,
 				"nginx-restore --op " + opS + " extra", "nginx-restore", "nginx-restore " + opS, "nginx-restore " + opS + " --op",
 				"nginx-status --op " + opS + " --op " + opS, "nginx-status --op", "nginx-status --op " + opS[:35],
 				deployArgs + " extra", deployArgs + "0",

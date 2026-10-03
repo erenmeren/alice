@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/nginx/nginxconf"
@@ -268,6 +270,15 @@ func (h *nginxHost) nginxConfig() (nginxconf.Config, nginxMeta, error) {
 	if h.configInvalid != "" {
 		return invalid(&configError{class: h.configInvalid})
 	}
+	// Real nginx -T loads the pair files like nginx -t: a missing file, a certificate that does not
+	// load or a key that does not match fail it (class file_missing, cert_load, key_load,
+	// key_mismatch). The races the helper's own checks guard against (a file changing between nginx
+	// -T and the helper's read) exist only with a forged dump: SetNginxDump(NginxDumpText()).
+	if h.dumpText == nil {
+		if c := h.pairsFailure(); c != "" {
+			return invalid(&configError{class: c})
+		}
+	}
 	out := h.dumpOutput()
 	switch {
 	case len(out) > helperproto.MaxNginxConfig:
@@ -337,8 +348,13 @@ func (h *nginxHost) sameContent(name string, body []byte) (*emuFile, string) {
 	}
 	name = filepath.Clean(name)
 	m := h.meta[name]
-	if m != nil && (m.problem == helperproto.FileNotRootControlled || m.problem == helperproto.FileSpecialFS) {
-		return nil, m.problem // the walk of the directories fails
+	if m != nil {
+		switch m.problem { // the walk of the directories fails
+		case helperproto.FileNotRootControlled:
+			return nil, helperproto.ConfigReasonNotRootControlled
+		case helperproto.FileSpecialFS:
+			return nil, helperproto.ConfigReasonSpecialFS
+		}
 	}
 	got, ok := h.fileLocked(name)
 	if !ok {
@@ -388,19 +404,32 @@ func (h *nginxHost) testConfig(inDeploy bool) (class string, err error) {
 		h.failTest--
 		return helperproto.ConfigErrSyntax, errors.New("nginx -t failed")
 	}
+	if _, ok := h.liveConfig(); !ok {
+		return helperproto.ConfigErrSyntax, errors.New("nginx -t failed")
+	}
+	if c := h.pairsFailure(); c != "" {
+		return c, errors.New("nginx -t failed")
+	}
+	return "", nil
+}
+
+// pairsFailure is the class of the first pair whose files nginx cannot load, "" when all load (or
+// the configuration does not parse: that is a syntax error, reported elsewhere). Real Nginx loads
+// every ssl_certificate and ssl_certificate_key in "nginx -t" and in "nginx -T" alike.
+func (h *nginxHost) pairsFailure() string {
 	cfg, ok := h.liveConfig()
 	if !ok {
-		return helperproto.ConfigErrSyntax, errors.New("nginx -t failed")
+		return ""
 	}
 	for _, p := range cfg.pairs() {
 		if h.phantomPair(p) {
 			continue
 		}
 		if c := h.pairClass(p.Cert, p.Key); c != "" {
-			return c, errors.New("nginx -t failed")
+			return c
 		}
 	}
-	return "", nil
+	return ""
 }
 
 // liveConfig parses the configuration files as they are on the host (what nginx loads: not a dump
@@ -451,8 +480,14 @@ func (h *nginxHost) pairClass(certPath, keyPath string) string {
 	if !cok || !kok {
 		return helperproto.ConfigErrFileMissing
 	}
-	if len(certDERs(cert)) == 0 {
+	ders := certDERs(cert)
+	if len(ders) == 0 {
 		return helperproto.ConfigErrCertLoad
+	}
+	for _, d := range ders { // OpenSSL fails the whole chain file on a block that is not a certificate
+		if _, err := x509.ParseCertificate(d); err != nil {
+			return helperproto.ConfigErrCertLoad
+		}
 	}
 	if _, err := tlsPair(cert, key); err != nil {
 		if errors.Is(err, errKeyLoad) {
@@ -538,11 +573,13 @@ func (e *Emulator) nginxDump(args []string) Response {
 
 // toWire converts a parsed server block (the helper's toWire).
 func toWire(sv nginxconf.Server) helperproto.NginxServer {
-	out := helperproto.NginxServer{File: sv.File, Line: sv.Line, Names: []string{}, Listens: []helperproto.NginxListen{},
+	out := helperproto.NginxServer{File: clean(sv.File, 4096), Line: sv.Line, Names: []string{}, Listens: []helperproto.NginxListen{},
 		Pairs: []helperproto.NginxPair{}, Stream: sv.Stream}
-	out.Names = append(out.Names, sv.Names...)
+	for _, n := range sv.Names {
+		out.Names = append(out.Names, clean(n, 253))
+	}
 	for _, l := range nginxconf.SSLListens(sv) {
-		out.Listens = append(out.Listens, helperproto.NginxListen{Addr: l.Addr, Port: l.Port, DefaultServer: l.DefaultServer})
+		out.Listens = append(out.Listens, helperproto.NginxListen{Addr: clean(l.Addr, 253), Port: l.Port, DefaultServer: l.DefaultServer})
 	}
 	for _, p := range sv.Pairs {
 		wp := helperproto.NginxPair{Cert: p.Cert, Key: p.Key, Inherited: p.Inherited, Unsupported: p.Unsupported}
@@ -554,13 +591,25 @@ func toWire(sv nginxconf.Server) helperproto.NginxServer {
 	return out
 }
 
-func cleanRunes(s string, maxRunes int) string {
+// clean drops control characters and invalid UTF-8 and cuts s to at most maxBytes on a rune
+// boundary (the helper's clean).
+func clean(s string, maxBytes int) string {
 	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || r == '�' {
+		if unicode.IsControl(r) || r == utf8.RuneError {
 			return -1
 		}
 		return r
 	}, strings.ToValidUTF8(s, ""))
+	for len(s) > maxBytes {
+		_, size := utf8.DecodeLastRuneInString(s)
+		s = s[:len(s)-size]
+	}
+	return s
+}
+
+// cleanRunes is clean with a limit in runes.
+func cleanRunes(s string, maxRunes int) string {
+	s = clean(s, len(s))
 	if r := []rune(s); len(r) > maxRunes {
 		return string(r[:maxRunes])
 	}

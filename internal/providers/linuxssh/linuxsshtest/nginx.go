@@ -98,6 +98,7 @@ type nginxHost struct {
 	failJournal   string
 	interfere     []interference
 	killAt        string
+	killExit137   bool
 	hangupAt      string
 	hangedUp      bool
 	locked        bool
@@ -313,7 +314,10 @@ func (e *Emulator) SetNginxConfPath(p string) {
 }
 
 // SetNginxDump replaces what nginx -T prints (the helper's tests do the same to present a
-// forged, truncated or odd dump); the helper's checks then run on it.
+// forged, truncated or odd dump); the helper's checks then run on it. A forged dump is also the way
+// to reach what real Nginx never shows: the emulated nginx -T fails on a pair file that is missing,
+// does not load or does not match, as real Nginx does, so a dump with such a file (a "missing" or
+// "not_a_certificate" problem, a deploy racing a file change) needs SetNginxDump(NginxDumpText()).
 func (e *Emulator) SetNginxDump(text string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -342,8 +346,9 @@ func (e *Emulator) SetConfigInvalid(class string) {
 	e.nginx().configInvalid = class
 }
 
-// SetNginxKilled makes every run of nginx time out or die by a signal: nginx-dump and nginx-test
-// answer IO_ERROR, and a deployment's nginx -t fails its step with an empty class.
+// SetNginxKilled makes every run of the nginx binary (-V, -T, -t) time out or die by a signal:
+// nginx-dump and nginx-test answer IO_ERROR, and a deployment's nginx -t fails its step with an
+// empty class. systemctl (the reload) is unaffected: FailReload makes that fail.
 func (e *Emulator) SetNginxKilled(on bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -449,6 +454,9 @@ func (e *Emulator) FailRestoreFile(p string) {
 // FailJournalWrite makes the next write of a journal in the given phase (prepared, writing or
 // committed) fail: a refusal for the first two, the journal step's rollback for committed.
 func (e *Emulator) FailJournalWrite(phase string) {
+	if !slices.Contains([]string{helperproto.PhasePrepared, helperproto.PhaseWriting, helperproto.PhaseCommitted}, phase) {
+		panic("linuxsshtest: FailJournalWrite: the helper answers a failed journal write only in the phases prepared, writing and committed, not " + phase)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.nginx().failJournal = phase
@@ -456,12 +464,25 @@ func (e *Emulator) FailJournalWrite(phase string) {
 
 // InterfereAt makes someone else replace path with content when a transaction reaches point (a
 // point name of the helper: backup, write_key, write_cert, config_test, reload, ...): a file
-// changed during a deployment. It fires once.
+// changed during a deployment. Armed transaction faults (InterfereAt, KillAt, KillAtWithExit137,
+// HangupAfter, FailJournalWrite) apply to the next nginx-deploy, nginx-restore or Nginx cleanup only
+// and are consumed by it, fired or not (a refusal before the transaction leaves none behind).
 func (e *Emulator) InterfereAt(point, p string, content []byte) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	h := e.nginx()
 	h.interfere = append(h.interfere, interference{point: point, path: p, content: newSecret(content)})
+}
+
+// KillAtWithExit137 is KillAt with the other way a killed helper ends: no signal, exit status 137
+// (the remote shell did not exec the helper and it was SIGKILLed) and empty stdout. Alice's
+// DecodeHelper maps it to ssh.helper_missing; the Nginx provider must still treat it as an
+// uncertain outcome, never as a refusal.
+func (e *Emulator) KillAtWithExit137(point string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	h := e.nginx()
+	h.killAt, h.killExit137 = point, true
 }
 
 // KillNginxAt makes every run of nginx die from the moment a transaction reaches point (a point
