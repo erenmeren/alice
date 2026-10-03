@@ -263,6 +263,18 @@ func TestOpenWithFreshConnectionDials(t *testing.T) {
 	assert.Equal(t, dials+1, e.srv.Connections())
 }
 
+// A-16: the provider forgets a deleted target's pooled connections.
+func TestProviderForgetsADeletedTarget(t *testing.T) {
+	e := newProvEnv(t)
+	s := e.open(t)
+	c := connOf(t, s)
+	require.NoError(t, s.Close())
+	require.True(t, c.Healthy(), "kept idle")
+	var cc providers.ConnectionCache = e.prov
+	cc.ForgetTarget(testTarget)
+	assert.False(t, c.Healthy())
+}
+
 func TestOpenHelperMissing(t *testing.T) {
 	e := newProvEnv(t)
 	e.emu.SetHelperMissing(true)

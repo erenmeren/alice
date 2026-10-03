@@ -387,3 +387,16 @@ func TestPoolForgetTarget(t *testing.T) {
 	assert.Empty(t, e.pool.idle[testTarget])
 	e.pool.mu.Unlock()
 }
+
+// Zero or negative limits take the defaults; a per-target limit above the total is capped.
+func TestNewPoolDefaults(t *testing.T) {
+	d := &Dialer{Clock: clock.NewFake(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)), HostKeys: &memHostKeys{}}
+	p := NewPool(d, 0, -1, 0)
+	defer p.Close()
+	assert.Equal(t, MaxConnections, cap(p.global))
+	assert.Equal(t, MaxConnectionsPerTarget, p.perTarget)
+	assert.Equal(t, IdleTimeout, p.idleFor)
+	q := NewPool(d, 1, 5, time.Minute)
+	defer q.Close()
+	assert.Equal(t, 1, q.perTarget, "capped by the total")
+}
