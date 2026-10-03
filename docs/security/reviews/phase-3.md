@@ -14,7 +14,7 @@ All commands run from the repository root; `-tags integration` needs Docker.
 | 1 | Host-key pinning: an unconfirmed key stops before authentication, a changed key and a missing algorithm block, a failing host-key store is not a connection, a server that skips the client key is refused, a re-pin drops pooled connections (F-30, F-31) | `go test ./internal/providers/linuxssh -run 'FirstContact\|ChangedHostKey\|PinnedAlgorithm\|HostKeyStore\|NoCodeAcceptsAnyHostKey\|Repin\|WithoutTheClientKey' -count=1` | ok |
 | 2 | Confirmation and re-pin rules, one email per change, history kept, dismissal, stale candidates never pinned, background jobs never pin (F-30..F-33) | `go test -tags integration ./internal/inventory -run 'F30\|Confirm\|Changed\|Repin\|Observed\|Dismiss\|Stale' -count=1` and `go test -tags integration ./internal/api -run 'TestAddServerJourney\|TestChangedHostKeyJourney\|TestDismissedHostKeyChange' -count=1` | ok |
 | 3 | Command surface: only helper constructors and `cat /etc/os-release`; one quoting function; no session call outside `dial.go`; no `InsecureIgnoreHostKey`, no `StrictHostKeyChecking=no`; sudoers matches every built command; the setup script never writes through `alice-svc` paths and checks the helper checksum (A-12, SEC-063) | `go test ./internal/providers/linuxssh/... -run 'Command\|Quote\|OnlyDial\|Hostile\|Sudoers\|SetupScript\|HelperCheck' -count=1` and `make lint` | ok |
-| 4 | Helper argument and path validation, candidate-only paths, symlinks out of the home refused, hard links and foreign owners refused, swap races, atomic compare-and-swap writes, lock file, backups and their 30-day sweep (A-12, A-13, F-38) | `go test ./cmd/alice-helper -count=1` (as a normal user the three root-only tests `TestWriteAsRoot`, `TestStaleRootInodeInUserDirIsRefused` and `TestAttackSSHDirSwappedForARootDirectory` skip; run it as root on a disposable machine to include them) | ok |
+| 4 | Helper argument and path validation, candidate-only paths, symlinks out of the home refused, hard links and foreign owners refused, swap races, atomic compare-and-swap writes, lock file, backups and their 30-day sweep (A-12, A-13, F-38) | `go test ./cmd/alice-helper -count=1` (as a normal user the root-only tests, for example `TestWriteAsRoot`, `TestAttackSSHDirSwappedForARootDirectory`, `TestReadThroughSymlinkIntoARootDirectoryIsRefused` and `TestSymlinkedHomeMustBelongToTheAccount`, skip; run it as root in a disposable container, for example `docker run --rm --network none` with `debian:12` and a test binary from `go test -c`, to include them) | ok |
 | 5 | Helper is a static binary that links only the allowed modules | `go test ./cmd/alice-helper -run TestHelperIsStatic -count=1` and `make helper` | ok |
 | 6 | Parsers fuzzed (§25.6) | `make fuzz-ssh` | no crasher |
 | 7 | Key operations: own key refused by fingerprint, last root key, keys managed elsewhere, `cert-authority` lines, CRLF and foreign lines preserved, three compare-and-swap attempts; removal requests refused before queueing; database trigger protects Alice's key location (F-35..F-38) | `go test ./internal/providers/linuxssh -run 'Remove\|Add\|KeyOperations\|ConcurrentChange\|Write' -count=1` and `go test -tags integration ./internal/inventory -run 'Removal\|Protect\|Trigger\|PlatformKey' -count=1` | ok |
@@ -22,7 +22,7 @@ All commands run from the repository root; `-tags integration` needs Docker.
 | 9 | Job queue: exactly once with 20 workers and 1000 jobs, per-target exclusivity, retries, MAC tamper, crash recovery kill test, fenced writes, leader lock, alerts (F-66, F-69, J-1) | `go test -tags integration ./internal/jobs/... -count=1` | ok |
 | 10 | License: target limit and lock with real targets, blocked removals wait for an administrator (L-04, L-26, L-29, L-70..L-79, L-81) | `go test -tags integration ./internal/inventory -run 'L0\|L7\|AddInLock' -count=1`, `go test -tags integration ./internal/api -run 'TestLockRefusesInfrastructureChanges\|TestBlockedRemovalNeedsConfirmation\|TestEvaluationLimitViaAPI' -count=1`, `go test -tags integration ./internal/jobs -run Lock -count=1` and `go test ./internal/archtest -count=1` | ok |
 | 11 | Authorization matrix incl. the five new permissions; lock-group rules; test and discover are read-only class and refused in lock | `go test ./internal/api -run 'Authz\|RouteRule\|Lock\|Sensitive\|Gated\|InfrastructureRoutes' -count=1` and `make authz-doc && git diff --exit-code docs/authz-matrix.md` | ok, no diff |
-| 12 | Secret leak with the platform SSH key (seed, OpenSSH PEM) through journeys and error paths; S-04 ciphertext | `go test -tags integration ./internal/api -run 'TestSecretsNeverLeak\|TestPlatformKeyNeverLeaks' -count=1` | ok |
+| 12 | Secret leak with the platform SSH key (seed, OpenSSH PEM, PKCS#8 DER and PEM, the `openssh-key-v1` marker) through journeys and error paths, including the rendered host-key and sign-in emails; S-04 ciphertext | `go test -tags integration ./internal/api -run 'TestSecretsNeverLeak\|TestPlatformKeyNeverLeaks' -count=1` | ok |
 | 13 | Grants: `credentials` append-only, inventory never deleted, own-key protection trigger cannot be bypassed; `00004` Down safe | `go test -tags integration ./migrations -count=1` | ok |
 | 14 | Coverage floors | `make coverage` | every package ok |
 | 15 | E2E EN/TR incl. axe at 375/640/1280/1920 px on the new screens and banners, on the separate compose project `alice-e2e` | `make e2e-up && make e2e-hardening-check && make e2e`, then `make e2e-down` | all passed |
@@ -81,7 +81,13 @@ No High finding is open except the documented product residual P3-01.
 - **Audit chain is unkeyed.** The audit log is a plain SHA-256 hash chain. It detects changed and deleted entries,
   but `alice_app` (or anyone with its database password) can append new rows that verify as valid. External
   anchors (syslog forwarding, signed checkpoints) arrive in Phase 7. The daily check (`audit.verified` by
-  `scheduler`) only re-checks the chain.
+  `scheduler`) only re-checks the chain, and its state (the setting `jobs.audit_verify`: last intact verification
+  and the break already announced) is writable by `alice_app`, so whoever holds that role can also suppress the
+  `audit.broken` email. Both are fixed together in Phase 7.
+- **Forged license notices.** The application role can insert rows into `license_history`, so someone with its
+  database password can make the **License** page show notices that never happened (for example about the
+  installation record). Alice never decides anything from these notices: whether an installation-record episode is
+  open is read from the audit log, which is authoritative.
 - **Directory-service accounts.** The static helper reads `/etc/passwd` only; users that exist only in LDAP or
   SSSD are not listed (warning `directory_users_not_listed` per server). At most 200 accounts are listed per server
   (warning `too_many_users`).
@@ -117,9 +123,14 @@ No High finding is open except the documented product residual P3-01.
   credential failure of the platform key is reported without its cause (deliberately: the cause can name key
   material).
 - **Stale host-key candidates.** A key a server presented and no longer presents stays as a candidate until an
-  Administrator acts. If a blocked server presents its pinned key again, the block stays, the page still offers the
-  old candidate (accepting it fails with `ALC-TGT-0003`), and the block can only be ended through the API by
-  re-pinning the pinned key (`hostkey.change_dismissed`); the UI has no button for this yet.
+  Administrator acts. A blocked server stays blocked when it presents its pinned key again; an Administrator ends the
+  block in the re-pin dialog with **The server still shows the previous fingerprint** (step-up and a reason, audited
+  `hostkey.change_dismissed`), which rejects the candidates and tests the connection again.
+- **A late test result can reject a new candidate.** A connection test that reached the server with the pinned key
+  and reports after the target was blocked rejects every outstanding candidate, also one the server presented a
+  moment later for a legitimate reason. The dialog then offers no new fingerprint; the Administrator uses **The
+  server still shows the previous fingerprint**, and the next test records the new key again (and blocks and emails
+  again) so it can be reviewed.
 - **Servers without readable sshd settings.** Alice refuses key removal on a server (or for a user) when the last
   scan could not run `sshd -T`, because it cannot know which file sshd honours. A server whose `sshd -T` fails
   permanently cannot have keys removed through Alice.
@@ -131,6 +142,18 @@ No High finding is open except the documented product residual P3-01.
 - **Missing keys per path.** A key location is marked "no longer found" only when its file was read in the scan,
   matching on the file path and not the user, so an absolute `AuthorizedKeysFile` shared by several users is
   tracked per path (R37 item 23).
+- **Keys of deleted accounts stay "present".** The helper lists only some accounts (root, `alice-svc`, uid ≥ 1000
+  except `nobody` with a login shell and an existing home) and does not report the accounts it skips, so Alice cannot
+  tell a deleted account from one that got a `nologin` shell or lost its home (whose keys sshd may still accept).
+  The files of an account that is no longer listed are not read, so its key locations are never marked missing, and
+  removing them through Alice is refused. A fix needs a helper protocol change (the helper reporting every account
+  name it read and whether `/etc/passwd` was read completely). `docs/operator-guide.md` describes how to spot and
+  handle it.
+- **Key options shown verbatim.** `authorized_keys` options (for example `environment=` or `command=`, which can
+  carry values an administrator considers sensitive) are stored and shown exactly as in the file to every role that
+  can read the inventory, Auditors included.
+- **No "missing" mark in the key list.** **Show keys that are no longer found** adds those keys to the **SSH keys**
+  list without marking the rows; the key's page shows the state of each place.
 - **No automatic restore.** When reading a key file back after a write does not show the expected content, the job
   stops for a person (`ALC-KEY-0005`) and names the backup; restoring is manual until Phase 4.
 - **No certificates yet (Phase 4).** Nginx servers can be added only as Linux servers; `nginx-*` subcommands and
@@ -141,7 +164,9 @@ No High finding is open except the documented product residual P3-01.
   alert list, dashboard and email settings arrive in Phase 7. SSH limits are constants until Settings exist.
 - **Target edits.** Only the name and the scan interval can be changed (API; the UI has no edit form yet).
 - **Address checks.** SEC-065's "unless explicitly allowed" switch is not built: link-local and metadata,
-  unspecified, multicast and broadcast addresses are always refused, loopback is allowed.
+  unspecified, multicast and broadcast addresses are always refused, loopback is allowed. Addresses in the
+  local-use NAT64 range `64:ff9b:1::/48` are refused when the IPv4 address embedded at any RFC 6052 position (/48,
+  /56, /64, /96) is one of those, because Alice cannot know the prefix length the network uses.
 - **Packaging (Phase 8).** The helper is built with `make helper`; the release bundle and its signature arrive in
   Phase 8. Master-key rotation (which must re-seal the installation record and the time record, and re-encrypt the
   platform key) is not built. Replacing the platform SSH key is a manual procedure (`docs/operator-guide.md`).

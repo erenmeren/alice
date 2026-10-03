@@ -28,7 +28,9 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 
 - **"Connecting to the server…" ends with "Cannot be reached".** Check the address and port, that the server's SSH
   service runs, and that a firewall lets the Alice server through (`ALC-SSH-0001`, `ALC-SSH-0003`). Then choose
-  **Test connection** on the server's page.
+  **Test connection** on the server's page. Alice also tests a server that cannot be reached once per discovery
+  interval on its own and scans it as soon as the test succeeds; a new server whose fingerprint is not confirmed yet
+  is not tested on its own.
 - **"Sign-in refused" (`ALC-SSH-0002`).** The server does not accept Alice's key for the user you entered. Run the
   setup commands again (they put the key in `/var/lib/alice-svc/.ssh/authorized_keys`), check that the user
   name is `alice-svc`, then choose **Test connection**. Alice does not try a server with a refused key again on its
@@ -42,7 +44,10 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   `alice-helper-linux-arm64` (aarch64) built by `make helper` from the same Alice version, renamed to
   `alice-helper`.
 - **Server identity changed (`ALC-TGT-0004`).** See [nginx-host-preparation.md](nginx-host-preparation.md#when-the-server-is-rebuilt).
-  Never accept a new fingerprint you have not compared on the server itself.
+  Never accept a new fingerprint you have not compared on the server itself. If the server shows its previous
+  fingerprint again, choose **Review the new fingerprint** and **The server still shows the previous fingerprint**.
+- **A key of a deleted account is still listed as found.** Alice does not learn that an account was deleted (or got a
+  `nologin` shell); see [operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists).
 - **"This server gets its SSH keys from a program" (`ALC-SSH-0008`).** The server uses `AuthorizedKeysCommand`;
   Alice lists keys but does not change them there.
 - **A key removal says "The file changed while Alice was working" (`ALC-SSH-0007`).** Someone or something edited
@@ -449,8 +454,10 @@ security team: something may be intercepting the connection.
 **Likely cause.** The server was reinstalled or its SSH host keys were regenerated, or someone is impersonating it.
 
 **What to do.** Ask your security team to confirm the change on the server itself. Then an administrator opens the
-server, chooses **Review the new fingerprint**, confirms with the authenticator code and gives a reason. The previous
-fingerprint stays in the history.
+server, chooses **Review the new fingerprint**, gives a reason and chooses **Accept new fingerprint** (the previous
+fingerprint stays in the history) or, when the previous fingerprint is still the right one, **The server still shows
+the previous fingerprint** (Alice tests the connection again and blocks the server again if it presents another
+key). Alice asks for an authenticator code if the last one is more than five minutes old.
 
 ## ALC-TGT-0005: Fingerprint cannot be accepted now
 
@@ -481,7 +488,8 @@ tasks).
 ## ALC-SSH-0002: Server refused Alice's key
 
 **Meaning.** The server rejected the sign-in of the `alice-svc` account with Alice's key. The server is marked "Sign-in
-refused" and administrators get an email. Alice does not retry on its own more often than the discovery interval.
+refused" and administrators get an email. Alice never tries a refused key again on its own (no scheduled scan or
+test), so the server never locks the account because of Alice; only **Test connection** tries again.
 
 **Likely cause.** The preparation commands were not run, the key line was removed from
 `/var/lib/alice-svc/.ssh/authorized_keys`, or the account is locked.
@@ -507,7 +515,8 @@ connection.
 
 ## ALC-SSH-0005: Helper outdated
 
-**Meaning.** The helper on the server speaks an older protocol than this Alice version needs.
+**Meaning.** The helper on the server speaks an older protocol than this Alice version needs (this release needs
+protocol 3, `alice-helper` 1.2.0).
 
 **Likely cause.** Alice was updated but the helper on the server was not.
 

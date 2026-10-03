@@ -20,7 +20,8 @@ safe.
    processor). If they differ, the script stops: the file is not the `alice-helper` of this Alice version. (A
    development build of Alice without checksums prints a warning instead and installs the file unchecked.)
 2. Install the checked copy as `/usr/local/libexec/alice-helper`, owned by root, mode 0755. Alice cannot change this
-   file; you update it yourself when a new Alice release asks for it ("helper outdated").
+   file; you update it yourself when a new Alice release asks for it ("helper outdated"). This release needs helper
+   protocol 3 (`alice-helper` 1.2.0), which refuses a key-file change whose content did not arrive complete.
 3. Create the system user `alice-svc` (home `/var/lib/alice-svc`, shell `/bin/bash`, no files from `/etc/skel`) if
    it does not exist. If a user `alice-svc` already exists with another home directory, the script stops. The
    account gets no password (`usermod -p '*'`): nobody can sign in with a password, but the SSH server still accepts
@@ -79,11 +80,27 @@ server never gets the Nginx permissions. The helper of this release answers the 
 
 ## What Alice reads and changes
 
-- Alice reads the `authorized_keys` files of `root`, of every account in `/etc/passwd` with a user ID of 1000 or
-  more, an existing home directory and a login shell, and of `alice-svc` itself (at most 200 accounts), in the
-  places that the SSH server's `AuthorizedKeysFile` setting names (also per user, through `Match` blocks). A key
-  file reached through a symbolic link that leaves the user's home is reported, not read. Alice also reads the
-  server's host key fingerprints and its SSH settings (`sshd -T`). It never reads private keys.
+- Alice reads the `authorized_keys` files of `root`, of `alice-svc` itself, and of every account in `/etc/passwd`
+  with a user ID of 1000 or more (except `nobody`, user ID 65534) that has an existing home directory and a login
+  shell (a shell that is not `…/nologin` or `…/false`), at most 200 accounts, in the places that the SSH server's
+  `AuthorizedKeysFile` setting names (also per user, through `Match` blocks). Alice also reads the server's host key
+  fingerprints and its SSH settings (`sshd -T`). It never reads private keys.
+- Alice lists some key files as unsupported and never reads or changes them, because another user could redirect
+  them to a file of their choosing (for example `root`'s keys):
+  - a file reached through a symbolic link that leaves the user's home;
+  - a file named by an absolute `AuthorizedKeysFile` outside the home whose directory is reached through a symbolic
+    link, or whose directory or any directory above it is not owned by root or can be written by its group or by
+    others. A per-user directory that the user owns, for example `/srv/keys/%u`, is therefore unsupported, although
+    the SSH server accepts it;
+  - every file of an account when a directory above its home (for example `/home` or `/`) is not owned by root or
+    can be written by its group or by others. A symbolic link above the home is accepted only when root owns it,
+    its target contains no `..`, and the directories it leads to pass the same check, so `/home -> /data/home` and
+    Fedora's `/home -> var/home` work; a home that is itself a symbolic link must lead to a directory that the
+    account owns.
+- Alice does not learn that an account was deleted. An account that is deleted, switched to a shell such as
+  `/usr/sbin/nologin` or left without its home directory is simply no longer listed, and the helper cannot tell
+  these cases apart. Its keys stay in Alice as they were last seen (they are not marked **No longer found**), and
+  Alice cannot remove them. How to spot and handle this: [operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists).
 - Accounts that exist only in a directory service (LDAP, SSSD) are not listed; Alice shows a warning when the
   server uses one.
 - If the SSH server gets keys from a program (`AuthorizedKeysCommand`), Alice shows the keys it finds in files but
@@ -98,16 +115,23 @@ server never gets the Nginx permissions. The helper of this release answers the 
 
 ## When the server is rebuilt
 
-A rebuilt server has a new host key. Alice then shows **Server identity changed** and stops all work on it until an
-administrator compares the new fingerprint (step 5 above) and accepts it: **Review the new fingerprint**, a reason
-of at least 10 characters, **Accept new fingerprint**, and a new authenticator code if Alice asks for one. The
-previous fingerprint stays in the history.
+A rebuilt server has a new host key. Alice then shows **Server identity changed**, stops all work on it and emails
+the administrators. An administrator chooses **Review the new fingerprint**, enters a **Reason** of at least 10
+characters (for example the change ticket number) and chooses one of two actions; Alice asks for a new authenticator
+code if the last one is more than five minutes old.
 
-The block stays even if the server later presents its previous key again. In that case the page still offers the
-key the server no longer presents, and accepting it fails with `ALC-TGT-0003`. In this release the block can then be
-ended only through the API: an administrator, signed in to the browser, re-pins the already pinned key
-(`POST /api/v1/targets/{id}/host-keys/{pinned key id}/actions/repin`, with its fingerprint and a reason). Alice
-records this as `hostkey.change_dismissed`.
+- **Accept new fingerprint**: only after comparing the new fingerprint on the server (step 5 above), when the server
+  was reinstalled or its keys were replaced on purpose. The previous fingerprint stays in the history. Recorded as
+  `hostkey.repinned`.
+- **The server still shows the previous fingerprint**: when the previous fingerprint is still the right one, for
+  example because the connection reached another machine for a while. Alice keeps the previous fingerprint, drops
+  the new one, unblocks the server and tests the connection again. Recorded as `hostkey.change_dismissed`. If the
+  server then presents a different key again, Alice blocks it again, emails the administrators again and asks for a
+  new review.
+
+The block never ends on its own, also not when the server presents its previous key again. If Alice has no new
+fingerprint to offer, the dialog says "Alice has not recorded a new fingerprint for this server." and only
+**The server still shows the previous fingerprint** is available.
 
 Alice reuses an open SSH connection for up to 60 seconds for its own work. **Test connection** always opens a new
 connection, so it shows a changed host key at once.
@@ -125,4 +149,4 @@ rm -rf /var/lib/alice-svc /var/lib/alice-helper
 
 `userdel -r` is not used because the home directory belongs to root. If `userdel` reports that `alice-svc` is still
 logged in, a job that was already running when you removed the server has not finished yet: wait a minute and run it
-again.
+again, or end the session with `pkill -u alice-svc` and run `userdel alice-svc` again.

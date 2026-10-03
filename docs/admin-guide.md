@@ -126,12 +126,25 @@ confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **S
   toward the license; when the license is full, Alice says "Your license allows N targets." and adds nothing. A
   server's address, SSH port and user cannot be changed later: remove the server and add it again.
 - **Test connection** and **Scan for SSH keys** (administrators and operators) run in the background; the page
-  updates when they finish. Alice also scans every connected server once a day on its own. A server that cannot be
-  reached or refused Alice's key is not tried again automatically: fix the cause, then choose **Test connection**.
+  updates when they finish. Test connection always opens a new connection to the server.
+- Alice scans every **Connected** server on its own once per discovery interval (one day unless it was changed
+  through the API; at least one hour), and starts at most one scheduled job per server per interval whatever its
+  outcome. A server that **Cannot be reached** is tested again at that interval; when the test succeeds it is
+  **Connected** again and Alice scans it at once. A successful scan or key removal also brings it back to
+  **Connected**. A server with **Sign-in refused** or **Server identity changed** is never tried again
+  automatically: fix the cause, then choose **Test connection** (Sign-in refused) or review the fingerprint (Server
+  identity changed).
+- A new server that cannot be reached before you confirmed its fingerprint stays **Waiting for fingerprint
+  confirmation** (its last error says why), so a fingerprint Alice already recorded can still be confirmed. Alice does
+  not try it again on its own: choose **Test connection** when it can be reached.
 - **Server identity changed**: Alice stopped all work on the server because its host key is different from the
-  one you confirmed. Only an administrator can accept the new fingerprint, after checking it on the server, with a
-  reason and a recent authenticator code. Everything is recorded in the audit log, and administrators with an email
-  address get one email when it happens. The same email goes out once when a server refuses Alice's key.
+  one you confirmed. Only an administrator can end this, with **Review the new fingerprint**, a reason and a recent
+  authenticator code: **Accept new fingerprint** after checking it on the server, or **The server still shows the
+  previous fingerprint** when the previous one is still right (Alice then tests the connection again and blocks the
+  server again if it still presents another key). See
+  [nginx-host-preparation.md](nginx-host-preparation.md#when-the-server-is-rebuilt). Everything is recorded in the
+  audit log, and administrators with an email address get one email each time a server becomes blocked. The same
+  email goes out once when a server refuses Alice's key.
 - **Remove server** (administrators) makes Alice forget the server, closes the SSH connections Alice kept open to it
   and frees its license slot. Nothing is changed on the server.
 - **Waiting for an administrator** lists work that was paused while the license had expired (for example a key
@@ -154,6 +167,12 @@ administrator ticks "This is the last key of the root account. Remove it anyway.
 that get their keys from a program (`AuthorizedKeysCommand`) or whose SSH settings the last scan could not read.
 Every refusal that protects access is recorded in the audit log. Generating, deploying and rotating keys arrive in a
 later release.
+
+The **SSH keys** list shows no **No longer found** mark on its rows; open a key to see the state of each place.
+Alice does not learn that an account was deleted from a server: such an account's keys stay listed as they were
+last seen and cannot be removed through Alice (see
+[operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists)). Key options such as `command=` or
+`environment=` are shown exactly as they are in the file, to everyone who can see the key, auditors included.
 
 ## License
 

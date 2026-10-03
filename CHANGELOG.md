@@ -24,6 +24,15 @@
   a broken audit chain, a job that stopped after its last attempt and a job changed in the database.
 - Developer targets: `make helper`, `make fuzz-ssh`, `make test-ssh` (real OpenSSH on Ubuntu 22.04, Debian 12,
   Rocky 9); the e2e stack runs as the separate compose project `alice-e2e` with an SSH test server.
+- The re-pin dialog offers **The server still shows the previous fingerprint**: an administrator can end a host-key
+  block from the UI when the previous fingerprint is still right (audited `hostkey.change_dismissed`).
+- A server that cannot be reached is tested again once per discovery interval and scanned as soon as the test
+  succeeds; a successful scan or key removal also brings it back to **Connected** (`target.status_changed` reasons
+  `discovery_ok`, `removal_ok`).
+- Audit action `job.cancelled_license` for a read-only job the license lock cancelled; `job.dead` carries
+  `shutdown=true`, and sends no email, when Alice's own shutdown cut off the last attempt.
+- `ALC-SSH-0011`: a versioned build without the helper checksums answers this code on **Prepare a server for Alice**
+  instead of a generic error, and logs a warning at startup.
 
 ### Changed
 - Every state-changing API route belongs to exactly one license lock group; `GET /api/v1/license/status` answers
@@ -33,9 +42,38 @@
 - On a new installation the audit log now starts with `platform_key.created`.
 - Builds other than development builds (version `dev`) need the helper checksums: `make build` and the image build
   embed them, and a build without them offers no setup commands.
+- Helper protocol 3 (helper 1.2.0): `authkeys-write` takes `--content-sha256` and refuses incomplete content
+  (`CONTENT_MISMATCH`), so a dropped connection never leaves a truncated `authorized_keys`. The sudoers line changed
+  with it: run the setup commands again with the new `alice-helper` on servers prepared with an earlier build
+  (Alice reports them with `ALC-SSH-0005`, helper outdated).
+- The setup commands check and install a root-private copy of `./alice-helper`, create `alice-svc` without
+  `/etc/skel` files and empty its home on every run; keep the helper in a directory only you can write.
+- The helper lists key files as unsupported when another user could redirect them: an absolute `AuthorizedKeysFile`
+  directory that is reached through a symlink or not controlled by root (for example a user-owned `/srv/keys/%u`),
+  and every file of an account with a directory above its home that is not root's or is writable by others
+  (root-owned symlinks such as `/home -> /data/home` work; a `..` in such a link does not). It answers
+  `HOME_NOT_WRITABLE` when a user's `.ssh` cannot be created, removes lock files unused for 30 days, and reading or
+  writing a key file may take up to 60 seconds.
+- **Test connection** always opens a new SSH connection; removing a server closes the connections Alice kept open to
+  it.
+- Scheduled work runs at most once per discovery interval per server, whatever its outcome; a failed scheduled
+  re-test ends without a dead-job email.
+- A new server that cannot be reached before its fingerprint is confirmed stays "Waiting for fingerprint
+  confirmation"; confirm, re-pin and dismissal always start a new connection test.
+- A job whose lease cannot be renewed is stopped and handed back before the lease runs out; a key removal applied
+  while its server was deleted is still recorded.
+- The database checks server addresses, ports and fingerprint formats; local-use NAT64 addresses
+  (`64:ff9b:1::/48`) that translate to link-local, multicast or broadcast addresses are refused.
+- Web: progress waits through network errors, a stopped task says so, the setup wizard no longer reports success
+  after a failed first check, and several Turkish texts were corrected.
+- Development: `make image` builds `alice:ci` (never the `alice:dev` tag of the `make up` stack); the e2e stack
+  publishes `ALICE_E2E_PORT` (default 9443) so it runs beside the `make up` stack; `make ci` removes it at the end.
 
 ### Known issues
 - Accounts that exist only in LDAP or SSSD are not inventoried.
+- Keys of an account deleted from a server (or switched to a `nologin` shell) stay listed as found and cannot be
+  removed through Alice; see `docs/operator-guide.md`.
+- Replacing Alice's own SSH key needs the vendor; there is no command for it.
 - The full list is in `docs/security/reviews/phase-3.md` ("Known limitations").
 
 ## Unreleased — Phase 2: Licensing

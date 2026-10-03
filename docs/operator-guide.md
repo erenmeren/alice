@@ -64,10 +64,12 @@ Alice protects this key on every server: it refuses to remove any key whose fing
 platform key, in any file, and a database trigger refuses to delete or un-mark the inventory entry of Alice's own
 key. The application role cannot change or delete rows of `credentials`.
 
-Replacing the key is therefore a manual procedure: add the new public key to every server first, then contact the
-vendor; Alice never removes its own key from a server. During such a change do not run the server preparation
-commands again: they replace `/var/lib/alice-svc/.ssh/authorized_keys` with a single line holding the key Alice
-uses at that moment, which removes the other key.
+Replacing the key needs your vendor in this release: there is no command and no page for it. Contact the vendor
+before you change anything. The new public key must be on every server before Alice switches to it, and Alice never
+removes its own key (old or new) from a server, so the old line is removed by hand afterwards. During such a change
+do not run the server preparation commands again: they replace `/var/lib/alice-svc/.ssh/authorized_keys` with a
+single line holding the key Alice uses at that moment, which removes the other key. Connections Alice opened with
+the old key may stay in use for up to 60 seconds after the switch.
 
 ## The `alice-svc` account on each server
 
@@ -79,6 +81,26 @@ The sudoers file sets `Defaults:alice-svc log_output`, so sudo keeps an I/O log 
 every answer the helper prints (lists of key files and the content of the `authorized_keys` files Alice read).
 These are public keys, not secrets, but the logs grow with every scan: rotating or removing them (by default below
 `/var/log/sudo-io`) is the server administrator's job.
+
+## Keys of accounts Alice no longer lists
+
+The helper lists only some accounts of a server (see "What Alice reads and changes" in
+[nginx-host-preparation.md](nginx-host-preparation.md#what-alice-reads-and-changes)). When an account is deleted,
+gets a shell such as `/usr/sbin/nologin`, or loses its home directory, it is no longer listed, and the helper does
+not say which of these happened. Alice therefore keeps the account's keys as they were last seen: they are not
+marked **No longer found**, and **Remove key** fails because the helper refuses a file of an account it does not list
+(`ALC-SSH-0006`). A key is marked **No longer found** only when a scan reads its file again and the key is gone.
+
+To spot it: on the key's page (**SSH keys**, then the key), **Where this key is used** shows a **Last seen** time that
+stays behind the server's latest scan. To handle it, check the account on the server (`getent passwd <user>`):
+
+- The account was deleted: its keys no longer let anyone sign in as that user. If its home directory is still on
+  the server, delete the old `authorized_keys` file there.
+- The account still exists with a `nologin` or `false` shell, or without its home directory: the SSH server may still
+  accept its keys (for example for port forwarding). Remove the key lines from the file on the server yourself, or
+  give the account a login shell and its home again, choose **Scan for SSH keys**, and remove the key in Alice.
+
+In both cases the entry stays in Alice as last seen; this is a known limitation of this release.
 
 ## Master-key rotation and the installation record
 
@@ -98,6 +120,25 @@ put back in the queue (audited as `job.recovered`) when it has attempts left, an
 seconds, doubling up to 30 minutes (connection tests are not retried; scans get 5 attempts, other jobs 3). A failed
 sign-in is not retried: the server is marked "Sign-in refused" until someone tests it again.
 
+Scheduled work per server: every minute Alice looks for servers that are due. A **Connected** server is scanned
+once per discovery interval (default one day, at least one hour). Alice starts at most one scheduled job per server
+per interval, whatever its outcome: a scheduled scan that fails (for example because the helper is outdated, or the
+license lock cancelled it) is tried again only after a full interval. A server that **Cannot be reached** gets a
+connection test at its discovery interval instead; when it succeeds, the server is **Connected** again and Alice
+scans it at once. A scheduled test that fails ends as failed, without a dead-job email; the server keeps its status
+and the next interval tests it again. A server left at **Checking…** after its fingerprint was confirmed (because
+Alice restarted, or the license lock cancelled the test) is tested the same way, at once the first time. Any
+successful scan or key removal also returns a server that could not be
+reached to **Connected** (audited as `target.status_changed` with the reason `discovery_ok` or `removal_ok`). A
+server marked **Sign-in refused** or **Server identity changed**, one waiting for its fingerprint confirmation and a
+disabled one are never tried automatically: a person must act first.
+
+If Alice cannot renew a running job's lease (for example because the database cannot be reached) and the lease
+would run out before the next renewal, Alice stops the job's work and hands the job back to the queue; with the
+defaults this happens about 30 seconds after the last renewal. When a server is removed while a job runs on it, a
+key removal that already changed the server is still recorded in the audit log, and a connection test ends as
+failed (`ALC-SYS-0001`) without a retry or an email.
+
 At most 10 SSH connections are in use at once (2 per server); an idle connection is kept for up to 60 seconds and
 reused, except by **Test connection**, which always opens a new connection. Each step has its own time limit: 10 seconds to connect, 15 seconds for the SSH handshake, 30 seconds per
 command (60 seconds for reading the SSH settings and for listing, reading and changing key files; the helper on
@@ -106,13 +147,15 @@ uncertain outcome and stops for a person). Every job payload carries an HMAC; a 
 changed in the database is never run (`job.tampered`).
 
 While the license is locked, nothing new can be requested on servers (`ALC-LIC-0001`), scheduled scans are not
-queued, queued tests and scans are cancelled, and queued key removals are held as "Waiting for an administrator" on
+queued, queued tests and scans are cancelled (each recorded as `job.cancelled_license`), and queued key removals are held as "Waiting for an administrator" on
 **Servers** until an administrator runs or discards them after the next license is installed.
 
 If two Alice processes run against the same database (for example during an update), only one of them schedules
 periodic work (a PostgreSQL advisory lock); both may run queued jobs, and each job still runs exactly once. On
 shutdown Alice stops taking new jobs and gives running jobs up to 60 seconds to finish (the Compose file allows 90
-seconds before it kills the container).
+seconds before it kills the container). A job that the shutdown cuts off counts the attempt like a crash does; if it
+was the last attempt, the job is stopped and recorded as `job.dead` with `shutdown=true`, but no email is sent,
+because the stop was planned. A job stopped after a crash or a killed process is announced by email as usual.
 
 Periodic work: license evaluation (hourly), email sending (every minute), audit chain verification (checked every
 hour, run once a day, recorded as `audit.verified` by `scheduler`), clean-up (hourly: expired sessions and setup
@@ -189,5 +232,6 @@ new 30-day evaluation. Use it after pulling a phase that needs a fresh database 
 stack: the `alice_app` role is created only on a fresh database). A license issued for the old Installation ID does
 not work on the new one.
 
-`make e2e-up` starts the **test build** on the same development database, and every Playwright run empties all its
-tables (`POST /test/reset`). Do not run it on a stack whose data you want to keep, and never on a server.
+`make e2e-up` starts the **test build** as a separate compose project, `alice-e2e`, with its own database and volumes
+on its own port (`ALICE_E2E_PORT`, default 9443); every Playwright run empties all its tables (`POST /test/reset`).
+It never touches the `make up` stack. Never run the test build on a server.
