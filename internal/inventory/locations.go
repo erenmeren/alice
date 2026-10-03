@@ -168,8 +168,15 @@ func prepareLocation(d providers.DiscoveredCertificate, now time.Time) (prepared
 	if cut {
 		added = append(added, providers.WarnListTruncated)
 	}
-	if p.cert != nil && sanMismatch(p.cert.SANs, servers) {
-		added = append(added, WarnSANMismatch)
+	if p.cert != nil {
+		sans, dropped := boundSANs(p.cert.SANs)
+		if dropped && !cut {
+			// SANs the certificates row cannot hold: the names shown are not all of them.
+			added = append(added, providers.WarnListTruncated)
+		}
+		if sanMismatch(sans, servers) {
+			added = append(added, WarnSANMismatch)
+		}
 	}
 	l.Servers = servers
 	l.Supported = l.Unsupported == ""

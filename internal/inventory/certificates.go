@@ -144,10 +144,7 @@ func upsertCertificates(ctx context.Context, tx pgx.Tx, found map[string]discove
 		if len(pemChain) > maxPEMChain {
 			pemChain, d.complete = leafPEM(d.p), false
 		}
-		sans := make([]string, 0, len(d.p.SANs))
-		for _, s := range d.p.SANs {
-			sans = append(sans, clean(s))
-		}
+		sans, _ := boundSANs(d.p.SANs)
 		var id uuid.UUID
 		err := tx.QueryRow(ctx, `INSERT INTO certificates (id, fingerprint_sha256, subject_cn, subject, issuer, serial, sans, not_before, not_after,
     key_algorithm, key_bits, public_key_sha256, pem_chain, chain_complete, self_signed, source, first_seen_at, last_seen_at, created_at)
@@ -155,7 +152,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'disco
 ON CONFLICT (fingerprint_sha256) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at,
     pem_chain = CASE WHEN NOT certificates.chain_complete AND EXCLUDED.chain_complete THEN EXCLUDED.pem_chain ELSE certificates.pem_chain END,
     chain_complete = certificates.chain_complete OR EXCLUDED.chain_complete
-RETURNING id`, uuid.Must(uuid.NewV7()), fp, clean(d.p.SubjectCN), clean(d.p.Subject), clean(d.p.Issuer), clean(d.p.Serial), sans,
+RETURNING id`, uuid.Must(uuid.NewV7()), fp, boundText(d.p.SubjectCN), boundText(d.p.Subject), boundText(d.p.Issuer), boundText(d.p.Serial), sans,
 			d.p.NotBefore.UTC(), d.p.NotAfter.UTC(), d.p.Algorithm, d.p.Bits, d.p.PublicKeySHA256, pemChain, d.complete, d.p.SelfSigned,
 			now).Scan(&id)
 		if err != nil {
@@ -165,6 +162,34 @@ RETURNING id`, uuid.Must(uuid.NewV7()), fp, clean(d.p.SubjectCN), clean(d.p.Subj
 	}
 	return ids, nil
 }
+
+// Bounds of the certificate text Alice keeps. sans has a GIN index, whose entries may not exceed
+// about 2.7 KB: a SAN longer than a DNS name (253 characters) is dropped, never cut (a cut name is
+// another name), and at most maxSANs are kept. The other text columns have no index or CHECK; they
+// are cut at maxCertificateText characters so that no certificate makes a row unreasonably large.
+const (
+	maxSANLength       = 253
+	maxSANs            = 1000
+	maxCertificateText = 4096
+)
+
+// boundSANs is the SANs Alice stores, cleaned, and whether any was left out.
+func boundSANs(in []string) ([]string, bool) {
+	out := make([]string, 0, min(len(in), maxSANs))
+	dropped := false
+	for _, s := range in {
+		s = clean(s)
+		if len(s) > maxSANLength || len(out) >= maxSANs {
+			dropped = true
+			continue
+		}
+		out = append(out, s)
+	}
+	return out, dropped
+}
+
+// boundText is certificate text made storable and cut at maxCertificateText characters.
+func boundText(s string) string { return truncRunes(clean(s), maxCertificateText) }
 
 // leafPEM is the leaf of p alone, re-encoded.
 func leafPEM(p certs.Parsed) string {

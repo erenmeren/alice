@@ -335,7 +335,9 @@ func TestReconcileIncompleteScansUpdateAndMarkMissingOnlyFromTheWholeList(t *tes
 	cert := ca.Issue(pki.Opts{CommonName: "c.example.test", SANs: []string{"c.example.test"}}, h.clock.Now())
 	locA, locB := cl("/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key", "a.example.test"), cl("/etc/nginx/ssl/b.crt", "/etc/nginx/ssl/b.key", "b.example.test")
 	locC := cl("/etc/nginx/ssl/c.crt", "/etc/nginx/ssl/c.key", "c.example.test")
-	warn := func(code string) []providers.Warning { return []providers.Warning{{Code: code, Params: map[string]string{}}} }
+	warn := func(code string) []providers.Warning {
+		return []providers.Warning{{Code: code, Params: map[string]string{}}}
+	}
 	for i, tc := range []struct {
 		name        string
 		res         providers.DiscoveryResult
@@ -594,18 +596,33 @@ func TestReconcileHostileDiscoveryData(t *testing.T) {
 	empty := providers.CertLocation{}
 	dup1 := dc(cl("/etc/nginx/ssl/dup.crt", "/etc/nginx/ssl/dup.key", "www.example.test"), leaf)
 	dup2 := dc(cl("/etc/nginx/ssl/dup.crt", "/etc/nginx/ssl/other.key", "other.example.test"), other)
+	// A SAN longer than a DNS name (a GIN index entry of over 2.7 KB fails the INSERT) and more SANs
+	// than the inventory keeps.
+	var noise strings.Builder // incompressible, as a hostile name would be
+	for i := 0; noise.Len() < 3000; i++ {
+		noise.WriteString(sha([]byte(strconv.Itoa(i))))
+	}
+	longSAN := ca.Issue(pki.Opts{CommonName: "long.example.test", SANs: []string{"long.example.test", noise.String() + ".example.test"}},
+		h.clock.Now())
+	var sans []string
+	for i := range 1200 {
+		sans = append(sans, fmt.Sprintf("s%04d.example.test", i))
+	}
+	manySAN := ca.Issue(pki.Opts{CommonName: "many.example.test", SANs: sans}, h.clock.Now())
 
 	res := providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigValid: true, Version: "1.2\x003", ConfPath: "/etc/nginx/nginx.conf"},
 		SSHD: sshdRead, ReadFiles: []string{deployFile},
 		SSHKeys: []providers.DiscoveredSSHKey{dk("deploy", deployFile, 1, "SHA256:dep0000000000000000000000000000000000000000", "x")},
 		Certificates: []providers.DiscoveredCertificate{dc(big, leaf), {Location: pathNotAllowed}, {Location: newReason}, {Location: badReason},
 			dc(lying, leaf), dc(lyingProblem, leaf), {Location: reasonless}, {Location: emptyChain}, dc(odd, leaf), dc(longKey, leaf), garbage,
-			badHash, upperHash, {Location: tooLong}, {Location: empty}, dup1, dup2}}
+			badHash, upperHash, {Location: tooLong}, {Location: empty}, dup1, dup2,
+			dc(cl("/etc/nginx/ssl/longsan.crt", "/etc/nginx/ssl/longsan.key", "long.example.test"), longSAN),
+			dc(cl("/etc/nginx/ssl/manysan.crt", "/etc/nginx/ssl/manysan.key", "s0000.example.test"), manySAN)}}
 	sum, err := h.svc.Reconcile(h.ctx, web.ID, res)
 	require.NoError(t, err)
 	assert.Equal(t, 1, sum.Keys, "the SSH half is stored too")
-	assert.Equal(t, 14, sum.Locations)
-	assert.Equal(t, 2, sum.Certificates)
+	assert.Equal(t, 16, sum.Locations)
+	assert.Equal(t, 4, sum.Certificates)
 	got, err := h.svc.GetTarget(h.ctx, web.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "1.2�3", got.Facts.Nginx.Version)
@@ -614,7 +631,16 @@ func TestReconcileHostileDiscoveryData(t *testing.T) {
 	assert.Equal(t, "2", d[len(d)-1]["skipped_location_count"])
 
 	paths := byPath(t, h, web.ID, false)
-	require.Len(t, paths, 14)
+	require.Len(t, paths, 16)
+	assert.Equal(t, []string{providers.WarnListTruncated}, paths["/etc/nginx/ssl/longsan.crt"].Warnings, "SANs left out are flagged")
+	assert.Equal(t, []string{providers.WarnListTruncated}, paths["/etc/nginx/ssl/manysan.crt"].Warnings)
+	long, err := h.svc.GetCertificate(h.ctx, paths["/etc/nginx/ssl/longsan.crt"].Certificate.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"long.example.test"}, long.SANs, "a name longer than 253 characters is dropped, never cut")
+	many, err := h.svc.GetCertificate(h.ctx, paths["/etc/nginx/ssl/manysan.crt"].Certificate.ID)
+	require.NoError(t, err)
+	assert.Len(t, many.SANs, 1000)
+	assert.Equal(t, sans[:1000], many.SANs)
 	assert.Len(t, paths["/etc/nginx/ssl/big.crt"].Servers, 500)
 	assert.Len(t, paths["/etc/nginx/ssl/big.crt"].Servers[499].Names, 100)
 	pna := paths[quoted]

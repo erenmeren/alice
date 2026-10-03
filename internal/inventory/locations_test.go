@@ -170,3 +170,13 @@ func TestLeafPEMIsTheFirstBlock(t *testing.T) {
 	require.Len(t, p.Chain, 1)
 	assert.Equal(t, string(leaf.CertPEM), leafPEM(p))
 }
+
+func TestBoundSANs(t *testing.T) {
+	got, dropped := boundSANs([]string{"a.example.test", strings.Repeat("x", maxSANLength+1), "n\x00ul"})
+	assert.True(t, dropped)
+	assert.Equal(t, []string{"a.example.test", "n�ul"}, got)
+	got, dropped = boundSANs(nil)
+	assert.False(t, dropped)
+	assert.Equal(t, []string{}, got)
+	assert.Len(t, []rune(boundText(strings.Repeat("ş", maxCertificateText+5))), maxCertificateText)
+}
