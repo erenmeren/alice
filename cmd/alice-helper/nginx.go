@@ -210,11 +210,21 @@ func missingProgram(err error) bool {
 // pseudo or FUSE file system). It refuses an anonymous section that is not blank (text before the
 // first marker), a first section that is not the configuration file, a name that is not a valid
 // absolute path, a file that cannot be read that way, and any difference; the error says why and
-// which file. It returns the files a user other than root can write (owner other than root, or
+// which file (after a file a user can write, always "changed" naming that file). It returns the files a user other than root can write (owner other than root, or
 // writable by group or others), in dump order.
 func (s *sys) authenticate(secs []nginxconf.Section, confPath string) ([]string, *configError) {
 	writable := []string{}
 	named := 0
+	// Once a file a user can write has been printed, everything after it may be a section that
+	// user forged (a marker naming any path, with the user's file rewritten after nginx -T to match
+	// its own section). Every later failure then reads the same, "changed" naming the user's file:
+	// the reason must not tell whether a root-only path exists or what it is.
+	masked := func(e *configError) *configError {
+		if len(writable) > 0 {
+			return untrusted(helperproto.ConfigReasonChanged, writable[0])
+		}
+		return e
+	}
 	for _, sec := range secs {
 		if sec.File == "" {
 			if len(bytes.TrimSpace(sec.Body)) > 0 {
@@ -223,14 +233,14 @@ func (s *sys) authenticate(secs []nginxconf.Section, confPath string) ([]string,
 			continue
 		}
 		if !strings.HasPrefix(sec.File, "/") || !helperproto.ValidArg(sec.File) {
-			return nil, unsupported(helperproto.ConfigReasonNameNotAllowed, "")
+			return nil, masked(unsupported(helperproto.ConfigReasonNameNotAllowed, ""))
 		}
 		if named++; named == 1 && filepath.Clean(sec.File) != confPath {
 			return nil, untrusted(helperproto.ConfigReasonWrongFirstFile, sec.File)
 		}
 		st, reason := s.sameContent(sec.File, sec.Body)
 		if reason != "" {
-			return nil, untrusted(reason, sec.File)
+			return nil, masked(untrusted(reason, sec.File))
 		}
 		if int(st.Uid) != s.rootUID || st.Mode&0o022 != 0 {
 			writable = append(writable, sec.File)
@@ -261,9 +271,6 @@ func (s *sys) sameContent(name string, body []byte) (unix.Stat_t, string) {
 		return st, walkReason(err)
 	}
 	defer func() { _ = f.Close() }()
-	if err := s.normalFS(int(f.Fd())); err != nil { //nolint:gosec // G115: a descriptor fits an int
-		return st, helperproto.ConfigReasonSpecialFS
-	}
 	if st.Size != int64(len(want)) {
 		return st, helperproto.ConfigReasonChanged
 	}

@@ -473,6 +473,55 @@ func TestNginxDumpRefusalsSayWhyAndWhere(t *testing.T) {
 	}
 }
 
+// Task 5 re-review (a): once a file a user can write has appeared in the dump, every later
+// authentication failure reads the same (changed, naming that file). Otherwise a user who can edit
+// one included file (and rewrite it after nginx -T, so its own section matches) forges a marker
+// naming any root-only path and learns from the reason whether it exists.
+func TestAttackForgedMarkerIsNoExistenceOracle(t *testing.T) {
+	const evil = "/etc/nginx/conf.d/evil.conf"
+	answers := map[string]map[string]any{}
+	for _, probe := range []string{"/root/exists.txt", "/root/nope.txt", "/root/sub/dir.txt", "/root/sub", "/root/a b"} {
+		w := newNginxWorld(t)
+		w.f.write("/root/exists.txt", "secret\n", 0o600)
+		w.f.mkdir("/root/sub", 0o777)
+		w.f.write("/root/sub/dir.txt", "", 0o600)
+		w.f.write(evil, "", 0o666) // the user's file, rewritten after nginx -T to match its section
+		w.setDump(w.dumpText() + "# configuration file " + evil + ":\n\n# configuration file " + probe + ":\n\n")
+		code, m := w.f.run("nginx-dump")
+		require.Equal(t, 0, code, "%v", m)
+		assert.Equal(t, false, m["config_valid"], probe)
+		answers[probe] = map[string]any{"class": m["config_error"], "reason": m["config_error_reason"], "file": m["config_error_file"]}
+	}
+	want := map[string]any{"class": helperproto.ConfigErrUntrusted, "reason": helperproto.ConfigReasonChanged, "file": evil}
+	for probe, got := range answers {
+		assert.Equal(t, want, got, probe)
+	}
+}
+
+// Task 5 re-review (b), (c): a certificate file on FUSE or a pseudo file system (a mount over the
+// file itself, whose owner, mode and link count its daemon reports) is never read, and the problem
+// says so; a directory on FUSE too.
+func TestCertificateFilesOnSpecialFileSystems(t *testing.T) {
+	for name, at := range map[string]string{
+		"FUSE mounted over the certificate file": "/etc/nginx/ssl/www.crt",
+		"certificate directory on FUSE":          "/etc/nginx/ssl",
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newNginxWorld(t)
+			w.magicAt(at, unix.FUSE_SUPER_MAGIC)
+			_, m := w.f.run("nginx-dump")
+			cert := fileOf(t, m, "cert", "/etc/nginx/ssl/www.crt")
+			assert.Equal(t, helperproto.FileSpecialFS, cert["problem"])
+			assert.Equal(t, "", cert["pem"])
+			assert.Equal(t, "", cert["sha256"])
+		})
+	}
+	w := newNginxWorld(t)
+	w.magicAt("/etc/nginx/ssl", unix.PROC_SUPER_MAGIC)
+	_, m := w.f.run("nginx-dump")
+	assert.Equal(t, helperproto.FileSpecialFS, fileOf(t, m, "key", "/etc/nginx/ssl/www.key")["problem"])
+}
+
 // magicAt makes the file system of the guest directory (and everything opened in it) report magic.
 func (w *nginxWorld) magicAt(guest string, magic int64) {
 	var want unix.Stat_t

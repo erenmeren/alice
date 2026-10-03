@@ -322,6 +322,7 @@ func TestProblemOf(t *testing.T) {
 		unix.ENOENT: "missing", errNotRootControlled: "not_root_controlled", errEscaped: "not_root_controlled",
 		errTooManyLinks: "not_regular", errUnsafe: "hard_linked", errNotRegular: "not_regular",
 		unix.ENOTDIR: "not_regular", unix.ELOOP: "not_regular", errTooLarge: "too_large", unix.EIO: "unreadable",
+		errSpecialFS: "special_filesystem",
 	} {
 		assert.Equal(t, want, problemOf(err), "%v", err)
 	}

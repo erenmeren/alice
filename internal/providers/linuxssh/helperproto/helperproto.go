@@ -181,6 +181,9 @@ const (
 	FileNotACertificate   = "not_a_certificate"
 	FileUnreadable        = "unreadable"
 	FileBadName           = "bad_name" // the resolved name has no certificate or key extension
+	// FileSpecialFS: the file or a directory on its path is on FUSE or a pseudo file system
+	// (procfs, sysfs, ...), whose owners, modes and contents a daemon or the kernel reports.
+	FileSpecialFS = "special_filesystem"
 )
 
 // Deployment journal phases (nginx-status, nginx-deploy outcome).

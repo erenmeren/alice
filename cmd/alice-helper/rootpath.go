@@ -61,19 +61,25 @@ type rootFile struct {
 	name      string
 	resolved  string // the guest path with every link resolved
 	symlinked bool   // a link was followed on the way
+	s         *sys   // the walk's environment (normalFS for the file itself)
 }
 
 func (f rootFile) close() { _ = unix.Close(f.dirfd) }
 
 // open opens the file for reading without following a link. It must be a regular file with
-// exactly one link (a hard link could be another name of /etc/shadow). The type is checked before
-// the open, so a device or a FIFO is never opened (opening a device can have side effects), and
-// again on the descriptor, which must be the inode that was checked.
+// exactly one link (a hard link could be another name of /etc/shadow) on a normal file system. The
+// type is checked before the open, so a device or a FIFO is never opened (opening a device can have
+// side effects), and again on the descriptor, which must be the inode that was checked.
 func (f rootFile) open() (*os.File, unix.Stat_t, error) { return f.openLinked(false) }
 
 // openLinked is open; with anyLinks a file with more than one link is accepted (only for reads
 // that are compared and never returned: the configuration sections). Certificate reads and every
 // write keep open's one-link rule.
+//
+// The file system of the file itself is checked on an O_PATH descriptor before the file is opened
+// for reading (errSpecialFS): FUSE mounted over a user's regular file reports whatever owner, mode
+// and link count its daemon chooses, and its open and read calls can stall; the walk checked only
+// the directories.
 func (f rootFile) openLinked(anyLinks bool) (*os.File, unix.Stat_t, error) {
 	var before, st unix.Stat_t
 	if err := unix.Fstatat(f.dirfd, f.name, &before, unix.AT_SYMLINK_NOFOLLOW); err != nil {
@@ -81,6 +87,9 @@ func (f rootFile) openLinked(anyLinks bool) (*os.File, unix.Stat_t, error) {
 	}
 	if before.Mode&unix.S_IFMT != unix.S_IFREG {
 		return nil, before, errNotRegular
+	}
+	if err := f.checkFS(before); err != nil {
+		return nil, before, err
 	}
 	fd, err := unix.Openat(f.dirfd, f.name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOCTTY, 0)
 	if err != nil {
@@ -99,6 +108,24 @@ func (f rootFile) openLinked(anyLinks bool) (*os.File, unix.Stat_t, error) {
 		return nil, st, errUnsafe
 	}
 	return os.NewFile(uintptr(fd), f.name), st, nil
+}
+
+// checkFS opens the file with O_PATH (no open call reaches its file system), checks that it is the
+// inode that was checked and that its file system is a normal one.
+func (f rootFile) checkFS(before unix.Stat_t) error {
+	pfd, err := unix.Openat(f.dirfd, f.name, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Close(pfd) }()
+	var st unix.Stat_t
+	if err := unix.Fstat(pfd, &st); err != nil {
+		return err
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG || !sameFile(st, before) {
+		return errNotRegular
+	}
+	return f.s.normalFS(pfd)
 }
 
 // dirOK: a directory nobody but root can change (root's, not writable by group or others; a
@@ -173,7 +200,7 @@ func (s *sys) walkRoot(p string) (rootFile, error) {
 		var cst unix.Stat_t
 		if err := unix.Fstatat(cur, c, &cst, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			if last && errors.Is(err, unix.ENOENT) {
-				return keepLast(stack, names, c, symlinked), nil
+				return s.keepLast(stack, names, c, symlinked), nil
 			}
 			return fail(err)
 		}
@@ -228,19 +255,19 @@ func (s *sys) walkRoot(p string) (rootFile, error) {
 			if !last {
 				return fail(unix.ENOTDIR)
 			}
-			return keepLast(stack, names, c, symlinked), nil
+			return s.keepLast(stack, names, c, symlinked), nil
 		}
 	}
 	return fail(errEscaped) // the path ended at a directory ("x/." or a link to a directory)
 }
 
 // keepLast keeps the current directory open for the file c and closes the others.
-func keepLast(stack []int, names []string, c string, symlinked bool) rootFile {
+func (s *sys) keepLast(stack []int, names []string, c string, symlinked bool) rootFile {
 	for _, fd := range stack[:len(stack)-1] {
 		_ = unix.Close(fd)
 	}
 	parts := append(append([]string{}, names...), c)
-	return rootFile{dirfd: stack[len(stack)-1], name: c, resolved: "/" + strings.Join(parts, "/"), symlinked: symlinked}
+	return rootFile{dirfd: stack[len(stack)-1], name: c, resolved: "/" + strings.Join(parts, "/"), symlinked: symlinked, s: s}
 }
 
 func readlinkAt(dirfd int, name string) (string, error) {
@@ -274,7 +301,9 @@ func problemOf(err error) string {
 	switch {
 	case errors.Is(err, unix.ENOENT):
 		return helperproto.FileMissing
-	case errors.Is(err, errNotRootControlled), errors.Is(err, errEscaped), errors.Is(err, errSpecialFS):
+	case errors.Is(err, errSpecialFS):
+		return helperproto.FileSpecialFS
+	case errors.Is(err, errNotRootControlled), errors.Is(err, errEscaped):
 		return helperproto.FileNotRootControlled
 	case errors.Is(err, errUnsafe):
 		return helperproto.FileHardLinked
