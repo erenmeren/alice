@@ -259,4 +259,38 @@ describe('TargetsPage', () => {
     await waitFor(() => expect(within(table).getByText('app-02')).toBeInTheDocument());
     expect(within(table).getByText('web-01')).toBeInTheDocument();
   });
+
+  it('works in React StrictMode, which mounts, cleans up and mounts again', async () => {
+    withTargets('admin', []);
+    server.use(
+      created,
+      http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-1', status: 'succeeded' }))),
+      http.get('/api/v1/targets/:id', () => HttpResponse.json(targetWith({ ...pending, status: 'ok' }))),
+      http.get('/api/v1/targets/:id/host-keys', () => HttpResponse.json({ items: [] })),
+      http.get('/api/v1/targets/:id/ssh-keys', () => HttpResponse.json({ items: [] })),
+    );
+    const { router } = await renderRoute('/servers', { strict: true });
+    await addForm();
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/servers/${pending.id}`));
+  });
+
+  it('after the confirmation call fails, offers to open the server instead of the confirmation again', async () => {
+    withTargets('admin', []);
+    const observed = hostKeyFixture({ id: 'hk-observed', status: 'observed', fingerprint: 'SHA256:newServerNewServerNewServerNewServerNew0', confirmed_at: null, confirmed_by_name: '' });
+    server.use(
+      created,
+      http.get('/api/v1/jobs/:id', () =>
+        HttpResponse.json(jobFixture({ id: 'job-1', status: 'failed', error: { code: 'ALC-TGT-0002', reason: 'target.host_key_unconfirmed' } })),
+      ),
+      http.get('/api/v1/targets/:id/host-keys', () => HttpResponse.json({ items: [observed] })),
+      http.post('/api/v1/targets/:id/host-keys/:keyId/actions/confirm', () => errorResponse(500, 'ALC-INT-0001', 'internal.unexpected')),
+    );
+    await renderRoute('/servers');
+    await addForm();
+    const confirm = await screen.findByRole('dialog', { name: 'Is this your server?' });
+    await userEvent.click(within(confirm).getByRole('button', { name: 'Yes, this is my server' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add server' });
+    expect(await within(dialog).findByRole('button', { name: 'Open the server' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Yes, this is my server' })).not.toBeInTheDocument();
+  });
 });

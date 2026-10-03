@@ -236,6 +236,18 @@ describe('TargetDetailPage', () => {
     expect(screen.queryByText(/\{\{/)).not.toBeInTheDocument();
   });
 
+  it('finishes a started task in React StrictMode', async () => {
+    onServer('operator');
+    server.use(
+      http.post('/api/v1/targets/:id/actions/test', () => HttpResponse.json({ job_id: 'job-t', status_url: '/api/v1/jobs/job-t' }, { status: 202 })),
+      http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-t' }))),
+    );
+    await renderRoute(path, { strict: true });
+    await userEvent.click(await screen.findByRole('button', { name: 'Test connection' }));
+    expect(await screen.findByText('Finished.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Test connection' })).toBeEnabled();
+  });
+
   it('says when a started task is waiting for an administrator', async () => {
     onServer('operator');
     server.use(

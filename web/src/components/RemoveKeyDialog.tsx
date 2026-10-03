@@ -1,9 +1,10 @@
 import { Button, Checkbox, Code, Group, Loader, Stack, Text } from '@mantine/core';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isApiError } from '../api/client';
 import { removeKeyLocation } from '../api/endpoints';
 import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
+import { useAbort } from '../api/useAbort';
 import type { JobError, KeyLocation } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { AppModal } from './AppModal';
@@ -24,11 +25,7 @@ export function RemoveKeyDialog({ location, onClose, onDone }: { location: KeyLo
   const [needsRootConfirm, setNeedsRootConfirm] = useState(false);
   const [rootConfirmed, setRootConfirmed] = useState(false);
   const [blocked, setBlocked] = useState(false);
-  const abort = useRef(new AbortController());
-  useEffect(() => {
-    const ctrl = abort.current;
-    return () => ctrl.abort();
-  }, []);
+  const abort = useAbort();
 
   const submit = async () => {
     setBusy(true);
@@ -37,7 +34,7 @@ export function RemoveKeyDialog({ location, onClose, onDone }: { location: KeyLo
     setBlocked(false);
     try {
       const accepted = await removeKeyLocation(location.id, needsRootConfirm && rootConfirmed);
-      const job = await waitForJob(accepted.job_id, { signal: abort.current.signal });
+      const job = await waitForJob(accepted.job_id, { signal: abort.signal() });
       if (job.status === 'succeeded') {
         onDone();
         return;
@@ -45,7 +42,10 @@ export function RemoveKeyDialog({ location, onClose, onDone }: { location: KeyLo
       if (job.status === 'blocked_license') setBlocked(true);
       setJobError(job.error);
     } catch (e) {
-      if (isAbort(e)) return;
+      if (isAbort(e)) {
+        setBusy(false);
+        return;
+      }
       if (isApiError(e, 'sshkey.last_root_key') && admin) setNeedsRootConfirm(true);
       setError(e);
     }

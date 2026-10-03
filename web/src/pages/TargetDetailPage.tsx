@@ -1,11 +1,12 @@
 import { Alert, Button, Card, Code, Group, Loader, Stack, Table, Text, Textarea, Title } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { confirmHostKey, deleteTarget, discoverTarget, getTarget, listHostKeys, listTargetKeys, repinHostKey, testTarget } from '../api/endpoints';
 import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
 import { TARGETS_KEY, targetKey } from '../api/queryKeys';
+import { useAbort } from '../api/useAbort';
 import type { HostKey, JobAccepted, JobError, KeyLocation, Target, Warning } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { PageLoader } from '../auth/guards';
@@ -59,11 +60,7 @@ export function TargetDetailPage() {
   const [jobError, setJobError] = useState<JobError | null>(null);
   const [done, setDone] = useState(false);
   const [blocked, setBlocked] = useState(false);
-  const abort = useRef(new AbortController());
-  useEffect(() => {
-    const ctrl = abort.current;
-    return () => ctrl.abort();
-  }, []);
+  const abort = useAbort();
   const [repinning, setRepinning] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [removing, setRemoving] = useState<KeyLocation | null>(null);
@@ -78,13 +75,12 @@ export function TargetDetailPage() {
     setDone(false);
     setBlocked(false);
     try {
-      const job = await waitForJob((await start()).job_id, { signal: abort.current.signal });
+      const job = await waitForJob((await start()).job_id, { signal: abort.signal() });
       if (job.status === 'succeeded') setDone(true);
       else if (job.status === 'blocked_license') setBlocked(true);
       else setJobError(job.error);
     } catch (e) {
-      if (isAbort(e)) return;
-      setError(e);
+      if (!isAbort(e)) setError(e);
     }
     setBusy(false);
     await refresh();

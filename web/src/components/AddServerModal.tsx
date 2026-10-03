@@ -1,10 +1,11 @@
 import { Button, Group, Loader, NumberInput, Stack, Text, TextInput } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { confirmHostKey, createTarget, listHostKeys } from '../api/endpoints';
 import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
 import { TARGETS_KEY } from '../api/queryKeys';
+import { useAbort } from '../api/useAbort';
 import type { HostKey, Job, JobError, Target } from '../api/types';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
@@ -34,23 +35,18 @@ export function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAd
   const [blocked, setBlocked] = useState(false);
   const [target, setTarget] = useState<Target | null>(null);
   const [candidate, setCandidate] = useState<HostKey | null>(null);
-  const abort = useRef(new AbortController());
-
-  useEffect(() => {
-    const ctrl = abort.current;
-    return () => ctrl.abort();
-  }, []);
+  const abort = useAbort();
 
   const refresh = () => void client.invalidateQueries({ queryKey: TARGETS_KEY });
 
   // close stops all waiting. A created server shows up in the list.
   const close = () => {
-    abort.current.abort();
+    abort.abort();
     if (target) refresh();
     onClose();
   };
   const openServer = () => {
-    abort.current.abort();
+    abort.abort();
     if (target) {
       refresh();
       onAdded(target);
@@ -58,8 +54,7 @@ export function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAd
   };
 
   // settle decides what a finished connection test means for the dialog.
-  const settle = async (tgt: Target, job: Job) => {
-    const signal = abort.current.signal;
+  const settle = async (tgt: Target, job: Job, signal: AbortSignal) => {
     if (job.status === 'succeeded') {
       refresh();
       onAdded(tgt);
@@ -86,48 +81,50 @@ export function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAd
 
   // afterCreate runs the steps that follow a successful create call; any problem leaves the dialog
   // in the "failed" phase (or back at the confirmation), never at the form.
-  const afterCreate = async (tgt: Target, back: Phase, step: () => Promise<Job>) => {
+  const afterCreate = async (tgt: Target, step: (signal: AbortSignal) => Promise<Job>) => {
+    const signal = abort.signal();
     setError(null);
     setJobError(null);
     setBlocked(false);
     setPhase('working');
     try {
-      await settle(tgt, await step());
+      await settle(tgt, await step(signal), signal);
     } catch (e) {
-      if (isAbort(e) || abort.current.signal.aborted) return;
+      if (isAbort(e) || signal.aborted) return;
       setError(e);
       refresh();
-      setPhase(back);
+      setPhase('failed');
     }
   };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    const signal = abort.signal();
     setError(null);
     setPhase('working');
     let created;
     try {
       created = await createTarget({ name: name.trim(), type: 'linux', host: host.trim(), port: Number(port), username: username.trim() });
     } catch (err) {
-      if (abort.current.signal.aborted) return;
+      if (signal.aborted) return;
       setError(err);
       setPhase('form');
       return;
     }
-    if (abort.current.signal.aborted) {
+    if (signal.aborted) {
       refresh();
       return;
     }
     setTarget(created.target);
     refresh();
-    await afterCreate(created.target, 'failed', () => waitForJob(created.job_id, { signal: abort.current.signal }));
+    await afterCreate(created.target, (s) => waitForJob(created.job_id, { signal: s }));
   };
 
   const confirm = () => {
     if (!target || !candidate) return;
-    void afterCreate(target, 'confirm', async () => {
+    void afterCreate(target, async (s) => {
       const res = await confirmHostKey(target.id, candidate.id, candidate.fingerprint);
-      return waitForJob(res.job_id, { signal: abort.current.signal });
+      return waitForJob(res.job_id, { signal: s });
     });
   };
 

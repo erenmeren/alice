@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { vi } from 'vitest';
 import { jobFixture, keyLocationFixture, sessionFor } from '../test/fixtures';
+import { StrictMode } from 'react';
 import { renderApp } from '../test/render';
 import { server } from '../test/server';
 import { RemoveKeyDialog } from './RemoveKeyDialog';
@@ -25,5 +26,21 @@ describe('RemoveKeyDialog', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Remove this key from the server?' });
     await userEvent.click(within(dialog).getByRole('button', { name: 'Remove key' }));
     expect(await within(dialog).findByText('Alice is still working on this. Open the server\'s page in a minute to see the result.')).toBeInTheDocument();
+  });
+
+  it('does not stay busy in React StrictMode', async () => {
+    server.use(
+      http.post('/api/v1/ssh-keys/locations/:id/actions/remove', () => HttpResponse.json({ job_id: 'job-x', status_url: '/api/v1/jobs/job-x' }, { status: 202 })),
+      http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-x', type: 'sshkey.remove', status: 'failed', error: { code: 'ALC-SSH-0001', reason: 'ssh.unreachable' } }))),
+    );
+    await renderApp(
+      <StrictMode>
+        <RemoveKeyDialog location={keyLocationFixture()} onClose={() => undefined} onDone={() => undefined} />
+      </StrictMode>,
+    );
+    const dialog = await screen.findByRole('dialog', { name: 'Remove this key from the server?' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Remove key' }));
+    expect(await within(dialog).findByText('Alice cannot reach the server.')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Remove key' })).toBeEnabled();
   });
 });
