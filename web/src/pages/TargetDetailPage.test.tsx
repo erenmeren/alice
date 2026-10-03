@@ -147,6 +147,82 @@ describe('TargetDetailPage', () => {
     await waitFor(() => expect(body).toEqual({ fingerprint: observed.fingerprint, reason: 'CHG-2026-0412 server reinstalled' }));
   });
 
+  it('lets an administrator keep the previous fingerprint when the server still shows it', async () => {
+    let target = targetWith({ status: 'host_key_changed' });
+    onServer('admin', target);
+    let body: unknown = null;
+    let repinned = '';
+    server.use(
+      http.get('/api/v1/targets/:id', () => HttpResponse.json(target)),
+      http.post('/api/v1/targets/:id/host-keys/:keyId/actions/repin', async ({ request, params }) => {
+        body = await request.json();
+        repinned = String(params.keyId);
+        target = targetWith({ status: 'ok' });
+        return HttpResponse.json({ job_id: 'job-d', status_url: '/api/v1/jobs/job-d' }, { status: 202 });
+      }),
+      http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-d' }))),
+    );
+    await renderRoute(path);
+    await userEvent.click(await screen.findByRole('button', { name: 'Review the new fingerprint' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Accept the new server fingerprint' });
+    const keep = within(dialog).getByRole('button', { name: 'The server still shows the previous fingerprint' });
+    expect(keep).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText(/^Reason/), 'Traffic was misrouted for an hour');
+    await userEvent.click(keep);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Accept the new server fingerprint' })).not.toBeInTheDocument());
+    expect(repinned).toBe(pinned.id);
+    expect(body).toEqual({ fingerprint: pinned.fingerprint, reason: 'Traffic was misrouted for an hour' });
+    expect(await screen.findByText('Connected')).toBeInTheDocument();
+    expect(screen.queryByTestId('host-key-changed')).not.toBeInTheDocument();
+  });
+
+  it('offers to keep the previous fingerprint when no new one was recorded, and asks for a step-up', async () => {
+    const target = targetWith({ status: 'host_key_changed' });
+    onServer('admin', target);
+    server.use(http.get('/api/v1/targets/:id/host-keys', () => HttpResponse.json({ items: [pinned] })));
+    let attempts = 0;
+    server.use(
+      http.post('/api/v1/targets/:id/host-keys/:keyId/actions/repin', () => {
+        attempts += 1;
+        if (attempts === 1) return errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required');
+        return HttpResponse.json({ job_id: 'job-d', status_url: '/api/v1/jobs/job-d' }, { status: 202 });
+      }),
+      http.post('/api/v1/auth/stepup', () => HttpResponse.json(sessionFor('admin'))),
+      http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-d' }))),
+    );
+    await renderRoute(path);
+    await userEvent.click(await screen.findByRole('button', { name: 'Review the new fingerprint' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Accept the new server fingerprint' });
+    expect(within(dialog).getByText('Alice has not recorded a new fingerprint for this server.')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Accept new fingerprint' })).not.toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText(/^Reason/), 'Traffic was misrouted for an hour');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'The server still shows the previous fingerprint' }));
+    const stepUp = await screen.findByRole('dialog', { name: "Confirm it's you" });
+    await userEvent.type(within(stepUp).getByLabelText('6-digit code'), '123456');
+    await userEvent.click(within(stepUp).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(attempts).toBe(2));
+  });
+
+  it('refreshes the server after a refused re-pin so a stale candidate disappears', async () => {
+    const target = targetWith({ status: 'host_key_changed' });
+    let hostKeyCalls = 0;
+    onServer('admin', target);
+    server.use(
+      http.get('/api/v1/targets/:id/host-keys', () => {
+        hostKeyCalls += 1;
+        return HttpResponse.json({ items: [pinned, observed] });
+      }),
+      http.post('/api/v1/targets/:id/host-keys/:keyId/actions/repin', () => errorResponse(409, 'ALC-INV-0009', 'target.host_key_stale')),
+    );
+    await renderRoute(path);
+    await userEvent.click(await screen.findByRole('button', { name: 'Review the new fingerprint' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Accept the new server fingerprint' });
+    const before = hostKeyCalls;
+    await userEvent.type(within(dialog).getByLabelText(/^Reason/), 'CHG-2026-0412 reinstall');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Accept new fingerprint' }));
+    await waitFor(() => expect(hostKeyCalls).toBeGreaterThan(before));
+  });
+
   it('refuses to remove Alice’s own key and says why', async () => {
     onServer('admin');
     server.use(http.post('/api/v1/ssh-keys/locations/:id/actions/remove', () => errorResponse(409, 'ALC-KEY-0001', 'sshkey.own_key_protected')));

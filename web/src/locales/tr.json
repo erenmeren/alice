@@ -574,7 +574,10 @@
     "reasonHelp": "En az 10 karakter; örneğin değişiklik kaydının numarası. Denetim kaydında saklanır.",
     "repin": "Yeni parmak izini kabul et",
     "cancel": "Vazgeç",
-    "noCandidate": "Alice yeni parmak izini henüz almadı. Önce Bağlantıyı sına düğmesini kullanın."
+    "acceptHelp": "Sunucu yeniden kurulduysa ya da anahtarları bilerek değiştirildiyse bunu seçin.",
+    "keep": "Sunucu hâlâ önceki parmak izini gösteriyor",
+    "keepHelp": "Önceki parmak izi hâlâ doğruysa bunu seçin; örneğin bağlantı bir süre başka bir makineye ulaştıysa. Alice önceki parmak izini korur, sunucunun engelini kaldırır ve bağlantıyı yeniden sınar. Sunucu bundan sonra farklı bir anahtar gösterirse, onu yeniden incelemeniz istenir.",
+    "noCandidate": "Alice bu sunucu için yeni bir parmak izi kaydetmedi."
   },
   "sshKeys": {
     "user": "Kullanıcı",

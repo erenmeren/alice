@@ -574,7 +574,10 @@
     "reasonHelp": "At least 10 characters, for example the change ticket number. It is kept in the audit log.",
     "repin": "Accept new fingerprint",
     "cancel": "Cancel",
-    "noCandidate": "Alice has not received the new fingerprint yet. Use Test connection first."
+    "acceptHelp": "Choose this when the server was reinstalled or its keys were replaced on purpose.",
+    "keep": "The server still shows the previous fingerprint",
+    "keepHelp": "Choose this when the previous fingerprint is still the right one, for example because the connection reached another machine for a while. Alice keeps the previous fingerprint, unblocks the server and tests the connection again. If the server then shows a different key, you are asked to review it again.",
+    "noCandidate": "Alice has not recorded a new fingerprint for this server."
   },
   "sshKeys": {
     "user": "User",

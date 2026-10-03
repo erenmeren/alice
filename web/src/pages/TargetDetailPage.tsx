@@ -1,6 +1,6 @@
 import { Alert, Button, Card, Code, Group, Loader, Stack, Table, Text, Textarea, Title } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { confirmHostKey, deleteTarget, discoverTarget, getTarget, listHostKeys, listTargetKeys, repinHostKey, testTarget } from '../api/endpoints';
@@ -330,27 +330,38 @@ function RepinDialog({
 }) {
   const { t } = useTranslation();
   const { run } = useStepUp();
+  const client = useQueryClient();
   const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [acting, setActing] = useState<'accept' | 'keep' | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const cleanReason = oneLine(reason);
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!observed) return;
-    setBusy(true);
+  // send re-pins one host key: the new candidate (accept) or the pinned key itself (keep, the
+  // API's dismiss path). Both need a fresh step-up (§25.1): run asks for a code when the server
+  // says so. A refused request means the server's state moved on, so the target and its host keys
+  // are read again; the dialog then shows what is true now.
+  const send = async (action: 'accept' | 'keep', key: HostKey) => {
+    setActing(action);
     setError(null);
     try {
-      // hostkeys.repin needs a fresh step-up (§25.1): run asks for a code when the server says so.
-      onAccepted(await run(() => repinHostKey(target.id, observed.id, observed.fingerprint, oneLine(reason))));
+      const accepted = await run(() => repinHostKey(target.id, key.id, key.fingerprint, cleanReason));
+      void client.invalidateQueries({ queryKey: targetKey(target.id) });
+      onAccepted(accepted);
     } catch (err) {
       setError(err);
-      setBusy(false);
+      setActing(null);
+      void client.invalidateQueries({ queryKey: targetKey(target.id) });
     }
   };
 
   return (
     <AppModal opened onClose={onClose} title={t('hostKeys.repinTitle')} size="lg">
-      <form onSubmit={(e) => void submit(e)}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (observed) void send('accept', observed);
+        }}
+      >
         <Stack gap="sm">
           <Text size="sm">{t('hostKeys.repinHelp')}</Text>
           {pinned && (
@@ -377,31 +388,51 @@ function RepinDialog({
               <Code block style={WRAP}>
                 {observed.verify_command}
               </Code>
-              <Textarea
-                label={t('hostKeys.reason')}
-                description={t('hostKeys.reasonHelp')}
-                value={reason}
-                onChange={(e) => setReason(e.currentTarget.value)}
-                required
-                minLength={10}
-                maxLength={500}
-                autosize
-                minRows={2}
-              />
             </>
           ) : (
             <Text size="sm">{t('hostKeys.noCandidate')}</Text>
           )}
+          {(observed || pinned) && (
+            <Textarea
+              label={t('hostKeys.reason')}
+              description={t('hostKeys.reasonHelp')}
+              value={reason}
+              onChange={(e) => setReason(e.currentTarget.value)}
+              required
+              minLength={10}
+              maxLength={500}
+              autosize
+              minRows={2}
+            />
+          )}
           <ErrorAlert error={error} />
+          {observed && (
+            <Stack gap={4}>
+              <Text size="sm">{t('hostKeys.acceptHelp')}</Text>
+              <Button type="submit" color="red.9" w="fit-content" loading={acting === 'accept'} disabled={acting !== null || cleanReason.length < 10}>
+                {t('hostKeys.repin')}
+              </Button>
+            </Stack>
+          )}
+          {pinned && (
+            <Stack gap={4}>
+              <Text size="sm">{t('hostKeys.keepHelp')}</Text>
+              <Button
+                type="button"
+                variant="default"
+                w="fit-content"
+                loading={acting === 'keep'}
+                disabled={acting !== null || cleanReason.length < 10}
+                onClick={() => void send('keep', pinned)}
+              >
+                {t('hostKeys.keep')}
+              </Button>
+            </Stack>
+          )}
           <Group justify="flex-end">
             <Button variant="default" onClick={onClose}>
               {t('hostKeys.cancel')}
             </Button>
-            {observed && (
-              <Button type="submit" color="red.9" loading={busy} disabled={oneLine(reason).length < 10}>
-                {t('hostKeys.repin')}
-              </Button>
-            )}
           </Group>
         </Stack>
       </form>
