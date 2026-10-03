@@ -134,6 +134,11 @@ type Config struct {
 type Section struct {
 	File string
 	Body []byte
+	// Included reports that an include directive of an earlier section (one nginx printed before
+	// this one) matches this section's name and was reached while the dump was spliced. Every
+	// file nginx printed after the first one got there through such an include; a section that
+	// none reaches is a forged marker or a file the parse ignores.
+	Included bool
 }
 
 const markerPrefix = "# configuration file "
@@ -165,9 +170,10 @@ type node struct {
 
 // section is one file of the dump while it is parsed.
 type section struct {
-	file  string
-	body  []byte
-	nodes []node
+	file     string
+	body     []byte
+	nodes    []node
+	includes []string // patterns of every include directive in the file (parser.includes)
 }
 
 // splitSections splits the dump at the "# configuration file <path>:" marker lines (column 0, as
@@ -466,6 +472,9 @@ var (
 type parser struct {
 	lx    *lexer
 	nodes *int // remaining kept directives of the dump
+	// includes is the first argument of every include directive of the file, in any block (also
+	// the blocks whose content is otherwise dropped, such as location): Section.Included.
+	includes []string
 }
 
 // block reads directives until the matching "}" (closing) or the end of input (top level). keep is
@@ -510,6 +519,9 @@ func (p *parser) block(depth int, closing, keep bool) ([]node, error) {
 		if t.punct {
 			switch t.text {
 			case ";":
+				if n > 0 && first.text == "include" && len(args) > 0 {
+					p.includes = append(p.includes, args[0].text)
+				}
 				if n > 0 && keep && keptDirectives[first.text] {
 					if err := add(node{name: first.text, args: keepArgs(first.text, args), file: first.file, line: first.line}); err != nil {
 						return nil, err
@@ -550,7 +562,7 @@ func (p *parser) block(depth int, closing, keep bool) ([]node, error) {
 		switch {
 		case n == 0:
 			first = t
-			keepCur = keep && (keptDirectives[t.text] || keptBlocks[t.text])
+			keepCur = keep && (keptDirectives[t.text] || keptBlocks[t.text]) || t.text == "include"
 		case keepCur:
 			if len(args) >= maxArgs {
 				return nil, ErrTooComplex
@@ -677,6 +689,34 @@ func (e *expander) match(raw string) ([]int, error) {
 	return out, nil
 }
 
+// reached marks the sections an include directive of an earlier reached section matches, from the
+// first section on (nginx prints a file after the file that includes it). Every include counts,
+// also one in a block the parse drops (location, if, ...): nginx reads them all.
+func (e *expander) reached() ([]bool, error) {
+	out := make([]bool, len(e.secs))
+	queue := []int{0}
+	if e.secs[0].file == "" && len(e.secs) > 1 {
+		queue = append(queue, 1) // text before the first marker: the first file starts the walk
+	}
+	for len(queue) > 0 {
+		i := queue[0]
+		queue = queue[1:]
+		for _, pat := range e.secs[i].includes {
+			idx, err := e.match(pat)
+			if err != nil {
+				return nil, err
+			}
+			for _, k := range idx {
+				if k > i && !out[k] {
+					out[k] = true
+					queue = append(queue, k)
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
 // segMatch matches one path segment like glob(3): a leading '.' of the name is matched only by a
 // literal '.' of the pattern, never by *, ? or [.
 func segMatch(pat, name string) bool {
@@ -717,6 +757,7 @@ func Parse(dump []byte, confDir string) (Config, error) {
 		if secs[i].nodes, err = p.block(0, false, true); err != nil {
 			return Config{}, err
 		}
+		secs[i].includes = p.includes
 		c.Sections = append(c.Sections, Section{File: secs[i].file, Body: secs[i].body})
 		if secs[i].file != "" || i > 0 {
 			c.Files = append(c.Files, strings.ToValidUTF8(secs[i].file, "�"))
@@ -737,6 +778,13 @@ func Parse(dump []byte, confDir string) (Config, error) {
 	tree, err := e.expand(secs[0].nodes, 0, nil)
 	if err != nil {
 		return Config{}, err
+	}
+	reached, err := e.reached()
+	if err != nil {
+		return Config{}, err
+	}
+	for i := range c.Sections {
+		c.Sections[i].Included = reached[i]
 	}
 	for _, n := range tree {
 		switch {

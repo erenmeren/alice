@@ -632,3 +632,30 @@ func TestWarningCodesComeFromHelperproto(t *testing.T) {
 	assert.Equal(t, helperproto.WarnMailTLS, WarnMailTLS)
 	assert.Equal(t, helperproto.MaxNginxConfig, MaxInput)
 }
+
+// Fix round 1 (helper minor 4): a section is Included only when an include of an earlier section
+// reached it; a forged or orphan marker is not.
+func TestSectionsReachedByAnInclude(t *testing.T) {
+	dump := "# configuration file /etc/nginx/nginx.conf:\nhttp { include mime.types; include conf.d/*.conf; }\n\n" +
+		"# configuration file /etc/nginx/mime.types:\ntypes { text/html html; }\n\n" +
+		"# configuration file /etc/nginx/conf.d/a.conf:\nserver { location / { include /etc/nginx/snip.conf; } }\n\n" +
+		"# configuration file /etc/nginx/snip.conf:\nproxy_pass x;\n\n" +
+		"# configuration file /root/empty.txt:\n\n" +
+		"# configuration file /etc/nginx/conf.d/b.conf:\ninclude /etc/nginx/nginx2.conf;\n\n"
+	c, err := Parse([]byte(dump), "/etc/nginx")
+	require.NoError(t, err)
+	got := map[string]bool{}
+	for _, s := range c.Sections {
+		got[s.File] = s.Included
+	}
+	assert.Equal(t, map[string]bool{"/etc/nginx/nginx.conf": false, "/etc/nginx/mime.types": true, "/etc/nginx/conf.d/a.conf": true,
+		"/etc/nginx/snip.conf": true, "/root/empty.txt": false, "/etc/nginx/conf.d/b.conf": true}, got)
+
+	// An include in a later section that names an earlier one does not count (nginx prints a file
+	// after the one that includes it).
+	c, err = Parse([]byte("# configuration file /etc/nginx/nginx.conf:\nhttp { include /etc/nginx/b.conf; }\n\n"+
+		"# configuration file /etc/nginx/a.conf:\n\n# configuration file /etc/nginx/b.conf:\ninclude /etc/nginx/a.conf;\n\n"), "/etc/nginx")
+	require.NoError(t, err)
+	assert.False(t, c.Sections[1].Included)
+	assert.True(t, c.Sections[2].Included)
+}
