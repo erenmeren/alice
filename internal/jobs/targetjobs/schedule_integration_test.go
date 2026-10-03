@@ -119,8 +119,9 @@ func TestSuccessKeepsStatusesThatNeedAPerson(t *testing.T) {
 }
 
 // The ruling on B-2: an unreachable server is tested again once per discovery interval (never
-// every minute), and once it answers it is scanned at once and scheduled as usual. Statuses that
-// need a person (auth_failed, host_key_changed) are never retried automatically.
+// every minute), and once it answers it is scanned at once and scheduled as usual. A re-test that
+// fails again alerts nobody: the target already shows unreachable. Statuses that need a person
+// (auth_failed, host_key_changed) are never retried automatically.
 func TestUnreachableTargetIsRetestedOncePerInterval(t *testing.T) {
 	e := newEnv(t, nil)
 	tg := e.confirmed(hostKey(t))
@@ -144,6 +145,35 @@ func TestUnreachableTargetIsRetestedOncePerInterval(t *testing.T) {
 		e.clock.Advance(time.Minute)
 		assert.Zero(t, e.schedule(), "a failed re-test waits for the next interval")
 	}
+	// A server that stays down (also when the dial itself fails) is re-tested at every interval
+	// without alerting anyone again: its re-tests end failed, not dead, and neither the status
+	// change nor any email is repeated.
+	statusRows := countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'target.status_changed'")
+	for i, err := range []error{providers.NewError("ssh.timeout", true, nil, nil), providers.NewError("ssh.unreachable", true, nil, nil)} {
+		e.prov.Configure(func(c *fake.Config) { c.TestErr, c.OpenErr = nil, nil })
+		if i == 0 {
+			e.prov.Configure(func(c *fake.Config) { c.OpenErr = err })
+		} else {
+			e.prov.Configure(func(c *fake.Config) { c.TestErr = err })
+		}
+		e.clock.Advance(day)
+		require.Equal(t, 1, e.schedule())
+		e.drain()
+		assert.Equal(t, inventory.StatusUnreachable, e.status(tg.ID))
+	}
+	assert.Zero(t, countRows(t, e, "SELECT count(*) FROM jobs WHERE status = 'dead'"))
+	assert.Equal(t, 3, countRows(t, e, "SELECT count(*) FROM jobs WHERE kind = 'scheduled' AND status = 'failed'"))
+	assert.Zero(t, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'job.dead'"))
+	assert.Zero(t, countRows(t, e, "SELECT count(*) FROM notifications_outbox"), "no job.dead and no status email")
+	assert.Equal(t, statusRows, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'target.status_changed'"))
+	// A test a person asks for keeps its behaviour: its single attempt ends dead and alerts.
+	e.prov.Configure(func(c *fake.Config) { c.TestErr = providers.NewError("ssh.unreachable", true, nil, nil) })
+	manual, err := e.inv.RequestTest(e.ctx, e.admin, tg.ID)
+	require.NoError(t, err)
+	e.drain()
+	assert.Equal(t, jobs.StatusDead, e.job(manual).Status)
+	assert.Equal(t, 1, countRows(t, e, "SELECT count(*) FROM notifications_outbox WHERE template_key = 'job.dead'"))
+	e.prov.Configure(func(c *fake.Config) { c.OpenErr = nil })
 
 	e.prov.Configure(func(c *fake.Config) { c.TestErr = nil })
 	discovers := e.prov.Count("Discover")

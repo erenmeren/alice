@@ -81,7 +81,7 @@ func newEnv(t *testing.T, wrap func(providers.Session) providers.Session) *env {
 	_, err = e.inv.EnsurePlatformKey(e.ctx)
 	require.NoError(t, err)
 	e.runner = jobs.NewRunner(jobs.RunnerConfig{Pool: e.db.App, Queue: e.queue, Gate: e.lic, Audit: auditLog, Clock: e.clock,
-		Log: log, Workers: 1, Jitter: func() float64 { return 0 }})
+		Log: log, Workers: 1, Jitter: func() float64 { return 0 }, Notifier: notify.AdminNotifier{Clock: e.clock}})
 	targetjobs.Register(e.runner, targetjobs.Deps{Inventory: e.inv, Registry: reg, Clock: e.clock, Log: log})
 	id := uuid.Must(uuid.NewV7())
 	_, err = e.db.Owner.Exec(e.ctx, `INSERT INTO users (id, username, email, display_name, password_hash, role, created_at, updated_at)

@@ -121,16 +121,33 @@ func (h *handlers) close(s providers.Session) {
 	}
 }
 
+// retestFailure ends the scheduled re-test of an unreachable target (ScheduleDiscovery) as a plain
+// failure when the server did not answer as it should: its single attempt would otherwise make the
+// job dead and email every Administrator once per discovery interval for as long as the server is
+// down. The failure is already on the target (its status and last error, recorded once per
+// transition), and the next interval tests again. A test a person asked for, and a failure that is
+// not the server's (the database), keep their classification.
+func retestFailure(j jobs.Job, err error) error {
+	var (
+		pe *providers.Error
+		f  *jobs.Failure
+	)
+	if j.Kind == jobs.KindScheduled && errors.As(err, &pe) && errors.As(err, &f) && f.Class == jobs.Retryable {
+		return jobs.Fail(f.Reason, f.Params, err)
+	}
+	return err
+}
+
 func (h *handlers) testConnection(ctx context.Context, j jobs.Job, _ jobs.StepRecorder) (map[string]any, error) {
 	sess, t, err := h.open(ctx, j.TargetID, false, true)
 	if err != nil {
-		return nil, err
+		return nil, retestFailure(j, err)
 	}
 	defer h.close(sess)
 	rep, err := sess.TestConnection(ctx)
 	if err != nil {
 		h.recordFailure(ctx, j.TargetID, err)
-		return nil, jobs.FromProvider(err)
+		return nil, retestFailure(j, jobs.FromProvider(err))
 	}
 	// The report carries the key the server presented: inventory compares it with the pinned key.
 	err = h.d.Inventory.RecordConnectionOK(ctx, j.TargetID, rep)
