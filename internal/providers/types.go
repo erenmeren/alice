@@ -330,9 +330,11 @@ const (
 	DeployCommitted DeployResult = "committed"
 	// DeployUnchanged: the files already held this certificate.
 	DeployUnchanged DeployResult = "unchanged"
-	// DeployNoChange: an explicit refusal with nothing changed. A provider reports it only for a
-	// well-formed helper refusal (or sudo's refusal before the helper started), never for a
-	// transport failure, a timeout or an answer it cannot parse.
+	// DeployNoChange: nothing was changed by this operation. A provider reports it only for a
+	// well-formed refusal (the provider's own before contacting the helper, the helper's, or
+	// sudo's before the helper started), never for a transport failure, a timeout or an answer it
+	// cannot parse. The one other case: the helper answered "unchanged" and the verification then
+	// failed (Phase unchanged, FailedStep verify; see outcome.go).
 	DeployNoChange DeployResult = "no_change"
 	// DeployRolledBack: changed, failed, previous files restored and verified.
 	DeployRolledBack DeployResult = "rolled_back"

@@ -13,12 +13,43 @@ import (
 //
 //	committed        Phase "" or committed; no failed_step, cause_step, error or reason
 //	unchanged        Phase "" or unchanged; no failed_step, cause_step, error or reason
-//	no_change        no phase, steps, failed_step, cause_step or error; reason required
+//	no_change        a refusal before any change: no phase, steps, failed_step, cause_step or
+//	                 error; reason required. One exception: the helper answered unchanged and the
+//	                 verification then failed: Phase unchanged, failed_step verify, a failed verify
+//	                 step in Steps (other steps allowed), no cause_step or error, reason required
 //	rolled_back      Phase "" or restored; failed_step and reason required
-//	rollback_failed  Phase "" or restore_failed; failed_step and reason required
+//	rollback_failed  Phase "", restore_failed or restored; failed_step and reason required. Phase
+//	                 restored means the files ARE back and only the verification of the old
+//	                 certificate failed (failed_step must be verify_old); restore_failed means
+//	                 they are not (fully) back
 //	uncertain        no phase, failed_step, cause_step or error
 //
 // Any other Result, including "", is invalid.
+//
+// Legal shapes the Nginx provider maps (Result; Phase; FailedStep; CauseStep; error returned):
+//
+//	provider-side refusal before the helper (location unsupported)
+//	                              no_change; ""; ""; ""; *Error
+//	helper refusal                no_change; ""; ""; ""; *Error
+//	helper committed, verify ok   committed; committed; ""; ""; nil
+//	helper unchanged, verify ok   unchanged; unchanged; ""; ""; nil
+//	helper unchanged, verify bad  no_change; unchanged; verify; ""; *Error (Verified "")
+//	committed, verify bad, rolled back, old certificate verifies
+//	                              rolled_back; restored; verify; verify; nil
+//	committed, verify bad, files back, old certificate does not verify
+//	                              rollback_failed; restored; verify_old; verify; nil
+//	helper restored (its own nginx -t or reload failed)
+//	                              rolled_back; restored; <failed step>; <same>; nil, Error = its class
+//	helper restore_failed (file_changed with the starting step as failed_step and Error
+//	file_changed; the restore step; rollback_reload; rollback_config_test)
+//	                              rollback_failed; restore_failed; <that step>; <cause>; nil
+//	anything unknown              uncertain; ""; ""; ""; non-nil error
+//
+// RollbackDeployment: an unknown operation and SUPERSEDED are no_change with phase "" and a *Error;
+// the helper's "nothing to restore" is no_change with phase prepared or unchanged and a nil error;
+// HASH_MISMATCH on restore is rollback_failed with phase "", failed_step restore and Error
+// file_changed; restored with a failing old verification is rollback_failed with phase restored
+// and failed_step verify_old.
 //
 // The session method returns the outcome together with an error as follows (CheckDeployReturn):
 // committed, unchanged, rolled_back and rollback_failed come with a nil error (a known change is
@@ -28,6 +59,16 @@ import (
 // A caller must treat an outcome that fails Validate or CheckDeployReturn, a blank or unknown
 // Result, or any error the provider did not map to one of the above, as uncertain: it reads the
 // truth with DeploymentStatus and never as "no change".
+
+// restoredNeedsVerifyOld: rollback_failed with Phase restored means the helper put the files back
+// and only the verification of the old certificate failed, so the failed step is verify_old; any
+// other failure leaves the files not (fully) back, which is Phase restore_failed (or "").
+func restoredNeedsVerifyOld(phase, failedStep string) error {
+	if phase == PhaseRestored && failedStep != StepNameVerifyOld {
+		return fmt.Errorf("rollback_failed with phase restored: failed_step must be %s, got %q", StepNameVerifyOld, failedStep)
+	}
+	return nil
+}
 
 func orBlank(s string) string {
 	if s == "" {
@@ -89,18 +130,32 @@ func (o DeployOutcome) Validate() error {
 		f["reason"] = o.Reason
 		err = errors.Join(phaseIn(string(o.Result), o.Phase, want), forbid(string(o.Result), f))
 	case DeployNoChange:
+		if o.Phase == PhaseUnchanged {
+			// The helper said "unchanged" and the verification then failed.
+			rule := "no_change with phase unchanged"
+			if o.FailedStep != StepNameVerify {
+				err = fmt.Errorf("%s: failed_step must be %s, got %q", rule, StepNameVerify, o.FailedStep)
+			}
+			if !slices.ContainsFunc(o.Steps, func(st DeployStep) bool { return st.Name == StepNameVerify && st.Status == StepFailed }) {
+				err = errors.Join(err, fmt.Errorf("%s: steps must hold the failed %s step", rule, StepNameVerify))
+			}
+			err = errors.Join(err, forbid(rule, map[string]string{"cause_step": o.CauseStep, "error": o.Error}),
+				require("no_change", "reason", o.Reason))
+			break
+		}
 		f["phase"] = o.Phase
 		if len(o.Steps) > 0 {
 			err = fmt.Errorf("no_change: steps must be empty, got %d", len(o.Steps))
 		}
 		err = errors.Join(err, forbid("no_change", f), require("no_change", "reason", o.Reason))
 	case DeployRolledBack, DeployRollbackFailed:
-		want := PhaseRestored
-		if o.Result == DeployRollbackFailed {
-			want = PhaseRestoreFailed
-		}
 		rule := string(o.Result)
-		err = errors.Join(phaseIn(rule, o.Phase, want), require(rule, "failed_step", o.FailedStep), require(rule, "reason", o.Reason))
+		if o.Result == DeployRolledBack {
+			err = phaseIn(rule, o.Phase, PhaseRestored)
+		} else {
+			err = errors.Join(phaseIn(rule, o.Phase, PhaseRestoreFailed, PhaseRestored), restoredNeedsVerifyOld(o.Phase, o.FailedStep))
+		}
+		err = errors.Join(err, require(rule, "failed_step", o.FailedStep), require(rule, "reason", o.Reason))
 	case DeployUncertain:
 		f["phase"] = o.Phase
 		err = forbid("uncertain", f)
@@ -135,7 +190,7 @@ func (o RollbackOutcome) Validate() error {
 		f["reason"] = o.Reason
 		err = errors.Join(phaseIn("rolled_back", o.Phase, PhaseRestored), forbid("rolled_back", f))
 	case DeployRollbackFailed:
-		err = errors.Join(phaseIn("rollback_failed", o.Phase, PhaseRestoreFailed),
+		err = errors.Join(phaseIn("rollback_failed", o.Phase, PhaseRestoreFailed, PhaseRestored), restoredNeedsVerifyOld(o.Phase, o.FailedStep),
 			require("rollback_failed", "failed_step", o.FailedStep), require("rollback_failed", "reason", o.Reason))
 	case DeployNoChange:
 		if len(o.Steps) > 0 {
