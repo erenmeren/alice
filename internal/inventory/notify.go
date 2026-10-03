@@ -1,23 +1,39 @@
 package inventory
 
 // Email templates sent to every Administrator (R37 item 14). Texts: locales/common email.<template>.
+// Every deployment template takes target_name, cert_path and deployment_id, and those that name a
+// backup also backup_dir (BackupRoot/<operation id>, Alice's own value, never text from the server).
 const (
 	TemplateHostKeyChanged = "target.host_key_changed" // params target_name, old_fingerprint, new_fingerprint
 	TemplateAuthFailed     = "target.auth_failed"      // params target_name
 	// TemplateDeploymentFailed: a deployment ended and the server keeps (or has back) its previous
-	// certificate (status failed or rolled_back). Params target_name, cert_path, deployment_id.
+	// certificate (status failed or rolled_back).
 	TemplateDeploymentFailed = "deployment.failed"
-	// TemplateDeploymentRollbackFailed: manual action is needed (status rollback_failed). Params
-	// target_name, cert_path, deployment_id, backup_dir.
+	// TemplateDeploymentRollbackFailed: the change failed and the automatic restore failed too
+	// (status rollback_failed: the helper's restore_failed, or the restore refused because a file
+	// changed); manual action, with backup_dir.
 	TemplateDeploymentRollbackFailed = "deployment.rollback_failed"
+	// TemplateDeploymentOutcomeUnknown: Alice stopped without knowing how the deployment ended
+	// (rollback_failed with deployment.recovery_exhausted or deployment.target_deleted after a
+	// send); what to check, and where the backup is if the change reached the server (backup_dir).
+	TemplateDeploymentOutcomeUnknown = "deployment.outcome_unknown"
+	// TemplateDeploymentRestoredUnverified: the previous files are back but the website does not
+	// serve the previous certificate (rollback_failed, phase restored, failed step verify_old).
+	TemplateDeploymentRestoredUnverified = "deployment.restored_unverified"
+	// TemplateDeploymentSuperseded: a later operation replaced the files; nothing was restored
+	// (rollback_failed with deployment.superseded).
+	TemplateDeploymentSuperseded = "deployment.superseded"
 	// TemplateDeploymentNeedsAttention: Alice cannot reach the server to finish or undo a
-	// deployment and keeps trying; sent once per deployment. Params target_name, cert_path,
-	// deployment_id.
+	// deployment and keeps trying (about a day); sent once per deployment.
 	TemplateDeploymentNeedsAttention = "deployment.needs_attention"
+	// TemplateDeploymentNeedsAttentionUnconfirmed: as TemplateDeploymentNeedsAttention when the
+	// server answered but not as expected (the cause is not a lost connection).
+	TemplateDeploymentNeedsAttentionUnconfirmed = "deployment.needs_attention_unconfirmed"
 )
 
 // Templates lists the inventory's email templates (render tests).
 func Templates() []string {
 	return []string{TemplateHostKeyChanged, TemplateAuthFailed, TemplateDeploymentFailed, TemplateDeploymentRollbackFailed,
-		TemplateDeploymentNeedsAttention}
+		TemplateDeploymentOutcomeUnknown, TemplateDeploymentRestoredUnverified, TemplateDeploymentSuperseded,
+		TemplateDeploymentNeedsAttention, TemplateDeploymentNeedsAttentionUnconfirmed}
 }

@@ -405,9 +405,25 @@
         "subject": "Manual action needed: certificate restore failed on {{target_name}}",
         "body": "Alice deployed a certificate on the server {{target_name}} (file {{cert_path}}). The change failed, and the automatic restore failed too.\n\nThe previous files are on the server in {{backup_dir}}. Check the website now, then run nginx -t and systemctl status nginx on the server. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
       },
+      "outcome_unknown": {
+        "subject": "Alice could not confirm a certificate deployment on {{target_name}}",
+        "body": "Alice started deploying a certificate on the server {{target_name}} (file {{cert_path}}), but could not confirm how it ended and has stopped trying.\n\nCheck the website now and run nginx -t on the server. If the change reached the server, the previous files are in {{backup_dir}}. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
+      },
+      "restored_unverified": {
+        "subject": "The previous certificate is back on {{target_name}} but the website does not serve it",
+        "body": "A certificate deployment on the server {{target_name}} failed (file {{cert_path}}), and Alice put the previous files back. The website still does not serve the previous certificate, for example because another server block or a load balancer answers.\n\nCheck the website and run systemctl status nginx on the server. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
+      },
+      "superseded": {
+        "subject": "A later change replaced the files of a deployment on {{target_name}}",
+        "body": "Alice could not finish or undo a certificate deployment on the server {{target_name}} (file {{cert_path}}) because a later operation has already replaced the files. Alice did not restore anything.\n\nCheck which certificate the website serves now, then choose Discover on the server's page in Alice. Deployment: {{deployment_id}}"
+      },
       "needs_attention": {
         "subject": "Alice cannot finish a deployment on {{target_name}}",
-        "body": "The connection to the server {{target_name}} was lost during a certificate deployment (file {{cert_path}}), and Alice cannot reach the server to finish or undo it.\n\nAlice tries again every 15 minutes. Until then, check the website and the server's connection. Deployment: {{deployment_id}}"
+        "body": "The connection to the server {{target_name}} was lost during a certificate deployment (file {{cert_path}}), and Alice cannot reach the server to finish or undo it.\n\nAlice tries again every 15 minutes for about a day, then asks for manual action. Until then, check the website and the server's connection. Deployment: {{deployment_id}}"
+      },
+      "needs_attention_unconfirmed": {
+        "subject": "Alice cannot confirm a deployment on {{target_name}} yet",
+        "body": "Alice cannot yet confirm how a certificate deployment on the server {{target_name}} ended (file {{cert_path}}): the server did not answer as expected.\n\nAlice tries again every 15 minutes for about a day, then asks for manual action. Until then, check the website. Deployment: {{deployment_id}}"
       }
     },
     "target": {

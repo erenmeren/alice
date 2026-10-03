@@ -78,7 +78,9 @@ func TestDeploymentTemplatesRenderInBothLanguages(t *testing.T) {
 	s := &notify.Sender{Catalog: cat}
 	params := map[string]string{"target_name": "web-01 (İzmir)", "cert_path": "/etc/nginx/ssl/www.crt",
 		"deployment_id": "0190f5a0-0000-7000-8000-00000000abcd", "backup_dir": "/var/lib/alice-helper/backups/0190f5a0-0000-7000-8000-00000000abcd"}
-	templates := []string{inventory.TemplateDeploymentFailed, inventory.TemplateDeploymentRollbackFailed, inventory.TemplateDeploymentNeedsAttention}
+	templates := []string{inventory.TemplateDeploymentFailed, inventory.TemplateDeploymentRollbackFailed, inventory.TemplateDeploymentNeedsAttention,
+		inventory.TemplateDeploymentNeedsAttentionUnconfirmed, inventory.TemplateDeploymentOutcomeUnknown,
+		inventory.TemplateDeploymentRestoredUnverified, inventory.TemplateDeploymentSuperseded}
 	for _, tpl := range templates {
 		assert.Contains(t, inventory.Templates(), tpl)
 		for _, lang := range []string{"en", "tr"} {
@@ -102,9 +104,33 @@ func TestDeploymentTemplatesRenderInBothLanguages(t *testing.T) {
 	assert.Contains(t, tr.Body, "Önceki dosyalar sunucuda şu klasörde: /var/lib/alice-helper/backups/0190f5a0-0000-7000-8000-00000000abcd.")
 	na := s.Render("ada@example.com", inventory.TemplateDeploymentNeedsAttention, "en", params)
 	assert.Equal(t, "Alice cannot finish a deployment on web-01 (İzmir)", na.Subject)
-	assert.Contains(t, na.Body, "Alice tries again every 15 minutes.")
+	assert.Contains(t, na.Body, "Alice tries again every 15 minutes for about a day, then asks for manual action.")
 	natr := s.Render("ada@example.com", inventory.TemplateDeploymentNeedsAttention, "tr", params)
-	assert.Contains(t, natr.Body, "Alice 15 dakikada bir yeniden dener.")
+	assert.Contains(t, natr.Body, "Alice yaklaşık bir gün boyunca 15 dakikada bir yeniden dener, sonra elle müdahale ister.")
+
+	// The texts of each rollback_failed cause (Important 1), in both languages.
+	for _, tc := range []struct{ tpl, lang, subject, body string }{
+		{inventory.TemplateDeploymentNeedsAttentionUnconfirmed, "en", "Alice cannot confirm a deployment on web-01 (İzmir) yet",
+			"the server did not answer as expected"},
+		{inventory.TemplateDeploymentNeedsAttentionUnconfirmed, "tr", "Alice web-01 (İzmir) sunucusundaki bir dağıtımın sonucunu henüz doğrulayamıyor",
+			"sunucu beklendiği gibi yanıt vermedi"},
+		{inventory.TemplateDeploymentOutcomeUnknown, "en", "Alice could not confirm a certificate deployment on web-01 (İzmir)",
+			"If the change reached the server, the previous files are in /var/lib/alice-helper/backups/0190f5a0-0000-7000-8000-00000000abcd."},
+		{inventory.TemplateDeploymentOutcomeUnknown, "tr", "Alice web-01 (İzmir) sunucusundaki bir sertifika dağıtımının sonucunu doğrulayamadı",
+			"Değişiklik sunucuya ulaştıysa önceki dosyalar şu klasördedir: /var/lib/alice-helper/backups/0190f5a0-0000-7000-8000-00000000abcd."},
+		{inventory.TemplateDeploymentRestoredUnverified, "en", "The previous certificate is back on web-01 (İzmir) but the website does not serve it",
+			"Alice put the previous files back. The website still does not serve the previous certificate"},
+		{inventory.TemplateDeploymentRestoredUnverified, "tr", "web-01 (İzmir) sunucusunda önceki sertifika geri kondu ancak web sitesi onu sunmuyor",
+			"Alice önceki dosyaları geri koydu. Web sitesi hâlâ önceki sertifikayı sunmuyor"},
+		{inventory.TemplateDeploymentSuperseded, "en", "A later change replaced the files of a deployment on web-01 (İzmir)",
+			"a later operation has already replaced the files. Alice did not restore anything."},
+		{inventory.TemplateDeploymentSuperseded, "tr", "web-01 (İzmir) sunucusunda sonraki bir değişiklik bir dağıtımın dosyalarını değiştirdi",
+			"daha sonraki bir işlem dosyaları zaten değiştirdi. Alice hiçbir şeyi geri yüklemedi."},
+	} {
+		m := s.Render("ada@example.com", tc.tpl, tc.lang, params)
+		assert.Equal(t, tc.subject, m.Subject, "%s %s", tc.tpl, tc.lang)
+		assert.Contains(t, m.Body, tc.body, "%s %s", tc.tpl, tc.lang)
+	}
 
 	hostile := map[string]string{"target_name": "web", "cert_path": "/etc/x.crt\r\nBcc: evil@example.com", "deployment_id": "d"}
 	m := s.Render("ada@example.com", inventory.TemplateDeploymentFailed, "en", hostile)
