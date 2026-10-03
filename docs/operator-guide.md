@@ -69,6 +69,17 @@ vendor; Alice never removes its own key from a server. During such a change do n
 commands again: they replace `/var/lib/alice-svc/.ssh/authorized_keys` with a single line holding the key Alice
 uses at that moment, which removes the other key.
 
+## The `alice-svc` account on each server
+
+Whoever can run commands as `alice-svc` on a server (Alice itself, or anyone who holds its key or the master key
+and the database) is effectively root there: the helper writes the `authorized_keys` file of any listed account,
+`root` included. Treat Alice's key and `alice-svc` accordingly.
+
+The sudoers file sets `Defaults:alice-svc log_output`, so sudo keeps an I/O log of every helper call, including
+every answer the helper prints (lists of key files and the content of the `authorized_keys` files Alice read).
+These are public keys, not secrets, but the logs grow with every scan: rotating or removing them (by default below
+`/var/log/sudo-io`) is the server administrator's job.
+
 ## Master-key rotation and the installation record
 
 Master-key rotation (§7.2 of the design, `alice keys rotate-master`) is not available yet. When it is added it must,
