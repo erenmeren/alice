@@ -81,6 +81,15 @@ var (
 	SSHKeyRemove         = Register(inventory.JobSSHKeyRemove, license.ClassChange)
 )
 
+// Phase 4 job types (spec §8.2, §8.6, §8.7): a deployment changes a server (refused and held in
+// lock); finishing or undoing an interrupted one is never blocked (L-82, R38 item 8); the sweep
+// that finds interrupted ones runs in every state.
+var (
+	CertificateDeploy        = Register(inventory.JobCertificateDeploy, license.ClassChange)
+	CertificateDeployRecover = Register(inventory.JobDeployRecover, license.ClassAlways)
+	DeploymentRecoverySweep  = Register("deployment.recovery_sweep", license.ClassAlways)
+)
+
 // Kind says who asked for a job (jobs.kind).
 type Kind string
 
@@ -109,12 +118,15 @@ const (
 )
 
 // MaxAttemptsFor is the default number of attempts of a job type (spec §8.4): a connection
-// test is shown to the user at once and not retried; discovery tolerates a flaky network.
+// test is shown to the user at once and not retried; discovery tolerates a flaky network. A
+// deployment's job runs at most 3 times (a run after the first send never sends again: it reads
+// the deployment's state and recovers); a recovery job 5 times, and the deployment sweep queues
+// another one 15 minutes later while the deployment is unfinished.
 func MaxAttemptsFor(t Type) int {
 	switch t.Name {
 	case inventory.JobTestConnection:
 		return 1
-	case inventory.JobDiscover:
+	case inventory.JobDiscover, inventory.JobDeployRecover:
 		return 5
 	default:
 		return 3

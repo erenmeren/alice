@@ -113,6 +113,21 @@ func TestMaxAttemptsFor(t *testing.T) {
 	assert.Equal(t, 1, MaxAttemptsFor(TargetTestConnection))
 	assert.Equal(t, 5, MaxAttemptsFor(TargetDiscover))
 	assert.Equal(t, 3, MaxAttemptsFor(SSHKeyRemove))
+	assert.Equal(t, 3, MaxAttemptsFor(CertificateDeploy))
+	assert.Equal(t, 5, MaxAttemptsFor(CertificateDeployRecover))
+}
+
+// Phase 4: a deployment changes a server (refused and held in lock, R38); finishing or undoing an
+// interrupted one, and the sweep that finds it, are never blocked by the license (L-82, R38 #8).
+func TestPhase4JobTypesDeclareTheirLicenseClass(t *testing.T) {
+	assert.Equal(t, Type{Name: inventory.JobCertificateDeploy, Class: license.ClassChange}, CertificateDeploy)
+	assert.Equal(t, Type{Name: inventory.JobDeployRecover, Class: license.ClassAlways}, CertificateDeployRecover)
+	assert.Equal(t, Type{Name: "deployment.recovery_sweep", Class: license.ClassAlways}, DeploymentRecoverySweep)
+	assert.Equal(t, "certificate.deploy", inventory.JobCertificateDeploy)
+	assert.Equal(t, "certificate.deploy_recover", inventory.JobDeployRecover)
+	assert.NotPanics(t, func() {
+		NewScheduler(nil, &fakeGate{}, quiet, Task{Type: DeploymentRecoverySweep, Every: time.Minute, Run: func(context.Context) error { return nil }})
+	}, "the sweep is periodic work")
 }
 
 func TestPhase3JobTypesDeclareTheirLicenseClass(t *testing.T) {

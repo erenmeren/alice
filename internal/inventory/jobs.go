@@ -14,6 +14,12 @@ const (
 	JobTestConnection = "target.test_connection"
 	JobDiscover       = "target.discover"
 	JobSSHKeyRemove   = "sshkey.remove"
+	// JobCertificateDeploy runs one deployment (payload deployment_id; dedupe
+	// "certificate.deploy:<id>": one job per deployment).
+	JobCertificateDeploy = "certificate.deploy"
+	// JobDeployRecover finishes or undoes an interrupted deployment (payload deployment_id; dedupe
+	// "certificate.deploy_recover:<id>": at most one live recovery per deployment).
+	JobDeployRecover = "certificate.deploy_recover"
 )
 
 // JobRequest asks for one job. Payload holds ids and options only, never secrets.
