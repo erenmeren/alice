@@ -46,18 +46,18 @@ func cmdCleanup(ctx context.Context, s *sys, args []string) (any, error) {
 	if err != nil {
 		return nil, failed(helperproto.CodeIOError, "the backups cannot be checked")
 	}
-	if err := unix.Fstatat(int(root.Fd()), op+"/"+journalName, &st, unix.AT_SYMLINK_NOFOLLOW); err == nil { //nolint:gosec // G115: a descriptor fits an int
-		lock, err := s.nginxLock(ctx)
-		if err != nil {
-			return nil, failed(helperproto.CodeBusy, "a certificate change is running on this server")
+	// Always under the Nginx lock, then the journal is read: a deployment may be between creating
+	// this directory and writing its first journal.
+	lock, err := s.nginxLock(ctx)
+	if err != nil {
+		return nil, failed(helperproto.CodeBusy, "a certificate change is running on this server")
+	}
+	defer func() { _ = lock.Close() }()
+	if j, ok := s.nginxJournal(root, op); ok {
+		if s.keepForRecovery(j) {
+			return nil, failed(helperproto.CodeBusy, "the deployment is not finished; restore it before its backups are removed")
 		}
-		defer func() { _ = lock.Close() }()
-		if j, ok := s.nginxJournal(root, op); ok {
-			if j.Phase == helperproto.PhaseWriting || j.Phase == helperproto.PhaseRestoring {
-				return nil, failed(helperproto.CodeBusy, "the deployment was interrupted; restore it before its backups are removed")
-			}
-			s.cleanStaged(j)
-		}
+		s.cleanStaged(j)
 	}
 	if err := removeAt(root, op); err != nil {
 		return nil, failed(helperproto.CodeIOError, "the backups cannot be removed")
@@ -77,6 +77,21 @@ func (s *sys) nginxJournal(root *os.File, name string) (journal, bool) {
 	return j, found && err == nil
 }
 
+// keepForRecovery reports an Nginx operation whose backups nginx-restore may still need: one
+// interrupted (writing, restoring) or whose rollback failed with a file of the pair still holding
+// the deployed content (or unreadable) — unless a later operation superseded it (it is never
+// restored then).
+func (s *sys) keepForRecovery(j journal) bool {
+	switch j.Phase {
+	case helperproto.PhaseWriting, helperproto.PhaseRestoring:
+		sup, err := s.superseded(j)
+		return err != nil || !sup
+	case helperproto.PhaseRestoreFailed:
+		return s.needsRecovery(j)
+	}
+	return false
+}
+
 // sweepBackups removes old operation backup directories. It runs before every privileged
 // subcommand; failures are ignored (they never block the call).
 //
@@ -84,9 +99,10 @@ func (s *sys) nginxJournal(root *os.File, name string) (journal, bool) {
 // directory with a journal is an Nginx operation, decided under the Nginx lock (skipped while
 // another helper holds it): committed, unchanged, restored and prepared operations are removed
 // after helperproto.NginxBackupKeep, restore_failed and unreadable journals after backupRetention,
-// and an operation whose journal says writing or restoring is never removed, whatever its age
-// (S3): its backups are the only way back to a consistent pair. The staged files an operation
-// left next to its pair are removed with it (S2).
+// and an operation that keepForRecovery keeps (writing, restoring, a failed rollback whose pair
+// still holds deployed content) is never removed, whatever its age (S3): its backups are the only
+// way back to a consistent pair. Everything is decided under the Nginx lock (skipped while another
+// helper holds it). The staged files an operation left next to its pair are removed with it (S2).
 func (s *sys) sweepBackups() {
 	root, err := s.openBackupRoot(false)
 	if err != nil {
@@ -117,26 +133,26 @@ func (s *sys) sweepBackups() {
 		if age <= helperproto.NginxBackupKeep {
 			continue
 		}
+		if !locked {
+			lock, locked = s.tryNginxLock(), true
+		}
+		if lock == nil {
+			return
+		}
 		if unix.Fstatat(rfd, name+"/"+journalName, &st, unix.AT_SYMLINK_NOFOLLOW) != nil {
 			if age > backupRetention {
 				_ = removeAt(root, name)
 			}
 			continue
 		}
-		if !locked {
-			lock, locked = s.tryNginxLock(), true
-		}
-		if lock == nil {
-			continue
-		}
 		j, ok := s.nginxJournal(root, name)
 		switch {
-		case !ok, j.Phase == helperproto.PhaseRestoreFailed:
+		case ok && s.keepForRecovery(j):
+			continue
+		case !ok, j.Phase == helperproto.PhaseRestoreFailed, j.Phase == helperproto.PhaseWriting, j.Phase == helperproto.PhaseRestoring:
 			if age <= backupRetention {
 				continue
 			}
-		case j.Phase == helperproto.PhaseWriting, j.Phase == helperproto.PhaseRestoring:
-			continue
 		}
 		if ok {
 			s.cleanStaged(j)

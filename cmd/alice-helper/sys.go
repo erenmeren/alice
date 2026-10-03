@@ -21,7 +21,10 @@ type sys struct {
 	root string // filesystem prefix: "" in production, a temporary directory in tests
 	// rootUID is the owner every directory of an absolute AuthorizedKeysFile pattern outside the
 	// home must have (rootControlled): 0 in production; tests that do not run as root use their uid.
-	rootUID  int
+	rootUID int
+	// rootGID is root's group (0 in production; tests use their own gid), compared with key files'
+	// groups the same way rootUID is with their owners.
+	rootGID  int
 	euid     func() int
 	sudoUser func() string
 	now      func() time.Time

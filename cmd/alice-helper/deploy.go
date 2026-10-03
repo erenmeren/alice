@@ -226,7 +226,13 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 			}
 			switch j.Phase {
 			case helperproto.PhaseWriting, helperproto.PhaseRestoring:
-				j, _ = s.restoreOp(context.WithoutCancel(ctx), dir, j)
+				switch sup, err := s.superseded(j); {
+				case err != nil:
+					return nil, failed(helperproto.CodeIOError, "the record of the latest deployment cannot be read")
+				case sup:
+					return nil, precondition(helperproto.CodeSuperseded, "a later deployment replaced these files; this one is not rolled back")
+				}
+				j, _ = s.restoreOp(context.WithoutCancel(ctx), dir, j, false)
 				return deployAnswer(j), nil
 			case helperproto.PhasePrepared:
 			default:
@@ -287,31 +293,65 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 	if !s.spaceFor(cert.rf.dirfd, need) || !s.spaceFor(key.rf.dirfd, need) {
 		return nil, precondition(helperproto.CodeNoSpace, "the server has not enough free disk space for the new files")
 	}
-	if dir == nil {
+	created := dir == nil
+	if created {
 		if dir, err = s.newOpDir(d.op); err != nil {
 			return nil, err
 		}
 	}
+	// refuse answers a refusal before anything was replaced; an operation directory this run
+	// created goes again (a refusal leaves nothing behind).
+	refuse := func(e error) (any, error) {
+		if created {
+			s.dropOpDir(d.op)
+		}
+		return nil, e
+	}
 	if !s.spaceFor(int(dir.Fd()), int64(len(cert.data)+len(key.data))+helperproto.MinFreeBytes) { //nolint:gosec // G115: a descriptor fits an int
-		return nil, precondition(helperproto.CodeNoSpace, "the server has not enough free disk space for the backup")
+		return refuse(precondition(helperproto.CodeNoSpace, "the server has not enough free disk space for the backup"))
 	}
 	if ctx.Err() != nil {
-		return nil, failed(helperproto.CodeIOError, "the time budget ended before anything was changed")
+		return refuse(failed(helperproto.CodeIOError, "the time budget ended before anything was changed"))
 	}
 
 	// 1. The journal, then the backups (nothing is replaced yet: a failure is a refusal).
 	s.cleanStaged(j)
 	if err := s.writeJournal(dir, j); err != nil {
-		return nil, failed(helperproto.CodeIOError, "the journal cannot be written")
+		return refuse(failed(helperproto.CodeIOError, "the journal cannot be written"))
 	}
 	if err := s.writeBackups(dir, cert.data, key.data); err != nil {
 		if errors.Is(err, unix.ENOSPC) || errors.Is(err, unix.EDQUOT) {
-			return nil, precondition(helperproto.CodeNoSpace, "the server has no free disk space for the backup")
+			return refuse(precondition(helperproto.CodeNoSpace, "the server has no free disk space for the backup"))
 		}
-		return nil, failed(helperproto.CodeIOError, "the backup cannot be written")
+		return refuse(failed(helperproto.CodeIOError, "the backup cannot be written"))
 	}
 	j.Steps = append(j.Steps, stepOK(helperproto.StepBackup))
 	s.point(helperproto.StepBackup)
+
+	// 2. This operation becomes the pair's latest (Important 3): written before the journal says
+	// writing, so every operation that may replace files is the pair's record until a later one
+	// starts. A refusal before the first rename puts the previous record back.
+	prev, err := s.pairRecord(j)
+	if err != nil {
+		return refuse(failed(helperproto.CodeIOError, "the record of the latest deployment cannot be read"))
+	}
+	if err := s.setPairRecord(j, d.op); err != nil {
+		_ = s.setPairRecord(j, prev)
+		return refuse(failed(helperproto.CodeIOError, "the record of the latest deployment cannot be written"))
+	}
+	// back undoes the record and the journal when nothing was replaced, and answers the refusal.
+	back := func(e error, steps ...helperproto.NginxStep) (any, error) {
+		_ = s.setPairRecord(j, prev)
+		if created {
+			s.dropOpDir(d.op)
+			return nil, e
+		}
+		b := j
+		b.Phase = helperproto.PhasePrepared
+		b.Steps = append(append([]helperproto.NginxStep{}, j.Steps...), steps...)
+		_ = s.writeJournal(dir, b)
+		return nil, e
+	}
 
 	// From here on the transaction runs to its end whatever happens to the caller (the helper
 	// ignores SIGHUP and SIGPIPE), and every outcome is recorded: the journal says "writing" before
@@ -320,40 +360,38 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 	tctx := context.WithoutCancel(ctx)
 	j.Phase = helperproto.PhaseWriting
 	if err := s.writeJournal(dir, j); err != nil {
-		return deployAnswer(s.fail(tctx, dir, j, helperproto.StepJournal, "")), nil
+		// Nothing was replaced (minor 2): a refusal, no nginx -t, no reload.
+		return back(failed(helperproto.CodeIOError, "the journal cannot be written"))
 	}
 
-	// 2. The key, then the certificate (spec §12.6 steps 3-4).
-	renamed, err := s.replaceFile(key, d.key, keyMode(j.KeyMeta.Mode), j.KeyMeta, stagedName(d.op, kindKey), ctx)
+	// 3. The key, then the certificate (spec §12.6 steps 3-4). Right before the key's rename both
+	// files must still be what was read (Important 1): a certificate changed by someone else is
+	// found before anything is replaced.
+	renamed, err := s.replaceFile(key, d.key, keyMode(j.KeyMeta.Mode), j.KeyMeta, stagedName(d.op, kindKey), ctx, cert.unchanged)
 	if err != nil && !renamed {
-		// Nothing was replaced: the operation goes back to prepared and the answer is a refusal.
-		back := j
-		back.Phase = helperproto.PhasePrepared
-		back.Steps = append(append([]helperproto.NginxStep{}, j.Steps...), stepFailed(helperproto.StepWriteKey, ""))
-		if s.writeJournal(dir, back) == nil {
-			return nil, replaceError(err)
-		}
-		return deployAnswer(s.fail(tctx, dir, j, helperproto.StepWriteKey, "")), nil
+		return back(replaceError(err), stepFailed(helperproto.StepWriteKey, ""))
 	}
 	if err != nil {
 		return deployAnswer(s.fail(tctx, dir, j, helperproto.StepWriteKey, "")), nil
 	}
 	j.Steps = append(j.Steps, stepOK(helperproto.StepWriteKey))
 	s.point(helperproto.StepWriteKey)
-	if _, err := s.replaceFile(cert, d.cert, certMode(j.CertMeta.Mode), j.CertMeta, stagedName(d.op, kindCert), nil); err != nil {
+	if _, err := s.replaceFile(cert, d.cert, certMode(j.CertMeta.Mode), j.CertMeta, stagedName(d.op, kindCert), nil, nil); err != nil {
+		// A certificate changed since the key's rename is left as it is; the rollback puts the key
+		// back (restore_failed, failed_step write_cert, error file_changed).
 		return deployAnswer(s.fail(tctx, dir, j, helperproto.StepWriteCert, "")), nil
 	}
 	j.Steps = append(j.Steps, stepOK(helperproto.StepWriteCert))
 	s.point(helperproto.StepWriteCert)
 
-	// 3. nginx -t (F-01).
+	// 4. nginx -t (F-01).
 	if class, err := s.configTest(tctx); err != nil {
 		return deployAnswer(s.fail(tctx, dir, j, helperproto.StepConfigTest, class)), nil
 	}
 	j.Steps = append(j.Steps, stepOK(helperproto.StepConfigTest))
 	s.point(helperproto.StepConfigTest)
 
-	// 4. Reload and is-active (F-03).
+	// 5. Reload and is-active (F-03).
 	if err := s.reload(tctx); err != nil {
 		return deployAnswer(s.fail(tctx, dir, j, helperproto.StepReload, "")), nil
 	}
@@ -368,24 +406,35 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 	return deployAnswer(j), nil
 }
 
+// dropOpDir removes the directory of an operation that changed nothing.
+func (s *sys) dropOpDir(op string) {
+	root, err := s.openBackupRoot(false)
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	_ = removeAt(root, op)
+}
+
 // replaceError is the refusal when the first file could not be replaced (nothing changed).
 func replaceError(err error) error {
 	switch {
 	case errors.Is(err, unix.ENOSPC), errors.Is(err, unix.EDQUOT):
 		return precondition(helperproto.CodeNoSpace, "the server has no free disk space for the new key")
 	case errors.Is(err, errChangedByOthers):
-		return precondition(helperproto.CodeHashMismatch, "the key file changed since it was read")
+		return precondition(helperproto.CodeHashMismatch, "the certificate or key file changed since it was read")
 	case errors.Is(err, errDeadline):
 		return failed(helperproto.CodeIOError, "the time budget ended before anything was changed")
 	}
 	return failed(helperproto.CodeIOError, "the key file cannot be written")
 }
 
-// fail records the failed step and rolls back.
+// fail records the failed step and rolls back within the transaction (partial: a file someone
+// else changed meanwhile is left, the files this transaction wrote are put back).
 func (s *sys) fail(ctx context.Context, dir *os.File, j journal, step, class string) journal {
 	j.Steps = append(j.Steps, stepFailed(step, class))
-	j.FailedStep, j.Error = step, class
-	j, _ = s.restoreOp(ctx, dir, j)
+	j.FailedStep, j.CauseStep, j.Error = step, step, class
+	j, _ = s.restoreOp(ctx, dir, j, true)
 	return j
 }
 
@@ -438,7 +487,9 @@ func (s *sys) writeBackups(dir *os.File, cert, key []byte) error {
 	if err := writeNewAt(dir, certBackup, cert); err != nil {
 		return err
 	}
-	s.point("backup " + kindCert)
+	if err := s.pointErr("backup " + kindCert); err != nil {
+		return err
+	}
 	if err := writeNewAt(dir, keyBackup, key); err != nil {
 		return err
 	}
@@ -477,9 +528,11 @@ func (s *sys) reload(ctx context.Context) error {
 // label of the replaced file, syncs, and renames it over the file in the directory the walk
 // opened; then it syncs the directory. Right before the rename it checks that the name still
 // refers to the file that was read and backed up and that the file still holds the same bytes
-// (errChangedByOthers), and, when deadline is not nil, that the helper's budget has not ended
+// (errChangedByOthers; also checks another file the same way), and, when deadline is not nil, that the helper's budget has not ended
 // (errDeadline). renamed reports whether the rename happened.
-func (s *sys) replaceFile(t *target, content []byte, mode uint32, meta fileMeta, staged string, deadline context.Context) (renamed bool, err error) {
+func (s *sys) replaceFile(t *target, content []byte, mode uint32, meta fileMeta, staged string, deadline context.Context,
+	also func() bool,
+) (renamed bool, err error) {
 	dfd := t.rf.dirfd
 	_ = unix.Unlinkat(dfd, staged, 0) // left by a helper that died (S2)
 	fd, err := unix.Openat(dfd, staged, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
@@ -513,7 +566,7 @@ func (s *sys) replaceFile(t *target, content []byte, mode uint32, meta fileMeta,
 			return false, err
 		}
 	}
-	if !t.unchanged() {
+	if !t.unchanged() || (also != nil && !also()) {
 		return false, errChangedByOthers
 	}
 	if deadline != nil && deadline.Err() != nil {
@@ -554,29 +607,39 @@ func (s *sys) cleanStaged(j journal) {
 	}
 }
 
-// restoreOp puts the backups back for both files, tests and reloads. Both files are checked first:
-// each must still be the file the journal resolved and hold either the deployed content (it is
-// restored) or the backed-up content (it is left); anything else was changed by someone else and
-// nothing at all is restored (errChangedByOthers, recorded as restore_failed / file_changed), so a
-// restore never leaves a mixed pair behind and never clobbers a newer deployment. A restore of a
-// restore is a no-op. The certificate is restored first, then the key (the reverse of the writes).
-func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal) (journal, error) {
+// restoreOp puts the backups back for both files, tests and reloads. Each file is checked first:
+// it must still be the file the journal resolved and hold either the deployed content (it is
+// restored) or the backed-up content (it is left).
+//
+// A file holding anything else was changed by someone else. For nginx-restore (partial false)
+// nothing at all is restored then (errChangedByOthers, recorded as restore_failed / file_changed;
+// not rewritten when the journal already says so), so a restore never leaves a mixed pair and never
+// clobbers a newer deployment. Within the deployment's own transaction (partial true: under the
+// lock, nothing newer exists) the files this transaction wrote are put back and the changed one is
+// left; the outcome is restore_failed / file_changed with failed_step the step that started the
+// rollback, without nginx -t or reload (the pair is now the other party's).
+//
+// A failure of the restore itself sets failed_step to restore (the pair may be mixed; another
+// nginx-restore can finish it); cause_step keeps the step that started the rollback. The
+// certificate is restored first, then the key (the reverse of the writes).
+func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal, partial bool) (journal, error) {
 	j.Steps = trimSteps(j.Steps)
 	failRestore := func(err error) (journal, error) {
+		if !partial && errors.Is(err, errChangedByOthers) && j.Phase == helperproto.PhaseRestoreFailed &&
+			j.Error == helperproto.RestoreErrFileChanged {
+			return j, err // the same refusal again: nothing changed, nothing rewritten
+		}
 		j.Steps = append(j.Steps, stepFailed(helperproto.StepRestore, ""))
-		j.Phase = helperproto.PhaseRestoreFailed
+		j.Phase, j.FailedStep = helperproto.PhaseRestoreFailed, helperproto.StepRestore
 		if errors.Is(err, errChangedByOthers) {
 			j.Error = helperproto.RestoreErrFileChanged
-		}
-		if j.FailedStep == "" {
-			j.FailedStep = helperproto.StepRestore
 		}
 		_ = s.writeJournal(dir, j)
 		return j, err
 	}
 	type file struct {
 		t                *target
-		restore          bool
+		restore, foreign bool
 		backup, kind     string
 		oldSHA, path     string
 		meta             fileMeta
@@ -593,24 +656,17 @@ func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal) (journal, 
 			}
 		}
 	}()
+	foreign := false
 	for _, f := range files {
-		t, err := s.readTarget(f.path)
+		state, t, err := s.fileState(f.path, f.resolved, f.oldSHA, f.newSHA)
 		switch {
-		case errors.Is(err, unix.ENOENT):
-			return failRestore(errChangedByOthers)
+		case errors.Is(err, errChangedByOthers) && partial:
+			f.foreign, foreign = true, true
+			continue
 		case err != nil:
 			return failRestore(err)
 		}
-		f.t = t
-		switch sum := hexSHA(t.data); {
-		case t.rf.resolved != f.resolved:
-			return failRestore(errChangedByOthers) // a link now leads elsewhere
-		case sum == f.oldSHA:
-		case sum == f.newSHA:
-			f.restore = true
-		default:
-			return failRestore(errChangedByOthers)
-		}
+		f.t, f.restore = t, state == stateNew
 	}
 	j.Phase = helperproto.PhaseRestoring
 	_ = s.writeJournal(dir, j)
@@ -624,7 +680,7 @@ func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal) (journal, 
 			err = errBadJournal // the backup does not match its journal
 		}
 		if err == nil {
-			_, err = s.replaceFile(f.t, data, f.meta.Mode, f.meta, stagedName(j.Op, f.kind), nil)
+			_, err = s.replaceFile(f.t, data, f.meta.Mode, f.meta, stagedName(j.Op, f.kind), nil, nil)
 		}
 		clear(data)
 		if err != nil {
@@ -633,6 +689,11 @@ func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal) (journal, 
 	}
 	j.Steps = append(j.Steps, stepOK(helperproto.StepRestore))
 	s.point(helperproto.StepRestore)
+	if foreign {
+		j.Phase, j.Error = helperproto.PhaseRestoreFailed, helperproto.RestoreErrFileChanged
+		_ = s.writeJournal(dir, j)
+		return j, nil
+	}
 	if class, err := s.configTest(ctx); err != nil {
 		j.Steps = append(j.Steps, stepFailed(helperproto.StepRollbackConfigTest, class))
 		j.Phase, j.FailedStep, j.Error = helperproto.PhaseRestoreFailed, helperproto.StepRollbackConfigTest, class
@@ -649,9 +710,65 @@ func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal) (journal, 
 	}
 	j.Steps = append(j.Steps, stepOK(helperproto.StepRollbackReload))
 	s.point(helperproto.StepRollbackReload)
-	j.Phase = helperproto.PhaseRestored
+	j.Phase, j.FailedStep = helperproto.PhaseRestored, j.CauseStep
+	if j.CauseStep == "" {
+		j.Error = "" // a restore of a committed operation: no class of an earlier failure applies
+	}
 	_ = s.writeJournal(dir, j)
 	return j, nil
+}
+
+const (
+	stateOld = iota
+	stateNew
+)
+
+// fileState reads one file of an operation's pair: stateOld or stateNew, or errChangedByOthers when
+// it is missing, resolves elsewhere now, or holds anything else. The caller closes the target.
+func (s *sys) fileState(path, resolved, oldSHA, newSHA string) (int, *target, error) {
+	t, err := s.readTarget(path)
+	switch {
+	case errors.Is(err, unix.ENOENT):
+		return 0, nil, errChangedByOthers
+	case err != nil:
+		return 0, nil, err
+	}
+	switch sum := hexSHA(t.data); {
+	case t.rf.resolved != resolved:
+	case sum == oldSHA:
+		return stateOld, t, nil
+	case sum == newSHA:
+		return stateNew, t, nil
+	}
+	t.close()
+	return 0, nil, errChangedByOthers
+}
+
+// needsRecovery reports whether an operation's backups may still be needed: a file of its pair
+// holds the deployed content (and it differs from the old), or a file cannot be read to tell. A
+// superseded operation is never restored, so it needs nothing.
+func (s *sys) needsRecovery(j journal) bool {
+	if sup, err := s.superseded(j); err == nil && sup {
+		return false
+	}
+	for _, f := range [][3]string{{j.CertPath, j.CertResolved, j.OldCertSHA}, {j.KeyPath, j.KeyResolved, j.OldKeySHA}} {
+		newSHA := j.NewCertSHA
+		if f[0] == j.KeyPath {
+			newSHA = j.NewKeySHA
+		}
+		state, t, err := s.fileState(f[0], f[1], f[2], newSHA)
+		if t != nil {
+			t.close()
+		}
+		switch {
+		case errors.Is(err, errChangedByOthers):
+		case err != nil:
+			return true
+		case state == stateNew && newSHA != f[2]:
+			return true
+		}
+	}
+	return false
 }
 
 // readBackup reads a backup of the operation directory (regular, at most MaxCertFileSize) into one
@@ -677,7 +794,7 @@ func readBackup(dir *os.File, name string) ([]byte, error) {
 }
 
 func deployAnswer(j journal) helperproto.NginxDeployResponse {
-	return helperproto.NginxDeployResponse{OK: true, Phase: j.Phase, FailedStep: j.FailedStep, Error: j.Error,
+	return helperproto.NginxDeployResponse{OK: true, Phase: j.Phase, FailedStep: j.FailedStep, CauseStep: j.CauseStep, Error: j.Error,
 		Steps: append([]helperproto.NginxStep{}, j.Steps...), BackupDir: helperproto.BackupRoot + "/" + j.Op}
 }
 
@@ -720,16 +837,25 @@ func cmdNginxRestore(ctx context.Context, s *sys, args []string) (out any, err e
 	switch j.Phase {
 	case helperproto.PhasePrepared, helperproto.PhaseUnchanged, helperproto.PhaseRestored:
 		s.cleanStaged(j)
-		return helperproto.NginxRestoreResponse{OK: true, Phase: j.Phase, Steps: []helperproto.NginxStep{}}, nil
+		return helperproto.NginxRestoreResponse{OK: true, Phase: j.Phase, FailedStep: j.FailedStep, CauseStep: j.CauseStep,
+			Error: j.Error, Steps: []helperproto.NginxStep{}}, nil
+	}
+	// Important 3: only the pair's latest operation is rolled back (never a walk back to an older
+	// key through retained operations).
+	switch sup, err := s.superseded(j); {
+	case err != nil:
+		return nil, failed(helperproto.CodeIOError, "the record of the latest deployment cannot be read")
+	case sup:
+		return nil, precondition(helperproto.CodeSuperseded, "a later deployment replaced these files; this one is not rolled back")
 	}
 	j.Steps = trimSteps(j.Steps) // as restoreOp does: the steps it adds follow
 	before := len(j.Steps)
-	j, err = s.restoreOp(context.WithoutCancel(ctx), dir, j)
+	j, err = s.restoreOp(context.WithoutCancel(ctx), dir, j, false)
 	if errors.Is(err, errChangedByOthers) {
 		return nil, precondition(helperproto.CodeHashMismatch, "a file was changed after the deployment; it is left as it is")
 	}
-	return helperproto.NginxRestoreResponse{OK: true, Phase: j.Phase, Error: j.Error,
-		Steps: append([]helperproto.NginxStep{}, j.Steps[before:]...)}, nil
+	return helperproto.NginxRestoreResponse{OK: true, Phase: j.Phase, FailedStep: j.FailedStep, CauseStep: j.CauseStep, Error: j.Error,
+		Steps: append([]helperproto.NginxStep{}, j.Steps[min(before, len(j.Steps)):]...)}, nil
 }
 
 // cmdNginxStatus reports an operation's journal (nginx-status --op <id>): phase "none" when there
@@ -761,6 +887,7 @@ func cmdNginxStatus(_ context.Context, s *sys, args []string) (any, error) {
 		return resp, nil
 	}
 	resp.Phase, resp.NewCertSHA256 = j.Phase, j.NewCertSHA
+	resp.FailedStep, resp.CauseStep, resp.Error = j.FailedStep, j.CauseStep, j.Error
 	if t, err := s.readTarget(j.CertPath); err == nil {
 		resp.CurrentCertSHA256 = hexSHA(t.data)
 		t.close()

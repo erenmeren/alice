@@ -208,7 +208,7 @@ func TestProtocol4WireNames(t *testing.T) {
 	b, err := json.Marshal(NginxDeployResponse{OK: true, Phase: PhaseCommitted, Steps: []NginxStep{{Name: StepBackup, Status: "ok"}},
 		BackupDir: BackupRoot + "/x"})
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"ok":true,"phase":"committed","failed_step":"","error":"","steps":[{"name":"backup","status":"ok","error":""}],
+	assert.JSONEq(t, `{"ok":true,"phase":"committed","failed_step":"","cause_step":"","error":"","steps":[{"name":"backup","status":"ok","error":""}],
 		"backup_dir":"/var/lib/alice-helper/backups/x"}`, string(b))
 	b, err = json.Marshal(AuthKeysListResponse{OK: true, Users: []UserFiles{}, Warnings: []string{}, Accounts: []string{"a"}, AccountsComplete: true})
 	require.NoError(t, err)
@@ -221,6 +221,14 @@ func TestProtocol4WireNames(t *testing.T) {
 		"unreadable", "bad_name", "special_filesystem"}, []string{FileMissing, FileNotRootControlled, FileNotRegular,
 		FileHardLinked, FileTooLarge, FileNotACertificate, FileUnreadable, FileBadName, FileSpecialFS})
 	assert.Equal(t, "key_group_open", WarnKeyGroupOpen)
+	assert.Equal(t, "SUPERSEDED", CodeSuperseded)
+	b, err = json.Marshal(NginxStatusResponse{OK: true, Phase: PhaseRestoreFailed, FailedStep: StepRestore, CauseStep: StepConfigTest})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"ok":true,"phase":"restore_failed","active":false,"failed_step":"restore","cause_step":"config_test","error":"",
+		"new_cert_sha256":"","current_cert_sha256":"","backup_dir":""}`, string(b))
+	b, err = json.Marshal(NginxRestoreResponse{OK: true, Phase: PhaseRestored, Steps: []NginxStep{}})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"ok":true,"phase":"restored","failed_step":"","cause_step":"","error":"","steps":[]}`, string(b))
 }
 
 func TestNginxConfigErrorWireNames(t *testing.T) {

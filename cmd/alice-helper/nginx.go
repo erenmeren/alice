@@ -238,6 +238,12 @@ func (s *sys) authenticate(secs []nginxconf.Section, confPath string) ([]string,
 		if named++; named == 1 && filepath.Clean(sec.File) != confPath {
 			return nil, untrusted(helperproto.ConfigReasonWrongFirstFile, sec.File)
 		}
+		// Every file after the first is printed because an include of an earlier file matched it.
+		// A section no include reaches is a forged marker: refused before its name is looked up,
+		// so nothing about that path (does it exist, what does it hold) shows in the answer.
+		if named > 1 && !sec.Included {
+			return nil, masked(untrusted(helperproto.ConfigReasonChanged, ""))
+		}
 		st, reason := s.sameContent(sec.File, sec.Body)
 		if reason != "" {
 			return nil, masked(untrusted(reason, sec.File))
@@ -587,13 +593,13 @@ func (s *sys) describeKey(p string, names, groups map[int]string) (fi helperprot
 	case st.Size > helperproto.MaxCertFileSize:
 		fi.Problem = helperproto.FileTooLarge
 	}
-	return fi, fi.Problem == "" && keyOpen(st, s.rootUID)
+	return fi, fi.Problem == "" && keyOpen(st, s.rootUID, s.rootGID)
 }
 
 // keyOpen reports a key file owned by a user other than root, or readable by a group other than
 // root's or by others (S10: a deployment keeps owner, group and a 0640 mode).
-func keyOpen(st unix.Stat_t, rootUID int) bool {
-	return int(st.Uid) != rootUID || (st.Mode&0o040 != 0 && st.Gid != 0) || st.Mode&0o004 != 0
+func keyOpen(st unix.Stat_t, rootUID, rootGID int) bool {
+	return int(st.Uid) != rootUID || (st.Mode&0o040 != 0 && int(st.Gid) != rootGID) || st.Mode&0o004 != 0
 }
 
 func ownerName(names map[int]string, uid int) string {

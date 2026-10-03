@@ -74,6 +74,7 @@ type journal struct {
 	CertMeta     fileMeta                `json:"cert_meta"`
 	KeyMeta      fileMeta                `json:"key_meta"`
 	FailedStep   string                  `json:"failed_step"`
+	CauseStep    string                  `json:"cause_step"`
 	Error        string                  `json:"error"`
 	Steps        []helperproto.NginxStep `json:"steps"`
 }
@@ -147,7 +148,9 @@ func (s *sys) writeJournal(dir *os.File, j journal) error {
 	if err := writeNewAt(dir, journalTmp, raw); err != nil {
 		return err
 	}
-	s.point("journal " + j.Phase + " staged")
+	if err := s.pointErr("journal " + j.Phase + " staged"); err != nil {
+		return err
+	}
 	if err := unix.Renameat(dfd, journalTmp, dfd, journalName); err != nil {
 		return err
 	}
@@ -225,6 +228,90 @@ func (s *sys) point(name string) {
 		s.killed = true
 		panic(errKilled)
 	}
+}
+
+// pointErr is point for the places where a test injects a failure: an error other than errKilled
+// is returned to the caller as if the operation there had failed.
+func (s *sys) pointErr(name string) error {
+	if s.afterDeployStep == nil {
+		return nil
+	}
+	err := s.afterDeployStep(name)
+	if errors.Is(err, errKilled) {
+		s.killed = true
+		panic(errKilled)
+	}
+	return err
+}
+
+// pairsDirName holds one record per resolved (certificate, key) pair: the operation that last
+// started replacing its files. nginx-restore rolls back only that operation (no walking back
+// through retained operations to an older key). Records are tiny, one per pair ever deployed, and
+// never swept: a record must outlive every operation directory it makes unrestorable.
+const pairsDirName = "pairs"
+
+// pairName is a pair's record file name: the hex SHA-256 of its two resolved paths.
+func pairName(j journal) string { return hexSHA([]byte(j.CertResolved + "\x00" + j.KeyResolved)) }
+
+// pairRecord returns the operation recorded for j's pair ("" when there is none).
+func (s *sys) pairRecord(j journal) (string, error) {
+	dir, err := s.openStateDir(pairsDirName, false)
+	if errors.Is(err, unix.ENOENT) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = dir.Close() }()
+	data, err := readBackup(dir, pairName(j))
+	if errors.Is(err, unix.ENOENT) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	op := string(bytes.TrimSpace(data))
+	if !helperproto.ValidOpID(op) {
+		return "", errBadJournal
+	}
+	return op, nil
+}
+
+// setPairRecord records op for j's pair (op "" removes the record), atomically and durably: a
+// crash leaves the old record or the new one.
+func (s *sys) setPairRecord(j journal, op string) error {
+	dir, err := s.openStateDir(pairsDirName, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	dfd := int(dir.Fd()) //nolint:gosec // G115: a descriptor fits an int
+	name := pairName(j)
+	if op == "" {
+		if err := unix.Unlinkat(dfd, name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+			return err
+		}
+		return dir.Sync()
+	}
+	tmp := name + ".tmp"
+	_ = unix.Unlinkat(dfd, tmp, 0)
+	if err := writeNewAt(dir, tmp, []byte(op+"\n")); err != nil {
+		return err
+	}
+	if err := s.pointErr("pair record staged"); err != nil {
+		return err
+	}
+	if err := unix.Renameat(dfd, tmp, dfd, name); err != nil {
+		return err
+	}
+	s.point("pair record renamed")
+	return dir.Sync()
+}
+
+// superseded reports that a later operation started replacing j's pair.
+func (s *sys) superseded(j journal) (bool, error) {
+	op, err := s.pairRecord(j)
+	return op != "" && op != j.Op, err
 }
 
 // survive turns the test kill (errKilled) into an IO_ERROR answer; any other panic goes on.

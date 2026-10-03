@@ -125,6 +125,10 @@ const (
 	// CodeOutputTooLarge: nginx-dump's answer would exceed NginxDumpOutput (exit 4); the helper
 	// never sends a truncated answer.
 	CodeOutputTooLarge = "OUTPUT_TOO_LARGE"
+	// CodeSuperseded: nginx-restore (or a re-sent interrupted nginx-deploy) of an operation that a
+	// later operation for the same certificate and key files replaced (exit 3, nothing changed):
+	// only the latest operation of a pair can be rolled back.
+	CodeSuperseded = "SUPERSEDED"
 )
 
 // MaxAccountNames bounds AuthKeysListResponse.Accounts (R38 item 20).
@@ -433,20 +437,28 @@ func (NginxDeployInput) LogValue() slog.Value { return slog.StringValue("redacte
 
 // NginxDeployResponse answers "nginx-deploy".
 type NginxDeployResponse struct {
-	OK         bool        `json:"ok"`
-	Phase      string      `json:"phase"` // PhaseCommitted, PhaseUnchanged, PhaseRestored, PhaseRestoreFailed
-	FailedStep string      `json:"failed_step"`
-	Error      string      `json:"error"`
-	Steps      []NginxStep `json:"steps"`
-	BackupDir  string      `json:"backup_dir"`
+	OK    bool   `json:"ok"`
+	Phase string `json:"phase"` // PhaseCommitted, PhaseUnchanged, PhaseRestored, PhaseRestoreFailed
+	// FailedStep is the step that decided the outcome: for PhaseRestored the step that failed and
+	// started the rollback; for PhaseRestoreFailed the step that failed last (StepRestore,
+	// StepRollbackConfigTest, StepRollbackReload), or the starting step when the rollback left a
+	// file someone else changed (Error RestoreErrFileChanged).
+	FailedStep string `json:"failed_step"`
+	// CauseStep is the step whose failure started the rollback ("" when there was none).
+	CauseStep string      `json:"cause_step"`
+	Error     string      `json:"error"`
+	Steps     []NginxStep `json:"steps"`
+	BackupDir string      `json:"backup_dir"`
 }
 
 // NginxRestoreResponse answers "nginx-restore".
 type NginxRestoreResponse struct {
-	OK    bool        `json:"ok"`
-	Phase string      `json:"phase"` // PhaseRestored, PhaseRestoreFailed, or PhasePrepared/PhaseUnchanged (nothing to restore)
-	Error string      `json:"error"`
-	Steps []NginxStep `json:"steps"`
+	OK         bool        `json:"ok"`
+	Phase      string      `json:"phase"` // PhaseRestored, PhaseRestoreFailed, or PhasePrepared/PhaseUnchanged (nothing to restore)
+	FailedStep string      `json:"failed_step"`
+	CauseStep  string      `json:"cause_step"`
+	Error      string      `json:"error"`
+	Steps      []NginxStep `json:"steps"`
 }
 
 // NginxStatusResponse answers "nginx-status".
@@ -454,6 +466,9 @@ type NginxStatusResponse struct {
 	OK                bool   `json:"ok"`
 	Phase             string `json:"phase"`
 	Active            bool   `json:"active"` // a helper process holds the Nginx lock now
+	FailedStep        string `json:"failed_step"`
+	CauseStep         string `json:"cause_step"`
+	Error             string `json:"error"`
 	NewCertSHA256     string `json:"new_cert_sha256"`
 	CurrentCertSHA256 string `json:"current_cert_sha256"`
 	BackupDir         string `json:"backup_dir"`

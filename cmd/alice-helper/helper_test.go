@@ -107,6 +107,7 @@ broken line
 	f.s = &sys{
 		root:     root,
 		rootUID:  os.Getuid(),
+		rootGID:  os.Getgid(),
 		euid:     func() int { return 0 },
 		sudoUser: func() string { return "alice-svc" },
 		now:      func() time.Time { return testNow },

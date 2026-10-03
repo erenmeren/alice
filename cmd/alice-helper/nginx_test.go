@@ -540,7 +540,7 @@ func TestNginxDumpWarnsAboutOpenKeyFiles(t *testing.T) {
 	w.f.write("/etc/group", fmt.Sprintf("root:x:0:\nssl-cert:x:%d:\n", gid), 0o644)
 	_, m = w.f.run("nginx-dump")
 	assert.Equal(t, "ssl-cert", fileOf(t, m, "key", "/etc/nginx/ssl/www.key")["group"])
-	if gid != 0 {
+	if gid != w.f.s.rootGID {
 		require.NoError(t, os.Chmod(w.f.host("/etc/nginx/ssl/www.key"), 0o640))
 		_, m = w.f.run("nginx-dump")
 		assert.Contains(t, m["warnings"], helperproto.WarnKeyGroupOpen, "group-readable by a group other than root")
@@ -549,10 +549,11 @@ func TestNginxDumpWarnsAboutOpenKeyFiles(t *testing.T) {
 	_, m = w.f.run("nginx-dump")
 	assert.Contains(t, m["warnings"], helperproto.WarnKeyGroupOpen, "readable by others")
 
-	assert.False(t, keyOpen(unix.Stat_t{Uid: 0, Gid: 0, Mode: 0o100640}, 0), "root's group")
-	assert.True(t, keyOpen(unix.Stat_t{Uid: 1000, Gid: 0, Mode: 0o100600}, 0), "another owner")
-	assert.True(t, keyOpen(unix.Stat_t{Uid: 0, Gid: 33, Mode: 0o100440}, 0))
-	assert.False(t, keyOpen(unix.Stat_t{Uid: 0, Gid: 33, Mode: 0o100600}, 0))
+	assert.False(t, keyOpen(unix.Stat_t{Uid: 0, Gid: 0, Mode: 0o100640}, 0, 0), "root's group")
+	assert.True(t, keyOpen(unix.Stat_t{Uid: 1000, Gid: 0, Mode: 0o100600}, 0, 0), "another owner")
+	assert.True(t, keyOpen(unix.Stat_t{Uid: 0, Gid: 33, Mode: 0o100440}, 0, 0))
+	assert.False(t, keyOpen(unix.Stat_t{Uid: 0, Gid: 33, Mode: 0o100600}, 0, 0))
+	assert.False(t, keyOpen(unix.Stat_t{Uid: 7, Gid: 33, Mode: 0o100640}, 7, 33), "the indirection, as for the owner")
 }
 
 // magicAt makes the file system of the guest directory (and everything opened in it) report magic.

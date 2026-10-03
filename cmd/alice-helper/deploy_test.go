@@ -820,7 +820,7 @@ func TestAttackRestoreOverANewerDeployment(t *testing.T) {
 	require.Equal(t, 0, code, "%v", m)
 	code, r := w.f.run("nginx-restore", "--op", opA)
 	assert.Equal(t, helperproto.ExitPrecondition, code)
-	assert.Equal(t, helperproto.CodeHashMismatch, r["code"])
+	assert.Equal(t, helperproto.CodeSuperseded, r["code"], "fix round 1: refused before the files are even compared")
 	assert.Equal(t, string(third.FullchainPEM), w.f.read("/etc/nginx/ssl/www.crt"))
 	assert.Equal(t, string(w.newLeaf.KeyPEM), w.f.read("/etc/nginx/ssl/www.key"), "the shared key stays")
 }
@@ -839,7 +839,7 @@ func TestDeployCompareAndSwapBeforeEachRename(t *testing.T) {
 	assert.Equal(t, string(w.leaf.FullchainPEM), w.f.read("/etc/nginx/ssl/www.crt"))
 	w.assertNoLeftovers(t)
 	_, st := w.f.run("nginx-status", "--op", opA)
-	assert.Equal(t, helperproto.PhasePrepared, st["phase"], "nothing was replaced")
+	assert.Equal(t, helperproto.PhaseNone, st["phase"], "nothing was replaced: a refusal leaves no operation behind")
 	assert.Equal(t, 0, w.reloads)
 
 	// After the key's rename the certificate changes: the deployment fails; nothing of someone else's
@@ -965,7 +965,7 @@ func TestStatusReportsTheJournal(t *testing.T) {
 	code, st := w.f.run("nginx-status", "--op", opA)
 	require.Equal(t, 0, code)
 	assert.Equal(t, map[string]any{"ok": true, "phase": helperproto.PhaseNone, "active": false, "new_cert_sha256": "",
-		"current_cert_sha256": "", "backup_dir": helperproto.BackupRoot + "/" + opA}, st)
+		"current_cert_sha256": "", "backup_dir": helperproto.BackupRoot + "/" + opA, "failed_step": "", "cause_step": "", "error": ""}, st)
 	code, _ = w.deploy(opA, w.newInput(), w.oldSHA())
 	require.Equal(t, 0, code)
 	_, st = w.f.run("nginx-status", "--op", opA)
