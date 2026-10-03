@@ -108,8 +108,10 @@ with the helper copied to `/opt/alice-bundle/alice-helper` (built like `make hel
 e2e image embeds). The Playwright tests prepare it with
 `docker compose -p alice-e2e … exec -T sshtarget /usr/local/sbin/alice-e2e-prepare` (the setup script on stdin) and
 change its host key with `/usr/local/sbin/alice-e2e-rotate-hostkey`; their helper `targetExec` refuses the project
-`alice`, and no test touches any other container. Both stacks publish `ALICE_PORT`, so stop one before starting
-the other. `make up` rebuilds the Go layer on every run because the build time is passed to the image (it is the
+`alice`, and no test touches any other container. The e2e stack publishes its own host port, `ALICE_E2E_PORT`
+(default 9443; open https://localhost:9443), never `ALICE_PORT`, so it runs beside the `make up` stack; the
+Playwright tests use the same port (`ALICE_BASE_URL` overrides the whole address). `make ci` runs `make e2e-down`
+at the end, also when an e2e stage fails. `make up` rebuilds the Go layer on every run because the build time is passed to the image (it is the
 floor of the license clock, L-53).
 
 The release key gate `make release-keycheck` fails until the vendor's public key is committed to
@@ -140,6 +142,7 @@ The compose stack reads `deploy/.env`:
 | `ALICE_DB_PASSWORD` | generated | Password of the owner role `alice` (migrations) |
 | `ALICE_APP_DB_PASSWORD` | generated | Password of the application role `alice_app`, created by `deploy/postgres/initdb` on a new volume |
 | `ALICE_PORT` | `443` | Host port published for the HTTPS listener (container port 8443) |
+| `ALICE_E2E_PORT` | `9443` | Host port of the e2e stack (`make e2e-up`, project `alice-e2e`); must differ from `ALICE_PORT` |
 | `ALICE_TLS_HOSTS` | empty | Passed through to Alice |
 
 ## Notes

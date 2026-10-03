@@ -30,6 +30,20 @@ check "alice state directory is owned by 10001 with mode 0700" \
   "$(docker cp "$alice:/opt/alice/state" - | tar -tvf - | awk 'NR==1 {print $1, $2}')" "drwx------ 10001/10001"
 check "alice state volume holds the time record" \
   "$(docker cp "$alice:/opt/alice/state" - | tar -tf - | grep -c '^state/hwm.dat$')" "1"
+# The published host port: ALICE_PORT (default 443) for the make up stack, ALICE_E2E_PORT (default 9443)
+# for the e2e stack. Like compose, the shell's value wins over deploy/.env.
+env_value() {
+  local v="${!1:-}"
+  [[ -n "$v" ]] || v="$(sed -n "s/^$1=//p" .env | tail -n 1)"
+  echo "${v:-$2}"
+}
+if [[ " ${ALICE_COMPOSE_FILES:-} " == *" docker-compose.e2e.yml "* ]]; then
+  want_port="$(env_value ALICE_E2E_PORT 9443)"
+else
+  want_port="$(env_value ALICE_PORT 443)"
+fi
+check "alice publishes only host port $want_port" \
+  "$(docker port "$alice" | sed 's/.*://' | sort -u | tr '\n' ' ')" "$want_port "
 check "postgres publishes no ports" "$(docker port "$pg" | wc -l | tr -d ' ')" "0"
 check "backend network is internal" "$(docker network inspect -f '{{.Internal}}' "${project}_backend")" "true"
 # The e2e overlay adds the SSH test target: it must publish nothing and sit only on the internal network.

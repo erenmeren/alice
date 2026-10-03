@@ -1,8 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
-// The host port is ALICE_PORT (deploy/.env); ALICE_BASE_URL overrides everything.
-const port = process.env.ALICE_PORT ?? '443';
-const baseURL = process.env.ALICE_BASE_URL ?? (port === '443' ? 'https://localhost' : `https://localhost:${port}`);
+// The e2e stack (project alice-e2e) publishes ALICE_E2E_PORT (default 9443, deploy/docker-compose.e2e.yml),
+// never ALICE_PORT, so it runs beside the make up stack. ALICE_BASE_URL overrides everything.
+const port = process.env.ALICE_E2E_PORT || '9443';
+const baseURL = process.env.ALICE_BASE_URL ?? `https://localhost:${port}`;
 
 export default defineConfig({
   testDir: './e2e',

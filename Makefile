@@ -185,8 +185,13 @@ fs-scan: ## Scan the source tree for HIGH/CRITICAL vulnerabilities and secrets (
 image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
 	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:$(TRIVY_VERSION) image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed alice:$(IMAGE_TAG)
 
+# The e2e stack is always removed at the end, also when a stage of it fails. It publishes
+# ALICE_E2E_PORT (default 9443), so it runs beside the make up stack, which ci never touches.
 .PHONY: ci
-ci: lint test coverage build release-symcheck i18n-check web-lint web-test vuln secrets-scan fs-scan e2e-up e2e-hardening-check e2e image-scan ## Run the full CI pipeline locally
+ci: ## Run the full CI pipeline locally
+	$(MAKE) lint test coverage build release-symcheck i18n-check web-lint web-test vuln secrets-scan fs-scan
+	@status=0; $(MAKE) e2e-up e2e-hardening-check e2e || status=$$?; $(MAKE) e2e-down; exit $$status
+	$(MAKE) image-scan
 
 .PHONY: fuzz-license
 fuzz-license: ## Fuzz the license parser for 60 s (spec §25.6)

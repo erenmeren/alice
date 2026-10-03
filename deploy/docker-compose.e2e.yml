@@ -5,6 +5,10 @@
 services:
   alice:
     image: alice:e2e
+    # Its own host port (ALICE_E2E_PORT, default 9443), never ALICE_PORT: the e2e stack runs beside the
+    # make up stack. !override replaces the base file's port list instead of adding to it.
+    ports: !override
+      - "${ALICE_E2E_PORT:-9443}:8443"
     build:
       args:
         GO_TAGS: e2e testlicense
