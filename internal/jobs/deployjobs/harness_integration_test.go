@@ -381,14 +381,30 @@ func (e *env) assertPair(s *server, certPath, keyPath, sni string, want pki.Leaf
 
 // killer simulates a process kill at injected points: the goroutine running the handler ends at
 // once (runtime.Goexit: nothing after the point runs, no outcome is returned to the runner, the
-// job stays running with its lease). Points: "before:<Method>" and "after:<Method>" of the
+// job stays running with its lease). Goexit runs the handler's deferred calls, which is the one
+// difference from a real kill: those defers only zero the key and close the provider session; none
+// writes a record or sends a command, so what the database and the server hold afterwards is what
+// a SIGKILL at that point leaves. A stalling killer instead blocks the run at the point until the
+// test releases it (a process paused past its lease). Points: "before:<Method>" and "after:<Method>" of the
 // inventory, "step:<name>:<status>" when a step was recorded, "session:after:<Method>" when a
 // provider call returned.
 type killer struct {
 	points map[string]bool
-	fired  atomic.Value // the point that fired
-	panics bool         // panic instead of ending the goroutine (the runner recovers a panic)
+	fired  atomic.Value  // the point that fired
+	panics bool          // panic instead of ending the goroutine (the runner recovers a panic)
+	stall  chan struct{} // non-nil: block at the point until closed (reached is closed on arrival)
+	reach  chan struct{}
+	on     map[string]func() // called at a point (any point name), before the kill check
 }
+
+// newStaller returns a killer that pauses the run at point until resume is called.
+func newStaller(point string) *killer {
+	k := newKiller(point)
+	k.stall, k.reach = make(chan struct{}), make(chan struct{})
+	return k
+}
+
+func (k *killer) resume() { close(k.stall) }
 
 func newKiller(points ...string) *killer {
 	k := &killer{points: map[string]bool{}}
@@ -399,8 +415,16 @@ func newKiller(points ...string) *killer {
 }
 
 func (k *killer) at(point string) {
+	if fn := k.on[point]; fn != nil {
+		fn()
+	}
 	if k.points[point] && k.fired.Load() == nil {
 		k.fired.Store(point)
+		if k.stall != nil {
+			close(k.reach)
+			<-k.stall
+			return
+		}
 		if k.panics {
 			panic("killed at " + point)
 		}
@@ -437,6 +461,7 @@ func (i killInv) FinishDeployment(ctx context.Context, id uuid.UUID, f inventory
 }
 
 func (i killInv) RecordDeploymentStep(ctx context.Context, id uuid.UUID, name string, status providers.StepStatus, params map[string]string) error {
+	i.k.at("before-step:" + name + ":" + string(status))
 	err := i.Service.RecordDeploymentStep(ctx, id, name, status, params)
 	i.k.at("step:" + name + ":" + string(status))
 	return err
@@ -465,6 +490,16 @@ func (s killSession) RollbackDeployment(ctx context.Context, req providers.Rollb
 // once the job's goroutine ended (killed or not).
 func (e *env) runDying(k *killer) {
 	e.t.Helper()
+	select {
+	case <-e.startDying(k):
+	case <-time.After(time.Minute):
+		e.t.Fatal("the dying process did not end")
+	}
+}
+
+// startDying starts one job in a separate process (see runDying) and returns when it ends.
+func (e *env) startDying(k *killer) <-chan struct{} {
+	e.t.Helper()
 	r := jobs.NewRunner(jobs.RunnerConfig{Pool: e.db.App, Queue: e.queue, Gate: e.gate, Audit: e.audit, Clock: e.clock,
 		Log: e.log(), Workers: 1, WorkerID: "dying", Heartbeat: 24 * time.Hour, Jitter: func() float64 { return 0 },
 		Notifier: notify.AdminNotifier{Clock: e.clock}})
@@ -480,11 +515,7 @@ func (e *env) runDying(k *killer) {
 		defer close(done)
 		_, _ = r.RunOnce(e.ctx)
 	}()
-	select {
-	case <-done:
-	case <-time.After(time.Minute):
-		e.t.Fatal("the dying process did not end")
-	}
+	return done
 }
 
 // restart is Alice starting again after a kill: the lease of the killed job expires, the

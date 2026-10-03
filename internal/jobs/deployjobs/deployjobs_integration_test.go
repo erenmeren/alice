@@ -309,3 +309,28 @@ func TestRecoveryRollsBackAnUnservedCommit(t *testing.T) {
 	e.assertPair(s, wwwCert, wwwKey, wwwName, e.old)
 	assert.Equal(t, 1, e.audits("deployment.rolled_back"))
 }
+
+// F-17: an incomplete chain is refused unless an Administrator confirms it (RequestDeployment,
+// audited); a confirmed one is deployed as it is and verified with the chain length recorded.
+func TestF17IncompleteChainNeedsAnAdministrator(t *testing.T) {
+	e := newEnv(t)
+	s := e.addServer("web-01", wwwSite())
+	other := pki.NewCA("Other", pki.ECDSA256, e.clock.Now()).Issue(pki.Opts{CommonName: wwwName, SANs: []string{wwwName}}, e.clock.Now())
+	c, _, err := e.inv.UploadCertificate(e.ctx, e.admin, inventory.UploadInput{CertificatePEM: string(other.FullchainPEM),
+		PrivateKeyPEM: string(other.KeyPEM)})
+	require.NoError(t, err)
+	require.False(t, c.ChainComplete)
+	_, err = e.inv.RequestDeployment(e.ctx, e.admin, inventory.DeployRequestInput{CertificateID: c.ID, LocationIDs: []uuid.UUID{s.locs[wwwCert]}})
+	require.ErrorIs(t, err, inventory.ErrChainUnconfirmed)
+	assert.Equal(t, 1, e.audits("deployment.denied"))
+
+	got, err := e.inv.RequestDeployment(e.ctx, e.admin, inventory.DeployRequestInput{CertificateID: c.ID, LocationIDs: []uuid.UUID{s.locs[wwwCert]},
+		ConfirmIncompleteChain: true})
+	require.NoError(t, err)
+	e.drain()
+	d := e.deployment(got[0].ID)
+	assert.Equal(t, inventory.DeployStatusSucceeded, d.Status)
+	assert.True(t, d.ConfirmIncompleteChain)
+	assert.Equal(t, 2, d.NewChainLength, "the chain as uploaded is what was sent and verified")
+	assert.Equal(t, pki.Fingerprint(other.Cert), s.emu.Served(443, wwwName))
+}
