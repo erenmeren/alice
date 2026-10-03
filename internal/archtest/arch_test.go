@@ -30,9 +30,10 @@ var rules = map[string][]string{
 	"alice/internal/license/...":   {platform, "alice/internal/secrets/...", "alice/internal/audit/..."},
 	"alice/internal/notify/...":    {platform, "alice/internal/i18n/...", "alice/internal/secrets/..."},
 	"alice/internal/auth/...":      {platform, "alice/internal/rbac/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/notify/..."},
+	"alice/internal/certs/...":     {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers":     {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers/...": {platform, "alice/internal/providers", "alice/internal/providers/linuxssh/..."},
-	"alice/internal/inventory/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers"},
+	"alice/internal/inventory/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/..."},
 	"alice/internal/jobs/...":      {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/..."},
 	"alice/internal/setup/...":     {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/..."},
 	"alice/internal/api/...": {platform, "alice/internal/i18n/...", "alice/internal/version/...", "alice/internal/rbac/...",
@@ -47,6 +48,7 @@ const platform = "alice/internal/platform/..."
 // denied lists imports that are forbidden even though a broader allow entry
 // covers them. Providers are pure adapters and have no database access (§5.4 rule 2).
 var denied = map[string][]string{
+	"alice/internal/certs/...":     {"alice/internal/platform/db/..."},
 	"alice/internal/providers":     {"alice/internal/platform/db/..."},
 	"alice/internal/providers/...": {"alice/internal/platform/db/..."},
 }
@@ -166,6 +168,8 @@ func TestAllowed(t *testing.T) {
 		{"api to setup allowed", "alice/internal/api", "alice/internal/setup", true},
 		{"auth to setup denied", "alice/internal/auth", "alice/internal/setup", false},
 		{"testutil to migrations allowed", "alice/internal/testutil/pgtest", "alice/migrations", true},
+		{"certs to secrets allowed", "alice/internal/certs", "alice/internal/secrets", true},
+		{"certs to platform/db denied", "alice/internal/certs", "alice/internal/platform/db", false},
 		{"testutil to auth denied", "alice/internal/testutil/pgtest", "alice/internal/auth", false},
 	}
 	for _, tc := range tests {
