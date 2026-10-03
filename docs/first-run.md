@@ -43,15 +43,19 @@ This guide walks you through the Alice setup wizard. Allow 10 minutes.
    Expected: **Add a license**, with your Installation ID.
 8. Either upload the license file from your vendor (**Check the file**, then **Install license**), or choose
    **Start 30-day evaluation (up to 5 targets)**. The evaluation has been running since Alice was installed.
+   Expected: **Connect your servers**.
+9. **Connect your servers** shows Alice's public key and the commands that prepare a server
+   ([nginx-host-preparation.md](nginx-host-preparation.md)). Choose **Add a server now** to add one at once, or
+   **Continue** to do it later on the **Servers** page.
    Expected: **Alice is ready**.
-9. Choose **Go to the dashboard**. Here too, Alice may ask for a new 6-digit code if more than five minutes
-   passed.
-   Expected: the home page **Welcome, <your name>**, with a blue evaluation banner if you started the evaluation.
+10. Choose **Go to the dashboard**. Here too, Alice may ask for a new 6-digit code if more than five minutes
+    passed.
+    Expected: the home page **Welcome, <your name>**, with a blue evaluation banner if you started the evaluation.
 
 If you close the browser after step 6, sign in normally (password, then the code from your app). Alice shows a
 red banner **Finish setting up: choose a recovery passphrase.** until you complete step 7,
 **Finish setting up: add a license or start the evaluation.** until you complete step 8, and
-**Finish setting up: open the setup wizard to confirm the last step.** until you complete step 9. The banner
+**Finish setting up: open the setup wizard to confirm the last step.** until you complete step 10. The banner
 links back to the wizard.
 
 ## If something goes wrong

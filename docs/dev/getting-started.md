@@ -48,6 +48,11 @@ creates when its data volume is new. Run `make reset` once (this deletes the dev
 | `make setup-token` | Print a new one-time setup code for the wizard |
 | `make e2e-up` | Start the **e2e build** of the stack (adds test-only `/test/*` endpoints) |
 | `make e2e` | Browser tests against the e2e build (run `make e2e-up` first) |
+| `make e2e-down` | Stop the e2e stack and delete its volumes (never touches the `make up` stack) |
+| `make helper` | Build the static `alice-helper` for linux/amd64 and linux/arm64 into `bin/` with `bin/alice-helper.sha256` |
+| `make fuzz-ssh` | Fuzz the `authorized_keys` and `sshd -T` parsers for 60 s each |
+| `make test-ssh` | Run the real-OpenSSH suite on Ubuntu 22.04, Debian 12 and Rocky 9 (needs Docker; builds three images on first run). `ALICE_SSH_IMAGES=ubuntu22 make test-ssh` limits it to one distribution |
+| `make coverage` | Every Go test with the integration tag under coverage; enforces `coverage-floors.json` |
 | `make lint` / `make web-lint` | Linters |
 | `make i18n-check` | English and Turkish catalogs have the same keys and placeholders |
 | `make authz-doc` | Regenerate `docs/authz-matrix.md` from the route table |
@@ -93,9 +98,14 @@ Never run either for real data.
 The e2e stack is a separate compose project, `alice-e2e` (its own database, volumes and networks), because every
 Playwright run empties its database; it never touches the `make up` stack. It also starts the SSH test target
 `sshtarget` (internal network only, no published port). `make e2e-hardening-check` checks it, `make e2e-down`
-removes it with its volumes. Both stacks publish `ALICE_PORT`, so stop one before starting the other. `make up`
-rebuilds the Go layer on every run because the build time is passed to the image (it is the floor of the license
-clock, L-53).
+removes it with its volumes. `sshtarget` is an Ubuntu 22.04 SSH server that Alice reaches as `sshtarget`, port 22,
+with the helper copied to `/opt/alice-bundle/alice-helper` (built like `make helper`, so its checksum is the one the
+e2e image embeds). The Playwright tests prepare it with
+`docker compose -p alice-e2e … exec -T sshtarget /usr/local/sbin/alice-e2e-prepare` (the setup script on stdin) and
+change its host key with `/usr/local/sbin/alice-e2e-rotate-hostkey`; their helper `targetExec` refuses the project
+`alice`, and no test touches any other container. Both stacks publish `ALICE_PORT`, so stop one before starting
+the other. `make up` rebuilds the Go layer on every run because the build time is passed to the image (it is the
+floor of the license clock, L-53).
 
 The release key gate `make release-keycheck` fails until the vendor's public key is committed to
 `internal/license/keys/production.json` (see `docs/vendor/licensing-vendor.md`); it is not part of `make ci`.

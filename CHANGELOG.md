@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased — Phase 3: Servers and SSH key inventory
+
+### Added
+- **Servers**: add a Linux server over SSH, confirm its host-key fingerprint before Alice trusts it, test the
+  connection, scan it, remove it. Servers count toward the license; the limit and lock mode are enforced when a
+  server is added.
+- `alice-helper`, a small static program installed root-owned on each server (`make helper`), and a generated
+  setup script with two restricted sudoers profiles (`linux`, `nginx`) that checks the helper's SHA-256 checksum
+  before installing it. Alice runs nothing else as root.
+- Host-key pinning: a changed host key stops all work on that server, emails administrators once and needs an
+  administrator with a recent authenticator code and a reason to accept the new key.
+- **SSH keys**: inventory of every `authorized_keys` entry (users, files, options, comments) with filters and
+  findings (weak keys, root keys without `from=`, forced commands, duplicates, certificate authorities, hardware
+  security keys); servers that use `AuthorizedKeysCommand` are detected and not changed.
+- Removing a key from one place (administrators and operators); Alice's own key is always refused, and root's last
+  key needs an administrator's confirmation.
+- Alice's own Ed25519 SSH key, created at first start and stored encrypted in the database; shown with the setup
+  commands on **Servers** and in the wizard's new **Connect your servers** step.
+- A durable job queue in PostgreSQL with leases, retries, crash recovery and one job per server at a time; work
+  paused by an expired license waits for an administrator after renewal.
+- Daily audit chain verification and hourly clean-up of expired sessions and old jobs; emails to administrators for
+  a broken audit chain, a job that stopped after its last attempt and a job changed in the database.
+- Developer targets: `make helper`, `make fuzz-ssh`, `make test-ssh` (real OpenSSH on Ubuntu 22.04, Debian 12,
+  Rocky 9); the e2e stack runs as the separate compose project `alice-e2e` with an SSH test server.
+
+### Changed
+- Every state-changing API route belongs to exactly one license lock group; `GET /api/v1/license/status` answers
+  `ALC-SYS-0002` until the first license evaluation has finished.
+- A changed installation record is audited once per occurrence (`license.installation_tampered`), and restoring it
+  is audited too (`license.installation_restored`).
+- On a new installation the audit log now starts with `platform_key.created`.
+- Builds other than development builds (version `dev`) need the helper checksums: `make build` and the image build
+  embed them, and a build without them offers no setup commands.
+
+### Known issues
+- For up to 60 seconds after Alice's last work on a server, **Test connection** can reuse an open connection and
+  report success although the server's host key just changed (fix scheduled before this release).
+- Accounts that exist only in LDAP or SSSD are not inventoried.
+- The full list is in `docs/security/reviews/phase-3.md` ("Known limitations").
+
 ## Unreleased — Phase 2: Licensing
 
 ### Added

@@ -46,6 +46,10 @@
 
 ## Spec conflicts resolved by this plan (proposed R37, written in Task 23)
 
+The recorded text, corrected to the built code, is R37 in `docs/superpowers/specs/alice-v1/00-decisions.md`; where it
+differs from the table below (helper protocol 2, narrowed sudoers lines, root-owned `alice-svc` home, error code
+ranges, items 22–25), R37 wins.
+
 | # | Conflict | Resolution |
 |---|---|---|
 | 1 | Platform SSH private key: a host file `/opt/alice/keys/ssh_ed25519` (§18.3, §20.2) vs "stored the same way" as generated keys in the encrypted store (§13.5, decisions "Secrets protection") | Encrypted store: one `credentials` row (`purpose = 'platform_ssh'`, `kind = 'ssh_private_key'`), payload = the 32-byte Ed25519 seed, envelope AAD `credentials/<id>/ciphertext`; generated on the first start after migration (or after the e2e reset); no host file. Backups carry it inside the database dump (Phase 8). The public key and fingerprint are in `public_info` |
@@ -1469,9 +1473,10 @@ Error codes (Task 16 registers them; locale texts and troubleshooting sections i
 `target.created`, `target.updated`, `target.deleted`, `target.add.denied_license` (L-04; details `reason`:
 `target_limit`|`locked`, `used`, `max`), `target.status_changed` (system; `from_status`, `to_status`, `reason`),
 `target.discovered` (system; `key_count`, `new_count`, `missing_count`, `partial` — `keys` is refused by the audit denylist), `hostkey.pinned` (`fingerprint`, `algorithm`),
-`hostkey.changed` (system; `old_fingerprint`, `new_fingerprint`), `hostkey.repinned` (`old_fingerprint`,
-`new_fingerprint`, `reason`), `sshkey.remove_requested` (`fingerprint`, `os_user`, `file_path`, `job_id`),
-`sshkey.remove.denied` (result `denied`; `reason`: `own_key`|`last_root_key`|`keys_managed_elsewhere`),
+`hostkey.observed` (system; a further new key while the target is already blocked), `hostkey.changed` (system;
+`old_fingerprint`, `new_fingerprint`), `hostkey.repinned` (`old_fingerprint`, `new_fingerprint`, `reason`),
+`hostkey.change_dismissed` (`old_fingerprint`, `new_fingerprint`, `reason`; a re-pin of the pinned key itself), `sshkey.remove_requested` (`fingerprint`, `os_user`, `file_path`, `job_id`),
+`sshkey.remove.denied` (result `denied`; `reason`: `own_key`|`last_root_key`|`keys_managed_elsewhere`|`sshd_unreadable`),
 `sshkey.removed` (system "jobs"; `fingerprint`, `os_user`, `file_path`, `job_id`; the person is named by `sshkey.remove_requested`), `sshkey.remove_failed`
 (`reason`), `job.recovered` (`job_id`, `attempt`), `job.dead`, `job.tampered`, `job.blocked_license`,
 `job.confirmed`, `job.discarded`, `platform_key.created` (`fingerprint`). Every entry's object type is `target`,
@@ -1593,7 +1598,8 @@ The task sections are authoritative for these details; they extend the contract 
   `StepFailed`, `StepSkipped` (Task 4); `providers/fake`: `New(kind, caps...)`, `Configure(func(*Config))`, `Calls()`,
   `Count(method)` (Task 4).
 - `helperproto`: `WarnSSHDUnreadable`, `WarnDirectoryUsers`, `WarnUnsupportedPath`; `ValidOpID` checks the UUID form
-  by hand (the helper links only the standard library, `golang.org/x/crypto` and `golang.org/x/sys`); `sshdconf`:
+  by hand (the helper links only the standard library, `golang.org/x/crypto` and `golang.org/x/sys`; `cmd/alice-helper`
+  imports `golang.org/x/sys/unix` directly since Tasks 6–7, R37 item 3); `sshdconf`:
   `ErrInvalidPattern`, and `Parse` fills the OpenSSH defaults; `linuxssh`: `ErrInvalidKeyLine` (Task 5).
   `authkeys-list` takes no arguments (Task 6).
 - `linuxssh`: `ServiceUser` lives in `dial.go`; `HostKeyOf(ssh.PublicKey) providers.HostKey`; the `curve25519-sha256@libssh.org`
@@ -1610,8 +1616,8 @@ The task sections are authoritative for these details; they extend the contract 
   delete; jobs of a deleted target fail with `system.not_found` (Tasks 13–15).
 - API: `POST /targets` also sets `ETag`; the remove body is optional; `components.parameters.KeyID` (Task 16).
 - Wiring: `registerProviders(reg, pool)` fills the registry after `inventory.New` received it; `buildRunner`,
-  `buildScheduler`, `waitForJobs`; `stop_grace_period: 90s` for `alice`; `make down --remove-orphans`; `make test-ssh`
-  (Task 18).
+  `buildScheduler`, `waitForJobs`; `stop_grace_period: 90s` for `alice`; `make down --remove-orphans` (Task 18);
+  `make test-ssh` (Task 19).
 - Web: test ids `target-keys`, `repin-new-fingerprint`; `ui.fields.host|port|reason`; the wizard platform step stores
   nothing and shows again after a reload until setup is completed (Tasks 20–21). L-81's "Run now" is covered by Vitest
   and the Go integration test, not by Playwright (no deterministic way to queue a job before the lock in e2e).

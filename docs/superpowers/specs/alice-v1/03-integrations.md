@@ -190,6 +190,8 @@ install -m 0440 -o root -g root alice-sudoers /etc/sudoers.d/alice   # validated
 install -d -m 0700 -o root -g root /var/lib/alice-helper/backups
 ```
 
+(Phase 3, R37: Alice serves no helper binary over HTTP; the script installs the `alice-helper` copied next to it from `make helper` or the release bundle after checking its SHA-256 checksum, and also runs `usermod -p '*' alice-svc` so servers with `UsePAM no` accept the key. The home and `.ssh` of `alice-svc` belong to root (0755) and `authorized_keys` is written as root:root 0644 through `mktemp` and `mv`, with the options `no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-pty,no-user-rc`; `from=` is offered through the API only; the UI shows no helper checksum, the script checks it.)
+
 The authorized_keys line for Alice's key can carry `from="<alice-ip>",no-agent-forwarding,no-X11-forwarding,no-port-forwarding` (the wizard offers the `from=` option, off by default because of NAT/HA). No `command=` restriction (Alice needs SFTP-less exec channels only; it uses exec, never a shell).
 
 The helper is shipped inside the Alice release (`alice-helper`, a small static Go binary built from the same repository, ~1 MB, `GOOS=linux`, amd64 and arm64, checksum shown in the UI) and is **root-owned** on the target. It is installed and updated only by the admin running the setup snippet; Alice cannot update it (no write permission, no sudo for it). On every connect Alice runs `alice-helper version` (unprivileged, allowed) and shows "helper outdated" when the protocol version differs; operations requiring a newer protocol are refused, older-compatible ones still work.
@@ -228,6 +230,8 @@ Cmnd_Alias ALICE_NGINX_ONLY = \
 
 alice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_NGINX_ONLY
 ```
+
+(Phase 3, R37 item 3: the built `ALICE_COMMON` lines are `sshd-dump`, `hostkeys`, `cleanup --op *`, `authkeys-list` (no `*`: sudo needs at least one argument to match a trailing `*`), `authkeys-read /*` and `authkeys-write /* --expect-sha256 * --op *`; the `ALICE_NGINX_ONLY` lines are narrowed in Phase 4. `version` prints the protocol 2 of Phase 3; `hostkeys` computes fingerprints in Go, without `ssh-keygen`.)
 
 The `*` wildcard in sudoers matches any characters including spaces, so **sudoers is only a coarse gate; the helper is the enforcement point** and treats all arguments as hostile. No `NOEXEC`-breaking commands (no shell, `tee`, `cp`, `systemctl` directly) are ever in sudoers. The helper calls `nginx`, `systemctl`, `restorecon` by absolute path with `exec.Command` (no shell), a clean environment, and umask 077.
 
@@ -415,6 +419,8 @@ Common procedure (`keyop` job, locked per target as 12.5; in license lock, user-
 4. WRITE: `authkeys-write <path> --expect-sha256 H0 --op <id>` with the new content. Helper: re-read and compare hash under an `flock` on the file's directory lock file (`.alice.lock` not created; uses `flock(2)` on the open file descriptor); backup of the previous content to `/var/lib/alice-helper/backups/<op>/`; write temp file `<dir>/.authorized_keys.alice-<rand>` (O_EXCL, mode 0600 initially), `fchown` to the original owner/group, `fchmod` to the original mode (default 0600 if new), copy SELinux label (`restorecon -F` if available, otherwise copy `security.selinux` xattr from the original), fsync, rename, fsync directory. New file creation (user had none): create `.ssh` (0700, user-owned) if missing.
 5. VERIFY: `authkeys-read` again and compare sha256 with the expected new content. Then, where possible, **test login** (below). Failure -> restore from backup via `restore` semantic (`authkeys-write --expect-sha256 <new>` of old content), verify again.
 6. Update DB (`ssh_key_locations`), audit, notify (optional).
+
+(Phase 3, R37 item 22: the write lock is a root-private file `/var/lib/alice-helper/locks/<dev>-<ino>.lock`, not `flock` on the key directory; a new file in a root-owned key directory is created root:root 0644; a failed VERIFY is not restored automatically but stops the job for a person with the backup named, until Phase 4 adds the restore primitive.)
 
 Optimistic concurrency: if `authkeys-write` returns hash mismatch (someone edited the file meanwhile), Alice re-reads and retries the transformation up to 3 times, then fails with "The file changed while Alice was working. Please try again."
 

@@ -112,7 +112,48 @@ chain.
   the original values (see [operator-guide.md](operator-guide.md#checking-an-audit-export-outside-alice)).
 - After verification Alice shows the **Fingerprint of the latest entry**. Record it somewhere outside Alice (for
   example in a ticket) from time to time: a later fingerprint that does not continue from it shows that entries
-  were removed. Syslog forwarding and a daily automatic check arrive in a later release.
+  were removed. Syslog forwarding arrives in a later release.
+- Alice also checks the whole chain once a day on its own (recorded as `audit.verified` by `scheduler`). If the
+  check finds a problem, administrators with an email address get one email about it.
+
+## Servers
+
+**Servers** lists every server Alice manages with its status: **Connected**, **Waiting for fingerprint
+confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **Server identity changed** or
+**Disabled**. Everyone can see the list and each server's details; nobody ever sees a password or private key there.
+
+- **Add server** (administrators): see [nginx-host-preparation.md](nginx-host-preparation.md). Each server counts
+  toward the license; when the license is full, Alice says "Your license allows N targets." and adds nothing. A
+  server's address, SSH port and user cannot be changed later: remove the server and add it again.
+- **Test connection** and **Scan for SSH keys** (administrators and operators) run in the background; the page
+  updates when they finish. Alice also scans every connected server once a day on its own. A server that cannot be
+  reached or refused Alice's key is not tried again automatically: fix the cause, then choose **Test connection**.
+- **Server identity changed**: Alice stopped all work on the server because its host key is different from the
+  one you confirmed. Only an administrator can accept the new fingerprint, after checking it on the server, with a
+  reason and a recent authenticator code. Everything is recorded in the audit log, and administrators with an email
+  address get one email when it happens. The same email goes out once when a server refuses Alice's key.
+- **Remove server** (administrators) makes Alice forget the server and frees its license slot. Nothing is changed on
+  the server.
+- **Waiting for an administrator** lists work that was paused while the license had expired (for example a key
+  removal). After a new license is installed, an administrator chooses **Run now** or **Discard** for each item;
+  nothing starts on its own (R29).
+
+## SSH keys
+
+**SSH keys** lists every public key Alice found, once per key, with the number of servers and places where it is
+used. Filter by **Search** (fingerprint, comment or key type), **Server**, **User** or **Finding** (weak key, runs a
+fixed command, root key without a source address limit, listed more than once, certificate authority, hardware
+security key). **Show keys that are no longer found** also lists keys that disappeared since the last scan; Alice
+never deletes them from its records.
+
+Open a key to see **Where this key is used**: server, user, file, line, options, last seen and state.
+Administrators and operators can remove a key from one place with **Remove key** (on the server's page and on the
+key's page). Alice removes only that key's lines from that file. It refuses to remove its own key ("Alice needs this
+key to connect to this server and will not remove it."), refuses the last key of `root` in a file unless an
+administrator ticks "This is the last key of the root account. Remove it anyway.", and refuses changes on servers
+that get their keys from a program (`AuthorizedKeysCommand`) or whose SSH settings the last scan could not read.
+Every refusal that protects access is recorded in the audit log. Generating, deploying and rotating keys arrive in a
+later release.
 
 ## License
 
@@ -130,7 +171,7 @@ the server operator has set up email ([operator-guide.md](operator-guide.md#emai
 
 ## For auditors
 
-Auditors sign in like everyone else (password and authenticator app). They see **Home**, **Audit log**,
+Auditors sign in like everyone else (password and authenticator app). They see **Home**, **Servers**, **SSH keys**, **Audit log**,
 **License** (read only), **API tokens** and **My account**, and no button that changes anything except their own password, recovery codes,
 language and read-only API tokens. On **Audit log** they can filter, **Verify integrity** and export. A read-only
 API token lets a script fetch `GET /api/v1/audit` or `GET /api/v1/audit/export?format=json` for regular

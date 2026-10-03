@@ -24,6 +24,34 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   the configuration is wrong, or (development) a Phase 0 database volume lacks the new `alice_app` role: run
   `make reset`.
 
+## Servers and SSH keys
+
+- **"Connecting to the server…" ends with "Cannot be reached".** Check the address and port, that the server's SSH
+  service runs, and that a firewall lets the Alice server through (`ALC-SSH-0001`, `ALC-SSH-0003`). Then choose
+  **Test connection** on the server's page.
+- **"Sign-in refused" (`ALC-SSH-0002`).** The server does not accept Alice's key for the user you entered. Run the
+  setup commands again (they put the key in `/var/lib/alice-svc/.ssh/authorized_keys`), check that the user
+  name is `alice-svc`, then choose **Test connection**. Alice does not try a server with a refused key again on its
+  own, so the server never locks the account because of Alice.
+- **"The Alice account on this server is not allowed to run the helper" (`ALC-SSH-0004`) or "The alice-helper on
+  this server is outdated" (`ALC-SSH-0005`).** Copy the `alice-helper` file of this Alice version next to the
+  commands from **Servers → Prepare a server for Alice** and run them again as root; they install the helper and the
+  sudoers file.
+- **The setup commands stop with "./alice-helper is not the alice-helper of this Alice version".** The file's
+  checksum differs from the one built into Alice. Copy `alice-helper-linux-amd64` (x86_64) or
+  `alice-helper-linux-arm64` (aarch64) built by `make helper` from the same Alice version, renamed to
+  `alice-helper`.
+- **Server identity changed (`ALC-TGT-0004`).** See [nginx-host-preparation.md](nginx-host-preparation.md#when-the-server-is-rebuilt).
+  Never accept a new fingerprint you have not compared on the server itself.
+- **"This server gets its SSH keys from a program" (`ALC-SSH-0008`).** The server uses `AuthorizedKeysCommand`;
+  Alice lists keys but does not change them there.
+- **A key removal says "The file changed while Alice was working" (`ALC-SSH-0007`).** Someone or something edited
+  the file at the same moment; Alice changed nothing. Try again.
+- **A key removal says "Alice could not read the SSH server settings" (`ALC-KEY-0004`).** Run `sshd -T` as root on
+  the server, fix what it reports, choose **Scan for SSH keys**, then try again.
+- **"Alice needs this key to connect to this server and will not remove it." (`ALC-KEY-0001`).** This is Alice's
+  own key; it is protected on purpose.
+
 ## License messages
 
 - **"The server clock changed unexpectedly …"** The server's clock is behind the latest time Alice has seen. Alice

@@ -15,6 +15,7 @@ development machine use the `make` targets; on a server use
 | `alice license status` | Prints the Installation ID, the license state (`evaluation`, `evaluation_expired`, `active`, `grace`, `locked`) and the license in force or the end of the evaluation, and warns when the server clock is behind. Changes nothing. |
 | `alice license keys` | Lists the vendor license keys built into this binary with their status and SHA-256 fingerprints; compare them with the fingerprint your vendor publishes. A build without the vendor key says so and accepts no license (evaluation only). |
 | `alice migrate` | Applies database migrations and exits. `alice serve` also applies them at startup. |
+| `make helper` (development checkout) | Builds the static `alice-helper` for Linux amd64 and arm64 into `bin/` with `bin/alice-helper.sha256`. See [nginx-host-preparation.md](nginx-host-preparation.md). |
 
 `alice audit verify` does not need the master key, so it works even when Alice refuses to start because of a
 key problem.
@@ -50,6 +51,61 @@ keys directory (`/opt/alice/keys`). On the very first start Alice creates it (mo
 
 The server disk must use full-disk encryption: anyone who can read both the database and this file can decrypt the
 secrets. The `alice` container has core dumps disabled so a crash never writes key material to disk.
+
+## Alice's SSH key
+
+On its first start after the Phase 3 update Alice creates its own Ed25519 SSH key (comment `alice-platform`) and
+records `platform_key.created` in the audit log. The private key is stored only encrypted with the master key,
+inside the database (table `credentials`, row with `purpose = 'platform_ssh'`); there is no key file. Backups of the
+database therefore contain it, protected like every other secret. The public key and its fingerprint are shown on
+**Servers** and in the setup wizard.
+
+Alice protects this key on every server: it refuses to remove any key whose fingerprint is that of a stored
+platform key, in any file, and a database trigger refuses to delete or un-mark the inventory entry of Alice's own
+key. The application role cannot change or delete rows of `credentials`.
+
+Replacing the key is therefore a manual procedure: add the new public key to every server first, then contact the
+vendor; Alice never removes its own key from a server. During such a change do not run the server preparation
+commands again: they replace `/var/lib/alice-svc/.ssh/authorized_keys` with a single line holding the key Alice
+uses at that moment, which removes the other key.
+
+## Master-key rotation and the installation record
+
+Master-key rotation (§7.2 of the design, `alice keys rotate-master`) is not available yet. When it is added it must,
+in the same procedure, re-seal the installation record (`license.installation_seal`, HMAC under the HKDF label
+`alice/installation/v1`) and re-write both copies of the license time record (`settings.time.hwm` and
+`<ALICE_STATE_DIR>/hwm.dat`, labels `alice/hwm/v1` and `alice/hwm-enc/v1`) with the new key; otherwise the next
+start reports the installation as tampered and the evaluation as ended. It must also re-encrypt the platform SSH key
+and re-compute the job payload MACs (label `alice/job/v1`). Do not replace `master.key` by hand.
+
+## Background jobs
+
+Work on servers runs in a job queue stored in PostgreSQL: connection tests, scans and key removals. A running job
+holds a 45-second lease that it renews every 15 seconds. If Alice stops or crashes, a job whose lease has run out is
+put back in the queue (audited as `job.recovered`) when it has attempts left, and is otherwise stopped
+(`job.dead`). Two jobs for the same server never run at the same time. Failed attempts are retried after 30
+seconds, doubling up to 30 minutes (connection tests are not retried; scans get 5 attempts, other jobs 3). A failed
+sign-in is not retried: the server is marked "Sign-in refused" until someone tests it again.
+
+At most 10 SSH connections are in use at once (2 per server); an idle connection is kept for up to 60 seconds and
+reused. Each step has its own time limit: 10 seconds to connect, 15 seconds for the SSH handshake, 30 seconds per
+command (60 seconds for reading the SSH settings and listing the key files). Every job payload carries an HMAC; a job
+changed in the database is never run (`job.tampered`).
+
+While the license is locked, nothing new can be requested on servers (`ALC-LIC-0001`), scheduled scans are not
+queued, queued tests and scans are cancelled, and queued key removals are held as "Waiting for an administrator" on
+**Servers** until an administrator runs or discards them after the next license is installed.
+
+If two Alice processes run against the same database (for example during an update), only one of them schedules
+periodic work (a PostgreSQL advisory lock); both may run queued jobs, and each job still runs exactly once. On
+shutdown Alice stops taking new jobs and gives running jobs up to 60 seconds to finish (the Compose file allows 90
+seconds before it kills the container).
+
+Periodic work: license evaluation (hourly), email sending (every minute), audit chain verification (checked every
+hour, run once a day, recorded as `audit.verified` by `scheduler`), clean-up (hourly: expired sessions and setup
+sessions, finished jobs older than 90 days), and scheduling of the daily server scans (every minute). Administrators
+with an email address get an email when a job stops after its last attempt, when a job was changed in the
+database, and when the daily audit check finds a problem.
 
 ## Checking an audit export outside Alice
 
