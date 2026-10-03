@@ -262,7 +262,8 @@ func TestInterruptedOperationSupersededLater(t *testing.T) {
 }
 
 // Fix round 1, minor 1: cleanup and the sweep decide under the Nginx lock, even for a directory
-// without a journal (a deployment between creating its directory and its first journal).
+// without a journal (a deployment between creating its directory and its first journal). Round 2
+// (New-4): cleanup of an empty or authorized_keys directory does not need the lock.
 func TestCleanupAndSweepAlwaysTakeTheLock(t *testing.T) {
 	w := newDeployWorld(t)
 	old := lockWait
@@ -271,11 +272,14 @@ func TestCleanupAndSweepAlwaysTakeTheLock(t *testing.T) {
 	w.f.mkdir(helperproto.BackupRoot+"/"+opA, 0o700)
 	at := testNow.Add(-40 * 24 * time.Hour)
 	require.NoError(t, os.Chtimes(w.opPath(opA), at, at))
+	w.f.mkdir(helperproto.BackupRoot+"/"+opB, 0o700) // an Nginx operation before its first journal
+	w.f.write(helperproto.BackupRoot+"/"+opB+"/cert.bak", "c", 0o600)
 	lock, err := w.f.s.nginxLock(context.Background())
 	require.NoError(t, err)
-	code, m := w.f.run("cleanup", "--op", opA)
+	code, m := w.f.run("cleanup", "--op", opB)
 	assert.Equal(t, helperproto.ExitFailed, code)
 	assert.Equal(t, helperproto.CodeBusy, m["code"])
+	assert.DirExists(t, w.opPath(opB))
 	w.f.s.sweepBackups()
 	assert.DirExists(t, w.opPath(opA))
 	require.NoError(t, lock.Close())

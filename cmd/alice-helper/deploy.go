@@ -46,10 +46,11 @@ func stagedName(op, kind string) string { return ".alice-" + op + "-" + kind }
 // target is a certificate or key file found under the lock, with the descriptors it was resolved
 // and read through.
 type target struct {
-	rf   rootFile
-	f    *os.File
-	st   unix.Stat_t
-	data []byte
+	rf        rootFile
+	f         *os.File
+	st        unix.Stat_t
+	data      []byte
+	installed fileID // the inode replaceFile put in its place
 }
 
 func (t *target) close() {
@@ -58,7 +59,14 @@ func (t *target) close() {
 	t.rf.close()
 }
 
-// readTarget resolves and reads one existing file of the pair through the root-controlled walk:
+// readTarget resolves and reads one existing file of the pair through the root-controlled walk.
+// Key files are opened (read) only by nginx-deploy (the backup and the compare-and-swap),
+// nginx-restore (whether a file holds the deployed or the backed-up content) and an explicit
+// cleanup --op (whether the operation is still needed for recovery). nginx-dump, nginx-test,
+// nginx-status and the backup sweep that runs before every privileged subcommand never open a
+// key file (they use fstatat only).
+//
+// The walk:
 // every directory and link root's, a certificate or key file name, a regular file with one link on
 // a normal file system, at most MaxCertFileSize. It is read into one buffer of its size (a key is
 // never copied by a growing read), cleared by close.
@@ -201,7 +209,10 @@ func cmdNginxDeploy(ctx context.Context, s *sys, args []string) (out any, err er
 // deploy runs the transaction under the lock.
 func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 	newCertSHA, newKeySHA := hexSHA(d.cert), hexSHA(d.key)
-	var dir *os.File
+	var (
+		dir   *os.File
+		prior *journal // a prepared journal of an earlier run of this operation
+	)
 	defer func() {
 		if dir != nil {
 			_ = dir.Close()
@@ -235,6 +246,7 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 				j, _ = s.restoreOp(context.WithoutCancel(ctx), dir, j, false)
 				return deployAnswer(j), nil
 			case helperproto.PhasePrepared:
+				prior = &j
 			default:
 				return deployAnswer(j), nil
 			}
@@ -275,6 +287,7 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 		NewCertSHA: newCertSHA, NewKeySHA: newKeySHA,
 		CertMeta: fileMeta{Mode: cert.st.Mode & 0o777, UID: int(cert.st.Uid), GID: int(cert.st.Gid)},
 		KeyMeta:  fileMeta{Mode: key.st.Mode & 0o777, UID: int(key.st.Uid), GID: int(key.st.Gid)},
+		KeyIDs:   keyIDs{Old: idOf(key.st)},
 		Steps:    []helperproto.NginxStep{}}
 	if bytes.Equal(cert.data, d.cert) && bytes.Equal(key.data, d.key) {
 		// §12.9 "Same cert already deployed": no write, no reload.
@@ -314,6 +327,17 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 		return refuse(failed(helperproto.CodeIOError, "the time budget ended before anything was changed"))
 	}
 
+	// The pair record before this operation (New-3): a re-run after a crash between taking the
+	// record and the writing journal finds itself there and keeps the previous value it saved.
+	rec, err := s.pairRecord(j)
+	if err != nil {
+		return refuse(failed(helperproto.CodeIOError, "the record of the latest deployment cannot be read"))
+	}
+	j.PrevRecord = rec
+	if prior != nil && rec == d.op {
+		j.PrevRecord = prior.PrevRecord
+	}
+
 	// 1. The journal, then the backups (nothing is replaced yet: a failure is a refusal).
 	s.cleanStaged(j)
 	if err := s.writeJournal(dir, j); err != nil {
@@ -331,18 +355,17 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 	// 2. This operation becomes the pair's latest (Important 3): written before the journal says
 	// writing, so every operation that may replace files is the pair's record until a later one
 	// starts. A refusal before the first rename puts the previous record back.
-	prev, err := s.pairRecord(j)
-	if err != nil {
-		return refuse(failed(helperproto.CodeIOError, "the record of the latest deployment cannot be read"))
-	}
 	if err := s.setPairRecord(j, d.op); err != nil {
-		_ = s.setPairRecord(j, prev)
-		return refuse(failed(helperproto.CodeIOError, "the record of the latest deployment cannot be written"))
+		if s.setPairRecord(j, j.PrevRecord) == nil {
+			return refuse(failed(helperproto.CodeIOError, "the record of the latest deployment cannot be written"))
+		}
+		return nil, failed(helperproto.CodeIOError, "the record of the latest deployment cannot be written") // keep the prepared journal: the record may name it
 	}
 	// back undoes the record and the journal when nothing was replaced, and answers the refusal.
+	// When the record cannot be put back the operation stays, prepared, so the record names an
+	// operation that supersedes nothing (never a dropped one).
 	back := func(e error, steps ...helperproto.NginxStep) (any, error) {
-		_ = s.setPairRecord(j, prev)
-		if created {
+		if s.setPairRecord(j, j.PrevRecord) == nil && created {
 			s.dropOpDir(d.op)
 			return nil, e
 		}
@@ -374,6 +397,7 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 	if err != nil {
 		return deployAnswer(s.fail(tctx, dir, j, helperproto.StepWriteKey, "")), nil
 	}
+	j.KeyIDs.New = key.installed
 	j.Steps = append(j.Steps, stepOK(helperproto.StepWriteKey))
 	s.point(helperproto.StepWriteKey)
 	if _, err := s.replaceFile(cert, d.cert, certMode(j.CertMeta.Mode), j.CertMeta, stagedName(d.op, kindCert), nil, nil); err != nil {
@@ -560,6 +584,10 @@ func (s *sys) replaceFile(t *target, content []byte, mode uint32, meta fileMeta,
 	if err := f.Sync(); err != nil {
 		return false, err
 	}
+	var sst unix.Stat_t
+	if err := unix.Fstat(fd, &sst); err != nil {
+		return false, err
+	}
 	s.point("staged " + staged)
 	if s.beforeRename != nil {
 		if err := s.beforeRename(); err != nil {
@@ -576,6 +604,7 @@ func (s *sys) replaceFile(t *target, content []byte, mode uint32, meta fileMeta,
 		return false, err
 	}
 	renamed = true
+	t.installed = idOf(sst)
 	s.point("renamed " + staged)
 	return true, unix.Fsync(dfd)
 }
@@ -624,6 +653,7 @@ func (s *sys) cleanStaged(j journal) {
 // certificate is restored first, then the key (the reverse of the writes).
 func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal, partial bool) (journal, error) {
 	j.Steps = trimSteps(j.Steps)
+	partial = partial || j.Partial // the transaction's own finding holds for a later nginx-restore too
 	failRestore := func(err error) (journal, error) {
 		if !partial && errors.Is(err, errChangedByOthers) && j.Phase == helperproto.PhaseRestoreFailed &&
 			j.Error == helperproto.RestoreErrFileChanged {
@@ -668,6 +698,18 @@ func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal, partial bo
 		}
 		f.t, f.restore = t, state == stateNew
 	}
+	if foreign {
+		j.Partial = true
+		if !files[0].restore && !files[1].restore {
+			// Nothing of this operation is left on disk: the outcome is final.
+			if j.Phase == helperproto.PhaseRestoreFailed && j.Error == helperproto.RestoreErrFileChanged && j.FailedStep == j.CauseStep {
+				return j, errChangedByOthers // already recorded: nothing rewritten
+			}
+			j.Phase, j.Error, j.FailedStep = helperproto.PhaseRestoreFailed, helperproto.RestoreErrFileChanged, j.CauseStep
+			_ = s.writeJournal(dir, j)
+			return j, errChangedByOthers
+		}
+	}
 	j.Phase = helperproto.PhaseRestoring
 	_ = s.writeJournal(dir, j)
 	s.cleanStaged(j)
@@ -686,11 +728,14 @@ func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal, partial bo
 		if err != nil {
 			return failRestore(err)
 		}
+		if f.kind == kindKey {
+			j.KeyIDs.Restored = f.t.installed
+		}
 	}
 	j.Steps = append(j.Steps, stepOK(helperproto.StepRestore))
 	s.point(helperproto.StepRestore)
 	if foreign {
-		j.Phase, j.Error = helperproto.PhaseRestoreFailed, helperproto.RestoreErrFileChanged
+		j.Phase, j.Error, j.FailedStep = helperproto.PhaseRestoreFailed, helperproto.RestoreErrFileChanged, j.CauseStep
 		_ = s.writeJournal(dir, j)
 		return j, nil
 	}
@@ -744,31 +789,81 @@ func (s *sys) fileState(path, resolved, oldSHA, newSHA string) (int, *target, er
 	return 0, nil, errChangedByOthers
 }
 
-// needsRecovery reports whether an operation's backups may still be needed: a file of its pair
-// holds the deployed content (and it differs from the old), or a file cannot be read to tell. A
-// superseded operation is never restored, so it needs nothing.
-func (s *sys) needsRecovery(j journal) bool {
-	if sup, err := s.superseded(j); err == nil && sup {
-		return false
+// fileUnknown: a file of the pair cannot be read (or stat'ed) right now, so its state is not known.
+const fileUnknown = -1
+
+// stateForeign: a file of the pair holds neither content, is missing or resolves elsewhere.
+const stateForeign = -2
+
+// stateOf is fileState's verdict as stateOld, stateNew, stateForeign or fileUnknown.
+func (s *sys) stateOf(path, resolved, oldSHA, newSHA string) int {
+	state, t, err := s.fileState(path, resolved, oldSHA, newSHA)
+	if t != nil {
+		t.close()
 	}
-	for _, f := range [][3]string{{j.CertPath, j.CertResolved, j.OldCertSHA}, {j.KeyPath, j.KeyResolved, j.OldKeySHA}} {
-		newSHA := j.NewCertSHA
-		if f[0] == j.KeyPath {
-			newSHA = j.NewKeySHA
-		}
-		state, t, err := s.fileState(f[0], f[1], f[2], newSHA)
-		if t != nil {
-			t.close()
-		}
-		switch {
-		case errors.Is(err, errChangedByOthers):
-		case err != nil:
-			return true
-		case state == stateNew && newSHA != f[2]:
-			return true
-		}
+	switch {
+	case errors.Is(err, errChangedByOthers):
+		return stateForeign
+	case err != nil:
+		return fileUnknown
 	}
-	return false
+	return state
+}
+
+// keyStateByStat is the key's state from fstatat alone (the sweep never opens a key file): the
+// inode and size this operation installed is new; the one it replaced or a restore put back is
+// old; anything else counts as someone else's.
+func (s *sys) keyStateByStat(j journal) int {
+	rf, err := s.resolveRoot(j.KeyPath)
+	if errors.Is(err, unix.ENOENT) {
+		return stateForeign
+	}
+	if err != nil {
+		return fileUnknown
+	}
+	defer rf.close()
+	var st unix.Stat_t
+	if err := unix.Fstatat(rf.dirfd, rf.name, &st, unix.AT_SYMLINK_NOFOLLOW); errors.Is(err, unix.ENOENT) {
+		return stateForeign
+	} else if err != nil {
+		return fileUnknown
+	}
+	id := idOf(st)
+	switch {
+	case rf.resolved != j.KeyResolved || st.Mode&unix.S_IFMT != unix.S_IFREG:
+		return stateForeign
+	case id == j.KeyIDs.New && id.Ino != 0:
+		return stateNew
+	case id == j.KeyIDs.Old && id.Ino != 0, id == j.KeyIDs.Restored && id.Ino != 0:
+		return stateOld
+	}
+	return stateForeign
+}
+
+// restorable reports whether nginx-restore could still act on a restore_failed operation (so its
+// backups are kept for recovery): not superseded, and a file of the pair cannot be read now, or a
+// file still holds the deployed content (different from the old) while no file is someone else's
+// — for an operation whose own rollback found someone else's file (Partial), a file holding the
+// deployed content is enough, since nginx-restore then puts back only its own files. readKeys
+// false decides the key by fstatat only (the sweep).
+func (s *sys) restorable(j journal, readKeys bool) bool {
+	if sup, err := s.superseded(j); err != nil || sup {
+		return err != nil
+	}
+	cert := s.stateOf(j.CertPath, j.CertResolved, j.OldCertSHA, j.NewCertSHA)
+	key := s.keyStateByStat(j)
+	if readKeys {
+		key = s.stateOf(j.KeyPath, j.KeyResolved, j.OldKeySHA, j.NewKeySHA)
+	}
+	if cert == fileUnknown || key == fileUnknown {
+		return true
+	}
+	anyNew := (cert == stateNew && j.NewCertSHA != j.OldCertSHA) || (key == stateNew && j.NewKeySHA != j.OldKeySHA)
+	anyForeign := cert == stateForeign || key == stateForeign
+	if j.Partial {
+		return anyNew
+	}
+	return anyNew && !anyForeign
 }
 
 // readBackup reads a backup of the operation directory (regular, at most MaxCertFileSize) into one

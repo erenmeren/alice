@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -46,15 +47,28 @@ func cmdCleanup(ctx context.Context, s *sys, args []string) (any, error) {
 	if err != nil {
 		return nil, failed(helperproto.CodeIOError, "the backups cannot be checked")
 	}
-	// Always under the Nginx lock, then the journal is read: a deployment may be between creating
-	// this directory and writing its first journal.
+	// An authorized_keys operation (only <n>.bak / <n>.json) and an empty directory are removed
+	// without the Nginx lock, as before Phase 4 (an empty directory is removed only while it is
+	// empty: a deployment that created it and has not written its journal yet then simply fails
+	// its first write, nothing changed). Anything else is or could be an Nginx operation: it is
+	// decided under the Nginx lock, the journal read under it.
+	if err := unix.Unlinkat(int(root.Fd()), op, unix.AT_REMOVEDIR); err == nil { //nolint:gosec // G115: a descriptor fits an int
+		_ = root.Sync()
+		return helperproto.CleanupResponse{OK: true, Removed: 1}, nil
+	}
+	if !s.nginxOperation(root, op) {
+		if err := removeAt(root, op); err != nil {
+			return nil, failed(helperproto.CodeIOError, "the backups cannot be removed")
+		}
+		return helperproto.CleanupResponse{OK: true, Removed: 1}, nil
+	}
 	lock, err := s.nginxLock(ctx)
 	if err != nil {
 		return nil, failed(helperproto.CodeBusy, "a certificate change is running on this server")
 	}
 	defer func() { _ = lock.Close() }()
 	if j, ok := s.nginxJournal(root, op); ok {
-		if s.keepForRecovery(j) {
+		if s.keepForRecovery(j, true) {
 			return nil, failed(helperproto.CodeBusy, "the deployment is not finished; restore it before its backups are removed")
 		}
 		s.cleanStaged(j)
@@ -63,6 +77,21 @@ func cmdCleanup(ctx context.Context, s *sys, args []string) (any, error) {
 		return nil, failed(helperproto.CodeIOError, "the backups cannot be removed")
 	}
 	return helperproto.CleanupResponse{OK: true, Removed: 1}, nil
+}
+
+// nginxOperation reports a directory that holds a name only an Nginx operation writes (or that
+// cannot be listed: then it is treated as one).
+func (s *sys) nginxOperation(root *os.File, name string) bool {
+	dir, err := subdir(root, name, false)
+	if err != nil {
+		return true
+	}
+	defer func() { _ = dir.Close() }()
+	names, err := dir.Readdirnames(-1)
+	if err != nil {
+		return true
+	}
+	return slices.ContainsFunc(names, func(n string) bool { return slices.Contains(nginxEntries, n) })
 }
 
 // nginxJournal reads the journal of the operation directory name below root (ok false when it has
@@ -78,19 +107,21 @@ func (s *sys) nginxJournal(root *os.File, name string) (journal, bool) {
 }
 
 // keepForRecovery reports an Nginx operation whose backups nginx-restore may still need: one
-// interrupted (writing, restoring) or whose rollback failed with a file of the pair still holding
-// the deployed content (or unreadable) — unless a later operation superseded it (it is never
-// restored then).
-func (s *sys) keepForRecovery(j journal) bool {
+// interrupted (writing, restoring) and not superseded, or a restore_failed one nginx-restore could
+// still act on (restorable). readKeys false (the sweep) decides the key file by fstatat only.
+func (s *sys) keepForRecovery(j journal, readKeys bool) bool {
 	switch j.Phase {
 	case helperproto.PhaseWriting, helperproto.PhaseRestoring:
 		sup, err := s.superseded(j)
 		return err != nil || !sup
 	case helperproto.PhaseRestoreFailed:
-		return s.needsRecovery(j)
+		return s.restorable(j, readKeys)
 	}
 	return false
 }
+
+// nginxEntries are the names only an Nginx operation directory holds.
+var nginxEntries = []string{journalName, journalTmp, certBackup, keyBackup}
 
 // sweepBackups removes old operation backup directories. It runs before every privileged
 // subcommand; failures are ignored (they never block the call).
@@ -147,7 +178,7 @@ func (s *sys) sweepBackups() {
 		}
 		j, ok := s.nginxJournal(root, name)
 		switch {
-		case ok && s.keepForRecovery(j):
+		case ok && s.keepForRecovery(j, false):
 			continue
 		case !ok, j.Phase == helperproto.PhaseRestoreFailed, j.Phase == helperproto.PhaseWriting, j.Phase == helperproto.PhaseRestoring:
 			if age <= backupRetention {
@@ -235,7 +266,12 @@ func (s *sys) openStateDir(name string, create bool) (*os.File, error) {
 func subdir(parent *os.File, name string, create bool) (*os.File, error) {
 	pfd := int(parent.Fd()) //nolint:gosec // G115: a descriptor fits an int
 	if create {
-		if err := unix.Mkdirat(pfd, name, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
+		switch err := unix.Mkdirat(pfd, name, 0o700); {
+		case err == nil:
+			if err := parent.Sync(); err != nil { // the new entry survives a power loss
+				return nil, err
+			}
+		case !errors.Is(err, unix.EEXIST):
 			return nil, err
 		}
 	}

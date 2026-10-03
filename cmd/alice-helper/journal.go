@@ -57,26 +57,51 @@ type fileMeta struct {
 	GID  int    `json:"gid"`
 }
 
+// fileID identifies a file by inode and size, so the sweep can tell a key it installed without
+// opening it.
+type fileID struct {
+	Dev  uint64 `json:"dev"`
+	Ino  uint64 `json:"ino"`
+	Size int64  `json:"size"`
+}
+
+func idOf(st unix.Stat_t) fileID { return fileID{Dev: st.Dev, Ino: st.Ino, Size: st.Size} }
+
+// keyIDs are the key file's inodes the operation knows: the one it replaced, the one it installed,
+// and the one a restore put back.
+type keyIDs struct {
+	Old      fileID `json:"old"`
+	New      fileID `json:"new"`
+	Restored fileID `json:"restored"`
+}
+
 // journal is the on-disk record of one nginx-deploy operation, <BackupRoot>/<op>/journal.json
 // (0600 in the 0700 root-only operation directory). nginx-status and nginx-restore read it after
 // any interruption. It holds paths, hashes, owners and modes, never key material.
 type journal struct {
-	Op           string                  `json:"op"`
-	Phase        string                  `json:"phase"`
-	CertPath     string                  `json:"cert_path"`
-	KeyPath      string                  `json:"key_path"`
-	CertResolved string                  `json:"cert_resolved"`
-	KeyResolved  string                  `json:"key_resolved"`
-	OldCertSHA   string                  `json:"old_cert_sha256"`
-	OldKeySHA    string                  `json:"old_key_sha256"`
-	NewCertSHA   string                  `json:"new_cert_sha256"`
-	NewKeySHA    string                  `json:"new_key_sha256"`
-	CertMeta     fileMeta                `json:"cert_meta"`
-	KeyMeta      fileMeta                `json:"key_meta"`
-	FailedStep   string                  `json:"failed_step"`
-	CauseStep    string                  `json:"cause_step"`
-	Error        string                  `json:"error"`
-	Steps        []helperproto.NginxStep `json:"steps"`
+	Op           string   `json:"op"`
+	Phase        string   `json:"phase"`
+	CertPath     string   `json:"cert_path"`
+	KeyPath      string   `json:"key_path"`
+	CertResolved string   `json:"cert_resolved"`
+	KeyResolved  string   `json:"key_resolved"`
+	OldCertSHA   string   `json:"old_cert_sha256"`
+	OldKeySHA    string   `json:"old_key_sha256"`
+	NewCertSHA   string   `json:"new_cert_sha256"`
+	NewKeySHA    string   `json:"new_key_sha256"`
+	CertMeta     fileMeta `json:"cert_meta"`
+	KeyMeta      fileMeta `json:"key_meta"`
+	FailedStep   string   `json:"failed_step"`
+	CauseStep    string   `json:"cause_step"`
+	// Partial: this operation's own rollback found a file of the pair changed by someone else; it
+	// puts back only the files it wrote (also when nginx-restore finishes it later).
+	Partial bool `json:"partial"`
+	// PrevRecord is the pair record (latest operation) before this operation took it over: a
+	// refusal before the first rename puts it back, also on a re-run after a crash.
+	PrevRecord string                  `json:"prev_record"`
+	KeyIDs     keyIDs                  `json:"key_ids"`
+	Error      string                  `json:"error"`
+	Steps      []helperproto.NginxStep `json:"steps"`
 }
 
 var journalPhases = []string{helperproto.PhasePrepared, helperproto.PhaseWriting, helperproto.PhaseCommitted,
@@ -90,7 +115,8 @@ func (j journal) valid(op string) bool {
 			return false
 		}
 	}
-	return j.Op == op && slices.Contains(journalPhases, j.Phase) && len(j.Steps) <= maxSteps
+	return j.Op == op && slices.Contains(journalPhases, j.Phase) && len(j.Steps) <= maxSteps &&
+		(j.PrevRecord == "" || helperproto.ValidOpID(j.PrevRecord))
 }
 
 // opDir opens (with create: makes) <BackupRoot>/<op>, root-only (0700), never through a link. op
@@ -308,10 +334,32 @@ func (s *sys) setPairRecord(j journal, op string) error {
 	return dir.Sync()
 }
 
-// superseded reports that a later operation started replacing j's pair.
+// superseded reports that a later operation started replacing j's pair: the pair record names
+// another operation whose journal says it got past prepared. A record naming an operation that
+// has no directory or no journal, or whose journal says prepared or unchanged (a crash or a
+// refusal before its first rename, or a record that could not be put back), supersedes nothing.
+// An unreadable journal counts as superseding (never a way back on a guess).
 func (s *sys) superseded(j journal) (bool, error) {
 	op, err := s.pairRecord(j)
-	return op != "" && op != j.Op, err
+	if err != nil || op == "" || op == j.Op {
+		return false, err
+	}
+	dir, err := s.opDir(op, false)
+	if errors.Is(err, unix.ENOENT) {
+		return false, nil
+	}
+	if err != nil {
+		return true, nil
+	}
+	defer func() { _ = dir.Close() }()
+	other, found, err := readJournal(dir, op)
+	switch {
+	case err != nil:
+		return true, nil
+	case !found, other.Phase == helperproto.PhasePrepared, other.Phase == helperproto.PhaseUnchanged:
+		return false, nil
+	}
+	return true, nil
 }
 
 // survive turns the test kill (errKilled) into an IO_ERROR answer; any other panic goes on.
