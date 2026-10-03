@@ -1,0 +1,368 @@
+// Package deployjobs runs certificate deployments (spec §12.6) and their recovery (§8.8): the job
+// handlers of certificate.deploy and certificate.deploy_recover. They connect a deployment record
+// (inventory, the only durable truth about what Alice did to a live website) to the server (the
+// provider's DeployCertificate, VerifyDeployment, RollbackDeployment and DeploymentStatus).
+//
+// Four properties hold on every path (each is enforced at one place, named here):
+//
+//  1. A send happens at most once per deployment. The only DeployCertificate call follows a
+//     successful StartDeployment in the same run (deploy.go, send); StartDeployment moves the record
+//     from precheck to deploying exactly once and refuses any other state, and a run that finds the
+//     record deploying, recovering or done never reaches that call (handlers.follow).
+//  2. Nothing is recorded as succeeded or unchanged without a passed verification (or a skip the
+//     location's settings allow): the deploy path records what inventory.DeployOutcomeRecord maps
+//     (a success only with Verified set, and the provider verifies before it answers committed);
+//     the recovery path records a success only after its own VerifyDeployment with the recorded
+//     fingerprint and chain length passed (recover.go, verified), never from the journal alone.
+//  3. Nothing is recorded as failed ("nothing was written") after a send unless the journal or the
+//     helper's answer proves nothing was written: a refusal (no_change with a *providers.Error, a
+//     well-formed answer), the journal phase none or prepared with no helper running and the start
+//     record older than the helper's budget (S6), the journal phase unchanged (the files already
+//     held the new pair), or a restore answering "nothing to restore". Every other doubt is
+//     uncertain and stays in recovery.
+//  4. An interrupted deployment always ends in recovery or a terminal state: before the send the
+//     record is queued or precheck (the job runs again, or the sweep ends it failed when the job
+//     ended); from StartDeployment on it is deploying or recovering with an operation id, and the
+//     sweep hands it to a certificate.deploy_recover job (ClassAlways) until it ends, escalating
+//     after RecoveryAttentionAfter attempts and ending it after MaxRecoveryAttempts.
+//
+// Recovery never needs the private key (DeploymentMaterial(id, false)); the deploy job unseals it
+// once, for the first send only, and zeroes it on every path.
+//
+// The complete decision tables of both handlers are in the doc comments of deploy (deploy.go) and
+// recoverDeployment (recover.go).
+package deployjobs
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
+	"time"
+
+	"github.com/google/uuid"
+
+	"alice/internal/inventory"
+	"alice/internal/jobs"
+	"alice/internal/platform/clock"
+	"alice/internal/providers"
+)
+
+// Inventory is the part of *inventory.Service the handlers use: the target and its session
+// dependencies, and the deployment record's engine-facing methods (deployment_records.go). The pure
+// mapping functions inventory.DeployOutcomeRecord and inventory.RollbackOutcomeRecord are called
+// directly.
+type Inventory interface {
+	TargetRef(ctx context.Context, id uuid.UUID) (providers.TargetRef, inventory.Target, error)
+	Credentials() providers.CredentialSource
+	HostKeyStore() providers.HostKeyStore
+	RecordConnectionFailure(ctx context.Context, id uuid.UUID, reason string) error
+
+	Deployment(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
+	CheckRecoveryPending(ctx context.Context, id uuid.UUID) error
+	BeginDeployment(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
+	DeploymentMaterial(ctx context.Context, id uuid.UUID, withKey bool) (inventory.Material, error)
+	StartDeployment(ctx context.Context, id uuid.UUID, v inventory.SendValues) error
+	RecordDeploymentStep(ctx context.Context, id uuid.UUID, name string, status providers.StepStatus, params map[string]string) error
+	FinishDeployment(ctx context.Context, id uuid.UUID, f inventory.DeploymentFinish) error
+	RecordOutcome(ctx context.Context, id uuid.UUID, rec inventory.OutcomeRecord, retryAt time.Time) error
+}
+
+var _ Inventory = (*inventory.Service)(nil)
+
+// Deps are the handlers' dependencies.
+type Deps struct {
+	Inventory Inventory
+	Registry  *providers.Registry
+	Clock     clock.Clock
+	Log       *slog.Logger
+	// FirstRecovery is when the first recovery of an uncertain first send is due (recover_after =
+	// now + FirstRecovery); 0 = inventory.FirstRecoveryDelay.
+	FirstRecovery time.Duration
+}
+
+// Register registers the deploy and recovery handlers on the runner.
+func Register(r *jobs.Runner, d Deps) {
+	h := newHandlers(d)
+	r.Handle(jobs.CertificateDeploy, h.deploy)
+	r.Handle(jobs.CertificateDeployRecover, h.recoverJob)
+}
+
+type handlers struct{ d Deps }
+
+func newHandlers(d Deps) *handlers {
+	if d.Log == nil {
+		d.Log = slog.New(slog.DiscardHandler)
+	}
+	if d.FirstRecovery <= 0 {
+		d.FirstRecovery = inventory.FirstRecoveryDelay
+	}
+	return &handlers{d: d}
+}
+
+const (
+	// HelperBudget is how long the helper may take for one nginx-deploy after Alice sent it (its
+	// own budget, Task 6): until then a journal that reads none or prepared may only mean that the
+	// helper has not reached its lock yet (S6).
+	HelperBudget = 50 * time.Second
+	// noJournalFinalAfter: a journal reading none or prepared, with no helper running, is final
+	// ("nothing was written") only when the start record is at least this old (the budget plus a
+	// margin, S6).
+	noJournalFinalAfter = HelperBudget + 10*time.Second
+	// writeTimeout bounds a record written with a context detached from the job's: the outcome of
+	// a completed call is recorded even when the job's context ended meanwhile (lease lost,
+	// shutdown).
+	writeTimeout = 15 * time.Second
+	// stepTimeout bounds one step record.
+	stepTimeout = 5 * time.Second
+)
+
+// Reasons the engine itself produces (besides the providers' and inventory's).
+const (
+	reasonNotFound        = "system.not_found"
+	reasonUnexpected      = "internal.unexpected"
+	reasonInterrupted     = "deployment.interrupted"
+	reasonRecoveryPending = "deployment.recovery_pending"
+	reasonExpired         = "certificate.expired"
+	reasonNotYetValid     = "certificate.not_yet_valid"
+	reasonNoPrivateKey    = "certificate.no_private_key"
+	reasonConfigInvalid   = "nginx.config_invalid"
+	reasonUnsupported     = "nginx.location_unsupported"
+	reasonVerifyOther     = "deployment.verify_other"
+	reasonBusy            = "nginx.busy"
+	reasonKeyMismatch     = "certificate.key_mismatch"
+	reasonConfigTest      = "deployment.config_test_failed"
+	reasonReload          = "deployment.reload_failed"
+)
+
+// detached is ctx without its cancellation, bounded by writeTimeout: for the records that must
+// outlive the job's context (the outcome of a call that completed; a refusal that is already
+// known), as targetjobs and inventory do for the same reason.
+func detached(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
+}
+
+// deploymentID is the job payload's deployment id.
+func deploymentID(j jobs.Job) (uuid.UUID, error) {
+	id, err := uuid.Parse(j.Payload["deployment_id"])
+	if err != nil || id == uuid.Nil {
+		return uuid.Nil, jobs.Fail(reasonNotFound, nil, errors.New("deployjobs: the job names no deployment"))
+	}
+	return id, nil
+}
+
+// open returns a session after the target checks of targetjobs: a deleted target is
+// system.not_found, a changed host key, an unconfirmed one or a disabled target refuses without
+// connecting (F-31); a provider failure is recorded on the target and returned classified.
+func (h *handlers) open(ctx context.Context, id uuid.UUID) (providers.Session, error) {
+	ref, t, err := h.d.Inventory.TargetRef(ctx, id)
+	switch {
+	case errors.Is(err, inventory.ErrNotFound):
+		return nil, jobs.Fail(reasonNotFound, nil, err)
+	case err != nil:
+		return nil, jobs.Retry(reasonUnexpected, nil, err)
+	case t.Status == inventory.StatusHostKeyChanged:
+		return nil, jobs.Fail("target.host_key_changed", nil, nil)
+	case t.Status == inventory.StatusDisabled:
+		return nil, jobs.Fail("target.disabled", nil, nil)
+	case t.Status == inventory.StatusPendingHostKey:
+		return nil, jobs.Fail("target.host_key_unconfirmed", nil, nil)
+	}
+	p, ok := h.d.Registry.Get(ref.Kind)
+	if !ok {
+		return nil, jobs.Fail(reasonUnexpected, nil, fmt.Errorf("deployjobs: no provider %q", ref.Kind))
+	}
+	sess, err := p.Open(ctx, ref, h.d.Inventory.Credentials(), providers.Env{Clock: h.d.Clock, HostKeys: h.d.Inventory.HostKeyStore(), Log: h.d.Log})
+	if err != nil {
+		h.recordConnectionFailure(ctx, id, err)
+		return nil, jobs.FromProvider(err)
+	}
+	return sess, nil
+}
+
+// recordConnectionFailure stores a provider failure's reason on the target (its status).
+func (h *handlers) recordConnectionFailure(ctx context.Context, id uuid.UUID, err error) {
+	var pe *providers.Error
+	if !errors.As(err, &pe) {
+		return
+	}
+	wctx, cancel := detached(ctx)
+	defer cancel()
+	if rerr := h.d.Inventory.RecordConnectionFailure(wctx, id, pe.Code); rerr != nil {
+		h.d.Log.Error("could not record a connection failure", "target_id", id.String(), "error_type", fmt.Sprintf("%T", rerr))
+	}
+}
+
+func (h *handlers) close(s providers.Session) {
+	if err := s.Close(); err != nil {
+		h.d.Log.Warn("closing a provider session failed", "error_type", fmt.Sprintf("%T", err))
+	}
+}
+
+// failure is err as a *jobs.Failure (jobs.FromProvider's classification).
+func failure(err error) *jobs.Failure {
+	var f *jobs.Failure
+	if errors.As(jobs.FromProvider(err), &f) {
+		return f
+	}
+	return &jobs.Failure{Class: jobs.Retryable, Reason: reasonUnexpected, Cause: err}
+}
+
+// jobParamKeys are the params a job's error may carry: fixed labels and numbers only, never a path
+// or remote text (the API's allowlist drops anything else too).
+var jobParamKeys = []string{"port", "failed_step", "phase", "helper_code", "subcommand", "exit_code"}
+
+func jobParams(in map[string]string) map[string]string {
+	var out map[string]string
+	for _, k := range jobParamKeys {
+		if v, ok := in[k]; ok {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// mode says which job runs the recovery logic.
+type mode int
+
+const (
+	// recoveryJob: a certificate.deploy_recover job (one attempt, never an alert; the sweep paces).
+	recoveryJob mode = iota
+	// deployJob: a certificate.deploy job that found a send may have happened (a run after a crash
+	// or a lost lease). Its failures are permanent: the runner never runs it again, the sweep hands
+	// the deployment to a recovery job.
+	deployJob
+)
+
+// resultOf is a job's answer for the deployment as recorded (the jobs row and the record agree):
+//
+//	recovery job, done              success {"outcome": status}: it recorded (or found) the end
+//	deploy job:
+//	done succeeded | unchanged      success {"outcome", "verified"}
+//	done failed | rolled_back       jobs.Fail(error_code, params): the job ends failed, never dead;
+//	                                the deployment email (deployment.failed) is the alert
+//	done rollback_failed            jobs.Attention(error_code, params): failed with needs_attention;
+//	                                the deployment's own email is the alert
+//	unfinished (recovering)         deploy job: jobs.Attention(deployment.interrupted): the job is
+//	                                over, a recovery finishes the deployment; recovery job: success
+//	                                {"outcome": "uncertain"} (it recorded what it learned; the
+//	                                sweep queues the next one)
+func resultOf(d inventory.Deployment, m mode) (map[string]any, error) {
+	out := map[string]any{"deployment_id": d.ID.String()}
+	if d.State != inventory.DeployStateDone {
+		out["outcome"] = string(providers.DeployUncertain)
+		if m == deployJob {
+			return out, jobs.Attention(reasonInterrupted, nil, nil)
+		}
+		return out, nil
+	}
+	out["outcome"] = d.Status
+	if m == recoveryJob {
+		// The recovery did its part: the record holds the outcome (and its email, the alert).
+		return out, nil
+	}
+	switch d.Status {
+	case inventory.DeployStatusSucceeded, inventory.DeployStatusUnchanged:
+		out["verified"] = d.Verified
+		return out, nil
+	case inventory.DeployStatusRollbackFailed:
+		return out, jobs.Attention(d.ErrorCode, jobParams(d.ErrorParams), nil)
+	}
+	return out, jobs.Fail(d.ErrorCode, jobParams(d.ErrorParams), nil)
+}
+
+// report re-reads the deployment after a record was written and answers resultOf it, so the job's
+// result says what the record says (inventory may have recorded a success with a skip the
+// location no longer allows as uncertain, or the deployment may have ended meanwhile). When the
+// read fails, fallback is the answer.
+func (h *handlers) report(ctx context.Context, id uuid.UUID, m mode, fallback func() (map[string]any, error)) (map[string]any, error) {
+	rctx, cancel := detached(ctx)
+	defer cancel()
+	d, err := h.d.Inventory.Deployment(rctx, id)
+	if err != nil {
+		return fallback()
+	}
+	return resultOf(d, m)
+}
+
+// record writes rec (RecordOutcome, detached from the job's context: the outcome of a call that
+// completed is never lost because the job's context ended) and answers what was recorded. A failed
+// write is retryable: nothing is lost, the next run finds the deployment deploying or recovering
+// and reads the truth from the journal.
+func (h *handlers) record(ctx context.Context, d inventory.Deployment, rec inventory.OutcomeRecord, retryAt time.Time, m mode, cause error) (map[string]any, error) {
+	wctx, cancel := detached(ctx)
+	err := h.d.Inventory.RecordOutcome(wctx, d.ID, rec, retryAt)
+	cancel()
+	if err != nil {
+		h.d.Log.Error("could not record a deployment outcome", "deployment_id", d.ID.String(), "error_type", fmt.Sprintf("%T", err))
+		return nil, jobs.Retry(reasonUnexpected, nil, err)
+	}
+	res, jerr := h.report(ctx, d.ID, m, func() (map[string]any, error) { return fallbackResult(d, rec, m) })
+	if jerr == nil && !rec.Terminal && m == recoveryJob && cause != nil {
+		// The recovery could not conclude because of the server: the job ends failed quietly
+		// (one attempt, never an alert) with the provider's reason; the sweep paces the next.
+		return res, jobs.FromProvider(cause)
+	}
+	return res, jerr
+}
+
+// fallbackResult answers rec when the record cannot be read back.
+func fallbackResult(d inventory.Deployment, rec inventory.OutcomeRecord, m mode) (map[string]any, error) {
+	d.State, d.Status = inventory.DeployStateRecovering, inventory.DeployStatusRunning
+	if rec.Terminal {
+		d.State, d.Status, d.ErrorCode, d.Verified = inventory.DeployStateDone, rec.Finish.Status, rec.Finish.ErrorCode, rec.Finish.Verified
+		d.ErrorParams = maps.Clone(rec.Finish.Params)
+	}
+	return resultOf(d, m)
+}
+
+// recorder is the providers.StepLogger of a deployment: each step goes to the job's step log and
+// is appended to the record (RecordDeploymentStep, detached from the job's context and bounded; a
+// failed step record is logged by type and does not stop the deployment).
+type recorder struct {
+	base context.Context // detached from the job's cancellation
+	inv  Inventory
+	id   uuid.UUID
+	next jobs.StepRecorder
+	log  *slog.Logger
+}
+
+func (h *handlers) recorder(ctx context.Context, id uuid.UUID, steps jobs.StepRecorder) *recorder {
+	return &recorder{base: context.WithoutCancel(ctx), inv: h.d.Inventory, id: id, next: steps, log: h.d.Log}
+}
+
+// Step implements providers.StepLogger.
+func (r *recorder) Step(name string, status providers.StepStatus, params map[string]string) {
+	if r.next != nil {
+		r.next.Step(name, status, params)
+	}
+	ctx, cancel := context.WithTimeout(r.base, stepTimeout)
+	defer cancel()
+	if err := r.inv.RecordDeploymentStep(ctx, r.id, name, status, params); err != nil {
+		r.log.Error("could not record a deployment step", "deployment_id", r.id.String(), "step", name, "error_type", fmt.Sprintf("%T", err))
+	}
+}
+
+// causeReason is the reason of the helper's own rollback by the step that started it (as the nginx
+// provider names it), for a journal the engine reads instead of an answer.
+func causeReason(causeStep, class string) string {
+	switch {
+	case causeStep == providers.StepNameConfigTest && class == providers.ConfigErrKeyMismatch:
+		return reasonKeyMismatch
+	case causeStep == providers.StepNameConfigTest:
+		return reasonConfigTest
+	case causeStep == providers.StepNameReload:
+		return reasonReload
+	}
+	return ""
+}
+
+// sendWithin reports whether the start record is younger than the helper's budget: a send may
+// still be on its way to the helper's lock (S6).
+func (h *handlers) sendWithin(d inventory.Deployment) bool {
+	return d.StartedAt != nil && h.d.Clock.Now().Sub(*d.StartedAt) < noJournalFinalAfter
+}
