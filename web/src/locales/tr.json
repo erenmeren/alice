@@ -357,7 +357,7 @@
       "target_add_denied_license": "Sunucu eklenmedi: lisans sınırına ulaşıldı veya lisans süresi doldu",
       "target_status_changed": "Sunucu durumu değişti",
       "target_discovered": "SSH anahtarları tarandı",
-      "hostkey_observed": "Sunucu parmak izi ilk kez görüldü",
+      "hostkey_observed": "Sunucu engelliyken başka bir yeni parmak izi görüldü",
       "hostkey_pinned": "Sunucu parmak izi onaylandı",
       "hostkey_changed": "Sunucu kimliği değişti",
       "hostkey_repinned": "Yeni sunucu parmak izi kabul edildi",
@@ -581,6 +581,7 @@
     "noCandidate": "Alice bu sunucu için yeni bir parmak izi kaydetmedi."
   },
   "sshKeys": {
+    "backToList": "SSH anahtarlarına dön",
     "user": "Kullanıcı",
     "key": "Anahtar",
     "file": "Dosya",
@@ -626,14 +627,14 @@
       "weak": "Zayıf anahtar",
       "command": "Sabit bir komut çalıştırır",
       "root_without_from": "Kaynak adres sınırı olmayan root anahtarı",
-      "duplicate": "Birden fazla kez yazılmış",
+      "duplicate": "Dosyada birden fazla kez geçiyor.",
       "cert_authority": "Sertifika yetkilisi",
       "security_key": "Donanım güvenlik anahtarı"
     }
   },
   "jobs": {
     "blockedTitle": "Yönetici onayı bekliyor",
-    "blockedHelp": "Bu değişiklikler lisans süresi dolduğu sırada duraklatıldı. Her birini inceleyin, sonra çalıştırın veya vazgeçin.",
+    "blockedHelp": "Bu değişiklikler lisans süresi dolduğu sırada duraklatıldı. Her birini inceleyin, sonra çalıştırın ya da ondan vazgeçin.",
     "runNow": "Şimdi çalıştır",
     "discard": "Vazgeç",
     "runNowNamed": "Şimdi çalıştır: {{job}}",
@@ -649,7 +650,7 @@
         "remove": "SSH anahtarının kaldırılması"
       }
     },
-    "blockedNotice": "Bu işlem duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",
+    "blockedNotice": "Bu iş duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",
     "stopped": "Bu iş bitmeden durduruldu."
   },
   "enum": {

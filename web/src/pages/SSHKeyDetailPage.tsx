@@ -26,7 +26,15 @@ export function SSHKeyDetailPage() {
   const [removing, setRemoving] = useState<KeyLocation | null>(null);
 
   if (key.isPending) return <PageLoader />;
-  if (key.isError || !key.data) return <ErrorAlert error={key.error} />;
+  if (key.isError || !key.data)
+    return (
+      <Stack gap="md">
+        <ErrorAlert error={key.error} />
+        <Anchor component={Link} to="/ssh-keys" w="fit-content">
+          {t('sshKeys.backToList')}
+        </Anchor>
+      </Stack>
+    );
   const k = key.data;
   const state = (l: KeyLocation) => (l.removed_at ? t('sshKeys.removedByAlice') : l.missing_since ? t('sshKeys.missing') : t('sshKeys.present'));
 

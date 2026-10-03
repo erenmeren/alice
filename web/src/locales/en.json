@@ -357,7 +357,7 @@
       "target_add_denied_license": "Server not added: license limit reached or license expired",
       "target_status_changed": "Server status changed",
       "target_discovered": "SSH keys scanned",
-      "hostkey_observed": "Server fingerprint seen for the first time",
+      "hostkey_observed": "Another new server fingerprint seen while the server is blocked",
       "hostkey_pinned": "Server fingerprint confirmed",
       "hostkey_changed": "Server identity changed",
       "hostkey_repinned": "New server fingerprint accepted",
@@ -581,6 +581,7 @@
     "noCandidate": "Alice has not recorded a new fingerprint for this server."
   },
   "sshKeys": {
+    "backToList": "Back to SSH keys",
     "user": "User",
     "key": "Key",
     "file": "File",

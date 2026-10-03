@@ -261,11 +261,24 @@ export interface UnreadableLine {
   line_no: number;
 }
 
+// SSHDSettings mirrors the API's sshd facts: the effective settings of the server's SSH daemon.
+// The whole object is null until the first scan; the strings are the values sshd reports.
+export interface SSHDSettings {
+  read: boolean;
+  pubkey_authentication: string;
+  password_authentication: string;
+  permit_root_login: string;
+  authorized_keys_file: string[];
+  authorized_keys_command: string;
+  keys_managed_elsewhere: boolean;
+  certificates_in_use: boolean;
+}
+
 export interface TargetFacts {
   os: OSRelease;
   helper_version: string;
   helper_protocol: number;
-  sshd: Record<string, unknown> | null;
+  sshd: SSHDSettings | null;
   host_keys: DiscoveredHostKey[];
   warnings: Warning[];
   unreadable: UnreadableLine[];
