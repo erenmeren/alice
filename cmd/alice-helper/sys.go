@@ -37,6 +37,9 @@ type sys struct {
 	// afterMkdirSSH runs between creating a missing .ssh and opening it (nil in production; tests
 	// inject races).
 	afterMkdirSSH func()
+	// walkHook runs in resolveRoot between the check of a directory and its open (nil in
+	// production; tests inject swaps).
+	walkHook func(name string)
 }
 
 // host returns the real path of an absolute guest path.
