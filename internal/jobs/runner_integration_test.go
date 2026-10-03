@@ -203,6 +203,22 @@ func TestLockCancelsQueuedReadOnlyWork(t *testing.T) {
 	assert.Equal(t, "cancelled", got.status)
 	assert.Equal(t, "license.locked", got.lastError)
 	assert.Equal(t, "succeeded", e.row(t, always).status)
+	assert.Equal(t, 1, e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'job.cancelled_license' AND object_id = $1
+  AND result = 'denied' AND details->>'type' = $2`, id.String(), testReadOnlyJob.Name), "every cancelled job is audited")
+}
+
+// A read-only job claimed just before the lock began is cancelled when the gate is asked again,
+// and that cancellation is audited like the sweep's.
+func TestReadOnlyJobCancelledAfterTheClaimIsAudited(t *testing.T) {
+	e := newQEnv(t)
+	id := e.enqueue(t, Spec{Type: testReadOnlyJob, Kind: KindScheduled})
+	r := e.runner(t, "w1", func(c *RunnerConfig) { c.Gate = &flipGate{} })
+	r.Handle(testReadOnlyJob, succeed)
+	ran, err := r.RunOnce(e.ctx)
+	require.NoError(t, err)
+	require.True(t, ran)
+	assert.Equal(t, "cancelled", e.row(t, id).status)
+	assert.Equal(t, 1, e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'job.cancelled_license' AND object_id = $1`, id.String()))
 }
 
 // flipGate allows the first question and refuses everything after it: the lock begins

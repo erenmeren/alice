@@ -340,34 +340,24 @@ func (r *Runner) sweepIfDue(ctx context.Context, now time.Time) {
 }
 
 // sweepLocked holds queued external-change work for an Administrator's confirmation and
-// cancels queued read-only work while the license is expired (spec §8.6, R29, L-81). The audit
+// cancels queued read-only work while the license is expired (spec §8.6, R29, L-81); each held
+// job is audited job.blocked_license and each cancelled one job.cancelled_license. The audit
 // rows are the transaction's last statements: the chain lock is held as briefly as possible.
 func (r *Runner) sweepLocked(ctx context.Context, now time.Time) error {
 	return db.InTx(ctx, r.cfg.Pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE jobs SET status = 'cancelled', last_error_code = 'license.locked', finished_at = $1
-WHERE status = 'queued' AND class = 'read_only'`, now); err != nil {
+		cancelled, err := touched(ctx, tx, `UPDATE jobs SET status = 'cancelled', last_error_code = 'license.locked', finished_at = $1
+WHERE status = 'queued' AND class = 'read_only' RETURNING id, type`, now)
+		if err != nil {
 			return fmt.Errorf("jobs: cancel read-only work in lock: %w", err)
 		}
-		rows, err := tx.Query(ctx, `UPDATE jobs SET status = 'blocked_license' WHERE status = 'queued' AND class = 'change' RETURNING id, type`)
+		blocked, err := touched(ctx, tx, `UPDATE jobs SET status = 'blocked_license' WHERE status = 'queued' AND class = 'change' RETURNING id, type`)
 		if err != nil {
 			return fmt.Errorf("jobs: hold changes in lock: %w", err)
 		}
-		type held struct {
-			id  uuid.UUID
-			typ string
-		}
-		var blocked []held
-		for rows.Next() {
-			var h held
-			if err := rows.Scan(&h.id, &h.typ); err != nil {
-				rows.Close()
-				return fmt.Errorf("jobs: hold changes in lock: %w", err)
+		for _, h := range cancelled {
+			if _, err := r.cfg.Audit.Append(ctx, tx, r.jobEvent("job.cancelled_license", audit.Denied, h.id, map[string]string{"type": h.typ})); err != nil {
+				return err
 			}
-			blocked = append(blocked, h)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("jobs: hold changes in lock: %w", err)
 		}
 		for _, h := range blocked {
 			if _, err := r.cfg.Audit.Append(ctx, tx, r.jobEvent("job.blocked_license", audit.Denied, h.id, map[string]string{"type": h.typ})); err != nil {
@@ -376,6 +366,30 @@ WHERE status = 'queued' AND class = 'read_only'`, now); err != nil {
 		}
 		return nil
 	})
+}
+
+// heldJob is a job the lock-mode sweep cancelled or held.
+type heldJob struct {
+	id  uuid.UUID
+	typ string
+}
+
+// touched runs an UPDATE that RETURNs id, type and collects the rows.
+func touched(ctx context.Context, tx pgx.Tx, sql string, args ...any) ([]heldJob, error) {
+	rows, err := tx.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []heldJob
+	for rows.Next() {
+		var h heldJob
+		if err := rows.Scan(&h.id, &h.typ); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }
 
 var errLeaseLost = errors.New("jobs: the lease was lost")
@@ -465,7 +479,7 @@ func (r *Runner) revert(ctx context.Context, c *claimed, t Type) {
 		tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'cancelled', last_error_code = 'license.locked', finished_at = $4,
     attempts = attempts - 1, locked_by = NULL, locked_until = NULL `+mine, c.fence(now)...)
 		return unclaim(tx, tag, err)
-	})
+	}, r.jobEvent("job.cancelled_license", audit.Denied, c.id, map[string]string{"type": c.typ}))
 }
 
 // stepLog collects a job's steps for its result.
