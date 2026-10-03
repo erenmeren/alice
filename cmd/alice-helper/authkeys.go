@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -170,18 +171,28 @@ func (s *sys) candidateFor(a account, pattern string) (p string, c candidate, va
 }
 
 // homeTrusted decides whether the home of a (home as in /etc/passwd, resolved its resolved form)
-// may hold candidates. The directories above the home must be root-controlled, or another user
-// could swap the home between the scan and the open (standard /home, /root and /var/lib/<x>
-// layouts are). When the home path goes through a symlink, the resolved home must also belong to
-// the account (root's own home excepted) and sit in a root-controlled directory: a user who can
+// may hold candidates. The directories above the home must be root-controlled (rootControlled,
+// which accepts root's own symlinks into root-controlled directories, such as /home -> var/home),
+// or another user could swap the home between the scan and the open; standard /home/<u>, /root
+// and /var/lib/<x> layouts are. When the home itself is a symlink, the directory it resolves to must
+// belong to the account (root excepted) and sit in a root-controlled directory: a user who can
 // write the directory of someone's home could otherwise point it at /root, and re-basing on the
 // resolved home would hide the symlink from throughOK (re-review item 1).
+//
+// The owner of a home that is not a symlink is not checked, as sshd does not: whatever it holds,
+// files are only taken from inside it (containment), must be the user's or root's in a
+// root-controlled directory (fileOK), must have one link (no hard link to another file), and a
+// symlink inside it only leads into a directory of the user (throughOK).
 func (s *sys) homeTrusted(a account, home, resolved string) bool {
-	if home != "/" && !s.rootControlled(filepath.Dir(home)) {
+	if home == "/" {
+		return true
+	}
+	parent := filepath.Dir(home)
+	if !s.rootControlled(parent) {
 		return false
 	}
-	if resolved == home {
-		return true
+	if rp, ok := s.resolveNearest(parent); ok && filepath.Join(rp, filepath.Base(home)) == resolved {
+		return true // only root-controlled ancestors are symlinks; the home itself is not
 	}
 	if resolved != "/" && !s.rootControlled(filepath.Dir(resolved)) {
 		return false
@@ -194,27 +205,64 @@ func (s *sys) homeTrusted(a account, home, resolved string) bool {
 	return a.uid == 0 || uid == a.uid
 }
 
-// rootControlled reports whether every existing component of the guest directory dir, from dir
-// up to "/", is a directory owned by root that group and others cannot write: nobody but root can
-// then swap a component between the scan and the open. Missing trailing components are allowed
-// (the write then fails with NOT_FOUND: only <home>/.ssh is ever created).
+// maxRootLinks bounds the symlinks rootControlled follows (a loop is refused, not followed).
+const maxRootLinks = 40
+
+// rootControlled reports whether nobody but root can change the guest directory dir or any
+// directory above it, so nothing can be swapped between the scan and the open. It walks from "/"
+// down: every existing component must be a directory owned by root that group and others cannot
+// write, or a symlink owned by root (its directory was checked before it), in which case the walk
+// starts again on the path it leads to, whose components must pass the same test (at most
+// maxRootLinks links). Missing trailing components are allowed (the write then fails with
+// NOT_FOUND: only <home>/.ssh is ever created).
 func (s *sys) rootControlled(dir string) bool {
-	for d := dir; ; d = filepath.Dir(d) {
-		st, err := os.Lstat(s.host(d))
+	ok := func(st fs.FileInfo) bool {
+		uid, _ := owner(st)
+		return uid == s.rootUID
+	}
+	path := filepath.Clean(dir)
+	links := 0
+restart:
+	st, err := os.Lstat(s.host("/"))
+	if err != nil || !ok(st) || st.Mode().Perm()&0o022 != 0 {
+		return false
+	}
+	cur := "/"
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	for i, c := range parts {
+		if c == "" {
+			continue
+		}
+		next := filepath.Join(cur, c)
+		st, err := os.Lstat(s.host(next))
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-		case err != nil || !st.IsDir():
+			return true
+		case err != nil || !ok(st):
 			return false
-		default:
-			uid, _ := owner(st)
-			if uid != s.rootUID || st.Mode().Perm()&0o022 != 0 {
+		case st.Mode()&fs.ModeSymlink != 0:
+			links++
+			target, err := os.Readlink(s.host(next))
+			if err != nil || links > maxRootLinks {
 				return false
 			}
+			if filepath.IsAbs(target) {
+				g, inRoot := s.guest(filepath.Clean(target))
+				if !inRoot {
+					return false
+				}
+				target = g
+			} else {
+				target = filepath.Join(cur, target)
+			}
+			path = filepath.Join(append([]string{target}, parts[i+1:]...)...)
+			goto restart
+		case !st.IsDir() || st.Mode().Perm()&0o022 != 0:
+			return false
 		}
-		if d == "/" {
-			return true
-		}
+		cur = next
 	}
+	return true
 }
 
 // throughOK refuses a file of a user other than root that the scan reached through a symlink

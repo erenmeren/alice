@@ -291,3 +291,79 @@ func TestSymlinkedHomeRules(t *testing.T) {
 	code, m = f.run("authkeys-read", "/var/lib/alice-svc/.ssh/authorized_keys")
 	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"], "another account's directory: %d", code)
 }
+
+// moveHomeBehindALink makes /home a symlink to /data/home (homes moved to a larger volume, or
+// Fedora Silverblue's /home -> var/home): root's link in root's directory.
+func (f *fixture) moveHomeBehindALink() {
+	f.t.Helper()
+	f.mkdir("/data", 0o755)
+	require.NoError(f.t, os.Rename(f.host("/home"), f.host("/data/home")))
+	require.NoError(f.t, os.Symlink("data/home", f.host("/home")))
+	f.asUser("/data/home/deploy", "/data/home/deploy/.ssh")
+}
+
+// Round 3 item 1: a root-owned symlink among the directories above the home, whose target chain is
+// root-controlled too, is as safe as a directory: accounts below it work (read, list, write).
+func TestHomeBehindARootOwnedSymlinkWorks(t *testing.T) {
+	f, _ := newWriteFixture(t)
+	f.moveHomeBehindALink()
+	f.write("/data/home/deploy/.ssh/authorized_keys", "old\n", 0o600)
+	f.asUser("/data/home/deploy/.ssh/authorized_keys")
+	code, m := f.run("authkeys-read", keysPath)
+	require.Equal(t, 0, code, "%v", m)
+	assert.Equal(t, "deploy", m["owner"])
+	_, m = f.run("authkeys-list")
+	fi := filesOf(listUser(t, m, "deploy"))[0]
+	assert.Equal(t, false, fi["unsupported"])
+	assert.Equal(t, hexOf("old\n"), fi["sha256"])
+	if os.Getuid() == 0 {
+		f.s.chown = productionSys().chown
+	}
+	code, m = f.runWith("new\n", writeArgs(keysPath, hexOf("old\n"), op1)...)
+	require.Equal(t, 0, code, "%v", m)
+	assert.Equal(t, "new\n", f.read("/data/home/deploy/.ssh/authorized_keys"))
+}
+
+// Round 3 item 1: the target chain of the link must be root-controlled too, and a link loop is
+// refused (not followed forever).
+func TestHomeBehindASymlinkIntoAWritableChainIsUnsupported(t *testing.T) {
+	f, _ := newWriteFixture(t)
+	f.moveHomeBehindALink()
+	f.write("/data/home/deploy/.ssh/authorized_keys", "old\n", 0o600)
+	f.asUser("/data/home/deploy/.ssh/authorized_keys")
+	require.NoError(t, os.Chmod(f.host("/data"), 0o777))
+	code, m := f.run("authkeys-read", keysPath)
+	assert.Equal(t, helperproto.ExitRefused, code, "%v", m)
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
+	_, m = f.run("authkeys-list")
+	assert.Equal(t, true, filesOf(listUser(t, m, "deploy"))[0]["unsupported"])
+	code, m = f.runWith("new\n", writeArgs(keysPath, hexOf("old\n"), op1)...)
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"], "%d", code)
+	assert.Equal(t, "old\n", f.read("/data/home/deploy/.ssh/authorized_keys"))
+	require.NoError(t, os.Chmod(f.host("/data"), 0o755))
+
+	assert.True(t, f.s.rootControlled("/loop/x"), "missing components are allowed")
+	require.NoError(t, os.Symlink("loop2", f.host("/loop")))
+	require.NoError(t, os.Symlink("loop", f.host("/loop2")))
+	assert.False(t, f.s.rootControlled("/loop/x"), "a symlink loop is refused")
+}
+
+// Round 3 item 1 (root only): a link owned by another user is refused, even into a
+// root-controlled chain.
+func TestHomeBehindASymlinkOwnedByAnotherUserIsUnsupported(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("needs root: the link must belong to another user")
+	}
+	f, _ := newWriteFixture(t)
+	f.moveHomeBehindALink()
+	f.write("/data/home/deploy/.ssh/authorized_keys", "old\n", 0o600)
+	f.asUser("/data/home/deploy/.ssh/authorized_keys")
+	require.NoError(t, os.Lchown(f.host("/home"), 3000, 3000))
+	code, m := f.run("authkeys-read", keysPath)
+	assert.Equal(t, helperproto.ExitRefused, code, "%v", m)
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
+	require.NoError(t, os.Lchown(f.host("/home"), 0, 0))
+	require.NoError(t, os.Chown(f.host("/data/home"), 3000, 3000))
+	code, m = f.run("authkeys-read", keysPath)
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"], "the target is another user's directory: %d", code)
+}
