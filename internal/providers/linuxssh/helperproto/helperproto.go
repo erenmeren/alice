@@ -96,6 +96,10 @@ const (
 	// WarnCertificateBlockDropped: a block labelled CERTIFICATE in a certificate file is not an
 	// X.509 certificate (or carries PEM headers); the helper dropped it and returned the others.
 	WarnCertificateBlockDropped = "certificate_block_dropped"
+	// WarnKeyGroupOpen: a key file is owned by a user other than root, or readable by a group other
+	// than root's or by others (S10). A deployment keeps the owner and group (and 0640), so a new
+	// key would be as exposed as the old one.
+	WarnKeyGroupOpen = "key_group_open"
 )
 
 // Phase 4 subcommands (spec §12.3, R38 item 1). tls-probe runs without sudo (like version).
@@ -363,6 +367,7 @@ type NginxFile struct {
 	Symlinked bool   `json:"symlinked"`
 	Mode      string `json:"mode"`  // "0644"
 	Owner     string `json:"owner"` // account name or uid
+	Group     string `json:"group"` // group name or gid
 	Size      int64  `json:"size"`
 	SHA256    string `json:"sha256"` // certificate files only
 	PEM       string `json:"pem"`    // certificate files only: CERTIFICATE blocks, nothing else

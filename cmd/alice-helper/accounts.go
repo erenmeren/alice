@@ -130,6 +130,27 @@ func (s *sys) directoryUsers() bool {
 	return false
 }
 
+// groupNames maps gids to the names in /etc/group (the first entry wins); empty when the file
+// cannot be read (gids are then reported as numbers).
+func (s *sys) groupNames() map[int]string {
+	m := map[int]string{}
+	data, err := s.readRegular("/etc/group", passwdLimit)
+	if err != nil {
+		return m
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Split(line, ":")
+		if len(f) != 4 || !helperproto.ValidUser(f[0]) {
+			continue
+		}
+		gid, err := strconv.Atoi(f[2])
+		if _, seen := m[gid]; err == nil && gid >= 0 && !seen {
+			m[gid] = f[0]
+		}
+	}
+	return m
+}
+
 // owners maps uids to account names (the first entry wins).
 func owners(accts []account) map[int]string {
 	m := map[int]string{}

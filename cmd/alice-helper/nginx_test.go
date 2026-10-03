@@ -522,6 +522,39 @@ func TestCertificateFilesOnSpecialFileSystems(t *testing.T) {
 	assert.Equal(t, helperproto.FileSpecialFS, fileOf(t, m, "key", "/etc/nginx/ssl/www.key")["problem"])
 }
 
+// S10: a deployment keeps the key's owner and group, and a 0640 key stays 0640. Discovery warns when
+// a key file is readable by a group other than root's or by others, or is owned by another user, so
+// the administrator sees it before a new key inherits that exposure. The key's group is reported.
+func TestNginxDumpWarnsAboutOpenKeyFiles(t *testing.T) {
+	w := newNginxWorld(t)
+	_, m := w.f.run("nginx-dump")
+	assert.NotContains(t, m["warnings"], helperproto.WarnKeyGroupOpen, "0600")
+	gid := 4321
+	if os.Geteuid() == 0 {
+		require.NoError(t, os.Chown(w.f.host("/etc/nginx/ssl/www.key"), 0, gid))
+	} else {
+		var st unix.Stat_t
+		require.NoError(t, unix.Stat(w.f.host("/etc/nginx/ssl/www.key"), &st))
+		gid = int(st.Gid)
+	}
+	w.f.write("/etc/group", fmt.Sprintf("root:x:0:\nssl-cert:x:%d:\n", gid), 0o644)
+	_, m = w.f.run("nginx-dump")
+	assert.Equal(t, "ssl-cert", fileOf(t, m, "key", "/etc/nginx/ssl/www.key")["group"])
+	if gid != 0 {
+		require.NoError(t, os.Chmod(w.f.host("/etc/nginx/ssl/www.key"), 0o640))
+		_, m = w.f.run("nginx-dump")
+		assert.Contains(t, m["warnings"], helperproto.WarnKeyGroupOpen, "group-readable by a group other than root")
+	}
+	require.NoError(t, os.Chmod(w.f.host("/etc/nginx/ssl/www.key"), 0o604))
+	_, m = w.f.run("nginx-dump")
+	assert.Contains(t, m["warnings"], helperproto.WarnKeyGroupOpen, "readable by others")
+
+	assert.False(t, keyOpen(unix.Stat_t{Uid: 0, Gid: 0, Mode: 0o100640}, 0), "root's group")
+	assert.True(t, keyOpen(unix.Stat_t{Uid: 1000, Gid: 0, Mode: 0o100600}, 0), "another owner")
+	assert.True(t, keyOpen(unix.Stat_t{Uid: 0, Gid: 33, Mode: 0o100440}, 0))
+	assert.False(t, keyOpen(unix.Stat_t{Uid: 0, Gid: 33, Mode: 0o100600}, 0))
+}
+
 // magicAt makes the file system of the guest directory (and everything opened in it) report magic.
 func (w *nginxWorld) magicAt(guest string, magic int64) {
 	var want unix.Stat_t

@@ -382,13 +382,14 @@ func cmdNginxDump(ctx context.Context, s *sys, args []string) (any, error) {
 	if accts, err := s.accounts(); err == nil {
 		names = owners(accts)
 	}
+	groups := s.groupNames()
 	n, pemBytes := 0, 0
 	for _, p := range cfg.CertPaths() {
 		if n++; n > helperproto.MaxNginxFiles {
 			warn(helperproto.WarnTooManyFiles)
 			break
 		}
-		fi, dropped := s.describeCert(p, names)
+		fi, dropped := s.describeCert(p, names, groups)
 		if dropped {
 			warn(helperproto.WarnCertificateBlockDropped)
 		}
@@ -402,7 +403,11 @@ func cmdNginxDump(ctx context.Context, s *sys, args []string) (any, error) {
 			warn(helperproto.WarnTooManyFiles)
 			break
 		}
-		resp.Files = append(resp.Files, s.describeKey(p, names))
+		fi, open := s.describeKey(p, names, groups)
+		if open {
+			warn(helperproto.WarnKeyGroupOpen)
+		}
+		resp.Files = append(resp.Files, fi)
 	}
 	b, err := json.Marshal(resp)
 	if err != nil {
@@ -461,7 +466,7 @@ func cleanRunes(s string, maxRunes int) string {
 
 // describeCert reads a certificate file through resolveRoot and returns its certificate blocks.
 // dropped reports blocks labelled CERTIFICATE that are not X.509 certificates (S9).
-func (s *sys) describeCert(p string, names map[int]string) (fi helperproto.NginxFile, dropped bool) {
+func (s *sys) describeCert(p string, names, groups map[int]string) (fi helperproto.NginxFile, dropped bool) {
 	fi = helperproto.NginxFile{Path: p, Kind: "cert"}
 	rf, err := s.resolveRoot(p)
 	if err != nil {
@@ -485,7 +490,7 @@ func (s *sys) describeCert(p string, names map[int]string) (fi helperproto.Nginx
 	}
 	defer func() { _ = f.Close() }()
 	fi.Exists, fi.Size = true, st.Size
-	fi.Mode, fi.Owner = fmt.Sprintf("%04o", st.Mode&0o777), ownerName(names, int(st.Uid))
+	fi.Mode, fi.Owner, fi.Group = fmt.Sprintf("%04o", st.Mode&0o777), ownerName(names, int(st.Uid)), ownerName(groups, int(st.Gid))
 	if st.Size > helperproto.MaxCertFileSize {
 		fi.Problem = helperproto.FileTooLarge
 		return fi, false
@@ -551,14 +556,15 @@ func certBlocks(data []byte) (string, bool) {
 }
 
 // describeKey stats a key file through resolveRoot. Its content is never opened or read: only
-// fstatat's owner, mode, size, type and link count.
-func (s *sys) describeKey(p string, names map[int]string) helperproto.NginxFile {
-	fi := helperproto.NginxFile{Path: p, Kind: "key"}
+// fstatat's owner, group, mode, size, type and link count. open reports a key file that keyOpen
+// finds exposed (S10).
+func (s *sys) describeKey(p string, names, groups map[int]string) (fi helperproto.NginxFile, open bool) {
+	fi = helperproto.NginxFile{Path: p, Kind: "key"}
 	rf, err := s.resolveRoot(p)
 	if err != nil {
 		fi.Exists = !errors.Is(err, unix.ENOENT)
 		fi.Problem = problemOf(err)
-		return fi
+		return fi, false
 	}
 	defer rf.close()
 	fi.Resolved, fi.Symlinked = rf.resolved, rf.symlinked
@@ -567,10 +573,10 @@ func (s *sys) describeKey(p string, names map[int]string) helperproto.NginxFile 
 	if err := unix.Fstatat(rf.dirfd, rf.name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		fi.Exists = !errors.Is(err, unix.ENOENT)
 		fi.Problem = problemOf(err)
-		return fi
+		return fi, false
 	}
 	fi.Exists, fi.Size = true, st.Size
-	fi.Mode, fi.Owner = fmt.Sprintf("%04o", st.Mode&0o777), ownerName(names, int(st.Uid))
+	fi.Mode, fi.Owner, fi.Group = fmt.Sprintf("%04o", st.Mode&0o777), ownerName(names, int(st.Uid)), ownerName(groups, int(st.Gid))
 	switch {
 	case !certName(rf.name):
 		fi.Problem = helperproto.FileBadName
@@ -581,7 +587,13 @@ func (s *sys) describeKey(p string, names map[int]string) helperproto.NginxFile 
 	case st.Size > helperproto.MaxCertFileSize:
 		fi.Problem = helperproto.FileTooLarge
 	}
-	return fi
+	return fi, fi.Problem == "" && keyOpen(st, s.rootUID)
+}
+
+// keyOpen reports a key file owned by a user other than root, or readable by a group other than
+// root's or by others (S10: a deployment keeps owner, group and a 0640 mode).
+func keyOpen(st unix.Stat_t, rootUID int) bool {
+	return int(st.Uid) != rootUID || (st.Mode&0o040 != 0 && st.Gid != 0) || st.Mode&0o004 != 0
 }
 
 func ownerName(names map[int]string, uid int) string {
