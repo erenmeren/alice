@@ -217,6 +217,7 @@ type claimed struct {
 	target      uuid.UUID
 	attempts    int // after the claim: this run's attempt number
 	maxAttempts int
+	leaseUntil  time.Time // when the lease the claim took ends (the heartbeat extends it)
 	createdBy   uuid.UUID
 	role        string
 }
@@ -307,7 +308,7 @@ RETURNING target_id`, cand.target, cand.id, cand.typ, cand.token, now, now.Add(r
 WHERE id = $1`, cand.id, cand.token, now.Add(r.cfg.Lease), now); err != nil {
 				return fmt.Errorf("jobs: mark running: %w", err)
 			}
-			cand.attempts, cand.maxAttempts = attempts+1, maxAtt
+			cand.attempts, cand.maxAttempts, cand.leaseUntil = attempts+1, maxAtt, now.Add(r.cfg.Lease)
 			if _, err := tx.Exec(ctx, `INSERT INTO job_attempts (id, job_id, attempt, worker_id, started_at) VALUES ($1, $2, $3, $4, $5)`,
 				uuid.Must(uuid.NewV7()), cand.id, cand.attempts, cand.token, now); err != nil {
 				return fmt.Errorf("jobs: record the attempt: %w", err)
@@ -529,7 +530,9 @@ func (r *Runner) beat(ctx context.Context, c *claimed) error {
 
 // heartbeat extends the lease every Heartbeat until stop is called. When the job row or the
 // target lock is no longer this claim's (the reaper took it), it sets lost and cancels the
-// handler's context.
+// handler's context. It does the same when beats keep failing (the database cannot be reached)
+// and the next beat would come after the lease ends: from then on another process may reap the
+// job and run it again, so this run must stop its work on the server.
 func (r *Runner) heartbeat(c *claimed, cancel context.CancelFunc, lost *atomic.Bool) (stop func()) {
 	done := make(chan struct{})
 	var wg sync.WaitGroup
@@ -538,23 +541,32 @@ func (r *Runner) heartbeat(c *claimed, cancel context.CancelFunc, lost *atomic.B
 		defer wg.Done()
 		t := r.cfg.Clock.NewTicker(r.cfg.Heartbeat)
 		defer t.Stop()
+		leaseUntil := c.leaseUntil
 		for {
 			select {
 			case <-done:
 				return
 			case <-t.C():
+				now := r.cfg.Clock.Now()
 				ctx, cancelBeat := context.WithTimeout(context.Background(), 5*time.Second)
 				err := r.beat(ctx, c)
 				cancelBeat()
-				if errors.Is(err, errLeaseLost) {
+				switch {
+				case err == nil:
+					leaseUntil = now.Add(r.cfg.Lease) // the beat's own time is later: this end is on the safe side
+					continue
+				case errors.Is(err, errLeaseLost):
 					r.cfg.Log.Warn("job lease lost; stopping the handler", "job_id", c.id.String(), "job_type", c.typ)
-					lost.Store(true)
-					cancel()
-					return
-				}
-				if err != nil {
+				case !r.cfg.Clock.Now().Add(r.cfg.Heartbeat).Before(leaseUntil):
+					r.cfg.Log.Warn("job heartbeats keep failing and the lease is about to end; stopping the handler",
+						"job_id", c.id.String(), "job_type", c.typ, "error_type", fmt.Sprintf("%T", err))
+				default:
 					r.cfg.Log.Warn("job heartbeat failed", "job_id", c.id.String(), "error_type", fmt.Sprintf("%T", err))
+					continue
 				}
+				lost.Store(true)
+				cancel()
+				return
 			}
 		}
 	}()

@@ -364,3 +364,51 @@ func TestHeartbeatLossStopsTheHandlerAndItsResultIsDropped(t *testing.T) {
 	assert.Equal(t, "running", got.status, "this worker no longer owns the job, so it writes nothing")
 	assert.Equal(t, "reaper-gave-it-away", got.lockedBy)
 }
+
+// A database the worker cannot reach (beats fail with errors other than a lost lease) stops the
+// handler before its lease ends: another process may reap the job and run it again, so this one
+// must not keep working on the server past its lease.
+func TestHeartbeatFailuresStopTheHandlerBeforeTheLeaseEnds(t *testing.T) {
+	e := newQEnv(t)
+	e.enqueue(t, Spec{Type: testQueueJob})
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	r := e.runner(t, "w1")
+	r.Handle(testQueueJob, func(ctx context.Context, _ Job, _ StepRecorder) (map[string]any, error) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			close(cancelled)
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Second):
+			return map[string]any{"finished": true}, nil
+		}
+	})
+	done := make(chan struct{})
+	go func() {
+		_, _ = r.RunOnce(e.ctx)
+		close(done)
+	}()
+	<-started
+	// Every write to the job row now fails, as during a network partition.
+	_, err := e.d.Owner.Exec(e.ctx, `CREATE FUNCTION fail_job_updates() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'partitioned'; END $$`)
+	require.NoError(t, err)
+	_, err = e.d.Owner.Exec(e.ctx, `CREATE TRIGGER fail_job_updates BEFORE UPDATE ON jobs FOR EACH ROW EXECUTE FUNCTION fail_job_updates()`)
+	require.NoError(t, err)
+	claimedAt := e.fake.Now()
+	require.Eventually(t, func() bool {
+		select {
+		case <-cancelled:
+			return true
+		default:
+			if e.fake.Now().Sub(claimedAt) < 45*time.Second {
+				e.fake.Advance(5 * time.Second)
+			}
+			return false
+		}
+	}, 5*time.Second, 20*time.Millisecond)
+	assert.Less(t, e.fake.Now().Sub(claimedAt), 45*time.Second, "the handler stops before the lease ends")
+	_, err = e.d.Owner.Exec(e.ctx, `DROP TRIGGER fail_job_updates ON jobs`)
+	require.NoError(t, err)
+	<-done
+}
