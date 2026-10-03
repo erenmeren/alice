@@ -334,14 +334,16 @@ func TestChangedHostKeyJourney(t *testing.T) {
 		return n
 	}
 
+	dials := f.server.Connections()
 	for i := 0; i < 2; i++ { // the second test must neither dial nor email again
 		rec := admin.do(http.MethodPost, "/api/v1/targets/"+targetID+"/actions/test", nil)
 		requireStatus(t, rec, http.StatusAccepted)
 		assert.Equal(t, 1, s.runJobs())
-		// The first test already sees the new key (the reinstall dropped the pooled connection);
-		// the second fails without dialing.
+		// The first test dials a fresh connection and sees the new key; the second fails without
+		// dialing (A-14: the server counts every TCP connection, not only authentications).
 		assert.Equal(t, "ALC-TGT-0004", jobErrorCode(s.job(admin, decodeBody[map[string]string](t, rec)["job_id"])), "test %d", i)
 		assert.Equal(t, "host_key_changed", s.target(admin, targetID)["status"], "test %d", i)
+		assert.Equal(t, dials+1, f.server.Connections(), "test %d: one dial in total", i)
 	}
 	assert.Equal(t, "host_key_changed", s.target(admin, targetID)["status"])
 	assert.Equal(t, attempts, f.server.AuthAttempts(), "F-31: no authentication reaches the server")

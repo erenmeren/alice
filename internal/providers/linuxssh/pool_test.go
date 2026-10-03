@@ -275,3 +275,77 @@ func TestNewPoolWithATinyIdleTimeDoesNotPanic(t *testing.T) {
 		}, "%v", idle)
 	}
 }
+
+// A-14: releasing a healthy connection twice keeps it idle once and frees its slots once: with
+// one slot, the reused connection still holds it and a second acquire has to wait.
+func TestPoolDoubleReleaseOfAHealthyConnection(t *testing.T) {
+	e := newPoolEnv(t, clock.Real{}, 1, 1)
+	c1, rel, err := e.pool.Acquire(context.Background(), testTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	rel(true)
+	rel(true)
+	e.pool.mu.Lock()
+	assert.Len(t, e.pool.idle[testTarget], 1, "kept idle once")
+	assert.Equal(t, 1, e.pool.idleN)
+	e.pool.mu.Unlock()
+	c2, rel2, err := e.pool.Acquire(shortCtx(t, 2*time.Second), testTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	assert.Same(t, c1, c2)
+	_, _, err = e.pool.Acquire(shortCtx(t, 200*time.Millisecond), testTarget, e.cfg, e.cred)
+	assert.Equal(t, "ssh.timeout", providerCode(t, err).Code, "the second release did not free a slot")
+	rel2(true)
+}
+
+// A-14: the liveness probe of an idle connection gives up after KeepaliveTimeout on the
+// connection's clock when the server never answers, and at once when the context ends; either
+// way the connection is closed and never reused.
+func TestProbeGivesUpOnTimeoutAndCancel(t *testing.T) {
+	dial := func(t *testing.T, clk clock.Clock) *Conn {
+		srv, cfg, cred := testServer(t, okHandler)
+		srv.HangGlobalRequests()
+		hk := &memHostKeys{}
+		hk.pin(srv.HostKey())
+		c, err := (&Dialer{Clock: clk, HostKeys: hk}).Dial(context.Background(), testTarget, cfg, cred)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = c.Close() })
+		return c
+	}
+	t.Run("timeout", func(t *testing.T) {
+		fake := clock.NewFake(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC))
+		c := dial(t, fake)
+		done := make(chan bool, 1)
+		go func() { done <- c.alive(context.Background()) }()
+		select {
+		case <-done:
+			t.Fatal("the probe ended before its timeout")
+		case <-time.After(100 * time.Millisecond):
+		}
+		var alive bool
+		require.Eventually(t, func() bool {
+			fake.Advance(KeepaliveTimeout)
+			select {
+			case alive = <-done:
+				return true
+			default:
+				return false
+			}
+		}, 5*time.Second, 10*time.Millisecond)
+		assert.False(t, alive)
+		assert.False(t, c.Healthy())
+	})
+	t.Run("cancel", func(t *testing.T) {
+		fake := clock.NewFake(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC))
+		c := dial(t, fake)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan bool, 1)
+		go func() { done <- c.alive(ctx) }()
+		cancel()
+		select {
+		case alive := <-done:
+			assert.False(t, alive)
+		case <-time.After(5 * time.Second):
+			t.Fatal("the probe ignored the cancelled context")
+		}
+		assert.False(t, c.Healthy())
+	})
+}
