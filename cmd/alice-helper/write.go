@@ -126,9 +126,7 @@ func (d keyDir) close() {
 
 // writeCandidate is the locked compare, backup and atomic replace.
 func (s *sys) writeCandidate(ctx context.Context, c candidate, expect, op string, content []byte) (any, error) {
-	home, ok := s.resolveNearest(c.acct.home)
-	inHome := ok && c.dir == home
-	d, err := s.openKeyDir(c, inHome)
+	d, err := s.openKeyDir(c)
 	if err != nil {
 		return nil, writeError(err)
 	}
@@ -138,10 +136,10 @@ func (s *sys) writeCandidate(ctx context.Context, c candidate, expect, op string
 		return nil, failed(helperproto.CodeIOError, "the key directory is locked by another process")
 	}
 	defer func() { _ = lock.Close() }()
-	if err := s.secureDirs(d, c.acct.uid, inHome); err != nil {
+	if err := s.secureDirs(d, c.acct.uid, c.inHome); err != nil {
 		return nil, writeError(err)
 	}
-	if err := writeThroughOK(c, d, inHome); err != nil {
+	if err := writeThroughOK(c, d); err != nil {
 		return nil, writeError(err)
 	}
 	cur, err := readCurrent(d, c.acct)
@@ -166,26 +164,19 @@ func (s *sys) writeCandidate(ctx context.Context, c candidate, expect, op string
 	return helperproto.AuthKeysWriteResponse{OK: true, SHA256: hexSHA(content), Backup: b.path(), Owner: c.acct.name}, nil
 }
 
-// writeThroughOK refuses a file in the home reached through a symlink (the scan resolved the
-// listed path elsewhere) when the directory that really holds it is not the user's: a link the
-// user planted must not make root rewrite a file in a directory root or another user controls.
-func writeThroughOK(c candidate, d keyDir, inHome bool) error {
-	if !inHome || c.real == c.path || c.acct.uid == 0 {
-		return nil
-	}
+// writeThroughOK is throughOK for the opened key directory: a file reached through a symlink must
+// sit in a directory of its user (root excepted).
+func writeThroughOK(c candidate, d keyDir) error {
 	var parent unix.Stat_t
 	if err := unix.Fstat(d.fd, &parent); err != nil {
 		return err
 	}
-	if int(parent.Uid) != c.acct.uid {
-		return errUnsafe
-	}
-	return nil
+	return throughOK(c, parent)
 }
 
 // openKeyDir opens the allowed directory and, beneath it, the directory of the file. A missing
 // <home>/.ssh is created (spec §13.4 step 4); no other missing directory ever is.
-func (s *sys) openKeyDir(c candidate, inHome bool) (keyDir, error) {
+func (s *sys) openKeyDir(c candidate) (keyDir, error) {
 	dirRel, base, err := splitCandidate(c)
 	if err != nil {
 		return keyDir{}, err
@@ -194,10 +185,10 @@ func (s *sys) openKeyDir(c candidate, inHome bool) (keyDir, error) {
 	if err != nil {
 		return keyDir{}, err
 	}
-	pfd, err := openBeneath(allowed, dirRel)
-	if errors.Is(err, fs.ErrNotExist) && inHome && dirRel == ".ssh" {
+	pfd, err := openBeneath(allowed, dirRel, !c.through)
+	if errors.Is(err, fs.ErrNotExist) && c.inHome && dirRel == ".ssh" {
 		if err = s.makeSSHDir(allowed, c.acct); err == nil {
-			pfd, err = openBeneath(allowed, dirRel)
+			pfd, err = openBeneath(allowed, dirRel, !c.through)
 		}
 	}
 	if err != nil {

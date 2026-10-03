@@ -13,8 +13,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/linuxssh/sshdconf"
@@ -26,6 +27,13 @@ type candidate struct {
 	path string // the expanded path, as listed to Alice and as Alice names it
 	real string // the path after resolving symlinks (missing trailing elements kept)
 	dir  string // the resolved directory real must stay in: the home, or the directory of an absolute pattern
+	// inHome is true when path lies in the user's home (whatever the pattern looked like): dir is
+	// then the resolved home, a missing .ssh may be created and StrictModes stops at the home.
+	inHome bool
+	// through is true when the scan reached the file through a symlink below dir (real differs
+	// from path rebased on dir). Opening then follows symlinks beneath dir, and for a user other
+	// than root the directory that really holds the file must be the user's (throughOK).
+	through bool
 }
 
 // scanItem is one expanded AuthorizedKeysFile entry: a candidate, or (ok false) a path that is a
@@ -120,26 +128,74 @@ func (s *sys) scan(ctx context.Context) (scanResult, error) {
 }
 
 // candidateFor expands one AuthorizedKeysFile pattern for a. valid reports that the expansion is a
-// valid helper path (p); ok that it is also a candidate: after resolving symlinks it must stay inside the user's home, or inside the directory
-// of an absolute pattern (/etc/ssh/keys/%u stays in /etc/ssh/keys).
+// valid helper path (p); ok that it is also a candidate (A-1 of the final review):
+//   - a path that lies in the user's home, from a relative pattern or an absolute one such as
+//     /home/%u/.ssh/authorized_keys, must stay inside the resolved home after resolving symlinks;
+//   - any other path (an absolute pattern such as /etc/ssh/keys/%u) must sit in a directory that is
+//     not reached through a symlink and whose existing components are all root's and not writable
+//     by group or others (rootControlled), and must stay inside that directory.
+//
+// The home rule is decided lexically first: a user who replaces ~/.ssh by a symlink to /root/.ssh
+// never turns an absolute pattern into "a directory of its own" whose containment passes trivially.
 func (s *sys) candidateFor(a account, pattern string) (p string, c candidate, valid, ok bool) {
 	p, err := sshdconf.Expand(pattern, a.name, a.home, a.uid)
 	if err != nil || !helperproto.ValidPath(p) {
 		return "", candidate{}, false, false
 	}
-	allowed := a.home
-	if strings.HasPrefix(pattern, "/") {
+	home := filepath.Clean(a.home)
+	inHome := within(p, home)
+	allowed := home
+	if !inHome {
 		allowed = filepath.Dir(p)
 	}
 	dir, found := s.resolveNearest(allowed)
-	if !found {
+	if !found || (!inHome && (dir != allowed || !s.rootControlled(allowed))) {
 		return p, candidate{}, true, false
 	}
 	real, found := s.resolveNearest(p)
 	if !found || !within(real, dir) {
 		return p, candidate{}, true, false
 	}
-	return p, candidate{acct: a, path: p, real: real, dir: dir}, true, true
+	rel, err := filepath.Rel(allowed, p)
+	if err != nil {
+		return p, candidate{}, true, false
+	}
+	through := real != filepath.Join(dir, rel)
+	return p, candidate{acct: a, path: p, real: real, dir: dir, inHome: inHome, through: through}, true, true
+}
+
+// rootControlled reports whether every existing component of the guest directory dir, from dir
+// up to "/", is a directory owned by root that group and others cannot write: nobody but root can
+// then swap a component between the scan and the open. Missing trailing components are allowed
+// (the write then fails with NOT_FOUND: only <home>/.ssh is ever created).
+func (s *sys) rootControlled(dir string) bool {
+	for d := dir; ; d = filepath.Dir(d) {
+		st, err := os.Lstat(s.host(d))
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+		case err != nil || !st.IsDir():
+			return false
+		default:
+			uid, _ := owner(st)
+			if uid != s.rootUID || st.Mode().Perm()&0o022 != 0 {
+				return false
+			}
+		}
+		if d == "/" {
+			return true
+		}
+	}
+}
+
+// throughOK refuses a file of a user other than root that the scan reached through a symlink
+// when the directory that really holds it (parent, from fstat of the opened directory) is not the
+// user's: a link the user planted must not make root read or rewrite a file in a directory root
+// or another user controls (A-1). It applies to reads, listings and writes alike.
+func throughOK(c candidate, parent unix.Stat_t) error {
+	if !c.through || c.acct.uid == 0 || int(parent.Uid) == c.acct.uid {
+		return nil
+	}
+	return errUnsafe
 }
 
 func cmdAuthKeysList(ctx context.Context, s *sys, args []string) (any, error) {

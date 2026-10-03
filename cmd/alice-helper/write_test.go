@@ -237,7 +237,7 @@ func TestWriteAbsolutePattern(t *testing.T) {
 	require.NoError(t, os.Chmod(f.host("/etc"), 0o777))
 	code, m = f.runWith("y\n", writeArgs("/etc/ssh/keys/deploy", hexOf("x\n"), op1)...)
 	assert.Equal(t, helperproto.ExitRefused, code, "a world-writable directory above an absolute pattern")
-	assert.Equal(t, helperproto.CodeInsecurePermissions, m["code"])
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"], "refused by the scan already (A-1: rootControlled)")
 	assert.Equal(t, "x\n", f.read("/etc/ssh/keys/deploy"))
 }
 

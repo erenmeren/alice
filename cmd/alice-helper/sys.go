@@ -17,7 +17,10 @@ import (
 // "guest" paths (as on the server); host turns them into real paths under root, so tests can run
 // every subcommand against a temporary directory as an unprivileged user.
 type sys struct {
-	root     string // filesystem prefix: "" in production, a temporary directory in tests
+	root string // filesystem prefix: "" in production, a temporary directory in tests
+	// rootUID is the owner every directory of an absolute AuthorizedKeysFile pattern outside the
+	// home must have (rootControlled): 0 in production; tests that do not run as root use their uid.
+	rootUID  int
 	euid     func() int
 	sudoUser func() string
 	now      func() time.Time

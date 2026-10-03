@@ -40,8 +40,10 @@ func useFallback(err error) bool {
 // or a walk that follows no symlink where openat2 is unavailable), and the file is opened with
 // openat relative to that parent descriptor with O_NOFOLLOW. A component swapped for a symlink
 // after the scan can never lead outside the allowed directory. Symlinks that stay beneath it are
-// followed by openat2 (A-13); the fallback refuses every symlink component. The parent's fstat is
-// returned for fileOK; the caller checks the file with fstat too.
+// followed by openat2 (A-13) only when the scan itself went through one (c.through); otherwise a
+// symlink that appeared after the scan is refused. The fallback refuses every symlink component.
+// A file reached through a symlink must pass throughOK. The parent's fstat is returned for
+// fileOK; the caller checks the file with fstat too.
 func (s *sys) openCandidate(c candidate) (*os.File, unix.Stat_t, error) {
 	var parent unix.Stat_t
 	dirRel, base, err := splitCandidate(c)
@@ -53,12 +55,15 @@ func (s *sys) openCandidate(c candidate) (*os.File, unix.Stat_t, error) {
 		return nil, parent, err
 	}
 	defer func() { _ = unix.Close(dirfd) }()
-	parentfd, err := openBeneath(dirfd, dirRel)
+	parentfd, err := openBeneath(dirfd, dirRel, !c.through)
 	if err != nil {
 		return nil, parent, err
 	}
 	defer func() { _ = unix.Close(parentfd) }()
 	if err := unix.Fstat(parentfd, &parent); err != nil {
+		return nil, parent, err
+	}
+	if err := throughOK(c, parent); err != nil {
 		return nil, parent, err
 	}
 	fd, err := unix.Openat(parentfd, base, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
@@ -87,19 +92,21 @@ func (s *sys) openAllowed(c candidate) (int, error) {
 }
 
 // openBeneath opens the directory dirRel beneath dirfd (openat2 with RESOLVE_BENEATH, or the
-// component-wise walk where openat2 is unavailable). An empty dirRel returns a duplicate of dirfd.
-// The caller closes the returned descriptor.
-func openBeneath(dirfd int, dirRel string) (int, error) {
+// component-wise walk where openat2 is unavailable). With noSymlinks openat2 follows no symlink
+// at all (the walk never does). An empty dirRel returns a duplicate of dirfd. The caller closes the
+// returned descriptor.
+func openBeneath(dirfd int, dirRel string, noSymlinks bool) (int, error) {
 	if dirRel == "" {
 		return unix.FcntlInt(uintptr(dirfd), unix.F_DUPFD_CLOEXEC, 0) //nolint:gosec // G115: a descriptor is never negative
 	}
 	pfd, err := -1, error(nil)
 	if useOpenat2 {
-		pfd, err = openat2(dirfd, dirRel, &unix.OpenHow{
-			Flags:   unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC,
-			Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV,
-		})
-		if errors.Is(err, unix.EXDEV) {
+		resolve := uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV)
+		if noSymlinks {
+			resolve |= unix.RESOLVE_NO_SYMLINKS
+		}
+		pfd, err = openat2(dirfd, dirRel, &unix.OpenHow{Flags: unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC, Resolve: resolve})
+		if errors.Is(err, unix.EXDEV) || (noSymlinks && errors.Is(err, unix.ELOOP)) {
 			return -1, errEscaped
 		}
 	}

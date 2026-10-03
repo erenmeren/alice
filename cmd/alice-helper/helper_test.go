@@ -104,6 +104,7 @@ broken line
 	f.write("/etc/nsswitch.conf", "passwd: files systemd\ngroup: files\n", 0o644)
 	f.s = &sys{
 		root:     root,
+		rootUID:  os.Getuid(),
 		euid:     func() int { return 0 },
 		sudoUser: func() string { return "alice-svc" },
 		now:      func() time.Time { return testNow },
@@ -389,6 +390,7 @@ func TestEscapingSymlinkIsNotACandidate(t *testing.T) {
 func TestSymlinkInsideHomeIsFollowed(t *testing.T) {
 	f := newFixture(t)
 	f.write("/home/deploy/.ssh/authorized_keys", "real\n", 0o600)
+	f.asUser("/home/deploy/.ssh", "/home/deploy/.ssh/authorized_keys") // as root: a symlink is followed into the user's directory only (A-1)
 	require.NoError(t, os.Symlink("authorized_keys", f.host("/home/deploy/.ssh/authorized_keys2")))
 	code, m := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys2")
 	assert.Equal(t, 0, code)
@@ -512,8 +514,9 @@ func TestAttackSwapRace(t *testing.T) {
 	}
 }
 
-// N-3: a symlink to a sibling directory inside the home appears after the scan. openat2 accepts
-// it (it stays beneath the home), the walk refuses it.
+// N-3: a symlink to a sibling directory inside the home appears after the scan. Both openat2 and
+// the walk refuse it: the scan saw no symlink, so none may be followed at the open (A-1 of the final
+// review: the sibling could be a root-owned directory of the home).
 func TestIntermediateSymlinkAfterScan(t *testing.T) {
 	for _, openat2OK := range []bool{true, false} {
 		t.Run(fmt.Sprintf("openat2=%v", openat2OK), func(t *testing.T) {
@@ -532,12 +535,8 @@ func TestIntermediateSymlinkAfterScan(t *testing.T) {
 			}
 			code, m := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys")
 			require.True(t, swapped)
-			if openat2OK {
-				assert.Equal(t, 0, code, "openat2 follows a symlink that stays beneath the home (A-13)")
-			} else {
-				assert.Equal(t, helperproto.ExitRefused, code)
-				assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
-			}
+			assert.Equal(t, helperproto.ExitRefused, code)
+			assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
 		})
 	}
 }
