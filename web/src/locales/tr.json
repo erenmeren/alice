@@ -648,7 +648,8 @@
         "remove": "SSH anahtarının kaldırılması"
       }
     },
-    "blockedNotice": "Bu işlem duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor."
+    "blockedNotice": "Bu işlem duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",
+    "stopped": "Bu iş bitmeden durduruldu."
   },
   "enum": {
     "targetStatus": {

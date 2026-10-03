@@ -13,7 +13,7 @@ import { PageLoader } from '../auth/guards';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { HostKeyConfirm } from '../components/HostKeyConfirm';
-import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert } from '../components/JobErrorAlert';
+import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert, StoppedJobAlert } from '../components/JobErrorAlert';
 import { KeyFlags } from '../components/KeyFlags';
 import { RemoveKeyDialog } from '../components/RemoveKeyDialog';
 import { useStepUp } from '../components/StepUpProvider';
@@ -62,6 +62,7 @@ export function TargetDetailPage() {
   const [jobError, setJobError] = useState<JobError | null>(null);
   const [done, setDone] = useState(false);
   const [blocked, setBlocked] = useState(false);
+  const [stopped, setStopped] = useState(false);
   const abort = useAbort();
   const [repinning, setRepinning] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -76,11 +77,13 @@ export function TargetDetailPage() {
     setJobError(null);
     setDone(false);
     setBlocked(false);
+    setStopped(false);
     try {
       const job = await waitForJob((await start()).job_id, { signal: abort.signal() });
       if (job.status === 'succeeded') setDone(true);
       else if (job.status === 'blocked_license') setBlocked(true);
-      else setJobError(job.error);
+      else if (job.error) setJobError(job.error);
+      else setStopped(true);
     } catch (e) {
       if (!isAbort(e)) setError(e);
     }
@@ -165,6 +168,7 @@ export function TargetDetailPage() {
       )}
       {error instanceof JobTimeoutError ? <StillWorkingAlert /> : <ErrorAlert error={error} />}
       {blocked && <BlockedJobAlert />}
+      {stopped && <StoppedJobAlert />}
       <JobErrorAlert error={jobError} />
 
       <Title order={2} size="h3">

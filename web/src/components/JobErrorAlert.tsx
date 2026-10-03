@@ -30,6 +30,16 @@ export function BlockedJobAlert() {
   );
 }
 
+// StoppedJobAlert: the job ended (cancelled or given up) without an error of its own to show.
+export function StoppedJobAlert() {
+  const { t } = useTranslation();
+  return (
+    <Alert color="yellow" role="status">
+      {t('jobs.stopped')}
+    </Alert>
+  );
+}
+
 // JobErrorAlert shows why a background job failed: what happened, what to do, and the code.
 export function JobErrorAlert({ error }: { error: JobError | null }) {
   const { t, i18n } = useTranslation();

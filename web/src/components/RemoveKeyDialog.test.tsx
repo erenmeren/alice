@@ -43,4 +43,15 @@ describe('RemoveKeyDialog', () => {
     expect(await within(dialog).findByText('Alice cannot reach the server.')).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Remove key' })).toBeEnabled();
   });
+
+  it('says that the removal was stopped when a cancelled job carries no error', async () => {
+    server.use(
+      http.post('/api/v1/ssh-keys/locations/:id/actions/remove', () => HttpResponse.json({ job_id: 'job-x', status_url: '/api/v1/jobs/job-x' }, { status: 202 })),
+      http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-x', type: 'sshkey.remove', status: 'cancelled', error: null }))),
+    );
+    await renderApp(<RemoveKeyDialog location={keyLocationFixture()} onClose={() => undefined} onDone={() => undefined} />);
+    const dialog = await screen.findByRole('dialog', { name: 'Remove this key from the server?' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Remove key' }));
+    expect(await within(dialog).findByText('This task was stopped before it finished.')).toBeInTheDocument();
+  });
 });

@@ -383,6 +383,18 @@ describe('TargetDetailPage', () => {
     expect(screen.queryByText('Finished.')).not.toBeInTheDocument();
   });
 
+  it('says when a started task was stopped without an error', async () => {
+    onServer('operator');
+    server.use(
+      http.post('/api/v1/targets/:id/actions/test', () => HttpResponse.json({ job_id: 'job-t', status_url: '/api/v1/jobs/job-t' }, { status: 202 })),
+      http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-t', status: 'dead', error: null }))),
+    );
+    await renderRoute(path);
+    await userEvent.click(await screen.findByRole('button', { name: 'Test connection' }));
+    expect(await screen.findByText('This task was stopped before it finished.')).toBeInTheDocument();
+    expect(screen.queryByText('Finished.')).not.toBeInTheDocument();
+  });
+
   it('shows a generic note with the code for warnings it cannot describe or that lack their details', async () => {
     const warnings: Warning[] = [
       { code: 'made_up_by_a_newer_helper', params: {} },

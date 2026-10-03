@@ -648,7 +648,8 @@
         "remove": "SSH key removal"
       }
     },
-    "blockedNotice": "This task is paused and waits for an administrator to run it."
+    "blockedNotice": "This task is paused and waits for an administrator to run it.",
+    "stopped": "This task was stopped before it finished."
   },
   "enum": {
     "targetStatus": {

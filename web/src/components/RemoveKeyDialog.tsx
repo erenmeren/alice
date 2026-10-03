@@ -9,7 +9,7 @@ import type { JobError, KeyLocation } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
-import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert } from './JobErrorAlert';
+import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert, StoppedJobAlert } from './JobErrorAlert';
 import { WRAP } from './wrap';
 
 // RemoveKeyDialog removes one key from one authorized_keys file through the sshkey.remove job.
@@ -25,6 +25,7 @@ export function RemoveKeyDialog({ location, onClose, onDone }: { location: KeyLo
   const [needsRootConfirm, setNeedsRootConfirm] = useState(false);
   const [rootConfirmed, setRootConfirmed] = useState(false);
   const [blocked, setBlocked] = useState(false);
+  const [stopped, setStopped] = useState(false);
   const abort = useAbort();
 
   const submit = async () => {
@@ -32,6 +33,7 @@ export function RemoveKeyDialog({ location, onClose, onDone }: { location: KeyLo
     setError(null);
     setJobError(null);
     setBlocked(false);
+    setStopped(false);
     try {
       const accepted = await removeKeyLocation(location.id, needsRootConfirm && rootConfirmed);
       const job = await waitForJob(accepted.job_id, { signal: abort.signal() });
@@ -40,6 +42,7 @@ export function RemoveKeyDialog({ location, onClose, onDone }: { location: KeyLo
         return;
       }
       if (job.status === 'blocked_license') setBlocked(true);
+      else if (!job.error) setStopped(true);
       setJobError(job.error);
     } catch (e) {
       if (isAbort(e)) {
@@ -74,6 +77,7 @@ export function RemoveKeyDialog({ location, onClose, onDone }: { location: KeyLo
         )}
         {error instanceof JobTimeoutError ? <StillWorkingAlert /> : <ErrorAlert error={error} />}
         {blocked && <BlockedJobAlert />}
+        {stopped && <StoppedJobAlert />}
         <JobErrorAlert error={jobError} />
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>
