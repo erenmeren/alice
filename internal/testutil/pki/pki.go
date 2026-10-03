@@ -143,7 +143,7 @@ func NewCA(name string, kt KeyType, now time.Time) *CA {
 		RootPEM: pemOf(root), IntermediatePEM: pemOf(inter)}
 }
 
-func leafTemplate(o Opts, key crypto.Signer, now time.Time) *x509.Certificate {
+func leafTemplate(o Opts, pub crypto.PublicKey, now time.Time) *x509.Certificate {
 	nb, na := o.NotBefore, o.NotAfter
 	if nb.IsZero() {
 		nb = now.Add(-time.Hour)
@@ -152,7 +152,7 @@ func leafTemplate(o Opts, key crypto.Signer, now time.Time) *x509.Certificate {
 		na = now.AddDate(0, 0, 90)
 	}
 	usage := x509.KeyUsageDigitalSignature
-	if _, ok := key.Public().(*rsa.PublicKey); ok {
+	if _, ok := pub.(*rsa.PublicKey); ok {
 		usage |= x509.KeyUsageKeyEncipherment
 	}
 	t := &x509.Certificate{
@@ -162,7 +162,7 @@ func leafTemplate(o Opts, key crypto.Signer, now time.Time) *x509.Certificate {
 		NotAfter:     na,
 		KeyUsage:     usage,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		SubjectKeyId: ski(key.Public()),
+		SubjectKeyId: ski(pub),
 	}
 	for _, s := range o.SANs {
 		if ip := net.ParseIP(s); ip != nil {
@@ -180,14 +180,23 @@ func (ca *CA) Issue(o Opts, now time.Time) Leaf {
 	if key == nil {
 		key = NewKey(o.KeyType)
 	}
-	cert := sign(leafTemplate(o, key, now), ca.Intermediate, key.Public(), ca.IntermediateKey)
+	cert := sign(leafTemplate(o, key.Public(), now), ca.Intermediate, key.Public(), ca.IntermediateKey)
 	return newLeaf(cert, key, ca.IntermediatePEM)
+}
+
+// IssueForCSR signs a leaf for a signing request with the intermediate: the request's public key,
+// common name and DNS names. The requester holds the key, so Key is nil and KeyPEM empty.
+func (ca *CA) IssueForCSR(r *x509.CertificateRequest, now time.Time) Leaf {
+	cert := sign(leafTemplate(Opts{CommonName: r.Subject.CommonName, SANs: r.DNSNames}, r.PublicKey, now), ca.Intermediate,
+		r.PublicKey, ca.IntermediateKey)
+	certPEM := pemOf(cert)
+	return Leaf{Cert: cert, CertPEM: certPEM, FullchainPEM: append(append([]byte{}, certPEM...), ca.IntermediatePEM...)}
 }
 
 // SelfSigned returns a self-signed leaf.
 func SelfSigned(cn string, kt KeyType, now time.Time) Leaf {
 	key := NewKey(kt)
-	tmpl := leafTemplate(Opts{CommonName: cn, SANs: []string{cn}}, key, now)
+	tmpl := leafTemplate(Opts{CommonName: cn, SANs: []string{cn}}, key.Public(), now)
 	return newLeaf(sign(tmpl, tmpl, key.Public(), key), key, nil)
 }
 

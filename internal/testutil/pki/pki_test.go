@@ -1,6 +1,7 @@
 package pki
 
 import (
+	"crypto"
 	"crypto/x509"
 	"encoding/pem"
 	"testing"
@@ -64,4 +65,23 @@ func TestEncryptedKeyPEMIsMarked(t *testing.T) {
 	b, _ := pem.Decode(EncryptedKeyPEM(ca.Issue(Opts{CommonName: "x", KeyType: RSA2048}, now)))
 	require.NotNil(t, b)
 	assert.Equal(t, "4,ENCRYPTED", b.Headers["Proc-Type"])
+}
+
+func TestIssueForCSRSignsTheRequestsKey(t *testing.T) {
+	ca := NewCA("Alice Test", ECDSA256, now)
+	key := NewKey(RSA2048)
+	r := CSRFor("www.example.test", []string{"www.example.test", "example.test"}, key)
+	l := ca.IssueForCSR(r, now)
+	assert.Nil(t, l.Key, "the requester keeps the key")
+	assert.Empty(t, l.KeyPEM)
+	assert.True(t, l.Cert.PublicKey.(interface{ Equal(crypto.PublicKey) bool }).Equal(key.Public()))
+	assert.Equal(t, "www.example.test", l.Cert.Subject.CommonName)
+	assert.Equal(t, []string{"www.example.test", "example.test"}, l.Cert.DNSNames)
+	assert.NotZero(t, l.Cert.KeyUsage&x509.KeyUsageKeyEncipherment, "an RSA leaf as Issue makes it")
+	roots, inter := x509.NewCertPool(), x509.NewCertPool()
+	roots.AddCert(ca.Root)
+	inter.AddCert(ca.Intermediate)
+	_, err := l.Cert.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter, CurrentTime: now, DNSName: "example.test"})
+	require.NoError(t, err)
+	assert.Equal(t, append(append([]byte{}, l.CertPEM...), ca.IntermediatePEM...), l.FullchainPEM)
 }
