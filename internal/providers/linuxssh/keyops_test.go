@@ -481,7 +481,7 @@ func TestWriteAnsweredForAnotherAccountIsPartial(t *testing.T) {
 	assert.True(t, res.Changed)
 }
 
-// A helper claiming protocol 2 must name the owner.
+// A helper claiming protocol 2 or later must name the owner.
 func TestReadWithoutOwnerIsAProtocolError(t *testing.T) {
 	e := newProvEnv(t)
 	k, fp := keyLine(t, "ed25519", "", "a@x")

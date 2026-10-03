@@ -12,13 +12,15 @@ import (
 
 // Protocol and file locations.
 const (
-	Protocol   = 2 // 2: authkeys-read and authkeys-write answer with the resolved owner
-	Version    = "1.1.0"
+	// Protocol 2: authkeys-read and authkeys-write answer with the resolved owner. Protocol 3:
+	// authkeys-write takes --content-sha256 and refuses incomplete content (CONTENT_MISMATCH).
+	Protocol   = 3
+	Version    = "1.2.0"
 	HelperPath = "/usr/local/libexec/alice-helper"
 	BackupRoot = "/var/lib/alice-helper/backups"
 )
 
-// Subcommands of protocol 2 (R37 item 3).
+// Subcommands of protocol 3 (R37 item 3).
 const (
 	SubVersion       = "version"
 	SubSSHDDump      = "sshd-dump"
@@ -48,10 +50,13 @@ const (
 	CodeInsecurePermissions = "INSECURE_PERMISSIONS"
 	CodeTooLarge            = "TOO_LARGE"
 	CodeHashMismatch        = "HASH_MISMATCH"
-	CodeNotFound            = "NOT_FOUND"
-	CodeSSHDFailed          = "SSHD_FAILED"
-	CodeIOError             = "IO_ERROR"
-	CodeUnsafeFile          = "UNSAFE_FILE" // hard-linked, or owned by neither its user nor root
+	// CodeContentMismatch refuses a write whose stdin does not have the --content-sha256 hash: the
+	// content arrived incomplete (the connection dropped while it was sent). Exit 3, nothing written.
+	CodeContentMismatch = "CONTENT_MISMATCH"
+	CodeNotFound        = "NOT_FOUND"
+	CodeSSHDFailed      = "SSHD_FAILED"
+	CodeIOError         = "IO_ERROR"
+	CodeUnsafeFile      = "UNSAFE_FILE" // hard-linked, or owned by neither its user nor root
 	// CodeAuthorizedKeysCommand refuses a write for a user whose keys sshd takes from an
 	// AuthorizedKeysCommand: the files are not the whole truth, keys are managed elsewhere.
 	CodeAuthorizedKeysCommand = "AUTHORIZED_KEYS_COMMAND"
@@ -157,7 +162,7 @@ type AuthKeysWriteResponse struct {
 	OK     bool   `json:"ok"`
 	SHA256 string `json:"sha256"`
 	Backup string `json:"backup"`
-	// Owner is the account the helper resolved the file to (protocol 2).
+	// Owner is the account the helper resolved the file to (since protocol 2).
 	Owner string `json:"owner"`
 }
 

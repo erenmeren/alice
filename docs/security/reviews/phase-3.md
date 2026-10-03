@@ -39,8 +39,9 @@ Playwright: the e2e build has no deterministic way to queue a job before the loc
       `sudo -n /usr/local/libexec/alice-helper <subcommand> '<arg>'…` with arguments from `[A-Za-z0-9._/@:+-]`.
 - [ ] The helper refuses every path it did not compute itself from `/etc/passwd` and `sshd -T`, resolves symlinks
       and keeps them inside the user's home (or the configured directory), never prints private key material, and
-      writes with a root-private lock file, hash check, backup, temporary file, `fsync`, rename and directory
-      `fsync`.
+      writes with a root-private lock file, hash check of the current file, hash check of the received content
+      (`--content-sha256`, protocol 3: a connection dropped mid-transfer never leaves a truncated file), backup,
+      temporary file, `fsync`, rename and directory `fsync`.
 - [ ] sudoers allows only `alice-helper` subcommands of the chosen profile with the narrowed argument patterns
       (R37 item 3); `!requiretty`, `!lecture`, `env_reset`, `secure_path`, `log_output`.
 - [ ] The setup script never writes, chowns or chmods through a path `alice-svc` controls, and installs only a
@@ -62,7 +63,7 @@ Playwright: the e2e build has no deterministic way to queue a job before the loc
 | P3-05 | Low | Accounts known only to LDAP/SSSD are not listed, so their keys are not inventoried. | Accepted for v1 (R37 item 4); a warning names the gap on each such server. |
 | P3-06 | Low | The `nginx` sudoers profile keeps `*` wildcards that accept any arguments; the helper is the enforcement point. The `linux` profile lines are narrowed (R37 item 3). | Accepted (spec §12.3); helper validation is tested on three distributions; the Nginx lines are narrowed with their command builders in Phase 4. |
 | P3-07 | Low | Helper backups of `authorized_keys` (public data) stay on the server for up to 30 days; Alice does not call `cleanup` in Phase 3. | Accepted; they are root-only (0700/0600). |
-| P3-08 | Info | The `nginx` sudoers profile already allows subcommands that protocol 2 answers with `UNKNOWN_SUBCOMMAND`. | Intended (R37 item 3). |
+| P3-08 | Info | The `nginx` sudoers profile already allows subcommands that protocol 3 answers with `UNKNOWN_SUBCOMMAND`. | Intended (R37 item 3). |
 
 No High finding is open except the documented product residual P3-01.
 

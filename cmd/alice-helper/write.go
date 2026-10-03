@@ -39,13 +39,16 @@ var errInsecure = errors.New("insecure permissions")
 var lockWait = 45 * time.Second
 
 // cmdAuthKeysWrite replaces one candidate authorized_keys file with stdin, but only when its
-// current content still has the hash Alice read (spec §13.4 step 4).
+// current content still has the hash Alice read (spec §13.4 step 4) and stdin has the hash Alice
+// computed for the new content (protocol 3): EOF on stdin is not proof that all of it arrived (a
+// dropped connection ends it early), so a prefix is never written.
 func cmdAuthKeysWrite(ctx context.Context, s *sys, args []string) (any, error) {
-	if len(args) != 5 || args[1] != "--expect-sha256" || args[3] != "--op" {
-		return nil, refused(helperproto.CodeUsage, "usage: authkeys-write <path> --expect-sha256 <sha256|absent> --op <operation id>")
+	if len(args) != 7 || args[1] != "--expect-sha256" || args[3] != "--content-sha256" || args[5] != "--op" {
+		return nil, refused(helperproto.CodeUsage, "usage: authkeys-write <path> --expect-sha256 <sha256|absent> --content-sha256 <sha256> --op <operation id>")
 	}
-	path, expect, op := args[0], args[2], args[4]
-	if !helperproto.ValidPath(path) || !helperproto.ValidSHA256(expect) || !helperproto.ValidOpID(op) {
+	path, expect, want, op := args[0], args[2], args[4], args[6]
+	if !helperproto.ValidPath(path) || !helperproto.ValidSHA256(expect) || want == helperproto.AbsentSHA256 ||
+		!helperproto.ValidSHA256(want) || !helperproto.ValidOpID(op) {
 		return nil, refused(helperproto.CodeInvalidArgument, "an argument is not allowed")
 	}
 	content, err := io.ReadAll(io.LimitReader(s.stdin, helperproto.MaxAuthorizedKeysSize+1))
@@ -54,6 +57,9 @@ func cmdAuthKeysWrite(ctx context.Context, s *sys, args []string) (any, error) {
 	}
 	if len(content) > helperproto.MaxAuthorizedKeysSize {
 		return nil, refused(helperproto.CodeTooLarge, "the new content is too large")
+	}
+	if hexSHA(content) != want {
+		return nil, precondition(helperproto.CodeContentMismatch, "the new content arrived incomplete")
 	}
 	s.syslog(helperproto.SubAuthKeysWrite, path)
 	r, err := s.scan(ctx)

@@ -1,6 +1,8 @@
 package linuxssh
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -85,6 +87,9 @@ func CmdAuthKeysRead(path string) (HelperCommand, error) {
 
 // CmdAuthKeysWrite replaces one authorized_keys file with content when its current SHA-256 is
 // expectSHA256 (helperproto.AbsentSHA256 for a file that does not exist yet). op names the backup.
+// The SHA-256 of content goes on the command line too (--content-sha256, protocol 3): the helper
+// refuses stdin that does not match it, so a connection that drops while the content is sent
+// never leaves a truncated file (the helper would otherwise take the early EOF for the end).
 func CmdAuthKeysWrite(path, expectSHA256 string, op uuid.UUID, content []byte) (HelperCommand, error) {
 	if !helperproto.ValidPath(path) || !helperproto.ValidSHA256(expectSHA256) || op == uuid.Nil || !helperproto.ValidOpID(op.String()) {
 		return HelperCommand{}, ErrInvalidArgument
@@ -100,11 +105,16 @@ func CmdAuthKeysWrite(path, expectSHA256 string, op uuid.UUID, content []byte) (
 	if err != nil {
 		return HelperCommand{}, err
 	}
+	sum := sha256.Sum256(content)
+	qc, err := quoteArg(hex.EncodeToString(sum[:]))
+	if err != nil {
+		return HelperCommand{}, err
+	}
 	qo, err := quoteArg(op.String())
 	if err != nil {
 		return HelperCommand{}, err
 	}
-	c := privileged(helperproto.SubAuthKeysWrite, DefaultCommandTimeout, smallOutput, qp, "--expect-sha256", qh, "--op", qo)
+	c := privileged(helperproto.SubAuthKeysWrite, DefaultCommandTimeout, smallOutput, qp, "--expect-sha256", qh, "--content-sha256", qc, "--op", qo)
 	c.stdin = append([]byte(nil), content...)
 	return c, nil
 }

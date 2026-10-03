@@ -29,7 +29,7 @@ Cmnd_Alias ALICE_COMMON = \
     /usr/local/libexec/alice-helper cleanup --op *, \
     /usr/local/libexec/alice-helper authkeys-list, \
     /usr/local/libexec/alice-helper authkeys-read /*, \
-    /usr/local/libexec/alice-helper authkeys-write /* --expect-sha256 * --op *
+    /usr/local/libexec/alice-helper authkeys-write /* --expect-sha256 * --content-sha256 * --op *
 `
 
 const goldenSudoersLinux = goldenSudoersHead + `

@@ -247,7 +247,7 @@ func parseLine(cmd string) (sudo bool, sub string, args []string, valid bool, ok
 	sub = fields[0]
 	valid = true
 	for _, f := range fields[1:] {
-		if f == "--expect-sha256" || f == "--op" {
+		if f == "--expect-sha256" || f == "--content-sha256" || f == "--op" {
 			args = append(args, f)
 			continue
 		}
@@ -478,15 +478,19 @@ func (e *Emulator) read(args []string) Response {
 }
 
 func (e *Emulator) write(args []string, stdin []byte) Response {
-	if len(args) != 5 || args[1] != "--expect-sha256" || args[3] != "--op" {
+	if len(args) != 7 || args[1] != "--expect-sha256" || args[3] != "--content-sha256" || args[5] != "--op" {
 		return refuse(helperproto.ExitRefused, helperproto.CodeUsage)
 	}
-	path, expect, op := args[0], args[2], args[4]
-	if !helperproto.ValidPath(path) || !helperproto.ValidSHA256(expect) || !helperproto.ValidOpID(op) {
+	path, expect, want, op := args[0], args[2], args[4], args[6]
+	if !helperproto.ValidPath(path) || !helperproto.ValidSHA256(expect) || want == helperproto.AbsentSHA256 ||
+		!helperproto.ValidSHA256(want) || !helperproto.ValidOpID(op) {
 		return refuse(helperproto.ExitRefused, helperproto.CodeInvalidArgument)
 	}
 	if len(stdin) > helperproto.MaxAuthorizedKeysSize {
 		return refuse(helperproto.ExitRefused, helperproto.CodeTooLarge)
+	}
+	if sum(stdin) != want {
+		return refuse(helperproto.ExitPrecondition, helperproto.CodeContentMismatch)
 	}
 	e.mu.Lock()
 	hook := e.beforeWrite

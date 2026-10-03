@@ -56,11 +56,27 @@ func newWriteFixture(t *testing.T) (*fixture, func() []chownCall) {
 func (f *fixture) runWith(stdin string, args ...string) (int, map[string]any) {
 	f.t.Helper()
 	f.s.stdin = strings.NewReader(stdin)
-	return f.run(args...)
+	return f.run(withContent(args, stdin)...)
 }
 
+// autoContent stands for "the SHA-256 of the stdin the test sends" in writeArgs; runWith and
+// withContent replace it. It is a valid hash itself (of the empty content), so a test whose stdin
+// fails to read still gets past argument validation.
+var autoContent = hexOf("")
+
 func writeArgs(path, expect, op string) []string {
-	return []string{"authkeys-write", path, "--expect-sha256", expect, "--op", op}
+	return []string{"authkeys-write", path, "--expect-sha256", expect, "--content-sha256", autoContent, "--op", op}
+}
+
+// withContent puts the hash of stdin in place of autoContent (a copy; args is not changed).
+func withContent(args []string, stdin string) []string {
+	out := append([]string(nil), args...)
+	for i := 1; i < len(out); i++ {
+		if out[i-1] == "--content-sha256" && out[i] == autoContent {
+			out[i] = hexOf(stdin)
+		}
+	}
+	return out
 }
 
 // sshDirEntries lists the names in the deploy .ssh directory (no staging file may remain).
@@ -269,7 +285,7 @@ func TestConcurrentWritersSerialize(t *testing.T) {
 			var out strings.Builder
 			s.stdout = &out
 			s.stdin = strings.NewReader(content)
-			codes[i] = run(writeArgs(keysPath, hexOf("base\n"), []string{op1, op2}[i]), &s)
+			codes[i] = run(withContent(writeArgs(keysPath, hexOf("base\n"), []string{op1, op2}[i]), content), &s)
 		}()
 	}
 	wg.Wait()
@@ -362,13 +378,14 @@ func TestConcurrentWritersOfOneOperationGetDistinctBackups(t *testing.T) {
 				defer wg.Done()
 				s := *f.s
 				s.stdout = &outs[i]
-				s.stdin = strings.NewReader(fmt.Sprintf("round %d\n", round))
+				content := fmt.Sprintf("round %d\n", round)
+				s.stdin = strings.NewReader(content)
 				path := fmt.Sprintf("/home/deploy/k%d/keys", i)
 				prev := fmt.Sprintf("old %d\n", i)
 				if round > 0 {
 					prev = fmt.Sprintf("round %d\n", round-1)
 				}
-				codes[i] = run(writeArgs(path, hexOf(prev), op), &s)
+				codes[i] = run(withContent(writeArgs(path, hexOf(prev), op), content), &s)
 			}()
 		}
 		wg.Wait()
@@ -403,7 +420,10 @@ func TestWriteRefusesBadRequests(t *testing.T) {
 		{"newline in the path", writeArgs(keysPath+"\n/etc/shadow", good, op1), "x", helperproto.ExitRefused, helperproto.CodeInvalidArgument},
 		{"upper-case hash", writeArgs(keysPath, strings.Repeat("A", 64), op1), "x", helperproto.ExitRefused, helperproto.CodeInvalidArgument},
 		{"traversal in the op id", writeArgs(keysPath, good, "../../../../etc/cron.d/x"), "x", helperproto.ExitRefused, helperproto.CodeInvalidArgument},
-		{"flags swapped", []string{"authkeys-write", keysPath, "--op", op1, "--expect-sha256", good}, "x", helperproto.ExitRefused, helperproto.CodeUsage},
+		{"flags swapped", []string{"authkeys-write", keysPath, "--op", op1, "--expect-sha256", good, "--content-sha256", hexOf("x")}, "x", helperproto.ExitRefused, helperproto.CodeUsage},
+		{"protocol 2 arguments", []string{"authkeys-write", keysPath, "--expect-sha256", good, "--op", op1}, "x", helperproto.ExitRefused, helperproto.CodeUsage},
+		{"content hash absent", []string{"authkeys-write", keysPath, "--expect-sha256", good, "--content-sha256", helperproto.AbsentSHA256, "--op", op1}, "x", helperproto.ExitRefused, helperproto.CodeInvalidArgument},
+		{"upper-case content hash", []string{"authkeys-write", keysPath, "--expect-sha256", good, "--content-sha256", strings.Repeat("A", 64), "--op", op1}, "x", helperproto.ExitRefused, helperproto.CodeInvalidArgument},
 		{"missing flags", []string{"authkeys-write", keysPath}, "x", helperproto.ExitRefused, helperproto.CodeUsage},
 		{"content too large", writeArgs(keysPath, good, op1), strings.Repeat("#", helperproto.MaxAuthorizedKeysSize+1), helperproto.ExitRefused, helperproto.CodeTooLarge},
 	} {
@@ -415,6 +435,27 @@ func TestWriteRefusesBadRequests(t *testing.T) {
 	assert.Equal(t, "root:HASH:1::::::\n", f.read("/etc/shadow"))
 	assert.Empty(t, chowns())
 	assert.False(t, f.exists(helperproto.BackupRoot), "no refused request creates backups")
+}
+
+// A-2: the connection dies while Alice sends the new content. The helper sees EOF after a prefix
+// of it; the content hash Alice sent on the command line does not match, so nothing is written.
+func TestWriteRefusesTruncatedContent(t *testing.T) {
+	f, chowns := newWriteFixture(t)
+	f.write(keysPath, "old\n", 0o600)
+	full := "ssh-ed25519 AAAA one\nssh-ed25519 BBBB two\n"
+	args := []string{"authkeys-write", keysPath, "--expect-sha256", hexOf("old\n"), "--content-sha256", hexOf(full), "--op", op1}
+	for _, prefix := range []string{"", "ssh-ed25519 AAAA one\n", full[:len(full)-1]} {
+		code, m := f.runWith(prefix, args...)
+		assert.Equal(t, helperproto.ExitPrecondition, code, "%q", prefix)
+		assert.Equal(t, helperproto.CodeContentMismatch, m["code"], "%q", prefix)
+		assert.Equal(t, "old\n", f.read(keysPath))
+	}
+	assert.Empty(t, chowns())
+	assert.False(t, f.exists(helperproto.BackupRoot+"/"+op1), "nothing was backed up")
+
+	code, m := f.runWith(full, args...)
+	require.Equal(t, 0, code, "%v", m)
+	assert.Equal(t, full, f.read(keysPath))
 }
 
 func TestWriteRefusesHardLinkedAndNonRegularFiles(t *testing.T) {

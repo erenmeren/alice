@@ -37,6 +37,9 @@ func TestCommandLinesAreExact(t *testing.T) {
 	write, err := CmdAuthKeysWrite("/root/.ssh/authorized_keys", helperproto.AbsentSHA256, testOp, []byte("x\n"))
 	require.NoError(t, err)
 	sha := strings.Repeat("ab", 32)
+	// A-2 (protocol 3): the SHA-256 of the new content travels on the command line.
+	const xSHA = "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+	const emptySHA = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	writeSHA, err := CmdAuthKeysWrite("/root/.ssh/authorized_keys", sha, testOp, nil)
 	require.NoError(t, err)
 	cleanup, err := CmdCleanup(testOp)
@@ -52,8 +55,8 @@ func TestCommandLinesAreExact(t *testing.T) {
 		{CmdHostKeys(), "sudo -n /usr/local/libexec/alice-helper hostkeys", "hostkeys"},
 		{CmdAuthKeysList(), "sudo -n /usr/local/libexec/alice-helper authkeys-list", "authkeys-list"},
 		{read, "sudo -n /usr/local/libexec/alice-helper authkeys-read '/home/deploy/.ssh/authorized_keys'", "authkeys-read"},
-		{write, "sudo -n /usr/local/libexec/alice-helper authkeys-write '/root/.ssh/authorized_keys' --expect-sha256 'absent' --op '0190f5a0-0000-7000-8000-0000000000aa'", "authkeys-write"},
-		{writeSHA, "sudo -n /usr/local/libexec/alice-helper authkeys-write '/root/.ssh/authorized_keys' --expect-sha256 '" + sha + "' --op '0190f5a0-0000-7000-8000-0000000000aa'", "authkeys-write"},
+		{write, "sudo -n /usr/local/libexec/alice-helper authkeys-write '/root/.ssh/authorized_keys' --expect-sha256 'absent' --content-sha256 '" + xSHA + "' --op '0190f5a0-0000-7000-8000-0000000000aa'", "authkeys-write"},
+		{writeSHA, "sudo -n /usr/local/libexec/alice-helper authkeys-write '/root/.ssh/authorized_keys' --expect-sha256 '" + sha + "' --content-sha256 '" + emptySHA + "' --op '0190f5a0-0000-7000-8000-0000000000aa'", "authkeys-write"},
 		{cleanup, "sudo -n /usr/local/libexec/alice-helper cleanup --op '0190f5a0-0000-7000-8000-0000000000aa'", "cleanup"},
 	} {
 		assert.Equal(t, tc.line, tc.cmd.Line())

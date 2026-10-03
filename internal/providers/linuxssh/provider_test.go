@@ -246,13 +246,13 @@ func TestOpenHelperMissing(t *testing.T) {
 
 func TestOpenHelperOutdated(t *testing.T) {
 	e := newProvEnv(t)
-	for _, old := range []int{0, 1} { // protocol 1 answers without an owner
+	for _, old := range []int{0, 1, 2} { // protocol 1 answers without an owner; 2 has no --content-sha256
 		e.emu.SetProtocol(old)
 		_, err := e.prov.Open(context.Background(), e.ref, e.cred, providers.Env{})
 		pe := providerCode(t, err)
 		assert.Equal(t, "ssh.helper_outdated", pe.Code)
 		assert.Equal(t, strconv.Itoa(old), pe.Params["helper_protocol"])
-		assert.Equal(t, "2", pe.Params["required_protocol"])
+		assert.Equal(t, "3", pe.Params["required_protocol"])
 	}
 }
 
