@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"alice/internal/providers/linuxssh/helperproto"
 )
 
 func fixture(t *testing.T, name string) []byte {
@@ -524,4 +526,10 @@ func TestMailTLSWarns(t *testing.T) {
 	assert.Equal(t, []string{WarnMailTLS}, parseInline(t, "mail { server { listen 993 ssl; ssl_certificate /etc/ssl/m.crt; ssl_certificate_key /etc/ssl/m.key; } }").Warnings)
 	assert.Equal(t, []string{WarnMailTLS}, parseInline(t, "mail { ssl_certificate /etc/ssl/m.crt; server { listen 993; } }").Warnings)
 	assert.Empty(t, parseInline(t, "mail { server { listen 143; } }").Warnings)
+}
+
+func TestWarningCodesComeFromHelperproto(t *testing.T) {
+	assert.Equal(t, helperproto.WarnStreamTLS, WarnStreamTLS)
+	assert.Equal(t, helperproto.WarnMailTLS, WarnMailTLS)
+	assert.Equal(t, helperproto.MaxNginxConfig, MaxInput)
 }

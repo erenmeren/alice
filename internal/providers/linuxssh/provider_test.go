@@ -290,7 +290,7 @@ func TestOpenHelperOutdated(t *testing.T) {
 		pe := providerCode(t, err)
 		assert.Equal(t, "ssh.helper_outdated", pe.Code)
 		assert.Equal(t, strconv.Itoa(old), pe.Params["helper_protocol"])
-		assert.Equal(t, "3", pe.Params["required_protocol"])
+		assert.Equal(t, "4", pe.Params["required_protocol"])
 	}
 }
 

@@ -44,11 +44,10 @@ const (
 	maxPattern = 512      // longest include pattern that is matched
 )
 
-// Warning codes (the web catalog keys warnings.<code>). helperproto does not define them yet, so
-// they live here until the protocol task adds them.
+// Warning codes (the web catalog keys warnings.<code>); helperproto is their single source.
 const (
-	WarnStreamTLS = "stream_tls" // TLS in a stream block
-	WarnMailTLS   = "mail_tls"   // TLS in a mail block
+	WarnStreamTLS = helperproto.WarnStreamTLS // TLS in a stream block
+	WarnMailTLS   = helperproto.WarnMailTLS   // TLS in a mail block
 )
 
 // Errors.

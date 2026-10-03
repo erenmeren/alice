@@ -518,7 +518,7 @@ connection.
 ## ALC-SSH-0005: Helper outdated
 
 **Meaning.** The helper on the server speaks an older protocol than this Alice version needs (this release needs
-protocol 3, `alice-helper` 1.2.0).
+protocol 4, `alice-helper` 1.3.0).
 
 **Likely cause.** Alice was updated but the helper on the server was not.
 

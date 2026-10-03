@@ -21,7 +21,7 @@ safe.
    development build of Alice without checksums prints a warning instead and installs the file unchecked.)
 2. Install the checked copy as `/usr/local/libexec/alice-helper`, owned by root, mode 0755. Alice cannot change this
    file; you update it yourself when a new Alice release asks for it ("helper outdated"). This release needs helper
-   protocol 3 (`alice-helper` 1.2.0), which refuses a key-file change whose content did not arrive complete.
+   protocol 4 (`alice-helper` 1.3.0): the Nginx certificate commands, plus the protocol 3 rule that a key-file change whose content did not arrive complete is refused.
 3. Create the system user `alice-svc` (home `/var/lib/alice-svc`, shell `/bin/bash`, no files from `/etc/skel`) if
    it does not exist. If a user `alice-svc` already exists with another home directory, the script stops. The
    account gets no password (`usermod -p '*'`): nobody can sign in with a password, but the SSH server still accepts

@@ -1,9 +1,12 @@
 package helperproto
 
 import (
+	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -136,11 +139,12 @@ func TestValidSHA256(t *testing.T) {
 func TestWireNames(t *testing.T) {
 	b, err := json.Marshal(AuthKeysListResponse{OK: true, Users: []UserFiles{{User: "deploy", UID: 1001, Home: "/home/deploy",
 		Files: []FileInfo{{Path: "/home/deploy/.ssh/authorized_keys", Exists: true, Size: 3, SHA256: "x", Mode: "0600",
-			Owner: "deploy", StrictModesOK: true}}}}, AuthorizedKeysCommand: "none", Warnings: []string{WarnSSHDUnreadable}})
+			Owner: "deploy", StrictModesOK: true}}}}, AuthorizedKeysCommand: "none", Warnings: []string{WarnSSHDUnreadable},
+		Accounts: []string{"deploy", "root"}, AccountsComplete: true})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"ok":true,"users":[{"user":"deploy","uid":1001,"home":"/home/deploy","files":[{"path":"/home/deploy/.ssh/authorized_keys",
 		"exists":true,"size":3,"sha256":"x","mode":"0600","owner":"deploy","strict_modes_ok":true,"too_large":false,"unsupported":false}],"sshd_unreadable":false,"authorized_keys_command":""}],
-		"authorized_keys_command":"none","warnings":["sshd_unreadable"]}`, string(b))
+		"authorized_keys_command":"none","warnings":["sshd_unreadable"],"accounts":["deploy","root"],"accounts_complete":true}`, string(b))
 	b, err = json.Marshal(ErrorResponse{Code: CodePathNotAllowed, Message: "m"})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"ok":false,"code":"PATH_NOT_ALLOWED","message":"m"}`, string(b))
@@ -150,7 +154,89 @@ func TestWireNames(t *testing.T) {
 	b, err = json.Marshal(HostKeysResponse{OK: true, Keys: []HostKeyInfo{{Type: "ssh-ed25519", Bits: 256, Fingerprint: "SHA256:x", Path: "/k.pub"}}})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"ok":true,"keys":[{"type":"ssh-ed25519","bits":256,"fingerprint":"SHA256:x","path":"/k.pub"}]}`, string(b))
-	assert.Equal(t, 3, Protocol)
+	assert.Equal(t, 4, Protocol)
 	assert.Equal(t, "/usr/local/libexec/alice-helper", HelperPath)
 	assert.Equal(t, 1<<20, MaxAuthorizedKeysSize)
+}
+
+func TestProtocol4(t *testing.T) {
+	assert.Equal(t, 4, Protocol)
+	assert.Equal(t, "1.3.0", Version)
+	assert.Equal(t, 20<<20, MaxNginxConfig)
+	assert.Equal(t, 7*24*time.Hour, NginxBackupKeep)
+}
+
+func TestNginxWarningCodes(t *testing.T) {
+	assert.Equal(t, "stream_tls", WarnStreamTLS)
+	assert.Equal(t, "mail_tls", WarnMailTLS)
+	assert.Equal(t, "config_file_writable", WarnConfigFileWritable)
+	assert.Equal(t, "too_many_files", WarnTooManyFiles)
+}
+
+func TestValidPort(t *testing.T) {
+	for in, want := range map[string]bool{"1": true, "443": true, "65535": true, "0": false, "65536": false, "0443": false,
+		"": false, "-1": false, "4a": false, "443 ": false, "123456": false} {
+		assert.Equal(t, want, ValidPort(in), in)
+	}
+}
+
+func TestValidSNI(t *testing.T) {
+	for in, want := range map[string]bool{"www.example.test": true, "alice-check.example.test": true, "localhost": true,
+		"WWW.example.test": false, "": false, ".a": false, "a.": false, "a..b": false, "-a.b": false, "a-.b": false,
+		"*.a.b": false, "a b": false, "a_b.c": false, strings.Repeat("a", 64) + ".b": false, "ö.example": false,
+		"10.0.0.5": false, "127.0.0.1": false, "::1": false, "2001:db8::5": false, NoSNI: false} {
+		assert.Equal(t, want, ValidSNI(in), in)
+	}
+}
+
+func TestValidIP(t *testing.T) {
+	for in, want := range map[string]bool{"127.0.0.1": true, "::1": true, "10.0.0.5": true, "2001:db8::5": true,
+		"fe80::1%eth0": false, "::ffff:127.0.0.1": true, "2001:DB8::5": false, "localhost": false, "": false, "1.2.3": false} {
+		assert.Equal(t, want, ValidIP(in), in)
+	}
+}
+
+func TestProtocol4WireNames(t *testing.T) {
+	b, err := json.Marshal(NginxDeployResponse{OK: true, Phase: PhaseCommitted, Steps: []NginxStep{{Name: StepBackup, Status: "ok"}},
+		BackupDir: BackupRoot + "/x"})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"ok":true,"phase":"committed","failed_step":"","error":"","steps":[{"name":"backup","status":"ok","error":""}],
+		"backup_dir":"/var/lib/alice-helper/backups/x"}`, string(b))
+	b, err = json.Marshal(AuthKeysListResponse{OK: true, Users: []UserFiles{}, Warnings: []string{}, Accounts: []string{"a"}, AccountsComplete: true})
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"accounts":["a"],"accounts_complete":true`)
+	b, err = json.Marshal(NginxFile{Path: "/p", Kind: "key", Exists: true})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"path":"/p","kind":"key","exists":true,"resolved":"","symlinked":false,"mode":"","owner":"","size":0,
+		"sha256":"","pem":"","problem":"","free_bytes":0}`, string(b))
+}
+
+func TestNginxDeployInputIsNotPrintable(t *testing.T) {
+	in := NginxDeployInput{CertPEM: "CERT", KeyPEM: "SECRETKEYMATERIAL"}
+	for _, f := range []string{"%v", "%+v", "%#v", "%s"} {
+		assert.NotContains(t, fmt.Sprintf(f, in), "SECRETKEYMATERIAL", f)
+		assert.NotContains(t, fmt.Sprintf(f, &in), "SECRETKEYMATERIAL", f)
+	}
+	b, err := json.Marshal(in) // the wire form still carries both fields
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"cert_pem":"CERT","key_pem":"SECRETKEYMATERIAL"}`, string(b))
+}
+
+func TestProbeTLSConfig(t *testing.T) {
+	c := ProbeTLSConfig("www.example.test", ProbeAny)
+	assert.True(t, c.InsecureSkipVerify)
+	assert.Equal(t, "www.example.test", c.ServerName)
+	assert.Equal(t, uint16(tls.VersionTLS12), c.MinVersion)
+	assert.Zero(t, c.MaxVersion) // TLS 1.3-only sites stay probeable
+	assert.Empty(t, c.CipherSuites)
+	assert.Empty(t, ProbeTLSConfig(NoSNI, ProbeAny).ServerName)
+	assert.Empty(t, ProbeTLSConfig("", ProbeAny).ServerName)
+	r := ProbeTLSConfig("", ProbeRSA)
+	assert.Equal(t, uint16(tls.VersionTLS12), r.MaxVersion)
+	assert.Contains(t, r.CipherSuites, tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256)
+	assert.NotContains(t, r.CipherSuites, tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
+	e := ProbeTLSConfig("", ProbeECDSA)
+	assert.Equal(t, uint16(tls.VersionTLS12), e.MaxVersion)
+	assert.Contains(t, e.CipherSuites, tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
+	assert.NotContains(t, e.CipherSuites, tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256)
 }

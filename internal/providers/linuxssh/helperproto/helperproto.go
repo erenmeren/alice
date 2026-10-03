@@ -5,6 +5,8 @@
 package helperproto
 
 import (
+	"crypto/tls"
+	"net/netip"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -15,8 +17,9 @@ import (
 const (
 	// Protocol 2: authkeys-read and authkeys-write answer with the resolved owner. Protocol 3:
 	// authkeys-write takes --content-sha256 and refuses incomplete content (CONTENT_MISMATCH).
-	Protocol   = 3
-	Version    = "1.2.0"
+	// Protocol 4: the Nginx subcommands, tls-probe, and the accounts list of authkeys-list.
+	Protocol   = 4
+	Version    = "1.3.0"
 	HelperPath = "/usr/local/libexec/alice-helper"
 	BackupRoot = "/var/lib/alice-helper/backups"
 )
@@ -81,6 +84,107 @@ const (
 	WarnUnsupportedPath = "unsupported_path"
 	WarnTooManyUsers    = "too_many_users" // more accounts than the helper lists
 )
+
+// Phase 4 warnings of nginx-dump. WarnStreamTLS and WarnMailTLS are also the codes of
+// nginxconf.Config.Warnings, which takes its values from here.
+const (
+	WarnStreamTLS          = "stream_tls"           // TLS in stream {} is listed but not supported (F-21, R23)
+	WarnMailTLS            = "mail_tls"             // TLS in mail {} is listed but not supported
+	WarnConfigFileWritable = "config_file_writable" // a configuration file can be changed by users other than root
+	WarnTooManyFiles       = "too_many_files"       // more referenced files than MaxNginxFiles
+)
+
+// Phase 4 subcommands (spec §12.3, R38 item 1). tls-probe runs without sudo (like version).
+const (
+	SubNginxDump    = "nginx-dump"
+	SubNginxTest    = "nginx-test"
+	SubNginxDeploy  = "nginx-deploy"
+	SubNginxRestore = "nginx-restore"
+	SubNginxStatus  = "nginx-status"
+	SubTLSProbe     = "tls-probe"
+)
+
+// Phase 4 error codes.
+const (
+	CodeNginxNotFound = "NGINX_NOT_FOUND" // /usr/sbin/nginx does not exist (F-20)
+	CodeConfigInvalid = "CONFIG_INVALID"  // nginx -T/-t fails before anything changed (F-02)
+	CodeConfigChanged = "CONFIG_CHANGED"  // the paths are not a supported pair of the current configuration
+	CodeNoSpace       = "NO_SPACE"        // less free space than the new files plus MinFreeBytes (F-10, F-11)
+	CodeBadContent    = "BAD_CONTENT"     // stdin is not one certificate file and one unencrypted private key
+	CodeBusy          = "BUSY"            // another nginx-deploy or nginx-restore holds the lock
+	CodeUnknownOp     = "UNKNOWN_OP"      // nginx-restore: no journal for this operation
+	CodeProbeFailed   = "PROBE_FAILED"    // tls-probe could not connect or complete the handshake
+)
+
+// MaxAccountNames bounds AuthKeysListResponse.Accounts (R38 item 20).
+const MaxAccountNames = 5000
+
+// Phase 4 limits.
+const (
+	MaxNginxConfig  = 20 << 20  // nginx -T output the helper reads
+	MaxCertFileSize = 256 << 10 // a certificate or key file
+	MaxDeployInput  = 512 << 10 // nginx-deploy stdin
+	MaxNginxFiles   = 1000      // referenced certificate and key files nginx-dump describes
+	MinFreeBytes    = 10 << 20  // free space kept after a write (spec §12.6 step 1)
+	NginxDumpOutput = 16 << 20  // nginx-dump's answer: certificates are public and small
+	NginxBackupKeep = 7 * 24 * time.Hour
+)
+
+// Configuration error classes of nginx -t (never the raw text).
+const (
+	ConfigErrKeyMismatch = "key_mismatch"
+	ConfigErrFileMissing = "file_missing"
+	ConfigErrCertLoad    = "cert_load"
+	ConfigErrKeyLoad     = "key_load"
+	ConfigErrSyntax      = "syntax"
+)
+
+// File problems of nginx-dump (also providers.CertProblem*).
+const (
+	FileMissing           = "missing"
+	FileNotRootControlled = "not_root_controlled"
+	FileNotRegular        = "not_regular"
+	FileHardLinked        = "hard_linked"
+	FileTooLarge          = "too_large"
+	FileNotACertificate   = "not_a_certificate"
+	FileUnreadable        = "unreadable"
+	FileBadName           = "bad_name" // the resolved name has no certificate or key extension
+)
+
+// Deployment journal phases (nginx-status, nginx-deploy outcome).
+const (
+	PhaseNone          = "none"           // no journal: nothing happened for this operation
+	PhasePrepared      = "prepared"       // backups written; nothing renamed
+	PhaseWriting       = "writing"        // between the first rename and the end of the reload: interrupted when not active
+	PhaseCommitted     = "committed"      // both files written, nginx -t passed, reload and is-active passed
+	PhaseUnchanged     = "unchanged"      // the files already held the new content; nothing written, no reload
+	PhaseRestoring     = "restoring"      // a rollback is under way: interrupted when not active
+	PhaseRestored      = "restored"       // the backups are back and Nginx reloaded
+	PhaseRestoreFailed = "restore_failed" // the rollback could not finish
+)
+
+// Deploy step names (nginx-deploy and nginx-restore report them in order).
+const (
+	StepBackup             = "backup"
+	StepWriteKey           = "write_key"
+	StepWriteCert          = "write_cert"
+	StepConfigTest         = "config_test"
+	StepReload             = "reload"
+	StepRestore            = "restore"
+	StepRollbackConfigTest = "rollback_config_test"
+	StepRollbackReload     = "rollback_reload"
+)
+
+// KeyTypes of tls-probe.
+const (
+	ProbeAny   = "any"
+	ProbeRSA   = "rsa"
+	ProbeECDSA = "ecdsa"
+)
+
+// NoSNI is the --sni value of tls-probe that sends no server name (ValidArg accepts it,
+// ValidSNI does not, so it can never be a real name).
+const NoSNI = "_"
 
 // Size limits and markers.
 const (
@@ -156,6 +260,10 @@ type AuthKeysListResponse struct {
 	Users                 []UserFiles `json:"users"`
 	AuthorizedKeysCommand string      `json:"authorized_keys_command"`
 	Warnings              []string    `json:"warnings"`
+	// Accounts is every valid /etc/passwd name, sorted and deduplicated (at most MaxAccountNames);
+	// AccountsComplete is false when the list was cut or could not be read completely (R38 item 20).
+	Accounts         []string `json:"accounts"`
+	AccountsComplete bool     `json:"accounts_complete"`
 }
 
 // AuthKeysReadResponse answers "authkeys-read".
@@ -182,6 +290,125 @@ type AuthKeysWriteResponse struct {
 type CleanupResponse struct {
 	OK      bool `json:"ok"`
 	Removed int  `json:"removed"`
+}
+
+// NginxListen is one SSL listen of a server block.
+type NginxListen struct {
+	Addr          string `json:"addr"` // "" = any address
+	Port          int    `json:"port"`
+	DefaultServer bool   `json:"default_server"`
+}
+
+// NginxPair is one ssl_certificate / ssl_certificate_key pair of a server block.
+type NginxPair struct {
+	Cert        string `json:"cert"`
+	Key         string `json:"key"`
+	Inherited   bool   `json:"inherited"`
+	Unsupported string `json:"unsupported"` // "" or an nginxconf.Reason*
+	Raw         string `json:"raw"`         // the directive's argument when unsupported (cleaned, at most 200 runes)
+}
+
+// NginxServer is one server block of the parsed configuration.
+type NginxServer struct {
+	File    string        `json:"file"`
+	Line    int           `json:"line"`
+	Names   []string      `json:"names"`
+	Listens []NginxListen `json:"listens"` // SSL listens only
+	Pairs   []NginxPair   `json:"pairs"`
+	Stream  bool          `json:"stream"`
+}
+
+// NginxFile describes one certificate or key file a supported pair references. Key files are
+// only stat'ed: their content is never read or returned.
+type NginxFile struct {
+	Path      string `json:"path"`
+	Kind      string `json:"kind"` // "cert" | "key"
+	Exists    bool   `json:"exists"`
+	Resolved  string `json:"resolved"`
+	Symlinked bool   `json:"symlinked"`
+	Mode      string `json:"mode"`  // "0644"
+	Owner     string `json:"owner"` // account name or uid
+	Size      int64  `json:"size"`
+	SHA256    string `json:"sha256"` // certificate files only
+	PEM       string `json:"pem"`    // certificate files only: CERTIFICATE blocks, nothing else
+	Problem   string `json:"problem"`
+	FreeBytes int64  `json:"free_bytes"`
+}
+
+// NginxDumpResponse answers "nginx-dump".
+type NginxDumpResponse struct {
+	OK          bool          `json:"ok"`
+	Version     string        `json:"version"`
+	ConfPath    string        `json:"conf_path"`
+	ConfigValid bool          `json:"config_valid"`
+	ConfigError string        `json:"config_error"` // a ConfigErr* class when !ConfigValid
+	Servers     []NginxServer `json:"servers"`
+	Files       []NginxFile   `json:"files"`
+	Warnings    []string      `json:"warnings"`
+	Writable    []string      `json:"writable"` // configuration files others than root can change
+}
+
+// NginxTestResponse answers "nginx-test".
+type NginxTestResponse struct {
+	OK    bool   `json:"ok"`
+	Valid bool   `json:"valid"`
+	Error string `json:"error"`
+}
+
+// NginxStep is one step of a deployment or restore.
+type NginxStep struct {
+	Name   string `json:"name"`
+	Status string `json:"status"` // "ok" | "failed"
+	Error  string `json:"error"`  // a ConfigErr* class or "" (never raw text)
+}
+
+// NginxDeployInput is the JSON on nginx-deploy's stdin. It carries a private key: it has no
+// String or GoString that prints the values, and the key must never be logged.
+type NginxDeployInput struct {
+	CertPEM string `json:"cert_pem"`
+	KeyPEM  string `json:"key_pem"`
+}
+
+// String redacts the key material so %v and %+v never print it.
+func (NginxDeployInput) String() string { return "helperproto.NginxDeployInput{redacted}" }
+
+// GoString redacts the key material so %#v never prints it.
+func (NginxDeployInput) GoString() string { return "helperproto.NginxDeployInput{redacted}" }
+
+// NginxDeployResponse answers "nginx-deploy".
+type NginxDeployResponse struct {
+	OK         bool        `json:"ok"`
+	Phase      string      `json:"phase"` // PhaseCommitted, PhaseUnchanged, PhaseRestored, PhaseRestoreFailed
+	FailedStep string      `json:"failed_step"`
+	Error      string      `json:"error"`
+	Steps      []NginxStep `json:"steps"`
+	BackupDir  string      `json:"backup_dir"`
+}
+
+// NginxRestoreResponse answers "nginx-restore".
+type NginxRestoreResponse struct {
+	OK    bool        `json:"ok"`
+	Phase string      `json:"phase"` // PhaseRestored, PhaseRestoreFailed, or PhasePrepared/PhaseUnchanged (nothing to restore)
+	Error string      `json:"error"`
+	Steps []NginxStep `json:"steps"`
+}
+
+// NginxStatusResponse answers "nginx-status".
+type NginxStatusResponse struct {
+	OK                bool   `json:"ok"`
+	Phase             string `json:"phase"`
+	Active            bool   `json:"active"` // a helper process holds the Nginx lock now
+	NewCertSHA256     string `json:"new_cert_sha256"`
+	CurrentCertSHA256 string `json:"current_cert_sha256"`
+	BackupDir         string `json:"backup_dir"`
+}
+
+// TLSProbeResponse answers "tls-probe".
+type TLSProbeResponse struct {
+	OK          bool   `json:"ok"`
+	LeafSHA256  string `json:"leaf_sha256"` // hex SHA-256 of the served leaf's DER
+	ChainLength int    `json:"chain_length"`
+	NotAfter    string `json:"not_after"` // RFC 3339 UTC
 }
 
 var (
@@ -250,3 +477,75 @@ func ValidSHA256(s string) bool {
 }
 
 func isLowerHex(c byte) bool { return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' }
+
+// ValidPort reports whether s is a decimal TCP port 1..65535 without leading zeros.
+func ValidPort(s string) bool {
+	if s == "" || len(s) > 5 || s[0] == '0' {
+		return false
+	}
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+		n = n*10 + int(s[i]-'0')
+	}
+	return n >= 1 && n <= 65535
+}
+
+// ValidSNI reports whether s is a lower-case DNS name Alice may send as SNI: 1..253 bytes of
+// [a-z0-9.-], no empty label, no leading or trailing hyphen in a label. IP literals are refused
+// (RFC 6066 forbids them in server_name).
+func ValidSNI(s string) bool {
+	if len(s) == 0 || len(s) > 253 {
+		return false
+	}
+	if _, err := netip.ParseAddr(s); err == nil {
+		return false
+	}
+	for _, label := range strings.Split(s, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// ValidIP reports whether s is an IPv4 or IPv6 literal without a zone in its canonical form.
+func ValidIP(s string) bool {
+	a, err := netip.ParseAddr(s)
+	return err == nil && a.Zone() == "" && a.String() == s
+}
+
+// ProbeTLSConfig is the client configuration of both verification probes (Alice's and the
+// helper's tls-probe): no certificate verification (the served leaf's fingerprint is compared,
+// spec §12.8 item 3), TLS 1.2 or later. With keyType ProbeAny the maximum version is left open,
+// so a TLS 1.3-only site can be probed. ProbeRSA or ProbeECDSA limits the probe to TLS 1.2 with
+// ECDHE_RSA or ECDHE_ECDSA suites so a dual-certificate server shows the one of that type
+// (spec §12.8 item 4); callers use them only for that purpose. sni "" or NoSNI sends no name.
+func ProbeTLSConfig(sni, keyType string) *tls.Config {
+	c := &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // G402: the probe only compares the served leaf's SHA-256 with the expected certificate (spec §12.8 item 3); it never trusts the connection or sends data
+		MinVersion:         tls.VersionTLS12,
+	}
+	if sni != "" && sni != NoSNI {
+		c.ServerName = sni
+	}
+	switch keyType {
+	case ProbeRSA:
+		c.MaxVersion = tls.VersionTLS12
+		c.CipherSuites = []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256}
+	case ProbeECDSA:
+		c.MaxVersion = tls.VersionTLS12
+		c.CipherSuites = []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256}
+	}
+	return c
+}
