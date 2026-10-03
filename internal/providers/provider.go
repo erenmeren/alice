@@ -62,9 +62,11 @@ type HostKey struct {
 var ErrNoPinnedKey = errors.New("providers: no pinned host key")
 
 // HostKeyStore is implemented by inventory. Pinned returns ErrNoPinnedKey when nothing is pinned.
-// Observed records a presented key that is not pinned; changed is true when another key is pinned.
-// Observed must honour ctx, may complete after Dial has returned (Dial stops waiting at its
-// handshake budget), and must be idempotent per (target, key).
+// Observed records a presented key that is not pinned. changed is the caller's view (another key
+// was pinned when it compared) and is advisory only: the store decides from its own pinned key
+// whether the sighting is a change that blocks the target, so a stale or wrong flag never unblocks
+// or skips a block. Observed must honour ctx, may complete after Dial has returned (Dial stops
+// waiting at its handshake budget), and must be idempotent per (target, key).
 type HostKeyStore interface {
 	Pinned(ctx context.Context, target uuid.UUID) (HostKey, error)
 	Observed(ctx context.Context, target uuid.UUID, key HostKey, changed bool) error

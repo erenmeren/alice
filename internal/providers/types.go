@@ -24,8 +24,8 @@ type DiscoveryResult struct {
 	SSHD            SSHDSummary
 	UnreadableLines []UnreadableLine
 	Warnings        []Warning
-	Partial         bool     // some source failed: inventory never marks anything missing from a partial scan
-	ReadFiles       []string // files read completely (missing marking is limited to these)
+	Partial         bool     // some source failed (a file could not be read); reported, it does not stop missing marking
+	ReadFiles       []string // files read completely: missing marking is limited to these, also in a partial scan (R37 #23)
 }
 
 // DiscoveredSSHKey is one authorized_keys entry.

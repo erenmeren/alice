@@ -318,8 +318,9 @@ func (s *Service) DeleteTarget(ctx context.Context, a Actor, id uuid.UUID) error
 	return nil
 }
 
-// RequestTest queues a connection test. It is allowed in every status: on a changed host key the
-// test stops at the key exchange and only confirms the block (owner step 5).
+// RequestTest queues a connection test. It is allowed in every status; on a changed host key (or
+// a disabled target) the job refuses before connecting at all (F-31: nothing runs on that target
+// until an Administrator re-pins), so it only confirms the block (owner step 5).
 func (s *Service) RequestTest(ctx context.Context, a Actor, id uuid.UUID) (uuid.UUID, error) {
 	return s.requestJob(ctx, a, id, JobTestConnection, "target.test_connection:"+id.String(), nil)
 }
