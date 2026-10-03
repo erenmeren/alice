@@ -223,6 +223,22 @@ describe('TargetDetailPage', () => {
     await waitFor(() => expect(hostKeyCalls).toBeGreaterThan(before));
   });
 
+  it('shows the confirmation card once a server that was being checked starts waiting for confirmation', async () => {
+    let target = targetWith({ status: 'checking' });
+    onServer('admin', target);
+    server.use(
+      http.get('/api/v1/targets/:id', () => HttpResponse.json(target)),
+      http.get('/api/v1/targets/:id/host-keys', () =>
+        HttpResponse.json({ items: target.status === 'pending_host_key' ? [hostKeyFixture({ status: 'observed', confirmed_at: null, confirmed_by_name: '' })] : [] }),
+      ),
+    );
+    await renderRoute(path);
+    await screen.findByTestId('target-status');
+    expect(screen.queryByRole('heading', { name: 'Is this your server?' })).not.toBeInTheDocument();
+    target = targetWith({ status: 'pending_host_key' });
+    expect(await screen.findByRole('heading', { name: 'Is this your server?' }, { timeout: 6000 })).toBeInTheDocument();
+  }, 10_000);
+
   it('refuses to remove Alice’s own key and says why', async () => {
     onServer('admin');
     server.use(http.post('/api/v1/ssh-keys/locations/:id/actions/remove', () => errorResponse(409, 'ALC-KEY-0001', 'sshkey.own_key_protected')));

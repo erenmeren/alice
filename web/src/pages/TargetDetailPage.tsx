@@ -49,7 +49,9 @@ export function TargetDetailPage() {
       return addedNow && !d.last_discovery_at && q.state.dataUpdateCount < 20 ? 3000 : false;
     },
   });
-  const hostKeys = useQuery({ queryKey: [...targetKey(id), 'host-keys'], queryFn: () => listHostKeys(id) });
+  // The status is part of the key so the host keys are read again when a polled server moves on
+  // (for example from checking to pending_host_key and its confirmation card).
+  const hostKeys = useQuery({ queryKey: [...targetKey(id), 'host-keys', target.data?.status ?? null], queryFn: () => listHostKeys(id) });
   const keys = useQuery({
     queryKey: [...targetKey(id), 'ssh-keys', target.data?.last_discovery_at ?? null],
     queryFn: () => listTargetKeys(id),
