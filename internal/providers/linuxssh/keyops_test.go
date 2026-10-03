@@ -95,6 +95,32 @@ func TestRemoveRefusesTheLastKeyOfTheConnectionAccount(t *testing.T) {
 	assert.Empty(t, e.emu.Writes())
 }
 
+// Re-review item 1: the last-key guard covers every uid-0 account (toor), not only the one named
+// root; a normal account's last key needs no confirmation.
+func TestRemoveLastKeyOfAnotherUID0AccountNeedsConfirmation(t *testing.T) {
+	e := newProvEnv(t)
+	e.emu.AddUser("toor", 0, "/home/toor")
+	const toorFile = "/home/toor/.ssh/authorized_keys"
+	k, fp := keyLine(t, "ed25519", "", "toor@x")
+	e.emu.SetFile(toorFile, []byte(k+"\n"))
+	s := e.open(t)
+	_, err := s.RemoveAuthorizedKey(context.Background(), removeReq("toor", toorFile, fp), nil)
+	assert.Equal(t, "sshkey.last_root_key", providerCode(t, err).Code)
+	assert.Empty(t, e.emu.Writes())
+
+	req := removeReq("toor", toorFile, fp)
+	req.AllowLastRootKey = true
+	res, err := s.RemoveAuthorizedKey(context.Background(), req, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Removed)
+
+	k2, fp2 := keyLine(t, "ed25519", "", "deploy@x")
+	e.emu.SetFile(deployFile, []byte(k2+"\n"))
+	res, err = s.RemoveAuthorizedKey(context.Background(), removeReq("deploy", deployFile, fp2), nil)
+	require.NoError(t, err, "uid 1001: no confirmation")
+	assert.Equal(t, 1, res.Removed)
+}
+
 func TestRemoveLastRootKeyNeedsConfirmation(t *testing.T) {
 	e := newProvEnv(t)
 	k, fp := keyLine(t, "ed25519", `from="10.0.0.0/8"`, "root@bastion")

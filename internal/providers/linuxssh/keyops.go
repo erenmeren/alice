@@ -88,6 +88,24 @@ func (s *session) checkListedFor(ctx context.Context, req providers.AuthKeyChang
 	return refusedRequest("os_user")
 }
 
+// isUID0 reports whether user is a superuser account: root, or any account the helper lists with
+// uid 0 (toor). The last key of such an account needs an administrator's confirmation.
+func (s *session) isUID0(ctx context.Context, user string) (bool, error) {
+	if user == "root" {
+		return true, nil
+	}
+	list, err := runHelper[helperproto.AuthKeysListResponse](ctx, s.conn, CmdAuthKeysList())
+	if err != nil {
+		return false, err
+	}
+	for _, u := range list.Users {
+		if u.User == user {
+			return u.UID == 0, nil
+		}
+	}
+	return false, nil
+}
+
 // transformFailed logs the refusal of the in-memory change as a failed precheck step.
 func transformFailed(log providers.StepLogger, attempt int, err error) (providers.AuthKeyResult, bool, error) {
 	step(log, "precheck", "failed", failParams(attempt, err))
@@ -229,8 +247,14 @@ func (s *session) removeOnce(ctx context.Context, req providers.AuthKeyChange, l
 			return transformFailed(log, attempt, providers.NewError("sshkey.own_key_protected", false, nil,
 				map[string]string{"reason": "last_key_of_connection_account"}))
 		}
-		if req.OSUser == "root" && !req.AllowLastRootKey {
-			return transformFailed(log, attempt, providers.NewError("sshkey.last_root_key", false, nil, nil))
+		if !req.AllowLastRootKey {
+			uid0, err := s.isUID0(ctx, req.OSUser)
+			if err != nil {
+				return transformFailed(log, attempt, err)
+			}
+			if uid0 {
+				return transformFailed(log, attempt, providers.NewError("sshkey.last_root_key", false, nil, nil))
+			}
 		}
 	}
 	return s.writeAndVerify(ctx, req, log, attempt, h0, next.Bytes(), removed)
