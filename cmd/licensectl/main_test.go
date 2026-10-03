@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -299,9 +300,11 @@ func TestConcurrentIssuing(t *testing.T) {
 		codes := make([]int, len(ids))
 		var wg sync.WaitGroup
 		for i, licID := range ids {
+			// Each run writes its own file, so the ledger is the only state the two runs share.
+			outFile := filepath.Join(files, licID+"-"+strconv.Itoa(i)+".alicelic")
 			wg.Go(func() {
 				var out, errOut bytes.Buffer
-				codes[i] = run(issueArgs(dir, id, filepath.Join(files, licID+".alicelic"), "--license-id", licID),
+				codes[i] = run(issueArgs(dir, id, outFile, "--license-id", licID),
 					strings.NewReader("yes\n"), &out, &errOut, func(string) ([]byte, error) { return []byte(testWords), nil }, testClock)
 				if codes[i] != 0 {
 					assert.Contains(t, errOut.String(), "already issued", "the only acceptable failure")
