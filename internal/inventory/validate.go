@@ -107,19 +107,21 @@ func NormalizeHost(raw string) (string, *validate.FieldError) {
 var numericLabelRE = regexp.MustCompile(`^([0-9]+|0x[0-9a-f]*)$`)
 
 var (
-	nat64Prefix  = netip.MustParsePrefix("64:ff9b::/96") // RFC 6052 well-known prefix
-	sixToFour    = netip.MustParsePrefix("2002::/16")    // RFC 3056
-	awsIMDSv6    = netip.MustParseAddr("fd00:ec2::254")  // AWS instance metadata over IPv6
+	nat64Prefix  = netip.MustParsePrefix("64:ff9b::/96")   // RFC 6052 well-known prefix
+	nat64Local   = netip.MustParsePrefix("64:ff9b:1::/48") // RFC 8215 local-use prefix
+	sixToFour    = netip.MustParsePrefix("2002::/16")      // RFC 3056
+	awsIMDSv6    = netip.MustParseAddr("fd00:ec2::254")    // AWS instance metadata over IPv6
 	ipv4Broadcst = netip.AddrFrom4([4]byte{255, 255, 255, 255})
 )
 
 // checkAddr refuses addresses that are never a managed server: link-local (including the cloud
-// metadata address 169.254.169.254, SEC-065, and its IPv6 forms: IPv4-mapped, NAT64 64:ff9b::/96,
-// 6to4 2002::/16 and AWS's fd00:ec2::254), multicast, unspecified and the IPv4 broadcast address.
-// Loopback and private addresses are allowed.
+// metadata address 169.254.169.254, SEC-065, and its IPv6 forms: IPv4-mapped, NAT64 64:ff9b::/96
+// and the local-use NAT64 range 64:ff9b:1::/48, 6to4 2002::/16 and AWS's fd00:ec2::254),
+// multicast, unspecified and the IPv4 broadcast address. Loopback and private addresses are
+// allowed.
 func checkAddr(a netip.Addr) (string, *validate.FieldError) {
 	u := a.Unmap()
-	if notAServer(u) || u == awsIMDSv6 {
+	if notAServer(u) || u == awsIMDSv6 || localNAT64ToNonServer(u) {
 		return "", hostProblem(CodeHostNotAllowed, nil)
 	}
 	if u.Is6() {
@@ -136,6 +138,28 @@ func checkAddr(a netip.Addr) (string, *validate.FieldError) {
 		}
 	}
 	return u.String(), nil
+}
+
+// localNAT64ToNonServer reports whether u lies in the local-use NAT64 range 64:ff9b:1::/48 and
+// translates to an address that is never a managed server. Alice cannot know the prefix length an
+// operator chose inside the range, so the IPv4 address is read at every RFC 6052 position a prefix
+// of /48, /56, /64 or /96 places it: the last 32 bits like the well-known prefix (also refused when
+// unspecified), and the three shorter forms, which skip the u-octet (bits 64-71) and are refused
+// for link-local, multicast and broadcast (their zero bits read as 0.0.0.0 in every /96 address).
+func localNAT64ToNonServer(u netip.Addr) bool {
+	if !u.Is6() || !nat64Local.Contains(u) {
+		return false
+	}
+	b := u.As16()
+	if notAServer(netip.AddrFrom4([4]byte(b[12:16]))) {
+		return true
+	}
+	for _, v4 := range [][4]byte{{b[6], b[7], b[9], b[10]}, {b[7], b[9], b[10], b[11]}, {b[9], b[10], b[11], b[12]}} {
+		if e := netip.AddrFrom4(v4); !e.IsUnspecified() && notAServer(e) {
+			return true
+		}
+	}
+	return false
 }
 
 func notAServer(u netip.Addr) bool {

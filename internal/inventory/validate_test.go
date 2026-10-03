@@ -69,6 +69,14 @@ func TestNormalizeHostTable(t *testing.T) {
 		{"64:ff9b::", "", CodeHostNotAllowed},
 		{"64:ff9b::ffff:ffff", "", CodeHostNotAllowed},
 		{"64:ff9b::a00:5", "64:ff9b::a00:5", ""},
+		{"64:ff9b:1::a9fe:a9fe", "", CodeHostNotAllowed},       // local-use NAT64 (RFC 8215), /96 form
+		{"64:ff9b:1:a9fe:a9:fe00::", "", CodeHostNotAllowed},   // /48 form (u-octet skipped)
+		{"64:ff9b:1:a9:fe:a9fe::", "", CodeHostNotAllowed},     // /56 form
+		{"64:ff9b:1:0:a9:fea9:fe00:0", "", CodeHostNotAllowed}, // /64 form
+		{"64:ff9b:1::e000:1", "", CodeHostNotAllowed},
+		{"64:ff9b:1::", "", CodeHostNotAllowed},
+		{"64:ff9b:1::a00:5", "64:ff9b:1::a00:5", ""},
+		{"64:ff9b:1:abcd::a00:5", "64:ff9b:1:abcd::a00:5", ""},
 		{"2002:a9fe:a9fe::1", "", CodeHostNotAllowed},
 		{"[2002:a9fe:a9fe::1]", "", CodeHostNotAllowed},
 		{"2002:a00:5::1", "2002:a00:5::1", ""},
