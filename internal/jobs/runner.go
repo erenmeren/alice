@@ -69,6 +69,15 @@ type Notifier interface {
 // those of deadAlertParams.
 const TemplateJobDead = "job.dead"
 
+// alertsWhenDead reports whether a job of the type that dies emails the Administrators:
+// AlertsWhenExhausted, on every path that ends a job dead (finish, release after a lost lease, the
+// reaper after a crash). A recovery job's death is announced by its deployment's own escalation;
+// the dead status and the job.dead audit row stay.
+func alertsWhenDead(typ string) bool {
+	t, ok := lookup(typ)
+	return !ok || AlertsWhenExhausted(t)
+}
+
 // TemplateJobTampered is the email sent when a job's stored data fails its integrity check
 // (threat J-1): the job was changed outside Alice and is never run. Its params are those of
 // tamperedAlertParams.
@@ -420,8 +429,10 @@ func (r *Runner) settle(ctx context.Context, c *claimed, errorCode string,
 			var err error
 			switch ev.Action {
 			case "job.dead":
-				if ev.Details["shutdown"] == "true" {
-					continue // killed by this process's own shutdown: audited, not mailed (release)
+				if ev.Details["shutdown"] == "true" || !alertsWhenDead(c.typ) {
+					// Killed by this process's own shutdown (release), or a type whose death is
+					// announced elsewhere: audited, not mailed.
+					continue
 				}
 				err = r.alert(ctx, tx, TemplateJobDead, deadAlertParams(c.id, c.typ, ev.Details["reason"], c.attempts))
 			case "job.tampered":
@@ -782,7 +793,7 @@ WHERE job_id = ANY($1::uuid[]) AND finished_at IS NULL`, ids, now); err != nil {
 		return nil, err
 	}
 	for _, x := range all {
-		if x.status == string(StatusDead) && !shutdown {
+		if x.status == string(StatusDead) && !shutdown && alertsWhenDead(x.typ) {
 			if err := r.alert(ctx, tx, TemplateJobDead, deadAlertParams(x.id, x.typ, "job.lease_expired", x.attempts)); err != nil {
 				return nil, err
 			}

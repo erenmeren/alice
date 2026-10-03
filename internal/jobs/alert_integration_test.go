@@ -121,3 +121,47 @@ func TestTamperedJobsAlertTheAdministratorsOnce(t *testing.T) {
 	assert.False(t, ran)
 	assert.Len(t, e.emails(t, TemplateJobTampered, "job_id"), 1, "a second pass adds none")
 }
+
+// I-2: a job type whose exhaustion does not alert (a deployment recovery: its deployment's own
+// escalation is the alert) is not mailed when it dies on the reaper's path (a crashed worker) or on
+// the release path (a lost lease on its last attempt) either; the dead status and the job.dead
+// audit row stay. Other types keep the email on both paths.
+func TestDeadJobsOfQuietTypesAreAuditedNotMailed(t *testing.T) {
+	for _, tc := range []struct {
+		typ    Type
+		mailed bool
+	}{{CertificateDeployRecover, false}, {testQueueJob, true}} {
+		t.Run(tc.typ.Name, func(t *testing.T) {
+			e := newQEnv(t)
+			e.adminWithEmail(t)
+			r := e.runner(t, "w1", func(c *RunnerConfig) { c.Notifier = notify.AdminNotifier{Clock: e.clk} })
+			r.Handle(tc.typ, succeed)
+
+			// The reaper: the worker died on the job's last attempt.
+			reaped := e.enqueue(t, Spec{Type: tc.typ, TargetID: insertTarget(t, e.d), MaxAttempts: 1})
+			_, err := e.d.Owner.Exec(e.ctx, `UPDATE jobs SET status = 'running', locked_by = 'gone/1', attempts = 1, locked_until = $2 WHERE id = $1`,
+				reaped, e.clk.Now().Add(-time.Second))
+			require.NoError(t, err)
+			_, err = r.Reap(e.ctx)
+			require.NoError(t, err)
+			require.Equal(t, "dead", e.row(t, reaped).status)
+
+			// The release: this worker gives a job back on its last attempt (lease lost to failing
+			// heartbeats while the row is still its own).
+			released := e.enqueue(t, Spec{Type: tc.typ, TargetID: insertTarget(t, e.d), MaxAttempts: 1})
+			c, err := r.claim(e.ctx)
+			require.NoError(t, err)
+			require.NotNil(t, c)
+			require.Equal(t, released, c.id)
+			r.release(e.ctx, c, false)
+			require.Equal(t, "dead", e.row(t, released).status)
+
+			assert.Equal(t, 2, e.audits(t, "job.dead"), "both deaths are audited")
+			if tc.mailed {
+				assert.Len(t, e.deadEmails(t), 2)
+			} else {
+				assert.Empty(t, e.deadEmails(t), "the deployment's escalation is the alert")
+			}
+		})
+	}
+}
