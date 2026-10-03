@@ -415,7 +415,7 @@
       },
       "superseded": {
         "subject": "{{target_name}} sunucusunda sonraki bir işlem bir dağıtımın dosyalarının üzerine yazdı",
-        "body": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımını tamamlayamadı veya geri alamadı (dosya: {{cert_path}}), çünkü daha sonraki bir işlem dosyaları zaten değiştirdi. Alice hiçbir şeyi geri yüklemedi.\n\nWeb sitesinin şu anda hangi sertifikayı sunduğunu denetleyin, sonra Alice'te sunucunun sayfasında SSH anahtarlarını tara düğmesini seçin. Dağıtım: {{deployment_id}}"
+        "body": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımını tamamlayamadı veya geri alamadı (dosya: {{cert_path}}), çünkü daha sonraki bir işlem dosyaları zaten değiştirdi. Alice hiçbir şeyi geri yüklemedi.\n\nWeb sitesinin şu anda hangi sertifikayı sunduğunu denetleyin, sonra Alice'te sunucunun sayfasında SSH anahtarlarını tara düğmesine tıklayın: bu tarama sunucunun sertifikalarını da yeniler. Dağıtım: {{deployment_id}}"
       },
       "needs_attention": {
         "subject": "Alice {{target_name}} sunucusundaki bir dağıtımı tamamlayamıyor",

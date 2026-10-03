@@ -127,9 +127,9 @@ func TestDeploymentTemplatesRenderInBothLanguages(t *testing.T) {
 		{inventory.TemplateDeploymentSuperseded, "tr", "web-01 (İzmir) sunucusunda sonraki bir işlem bir dağıtımın dosyalarının üzerine yazdı",
 			"daha sonraki bir işlem dosyaları zaten değiştirdi. Alice hiçbir şeyi geri yüklemedi."},
 		{inventory.TemplateDeploymentSuperseded, "en", "A later operation overwrote the files of a deployment on web-01 (İzmir)",
-			"then choose Scan for SSH keys on the server's page in Alice."},
+			"then choose Scan for SSH keys on the server's page in Alice: the scan also refreshes the server's certificates."},
 		{inventory.TemplateDeploymentSuperseded, "tr", "web-01 (İzmir) sunucusunda sonraki bir işlem bir dağıtımın dosyalarının üzerine yazdı",
-			"sonra Alice'te sunucunun sayfasında SSH anahtarlarını tara düğmesini seçin."},
+			"sonra Alice'te sunucunun sayfasında SSH anahtarlarını tara düğmesine tıklayın: bu tarama sunucunun sertifikalarını da yeniler."},
 	} {
 		m := s.Render("ada@example.com", tc.tpl, tc.lang, params)
 		assert.Equal(t, tc.subject, m.Subject, "%s %s", tc.tpl, tc.lang)

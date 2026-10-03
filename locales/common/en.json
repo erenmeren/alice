@@ -415,7 +415,7 @@
       },
       "superseded": {
         "subject": "A later operation overwrote the files of a deployment on {{target_name}}",
-        "body": "Alice could not finish or undo a certificate deployment on the server {{target_name}} (file {{cert_path}}) because a later operation has already replaced the files. Alice did not restore anything.\n\nCheck which certificate the website serves now, then choose Scan for SSH keys on the server's page in Alice. Deployment: {{deployment_id}}"
+        "body": "Alice could not finish or undo a certificate deployment on the server {{target_name}} (file {{cert_path}}) because a later operation has already replaced the files. Alice did not restore anything.\n\nCheck which certificate the website serves now, then choose Scan for SSH keys on the server's page in Alice: the scan also refreshes the server's certificates. Deployment: {{deployment_id}}"
       },
       "needs_attention": {
         "subject": "Alice cannot finish a deployment on {{target_name}}",
