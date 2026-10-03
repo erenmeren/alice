@@ -245,11 +245,16 @@ RETURNING id, (xmax = 0)`, uuid.Must(uuid.NewV7()), keyID, target, clean(k.OSUse
 	return locID, inserted, nil
 }
 
-// locationSelect reads KeyLocation rows of live targets (scanLocation's order).
-const locationSelect = `SELECT l.id, l.ssh_key_id, k.fingerprint_sha256, k.key_type, l.target_id, t.name::text, l.os_user, l.file_path,
+// locationSelectAny reads KeyLocation rows whether or not their target was deleted
+// (scanLocation's order): the record of a change made on a server is kept after the server was
+// removed from Alice.
+const locationSelectAny = `SELECT l.id, l.ssh_key_id, k.fingerprint_sha256, k.key_type, l.target_id, t.name::text, l.os_user, l.file_path,
 l.line_no, l.options, l.comment, l.flags, l.first_seen_at, l.last_seen_at, l.missing_since, l.removed_by_alice_at,
 l.is_alice_connection_key
-FROM ssh_key_locations l JOIN ssh_keys k ON k.id = l.ssh_key_id JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL`
+FROM ssh_key_locations l JOIN ssh_keys k ON k.id = l.ssh_key_id JOIN targets t ON t.id = l.target_id`
+
+// locationSelect reads KeyLocation rows of live targets (scanLocation's order).
+const locationSelect = locationSelectAny + ` AND t.deleted_at IS NULL`
 
 func scanLocation(row pgx.Row, extra ...any) (KeyLocation, error) {
 	var l KeyLocation

@@ -187,7 +187,9 @@ func protectedFingerprints(ctx context.Context, q db.Querier) ([]string, error) 
 // RequestID is the job id, which links this row to sshkey.remove_requested. Alice's own key is
 // refused here, and the database trigger refuses it even if this check had a bug. The removal
 // reached the server, so the target's connection is recorded too (markConnected). The target row
-// is locked before the location (Reconcile's and RequestKeyRemoval's order).
+// is locked before the location (Reconcile's and RequestKeyRemoval's order). A target deleted
+// while the removal ran does not hide it: the location is read whatever its target's state, so
+// the change made on the server is recorded and audited.
 func (s *Service) MarkKeyRemoved(ctx context.Context, locationID uuid.UUID, actor audit.Actor, res providers.AuthKeyResult) error {
 	now := s.clock.Now().UTC()
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -199,11 +201,12 @@ func (s *Service) MarkKeyRemoved(ctx context.Context, locationID uuid.UUID, acto
 		if err != nil {
 			return fmt.Errorf("inventory: read key location: %w", err)
 		}
-		t, err := getTarget(ctx, tx, targetID, true)
-		if err != nil {
-			return err
+		// A target deleted while the removal ran keeps its record: the server did change.
+		var deleted bool
+		if err := tx.QueryRow(ctx, "SELECT deleted_at IS NOT NULL FROM targets WHERE id = $1 FOR UPDATE", targetID).Scan(&deleted); err != nil {
+			return fmt.Errorf("inventory: lock target: %w", err)
 		}
-		loc, err := scanLocation(tx.QueryRow(ctx, locationSelect+" WHERE l.id = $1 FOR UPDATE OF l", locationID))
+		loc, err := scanLocation(tx.QueryRow(ctx, locationSelectAny+" WHERE l.id = $1 FOR UPDATE OF l", locationID))
 		if err != nil {
 			return err
 		}
@@ -218,8 +221,14 @@ func (s *Service) MarkKeyRemoved(ctx context.Context, locationID uuid.UUID, acto
 WHERE id = $1`, locationID, now); err != nil {
 			return fmt.Errorf("inventory: mark key removed: %w", err)
 		}
-		if err := s.markConnected(ctx, tx, t, now, false, "removal_ok", nil); err != nil {
-			return err
+		if !deleted {
+			t, err := getTarget(ctx, tx, targetID, false) // locked above
+			if err != nil {
+				return err
+			}
+			if err := s.markConnected(ctx, tx, t, now, false, "removal_ok", nil); err != nil {
+				return err
+			}
 		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "sshkey.removed", ObjectType: "ssh_key_location",
 			ObjectID: locationID.String(), Result: audit.Success, Details: map[string]string{
@@ -235,7 +244,8 @@ func (s *Service) RecordRemovalFailure(ctx context.Context, locationID uuid.UUID
 	if !reasonRE.MatchString(reason) {
 		reason = "internal.unexpected"
 	}
-	loc, err := s.KeyLocation(ctx, locationID)
+	// Also on a target deleted meanwhile: the attempt on the server is still audited.
+	loc, err := scanLocation(s.pool.QueryRow(ctx, locationSelectAny+" WHERE l.id = $1", locationID))
 	if err != nil {
 		return err
 	}

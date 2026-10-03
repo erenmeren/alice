@@ -3,9 +3,11 @@
 package targetjobs_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -185,4 +187,78 @@ func TestScheduleDiscoveryResumesAfterRepin(t *testing.T) {
 	require.Equal(t, inventory.StatusOK, e.status(tg.ID))
 	e.clock.Advance(day)
 	assert.Equal(t, 1, e.schedule(), "the re-pinned target is scheduled again")
+}
+
+// deletingSession deletes the target while the remote operation runs (an Administrator deletes
+// the server in another tab), then lets the operation succeed.
+type deletingSession struct {
+	providers.Session
+	del func()
+}
+
+func (s deletingSession) TestConnection(ctx context.Context) (providers.ConnectionReport, error) {
+	s.del()
+	return s.Session.TestConnection(ctx)
+}
+
+func (s deletingSession) RemoveAuthorizedKey(ctx context.Context, req providers.AuthKeyChange, log providers.StepLogger) (providers.AuthKeyResult, error) {
+	s.del()
+	return s.Session.RemoveAuthorizedKey(ctx, req, log)
+}
+
+// A removal applied on the server while its target was deleted is still recorded and audited:
+// the audit row is about the server, which changed.
+func TestRemovalAppliedWhileTheTargetIsDeletedIsAudited(t *testing.T) {
+	var e *env
+	var target uuid.UUID
+	deleteNow := false
+	e = newEnv(t, func(s providers.Session) providers.Session {
+		return deletingSession{Session: s, del: func() {
+			if deleteNow {
+				require.NoError(t, e.inv.DeleteTarget(e.ctx, e.admin, target))
+			}
+		}}
+	})
+	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep"))
+	target = tg.ID
+	e.prov.Configure(func(c *fake.Config) {
+		c.RemoveResult = providers.AuthKeyResult{Changed: true, Removed: 1, Verified: true}
+	})
+	loc := locationOf(t, e, tg.ID, "SHA256:dep")
+	jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, loc.ID, false)
+	require.NoError(t, err)
+	deleteNow = true
+	e.drain()
+	v := e.job(jobID)
+	assert.Equal(t, jobs.StatusSucceeded, v.Status, v.LastErrorCode)
+	assert.Equal(t, 1, e.prov.Count("RemoveAuthorizedKey"))
+	assert.Equal(t, 1, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'sshkey.removed' AND details->>'job_id' = '"+jobID.String()+"'"))
+	assert.Equal(t, 1, countRows(t, e, "SELECT count(*) FROM ssh_key_locations WHERE removed_by_alice_at IS NOT NULL"))
+	assert.Zero(t, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'job.dead'"))
+}
+
+// A connection test whose target was deleted while it ran ends as not found: no retry, no dead
+// job, no email to the Administrators.
+func TestConnectionTestOfADeletedTargetIsNotFound(t *testing.T) {
+	var e *env
+	var target uuid.UUID
+	deleteNow := false
+	e = newEnv(t, func(s providers.Session) providers.Session {
+		return deletingSession{Session: s, del: func() {
+			if deleteNow {
+				require.NoError(t, e.inv.DeleteTarget(e.ctx, e.admin, target))
+			}
+		}}
+	})
+	tg := e.confirmed(hostKey(t))
+	target = tg.ID
+	id, err := e.inv.RequestTest(e.ctx, e.admin, tg.ID)
+	require.NoError(t, err)
+	deleteNow = true
+	e.drain()
+	v := e.job(id)
+	assert.Equal(t, jobs.StatusFailed, v.Status)
+	assert.Equal(t, "system.not_found", v.LastErrorCode)
+	assert.Zero(t, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'job.dead'"))
+	assert.Zero(t, countRows(t, e, "SELECT count(*) FROM notifications_outbox WHERE template_key = 'job.dead'"))
 }

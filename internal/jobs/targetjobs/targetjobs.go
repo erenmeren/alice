@@ -133,7 +133,11 @@ func (h *handlers) testConnection(ctx context.Context, j jobs.Job, _ jobs.StepRe
 		return nil, jobs.FromProvider(err)
 	}
 	// The report carries the key the server presented: inventory compares it with the pinned key.
-	if err := h.d.Inventory.RecordConnectionOK(ctx, j.TargetID, rep); err != nil {
+	err = h.d.Inventory.RecordConnectionOK(ctx, j.TargetID, rep)
+	if errors.Is(err, inventory.ErrNotFound) {
+		return nil, jobs.Fail("system.not_found", nil, err) // deleted while it was tested
+	}
+	if err != nil {
 		return nil, jobs.Retry("internal.unexpected", nil, err)
 	}
 	out := map[string]any{"host_key_fingerprint": rep.HostKey.Fingerprint, "helper_version": rep.HelperVersion}
