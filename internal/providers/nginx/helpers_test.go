@@ -1,0 +1,191 @@
+package nginx
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/pem"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
+
+	"alice/internal/platform/clock"
+	"alice/internal/providers"
+	"alice/internal/providers/linuxssh"
+	"alice/internal/providers/linuxssh/linuxsshtest"
+	"alice/internal/testutil/pki"
+)
+
+var testTarget = uuid.MustParse("0190f5a0-0000-7000-8000-0000000000b1")
+
+const (
+	wwwCert = "/etc/nginx/ssl/www.crt"
+	wwwKey  = "/etc/nginx/ssl/www.key"
+)
+
+// fakeCred hands out one client key.
+type fakeCred struct {
+	signer ssh.Signer
+	priv   ed25519.PrivateKey
+}
+
+func newFakeCred(t testing.TB) *fakeCred {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	s, err := ssh.NewSignerFromKey(priv)
+	require.NoError(t, err)
+	return &fakeCred{signer: s, priv: priv}
+}
+
+func (f *fakeCred) SSHSigner(context.Context) (ssh.Signer, func(), error) {
+	return f.signer, func() {}, nil
+}
+
+// secrets renders the credential's private key the ways it could leak.
+func (f *fakeCred) secrets(t testing.TB) []string {
+	t.Helper()
+	block, err := ssh.MarshalPrivateKey(f.priv, "")
+	require.NoError(t, err)
+	seed := f.priv.Seed()
+	return []string{
+		string(pem.EncodeToMemory(block)),
+		base64.StdEncoding.EncodeToString(block.Bytes)[:64],
+		base64.StdEncoding.EncodeToString(seed),
+		hex.EncodeToString(seed),
+		string(seed),
+	}
+}
+
+// memHostKeys is an in-memory providers.HostKeyStore with one pinned key.
+type memHostKeys struct {
+	mu     sync.Mutex
+	pinned *providers.HostKey
+}
+
+func (m *memHostKeys) Pinned(context.Context, uuid.UUID) (providers.HostKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.pinned == nil {
+		return providers.HostKey{}, providers.ErrNoPinnedKey
+	}
+	return *m.pinned, nil
+}
+
+func (m *memHostKeys) Observed(context.Context, uuid.UUID, providers.HostKey, bool) error { return nil }
+
+// emuProber answers from what the emulated Nginx serves.
+type emuProber struct{ emu *linuxsshtest.Emulator }
+
+func (p emuProber) Probe(_ context.Context, _ string, port int, sni, _ string) (Probe, error) {
+	return Probe{LeafSHA256: p.emu.Served(port, sni)}, nil
+}
+
+// env is the nginx provider wired to the emulated host through a fake SSH server.
+type env struct {
+	srv  *linuxsshtest.Server
+	emu  *linuxsshtest.Emulator
+	cred *fakeCred
+	hk   *memHostKeys
+	prov *Provider
+	ref  providers.TargetRef
+	ca   *pki.CA
+	leaf pki.Leaf
+	now  time.Time
+}
+
+type envOption func(*envConfig)
+
+type envConfig struct{ noNginx bool }
+
+// withoutNginx leaves Nginx uninstalled (the sudoers profile stays, as on a prepared server).
+func withoutNginx() envOption { return func(c *envConfig) { c.noNginx = true } }
+
+func newEnv(t *testing.T, opts ...envOption) *env {
+	t.Helper()
+	var cfg envConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	emu := linuxsshtest.NewEmulator()
+	srv := linuxsshtest.NewServer(t, emu.Handler())
+	cred := newFakeCred(t)
+	srv.Authorize(cred.signer.PublicKey())
+	hk := &memHostKeys{}
+	pin := linuxssh.HostKeyOf(srv.HostKey())
+	hk.pinned = &pin
+	pool := linuxssh.NewPool(&linuxssh.Dialer{Clock: clock.Real{}, HostKeys: hk},
+		linuxssh.MaxConnections, linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)
+	t.Cleanup(pool.Close)
+	lp := linuxssh.New(linuxssh.Options{Pool: pool, AllowUnverifiedHelper: true})
+	host, port := srv.Addr()
+	ca := pki.NewCA("Emu", pki.ECDSA256, now)
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, now)
+	if !cfg.noNginx {
+		emu.EnableNginx("1.22.1")
+	}
+	emu.AddSite(linuxsshtest.NginxSite{Names: []string{"www.example.test"}, Port: 443, CertPath: wwwCert, KeyPath: wwwKey},
+		leaf.FullchainPEM, leaf.KeyPEM)
+	return &env{
+		srv: srv, emu: emu, cred: cred, hk: hk, ca: ca, leaf: leaf, now: now,
+		prov: New(Options{SSH: lp, Prober: emuProber{emu}, RetryWait: time.Millisecond}),
+		ref: providers.TargetRef{ID: testTarget, Name: "web-01", Kind: providers.KindNginx,
+			Config: providers.TargetConfig{"host": host, "port": port, "username": "alice-svc"}},
+	}
+}
+
+func (e *env) open(t *testing.T) providers.Session {
+	t.Helper()
+	s, err := e.prov.Open(context.Background(), e.ref, e.cred, providers.Env{Clock: clock.Real{}, HostKeys: e.hk})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+func warningCodes(ws []providers.Warning) []string {
+	out := make([]string, 0, len(ws))
+	for _, w := range ws {
+		out = append(out, w.Code)
+	}
+	return out
+}
+
+func warningsOf(ws []providers.Warning, code string) []providers.Warning {
+	var out []providers.Warning
+	for _, w := range ws {
+		if w.Code == code {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// providerErr returns the *providers.Error behind err.
+func providerErr(t testing.TB, err error) *providers.Error {
+	t.Helper()
+	var pe *providers.Error
+	require.ErrorAs(t, err, &pe)
+	return pe
+}
+
+// locationsByPath indexes a discovery's certificates by certificate path.
+func locationsByPath(res providers.DiscoveryResult) map[string]providers.DiscoveredCertificate {
+	m := map[string]providers.DiscoveredCertificate{}
+	for _, c := range res.Certificates {
+		m[c.Location.CertPath] = c
+	}
+	return m
+}
+
+func hexSHA(b []byte) string {
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}

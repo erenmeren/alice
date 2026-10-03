@@ -8,7 +8,8 @@
         "port": { "label": "SSH port", "help": "Usually 22." },
         "username": { "label": "User name on the server", "help": "The service user the setup commands create, normally alice-svc." }
       }
-    }
+    },
+    "nginx": { "name": "Nginx server" }
   },
   "enum": {
     "role": {
