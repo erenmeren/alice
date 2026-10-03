@@ -188,7 +188,7 @@ func TestValidSNI(t *testing.T) {
 		"*.a.b": false, "a b": false, "a_b.c": false, strings.Repeat("a", 64) + ".b": false, "ö.example": false,
 		"10.0.0.5": false, "127.0.0.1": false,
 		strings.Repeat("a", 63) + ".b": true, strings.Repeat("a", 64): false,
-		strings.Repeat(strings.Repeat("a", 61)+".", 4) + "bcd":  true,  // 253 bytes
+		strings.Repeat(strings.Repeat("a", 61)+".", 4) + "bcdef":  true,  // 253 bytes
 		strings.Repeat(strings.Repeat("a", 61)+".", 4) + "bcdefg": false, // 254 bytes
 		"::1": false, "2001:db8::5": false, NoSNI: false} {
 		assert.Equal(t, want, ValidSNI(in), in)
