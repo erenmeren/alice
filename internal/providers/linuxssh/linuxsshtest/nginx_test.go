@@ -1144,12 +1144,22 @@ func TestEmulatedFaultsArmedForASubcommand(t *testing.T) {
 
 func TestEmulatedProbeServed(t *testing.T) {
 	w := newWorld(t)
-	leaf, chain, ok := w.e.ProbeServed(443, "www.example.test", helperproto.ProbeAny)
+	leaf, chain, ok := w.e.ProbeServed("", 443, "www.example.test", helperproto.ProbeAny)
 	require.True(t, ok)
 	assert.Equal(t, hexSum(w.old.Cert.Raw), leaf)
 	assert.Equal(t, 2, chain, "leaf and intermediate")
-	_, _, ok = w.e.ProbeServed(443, "www.example.test", helperproto.ProbeRSA)
+	_, _, ok = w.e.ProbeServed("", 443, "www.example.test", helperproto.ProbeRSA)
 	assert.False(t, ok, "an ECDSA-only site has nothing for an RSA probe")
-	_, _, ok = w.e.ProbeServed(8443, "", helperproto.ProbeAny)
+	_, _, ok = w.e.ProbeServed("", 8443, "", helperproto.ProbeAny)
 	assert.False(t, ok, "nothing listens there")
+
+	// A listen on a specific address answers only there; another block answers elsewhere.
+	other := w.ca.Issue(pki.Opts{CommonName: "www.example.test"}, testNow)
+	w.e.AddSite(NginxSite{Names: []string{"www.example.test"}, Port: 8443, Addr: "10.0.0.5", CertPath: "/etc/nginx/ssl/a.crt", KeyPath: "/etc/nginx/ssl/a.key"},
+		other.FullchainPEM, other.KeyPEM)
+	leaf, _, ok = w.e.ProbeServed("10.0.0.5", 8443, "www.example.test", helperproto.ProbeAny)
+	require.True(t, ok)
+	assert.Equal(t, hexSum(other.Cert.Raw), leaf)
+	_, _, ok = w.e.ProbeServed("192.0.2.10", 8443, "www.example.test", helperproto.ProbeAny)
+	assert.False(t, ok, "not at another address")
 }

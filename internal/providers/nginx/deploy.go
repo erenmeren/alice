@@ -2,10 +2,11 @@ package nginx
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"maps"
-	"path"
 	"slices"
 	"strconv"
 
@@ -24,7 +25,7 @@ const (
 	reasonInvalidCertificate   = "certificate.invalid"           // the pair cannot be sent (empty or not PEM text)
 	reasonConfigTestFailed     = "deployment.config_test_failed" // the helper's nginx -t failed with another class
 	reasonReloadFailed         = "deployment.reload_failed"      // the helper's reload failed
-	reasonInterrupted          = "deployment.interrupted"        // a write or the journal failed inside the helper's transaction
+	reasonInterrupted          = "deployment.interrupted"        // a write or the journal failed in the helper's transaction, or ctx ended during the verification
 	reasonRollbackFailed       = "deployment.rollback_failed"    // param backup_dir
 	reasonRollbackReloadFailed = "deployment.rollback_reload_failed"
 	reasonNothingToRestore     = "deployment.nothing_to_restore"
@@ -107,7 +108,8 @@ type call[T any] struct {
 
 // decodeCall sorts what Conn.Run returned for sub. A refusal is (a) the helper's JSON error with a
 // code of refusals at the exit status the table gives it, or (b) sudo's refusal before the helper
-// started (exit 1, nothing on stdout: the helper itself never exits 1; pre-flight D16). Everything
+// started (exit 1 with nothing on stdout: the helper itself never exits 1; pre-flight D16; exit 1
+// with any output is uncertain). Everything
 // else that is not an exit-0 answer is uncertain: a transport error, a timeout or cancellation
 // after the command was sent, a signal, exit 137 or any other status without JSON
 // (ssh.helper_missing), malformed JSON (ssh.protocol_error), an unknown code, or a known code at
@@ -123,7 +125,7 @@ func decodeCall[T any](res linuxssh.Result, runErr error, sub string, refusals m
 	pe := asProviderError(err)
 	code := pe.Params["helper_code"]
 	switch {
-	case pe.Code == "ssh.helper_missing" && pe.Params["exit_code"] == "1":
+	case pe.Code == "ssh.helper_missing" && pe.Params["exit_code"] == "1" && len(res.Stdout) == 0:
 		return call[T]{refusal: pe}
 	case code == "":
 		return call[T]{uncertain: pe}
@@ -245,6 +247,22 @@ func appendJSONString(dst, b []byte) []byte {
 	return append(dst, '"')
 }
 
+// leafFingerprint is the hex SHA-256 of the DER of the chain's first CERTIFICATE block (the leaf
+// the website must serve); ok is false when there is none.
+func leafFingerprint(p []byte) (string, bool) {
+	for rest := p; ; {
+		var b *pem.Block
+		b, rest = pem.Decode(rest)
+		if b == nil {
+			return "", false
+		}
+		if b.Type == "CERTIFICATE" {
+			sum := sha256.Sum256(b.Bytes)
+			return hex.EncodeToString(sum[:]), true
+		}
+	}
+}
+
 // chainLength counts the CERTIFICATE blocks of a PEM chain.
 func chainLength(p []byte) int {
 	n := 0
@@ -286,6 +304,19 @@ func backupDir(op uuid.UUID) string { return helperproto.BackupRoot + "/" + op.S
 // failed verification and is rolled back. The helper's own restore_failed is reported as it is
 // (not retried here): the engine decides about another nginx-restore (RollbackDeployment).
 //
+// The leaf compared is the one of req.CertificatePEM (its first CERTIFICATE block), computed here: a
+// verification after a deployment is never vacuous. A request whose Fingerprint names another leaf
+// is refused (internal.unexpected) before anything is sent.
+//
+// An uncertain outcome with a Reason, and Params["failed_step"] = "verify", means the new
+// certificate's verification had failed (Reason: deployment.verify_failed, verify_other,
+// verify_chain or verify_unreachable, Params["port"]; or deployment.interrupted when the call's
+// context ended during it) before the rollback could be done or confirmed. The journal may then read
+// committed. A deploy engine must store that reason, and must never treat a journal reading
+// committed as success without verifying again (VerifyDeployment with the same fingerprint and chain
+// length); when that verification fails it rolls back (RollbackDeployment). An uncertain outcome
+// without a Reason carries no such knowledge.
+//
 // A context cancelled before the command is sent is told apart from one cancelled after by
 // checking ctx right before Conn.Run: once Run is called the command may have reached the helper,
 // so any failure from there on is uncertain (a cancellation that races into Run's own pre-send
@@ -308,6 +339,16 @@ func (s *session) DeployCertificate(ctx context.Context, req providers.DeployReq
 	if !req.Location.Supported {
 		return d.refuse(providers.NewError(reasonLocationUnsupported, false, nil, nil))
 	}
+	// The verification compares the leaf of the chain sent, never nothing: the provider computes it,
+	// and a request that names another leaf is a caller's error, refused before anything is sent.
+	leaf, ok := leafFingerprint(req.CertificatePEM)
+	switch {
+	case !ok:
+		return d.refuse(providers.NewError(reasonInvalidCertificate, false, nil, nil))
+	case req.Fingerprint != "" && req.Fingerprint != leaf:
+		return d.refuse(providers.NewError(reasonUnexpected, false, errors.New("nginx: the fingerprint is not the chain's leaf"), nil))
+	}
+	d.fingerprint = leaf
 	input, ok := deployInput(req.CertificatePEM, req.PrivateKeyPEM.Bytes())
 	defer clear(input)
 	if !ok {
@@ -329,7 +370,7 @@ func (s *session) DeployCertificate(ctx context.Context, req providers.DeployReq
 	case c.uncertain != nil:
 		return d.uncertain(c.uncertain)
 	case c.refusal != nil:
-		return d.refuse(asProviderError(mapHelperIn(c.refusal, helperproto.SubNginxDeploy, path.Dir(req.Location.KeyPath))))
+		return d.refuse(asProviderError(mapHelper(c.refusal, helperproto.SubNginxDeploy)))
 	}
 	return d.answer(ctx, c.answer)
 }
@@ -351,10 +392,11 @@ func (d *deployment) buildRefusal(cause error) *providers.Error {
 
 // deployment is one DeployCertificate call while it maps the helper's answers.
 type deployment struct {
-	s   *session
-	req providers.DeployRequest
-	log providers.StepLogger
-	out providers.DeployOutcome
+	s           *session
+	req         providers.DeployRequest
+	fingerprint string // the leaf of req.CertificatePEM (hex SHA-256)
+	log         providers.StepLogger
+	out         providers.DeployOutcome
 }
 
 // refuse is DeployNoChange for a refusal: nothing changed, no phase and no steps.
@@ -367,6 +409,20 @@ func (d *deployment) refuse(e *providers.Error) (providers.DeployOutcome, error)
 // error class are cleared (the caller reads DeploymentStatus).
 func (d *deployment) uncertain(err error) (providers.DeployOutcome, error) {
 	return providers.DeployOutcome{Result: providers.DeployUncertain, Steps: d.out.Steps, Backup: d.out.Backup}, err
+}
+
+// uncertainAfterVerify is DeployUncertain after the new certificate's verification failed: Reason
+// and Params say why the verification failed (its reason and port) and Params["failed_step"] =
+// verify says that it had failed before the outcome became uncertain. The journal may still read
+// committed (see DeployCertificate).
+func (d *deployment) uncertainAfterVerify(reason string, params map[string]string, err error) (providers.DeployOutcome, error) {
+	o, err := d.uncertain(err)
+	o.Reason, o.Params = reason, maps.Clone(params)
+	if o.Params == nil {
+		o.Params = map[string]string{}
+	}
+	o.Params["failed_step"] = providers.StepNameVerify
+	return o, err
 }
 
 // answer maps a completed nginx-deploy (exit 0) by its phase (the table of DeployCertificate).
@@ -432,11 +488,24 @@ func (d *deployment) verifyNew(ctx context.Context, phase string) (providers.Dep
 		chain = chainLength(req.CertificatePEM)
 	}
 	step(d.log, providers.StepNameVerify, providers.StepStarted, nil)
-	vr, verr := d.s.VerifyDeployment(ctx, providers.VerifyRequest{Location: req.Location, Fingerprint: req.Fingerprint, ChainLength: chain,
+	vr, verr := d.s.VerifyDeployment(ctx, providers.VerifyRequest{Location: req.Location, Fingerprint: d.fingerprint, ChainLength: chain,
 		PreviousFingerprint: req.OldFingerprint, SANs: req.SANs, KeyType: req.KeyType, Verify: req.Verify})
+	if verr != nil && ctx.Err() != nil {
+		// The call's context ended during the verification: interrupted, not a failed check. The
+		// step status vocabulary has no "interrupted": the step is failed with param error =
+		// interrupted, the outcome's reason deployment.interrupted.
+		step(d.log, providers.StepNameVerify, providers.StepFailed, map[string]string{"error": "interrupted"})
+		d.out.Steps = append(d.out.Steps, providers.DeployStep{Name: providers.StepNameVerify, Status: providers.StepFailed})
+		if phase == helperproto.PhaseUnchanged {
+			d.out.Result, d.out.Phase, d.out.FailedStep, d.out.Reason = providers.DeployNoChange, providers.PhaseUnchanged, providers.StepNameVerify, reasonInterrupted
+			return d.out, providers.NewError(reasonInterrupted, true, verr, nil)
+		}
+		// Cancelled after the change: no rollback can be sent. The journal says committed.
+		return d.uncertainAfterVerify(reasonInterrupted, nil, verr)
+	}
 	if verr != nil {
-		// The check could not be made (the SSH connection failed during a server-side probe, or
-		// ctx ended): it is a failed verification, a website Alice cannot check.
+		// The check could not be made (the SSH connection failed during a server-side probe): a
+		// failed verification, a website Alice cannot check.
 		vr = unverifiable(req.Location, req.Verify, req.SANs)
 	}
 	if vr.OK {
@@ -460,10 +529,6 @@ func (d *deployment) verifyNew(ctx context.Context, phase string) (providers.Dep
 		d.out.Reason, d.out.Params = vr.Reason, vr.Params
 		return d.out, providers.NewError(vr.Reason, false, verr, maps.Clone(vr.Params))
 	}
-	if verr != nil && ctx.Err() != nil {
-		// Cancelled after the change: no rollback can be sent. The journal says committed.
-		return d.uncertain(verr)
-	}
 	return d.rollBack(ctx, vr)
 }
 
@@ -482,10 +547,20 @@ func unverifiable(loc providers.CertLocation, v providers.VerifyOptions, sans []
 // rollBack restores the files of a committed operation whose verification failed (nginx-restore
 // of the same operation) and verifies the previous certificate. The verification's reason and
 // params stay the outcome's when the rollback succeeds.
+//
+// The restore's answer decides: restored (then the old certificate is verified) or restore_failed
+// and HASH_MISMATCH (someone else's file) are known outcomes. BUSY (another deployment on the server
+// holds the helper's lock) is retried: s.p.restoreAttempts sends in all, s.p.restoreWait apart on
+// the session clock (3 and 10 s: at most 20 s of waiting by Alice; each BUSY answer itself comes
+// after the helper's own lock wait of up to 30 s). Every other outcome of the restore (still BUSY,
+// IO_ERROR, sudo's refusal, a context ended before it was sent, SUPERSEDED and UNKNOWN_OP, which
+// cannot happen for the operation just committed, and anything uncertain) is DeployUncertain with
+// the verification's reason: the new files may still be live, unverified, and the deploy engine's
+// recovery reads the journal and finishes the rollback.
 func (d *deployment) rollBack(ctx context.Context, vr providers.VerifyResult) (providers.DeployOutcome, error) {
-	r, err := d.s.restore(ctx, d.req.OperationID, d.log)
+	r, err := d.restoreRetryingBusy(ctx)
 	if err != nil {
-		return d.uncertain(err)
+		return d.uncertainAfterVerify(vr.Reason, vr.Params, err)
 	}
 	failed := func(phase, failedStep, class string) (providers.DeployOutcome, error) {
 		d.out.Result, d.out.Phase, d.out.FailedStep, d.out.CauseStep, d.out.Error =
@@ -498,9 +573,7 @@ func (d *deployment) rollBack(ctx context.Context, vr providers.VerifyResult) (p
 		// Someone else's file is in place: nothing was restored.
 		return failed("", providers.StepNameRestore, providers.DeployErrFileChanged)
 	case r.refusal != nil:
-		// The helper did not run the restore (busy, an I/O error before it, superseded, ...): the
-		// new files stay, unverified. A final state for this call, not an uncertain one.
-		return failed("", providers.StepNameRestore, "")
+		return d.uncertainAfterVerify(vr.Reason, vr.Params, restoreRefusalError(r))
 	}
 	d.out.Steps = append(d.out.Steps, r.steps...)
 	switch r.phase {
@@ -513,7 +586,34 @@ func (d *deployment) rollBack(ctx context.Context, vr providers.VerifyResult) (p
 		return failed(providers.PhaseRestoreFailed, r.failedStep, r.class)
 	}
 	// prepared or unchanged ("nothing to restore") cannot follow a committed answer.
-	return d.uncertain(protocolError(helperproto.SubNginxRestore, "nothing to restore after a committed deployment"))
+	return d.uncertainAfterVerify(vr.Reason, vr.Params, protocolError(helperproto.SubNginxRestore, "nothing to restore after a committed deployment"))
+}
+
+// restoreRetryingBusy is restore for the inline rollback, sent again while the helper answers BUSY
+// (see rollBack for the bound).
+func (d *deployment) restoreRetryingBusy(ctx context.Context) (restoreResult, error) {
+	for attempt := 1; ; attempt++ {
+		r, err := d.s.restore(ctx, d.req.OperationID, d.log)
+		if err != nil || r.code != helperproto.CodeBusy || attempt >= d.s.p.restoreAttempts {
+			return r, err
+		}
+		select {
+		case <-ctx.Done():
+			return r, nil
+		case <-d.s.clock.After(d.s.p.restoreWait):
+		}
+	}
+}
+
+// restoreRefusalError is the *providers.Error of a well-formed nginx-restore refusal.
+func restoreRefusalError(r restoreResult) *providers.Error {
+	switch r.code {
+	case helperproto.CodeUnknownOp:
+		return providers.NewError(reasonUnknownOperation, false, r.refusal, nil)
+	case helperproto.CodeSuperseded:
+		return providers.NewError(reasonSuperseded, false, r.refusal, nil)
+	}
+	return asProviderError(mapHelper(r.refusal, helperproto.SubNginxRestore))
 }
 
 // verifyOld checks the previous certificate after a rollback (the helper's own or the inline one);
@@ -551,8 +651,11 @@ func (s *session) checkOld(ctx context.Context, log providers.StepLogger, vreq p
 	}
 	step(log, providers.StepNameVerifyOld, providers.StepStarted, nil)
 	vr, err := s.VerifyDeployment(ctx, vreq)
+	if err != nil {
+		vr = unverifiable(vreq.Location, vreq.Verify, vreq.SANs) // not checkable: the port it would have probed
+	}
 	switch {
-	case err != nil || (!vr.OK && vr.Reason == reasonVerifyUnreachable):
+	case !vr.OK && vr.Reason == reasonVerifyUnreachable:
 		step(log, providers.StepNameVerifyOld, providers.StepFailed, map[string]string{"port": vr.Params["port"]})
 		return oldCheck{step: providers.DeployStep{Name: providers.StepNameVerifyOld, Status: providers.StepFailed}}, true
 	case !vr.OK:
@@ -676,12 +779,8 @@ func (s *session) RollbackDeployment(ctx context.Context, req providers.Rollback
 		case helperproto.CodeHashMismatch:
 			return providers.RollbackOutcome{Result: providers.DeployRollbackFailed, FailedStep: providers.StepNameRestore,
 				Error: providers.DeployErrFileChanged, Reason: reasonRollbackFailed, Params: backup}, nil
-		case helperproto.CodeUnknownOp:
-			return refuse(providers.NewError(reasonUnknownOperation, false, r.refusal, nil))
-		case helperproto.CodeSuperseded:
-			return refuse(providers.NewError(reasonSuperseded, false, r.refusal, nil))
 		}
-		return refuse(asProviderError(mapHelper(r.refusal, helperproto.SubNginxRestore)))
+		return refuse(restoreRefusalError(r))
 	}
 	switch r.phase {
 	case helperproto.PhasePrepared, helperproto.PhaseUnchanged:

@@ -105,7 +105,9 @@ func (p *emuProber) Probe(_ context.Context, host string, port int, sni, keyType
 	case p.remoteFails:
 		return Probe{}, ErrProbeFailed
 	}
-	leaf, chain, ok := p.emu.ProbeServed(port, sni, keyType)
+	// Alice reaches the emulated host at host: a listen on another specific address does not
+	// answer there (another server block may).
+	leaf, chain, ok := p.emu.ProbeServed(host, port, sni, keyType)
 	if !ok {
 		return Probe{}, ErrProbeFailed
 	}
@@ -162,7 +164,13 @@ type env struct {
 
 type envOption func(*envConfig)
 
-type envConfig struct{ noNginx bool }
+type envConfig struct {
+	noNginx  bool
+	siteAddr string
+}
+
+// withSiteAddr makes the fixture site listen on addr only (listen addr:443 ssl).
+func withSiteAddr(addr string) envOption { return func(c *envConfig) { c.siteAddr = addr } }
 
 // withoutNginx leaves Nginx uninstalled (the sudoers profile stays, as on a prepared server).
 func withoutNginx() envOption { return func(c *envConfig) { c.noNginx = true } }
@@ -192,12 +200,16 @@ func newEnv(t *testing.T, opts ...envOption) *env {
 	if !cfg.noNginx {
 		emu.EnableNginx("1.22.1")
 	}
-	emu.AddSite(linuxsshtest.NginxSite{Names: []string{"www.example.test"}, Port: 443, CertPath: wwwCert, KeyPath: wwwKey},
+	emu.AddSite(linuxsshtest.NginxSite{Names: []string{"www.example.test"}, Port: 443, Addr: cfg.siteAddr, CertPath: wwwCert, KeyPath: wwwKey},
 		leaf.FullchainPEM, leaf.KeyPEM)
 	prober := &emuProber{emu: emu}
 	return &env{
 		srv: srv, emu: emu, cred: cred, hk: hk, ca: ca, leaf: leaf, now: now, prober: prober, op: uuid.New(),
-		prov: New(Options{SSH: lp, Prober: prober, RetryWait: time.Millisecond}),
+		prov: func() *Provider {
+			p := New(Options{SSH: lp, Prober: prober, RetryWait: time.Millisecond})
+			p.restoreWait = time.Millisecond
+			return p
+		}(),
 		ref: providers.TargetRef{ID: testTarget, Name: "web-01", Kind: providers.KindNginx,
 			Config: providers.TargetConfig{"host": host, "port": port, "username": "alice-svc"}},
 	}
@@ -293,6 +305,16 @@ func intercept(e *env, sub string, fn func() (linuxsshtest.Response, bool)) {
 		}
 		return h(cmd, stdin)
 	})
+}
+
+// addCatchAll adds a default server on 443 (any address) serving another certificate: what
+// answers a connection the fixture site does not take.
+func (e *env) addCatchAll(t *testing.T) pki.Leaf {
+	t.Helper()
+	other := e.ca.Issue(pki.Opts{CommonName: "catch-all.example.test"}, e.now)
+	e.emu.AddSite(linuxsshtest.NginxSite{Names: []string{"_"}, Port: 443, Default: true, CertPath: "/etc/nginx/ssl/default.crt",
+		KeyPath: "/etc/nginx/ssl/default.key"}, other.FullchainPEM, other.KeyPEM)
+	return other
 }
 
 func warningCodes(ws []providers.Warning) []string {

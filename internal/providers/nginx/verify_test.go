@@ -12,6 +12,7 @@ import (
 
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh/helperproto"
+	"alice/internal/providers/linuxssh/linuxsshtest"
 	"alice/internal/testutil/pki"
 )
 
@@ -44,11 +45,15 @@ func TestEndpoints(t *testing.T) {
 	}}
 	assert.Equal(t, []Endpoint{
 		{Port: 443, SNI: "a.example.test", Addr: "127.0.0.1"},
-		{Port: 8443, SNI: "a.example.test", Addr: "10.0.0.5"},
+		{Port: 8443, SNI: "a.example.test", Addr: "10.0.0.5", Listen: "10.0.0.5"},
 		{Port: 443, SNI: "b.example.test", Addr: "127.0.0.1"},
-	}, Endpoints(loc, providers.VerifyOptions{}, []string{"b.example.test"}), "deduplicated by port and name")
-	assert.Equal(t, []Endpoint{{Port: 9443, SNI: "check.example.test", Addr: "127.0.0.1"}},
-		Endpoints(loc, providers.VerifyOptions{Port: 9443, SNI: "check.example.test"}, nil), "an override maps every listen to one endpoint")
+	}, Endpoints(loc, providers.VerifyOptions{}, []string{"b.example.test"}), "deduplicated by port, name and listen address (any address is one)")
+	assert.Equal(t, []Endpoint{{Port: 9443, SNI: "check.example.test", Addr: "127.0.0.1"}, {Port: 9443, SNI: "check.example.test", Addr: "10.0.0.5", Listen: "10.0.0.5"}},
+		Endpoints(loc, providers.VerifyOptions{Port: 9443, SNI: "check.example.test"}, nil), "an override maps the listens of each address to one endpoint")
+	two := providers.CertLocation{Servers: []providers.CertServer{{Names: []string{"a.example.test"},
+		Listens: []providers.CertListen{{Addr: "10.0.0.5", Port: 443}, {Addr: "10.0.0.6", Port: 443}, {Addr: "*", Port: 443}, {Addr: "0.0.0.0", Port: 443}}}}}
+	assert.Equal(t, []Endpoint{{Port: 443, SNI: "a.example.test", Addr: "10.0.0.5", Listen: "10.0.0.5"}, {Port: 443, SNI: "a.example.test", Addr: "10.0.0.6", Listen: "10.0.0.6"},
+		{Port: 443, SNI: "a.example.test", Addr: "127.0.0.1"}}, Endpoints(two, providers.VerifyOptions{}, nil), "one endpoint per specific address")
 	many := providers.CertLocation{}
 	for i := 0; i < 30; i++ {
 		many.Servers = append(many.Servers, providers.CertServer{Names: []string{fmt.Sprintf("s%d.example.test", i)}, Listens: []providers.CertListen{{Port: 443}}})
@@ -263,4 +268,110 @@ func TestVerifyDistrustsTheServerProbe(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok, "a port the helper cannot take")
 	assert.Equal(t, served{}, sv)
+}
+
+// Important 1: Alice's own probe stands for an endpoint only when it reaches that listen: a
+// wildcard listen, or one on the address Alice connects to. A listen on another specific address
+// (or on loopback) is checked by the server-side probe against that address.
+func TestVerifyProbesWhereTheListenIs(t *testing.T) {
+	t.Run("specific address answered by another block on the target's address", func(t *testing.T) {
+		e := newEnv(t, withSiteAddr("10.0.0.5"))
+		e.addCatchAll(t)
+		loc := e.location(t)
+		vr, err := e.open(t).VerifyDeployment(context.Background(), providers.VerifyRequest{Location: loc, Fingerprint: pki.Fingerprint(e.leaf.Cert)})
+		require.NoError(t, err)
+		assert.True(t, vr.OK, "%+v", vr)
+		assert.Equal(t, "local", vr.Mode)
+		assert.Empty(t, e.prober.probes(), "Alice's probe of the target's address does not stand for 10.0.0.5")
+		assert.Contains(t, strings.Join(e.srv.Commands(), "\n"), "tls-probe --addr '10.0.0.5' --port '443' --sni 'www.example.test'")
+	})
+	t.Run("loopback-only listen", func(t *testing.T) {
+		e := newEnv(t, withSiteAddr("127.0.0.1"))
+		e.addCatchAll(t)
+		loc := e.location(t)
+		s := e.session(t)
+		s.host = "192.0.2.10" // Alice reaches the server at its public address
+		vr, err := s.VerifyDeployment(context.Background(), providers.VerifyRequest{Location: loc, Fingerprint: pki.Fingerprint(e.leaf.Cert)})
+		require.NoError(t, err)
+		assert.True(t, vr.OK, "%+v", vr)
+		assert.Equal(t, "local", vr.Mode)
+		assert.Empty(t, e.prober.probes())
+	})
+	t.Run("a listen on the address Alice connects to", func(t *testing.T) {
+		e := newEnv(t, withSiteAddr("127.0.0.1"))
+		e.addCatchAll(t)
+		vr, err := e.open(t).VerifyDeployment(context.Background(), providers.VerifyRequest{Location: e.location(t), Fingerprint: pki.Fingerprint(e.leaf.Cert)})
+		require.NoError(t, err)
+		assert.True(t, vr.OK, "%+v", vr)
+		assert.Equal(t, "remote", vr.Mode)
+		assert.Equal(t, []string{"127.0.0.1 443 www.example.test any"}, e.prober.probes())
+	})
+	t.Run("wildcard listen", func(t *testing.T) {
+		e := newEnv(t)
+		e.addCatchAll(t)
+		s := e.session(t)
+		s.host = "192.0.2.10"
+		vr, err := s.VerifyDeployment(context.Background(), providers.VerifyRequest{Location: e.location(t), Fingerprint: pki.Fingerprint(e.leaf.Cert)})
+		require.NoError(t, err)
+		assert.True(t, vr.OK, "%+v", vr)
+		assert.Equal(t, "remote", vr.Mode)
+		assert.Equal(t, []string{"192.0.2.10 443 www.example.test any"}, e.prober.probes())
+	})
+	t.Run("two blocks on different addresses, same port and name", func(t *testing.T) {
+		e := newEnv(t, withSiteAddr("10.0.0.5"))
+		e.addCatchAll(t)
+		b := e.ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, e.now)
+		e.emu.AddSite(linuxsshtest.NginxSite{Names: []string{"www.example.test"}, Port: 443, Addr: "10.0.0.6", CertPath: "/etc/nginx/ssl/b.crt",
+			KeyPath: "/etc/nginx/ssl/b.key"}, b.FullchainPEM, b.KeyPEM)
+		s := e.open(t)
+		res, err := s.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
+		require.NoError(t, err)
+		byPath := locationsByPath(res)
+		for path, leaf := range map[string]pki.Leaf{wwwCert: e.leaf, "/etc/nginx/ssl/b.crt": b} {
+			vr, err := s.VerifyDeployment(context.Background(), providers.VerifyRequest{Location: byPath[path].Location, Fingerprint: pki.Fingerprint(leaf.Cert)})
+			require.NoError(t, err)
+			assert.True(t, vr.OK, "%s: %+v", path, vr)
+		}
+		assert.Empty(t, e.prober.probes())
+	})
+}
+
+func TestProbeFromAlice(t *testing.T) {
+	for _, tc := range []struct {
+		listen, host string
+		want         bool
+	}{
+		{"", "web.example.test", true},
+		{"10.0.0.5", "10.0.0.5", true},
+		{"2001:db8::1", "2001:DB8::1", true},
+		{"::ffff:10.0.0.5", "10.0.0.5", true},
+		{"web.example.test", "WEB.example.test", true},
+		{"10.0.0.5", "web.example.test", false},
+		{"127.0.0.1", "192.0.2.10", false},
+		{"::1", "::1", true}, // Alice runs on the server itself: it connects there
+		{"10.0.0.5", "10.0.0.6", false},
+	} {
+		assert.Equal(t, tc.want, probeFromAlice(Endpoint{Listen: tc.listen}, tc.host), "%+v", tc)
+	}
+}
+
+// Minor 4: an empty Fingerprint is a query of what the first endpoint serves, not a verification;
+// the deploy engine's pre-check passes the currently deployed fingerprint (and key type) so that
+// every endpoint is compared and the typed probe applies.
+func TestVerifyQueryIsNotAVerification(t *testing.T) {
+	e := newEnv(t)
+	e.emu.ServeOther(8443, strings.Repeat("c", 64))
+	loc := providers.CertLocation{Servers: []providers.CertServer{
+		{Names: []string{"www.example.test"}, Listens: []providers.CertListen{{Port: 443}, {Port: 8443}}},
+	}}
+	s := e.open(t)
+	vr, err := s.VerifyDeployment(context.Background(), providers.VerifyRequest{Location: loc})
+	require.NoError(t, err)
+	assert.True(t, vr.OK, "a query: every endpoint answered")
+	assert.Equal(t, pki.Fingerprint(e.leaf.Cert), vr.Served, "the first endpoint's leaf")
+	vr, err = s.VerifyDeployment(context.Background(), providers.VerifyRequest{Location: loc, Fingerprint: pki.Fingerprint(e.leaf.Cert), KeyType: "ecdsa"})
+	require.NoError(t, err)
+	assert.False(t, vr.OK)
+	assert.Equal(t, "deployment.verify_other", vr.Reason)
+	assert.Equal(t, map[string]string{"port": "8443"}, vr.Params, "every endpoint is compared")
 }

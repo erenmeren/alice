@@ -587,15 +587,16 @@ func (e *Emulator) Served(port int, sni string) string {
 	return ""
 }
 
-// ProbeServed is what a TLS handshake with the emulated host on port with sni ("" or "_": none)
-// and keyType (helperproto.ProbeAny, ProbeRSA or ProbeECDSA) shows, as the emulated tls-probe
-// answers it from any address: the served leaf's hex SHA-256 and the number of certificates
-// presented. ok is false when nothing answers or the handshake would fail. Test probers that stand
-// for Alice's own probe use it.
-func (e *Emulator) ProbeServed(port int, sni, keyType string) (leafSHA256 string, chainLength int, ok bool) {
+// ProbeServed is what a TLS handshake with the emulated host at addr:port with sni ("" or "_":
+// none) and keyType (helperproto.ProbeAny, ProbeRSA or ProbeECDSA) shows, selected like Nginx
+// (and like the emulated tls-probe): a listen on another specific address does not answer at addr;
+// addr "" connects to any. It returns the served leaf's hex SHA-256 and the number of certificates
+// presented; ok is false when nothing answers or the handshake would fail. Test probers that stand
+// for Alice's own probe pass the address Alice connects to.
+func (e *Emulator) ProbeServed(addr string, port int, sni, keyType string) (leafSHA256 string, chainLength int, ok bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	s, ok := e.nginx().servedLocked("", port, sni, keyType)
+	s, ok := e.nginx().servedLocked(addr, port, sni, keyType)
 	return s.leafSHA, s.chain, ok
 }
 

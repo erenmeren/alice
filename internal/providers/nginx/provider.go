@@ -31,7 +31,11 @@ type Provider struct {
 	prober    Prober
 	retryWait time.Duration
 	attempts  int
-	caps      providers.CapabilitySet
+	// The inline rollback's nginx-restore is sent again while the helper answers BUSY:
+	// restoreAttempts sends in all, restoreWait apart (3 and 10 s).
+	restoreAttempts int
+	restoreWait     time.Duration
+	caps            providers.CapabilitySet
 }
 
 var (
@@ -49,6 +53,7 @@ func New(o Options) *Provider {
 	if p.prober == nil {
 		p.prober = TLSProber{}
 	}
+	p.restoreAttempts, p.restoreWait = 3, 10*time.Second
 	if p.retryWait <= 0 {
 		p.retryWait = 2 * time.Second
 	}
@@ -174,11 +179,7 @@ func isHelperCode(err error, code string) bool {
 
 // mapHelper maps the reasons of linuxssh's DecodeHelper for the Nginx subcommands to nginx.*
 // reasons; every other error is returned unchanged. sub is the helper subcommand.
-func mapHelper(err error, sub string) error { return mapHelperIn(err, sub, "") }
-
-// mapHelperIn is mapHelper for a deployment: directory is the key file's directory, the param of
-// nginx.write_failed (an IO_ERROR of nginx-deploy).
-func mapHelperIn(err error, sub, directory string) error {
+func mapHelper(err error, sub string) error {
 	var pe *providers.Error
 	if !errors.As(err, &pe) {
 		return err
@@ -208,11 +209,11 @@ func mapHelperIn(err error, sub, directory string) error {
 		if sub != helperproto.SubNginxDeploy {
 			return err // a killed or timed-out nginx: the retryable ssh.helper_refused stays
 		}
-		params := map[string]string{}
-		if directory != "" {
-			params["directory"] = directory
-		}
-		return providers.NewError("nginx.write_failed", false, err, params)
+		// nginx-deploy's IO_ERROR has several causes the answer does not tell apart (Alice keeps the
+		// code only, never the message): a folder that cannot be written, nginx killed or timed out
+		// during -V/-T, the journal, backup or lock unreadable, stdin unreadable, the budget ended
+		// before the first rename. Nothing was changed; a neutral, retryable reason.
+		return providers.NewError("nginx.io_error", true, err, nil)
 	case helperproto.CodePathNotAllowed, helperproto.CodeUnsafeFile, helperproto.CodeNotRegularFile, helperproto.CodeNotFound, helperproto.CodeTooLarge:
 		return providers.NewError("nginx.location_unsupported", false, err, nil)
 	case helperproto.CodeBadContent:

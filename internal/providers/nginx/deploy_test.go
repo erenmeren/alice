@@ -36,6 +36,8 @@ type wantDeploy struct {
 	files                     string // "old" | "new" | "" (not checked)
 	noDeploySent, noRestore   bool
 	restoreSent               bool
+	restores                  int               // nginx-restore commands sent (0: not checked)
+	logParams                 map[string]string // params of the last logged step (nil: not checked)
 }
 
 // stepList renders steps as "name:status" or "name:status:class".
@@ -153,8 +155,7 @@ func TestDeployOutcomeTable(t *testing.T) {
 		{"F-12 directory not writable", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
 			e.emu.FailWriteIn("/etc/nginx/ssl")
 		},
-			nil, wantDeploy{result: providers.DeployNoChange, reason: "nginx.write_failed", params: map[string]string{"directory": "/etc/nginx/ssl"},
-				errCode: "nginx.write_failed", files: "old"}},
+			nil, wantDeploy{result: providers.DeployNoChange, reason: "nginx.io_error", errCode: "nginx.io_error", retryable: true, files: "old"}},
 		{"changed since discovery", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
 			e.emu.SetNginxFile(wwwCert, e.leaf.CertPEM)
 		},
@@ -200,7 +201,8 @@ func TestDeployOutcomeTable(t *testing.T) {
 		{"verification error (SSH lost during tls-probe): the rollback cannot be sent, uncertain", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
 			e.prober.set(true, false)
 			hangUpOn(e, helperproto.SubTLSProbe)
-		}, nil, wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), errCode: "ssh.unreachable", retryable: true, files: "new"}},
+		}, nil, wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), reason: "deployment.verify_unreachable",
+			params: map[string]string{"port": "443", "failed_step": "verify"}, errCode: "ssh.unreachable", retryable: true, files: "new"}},
 		{"old certificate not served after the restore: rollback_failed, phase restored", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
 			e.emu.ServeOther(443, strings.Repeat("c", 64))
 		}, nil, wantDeploy{result: providers.DeployRollbackFailed, phase: "restored", failed: "verify_old", cause: "verify",
@@ -225,29 +227,76 @@ func TestDeployOutcomeTable(t *testing.T) {
 			beforeOn(e, restoreSub, func() { e.emu.SetNginxFile(wwwCert, other.FullchainPEM) })
 		}, nil, wantDeploy{result: providers.DeployRollbackFailed, failed: "restore", cause: "verify", cls: "file_changed",
 			steps: cat(helperOK, []string{"verify:failed"}), reason: "deployment.rollback_failed", restoreSent: true}},
-		{"inline restore refused (BUSY): the new files stay, rollback_failed", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
+		{"inline restore BUSY once: retried, rolled back", func(t *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
+			e.emu.NoopReload(true)
+			scriptOn(e, restoreSub, refusal(t, 4, helperproto.CodeBusy))
+		}, nil, wantDeploy{result: providers.DeployRolledBack, phase: "restored", failed: "verify", cause: "verify", verified: "remote",
+			steps: cat(helperOK, []string{"verify:failed"}, restored, []string{"verify_old:ok"}), reason: "deployment.verify_failed",
+			params: map[string]string{"port": "443"}, files: "old", restores: 2}},
+		{"inline restore BUSY throughout: uncertain after the bounded retries", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
 			e.emu.NoopReload(true)
 			beforeOn(e, restoreSub, func() { e.emu.HoldLock(true) })
-		}, nil, wantDeploy{result: providers.DeployRollbackFailed, failed: "restore", cause: "verify",
-			steps: cat(helperOK, []string{"verify:failed"}), reason: "deployment.rollback_failed", files: "new", restoreSent: true}},
+		}, nil, wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), reason: "deployment.verify_failed",
+			params: map[string]string{"port": "443", "failed_step": "verify"}, errCode: "nginx.busy", retryable: true, files: "new", restores: 3}},
+		{"inline restore IO_ERROR: uncertain", func(t *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
+			e.emu.NoopReload(true)
+			scriptOn(e, restoreSub, refusal(t, 4, helperproto.CodeIOError))
+		}, nil, wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), reason: "deployment.verify_failed",
+			params: map[string]string{"port": "443", "failed_step": "verify"}, errCode: "ssh.helper_refused", retryable: true, files: "new", restores: 1}},
+		{"inline restore refused by sudo: uncertain", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
+			e.emu.NoopReload(true)
+			beforeOn(e, restoreSub, func() { e.emu.SetNginxProfile(false) })
+		}, nil, wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), reason: "deployment.verify_failed",
+			params: map[string]string{"port": "443", "failed_step": "verify"}, errCode: "nginx.profile_missing", files: "new", restores: 1}},
+		{"inline restore SUPERSEDED (cannot happen for the operation just committed): uncertain", func(t *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
+			e.emu.NoopReload(true)
+			scriptOn(e, restoreSub, refusal(t, 3, helperproto.CodeSuperseded))
+		}, nil, wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), reason: "deployment.verify_failed",
+			params: map[string]string{"port": "443", "failed_step": "verify"}, errCode: "deployment.superseded", files: "new", restores: 1}},
+		{"inline restore UNKNOWN_OP (cannot happen): uncertain", func(t *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
+			e.emu.NoopReload(true)
+			scriptOn(e, restoreSub, refusal(t, 3, helperproto.CodeUnknownOp))
+		}, nil, wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), reason: "deployment.verify_failed",
+			params: map[string]string{"port": "443", "failed_step": "verify"}, errCode: "deployment.unknown_operation", files: "new", restores: 1}},
 		{"inline restore killed: uncertain", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
 			e.emu.NoopReload(true)
 			e.emu.KillAt(helperproto.StepRestore)
 			e.emu.ArmFaultsFor(restoreSub)
-		}, nil, wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), errCode: "ssh.protocol_error", restoreSent: true}},
+		}, nil, wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), reason: "deployment.verify_failed",
+			params: map[string]string{"port": "443", "failed_step": "verify"}, errCode: "ssh.protocol_error", restoreSent: true}},
 		{"inline restore: a malformed answer is uncertain", func(t *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
 			e.emu.NoopReload(true)
 			scriptOn(e, restoreSub, linuxsshtest.Response{Stdout: []byte(`{"ok":true,"phase":"restored","steps":[{"name":"rm -rf","status":"ok"}]}`)})
-		}, nil, wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), errCode: "ssh.protocol_error", files: "new", restoreSent: true}},
+		}, nil, wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), reason: "deployment.verify_failed",
+			params: map[string]string{"port": "443", "failed_step": "verify"}, errCode: "ssh.protocol_error", files: "new", restoreSent: true}},
 		{"inline restore answers nothing to restore: uncertain", func(t *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
 			e.emu.NoopReload(true)
 			scriptOn(e, restoreSub, linuxsshtest.Response{Stdout: answerJSON(t, helperproto.NginxRestoreResponse{OK: true, Phase: "prepared", Steps: []helperproto.NginxStep{}})})
-		}, nil, wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), errCode: "ssh.protocol_error", files: "new", restoreSent: true}},
+		}, nil, wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), reason: "deployment.verify_failed",
+			params: map[string]string{"port": "443", "failed_step": "verify"}, errCode: "ssh.protocol_error", files: "new", restoreSent: true}},
 		{"cancelled during the verification: uncertain (no rollback can be sent)", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
 			e.prov.retryWait = 10 * time.Second
 			e.emu.NoopReload(true)
-		}, withDeadline(300 * time.Millisecond), wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}), errCode: "ssh.timeout",
-			retryable: true, files: "new", noRestore: true}},
+		}, withDeadline(300 * time.Millisecond), wantDeploy{result: providers.DeployUncertain, steps: cat(helperOK, []string{"verify:failed"}),
+			reason: "deployment.interrupted", params: map[string]string{"failed_step": "verify"}, errCode: "ssh.timeout",
+			retryable: true, files: "new", noRestore: true, logParams: map[string]string{"error": "interrupted"}}},
+
+		// Important 2: the verification is never vacuous.
+		{"no fingerprint in the request: the leaf's is computed and compared", func(_ *testing.T, e *env, _ pki.Leaf, r *providers.DeployRequest) {
+			r.Fingerprint = ""
+			e.emu.NoopReload(true)
+		}, nil, wantDeploy{result: providers.DeployRolledBack, phase: "restored", failed: "verify", cause: "verify", verified: "remote",
+			steps: cat(helperOK, []string{"verify:failed"}, restored, []string{"verify_old:ok"}), reason: "deployment.verify_failed",
+			params: map[string]string{"port": "443"}, files: "old", restoreSent: true}},
+		{"provider: a fingerprint that is not the leaf's", func(_ *testing.T, _ *env, _ pki.Leaf, r *providers.DeployRequest) {
+			r.Fingerprint = strings.Repeat("a", 64)
+		},
+			nil, wantDeploy{result: providers.DeployNoChange, reason: "internal.unexpected", errCode: "internal.unexpected", files: "old", noDeploySent: true}},
+		{"provider: no certificate in the chain", func(_ *testing.T, _ *env, _ pki.Leaf, r *providers.DeployRequest) { r.CertificatePEM = []byte("x") },
+			nil, wantDeploy{result: providers.DeployNoChange, reason: "certificate.invalid", errCode: "certificate.invalid", files: "old", noDeploySent: true}},
+		{"exit 1 with output is not sudo's refusal: uncertain", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
+			scriptOn(e, deploySub, linuxsshtest.Response{Exit: 1, Stdout: []byte("something\n")})
+		}, nil, wantDeploy{result: providers.DeployUncertain, errCode: "ssh.helper_missing", files: "old"}},
 
 		// The helper's own rollback (restored).
 		{"helper restored: config test failed", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) { e.emu.FailConfigTest(1) },
@@ -444,6 +493,13 @@ func TestDeployOutcomeTable(t *testing.T) {
 			if w.restoreSent {
 				assert.Contains(t, cmds, restoreSub)
 			}
+			if w.restores > 0 {
+				assert.Equal(t, w.restores, strings.Count(cmds, restoreSub), "nginx-restore sent")
+			}
+			if w.logParams != nil {
+				require.NotEmpty(t, log.params)
+				assert.Equal(t, w.logParams, log.params[len(log.params)-1])
+			}
 			// The logger saw every final step of the outcome, in order (plus "started" entries).
 			var logged []string
 			for _, l := range log.list() {
@@ -479,7 +535,7 @@ func TestDeployRefusalCodes(t *testing.T) {
 		helperproto.CodeConfigInvalid: "nginx.config_invalid", helperproto.CodeConfigChanged: "nginx.config_changed",
 		helperproto.CodeNotFound: "nginx.location_unsupported", helperproto.CodeHashMismatch: "nginx.file_changed",
 		helperproto.CodeNoSpace: "nginx.no_space", helperproto.CodeSuperseded: "ssh.helper_refused",
-		helperproto.CodeBusy: "nginx.busy", helperproto.CodeIOError: "nginx.write_failed",
+		helperproto.CodeBusy: "nginx.busy", helperproto.CodeIOError: "nginx.io_error",
 	}
 	require.Len(t, deployRefusals, len(want))
 	e := newEnv(t)
@@ -1081,4 +1137,41 @@ func TestAnswerValidators(t *testing.T) {
 	assert.Equal(t, map[string]string{"port": "443"}, unverifiable(providers.CertLocation{}, providers.VerifyOptions{}, nil).Params)
 	assert.Equal(t, map[string]string{"port": "8443"}, unverifiable(providers.CertLocation{}, providers.VerifyOptions{Port: 8443}, nil).Params)
 	assert.Equal(t, "internal.unexpected", asProviderError(fmt.Errorf("plain")).Code)
+}
+
+// Important 3: a context that ends before the inline restore is sent is uncertain (the new files
+// stay live, unverified; the engine's recovery finishes the rollback), carrying the verification's
+// reason. Driven on the unexported step because the verification itself would see the cancelled
+// context first.
+func TestInlineRestoreNotSentIsUncertain(t *testing.T) {
+	e := newEnv(t)
+	nw := e.ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, e.now)
+	s := e.session(t)
+	d := deployment{s: s, req: e.req(t, nw), out: providers.DeployOutcome{Steps: []providers.DeployStep{{Name: "verify", Status: providers.StepFailed}}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	before := len(e.srv.Commands())
+	out, err := d.rollBack(ctx, providers.VerifyResult{Reason: "deployment.verify_other", Params: map[string]string{"port": "443"}})
+	providertest.CheckDeployOutcome(t, out, err)
+	assert.Equal(t, providers.DeployUncertain, out.Result)
+	assert.Equal(t, "deployment.verify_other", out.Reason)
+	assert.Equal(t, map[string]string{"port": "443", "failed_step": "verify"}, out.Params)
+	pe := providerErr(t, err)
+	assert.Equal(t, "ssh.timeout", pe.Code)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Len(t, e.srv.Commands(), before, "nothing was sent")
+}
+
+// Minor 3: a check of the old certificate that cannot be made logs the port it would have probed.
+func TestCheckOldLogsThePortOnAnError(t *testing.T) {
+	e := newEnv(t)
+	s := e.session(t)
+	log := &steps{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c, ok := s.checkOld(ctx, log, providers.VerifyRequest{Location: e.location(t), Fingerprint: pki.Fingerprint(e.leaf.Cert)})
+	assert.True(t, ok, "not checkable is not a wrong certificate")
+	assert.Equal(t, providers.StepFailed, c.step.Status)
+	assert.Equal(t, []string{"verify_old:started", "verify_old:failed"}, log.list())
+	assert.Equal(t, map[string]string{"port": "443"}, log.params[1])
 }

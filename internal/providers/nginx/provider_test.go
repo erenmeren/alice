@@ -179,7 +179,7 @@ func TestMapHelper(t *testing.T) {
 			deploy, "nginx.file_changed", map[string]string{}, false},
 		{"no space", helperErr(deploy, "NO_SPACE", false), deploy, "nginx.no_space", map[string]string{}, false},
 		{"busy", helperErr(deploy, "BUSY", true), deploy, "nginx.busy", map[string]string{}, true},
-		{"write failed", helperErr(deploy, "IO_ERROR", true), deploy, "nginx.write_failed", map[string]string{}, false},
+		{"io error of a deployment", helperErr(deploy, "IO_ERROR", true), deploy, "nginx.io_error", map[string]string{}, true},
 		{"io error of the dump stays", helperErr("nginx-dump", "IO_ERROR", true), "nginx-dump", "ssh.helper_refused",
 			map[string]string{"subcommand": "nginx-dump", "helper_code": "IO_ERROR"}, true},
 		{"path not allowed", helperErr(deploy, "PATH_NOT_ALLOWED", false), deploy, "nginx.location_unsupported", map[string]string{}, false},
@@ -207,9 +207,6 @@ func TestMapHelper(t *testing.T) {
 	}
 	assert.NoError(t, mapHelper(nil, deploy))
 	assert.Equal(t, cause, mapHelper(cause, deploy), "an error that is not a provider error passes through")
-	pe := providerErr(t, mapHelperIn(helperErr(deploy, "IO_ERROR", true), deploy, "/etc/nginx/ssl"))
-	assert.Equal(t, "nginx.write_failed", pe.Code)
-	assert.Equal(t, map[string]string{"directory": "/etc/nginx/ssl"}, pe.Params)
 }
 
 func TestNewDefaults(t *testing.T) {

@@ -25,11 +25,15 @@ const (
 	reasonVerifyChain       = "deployment.verify_chain"       // the expected leaf, another chain length (param port)
 )
 
-// Endpoint is one (port, name) Alice checks after a deployment.
+// Endpoint is one (port, name, listen address) Alice checks after a deployment.
 type Endpoint struct {
 	Port int
 	SNI  string // "" = no server name (helperproto.NoSNI on the helper's command line)
 	Addr string // where the server-side probe (tls-probe) connects: an IP literal
+	// Listen is the listen address ("" for any address: "*", "0.0.0.0", "::", none). It decides
+	// whether Alice's own probe stands for the endpoint (probeFromAlice). An addition to the plan's
+	// struct.
+	Listen string
 }
 
 // SNIFor chooses the server name a probe sends (spec §12.8 item 1): the first usable server_name,
@@ -94,9 +98,37 @@ func localAddr(addr string) string {
 	return "127.0.0.1"
 }
 
-// Endpoints lists the (port, name) pairs of a location to verify, deduplicated by port and name, in
-// the order of its servers and listens, at most maxEndpoints. The options override the port of every
-// listen and the name of every server.
+// listenAddr is a listen address with every "any address" spelling as "".
+func listenAddr(addr string) string {
+	if a, err := netip.ParseAddr(addr); err == nil && a.IsUnspecified() {
+		return ""
+	}
+	if addr == "*" {
+		return ""
+	}
+	return addr
+}
+
+// probeFromAlice reports whether Alice's own probe of host (the target's address) reaches the
+// endpoint's listen, so that its answer stands for the endpoint: a listen on any address, or on the
+// address Alice connects to (the same IP, or the same host name ignoring case). A listen on another
+// specific address, loopback among them, is not reached by a connection to host: another server
+// block may answer there, so only the server-side probe against that address is the authority.
+func probeFromAlice(ep Endpoint, host string) bool {
+	if ep.Listen == "" {
+		return true
+	}
+	l, lerr := netip.ParseAddr(ep.Listen)
+	h, herr := netip.ParseAddr(host)
+	if lerr == nil || herr == nil {
+		return lerr == nil && herr == nil && l.Unmap() == h.Unmap() && l.Zone() == h.Zone()
+	}
+	return asciiLower(ep.Listen) == asciiLower(host)
+}
+
+// Endpoints lists the endpoints of a location to verify, deduplicated by port, name and listen
+// address (every spelling of "any address" is one), in the order of its servers and listens, at most
+// maxEndpoints. The options override the port of every listen and the name of every server.
 func Endpoints(loc providers.CertLocation, v providers.VerifyOptions, sans []string) []Endpoint {
 	var out []Endpoint
 	seen := map[string]bool{}
@@ -110,12 +142,13 @@ func Endpoints(loc providers.CertLocation, v providers.VerifyOptions, sans []str
 			if v.Port != 0 {
 				port = v.Port
 			}
-			k := strconv.Itoa(port) + "\x00" + sni
+			listen := listenAddr(l.Addr)
+			k := strconv.Itoa(port) + "\x00" + sni + "\x00" + listen
 			if seen[k] {
 				continue
 			}
 			seen[k] = true
-			out = append(out, Endpoint{Port: port, SNI: sni, Addr: localAddr(l.Addr)})
+			out = append(out, Endpoint{Port: port, SNI: sni, Addr: localAddr(l.Addr), Listen: listen})
 			if len(out) == maxEndpoints {
 				return out
 			}
@@ -135,22 +168,39 @@ type served struct {
 	local bool // answered by the server-side probe
 }
 
-// VerifyDeployment checks which certificate the location serves (spec §12.8; R38 item 6). Every
-// endpoint (Endpoints) is probed with helperproto.ProbeAny, so TLS 1.3-only websites answer (D15):
-// from Alice first, and from the server itself (tls-probe) when Alice cannot connect or complete a
-// handshake. When the leaf served is not the expected one and req.KeyType is rsa or ecdsa, a second
-// probe of that key type (TLS 1.2 with that key type's suites) asks a dual-certificate server for
-// the certificate of the deployed type (spec §12.8 item 4); it decides only when it shows the
-// expected leaf. An endpoint that does not serve the expected leaf yet is probed again, up to
-// Options.Attempts times Options.RetryWait apart (old workers answer for a moment after a graceful
-// reload). A result compares the leaf's SHA-256 with req.Fingerprint and, when req.ChainLength > 0,
-// the number of certificates presented with it (spec §12.8 item 5); nothing else of a probe is
-// trusted. Reasons: reasonVerifyFailed (the previous leaf is served), reasonVerifyOther,
-// reasonVerifyChain, reasonVerifyUnreachable (no handshake either way; also for a location without
-// endpoints), each with param port. With req.Fingerprint "" the first endpoint's leaf is reported in
-// Served. The error is a *providers.Error for a cancelled ctx (ssh.timeout, wrapping the context's
-// error) or a failure of the SSH connection during a server-side probe; a website that cannot be
-// reached is a result, not an error.
+// VerifyDeployment checks which certificate the location serves (spec §12.8; R38 item 6).
+//
+// Where each endpoint (Endpoints) is probed: Alice's own probe (TLSProber, to the target's address)
+// stands for an endpoint only when it reaches that listen (probeFromAlice): a listen on any address
+// ("*", "0.0.0.0", "::" or none), or on the address Alice connects to. Then Alice probes first and
+// the server itself (tls-probe) when Alice cannot connect or complete a handshake. A listen on
+// another specific address, loopback among them, is probed only from the server, against that
+// address: a connection to the target's address would be answered by another server block. (Unix
+// sockets are not TLS listens of a location; the parser drops them.)
+//
+// How: every probe uses helperproto.ProbeAny first, so TLS 1.3-only websites answer (D15). When the
+// leaf served is not the expected one and req.KeyType is rsa or ecdsa, a second probe of that key
+// type (TLS 1.2 with that key type's suites) asks a dual-certificate server for the certificate of
+// the deployed type (spec §12.8 item 4); it decides only when it shows the expected leaf. An
+// endpoint that does not serve the expected leaf yet is probed again, up to Options.Attempts times
+// Options.RetryWait apart (old workers answer for a moment after a graceful reload).
+//
+// Two uses, told apart by req.Fingerprint:
+//   - a verification (Fingerprint set; DeployCertificate always sets it to the deployed leaf, and the
+//     deploy engine's pre-check passes the currently deployed fingerprint and key type): every
+//     endpoint is compared, the leaf's SHA-256 with Fingerprint and, when req.ChainLength > 0, the
+//     number of certificates presented (spec §12.8 item 5); OK only when every endpoint serves it.
+//     Reasons: reasonVerifyFailed (the previous leaf is served), reasonVerifyOther,
+//     reasonVerifyChain, reasonVerifyUnreachable (no handshake either way; also for a location
+//     without endpoints), each with param port of the first endpoint that failed;
+//   - a query (Fingerprint ""): nothing is compared. OK means only that every endpoint completed a
+//     handshake; Served and ServedChainLength are the first endpoint's answer, and endpoints that
+//     serve other leaves are not reported. It is never a pass of a deployment.
+//
+// Nothing of a probe but the leaf's SHA-256 and the chain length is trusted. The error is a
+// *providers.Error for a cancelled ctx (ssh.timeout, wrapping the context's error) or a failure of
+// the SSH connection during a server-side probe; a website that cannot be reached is a result, not
+// an error.
 func (s *session) VerifyDeployment(ctx context.Context, req providers.VerifyRequest) (providers.VerifyResult, error) {
 	if err := s.open(); err != nil {
 		return providers.VerifyResult{}, err
@@ -218,7 +268,7 @@ func (s *session) probeEndpoint(ctx context.Context, ep Endpoint, req providers.
 	if req.KeyType == helperproto.ProbeRSA || req.KeyType == helperproto.ProbeECDSA {
 		typed = req.KeyType
 	}
-	localOnly := false
+	localOnly := !probeFromAlice(ep, s.host)
 	for attempt := 1; attempt <= s.p.attempts; attempt++ {
 		sv, ok, err := s.probeOnce(ctx, ep, helperproto.ProbeAny, &localOnly)
 		if err != nil {

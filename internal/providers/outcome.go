@@ -56,6 +56,12 @@ import (
 // an outcome, never an error); no_change comes with a non-nil *Error (a well-formed refusal);
 // uncertain comes with a non-nil error (why Alice does not know). ErrUnsupported is none of these.
 //
+// no_change means "this call changed nothing". On a RE-SENT operation ID (the same operation sent
+// again, e.g. after an uncertain outcome) it does not mean that the files are unchanged since before
+// the first send: an earlier send of the operation may have changed them. Read DeploymentStatus
+// before re-sending an operation, and never conclude from a re-send's no_change that nothing
+// happened.
+//
 // A caller must treat an outcome that fails Validate or CheckDeployReturn, a blank or unknown
 // Result, or any error the provider did not map to one of the above, as uncertain: it reads the
 // truth with DeploymentStatus and never as "no change".
