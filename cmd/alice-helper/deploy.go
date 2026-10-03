@@ -274,8 +274,8 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 		// §12.9 "Same cert already deployed": no write, no reload.
 		j.Phase = helperproto.PhaseUnchanged
 		if dir == nil {
-			if dir, err = s.opDir(d.op, true); err != nil {
-				return nil, failed(helperproto.CodeIOError, "the backup directory cannot be created")
+			if dir, err = s.newOpDir(d.op); err != nil {
+				return nil, err
 			}
 		}
 		if err := s.writeJournal(dir, j); err != nil {
@@ -288,11 +288,8 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 		return nil, precondition(helperproto.CodeNoSpace, "the server has not enough free disk space for the new files")
 	}
 	if dir == nil {
-		if s.nginxOps() >= maxNginxOps {
-			return nil, precondition(helperproto.CodeNoSpace, "too many deployment backups are kept on this server")
-		}
-		if dir, err = s.opDir(d.op, true); err != nil {
-			return nil, failed(helperproto.CodeIOError, "the backup directory cannot be created")
+		if dir, err = s.newOpDir(d.op); err != nil {
+			return nil, err
 		}
 	}
 	if !s.spaceFor(int(dir.Fd()), int64(len(cert.data)+len(key.data))+helperproto.MinFreeBytes) { //nolint:gosec // G115: a descriptor fits an int
@@ -395,6 +392,19 @@ func (s *sys) fail(ctx context.Context, dir *os.File, j journal, step, class str
 func (s *sys) spaceFor(fd int, need int64) bool {
 	free, err := s.statfs(fd)
 	return err == nil && free >= need
+}
+
+// newOpDir creates the operation directory of a new operation, unless maxNginxOps operations
+// are kept already (the answer is then a refusal).
+func (s *sys) newOpDir(op string) (*os.File, error) {
+	if s.nginxOps() >= maxNginxOps {
+		return nil, precondition(helperproto.CodeNoSpace, "too many deployment backups are kept on this server")
+	}
+	dir, err := s.opDir(op, true)
+	if err != nil {
+		return nil, failed(helperproto.CodeIOError, "the backup directory cannot be created")
+	}
+	return dir, nil
 }
 
 // nginxOps counts the operation directories that hold a journal.
@@ -551,6 +561,7 @@ func (s *sys) cleanStaged(j journal) {
 // restore never leaves a mixed pair behind and never clobbers a newer deployment. A restore of a
 // restore is a no-op. The certificate is restored first, then the key (the reverse of the writes).
 func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal) (journal, error) {
+	j.Steps = trimSteps(j.Steps)
 	failRestore := func(err error) (journal, error) {
 		j.Steps = append(j.Steps, stepFailed(helperproto.StepRestore, ""))
 		j.Phase = helperproto.PhaseRestoreFailed
@@ -711,6 +722,7 @@ func cmdNginxRestore(ctx context.Context, s *sys, args []string) (out any, err e
 		s.cleanStaged(j)
 		return helperproto.NginxRestoreResponse{OK: true, Phase: j.Phase, Steps: []helperproto.NginxStep{}}, nil
 	}
+	j.Steps = trimSteps(j.Steps) // as restoreOp does: the steps it adds follow
 	before := len(j.Steps)
 	j, err = s.restoreOp(context.WithoutCancel(ctx), dir, j)
 	if errors.Is(err, errChangedByOthers) {

@@ -980,6 +980,36 @@ func TestStatusReportsTheJournal(t *testing.T) {
 		"nginx-status is not logged")
 }
 
+// Attack: nginx-restore called again and again on an operation it refuses (or whose rollback
+// reload keeps failing) never makes the journal unreadable or larger than its limit.
+func TestRepeatedRestoresKeepTheJournalReadable(t *testing.T) {
+	w := newDeployWorld(t)
+	code, _ := w.deploy(opA, w.newInput(), w.oldSHA())
+	require.Equal(t, 0, code)
+	w.f.write("/etc/nginx/ssl/www.crt", "someone else's certificate", 0o644)
+	for i := 0; i < 200; i++ {
+		code, r := w.f.run("nginx-restore", "--op", opA)
+		require.Equal(t, helperproto.ExitPrecondition, code, "%d %v", i, r)
+	}
+	w.f.write("/etc/nginx/ssl/www.crt", string(w.newLeaf.FullchainPEM), 0o644)
+	for i := 0; i < 100; i++ {
+		w.reloadFail = 1
+		code, r := w.f.run("nginx-restore", "--op", opA)
+		require.Equal(t, 0, code, "%d %v", i, r)
+		assert.Equal(t, helperproto.PhaseRestoreFailed, r["phase"])
+		assert.Equal(t, []string{"restore:ok", "rollback_config_test:ok", "rollback_reload:failed"}, stepsOf(r))
+	}
+	code, st := w.f.run("nginx-status", "--op", opA)
+	require.Equal(t, 0, code, "%v", st)
+	code, r := w.f.run("nginx-restore", "--op", opA)
+	require.Equal(t, 0, code, "%v", r)
+	assert.Equal(t, helperproto.PhaseRestored, r["phase"])
+	var j journal
+	require.NoError(t, json.Unmarshal([]byte(w.f.read(helperproto.BackupRoot+"/"+opA+"/journal.json")), &j))
+	assert.LessOrEqual(t, len(j.Steps), maxSteps)
+	assert.Equal(t, helperproto.StepBackup, j.Steps[0].Name, "the deployment's own steps are kept")
+}
+
 // A journal that cannot be read is never guessed at.
 func TestUnreadableJournal(t *testing.T) {
 	w := newDeployWorld(t)
@@ -1104,6 +1134,12 @@ func TestDeployBoundsTheBackupsKept(t *testing.T) {
 	assert.Equal(t, helperproto.ExitPrecondition, code)
 	assert.Equal(t, helperproto.CodeNoSpace, m["code"])
 	w.assertPair(t, true)
+	assert.NoDirExists(t, w.opPath(opB))
+	// An unchanged deployment records a journal too, so it counts the same.
+	in = w.newInput()
+	code, m = w.f.runWith(in, "nginx-deploy", "--op", opB, "--cert", "/etc/nginx/ssl/www.crt", "--key", "/etc/nginx/ssl/www.key",
+		"--expect-cert-sha256", hexOf(string(w.newLeaf.FullchainPEM)), "--content-sha256", hexOf(in))
+	assert.Equal(t, helperproto.ExitPrecondition, code, "%v", m)
 	assert.NoDirExists(t, w.opPath(opB))
 }
 

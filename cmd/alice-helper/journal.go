@@ -33,8 +33,22 @@ const (
 	certBackup    = "cert.bak"
 	keyBackup     = "key.bak"
 	nginxLockName = "nginx.lock"
-	maxSteps      = 32
+	// maxSteps bounds the steps a journal keeps (its validation refuses more): repeated restores
+	// of one operation keep its deployment's steps and its latest attempts (trimSteps).
+	maxSteps = 64
+	// keptHead is how many of the first steps (the deployment's own) trimSteps never drops.
+	keptHead = 12
 )
+
+// trimSteps leaves room for one more restore (a few steps) under maxSteps: it keeps the first
+// keptHead steps and the most recent ones.
+func trimSteps(steps []helperproto.NginxStep) []helperproto.NginxStep {
+	limit := maxSteps - 8
+	if len(steps) <= limit {
+		return steps
+	}
+	return append(append([]helperproto.NginxStep{}, steps[:keptHead]...), steps[len(steps)-(limit-keptHead):]...)
+}
 
 // fileMeta is the owner, group and mode a replaced file had; nginx-restore puts them back.
 type fileMeta struct {
