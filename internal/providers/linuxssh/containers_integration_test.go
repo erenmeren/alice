@@ -42,6 +42,10 @@ import (
 //	ALICE_SSH_IMAGES=ubuntu22 go test -count=1 -tags integration -run TestRealOpenSSH ./internal/providers/linuxssh/
 //
 // Only containers created here through testcontainers are touched.
+//
+// Every helper of this file is prefixed with ctr (container) so that it cannot clash with the
+// in-process fakes of the package's other tests (testServer, newProvEnv, ...), which are compiled
+// into the same test binary.
 
 var ctrDistros = map[string]string{"ubuntu22": "ubuntu", "debian12": "debian", "rocky9": "rocky"} // image -> os-release ID
 
@@ -164,6 +168,14 @@ func (h *ctrHost) hostFingerprint() string {
 	return strings.Fields(h.mustExec("ssh-keygen", "-lf", "/etc/ssh/ssh_host_ed25519_key.pub"))[1]
 }
 
+// assertNoNewLogin checks that sshd's log shows no login beyond want. sshd writes its log lines a
+// little after the client sees the outcome, so the count is watched for a short while rather than
+// read once.
+func (h *ctrHost) assertNoNewLogin(want int, msg string) {
+	h.t.Helper()
+	assert.Never(h.t, func() bool { return h.accepted() != want }, 1500*time.Millisecond, 250*time.Millisecond, msg)
+}
+
 // accepted counts successful public-key logins in sshd's log (sshd -D -e logs to stderr).
 func (h *ctrHost) accepted() int {
 	h.t.Helper()
@@ -281,7 +293,7 @@ func TestRealOpenSSH(t *testing.T) {
 			assert.False(t, first.changed)
 			assert.Equal(t, h.hostFingerprint(), first.key.Fingerprint)
 			assert.Equal(t, "ssh-ed25519", first.key.Type)
-			assert.Equal(t, before, h.accepted(), "no authentication before the fingerprint is confirmed")
+			h.assertNoNewLogin(before, "no authentication before the fingerprint is confirmed")
 
 			// The administrator confirms; the connection test reports the helper and the OS.
 			h.pinKey(first.key)
@@ -301,7 +313,7 @@ func TestRealOpenSSH(t *testing.T) {
 			require.NoError(t, sess.Close())
 			sess = h.mustOpen(prov)
 			assert.Same(t, conn, connOf(t, sess), "the idle connection was reused, not redialed")
-			assert.Equal(t, logins, h.accepted(), "no new login for a reused connection")
+			h.assertNoNewLogin(logins, "no new login for a reused connection")
 
 			// Exit criterion "inventory matches the seeded fixtures exactly": every fixture key with
 			// its user, plus Alice's own key for alice-svc; nothing for noshell or linky.
@@ -333,11 +345,21 @@ func TestRealOpenSSH(t *testing.T) {
 			assert.True(t, linky, "the symlinked file of linky is reported, not read: %+v", res.Warnings)
 
 			// The sudoers profile allows only the helper's linux subcommands.
+			// A refusal by sudo itself (not some other failure): with -n, sudo answers a command
+			// outside the rules with "a password is required" or "not allowed".
+			sudoRefused := `a password is required|is not allowed to (run|execute)`
 			code, out := h.exec([]string{"sudo", "-n", "/bin/cat", "/etc/shadow"}, tcexec.WithUser(ServiceUser))
 			assert.NotZero(t, code)
+			assert.Regexp(t, sudoRefused, out)
 			assert.NotContains(t, out, "root:")
-			code, _ = h.exec([]string{"sudo", "-n", helperproto.HelperPath, "nginx-dump"}, tcexec.WithUser(ServiceUser))
+			code, out = h.exec([]string{"sudo", "-n", helperproto.HelperPath, "nginx-dump"}, tcexec.WithUser(ServiceUser))
 			assert.NotZero(t, code, "the linux profile has no nginx subcommands")
+			assert.Regexp(t, sudoRefused, out, "refused by sudo, not by the helper")
+			assert.NotContains(t, out, "UNKNOWN_SUBCOMMAND", "the helper never ran")
+			code, out = h.exec([]string{"sudo", "-n", helperproto.HelperPath, "authkeys-write", "/root/.ssh/authorized_keys",
+				"--expect-sha256", "absent", "--op", "0190f5a0-0000-7000-8000-0000000000aa"}, tcexec.WithUser(ServiceUser))
+			assert.NotZero(t, code, "protocol 2 arguments do not match the narrowed sudoers line")
+			assert.Regexp(t, sudoRefused, out)
 
 			// A-13: the helper refuses a path outside the candidate files, through the real sudo.
 			c2, release, err := pool.Acquire(ctx, h.target, h.cfg, ctrSigner{h.signer})
@@ -385,6 +407,8 @@ func TestRealOpenSSH(t *testing.T) {
 				FilePath: ownFile, Fingerprint: h.platform, ProtectedFingerprints: []string{h.platform}}, ctrNoSteps{})
 			_ = ctrRequireReason(t, err, "sshkey.own_key_protected")
 			assert.Equal(t, ownSHA, h.sha(ownFile))
+			// root:root 0644 is intentional: the setup script makes alice-svc's key file root's, so
+			// alice-svc can read it (sshd's StrictModes accepts root-owned files) but never change it.
 			assert.Equal(t, "root:root 644", strings.TrimSpace(h.mustExec("stat", "-c", "%U:%G %a", ownFile)))
 
 			// F-37: adding to a file without a trailing newline starts a new line.
@@ -472,7 +496,7 @@ func TestRealOpenSSH(t *testing.T) {
 			changed := h.lastObservation()
 			assert.True(t, changed.changed)
 			assert.Equal(t, newFP, changed.key.Fingerprint)
-			assert.Equal(t, before, h.accepted(), "no authentication with a changed host key")
+			h.assertNoNewLogin(before, "no authentication with a changed host key")
 		})
 	}
 }
