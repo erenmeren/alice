@@ -98,7 +98,7 @@ var notReasons = map[string]bool{
 	"target.created": true, "target.updated": true, "target.deleted": true, "target.status_changed": true,
 	"target.discovered": true, "hostkey.pinned": true, "hostkey.changed": true, "hostkey.repinned": true,
 	"hostkey.change_dismissed": true, "hostkey.observed": true, "sshkey.remove_requested": true, "sshkey.removed": true, "sshkey.remove_failed": true,
-	"job.recovered": true, "job.dead": true, "job.blocked_license": true, "job.confirmed": true, "job.discarded": true,
+	"job.recovered": true, "job.dead": true, "job.blocked_license": true, "job.cancelled_license": true, "job.confirmed": true, "job.discarded": true,
 	// job types
 	"target.test_connection": true, "target.discover": true, "sshkey.remove": true,
 	// email templates (target.host_key_changed is also a reason and stays checked)
