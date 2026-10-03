@@ -244,3 +244,34 @@ func TestAddInLockIsRefused(t *testing.T) {
 	assert.Equal(t, 0, liveTargets(h))
 	assert.Equal(t, []map[string]string{{"reason": "locked", "name": "web-01"}}, h.auditDetails("target.add.denied_license"))
 }
+
+// tickProbe records the context of the license evaluation that follows a committed change.
+type tickProbe struct {
+	inventory.LicenseGate
+	mu       sync.Mutex
+	deadline time.Time
+	err      error
+}
+
+func (p *tickProbe) Tick(ctx context.Context) error {
+	p.mu.Lock()
+	p.deadline, _ = ctx.Deadline()
+	p.err = ctx.Err()
+	p.mu.Unlock()
+	return p.LicenseGate.Tick(ctx)
+}
+
+// The evaluation after a committed add or delete outlives the request (a client that disconnects
+// does not skip it) but is bounded: it cannot hang the request's goroutine forever.
+func TestLicenseRefreshAfterAChangeIsDetachedButBounded(t *testing.T) {
+	probe := &tickProbe{}
+	h := newHarness(t, func(c *inventory.Config) { probe.LicenseGate = c.License; c.License = probe })
+	admin := h.user("ada", rbac.Admin, "")
+	tg := h.add(admin, "web-01", "web-01.example.com")
+	require.NoError(t, h.svc.DeleteTarget(h.ctx, admin, tg.ID))
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	require.False(t, probe.deadline.IsZero(), "the evaluation has a deadline")
+	assert.WithinDuration(t, time.Now().Add(30*time.Second), probe.deadline, 5*time.Second)
+	assert.NoError(t, probe.err)
+}

@@ -190,7 +190,8 @@ created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 
 // add's transaction was rolled back. Other errors are not audited here. The record does not
 // depend on the request: a client that disconnects right after the refusal does not erase it.
 func (s *Service) auditLicenseDenial(ctx context.Context, a Actor, name string, cause error) {
-	ctx = context.WithoutCancel(ctx)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedTimeout)
+	defer cancel()
 	var limit *license.TargetLimitError
 	d := map[string]string{"name": name}
 	switch {
@@ -211,11 +212,18 @@ func (s *Service) auditLicenseDenial(ctx context.Context, a Actor, name string, 
 	}
 }
 
+// detachedTimeout bounds work that outlives its request (the evaluation after a committed change,
+// the audit of a refusal): a client that disconnects does not skip it, a stuck database does not
+// hold the goroutine forever.
+const detachedTimeout = 30 * time.Second
+
 // refreshLicense re-evaluates the license after a committed add or delete, so the snapshot's
 // target count and the limit banners are current (L-76). A failure is logged: the next hourly
-// evaluation repeats it. It runs for a committed change even if the request has ended.
+// evaluation repeats it. It runs for a committed change even if the request has ended, for at
+// most detachedTimeout.
 func (s *Service) refreshLicense(ctx context.Context) {
-	ctx = context.WithoutCancel(ctx)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedTimeout)
+	defer cancel()
 	if err := s.license.Tick(ctx); err != nil {
 		s.log.Error("license evaluation after a target change failed", "error_type", fmt.Sprintf("%T", err))
 	}

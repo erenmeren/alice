@@ -136,9 +136,11 @@ WHERE target_id = $1 AND os_user = 'root' AND file_path = $2 AND id <> $3 AND mi
 }
 
 // auditDenial records a refused removal in its own transaction (the request's was rolled back).
-// The record does not depend on the request: a client that disconnects does not erase it.
+// The record does not depend on the request: a client that disconnects does not erase it (it is
+// bounded by detachedTimeout).
 func (s *Service) auditDenial(ctx context.Context, a Actor, d *denial) {
-	ctx = context.WithoutCancel(ctx)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedTimeout)
+	defer cancel()
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "sshkey.remove.denied", ObjectType: "ssh_key_location",
 			ObjectID: d.loc.ID.String(), Result: audit.Denied, Details: map[string]string{
