@@ -4,6 +4,7 @@ package inventory_test
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -427,5 +428,76 @@ func TestListSSHKeysMarksMissingKeys(t *testing.T) {
 	require.NoError(t, err)
 	for _, k := range page.Items {
 		assert.False(t, k.Missing, "without missing keys requested no item is missing: %s", k.Fingerprint)
+	}
+}
+
+// mustLocation reads one SSH key location.
+func mustLocation(t *testing.T, h *harness, id uuid.UUID) inventory.KeyLocation {
+	t.Helper()
+	l, err := h.svc.KeyLocation(h.ctx, id)
+	require.NoError(t, err)
+	return l
+}
+
+// Carry 1: keys of users that left /etc/passwd become missing, only with a complete list.
+func TestReconcileMarksKeysOfVanishedUsersMissing(t *testing.T) {
+	f := newRemovalFixture(t)
+	h := f.h
+	keys := providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{
+		dk("root", rootFile, 1, "SHA256:root000000000000000000000000000000000000000", "root@bastion"),
+	}, SSHD: sshdRead, ReadFiles: []string{rootFile}}
+	keys.Accounts, keys.AccountsComplete = []string{"alice-svc", "root"}, false
+	_, err := h.svc.Reconcile(h.ctx, f.target.ID, keys)
+	require.NoError(t, err)
+	assert.Nil(t, mustLocation(t, h, f.deploy).MissingSince, "an incomplete list proves nothing")
+
+	// A complete list that still names deploy (a user whose files were not scanned: no login shell,
+	// no home) marks nothing either.
+	keys.Accounts, keys.AccountsComplete = []string{"alice-svc", "deploy", "root"}, true
+	_, err = h.svc.Reconcile(h.ctx, f.target.ID, keys)
+	require.NoError(t, err)
+	assert.Nil(t, mustLocation(t, h, f.deploy).MissingSince, "deploy is still an account")
+
+	// A list that is empty or lacks root comes from a broken helper: never used.
+	for _, accounts := range [][]string{{}, nil, {"alice-svc"}} {
+		keys.Accounts = accounts
+		_, err = h.svc.Reconcile(h.ctx, f.target.ID, keys)
+		require.NoError(t, err)
+		assert.Nil(t, mustLocation(t, h, f.deploy).MissingSince)
+	}
+
+	keys.Accounts = []string{"alice-svc", "root"}
+	h.clock.Advance(time.Hour)
+	sum, err := h.svc.Reconcile(h.ctx, f.target.ID, keys)
+	require.NoError(t, err)
+	assert.NotNil(t, mustLocation(t, h, f.deploy).MissingSince, "deploy is no longer an account")
+	assert.Equal(t, h.clock.Now(), *mustLocation(t, h, f.ca).MissingSince)
+	assert.Nil(t, mustLocation(t, h, f.own).MissingSince, "alice-svc is in the list")
+	assert.Nil(t, mustLocation(t, h, f.root).MissingSince)
+	assert.Equal(t, 2, sum.Missing, "deploy's key and its cert-authority line")
+	sum, err = h.svc.Reconcile(h.ctx, f.target.ID, keys)
+	require.NoError(t, err)
+	assert.Zero(t, sum.Missing, "already missing")
+
+	// The user comes back with the key: it is no longer missing.
+	back := keys
+	back.Accounts = []string{"alice-svc", "deploy", "root"}
+	back.SSHKeys = append(slices.Clone(keys.SSHKeys), dk("deploy", deployFile, 1, "SHA256:dep0000000000000000000000000000000000000000", "deploy@laptop"))
+	back.ReadFiles = []string{rootFile, deployFile}
+	_, err = h.svc.Reconcile(h.ctx, f.target.ID, back)
+	require.NoError(t, err)
+	assert.Nil(t, mustLocation(t, h, f.deploy).MissingSince)
+}
+
+// A certificates-only result never marks SSH keys missing, even one that claims a complete list.
+func TestCertificateScanNeverMarksKeysMissing(t *testing.T) {
+	f := newRemovalFixture(t)
+	h := f.h
+	res := providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigValid: true}, AccountsComplete: true}
+	sum, err := h.svc.Reconcile(h.ctx, f.target.ID, res)
+	require.NoError(t, err)
+	assert.Zero(t, sum.Missing)
+	for _, id := range []uuid.UUID{f.own, f.deploy, f.root, f.ca} {
+		assert.Nil(t, mustLocation(t, h, id).MissingSince)
 	}
 }

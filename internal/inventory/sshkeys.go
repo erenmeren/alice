@@ -113,7 +113,10 @@ func clean(s string) string {
 // location of the platform key (the fingerprint in the platform_ssh credential) is marked as
 // Alice's connection key (SEC-081); the mark is never cleared here (the protection trigger would
 // refuse it). A successful scan also records the connection (markConnected): an unreachable or
-// checking target is "ok" again.
+// checking target is "ok" again. With a complete account list, the keys of users that are no
+// longer accounts are marked missing as well. A result with Nginx facts also carries the
+// certificate half (reconcileLocations), stored in the same transaction; a certificates-only
+// result (sshHalfRead) leaves the stored SSH facts as they are.
 func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.DiscoveryResult) (ReconcileSummary, error) {
 	var sum ReconcileSummary
 	now := s.clock.Now().UTC()
@@ -168,6 +171,20 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL
 			return fmt.Errorf("inventory: mark missing keys: %w", err)
 		}
 		sum.Missing = int(tag.RowsAffected())
+		// Carry 1: the keys of an OS user that is no longer an account are missing, decided only on
+		// a complete account list (AccountsComplete, never on the list alone). A list without root
+		// comes from a broken helper and proves nothing. An account the scan did not read (no
+		// login shell, no home) is in the list, so its keys are left alone; a certificates-only
+		// result carries no list.
+		if res.AccountsComplete && slices.Contains(res.Accounts, "root") {
+			tag, err := tx.Exec(ctx, `UPDATE ssh_key_locations SET missing_since = $2
+WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL AND NOT (os_user = ANY($3)) AND NOT (id = ANY($4))`,
+				id, now, res.Accounts, seen)
+			if err != nil {
+				return fmt.Errorf("inventory: mark keys of removed accounts missing: %w", err)
+			}
+			sum.Missing += int(tag.RowsAffected())
+		}
 		f := t.Facts
 		if sshHalfRead(res) {
 			sshd := res.SSHD
