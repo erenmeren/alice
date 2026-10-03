@@ -63,7 +63,9 @@ CREATE INDEX certificates_public_key ON certificates (public_key_sha256);
 -- A certificate's private key is the key of that certificate, whoever writes the row, and a key
 -- once attached is never replaced or detached (uploading the key of a discovered certificate is the
 -- only update of private_key_id: NULL to a key whose public key hash equals the certificate's).
--- SQLSTATEs: AL001 the key does not belong to the certificate, AL002 a key is already attached.
+-- SQLSTATEs: Z1001 the key does not belong to the certificate, Z1002 a key is already attached
+-- (class Z1, Alice's own: the SQL standard reserves classes beginning 0-4 and A-H, implementation-
+-- defined classes begin 5-9 or I-Z; Z1003 is the frozen deployment below).
 -- It runs as the invoking role (alice_app can read managed_private_keys), so every name is
 -- schema-qualified and the search path is pinned with pg_temp last.
 -- +goose StatementBegin
@@ -71,12 +73,12 @@ CREATE FUNCTION certificates_check_key() RETURNS trigger LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
     IF TG_OP = 'UPDATE' AND OLD.private_key_id IS NOT NULL AND NEW.private_key_id IS DISTINCT FROM OLD.private_key_id THEN
-        RAISE EXCEPTION 'the private key of a certificate cannot be replaced or detached' USING ERRCODE = 'AL002';
+        RAISE EXCEPTION 'the private key of a certificate cannot be replaced or detached' USING ERRCODE = 'Z1002';
     END IF;
     IF NEW.private_key_id IS NOT NULL AND (TG_OP = 'INSERT' OR NEW.private_key_id IS DISTINCT FROM OLD.private_key_id) THEN
         IF NOT EXISTS (SELECT 1 FROM public.managed_private_keys k
                        WHERE k.id = NEW.private_key_id AND k.public_key_sha256 = NEW.public_key_sha256) THEN
-            RAISE EXCEPTION 'the private key does not belong to the certificate' USING ERRCODE = 'AL001';
+            RAISE EXCEPTION 'the private key does not belong to the certificate' USING ERRCODE = 'Z1001';
         END IF;
     END IF;
     RETURN NEW;
@@ -218,14 +220,14 @@ CREATE INDEX deployments_unfinished ON deployments (recover_after) WHERE state I
 -- ON DELETE SET NULL when maintenance.cleanup prunes the job; it runs as the table owner and passes
 -- through this trigger). Everything the engine sends or learns (expect_cert_sha256, chain lengths,
 -- operation_id, previous_fingerprint, result, error fields) is written before or with the update
--- that makes the row done. SQLSTATE AL003.
+-- that makes the row done. SQLSTATE Z1003.
 -- +goose StatementBegin
 CREATE FUNCTION deployments_protect_done() RETURNS trigger LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
     IF OLD.state = 'done' AND ((to_jsonb(NEW) - 'job_id') IS DISTINCT FROM (to_jsonb(OLD) - 'job_id')
             OR (NEW.job_id IS NOT NULL AND NEW.job_id IS DISTINCT FROM OLD.job_id)) THEN
-        RAISE EXCEPTION 'a finished deployment cannot be changed' USING ERRCODE = 'AL003';
+        RAISE EXCEPTION 'a finished deployment cannot be changed' USING ERRCODE = 'Z1003';
     END IF;
     RETURN NEW;
 END $$;

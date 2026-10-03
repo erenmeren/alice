@@ -27,9 +27,9 @@ const (
 	privilegeDenied = "42501"
 	uniqueViolation = "23505"
 	// SQLSTATEs of the triggers (the application maps them to specific errors).
-	keyMismatch = "AL001" // the private key does not belong to the certificate
-	keyAttached = "AL002" // a certificate's key is never replaced or detached
-	doneFrozen  = "AL003" // a finished deployment is never rewritten
+	keyMismatch = "Z1001" // the private key does not belong to the certificate
+	keyAttached = "Z1002" // a certificate's key is never replaced or detached
+	doneFrozen  = "Z1003" // a finished deployment is never rewritten
 )
 
 func hex64(c string) string { return strings.Repeat(c, 64) }
