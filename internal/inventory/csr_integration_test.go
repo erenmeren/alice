@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/certs"
 	"alice/internal/inventory"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
@@ -241,4 +242,85 @@ func TestListSigningRequests(t *testing.T) {
 	list, err = empty.svc.ListCSRs(empty.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []inventory.CSR{}, list)
+}
+
+// A cancel that commits while a completion waits for the request's row: the completion sees the
+// request no longer pending under the lock and stores nothing (the check before the transaction
+// passed).
+func TestCompleteSigningRequestLosesToACancel(t *testing.T) {
+	h := newHarness(t)
+	op := h.user("oya", rbac.Operator, "")
+	csr, err := h.svc.CreateCSR(h.ctx, op, inventory.CSRInput{CommonName: "www.example.test", KeyType: "ecdsa-p256"})
+	require.NoError(t, err)
+	ca := pki.NewCA("CSR", pki.ECDSA256, h.clock.Now())
+	signed := ca.IssueForCSR(parseCSR(t, csr), h.clock.Now())
+
+	tx, err := h.db.Owner.Begin(h.ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(h.ctx) }()
+	_, err = tx.Exec(h.ctx, "SELECT id FROM csr_requests WHERE id = $1 FOR UPDATE", csr.ID)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := h.svc.CompleteCSR(h.ctx, op, csr.ID, string(signed.FullchainPEM), "")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("the completion did not wait for the request's row: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	_, err = tx.Exec(h.ctx, "UPDATE csr_requests SET status = 'cancelled', finished_at = $2 WHERE id = $1", csr.ID, h.clock.Now())
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(h.ctx))
+	require.ErrorIs(t, <-done, inventory.ErrCSRNotPending)
+	assert.Equal(t, 0, h.count("SELECT count(*) FROM certificates"))
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM managed_private_keys"), "only the request's key")
+	got, err := h.svc.GetCSR(h.ctx, csr.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", got.Status)
+	assert.Equal(t, 0, h.audits("csr.completed"))
+}
+
+// The mirror: a completion that commits while a cancel waits leaves the cancel a not-pending error.
+func TestCancelSigningRequestLosesToACompletion(t *testing.T) {
+	h := newHarness(t)
+	op := h.user("oya", rbac.Operator, "")
+	csr, err := h.svc.CreateCSR(h.ctx, op, inventory.CSRInput{CommonName: "www.example.test", KeyType: "ecdsa-p256"})
+	require.NoError(t, err)
+	ca := pki.NewCA("CSR", pki.ECDSA256, h.clock.Now())
+	signed := ca.IssueForCSR(parseCSR(t, csr), h.clock.Now())
+	p, err := certs.ParseChainPEM(signed.FullchainPEM)
+	require.NoError(t, err)
+
+	tx, err := h.db.Owner.Begin(h.ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(h.ctx) }()
+	_, err = tx.Exec(h.ctx, "SELECT id FROM csr_requests WHERE id = $1 FOR UPDATE", csr.ID)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.svc.CancelCSR(h.ctx, op, csr.ID)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("the cancel did not wait for the request's row: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	certID := uuid.Must(uuid.NewV7())
+	_, err = tx.Exec(h.ctx, `INSERT INTO certificates (id, fingerprint_sha256, not_before, not_after, key_algorithm, key_bits, public_key_sha256,
+pem_chain, source, private_key_id, first_seen_at, last_seen_at, created_at)
+SELECT $1, $2, $3, $4, 'ecdsa', 256, $5, $6, 'csr', private_key_id, $7, $7, $7 FROM csr_requests WHERE id = $8`,
+		certID, p.Fingerprint, p.NotBefore, p.NotAfter, p.PublicKeySHA256, p.PEMChain, h.clock.Now(), csr.ID)
+	require.NoError(t, err)
+	_, err = tx.Exec(h.ctx, "UPDATE csr_requests SET status = 'completed', certificate_id = $2, finished_at = $3 WHERE id = $1",
+		csr.ID, certID, h.clock.Now())
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(h.ctx))
+	require.ErrorIs(t, <-done, inventory.ErrCSRNotPending)
+	got, err := h.svc.GetCSR(h.ctx, csr.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "completed", got.Status)
+	assert.Equal(t, 0, h.audits("csr.cancelled"))
 }
