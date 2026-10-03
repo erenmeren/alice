@@ -285,7 +285,13 @@ for (const lang of ['en', 'tr'] as Lang[]) {
         await settle(request, page.getByTestId('target-status').filter({ hasText: p.connected }));
         await expect(page.getByTestId('host-key-changed')).toHaveCount(0);
       } finally {
-        targetExec(['sh', '-c', `cat > ${DEPLOY_KEYS}`], deployKeys);
+        // Restoring must not hide the failure that got us here, so a failed restore is only logged.
+        // The suite leaves "sshtarget" with its rotated host key; make e2e-up starts it fresh.
+        try {
+          targetExec(['sh', '-c', `cat > ${DEPLOY_KEYS}`], deployKeys);
+        } catch (e) {
+          console.error('could not restore the deploy user authorized_keys on sshtarget:', e);
+        }
       }
     });
 
@@ -341,9 +347,14 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await page.keyboard.press('Escape');
       await expect(dialog).toHaveCount(0);
       await expect(page.getByTestId('targets-table').getByRole('row')).toHaveCount(2); // header + web-1, web-2 refused
+      // The server's own page stays readable while the license is locked.
+      await page.getByTestId('targets-table').getByRole('link', { name: 'web-1', exact: true }).click();
+      await expect(page.getByRole('heading', { name: 'web-1', level: 1 })).toBeVisible();
+      await expect(page.getByTestId('target-status')).toBeVisible();
       await page.getByRole('link', { name: p.navSshKeys, exact: true }).click();
       await expect(page.getByRole('heading', { name: p.navSshKeys, level: 1 })).toBeVisible();
       await expect(page.getByText(p.noKeys)).toBeVisible();
+      await expectWide(page, 'SSH key inventory with the license locked');
     });
   });
 }

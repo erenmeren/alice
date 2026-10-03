@@ -502,7 +502,8 @@ export async function seriousViolations(page: Page): Promise<string[]> {
 // --- Phase 3: the e2e SSH target, background jobs and API calls as the signed-in browser user ---
 
 // E2E_PROJECT is the compose project of the e2e stack (make e2e-up; the Makefile passes it as
-// ALICE_E2E_PROJECT). The owner's own stack is the project "alice"; tests never address it.
+// ALICE_E2E_PROJECT). The owner's own stack is the project "alice"; tests never address it, and
+// targetExec insists on a project name starting with alice-e2e.
 const E2E_PROJECT = process.env.ALICE_E2E_PROJECT || 'alice-e2e';
 
 // COMPOSE addresses the e2e stack of this repository; tests run from web/.
@@ -521,7 +522,9 @@ const COMPOSE = [
 // targetExec runs a command as root in the e2e SSH target service "sshtarget" and returns its
 // standard output. It never addresses any other service or compose project.
 export function targetExec(args: string[], input?: string): string {
-  if (E2E_PROJECT === 'alice') throw new Error('targetExec refuses the compose project "alice" (the owner stack)');
+  if (!E2E_PROJECT.startsWith('alice-e2e')) {
+    throw new Error(`targetExec refuses the compose project "${E2E_PROJECT}": only projects named alice-e2e* are e2e stacks (never the owner stack "alice")`);
+  }
   return execFileSync('docker', [...COMPOSE, 'exec', '-T', 'sshtarget', ...args], {
     input,
     encoding: 'utf8',
