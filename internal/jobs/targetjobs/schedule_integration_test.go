@@ -4,6 +4,7 @@ package targetjobs_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/audit"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/providers"
@@ -103,19 +105,47 @@ func TestSuccessfulRemovalRestoresAnUnreachableTarget(t *testing.T) {
   AND details->>'to_status' = 'ok' AND details->>'reason' = 'removal_ok'`))
 }
 
-// A success never leaves a status that needs a person: authentication failures and changed host
-// keys are not cleared by a discovery or a removal.
+// A success never leaves a status that needs a person: authentication failures, changed host
+// keys, an unconfirmed key and a disabled target are not cleared by a discovery or a removal.
 func TestSuccessKeepsStatusesThatNeedAPerson(t *testing.T) {
 	e := newEnv(t, nil)
-	tg := e.confirmed(hostKey(t))
-	_, err := e.db.Owner.Exec(e.ctx, "UPDATE targets SET status = 'auth_failed', last_error_code = 'ssh.auth_failed' WHERE id = $1", tg.ID)
-	require.NoError(t, err)
-	_, err = e.inv.Reconcile(e.ctx, tg.ID, providers.DiscoveryResult{})
-	require.NoError(t, err)
-	got, err := e.inv.GetTarget(e.ctx, tg.ID)
-	require.NoError(t, err)
-	assert.Equal(t, inventory.StatusAuthFailed, got.Status)
-	assert.Equal(t, "ssh.auth_failed", got.LastErrorCode)
+	statuses := []struct{ status, lastError string }{
+		{inventory.StatusAuthFailed, "ssh.auth_failed"},
+		{inventory.StatusHostKeyChanged, "target.host_key_changed"},
+		{inventory.StatusPendingHostKey, "target.host_key_unconfirmed"},
+		{inventory.StatusDisabled, ""},
+	}
+	var keys []providers.DiscoveredSSHKey
+	for i := range statuses {
+		keys = append(keys, key(fmt.Sprintf("u%d", i), fmt.Sprintf("/home/u%d/.ssh/authorized_keys", i), 1, fmt.Sprintf("SHA256:per%040d", i)))
+	}
+	tg := e.confirmed(hostKey(t), keys...)
+	jobActor := audit.Actor{Type: audit.ActorSystem, Name: "jobs", RequestID: uuid.Must(uuid.NewV7()).String()}
+	for i, st := range statuses {
+		status, lastError := st.status, st.lastError
+		set := func() {
+			_, err := e.db.Owner.Exec(e.ctx, "UPDATE targets SET status = $2, last_error_code = $3 WHERE id = $1", tg.ID, status, lastError)
+			require.NoError(t, err)
+		}
+		check := func(by string) {
+			got, err := e.inv.GetTarget(e.ctx, tg.ID)
+			require.NoError(t, err)
+			assert.Equal(t, status, got.Status, "%s after a %s", status, by)
+			if status == inventory.StatusAuthFailed || status == inventory.StatusHostKeyChanged {
+				assert.Equal(t, lastError, got.LastErrorCode, "the block reason stays after a %s", by)
+			}
+		}
+		set()
+		_, err := e.inv.Reconcile(e.ctx, tg.ID, providers.DiscoveryResult{})
+		require.NoError(t, err)
+		check("discovery")
+
+		set()
+		loc := locationOf(t, e, tg.ID, keys[i].Fingerprint)
+		require.NoError(t, e.inv.MarkKeyRemoved(e.ctx, loc.ID, jobActor, providers.AuthKeyResult{Changed: true, Removed: 1, Verified: true}))
+		check("removal")
+	}
+	assert.Zero(t, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'target.status_changed' AND details->>'reason' IN ('discovery_ok', 'removal_ok')"))
 }
 
 // The ruling on B-2: an unreachable server is tested again once per discovery interval (never
