@@ -326,3 +326,20 @@ func TestProblemOf(t *testing.T) {
 		assert.Equal(t, want, problemOf(err), "%v", err)
 	}
 }
+
+// The production file system check sees the real /proc as special and the test directory as not.
+func TestProductionFSMagic(t *testing.T) {
+	s := productionSys()
+	fd, err := unix.Open("/proc/self", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Skip("no /proc")
+	}
+	defer func() { _ = unix.Close(fd) }()
+	assert.ErrorIs(t, s.normalFS(fd), errSpecialFS)
+	tmp, err := unix.Open(t.TempDir(), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	require.NoError(t, err)
+	defer func() { _ = unix.Close(tmp) }()
+	assert.NoError(t, s.normalFS(tmp))
+	assert.ErrorIs(t, (&sys{fsMagic: func(int) (int64, error) { return 0, unix.EBADF }}).normalFS(tmp), errSpecialFS,
+		"an unreadable file system type is refused")
+}

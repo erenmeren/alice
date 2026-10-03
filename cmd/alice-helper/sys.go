@@ -34,6 +34,8 @@ type sys struct {
 	runSystemctl func(ctx context.Context, args ...string) error
 	// statfs returns the bytes available to root in the file system of a descriptor.
 	statfs func(fd int) (int64, error)
+	// fsMagic returns the file system type (statfs f_type) of a descriptor.
+	fsMagic func(fd int) (int64, error)
 	// dial opens the TCP connection of tls-probe.
 	dial   func(ctx context.Context, network, addr string) (net.Conn, error)
 	stdin  io.Reader

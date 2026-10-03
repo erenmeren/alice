@@ -219,6 +219,24 @@ func TestProtocol4WireNames(t *testing.T) {
 		"sha256":"","pem":"","problem":"","free_bytes":0}`, string(b))
 }
 
+func TestNginxConfigErrorWireNames(t *testing.T) {
+	assert.Equal(t, "untrusted", ConfigErrUntrusted)
+	assert.Equal(t, "unsupported", ConfigErrUnsupported)
+	assert.Equal(t, []string{"not_root_controlled", "special_filesystem", "missing", "not_regular", "changed",
+		"name_not_allowed", "unexpected_text", "wrong_first_file", "duplicate_file", "no_conf_path", "too_large",
+		"too_complex", "include_loop", "nul_byte"},
+		[]string{ConfigReasonNotRootControlled, ConfigReasonSpecialFS, ConfigReasonMissing, ConfigReasonNotRegular,
+			ConfigReasonChanged, ConfigReasonNameNotAllowed, ConfigReasonUnexpectedText, ConfigReasonWrongFirstFile,
+			ConfigReasonDuplicateFile, ConfigReasonNoConfPath, ConfigReasonTooLarge, ConfigReasonTooComplex,
+			ConfigReasonIncludeLoop, ConfigReasonNULByte})
+	b, err := json.Marshal(NginxDumpResponse{OK: true, ConfigError: ConfigErrUntrusted, ConfigErrorReason: ConfigReasonNotRootControlled,
+		ConfigErrorFile: "/etc/nginx/conf.d/www.conf", Servers: []NginxServer{}, Files: []NginxFile{}, Warnings: []string{}, Writable: []string{}})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"ok":true,"version":"","conf_path":"","config_valid":false,"config_error":"untrusted",
+		"config_error_reason":"not_root_controlled","config_error_file":"/etc/nginx/conf.d/www.conf",
+		"servers":[],"files":[],"warnings":[],"writable":[]}`, string(b))
+}
+
 func TestNginxDeployInputIsNotPrintable(t *testing.T) {
 	in := NginxDeployInput{CertPEM: "CERT", KeyPEM: "SECRETKEYMATERIAL"}
 	for _, f := range []string{"%v", "%+v", "%#v", "%s"} {

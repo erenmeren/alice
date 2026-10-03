@@ -17,7 +17,40 @@ var (
 	errNotRootControlled = errors.New("a directory or link on the path is not controlled by root")
 	// errTooManyLinks: more than maxRootLinks links (a loop).
 	errTooManyLinks = errors.New("too many symbolic links")
+	// errSpecialFS: a directory or file on the path is on a pseudo file system (procfs, sysfs, ...)
+	// or on FUSE, whose owners and modes a user's daemon reports.
+	errSpecialFS = errors.New("a pseudo or FUSE file system on the path")
 )
+
+// specialFS are the file systems the walk never trusts: pseudo file systems whose files are not
+// configuration or certificates (reading them can disclose kernel or process state), and FUSE,
+// whose owner and mode bits come from a daemon a user may run (user_allow_other). devtmpfs reports
+// TMPFS_MAGIC and cannot be told from tmpfs; device nodes are refused as not regular anyway.
+var specialFS = map[int64]bool{
+	unix.PROC_SUPER_MAGIC: true, unix.SYSFS_MAGIC: true, unix.FUSE_SUPER_MAGIC: true, unix.DEBUGFS_MAGIC: true,
+	unix.TRACEFS_MAGIC: true, unix.SECURITYFS_MAGIC: true, unix.CGROUP_SUPER_MAGIC: true, unix.CGROUP2_SUPER_MAGIC: true,
+	unix.BPF_FS_MAGIC: true, configfsMagic: true, unix.EFIVARFS_MAGIC: true, unix.PSTOREFS_MAGIC: true,
+	unix.DEVPTS_SUPER_MAGIC: true, unix.HUGETLBFS_MAGIC: true, mqueueMagic: true, unix.SELINUX_MAGIC: true,
+	unix.SMACK_MAGIC: true, unix.NSFS_MAGIC: true, unix.BINFMTFS_MAGIC: true, unix.RDTGROUP_SUPER_MAGIC: true,
+	unix.BINDERFS_SUPER_MAGIC: true, unix.ANON_INODE_FS_MAGIC: true, unix.PID_FS_MAGIC: true,
+	unix.OPENPROM_SUPER_MAGIC: true, unix.XENFS_SUPER_MAGIC: true, unix.USBDEVICE_SUPER_MAGIC: true,
+}
+
+// File system types x/sys/unix does not name (linux/magic.h).
+const (
+	configfsMagic = 0x62656570
+	mqueueMagic   = 0x19800202
+)
+
+// normalFS refuses a descriptor on a special file system (errSpecialFS), or whose file system
+// cannot be read.
+func (s *sys) normalFS(fd int) error {
+	magic, err := s.fsMagic(fd)
+	if err != nil || specialFS[magic] {
+		return errSpecialFS
+	}
+	return nil
+}
 
 // rootFile is a file whose every directory and link, from "/" down, belongs to root and cannot be
 // changed by anyone else: nothing a user can change redirects an operation on it. dirfd is the
@@ -36,7 +69,12 @@ func (f rootFile) close() { _ = unix.Close(f.dirfd) }
 // exactly one link (a hard link could be another name of /etc/shadow). The type is checked before
 // the open, so a device or a FIFO is never opened (opening a device can have side effects), and
 // again on the descriptor, which must be the inode that was checked.
-func (f rootFile) open() (*os.File, unix.Stat_t, error) {
+func (f rootFile) open() (*os.File, unix.Stat_t, error) { return f.openLinked(false) }
+
+// openLinked is open; with anyLinks a file with more than one link is accepted (only for reads
+// that are compared and never returned: the configuration sections). Certificate reads and every
+// write keep open's one-link rule.
+func (f rootFile) openLinked(anyLinks bool) (*os.File, unix.Stat_t, error) {
 	var before, st unix.Stat_t
 	if err := unix.Fstatat(f.dirfd, f.name, &before, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return nil, st, err
@@ -56,7 +94,7 @@ func (f rootFile) open() (*os.File, unix.Stat_t, error) {
 	case st.Mode&unix.S_IFMT != unix.S_IFREG || !sameFile(st, before):
 		_ = unix.Close(fd)
 		return nil, st, errNotRegular
-	case st.Nlink != 1:
+	case st.Nlink != 1 && !anyLinks:
 		_ = unix.Close(fd)
 		return nil, st, errUnsafe
 	}
@@ -102,6 +140,10 @@ func (s *sys) walkRoot(p string) (rootFile, error) {
 	if err := unix.Fstat(rootfd, &st); err != nil || !s.dirOK(st) {
 		_ = unix.Close(rootfd)
 		return rootFile{}, errNotRootControlled
+	}
+	if err := s.normalFS(rootfd); err != nil {
+		_ = unix.Close(rootfd)
+		return rootFile{}, err
 	}
 	stack := []int{rootfd}
 	var names []string
@@ -177,6 +219,10 @@ func (s *sys) walkRoot(p string) (rootFile, error) {
 				_ = unix.Close(fd)
 				return fail(errNotRootControlled)
 			}
+			if err := s.normalFS(fd); err != nil { // checked on the opened directory: owner and mode
+				_ = unix.Close(fd) //                    of a FUSE directory are what its daemon says
+				return fail(err)
+			}
 			stack, names = append(stack, fd), append(names, c)
 		default:
 			if !last {
@@ -228,7 +274,7 @@ func problemOf(err error) string {
 	switch {
 	case errors.Is(err, unix.ENOENT):
 		return helperproto.FileMissing
-	case errors.Is(err, errNotRootControlled), errors.Is(err, errEscaped):
+	case errors.Is(err, errNotRootControlled), errors.Is(err, errEscaped), errors.Is(err, errSpecialFS):
 		return helperproto.FileNotRootControlled
 	case errors.Is(err, errUnsafe):
 		return helperproto.FileHardLinked

@@ -58,12 +58,23 @@ func runProgram(ctx context.Context, path string, outLimit int, args ...string) 
 	unix.Umask(old)
 	if err == nil {
 		err = cmd.Wait()
+		var exit *exec.ExitError
+		switch {
+		case ctx.Err() != nil:
+			err = fmt.Errorf("%w: %w", errProgramKilled, ctx.Err())
+		case errors.As(err, &exit) && !exit.Exited():
+			err = fmt.Errorf("%w: %w", errProgramKilled, err) // ended by a signal, not by its own exit
+		}
 	}
 	if out.over {
 		return nil, errOut.buf, errTooLarge
 	}
 	return out.buf, errOut.buf, err
 }
+
+// errProgramKilled: the program timed out or was killed by a signal. Its answer says nothing about
+// the configuration: the subcommand fails with IO_ERROR (retryable).
+var errProgramKilled = errors.New("the program timed out or was killed")
 
 // classifyNginxError reduces nginx's error text to a class (never the text: it names files and
 // may quote configuration).
@@ -91,7 +102,52 @@ type nginxMeta struct {
 	confPath string
 	valid    bool
 	class    string
+	reason   string // a helperproto.ConfigReason* for ConfigErrUntrusted and ConfigErrUnsupported
+	file     string // the configuration file the reason is about ("" when unknown or not carried)
 	writable []string
+}
+
+// configError is why a dump is refused: a class, a reason and the file when it can be carried.
+type configError struct {
+	class, reason, file string
+}
+
+func (e *configError) Error() string { return e.class + ": " + e.reason }
+
+func untrusted(reason, file string) *configError {
+	return &configError{class: helperproto.ConfigErrUntrusted, reason: reason, file: carried(file)}
+}
+
+func unsupported(reason, file string) *configError {
+	return &configError{class: helperproto.ConfigErrUnsupported, reason: reason, file: carried(file)}
+}
+
+// carried is a configuration file name as it may be returned: a clean absolute helper path, or "".
+func carried(file string) string {
+	if !strings.HasPrefix(file, "/") || !helperproto.ValidArg(file) {
+		return ""
+	}
+	if c := filepath.Clean(file); helperproto.ValidPath(c) {
+		return c
+	}
+	return ""
+}
+
+// parseError maps a parser error to its class and reason.
+func parseError(err error) *configError {
+	switch {
+	case errors.Is(err, nginxconf.ErrTooLarge), errors.Is(err, nginxconf.ErrLineTooLong):
+		return unsupported(helperproto.ConfigReasonTooLarge, "")
+	case errors.Is(err, nginxconf.ErrTooComplex), errors.Is(err, nginxconf.ErrTooDeep):
+		return unsupported(helperproto.ConfigReasonTooComplex, "")
+	case errors.Is(err, nginxconf.ErrIncludeLoop):
+		return unsupported(helperproto.ConfigReasonIncludeLoop, "")
+	case errors.Is(err, nginxconf.ErrNUL):
+		return unsupported(helperproto.ConfigReasonNULByte, "")
+	case errors.Is(err, nginxconf.ErrDuplicateFile):
+		return untrusted(helperproto.ConfigReasonDuplicateFile, "")
+	}
+	return &configError{class: helperproto.ConfigErrSyntax}
 }
 
 var errNginxMissing = errors.New("nginx is not installed")
@@ -104,8 +160,8 @@ var errNginxMissing = errors.New("nginx is not installed")
 // block, a file spliced into it, or one of its directives) is marked unsupported (S1).
 func (s *sys) nginxConfig(ctx context.Context) (nginxconf.Config, nginxMeta, error) {
 	var meta nginxMeta
-	invalid := func(class string) (nginxconf.Config, nginxMeta, error) {
-		meta.valid, meta.class, meta.writable = false, class, nil
+	invalid := func(e *configError) (nginxconf.Config, nginxMeta, error) {
+		meta.valid, meta.class, meta.reason, meta.file, meta.writable = false, e.class, e.reason, e.file, nil
 		return nginxconf.Config{}, meta, nil
 	}
 	_, verr, err := s.runNginx(ctx, "-V")
@@ -120,22 +176,24 @@ func (s *sys) nginxConfig(ctx context.Context) (nginxconf.Config, nginxMeta, err
 	switch {
 	case missingProgram(err):
 		return nginxconf.Config{}, meta, errNginxMissing
+	case errors.Is(err, errProgramKilled):
+		return nginxconf.Config{}, meta, err // says nothing about the configuration
 	case errors.Is(err, errTooLarge):
-		return invalid(helperproto.ConfigErrSyntax)
+		return invalid(unsupported(helperproto.ConfigReasonTooLarge, ""))
 	case err != nil:
-		return invalid(classifyNginxError(terr))
+		return invalid(&configError{class: classifyNginxError(terr)})
 	case meta.confPath == "":
 		// A relative or missing --conf-path: the configuration prefix is unknown, so relative
 		// include and certificate paths cannot be resolved. Unsupported, not an empty host.
-		return invalid(helperproto.ConfigErrSyntax)
+		return invalid(unsupported(helperproto.ConfigReasonNoConfPath, ""))
 	}
 	cfg, err := nginxconf.Parse(out, filepath.Dir(meta.confPath))
 	if err != nil {
-		return invalid(helperproto.ConfigErrSyntax)
+		return invalid(parseError(err))
 	}
-	writable, err := s.authenticate(cfg.Sections, meta.confPath)
-	if err != nil {
-		return invalid(helperproto.ConfigErrSyntax)
+	writable, cerr := s.authenticate(cfg.Sections, meta.confPath)
+	if cerr != nil {
+		return invalid(cerr)
 	}
 	meta.valid, meta.writable = true, writable
 	refuseWritable(&cfg, writable)
@@ -146,69 +204,87 @@ func missingProgram(err error) bool {
 	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, exec.ErrNotFound)
 }
 
-// errUntrusted: the dump does not match the files it names.
-var errUntrusted = errors.New("the nginx -T dump does not match the configuration files")
-
 // authenticate compares every section of the dump with the file it names: nginx prints each file
 // followed by a line feed, so the body must be exactly the file's content and "\n". The file is
-// read through walkRoot (every directory and link root's, no link a user made is followed). It
-// refuses an anonymous section that is not blank (text before the first marker), a first section
-// that is not the configuration file, a name that is not a valid absolute path, a file that cannot
-// be read that way, and any difference. It returns the files a user other than root can write
-// (owner other than root, or writable by group or others), in dump order.
-func (s *sys) authenticate(secs []nginxconf.Section, confPath string) ([]string, error) {
+// read through walkRoot (every directory and link root's, no link a user made is followed, no
+// pseudo or FUSE file system). It refuses an anonymous section that is not blank (text before the
+// first marker), a first section that is not the configuration file, a name that is not a valid
+// absolute path, a file that cannot be read that way, and any difference; the error says why and
+// which file. It returns the files a user other than root can write (owner other than root, or
+// writable by group or others), in dump order.
+func (s *sys) authenticate(secs []nginxconf.Section, confPath string) ([]string, *configError) {
 	writable := []string{}
 	named := 0
 	for _, sec := range secs {
 		if sec.File == "" {
 			if len(bytes.TrimSpace(sec.Body)) > 0 {
-				return nil, errUntrusted
+				return nil, untrusted(helperproto.ConfigReasonUnexpectedText, "")
 			}
 			continue
 		}
-		if named++; named == 1 && filepath.Clean(sec.File) != confPath {
-			return nil, errUntrusted
+		if !strings.HasPrefix(sec.File, "/") || !helperproto.ValidArg(sec.File) {
+			return nil, unsupported(helperproto.ConfigReasonNameNotAllowed, "")
 		}
-		st, err := s.sameContent(sec.File, sec.Body)
-		if err != nil {
-			return nil, err
+		if named++; named == 1 && filepath.Clean(sec.File) != confPath {
+			return nil, untrusted(helperproto.ConfigReasonWrongFirstFile, sec.File)
+		}
+		st, reason := s.sameContent(sec.File, sec.Body)
+		if reason != "" {
+			return nil, untrusted(reason, sec.File)
 		}
 		if int(st.Uid) != s.rootUID || st.Mode&0o022 != 0 {
 			writable = append(writable, sec.File)
 		}
 	}
 	if named == 0 {
-		return nil, errUntrusted
+		return nil, untrusted(helperproto.ConfigReasonWrongFirstFile, "")
 	}
 	return writable, nil
 }
 
-// sameContent reports (as a nil error) that the file name holds exactly body without its final
-// line feed, and returns the file's stat.
-func (s *sys) sameContent(name string, body []byte) (unix.Stat_t, error) {
+// sameContent reports (reason "") that the file name holds exactly body without its final line
+// feed, and returns the file's stat; otherwise a helperproto.ConfigReason*. A hard-linked file is
+// accepted here: the read is only a comparison and nothing of it is returned.
+func (s *sys) sameContent(name string, body []byte) (unix.Stat_t, string) {
 	var st unix.Stat_t
 	if len(body) == 0 || body[len(body)-1] != '\n' {
-		return st, errUntrusted
+		return st, helperproto.ConfigReasonChanged
 	}
 	want := body[:len(body)-1]
 	rf, err := s.walkRoot(name)
 	if err != nil {
-		return st, errUntrusted
+		return st, walkReason(err)
 	}
 	defer rf.close()
-	f, st, err := rf.open()
+	f, st, err := rf.openLinked(true)
 	if err != nil {
-		return st, errUntrusted
+		return st, walkReason(err)
 	}
 	defer func() { _ = f.Close() }()
+	if err := s.normalFS(int(f.Fd())); err != nil { //nolint:gosec // G115: a descriptor fits an int
+		return st, helperproto.ConfigReasonSpecialFS
+	}
 	if st.Size != int64(len(want)) {
-		return st, errUntrusted
+		return st, helperproto.ConfigReasonChanged
 	}
 	got, err := io.ReadAll(io.LimitReader(f, int64(len(want))+1))
 	if err != nil || !bytes.Equal(got, want) {
-		return st, errUntrusted
+		return st, helperproto.ConfigReasonChanged
 	}
-	return st, nil
+	return st, ""
+}
+
+// walkReason maps a walk or open error of a configuration file to a helperproto.ConfigReason*.
+func walkReason(err error) string {
+	switch {
+	case errors.Is(err, unix.ENOENT):
+		return helperproto.ConfigReasonMissing
+	case errors.Is(err, errSpecialFS):
+		return helperproto.ConfigReasonSpecialFS
+	case errors.Is(err, errNotRootControlled), errors.Is(err, errEscaped):
+		return helperproto.ConfigReasonNotRootControlled
+	}
+	return helperproto.ConfigReasonNotRegular // not a regular file, ENOTDIR, a link loop
 }
 
 // refuseWritable marks every supported pair unsupported when a file that holds its server block,
@@ -276,10 +352,10 @@ func cmdNginxDump(ctx context.Context, s *sys, args []string) (any, error) {
 	case errors.Is(err, errNginxMissing):
 		return nil, precondition(helperproto.CodeNginxNotFound, "nginx is not installed at /usr/sbin/nginx")
 	case err != nil:
-		return nil, failed(helperproto.CodeIOError, "nginx could not be run")
+		return nil, failed(helperproto.CodeIOError, "nginx could not be run to the end")
 	}
 	resp := helperproto.NginxDumpResponse{OK: true, Version: meta.version, ConfPath: meta.confPath, ConfigValid: meta.valid,
-		ConfigError: meta.class, Servers: []helperproto.NginxServer{}, Files: []helperproto.NginxFile{},
+		ConfigError: meta.class, ConfigErrorReason: meta.reason, ConfigErrorFile: meta.file, Servers: []helperproto.NginxServer{}, Files: []helperproto.NginxFile{},
 		Warnings: append([]string{}, cfg.Warnings...), Writable: append([]string{}, meta.writable...)}
 	if !meta.valid {
 		return resp, nil
@@ -432,9 +508,11 @@ var (
 )
 
 // certBlocks returns the X.509 certificates of data, re-encoded as CERTIFICATE blocks, and whether
-// a block labelled CERTIFICATE was dropped (not a certificate, or with PEM headers). Only the text
-// between a CERTIFICATE begin line and the next CERTIFICATE end line is ever decoded, so a private
-// key in the same file is never decoded, copied or returned.
+// a block was dropped (not a certificate, or with PEM headers). Only the text from a CERTIFICATE
+// begin line to the next CERTIFICATE end line is handed to pem.Decode. A private key elsewhere in
+// the file is never decoded; one inside that span (an unterminated CERTIFICATE block, then a key,
+// then a certificate) can be decoded by pem.Decode's retry, and is then dropped by the type and
+// X.509 checks and its bytes cleared. A private key is never returned.
 func certBlocks(data []byte) (string, bool) {
 	var b bytes.Buffer
 	dropped := false
@@ -515,6 +593,8 @@ func cmdNginxTest(ctx context.Context, s *sys, args []string) (any, error) {
 	switch {
 	case missingProgram(err):
 		return nil, precondition(helperproto.CodeNginxNotFound, "nginx is not installed at /usr/sbin/nginx")
+	case errors.Is(err, errProgramKilled):
+		return nil, failed(helperproto.CodeIOError, "nginx could not be run to the end")
 	case err != nil:
 		return helperproto.NginxTestResponse{OK: true, Valid: false, Error: classifyNginxError(stderr)}, nil
 	}

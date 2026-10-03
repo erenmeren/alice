@@ -99,8 +99,9 @@ type Pair struct {
 	// CertFile and KeyFile are the configuration files (raw marker names) of the ssl_certificate
 	// and ssl_certificate_key directives ("" when there is no key directive).
 	CertFile, KeyFile string
-	// Files is every file (raw marker names, sorted) that holds one of the two directives or
-	// includes, directly or through other files, a file that holds one.
+	// Files is every file (raw marker names, sorted) that holds a certificate or key directive at
+	// an index up to this pair's (they decide which directive is this pair's), or includes,
+	// directly or through other files, a file that holds one.
 	Files []string
 }
 
@@ -815,10 +816,8 @@ func (c *Config) http(children []node, confDir string) {
 			pr := Pair{CertRaw: cr.arg, CertFile: cr.file, Inherited: inhC || (inhK && len(top.keys) > 0)}
 			if i < len(keys) {
 				pr.KeyRaw, pr.KeyFile = keys[i].arg, keys[i].file
-				pr.Files = pairFiles(cr, keys[i])
-			} else {
-				pr.Files = pairFiles(cr)
 			}
+			pr.Files = pairFiles(certs, keys, i)
 			pr.Cert, pr.Key, pr.Unsupported = resolvePair(pr.CertRaw, pr.KeyRaw, confDir, password)
 			s.Pairs = append(s.Pairs, pr)
 		}
@@ -857,10 +856,8 @@ func (c *Config) stream(children []node) {
 			pr := Pair{CertRaw: cr.arg, CertFile: cr.file, Unsupported: ReasonStream, Inherited: inhC || (inhK && len(top.keys) > 0)}
 			if i < len(keys) {
 				pr.KeyRaw, pr.KeyFile = keys[i].arg, keys[i].file
-				pr.Files = pairFiles(cr, keys[i])
-			} else {
-				pr.Files = pairFiles(cr)
 			}
+			pr.Files = pairFiles(certs, keys, i)
 			s.Pairs = append(s.Pairs, pr)
 		}
 		c.Servers = append(c.Servers, s)
@@ -960,10 +957,16 @@ func blockFiles(n node) []string {
 	return fs.sorted()
 }
 
-// pairFiles returns the files of a pair's directives and of their include chains, sorted.
-func pairFiles(ds ...directive) []string {
+// pairFiles returns, for the i-th pair, the files of every certificate and key directive at an
+// index up to i and of their include chains, sorted. Pairs are drawn by position: a directive
+// added before the i-th one (by an include, at the http level) shifts which file is the i-th, so
+// every earlier element decides the pair too.
+func pairFiles(certs, keys []directive, i int) []string {
 	var fs fileSet
-	for _, d := range ds {
+	for _, d := range certs[:min(i+1, len(certs))] {
+		fs.add(d.file, d.via)
+	}
+	for _, d := range keys[:min(i+1, len(keys))] {
 		fs.add(d.file, d.via)
 	}
 	return fs.sorted()

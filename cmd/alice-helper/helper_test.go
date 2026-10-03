@@ -114,10 +114,11 @@ broken line
 		runNginx: func(context.Context, ...string) ([]byte, []byte, error) {
 			return nil, nil, &fs.PathError{Op: "fork/exec", Path: nginxPath, Err: fs.ErrNotExist}
 		},
-		statfs: func(int) (int64, error) { return 1 << 30, nil },
-		dial:   (&net.Dialer{}).DialContext,
-		stdin:  strings.NewReader(""),
-		stdout: &f.out,
+		statfs:  func(int) (int64, error) { return 1 << 30, nil },
+		fsMagic: func(int) (int64, error) { return unix.EXT4_SUPER_MAGIC, nil },
+		dial:    (&net.Dialer{}).DialContext,
+		stdin:   strings.NewReader(""),
+		stdout:  &f.out,
 		syslog: func(sub, path string) {
 			f.mu.Lock()
 			defer f.mu.Unlock()

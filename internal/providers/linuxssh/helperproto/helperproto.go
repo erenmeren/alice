@@ -144,6 +144,31 @@ const (
 	ConfigErrCertLoad    = "cert_load"
 	ConfigErrKeyLoad     = "key_load"
 	ConfigErrSyntax      = "syntax"
+	// ConfigErrUntrusted: nginx -T's output cannot be trusted: a section does not match its file,
+	// or a configuration file cannot be read through the root-controlled walk (nginx-dump only).
+	ConfigErrUntrusted = "untrusted"
+	// ConfigErrUnsupported: a configuration Alice cannot read safely: no or a relative
+	// --conf-path, the size cap, the parser's limits, a file name the vocabulary cannot carry.
+	ConfigErrUnsupported = "unsupported"
+)
+
+// Reasons of an untrusted or unsupported configuration (NginxDumpResponse.ConfigErrorReason), a
+// closed set; ConfigErrorFile names the file when it can be carried.
+const (
+	ConfigReasonNotRootControlled = "not_root_controlled" // a directory or link on the file's path is not root's alone
+	ConfigReasonSpecialFS         = "special_filesystem"  // the file is on procfs, sysfs, FUSE or another pseudo file system
+	ConfigReasonMissing           = "missing"             // the file named by the dump does not exist
+	ConfigReasonNotRegular        = "not_regular"         // not a regular file
+	ConfigReasonChanged           = "changed"             // the file's content is not what nginx -T printed
+	ConfigReasonNameNotAllowed    = "name_not_allowed"    // the file name is not a path the helper accepts
+	ConfigReasonUnexpectedText    = "unexpected_text"     // text before the first file of the dump
+	ConfigReasonWrongFirstFile    = "wrong_first_file"    // the dump does not start with the configuration file
+	ConfigReasonDuplicateFile     = "duplicate_file"      // the dump names one file twice
+	ConfigReasonNoConfPath        = "no_conf_path"        // nginx -V names no absolute --conf-path
+	ConfigReasonTooLarge          = "too_large"           // the dump, a line or a token is over its limit
+	ConfigReasonTooComplex        = "too_complex"         // too many tokens, files, directives, arguments or nesting levels
+	ConfigReasonIncludeLoop       = "include_loop"        // files include each other in a loop
+	ConfigReasonNULByte           = "nul_byte"            // the dump contains a NUL byte
 )
 
 // File problems of nginx-dump (also providers.CertProblem*).
@@ -344,15 +369,19 @@ type NginxFile struct {
 
 // NginxDumpResponse answers "nginx-dump".
 type NginxDumpResponse struct {
-	OK          bool          `json:"ok"`
-	Version     string        `json:"version"`
-	ConfPath    string        `json:"conf_path"`
-	ConfigValid bool          `json:"config_valid"`
-	ConfigError string        `json:"config_error"` // a ConfigErr* class when !ConfigValid
-	Servers     []NginxServer `json:"servers"`
-	Files       []NginxFile   `json:"files"`
-	Warnings    []string      `json:"warnings"`
-	Writable    []string      `json:"writable"` // configuration files others than root can change
+	OK          bool   `json:"ok"`
+	Version     string `json:"version"`
+	ConfPath    string `json:"conf_path"`
+	ConfigValid bool   `json:"config_valid"`
+	ConfigError string `json:"config_error"` // a ConfigErr* class when !ConfigValid
+	// ConfigErrorReason (a ConfigReason*) and ConfigErrorFile (a cleaned absolute path, or "") say
+	// why and where for ConfigErrUntrusted and ConfigErrUnsupported.
+	ConfigErrorReason string        `json:"config_error_reason"`
+	ConfigErrorFile   string        `json:"config_error_file"`
+	Servers           []NginxServer `json:"servers"`
+	Files             []NginxFile   `json:"files"`
+	Warnings          []string      `json:"warnings"`
+	Writable          []string      `json:"writable"` // configuration files others than root can change
 }
 
 // NginxTestResponse answers "nginx-test".

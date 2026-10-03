@@ -218,11 +218,23 @@ func TestDirectiveFilesAreReported(t *testing.T) {
 		"the snippet, the site that includes it and nginx.conf that includes the site")
 	assert.Equal(t, "/etc/nginx/sites/a", a.Pairs[1].CertFile)
 	assert.Equal(t, "", a.Pairs[1].KeyFile, "no second key directive")
-	assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/sites/a"}, a.Pairs[1].Files)
+	assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/sites/a", "/etc/nginx/snippets/tls.conf"}, a.Pairs[1].Files,
+		"the snippet's certificate is element 0, so it decides which certificate is element 1")
 	assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/sites/b"}, b.Files)
 	assert.Equal(t, "/etc/nginx/sites/b", b.Pairs[0].CertFile)
 	assert.Equal(t, "/etc/nginx/nginx.conf", b.Pairs[0].KeyFile, "inherited from the http block")
 	assert.True(t, b.Pairs[0].Inherited)
+
+	// Pairs are drawn by position: an earlier element of either array decides the pair too.
+	in = "# configuration file /etc/nginx/nginx.conf:\nhttp { include /etc/nginx/user.conf;\n" +
+		"ssl_certificate_key /etc/nginx/ssl/k1.key; ssl_certificate_key /etc/nginx/ssl/k2.key;\n" +
+		"server { listen 443 ssl; ssl_certificate /etc/nginx/ssl/a1.crt; ssl_certificate /etc/nginx/ssl/a2.crt; } }\n" +
+		"# configuration file /etc/nginx/user.conf:\nssl_certificate_key /etc/nginx/ssl/evil.key;\n"
+	c = parseInline(t, in)
+	require.Len(t, c.Servers[0].Pairs, 2)
+	assert.Equal(t, "/etc/nginx/ssl/k1.key", c.Servers[0].Pairs[1].Key)
+	assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/user.conf"}, c.Servers[0].Pairs[1].Files,
+		"user.conf's key shifted k1 to the second pair")
 
 	// A root file brought in by another file's include is attributed to that file too.
 	in = "# configuration file /etc/nginx/nginx.conf:\nhttp { include /etc/nginx/user.conf; server { listen 443 ssl; } }\n" +

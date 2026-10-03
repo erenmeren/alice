@@ -214,14 +214,18 @@ func TestNginxDumpNeverOutputsKeyBlocks(t *testing.T) {
 	assert.NotContains(t, w.f.out.String(), string(w.leaf.KeyPEM[30:70]))
 }
 
-// A private key inside a CERTIFICATE begin line and a broken block are never decoded or returned.
-func TestCertBlocksNeverDecodeAKey(t *testing.T) {
+// A private key in a certificate file is never returned. An unterminated CERTIFICATE block followed
+// by a key and a certificate makes pem.Decode decode the key: it is dropped by the type and X.509
+// checks and cleared.
+func TestCertBlocksNeverReturnAKey(t *testing.T) {
 	leaf := newNginxWorld(t).leaf
 	key := strings.TrimSpace(string(leaf.KeyPEM))
 	for name, in := range map[string]string{
 		"key after an unterminated certificate": "-----BEGIN CERTIFICATE-----\nAAAA\n" + key,
 		"key labelled as a certificate":         strings.ReplaceAll(key, privateKeyMarker, "CERTIFICATE"),
 		"certificate with headers":              strings.Replace(string(leaf.CertPEM), "-----\n", "-----\nProc-Type: 4,ENCRYPTED\n\n", 1),
+		"unterminated certificate, key, certificate": "-----BEGIN CERTIFICATE-----\nAAAA\n" + string(leaf.KeyPEM) +
+			string(leaf.CertPEM),
 	} {
 		blocks, dropped := certBlocks([]byte(in))
 		assert.Equal(t, "", blocks, name)
@@ -367,35 +371,101 @@ func TestNginxDumpInvalidConfiguration(t *testing.T) {
 	assert.NotContains(t, w.f.out.String(), "/etc/nginx/ssl/www.key", "nginx's text never leaves the helper")
 }
 
-// Requirement 2: any parse failure, size limit or unknown configuration prefix is reported as an
-// invalid configuration, never as a partial or empty one.
-func TestNginxDumpUnsupportedConfigurations(t *testing.T) {
-	for name, tc := range map[string]func(w *nginxWorld){
-		"syntax error": func(w *nginxWorld) { w.setConf(confFile{"/etc/nginx/nginx.conf", "http {\n"}) },
-		"NUL byte":     func(w *nginxWorld) { w.setDump("# configuration file /etc/nginx/nginx.conf:\nhttp { }\x00\n") },
-		"too many args": func(w *nginxWorld) {
+// Requirement 2 and fix round 1 (Important 1): a dump that cannot be parsed, trusted or carried
+// refuses the whole host, never a partial answer, and says which class, why and, when the
+// vocabulary can carry it, which file.
+func TestNginxDumpRefusalsSayWhyAndWhere(t *testing.T) {
+	const www = "/etc/nginx/conf.d/www.conf"
+	for name, tc := range map[string]struct {
+		set                 func(t *testing.T, w *nginxWorld)
+		class, reason, file string
+	}{
+		"syntax error": {func(_ *testing.T, w *nginxWorld) { w.setConf(confFile{"/etc/nginx/nginx.conf", "http {\n"}) },
+			helperproto.ConfigErrSyntax, "", ""},
+		"NUL byte": {func(_ *testing.T, w *nginxWorld) {
+			w.setDump("# configuration file /etc/nginx/nginx.conf:\nhttp { }\x00\n")
+		},
+			helperproto.ConfigErrUnsupported, helperproto.ConfigReasonNULByte, ""},
+		"too many arguments": {func(_ *testing.T, w *nginxWorld) {
 			w.setConf(confFile{"/etc/nginx/nginx.conf", "http { server { server_name" + strings.Repeat(" a", 5000) + "; } }"})
-		},
-		"include loop": func(w *nginxWorld) { w.setConf(confFile{"/etc/nginx/nginx.conf", "include /etc/nginx/nginx.conf;"}) },
-		"duplicate file": func(w *nginxWorld) {
-			w.setDump(w.dumpText() + "# configuration file /etc/nginx/nginx.conf:\nhttp { }\n")
-		},
-		"output too large": func(w *nginxWorld) { w.tooBig = true },
-		"relative confpath": func(w *nginxWorld) {
+		}, helperproto.ConfigErrUnsupported, helperproto.ConfigReasonTooComplex, ""},
+		"nested too deep": {func(_ *testing.T, w *nginxWorld) {
+			w.setConf(confFile{"/etc/nginx/nginx.conf", strings.Repeat("a {", 120) + strings.Repeat("}", 120)})
+		}, helperproto.ConfigErrUnsupported, helperproto.ConfigReasonTooComplex, ""},
+		"line too long": {func(_ *testing.T, w *nginxWorld) {
+			w.setConf(confFile{"/etc/nginx/nginx.conf", "# " + strings.Repeat("x", nginxconf.MaxLine+1)})
+		}, helperproto.ConfigErrUnsupported, helperproto.ConfigReasonTooLarge, ""},
+		"include loop": {func(_ *testing.T, w *nginxWorld) {
+			w.setConf(confFile{"/etc/nginx/nginx.conf", "include /etc/nginx/nginx.conf;"})
+		}, helperproto.ConfigErrUnsupported, helperproto.ConfigReasonIncludeLoop, ""},
+		"output over the cap": {func(_ *testing.T, w *nginxWorld) { w.tooBig = true },
+			helperproto.ConfigErrUnsupported, helperproto.ConfigReasonTooLarge, ""},
+		"relative conf path": {func(_ *testing.T, w *nginxWorld) {
 			w.version = strings.Replace(nginxV, "/etc/nginx/nginx.conf", "conf/nginx.conf", 1)
-		},
-		"no confpath": func(w *nginxWorld) { w.version = strings.Replace(nginxV, "--conf-path=/etc/nginx/nginx.conf ", "", 1) },
-		"unclean confpath": func(w *nginxWorld) {
+		}, helperproto.ConfigErrUnsupported, helperproto.ConfigReasonNoConfPath, ""},
+		"no conf path (source build)": {func(_ *testing.T, w *nginxWorld) {
+			w.version = strings.Replace(nginxV, "--conf-path=/etc/nginx/nginx.conf ", "", 1)
+		}, helperproto.ConfigErrUnsupported, helperproto.ConfigReasonNoConfPath, ""},
+		"unclean conf path": {func(_ *testing.T, w *nginxWorld) {
 			w.version = strings.Replace(nginxV, "/etc/nginx/nginx.conf", "/etc/nginx//nginx.conf", 1)
-		},
+		}, helperproto.ConfigErrUnsupported, helperproto.ConfigReasonNoConfPath, ""},
+		"duplicate file": {func(_ *testing.T, w *nginxWorld) {
+			w.setDump(w.dumpText() + "# configuration file /etc/nginx/nginx.conf:\nhttp { }\n")
+		}, helperproto.ConfigErrUntrusted, helperproto.ConfigReasonDuplicateFile, ""},
+		"text before the first marker": {func(_ *testing.T, w *nginxWorld) { w.setDump("http { server { }}\n" + w.dumpText()) },
+			helperproto.ConfigErrUntrusted, helperproto.ConfigReasonUnexpectedText, ""},
+		"first file is not the configuration": {func(_ *testing.T, w *nginxWorld) {
+			w.setConf(confFile{www, wwwConf}, confFile{"/etc/nginx/nginx.conf", mainConf})
+		}, helperproto.ConfigErrUntrusted, helperproto.ConfigReasonWrongFirstFile, www},
+		"an empty dump": {func(_ *testing.T, w *nginxWorld) { w.setDump("") },
+			helperproto.ConfigErrUntrusted, helperproto.ConfigReasonWrongFirstFile, ""},
+		"a file changed since nginx read it": {func(_ *testing.T, w *nginxWorld) { w.f.write(www, wwwConf+"#\n", 0o644) },
+			helperproto.ConfigErrUntrusted, helperproto.ConfigReasonChanged, www},
+		"no line feed after the file": {func(_ *testing.T, w *nginxWorld) { w.setDump(strings.TrimSuffix(w.dumpText(), "\n")) },
+			helperproto.ConfigErrUntrusted, helperproto.ConfigReasonChanged, www},
+		"a file that does not exist": {func(t *testing.T, w *nginxWorld) { require.NoError(t, os.Remove(w.f.host(www))) },
+			helperproto.ConfigErrUntrusted, helperproto.ConfigReasonMissing, www},
+		"a FIFO": {func(t *testing.T, w *nginxWorld) {
+			require.NoError(t, os.Remove(w.f.host(www)))
+			require.NoError(t, unix.Mkfifo(w.f.host(www), 0o644))
+		}, helperproto.ConfigErrUntrusted, helperproto.ConfigReasonNotRegular, www},
+		"a name with a space": {func(_ *testing.T, w *nginxWorld) {
+			w.f.write("/etc/nginx/conf.d/a b.conf", "", 0o644)
+			w.setDump(w.dumpText() + "# configuration file /etc/nginx/conf.d/a b.conf:\n\n")
+		}, helperproto.ConfigErrUnsupported, helperproto.ConfigReasonNameNotAllowed, ""},
+		"a name with ..": {func(_ *testing.T, w *nginxWorld) {
+			w.setDump(w.dumpText() + "# configuration file /etc/nginx/conf.d/../nginx.conf:\n" + mainConf + "\n")
+		}, helperproto.ConfigErrUnsupported, helperproto.ConfigReasonNameNotAllowed, ""},
+		"a relative name": {func(_ *testing.T, w *nginxWorld) {
+			w.setDump(w.dumpText() + "# configuration file conf.d/www.conf:\n" + wwwConf + "\n")
+		}, helperproto.ConfigErrUnsupported, helperproto.ConfigReasonNameNotAllowed, ""},
+		// The reviewer's case: nginx -t passes, the administrator must learn what to tighten.
+		"a group-writable directory": {func(t *testing.T, w *nginxWorld) { require.NoError(t, os.Chmod(w.f.host("/etc/nginx/conf.d"), 0o775)) },
+			helperproto.ConfigErrUntrusted, helperproto.ConfigReasonNotRootControlled, www},
+		"a world-writable directory": {func(t *testing.T, w *nginxWorld) { require.NoError(t, os.Chmod(w.f.host("/etc/nginx/conf.d"), 0o777)) },
+			helperproto.ConfigErrUntrusted, helperproto.ConfigReasonNotRootControlled, www},
+		"a link into a writable directory": {func(t *testing.T, w *nginxWorld) {
+			w.f.mkdir("/srv", 0o777)
+			w.f.write("/srv/www.conf", wwwConf, 0o644)
+			require.NoError(t, os.Remove(w.f.host(www)))
+			w.f.symlink("/srv/www.conf", www)
+		}, helperproto.ConfigErrUntrusted, helperproto.ConfigReasonNotRootControlled, www},
+		"a file on a special file system": {func(_ *testing.T, w *nginxWorld) { w.magicAt("/etc/nginx/conf.d", unix.PROC_SUPER_MAGIC) },
+			helperproto.ConfigErrUntrusted, helperproto.ConfigReasonSpecialFS, www},
+		"a file bind-mounted from a special file system": {func(_ *testing.T, w *nginxWorld) { w.magicAt(www, unix.SYSFS_MAGIC) },
+			helperproto.ConfigErrUntrusted, helperproto.ConfigReasonSpecialFS, www},
+		"a directory on FUSE": {func(_ *testing.T, w *nginxWorld) { w.magicAt("/etc/nginx/conf.d", unix.FUSE_SUPER_MAGIC) },
+			helperproto.ConfigErrUntrusted, helperproto.ConfigReasonSpecialFS, www},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newNginxWorld(t)
-			tc(w)
+			tc.set(t, w)
 			code, m := w.f.run("nginx-dump")
 			require.Equal(t, 0, code, "%v", m)
 			assert.Equal(t, false, m["config_valid"])
-			assert.Equal(t, helperproto.ConfigErrSyntax, m["config_error"])
+			assert.Equal(t, tc.class, m["config_error"])
+			assert.Equal(t, tc.reason, m["config_error_reason"])
+			assert.Equal(t, tc.file, m["config_error_file"])
 			assert.Equal(t, []any{}, m["servers"])
 			assert.Equal(t, []any{}, m["files"])
 			assert.Equal(t, []any{}, m["writable"])
@@ -403,51 +473,54 @@ func TestNginxDumpUnsupportedConfigurations(t *testing.T) {
 	}
 }
 
-// Requirement 1: every section must be the exact content of the file it names, read through the
-// root-controlled walk; otherwise the whole dump is refused.
-func TestAttackUntrustedDumpsAreRefused(t *testing.T) {
-	for name, tc := range map[string]func(w *nginxWorld){
-		"text before the first marker": func(w *nginxWorld) { w.setDump("http { server { }}\n" + w.dumpText()) },
-		"first file is not the configuration": func(w *nginxWorld) {
-			w.setConf(confFile{"/etc/nginx/conf.d/www.conf", wwwConf}, confFile{"/etc/nginx/nginx.conf", mainConf})
-		},
-		"a file changed since nginx read it": func(w *nginxWorld) { w.f.write("/etc/nginx/conf.d/www.conf", wwwConf+"#\n", 0o644) },
-		"a file that does not exist":         func(w *nginxWorld) { require.NoError(t, os.Remove(w.f.host("/etc/nginx/conf.d/www.conf"))) },
-		"no line feed after the file":        func(w *nginxWorld) { w.setDump(strings.TrimSuffix(w.dumpText(), "\n")) },
-		"a name with a space": func(w *nginxWorld) {
-			w.f.write("/etc/nginx/conf.d/a b.conf", "", 0o644)
-			w.setDump(w.dumpText() + "# configuration file /etc/nginx/conf.d/a b.conf:\n\n")
-		},
-		"a name with ..": func(w *nginxWorld) {
-			w.setDump(w.dumpText() + "# configuration file /etc/nginx/conf.d/../nginx.conf:\n" + mainConf + "\n")
-		},
-		"a relative name": func(w *nginxWorld) {
-			w.setDump(w.dumpText() + "# configuration file conf.d/www.conf:\n" + wwwConf + "\n")
-		},
-		"a file in a directory others can write": func(w *nginxWorld) {
-			require.NoError(t, os.Chmod(w.f.host("/etc/nginx/conf.d"), 0o777))
-		},
-		"a file reached through a link to a writable directory": func(w *nginxWorld) {
-			w.f.mkdir("/srv", 0o777)
-			w.f.write("/srv/www.conf", wwwConf, 0o644)
-			require.NoError(t, os.Remove(w.f.host("/etc/nginx/conf.d/www.conf")))
-			w.f.symlink("/srv/www.conf", "/etc/nginx/conf.d/www.conf")
-		},
-		"a hard-linked file": func(w *nginxWorld) {
-			require.NoError(t, os.Link(w.f.host("/etc/nginx/conf.d/www.conf"), w.f.host("/etc/nginx/www.conf.bak")))
-		},
-		"an empty dump": func(w *nginxWorld) { w.setDump("") },
-	} {
-		t.Run(name, func(t *testing.T) {
-			w := newNginxWorld(t)
-			tc(w)
-			code, m := w.f.run("nginx-dump")
-			require.Equal(t, 0, code, "%v", m)
-			assert.Equal(t, false, m["config_valid"])
-			assert.Equal(t, helperproto.ConfigErrSyntax, m["config_error"])
-			assert.Equal(t, []any{}, m["servers"])
-			assert.Equal(t, []any{}, m["files"])
-		})
+// magicAt makes the file system of the guest directory (and everything opened in it) report magic.
+func (w *nginxWorld) magicAt(guest string, magic int64) {
+	var want unix.Stat_t
+	require.NoError(w.f.t, unix.Stat(w.f.host(guest), &want))
+	w.f.s.fsMagic = func(fd int) (int64, error) {
+		var st unix.Stat_t
+		if err := unix.Fstat(fd, &st); err != nil {
+			return 0, err
+		}
+		if sameFile(st, want) {
+			return magic, nil
+		}
+		return unix.EXT4_SUPER_MAGIC, nil
+	}
+}
+
+// Fix round 1 (Important 1d): the comparison reads a hard-linked configuration file too (nothing is
+// returned); certificate reads still refuse hard links.
+func TestHardLinkedConfigurationFileIsCompared(t *testing.T) {
+	w := newNginxWorld(t)
+	require.NoError(t, os.Link(w.f.host("/etc/nginx/conf.d/www.conf"), w.f.host("/etc/nginx/www.conf.bak")))
+	_, m := w.f.run("nginx-dump")
+	assert.Equal(t, true, m["config_valid"], "%v", m)
+	assert.Equal(t, "", m["config_error_reason"])
+	require.NoError(t, os.Link(w.f.host("/etc/nginx/ssl/www.crt"), w.f.host("/etc/nginx/www.crt.bak")))
+	_, m = w.f.run("nginx-dump")
+	assert.Equal(t, helperproto.FileHardLinked, fileOf(t, m, "cert", "/etc/nginx/ssl/www.crt")["problem"])
+}
+
+// Fix round 1 (Important 1b): a timed-out or killed nginx is an I/O failure (retryable), never an
+// invalid configuration.
+func TestKilledNginxIsAnIOError(t *testing.T) {
+	for _, arg := range []string{"-V", "-T", "-t"} {
+		w := newNginxWorld(t)
+		run := w.f.s.runNginx
+		w.f.s.runNginx = func(ctx context.Context, args ...string) ([]byte, []byte, error) {
+			if args[0] == arg {
+				return nil, []byte("nginx: [emerg] whatever"), fmt.Errorf("%w: signal: killed", errProgramKilled)
+			}
+			return run(ctx, args...)
+		}
+		sub := "nginx-dump"
+		if arg == "-t" {
+			sub = "nginx-test"
+		}
+		code, m := w.f.run(sub)
+		assert.Equal(t, helperproto.ExitFailed, code, arg)
+		assert.Equal(t, helperproto.CodeIOError, m["code"], arg)
 	}
 }
 
@@ -574,6 +647,22 @@ func TestAttackWritableFileThatContributesToAPair(t *testing.T) {
 			assert.Equal(t, []string{"/etc/nginx/ssl/www.crt /etc/nginx/ssl/www.key " + tc.want}, pairsOf(m))
 		})
 	}
+}
+
+// Fix round 1 (Minor 1): pairs are drawn by position from http-level arrays, so a writable file that
+// adds an element before root's own shifts every later pair; all of them are refused.
+func TestAttackIndexShiftThroughHTTPLevelArrays(t *testing.T) {
+	w := newNginxWorld(t)
+	w.setConf(confFile{"/etc/nginx/nginx.conf", "http { include /etc/nginx/snip.conf;\n" +
+		"ssl_certificate_key /etc/nginx/ssl/k1.key; ssl_certificate_key /etc/nginx/ssl/k2.key;\n" +
+		"server { listen 443 ssl; ssl_certificate /etc/nginx/ssl/a1.crt; ssl_certificate /etc/nginx/ssl/a2.crt; } }\n"},
+		confFile{"/etc/nginx/snip.conf", "ssl_certificate_key /etc/nginx/ssl/evil.key;\n"})
+	require.NoError(t, os.Chmod(w.f.host("/etc/nginx/snip.conf"), 0o666))
+	_, m := w.f.run("nginx-dump")
+	require.Equal(t, true, m["config_valid"], "%v", m)
+	assert.Equal(t, []string{"/etc/nginx/ssl/a1.crt /etc/nginx/ssl/evil.key config_file_writable",
+		"/etc/nginx/ssl/a2.crt /etc/nginx/ssl/k1.key config_file_writable"}, pairsOf(m))
+	assert.Equal(t, []any{}, m["files"])
 }
 
 // Root only: a configuration file owned by another user (even 0644) makes its pairs unsupported,
@@ -750,7 +839,12 @@ func TestRunProgram(t *testing.T) {
 	defer cancel()
 	start := time.Now()
 	_, _, err = runProgram(ctx, "/bin/sleep", 10, "30")
+	assert.ErrorIs(t, err, errProgramKilled)
+	_, _, err = runProgram(context.Background(), "/bin/sh", 10, "-c", "kill -9 $$")
+	assert.ErrorIs(t, err, errProgramKilled, "killed by a signal")
+	_, _, err = runProgram(context.Background(), "/bin/sh", 10, "-c", "exit 1")
 	assert.Error(t, err)
+	assert.NotErrorIs(t, err, errProgramKilled, "a failing nginx -t is not a kill")
 	assert.Less(t, time.Since(start), 5*time.Second)
 
 	_, _, err = runProgram(context.Background(), filepath.Join(t.TempDir(), "nginx"), 10, "-T")

@@ -50,6 +50,13 @@ func productionSys() *sys {
 			}
 			return int64(st.Bavail) * st.Bsize, nil //nolint:gosec // G115: block counts fit an int64
 		},
+		fsMagic: func(fd int) (int64, error) {
+			var st unix.Statfs_t
+			if err := unix.Fstatfs(fd, &st); err != nil {
+				return 0, err
+			}
+			return st.Type, nil
+		},
 		dial: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 	}
 	s.syslog = func(subcommand, path string) { writeSyslog(s.sudoUserName(), subcommand, path) }
