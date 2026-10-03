@@ -150,6 +150,7 @@ func TestFailMapsDomainErrors(t *testing.T) {
 		{inventory.ErrNotRemovable, 409, "ALC-KEY-0003"},
 		{inventory.ErrKeysManagedElsewhere, 409, "ALC-SSH-0008"},
 		{inventory.ErrNoPlatformKey, 503, "ALC-SYS-0002"},
+		{inventory.ErrNoSetupScript, 500, "ALC-SSH-0011"},
 		{fmt.Errorf("remove: %w", inventory.ErrSSHDUnreadable), 409, "ALC-KEY-0004"},
 		{fmt.Errorf("enqueue: %w", inventory.ErrJobConflict), 409, "ALC-JOB-0005"},
 		{jobs.ErrNotFound, 404, "ALC-SYS-0001"},

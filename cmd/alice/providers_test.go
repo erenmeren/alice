@@ -1,6 +1,8 @@
 package main
 
 import (
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,7 +26,7 @@ func TestRegisterProvidersShipsExactlyLinuxSSH(t *testing.T) {
 	pool := newTestPool()
 	t.Cleanup(pool.Close)
 	reg := providers.NewRegistry()
-	registerProviders(reg, pool)
+	registerProviders(reg, pool, slog.New(slog.DiscardHandler))
 
 	list := reg.List()
 	require.Len(t, list, 1)
@@ -48,19 +50,25 @@ func TestRegisterProvidersShipsExactlyLinuxSSH(t *testing.T) {
 // (R37 item 2).
 func TestOnlyADevelopmentBuildSkipsTheHelperCheck(t *testing.T) {
 	line := "no-pty ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform"
+	var logs strings.Builder
 	script := func() string {
+		logs.Reset()
 		pool := newTestPool()
 		t.Cleanup(pool.Close)
 		reg := providers.NewRegistry()
-		registerProviders(reg, pool)
+		registerProviders(reg, pool, slog.New(slog.NewTextHandler(&logs, nil)))
 		p, ok := reg.Get(providers.KindLinuxSSH)
 		require.True(t, ok)
 		return p.(providers.SetupGuide).SetupSnippets(line)["linux"].Script
 	}
 	require.Equal(t, "dev", version.Version)
+	require.False(t, linuxssh.HelperChecksumsKnown(), "go test links no helper checksums")
 	assert.Contains(t, script(), "cannot verify alice-helper")
+	assert.Empty(t, logs.String(), "a development build starts without a warning")
 
 	version.Version = "1.0.0"
 	t.Cleanup(func() { version.Version = "dev" })
 	assert.Empty(t, script(), "a release build without the checksums has no setup script")
+	assert.Contains(t, logs.String(), "level=WARN")
+	assert.Contains(t, logs.String(), "this build has no alice-helper checksums")
 }

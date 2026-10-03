@@ -91,6 +91,7 @@ var (
 	ErrKeysManagedElsewhere = ErrorCode{Code: "ALC-SSH-0008", Reason: "ssh.keys_managed_elsewhere", Status: http.StatusConflict}
 	ErrOutputTooLarge       = ErrorCode{Code: "ALC-SSH-0009", Reason: "ssh.output_too_large", Status: http.StatusBadGateway}
 	ErrSSHProtocol          = ErrorCode{Code: "ALC-SSH-0010", Reason: "ssh.protocol_error", Status: http.StatusBadGateway}
+	ErrHelperChecksums      = ErrorCode{Code: "ALC-SSH-0011", Reason: "ssh.helper_checksums_missing", Status: http.StatusInternalServerError}
 
 	ErrOwnKeyProtected = ErrorCode{Code: "ALC-KEY-0001", Reason: "sshkey.own_key_protected", Status: http.StatusConflict}
 	ErrLastRootKey     = ErrorCode{Code: "ALC-KEY-0002", Reason: "sshkey.last_root_key", Status: http.StatusConflict}
@@ -119,7 +120,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrLicenseUnsupportedFormat, ErrLicenseOlderThanInstalled, ErrLicenseTargetLimit,
 		ErrTargetDuplicate, ErrHostKeyUnconfirmed, ErrHostKeyStale, ErrHostKeyChanged, ErrHostKeyState, ErrTargetDisabled,
 		ErrSSHUnreachable, ErrSSHAuthFailed, ErrSSHTimeout, ErrHelperMissing, ErrHelperOutdated, ErrHelperRefused,
-		ErrFileChanged, ErrKeysManagedElsewhere, ErrOutputTooLarge, ErrSSHProtocol,
+		ErrFileChanged, ErrKeysManagedElsewhere, ErrOutputTooLarge, ErrSSHProtocol, ErrHelperChecksums,
 		ErrOwnKeyProtected, ErrLastRootKey, ErrKeyNotRemovable, ErrSSHDUnreadable, ErrKeyVerifyFailed,
 		ErrJobNotWaiting, ErrJobLeaseExpired, ErrJobTampered, ErrJobUnknownType, ErrJobConflict,
 	}
@@ -177,7 +178,8 @@ var errorMap = []struct {
 	{license.ErrWrongInstallation, ErrLicenseWrongInstallation, nil},
 	{license.ErrNoInstallation, ErrUnavailable, nil},
 	{inventory.ErrNotFound, ErrNotFound, nil},
-	{inventory.ErrNoPlatformKey, ErrUnavailable, nil}, // EnsurePlatformKey runs before serving; only a broken start reaches this
+	{inventory.ErrNoPlatformKey, ErrUnavailable, nil},     // EnsurePlatformKey runs before serving; only a broken start reaches this
+	{inventory.ErrNoSetupScript, ErrHelperChecksums, nil}, // a non-development build without the helper checksums
 	{inventory.ErrDuplicateTarget, ErrTargetDuplicate, nil},
 	{inventory.ErrVersionMismatch, ErrPreconditionFailed, nil},
 	{inventory.ErrHostKeyUnconfirmed, ErrHostKeyUnconfirmed, nil},

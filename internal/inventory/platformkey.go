@@ -202,8 +202,9 @@ func (s *Service) SetupGuide(ctx context.Context, from string) (Guide, error) {
 	profiles := sg.SetupSnippets(line)
 	for _, p := range profiles {
 		if p.Script == "" {
-			// The provider refused to embed the line: a guide without a script is never shown.
-			return Guide{}, errors.New("inventory: the provider cannot build the setup script")
+			// The provider refused the script (a build without the helper checksums; the line
+			// itself is always embeddable): a guide without a script is never shown.
+			return Guide{}, ErrNoSetupScript
 		}
 	}
 	return Guide{PlatformKey: pk, AuthorizedKeysLine: line, HelperPath: path, HelperProtocol: protocol,

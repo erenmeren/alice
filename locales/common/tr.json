@@ -318,6 +318,11 @@
         "title": "Alice sunucunun yanıtını anlayamadı.",
         "cause": "Sunucudaki yardımcı program beklenmeyen bir biçimde yanıt verdi; başka bir program onun yerini almış olabilir.",
         "action": "alice-helper programını hazırlık komutlarıyla yeniden kurun, sonra bağlantıyı sınayın."
+      },
+      "helper_checksums_missing": {
+        "title": "Bu Alice sürümü bir sunucuyu hazırlayan komutları gösteremiyor.",
+        "cause": "Alice programı alice-helper sağlama toplamları olmadan derlendi; bu yüzden komutlar yardımcı programı root olarak kurmadan önce denetleyemez.",
+        "action": "Resmî bir Alice sürümü kurun ya da Alice'i make build veya imaj derlemesiyle derleyin."
       }
     },
     "sshkey": {

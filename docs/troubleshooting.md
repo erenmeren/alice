@@ -564,6 +564,19 @@ there (HTTP 409).
 
 **What to do.** Install the helper again from the Alice bundle and compare its checksum with `alice-helper.sha256`.
 
+## ALC-SSH-0011: This build cannot show the setup commands
+
+**Meaning.** Alice cannot show **Prepare a server for Alice** (`GET /api/v1/ssh-keys/platform-key`, HTTP 500). Its
+setup commands check `alice-helper` against the checksums built into Alice before they install it as root, and this
+build has none. Alice also logs "this build has no alice-helper checksums" at every start.
+
+**Likely cause.** Alice was built by hand with `go build` and a version number, not with `make build` or the image
+build, which embed the checksums. (A development build, version `dev`, shows the commands with a warning that they
+cannot check the helper.)
+
+**What to do.** Install an official Alice release, or rebuild with `make build` or the image build. Servers that are
+already prepared keep working.
+
 ## ALC-KEY-0001: Alice's own key is protected
 
 **Meaning.** Alice refuses to remove its own connection key (HTTP 409), in any file and whatever its comment says. The

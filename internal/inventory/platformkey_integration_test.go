@@ -114,11 +114,18 @@ func TestCredentialsRefuseAMovedCiphertext(t *testing.T) {
 // guideProvider is the fake provider plus the SetupGuide methods, recording the line it got.
 type guideProvider struct {
 	*fake.Provider
-	line string
+	line     string
+	noScript bool // as linuxssh in a non-development build without the helper checksums
 }
 
 func (g *guideProvider) SetupSnippets(line string) map[string]providers.SetupSnippet {
 	g.line = line
+	if g.noScript {
+		return map[string]providers.SetupSnippet{
+			"linux": {Profile: "linux", Sudoers: "linux sudoers"},
+			"nginx": {Profile: "nginx", Sudoers: "nginx sudoers"},
+		}
+	}
 	return map[string]providers.SetupSnippet{
 		"linux": {Profile: "linux", Sudoers: "linux sudoers", Script: "linux script " + line},
 		"nginx": {Profile: "nginx", Sudoers: "nginx sudoers", Script: "nginx script " + line},
@@ -172,4 +179,20 @@ func TestSetupGuideWithoutGuideProviderFails(t *testing.T) {
 	require.NoError(t, err)
 	_, err = h.svc.SetupGuide(h.ctx, "")
 	require.Error(t, err)
+}
+
+// A build that cannot offer a setup script answers with its own error (mapped to a documented
+// code), never a guide without a script.
+func TestSetupGuideWithoutAScriptFailsWithItsOwnError(t *testing.T) {
+	g := &guideProvider{Provider: fake.New(providers.KindLinuxSSH), noScript: true}
+	h := newHarness(t, withSeed, func(c *inventory.Config) {
+		reg := providers.NewRegistry()
+		reg.Register(g)
+		reg.Freeze()
+		c.Registry = reg
+	})
+	_, err := h.svc.EnsurePlatformKey(h.ctx)
+	require.NoError(t, err)
+	_, err = h.svc.SetupGuide(h.ctx, "")
+	require.ErrorIs(t, err, inventory.ErrNoSetupScript)
 }

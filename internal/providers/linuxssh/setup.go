@@ -166,6 +166,10 @@ fi
 // build: it offers no setup script rather than one that installs an unchecked helper as root.
 var ErrHelperUnverified = errors.New("linuxssh: this Alice build has no alice-helper checksums; build it with make build or the image build")
 
+// HelperChecksumsKnown reports whether this build embeds both alice-helper checksums (make build
+// and the image build do). cmd/alice warns at startup when a non-development build lacks them.
+func HelperChecksumsKnown() bool { return helperSumsKnown() }
+
 func helperSumsKnown() bool {
 	return sha256Hex.MatchString(helperSHA256LinuxAMD64) && sha256Hex.MatchString(helperSHA256LinuxARM64)
 }

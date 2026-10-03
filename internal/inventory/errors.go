@@ -21,6 +21,9 @@ var (
 	ErrSSHDUnreadable = errors.New("inventory: the server's sshd settings could not be read")
 	// ErrJobConflict: the same job is already queued with other options (EnqueueTx).
 	ErrJobConflict = errors.New("inventory: the same job is already queued with other options")
+	// ErrNoSetupScript: the provider offers no setup script, because this build has no
+	// alice-helper checksums and is not a development build (R37 item 2).
+	ErrNoSetupScript = errors.New("inventory: this build of Alice cannot offer a setup script")
 	// ErrNoPlatformKey means EnsurePlatformKey has not run on this database yet.
 	ErrNoPlatformKey = errors.New("inventory: the platform SSH key does not exist yet")
 )

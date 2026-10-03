@@ -106,7 +106,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 	})
 	sshPool := linuxssh.NewPool(&linuxssh.Dialer{Clock: clk, HostKeys: inv.HostKeyStore()},
 		linuxssh.MaxConnections, linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)
-	registerProviders(registry, sshPool)
+	registerProviders(registry, sshPool, log)
 	setupSvc := setup.New(setup.Config{
 		Pool:      pool,
 		Auth:      authSvc,

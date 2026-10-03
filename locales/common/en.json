@@ -318,6 +318,11 @@
         "title": "Alice could not understand the server's answer.",
         "cause": "The helper on the server answered in an unexpected way, possibly because another program replaced it.",
         "action": "Install alice-helper again with the preparation commands, then test the connection."
+      },
+      "helper_checksums_missing": {
+        "title": "This build of Alice cannot show the commands that prepare a server.",
+        "cause": "The Alice program was built without the alice-helper checksums, so the commands could not check the helper before installing it as root.",
+        "action": "Install an official Alice release, or build Alice with make build or the image build."
       }
     },
     "sshkey": {
