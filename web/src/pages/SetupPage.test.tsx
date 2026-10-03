@@ -377,6 +377,31 @@ describe('setup wizard edge cases', () => {
     expect(await screen.findByRole('heading', { name: 'Alice is ready' })).toBeInTheDocument();
   });
 
+  it('does not report success in the wizard when the first check of a new server failed', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin'), { admin_exists: true, recovery_passphrase_set: true, license_chosen: true, completed: false, default_locale: 'en' }),
+      http.post('/api/v1/targets', () =>
+        HttpResponse.json({ target: targetFixture, job_id: 'job-1', status_url: '/api/v1/jobs/job-1' }, { status: 201 }),
+      ),
+      http.get('/api/v1/jobs/:id', () =>
+        HttpResponse.json(jobFixture({ id: 'job-1', status: 'failed', error: { code: 'ALC-SSH-0001', reason: 'ssh.unreachable' } })),
+      ),
+    );
+    await renderRoute('/setup');
+    await userEvent.click(await screen.findByRole('button', { name: 'Add a server now' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add server' });
+    await userEvent.type(within(dialog).getByLabelText(/^Name/), 'web-01');
+    await userEvent.type(within(dialog).getByLabelText(/^Address/), 'web-01.example.com');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
+    expect(await within(dialog).findByText('Alice cannot reach the server.')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Open the server' })).not.toBeInTheDocument();
+    // The dialog also has a corner close icon with the same name; the labelled button is the one with text.
+    await userEvent.click(within(dialog).getByText('Close', { selector: 'button *' }));
+    expect(await screen.findByText(/could not finish the first check/)).toBeInTheDocument();
+    expect(screen.queryByText('Server added. Alice is reading its SSH keys.')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Connect your servers' })).toBeInTheDocument();
+  });
+
   it('adds a server from the wizard under React StrictMode and stays in the wizard', async () => {
     server.use(
       ...sessionHandlers(sessionFor('admin'), { admin_exists: true, recovery_passphrase_set: true, license_chosen: true, completed: false, default_locale: 'en' }),

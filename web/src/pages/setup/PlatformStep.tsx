@@ -11,15 +11,20 @@ import { PlatformKeyPanel } from '../../components/PlatformKeyPanel';
 export function PlatformStep({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation();
   const [adding, setAdding] = useState(false);
-  const [added, setAdded] = useState(false);
+  const [added, setAdded] = useState<'ok' | 'failed' | null>(null);
   return (
     <Stack>
       <Title order={2}>{t('setup.platform.title')}</Title>
       <Text>{t('setup.platform.help')}</Text>
       <PlatformKeyPanel titleOrder={3} />
-      {added && (
+      {added === 'ok' && (
         <Alert color="green" role="status">
           {t('targets.added')}
+        </Alert>
+      )}
+      {added === 'failed' && (
+        <Alert color="yellow" role="status">
+          {t('setup.platform.addedFailed')}
         </Alert>
       )}
       <Group>
@@ -33,7 +38,11 @@ export function PlatformStep({ onDone }: { onDone: () => void }) {
           onClose={() => setAdding(false)}
           onAdded={() => {
             setAdding(false);
-            setAdded(true);
+            setAdded('ok');
+          }}
+          onFailedClose={() => {
+            setAdding(false);
+            setAdded('failed');
           }}
         />
       )}

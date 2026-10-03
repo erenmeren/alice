@@ -168,6 +168,7 @@
       "title": "Connect your servers",
       "help": "Alice signs in to your servers with its own key. Prepare each server with the commands below; you can also do this later on the Servers page.",
       "addNow": "Add a server now",
+      "addedFailed": "The server was added, but Alice could not finish the first check. After the setup, open it on the Servers page.",
       "continue": "Continue"
     }
   },

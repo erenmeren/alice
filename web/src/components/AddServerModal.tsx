@@ -22,7 +22,19 @@ type Phase = 'form' | 'working' | 'confirm' | 'failed';
 // The server counts toward the license as soon as it is created (spec §7.3), so after the create
 // call succeeds the form never comes back: problems end in the "failed" phase with a way to open
 // the server. Closing the dialog stops the waiting and nothing navigates afterwards.
-export function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAdded: (target: Target) => void }) {
+//
+// A screen that cannot offer to open the server (the setup wizard) passes onFailedClose: the failed
+// phase then has only Close, which reports the server through onFailedClose instead of onAdded, so
+// that screen never shows the success of a check that did not succeed.
+export function AddServerModal({
+  onClose,
+  onAdded,
+  onFailedClose,
+}: {
+  onClose: () => void;
+  onAdded: (target: Target) => void;
+  onFailedClose?: (target: Target) => void;
+}) {
   const { t } = useTranslation();
   const client = useQueryClient();
   const [name, setName] = useState('');
@@ -43,7 +55,8 @@ export function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAd
   const close = () => {
     abort.abort();
     if (target) refresh();
-    onClose();
+    if (target && phase === 'failed' && onFailedClose) onFailedClose(target);
+    else onClose();
   };
   const openServer = () => {
     abort.abort();
@@ -174,7 +187,7 @@ export function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAd
             <Button variant="default" onClick={close}>
               {t('ui.close')}
             </Button>
-            <Button onClick={openServer}>{t('targets.openServer')}</Button>
+            {!onFailedClose && <Button onClick={openServer}>{t('targets.openServer')}</Button>}
           </Group>
         </Stack>
       )}

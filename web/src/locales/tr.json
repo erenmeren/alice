@@ -168,6 +168,7 @@
       "title": "Sunucularınızı bağlayın",
       "help": "Alice sunucularınızda kendi anahtarıyla oturum açar. Her sunucuyu aşağıdaki komutlarla hazırlayın; bunu daha sonra Sunucular sayfasında da yapabilirsiniz.",
       "addNow": "Şimdi sunucu ekle",
+      "addedFailed": "Sunucu eklendi ancak Alice ilk denetimi tamamlayamadı. Kurulum bittikten sonra Sunucular sayfasından açın.",
       "continue": "Devam"
     }
   },
