@@ -262,3 +262,30 @@ func TestConnectionTestOfADeletedTargetIsNotFound(t *testing.T) {
 	assert.Zero(t, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'job.dead'"))
 	assert.Zero(t, countRows(t, e, "SELECT count(*) FROM notifications_outbox WHERE template_key = 'job.dead'"))
 }
+
+// A confirmation is answered by a new connection test, never by a stale one that is already
+// running (it started before the key was pinned and fails): the target would stay "checking"
+// with nothing queued.
+func TestPinQueuesAFreshTestDespiteARunningOne(t *testing.T) {
+	e := newEnv(t, nil)
+	k := hostKey(t)
+	e.prov.Configure(func(c *fake.Config) {
+		c.PresentedKey = k
+		c.Report = providers.ConnectionReport{HostKey: k, HelperVersion: "1.0.0", HelperProtocol: 1}
+	})
+	tg, _, err := e.inv.CreateTarget(e.ctx, e.admin, inventory.NewTarget{Name: "web-01", Type: "linux", Host: "web-01.example.com"})
+	require.NoError(t, err)
+	e.drain()
+	stale, err := e.inv.RequestTest(e.ctx, e.admin, tg.ID)
+	require.NoError(t, err)
+	_, err = e.db.Owner.Exec(e.ctx, "UPDATE jobs SET status = 'running', attempts = 1 WHERE id = $1", stale)
+	require.NoError(t, err)
+
+	recs, err := e.inv.ListHostKeys(e.ctx, tg.ID)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	test, err := e.inv.ConfirmHostKey(e.ctx, e.admin, tg.ID, recs[0].ID, k.Fingerprint)
+	require.NoError(t, err)
+	assert.NotEqual(t, stale, test)
+	assert.Equal(t, jobs.StatusQueued, e.job(test).Status)
+}

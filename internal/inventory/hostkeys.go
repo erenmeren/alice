@@ -392,7 +392,11 @@ func setChecking(ctx context.Context, tx pgx.Tx, targetID uuid.UUID, now time.Ti
 	return nil
 }
 
+// enqueueTest queues the connection test that follows a pin, a re-pin or a dismissal. It has no
+// dedupe key: a test queued or running from before the pin must not answer it (a running one
+// started without the new key and fails, leaving the target checking with nothing queued). The
+// pin's own status check (pending_host_key, host_key_changed) already refuses a second pin.
 func (s *Service) enqueueTest(ctx context.Context, tx pgx.Tx, a Actor, targetID uuid.UUID) (uuid.UUID, error) {
 	return s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: JobTestConnection, TargetID: targetID, Payload: map[string]string{},
-		Kind: a.jobKind(), CreatedBy: a.UserID, CreatedByRole: string(a.Role), DedupeKey: "target.test_connection:" + targetID.String()})
+		Kind: a.jobKind(), CreatedBy: a.UserID, CreatedByRole: string(a.Role)})
 }
