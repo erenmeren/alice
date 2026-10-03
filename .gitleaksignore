@@ -1,0 +1,10 @@
+# Findings reviewed by hand and allowlisted by fingerprint (commit:file:rule:line). Each one is a
+# test canary or plan text quoting it; none is real secret material. Add a line here only after
+# reading the finding; never allowlist a path or a rule.
+# Fake PEM wrapper around a canary string (hostile helper answer in the leak suite).
+3feda27d1d463f4fde950b3c2a14a7df98f90dd0:internal/api/platformkey_leak_integration_test.go:private-key:80
+# "password=CANARY-hunter2": an error cause that must never be shown.
+5743ec341e905120fcfb50a30f7ad966f0354cc4:internal/providers/providers_test.go:generic-api-key:206
+5d8915d1ea37a74098e38da86cf8eed472bf8eba:internal/providers/providers_test.go:generic-api-key:136
+# The Phase 3 plan quoting the same canary.
+32c141e751267fbd568c47d6775b02223c7e0186:docs/superpowers/plans/2026-10-01-phase-3-ssh-targets.md:generic-api-key:2998
