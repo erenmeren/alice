@@ -3,10 +3,16 @@ package providers_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -411,4 +417,134 @@ func TestDeployResultsAreDistinct(t *testing.T) {
 		seen[r] = true
 	}
 	assert.Equal(t, "uncertain", string(providers.DeployUncertain))
+}
+
+// holder keeps a request in an UNEXPORTED field: fmt cannot call methods on such a value, so it
+// prints the fields by reflection.
+type holder struct {
+	req  providers.DeployRequest
+	reqs []providers.DeployRequest
+	ptr  *providers.DeployRequest
+}
+
+func TestKeyNeverPrintsThroughUnexportedFields(t *testing.T) {
+	req := providers.DeployRequest{PrivateKeyPEM: secrets.NewPlaintext([]byte(keyCanary))}
+	raw := []byte(keyCanary)
+	needles := []string{
+		keyCanary,
+		fmt.Sprintf("%x", keyCanary),
+		strings.Trim(fmt.Sprintf("%d", raw), "[]"),
+		strings.ReplaceAll(strings.Trim(fmt.Sprintf("%d", raw), "[]"), " ", ","),
+		base64.StdEncoding.EncodeToString([]byte(keyCanary)),
+		base64.RawStdEncoding.EncodeToString([]byte(keyCanary)),
+	}
+	values := []any{
+		holder{req: req, reqs: []providers.DeployRequest{req}, ptr: &req},
+		&holder{req: req},
+		struct{ r providers.DeployRequest }{req},
+		struct{ k secrets.Plaintext }{req.PrivateKeyPEM},
+		[]providers.DeployRequest{req},
+		map[string]providers.DeployRequest{"a": req},
+	}
+	for _, v := range values {
+		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%d", "%x", "%q"} {
+			out := fmt.Sprintf(verb, v)
+			for _, n := range needles {
+				assert.NotContains(t, out, n, "%s of %T", verb, v)
+			}
+		}
+	}
+}
+
+// stringConsts returns the string constants of a Go source file whose names start with a prefix,
+// name -> value, so a value added to helperproto or nginxconf later is noticed.
+func stringConsts(t *testing.T, file string, prefixes ...string) map[string]string {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+	require.NoError(t, err)
+	out := map[string]string{}
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, sp := range gd.Specs {
+			vs := sp.(*ast.ValueSpec)
+			for i, n := range vs.Names {
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				for _, p := range prefixes {
+					if strings.HasPrefix(n.Name, p) {
+						v, err := strconv.Unquote(lit.Value)
+						require.NoError(t, err)
+						out[n.Name] = v
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+func valueSet(m map[string]string) []string {
+	var out []string
+	for _, v := range m {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestMirroredSetsAreCompleteAgainstTheirSources(t *testing.T) {
+	hp := "linuxssh/helperproto/helperproto.go"
+	assert.Equal(t, sortedCopy([]string{
+		providers.ConfigReasonNotRootControlled, providers.ConfigReasonSpecialFS, providers.ConfigReasonMissing,
+		providers.ConfigReasonNotRegular, providers.ConfigReasonChanged, providers.ConfigReasonNameNotAllowed,
+		providers.ConfigReasonUnexpectedText, providers.ConfigReasonWrongFirstFile, providers.ConfigReasonDuplicateFile,
+		providers.ConfigReasonNoConfPath, providers.ConfigReasonTooLarge, providers.ConfigReasonTooComplex,
+		providers.ConfigReasonIncludeLoop, providers.ConfigReasonNULByte,
+	}), valueSet(stringConsts(t, hp, "ConfigReason")), "config reasons")
+	assert.Equal(t, sortedCopy([]string{
+		providers.ConfigErrKeyMismatch, providers.ConfigErrFileMissing, providers.ConfigErrCertLoad, providers.ConfigErrKeyLoad,
+		providers.ConfigErrSyntax, providers.ConfigErrUntrusted, providers.ConfigErrUnsupported,
+	}), valueSet(stringConsts(t, hp, "ConfigErr")), "config error classes")
+	assert.Equal(t, sortedCopy([]string{
+		providers.CertProblemMissing, providers.CertProblemNotRootControlled, providers.CertProblemNotRegular,
+		providers.CertProblemHardLinked, providers.CertProblemTooLarge, providers.CertProblemNotACertificate,
+		providers.CertProblemUnreadable, providers.CertProblemBadName, providers.CertProblemSpecialFS,
+	}), valueSet(stringConsts(t, hp, "File")), "file problems")
+	assert.Equal(t, sortedCopy([]string{
+		providers.PhaseNone, providers.PhasePrepared, providers.PhaseWriting, providers.PhaseCommitted,
+		providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed,
+	}), valueSet(stringConsts(t, hp, "Phase")), "phases")
+	assert.Equal(t, sortedCopy([]string{
+		providers.StepNameBackup, providers.StepNameWriteKey, providers.StepNameWriteCert, providers.StepNameConfigTest,
+		providers.StepNameReload, providers.StepNameJournal, providers.StepNameRestore,
+		providers.StepNameRollbackConfigTest, providers.StepNameRollbackReload,
+	}), valueSet(stringConsts(t, hp, "Step")), "helper steps")
+
+	// The nginx-dump warnings; the first four Warn* of helperproto belong to linuxssh.
+	warns := stringConsts(t, hp, "Warn")
+	for _, linux := range []string{"WarnSSHDUnreadable", "WarnDirectoryUsers", "WarnUnsupportedPath", "WarnTooManyUsers"} {
+		delete(warns, linux)
+	}
+	assert.Equal(t, sortedCopy([]string{
+		providers.WarnStreamTLS, providers.WarnMailTLS, providers.WarnConfigFileWritable, providers.WarnTooManyFiles,
+		providers.WarnCertificateBlockDropped, providers.WarnKeyGroupOpen,
+	}), valueSet(warns), "nginx-dump warnings")
+
+	reasons := stringConsts(t, "nginx/nginxconf/nginxconf.go", "Reason")
+	assert.Equal(t, sortedCopy([]string{
+		providers.UnsupportedVariable, providers.UnsupportedDataValue, providers.UnsupportedEngineKey,
+		providers.UnsupportedKeyMissing, providers.UnsupportedPasswordFile, providers.UnsupportedPathNotAllowed,
+		providers.UnsupportedStream, providers.UnsupportedCombinedFile,
+	}), valueSet(reasons), "nginxconf reasons (ReasonConfigFileWritable is an alias of a helperproto value and is not a literal)")
+}
+
+func sortedCopy(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
 }

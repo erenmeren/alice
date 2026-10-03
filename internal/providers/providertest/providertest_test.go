@@ -148,7 +148,7 @@ func (s deploySession) DeploymentStatus(ctx context.Context, _ uuid.UUID) (provi
 		if err := ctx.Err(); err != nil {
 			return providers.DeploymentState{}, providers.NewError("ssh.timeout", true, err, nil)
 		}
-		return providers.DeploymentState{}, nil
+		return providers.DeploymentState{Phase: providers.PhaseNone}, nil
 	}
 	return providers.DeploymentState{}, providers.ErrUnsupported
 }
@@ -227,4 +227,42 @@ func TestCheckUnsupportedCatchesUnadvertisedDeployMethods(t *testing.T) {
 				providers.CapDeployCertificate, providers.CapVerifyDeployment))
 		assert.Empty(t, r.failures)
 	})
+}
+
+func TestCheckOutcomeFunctionsReportContractViolations(t *testing.T) {
+	r := &recorder{TB: t}
+	providertest.CheckDeployOutcome(r, providers.DeployOutcome{Result: providers.DeployCommitted}, nil)
+	providertest.CheckDeployOutcome(r, providers.DeployOutcome{Result: providers.DeployNoChange, Reason: "x"}, providers.NewError("x", false, nil, nil))
+	providertest.CheckRollbackOutcome(r, providers.RollbackOutcome{Result: providers.DeployRolledBack}, nil)
+	providertest.CheckDeploymentState(r, providers.DeploymentState{Phase: providers.PhaseNone}, nil)
+	providertest.CheckDeploymentState(r, providers.DeploymentState{}, errors.New("no state on error"))
+	assert.Empty(t, r.failures)
+
+	providertest.CheckDeployOutcome(r, providers.DeployOutcome{}, nil)
+	providertest.CheckDeployOutcome(r, providers.DeployOutcome{Result: providers.DeployNoChange, Reason: "x"}, nil)
+	providertest.CheckRollbackOutcome(r, providers.RollbackOutcome{Result: providers.DeployUncertain}, nil)
+	providertest.CheckDeploymentState(r, providers.DeploymentState{}, nil)
+	require.Len(t, r.failures, 4, "%v", r.failures)
+	assert.Contains(t, r.failures[0], "DeployCertificate")
+	assert.Contains(t, r.failures[0], "blank or unknown result")
+	assert.Contains(t, r.failures[1], "no_change without an error")
+	assert.Contains(t, r.failures[2], "RollbackDeployment")
+	assert.Contains(t, r.failures[3], "DeploymentStatus")
+}
+
+// stateSession answers DeploymentStatus with an invalid state.
+type stateSession struct{ providers.UnsupportedSession }
+
+func (stateSession) DeploymentStatus(context.Context, uuid.UUID) (providers.DeploymentState, error) {
+	return providers.DeploymentState{Phase: "bogus"}, nil
+}
+
+func TestCheckSessionValidatesDeploymentStatus(t *testing.T) {
+	r := &recorder{TB: t}
+	providertest.CheckSession(r, providertest.SessionHarness{
+		Capabilities: providers.NewCapabilitySet(providers.CapDeployCertificate),
+		Open:         func(context.Context) (providers.Session, error) { return stateSession{}, nil },
+		CancelBound:  200 * time.Millisecond,
+	})
+	assert.Contains(t, fmt.Sprint(r.failures), "DeploymentStatus returned an invalid result: providers: deployment state: blank or unknown phase")
 }

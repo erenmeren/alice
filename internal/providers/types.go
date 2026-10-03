@@ -275,6 +275,7 @@ const (
 	WarnStreamTLS               = "stream_tls"           // TLS in stream {} is listed, not supported
 	WarnMailTLS                 = "mail_tls"             // TLS in mail {} is listed, not supported
 	WarnConfigFileWritable      = "config_file_writable" // a configuration file can be changed by users other than root
+	WarnTooManyFiles            = "too_many_files"       // more referenced files than the helper describes
 )
 
 // VerifyOptions are a location's verification settings (Administrator, R38 item 6).
@@ -283,6 +284,9 @@ type VerifyOptions struct {
 	SNI  string // "" = derived from server_name and the certificate (spec §12.8 item 1)
 	Skip bool
 }
+
+// Requests are validated by the provider, not by the framework: operation ids, paths, SNI, ports
+// and hashes pass through the provider's helperproto validators when it builds helper commands.
 
 // DeployRequest asks for one deployment of a certificate file pair (spec §6.3). It carries a
 // private key: Format and LogValue print nothing but the operation id, so no fmt verb and no slog
@@ -299,7 +303,9 @@ type DeployRequest struct {
 	OldFingerprint   string // served before the change ("" when verification is skipped)
 	OldSANs          []string
 	Verify           VerifyOptions
-	// The chain length verification expects is the number of certificates in CertificatePEM.
+	// ChainLength is the number of certificates in CertificatePEM (>= 1), set by the caller that
+	// parsed the chain; the provider compares the served chain length with it (spec §12.8 item 5).
+	ChainLength int
 }
 
 func (r DeployRequest) redacted() string {
@@ -350,8 +356,10 @@ const (
 	StepNameRestore            = "restore"
 	StepNameRollbackConfigTest = "rollback_config_test"
 	StepNameRollbackReload     = "rollback_reload"
-	StepNameVerify             = "verify"     // provider: the served certificate after the change
-	StepNameVerifyOld          = "verify_old" // provider: the old certificate after a rollback
+	// StepNameVerify and StepNameVerifyOld are provider-side steps with no helperproto
+	// counterpart: the helper never reports them.
+	StepNameVerify    = "verify"     // the served certificate after the change
+	StepNameVerifyOld = "verify_old" // the old certificate after a rollback
 )
 
 // DeployErrFileChanged is DeployOutcome.Error when a certificate or key file holds neither the
@@ -368,9 +376,12 @@ type DeployStep struct {
 }
 
 // DeployOutcome is the result of DeployCertificate. Exactly three situations exist: an explicit
-// refusal (Result DeployNoChange: nothing changed, no Steps), a completed operation (committed,
-// unchanged, rolled back or rollback failed, with its Steps) and an uncertain one (DeployUncertain,
-// returned together with the error that made it uncertain).
+// refusal (Result DeployNoChange: nothing changed, no Steps, returned with a *Error), a completed
+// operation (committed, unchanged, rolled back or rollback failed, with its Steps, returned with a
+// nil error) and an uncertain one (DeployUncertain, returned together with the error that made it
+// uncertain). Validate and CheckDeployReturn enforce this (see outcome.go for every rule). A
+// blank or unknown Result, an outcome that fails Validate and any error that is not one of the
+// above are uncertain: read the truth with DeploymentStatus.
 type DeployOutcome struct {
 	Result DeployResult
 	// Phase is the helper journal phase of a completed operation (Phase*), "" otherwise.
@@ -408,9 +419,12 @@ type RollbackRequest struct {
 }
 
 // RollbackOutcome is the result of RollbackDeployment. Result is DeployRolledBack,
-// DeployRollbackFailed, DeployNoChange (a well-formed refusal, or nothing to restore: the helper
-// answered phase prepared or unchanged, or SUPERSEDED because a later operation replaced the
-// files) or DeployUncertain (returned with the error).
+// DeployRollbackFailed, DeployNoChange or DeployUncertain (returned with the error); see
+// RollbackOutcome.Validate and CheckRollbackReturn for the rules. DeployNoChange means "nothing was
+// restored" (the helper answered phase prepared or unchanged, or refused with SUPERSEDED because a
+// later operation replaced the files). It does NOT mean the files are unchanged since the
+// deployment: the engine must not read it that way. A blank or unknown Result, or an outcome that
+// fails Validate, is uncertain: read the truth with DeploymentStatus.
 type RollbackOutcome struct {
 	Result     DeployResult
 	Phase      string // Phase* of the helper's answer, "" when none
@@ -423,7 +437,7 @@ type RollbackOutcome struct {
 	Verified   string
 }
 
-// VerifyRequest checks which certificate the location's websites serve.
+// VerifyRequest (validated by the provider, like every request) checks which certificate the location's websites serve.
 type VerifyRequest struct {
 	Location            CertLocation
 	Fingerprint         string // expected leaf; "" = report what is served

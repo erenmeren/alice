@@ -204,3 +204,17 @@ func TestWrapBoundToKeyVersion(t *testing.T) {
 	_, err = v2.Open(loc, env)
 	assert.ErrorIs(t, err, secrets.ErrDecrypt)
 }
+
+func TestPlaintextZeroValueAndUnexportedFields(t *testing.T) {
+	var zero secrets.Plaintext
+	assert.Nil(t, zero.Bytes())
+	zero.Zero() // must not panic
+
+	holder := struct{ p secrets.Plaintext }{secrets.NewPlaintext([]byte("PLAIN-CANARY"))}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%d", "%x", "%q"} {
+		out := fmt.Sprintf(verb, holder)
+		assert.NotContains(t, out, "PLAIN-CANARY", verb)
+		assert.NotContains(t, out, "80 76 65 73 78", verb, verb) // decimal bytes of "PLAIN"
+		assert.NotContains(t, out, fmt.Sprintf("%x", "PLAIN-CANARY"), verb)
+	}
+}

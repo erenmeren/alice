@@ -115,6 +115,36 @@ type sessionOp struct {
 	call func(ctx context.Context, s providers.Session) (any, error)
 }
 
+// CheckDeployOutcome reports a DeployCertificate result that breaks the provider contract
+// (providers.CheckDeployReturn: Validate, and how the error relates to the Result). A provider
+// runs it on every outcome its own deploy tests produce.
+func CheckDeployOutcome(t testing.TB, out providers.DeployOutcome, err error) {
+	t.Helper()
+	if cerr := providers.CheckDeployReturn(out, err); cerr != nil {
+		t.Errorf("DeployCertificate: %v", cerr)
+	}
+}
+
+// CheckRollbackOutcome is CheckDeployOutcome for RollbackDeployment.
+func CheckRollbackOutcome(t testing.TB, out providers.RollbackOutcome, err error) {
+	t.Helper()
+	if cerr := providers.CheckRollbackReturn(out, err); cerr != nil {
+		t.Errorf("RollbackDeployment: %v", cerr)
+	}
+}
+
+// CheckDeploymentState reports a DeploymentStatus answer (returned with a nil err) that fails
+// DeploymentState.Validate.
+func CheckDeploymentState(t testing.TB, st providers.DeploymentState, err error) {
+	t.Helper()
+	if err != nil {
+		return
+	}
+	if verr := st.Validate(); verr != nil {
+		t.Errorf("DeploymentStatus returned an invalid result: %v", verr)
+	}
+}
+
 var sessionOps = []sessionOp{
 	{"TestConnection", providers.CapTestConnection, func(ctx context.Context, s providers.Session) (any, error) {
 		return s.TestConnection(ctx)
@@ -134,8 +164,8 @@ var sessionOps = []sessionOp{
 	{"RemoveAuthorizedKey", providers.CapAuthorizedKeys, func(ctx context.Context, s providers.Session) (any, error) {
 		return s.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{}, nil)
 	}},
-	// DeployCertificate and RollbackDeployment change servers: the provider's own tests cover
-	// them. DeploymentStatus only reads.
+	// DeployCertificate and RollbackDeployment change servers and cannot be called against a
+	// real counterpart here: only the read-only DeploymentStatus is. See CheckSession.
 	{"DeploymentStatus", providers.CapDeployCertificate, func(ctx context.Context, s providers.Session) (any, error) {
 		return s.DeploymentStatus(ctx, uuid.New())
 	}},
@@ -145,7 +175,13 @@ var sessionOps = []sessionOp{
 }
 
 // CheckSession runs the session conformance checks of spec §6.5 item 5 against a live
-// counterpart: every advertised capability's methods are implemented (never ErrUnsupported) and
+// counterpart. It cannot call DeployCertificate or RollbackDeployment (they change servers), so
+// for CapDeployCertificate it calls only the read-only DeploymentStatus and validates its answer.
+// A provider that advertises CapDeployCertificate must therefore carry its own test that
+// DeployCertificate and RollbackDeployment do not return ErrUnsupported, and run CheckDeployOutcome
+// and CheckRollbackOutcome on every outcome those tests produce.
+//
+// The checks: every advertised capability's methods are implemented (never ErrUnsupported) and
 // return only *providers.Error; the others answer ErrUnsupported (CheckUnsupported); Open and
 // every advertised method honour a cancelled context promptly with an error that wraps
 // context.Canceled; and no secret appears in any result or error, however it is rendered.
@@ -185,6 +221,9 @@ func CheckSession(t testing.TB, h SessionHarness) {
 		out, err := op.call(context.Background(), s)
 		_ = s.Close()
 		seen = append(seen, out, err)
+		if st, ok := out.(providers.DeploymentState); ok {
+			CheckDeploymentState(t, st, err)
+		}
 		switch {
 		case errors.Is(err, providers.ErrUnsupported):
 			t.Errorf("%s answers ErrUnsupported although %s is advertised", op.name, op.cap)

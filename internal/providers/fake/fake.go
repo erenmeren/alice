@@ -56,8 +56,10 @@ type Config struct {
 	Verify func(req providers.VerifyRequest) (providers.VerifyResult, error)
 	// Status decides DeploymentStatus; nil = phase none.
 	Status func(op uuid.UUID) (providers.DeploymentState, error)
-	// DeploySteps are the steps DeployCertificate reports (status ok) to its logger before the
-	// outcome; nil = the five helper steps and verify.
+	// DeploySteps, when non-nil (an empty slice included), are exactly the steps DeployCertificate
+	// reports (status ok) to its logger, whatever Deploy returns. When nil: with Deploy set, the
+	// steps of the outcome Deploy returns (with their statuses); on the default committed path,
+	// the five helper steps and verify. The default six never accompany a scripted outcome.
 	DeploySteps []string
 }
 
@@ -266,12 +268,20 @@ func (s *session) TestConnection(context.Context) (providers.ConnectionReport, e
 	return rep, cfg.TestErr
 }
 
-func (s *session) Discover(context.Context, providers.DiscoverRequest) (providers.DiscoveryResult, error) {
+func (s *session) Discover(_ context.Context, req providers.DiscoverRequest) (providers.DiscoveryResult, error) {
 	cfg := s.p.record(Call{Method: "Discover", Target: s.target})
 	if !s.p.caps.Has(providers.CapDiscoverSSHKeys) && !s.p.caps.Has(providers.CapDiscoverCerts) {
 		return providers.DiscoveryResult{}, providers.ErrUnsupported
 	}
-	return cfg.Discovery, cfg.DiscoverErr
+	res := cfg.Discovery
+	if !req.SSHKeys {
+		res.SSHKeys, res.HostKeys, res.SSHD, res.UnreadableLines = nil, nil, providers.SSHDSummary{}, nil
+		res.UID0Users, res.Accounts, res.AccountsComplete, res.ReadFiles = nil, nil, false, nil
+	}
+	if !req.Certificates {
+		res.Certificates, res.Nginx = nil, nil
+	}
+	return res, cfg.DiscoverErr
 }
 
 func (s *session) ListAuthorizedKeys(context.Context) ([]providers.DiscoveredSSHKey, error) {
@@ -298,6 +308,14 @@ func (s *session) RemoveAuthorizedKey(_ context.Context, req providers.AuthKeyCh
 	return cfg.RemoveResult, cfg.RemoveErr
 }
 
+// mustHonour panics when a scripted result breaks the provider contract: that is a mistake of the
+// test that scripted it, and failing loudly beats an engine test that passes on a bogus shape.
+func mustHonour(method string, err error) {
+	if err != nil {
+		panic("fake: scripted " + method + " result breaks the provider contract: " + err.Error())
+	}
+}
+
 func (s *session) DeployCertificate(_ context.Context, req providers.DeployRequest, log providers.StepLogger) (providers.DeployOutcome, error) {
 	kept := req
 	kept.PrivateKeyPEM = providers.DeployRequest{}.PrivateKeyPEM // the zero value: the fake never keeps a key
@@ -305,24 +323,37 @@ func (s *session) DeployCertificate(_ context.Context, req providers.DeployReque
 	if !s.p.caps.Has(providers.CapDeployCertificate) {
 		return providers.DeployOutcome{}, providers.ErrUnsupported
 	}
-	steps := cfg.DeploySteps
-	if steps == nil {
-		steps = defaultDeploySteps
-	}
-	var done []providers.DeployStep
-	for _, name := range steps {
-		if log != nil {
-			log.Step(name, providers.StepOK, nil)
-		}
-		done = append(done, providers.DeployStep{Name: name, Status: providers.StepOK})
-	}
+	var out providers.DeployOutcome
+	var err error
 	if cfg.Deploy != nil {
-		return cfg.Deploy(req)
+		out, err = cfg.Deploy(req)
+	} else {
+		names := defaultDeploySteps
+		if cfg.DeploySteps != nil {
+			names = cfg.DeploySteps
+		}
+		out = providers.DeployOutcome{
+			Result: providers.DeployCommitted, Phase: providers.PhaseCommitted,
+			Verified: "remote", Backup: providers.BackupRef{OperationID: req.OperationID},
+		}
+		for _, n := range names {
+			out.Steps = append(out.Steps, providers.DeployStep{Name: n, Status: providers.StepOK})
+		}
 	}
-	return providers.DeployOutcome{
-		Result: providers.DeployCommitted, Phase: providers.PhaseCommitted, Steps: done,
-		Verified: "remote", Backup: providers.BackupRef{OperationID: req.OperationID},
-	}, nil
+	mustHonour("DeployCertificate", providers.CheckDeployReturn(out, err))
+	if log != nil {
+		reported := out.Steps
+		if cfg.DeploySteps != nil && cfg.Deploy != nil {
+			reported = nil
+			for _, n := range cfg.DeploySteps {
+				reported = append(reported, providers.DeployStep{Name: n, Status: providers.StepOK})
+			}
+		}
+		for _, st := range reported {
+			log.Step(st.Name, st.Status, nil)
+		}
+	}
+	return out, err
 }
 
 func (s *session) RollbackDeployment(_ context.Context, req providers.RollbackRequest, _ providers.StepLogger) (providers.RollbackOutcome, error) {
@@ -330,10 +361,13 @@ func (s *session) RollbackDeployment(_ context.Context, req providers.RollbackRe
 	if !s.p.caps.Has(providers.CapDeployCertificate) {
 		return providers.RollbackOutcome{}, providers.ErrUnsupported
 	}
+	out := providers.RollbackOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestored, Verified: "remote"}
+	var err error
 	if cfg.Rollback != nil {
-		return cfg.Rollback(req)
+		out, err = cfg.Rollback(req)
 	}
-	return providers.RollbackOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestored, Verified: "remote"}, nil
+	mustHonour("RollbackDeployment", providers.CheckRollbackReturn(out, err))
+	return out, err
 }
 
 func (s *session) VerifyDeployment(_ context.Context, req providers.VerifyRequest) (providers.VerifyResult, error) {
@@ -352,10 +386,15 @@ func (s *session) DeploymentStatus(_ context.Context, op uuid.UUID) (providers.D
 	if !s.p.caps.Has(providers.CapDeployCertificate) {
 		return providers.DeploymentState{}, providers.ErrUnsupported
 	}
+	st := providers.DeploymentState{Phase: providers.PhaseNone}
+	var err error
 	if cfg.Status != nil {
-		return cfg.Status(op)
+		st, err = cfg.Status(op)
 	}
-	return providers.DeploymentState{Phase: providers.PhaseNone}, nil
+	if err == nil {
+		mustHonour("DeploymentStatus", st.Validate())
+	}
+	return st, err
 }
 
 var (

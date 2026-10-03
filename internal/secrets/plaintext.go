@@ -14,18 +14,32 @@ const redacted = "[redacted]"
 // Plaintext holds decrypted secret material. Every formatting, JSON and
 // logging path renders it as "[redacted]"; call Bytes to use the value and
 // Zero when done.
+//
+// The bytes sit behind a pointer to a pointer: fmt cannot call Format on a value reached through
+// an unexported struct field, and for a bad verb it prints what a plain pointer points to. A
+// pointer whose target is itself a pointer prints as an address in every case.
 type Plaintext struct {
-	b []byte
+	h *secretRef
 }
 
+type secretRef *[]byte
+
 // NewPlaintext wraps b without copying it.
-func NewPlaintext(b []byte) Plaintext { return Plaintext{b: b} }
+func NewPlaintext(b []byte) Plaintext {
+	r := secretRef(&b)
+	return Plaintext{h: &r}
+}
 
 // Bytes returns the secret bytes. The caller must not log them.
-func (p Plaintext) Bytes() []byte { return p.b }
+func (p Plaintext) Bytes() []byte {
+	if p.h == nil {
+		return nil
+	}
+	return **p.h
+}
 
 // Zero overwrites the secret bytes in place.
-func (p Plaintext) Zero() { clear(p.b) }
+func (p Plaintext) Zero() { clear(p.Bytes()) }
 
 // String implements fmt.Stringer.
 func (Plaintext) String() string { return redacted }

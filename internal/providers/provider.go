@@ -110,12 +110,19 @@ type Session interface {
 	AddAuthorizedKey(ctx context.Context, req AuthKeyChange, log StepLogger) (AuthKeyResult, error)
 	RemoveAuthorizedKey(ctx context.Context, req AuthKeyChange, log StepLogger) (AuthKeyResult, error)
 	// DeployCertificate (CapDeployCertificate) never returns a non-nil error together with a
-	// change it knows about: a known change is an outcome. A transport failure after the request
-	// was sent is DeployUncertain with the error; DeployNoChange is only a well-formed refusal.
+	// change it knows about: a known change is an outcome with a nil error. A well-formed helper
+	// refusal is DeployNoChange with a non-nil *Error; a transport failure after the request was
+	// sent, a timeout, an unparsable answer or an unexpected exit is DeployUncertain with the
+	// error (CheckDeployReturn lists every rule). A caller treats an outcome that fails
+	// DeployOutcome.Validate, a blank or unknown Result or an unmapped error as uncertain and reads
+	// the truth with DeploymentStatus.
 	DeployCertificate(ctx context.Context, req DeployRequest, log StepLogger) (DeployOutcome, error)
-	// RollbackDeployment (CapDeployCertificate) restores the files an operation replaced.
+	// RollbackDeployment (CapDeployCertificate) restores the files an operation replaced. The same
+	// rules apply (CheckRollbackReturn): an outcome that fails RollbackOutcome.Validate, a blank or
+	// unknown Result or an unmapped error is uncertain; read the truth with DeploymentStatus.
 	RollbackDeployment(ctx context.Context, req RollbackRequest, log StepLogger) (RollbackOutcome, error)
-	// DeploymentStatus (CapDeployCertificate) reads what the server knows about an operation.
+	// DeploymentStatus (CapDeployCertificate) reads what the server knows about an operation. A
+	// state that fails DeploymentState.Validate must not be acted on.
 	DeploymentStatus(ctx context.Context, op uuid.UUID) (DeploymentState, error)
 	// VerifyDeployment (CapVerifyDeployment) checks which certificate the location serves.
 	VerifyDeployment(ctx context.Context, req VerifyRequest) (VerifyResult, error)

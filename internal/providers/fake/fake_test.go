@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -414,26 +415,38 @@ func TestFakeDeployRecordsWithoutTheKey(t *testing.T) {
 	assert.Empty(t, last.Deploy.PrivateKeyPEM.Bytes())
 }
 
+func okSteps(names ...string) []providers.DeployStep {
+	var out []providers.DeployStep
+	for _, n := range names {
+		out = append(out, providers.DeployStep{Name: n, Status: providers.StepOK})
+	}
+	return out
+}
+
+// With Config.Deploy set the fake reports the steps of the outcome it returns, never the default six.
 func TestFakeDeploySimulatesEveryOutcome(t *testing.T) {
 	ctx := context.Background()
-	uncertain := providers.NewError("ssh.timeout", true, nil, nil)
+	refusal := providers.NewError("nginx.no_space", false, nil, nil)
+	lost := providers.NewError("ssh.timeout", true, nil, nil)
+	failedStep := providers.DeployStep{Name: "config_test", Status: providers.StepFailed, Error: providers.ConfigErrSyntax}
 	outcomes := []struct {
 		name  string
 		out   providers.DeployOutcome
 		err   error
-		steps []string
+		steps []string // names reported to the logger
 	}{
-		{"no change", providers.DeployOutcome{Result: providers.DeployNoChange, Reason: "nginx.no_space"}, nil, []string{}},
-		{"unchanged", providers.DeployOutcome{Result: providers.DeployUnchanged, Phase: providers.PhaseUnchanged}, nil, []string{"backup"}},
-		{"rolled back", providers.DeployOutcome{Result: providers.DeployRolledBack, FailedStep: "config_test"}, nil, []string{"backup", "write_key", "write_cert"}},
-		{"rollback failed", providers.DeployOutcome{Result: providers.DeployRollbackFailed, FailedStep: "restore"}, nil, []string{"backup"}},
-		{"uncertain", providers.DeployOutcome{Result: providers.DeployUncertain}, uncertain, []string{"backup", "write_key"}},
+		{"no change", providers.DeployOutcome{Result: providers.DeployNoChange, Reason: "nginx.no_space"}, refusal, nil},
+		{"unchanged", providers.DeployOutcome{Result: providers.DeployUnchanged, Phase: providers.PhaseUnchanged, Steps: okSteps("backup")}, nil, []string{"backup"}},
+		{"rolled back", providers.DeployOutcome{Result: providers.DeployRolledBack, FailedStep: "config_test", Reason: "certificate.config_invalid",
+			Steps: append(okSteps("backup", "write_key", "write_cert"), failedStep)}, nil, []string{"backup", "write_key", "write_cert", "config_test"}},
+		{"rollback failed", providers.DeployOutcome{Result: providers.DeployRollbackFailed, FailedStep: "restore", Reason: "deployment.rollback_failed", Steps: okSteps("backup")}, nil, []string{"backup"}},
+		{"uncertain", providers.DeployOutcome{Result: providers.DeployUncertain, Steps: okSteps("backup", "write_key")}, lost, []string{"backup", "write_key"}},
+		{"uncertain without steps", providers.DeployOutcome{Result: providers.DeployUncertain}, lost, nil},
 	}
 	for _, tc := range outcomes {
 		t.Run(tc.name, func(t *testing.T) {
 			p, s := openDeployFake(t, providers.CapDeployCertificate)
 			p.Configure(func(c *fake.Config) {
-				c.DeploySteps = tc.steps
 				c.Deploy = func(providers.DeployRequest) (providers.DeployOutcome, error) { return tc.out, tc.err }
 			})
 			var got []string
@@ -442,8 +455,128 @@ func TestFakeDeploySimulatesEveryOutcome(t *testing.T) {
 			}))
 			assert.Equal(t, tc.err, err)
 			assert.Equal(t, tc.out, out)
-			assert.ElementsMatch(t, tc.steps, got)
+			assert.Equal(t, tc.steps, got)
 		})
+	}
+}
+
+func TestFakeDeployStepStatusesComeFromTheOutcome(t *testing.T) {
+	p, s := openDeployFake(t, providers.CapDeployCertificate)
+	p.Configure(func(c *fake.Config) {
+		c.Deploy = func(providers.DeployRequest) (providers.DeployOutcome, error) {
+			return providers.DeployOutcome{Result: providers.DeployRolledBack, FailedStep: "reload", Reason: "r",
+				Steps: []providers.DeployStep{{Name: "backup", Status: providers.StepOK}, {Name: "reload", Status: providers.StepFailed}}}, nil
+		}
+	})
+	var got []string
+	_, err := s.DeployCertificate(context.Background(), providers.DeployRequest{}, stepFunc(func(n string, st providers.StepStatus, _ map[string]string) {
+		got = append(got, n+":"+string(st))
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"backup:ok", "reload:failed"}, got)
+}
+
+// DeploySteps, when set (even empty), overrides both the default six and the outcome's steps.
+func TestFakeDeployStepsOverride(t *testing.T) {
+	for name, tc := range map[string]struct {
+		steps  []string
+		script bool
+		want   []string
+	}{
+		"default committed path":       {nil, false, []string{"backup", "write_key", "write_cert", "config_test", "reload", "verify"}},
+		"explicit steps, default path": {[]string{"backup"}, false, []string{"backup"}},
+		"explicit empty, default path": {[]string{}, false, nil},
+		"explicit steps over outcome":  {[]string{"backup", "write_key"}, true, []string{"backup", "write_key"}},
+		"explicit empty over outcome":  {[]string{}, true, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, s := openDeployFake(t, providers.CapDeployCertificate)
+			p.Configure(func(c *fake.Config) {
+				c.DeploySteps = tc.steps
+				if tc.script {
+					c.Deploy = func(providers.DeployRequest) (providers.DeployOutcome, error) {
+						return providers.DeployOutcome{Result: providers.DeployCommitted, Steps: okSteps("other")}, nil
+					}
+				}
+			})
+			var got []string
+			_, err := s.DeployCertificate(context.Background(), providers.DeployRequest{}, stepFunc(func(n string, _ providers.StepStatus, _ map[string]string) {
+				got = append(got, n)
+			}))
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestFakeRejectsScriptedOutcomesThatBreakTheContract(t *testing.T) {
+	ctx := context.Background()
+	p, s := openDeployFake(t, providers.CapDeployCertificate)
+	p.Configure(func(c *fake.Config) {
+		c.Deploy = func(providers.DeployRequest) (providers.DeployOutcome, error) {
+			return providers.DeployOutcome{Result: providers.DeployNoChange, Reason: "r"}, nil // a refusal needs an error
+		}
+		c.Rollback = func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
+			return providers.RollbackOutcome{}, nil // blank result
+		}
+		c.Status = func(uuid.UUID) (providers.DeploymentState, error) {
+			return providers.DeploymentState{}, nil // blank phase
+		}
+	})
+	assert.PanicsWithValue(t, "fake: scripted DeployCertificate result breaks the provider contract: providers: deploy: no_change without an error: a refusal carries a *providers.Error",
+		func() { _, _ = s.DeployCertificate(ctx, providers.DeployRequest{}, nil) })
+	assert.PanicsWithValue(t, `fake: scripted RollbackDeployment result breaks the provider contract: providers: rollback outcome: blank or unknown result ""`,
+		func() { _, _ = s.RollbackDeployment(ctx, providers.RollbackRequest{}, nil) })
+	assert.PanicsWithValue(t, `fake: scripted DeploymentStatus result breaks the provider contract: providers: deployment state: blank or unknown phase "blank"`,
+		func() { _, _ = s.DeploymentStatus(ctx, uuid.New()) })
+}
+
+func TestFakeDiscoverHonoursTheRequest(t *testing.T) {
+	ctx := context.Background()
+	p, s := openDeployFake(t, providers.CapDiscoverSSHKeys, providers.CapDiscoverCerts)
+	p.Configure(func(c *fake.Config) {
+		c.Discovery = providers.DiscoveryResult{
+			SSHKeys: []providers.DiscoveredSSHKey{{Fingerprint: "SHA256:K"}}, HostKeys: []providers.DiscoveredHostKey{{Fingerprint: "SHA256:H"}},
+			SSHD: providers.SSHDSummary{Read: true}, UID0Users: []string{"root"}, Accounts: []string{"root"}, AccountsComplete: true,
+			ReadFiles: []string{"/root/.ssh/authorized_keys"}, UnreadableLines: []providers.UnreadableLine{{OSUser: "u"}},
+			Certificates: []providers.DiscoveredCertificate{{FileSHA256: "c"}}, Nginx: &providers.NginxFacts{Found: true},
+			Warnings: []providers.Warning{{Code: "w"}},
+		}
+	})
+	certs, err := s.Discover(ctx, providers.DiscoverRequest{Certificates: true})
+	require.NoError(t, err)
+	assert.Len(t, certs.Certificates, 1)
+	assert.NotNil(t, certs.Nginx)
+	assert.Empty(t, certs.SSHKeys)
+	assert.Empty(t, certs.HostKeys)
+	assert.Empty(t, certs.Accounts)
+	assert.False(t, certs.AccountsComplete)
+	assert.False(t, certs.SSHD.Read)
+	assert.Empty(t, certs.ReadFiles)
+	assert.Empty(t, certs.UID0Users)
+	assert.Empty(t, certs.UnreadableLines)
+
+	keys, err := s.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.Len(t, keys.SSHKeys, 1)
+	assert.True(t, keys.AccountsComplete)
+	assert.Empty(t, keys.Certificates)
+	assert.Nil(t, keys.Nginx)
+	assert.Equal(t, []providers.Warning{{Code: "w"}}, keys.Warnings)
+}
+
+func TestFakeCallNeverPrintsAKey(t *testing.T) {
+	const canary = "KEY-CANARY-FAKE"
+	call := fake.Call{Method: "DeployCertificate", Deploy: providers.DeployRequest{PrivateKeyPEM: secrets.NewPlaintext([]byte(canary))}}
+	raw := []byte(canary)
+	type wrapper struct{ c fake.Call }
+	for _, v := range []any{call, &call, wrapper{call}, []fake.Call{call}} {
+		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%d", "%x", "%q"} {
+			out := fmt.Sprintf(verb, v)
+			assert.NotContains(t, out, canary)
+			assert.NotContains(t, out, fmt.Sprintf("%x", canary))
+			assert.NotContains(t, out, strings.Trim(fmt.Sprintf("%d", raw), "[]"))
+		}
 	}
 }
 
