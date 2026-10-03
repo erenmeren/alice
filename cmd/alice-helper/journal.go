@@ -334,32 +334,67 @@ func (s *sys) setPairRecord(j journal, op string) error {
 	return dir.Sync()
 }
 
-// superseded reports that a later operation started replacing j's pair: the pair record names
-// another operation whose journal says it got past prepared. A record naming an operation that
-// has no directory or no journal, or whose journal says prepared or unchanged (a crash or a
-// refusal before its first rename, or a record that could not be put back), supersedes nothing.
-// An unreadable journal counts as superseding (never a way back on a guess).
+// maxRecordChain bounds the walk from a pair record through operations that changed nothing.
+const maxRecordChain = 64
+
+// latestOp resolves j's pair record to the operation that last actually replaced files: an
+// operation whose journal says prepared or unchanged changed nothing, so the record falls through
+// to its prev_record. ok is false when that cannot be decided (a record naming an operation
+// without a directory or a journal — removed by cleanup or the sweep — an unreadable journal, a
+// loop, or a chain longer than maxRecordChain): the caller then treats every other operation as
+// superseded. op "" with ok means no operation ever replaced the pair's files.
+func (s *sys) latestOp(j journal) (op string, ok bool, err error) {
+	op, err = s.pairRecord(j)
+	if err != nil {
+		return "", false, err
+	}
+	seen := map[string]bool{}
+	for range maxRecordChain {
+		if op == "" || op == j.Op || seen[op] {
+			return op, !seen[op], nil
+		}
+		seen[op] = true
+		dir, err := s.opDir(op, false)
+		if err != nil {
+			return op, false, nil
+		}
+		other, found, err := readJournal(dir, op)
+		_ = dir.Close()
+		if err != nil || !found {
+			return op, false, nil
+		}
+		if other.Phase != helperproto.PhasePrepared && other.Phase != helperproto.PhaseUnchanged {
+			return op, true, nil
+		}
+		op = other.PrevRecord
+	}
+	return op, false, nil
+}
+
+// superseded reports that j is not the operation that last actually replaced its pair's files
+// (or that this cannot be established). Once the pair's latest operation is cleaned up or swept,
+// no older retained operation of that pair can be restored.
 func (s *sys) superseded(j journal) (bool, error) {
-	op, err := s.pairRecord(j)
-	if err != nil || op == "" || op == j.Op {
+	op, ok, err := s.latestOp(j)
+	if err != nil {
 		return false, err
 	}
-	dir, err := s.opDir(op, false)
-	if errors.Is(err, unix.ENOENT) {
-		return false, nil
+	return !ok || (op != "" && op != j.Op), nil
+}
+
+// releaseRecord hands the pair record back to prev_record before an operation that changed
+// nothing (prepared, unchanged) is removed while the record names it, so removing a no-op never
+// makes the operation before it unrestorable. false: the record could not be updated (the
+// operation is then kept).
+func (s *sys) releaseRecord(j journal) bool {
+	if j.Phase != helperproto.PhasePrepared && j.Phase != helperproto.PhaseUnchanged {
+		return true
 	}
+	rec, err := s.pairRecord(j)
 	if err != nil {
-		return true, nil
+		return false
 	}
-	defer func() { _ = dir.Close() }()
-	other, found, err := readJournal(dir, op)
-	switch {
-	case err != nil:
-		return true, nil
-	case !found, other.Phase == helperproto.PhasePrepared, other.Phase == helperproto.PhaseUnchanged:
-		return false, nil
-	}
-	return true, nil
+	return rec != j.Op || s.setPairRecord(j, j.PrevRecord) == nil
 }
 
 // survive turns the test kill (errKilled) into an IO_ERROR answer; any other panic goes on.

@@ -289,6 +289,17 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 		KeyMeta:  fileMeta{Mode: key.st.Mode & 0o777, UID: int(key.st.Uid), GID: int(key.st.Gid)},
 		KeyIDs:   keyIDs{Old: idOf(key.st)},
 		Steps:    []helperproto.NginxStep{}}
+	// The pair record before this operation (New-3): a re-run after a crash between taking the
+	// record and the writing journal finds itself there and keeps the previous value it saved (an
+	// unchanged re-run keeps it too, so the record resolves through it).
+	rec, err := s.pairRecord(j)
+	if err != nil {
+		return nil, failed(helperproto.CodeIOError, "the record of the latest deployment cannot be read")
+	}
+	j.PrevRecord = rec
+	if prior != nil && rec == d.op {
+		j.PrevRecord = prior.PrevRecord
+	}
 	if bytes.Equal(cert.data, d.cert) && bytes.Equal(key.data, d.key) {
 		// §12.9 "Same cert already deployed": no write, no reload.
 		j.Phase = helperproto.PhaseUnchanged
@@ -325,17 +336,6 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 	}
 	if ctx.Err() != nil {
 		return refuse(failed(helperproto.CodeIOError, "the time budget ended before anything was changed"))
-	}
-
-	// The pair record before this operation (New-3): a re-run after a crash between taking the
-	// record and the writing journal finds itself there and keeps the previous value it saved.
-	rec, err := s.pairRecord(j)
-	if err != nil {
-		return refuse(failed(helperproto.CodeIOError, "the record of the latest deployment cannot be read"))
-	}
-	j.PrevRecord = rec
-	if prior != nil && rec == d.op {
-		j.PrevRecord = prior.PrevRecord
 	}
 
 	// 1. The journal, then the backups (nothing is replaced yet: a failure is a refusal).

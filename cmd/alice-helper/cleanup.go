@@ -56,10 +56,7 @@ func cmdCleanup(ctx context.Context, s *sys, args []string) (any, error) {
 		_ = root.Sync()
 		return helperproto.CleanupResponse{OK: true, Removed: 1}, nil
 	}
-	if !s.nginxOperation(root, op) {
-		if err := removeAt(root, op); err != nil {
-			return nil, failed(helperproto.CodeIOError, "the backups cannot be removed")
-		}
+	if !s.nginxOperation(root, op) && removeAuthKeysOp(root, op) {
 		return helperproto.CleanupResponse{OK: true, Removed: 1}, nil
 	}
 	lock, err := s.nginxLock(ctx)
@@ -71,12 +68,43 @@ func cmdCleanup(ctx context.Context, s *sys, args []string) (any, error) {
 		if s.keepForRecovery(j, true) {
 			return nil, failed(helperproto.CodeBusy, "the deployment is not finished; restore it before its backups are removed")
 		}
+		if !s.releaseRecord(j) {
+			return nil, failed(helperproto.CodeIOError, "the record of the latest deployment cannot be updated")
+		}
 		s.cleanStaged(j)
 	}
 	if err := removeAt(root, op); err != nil {
 		return nil, failed(helperproto.CodeIOError, "the backups cannot be removed")
 	}
 	return helperproto.CleanupResponse{OK: true, Removed: 1}, nil
+}
+
+// authKeysEntry matches the files authkeys-write keeps in an operation directory.
+var authKeysEntry = regexp.MustCompile(`^[0-9]+\.(bak|json)$`)
+
+// removeAuthKeysOp removes an authorized_keys operation directory without the Nginx lock: only
+// <n>.bak and <n>.json are unlinked, then the directory is removed only if that left it empty.
+// Anything else (an Nginx deployment that reused the id and wrote meanwhile) stays, and false
+// sends the caller to the locked path.
+func removeAuthKeysOp(root *os.File, name string) bool {
+	dir, err := subdir(root, name, false)
+	if err != nil {
+		return false
+	}
+	names, err := dir.Readdirnames(-1)
+	if err == nil {
+		for _, n := range names {
+			if authKeysEntry.MatchString(n) {
+				_ = unix.Unlinkat(int(dir.Fd()), n, 0) //nolint:gosec // G115: a descriptor fits an int
+			}
+		}
+	}
+	_ = dir.Close()
+	if unix.Unlinkat(int(root.Fd()), name, unix.AT_REMOVEDIR) != nil { //nolint:gosec // G115: a descriptor fits an int
+		return false
+	}
+	_ = root.Sync()
+	return true
 }
 
 // nginxOperation reports a directory that holds a name only an Nginx operation writes (or that
@@ -186,6 +214,9 @@ func (s *sys) sweepBackups() {
 			}
 		}
 		if ok {
+			if !s.releaseRecord(j) {
+				continue
+			}
 			s.cleanStaged(j)
 		}
 		_ = removeAt(root, name)
