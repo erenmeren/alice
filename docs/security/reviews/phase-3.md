@@ -88,15 +88,18 @@ No High finding is open except the documented product residual P3-01.
 - **Helper base directory.** The helper opens the base directory of a key file (the user's home, or the directory
   an absolute `AuthorizedKeysFile` names) by its path and resolves everything below it through that descriptor.
   This is safe only while every directory above it (for example `/home` and `/`) is controlled by root, so the
-  helper checks it at the scan: every existing directory above the home (and above the directory of an absolute
-  pattern outside the home) must be root's and not group or other writable. When the home path goes through a
-  symlink, the resolved home must also belong to the account (root excepted) and sit in such a directory.
-  Otherwise the account's key files are reported as unsupported and never read or written. Standard layouts
-  (`/home/<u>`, `/root`, `/var/lib/<x>`) pass; a home below a directory other users can write (for example a
-  group-writable `/srv/homes`) does not. The check and the open are separate steps: a root-controlled layout
+  helper checks it at the scan: every existing directory above the home must be root's and not group or other
+  writable. A symlink among those directories is accepted only when root owns it and the path it leads to passes
+  the same check (at most 40 links, so a loop is refused); this covers `/home -> /data/home` and Fedora's
+  `/home -> var/home`. A symlink owned by another user, or one that leads into a directory another user owns or
+  can write, makes the account unsupported. A home that is itself a symlink must lead to a directory owned by the
+  account (root excepted) below such directories. The directory of an absolute pattern outside the home must not
+  be reached through any symlink. Otherwise the account's key files are reported as unsupported and never read
+  or written. Standard layouts (`/home/<u>`, `/root`, `/var/lib/<x>`) pass; a home below a directory other users
+  can write (for example a group-writable `/srv/homes`) does not. The check and the open are separate steps: a root-controlled layout
   cannot change in between, which is why the check is required.
 - **Last-key guard for uid-0 accounts.** Alice's linuxssh provider refuses the last key of every uid-0 account
-  (`root`, `toor`, …) without an administrator's confirmation (it asks the helper for the uid). Inventory's own
+  (`root`, `toor`, …) without an administrator's confirmation (it uses the uid of an account listing this session already made, and treats the name `root` as uid 0 always; the helper lists no other uid-0 account today). Inventory's own
   pre-check before queueing a removal still looks at the name `root` only, so for another uid-0 account the refusal
   arrives when the job runs rather than when the removal is requested.
 - **`.ssh` created with root's supplementary groups.** The helper creates a missing `.ssh` with the user's
