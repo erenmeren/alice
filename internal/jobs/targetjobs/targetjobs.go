@@ -137,9 +137,10 @@ func (h *handlers) testConnection(ctx context.Context, j jobs.Job, _ jobs.StepRe
 		return nil, jobs.Retry("internal.unexpected", nil, err)
 	}
 	out := map[string]any{"host_key_fingerprint": rep.HostKey.Fingerprint, "helper_version": rep.HelperVersion}
-	// The first successful test after a confirmation or a re-pin (status checking), or of a target
-	// never scanned, starts a discovery by itself, once the target is connected (status ok).
-	if t.Status != inventory.StatusChecking && t.LastDiscoveryAt != nil {
+	// The first successful test after a confirmation or a re-pin (status checking), of a server
+	// that was unreachable (the scheduled re-test, ScheduleDiscovery), or of a target never
+	// scanned, starts a discovery by itself, once the target is connected (status ok).
+	if t.Status != inventory.StatusChecking && t.Status != inventory.StatusUnreachable && t.LastDiscoveryAt != nil {
 		return out, nil
 	}
 	_, now, err := h.d.Inventory.TargetRef(ctx, j.TargetID)

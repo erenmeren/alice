@@ -102,7 +102,8 @@ func clean(s string) string {
 // (the provider puts it in ReadFiles), so the keys of a deleted file are marked missing. The
 // location of the platform key (the fingerprint in the platform_ssh credential) is marked as
 // Alice's connection key (SEC-081); the mark is never cleared here (the protection trigger would
-// refuse it).
+// refuse it). A successful scan also records the connection (markConnected): an unreachable or
+// checking target is "ok" again.
 func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.DiscoveryResult) (ReconcileSummary, error) {
 	var sum ReconcileSummary
 	now := s.clock.Now().UTC()
@@ -169,6 +170,10 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL
     keys_managed_elsewhere = CASE WHEN $5 THEN $3 ELSE keys_managed_elsewhere END, last_discovery_at = $4, updated_at = $4
 WHERE id = $1`, id, raw, res.SSHD.KeysManagedElsewhere, now, res.SSHD.Read); err != nil {
 			return fmt.Errorf("inventory: store discovery facts: %w", err)
+		}
+		// The scan reached the server: an unreachable target is connected again (statusAfterSuccess).
+		if err := s.markConnected(ctx, tx, t, now, false, "discovery_ok", nil); err != nil {
+			return err
 		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("jobs"), Action: "target.discovered",
 			ObjectType: "target", ObjectID: id.String(), Result: audit.Success, Details: map[string]string{

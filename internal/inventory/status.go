@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -48,13 +49,50 @@ func pinnedFingerprint(ctx context.Context, tx pgx.Tx, id uuid.UUID) (string, er
 	return fp, nil
 }
 
-// RecordConnectionOK stores a successful connection test: status ok, operating system and helper
-// facts, last success time. Only a re-pin leaves host_key_changed (its block reason is kept), only
-// a confirmation leaves pending_host_key, and disabled stays disabled, so neither a late report
-// nor one for a target without a pinned key changes those statuses. A blocked target whose server
-// presented the pinned key again has its outstanding candidates rejected: the server stopped
-// presenting them, so they can never be accepted; the Administrator dismisses the change by
-// re-pinning the pinned key (RepinHostKey).
+// statusAfterSuccess is the status of a target after an operation reached the server over SSH
+// (pinned reports that a key is pinned). Only a re-pin leaves host_key_changed, only a
+// confirmation leaves pending_host_key, and disabled stays disabled, so neither a late report nor
+// one for a target without a pinned key changes those statuses. An explicit connection test (test)
+// connects every other status. A discovery or a removal connects only an unreachable or checking
+// target with a pinned key: it never clears what a person must look at (auth_failed).
+func statusAfterSuccess(current string, pinned, test bool) string {
+	switch {
+	case current == StatusHostKeyChanged || current == StatusDisabled:
+		return current
+	case test && !pinned:
+		return StatusPendingHostKey
+	case test, pinned && (current == StatusUnreachable || current == StatusChecking):
+		return StatusOK
+	}
+	return current
+}
+
+// markConnected stores a successful operation on the locked target t (see statusAfterSuccess):
+// the status, the last success time and, unless the status still names a problem, an empty last
+// error. reason names the operation in the status-change audit row; it runs last in its
+// transaction's status updates.
+func (s *Service) markConnected(ctx context.Context, tx pgx.Tx, t Target, now time.Time, test bool, reason string, facts []byte) error {
+	pinned, err := pinnedFingerprint(ctx, tx, t.ID)
+	if err != nil {
+		return err
+	}
+	to := statusAfterSuccess(t.Status, pinned != "", test)
+	errorCode := ""
+	if to == StatusHostKeyChanged || to == StatusAuthFailed {
+		errorCode = t.LastErrorCode // the block reason stays until a person acts
+	}
+	if _, err := tx.Exec(ctx, `UPDATE targets SET status = $2, last_error_code = $3, last_success_at = $4, updated_at = $4,
+    facts = coalesce($5, facts) WHERE id = $1`, t.ID, to, errorCode, now, facts); err != nil {
+		return fmt.Errorf("inventory: record a successful connection: %w", err)
+	}
+	return s.auditStatus(ctx, tx, t, to, reason)
+}
+
+// RecordConnectionOK stores a successful connection test: status (statusAfterSuccess), operating
+// system and helper facts, last success time. A blocked target whose server presented the pinned
+// key again has its outstanding candidates rejected: the server stopped presenting them, so they
+// can never be accepted; the Administrator dismisses the change by re-pinning the pinned key
+// (RepinHostKey).
 func (s *Service) RecordConnectionOK(ctx context.Context, id uuid.UUID, r providers.ConnectionReport) error {
 	now := s.clock.Now().UTC()
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -62,23 +100,16 @@ func (s *Service) RecordConnectionOK(ctx context.Context, id uuid.UUID, r provid
 		if err != nil {
 			return err
 		}
-		pinned, err := pinnedFingerprint(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		to, errorCode := StatusOK, ""
-		switch {
-		case t.Status == StatusHostKeyChanged:
-			to, errorCode = t.Status, t.LastErrorCode
-			if r.HostKey.Fingerprint != "" && r.HostKey.Fingerprint == pinned {
+		if t.Status == StatusHostKeyChanged && r.HostKey.Fingerprint != "" {
+			pinned, err := pinnedFingerprint(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if r.HostKey.Fingerprint == pinned {
 				if err := rejectCandidates(ctx, tx, id); err != nil {
 					return err
 				}
 			}
-		case t.Status == StatusDisabled:
-			to = t.Status
-		case pinned == "":
-			to = StatusPendingHostKey
 		}
 		f := t.Facts
 		f.OS, f.HelperVersion, f.HelperProtocol = r.OS, r.HelperVersion, r.HelperProtocol
@@ -86,11 +117,7 @@ func (s *Service) RecordConnectionOK(ctx context.Context, id uuid.UUID, r provid
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE targets SET status = $2, facts = $3, last_success_at = $4, last_error_code = $5, updated_at = $4
-WHERE id = $1`, id, to, raw, now, errorCode); err != nil {
-			return fmt.Errorf("inventory: record connection: %w", err)
-		}
-		return s.auditStatus(ctx, tx, t, to, "connection_ok")
+		return s.markConnected(ctx, tx, t, now, true, "connection_ok", raw)
 	})
 }
 

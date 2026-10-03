@@ -185,10 +185,24 @@ func protectedFingerprints(ctx context.Context, q db.Querier) ([]string, error) 
 
 // MarkKeyRemoved records a removal the provider applied. actor is the job's system actor; its
 // RequestID is the job id, which links this row to sshkey.remove_requested. Alice's own key is
-// refused here, and the database trigger refuses it even if this check had a bug.
+// refused here, and the database trigger refuses it even if this check had a bug. The removal
+// reached the server, so the target's connection is recorded too (markConnected). The target row
+// is locked before the location (Reconcile's and RequestKeyRemoval's order).
 func (s *Service) MarkKeyRemoved(ctx context.Context, locationID uuid.UUID, actor audit.Actor, res providers.AuthKeyResult) error {
 	now := s.clock.Now().UTC()
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var targetID uuid.UUID
+		err := tx.QueryRow(ctx, "SELECT target_id FROM ssh_key_locations WHERE id = $1", locationID).Scan(&targetID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("inventory: read key location: %w", err)
+		}
+		t, err := getTarget(ctx, tx, targetID, true)
+		if err != nil {
+			return err
+		}
 		loc, err := scanLocation(tx.QueryRow(ctx, locationSelect+" WHERE l.id = $1 FOR UPDATE OF l", locationID))
 		if err != nil {
 			return err
@@ -203,6 +217,9 @@ func (s *Service) MarkKeyRemoved(ctx context.Context, locationID uuid.UUID, acto
 		if _, err := tx.Exec(ctx, `UPDATE ssh_key_locations SET removed_by_alice_at = $2, missing_since = coalesce(missing_since, $2)
 WHERE id = $1`, locationID, now); err != nil {
 			return fmt.Errorf("inventory: mark key removed: %w", err)
+		}
+		if err := s.markConnected(ctx, tx, t, now, false, "removal_ok", nil); err != nil {
+			return err
 		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "sshkey.removed", ObjectType: "ssh_key_location",
 			ObjectID: locationID.String(), Result: audit.Success, Details: map[string]string{
