@@ -21,6 +21,10 @@ test: ## Run Go unit tests with the race detector (release build, plus the e2e a
 test-integration: ## Run integration tests (needs Docker)
 	go test -race -count=1 -tags integration ./...
 
+.PHONY: test-ssh
+test-ssh: ## Run the real OpenSSH matrix (Ubuntu 22.04, Debian 12, Rocky 9; needs Docker). ALICE_SSH_IMAGES=ubuntu22 limits it
+	go test -count=1 -tags integration -run TestRealOpenSSH ./internal/providers/linuxssh/
+
 .PHONY: i18n-check
 i18n-check: ## Verify EN/TR translation catalogs have identical keys and placeholders
 	go run ./tools/i18n-check locales/common web/src/locales
