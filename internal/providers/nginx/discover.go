@@ -122,6 +122,28 @@ func cleanPath(v string) string {
 	return c
 }
 
+// shownPath is how a pair path of the dump is shown: the raw value when helperproto.ValidPath
+// holds (it is then clean already), else invalidPath; "" for "".
+func shownPath(raw string) string {
+	switch {
+	case raw == "":
+		return ""
+	case helperproto.ValidPath(raw):
+		return raw
+	}
+	return invalidPath(raw)
+}
+
+// invalidPath shows a pair path that fails helperproto.ValidPath (the location is path_not_allowed):
+// the raw value, cut at maxPathLength bytes, quoted with Go escapes. It is never a cleaned rewrite
+// that could read as (or merge with) another, real path, and never starts with "/".
+func invalidPath(raw string) string {
+	if len(raw) > maxPathLength {
+		raw = raw[:maxPathLength]
+	}
+	return strconv.QuoteToASCII(raw)
+}
+
 func knownOrEmpty(v string, set []string) string {
 	if slices.Contains(set, v) {
 		return v
@@ -211,7 +233,11 @@ func sameServer(a, b providers.CertServer) bool {
 func convert(d helperproto.NginxDumpResponse) ([]providers.DiscoveredCertificate, []providers.Warning) {
 	files := map[string]helperproto.NginxFile{}
 	for _, f := range d.Files {
-		files[f.Kind+"\x00"+clean(f.Path, maxPathLength)] = f
+		// Keyed by the raw path, and only a valid one: a spelling that cleaning would turn into a
+		// real path never describes that path's file.
+		if helperproto.ValidPath(f.Path) {
+			files[f.Kind+"\x00"+f.Path] = f
+		}
 	}
 	builds := map[string]*build{}
 	var order []*build
@@ -220,7 +246,7 @@ func convert(d helperproto.NginxDumpResponse) ([]providers.DiscoveredCertificate
 		cs, cut := certServer(s)
 		truncated = truncated || cut
 		for _, p := range s.Pairs {
-			certPath := clean(p.Cert, maxPathLength)
+			certPath := shownPath(p.Cert)
 			if certPath == "" {
 				certPath = clean(p.Raw, maxPathLength)
 			}
@@ -251,7 +277,7 @@ func convert(d helperproto.NginxDumpResponse) ([]providers.DiscoveredCertificate
 			} else if b.pairReason == "" {
 				b.pairReason = reason
 			}
-			if k := clean(p.Key, maxPathLength); k != "" {
+			if k := shownPath(p.Key); k != "" {
 				if b.key == "" {
 					b.key = k
 				} else if b.key != k {

@@ -486,8 +486,52 @@ func TestConvertPairPathsAreValidatedRaw(t *testing.T) {
 			assert.Equal(t, providers.UnsupportedPathNotAllowed, got[0].Location.Unsupported)
 			assert.Empty(t, got[0].PEMChain)
 			assert.NotContains(t, got[0].Location.CertPath, "\n")
+			// The shown paths are the raw values, marked, never a cleaned rewrite of them.
+			for _, sh := range []struct{ shown, raw string }{{got[0].Location.CertPath, tc.cert}, {got[0].Location.KeyPath, tc.key}} {
+				if helperproto.ValidPath(sh.raw) {
+					assert.Equal(t, sh.raw, sh.shown)
+					continue
+				}
+				assert.Equal(t, invalidPath(sh.raw), sh.shown)
+				assert.NotEqual(t, clean(sh.raw, maxPathLength), sh.shown, "not a rewrite")
+				assert.False(t, strings.HasPrefix(sh.shown, "/"), "never shown as a path")
+			}
 		})
 	}
+}
+
+// An invalid spelling of a real path neither hides the real location nor describes its files.
+func TestConvertInvalidPathsNeverMergeWithRealOnes(t *testing.T) {
+	u := newUnitCerts(t)
+	other := newUnitCerts(t)
+	const c, k = "/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key"
+	d := validDump([]helperproto.NginxServer{
+		server([]string{"a"}, 443, pair(c, k)),
+		server([]string{"b"}, 443, pair(c+"\n", k)),
+	}, certFile(c, u.chain), keyFile(k), certFile(c+"\n", other.chain), keyFile(k+"\t"))
+	got, _ := convert(d)
+	require.Len(t, got, 2)
+	byPath := map[string]providers.DiscoveredCertificate{}
+	for _, g := range got {
+		byPath[g.Location.CertPath] = g
+	}
+	real, ok := byPath[c]
+	require.True(t, ok)
+	assert.True(t, real.Location.Supported, "the real location stays supported")
+	assert.Equal(t, string(u.chain), string(real.PEMChain), "described by its own file, not by the invalid spelling's")
+	bad, ok := byPath[invalidPath(c+"\n")]
+	require.True(t, ok)
+	assert.Equal(t, providers.UnsupportedPathNotAllowed, bad.Location.Unsupported)
+	assert.Equal(t, k, bad.Location.KeyPath)
+
+	// The file list is keyed by valid raw paths only: a later invalid entry does not replace the real one.
+	d = validDump([]helperproto.NginxServer{server([]string{"a"}, 443, pair(c, k))}, certFile(c, u.chain), keyFile(k), certFile(c+" ", other.chain))
+	got, _ = convert(d)
+	require.Len(t, got, 1)
+	assert.Equal(t, string(u.chain), string(got[0].PEMChain))
+	assert.Equal(t, hexSHA(u.chain), got[0].FileSHA256)
+	assert.Equal(t, `"/a\n\x1b"`, invalidPath("/a\n\x1b"))
+	assert.LessOrEqual(t, len(invalidPath(strings.Repeat("\x01", 10000))), 4*maxPathLength+2, "bounded")
 }
 
 func TestConvertTruncationIsReported(t *testing.T) {
