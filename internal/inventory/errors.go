@@ -39,13 +39,16 @@ var (
 	ErrCertificateDuplicate = errors.New("inventory: Alice already holds this certificate with its key")
 	ErrCSRNotPending        = errors.New("inventory: the signing request is no longer open")
 	ErrLocationUnsupported  = errors.New("inventory: certificates cannot be deployed to this location")
-	ErrCertificateInvalid   = certs.ErrInvalid
-	ErrKeyMismatch          = certs.ErrKeyMismatch
-	ErrCertificateExpired   = certs.ErrExpired // also returned by RequestDeployment (Task 15)
-	ErrKeyEncrypted         = certs.ErrKeyEncrypted
-	ErrPFXPassword          = certs.ErrPFXPassword
-	ErrWeakCertificate      = certs.ErrWeak
-	ErrUnsupportedKey       = certs.ErrUnsupportedKey
-	ErrCSRMismatch          = certs.ErrCSRMismatch
-	ErrCertificateTooLarge  = certs.ErrTooLarge
+	// ErrPFXBusy: the process already decodes as many PFX files as it allows at once
+	// (maxPFXDecodes); retryable.
+	ErrPFXBusy             = errors.New("inventory: too many PFX files are being read; try again shortly")
+	ErrCertificateInvalid  = certs.ErrInvalid
+	ErrKeyMismatch         = certs.ErrKeyMismatch
+	ErrCertificateExpired  = certs.ErrExpired // also returned by RequestDeployment (Task 15)
+	ErrKeyEncrypted        = certs.ErrKeyEncrypted
+	ErrPFXPassword         = certs.ErrPFXPassword
+	ErrWeakCertificate     = certs.ErrWeak
+	ErrUnsupportedKey      = certs.ErrUnsupportedKey
+	ErrCSRMismatch         = certs.ErrCSRMismatch
+	ErrCertificateTooLarge = certs.ErrTooLarge
 )

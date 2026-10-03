@@ -32,3 +32,23 @@ func ServersTextBound(servers []providers.CertServer) int {
 func (s *Service) LoadKey(ctx context.Context, id uuid.UUID) (secrets.Plaintext, error) {
 	return s.loadKey(ctx, s.pool, id)
 }
+
+// HoldPFXSlots takes n PFX decode slots without waiting; ok is false (and nothing is held) when
+// they are not all free. release gives them back.
+func HoldPFXSlots(n int) (release func(), ok bool) {
+	var held []func()
+	release = func() {
+		for _, r := range held {
+			r()
+		}
+	}
+	for range n {
+		r, ok := acquirePFXSlot()
+		if !ok {
+			release()
+			return func() {}, false
+		}
+		held = append(held, r)
+	}
+	return release, true
+}

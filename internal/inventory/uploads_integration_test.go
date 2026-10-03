@@ -3,6 +3,7 @@
 package inventory_test
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
@@ -189,7 +190,7 @@ func TestUploadRefusalsAreAuditedAndStoreNothing(t *testing.T) {
 	assert.Equal(t, []string{"key_mismatch", "pfx_password", "invalid", "expired", "key_encrypted", "weak", "unsupported_key", "too_large",
 		"too_large", "invalid"}, rejectReasons(h))
 
-	// Field errors are not audited.
+	// Field errors: a PEM upload's are not audited; every PFX attempt is (the carried mitigation).
 	_, _, err := h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{})
 	assert.Equal(t, map[string]string{"certificate_pem": validate.Required, "private_key_pem": validate.Required,
 		"pfx_base64": validate.Required}, fieldsOf(err), "neither PEM nor PFX")
@@ -215,11 +216,11 @@ func TestUploadRefusalsAreAuditedAndStoreNothing(t *testing.T) {
 	assert.Equal(t, 0, h.count("SELECT count(*) FROM certificates"))
 	assert.Equal(t, 0, h.count("SELECT count(*) FROM managed_private_keys"))
 	assert.Equal(t, []string{"key_mismatch", "pfx_password", "invalid", "expired", "key_encrypted", "weak", "unsupported_key", "too_large",
-		"too_large", "invalid"}, rejectReasons(h))
+		"too_large", "invalid", "validation", "validation"}, rejectReasons(h))
 	for _, d := range h.auditDetails("certificate.upload_rejected") {
 		assert.Contains(t, []string{"pem", "pfx"}, d["format"])
 	}
-	assert.Equal(t, 10, h.count("SELECT count(*) FROM audit_log WHERE action = 'certificate.upload_rejected' AND result = 'failure' AND actor_id = $1",
+	assert.Equal(t, 12, h.count("SELECT count(*) FROM audit_log WHERE action = 'certificate.upload_rejected' AND result = 'failure' AND actor_id = $1",
 		op.UserID))
 }
 
@@ -420,4 +421,61 @@ func TestConcurrentUploadsOfOnePair(t *testing.T) {
 	}
 	assert.Equal(t, 1, ok)
 	assert.Equal(t, 1, h.count("SELECT count(*) FROM managed_private_keys"))
+}
+
+// The carried PFX mitigation: at most two PFX files are decoded at once; a third is refused at
+// once with a retryable error and audited. PEM uploads do not wait for PFX decodes. Every path
+// gives the slot back.
+func TestPFXDecodesAreCapped(t *testing.T) {
+	h := newHarness(t)
+	op := h.user("oya", rbac.Operator, "")
+	ca := pki.NewCA("Up", pki.ECDSA256, h.clock.Now())
+	l := ca.Issue(pki.Opts{CommonName: "pfx.example.test"}, h.clock.Now())
+	pfx := inventory.UploadInput{PFXBase64: base64.StdEncoding.EncodeToString(pki.PFX(l, ca, "pw")), PFXPassword: "pw"}
+
+	// Failures of every kind give the slot back.
+	for _, in := range []inventory.UploadInput{{PFXBase64: "!!!"}, {PFXBase64: pfx.PFXBase64, PFXPassword: "wrong"},
+		{PFXBase64: base64.StdEncoding.EncodeToString([]byte("not a pfx"))}} {
+		_, _, err := h.svc.UploadCertificate(h.ctx, op, in)
+		require.Error(t, err)
+	}
+	release, ok := inventory.HoldPFXSlots(2)
+	require.True(t, ok, "both slots are free after the failures")
+
+	_, _, err := h.svc.UploadCertificate(h.ctx, op, pfx)
+	require.ErrorIs(t, err, inventory.ErrPFXBusy)
+	assert.Equal(t, "busy", rejectReasons(h)[len(rejectReasons(h))-1])
+	assert.Equal(t, 0, h.count("SELECT count(*) FROM certificates"))
+	pemLeaf := ca.Issue(pki.Opts{CommonName: "pem.example.test"}, h.clock.Now())
+	_, _, err = h.svc.UploadCertificate(h.ctx, op, pemUpload(pemLeaf))
+	require.NoError(t, err, "a PEM upload does not need a PFX slot")
+	release()
+
+	_, _, err = h.svc.UploadCertificate(h.ctx, op, pfx)
+	require.NoError(t, err)
+	release, ok = inventory.HoldPFXSlots(2)
+	require.True(t, ok, "the slot is back after a success")
+	release()
+	assert.Equal(t, []string{"invalid", "pfx_password", "pfx_password", "busy"}, rejectReasons(h))
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM audit_log WHERE action = 'certificate.uploaded' AND details->>'format' = 'pfx'"))
+}
+
+// Every PFX attempt is on record, even one the database failed (here: the request was cancelled
+// before the transaction began); the record does not depend on the request's context.
+func TestFailedPFXUploadIsAudited(t *testing.T) {
+	h := newHarness(t)
+	op := h.user("oya", rbac.Operator, "")
+	ca := pki.NewCA("Up", pki.ECDSA256, h.clock.Now())
+	l := ca.Issue(pki.Opts{CommonName: "pfx.example.test"}, h.clock.Now())
+	ctx, cancel := context.WithCancel(h.ctx)
+	cancel()
+	_, _, err := h.svc.UploadCertificate(ctx, op, inventory.UploadInput{PFXBase64: base64.StdEncoding.EncodeToString(pki.PFX(l, ca, "pw")),
+		PFXPassword: "pw"})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, []string{"internal"}, rejectReasons(h))
+	assert.Equal(t, pki.Fingerprint(l.Cert), h.auditDetails("certificate.upload_rejected")[0]["fingerprint"])
+	assert.Equal(t, 0, h.count("SELECT count(*) FROM managed_private_keys"))
+	release, ok := inventory.HoldPFXSlots(2)
+	require.True(t, ok)
+	release()
 }

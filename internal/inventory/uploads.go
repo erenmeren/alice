@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -44,6 +45,26 @@ type UploadInput struct {
 
 // maxLabelRunes is certificates.label's bound.
 const maxLabelRunes = 100
+
+// maxPFXDecodes bounds the PFX files decoded at once in this process. A shrouded key bag inside an
+// encrypted PFX content keeps an iteration count that certs cannot check before decoding (Task 2
+// ruling), so a hostile file can pin a core: at most this many cores, and further PFX uploads are
+// refused at once with ErrPFXBusy instead of queueing.
+const maxPFXDecodes = 2
+
+var pfxSlots = make(chan struct{}, maxPFXDecodes)
+
+// acquirePFXSlot takes a decode slot without waiting. release gives it back and may be called more
+// than once.
+func acquirePFXSlot() (release func(), ok bool) {
+	select {
+	case pfxSlots <- struct{}{}:
+		var once sync.Once
+		return func() { once.Do(func() { <-pfxSlots }) }, true
+	default:
+		return nil, false
+	}
+}
 
 // Upload formats, as audited.
 const (
@@ -160,7 +181,8 @@ func (s *Service) auditRejection(ctx context.Context, a Actor, r rejected) {
 // UploadCertificate validates an uploaded certificate with its chain and private key (certs:
 // everything is checked before anything is stored) and stores it with the key sealed. A
 // certificate Alice knows without a key (found on a server) gets the key attached; one Alice holds
-// with its key is refused with ErrCertificateDuplicate. Every refusal of a read upload is audited. It returns the certificate and the warnings
+// with its key is refused with ErrCertificateDuplicate. Every refusal of a read upload, and every
+// PFX attempt whatever its outcome, is audited. It returns the certificate and the warnings
 // (not_yet_valid, chain_incomplete, chain_certificate_expired), which never block.
 func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput) (Certificate, []string, error) {
 	pfxText := strings.TrimSpace(in.PFXBase64)
@@ -197,10 +219,14 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 		}
 	}
 	if len(errs) > 0 {
+		if format == formatPFX {
+			s.auditRejection(ctx, a, rejected{format: format, reason: "validation"})
+		}
 		return Certificate{}, nil, errs
 	}
 
 	var up certs.Upload
+	release := func() {}
 	if format == formatPFX {
 		if len(pfxText) > base64.StdEncoding.EncodedLen(certs.MaxInputSize) {
 			return reject("too_large", ErrCertificateTooLarge)
@@ -210,6 +236,11 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 			return reject("invalid", ErrCertificateInvalid)
 		}
 		defer clear(raw)
+		var ok bool
+		if release, ok = acquirePFXSlot(); !ok {
+			return reject("busy", ErrPFXBusy)
+		}
+		defer release()
 		up.PFX, up.PFXPassword = raw, in.PFXPassword
 	} else {
 		if len(certText) > certs.MaxInputSize || len(keyText) > certs.MaxInputSize {
@@ -219,6 +250,7 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 		defer clear(up.PrivateKeyPEM)
 	}
 	v, err := certs.ValidateUpload(up, s.clock.Now(), s.roots)
+	release() // the slot covers the decode only
 	if err != nil {
 		reason, out := refusal(err)
 		return reject(reason, out)
@@ -257,6 +289,8 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 		return Certificate{}, nil, err
 	}
 	if err != nil {
+		// Not the upload's fault (the database failed), but the attempt is still on record.
+		s.auditRejection(ctx, a, rejected{format: format, reason: "internal", fingerprint: v.Fingerprint})
 		return Certificate{}, nil, err
 	}
 	return s.placedCertificate(ctx, placed.id, v.Warnings)
