@@ -95,8 +95,11 @@ func TestRemoveRefusesTheLastKeyOfTheConnectionAccount(t *testing.T) {
 	assert.Empty(t, e.emu.Writes())
 }
 
-// Re-review item 1: the last-key guard covers every uid-0 account (toor), not only the one named
-// root; a normal account's last key needs no confirmation.
+// Re-review item 1: the last-key guard covers every uid-0 account a listing of the session showed
+// (toor), not only the one named root, without running another command; a normal account's last
+// key needs no confirmation. The real helper lists no uid-0 account other than root today (its
+// toScan rule); the emulator lists every account it is given, so the test can show the guard
+// would hold if that rule widened.
 func TestRemoveLastKeyOfAnotherUID0AccountNeedsConfirmation(t *testing.T) {
 	e := newProvEnv(t)
 	e.emu.AddUser("toor", 0, "/home/toor")
@@ -104,7 +107,10 @@ func TestRemoveLastKeyOfAnotherUID0AccountNeedsConfirmation(t *testing.T) {
 	k, fp := keyLine(t, "ed25519", "", "toor@x")
 	e.emu.SetFile(toorFile, []byte(k+"\n"))
 	s := e.open(t)
-	_, err := s.RemoveAuthorizedKey(context.Background(), removeReq("toor", toorFile, fp), nil)
+	_, err := s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	lists := strings.Count(strings.Join(e.srv.Commands(), "\n"), "authkeys-list")
+	_, err = s.RemoveAuthorizedKey(context.Background(), removeReq("toor", toorFile, fp), nil)
 	assert.Equal(t, "sshkey.last_root_key", providerCode(t, err).Code)
 	assert.Empty(t, e.emu.Writes())
 
@@ -113,6 +119,8 @@ func TestRemoveLastKeyOfAnotherUID0AccountNeedsConfirmation(t *testing.T) {
 	res, err := s.RemoveAuthorizedKey(context.Background(), req, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Removed)
+
+	assert.Equal(t, lists, strings.Count(strings.Join(e.srv.Commands(), "\n"), "authkeys-list"), "no extra scan")
 
 	k2, fp2 := keyLine(t, "ed25519", "", "deploy@x")
 	e.emu.SetFile(deployFile, []byte(k2+"\n"))

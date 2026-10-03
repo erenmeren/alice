@@ -66,7 +66,7 @@ func writeRefused(err error) bool {
 // listed at all because the helper lists only its first 200 accounts (too_many_users), the refusal
 // names that reason instead of the user name.
 func (s *session) checkListedFor(ctx context.Context, req providers.AuthKeyChange) error {
-	list, err := runHelper[helperproto.AuthKeysListResponse](ctx, s.conn, CmdAuthKeysList())
+	list, err := s.listAuthKeys(ctx)
 	if err != nil {
 		return err
 	}
@@ -88,22 +88,32 @@ func (s *session) checkListedFor(ctx context.Context, req providers.AuthKeyChang
 	return refusedRequest("os_user")
 }
 
-// isUID0 reports whether user is a superuser account: root, or any account the helper lists with
-// uid 0 (toor). The last key of such an account needs an administrator's confirmation.
-func (s *session) isUID0(ctx context.Context, user string) (bool, error) {
-	if user == "root" {
-		return true, nil
-	}
+// listAuthKeys runs authkeys-list and remembers the uid of every listed account for isUID0.
+func (s *session) listAuthKeys(ctx context.Context) (helperproto.AuthKeysListResponse, error) {
 	list, err := runHelper[helperproto.AuthKeysListResponse](ctx, s.conn, CmdAuthKeysList())
 	if err != nil {
-		return false, err
+		return list, err
+	}
+	if s.uids == nil {
+		s.uids = map[string]int{}
 	}
 	for _, u := range list.Users {
-		if u.User == user {
-			return u.UID == 0, nil
-		}
+		s.uids[u.User] = u.UID
 	}
-	return false, nil
+	return list, nil
+}
+
+// isUID0 reports whether user is a superuser account: the name root (always, whatever is known
+// about its uid), or an account an earlier listing of this session showed with uid 0. It runs no
+// command: the helper lists no uid-0 account other than root today (toScan), so the uid only
+// matters if that rule widens. The last key of such an account needs an administrator's
+// confirmation.
+func (s *session) isUID0(user string) bool {
+	if user == "root" {
+		return true
+	}
+	uid, ok := s.uids[user]
+	return ok && uid == 0
 }
 
 // transformFailed logs the refusal of the in-memory change as a failed precheck step.
@@ -247,14 +257,8 @@ func (s *session) removeOnce(ctx context.Context, req providers.AuthKeyChange, l
 			return transformFailed(log, attempt, providers.NewError("sshkey.own_key_protected", false, nil,
 				map[string]string{"reason": "last_key_of_connection_account"}))
 		}
-		if !req.AllowLastRootKey {
-			uid0, err := s.isUID0(ctx, req.OSUser)
-			if err != nil {
-				return transformFailed(log, attempt, err)
-			}
-			if uid0 {
-				return transformFailed(log, attempt, providers.NewError("sshkey.last_root_key", false, nil, nil))
-			}
+		if !req.AllowLastRootKey && s.isUID0(req.OSUser) {
+			return transformFailed(log, attempt, providers.NewError("sshkey.last_root_key", false, nil, nil))
 		}
 	}
 	return s.writeAndVerify(ctx, req, log, attempt, h0, next.Bytes(), removed)

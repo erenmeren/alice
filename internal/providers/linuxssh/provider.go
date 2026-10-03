@@ -128,6 +128,7 @@ type session struct {
 	caps    providers.CapabilitySet
 	version helperproto.VersionResponse
 	release func(bool)
+	uids    map[string]int // account -> uid from this session's authkeys-list (isUID0)
 	once    sync.Once
 	closed  atomic.Bool
 }

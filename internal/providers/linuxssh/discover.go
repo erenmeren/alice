@@ -180,7 +180,7 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 	if !req.SSHKeys {
 		return res, nil
 	}
-	list, err := runHelper[helperproto.AuthKeysListResponse](ctx, s.conn, CmdAuthKeysList())
+	list, err := s.listAuthKeys(ctx)
 	if err != nil {
 		return providers.DiscoveryResult{}, err
 	}
