@@ -642,6 +642,7 @@ func (e *Emulator) nginxDeploy(args []string, stdin []byte) (resp Response) {
 	defer e.mu.Unlock()
 	h := e.nginx()
 	h.stdins = append(h.stdins, newSecret(stdin))
+	defer h.holdFaults(helperproto.SubNginxDeploy)()
 	defer h.consumeFaults()
 	defer h.recoverKill(&resp)
 	h.hangedUp = false
@@ -878,6 +879,7 @@ func (e *Emulator) nginxRestore(args []string) (resp Response) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	h := e.nginx()
+	defer h.holdFaults(helperproto.SubNginxRestore)()
 	defer h.consumeFaults()
 	defer h.recoverKill(&resp)
 	op := args[1]
@@ -941,6 +943,7 @@ func (h *nginxHost) cleanupOp(op string) (resp Response, known bool) {
 	if dir == nil {
 		return Response{}, false
 	}
+	defer h.holdFaults(helperproto.SubCleanup)()
 	defer h.consumeFaults()
 	defer func() {
 		if r := recover(); r != nil {

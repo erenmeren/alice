@@ -1083,3 +1083,73 @@ func TestEmulatedToWireCleansNames(t *testing.T) {
 	assert.Equal(t, "aé", clean("aéé", 3))
 	assert.Equal(t, "abc", cleanRunes("abcdef", 3))
 }
+
+// KillAt after KillAtWithExit137 kills by a signal again: the style of the last call counts.
+func TestEmulatedKillAtResetsTheExitStyle(t *testing.T) {
+	w := newWorld(t)
+	w.e.KillAtWithExit137(helperproto.StepWriteCert)
+	w.e.KillAt(helperproto.StepWriteCert)
+	r := w.deploy(emuOp)
+	assert.Equal(t, "KILL", r.Signal)
+	assert.Equal(t, 0, r.Exit)
+}
+
+// Faults armed for a subcommand wait for it: a provider's deployment runs without them and its
+// inline nginx-restore takes them.
+func TestEmulatedFaultsArmedForASubcommand(t *testing.T) {
+	assert.Panics(t, func() { NewEmulator().ArmFaultsFor(helperproto.SubNginxStatus) })
+
+	w := newWorld(t)
+	w.e.KillAt(helperproto.StepRestore)
+	w.e.ArmFaultsFor(helperproto.SubNginxRestore)
+	r := w.deploy(emuOp)
+	require.Equal(t, 0, r.Exit, string(r.Stdout))
+	assert.Equal(t, helperproto.PhaseCommitted, decode[helperproto.NginxDeployResponse](t, r).Phase, "the deployment ran without it")
+	assert.Equal(t, "KILL", w.restore(emuOp).Signal, "the restore took the kill")
+	assert.Equal(t, helperproto.PhaseRestoring, w.status(emuOp).Phase)
+	assert.Equal(t, helperproto.PhaseRestored, decode[helperproto.NginxRestoreResponse](t, w.restore(emuOp)).Phase, "consumed")
+	w.assertPair(t, w.old)
+
+	w = newWorld(t)
+	w.e.FailReload(1)
+	w.e.ArmFaultsFor(helperproto.SubNginxRestore)
+	require.Equal(t, helperproto.PhaseCommitted, decode[helperproto.NginxDeployResponse](t, w.deploy(emuOp)).Phase, "its reload passed")
+	rr := decode[helperproto.NginxRestoreResponse](t, w.restore(emuOp))
+	assert.Equal(t, helperproto.PhaseRestoreFailed, rr.Phase, "the reload failure was kept for the restore")
+	assert.Equal(t, helperproto.StepRollbackReload, rr.FailedStep)
+	assert.Equal(t, helperproto.PhaseRestored, decode[helperproto.NginxRestoreResponse](t, w.restore(emuOp)).Phase, "consumed")
+
+	// FailConfigTest and FailRestoreFile wait too; "" goes back to the next command.
+	w = newWorld(t)
+	w.e.FailConfigTest(1)
+	w.e.ArmFaultsFor(helperproto.SubNginxRestore)
+	w.e.ArmFaultsFor("")
+	r = w.deploy(emuOp)
+	assert.Equal(t, helperproto.PhaseRestored, decode[helperproto.NginxDeployResponse](t, r).Phase)
+	w = newWorld(t)
+	w.e.FailRestoreFile(key)
+	w.e.ArmFaultsFor(helperproto.SubNginxRestore)
+	require.Equal(t, helperproto.PhaseCommitted, decode[helperproto.NginxDeployResponse](t, w.deploy(emuOp)).Phase)
+	rr = decode[helperproto.NginxRestoreResponse](t, w.restore(emuOp))
+	assert.Equal(t, helperproto.PhaseRestoreFailed, rr.Phase)
+	assert.Equal(t, helperproto.StepRestore, rr.FailedStep)
+
+	// Armed for the cleanup: a restore before it runs without the fault.
+	w = newWorld(t)
+	require.Equal(t, 0, w.deploy(emuOp).Exit)
+	w.e.KillAt(helperproto.StepRestore)
+	w.e.ArmFaultsFor(helperproto.SubCleanup)
+	assert.Equal(t, helperproto.PhaseRestored, decode[helperproto.NginxRestoreResponse](t, w.restore(emuOp)).Phase)
+}
+
+func TestEmulatedProbeServed(t *testing.T) {
+	w := newWorld(t)
+	leaf, chain, ok := w.e.ProbeServed(443, "www.example.test", helperproto.ProbeAny)
+	require.True(t, ok)
+	assert.Equal(t, hexSum(w.old.Cert.Raw), leaf)
+	assert.Equal(t, 2, chain, "leaf and intermediate")
+	_, _, ok = w.e.ProbeServed(443, "www.example.test", helperproto.ProbeRSA)
+	assert.False(t, ok, "an ECDSA-only site has nothing for an RSA probe")
+	_, _, ok = w.e.ProbeServed(8443, "", helperproto.ProbeAny)
+	assert.False(t, ok, "nothing listens there")
+}

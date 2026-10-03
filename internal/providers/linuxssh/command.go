@@ -19,9 +19,14 @@ import (
 // built by the constructors below: every argument passed helperproto's vocabulary check and
 // quoteArg (spec §6.6, SEC-063). There is no way to send a free-form shell string.
 type HelperCommand struct {
-	sub       string
-	tokens    []string // rendered arguments: constant flag names or quoteArg output
-	stdin     []byte
+	sub    string
+	tokens []string // rendered arguments: constant flag names or quoteArg output
+	// stdin is behind two pointers: a command held in an unexported field of another struct is
+	// formatted by fmt without Format (fmt cannot call methods there). A pointer below the top
+	// level prints as an address for %v; for any other verb fmt's bad-verb path expands it once
+	// (&{...}), and the second pointer inside is then printed as an address again, never as the
+	// key bytes. Copies of a command share the input.
+	stdin     *stdinBuf
 	sudo      bool
 	fixed     string // the one fixed non-helper command (cat /etc/os-release); set only in dial.go
 	timeout   time.Duration
@@ -119,7 +124,7 @@ func CmdAuthKeysWrite(path, expectSHA256 string, op uuid.UUID, content []byte) (
 	}
 	// The scan of authkeys-list plus the lock wait; the helper stops after helperproto.HelperBudget.
 	c := privileged(helperproto.SubAuthKeysWrite, LongCommandTimeout, smallOutput, qp, "--expect-sha256", qh, "--content-sha256", qc, "--op", qo)
-	c.stdin = append([]byte(nil), content...)
+	c.stdin = owned(content)
 	return c, nil
 }
 
@@ -162,7 +167,7 @@ func CmdNginxDeploy(op uuid.UUID, certPath, keyPath, expectCertSHA256 string, in
 	}
 	c := privileged(helperproto.SubNginxDeploy, DeployCommandTimeout, smallOutput,
 		"--op", tokens[0], "--cert", tokens[1], "--key", tokens[2], "--expect-cert-sha256", tokens[3], "--content-sha256", tokens[4])
-	c.stdin = append([]byte(nil), input...)
+	c.stdin = owned(input)
 	return c, nil
 }
 
@@ -218,9 +223,28 @@ func quoteAll(values ...string) ([]string, error) {
 	return out, nil
 }
 
+// stdinBuf holds a command's input; see HelperCommand.stdin for why it is two pointers deep.
+type stdinBuf struct{ p *[]byte }
+
+// owned is the command's own copy of its input.
+func owned(b []byte) *stdinBuf {
+	cp := append([]byte(nil), b...)
+	return &stdinBuf{p: &cp}
+}
+
+// input is the stdin to send (nil when none).
+func (c HelperCommand) input() []byte {
+	if c.stdin == nil || c.stdin.p == nil {
+		return nil
+	}
+	return *c.stdin.p
+}
+
 // WipeInput overwrites the command's stdin (the private key of nginx-deploy) with zeros. The
-// command keeps its own copy of the input, so the caller wipes it after Run (SEC-044, best effort).
-func (c HelperCommand) WipeInput() { clear(c.stdin) }
+// command keeps its own copy of the input, so the caller wipes it after Run (SEC-044, best
+// effort). Copies of a command share that copy: wiping one wipes them all, and a wiped command
+// sends zeros (the helper answers CONTENT_MISMATCH), so a re-send needs a newly built command.
+func (c HelperCommand) WipeInput() { clear(c.input()) }
 
 // Format prints the command line only, for every verb and flag: stdin holds the private key of
 // nginx-deploy, and fmt would otherwise print it (%s as text, %v and %d as bytes, %x as hex).

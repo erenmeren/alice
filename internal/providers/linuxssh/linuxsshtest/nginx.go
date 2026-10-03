@@ -99,6 +99,7 @@ type nginxHost struct {
 	interfere     []interference
 	killAt        string
 	killExit137   bool
+	faultsFor     string // ArmFaultsFor: the subcommand the armed faults wait for ("" = the next one)
 	hangupAt      string
 	hangedUp      bool
 	locked        bool
@@ -512,7 +513,52 @@ func (e *Emulator) HangupAfter(step string) {
 func (e *Emulator) KillAt(point string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.nginx().killAt = point
+	h := e.nginx()
+	h.killAt, h.killExit137 = point, false
+}
+
+// ArmFaultsFor makes the faults armed so far and until that command (KillAt, KillAtWithExit137,
+// HangupAfter, InterfereAt, FailJournalWrite, and the counts of FailConfigTest and FailReload, and
+// FailRestoreFile) wait for the next command of subcommand sub (helperproto.SubNginxDeploy,
+// SubNginxRestore or SubCleanup): a transaction command of another subcommand runs without them and
+// leaves them armed. A test of a provider call that sends several commands (a deployment and its
+// inline nginx-restore) arms a fault for the later one this way. "" goes back to the default: the
+// next transaction command takes the faults.
+func (e *Emulator) ArmFaultsFor(sub string) {
+	if !slices.Contains([]string{"", helperproto.SubNginxDeploy, helperproto.SubNginxRestore, helperproto.SubCleanup}, sub) {
+		panic("linuxsshtest: ArmFaultsFor: not a transaction subcommand: " + sub)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.nginx().faultsFor = sub
+}
+
+// heldFaults are the faults a transaction command of another subcommand than ArmFaultsFor's runs
+// without.
+type heldFaults struct {
+	killAt, hangupAt, failJournal string
+	killExit137                   bool
+	interfere                     []interference
+	failTest, failReload          int
+	failRestore                   map[string]bool
+}
+
+// holdFaults is called at the start of a transaction command of subcommand sub: when the armed
+// faults wait for another subcommand they are put aside for this command and the returned
+// function puts them back (defer it before consumeFaults); otherwise the command takes them.
+func (h *nginxHost) holdFaults(sub string) func() {
+	if h.faultsFor == "" || h.faultsFor == sub {
+		h.faultsFor = ""
+		return func() {}
+	}
+	held := heldFaults{killAt: h.killAt, hangupAt: h.hangupAt, failJournal: h.failJournal, killExit137: h.killExit137,
+		interfere: h.interfere, failTest: h.failTest, failReload: h.failReload, failRestore: h.failRestore}
+	h.killAt, h.hangupAt, h.failJournal, h.killExit137, h.interfere = "", "", "", false, nil
+	h.failTest, h.failReload, h.failRestore = 0, 0, map[string]bool{}
+	return func() {
+		h.killAt, h.hangupAt, h.failJournal, h.killExit137, h.interfere = held.killAt, held.hangupAt, held.failJournal, held.killExit137, held.interfere
+		h.failTest, h.failReload, h.failRestore = held.failTest, held.failReload, held.failRestore
+	}
 }
 
 // HoldLock makes another process hold the Nginx lock: nginx-deploy, nginx-restore and the cleanup
@@ -539,6 +585,18 @@ func (e *Emulator) Served(port int, sni string) string {
 		return s.leafSHA
 	}
 	return ""
+}
+
+// ProbeServed is what a TLS handshake with the emulated host on port with sni ("" or "_": none)
+// and keyType (helperproto.ProbeAny, ProbeRSA or ProbeECDSA) shows, as the emulated tls-probe
+// answers it from any address: the served leaf's hex SHA-256 and the number of certificates
+// presented. ok is false when nothing answers or the handshake would fail. Test probers that stand
+// for Alice's own probe use it.
+func (e *Emulator) ProbeServed(port int, sni, keyType string) (leafSHA256 string, chainLength int, ok bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s, ok := e.nginx().servedLocked("", port, sni, keyType)
+	return s.leafSHA, s.chain, ok
 }
 
 // Reloads counts the reloads Nginx was asked for (successful or not).

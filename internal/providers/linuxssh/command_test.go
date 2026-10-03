@@ -99,7 +99,7 @@ func TestWriteCopiesItsContent(t *testing.T) {
 	c, err := CmdAuthKeysWrite("/root/.ssh/authorized_keys", helperproto.AbsentSHA256, testOp, content)
 	require.NoError(t, err)
 	content[0] = 'X'
-	assert.Equal(t, "ssh-ed25519 AAAA x\n", string(c.stdin))
+	assert.Equal(t, "ssh-ed25519 AAAA x\n", string(c.input()))
 }
 
 // A-12: every string that would cross into a command line is validated; hostile values never
@@ -182,7 +182,7 @@ func TestNginxCommandLinesAreExact(t *testing.T) {
 		assert.Equal(t, tc.sub, tc.cmd.Subcommand())
 		assert.Equal(t, tc.sudo, tc.cmd.sudo)
 	}
-	assert.Equal(t, input, deploy.stdin)
+	assert.Equal(t, input, deploy.input())
 	assert.Equal(t, int64(helperproto.NginxDumpOutput), CmdNginxDump().maxOutput)
 	assert.Equal(t, LongCommandTimeout, CmdNginxDump().timeout)
 	assert.Equal(t, LongCommandTimeout, CmdNginxTest().timeout)
@@ -238,7 +238,7 @@ func TestWipeInputClearsTheKey(t *testing.T) {
 	c, err := CmdNginxDeploy(testOp, "/a.crt", "/a.key", strings.Repeat("ab", 32), []byte("secret key bytes"))
 	require.NoError(t, err)
 	c.WipeInput()
-	assert.Equal(t, make([]byte, len("secret key bytes")), c.stdin)
+	assert.Equal(t, make([]byte, len("secret key bytes")), c.input())
 }
 
 // The private key travels in stdin only: the command line, its formatting and its error carry none of it.
@@ -248,7 +248,7 @@ func TestDeployKeyIsNeverOutsideStdin(t *testing.T) {
 	require.NoError(t, err)
 	c, err := CmdNginxDeploy(testOp, "/a.crt", "/a.key", strings.Repeat("ab", 32), raw)
 	require.NoError(t, err)
-	assert.Contains(t, string(c.stdin), needle, "the key is in the payload")
+	assert.Contains(t, string(c.input()), needle, "the key is in the payload")
 	assert.NotContains(t, c.Line(), needle)
 	assert.NotContains(t, fmt.Sprintf("%v|%+v|%#v|%s", c.tokens, c.Subcommand(), c.Line(), c.Subcommand()), needle)
 	// A rejected deployment (too large) names the limit, never the content.
@@ -283,4 +283,35 @@ func TestDeployKeyIsNeverOutsideStdin(t *testing.T) {
 	// The input type redacts itself when formatted.
 	in := helperproto.NginxDeployInput{CertPEM: "c", KeyPEM: needle}
 	assert.NotContains(t, fmt.Sprintf("%v %+v %#v %s", in, in, in, in), needle)
+}
+
+// A command held in an unexported field of another struct is formatted by fmt without its Format
+// method (fmt cannot call methods on unexported fields): its stdin is behind a pointer, which fmt
+// prints as an address below the top level, so the wrapper never prints the key either.
+func TestAWrappedCommandNeverPrintsItsStdin(t *testing.T) {
+	marker := "WRAPPEDKEYMARKER"
+	secret, err := json.Marshal(helperproto.NginxDeployInput{CertPEM: "c", KeyPEM: "-----BEGIN " + "PRIVATE KEY-----" + marker})
+	require.NoError(t, err)
+	c, err := CmdNginxDeploy(testOp, "/a.crt", "/a.key", strings.Repeat("ab", 32), secret)
+	require.NoError(t, err)
+	type wrapper struct {
+		name string
+		cmd  HelperCommand
+		list []HelperCommand
+		ptr  *HelperCommand
+	}
+	w := wrapper{name: "w", cmd: c, list: []HelperCommand{c}, ptr: &c}
+	text := fmt.Sprintf("%v %+v %#v %s %q %x %X", w, w, w, w, w, w, w) + fmt.Sprintf("%v %+v %#v", &w, &w, &w)
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("w", slog.Any("w", w))
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("w", "w", w)
+	text += buf.String()
+	decimal := strings.Trim(fmt.Sprintf("%d", []byte(marker)), "[]")
+	for _, needle := range []string{marker, "PRIVATE KEY", hex.EncodeToString([]byte(marker)), decimal, base64.StdEncoding.EncodeToString([]byte(marker))} {
+		assert.NotContains(t, text, needle)
+	}
+	// A copy shares the input: wiping either wipes the bytes the other would send.
+	cp := c
+	cp.WipeInput()
+	assert.Equal(t, make([]byte, len(secret)), c.input())
 }

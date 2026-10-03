@@ -559,7 +559,7 @@ func (c *Conn) Run(ctx context.Context, cmd HelperCommand) (Result, error) {
 	stdout := &cappedWriter{max: cmd.maxOutput, onOverflow: func() { _ = sess.Close() }}
 	sess.Stdout = stdout
 	sess.Stderr = &cappedWriter{max: maxStderr, discard: true}
-	sess.Stdin = bytes.NewReader(cmd.stdin)
+	sess.Stdin = bytes.NewReader(cmd.input())
 	timeout := cmd.timeout
 	if timeout <= 0 {
 		timeout = DefaultCommandTimeout
