@@ -263,8 +263,9 @@ func (s *Service) recordInstallationEpisode(ctx context.Context, tx pgx.Tx, c co
 		n := strconv.Itoa(last)
 		d := map[string]string{"installation_id": id, "episode": n}
 		if legacy {
-			// The episode was opened by Phase 2 (no episode number); closing it on the first tick
-			// after the upgrade is marked so the audit trail shows why it closed at once.
+			// The episode was opened before the upgrade, by Phase 2 (its audit event has no episode
+			// number). reason=upgrade says where the open episode came from, not why the record
+			// matches again: the restore itself is the same as any other.
 			d["reason"] = "upgrade"
 		}
 		if err := s.insertEpisodeNotice(ctx, tx, now, noticeInstallationRestored, id, n, d); err != nil {

@@ -394,27 +394,17 @@ func TestInstallationMissingEventIsNotAnEpisode(t *testing.T) {
 func TestForgedNoticesDoNotSuppressTheAudit(t *testing.T) {
 	e := newEnv(t)
 	id := e.installation()
-	for _, n := range []string{
-		"installation_tampered:" + id, "installation_tampered:" + id + ":1",
-		"installation_tampered:" + id + ":2", "installation_restored:" + id + ":2",
+	for _, n := range []struct{ licenseID, notice string }{
+		{"", "installation_tampered:" + id}, {"", "installation_tampered:" + id + ":1"},
+		{"", "installation_tampered:" + id + ":2"}, {"", "installation_restored:" + id + ":2"},
+		{"LIC-X", "installation_tampered:" + id + ":1"}, // with a license ID: not even shaped like an installation notice
 	} {
 		_, err := e.db.App.Exec(e.ctx, `INSERT INTO license_history (id, at, event, license_id, notice, details)
-VALUES (gen_random_uuid(), now(), 'notice', '', $1, '{}')`, n)
+VALUES (gen_random_uuid(), now(), 'notice', $1, $2, '{}')`, n.licenseID, n.notice)
 		require.NoError(t, err)
 	}
 	e.ownerExec("UPDATE license SET installed_at = installed_at + interval '1 day'")
 	e.restart()
 	e.requireTamperedLock()
 	assert.Equal(t, []string{"1"}, e.auditEpisodes("license.installation_tampered"), "the forged notices did not suppress the audit")
-}
-
-// A notice with a license ID is not an installation notice; it changes nothing either.
-func TestInstallationNoticeWithLicenseIDIsIgnored(t *testing.T) {
-	e := newEnv(t)
-	id := e.installation()
-	e.ownerExec(`INSERT INTO license_history (id, at, event, license_id, notice, details)
-VALUES (gen_random_uuid(), now(), 'notice', 'LIC-X', $1, '{}')`, "installation_tampered:"+id+":1")
-	e.ownerExec("UPDATE license SET installed_at = installed_at + interval '1 day'")
-	e.restart()
-	assert.Equal(t, []string{"1"}, e.auditEpisodes("license.installation_tampered"))
 }
