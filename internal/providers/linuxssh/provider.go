@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/google/uuid"
+
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh/helperproto"
@@ -28,9 +30,10 @@ type Provider struct {
 }
 
 var (
-	_ providers.Provider   = (*Provider)(nil)
-	_ providers.SetupGuide = (*Provider)(nil)
-	_ providers.Session    = (*session)(nil)
+	_ providers.Provider        = (*Provider)(nil)
+	_ providers.SetupGuide      = (*Provider)(nil)
+	_ providers.ConnectionCache = (*Provider)(nil)
+	_ providers.Session         = (*session)(nil)
 )
 
 // New returns the provider.
@@ -80,6 +83,9 @@ func (p *Provider) SetupSnippets(authorizedKeysLine string) map[string]providers
 	}
 	return out
 }
+
+// ForgetTarget implements providers.ConnectionCache: a deleted target's pooled connections close.
+func (p *Provider) ForgetTarget(target uuid.UUID) { p.pool.ForgetTarget(target) }
 
 // HelperInfo implements providers.SetupGuide.
 func (p *Provider) HelperInfo() (string, int) { return helperproto.HelperPath, helperproto.Protocol }

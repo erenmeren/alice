@@ -132,8 +132,8 @@ confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **S
   one you confirmed. Only an administrator can accept the new fingerprint, after checking it on the server, with a
   reason and a recent authenticator code. Everything is recorded in the audit log, and administrators with an email
   address get one email when it happens. The same email goes out once when a server refuses Alice's key.
-- **Remove server** (administrators) makes Alice forget the server and frees its license slot. Nothing is changed on
-  the server.
+- **Remove server** (administrators) makes Alice forget the server, closes the SSH connections Alice kept open to it
+  and frees its license slot. Nothing is changed on the server.
 - **Waiting for an administrator** lists work that was paused while the license had expired (for example a key
   removal). After a new license is installed, an administrator chooses **Run now** or **Discard** for each item;
   nothing starts on its own (R29).

@@ -6,11 +6,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/inventory"
 	"alice/internal/platform/validate"
+	"alice/internal/providers"
+	"alice/internal/providers/fake"
 	"alice/internal/rbac"
 )
 
@@ -102,6 +105,33 @@ func TestEmptyPatchIsRefusedWithoutAChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, tg.Version, got.Version, "nothing changed")
 	assert.Equal(t, 0, h.audits("target.updated"))
+}
+
+// forgettingProvider records the targets whose connections inventory asks it to forget.
+type forgettingProvider struct {
+	*fake.Provider
+	forgotten []uuid.UUID
+}
+
+func (p *forgettingProvider) ForgetTarget(id uuid.UUID) { p.forgotten = append(p.forgotten, id) }
+
+// A-16: deleting a target makes its provider forget the target's pooled connections, so the
+// documented removal procedure does not trip over a live session.
+func TestDeleteTargetForgetsItsConnections(t *testing.T) {
+	p := &forgettingProvider{Provider: fake.New(providers.KindLinuxSSH)}
+	h := newHarness(t, func(c *inventory.Config) {
+		reg := providers.NewRegistry()
+		reg.Register(p)
+		reg.Freeze()
+		c.Registry = reg
+	})
+	admin := h.user("ada", rbac.Admin, "")
+	tg := h.add(admin, "web-01", "web-01.example.com")
+	assert.Empty(t, p.forgotten)
+	require.NoError(t, h.svc.DeleteTarget(h.ctx, admin, tg.ID))
+	assert.Equal(t, []uuid.UUID{tg.ID}, p.forgotten)
+	require.ErrorIs(t, h.svc.DeleteTarget(h.ctx, admin, tg.ID), inventory.ErrNotFound)
+	assert.Len(t, p.forgotten, 1, "nothing to forget for a target that was not deleted")
 }
 
 func TestDeleteTargetIsSoftAndHidesIt(t *testing.T) {

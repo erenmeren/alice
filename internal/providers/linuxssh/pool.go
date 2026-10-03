@@ -49,6 +49,8 @@ type Pool struct {
 	targets map[uuid.UUID]chan struct{}
 	idle    map[uuid.UUID][]idleConn
 	idleN   int
+	// forgotten holds deleted targets (ForgetTarget): their released connections are closed.
+	forgotten map[uuid.UUID]bool
 }
 
 // NewPool returns a pool; zero or negative limits take the defaults.
@@ -192,6 +194,19 @@ func (p *Pool) acquire(ctx context.Context, target uuid.UUID, cfg Config, cred p
 	return c, p.releaser(target, c, slots), nil
 }
 
+// ForgetTarget closes the idle connections of a deleted target and drops its slot channel. A
+// connection of it still in use is closed when released (forgotten targets keep nothing idle).
+func (p *Pool) ForgetTarget(target uuid.UUID) {
+	p.mu.Lock()
+	delete(p.targets, target)
+	if p.forgotten == nil {
+		p.forgotten = map[uuid.UUID]bool{}
+	}
+	p.forgotten[target] = true
+	p.mu.Unlock()
+	p.dropIdle(target)
+}
+
 func hostKeyChanged(err error) bool {
 	var pe *providers.Error
 	return errors.As(err, &pe) && pe.Code == "target.host_key_changed"
@@ -282,7 +297,7 @@ func (p *Pool) releaser(target uuid.UUID, c *Conn, slots func()) func(bool) {
 			now := p.dialer.clk().Now()
 			p.mu.Lock()
 			stale := p.sweepLocked(now)
-			keep := healthy && c.Healthy() && !p.closed && p.idleN < p.maxIdle
+			keep := healthy && c.Healthy() && !p.closed && p.idleN < p.maxIdle && !p.forgotten[target]
 			if keep {
 				p.idle[target] = append(p.idle[target], idleConn{conn: c, since: now})
 				p.idleN++

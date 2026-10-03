@@ -108,6 +108,13 @@ type Session interface {
 	RemoveAuthorizedKey(ctx context.Context, req AuthKeyChange, log StepLogger) (AuthKeyResult, error)
 }
 
+// ConnectionCache is implemented by providers that keep connections to targets between sessions
+// (linuxssh's pool). ForgetTarget closes the idle connections of a deleted target and drops what
+// the provider keeps for it; a connection still in use is closed when its session ends.
+type ConnectionCache interface {
+	ForgetTarget(target uuid.UUID)
+}
+
 // SetupGuide is implemented by providers that need host preparation (linuxssh).
 type SetupGuide interface {
 	SetupSnippets(authorizedKeysLine string) map[string]SetupSnippet // key: profile "linux" | "nginx"

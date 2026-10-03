@@ -349,3 +349,41 @@ func TestProbeGivesUpOnTimeoutAndCancel(t *testing.T) {
 		assert.False(t, c.Healthy())
 	})
 }
+
+// A-16: forgetting a deleted target closes its idle connections and drops its slot channel; other
+// targets keep theirs, and a connection still in use is closed when it is released.
+func TestPoolForgetTarget(t *testing.T) {
+	e := newPoolEnv(t, clock.Real{}, 4, 2)
+	ctx := context.Background()
+	idle, rel, err := e.pool.Acquire(ctx, testTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	rel(true)
+	busy, relBusy, err := e.pool.Acquire(ctx, testTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	require.Same(t, idle, busy)
+	other, relOther, err := e.pool.Acquire(ctx, otherTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	relOther(true)
+	idle2, rel2, err := e.pool.AcquireFresh(ctx, testTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	rel2(true)
+
+	e.pool.ForgetTarget(testTarget)
+	assert.False(t, idle2.Healthy(), "the idle connection of the deleted target is closed")
+	assert.True(t, other.Healthy(), "other targets keep theirs")
+	e.pool.mu.Lock()
+	_, slots := e.pool.targets[testTarget]
+	_, otherSlots := e.pool.targets[otherTarget]
+	assert.Empty(t, e.pool.idle[testTarget])
+	assert.Equal(t, 1, e.pool.idleN)
+	e.pool.mu.Unlock()
+	assert.False(t, slots, "the slot channel of the deleted target is dropped")
+	assert.True(t, otherSlots)
+
+	assert.True(t, busy.Healthy(), "a connection in use is not pulled away")
+	relBusy(true)
+	assert.False(t, busy.Healthy(), "it is closed when released, not kept idle")
+	e.pool.mu.Lock()
+	assert.Empty(t, e.pool.idle[testTarget])
+	e.pool.mu.Unlock()
+}

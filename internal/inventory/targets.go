@@ -289,11 +289,13 @@ WHERE id = $1`, id, cur.Name, int(cur.DiscoveryInterval/time.Second), s.clock.No
 // DeleteTarget soft-deletes a target: its license slot is free at once and nothing is changed on
 // the server (§7.3). Queued jobs of the target fail when they run (TargetRef answers ErrNotFound).
 func (s *Service) DeleteTarget(ctx context.Context, a Actor, id uuid.UUID) error {
+	var typ string
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		cur, err := getTarget(ctx, tx, id, true)
 		if err != nil {
 			return err
 		}
+		typ = cur.Type
 		now := s.clock.Now().UTC()
 		if _, err := tx.Exec(ctx, "UPDATE targets SET deleted_at = $2, version = version + 1, updated_at = $2 WHERE id = $1", id, now); err != nil {
 			return fmt.Errorf("inventory: delete target: %w", err)
@@ -304,6 +306,13 @@ func (s *Service) DeleteTarget(ctx context.Context, a Actor, id uuid.UUID) error
 	})
 	if err != nil {
 		return err
+	}
+	// The provider forgets the target's pooled connections (A-16): nothing stays connected to a
+	// server that was removed, so its documented clean-up does not meet a live session.
+	if p, ok := s.providerFor(typ); ok {
+		if cc, ok := p.(providers.ConnectionCache); ok {
+			cc.ForgetTarget(id)
+		}
 	}
 	s.refreshLicense(ctx)
 	return nil

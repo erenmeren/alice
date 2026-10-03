@@ -114,7 +114,8 @@ connection, so it shows a changed host key at once.
 
 ## Removing Alice from a server
 
-As root on the server:
+First choose **Remove server** on the server's page in Alice. Alice forgets the server and its keys, and closes the
+SSH connections it kept open to it; it never connects to the server to do this. Then, as root on the server:
 
 ```sh
 rm -f /etc/sudoers.d/alice /usr/local/libexec/alice-helper
@@ -122,5 +123,6 @@ userdel alice-svc
 rm -rf /var/lib/alice-svc /var/lib/alice-helper
 ```
 
-`userdel -r` is not used because the home directory belongs to root. Then choose **Remove server** on the server's
-page in Alice. Alice forgets the server and its keys; it never connects to the server to do this.
+`userdel -r` is not used because the home directory belongs to root. If `userdel` reports that `alice-svc` is still
+logged in, a job that was already running when you removed the server has not finished yet: wait a minute and run it
+again.
