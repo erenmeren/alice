@@ -4,6 +4,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -94,4 +98,82 @@ func TestEveryParserReasonIsCoveredByTheDiscoverTest(t *testing.T) {
 	}
 	assert.Len(t, unsupportedRaws, len(withPrefix(conf, "Reason")), "no stale entry")
 	assert.Equal(t, nginxconf.ReasonVariable, providers.UnsupportedVariable)
+}
+
+// goSources lists the repository's non-test Go files (relative, slash-separated): the files git
+// knows (tracked, or untracked and not ignored), so a git-ignored tree and other worktrees under
+// .claude/ (D17) are not read; without git, a walk that skips every directory whose name starts
+// with "." and node_modules and bin. Either way no path with a component starting with "." counts.
+func goSources(t *testing.T, root string) []string {
+	t.Helper()
+	var files []string
+	cmd := exec.Command("git", "ls-files", "-co", "--exclude-standard", "--", "*.go")
+	cmd.Dir = root
+	if out, err := cmd.Output(); err == nil {
+		files = strings.Split(strings.TrimSpace(string(out)), "\n")
+	} else {
+		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() && p != root && (strings.HasPrefix(d.Name(), ".") || d.Name() == "node_modules" || d.Name() == "bin") {
+				return filepath.SkipDir
+			}
+			if !d.IsDir() && filepath.Ext(p) == ".go" {
+				rel, err := filepath.Rel(root, p)
+				if err != nil {
+					return err
+				}
+				files = append(files, filepath.ToSlash(rel))
+			}
+			return nil
+		})
+		require.NoError(t, err)
+	}
+	var out []string
+	for _, f := range files {
+		if f == "" || strings.HasSuffix(f, "_test.go") || slices.ContainsFunc(strings.Split(f, "/"), func(c string) bool { return strings.HasPrefix(c, ".") }) {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// Global constraint: helperproto.ProbeTLSConfig is the only certificate check Alice skips; both
+// probes (TLSProber here, the helper's tls-probe) use it.
+func TestOnlyProbeTLSConfigSkipsVerification(t *testing.T) {
+	root, err := filepath.Abs("../../..")
+	require.NoError(t, err)
+	needle := "InsecureSkip" + "Verify"
+	files := goSources(t, root)
+	require.Contains(t, files, "internal/providers/nginx/probe.go", "the walk sees this package")
+	var found []string
+	for _, f := range files {
+		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(f))) //nolint:gosec // G304: reading the repository's own sources in a test
+		if err != nil && os.IsNotExist(err) {
+			continue // listed by git but deleted in the working tree
+		}
+		require.NoError(t, err)
+		if strings.Contains(string(b), needle) {
+			found = append(found, f)
+		}
+	}
+	assert.Equal(t, []string{"internal/providers/linuxssh/helperproto/helperproto.go"}, found)
+	for _, f := range []string{"probe.go", "../../../cmd/alice-helper/probe.go"} {
+		b, err := os.ReadFile(f) //nolint:gosec // G304: a fixed source file of the repository
+		require.NoError(t, err)
+		assert.Contains(t, string(b), "helperproto.ProbeTLSConfig(", "%s builds its TLS client from ProbeTLSConfig", f)
+	}
+}
+
+// D17: other worktrees (.claude/worktrees/*) and other dot-directories are never read.
+func TestGoSourcesSkipsDotDirectories(t *testing.T) {
+	root := t.TempDir() // outside any git repository: the walk
+	for _, f := range []string{"a/b.go", ".claude/worktrees/x/internal/c.go", "bin/d.go", "a/e_test.go", "node_modules/f.go", "a/.hidden/g.go"} {
+		p := filepath.Join(root, filepath.FromSlash(f))
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o750))
+		require.NoError(t, os.WriteFile(p, []byte("package x\n"), 0o600))
+	}
+	assert.Equal(t, []string{"a/b.go"}, goSources(t, root))
 }

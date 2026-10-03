@@ -20,9 +20,8 @@ func TestNginxProviderDescribesItself(t *testing.T) {
 	assert.Equal(t, providers.KindNginx, e.prov.Kind())
 	assert.Equal(t, "provider.nginx.name", e.prov.DisplayNameKey())
 	assert.Equal(t, []providers.Capability{providers.CapAuthorizedKeys, providers.CapDiscoverCerts, providers.CapDiscoverSSHKeys,
-		providers.CapTestConnection}, e.prov.Capabilities().Sorted(), "D10: deploy and verify arrive with Task 11")
-	assert.False(t, e.prov.Capabilities().Has(providers.CapDeployCertificate))
-	assert.False(t, e.prov.Capabilities().Has(providers.CapVerifyDeployment))
+		providers.CapTestConnection, providers.CapVerifyDeployment}, e.prov.Capabilities().Sorted())
+	assert.Equal(t, TLSProber{}, New(Options{}).prober, "Alice's own TLS probe when none is given")
 	var _ providers.ConnectionCache = e.prov
 	assert.Equal(t, e.prov.ssh.ConfigSchema(), e.prov.ConfigSchema())
 	assert.Empty(t, e.prov.CredentialSchema().Fields)
@@ -51,7 +50,7 @@ func TestTheDeploySessionMethodsStayUnsupported(t *testing.T) {
 	_, err = s.DeploymentStatus(context.Background(), testTarget)
 	assert.ErrorIs(t, err, providers.ErrUnsupported)
 	_, err = s.VerifyDeployment(context.Background(), providers.VerifyRequest{})
-	assert.ErrorIs(t, err, providers.ErrUnsupported)
+	assert.NotErrorIs(t, err, providers.ErrUnsupported)
 }
 
 // F-14: a server prepared with the Linux profile only.

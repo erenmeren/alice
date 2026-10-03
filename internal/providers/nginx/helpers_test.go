@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -81,24 +83,60 @@ func (m *memHostKeys) Pinned(context.Context, uuid.UUID) (providers.HostKey, err
 
 func (m *memHostKeys) Observed(context.Context, uuid.UUID, providers.HostKey, bool) error { return nil }
 
-// emuProber answers from what the emulated Nginx serves.
-type emuProber struct{ emu *linuxsshtest.Emulator }
+// emuProber stands for Alice's own TLS probe: it answers from what the emulated Nginx serves.
+// remoteDown makes it unable to connect (ErrProbeUnreachable), remoteFails makes every handshake
+// fail (ErrProbeFailed, e.g. a firewall that resets); calls records "port sni keyType" per probe.
+type emuProber struct {
+	emu         *linuxsshtest.Emulator
+	mu          sync.Mutex
+	remoteDown  bool
+	remoteFails bool
+	calls       []string
+}
 
-func (p emuProber) Probe(_ context.Context, _ string, port int, sni, _ string) (Probe, error) {
-	return Probe{LeafSHA256: p.emu.Served(port, sni)}, nil
+func (p *emuProber) Probe(_ context.Context, host string, port int, sni, keyType string) (Probe, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls = append(p.calls, fmt.Sprintf("%s %d %s %s", host, port, sni, keyType))
+	switch {
+	case p.remoteDown:
+		return Probe{}, ErrProbeUnreachable
+	case p.remoteFails:
+		return Probe{}, ErrProbeFailed
+	}
+	leaf, chain, ok := p.emu.ProbeServed(port, sni, keyType)
+	if !ok {
+		return Probe{}, ErrProbeFailed
+	}
+	return Probe{LeafSHA256: leaf, ChainLength: chain}, nil
+}
+
+func (p *emuProber) set(down, fails bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.remoteDown, p.remoteFails = down, fails
+}
+
+func (p *emuProber) probes() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.calls...)
 }
 
 // env is the nginx provider wired to the emulated host through a fake SSH server.
 type env struct {
-	srv  *linuxsshtest.Server
-	emu  *linuxsshtest.Emulator
-	cred *fakeCred
-	hk   *memHostKeys
-	prov *Provider
-	ref  providers.TargetRef
-	ca   *pki.CA
-	leaf pki.Leaf
-	now  time.Time
+	srv    *linuxsshtest.Server
+	emu    *linuxsshtest.Emulator
+	cred   *fakeCred
+	hk     *memHostKeys
+	prov   *Provider
+	ref    providers.TargetRef
+	ca     *pki.CA
+	leaf   pki.Leaf
+	now    time.Time
+	prober *emuProber
+	op     uuid.UUID // the operation id of e.req
+	loc    *providers.CertLocation
 }
 
 type envOption func(*envConfig)
@@ -122,8 +160,9 @@ func newEnv(t *testing.T, opts ...envOption) *env {
 	hk := &memHostKeys{}
 	pin := linuxssh.HostKeyOf(srv.HostKey())
 	hk.pinned = &pin
+	// More connections per target than production's 2: tests keep sessions open until they end.
 	pool := linuxssh.NewPool(&linuxssh.Dialer{Clock: clock.Real{}, HostKeys: hk},
-		linuxssh.MaxConnections, linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)
+		linuxssh.MaxConnections, 16, linuxssh.IdleTimeout)
 	t.Cleanup(pool.Close)
 	lp := linuxssh.New(linuxssh.Options{Pool: pool, AllowUnverifiedHelper: true})
 	host, port := srv.Addr()
@@ -134,9 +173,10 @@ func newEnv(t *testing.T, opts ...envOption) *env {
 	}
 	emu.AddSite(linuxsshtest.NginxSite{Names: []string{"www.example.test"}, Port: 443, CertPath: wwwCert, KeyPath: wwwKey},
 		leaf.FullchainPEM, leaf.KeyPEM)
+	prober := &emuProber{emu: emu}
 	return &env{
-		srv: srv, emu: emu, cred: cred, hk: hk, ca: ca, leaf: leaf, now: now,
-		prov: New(Options{SSH: lp, Prober: emuProber{emu}, RetryWait: time.Millisecond}),
+		srv: srv, emu: emu, cred: cred, hk: hk, ca: ca, leaf: leaf, now: now, prober: prober, op: uuid.New(),
+		prov: New(Options{SSH: lp, Prober: prober, RetryWait: time.Millisecond}),
 		ref: providers.TargetRef{ID: testTarget, Name: "web-01", Kind: providers.KindNginx,
 			Config: providers.TargetConfig{"host": host, "port": port, "username": "alice-svc"}},
 	}
@@ -148,6 +188,54 @@ func (e *env) open(t *testing.T) providers.Session {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// session is open as the package's session type (for the unexported helpers).
+func (e *env) session(t *testing.T) *session {
+	t.Helper()
+	s, ok := e.open(t).(*session)
+	require.True(t, ok)
+	return s
+}
+
+// location is the fixture site's CertLocation from a discovery.
+func (e *env) location(t *testing.T) providers.CertLocation {
+	t.Helper()
+	if e.loc != nil {
+		return *e.loc
+	}
+	s := e.open(t)
+	res, err := s.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+	c, ok := locationsByPath(res)[wwwCert]
+	require.True(t, ok, "the fixture site is discovered")
+	require.True(t, c.Location.Supported)
+	e.loc = &c.Location
+	return c.Location
+}
+
+// hangUpOn makes the fake server drop the connection on the next command of subcommand sub;
+// every other command is the emulator's.
+func hangUpOn(e *env, sub string) {
+	scriptOn(e, sub, linuxsshtest.Response{Hangup: true})
+}
+
+// scriptOn makes the fake server answer the next command of subcommand sub with r (instead of the
+// emulator); every other command is the emulator's.
+func scriptOn(e *env, sub string, r linuxsshtest.Response) {
+	var once sync.Once
+	h := e.emu.Handler()
+	e.srv.SetHandler(func(cmd string, stdin []byte) linuxsshtest.Response {
+		hit := false
+		if strings.Contains(cmd, " "+sub+" ") || strings.HasSuffix(cmd, " "+sub) {
+			once.Do(func() { hit = true })
+		}
+		if hit {
+			return r
+		}
+		return h(cmd, stdin)
+	})
 }
 
 func warningCodes(ws []providers.Warning) []string {

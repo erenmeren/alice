@@ -1,5 +1,5 @@
 // Package nginx is the nginx provider (spec §6.6, §12): a linuxssh session plus certificate
-// discovery (and, with Task 11, deployment) through alice-helper's nginx subcommands.
+// discovery, deployment, rollback and verification through alice-helper's nginx subcommands.
 package nginx
 
 import (
@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/platform/clock"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
@@ -19,7 +20,7 @@ import (
 // Options are the provider's dependencies.
 type Options struct {
 	SSH       *linuxssh.Provider
-	Prober    Prober        // Task 11 defaults a nil prober to its TLS prober
+	Prober    Prober        // Alice's own TLS probe; nil = TLSProber{}
 	RetryWait time.Duration // between verification attempts; 0 = 2 s
 	Attempts  int           // verification attempts per endpoint; 0 = 5
 }
@@ -39,12 +40,15 @@ var (
 	_ providers.Session         = (*session)(nil)
 )
 
-// New returns the provider. It advertises what it implements: Task 11 adds deploy_certificate and
-// verify_deployment together with their methods.
+// New returns the provider. It advertises what it implements: the linuxssh capabilities, certificate
+// discovery, deployment (DeployCertificate, RollbackDeployment, DeploymentStatus) and verification.
 func New(o Options) *Provider {
 	p := &Provider{ssh: o.SSH, prober: o.Prober, retryWait: o.RetryWait, attempts: o.Attempts,
 		caps: providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
-			providers.CapDiscoverCerts)}
+			providers.CapDiscoverCerts, providers.CapVerifyDeployment)}
+	if p.prober == nil {
+		p.prober = TLSProber{}
+	}
 	if p.retryWait <= 0 {
 		p.retryWait = 2 * time.Second
 	}
@@ -78,7 +82,9 @@ func (p *Provider) ValidateConfig(cfg providers.TargetConfig) []validate.FieldEr
 func (p *Provider) ForgetTarget(target uuid.UUID) { p.ssh.ForgetTarget(target) }
 
 // Open opens a linuxssh session (same pool, pinned host key and helper protocol check) and keeps
-// its connection for the Nginx subcommands.
+// its connection for the Nginx subcommands, the target's host for Alice's own TLS probes and the
+// environment's clock (the real one when none is given) for the waits between verification
+// attempts.
 func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred providers.CredentialSource, env providers.Env) (providers.Session, error) {
 	s, err := p.ssh.Open(ctx, t, cred, env)
 	if err != nil {
@@ -89,15 +95,22 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 		_ = s.Close()
 		return nil, providers.NewError("ssh.unreachable", true, errors.New("nginx: the linuxssh session has no connection"), nil)
 	}
-	return &session{Session: s, conn: conn, p: p}, nil
+	cfg, _ := linuxssh.ParseConfig(t.Config) // valid: the linuxssh Open above refuses anything else
+	clk := env.Clock
+	if clk == nil {
+		clk = clock.Real{}
+	}
+	return &session{Session: s, conn: conn, p: p, host: cfg.Host, clock: clk}, nil
 }
 
-// session is a linuxssh session with the certificate methods. The four deployment methods stay
-// the framework's unsupported ones until Task 11.
+// session is a linuxssh session with the certificate methods. It never keeps a helper command:
+// commands are built where they are run (a deploy command carries the key on its stdin).
 type session struct {
 	providers.Session
 	conn   *linuxssh.Conn
 	p      *Provider
+	host   string // the target's address, for Alice's own TLS probes
+	clock  clock.Clock
 	closed atomic.Bool
 }
 
