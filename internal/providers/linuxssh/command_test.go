@@ -72,8 +72,8 @@ func TestCommandBudgets(t *testing.T) {
 	assert.Equal(t, LongCommandTimeout, CmdSSHDDump().timeout)
 	assert.Equal(t, LongCommandTimeout, CmdAuthKeysList().timeout)
 	// A-5: authkeys-read and authkeys-write run the same scan as authkeys-list (sshd -T per user),
-	// so they get its budget; the helper gives up on its own (helperproto.HelperBudget) well before
-	// Alice does, so a write never completes after Alice reported ssh.timeout.
+	// so they get its budget; the helper gives up on its own (helperproto.HelperBudget) 10 s before
+	// Alice normally does (a timed-out write is still an uncertain outcome for Alice).
 	write, err := CmdAuthKeysWrite("/root/.ssh/authorized_keys", helperproto.AbsentSHA256, testOp, []byte("x\n"))
 	require.NoError(t, err)
 	assert.Equal(t, LongCommandTimeout, read.timeout)

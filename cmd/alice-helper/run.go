@@ -50,7 +50,8 @@ var commands = map[string]command{
 }
 
 // commandBudget bounds one call. Alice gives authkeys-list, -read and -write 60 s (R37 item 17);
-// the helper stops 10 s earlier and never replaces a file after the deadline (replace).
+// the helper normally stops 10 s earlier and never replaces a file after its own deadline
+// (replace); Alice still treats a write that timed out as uncertain (see helperproto.HelperBudget).
 const commandBudget = helperproto.HelperBudget
 
 // run executes one call and returns the exit code. It prints exactly one JSON line.

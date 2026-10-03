@@ -40,7 +40,11 @@ Playwright: the e2e build has no deterministic way to queue a job before the loc
 - [ ] The helper refuses every path it did not compute itself from `/etc/passwd` and `sshd -T`, resolves symlinks
       and keeps them inside the user's home (also for an absolute pattern that points into the home) or inside a
       root-controlled directory of an absolute pattern, reads or writes a file reached through a symlink only in a
-      directory of its user, follows no symlink that appeared after the scan, never prints private key material, and
+      directory of its user, opens a candidate the scan reached without a symlink with `RESOLVE_NO_SYMLINKS` (a
+      symlink that appeared after the scan is refused) and one reached through a symlink still beneath its allowed
+      directory (`RESOLVE_BENEATH`) and only in a directory of its user, requires root-controlled directories above
+      every home (and, for a symlinked home, a resolved home of the account itself), never prints private key
+      material, and
       writes with a root-private lock file, hash check of the current file, hash check of the received content
       (`--content-sha256`, protocol 3: a connection dropped mid-transfer never leaves a truncated file), backup,
       temporary file, `fsync`, rename and directory `fsync`.
@@ -83,9 +87,18 @@ No High finding is open except the documented product residual P3-01.
   (warning `too_many_users`).
 - **Helper base directory.** The helper opens the base directory of a key file (the user's home, or the directory
   an absolute `AuthorizedKeysFile` names) by its path and resolves everything below it through that descriptor.
-  This is safe only while every directory above it (for example `/home` and `/`) is controlled by root. For an
-  absolute pattern outside the home the helper checks this at the scan (every component root's, not group or
-  other writable); for the home it relies on the system layout.
+  This is safe only while every directory above it (for example `/home` and `/`) is controlled by root, so the
+  helper checks it at the scan: every existing directory above the home (and above the directory of an absolute
+  pattern outside the home) must be root's and not group or other writable. When the home path goes through a
+  symlink, the resolved home must also belong to the account (root excepted) and sit in such a directory.
+  Otherwise the account's key files are reported as unsupported and never read or written. Standard layouts
+  (`/home/<u>`, `/root`, `/var/lib/<x>`) pass; a home below a directory other users can write (for example a
+  group-writable `/srv/homes`) does not. The check and the open are separate steps: a root-controlled layout
+  cannot change in between, which is why the check is required.
+- **Last-key guard for uid-0 accounts.** Alice's linuxssh provider refuses the last key of every uid-0 account
+  (`root`, `toor`, …) without an administrator's confirmation (it asks the helper for the uid). Inventory's own
+  pre-check before queueing a removal still looks at the name `root` only, so for another uid-0 account the refusal
+  arrives when the job runs rather than when the removal is requested.
 - **`.ssh` created with root's supplementary groups.** The helper creates a missing `.ssh` with the user's
   filesystem uid and gid but keeps root's supplementary groups. Ownership is the user's either way; a directory
   that ended up group-writable would be refused by the StrictModes check of the next write, never used.

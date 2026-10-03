@@ -22,8 +22,11 @@ const (
 )
 
 // HelperBudget bounds one helper call on the server (R37 item 17): the helper gives up before
-// Alice's longest command budget (60 s) ends, with a margin for the connection, and never replaces
-// a file after it, so a write never completes after Alice reported ssh.timeout.
+// Alice's longest command budget (60 s) ends, with a 10 s margin, and never replaces a file after
+// it. So a write normally ends before Alice gives up, but not always: the helper's budget starts
+// when its process starts, Alice's when Conn.Run starts (a slow sudo or PAM eats the margin), and a
+// cancelled job reports ssh.timeout at any moment. Alice therefore treats a timeout of a write as
+// an uncertain outcome.
 const HelperBudget = 50 * time.Second
 
 // Subcommands of protocol 3 (R37 item 3).
