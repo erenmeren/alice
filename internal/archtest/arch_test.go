@@ -33,9 +33,12 @@ var rules = map[string][]string{
 	"alice/internal/certs/...":     {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers":     {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers/...": {platform, "alice/internal/providers", "alice/internal/providers/linuxssh/..."},
-	"alice/internal/inventory/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/..."},
-	"alice/internal/jobs/...":      {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/..."},
-	"alice/internal/setup/...":     {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/..."},
+	// The test world of the linuxssh provider runs the real nginx configuration parser, so that an
+	// emulated nginx-dump parses configuration text the way the helper does.
+	"alice/internal/providers/linuxssh/linuxsshtest": {platform, "alice/internal/providers/linuxssh/...", "alice/internal/providers/nginx/nginxconf"},
+	"alice/internal/inventory/...":                   {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/..."},
+	"alice/internal/jobs/...":                        {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/..."},
+	"alice/internal/setup/...":                       {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/..."},
 	"alice/internal/api/...": {platform, "alice/internal/i18n/...", "alice/internal/version/...", "alice/internal/rbac/...",
 		"alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/notify/...",
 		"alice/internal/auth/...", "alice/internal/setup/...", "alice/internal/inventory/...", "alice/internal/jobs/...", "alice/internal/providers"},
@@ -48,9 +51,10 @@ const platform = "alice/internal/platform/..."
 // denied lists imports that are forbidden even though a broader allow entry
 // covers them. Providers are pure adapters and have no database access (§5.4 rule 2).
 var denied = map[string][]string{
-	"alice/internal/certs/...":     {"alice/internal/platform/db/..."},
-	"alice/internal/providers":     {"alice/internal/platform/db/..."},
-	"alice/internal/providers/...": {"alice/internal/platform/db/..."},
+	"alice/internal/certs/...":                       {"alice/internal/platform/db/..."},
+	"alice/internal/providers":                       {"alice/internal/platform/db/..."},
+	"alice/internal/providers/...":                   {"alice/internal/platform/db/..."},
+	"alice/internal/providers/linuxssh/linuxsshtest": {"alice/internal/platform/db/..."},
 }
 
 // allowed decides whether package pkg may import imp. It is a pure function so
@@ -143,6 +147,8 @@ func TestAllowed(t *testing.T) {
 	const (
 		nginx   = "alice/internal/providers/nginx"
 		azurekv = "alice/internal/providers/azurekv"
+
+		linuxsshtest = "alice/internal/providers/linuxssh/linuxsshtest"
 	)
 	tests := []struct {
 		name, pkg, imp string
@@ -156,6 +162,9 @@ func TestAllowed(t *testing.T) {
 		{"provider to linuxssh allowed", nginx, "alice/internal/providers/linuxssh", true},
 		{"provider to own subpackage allowed", nginx, nginx + "/internal", true},
 		{"nginxconf to helperproto allowed", nginx + "/nginxconf", "alice/internal/providers/linuxssh/helperproto", true},
+		{"linuxsshtest to nginxconf allowed", linuxsshtest, "alice/internal/providers/nginx/nginxconf", true},
+		{"linuxsshtest to the nginx provider denied", linuxsshtest, nginx, false},
+		{"linuxsshtest to platform/db denied", linuxsshtest, "alice/internal/platform/db", false},
 		{"nginxconf to platform/db denied", nginx + "/nginxconf", "alice/internal/platform/db", false},
 		{"platform to i18n denied", "alice/internal/platform/clock", "alice/internal/i18n", false},
 		{"platform to platform allowed", "alice/internal/platform/db", "alice/internal/platform/clock", true},

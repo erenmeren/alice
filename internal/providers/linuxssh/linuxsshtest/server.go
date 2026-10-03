@@ -32,6 +32,9 @@ type Response struct {
 	// Delay is waited before answering (a slow host, F-39). The wait ends early when the client
 	// closes the connection.
 	Delay time.Duration
+	// Hangup closes the whole SSH connection instead of answering (a dropped connection, F-08):
+	// the client sees a transport error, not an exit status.
+	Hangup bool
 }
 
 // Handler answers one command line; stdin is everything the client sent before closing its input.
@@ -301,13 +304,13 @@ func (s *Server) handleConn(c net.Conn) {
 		sessions.Add(1)
 		go func() {
 			defer sessions.Done()
-			s.serveSession(ch, creqs, closed)
+			s.serveSession(ch, creqs, closed, sc)
 		}()
 	}
 	sessions.Wait()
 }
 
-func (s *Server) serveSession(ch ssh.Channel, reqs <-chan *ssh.Request, closed <-chan struct{}) {
+func (s *Server) serveSession(ch ssh.Channel, reqs <-chan *ssh.Request, closed <-chan struct{}, conn ssh.Conn) {
 	defer func() { _ = ch.Close() }()
 	for req := range reqs {
 		if req.Type != "exec" {
@@ -333,6 +336,10 @@ func (s *Server) serveSession(ch ssh.Channel, reqs <-chan *ssh.Request, closed <
 		resp := Response{Stderr: []byte("sh: command not found\n"), Exit: 127}
 		if h != nil {
 			resp = h(p.Command, stdin)
+		}
+		if resp.Hangup {
+			_ = conn.Close()
+			return
 		}
 		if resp.Delay > 0 {
 			select {

@@ -1,0 +1,1042 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
+
+	"alice/internal/providers/linuxssh/helperproto"
+	"alice/internal/providers/linuxssh/linuxsshtest"
+	"alice/internal/providers/nginx/nginxconf"
+	"alice/internal/testutil/pki"
+)
+
+// The fidelity test: the same scenario runs against the real helper (on a temporary directory
+// tree, through its sys indirection) and against the emulated Nginx of the fake SSH server
+// (internal/providers/linuxssh/linuxsshtest), and every answer is compared: exit status, error
+// code, phase, failed_step, cause_step, error, steps, unsupported reasons, warnings, config_error
+// class, reason and file, the files described, and what is left on disk. The helper is the
+// specification: a difference means the emulator is wrong. The scenarios are in the order of the
+// table in the Task 9 report.
+//
+// What differs by construction and is normalized away: the helper's messages (the emulator's
+// are fixed text), the names of owners and groups (the helper's fixture is owned by the test's
+// uid), and the file and line of a server block (the emulator generates its own configuration
+// file, conf.d/emu.conf, where the helper fixture has conf.d/www.conf).
+
+const (
+	fidCrt = "/etc/nginx/ssl/www.crt"
+	fidKey = "/etc/nginx/ssl/www.key"
+	fidSSL = "/etc/nginx/ssl"
+	wwwCfg = "/etc/nginx/conf.d/www.conf"
+	emuCfg = "/etc/nginx/conf.d/emu.conf"
+)
+
+type twin struct {
+	t      *testing.T
+	w      *deployWorld
+	e      *linuxsshtest.Emulator
+	h      linuxsshtest.Handler
+	third  pki.Leaf // a leaf for a third deployment
+	killed bool
+
+	failTests int
+	renames   int
+	rename    func(n int) error
+}
+
+func newTwin(t *testing.T, withNginx bool) *twin {
+	t.Helper()
+	if os.Getuid() == 0 {
+		t.Skip("the scenarios use the permission bits of an unprivileged user")
+	}
+	w := newDeployWorld(t)
+	e := linuxsshtest.NewEmulator()
+	if withNginx {
+		e.EnableNginx("1.22.1")
+		e.AddSite(linuxsshtest.NginxSite{Names: []string{"www.example.test"}, Port: 443, CertPath: fidCrt, KeyPath: fidKey},
+			w.leaf.FullchainPEM, w.leaf.KeyPEM)
+		e.AddUnsupported([]string{"both.example.test"}, 443, "/etc/nginx/ssl/both.pem", nginxconf.ReasonCombinedFile)
+	}
+	tw := &twin{t: t, w: w, e: e, h: e.Handler(),
+		third: pki.NewCA("Third", pki.ECDSA256, testNow).Issue(pki.Opts{CommonName: "www.example.test"}, testNow)}
+	inner := w.f.s.runNginx
+	w.f.s.runNginx = func(ctx context.Context, args ...string) ([]byte, []byte, error) {
+		if !withNginx {
+			return inner(ctx, args...) // the fixture's nginx is missing
+		}
+		if tw.killed {
+			return nil, nil, errProgramKilled
+		}
+		if args[0] == "-t" && tw.failTests > 0 {
+			tw.failTests--
+			return nil, []byte("nginx: [emerg] unexpected \"}\" in /etc/nginx/nginx.conf:3"), errors.New("exit status 1")
+		}
+		return inner(ctx, args...)
+	}
+	if !withNginx {
+		w.missing = true
+	}
+	w.f.s.beforeRename = func() error {
+		tw.renames++
+		if tw.rename != nil {
+			return tw.rename(tw.renames)
+		}
+		return nil
+	}
+	return tw
+}
+
+// ---- running a command on both ----------------------------------------------------------------
+
+type answer struct {
+	exit   int
+	killed bool
+	m      map[string]any
+}
+
+func (tw *twin) emuLine(sub string, args []string) string {
+	var b strings.Builder
+	if sub != helperproto.SubTLSProbe {
+		b.WriteString("sudo -n ")
+	}
+	b.WriteString(helperproto.HelperPath + " " + sub)
+	for _, a := range args {
+		if strings.HasPrefix(a, "--") && a != "--" && !strings.ContainsAny(a, " '") {
+			b.WriteString(" " + a)
+		} else {
+			b.WriteString(" '" + a + "'")
+		}
+	}
+	return b.String()
+}
+
+func (tw *twin) runHelper(sub, stdin string, args ...string) answer {
+	tw.t.Helper()
+	tw.w.f.s.stdin = strings.NewReader(stdin)
+	code, m := tw.w.f.run(append([]string{sub}, args...)...)
+	return answer{exit: code, m: m}
+}
+
+func (tw *twin) runEmu(sub, stdin string, args ...string) answer {
+	tw.t.Helper()
+	r := tw.h(tw.emuLine(sub, args), []byte(stdin))
+	if r.Signal != "" {
+		return answer{exit: -1, killed: true}
+	}
+	var m map[string]any
+	if len(r.Stdout) > 0 {
+		require.NoError(tw.t, json.Unmarshal(r.Stdout, &m), string(r.Stdout))
+	}
+	return answer{exit: r.Exit, m: m}
+}
+
+// normalize makes the two answers comparable (see the comment at the top of the file).
+func normalize(sub string, a answer, helperSide bool) answer {
+	if a.m == nil {
+		return a
+	}
+	raw, _ := json.Marshal(a.m)
+	text := string(raw)
+	if helperSide {
+		text = strings.ReplaceAll(text, wwwCfg, emuCfg)
+	}
+	var m map[string]any
+	_ = json.Unmarshal([]byte(text), &m)
+	delete(m, "message")
+	if sub == helperproto.SubNginxDump {
+		for _, s := range asList(m["servers"]) {
+			delete(s, "file")
+			delete(s, "line")
+		}
+		for _, f := range asList(m["files"]) {
+			delete(f, "owner")
+			delete(f, "group")
+		}
+	}
+	a.m = m
+	return a
+}
+
+func asList(v any) []map[string]any {
+	var out []map[string]any
+	l, _ := v.([]any)
+	for _, x := range l {
+		out = append(out, x.(map[string]any))
+	}
+	return out
+}
+
+// same runs the command on both and requires the same answer; it returns the helper's.
+func (tw *twin) same(sub, stdin string, args ...string) answer {
+	tw.t.Helper()
+	h := normalize(sub, tw.runHelper(sub, stdin, args...), true)
+	e := normalize(sub, tw.runEmu(sub, stdin, args...), false)
+	assert.Equal(tw.t, h.exit, e.exit, "exit status of %s %v", sub, args)
+	assert.Equal(tw.t, h.m, e.m, "answer of %s %v", sub, args)
+	return h
+}
+
+// ---- mirrored changes to the two worlds ---------------------------------------------------------
+
+func (tw *twin) put(guest string, content []byte) {
+	tw.t.Helper()
+	require.NoError(tw.t, os.WriteFile(tw.w.f.host(guest), content, 0o600)) // keeps the mode of an existing file
+	tw.e.SetNginxFile(guest, content)
+}
+
+func (tw *twin) remove(guest string) {
+	tw.t.Helper()
+	require.NoError(tw.t, os.Remove(tw.w.f.host(guest)))
+	tw.e.RemoveNginxFile(guest)
+}
+
+func (tw *twin) chmod(guest string, mode os.FileMode) {
+	tw.t.Helper()
+	require.NoError(tw.t, os.Chmod(tw.w.f.host(guest), mode))
+	tw.e.SetNginxFileMode(guest, "root", "root", uint32(mode))
+}
+
+func (tw *twin) failTest(n int) { tw.failTests = n; tw.e.FailConfigTest(n) }
+
+func (tw *twin) failReload(n int) { tw.w.reloadFail = n; tw.e.FailReload(n) }
+
+func (tw *twin) killNginx() { tw.killed = true; tw.e.SetNginxKilled(true) }
+
+// dirProblem makes the directory of the certificate and key (/etc/nginx/ssl) one the walk refuses.
+func (tw *twin) dirNotRootControlled() {
+	tw.t.Helper()
+	require.NoError(tw.t, os.Chmod(tw.w.f.host(fidSSL), 0o775))
+	tw.e.SetFileProblem(fidCrt, helperproto.FileNotRootControlled)
+	tw.e.SetFileProblem(fidKey, helperproto.FileNotRootControlled)
+}
+
+func (tw *twin) dirSpecialFS() {
+	tw.w.magicAt(fidSSL, unix.PROC_SUPER_MAGIC)
+	tw.e.SetFileProblem(fidCrt, helperproto.FileSpecialFS)
+	tw.e.SetFileProblem(fidKey, helperproto.FileSpecialFS)
+}
+
+// kill kills both helpers at the named point of the next transaction (the helper's own point names).
+func (tw *twin) kill(point string) {
+	fired := false
+	tw.w.f.s.afterDeployStep = func(name string) error {
+		if name == point && !fired {
+			fired = true
+			return errKilled
+		}
+		return nil
+	}
+	tw.e.KillAt(point)
+}
+
+func (tw *twin) revive() { tw.w.f.s.afterDeployStep, tw.w.f.s.killed = nil, false }
+
+// ---- command helpers ------------------------------------------------------------------------
+
+func (tw *twin) deployArgs(op, in, expect string) []string {
+	return []string{"--op", op, "--cert", fidCrt, "--key", fidKey, "--expect-cert-sha256", expect, "--content-sha256", hexOf(in)}
+}
+
+func (tw *twin) deploy(op string) answer {
+	tw.t.Helper()
+	in := tw.w.newInput()
+	return tw.same(helperproto.SubNginxDeploy, in, tw.deployArgs(op, in, tw.w.oldSHA())...)
+}
+
+func (tw *twin) status(op string) answer { return tw.same(helperproto.SubNginxStatus, "", "--op", op) }
+
+func (tw *twin) restore(op string) answer {
+	return tw.same(helperproto.SubNginxRestore, "", "--op", op)
+}
+
+func (tw *twin) dump() answer { return tw.same(helperproto.SubNginxDump, "") }
+
+// sameFiles requires both worlds to hold the same certificate and key.
+func (tw *twin) sameFiles(want string) {
+	tw.t.Helper()
+	cert, key := tw.w.f.read(fidCrt), tw.w.f.read(fidKey)
+	assert.Equal(tw.t, cert, string(tw.e.NginxFile(fidCrt)), "certificate file")
+	assert.Equal(tw.t, key, string(tw.e.NginxFile(fidKey)), "key file")
+	switch want {
+	case "old":
+		assert.Equal(tw.t, string(tw.w.leaf.FullchainPEM), cert)
+		assert.Equal(tw.t, string(tw.w.leaf.KeyPEM), key)
+	case "new":
+		assert.Equal(tw.t, string(tw.w.newLeaf.FullchainPEM), cert)
+		assert.Equal(tw.t, string(tw.w.newLeaf.KeyPEM), key)
+	}
+}
+
+// ---- the scenarios ----------------------------------------------------------------------------------
+
+func TestEmulatorFidelityDump(t *testing.T) {
+	dumpOf := func(tw *twin) string { return tw.w.dumpText() }
+	emuDump := func(tw *twin) string { return tw.e.NginxDumpText() }
+	// forge replaces the text nginx -T prints, in both worlds, by f of each world's own text.
+	forge := func(tw *twin, f func(text string, helper bool) string) {
+		tw.w.setDump(f(dumpOf(tw), true))
+		tw.e.SetNginxDump(f(emuDump(tw), false))
+	}
+	conf := func(tw *twin, path, content string) {
+		tw.w.setConf(confFile{path, content})
+		tw.e.SetNginxConfig(path, content)
+	}
+	const main = "/etc/nginx/nginx.conf"
+	type scenario struct {
+		name  string
+		nginx bool
+		run   func(t *testing.T, tw *twin)
+	}
+	for _, sc := range []scenario{
+		{"a valid configuration with a supported and an unsupported pair", true, func(t *testing.T, tw *twin) {
+			a := tw.dump()
+			assert.Equal(t, true, a.m["config_valid"])
+		}},
+		{"nginx missing", false, func(t *testing.T, tw *twin) {
+			a := tw.dump()
+			assert.Equal(t, helperproto.CodeNginxNotFound, a.m["code"])
+			assert.Equal(t, helperproto.CodeNginxNotFound, tw.same(helperproto.SubNginxTest, "").m["code"])
+		}},
+		{"nginx killed", true, func(t *testing.T, tw *twin) {
+			tw.killNginx()
+			assert.Equal(t, helperproto.CodeIOError, tw.dump().m["code"])
+			assert.Equal(t, helperproto.CodeIOError, tw.same(helperproto.SubNginxTest, "").m["code"])
+		}},
+		{"nginx -t fails", true, func(t *testing.T, tw *twin) {
+			tw.same(helperproto.SubNginxTest, "")
+			tw.w.tFails = "nginx: [emerg] unexpected \"}\" in /etc/nginx/nginx.conf:3"
+			tw.e.SetConfigInvalid(helperproto.ConfigErrSyntax)
+			assert.Equal(t, false, tw.same(helperproto.SubNginxTest, "").m["valid"])
+			assert.Equal(t, helperproto.ConfigErrSyntax, tw.dump().m["config_error"])
+		}},
+		{"warning key_group_open (a 0644 key)", true, func(t *testing.T, tw *twin) {
+			tw.chmod(fidKey, 0o644)
+			assert.Equal(t, []any{helperproto.WarnKeyGroupOpen}, tw.dump().m["warnings"])
+		}},
+		{"no warning for 0640 and 0660 keys (root's group)", true, func(t *testing.T, tw *twin) {
+			for _, m := range []os.FileMode{0o640, 0o660, 0o600, 0o400} {
+				tw.chmod(fidKey, m)
+				assert.Equal(t, []any{}, tw.dump().m["warnings"], "%o", m)
+			}
+		}},
+		{"warning key_group_open (others can read)", true, func(t *testing.T, tw *twin) {
+			tw.chmod(fidKey, 0o604)
+			assert.Equal(t, []any{helperproto.WarnKeyGroupOpen}, tw.dump().m["warnings"])
+		}},
+		{"warning certificate_block_dropped", true, func(t *testing.T, tw *twin) {
+			tw.put(fidCrt, append(append([]byte{}, tw.w.leaf.FullchainPEM...), "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"...))
+			assert.Equal(t, []any{helperproto.WarnCertificateBlockDropped}, tw.dump().m["warnings"])
+		}},
+		{"config_file_writable (a writable configuration file)", true, func(t *testing.T, tw *twin) {
+			tw.chmod(wwwCfg, 0o666)
+			tw.e.SetNginxFileMode(emuCfg, "root", "root", 0o666)
+			a := tw.dump()
+			assert.Equal(t, []any{helperproto.WarnConfigFileWritable}, a.m["warnings"])
+			assert.Equal(t, []any{emuCfg}, a.m["writable"])
+		}},
+		{"syntax error in the configuration", true, func(t *testing.T, tw *twin) {
+			conf(tw, main, "http {\n")
+			assert.Equal(t, helperproto.ConfigErrSyntax, tw.dump().m["config_error"])
+		}},
+		{"NUL byte", true, func(t *testing.T, tw *twin) {
+			text := "# configuration file /etc/nginx/nginx.conf:\nhttp { }\x00\n"
+			tw.w.setDump(text)
+			tw.e.SetNginxDump(text)
+			assert.Equal(t, helperproto.ConfigReasonNULByte, tw.dump().m["config_error_reason"])
+		}},
+		{"too many arguments", true, func(t *testing.T, tw *twin) {
+			conf(tw, main, "http { server { server_name"+strings.Repeat(" a", 5000)+"; } }")
+			assert.Equal(t, helperproto.ConfigReasonTooComplex, tw.dump().m["config_error_reason"])
+		}},
+		{"nested too deep", true, func(t *testing.T, tw *twin) {
+			conf(tw, main, strings.Repeat("a {", 120)+strings.Repeat("}", 120))
+			assert.Equal(t, helperproto.ConfigReasonTooComplex, tw.dump().m["config_error_reason"])
+		}},
+		{"line too long", true, func(t *testing.T, tw *twin) {
+			conf(tw, main, "# "+strings.Repeat("x", nginxconf.MaxLine+1))
+			assert.Equal(t, helperproto.ConfigReasonTooLarge, tw.dump().m["config_error_reason"])
+		}},
+		{"include loop", true, func(t *testing.T, tw *twin) {
+			conf(tw, main, "include /etc/nginx/nginx.conf;")
+			assert.Equal(t, helperproto.ConfigReasonIncludeLoop, tw.dump().m["config_error_reason"])
+		}},
+		{"relative conf path", true, func(t *testing.T, tw *twin) {
+			tw.w.version = strings.Replace(nginxV, "/etc/nginx/nginx.conf", "conf/nginx.conf", 1)
+			tw.e.SetNginxConfPath("conf/nginx.conf")
+			assert.Equal(t, helperproto.ConfigReasonNoConfPath, tw.dump().m["config_error_reason"])
+		}},
+		{"no conf path (a source build)", true, func(t *testing.T, tw *twin) {
+			tw.w.version = strings.Replace(nginxV, "--conf-path=/etc/nginx/nginx.conf ", "", 1)
+			tw.e.SetNginxConfPath("")
+			assert.Equal(t, helperproto.ConfigReasonNoConfPath, tw.dump().m["config_error_reason"])
+		}},
+		{"unclean conf path", true, func(t *testing.T, tw *twin) {
+			tw.w.version = strings.Replace(nginxV, "/etc/nginx/nginx.conf", "/etc/nginx//nginx.conf", 1)
+			tw.e.SetNginxConfPath("/etc/nginx//nginx.conf")
+			assert.Equal(t, helperproto.ConfigReasonNoConfPath, tw.dump().m["config_error_reason"])
+		}},
+		{"output over the cap", true, func(t *testing.T, tw *twin) {
+			tw.w.tooBig = true
+			conf(tw, main, "# "+strings.Repeat("x", helperproto.MaxNginxConfig)+"\nhttp { include /etc/nginx/conf.d/*.conf; }\n")
+			assert.Equal(t, helperproto.ConfigReasonTooLarge, tw.dump().m["config_error_reason"])
+		}},
+		{"duplicate file", true, func(t *testing.T, tw *twin) {
+			forge(tw, func(s string, _ bool) string { return s + "# configuration file /etc/nginx/nginx.conf:\nhttp { }\n" })
+			assert.Equal(t, helperproto.ConfigReasonDuplicateFile, tw.dump().m["config_error_reason"])
+		}},
+		{"text before the first marker", true, func(t *testing.T, tw *twin) {
+			forge(tw, func(s string, _ bool) string { return "http { server { }}\n" + s })
+			assert.Equal(t, helperproto.ConfigReasonUnexpectedText, tw.dump().m["config_error_reason"])
+		}},
+		{"an empty dump", true, func(t *testing.T, tw *twin) {
+			forge(tw, func(string, bool) string { return "" })
+			assert.Equal(t, helperproto.ConfigReasonWrongFirstFile, tw.dump().m["config_error_reason"])
+		}},
+		{"a file changed since nginx read it", true, func(t *testing.T, tw *twin) {
+			forge(tw, func(s string, _ bool) string { return s })
+			tw.put(wwwCfg, append(append([]byte{}, tw.w.f.read(wwwCfg)...), "#\n"...))
+			tw.e.SetNginxFile(emuCfg, append(tw.e.NginxFile(emuCfg), "#\n"...))
+			assert.Equal(t, helperproto.ConfigReasonChanged, tw.dump().m["config_error_reason"])
+		}},
+		{"no line feed after the file", true, func(t *testing.T, tw *twin) {
+			forge(tw, func(s string, _ bool) string { return strings.TrimSuffix(s, "\n") })
+			assert.Equal(t, helperproto.ConfigReasonChanged, tw.dump().m["config_error_reason"])
+		}},
+		{"a configuration file that does not exist", true, func(t *testing.T, tw *twin) {
+			forge(tw, func(s string, _ bool) string { return s })
+			require.NoError(t, os.Remove(tw.w.f.host(wwwCfg)))
+			tw.e.RemoveNginxFile(emuCfg)
+			assert.Equal(t, helperproto.ConfigReasonMissing, tw.dump().m["config_error_reason"])
+		}},
+		{"a FIFO", true, func(t *testing.T, tw *twin) {
+			require.NoError(t, os.Remove(tw.w.f.host(wwwCfg)))
+			require.NoError(t, unix.Mkfifo(tw.w.f.host(wwwCfg), 0o644))
+			tw.e.SetFileProblem(emuCfg, helperproto.FileNotRegular)
+			assert.Equal(t, helperproto.ConfigReasonNotRegular, tw.dump().m["config_error_reason"])
+		}},
+		{"a name with a space", true, func(t *testing.T, tw *twin) {
+			tw.w.f.write("/etc/nginx/conf.d/a b.conf", "", 0o644)
+			forge(tw, func(s string, _ bool) string { return s + "# configuration file /etc/nginx/conf.d/a b.conf:\n\n" })
+			assert.Equal(t, helperproto.ConfigReasonNameNotAllowed, tw.dump().m["config_error_reason"])
+		}},
+		{"a relative name", true, func(t *testing.T, tw *twin) {
+			forge(tw, func(s string, _ bool) string { return s + "# configuration file conf.d/www.conf:\nhttp { }\n" })
+			assert.Equal(t, helperproto.ConfigReasonNameNotAllowed, tw.dump().m["config_error_reason"])
+		}},
+		{"a group-writable directory", true, func(t *testing.T, tw *twin) {
+			require.NoError(t, os.Chmod(tw.w.f.host("/etc/nginx/conf.d"), 0o775))
+			tw.e.SetFileProblem(emuCfg, helperproto.FileNotRootControlled)
+			assert.Equal(t, helperproto.ConfigReasonNotRootControlled, tw.dump().m["config_error_reason"])
+		}},
+		{"a configuration directory on procfs", true, func(t *testing.T, tw *twin) {
+			tw.w.magicAt("/etc/nginx/conf.d", unix.PROC_SUPER_MAGIC)
+			tw.e.SetFileProblem(emuCfg, helperproto.FileSpecialFS)
+			assert.Equal(t, helperproto.ConfigReasonSpecialFS, tw.dump().m["config_error_reason"])
+		}},
+		{"certificate file problems: missing", true, func(t *testing.T, tw *twin) {
+			tw.remove(fidCrt)
+			assert.Equal(t, helperproto.FileMissing, asList(tw.dump().m["files"])[0]["problem"])
+		}},
+		{"certificate file problems: missing key", true, func(t *testing.T, tw *twin) {
+			tw.remove(fidKey)
+			assert.Equal(t, helperproto.FileMissing, asList(tw.dump().m["files"])[1]["problem"])
+		}},
+		{"certificate file problems: a FIFO", true, func(t *testing.T, tw *twin) {
+			require.NoError(t, os.Remove(tw.w.f.host(fidCrt)))
+			require.NoError(t, unix.Mkfifo(tw.w.f.host(fidCrt), 0o644))
+			tw.e.SetFileProblem(fidCrt, helperproto.FileNotRegular)
+			assert.Equal(t, helperproto.FileNotRegular, asList(tw.dump().m["files"])[0]["problem"])
+		}},
+		{"certificate file problems: a hard-linked key", true, func(t *testing.T, tw *twin) {
+			require.NoError(t, os.Link(tw.w.f.host(fidKey), tw.w.f.host("/etc/nginx/ssl/other.key")))
+			tw.e.SetFileProblem(fidKey, helperproto.FileHardLinked)
+			assert.Equal(t, helperproto.FileHardLinked, asList(tw.dump().m["files"])[1]["problem"])
+		}},
+		{"certificate file problems: too large", true, func(t *testing.T, tw *twin) {
+			tw.put(fidCrt, make([]byte, helperproto.MaxCertFileSize+1))
+			assert.Equal(t, helperproto.FileTooLarge, asList(tw.dump().m["files"])[0]["problem"])
+		}},
+		{"certificate file problems: not a certificate", true, func(t *testing.T, tw *twin) {
+			tw.put(fidCrt, []byte("hello"))
+			assert.Equal(t, helperproto.FileNotACertificate, asList(tw.dump().m["files"])[0]["problem"])
+		}},
+		{"certificate file problems: the directory is not root controlled", true, func(t *testing.T, tw *twin) {
+			tw.dirNotRootControlled()
+			assert.Equal(t, helperproto.FileNotRootControlled, asList(tw.dump().m["files"])[0]["problem"])
+		}},
+		{"certificate file problems: the directory is on procfs", true, func(t *testing.T, tw *twin) {
+			tw.dirSpecialFS()
+			assert.Equal(t, helperproto.FileSpecialFS, asList(tw.dump().m["files"])[0]["problem"])
+		}},
+		{"answer over the budget", true, func(t *testing.T, tw *twin) {
+			old := dumpBudget
+			dumpBudget = 100
+			defer func() { dumpBudget = old }()
+			tw.e.SetNginxDumpBudget(100)
+			assert.Equal(t, helperproto.CodeOutputTooLarge, tw.dump().m["code"])
+		}},
+	} {
+		t.Run(sc.name, func(t *testing.T) { sc.run(t, newTwin(t, sc.nginx)) })
+	}
+}
+
+func TestEmulatorFidelityDeploy(t *testing.T) {
+	type scenario struct {
+		name string
+		run  func(t *testing.T, tw *twin)
+	}
+	for _, sc := range []scenario{
+		{"committed, then restored", func(t *testing.T, tw *twin) {
+			a := tw.deploy(opA)
+			assert.Equal(t, helperproto.PhaseCommitted, a.m["phase"])
+			tw.sameFiles("new")
+			assert.Equal(t, helperproto.PhaseCommitted, tw.status(opA).m["phase"])
+			assert.Equal(t, helperproto.PhaseCommitted, tw.deploy(opA).m["phase"], "the journal answers the same operation")
+			assert.Equal(t, helperproto.PhaseRestored, tw.restore(opA).m["phase"])
+			tw.sameFiles("old")
+			assert.Equal(t, helperproto.PhaseRestored, tw.status(opA).m["phase"])
+			tw.same(helperproto.SubNginxRestore, "", "--op", opA)
+			assert.Equal(t, helperproto.PhaseRestored, tw.deploy(opA).m["phase"], "the restored operation answers from its journal")
+		}},
+		{"modes: a 0640 key stays 0640, the certificate never gets wider", func(t *testing.T, tw *twin) {
+			tw.chmod(fidKey, 0o640)
+			tw.chmod(fidCrt, 0o664)
+			tw.deploy(opA)
+			files := asList(tw.dump().m["files"])
+			assert.Equal(t, "0644", files[0]["mode"])
+			assert.Equal(t, "0640", files[1]["mode"])
+			tw.restore(opA)
+			files = asList(tw.dump().m["files"])
+			assert.Equal(t, "0664", files[0]["mode"], "nginx-restore puts the exact old mode back")
+			assert.Equal(t, "0640", files[1]["mode"])
+			tw.chmod(fidKey, 0o444)
+			tw.deploy(opB)
+			assert.Equal(t, "0600", asList(tw.dump().m["files"])[1]["mode"], "an old 0444 key becomes 0600")
+		}},
+		{"unchanged", func(t *testing.T, tw *twin) {
+			in := input(tw.w.leaf.FullchainPEM, tw.w.leaf.KeyPEM)
+			a := tw.same(helperproto.SubNginxDeploy, in, tw.deployArgs(opA, in, tw.w.oldSHA())...)
+			assert.Equal(t, helperproto.PhaseUnchanged, a.m["phase"])
+			tw.status(opA)
+			tw.restore(opA)
+		}},
+		{"operation id of another deployment", func(t *testing.T, tw *twin) {
+			tw.deploy(opA)
+			in := input(tw.w.leaf.FullchainPEM, tw.w.leaf.KeyPEM)
+			a := tw.same(helperproto.SubNginxDeploy, in, tw.deployArgs(opA, in, hexOf(string(tw.w.newLeaf.FullchainPEM)))...)
+			assert.Equal(t, helperproto.CodeInvalidArgument, a.m["code"])
+		}},
+		{"refusal: the certificate hash changed", func(t *testing.T, tw *twin) {
+			tw.put(fidCrt, []byte("changed"))
+			a := tw.deploy(opA)
+			assert.Equal(t, helperproto.CodeHashMismatch, a.m["code"])
+			tw.status(opA)
+		}},
+		{"refusal: certificate missing", func(t *testing.T, tw *twin) {
+			tw.remove(fidCrt)
+			assert.Equal(t, helperproto.CodeNotFound, tw.deploy(opA).m["code"])
+		}},
+		{"refusal: key missing", func(t *testing.T, tw *twin) {
+			tw.remove(fidKey)
+			assert.Equal(t, helperproto.CodeNotFound, tw.deploy(opA).m["code"])
+		}},
+		{"refusal: a FIFO certificate", func(t *testing.T, tw *twin) {
+			require.NoError(t, os.Remove(tw.w.f.host(fidCrt)))
+			require.NoError(t, unix.Mkfifo(tw.w.f.host(fidCrt), 0o644))
+			tw.e.SetFileProblem(fidCrt, helperproto.FileNotRegular)
+			assert.Equal(t, helperproto.CodeNotRegularFile, tw.deploy(opA).m["code"])
+		}},
+		{"refusal: a hard-linked key", func(t *testing.T, tw *twin) {
+			require.NoError(t, os.Link(tw.w.f.host(fidKey), tw.w.f.host("/etc/nginx/ssl/other.key")))
+			tw.e.SetFileProblem(fidKey, helperproto.FileHardLinked)
+			assert.Equal(t, helperproto.CodeUnsafeFile, tw.deploy(opA).m["code"])
+		}},
+		{"refusal: a certificate over the size limit", func(t *testing.T, tw *twin) {
+			tw.put(fidCrt, make([]byte, helperproto.MaxCertFileSize+1))
+			assert.Equal(t, helperproto.CodeTooLarge, tw.deploy(opA).m["code"])
+		}},
+		{"refusal: the directory is not root controlled", func(t *testing.T, tw *twin) {
+			tw.dirNotRootControlled()
+			assert.Equal(t, helperproto.CodePathNotAllowed, tw.deploy(opA).m["code"])
+		}},
+		{"refusal: the directory is on procfs", func(t *testing.T, tw *twin) {
+			tw.dirSpecialFS()
+			assert.Equal(t, helperproto.CodePathNotAllowed, tw.deploy(opA).m["code"])
+		}},
+		{"refusal: the pair is not in the configuration", func(t *testing.T, tw *twin) {
+			in := tw.w.newInput()
+			a := tw.same(helperproto.SubNginxDeploy, in, "--op", opA, "--cert", "/etc/nginx/ssl/other.crt", "--key", fidKey,
+				"--expect-cert-sha256", tw.w.oldSHA(), "--content-sha256", hexOf(in))
+			assert.Equal(t, helperproto.CodeConfigChanged, a.m["code"])
+		}},
+		{"refusal: an unsupported (combined) pair", func(t *testing.T, tw *twin) {
+			in := tw.w.newInput()
+			a := tw.same(helperproto.SubNginxDeploy, in, "--op", opA, "--cert", "/etc/nginx/ssl/both.pem", "--key", "/etc/nginx/ssl/both.pem2",
+				"--expect-cert-sha256", tw.w.oldSHA(), "--content-sha256", hexOf(in))
+			assert.Equal(t, helperproto.CodeConfigChanged, a.m["code"])
+		}},
+		{"refusal: a writable configuration file (config_file_writable)", func(t *testing.T, tw *twin) {
+			tw.chmod(wwwCfg, 0o666)
+			tw.e.SetNginxFileMode(emuCfg, "root", "root", 0o666)
+			assert.Equal(t, helperproto.CodeConfigChanged, tw.deploy(opA).m["code"])
+		}},
+		{"refusal: the configuration is invalid", func(t *testing.T, tw *twin) {
+			tw.w.tFails = "nginx: [emerg] unexpected \"}\" in /etc/nginx/nginx.conf:3"
+			tw.e.SetConfigInvalid(helperproto.ConfigErrSyntax)
+			assert.Equal(t, helperproto.CodeConfigInvalid, tw.deploy(opA).m["code"])
+		}},
+		{"refusal: no space", func(t *testing.T, tw *twin) {
+			tw.w.f.s.statfs = func(int) (int64, error) { return 1, nil }
+			tw.e.SetFreeBytes(1)
+			assert.Equal(t, helperproto.CodeNoSpace, tw.deploy(opA).m["code"])
+			tw.status(opA)
+		}},
+		{"refusal: too many operations kept", func(t *testing.T, tw *twin) {
+			old := maxNginxOps
+			maxNginxOps = 1
+			defer func() { maxNginxOps = old }()
+			tw.e.SetMaxNginxOps(1)
+			tw.deploy(opA)
+			in := input(tw.w.leaf.FullchainPEM, tw.w.leaf.KeyPEM)
+			a := tw.same(helperproto.SubNginxDeploy, in, tw.deployArgs(opB, in, hexOf(string(tw.w.newLeaf.FullchainPEM)))...)
+			assert.Equal(t, helperproto.CodeNoSpace, a.m["code"])
+			tw.status(opB)
+		}},
+		{"refusal: the lock is held (BUSY), status active", func(t *testing.T, tw *twin) {
+			old := lockWait
+			lockWait = 100 * time.Millisecond
+			defer func() { lockWait = old }()
+			lock, err := tw.w.f.s.nginxLock(context.Background())
+			require.NoError(t, err)
+			tw.e.HoldLock(true)
+			assert.Equal(t, helperproto.CodeBusy, tw.deploy(opA).m["code"])
+			assert.Equal(t, helperproto.CodeBusy, tw.restore(opA).m["code"])
+			assert.Equal(t, true, tw.status(opA).m["active"])
+			require.NoError(t, lock.Close())
+			tw.e.HoldLock(false)
+			assert.Equal(t, false, tw.status(opA).m["active"])
+		}},
+		{"refusal: the key cannot be created (IO_ERROR)", func(t *testing.T, tw *twin) {
+			require.NoError(t, os.Chmod(tw.w.f.host(fidSSL), 0o555))
+			t.Cleanup(func() { _ = os.Chmod(tw.w.f.host(fidSSL), 0o755) })
+			tw.e.FailWriteIn(fidSSL)
+			assert.Equal(t, helperproto.CodeIOError, tw.deploy(opA).m["code"])
+			tw.status(opA)
+		}},
+		{"refusal: the certificate changes before the key is replaced", func(t *testing.T, tw *twin) {
+			tw.rename = func(n int) error {
+				if n == 1 {
+					return os.WriteFile(tw.w.f.host(fidCrt), []byte("someone else's"), 0o644)
+				}
+				return nil
+			}
+			tw.e.InterfereAt(helperproto.StepBackup, fidCrt, []byte("someone else's"))
+			assert.Equal(t, helperproto.CodeHashMismatch, tw.deploy(opA).m["code"])
+			tw.status(opA)
+			tw.sameFiles("")
+		}},
+		{"refusal: the journal cannot be written", func(t *testing.T, tw *twin) {
+			tw.w.f.s.afterDeployStep = func(name string) error {
+				if name == "journal prepared staged" {
+					return errors.New("disk")
+				}
+				return nil
+			}
+			tw.e.FailJournalWrite(helperproto.PhasePrepared)
+			assert.Equal(t, helperproto.CodeIOError, tw.deploy(opA).m["code"])
+			tw.status(opA)
+		}},
+		{"content errors", func(t *testing.T, tw *twin) {
+			good := tw.w.newInput()
+			args := tw.deployArgs(opA, good, tw.w.oldSHA())
+			a := tw.same(helperproto.SubNginxDeploy, good[:len(good)-10], args...)
+			assert.Equal(t, helperproto.CodeContentMismatch, a.m["code"])
+			for _, in := range []string{"cert", input(tw.w.newLeaf.FullchainPEM, tw.w.leaf.KeyPEM), `{"cert_pem":"a","key_pem":"b","x":"c"}`,
+				`{"cert_pem":"a","cert_pem":"b"}`, input(tw.w.newLeaf.FullchainPEM, nil)} {
+				a := tw.same(helperproto.SubNginxDeploy, in, tw.deployArgs(opA, in, tw.w.oldSHA())...)
+				assert.Equal(t, helperproto.CodeBadContent, a.m["code"], in)
+			}
+			in := strings.Repeat("x", helperproto.MaxDeployInput+1)
+			assert.Equal(t, helperproto.CodeTooLarge, tw.same(helperproto.SubNginxDeploy, in, tw.deployArgs(opA, in, tw.w.oldSHA())...).m["code"])
+		}},
+		{"argument errors past sudoers", func(t *testing.T, tw *twin) {
+			in := tw.w.newInput()
+			for _, args := range [][]string{
+				{"--op", "0190F5A0-0000-7000-8000-0000000000D1", "--cert", fidCrt, "--key", fidKey, "--expect-cert-sha256", tw.w.oldSHA(), "--content-sha256", hexOf(in)},
+				{"--op", opA, "--cert", "/etc/../shadow", "--key", fidKey, "--expect-cert-sha256", tw.w.oldSHA(), "--content-sha256", hexOf(in)},
+				{"--op", opA, "--cert", fidCrt, "--key", fidCrt, "--expect-cert-sha256", tw.w.oldSHA(), "--content-sha256", hexOf(in)},
+				{"--op", opA, "--cert", fidCrt, "--key", fidKey, "--expect-cert-sha256", strings.Repeat("g", 64), "--content-sha256", hexOf(in)},
+			} {
+				a := tw.same(helperproto.SubNginxDeploy, in, args...)
+				assert.Equal(t, helperproto.CodeInvalidArgument, a.m["code"], "%v", args)
+			}
+			for _, sub := range []string{helperproto.SubNginxRestore, helperproto.SubNginxStatus} {
+				assert.Equal(t, helperproto.CodeInvalidArgument, tw.same(sub, "", "--op", strings.Repeat("z", 36)).m["code"])
+			}
+		}},
+		{"restored: nginx -t fails", func(t *testing.T, tw *twin) {
+			tw.failTest(1)
+			a := tw.deploy(opA)
+			assert.Equal(t, helperproto.PhaseRestored, a.m["phase"])
+			assert.Equal(t, helperproto.StepConfigTest, a.m["failed_step"])
+			tw.sameFiles("old")
+			tw.status(opA)
+			tw.restore(opA)
+		}},
+		{"restored: the reload fails", func(t *testing.T, tw *twin) {
+			tw.failReload(1)
+			a := tw.deploy(opA)
+			assert.Equal(t, helperproto.StepReload, a.m["failed_step"])
+			tw.sameFiles("old")
+			assert.Equal(t, tw.w.reloads, tw.e.Reloads())
+		}},
+		{"restored: the commit journal cannot be written", func(t *testing.T, tw *twin) {
+			tw.w.f.s.afterDeployStep = func(name string) error {
+				if name == "journal committed staged" {
+					return errors.New("disk")
+				}
+				return nil
+			}
+			tw.e.FailJournalWrite(helperproto.PhaseCommitted)
+			a := tw.deploy(opA)
+			assert.Equal(t, helperproto.StepJournal, a.m["failed_step"])
+			tw.sameFiles("old")
+		}},
+		{"restored: nginx killed during nginx -t", func(t *testing.T, tw *twin) {
+			tw.w.f.s.afterDeployStep = func(name string) error {
+				if name == helperproto.StepWriteCert {
+					tw.killed = true
+				}
+				return nil
+			}
+			tw.e.KillNginxAt(helperproto.StepWriteCert)
+			a := tw.deploy(opA)
+			assert.Equal(t, helperproto.PhaseRestoreFailed, a.m["phase"])
+			assert.Equal(t, helperproto.StepRollbackConfigTest, a.m["failed_step"])
+			tw.status(opA)
+		}},
+		{"restore_failed: the rollback's nginx -t fails", func(t *testing.T, tw *twin) {
+			tw.failTest(2)
+			a := tw.deploy(opA)
+			assert.Equal(t, helperproto.StepRollbackConfigTest, a.m["failed_step"])
+			tw.status(opA)
+			tw.failTest(0)
+			assert.Equal(t, helperproto.PhaseRestored, tw.restore(opA).m["phase"])
+		}},
+		{"restore_failed: the rollback's reload fails", func(t *testing.T, tw *twin) {
+			tw.failReload(2)
+			a := tw.deploy(opA)
+			assert.Equal(t, helperproto.StepRollbackReload, a.m["failed_step"])
+			tw.status(opA)
+			assert.Equal(t, helperproto.PhaseRestored, tw.restore(opA).m["phase"])
+		}},
+		{"restore_failed: the key cannot be restored (a mixed pair)", func(t *testing.T, tw *twin) {
+			tw.failTest(1)
+			tw.rename = func(n int) error {
+				if n == 4 {
+					return errors.New("disk")
+				}
+				return nil
+			}
+			tw.e.FailRestoreFile(fidKey)
+			a := tw.deploy(opA)
+			assert.Equal(t, helperproto.StepRestore, a.m["failed_step"])
+			tw.sameFiles("")
+			tw.status(opA)
+			tw.rename = nil
+			tw.e.FailRestoreFile("")
+			assert.Equal(t, helperproto.PhaseRestored, tw.restore(opA).m["phase"])
+			tw.sameFiles("old")
+		}},
+		{"restore_failed: nothing can be restored", func(t *testing.T, tw *twin) {
+			tw.failTest(1)
+			tw.rename = func(n int) error {
+				if n == 3 {
+					return errors.New("disk")
+				}
+				return nil
+			}
+			tw.e.FailRestoreFile(fidCrt)
+			a := tw.deploy(opA)
+			assert.Equal(t, helperproto.StepRestore, a.m["failed_step"])
+			tw.sameFiles("new")
+			tw.status(opA)
+		}},
+		{"restore_failed: the certificate is changed by someone else mid-deployment (file_changed)", func(t *testing.T, tw *twin) {
+			tw.rename = func(n int) error {
+				if n == 2 {
+					return os.WriteFile(tw.w.f.host(fidCrt), []byte("someone else's"), 0o644)
+				}
+				return nil
+			}
+			tw.e.InterfereAt(helperproto.StepWriteKey, fidCrt, []byte("someone else's"))
+			a := tw.deploy(opA)
+			assert.Equal(t, helperproto.PhaseRestoreFailed, a.m["phase"])
+			assert.Equal(t, helperproto.RestoreErrFileChanged, a.m["error"])
+			assert.Equal(t, helperproto.StepWriteCert, a.m["cause_step"])
+			tw.sameFiles("")
+			tw.status(opA)
+			assert.Equal(t, helperproto.CodeHashMismatch, tw.restore(opA).m["code"])
+			tw.status(opA)
+		}},
+		{"restore_failed: a partial rollback that failed, finished by nginx-restore", func(t *testing.T, tw *twin) {
+			// Someone else changes the certificate before its rename (write_cert fails), and the
+			// rollback cannot put the key back: the operation is partial, and nginx-restore later
+			// restores only its own file.
+			tw.rename = func(n int) error {
+				switch n {
+				case 2:
+					return os.WriteFile(tw.w.f.host(fidCrt), []byte("someone else's"), 0o644)
+				case 3:
+					return errors.New("disk")
+				}
+				return nil
+			}
+			tw.e.InterfereAt(helperproto.StepWriteKey, fidCrt, []byte("someone else's"))
+			tw.e.FailRestoreFile(fidKey)
+			a := tw.deploy(opA)
+			assert.Equal(t, helperproto.StepRestore, a.m["failed_step"])
+			assert.Equal(t, helperproto.StepWriteCert, a.m["cause_step"])
+			tw.status(opA)
+			tw.rename = nil
+			tw.e.FailRestoreFile("")
+			r := tw.restore(opA)
+			assert.Equal(t, helperproto.PhaseRestoreFailed, r.m["phase"])
+			assert.Equal(t, helperproto.RestoreErrFileChanged, r.m["error"])
+			tw.sameFiles("")
+			assert.Equal(t, string(tw.w.leaf.KeyPEM), tw.w.f.read(fidKey), "its own file is back")
+			tw.status(opA)
+		}},
+	} {
+		t.Run(sc.name, func(t *testing.T) { sc.run(t, newTwin(t, true)) })
+	}
+}
+
+func TestEmulatorFidelityRestoreAndSuperseded(t *testing.T) {
+	t.Run("unknown operation", func(t *testing.T) {
+		tw := newTwin(t, true)
+		assert.Equal(t, helperproto.CodeUnknownOp, tw.restore(opA).m["code"])
+		assert.Equal(t, helperproto.PhaseNone, tw.status(opA).m["phase"])
+	})
+	t.Run("someone else changed a file after the deployment", func(t *testing.T) {
+		tw := newTwin(t, true)
+		tw.deploy(opA)
+		tw.put(fidCrt, []byte("someone else's"))
+		assert.Equal(t, helperproto.CodeHashMismatch, tw.restore(opA).m["code"])
+		tw.status(opA)
+		assert.Equal(t, helperproto.CodeHashMismatch, tw.restore(opA).m["code"], "the same refusal again")
+		tw.sameFiles("")
+	})
+	// A, B, C: only the operation that last replaced the pair's files can be restored.
+	chain := func(t *testing.T) (*twin, string) {
+		tw := newTwin(t, true)
+		tw.deploy(opA)
+		in := input(tw.third.FullchainPEM, tw.third.KeyPEM)
+		a := tw.same(helperproto.SubNginxDeploy, in, tw.deployArgs(opB, in, hexOf(string(tw.w.newLeaf.FullchainPEM)))...)
+		require.Equal(t, helperproto.PhaseCommitted, a.m["phase"])
+		return tw, in
+	}
+	t.Run("an older operation is superseded", func(t *testing.T) {
+		tw, _ := chain(t)
+		assert.Equal(t, helperproto.CodeSuperseded, tw.restore(opA).m["code"])
+		tw.sameFiles("")
+	})
+	t.Run("an operation that changed nothing is passed over", func(t *testing.T) {
+		tw, in := chain(t)
+		third := tw.third
+		a := tw.same(helperproto.SubNginxDeploy, in, tw.deployArgs(opC, in, hexOf(string(third.FullchainPEM)))...)
+		assert.Equal(t, helperproto.PhaseUnchanged, a.m["phase"])
+		assert.Equal(t, helperproto.CodeSuperseded, tw.restore(opA).m["code"])
+		assert.Equal(t, helperproto.PhaseRestored, tw.restore(opB).m["phase"], "B is still the latest: C changed nothing")
+		tw.sameFiles("")
+		assert.Equal(t, 1.0, tw.same(helperproto.SubCleanup, "", "--op", opC).m["removed"])
+		assert.Equal(t, helperproto.CodeSuperseded, tw.restore(opA).m["code"])
+		assert.Equal(t, 1.0, tw.same(helperproto.SubCleanup, "", "--op", opB).m["removed"])
+		assert.Equal(t, helperproto.CodeSuperseded, tw.restore(opA).m["code"], "after the latest is cleaned up no older one is restorable")
+	})
+	t.Run("an operation that took the pair record and changed nothing is passed over", func(t *testing.T) {
+		tw := newTwin(t, true)
+		tw.deploy(opA)
+		// B is killed right after it took the pair record (its journal says prepared).
+		in := input(tw.third.FullchainPEM, tw.third.KeyPEM)
+		args := tw.deployArgs(opB, in, hexOf(string(tw.w.newLeaf.FullchainPEM)))
+		tw.kill("pair record renamed")
+		_ = tw.runHelper(helperproto.SubNginxDeploy, in, args...)
+		_ = tw.runEmu(helperproto.SubNginxDeploy, in, args...)
+		tw.revive()
+		assert.Equal(t, helperproto.PhasePrepared, tw.status(opB).m["phase"])
+		assert.Equal(t, helperproto.PhasePrepared, tw.restore(opB).m["phase"], "nothing to restore")
+		// Removing B hands the record back to A: A is restorable, and stays so.
+		assert.Equal(t, 1.0, tw.same(helperproto.SubCleanup, "", "--op", opB).m["removed"])
+		assert.Equal(t, helperproto.PhaseRestored, tw.restore(opA).m["phase"])
+		tw.sameFiles("old")
+	})
+	t.Run("a no-op that took the record does not make the one before it unrestorable", func(t *testing.T) {
+		tw := newTwin(t, true)
+		tw.deploy(opA)
+		in := input(tw.third.FullchainPEM, tw.third.KeyPEM)
+		args := tw.deployArgs(opB, in, hexOf(string(tw.w.newLeaf.FullchainPEM)))
+		tw.kill("pair record renamed")
+		_ = tw.runHelper(helperproto.SubNginxDeploy, in, args...)
+		_ = tw.runEmu(helperproto.SubNginxDeploy, in, args...)
+		tw.revive()
+		assert.Equal(t, helperproto.PhaseRestored, tw.restore(opA).m["phase"], "A is still the operation that last replaced the files")
+		tw.sameFiles("old")
+	})
+	t.Run("the latest one is restorable", func(t *testing.T) {
+		tw, _ := chain(t)
+		assert.Equal(t, helperproto.PhaseRestored, tw.restore(opB).m["phase"])
+		tw.sameFiles("")
+	})
+	t.Run("a re-sent interrupted deployment that a later one superseded", func(t *testing.T) {
+		tw := newTwin(t, true)
+		in := tw.w.newInput()
+		argsA := tw.deployArgs(opA, in, tw.w.oldSHA())
+		tw.kill(helperproto.StepWriteKey)
+		_ = tw.runHelper(helperproto.SubNginxDeploy, in, argsA...)
+		_ = tw.runEmu(helperproto.SubNginxDeploy, in, argsA...)
+		tw.revive()
+		assert.Equal(t, helperproto.PhaseWriting, tw.status(opA).m["phase"])
+		// B replaces the pair (a mixed one: the new key of A, the old certificate) and commits.
+		inB := input(tw.third.FullchainPEM, tw.third.KeyPEM)
+		a := tw.same(helperproto.SubNginxDeploy, inB, tw.deployArgs(opB, inB, tw.w.oldSHA())...)
+		assert.Equal(t, helperproto.PhaseCommitted, a.m["phase"])
+		assert.Equal(t, helperproto.CodeSuperseded, tw.same(helperproto.SubNginxDeploy, in, argsA...).m["code"])
+		assert.Equal(t, helperproto.CodeSuperseded, tw.restore(opA).m["code"])
+		assert.Equal(t, 1.0, tw.same(helperproto.SubCleanup, "", "--op", opA).m["removed"], "a superseded operation is not kept for recovery")
+	})
+	t.Run("cleanup", func(t *testing.T) {
+		tw := newTwin(t, true)
+		tw.kill(helperproto.StepWriteKey)
+		in := tw.w.newInput()
+		args := tw.deployArgs(opA, in, tw.w.oldSHA())
+		_ = tw.runHelper(helperproto.SubNginxDeploy, in, args...)
+		_ = tw.runEmu(helperproto.SubNginxDeploy, in, args...)
+		tw.revive()
+		assert.Equal(t, helperproto.CodeBusy, tw.same(helperproto.SubCleanup, "", "--op", opA).m["code"], "an interrupted operation is kept")
+		tw.restore(opA)
+		assert.Equal(t, 1.0, tw.same(helperproto.SubCleanup, "", "--op", opA).m["removed"])
+		assert.Equal(t, 0.0, tw.same(helperproto.SubCleanup, "", "--op", opA).m["removed"])
+		assert.Equal(t, helperproto.PhaseNone, tw.status(opA).m["phase"])
+	})
+}
+
+// The helper is killed at every point of a deployment and of a rollback: what it leaves (status,
+// the files, what nginx-restore then answers) is the same in the emulator.
+func TestEmulatorFidelityKillPoints(t *testing.T) {
+	keyFile, certFile := stagedName(opA, kindKey), stagedName(opA, kindCert)
+	deployPoints := []string{
+		"journal prepared staged", "journal prepared renamed", "backup cert", "backup key", "backup", "pair record staged", "pair record renamed",
+		"journal writing staged", "journal writing renamed",
+		"stage " + keyFile, "staged " + keyFile, "renamed " + keyFile, "write_key",
+		"stage " + certFile, "staged " + certFile, "renamed " + certFile, "write_cert",
+		"config_test", "reload", "journal committed staged", "journal committed renamed",
+	}
+	for _, p := range deployPoints {
+		t.Run("deploy killed at "+p, func(t *testing.T) {
+			tw := newTwin(t, true)
+			tw.kill(p)
+			in := tw.w.newInput()
+			args := tw.deployArgs(opA, in, tw.w.oldSHA())
+			h := tw.runHelper(helperproto.SubNginxDeploy, in, args...)
+			e := tw.runEmu(helperproto.SubNginxDeploy, in, args...)
+			assert.Equal(t, helperproto.ExitFailed, h.exit, "the test kill answers IO_ERROR; a real kill prints nothing")
+			assert.True(t, e.killed, "the emulated helper printed nothing")
+			tw.revive()
+			tw.sameFiles("")
+			st := tw.status(opA)
+			// (nginx -t is not compared here: the fixture's nginx never checks a pair, the
+			// emulator's does, and says key_mismatch for a mixed one as nginx would.)
+			tw.same(helperproto.SubNginxDump, "")
+			tw.restore(opA)
+			tw.sameFiles("old")
+			tw.status(opA)
+			_ = st
+		})
+	}
+	// After a kill the same deployment sent again.
+	for _, p := range []string{"backup", "journal writing renamed", "renamed " + keyFile, "write_key", "write_cert", "config_test", "reload"} {
+		t.Run("deploy killed at "+p+", sent again", func(t *testing.T) {
+			tw := newTwin(t, true)
+			tw.kill(p)
+			in := tw.w.newInput()
+			args := tw.deployArgs(opA, in, tw.w.oldSHA())
+			_ = tw.runHelper(helperproto.SubNginxDeploy, in, args...)
+			_ = tw.runEmu(helperproto.SubNginxDeploy, in, args...)
+			tw.revive()
+			tw.same(helperproto.SubNginxDeploy, in, args...)
+			tw.sameFiles("")
+			tw.status(opA)
+		})
+	}
+	for _, p := range []string{"journal restoring staged", "journal restoring renamed", "stage " + certFile, "renamed " + certFile, "renamed " + keyFile,
+		"restore", "rollback_config_test", "rollback_reload", "journal restored staged", "journal restored renamed"} {
+		t.Run("restore killed at "+p, func(t *testing.T) {
+			tw := newTwin(t, true)
+			tw.deploy(opA)
+			tw.kill(p)
+			_ = tw.runHelper(helperproto.SubNginxRestore, "", "--op", opA)
+			e := tw.runEmu(helperproto.SubNginxRestore, "", "--op", opA)
+			assert.True(t, e.killed)
+			tw.revive()
+			tw.sameFiles("")
+			tw.status(opA)
+			tw.restore(opA)
+			tw.sameFiles("old")
+			tw.status(opA)
+		})
+	}
+}
+
+// tls-probe: the helper connects to a real TLS server; the emulator answers from its host.
+func TestEmulatorFidelityProbe(t *testing.T) {
+	tw := newTwin(t, true)
+	sni := make(chan string, 8)
+	port := startTLS(t, tw.w.leaf, sni)
+	var n int
+	_, err := fmt.Sscanf(port, "%d", &n)
+	require.NoError(t, err)
+	tw.e.AddSite(linuxsshtest.NginxSite{Names: []string{"probe.example.test"}, Port: n, Default: true, CertPath: "/etc/nginx/ssl/probe.crt", KeyPath: "/etc/nginx/ssl/probe.key"},
+		tw.w.leaf.FullchainPEM, tw.w.leaf.KeyPEM)
+	probe := func(addr, port, sni, kt string) answer {
+		return tw.same(helperproto.SubTLSProbe, "", "--addr", addr, "--port", port, "--sni", sni, "--key-type", kt)
+	}
+	a := probe("127.0.0.1", port, "probe.example.test", "any")
+	assert.Equal(t, 2.0, a.m["chain_length"])
+	probe("127.0.0.1", port, helperproto.NoSNI, "any")
+	probe("127.0.0.1", port, "probe.example.test", "ecdsa")
+	assert.Equal(t, helperproto.CodeProbeFailed, probe("127.0.0.1", port, "probe.example.test", "rsa").m["code"], "no RSA certificate")
+	assert.Equal(t, helperproto.CodeProbeFailed, probe("127.0.0.1", "1", "probe.example.test", "any").m["code"], "nothing listens")
+	assert.Equal(t, helperproto.CodeInvalidArgument, probe("localhost", port, "a.example.test", "any").m["code"])
+	assert.Equal(t, helperproto.CodeInvalidArgument, probe("127.0.0.1", "08", "a.example.test", "any").m["code"])
+	assert.Equal(t, helperproto.CodeInvalidArgument, probe("127.0.0.1", port, "A.example.test", "any").m["code"])
+	assert.Equal(t, helperproto.CodeInvalidArgument, probe("127.0.0.1", port, "a.example.test", "dsa").m["code"])
+}
+
+// Without root the helper refuses every privileged subcommand before anything else.
+func TestEmulatorFidelityNotRoot(t *testing.T) {
+	tw := newTwin(t, true)
+	tw.w.f.s.euid = func() int { return 1000 }
+	for _, sub := range []string{helperproto.SubNginxDump, helperproto.SubNginxTest, helperproto.SubNginxDeploy, helperproto.SubNginxRestore, helperproto.SubNginxStatus} {
+		h := normalize(sub, tw.runHelper(sub, ""), true)
+		line := "/usr/local/libexec/alice-helper " + sub // no sudo
+		r := tw.h(line, nil)
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(r.Stdout, &m))
+		delete(m, "message")
+		assert.Equal(t, h.exit, r.Exit, sub)
+		assert.Equal(t, h.m, m, sub)
+	}
+}

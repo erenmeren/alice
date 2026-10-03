@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -28,6 +29,7 @@ import (
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/linuxssh/linuxsshtest"
 	"alice/internal/providers/providertest"
+	"alice/internal/testutil/pki"
 	"alice/locales"
 )
 
@@ -773,80 +775,168 @@ func TestConnOf(t *testing.T) {
 	assert.False(t, ok)
 }
 
-// A failed deployment run reports neither the key nor the payload in its error: a helper refusal,
-// a malformed answer that even echoes the payload, and a cancelled run. The emulator does not know
-// nginx-deploy yet, so the refusal here is UNKNOWN_SUBCOMMAND; Task 9 re-points this test at the
-// emulated deploy (its real refusals and answers).
+// A failed deployment run reports neither the key nor the payload in its error or answer. The runs
+// go through the emulated Nginx (the helper's own refusals, a restored and a restore_failed outcome,
+// a killed helper that prints nothing, a dropped connection), and through scripted handlers for what
+// no helper prints: a malformed answer that even echoes the payload, and a cancelled run.
 func TestFailedDeployRunDoesNotLeakTheKey(t *testing.T) {
-	const needle = "KEYMATERIAL-0123456789abcdef"
-	raw, err := json.Marshal(helperproto.NginxDeployInput{CertPEM: "cert", KeyPEM: needle})
+	const crt, key = "/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key"
+	ca := pki.NewCA("Leak", pki.ECDSA256, time.Now())
+	oldLeaf, newLeaf := ca.Issue(pki.Opts{CommonName: "www.example.test"}, time.Now()), ca.Issue(pki.Opts{CommonName: "www.example.test"}, time.Now())
+	raw, err := json.Marshal(helperproto.NginxDeployInput{CertPEM: string(newLeaf.FullchainPEM), KeyPEM: string(newLeaf.KeyPEM)})
 	require.NoError(t, err)
-	newCmd := func() HelperCommand {
-		cmd, err := CmdNginxDeploy(testOp, "/etc/nginx/a.crt", "/etc/nginx/a.key", strings.Repeat("ab", 32), raw)
-		require.NoError(t, err)
-		return cmd
+	body := strings.Split(string(newLeaf.KeyPEM), "\n")[1] // a line of the key's base64
+	needles := []string{body, hex.EncodeToString([]byte(body)), base64.StdEncoding.EncodeToString([]byte(body))}
+	sum := sha256.Sum256(oldLeaf.FullchainPEM)
+	oldSHA := hex.EncodeToString(sum[:])
+	newEnv := func(t *testing.T) *provEnv {
+		e := newProvEnv(t)
+		e.emu.EnableNginx("1.22.1")
+		e.emu.AddSite(linuxsshtest.NginxSite{Names: []string{"www.example.test"}, Port: 443, CertPath: crt, KeyPath: key}, oldLeaf.FullchainPEM, oldLeaf.KeyPEM)
+		return e
 	}
-	check := func(name string, err error) {
+	check := func(name string, res Result, resp helperproto.NginxDeployResponse, err error) {
 		t.Helper()
-		require.Error(t, err, name)
-		var pe *providers.Error
-		require.True(t, errors.As(err, &pe), name)
-		all := fmt.Sprintf("%v %+v %#v %v %v", err, err, pe.Params, pe.Unwrap(), pe)
-		if j, jerr := json.Marshal(pe); jerr == nil {
+		all := fmt.Sprintf("%v %+v %+v %#v", err, err, resp, resp) + string(res.Stdout)
+		if j, jerr := json.Marshal(resp); jerr == nil {
 			all += string(j)
 		}
-		assert.NotContains(t, all, needle, name)
-		assert.NotContains(t, all, hex.EncodeToString([]byte(needle)), name)
-	}
-	run := func(t *testing.T, h func(cmd string, stdin []byte) linuxsshtest.Response, ctx context.Context) (Result, error) {
-		e := newProvEnv(t)
-		if h != nil { // only the deployment is scripted; Open's version check goes to the emulator
-			e.srv.SetHandler(func(cmd string, stdin []byte) linuxsshtest.Response {
-				if strings.Contains(cmd, " nginx-deploy ") {
-					return h(cmd, stdin)
-				}
-				return e.emu.Handler()(cmd, stdin)
-			})
+		if err != nil {
+			var pe *providers.Error
+			require.True(t, errors.As(err, &pe), name)
+			all += fmt.Sprintf("%#v %v %v", pe.Params, pe.Unwrap(), pe)
+			if j, jerr := json.Marshal(pe); jerr == nil {
+				all += string(j)
+			}
 		}
+		for _, n := range needles {
+			assert.NotContains(t, all, n, name)
+		}
+	}
+	run := func(t *testing.T, e *provEnv, expect string, ctx context.Context) (Result, helperproto.NginxDeployResponse, error) {
 		c, ok := ConnOf(e.open(t))
 		require.True(t, ok)
-		cmd := newCmd()
+		cmd, err := CmdNginxDeploy(testOp, crt, key, expect, raw)
+		require.NoError(t, err)
 		defer cmd.WipeInput()
 		res, err := c.Run(ctx, cmd)
 		if err != nil {
-			return res, err
+			return res, helperproto.NginxDeployResponse{}, err
 		}
-		_, err = DecodeHelper[helperproto.NginxDeployResponse](res, cmd.Subcommand())
-		return res, err
+		resp, err := DecodeHelper[helperproto.NginxDeployResponse](res, cmd.Subcommand())
+		return res, resp, err
 	}
-	// A helper refusal (the emulator's UNKNOWN_SUBCOMMAND).
-	_, err = run(t, nil, context.Background())
-	check("refusal", err)
-	// A malformed answer that echoes the payload (a helper reflecting its input).
-	for _, exit := range []int{0, 3} {
-		_, err = run(t, func(_ string, stdin []byte) linuxsshtest.Response {
-			return linuxsshtest.Response{Stdout: append([]byte("not json "), stdin...), Exit: exit}
-		}, context.Background())
-		check("malformed answer exit "+strconv.Itoa(exit), err)
+	code := func(err error) (string, string) {
 		var pe *providers.Error
 		require.True(t, errors.As(err, &pe))
-		assert.Equal(t, "ssh.protocol_error", pe.Code)
+		return pe.Code, pe.Params["helper_code"]
 	}
-	// A cancelled run: the handler answers only after the context ended.
+
+	// Real refusals of the helper (nothing changed).
+	for name, tc := range map[string]struct {
+		setup  func(e *linuxsshtest.Emulator)
+		expect string
+		code   string
+	}{
+		"hash mismatch": {func(*linuxsshtest.Emulator) {}, strings.Repeat("ab", 32), helperproto.CodeHashMismatch},
+		"busy":          {func(e *linuxsshtest.Emulator) { e.HoldLock(true) }, oldSHA, helperproto.CodeBusy},
+		"no space":      {func(e *linuxsshtest.Emulator) { e.SetFreeBytes(1) }, oldSHA, helperproto.CodeNoSpace},
+		"config":        {func(e *linuxsshtest.Emulator) { e.SetConfigInvalid(helperproto.ConfigErrSyntax) }, oldSHA, helperproto.CodeConfigInvalid},
+	} {
+		e := newEnv(t)
+		tc.setup(e.emu)
+		res, resp, err := run(t, e, tc.expect, context.Background())
+		require.Error(t, err, name)
+		check(name, res, resp, err)
+		_, hc := code(err)
+		assert.Equal(t, tc.code, hc, name)
+		assert.Zero(t, e.emu.Reloads(), name)
+	}
+
+	// A restored outcome and a restore_failed one are answers, not errors.
+	for name, tc := range map[string]struct {
+		setup func(e *linuxsshtest.Emulator)
+		phase string
+	}{
+		"restored":       {func(e *linuxsshtest.Emulator) { e.FailConfigTest(1) }, helperproto.PhaseRestored},
+		"restore_failed": {func(e *linuxsshtest.Emulator) { e.FailConfigTest(2) }, helperproto.PhaseRestoreFailed},
+	} {
+		e := newEnv(t)
+		tc.setup(e.emu)
+		res, resp, err := run(t, e, oldSHA, context.Background())
+		require.NoError(t, err, name)
+		assert.Equal(t, tc.phase, resp.Phase, name)
+		check(name, res, resp, err)
+	}
+
+	// A killed helper prints nothing (a protocol error: the outcome is unknown); so does a dropped
+	// connection (the transport fails). Neither carries the payload.
+	e := newEnv(t)
+	e.emu.KillAt(helperproto.StepWriteKey)
+	res, resp, err := run(t, e, oldSHA, context.Background())
+	require.Error(t, err)
+	assert.Empty(t, res.Stdout)
+	c, _ := code(err)
+	assert.Equal(t, "ssh.protocol_error", c)
+	check("killed", res, resp, err)
+	e = newEnv(t)
+	e.emu.HangupAfter(helperproto.StepWriteCert)
+	res, resp, err = run(t, e, oldSHA, context.Background())
+	require.Error(t, err)
+	c, _ = code(err)
+	assert.Contains(t, []string{"ssh.unreachable", "ssh.protocol_error"}, c, "a transport failure or a session without an exit status: never a helper refusal")
+	check("hangup", res, resp, err)
+	assert.Equal(t, helperproto.PhaseCommitted, e.emu.NginxPhase(testOp.String()), "the helper finished on its own")
+
+	// The key went only to the helper's stdin.
+	e = newEnv(t)
+	_, _, err = run(t, e, oldSHA, context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, [][]byte{raw}, e.emu.DeployStdins())
+	for _, cmdLine := range e.srv.Commands() {
+		for _, n := range needles {
+			assert.NotContains(t, cmdLine, n)
+		}
+	}
+
+	// Scripted answers no helper prints: a malformed answer that echoes the payload, a cancelled run.
+	scripted := func(t *testing.T, h func(cmd string, stdin []byte) linuxsshtest.Response, ctx context.Context) (Result, helperproto.NginxDeployResponse, error) {
+		e := newEnv(t)
+		e.srv.SetHandler(func(cmd string, stdin []byte) linuxsshtest.Response {
+			if strings.Contains(cmd, " nginx-deploy ") {
+				return h(cmd, stdin)
+			}
+			return e.emu.Handler()(cmd, stdin)
+		})
+		return run(t, e, oldSHA, ctx)
+	}
+	for _, exit := range []int{0, 3} {
+		res, resp, err := scripted(t, func(_ string, stdin []byte) linuxsshtest.Response {
+			return linuxsshtest.Response{Stdout: append([]byte("not json "), stdin...), Exit: exit}
+		}, context.Background())
+		name := "malformed answer exit " + strconv.Itoa(exit)
+		require.Error(t, err, name)
+		c, _ := code(err)
+		assert.Equal(t, "ssh.protocol_error", c)
+		check(name, Result{}, resp, err)
+		_ = res
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	_, err = run(t, func(string, []byte) linuxsshtest.Response {
-		time.Sleep(600 * time.Millisecond) // past the context; Run waits for the session to end
+	_, resp, err = scripted(t, func(string, []byte) linuxsshtest.Response {
+		<-ctx.Done()
 		return linuxsshtest.Response{}
 	}, ctx)
-	check("timeout", err)
-	var pe *providers.Error
-	require.True(t, errors.As(err, &pe))
-	assert.Equal(t, "ssh.timeout", pe.Code)
+	require.Error(t, err)
+	c, _ = code(err)
+	assert.Equal(t, "ssh.timeout", c)
+	check("timeout", Result{}, resp, err)
 }
 
-// tls-probe runs without sudo (the emulator does not answer NOT_ROOT for it, as the helper does not),
-// and the privileged Nginx commands are parsed with the protocol 4 flags.
+// The Nginx subcommands and tls-probe reach the emulated helper through the lines the constructors
+// build (sudo for the privileged ones, none for tls-probe), and answer as the helper would on a
+// server without Nginx: dump and test NGINX_NOT_FOUND, the deploy its content check, the status
+// "none", the probe PROBE_FAILED (nothing listens).
 func TestEmulatorParsesProtocol4Lines(t *testing.T) {
 	e := newProvEnv(t)
 	s := e.open(t)
@@ -858,11 +948,30 @@ func TestEmulatorParsesProtocol4Lines(t *testing.T) {
 	require.NoError(t, err)
 	status, err := CmdNginxStatus(testOp)
 	require.NoError(t, err)
-	for _, cmd := range []HelperCommand{probe, deploy, status, CmdNginxDump(), CmdNginxTest()} {
-		res, err := c.Run(context.Background(), cmd)
+	restore, err := CmdNginxRestore(testOp)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		cmd  HelperCommand
+		want string
+	}{
+		{probe, helperproto.CodeProbeFailed}, {deploy, helperproto.CodeBadContent}, {restore, helperproto.CodeUnknownOp},
+		{CmdNginxDump(), helperproto.CodeNginxNotFound}, {CmdNginxTest(), helperproto.CodeNginxNotFound},
+	} {
+		res, err := c.Run(context.Background(), tc.cmd)
 		require.NoError(t, err)
-		_, err = DecodeHelper[helperproto.NginxStatusResponse](res, cmd.Subcommand())
+		_, err = DecodeHelper[helperproto.NginxStatusResponse](res, tc.cmd.Subcommand())
 		pe := providerCode(t, err)
-		assert.Equal(t, helperproto.CodeUnknownSubcommand, pe.Params["helper_code"], "%s reaches the dispatcher (a later task adds the emulated Nginx)", cmd.Subcommand())
+		assert.Equal(t, tc.want, pe.Params["helper_code"], tc.cmd.Subcommand())
 	}
+	res, err := c.Run(context.Background(), status)
+	require.NoError(t, err)
+	st, err := DecodeHelper[helperproto.NginxStatusResponse](res, status.Subcommand())
+	require.NoError(t, err)
+	assert.Equal(t, helperproto.PhaseNone, st.Phase)
+
+	// The probe is unprivileged: sudo would refuse it (sudoers does not list it), so the emulator does too.
+	res, err = c.Run(context.Background(), HelperCommand{sub: helperproto.SubTLSProbe, sudo: true, timeout: DefaultCommandTimeout, maxOutput: smallOutput,
+		tokens: []string{"--addr", "'127.0.0.1'", "--port", "'443'", "--sni", "'_'", "--key-type", "'any'"}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.ExitCode)
 }

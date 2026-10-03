@@ -59,6 +59,7 @@ type Emulator struct {
 	backups     map[string]int // operation id -> backups written
 	maxUsers    int            // accounts listed at most (the helper's 200 when 0)
 	accounts    *accountList   // SetAccounts: the /etc/passwd names authkeys-list reports (derived from users when nil)
+	nx          *nginxHost     // the emulated Nginx (nginx.go); created on first use
 }
 
 type accountList struct {
@@ -266,8 +267,43 @@ var flagTokens = map[string]bool{
 
 func isFlagToken(f string) bool { return flagTokens[f] }
 
+// shellFields splits like a POSIX shell for the quoting the constructors use: fields are separated
+// by spaces outside single quotes; quoted marks a field that had a quote.
+type lineField struct {
+	text   string
+	quoted bool
+}
+
+func shellFields(s string) (fields []lineField, ok bool) {
+	var cur strings.Builder
+	has, quoted, inQuote := false, false, false
+	flush := func() {
+		if has {
+			fields = append(fields, lineField{cur.String(), quoted})
+		}
+		cur.Reset()
+		has, quoted = false, false
+	}
+	for _, r := range s {
+		switch {
+		case r == '\'':
+			inQuote, has, quoted = !inQuote, true, true
+		case r == ' ' && !inQuote:
+			flush()
+		default:
+			cur.WriteRune(r)
+			has = true
+		}
+	}
+	flush()
+	return fields, !inQuote
+}
+
 // parseLine splits "[sudo -n ]<helper> <sub> <args>" and unquotes the arguments like the remote
-// shell would; it reports ok=false for anything that is not a helper command line.
+// shell would. valid is false when an argument is not a constant flag or a quoted ValidArg (the
+// Phase 3 subcommands refuse such a line before anything else); the arguments are kept as the
+// shell would pass them, so the Nginx subcommands validate them themselves like the helper. ok is
+// false for anything that is not a helper command line.
 func parseLine(cmd string) (sudo bool, sub string, args []string, valid bool, ok bool) {
 	rest := cmd
 	if r, found := strings.CutPrefix(rest, "sudo -n "); found {
@@ -277,19 +313,18 @@ func parseLine(cmd string) (sudo bool, sub string, args []string, valid bool, ok
 	if !found {
 		return false, "", nil, false, false
 	}
-	fields := strings.Split(r, " ")
-	sub = fields[0]
-	valid = true
+	fields, closed := shellFields(r)
+	if len(fields) == 0 {
+		return sudo, "", nil, false, true
+	}
+	sub = fields[0].text
+	valid = closed
 	for _, f := range fields[1:] {
-		if isFlagToken(f) {
-			args = append(args, f)
+		args = append(args, f.text)
+		if f.quoted && helperproto.ValidArg(f.text) || !f.quoted && isFlagToken(f.text) {
 			continue
 		}
-		if len(f) < 2 || f[0] != '\'' || f[len(f)-1] != '\'' || !helperproto.ValidArg(f[1:len(f)-1]) {
-			valid = false
-			continue
-		}
-		args = append(args, f[1:len(f)-1])
+		valid = false
 	}
 	return sudo, sub, args, valid, true
 }
@@ -313,10 +348,19 @@ func (e *Emulator) handle(cmd string, stdin []byte) Response {
 		}
 		return Response{Stderr: []byte("sh: " + helperproto.HelperPath + ": not found\n"), Exit: 127}
 	}
+	if isNginxSub(sub) {
+		return e.handleNginx(sudo, sub, args, stdin)
+	}
+	if sub == helperproto.SubTLSProbe {
+		if sudo {
+			return sudoRefusal() // sudoers does not list it: the probe runs unprivileged
+		}
+		return e.tlsProbe(args)
+	}
 	if !valid {
 		return refuse(helperproto.ExitRefused, helperproto.CodeInvalidArgument)
 	}
-	if sub != helperproto.SubVersion && sub != helperproto.SubTLSProbe && !sudo {
+	if sub != helperproto.SubVersion && !sudo {
 		return refuse(helperproto.ExitRefused, helperproto.CodeNotRoot)
 	}
 	noArgs := func(r func() Response) Response {
@@ -599,6 +643,9 @@ func (e *Emulator) cleanup(args []string) Response {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if r, ok := e.nginx().cleanupOp(args[1]); ok {
+		return r
+	}
 	removed := 0
 	if e.backups[args[1]] > 0 {
 		removed = 1
