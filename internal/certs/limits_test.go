@@ -87,7 +87,7 @@ func TestContainsPrivateKey(t *testing.T) {
 		{"PRIVATE KEY-----", false},
 		{"", false},
 	} {
-		assert.Equal(t, tc.want, ContainsPrivateKey([]byte(tc.in)), "%.60q", tc.in)
+		assert.Equal(t, tc.want, ContainsPrivateKey(tc.in), "%.60q", tc.in)
 	}
-	assert.False(t, ContainsPrivateKey([]byte(strings.Repeat(begin, 10000))))
+	assert.False(t, ContainsPrivateKey(strings.Repeat(begin, 10000)))
 }

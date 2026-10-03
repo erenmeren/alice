@@ -214,7 +214,9 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 		if certText == "" {
 			errs.Add("certificate_pem", validate.Required, nil)
 		}
-		if certs.ContainsPrivateKey([]byte(certText)) {
+		// The size bound comes first (a huge paste is refused unread), and the scan reads the
+		// string itself: a byte copy of a field that may hold a key would never be cleared.
+		if len(certText) <= certs.MaxInputSize && certs.ContainsPrivateKey(certText) {
 			// The contract has no combined paste: the key belongs in its own field, and a key in
 			// the certificate field is never used from there.
 			errs.Add("certificate_pem", CodeKeyInCertificate, nil)

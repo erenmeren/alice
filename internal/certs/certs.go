@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -110,21 +111,23 @@ func certificatesOf(data []byte) ([]*x509.Certificate, error) {
 }
 
 // ContainsPrivateKey reports whether data has a PEM private key block (PRIVATE KEY, RSA/EC/
-// ENCRYPTED PRIVATE KEY, …). It reads only the BEGIN lines: nothing is decoded or copied.
-func ContainsPrivateKey(data []byte) bool {
+// ENCRYPTED PRIVATE KEY, …). It reads only the BEGIN lines: nothing is decoded or copied. It takes
+// a string so a caller holding pasted text (which may be a key) does not make a byte copy of it
+// that nobody clears.
+func ContainsPrivateKey(data string) bool {
 	const begin, dashes = "-----BEGIN ", "-----"
 	for rest := data; ; {
-		i := bytes.Index(rest, []byte(begin))
+		i := strings.Index(rest, begin)
 		if i < 0 {
 			return false
 		}
 		rest = rest[i+len(begin):]
-		end := bytes.Index(rest, []byte(dashes))
+		end := strings.Index(rest, dashes)
 		if end < 0 {
 			return false
 		}
 		typ := rest[:end]
-		if bytes.Equal(typ, []byte("PRIVATE KEY")) || bytes.HasSuffix(typ, []byte(" PRIVATE KEY")) {
+		if typ == "PRIVATE KEY" || strings.HasSuffix(typ, " PRIVATE KEY") {
 			return true
 		}
 		rest = rest[end:]
