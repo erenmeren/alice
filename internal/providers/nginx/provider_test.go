@@ -19,7 +19,7 @@ func TestNginxProviderDescribesItself(t *testing.T) {
 	providertest.CheckProvider(t, e.prov)
 	assert.Equal(t, providers.KindNginx, e.prov.Kind())
 	assert.Equal(t, "provider.nginx.name", e.prov.DisplayNameKey())
-	assert.Equal(t, []providers.Capability{providers.CapAuthorizedKeys, providers.CapDiscoverCerts, providers.CapDiscoverSSHKeys,
+	assert.Equal(t, []providers.Capability{providers.CapAuthorizedKeys, providers.CapDeployCertificate, providers.CapDiscoverCerts, providers.CapDiscoverSSHKeys,
 		providers.CapTestConnection, providers.CapVerifyDeployment}, e.prov.Capabilities().Sorted())
 	assert.Equal(t, TLSProber{}, New(Options{}).prober, "Alice's own TLS probe when none is given")
 	var _ providers.ConnectionCache = e.prov
@@ -41,14 +41,25 @@ func TestNginxConformance(t *testing.T) {
 	})
 }
 
-func TestTheDeploySessionMethodsStayUnsupported(t *testing.T) {
-	s := newEnv(t).open(t)
-	_, err := s.DeployCertificate(context.Background(), providers.DeployRequest{}, nil)
-	assert.ErrorIs(t, err, providers.ErrUnsupported)
-	_, err = s.RollbackDeployment(context.Background(), providers.RollbackRequest{}, nil)
-	assert.ErrorIs(t, err, providers.ErrUnsupported)
-	_, err = s.DeploymentStatus(context.Background(), testTarget)
-	assert.ErrorIs(t, err, providers.ErrUnsupported)
+// The shared conformance suite cannot call DeployCertificate or RollbackDeployment (they change
+// servers; Task 8 ruling I-1): this provider proves here that they are implemented, and that what
+// they return for an empty request is a legal refusal.
+func TestTheDeploySessionMethodsAreImplemented(t *testing.T) {
+	e := newEnv(t)
+	s := e.open(t)
+	before := len(e.srv.Commands())
+	out, err := s.DeployCertificate(context.Background(), providers.DeployRequest{}, nil)
+	assert.NotErrorIs(t, err, providers.ErrUnsupported)
+	providertest.CheckDeployOutcome(t, out, err)
+	assert.Equal(t, providers.DeployNoChange, out.Result, "an empty request is refused before the helper")
+	rb, err := s.RollbackDeployment(context.Background(), providers.RollbackRequest{}, nil)
+	assert.NotErrorIs(t, err, providers.ErrUnsupported)
+	providertest.CheckRollbackOutcome(t, rb, err)
+	assert.Equal(t, providers.DeployNoChange, rb.Result)
+	assert.Len(t, e.srv.Commands(), before, "nothing was sent")
+	st, err := s.DeploymentStatus(context.Background(), e.op)
+	assert.NotErrorIs(t, err, providers.ErrUnsupported)
+	providertest.CheckDeploymentState(t, st, err)
 	_, err = s.VerifyDeployment(context.Background(), providers.VerifyRequest{})
 	assert.NotErrorIs(t, err, providers.ErrUnsupported)
 }

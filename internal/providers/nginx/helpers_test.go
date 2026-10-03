@@ -22,6 +22,7 @@ import (
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/linuxsshtest"
+	"alice/internal/secrets"
 	"alice/internal/testutil/pki"
 )
 
@@ -123,6 +124,26 @@ func (p *emuProber) probes() []string {
 	return append([]string(nil), p.calls...)
 }
 
+// steps is a recording StepLogger: "name:status" per call, and the params it was given.
+type steps struct {
+	mu     sync.Mutex
+	names  []string
+	params []map[string]string
+}
+
+func (l *steps) Step(name string, status providers.StepStatus, params map[string]string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.names = append(l.names, name+":"+string(status))
+	l.params = append(l.params, params)
+}
+
+func (l *steps) list() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.names...)
+}
+
 // env is the nginx provider wired to the emulated host through a fake SSH server.
 type env struct {
 	srv    *linuxsshtest.Server
@@ -215,6 +236,25 @@ func (e *env) location(t *testing.T) providers.CertLocation {
 	return c.Location
 }
 
+// req is the DeployRequest of leaf for the fixture location under e.op: the current file's hash,
+// the served leaf as the old one, the new leaf's fingerprint, SANs and chain length, and the key.
+func (e *env) req(t *testing.T, leaf pki.Leaf) providers.DeployRequest {
+	t.Helper()
+	return providers.DeployRequest{
+		OperationID:      e.op,
+		Location:         e.location(t),
+		ExpectCertSHA256: hexSHA(e.emu.NginxFile(wwwCert)),
+		CertificatePEM:   leaf.FullchainPEM,
+		PrivateKeyPEM:    secrets.NewPlaintext(append([]byte(nil), leaf.KeyPEM...)),
+		Fingerprint:      pki.Fingerprint(leaf.Cert),
+		SANs:             leaf.Cert.DNSNames,
+		KeyType:          "ecdsa",
+		OldFingerprint:   pki.Fingerprint(e.leaf.Cert),
+		OldSANs:          e.leaf.Cert.DNSNames,
+		ChainLength:      2,
+	}
+}
+
 // hangUpOn makes the fake server drop the connection on the next command of subcommand sub;
 // every other command is the emulator's.
 func hangUpOn(e *env, sub string) {
@@ -224,15 +264,32 @@ func hangUpOn(e *env, sub string) {
 // scriptOn makes the fake server answer the next command of subcommand sub with r (instead of the
 // emulator); every other command is the emulator's.
 func scriptOn(e *env, sub string, r linuxsshtest.Response) {
-	var once sync.Once
+	intercept(e, sub, func() (linuxsshtest.Response, bool) { return r, true })
+}
+
+// beforeOn runs fn right before the next command of subcommand sub reaches the emulator (a change
+// on the server between two commands of one provider call).
+func beforeOn(e *env, sub string, fn func()) {
+	intercept(e, sub, func() (linuxsshtest.Response, bool) { fn(); return linuxsshtest.Response{}, false })
+}
+
+// intercept calls fn for the next command of subcommand sub; when fn answers true its response is
+// the command's, else the emulator answers. Every other command is the emulator's.
+func intercept(e *env, sub string, fn func() (linuxsshtest.Response, bool)) {
+	var mu sync.Mutex
+	done := false
 	h := e.emu.Handler()
 	e.srv.SetHandler(func(cmd string, stdin []byte) linuxsshtest.Response {
-		hit := false
-		if strings.Contains(cmd, " "+sub+" ") || strings.HasSuffix(cmd, " "+sub) {
-			once.Do(func() { hit = true })
-		}
+		mu.Lock()
+		hit := !done && (strings.Contains(cmd, " "+sub+" ") || strings.HasSuffix(cmd, " "+sub))
 		if hit {
-			return r
+			done = true
+		}
+		mu.Unlock()
+		if hit {
+			if r, ok := fn(); ok {
+				return r
+			}
 		}
 		return h(cmd, stdin)
 	})

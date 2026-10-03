@@ -1,0 +1,741 @@
+package nginx
+
+import (
+	"context"
+	"encoding/pem"
+	"errors"
+	"maps"
+	"path"
+	"slices"
+	"strconv"
+
+	"github.com/google/uuid"
+
+	"alice/internal/providers"
+	"alice/internal/providers/linuxssh"
+	"alice/internal/providers/linuxssh/helperproto"
+)
+
+// Outcome reasons of DeployCertificate and RollbackDeployment besides the verification reasons
+// (verify.go) and mapHelper's refusal reasons. reasonNothingToRestore, reasonSuperseded and
+// reasonUnknownOperation are additions to the plan's contract (RollbackDeployment's no_change).
+const (
+	reasonKeyMismatch          = "certificate.key_mismatch"      // the helper's nginx -t failed with key_mismatch
+	reasonInvalidCertificate   = "certificate.invalid"           // the pair cannot be sent (empty or not PEM text)
+	reasonConfigTestFailed     = "deployment.config_test_failed" // the helper's nginx -t failed with another class
+	reasonReloadFailed         = "deployment.reload_failed"      // the helper's reload failed
+	reasonInterrupted          = "deployment.interrupted"        // a write or the journal failed inside the helper's transaction
+	reasonRollbackFailed       = "deployment.rollback_failed"    // param backup_dir
+	reasonRollbackReloadFailed = "deployment.rollback_reload_failed"
+	reasonNothingToRestore     = "deployment.nothing_to_restore"
+	reasonSuperseded           = "deployment.superseded"
+	reasonUnknownOperation     = "deployment.unknown_operation"
+	reasonLocationUnsupported  = "nginx.location_unsupported"
+	reasonUnexpected           = "internal.unexpected"
+)
+
+// Refusal codes per subcommand with the exit status the helper gives each (cmd/alice-helper
+// deploy.go, run.go; the Task 6 contract). Only such an answer (well-formed JSON, ok false, a code
+// of this table at its exit status) is a refusal that changed nothing; any other code, or a known
+// code at another exit status, is an answer Alice does not understand: uncertain.
+var (
+	deployRefusals = map[string]int{
+		helperproto.CodeUsage: helperproto.ExitRefused, helperproto.CodeUnknownSubcommand: helperproto.ExitRefused,
+		helperproto.CodeNotRoot: helperproto.ExitRefused, helperproto.CodeInvalidArgument: helperproto.ExitRefused,
+		helperproto.CodeTooLarge: helperproto.ExitRefused, helperproto.CodeBadContent: helperproto.ExitRefused,
+		helperproto.CodeUnsafeFile: helperproto.ExitRefused, helperproto.CodeNotRegularFile: helperproto.ExitRefused,
+		helperproto.CodePathNotAllowed:  helperproto.ExitRefused,
+		helperproto.CodeContentMismatch: helperproto.ExitPrecondition, helperproto.CodeNginxNotFound: helperproto.ExitPrecondition,
+		helperproto.CodeConfigInvalid: helperproto.ExitPrecondition, helperproto.CodeConfigChanged: helperproto.ExitPrecondition,
+		helperproto.CodeNotFound: helperproto.ExitPrecondition, helperproto.CodeHashMismatch: helperproto.ExitPrecondition,
+		helperproto.CodeNoSpace: helperproto.ExitPrecondition, helperproto.CodeSuperseded: helperproto.ExitPrecondition,
+		helperproto.CodeBusy: helperproto.ExitFailed, helperproto.CodeIOError: helperproto.ExitFailed,
+	}
+	restoreRefusals = map[string]int{
+		helperproto.CodeUsage: helperproto.ExitRefused, helperproto.CodeUnknownSubcommand: helperproto.ExitRefused,
+		helperproto.CodeNotRoot: helperproto.ExitRefused, helperproto.CodeInvalidArgument: helperproto.ExitRefused,
+		helperproto.CodeUnknownOp: helperproto.ExitPrecondition, helperproto.CodeHashMismatch: helperproto.ExitPrecondition,
+		helperproto.CodeSuperseded: helperproto.ExitPrecondition,
+		helperproto.CodeBusy:       helperproto.ExitFailed, helperproto.CodeIOError: helperproto.ExitFailed,
+	}
+)
+
+// The helper's vocabulary of a transaction answer (Task 6 contract): step names, the steps that
+// can start a rollback, the steps a rollback fails at, and the error classes (nginx -t's classes,
+// file_changed, or "").
+var (
+	helperSteps = []string{helperproto.StepBackup, helperproto.StepWriteKey, helperproto.StepWriteCert, helperproto.StepConfigTest,
+		helperproto.StepReload, helperproto.StepJournal, helperproto.StepRestore, helperproto.StepRollbackConfigTest, helperproto.StepRollbackReload}
+	causeSteps    = []string{helperproto.StepWriteKey, helperproto.StepWriteCert, helperproto.StepConfigTest, helperproto.StepReload, helperproto.StepJournal}
+	rollbackSteps = []string{helperproto.StepRestore, helperproto.StepRollbackConfigTest, helperproto.StepRollbackReload}
+	nginxClasses  = []string{helperproto.ConfigErrKeyMismatch, helperproto.ConfigErrFileMissing, helperproto.ConfigErrCertLoad,
+		helperproto.ConfigErrKeyLoad, helperproto.ConfigErrSyntax}
+	helperPhases = []string{helperproto.PhaseNone, helperproto.PhasePrepared, helperproto.PhaseWriting, helperproto.PhaseCommitted,
+		helperproto.PhaseUnchanged, helperproto.PhaseRestoring, helperproto.PhaseRestored, helperproto.PhaseRestoreFailed}
+)
+
+// maxAnswerSteps bounds the steps of one answer (the helper trims its journal's list to 64).
+const maxAnswerSteps = 64
+
+func knownClass(c string, fileChanged bool) bool {
+	return c == "" || slices.Contains(nginxClasses, c) || (fileChanged && c == helperproto.RestoreErrFileChanged)
+}
+
+// protocolError is the error of an answer that breaks the helper's contract: uncertain.
+func protocolError(sub, why string) *providers.Error {
+	return providers.NewError("ssh.protocol_error", false, errors.New("nginx: "+why), map[string]string{"subcommand": sub})
+}
+
+// asProviderError returns err as a *providers.Error (every error this package maps is one).
+func asProviderError(err error) *providers.Error {
+	var pe *providers.Error
+	if errors.As(err, &pe) {
+		return pe
+	}
+	return providers.NewError(reasonUnexpected, false, err, nil)
+}
+
+// call is a helper transaction command's result sorted into the three situations: an answer
+// (exit 0, decoded), a well-formed refusal (refusal != nil: nothing changed) or an uncertain outcome
+// (uncertain != nil).
+type call[T any] struct {
+	answer    T
+	code      string           // the refusal's helper code ("" for sudo's refusal)
+	refusal   *providers.Error // as DecodeHelper gives it, not mapped yet
+	uncertain error
+}
+
+// decodeCall sorts what Conn.Run returned for sub. A refusal is (a) the helper's JSON error with a
+// code of refusals at the exit status the table gives it, or (b) sudo's refusal before the helper
+// started (exit 1, nothing on stdout: the helper itself never exits 1; pre-flight D16). Everything
+// else that is not an exit-0 answer is uncertain: a transport error, a timeout or cancellation
+// after the command was sent, a signal, exit 137 or any other status without JSON
+// (ssh.helper_missing), malformed JSON (ssh.protocol_error), an unknown code, or a known code at
+// the wrong exit status.
+func decodeCall[T any](res linuxssh.Result, runErr error, sub string, refusals map[string]int) call[T] {
+	if runErr != nil {
+		return call[T]{uncertain: runErr}
+	}
+	v, err := linuxssh.DecodeHelper[T](res, sub)
+	if err == nil {
+		return call[T]{answer: v}
+	}
+	pe := asProviderError(err)
+	code := pe.Params["helper_code"]
+	switch {
+	case pe.Code == "ssh.helper_missing" && pe.Params["exit_code"] == "1":
+		return call[T]{refusal: pe}
+	case code == "":
+		return call[T]{uncertain: pe}
+	case refusals[code] != res.ExitCode:
+		u := protocolError(sub, "a refusal outside the helper's contract")
+		u.Params["helper_code"] = code
+		u.Cause = pe
+		return call[T]{uncertain: u}
+	}
+	return call[T]{code: code, refusal: pe}
+}
+
+// toSteps checks the steps of an answer against the helper's vocabulary and converts them.
+func toSteps(in []helperproto.NginxStep) ([]providers.DeployStep, bool) {
+	if len(in) > maxAnswerSteps {
+		return nil, false
+	}
+	out := make([]providers.DeployStep, 0, len(in))
+	for _, st := range in {
+		var status providers.StepStatus
+		switch st.Status {
+		case "ok":
+			status = providers.StepOK
+		case "failed":
+			status = providers.StepFailed
+		default:
+			return nil, false
+		}
+		if !slices.Contains(helperSteps, st.Name) || !knownClass(st.Error, true) {
+			return nil, false
+		}
+		out = append(out, providers.DeployStep{Name: st.Name, Status: status, Error: st.Error})
+	}
+	return out, true
+}
+
+func anyFailed(steps []providers.DeployStep) bool {
+	return slices.ContainsFunc(steps, func(st providers.DeployStep) bool { return st.Status == providers.StepFailed })
+}
+
+// step reports one step to the logger (nil: none).
+func step(log providers.StepLogger, name string, status providers.StepStatus, params map[string]string) {
+	if log != nil {
+		log.Step(name, status, params)
+	}
+}
+
+// logSteps reports the steps of a helper answer, each once with its final status (param error =
+// its class when it has one).
+func logSteps(log providers.StepLogger, steps []providers.DeployStep) {
+	for _, st := range steps {
+		var params map[string]string
+		if st.Error != "" {
+			params = map[string]string{"error": st.Error}
+		}
+		step(log, st.Name, st.Status, params)
+	}
+}
+
+// deployInput is the JSON of helperproto.NginxDeployInput ({"cert_pem":"…","key_pem":"…"}), built
+// in one allocation of its final size and without a string copy of the key (a Go string cannot be
+// wiped; json.Marshal would make one and grow buffers it leaves behind). The caller clears it. ok
+// is false for an empty or non-ASCII PEM text (the helper would refuse it as BAD_CONTENT).
+func deployInput(cert, key []byte) ([]byte, bool) {
+	cn, ok1 := jsonStringLen(cert)
+	kn, ok2 := jsonStringLen(key)
+	if !ok1 || !ok2 || len(cert) == 0 || len(key) == 0 {
+		return nil, false
+	}
+	const head, mid, tail = `{"cert_pem":`, `,"key_pem":`, `}`
+	out := make([]byte, 0, len(head)+cn+len(mid)+kn+len(tail))
+	out = append(out, head...)
+	out = appendJSONString(out, cert)
+	out = append(out, mid...)
+	out = appendJSONString(out, key)
+	return append(out, tail...), true
+}
+
+const hexDigits = "0123456789abcdef"
+
+// jsonStringLen is the length of b as a JSON string literal (quotes included); ok is false for a
+// byte outside ASCII.
+func jsonStringLen(b []byte) (int, bool) {
+	n := 2
+	for _, c := range b {
+		switch {
+		case c >= 0x80:
+			return 0, false
+		case c == '"' || c == '\\' || c == '\n' || c == '\r' || c == '\t':
+			n += 2
+		case c < 0x20:
+			n += 6
+		default:
+			n++
+		}
+	}
+	return n, true
+}
+
+// appendJSONString appends b (ASCII, see jsonStringLen) as a JSON string literal.
+func appendJSONString(dst, b []byte) []byte {
+	dst = append(dst, '"')
+	for _, c := range b {
+		switch {
+		case c == '"' || c == '\\':
+			dst = append(dst, '\\', c)
+		case c == '\n':
+			dst = append(dst, '\\', 'n')
+		case c == '\r':
+			dst = append(dst, '\\', 'r')
+		case c == '\t':
+			dst = append(dst, '\\', 't')
+		case c < 0x20:
+			dst = append(dst, '\\', 'u', '0', '0', hexDigits[c>>4], hexDigits[c&0xf])
+		default:
+			dst = append(dst, c)
+		}
+	}
+	return append(dst, '"')
+}
+
+// chainLength counts the CERTIFICATE blocks of a PEM chain.
+func chainLength(p []byte) int {
+	n := 0
+	for rest := p; ; {
+		var b *pem.Block
+		b, rest = pem.Decode(rest)
+		if b == nil {
+			return n
+		}
+		if b.Type == "CERTIFICATE" {
+			n++
+		}
+	}
+}
+
+func backupDir(op uuid.UUID) string { return helperproto.BackupRoot + "/" + op.String() }
+
+// DeployCertificate deploys a certificate and its key to an Nginx location in one helper
+// transaction (nginx-deploy), verifies that the website serves the new certificate (spec §12.8;
+// VerifyDeployment) and, when it does not, restores the previous files right away (nginx-restore of
+// the same operation) and verifies that the previous certificate is served again (spec §6.3 item
+// 3). Every return is one of the legal shapes of providers/outcome.go:
+//
+//   - a refusal before anything was sent (closed session, unsupported location, a pair that cannot
+//     be sent, a context cancelled before the command was sent) or a well-formed helper refusal
+//     (decodeCall): DeployNoChange with a *providers.Error and no phase or steps;
+//   - committed or unchanged and verified: DeployCommitted / DeployUnchanged, Phase as the helper's;
+//   - unchanged and not verified: DeployNoChange, Phase unchanged, FailedStep verify, a *Error;
+//   - the helper's own rollback (restored, restore_failed) and the inline rollback after a failed
+//     verification: DeployRolledBack / DeployRollbackFailed with a nil error (see TestDeployOutcomeTable
+//     in deploy_test.go for every row);
+//   - anything else: DeployUncertain with a non-nil error and no Phase, FailedStep, CauseStep or
+//     Error (the caller reads DeploymentStatus).
+//
+// Verification is not done before the change here: the deploy engine's precheck (VerifyDeployment
+// with the current fingerprint) refuses a website Alice cannot check or that serves another
+// certificate, before anything is written. After the change, a verification that cannot be made
+// (unreachable both ways, or a failure of the SSH connection during the server-side probe) is a
+// failed verification and is rolled back. The helper's own restore_failed is reported as it is
+// (not retried here): the engine decides about another nginx-restore (RollbackDeployment).
+//
+// A context cancelled before the command is sent is told apart from one cancelled after by
+// checking ctx right before Conn.Run: once Run is called the command may have reached the helper,
+// so any failure from there on is uncertain (a cancellation that races into Run's own pre-send
+// check is reported uncertain too, the safe side).
+//
+// The private key goes from req.PrivateKeyPEM into the input JSON and from there only onto the
+// command's stdin; both are wiped after the send, and a command is never kept or re-sent (the
+// same operation is only ever sent again with a newly built command). The helper's steps reach
+// log only after nginx-deploy has returned (one SSH exec answers once): a caller sees no live
+// progress inside the helper's transaction, only the steps that follow (verify, restore,
+// verify_old) as they happen.
+func (s *session) DeployCertificate(ctx context.Context, req providers.DeployRequest, log providers.StepLogger) (providers.DeployOutcome, error) {
+	d := deployment{s: s, req: req, log: log, out: providers.DeployOutcome{Backup: providers.BackupRef{OperationID: req.OperationID}}}
+	if req.OperationID != uuid.Nil {
+		d.out.Backup.Dir = backupDir(req.OperationID)
+	}
+	if err := s.open(); err != nil {
+		return d.refuse(asProviderError(err))
+	}
+	if !req.Location.Supported {
+		return d.refuse(providers.NewError(reasonLocationUnsupported, false, nil, nil))
+	}
+	input, ok := deployInput(req.CertificatePEM, req.PrivateKeyPEM.Bytes())
+	defer clear(input)
+	if !ok {
+		return d.refuse(providers.NewError(reasonInvalidCertificate, false, nil, nil))
+	}
+	cmd, err := linuxssh.CmdNginxDeploy(req.OperationID, req.Location.CertPath, req.Location.KeyPath, req.ExpectCertSHA256, input)
+	clear(input)
+	if err != nil {
+		return d.refuse(d.buildRefusal(err))
+	}
+	defer cmd.WipeInput()
+	if err := ctx.Err(); err != nil {
+		return d.refuse(providers.NewError("ssh.timeout", true, err, map[string]string{"subcommand": helperproto.SubNginxDeploy}))
+	}
+	res, runErr := s.conn.Run(ctx, cmd)
+	cmd.WipeInput()
+	c := decodeCall[helperproto.NginxDeployResponse](res, runErr, helperproto.SubNginxDeploy, deployRefusals)
+	switch {
+	case c.uncertain != nil:
+		return d.uncertain(c.uncertain)
+	case c.refusal != nil:
+		return d.refuse(asProviderError(mapHelperIn(c.refusal, helperproto.SubNginxDeploy, path.Dir(req.Location.KeyPath))))
+	}
+	return d.answer(ctx, c.answer)
+}
+
+// buildRefusal is the refusal when no command could be built: a pair path or the input outside the
+// helper's vocabulary or bounds (the location or the pair is not deployable), or a request a caller
+// should never send (no operation id, no certificate hash).
+func (d *deployment) buildRefusal(cause error) *providers.Error {
+	loc := d.req.Location
+	switch {
+	case !helperproto.ValidPath(loc.CertPath) || !helperproto.ValidPath(loc.KeyPath) || loc.CertPath == "/" || loc.KeyPath == "/" ||
+		loc.CertPath == loc.KeyPath:
+		return providers.NewError(reasonLocationUnsupported, false, cause, nil)
+	case d.req.OperationID == uuid.Nil || !isHexSHA256(d.req.ExpectCertSHA256):
+		return providers.NewError(reasonUnexpected, false, cause, nil)
+	}
+	return providers.NewError(reasonInvalidCertificate, false, cause, nil) // larger than the helper takes
+}
+
+// deployment is one DeployCertificate call while it maps the helper's answers.
+type deployment struct {
+	s   *session
+	req providers.DeployRequest
+	log providers.StepLogger
+	out providers.DeployOutcome
+}
+
+// refuse is DeployNoChange for a refusal: nothing changed, no phase and no steps.
+func (d *deployment) refuse(e *providers.Error) (providers.DeployOutcome, error) {
+	o := providers.DeployOutcome{Result: providers.DeployNoChange, Reason: e.Code, Params: maps.Clone(e.Params), Backup: d.out.Backup}
+	return o, e
+}
+
+// uncertain is DeployUncertain: the steps known so far are kept; phase, failed and cause step and
+// error class are cleared (the caller reads DeploymentStatus).
+func (d *deployment) uncertain(err error) (providers.DeployOutcome, error) {
+	return providers.DeployOutcome{Result: providers.DeployUncertain, Steps: d.out.Steps, Backup: d.out.Backup}, err
+}
+
+// answer maps a completed nginx-deploy (exit 0) by its phase (the table of DeployCertificate).
+func (d *deployment) answer(ctx context.Context, a helperproto.NginxDeployResponse) (providers.DeployOutcome, error) {
+	const sub = helperproto.SubNginxDeploy
+	steps, ok := toSteps(a.Steps)
+	if !ok {
+		return d.uncertain(protocolError(sub, "steps outside the helper's vocabulary"))
+	}
+	switch a.Phase {
+	case helperproto.PhaseCommitted, helperproto.PhaseUnchanged:
+		if a.FailedStep != "" || a.CauseStep != "" || a.Error != "" || anyFailed(steps) {
+			return d.uncertain(protocolError(sub, "a successful phase with a failure"))
+		}
+		d.out.Steps = steps
+		logSteps(d.log, steps)
+		return d.verifyNew(ctx, a.Phase)
+	case helperproto.PhaseRestored:
+		// failed_step = cause_step = the step that started the helper's own rollback. An empty
+		// failed_step is the answer to a re-sent operation that was recovered or restored before
+		// (Task 9 finding 1): it has no legal rolled_back shape, so the journal must decide.
+		if !slices.Contains(causeSteps, a.FailedStep) || a.CauseStep != a.FailedStep || !knownClass(a.Error, false) {
+			return d.uncertain(protocolError(sub, "a restored answer without the step that failed"))
+		}
+		d.out.Steps = steps
+		logSteps(d.log, steps)
+		d.out.Result, d.out.Phase, d.out.FailedStep, d.out.CauseStep, d.out.Error =
+			providers.DeployRolledBack, providers.PhaseRestored, a.FailedStep, a.CauseStep, a.Error
+		d.out.Reason = failedReason(a.FailedStep, a.Error)
+		return d.verifyOld(ctx)
+	case helperproto.PhaseRestoreFailed:
+		if !restoreFailedShape(a.FailedStep, a.CauseStep, a.Error) {
+			return d.uncertain(protocolError(sub, "a restore_failed answer outside the helper's contract"))
+		}
+		d.out.Steps = steps
+		logSteps(d.log, steps)
+		d.out.Result, d.out.Phase, d.out.FailedStep, d.out.CauseStep, d.out.Error =
+			providers.DeployRollbackFailed, providers.PhaseRestoreFailed, a.FailedStep, a.CauseStep, a.Error
+		d.out.Reason, d.out.Params = rollbackReason(a.FailedStep), map[string]string{"backup_dir": d.out.Backup.Dir}
+		return d.out, nil
+	}
+	return d.uncertain(protocolError(sub, "an unknown phase"))
+}
+
+// restoreFailedShape: the rollback failed at one of its own steps (the cause any step of the
+// transaction, or "" for a re-sent interrupted operation), or a file someone else changed was left
+// (error file_changed, failed_step = cause_step = the step that started the rollback).
+func restoreFailedShape(failed, cause, class string) bool {
+	switch {
+	case !knownClass(class, true) || (cause != "" && !slices.Contains(causeSteps, cause)):
+		return false
+	case slices.Contains(rollbackSteps, failed):
+		return true
+	}
+	return class == helperproto.RestoreErrFileChanged && slices.Contains(causeSteps, failed) && cause == failed
+}
+
+// verifyNew verifies the new certificate after a committed or unchanged answer.
+func (d *deployment) verifyNew(ctx context.Context, phase string) (providers.DeployOutcome, error) {
+	req := d.req
+	chain := req.ChainLength
+	if chain <= 0 {
+		chain = chainLength(req.CertificatePEM)
+	}
+	step(d.log, providers.StepNameVerify, providers.StepStarted, nil)
+	vr, verr := d.s.VerifyDeployment(ctx, providers.VerifyRequest{Location: req.Location, Fingerprint: req.Fingerprint, ChainLength: chain,
+		PreviousFingerprint: req.OldFingerprint, SANs: req.SANs, KeyType: req.KeyType, Verify: req.Verify})
+	if verr != nil {
+		// The check could not be made (the SSH connection failed during a server-side probe, or
+		// ctx ended): it is a failed verification, a website Alice cannot check.
+		vr = unverifiable(req.Location, req.Verify, req.SANs)
+	}
+	if vr.OK {
+		status := providers.StepOK
+		if vr.Mode == "skipped" {
+			status = providers.StepSkipped
+		}
+		step(d.log, providers.StepNameVerify, status, map[string]string{"mode": vr.Mode})
+		d.out.Steps = append(d.out.Steps, providers.DeployStep{Name: providers.StepNameVerify, Status: status})
+		d.out.Result, d.out.Phase, d.out.Verified = providers.DeployCommitted, providers.PhaseCommitted, vr.Mode
+		if phase == helperproto.PhaseUnchanged {
+			d.out.Result, d.out.Phase = providers.DeployUnchanged, providers.PhaseUnchanged
+		}
+		return d.out, nil
+	}
+	step(d.log, providers.StepNameVerify, providers.StepFailed, map[string]string{"port": vr.Params["port"]})
+	d.out.Steps = append(d.out.Steps, providers.DeployStep{Name: providers.StepNameVerify, Status: providers.StepFailed})
+	if phase == helperproto.PhaseUnchanged {
+		// This operation changed nothing (the files already were the new ones): nothing to roll back.
+		d.out.Result, d.out.Phase, d.out.FailedStep = providers.DeployNoChange, providers.PhaseUnchanged, providers.StepNameVerify
+		d.out.Reason, d.out.Params = vr.Reason, vr.Params
+		return d.out, providers.NewError(vr.Reason, false, verr, maps.Clone(vr.Params))
+	}
+	if verr != nil && ctx.Err() != nil {
+		// Cancelled after the change: no rollback can be sent. The journal says committed.
+		return d.uncertain(verr)
+	}
+	return d.rollBack(ctx, vr)
+}
+
+// unverifiable is the result of a verification that could not be made.
+func unverifiable(loc providers.CertLocation, v providers.VerifyOptions, sans []string) providers.VerifyResult {
+	port := v.Port
+	if eps := Endpoints(loc, v, sans); len(eps) > 0 {
+		port = eps[0].Port
+	}
+	if port == 0 {
+		port = 443
+	}
+	return providers.VerifyResult{Reason: reasonVerifyUnreachable, Params: map[string]string{"port": strconv.Itoa(port)}}
+}
+
+// rollBack restores the files of a committed operation whose verification failed (nginx-restore
+// of the same operation) and verifies the previous certificate. The verification's reason and
+// params stay the outcome's when the rollback succeeds.
+func (d *deployment) rollBack(ctx context.Context, vr providers.VerifyResult) (providers.DeployOutcome, error) {
+	r, err := d.s.restore(ctx, d.req.OperationID, d.log)
+	if err != nil {
+		return d.uncertain(err)
+	}
+	failed := func(phase, failedStep, class string) (providers.DeployOutcome, error) {
+		d.out.Result, d.out.Phase, d.out.FailedStep, d.out.CauseStep, d.out.Error =
+			providers.DeployRollbackFailed, phase, failedStep, providers.StepNameVerify, class
+		d.out.Reason, d.out.Params = rollbackReason(failedStep), map[string]string{"backup_dir": d.out.Backup.Dir}
+		return d.out, nil
+	}
+	switch {
+	case r.refusal != nil && r.code == helperproto.CodeHashMismatch:
+		// Someone else's file is in place: nothing was restored.
+		return failed("", providers.StepNameRestore, providers.DeployErrFileChanged)
+	case r.refusal != nil:
+		// The helper did not run the restore (busy, an I/O error before it, superseded, ...): the
+		// new files stay, unverified. A final state for this call, not an uncertain one.
+		return failed("", providers.StepNameRestore, "")
+	}
+	d.out.Steps = append(d.out.Steps, r.steps...)
+	switch r.phase {
+	case helperproto.PhaseRestored:
+		d.out.Result, d.out.Phase, d.out.FailedStep, d.out.CauseStep, d.out.Error =
+			providers.DeployRolledBack, providers.PhaseRestored, providers.StepNameVerify, providers.StepNameVerify, ""
+		d.out.Reason, d.out.Params = vr.Reason, maps.Clone(vr.Params)
+		return d.verifyOld(ctx)
+	case helperproto.PhaseRestoreFailed:
+		return failed(providers.PhaseRestoreFailed, r.failedStep, r.class)
+	}
+	// prepared or unchanged ("nothing to restore") cannot follow a committed answer.
+	return d.uncertain(protocolError(helperproto.SubNginxRestore, "nothing to restore after a committed deployment"))
+}
+
+// verifyOld checks the previous certificate after a rollback (the helper's own or the inline one);
+// d.out is rolled_back. A wrong certificate served makes it rollback_failed with Phase restored and
+// FailedStep verify_old (the files are back, the website does not serve them); a website that
+// cannot be checked leaves it rolled_back with Verified "" (the helper restored and reloaded). A
+// DeployRequest has no previous chain length, so only the previous leaf is compared.
+func (d *deployment) verifyOld(ctx context.Context) (providers.DeployOutcome, error) {
+	req := d.req
+	v, ok := d.s.checkOld(ctx, d.log, providers.VerifyRequest{Location: req.Location, Fingerprint: req.OldFingerprint,
+		SANs: req.OldSANs, KeyType: req.KeyType, Verify: req.Verify})
+	d.out.Steps = append(d.out.Steps, v.step)
+	if !ok {
+		d.out.Result, d.out.FailedStep = providers.DeployRollbackFailed, providers.StepNameVerifyOld
+		d.out.Reason, d.out.Params = reasonRollbackFailed, map[string]string{"backup_dir": d.out.Backup.Dir}
+		return d.out, nil
+	}
+	d.out.Verified = v.mode
+	return d.out, nil
+}
+
+// oldCheck is the result of checking the previous certificate after a rollback.
+type oldCheck struct {
+	step providers.DeployStep
+	mode string // Verified: "remote", "local", "skipped" or "" (not checked)
+}
+
+// checkOld verifies the previous certificate (step verify_old). ok is false only when the website
+// serves another certificate; nothing to compare (no previous fingerprint), a skipped verification
+// and a website that cannot be checked are ok with mode "skipped" or "".
+func (s *session) checkOld(ctx context.Context, log providers.StepLogger, vreq providers.VerifyRequest) (oldCheck, bool) {
+	if vreq.Fingerprint == "" {
+		step(log, providers.StepNameVerifyOld, providers.StepSkipped, nil)
+		return oldCheck{step: providers.DeployStep{Name: providers.StepNameVerifyOld, Status: providers.StepSkipped}}, true
+	}
+	step(log, providers.StepNameVerifyOld, providers.StepStarted, nil)
+	vr, err := s.VerifyDeployment(ctx, vreq)
+	switch {
+	case err != nil || (!vr.OK && vr.Reason == reasonVerifyUnreachable):
+		step(log, providers.StepNameVerifyOld, providers.StepFailed, map[string]string{"port": vr.Params["port"]})
+		return oldCheck{step: providers.DeployStep{Name: providers.StepNameVerifyOld, Status: providers.StepFailed}}, true
+	case !vr.OK:
+		step(log, providers.StepNameVerifyOld, providers.StepFailed, map[string]string{"port": vr.Params["port"]})
+		return oldCheck{step: providers.DeployStep{Name: providers.StepNameVerifyOld, Status: providers.StepFailed}}, false
+	case vr.Mode == "skipped":
+		step(log, providers.StepNameVerifyOld, providers.StepSkipped, nil)
+		return oldCheck{step: providers.DeployStep{Name: providers.StepNameVerifyOld, Status: providers.StepSkipped}, mode: vr.Mode}, true
+	}
+	step(log, providers.StepNameVerifyOld, providers.StepOK, map[string]string{"mode": vr.Mode})
+	return oldCheck{step: providers.DeployStep{Name: providers.StepNameVerifyOld, Status: providers.StepOK}, mode: vr.Mode}, true
+}
+
+// failedReason is the reason of the helper's own rollback by the step that started it.
+func failedReason(step, class string) string {
+	switch {
+	case step == helperproto.StepConfigTest && class == helperproto.ConfigErrKeyMismatch:
+		return reasonKeyMismatch // F-01's message
+	case step == helperproto.StepConfigTest:
+		return reasonConfigTestFailed
+	case step == helperproto.StepReload:
+		return reasonReloadFailed
+	}
+	return reasonInterrupted // write_key, write_cert or journal failed inside the transaction
+}
+
+// rollbackReason is the reason of a rollback that failed at step.
+func rollbackReason(step string) string {
+	if step == helperproto.StepRollbackReload {
+		return reasonRollbackReloadFailed // F-04: files back, Nginx not reloaded
+	}
+	return reasonRollbackFailed
+}
+
+// restoreResult is one nginx-restore sorted: a refusal (refusal != nil, code), or an answer (phase,
+// failedStep, causeStep and class as the helper gave them, this call's steps). An uncertain call
+// is restore's error.
+type restoreResult struct {
+	refusal                      *providers.Error
+	code                         string
+	phase                        string
+	failedStep, causeStep, class string
+	steps                        []providers.DeployStep
+}
+
+// restore runs nginx-restore for op once (a newly built command) and checks the answer against the
+// helper's contract; the error is an uncertain outcome. The steps are reported to log.
+func (s *session) restore(ctx context.Context, op uuid.UUID, log providers.StepLogger) (restoreResult, error) {
+	const sub = helperproto.SubNginxRestore
+	cmd, err := linuxssh.CmdNginxRestore(op)
+	if err != nil {
+		return restoreResult{refusal: providers.NewError(reasonUnexpected, false, err, nil)}, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return restoreResult{refusal: providers.NewError("ssh.timeout", true, err, map[string]string{"subcommand": sub})}, nil
+	}
+	res, runErr := s.conn.Run(ctx, cmd)
+	c := decodeCall[helperproto.NginxRestoreResponse](res, runErr, sub, restoreRefusals)
+	switch {
+	case c.uncertain != nil:
+		return restoreResult{}, c.uncertain
+	case c.refusal != nil:
+		return restoreResult{refusal: c.refusal, code: c.code}, nil
+	}
+	a := c.answer
+	steps, ok := toSteps(a.Steps)
+	if !ok {
+		return restoreResult{}, protocolError(sub, "steps outside the helper's vocabulary")
+	}
+	switch a.Phase {
+	case helperproto.PhasePrepared, helperproto.PhaseUnchanged:
+		if len(steps) > 0 {
+			return restoreResult{}, protocolError(sub, "nothing to restore, with steps")
+		}
+	case helperproto.PhaseRestored:
+		// failed_step, cause_step and error echo the deployment's journal: not this call's.
+		if anyFailed(steps) {
+			return restoreResult{}, protocolError(sub, "restored with a failed step")
+		}
+	case helperproto.PhaseRestoreFailed:
+		if !restoreFailedShape(a.FailedStep, a.CauseStep, a.Error) {
+			return restoreResult{}, protocolError(sub, "a restore_failed answer outside the helper's contract")
+		}
+	default:
+		return restoreResult{}, protocolError(sub, "an unknown phase")
+	}
+	logSteps(log, steps)
+	return restoreResult{phase: a.Phase, failedStep: a.FailedStep, causeStep: a.CauseStep, class: a.Error, steps: steps}, nil
+}
+
+// RollbackDeployment restores the files an operation replaced (nginx-restore) and verifies the
+// previous certificate (req.OldFingerprint, req.OldChainLength). It is idempotent: a restored
+// operation answers restored again without a reload. Every return is a legal shape
+// (providers.RollbackOutcome.Validate, CheckRollbackReturn):
+//
+//   - restored, the previous certificate verified (or not checkable): rolled_back, Phase restored,
+//     no failed_step, cause_step or error (the helper echoes the deployment's; they are dropped);
+//   - restored, another certificate served: rollback_failed, Phase restored, FailedStep verify_old;
+//   - restore_failed: rollback_failed, Phase restore_failed, the helper's failed_step, cause_step
+//     and error;
+//   - HASH_MISMATCH (someone else's file; nothing restored): rollback_failed, Phase "",
+//     FailedStep restore, Error file_changed;
+//   - nothing to restore (prepared, unchanged): no_change with that Phase and a nil error;
+//   - UNKNOWN_OP, SUPERSEDED and every other well-formed refusal, and a refusal before sending:
+//     no_change, Phase "", a *providers.Error ("nothing was restored", not "files unchanged");
+//   - anything else: uncertain with the error.
+func (s *session) RollbackDeployment(ctx context.Context, req providers.RollbackRequest, log providers.StepLogger) (providers.RollbackOutcome, error) {
+	refuse := func(e *providers.Error) (providers.RollbackOutcome, error) {
+		return providers.RollbackOutcome{Result: providers.DeployNoChange, Reason: e.Code, Params: maps.Clone(e.Params)}, e
+	}
+	if err := s.open(); err != nil {
+		return refuse(asProviderError(err))
+	}
+	r, err := s.restore(ctx, req.OperationID, log)
+	if err != nil {
+		return providers.RollbackOutcome{Result: providers.DeployUncertain}, err
+	}
+	backup := map[string]string{"backup_dir": backupDir(req.OperationID)}
+	if r.refusal != nil {
+		switch r.code {
+		case helperproto.CodeHashMismatch:
+			return providers.RollbackOutcome{Result: providers.DeployRollbackFailed, FailedStep: providers.StepNameRestore,
+				Error: providers.DeployErrFileChanged, Reason: reasonRollbackFailed, Params: backup}, nil
+		case helperproto.CodeUnknownOp:
+			return refuse(providers.NewError(reasonUnknownOperation, false, r.refusal, nil))
+		case helperproto.CodeSuperseded:
+			return refuse(providers.NewError(reasonSuperseded, false, r.refusal, nil))
+		}
+		return refuse(asProviderError(mapHelper(r.refusal, helperproto.SubNginxRestore)))
+	}
+	switch r.phase {
+	case helperproto.PhasePrepared, helperproto.PhaseUnchanged:
+		return providers.RollbackOutcome{Result: providers.DeployNoChange, Phase: r.phase, Reason: reasonNothingToRestore}, nil
+	case helperproto.PhaseRestoreFailed:
+		return providers.RollbackOutcome{Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestoreFailed, FailedStep: r.failedStep,
+			CauseStep: r.causeStep, Error: r.class, Steps: r.steps, Reason: rollbackReason(r.failedStep), Params: backup}, nil
+	}
+	out := providers.RollbackOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestored, Steps: r.steps}
+	v, ok := s.checkOld(ctx, log, providers.VerifyRequest{Location: req.Location, Fingerprint: req.OldFingerprint, ChainLength: req.OldChainLength,
+		SANs: req.OldSANs, KeyType: req.KeyType, Verify: req.Verify})
+	out.Steps = append(out.Steps, v.step)
+	if !ok {
+		out.Result, out.FailedStep, out.Reason, out.Params = providers.DeployRollbackFailed, providers.StepNameVerifyOld, reasonRollbackFailed, backup
+		return out, nil
+	}
+	out.Verified = v.mode
+	return out, nil
+}
+
+// DeploymentStatus reads an operation's journal on the server (nginx-status). The answer is checked
+// against the helper's vocabulary and DeploymentState.Validate; one that breaks them is an
+// ssh.protocol_error, never a state. Phase none carries nothing but Active (the helper still names
+// the backup directory then); every other phase's BackupDir is the operation's directory.
+func (s *session) DeploymentStatus(ctx context.Context, op uuid.UUID) (providers.DeploymentState, error) {
+	const sub = helperproto.SubNginxStatus
+	if err := s.open(); err != nil {
+		return providers.DeploymentState{}, err
+	}
+	cmd, err := linuxssh.CmdNginxStatus(op)
+	if err != nil {
+		return providers.DeploymentState{}, providers.NewError(reasonUnexpected, false, err, nil)
+	}
+	res, err := s.conn.Run(ctx, cmd)
+	if err != nil {
+		return providers.DeploymentState{}, err
+	}
+	r, err := linuxssh.DecodeHelper[helperproto.NginxStatusResponse](res, sub)
+	if err != nil {
+		return providers.DeploymentState{}, mapHelper(err, sub)
+	}
+	switch {
+	case !slices.Contains(helperPhases, r.Phase):
+		return providers.DeploymentState{}, protocolError(sub, "an unknown phase")
+	case r.Phase == helperproto.PhaseNone:
+		return providers.DeploymentState{Phase: providers.PhaseNone, Active: r.Active}, nil
+	case (r.FailedStep != "" && !slices.Contains(helperSteps, r.FailedStep)) || (r.CauseStep != "" && !slices.Contains(helperSteps, r.CauseStep)) ||
+		!knownClass(r.Error, true) || !isHexSHA256(r.NewCertSHA256) || (r.CurrentCertSHA256 != "" && !isHexSHA256(r.CurrentCertSHA256)):
+		return providers.DeploymentState{}, protocolError(sub, "a journal outside the helper's vocabulary")
+	}
+	st := providers.DeploymentState{Phase: r.Phase, Active: r.Active, FailedStep: r.FailedStep, CauseStep: r.CauseStep, Error: r.Error,
+		NewCertSHA256: r.NewCertSHA256, CurrentCertSHA256: r.CurrentCertSHA256, BackupDir: backupDir(op)}
+	if err := st.Validate(); err != nil {
+		return providers.DeploymentState{}, protocolError(sub, "a journal state that breaks the invariants")
+	}
+	return st, nil
+}

@@ -45,7 +45,7 @@ var (
 func New(o Options) *Provider {
 	p := &Provider{ssh: o.SSH, prober: o.Prober, retryWait: o.RetryWait, attempts: o.Attempts,
 		caps: providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
-			providers.CapDiscoverCerts, providers.CapVerifyDeployment)}
+			providers.CapDiscoverCerts, providers.CapDeployCertificate, providers.CapVerifyDeployment)}
 	if p.prober == nil {
 		p.prober = TLSProber{}
 	}
