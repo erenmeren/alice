@@ -39,7 +39,9 @@ func TestSingle(t *testing.T) {
 	assert.Equal(t, []string{"www.example.test", "example.test"}, s.Names)
 	assert.Equal(t, []Listen{{Port: 443, SSL: true}, {Addr: "::", Port: 443, SSL: true}}, SSLListens(s))
 	assert.Equal(t, []Pair{{Cert: "/etc/nginx/ssl/www.crt", Key: "/etc/nginx/ssl/www.key",
-		CertRaw: "/etc/nginx/ssl/www.crt", KeyRaw: "/etc/nginx/ssl/www.key"}}, s.Pairs)
+		CertRaw: "/etc/nginx/ssl/www.crt", KeyRaw: "/etc/nginx/ssl/www.key",
+		CertFile: "/etc/nginx/conf.d/www.conf", KeyFile: "/etc/nginx/conf.d/www.conf"}}, s.Pairs)
+	assert.Equal(t, []string{"/etc/nginx/conf.d/www.conf"}, s.Files)
 	assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/conf.d/www.conf"}, c.Files)
 	assert.True(t, c.HasPair("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key"))
 	assert.False(t, c.HasPair("/etc/nginx/ssl/www.crt", "/etc/shadow"))
@@ -159,28 +161,64 @@ func TestRobustnessErrors(t *testing.T) {
 		in  string
 		err error
 	}{
-		"NUL byte":                       {"http { server { " + okServer + " } }\x00", ErrNUL},
-		"unterminated single quote":      {"http { server_name 'abc; }", ErrSyntax},
-		"unterminated brace":             {"http {", ErrSyntax},
-		"stray closing brace":            {"}", ErrSyntax},
-		"quote glued to a word":          {`http { server_name "a"b; }`, ErrSyntax},
-		"block without a name":           {"{ }", ErrSyntax},
-		"missing semicolon at end":       {"http { x }", ErrSyntax},
-		"missing semicolon at EOF":       {"worker_processes 1", ErrSyntax},
-		"overlong line":                  {strings.Repeat(" ", MaxLine+1), ErrLineTooLong},
-		"overlong quoted token":          {`a "` + strings.Repeat("x\n", MaxLine/2+1) + `";`, ErrLineTooLong},
-		"include loop":                   {"# configuration file /a:\ninclude /b;\n# configuration file /b:\ninclude /a;\n", ErrIncludeLoop},
-		"too many tokens":                {strings.Repeat(";\n", MaxTokens+1), ErrTooComplex},
-		"too many files":                 {manyFiles(MaxFiles + 1), ErrTooComplex},
-		"same file named twice":          {"# configuration file /a:\n# configuration file /a:\n", ErrDuplicateFile},
-		"same file named twice, unclean": {"# configuration file /a/b:\n# configuration file /a//b:\n", ErrDuplicateFile},
-		"deep nesting through files":     {deepIncludes(), ErrTooDeep},
+		"NUL byte":                   {"http { server { " + okServer + " } }\x00", ErrNUL},
+		"unterminated single quote":  {"http { server_name 'abc; }", ErrSyntax},
+		"unterminated brace":         {"http {", ErrSyntax},
+		"stray closing brace":        {"}", ErrSyntax},
+		"quote glued to a word":      {`http { server_name "a"b; }`, ErrSyntax},
+		"block without a name":       {"{ }", ErrSyntax},
+		"missing semicolon at end":   {"http { x }", ErrSyntax},
+		"missing semicolon at EOF":   {"worker_processes 1", ErrSyntax},
+		"overlong line":              {strings.Repeat(" ", MaxLine+1), ErrLineTooLong},
+		"overlong quoted token":      {`a "` + strings.Repeat("x\n", MaxLine/2+1) + `";`, ErrLineTooLong},
+		"include loop":               {"# configuration file /a:\ninclude /b;\n# configuration file /b:\ninclude /a;\n", ErrIncludeLoop},
+		"too many tokens":            {strings.Repeat(";\n", MaxTokens+1), ErrTooComplex},
+		"too many files":             {manyFiles(MaxFiles + 1), ErrTooComplex},
+		"same file named twice":      {"# configuration file /a:\n# configuration file /a:\n", ErrDuplicateFile},
+		"deep nesting through files": {deepIncludes(), ErrTooDeep},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Parse([]byte(tc.in), "/etc/nginx")
 			assert.ErrorIs(t, err, tc.err)
 		})
 	}
+}
+
+// nginx prints a file reached under two spellings twice; names are compared as raw text.
+func TestTheSameFileUnderTwoSpellingsIsNotADuplicate(t *testing.T) {
+	in := "# configuration file /etc/nginx/nginx.conf:\nhttp { include conf.d/a.conf; include ./conf.d/a.conf; }\n" +
+		"# configuration file /etc/nginx/conf.d/a.conf:\nserver { " + okServer + " }\n" +
+		"# configuration file /etc/nginx/./conf.d/a.conf:\nserver { " + okServer + " }\n"
+	c := parseInline(t, in)
+	assert.Len(t, c.Servers, 2)
+	assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/conf.d/a.conf", "/etc/nginx/./conf.d/a.conf"}, c.Files)
+	_, err := Parse([]byte("# configuration file /a/b:\n# configuration file /a//b:\n"), "/etc/nginx")
+	assert.NoError(t, err)
+}
+
+// S1: the files that hold a server block, everything spliced into it, and each pair's directives
+// are reported, so the helper can refuse pairs a non-root user could have written.
+func TestDirectiveFilesAreReported(t *testing.T) {
+	in := "# configuration file /etc/nginx/nginx.conf:\n" +
+		"http { ssl_certificate_key /etc/nginx/ssl/top.key; include /etc/nginx/sites/*; }\n" +
+		"# configuration file /etc/nginx/sites/a:\n" +
+		"server { listen 443 ssl; include /etc/nginx/snippets/tls.conf; ssl_certificate /etc/nginx/ssl/a2.crt; }\n" +
+		"# configuration file /etc/nginx/sites/b:\n" +
+		"server { listen 443 ssl; ssl_certificate /etc/nginx/ssl/b.crt; }\n" +
+		"# configuration file /etc/nginx/snippets/tls.conf:\n" +
+		"ssl_certificate /etc/nginx/ssl/a.crt;\nssl_certificate_key /etc/nginx/ssl/a.key;\n"
+	c := parseInline(t, in)
+	require.Len(t, c.Servers, 2)
+	a, b := c.Servers[0], c.Servers[1]
+	assert.Equal(t, []string{"/etc/nginx/sites/a", "/etc/nginx/snippets/tls.conf"}, a.Files)
+	assert.Equal(t, "/etc/nginx/snippets/tls.conf", a.Pairs[0].CertFile)
+	assert.Equal(t, "/etc/nginx/snippets/tls.conf", a.Pairs[0].KeyFile)
+	assert.Equal(t, "/etc/nginx/sites/a", a.Pairs[1].CertFile)
+	assert.Equal(t, "", a.Pairs[1].KeyFile, "no second key directive")
+	assert.Equal(t, []string{"/etc/nginx/sites/b"}, b.Files)
+	assert.Equal(t, "/etc/nginx/sites/b", b.Pairs[0].CertFile)
+	assert.Equal(t, "/etc/nginx/nginx.conf", b.Pairs[0].KeyFile, "inherited from the http block")
+	assert.True(t, b.Pairs[0].Inherited)
 }
 
 func manyFiles(n int) string {
@@ -371,17 +409,53 @@ func globStorm() string {
 	return b.String()
 }
 
-func TestLargeIncludedFileCostsLittleMemory(t *testing.T) {
-	// 1 MB: /a includes /b twice, /b is 500000 directives nobody reads.
-	in := "# configuration file /a:\nhttp { include /b; include /b; }\n# configuration file /b:\n" + strings.Repeat("a;", 500000) + "\n"
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	c, err := Parse([]byte(in), "/etc/nginx")
-	runtime.ReadMemStats(&after)
-	require.NoError(t, err)
-	assert.Empty(t, c.Servers)
-	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20))
+// The memory one dump can cost is bounded whatever its shape: dropped directives are counted, not
+// stored, a kept directive has at most maxArgs arguments and the dump at most maxNodes kept ones.
+func TestAllocationCeiling(t *testing.T) {
+	for name, tc := range map[string]struct {
+		in  string
+		err error
+	}{
+		// 1 MB: /a includes /b twice, /b is 500000 directives nobody reads.
+		"many dropped directives": {"# configuration file /a:\nhttp { include /b; include /b; }\n# configuration file /b:\n" +
+			strings.Repeat("a;", 500000) + "\n", nil},
+		// One directive nobody reads with a million arguments.
+		"one long dropped directive": {"http { add_header" + strings.Repeat("\n x", MaxTokens-10) + "; }", nil},
+		// One kept directive with a million arguments.
+		"one long server_name": {"http { server { server_name" + strings.Repeat("\n x", MaxTokens-10) + "; } }", ErrTooComplex},
+		// As many kept directives as the token budget allows.
+		"340k listen lines": {"http { server {\n" + strings.Repeat("listen 1;\n", (MaxTokens-10)/3) + "} }", ErrTooComplex},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			c, err := Parse([]byte(tc.in), "/etc/nginx")
+			runtime.ReadMemStats(&after)
+			if tc.err != nil {
+				assert.ErrorIs(t, err, tc.err)
+			} else {
+				require.NoError(t, err)
+				assert.Empty(t, c.Servers)
+			}
+			t.Logf("allocated %d MiB", (after.TotalAlloc-before.TotalAlloc)>>20)
+			assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20))
+		})
+	}
+}
+
+func TestKeptDirectiveArgumentsAreCapped(t *testing.T) {
+	names := func(n int) string {
+		return "http { server { listen 443 ssl; server_name" + strings.Repeat(" a.example", n) + "; " +
+			"ssl_certificate /etc/nginx/ssl/x.crt; ssl_certificate_key /etc/nginx/ssl/x.key; } }"
+	}
+	c := parseInline(t, names(maxArgs))
+	require.Len(t, c.Servers, 1)
+	assert.Len(t, c.Servers[0].Names, maxArgs)
+	_, err := Parse([]byte(names(maxArgs+1)), "/etc/nginx")
+	assert.ErrorIs(t, err, ErrTooComplex)
+	_, err = Parse([]byte("http { add_header"+strings.Repeat(" x", maxArgs*2)+"; }"), "/etc/nginx")
+	assert.NoError(t, err, "a directive nobody reads may be long")
 }
 
 func TestForgedMarkerCannotChangeAnotherServersPairs(t *testing.T) {

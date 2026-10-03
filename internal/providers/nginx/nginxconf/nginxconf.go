@@ -10,12 +10,14 @@
 // configuration and is ignored.
 //
 // The markers are NOT authenticated: any file can contain a line that looks like one. Parse
-// refuses a dump that names a file twice (nginx prints each file once), but a forged marker with
-// a new name still lets its text be spliced where an include glob matches it. A caller that acts
-// on the result (the root helper) must therefore compare every section the parse used, byte for
-// byte, with the real file (Config.Sections gives the name and the exact bytes of each) before it
-// relies on the parse. Paths are decided on the raw text: a "." or ".." segment is never
-// accepted, so no textual folding can differ from what the kernel opens.
+// refuses a dump that names a file twice under the same raw name (nginx prints each file it
+// opened once per name), but a forged marker with a new name still lets its text be spliced
+// where an include glob matches it. A caller that acts on the result (the root helper) must
+// therefore compare every section, byte for byte, with the real file (Config.Sections gives the
+// name and the exact bytes of each) before it relies on the parse. Paths are decided on the raw
+// text: a "." or ".." segment is never accepted, so no textual folding can differ from what the
+// kernel opens. Server.Files, Pair.CertFile and Pair.KeyFile name the files each server block and
+// directive came from, so the caller can refuse what a user other than root could have written.
 package nginxconf
 
 import (
@@ -37,7 +39,8 @@ const (
 	MaxLine    = 1 << 20  // bytes of one line, and of one token
 	MaxTokens  = 1 << 20  // tokens of the whole dump
 	MaxFiles   = 4096     // "# configuration file" sections
-	maxNodes   = 1 << 17  // kept directives visited while splicing includes
+	maxNodes   = 1 << 17  // kept directives in the dump, and visited while splicing includes
+	maxArgs    = 4096     // arguments of one kept directive
 	maxWork    = 1 << 26  // glob matching effort while splicing includes
 	maxSegment = 255      // longest path segment that is glob matched
 	maxPath    = 4096     // longest file name in a marker
@@ -72,6 +75,10 @@ const (
 	ReasonPathNotAllowed = "path_not_allowed"
 	ReasonStream         = "stream"
 	ReasonCombinedFile   = "combined_file"
+	// ReasonConfigFileWritable is set by the root helper (not by Parse): a configuration file that
+	// holds the server block or one of the pair's directives can be changed by a user other than
+	// root (S1), so the pair could name any file of that user's choosing.
+	ReasonConfigFileWritable = helperproto.WarnConfigFileWritable
 )
 
 // Listen is one listen directive.
@@ -88,6 +95,9 @@ type Pair struct {
 	CertRaw, KeyRaw string // the directive arguments as written
 	Inherited       bool   // either path came from the http block
 	Unsupported     string // "" or a Reason*
+	// CertFile and KeyFile are the configuration files (raw marker names) of the ssl_certificate
+	// and ssl_certificate_key directives ("" when there is no key directive).
+	CertFile, KeyFile string
 }
 
 // Server is one server block that serves TLS with at least one certificate.
@@ -98,6 +108,9 @@ type Server struct {
 	Listens []Listen
 	Pairs   []Pair
 	Stream  bool
+	// Files is every configuration file (raw marker names, sorted) that holds the block or a
+	// directive spliced into it by an include.
+	Files []string
 }
 
 // Config is the part of the configuration Alice uses.
@@ -180,11 +193,12 @@ func splitSections(dump []byte) ([]section, error) {
 			if len(secs) >= MaxFiles {
 				return nil, ErrTooComplex
 			}
-			if key := filepath.Clean(file); seen[key] {
+			// Raw names: nginx prints each file once under the name it opened, and a file reached
+			// under two spellings ("conf.d/x" and "./conf.d/x") is printed twice, legitimately.
+			if seen[file] {
 				return nil, ErrDuplicateFile
-			} else {
-				seen[key] = true
 			}
+			seen[file] = true
 			closeSection(pos)
 			secs = append(secs, section{file: file})
 			cur = len(secs) - 1
@@ -437,17 +451,41 @@ var (
 )
 
 type parser struct {
-	lx *lexer
+	lx    *lexer
+	nodes *int // remaining kept directives of the dump
 }
 
 // block reads directives until the matching "}" (closing) or the end of input (top level). keep is
-// false inside blocks whose content is not read: their directives are checked and dropped.
+// false inside blocks whose content is not read: their directives are checked and dropped. Only
+// the first token of a directive that is not kept is held; the others are counted (the lexer's
+// token budget bounds them), so one long directive costs no memory. A kept directive has at most
+// maxArgs arguments and the dump at most maxNodes kept directives.
 func (p *parser) block(depth int, closing, keep bool) ([]node, error) {
 	if depth > MaxDepth {
 		return nil, ErrTooDeep
 	}
-	var out []node
-	var cur []token
+	var (
+		out     []node
+		first   token   // the directive's name
+		args    []token // its arguments, when it is kept
+		n       int     // tokens of the current directive
+		keepCur bool
+	)
+	add := func(nd node) error {
+		if *p.nodes--; *p.nodes < 0 {
+			return ErrTooComplex
+		}
+		if len(out) == cap(out) {
+			// Double, but never past the remaining budget: append's 1.25 growth for large slices
+			// would allocate five times the final size of a block with a hundred thousand
+			// directives.
+			grown := make([]node, len(out), min(2*cap(out)+4, len(out)+*p.nodes+1))
+			copy(grown, out)
+			out = grown
+		}
+		out = append(out, nd)
+		return nil
+	}
 	for {
 		t, ok, err := p.lx.next()
 		if err != nil {
@@ -459,54 +497,67 @@ func (p *parser) block(depth int, closing, keep bool) ([]node, error) {
 		if t.punct {
 			switch t.text {
 			case ";":
-				if len(cur) > 0 && keep && keptDirectives[cur[0].text] {
-					out = append(out, node{name: cur[0].text, args: keepArgs(cur), file: cur[0].file, line: cur[0].line})
+				if n > 0 && keep && keptDirectives[first.text] {
+					if err := add(node{name: first.text, args: keepArgs(first.text, args), file: first.file, line: first.line}); err != nil {
+						return nil, err
+					}
 				}
-				cur = cur[:0]
+				n, args = 0, nil
 				continue
 			case "{":
-				if len(cur) == 0 {
+				if n == 0 {
 					return nil, ErrSyntax
 				}
-				if strings.HasSuffix(cur[0].text, "_by_lua_block") {
+				if strings.HasSuffix(first.text, "_by_lua_block") {
 					if err := p.lx.skipLua(); err != nil {
 						return nil, err
 					}
-					cur = cur[:0]
+					n, args = 0, nil
 					continue
 				}
-				kept := keep && keptBlocks[cur[0].text]
+				kept := keep && keptBlocks[first.text]
 				children, err := p.block(depth+1, true, kept)
 				if err != nil {
 					return nil, err
 				}
 				if kept {
-					out = append(out, node{name: cur[0].text, args: keepArgs(cur), file: cur[0].file, line: cur[0].line, block: true, children: children})
+					if err := add(node{name: first.text, args: keepArgs(first.text, args), file: first.file, line: first.line, block: true, children: children}); err != nil {
+						return nil, err
+					}
 				}
-				cur = cur[:0]
+				n, args = 0, nil
 				continue
 			case "}":
-				if !closing || len(cur) > 0 {
+				if !closing || n > 0 {
 					return nil, ErrSyntax
 				}
 				return out, nil
 			}
 		}
-		cur = append(cur, t)
+		switch {
+		case n == 0:
+			first = t
+			keepCur = keep && (keptDirectives[t.text] || keptBlocks[t.text])
+		case keepCur:
+			if len(args) >= maxArgs {
+				return nil, ErrTooComplex
+			}
+			args = append(args, t)
+		}
+		n++
 	}
-	if closing || len(cur) > 0 {
+	if closing || n > 0 {
 		return nil, ErrSyntax
 	}
 	return out, nil
 }
 
-// keepArgs copies the arguments of a directive; text that is shown or stored is made valid UTF-8,
-// include patterns stay raw bytes (they are compared with the raw marker names).
-func keepArgs(cur []token) []token {
-	args := slices.Clone(cur[1:])
-	if cur[0].text != "include" {
+// keepArgs prepares the arguments of a kept directive; text that is shown or stored is made valid
+// UTF-8, include patterns stay raw bytes (they are compared with the raw marker names).
+func keepArgs(name string, args []token) []token {
+	if name != "include" {
 		for i := range args {
-			args[i].text = strings.ToValidUTF8(args[i].text, "�")
+			args[i].text = strings.ToValidUTF8(args[i].text, "\uFFFD")
 		}
 	}
 	return args
@@ -645,10 +696,10 @@ func Parse(dump []byte, confDir string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	left := MaxTokens
+	left, nodes := MaxTokens, maxNodes
 	c := Config{}
 	for i := range secs {
-		p := &parser{lx: &lexer{data: secs[i].body, line: 1, file: secs[i].file, left: &left}}
+		p := &parser{lx: &lexer{data: secs[i].body, line: 1, file: secs[i].file, left: &left}, nodes: &nodes}
 		if secs[i].nodes, err = p.block(0, false, true); err != nil {
 			return Config{}, err
 		}
@@ -686,8 +737,13 @@ func Parse(dump []byte, confDir string) (Config, error) {
 	return c, nil
 }
 
+// directive is the first argument of a directive and the file that holds the directive.
+type directive struct {
+	arg, file string
+}
+
 type sslDirs struct {
-	certs, keys []string
+	certs, keys []directive
 	password    bool
 	sslSet      bool // an "ssl on|off" directive is present
 	sslOn       bool
@@ -701,9 +757,9 @@ func collect(nodes []node) sslDirs {
 		}
 		switch n.name {
 		case "ssl_certificate":
-			d.certs = append(d.certs, n.args[0].text)
+			d.certs = append(d.certs, directive{n.args[0].text, n.file})
 		case "ssl_certificate_key":
-			d.keys = append(d.keys, n.args[0].text)
+			d.keys = append(d.keys, directive{n.args[0].text, n.file})
 		case "ssl_password_file":
 			d.password = true
 		case "ssl":
@@ -741,9 +797,9 @@ func (c *Config) http(children []node, confDir string) {
 		}
 		password := own.password || top.password
 		for i, cr := range certs {
-			pr := Pair{CertRaw: cr, Inherited: inhC || (inhK && len(top.keys) > 0)}
+			pr := Pair{CertRaw: cr.arg, CertFile: cr.file, Inherited: inhC || (inhK && len(top.keys) > 0)}
 			if i < len(keys) {
-				pr.KeyRaw = keys[i]
+				pr.KeyRaw, pr.KeyFile = keys[i].arg, keys[i].file
 			}
 			pr.Cert, pr.Key, pr.Unsupported = resolvePair(pr.CertRaw, pr.KeyRaw, confDir, password)
 			s.Pairs = append(s.Pairs, pr)
@@ -780,9 +836,9 @@ func (c *Config) stream(children []node) {
 		}
 		s.Stream = true
 		for i, cr := range certs {
-			pr := Pair{CertRaw: cr, Unsupported: ReasonStream, Inherited: inhC || (inhK && len(top.keys) > 0)}
+			pr := Pair{CertRaw: cr.arg, CertFile: cr.file, Unsupported: ReasonStream, Inherited: inhC || (inhK && len(top.keys) > 0)}
 			if i < len(keys) {
-				pr.KeyRaw = keys[i]
+				pr.KeyRaw, pr.KeyFile = keys[i].arg, keys[i].file
 			}
 			s.Pairs = append(s.Pairs, pr)
 		}
@@ -813,7 +869,7 @@ func (c *Config) warn(code string) {
 
 // server reads the names and listens of a server block; sslOn is the effective "ssl on" setting.
 func server(n node, sslOn bool) Server {
-	s := Server{File: strings.ToValidUTF8(n.file, "\uFFFD"), Line: n.line}
+	s := Server{File: strings.ToValidUTF8(n.file, "\uFFFD"), Line: n.line, Files: blockFiles(n)}
 	for _, d := range n.children {
 		if d.block {
 			continue
@@ -838,6 +894,23 @@ func server(n node, sslOn bool) Server {
 		}
 	}
 	return s
+}
+
+// blockFiles returns the files of a block and of everything spliced into it, sorted.
+func blockFiles(n node) []string {
+	files := []string{n.file}
+	var walk func(nodes []node)
+	walk = func(nodes []node) {
+		for _, c := range nodes {
+			if !slices.Contains(files, c.file) {
+				files = append(files, c.file)
+			}
+			walk(c.children)
+		}
+	}
+	walk(n.children)
+	slices.Sort(files)
+	return files
 }
 
 func hasSSL(s Server) bool { return len(SSLListens(s)) > 0 }

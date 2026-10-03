@@ -46,8 +46,20 @@ func FuzzParseNginxConfig(f *testing.F) {
 		if len(c1.Files) > markers {
 			t.Fatalf("%d files for %d marker lines", len(c1.Files), markers)
 		}
+		sections := map[string]bool{}
+		for _, sec := range c1.Sections {
+			sections[sec.File] = true
+		}
 		for _, s := range c1.Servers {
+			for _, f := range s.Files {
+				if !sections[f] {
+					t.Fatalf("server file %q is not a section", f)
+				}
+			}
 			for _, p := range s.Pairs {
+				if !sections[p.CertFile] || (p.KeyRaw != "" && !sections[p.KeyFile]) {
+					t.Fatalf("a directive file is not a section: %+v", p)
+				}
 				for _, path := range []string{p.Cert, p.Key} {
 					if path != "" && !helperproto.ValidPath(path) {
 						t.Fatalf("invalid path %q", path)
