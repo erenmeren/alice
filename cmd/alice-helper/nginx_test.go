@@ -286,6 +286,14 @@ func TestNginxDumpReportsFileProblems(t *testing.T) {
 	w.f.write("/etc/nginx/ssl/www.crt", strings.Repeat("a", helperproto.MaxCertFileSize+1), 0o644)
 	_, m = w.f.run("nginx-dump")
 	assert.Equal(t, helperproto.FileTooLarge, fileOf(t, m, "cert", "/etc/nginx/ssl/www.crt")["problem"])
+	w.f.write("/etc/nginx/ssl/www.crt", string(w.leaf.FullchainPEM), 0o644)
+	w.f.s.statfs = func(int) (int64, error) { // the file grows between fstat and the read
+		w.f.write("/etc/nginx/ssl/www.crt", string(w.leaf.FullchainPEM)+"\n", 0o644)
+		return 1 << 30, nil
+	}
+	_, m = w.f.run("nginx-dump")
+	assert.Equal(t, helperproto.FileUnreadable, fileOf(t, m, "cert", "/etc/nginx/ssl/www.crt")["problem"])
+	w.f.s.statfs = func(int) (int64, error) { return 1 << 30, nil }
 	require.NoError(t, os.Link(w.f.host("/etc/nginx/ssl/www.key"), w.f.host("/etc/nginx/ssl/other.key")))
 	_, m = w.f.run("nginx-dump")
 	assert.Equal(t, helperproto.FileHardLinked, fileOf(t, m, "key", "/etc/nginx/ssl/www.key")["problem"])

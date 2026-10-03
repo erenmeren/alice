@@ -388,12 +388,13 @@ func (s *sys) describeCert(p string, names map[int]string) (fi helperproto.Nginx
 	}
 	defer rf.close()
 	fi.Resolved, fi.Symlinked = rf.resolved, rf.symlinked
-	fi.FreeBytes, _ = s.statfs(rf.dirfd)
 	if !certName(rf.name) {
 		fi.Exists, fi.Problem = true, helperproto.FileBadName
+		fi.FreeBytes, _ = s.statfs(rf.dirfd)
 		return fi, false
 	}
 	f, st, err := rf.open()
+	fi.FreeBytes, _ = s.statfs(rf.dirfd)
 	if err != nil {
 		fi.Exists = !errors.Is(err, unix.ENOENT)
 		fi.Problem = problemOf(err)
@@ -406,12 +407,16 @@ func (s *sys) describeCert(p string, names map[int]string) (fi helperproto.Nginx
 		fi.Problem = helperproto.FileTooLarge
 		return fi, false
 	}
-	data, err := io.ReadAll(io.LimitReader(f, helperproto.MaxCertFileSize+1))
-	defer clear(data) // the file may also hold a private key
-	if err != nil || len(data) > helperproto.MaxCertFileSize {
-		fi.Problem = helperproto.FileUnreadable
+	// One buffer of the file's size (plus one byte to see growth), cleared afterwards: the file may
+	// also hold a private key, and io.ReadAll's growth would leave copies nobody clears.
+	buf := make([]byte, st.Size+1)
+	defer clear(buf)
+	n, err := io.ReadFull(f, buf)
+	if !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		fi.Problem = helperproto.FileUnreadable // a read error, or the file grew since fstat
 		return fi, false
 	}
+	data := buf[:n]
 	fi.SHA256 = hexSHA(data)
 	blocks, dropped := certBlocks(data)
 	if blocks == "" {
@@ -446,11 +451,12 @@ func certBlocks(data []byte) (string, bool) {
 		}
 		blk, _ := pem.Decode(rest[:end+len(pemCertEnd)])
 		rest = rest[end+len(pemCertEnd):]
-		if blk == nil || blk.Type != "CERTIFICATE" || len(blk.Headers) != 0 {
+		if blk == nil {
 			dropped = true
 			continue
 		}
-		if _, err := x509.ParseCertificate(blk.Bytes); err != nil {
+		if _, err := x509.ParseCertificate(blk.Bytes); err != nil || blk.Type != "CERTIFICATE" || len(blk.Headers) != 0 {
+			clear(blk.Bytes) // whatever it was (a key labelled CERTIFICATE), it does not stay in memory
 			dropped = true
 			continue
 		}
