@@ -202,6 +202,10 @@ fuzz-ssh: ## Fuzz the authorized_keys and sshd configuration parsers for 60 s ea
 	go test -count=1 -run '^$$' -fuzz FuzzParseAuthorizedKeys -fuzztime 60s ./internal/providers/linuxssh/
 	go test -count=1 -run '^$$' -fuzz FuzzParseSSHDConfig -fuzztime 60s ./internal/providers/linuxssh/sshdconf/
 
+.PHONY: fuzz-nginx
+fuzz-nginx: ## Fuzz the nginx -T parser for 60 s (spec §25.6)
+	go test -count=1 -run '^$$' -fuzz FuzzParseNginxConfig -fuzztime 60s ./internal/providers/nginx/nginxconf/
+
 .PHONY: fuzz-certs
 fuzz-certs: ## Fuzz the certificate upload parser for 60 s (spec §25.6)
 	go test -count=1 -run '^$$' -fuzz FuzzParseCertificateUpload -fuzztime 60s ./internal/certs/

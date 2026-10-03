@@ -155,6 +155,8 @@ func TestAllowed(t *testing.T) {
 		{"provider to interface package allowed", nginx, "alice/internal/providers", true},
 		{"provider to linuxssh allowed", nginx, "alice/internal/providers/linuxssh", true},
 		{"provider to own subpackage allowed", nginx, nginx + "/internal", true},
+		{"nginxconf to helperproto allowed", nginx + "/nginxconf", "alice/internal/providers/linuxssh/helperproto", true},
+		{"nginxconf to platform/db denied", nginx + "/nginxconf", "alice/internal/platform/db", false},
 		{"platform to i18n denied", "alice/internal/platform/clock", "alice/internal/i18n", false},
 		{"platform to platform allowed", "alice/internal/platform/db", "alice/internal/platform/clock", true},
 		{"api to provider impl denied", "alice/internal/api", nginx, false},

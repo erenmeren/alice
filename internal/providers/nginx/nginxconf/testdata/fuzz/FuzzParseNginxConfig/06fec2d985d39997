@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("http{server{listen 1 ssl ;ssl_certificate . 00000000000000000000000000000000000000000;ssl_certificate_key 0;}}")
