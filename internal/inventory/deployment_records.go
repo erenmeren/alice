@@ -1,7 +1,8 @@
 package inventory
 
 // The deployment engine's side of the records (Task 16 calls these; see the state machine in
-// deployments.go). The engine, per deployment job:
+// deployments.go). Every engine write is fenced to the job run named by the context's Claim
+// (claim.go): a run that lost its job writes nothing (ErrClaimLost). The engine, per deployment job:
 //
 //  1. d := Deployment(id); a done deployment is left alone. In deploying or recovering a send may
 //     have happened: never send again, recover (read DeploymentStatus first).
@@ -330,6 +331,9 @@ func (s *Service) appendAudit(ctx context.Context, tx pgx.Tx, action string, res
 // caller follows its state (deploying or recovering: recover; done: nothing to do).
 func (s *Service) BeginDeployment(ctx context.Context, id uuid.UUID) (Deployment, error) {
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := checkClaim(ctx, tx); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `UPDATE deployments SET state = $3, status = $4, started_at = coalesce(started_at, $2)
 WHERE id = $1 AND state = $5`, id, s.clock.Now().UTC(), DeployStatePrecheck, DeployStatusRunning, DeployStateQueued)
 		if err != nil {
@@ -391,6 +395,9 @@ FROM deployments d WHERE d.id = $1`, id, DeployStateRecovering).Scan(&exists, &p
 
 func (s *Service) startDeployment(ctx context.Context, id uuid.UUID, v SendValues) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := checkClaim(ctx, tx); err != nil {
+			return err
+		}
 		d, err := lockDeployment(ctx, tx, id)
 		if err != nil {
 			return err
@@ -428,8 +435,9 @@ WHERE id = $1`, id, DeployStateDeploying, v.OperationID, v.ExpectCertSHA256, v.N
 	})
 }
 
-// stepParamKeys are the step params a record keeps (providers.StepLogger's primitives).
-var stepParamKeys = []string{"error", "port", "mode", "served"}
+// stepParamKeys are the step params a record keeps (providers.StepLogger's primitives; reason is the
+// failed verification's reason code, which a recovery reads back after a crash).
+var stepParamKeys = []string{"error", "port", "mode", "served", "reason"}
 
 // errorParamKeys are the error params a record keeps (the providers' allowlist, Tasks 11 and 17).
 var errorParamKeys = []string{"port", "failed_step", "profile", "phase", "directory", "backup_dir", "expected", "actual", "mode",
@@ -476,7 +484,7 @@ func boundParams(in map[string]string, allowed []string) map[string]string {
 
 // RecordDeploymentStep appends a step event (R38 item 7) to an unfinished deployment, numbered
 // under the deployment's row lock (concurrent writers get consecutive numbers). Params keep the
-// keys error, port, mode and served. A finished deployment, an unknown step name or status (the
+// keys error, port, mode, served and reason. A finished deployment, an unknown step name or status (the
 // record could not hold it) is ErrDeploymentState.
 func (s *Service) RecordDeploymentStep(ctx context.Context, id uuid.UUID, name string, status providers.StepStatus, params map[string]string) error {
 	switch status {
@@ -492,6 +500,9 @@ func (s *Service) RecordDeploymentStep(ctx context.Context, id uuid.UUID, name s
 		return err
 	}
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := checkClaim(ctx, tx); err != nil {
+			return err
+		}
 		d, err := lockDeployment(ctx, tx, id)
 		if err != nil {
 			return err
@@ -600,6 +611,9 @@ func (s *Service) FinishDeployment(ctx context.Context, id uuid.UUID, f Deployme
 		return errors.New("inventory: a deployment succeeds only when verified")
 	}
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := checkClaim(ctx, tx); err != nil {
+			return err
+		}
 		var location uuid.UUID
 		err := tx.QueryRow(ctx, "SELECT location_id FROM deployments WHERE id = $1", id).Scan(&location)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -706,7 +720,7 @@ WHERE id = $1`, d.location, d.newFingerprint, d.certificate, fileSHA); err != ni
 // (the status stays rollback_failed, "unknown or mixed", for the changed-outside check).
 func rollbackFailedTemplate(code, phase string) string {
 	switch {
-	case code == "deployment.recovery_exhausted" || code == "deployment.target_deleted":
+	case code == "deployment.recovery_exhausted" || code == "deployment.target_deleted" || code == "deployment.outcome_unknown":
 		return TemplateDeploymentOutcomeUnknown
 	case code == "deployment.superseded":
 		return TemplateDeploymentSuperseded
@@ -798,6 +812,9 @@ func (s *Service) notify(ctx context.Context, tx pgx.Tx, template string, params
 // an answer Alice could not use). A finished deployment is left as it is (nil).
 func (s *Service) MarkRecovering(ctx context.Context, id uuid.UUID, retryAt time.Time, needsAttention bool) error {
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := checkClaim(ctx, tx); err != nil {
+			return err
+		}
 		d, err := lockDeployment(ctx, tx, id)
 		if err != nil {
 			return err
@@ -889,6 +906,9 @@ func (s *Service) markRecoveringLocked(ctx context.Context, tx pgx.Tx, d lockedD
 func (s *Service) RequestRecovery(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
 	var jobID uuid.UUID
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := checkClaim(ctx, tx); err != nil {
+			return err
+		}
 		d, err := lockDeployment(ctx, tx, id)
 		if err != nil {
 			return err
@@ -960,6 +980,9 @@ func (s *Service) RecordOutcome(ctx context.Context, id uuid.UUID, rec OutcomeRe
 		port = f.VerifyFailedPort
 	}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := checkClaim(ctx, tx); err != nil {
+			return err
+		}
 		d, err := lockDeployment(ctx, tx, id)
 		if err != nil {
 			return err

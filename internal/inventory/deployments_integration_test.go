@@ -1100,6 +1100,13 @@ func TestRollbackFailedEmailsByCause(t *testing.T) {
 	want = map[string]string{"target_name": "web-02", "cert_path": "/etc/nginx/ssl/www.crt", "deployment_id": id.String(),
 		"backup_dir": inventory.BackupRoot + "/" + id.String()}
 	assert.Equal(t, outboxRow{"deployment.outcome_unknown", want}, e2[len(e2)-1])
+	// The engine cannot recover from what the record holds (M-8): the outcome is unknown at once.
+	id = f.deploying(f.loc1)
+	require.NoError(t, f.h.svc.FinishDeployment(ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusRollbackFailed,
+		ErrorCode: "deployment.outcome_unknown"}))
+	e2 = f.emails()
+	assert.Equal(t, "deployment.outcome_unknown", e2[len(e2)-1].Template)
+	assert.Equal(t, inventory.BackupRoot+"/"+id.String(), e2[len(e2)-1].Params["backup_dir"])
 }
 
 // Minor 4: a rollback after a failed verification keeps the step that failed.
@@ -1116,4 +1123,56 @@ func TestRolledBackKeepsTheFailedStep(t *testing.T) {
 	d := f.get(id)
 	assert.Equal(t, "verify", d.FailedStep)
 	assert.Equal(t, "verify", f.h.auditDetails("deployment.failed")[0]["failed_step"])
+}
+
+// I-1: the engine's writes are fenced to the job run that makes them. A run whose job was taken
+// back (re-queued) or claimed again writes nothing; a write without a claim (the sweep) is not
+// fenced.
+func TestEngineWritesAreFencedToTheJobClaim(t *testing.T) {
+	f := newDeployFixture(t)
+	ctx := f.h.ctx
+	id := f.request(f.admin, f.cert.ID, f.loc1)
+	job := f.jobOf(id)
+	_, err := f.h.db.Owner.Exec(ctx, "UPDATE jobs SET status = 'running', attempts = 1 WHERE id = $1", job)
+	require.NoError(t, err)
+	live := inventory.WithClaim(ctx, inventory.Claim{JobID: job, Attempt: 1})
+	_, err = f.h.svc.BeginDeployment(live, id)
+	require.NoError(t, err)
+	require.NoError(t, f.h.svc.CheckClaim(live))
+	require.NoError(t, f.h.svc.RecordDeploymentStep(live, id, "verify_current", providers.StepOK, nil))
+	m, err := f.h.svc.DeploymentMaterial(ctx, id, false)
+	require.NoError(t, err)
+	require.NoError(t, f.h.svc.StartDeployment(live, id, m.SendValues(pki.Fingerprint(f.old.Cert), 2)))
+
+	// The reaper took the job back and another run claimed it: attempt 2 holds it now.
+	_, err = f.h.db.Owner.Exec(ctx, "UPDATE jobs SET attempts = 2 WHERE id = $1", job)
+	require.NoError(t, err)
+	stale := live
+	before := f.get(id)
+	require.ErrorIs(t, f.h.svc.CheckClaim(stale), inventory.ErrClaimLost)
+	require.ErrorIs(t, f.h.svc.RecordDeploymentStep(stale, id, "verify", providers.StepOK, nil), inventory.ErrClaimLost)
+	require.ErrorIs(t, f.h.svc.FinishDeployment(stale, id, inventory.DeploymentFinish{Status: inventory.DeployStatusSucceeded, Verified: "remote"}),
+		inventory.ErrClaimLost)
+	require.ErrorIs(t, f.h.svc.RecordOutcome(stale, id, inventory.DeployOutcomeRecord(providers.DeployOutcome{Result: providers.DeployCommitted,
+		Phase: providers.PhaseCommitted, Verified: "remote"}, nil, false), time.Time{}), inventory.ErrClaimLost)
+	require.ErrorIs(t, f.h.svc.RecordOutcome(stale, id, inventory.DeployOutcomeRecord(providers.DeployOutcome{}, nil, false), time.Time{}),
+		inventory.ErrClaimLost)
+	require.ErrorIs(t, f.h.svc.MarkRecovering(stale, id, time.Time{}, false), inventory.ErrClaimLost)
+	_, err = f.h.svc.RequestRecovery(stale, id)
+	require.ErrorIs(t, err, inventory.ErrClaimLost)
+	_, err = f.h.svc.BeginDeployment(stale, id)
+	require.ErrorIs(t, err, inventory.ErrClaimLost)
+	after := f.get(id)
+	assert.Equal(t, before.State, after.State, "the stale run wrote nothing")
+	assert.Equal(t, len(before.Steps), len(after.Steps))
+	assert.Equal(t, 0, f.h.count("SELECT count(*) FROM audit_log WHERE action = 'deployment.succeeded'"))
+
+	// The run that holds the job now writes; a job that is no longer running fences every claim.
+	current := inventory.WithClaim(ctx, inventory.Claim{JobID: job, Attempt: 2})
+	require.NoError(t, f.h.svc.RecordDeploymentStep(current, id, "verify", providers.StepStarted, nil))
+	f.jobStatus(job, "queued", "")
+	require.ErrorIs(t, f.h.svc.CheckClaim(current), inventory.ErrClaimLost)
+	// Without a claim (the sweep, the API) nothing is fenced.
+	require.NoError(t, f.h.svc.CheckClaim(ctx))
+	require.NoError(t, f.h.svc.FinishDeployment(ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: "x.y"}))
 }
