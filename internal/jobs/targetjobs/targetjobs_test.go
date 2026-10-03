@@ -32,6 +32,7 @@ type stubInventory struct {
 	failErr      error
 	failures     []string
 	reconcileErr error
+	reconciled   []providers.DiscoveryResult
 	discoveryErr error
 	location     inventory.KeyLocation
 	locationErr  error
@@ -69,6 +70,7 @@ func (s *stubInventory) RecordConnectionFailure(_ context.Context, _ uuid.UUID, 
 	return s.failErr
 }
 func (s *stubInventory) Reconcile(_ context.Context, _ uuid.UUID, res providers.DiscoveryResult) (inventory.ReconcileSummary, error) {
+	s.reconciled = append(s.reconciled, res)
 	sum := inventory.ReconcileSummary{Keys: 1}
 	if res.Nginx != nil {
 		sum.Certificates, sum.Locations, sum.NewLocations = 2, 3, 1
@@ -512,4 +514,81 @@ func TestDiscoverReadsCertificatesOfNginxTargets(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"key_count": 1, "new_count": 0, "missing_count": 0, "partial": false}, out)
 	assert.Equal(t, []providers.DiscoverRequest{{SSHKeys: true, Certificates: true}, {SSHKeys: true}}, reqs)
+}
+
+// notFoundSession answers nginx.not_found to a discovery that asks for certificates, as the nginx
+// provider does on a server without Nginx (nginx-dump runs first).
+type notFoundSession struct {
+	providers.Session
+	reqs *[]providers.DiscoverRequest
+	code string
+}
+
+func (s notFoundSession) Discover(ctx context.Context, req providers.DiscoverRequest) (providers.DiscoveryResult, error) {
+	*s.reqs = append(*s.reqs, req)
+	if req.Certificates {
+		return providers.DiscoveryResult{}, providers.NewError(s.code, false, nil, nil)
+	}
+	return s.Session.Discover(ctx, req)
+}
+
+type notFoundProvider struct {
+	*fake.Provider
+	reqs *[]providers.DiscoverRequest
+	code string
+}
+
+func (p notFoundProvider) Open(ctx context.Context, t providers.TargetRef, c providers.CredentialSource, e providers.Env) (providers.Session, error) {
+	s, err := p.Provider.Open(ctx, t, c, e)
+	if err != nil {
+		return nil, err
+	}
+	return notFoundSession{s, p.reqs, p.code}, nil
+}
+
+// An Nginx server without Nginx keeps its SSH-key discovery: the job scans the SSH half alone and
+// reconciles it with Nginx facts that say "not found" (inventory then leaves the certificate
+// locations as they are). Any other failure of the certificate half fails the job as before.
+func TestDiscoverWithoutNginxStillScansSSHKeys(t *testing.T) {
+	run := func(code string, sshErr error) (*stubInventory, []providers.DiscoverRequest, map[string]any, error) {
+		var reqs []providers.DiscoverRequest
+		prov := fake.New(providers.KindNginx, providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
+			providers.CapDiscoverCerts)
+		prov.Configure(func(c *fake.Config) {
+			c.Discovery = providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{{OSUser: "deploy", Fingerprint: "SHA256:K"}},
+				SSHD: providers.SSHDSummary{Read: true}}
+			c.DiscoverErr = sshErr
+		})
+		reg := providers.NewRegistry()
+		reg.Register(notFoundProvider{prov, &reqs, code})
+		reg.Freeze()
+		inv := &stubInventory{target: inventory.Target{Name: "web-01", Type: inventory.TypeNginx, Status: inventory.StatusOK,
+			Capabilities: []string{"discover_certificates", "discover_ssh_keys"}}}
+		h := newHandlers(Deps{Inventory: inv, Registry: reg, Clock: clock.NewFake(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC))})
+		out, err := h.discover(context.Background(), testJob, nil)
+		return inv, reqs, out, err
+	}
+	inv, reqs, out, err := run("nginx.not_found", nil)
+	require.NoError(t, err)
+	assert.Equal(t, []providers.DiscoverRequest{{SSHKeys: true, Certificates: true}, {SSHKeys: true}}, reqs)
+	require.Len(t, inv.reconciled, 1)
+	res := inv.reconciled[0]
+	assert.Equal(t, &providers.NginxFacts{}, res.Nginx, "Nginx not found")
+	assert.Len(t, res.SSHKeys, 1)
+	assert.True(t, res.SSHD.Read)
+	assert.Equal(t, []string{"nginx_not_found"}, []string{res.Warnings[len(res.Warnings)-1].Code})
+	assert.Empty(t, inv.failures, "not a connection failure")
+	assert.Contains(t, out, "location_count")
+
+	// The SSH half fails as well: the job fails with its reason.
+	inv, _, _, err = run("nginx.not_found", providers.NewError("ssh.timeout", true, nil, nil))
+	r, _ := reason(t, err)
+	assert.Equal(t, "ssh.timeout", r)
+	assert.Empty(t, inv.reconciled)
+
+	inv, reqs, _, err = run("nginx.profile_missing", nil)
+	r, _ = reason(t, err)
+	assert.Equal(t, "nginx.profile_missing", r)
+	assert.Len(t, reqs, 1)
+	assert.Empty(t, inv.reconciled)
 }

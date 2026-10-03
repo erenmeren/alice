@@ -187,6 +187,14 @@ func (h *handlers) discover(ctx context.Context, j jobs.Job, _ jobs.StepRecorder
 	// discovery, scheduled or not; inventory reconciles them in one transaction.
 	req := providers.DiscoverRequest{SSHKeys: true, Certificates: slices.Contains(t.Capabilities, string(providers.CapDiscoverCerts))}
 	res, err := sess.Discover(ctx, req)
+	if err != nil && req.Certificates && isCode(err, "nginx.not_found") {
+		// Nginx is not installed (or no longer): the server's SSH keys are still scanned, and the
+		// Nginx facts say "not found" (inventory leaves the certificate locations as they are).
+		if res, err = sess.Discover(ctx, providers.DiscoverRequest{SSHKeys: true}); err == nil {
+			res.Nginx = &providers.NginxFacts{}
+			res.Warnings = append(res.Warnings, providers.Warning{Code: "nginx_not_found", Params: map[string]string{}})
+		}
+	}
 	if err != nil {
 		h.recordFailure(ctx, j.TargetID, err)
 		return nil, jobs.FromProvider(err)
@@ -203,6 +211,12 @@ func (h *handlers) discover(ctx context.Context, j jobs.Job, _ jobs.StepRecorder
 		out["certificate_count"], out["location_count"] = sum.Certificates, sum.Locations
 	}
 	return out, nil
+}
+
+// isCode reports whether err is a provider error with the reason code.
+func isCode(err error, code string) bool {
+	var pe *providers.Error
+	return errors.As(err, &pe) && pe.Code == code
 }
 
 // writeTracker forwards steps and remembers whether the provider started the write step, after
