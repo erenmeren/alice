@@ -265,3 +265,13 @@ func TestPoolAcquireFreshDialsAndDropsIdleConnectionsOnAChangedKey(t *testing.T)
 	_, _, err = e.pool.Acquire(ctx, testTarget, e.cfg, e.cred)
 	assert.Equal(t, "target.host_key_changed", providerCode(t, err).Code, "nothing old is handed out afterwards")
 }
+
+// A-12: an idle time below two nanoseconds must not make the sweep ticker panic.
+func TestNewPoolWithATinyIdleTimeDoesNotPanic(t *testing.T) {
+	for _, idle := range []time.Duration{time.Nanosecond, 2 * time.Nanosecond} {
+		assert.NotPanics(t, func() {
+			p := NewPool(&Dialer{Clock: clock.NewFake(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)), HostKeys: &memHostKeys{}}, 1, 1, idle)
+			p.Close()
+		}, "%v", idle)
+	}
+}

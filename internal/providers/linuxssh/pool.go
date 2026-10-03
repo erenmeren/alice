@@ -72,8 +72,17 @@ func NewPool(d *Dialer, maxConns, perTarget int, idle time.Duration) *Pool {
 		targets: map[uuid.UUID]chan struct{}{},
 		idle:    map[uuid.UUID][]idleConn{},
 	}
-	go p.sweepLoop(d.clk().NewTicker(idle / 2))
+	go p.sweepLoop(d.clk().NewTicker(sweepEvery(idle)))
 	return p
+}
+
+// minSweepEvery floors the sweep period: half of a tiny idle time would be zero (a ticker panics)
+// or keep a CPU busy.
+const minSweepEvery = time.Millisecond
+
+// sweepEvery is half the idle time, at least minSweepEvery.
+func sweepEvery(idle time.Duration) time.Duration {
+	return max(idle/2, minSweepEvery)
 }
 
 // sweepLoop closes expired idle connections until the pool is closed.
