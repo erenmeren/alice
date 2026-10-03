@@ -43,7 +43,9 @@ CREATE TABLE certificates (
     key_algorithm      text NOT NULL CHECK (key_algorithm IN ('rsa', 'ecdsa', 'ed25519', 'other')),
     key_bits           integer NOT NULL DEFAULT 0 CHECK (key_bits >= 0),
     public_key_sha256  text NOT NULL CHECK (public_key_sha256 ~ '^[0-9a-f]{64}$'),
-    pem_chain          text NOT NULL CHECK (char_length(pem_chain) <= 1048576), -- leaf first, then the chain; public
+    -- leaf first, then the chain; public. Updatable (a better chain), and nothing here ties its first
+    -- block to fingerprint_sha256: the provider refuses a deployment whose leaf differs.
+    pem_chain          text NOT NULL CHECK (char_length(pem_chain) <= 1048576),
     chain_complete     boolean NOT NULL DEFAULT false,
     self_signed        boolean NOT NULL DEFAULT false,
     source             text NOT NULL CHECK (source IN ('discovered', 'uploaded', 'csr', 'azure_kv')),
@@ -61,6 +63,7 @@ CREATE INDEX certificates_public_key ON certificates (public_key_sha256);
 -- A certificate's private key is the key of that certificate, whoever writes the row, and a key
 -- once attached is never replaced or detached (uploading the key of a discovered certificate is the
 -- only update of private_key_id: NULL to a key whose public key hash equals the certificate's).
+-- SQLSTATEs: AL001 the key does not belong to the certificate, AL002 a key is already attached.
 -- It runs as the invoking role (alice_app can read managed_private_keys), so every name is
 -- schema-qualified and the search path is pinned with pg_temp last.
 -- +goose StatementBegin
@@ -68,18 +71,18 @@ CREATE FUNCTION certificates_check_key() RETURNS trigger LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
     IF TG_OP = 'UPDATE' AND OLD.private_key_id IS NOT NULL AND NEW.private_key_id IS DISTINCT FROM OLD.private_key_id THEN
-        RAISE EXCEPTION 'the private key of a certificate cannot be replaced or detached' USING ERRCODE = 'P0001';
+        RAISE EXCEPTION 'the private key of a certificate cannot be replaced or detached' USING ERRCODE = 'AL002';
     END IF;
     IF NEW.private_key_id IS NOT NULL AND (TG_OP = 'INSERT' OR NEW.private_key_id IS DISTINCT FROM OLD.private_key_id) THEN
         IF NOT EXISTS (SELECT 1 FROM public.managed_private_keys k
                        WHERE k.id = NEW.private_key_id AND k.public_key_sha256 = NEW.public_key_sha256) THEN
-            RAISE EXCEPTION 'the private key does not belong to the certificate' USING ERRCODE = 'P0001';
+            RAISE EXCEPTION 'the private key does not belong to the certificate' USING ERRCODE = 'AL001';
         END IF;
     END IF;
     RETURN NEW;
 END $$;
 -- +goose StatementEnd
-CREATE TRIGGER certificates_key_check BEFORE INSERT OR UPDATE OF private_key_id ON certificates
+CREATE TRIGGER certificates_key_check BEFORE INSERT OR UPDATE OF private_key_id, public_key_sha256 ON certificates
     FOR EACH ROW EXECUTE FUNCTION certificates_check_key();
 
 CREATE TABLE csr_requests (
@@ -94,23 +97,27 @@ CREATE TABLE csr_requests (
     created_by     uuid REFERENCES users (id),
     created_at     timestamptz NOT NULL,
     finished_at    timestamptz,
-    CHECK ((status = 'completed') = (certificate_id IS NOT NULL))
+    CHECK ((status = 'completed') = (certificate_id IS NOT NULL)),
+    CHECK ((status <> 'pending') = (finished_at IS NOT NULL))
 );
 
 -- One row per certificate file an Nginx target uses (spec §7.3, §12.4 step 6: a file shared by
 -- several server blocks is one location; its server blocks are in servers). A path the helper
--- refused is stored as reported (bounded length only): such a location is unsupported and its
--- path is never sent back; deployments.cert_path and key_path are the strict ones.
+-- refused is stored as the provider shows it, strconv.QuoteToASCII of its first 4096 bytes: at most
+-- 4*4096+2 = 16386 characters (an invalid byte becomes \xNN), so cert_path and key_path allow 16400.
+-- Such a location is unsupported and its path is never sent back; deployments.cert_path and
+-- key_path are the strict ones. Uniqueness and lookups use the hash of the path (below): a btree
+-- entry on the raw text fails for incompressible values of 2.7 KB and more.
 CREATE TABLE certificate_locations (
     id                   uuid PRIMARY KEY,
     target_id            uuid NOT NULL REFERENCES targets (id),
     kind                 text NOT NULL CHECK (kind IN ('nginx_file')),
-    cert_path            text NOT NULL CHECK (char_length(cert_path) BETWEEN 1 AND 4096),
-    key_path             text NOT NULL DEFAULT '' CHECK (char_length(key_path) <= 4096),
+    cert_path            text NOT NULL CHECK (char_length(cert_path) BETWEEN 1 AND 16400),
+    key_path             text NOT NULL DEFAULT '' CHECK (char_length(key_path) <= 16400),
     resolved_cert_path   text NOT NULL DEFAULT '' CHECK (char_length(resolved_cert_path) <= 4096), -- the file a symlink leads to
     certificate_id       uuid REFERENCES certificates (id),       -- NULL: no readable certificate in the file
     key_type             text NOT NULL DEFAULT '' CHECK (key_type IN ('', 'rsa', 'ecdsa')),
-    servers              jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(servers) = 'array' AND octet_length(servers::text) <= 262144), -- providers.CertServer list
+    servers              jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(servers) = 'array' AND octet_length(servers::text) <= 33554432), -- providers.CertServer list; 32 MiB: the helper's whole answer is capped at 16 MiB
     supported            boolean NOT NULL,
     unsupported_reason   text NOT NULL DEFAULT '' CHECK (unsupported_reason ~ '^([a-z][a-z_]{0,39})?$'),
     problem              text NOT NULL DEFAULT '' CHECK (problem ~ '^([a-z][a-z_]{0,39})?$'),
@@ -135,9 +142,21 @@ CREATE TABLE certificate_locations (
     last_seen_at         timestamptz NOT NULL,
     missing_since        timestamptz,
     version              integer NOT NULL DEFAULT 1 CHECK (version >= 1),
-    UNIQUE (target_id, kind, cert_path),
     CHECK (NOT supported OR unsupported_reason = '')
 );
+-- One location per target, kind and certificate path, by the SHA-256 of the path's UTF-8 bytes
+-- (convert_to is only STABLE, so the immutable wrapper below is what an index may call; the
+-- database encoding is fixed, so the conversion is deterministic). The conflict target and every
+-- lookup by path write the same expression:
+--   ON CONFLICT (target_id, kind, certificate_location_path_hash(cert_path))
+--   WHERE target_id = $1 AND kind = $2 AND certificate_location_path_hash(cert_path) = certificate_location_path_hash($3)
+--         AND cert_path = $3
+-- +goose StatementBegin
+CREATE FUNCTION certificate_location_path_hash(p text) RETURNS bytea LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+SET search_path = pg_catalog, pg_temp
+RETURN sha256(convert_to(p, 'UTF8'));
+-- +goose StatementEnd
+CREATE UNIQUE INDEX certificate_locations_path ON certificate_locations (target_id, kind, certificate_location_path_hash(cert_path));
 CREATE INDEX certificate_locations_certificate ON certificate_locations (certificate_id);
 
 -- One deployment of one certificate to one location (spec §7.4). Its id is also the helper's
@@ -162,10 +181,10 @@ CREATE TABLE deployments (
                                                                    'restoring', 'restored', 'restore_failed')),
     operation_id         uuid UNIQUE,
     new_fingerprint      text NOT NULL CHECK (new_fingerprint ~ '^[0-9a-f]{64}$'),
-    new_chain_length     integer NOT NULL DEFAULT 1 CHECK (new_chain_length >= 1),
+    new_chain_length     integer NOT NULL DEFAULT 0 CHECK (new_chain_length >= 0), -- 0: not recorded yet; the engine records it before the first send
     previous_fingerprint text NOT NULL DEFAULT '' CHECK (previous_fingerprint ~ '^([0-9a-f]{64})?$'),
     previous_chain_length integer NOT NULL DEFAULT 0 CHECK (previous_chain_length >= 0), -- 0: not compared
-    expect_cert_sha256   text NOT NULL DEFAULT '' CHECK (expect_cert_sha256 ~ '^([0-9a-f]{64})?$'), -- the file hash the deployment expects to replace
+    expect_cert_sha256   text NOT NULL DEFAULT '' CHECK (expect_cert_sha256 ~ '^([0-9a-f]{64})?$'), -- the file hash the deployment expects to replace; recorded before the first send
     cert_path            text NOT NULL CHECK (cert_path ~ '^/[A-Za-z0-9._/@:+-]+$' AND char_length(cert_path) <= 4096),
     key_path             text NOT NULL CHECK (key_path ~ '^/[A-Za-z0-9._/@:+-]+$' AND char_length(key_path) <= 4096),
     confirm_incomplete_chain boolean NOT NULL DEFAULT false,
@@ -189,9 +208,30 @@ CREATE TABLE deployments (
 );
 CREATE UNIQUE INDEX deployments_one_active ON deployments (location_id) WHERE state <> 'done';
 CREATE INDEX deployments_target ON deployments (target_id, created_at DESC, id DESC);
+CREATE INDEX deployments_location ON deployments (location_id, created_at DESC, id DESC);
+CREATE INDEX deployments_job ON deployments (job_id) WHERE job_id IS NOT NULL; -- the foreign key of a pruned job
 CREATE INDEX deployments_certificate ON deployments (certificate_id, created_at DESC, id DESC);
 CREATE INDEX deployments_created ON deployments (created_at DESC, id DESC);
 CREATE INDEX deployments_unfinished ON deployments (recover_after) WHERE state IN ('deploying', 'recovering');
+
+-- A finished deployment is history: nothing changes except job_id going to NULL (the foreign key's
+-- ON DELETE SET NULL when maintenance.cleanup prunes the job; it runs as the table owner and passes
+-- through this trigger). Everything the engine sends or learns (expect_cert_sha256, chain lengths,
+-- operation_id, previous_fingerprint, result, error fields) is written before or with the update
+-- that makes the row done. SQLSTATE AL003.
+-- +goose StatementBegin
+CREATE FUNCTION deployments_protect_done() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    IF OLD.state = 'done' AND ((to_jsonb(NEW) - 'job_id') IS DISTINCT FROM (to_jsonb(OLD) - 'job_id')
+            OR (NEW.job_id IS NOT NULL AND NEW.job_id IS DISTINCT FROM OLD.job_id)) THEN
+        RAISE EXCEPTION 'a finished deployment cannot be changed' USING ERRCODE = 'AL003';
+    END IF;
+    RETURN NEW;
+END $$;
+-- +goose StatementEnd
+CREATE TRIGGER deployments_done_frozen BEFORE UPDATE ON deployments
+    FOR EACH ROW EXECUTE FUNCTION deployments_protect_done();
 
 -- Append-only step events (R38 item 7): one row per started/ok/failed/skipped.
 CREATE TABLE deployment_steps (
@@ -216,16 +256,18 @@ GRANT UPDATE (key_path, resolved_cert_path, certificate_id, key_type, servers, s
     warnings, deployed_fingerprint, changed_outside_at, verify_port, verify_sni, skip_verify, last_seen_at,
     missing_since, version)
     ON certificate_locations TO alice_app;
-GRANT UPDATE (job_id, state, status, result, phase, operation_id, previous_fingerprint, previous_chain_length,
-    rollback_info, verified, error_code, error_params, failed_step, cause_step, helper_error, verify_failed_reason,
+GRANT UPDATE (job_id, state, status, result, phase, operation_id, new_chain_length, expect_cert_sha256,
+    previous_fingerprint, previous_chain_length, rollback_info, verified, error_code, error_params, failed_step, cause_step, helper_error, verify_failed_reason,
     verify_failed_port, recover_after, recovery_attempts, started_at, finished_at) ON deployments TO alice_app;
 
 -- +goose Down
 DROP TABLE deployment_steps;
 DROP TABLE deployments;
+DROP FUNCTION deployments_protect_done();
 DROP TABLE certificate_locations;
 DROP TABLE csr_requests;
 DROP TRIGGER certificates_key_check ON certificates;
 DROP FUNCTION certificates_check_key();
 DROP TABLE certificates;
 DROP TABLE managed_private_keys;
+DROP FUNCTION certificate_location_path_hash(text);

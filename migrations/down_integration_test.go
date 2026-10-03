@@ -113,8 +113,8 @@ func TestMigration00006UpAndDownKeepPhase3Data(t *testing.T) {
 				assert.False(t, tableExists(t, d, tbl), tbl)
 			}
 			var fn bool
-			require.NoError(t, d.Owner.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'certificates_check_key')").Scan(&fn))
-			assert.False(t, fn, "the Down drops the trigger function")
+			require.NoError(t, d.Owner.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_proc WHERE proname IN ('certificates_check_key', 'deployments_protect_done', 'certificate_location_path_hash'))").Scan(&fn))
+			assert.False(t, fn, "the Down drops the trigger and index functions")
 			targets, jobs, creds = count()
 			assert.Equal(t, [3]int{1, 1, 1}, [3]int{targets, jobs, creds}, "Phase 3 data survives the Down")
 		}

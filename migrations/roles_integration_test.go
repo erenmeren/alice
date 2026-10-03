@@ -141,9 +141,10 @@ var explicitColumnGrants = map[string]map[string][]string{
 		"deployed_fingerprint", "inherited", "key_exists", "key_group", "key_mode", "key_owner", "key_path", "key_problem", "key_type",
 		"last_seen_at", "missing_since", "problem", "resolved_cert_path", "servers", "skip_verify", "supported", "symlinked",
 		"unsupported_reason", "verify_port", "verify_sni", "version", "warnings"}},
-	"public.deployments": {"UPDATE": {"cause_step", "error_code", "error_params", "failed_step", "finished_at", "helper_error",
-		"job_id", "operation_id", "phase", "previous_chain_length", "previous_fingerprint", "recover_after", "recovery_attempts",
-		"result", "rollback_info", "started_at", "state", "status", "verified", "verify_failed_port", "verify_failed_reason"}},
+	"public.deployments": {"UPDATE": {"cause_step", "error_code", "error_params", "expect_cert_sha256", "failed_step", "finished_at",
+		"helper_error", "job_id", "new_chain_length", "operation_id", "phase", "previous_chain_length", "previous_fingerprint",
+		"recover_after", "recovery_attempts", "result", "rollback_info", "started_at", "state", "status", "verified",
+		"verify_failed_port", "verify_failed_reason"}},
 }
 
 var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}

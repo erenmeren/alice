@@ -4,8 +4,11 @@ package migrations_test
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +26,10 @@ const (
 	checkViolation  = "23514"
 	privilegeDenied = "42501"
 	uniqueViolation = "23505"
+	// SQLSTATEs of the triggers (the application maps them to specific errors).
+	keyMismatch = "AL001" // the private key does not belong to the certificate
+	keyAttached = "AL002" // a certificate's key is never replaced or detached
+	doneFrozen  = "AL003" // a finished deployment is never rewritten
 )
 
 func hex64(c string) string { return strings.Repeat(c, 64) }
@@ -281,7 +288,7 @@ func TestCompletedCSRNamesItsCertificate(t *testing.T) {
 VALUES ($1, $2, 'a.example.test', 'x', 'completed', now())`, uuid.New(), key)
 	assert.Equal(t, checkViolation, sqlState(err), "completed without a certificate")
 	_, err = d.App.Exec(context.Background(), `INSERT INTO csr_requests (id, private_key_id, common_name, csr_pem, status, certificate_id,
-created_at) VALUES ($1, $2, 'a.example.test', 'x', 'completed', $3, now())`, uuid.New(), key, cert)
+created_at, finished_at) VALUES ($1, $2, 'a.example.test', 'x', 'completed', $3, now(), now())`, uuid.New(), key, cert)
 	assert.NoError(t, err)
 }
 
@@ -301,6 +308,8 @@ func TestCSRConstraints(t *testing.T) {
 		"only a completed request names a certificate")
 	assert.Equal(t, checkViolation, sqlState(insertRow(t, d.App, "csr_requests", with(csrRow(w.key), map[string]any{"csr_pem": strings.Repeat("p", 65537)}))))
 	assert.Equal(t, checkViolation, sqlState(insertRow(t, d.App, "csr_requests", with(csrRow(w.key), map[string]any{"sans": manyStrings(101)}))))
+	assert.Equal(t, checkViolation, sqlState(insertRow(t, d.App, "csr_requests", with(csrRow(w.key), map[string]any{"finished_at": time.Now()}))), "a pending request is not finished")
+	assert.Equal(t, checkViolation, sqlState(insertRow(t, d.App, "csr_requests", with(csrRow(w.key), map[string]any{"status": "cancelled"}))), "a cancelled request has finished_at")
 	require.NoError(t, insertRow(t, d.App, "csr_requests", with(csrRow(w.key), map[string]any{"common_name": strings.Repeat("a", 64)})))
 	assert.Equal(t, uniqueViolation, sqlState(insertRow(t, d.App, "csr_requests", csrRow(w.key))), "one request per key")
 	for _, stmt := range []string{
@@ -331,8 +340,8 @@ func TestLocationConstraints(t *testing.T) {
 	for name, over := range map[string]map[string]any{
 		"unknown kind":            {"kind": "azure"},
 		"empty cert path":         {"cert_path": ""},
-		"cert path over 4096":     {"cert_path": "/" + strings.Repeat("a", 4096)},
-		"key path over 4096":      {"key_path": "/" + strings.Repeat("a", 4096)},
+		"cert path over 16400":    {"cert_path": strings.Repeat("a", 16401)},
+		"key path over 16400":     {"key_path": strings.Repeat("a", 16401)},
 		"resolved path over 4096": {"resolved_cert_path": "/" + strings.Repeat("a", 4096)},
 		"key type":                {"key_type": "dsa"},
 		"bad cert file hash":      {"cert_file_sha256": "abc"},
@@ -344,7 +353,6 @@ func TestLocationConstraints(t *testing.T) {
 		"sni upper case":          {"verify_sni": "WWW.example.test"},
 		"sni over 253":            {"verify_sni": strings.Repeat("a", 254)},
 		"servers not an array":    {"servers": `{"a":1}`},
-		"servers over 256 KiB":    {"servers": `["` + strings.Repeat("s", 256<<10) + `"]`},
 		"version zero":            {"version": 0},
 		"reason on supported":     {"supported": true, "unsupported_reason": "stream"},
 		"reason with caps":        {"supported": false, "unsupported_reason": "Stream"},
@@ -372,7 +380,8 @@ func TestLocationConstraints(t *testing.T) {
 		"future reason":     {"supported": false, "unsupported_reason": "some_new_reason"},
 		"all fields":        {"key_type": "ecdsa", "key_mode": "0640", "key_owner": "root", "key_group": "ssl-cert", "verify_port": 8443, "verify_sni": "www.example.test", "warnings": []string{"key_group_open", "list_truncated", "certificate_block_dropped"}, "servers": `[{"names":["a"],"listens":[]}]`, "deployed_fingerprint": hex64("a"), "cert_file_sha256": hex64("f")},
 		"unusual path":      {"cert_path": "/etc/nginx/ssl/with space/$var.crt"},
-		"unix paths max":    {"cert_path": "/" + strings.Repeat("a", 4095)},
+		"key path 16400":    {"key_path": strings.Repeat("a", 16400)},
+		"servers 300 KiB":   {"servers": `["` + strings.Repeat("s", 300<<10) + `"]`},
 		"no sni, no port":   {"verify_port": nil, "verify_sni": nil},
 		"mode without zero": {"key_mode": "640"},
 	} {
@@ -380,6 +389,77 @@ func TestLocationConstraints(t *testing.T) {
 	}
 	assert.Equal(t, uniqueViolation, sqlState(insertRow(t, d.App, "certificate_locations", with(locationRow(w, "/etc/nginx/ssl/www.crt"), nil))),
 		"one location per target, kind and certificate path")
+}
+
+// A path the helper refused is shown as strconv.QuoteToASCII of its first 4096 bytes: at most
+// 4*4096+2 = 16386 characters (an invalid byte becomes \xNN). It must be storable, and so must a
+// 4096-byte path that does not compress, and the uniqueness must not depend on btree entry size.
+func TestLongLocationPathsAreStorableAndUnique(t *testing.T) {
+	d := pgtest.New(t)
+	w := seedWorld(t, d)
+	ctx := context.Background()
+	insert := func(path string) error {
+		return insertRow(t, d.App, "certificate_locations", locationRow(w, path))
+	}
+	random := func(n int) string {
+		b := make([]byte, n)
+		_, err := rand.Read(b)
+		require.NoError(t, err)
+		return "/" + hex.EncodeToString(b)[:n-1]
+	}
+	incompressible := random(4096)
+	require.Len(t, incompressible, 4096)
+	require.NoError(t, insert(incompressible), "a random 4096-byte path (a btree entry on the raw text would not fit)")
+	assert.Equal(t, uniqueViolation, sqlState(insert(incompressible)), "and it is still unique")
+
+	quoted := strconv.QuoteToASCII(strings.Repeat("\xff", 4096)) // invalid UTF-8 bytes: 4 characters each
+	require.Len(t, quoted, 16386)
+	require.NoError(t, insert(quoted), "the longest shown path of a path_not_allowed location")
+	assert.Equal(t, uniqueViolation, sqlState(insert(quoted)))
+	require.NoError(t, insert(strconv.QuoteToASCII(strings.Repeat("é", 2048))), "non-ASCII is expanded 3x")
+
+	base := random(4000)
+	require.NoError(t, insert(base+"a"))
+	require.NoError(t, insert(base+"b"), "paths that differ only after byte 3000 are different paths")
+	assert.Equal(t, uniqueViolation, sqlState(insert(base+"a")))
+	// The same path on another target is another location.
+	other := w
+	other.target = uuid.New()
+	_, err := d.Owner.Exec(ctx, `INSERT INTO targets (id, name, type, config, credential_id, status, created_at, updated_at)
+SELECT $1, 'web-02', 'nginx', '{"host":"10.0.0.2","port":22}', credential_id, 'ok', now(), now() FROM targets LIMIT 1`, other.target)
+	require.NoError(t, err)
+	require.NoError(t, insertRow(t, d.App, "certificate_locations", locationRow(other, incompressible)))
+
+	// The conflict target and the lookup both use the hash expression.
+	var id uuid.UUID
+	require.NoError(t, d.App.QueryRow(ctx, `SELECT id FROM certificate_locations
+WHERE target_id = $1 AND kind = 'nginx_file' AND certificate_location_path_hash(cert_path) = certificate_location_path_hash($2) AND cert_path = $2`, w.target, incompressible).Scan(&id))
+	tag, err := d.App.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, supported, first_seen_at, last_seen_at)
+VALUES (gen_random_uuid(), $1, 'nginx_file', $2, true, now(), now())
+ON CONFLICT (target_id, kind, certificate_location_path_hash(cert_path)) DO UPDATE SET last_seen_at = now()`, w.target, incompressible)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, tag.RowsAffected())
+	var n int
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT count(*) FROM pg_indexes WHERE tablename = 'certificate_locations' AND indexdef LIKE '%cert_path%' AND indexdef NOT LIKE '%certificate_location_path_hash(cert_path)%'`).Scan(&n))
+	assert.Zero(t, n, "no index holds the raw path text")
+}
+
+// The Nginx provider keeps at most 500 servers per location, 100 names and 100 listens each; the
+// helper's whole answer is capped at 16 MiB, so a location's servers never exceed that. The bound
+// is 32 MiB.
+func TestLocationServersBound(t *testing.T) {
+	d := pgtest.New(t)
+	w := seedWorld(t, d)
+	insert := func(path, expr string) error {
+		_, err := d.App.Exec(context.Background(), `INSERT INTO certificate_locations (id, target_id, kind, cert_path, supported, servers, first_seen_at, last_seen_at)
+SELECT gen_random_uuid(), $1, 'nginx_file', $2, true, `+expr+`, now(), now()`, w.target, path)
+		return err
+	}
+	// 500 servers x 100 names of 253 characters x 100 listens: about 15 MB.
+	require.NoError(t, insert("/big.crt", `(SELECT jsonb_agg(jsonb_build_object('names', (SELECT jsonb_agg(repeat('n', 253)) FROM generate_series(1, 100)),
+'listens', (SELECT jsonb_agg(jsonb_build_object('addr', repeat('a', 20), 'port', 443, 'default_server', false)) FROM generate_series(1, 100)),
+'file', repeat('f', 4096), 'line', 1)) FROM generate_series(1, 500))`))
+	assert.Equal(t, checkViolation, sqlState(insert("/huge.crt", `jsonb_build_array(repeat('s', 33 * 1024 * 1024))`)), "a bound exists")
 }
 
 func manyWarnings(n int) []string {
@@ -429,7 +509,7 @@ func TestDeploymentConstraints(t *testing.T) {
 		"bad new fingerprint":     {"new_fingerprint": "abc"},
 		"bad previous":            {"previous_fingerprint": "abc"},
 		"bad expect hash":         {"expect_cert_sha256": "abc"},
-		"chain length zero":       {"new_chain_length": 0},
+		"negative new chain":      {"new_chain_length": -1},
 		"negative prev chain":     {"previous_chain_length": -1},
 		"cert path relative":      {"cert_path": "etc/a.crt"},
 		"cert path with space":    {"cert_path": "/etc/a b.crt"},
@@ -492,15 +572,15 @@ func TestDeploymentGrants(t *testing.T) {
 		"UPDATE deployments SET certificate_id = certificate_id", "UPDATE deployments SET location_id = location_id",
 		"UPDATE deployments SET target_id = target_id", "UPDATE deployments SET trigger = 'retry'", "UPDATE deployments SET requested_by = NULL",
 		"UPDATE deployments SET new_fingerprint = new_fingerprint", "UPDATE deployments SET cert_path = '/x'", "UPDATE deployments SET key_path = '/x'",
-		"UPDATE deployments SET created_at = now()", "UPDATE deployments SET confirm_incomplete_chain = true", "UPDATE deployments SET expect_cert_sha256 = ''",
-		"UPDATE deployments SET new_chain_length = 2", "UPDATE deployments SET id = gen_random_uuid()",
+		"UPDATE deployments SET created_at = now()", "UPDATE deployments SET confirm_incomplete_chain = true",
+		"UPDATE deployments SET id = gen_random_uuid()",
 		"DELETE FROM deployments", "TRUNCATE deployments",
 	} {
 		assert.Equal(t, privilegeDenied, sqlState(exec(t, d.App, stmt)), stmt)
 	}
 	now := time.Now()
 	require.NoError(t, exec(t, d.App, `UPDATE deployments SET job_id = NULL, state = 'recovering', status = 'running', result = 'uncertain', phase = '',
-previous_fingerprint = $1, previous_chain_length = 2, operation_id = $2, rollback_info = '{}', verified = 'local', error_code = 'x',
+previous_fingerprint = $1, previous_chain_length = 2, new_chain_length = 3, expect_cert_sha256 = $1, operation_id = $2, rollback_info = '{}', verified = 'local', error_code = 'x',
 error_params = '{}', failed_step = 'verify', cause_step = 'verify', helper_error = 'file_changed', verify_failed_reason = 'x', verify_failed_port = 443,
 recover_after = $3, recovery_attempts = 1, started_at = $3`, hex64("a"), uuid.New(), now))
 	require.NoError(t, exec(t, d.App, `UPDATE deployments SET state = 'done', status = 'rolled_back', finished_at = $1`, now))
@@ -539,8 +619,8 @@ func TestCertificateKeyAttachmentIsChecked(t *testing.T) {
 	d := pgtest.New(t)
 	ctx := context.Background()
 	w := seedWorld(t, d) // the key hashes to 'c', the discovered certificate to 'b'
-	assert.Equal(t, "P0001", sqlState(exec(t, d.App, "UPDATE certificates SET private_key_id = $1 WHERE id = $2", w.key, w.cert)), "a key of another public key")
-	assert.Equal(t, "P0001", sqlState(exec(t, d.Owner, "UPDATE certificates SET private_key_id = $1 WHERE id = $2", w.key, w.cert)), "the owner role too")
+	assert.Equal(t, keyMismatch, sqlState(exec(t, d.App, "UPDATE certificates SET private_key_id = $1 WHERE id = $2", w.key, w.cert)), "a key of another public key")
+	assert.Equal(t, keyMismatch, sqlState(exec(t, d.Owner, "UPDATE certificates SET private_key_id = $1 WHERE id = $2", w.key, w.cert)), "the owner role too")
 	matching := certRow()
 	matching["public_key_sha256"], matching["private_key_id"] = hex64("c"), w.key
 	require.NoError(t, insertRow(t, d.App, "certificates", matching), "a key of the same public key")
@@ -552,7 +632,7 @@ func TestCertificateKeyAttachmentIsChecked(t *testing.T) {
 	assert.NotEmpty(t, sqlState(insertRow(t, d.App, "certificates", wrong)), "an unknown key")
 	mismatch := certRow()
 	mismatch["fingerprint_sha256"], mismatch["private_key_id"] = hex64("5"), seedManagedKey(t, d)
-	assert.Equal(t, "P0001", sqlState(insertRow(t, d.App, "certificates", mismatch)), "an inserted row is checked too")
+	assert.Equal(t, keyMismatch, sqlState(insertRow(t, d.App, "certificates", mismatch)), "an inserted row is checked too")
 
 	// Attach, then never change or detach.
 	second := seedManagedKey(t, d)
@@ -562,8 +642,8 @@ func TestCertificateKeyAttachmentIsChecked(t *testing.T) {
 	require.NoError(t, insertRow(t, d.App, "certificates", row))
 	require.NoError(t, exec(t, d.App, "UPDATE certificates SET private_key_id = $1 WHERE id = $2", second, plain))
 	third := seedManagedKey(t, d)
-	assert.Equal(t, "P0001", sqlState(exec(t, d.App, "UPDATE certificates SET private_key_id = $1 WHERE id = $2", third, plain)), "no replacement")
-	assert.Equal(t, "P0001", sqlState(exec(t, d.App, "UPDATE certificates SET private_key_id = NULL WHERE id = $1", plain)), "no detaching")
+	assert.Equal(t, keyAttached, sqlState(exec(t, d.App, "UPDATE certificates SET private_key_id = $1 WHERE id = $2", third, plain)), "no replacement")
+	assert.Equal(t, keyAttached, sqlState(exec(t, d.App, "UPDATE certificates SET private_key_id = NULL WHERE id = $1", plain)), "no detaching")
 	require.NoError(t, exec(t, d.App, "UPDATE certificates SET label = 'x', last_seen_at = now(), chain_complete = true, pem_chain = 'y' WHERE id = $1", plain))
 	var fn string
 	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT array_to_string(p.proconfig, ',') FROM pg_proc p WHERE p.proname = 'certificates_check_key'`).Scan(&fn))
@@ -604,4 +684,65 @@ WHERE table_schema = 'public' AND table_name IN ('managed_private_keys', 'certif
 		assert.NotContains(t, def, "CURRENT_TIMESTAMP", "%s.%s", table, col)
 	}
 	require.NoError(t, rows.Err())
+}
+
+func TestDeploymentIndexes(t *testing.T) {
+	d := pgtest.New(t)
+	rows, err := d.Owner.Query(context.Background(), `SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'deployments'`)
+	require.NoError(t, err)
+	defer rows.Close()
+	defs := map[string]string{}
+	for rows.Next() {
+		var n, def string
+		require.NoError(t, rows.Scan(&n, &def))
+		defs[n] = def
+	}
+	require.NoError(t, rows.Err())
+	assert.Contains(t, defs["deployments_job"], "(job_id) WHERE (job_id IS NOT NULL)", "the foreign key of a pruned job")
+	assert.Contains(t, defs["deployments_location"], "(location_id, created_at DESC, id DESC)")
+}
+
+// A finished deployment is history: nothing but the link to a pruned job changes.
+func TestFinishedDeploymentIsFrozen(t *testing.T) {
+	d := pgtest.New(t)
+	w := seedWorld(t, d)
+	ctx := context.Background()
+	job := uuid.New()
+	_, err := d.Owner.Exec(ctx, `INSERT INTO jobs (id, type, class, kind, payload_mac, target_id, status, run_at, max_attempts, created_at)
+VALUES ($1, 'certificate.deploy', 'change', 'user', $2, $3, 'succeeded', now(), 3, now())`, job, make([]byte, 32), w.target)
+	require.NoError(t, err)
+	now := time.Now()
+	row := with(deploymentRow(w), map[string]any{"state": "done", "status": "failed", "finished_at": now, "job_id": job, "error_code": "ALC-X"})
+	require.NoError(t, insertRow(t, d.App, "deployments", row))
+	id := row["id"]
+	for _, stmt := range []string{
+		"UPDATE deployments SET status = 'succeeded', error_code = '' WHERE id = $1",
+		"UPDATE deployments SET state = 'recovering', status = 'running', finished_at = NULL WHERE id = $1",
+		"UPDATE deployments SET state = 'queued', status = 'pending', finished_at = NULL WHERE id = $1",
+		"UPDATE deployments SET verified = 'remote' WHERE id = $1",
+		"UPDATE deployments SET result = 'committed' WHERE id = $1",
+		"UPDATE deployments SET phase = 'committed' WHERE id = $1",
+		"UPDATE deployments SET finished_at = now() + interval '1 day' WHERE id = $1",
+		"UPDATE deployments SET previous_fingerprint = '' , new_chain_length = 9 WHERE id = $1",
+		"UPDATE deployments SET error_params = '{\"a\":\"b\"}' WHERE id = $1",
+		"UPDATE deployments SET job_id = gen_random_uuid() WHERE id = $1", // not an existing job: refused by the trigger first
+	} {
+		assert.Equal(t, doneFrozen, sqlState(exec(t, d.App, stmt, id)), stmt)
+	}
+	assert.Equal(t, doneFrozen, sqlState(exec(t, d.Owner, "UPDATE deployments SET status = 'succeeded' WHERE id = $1", id)), "the owner role too")
+	require.NoError(t, exec(t, d.App, "UPDATE deployments SET error_code = error_code WHERE id = $1", id), "an update that changes nothing")
+	_, err = d.App.Exec(ctx, "DELETE FROM jobs WHERE id = $1", job)
+	require.NoError(t, err, "the job is pruned: the foreign key sets job_id to NULL on a finished deployment")
+	var jobID *uuid.UUID
+	var code string
+	require.NoError(t, d.App.QueryRow(ctx, "SELECT job_id, error_code FROM deployments WHERE id = $1", id).Scan(&jobID, &code))
+	assert.Nil(t, jobID)
+	assert.Equal(t, "ALC-X", code)
+	assert.Equal(t, doneFrozen, sqlState(exec(t, d.App, "UPDATE deployments SET job_id = $2 WHERE id = $1", id, uuid.New())), "a job link is never added to a finished deployment")
+
+	// An unfinished one stays writable, and becomes done in one update.
+	open := deploymentRow(w)
+	require.NoError(t, exec(t, d.App, "UPDATE deployments SET state = state WHERE id = $1", id))
+	require.NoError(t, insertRow(t, d.App, "deployments", open))
+	require.NoError(t, exec(t, d.App, "UPDATE deployments SET state = 'done', status = 'succeeded', finished_at = now(), result = 'committed' WHERE id = $1", open["id"]))
 }
