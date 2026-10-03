@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
@@ -18,8 +19,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
+	"alice/internal/i18n"
+	"alice/internal/notify"
 	"alice/internal/providers/linuxssh/linuxsshtest"
 	"alice/internal/secrets"
+	"alice/locales"
 )
 
 // platformSeed decrypts the stored platform key (test-only, with the stack's keyring) and checks
@@ -100,8 +104,23 @@ func TestPlatformKeyNeverLeaks(t *testing.T) {
 	requireStatus(t, admin.do(http.MethodPost, "/api/v1/ssh-keys/locations/"+laptop["id"].(string)+"/actions/remove", nil), http.StatusAccepted)
 	s.runJobs()
 
-	// Every read that returns Phase 3 data, so its response is scanned too.
+	// Phase 3 emails (C-10): a changed host key on this server and a refused sign-in on a second one,
+	// for an administrator with an address. Their rendered bodies are scanned below.
 	s.stepUp(admin, adminAcct)
+	requireStatus(t, admin.do(http.MethodPatch, "/api/v1/users/"+adminAcct.id, map[string]string{"email": "ada@example.com"}), http.StatusOK)
+	f2 := s.sshFixture()
+	target2, _ := s.addServer(admin, "web-02", f2)
+	s.pinServer(admin, target2)
+	f2.server.DisablePublicKeyAuth()
+	requireStatus(t, admin.do(http.MethodPost, "/api/v1/targets/"+target2+"/actions/test", nil), http.StatusAccepted)
+	s.runJobs()
+	require.Equal(t, "auth_failed", s.target(admin, target2)["status"])
+	f.server.SetHostKey(linuxsshtest.NewHostKey(t))
+	requireStatus(t, admin.do(http.MethodPost, "/api/v1/targets/"+targetID+"/actions/test", nil), http.StatusAccepted)
+	s.runJobs()
+	require.Equal(t, "host_key_changed", s.target(admin, targetID)["status"])
+
+	// Every read that returns Phase 3 data, so its response is scanned too.
 	rec = admin.do(http.MethodGet, "/api/v1/ssh-keys/platform-key", nil)
 	requireStatus(t, rec, http.StatusOK)
 	pk, err := s.inv.PlatformKey(context.Background())
@@ -118,10 +137,14 @@ func TestPlatformKeyNeverLeaks(t *testing.T) {
 	block, err := ssh.MarshalPrivateKey(priv, "")
 	require.NoError(t, err)
 	pemText := string(pem.EncodeToMemory(block))
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(priv)
+	require.NoError(t, err)
 	secs := []secretValue{
 		{name: "platform key seed", forms: binaryForms(seed)},
 		{name: "platform private key", forms: binaryForms(priv)},
 		{name: "platform key (OpenSSH PEM)", forms: []string{pemText, base64.StdEncoding.EncodeToString(block.Bytes)}},
+		{name: "platform key (PKCS#8)", forms: append(binaryForms(pkcs8),
+			string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8})))},
 		{name: "hostile helper output", value: hostile},
 		s.masterKeySecret(),
 		{name: "platform key DEK", forms: binaryForms(s.platformDEK())},
@@ -153,6 +176,29 @@ func TestPlatformKeyNeverLeaks(t *testing.T) {
 	for _, m := range privateKeyMarkers {
 		assert.NotContains(t, dump, m, "database")
 	}
+
+	// The emails as the sender renders them (the outbox stores only template keys and parameters).
+	catalog, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	sender := notify.Sender{Catalog: catalog}
+	rows, err := s.db.Owner.Query(context.Background(), `SELECT to_address, template_key, locale, params FROM notifications_outbox`)
+	require.NoError(t, err)
+	templates := map[string]bool{}
+	for rows.Next() {
+		var to, tpl, locale string
+		var params map[string]string
+		require.NoError(t, rows.Scan(&to, &tpl, &locale, &params))
+		templates[tpl] = true
+		msg := sender.Render(to, tpl, locale, params)
+		text := msg.Subject + "\n" + msg.Body
+		assertNoSecret(t, "email "+tpl, text, secs)
+		for _, m := range privateKeyMarkers {
+			assert.NotContains(t, text, m, "email %s", tpl)
+		}
+	}
+	require.NoError(t, rows.Err())
+	assert.True(t, templates["target.host_key_changed"], "the scan saw the host-key email")
+	assert.True(t, templates["target.auth_failed"], "the scan saw the refused sign-in email")
 
 	// S-04: the stored key is ciphertext with its own DEK; another installation's differs.
 	assert.False(t, bytes.Contains(ciphertext, seed), "the seed is not stored in clear")

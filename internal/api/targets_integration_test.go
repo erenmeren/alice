@@ -466,20 +466,33 @@ func TestLockRefusesInfrastructureChanges(t *testing.T) {
 	require.NoError(t, s.license.Tick(t.Context()))
 	require.True(t, s.license.Snapshot().Eval.Locked())
 	s.signIn(admin, adminAcct)
+	s.stepUp(admin, adminAcct) // so a refusal can only come from the license gate, not from step-up
+	pinned := withStatus(s.hostKeys(admin, targetID), "pinned")
+	require.Len(t, pinned, 1)
+	hostKey := "/api/v1/targets/" + targetID + "/host-keys/" + pinned[0]["id"].(string)
+	fingerprint := map[string]string{"fingerprint": pinned[0]["fingerprint"].(string)}
 
 	denied := s.auditCount("request.denied_license")
-	for _, rq := range []struct {
-		path string
-		body any
+	requests := []struct {
+		method, path string
+		body         any
 	}{
-		{"/api/v1/targets", map[string]any{"name": "web-02", "host": "web-02.example.test"}},
-		{"/api/v1/targets/" + targetID + "/actions/test", nil},
-		{"/api/v1/targets/" + targetID + "/actions/discover", nil},
-		{"/api/v1/ssh-keys/locations/" + laptop["id"].(string) + "/actions/remove", nil},
-	} {
-		requireError(t, admin.do(http.MethodPost, rq.path, rq.body), http.StatusForbidden, "ALC-LIC-0001")
+		{http.MethodPost, "/api/v1/targets", map[string]any{"name": "web-02", "host": "web-02.example.test"}},
+		{http.MethodPatch, "/api/v1/targets/" + targetID, map[string]any{"name": "web-01b"}},
+		{http.MethodDelete, "/api/v1/targets/" + targetID, nil},
+		{http.MethodPost, "/api/v1/targets/" + targetID + "/actions/test", nil},
+		{http.MethodPost, "/api/v1/targets/" + targetID + "/actions/discover", nil},
+		{http.MethodPost, hostKey + "/actions/confirm", fingerprint},
+		{http.MethodPost, hostKey + "/actions/repin", map[string]string{"fingerprint": fingerprint["fingerprint"],
+			"reason": "False alarm reported by the monitoring team"}},
+		{http.MethodPost, "/api/v1/ssh-keys/locations/" + laptop["id"].(string) + "/actions/remove", nil},
+		{http.MethodPost, "/api/v1/jobs/" + queuedDiscovery + "/actions/confirm", nil},
 	}
-	assert.Equal(t, denied+4, s.auditCount("request.denied_license"))
+	for _, rq := range requests {
+		requireError(t, admin.do(rq.method, rq.path, rq.body), http.StatusForbidden, "ALC-LIC-0001")
+	}
+	assert.Equal(t, denied+len(requests), s.auditCount("request.denied_license"))
+	assert.Equal(t, "web-01", s.target(admin, targetID)["name"])
 	for _, path := range []string{"/api/v1/targets", "/api/v1/targets/" + targetID, "/api/v1/targets/" + targetID + "/ssh-keys",
 		"/api/v1/targets/" + targetID + "/host-keys", "/api/v1/ssh-keys", "/api/v1/jobs"} {
 		requireStatus(t, admin.do(http.MethodGet, path, nil), http.StatusOK)

@@ -134,7 +134,10 @@ func assertNoSecret(t *testing.T, where, text string, secs []secretValue) {
 	}
 }
 
-var privateKeyMarkers = []string{"PRIVATE KEY-----", "OPENSSH PRIVATE KEY", "PuTTY-User-Key-File"}
+// "openssh-key-v1" opens every OpenSSH private key blob; "b3BlbnNzaC1rZXktdjE" is its base64, the
+// start of every OpenSSH PEM body.
+var privateKeyMarkers = []string{"PRIVATE KEY-----", "OPENSSH PRIVATE KEY", "PuTTY-User-Key-File", "openssh-key-v1",
+	"b3BlbnNzaC1rZXktdjE"}
 
 // dumpTables lists every Alice table (all of schema public except goose's bookkeeping).
 func (s *stack) dumpTables() []string {
