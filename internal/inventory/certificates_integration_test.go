@@ -885,3 +885,52 @@ func TestServersSizeBoundCoversPostgreSQL(t *testing.T) {
 		assert.GreaterOrEqual(t, inventory.ServersTextBound(servers), rendered, "%s", raw)
 	}
 }
+
+// Alice's own deployment is never a change outside Alice: the certificate a deployment in flight
+// installs or restores, and those of the last finished one, are expected in the file before (or
+// after) deployed_fingerprint records them.
+func TestReconcileChangedOutsideKnowsAlicesDeployments(t *testing.T) {
+	h := newHarness(t)
+	web := nginxTarget(t, h, h.user("ada", rbac.Admin, ""), "web-01")
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	a, x, z := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now()),
+		ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now()),
+		ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
+	loc := cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test")
+	scan := func(leaf pki.Leaf) inventory.CertificateLocation {
+		t.Helper()
+		_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{dc(loc, leaf)}})
+		require.NoError(t, err)
+		return byPath(t, h, web.ID, true)["/etc/nginx/ssl/www.crt"]
+	}
+	l := scan(a)
+	xID := uuid.Must(uuid.NewV7())
+	_, err := h.db.Owner.Exec(h.ctx, `INSERT INTO certificates (id, fingerprint_sha256, not_before, not_after, key_algorithm, public_key_sha256,
+pem_chain, source, first_seen_at, last_seen_at, created_at) VALUES ($1, $2, $3, $4, 'ecdsa', $5, $6, 'uploaded', $7, $7, $7)`,
+		xID, pki.Fingerprint(x.Cert), x.Cert.NotBefore, x.Cert.NotAfter, sha([]byte("x")), string(x.FullchainPEM), h.clock.Now())
+	require.NoError(t, err)
+	depID := uuid.Must(uuid.NewV7())
+	_, err = h.db.Owner.Exec(h.ctx, `INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, state, status,
+new_fingerprint, previous_fingerprint, cert_path, key_path, created_at) VALUES ($1, $2, $3, $4, 'manual', 'deploying', 'running', $5, $6, $7, $8, $9)`,
+		depID, xID, l.ID, web.ID, pki.Fingerprint(x.Cert), pki.Fingerprint(a.Cert), l.CertPath, l.KeyPath, h.clock.Now())
+	require.NoError(t, err)
+
+	// The scan runs while the deployment is being verified: the file already holds X.
+	l = scan(x)
+	assert.Equal(t, pki.Fingerprint(x.Cert), l.Certificate.Fingerprint)
+	assert.Nil(t, l.ChangedOutsideAt, "the certificate a deployment in flight installs")
+	// The deployment rolls back: the file holds A again.
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE deployments SET state = 'done', status = 'rolled_back', finished_at = $2 WHERE id = $1", depID, h.clock.Now())
+	require.NoError(t, err)
+	l = scan(a)
+	assert.Nil(t, l.ChangedOutsideAt, "the certificate the last deployment restored")
+	assert.Zero(t, h.audits("location.changed_outside"))
+
+	// A third certificate is somebody else's.
+	l = scan(z)
+	require.NotNil(t, l.ChangedOutsideAt)
+	d := h.auditDetails("location.changed_outside")
+	require.Len(t, d, 1)
+	assert.Equal(t, map[string]string{"location_id": l.ID.String(), "target_id": web.ID.String(), "cert_path": "/etc/nginx/ssl/www.crt",
+		"fingerprint": pki.Fingerprint(z.Cert), "previous_fingerprint": pki.Fingerprint(a.Cert)}, d[0])
+}
