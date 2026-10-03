@@ -149,8 +149,6 @@ No High finding is open except the documented product residual P3-01.
   removing them through Alice is refused. A fix needs a helper protocol change (the helper reporting every account
   name it read and whether `/etc/passwd` was read completely). `docs/operator-guide.md` describes how to spot and
   handle it.
-- **Accounts with an empty shell field are not listed.** The helper skips an account whose `/etc/passwd` shell
-  field is empty, although sshd treats it as `/bin/sh` and the account can sign in; its keys are not inventoried.
 - **Key options shown verbatim.** `authorized_keys` options (for example `environment=` or `command=`, which can
   carry values an administrator considers sensitive) are stored and shown exactly as in the file to every role that
   can read the inventory, Auditors included.

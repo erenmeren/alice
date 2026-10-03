@@ -81,9 +81,9 @@ server never gets the Nginx permissions. The helper of this release answers the 
 ## What Alice reads and changes
 
 - Alice reads the `authorized_keys` files of `root`, of `alice-svc` itself, and of every account in `/etc/passwd`
-  with a user ID of 1000 or more (except `nobody`, user ID 65534) that has an existing home directory and a login
-  shell (a shell field that is not empty and does not end in `/nologin` or `/false`; an account with an empty shell
-  field is not listed, although the SSH server treats it as `/bin/sh`), at most 200 accounts, in the places that the SSH server's
+  with user ID 0 or a user ID of 1000 or more (except `nobody`, user ID 65534) that has an existing home directory
+  and a login shell (a shell field that does not end in `/nologin` or `/false`; an empty shell field counts as a
+  login shell, because the SSH server treats it as `/bin/sh`), at most 200 accounts, in the places that the SSH server's
   `AuthorizedKeysFile` setting names (also per user, through `Match` blocks). Alice also reads the server's host key
   fingerprints and its SSH settings (`sshd -T`). It never reads private keys.
 - Alice lists some key files as unsupported and never reads or changes them, because another user could redirect

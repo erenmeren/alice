@@ -654,6 +654,78 @@ func TestTooManyUsers(t *testing.T) {
 	assert.Len(t, m["users"], 200)
 }
 
+// Carry 1: every valid account name is reported, and whether the list is complete.
+func TestAuthKeysListReportsEveryAccountName(t *testing.T) {
+	f := newFixture(t)
+	code, m := f.run("authkeys-list")
+	require.Equal(t, 0, code, "%v", m)
+	assert.Equal(t, []any{"alice-svc", "daemon", "deploy", "ghost", "nobody", "nologin", "root"}, m["accounts"],
+		"sorted; Bad Name and the broken line are not account names")
+	assert.Equal(t, true, m["accounts_complete"])
+
+	f.write("/etc/nsswitch.conf", "passwd: files sss\n", 0o644)
+	_, m = f.run("authkeys-list")
+	assert.Equal(t, false, m["accounts_complete"], "directory users may exist")
+}
+
+func TestAccountsAreAnEmptyListNotNull(t *testing.T) {
+	f := newFixture(t)
+	f.write("/etc/passwd", "Bad Name:x:1004:1004::/home/deploy:/bin/bash\n", 0o644)
+	_, m := f.run("authkeys-list")
+	assert.Equal(t, []any{}, m["accounts"])
+	assert.Contains(t, f.out.String(), `"accounts":[]`)
+}
+
+func TestAccountsIncompleteWhenTooMany(t *testing.T) {
+	f := newFixture(t)
+	var b strings.Builder
+	b.WriteString(f.read("/etc/passwd"))
+	for i := 0; i < helperproto.MaxAccountNames; i++ {
+		fmt.Fprintf(&b, "u%d:x:%d:%d::/nonexistent:/usr/sbin/nologin\n", i, 20000+i, 20000+i)
+	}
+	f.write("/etc/passwd", b.String(), 0o644)
+	_, m := f.run("authkeys-list")
+	assert.Len(t, m["accounts"], helperproto.MaxAccountNames)
+	assert.Equal(t, false, m["accounts_complete"])
+}
+
+func TestAccountsIncompleteWhenTooManyUsersAreScanned(t *testing.T) {
+	f := newFixture(t)
+	var b strings.Builder
+	for i := 0; i < 205; i++ {
+		fmt.Fprintf(&b, "u%d:x:%d:%d::/home/deploy:/bin/bash\n", i, 3000+i, 3000+i)
+	}
+	f.write("/etc/passwd", f.read("/etc/passwd")+b.String(), 0o644)
+	_, m := f.run("authkeys-list")
+	assert.Len(t, m["accounts"], 212)
+	assert.Equal(t, false, m["accounts_complete"], "too_many_users: some accounts' files were not read")
+}
+
+// Carry 2: an empty shell field is /bin/sh for sshd, so the account is scanned.
+func TestEmptyShellIsALoginShell(t *testing.T) {
+	f := newFixture(t)
+	f.mkdir("/home/sh", 0o755)
+	f.write("/etc/passwd", f.read("/etc/passwd")+"sh:x:1010:1010::/home/sh:\n", 0o644)
+	_, m := f.run("authkeys-list")
+	assert.NotNil(t, listUser(t, m, "sh"))
+	assert.True(t, loginShell(""))
+	assert.False(t, loginShell("/usr/sbin/nologin"))
+	assert.False(t, loginShell("/bin/false"))
+}
+
+// Carry 3: every uid-0 account with a login shell and a home is scanned (its last key is guarded).
+func TestUID0AccountsAreScanned(t *testing.T) {
+	f := newFixture(t)
+	f.mkdir("/var/toor", 0o755)
+	f.write("/etc/passwd", f.read("/etc/passwd")+"toor:x:0:0::/var/toor:/bin/sh\nlocked:x:0:0::/var/toor:/usr/sbin/nologin\n", 0o644)
+	_, m := f.run("authkeys-list")
+	u := listUser(t, m, "toor")
+	assert.Equal(t, float64(0), u["uid"])
+	for _, x := range m["users"].([]any) {
+		assert.NotEqual(t, "locked", x.(map[string]any)["user"], "no login shell")
+	}
+}
+
 // D13: an expansion that is a valid path but is refused is listed as unsupported; one that is not
 // a valid path only raises the global warning.
 func TestUnsupportedPatterns(t *testing.T) {

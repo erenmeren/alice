@@ -48,9 +48,10 @@ func (s *sys) accounts() ([]account, error) {
 	return out, nil
 }
 
-// toScan selects the accounts whose keys are inventoried (spec §13.1): root, every normal account
-// (uid >= 1000, not nobody) with an existing home and a login shell, and the account that runs the
-// helper through sudo (alice-svc, a system account) so Alice's own key appears in the inventory.
+// toScan selects the accounts whose keys are inventoried (spec §13.1): root, every other uid-0
+// account and every normal account (uid >= 1000, not nobody) with an existing home and a login
+// shell, and the account that runs the helper through sudo (alice-svc, a system account) so Alice's
+// own key appears in the inventory.
 func (s *sys) toScan(accts []account) ([]account, bool) {
 	sudo := s.sudoUserName()
 	seen := map[string]bool{}
@@ -60,6 +61,7 @@ func (s *sys) toScan(accts []account) ([]account, bool) {
 			continue
 		}
 		ok := (a.name == "root" && a.uid == 0) || (sudo != "" && a.name == sudo) ||
+			(a.uid == 0 && loginShell(a.shell) && s.isDir(a.home)) ||
 			(a.uid >= 1000 && a.uid != nobodyUID && loginShell(a.shell) && s.isDir(a.home))
 		if !ok {
 			continue
@@ -79,8 +81,28 @@ func (s *sys) toScan(accts []account) ([]account, bool) {
 	return out, false
 }
 
+// loginShell reports whether an account can sign in with its shell field. An empty field is /bin/sh
+// for sshd and login (passwd(5)).
 func loginShell(shell string) bool {
-	return shell != "" && !strings.HasSuffix(shell, "/nologin") && !strings.HasSuffix(shell, "/false")
+	return !strings.HasSuffix(shell, "/nologin") && !strings.HasSuffix(shell, "/false")
+}
+
+// accountNames returns every valid account name, sorted and deduplicated, at most
+// helperproto.MaxAccountNames (never nil); fits is false when there were more.
+func accountNames(accts []account) (names []string, fits bool) {
+	seen := map[string]bool{}
+	names = []string{}
+	for _, a := range accts {
+		if helperproto.ValidUser(a.name) && !seen[a.name] {
+			seen[a.name] = true
+			names = append(names, a.name)
+		}
+	}
+	sort.Strings(names)
+	if len(names) > helperproto.MaxAccountNames {
+		return names[:helperproto.MaxAccountNames], false
+	}
+	return names, true
 }
 
 func (s *sys) isDir(guest string) bool {

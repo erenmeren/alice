@@ -57,6 +57,8 @@ type scanResult struct {
 	warnings []string
 	command  string
 	owners   map[int]string
+	names    []string // every valid account name (accountNames)
+	namesFit bool     // names holds every account name
 }
 
 func (r *scanResult) warn(code string) {
@@ -86,6 +88,7 @@ func (s *sys) scan(ctx context.Context) (scanResult, error) {
 		return scanResult{}, failed(helperproto.CodeIOError, "cannot read /etc/passwd")
 	}
 	r := scanResult{warnings: []string{}, owners: owners(accts)}
+	r.names, r.namesFit = accountNames(accts)
 	global, _, gerr := s.sshdConfig(ctx)
 	if gerr != nil {
 		global = sshdconf.Config{AuthorizedKeysFile: sshdconf.DefaultAuthorizedKeysFile, AuthorizedKeysCommand: "none"}
@@ -295,7 +298,12 @@ func cmdAuthKeysList(ctx context.Context, s *sys, args []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp := helperproto.AuthKeysListResponse{OK: true, Users: []helperproto.UserFiles{}, AuthorizedKeysCommand: r.command, Warnings: r.warnings}
+	resp := helperproto.AuthKeysListResponse{OK: true, Users: []helperproto.UserFiles{}, AuthorizedKeysCommand: r.command, Warnings: r.warnings,
+		Accounts: r.names, AccountsComplete: r.namesFit && !slices.Contains(r.warnings, helperproto.WarnTooManyUsers) &&
+			!slices.Contains(r.warnings, helperproto.WarnDirectoryUsers)}
+	if resp.Accounts == nil {
+		resp.Accounts = []string{}
+	}
 	for _, u := range r.users {
 		uf := helperproto.UserFiles{User: u.acct.name, UID: u.acct.uid, Home: u.acct.home, Files: []helperproto.FileInfo{},
 			SSHDUnreadable: u.unreadable, AuthorizedKeysCommand: u.command}
