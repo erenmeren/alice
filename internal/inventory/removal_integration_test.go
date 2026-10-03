@@ -228,3 +228,51 @@ func TestRequestKeyRemovalRefusesWhenSSHDWasNotRead(t *testing.T) {
 	}
 	assert.Equal(t, []string{"sshd_unreadable", "sshd_unreadable"}, reasons)
 }
+
+// A removal (or its failure) that ends after its target was deleted is still recorded: the server
+// changed. The deleted target's status is left alone.
+func TestRemovalBookkeepingAfterTheTargetWasDeleted(t *testing.T) {
+	f := newRemovalFixture(t)
+	h := f.h
+	jobActor := audit.Actor{Type: audit.ActorSystem, Name: "jobs", RequestID: "0192aaaa-0000-7000-8000-000000000002"}
+	require.NoError(t, h.svc.DeleteTarget(h.ctx, f.admin, f.target.ID))
+	require.NoError(t, h.svc.RecordRemovalFailure(h.ctx, f.root, jobActor, "ssh.timeout"))
+	require.NoError(t, h.svc.MarkKeyRemoved(h.ctx, f.deploy, jobActor, providers.AuthKeyResult{Changed: true, Removed: 1, Verified: true}))
+	assert.Equal(t, 1, h.audits("sshkey.removed"))
+	assert.Equal(t, 1, h.audits("sshkey.remove_failed"))
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM ssh_key_locations WHERE id = $1 AND removed_by_alice_at IS NOT NULL", f.deploy))
+	assert.Zero(t, h.audits("target.status_changed"))
+	_, err := h.svc.KeyLocation(h.ctx, f.deploy)
+	require.ErrorIs(t, err, inventory.ErrNotFound, "the inventory screens still hide a deleted target's keys")
+}
+
+// A removal that reached the server reconnects an unreachable target; one on a target that needs
+// a person (auth_failed) leaves it as it is.
+func TestMarkKeyRemovedRecordsTheConnection(t *testing.T) {
+	f := newRemovalFixture(t)
+	h := f.h
+	k := ed25519HostKey(t)
+	require.NoError(t, h.svc.HostKeyStore().Observed(h.ctx, f.target.ID, k, false))
+	_, err := h.db.Owner.Exec(h.ctx, "UPDATE host_keys SET status = 'pinned' WHERE target_id = $1", f.target.ID)
+	require.NoError(t, err)
+	jobActor := audit.Actor{Type: audit.ActorSystem, Name: "jobs", RequestID: "0192aaaa-0000-7000-8000-000000000003"}
+
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE targets SET status = 'auth_failed', last_error_code = 'ssh.auth_failed' WHERE id = $1", f.target.ID)
+	require.NoError(t, err)
+	require.NoError(t, h.svc.MarkKeyRemoved(h.ctx, f.root, jobActor, providers.AuthKeyResult{Changed: true, Removed: 1, Verified: true}))
+	got, err := h.svc.GetTarget(h.ctx, f.target.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.StatusAuthFailed, got.Status)
+	assert.Equal(t, "ssh.auth_failed", got.LastErrorCode)
+
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE targets SET status = 'unreachable' WHERE id = $1", f.target.ID)
+	require.NoError(t, err)
+	require.NoError(t, h.svc.MarkKeyRemoved(h.ctx, f.deploy, jobActor, providers.AuthKeyResult{Changed: true, Removed: 1, Verified: true}))
+	got, err = h.svc.GetTarget(h.ctx, f.target.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.StatusOK, got.Status)
+	assert.Empty(t, got.LastErrorCode)
+	require.NotNil(t, got.LastSuccessAt)
+	assert.Equal(t, []map[string]string{{"from_status": "unreachable", "to_status": "ok", "reason": "removal_ok"}},
+		h.auditDetails("target.status_changed"))
+}

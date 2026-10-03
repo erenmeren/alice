@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -45,4 +46,27 @@ func TestScheduleDiscoveryEnqueuesDueTargetsOnly(t *testing.T) {
 	n, err = h.svc.ScheduleDiscovery(h.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 2, n, "both connected targets are due a day later")
+}
+
+// An unreachable target is re-tested (not scanned) at its discovery interval; targets that need
+// a person are never scheduled.
+func TestScheduleDiscoveryRetestsUnreachableTargets(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	down := okTarget(t, h, admin, "down")
+	refused := okTarget(t, h, admin, "refused")
+	for id, status := range map[uuid.UUID]string{down.ID: inventory.StatusUnreachable, refused.ID: inventory.StatusAuthFailed} {
+		_, err := h.db.Owner.Exec(h.ctx, "UPDATE targets SET status = $2 WHERE id = $1", id, status)
+		require.NoError(t, err)
+	}
+	before := len(h.jobs.requests())
+	n, err := h.svc.ScheduleDiscovery(h.ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	assert.Equal(t, inventory.JobRequest{Type: inventory.JobTestConnection, TargetID: down.ID, Payload: map[string]string{},
+		Kind: "scheduled", DedupeKey: "target.test_connection:" + down.ID.String()}, h.jobs.requests()[before])
+	h.clock.Advance(time.Hour)
+	n, err = h.svc.ScheduleDiscovery(h.ctx)
+	require.NoError(t, err)
+	assert.Zero(t, n)
 }
