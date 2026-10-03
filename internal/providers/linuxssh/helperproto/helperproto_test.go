@@ -1,9 +1,11 @@
 package helperproto
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -184,7 +186,11 @@ func TestValidSNI(t *testing.T) {
 	for in, want := range map[string]bool{"www.example.test": true, "alice-check.example.test": true, "localhost": true,
 		"WWW.example.test": false, "": false, ".a": false, "a.": false, "a..b": false, "-a.b": false, "a-.b": false,
 		"*.a.b": false, "a b": false, "a_b.c": false, strings.Repeat("a", 64) + ".b": false, "ö.example": false,
-		"10.0.0.5": false, "127.0.0.1": false, "::1": false, "2001:db8::5": false, NoSNI: false} {
+		"10.0.0.5": false, "127.0.0.1": false,
+		strings.Repeat("a", 63) + ".b": true, strings.Repeat("a", 64): false,
+		strings.Repeat(strings.Repeat("a", 61)+".", 4) + "bcd":  true,  // 253 bytes
+		strings.Repeat(strings.Repeat("a", 61)+".", 4) + "bcdefg": false, // 254 bytes
+		"::1": false, "2001:db8::5": false, NoSNI: false} {
 		assert.Equal(t, want, ValidSNI(in), in)
 	}
 }
@@ -217,6 +223,9 @@ func TestNginxDeployInputIsNotPrintable(t *testing.T) {
 		assert.NotContains(t, fmt.Sprintf(f, in), "SECRETKEYMATERIAL", f)
 		assert.NotContains(t, fmt.Sprintf(f, &in), "SECRETKEYMATERIAL", f)
 	}
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("m", "in", in, "ptr", &in)
+	assert.NotContains(t, buf.String(), "SECRETKEYMATERIAL")
 	b, err := json.Marshal(in) // the wire form still carries both fields
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"cert_pem":"CERT","key_pem":"SECRETKEYMATERIAL"}`, string(b))

@@ -284,7 +284,7 @@ func TestOpenHelperMissing(t *testing.T) {
 
 func TestOpenHelperOutdated(t *testing.T) {
 	e := newProvEnv(t)
-	for _, old := range []int{0, 1, 2} { // protocol 1 answers without an owner; 2 has no --content-sha256
+	for _, old := range []int{0, 1, 2, 3} { // 1 answers without an owner; 2 has no --content-sha256; 3 refuses incomplete content only
 		e.emu.SetProtocol(old)
 		_, err := e.prov.Open(context.Background(), e.ref, e.cred, providers.Env{})
 		pe := providerCode(t, err)

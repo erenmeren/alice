@@ -6,6 +6,7 @@ package helperproto
 
 import (
 	"crypto/tls"
+	"log/slog"
 	"net/netip"
 	"path/filepath"
 	"regexp"
@@ -362,8 +363,10 @@ type NginxStep struct {
 	Error  string `json:"error"`  // a ConfigErr* class or "" (never raw text)
 }
 
-// NginxDeployInput is the JSON on nginx-deploy's stdin. It carries a private key: it has no
-// String or GoString that prints the values, and the key must never be logged.
+// NginxDeployInput is the JSON on nginx-deploy's stdin. It carries a private key: its String,
+// GoString and LogValue redact the values so %v, %+v, %#v, %s and slog never print them. The type
+// must still never be put into a log or an error: %d and json.Marshal print the fields (the wire
+// form requires marshaling).
 type NginxDeployInput struct {
 	CertPEM string `json:"cert_pem"`
 	KeyPEM  string `json:"key_pem"`
@@ -374,6 +377,9 @@ func (NginxDeployInput) String() string { return "helperproto.NginxDeployInput{r
 
 // GoString redacts the key material so %#v never prints it.
 func (NginxDeployInput) GoString() string { return "helperproto.NginxDeployInput{redacted}" }
+
+// LogValue redacts the key material for log/slog handlers.
+func (NginxDeployInput) LogValue() slog.Value { return slog.StringValue("redacted") }
 
 // NginxDeployResponse answers "nginx-deploy".
 type NginxDeployResponse struct {
@@ -528,7 +534,8 @@ func ValidIP(s string) bool {
 // spec §12.8 item 3), TLS 1.2 or later. With keyType ProbeAny the maximum version is left open,
 // so a TLS 1.3-only site can be probed. ProbeRSA or ProbeECDSA limits the probe to TLS 1.2 with
 // ECDHE_RSA or ECDHE_ECDSA suites so a dual-certificate server shows the one of that type
-// (spec §12.8 item 4); callers use them only for that purpose. sni "" or NoSNI sends no name.
+// (spec §12.8 item 4); callers use them only for that purpose. An unknown keyType behaves like
+// ProbeAny, so callers validate the value. sni "" or NoSNI sends no name.
 func ProbeTLSConfig(sni, keyType string) *tls.Config {
 	c := &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec // G402: the probe only compares the served leaf's SHA-256 with the expected certificate (spec §12.8 item 3); it never trusts the connection or sends data
