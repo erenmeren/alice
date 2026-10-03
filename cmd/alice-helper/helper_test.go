@@ -227,7 +227,7 @@ func TestPrivilegedSubcommandsNeedRoot(t *testing.T) {
 	f.s.euid = func() int { return 1001 }
 	for _, args := range [][]string{
 		{"sshd-dump"}, {"hostkeys"}, {"authkeys-list"}, {"authkeys-read", "/home/deploy/.ssh/authorized_keys"},
-		{"nginx-dump"}, {"nginx-test"},
+		{"nginx-dump"}, {"nginx-test"}, {"nginx-deploy", "--op", opA}, {"nginx-restore", "--op", opA}, {"nginx-status", "--op", opA},
 	} {
 		code, m := f.run(args...)
 		assert.Equal(t, helperproto.ExitRefused, code, "%v", args)
@@ -243,13 +243,14 @@ func TestUnknownSubcommandAndUsage(t *testing.T) {
 	code, m := f.run()
 	assert.Equal(t, helperproto.ExitRefused, code)
 	assert.Equal(t, helperproto.CodeUsage, m["code"])
-	for _, sub := range []string{"install-cert", "sh", "--help", "VERSION", "NGINX-DUMP", "nginx_dump", "nginx"} {
+	for _, sub := range []string{"install-cert", "sh", "--help", "VERSION", "NGINX-DUMP", "nginx_dump", "nginx",
+		"nginx_deploy", "NGINX-RESTORE", "nginx-rollback", "nginx-install", "nginx-deploy-force"} {
 		code, m = f.run(sub)
 		assert.Equal(t, helperproto.ExitRefused, code, sub)
 		assert.Equal(t, helperproto.CodeUnknownSubcommand, m["code"], sub)
 	}
 	for _, args := range [][]string{{"sshd-dump", "x"}, {"hostkeys", "x"}, {"authkeys-list", "--user", "root"}, {"authkeys-read"},
-		{"authkeys-read", "/a", "/b"}} {
+		{"authkeys-read", "/a", "/b"}, {"nginx-status"}, {"nginx-restore"}, {"nginx-deploy"}} {
 		code, m = f.run(args...)
 		assert.Equal(t, helperproto.ExitRefused, code, "%v", args)
 		assert.Equal(t, helperproto.CodeUsage, m["code"], "%v", args)

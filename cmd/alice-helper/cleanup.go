@@ -18,8 +18,10 @@ import (
 // backupRetention is the helper's hard cap for backups (spec §12.6 step 8).
 const backupRetention = 30 * 24 * time.Hour
 
-// cmdCleanup removes the backups of one operation.
-func cmdCleanup(_ context.Context, s *sys, args []string) (any, error) {
+// cmdCleanup removes the backups of one operation. An Nginx operation (a directory with a
+// journal) is removed under the Nginx lock, and never while its journal says writing or
+// restoring: those backups are what nginx-restore needs (S3).
+func cmdCleanup(ctx context.Context, s *sys, args []string) (any, error) {
 	if len(args) != 2 || args[0] != "--op" {
 		return nil, refused(helperproto.CodeUsage, "usage: cleanup --op <operation id>")
 	}
@@ -44,14 +46,47 @@ func cmdCleanup(_ context.Context, s *sys, args []string) (any, error) {
 	if err != nil {
 		return nil, failed(helperproto.CodeIOError, "the backups cannot be checked")
 	}
+	if err := unix.Fstatat(int(root.Fd()), op+"/"+journalName, &st, unix.AT_SYMLINK_NOFOLLOW); err == nil { //nolint:gosec // G115: a descriptor fits an int
+		lock, err := s.nginxLock(ctx)
+		if err != nil {
+			return nil, failed(helperproto.CodeBusy, "a certificate change is running on this server")
+		}
+		defer func() { _ = lock.Close() }()
+		if j, ok := s.nginxJournal(root, op); ok {
+			if j.Phase == helperproto.PhaseWriting || j.Phase == helperproto.PhaseRestoring {
+				return nil, failed(helperproto.CodeBusy, "the deployment was interrupted; restore it before its backups are removed")
+			}
+			s.cleanStaged(j)
+		}
+	}
 	if err := removeAt(root, op); err != nil {
 		return nil, failed(helperproto.CodeIOError, "the backups cannot be removed")
 	}
 	return helperproto.CleanupResponse{OK: true, Removed: 1}, nil
 }
 
-// sweepBackups removes operation backup directories older than backupRetention. It runs before
-// every privileged subcommand; failures are ignored (they never block the call).
+// nginxJournal reads the journal of the operation directory name below root (ok false when it has
+// none or it cannot be read).
+func (s *sys) nginxJournal(root *os.File, name string) (journal, bool) {
+	dir, err := subdir(root, name, false)
+	if err != nil {
+		return journal{}, false
+	}
+	defer func() { _ = dir.Close() }()
+	j, found, err := readJournal(dir, name)
+	return j, found && err == nil
+}
+
+// sweepBackups removes old operation backup directories. It runs before every privileged
+// subcommand; failures are ignored (they never block the call).
+//
+// A directory without a journal (authkeys-write backups) is removed after backupRetention. A
+// directory with a journal is an Nginx operation, decided under the Nginx lock (skipped while
+// another helper holds it): committed, unchanged, restored and prepared operations are removed
+// after helperproto.NginxBackupKeep, restore_failed and unreadable journals after backupRetention,
+// and an operation whose journal says writing or restoring is never removed, whatever its age
+// (S3): its backups are the only way back to a consistent pair. The staged files an operation
+// left next to its pair are removed with it (S2).
 func (s *sys) sweepBackups() {
 	root, err := s.openBackupRoot(false)
 	if err != nil {
@@ -62,17 +97,51 @@ func (s *sys) sweepBackups() {
 	if err != nil {
 		return
 	}
+	var lock *os.File
+	locked := false
+	defer func() {
+		if lock != nil {
+			_ = lock.Close()
+		}
+	}()
+	rfd := int(root.Fd()) //nolint:gosec // G115: a descriptor fits an int
 	for _, name := range names {
 		if !helperproto.ValidOpID(name) {
 			continue
 		}
 		var st unix.Stat_t
-		if unix.Fstatat(int(root.Fd()), name, &st, unix.AT_SYMLINK_NOFOLLOW) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR { //nolint:gosec // G115: a descriptor fits an int
+		if unix.Fstatat(rfd, name, &st, unix.AT_SYMLINK_NOFOLLOW) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR {
 			continue
 		}
-		if s.now().Sub(time.Unix(st.Mtim.Unix())) > backupRetention {
-			_ = removeAt(root, name)
+		age := s.now().Sub(time.Unix(st.Mtim.Unix()))
+		if age <= helperproto.NginxBackupKeep {
+			continue
 		}
+		if unix.Fstatat(rfd, name+"/"+journalName, &st, unix.AT_SYMLINK_NOFOLLOW) != nil {
+			if age > backupRetention {
+				_ = removeAt(root, name)
+			}
+			continue
+		}
+		if !locked {
+			lock, locked = s.tryNginxLock(), true
+		}
+		if lock == nil {
+			continue
+		}
+		j, ok := s.nginxJournal(root, name)
+		switch {
+		case !ok, j.Phase == helperproto.PhaseRestoreFailed:
+			if age <= backupRetention {
+				continue
+			}
+		case j.Phase == helperproto.PhaseWriting, j.Phase == helperproto.PhaseRestoring:
+			continue
+		}
+		if ok {
+			s.cleanStaged(j)
+		}
+		_ = removeAt(root, name)
 	}
 }
 

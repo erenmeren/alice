@@ -49,6 +49,9 @@ var commands = map[string]command{
 	helperproto.SubCleanup:       {privileged: true, handle: cmdCleanup},
 	helperproto.SubNginxDump:     {privileged: true, handle: cmdNginxDump},
 	helperproto.SubNginxTest:     {privileged: true, handle: cmdNginxTest},
+	helperproto.SubNginxDeploy:   {privileged: true, handle: cmdNginxDeploy},
+	helperproto.SubNginxRestore:  {privileged: true, handle: cmdNginxRestore},
+	helperproto.SubNginxStatus:   {privileged: true, handle: cmdNginxStatus},
 	helperproto.SubTLSProbe:      {handle: cmdTLSProbe},
 }
 

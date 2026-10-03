@@ -53,6 +53,11 @@ type sys struct {
 	// walkHook runs in resolveRoot between the check of a directory and its open (nil in
 	// production; tests inject swaps).
 	walkHook func(name string)
+	// afterDeployStep runs at each step and at each finer point of nginx-deploy and nginx-restore
+	// (nil in production); a test returns errKilled to simulate the helper dying right there (no
+	// rollback, no cleanup, the journal stays). killed is set when it did.
+	afterDeployStep func(point string) error
+	killed          bool
 }
 
 // host returns the real path of an absolute guest path.

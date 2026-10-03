@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"syscall"
 	"time"
 
@@ -23,7 +24,16 @@ import (
 
 func main() {
 	syscall.Umask(0o077)
+	keepRunning()
 	os.Exit(run(os.Args[1:], productionSys()))
+}
+
+// keepRunning makes SIGHUP and SIGPIPE harmless: a dropped SSH connection must never stop a
+// transaction half-way (R38 item 1); a write to a closed stdout then fails with EPIPE instead.
+// The signals are caught, not ignored, so nginx and systemctl start with the default dispositions
+// (an ignored signal would be inherited across exec).
+func keepRunning() {
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGHUP, syscall.SIGPIPE)
 }
 
 // productionSys is the real environment: the whole filesystem, the real user IDs and sshd.

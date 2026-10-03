@@ -212,7 +212,14 @@ const (
 	StepRestore            = "restore"
 	StepRollbackConfigTest = "rollback_config_test"
 	StepRollbackReload     = "rollback_reload"
+	// StepJournal: the journal could not record the commit after the files were replaced, so the
+	// deployment was rolled back (the journal is what nginx-status reports; it must not disagree).
+	StepJournal = "journal"
 )
+
+// RestoreErrFileChanged is the Error of PhaseRestoreFailed when a certificate or key file holds
+// neither the deployed nor the backed-up content (someone else changed it): nothing is restored.
+const RestoreErrFileChanged = "file_changed"
 
 // KeyTypes of tls-probe.
 const (
