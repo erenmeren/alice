@@ -234,7 +234,34 @@ describe('TargetDetailPage', () => {
     expect(screen.getByText(/keys of ldapuser/)).toBeInTheDocument();
     expect(screen.getByText(/more user accounts than Alice lists/)).toBeInTheDocument();
     expect(screen.queryByText(/\{\{/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/made_up_by_a_newer_helper/)).not.toBeInTheDocument();
+  });
+
+  it('says when a started task is waiting for an administrator', async () => {
+    onServer('operator');
+    server.use(
+      http.post('/api/v1/targets/:id/actions/test', () => HttpResponse.json({ job_id: 'job-t', status_url: '/api/v1/jobs/job-t' }, { status: 202 })),
+      http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-t', status: 'blocked_license', error: null }))),
+    );
+    await renderRoute(path);
+    await userEvent.click(await screen.findByRole('button', { name: 'Test connection' }));
+    expect(await screen.findByText('This task is paused and waits for an administrator to run it.')).toBeInTheDocument();
+    expect(screen.queryByText('Finished.')).not.toBeInTheDocument();
+  });
+
+  it('shows a generic note with the code for warnings it cannot describe or that lack their details', async () => {
+    const warnings: Warning[] = [
+      { code: 'made_up_by_a_newer_helper', params: {} },
+      { code: 'strict_modes', params: {} },
+      { code: 'keys_managed_elsewhere', params: {} },
+    ];
+    onServer('operator', targetWith({ facts: { ...targetFixture.facts, warnings } }));
+    await renderRoute(path);
+    await screen.findByTestId('target-keys');
+    expect(screen.getAllByText('Alice reported a note about this server that this version cannot describe.')).toHaveLength(1);
+    expect(screen.getAllByText('Alice reported a note about this server without its details.')).toHaveLength(2);
+    expect(screen.getByText('made_up_by_a_newer_helper')).toBeInTheDocument();
+    expect(screen.getByText('strict_modes')).toBeInTheDocument();
+    expect(screen.queryByText(/\{\{/)).not.toBeInTheDocument();
   });
 
   it('is shown in Turkish', async () => {

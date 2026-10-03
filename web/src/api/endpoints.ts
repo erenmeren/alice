@@ -159,7 +159,8 @@ export const installLicense = (license: string) =>
 // Servers (targets) and host keys
 const enc = encodeURIComponent;
 
-export const listTargets = () => apiFetch<{ items: Target[]; next_cursor: string | null }>(`${v1}/targets`);
+export const listTargets = (cursor?: string | null) =>
+  apiFetch<{ items: Target[]; next_cursor: string | null }>(`${v1}/targets${cursor ? `?cursor=${enc(cursor)}` : ''}`);
 
 export const getTarget = (id: string) => apiFetch<Target>(`${v1}/targets/${enc(id)}`);
 

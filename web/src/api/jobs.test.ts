@@ -32,4 +32,23 @@ describe('waitForJob', () => {
     expect(err).toBeInstanceOf(JobTimeoutError);
     expect((err as JobTimeoutError).job.status).toBe('running');
   });
+
+  it('stops polling when the caller cancels', async () => {
+    let calls = 0;
+    server.use(
+      http.get('/api/v1/jobs/:id', () => {
+        calls += 1;
+        return HttpResponse.json(jobFixture({ status: 'running' }));
+      }),
+    );
+    const ctrl = new AbortController();
+    const pending = waitForJob('job-3', { intervalMs: 20, signal: ctrl.signal }).catch((e: unknown) => e);
+    await new Promise((r) => setTimeout(r, 50));
+    ctrl.abort();
+    const err = await pending;
+    expect((err as Error).name).toBe('AbortError');
+    const seen = calls;
+    await new Promise((r) => setTimeout(r, 80));
+    expect(calls).toBe(seen);
+  });
 });

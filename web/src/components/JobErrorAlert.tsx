@@ -10,6 +10,26 @@ export function reasonTitle(t: TFunction, i18n: I18n, reason: string, params: Re
   return i18n.exists(key) ? t(key, params) : t('ui.unexpectedError');
 }
 
+// StillWorkingAlert: the screen stopped waiting for a job that has not finished.
+export function StillWorkingAlert() {
+  const { t } = useTranslation();
+  return (
+    <Alert color="yellow" role="status">
+      {t('targets.stillWorking')}
+    </Alert>
+  );
+}
+
+// BlockedJobAlert: the license paused the job; an Administrator runs or discards it (R29).
+export function BlockedJobAlert() {
+  const { t } = useTranslation();
+  return (
+    <Alert color="yellow" role="status" title={t('enum.jobStatus.blocked_license')}>
+      {t('jobs.blockedNotice')}
+    </Alert>
+  );
+}
+
 // JobErrorAlert shows why a background job failed: what happened, what to do, and the code.
 export function JobErrorAlert({ error }: { error: JobError | null }) {
   const { t, i18n } = useTranslation();

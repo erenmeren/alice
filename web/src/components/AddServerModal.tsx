@@ -1,21 +1,26 @@
-import { Alert, Button, Group, Loader, NumberInput, Stack, Text, TextInput } from '@mantine/core';
+import { Button, Group, Loader, NumberInput, Stack, Text, TextInput } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { confirmHostKey, createTarget, listHostKeys } from '../api/endpoints';
-import { JobTimeoutError, waitForJob } from '../api/jobs';
+import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
 import { TARGETS_KEY } from '../api/queryKeys';
 import type { HostKey, Job, JobError, Target } from '../api/types';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { HostKeyConfirm } from './HostKeyConfirm';
-import { JobErrorAlert } from './JobErrorAlert';
+import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert } from './JobErrorAlert';
 
+// form: nothing exists yet. working: a request or a job is running. confirm: waiting for the
+// Administrator's comparison. failed: the server exists but the check did not succeed (the dialog
+// can only be left, never resubmitted).
 type Phase = 'form' | 'working' | 'confirm' | 'failed';
 
 // AddServerModal creates a Linux server, waits for the first connection test and, when the server
 // presented a fingerprint nobody confirmed yet, asks the Administrator to compare and confirm it.
-// The server counts toward the license as soon as it is created (spec §7.3).
+// The server counts toward the license as soon as it is created (spec §7.3), so after the create
+// call succeeds the form never comes back: problems end in the "failed" phase with a way to open
+// the server. Closing the dialog stops the waiting and nothing navigates afterwards.
 export function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAdded: (target: Target) => void }) {
   const { t } = useTranslation();
   const client = useQueryClient();
@@ -26,20 +31,48 @@ export function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAd
   const [phase, setPhase] = useState<Phase>('form');
   const [error, setError] = useState<unknown>(null);
   const [jobError, setJobError] = useState<JobError | null>(null);
+  const [blocked, setBlocked] = useState(false);
   const [target, setTarget] = useState<Target | null>(null);
   const [candidate, setCandidate] = useState<HostKey | null>(null);
+  const abort = useRef(new AbortController());
+
+  useEffect(() => {
+    const ctrl = abort.current;
+    return () => ctrl.abort();
+  }, []);
 
   const refresh = () => void client.invalidateQueries({ queryKey: TARGETS_KEY });
 
+  // close stops all waiting. A created server shows up in the list.
+  const close = () => {
+    abort.current.abort();
+    if (target) refresh();
+    onClose();
+  };
+  const openServer = () => {
+    abort.current.abort();
+    if (target) {
+      refresh();
+      onAdded(target);
+    }
+  };
+
   // settle decides what a finished connection test means for the dialog.
   const settle = async (tgt: Target, job: Job) => {
+    const signal = abort.current.signal;
     if (job.status === 'succeeded') {
       refresh();
       onAdded(tgt);
       return;
     }
+    if (job.status === 'blocked_license') {
+      setBlocked(true);
+      setPhase('failed');
+      return;
+    }
     if (job.error?.reason === 'target.host_key_unconfirmed') {
       const keys = await listHostKeys(tgt.id);
+      if (signal.aborted) return;
       const observed = keys.items.find((k) => k.status === 'observed') ?? null;
       if (observed) {
         setCandidate(observed);
@@ -51,47 +84,57 @@ export function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAd
     setPhase('failed');
   };
 
-  const run = async (fn: () => Promise<void>, back: Phase) => {
+  // afterCreate runs the steps that follow a successful create call; any problem leaves the dialog
+  // in the "failed" phase (or back at the confirmation), never at the form.
+  const afterCreate = async (tgt: Target, back: Phase, step: () => Promise<Job>) => {
     setError(null);
     setJobError(null);
+    setBlocked(false);
     setPhase('working');
     try {
-      await fn();
+      await settle(tgt, await step());
     } catch (e) {
+      if (isAbort(e) || abort.current.signal.aborted) return;
       setError(e);
+      refresh();
       setPhase(back);
     }
   };
 
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
-    void run(async () => {
-      const res = await createTarget({ name: name.trim(), type: 'linux', host: host.trim(), port: Number(port), username: username.trim() });
-      setTarget(res.target);
+    setError(null);
+    setPhase('working');
+    let created;
+    try {
+      created = await createTarget({ name: name.trim(), type: 'linux', host: host.trim(), port: Number(port), username: username.trim() });
+    } catch (err) {
+      if (abort.current.signal.aborted) return;
+      setError(err);
+      setPhase('form');
+      return;
+    }
+    if (abort.current.signal.aborted) {
       refresh();
-      await settle(res.target, await waitForJob(res.job_id));
-    }, 'form');
+      return;
+    }
+    setTarget(created.target);
+    refresh();
+    await afterCreate(created.target, 'failed', () => waitForJob(created.job_id, { signal: abort.current.signal }));
   };
 
   const confirm = () => {
     if (!target || !candidate) return;
-    void run(async () => {
+    void afterCreate(target, 'confirm', async () => {
       const res = await confirmHostKey(target.id, candidate.id, candidate.fingerprint);
-      await settle(target, await waitForJob(res.job_id));
-    }, 'confirm');
+      return waitForJob(res.job_id, { signal: abort.current.signal });
+    });
   };
 
-  const problem =
-    error instanceof JobTimeoutError ? (
-      <Alert color="yellow" role="status">
-        {t('targets.stillWorking')}
-      </Alert>
-    ) : (
-      <ErrorAlert error={error} />
-    );
+  const problem = error instanceof JobTimeoutError ? <StillWorkingAlert /> : <ErrorAlert error={error} />;
 
   return (
-    <AppModal opened onClose={onClose} title={phase === 'confirm' ? t('hostKeys.confirmTitle') : t('targets.add')} size="lg">
+    <AppModal opened onClose={close} title={phase === 'confirm' ? t('hostKeys.confirmTitle') : t('targets.add')} size="lg">
       {phase === 'working' && (
         <Group gap="sm" role="status" aria-live="polite">
           <Loader size="sm" aria-hidden />
@@ -99,7 +142,7 @@ export function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAd
         </Group>
       )}
       {phase === 'form' && (
-        <form onSubmit={submit}>
+        <form onSubmit={(e) => void submit(e)}>
           <Stack gap="sm">
             <TextInput label={t('targets.form.name')} value={name} onChange={(e) => setName(e.currentTarget.value)} required maxLength={100} data-autofocus />
             <TextInput
@@ -120,16 +163,21 @@ export function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAd
       )}
       {phase === 'confirm' && target && candidate && (
         <Stack gap="sm">
-          <HostKeyConfirm host={target.host} hostKey={candidate} onYes={confirm} onNo={onClose} />
+          <HostKeyConfirm host={target.host} hostKey={candidate} onYes={confirm} onNo={close} />
           {problem}
         </Stack>
       )}
       {phase === 'failed' && (
         <Stack gap="sm">
+          {blocked && <BlockedJobAlert />}
+          {error !== null && problem}
           <JobErrorAlert error={jobError} />
-          <Text size="sm">{t('targets.failedHelp')}</Text>
+          {!blocked && error === null && <Text size="sm">{t('targets.failedHelp')}</Text>}
           <Group justify="flex-end">
-            <Button onClick={onClose}>{t('ui.close')}</Button>
+            <Button variant="default" onClick={close}>
+              {t('ui.close')}
+            </Button>
+            <Button onClick={openServer}>{t('targets.openServer')}</Button>
           </Group>
         </Stack>
       )}

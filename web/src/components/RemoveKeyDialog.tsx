@@ -1,14 +1,14 @@
 import { Button, Checkbox, Code, Group, Loader, Stack, Text } from '@mantine/core';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isApiError } from '../api/client';
 import { removeKeyLocation } from '../api/endpoints';
-import { waitForJob } from '../api/jobs';
+import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
 import type { JobError, KeyLocation } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
-import { JobErrorAlert } from './JobErrorAlert';
+import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert } from './JobErrorAlert';
 import { WRAP } from './wrap';
 
 // RemoveKeyDialog removes one key from one authorized_keys file through the sshkey.remove job.
@@ -23,20 +23,29 @@ export function RemoveKeyDialog({ location, onClose, onDone }: { location: KeyLo
   const [jobError, setJobError] = useState<JobError | null>(null);
   const [needsRootConfirm, setNeedsRootConfirm] = useState(false);
   const [rootConfirmed, setRootConfirmed] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  const abort = useRef(new AbortController());
+  useEffect(() => {
+    const ctrl = abort.current;
+    return () => ctrl.abort();
+  }, []);
 
   const submit = async () => {
     setBusy(true);
     setError(null);
     setJobError(null);
+    setBlocked(false);
     try {
       const accepted = await removeKeyLocation(location.id, needsRootConfirm && rootConfirmed);
-      const job = await waitForJob(accepted.job_id);
+      const job = await waitForJob(accepted.job_id, { signal: abort.current.signal });
       if (job.status === 'succeeded') {
         onDone();
         return;
       }
+      if (job.status === 'blocked_license') setBlocked(true);
       setJobError(job.error);
     } catch (e) {
+      if (isAbort(e)) return;
       if (isApiError(e, 'sshkey.last_root_key') && admin) setNeedsRootConfirm(true);
       setError(e);
     }
@@ -63,7 +72,8 @@ export function RemoveKeyDialog({ location, onClose, onDone }: { location: KeyLo
         {needsRootConfirm && (
           <Checkbox label={t('sshKeys.confirmLastRootKey')} checked={rootConfirmed} onChange={(e) => setRootConfirmed(e.currentTarget.checked)} />
         )}
-        <ErrorAlert error={error} />
+        {error instanceof JobTimeoutError ? <StillWorkingAlert /> : <ErrorAlert error={error} />}
+        {blocked && <BlockedJobAlert />}
         <JobErrorAlert error={jobError} />
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>

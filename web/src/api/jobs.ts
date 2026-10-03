@@ -20,19 +20,50 @@ export class JobTimeoutError extends Error {
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function abortError(): Error {
+  const err = new Error('cancelled');
+  err.name = 'AbortError';
+  return err;
+}
+
+// isAbort tells a cancelled wait from a real failure.
+export function isAbort(e: unknown): boolean {
+  return e instanceof Error && e.name === 'AbortError';
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortError());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 // waitForJob polls GET /jobs/{id} until the job has finished. Long operations answer 202 with a
-// job ID (spec §9.1); the screens wait here and then refresh what the job changed.
-export async function waitForJob(id: string, opts: { intervalMs?: number; timeoutMs?: number } = {}): Promise<Job> {
+// job ID (spec §9.1); the screens wait here and then refresh what the job changed. A screen that
+// goes away passes a signal; the wait then rejects with an AbortError (see isAbort).
+export async function waitForJob(
+  id: string,
+  opts: { intervalMs?: number; timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<Job> {
   const interval = opts.intervalMs ?? 1000;
   const deadline = Date.now() + (opts.timeoutMs ?? 120_000);
   for (;;) {
+    if (opts.signal?.aborted) throw abortError();
     const job = await getJob(id);
+    if (opts.signal?.aborted) throw abortError();
     if (isTerminal(job.status)) return job;
     if (Date.now() > deadline) throw new JobTimeoutError(job);
-    await sleep(interval);
+    await sleep(interval, opts.signal);
   }
 }

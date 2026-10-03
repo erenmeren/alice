@@ -469,7 +469,9 @@
     "unreadable_line": "Line {{line_no}} of {{file_path}} could not be read. Alice leaves it unchanged.",
     "too_many_users": "This server has more user accounts than Alice lists, so some accounts were not scanned.",
     "sshd_unreadable_user": "Could not read the SSH server settings for {{user}}; only the default key files were checked.",
-    "unsupported_path_unnamed": "Alice cannot read a key file at one of the paths that the SSH server uses."
+    "unsupported_path_unnamed": "Alice cannot read a key file at one of the paths that the SSH server uses.",
+    "unknown": "Alice reported a note about this server that this version cannot describe.",
+    "incomplete": "Alice reported a note about this server without its details."
   },
   "targets": {
     "title": "Servers",
@@ -522,7 +524,8 @@
       "helper": "alice-helper version: {{version}}",
       "lastDiscovery": "Last scan: {{time}}",
       "neverScanned": "Not scanned yet."
-    }
+    },
+    "openServer": "Open the server"
   },
   "hostKeys": {
     "confirmTitle": "Is this your server?",
@@ -585,7 +588,8 @@
       "sshkey": {
         "remove": "SSH key removal"
       }
-    }
+    },
+    "blockedNotice": "This task is paused and waits for an administrator to run it."
   },
   "enum": {
     "targetStatus": {

@@ -469,7 +469,9 @@
     "unreadable_line": "{{file_path}} dosyasının {{line_no}}. satırı okunamadı. Alice bu satırı değiştirmez.",
     "too_many_users": "Bu sunucuda Alice'in listelediğinden fazla kullanıcı hesabı var, bu yüzden bazı hesaplar taranmadı.",
     "sshd_unreadable_user": "{{user}} için SSH sunucusu ayarları okunamadı; yalnızca varsayılan anahtar dosyaları denetlendi.",
-    "unsupported_path_unnamed": "Alice, SSH sunucusunun kullandığı yollardan birindeki anahtar dosyasını okuyamıyor."
+    "unsupported_path_unnamed": "Alice, SSH sunucusunun kullandığı yollardan birindeki anahtar dosyasını okuyamıyor.",
+    "unknown": "Alice bu sunucu hakkında, bu sürümün açıklayamadığı bir not bildirdi.",
+    "incomplete": "Alice bu sunucu hakkında ayrıntıları olmayan bir not bildirdi."
   },
   "targets": {
     "title": "Sunucular",
@@ -522,7 +524,8 @@
       "helper": "alice-helper sürümü: {{version}}",
       "lastDiscovery": "Son tarama: {{time}}",
       "neverScanned": "Henüz taranmadı."
-    }
+    },
+    "openServer": "Sunucuyu aç"
   },
   "hostKeys": {
     "confirmTitle": "Bu sizin sunucunuz mu?",
@@ -585,7 +588,8 @@
       "sshkey": {
         "remove": "SSH anahtarının kaldırılması"
       }
-    }
+    },
+    "blockedNotice": "Bu işlem duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor."
   },
   "enum": {
     "targetStatus": {

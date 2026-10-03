@@ -181,4 +181,82 @@ describe('TargetsPage', () => {
     expect(await screen.findByText('Bağlı')).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Sunucuyu Alice için hazırlayın' })).toBeInTheDocument();
   });
+
+  const addForm = async (host = 'db-01.example.com') => {
+    await userEvent.click(await screen.findByRole('button', { name: 'Add server' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add server' });
+    await userEvent.type(within(dialog).getByLabelText(/^Name/), 'db-01');
+    await userEvent.type(within(dialog).getByLabelText(/^Address/), host);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
+    return dialog;
+  };
+  const created = http.post('/api/v1/targets', () => HttpResponse.json({ target: pending, job_id: 'job-1', status_url: '/api/v1/jobs/job-1' }, { status: 201 }));
+
+  it('does not go back to the form when something fails after the server was created', async () => {
+    withTargets('admin', []);
+    let creates = 0;
+    server.use(
+      http.post('/api/v1/targets', () => {
+        creates += 1;
+        return HttpResponse.json({ target: pending, job_id: 'job-1', status_url: '/api/v1/jobs/job-1' }, { status: 201 });
+      }),
+      http.get('/api/v1/jobs/:id', () => errorResponse(500, 'ALC-INT-0001', 'internal.unexpected')),
+      http.get('/api/v1/targets/:id', () => HttpResponse.json(pending)),
+      http.get('/api/v1/targets/:id/host-keys', () => HttpResponse.json({ items: [] })),
+      http.get('/api/v1/targets/:id/ssh-keys', () => HttpResponse.json({ items: [] })),
+    );
+    const { router } = await renderRoute('/servers');
+    const dialog = await addForm();
+    const open = await within(dialog).findByRole('button', { name: 'Open the server' });
+    expect(within(dialog).queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/^Address/)).not.toBeInTheDocument();
+    await userEvent.click(open);
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/servers/${pending.id}`));
+    expect(creates).toBe(1);
+  });
+
+  it('does not navigate when the dialog was closed while the connection test was still running', async () => {
+    withTargets('admin', []);
+    let calls = 0;
+    server.use(
+      created,
+      http.get('/api/v1/jobs/:id', () => {
+        calls += 1;
+        return HttpResponse.json(jobFixture({ id: 'job-1', status: calls < 2 ? 'running' : 'succeeded' }));
+      }),
+    );
+    const { router } = await renderRoute('/servers');
+    const dialog = await addForm();
+    await within(dialog).findByText('Connecting to the server…');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add server' })).not.toBeInTheDocument());
+    await new Promise((r) => setTimeout(r, 1400));
+    expect(router.state.location.pathname).toBe('/servers');
+    expect(calls).toBe(1);
+  });
+
+  it('says that the first check is waiting for an administrator when the license paused it', async () => {
+    withTargets('admin', []);
+    server.use(created, http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-1', status: 'blocked_license', error: null }))));
+    await renderRoute('/servers');
+    const dialog = await addForm();
+    expect(await within(dialog).findByText('Waiting for an administrator')).toBeInTheDocument();
+    expect(within(dialog).getByText('This task is paused and waits for an administrator to run it.')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Open the server' })).toBeInTheDocument();
+  });
+
+  it('loads every page of servers', async () => {
+    const second = targetWith({ id: '0192b000-0000-7000-8000-0000000000a3', name: 'app-02', host: 'app-02.example.com' });
+    server.use(
+      ...sessionHandlers(sessionFor('operator')),
+      http.get('/api/v1/targets', ({ request }) => {
+        const cursor = new URL(request.url).searchParams.get('cursor');
+        return cursor ? HttpResponse.json({ items: [second], next_cursor: null }) : HttpResponse.json({ items: [targetFixture], next_cursor: 'c2' });
+      }),
+    );
+    await renderRoute('/servers');
+    const table = await screen.findByTestId('targets-table');
+    await waitFor(() => expect(within(table).getByText('app-02')).toBeInTheDocument());
+    expect(within(table).getByText('web-01')).toBeInTheDocument();
+  });
 });

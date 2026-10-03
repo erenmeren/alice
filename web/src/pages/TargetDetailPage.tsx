@@ -1,10 +1,10 @@
 import { Alert, Button, Card, Code, Group, Loader, Stack, Table, Text, Textarea, Title } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { confirmHostKey, deleteTarget, discoverTarget, getTarget, listHostKeys, listTargetKeys, repinHostKey, testTarget } from '../api/endpoints';
-import { JobTimeoutError, waitForJob } from '../api/jobs';
+import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
 import { TARGETS_KEY, targetKey } from '../api/queryKeys';
 import type { HostKey, JobAccepted, JobError, KeyLocation, Target, Warning } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
@@ -12,7 +12,7 @@ import { PageLoader } from '../auth/guards';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { HostKeyConfirm } from '../components/HostKeyConfirm';
-import { JobErrorAlert } from '../components/JobErrorAlert';
+import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert } from '../components/JobErrorAlert';
 import { KeyFlags } from '../components/KeyFlags';
 import { RemoveKeyDialog } from '../components/RemoveKeyDialog';
 import { useStepUp } from '../components/StepUpProvider';
@@ -34,11 +34,19 @@ export function TargetDetailPage() {
   const admin = role === 'admin';
   const canOperate = role === 'admin' || role === 'operator';
 
+  const [busy, setBusy] = useState(false);
+  const addedNow = (location.state as { added?: boolean } | null)?.added === true;
   const target = useQuery({
     queryKey: targetKey(id),
     queryFn: () => getTarget(id),
-    // Follow a server that is still being checked or scanned.
-    refetchInterval: (q) => (q.state.data && (q.state.data.status === 'checking' || !q.state.data.last_discovery_at) ? 3000 : false),
+    // Follow a server only while something is happening: it is being checked, a job started from
+    // this page is pending, or it was just added and its first scan is still to come (bounded).
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      if (!d) return false;
+      if (d.status === 'checking' || busy) return 3000;
+      return addedNow && !d.last_discovery_at && q.state.dataUpdateCount < 20 ? 3000 : false;
+    },
   });
   const hostKeys = useQuery({ queryKey: [...targetKey(id), 'host-keys'], queryFn: () => listHostKeys(id) });
   const keys = useQuery({
@@ -47,10 +55,15 @@ export function TargetDetailPage() {
     enabled: target.isSuccess,
   });
 
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [jobError, setJobError] = useState<JobError | null>(null);
   const [done, setDone] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  const abort = useRef(new AbortController());
+  useEffect(() => {
+    const ctrl = abort.current;
+    return () => ctrl.abort();
+  }, []);
   const [repinning, setRepinning] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [removing, setRemoving] = useState<KeyLocation | null>(null);
@@ -63,16 +76,18 @@ export function TargetDetailPage() {
     setError(null);
     setJobError(null);
     setDone(false);
+    setBlocked(false);
     try {
-      const job = await waitForJob((await start()).job_id);
+      const job = await waitForJob((await start()).job_id, { signal: abort.current.signal });
       if (job.status === 'succeeded') setDone(true);
+      else if (job.status === 'blocked_license') setBlocked(true);
       else setJobError(job.error);
     } catch (e) {
+      if (isAbort(e)) return;
       setError(e);
-    } finally {
-      setBusy(false);
-      await refresh();
     }
+    setBusy(false);
+    await refresh();
   };
 
   if (target.isPending) return <PageLoader />;
@@ -80,7 +95,7 @@ export function TargetDetailPage() {
   const tg = target.data;
   const pinned = hostKeys.data?.items.find((k) => k.status === 'pinned') ?? null;
   const observed = hostKeys.data?.items.find((k) => k.status === 'observed') ?? null;
-  const added = (location.state as { added?: boolean } | null)?.added === true;
+  const added = addedNow;
   const visibleKeys = (keys.data?.items ?? []).filter((k) => !k.removed_at);
 
   return (
@@ -150,13 +165,8 @@ export function TargetDetailPage() {
           {t('targets.jobDone')}
         </Text>
       )}
-      {error instanceof JobTimeoutError ? (
-        <Alert color="yellow" role="status">
-          {t('targets.stillWorking')}
-        </Alert>
-      ) : (
-        <ErrorAlert error={error} />
-      )}
+      {error instanceof JobTimeoutError ? <StillWorkingAlert /> : <ErrorAlert error={error} />}
+      {blocked && <BlockedJobAlert />}
       <JobErrorAlert error={jobError} />
 
       <Title order={2} size="h3">
@@ -241,37 +251,40 @@ export function TargetDetailPage() {
   );
 }
 
-// warningKey picks the text of a discovery warning. Some helper warnings come with and without a
-// parameter (unsupported_path without a path, sshd_unreadable without a user), and a missing
-// parameter would show a raw {{placeholder}}, so those have their own texts. An unknown code has none.
-const WARNING_KEYS = new Set([
-  'keys_managed_elsewhere',
-  'certificates_in_use',
-  'pubkey_disabled',
-  'sshd_unreadable',
-  'sshd_unreadable_user',
-  'strict_modes',
-  'unsupported_path',
-  'unsupported_path_unnamed',
-  'file_unreadable',
-  'file_unparseable',
-  'file_too_large',
-  'directory_users_not_listed',
-  'too_many_users',
-]);
+// Discovery warnings: the text key and the parameters it needs. Some helper warnings come with and
+// without a parameter (unsupported_path without a path, sshd_unreadable without a user) and have
+// their own text; a missing parameter would show a raw {{placeholder}}, so a warning without its
+// details, and a code this version does not know, get a generic text plus the code.
+const WARNING_PARAMS: Record<string, string[]> = {
+  keys_managed_elsewhere: ['user'],
+  certificates_in_use: [],
+  pubkey_disabled: [],
+  sshd_unreadable: [],
+  sshd_unreadable_user: ['user'],
+  strict_modes: ['path'],
+  unsupported_path: ['path'],
+  unsupported_path_unnamed: [],
+  file_unreadable: ['path'],
+  file_unparseable: ['path', 'user'],
+  file_too_large: ['path'],
+  directory_users_not_listed: [],
+  too_many_users: [],
+};
 
-function warningKey(w: Warning): string | null {
+function warningKey(w: Warning): string {
   let code = w.code;
   if (code === 'unsupported_path' && !w.params.path) code = 'unsupported_path_unnamed';
   if (code === 'sshd_unreadable' && w.params.user) code = 'sshd_unreadable_user';
-  return WARNING_KEYS.has(code) ? `warnings.${code}` : null;
+  const need = WARNING_PARAMS[code];
+  if (!need) return 'warnings.unknown';
+  return need.every((p) => w.params[p]) ? `warnings.${code}` : 'warnings.incomplete';
 }
 
 function Facts({ target }: { target: Target }) {
   const { t, i18n } = useTranslation();
   const f = target.facts;
   // unreadable_line is shown per line from facts.unreadable below, so the summary warning is skipped here.
-  const warnings = f.warnings.filter((w) => w.code !== 'unreadable_line' && warningKey(w) !== null);
+  const warnings = f.warnings.filter((w) => w.code !== 'unreadable_line');
   return (
     <Stack gap={4}>
       {f.os.pretty_name && <Text size="sm">{t('targets.facts.os', { name: f.os.pretty_name })}</Text>}
@@ -283,7 +296,10 @@ function Facts({ target }: { target: Target }) {
       </Text>
       {warnings.map((w) => (
         <Alert key={`${w.code}-${JSON.stringify(w.params)}`} color="yellow" style={WRAP}>
-          {t(warningKey(w) ?? '', w.params)}
+          {t(warningKey(w), w.params)}
+          {warningKey(w) === 'warnings.unknown' || warningKey(w) === 'warnings.incomplete' ? (
+            <Code ml="xs">{w.code}</Code>
+          ) : null}
         </Alert>
       ))}
       {f.unreadable.map((u) => (
