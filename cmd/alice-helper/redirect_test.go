@@ -367,3 +367,34 @@ func TestHomeBehindASymlinkOwnedByAnotherUserIsUnsupported(t *testing.T) {
 	code, m = f.run("authkeys-read", keysPath)
 	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"], "the target is another user's directory: %d", code)
 }
+
+// Round 4 item 1 (the reviewer's PoC): a link target with ".." was cleaned as text before the
+// symlink before it was followed, so the check looked at another path than the kernel opens.
+// /a -> evil/sub and /home -> a/../real/home (both root's) really lead to /evil/real/home, below
+// a world-writable /evil. Such a target is refused: the account is unsupported.
+func TestHomeBehindALinkWithDotDotIsUnsupported(t *testing.T) {
+	f, _ := newWriteFixture(t)
+	f.mkdir("/evil", 0o777)
+	f.mkdir("/evil/sub", 0o755)
+	f.mkdir("/evil/real", 0o755)
+	require.NoError(t, os.Rename(f.host("/home"), f.host("/evil/real/home")))
+	require.NoError(t, os.Symlink("evil/sub", f.host("/a")))
+	require.NoError(t, os.Symlink("a/../real/home", f.host("/home")))
+	f.write("/evil/real/home/deploy/.ssh/authorized_keys", "old\n", 0o600)
+	f.asUser("/evil/real/home/deploy", "/evil/real/home/deploy/.ssh", "/evil/real/home/deploy/.ssh/authorized_keys")
+
+	assert.False(t, f.s.rootControlled("/home"))
+	code, m := f.run("authkeys-read", keysPath)
+	assert.Equal(t, helperproto.ExitRefused, code, "%v", m)
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
+	_, m = f.run("authkeys-list")
+	assert.Equal(t, true, filesOf(listUser(t, m, "deploy"))[0]["unsupported"])
+	code, m = f.runWith("new\n", writeArgs(keysPath, hexOf("old\n"), op1)...)
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"], "%d", code)
+	assert.Equal(t, "old\n", f.read("/evil/real/home/deploy/.ssh/authorized_keys"))
+
+	// A plain ".." target without an earlier link is refused too (no legitimate layout needs one).
+	require.NoError(t, os.Remove(f.host("/home")))
+	require.NoError(t, os.Symlink("evil/../evil/real/home", f.host("/home")))
+	assert.False(t, f.s.rootControlled("/home"))
+}

@@ -213,8 +213,11 @@ const maxRootLinks = 40
 // down: every existing component must be a directory owned by root that group and others cannot
 // write, or a symlink owned by root (its directory was checked before it), in which case the walk
 // starts again on the path it leads to, whose components must pass the same test (at most
-// maxRootLinks links). Missing trailing components are allowed (the write then fails with
-// NOT_FOUND: only <home>/.ssh is ever created).
+// maxRootLinks links). A link target with a ".." component is refused: cleaning it as text would
+// check another path than the kernel opens (it follows an earlier link first), and no legitimate
+// layout (/home -> var/home, /home -> /data/home) needs one. Missing trailing components are
+// allowed (the write then fails with NOT_FOUND: only <home>/.ssh is ever created), but the path
+// checked must be the one resolveNearest (and so the open) uses, or the answer is false.
 func (s *sys) rootControlled(dir string) bool {
 	ok := func(st fs.FileInfo) bool {
 		uid, _ := owner(st)
@@ -237,13 +240,13 @@ restart:
 		st, err := os.Lstat(s.host(next))
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-			return true
+			return s.sameResolved(dir, filepath.Join(append([]string{cur}, parts[i:]...)...))
 		case err != nil || !ok(st):
 			return false
 		case st.Mode()&fs.ModeSymlink != 0:
 			links++
 			target, err := os.Readlink(s.host(next))
-			if err != nil || links > maxRootLinks {
+			if err != nil || links > maxRootLinks || slices.Contains(strings.Split(target, "/"), "..") {
 				return false
 			}
 			if filepath.IsAbs(target) {
@@ -262,7 +265,14 @@ restart:
 		}
 		cur = next
 	}
-	return true
+	return s.sameResolved(dir, cur)
+}
+
+// sameResolved reports whether the guest path dir resolves (as resolveNearest and the open see
+// it) to checked, the path rootControlled walked.
+func (s *sys) sameResolved(dir, checked string) bool {
+	r, ok := s.resolveNearest(dir)
+	return ok && r == checked
 }
 
 // throughOK refuses a file of a user other than root that the scan reached through a symlink
