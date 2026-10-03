@@ -16,16 +16,20 @@ import (
 
 	"alice/internal/audit"
 	"alice/internal/certs"
+	"alice/internal/license"
 	"alice/internal/platform/clock"
 	"alice/internal/providers"
 	"alice/internal/secrets"
 )
 
 // LicenseGate is license.Service: CheckCanAddTarget runs inside the insert transaction; Tick runs
-// after a committed add or delete so the snapshot's target count and the banners are current.
+// after a committed add or delete so the snapshot's target count and the banners are current;
+// Allow is the lock-mode gate, which the certificate changes of this package (uploads, signing
+// requests, location settings: R38 item 9) consult themselves besides their routes' class.
 type LicenseGate interface {
 	CheckCanAddTarget(ctx context.Context, tx pgx.Tx) error
 	Tick(ctx context.Context) error
+	Allow(c license.Class) error
 }
 
 // Notifier is notify.AdminNotifier (inventory may not import notify, §5.4).

@@ -1,6 +1,10 @@
 package inventory
 
-import "errors"
+import (
+	"errors"
+
+	"alice/internal/certs"
+)
 
 // Errors of the inventory service. The API maps each to a stable ALC code (Task 16). None of
 // them carries a value from the request or the database.
@@ -26,4 +30,22 @@ var (
 	ErrNoSetupScript = errors.New("inventory: this build of Alice cannot offer a setup script")
 	// ErrNoPlatformKey means EnsurePlatformKey has not run on this database yet.
 	ErrNoPlatformKey = errors.New("inventory: the platform SSH key does not exist yet")
+)
+
+// Errors of certificate uploads, signing requests and locations (Task 14). The upload and signing
+// request refusals are the certs package's sentinels re-exported (api may not import certs); like
+// those, none carries input, and never key material or a password.
+var (
+	ErrCertificateDuplicate = errors.New("inventory: Alice already holds this certificate with its key")
+	ErrCSRNotPending        = errors.New("inventory: the signing request is no longer open")
+	ErrLocationUnsupported  = errors.New("inventory: certificates cannot be deployed to this location")
+	ErrCertificateInvalid   = certs.ErrInvalid
+	ErrKeyMismatch          = certs.ErrKeyMismatch
+	ErrCertificateExpired   = certs.ErrExpired // also returned by RequestDeployment (Task 15)
+	ErrKeyEncrypted         = certs.ErrKeyEncrypted
+	ErrPFXPassword          = certs.ErrPFXPassword
+	ErrWeakCertificate      = certs.ErrWeak
+	ErrUnsupportedKey       = certs.ErrUnsupportedKey
+	ErrCSRMismatch          = certs.ErrCSRMismatch
+	ErrCertificateTooLarge  = certs.ErrTooLarge
 )
