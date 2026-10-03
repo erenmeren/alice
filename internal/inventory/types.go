@@ -18,6 +18,13 @@ const (
 	defaultInterval    = 24 * time.Hour
 )
 
+// Target types (targets.type) a person can add: a Linux server (SSH keys) and an Nginx server
+// (SSH keys and certificates, spec §12).
+const (
+	TypeLinux = "linux"
+	TypeNginx = "nginx"
+)
+
 // Target statuses (targets.status, R37 item 6).
 const (
 	StatusPendingHostKey = "pending_host_key"
@@ -90,12 +97,13 @@ type Facts struct {
 	Warnings       []providers.Warning           `json:"warnings,omitempty"`
 	Unreadable     []providers.UnreadableLine    `json:"unreadable,omitempty"`
 	UID0Users      []string                      `json:"uid0_users,omitempty"` // listed accounts with uid 0 (last-root-key guard)
+	Nginx          *providers.NginxFacts         `json:"nginx,omitempty"`      // what the last test or certificate scan learned of Nginx
 }
 
 // NewTarget is the input of CreateTarget.
 type NewTarget struct {
 	Name     string
-	Type     string // "linux" in Phase 3
+	Type     string // TypeLinux or TypeNginx
 	Host     string
 	Port     int    // 0 = 22
 	Username string // "" = alice-svc

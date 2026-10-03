@@ -20,6 +20,9 @@ const (
 	CodeHostASCII      = "validation.host_ascii"       // non-ASCII host name: type the xn-- form or the IP address
 )
 
+// typeValues are the parameters of a refused target type.
+func typeValues() map[string]string { return map[string]string{"values": TypeLinux + ", " + TypeNginx} }
+
 const (
 	maxNameRunes = 100
 	maxHostLen   = 253
@@ -198,8 +201,8 @@ func validateNewTarget(in NewTarget) (NewTarget, validate.Errors) {
 	} else {
 		out.Name = name
 	}
-	if in.Type != "linux" {
-		errs.Add("type", validate.OneOf, map[string]string{"values": "linux"})
+	if in.Type != TypeLinux && in.Type != TypeNginx {
+		errs.Add("type", validate.OneOf, typeValues())
 	}
 	if host, fe := NormalizeHost(in.Host); fe != nil {
 		errs = append(errs, *fe)

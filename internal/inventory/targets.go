@@ -117,7 +117,7 @@ func (s *Service) CreateTarget(ctx context.Context, a Actor, in NewTarget) (Targ
 	}
 	p, ok := s.providerFor(n.Type)
 	if !ok {
-		errs.Add("type", validate.OneOf, map[string]string{"values": "linux"})
+		errs.Add("type", validate.OneOf, typeValues()) // a type of this build without its provider
 		return Target{}, uuid.Nil, errs
 	}
 	cfg := targetConfig{Host: n.Host, Port: n.Port, Username: n.Username}

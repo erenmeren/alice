@@ -172,3 +172,80 @@ func TestRequestDiscoveryNeedsAConfirmedKey(t *testing.T) {
 	assert.NotZero(t, testID)
 	assert.Equal(t, inventory.JobTestConnection, h.jobs.requests()[len(h.jobs.requests())-1].Type)
 }
+
+// An Nginx server is a target like a Linux server: same validation, license slot, host-key flow;
+// its capabilities are the nginx provider's, and a connection test keeps what it learned of Nginx.
+func TestNginxTargets(t *testing.T) {
+	h := newHarness(t, withNginxProvider())
+	admin := h.user("ada", rbac.Admin, "")
+	tg, jobID, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "web-nginx", Type: inventory.TypeNginx, Host: "10.0.0.9"})
+	require.NoError(t, err)
+	assert.NotZero(t, jobID)
+	assert.Equal(t, "nginx", tg.Type)
+	assert.Equal(t, inventory.StatusPendingHostKey, tg.Status)
+	assert.Contains(t, tg.Capabilities, "discover_certificates")
+	assert.Equal(t, []map[string]string{{"name": "web-nginx", "host": "10.0.0.9", "port": "22", "username": "alice-svc", "type": "nginx"}},
+		h.auditDetails("target.created"))
+
+	_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "x", Type: "apache", Host: "10.0.0.10"})
+	var verrs validate.Errors
+	require.ErrorAs(t, err, &verrs)
+	assert.Equal(t, "type", verrs[0].Field)
+	assert.Equal(t, map[string]string{"values": "linux, nginx"}, verrs[0].Params)
+	// The address rules are the same (SEC-065), and so is the endpoint uniqueness within the type.
+	_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "meta", Type: inventory.TypeNginx, Host: "169.254.169.254"})
+	require.ErrorAs(t, err, &verrs)
+	assert.Equal(t, inventory.CodeHostNotAllowed, verrs[0].Code)
+	_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "again", Type: inventory.TypeNginx, Host: "10.0.0.9"})
+	require.ErrorIs(t, err, inventory.ErrDuplicateTarget)
+	_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "same-host-linux", Type: inventory.TypeLinux, Host: "10.0.0.9"})
+	require.NoError(t, err, "a Linux target on the same address is another target type")
+
+	// Host-key flow: a confirmation, then the connection test stores what it found of Nginx.
+	k := h.pinnedKey(tg.ID)
+	require.NoError(t, h.svc.RecordConnectionOK(h.ctx, tg.ID, providers.ConnectionReport{HostKey: k,
+		Nginx: &providers.NginxFacts{Found: true, ConfigValid: true}}))
+	got, err := h.svc.GetTarget(h.ctx, tg.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.StatusOK, got.Status)
+	require.NotNil(t, got.Facts.Nginx)
+	assert.True(t, got.Facts.Nginx.ConfigValid)
+
+	// A discovery learns the version; a later test (which knows no version) keeps it, a report
+	// without Nginx facts keeps them all.
+	_, err = h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigValid: true,
+		Version: "1.22.1", ConfPath: "/etc/nginx/nginx.conf"}})
+	require.NoError(t, err)
+	require.NoError(t, h.svc.RecordConnectionOK(h.ctx, tg.ID, providers.ConnectionReport{HostKey: k,
+		Nginx: &providers.NginxFacts{Found: true, ConfigValid: false, ConfigError: providers.ConfigErrSyntax}}))
+	got, err = h.svc.GetTarget(h.ctx, tg.ID)
+	require.NoError(t, err)
+	assert.Equal(t, &providers.NginxFacts{Found: true, ConfigValid: false, ConfigError: providers.ConfigErrSyntax, Version: "1.22.1",
+		ConfPath: "/etc/nginx/nginx.conf"}, got.Facts.Nginx)
+	require.NoError(t, h.svc.RecordConnectionOK(h.ctx, tg.ID, providers.ConnectionReport{HostKey: k}))
+	got, err = h.svc.GetTarget(h.ctx, tg.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Facts.Nginx)
+	assert.Equal(t, providers.ConfigErrSyntax, got.Facts.Nginx.ConfigError)
+
+	// A target of the nginx type without a registered nginx provider is refused like an unknown type.
+	plain := newHarness(t)
+	_, _, err = plain.svc.CreateTarget(plain.ctx, plain.user("bo", rbac.Admin, ""), inventory.NewTarget{Name: "n", Type: inventory.TypeNginx, Host: "10.0.0.11"})
+	require.ErrorAs(t, err, &verrs)
+	assert.Equal(t, map[string]string{"values": "linux, nginx"}, verrs[0].Params)
+}
+
+// Nginx targets count toward the license limit like every other target (L-74).
+func TestNginxTargetsCountTowardTheLicense(t *testing.T) {
+	h := newHarness(t, withNginxProvider())
+	admin := h.user("ada", rbac.Admin, "")
+	for i := range 5 {
+		_, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "n" + string(rune('a'+i)), Type: inventory.TypeNginx,
+			Host: "10.0.1." + string(rune('1'+i))})
+		require.NoError(t, err)
+	}
+	_, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "sixth", Type: inventory.TypeNginx, Host: "10.0.1.9"})
+	require.Error(t, err)
+	assert.Equal(t, 1, h.audits("target.add.denied_license"))
+	assert.Equal(t, 5, h.count("SELECT count(*) FROM targets WHERE deleted_at IS NULL"))
+}

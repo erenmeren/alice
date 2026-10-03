@@ -165,9 +165,14 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL
 		}
 		sum.Missing = int(tag.RowsAffected())
 		f := t.Facts
-		sshd := res.SSHD
-		f.SSHD, f.HostKeys, f.Warnings, f.Unreadable = &sshd, res.HostKeys, res.Warnings, res.UnreadableLines
-		f.UID0Users = append([]string(nil), res.UID0Users...)
+		if sshHalfRead(res) {
+			sshd := res.SSHD
+			f.SSHD, f.HostKeys, f.Warnings, f.Unreadable = &sshd, res.HostKeys, res.Warnings, res.UnreadableLines
+			f.UID0Users = append([]string(nil), res.UID0Users...)
+		}
+		if res.Nginx != nil {
+			f.Nginx = mergeNginxFacts(f.Nginx, *res.Nginx)
+		}
 		raw, err := json.Marshal(f)
 		if err != nil {
 			return err
@@ -189,6 +194,16 @@ WHERE id = $1`, id, raw, res.SSHD.KeysManagedElsewhere, now, res.SSHD.Read); err
 		return err
 	})
 	return sum, err
+}
+
+// sshHalfRead reports whether res carries the SSH half of a discovery: linuxssh's host keys, sshd
+// settings and (when asked) keys and accounts. A result with Nginx facts and none of those is a
+// certificates-only discovery (nginx.Discover without SSHKeys), which knows nothing about SSH: the
+// stored sshd, host-key, warning and account facts stay as they are. A combined scan that found
+// nothing at all on the SSH side is read the same way, which only keeps the earlier facts.
+func sshHalfRead(res providers.DiscoveryResult) bool {
+	return res.Nginx == nil || res.SSHD.Read || len(res.HostKeys) > 0 || len(res.SSHKeys) > 0 || len(res.ReadFiles) > 0 ||
+		len(res.UnreadableLines) > 0 || len(res.Accounts) > 0 || len(res.UID0Users) > 0
 }
 
 // upsertKeys stores one ssh_keys row per fingerprint and returns their ids by (cleaned)

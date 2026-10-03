@@ -102,6 +102,35 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	return h
 }
 
+// nginxCaps are the capabilities of the nginx provider (nginx.New).
+var nginxCaps = []providers.Capability{providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
+	providers.CapDiscoverCerts, providers.CapDeployCertificate, providers.CapVerifyDeployment}
+
+// withNginxProvider replaces the registry with one holding the harness's fake linuxssh provider and
+// a fake nginx provider with the nginx capabilities.
+func withNginxProvider() harnessOption {
+	return func(c *inventory.Config) {
+		ssh, _ := c.Registry.Get(providers.KindLinuxSSH)
+		reg := providers.NewRegistry()
+		reg.Register(ssh)
+		reg.Register(fake.New(providers.KindNginx, nginxCaps...))
+		reg.Freeze()
+		c.Registry = reg
+	}
+}
+
+// pinnedKey records a host key for the target, confirms it as a new Administrator and returns it
+// (the target is then checking, as after a real confirmation).
+func (h *harness) pinnedKey(target uuid.UUID) providers.HostKey {
+	h.t.Helper()
+	k := ed25519HostKey(h.t)
+	require.NoError(h.t, h.svc.HostKeyStore().Observed(h.ctx, target, k, false))
+	admin := h.user("pin-"+target.String()[:8]+"-"+uuid.NewString()[:4], rbac.Admin, "")
+	_, err := h.svc.ConfirmHostKey(h.ctx, admin, target, keyID(h.t, h, target, k.Fingerprint), k.Fingerprint)
+	require.NoError(h.t, err)
+	return k
+}
+
 // user inserts an enabled local user with the role and returns an actor for it.
 func (h *harness) user(name string, role rbac.Role, email string) inventory.Actor {
 	h.t.Helper()

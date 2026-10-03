@@ -70,3 +70,41 @@ func TestScheduleDiscoveryRetestsUnreachableTargets(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, n)
 }
+
+// The Phase 3 schedule rules hold for Nginx targets: at most one job per interval whatever its
+// outcome, an unreachable server is re-tested, auth_failed and host_key_changed are never retried.
+func TestScheduleDiscoveryNginxTargets(t *testing.T) {
+	h := newHarness(t, withNginxProvider())
+	admin := h.user("ada", rbac.Admin, "")
+	ids := map[string]uuid.UUID{}
+	for i, name := range []string{"ok", "down", "refused", "changed"} {
+		tg, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "nginx-" + name, Type: inventory.TypeNginx,
+			Host: fmt.Sprintf("10.0.2.%d", i+1)})
+		require.NoError(t, err)
+		ids[name] = tg.ID
+	}
+	for name, status := range map[string]string{"ok": inventory.StatusOK, "down": inventory.StatusUnreachable,
+		"refused": inventory.StatusAuthFailed, "changed": inventory.StatusHostKeyChanged} {
+		_, err := h.db.Owner.Exec(h.ctx, "UPDATE targets SET status = $2 WHERE id = $1", ids[name], status)
+		require.NoError(t, err)
+	}
+	before := len(h.jobs.requests())
+	n, err := h.svc.ScheduleDiscovery(h.ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	got := map[uuid.UUID]string{}
+	for _, r := range h.jobs.requests()[before:] {
+		got[r.TargetID] = r.Type
+	}
+	assert.Equal(t, map[uuid.UUID]string{ids["ok"]: inventory.JobDiscover, ids["down"]: inventory.JobTestConnection}, got)
+
+	// The scan of the ok target fails (no discovery recorded): it still waits a full interval.
+	h.clock.Advance(23 * time.Hour)
+	n, err = h.svc.ScheduleDiscovery(h.ctx)
+	require.NoError(t, err)
+	assert.Zero(t, n)
+	h.clock.Advance(time.Hour)
+	n, err = h.svc.ScheduleDiscovery(h.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n, "a day later both are due again; auth_failed and host_key_changed never are")
+}
