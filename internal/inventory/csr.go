@@ -67,6 +67,10 @@ const (
 	listedFinishedCSRs   = 50
 )
 
+// WarnCSRNameMismatch: the signed certificate does not cover every name of its request (a CA may
+// change the names; the completion is accepted and says so).
+const WarnCSRNameMismatch = "csr_name_mismatch"
+
 var csrKeyTypes = []string{"ecdsa-p256", "rsa-3072", "rsa-4096"}
 
 // validRequestName is a DNS name a signing request may carry: certs.ValidDNSName (lower-case
@@ -226,8 +230,9 @@ ORDER BY sel.grp, sel.at DESC, sel.id DESC`, maxListedPendingCSRs, listedFinishe
 }
 
 // signedWarnings are an upload's warnings for a signed certificate (certs.ValidateSigned reports
-// only whether the chain is complete).
-func signedWarnings(pemText []byte, p certs.Parsed, complete bool, now time.Time) []string {
+// only whether the chain is complete), plus WarnCSRNameMismatch when the certificate's SANs do
+// not cover every requested name (the inventory's server-name rule, nameCovered).
+func signedWarnings(pemText []byte, p certs.Parsed, complete bool, requested []string, now time.Time) []string {
 	out := []string{}
 	if now.Before(p.NotBefore) {
 		out = append(out, "not_yet_valid")
@@ -241,6 +246,12 @@ func signedWarnings(pemText []byte, p certs.Parsed, complete bool, now time.Time
 				out = append(out, "chain_certificate_expired")
 				break
 			}
+		}
+	}
+	for _, n := range requested {
+		if !nameCovered(p.SANs, n) {
+			out = append(out, WarnCSRNameMismatch)
+			break
 		}
 	}
 	return out
@@ -295,7 +306,7 @@ JOIN managed_private_keys k ON k.id = r.private_key_id WHERE r.id = $1`, id).Sca
 		reason, out := refusal(err)
 		return reject(rejected{reason: reason}, out)
 	}
-	warnings := signedWarnings([]byte(text), p, complete, now)
+	warnings := signedWarnings([]byte(text), p, complete, req.SANs, now)
 
 	var placed placement
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -321,7 +332,7 @@ JOIN managed_private_keys k ON k.id = r.private_key_id WHERE r.id = $1`, id).Sca
 		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "csr.completed", ObjectType: "csr", ObjectID: id.String(),
 			Result: audit.Success, Details: map[string]string{"csr_id": id.String(), "certificate_id": placed.id.String(),
-				"fingerprint": p.Fingerprint, "outcome": outcome}})
+				"fingerprint": p.Fingerprint, "outcome": outcome, "warnings": strings.Join(heldWarnings(warnings, placed.complete), ",")}})
 		return err
 	})
 	switch {
@@ -332,7 +343,11 @@ JOIN managed_private_keys k ON k.id = r.private_key_id WHERE r.id = $1`, id).Sca
 	case err != nil:
 		return Certificate{}, nil, err
 	}
-	return s.placedCertificate(ctx, placed.id, warnings)
+	c, err := s.GetCertificate(ctx, placed.id)
+	if err != nil {
+		return Certificate{}, nil, err
+	}
+	return c, heldWarnings(warnings, placed.complete), nil
 }
 
 // CancelCSR closes a pending request without a certificate. Its key stays sealed and unused.

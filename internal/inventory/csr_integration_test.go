@@ -78,7 +78,7 @@ func TestSigningRequestLifecycle(t *testing.T) {
 	assert.Equal(t, 1, h.count("SELECT count(*) FROM certificates c JOIN csr_requests r ON r.private_key_id = c.private_key_id"),
 		"the certificate holds the request's key")
 	assert.Equal(t, []map[string]string{{"csr_id": csr.ID.String(), "certificate_id": c.ID.String(), "fingerprint": c.Fingerprint,
-		"outcome": "created"}}, h.auditDetails("csr.completed"))
+		"outcome": "created", "warnings": "chain_incomplete"}}, h.auditDetails("csr.completed"))
 	_, _, err = h.svc.CompleteCSR(h.ctx, op, csr.ID, string(signed.FullchainPEM), "")
 	assert.ErrorIs(t, err, inventory.ErrCSRNotPending)
 
@@ -323,4 +323,33 @@ SELECT $1, $2, $3, $4, 'ecdsa', 256, $5, $6, 'csr', private_key_id, $7, $7, $7 F
 	require.NoError(t, err)
 	assert.Equal(t, "completed", got.Status)
 	assert.Equal(t, 0, h.audits("csr.cancelled"))
+}
+
+// A CA may change the names of a request; the completion is accepted (controller ruling) but says
+// so, in the result and in the audit trail.
+func TestCompletionWarnsWhenNamesDifferFromTheRequest(t *testing.T) {
+	h := newHarness(t)
+	op := h.user("oya", rbac.Operator, "")
+	ca := pki.NewCA("CSR", pki.ECDSA256, h.clock.Now())
+	for _, tc := range []struct {
+		cn       string
+		sans     []string
+		warnings []string
+	}{
+		{"www.example.test", []string{"www.example.test", "example.test"}, []string{"chain_incomplete"}},
+		{"www.example.test", []string{"*.example.test", "example.test"}, []string{"chain_incomplete"}},
+		{"www.example.test", []string{"www.example.test"}, []string{"chain_incomplete", inventory.WarnCSRNameMismatch}},
+		{"other.example.test", []string{"other.example.test"}, []string{"chain_incomplete", inventory.WarnCSRNameMismatch}},
+	} {
+		csr, err := h.svc.CreateCSR(h.ctx, op, inventory.CSRInput{CommonName: "www.example.test", SANs: []string{"example.test"}, KeyType: "ecdsa-p256"})
+		require.NoError(t, err)
+		req := *parseCSR(t, csr)
+		req.Subject.CommonName, req.DNSNames = tc.cn, tc.sans
+		signed := ca.IssueForCSR(&req, h.clock.Now())
+		_, warnings, err := h.svc.CompleteCSR(h.ctx, op, csr.ID, string(signed.FullchainPEM), "")
+		require.NoError(t, err, "%+v", tc)
+		assert.Equal(t, tc.warnings, warnings, "%+v", tc)
+		d := h.auditDetails("csr.completed")
+		assert.Equal(t, strings.Join(tc.warnings, ","), d[len(d)-1]["warnings"])
+	}
 }

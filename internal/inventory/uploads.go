@@ -214,6 +214,11 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 		if certText == "" {
 			errs.Add("certificate_pem", validate.Required, nil)
 		}
+		if certs.ContainsPrivateKey([]byte(certText)) {
+			// The contract has no combined paste: the key belongs in its own field, and a key in
+			// the certificate field is never used from there.
+			errs.Add("certificate_pem", CodeKeyInCertificate, nil)
+		}
 		if keyText == "" {
 			errs.Add("private_key_pem", validate.Required, nil) // D21: blanks only is no key
 		}
@@ -228,14 +233,12 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 	var up certs.Upload
 	release := func() {}
 	if format == formatPFX {
-		if len(pfxText) > base64.StdEncoding.EncodedLen(certs.MaxInputSize) {
-			return reject("too_large", ErrCertificateTooLarge)
-		}
-		raw, err := base64.StdEncoding.DecodeString(pfxText)
-		if err != nil {
-			return reject("invalid", ErrCertificateInvalid)
-		}
+		raw, err := decodePFXText(pfxText)
 		defer clear(raw)
+		if err != nil {
+			reason, out := refusal(err)
+			return reject(reason, out)
+		}
 		var ok bool
 		if release, ok = acquirePFXSlot(); !ok {
 			return reject("busy", ErrPFXBusy)
@@ -247,19 +250,22 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 			return reject("too_large", ErrCertificateTooLarge)
 		}
 		up.CertificatePEM, up.PrivateKeyPEM = []byte(certText), []byte(keyText)
+		defer clear(up.CertificatePEM) // may hold a pasted key (refused above, but the bytes were copied)
 		defer clear(up.PrivateKeyPEM)
 	}
-	v, err := certs.ValidateUpload(up, s.clock.Now(), s.roots)
+	v, err := s.validateUpload(up)
 	release() // the slot covers the decode only
+	if errors.Is(err, errDecoderPanic) {
+		s.auditRejection(ctx, a, rejected{format: format, reason: "internal"})
+		return Certificate{}, nil, err
+	}
 	if err != nil {
 		reason, out := refusal(err)
 		return reject(reason, out)
 	}
 	defer v.PrivateKeyDER.Zero()
-	info, err := certs.KeyInfoOf(v.PrivateKeyDER)
-	if err != nil || info.PublicKeySHA256 != v.PublicKeySHA256 {
-		return reject("key_mismatch", ErrKeyMismatch) // certs matched them already: never expected
-	}
+	// What certs matched: the leaf's key is the uploaded key (no second parse of the key).
+	info := certs.KeyInfo{Algorithm: v.Algorithm, Bits: v.Bits, PublicKeySHA256: v.PublicKeySHA256}
 
 	var placed placement
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -272,7 +278,8 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 		}
 		ev := audit.Event{Actor: a.Audit, Action: "certificate.uploaded", ObjectType: "certificate", ObjectID: placed.id.String(),
 			Result: audit.Success, Details: map[string]string{"certificate_id": placed.id.String(), "fingerprint": v.Fingerprint,
-				"source": "uploaded", "format": format, "algorithm": info.Algorithm, "bits": strconv.Itoa(info.Bits)}}
+				"source": "uploaded", "format": format, "algorithm": info.Algorithm, "bits": strconv.Itoa(info.Bits),
+				"warnings": strings.Join(heldWarnings(v.Warnings, placed.complete), ",")}}
 		if placed.attached {
 			ev.Action = "certificate.key_attached"
 			delete(ev.Details, "source")
@@ -293,29 +300,80 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 		s.auditRejection(ctx, a, rejected{format: format, reason: "internal", fingerprint: v.Fingerprint})
 		return Certificate{}, nil, err
 	}
-	return s.placedCertificate(ctx, placed.id, v.Warnings)
-}
-
-// placedCertificate reads a stored certificate and returns it with the warnings of its upload,
-// less chain_incomplete when the chain Alice holds is complete (an upload never downgrades it).
-func (s *Service) placedCertificate(ctx context.Context, id uuid.UUID, warnings []string) (Certificate, []string, error) {
-	c, err := s.GetCertificate(ctx, id)
+	// A failure to read the committed certificate back reports an error for a stored upload (a
+	// retry gets ErrCertificateDuplicate); the audit row is already written.
+	c, err := s.GetCertificate(ctx, placed.id)
 	if err != nil {
 		return Certificate{}, nil, err
 	}
+	return c, heldWarnings(v.Warnings, placed.complete), nil
+}
+
+// heldWarnings are an upload's warnings for what Alice holds: chain_incomplete is left out when the
+// stored chain is complete (an upload never downgrades it). Never nil. They are not stored with
+// the certificate (no column); the audit row of the upload keeps them.
+func heldWarnings(warnings []string, complete bool) []string {
 	out := []string{}
 	for _, w := range warnings {
-		if w == "chain_incomplete" && c.ChainComplete {
+		if w == "chain_incomplete" && complete {
 			continue
 		}
 		out = append(out, w)
 	}
-	return c, out, nil
+	return out
+}
+
+// errDecoderPanic: decoding an upload panicked (a bug in a parser). The upload is refused as an
+// internal error; no text of the panic, which may quote input, is kept.
+var errDecoderPanic = errors.New("inventory: the uploaded file could not be decoded")
+
+// validateUpload is certs.ValidateUpload (replaceable in tests).
+var validateUpload = certs.ValidateUpload
+
+// validateUpload runs the decoder and turns a panic into errDecoderPanic, logged without its value.
+func (s *Service) validateUpload(up certs.Upload) (v certs.Validated, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Error("decoding an uploaded certificate failed", "panic_type", fmt.Sprintf("%T", r))
+			v, err = certs.Validated{}, errDecoderPanic
+		}
+	}()
+	return validateUpload(up, s.clock.Now(), s.roots)
+}
+
+// decodePFXText decodes a PFX given as standard base64. White space (line breaks of a wrapped
+// text, blanks) is ignored; the bound is on the decoded file (certs.MaxInputSize), checked before
+// decoding. The caller clears the result, also on error.
+func decodePFXText(text string) ([]byte, error) {
+	compact := make([]byte, 0, len(text))
+	defer func() { clear(compact) }()
+	for i := 0; i < len(text); i++ {
+		switch c := text[i]; c {
+		case ' ', '\t', '\r', '\n', '\f', '\v':
+		default:
+			compact = append(compact, c)
+		}
+	}
+	if base64.StdEncoding.DecodedLen(len(compact)) > certs.MaxInputSize+2 { // DecodedLen counts the padding as data
+		return nil, ErrCertificateTooLarge
+	}
+	raw := make([]byte, base64.StdEncoding.DecodedLen(len(compact)))
+	n, err := base64.StdEncoding.Decode(raw, compact)
+	if err != nil {
+		clear(raw)
+		return nil, ErrCertificateInvalid
+	}
+	if n > certs.MaxInputSize {
+		clear(raw)
+		return nil, ErrCertificateTooLarge
+	}
+	return raw[:n], nil
 }
 
 // placement is where placeCertificate put a certificate.
 type placement struct {
 	id       uuid.UUID
+	complete bool      // the chain Alice now holds for it is complete
 	attached bool      // the key was attached to a certificate Alice knew without one
 	existing uuid.UUID // the certificate that already had a key (ErrCertificateDuplicate)
 }
@@ -371,7 +429,7 @@ RETURNING id`, id, p.Fingerprint, boundText(p.SubjectCN), boundText(p.Subject), 
 			now, nullableUser(by)).Scan(&id)
 		switch {
 		case err == nil:
-			return placement{id: id}, nil
+			return placement{id: id, complete: complete}, nil
 		case !errors.Is(err, pgx.ErrNoRows):
 			return placement{}, fmt.Errorf("inventory: store certificate: %w", keyTriggerError(err))
 		}
@@ -390,23 +448,27 @@ RETURNING id`, id, p.Fingerprint, boundText(p.SubjectCN), boundText(p.Subject), 
 	if err != nil {
 		return placement{}, err
 	}
-	_, err = tx.Exec(ctx, `UPDATE certificates SET private_key_id = $2, label = CASE WHEN label = '' THEN $3 ELSE label END,
+	var held bool
+	err = tx.QueryRow(ctx, `UPDATE certificates SET private_key_id = $2, label = CASE WHEN label = '' THEN $3 ELSE label END,
     pem_chain = CASE WHEN NOT chain_complete AND $5 THEN $4 ELSE pem_chain END, chain_complete = chain_complete OR $5
-WHERE id = $1`, existing, kid, label, pemChain, complete)
+WHERE id = $1 RETURNING chain_complete`, existing, kid, label, pemChain, complete).Scan(&held)
 	if err != nil {
 		if mapped := keyTriggerError(err); errors.Is(mapped, ErrKeyMismatch) || errors.Is(mapped, ErrCertificateDuplicate) {
 			return placement{existing: existing}, mapped
 		}
 		return placement{}, fmt.Errorf("inventory: attach the private key: %w", err)
 	}
-	return placement{id: existing, attached: true}, nil
+	return placement{id: existing, attached: true, complete: held}, nil
 }
 
-// lockCertificate finds the certificate of a fingerprint and locks it (uuid.Nil when absent).
+// lockCertificate finds the certificate of a fingerprint and locks it (uuid.Nil when absent). FOR NO
+// KEY UPDATE: the foreign-key checks of rows inserted meanwhile that reference the certificate
+// (locations, deployments) take KEY SHARE and are not blocked; attaching the key changes the unique
+// private_key_id and takes the stronger lock only at that UPDATE.
 func lockCertificate(ctx context.Context, tx pgx.Tx, fingerprint string) (uuid.UUID, bool, error) {
 	var id uuid.UUID
 	var hasKey bool
-	err := tx.QueryRow(ctx, "SELECT id, private_key_id IS NOT NULL FROM certificates WHERE fingerprint_sha256 = $1 FOR UPDATE", fingerprint).
+	err := tx.QueryRow(ctx, "SELECT id, private_key_id IS NOT NULL FROM certificates WHERE fingerprint_sha256 = $1 FOR NO KEY UPDATE", fingerprint).
 		Scan(&id, &hasKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, false, nil

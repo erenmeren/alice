@@ -391,7 +391,8 @@
     "email": "Geçerli bir e-posta adresi girin, örneğin ad@ornek.com.",
     "host_port": "Buraya yalnızca sunucunun adını veya adresini girin. Bağlantı noktasını SSH bağlantı noktası alanına yazın.",
     "host_not_allowed": "Bu adres yönetilen bir sunucu olamaz (yerel bağlantı, grup veya yayın adresi ya da hiç adres değil).",
-    "host_ascii": "Sunucunun düz ana bilgisayar adını (uluslararası adlarda xn-- ile başlayan biçimi) veya IP adresini kullanın."
+    "host_ascii": "Sunucunun düz ana bilgisayar adını (uluslararası adlarda xn-- ile başlayan biçimi) veya IP adresini kullanın.",
+    "key_in_certificate": "Sertifika alanında bir özel anahtar var. Buraya yalnızca sertifikayı ve zincirini, özel anahtarı ise özel anahtar alanına girin."
   },
   "email": {
     "footer": "Bu ileti Alice tarafından otomatik olarak gönderildi. Lütfen yanıtlamayın.",

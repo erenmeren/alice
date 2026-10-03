@@ -17,7 +17,7 @@ func TestSignedWarnings(t *testing.T) {
 	soon := ca.Issue(pki.Opts{CommonName: "a.example.test", NotBefore: now.Add(time.Hour), NotAfter: now.AddDate(0, 1, 0)}, now)
 	p, err := certs.ParseChainPEM(soon.FullchainPEM)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"not_yet_valid"}, signedWarnings(soon.FullchainPEM, p, true, now))
+	assert.Equal(t, []string{"not_yet_valid"}, signedWarnings(soon.FullchainPEM, p, true, nil, now))
 
 	// An expired extra certificate in the file (an old copy, a stale cross-sign) is flagged.
 	old := ca.Issue(pki.Opts{CommonName: "old.example.test", NotBefore: now.AddDate(0, -3, 0), NotAfter: now.Add(-time.Hour)}, now)
@@ -25,6 +25,6 @@ func TestSignedWarnings(t *testing.T) {
 	file := append(append([]byte{}, cur.FullchainPEM...), old.CertPEM...)
 	p, err = certs.ParseChainPEM(cur.FullchainPEM)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"chain_incomplete", "chain_certificate_expired"}, signedWarnings(file, p, false, now))
-	assert.Equal(t, []string{}, signedWarnings(cur.FullchainPEM, p, true, now))
+	assert.Equal(t, []string{"chain_incomplete", "chain_certificate_expired"}, signedWarnings(file, p, false, nil, now))
+	assert.Equal(t, []string{}, signedWarnings(cur.FullchainPEM, p, true, nil, now))
 }

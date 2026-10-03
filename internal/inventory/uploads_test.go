@@ -10,7 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/certs"
+	"alice/internal/i18n"
 	"alice/internal/platform/validate"
+	"alice/locales"
 )
 
 // Every refusal of the certs package has its reason and a specific error; none is left to be
@@ -43,6 +45,14 @@ func TestEveryCertsRefusalHasAReason(t *testing.T) {
 	var verrs validate.Errors
 	require.ErrorAs(t, out, &verrs)
 	assert.Equal(t, validate.Errors{{Field: "private_key_pem", Code: validate.Required}}, verrs)
+}
+
+func TestKeyInCertificateCodeIsTranslated(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	for _, lang := range []string{"en", "tr"} {
+		assert.NotEqual(t, CodeKeyInCertificate, cat.T(lang, CodeKeyInCertificate, nil), lang)
+	}
 }
 
 func TestKeyTriggerSQLStatesAreMapped(t *testing.T) {

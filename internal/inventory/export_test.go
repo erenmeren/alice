@@ -2,9 +2,12 @@ package inventory
 
 import (
 	"context"
+	"crypto/x509"
+	"time"
 
 	"github.com/google/uuid"
 
+	"alice/internal/certs"
 	"alice/internal/providers"
 	"alice/internal/secrets"
 )
@@ -55,3 +58,10 @@ func HoldPFXSlots(n int) (release func(), ok bool) {
 
 // ValidSNI exposes validSNI to the test that compares it with helperproto.ValidSNI.
 func ValidSNI(s string) bool { return validSNI(s) }
+
+// SetValidateUpload replaces the upload decoder (a panicking one in tests); restore puts it back.
+func SetValidateUpload(f func(certs.Upload, time.Time, *x509.CertPool) (certs.Validated, error)) (restore func()) {
+	old := validateUpload
+	validateUpload = f
+	return func() { validateUpload = old }
+}

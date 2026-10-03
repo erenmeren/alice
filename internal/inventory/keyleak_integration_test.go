@@ -6,12 +6,15 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,23 +25,43 @@ import (
 	"alice/internal/testutil/pki"
 )
 
-// secretMarkers are forms of the private part of an ECDSA key (its scalar, never the public point,
-// which the certificate carries): raw, hex in both cases, base64 in the usual alphabets, and the
-// run of the PKCS#8 base64 text (what a PEM body shows) that covers only scalar bytes.
+// secretMarkers are forms of 32 bytes of a key's private part (an ECDSA scalar; a slice of an RSA
+// private exponent — never public values, which the certificate carries): raw, hex in both cases,
+// base64 in the usual alphabets, and, for each encoding a PEM body may show (PKCS#8 and the
+// key's own: SEC 1 or PKCS#1), the run of its base64 text that covers only those bytes.
 func secretMarkers(t *testing.T, key crypto.Signer) []string {
 	t.Helper()
-	k, ok := key.(*ecdsa.PrivateKey)
-	require.True(t, ok)
-	d, err := k.Bytes()
+	var secret, native []byte
+	switch k := key.(type) {
+	case *ecdsa.PrivateKey:
+		d, err := k.Bytes()
+		require.NoError(t, err)
+		secret = d
+		native, err = x509.MarshalECPrivateKey(k)
+		require.NoError(t, err)
+	case *rsa.PrivateKey:
+		secret = k.D.Bytes()[16:48]
+		native = x509.MarshalPKCS1PrivateKey(k)
+	default:
+		t.Fatalf("no markers for %T", key)
+	}
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
 	require.NoError(t, err)
-	der, err := x509.MarshalPKCS8PrivateKey(k)
-	require.NoError(t, err)
-	o := bytes.Index(der, d)
+	out := []string{string(secret), hex.EncodeToString(secret), fmt.Sprintf("%X", secret), base64.StdEncoding.EncodeToString(secret),
+		base64.RawURLEncoding.EncodeToString(secret)}
+	for _, der := range [][]byte{pkcs8, native} {
+		out = append(out, pemTextRun(t, der, secret))
+	}
+	return out
+}
+
+// pemTextRun is the part of der's base64 text that encodes only bytes of secret.
+func pemTextRun(t *testing.T, der, secret []byte) string {
+	t.Helper()
+	o := bytes.Index(der, secret)
 	require.GreaterOrEqual(t, o, 0)
-	from, to := (o+2)/3*3, (o+32)/3*3
-	text := base64.StdEncoding.EncodeToString(der)[from/3*4 : to/3*4]
-	return []string{string(d), hex.EncodeToString(d), fmt.Sprintf("%X", d), base64.StdEncoding.EncodeToString(d),
-		base64.RawURLEncoding.EncodeToString(d), text}
+	from, to := (o+2)/3*3, (o+len(secret))/3*3
+	return base64.StdEncoding.EncodeToString(der)[from/3*4 : to/3*4]
 }
 
 // leakScan collects every value the flows produce and searches all of it for the markers.
@@ -91,10 +114,15 @@ func TestNoPrivateKeyOrPasswordLeaks(t *testing.T) {
 	op := h.user("oya", rbac.Operator, "")
 	s := &leakScan{t: t, h: h}
 	ca := pki.NewCA("Leak", pki.ECDSA256, h.clock.Now())
-	issue := func(cn string) pki.Leaf {
-		l := ca.Issue(pki.Opts{CommonName: cn}, h.clock.Now())
+	issue := func(cn string, o ...pki.Opts) pki.Leaf {
+		opts := pki.Opts{CommonName: cn}
+		if len(o) > 0 {
+			opts = o[0]
+			opts.CommonName = cn
+		}
+		l := ca.Issue(opts, h.clock.Now())
 		m := secretMarkers(t, l.Key)
-		require.Contains(t, strings.ReplaceAll(string(l.KeyPEM), "\n", ""), m[len(m)-1], "the text marker is what a PEM shows")
+		require.Contains(t, strings.ReplaceAll(string(l.KeyPEM), "\n", ""), m[5], "the text marker is what a PEM shows")
 		s.markers = append(s.markers, m...)
 		return l
 	}
@@ -121,6 +149,48 @@ func TestNoPrivateKeyOrPasswordLeaks(t *testing.T) {
 	s.add(c, w, err)
 	c, w, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{CertificatePEM: "x", PFXBase64: "eA==", PFXPassword: pw2})
 	require.Error(t, err)
+	s.add(c, w, err)
+
+	// Key encodings other than PKCS#8 (their own PEM text forms are markers), and RSA keys.
+	now := h.clock.Now()
+	rsaLeaf := issue("rsa.example.test", pki.Opts{KeyType: pki.RSA2048})
+	pkcs1 := pki.KeyPEMPKCS1(rsaLeaf.Key.(*rsa.PrivateKey))
+	require.Contains(t, strings.ReplaceAll(string(pkcs1), "\n", ""), secretMarkers(t, rsaLeaf.Key)[6])
+	c, w, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{CertificatePEM: string(rsaLeaf.FullchainPEM), PrivateKeyPEM: string(pkcs1)})
+	require.NoError(t, err)
+	s.add(c, w)
+	ecLeaf := issue("sec1.example.test")
+	sec1 := pki.KeyPEMSEC1(ecLeaf.Key.(*ecdsa.PrivateKey))
+	require.Contains(t, strings.ReplaceAll(string(sec1), "\n", ""), secretMarkers(t, ecLeaf.Key)[6])
+	c, w, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{CertificatePEM: string(ecLeaf.FullchainPEM), PrivateKeyPEM: string(sec1)})
+	require.NoError(t, err)
+	s.add(c, w)
+	// Refusals that read the key: expired, weak, a key in the certificate field, an invalid label.
+	expired := issue("old.example.test", pki.Opts{NotBefore: now.AddDate(0, -3, 0), NotAfter: now.Add(-time.Minute)})
+	c, w, err = h.svc.UploadCertificate(h.ctx, op, pemUpload(expired))
+	require.ErrorIs(t, err, inventory.ErrCertificateExpired)
+	s.add(c, w, err)
+	weak := issue("weak.example.test", pki.Opts{KeyType: pki.RSA1024})
+	c, w, err = h.svc.UploadCertificate(h.ctx, op, pemUpload(weak))
+	require.ErrorIs(t, err, inventory.ErrWeakCertificate)
+	s.add(c, w, err)
+	labelled := issue("label.example.test")
+	in := pemUpload(labelled)
+	in.Label = "bad\x00label"
+	c, w, err = h.svc.UploadCertificate(h.ctx, op, in)
+	require.Error(t, err)
+	s.add(c, w, err)
+	pasted := issue("pasted.example.test")
+	c, w, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{CertificatePEM: string(pasted.FullchainPEM) + string(pasted.KeyPEM)})
+	require.Error(t, err)
+	s.add(c, w, err)
+	// A password-protected key: its encrypted body is never shown either.
+	encrypted := pki.EncryptedKeyPEM(labelled)
+	block, _ := pem.Decode(encrypted)
+	require.NotNil(t, block)
+	s.markers = append(s.markers, hex.EncodeToString(block.Bytes[32:64]), pemTextRun(t, block.Bytes, block.Bytes[32:64]))
+	c, w, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{CertificatePEM: string(labelled.FullchainPEM), PrivateKeyPEM: string(encrypted)})
+	require.ErrorIs(t, err, inventory.ErrKeyEncrypted)
 	s.add(c, w, err)
 
 	// Signing requests: the generated keys are read back (test-only) to build their markers.
@@ -164,6 +234,6 @@ func TestNoPrivateKeyOrPasswordLeaks(t *testing.T) {
 		require.NoError(t, err)
 		s.add(full)
 	}
-	require.Len(t, s.markers, 6*6+3)
+	require.Len(t, s.markers, (10+2)*7+3+2, "10 uploaded keys, 2 generated keys, 3 passwords, 2 of the encrypted key")
 	s.check()
 }

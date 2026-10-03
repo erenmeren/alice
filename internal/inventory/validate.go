@@ -18,6 +18,8 @@ const (
 	CodeHostPort       = "validation.host_port"        // a port typed into the address field
 	CodeHostNotAllowed = "validation.host_not_allowed" // link-local, multicast, unspecified, broadcast
 	CodeHostASCII      = "validation.host_ascii"       // non-ASCII host name: type the xn-- form or the IP address
+	// CodeKeyInCertificate: a private key was pasted into the certificate field of an upload.
+	CodeKeyInCertificate = "validation.key_in_certificate"
 )
 
 // typeValues are the parameters of a refused target type.

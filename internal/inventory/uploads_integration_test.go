@@ -92,6 +92,7 @@ JOIN managed_private_keys k ON k.id = c.private_key_id AND k.public_key_sha256 =
 	assert.Equal(t, c.ID.String(), d[0]["certificate_id"])
 	assert.Equal(t, "uploaded", d[0]["source"])
 	assert.Equal(t, "pem", d[0]["format"])
+	assert.Equal(t, "chain_incomplete", d[0]["warnings"], "the warnings are kept in the audit trail")
 	var details string // every audit row's details, as text
 	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT coalesce(string_agg(details::text, ' '), '') FROM audit_log").Scan(&details))
 	assert.NotContains(t, details, string(l.KeyPEM[30:70]))
@@ -201,6 +202,13 @@ func TestUploadRefusalsAreAuditedAndStoreNothing(t *testing.T) {
 	assert.Equal(t, map[string]string{"private_key_pem": validate.Required}, fieldsOf(err))
 	_, _, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{PrivateKeyPEM: string(l.KeyPEM)})
 	assert.Equal(t, map[string]string{"certificate_pem": validate.Required}, fieldsOf(err))
+	// A key pasted into the certificate field is never used from there: the person is told to put it
+	// in the key field (the contract has no combined paste).
+	combined := string(l.FullchainPEM) + string(l.KeyPEM)
+	_, _, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{CertificatePEM: combined, PrivateKeyPEM: string(l.KeyPEM)})
+	assert.Equal(t, map[string]string{"certificate_pem": inventory.CodeKeyInCertificate}, fieldsOf(err))
+	_, _, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{CertificatePEM: combined})
+	assert.Equal(t, map[string]string{"certificate_pem": inventory.CodeKeyInCertificate, "private_key_pem": validate.Required}, fieldsOf(err))
 	_, _, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{CertificatePEM: string(l.FullchainPEM), PrivateKeyPEM: string(l.KeyPEM),
 		Label: "tab\there"})
 	assert.Equal(t, map[string]string{"label": validate.Pattern}, fieldsOf(err))
@@ -262,7 +270,7 @@ func TestUploadAttachesTheKeyOfADiscoveredCertificate(t *testing.T) {
 	assert.Equal(t, 1, c.LocationCount)
 	require.Len(t, h.auditDetails("certificate.key_attached"), 1)
 	assert.Equal(t, map[string]string{"certificate_id": c.ID.String(), "fingerprint": c.Fingerprint, "format": "pem", "algorithm": "ecdsa",
-		"bits": "256"}, h.auditDetails("certificate.key_attached")[0])
+		"bits": "256", "warnings": ""}, h.auditDetails("certificate.key_attached")[0])
 	assert.Equal(t, 0, h.audits("certificate.uploaded"))
 
 	// Again: refused, nothing stored, nothing changed.
@@ -478,4 +486,55 @@ func TestFailedPFXUploadIsAudited(t *testing.T) {
 	release, ok := inventory.HoldPFXSlots(2)
 	require.True(t, ok)
 	release()
+}
+
+// The PFX size bound is on the file, not its text: line breaks of a wrapped base64 do not count.
+func TestPFXSizeBoundIgnoresLineBreaks(t *testing.T) {
+	h := newHarness(t)
+	op := h.user("oya", rbac.Operator, "")
+	wrap := func(n int) string {
+		text := base64.StdEncoding.EncodeToString(make([]byte, n))
+		var b strings.Builder
+		for len(text) > 64 {
+			b.WriteString(text[:64] + "\r\n")
+			text = text[64:]
+		}
+		b.WriteString(text)
+		return b.String()
+	}
+	limit := 256 << 10
+	require.Greater(t, len(wrap(limit)), base64.StdEncoding.EncodedLen(limit), "the wrapped text is longer than the bound's encoding")
+	_, _, err := h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{PFXBase64: wrap(limit), PFXPassword: "pw"})
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, inventory.ErrCertificateTooLarge, "a file of exactly 256 KiB is read")
+	_, _, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{PFXBase64: wrap(limit + 1), PFXPassword: "pw"})
+	require.ErrorIs(t, err, inventory.ErrCertificateTooLarge)
+	_, _, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{PFXBase64: "ZW Fz\neQ==", PFXPassword: "pw"})
+	require.ErrorIs(t, err, inventory.ErrPFXPassword, "blanks inside the text are ignored")
+}
+
+// A panic while a file is decoded becomes an internal error: the attempt is audited, the PFX slot
+// comes back, and neither the audit nor the log carries the panic's text.
+func TestDecoderPanicIsAnAuditedInternalError(t *testing.T) {
+	h := newHarness(t)
+	op := h.user("oya", rbac.Operator, "")
+	restore := inventory.SetValidateUpload(func(certs.Upload, time.Time, *x509.CertPool) (certs.Validated, error) {
+		panic("decoder exploded on SECRET-INPUT")
+	})
+	defer restore()
+	_, _, err := h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{PFXBase64: "eA==", PFXPassword: "pw"})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "SECRET-INPUT")
+	for _, sentinel := range []error{inventory.ErrCertificateInvalid, inventory.ErrPFXPassword, inventory.ErrCertificateTooLarge} {
+		assert.NotErrorIs(t, err, sentinel)
+	}
+	assert.Equal(t, []string{"internal"}, rejectReasons(h))
+	release, ok := inventory.HoldPFXSlots(2)
+	require.True(t, ok, "the slot is back")
+	release()
+	assert.Contains(t, h.logs.String(), "decoding an uploaded certificate failed")
+	assert.NotContains(t, h.logs.String(), "SECRET-INPUT")
+	var details string
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT coalesce(string_agg(details::text, ' '), '') FROM audit_log").Scan(&details))
+	assert.NotContains(t, details, "SECRET-INPUT")
 }

@@ -68,7 +68,8 @@ func (s *Service) UpdateLocation(ctx context.Context, a Actor, id uuid.UUID, ifV
 	}
 	var out CertificateLocation
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		// Only the location row is locked (a scan locks its target first, then its locations).
+		// Only the location row is locked (a scan locks its target first, then its locations), and
+		// FOR NO KEY UPDATE: a deployment inserted meanwhile that references it is not blocked.
 		var (
 			version           int
 			port              *int
@@ -76,7 +77,7 @@ func (s *Service) UpdateLocation(ctx context.Context, a Actor, id uuid.UUID, ifV
 			skip, targetAlive bool
 		)
 		err := tx.QueryRow(ctx, `SELECT l.version, l.verify_port, l.verify_sni, l.skip_verify, t.deleted_at IS NULL
-FROM certificate_locations l JOIN targets t ON t.id = l.target_id WHERE l.id = $1 FOR UPDATE OF l`, id).
+FROM certificate_locations l JOIN targets t ON t.id = l.target_id WHERE l.id = $1 FOR NO KEY UPDATE OF l`, id).
 			Scan(&version, &port, &curSNI, &skip, &targetAlive)
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !targetAlive) {
 			return ErrNotFound
