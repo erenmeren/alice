@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/certs"
 	"alice/internal/providers"
 	"alice/internal/testutil/pki"
 )
@@ -157,4 +158,13 @@ func TestMergeNginxFacts(t *testing.T) {
 		mergeNginxFacts(old, providers.NginxFacts{Found: true, ConfigError: "syntax"}))
 	assert.Equal(t, &providers.NginxFacts{}, mergeNginxFacts(old, providers.NginxFacts{}), "Nginx gone: nothing is kept")
 	assert.Equal(t, &providers.NginxFacts{Found: true, Version: "1.�"}, mergeNginxFacts(nil, providers.NginxFacts{Found: true, Version: "1.\x00"}))
+}
+
+func TestLeafPEMIsTheFirstBlock(t *testing.T) {
+	ca := pki.NewCA("Unit", pki.ECDSA256, unitNow)
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test"}, unitNow)
+	p, err := certs.ParseChainPEM(leaf.FullchainPEM)
+	require.NoError(t, err)
+	require.Len(t, p.Chain, 1)
+	assert.Equal(t, string(leaf.CertPEM), leafPEM(p))
 }
