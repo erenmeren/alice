@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
+	"slices"
 )
 
 // ErrUnsupported is returned by sessions for capabilities the provider does not have.
@@ -43,11 +45,12 @@ func (e *Error) MarshalJSON() ([]byte, error) {
 	}{e.Code, e.Params})
 }
 
-// LogValue implements slog.LogValuer: only Code and Params are logged, never the cause.
+// LogValue implements slog.LogValuer: only Code and Params are logged, never the cause. Params
+// are logged in key order, so equal errors give equal log lines.
 func (e *Error) LogValue() slog.Value {
 	attrs := []slog.Attr{slog.String("code", e.Code)}
-	for k, v := range e.Params {
-		attrs = append(attrs, slog.String("param."+k, v))
+	for _, k := range slices.Sorted(maps.Keys(e.Params)) {
+		attrs = append(attrs, slog.String("param."+k, e.Params[k]))
 	}
 	return slog.GroupValue(attrs...)
 }

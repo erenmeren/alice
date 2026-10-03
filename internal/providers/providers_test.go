@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 
@@ -239,4 +240,39 @@ func TestRegistryConcurrentUseBeforeFreeze(t *testing.T) {
 	wg.Wait()
 	r.Freeze()
 	assert.Len(t, r.List(), 3)
+}
+
+// A-9: a field pattern is matched as ^(?:pattern)$ (like the HTML pattern attribute), so an
+// alternation that only looks anchored ("^a|b$") cannot match a value that merely starts or ends
+// right.
+func TestFieldPatternIsFullyAnchored(t *testing.T) {
+	f := providers.Field{Name: "x", Type: providers.FieldString, Pattern: `^admin|ops$`}
+	assert.True(t, f.MatchPattern("admin"))
+	assert.True(t, f.MatchPattern("ops"))
+	for _, v := range []string{"admin; rm -rf /", "x ops", "adminops"} {
+		assert.False(t, f.MatchPattern(v), "%q", v)
+	}
+	assert.True(t, providers.Field{Name: "y"}.MatchPattern("anything"), "no pattern accepts everything")
+	assert.False(t, providers.Field{Name: "z", Pattern: `^[a$`}.MatchPattern("a"), "a broken pattern accepts nothing")
+}
+
+// A-9: the log value lists params in key order, so equal errors log the same line.
+func TestErrorLogValueIsDeterministic(t *testing.T) {
+	params := map[string]string{}
+	for _, k := range []string{"zeta", "alpha", "mid", "beta", "omega", "gamma", "delta", "kappa"} {
+		params[k] = k
+	}
+	err := providers.NewError("ssh.timeout", true, nil, params)
+	first := ""
+	for i := 0; i < 20; i++ {
+		var buf bytes.Buffer
+		slog.New(slog.NewTextHandler(&buf, nil)).Info("x", "err", err)
+		line := buf.String()[strings.Index(buf.String(), "err."):]
+		if i == 0 {
+			first = line
+			assert.Regexp(t, `err.code=ssh.timeout err.param.alpha=alpha err.param.beta=beta err.param.delta=delta`, line)
+			continue
+		}
+		assert.Equal(t, first, line)
+	}
 }

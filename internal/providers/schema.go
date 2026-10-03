@@ -28,9 +28,24 @@ type Field struct {
 	Default  any
 	LabelKey string // i18n key, e.g. "provider.linuxssh.fields.host.label"
 	HelpKey  string
-	Pattern  string // Go regexp, anchored
+	Pattern  string // Go regexp starting with ^ and ending with $; matched as ^(?:Pattern)$ (MatchPattern)
 	Min, Max int    // ints: value range; strings: length range (0 = unbounded)
 	Values   []string
+}
+
+// anchored wraps a pattern so that it must match the whole value: "^a|b$" alone matches every
+// value that starts with a or ends with b; ^(?:^a|b$)$ only "a" and "b" (the HTML pattern attribute
+// is matched the same way).
+func anchored(pattern string) (*regexp.Regexp, error) { return regexp.Compile("^(?:" + pattern + ")$") }
+
+// MatchPattern reports whether v matches the field's Pattern as a whole (true without a pattern,
+// false for a pattern that does not compile).
+func (f Field) MatchPattern(v string) bool {
+	if f.Pattern == "" {
+		return true
+	}
+	re, err := anchored(f.Pattern)
+	return err == nil && re.MatchString(v)
 }
 
 // ConfigSchema describes the non-secret target config.
@@ -71,7 +86,7 @@ func checkFields(fields []Field) error {
 			if !strings.HasPrefix(f.Pattern, "^") || !strings.HasSuffix(f.Pattern, "$") {
 				return fmt.Errorf("field %q has a pattern that is not anchored with ^ and $", f.Name)
 			}
-			if _, err := regexp.Compile(f.Pattern); err != nil {
+			if _, err := anchored(f.Pattern); err != nil {
 				return fmt.Errorf("field %q has a pattern that does not compile", f.Name)
 			}
 		}
