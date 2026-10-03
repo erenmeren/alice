@@ -542,12 +542,23 @@ func TestAttackWritableFileThatContributesToAPair(t *testing.T) {
 			"listen 443 ssl;\n", "config_file_writable"},
 		"inherited http-level key": {"http { include /etc/nginx/snip.conf; server { listen 443 ssl; ssl_certificate /etc/nginx/ssl/www.crt; } }\n",
 			"ssl_certificate_key /etc/nginx/ssl/www.key;\n", "config_file_writable"},
+		"root snippet included by the writable file at http level": {"http { include /etc/nginx/snip.conf; server { listen 443 ssl; } }\n",
+			"include /etc/nginx/rootsnip.conf;\n", "config_file_writable"},
+		"root server block activated by the writable file": {"http { include /etc/nginx/snip.conf; }\n",
+			"include /etc/nginx/rootserver.conf;\n", "config_file_writable"},
 		"unrelated writable file": {"http { include /etc/nginx/snip.conf; server { listen 443 ssl; ssl_certificate /etc/nginx/ssl/www.crt; ssl_certificate_key /etc/nginx/ssl/www.key; } }\n",
 			"server_names_hash_bucket_size 64;\n", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newNginxWorld(t)
-			w.setConf(confFile{"/etc/nginx/nginx.conf", tc.main}, confFile{"/etc/nginx/snip.conf", tc.snippet})
+			files := []confFile{{"/etc/nginx/nginx.conf", tc.main}, {"/etc/nginx/snip.conf", tc.snippet}}
+			switch {
+			case strings.Contains(tc.snippet, "rootsnip"): // root's own file, e.g. Debian's snippets/snakeoil.conf
+				files = append(files, confFile{"/etc/nginx/rootsnip.conf", "ssl_certificate /etc/nginx/ssl/www.crt;\nssl_certificate_key /etc/nginx/ssl/www.key;\n"})
+			case strings.Contains(tc.snippet, "rootserver"): // a site root wrote but did not enable
+				files = append(files, confFile{"/etc/nginx/rootserver.conf", "server { listen 443 ssl; ssl_certificate /etc/nginx/ssl/www.crt; ssl_certificate_key /etc/nginx/ssl/www.key; }\n"})
+			}
+			w.setConf(files...)
 			require.NoError(t, os.Chmod(w.f.host("/etc/nginx/snip.conf"), 0o646))
 			_, m := w.f.run("nginx-dump")
 			require.Equal(t, true, m["config_valid"], "%v", m)

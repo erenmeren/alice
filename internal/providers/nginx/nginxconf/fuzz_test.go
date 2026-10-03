@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -59,6 +60,14 @@ func FuzzParseNginxConfig(f *testing.F) {
 			for _, p := range s.Pairs {
 				if !sections[p.CertFile] || (p.KeyRaw != "" && !sections[p.KeyFile]) {
 					t.Fatalf("a directive file is not a section: %+v", p)
+				}
+				for _, f := range p.Files {
+					if !sections[f] {
+						t.Fatalf("pair file %q is not a section", f)
+					}
+				}
+				if !slices.Contains(p.Files, p.CertFile) || (p.KeyRaw != "" && !slices.Contains(p.Files, p.KeyFile)) {
+					t.Fatalf("a pair's files miss its directive files: %+v", p)
 				}
 				for _, path := range []string{p.Cert, p.Key} {
 					if path != "" && !helperproto.ValidPath(path) {

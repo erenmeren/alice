@@ -40,8 +40,9 @@ func TestSingle(t *testing.T) {
 	assert.Equal(t, []Listen{{Port: 443, SSL: true}, {Addr: "::", Port: 443, SSL: true}}, SSLListens(s))
 	assert.Equal(t, []Pair{{Cert: "/etc/nginx/ssl/www.crt", Key: "/etc/nginx/ssl/www.key",
 		CertRaw: "/etc/nginx/ssl/www.crt", KeyRaw: "/etc/nginx/ssl/www.key",
-		CertFile: "/etc/nginx/conf.d/www.conf", KeyFile: "/etc/nginx/conf.d/www.conf"}}, s.Pairs)
-	assert.Equal(t, []string{"/etc/nginx/conf.d/www.conf"}, s.Files)
+		CertFile: "/etc/nginx/conf.d/www.conf", KeyFile: "/etc/nginx/conf.d/www.conf",
+		Files: []string{"/etc/nginx/conf.d/www.conf", "/etc/nginx/nginx.conf"}}}, s.Pairs)
+	assert.Equal(t, []string{"/etc/nginx/conf.d/www.conf", "/etc/nginx/nginx.conf"}, s.Files, "nginx.conf includes www.conf")
 	assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/conf.d/www.conf"}, c.Files)
 	assert.True(t, c.HasPair("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key"))
 	assert.False(t, c.HasPair("/etc/nginx/ssl/www.crt", "/etc/shadow"))
@@ -210,15 +211,27 @@ func TestDirectiveFilesAreReported(t *testing.T) {
 	c := parseInline(t, in)
 	require.Len(t, c.Servers, 2)
 	a, b := c.Servers[0], c.Servers[1]
-	assert.Equal(t, []string{"/etc/nginx/sites/a", "/etc/nginx/snippets/tls.conf"}, a.Files)
+	assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/sites/a", "/etc/nginx/snippets/tls.conf"}, a.Files)
 	assert.Equal(t, "/etc/nginx/snippets/tls.conf", a.Pairs[0].CertFile)
 	assert.Equal(t, "/etc/nginx/snippets/tls.conf", a.Pairs[0].KeyFile)
+	assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/sites/a", "/etc/nginx/snippets/tls.conf"}, a.Pairs[0].Files,
+		"the snippet, the site that includes it and nginx.conf that includes the site")
 	assert.Equal(t, "/etc/nginx/sites/a", a.Pairs[1].CertFile)
 	assert.Equal(t, "", a.Pairs[1].KeyFile, "no second key directive")
-	assert.Equal(t, []string{"/etc/nginx/sites/b"}, b.Files)
+	assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/sites/a"}, a.Pairs[1].Files)
+	assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/sites/b"}, b.Files)
 	assert.Equal(t, "/etc/nginx/sites/b", b.Pairs[0].CertFile)
 	assert.Equal(t, "/etc/nginx/nginx.conf", b.Pairs[0].KeyFile, "inherited from the http block")
 	assert.True(t, b.Pairs[0].Inherited)
+
+	// A root file brought in by another file's include is attributed to that file too.
+	in = "# configuration file /etc/nginx/nginx.conf:\nhttp { include /etc/nginx/user.conf; server { listen 443 ssl; } }\n" +
+		"# configuration file /etc/nginx/user.conf:\ninclude /etc/nginx/snakeoil.conf;\n" +
+		"# configuration file /etc/nginx/snakeoil.conf:\nssl_certificate /etc/ssl/s.pem;\nssl_certificate_key /etc/ssl/s.key;\n"
+	c = parseInline(t, in)
+	require.Len(t, c.Servers, 1)
+	assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/snakeoil.conf", "/etc/nginx/user.conf"}, c.Servers[0].Pairs[0].Files)
+	assert.Equal(t, []string{"/etc/nginx/nginx.conf"}, c.Servers[0].Files)
 }
 
 func manyFiles(n int) string {
@@ -371,7 +384,7 @@ func TestHostileSizesFinishQuickly(t *testing.T) {
 			start := time.Now()
 			_, err := Parse([]byte(in), "/etc/nginx")
 			assert.Error(t, err)
-			assert.Less(t, time.Since(start), 2*time.Second)
+			assert.Less(t, time.Since(start), 2*time.Second*raceSlowdown)
 		})
 	}
 }

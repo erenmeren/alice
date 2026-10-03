@@ -16,8 +16,9 @@
 // therefore compare every section, byte for byte, with the real file (Config.Sections gives the
 // name and the exact bytes of each) before it relies on the parse. Paths are decided on the raw
 // text: a "." or ".." segment is never accepted, so no textual folding can differ from what the
-// kernel opens. Server.Files, Pair.CertFile and Pair.KeyFile name the files each server block and
-// directive came from, so the caller can refuse what a user other than root could have written.
+// kernel opens. Server.Files and Pair.Files name every file that holds a server block or a
+// directive, or brought it in through an include, so the caller can refuse what a user other than
+// root could have written or activated.
 package nginxconf
 
 import (
@@ -98,6 +99,9 @@ type Pair struct {
 	// CertFile and KeyFile are the configuration files (raw marker names) of the ssl_certificate
 	// and ssl_certificate_key directives ("" when there is no key directive).
 	CertFile, KeyFile string
+	// Files is every file (raw marker names, sorted) that holds one of the two directives or
+	// includes, directly or through other files, a file that holds one.
+	Files []string
 }
 
 // Server is one server block that serves TLS with at least one certificate.
@@ -109,7 +113,7 @@ type Server struct {
 	Pairs   []Pair
 	Stream  bool
 	// Files is every configuration file (raw marker names, sorted) that holds the block or a
-	// directive spliced into it by an include.
+	// directive spliced into it, and every file whose include directives brought them in.
 	Files []string
 }
 
@@ -141,7 +145,15 @@ type token struct {
 	line  int // line within file, 1-based
 }
 
+// includeLink is one include directive that spliced a file in: the file that holds the directive,
+// and the link that brought that file in (nil at the top). Spliced nodes share the chain.
+type includeLink struct {
+	file string
+	next *includeLink
+}
+
 type node struct {
+	via      *includeLink // the include chain that spliced this node in (set while expanding)
 	name     string
 	args     []token
 	file     string
@@ -574,7 +586,7 @@ type expander struct {
 	work    int // remaining glob matching budget
 }
 
-func (e *expander) expand(nodes []node, depth int) ([]node, error) {
+func (e *expander) expand(nodes []node, depth int, via *includeLink) ([]node, error) {
 	if depth > MaxDepth {
 		return nil, ErrTooDeep
 	}
@@ -583,9 +595,10 @@ func (e *expander) expand(nodes []node, depth int) ([]node, error) {
 		if e.nodes--; e.nodes < 0 {
 			return nil, ErrTooComplex
 		}
+		n.via = via
 		switch {
 		case n.block:
-			kids, err := e.expand(n.children, depth+1)
+			kids, err := e.expand(n.children, depth+1, via)
 			if err != nil {
 				return nil, err
 			}
@@ -604,7 +617,7 @@ func (e *expander) expand(nodes []node, depth int) ([]node, error) {
 					return nil, ErrIncludeLoop
 				}
 				e.active[i] = true
-				sub, err := e.expand(e.secs[i].nodes, depth)
+				sub, err := e.expand(e.secs[i].nodes, depth, &includeLink{file: n.file, next: via})
 				e.active[i] = false
 				if err != nil {
 					return nil, err
@@ -720,7 +733,7 @@ func Parse(dump []byte, confDir string) (Config, error) {
 		}
 	}
 	e.active[0] = true
-	tree, err := e.expand(secs[0].nodes, 0)
+	tree, err := e.expand(secs[0].nodes, 0, nil)
 	if err != nil {
 		return Config{}, err
 	}
@@ -737,9 +750,11 @@ func Parse(dump []byte, confDir string) (Config, error) {
 	return c, nil
 }
 
-// directive is the first argument of a directive and the file that holds the directive.
+// directive is the first argument of a directive, the file that holds the directive and the
+// include chain that brought it in.
 type directive struct {
 	arg, file string
+	via       *includeLink
 }
 
 type sslDirs struct {
@@ -757,9 +772,9 @@ func collect(nodes []node) sslDirs {
 		}
 		switch n.name {
 		case "ssl_certificate":
-			d.certs = append(d.certs, directive{n.args[0].text, n.file})
+			d.certs = append(d.certs, directive{n.args[0].text, n.file, n.via})
 		case "ssl_certificate_key":
-			d.keys = append(d.keys, directive{n.args[0].text, n.file})
+			d.keys = append(d.keys, directive{n.args[0].text, n.file, n.via})
 		case "ssl_password_file":
 			d.password = true
 		case "ssl":
@@ -800,6 +815,9 @@ func (c *Config) http(children []node, confDir string) {
 			pr := Pair{CertRaw: cr.arg, CertFile: cr.file, Inherited: inhC || (inhK && len(top.keys) > 0)}
 			if i < len(keys) {
 				pr.KeyRaw, pr.KeyFile = keys[i].arg, keys[i].file
+				pr.Files = pairFiles(cr, keys[i])
+			} else {
+				pr.Files = pairFiles(cr)
 			}
 			pr.Cert, pr.Key, pr.Unsupported = resolvePair(pr.CertRaw, pr.KeyRaw, confDir, password)
 			s.Pairs = append(s.Pairs, pr)
@@ -839,6 +857,9 @@ func (c *Config) stream(children []node) {
 			pr := Pair{CertRaw: cr.arg, CertFile: cr.file, Unsupported: ReasonStream, Inherited: inhC || (inhK && len(top.keys) > 0)}
 			if i < len(keys) {
 				pr.KeyRaw, pr.KeyFile = keys[i].arg, keys[i].file
+				pr.Files = pairFiles(cr, keys[i])
+			} else {
+				pr.Files = pairFiles(cr)
 			}
 			s.Pairs = append(s.Pairs, pr)
 		}
@@ -896,21 +917,56 @@ func server(n node, sslOn bool) Server {
 	return s
 }
 
-// blockFiles returns the files of a block and of everything spliced into it, sorted.
+// fileSet collects file names and the files of include chains; a chain shared by many nodes is
+// walked once.
+type fileSet struct {
+	files []string
+	seen  map[*includeLink]bool
+}
+
+func (f *fileSet) add(file string, via *includeLink) {
+	if !slices.Contains(f.files, file) {
+		f.files = append(f.files, file)
+	}
+	for l := via; l != nil && !f.seen[l]; l = l.next {
+		if f.seen == nil {
+			f.seen = map[*includeLink]bool{}
+		}
+		f.seen[l] = true
+		if !slices.Contains(f.files, l.file) {
+			f.files = append(f.files, l.file)
+		}
+	}
+}
+
+func (f *fileSet) sorted() []string {
+	slices.Sort(f.files)
+	return f.files
+}
+
+// blockFiles returns the files of a block and of everything spliced into it, and the files whose
+// include directives brought them in, sorted.
 func blockFiles(n node) []string {
-	files := []string{n.file}
+	var fs fileSet
+	fs.add(n.file, n.via)
 	var walk func(nodes []node)
 	walk = func(nodes []node) {
 		for _, c := range nodes {
-			if !slices.Contains(files, c.file) {
-				files = append(files, c.file)
-			}
+			fs.add(c.file, c.via)
 			walk(c.children)
 		}
 	}
 	walk(n.children)
-	slices.Sort(files)
-	return files
+	return fs.sorted()
+}
+
+// pairFiles returns the files of a pair's directives and of their include chains, sorted.
+func pairFiles(ds ...directive) []string {
+	var fs fileSet
+	for _, d := range ds {
+		fs.add(d.file, d.via)
+	}
+	return fs.sorted()
 }
 
 func hasSSL(s Server) bool { return len(SSLListens(s)) > 0 }

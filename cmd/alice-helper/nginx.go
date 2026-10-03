@@ -212,8 +212,9 @@ func (s *sys) sameContent(name string, body []byte) (unix.Stat_t, error) {
 }
 
 // refuseWritable marks every supported pair unsupported when a file that holds its server block,
-// anything spliced into it, or its ssl_certificate or ssl_certificate_key directive is writable
-// by a user other than root (S1): that user could name any root-controlled file as the pair.
+// anything spliced into it, or its ssl_certificate or ssl_certificate_key directive, or a file
+// whose include brought any of these in, is writable by a user other than root (S1): that user
+// could name, or activate, any root-controlled file as the pair.
 func refuseWritable(cfg *nginxconf.Config, writable []string) {
 	if len(writable) == 0 {
 		return
@@ -224,7 +225,7 @@ func refuseWritable(cfg *nginxconf.Config, writable []string) {
 		server := slices.ContainsFunc(sv.Files, bad)
 		for j := range sv.Pairs {
 			p := &sv.Pairs[j]
-			if p.Unsupported == "" && (server || bad(p.CertFile) || bad(p.KeyFile)) {
+			if p.Unsupported == "" && (server || slices.ContainsFunc(p.Files, bad)) {
 				p.Unsupported = nginxconf.ReasonConfigFileWritable
 			}
 		}
