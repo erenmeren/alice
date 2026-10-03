@@ -52,3 +52,6 @@ func HoldPFXSlots(n int) (release func(), ok bool) {
 	}
 	return release, true
 }
+
+// ValidSNI exposes validSNI to the test that compares it with helperproto.ValidSNI.
+func ValidSNI(s string) bool { return validSNI(s) }
