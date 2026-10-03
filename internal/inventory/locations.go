@@ -150,6 +150,14 @@ func prepareLocation(d providers.DiscoveredCertificate, now time.Time) (prepared
 			l.Unsupported = providers.UnsupportedFile
 		}
 	}
+	if l.Unsupported == "" && p.fileSHA == "" {
+		// Reported supported without a certificate read or without the file's hash: a deployment
+		// would have no compare-and-swap value.
+		if l.Problem == "" {
+			l.Problem = providers.CertProblemUnreadable
+		}
+		l.Unsupported = providers.UnsupportedFile
+	}
 	var added []string
 	if p.cert != nil {
 		switch p.cert.Algorithm {
@@ -238,20 +246,35 @@ func serverTextSize(s providers.CertServer) int {
 	return buf.Len() - 1 + 7 + max(len(s.Names)-1, 0) + max(len(s.Listens)-1, 0) + 5*len(s.Listens)
 }
 
-// sanMismatch reports whether a server name is not covered by the certificate's SANs. The
-// catch-all "_", an empty name and a regular expression (~...) say nothing about a host name.
+// sanMismatch reports whether a server name is not covered by the certificate's SANs, in Nginx's
+// server_name forms: ".example.test" (example.test and its subdomains) needs example.test,
+// "*.example.test" needs that wildcard, "www.example.*" needs a SAN that starts with "www.example.".
+// The catch-all "_", an empty name and a regular expression (~...) say nothing about a host name.
 func sanMismatch(sans []string, servers []providers.CertServer) bool {
 	for _, s := range servers {
 		for _, n := range s.Names {
 			if n == "" || n == "_" || strings.HasPrefix(n, "~") {
 				continue
 			}
-			if !certs.SANMatches(sans, n) {
+			if !nameCovered(sans, n) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func nameCovered(sans []string, n string) bool {
+	switch {
+	case strings.HasPrefix(n, "."):
+		return certs.SANMatches(sans, n[1:])
+	case strings.HasSuffix(n, ".*"):
+		prefix := n[:len(n)-1] // "www.example."
+		return slices.ContainsFunc(sans, func(san string) bool {
+			return len(san) > len(prefix) && !strings.HasPrefix(san, "*") && strings.EqualFold(san[:len(prefix)], prefix)
+		})
+	}
+	return certs.SANMatches(sans, n)
 }
 
 // locationWarnings is the provider's location warnings that have the code shape, each once, then
@@ -443,26 +466,36 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
 	return id, nil
 }
 
-// updateLocation writes a reported location over the stored one. Settings a person made
-// (verify_port, verify_sni, skip_verify) and what a deployment recorded (deployed_fingerprint)
-// are not touched; the version moves only when a stored value changes, so an unchanged scan does
-// not make a pending If-Match stale.
+// updateLocation writes a reported location over the stored one. When nothing reported differs
+// from what is stored (and the location was not missing), only last_seen_at is written, so a large
+// servers value is not written again on every scan and the version stays: an unchanged scan does
+// not make a pending If-Match stale. Settings a person made (verify_port, verify_sni,
+// skip_verify) and what a deployment recorded (deployed_fingerprint) are never touched.
 func updateLocation(ctx context.Context, tx pgx.Tx, id uuid.UUID, p preparedLocation, certID *uuid.UUID, fileSHA, keyType string,
 	changedOutside bool, now time.Time) error {
 	l := p.loc
-	_, err := tx.Exec(ctx, `UPDATE certificate_locations SET
-    version = version + CASE WHEN missing_since IS NOT NULL OR $20::boolean
-        OR (key_path, resolved_cert_path, certificate_id, key_type, servers, supported, unsupported_reason, problem, key_problem, inherited,
-            custom_location, symlinked, cert_file_sha256, key_exists, key_mode, key_owner, key_group, warnings)
-           IS DISTINCT FROM ($2::text, $3::text, $4::uuid, $5::text, $6::jsonb, $7::boolean, $8::text, $9::text, $10::text, $11::boolean,
-            $12::boolean, $13::boolean, $14::text, $15::boolean, $16::text, $17::text, $18::text, $19::text[])
-        THEN 1 ELSE 0 END,
+	args := []any{id, l.KeyPath, l.ResolvedCertPath, certID, keyType, p.servers, l.Supported, l.Unsupported, l.Problem, l.KeyProblem,
+		l.Inherited, l.CustomLocation, l.Symlinked, fileSHA, l.KeyExists, l.KeyMode, l.KeyOwner, l.KeyGroup, p.warnings, changedOutside, now}
+	if !changedOutside {
+		tag, err := tx.Exec(ctx, `UPDATE certificate_locations SET last_seen_at = $21
+WHERE id = $1 AND missing_since IS NULL AND NOT $20::boolean
+  AND (key_path, resolved_cert_path, certificate_id, key_type, servers, supported, unsupported_reason, problem, key_problem, inherited,
+       custom_location, symlinked, cert_file_sha256, key_exists, key_mode, key_owner, key_group, warnings)
+      IS NOT DISTINCT FROM ($2::text, $3::text, $4::uuid, $5::text, $6::jsonb, $7::boolean, $8::text, $9::text, $10::text, $11::boolean,
+       $12::boolean, $13::boolean, $14::text, $15::boolean, $16::text, $17::text, $18::text, $19::text[])`, args...)
+		if err != nil {
+			return fmt.Errorf("inventory: update certificate location: %w", err)
+		}
+		if tag.RowsAffected() == 1 {
+			return nil
+		}
+	}
+	_, err := tx.Exec(ctx, `UPDATE certificate_locations SET version = version + 1,
     key_path = $2, resolved_cert_path = $3, certificate_id = $4, key_type = $5, servers = $6, supported = $7, unsupported_reason = $8,
     problem = $9, key_problem = $10, inherited = $11, custom_location = $12, symlinked = $13, cert_file_sha256 = $14, key_exists = $15,
     key_mode = $16, key_owner = $17, key_group = $18, warnings = $19, last_seen_at = $21, missing_since = NULL,
     changed_outside_at = CASE WHEN $20 THEN $21 ELSE changed_outside_at END
-WHERE id = $1`, id, l.KeyPath, l.ResolvedCertPath, certID, keyType, p.servers, l.Supported, l.Unsupported, l.Problem, l.KeyProblem,
-		l.Inherited, l.CustomLocation, l.Symlinked, fileSHA, l.KeyExists, l.KeyMode, l.KeyOwner, l.KeyGroup, p.warnings, changedOutside, now)
+WHERE id = $1`, args...)
 	if err != nil {
 		return fmt.Errorf("inventory: update certificate location: %w", err)
 	}
@@ -532,13 +565,15 @@ func collectCertLocations(rows pgx.Rows) ([]CertificateLocation, error) {
 }
 
 // ListLocations returns the certificate locations of a live target (missing ones only when
-// asked), ordered by the first server name, then the certificate path.
+// asked, after the others), ordered by the first server name, then the certificate path; at most
+// MaxListedLocations (only missing ones can be left out, see MaxListedLocations).
 func (s *Service) ListLocations(ctx context.Context, targetID uuid.UUID, includeMissing bool) ([]CertificateLocation, error) {
 	if _, err := s.GetTarget(ctx, targetID); err != nil {
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx, certLocationSelect+` WHERE l.target_id = $1 AND ($2 OR l.missing_since IS NULL)
-ORDER BY l.servers->0->'names'->>0 NULLS LAST, l.cert_path, l.id`, targetID, includeMissing)
+ORDER BY l.missing_since IS NOT NULL, l.servers->0->'names'->>0 NULLS LAST, l.cert_path, l.id
+LIMIT $3`, targetID, includeMissing, MaxListedLocations)
 	if err != nil {
 		return nil, fmt.Errorf("inventory: list certificate locations: %w", err)
 	}

@@ -66,6 +66,15 @@ func TestSANMismatch(t *testing.T) {
 	assert.True(t, sanMismatch(sans, srv("a.b.example.test")))
 	assert.True(t, sanMismatch(nil, srv("example.test")))
 	assert.False(t, sanMismatch(nil, nil))
+	// Nginx's forms: ".example.test" is example.test and its subdomains, "*.example.test" a
+	// leading wildcard, "www.example.*" a trailing one.
+	assert.False(t, sanMismatch([]string{"example.test"}, srv(".example.test")))
+	assert.True(t, sanMismatch([]string{"www.example.test"}, srv(".example.test")))
+	assert.False(t, sanMismatch([]string{"*.example.test"}, srv("*.example.test")))
+	assert.True(t, sanMismatch([]string{"www.example.test"}, srv("*.example.test")))
+	assert.False(t, sanMismatch([]string{"WWW.example.org"}, srv("www.example.*")))
+	assert.True(t, sanMismatch([]string{"api.example.org", "*.example.org"}, srv("www.example.*")))
+	assert.False(t, sanMismatch(nil, srv("~^(?<sub>.+)\\.example\\.test$")))
 }
 
 func TestPrepareLocation(t *testing.T) {

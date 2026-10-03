@@ -125,6 +125,10 @@ func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.Dis
 		if err != nil {
 			return err
 		}
+		if t.Type != TypeNginx {
+			// Certificates belong to Nginx targets only: another target type's result is its SSH half.
+			res.Nginx, res.Certificates = nil, nil
+		}
 		platformFP := ""
 		pk, err := loadPlatformKey(ctx, tx)
 		switch {
@@ -218,9 +222,11 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL A
 			return err
 		}
 		// Only a scan that read sshd's settings decides F-35: the defaults assumed otherwise say nothing.
+		// Only a scan of the SSH half is a discovery for the schedule (last_discovery_at).
 		if _, err := tx.Exec(ctx, `UPDATE targets SET facts = $2,
-    keys_managed_elsewhere = CASE WHEN $5 THEN $3 ELSE keys_managed_elsewhere END, last_discovery_at = $4, updated_at = $4
-WHERE id = $1`, id, raw, res.SSHD.KeysManagedElsewhere, now, res.SSHD.Read); err != nil {
+    keys_managed_elsewhere = CASE WHEN $5 THEN $3 ELSE keys_managed_elsewhere END,
+    last_discovery_at = CASE WHEN $6 THEN $4 ELSE last_discovery_at END, updated_at = $4
+WHERE id = $1`, id, raw, res.SSHD.KeysManagedElsewhere, now, res.SSHD.Read, sshHalfRead(res)); err != nil {
 			return fmt.Errorf("inventory: store discovery facts: %w", err)
 		}
 		// The scan reached the server: an unreachable target is connected again (statusAfterSuccess).

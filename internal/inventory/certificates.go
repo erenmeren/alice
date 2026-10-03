@@ -51,7 +51,9 @@ type Certificate struct {
 	LocationCount int // locations on live targets that are not missing
 	FirstSeenAt   time.Time
 	LastSeenAt    time.Time
-	Locations     []CertificateLocation // GetCertificate only
+	Locations     []CertificateLocation // GetCertificate only: at most MaxListedLocations
+	// LocationsTruncated: GetCertificate left locations out (more than MaxListedLocations).
+	LocationsTruncated bool
 }
 
 // CertificateLocation is one certificate file an Nginx target uses (spec §7.3): its key file, the
@@ -106,6 +108,11 @@ type CertificatePage struct {
 	Items      []Certificate
 	NextCursor string
 }
+
+// MaxListedLocations bounds ListLocations and GetCertificate's locations. A target never has that
+// many locations in use (the provider lists at most helperproto.MaxNginxFiles, 1000); only missing
+// ones accumulate, and those are listed last.
+const MaxListedLocations = 1000
 
 const (
 	defaultCertificateLimit = 50
@@ -240,7 +247,10 @@ func (s *Service) ListCertificates(ctx context.Context, f CertificateFilter) (Ce
 	if f.Expiry != "" && !slices.Contains(expiryWindows, f.Expiry) {
 		errs.Add("expiry", validate.OneOf, map[string]string{"values": strings.Join(expiryWindows, ", ")})
 	}
-	if !utf8.ValidString(f.Query) || utf8.RuneCountInString(f.Query) > maxQueryRunes || strings.ContainsRune(f.Query, 0) {
+	switch {
+	case !utf8.ValidString(f.Query) || strings.ContainsRune(f.Query, 0):
+		errs.Add("q", validate.Pattern, nil)
+	case utf8.RuneCountInString(f.Query) > maxQueryRunes:
 		errs.Add("q", validate.TooLong, map[string]string{"max": strconv.Itoa(maxQueryRunes)})
 	}
 	var afterAt *time.Time
@@ -314,8 +324,9 @@ LIMIT $8`, target, f.Source, expiredBy, before, pattern, afterAt, afterID, limit
 	return page, nil
 }
 
-// GetCertificate returns a certificate with its chain and every location on a live target that
-// uses it, missing ones included, most recently seen first.
+// GetCertificate returns a certificate with its chain and the locations on live targets that use
+// it: those in use first, then missing ones, each most recently seen first; at most
+// MaxListedLocations (LocationsTruncated says when some were left out).
 func (s *Service) GetCertificate(ctx context.Context, id uuid.UUID) (Certificate, error) {
 	var pemChain string
 	c, err := scanCertificate(s.pool.QueryRow(ctx, "SELECT "+certificateColumns+", c.pem_chain FROM certificates c WHERE c.id = $1", id), &pemChain)
@@ -324,12 +335,16 @@ func (s *Service) GetCertificate(ctx context.Context, id uuid.UUID) (Certificate
 	}
 	c.PEMChain = pemChain
 	rows, err := s.pool.Query(ctx, certLocationSelect+` WHERE l.certificate_id = $1
-ORDER BY l.last_seen_at DESC, l.first_seen_at DESC, l.id DESC`, id)
+ORDER BY l.missing_since IS NOT NULL, l.last_seen_at DESC, l.first_seen_at DESC, l.id DESC
+LIMIT $2`, id, MaxListedLocations+1)
 	if err != nil {
 		return Certificate{}, fmt.Errorf("inventory: list certificate locations: %w", err)
 	}
 	if c.Locations, err = collectCertLocations(rows); err != nil {
 		return Certificate{}, err
+	}
+	if len(c.Locations) > MaxListedLocations {
+		c.Locations, c.LocationsTruncated = c.Locations[:MaxListedLocations], true
 	}
 	return c, nil
 }
