@@ -34,6 +34,10 @@ const maxDirDepth = 256
 // others, or owned by neither the user nor root.
 var errInsecure = errors.New("insecure permissions")
 
+// errHomeNotWritable means a missing .ssh cannot be created because the user may not write the
+// home (.ssh is created with the user's filesystem credentials).
+var errHomeNotWritable = errors.New("home not writable for its user")
+
 // lockWait bounds the wait for the key directory lock: a user can hold a flock on their own .ssh
 // forever, and the helper must answer within Alice's budget. It is well below commandBudget, which
 // also bounds it, so the scan before it keeps time too (tests shorten it).
@@ -109,6 +113,8 @@ func writeError(err error) error {
 		return refused(helperproto.CodePathNotAllowed, "the path leaves its allowed directory")
 	case errors.Is(err, errUnsafe):
 		return refused(helperproto.CodeUnsafeFile, "the file is hard-linked or owned by another user")
+	case errors.Is(err, errHomeNotWritable):
+		return precondition(helperproto.CodeHomeNotWritable, "the user cannot create .ssh in the home directory")
 	case errors.Is(err, errInsecure):
 		return refused(helperproto.CodeInsecurePermissions, "the file or a directory above it is writable by others or owned by another user")
 	case errors.Is(err, errNotRegular), errors.Is(err, unix.ELOOP), errors.Is(err, unix.ENOTDIR):
@@ -196,6 +202,8 @@ func (s *sys) openKeyDir(c candidate) (keyDir, error) {
 	if errors.Is(err, fs.ErrNotExist) && c.inHome && dirRel == ".ssh" {
 		if err = s.makeSSHDir(allowed, c.acct); err == nil {
 			pfd, err = openBeneath(allowed, dirRel, !c.through)
+		} else if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) || errors.Is(err, unix.EROFS) {
+			err = errHomeNotWritable
 		}
 	}
 	if err != nil {

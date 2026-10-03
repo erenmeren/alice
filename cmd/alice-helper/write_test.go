@@ -1093,9 +1093,12 @@ func TestWriteFailsWhenSSHDirCannotBeCreated(t *testing.T) {
 	require.NoError(t, os.Chmod(f.host("/home/deploy"), 0o555))
 	t.Cleanup(func() { _ = os.Chmod(f.host("/home/deploy"), 0o755) })
 	code, m := f.runWith("x\n", writeArgs(keysPath, helperproto.AbsentSHA256, op1)...)
-	assert.Equal(t, helperproto.ExitFailed, code)
-	assert.Equal(t, helperproto.CodeIOError, m["code"])
+	// A-11: a distinct precondition, not an I/O error: nothing was written, and the administrator
+	// knows where to look.
+	assert.Equal(t, helperproto.ExitPrecondition, code)
+	assert.Equal(t, helperproto.CodeHomeNotWritable, m["code"])
 	assert.False(t, f.exists("/home/deploy/.ssh"))
+	assert.False(t, f.exists(helperproto.BackupRoot+"/"+op1))
 }
 
 // The sweep only removes directories named like an operation; a file with such a name stays,

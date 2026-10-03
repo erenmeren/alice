@@ -522,7 +522,8 @@ connection.
 leaves the user's home), or the file is not a regular file.
 
 `CONTENT_MISMATCH` means the new file content reached the server incomplete (the connection dropped while Alice
-sent it); the helper wrote nothing.
+sent it); the helper wrote nothing. `HOME_NOT_WRITABLE` means the user has no `.ssh` directory yet and may not create
+one in their home directory (for example a home owned by root); the helper wrote nothing.
 
 **What to do.** Scan the server again. If the refusal stays, check the named file on the server; contact support with
 the request ID if needed. After `CONTENT_MISMATCH`, check the network path to the server and run the action again.

@@ -63,6 +63,9 @@ const (
 	CodeSSHDFailed      = "SSHD_FAILED"
 	CodeIOError         = "IO_ERROR"
 	CodeUnsafeFile      = "UNSAFE_FILE" // hard-linked, or owned by neither its user nor root
+	// CodeHomeNotWritable refuses a write that needs a new <home>/.ssh the user may not create
+	// (the home is not writable for its user). Exit 3, nothing written.
+	CodeHomeNotWritable = "HOME_NOT_WRITABLE"
 	// CodeAuthorizedKeysCommand refuses a write for a user whose keys sshd takes from an
 	// AuthorizedKeysCommand: the files are not the whole truth, keys are managed elsewhere.
 	CodeAuthorizedKeysCommand = "AUTHORIZED_KEYS_COMMAND"

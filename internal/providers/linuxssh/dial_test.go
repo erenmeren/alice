@@ -384,7 +384,7 @@ func TestEveryHelperCodeHasAReason(t *testing.T) {
 		helperproto.CodeInvalidArgument, helperproto.CodePathNotAllowed, helperproto.CodeNotRegularFile,
 		helperproto.CodeInsecurePermissions, helperproto.CodeTooLarge, helperproto.CodeHashMismatch,
 		helperproto.CodeNotFound, helperproto.CodeSSHDFailed, helperproto.CodeIOError, helperproto.CodeUnsafeFile,
-		helperproto.CodeAuthorizedKeysCommand}
+		helperproto.CodeAuthorizedKeysCommand, helperproto.CodeContentMismatch, helperproto.CodeHomeNotWritable}
 	for _, code := range codes {
 		for _, exit := range []int{helperproto.ExitRefused, helperproto.ExitPrecondition, helperproto.ExitFailed} {
 			reason, _ := helperReason(exit, code)
