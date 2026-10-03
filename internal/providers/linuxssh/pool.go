@@ -49,8 +49,9 @@ type Pool struct {
 	targets map[uuid.UUID]chan struct{}
 	idle    map[uuid.UUID][]idleConn
 	idleN   int
-	// forgotten holds deleted targets (ForgetTarget): their released connections are closed.
-	forgotten map[uuid.UUID]bool
+	// forgotten holds deleted targets (ForgetTarget) and when they were forgotten: Acquire refuses
+	// them and their released connections are closed. Entries are pruned after the idle time.
+	forgotten map[uuid.UUID]time.Time
 }
 
 // NewPool returns a pool; zero or negative limits take the defaults.
@@ -134,6 +135,9 @@ func (p *Pool) targetSlots(target uuid.UUID) (chan struct{}, error) {
 	if p.closed {
 		return nil, closedError()
 	}
+	if _, gone := p.forgotten[target]; gone {
+		return nil, providers.NewError("ssh.unreachable", false, errTargetForgotten, nil)
+	}
 	ch, ok := p.targets[target]
 	if !ok {
 		ch = make(chan struct{}, p.perTarget)
@@ -194,15 +198,21 @@ func (p *Pool) acquire(ctx context.Context, target uuid.UUID, cfg Config, cred p
 	return c, p.releaser(target, c, slots), nil
 }
 
-// ForgetTarget closes the idle connections of a deleted target and drops its slot channel. A
-// connection of it still in use is closed when released (forgotten targets keep nothing idle).
+// errTargetForgotten refuses connections to a target that was deleted (ForgetTarget).
+var errTargetForgotten = errors.New("linuxssh: the target was deleted")
+
+// ForgetTarget closes the idle connections of a deleted target and drops its slot channel. For
+// the idle time afterwards Acquire refuses the target (no slot entry is created again) and a
+// connection of it still in use is closed when released; then the entry is pruned, so the map
+// stays bounded.
 func (p *Pool) ForgetTarget(target uuid.UUID) {
+	now := p.dialer.clk().Now()
 	p.mu.Lock()
 	delete(p.targets, target)
 	if p.forgotten == nil {
-		p.forgotten = map[uuid.UUID]bool{}
+		p.forgotten = map[uuid.UUID]time.Time{}
 	}
-	p.forgotten[target] = true
+	p.forgotten[target] = now
 	p.mu.Unlock()
 	p.dropIdle(target)
 }
@@ -267,8 +277,14 @@ func (p *Pool) takeIdle(ctx context.Context, target uuid.UUID, cfg Config) *Conn
 	return found
 }
 
-// sweepLocked removes expired idle connections; the caller closes them after unlocking.
+// sweepLocked removes expired idle connections (the caller closes them after unlocking) and
+// prunes forgotten targets older than the idle time.
 func (p *Pool) sweepLocked(now time.Time) []*Conn {
+	for t, at := range p.forgotten {
+		if now.Sub(at) >= p.idleFor {
+			delete(p.forgotten, t)
+		}
+	}
 	var stale []*Conn
 	for t, list := range p.idle {
 		keep := list[:0]
@@ -297,7 +313,8 @@ func (p *Pool) releaser(target uuid.UUID, c *Conn, slots func()) func(bool) {
 			now := p.dialer.clk().Now()
 			p.mu.Lock()
 			stale := p.sweepLocked(now)
-			keep := healthy && c.Healthy() && !p.closed && p.idleN < p.maxIdle && !p.forgotten[target]
+			_, gone := p.forgotten[target]
+			keep := healthy && c.Healthy() && !p.closed && p.idleN < p.maxIdle && !gone
 			if keep {
 				p.idle[target] = append(p.idle[target], idleConn{conn: c, since: now})
 				p.idleN++

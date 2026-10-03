@@ -400,3 +400,28 @@ func TestNewPoolDefaults(t *testing.T) {
 	defer q.Close()
 	assert.Equal(t, 1, q.perTarget, "capped by the total")
 }
+
+// Re-review item 4: a forgotten target is refused (no slot entry comes back) for the idle time,
+// then its entry is pruned by the sweep, so the map stays bounded.
+func TestPoolForgottenTargetsAreRefusedThenPruned(t *testing.T) {
+	fake := clock.NewFake(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC))
+	e := newPoolEnv(t, fake, 2, 1)
+	e.pool.ForgetTarget(testTarget)
+	_, _, err := e.pool.Acquire(context.Background(), testTarget, e.cfg, e.cred)
+	assert.Equal(t, "ssh.unreachable", providerCode(t, err).Code)
+	e.pool.mu.Lock()
+	_, slots := e.pool.targets[testTarget]
+	e.pool.mu.Unlock()
+	assert.False(t, slots, "a refused acquire creates no slot entry")
+
+	fake.Advance(IdleTimeout)
+	require.Eventually(t, func() bool {
+		e.pool.mu.Lock()
+		defer e.pool.mu.Unlock()
+		return len(e.pool.forgotten) == 0
+	}, 5*time.Second, 10*time.Millisecond, "pruned by the background sweep")
+	c, rel, err := e.pool.Acquire(context.Background(), testTarget, e.cfg, e.cred)
+	require.NoError(t, err, "after the idle time the id is an ordinary target again")
+	rel(true)
+	assert.True(t, c.Healthy())
+}
