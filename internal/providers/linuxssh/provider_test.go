@@ -8,9 +8,11 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -655,4 +657,118 @@ func TestDiscoverReportsUID0Users(t *testing.T) {
 	res, err := s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"root", "toor"}, res.UID0Users)
+}
+
+// Carry 1: Discover passes the helper's account list on; inventory decides with it.
+func TestDiscoverReportsTheAccountList(t *testing.T) {
+	e := newProvEnv(t)
+	e.emu.SetAccounts([]string{"alice-svc", "deploy", "root"}, true)
+	s := e.open(t)
+	res, err := s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alice-svc", "deploy", "root"}, res.Accounts)
+	assert.True(t, res.AccountsComplete)
+
+	e.emu.SetAccounts([]string{"root", "Bad Name", "deploy"}, true)
+	res, err = s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"deploy", "root"}, res.Accounts, "invalid names are dropped")
+	assert.False(t, res.AccountsComplete, "a list with an invalid entry is not trusted as complete")
+
+	e.emu.SetAccounts([]string{"root"}, false)
+	res, err = s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"root"}, res.Accounts)
+	assert.False(t, res.AccountsComplete, "the helper said the list is not complete")
+
+	many := make([]string, 0, helperproto.MaxAccountNames+3)
+	for i := 0; i < helperproto.MaxAccountNames+3; i++ {
+		many = append(many, "u"+strconv.Itoa(i))
+	}
+	e.emu.SetAccounts(many, true)
+	res, err = s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.Len(t, res.Accounts, helperproto.MaxAccountNames)
+	assert.False(t, res.AccountsComplete, "a list cut at the bound is not complete")
+
+	res, err = s.Discover(context.Background(), providers.DiscoverRequest{})
+	require.NoError(t, err)
+	assert.Nil(t, res.Accounts, "without SSH keys no list is read")
+	assert.False(t, res.AccountsComplete)
+}
+
+// The emulator, like the real helper, lists every account (users, daemon, nobody) when nothing is
+// set, and an absent accounts_complete is unknown.
+func TestDiscoverAccountsDefaultsAndUnknown(t *testing.T) {
+	e := newProvEnv(t)
+	s := e.open(t)
+	res, err := s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.Contains(t, res.Accounts, "root")
+	assert.Contains(t, res.Accounts, "nobody")
+	assert.True(t, res.AccountsComplete)
+	assert.True(t, sort.StringsAreSorted(res.Accounts))
+}
+
+func TestConnOf(t *testing.T) {
+	e := newProvEnv(t)
+	s, err := e.prov.Open(context.Background(), e.ref, e.cred, providers.Env{Clock: clock.Real{}, HostKeys: e.hk})
+	require.NoError(t, err)
+	c, ok := ConnOf(s)
+	require.True(t, ok)
+	res, err := c.Run(context.Background(), CmdVersion())
+	require.NoError(t, err)
+	assert.Contains(t, string(res.Stdout), `"protocol":4`)
+	require.NoError(t, s.Close())
+	_, ok = ConnOf(s)
+	assert.False(t, ok, "a closed session's connection may serve another session")
+	_, ok = ConnOf(providers.UnsupportedSession{})
+	assert.False(t, ok)
+	_, ok = ConnOf(nil)
+	assert.False(t, ok)
+}
+
+// A failed deployment run reports neither the key nor the payload in its error. The emulator
+// does not know nginx-deploy (Task 9), so the helper answers UNKNOWN_SUBCOMMAND.
+func TestFailedDeployRunDoesNotLeakTheKey(t *testing.T) {
+	const needle = "KEYMATERIAL-0123456789abcdef"
+	e := newProvEnv(t)
+	s := e.open(t)
+	c, ok := ConnOf(s)
+	require.True(t, ok)
+	raw, err := json.Marshal(helperproto.NginxDeployInput{CertPEM: "cert", KeyPEM: needle})
+	require.NoError(t, err)
+	cmd, err := CmdNginxDeploy(testOp, "/etc/nginx/a.crt", "/etc/nginx/a.key", strings.Repeat("ab", 32), raw)
+	require.NoError(t, err)
+	res, err := c.Run(context.Background(), cmd)
+	cmd.WipeInput()
+	require.NoError(t, err)
+	_, err = DecodeHelper[helperproto.NginxDeployResponse](res, cmd.Subcommand())
+	require.Error(t, err)
+	var pe *providers.Error
+	require.True(t, errors.As(err, &pe))
+	assert.NotContains(t, fmt.Sprintf("%v %+v %#v %v", err, err, pe.Params, pe.Unwrap()), needle)
+	assert.NotContains(t, string(res.Stdout), needle)
+}
+
+// tls-probe runs without sudo (the emulator does not answer NOT_ROOT for it, as the helper does not),
+// and the privileged Nginx commands are parsed with the protocol 4 flags.
+func TestEmulatorParsesProtocol4Lines(t *testing.T) {
+	e := newProvEnv(t)
+	s := e.open(t)
+	c, ok := ConnOf(s)
+	require.True(t, ok)
+	probe, err := CmdTLSProbe("127.0.0.1", 443, "a.b", "any")
+	require.NoError(t, err)
+	deploy, err := CmdNginxDeploy(testOp, "/etc/nginx/a.crt", "/etc/nginx/a.key", strings.Repeat("ab", 32), []byte("{}"))
+	require.NoError(t, err)
+	status, err := CmdNginxStatus(testOp)
+	require.NoError(t, err)
+	for _, cmd := range []HelperCommand{probe, deploy, status, CmdNginxDump(), CmdNginxTest()} {
+		res, err := c.Run(context.Background(), cmd)
+		require.NoError(t, err)
+		_, err = DecodeHelper[helperproto.NginxStatusResponse](res, cmd.Subcommand())
+		pe := providerCode(t, err)
+		assert.Equal(t, helperproto.CodeUnknownSubcommand, pe.Params["helper_code"], "%s reaches the dispatcher (a later task adds the emulated Nginx)", cmd.Subcommand())
+	}
 }

@@ -1,6 +1,10 @@
 package linuxssh
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -136,4 +140,121 @@ func TestHostileArgumentsNeverBecomeCommands(t *testing.T) {
 	_, err = CmdAuthKeysWrite("/root/.ssh/authorized_keys", helperproto.AbsentSHA256, testOp,
 		make([]byte, helperproto.MaxAuthorizedKeysSize+1))
 	assert.ErrorIs(t, err, ErrInvalidArgument)
+}
+
+func TestNginxCommandLinesAreExact(t *testing.T) {
+	sha := strings.Repeat("ab", 32)
+	input := []byte(`{"cert_pem":"c","key_pem":"k"}`)
+	h := sha256.Sum256(input)
+	deploy, err := CmdNginxDeploy(testOp, "/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", sha, input)
+	require.NoError(t, err)
+	restore, err := CmdNginxRestore(testOp)
+	require.NoError(t, err)
+	status, err := CmdNginxStatus(testOp)
+	require.NoError(t, err)
+	probe, err := CmdTLSProbe("127.0.0.1", 443, "www.example.test", helperproto.ProbeRSA)
+	require.NoError(t, err)
+	probeNoSNI, err := CmdTLSProbe("::1", 8443, "", helperproto.ProbeAny)
+	require.NoError(t, err)
+	cleanup, err := CmdCleanup(testOp)
+	require.NoError(t, err)
+	op := "'0190f5a0-0000-7000-8000-0000000000aa'"
+	const pre = "sudo -n /usr/local/libexec/alice-helper "
+	for _, tc := range []struct {
+		cmd  HelperCommand
+		line string
+		sub  string
+		sudo bool
+	}{
+		{CmdNginxDump(), pre + "nginx-dump", "nginx-dump", true},
+		{CmdNginxTest(), pre + "nginx-test", "nginx-test", true},
+		{deploy, pre + "nginx-deploy --op " + op + " --cert '/etc/nginx/ssl/www.crt' --key '/etc/nginx/ssl/www.key' --expect-cert-sha256 '" + sha + "' --content-sha256 '" + hex.EncodeToString(h[:]) + "'", "nginx-deploy", true},
+		{restore, pre + "nginx-restore --op " + op, "nginx-restore", true},
+		{status, pre + "nginx-status --op " + op, "nginx-status", true},
+		{cleanup, pre + "cleanup --op " + op, "cleanup", true},
+		{probe, "/usr/local/libexec/alice-helper tls-probe --addr '127.0.0.1' --port '443' --sni 'www.example.test' --key-type 'rsa'", "tls-probe", false},
+		{probeNoSNI, "/usr/local/libexec/alice-helper tls-probe --addr '::1' --port '8443' --sni '_' --key-type 'any'", "tls-probe", false},
+	} {
+		assert.Equal(t, tc.line, tc.cmd.Line())
+		assert.Equal(t, tc.sub, tc.cmd.Subcommand())
+		assert.Equal(t, tc.sudo, tc.cmd.sudo)
+	}
+	assert.Equal(t, input, deploy.stdin)
+	assert.Equal(t, int64(helperproto.NginxDumpOutput), CmdNginxDump().maxOutput)
+	assert.Equal(t, LongCommandTimeout, CmdNginxDump().timeout)
+	assert.Equal(t, LongCommandTimeout, CmdNginxTest().timeout)
+	assert.Equal(t, DeployCommandTimeout, deploy.timeout)
+	assert.Equal(t, DeployCommandTimeout, restore.timeout)
+	assert.Greater(t, DeployCommandTimeout, helperproto.HelperBudget+2*time.Minute, "the helper's post-rename work (about two minutes) fits")
+	assert.Equal(t, DefaultCommandTimeout, status.timeout)
+	assert.Equal(t, DefaultCommandTimeout, probe.timeout)
+	assert.Greater(t, cleanup.timeout, 30*time.Second, "cleanup may wait 30 s for the Nginx lock")
+}
+
+func TestNginxCommandsRefuseHostileValues(t *testing.T) {
+	sha := strings.Repeat("ab", 32)
+	deploy := func(cert, key, expect string, op uuid.UUID, in []byte) error {
+		_, e := CmdNginxDeploy(op, cert, key, expect, in)
+		return e
+	}
+	probe := func(addr string, port int, sni, kt string) error { _, e := CmdTLSProbe(addr, port, sni, kt); return e }
+	in := []byte("{}")
+	for name, err := range map[string]error{
+		"deploy relative cert":   deploy("etc/x.crt", "/k.key", sha, testOp, in),
+		"deploy dotdot":          deploy("/etc/../shadow", "/k.key", sha, testOp, in),
+		"deploy same path":       deploy("/a.pem", "/a.pem", sha, testOp, in),
+		"deploy root path":       deploy("/", "/a.key", sha, testOp, in),
+		"deploy absent hash":     deploy("/a.crt", "/a.key", helperproto.AbsentSHA256, testOp, in),
+		"deploy short hash":      deploy("/a.crt", "/a.key", "abcd", testOp, in),
+		"deploy shell":           deploy("/a.crt;rm -rf /", "/a.key", sha, testOp, in),
+		"deploy quote":           deploy("/a'.crt", "/a.key", sha, testOp, in),
+		"deploy nil op":          deploy("/a.crt", "/a.key", sha, uuid.Nil, in),
+		"deploy empty input":     deploy("/a.crt", "/a.key", sha, testOp, nil),
+		"deploy too large":       deploy("/a.crt", "/a.key", sha, testOp, make([]byte, helperproto.MaxDeployInput+1)),
+		"probe hostname":         probe("localhost", 443, "a.b", "any"),
+		"probe zone":             probe("fe80::1%eth0", 443, "a.b", "any"),
+		"probe non canonical ip": probe("::ffff:1.2.3.4 ", 443, "a.b", "any"),
+		"probe port 0":           probe("127.0.0.1", 0, "a.b", "any"),
+		"probe port high":        probe("127.0.0.1", 65536, "a.b", "any"),
+		"probe sni space":        probe("127.0.0.1", 443, "a b", "any"),
+		"probe sni injection":    probe("127.0.0.1", 443, "$(id)", "any"),
+		"probe sni ip":           probe("127.0.0.1", 443, "10.0.0.1", "any"),
+		"probe key type":         probe("127.0.0.1", 443, "a.b", "dsa"),
+	} {
+		assert.ErrorIs(t, err, ErrInvalidArgument, name)
+	}
+	_, err := CmdNginxRestore(uuid.Nil)
+	assert.ErrorIs(t, err, ErrInvalidArgument)
+	_, err = CmdNginxStatus(uuid.Nil)
+	assert.ErrorIs(t, err, ErrInvalidArgument)
+}
+
+func TestWipeInputClearsTheKey(t *testing.T) {
+	c, err := CmdNginxDeploy(testOp, "/a.crt", "/a.key", strings.Repeat("ab", 32), []byte("secret key bytes"))
+	require.NoError(t, err)
+	c.WipeInput()
+	assert.Equal(t, make([]byte, len("secret key bytes")), c.stdin)
+}
+
+// The private key travels in stdin only: the command line, its formatting and its error carry none of it.
+func TestDeployKeyIsNeverOutsideStdin(t *testing.T) {
+	const needle = "KEYMATERIAL-0123456789abcdef"
+	raw, err := json.Marshal(helperproto.NginxDeployInput{CertPEM: "cert-pem", KeyPEM: needle})
+	require.NoError(t, err)
+	c, err := CmdNginxDeploy(testOp, "/a.crt", "/a.key", strings.Repeat("ab", 32), raw)
+	require.NoError(t, err)
+	assert.Contains(t, string(c.stdin), needle, "the key is in the payload")
+	assert.NotContains(t, c.Line(), needle)
+	assert.NotContains(t, fmt.Sprintf("%v|%+v|%#v|%s", c.tokens, c.Subcommand(), c.Line(), c.Subcommand()), needle)
+	// A rejected deployment (too large) names the limit, never the content.
+	big := append(raw, make([]byte, helperproto.MaxDeployInput)...)
+	_, err = CmdNginxDeploy(testOp, "/a.crt", "/a.key", strings.Repeat("ab", 32), big)
+	require.ErrorIs(t, err, ErrInvalidArgument)
+	assert.NotContains(t, err.Error(), needle)
+	_, err = CmdNginxDeploy(testOp, "/a.crt\n"+needle, "/a.key", strings.Repeat("ab", 32), raw)
+	require.ErrorIs(t, err, ErrInvalidArgument)
+	assert.NotContains(t, err.Error(), needle)
+	// The input type redacts itself when formatted.
+	in := helperproto.NginxDeployInput{CertPEM: "c", KeyPEM: needle}
+	assert.NotContains(t, fmt.Sprintf("%v %+v %#v %s", in, in, in, in), needle)
 }

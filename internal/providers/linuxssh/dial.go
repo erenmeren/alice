@@ -35,7 +35,14 @@ const (
 	DefaultHandshakeTimeout = 15 * time.Second
 	DefaultCommandTimeout   = 30 * time.Second
 	LongCommandTimeout      = 60 * time.Second
-	DefaultMaxOutput        = 8 << 20
+
+	// DeployCommandTimeout bounds nginx-deploy and nginx-restore: up to helperproto.HelperBudget
+	// (50 s) before the first rename, then up to about two minutes of nginx -t and reload work
+	// (each program 30 s), plus a margin. Longer than LongCommandTimeout on purpose: cutting the
+	// connection at 60 s would abandon a deployment the helper is still finishing.
+	DeployCommandTimeout = 180 * time.Second
+
+	DefaultMaxOutput = 8 << 20
 
 	maxStderr      = 64 << 10
 	osReleaseLimit = 64 << 10
@@ -700,14 +707,24 @@ func decodeOne(b []byte, dst any) error {
 }
 
 // helperReason maps a helper error code to a provider reason. Codes Alice acts on have their own
-// reason; every other code (USAGE, NOT_ROOT, PATH_NOT_ALLOWED, UNSAFE_FILE, SSHD_FAILED, IO_ERROR,
-// …) is ssh.helper_refused, and its helper_code parameter tells the UI which one.
-func helperReason(exit int, code string) (reason string, retryable bool) {
+// reason; every other code (USAGE, NOT_ROOT, PATH_NOT_ALLOWED, UNSAFE_FILE, SSHD_FAILED, TOO_LARGE,
+// SUPERSEDED, NO_SPACE, PROBE_FAILED, NGINX_NOT_FOUND, …) is ssh.helper_refused, and its helper_code
+// parameter tells the caller which one. The retryable flag is set only for conditions that a repeat
+// of the same command can clear: BUSY (another helper holds the Nginx lock, or an operation is kept
+// for recovery) and IO_ERROR (also what a killed or timed-out nginx, or a failed stdin read, gives).
+func helperReason(sub string, exit int, code string) (reason string, retryable bool) {
 	switch {
 	case code == helperproto.CodeHashMismatch && exit == helperproto.ExitPrecondition:
-		return "ssh.file_changed", true // the file changed between read and write (F-38)
+		// authkeys-*: the file changed between read and write (F-38), a re-read clears it.
+		// nginx-deploy and nginx-restore: a certificate or key file is not what the operation
+		// expects; repeating the same command cannot change that.
+		return "ssh.file_changed", sub != helperproto.SubNginxDeploy && sub != helperproto.SubNginxRestore
 	case code == helperproto.CodeAuthorizedKeysCommand:
 		return "ssh.keys_managed_elsewhere", false // sshd takes this user's keys from a program (F-35)
+	case code == helperproto.CodeOutputTooLarge:
+		return "ssh.output_too_large", false // nginx-dump's answer would exceed its bound
+	case code == helperproto.CodeBusy, code == helperproto.CodeIOError:
+		return "ssh.helper_refused", true
 	default:
 		return "ssh.helper_refused", false
 	}
@@ -748,7 +765,7 @@ func DecodeHelper[T any](r Result, sub string) (T, error) {
 			return protocol(errors.New("linuxssh: malformed helper error"))
 		}
 		params["helper_code"] = e.Code
-		reason, retryable := helperReason(r.ExitCode, e.Code)
+		reason, retryable := helperReason(sub, r.ExitCode, e.Code)
 		return zero, providers.NewError(reason, retryable, nil, params)
 	default:
 		params["exit_code"] = strconv.Itoa(r.ExitCode)

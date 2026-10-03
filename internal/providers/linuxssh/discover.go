@@ -185,6 +185,22 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 	if err != nil {
 		return providers.DiscoveryResult{}, err
 	}
+	// Carry 1: the account list lets inventory tell a deleted OS user from a user whose file could
+	// not be read. An absent or false accounts_complete is unknown, and so is a list that had to be
+	// repaired (an invalid name dropped) or cut at the bound.
+	res.AccountsComplete = list.AccountsComplete
+	for _, a := range list.Accounts {
+		if !helperproto.ValidUser(a) {
+			res.AccountsComplete = false
+			continue
+		}
+		res.Accounts = append(res.Accounts, a)
+	}
+	slices.Sort(res.Accounts)
+	res.Accounts = slices.Compact(res.Accounts)
+	if len(res.Accounts) > helperproto.MaxAccountNames {
+		res.Accounts, res.AccountsComplete = res.Accounts[:helperproto.MaxAccountNames], false
+	}
 	for _, w := range list.Warnings {
 		// sshd_unreadable is derived below, globally from sshd-dump and per user from the list.
 		if warningCodeRE.MatchString(w) && w != helperproto.WarnSSHDUnreadable {

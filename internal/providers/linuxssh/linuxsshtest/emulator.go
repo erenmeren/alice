@@ -58,6 +58,21 @@ type Emulator struct {
 	writes      []string
 	backups     map[string]int // operation id -> backups written
 	maxUsers    int            // accounts listed at most (the helper's 200 when 0)
+	accounts    *accountList   // SetAccounts: the /etc/passwd names authkeys-list reports (derived from users when nil)
+}
+
+type accountList struct {
+	names    []string
+	complete bool
+}
+
+// SetAccounts sets the account names authkeys-list reports in "accounts" and whether it says
+// "accounts_complete". Without it the emulator reports its users plus daemon and nobody, sorted,
+// as complete, as the helper does for a readable /etc/passwd.
+func (e *Emulator) SetAccounts(names []string, complete bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.accounts = &accountList{names: append([]string(nil), names...), complete: complete}
 }
 
 // SetMaxUsers makes the emulator list at most n accounts (in uid order) and warn
@@ -241,6 +256,16 @@ func sum(b []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
+// flagTokens are the constant flag names of the command constructors (everything else is a
+// quoted value).
+var flagTokens = map[string]bool{
+	"--expect-sha256": true, "--content-sha256": true, "--op": true, // protocol 3
+	"--cert": true, "--key": true, "--expect-cert-sha256": true, // protocol 4: nginx-deploy
+	"--addr": true, "--port": true, "--sni": true, "--key-type": true, // protocol 4: tls-probe
+}
+
+func isFlagToken(f string) bool { return flagTokens[f] }
+
 // parseLine splits "[sudo -n ]<helper> <sub> <args>" and unquotes the arguments like the remote
 // shell would; it reports ok=false for anything that is not a helper command line.
 func parseLine(cmd string) (sudo bool, sub string, args []string, valid bool, ok bool) {
@@ -256,7 +281,7 @@ func parseLine(cmd string) (sudo bool, sub string, args []string, valid bool, ok
 	sub = fields[0]
 	valid = true
 	for _, f := range fields[1:] {
-		if f == "--expect-sha256" || f == "--content-sha256" || f == "--op" {
+		if isFlagToken(f) {
 			args = append(args, f)
 			continue
 		}
@@ -291,7 +316,7 @@ func (e *Emulator) handle(cmd string, stdin []byte) Response {
 	if !valid {
 		return refuse(helperproto.ExitRefused, helperproto.CodeInvalidArgument)
 	}
-	if sub != helperproto.SubVersion && !sudo {
+	if sub != helperproto.SubVersion && sub != helperproto.SubTLSProbe && !sudo {
 		return refuse(helperproto.ExitRefused, helperproto.CodeNotRoot)
 	}
 	noArgs := func(r func() Response) Response {
@@ -428,7 +453,18 @@ func (e *Emulator) scanLocked() emuScan {
 
 func (e *Emulator) listLocked() helperproto.AuthKeysListResponse {
 	s := e.scanLocked()
-	resp := helperproto.AuthKeysListResponse{OK: true, Users: []helperproto.UserFiles{}, AuthorizedKeysCommand: s.command, Warnings: s.warnings}
+	resp := helperproto.AuthKeysListResponse{OK: true, Users: []helperproto.UserFiles{}, AuthorizedKeysCommand: s.command, Warnings: s.warnings,
+		Accounts: []string{}}
+	if e.accounts != nil {
+		resp.Accounts, resp.AccountsComplete = append(resp.Accounts, e.accounts.names...), e.accounts.complete
+	} else {
+		names := []string{"daemon", "nobody"}
+		for _, u := range e.users {
+			names = append(names, u.name)
+		}
+		slices.Sort(names)
+		resp.Accounts, resp.AccountsComplete = slices.Compact(names), true
+	}
 	for _, us := range s.users {
 		u := us.user
 		uf := helperproto.UserFiles{User: u.name, UID: u.uid, Home: u.home, Files: []helperproto.FileInfo{},

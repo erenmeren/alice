@@ -361,6 +361,75 @@ func TestRealOpenSSH(t *testing.T) {
 			assert.NotZero(t, code, "protocol 2 arguments do not match the narrowed sudoers line")
 			assert.Regexp(t, sudoRefused, out)
 
+			// Protocol 4 (Task 7): the nginx profile's sudoers lines let exactly the constructed
+			// command lines through, and sudo itself refuses every variation. The helper's own
+			// answer is not the point here (nginx is not installed): what matters is that the
+			// helper ran, or did not.
+			alicePub := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(h.signer.PublicKey())))
+			nginxScript, err := SetupScript("nginx", AuthorizedKeysLine(alicePub, ""), true)
+			require.NoError(t, err)
+			require.NoError(t, h.ctr.CopyToContainer(ctx, []byte(nginxScript), "/root/bundle/setup-nginx.sh", 0o700))
+			// The linux profile still has none of the nginx lines (its sudo refuses the built lines).
+			nginxOp := uuid.New()
+			sha64 := strings.Repeat("ab", 32)
+			nDump, nTest := CmdNginxDump(), CmdNginxTest()
+			nDeploy, err := CmdNginxDeploy(nginxOp, "/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key", sha64, []byte("{}"))
+			require.NoError(t, err)
+			nRestore, err := CmdNginxRestore(nginxOp)
+			require.NoError(t, err)
+			nStatus, err := CmdNginxStatus(nginxOp)
+			require.NoError(t, err)
+			nProbe, err := CmdTLSProbe("127.0.0.1", 9, "", helperproto.ProbeAny)
+			require.NoError(t, err)
+			runLine := func(c HelperCommand) (int, string) {
+				return h.exec([]string{"sh", "-c", c.Line() + " </dev/null"}, tcexec.WithUser(ServiceUser))
+			}
+			for _, c := range []HelperCommand{nDump, nTest, nDeploy, nRestore, nStatus} {
+				code, out := runLine(c)
+				assert.NotZero(t, code, c.Subcommand())
+				assert.Regexp(t, sudoRefused, out, "%s: the linux profile refuses it in sudo", c.Subcommand())
+			}
+			require.Contains(t, h.mustExec("sh", "-c", "cd /root/bundle && sh ./setup-nginx.sh"), "This server is ready for Alice.")
+			for _, c := range []HelperCommand{nDump, nTest, nDeploy, nRestore, nStatus} {
+				_, out := runLine(c)
+				assert.NotRegexp(t, sudoRefused, out, "%s: sudo let the built line through", c.Subcommand())
+				assert.Contains(t, out, `"ok":`, "%s: the helper ran and answered", c.Subcommand())
+			}
+			_, out = runLine(nStatus)
+			assert.Contains(t, out, `"phase":"none"`)
+			_, out = runLine(nRestore)
+			assert.Contains(t, out, helperproto.CodeUnknownOp)
+			// tls-probe needs no sudo: it runs as alice-svc and the helper answers for itself.
+			code, out = runLine(nProbe)
+			assert.NotRegexp(t, sudoRefused, out)
+			assert.Contains(t, out, helperproto.CodeProbeFailed, "nothing listens on port 9")
+			assert.NotZero(t, code)
+			// Through sudo it is refused: tls-probe is not in sudoers.
+			code, out = h.exec([]string{"sudo", "-n", helperproto.HelperPath, "tls-probe", "--addr", "127.0.0.1", "--port", "9", "--sni", "_", "--key-type", "any"},
+				tcexec.WithUser(ServiceUser))
+			assert.NotZero(t, code)
+			assert.Regexp(t, sudoRefused, out, "tls-probe through sudo is refused by sudo")
+			// Variations of the built lines are refused by sudo (not by the helper).
+			opS, urlA, urlK := nginxOp.String(), "/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key"
+			deployArgs := "nginx-deploy --op " + opS + " --cert " + urlA + " --key " + urlK + " --expect-cert-sha256 " + sha64 + " --content-sha256 " + sha64
+			for _, bad := range []string{
+				"nginx-dump -c /tmp/x", "nginx-dump extra", "nginx-test -c /tmp/x", "nginx-test " + opS,
+				"nginx-restore --op " + opS + " extra", "nginx-restore", "nginx-restore " + opS, "nginx-restore " + opS + " --op",
+				"nginx-status --op " + opS + " --op " + opS, "nginx-status --op", "nginx-status --op " + opS[:35],
+				deployArgs + " extra", deployArgs + "0",
+				"nginx-deploy --op " + opS + " --key " + urlK + " --cert " + urlA + " --expect-cert-sha256 " + sha64 + " --content-sha256 " + sha64,
+				"nginx-deploy --op " + opS + " --cert " + urlA + " --key " + urlK + " --expect-cert-sha256 " + sha64,
+				"nginx-deploy --op " + opS + " --cert relative.crt --key " + urlK + " --expect-cert-sha256 " + sha64 + " --content-sha256 " + sha64,
+				"nginx-reload", "stat /etc/shadow", "read-cert /etc/shadow", "install-cert /etc/x", "backup /etc/x", "restore /etc/x",
+			} {
+				code, out = h.exec(append([]string{"sudo", "-n", helperproto.HelperPath}, strings.Fields(bad)...), tcexec.WithUser(ServiceUser))
+				assert.NotZero(t, code, bad)
+				assert.Regexp(t, sudoRefused, out, "%q: refused by sudo", bad)
+				assert.NotContains(t, out, `"ok":`, "%q: the helper never ran", bad)
+			}
+			// Back to the linux profile for the rest of the matrix.
+			require.Contains(t, h.mustExec("sh", "-c", "cd /root/bundle && sh ./setup.sh"), "This server is ready for Alice.")
+
 			// A-13: the helper refuses a path outside the candidate files, through the real sudo.
 			c2, release, err := pool.Acquire(ctx, h.target, h.cfg, ctrSigner{h.signer})
 			require.NoError(t, err)

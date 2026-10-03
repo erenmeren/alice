@@ -25,16 +25,25 @@ Cmnd_Alias ALICE_COMMON = \
     /usr/local/libexec/alice-helper authkeys-write /* --expect-sha256 * --content-sha256 * --op *
 `
 
+// The Nginx lines (profile "nginx", spec §12.3 / A-12). sudo matches arguments with fnmatch and
+// no FNM_PATHNAME, so '*' also matches spaces and further words: the helper's own argument check is
+// the real gate. Each line is still as narrow as sudo's grammar allows: flags are literal and in the
+// helper's order, a command that takes no arguments ends right after its subcommand (sudo refuses
+// any further word), and the operation id and the two hashes are fixed-length '?' runs, so nothing
+// can follow them. Only the two certificate paths are open-ended. tls-probe is unprivileged and has
+// no line.
+const (
+	sudoersOpID = "????????-????-????-????-????????????"                             // 8-4-4-4-12, like helperproto.ValidOpID
+	sudoersSHA  = "????????????????????????????????????????????????????????????????" // 64 characters
+)
+
 const sudoersNginxOnly = `
 Cmnd_Alias ALICE_NGINX_ONLY = \
     /usr/local/libexec/alice-helper nginx-dump, \
     /usr/local/libexec/alice-helper nginx-test, \
-    /usr/local/libexec/alice-helper nginx-reload, \
-    /usr/local/libexec/alice-helper stat *, \
-    /usr/local/libexec/alice-helper read-cert *, \
-    /usr/local/libexec/alice-helper install-cert *, \
-    /usr/local/libexec/alice-helper backup *, \
-    /usr/local/libexec/alice-helper restore *
+    /usr/local/libexec/alice-helper nginx-deploy --op ` + sudoersOpID + ` --cert /* --key /* --expect-cert-sha256 ` + sudoersSHA + ` --content-sha256 ` + sudoersSHA + `, \
+    /usr/local/libexec/alice-helper nginx-restore --op ` + sudoersOpID + `, \
+    /usr/local/libexec/alice-helper nginx-status --op ` + sudoersOpID + `
 `
 
 var errUnknownProfile = errors.New(`linuxssh: unknown sudoers profile (want "linux" or "nginx")`)

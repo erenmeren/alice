@@ -191,3 +191,14 @@ func (s *session) ListAuthorizedKeys(ctx context.Context) ([]providers.Discovere
 	}
 	return res.SSHKeys, nil
 }
+
+// ConnOf returns the connection of an open linuxssh session; the nginx provider runs its helper
+// commands on it (spec §6.6: nginx is built on the linuxssh connector). A closed session has none:
+// its connection may already serve another session.
+func ConnOf(s providers.Session) (*Conn, bool) {
+	ls, ok := s.(*session)
+	if !ok || ls == nil || ls.closed.Load() {
+		return nil, false
+	}
+	return ls.conn, true
+}

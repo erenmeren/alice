@@ -19,14 +19,16 @@ type DiscoverRequest struct{ SSHKeys bool }
 
 // DiscoveryResult is read-only data; inventory reconciles it.
 type DiscoveryResult struct {
-	SSHKeys         []DiscoveredSSHKey
-	HostKeys        []DiscoveredHostKey
-	SSHD            SSHDSummary
-	UnreadableLines []UnreadableLine
-	Warnings        []Warning
-	Partial         bool     // some source failed (a file could not be read); reported, it does not stop missing marking
-	UID0Users       []string // listed accounts with uid 0 (root and any other); their last key is guarded like root's
-	ReadFiles       []string // files read completely: missing marking is limited to these, also in a partial scan (R37 #23)
+	SSHKeys          []DiscoveredSSHKey
+	HostKeys         []DiscoveredHostKey
+	SSHD             SSHDSummary
+	UnreadableLines  []UnreadableLine
+	Warnings         []Warning
+	Partial          bool     // some source failed (a file could not be read); reported, it does not stop missing marking
+	UID0Users        []string // listed accounts with uid 0 (root and any other); their last key is guarded like root's
+	Accounts         []string // every account name of /etc/passwd the helper reported (carry 1)
+	AccountsComplete bool     // Accounts is the whole list; only then may inventory mark vanished users' keys missing
+	ReadFiles        []string // files read completely: missing marking is limited to these, also in a partial scan (R37 #23)
 }
 
 // DiscoveredSSHKey is one authorized_keys entry.

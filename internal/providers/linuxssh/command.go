@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -121,8 +122,60 @@ func CmdAuthKeysWrite(path, expectSHA256 string, op uuid.UUID, content []byte) (
 	return c, nil
 }
 
-// CmdCleanup removes the helper's backup directory of one operation.
+// CmdCleanup removes the helper's backup directory of one operation. For an operation that holds
+// Nginx state the helper waits up to 30 s for its Nginx lock and may answer BUSY (retryable), so the
+// command gets the long timeout; an authorized_keys operation never waits for that lock.
 func CmdCleanup(op uuid.UUID) (HelperCommand, error) {
+	return opCommand(helperproto.SubCleanup, op, LongCommandTimeout)
+}
+
+// CmdNginxDump returns the parsed Nginx configuration and the referenced certificate files
+// (nginx -V and nginx -T, each bounded; the helper stops after helperproto.HelperBudget).
+func CmdNginxDump() HelperCommand {
+	return privileged(helperproto.SubNginxDump, LongCommandTimeout, helperproto.NginxDumpOutput)
+}
+
+// CmdNginxTest runs nginx -t.
+func CmdNginxTest() HelperCommand {
+	return privileged(helperproto.SubNginxTest, LongCommandTimeout, smallOutput)
+}
+
+// CmdNginxDeploy replaces a certificate/key pair in one helper transaction. input is the JSON
+// helperproto.NginxDeployInput (it carries the private key): it goes on stdin only, with its
+// SHA-256 on the command line (--content-sha256), so a dropped connection never deploys a prefix.
+// The command line carries paths and hashes, never key material. A timeout of the run is an
+// uncertain outcome that the caller settles with CmdNginxStatus.
+func CmdNginxDeploy(op uuid.UUID, certPath, keyPath, expectCertSHA256 string, input []byte) (HelperCommand, error) {
+	if op == uuid.Nil || !helperproto.ValidOpID(op.String()) || !helperproto.ValidPath(certPath) || !helperproto.ValidPath(keyPath) ||
+		certPath == "/" || keyPath == "/" || certPath == keyPath ||
+		!helperproto.ValidSHA256(expectCertSHA256) || expectCertSHA256 == helperproto.AbsentSHA256 || len(input) == 0 {
+		return HelperCommand{}, ErrInvalidArgument
+	}
+	if len(input) > helperproto.MaxDeployInput {
+		return HelperCommand{}, fmt.Errorf("%w: input is larger than %d bytes", ErrInvalidArgument, helperproto.MaxDeployInput)
+	}
+	sum := sha256.Sum256(input)
+	tokens, err := quoteAll(op.String(), certPath, keyPath, expectCertSHA256, hex.EncodeToString(sum[:]))
+	if err != nil {
+		return HelperCommand{}, err
+	}
+	c := privileged(helperproto.SubNginxDeploy, DeployCommandTimeout, smallOutput,
+		"--op", tokens[0], "--cert", tokens[1], "--key", tokens[2], "--expect-cert-sha256", tokens[3], "--content-sha256", tokens[4])
+	c.stdin = append([]byte(nil), input...)
+	return c, nil
+}
+
+// CmdNginxRestore restores the files an operation replaced (DeployCommandTimeout, like the deploy).
+func CmdNginxRestore(op uuid.UUID) (HelperCommand, error) {
+	return opCommand(helperproto.SubNginxRestore, op, DeployCommandTimeout)
+}
+
+// CmdNginxStatus reports an operation's journal: the cheap poll after an uncertain deploy.
+func CmdNginxStatus(op uuid.UUID) (HelperCommand, error) {
+	return opCommand(helperproto.SubNginxStatus, op, DefaultCommandTimeout)
+}
+
+func opCommand(sub string, op uuid.UUID, timeout time.Duration) (HelperCommand, error) {
 	if op == uuid.Nil || !helperproto.ValidOpID(op.String()) {
 		return HelperCommand{}, ErrInvalidArgument
 	}
@@ -130,8 +183,43 @@ func CmdCleanup(op uuid.UUID) (HelperCommand, error) {
 	if err != nil {
 		return HelperCommand{}, err
 	}
-	return privileged(helperproto.SubCleanup, DefaultCommandTimeout, smallOutput, "--op", qo), nil
+	return privileged(sub, timeout, smallOutput, "--op", qo), nil
 }
+
+// CmdTLSProbe checks a TLS endpoint from the server itself. It runs without sudo (the helper's
+// tls-probe is unprivileged and not in sudoers). sni "" sends no server name.
+func CmdTLSProbe(addr string, port int, sni, keyType string) (HelperCommand, error) {
+	if sni == "" {
+		sni = helperproto.NoSNI
+	}
+	ps := strconv.Itoa(port)
+	if !helperproto.ValidIP(addr) || !helperproto.ValidPort(ps) || (sni != helperproto.NoSNI && !helperproto.ValidSNI(sni)) ||
+		(keyType != helperproto.ProbeAny && keyType != helperproto.ProbeRSA && keyType != helperproto.ProbeECDSA) {
+		return HelperCommand{}, ErrInvalidArgument
+	}
+	t, err := quoteAll(addr, ps, sni, keyType)
+	if err != nil {
+		return HelperCommand{}, err
+	}
+	return HelperCommand{sub: helperproto.SubTLSProbe, tokens: []string{"--addr", t[0], "--port", t[1], "--sni", t[2], "--key-type", t[3]},
+		timeout: DefaultCommandTimeout, maxOutput: smallOutput}, nil
+}
+
+func quoteAll(values ...string) ([]string, error) {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		q, err := quoteArg(v)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, nil
+}
+
+// WipeInput overwrites the command's stdin (the private key of nginx-deploy) with zeros. The
+// command keeps its own copy of the input, so the caller wipes it after Run (SEC-044, best effort).
+func (c HelperCommand) WipeInput() { clear(c.stdin) }
 
 // Line is the exact command line sent over the SSH exec channel ("" for the zero value).
 func (c HelperCommand) Line() string {

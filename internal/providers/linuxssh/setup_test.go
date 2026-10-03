@@ -36,16 +36,14 @@ const goldenSudoersLinux = goldenSudoersHead + `
 alice-svc ALL=(root) NOPASSWD: ALICE_COMMON
 `
 
+// The Nginx lines written out in full: an operation id is 36 and a hash 64 characters.
 const goldenSudoersNginx = goldenSudoersHead + `
 Cmnd_Alias ALICE_NGINX_ONLY = \
     /usr/local/libexec/alice-helper nginx-dump, \
     /usr/local/libexec/alice-helper nginx-test, \
-    /usr/local/libexec/alice-helper nginx-reload, \
-    /usr/local/libexec/alice-helper stat *, \
-    /usr/local/libexec/alice-helper read-cert *, \
-    /usr/local/libexec/alice-helper install-cert *, \
-    /usr/local/libexec/alice-helper backup *, \
-    /usr/local/libexec/alice-helper restore *
+    /usr/local/libexec/alice-helper nginx-deploy --op ????????-????-????-????-???????????? --cert /* --key /* --expect-cert-sha256 ???????????????????????????????????????????????????????????????? --content-sha256 ????????????????????????????????????????????????????????????????, \
+    /usr/local/libexec/alice-helper nginx-restore --op ????????-????-????-????-????????????, \
+    /usr/local/libexec/alice-helper nginx-status --op ????????-????-????-????-????????????
 
 alice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_NGINX_ONLY
 `
@@ -158,8 +156,8 @@ func TestSetupScriptRefusesLinesThatCouldBreakTheScript(t *testing.T) {
 }
 
 // sudoGlob is sudo's argument match (fnmatch without FNM_PATHNAME): '*' matches any run of
-// characters, slashes and spaces included; everything else is literal. The sudoers lines use no
-// other wildcard.
+// characters, slashes and spaces included, '?' matches exactly one character; everything else is
+// literal. The sudoers lines use no other wildcard.
 func sudoGlob(pattern, s string) bool {
 	if pattern == "" {
 		return s == ""
@@ -172,7 +170,7 @@ func sudoGlob(pattern, s string) bool {
 		}
 		return false
 	}
-	return s != "" && s[0] == pattern[0] && sudoGlob(pattern[1:], s[1:])
+	return s != "" && (pattern[0] == '?' || s[0] == pattern[0]) && sudoGlob(pattern[1:], s[1:])
 }
 
 // sudoersPatterns returns the argument patterns of the helper lines of a sudoers profile.
@@ -373,4 +371,86 @@ func TestHelperCheckRunsInAShell(t *testing.T) {
 	}
 	assert.NoError(t, run(good, good))
 	assert.Error(t, run(strings.Repeat("0", 64), strings.Repeat("0", 64)), "a different helper is refused")
+}
+
+func TestNginxSudoersLinesAreWhatTheSpecSays(t *testing.T) {
+	assert.Equal(t, 36, len(sudoersOpID))
+	assert.Equal(t, 64, len(sudoersSHA))
+	assert.NotContains(t, goldenSudoersNginx, "tls-probe", "tls-probe is unprivileged")
+	assert.NotContains(t, goldenSudoersNginx, "log_input")
+}
+
+func TestNginxSudoersMatchesEveryBuiltCommand(t *testing.T) {
+	sha := strings.Repeat("ab", 32)
+	deploy, err := CmdNginxDeploy(testOp, "/etc/letsencrypt/live/a/fullchain.pem", "/etc/letsencrypt/live/a/privkey.pem", sha, []byte("{}"))
+	require.NoError(t, err)
+	restore, err := CmdNginxRestore(testOp)
+	require.NoError(t, err)
+	status, err := CmdNginxStatus(testOp)
+	require.NoError(t, err)
+	patterns := sudoersPatterns(t, "nginx")
+	require.Len(t, patterns, 11)
+	for _, cmd := range []HelperCommand{CmdNginxDump(), CmdNginxTest(), deploy, restore, status} {
+		args := sudoArgs(t, cmd)
+		n := 0
+		for _, p := range patterns {
+			if sudoGlob(p, args) {
+				n++
+			}
+		}
+		assert.Equal(t, 1, n, "%q matches exactly one sudoers line", args)
+	}
+	probe, err := CmdTLSProbe("127.0.0.1", 443, "a.b", "any")
+	require.NoError(t, err)
+	assert.False(t, strings.HasPrefix(probe.Line(), "sudo"), "tls-probe runs without sudo and is not in sudoers")
+	op, h := testOp.String(), sha
+	path := "/etc/nginx/a.crt"
+	valid := "nginx-deploy --op " + op + " --cert " + path + " --key /etc/nginx/a.key --expect-cert-sha256 " + h + " --content-sha256 " + h
+	require.True(t, anyGlob(patterns, valid), "the reference line is accepted")
+	for _, bad := range []string{
+		// no arguments means none: a word after the subcommand is refused by sudo itself
+		"nginx-dump -c /tmp/x", "nginx-test -c /tmp/x", "nginx-dump x", "nginx-test --op " + op,
+		// restore and status: a trailing word, a missing or reordered value, a short or long id
+		"nginx-restore --op " + op + " extra", "nginx-restore --op " + op + " --op " + op, "nginx-restore", "nginx-restore --op",
+		"nginx-restore " + op + " --op", "nginx-restore /x", "nginx-restore --op " + op[:35], "nginx-restore --op " + op + "0",
+		"nginx-status --op " + op + " extra", "nginx-status", "nginx-status op", "nginx-status --op " + op + " --verbose",
+		// deploy: extra, missing, reordered, short or long hashes
+		valid + " extra", valid + " --content-sha256 " + h, valid + "0",
+		"nginx-deploy --cert /x --op y",
+		"nginx-deploy --op " + op + " --key /etc/nginx/a.key --cert " + path + " --expect-cert-sha256 " + h + " --content-sha256 " + h,
+		"nginx-deploy --op " + op + " --cert " + path + " --key /etc/nginx/a.key --content-sha256 " + h + " --expect-cert-sha256 " + h,
+		"nginx-deploy --op " + op + " --cert " + path + " --key /etc/nginx/a.key --expect-cert-sha256 " + h,
+		"nginx-deploy --op " + op + " --cert etc/a.crt --key /etc/nginx/a.key --expect-cert-sha256 " + h + " --content-sha256 " + h,
+		"nginx-deploy --op " + op + " --cert " + path + " --key /etc/nginx/a.key --expect-cert-sha256 " + h[:63] + " --content-sha256 " + h,
+		"nginx-deploy --op " + op + " --cert " + path + " --key /etc/nginx/a.key --expect-cert-sha256 " + h + " --content-sha256 " + h[:63],
+		// the Phase 4 draft's commands and everything else
+		"stat /etc/shadow", "read-cert /etc/shadow", "install-cert /etc/x", "backup /etc/x", "restore /etc/x",
+		"nginx-reload", "tls-probe --addr 1.1.1.1", "tls-probe",
+	} {
+		assert.False(t, anyGlob(patterns, bad), "%q must be refused", bad)
+	}
+	linux := sudoersPatterns(t, "linux")
+	for _, cmd := range []HelperCommand{CmdNginxDump(), CmdNginxTest(), deploy, restore, status} {
+		assert.False(t, anyGlob(linux, sudoArgs(t, cmd)), "a Linux server never gets nginx subcommands")
+	}
+}
+
+func anyGlob(patterns []string, s string) bool {
+	for _, p := range patterns {
+		if sudoGlob(p, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// The key travels in nginx-deploy's stdin: sudo must never record input.
+func TestSudoersNeverLogsInput(t *testing.T) {
+	for _, profile := range []string{"linux", "nginx"} {
+		s, err := Sudoers(profile)
+		require.NoError(t, err)
+		assert.NotContains(t, s, "log_input")
+		assert.NotContains(t, s, "LOG_INPUT")
+		assert.Contains(t, s, "Defaults:alice-svc log_output")
+	}
 }

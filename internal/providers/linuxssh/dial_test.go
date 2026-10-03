@@ -280,7 +280,7 @@ func TestDecodeHelper(t *testing.T) {
 		{"not json", Result{Stdout: []byte("hello")}, "ssh.protocol_error", "", false},
 		{"two values", Result{Stdout: []byte(`{"ok":true}{"ok":true}`)}, "ssh.protocol_error", "", false},
 		{"refused", Result{ExitCode: 2, Stdout: []byte(`{"ok":false,"code":"PATH_NOT_ALLOWED","message":"no"}`)}, "ssh.helper_refused", "PATH_NOT_ALLOWED", false},
-		{"failed", Result{ExitCode: 4, Stdout: []byte(`{"ok":false,"code":"IO_ERROR","message":"no"}`)}, "ssh.helper_refused", "IO_ERROR", false},
+		{"failed", Result{ExitCode: 4, Stdout: []byte(`{"ok":false,"code":"IO_ERROR","message":"no"}`)}, "ssh.helper_refused", "IO_ERROR", true},
 		{"hash mismatch", Result{ExitCode: 3, Stdout: []byte(`{"ok":false,"code":"HASH_MISMATCH","message":"x"}`)}, "ssh.file_changed", "HASH_MISMATCH", true},
 		{"not found", Result{ExitCode: 3, Stdout: []byte(`{"ok":false,"code":"NOT_FOUND","message":"x"}`)}, "ssh.helper_refused", "NOT_FOUND", false},
 		{"keys managed elsewhere", Result{ExitCode: 2, Stdout: []byte(`{"ok":false,"code":"AUTHORIZED_KEYS_COMMAND","message":"x"}`)}, "ssh.keys_managed_elsewhere", "AUTHORIZED_KEYS_COMMAND", false},
@@ -379,16 +379,74 @@ func TestLazyAuthFetchesAndReleasesOnce(t *testing.T) {
 
 // Every helper error code maps to a reason of the provider catalog (global constraints).
 func TestEveryHelperCodeHasAReason(t *testing.T) {
-	catalog := map[string]bool{"ssh.helper_refused": true, "ssh.file_changed": true, "ssh.keys_managed_elsewhere": true}
+	catalog := map[string]bool{"ssh.helper_refused": true, "ssh.file_changed": true, "ssh.keys_managed_elsewhere": true, "ssh.output_too_large": true}
 	codes := []string{helperproto.CodeUsage, helperproto.CodeUnknownSubcommand, helperproto.CodeNotRoot,
 		helperproto.CodeInvalidArgument, helperproto.CodePathNotAllowed, helperproto.CodeNotRegularFile,
 		helperproto.CodeInsecurePermissions, helperproto.CodeTooLarge, helperproto.CodeHashMismatch,
 		helperproto.CodeNotFound, helperproto.CodeSSHDFailed, helperproto.CodeIOError, helperproto.CodeUnsafeFile,
-		helperproto.CodeAuthorizedKeysCommand, helperproto.CodeContentMismatch, helperproto.CodeHomeNotWritable}
+		helperproto.CodeAuthorizedKeysCommand, helperproto.CodeContentMismatch, helperproto.CodeHomeNotWritable,
+		helperproto.CodeNginxNotFound, helperproto.CodeConfigInvalid, helperproto.CodeConfigChanged, helperproto.CodeNoSpace,
+		helperproto.CodeBadContent, helperproto.CodeBusy, helperproto.CodeUnknownOp, helperproto.CodeProbeFailed,
+		helperproto.CodeOutputTooLarge, helperproto.CodeSuperseded}
 	for _, code := range codes {
 		for _, exit := range []int{helperproto.ExitRefused, helperproto.ExitPrecondition, helperproto.ExitFailed} {
-			reason, _ := helperReason(exit, code)
+			reason, _ := helperReason(helperproto.SubNginxDeploy, exit, code)
 			assert.True(t, catalog[reason], "%s (exit %d) -> %s", code, exit, reason)
 		}
+	}
+}
+
+// The codes of the Nginx subcommands: BUSY and IO_ERROR are retryable refusals, OUTPUT_TOO_LARGE
+// is the existing output-too-large reason, a hash mismatch of a deploy or restore is final, and the
+// rest are plain refusals. Nothing but a well-formed answer is a refusal ("nothing changed").
+func TestNginxHelperCodesMapToProviderErrors(t *testing.T) {
+	type out struct{}
+	for _, tc := range []struct {
+		sub    string
+		exit   int
+		code   string
+		reason string
+		retry  bool
+	}{
+		{"nginx-deploy", 4, "BUSY", "ssh.helper_refused", true},
+		{"nginx-restore", 4, "BUSY", "ssh.helper_refused", true},
+		{"cleanup", 4, "BUSY", "ssh.helper_refused", true},
+		{"nginx-deploy", 4, "IO_ERROR", "ssh.helper_refused", true},
+		{"nginx-dump", 4, "IO_ERROR", "ssh.helper_refused", true},
+		{"nginx-test", 4, "IO_ERROR", "ssh.helper_refused", true},
+		{"nginx-dump", 4, "OUTPUT_TOO_LARGE", "ssh.output_too_large", false},
+		{"nginx-deploy", 3, "HASH_MISMATCH", "ssh.file_changed", false},
+		{"nginx-restore", 3, "HASH_MISMATCH", "ssh.file_changed", false},
+		{"authkeys-write", 3, "HASH_MISMATCH", "ssh.file_changed", true},
+		{"nginx-deploy", 3, "SUPERSEDED", "ssh.helper_refused", false},
+		{"nginx-restore", 3, "SUPERSEDED", "ssh.helper_refused", false},
+		{"nginx-restore", 3, "UNKNOWN_OP", "ssh.helper_refused", false},
+		{"nginx-deploy", 3, "NO_SPACE", "ssh.helper_refused", false},
+		{"nginx-deploy", 2, "TOO_LARGE", "ssh.helper_refused", false},
+		{"nginx-deploy", 2, "INVALID_ARGUMENT", "ssh.helper_refused", false},
+		{"nginx-deploy", 2, "BAD_CONTENT", "ssh.helper_refused", false},
+		{"nginx-deploy", 3, "CONTENT_MISMATCH", "ssh.helper_refused", false},
+		{"nginx-deploy", 3, "CONFIG_CHANGED", "ssh.helper_refused", false},
+		{"nginx-dump", 3, "NGINX_NOT_FOUND", "ssh.helper_refused", false},
+		{"nginx-test", 3, "NGINX_NOT_FOUND", "ssh.helper_refused", false},
+		{"nginx-dump", 3, "CONFIG_INVALID", "ssh.helper_refused", false},
+		{"tls-probe", 4, "PROBE_FAILED", "ssh.helper_refused", false},
+	} {
+		body := `{"ok":false,"code":"` + tc.code + `","message":"x"}`
+		_, err := DecodeHelper[out](Result{ExitCode: tc.exit, Stdout: []byte(body)}, tc.sub)
+		pe := providerCode(t, err)
+		assert.Equal(t, tc.reason, pe.Code, "%s %s", tc.sub, tc.code)
+		assert.Equal(t, tc.retry, pe.Retryable, "%s %s", tc.sub, tc.code)
+		assert.Equal(t, tc.code, pe.Params["helper_code"])
+	}
+	// No answer, a malformed answer, a signal or an unknown exit is never a refusal.
+	for name, r := range map[string]Result{
+		"exit 4 without JSON": {ExitCode: 4},
+		"exit 3 truncated":    {ExitCode: 3, Stdout: []byte(`{"ok":false,"code":"SUPERS`)},
+		"exit 0 without ok":   {Stdout: []byte(`{"phase":"committed"}`)},
+		"exit 0 empty":        {},
+	} {
+		_, err := DecodeHelper[out](r, "nginx-deploy")
+		assert.Equal(t, "ssh.protocol_error", providerCode(t, err).Code, name)
 	}
 }
