@@ -439,13 +439,19 @@ func lockRuleViolations(routes []route) []string {
 	var out []string
 	for _, rt := range routes {
 		key := rt.method + " " + rt.pattern
+		pol, known := rbac.PolicyFor(rt.perm)
+		if !known {
+			// An unknown permission would also skip the signed-in-user rule below.
+			out = append(out, key+": unknown permission")
+			continue
+		}
 		if safeMethod(rt.method) {
 			if rt.lic != license.ClassUnset && rt.lic != license.ClassAlways {
 				out = append(out, key+": reads stay available in lock")
 			}
 			continue
 		}
-		if pol, ok := rbac.PolicyFor(rt.perm); ok && (pol.Anonymous || pol.Setup || pol.Pending) && gated(rt.lic) {
+		if (pol.Anonymous || pol.Setup || pol.Pending) && gated(rt.lic) {
 			out = append(out, key+": a route without a signed-in user is never refused by the license gate")
 		}
 		refused, available := underAny(rt.pattern, lockRefused), underAny(rt.pattern, lockAvailable)
@@ -481,10 +487,21 @@ func TestLockRuleViolationsCatchesMistakes(t *testing.T) {
 		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Public, lic: license.ClassChange},
 		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/confirm", perm: rbac.Read, lic: license.ClassAlways},
 		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", perm: rbac.Setup, lic: license.ClassReadOnly},
+		// Fix wave C-9: a gated route of a pending sign-in, and permissions the policy table does
+		// not know (otherwise valid routes, so the unknown permission is their only violation).
+		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.MFAPending, lic: license.ClassChange},
+		{method: http.MethodPost, pattern: "/api/v1/targets", perm: "targets.nonexistent", lic: license.ClassChange},
+		{method: http.MethodGet, pattern: "/api/v1/targets", perm: "targets.nonexistent"},
 	}
 	for _, rt := range bad {
 		assert.Len(t, lockRuleViolations([]route{rt}), 1, "%s %s", rt.method, rt.pattern)
 	}
+	// A route group in both lock lists is a mistake in the lists themselves.
+	saved := lockAvailable
+	lockAvailable = append(append([]string{}, saved...), "/api/v1/targets")
+	both := lockRuleViolations([]route{{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Read, lic: license.ClassChange}})
+	lockAvailable = saved
+	assert.Equal(t, []string{"POST /api/v1/targets: route group is in both lock lists"}, both)
 	good := []route{
 		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Read, lic: license.ClassChange},
 		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", perm: rbac.Read, lic: license.ClassReadOnly},
