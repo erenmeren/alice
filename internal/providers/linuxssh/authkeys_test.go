@@ -402,7 +402,8 @@ func TestOpenSSHAcceptedOptionForms(t *testing.T) {
 func TestOpenSSHRejectedOptionForms(t *testing.T) {
 	k, _ := edKey(t)
 	for _, in := range []string{`principal` + "ſ" + `="x" ` + k, "no-pty=x " + k, `command=x ` + k, `from ` + k,
-		"no-pty,, " + k, "command=\"a\x01b\" " + k, "no-pty\t" + "," + k} {
+		"no-pty,, " + k, "command=\"a\x01b\" " + k, "no-pty\t" + "," + k,
+		", " + k, "  , " + k + " c"} { // A-10: a lone comma is not an empty options field for OpenSSH
 		a := mustParse(t, in+"\n")
 		assert.Equal(t, LineInvalid, a.Lines[0].Kind, "%q", in)
 	}

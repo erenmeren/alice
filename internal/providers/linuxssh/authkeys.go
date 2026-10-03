@@ -107,9 +107,10 @@ func parseKeyLine(l *Line) {
 	// The blob must be canonical base64 (Go's decoder tolerates nonzero padding bits, OpenSSH
 	// would read the same key from a different text) and every option must be one OpenSSH knows.
 	optText, afterOpts := splitOptions(l.Raw)
-	// OpenSSH tolerates one trailing comma before the key ("no-pty, ssh-ed25519 ..."); OptionsText
-	// is then the options field without that comma, so it always equals Join(Options, ",").
-	if strings.HasSuffix(optText, ",") && !strings.HasSuffix(optText, ",,") {
+	// OpenSSH tolerates one trailing comma after the options ("no-pty, ssh-ed25519 ..."); OptionsText
+	// is then the options field without that comma, so it always equals Join(Options, ","). A comma
+	// without any option before it (", ssh-ed25519 ...") is not an options field: OpenSSH rejects it.
+	if len(options) > 0 && strings.HasSuffix(optText, ",") && !strings.HasSuffix(optText, ",,") {
 		optText = optText[:len(optText)-1]
 	}
 	if len(options) > 0 && (optText == "" || strings.Join(options, ",") != optText) {
