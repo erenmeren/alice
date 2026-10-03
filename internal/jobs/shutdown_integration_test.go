@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/notify"
 	"alice/internal/platform/clock"
 )
 
@@ -133,4 +134,44 @@ VALUES ($1, $2, 'test.queue', 'dead/1', $3, $3)`, target, id, past)
 	waitClosed(t, done, 5*time.Second, "Run returning")
 	assert.Equal(t, int32(1), runs.Load())
 	assert.Equal(t, 1, e.audits(t, "job.recovered"))
+}
+
+// A job killed by this process's own shutdown (its last attempt cut off: a connection test has
+// one) is audited as dead with shutdown=true but no job.dead email goes out: the Administrators
+// restarted Alice themselves. The attempt still counts (R37 item 20). Both shutdown paths are
+// covered: a handler that returns on cancellation and one that ignores it.
+func TestShutdownKillsALastAttemptWithoutAnEmail(t *testing.T) {
+	for _, stuck := range []bool{false, true} {
+		e := newQEnvWith(t, clock.Real{})
+		e.adminWithEmail(t)
+		target := insertTarget(t, e.d)
+		id := e.enqueue(t, Spec{Type: testQueueJob, TargetID: target, MaxAttempts: 1})
+		started, release := make(chan struct{}), make(chan struct{})
+		r := e.runner(t, "w1", func(c *RunnerConfig) {
+			c.Workers, c.Poll, c.ShutdownGrace = 1, 5*time.Millisecond, 100*time.Millisecond
+			c.Notifier = notify.AdminNotifier{Clock: e.clk}
+		})
+		r.Handle(testQueueJob, func(ctx context.Context, _ Job, _ StepRecorder) (map[string]any, error) {
+			close(started)
+			if stuck {
+				<-release
+				return nil, nil
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+		ctx, cancel := context.WithCancel(e.ctx)
+		done := runInBackground(ctx, r)
+		<-started
+		cancel()
+		waitClosed(t, done, 5*time.Second, "Run returning")
+		close(release)
+		got := e.row(t, id)
+		assert.Equal(t, "dead", got.status, "stuck=%v", stuck)
+		assert.Equal(t, 1, got.attempts, "stuck=%v: the attempt counts", stuck)
+		assert.Equal(t, 1, e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'job.dead' AND object_id = $1
+  AND details->>'shutdown' = 'true'`, id.String()), "stuck=%v", stuck)
+		assert.Empty(t, e.deadEmails(t), "stuck=%v: a restart is not an alert", stuck)
+		assert.Zero(t, e.count(t, `SELECT count(*) FROM target_locks`))
+	}
 }

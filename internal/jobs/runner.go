@@ -420,6 +420,9 @@ func (r *Runner) settle(ctx context.Context, c *claimed, errorCode string,
 			var err error
 			switch ev.Action {
 			case "job.dead":
+				if ev.Details["shutdown"] == "true" {
+					continue // killed by this process's own shutdown: audited, not mailed (release)
+				}
 				err = r.alert(ctx, tx, TemplateJobDead, deadAlertParams(c.id, c.typ, ev.Details["reason"], c.attempts))
 			case "job.tampered":
 				err = r.alert(ctx, tx, TemplateJobTampered, tamperedAlertParams(c.id, c.typ))
@@ -628,7 +631,7 @@ func (r *Runner) execute(jobCtx context.Context, c *claimed) {
 	stop()
 	cancel()
 	if lost.Load() {
-		r.release(ctx, c) // writes nothing when the job row is no longer this claim's
+		r.release(ctx, c, false) // writes nothing when the job row is no longer this claim's
 		return
 	}
 	r.finish(ctx, jobCtx, c, res, steps.list(), err)
@@ -669,7 +672,7 @@ func (r *Runner) finish(ctx, jobCtx context.Context, c *claimed, res map[string]
 		}
 	}
 	if r.stopping.Load() && jobCtx.Err() != nil {
-		r.release(ctx, c) // interrupted by the shutdown: it runs again after the restart (§8.8)
+		r.release(ctx, c, true) // interrupted by the shutdown: it runs again after the restart (§8.8)
 		return
 	}
 	f := classify(err)
@@ -701,13 +704,20 @@ func (r *Runner) finish(ctx, jobCtx context.Context, c *claimed, res map[string]
 }
 
 // release hands an unfinished run back (graceful shutdown, lost target lock). The attempt
-// counts, as with an expired lease: a job without attempts left is dead.
-func (r *Runner) release(ctx context.Context, c *claimed) {
+// counts, as with an expired lease (R37 item 20): a job without attempts left is dead. A job
+// killed by this process's own shutdown is audited (detail shutdown=true) but not mailed: the
+// Administrators restarted Alice themselves, and a connection test (one attempt) interrupted by
+// every restart must not raise an alert.
+func (r *Runner) release(ctx context.Context, c *claimed, shutdown bool) {
 	if c.attempts >= c.maxAttempts {
+		details := map[string]string{"type": c.typ, "reason": "job.lease_expired", "attempt": strconv.Itoa(c.attempts)}
+		if shutdown {
+			details["shutdown"] = "true"
+		}
 		r.settle(ctx, c, "job.lease_expired", func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
 			return tx.Exec(ctx, `UPDATE jobs SET status = 'dead', last_error_code = 'job.lease_expired', finished_at = $4,
     locked_by = NULL, locked_until = NULL `+mine, c.fence(now)...)
-		}, r.jobEvent("job.dead", audit.Failure, c.id, map[string]string{"type": c.typ, "reason": "job.lease_expired", "attempt": strconv.Itoa(c.attempts)}))
+		}, r.jobEvent("job.dead", audit.Failure, c.id, details))
 		return
 	}
 	r.settle(ctx, c, "job.lease_expired", func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
@@ -738,8 +748,10 @@ type requeued struct {
 
 // takeBack re-queues (or, without attempts left, kills) the running jobs that the UPDATE in sql
 // selects, closes their attempts, releases their target locks and audits them last.
-// sql's parameters are $1 = now plus args; it must RETURN id, type, attempts, status.
-func (r *Runner) takeBack(ctx context.Context, tx pgx.Tx, now time.Time, sql string, args ...any) ([]requeued, error) {
+// sql's parameters are $1 = now plus args; it must RETURN id, type, attempts, status. shutdown
+// says that this process's own shutdown takes them back: a killed job is then audited with
+// shutdown=true and not mailed (see release).
+func (r *Runner) takeBack(ctx context.Context, tx pgx.Tx, now time.Time, shutdown bool, sql string, args ...any) ([]requeued, error) {
 	rows, err := tx.Query(ctx, sql, append([]any{now}, args...)...)
 	if err != nil {
 		return nil, err
@@ -769,7 +781,7 @@ WHERE job_id = ANY($1::uuid[]) AND finished_at IS NULL`, ids, now); err != nil {
 		return nil, err
 	}
 	for _, x := range all {
-		if x.status == string(StatusDead) {
+		if x.status == string(StatusDead) && !shutdown {
 			if err := r.alert(ctx, tx, TemplateJobDead, deadAlertParams(x.id, x.typ, "job.lease_expired", x.attempts)); err != nil {
 				return nil, err
 			}
@@ -781,6 +793,9 @@ WHERE job_id = ANY($1::uuid[]) AND finished_at IS NULL`, ids, now); err != nil {
 		action, result := "job.recovered", audit.Success
 		if x.status == string(StatusDead) {
 			action, result = "job.dead", audit.Failure
+			if shutdown {
+				details["shutdown"] = "true"
+			}
 		}
 		if _, err := r.cfg.Audit.Append(ctx, tx, r.jobEvent(action, result, x.id, details)); err != nil {
 			return nil, err
@@ -807,7 +822,7 @@ func (r *Runner) Reap(ctx context.Context) (int, error) {
 	err := db.InTx(ctx, r.cfg.Pool, func(tx pgx.Tx) error {
 		now := r.cfg.Clock.Now().UTC()
 		// takeBack also deletes the target locks of the jobs it takes back.
-		all, err := r.takeBack(ctx, tx, now, takeBackSet+`WHERE status = 'running' AND locked_until < $1
+		all, err := r.takeBack(ctx, tx, now, false, takeBackSet+`WHERE status = 'running' AND locked_until < $1
 RETURNING id, type, attempts, status`)
 		if err != nil {
 			return fmt.Errorf("jobs: reap: %w", err)
@@ -906,7 +921,7 @@ func (r *Runner) Run(ctx context.Context) {
 func (r *Runner) releaseAll(ctx context.Context) {
 	err := db.InTx(ctx, r.cfg.Pool, func(tx pgx.Tx) error {
 		now := r.cfg.Clock.Now().UTC()
-		_, err := r.takeBack(ctx, tx, now, takeBackSet+`WHERE status = 'running' AND left(locked_by, length($2) + 1) = $2 || '/'
+		_, err := r.takeBack(ctx, tx, now, true, takeBackSet+`WHERE status = 'running' AND left(locked_by, length($2) + 1) = $2 || '/'
 RETURNING id, type, attempts, status`, r.cfg.WorkerID)
 		return err
 	})
