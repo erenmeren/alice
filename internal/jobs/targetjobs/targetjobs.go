@@ -231,7 +231,15 @@ func (h *handlers) removeKey(ctx context.Context, j jobs.Job, steps jobs.StepRec
 	if err != nil {
 		return nil, jobs.Fail("sshkey.not_removable", nil, err)
 	}
+	actor := audit.Actor{Type: audit.ActorSystem, Name: "jobs", RequestID: j.ID.String()}
 	loc, err := h.d.Inventory.KeyLocation(ctx, locID)
+	if errors.Is(err, inventory.ErrNotFound) && j.Attempt > 1 {
+		// The target was deleted after an earlier attempt, which may have changed the file before
+		// its bookkeeping failed. Alice cannot reach the server any more to find out: the attempt
+		// is audited and a person looks, rather than the job ending without a record.
+		h.removalFailed(ctx, locID, actor, "system.not_found")
+		return nil, jobs.Attention("system.not_found", nil, err)
+	}
 	if errors.Is(err, inventory.ErrNotFound) {
 		return nil, jobs.Fail("sshkey.not_removable", nil, err)
 	}
@@ -246,7 +254,6 @@ func (h *handlers) removeKey(ctx context.Context, j jobs.Job, steps jobs.StepRec
 		loc.FilePath != j.Payload["file_path"] {
 		return nil, jobs.Fail("sshkey.not_removable", nil, nil)
 	}
-	actor := audit.Actor{Type: audit.ActorSystem, Name: "jobs", RequestID: j.ID.String()}
 	protected, err := h.d.Inventory.ProtectedFingerprints(ctx)
 	if err != nil {
 		return nil, jobs.Retry("internal.unexpected", nil, err)

@@ -297,6 +297,54 @@ func TestRemovalAppliedWhileTheTargetIsDeletedIsAudited(t *testing.T) {
 	assert.Zero(t, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'job.dead'"))
 }
 
+// A removal applied on the server whose bookkeeping failed (the database refused the update) is
+// retried; when the target was deleted before the retry, the retry cannot reach the server any
+// more. It still records the attempt (sshkey.remove_failed, system.not_found) and stops for a
+// person, since the server may or may not have changed, instead of ending silently.
+func TestRemovalRetryAfterTheTargetWasDeletedIsRecorded(t *testing.T) {
+	var e *env
+	failBookkeeping := false
+	e = newEnv(t, func(s providers.Session) providers.Session {
+		return deletingSession{Session: s, del: func() {
+			if !failBookkeeping {
+				return
+			}
+			_, err := e.db.Owner.Exec(e.ctx, `CREATE FUNCTION fail_location_updates() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'location updates fail'; END $$`)
+			require.NoError(t, err)
+			_, err = e.db.Owner.Exec(e.ctx, `CREATE TRIGGER fail_location_updates BEFORE UPDATE ON ssh_key_locations
+FOR EACH ROW EXECUTE FUNCTION fail_location_updates()`)
+			require.NoError(t, err)
+		}}
+	})
+	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep0000000000000000000000000000000000000000"))
+	e.prov.Configure(func(c *fake.Config) {
+		c.RemoveResult = providers.AuthKeyResult{Changed: true, Removed: 1, Verified: true}
+	})
+	loc := locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000")
+	jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, loc.ID, false)
+	require.NoError(t, err)
+	failBookkeeping = true
+	e.drain()
+	failBookkeeping = false
+	require.Equal(t, jobs.StatusQueued, e.job(jobID).Status, "the bookkeeping failure is retried")
+	require.Equal(t, 1, e.prov.Count("RemoveAuthorizedKey"))
+	_, err = e.db.Owner.Exec(e.ctx, "DROP TRIGGER fail_location_updates ON ssh_key_locations")
+	require.NoError(t, err)
+
+	require.NoError(t, e.inv.DeleteTarget(e.ctx, e.admin, tg.ID))
+	e.clock.Advance(time.Hour)
+	e.drain()
+	v := e.job(jobID)
+	assert.Equal(t, jobs.StatusFailed, v.Status)
+	assert.Equal(t, "system.not_found", v.LastErrorCode)
+	assert.Equal(t, true, v.Result["needs_attention"], "the server may have changed: a person looks")
+	assert.Equal(t, 1, e.prov.Count("RemoveAuthorizedKey"), "the deleted target is not contacted")
+	assert.Equal(t, 1, countRows(t, e, `SELECT count(*) FROM audit_log WHERE action = 'sshkey.remove_failed'
+  AND details->>'reason' = 'system.not_found' AND details->>'job_id' = '`+jobID.String()+"'"))
+	assert.Zero(t, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'job.dead'"))
+}
+
 // A connection test whose target was deleted while it ran ends as not found: no retry, no dead
 // job, no email to the Administrators.
 func TestConnectionTestOfADeletedTargetIsNotFound(t *testing.T) {
