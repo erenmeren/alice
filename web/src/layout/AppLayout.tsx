@@ -19,6 +19,7 @@ const ALL: Role[] = ['admin', 'operator', 'auditor'];
 // NAV_ITEMS lists the side navigation. Roles mirror the server permissions (docs/authz-matrix.md).
 export const NAV_ITEMS: NavItem[] = [
   { to: '/', labelKey: 'nav.home', roles: ALL },
+  { to: '/servers', labelKey: 'nav.servers', roles: ALL },
   { to: '/users', labelKey: 'nav.users', roles: ['admin'] },
   { to: '/audit', labelKey: 'nav.audit', roles: ['admin', 'auditor'] },
   { to: '/license', labelKey: 'nav.license', roles: ['admin', 'auditor'] },

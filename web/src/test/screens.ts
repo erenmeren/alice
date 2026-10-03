@@ -1,5 +1,5 @@
 import type { SessionInfo, SetupStatus } from '../api/types';
-import { freshStatus, installedStatus, sessionFor } from './fixtures';
+import { freshStatus, installedStatus, sessionFor, targetFixture } from './fixtures';
 
 export interface Screen {
   path: string;
@@ -38,5 +38,12 @@ export const SCREENS: Screen[] = [
   { path: '/audit', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'User created', tr: 'Kullanıcı oluşturuldu' } },
   { path: '/license', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Upload a license', tr: 'Lisans yükle' } },
   { path: '/license', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'Installation ID', tr: 'Kurulum Kimliği' } },
+  {
+    path: '/servers',
+    session: sessionFor('admin'),
+    status: installedStatus,
+    ready: { en: 'Prepare a server for Alice', tr: 'Sunucuyu Alice için hazırlayın' },
+  },
+  { path: `/servers/${targetFixture.id}`, session: sessionFor('operator'), status: installedStatus, ready: { en: 'deploy@laptop', tr: 'deploy@laptop' } },
   { path: '/missing', session: null, status: installedStatus, ready: { en: 'Page not found', tr: 'Sayfa bulunamadı' } },
 ];

@@ -31,21 +31,21 @@ describe('application shell', () => {
     await renderRoute('/');
     expect(await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('server-status')).toHaveTextContent('Server version: 1.2.3'));
-    expect(navLabels()).toEqual(['Home', 'Users', 'Audit log', 'License', 'API tokens', 'My account']);
+    expect(navLabels()).toEqual(['Home', 'Servers', 'Users', 'Audit log', 'License', 'API tokens', 'My account']);
   });
 
   it('hides Users and Audit log from operators', async () => {
     server.use(...sessionHandlers(sessionFor('operator')));
     await renderRoute('/');
     await screen.findByRole('heading', { name: 'Welcome, Olcay Öztürk' });
-    expect(navLabels()).toEqual(['Home', 'API tokens', 'My account']);
+    expect(navLabels()).toEqual(['Home', 'Servers', 'API tokens', 'My account']);
   });
 
   it('shows the audit log but not Users to auditors, in Turkish', async () => {
     server.use(...sessionHandlers(sessionFor('auditor', 'tr')));
     await renderRoute('/', { languages: ['tr-TR'] });
     expect(await screen.findByRole('heading', { name: 'Hoş geldiniz, Ilgın Işık' })).toBeInTheDocument();
-    expect(navLabels()).toEqual(['Ana sayfa', 'Denetim kaydı', 'Lisans', 'API anahtarları', 'Hesabım']);
+    expect(navLabels()).toEqual(['Ana sayfa', 'Sunucular', 'Denetim kaydı', 'Lisans', 'API anahtarları', 'Hesabım']);
     expect(document.documentElement.lang).toBe('tr');
   });
 

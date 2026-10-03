@@ -19,6 +19,7 @@
     "license": "Lisans",
     "tokens": "API anahtarları",
     "account": "Hesabım",
+    "servers": "Sunucular",
     "signOutFailed": "Oturumunuz kapatılamadı. Tekrar deneyin.",
     "signOut": "Çıkış yap",
     "setupBanner": "Kurulumu tamamlayın: bir kurtarma parolası belirleyin.",
@@ -55,7 +56,10 @@
       "scope": "Erişim",
       "expires_in_days": "Geçerlilik (gün)",
       "locale": "Dil",
-      "language": "Dil"
+      "language": "Dil",
+      "host": "Adres",
+      "port": "SSH bağlantı noktası",
+      "reason": "Gerekçe"
     },
     "continue": "Devam",
     "verify": "Doğrula",
@@ -452,6 +456,155 @@
     }
   },
   "warnings": {
-    "file_unparseable": "Alice, {{user}} kullanıcısının {{path}} authorized_keys dosyasını okuyamadı; dosyadaki anahtarlar listelenmedi."
+    "file_unparseable": "Alice, {{user}} kullanıcısının {{path}} authorized_keys dosyasını okuyamadı; dosyadaki anahtarlar listelenmedi.",
+    "keys_managed_elsewhere": "SSH sunucusu {{user}} kullanıcısının anahtarlarını bir programdan (AuthorizedKeysCommand) da alıyor, bu yüzden anahtar dosyaları tablonun tamamı olmayabilir. Alice burada anahtarları değiştirmez.",
+    "certificates_in_use": "Bu sunucuda SSH sertifikaları kullanılıyor. Alice yalnızca düz anahtarları yönetir.",
+    "pubkey_disabled": "Bu sunucuda açık anahtarla oturum açma kapalı.",
+    "sshd_unreadable": "SSH sunucusu ayarları okunamadı; yalnızca varsayılan anahtar dosyaları denetlendi.",
+    "strict_modes": "İzinleri fazla açık olduğu için SSH sunucusu bu anahtar dosyasını yok sayıyor: {{path}}",
+    "unsupported_path": "Alice bu yoldaki anahtar dosyasını okuyamıyor: {{path}}",
+    "file_unreadable": "Alice bu anahtar dosyasını okuyamadı: {{path}}",
+    "file_too_large": "Bu anahtar dosyası 1 MiB'tan büyük olduğu için okunmadı: {{path}}",
+    "directory_users_not_listed": "Dizin hizmetinden (LDAP veya SSSD) gelen kullanıcılar listelenmez.",
+    "unreadable_line": "{{file_path}} dosyasının {{line_no}}. satırı okunamadı. Alice bu satırı değiştirmez.",
+    "too_many_users": "Bu sunucuda Alice'in listelediğinden fazla kullanıcı hesabı var, bu yüzden bazı hesaplar taranmadı.",
+    "sshd_unreadable_user": "{{user}} için SSH sunucusu ayarları okunamadı; yalnızca varsayılan anahtar dosyaları denetlendi.",
+    "unsupported_path_unnamed": "Alice, SSH sunucusunun kullandığı yollardan birindeki anahtar dosyasını okuyamıyor."
+  },
+  "targets": {
+    "title": "Sunucular",
+    "add": "Sunucu ekle",
+    "empty": "Henüz sunucu yok. Bir sunucuyu aşağıdaki komutla hazırlayın, sonra ekleyin.",
+    "columns": {
+      "name": "Ad",
+      "address": "Adres",
+      "status": "Durum",
+      "problem": "Son sorun"
+    },
+    "prepare": {
+      "title": "Sunucuyu Alice için hazırlayın",
+      "help": "Bu komutları sunucuda root olarak çalıştırın. Komutlar alice-svc kullanıcısını oluşturur, Alice'in anahtarına izin verir, alice-helper'ı kurar (önce Alice paketinden kopyalayın) ve ona küçük, sabit bir izin kümesi verir.",
+      "publicKey": "Alice'in açık anahtarı",
+      "fingerprint": "Alice'in anahtarının parmak izi",
+      "profile": "Sunucu türü",
+      "profileLinux": "Linux sunucu",
+      "profileNginx": "Nginx sunucu",
+      "script": "root olarak çalıştırılacak komutlar",
+      "copy": "Komutları kopyala",
+      "copied": "Kopyalandı"
+    },
+    "form": {
+      "name": "Ad",
+      "host": "Adres",
+      "hostHelp": "Yalnızca sunucu adı veya IP adresi. Bağlantı noktasını sonraki alana yazın.",
+      "port": "SSH bağlantı noktası",
+      "username": "Sunucudaki kullanıcı adı",
+      "submit": "Bağlan"
+    },
+    "connecting": "Sunucuya bağlanılıyor…",
+    "stillWorking": "Alice bu iş üzerinde çalışmaya devam ediyor. Sonucu görmek için bir dakika sonra sunucunun sayfasını açın.",
+    "failedHelp": "Sunucu eklendi ancak Alice denetimi tamamlayamadı. Sorunu giderin, sonra sunucunun sayfasında Bağlantıyı sına düğmesini kullanın.",
+    "added": "Sunucu eklendi. Alice SSH anahtarlarını okuyor.",
+    "address": "Alice oturumu {{host}} adresinde, {{port}} numaralı bağlantı noktasında şu kullanıcıyla açar: {{user}}.",
+    "test": "Bağlantıyı sına",
+    "discover": "SSH anahtarlarını tara",
+    "working": "Alice bu iş üzerinde çalışıyor…",
+    "jobDone": "Tamamlandı.",
+    "delete": "Sunucuyu kaldır",
+    "deleteTitle": "Bu sunucu Alice'ten kaldırılsın mı?",
+    "deleteHelp": "Alice sunucuyu ve anahtarlarını unutur. Sunucuda hiçbir şey değiştirilmez.",
+    "cancel": "Vazgeç",
+    "keysTitle": "Bu sunucudaki SSH anahtarları",
+    "noKeys": "Alice bu sunucuda henüz SSH anahtarı bulmadı.",
+    "hostKeyChanged": "Sunucunun kimliği değişti, bu yüzden Alice bu sunucudaki tüm işleri durdurdu. Değişikliği kabul etmeden önce güvenlik ekibinizden doğrulamasını isteyin.",
+    "facts": {
+      "os": "İşletim sistemi: {{name}}",
+      "helper": "alice-helper sürümü: {{version}}",
+      "lastDiscovery": "Son tarama: {{time}}",
+      "neverScanned": "Henüz taranmadı."
+    }
+  },
+  "hostKeys": {
+    "confirmTitle": "Bu sizin sunucunuz mu?",
+    "confirmHelp": "Alice bu parmak izini {{host}} adresinden aldı. Aşağıdaki komutu sunucuda çalıştırın ve aynı parmak izini gösterdiğini denetleyin.",
+    "fingerprintLabel": "Parmak izi",
+    "commandLabel": "Sunucuda çalıştırılacak komut",
+    "yes": "Evet, bu benim sunucum",
+    "no": "Hayır, vazgeç",
+    "pendingNote": "Vazgeçerseniz sunucu listede “Parmak izi onayı bekleniyor” durumunda kalır. Onayı daha sonra sunucunun sayfasında verebilirsiniz.",
+    "review": "Yeni parmak izini incele",
+    "repinTitle": "Yeni sunucu parmak izini kabul et",
+    "repinHelp": "Yeni parmak izini yalnızca güvenlik ekibiniz sunucunun yeniden kurulduğunu veya anahtarlarının bilerek değiştirildiğini doğruladıktan sonra kabul edin.",
+    "oldFingerprint": "Önceki parmak izi",
+    "newFingerprint": "Yeni parmak izi",
+    "reason": "Gerekçe",
+    "reasonHelp": "En az 10 karakter; örneğin değişiklik kaydının numarası. Denetim kaydında saklanır.",
+    "repin": "Yeni parmak izini kabul et",
+    "cancel": "Vazgeç",
+    "noCandidate": "Alice yeni parmak izini henüz almadı. Önce Bağlantıyı sına düğmesini kullanın."
+  },
+  "sshKeys": {
+    "user": "Kullanıcı",
+    "key": "Anahtar",
+    "file": "Dosya",
+    "comment": "Açıklama",
+    "actions": "İşlemler",
+    "aliceKey": "Alice'in anahtarı",
+    "fingerprintLabel": "Parmak izi",
+    "removeUser": "Sunucudaki kullanıcı: {{user}}",
+    "removeNamed": "Anahtarı kaldır: {{user}}",
+    "removeTitle": "Bu anahtar sunucudan kaldırılsın mı?",
+    "removeHelp": "Alice {{file}} dosyasından yalnızca bu anahtarı kaldırır. Dosyadaki diğer satırlar olduğu gibi kalır.",
+    "removeConfirm": "Anahtarı kaldır",
+    "removeCancel": "Vazgeç",
+    "removeQueued": "Alice anahtarı kaldırıyor.",
+    "confirmLastRootKey": "Bu, root hesabının son anahtarı. Yine de kaldır.",
+    "flags": {
+      "weak": "Zayıf anahtar",
+      "command": "Sabit bir komut çalıştırır",
+      "root_without_from": "Kaynak adres sınırı olmayan root anahtarı",
+      "duplicate": "Birden fazla kez yazılmış",
+      "cert_authority": "Sertifika yetkilisi",
+      "security_key": "Donanım güvenlik anahtarı"
+    }
+  },
+  "jobs": {
+    "blockedTitle": "Yönetici onayı bekliyor",
+    "blockedHelp": "Bu değişiklikler lisans süresi dolduğu sırada duraklatıldı. Her birini inceleyin, sonra çalıştırın veya vazgeçin.",
+    "runNow": "Şimdi çalıştır",
+    "discard": "Vazgeç",
+    "runNowNamed": "Şimdi çalıştır: {{job}}",
+    "discardNamed": "Vazgeç: {{job}}",
+    "created": "İstenme zamanı: {{time}}",
+    "errorCode": "Hata kodu: {{code}}",
+    "types": {
+      "target": {
+        "test_connection": "Bağlantı sınaması",
+        "discover": "SSH anahtarı taraması"
+      },
+      "sshkey": {
+        "remove": "SSH anahtarının kaldırılması"
+      }
+    }
+  },
+  "enum": {
+    "targetStatus": {
+      "pending_host_key": "Parmak izi onayı bekleniyor",
+      "checking": "Denetleniyor…",
+      "ok": "Bağlı",
+      "unreachable": "Erişilemiyor",
+      "host_key_changed": "Sunucu kimliği değişti",
+      "auth_failed": "Oturum açma reddedildi",
+      "disabled": "Devre dışı"
+    },
+    "jobStatus": {
+      "queued": "Başlamayı bekliyor",
+      "running": "Çalışıyor",
+      "succeeded": "Tamamlandı",
+      "failed": "Başarısız",
+      "cancelled": "İptal edildi",
+      "dead": "Tekrarlanan hatalardan sonra durduruldu",
+      "blocked_license": "Yönetici onayı bekliyor"
+    }
   }
 }

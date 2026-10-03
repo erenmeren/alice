@@ -19,6 +19,7 @@
     "license": "License",
     "tokens": "API tokens",
     "account": "My account",
+    "servers": "Servers",
     "signOutFailed": "Could not sign you out. Try again.",
     "signOut": "Sign out",
     "setupBanner": "Finish setting up: choose a recovery passphrase.",
@@ -55,7 +56,10 @@
       "scope": "Access",
       "expires_in_days": "Valid for (days)",
       "locale": "Language",
-      "language": "Language"
+      "language": "Language",
+      "host": "Address",
+      "port": "SSH port",
+      "reason": "Reason"
     },
     "continue": "Continue",
     "verify": "Verify",
@@ -452,6 +456,155 @@
     }
   },
   "warnings": {
-    "file_unparseable": "Alice could not read the authorized_keys file {{path}} of {{user}}; its keys are not listed."
+    "file_unparseable": "Alice could not read the authorized_keys file {{path}} of {{user}}; its keys are not listed.",
+    "keys_managed_elsewhere": "The SSH server also asks a program (AuthorizedKeysCommand) for the keys of {{user}}, so the key files may not be the whole picture. Alice will not change keys here.",
+    "certificates_in_use": "SSH certificates are in use on this server. Alice manages plain keys only.",
+    "pubkey_disabled": "Public key sign-in is turned off on this server.",
+    "sshd_unreadable": "Could not read the SSH server settings; only the default key files were checked.",
+    "strict_modes": "The SSH server ignores this key file because its permissions are too open: {{path}}",
+    "unsupported_path": "Alice cannot read a key file at this path: {{path}}",
+    "file_unreadable": "Alice could not read this key file: {{path}}",
+    "file_too_large": "This key file is larger than 1 MiB and was not read: {{path}}",
+    "directory_users_not_listed": "Users from a directory service (LDAP or SSSD) are not listed.",
+    "unreadable_line": "Line {{line_no}} of {{file_path}} could not be read. Alice leaves it unchanged.",
+    "too_many_users": "This server has more user accounts than Alice lists, so some accounts were not scanned.",
+    "sshd_unreadable_user": "Could not read the SSH server settings for {{user}}; only the default key files were checked.",
+    "unsupported_path_unnamed": "Alice cannot read a key file at one of the paths that the SSH server uses."
+  },
+  "targets": {
+    "title": "Servers",
+    "add": "Add server",
+    "empty": "No servers yet. Prepare a server with the command below, then add it.",
+    "columns": {
+      "name": "Name",
+      "address": "Address",
+      "status": "Status",
+      "problem": "Last problem"
+    },
+    "prepare": {
+      "title": "Prepare a server for Alice",
+      "help": "Run these commands as root on the server. They create the user alice-svc, allow Alice's key, install alice-helper (copy it from the Alice bundle first) and give it a small, fixed set of permissions.",
+      "publicKey": "Alice's public key",
+      "fingerprint": "Fingerprint of Alice's key",
+      "profile": "Server type",
+      "profileLinux": "Linux server",
+      "profileNginx": "Nginx server",
+      "script": "Commands to run as root",
+      "copy": "Copy commands",
+      "copied": "Copied"
+    },
+    "form": {
+      "name": "Name",
+      "host": "Address",
+      "hostHelp": "Host name or IP address only. Enter the port in the next field.",
+      "port": "SSH port",
+      "username": "User name on the server",
+      "submit": "Connect"
+    },
+    "connecting": "Connecting to the server…",
+    "stillWorking": "Alice is still working on this. Open the server's page in a minute to see the result.",
+    "failedHelp": "The server was added, but Alice could not finish the check. Fix the problem, then use Test connection on the server's page.",
+    "added": "Server added. Alice is reading its SSH keys.",
+    "address": "Alice signs in as {{user}} at {{host}}, port {{port}}.",
+    "test": "Test connection",
+    "discover": "Scan for SSH keys",
+    "working": "Alice is working on it…",
+    "jobDone": "Finished.",
+    "delete": "Remove server",
+    "deleteTitle": "Remove this server from Alice?",
+    "deleteHelp": "Alice forgets the server and its keys. Nothing is changed on the server.",
+    "cancel": "Cancel",
+    "keysTitle": "SSH keys on this server",
+    "noKeys": "Alice has not found any SSH keys on this server yet.",
+    "hostKeyChanged": "The server's identity has changed, so Alice stopped all work on it. Ask your security team to confirm the change before you accept it.",
+    "facts": {
+      "os": "Operating system: {{name}}",
+      "helper": "alice-helper version: {{version}}",
+      "lastDiscovery": "Last scan: {{time}}",
+      "neverScanned": "Not scanned yet."
+    }
+  },
+  "hostKeys": {
+    "confirmTitle": "Is this your server?",
+    "confirmHelp": "Alice received this fingerprint from {{host}}. Run the command below on the server and check that it shows the same fingerprint.",
+    "fingerprintLabel": "Fingerprint",
+    "commandLabel": "Command to run on the server",
+    "yes": "Yes, this is my server",
+    "no": "No, cancel",
+    "pendingNote": "If you cancel, the server stays in the list as “Waiting for fingerprint confirmation”. You can confirm it later on the server's page.",
+    "review": "Review the new fingerprint",
+    "repinTitle": "Accept the new server fingerprint",
+    "repinHelp": "Accept the new fingerprint only after your security team has confirmed that the server was reinstalled or its keys were replaced on purpose.",
+    "oldFingerprint": "Previous fingerprint",
+    "newFingerprint": "New fingerprint",
+    "reason": "Reason",
+    "reasonHelp": "At least 10 characters, for example the change ticket number. It is kept in the audit log.",
+    "repin": "Accept new fingerprint",
+    "cancel": "Cancel",
+    "noCandidate": "Alice has not received the new fingerprint yet. Use Test connection first."
+  },
+  "sshKeys": {
+    "user": "User",
+    "key": "Key",
+    "file": "File",
+    "comment": "Comment",
+    "actions": "Actions",
+    "aliceKey": "Alice's key",
+    "fingerprintLabel": "Fingerprint",
+    "removeUser": "User on the server: {{user}}",
+    "removeNamed": "Remove key from {{user}}",
+    "removeTitle": "Remove this key from the server?",
+    "removeHelp": "Alice removes only this key from {{file}}. Other lines in the file stay as they are.",
+    "removeConfirm": "Remove key",
+    "removeCancel": "Cancel",
+    "removeQueued": "Alice is removing the key.",
+    "confirmLastRootKey": "This is the last key of the root account. Remove it anyway.",
+    "flags": {
+      "weak": "Weak key",
+      "command": "Runs a fixed command",
+      "root_without_from": "root key without a source address limit",
+      "duplicate": "Listed more than once",
+      "cert_authority": "Certificate authority",
+      "security_key": "Hardware security key"
+    }
+  },
+  "jobs": {
+    "blockedTitle": "Waiting for an administrator",
+    "blockedHelp": "These changes were paused while the license was expired. Check each one, then run it or discard it.",
+    "runNow": "Run now",
+    "discard": "Discard",
+    "runNowNamed": "Run now: {{job}}",
+    "discardNamed": "Discard: {{job}}",
+    "created": "Requested on {{time}}",
+    "errorCode": "Error code: {{code}}",
+    "types": {
+      "target": {
+        "test_connection": "Connection test",
+        "discover": "SSH key scan"
+      },
+      "sshkey": {
+        "remove": "SSH key removal"
+      }
+    }
+  },
+  "enum": {
+    "targetStatus": {
+      "pending_host_key": "Waiting for fingerprint confirmation",
+      "checking": "Checking…",
+      "ok": "Connected",
+      "unreachable": "Cannot be reached",
+      "host_key_changed": "Server identity changed",
+      "auth_failed": "Sign-in refused",
+      "disabled": "Disabled"
+    },
+    "jobStatus": {
+      "queued": "Waiting to start",
+      "running": "Running",
+      "succeeded": "Finished",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "dead": "Stopped after repeated failures",
+      "blocked_license": "Waiting for an administrator"
+    }
   }
 }

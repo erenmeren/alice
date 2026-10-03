@@ -9,6 +9,8 @@ import { HomePage } from './pages/HomePage';
 import { LicensePage } from './pages/LicensePage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { TargetDetailPage } from './pages/TargetDetailPage';
+import { TargetsPage } from './pages/TargetsPage';
 import { SetupPage } from './pages/SetupPage';
 import { TokensPage } from './pages/TokensPage';
 import { UsersPage } from './pages/UsersPage';
@@ -41,6 +43,8 @@ export function routes(): RouteObject[] {
           children: [
             { index: true, element: <HomePage /> },
             { path: 'account', element: <AccountPage /> },
+            { path: 'servers', element: <TargetsPage /> },
+            { path: 'servers/:id', element: <TargetDetailPage /> },
             {
               path: 'users',
               element: (

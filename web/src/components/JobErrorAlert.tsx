@@ -1,0 +1,29 @@
+import { Alert, Text } from '@mantine/core';
+import type { i18n as I18n, TFunction } from 'i18next';
+import { useTranslation } from 'react-i18next';
+import type { JobError } from '../api/types';
+
+// reasonTitle is the one-line text of a stable error reason (errors.<reason>.title); an unknown
+// reason gets the generic message, never the raw reason.
+export function reasonTitle(t: TFunction, i18n: I18n, reason: string, params: Record<string, string> = {}): string {
+  const key = `errors.${reason}.title`;
+  return i18n.exists(key) ? t(key, params) : t('ui.unexpectedError');
+}
+
+// JobErrorAlert shows why a background job failed: what happened, what to do, and the code.
+export function JobErrorAlert({ error }: { error: JobError | null }) {
+  const { t, i18n } = useTranslation();
+  if (!error) return null;
+  const params = error.params ?? {};
+  const actionKey = `errors.${error.reason}.action`;
+  return (
+    <Alert color="red" role="alert" title={reasonTitle(t, i18n, error.reason, params)}>
+      {i18n.exists(actionKey) && <Text size="sm">{t(actionKey, params)}</Text>}
+      {error.code && (
+        <Text size="xs" c="gray.7" mt="xs">
+          {t('jobs.errorCode', { code: error.code })}
+        </Text>
+      )}
+    </Alert>
+  );
+}

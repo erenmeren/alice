@@ -1,7 +1,7 @@
 import { screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import type { ApiToken, AuditEntry } from './api/types';
-import { sessionHandlers, userFor } from './test/fixtures';
+import { aliceKeyLocation, hostKeyFixture, keyLocationFixture, sessionHandlers, targetFixture, userFor } from './test/fixtures';
 import { expectNoRawKeys } from './test/i18nAssert';
 import { renderRoute } from './test/render';
 import { SCREENS } from './test/screens';
@@ -38,6 +38,10 @@ const auditEntry: AuditEntry = {
 const dataHandlers = [
   http.get('/api/v1/users', () => HttpResponse.json({ items: [userFor('admin'), userFor('operator'), userFor('auditor')] })),
   http.get('/api/v1/tokens', () => HttpResponse.json({ items: [token] })),
+  http.get('/api/v1/targets', () => HttpResponse.json({ items: [targetFixture], next_cursor: null })),
+  http.get('/api/v1/targets/:id', () => HttpResponse.json(targetFixture)),
+  http.get('/api/v1/targets/:id/host-keys', () => HttpResponse.json({ items: [hostKeyFixture()] })),
+  http.get('/api/v1/targets/:id/ssh-keys', () => HttpResponse.json({ items: [keyLocationFixture(), aliceKeyLocation] })),
   http.get('/api/v1/audit', () => HttpResponse.json({ items: [auditEntry], next_cursor: null })),
 ];
 

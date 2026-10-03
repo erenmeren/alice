@@ -21,6 +21,19 @@ import type {
   UserCreateRequest,
   UserUpdateRequest,
   VersionInfo,
+  HostKey,
+  Job,
+  JobAccepted,
+  JobPage,
+  JobQuery,
+  KeyLocation,
+  PlatformKeyInfo,
+  SSHKey,
+  SSHKeyPage,
+  SSHKeyQuery,
+  Target,
+  TargetCreated,
+  TargetCreateRequest,
 } from './types';
 
 const v1 = '/api/v1';
@@ -142,3 +155,78 @@ export const previewLicense = (license: string) =>
 
 export const installLicense = (license: string) =>
   apiFetch<LicenseUploadResult>(`${v1}/license`, { method: 'POST', body: { license } });
+
+// Servers (targets) and host keys
+const enc = encodeURIComponent;
+
+export const listTargets = () => apiFetch<{ items: Target[]; next_cursor: string | null }>(`${v1}/targets`);
+
+export const getTarget = (id: string) => apiFetch<Target>(`${v1}/targets/${enc(id)}`);
+
+export const createTarget = (req: TargetCreateRequest) =>
+  apiFetch<TargetCreated>(`${v1}/targets`, { method: 'POST', body: req });
+
+export const deleteTarget = (id: string) => apiFetch<void>(`${v1}/targets/${enc(id)}`, { method: 'DELETE' });
+
+export const testTarget = (id: string) =>
+  apiFetch<JobAccepted>(`${v1}/targets/${enc(id)}/actions/test`, { method: 'POST' });
+
+export const discoverTarget = (id: string) =>
+  apiFetch<JobAccepted>(`${v1}/targets/${enc(id)}/actions/discover`, { method: 'POST' });
+
+export const listHostKeys = (targetId: string) => apiFetch<{ items: HostKey[] }>(`${v1}/targets/${enc(targetId)}/host-keys`);
+
+export const confirmHostKey = (targetId: string, keyId: string, fingerprint: string) =>
+  apiFetch<JobAccepted>(`${v1}/targets/${enc(targetId)}/host-keys/${enc(keyId)}/actions/confirm`, {
+    method: 'POST',
+    body: { fingerprint },
+  });
+
+export const repinHostKey = (targetId: string, keyId: string, fingerprint: string, reason: string) =>
+  apiFetch<JobAccepted>(`${v1}/targets/${enc(targetId)}/host-keys/${enc(keyId)}/actions/repin`, {
+    method: 'POST',
+    body: { fingerprint, reason },
+  });
+
+export const listTargetKeys = (targetId: string, missing = false) =>
+  apiFetch<{ items: KeyLocation[] }>(`${v1}/targets/${enc(targetId)}/ssh-keys${missing ? '?missing=true' : ''}`);
+
+// SSH keys
+export function listSSHKeys(q: SSHKeyQuery = {}): Promise<SSHKeyPage> {
+  const params = new URLSearchParams();
+  if (q.target_id) params.set('target_id', q.target_id);
+  if (q.os_user) params.set('os_user', q.os_user);
+  if (q.q) params.set('q', q.q);
+  if (q.flag) params.set('flag', q.flag);
+  if (q.missing) params.set('missing', 'true');
+  if (q.cursor) params.set('cursor', q.cursor);
+  if (q.limit) params.set('limit', String(q.limit));
+  const qs = params.toString();
+  return apiFetch<SSHKeyPage>(`${v1}/ssh-keys${qs ? `?${qs}` : ''}`);
+}
+
+export const getSSHKey = (id: string) => apiFetch<SSHKey>(`${v1}/ssh-keys/${enc(id)}`);
+
+export const getPlatformKey = () => apiFetch<PlatformKeyInfo>(`${v1}/ssh-keys/platform-key`);
+
+export const removeKeyLocation = (id: string, confirmLastRootKey = false) =>
+  apiFetch<JobAccepted>(`${v1}/ssh-keys/locations/${enc(id)}/actions/remove`, {
+    method: 'POST',
+    body: { confirm_last_root_key: confirmLastRootKey },
+  });
+
+// Jobs
+export function listJobs(q: JobQuery = {}): Promise<JobPage> {
+  const params = new URLSearchParams();
+  if (q.status) params.set('status', q.status);
+  if (q.target_id) params.set('target_id', q.target_id);
+  if (q.cursor) params.set('cursor', q.cursor);
+  const qs = params.toString();
+  return apiFetch<JobPage>(`${v1}/jobs${qs ? `?${qs}` : ''}`);
+}
+
+export const getJob = (id: string) => apiFetch<Job>(`${v1}/jobs/${enc(id)}`);
+
+export const confirmJob = (id: string) => apiFetch<Job>(`${v1}/jobs/${enc(id)}/actions/confirm`, { method: 'POST' });
+
+export const discardJob = (id: string) => apiFetch<Job>(`${v1}/jobs/${enc(id)}/actions/discard`, { method: 'POST' });

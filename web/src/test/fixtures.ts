@@ -1,5 +1,18 @@
 import { http, HttpResponse } from 'msw';
-import type { LicenseBanner, LicenseDetail, LicenseStatus, Role, SessionInfo, SetupStatus, User } from '../api/types';
+import type {
+  HostKey,
+  Job,
+  KeyLocation,
+  LicenseBanner,
+  LicenseDetail,
+  LicenseStatus,
+  PlatformKeyInfo,
+  Role,
+  SessionInfo,
+  SetupStatus,
+  Target,
+  User,
+} from '../api/types';
 
 export function userFor(role: Role, locale = 'en'): User {
   return {
@@ -114,4 +127,118 @@ export const licenseDetailFixture: LicenseDetail = {
 // statusWith builds a license status with the given banners (no banner = nothing to show).
 export function statusWith(...banners: LicenseBanner[]): LicenseStatus {
   return { expired: banners.some((b) => ['grace', 'locked', 'evaluation_ended'].includes(b.kind)), banners };
+}
+
+// Phase 3 fixtures: one connected Linux server with three keys, Alice's own key and a finished job.
+export const targetFixture: Target = {
+  id: '0192b000-0000-7000-8000-0000000000a1',
+  name: 'web-01',
+  type: 'linux',
+  host: 'web-01.example.com',
+  port: 22,
+  username: 'alice-svc',
+  status: 'ok',
+  last_error: null,
+  last_success_at: '2026-10-01T08:00:00Z',
+  last_discovery_at: '2026-10-01T08:01:00Z',
+  discovery_interval_hours: 24,
+  keys_managed_elsewhere: false,
+  capabilities: ['authorized_keys', 'discover_ssh_keys', 'test_connection'],
+  facts: {
+    os: { id: 'ubuntu', version_id: '22.04', pretty_name: 'Ubuntu 22.04.4 LTS' },
+    helper_version: '1.0.0',
+    helper_protocol: 1,
+    sshd: null,
+    host_keys: [],
+    warnings: [],
+    unreadable: [],
+  },
+  version: 3,
+  created_at: '2026-10-01T07:59:00Z',
+  updated_at: '2026-10-01T08:01:00Z',
+};
+
+export function targetWith(o: Partial<Target>): Target {
+  return { ...targetFixture, ...o };
+}
+
+export function hostKeyFixture(o: Partial<HostKey> = {}): HostKey {
+  return {
+    id: '0192b000-0000-7000-8000-0000000000h1',
+    key_type: 'ssh-ed25519',
+    fingerprint: 'SHA256:pinnedPinnedPinnedPinnedPinnedPinnedPinned0',
+    status: 'pinned',
+    observed_at: '2026-10-01T07:59:30Z',
+    confirmed_at: '2026-10-01T07:59:40Z',
+    confirmed_by_name: 'admin',
+    superseded_at: null,
+    verify_command: 'ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub',
+    ...o,
+  };
+}
+
+export function keyLocationFixture(o: Partial<KeyLocation> = {}): KeyLocation {
+  return {
+    id: '0192b000-0000-7000-8000-0000000000l1',
+    ssh_key_id: '0192b000-0000-7000-8000-0000000000k1',
+    fingerprint: 'SHA256:deployDeployDeployDeployDeployDeployDeploy0',
+    key_type: 'ssh-ed25519',
+    target_id: targetFixture.id,
+    target_name: targetFixture.name,
+    os_user: 'deploy',
+    file_path: '/home/deploy/.ssh/authorized_keys',
+    line_no: 1,
+    options: '',
+    comment: 'deploy@laptop',
+    flags: [],
+    first_seen_at: '2026-10-01T08:01:00Z',
+    last_seen_at: '2026-10-01T08:01:00Z',
+    missing_since: null,
+    removed_at: null,
+    is_alice_connection_key: false,
+    ...o,
+  };
+}
+
+export const aliceKeyLocation: KeyLocation = keyLocationFixture({
+  id: '0192b000-0000-7000-8000-0000000000l9',
+  ssh_key_id: '0192b000-0000-7000-8000-0000000000k9',
+  fingerprint: 'SHA256:aliceAliceAliceAliceAliceAliceAliceAlice00',
+  os_user: 'alice-svc',
+  file_path: '/var/lib/alice-svc/.ssh/authorized_keys',
+  comment: 'alice-platform',
+  options: 'no-agent-forwarding,no-port-forwarding,no-X11-forwarding',
+  is_alice_connection_key: true,
+});
+
+export const platformKeyFixture: PlatformKeyInfo = {
+  public_key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExample alice-platform',
+  fingerprint: 'SHA256:aliceAliceAliceAliceAliceAliceAliceAlice00',
+  authorized_keys_line:
+    'no-agent-forwarding,no-port-forwarding,no-X11-forwarding ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExample alice-platform',
+  helper_path: '/usr/local/libexec/alice-helper',
+  helper_protocol: 1,
+  profiles: {
+    linux: { sudoers: '# linux profile', script: '# linux setup script\nset -eu\n' },
+    nginx: { sudoers: '# nginx profile', script: '# nginx setup script\nset -eu\n' },
+  },
+};
+
+export function jobFixture(o: Partial<Job> = {}): Job {
+  return {
+    id: '0192b000-0000-7000-8000-0000000000j1',
+    type: 'target.test_connection',
+    kind: 'user',
+    status: 'succeeded',
+    target_id: targetFixture.id,
+    attempts: 1,
+    max_attempts: 1,
+    error: null,
+    result: {},
+    created_at: '2026-10-01T08:00:00Z',
+    run_at: '2026-10-01T08:00:00Z',
+    started_at: '2026-10-01T08:00:01Z',
+    finished_at: '2026-10-01T08:00:02Z',
+    ...o,
+  };
 }

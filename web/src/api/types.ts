@@ -230,3 +230,196 @@ export interface LicenseUploadResult {
   duplicate: boolean;
   phase: LicensePhase;
 }
+
+// Phase 3: servers (targets), host keys, SSH key inventory, jobs (api/openapi.yaml).
+
+export type TargetStatus = 'pending_host_key' | 'checking' | 'ok' | 'unreachable' | 'host_key_changed' | 'auth_failed' | 'disabled';
+export type TargetType = 'linux' | 'nginx' | 'azure_key_vault';
+
+// Warning is a stable code (translated as warnings.<code>) and its parameters.
+export interface Warning {
+  code: string;
+  params: Record<string, string>;
+}
+
+export interface OSRelease {
+  id: string;
+  version_id: string;
+  pretty_name: string;
+}
+
+export interface DiscoveredHostKey {
+  key_type: string;
+  bits: number;
+  fingerprint: string;
+  weak: boolean;
+}
+
+export interface UnreadableLine {
+  os_user: string;
+  file_path: string;
+  line_no: number;
+}
+
+export interface TargetFacts {
+  os: OSRelease;
+  helper_version: string;
+  helper_protocol: number;
+  sshd: Record<string, unknown> | null;
+  host_keys: DiscoveredHostKey[];
+  warnings: Warning[];
+  unreadable: UnreadableLine[];
+}
+
+export interface Target {
+  id: string;
+  name: string;
+  type: TargetType;
+  host: string;
+  port: number;
+  username: string;
+  status: TargetStatus;
+  last_error: { code: string; reason: string } | null;
+  last_success_at: string | null;
+  last_discovery_at: string | null;
+  discovery_interval_hours: number;
+  keys_managed_elsewhere: boolean;
+  capabilities: string[];
+  facts: TargetFacts;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TargetCreateRequest {
+  name: string;
+  type: 'linux';
+  host: string;
+  port: number;
+  username: string;
+}
+
+export interface JobAccepted {
+  job_id: string;
+  status_url: string;
+}
+
+export interface TargetCreated extends JobAccepted {
+  target: Target;
+}
+
+export type HostKeyStatus = 'observed' | 'pinned' | 'superseded' | 'rejected';
+
+export interface HostKey {
+  id: string;
+  key_type: string;
+  fingerprint: string;
+  status: HostKeyStatus;
+  observed_at: string;
+  confirmed_at: string | null;
+  confirmed_by_name: string;
+  superseded_at: string | null;
+  verify_command: string;
+}
+
+export type KeyFlag = 'weak' | 'command' | 'root_without_from' | 'duplicate' | 'cert_authority' | 'security_key';
+
+export interface KeyLocation {
+  id: string;
+  ssh_key_id: string;
+  fingerprint: string;
+  key_type: string;
+  target_id: string;
+  target_name: string;
+  os_user: string;
+  file_path: string;
+  line_no: number;
+  options: string;
+  comment: string;
+  flags: KeyFlag[];
+  first_seen_at: string;
+  last_seen_at: string;
+  missing_since: string | null;
+  removed_at: string | null;
+  is_alice_connection_key: boolean;
+}
+
+export interface SSHKey {
+  id: string;
+  fingerprint: string;
+  key_type: string;
+  bits: number;
+  public_key: string;
+  managed: boolean;
+  is_platform_key: boolean;
+  weak: boolean;
+  comment: string;
+  location_count: number;
+  target_count: number;
+  first_seen_at: string;
+  locations?: KeyLocation[];
+}
+
+export interface SSHKeyPage {
+  items: SSHKey[];
+  next_cursor: string | null;
+}
+
+export interface SSHKeyQuery {
+  target_id?: string;
+  os_user?: string;
+  q?: string;
+  flag?: KeyFlag | '';
+  missing?: boolean;
+  cursor?: string | null;
+  limit?: number;
+}
+
+export interface SetupSnippet {
+  sudoers: string;
+  script: string;
+}
+
+export interface PlatformKeyInfo {
+  public_key: string;
+  fingerprint: string;
+  authorized_keys_line: string;
+  helper_path: string;
+  helper_protocol: number;
+  profiles: { linux: SetupSnippet; nginx: SetupSnippet };
+}
+
+export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead' | 'blocked_license';
+
+export interface JobError {
+  code: string;
+  reason: string;
+  params?: Record<string, string>;
+}
+
+export interface Job {
+  id: string;
+  type: string;
+  kind: 'user' | 'scheduled' | 'system';
+  status: JobStatus;
+  target_id: string | null;
+  attempts: number;
+  max_attempts: number;
+  error: JobError | null;
+  result: Record<string, unknown>;
+  created_at: string;
+  run_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface JobPage {
+  items: Job[];
+  next_cursor: string | null;
+}
+
+export interface JobQuery {
+  status?: JobStatus;
+  target_id?: string;
+  cursor?: string | null;
+}
