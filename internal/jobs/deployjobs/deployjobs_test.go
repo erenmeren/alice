@@ -1229,8 +1229,8 @@ func TestHandlersNeverShowTheKey(t *testing.T) {
 		if err != nil {
 			text += err.Error()
 		}
-		for _, n := range needles {
-			assert.NotContains(t, text, n, "scenario %d", i)
+		for j, n := range needles {
+			assert.False(t, strings.Contains(text, n), "scenario %d: key marker %d leaked", i, j)
 		}
 	}
 }

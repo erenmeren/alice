@@ -197,6 +197,7 @@ type Deployment struct {
 	CertPath               string
 	KeyPath                string
 	JobID                  *uuid.UUID // nil once the job was pruned
+	JobStatus              string     // its job's status ("" once pruned); blocked_license: held in lock for an Administrator (L-81)
 	Trigger                string
 	RequestedBy            *uuid.UUID
 	RequestedByName        string
@@ -543,11 +544,12 @@ d.location_id, d.target_id, t.name::text, d.cert_path, d.key_path, d.job_id, d.t
 d.state, d.status, d.new_fingerprint, d.previous_fingerprint, d.confirm_incomplete_chain, d.rollback_info, d.verified, d.error_code,
 d.error_params, d.failed_step, d.created_at, d.started_at, d.finished_at, d.result, d.phase, d.cause_step, d.helper_error,
 d.verify_failed_reason, d.verify_failed_port, d.operation_id, d.new_chain_length, d.previous_chain_length, d.expect_cert_sha256,
-d.recover_after, d.recovery_attempts
+d.recover_after, d.recovery_attempts, coalesce(j.status, '')
 FROM deployments d
 JOIN certificates c ON c.id = d.certificate_id
 JOIN targets t ON t.id = d.target_id
-LEFT JOIN users u ON u.id = d.requested_by`
+LEFT JOIN users u ON u.id = d.requested_by
+LEFT JOIN jobs j ON j.id = d.job_id`
 
 func scanDeployment(row pgx.Row) (Deployment, error) {
 	var (
@@ -558,7 +560,7 @@ func scanDeployment(row pgx.Row) (Deployment, error) {
 		&d.JobID, &d.Trigger, &d.RequestedBy, &d.RequestedByName, &d.State, &d.Status, &d.NewFingerprint, &d.PreviousFingerprint,
 		&d.ConfirmIncompleteChain, &backup, &d.Verified, &d.ErrorCode, &params, &d.FailedStep, &d.CreatedAt, &d.StartedAt, &d.FinishedAt,
 		&d.Result, &d.Phase, &d.CauseStep, &d.HelperError, &d.VerifyFailedReason, &d.VerifyFailedPort, &d.OperationID, &d.NewChainLength,
-		&d.PreviousChainLength, &d.ExpectCertSHA256, &d.RecoverAfter, &d.RecoveryAttempts)
+		&d.PreviousChainLength, &d.ExpectCertSHA256, &d.RecoverAfter, &d.RecoveryAttempts, &d.JobStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
