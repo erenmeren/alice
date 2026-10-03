@@ -1241,3 +1241,78 @@ func keyNeedles(keyPEM []byte) []string {
 	der, _ := base64.StdEncoding.DecodeString(strings.Join(strings.Split(strings.TrimSpace(string(keyPEM)), "\n")[1:len(strings.Split(strings.TrimSpace(string(keyPEM)), "\n"))-1], ""))
 	return []string{"PRIVATE " + "KEY", body[:40], hex.EncodeToString(der)[:40], base64.StdEncoding.EncodeToString(der)[8:48]}
 }
+
+// When the record cannot be read back after an outcome was written, the job answers what it wrote.
+func TestDeployAnswersWhatItWroteWhenTheRecordCannotBeRead(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		out   providers.DeployOutcome
+		err   error
+		class jobs.FailureClass // -1 = success
+	}{
+		{"succeeded", providers.DeployOutcome{Result: providers.DeployCommitted, Phase: providers.PhaseCommitted, Verified: "remote"}, nil, -1},
+		{"rolled back", providers.DeployOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestored, FailedStep: "reload",
+			CauseStep: "reload", Reason: "deployment.reload_failed"}, nil, jobs.Permanent},
+		{"uncertain", providers.DeployOutcome{Result: providers.DeployUncertain}, providers.NewError("ssh.unreachable", true, nil, nil),
+			jobs.NeedsAttention},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.prov.Configure(func(c *fake.Config) {
+				c.Deploy = func(providers.DeployRequest) (providers.DeployOutcome, error) { return tc.out, tc.err }
+			})
+			f.inv.hooks["RecordOutcome"] = func(context.Context) { f.inv.errs["Deployment"] = errors.New("db down") }
+			res, err := f.h.deploy(f.ctx, f.job(), f.steps)
+			if tc.class < 0 {
+				require.NoError(t, err)
+				assert.Equal(t, "succeeded", res["outcome"])
+				return
+			}
+			assert.Equal(t, tc.class, failureOf(t, err).Class)
+		})
+	}
+
+	f := newFixture(t)
+	f.inv.material.NotAfter = f.clock.Now()
+	f.inv.hooks["FinishDeployment"] = func(context.Context) { f.inv.errs["Deployment"] = errors.New("db down") }
+	res, err := f.h.deploy(f.ctx, f.job(), f.steps)
+	assert.Equal(t, "failed", res["outcome"])
+	assert.Equal(t, "certificate.expired", failureOf(t, err).Reason)
+}
+
+func TestDeployRefusalThatCannotBeRecordedIsRetried(t *testing.T) {
+	f := newFixture(t)
+	f.inv.material.ConfigValid = false
+	f.inv.errs["FinishDeployment"] = errors.New("db down")
+	_, err := f.h.deploy(f.ctx, f.job(), f.steps)
+	jf := failureOf(t, err)
+	assert.Equal(t, jobs.Retryable, jf.Class, "nothing was sent: a retry is safe")
+	assert.Zero(t, f.prov.Count("DeployCertificate"))
+}
+
+func TestDeployGivesUpOnAStateThatKeepsChanging(t *testing.T) {
+	f := newFixture(t)
+	f.inv.errs["DeploymentMaterial(true)"] = inventory.ErrDeploymentState // yet the record keeps saying precheck
+	_, err := f.h.deploy(f.ctx, f.job(), f.steps)
+	assert.Equal(t, jobs.Retryable, failureOf(t, err).Class)
+	assert.Zero(t, f.prov.Count("DeployCertificate"))
+
+	f = newFixture(t)
+	f.inv.hooks["DeploymentMaterial(true)"] = func(context.Context) { f.inv.errs["Deployment"] = errors.New("db down") }
+	f.inv.errs["DeploymentMaterial(true)"] = inventory.ErrDeploymentState
+	_, err = f.h.deploy(f.ctx, f.job(), f.steps)
+	assert.Equal(t, jobs.Retryable, failureOf(t, err).Class)
+}
+
+func TestCauseAndPortHelpers(t *testing.T) {
+	assert.Equal(t, "certificate.key_mismatch", causeReason("config_test", "key_mismatch"))
+	assert.Equal(t, "deployment.config_test_failed", causeReason("config_test", "syntax"))
+	assert.Equal(t, "deployment.reload_failed", causeReason("reload", ""))
+	assert.Empty(t, causeReason("write_key", ""))
+	assert.Nil(t, portOf(map[string]string{"port": "x"}))
+	assert.Nil(t, portOf(map[string]string{"port": "70000"}))
+	assert.Equal(t, 443, *portOf(map[string]string{"port": "443"}))
+	assert.Nil(t, permanent(nil))
+	assert.Equal(t, jobs.NeedsAttention, failureOf(t, permanent(jobs.Attention("x", nil, nil))).Class)
+	assert.Equal(t, "internal.unexpected", failure(errors.New("plain")).Reason)
+}

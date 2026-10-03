@@ -9,6 +9,7 @@
   "alice/internal/notify": 80,
   "alice/internal/jobs": 88,
   "alice/internal/jobs/targetjobs": 100,
+  "alice/internal/jobs/deployjobs": 95,
   "alice/internal/inventory": 86,
   "alice/internal/providers": 99,
   "alice/internal/providers/linuxssh": 91,
