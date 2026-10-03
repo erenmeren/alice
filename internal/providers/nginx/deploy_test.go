@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1174,4 +1175,21 @@ func TestCheckOldLogsThePortOnAnError(t *testing.T) {
 	assert.Equal(t, providers.StepFailed, c.step.Status)
 	assert.Equal(t, []string{"verify_old:started", "verify_old:failed"}, log.list())
 	assert.Equal(t, map[string]string{"port": "443"}, log.params[1])
+}
+
+// Task 16 M-3: the failed verification's reason travels on its step, which the caller records
+// before the rollback is sent.
+func TestFailedVerificationStepCarriesItsReason(t *testing.T) {
+	e := newEnv(t)
+	nw := e.ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, e.now)
+	e.emu.NoopReload(true)
+	log := &steps{}
+	out, err := e.open(t).DeployCertificate(context.Background(), e.req(t, nw), log)
+	require.NoError(t, err)
+	require.Equal(t, providers.DeployRolledBack, out.Result)
+	i := slices.Index(log.list(), "verify:failed")
+	require.GreaterOrEqual(t, i, 0)
+	assert.Equal(t, map[string]string{"port": "443", "reason": "deployment.verify_failed"}, log.params[i])
+	assert.Equal(t, "verify:failed", log.list()[i])
+	assert.Less(t, i, slices.Index(log.list(), "restore:ok"), "logged before the rollback")
 }

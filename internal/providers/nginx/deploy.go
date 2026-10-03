@@ -521,7 +521,9 @@ func (d *deployment) verifyNew(ctx context.Context, phase string) (providers.Dep
 		}
 		return d.out, nil
 	}
-	step(d.log, providers.StepNameVerify, providers.StepFailed, map[string]string{"port": vr.Params["port"]})
+	// The reason goes with the step: the step is recorded before the rollback is sent, so a deploy
+	// engine that dies during the rollback can still tell why it was rolled back.
+	step(d.log, providers.StepNameVerify, providers.StepFailed, map[string]string{"port": vr.Params["port"], "reason": vr.Reason})
 	d.out.Steps = append(d.out.Steps, providers.DeployStep{Name: providers.StepNameVerify, Status: providers.StepFailed})
 	if phase == helperproto.PhaseUnchanged {
 		// This operation changed nothing (the files already were the new ones): nothing to roll back.
