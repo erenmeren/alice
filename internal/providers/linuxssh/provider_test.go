@@ -681,7 +681,7 @@ func TestDiscoverReportsTheAccountList(t *testing.T) {
 	assert.Equal(t, []string{"root"}, res.Accounts)
 	assert.False(t, res.AccountsComplete, "the helper said the list is not complete")
 
-	many := make([]string, 0, helperproto.MaxAccountNames+3)
+	many := []string{"root"}
 	for i := 0; i < helperproto.MaxAccountNames+3; i++ {
 		many = append(many, "u"+strconv.Itoa(i))
 	}
@@ -710,6 +710,51 @@ func TestDiscoverAccountsDefaultsAndUnknown(t *testing.T) {
 	assert.True(t, sort.StringsAreSorted(res.Accounts))
 }
 
+// Alice does not trust accounts_complete blindly (a broken or hostile helper), and the emulator
+// follows the real helper: too many users or skipped directory users make the list incomplete.
+func TestDiscoverAccountsCompletenessIsChecked(t *testing.T) {
+	e := newProvEnv(t)
+	s := e.open(t)
+	discover := func() providers.DiscoveryResult {
+		res, err := s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+		require.NoError(t, err)
+		return res
+	}
+	e.emu.SetAccounts([]string{}, true)
+	assert.False(t, discover().AccountsComplete, "an empty list is not a passwd file")
+	e.emu.SetAccounts([]string{"deploy", "alice-svc"}, true)
+	assert.False(t, discover().AccountsComplete, "no root: not trusted")
+	e.emu.SetAccounts([]string{"root"}, true)
+	assert.True(t, discover().AccountsComplete)
+
+	// The real helper's listing limit: the emulator reports incomplete with too_many_users.
+	e2 := newProvEnv(t)
+	e2.emu.SetMaxUsers(1)
+	res, err := e2.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.False(t, res.AccountsComplete)
+	assert.Contains(t, res.Accounts, "root")
+	var seen bool
+	for _, w := range res.Warnings {
+		seen = seen || w.Code == helperproto.WarnTooManyUsers
+	}
+	assert.True(t, seen, "the emulator warns too_many_users")
+
+	// A helper that says complete while it warned of skipped users.
+	e3 := newProvEnv(t)
+	e3.srv.SetHandler(func(cmd string, stdin []byte) linuxsshtest.Response {
+		r := e3.emu.Handler()(cmd, stdin)
+		if strings.Contains(cmd, " authkeys-list") {
+			require.Contains(t, string(r.Stdout), `"warnings":[]`, "the list has no warnings to begin with")
+			r.Stdout = bytes.Replace(r.Stdout, []byte(`"warnings":[]`), []byte(`"warnings":["directory_users_not_listed"]`), 1)
+		}
+		return r
+	})
+	res, err = e3.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.False(t, res.AccountsComplete, "directory users not listed: incomplete whatever the helper says")
+}
+
 func TestConnOf(t *testing.T) {
 	e := newProvEnv(t)
 	s, err := e.prov.Open(context.Background(), e.ref, e.cred, providers.Env{Clock: clock.Real{}, HostKeys: e.hk})
@@ -728,27 +773,76 @@ func TestConnOf(t *testing.T) {
 	assert.False(t, ok)
 }
 
-// A failed deployment run reports neither the key nor the payload in its error. The emulator
-// does not know nginx-deploy (Task 9), so the helper answers UNKNOWN_SUBCOMMAND.
+// A failed deployment run reports neither the key nor the payload in its error: a helper refusal,
+// a malformed answer that even echoes the payload, and a cancelled run. The emulator does not know
+// nginx-deploy yet, so the refusal here is UNKNOWN_SUBCOMMAND; Task 9 re-points this test at the
+// emulated deploy (its real refusals and answers).
 func TestFailedDeployRunDoesNotLeakTheKey(t *testing.T) {
 	const needle = "KEYMATERIAL-0123456789abcdef"
-	e := newProvEnv(t)
-	s := e.open(t)
-	c, ok := ConnOf(s)
-	require.True(t, ok)
 	raw, err := json.Marshal(helperproto.NginxDeployInput{CertPEM: "cert", KeyPEM: needle})
 	require.NoError(t, err)
-	cmd, err := CmdNginxDeploy(testOp, "/etc/nginx/a.crt", "/etc/nginx/a.key", strings.Repeat("ab", 32), raw)
-	require.NoError(t, err)
-	res, err := c.Run(context.Background(), cmd)
-	cmd.WipeInput()
-	require.NoError(t, err)
-	_, err = DecodeHelper[helperproto.NginxDeployResponse](res, cmd.Subcommand())
-	require.Error(t, err)
+	newCmd := func() HelperCommand {
+		cmd, err := CmdNginxDeploy(testOp, "/etc/nginx/a.crt", "/etc/nginx/a.key", strings.Repeat("ab", 32), raw)
+		require.NoError(t, err)
+		return cmd
+	}
+	check := func(name string, err error) {
+		t.Helper()
+		require.Error(t, err, name)
+		var pe *providers.Error
+		require.True(t, errors.As(err, &pe), name)
+		all := fmt.Sprintf("%v %+v %#v %v %v", err, err, pe.Params, pe.Unwrap(), pe)
+		if j, jerr := json.Marshal(pe); jerr == nil {
+			all += string(j)
+		}
+		assert.NotContains(t, all, needle, name)
+		assert.NotContains(t, all, hex.EncodeToString([]byte(needle)), name)
+	}
+	run := func(t *testing.T, h func(cmd string, stdin []byte) linuxsshtest.Response, ctx context.Context) (Result, error) {
+		e := newProvEnv(t)
+		if h != nil { // only the deployment is scripted; Open's version check goes to the emulator
+			e.srv.SetHandler(func(cmd string, stdin []byte) linuxsshtest.Response {
+				if strings.Contains(cmd, " nginx-deploy ") {
+					return h(cmd, stdin)
+				}
+				return e.emu.Handler()(cmd, stdin)
+			})
+		}
+		c, ok := ConnOf(e.open(t))
+		require.True(t, ok)
+		cmd := newCmd()
+		defer cmd.WipeInput()
+		res, err := c.Run(ctx, cmd)
+		if err != nil {
+			return res, err
+		}
+		_, err = DecodeHelper[helperproto.NginxDeployResponse](res, cmd.Subcommand())
+		return res, err
+	}
+	// A helper refusal (the emulator's UNKNOWN_SUBCOMMAND).
+	_, err = run(t, nil, context.Background())
+	check("refusal", err)
+	// A malformed answer that echoes the payload (a helper reflecting its input).
+	for _, exit := range []int{0, 3} {
+		_, err = run(t, func(_ string, stdin []byte) linuxsshtest.Response {
+			return linuxsshtest.Response{Stdout: append([]byte("not json "), stdin...), Exit: exit}
+		}, context.Background())
+		check("malformed answer exit "+strconv.Itoa(exit), err)
+		var pe *providers.Error
+		require.True(t, errors.As(err, &pe))
+		assert.Equal(t, "ssh.protocol_error", pe.Code)
+	}
+	// A cancelled run: the handler answers only after the context ended.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err = run(t, func(string, []byte) linuxsshtest.Response {
+		time.Sleep(600 * time.Millisecond) // past the context; Run waits for the session to end
+		return linuxsshtest.Response{}
+	}, ctx)
+	check("timeout", err)
 	var pe *providers.Error
 	require.True(t, errors.As(err, &pe))
-	assert.NotContains(t, fmt.Sprintf("%v %+v %#v %v", err, err, pe.Params, pe.Unwrap()), needle)
-	assert.NotContains(t, string(res.Stdout), needle)
+	assert.Equal(t, "ssh.timeout", pe.Code)
 }
 
 // tls-probe runs without sudo (the emulator does not answer NOT_ROOT for it, as the helper does not),

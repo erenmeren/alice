@@ -198,6 +198,12 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 	}
 	slices.Sort(res.Accounts)
 	res.Accounts = slices.Compact(res.Accounts)
+	// The helper already says false for these; Alice does not rely on it alone. A list that
+	// misses root (or is empty) comes from a broken or hostile helper: every real /etc/passwd has root.
+	if slices.Contains(list.Warnings, helperproto.WarnTooManyUsers) || slices.Contains(list.Warnings, helperproto.WarnDirectoryUsers) ||
+		!slices.Contains(res.Accounts, "root") {
+		res.AccountsComplete = false
+	}
 	if len(res.Accounts) > helperproto.MaxAccountNames {
 		res.Accounts, res.AccountsComplete = res.Accounts[:helperproto.MaxAccountNames], false
 	}

@@ -36,11 +36,12 @@ const (
 	DefaultCommandTimeout   = 30 * time.Second
 	LongCommandTimeout      = 60 * time.Second
 
-	// DeployCommandTimeout bounds nginx-deploy and nginx-restore: up to helperproto.HelperBudget
-	// (50 s) before the first rename, then up to about two minutes of nginx -t and reload work
-	// (each program 30 s), plus a margin. Longer than LongCommandTimeout on purpose: cutting the
-	// connection at 60 s would abandon a deployment the helper is still finishing.
-	DeployCommandTimeout = 180 * time.Second
+	// DeployCommandTimeout bounds nginx-deploy and nginx-restore. The helper's worst case is about
+	// 176 s: helperproto.HelperBudget (50 s) before the first rename, then nginx -t (30 s) and reload
+	// (30 s), and after a failure the rollback nginx -t (30 s) and reload (30 s), plus waits and
+	// fsyncs; sudo and SSH startup come on top. Cutting the connection earlier would abandon a
+	// deployment the helper is still finishing.
+	DeployCommandTimeout = 240 * time.Second
 
 	DefaultMaxOutput = 8 << 20
 

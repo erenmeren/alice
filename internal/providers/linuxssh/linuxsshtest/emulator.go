@@ -463,7 +463,10 @@ func (e *Emulator) listLocked() helperproto.AuthKeysListResponse {
 			names = append(names, u.name)
 		}
 		slices.Sort(names)
-		resp.Accounts, resp.AccountsComplete = slices.Compact(names), true
+		// Like the helper: not complete when it listed fewer accounts than exist or skipped directory users.
+		resp.Accounts = slices.Compact(names)
+		resp.AccountsComplete = !slices.Contains(s.warnings, helperproto.WarnTooManyUsers) &&
+			!slices.Contains(s.warnings, helperproto.WarnDirectoryUsers)
 	}
 	for _, us := range s.users {
 		u := us.user

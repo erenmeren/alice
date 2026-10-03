@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -220,6 +221,14 @@ func quoteAll(values ...string) ([]string, error) {
 // WipeInput overwrites the command's stdin (the private key of nginx-deploy) with zeros. The
 // command keeps its own copy of the input, so the caller wipes it after Run (SEC-044, best effort).
 func (c HelperCommand) WipeInput() { clear(c.stdin) }
+
+// Format prints the command line only, for every verb and flag: stdin holds the private key of
+// nginx-deploy, and fmt would otherwise print it (%s as text, %v and %d as bytes, %x as hex).
+// The value receiver covers pointers too.
+func (c HelperCommand) Format(f fmt.State, _ rune) { _, _ = fmt.Fprint(f, c.Line()) }
+
+// LogValue keeps the command's stdin out of slog output: only the command line is logged.
+func (c HelperCommand) LogValue() slog.Value { return slog.StringValue(c.Line()) }
 
 // Line is the exact command line sent over the SSH exec channel ("" for the zero value).
 func (c HelperCommand) Line() string {

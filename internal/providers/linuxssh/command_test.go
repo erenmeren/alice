@@ -1,10 +1,13 @@
 package linuxssh
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -185,7 +188,9 @@ func TestNginxCommandLinesAreExact(t *testing.T) {
 	assert.Equal(t, LongCommandTimeout, CmdNginxTest().timeout)
 	assert.Equal(t, DeployCommandTimeout, deploy.timeout)
 	assert.Equal(t, DeployCommandTimeout, restore.timeout)
-	assert.Greater(t, DeployCommandTimeout, helperproto.HelperBudget+2*time.Minute, "the helper's post-rename work (about two minutes) fits")
+	// pre-rename budget + nginx -t + reload + rollback nginx -t + rollback reload (30 s each) + startup margin
+	assert.GreaterOrEqual(t, DeployCommandTimeout, helperproto.HelperBudget+4*30*time.Second+30*time.Second,
+		"the helper's worst case (about 176 s) fits with room for sudo and SSH startup")
 	assert.Equal(t, DefaultCommandTimeout, status.timeout)
 	assert.Equal(t, DefaultCommandTimeout, probe.timeout)
 	assert.Greater(t, cleanup.timeout, 30*time.Second, "cleanup may wait 30 s for the Nginx lock")
@@ -254,6 +259,27 @@ func TestDeployKeyIsNeverOutsideStdin(t *testing.T) {
 	_, err = CmdNginxDeploy(testOp, "/a.crt\n"+needle, "/a.key", strings.Repeat("ab", 32), raw)
 	require.ErrorIs(t, err, ErrInvalidArgument)
 	assert.NotContains(t, err.Error(), needle)
+	// The command itself prints its line only: every verb, value and pointer, fmt and slog.
+	marker := "MARKERKEYBYTES"
+	secret, err := json.Marshal(helperproto.NginxDeployInput{CertPEM: "c", KeyPEM: "-----BEGIN " + "PRIVATE KEY-----" + marker})
+	require.NoError(t, err)
+	sc, err := CmdNginxDeploy(testOp, "/a.crt", "/a.key", strings.Repeat("ab", 32), secret)
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	th, jh := slog.NewTextHandler(&buf, nil), slog.NewJSONHandler(&buf, nil)
+	slog.New(th).Info("run", "cmd", sc, "ptr", &sc)
+	slog.New(jh).Info("run", slog.Any("cmd", sc), slog.Any("ptr", &sc))
+	rendered := []string{buf.String()}
+	for _, v := range []any{sc, &sc} {
+		rendered = append(rendered, fmt.Sprintf("%v %+v %#v %s %d %x %X %q %10.3s", v, v, v, v, v, v, v, v, v))
+	}
+	text := strings.Join(rendered, "\n")
+	decimal := strings.Trim(fmt.Sprintf("%d", []byte(marker)), "[]")
+	for _, needle := range []string{marker, "PRIVATE KEY", hex.EncodeToString([]byte(marker)), decimal, base64.StdEncoding.EncodeToString([]byte(marker))} {
+		assert.NotContains(t, text, needle)
+	}
+	assert.Contains(t, fmt.Sprintf("%s", sc), "nginx-deploy --op")
+	assert.Contains(t, buf.String(), "nginx-deploy")
 	// The input type redacts itself when formatted.
 	in := helperproto.NginxDeployInput{CertPEM: "c", KeyPEM: needle}
 	assert.NotContains(t, fmt.Sprintf("%v %+v %#v %s", in, in, in, in), needle)
