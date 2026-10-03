@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { confirmJob, discardJob, listJobs } from '../api/endpoints';
-import { BLOCKED_JOBS_KEY } from '../api/queryKeys';
+import { BLOCKED_JOBS_KEY, SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
 import type { Job } from '../api/types';
 import { formatDateTime } from '../datetime';
 import { ErrorAlert } from './ErrorAlert';
@@ -23,7 +23,8 @@ export function BlockedJobsPanel() {
     setError(null);
     try {
       await fn(job.id);
-      await client.invalidateQueries({ queryKey: BLOCKED_JOBS_KEY });
+      // Running or discarding a change moves a server or a key, so those lists are read again too.
+      await Promise.all([BLOCKED_JOBS_KEY, TARGETS_KEY, SSH_KEYS_KEY].map((queryKey) => client.invalidateQueries({ queryKey })));
     } catch (e) {
       setError(e);
     } finally {

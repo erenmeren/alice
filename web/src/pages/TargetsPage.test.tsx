@@ -173,6 +173,26 @@ describe('TargetsPage', () => {
     await waitFor(() => expect(screen.queryByTestId('blocked-jobs')).not.toBeInTheDocument());
   });
 
+  it('refreshes the server list after a paused change is run', async () => {
+    withTargets('admin');
+    const blocked = jobFixture({ id: 'job-b', type: 'sshkey.remove', status: 'blocked_license', finished_at: null });
+    let listCalls = 0;
+    server.use(
+      http.get('/api/v1/targets', () => {
+        listCalls += 1;
+        return HttpResponse.json({ items: [targetFixture], next_cursor: null });
+      }),
+      http.get('/api/v1/jobs', () => HttpResponse.json({ items: [blocked], next_cursor: null })),
+      http.post('/api/v1/jobs/:id/actions/confirm', () => HttpResponse.json({ ...blocked, status: 'queued' })),
+    );
+    await renderRoute('/servers');
+    const panel = await screen.findByTestId('blocked-jobs');
+    await screen.findByTestId('targets-table');
+    const before = listCalls;
+    await userEvent.click(within(panel).getByRole('button', { name: 'Run now: SSH key removal' }));
+    await waitFor(() => expect(listCalls).toBeGreaterThan(before));
+  });
+
   it('is shown in Turkish', async () => {
     withTargets('admin', [targetFixture], 'tr');
     await renderRoute('/servers', { languages: ['tr-TR'] });
