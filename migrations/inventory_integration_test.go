@@ -108,7 +108,7 @@ func TestAliceKeyLocationIsProtectedByTrigger(t *testing.T) {
 	target := seedTarget(t, d, "web-01", "web-01.example.com")
 	var key string
 	require.NoError(t, d.App.QueryRow(ctx, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, public_key, is_platform_key, first_seen_at, created_at)
-VALUES (gen_random_uuid(), 'SHA256:alice', 'ssh-ed25519', 'ssh-ed25519 AAAA', true, now(), now()) RETURNING id::text`).Scan(&key))
+VALUES (gen_random_uuid(), 'SHA256:alice00000000000000000000000000000000000000', 'ssh-ed25519', 'ssh-ed25519 AAAA', true, now(), now()) RETURNING id::text`).Scan(&key))
 	var own, other string
 	require.NoError(t, d.App.QueryRow(ctx, `INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, first_seen_at, last_seen_at, is_alice_connection_key)
 VALUES (gen_random_uuid(), $1, $2, 'alice-svc', '/var/lib/alice-svc/.ssh/authorized_keys', 1, now(), now(), true) RETURNING id::text`, key, target).Scan(&own))
@@ -130,11 +130,11 @@ func TestOneHostKeyIsPinnedPerTarget(t *testing.T) {
 		return exec(t, d.App, `INSERT INTO host_keys (id, target_id, key_type, public_key, fingerprint_sha256, status, observed_at)
 VALUES (gen_random_uuid(), $1, 'ssh-ed25519', '\x00', $2, $3, now())`, target, fp, status)
 	}
-	require.NoError(t, insert("SHA256:a", "pinned"))
-	require.NoError(t, insert("SHA256:b", "observed"))
-	assert.Equal(t, "23505", sqlState(insert("SHA256:c", "pinned")), "a second pinned key")
-	assert.Equal(t, "23505", sqlState(insert("SHA256:a", "superseded")), "one row per fingerprint and target")
-	assert.Equal(t, "23514", sqlState(insert("SHA256:d", "trusted")), "status is a closed set")
+	require.NoError(t, insert("SHA256:a000000000000000000000000000000000000000000", "pinned"))
+	require.NoError(t, insert("SHA256:b000000000000000000000000000000000000000000", "observed"))
+	assert.Equal(t, "23505", sqlState(insert("SHA256:c000000000000000000000000000000000000000000", "pinned")), "a second pinned key")
+	assert.Equal(t, "23505", sqlState(insert("SHA256:a000000000000000000000000000000000000000000", "superseded")), "one row per fingerprint and target")
+	assert.Equal(t, "23514", sqlState(insert("SHA256:d000000000000000000000000000000000000000000", "trusted")), "status is a closed set")
 }
 
 func TestJobDedupeKeysAreUniqueAmongLiveJobsOnly(t *testing.T) {
@@ -175,12 +175,12 @@ func TestAliceKeyLocationCannotBeUnprotectedByEditingIt(t *testing.T) {
 	ctx := context.Background()
 	target := seedTarget(t, d, "web-01", "web-01.example.com")
 	other := seedTarget(t, d, "web-02", "web-02.example.com")
-	require.NoError(t, exec(t, d.Owner, `UPDATE credentials SET public_info = '{"fingerprint": "SHA256:alice"}'`))
+	require.NoError(t, exec(t, d.Owner, `UPDATE credentials SET public_info = '{"fingerprint": "SHA256:alice00000000000000000000000000000000000000"}'`))
 	var key, otherKey string
 	require.NoError(t, d.App.QueryRow(ctx, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, public_key, first_seen_at, created_at)
-VALUES (gen_random_uuid(), 'SHA256:alice', 'ssh-ed25519', 'ssh-ed25519 AAAA', now(), now()) RETURNING id::text`).Scan(&key))
+VALUES (gen_random_uuid(), 'SHA256:alice00000000000000000000000000000000000000', 'ssh-ed25519', 'ssh-ed25519 AAAA', now(), now()) RETURNING id::text`).Scan(&key))
 	require.NoError(t, d.App.QueryRow(ctx, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, public_key, first_seen_at, created_at)
-VALUES (gen_random_uuid(), 'SHA256:bob', 'ssh-ed25519', 'ssh-ed25519 BBBB', now(), now()) RETURNING id::text`).Scan(&otherKey))
+VALUES (gen_random_uuid(), 'SHA256:bob0000000000000000000000000000000000000000', 'ssh-ed25519', 'ssh-ed25519 BBBB', now(), now()) RETURNING id::text`).Scan(&otherKey))
 	insert := func(flag bool, user string) string {
 		var id string
 		require.NoError(t, d.App.QueryRow(ctx, `INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, first_seen_at, last_seen_at, is_alice_connection_key)
@@ -277,16 +277,19 @@ func TestAliceKeyProtectionIgnoresShadowingTempTables(t *testing.T) {
 	d := pgtest.New(t)
 	ctx := context.Background()
 	target := seedTarget(t, d, "web-01", "web-01.example.com")
-	require.NoError(t, exec(t, d.Owner, `UPDATE credentials SET public_info = '{"fingerprint": "SHA256:alice"}'`))
+	require.NoError(t, exec(t, d.Owner, `UPDATE credentials SET public_info = '{"fingerprint": "SHA256:alice00000000000000000000000000000000000000"}'`))
 	var loc string
 	require.NoError(t, d.App.QueryRow(ctx, `WITH k AS (INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, public_key, first_seen_at, created_at)
-VALUES (gen_random_uuid(), 'SHA256:alice', 'ssh-ed25519', 'ssh-ed25519 AAAA', now(), now()) RETURNING id)
+VALUES (gen_random_uuid(), 'SHA256:alice00000000000000000000000000000000000000', 'ssh-ed25519', 'ssh-ed25519 AAAA', now(), now()) RETURNING id)
 INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, first_seen_at, last_seen_at)
 SELECT gen_random_uuid(), k.id, $1, 'deploy', '/home/deploy/.ssh/authorized_keys', 1, now(), now() FROM k RETURNING id::text`, target).Scan(&loc))
 
 	conn, err := d.App.Acquire(ctx)
 	require.NoError(t, err)
 	defer conn.Release()
+	// Runs before the release, also when an assertion below stops the test: the connection goes
+	// back to the pool without the shadow tables.
+	defer func() { _, _ = conn.Exec(ctx, "DROP TABLE IF EXISTS pg_temp.credentials, pg_temp.ssh_keys") }()
 	for _, stmt := range []string{
 		"CREATE TEMP TABLE credentials (purpose text, public_info jsonb)",
 		"CREATE TEMP TABLE ssh_keys (id uuid, fingerprint_sha256 text)",
@@ -296,5 +299,40 @@ SELECT gen_random_uuid(), k.id, $1, 'deploy', '/home/deploy/.ssh/authorized_keys
 	}
 	_, err = conn.Exec(ctx, "UPDATE ssh_key_locations SET removed_by_alice_at = now() WHERE id = $1", loc)
 	assert.Equal(t, "P0001", sqlState(err), "shadow tables must not hide the platform fingerprint")
-	_, _ = conn.Exec(ctx, "DROP TABLE pg_temp.credentials, pg_temp.ssh_keys")
+}
+
+// A target's port is an integer from 1 to 65535 and its host a non-empty word without spaces,
+// refused by a CHECK (not by a cast error in the endpoint index); fingerprints are SHA256: and
+// 43 unpadded base64 characters (ssh.FingerprintSHA256).
+func TestTargetAddressAndFingerprintChecks(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	target := seedTarget(t, d, "web-01", "web-01.example.com")
+	var cred string
+	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT id::text FROM credentials").Scan(&cred))
+	ins := func(cfg string) error {
+		return exec(t, d.App, `INSERT INTO targets (id, name, type, config, credential_id, status, created_at, updated_at)
+VALUES (gen_random_uuid(), gen_random_uuid()::text, 'linux', $1::jsonb, $2, 'ok', now(), now())`, cfg, cred)
+	}
+	for _, cfg := range []string{
+		`{"host": "a", "port": 22.5}`, `{"host": "a", "port": 0}`, `{"host": "a", "port": 70000}`, `{"host": "a", "port": -22}`,
+		`{"host": " ", "port": 22}`, `{"host": "a b", "port": 22}`, `{"host": " a", "port": 22}`,
+		`{"host": "a\t", "port": 22}`,
+	} {
+		assert.Equal(t, "23514", sqlState(ins(cfg)), cfg)
+	}
+	require.NoError(t, ins(`{"host": "a", "port": 1}`))
+	require.NoError(t, ins(`{"host": "b", "port": 65535}`))
+
+	const good = "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU"
+	for _, fp := range []string{"SHA256:dep", "SHA256:" + good[7:] + "=", "sha256:" + good[7:], good[:49] + "-"} {
+		assert.Equal(t, "23514", sqlState(exec(t, d.App, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, public_key, first_seen_at, created_at)
+VALUES (gen_random_uuid(), $1, 'ssh-ed25519', 'ssh-ed25519 AAAA', now(), now())`, fp)), fp)
+		assert.Equal(t, "23514", sqlState(exec(t, d.App, `INSERT INTO host_keys (id, target_id, key_type, public_key, fingerprint_sha256, status, observed_at)
+VALUES (gen_random_uuid(), $1, 'ssh-ed25519', '\x01', $2, 'observed', now())`, target, fp)), fp)
+	}
+	require.NoError(t, exec(t, d.App, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, public_key, first_seen_at, created_at)
+VALUES (gen_random_uuid(), $1, 'ssh-ed25519', 'ssh-ed25519 AAAA', now(), now())`, good))
+	require.NoError(t, exec(t, d.App, `INSERT INTO host_keys (id, target_id, key_type, public_key, fingerprint_sha256, status, observed_at)
+VALUES (gen_random_uuid(), $1, 'ssh-ed25519', '\x01', $2, 'observed', now())`, target, good))
 }

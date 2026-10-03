@@ -38,9 +38,13 @@ CREATE TABLE targets (
     created_at                 timestamptz NOT NULL,
     updated_at                 timestamptz NOT NULL,
     deleted_at                 timestamptz,
-    -- coalesce: a missing key makes the comparisons NULL, which a CHECK would accept
-    CHECK (type = 'azure_key_vault' OR coalesce(jsonb_typeof(config->'host') = 'string' AND config->>'host' <> ''
-                                                AND jsonb_typeof(config->'port') = 'number', false))
+    -- coalesce: a missing key makes the comparisons NULL, which a CHECK would accept. The host is
+    -- one word without white space; the port an integer from 1 to 65535 (the CASE keeps 22.5 or
+    -- 70000 from reaching the cast, here and in targets_endpoint_live: a CHECK refuses them).
+    CHECK (type = 'azure_key_vault' OR coalesce(jsonb_typeof(config->'host') = 'string' AND config->>'host' ~ '^[^[:space:]]+$'
+                                                AND jsonb_typeof(config->'port') = 'number'
+                                                AND CASE WHEN config->>'port' ~ '^[0-9]{1,5}$'
+                                                         THEN (config->>'port')::int BETWEEN 1 AND 65535 ELSE false END, false))
 );
 CREATE UNIQUE INDEX targets_name_live ON targets (name) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX targets_endpoint_live ON targets (type, lower(config->>'host'), ((config->>'port')::int)) WHERE deleted_at IS NULL;
@@ -51,7 +55,7 @@ CREATE TABLE host_keys (
     target_id          uuid NOT NULL REFERENCES targets (id),
     key_type           text NOT NULL,
     public_key         bytea NOT NULL,
-    fingerprint_sha256 text NOT NULL,
+    fingerprint_sha256 text NOT NULL CHECK (fingerprint_sha256 ~ '^SHA256:[A-Za-z0-9+/]{43}$'), -- ssh.FingerprintSHA256
     status             text NOT NULL CHECK (status IN ('observed', 'pinned', 'superseded', 'rejected')),
     observed_at        timestamptz NOT NULL,
     confirmed_by       uuid REFERENCES users (id),
@@ -63,7 +67,7 @@ CREATE UNIQUE INDEX host_keys_one_pinned ON host_keys (target_id) WHERE status =
 
 CREATE TABLE ssh_keys (
     id                 uuid PRIMARY KEY,
-    fingerprint_sha256 text NOT NULL UNIQUE,
+    fingerprint_sha256 text NOT NULL UNIQUE CHECK (fingerprint_sha256 ~ '^SHA256:[A-Za-z0-9+/]{43}$'),
     key_type           text NOT NULL,
     bits               integer NOT NULL DEFAULT 0,
     public_key         text NOT NULL,

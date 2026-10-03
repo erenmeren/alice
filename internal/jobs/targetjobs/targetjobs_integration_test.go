@@ -169,7 +169,7 @@ func (e *env) confirmed(k providers.HostKey, keys ...providers.DiscoveredSSHKey)
 func TestFirstConnectionWaitsForConfirmationThenDiscovers(t *testing.T) {
 	e := newEnv(t, nil)
 	k := hostKey(t)
-	tg := e.confirmed(k, key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep"))
+	tg := e.confirmed(k, key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep0000000000000000000000000000000000000000"))
 	assert.Equal(t, 1, e.prov.Count("TestConnection"), "the unconfirmed attempt never reached TestConnection")
 	assert.Equal(t, 1, e.prov.Count("Discover"))
 
@@ -268,13 +268,13 @@ func locationOf(t *testing.T, e *env, target uuid.UUID, fp string) inventory.Key
 
 func TestRemoveKeyJob(t *testing.T) {
 	e := newEnv(t, nil)
-	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep"))
+	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep0000000000000000000000000000000000000000"))
 	pk, err := e.inv.PlatformKey(e.ctx)
 	require.NoError(t, err)
 	e.prov.Configure(func(c *fake.Config) {
 		c.RemoveResult = providers.AuthKeyResult{Changed: true, Removed: 1, Verified: true}
 	})
-	loc := locationOf(t, e, tg.ID, "SHA256:dep")
+	loc := locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000")
 	jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, loc.ID, false)
 	require.NoError(t, err)
 	e.drain()
@@ -289,8 +289,8 @@ func TestRemoveKeyJob(t *testing.T) {
 		}
 	}
 	assert.Equal(t, providers.AuthKeyChange{OperationID: jobID, OSUser: "deploy", FilePath: "/home/deploy/.ssh/authorized_keys",
-		Fingerprint: "SHA256:dep", ProtectedFingerprints: []string{pk.Fingerprint}}, change)
-	require.NotNil(t, locationOf(t, e, tg.ID, "SHA256:dep").RemovedAt)
+		Fingerprint: "SHA256:dep0000000000000000000000000000000000000000", ProtectedFingerprints: []string{pk.Fingerprint}}, change)
+	require.NotNil(t, locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000").RemovedAt)
 	assert.Equal(t, 1, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'sshkey.removed'"))
 }
 
@@ -336,8 +336,8 @@ func (s *stepSession) RemoveAuthorizedKey(ctx context.Context, req providers.Aut
 func TestRemoveFailureRetriesOnlyBeforeTheWrite(t *testing.T) {
 	for _, wrote := range []bool{false, true} {
 		e := newEnv(t, func(s providers.Session) providers.Session { return &stepSession{Session: s, wrote: wrote} })
-		tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep"))
-		jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, locationOf(t, e, tg.ID, "SHA256:dep").ID, false)
+		tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep0000000000000000000000000000000000000000"))
+		jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000").ID, false)
 		require.NoError(t, err)
 		e.drain()
 		v := e.job(jobID)
@@ -348,7 +348,7 @@ func TestRemoveFailureRetriesOnlyBeforeTheWrite(t *testing.T) {
 			assert.Equal(t, jobs.StatusQueued, v.Status, "before the write a retryable failure is retried later")
 		}
 		assert.Equal(t, 1, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'sshkey.remove_failed'"))
-		assert.Nil(t, locationOf(t, e, tg.ID, "SHA256:dep").RemovedAt)
+		assert.Nil(t, locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000").RemovedAt)
 	}
 }
 
@@ -356,8 +356,8 @@ func TestRemoveFailureRetriesOnlyBeforeTheWrite(t *testing.T) {
 // a queued removal waits for an Administrator and a queued scan is cancelled.
 func TestL29NoRemoteWorkInLock(t *testing.T) {
 	e := newEnv(t, nil)
-	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep"))
-	removal, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, locationOf(t, e, tg.ID, "SHA256:dep").ID, false)
+	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep0000000000000000000000000000000000000000"))
+	removal, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000").ID, false)
 	require.NoError(t, err)
 	scan, err := e.inv.RequestDiscovery(e.ctx, e.admin, tg.ID)
 	require.NoError(t, err)
@@ -370,7 +370,7 @@ func TestL29NoRemoteWorkInLock(t *testing.T) {
 	assert.Equal(t, calls, len(e.prov.Calls()), "zero remote commands in lock")
 	assert.Equal(t, jobs.StatusBlocked, e.job(removal).Status)
 	assert.Equal(t, jobs.StatusCancelled, e.job(scan).Status)
-	assert.Nil(t, locationOf(t, e, tg.ID, "SHA256:dep").RemovedAt)
+	assert.Nil(t, locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000").RemovedAt)
 }
 
 // §8.4: when the provider reports a change together with the error, the outcome is uncertain:
@@ -378,12 +378,12 @@ func TestL29NoRemoteWorkInLock(t *testing.T) {
 // recorded as removed; the backup the helper made is shown.
 func TestRemoveWithAnUncertainOutcomeIsNeverRetried(t *testing.T) {
 	e := newEnv(t, nil)
-	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep"))
+	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep0000000000000000000000000000000000000000"))
 	e.prov.Configure(func(c *fake.Config) {
 		c.RemoveResult = providers.AuthKeyResult{Changed: true, Removed: 1, Backup: "/var/lib/alice-helper/backup/1"}
 		c.RemoveErr = providers.NewError("ssh.timeout", true, nil, nil)
 	})
-	jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, locationOf(t, e, tg.ID, "SHA256:dep").ID, false)
+	jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000").ID, false)
 	require.NoError(t, err)
 	e.drain()
 	v := e.job(jobID)
@@ -393,7 +393,7 @@ func TestRemoveWithAnUncertainOutcomeIsNeverRetried(t *testing.T) {
 	assert.Equal(t, true, v.Result["changed"])
 	assert.Equal(t, "/var/lib/alice-helper/backup/1", v.Result["backup"])
 	assert.Equal(t, 1, e.prov.Count("RemoveAuthorizedKey"))
-	assert.Nil(t, locationOf(t, e, tg.ID, "SHA256:dep").RemovedAt)
+	assert.Nil(t, locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000").RemovedAt)
 	assert.Equal(t, 1, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'sshkey.remove_failed'"))
 	assert.Equal(t, inventory.StatusUnreachable, e.status(tg.ID), "a connection reason marks the target")
 }
@@ -402,11 +402,11 @@ func TestRemoveWithAnUncertainOutcomeIsNeverRetried(t *testing.T) {
 // exists the job stops for a person with the helper's backup; the key is not recorded as removed.
 func TestRemoveUnverifiedStopsForAPerson(t *testing.T) {
 	e := newEnv(t, nil)
-	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep"))
+	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep0000000000000000000000000000000000000000"))
 	e.prov.Configure(func(c *fake.Config) {
 		c.RemoveResult = providers.AuthKeyResult{Changed: true, Removed: 1, Backup: "/var/lib/alice-helper/backup/2"}
 	})
-	jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, locationOf(t, e, tg.ID, "SHA256:dep").ID, false)
+	jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000").ID, false)
 	require.NoError(t, err)
 	e.drain()
 	v := e.job(jobID)
@@ -417,7 +417,7 @@ func TestRemoveUnverifiedStopsForAPerson(t *testing.T) {
 	assert.Equal(t, float64(1), v.Result["removed"])
 	assert.Equal(t, false, v.Result["verified"])
 	assert.Equal(t, "/var/lib/alice-helper/backup/2", v.Result["backup"])
-	assert.Nil(t, locationOf(t, e, tg.ID, "SHA256:dep").RemovedAt)
+	assert.Nil(t, locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000").RemovedAt)
 	assert.Zero(t, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'sshkey.removed'"))
 	assert.Equal(t, 1, countRows(t, e,
 		"SELECT count(*) FROM audit_log WHERE action = 'sshkey.remove_failed' AND details->>'reason' = 'sshkey.verify_failed'"))
@@ -427,8 +427,8 @@ func TestRemoveUnverifiedStopsForAPerson(t *testing.T) {
 // A disabled target runs no job at all.
 func TestDisabledTargetRunsNoJob(t *testing.T) {
 	e := newEnv(t, nil)
-	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep"))
-	loc := locationOf(t, e, tg.ID, "SHA256:dep")
+	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep0000000000000000000000000000000000000000"))
+	loc := locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000")
 	removal, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, loc.ID, false)
 	require.NoError(t, err)
 	test, err := e.inv.RequestTest(e.ctx, e.admin, tg.ID)
@@ -450,8 +450,8 @@ func TestDisabledTargetRunsNoJob(t *testing.T) {
 // authentication failure marks the target (R37 item 13).
 func TestRemoveFailureReasonsAndTheTargetStatus(t *testing.T) {
 	e := newEnv(t, nil)
-	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep"))
-	loc := locationOf(t, e, tg.ID, "SHA256:dep")
+	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep0000000000000000000000000000000000000000"))
+	loc := locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000")
 	e.prov.Configure(func(c *fake.Config) { c.RemoveErr = providers.NewError("sshkey.last_root_key", false, nil, nil) })
 	refused, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, loc.ID, false)
 	require.NoError(t, err)

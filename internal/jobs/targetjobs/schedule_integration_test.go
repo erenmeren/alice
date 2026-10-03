@@ -85,13 +85,13 @@ func TestSuccessfulDiscoveryRestoresAnUnreachableTarget(t *testing.T) {
 // A removal that succeeds also proves the connection: an unreachable target is "ok" again.
 func TestSuccessfulRemovalRestoresAnUnreachableTarget(t *testing.T) {
 	e := newEnv(t, nil)
-	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep"))
+	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep0000000000000000000000000000000000000000"))
 	e.prov.Configure(func(c *fake.Config) {
 		c.RemoveResult = providers.AuthKeyResult{Changed: true, Removed: 1, Verified: true}
 	})
 	_, err := e.db.Owner.Exec(e.ctx, "UPDATE targets SET status = 'unreachable', last_error_code = 'ssh.timeout' WHERE id = $1", tg.ID)
 	require.NoError(t, err)
-	jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, locationOf(t, e, tg.ID, "SHA256:dep").ID, false)
+	jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000").ID, false)
 	require.NoError(t, err)
 	e.drain()
 	require.Equal(t, jobs.StatusSucceeded, e.job(jobID).Status)
@@ -219,12 +219,12 @@ func TestRemovalAppliedWhileTheTargetIsDeletedIsAudited(t *testing.T) {
 			}
 		}}
 	})
-	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep"))
+	tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep0000000000000000000000000000000000000000"))
 	target = tg.ID
 	e.prov.Configure(func(c *fake.Config) {
 		c.RemoveResult = providers.AuthKeyResult{Changed: true, Removed: 1, Verified: true}
 	})
-	loc := locationOf(t, e, tg.ID, "SHA256:dep")
+	loc := locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000")
 	jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, loc.ID, false)
 	require.NoError(t, err)
 	deleteNow = true

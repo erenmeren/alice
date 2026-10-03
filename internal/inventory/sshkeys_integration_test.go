@@ -60,13 +60,13 @@ func TestReconcileTracksNewMissingAndOwnKey(t *testing.T) {
 
 	first := providers.DiscoveryResult{
 		SSHKeys: []providers.DiscoveredSSHKey{
-			dk("deploy", deployFile, 1, "SHA256:aaa", "deploy@laptop"),
-			dk("deploy", deployFile, 2, "SHA256:bbb", "ci@build", providers.FlagWeak),
-			dk("deploy", deployFile, 3, "SHA256:aaa", "deploy@laptop", providers.FlagDuplicate),
+			dk("deploy", deployFile, 1, "SHA256:aaa0000000000000000000000000000000000000000", "deploy@laptop"),
+			dk("deploy", deployFile, 2, "SHA256:bbb0000000000000000000000000000000000000000", "ci@build", providers.FlagWeak),
+			dk("deploy", deployFile, 3, "SHA256:aaa0000000000000000000000000000000000000000", "deploy@laptop", providers.FlagDuplicate),
 			dk("alice-svc", aliceFile, 1, pk.Fingerprint, "alice-platform"),
-			dk("root", rootFile, 1, "SHA256:aaa", "root copy", providers.FlagRootWithoutFrom),
+			dk("root", rootFile, 1, "SHA256:aaa0000000000000000000000000000000000000000", "root copy", providers.FlagRootWithoutFrom),
 		},
-		HostKeys:  []providers.DiscoveredHostKey{{KeyType: "ssh-ed25519", Bits: 256, Fingerprint: "SHA256:host"}},
+		HostKeys:  []providers.DiscoveredHostKey{{KeyType: "ssh-ed25519", Bits: 256, Fingerprint: "SHA256:host000000000000000000000000000000000000000"}},
 		SSHD:      providers.SSHDSummary{Read: true, AuthorizedKeysCommand: "none", AuthorizedKeysFile: []string{".ssh/authorized_keys"}},
 		Warnings:  []providers.Warning{{Code: "strict_modes", Params: map[string]string{"file_path": rootFile}}},
 		ReadFiles: []string{deployFile, aliceFile, rootFile},
@@ -77,13 +77,13 @@ func TestReconcileTracksNewMissingAndOwnKey(t *testing.T) {
 	assert.Equal(t, 3, h.count("SELECT count(*) FROM ssh_keys"), "one row per fingerprint")
 	locs := locations(t, h, tg.ID, false)
 	require.Len(t, locs, 4)
-	assert.Equal(t, 1, locs["deploy SHA256:aaa"].LineNo, "the first line of a duplicate is kept")
+	assert.Equal(t, 1, locs["deploy SHA256:aaa0000000000000000000000000000000000000000"].LineNo, "the first line of a duplicate is kept")
 	assert.True(t, locs["alice-svc "+pk.Fingerprint].IsAliceConnectionKey)
-	assert.False(t, locs["deploy SHA256:aaa"].IsAliceConnectionKey)
-	assert.Equal(t, []string{providers.FlagWeak}, locs["deploy SHA256:bbb"].Flags)
-	assert.Equal(t, "web-01", locs["deploy SHA256:aaa"].TargetName)
+	assert.False(t, locs["deploy SHA256:aaa0000000000000000000000000000000000000000"].IsAliceConnectionKey)
+	assert.Equal(t, []string{providers.FlagWeak}, locs["deploy SHA256:bbb0000000000000000000000000000000000000000"].Flags)
+	assert.Equal(t, "web-01", locs["deploy SHA256:aaa0000000000000000000000000000000000000000"].TargetName)
 	assert.Equal(t, 1, h.count("SELECT count(*) FROM ssh_keys WHERE is_platform_key AND fingerprint_sha256 = $1", pk.Fingerprint))
-	assert.Equal(t, 1, h.count("SELECT count(*) FROM ssh_keys WHERE weak AND fingerprint_sha256 = 'SHA256:bbb'"))
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM ssh_keys WHERE weak AND fingerprint_sha256 = 'SHA256:bbb0000000000000000000000000000000000000000'"))
 	assert.Equal(t, []map[string]string{{"key_count": "4", "new_count": "4", "missing_count": "0", "partial": "false"}},
 		h.auditDetails("target.discovered"))
 	got, err := h.svc.GetTarget(h.ctx, tg.ID)
@@ -98,7 +98,7 @@ func TestReconcileTracksNewMissingAndOwnKey(t *testing.T) {
 	// files that were read; the platform key is not marked missing because its file was not read.
 	h.clock.Advance(time.Hour)
 	second := providers.DiscoveryResult{
-		SSHKeys:   []providers.DiscoveredSSHKey{dk("deploy", deployFile, 1, "SHA256:aaa", "deploy@laptop")},
+		SSHKeys:   []providers.DiscoveredSSHKey{dk("deploy", deployFile, 1, "SHA256:aaa0000000000000000000000000000000000000000", "deploy@laptop")},
 		SSHD:      providers.SSHDSummary{Read: true, AuthorizedKeysCommand: "/usr/bin/sss_ssh_authorizedkeys", KeysManagedElsewhere: true},
 		Partial:   true,
 		ReadFiles: []string{deployFile, rootFile},
@@ -110,8 +110,8 @@ func TestReconcileTracksNewMissingAndOwnKey(t *testing.T) {
 	assert.Len(t, live, 2, "aaa in deploy's file and the platform key stay")
 	assert.Contains(t, live, "alice-svc "+pk.Fingerprint)
 	all := locations(t, h, tg.ID, true)
-	require.NotNil(t, all["deploy SHA256:bbb"].MissingSince)
-	require.NotNil(t, all["root SHA256:aaa"].MissingSince)
+	require.NotNil(t, all["deploy SHA256:bbb0000000000000000000000000000000000000000"].MissingSince)
+	require.NotNil(t, all["root SHA256:aaa0000000000000000000000000000000000000000"].MissingSince)
 	assert.Equal(t, 4, h.count("SELECT count(*) FROM ssh_key_locations"), "nothing is ever deleted")
 	got, err = h.svc.GetTarget(h.ctx, tg.ID)
 	require.NoError(t, err)
@@ -123,7 +123,7 @@ func TestReconcileTracksNewMissingAndOwnKey(t *testing.T) {
 	sum, err = h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{SSHKeys: first.SSHKeys[:2], ReadFiles: []string{deployFile}})
 	require.NoError(t, err)
 	assert.Equal(t, 0, sum.New)
-	assert.Nil(t, locations(t, h, tg.ID, true)["deploy SHA256:bbb"].MissingSince)
+	assert.Nil(t, locations(t, h, tg.ID, true)["deploy SHA256:bbb0000000000000000000000000000000000000000"].MissingSince)
 }
 
 // SEC-081: even the owner role cannot mark Alice's own key location removed or delete it.
@@ -157,7 +157,7 @@ func TestL72DiscoveryAtTheLimit(t *testing.T) {
 	}
 	keys := make([]providers.DiscoveredSSHKey, 200)
 	for i := range keys {
-		keys[i] = dk("deploy", deployFile, i+1, fmt.Sprintf("SHA256:k%03d", i), "")
+		keys[i] = dk("deploy", deployFile, i+1, fmt.Sprintf("SHA256:k%03d000000000000000000000000000000000000000", i), "")
 	}
 	sum, err := h.svc.Reconcile(h.ctx, first.ID, providers.DiscoveryResult{SSHKeys: keys, ReadFiles: []string{deployFile}})
 	require.NoError(t, err)
@@ -186,14 +186,14 @@ func seedInventory(t *testing.T, h *harness) (inventory.Target, inventory.Target
 	a := okTarget(t, h, admin, "web-01")
 	b := okTarget(t, h, admin, "web-02")
 	_, err := h.svc.Reconcile(h.ctx, a.ID, providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{
-		dk("deploy", deployFile, 1, "SHA256:Izm1", "deploy@İzmir"),
-		dk("deploy", deployFile, 2, "SHA256:Igd2", "ops@ığdır", providers.FlagWeak),
-		dk("root", rootFile, 1, "SHA256:Ci3", "100%_done"),
+		dk("deploy", deployFile, 1, "SHA256:Izm1000000000000000000000000000000000000000", "deploy@İzmir"),
+		dk("deploy", deployFile, 2, "SHA256:Igd2000000000000000000000000000000000000000", "ops@ığdır", providers.FlagWeak),
+		dk("root", rootFile, 1, "SHA256:Ci30000000000000000000000000000000000000000", "100%_done"),
 	}, ReadFiles: []string{deployFile, rootFile}})
 	require.NoError(t, err)
 	h.clock.Advance(time.Minute)
 	_, err = h.svc.Reconcile(h.ctx, b.ID, providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{
-		dk("deploy", deployFile, 1, "SHA256:Izm1", "deploy@izmir-new"),
+		dk("deploy", deployFile, 1, "SHA256:Izm1000000000000000000000000000000000000000", "deploy@izmir-new"),
 	}, ReadFiles: []string{deployFile}})
 	require.NoError(t, err)
 	return a, b
@@ -217,37 +217,37 @@ func TestListSSHKeysFiltersSearchAndCursor(t *testing.T) {
 		return p
 	}
 	all := list(inventory.KeyFilter{})
-	assert.Equal(t, []string{"SHA256:Izm1", "SHA256:Igd2", "SHA256:Ci3"}, fingerprints(all))
+	assert.Equal(t, []string{"SHA256:Izm1000000000000000000000000000000000000000", "SHA256:Igd2000000000000000000000000000000000000000", "SHA256:Ci30000000000000000000000000000000000000000"}, fingerprints(all))
 	assert.Equal(t, 2, all.Items[0].LocationCount)
 	assert.Equal(t, 2, all.Items[0].TargetCount)
 	assert.Equal(t, "deploy@izmir-new", all.Items[0].Comment, "the comment of the most recently seen location")
 	assert.True(t, all.Items[1].Weak)
 
-	assert.Equal(t, []string{"SHA256:Izm1"}, fingerprints(list(inventory.KeyFilter{Query: "İZMİR"})))
-	assert.Equal(t, []string{"SHA256:Izm1"}, fingerprints(list(inventory.KeyFilter{Query: "izmir"})))
-	assert.Equal(t, []string{"SHA256:Igd2"}, fingerprints(list(inventory.KeyFilter{Query: "Iğdır"})))
-	assert.Equal(t, []string{"SHA256:Ci3"}, fingerprints(list(inventory.KeyFilter{Query: "100%_"})))
-	assert.Equal(t, []string{"SHA256:Ci3"}, fingerprints(list(inventory.KeyFilter{Query: "%"})), "a literal % matches only the comment that has one")
-	assert.Equal(t, []string{"SHA256:Igd2"}, fingerprints(list(inventory.KeyFilter{Query: "sha256:igd"})), "fingerprints too")
-	assert.Equal(t, []string{"SHA256:Izm1"}, fingerprints(list(inventory.KeyFilter{TargetID: b.ID})))
-	assert.Equal(t, []string{"SHA256:Ci3"}, fingerprints(list(inventory.KeyFilter{TargetID: a.ID, OSUser: "root"})))
-	assert.Equal(t, []string{"SHA256:Igd2"}, fingerprints(list(inventory.KeyFilter{Flag: providers.FlagWeak})))
+	assert.Equal(t, []string{"SHA256:Izm1000000000000000000000000000000000000000"}, fingerprints(list(inventory.KeyFilter{Query: "İZMİR"})))
+	assert.Equal(t, []string{"SHA256:Izm1000000000000000000000000000000000000000"}, fingerprints(list(inventory.KeyFilter{Query: "izmir"})))
+	assert.Equal(t, []string{"SHA256:Igd2000000000000000000000000000000000000000"}, fingerprints(list(inventory.KeyFilter{Query: "Iğdır"})))
+	assert.Equal(t, []string{"SHA256:Ci30000000000000000000000000000000000000000"}, fingerprints(list(inventory.KeyFilter{Query: "100%_"})))
+	assert.Equal(t, []string{"SHA256:Ci30000000000000000000000000000000000000000"}, fingerprints(list(inventory.KeyFilter{Query: "%"})), "a literal % matches only the comment that has one")
+	assert.Equal(t, []string{"SHA256:Igd2000000000000000000000000000000000000000"}, fingerprints(list(inventory.KeyFilter{Query: "sha256:igd"})), "fingerprints too")
+	assert.Equal(t, []string{"SHA256:Izm1000000000000000000000000000000000000000"}, fingerprints(list(inventory.KeyFilter{TargetID: b.ID})))
+	assert.Equal(t, []string{"SHA256:Ci30000000000000000000000000000000000000000"}, fingerprints(list(inventory.KeyFilter{TargetID: a.ID, OSUser: "root"})))
+	assert.Equal(t, []string{"SHA256:Igd2000000000000000000000000000000000000000"}, fingerprints(list(inventory.KeyFilter{Flag: providers.FlagWeak})))
 
 	p1 := list(inventory.KeyFilter{Limit: 2})
-	assert.Equal(t, []string{"SHA256:Izm1", "SHA256:Igd2"}, fingerprints(p1))
+	assert.Equal(t, []string{"SHA256:Izm1000000000000000000000000000000000000000", "SHA256:Igd2000000000000000000000000000000000000000"}, fingerprints(p1))
 	require.NotEmpty(t, p1.NextCursor)
 	p2 := list(inventory.KeyFilter{Limit: 2, Cursor: p1.NextCursor})
-	assert.Equal(t, []string{"SHA256:Ci3"}, fingerprints(p2))
+	assert.Equal(t, []string{"SHA256:Ci30000000000000000000000000000000000000000"}, fingerprints(p2))
 	assert.Empty(t, p2.NextCursor)
 
 	// A key that is only missing is hidden unless asked for.
 	_, err := h.svc.Reconcile(h.ctx, a.ID, providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{
-		dk("deploy", deployFile, 1, "SHA256:Izm1", "deploy@İzmir"),
-		dk("deploy", deployFile, 2, "SHA256:Igd2", "ops@ığdır", providers.FlagWeak),
+		dk("deploy", deployFile, 1, "SHA256:Izm1000000000000000000000000000000000000000", "deploy@İzmir"),
+		dk("deploy", deployFile, 2, "SHA256:Igd2000000000000000000000000000000000000000", "ops@ığdır", providers.FlagWeak),
 	}, ReadFiles: []string{deployFile, rootFile}})
 	require.NoError(t, err)
-	assert.NotContains(t, fingerprints(list(inventory.KeyFilter{})), "SHA256:Ci3")
-	assert.Contains(t, fingerprints(list(inventory.KeyFilter{IncludeMissing: true})), "SHA256:Ci3")
+	assert.NotContains(t, fingerprints(list(inventory.KeyFilter{})), "SHA256:Ci30000000000000000000000000000000000000000")
+	assert.Contains(t, fingerprints(list(inventory.KeyFilter{IncludeMissing: true})), "SHA256:Ci30000000000000000000000000000000000000000")
 
 	for _, bad := range []inventory.KeyFilter{{Limit: 201}, {Limit: -1}, {Cursor: "not-a-cursor"}, {Flag: "evil"}, {Query: string(make([]byte, 201))}} {
 		_, err := h.svc.ListSSHKeys(h.ctx, bad)
@@ -279,7 +279,7 @@ func TestReconcileMarksTheKeysOfADeletedFileMissing(t *testing.T) {
 	admin := h.user("ada", rbac.Admin, "")
 	tg := okTarget(t, h, admin, "web-01")
 	_, err := h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{
-		dk("deploy", deployFile, 1, "SHA256:aaa", ""), dk("root", rootFile, 1, "SHA256:rrr", ""),
+		dk("deploy", deployFile, 1, "SHA256:aaa0000000000000000000000000000000000000000", ""), dk("root", rootFile, 1, "SHA256:rrr0000000000000000000000000000000000000000", ""),
 	}, ReadFiles: []string{deployFile, rootFile}})
 	require.NoError(t, err)
 	h.clock.Advance(time.Hour)
@@ -288,9 +288,9 @@ func TestReconcileMarksTheKeysOfADeletedFileMissing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, inventory.ReconcileSummary{Keys: 0, New: 0, Missing: 1}, sum)
 	all := locations(t, h, tg.ID, true)
-	require.NotNil(t, all["deploy SHA256:aaa"].MissingSince)
-	assert.True(t, all["deploy SHA256:aaa"].MissingSince.Equal(h.clock.Now()))
-	assert.Nil(t, all["root SHA256:rrr"].MissingSince, "a file that was not read never makes its keys missing")
+	require.NotNil(t, all["deploy SHA256:aaa0000000000000000000000000000000000000000"].MissingSince)
+	assert.True(t, all["deploy SHA256:aaa0000000000000000000000000000000000000000"].MissingSince.Equal(h.clock.Now()))
+	assert.Nil(t, all["root SHA256:rrr0000000000000000000000000000000000000000"].MissingSince, "a file that was not read never makes its keys missing")
 }
 
 // SEC-081: the connection-key mark is never written back to false by a later scan (the trigger
@@ -303,20 +303,20 @@ func TestReconcileNeverClearsTheConnectionKeyMark(t *testing.T) {
 	tg := okTarget(t, h, admin, "web-01")
 	scan := providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{
 		dk("alice-svc", aliceFile, 1, pk.Fingerprint, "alice-platform"),
-		dk("alice-svc", aliceFile, 2, "SHA256:previous", "alice-platform-old"),
+		dk("alice-svc", aliceFile, 2, "SHA256:previous00000000000000000000000000000000000", "alice-platform-old"),
 	}, ReadFiles: []string{aliceFile}}
 	_, err = h.svc.Reconcile(h.ctx, tg.ID, scan)
 	require.NoError(t, err)
 	// An earlier platform key's location (an owner procedure marks it during a rotation).
 	_, err = h.db.Owner.Exec(h.ctx, `UPDATE ssh_key_locations SET is_alice_connection_key = true
-WHERE ssh_key_id = (SELECT id FROM ssh_keys WHERE fingerprint_sha256 = 'SHA256:previous')`)
+WHERE ssh_key_id = (SELECT id FROM ssh_keys WHERE fingerprint_sha256 = 'SHA256:previous00000000000000000000000000000000000')`)
 	require.NoError(t, err)
 	h.clock.Advance(time.Hour)
 	_, err = h.svc.Reconcile(h.ctx, tg.ID, scan)
 	require.NoError(t, err, "the scan must not try to clear the mark")
 	locs := locations(t, h, tg.ID, false)
 	assert.True(t, locs["alice-svc "+pk.Fingerprint].IsAliceConnectionKey)
-	assert.True(t, locs["alice-svc SHA256:previous"].IsAliceConnectionKey)
+	assert.True(t, locs["alice-svc SHA256:previous00000000000000000000000000000000000"].IsAliceConnectionKey)
 }
 
 // Remote text is stored as text: invalid UTF-8 and NUL never reach the database as bytes.
@@ -324,16 +324,17 @@ func TestReconcileCleansRemoteText(t *testing.T) {
 	h := newHarness(t)
 	admin := h.user("ada", rbac.Admin, "")
 	tg := okTarget(t, h, admin, "web-01")
-	k := dk("deploy", deployFile, 1, "SHA256:aaa", "bad\xff\x00comment")
+	k := dk("deploy", deployFile, 1, "SHA256:aaa0000000000000000000000000000000000000000", "bad\xff\x00comment")
 	k.Options = `from="10.0.0.1"`
 	_, err := h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{
-		k, dk("deploy", deployFile, 0, "SHA256:noline", ""), dk("deploy", deployFile, 2, "", ""),
+		k, dk("deploy", deployFile, 0, "SHA256:noline0000000000000000000000000000000000000", ""), dk("deploy", deployFile, 2, "", ""),
+		dk("deploy", deployFile, 3, "SHA256:bogus", ""), dk("deploy", deployFile, 4, "MD5:aa:bb", ""),
 	}, ReadFiles: []string{deployFile}})
-	require.NoError(t, err)
+	require.NoError(t, err, "a malformed entry never fails the whole scan (the fingerprint CHECK would)")
 	locs := locations(t, h, tg.ID, false)
-	require.Len(t, locs, 1, "entries without a fingerprint or a line number are skipped")
-	assert.Equal(t, "bad��comment", locs["deploy SHA256:aaa"].Comment)
-	assert.Equal(t, `from="10.0.0.1"`, locs["deploy SHA256:aaa"].Options)
+	require.Len(t, locs, 1, "entries without a well-formed fingerprint or a line number are skipped")
+	assert.Equal(t, "bad��comment", locs["deploy SHA256:aaa0000000000000000000000000000000000000000"].Comment)
+	assert.Equal(t, `from="10.0.0.1"`, locs["deploy SHA256:aaa0000000000000000000000000000000000000000"].Options)
 }
 
 func TestListTargetKeysOfDeletedTargetIsNotFound(t *testing.T) {
@@ -355,7 +356,7 @@ func TestConcurrentReconcilesWithSharedKeysDoNotDeadlock(t *testing.T) {
 	for round := range 5 {
 		keys := make([]providers.DiscoveredSSHKey, 40)
 		for i := range keys {
-			keys[i] = dk("deploy", deployFile, i+1, fmt.Sprintf("SHA256:r%d-%02d", round, i), "")
+			keys[i] = dk("deploy", deployFile, i+1, fmt.Sprintf("SHA256:r%dx%02d00000000000000000000000000000000000000", round, i), "")
 		}
 		reversed := make([]providers.DiscoveredSSHKey, len(keys))
 		for i, k := range keys {

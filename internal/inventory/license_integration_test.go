@@ -129,7 +129,7 @@ func TestL72KeysDoNotCount(t *testing.T) {
 	addN(h, admin, 1, 10)
 	for i := range 200 {
 		_, err := h.db.Owner.Exec(h.ctx, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, public_key, first_seen_at, created_at)
-VALUES ($1, $2, 'ssh-ed25519', 'ssh-ed25519 AAAA', $3, $3)`, uuid.New(), fmt.Sprintf("SHA256:key%03d", i), h.clock.Now())
+VALUES ($1, $2, 'ssh-ed25519', 'ssh-ed25519 AAAA', $3, $3)`, uuid.New(), fmt.Sprintf("SHA256:key%03d0000000000000000000000000000000000000", i), h.clock.Now())
 		require.NoError(t, err)
 	}
 	n, err := inventory.Counter{}.CountTargets(h.ctx, h.db.App)

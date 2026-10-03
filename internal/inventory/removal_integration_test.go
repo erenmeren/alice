@@ -38,14 +38,14 @@ func newRemovalFixture(t *testing.T) removalFixture {
 	f.target = okTarget(t, h, f.admin, "web-01")
 	_, err = h.svc.Reconcile(h.ctx, f.target.ID, providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{
 		dk("alice-svc", aliceFile, 1, pk.Fingerprint, "alice-platform"),
-		dk("deploy", deployFile, 1, "SHA256:dep", "deploy@laptop"),
-		dk("deploy", deployFile, 2, "SHA256:ca", "", providers.FlagCertAuthority),
-		dk("root", rootFile, 1, "SHA256:root", "root@bastion"),
+		dk("deploy", deployFile, 1, "SHA256:dep0000000000000000000000000000000000000000", "deploy@laptop"),
+		dk("deploy", deployFile, 2, "SHA256:ca00000000000000000000000000000000000000000", "", providers.FlagCertAuthority),
+		dk("root", rootFile, 1, "SHA256:root000000000000000000000000000000000000000", "root@bastion"),
 	}, SSHD: sshdRead, ReadFiles: []string{aliceFile, deployFile, rootFile}})
 	require.NoError(t, err)
 	locs := locations(t, h, f.target.ID, false)
-	f.own, f.deploy = locs["alice-svc "+pk.Fingerprint].ID, locs["deploy SHA256:dep"].ID
-	f.root, f.ca = locs["root SHA256:root"].ID, locs["deploy SHA256:ca"].ID
+	f.own, f.deploy = locs["alice-svc "+pk.Fingerprint].ID, locs["deploy SHA256:dep0000000000000000000000000000000000000000"].ID
+	f.root, f.ca = locs["root SHA256:root000000000000000000000000000000000000000"].ID, locs["deploy SHA256:ca00000000000000000000000000000000000000000"].ID
 	return f
 }
 
@@ -60,11 +60,11 @@ func TestRequestKeyRemovalQueuesTheJob(t *testing.T) {
 	require.Len(t, reqs, before+1)
 	assert.Equal(t, inventory.JobRequest{Type: inventory.JobSSHKeyRemove, TargetID: f.target.ID, Kind: "user",
 		CreatedBy: f.operator.UserID, CreatedByRole: "operator", DedupeKey: "sshkey.remove:" + f.deploy.String(),
-		Payload: map[string]string{"location_id": f.deploy.String(), "fingerprint": "SHA256:dep", "os_user": "deploy",
+		Payload: map[string]string{"location_id": f.deploy.String(), "fingerprint": "SHA256:dep0000000000000000000000000000000000000000", "os_user": "deploy",
 			"file_path": deployFile, "confirm_last_root_key": "false"}}, reqs[before])
 	d := h.auditDetails("sshkey.remove_requested")
 	require.Len(t, d, 1)
-	assert.Equal(t, "SHA256:dep", d[0]["fingerprint"])
+	assert.Equal(t, "SHA256:dep0000000000000000000000000000000000000000", d[0]["fingerprint"])
 	assert.Equal(t, "deploy", d[0]["os_user"])
 	assert.Equal(t, deployFile, d[0]["file_path"])
 }
@@ -124,9 +124,9 @@ func TestMarkKeyRemovedAndFailures(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, loc.RemovedAt)
 	require.NotNil(t, loc.MissingSince)
-	assert.Equal(t, []map[string]string{{"fingerprint": "SHA256:dep", "os_user": "deploy", "file_path": deployFile,
+	assert.Equal(t, []map[string]string{{"fingerprint": "SHA256:dep0000000000000000000000000000000000000000", "os_user": "deploy", "file_path": deployFile,
 		"job_id": jobActor.RequestID, "removed_count": "1", "verified": "true"}}, h.auditDetails("sshkey.removed"))
-	assert.Equal(t, []map[string]string{{"fingerprint": "SHA256:dep", "os_user": "deploy", "file_path": deployFile,
+	assert.Equal(t, []map[string]string{{"fingerprint": "SHA256:dep0000000000000000000000000000000000000000", "os_user": "deploy", "file_path": deployFile,
 		"job_id": jobActor.RequestID, "reason": "ssh.file_changed"}}, h.auditDetails("sshkey.remove_failed"))
 	_, err = h.svc.RequestKeyRemoval(h.ctx, f.admin, f.deploy, false)
 	require.ErrorIs(t, err, inventory.ErrNotRemovable, "a removed key cannot be removed again")
@@ -143,10 +143,10 @@ func TestRequestKeyRemovalRefusesAUserWhoseKeysAreManagedElsewhere(t *testing.T)
 	f := newRemovalFixture(t)
 	h := f.h
 	_, err := h.svc.Reconcile(h.ctx, f.target.ID, providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{
-		dk("deploy", deployFile, 1, "SHA256:dep", "deploy@laptop"),
-		dk("deploy", deployFile, 2, "SHA256:ca", "", providers.FlagCertAuthority),
-		dk("root", rootFile, 1, "SHA256:root", "root@bastion"),
-		dk("root", rootFile, 2, "SHA256:root2", "root@backup"),
+		dk("deploy", deployFile, 1, "SHA256:dep0000000000000000000000000000000000000000", "deploy@laptop"),
+		dk("deploy", deployFile, 2, "SHA256:ca00000000000000000000000000000000000000000", "", providers.FlagCertAuthority),
+		dk("root", rootFile, 1, "SHA256:root000000000000000000000000000000000000000", "root@bastion"),
+		dk("root", rootFile, 2, "SHA256:root200000000000000000000000000000000000000", "root@backup"),
 	}, Warnings: []providers.Warning{{Code: "keys_managed_elsewhere", Params: map[string]string{"user": "deploy"}}},
 		SSHD: sshdRead, ReadFiles: []string{deployFile, rootFile}})
 	require.NoError(t, err)
@@ -165,11 +165,11 @@ func TestProtectedFingerprintsIncludeEveryPlatformKey(t *testing.T) {
 	h := f.h
 	pk, err := h.svc.PlatformKey(h.ctx)
 	require.NoError(t, err)
-	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_keys SET is_platform_key = true WHERE fingerprint_sha256 = 'SHA256:dep'")
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_keys SET is_platform_key = true WHERE fingerprint_sha256 = 'SHA256:dep0000000000000000000000000000000000000000'")
 	require.NoError(t, err)
 	fps, err := h.svc.ProtectedFingerprints(h.ctx)
 	require.NoError(t, err)
-	assert.Equal(t, []string{pk.Fingerprint, "SHA256:dep"}, fps)
+	assert.Equal(t, []string{pk.Fingerprint, "SHA256:dep0000000000000000000000000000000000000000"}, fps)
 
 	_, err = h.svc.RequestKeyRemoval(h.ctx, f.admin, f.deploy, false)
 	require.ErrorIs(t, err, inventory.ErrOwnKeyProtected)
@@ -177,7 +177,7 @@ func TestProtectedFingerprintsIncludeEveryPlatformKey(t *testing.T) {
 	require.ErrorIs(t, h.svc.MarkKeyRemoved(h.ctx, f.deploy, jobActor, providers.AuthKeyResult{}), inventory.ErrOwnKeyProtected)
 	require.ErrorIs(t, h.svc.MarkKeyRemoved(h.ctx, f.own, jobActor, providers.AuthKeyResult{}), inventory.ErrOwnKeyProtected)
 
-	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_keys SET retired_at = now() WHERE fingerprint_sha256 = 'SHA256:dep'")
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_keys SET retired_at = now() WHERE fingerprint_sha256 = 'SHA256:dep0000000000000000000000000000000000000000'")
 	require.NoError(t, err)
 	fps, err = h.svc.ProtectedFingerprints(h.ctx)
 	require.NoError(t, err)
@@ -205,9 +205,9 @@ func TestRequestKeyRemovalRefusesWhenSSHDWasNotRead(t *testing.T) {
 	scan := func(sshd providers.SSHDSummary, warnings ...providers.Warning) {
 		t.Helper()
 		_, err := h.svc.Reconcile(h.ctx, f.target.ID, providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{
-			dk("deploy", deployFile, 1, "SHA256:dep", "deploy@laptop"),
-			dk("root", rootFile, 1, "SHA256:root", "root@bastion"),
-			dk("root", rootFile, 2, "SHA256:root2", "root@backup"),
+			dk("deploy", deployFile, 1, "SHA256:dep0000000000000000000000000000000000000000", "deploy@laptop"),
+			dk("root", rootFile, 1, "SHA256:root000000000000000000000000000000000000000", "root@bastion"),
+			dk("root", rootFile, 2, "SHA256:root200000000000000000000000000000000000000", "root@backup"),
 		}, SSHD: sshd, Warnings: warnings, ReadFiles: []string{deployFile, rootFile}})
 		require.NoError(t, err)
 	}

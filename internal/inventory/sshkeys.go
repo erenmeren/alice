@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -87,6 +88,10 @@ const (
 	maxQueryRunes   = 200
 )
 
+// fingerprintRE is the form of ssh.FingerprintSHA256, which the fingerprint columns' CHECK
+// enforces: Reconcile skips an entry of another form instead of failing the whole scan.
+var fingerprintRE = regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{43}$`)
+
 var knownFlags = []string{providers.FlagWeak, providers.FlagCommand, providers.FlagRootWithoutFrom,
 	providers.FlagDuplicate, providers.FlagCertAuthority, providers.FlagSecurityKey}
 
@@ -125,7 +130,7 @@ func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.Dis
 		var entries []providers.DiscoveredSSHKey
 		for _, k := range res.SSHKeys {
 			tp := tuple{k.Fingerprint, k.OSUser, k.FilePath}
-			if done[tp] || k.Fingerprint == "" || k.LineNo < 1 {
+			if done[tp] || !fingerprintRE.MatchString(k.Fingerprint) || k.LineNo < 1 {
 				continue
 			}
 			done[tp] = true
