@@ -396,6 +396,20 @@
   },
   "email": {
     "footer": "Bu ileti Alice tarafından otomatik olarak gönderildi. Lütfen yanıtlamayın.",
+    "deployment": {
+      "failed": {
+        "subject": "{{target_name}} sunucusunda sertifika dağıtımı başarısız oldu",
+        "body": "Alice {{target_name}} sunucusunda bir sertifikayı dağıtamadı (dosya: {{cert_path}}). Sunucu önceki sertifikasını kullanmaya devam ediyor.\n\nAlice'teki dağıtım geçmişi her adımı, nedeni ve yapılması gerekenleri gösterir. Dağıtım: {{deployment_id}}"
+      },
+      "rollback_failed": {
+        "subject": "Elle müdahale gerekiyor: {{target_name}} sunucusunda sertifika geri yüklenemedi",
+        "body": "Alice {{target_name}} sunucusunda bir sertifika dağıttı (dosya: {{cert_path}}). Değişiklik başarısız oldu ve otomatik geri yükleme de başarısız oldu.\n\nÖnceki dosyalar sunucuda şu klasörde: {{backup_dir}}. Web sitesini hemen denetleyin, sonra sunucuda nginx -t ve systemctl status nginx komutlarını çalıştırın. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
+      },
+      "needs_attention": {
+        "subject": "Alice {{target_name}} sunucusundaki bir dağıtımı tamamlayamıyor",
+        "body": "Bir sertifika dağıtımı sırasında {{target_name}} sunucusuyla bağlantı kesildi (dosya: {{cert_path}}) ve Alice dağıtımı tamamlamak veya geri almak için sunucuya erişemiyor.\n\nAlice 15 dakikada bir yeniden dener. O zamana kadar web sitesini ve sunucunun bağlantısını denetleyin. Dağıtım: {{deployment_id}}"
+      }
+    },
     "target": {
       "host_key_changed": {
         "subject": "Alice, kimliği değişen bir sunucudaki işleri durdurdu: {{target_name}}",

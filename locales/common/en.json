@@ -396,6 +396,20 @@
   },
   "email": {
     "footer": "This message was sent automatically by Alice. Do not reply to it.",
+    "deployment": {
+      "failed": {
+        "subject": "Certificate deployment failed on {{target_name}}",
+        "body": "Alice could not deploy a certificate on the server {{target_name}} (file {{cert_path}}). The server keeps its previous certificate.\n\nThe deployment history in Alice shows each step, the reason and what to do. Deployment: {{deployment_id}}"
+      },
+      "rollback_failed": {
+        "subject": "Manual action needed: certificate restore failed on {{target_name}}",
+        "body": "Alice deployed a certificate on the server {{target_name}} (file {{cert_path}}). The change failed, and the automatic restore failed too.\n\nThe previous files are on the server in {{backup_dir}}. Check the website now, then run nginx -t and systemctl status nginx on the server. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
+      },
+      "needs_attention": {
+        "subject": "Alice cannot finish a deployment on {{target_name}}",
+        "body": "The connection to the server {{target_name}} was lost during a certificate deployment (file {{cert_path}}), and Alice cannot reach the server to finish or undo it.\n\nAlice tries again every 15 minutes. Until then, check the website and the server's connection. Deployment: {{deployment_id}}"
+      }
+    },
     "target": {
       "host_key_changed": {
         "subject": "Alice stopped work on a server whose identity changed: {{target_name}}",
