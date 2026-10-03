@@ -90,16 +90,19 @@ No High finding is open except the documented product residual P3-01.
   This is safe only while every directory above it (for example `/home` and `/`) is controlled by root, so the
   helper checks it at the scan: every existing directory above the home must be root's and not group or other
   writable. A symlink among those directories is accepted only when root owns it and the path it leads to passes
-  the same check (at most 40 links, so a loop is refused); this covers `/home -> /data/home` and Fedora's
-  `/home -> var/home`. A symlink owned by another user, or one that leads into a directory another user owns or
-  can write, makes the account unsupported. A home that is itself a symlink must lead to a directory owned by the
+  the same check (at most 40 links, so a loop is refused) and its target has no `..` component (the check must
+  look at the same path the kernel opens, and the path it checked must equal the resolved path); this covers
+  `/home -> /data/home` and Fedora's `/home -> var/home`. A symlink owned by another user, one whose target contains `..`, or one that leads into a
+  directory another user owns or can write, makes the account unsupported. A home that is itself a symlink must lead to a directory owned by the
   account (root excepted) below such directories. The directory of an absolute pattern outside the home must not
   be reached through any symlink. Otherwise the account's key files are reported as unsupported and never read
   or written. Standard layouts (`/home/<u>`, `/root`, `/var/lib/<x>`) pass; a home below a directory other users
   can write (for example a group-writable `/srv/homes`) does not. The check and the open are separate steps: a root-controlled layout
   cannot change in between, which is why the check is required.
-- **Last-key guard for uid-0 accounts.** Alice's linuxssh provider refuses the last key of every uid-0 account
-  (`root`, `toor`, …) without an administrator's confirmation (it uses the uid of an account listing this session already made, and treats the name `root` as uid 0 always; the helper lists no other uid-0 account today). Inventory's own
+- **Last-key guard for uid-0 accounts.** Alice's linuxssh provider asks for an administrator's confirmation before
+  it removes the last key of the account named `root`, and of any account that an account listing made earlier in
+  the same session reported with uid 0. The helper lists no uid-0 account other than `root` today, so in practice
+  the guard covers `root` only. Inventory's own
   pre-check before queueing a removal still looks at the name `root` only, so for another uid-0 account the refusal
   arrives when the job runs rather than when the removal is requested.
 - **`.ssh` created with root's supplementary groups.** The helper creates a missing `.ssh` with the user's
