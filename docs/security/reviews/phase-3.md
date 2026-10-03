@@ -83,7 +83,20 @@ No High finding is open except the documented product residual P3-01.
   (warning `too_many_users`).
 - **Helper base directory.** The helper opens the base directory of a key file (the user's home, or the directory
   an absolute `AuthorizedKeysFile` names) by its path and resolves everything below it through that descriptor.
-  This is safe only while every directory above it (for example `/home` and `/`) is controlled by root.
+  This is safe only while every directory above it (for example `/home` and `/`) is controlled by root. For an
+  absolute pattern outside the home the helper checks this at the scan (every component root's, not group or
+  other writable); for the home it relies on the system layout.
+- **`.ssh` created with root's supplementary groups.** The helper creates a missing `.ssh` with the user's
+  filesystem uid and gid but keeps root's supplementary groups. Ownership is the user's either way; a directory
+  that ended up group-writable would be refused by the StrictModes check of the next write, never used.
+- **Platform-key rotation and pooled connections.** A connection opened before the platform key was replaced keeps
+  authenticating with the old key's session for up to 60 s (the pool idle time).
+- **`Match Address` and `Match Host`.** The helper evaluates per-user settings with
+  `sshd -T -C user=<u>,host=localhost,addr=127.0.0.1`. Blocks that match on the client address or host name of
+  real clients cannot be evaluated; their `AuthorizedKeysFile` and `AuthorizedKeysCommand` are not seen.
+- **Internal test and error details.** The fake provider's configuration copy is shallow (tests only), and a
+  credential failure of the platform key is reported without its cause (deliberately: the cause can name key
+  material).
 - **Stale host-key candidates.** A key a server presented and no longer presents stays as a candidate until an
   Administrator acts. If a blocked server presents its pinned key again, the block stays, the page still offers the
   old candidate (accepting it fails with `ALC-TGT-0003`), and the block can only be ended through the API by
