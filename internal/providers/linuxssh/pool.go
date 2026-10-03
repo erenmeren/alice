@@ -50,7 +50,8 @@ type Pool struct {
 	idle    map[uuid.UUID][]idleConn
 	idleN   int
 	// forgotten holds deleted targets (ForgetTarget) and when they were forgotten: Acquire refuses
-	// them and their released connections are closed. Entries are pruned after the idle time.
+	// them for the idle time, then the entry is pruned. Their released connections are closed
+	// because their slot channel is gone (releaser), not because of this map.
 	forgotten map[uuid.UUID]time.Time
 }
 
@@ -184,7 +185,7 @@ func (p *Pool) acquire(ctx context.Context, target uuid.UUID, cfg Config, cred p
 	}
 	if !fresh {
 		if c := p.takeIdle(ctx, target, cfg); c != nil {
-			return c, p.releaser(target, c, slots), nil
+			return c, p.releaser(target, tsem, c, slots), nil
 		}
 	}
 	c, err := p.dialer.Dial(ctx, target, cfg, cred)
@@ -195,16 +196,16 @@ func (p *Pool) acquire(ctx context.Context, target uuid.UUID, cfg Config, cred p
 		}
 		return nil, nil, err
 	}
-	return c, p.releaser(target, c, slots), nil
+	return c, p.releaser(target, tsem, c, slots), nil
 }
 
 // errTargetForgotten refuses connections to a target that was deleted (ForgetTarget).
 var errTargetForgotten = errors.New("linuxssh: the target was deleted")
 
-// ForgetTarget closes the idle connections of a deleted target and drops its slot channel. For
-// the idle time afterwards Acquire refuses the target (no slot entry is created again) and a
-// connection of it still in use is closed when released; then the entry is pruned, so the map
-// stays bounded.
+// ForgetTarget closes the idle connections of a deleted target and drops its slot channel, so a
+// connection of it still in use is closed when released, however long it is held. For the idle
+// time afterwards Acquire refuses the target (no slot entry is created again); then the entry is
+// pruned, so the map stays bounded.
 func (p *Pool) ForgetTarget(target uuid.UUID) {
 	now := p.dialer.clk().Now()
 	p.mu.Lock()
@@ -305,7 +306,11 @@ func (p *Pool) sweepLocked(now time.Time) []*Conn {
 	return stale
 }
 
-func (p *Pool) releaser(target uuid.UUID, c *Conn, slots func()) func(bool) {
+// releaser returns the release function of c, acquired with the slot channel tsem. The connection
+// is kept idle only while tsem is still the target's slot channel: ForgetTarget drops it, so a
+// connection of a deleted target is closed on release however long it was held (even after the
+// forgotten entry was pruned).
+func (p *Pool) releaser(target uuid.UUID, tsem chan struct{}, c *Conn, slots func()) func(bool) {
 	var once sync.Once
 	return func(healthy bool) {
 		once.Do(func() {
@@ -313,8 +318,7 @@ func (p *Pool) releaser(target uuid.UUID, c *Conn, slots func()) func(bool) {
 			now := p.dialer.clk().Now()
 			p.mu.Lock()
 			stale := p.sweepLocked(now)
-			_, gone := p.forgotten[target]
-			keep := healthy && c.Healthy() && !p.closed && p.idleN < p.maxIdle && !gone
+			keep := healthy && c.Healthy() && !p.closed && p.idleN < p.maxIdle && p.targets[target] == tsem
 			if keep {
 				p.idle[target] = append(p.idle[target], idleConn{conn: c, since: now})
 				p.idleN++

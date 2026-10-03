@@ -425,3 +425,24 @@ func TestPoolForgottenTargetsAreRefusedThenPruned(t *testing.T) {
 	rel(true)
 	assert.True(t, c.Healthy())
 }
+
+// Round 3 item 4: a connection acquired before ForgetTarget and held past the idle time (so the
+// forgotten entry is already pruned) is still closed on release, never kept idle.
+func TestPoolClosesALateReleaseOfAForgottenTarget(t *testing.T) {
+	fake := clock.NewFake(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC))
+	e := newPoolEnv(t, fake, 2, 1)
+	c, rel, err := e.pool.Acquire(context.Background(), testTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	e.pool.ForgetTarget(testTarget)
+	fake.Advance(IdleTimeout)
+	require.Eventually(t, func() bool {
+		e.pool.mu.Lock()
+		defer e.pool.mu.Unlock()
+		return len(e.pool.forgotten) == 0
+	}, 5*time.Second, 10*time.Millisecond)
+	rel(true)
+	assert.False(t, c.Healthy(), "closed, not kept idle")
+	e.pool.mu.Lock()
+	assert.Empty(t, e.pool.idle[testTarget])
+	e.pool.mu.Unlock()
+}
