@@ -100,7 +100,8 @@ type Provider interface {
 }
 
 // Session is one connection scope. Methods of capabilities a provider does not advertise return
-// ErrUnsupported (embed UnsupportedSession). Later phases add deploy and import methods.
+// ErrUnsupported (embed UnsupportedSession). Phase 5 adds import. A provider advertises a
+// capability only when its methods are implemented: the conformance suite fails otherwise.
 type Session interface {
 	Close() error
 	TestConnection(ctx context.Context) (ConnectionReport, error)
@@ -108,6 +109,16 @@ type Session interface {
 	ListAuthorizedKeys(ctx context.Context) ([]DiscoveredSSHKey, error)
 	AddAuthorizedKey(ctx context.Context, req AuthKeyChange, log StepLogger) (AuthKeyResult, error)
 	RemoveAuthorizedKey(ctx context.Context, req AuthKeyChange, log StepLogger) (AuthKeyResult, error)
+	// DeployCertificate (CapDeployCertificate) never returns a non-nil error together with a
+	// change it knows about: a known change is an outcome. A transport failure after the request
+	// was sent is DeployUncertain with the error; DeployNoChange is only a well-formed refusal.
+	DeployCertificate(ctx context.Context, req DeployRequest, log StepLogger) (DeployOutcome, error)
+	// RollbackDeployment (CapDeployCertificate) restores the files an operation replaced.
+	RollbackDeployment(ctx context.Context, req RollbackRequest, log StepLogger) (RollbackOutcome, error)
+	// DeploymentStatus (CapDeployCertificate) reads what the server knows about an operation.
+	DeploymentStatus(ctx context.Context, op uuid.UUID) (DeploymentState, error)
+	// VerifyDeployment (CapVerifyDeployment) checks which certificate the location serves.
+	VerifyDeployment(ctx context.Context, req VerifyRequest) (VerifyResult, error)
 }
 
 // ConnectionCache is implemented by providers that keep connections to targets between sessions

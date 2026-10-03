@@ -11,11 +11,15 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
+	"alice/internal/providers/linuxssh/helperproto"
+	"alice/internal/providers/nginx/nginxconf"
+	"alice/internal/secrets"
 )
 
 // stub is the smallest valid provider; tests break one property at a time.
@@ -275,4 +279,136 @@ func TestErrorLogValueIsDeterministic(t *testing.T) {
 		}
 		assert.Equal(t, first, line)
 	}
+}
+
+func TestUnsupportedSessionAnswersErrUnsupportedForDeployMethods(t *testing.T) {
+	var s providers.Session = providers.UnsupportedSession{}
+	ctx := context.Background()
+	_, err := s.DeployCertificate(ctx, providers.DeployRequest{}, nil)
+	assert.ErrorIs(t, err, providers.ErrUnsupported)
+	_, err = s.RollbackDeployment(ctx, providers.RollbackRequest{}, nil)
+	assert.ErrorIs(t, err, providers.ErrUnsupported)
+	_, err = s.VerifyDeployment(ctx, providers.VerifyRequest{})
+	assert.ErrorIs(t, err, providers.ErrUnsupported)
+	_, err = s.DeploymentStatus(ctx, uuid.New())
+	assert.ErrorIs(t, err, providers.ErrUnsupported)
+}
+
+const keyCanary = "KEY-MATERIAL-CANARY"
+
+func TestDeployRequestNeverPrintsTheKey(t *testing.T) {
+	req := providers.DeployRequest{
+		OperationID:   uuid.New(),
+		PrivateKeyPEM: secrets.NewPlaintext([]byte(keyCanary)),
+	}
+	for _, v := range []any{req, &req} {
+		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%d", "%x", "%q"} {
+			out := fmt.Sprintf(verb, v)
+			assert.NotContains(t, out, keyCanary, "%s of %T", verb, v)
+			assert.NotContains(t, out, fmt.Sprintf("%x", keyCanary), "%s of %T", verb, v)
+		}
+		var text, js bytes.Buffer
+		slog.New(slog.NewTextHandler(&text, nil)).Info("deploy", "req", v)
+		slog.New(slog.NewJSONHandler(&js, nil)).Info("deploy", slog.Any("req", v))
+		assert.NotContains(t, text.String(), keyCanary)
+		assert.NotContains(t, js.String(), keyCanary)
+		assert.Contains(t, text.String(), "redacted")
+	}
+	b, err := json.Marshal(req)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), keyCanary)
+	assert.NotContains(t, string(b), "PrivateKeyPEM", "the key field is not part of any JSON form")
+}
+
+func TestBackupRefJSON(t *testing.T) {
+	id := uuid.MustParse("0190f5a0-0000-7000-8000-0000000000aa")
+	b, err := json.Marshal(providers.BackupRef{OperationID: id, Dir: "/var/lib/alice-helper/backups/" + id.String()})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"operation_id":"0190f5a0-0000-7000-8000-0000000000aa","dir":"/var/lib/alice-helper/backups/0190f5a0-0000-7000-8000-0000000000aa"}`, string(b))
+}
+
+// The framework mirrors the helper's vocabulary as strings (the package may not import
+// helperproto); these tests pin every mirrored value to its source.
+func TestMirroredPhasesStepsAndErrorsEqualTheHelperProtocol(t *testing.T) {
+	assert.Equal(t, helperproto.PhaseNone, providers.PhaseNone)
+	assert.Equal(t, helperproto.PhasePrepared, providers.PhasePrepared)
+	assert.Equal(t, helperproto.PhaseWriting, providers.PhaseWriting)
+	assert.Equal(t, helperproto.PhaseCommitted, providers.PhaseCommitted)
+	assert.Equal(t, helperproto.PhaseUnchanged, providers.PhaseUnchanged)
+	assert.Equal(t, helperproto.PhaseRestoring, providers.PhaseRestoring)
+	assert.Equal(t, helperproto.PhaseRestored, providers.PhaseRestored)
+	assert.Equal(t, helperproto.PhaseRestoreFailed, providers.PhaseRestoreFailed)
+
+	assert.Equal(t, helperproto.StepBackup, providers.StepNameBackup)
+	assert.Equal(t, helperproto.StepWriteKey, providers.StepNameWriteKey)
+	assert.Equal(t, helperproto.StepWriteCert, providers.StepNameWriteCert)
+	assert.Equal(t, helperproto.StepConfigTest, providers.StepNameConfigTest)
+	assert.Equal(t, helperproto.StepReload, providers.StepNameReload)
+	assert.Equal(t, helperproto.StepJournal, providers.StepNameJournal)
+	assert.Equal(t, helperproto.StepRestore, providers.StepNameRestore)
+	assert.Equal(t, helperproto.StepRollbackConfigTest, providers.StepNameRollbackConfigTest)
+	assert.Equal(t, helperproto.StepRollbackReload, providers.StepNameRollbackReload)
+
+	assert.Equal(t, helperproto.RestoreErrFileChanged, providers.DeployErrFileChanged)
+	assert.Equal(t, helperproto.ConfigErrKeyMismatch, providers.ConfigErrKeyMismatch)
+	assert.Equal(t, helperproto.ConfigErrFileMissing, providers.ConfigErrFileMissing)
+	assert.Equal(t, helperproto.ConfigErrCertLoad, providers.ConfigErrCertLoad)
+	assert.Equal(t, helperproto.ConfigErrKeyLoad, providers.ConfigErrKeyLoad)
+	assert.Equal(t, helperproto.ConfigErrSyntax, providers.ConfigErrSyntax)
+	assert.Equal(t, helperproto.ConfigErrUntrusted, providers.ConfigErrUntrusted)
+	assert.Equal(t, helperproto.ConfigErrUnsupported, providers.ConfigErrUnsupported)
+
+	assert.Equal(t, helperproto.ConfigReasonNotRootControlled, providers.ConfigReasonNotRootControlled)
+	assert.Equal(t, helperproto.ConfigReasonSpecialFS, providers.ConfigReasonSpecialFS)
+	assert.Equal(t, helperproto.ConfigReasonMissing, providers.ConfigReasonMissing)
+	assert.Equal(t, helperproto.ConfigReasonNotRegular, providers.ConfigReasonNotRegular)
+	assert.Equal(t, helperproto.ConfigReasonChanged, providers.ConfigReasonChanged)
+	assert.Equal(t, helperproto.ConfigReasonNameNotAllowed, providers.ConfigReasonNameNotAllowed)
+	assert.Equal(t, helperproto.ConfigReasonUnexpectedText, providers.ConfigReasonUnexpectedText)
+	assert.Equal(t, helperproto.ConfigReasonWrongFirstFile, providers.ConfigReasonWrongFirstFile)
+	assert.Equal(t, helperproto.ConfigReasonDuplicateFile, providers.ConfigReasonDuplicateFile)
+	assert.Equal(t, helperproto.ConfigReasonNoConfPath, providers.ConfigReasonNoConfPath)
+	assert.Equal(t, helperproto.ConfigReasonTooLarge, providers.ConfigReasonTooLarge)
+	assert.Equal(t, helperproto.ConfigReasonTooComplex, providers.ConfigReasonTooComplex)
+	assert.Equal(t, helperproto.ConfigReasonIncludeLoop, providers.ConfigReasonIncludeLoop)
+	assert.Equal(t, helperproto.ConfigReasonNULByte, providers.ConfigReasonNULByte)
+}
+
+func TestMirroredReasonsProblemsAndWarningsEqualTheirSources(t *testing.T) {
+	assert.Equal(t, nginxconf.ReasonVariable, providers.UnsupportedVariable)
+	assert.Equal(t, nginxconf.ReasonDataValue, providers.UnsupportedDataValue)
+	assert.Equal(t, nginxconf.ReasonEngineKey, providers.UnsupportedEngineKey)
+	assert.Equal(t, nginxconf.ReasonKeyMissing, providers.UnsupportedKeyMissing)
+	assert.Equal(t, nginxconf.ReasonPasswordFile, providers.UnsupportedPasswordFile)
+	assert.Equal(t, nginxconf.ReasonPathNotAllowed, providers.UnsupportedPathNotAllowed)
+	assert.Equal(t, nginxconf.ReasonStream, providers.UnsupportedStream)
+	assert.Equal(t, nginxconf.ReasonCombinedFile, providers.UnsupportedCombinedFile)
+	assert.Equal(t, nginxconf.ReasonConfigFileWritable, providers.UnsupportedConfigFileWritable)
+
+	assert.Equal(t, helperproto.FileMissing, providers.CertProblemMissing)
+	assert.Equal(t, helperproto.FileNotRootControlled, providers.CertProblemNotRootControlled)
+	assert.Equal(t, helperproto.FileNotRegular, providers.CertProblemNotRegular)
+	assert.Equal(t, helperproto.FileHardLinked, providers.CertProblemHardLinked)
+	assert.Equal(t, helperproto.FileTooLarge, providers.CertProblemTooLarge)
+	assert.Equal(t, helperproto.FileNotACertificate, providers.CertProblemNotACertificate)
+	assert.Equal(t, helperproto.FileUnreadable, providers.CertProblemUnreadable)
+	assert.Equal(t, helperproto.FileBadName, providers.CertProblemBadName)
+	assert.Equal(t, helperproto.FileSpecialFS, providers.CertProblemSpecialFS)
+
+	assert.Equal(t, helperproto.WarnStreamTLS, providers.WarnStreamTLS)
+	assert.Equal(t, helperproto.WarnMailTLS, providers.WarnMailTLS)
+	assert.Equal(t, helperproto.WarnCertificateBlockDropped, providers.WarnCertificateBlockDropped)
+	assert.Equal(t, helperproto.WarnKeyGroupOpen, providers.WarnKeyGroupOpen)
+	assert.Equal(t, helperproto.WarnConfigFileWritable, providers.WarnConfigFileWritable)
+}
+
+func TestDeployResultsAreDistinct(t *testing.T) {
+	seen := map[providers.DeployResult]bool{}
+	for _, r := range []providers.DeployResult{providers.DeployCommitted, providers.DeployUnchanged,
+		providers.DeployNoChange, providers.DeployRolledBack, providers.DeployRollbackFailed, providers.DeployUncertain} {
+		assert.NotEmpty(t, r)
+		assert.False(t, seen[r], r)
+		seen[r] = true
+	}
+	assert.Equal(t, "uncertain", string(providers.DeployUncertain))
 }

@@ -16,9 +16,17 @@ import (
 
 // Call is one recorded method call.
 type Call struct {
-	Method string // "Open", "TestConnection", "Discover", "ListAuthorizedKeys", "AddAuthorizedKey", "RemoveAuthorizedKey", "Close"
+	Method string // "Open", "TestConnection", "Discover", "ListAuthorizedKeys", "AddAuthorizedKey", "RemoveAuthorizedKey", "DeployCertificate", "RollbackDeployment", "DeploymentStatus", "VerifyDeployment", "Close"
 	Target uuid.UUID
 	Change providers.AuthKeyChange // Add/Remove only
+	// Deploy is the DeployCertificate request with PrivateKeyPEM replaced by an empty value: the
+	// fake never keeps a key.
+	Deploy providers.DeployRequest
+	// Rollback and Verify are the RollbackDeployment and VerifyDeployment requests.
+	Rollback providers.RollbackRequest
+	Verify   providers.VerifyRequest
+	// Op is the operation id of DeployCertificate, RollbackDeployment and DeploymentStatus.
+	Op uuid.UUID
 }
 
 // Config is the scripted behaviour.
@@ -36,6 +44,26 @@ type Config struct {
 	AddErr           error
 	RemoveResult     providers.AuthKeyResult
 	RemoveErr        error
+
+	// Deploy decides the outcome of DeployCertificate; nil = committed, verified "remote". To
+	// simulate each outcome return DeployNoChange (a refusal), DeployUnchanged, DeployRolledBack,
+	// DeployRollbackFailed, or DeployUncertain together with an error.
+	Deploy func(req providers.DeployRequest) (providers.DeployOutcome, error)
+	// Rollback decides the outcome of RollbackDeployment; nil = rolled back.
+	Rollback func(req providers.RollbackRequest) (providers.RollbackOutcome, error)
+	// Verify decides VerifyDeployment; nil = OK, Served = req.Fingerprint, ServedChainLength =
+	// req.ChainLength.
+	Verify func(req providers.VerifyRequest) (providers.VerifyResult, error)
+	// Status decides DeploymentStatus; nil = phase none.
+	Status func(op uuid.UUID) (providers.DeploymentState, error)
+	// DeploySteps are the steps DeployCertificate reports (status ok) to its logger before the
+	// outcome; nil = the five helper steps and verify.
+	DeploySteps []string
+}
+
+var defaultDeploySteps = []string{
+	providers.StepNameBackup, providers.StepNameWriteKey, providers.StepNameWriteCert,
+	providers.StepNameConfigTest, providers.StepNameReload, providers.StepNameVerify,
 }
 
 // Provider is the scriptable provider.
@@ -69,7 +97,7 @@ func (p *Provider) Calls() []Call {
 	defer p.mu.Unlock()
 	out := slices.Clone(p.calls)
 	for i := range out {
-		out[i].Change.ProtectedFingerprints = slices.Clone(out[i].Change.ProtectedFingerprints)
+		out[i] = cloneCall(out[i])
 	}
 	return out
 }
@@ -88,9 +116,36 @@ func (p *Provider) Count(method string) int {
 func (p *Provider) record(c Call) Config {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	c.Change.ProtectedFingerprints = slices.Clone(c.Change.ProtectedFingerprints)
-	p.calls = append(p.calls, c)
+	p.calls = append(p.calls, cloneCall(c))
 	return p.cfg.clone()
+}
+
+func cloneCall(c Call) Call {
+	c.Change.ProtectedFingerprints = slices.Clone(c.Change.ProtectedFingerprints)
+	c.Deploy.Location = cloneLocation(c.Deploy.Location)
+	c.Deploy.CertificatePEM = slices.Clone(c.Deploy.CertificatePEM)
+	c.Deploy.SANs = slices.Clone(c.Deploy.SANs)
+	c.Deploy.OldSANs = slices.Clone(c.Deploy.OldSANs)
+	c.Rollback.Location = cloneLocation(c.Rollback.Location)
+	c.Rollback.OldSANs = slices.Clone(c.Rollback.OldSANs)
+	c.Verify.Location = cloneLocation(c.Verify.Location)
+	c.Verify.SANs = slices.Clone(c.Verify.SANs)
+	return c
+}
+
+func cloneLocation(l providers.CertLocation) providers.CertLocation {
+	l.Warnings = slices.Clone(l.Warnings)
+	servers := make([]providers.CertServer, len(l.Servers))
+	for i, sv := range l.Servers {
+		sv.Names = slices.Clone(sv.Names)
+		sv.Listens = slices.Clone(sv.Listens)
+		servers[i] = sv
+	}
+	if l.Servers == nil {
+		servers = nil
+	}
+	l.Servers = servers
+	return l
 }
 
 // clone copies the slices so a caller of the returned Config cannot race with Configure.
@@ -102,6 +157,26 @@ func (c Config) clone() Config {
 	c.Discovery.Warnings = slices.Clone(c.Discovery.Warnings)
 	c.Discovery.ReadFiles = slices.Clone(c.Discovery.ReadFiles)
 	c.Report.Warnings = slices.Clone(c.Report.Warnings)
+	if c.Report.Nginx != nil {
+		n := *c.Report.Nginx
+		c.Report.Nginx = &n
+	}
+	if c.Discovery.Nginx != nil {
+		n := *c.Discovery.Nginx
+		c.Discovery.Nginx = &n
+	}
+	if c.Discovery.Certificates != nil {
+		certs := make([]providers.DiscoveredCertificate, len(c.Discovery.Certificates))
+		for i, dc := range c.Discovery.Certificates {
+			dc.Location = cloneLocation(dc.Location)
+			dc.PEMChain = slices.Clone(dc.PEMChain)
+			certs[i] = dc
+		}
+		c.Discovery.Certificates = certs
+	}
+	c.Discovery.UID0Users = slices.Clone(c.Discovery.UID0Users)
+	c.Discovery.Accounts = slices.Clone(c.Discovery.Accounts)
+	c.DeploySteps = slices.Clone(c.DeploySteps)
 	return c
 }
 
@@ -193,7 +268,7 @@ func (s *session) TestConnection(context.Context) (providers.ConnectionReport, e
 
 func (s *session) Discover(context.Context, providers.DiscoverRequest) (providers.DiscoveryResult, error) {
 	cfg := s.p.record(Call{Method: "Discover", Target: s.target})
-	if !s.p.caps.Has(providers.CapDiscoverSSHKeys) {
+	if !s.p.caps.Has(providers.CapDiscoverSSHKeys) && !s.p.caps.Has(providers.CapDiscoverCerts) {
 		return providers.DiscoveryResult{}, providers.ErrUnsupported
 	}
 	return cfg.Discovery, cfg.DiscoverErr
@@ -221,6 +296,66 @@ func (s *session) RemoveAuthorizedKey(_ context.Context, req providers.AuthKeyCh
 		return providers.AuthKeyResult{}, providers.ErrUnsupported
 	}
 	return cfg.RemoveResult, cfg.RemoveErr
+}
+
+func (s *session) DeployCertificate(_ context.Context, req providers.DeployRequest, log providers.StepLogger) (providers.DeployOutcome, error) {
+	kept := req
+	kept.PrivateKeyPEM = providers.DeployRequest{}.PrivateKeyPEM // the zero value: the fake never keeps a key
+	cfg := s.p.record(Call{Method: "DeployCertificate", Target: s.target, Deploy: kept, Op: req.OperationID})
+	if !s.p.caps.Has(providers.CapDeployCertificate) {
+		return providers.DeployOutcome{}, providers.ErrUnsupported
+	}
+	steps := cfg.DeploySteps
+	if steps == nil {
+		steps = defaultDeploySteps
+	}
+	var done []providers.DeployStep
+	for _, name := range steps {
+		if log != nil {
+			log.Step(name, providers.StepOK, nil)
+		}
+		done = append(done, providers.DeployStep{Name: name, Status: providers.StepOK})
+	}
+	if cfg.Deploy != nil {
+		return cfg.Deploy(req)
+	}
+	return providers.DeployOutcome{
+		Result: providers.DeployCommitted, Phase: providers.PhaseCommitted, Steps: done,
+		Verified: "remote", Backup: providers.BackupRef{OperationID: req.OperationID},
+	}, nil
+}
+
+func (s *session) RollbackDeployment(_ context.Context, req providers.RollbackRequest, _ providers.StepLogger) (providers.RollbackOutcome, error) {
+	cfg := s.p.record(Call{Method: "RollbackDeployment", Target: s.target, Rollback: req, Op: req.OperationID})
+	if !s.p.caps.Has(providers.CapDeployCertificate) {
+		return providers.RollbackOutcome{}, providers.ErrUnsupported
+	}
+	if cfg.Rollback != nil {
+		return cfg.Rollback(req)
+	}
+	return providers.RollbackOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestored, Verified: "remote"}, nil
+}
+
+func (s *session) VerifyDeployment(_ context.Context, req providers.VerifyRequest) (providers.VerifyResult, error) {
+	cfg := s.p.record(Call{Method: "VerifyDeployment", Target: s.target, Verify: req})
+	if !s.p.caps.Has(providers.CapVerifyDeployment) {
+		return providers.VerifyResult{}, providers.ErrUnsupported
+	}
+	if cfg.Verify != nil {
+		return cfg.Verify(req)
+	}
+	return providers.VerifyResult{OK: true, Mode: "remote", Served: req.Fingerprint, ServedChainLength: req.ChainLength}, nil
+}
+
+func (s *session) DeploymentStatus(_ context.Context, op uuid.UUID) (providers.DeploymentState, error) {
+	cfg := s.p.record(Call{Method: "DeploymentStatus", Target: s.target, Op: op})
+	if !s.p.caps.Has(providers.CapDeployCertificate) {
+		return providers.DeploymentState{}, providers.ErrUnsupported
+	}
+	if cfg.Status != nil {
+		return cfg.Status(op)
+	}
+	return providers.DeploymentState{Phase: providers.PhaseNone}, nil
 }
 
 var (

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -114,4 +115,116 @@ func TestCheckNoSecretsLooksAtEveryRendering(t *testing.T) {
 		providers.NewError("x", false, errors.New("harmless"), nil),
 	)
 	assert.Len(t, r.failures, 4, "%v", r.failures)
+}
+
+// deploySession breaks the deploy-related rules one at a time.
+type deploySession struct {
+	providers.UnsupportedSession
+	implementsDeploy bool // DeployCertificate succeeds
+	implementsVerify bool
+	implementsStatus bool
+	implementsDiscov bool
+}
+
+func (s deploySession) DeployCertificate(context.Context, providers.DeployRequest, providers.StepLogger) (providers.DeployOutcome, error) {
+	if s.implementsDeploy {
+		return providers.DeployOutcome{Result: providers.DeployCommitted}, nil
+	}
+	return providers.DeployOutcome{}, providers.ErrUnsupported
+}
+
+func (s deploySession) VerifyDeployment(ctx context.Context, _ providers.VerifyRequest) (providers.VerifyResult, error) {
+	if s.implementsVerify {
+		if err := ctx.Err(); err != nil {
+			return providers.VerifyResult{}, providers.NewError("ssh.timeout", true, err, nil)
+		}
+		return providers.VerifyResult{}, nil
+	}
+	return providers.VerifyResult{}, providers.ErrUnsupported
+}
+
+func (s deploySession) DeploymentStatus(ctx context.Context, _ uuid.UUID) (providers.DeploymentState, error) {
+	if s.implementsStatus {
+		if err := ctx.Err(); err != nil {
+			return providers.DeploymentState{}, providers.NewError("ssh.timeout", true, err, nil)
+		}
+		return providers.DeploymentState{}, nil
+	}
+	return providers.DeploymentState{}, providers.ErrUnsupported
+}
+
+func (s deploySession) Discover(ctx context.Context, _ providers.DiscoverRequest) (providers.DiscoveryResult, error) {
+	if s.implementsDiscov {
+		if err := ctx.Err(); err != nil {
+			return providers.DiscoveryResult{}, providers.NewError("ssh.timeout", true, err, nil)
+		}
+		return providers.DiscoveryResult{}, nil
+	}
+	return providers.DiscoveryResult{}, providers.ErrUnsupported
+}
+
+func deployHarness(s deploySession, caps ...providers.Capability) providertest.SessionHarness {
+	return providertest.SessionHarness{
+		Capabilities: providers.NewCapabilitySet(caps...),
+		Open: func(ctx context.Context) (providers.Session, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, providers.NewError("ssh.timeout", true, err, nil)
+			}
+			return s, nil
+		},
+		CancelBound: 200 * time.Millisecond,
+	}
+}
+
+func TestCheckSessionReportsAdvertisedButUnimplementedDeployCapabilities(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		h    providertest.SessionHarness
+		want string
+	}{
+		{"deploy", deployHarness(deploySession{}, providers.CapDeployCertificate), "DeploymentStatus answers ErrUnsupported although deploy_certificate is advertised"},
+		{"verify", deployHarness(deploySession{}, providers.CapVerifyDeployment), "VerifyDeployment answers ErrUnsupported although verify_deployment is advertised"},
+		{"discover certificates", deployHarness(deploySession{}, providers.CapDiscoverCerts), "DiscoverCertificates answers ErrUnsupported although discover_certificates is advertised"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &recorder{TB: t}
+			providertest.CheckSession(r, tc.h)
+			assert.Contains(t, fmt.Sprint(r.failures), tc.want)
+		})
+	}
+}
+
+func TestCheckSessionPassesImplementedDeployCapabilities(t *testing.T) {
+	r := &recorder{TB: t}
+	h := deployHarness(deploySession{implementsStatus: true, implementsVerify: true, implementsDiscov: true},
+		providers.CapDeployCertificate, providers.CapVerifyDeployment, providers.CapDiscoverCerts)
+	providertest.CheckSession(r, h)
+	assert.Empty(t, r.failures)
+}
+
+func TestCheckUnsupportedCatchesUnadvertisedDeployMethods(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		s    deploySession
+		caps []providers.Capability
+		want string
+	}{
+		{"deploy", deploySession{implementsDeploy: true}, nil, "DeployCertificate without its capability"},
+		{"verify", deploySession{implementsVerify: true}, []providers.Capability{providers.CapDeployCertificate}, "VerifyDeployment without its capability"},
+		{"status", deploySession{implementsStatus: true}, []providers.Capability{providers.CapVerifyDeployment}, "DeploymentStatus without its capability"},
+		{"discover certificates", deploySession{implementsDiscov: true}, []providers.Capability{providers.CapTestConnection}, "Discover without its capability"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &recorder{TB: t}
+			providertest.CheckUnsupported(r, tc.s, providers.NewCapabilitySet(tc.caps...))
+			assert.Contains(t, fmt.Sprint(r.failures), tc.want)
+		})
+	}
+	t.Run("advertised methods are not checked", func(t *testing.T) {
+		r := &recorder{TB: t}
+		providertest.CheckUnsupported(r, deploySession{implementsDeploy: true, implementsVerify: true, implementsStatus: true},
+			providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
+				providers.CapDeployCertificate, providers.CapVerifyDeployment))
+		assert.Empty(t, r.failures)
+	})
 }

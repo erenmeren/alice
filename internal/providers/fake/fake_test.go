@@ -16,6 +16,7 @@ import (
 	"alice/internal/providers"
 	"alice/internal/providers/fake"
 	"alice/internal/providers/providertest"
+	"alice/internal/secrets"
 )
 
 type memStore struct {
@@ -374,4 +375,198 @@ func TestFakeConfigureWhileSessionsRun(t *testing.T) {
 	}
 	wg.Wait()
 	assert.Equal(t, 8, p.Count("Open"))
+}
+
+type stepFunc func(name string, st providers.StepStatus, params map[string]string)
+
+func (f stepFunc) Step(name string, st providers.StepStatus, params map[string]string) {
+	f(name, st, params)
+}
+
+func openDeployFake(t *testing.T, caps ...providers.Capability) (*fake.Provider, providers.Session) {
+	t.Helper()
+	p := fake.New(providers.KindNginx, caps...)
+	s, err := p.Open(context.Background(), providers.TargetRef{ID: uuid.New()}, nil, providers.Env{})
+	require.NoError(t, err)
+	return p, s
+}
+
+func TestFakeDeployRecordsWithoutTheKey(t *testing.T) {
+	p, s := openDeployFake(t, providers.CapDeployCertificate, providers.CapVerifyDeployment)
+	var steps []string
+	op := uuid.New()
+	out, err := s.DeployCertificate(context.Background(), providers.DeployRequest{OperationID: op,
+		PrivateKeyPEM: secrets.NewPlaintext([]byte("k"))}, stepFunc(func(n string, st providers.StepStatus, _ map[string]string) {
+		steps = append(steps, n+":"+string(st))
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, providers.DeployCommitted, out.Result)
+	assert.Equal(t, "remote", out.Verified)
+	assert.Equal(t, providers.BackupRef{OperationID: op}, out.Backup)
+	assert.Equal(t, providers.PhaseCommitted, out.Phase)
+	assert.Equal(t, []string{"backup:ok", "write_key:ok", "write_cert:ok", "config_test:ok", "reload:ok", "verify:ok"}, steps)
+	require.Len(t, out.Steps, 6)
+	calls := p.Calls()
+	last := calls[len(calls)-1]
+	require.Equal(t, "DeployCertificate", last.Method)
+	assert.Equal(t, op, last.Deploy.OperationID)
+	assert.Equal(t, op, last.Op)
+	assert.Empty(t, last.Deploy.PrivateKeyPEM.Bytes())
+}
+
+func TestFakeDeploySimulatesEveryOutcome(t *testing.T) {
+	ctx := context.Background()
+	uncertain := providers.NewError("ssh.timeout", true, nil, nil)
+	outcomes := []struct {
+		name  string
+		out   providers.DeployOutcome
+		err   error
+		steps []string
+	}{
+		{"no change", providers.DeployOutcome{Result: providers.DeployNoChange, Reason: "nginx.no_space"}, nil, []string{}},
+		{"unchanged", providers.DeployOutcome{Result: providers.DeployUnchanged, Phase: providers.PhaseUnchanged}, nil, []string{"backup"}},
+		{"rolled back", providers.DeployOutcome{Result: providers.DeployRolledBack, FailedStep: "config_test"}, nil, []string{"backup", "write_key", "write_cert"}},
+		{"rollback failed", providers.DeployOutcome{Result: providers.DeployRollbackFailed, FailedStep: "restore"}, nil, []string{"backup"}},
+		{"uncertain", providers.DeployOutcome{Result: providers.DeployUncertain}, uncertain, []string{"backup", "write_key"}},
+	}
+	for _, tc := range outcomes {
+		t.Run(tc.name, func(t *testing.T) {
+			p, s := openDeployFake(t, providers.CapDeployCertificate)
+			p.Configure(func(c *fake.Config) {
+				c.DeploySteps = tc.steps
+				c.Deploy = func(providers.DeployRequest) (providers.DeployOutcome, error) { return tc.out, tc.err }
+			})
+			var got []string
+			out, err := s.DeployCertificate(ctx, providers.DeployRequest{}, stepFunc(func(n string, _ providers.StepStatus, _ map[string]string) {
+				got = append(got, n)
+			}))
+			assert.Equal(t, tc.err, err)
+			assert.Equal(t, tc.out, out)
+			assert.ElementsMatch(t, tc.steps, got)
+		})
+	}
+}
+
+func TestFakeDeployWithoutLoggerAndWithoutCapability(t *testing.T) {
+	ctx := context.Background()
+	_, s := openDeployFake(t, providers.CapDeployCertificate)
+	_, err := s.DeployCertificate(ctx, providers.DeployRequest{}, nil)
+	require.NoError(t, err)
+
+	_, none := openDeployFake(t, providers.CapTestConnection)
+	_, err = none.DeployCertificate(ctx, providers.DeployRequest{}, nil)
+	assert.ErrorIs(t, err, providers.ErrUnsupported)
+	_, err = none.RollbackDeployment(ctx, providers.RollbackRequest{}, nil)
+	assert.ErrorIs(t, err, providers.ErrUnsupported)
+	_, err = none.DeploymentStatus(ctx, uuid.New())
+	assert.ErrorIs(t, err, providers.ErrUnsupported)
+	_, err = none.VerifyDeployment(ctx, providers.VerifyRequest{})
+	assert.ErrorIs(t, err, providers.ErrUnsupported)
+}
+
+func TestFakeRollbackVerifyAndStatusDefaultsAndScripts(t *testing.T) {
+	ctx := context.Background()
+	p, s := openDeployFake(t, providers.CapDeployCertificate, providers.CapVerifyDeployment)
+	op := uuid.New()
+
+	rb, err := s.RollbackDeployment(ctx, providers.RollbackRequest{OperationID: op}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, providers.DeployRolledBack, rb.Result)
+	assert.Equal(t, providers.PhaseRestored, rb.Phase)
+
+	v, err := s.VerifyDeployment(ctx, providers.VerifyRequest{Fingerprint: "ab", ChainLength: 3})
+	require.NoError(t, err)
+	assert.True(t, v.OK)
+	assert.Equal(t, "ab", v.Served)
+	assert.Equal(t, 3, v.ServedChainLength)
+
+	st, err := s.DeploymentStatus(ctx, op)
+	require.NoError(t, err)
+	assert.Equal(t, providers.PhaseNone, st.Phase)
+
+	boom := errors.New("boom")
+	p.Configure(func(c *fake.Config) {
+		c.Rollback = func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
+			return providers.RollbackOutcome{Result: providers.DeployUncertain}, boom
+		}
+		c.Verify = func(r providers.VerifyRequest) (providers.VerifyResult, error) {
+			return providers.VerifyResult{Reason: "deployment.verify_failed", ServedChainLength: r.ChainLength + 1}, nil
+		}
+		c.Status = func(o uuid.UUID) (providers.DeploymentState, error) {
+			return providers.DeploymentState{Phase: providers.PhaseWriting, BackupDir: o.String()}, boom
+		}
+	})
+	rb, err = s.RollbackDeployment(ctx, providers.RollbackRequest{}, nil)
+	assert.Same(t, boom, err)
+	assert.Equal(t, providers.DeployUncertain, rb.Result)
+	v, _ = s.VerifyDeployment(ctx, providers.VerifyRequest{ChainLength: 2})
+	assert.False(t, v.OK)
+	assert.Equal(t, 3, v.ServedChainLength)
+	st, err = s.DeploymentStatus(ctx, op)
+	assert.Same(t, boom, err)
+	assert.Equal(t, providers.PhaseWriting, st.Phase)
+
+	var methods []string
+	for _, c := range p.Calls() {
+		methods = append(methods, c.Method)
+	}
+	assert.Contains(t, methods, "RollbackDeployment")
+	assert.Contains(t, methods, "VerifyDeployment")
+	assert.Contains(t, methods, "DeploymentStatus")
+	for _, c := range p.Calls() {
+		if c.Method == "DeploymentStatus" {
+			assert.Equal(t, op, c.Op)
+		}
+	}
+}
+
+func TestFakeDiscoverServesCertificates(t *testing.T) {
+	ctx := context.Background()
+	p, s := openDeployFake(t, providers.CapDiscoverCerts)
+	servers := []providers.CertServer{{Names: []string{"a"}}}
+	p.Configure(func(c *fake.Config) {
+		c.Discovery.Certificates = []providers.DiscoveredCertificate{{Location: providers.CertLocation{Servers: servers}}}
+		c.Discovery.Nginx = &providers.NginxFacts{Found: true}
+	})
+	res, err := s.Discover(ctx, providers.DiscoverRequest{Certificates: true})
+	require.NoError(t, err)
+	require.Len(t, res.Certificates, 1)
+	res.Certificates[0].Location.Servers[0].Names[0] = "mutated"
+	res.Nginx.Found = false
+	again, _ := s.Discover(ctx, providers.DiscoverRequest{Certificates: true})
+	assert.Equal(t, "a", again.Certificates[0].Location.Servers[0].Names[0], "callers cannot change the scripted data")
+	assert.True(t, again.Nginx.Found)
+	p.Configure(func(c *fake.Config) { c.Report.Nginx = &providers.NginxFacts{Found: true} })
+}
+
+func TestFakeCallsOfDeployMethodsAreCopies(t *testing.T) {
+	ctx := context.Background()
+	p, s := openDeployFake(t, providers.CapDeployCertificate, providers.CapVerifyDeployment)
+	sans := []string{"a.example"}
+	pem := []byte("PEM")
+	_, err := s.DeployCertificate(ctx, providers.DeployRequest{SANs: sans, CertificatePEM: pem}, nil)
+	require.NoError(t, err)
+	sans[0] = "mutated"
+	pem[0] = 'X'
+	_, err = s.VerifyDeployment(ctx, providers.VerifyRequest{SANs: []string{"v"}, ChainLength: 2})
+	require.NoError(t, err)
+	_, err = s.RollbackDeployment(ctx, providers.RollbackRequest{OldChainLength: 4}, nil)
+	require.NoError(t, err)
+	var dep providers.DeployRequest
+	var vr providers.VerifyRequest
+	var rr providers.RollbackRequest
+	for _, c := range p.Calls() {
+		switch c.Method {
+		case "DeployCertificate":
+			dep = c.Deploy
+		case "VerifyDeployment":
+			vr = c.Verify
+		case "RollbackDeployment":
+			rr = c.Rollback
+		}
+	}
+	assert.Equal(t, []string{"a.example"}, dep.SANs)
+	assert.Equal(t, []byte("PEM"), dep.CertificatePEM)
+	assert.Equal(t, 2, vr.ChainLength)
+	assert.Equal(t, 4, rr.OldChainLength)
 }

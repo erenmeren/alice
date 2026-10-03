@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
 )
@@ -66,9 +68,22 @@ func CheckUnsupported(t testing.TB, s providers.Session, caps providers.Capabili
 		_, err := s.TestConnection(ctx)
 		expect("TestConnection", err)
 	}
-	if !caps.Has(providers.CapDiscoverSSHKeys) {
-		_, err := s.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+	if !caps.Has(providers.CapDiscoverSSHKeys) && !caps.Has(providers.CapDiscoverCerts) {
+		// One call: a provider with neither discovery capability must refuse a request for both.
+		_, err := s.Discover(ctx, providers.DiscoverRequest{SSHKeys: true, Certificates: true})
 		expect("Discover", err)
+	}
+	if !caps.Has(providers.CapDeployCertificate) {
+		_, err := s.DeployCertificate(ctx, providers.DeployRequest{}, nil)
+		expect("DeployCertificate", err)
+		_, err = s.RollbackDeployment(ctx, providers.RollbackRequest{}, nil)
+		expect("RollbackDeployment", err)
+		_, err = s.DeploymentStatus(ctx, uuid.New())
+		expect("DeploymentStatus", err)
+	}
+	if !caps.Has(providers.CapVerifyDeployment) {
+		_, err := s.VerifyDeployment(ctx, providers.VerifyRequest{})
+		expect("VerifyDeployment", err)
 	}
 	if !caps.Has(providers.CapAuthorizedKeys) {
 		_, err := s.ListAuthorizedKeys(ctx)
@@ -107,6 +122,9 @@ var sessionOps = []sessionOp{
 	{"Discover", providers.CapDiscoverSSHKeys, func(ctx context.Context, s providers.Session) (any, error) {
 		return s.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
 	}},
+	{"DiscoverCertificates", providers.CapDiscoverCerts, func(ctx context.Context, s providers.Session) (any, error) {
+		return s.Discover(ctx, providers.DiscoverRequest{Certificates: true})
+	}},
 	{"ListAuthorizedKeys", providers.CapAuthorizedKeys, func(ctx context.Context, s providers.Session) (any, error) {
 		return s.ListAuthorizedKeys(ctx)
 	}},
@@ -115,6 +133,14 @@ var sessionOps = []sessionOp{
 	}},
 	{"RemoveAuthorizedKey", providers.CapAuthorizedKeys, func(ctx context.Context, s providers.Session) (any, error) {
 		return s.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{}, nil)
+	}},
+	// DeployCertificate and RollbackDeployment change servers: the provider's own tests cover
+	// them. DeploymentStatus only reads.
+	{"DeploymentStatus", providers.CapDeployCertificate, func(ctx context.Context, s providers.Session) (any, error) {
+		return s.DeploymentStatus(ctx, uuid.New())
+	}},
+	{"VerifyDeployment", providers.CapVerifyDeployment, func(ctx context.Context, s providers.Session) (any, error) {
+		return s.VerifyDeployment(ctx, providers.VerifyRequest{})
 	}},
 }
 

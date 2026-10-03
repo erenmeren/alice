@@ -1,6 +1,13 @@
 package providers
 
-import "github.com/google/uuid"
+import (
+	"fmt"
+	"log/slog"
+
+	"github.com/google/uuid"
+
+	"alice/internal/secrets"
+)
 
 // OSRelease is the part of /etc/os-release Alice shows.
 type OSRelease struct{ ID, VersionID, PrettyName string }
@@ -12,10 +19,11 @@ type ConnectionReport struct {
 	HelperProtocol int
 	OS             OSRelease
 	Warnings       []Warning
+	Nginx          *NginxFacts // what the Nginx provider found on the server; nil for linuxssh
 }
 
 // DiscoverRequest selects what Discover reads.
-type DiscoverRequest struct{ SSHKeys bool }
+type DiscoverRequest struct{ SSHKeys, Certificates bool }
 
 // DiscoveryResult is read-only data; inventory reconciles it.
 type DiscoveryResult struct {
@@ -29,6 +37,8 @@ type DiscoveryResult struct {
 	Accounts         []string // every account name of /etc/passwd the helper reported (carry 1)
 	AccountsComplete bool     // Accounts is the whole list; only then may inventory mark vanished users' keys missing
 	ReadFiles        []string // files read completely: missing marking is limited to these, also in a partial scan (R37 #23)
+	Certificates     []DiscoveredCertificate
+	Nginx            *NginxFacts // nil when certificates were not read
 }
 
 // DiscoveredSSHKey is one authorized_keys entry.
@@ -131,4 +141,331 @@ type Descriptor struct {
 	Capabilities     []Capability
 	ConfigSchema     ConfigSchema
 	CredentialSchema CredentialSchema
+}
+
+// NginxFacts is what Alice shows about Nginx on a server.
+type NginxFacts struct {
+	Version     string `json:"version"`
+	ConfPath    string `json:"conf_path"`
+	ConfigValid bool   `json:"config_valid"`
+	// ConfigError is a ConfigErr* class when !ConfigValid, never raw nginx output.
+	ConfigError string `json:"config_error"`
+	// ConfigErrorReason (a ConfigReason* value) and ConfigErrorFile (a cleaned absolute path, or
+	// "") say why and where for ConfigErrUntrusted and ConfigErrUnsupported.
+	ConfigErrorReason string `json:"config_error_reason"`
+	ConfigErrorFile   string `json:"config_error_file"`
+	Found             bool   `json:"found"`
+}
+
+// Configuration error classes of NginxFacts.ConfigError and of a deployment step's Error. They
+// equal helperproto.ConfigErr* (a test compares them).
+const (
+	ConfigErrKeyMismatch = "key_mismatch"
+	ConfigErrFileMissing = "file_missing"
+	ConfigErrCertLoad    = "cert_load"
+	ConfigErrKeyLoad     = "key_load"
+	ConfigErrSyntax      = "syntax"
+	ConfigErrUntrusted   = "untrusted"   // nginx -T's output cannot be trusted
+	ConfigErrUnsupported = "unsupported" // a configuration Alice cannot read safely
+)
+
+// Reasons of NginxFacts.ConfigErrorReason (a closed set); they equal helperproto.ConfigReason*.
+const (
+	ConfigReasonNotRootControlled = "not_root_controlled"
+	ConfigReasonSpecialFS         = "special_filesystem"
+	ConfigReasonMissing           = "missing"
+	ConfigReasonNotRegular        = "not_regular"
+	ConfigReasonChanged           = "changed"
+	ConfigReasonNameNotAllowed    = "name_not_allowed"
+	ConfigReasonUnexpectedText    = "unexpected_text"
+	ConfigReasonWrongFirstFile    = "wrong_first_file"
+	ConfigReasonDuplicateFile     = "duplicate_file"
+	ConfigReasonNoConfPath        = "no_conf_path"
+	ConfigReasonTooLarge          = "too_large"
+	ConfigReasonTooComplex        = "too_complex"
+	ConfigReasonIncludeLoop       = "include_loop"
+	ConfigReasonNULByte           = "nul_byte"
+)
+
+// DiscoveredCertificate is one certificate file Nginx uses.
+type DiscoveredCertificate struct {
+	Location   CertLocation
+	PEMChain   []byte // CERTIFICATE blocks of the file in file order; empty when Location.Problem != ""
+	FileSHA256 string
+}
+
+// CertLocation is a certificate/key file pair of an Nginx server and the server blocks using it.
+type CertLocation struct {
+	CertPath         string
+	KeyPath          string
+	ResolvedCertPath string
+	Servers          []CertServer
+	Inherited        bool
+	Symlinked        bool
+	CustomLocation   bool // resolved outside /etc/ssl, /etc/nginx, /etc/pki, /etc/letsencrypt
+	Supported        bool
+	Unsupported      string // Unsupported* reason when !Supported
+	Problem          string // CertProblem* code of the certificate file
+	KeyExists        bool
+	KeyMode          string
+	KeyOwner         string
+	KeyGroup         string // account group name or gid of the key file
+	KeyProblem       string // CertProblem* code of the key file
+	Warnings         []string
+	FreeBytes        int64
+}
+
+// CertServer is one server block using a location (only its SSL listens).
+type CertServer struct {
+	Names   []string     `json:"names"`
+	Listens []CertListen `json:"listens"`
+	File    string       `json:"file"`
+	Line    int          `json:"line"`
+}
+
+// CertListen is one SSL listen of a server block.
+type CertListen struct {
+	Addr          string `json:"addr"`
+	Port          int    `json:"port"`
+	DefaultServer bool   `json:"default_server"`
+}
+
+// Unsupported reasons of CertLocation.Unsupported (nginxconf's plus the ones the provider and
+// inventory add); the nginxconf ones equal nginxconf.Reason* (a test compares them).
+const (
+	UnsupportedVariable           = "variable"
+	UnsupportedDataValue          = "data_value"
+	UnsupportedEngineKey          = "engine_key"
+	UnsupportedKeyMissing         = "key_missing"
+	UnsupportedPasswordFile       = "password_file"
+	UnsupportedPathNotAllowed     = "path_not_allowed"
+	UnsupportedStream             = "stream"
+	UnsupportedCombinedFile       = "combined_file"
+	UnsupportedConfigFileWritable = "config_file_writable" // a configuration file can be changed by users other than root
+	UnsupportedKeyConflict        = "key_conflict"         // one certificate file used with different key files
+	UnsupportedFile               = "file_problem"         // see Problem / KeyProblem
+	UnsupportedKeyType            = "unsupported_key"      // the certificate is not RSA or ECDSA (set by inventory)
+)
+
+// Certificate and key file problems of CertLocation.Problem / KeyProblem (helperproto.File*).
+const (
+	CertProblemMissing           = "missing"
+	CertProblemNotRootControlled = "not_root_controlled"
+	CertProblemNotRegular        = "not_regular"
+	CertProblemHardLinked        = "hard_linked"
+	CertProblemTooLarge          = "too_large"
+	CertProblemNotACertificate   = "not_a_certificate"
+	CertProblemUnreadable        = "unreadable"
+	CertProblemBadName           = "bad_name"
+	CertProblemSpecialFS         = "special_filesystem" // on FUSE or a pseudo file system
+)
+
+// Warnings of CertLocation.Warnings (location level) and of Warning.Code in a discovery (server
+// level). The helper-sourced ones equal helperproto.Warn*.
+const (
+	WarnKeyModeOpen    = "key_mode_open" // key file mode allows more than 0640
+	WarnSymlinked      = "symlinked"     // another tool (certbot) may replace the file
+	WarnCustomLocation = "custom_location"
+	// WarnKeyGroupOpen: the key file is owned by a user other than root, or readable by a group
+	// other than root's or by others; a deployment keeps owner, group and 0640.
+	WarnKeyGroupOpen = "key_group_open"
+	// WarnCertificateBlockDropped: a CERTIFICATE block of the file is not an X.509 certificate;
+	// the others were returned.
+	WarnCertificateBlockDropped = "certificate_block_dropped"
+	WarnStreamTLS               = "stream_tls"           // TLS in stream {} is listed, not supported
+	WarnMailTLS                 = "mail_tls"             // TLS in mail {} is listed, not supported
+	WarnConfigFileWritable      = "config_file_writable" // a configuration file can be changed by users other than root
+)
+
+// VerifyOptions are a location's verification settings (Administrator, R38 item 6).
+type VerifyOptions struct {
+	Port int    // 0 = the ports of the SSL listens
+	SNI  string // "" = derived from server_name and the certificate (spec §12.8 item 1)
+	Skip bool
+}
+
+// DeployRequest asks for one deployment of a certificate file pair (spec §6.3). It carries a
+// private key: Format and LogValue print nothing but the operation id, so no fmt verb and no slog
+// handler shows the key, and the key has no JSON form (the wire form is helperproto's).
+type DeployRequest struct {
+	OperationID      uuid.UUID // = deployment id = the helper's operation id
+	Location         CertLocation
+	ExpectCertSHA256 string            // the certificate file's SHA-256 from the last discovery
+	CertificatePEM   []byte            // leaf first, then the chain (public)
+	PrivateKeyPEM    secrets.Plaintext `json:"-"` // the caller zeroes it after the call
+	Fingerprint      string            // hex SHA-256 of the new leaf
+	SANs             []string
+	KeyType          string // "rsa" | "ecdsa"
+	OldFingerprint   string // served before the change ("" when verification is skipped)
+	OldSANs          []string
+	Verify           VerifyOptions
+	// The chain length verification expects is the number of certificates in CertificatePEM.
+}
+
+func (r DeployRequest) redacted() string {
+	return fmt.Sprintf("providers.DeployRequest{operation:%s, key:[redacted]}", r.OperationID)
+}
+
+// Format prints the operation id only, for every verb and flag; the value receiver covers
+// pointers too.
+func (r DeployRequest) Format(f fmt.State, _ rune) { _, _ = fmt.Fprint(f, r.redacted()) }
+
+// LogValue keeps the key out of slog output.
+func (r DeployRequest) LogValue() slog.Value { return slog.StringValue(r.redacted()) }
+
+// DeployResult is how an operation ended on the server. Only DeployNoChange, a refusal by a
+// well-formed helper answer, means that nothing changed. DeployUncertain means Alice does not
+// know: a timeout, a lost connection, a malformed answer, an unexpected exit status.
+type DeployResult string
+
+// Deploy results.
+const (
+	// DeployCommitted: the new files are live and verified.
+	DeployCommitted DeployResult = "committed"
+	// DeployUnchanged: the files already held this certificate.
+	DeployUnchanged DeployResult = "unchanged"
+	// DeployNoChange: an explicit refusal with nothing changed. A provider reports it only for a
+	// well-formed helper refusal (or sudo's refusal before the helper started), never for a
+	// transport failure, a timeout or an answer it cannot parse.
+	DeployNoChange DeployResult = "no_change"
+	// DeployRolledBack: changed, failed, previous files restored and verified.
+	DeployRolledBack DeployResult = "rolled_back"
+	// DeployRollbackFailed: changed, failed, and the restore did not finish.
+	DeployRollbackFailed DeployResult = "rollback_failed"
+	// DeployUncertain: the outcome is unknown (the request may have reached the helper); read it
+	// with DeploymentStatus. The error returned with it says why.
+	DeployUncertain DeployResult = "uncertain"
+)
+
+// Deployment step names, in the order a deployment reports them to the StepLogger: the helper's
+// (equal to helperproto.Step*), then the provider's. Step params are allowlisted primitives
+// (error, port, mode, served).
+const (
+	StepNameBackup             = "backup"
+	StepNameWriteKey           = "write_key"
+	StepNameWriteCert          = "write_cert"
+	StepNameConfigTest         = "config_test"
+	StepNameReload             = "reload"
+	StepNameJournal            = "journal" // the journal could not record the commit: the helper rolled back
+	StepNameRestore            = "restore"
+	StepNameRollbackConfigTest = "rollback_config_test"
+	StepNameRollbackReload     = "rollback_reload"
+	StepNameVerify             = "verify"     // provider: the served certificate after the change
+	StepNameVerifyOld          = "verify_old" // provider: the old certificate after a rollback
+)
+
+// DeployErrFileChanged is DeployOutcome.Error when a certificate or key file holds neither the
+// deployed nor the backed-up content (someone else changed it): nothing was restored.
+const DeployErrFileChanged = "file_changed"
+
+// DeployStep is one step a completed operation reported.
+type DeployStep struct {
+	Name   string // StepName*
+	Status StepStatus
+	// Error is a ConfigErr* class, DeployErrFileChanged or "" (also "" for a failed step whose
+	// cause is not a configuration error, such as a killed Nginx); never raw text.
+	Error string
+}
+
+// DeployOutcome is the result of DeployCertificate. Exactly three situations exist: an explicit
+// refusal (Result DeployNoChange: nothing changed, no Steps), a completed operation (committed,
+// unchanged, rolled back or rollback failed, with its Steps) and an uncertain one (DeployUncertain,
+// returned together with the error that made it uncertain).
+type DeployOutcome struct {
+	Result DeployResult
+	// Phase is the helper journal phase of a completed operation (Phase*), "" otherwise.
+	Phase string
+	// FailedStep is the step that decided the outcome; CauseStep the step whose failure started
+	// the rollback ("" when none). Both are StepName* values.
+	FailedStep string
+	CauseStep  string
+	// Error is the helper's error class of a completed, failed operation (ConfigErr*,
+	// DeployErrFileChanged or "").
+	Error  string
+	Steps  []DeployStep
+	Reason string // stable reason (ALC code) when Result is not committed/unchanged
+	Params map[string]string
+	// Verified is "remote" | "local" | "skipped" | "".
+	Verified string
+	Backup   BackupRef
+}
+
+// BackupRef is persisted in deployments.rollback_info before the first change (spec §6.3 item 3).
+type BackupRef struct {
+	OperationID uuid.UUID `json:"operation_id"`
+	Dir         string    `json:"dir,omitempty"`
+}
+
+// RollbackRequest restores the files an operation replaced and checks the old certificate.
+type RollbackRequest struct {
+	OperationID    uuid.UUID
+	Location       CertLocation
+	OldFingerprint string
+	OldChainLength int // certificates in the old chain, compared with the served chain; 0 = not compared
+	OldSANs        []string
+	KeyType        string
+	Verify         VerifyOptions
+}
+
+// RollbackOutcome is the result of RollbackDeployment. Result is DeployRolledBack,
+// DeployRollbackFailed, DeployNoChange (a well-formed refusal, or nothing to restore: the helper
+// answered phase prepared or unchanged, or SUPERSEDED because a later operation replaced the
+// files) or DeployUncertain (returned with the error).
+type RollbackOutcome struct {
+	Result     DeployResult
+	Phase      string // Phase* of the helper's answer, "" when none
+	FailedStep string
+	CauseStep  string
+	Error      string // as DeployOutcome.Error
+	Steps      []DeployStep
+	Reason     string
+	Params     map[string]string
+	Verified   string
+}
+
+// VerifyRequest checks which certificate the location's websites serve.
+type VerifyRequest struct {
+	Location            CertLocation
+	Fingerprint         string // expected leaf; "" = report what is served
+	ChainLength         int    // certificates in the expected chain, compared with the served one (spec §12.8 item 5); 0 = not compared
+	PreviousFingerprint string // the leaf served before the change: a mismatch equal to it is verify_failed (F-05), another is verify_other (F-06)
+	SANs                []string
+	KeyType             string
+	Verify              VerifyOptions
+}
+
+// VerifyResult is the result of VerifyDeployment.
+type VerifyResult struct {
+	OK                bool
+	Mode              string // "remote" | "local" | "skipped"
+	Served            string // the fingerprint served (first mismatching endpoint, or the first endpoint when Fingerprint == "")
+	ServedChainLength int    // certificates the endpoint served (the helper's chain_length); 0 when nothing was probed
+	Reason            string // "deployment.verify_failed" | "deployment.verify_other" | "deployment.verify_unreachable"
+	Params            map[string]string
+}
+
+// Deployment phases of DeploymentState (the nginx provider reports the helper journal's phases,
+// whose names are the same: a test compares them with helperproto.Phase*). jobs may not import
+// helperproto (archtest), so the engine uses these.
+const (
+	PhaseNone          = "none"
+	PhasePrepared      = "prepared"
+	PhaseWriting       = "writing"
+	PhaseCommitted     = "committed"
+	PhaseUnchanged     = "unchanged"
+	PhaseRestoring     = "restoring"
+	PhaseRestored      = "restored"
+	PhaseRestoreFailed = "restore_failed"
+)
+
+// DeploymentState is what the server knows about an operation (helper journal).
+type DeploymentState struct {
+	Phase             string // Phase*
+	Active            bool
+	FailedStep        string // as DeployOutcome.FailedStep
+	CauseStep         string
+	Error             string // as DeployOutcome.Error
+	NewCertSHA256     string
+	CurrentCertSHA256 string
+	BackupDir         string
 }
