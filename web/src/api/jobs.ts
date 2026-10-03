@@ -1,3 +1,4 @@
+import { isApiError } from './client';
 import { getJob } from './endpoints';
 import type { Job, JobStatus } from './types';
 
@@ -51,7 +52,8 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 // waitForJob polls GET /jobs/{id} until the job has finished. Long operations answer 202 with a
 // job ID (spec §9.1); the screens wait here and then refresh what the job changed. A screen that
-// goes away passes a signal; the wait then rejects with an AbortError (see isAbort).
+// goes away passes a signal; a network error or a retryable error while polling is retried until
+// the deadline; the wait then rejects with an AbortError (see isAbort).
 export async function waitForJob(
   id: string,
   opts: { intervalMs?: number; timeoutMs?: number; signal?: AbortSignal } = {},
@@ -60,7 +62,18 @@ export async function waitForJob(
   const deadline = Date.now() + (opts.timeoutMs ?? 120_000);
   for (;;) {
     if (opts.signal?.aborted) throw abortError();
-    const job = await getJob(id);
+    let job: Job;
+    try {
+      job = await getJob(id);
+    } catch (e) {
+      // A dropped connection or a retryable answer (for example while Alice restarts) must not
+      // end the wait: the job goes on without us. Anything else, or the deadline, rejects.
+      const transient = isApiError(e) ? e.retryable : e instanceof TypeError;
+      if (opts.signal?.aborted) throw abortError();
+      if (!transient || Date.now() > deadline) throw e;
+      await sleep(interval, opts.signal);
+      continue;
+    }
     if (opts.signal?.aborted) throw abortError();
     if (isTerminal(job.status)) return job;
     if (Date.now() > deadline) throw new JobTimeoutError(job);

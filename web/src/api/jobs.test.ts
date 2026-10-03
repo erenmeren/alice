@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw';
-import { jobFixture } from '../test/fixtures';
+import { errorResponse, jobFixture } from '../test/fixtures';
 import { server } from '../test/server';
 import { isTerminal, JobTimeoutError, waitForJob } from './jobs';
 
@@ -50,5 +50,37 @@ describe('waitForJob', () => {
     const seen = calls;
     await new Promise((r) => setTimeout(r, 80));
     expect(calls).toBe(seen);
+  });
+
+  it('keeps waiting through a retryable server error and a dropped connection', async () => {
+    let calls = 0;
+    server.use(
+      http.get('/api/v1/jobs/:id', () => {
+        calls += 1;
+        if (calls === 1) return errorResponse(503, 'ALC-SYS-0003', 'system.unavailable', { retryable: true });
+        if (calls === 2) return HttpResponse.error();
+        return HttpResponse.json(jobFixture({ status: 'succeeded' }));
+      }),
+    );
+    const job = await waitForJob('job-4', { intervalMs: 1 });
+    expect(job.status).toBe('succeeded');
+    expect(calls).toBe(3);
+  });
+
+  it('rejects at once on an error that retrying cannot fix', async () => {
+    let calls = 0;
+    server.use(
+      http.get('/api/v1/jobs/:id', () => {
+        calls += 1;
+        return errorResponse(404, 'ALC-SYS-0404', 'system.not_found');
+      }),
+    );
+    await expect(waitForJob('job-5', { intervalMs: 1 })).rejects.toMatchObject({ status: 404 });
+    expect(calls).toBe(1);
+  });
+
+  it('gives up on a failing server when the deadline has passed', async () => {
+    server.use(http.get('/api/v1/jobs/:id', () => HttpResponse.error()));
+    await expect(waitForJob('job-6', { intervalMs: 1, timeoutMs: 20 })).rejects.toBeInstanceOf(TypeError);
   });
 });

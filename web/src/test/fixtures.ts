@@ -65,7 +65,7 @@ export function errorResponse(
   status: number,
   code: string,
   reason: string,
-  extra: { params?: Record<string, string>; details?: { field: string; code: string; params?: Record<string, string> }[] } = {},
+  extra: { retryable?: boolean; params?: Record<string, string>; details?: { field: string; code: string; params?: Record<string, string> }[] } = {},
 ) {
   return HttpResponse.json(
     {
