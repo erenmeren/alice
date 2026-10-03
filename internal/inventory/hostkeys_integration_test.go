@@ -476,6 +476,26 @@ func TestDismissChangeWhenServerShowsPinnedKeyAgain(t *testing.T) {
 
 	require.NoError(t, h.svc.RecordConnectionOK(h.ctx, tg.ID, providers.ConnectionReport{HostKey: k1}))
 	assert.Equal(t, inventory.StatusOK, statusOf(t, h, tg.ID))
+
+	// Task 14 carry: a dismissal is not an allow-list. The rejected key presented again blocks the
+	// target again and is announced again (a new transition).
+	require.NoError(t, h.svc.HostKeyStore().Observed(h.ctx, tg.ID, k2, false))
+	assert.Equal(t, inventory.StatusHostKeyChanged, statusOf(t, h, tg.ID))
+	assert.Equal(t, 2, h.audits("hostkey.changed"))
+	assert.Equal(t, 2, h.count("SELECT count(*) FROM notifications_outbox WHERE template_key = 'target.host_key_changed'"))
+	assert.Equal(t, "observed", h.recordStatus(t, tg.ID, k2.Fingerprint), "the key is a candidate again")
+	got, err = h.svc.HostKeyStore().Pinned(h.ctx, tg.ID)
+	require.NoError(t, err)
+	assert.Equal(t, k1, got, "the pinned key is never replaced by a sighting")
+}
+
+// recordStatus returns the status of the target's host-key row with fingerprint fp.
+func (h *harness) recordStatus(t *testing.T, target uuid.UUID, fp string) string {
+	t.Helper()
+	var status string
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT status FROM host_keys WHERE target_id = $1 AND fingerprint_sha256 = $2",
+		target, fp).Scan(&status))
+	return status
 }
 
 // Dismissal also works while a candidate is still outstanding (no connection report yet): it is
