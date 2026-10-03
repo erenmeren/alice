@@ -3,8 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router';
-import { listTargets } from '../api/endpoints';
-import type { Target } from '../api/types';
+import { listAllTargets } from '../api/endpoints';
 import { TARGETS_KEY } from '../api/queryKeys';
 import { useAuth } from '../auth/AuthProvider';
 import { AddServerModal } from '../components/AddServerModal';
@@ -14,21 +13,6 @@ import { reasonTitle } from '../components/JobErrorAlert';
 import { PlatformKeyPanel } from '../components/PlatformKeyPanel';
 import { TargetStatusBadge } from '../components/TargetStatusBadge';
 import { WRAP } from '../components/wrap';
-
-// listAllTargets follows next_cursor until the list is complete (a guard stops a repeating cursor).
-async function listAllTargets(): Promise<{ items: Target[]; next_cursor: string | null }> {
-  const items: Target[] = [];
-  const seen = new Set<string>();
-  let cursor: string | null = null;
-  for (let page = 0; page < 100; page++) {
-    const res = await listTargets(cursor);
-    items.push(...res.items);
-    cursor = res.next_cursor;
-    if (!cursor || seen.has(cursor)) break;
-    seen.add(cursor);
-  }
-  return { items, next_cursor: null };
-}
 
 // TargetsPage lists the managed servers for every role (metadata only, never credentials, R3).
 // Administrators also get "Add server", the preparation commands and the paused changes.

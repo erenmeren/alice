@@ -1,7 +1,16 @@
 import { screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import type { ApiToken, AuditEntry } from './api/types';
-import { aliceKeyLocation, hostKeyFixture, keyLocationFixture, sessionHandlers, targetFixture, userFor } from './test/fixtures';
+import {
+  aliceKeyLocation,
+  hostKeyFixture,
+  keyLocationFixture,
+  platformKeyFixture,
+  sessionHandlers,
+  sshKeyFixture,
+  targetFixture,
+  userFor,
+} from './test/fixtures';
 import { expectNoRawKeys } from './test/i18nAssert';
 import { renderRoute } from './test/render';
 import { SCREENS } from './test/screens';
@@ -42,6 +51,15 @@ const dataHandlers = [
   http.get('/api/v1/targets/:id', () => HttpResponse.json(targetFixture)),
   http.get('/api/v1/targets/:id/host-keys', () => HttpResponse.json({ items: [hostKeyFixture()] })),
   http.get('/api/v1/targets/:id/ssh-keys', () => HttpResponse.json({ items: [keyLocationFixture(), aliceKeyLocation] })),
+  http.get('/api/v1/ssh-keys', () =>
+    HttpResponse.json({
+      items: [sshKeyFixture(), sshKeyFixture({ id: 'k9', fingerprint: 'SHA256:aliceAliceAlice', is_platform_key: true, comment: 'alice-platform' })],
+      next_cursor: 'next',
+    }),
+  ),
+  // Declared before /ssh-keys/:id, which would otherwise answer the platform key request too.
+  http.get('/api/v1/ssh-keys/platform-key', () => HttpResponse.json(platformKeyFixture)),
+  http.get('/api/v1/ssh-keys/:id', () => HttpResponse.json({ ...sshKeyFixture(), locations: [keyLocationFixture(), aliceKeyLocation] })),
   http.get('/api/v1/audit', () => HttpResponse.json({ items: [auditEntry], next_cursor: null })),
 ];
 

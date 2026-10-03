@@ -65,6 +65,7 @@ export const COPY = {
     confirmLicense: 'Confirm the license',
     installLicense: 'Install license',
     doneHeading: 'Alice is ready',
+    platformHeading: 'Connect your servers',
     toDashboard: 'Go to the dashboard',
     loginHeading: 'Sign in to Alice',
     signIn: 'Sign in',
@@ -147,6 +148,7 @@ export const COPY = {
     confirmLicense: 'Lisansı onaylayın',
     installLicense: 'Lisansı yükle',
     doneHeading: 'Alice hazır',
+    platformHeading: 'Sunucularınızı bağlayın',
     toDashboard: 'Ana sayfaya git',
     loginHeading: "Alice'e giriş yapın",
     signIn: 'Giriş yap',
@@ -378,6 +380,12 @@ export async function runWizard(
   } else {
     await page.getByRole('button', { name: c.startEvaluation }).click();
   }
+
+  // Phase 3 wizard step 7: Alice's public key and the server preparation commands; adding a server is optional.
+  await expect(page.getByRole('heading', { name: c.platformHeading })).toBeVisible();
+  await expect(page.getByTestId('platform-public-key')).toContainText('ssh-ed25519 ');
+  if (opts.a11y) await expectAccessible(page, 'wizard platform key');
+  await page.getByRole('button', { name: c.continue, exact: true }).click();
 
   await expect(page.getByRole('heading', { name: c.doneHeading })).toBeVisible();
   if (opts.a11y) await expectAccessible(page, 'wizard done');

@@ -15,8 +15,9 @@ import { LanguageStep } from './setup/LanguageStep';
 import { isGone } from './setup/gone';
 import { LicenseStep } from './setup/LicenseStep';
 import { PassphraseStep } from './setup/PassphraseStep';
+import { PlatformStep } from './setup/PlatformStep';
 
-export type WizardStep = 'code' | 'language' | 'admin' | 'totp' | 'codes' | 'passphrase' | 'license' | 'done';
+export type WizardStep = 'code' | 'language' | 'admin' | 'totp' | 'codes' | 'passphrase' | 'license' | 'platform' | 'done';
 
 // startOf decides where the wizard begins. Before an administrator exists everybody
 // starts with the setup code; afterwards only the signed-in administrator may finish
@@ -26,7 +27,8 @@ export function startOf(status: SetupStatus | null, session: SessionInfo | null)
   if (!session) return 'login';
   if (session.user.role !== 'admin' || status.completed) return 'home';
   if (!status.recovery_passphrase_set) return 'passphrase';
-  return status.license_chosen ? 'done' : 'license';
+  // Step 7 (Alice's key, first server) may be skipped and stores nothing, so it is shown again until Finish.
+  return status.license_chosen ? 'platform' : 'license';
 }
 
 export function SetupPage() {
@@ -79,7 +81,8 @@ export function SetupPage() {
         {current === 'totp' && enrollment && <TotpEnrollment enrollment={enrollment} onVerify={verifyAdmin} />}
         {current === 'codes' && <RecoveryCodes codes={codes} onContinue={() => setStep('passphrase')} />}
         {current === 'passphrase' && <PassphraseStep onDone={() => setStep('license')} onGone={gone} />}
-        {current === 'license' && <LicenseStep onDone={() => setStep('done')} onGone={gone} />}
+        {current === 'license' && <LicenseStep onDone={() => setStep('platform')} onGone={gone} />}
+        {current === 'platform' && <PlatformStep onDone={() => setStep('done')} />}
         {current === 'done' && <DoneStep onGone={gone} />}
       </Stack>
     </Container>

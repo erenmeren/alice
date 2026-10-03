@@ -12,6 +12,8 @@ import { NotFoundPage } from './pages/NotFoundPage';
 import { TargetDetailPage } from './pages/TargetDetailPage';
 import { TargetsPage } from './pages/TargetsPage';
 import { SetupPage } from './pages/SetupPage';
+import { SSHKeyDetailPage } from './pages/SSHKeyDetailPage';
+import { SSHKeysPage } from './pages/SSHKeysPage';
 import { TokensPage } from './pages/TokensPage';
 import { UsersPage } from './pages/UsersPage';
 
@@ -45,6 +47,8 @@ export function routes(): RouteObject[] {
             { path: 'account', element: <AccountPage /> },
             { path: 'servers', element: <TargetsPage /> },
             { path: 'servers/:id', element: <TargetDetailPage /> },
+            { path: 'ssh-keys', element: <SSHKeysPage /> },
+            { path: 'ssh-keys/:id', element: <SSHKeyDetailPage /> },
             {
               path: 'users',
               element: (

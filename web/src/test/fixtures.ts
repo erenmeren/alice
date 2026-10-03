@@ -10,6 +10,7 @@ import type {
   Role,
   SessionInfo,
   SetupStatus,
+  SSHKey,
   Target,
   User,
 } from '../api/types';
@@ -239,6 +240,24 @@ export function jobFixture(o: Partial<Job> = {}): Job {
     run_at: '2026-10-01T08:00:00Z',
     started_at: '2026-10-01T08:00:01Z',
     finished_at: '2026-10-01T08:00:02Z',
+    ...o,
+  };
+}
+
+export function sshKeyFixture(o: Partial<SSHKey> = {}): SSHKey {
+  return {
+    id: '0192b000-0000-7000-8000-0000000000k1',
+    fingerprint: 'SHA256:deployDeployDeployDeployDeployDeployDeploy0',
+    key_type: 'ssh-ed25519',
+    bits: 256,
+    public_key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDeployDeployDeployDeployDeployDeployDep',
+    managed: false,
+    is_platform_key: false,
+    weak: false,
+    comment: 'deploy@laptop',
+    location_count: 2,
+    target_count: 2,
+    first_seen_at: '2026-10-01T08:01:00Z',
     ...o,
   };
 }

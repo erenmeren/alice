@@ -30,7 +30,7 @@ export const SCREENS: Screen[] = [
     path: '/setup',
     session: sessionFor('admin'),
     status: { ...installedStatus, completed: false },
-    ready: { en: 'Alice is ready', tr: 'Alice hazır' },
+    ready: { en: 'Connect your servers', tr: 'Sunucularınızı bağlayın' },
   },
   { path: '/account', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Change password', tr: 'Parolayı değiştir' } },
   { path: '/users', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Operator', tr: 'Operatör' } },
@@ -45,5 +45,12 @@ export const SCREENS: Screen[] = [
     ready: { en: 'Prepare a server for Alice', tr: 'Sunucuyu Alice için hazırlayın' },
   },
   { path: `/servers/${targetFixture.id}`, session: sessionFor('operator'), status: installedStatus, ready: { en: 'deploy@laptop', tr: 'deploy@laptop' } },
+  { path: '/ssh-keys', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'deploy@laptop', tr: 'deploy@laptop' } },
+  {
+    path: '/ssh-keys/0192b000-0000-7000-8000-0000000000k1',
+    session: sessionFor('admin'),
+    status: installedStatus,
+    ready: { en: 'Where this key is used', tr: 'Bu anahtarın kullanıldığı yerler' },
+  },
   { path: '/missing', session: null, status: installedStatus, ready: { en: 'Page not found', tr: 'Sayfa bulunamadı' } },
 ];

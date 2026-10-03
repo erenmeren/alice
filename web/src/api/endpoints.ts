@@ -231,3 +231,18 @@ export const getJob = (id: string) => apiFetch<Job>(`${v1}/jobs/${enc(id)}`);
 export const confirmJob = (id: string) => apiFetch<Job>(`${v1}/jobs/${enc(id)}/actions/confirm`, { method: 'POST' });
 
 export const discardJob = (id: string) => apiFetch<Job>(`${v1}/jobs/${enc(id)}/actions/discard`, { method: 'POST' });
+
+// listAllTargets follows next_cursor until the list is complete (a guard stops a repeating cursor).
+export async function listAllTargets(): Promise<{ items: Target[]; next_cursor: string | null }> {
+  const items: Target[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = null;
+  for (let page = 0; page < 100; page++) {
+    const res = await listTargets(cursor);
+    items.push(...res.items);
+    cursor = res.next_cursor;
+    if (!cursor || seen.has(cursor)) break;
+    seen.add(cursor);
+  }
+  return { items, next_cursor: null };
+}

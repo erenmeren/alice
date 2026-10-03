@@ -2,7 +2,16 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { SetupStatus } from '../api/types';
-import { errorResponse, freshStatus, installedStatus, licenseInfoFixture, sessionFor, sessionHandlers } from '../test/fixtures';
+import {
+  errorResponse,
+  freshStatus,
+  installedStatus,
+  jobFixture,
+  licenseInfoFixture,
+  sessionFor,
+  sessionHandlers,
+  targetFixture,
+} from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
@@ -115,6 +124,12 @@ describe('setup wizard', () => {
     expect(await screen.findByRole('heading', { name: 'Add a license' })).toBeInTheDocument();
     expect(screen.getByTestId('installation-id')).toHaveTextContent('ALICE-7F3K-9Q2M-XD41-B8TC');
     await userEvent.click(screen.getByRole('button', { name: 'Start 30-day evaluation (up to 5 targets)' }));
+
+    // Step 7 (spec §18.5): Alice's public key and the preparation commands; adding a server is optional.
+    expect(await screen.findByRole('heading', { name: 'Connect your servers' })).toBeInTheDocument();
+    expect(await screen.findByTestId('platform-public-key')).toHaveTextContent('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5');
+    expect(screen.getByRole('button', { name: 'Add a server now' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
     expect(await screen.findByRole('heading', { name: 'Alice is ready' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Go to the dashboard' }));
@@ -283,6 +298,8 @@ describe('setup wizard edge cases', () => {
       http.post('/api/v1/auth/stepup', () => HttpResponse.json(sessionFor('admin'))),
     );
     const { router } = await renderRoute('/setup');
+    await screen.findByRole('heading', { name: 'Connect your servers' });
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Go to the dashboard' }));
     await screen.findByRole('dialog', { name: "Confirm it's you" });
     await userEvent.type(screen.getByLabelText('6-digit code'), '654321');
@@ -315,7 +332,7 @@ describe('setup wizard edge cases', () => {
     await userEvent.upload(screen.getByLabelText('License file'), new File(['{}'], 'l.alicelic', { type: 'application/json' }));
     await userEvent.click(screen.getByRole('button', { name: 'Check the file' }));
     await userEvent.click(within(await screen.findByRole('dialog', { name: 'Confirm the license' })).getByRole('button', { name: 'Install license' }));
-    expect(await screen.findByRole('heading', { name: 'Alice is ready' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Connect your servers' })).toBeInTheDocument();
   });
 
   it('asks for a code before starting the evaluation when the step-up expired', async () => {
@@ -335,8 +352,48 @@ describe('setup wizard edge cases', () => {
     await screen.findByRole('dialog', { name: "Confirm it's you" });
     await userEvent.type(screen.getByLabelText('6-digit code'), '654321');
     await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
-    expect(await screen.findByRole('heading', { name: 'Alice is ready' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Connect your servers' })).toBeInTheDocument();
     expect(attempts).toBe(2);
+  });
+
+  it('adds a server from the wizard and then continues to Finish', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin'), { admin_exists: true, recovery_passphrase_set: true, license_chosen: true, completed: false, default_locale: 'en' }),
+      http.post('/api/v1/targets', () =>
+        HttpResponse.json({ target: targetFixture, job_id: 'job-1', status_url: '/api/v1/jobs/job-1' }, { status: 201 }),
+      ),
+      http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-1' }))),
+    );
+    await renderRoute('/setup');
+    expect(await screen.findByRole('heading', { name: 'Connect your servers' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Add a server now' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add server' });
+    await userEvent.type(within(dialog).getByLabelText(/^Name/), 'web-01');
+    await userEvent.type(within(dialog).getByLabelText(/^Address/), 'web-01.example.com');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
+    expect(await screen.findByText('Server added. Alice is reading its SSH keys.')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Add server' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'Alice is ready' })).toBeInTheDocument();
+  });
+
+  it('adds a server from the wizard under React StrictMode and stays in the wizard', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin'), { admin_exists: true, recovery_passphrase_set: true, license_chosen: true, completed: false, default_locale: 'en' }),
+      http.post('/api/v1/targets', () =>
+        HttpResponse.json({ target: targetFixture, job_id: 'job-1', status_url: '/api/v1/jobs/job-1' }, { status: 201 }),
+      ),
+      http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-1' }))),
+    );
+    const { router } = await renderRoute('/setup', { strict: true });
+    await userEvent.click(await screen.findByRole('button', { name: 'Add a server now' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add server' });
+    await userEvent.type(within(dialog).getByLabelText(/^Name/), 'web-01');
+    await userEvent.type(within(dialog).getByLabelText(/^Address/), 'web-01.example.com');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
+    expect(await screen.findByText('Server added. Alice is reading its SSH keys.')).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/setup');
+    expect(screen.getByRole('heading', { name: 'Connect your servers' })).toBeInTheDocument();
   });
 });
 
@@ -349,7 +406,7 @@ describe('startOf', () => {
     expect(startOf(installedStatus, admin)).toBe('home');
     expect(startOf({ ...installedStatus, completed: false, recovery_passphrase_set: false, license_chosen: false }, admin)).toBe('passphrase');
     expect(startOf({ ...installedStatus, completed: false, license_chosen: false }, admin)).toBe('license');
-    expect(startOf({ ...installedStatus, completed: false }, admin)).toBe('done');
+    expect(startOf({ ...installedStatus, completed: false }, admin)).toBe('platform');
     expect(startOf({ ...installedStatus, completed: false }, sessionFor('operator'))).toBe('home');
   });
 });

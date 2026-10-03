@@ -68,8 +68,45 @@ const PHASE2_ACTIONS = [
   'request.denied_license',
 ];
 
+// Every audit action Phase 3 writes (servers, host keys, SSH keys, jobs, the platform key) and the
+// installation record restore of the Phase 2 carry (contract "Audit actions").
+const PHASE3_ACTIONS = [
+  'license.installation_restored',
+  'target.created',
+  'target.updated',
+  'target.deleted',
+  'target.add.denied_license',
+  'target.status_changed',
+  'target.discovered',
+  'hostkey.observed',
+  'hostkey.pinned',
+  'hostkey.changed',
+  'hostkey.repinned',
+  'hostkey.change_dismissed',
+  'sshkey.remove_requested',
+  'sshkey.remove.denied',
+  'sshkey.removed',
+  'sshkey.remove_failed',
+  'job.recovered',
+  'job.dead',
+  'job.tampered',
+  'job.blocked_license',
+  'job.confirmed',
+  'job.discarded',
+  'platform_key.created',
+];
+
 describe('AuditPage', () => {
   beforeEach(() => localStorage.clear());
+
+  it('labels every Phase 3 audit action in English and Turkish', () => {
+    for (const action of PHASE3_ACTIONS) {
+      const key = actionKey(action).replace('audit.actions.', '');
+      expect(en.audit.actions, action).toHaveProperty([key]);
+      expect(tr.audit.actions, action).toHaveProperty([key]);
+      expect((en.audit.actions as Record<string, string>)[key]).not.toEqual((tr.audit.actions as Record<string, string>)[key]);
+    }
+  });
 
   it('labels every Phase 2 audit action in English and Turkish', async () => {
     for (const action of PHASE2_ACTIONS) {
