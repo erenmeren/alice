@@ -7,7 +7,7 @@
   "alice/internal/audit": 89,
   "alice/internal/secrets": 81,
   "alice/internal/notify": 80,
-  "alice/internal/jobs": 85,
+  "alice/internal/jobs": 88,
   "alice/internal/jobs/targetjobs": 100,
   "alice/internal/inventory": 86,
   "alice/internal/providers": 99,
