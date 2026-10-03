@@ -605,20 +605,36 @@ func collectCertLocations(rows pgx.Rows) ([]CertificateLocation, error) {
 	return out, rows.Err()
 }
 
+// LocationList is a target's certificate locations; Truncated says that some were left out (more
+// than MaxListedLocations).
+type LocationList struct {
+	Items     []CertificateLocation
+	Truncated bool
+}
+
 // ListLocations returns the certificate locations of a live target (missing ones only when
 // asked, after the others), ordered by the first server name, then the certificate path; at most
-// MaxListedLocations (only missing ones can be left out, see MaxListedLocations).
-func (s *Service) ListLocations(ctx context.Context, targetID uuid.UUID, includeMissing bool) ([]CertificateLocation, error) {
+// MaxListedLocations, with Truncated set when more exist (only missing ones can be left out, see
+// MaxListedLocations).
+func (s *Service) ListLocations(ctx context.Context, targetID uuid.UUID, includeMissing bool) (LocationList, error) {
 	if _, err := s.GetTarget(ctx, targetID); err != nil {
-		return nil, err
+		return LocationList{}, err
 	}
 	rows, err := s.pool.Query(ctx, certLocationSelect+` WHERE l.target_id = $1 AND ($2 OR l.missing_since IS NULL)
 ORDER BY l.missing_since IS NOT NULL, l.servers->0->'names'->>0 NULLS LAST, l.cert_path, l.id
-LIMIT $3`, targetID, includeMissing, MaxListedLocations)
+LIMIT $3`, targetID, includeMissing, MaxListedLocations+1)
 	if err != nil {
-		return nil, fmt.Errorf("inventory: list certificate locations: %w", err)
+		return LocationList{}, fmt.Errorf("inventory: list certificate locations: %w", err)
 	}
-	return collectCertLocations(rows)
+	items, err := collectCertLocations(rows)
+	if err != nil {
+		return LocationList{}, err
+	}
+	out := LocationList{Items: items}
+	if len(items) > MaxListedLocations {
+		out.Items, out.Truncated = items[:MaxListedLocations], true
+	}
+	return out, nil
 }
 
 // GetLocation returns one certificate location on a live target.

@@ -47,8 +47,9 @@ func dc(loc providers.CertLocation, leaf pki.Leaf) providers.DiscoveredCertifica
 
 func byPath(t *testing.T, h *harness, target uuid.UUID, missing bool) map[string]inventory.CertificateLocation {
 	t.Helper()
-	locs, err := h.svc.ListLocations(h.ctx, target, missing)
+	page, err := h.svc.ListLocations(h.ctx, target, missing)
 	require.NoError(t, err)
+	locs := page.Items
 	out := map[string]inventory.CertificateLocation{}
 	for _, l := range locs {
 		out[l.CertPath] = l
@@ -118,8 +119,10 @@ func TestReconcileStoresCertificatesAndLocations(t *testing.T) {
 	assert.Equal(t, 256, c.KeyBits)
 	assert.Equal(t, shared.Cert.NotAfter.UTC(), c.NotAfter)
 	assert.Empty(t, c.PEMChain, "the list leaves the chain out")
-	locs, err := h.svc.ListLocations(h.ctx, web1.ID, false)
+	lp, err := h.svc.ListLocations(h.ctx, web1.ID, false)
 	require.NoError(t, err)
+	assert.False(t, lp.Truncated)
+	locs := lp.Items
 	require.Len(t, locs, 1)
 	l := locs[0]
 	assert.Equal(t, "ecdsa", l.KeyType)
@@ -201,8 +204,7 @@ func TestReconcileMissingChangedOutsideAndInvalidConfiguration(t *testing.T) {
 	sum, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigValid: false}})
 	require.NoError(t, err)
 	assert.Zero(t, sum.MissingLocations)
-	locs, _ := h.svc.ListLocations(h.ctx, web.ID, false)
-	assert.Len(t, locs, 2)
+	assert.Len(t, byPath(t, h, web.ID, false), 2)
 
 	// b disappears; a's file now holds another certificate Alice did not deploy.
 	sum, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{dc(locA, a2)}})
@@ -857,8 +859,9 @@ func TestGetCertificateAndLocations(t *testing.T) {
 		require.NoError(t, err)
 		h.clock.Advance(time.Minute)
 	}
-	locs, err := h.svc.ListLocations(h.ctx, web1.ID, false)
+	lp, err := h.svc.ListLocations(h.ctx, web1.ID, false)
 	require.NoError(t, err)
+	locs := lp.Items
 	order := []string{}
 	for _, l := range locs {
 		order = append(order, l.CertPath)
@@ -1080,13 +1083,15 @@ SELECT gen_random_uuid(), $1, 'nginx_file', '/etc/nginx/old/' || i || '.crt', $2
 FROM generate_series(1, $4::int) i`, web.ID, live.Certificate.ID, h.clock.Now(), inventory.MaxListedLocations)
 	require.NoError(t, err)
 
-	locs, err := h.svc.ListLocations(h.ctx, web.ID, true)
+	lp, err := h.svc.ListLocations(h.ctx, web.ID, true)
 	require.NoError(t, err)
-	assert.Len(t, locs, inventory.MaxListedLocations)
-	assert.Equal(t, live.ID, locs[0].ID, "the locations in use come first")
-	locs, err = h.svc.ListLocations(h.ctx, web.ID, false)
+	assert.Len(t, lp.Items, inventory.MaxListedLocations)
+	assert.True(t, lp.Truncated, "a location was left out, and the page says so")
+	assert.Equal(t, live.ID, lp.Items[0].ID, "the locations in use come first")
+	lp, err = h.svc.ListLocations(h.ctx, web.ID, false)
 	require.NoError(t, err)
-	assert.Len(t, locs, 1)
+	assert.Len(t, lp.Items, 1)
+	assert.False(t, lp.Truncated)
 
 	c, err := h.svc.GetCertificate(h.ctx, live.Certificate.ID)
 	require.NoError(t, err)
