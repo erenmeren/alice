@@ -33,6 +33,13 @@ func TestScheduleDiscoveryEnqueuesDueTargetsOnly(t *testing.T) {
 	slot := h.clock.Now().Unix() / int64((24 * time.Hour).Seconds())
 	assert.Equal(t, inventory.JobRequest{Type: inventory.JobDiscover, TargetID: due.ID, Payload: map[string]string{},
 		Kind: "scheduled", DedupeKey: fmt.Sprintf("target.discover:%s:%d", due.ID, slot)}, req)
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM targets WHERE last_scheduled_at = $1", h.clock.Now()))
+
+	// Whatever became of that job, the target is not queued again within its interval (R37 #13).
+	h.clock.Advance(time.Minute)
+	n, err = h.svc.ScheduleDiscovery(h.ctx)
+	require.NoError(t, err)
+	assert.Zero(t, n)
 
 	h.clock.Advance(24 * time.Hour)
 	n, err = h.svc.ScheduleDiscovery(h.ctx)

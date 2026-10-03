@@ -119,7 +119,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 	// Phase 3: only the columns the services write; identity columns (key material, fingerprints,
 	// target and credential references, the host key bytes) are never updated.
 	"public.targets": {"UPDATE": {"deleted_at", "discovery_interval_seconds", "facts", "keys_managed_elsewhere",
-		"last_discovery_at", "last_error_code", "last_success_at", "name", "status", "updated_at", "version"}},
+		"last_discovery_at", "last_error_code", "last_scheduled_at", "last_success_at", "name", "status", "updated_at", "version"}},
 	"public.host_keys": {"UPDATE": {"confirmed_at", "confirmed_by", "observed_at", "status", "superseded_at"}},
 	"public.ssh_keys":  {"UPDATE": {"is_platform_key", "weak"}},
 	"public.ssh_key_locations": {"UPDATE": {"comment", "flags", "is_alice_connection_key", "last_seen_at", "line_no",

@@ -25,6 +25,9 @@ CREATE TABLE targets (
     last_error_code            text NOT NULL DEFAULT '',
     last_success_at            timestamptz,
     last_discovery_at          timestamptz,
+    -- when the discovery scheduler last queued work for the target (a discovery, or a re-test of an
+    -- unreachable server): whatever that job's outcome, the next one waits a full interval (R37 #13)
+    last_scheduled_at          timestamptz,
     discovery_interval_seconds integer NOT NULL DEFAULT 86400 CHECK (discovery_interval_seconds BETWEEN 3600 AND 2592000),
     keys_managed_elsewhere     boolean NOT NULL DEFAULT false,
     facts                      jsonb NOT NULL DEFAULT '{}',
@@ -203,7 +206,7 @@ CREATE INDEX target_locks_job ON target_locks (job_id);
 GRANT SELECT, INSERT ON credentials TO alice_app;
 GRANT SELECT, INSERT ON targets, host_keys, ssh_keys, ssh_key_locations TO alice_app;
 GRANT UPDATE (name, discovery_interval_seconds, version, updated_at, deleted_at, status, last_error_code, facts,
-    last_success_at, last_discovery_at, keys_managed_elsewhere) ON targets TO alice_app;
+    last_success_at, last_discovery_at, last_scheduled_at, keys_managed_elsewhere) ON targets TO alice_app;
 GRANT UPDATE (status, observed_at, confirmed_by, confirmed_at, superseded_at) ON host_keys TO alice_app;
 GRANT UPDATE (is_platform_key, weak) ON ssh_keys TO alice_app;
 GRANT UPDATE (line_no, options, comment, flags, last_seen_at, missing_since, removed_by_alice_at, is_alice_connection_key)
