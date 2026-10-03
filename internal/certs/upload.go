@@ -30,7 +30,7 @@ type Validated struct {
 	Parsed
 	PrivateKeyDER secrets.Plaintext
 	ChainComplete bool
-	Warnings      []string // "not_yet_valid", "chain_incomplete"
+	Warnings      []string // "not_yet_valid", "chain_incomplete", "chain_certificate_expired"
 }
 
 // KeyInfo is what Alice keeps about a private key besides the key itself.
@@ -67,18 +67,12 @@ func ValidateUpload(u Upload, now time.Time, roots *x509.CertPool) (Validated, e
 		return Validated{}, err
 	}
 
-	leafIdx := -1
-	for i, c := range all {
-		if samePublicKey(c.PublicKey, signer.Public()) {
-			leafIdx = i
-			break
-		}
-	}
+	leafIdx := pickLeaf(all, now, func(c *x509.Certificate) bool { return samePublicKey(c.PublicKey, signer.Public()) })
 	if leafIdx < 0 {
 		return Validated{}, ErrKeyMismatch
 	}
 	others := append(append([]*x509.Certificate(nil), all[:leafIdx]...), all[leafIdx+1:]...)
-	p := describe(all[leafIdx], orderChain(all[leafIdx], others))
+	p := describe(all[leafIdx], orderChain(all[leafIdx], others, now))
 	if err := checkLeaf(p, now); err != nil {
 		return Validated{}, err
 	}
@@ -94,7 +88,48 @@ func ValidateUpload(u Upload, now time.Time, roots *x509.CertPool) (Validated, e
 	if !v.ChainComplete {
 		v.Warnings = append(v.Warnings, "chain_incomplete")
 	}
+	if anyExpired(others, now) {
+		v.Warnings = append(v.Warnings, "chain_certificate_expired")
+	}
 	return v, nil
+}
+
+// pickLeaf returns the index of the certificate in all that match selects and
+// that suits best: valid now, then valid later, then expired; the latest NotAfter
+// breaks ties. A file may hold the expired old certificate of a reused key
+// before the renewed one. -1 when none matches.
+func pickLeaf(all []*x509.Certificate, now time.Time, match func(*x509.Certificate) bool) int {
+	rank := func(c *x509.Certificate) int {
+		switch {
+		case validAt(c, now):
+			return 2
+		case now.Before(c.NotBefore):
+			return 1
+		}
+		return 0
+	}
+	best := -1
+	for i, c := range all {
+		if !match(c) {
+			continue
+		}
+		if best < 0 || rank(c) > rank(all[best]) || (rank(c) == rank(all[best]) && c.NotAfter.After(all[best].NotAfter)) {
+			best = i
+		}
+	}
+	return best
+}
+
+// anyExpired reports whether one of the uploaded certificates other than the
+// leaf has expired. Such an upload is accepted (old bundles carry a harmless
+// expired cross-sign) but flagged.
+func anyExpired(others []*x509.Certificate, now time.Time) bool {
+	for _, c := range others {
+		if !now.Before(c.NotAfter) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkLeaf applies the signature and validity rules shared by uploads and
@@ -105,7 +140,8 @@ func checkLeaf(p Parsed, now time.Time) error {
 		return ErrWeak
 	}
 	for _, c := range p.Chain {
-		if !selfSigned(c) && weakSignature(c) {
+		// A root's own signature is never used to trust it, so it is exempt.
+		if !bytes.Equal(c.RawIssuer, c.RawSubject) && weakSignature(c) {
 			return ErrWeak
 		}
 	}
@@ -148,6 +184,9 @@ func samePublicKey(a, b crypto.PublicKey) bool {
 }
 
 func decodePFX(data []byte, password string) ([]*x509.Certificate, any, error) {
+	if err := checkPFXIterations(data); err != nil {
+		return nil, nil, err
+	}
 	key, leaf, cas, err := pkcs12.DecodeChain(data, password)
 	if err != nil {
 		// A wrong password and a damaged file are indistinguishable to the person
@@ -173,7 +212,8 @@ func decodePEMPair(certPEM, keyPEM []byte) ([]*x509.Certificate, any, error) {
 }
 
 // parsePrivateKeyPEM finds the single private key in data. Password-protected
-// keys are refused before any decryption is attempted.
+// keys are refused before any decryption is attempted; a second key block is
+// refused without being parsed.
 func parsePrivateKeyPEM(data []byte) (any, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil, ErrNoKey
@@ -183,6 +223,7 @@ func parsePrivateKeyPEM(data []byte) (any, error) {
 	var (
 		blocks []*pem.Block
 		parsed any
+		found  int
 	)
 	defer func() {
 		for _, b := range blocks {
@@ -199,24 +240,24 @@ func parsePrivateKeyPEM(data []byte) (any, error) {
 		if b.Headers["Proc-Type"] == "4,ENCRYPTED" || b.Type == "ENCRYPTED PRIVATE KEY" {
 			return nil, ErrKeyEncrypted
 		}
-	}
-	found := 0
-	for _, b := range blocks {
-		var err error
+		var parse func([]byte) (any, error)
 		switch b.Type {
 		case "PRIVATE KEY":
-			parsed, err = x509.ParsePKCS8PrivateKey(b.Bytes)
+			parse = func(d []byte) (any, error) { return x509.ParsePKCS8PrivateKey(d) }
 		case "RSA PRIVATE KEY":
-			parsed, err = x509.ParsePKCS1PrivateKey(b.Bytes)
+			parse = func(d []byte) (any, error) { return x509.ParsePKCS1PrivateKey(d) }
 		case "EC PRIVATE KEY":
-			parsed, err = x509.ParseECPrivateKey(b.Bytes)
+			parse = func(d []byte) (any, error) { return x509.ParseECPrivateKey(d) }
 		default:
 			continue // EC PARAMETERS, certificates pasted along, ...
 		}
-		if err != nil {
+		if found++; found > 1 {
+			return nil, invalid("expected exactly one private key")
+		}
+		var err error
+		if parsed, err = parse(b.Bytes); err != nil {
 			return nil, invalid("the private key cannot be parsed")
 		}
-		found++
 	}
 	if found != 1 {
 		return nil, invalid("expected exactly one private key")

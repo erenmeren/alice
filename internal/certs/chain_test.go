@@ -26,7 +26,7 @@ func TestParseChainPEMTakesCertificatesOnly(t *testing.T) {
 func TestWeakSignatureAlgorithms(t *testing.T) {
 	for alg, weak := range map[x509.SignatureAlgorithm]bool{
 		x509.MD5WithRSA: true, x509.SHA1WithRSA: true, x509.ECDSAWithSHA1: true, x509.DSAWithSHA1: true, x509.DSAWithSHA256: true,
-		x509.SHA256WithRSA: false, x509.ECDSAWithSHA384: false, x509.SHA256WithRSAPSS: false, x509.PureEd25519: false,
+		x509.UnknownSignatureAlgorithm: true, x509.SHA256WithRSA: false, x509.ECDSAWithSHA384: false, x509.SHA256WithRSAPSS: false, x509.PureEd25519: false,
 	} {
 		assert.Equal(t, weak, weakSignature(&x509.Certificate{SignatureAlgorithm: alg}), alg.String())
 	}
@@ -54,4 +54,23 @@ func TestChainCompleteWithSystemRootsOrSelfSigned(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, ps.SelfSigned)
 	assert.True(t, ChainComplete(ps, x509.NewCertPool(), now), "a self-signed certificate is its own chain")
+}
+
+// The weak-signature rule is wired into the upload path: the leaf and every
+// chain certificate except a self-signed root.
+func TestCheckLeafSignatureRules(t *testing.T) {
+	future := now.AddDate(1, 0, 0)
+	cert := func(alg x509.SignatureAlgorithm, subject, issuer string) *x509.Certificate {
+		return &x509.Certificate{SignatureAlgorithm: alg, NotAfter: future, RawSubject: []byte(subject), RawIssuer: []byte(issuer)}
+	}
+	good := cert(x509.SHA256WithRSA, "leaf", "inter")
+	assert.NoError(t, checkLeaf(Parsed{Leaf: good, NotAfter: future}, now))
+	assert.ErrorIs(t, checkLeaf(Parsed{Leaf: cert(x509.SHA1WithRSA, "leaf", "inter"), NotAfter: future}, now), ErrWeak)
+	assert.ErrorIs(t, checkLeaf(Parsed{Leaf: cert(x509.UnknownSignatureAlgorithm, "leaf", "inter"), NotAfter: future}, now), ErrWeak)
+	weakInter := cert(x509.SHA1WithRSA, "inter", "root")
+	assert.ErrorIs(t, checkLeaf(Parsed{Leaf: good, Chain: []*x509.Certificate{weakInter}, NotAfter: future}, now), ErrWeak)
+	sha1Root := cert(x509.SHA1WithRSA, "root", "root")
+	assert.NoError(t, checkLeaf(Parsed{Leaf: good, Chain: []*x509.Certificate{cert(x509.SHA256WithRSA, "inter", "root"), sha1Root}, NotAfter: future}, now),
+		"a root's own signature does not matter")
+	assert.ErrorIs(t, checkLeaf(Parsed{Leaf: good, NotAfter: now}, now), ErrExpired)
 }

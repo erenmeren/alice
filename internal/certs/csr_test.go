@@ -61,7 +61,7 @@ func TestKeyPEMIsPKCS8(t *testing.T) {
 }
 
 func TestValidDNSName(t *testing.T) {
-	for in, want := range map[string]bool{"www.example.test": true, "*.example.test": true, "a-b.c": true, "localhost": true,
+	for in, want := range map[string]bool{"www.example.test": true, "*.example.test": true, "*.com": false, "*.": false, "a-b.c": true, "localhost": true,
 		"": false, "bad name": false, "a..b": false, "-a.b": false, "a.b-": false, "*.*.b": false, "a.*.b": false,
 		"ÖRNEK.com": false, strings.Repeat("a", 64) + ".b": false} {
 		assert.Equal(t, want, ValidDNSName(in), in)

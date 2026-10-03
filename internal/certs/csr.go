@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"io"
+	"strings"
 	"time"
 
 	"alice/internal/secrets"
@@ -30,6 +31,9 @@ func ValidDNSName(s string) bool {
 	rest := s
 	if len(s) > 2 && s[:2] == "*." {
 		rest = s[2:]
+		if !strings.Contains(rest, ".") {
+			return false // "*.com" would cover a whole top-level domain
+		}
 	}
 	start := 0
 	for i := 0; i <= len(rest); i++ {
@@ -113,22 +117,18 @@ func ValidateSigned(certPEM []byte, key KeyInfo, now time.Time, roots *x509.Cert
 	if err != nil {
 		return Parsed{}, false, err
 	}
-	var leaf *x509.Certificate
-	idx := -1
-	for i, c := range all {
-		if describe(c, nil).PublicKeySHA256 == key.PublicKeySHA256 {
-			leaf, idx = c, i
-			break
-		}
-	}
-	if leaf == nil {
+	idx := pickLeaf(all, now, func(c *x509.Certificate) bool {
+		return describe(c, nil).PublicKeySHA256 == key.PublicKeySHA256
+	})
+	if idx < 0 {
 		return Parsed{}, false, ErrCSRMismatch
 	}
+	leaf := all[idx]
 	if err := checkPublicKey(leaf.PublicKey); err != nil {
 		return Parsed{}, false, err
 	}
 	others := append(append([]*x509.Certificate(nil), all[:idx]...), all[idx+1:]...)
-	p := describe(leaf, orderChain(leaf, others))
+	p := describe(leaf, orderChain(leaf, others, now))
 	if err := checkLeaf(p, now); err != nil {
 		return Parsed{}, false, err
 	}
