@@ -72,7 +72,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   record is restored, for example from a backup. After a deleted record, Alice created a new Installation ID: send
   it to your vendor for a license.
 - **Alice logs "this build has no build time".** The image was built without `ALICE_BUILD_TIME` (for example with a
-  plain `docker compose build`). Rebuild with `make up` or `make image`; see `docs/dev/getting-started.md`.
+  plain `docker compose build`). Rebuild with `make up`; see `docs/dev/getting-started.md`.
 - **Every upload says "This license was issued with a key this version of Alice does not know."** If this happens
   with every file from your vendor, the build has no vendor key (`alice license keys` says so): install the
   vendor's release build.

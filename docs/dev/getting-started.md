@@ -29,6 +29,11 @@ Always build the image through `make up`, `make e2e-up` or `make image`: they pa
 Alice then starts with the warning "this build has no build time, …". To build with Compose directly, run
 `ALICE_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose -f deploy/docker-compose.yml --env-file deploy/.env build`.
 
+`make image` (and `make image-scan`, which builds and scans it) tags the image `alice:ci` only; `make
+IMAGE_TAG=<version> image` chooses another tag. It refuses `IMAGE_TAG=dev` and never writes `alice:dev`, the tag
+the `make up` stack runs, so `make image` and `make ci` never change the image of your running stack. `make up`
+is the only target that builds `alice:dev`; the e2e stack runs `alice:e2e`.
+
 The setup code works only while no administrator exists. `make setup-token` always issues a new code and
 invalidates the previous one. After the first administrator is created, sign in with the username,
 password and the 6-digit code from your authenticator app.

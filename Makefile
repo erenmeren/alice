@@ -87,9 +87,15 @@ helper: ## Build the static alice-helper for Linux amd64 and arm64 into bin/ wit
 
 COMPOSE := docker compose -f deploy/docker-compose.yml --env-file deploy/.env
 
+# make image builds alice:$(IMAGE_TAG) only. It never writes alice:dev, the tag the make up stack
+# runs (image: alice:$${ALICE_VERSION:-dev}), so a CI build cannot replace the image of a running
+# installation on the next "docker compose up". Pass IMAGE_TAG=<version> to tag a release build.
+IMAGE_TAG ?= ci
+
 .PHONY: image
-image: ## Build the alice container image
-	docker build -f deploy/Dockerfile --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t alice:$(VERSION) -t alice:dev .
+image: ## Build the alice container image as alice:$(IMAGE_TAG) (default alice:ci; never alice:dev)
+	@[ "$(IMAGE_TAG)" != dev ] || { echo "make image never writes alice:dev (the make up stack's tag); use make up"; exit 1; }
+	docker build -f deploy/Dockerfile --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t alice:$(IMAGE_TAG) .
 
 .PHONY: up
 up: ## Build and start Alice with PostgreSQL (https://localhost)
@@ -177,7 +183,7 @@ fs-scan: ## Scan the source tree for HIGH/CRITICAL vulnerabilities and secrets (
 
 .PHONY: image-scan
 image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
-	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:$(TRIVY_VERSION) image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed alice:dev
+	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:$(TRIVY_VERSION) image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed alice:$(IMAGE_TAG)
 
 .PHONY: ci
 ci: lint test coverage build release-symcheck i18n-check web-lint web-test vuln secrets-scan fs-scan e2e-up e2e-hardening-check e2e image-scan ## Run the full CI pipeline locally
