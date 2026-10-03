@@ -198,7 +198,7 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL A
 		if res.Nginx != nil {
 			f.Nginx = mergeNginxFacts(f.Nginx, *res.Nginx)
 			if configUsable(res.Nginx) {
-				cs, events, err := s.reconcileLocations(ctx, tx, t, res.Certificates, scanCoversLocations(res), now)
+				cs, events, err := s.reconcileLocations(ctx, tx, t, res.Certificates, listsEveryLocation(res), now)
 				if err != nil {
 					return err
 				}

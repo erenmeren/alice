@@ -77,6 +77,17 @@ func locationRows(t *testing.T, h *harness, target uuid.UUID, without ...string)
 	return out
 }
 
+// nginxTarget adds a connected target of the Nginx type (the certificate half is reconciled only
+// for those). The harness has no nginx provider, so the type is set as the owner.
+func nginxTarget(t *testing.T, h *harness, a inventory.Actor, name string) inventory.Target {
+	t.Helper()
+	tg := okTarget(t, h, a, name)
+	_, err := h.db.Owner.Exec(h.ctx, "UPDATE targets SET type = 'nginx' WHERE id = $1", tg.ID)
+	require.NoError(t, err)
+	tg.Type = inventory.TypeNginx
+	return tg
+}
+
 func withRoots(pool *x509.CertPool) harnessOption {
 	return func(c *inventory.Config) { c.Roots = pool }
 }
@@ -84,7 +95,7 @@ func withRoots(pool *x509.CertPool) harnessOption {
 func TestReconcileStoresCertificatesAndLocations(t *testing.T) {
 	h := newHarness(t)
 	admin := h.user("ada", rbac.Admin, "")
-	web1, web2 := okTarget(t, h, admin, "web-01"), okTarget(t, h, admin, "web-02")
+	web1, web2 := nginxTarget(t, h, admin, "web-01"), nginxTarget(t, h, admin, "web-02")
 	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
 	shared := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
 	for _, tg := range []inventory.Target{web1, web2} {
@@ -156,7 +167,7 @@ func TestReconcileStoresCertificatesAndLocations(t *testing.T) {
 func TestReconcileIsOrderIndependent(t *testing.T) {
 	h := newHarness(t)
 	admin := h.user("ada", rbac.Admin, "")
-	web := okTarget(t, h, admin, "web-01")
+	web := nginxTarget(t, h, admin, "web-01")
 	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
 	var found []providers.DiscoveredCertificate
 	for i := range 6 {
@@ -178,7 +189,7 @@ func TestReconcileIsOrderIndependent(t *testing.T) {
 func TestReconcileMissingChangedOutsideAndInvalidConfiguration(t *testing.T) {
 	h := newHarness(t)
 	admin := h.user("ada", rbac.Admin, "")
-	web := okTarget(t, h, admin, "web-01")
+	web := nginxTarget(t, h, admin, "web-01")
 	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
 	a, b, a2 := ca.Issue(pki.Opts{CommonName: "a.example.test"}, h.clock.Now()), ca.Issue(pki.Opts{CommonName: "b.example.test"}, h.clock.Now()),
 		ca.Issue(pki.Opts{CommonName: "a.example.test"}, h.clock.Now())
@@ -254,12 +265,12 @@ func TestReconcileMissingChangedOutsideAndInvalidConfiguration(t *testing.T) {
 	assert.Equal(t, 1, h.audits("location.changed_outside"))
 }
 
-// Requirement: locations are marked missing only from a result that covers them (a valid Nginx
-// configuration in a complete scan); any other result leaves every known location as it is.
+// Requirement: a result without a usable Nginx configuration (SSH only, a configuration error
+// class, Nginx not found) leaves every known location exactly as it is; the facts say why.
 func TestReconcileNeverDestroysOnABadScan(t *testing.T) {
 	h := newHarness(t)
 	admin := h.user("ada", rbac.Admin, "")
-	web := okTarget(t, h, admin, "web-01")
+	web := nginxTarget(t, h, admin, "web-01")
 	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
 	a, b := ca.Issue(pki.Opts{CommonName: "a.example.test", SANs: []string{"a.example.test"}}, h.clock.Now()),
 		ca.Issue(pki.Opts{CommonName: "b.example.test", SANs: []string{"b.example.test"}}, h.clock.Now())
@@ -276,11 +287,9 @@ func TestReconcileNeverDestroysOnABadScan(t *testing.T) {
 	untrusted := &providers.NginxFacts{Found: true, ConfigError: providers.ConfigErrUntrusted, ConfigErrorReason: providers.ConfigReasonNotRootControlled,
 		ConfigErrorFile: "/etc/nginx/conf.d/x.conf"}
 	cases := []struct {
-		name     string
-		res      providers.DiscoveryResult
-		newOne   bool // the new location c is stored (a scan of a valid configuration that is incomplete)
-		facts    *providers.NginxFacts
-		warnings bool
+		name  string
+		res   providers.DiscoveryResult
+		facts *providers.NginxFacts
 	}{
 		{name: "ssh only", res: providers.DiscoveryResult{SSHD: sshdRead, Certificates: changed}},
 		{name: "syntax error", res: providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigError: providers.ConfigErrSyntax}},
@@ -291,41 +300,89 @@ func TestReconcileNeverDestroysOnABadScan(t *testing.T) {
 			Certificates: changed}},
 		{name: "valid flag with an error class", res: providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigValid: true,
 			ConfigError: providers.ConfigErrUnsupported}, Certificates: changed}},
-		{name: "nginx not found", res: providers.DiscoveryResult{Nginx: &providers.NginxFacts{ConfigValid: true}, Certificates: changed}},
-		{name: "partial", res: providers.DiscoveryResult{Nginx: nginxOK, Partial: true, SSHD: sshdRead, Certificates: changed}, newOne: true},
-		{name: "list truncated", res: providers.DiscoveryResult{Nginx: nginxOK, Certificates: changed,
-			Warnings: []providers.Warning{{Code: providers.WarnListTruncated, Params: map[string]string{}}}}, newOne: true},
-		{name: "too many files", res: providers.DiscoveryResult{Nginx: nginxOK, Certificates: changed, SSHD: sshdRead,
-			Warnings: []providers.Warning{{Code: providers.WarnTooManyFiles, Params: map[string]string{}}}}, newOne: true, warnings: true},
+		{name: "nginx not found", res: providers.DiscoveryResult{Nginx: &providers.NginxFacts{ConfigValid: true}, Certificates: changed},
+			facts: &providers.NginxFacts{ConfigValid: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h.clock.Advance(time.Hour)
 			sum, err := h.svc.Reconcile(h.ctx, web.ID, tc.res)
 			require.NoError(t, err)
-			assert.Zero(t, sum.MissingLocations)
-			assert.Equal(t, known, locationRows(t, h, web.ID)[:2], "the known locations are untouched")
+			assert.Zero(t, sum.MissingLocations+sum.NewLocations+sum.Locations)
+			assert.Equal(t, known, locationRows(t, h, web.ID), "the known locations are untouched, nothing new is stored")
 			assert.Zero(t, h.audits("location.changed_outside"))
-			paths := byPath(t, h, web.ID, true)
-			_, stored := paths["/etc/nginx/ssl/c.crt"]
-			assert.Equal(t, tc.newOne, stored)
-			if tc.newOne {
-				assert.Equal(t, 1, sum.NewLocations)
-				_, err := h.db.Owner.Exec(h.ctx, "DELETE FROM certificate_locations WHERE cert_path = '/etc/nginx/ssl/c.crt'")
-				require.NoError(t, err)
-			}
 			got, err := h.svc.GetTarget(h.ctx, web.ID)
 			require.NoError(t, err)
 			if tc.facts != nil {
 				assert.Equal(t, tc.facts, got.Facts.Nginx, "the facts say why")
 			}
-			if tc.warnings {
-				assert.Equal(t, providers.WarnTooManyFiles, got.Facts.Warnings[0].Code)
+		})
+	}
+}
+
+// Controller ruling (fix round 1): a usable configuration updates every location it reports and
+// inserts new ones, whatever else the scan says; only marking a known location missing needs the
+// whole list of locations, which only locations_dropped denies. Partial (an SSH file),
+// list_truncated (names, listens or servers cut inside a location) and too_many_files (the
+// helper's file descriptions cut) never leave a location out.
+func TestReconcileIncompleteScansUpdateAndMarkMissingOnlyFromTheWholeList(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	a, b := ca.Issue(pki.Opts{CommonName: "a.example.test", SANs: []string{"a.example.test"}}, h.clock.Now()),
+		ca.Issue(pki.Opts{CommonName: "b.example.test", SANs: []string{"b.example.test"}}, h.clock.Now())
+	a2 := ca.Issue(pki.Opts{CommonName: "a.example.test", SANs: []string{"a.example.test"}}, h.clock.Now())
+	cert := ca.Issue(pki.Opts{CommonName: "c.example.test", SANs: []string{"c.example.test"}}, h.clock.Now())
+	locA, locB := cl("/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key", "a.example.test"), cl("/etc/nginx/ssl/b.crt", "/etc/nginx/ssl/b.key", "b.example.test")
+	locC := cl("/etc/nginx/ssl/c.crt", "/etc/nginx/ssl/c.key", "c.example.test")
+	warn := func(code string) []providers.Warning { return []providers.Warning{{Code: code, Params: map[string]string{}}} }
+	for i, tc := range []struct {
+		name        string
+		res         providers.DiscoveryResult
+		markMissing bool
+	}{
+		{name: "partial", res: providers.DiscoveryResult{Partial: true, SSHD: sshdRead}, markMissing: true},
+		{name: "list truncated", res: providers.DiscoveryResult{Warnings: warn(providers.WarnListTruncated)}, markMissing: true},
+		{name: "too many files", res: providers.DiscoveryResult{SSHD: sshdRead, Warnings: warn(providers.WarnTooManyFiles)}, markMissing: true},
+		{name: "locations dropped", res: providers.DiscoveryResult{Warnings: warn(providers.WarnLocationsDropped)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			web := nginxTarget(t, h, admin, fmt.Sprintf("web-%02d", i))
+			_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK,
+				Certificates: []providers.DiscoveredCertificate{dc(locA, a), dc(locB, b)}})
+			require.NoError(t, err)
+			before := h.audits("location.changed_outside")
+			res := tc.res
+			res.Nginx, res.Certificates = nginxOK, []providers.DiscoveredCertificate{dc(locA, a2), dc(locC, cert)}
+			sum, err := h.svc.Reconcile(h.ctx, web.ID, res)
+			require.NoError(t, err)
+			assert.Equal(t, 1, sum.NewLocations)
+			paths := byPath(t, h, web.ID, true)
+			require.Contains(t, paths, "/etc/nginx/ssl/c.crt")
+			assert.Equal(t, pki.Fingerprint(a2.Cert), paths["/etc/nginx/ssl/a.crt"].Certificate.Fingerprint, "the reported location is updated")
+			assert.NotNil(t, paths["/etc/nginx/ssl/a.crt"].ChangedOutsideAt)
+			assert.Equal(t, before+1, h.audits("location.changed_outside"))
+			if tc.markMissing {
+				assert.Equal(t, 1, sum.MissingLocations)
+				assert.NotNil(t, paths["/etc/nginx/ssl/b.crt"].MissingSince)
+			} else {
+				assert.Zero(t, sum.MissingLocations)
+				assert.Nil(t, paths["/etc/nginx/ssl/b.crt"].MissingSince, "a list with locations left out proves nothing")
 			}
 		})
 	}
-	// A failed scan never reaches Reconcile (the job fails); nothing above marked anything.
-	assert.Equal(t, 0, h.count("SELECT count(*) FROM certificate_locations WHERE missing_since IS NOT NULL"))
+
+	// A missing location that comes back in a partial scan is no longer missing.
+	web := nginxTarget(t, h, admin, "web-back")
+	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{dc(locA, a), dc(locB, b)}})
+	require.NoError(t, err)
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{dc(locA, a)}})
+	require.NoError(t, err)
+	require.NotNil(t, byPath(t, h, web.ID, true)["/etc/nginx/ssl/b.crt"].MissingSince)
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Partial: true, SSHD: sshdRead,
+		Certificates: []providers.DiscoveredCertificate{dc(locA, a), dc(locB, b)}})
+	require.NoError(t, err)
+	assert.Nil(t, byPath(t, h, web.ID, true)["/etc/nginx/ssl/b.crt"].MissingSince)
 }
 
 // A certificates-only result says nothing about SSH: stored sshd, host-key, account and warning
@@ -333,7 +390,7 @@ func TestReconcileNeverDestroysOnABadScan(t *testing.T) {
 func TestReconcileHalvesKeepTheOtherHalf(t *testing.T) {
 	h := newHarness(t)
 	admin := h.user("ada", rbac.Admin, "")
-	web := okTarget(t, h, admin, "web-01")
+	web := nginxTarget(t, h, admin, "web-01")
 	hk := providers.DiscoveredHostKey{KeyType: "ssh-ed25519", Bits: 256, Fingerprint: "SHA256:host"}
 	ssh := providers.DiscoveryResult{SSHD: sshdRead, HostKeys: []providers.DiscoveredHostKey{hk}, ReadFiles: []string{deployFile},
 		SSHKeys:   []providers.DiscoveredSSHKey{dk("deploy", deployFile, 1, "SHA256:dep0000000000000000000000000000000000000000", "x")},
@@ -375,7 +432,7 @@ func TestReconcileHalvesKeepTheOtherHalf(t *testing.T) {
 
 func TestReconcileUnsupportedLocationsAndWarnings(t *testing.T) {
 	h := newHarness(t)
-	web := okTarget(t, h, h.user("ada", rbac.Admin, ""), "web-01")
+	web := nginxTarget(t, h, h.user("ada", rbac.Admin, ""), "web-01")
 	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
 	expired := ca.Issue(pki.Opts{CommonName: "old.example.test", SANs: []string{"old.example.test"},
 		NotBefore: h.clock.Now().AddDate(0, -3, 0), NotAfter: h.clock.Now().Add(-time.Hour)}, h.clock.Now())
@@ -416,7 +473,7 @@ func TestReconcileStoresTheBetterChain(t *testing.T) {
 	roots := x509.NewCertPool()
 	roots.AddCert(ca.Root)
 	h := newHarness(t, withRoots(roots))
-	web := okTarget(t, h, h.user("ada", rbac.Admin, ""), "web-01")
+	web := nginxTarget(t, h, h.user("ada", rbac.Admin, ""), "web-01")
 	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
 	loc := cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test")
 	leafOnly := providers.DiscoveredCertificate{Location: loc, PEMChain: leaf.CertPEM, FileSHA256: sha(leaf.CertPEM)}
@@ -449,7 +506,7 @@ func TestReconcileStoresTheBetterChain(t *testing.T) {
 func TestReconcileConcurrentTargetsSharingCertificates(t *testing.T) {
 	h := newHarness(t)
 	admin := h.user("ada", rbac.Admin, "")
-	targets := []inventory.Target{okTarget(t, h, admin, "web-01"), okTarget(t, h, admin, "web-02"), okTarget(t, h, admin, "web-03")}
+	targets := []inventory.Target{nginxTarget(t, h, admin, "web-01"), nginxTarget(t, h, admin, "web-02"), nginxTarget(t, h, admin, "web-03")}
 	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
 	var found []providers.DiscoveredCertificate
 	for i := range 12 {
@@ -487,7 +544,7 @@ func TestReconcileConcurrentTargetsSharingCertificates(t *testing.T) {
 func TestReconcileHostileDiscoveryData(t *testing.T) {
 	h := newHarness(t)
 	admin := h.user("ada", rbac.Admin, "")
-	web := okTarget(t, h, admin, "web-01")
+	web := nginxTarget(t, h, admin, "web-01")
 	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
 	leaf := ca.Issue(pki.Opts{CommonName: "nul\x00cn.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
 	other := ca.Issue(pki.Opts{CommonName: "other.example.test"}, h.clock.Now())
@@ -616,7 +673,7 @@ func TestReconcileHostileDiscoveryData(t *testing.T) {
 func TestListCertificatesFilters(t *testing.T) {
 	h := newHarness(t)
 	admin := h.user("ada", rbac.Admin, "")
-	web1, web2 := okTarget(t, h, admin, "web-01"), okTarget(t, h, admin, "web-02")
+	web1, web2 := nginxTarget(t, h, admin, "web-01"), nginxTarget(t, h, admin, "web-02")
 	now := h.clock.Now()
 	ca := pki.NewCA("Inv", pki.ECDSA256, now)
 	// The SANs are ASCII (IA5String): the dotted capital I is only in a subject CN.
@@ -727,7 +784,7 @@ VALUES ($1, $2, 'uploaded.example.test', $3, $4, 'ecdsa', $5, $6, 'uploaded', 'S
 func TestGetCertificateAndLocations(t *testing.T) {
 	h := newHarness(t)
 	admin := h.user("ada", rbac.Admin, "")
-	web1, web2 := okTarget(t, h, admin, "web-01"), okTarget(t, h, admin, "web-02")
+	web1, web2 := nginxTarget(t, h, admin, "web-01"), nginxTarget(t, h, admin, "web-02")
 	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
 	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
 	for _, tg := range []inventory.Target{web1, web2} {

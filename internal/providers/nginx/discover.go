@@ -292,8 +292,9 @@ func convert(d helperproto.NginxDumpResponse) ([]providers.DiscoveredCertificate
 	}
 	warns, cutWritable := dumpWarnings(d, out)
 	truncated = truncated || cutWritable
-	if tooMany && !slices.ContainsFunc(warns, func(w providers.Warning) bool { return w.Code == providers.WarnTooManyFiles }) {
-		warns = append(warns, warning(providers.WarnTooManyFiles))
+	if tooMany {
+		// Locations were left out: inventory must not read the list as every location of the server.
+		warns = append(warns, warning(providers.WarnLocationsDropped))
 	}
 	if truncated {
 		warns = append(warns, warning(providers.WarnListTruncated))

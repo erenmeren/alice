@@ -123,12 +123,14 @@ func TestPrepareLocation(t *testing.T) {
 
 func TestScanCoverage(t *testing.T) {
 	valid := &providers.NginxFacts{Found: true, ConfigValid: true}
-	assert.True(t, scanCoversLocations(providers.DiscoveryResult{Nginx: valid}))
-	assert.True(t, scanCoversLocations(providers.DiscoveryResult{Nginx: valid, Warnings: []providers.Warning{{Code: "stream_tls"}}}))
-	assert.False(t, scanCoversLocations(providers.DiscoveryResult{}))
-	assert.False(t, scanCoversLocations(providers.DiscoveryResult{Nginx: valid, Partial: true}))
-	assert.False(t, scanCoversLocations(providers.DiscoveryResult{Nginx: valid, Warnings: []providers.Warning{{Code: providers.WarnListTruncated}}}))
-	assert.False(t, scanCoversLocations(providers.DiscoveryResult{Nginx: valid, Warnings: []providers.Warning{{Code: providers.WarnTooManyFiles}}}))
+	assert.True(t, listsEveryLocation(providers.DiscoveryResult{Nginx: valid}))
+	for _, code := range []string{"stream_tls", providers.WarnListTruncated, providers.WarnTooManyFiles} {
+		assert.True(t, listsEveryLocation(providers.DiscoveryResult{Nginx: valid, Warnings: []providers.Warning{{Code: code}}}), code)
+	}
+	assert.True(t, listsEveryLocation(providers.DiscoveryResult{Nginx: valid, Partial: true}), "Partial is about SSH files")
+	assert.False(t, listsEveryLocation(providers.DiscoveryResult{}))
+	assert.False(t, listsEveryLocation(providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true}}))
+	assert.False(t, listsEveryLocation(providers.DiscoveryResult{Nginx: valid, Warnings: []providers.Warning{{Code: providers.WarnLocationsDropped}}}))
 	assert.False(t, configUsable(&providers.NginxFacts{Found: true}))
 	assert.False(t, configUsable(&providers.NginxFacts{ConfigValid: true}))
 	assert.False(t, configUsable(&providers.NginxFacts{Found: true, ConfigValid: true, ConfigError: providers.ConfigErrSyntax}))

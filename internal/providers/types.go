@@ -290,6 +290,10 @@ const (
 	// WarnListTruncated: Alice cut a list of the dump at its bound (server names, listens or
 	// servers of a location, writable files); what is shown is incomplete.
 	WarnListTruncated = "list_truncated"
+	// WarnLocationsDropped: Alice left certificate locations of the dump out (more than
+	// helperproto.MaxNginxFiles): the list is not every location of the server, so inventory marks
+	// none missing. Only the provider emits it (too_many_files is the helper's own warning).
+	WarnLocationsDropped = "locations_dropped"
 )
 
 // VerifyOptions are a location's verification settings (Administrator, R38 item 6).

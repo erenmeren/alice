@@ -321,6 +321,13 @@ func TestConvertLocationCountIsBounded(t *testing.T) {
 	}
 	got, warns := convert(validDump(servers))
 	assert.Len(t, got, helperproto.MaxNginxFiles)
+	assert.Equal(t, []string{providers.WarnLocationsDropped}, warningCodes(warns), "locations were left out: inventory marks nothing missing")
+
+	// The helper's own too_many_files (its file descriptions cut) is passed on; no location was left out.
+	d := validDump(servers[:3])
+	d.Warnings = []string{providers.WarnTooManyFiles}
+	got, warns = convert(d)
+	assert.Len(t, got, 3)
 	assert.Equal(t, []string{providers.WarnTooManyFiles}, warningCodes(warns))
 }
 

@@ -260,13 +260,15 @@ func locationWarnings(reported, added []string) []string {
 	return append(out, added...)
 }
 
-// scanCoversLocations reports whether a discovery result describes every certificate location of
-// the target, so that a known location it does not name is gone: a valid configuration read in
-// full (Nginx found, valid, no configuration error class), no failed source (Partial) and no list
-// cut at a bound (list_truncated, too_many_files: some location may be absent).
-func scanCoversLocations(res providers.DiscoveryResult) bool {
-	return configUsable(res.Nginx) && !res.Partial && !slices.ContainsFunc(res.Warnings, func(w providers.Warning) bool {
-		return w.Code == providers.WarnListTruncated || w.Code == providers.WarnTooManyFiles
+// listsEveryLocation reports whether a discovery result names every certificate location of the
+// target, so that a known location it does not name is gone: a usable configuration (configUsable)
+// from which the provider left no location out (locations_dropped). Partial (an SSH file that
+// could not be read), list_truncated (names, listens or servers cut inside a location, or the
+// writable files) and too_many_files (the helper's file descriptions cut, the locations still
+// listed) leave no location out.
+func listsEveryLocation(res providers.DiscoveryResult) bool {
+	return configUsable(res.Nginx) && !slices.ContainsFunc(res.Warnings, func(w providers.Warning) bool {
+		return w.Code == providers.WarnLocationsDropped
 	})
 }
 
@@ -291,17 +293,15 @@ type existingLocation struct {
 // (called only for a usable configuration, see configUsable). Locations are identified by
 // (target, kind, certificate path) through the path hash of migration 00006; reported duplicates
 // keep the first. Certificates are upserted first, in fingerprint order. Then, by path:
-//   - a new location is inserted;
-//   - when complete (scanCoversLocations), a known location is updated with everything reported
-//     (missing_since cleared, version bumped only when a stored value changed), and the known
-//     locations not reported are marked missing (never deleted);
-//   - when not complete, known locations are left exactly as they are (their reported state may be
-//     cut short), and nothing is marked missing.
+//   - a new location is inserted, a known one is updated with everything reported (missing_since
+//     cleared; see updateLocation), whether or not the list is whole;
+//   - when markMissing (listsEveryLocation), the known locations not reported are marked missing
+//     (never deleted); otherwise nothing is marked missing.
 //
 // A location whose file now holds another certificate moves to it; when the old one was known and
 // the new one is not what Alice deployed there, changed_outside_at is set and an audit event is
 // returned for the caller to append last.
-func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, found []providers.DiscoveredCertificate, complete bool,
+func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, found []providers.DiscoveredCertificate, markMissing bool,
 	now time.Time) (certSummary, []audit.Event, error) {
 	var sum certSummary
 	var items []preparedLocation
@@ -357,9 +357,6 @@ func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, f
 			continue
 		}
 		seen = append(seen, prev.id)
-		if !complete {
-			continue
-		}
 		changedOutside := prev.fingerprint != "" && fp != "" && fp != prev.fingerprint && fp != prev.deployed
 		if err := updateLocation(ctx, tx, prev.id, p, certID, fileSHA, keyType, changedOutside, now); err != nil {
 			return certSummary{}, nil, err
@@ -370,7 +367,7 @@ func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, f
 					"target_id": t.ID.String(), "cert_path": p.loc.CertPath, "fingerprint": fp, "previous_fingerprint": prev.fingerprint}})
 		}
 	}
-	if complete {
+	if markMissing {
 		tag, err := tx.Exec(ctx, `UPDATE certificate_locations SET missing_since = $3, version = version + 1
 WHERE target_id = $1 AND kind = $2 AND missing_since IS NULL AND NOT (id = ANY($4))`, t.ID, locationKind, now, seen)
 		if err != nil {

@@ -425,6 +425,7 @@ func TestDiscoverTooManyFiles(t *testing.T) {
 	}
 	res := discover(t, e, providers.DiscoverRequest{Certificates: true})
 	assert.Len(t, warningsOf(res.Warnings, providers.WarnTooManyFiles), 1)
+	assert.Len(t, warningsOf(res.Warnings, providers.WarnLocationsDropped), 1, "the default site makes 1001 locations: one is left out")
 	assert.Len(t, res.Certificates, helperproto.MaxNginxFiles, "bounded like the helper's file list")
 	for _, c := range res.Certificates {
 		if c.Location.KeyProblem == providers.CertProblemUnreadable {
