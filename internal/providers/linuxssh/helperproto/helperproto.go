@@ -93,6 +93,9 @@ const (
 	WarnMailTLS            = "mail_tls"             // TLS in mail {} is listed but not supported
 	WarnConfigFileWritable = "config_file_writable" // a configuration file can be changed by users other than root
 	WarnTooManyFiles       = "too_many_files"       // more referenced files than MaxNginxFiles
+	// WarnCertificateBlockDropped: a block labelled CERTIFICATE in a certificate file is not an
+	// X.509 certificate (or carries PEM headers); the helper dropped it and returned the others.
+	WarnCertificateBlockDropped = "certificate_block_dropped"
 )
 
 // Phase 4 subcommands (spec §12.3, R38 item 1). tls-probe runs without sudo (like version).
@@ -115,6 +118,9 @@ const (
 	CodeBusy          = "BUSY"            // another nginx-deploy or nginx-restore holds the lock
 	CodeUnknownOp     = "UNKNOWN_OP"      // nginx-restore: no journal for this operation
 	CodeProbeFailed   = "PROBE_FAILED"    // tls-probe could not connect or complete the handshake
+	// CodeOutputTooLarge: nginx-dump's answer would exceed NginxDumpOutput (exit 4); the helper
+	// never sends a truncated answer.
+	CodeOutputTooLarge = "OUTPUT_TOO_LARGE"
 )
 
 // MaxAccountNames bounds AuthKeysListResponse.Accounts (R38 item 20).

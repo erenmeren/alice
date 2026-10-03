@@ -10,10 +10,15 @@ import (
 	"context"
 	"io"
 	"log/syslog"
+	"net"
 	"os"
 	"os/exec"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
+
+	"alice/internal/providers/linuxssh/helperproto"
 )
 
 func main() {
@@ -31,6 +36,21 @@ func productionSys() *sys {
 		stdin:    os.Stdin,
 		stdout:   os.Stdout,
 		chown:    func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) },
+		runNginx: func(ctx context.Context, args ...string) ([]byte, []byte, error) {
+			return runProgram(ctx, nginxPath, helperproto.MaxNginxConfig, args...)
+		},
+		runSystemctl: func(ctx context.Context, args ...string) error {
+			_, _, err := runProgram(ctx, systemctlPath, 64<<10, args...)
+			return err
+		},
+		statfs: func(fd int) (int64, error) {
+			var st unix.Statfs_t
+			if err := unix.Fstatfs(fd, &st); err != nil {
+				return 0, err
+			}
+			return int64(st.Bavail) * st.Bsize, nil //nolint:gosec // G115: block counts fit an int64
+		},
+		dial: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 	}
 	s.syslog = func(subcommand, path string) { writeSyslog(s.sudoUserName(), subcommand, path) }
 	return s

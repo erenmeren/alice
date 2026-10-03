@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,9 +26,19 @@ type sys struct {
 	sudoUser func() string
 	now      func() time.Time
 	runSSHD  func(ctx context.Context, args ...string) ([]byte, error)
-	stdin    io.Reader
-	stdout   io.Writer
-	syslog   func(subcommand, path string)
+	// runNginx runs /usr/sbin/nginx with fixed arguments (-V, -T, -t) through runProgram; stdout is
+	// capped at helperproto.MaxNginxConfig, stderr at 64 KiB. A missing binary is an
+	// fs.ErrNotExist error.
+	runNginx func(ctx context.Context, args ...string) (stdout, stderr []byte, err error)
+	// runSystemctl runs /usr/bin/systemctl with fixed arguments (Task 6).
+	runSystemctl func(ctx context.Context, args ...string) error
+	// statfs returns the bytes available to root in the file system of a descriptor.
+	statfs func(fd int) (int64, error)
+	// dial opens the TCP connection of tls-probe.
+	dial   func(ctx context.Context, network, addr string) (net.Conn, error)
+	stdin  io.Reader
+	stdout io.Writer
+	syslog func(subcommand, path string)
 	// chown sets the owner of a file or directory the helper created, through its descriptor
 	// (tests record instead: they do not run as root).
 	chown func(f *os.File, uid, gid int) error

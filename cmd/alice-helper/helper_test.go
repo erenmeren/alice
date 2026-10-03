@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -109,8 +111,13 @@ broken line
 		sudoUser: func() string { return "alice-svc" },
 		now:      func() time.Time { return testNow },
 		runSSHD:  f.runSSHD,
-		stdin:    strings.NewReader(""),
-		stdout:   &f.out,
+		runNginx: func(context.Context, ...string) ([]byte, []byte, error) {
+			return nil, nil, &fs.PathError{Op: "fork/exec", Path: nginxPath, Err: fs.ErrNotExist}
+		},
+		statfs: func(int) (int64, error) { return 1 << 30, nil },
+		dial:   (&net.Dialer{}).DialContext,
+		stdin:  strings.NewReader(""),
+		stdout: &f.out,
 		syslog: func(sub, path string) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
@@ -219,6 +226,7 @@ func TestPrivilegedSubcommandsNeedRoot(t *testing.T) {
 	f.s.euid = func() int { return 1001 }
 	for _, args := range [][]string{
 		{"sshd-dump"}, {"hostkeys"}, {"authkeys-list"}, {"authkeys-read", "/home/deploy/.ssh/authorized_keys"},
+		{"nginx-dump"}, {"nginx-test"},
 	} {
 		code, m := f.run(args...)
 		assert.Equal(t, helperproto.ExitRefused, code, "%v", args)
@@ -234,7 +242,7 @@ func TestUnknownSubcommandAndUsage(t *testing.T) {
 	code, m := f.run()
 	assert.Equal(t, helperproto.ExitRefused, code)
 	assert.Equal(t, helperproto.CodeUsage, m["code"])
-	for _, sub := range []string{"nginx-dump", "install-cert", "sh", "--help", "VERSION"} {
+	for _, sub := range []string{"install-cert", "sh", "--help", "VERSION", "NGINX-DUMP", "nginx_dump", "nginx"} {
 		code, m = f.run(sub)
 		assert.Equal(t, helperproto.ExitRefused, code, sub)
 		assert.Equal(t, helperproto.CodeUnknownSubcommand, m["code"], sub)

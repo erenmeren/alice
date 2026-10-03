@@ -173,6 +173,8 @@ func TestNginxWarningCodes(t *testing.T) {
 	assert.Equal(t, "mail_tls", WarnMailTLS)
 	assert.Equal(t, "config_file_writable", WarnConfigFileWritable)
 	assert.Equal(t, "too_many_files", WarnTooManyFiles)
+	assert.Equal(t, "certificate_block_dropped", WarnCertificateBlockDropped)
+	assert.Equal(t, "OUTPUT_TOO_LARGE", CodeOutputTooLarge)
 }
 
 func TestValidPort(t *testing.T) {

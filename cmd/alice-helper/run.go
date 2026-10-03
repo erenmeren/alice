@@ -47,6 +47,8 @@ var commands = map[string]command{
 	helperproto.SubAuthKeysRead:  {privileged: true, handle: cmdAuthKeysRead},
 	helperproto.SubAuthKeysWrite: {privileged: true, handle: cmdAuthKeysWrite},
 	helperproto.SubCleanup:       {privileged: true, handle: cmdCleanup},
+	helperproto.SubNginxDump:     {privileged: true, handle: cmdNginxDump},
+	helperproto.SubNginxTest:     {privileged: true, handle: cmdNginxTest},
 }
 
 // commandBudget bounds one call. Alice gives authkeys-list, -read and -write 60 s (R37 item 17);
