@@ -570,12 +570,15 @@ func TestWriteRefusesInsecurePermissions(t *testing.T) {
 			assert.False(t, f.exists(helperproto.BackupRoot))
 		})
 	}
-	// Directories above the home are not checked for a file in the home (as sshd).
+	// sshd does not check the directories above the home, but the helper does (re-review item 1):
+	// a home below a directory others can write could be swapped for a link to /root.
 	f, _ := newWriteFixture(t)
 	f.write(keysPath, "old\n", 0o600)
 	require.NoError(t, os.Chmod(f.host("/home"), 0o777))
 	code, m := f.runWith("new\n", writeArgs(keysPath, hexOf("old\n"), op1)...)
-	assert.Equal(t, 0, code, "%v", m)
+	assert.Equal(t, helperproto.ExitRefused, code, "%v", m)
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
+	assert.Equal(t, "old\n", f.read(keysPath))
 }
 
 // C-1 for writes: after the scan resolved ~/.ssh/authorized_keys, ~/.ssh becomes a symlink to a

@@ -149,7 +149,12 @@ func (s *sys) candidateFor(a account, pattern string) (p string, c candidate, va
 		allowed = filepath.Dir(p)
 	}
 	dir, found := s.resolveNearest(allowed)
-	if !found || (!inHome && (dir != allowed || !s.rootControlled(allowed))) {
+	switch {
+	case !found:
+		return p, candidate{}, true, false
+	case inHome && !s.homeTrusted(a, home, dir):
+		return p, candidate{}, true, false
+	case !inHome && (dir != allowed || !s.rootControlled(allowed)):
 		return p, candidate{}, true, false
 	}
 	real, found := s.resolveNearest(p)
@@ -162,6 +167,31 @@ func (s *sys) candidateFor(a account, pattern string) (p string, c candidate, va
 	}
 	through := real != filepath.Join(dir, rel)
 	return p, candidate{acct: a, path: p, real: real, dir: dir, inHome: inHome, through: through}, true, true
+}
+
+// homeTrusted decides whether the home of a (home as in /etc/passwd, resolved its resolved form)
+// may hold candidates. The directories above the home must be root-controlled, or another user
+// could swap the home between the scan and the open (standard /home, /root and /var/lib/<x>
+// layouts are). When the home path goes through a symlink, the resolved home must also belong to
+// the account (root's own home excepted) and sit in a root-controlled directory: a user who can
+// write the directory of someone's home could otherwise point it at /root, and re-basing on the
+// resolved home would hide the symlink from throughOK (re-review item 1).
+func (s *sys) homeTrusted(a account, home, resolved string) bool {
+	if home != "/" && !s.rootControlled(filepath.Dir(home)) {
+		return false
+	}
+	if resolved == home {
+		return true
+	}
+	if resolved != "/" && !s.rootControlled(filepath.Dir(resolved)) {
+		return false
+	}
+	st, err := os.Lstat(s.host(resolved))
+	if err != nil || !st.IsDir() {
+		return false
+	}
+	uid, _ := owner(st)
+	return a.uid == 0 || uid == a.uid
 }
 
 // rootControlled reports whether every existing component of the guest directory dir, from dir

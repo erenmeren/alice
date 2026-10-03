@@ -165,8 +165,129 @@ func TestWriteWhenTheHomeIsASymlink(t *testing.T) {
 	f.mkdir("/data", 0o755)
 	require.NoError(t, os.Rename(f.host("/home/deploy"), f.host("/data/deploy")))
 	require.NoError(t, os.Symlink("../data/deploy", f.host("/home/deploy")))
-	f.write("/data/deploy/.ssh/authorized_keys", "old\n", 0o644) // root:root in a root .ssh
+	require.NoError(t, os.Chown(f.host("/data/deploy"), f.uid, f.uid)) // the resolved home is the user's
+	f.write("/data/deploy/.ssh/authorized_keys", "old\n", 0o644)       // root:root in a root .ssh
 	code, m := f.runWith("new\n", writeArgs(keysPath, hexOf("old\n"), op1)...)
 	require.Equal(t, 0, code, "%v", m)
 	assert.Equal(t, "new\n", f.read("/data/deploy/.ssh/authorized_keys"))
+}
+
+// addSvc adds the account svc (uid 1500) whose home /srv/homes/svc sits below /srv/homes.
+func (f *fixture) addSvc() {
+	f.t.Helper()
+	f.mkdir("/srv", 0o755)
+	f.mkdir("/srv/homes", 0o755)
+	f.write("/etc/passwd", f.read("/etc/passwd")+"svc:x:1500:1500::/srv/homes/svc:/bin/bash\n", 0o644)
+}
+
+// Re-review item 1: another user can write the directory that holds svc's home and replaces the
+// home with a symlink to /root. Root's keys must never be read, hashed or rewritten as svc's.
+func TestAttackHomeReplacedBySymlinkToRoot(t *testing.T) {
+	f, chowns := newWriteFixture(t)
+	f.addSvc()
+	f.mkdir("/root/.ssh", 0o700)
+	f.write("/root/.ssh/authorized_keys", "ssh-ed25519 ROOTKEY root@admin\n", 0o600)
+	require.NoError(t, os.Chmod(f.host("/srv/homes"), 0o777)) // eve may write it
+	require.NoError(t, os.Symlink(f.host("/root"), f.host("/srv/homes/svc")))
+	if os.Getuid() == 0 {
+		require.NoError(t, os.Chmod(f.host("/srv/homes"), 0o755))
+		require.NoError(t, os.Chown(f.host("/srv/homes"), 3000, 3000)) // owned by eve
+	}
+	const svcKeys = "/srv/homes/svc/.ssh/authorized_keys"
+
+	code, m := f.run("authkeys-read", svcKeys)
+	assert.Equal(t, helperproto.ExitRefused, code, "%v", m)
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
+	assert.NotContains(t, f.out.String(), "ROOTKEY")
+
+	_, m = f.run("authkeys-list") // root's own entry may show its hash; svc's entries never do
+	for _, fi := range filesOf(listUser(t, m, "svc")) {
+		assert.Equal(t, true, fi["unsupported"], "%v", fi)
+		assert.Equal(t, "", fi["sha256"])
+	}
+
+	code, m = f.runWith("ssh-ed25519 ATTACKER eve@evil\n", writeArgs(svcKeys, hexOf("ssh-ed25519 ROOTKEY root@admin\n"), op1)...)
+	assert.Equal(t, helperproto.ExitRefused, code, "%v", m)
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
+	assert.Equal(t, "ssh-ed25519 ROOTKEY root@admin\n", f.read("/root/.ssh/authorized_keys"))
+	assert.Empty(t, chowns())
+}
+
+// Re-review item 1: a real home below a directory others can write could be swapped between the
+// scan and the open, so it is not a candidate either; a root-controlled parent chain is required
+// for every home.
+func TestHomeBelowAWritableDirectoryIsNotACandidate(t *testing.T) {
+	f, _ := newWriteFixture(t)
+	f.write(keysPath, "mine\n", 0o600)
+	f.asUser("/home/deploy", "/home/deploy/.ssh", keysPath)
+	code, m := f.run("authkeys-read", keysPath)
+	require.Equal(t, 0, code, "a root-controlled parent chain: %v", m)
+
+	for _, dir := range []string{"/home", "/"} {
+		st, err := os.Stat(f.host(dir))
+		require.NoError(t, err)
+		require.NoError(t, os.Chmod(f.host(dir), 0o777))
+		code, m := f.run("authkeys-read", keysPath)
+		assert.Equal(t, helperproto.ExitRefused, code, dir)
+		assert.Equal(t, helperproto.CodePathNotAllowed, m["code"], dir)
+		_, m = f.run("authkeys-list")
+		assert.Equal(t, true, filesOf(listUser(t, m, "deploy"))[0]["unsupported"], dir)
+		require.NoError(t, os.Chmod(f.host(dir), st.Mode().Perm()))
+	}
+	if os.Getuid() != 0 {
+		return
+	}
+	require.NoError(t, os.Chown(f.host("/home"), 3000, 3000))
+	code, m = f.run("authkeys-read", keysPath)
+	assert.Equal(t, helperproto.ExitRefused, code, "a parent owned by another user")
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
+}
+
+// Re-review item 1 (root only): a symlinked home is accepted only when the resolved home belongs
+// to the account (or the account is root) and its own parent chain is root-controlled.
+func TestSymlinkedHomeMustBelongToTheAccount(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("needs root: the resolved home must belong to another account")
+	}
+	f := newFixture(t)
+	f.mkdir("/data", 0o755)
+	require.NoError(t, os.Rename(f.host("/home/deploy"), f.host("/data/deploy")))
+	require.NoError(t, os.Symlink("../data/deploy", f.host("/home/deploy")))
+	f.write("/data/deploy/.ssh/authorized_keys", "x\n", 0o644)
+	require.NoError(t, os.Chown(f.host("/data/deploy"), 2000, 2000)) // someone else's directory
+	code, m := f.run("authkeys-read", keysPath)
+	assert.Equal(t, helperproto.ExitRefused, code, "%v", m)
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
+	require.NoError(t, os.Chown(f.host("/data/deploy"), f.uid, f.uid))
+	code, m = f.run("authkeys-read", keysPath)
+	assert.Equal(t, 0, code, "%v", m)
+	require.NoError(t, os.Chmod(f.host("/data"), 0o777))
+	code, m = f.run("authkeys-read", keysPath)
+	assert.Equal(t, helperproto.ExitRefused, code, "the resolved home sits in a writable directory: %v", m)
+}
+
+// Re-review item 1, without root: a symlinked home is followed when the resolved home is the
+// account's and sits in a root-controlled directory; another account's directory, or one in a
+// writable directory, is refused.
+func TestSymlinkedHomeRules(t *testing.T) {
+	skipOddUID(t)
+	f := newFixture(t)
+	f.mkdir("/data", 0o755)
+	require.NoError(t, os.Rename(f.host("/home/deploy"), f.host("/data/deploy")))
+	require.NoError(t, os.Symlink("../data/deploy", f.host("/home/deploy")))
+	f.write("/data/deploy/.ssh/authorized_keys", "mine\n", 0o600)
+	f.asUser("/data/deploy", "/data/deploy/.ssh", "/data/deploy/.ssh/authorized_keys")
+	code, m := f.run("authkeys-read", keysPath)
+	require.Equal(t, 0, code, "%v", m)
+
+	require.NoError(t, os.Chmod(f.host("/data"), 0o777))
+	code, m = f.run("authkeys-read", keysPath)
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"], "the resolved home sits in a writable directory: %d", code)
+	require.NoError(t, os.Chmod(f.host("/data"), 0o755))
+
+	// alice-svc (uid 998) whose home is linked to deploy's directory: not its own.
+	require.NoError(t, os.RemoveAll(f.host("/var/lib/alice-svc")))
+	require.NoError(t, os.Symlink("../../data/deploy", f.host("/var/lib/alice-svc")))
+	code, m = f.run("authkeys-read", "/var/lib/alice-svc/.ssh/authorized_keys")
+	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"], "another account's directory: %d", code)
 }
