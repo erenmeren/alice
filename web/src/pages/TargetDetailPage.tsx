@@ -252,7 +252,8 @@ export function TargetDetailPage() {
 // their own text; a missing parameter would show a raw {{placeholder}}, so a warning without its
 // details, and a code this version does not know, get a generic text plus the code.
 const WARNING_PARAMS: Record<string, string[]> = {
-  keys_managed_elsewhere: ['user'],
+  keys_managed_elsewhere: [],
+  keys_managed_elsewhere_user: ['user'],
   certificates_in_use: [],
   pubkey_disabled: [],
   sshd_unreadable: [],
@@ -270,6 +271,7 @@ const WARNING_PARAMS: Record<string, string[]> = {
 function warningKey(w: Warning): string {
   let code = w.code;
   if (code === 'unsupported_path' && !w.params.path) code = 'unsupported_path_unnamed';
+  if (code === 'keys_managed_elsewhere' && w.params.user) code = 'keys_managed_elsewhere_user';
   if (code === 'sshd_unreadable' && w.params.user) code = 'sshd_unreadable_user';
   const need = WARNING_PARAMS[code];
   if (!need) return 'warnings.unknown';

@@ -486,7 +486,8 @@
   },
   "warnings": {
     "file_unparseable": "Alice could not read the authorized_keys file {{path}} of {{user}}; its keys are not listed.",
-    "keys_managed_elsewhere": "The SSH server also asks a program (AuthorizedKeysCommand) for the keys of {{user}}, so the key files may not be the whole picture. Alice will not change keys here.",
+    "keys_managed_elsewhere": "The SSH server also asks a program (AuthorizedKeysCommand) for keys, so the key files may not be the whole picture. Alice will not change keys here.",
+    "keys_managed_elsewhere_user": "The SSH server also asks a program (AuthorizedKeysCommand) for the keys of {{user}}, so the key files may not be the whole picture. Alice will not change keys here.",
     "certificates_in_use": "SSH certificates are in use on this server. Alice manages plain keys only.",
     "pubkey_disabled": "Public key sign-in is turned off on this server.",
     "sshd_unreadable": "Could not read the SSH server settings; only the default key files were checked.",

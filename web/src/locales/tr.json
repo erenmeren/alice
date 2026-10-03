@@ -486,8 +486,9 @@
   },
   "warnings": {
     "file_unparseable": "Alice, {{user}} kullanıcısının {{path}} authorized_keys dosyasını okuyamadı; dosyadaki anahtarlar listelenmedi.",
-    "keys_managed_elsewhere": "SSH sunucusu {{user}} kullanıcısının anahtarlarını bir programdan (AuthorizedKeysCommand) da alıyor, bu yüzden anahtar dosyaları tablonun tamamı olmayabilir. Alice burada anahtarları değiştirmez.",
-    "certificates_in_use": "Bu sunucuda SSH sertifikaları kullanılıyor. Alice yalnızca düz anahtarları yönetir.",
+    "keys_managed_elsewhere": "SSH sunucusu anahtarları bir programdan (AuthorizedKeysCommand) da alıyor, bu yüzden anahtar dosyaları tüm anahtarları göstermeyebilir. Alice burada anahtarları değiştirmez.",
+    "keys_managed_elsewhere_user": "SSH sunucusu {{user}} kullanıcısının anahtarlarını bir programdan (AuthorizedKeysCommand) da alıyor, bu yüzden anahtar dosyaları tüm anahtarları göstermeyebilir. Alice burada anahtarları değiştirmez.",
+    "certificates_in_use": "Bu sunucuda SSH sertifikaları kullanılıyor. Alice yalnızca sertifikasız anahtarları yönetir.",
     "pubkey_disabled": "Bu sunucuda açık anahtarla oturum açma kapalı.",
     "sshd_unreadable": "SSH sunucusu ayarları okunamadı; yalnızca varsayılan anahtar dosyaları denetlendi.",
     "strict_modes": "İzinleri fazla açık olduğu için SSH sunucusu bu anahtar dosyasını yok sayıyor: {{path}}",

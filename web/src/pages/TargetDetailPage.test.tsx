@@ -236,6 +236,18 @@ describe('TargetDetailPage', () => {
     expect(screen.queryByText(/\{\{/)).not.toBeInTheDocument();
   });
 
+  it('words the server-wide keys-managed-elsewhere warning without a user', async () => {
+    onServer('operator', targetWith({ facts: { ...targetFixture.facts, warnings: [{ code: 'keys_managed_elsewhere', params: {} }] } }));
+    await renderRoute(path);
+    expect(
+      await screen.findByText(
+        'The SSH server also asks a program (AuthorizedKeysCommand) for keys, so the key files may not be the whole picture. Alice will not change keys here.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/without its details/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\{\{/)).not.toBeInTheDocument();
+  });
+
   it('finishes a started task in React StrictMode', async () => {
     onServer('operator');
     server.use(
@@ -264,13 +276,12 @@ describe('TargetDetailPage', () => {
     const warnings: Warning[] = [
       { code: 'made_up_by_a_newer_helper', params: {} },
       { code: 'strict_modes', params: {} },
-      { code: 'keys_managed_elsewhere', params: {} },
     ];
     onServer('operator', targetWith({ facts: { ...targetFixture.facts, warnings } }));
     await renderRoute(path);
     await screen.findByTestId('target-keys');
     expect(screen.getAllByText('Alice reported a note about this server that this version cannot describe.')).toHaveLength(1);
-    expect(screen.getAllByText('Alice reported a note about this server without its details.')).toHaveLength(2);
+    expect(screen.getAllByText('Alice reported a note about this server without its details.')).toHaveLength(1);
     expect(screen.getByText('made_up_by_a_newer_helper')).toBeInTheDocument();
     expect(screen.getByText('strict_modes')).toBeInTheDocument();
     expect(screen.queryByText(/\{\{/)).not.toBeInTheDocument();
