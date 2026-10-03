@@ -14,18 +14,20 @@ and Rocky Linux 9.
 The commands are one shell script. It stops at the first error and changes nothing after it. Running it again is
 safe.
 
-1. Check that it runs as root and that the file `./alice-helper` is in the current directory, then compare the
-   SHA-256 checksum of that file with the checksum built into this Alice version (for the server's processor). If
-   they differ, the script stops: the file is not the `alice-helper` of this Alice version. (A development build of
-   Alice without checksums prints a warning instead and installs the file unchecked.)
-2. Copy `alice-helper` to `/usr/local/libexec/alice-helper`, owned by root, mode 0755. Alice cannot change this
+1. Check that it runs as root and that the file `./alice-helper` is in the current directory. Copy it into a new
+   directory that only root can open (below `/var/lib/alice-helper`, removed again when the script ends), then
+   compare the SHA-256 checksum of that copy with the checksum built into this Alice version (for the server's
+   processor). If they differ, the script stops: the file is not the `alice-helper` of this Alice version. (A
+   development build of Alice without checksums prints a warning instead and installs the file unchecked.)
+2. Install the checked copy as `/usr/local/libexec/alice-helper`, owned by root, mode 0755. Alice cannot change this
    file; you update it yourself when a new Alice release asks for it ("helper outdated").
-3. Create the system user `alice-svc` (home `/var/lib/alice-svc`, shell `/bin/bash`) if it does not exist. If a user
-   `alice-svc` already exists with another home directory, the script stops. The account gets no password
-   (`usermod -p '*'`): nobody can sign in with a password, but the SSH server still accepts its key, also with
-   `UsePAM no`.
-4. Make `/var/lib/alice-svc` and `/var/lib/alice-svc/.ssh` belong to root (mode 0755), delete and re-create `.ssh`,
-   and write `/var/lib/alice-svc/.ssh/authorized_keys` (root:root, mode 0644) with exactly one line: Alice's public
+3. Create the system user `alice-svc` (home `/var/lib/alice-svc`, shell `/bin/bash`, no files from `/etc/skel`) if
+   it does not exist. If a user `alice-svc` already exists with another home directory, the script stops. The
+   account gets no password (`usermod -p '*'`): nobody can sign in with a password, but the SSH server still accepts
+   its key, also with `UsePAM no`.
+4. Make `/var/lib/alice-svc` and `/var/lib/alice-svc/.ssh` belong to root (mode 0755), delete everything else in
+   `/var/lib/alice-svc` (for example a `.bashrc` that an earlier version left there owned by `alice-svc`) and
+   re-create `.ssh`, and write `/var/lib/alice-svc/.ssh/authorized_keys` (root:root, mode 0644) with exactly one line: Alice's public
    key with the options `no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-pty,no-user-rc`. The account
    `alice-svc` itself cannot change this file. Running the script again replaces the file with that one line, so
    any other key you put there is removed.
@@ -54,8 +56,10 @@ server never gets the Nginx permissions. The helper of this release answers the 
 1. Get the helper. In a development checkout run `make helper`; it writes `bin/alice-helper-linux-amd64`,
    `bin/alice-helper-linux-arm64` and `bin/alice-helper.sha256`. (Release packages will ship the same files in a
    `helper/` directory.) Copy the file for the server's processor (`amd64` for x86_64, `arm64` for aarch64) to the
-   server as `alice-helper`, in an empty directory. You can compare it yourself: `sha256sum alice-helper` must print
-   the value from `alice-helper.sha256`; the setup commands check it again.
+   server as `alice-helper`, in a new directory that only you can write, for example one made with
+   `mkdir -m 700 ~/alice-setup` in your home. Do not use a shared directory such as `/tmp/alice`: another user of
+   the server could create it first and change the file. You can compare it yourself: `sha256sum alice-helper` must
+   print the value from `alice-helper.sha256`; the setup commands check it again.
 2. In Alice, sign in as an administrator and open **Servers**. Under **Prepare a server for Alice** choose the
    **Server type** and choose **Copy commands**. The commands contain Alice's public key; **Fingerprint of Alice's
    key** above them shows its fingerprint.

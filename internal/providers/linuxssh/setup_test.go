@@ -106,19 +106,26 @@ if [ ! -f ./alice-helper ]; then
     echo "Copy alice-helper from the Alice bundle into this directory first." >&2
     exit 1
 fi
+install -d -m 0700 -o root -g root /var/lib/alice-helper
+helper_dir=$(mktemp -d /var/lib/alice-helper/install.XXXXXX)
+trap 'rm -rf "$helper_dir"' EXIT
+cp ./alice-helper "$helper_dir/alice-helper"
 ` + goldenUnverified + `install -d -m 0755 -o root -g root /usr/local/libexec
-install -m 0755 -o root -g root ./alice-helper /usr/local/libexec/alice-helper
+install -m 0755 -o root -g root "$helper_dir/alice-helper" /usr/local/libexec/alice-helper
 if ! id alice-svc >/dev/null 2>&1; then
-    useradd --system --create-home --home-dir /var/lib/alice-svc --shell /bin/bash alice-svc
+    useradd --system --no-create-home --home-dir /var/lib/alice-svc --shell /bin/bash alice-svc
 fi
 if [ "$(getent passwd alice-svc | cut -d: -f6)" != /var/lib/alice-svc ]; then
     echo "The user alice-svc exists with a home directory other than /var/lib/alice-svc. Fix or remove it first." >&2
     exit 1
 fi
 usermod -p '*' alice-svc
+mkdir -p /var/lib/alice-svc
 chown -h root:root /var/lib/alice-svc
 chmod 0755 /var/lib/alice-svc
-rm -rf /var/lib/alice-svc/.ssh
+for f in /var/lib/alice-svc/* /var/lib/alice-svc/.[!.]* /var/lib/alice-svc/..?*; do
+    if [ -e "$f" ] || [ -L "$f" ]; then rm -rf -- "$f"; fi
+done
 install -d -m 0755 -o root -g root /var/lib/alice-svc/.ssh
 t=$(mktemp /var/lib/alice-svc/.ssh/.ak.XXXXXX)
 printf '%s\n' '` + line + `' >"$t"
@@ -221,6 +228,7 @@ func TestSudoersMatchesEveryBuiltCommand(t *testing.T) {
 	for _, bad := range []string{
 		"authkeys-list --all", "sshd-dump -f /tmp/x", "hostkeys x", "authkeys-read relative/path",
 		"cleanup /var/lib/alice-helper", "authkeys-write /x --op y", "version", "",
+		"authkeys-write /x --expect-sha256 absent --op y", // protocol 2: no --content-sha256
 	} {
 		for _, p := range patterns {
 			assert.False(t, sudoGlob(p, bad), "%q must not match %q", bad, p)
@@ -242,7 +250,8 @@ func TestSetupScriptNeverWritesThroughTheServiceUser(t *testing.T) {
 		order := []string{
 			"chown -h root:root /var/lib/alice-svc\n",
 			"chmod 0755 /var/lib/alice-svc\n",
-			"rm -rf /var/lib/alice-svc/.ssh\n",
+			"for f in /var/lib/alice-svc/* /var/lib/alice-svc/.[!.]* /var/lib/alice-svc/..?*; do\n",
+			"    if [ -e \"$f\" ] || [ -L \"$f\" ]; then rm -rf -- \"$f\"; fi\n",
 			"install -d -m 0755 -o root -g root /var/lib/alice-svc/.ssh\n",
 			"t=$(mktemp /var/lib/alice-svc/.ssh/.ak.XXXXXX)\n",
 			`>"$t"` + "\n",
@@ -256,7 +265,43 @@ func TestSetupScriptNeverWritesThroughTheServiceUser(t *testing.T) {
 			last = i
 		}
 		assert.Contains(t, script, "getent passwd alice-svc | cut -d: -f6")
+		// A-6: no /etc/skel file (a .bashrc bash sources for sshd commands) is ever owned by alice-svc.
+		assert.Contains(t, script, "useradd --system --no-create-home ")
+		assert.NotContains(t, script, "--create-home --")
+		assert.NotContains(t, script, "useradd --system -m")
 	}
+}
+
+// A-3: the helper is copied into a fresh root-only directory first; the check and the install use
+// that copy, never ./alice-helper again (someone who can write the current directory could swap
+// the file between them).
+func TestSetupScriptChecksAndInstallsAPrivateCopy(t *testing.T) {
+	withHelperSums(t, strings.Repeat("a1", 32), strings.Repeat("b2", 32))
+	script, err := SetupScript("linux", wantOptions+" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform", false)
+	require.NoError(t, err)
+	order := []string{
+		"install -d -m 0700 -o root -g root /var/lib/alice-helper\n",
+		"helper_dir=$(mktemp -d /var/lib/alice-helper/install.XXXXXX)\n",
+		"trap 'rm -rf \"$helper_dir\"' EXIT\n",
+		"cp ./alice-helper \"$helper_dir/alice-helper\"\n",
+		`"$helper_sha256" "$helper_dir/alice-helper" | sha256sum -c -`,
+		"install -m 0755 -o root -g root \"$helper_dir/alice-helper\" /usr/local/libexec/alice-helper\n",
+	}
+	last := -1
+	for _, step := range order {
+		i := strings.Index(script, step)
+		require.GreaterOrEqual(t, i, 0, "%q missing", step)
+		assert.Greater(t, i, last, "%q out of order", step)
+		last = i
+	}
+	for _, l := range strings.Split(script, "\n") {
+		l = strings.TrimSpace(l)
+		if strings.Contains(l, "./alice-helper") && !strings.HasPrefix(l, "echo ") {
+			assert.Contains(t, []string{"if [ ! -f ./alice-helper ]; then", `cp ./alice-helper "$helper_dir/alice-helper"`}, l,
+				"./alice-helper is only tested for and copied, never checked or installed itself")
+		}
+	}
+	assert.NotContains(t, script, "install -m 0755 -o root -g root ./alice-helper")
 }
 
 // withHelperSums sets the link-time helper checksums for one test.
@@ -279,8 +324,8 @@ func TestSetupScriptVerifiesTheHelperChecksum(t *testing.T) {
 	assert.Contains(t, script, `command -v sha256sum >/dev/null || { echo "sha256sum (coreutils) is required." >&2; exit 1; }`+"\n")
 	assert.Contains(t, script, "    x86_64) helper_sha256="+amd64+" ;;\n")
 	assert.Contains(t, script, "    aarch64) helper_sha256="+arm64+" ;;\n")
-	assert.Contains(t, script, `printf '%s  ./alice-helper\n' "$helper_sha256" | sha256sum -c - >/dev/null 2>&1`)
-	check, install := strings.Index(script, "sha256sum -c"), strings.Index(script, "install -m 0755 -o root -g root ./alice-helper")
+	assert.Contains(t, script, `printf '%s  %s\n' "$helper_sha256" "$helper_dir/alice-helper" | sha256sum -c - >/dev/null 2>&1`)
+	check, install := strings.Index(script, "sha256sum -c"), strings.Index(script, `install -m 0755 -o root -g root "$helper_dir/alice-helper"`)
 	require.GreaterOrEqual(t, check, 0)
 	assert.Less(t, check, install, "the helper is checked before it is installed")
 }
@@ -318,7 +363,7 @@ func TestHelperCheckRunsInAShell(t *testing.T) {
 	good := hex.EncodeToString(sum[:])
 	run := func(amd64, arm64 string) error {
 		block := helperCheck(amd64, arm64)
-		cmd := exec.Command("sh", "-c", "set -eu\n"+block+"echo checked\n")
+		cmd := exec.Command("sh", "-c", "set -eu\nhelper_dir=.\n"+block+"echo checked\n")
 		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()
 		if err == nil {

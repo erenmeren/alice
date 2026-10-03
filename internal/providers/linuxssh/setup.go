@@ -99,19 +99,26 @@ if [ ! -f ./alice-helper ]; then
     echo "Copy alice-helper from the Alice bundle into this directory first." >&2
     exit 1
 fi
+install -d -m 0700 -o root -g root /var/lib/alice-helper
+helper_dir=$(mktemp -d /var/lib/alice-helper/install.XXXXXX)
+trap 'rm -rf "$helper_dir"' EXIT
+cp ./alice-helper "$helper_dir/alice-helper"
 __HELPER_CHECK__install -d -m 0755 -o root -g root /usr/local/libexec
-install -m 0755 -o root -g root ./alice-helper /usr/local/libexec/alice-helper
+install -m 0755 -o root -g root "$helper_dir/alice-helper" /usr/local/libexec/alice-helper
 if ! id alice-svc >/dev/null 2>&1; then
-    useradd --system --create-home --home-dir /var/lib/alice-svc --shell /bin/bash alice-svc
+    useradd --system --no-create-home --home-dir /var/lib/alice-svc --shell /bin/bash alice-svc
 fi
 if [ "$(getent passwd alice-svc | cut -d: -f6)" != /var/lib/alice-svc ]; then
     echo "The user alice-svc exists with a home directory other than /var/lib/alice-svc. Fix or remove it first." >&2
     exit 1
 fi
 usermod -p '*' alice-svc
+mkdir -p /var/lib/alice-svc
 chown -h root:root /var/lib/alice-svc
 chmod 0755 /var/lib/alice-svc
-rm -rf /var/lib/alice-svc/.ssh
+for f in /var/lib/alice-svc/* /var/lib/alice-svc/.[!.]* /var/lib/alice-svc/..?*; do
+    if [ -e "$f" ] || [ -L "$f" ]; then rm -rf -- "$f"; fi
+done
 install -d -m 0755 -o root -g root /var/lib/alice-svc/.ssh
 t=$(mktemp /var/lib/alice-svc/.ssh/.ak.XXXXXX)
 printf '%s\n' '__LINE__' >"$t"
@@ -148,7 +155,7 @@ case "$(uname -m)" in
     aarch64) helper_sha256=__ARM64__ ;;
     *) echo "alice-helper is built for x86_64 and aarch64 only." >&2; exit 1 ;;
 esac
-if ! printf '%s  ./alice-helper\n' "$helper_sha256" | sha256sum -c - >/dev/null 2>&1; then
+if ! printf '%s  %s\n' "$helper_sha256" "$helper_dir/alice-helper" | sha256sum -c - >/dev/null 2>&1; then
     echo "./alice-helper is not the alice-helper of this Alice version (its SHA-256 checksum differs)." >&2
     echo "Copy alice-helper-linux-amd64 or alice-helper-linux-arm64 from the bundle of this Alice version as ./alice-helper." >&2
     exit 1
@@ -163,10 +170,10 @@ func helperSumsKnown() bool {
 	return sha256Hex.MatchString(helperSHA256LinuxAMD64) && sha256Hex.MatchString(helperSHA256LinuxARM64)
 }
 
-// helperCheck is the part of the setup script that checks ./alice-helper against the checksum of
-// this Alice version for the server's architecture (R37 item 2). Unless both checksums are well
-// formed it embeds neither and warns instead: a value that is not plain hex never reaches a root
-// script.
+// helperCheck is the part of the setup script that checks the root-private copy of ./alice-helper
+// ("$helper_dir/alice-helper") against the checksum of this Alice version for the server's
+// architecture (R37 item 2). Unless both checksums are well formed it embeds neither and warns
+// instead: a value that is not plain hex never reaches a root script.
 func helperCheck(amd64, arm64 string) string {
 	if !sha256Hex.MatchString(amd64) || !sha256Hex.MatchString(arm64) {
 		return helperUnverified
@@ -181,10 +188,16 @@ var errBadKeyLine = errors.New("linuxssh: the authorized_keys line cannot be emb
 // is installed only after visudo accepted it (a file name with a dot is ignored by sudo). The helper
 // is checked against the checksum of this Alice version before it is installed (helperCheck).
 //
+// The helper is first copied into a fresh root-only directory below /var/lib/alice-helper; that
+// copy is checked and installed, so whoever can write the directory the administrator ran the
+// script in cannot swap the file between the check and the install (A-3 of the final review).
+//
 // Running it again must be safe even if alice-svc is compromised: root never writes, chowns or
 // chmods a path inside a directory alice-svc can change (it could plant a symlink to
 // /etc/ld.so.preload there). The home and .ssh become root's (0755; sshd's StrictModes accepts
-// root-owned key files), .ssh is removed and recreated (rm never follows links), and the key is
+// root-owned key files). The account is created without /etc/skel files, and everything in the
+// home is removed on every run (rm never follows links), so no file alice-svc owns (a .bashrc
+// that bash sources for every command sshd runs) survives; .ssh is recreated and the key is
 // written to a fresh mktemp file in the root-owned .ssh and renamed into place. A pre-existing
 // alice-svc with another home is refused rather than reconfigured.
 //

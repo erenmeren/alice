@@ -270,6 +270,16 @@ func TestRealOpenSSH(t *testing.T) {
 			prov, pool := h.newProvider()
 			ctx := context.Background()
 
+			// A-6: alice-svc's home holds only the root-owned .ssh (no /etc/skel files), and a re-run
+			// removes a file alice-svc owns there (a .bashrc bash would source for every command).
+			// A-3: the private copy of the helper the script checked and installed is gone.
+			assert.Equal(t, ".ssh", strings.TrimSpace(h.mustExec("ls", "-A", "/var/lib/alice-svc")))
+			h.mustExec("install", "-o", ServiceUser, "-g", ServiceUser, "-m", "0644", "/dev/null", "/var/lib/alice-svc/.bashrc")
+			require.Contains(t, h.mustExec("sh", "-c", "cd /root/bundle && sh ./setup.sh"), "This server is ready for Alice.")
+			assert.Equal(t, ".ssh", strings.TrimSpace(h.mustExec("ls", "-A", "/var/lib/alice-svc")))
+			assert.Equal(t, "root:root 755", strings.TrimSpace(h.mustExec("stat", "-c", "%U:%G %a", "/var/lib/alice-svc")))
+			assert.NotContains(t, h.mustExec("ls", "-A", "/var/lib/alice-helper"), "install.")
+
 			// F-30: the first connection stops at the key exchange; the presented key is the
 			// server's real key; no login happened.
 			before := h.accepted()

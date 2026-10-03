@@ -44,8 +44,11 @@ Playwright: the e2e build has no deterministic way to queue a job before the loc
       temporary file, `fsync`, rename and directory `fsync`.
 - [ ] sudoers allows only `alice-helper` subcommands of the chosen profile with the narrowed argument patterns
       (R37 item 3); `!requiretty`, `!lecture`, `env_reset`, `secure_path`, `log_output`.
-- [ ] The setup script never writes, chowns or chmods through a path `alice-svc` controls, and installs only a
-      helper whose SHA-256 matches the checksum built into Alice.
+- [ ] The setup script never writes, chowns or chmods through a path `alice-svc` controls, leaves no file in
+      `alice-svc`'s home that `alice-svc` owns (no `/etc/skel` files; everything but `.ssh` is removed on every run),
+      and installs only a helper whose SHA-256 matches the checksum built into Alice: it copies `./alice-helper`
+      into a fresh root-only directory first and checks and installs that copy, so the file cannot be swapped
+      between the check and the install.
 - [ ] The platform key seed is only decrypted inside one dial and zeroed afterwards; it never reaches a log,
       error, audit row, job row or response (leak suite).
 - [ ] Remote output is size-capped, decoded as one JSON value, and never logged; stderr is discarded.
@@ -128,11 +131,12 @@ Spec §26.5 "Owner verifies". You need:
 If `deploy/.env` sets `ALICE_PORT`, open `https://localhost:<port>` instead of `https://localhost`.
 
 1. **Prepare the server.** On the Alice machine run `make helper`. Copy `bin/alice-helper-linux-amd64` (or
-   `-arm64` for an aarch64 server) to the test server as `alice-helper` in an empty directory, for example with
-   `scp bin/alice-helper-linux-amd64 you@server:/tmp/alice/alice-helper`. In Alice open **Servers**: **Prepare a
+   `-arm64` for an aarch64 server) to the test server as `alice-helper` in a new directory that only you can write
+   (not a shared directory such as `/tmp`), for example with `ssh you@server mkdir -m 700 alice-setup` and
+   `scp bin/alice-helper-linux-amd64 you@server:alice-setup/alice-helper`. In Alice open **Servers**: **Prepare a
    server for Alice** shows Alice's public key, its fingerprint and the commands. Choose **Server type** **Linux
-   server** and **Copy commands**. On the server save them as `/tmp/alice/prepare-alice.sh` and run
-   `cd /tmp/alice && sudo sh ./prepare-alice.sh`.
+   server** and **Copy commands**. On the server save them as `~/alice-setup/prepare-alice.sh` and run
+   `cd ~/alice-setup && sudo sh ./prepare-alice.sh`.
    Expected: the last line is "This server is ready for Alice."; `sudo -l -U alice-svc` on the server lists only
    `/usr/local/libexec/alice-helper` subcommands; `ls -ld /var/lib/alice-svc /var/lib/alice-svc/.ssh` shows root as
    owner. If the script says "./alice-helper is not the alice-helper of this Alice version", the file was built
