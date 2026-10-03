@@ -120,15 +120,23 @@ const (
 // MaxAttemptsFor is the default number of attempts of a job type (spec §8.4): a connection
 // test is shown to the user at once and not retried; discovery tolerates a flaky network. A
 // deployment's job runs at most 3 times (a run after the first send never sends again: it reads
-// the deployment's state and recovers); a recovery job 5 times, and the deployment sweep queues
-// another one 15 minutes later while the deployment is unfinished.
+// the deployment's state and recovers). A recovery job runs once: the deployment sweep paces
+// recovery (a new job every inventory.RecoveryRetryInterval, at most inventory.MaxRecoveryAttempts),
+// so a failed attempt waits for the sweep instead of polling the server on the queue's backoff.
 func MaxAttemptsFor(t Type) int {
 	switch t.Name {
-	case inventory.JobTestConnection:
+	case inventory.JobTestConnection, inventory.JobDeployRecover:
 		return 1
-	case inventory.JobDiscover, inventory.JobDeployRecover:
+	case inventory.JobDiscover:
 		return 5
 	default:
 		return 3
 	}
 }
+
+// AlertsWhenExhausted reports whether a job of the type that fails retryably on its last attempt
+// is dead with the job.dead email to every Administrator (spec §8.4). A recovery job is not: its
+// failure ends the job as a plain failure (failed, no email), the deployment sweep queues the next
+// one, and the deployment's own needs-attention email, sent once, is the alert. Otherwise an
+// unreachable server would send one job.dead email per recovery cycle (plan decision 15).
+func AlertsWhenExhausted(t Type) bool { return t.Name != inventory.JobDeployRecover }

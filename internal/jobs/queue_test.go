@@ -114,7 +114,10 @@ func TestMaxAttemptsFor(t *testing.T) {
 	assert.Equal(t, 5, MaxAttemptsFor(TargetDiscover))
 	assert.Equal(t, 3, MaxAttemptsFor(SSHKeyRemove))
 	assert.Equal(t, 3, MaxAttemptsFor(CertificateDeploy))
-	assert.Equal(t, 5, MaxAttemptsFor(CertificateDeployRecover))
+	assert.Equal(t, 1, MaxAttemptsFor(CertificateDeployRecover), "the deployment sweep paces recovery, not job retries")
+	assert.False(t, AlertsWhenExhausted(CertificateDeployRecover), "the deployment's own needs-attention email is the alert")
+	assert.True(t, AlertsWhenExhausted(CertificateDeploy))
+	assert.True(t, AlertsWhenExhausted(TargetDiscover))
 }
 
 // Phase 4: a deployment changes a server (refused and held in lock, R38); finishing or undoing an
