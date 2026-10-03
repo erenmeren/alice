@@ -49,18 +49,32 @@ type fakeInv struct {
 	retryAt  []time.Time
 	started  *inventory.SendValues
 	ctxErrs  map[string]error // the context's error when the method was called
+	claims   map[string]inventory.Claim
+	lost     bool // the job run's claim is lost: every write is refused (inventory's fence)
 }
+
+var fencedWrites = []string{"BeginDeployment", "StartDeployment", "RecordDeploymentStep", "FinishDeployment", "RecordOutcome", "CheckClaim"}
+
+func (f *fakeInv) CheckClaim(ctx context.Context) error { return f.call(ctx, "CheckClaim") }
 
 func (f *fakeInv) call(ctx context.Context, name string) error {
 	f.mu.Lock()
 	f.log = append(f.log, name)
 	f.ctxErrs[name] = ctx.Err()
-	hook, err := f.hooks[name], f.errs[name]
+	if c, ok := inventory.ClaimFrom(ctx); ok {
+		f.claims[name] = c
+	}
+	hook := f.hooks[name]
 	f.mu.Unlock()
 	if hook != nil {
 		hook(ctx)
 	}
-	return err
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lost && slices.Contains(fencedWrites, name) {
+		return inventory.ErrClaimLost
+	}
+	return f.errs[name]
 }
 
 // calls lists the deployment-record calls (D25: the target and step calls are asserted elsewhere).
@@ -311,7 +325,7 @@ func newFixture(t *testing.T) *fixture {
 	f.current = pki.Fingerprint(f.old.Cert)
 	loc := providers.CertLocation{CertPath: "/etc/nginx/ssl/www.crt", KeyPath: "/etc/nginx/ssl/www.key", Supported: true,
 		Servers: []providers.CertServer{{Names: []string{"www.example.test"}, Listens: []providers.CertListen{{Port: 443}}}}}
-	f.inv = &fakeInv{clock: f.clock, errs: map[string]error{}, hooks: map[string]func(context.Context){}, ctxErrs: map[string]error{},
+	f.inv = &fakeInv{clock: f.clock, errs: map[string]error{}, hooks: map[string]func(context.Context){}, ctxErrs: map[string]error{}, claims: map[string]inventory.Claim{},
 		target: inventory.Target{ID: f.target, Status: inventory.StatusOK},
 		dep: inventory.Deployment{ID: f.id, TargetID: f.target, State: inventory.DeployStateQueued, Status: inventory.DeployStatusPending,
 			NewFingerprint: pki.Fingerprint(f.nw.Cert), ErrorParams: map[string]string{}},
@@ -402,7 +416,7 @@ func TestDeploySucceeds(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"deployment_id": f.id.String(), "outcome": "succeeded", "verified": "remote"}, res)
 	assert.Equal(t, []string{"Deployment", "CheckRecoveryPending", "BeginDeployment", "DeploymentMaterial(true)", "StartDeployment",
-		"RecordOutcome", "Deployment"}, f.inv.calls())
+		"CheckClaim", "RecordOutcome", "Deployment"}, f.inv.calls())
 	require.Len(t, f.inv.outcomes, 1)
 	fin := f.inv.lastFinish()
 	assert.Equal(t, inventory.DeployStatusSucceeded, fin.Status)
@@ -708,7 +722,7 @@ func TestUncertainOutcomeStartsRecovery(t *testing.T) {
 	assert.Equal(t, "deployment.interrupted", jf.Reason)
 	assert.Equal(t, "uncertain", res["outcome"])
 	assert.Equal(t, []string{"Deployment", "CheckRecoveryPending", "BeginDeployment", "DeploymentMaterial(true)", "StartDeployment",
-		"RecordOutcome", "Deployment"}, f.inv.calls(), "RecordOutcome only: no MarkRecovering, no RequestRecovery (the sweep paces)")
+		"CheckClaim", "RecordOutcome", "Deployment"}, f.inv.calls(), "RecordOutcome only: no MarkRecovering, no RequestRecovery (the sweep paces)")
 	assert.Equal(t, f.clock.Now().Add(inventory.FirstRecoveryDelay), f.inv.retryAt[0])
 }
 
@@ -1195,7 +1209,11 @@ func TestStepRecordFailureDoesNotStopTheDeployment(t *testing.T) {
 
 func TestRegisterInstallsBothHandlers(t *testing.T) {
 	r := jobs.NewRunner(jobs.RunnerConfig{})
-	Register(r, Deps{})
+	assert.Panics(t, func() { Register(r, Deps{}) }, "a missing dependency fails at startup")
+	assert.Panics(t, func() {
+		Register(nil, Deps{Inventory: &fakeInv{}, Registry: providers.NewRegistry(), Clock: clock.NewFake(time.Now())})
+	})
+	Register(r, Deps{Inventory: &fakeInv{}, Registry: providers.NewRegistry(), Clock: clock.NewFake(time.Now())})
 	assert.Panics(t, func() {
 		r.Handle(jobs.CertificateDeploy, func(context.Context, jobs.Job, jobs.StepRecorder) (map[string]any, error) { return nil, nil })
 	})
@@ -1315,4 +1333,192 @@ func TestCauseAndPortHelpers(t *testing.T) {
 	assert.Nil(t, permanent(nil))
 	assert.Equal(t, jobs.NeedsAttention, failureOf(t, permanent(jobs.Attention("x", nil, nil))).Class)
 	assert.Equal(t, "internal.unexpected", failure(errors.New("plain")).Reason)
+}
+
+// I-1: every write carries the job run's claim (inventory fences it).
+func TestEveryWriteCarriesTheJobsClaim(t *testing.T) {
+	f := newFixture(t)
+	j := f.job()
+	j.Attempt = 2
+	_, err := f.h.deploy(f.ctx, j, f.steps)
+	require.NoError(t, err)
+	want := inventory.Claim{JobID: j.ID, Attempt: 2}
+	for _, w := range []string{"BeginDeployment", "StartDeployment", "RecordDeploymentStep", "CheckClaim", "RecordOutcome"} {
+		assert.Equal(t, want, f.inv.claims[w], w)
+	}
+
+	f = newFixture(t)
+	f.sent(inventory.DeployStateRecovering, time.Hour)
+	f.status = providers.DeploymentState{Phase: providers.PhaseWriting, NewCertSHA256: strings.Repeat("e", 64), BackupDir: "/b"}
+	r := f.recoverJob()
+	_, err = f.h.recoverJob(f.ctx, r, f.steps)
+	require.NoError(t, err)
+	for _, w := range []string{"CheckClaim", "RecordOutcome"} {
+		assert.Equal(t, inventory.Claim{JobID: r.ID, Attempt: 1}, f.inv.claims[w], w)
+	}
+}
+
+// I-1 (a): a run that lost its job after the send records nothing; (b): one that lost it after
+// the start record does not send.
+func TestStaleRunsWriteNothingAndSendNothing(t *testing.T) {
+	f := newFixture(t)
+	f.prov.Configure(func(c *fake.Config) {
+		c.Deploy = func(providers.DeployRequest) (providers.DeployOutcome, error) {
+			f.inv.mu.Lock()
+			f.inv.lost = true // stalled past the lease: another run holds the job now
+			f.inv.mu.Unlock()
+			return providers.DeployOutcome{Result: providers.DeployCommitted, Phase: providers.PhaseCommitted, Verified: "remote"}, nil
+		}
+	})
+	_, err := f.h.deploy(f.ctx, f.job(), f.steps)
+	assert.Equal(t, "job.lease_expired", failureOf(t, err).Reason)
+	assert.Empty(t, f.inv.finishes, "the stale run's success is not recorded")
+	assert.Equal(t, inventory.DeployStateDeploying, f.inv.dep.State)
+
+	f = newFixture(t)
+	f.inv.hooks["CheckClaim"] = func(context.Context) {
+		f.inv.mu.Lock()
+		f.inv.lost = true
+		f.inv.mu.Unlock()
+	}
+	_, err = f.h.deploy(f.ctx, f.job(), f.steps)
+	assert.Equal(t, "job.lease_expired", failureOf(t, err).Reason)
+	assert.Zero(t, f.prov.Count("DeployCertificate"), "a stale run does not send")
+	assert.Empty(t, f.inv.finishes)
+	assert.True(t, f.keyZeroed())
+
+	// A recovery that lost its job does not restore.
+	f = newFixture(t)
+	f.sent(inventory.DeployStateRecovering, time.Hour)
+	f.status = providers.DeploymentState{Phase: providers.PhaseRestored, NewCertSHA256: strings.Repeat("e", 64), BackupDir: "/b"}
+	f.inv.lost = true
+	_, err = f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+	assert.Equal(t, "job.lease_expired", failureOf(t, err).Reason)
+	assert.Zero(t, f.prov.Count("RollbackDeployment"))
+	assert.Empty(t, f.inv.outcomes)
+
+	// Nor does the deploy path's one more restore after restore_failed.
+	f = newFixture(t)
+	f.prov.Configure(func(c *fake.Config) {
+		c.Deploy = func(providers.DeployRequest) (providers.DeployOutcome, error) {
+			f.inv.mu.Lock()
+			f.inv.lost = true
+			f.inv.mu.Unlock()
+			return providers.DeployOutcome{Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestoreFailed, FailedStep: "restore",
+				CauseStep: "reload", Reason: "deployment.rollback_failed"}, nil
+		}
+	})
+	_, err = f.h.deploy(f.ctx, f.job(), f.steps)
+	assert.Equal(t, "job.lease_expired", failureOf(t, err).Reason)
+	assert.Zero(t, f.prov.Count("RollbackDeployment"))
+	assert.Empty(t, f.inv.finishes)
+}
+
+// I-3: a write that fails on the deploy job's last attempt never ends the job dead (a second alert).
+func TestLastAttemptWriteFailuresArePermanent(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(f *fixture)
+	}{
+		{"outcome write", func(f *fixture) { f.inv.errs["RecordOutcome"] = errors.New("db down") }},
+		{"refusal write", func(f *fixture) {
+			f.inv.material.ConfigValid = false
+			f.inv.errs["FinishDeployment"] = errors.New("db down")
+		}},
+		{"read", func(f *fixture) { f.inv.errs["Deployment"] = errors.New("db down") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			tc.setup(f)
+			j := f.job()
+			_, err := f.h.deploy(f.ctx, j, f.steps)
+			assert.Equal(t, jobs.Retryable, failureOf(t, err).Class, "attempts left: retried")
+			f = newFixture(t)
+			tc.setup(f)
+			j.Attempt = j.MaxAttempts
+			_, err = f.h.deploy(f.ctx, j, f.steps)
+			assert.Equal(t, jobs.Permanent, failureOf(t, err).Class, "the last attempt: failed, not dead")
+		})
+	}
+}
+
+// M-1: a provider param outside the allowlist never reaches the jobs row, on any path.
+func TestJobErrorsKeepOnlyAllowedParams(t *testing.T) {
+	hostile := map[string]string{"port": "443", "stderr": "remote text", "directory": "/etc/x"}
+	want := map[string]string{"port": "443"}
+
+	f := newFixture(t) // before the send, attempts left: the error is returned as it is
+	f.openErr = providers.NewError("ssh.unreachable", true, nil, hostile)
+	_, err := f.h.deploy(f.ctx, f.job(), f.steps)
+	assert.Equal(t, want, failureOf(t, err).Params)
+
+	f = newFixture(t) // a recovery that cannot reach the server
+	f.sent(inventory.DeployStateRecovering, time.Hour)
+	f.openErr = providers.NewError("ssh.unreachable", true, nil, hostile)
+	_, err = f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+	assert.Equal(t, want, failureOf(t, err).Params)
+
+	f = newFixture(t) // a recovery whose rollback was lost: the cause's params
+	f.sent(inventory.DeployStateRecovering, time.Hour)
+	f.status = providers.DeploymentState{Phase: providers.PhaseRestored, NewCertSHA256: strings.Repeat("e", 64), BackupDir: "/b"}
+	f.prov.Configure(func(c *fake.Config) {
+		c.Rollback = func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
+			return providers.RollbackOutcome{Result: providers.DeployUncertain}, providers.NewError("ssh.unreachable", true, nil, hostile)
+		}
+	})
+	_, err = f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+	assert.Equal(t, want, failureOf(t, err).Params)
+}
+
+// M-2: the start record's age is measured from before the journal was read.
+func TestNoJournalAgeIsMeasuredBeforeTheRead(t *testing.T) {
+	f := newFixture(t)
+	f.sent(inventory.DeployStateRecovering, 40*time.Second)
+	f.statusFn = func() (providers.DeploymentState, error) {
+		f.clock.Advance(30 * time.Second) // a slow answer
+		return providers.DeploymentState{Phase: providers.PhaseNone}, nil
+	}
+	_, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+	require.NoError(t, err)
+	assert.False(t, f.inv.outcomes[0].Terminal, "40 s before the read: not final yet")
+}
+
+// M-3: a verification failure recorded only as a step (the run died during the rollback) is why the
+// recovery rolled back.
+func TestRecoveryReadsTheVerificationFailureFromTheSteps(t *testing.T) {
+	f := newFixture(t)
+	f.sent(inventory.DeployStateRecovering, time.Hour)
+	f.inv.dep.Steps = []inventory.DeploymentStep{{N: 1, Name: "verify", Status: "started", Params: map[string]string{}},
+		{N: 2, Name: "verify", Status: "failed", Params: map[string]string{"port": "8443", "reason": "deployment.verify_chain"}},
+		{N: 3, Name: "restore", Status: "ok", Params: map[string]string{}}}
+	f.status = providers.DeploymentState{Phase: providers.PhaseRestored, NewCertSHA256: strings.Repeat("e", 64), BackupDir: "/b"}
+	_, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+	require.NoError(t, err)
+	rec := f.inv.outcomes[0]
+	assert.Equal(t, "deployment.verify_chain", rec.Finish.ErrorCode)
+	assert.Equal(t, "deployment.verify_chain", rec.Finish.VerifyFailedReason)
+	require.NotNil(t, rec.Finish.VerifyFailedPort)
+	assert.Equal(t, 8443, *rec.Finish.VerifyFailedPort)
+	assert.Equal(t, "verify", rec.Finish.FailedStep)
+
+	// A step without a usable reason is ignored.
+	f = newFixture(t)
+	f.sent(inventory.DeployStateRecovering, time.Hour)
+	f.inv.dep.Steps = []inventory.DeploymentStep{{N: 1, Name: "verify", Status: "failed", Params: map[string]string{"reason": "Not a code!"}}}
+	f.status = providers.DeploymentState{Phase: providers.PhaseRestored, NewCertSHA256: strings.Repeat("e", 64), BackupDir: "/b"}
+	_, err = f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+	require.NoError(t, err)
+	assert.Equal(t, "deployment.interrupted", f.inv.outcomes[0].Finish.ErrorCode)
+}
+
+// M-8: a record whose referenced rows cannot be read ends at once, outcome unknown.
+func TestRecoveryWithoutMaterialEndsOutcomeUnknown(t *testing.T) {
+	f := newFixture(t)
+	f.sent(inventory.DeployStateRecovering, time.Hour)
+	f.inv.errs["DeploymentMaterial(false)"] = inventory.ErrNotFound
+	res, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+	require.NoError(t, err)
+	assert.Equal(t, "rollback_failed", res["outcome"])
+	assert.Equal(t, "deployment.outcome_unknown", f.inv.lastFinish().ErrorCode)
+	assert.Zero(t, f.prov.Count("Open"))
 }

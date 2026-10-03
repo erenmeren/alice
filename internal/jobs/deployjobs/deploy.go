@@ -53,6 +53,9 @@ import (
 //	                                                                                                          finds deploying: recovers)
 //	 context ended after the start   nothing was sent (known)                finish failed interrupted        Fail deployment.interrupted
 //	  record, before the send
+//	 CheckClaim (fenced, right       ErrClaimLost: another run holds the     nothing; NO send                 stale run
+//	  before the send)               job now
+//	                                 other error                             finish failed interrupted        Fail deployment.interrupted
 //	 DeployCertificate(DeployRequest(v)); the key is zeroed as soon as it returns; then
 //	 rec = DeployOutcomeRecord(out, err, false):
 //	   committed / unchanged, verified                                       succeeded / unchanged with the   success {outcome, verified}
@@ -74,6 +77,29 @@ import (
 //	   an outcome that breaks the contract (CheckDeployReturn)               uncertain interrupted            Attention deployment.interrupted
 //	 RecordOutcome error                                                     nothing new (deploying)          Retry internal.unexpected: the
 //	                                                                                                          re-run recovers from the journal
+//	                                                                                                          (last attempt: Fail, I-3)
+//	 RecordOutcome ErrClaimLost (this run stalled past its lease; another    nothing (the live run's record   stale run
+//	   run holds the job)                                                    stands)
+//	 the one more restore after restore_failed: CheckClaim first; lost →     nothing                          stale run
+//	   no restore is sent
+//	 a step write refused during the call (ErrClaimLost) cancels the        what the outcome maps to; its    stale run
+//	   provider call: the provider sends no further command (its inline     write is refused too
+//	   restore follows the recorded verify:failed step)
+//
+// Fencing (I-1): the job run's claim (job id, attempt) is on the context of every write
+// (inventory.WithClaim); inventory checks it in the write's own transaction and refuses with
+// ErrClaimLost when the job was taken back or claimed again. Every ErrClaimLost row is "stale run":
+// record nothing more, send nothing more, return jobs.Retry(job.lease_expired), which the runner
+// drops (its own writes are fenced to the claim too). Residual, for the security review: (1) the
+// instant between a fenced check (CheckClaim, or the step write before the provider's inline
+// restore) and the command it guards: a lease that ends exactly then is not seen; (2) a command
+// already sent when the lease ends (nginx-deploy or nginx-restore in flight) completes; its outcome
+// is not recorded by the stale run, and the live run reads it from the journal. In both cases the
+// helper's own lock serialises the commands, and the record is only ever written by the run that
+// holds the job.
+//
+// Last attempt (I-3): a retryable failure on the deploy job's last attempt is returned permanent
+// (lastAttempt): a dead job's job.dead email would be a second alert next to the deployment's.
 //
 // pre-send failure F (nothing was sent): a retryable F with attempts left is returned as it is (the
 // record stays precheck; the next attempt runs the whole pre-check again); otherwise (permanent, or
@@ -85,6 +111,22 @@ import (
 // What every recorded outcome returns is resultOf the record as read back, so the jobs row and the
 // deployment agree.
 func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecorder) (map[string]any, error) {
+	res, err := h.deployRun(withClaim(ctx, j), j, steps)
+	return res, lastAttempt(j, err)
+}
+
+// lastAttempt makes a retryable failure on the deploy job's last attempt permanent (I-3): the
+// runner would end it dead with a job.dead email, and the deployment ends with its own email
+// anyway (before the send the sweep ends it failed; after it a recovery finishes it).
+func lastAttempt(j jobs.Job, err error) error {
+	var f *jobs.Failure
+	if j.Attempt < j.MaxAttempts || !errors.As(err, &f) || f.Class != jobs.Retryable {
+		return err
+	}
+	return jobs.Fail(f.Reason, f.Params, f.Cause)
+}
+
+func (h *handlers) deployRun(ctx context.Context, j jobs.Job, steps jobs.StepRecorder) (map[string]any, error) {
 	id, err := deploymentID(j)
 	if err != nil {
 		return nil, err
@@ -199,7 +241,15 @@ func (h *handlers) first(ctx context.Context, j jobs.Job, d inventory.Deployment
 		// Known: nothing was sent. Waiting for a recovery to read "no journal" would end the same.
 		return h.refuse(ctx, d, reasonInterrupted, nil)
 	}
-	out, derr := sess.DeployCertificate(ctx, m.DeployRequest(v), rec)
+	// The last fenced check before the send (I-1): a run that lost its lease after the start record
+	// does not send behind the back of the run (or recovery) that holds the job now.
+	if err := h.d.Inventory.CheckClaim(ctx); err != nil {
+		return h.lostBeforeSend(ctx, j, d, err)
+	}
+	sendCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	rec.lost = stop
+	out, derr := sess.DeployCertificate(sendCtx, m.DeployRequest(v), rec)
 	m.PrivateKeyPEM.Zero()
 	return h.afterSend(ctx, d, m, sess, rec, out, derr)
 }
@@ -234,8 +284,21 @@ func (h *handlers) precheck(ctx context.Context, sess providers.Session, m inven
 	return vr.Served, vr.ServedChainLength, nil
 }
 
+// lostBeforeSend: the fenced check before the send failed. Nothing was sent. A stale run stops;
+// otherwise (the check itself failed) the deployment ends failed, as for any known "nothing was
+// sent" after the start record.
+func (h *handlers) lostBeforeSend(ctx context.Context, _ jobs.Job, d inventory.Deployment, err error) (map[string]any, error) {
+	if errors.Is(err, inventory.ErrClaimLost) {
+		return staleRun(err)
+	}
+	return h.refuse(ctx, d, reasonInterrupted, nil)
+}
+
 // beforeSend handles a failure before anything was sent (see deploy).
 func (h *handlers) beforeSend(ctx context.Context, j jobs.Job, d inventory.Deployment, err error) (map[string]any, error) {
+	if errors.Is(err, inventory.ErrClaimLost) {
+		return staleRun(err)
+	}
 	f := failure(err)
 	if ctx.Err() != nil {
 		return nil, f // the job's context ended: record nothing, the runner releases the job
@@ -252,6 +315,9 @@ func (h *handlers) refuse(ctx context.Context, d inventory.Deployment, reason st
 	err := h.d.Inventory.FinishDeployment(wctx, d.ID, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: reason,
 		Params: params})
 	cancel()
+	if errors.Is(err, inventory.ErrClaimLost) {
+		return staleRun(err)
+	}
 	if err != nil {
 		// Nothing was sent: a retry is safe (and on the last attempt the sweep ends it).
 		return nil, jobs.Retry(reasonUnexpected, nil, err)
@@ -282,6 +348,11 @@ func (h *handlers) rollbackAgain(ctx context.Context, sess providers.Session, m 
 	cause := first.Finish.VerifyFailedReason
 	if cause == "" {
 		cause = causeReason(first.Finish.CauseStep, first.Finish.HelperError)
+	}
+	if err := h.d.Inventory.CheckClaim(ctx); err != nil {
+		// A stale run restores nothing; its record write is refused the same way. The record of the
+		// first answer (restore_failed) is kept as the outcome to try to write.
+		return first
 	}
 	out, err := sess.RollbackDeployment(ctx, m.RollbackRequest(), rec)
 	r := rollbackRecord(out, err, cause)

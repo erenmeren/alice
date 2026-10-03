@@ -3,6 +3,7 @@ package deployjobs
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strconv"
 
 	"alice/internal/inventory"
@@ -27,6 +28,7 @@ import (
 //	                         ends it)
 //	deploying | recovering   recoverDeployment              see recoverDeployment
 func (h *handlers) recoverJob(ctx context.Context, j jobs.Job, steps jobs.StepRecorder) (map[string]any, error) {
+	ctx = withClaim(ctx, j)
 	id, err := deploymentID(j)
 	if err != nil {
 		return nil, err
@@ -64,7 +66,9 @@ func (h *handlers) recoverJob(ctx context.Context, j jobs.Job, steps jobs.StepRe
 //	step / journal (DeploymentStatus of the recorded operation)   recorded                                   job returns
 //	------------------------------------------------------------  -----------------------------------------  ---------------------------
 //	operation_id nil (the record shows nothing was sent)           finish failed deployment.interrupted       resultOf
-//	DeploymentMaterial(id, false): ErrNotFound                     nothing                                    Fail system.not_found
+//	DeploymentMaterial(id, false): ErrNotFound (a referenced row   rollback_failed deployment.outcome_unknown resultOf
+//	  is unreadable; the row alone cannot verify or check a        at once (outcome-unknown email, M-8)
+//	  rollback)
 //	  other error                                                  nothing                                    unresolved internal.unexpected
 //	open: refusal (host key changed or unconfirmed, disabled,      nothing                                    unresolved with its reason
 //	  deleted) or provider error (recorded on the target)
@@ -72,7 +76,8 @@ func (h *handlers) recoverJob(ctx context.Context, j jobs.Job, steps jobs.StepRe
 //	  a state that fails Validate
 //	active, any phase (a helper holds the lock: this operation     uncertain nginx.busy                       resultOf (uncertain)
 //	  still running, or another one)
-//	none | prepared, start record younger than the budget (S6)     uncertain (the recorded reason, else       resultOf (uncertain)
+//	none | prepared, start record younger than the budget (S6;     uncertain (the recorded reason, else       resultOf (uncertain)
+//	  the clock is read before the journal: a lower bound)
 //	                                                               deployment.interrupted)
 //	none | prepared, no helper running, start record older         failed deployment.interrupted (nothing     resultOf
 //	                                                               was written: the journal never passed
@@ -89,8 +94,11 @@ func (h *handlers) recoverJob(ctx context.Context, j jobs.Job, steps jobs.StepRe
 //	    !OK, journal committed                                     rollback, cause = the verification         as the rollback
 //	                                                               reason (verify_failed_* recorded)
 //	writing | restoring | restored                                 rollback, cause = the recorded             as the rollback
-//	                                                               verification failure, else the helper's
-//	                                                               cause step's reason, else interrupted
+//	                                                               verification failure, else the last
+//	                                                               verify:failed step's reason and port
+//	                                                               (recorded before an inline restore, M-3),
+//	                                                               else the helper's cause step's reason,
+//	                                                               else interrupted
 //	restore_failed                                                 rollback (this IS the one more             as the rollback
 //	                                                               nginx-restore after the helper's
 //	                                                               restore_failed), same cause
@@ -110,8 +118,10 @@ func (h *handlers) recoverJob(ctx context.Context, j jobs.Job, steps jobs.StepRe
 //	  restored)                                                                    the provider error, quietly
 //	uncertain (transport, ctx, malformed)                                          uncertain with the reason; likewise
 //
-// A failed record write is unresolved internal.unexpected (nothing new was recorded; the next
-// recovery reads the journal again).
+// Every RollbackDeployment is preceded by a fenced CheckClaim (a stale run restores nothing); every
+// write is fenced to the job's claim; ErrClaimLost anywhere: nothing more is written or sent (the
+// stale-run rule of deploy). A failed record write is unresolved internal.unexpected (nothing new
+// was recorded; the next recovery reads the journal again).
 func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment, steps jobs.StepRecorder, m mode) (map[string]any, error) {
 	if d.OperationID == nil {
 		return h.recordFor(ctx, d, failedRecord(reasonInterrupted, ""), m, nil)
@@ -119,7 +129,13 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 	mat, err := h.d.Inventory.DeploymentMaterial(ctx, d.ID, false)
 	switch {
 	case errors.Is(err, inventory.ErrNotFound):
-		return nil, jobs.Fail(reasonNotFound, nil, err)
+		// M-8: the location, certificate or server row the record references is gone (they are
+		// never deleted: foreign keys, no delete grant; a server is only marked deleted). The row
+		// alone cannot verify or check a rollback (it holds no endpoints or SANs), so the outcome is
+		// unknown now, not after a day of attempts: rollback_failed deployment.outcome_unknown
+		// (the outcome-unknown email names the backup directory).
+		return h.recordFor(ctx, d, inventory.OutcomeRecord{Terminal: true, Finish: inventory.DeploymentFinish{
+			Status: inventory.DeployStatusRollbackFailed, ErrorCode: reasonOutcomeUnknown, Params: map[string]string{}}}, m, nil)
 	case err != nil:
 		return unresolved(m, jobs.Retry(reasonUnexpected, nil, err))
 	}
@@ -128,6 +144,7 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 		return unresolved(m, err)
 	}
 	defer h.close(sess)
+	now := h.d.Clock.Now() // before the journal is read: the budget check below is conservative (M-2)
 	st, err := sess.DeploymentStatus(ctx, *d.OperationID)
 	if err != nil {
 		return unresolved(m, err)
@@ -142,7 +159,7 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 	rec := h.recorder(ctx, d.ID, steps)
 	switch st.Phase {
 	case providers.PhaseNone, providers.PhasePrepared:
-		if h.sendWithin(d) {
+		if h.sendWithin(d, now) {
 			// S6: the helper may not have reached its lock yet; final only after its budget.
 			code := d.ErrorCode
 			if code == "" {
@@ -183,7 +200,7 @@ func (h *handlers) verified(ctx context.Context, sess providers.Session, d inven
 		}
 		return h.recordFor(ctx, d, inventory.OutcomeRecord{Terminal: true, Finish: f}, m, nil)
 	}
-	rec.Step(providers.StepNameVerify, providers.StepFailed, map[string]string{"port": vr.Params["port"]})
+	rec.Step(providers.StepNameVerify, providers.StepFailed, map[string]string{"port": vr.Params["port"], "reason": vr.Reason})
 	cause := rollbackCause{reason: vr.Reason, port: portOf(vr.Params), step: providers.StepNameVerify}
 	if st.Phase == providers.PhaseUnchanged {
 		// The files already held the new pair: this operation wrote nothing, nothing to roll back.
@@ -211,6 +228,9 @@ func (h *handlers) rollback(ctx context.Context, sess providers.Session, d inven
 		c = rollbackCause{reason: d.VerifyFailedReason, port: d.VerifyFailedPort, step: providers.StepNameVerify}
 	}
 	if c.reason == "" {
+		c = verifyFailureOfSteps(d.Steps) // M-3: recorded as a step before a rollback that was cut off
+	}
+	if c.reason == "" {
 		c.reason = causeReason(st.CauseStep, st.Error)
 		c.step = st.CauseStep
 	}
@@ -221,6 +241,13 @@ func (h *handlers) rollback(ctx context.Context, sess providers.Session, d inven
 	var r inventory.OutcomeRecord
 	var err error
 	for {
+		// Fenced (I-1): a stale run does not restore behind the back of the run that holds the job.
+		if cerr := h.d.Inventory.CheckClaim(ctx); cerr != nil {
+			if errors.Is(cerr, inventory.ErrClaimLost) {
+				return staleRun(cerr)
+			}
+			return unresolved(m, jobs.Retry(reasonUnexpected, nil, cerr))
+		}
 		var out providers.RollbackOutcome
 		out, err = sess.RollbackDeployment(ctx, mat.RollbackRequest(), rec)
 		r = rollbackRecord(out, err, c.reason)
@@ -288,6 +315,21 @@ func failedRecord(code, phase string) inventory.OutcomeRecord {
 	return inventory.OutcomeRecord{Terminal: true, Finish: inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: code,
 		Phase: phase, Params: map[string]string{}}}
 }
+
+// verifyFailureOfSteps is the last failed verification of the new certificate recorded as a step
+// (step verify, failed, params reason and port), or none.
+func verifyFailureOfSteps(steps []inventory.DeploymentStep) rollbackCause {
+	for i := len(steps) - 1; i >= 0; i-- {
+		st := steps[i]
+		if st.Name == providers.StepNameVerify && st.Status == string(providers.StepFailed) && reasonRE.MatchString(st.Params["reason"]) {
+			return rollbackCause{reason: st.Params["reason"], port: portOf(st.Params), step: providers.StepNameVerify}
+		}
+	}
+	return rollbackCause{}
+}
+
+// reasonRE is the shape of a reason code read back from a step.
+var reasonRE = regexp.MustCompile(`^[a-z][a-z0-9_]*\.[a-z0-9_.]{1,90}$`)
 
 func portOf(params map[string]string) *int {
 	p, err := strconv.Atoi(params["port"])

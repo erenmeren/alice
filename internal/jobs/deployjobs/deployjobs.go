@@ -26,6 +26,10 @@
 //     sweep hands it to a certificate.deploy_recover job (ClassAlways) until it ends, escalating
 //     after RecoveryAttentionAfter attempts and ending it after MaxRecoveryAttempts.
 //
+// The properties hold for the run that holds the job. Every write is fenced to the job run's claim
+// (inventory.Claim on the context): a run that stalled past its lease, whose job was taken back,
+// writes nothing and sends nothing more after its next fenced check (see deploy for the residual).
+//
 // Recovery never needs the private key (DeploymentMaterial(id, false)); the deploy job unseals it
 // once, for the first send only, and zeroes it on every path.
 //
@@ -67,6 +71,9 @@ type Inventory interface {
 	RecordDeploymentStep(ctx context.Context, id uuid.UUID, name string, status providers.StepStatus, params map[string]string) error
 	FinishDeployment(ctx context.Context, id uuid.UUID, f inventory.DeploymentFinish) error
 	RecordOutcome(ctx context.Context, id uuid.UUID, rec inventory.OutcomeRecord, retryAt time.Time) error
+	// CheckClaim is ErrClaimLost when the job run on the context (inventory.WithClaim) no longer
+	// holds its job. Every write above checks the same in its own transaction.
+	CheckClaim(ctx context.Context) error
 }
 
 var _ Inventory = (*inventory.Service)(nil)
@@ -83,7 +90,15 @@ type Deps struct {
 }
 
 // Register registers the deploy and recovery handlers on the runner.
+// It panics at startup when a dependency is missing (a handler would otherwise fail at run time,
+// in the middle of a deployment).
 func Register(r *jobs.Runner, d Deps) {
+	switch {
+	case r == nil:
+		panic("deployjobs: Register needs a runner")
+	case d.Inventory == nil, d.Registry == nil, d.Clock == nil:
+		panic("deployjobs: Register needs Deps.Inventory, Deps.Registry and Deps.Clock")
+	}
 	h := newHandlers(d)
 	r.Handle(jobs.CertificateDeploy, h.deploy)
 	r.Handle(jobs.CertificateDeployRecover, h.recoverJob)
@@ -134,6 +149,7 @@ const (
 	reasonKeyMismatch     = "certificate.key_mismatch"
 	reasonConfigTest      = "deployment.config_test_failed"
 	reasonReload          = "deployment.reload_failed"
+	reasonOutcomeUnknown  = "deployment.outcome_unknown"
 )
 
 // detached is ctx without its cancellation, bounded by writeTimeout: for the records that must
@@ -200,13 +216,27 @@ func (h *handlers) close(s providers.Session) {
 	}
 }
 
-// failure is err as a *jobs.Failure (jobs.FromProvider's classification).
+// failure is err as a *jobs.Failure (jobs.FromProvider's classification) whose params are only
+// jobParams': whatever path a provider error takes to the jobs row, no param outside the allowlist
+// is stored with it.
 func failure(err error) *jobs.Failure {
 	var f *jobs.Failure
-	if errors.As(jobs.FromProvider(err), &f) {
-		return f
+	if !errors.As(jobs.FromProvider(err), &f) {
+		f = &jobs.Failure{Class: jobs.Retryable, Reason: reasonUnexpected, Cause: err}
 	}
-	return &jobs.Failure{Class: jobs.Retryable, Reason: reasonUnexpected, Cause: err}
+	return &jobs.Failure{Class: f.Class, Reason: f.Reason, Params: jobParams(f.Params), Cause: f.Cause}
+}
+
+// staleRun is the answer of a run that found it no longer holds its job (inventory.ErrClaimLost):
+// it stops without writing anything more; the run that holds the job now, or the sweep, owns the
+// record. The runner drops the answer (its own writes are fenced the same way).
+func staleRun(err error) (map[string]any, error) {
+	return nil, jobs.Retry("job.lease_expired", nil, err)
+}
+
+// withClaim puts the job run on the context of every inventory write it makes (I-1).
+func withClaim(ctx context.Context, j jobs.Job) context.Context {
+	return inventory.WithClaim(ctx, inventory.Claim{JobID: j.ID, Attempt: j.Attempt})
 }
 
 // jobParamKeys are the params a job's error may carry: fixed labels and numbers only, never a path
@@ -297,6 +327,10 @@ func (h *handlers) record(ctx context.Context, d inventory.Deployment, rec inven
 	wctx, cancel := detached(ctx)
 	err := h.d.Inventory.RecordOutcome(wctx, d.ID, rec, retryAt)
 	cancel()
+	if errors.Is(err, inventory.ErrClaimLost) {
+		h.d.Log.Warn("a stale run did not record its outcome: its job is held by another run", "deployment_id", d.ID.String())
+		return staleRun(err)
+	}
 	if err != nil {
 		h.d.Log.Error("could not record a deployment outcome", "deployment_id", d.ID.String(), "error_type", fmt.Sprintf("%T", err))
 		return nil, jobs.Retry(reasonUnexpected, nil, err)
@@ -305,7 +339,7 @@ func (h *handlers) record(ctx context.Context, d inventory.Deployment, rec inven
 	if jerr == nil && !rec.Terminal && m == recoveryJob && cause != nil {
 		// The recovery could not conclude because of the server: the job ends failed quietly
 		// (one attempt, never an alert) with the provider's reason; the sweep paces the next.
-		return res, jobs.FromProvider(cause)
+		return res, failure(cause)
 	}
 	return res, jerr
 }
@@ -329,6 +363,11 @@ type recorder struct {
 	id   uuid.UUID
 	next jobs.StepRecorder
 	log  *slog.Logger
+	// lost, when set, is called once a step write is refused because this run no longer holds its
+	// job (inventory.ErrClaimLost): it cancels the provider call in flight, so that a stale run's
+	// provider does not send its inline restore (the provider checks its context before every
+	// command; its steps are recorded before the commands that follow them).
+	lost context.CancelFunc
 }
 
 func (h *handlers) recorder(ctx context.Context, id uuid.UUID, steps jobs.StepRecorder) *recorder {
@@ -342,7 +381,13 @@ func (r *recorder) Step(name string, status providers.StepStatus, params map[str
 	}
 	ctx, cancel := context.WithTimeout(r.base, stepTimeout)
 	defer cancel()
-	if err := r.inv.RecordDeploymentStep(ctx, r.id, name, status, params); err != nil {
+	err := r.inv.RecordDeploymentStep(ctx, r.id, name, status, params)
+	if errors.Is(err, inventory.ErrClaimLost) && r.lost != nil {
+		r.log.Warn("a stale run stops its provider call: its job is held by another run", "deployment_id", r.id.String())
+		r.lost()
+		return
+	}
+	if err != nil {
 		r.log.Error("could not record a deployment step", "deployment_id", r.id.String(), "step", name, "error_type", fmt.Sprintf("%T", err))
 	}
 }
@@ -363,6 +408,7 @@ func causeReason(causeStep, class string) string {
 
 // sendWithin reports whether the start record is younger than the helper's budget: a send may
 // still be on its way to the helper's lock (S6).
-func (h *handlers) sendWithin(d inventory.Deployment) bool {
-	return d.StartedAt != nil && h.d.Clock.Now().Sub(*d.StartedAt) < noJournalFinalAfter
+// now is taken before the journal was read, so the elapsed time is a lower bound (M-2).
+func (h *handlers) sendWithin(d inventory.Deployment, now time.Time) bool {
+	return d.StartedAt != nil && now.Sub(*d.StartedAt) < noJournalFinalAfter
 }
