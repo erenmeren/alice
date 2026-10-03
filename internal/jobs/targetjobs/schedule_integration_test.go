@@ -319,3 +319,61 @@ func TestPinQueuesAFreshTestDespiteARunningOne(t *testing.T) {
 	assert.NotEqual(t, stale, test)
 	assert.Equal(t, jobs.StatusQueued, e.job(test).Status)
 }
+
+// A post-pin connection test that never finished (cut off by a graceful restart, or cancelled by
+// the license lock) leaves a pinned target in checking with no job queued. The scheduler tests it
+// again: at once when it never scheduled anything for it, then at the discovery interval; never
+// while a job of the target is still queued or running, and never a target without a pinned key.
+func TestCheckingTargetWithoutAJobIsRetested(t *testing.T) {
+	e := newEnv(t, nil)
+	k := hostKey(t)
+	e.prov.Configure(func(c *fake.Config) {
+		c.PresentedKey = k
+		c.Report = providers.ConnectionReport{HostKey: k, HelperVersion: "1.0.0", HelperProtocol: 1}
+	})
+	tg, _, err := e.inv.CreateTarget(e.ctx, e.admin, inventory.NewTarget{Name: "web-01", Type: "linux", Host: "web-01.example.com"})
+	require.NoError(t, err)
+	e.drain()
+	_, err = e.db.Owner.Exec(e.ctx, "UPDATE targets SET status = 'checking' WHERE id = $1", tg.ID)
+	require.NoError(t, err)
+	assert.Zero(t, e.schedule(), "a target without a pinned key is never tested by the scheduler")
+	_, err = e.db.Owner.Exec(e.ctx, "UPDATE targets SET status = 'pending_host_key' WHERE id = $1", tg.ID)
+	require.NoError(t, err)
+
+	recs, err := e.inv.ListHostKeys(e.ctx, tg.ID)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	test, err := e.inv.ConfirmHostKey(e.ctx, e.admin, tg.ID, recs[0].ID, k.Fingerprint)
+	require.NoError(t, err)
+	require.Equal(t, inventory.StatusChecking, e.status(tg.ID))
+	assert.Zero(t, e.schedule(), "the post-pin test is still queued")
+	_, err = e.db.Owner.Exec(e.ctx, "UPDATE jobs SET status = 'running', attempts = 1 WHERE id = $1", test)
+	require.NoError(t, err)
+	assert.Zero(t, e.schedule(), "the post-pin test is still running")
+
+	// The restart kills the test's only attempt (release with shutdown=true).
+	_, err = e.db.Owner.Exec(e.ctx, "UPDATE jobs SET status = 'dead', last_error_code = 'job.lease_expired', finished_at = $2 WHERE id = $1",
+		test, e.clock.Now())
+	require.NoError(t, err)
+	_, err = e.db.Owner.Exec(e.ctx, "UPDATE targets SET last_discovery_at = $2 WHERE id = $1", tg.ID, e.clock.Now())
+	require.NoError(t, err)
+	require.Equal(t, 1, e.schedule(), "nothing was scheduled for it yet: tested at once, whatever its last scan")
+	list, _, err := e.queue.List(e.ctx, jobs.ListFilter{TargetID: tg.ID, Status: jobs.StatusQueued})
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, jobs.TargetTestConnection.Name, list[0].Type)
+	assert.Equal(t, string(jobs.KindScheduled), list[0].Kind)
+
+	// Cut off again: the next re-test waits for the interval.
+	_, err = e.db.Owner.Exec(e.ctx, "UPDATE jobs SET status = 'cancelled', last_error_code = 'license.locked', finished_at = $2 WHERE id = $1",
+		list[0].ID, e.clock.Now())
+	require.NoError(t, err)
+	e.clock.Advance(time.Hour)
+	assert.Zero(t, e.schedule(), "a re-test waits for the discovery interval")
+	e.clock.Advance(day)
+	require.Equal(t, 1, e.schedule())
+	discovers := e.prov.Count("Discover")
+	e.drain()
+	assert.Equal(t, inventory.StatusOK, e.status(tg.ID))
+	assert.Equal(t, discovers+1, e.prov.Count("Discover"), "the connected target is scanned at once")
+}
