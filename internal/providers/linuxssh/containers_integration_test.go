@@ -360,6 +360,30 @@ func TestRealOpenSSH(t *testing.T) {
 				assert.Equal(t, helperproto.CodePathNotAllowed, pe.Params["helper_code"], path)
 				assert.NotContains(t, string(r.Stdout), "root:", path)
 			}
+
+			// A-1: with an absolute AuthorizedKeysFile pattern that points into the home, a user who
+			// replaces ~/.ssh with a symlink to /root/.ssh gets neither a read nor a write of root's
+			// file. sshd -T reads the file each time, so no reload is needed.
+			rootFile := "/root/.ssh/authorized_keys"
+			rootSHA := h.sha(rootFile)
+			h.mustExec("sh", "-c", "cp -p /etc/ssh/sshd_config /root/sshd_config.orig && "+
+				"sed -i '1i AuthorizedKeysFile /home/%u/.ssh/authorized_keys' /etc/ssh/sshd_config && sshd -t && "+
+				"rm -rf /home/linky/.ssh && ln -s /root/.ssh /home/linky/.ssh")
+			linkyFile := "/home/linky/.ssh/authorized_keys"
+			readCmd, err := CmdAuthKeysRead(linkyFile)
+			require.NoError(t, err)
+			writeCmd, err := CmdAuthKeysWrite(linkyFile, rootSHA, uuid.New(), []byte("ssh-ed25519 AAAA attacker\n"))
+			require.NoError(t, err)
+			for _, cmd := range []HelperCommand{readCmd, writeCmd} {
+				r, err := c2.Run(ctx, cmd)
+				require.NoError(t, err)
+				_, err = DecodeHelper[helperproto.AuthKeysReadResponse](r, cmd.Subcommand())
+				pe := ctrRequireReason(t, err, "ssh.helper_refused")
+				assert.Equal(t, helperproto.CodePathNotAllowed, pe.Params["helper_code"], cmd.Subcommand())
+				assert.NotContains(t, string(r.Stdout), "root@bastion")
+			}
+			assert.Equal(t, rootSHA, h.sha(rootFile), "root's file is unchanged")
+			h.mustExec("sh", "-c", "mv /root/sshd_config.orig /etc/ssh/sshd_config && sshd -t")
 			release(true)
 
 			// F-36: Alice's own key is never removed, and nothing is written.
