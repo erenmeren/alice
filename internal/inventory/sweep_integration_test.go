@@ -144,7 +144,7 @@ func TestSweepRetriesAreBoundedAndEmailOnce(t *testing.T) {
 			want = inventory.DeployStatusNeedsAttention
 		}
 		require.Equal(t, want, d.Status, "attempt %d", i)
-		_, err = f.h.db.Owner.Exec(ctx, "UPDATE jobs SET status = 'dead', finished_at = $2 WHERE dedupe_key = $1 AND status = 'queued'",
+		_, err = f.h.db.Owner.Exec(ctx, "UPDATE jobs SET status = 'failed', last_error_code = 'ssh.unreachable', finished_at = $2 WHERE dedupe_key = $1 AND status = 'queued'",
 			"certificate.deploy_recover:"+id.String(), f.h.clock.Now())
 		require.NoError(t, err)
 		f.h.clock.Advance(14 * time.Minute)
@@ -165,7 +165,7 @@ func TestSweepRetriesAreBoundedAndEmailOnce(t *testing.T) {
 	for _, e := range f.emails() {
 		templates = append(templates, e.Template)
 	}
-	assert.Equal(t, []string{"deployment.needs_attention", "deployment.rollback_failed"}, templates)
+	assert.Equal(t, []string{"deployment.needs_attention", "deployment.outcome_unknown"}, templates, "Alice never reached the server: unknown, not a failed restore")
 	assert.Len(t, f.recoverJobs(id), inventory.MaxRecoveryAttempts)
 	loc, err := f.h.svc.GetLocation(ctx, f.loc1)
 	require.NoError(t, err)
@@ -278,7 +278,7 @@ func TestDeploymentFlowLeaksNoKey(t *testing.T) {
 		v := m.SendValues(pki.Fingerprint(f.old.Cert), 2)
 		req := m.DeployRequest(v)
 		s.add(d, m, req, v, m.PrecheckRequest())
-		require.NoError(t, f.h.svc.StartDeploymentWith(ctx, r.ID, v))
+		require.NoError(t, f.h.svc.StartDeployment(ctx, r.ID, v))
 		require.NoError(t, f.h.svc.RecordDeploymentStep(ctx, r.ID, "write_key", providers.StepOK, map[string]string{"mode": "0600",
 			"key": string(m.PrivateKeyPEM.Bytes())}))
 		_, err = f.h.svc.DeploymentMaterial(ctx, r.ID, true)
@@ -305,4 +305,31 @@ func TestDeploymentFlowLeaksNoKey(t *testing.T) {
 	}
 	require.NotEmpty(t, f.emails())
 	s.check()
+}
+
+// Important 4: each deployment is swept in its own transaction; one that fails is logged with its
+// id and retried next time, and does not stop the others.
+func TestSweepOneFailingDeploymentDoesNotStopTheOthers(t *testing.T) {
+	f := newDeployFixture(t)
+	ctx := f.h.ctx
+	ids := []uuid.UUID{f.deploying(f.loc1), f.deploying(f.loc5), f.deploying(f.loc2)}
+	for _, id := range ids {
+		f.jobStatus(f.jobOf(id), "dead", "ssh.unreachable")
+	}
+	f.h.jobs.mu.Lock()
+	f.h.jobs.fail = errors.New("queue down")
+	f.h.jobs.mu.Unlock()
+	n, err := f.h.svc.SweepDeployments(ctx)
+	assert.Error(t, err, "the failure is reported")
+	assert.Equal(t, 2, n)
+	assert.Empty(t, f.recoverJobs(ids[0]), "the oldest one failed")
+	assert.Equal(t, inventory.DeployStateDeploying, f.get(ids[0]).State, "and was rolled back alone")
+	for _, id := range ids[1:] {
+		assert.Equal(t, []string{"queued"}, f.recoverJobs(id))
+	}
+	assert.Contains(t, f.h.logs.String(), ids[0].String())
+	n, err = f.h.svc.SweepDeployments(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "retried on the next run")
+	assert.Equal(t, []string{"queued"}, f.recoverJobs(ids[0]))
 }

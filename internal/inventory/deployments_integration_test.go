@@ -151,7 +151,9 @@ func (f *deployFixture) start(id uuid.UUID) {
 	f.h.t.Helper()
 	_, err := f.h.svc.BeginDeployment(f.h.ctx, id)
 	require.NoError(f.h.t, err)
-	require.NoError(f.h.t, f.h.svc.StartDeployment(f.h.ctx, id, pki.Fingerprint(f.old.Cert), providers.BackupRef{OperationID: id}))
+	m, err := f.h.svc.DeploymentMaterial(f.h.ctx, id, false)
+	require.NoError(f.h.t, err)
+	require.NoError(f.h.t, f.h.svc.StartDeployment(f.h.ctx, id, m.SendValues(pki.Fingerprint(f.old.Cert), 2)))
 }
 
 func (f *deployFixture) get(id uuid.UUID) inventory.Deployment {
@@ -429,8 +431,8 @@ func TestDeploymentStateMachine(t *testing.T) {
 	f := newDeployFixture(t)
 	ctx := f.h.ctx
 	id := f.request(f.admin, f.cert.ID, f.loc1)
-	assert.ErrorIs(t, f.h.svc.StartDeployment(ctx, id, pki.Fingerprint(f.old.Cert), providers.BackupRef{OperationID: id}),
-		inventory.ErrDeploymentState, "queued: no precheck yet")
+	assert.ErrorIs(t, f.h.svc.StartDeployment(ctx, id, inventory.SendValues{OperationID: id, ExpectCertSHA256: sha(f.old.FullchainPEM),
+		NewChainLength: 2}), inventory.ErrDeploymentState, "queued: no precheck yet")
 	d, err := f.h.svc.BeginDeployment(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, inventory.DeployStatePrecheck, d.State)
@@ -478,8 +480,8 @@ func TestDeploymentStateMachine(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, m2.PrivateKeyPEM.Bytes())
 
-	require.NoError(t, f.h.svc.StartDeploymentWith(ctx, id, v))
-	assert.ErrorIs(t, f.h.svc.StartDeploymentWith(ctx, id, v), inventory.ErrDeploymentState, "a send is recorded once")
+	require.NoError(t, f.h.svc.StartDeployment(ctx, id, v))
+	assert.ErrorIs(t, f.h.svc.StartDeployment(ctx, id, v), inventory.ErrDeploymentState, "a send is recorded once")
 	_, err = f.h.svc.DeploymentMaterial(ctx, id, true)
 	assert.ErrorIs(t, err, inventory.ErrDeploymentState, "the key is unsealed for the first send only")
 	d = f.get(id)
@@ -512,7 +514,8 @@ func TestDeploymentStateMachine(t *testing.T) {
 	err = f.h.svc.FinishDeployment(ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusSucceeded})
 	assert.Error(t, err, "success needs a verification")
 	require.NoError(t, f.h.svc.FinishDeployment(ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusSucceeded, Verified: "remote",
-		Result: "committed", Phase: "committed", Backup: &providers.BackupRef{OperationID: id, Dir: "/var/lib/alice-helper/backups/" + id.String()}}))
+		Result: "committed", Phase: "committed", CertFileSHA256: m.NewCertSHA256,
+		Backup: &providers.BackupRef{OperationID: id, Dir: "/var/lib/alice-helper/backups/" + id.String()}}))
 	require.NoError(t, f.h.svc.FinishDeployment(ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed}), "a second finish changes nothing")
 	require.NoError(t, f.h.svc.MarkRecovering(ctx, id, f.h.clock.Now(), true), "nothing moves a finished deployment")
 	jobID, err := f.h.svc.RequestRecovery(ctx, id)
@@ -549,30 +552,44 @@ func TestDeploymentStateMachine(t *testing.T) {
 	assert.Equal(t, "Z1003", pgErr.Code)
 }
 
-// The record keeps the legacy StartDeployment's values from the database, and a key whose public
-// key is not the certificate's is never handed out.
+// StartDeployment records exactly the values given (the ones the engine sends) and refuses values a
+// send could not use, and a send while another deployment on the server is being recovered.
 func TestStartDeploymentRecordsTheSendValues(t *testing.T) {
 	f := newDeployFixture(t)
+	ctx := f.h.ctx
 	id := f.request(f.admin, f.cert.ID, f.loc1)
-	f.start(id)
-	d := f.get(id)
-	assert.Equal(t, sha(f.old.FullchainPEM), d.ExpectCertSHA256)
-	assert.Equal(t, 2, d.NewChainLength, "never 0 once a send may have happened")
-	assert.Equal(t, 0, d.PreviousChainLength, "not compared")
-	assert.Equal(t, &id, d.OperationID)
-
-	id2 := f.request(f.admin, f.cert.ID, f.loc2)
-	_, err := f.h.svc.BeginDeployment(f.h.ctx, id2)
+	_, err := f.h.svc.BeginDeployment(ctx, id)
 	require.NoError(t, err)
 	for name, v := range map[string]inventory.SendValues{
 		"another operation id": {OperationID: uuid.New(), ExpectCertSHA256: sha(f.old.FullchainPEM), NewChainLength: 2},
-		"no file hash":         {OperationID: id2, NewChainLength: 2},
-		"no chain":             {OperationID: id2, ExpectCertSHA256: sha(f.old.FullchainPEM)},
-		"bad previous":         {OperationID: id2, ExpectCertSHA256: sha(f.old.FullchainPEM), NewChainLength: 2, PreviousFingerprint: "x"},
+		"no file hash":         {OperationID: id, NewChainLength: 2},
+		"no chain":             {OperationID: id, ExpectCertSHA256: sha(f.old.FullchainPEM)},
+		"bad previous":         {OperationID: id, ExpectCertSHA256: sha(f.old.FullchainPEM), NewChainLength: 2, PreviousFingerprint: "x"},
+		"negative chain":       {OperationID: id, ExpectCertSHA256: sha(f.old.FullchainPEM), NewChainLength: 2, PreviousChainLength: -1},
 	} {
-		assert.Error(t, f.h.svc.StartDeploymentWith(f.h.ctx, id2, v), name)
+		assert.Error(t, f.h.svc.StartDeployment(ctx, id, v), name)
 	}
-	assert.Equal(t, inventory.DeployStatePrecheck, f.get(id2).State)
+	assert.Equal(t, inventory.DeployStatePrecheck, f.get(id).State)
+	v := inventory.SendValues{OperationID: id, ExpectCertSHA256: sha([]byte("sent")), NewChainLength: 3, PreviousFingerprint: pki.Fingerprint(f.old.Cert),
+		PreviousChainLength: 1}
+	require.NoError(t, f.h.svc.StartDeployment(ctx, id, v))
+	d := f.get(id)
+	assert.Equal(t, sha([]byte("sent")), d.ExpectCertSHA256, "what is sent, never re-read")
+	assert.Equal(t, 3, d.NewChainLength)
+	assert.Equal(t, 1, d.PreviousChainLength)
+	assert.Equal(t, &id, d.OperationID)
+
+	// Minor 8: a deployment queued before another one on its server went to recovery does not send.
+	other := f.request(f.admin, f.cert.ID, f.loc5)
+	_, err = f.h.svc.BeginDeployment(ctx, other)
+	require.NoError(t, err)
+	require.NoError(t, f.h.svc.MarkRecovering(ctx, id, f.h.clock.Now().Add(time.Hour), false))
+	m, err := f.h.svc.DeploymentMaterial(ctx, other, false)
+	require.NoError(t, err)
+	assert.ErrorIs(t, f.h.svc.StartDeployment(ctx, other, m.SendValues("", 0)), inventory.ErrRecoveryPending)
+	assert.ErrorIs(t, f.h.svc.CheckRecoveryPending(ctx, other), inventory.ErrRecoveryPending)
+	assert.NoError(t, f.h.svc.CheckRecoveryPending(ctx, id), "its own recovery does not block it")
+	assert.Equal(t, inventory.DeployStatePrecheck, f.get(other).State)
 }
 
 func TestDeploymentMaterialRefusesAForeignKey(t *testing.T) {
@@ -727,7 +744,9 @@ func TestMarkRecoveringEmailsOnce(t *testing.T) {
 	ctx := f.h.ctx
 	id := f.deploying(f.loc1)
 	t1 := f.h.clock.Now().Add(10 * time.Second)
-	require.NoError(t, f.h.svc.MarkRecovering(ctx, id, t1, false))
+	unreachable := inventory.DeployOutcomeRecord(providers.DeployOutcome{Result: providers.DeployUncertain},
+		providers.NewError("ssh.unreachable", true, nil, nil), false)
+	require.NoError(t, f.h.svc.RecordOutcome(ctx, id, unreachable, t1))
 	d := f.get(id)
 	assert.Equal(t, inventory.DeployStateRecovering, d.State)
 	assert.Equal(t, inventory.DeployStatusRunning, d.Status)
@@ -743,7 +762,7 @@ func TestMarkRecoveringEmailsOnce(t *testing.T) {
 	assert.Equal(t, inventory.DeployStatusNeedsAttention, d.Status, "needs attention until the deployment ends")
 	assert.Equal(t, t2.Add(2*time.Minute), *d.RecoverAfter)
 	assert.Equal(t, []outboxRow{{"deployment.needs_attention", map[string]string{"target_name": "web-01", "cert_path": "/etc/nginx/ssl/www.crt",
-		"deployment_id": id.String()}}}, f.emails())
+		"deployment_id": id.String()}}}, f.emails(), "an unreachable server: the connection text")
 	assert.Equal(t, 1, f.h.audits("deployment.needs_attention"))
 	assert.Equal(t, 1, f.h.audits("deployment.recovering"), "the episode began once")
 	loc, err := f.h.svc.GetLocation(ctx, f.loc1)
@@ -751,6 +770,69 @@ func TestMarkRecoveringEmailsOnce(t *testing.T) {
 	assert.Equal(t, &id, loc.ActiveDeploymentID, "needs_attention keeps the location held")
 	_, err = f.h.svc.RequestDeployment(ctx, f.admin, inventory.DeployRequestInput{CertificateID: f.cert.ID, LocationIDs: []uuid.UUID{f.loc5}})
 	assert.ErrorIs(t, err, inventory.ErrRecoveryPending, "no new deployment on a server being recovered")
+
+	// Another cause: Alice could not confirm the outcome (the server answered unexpectedly).
+	other := f.deploying(f.loc2)
+	require.NoError(t, f.h.svc.MarkRecovering(ctx, other, f.h.clock.Now().Add(time.Minute), true))
+	emails := f.emails()
+	require.Len(t, emails, 2)
+	assert.Equal(t, "deployment.needs_attention_unconfirmed", emails[1].Template)
+}
+
+// Important 5: a missing or past retry time is never "at once": recovery is paced by
+// RecoveryRetryInterval unless the caller names a time (such as now + FirstRecoveryDelay).
+func TestRecoveryTimesArePaced(t *testing.T) {
+	f := newDeployFixture(t)
+	ctx := f.h.ctx
+	now := f.h.clock.Now()
+	a := f.deploying(f.loc1)
+	require.NoError(t, f.h.svc.RecordOutcome(ctx, a, inventory.DeployOutcomeRecord(providers.DeployOutcome{}, nil, false), time.Time{}))
+	assert.Equal(t, now.Add(inventory.RecoveryRetryInterval), *f.get(a).RecoverAfter)
+	b := f.deploying(f.loc2)
+	require.NoError(t, f.h.svc.MarkRecovering(ctx, b, time.Time{}, false))
+	assert.Equal(t, now.Add(inventory.RecoveryRetryInterval), *f.get(b).RecoverAfter)
+	require.NoError(t, f.h.svc.MarkRecovering(ctx, b, now.Add(-time.Hour), false))
+	assert.Equal(t, now.Add(inventory.RecoveryRetryInterval), *f.get(b).RecoverAfter, "a past time too")
+	require.NoError(t, f.h.svc.MarkRecovering(ctx, b, now.Add(inventory.FirstRecoveryDelay), false))
+	assert.Equal(t, now.Add(inventory.FirstRecoveryDelay), *f.get(b).RecoverAfter, "a named time is kept")
+}
+
+// Important 2: a deployment that never sent anything cannot be moved into recovery; a failure
+// before the send ends it failed. The sweep treats a row without operation_id as never sent.
+func TestNothingSentNeverRecovers(t *testing.T) {
+	f := newDeployFixture(t)
+	ctx := f.h.ctx
+	queued := f.request(f.admin, f.cert.ID, f.loc1)
+	pre := f.request(f.admin, f.cert.ID, f.loc2)
+	_, err := f.h.svc.BeginDeployment(ctx, pre)
+	require.NoError(t, err)
+	unc := inventory.DeployOutcomeRecord(providers.DeployOutcome{Result: providers.DeployUncertain}, errors.New("lost"), false)
+	for _, id := range []uuid.UUID{queued, pre} {
+		assert.ErrorIs(t, f.h.svc.MarkRecovering(ctx, id, f.h.clock.Now().Add(time.Hour), false), inventory.ErrDeploymentState)
+		assert.ErrorIs(t, f.h.svc.MarkRecovering(ctx, id, f.h.clock.Now().Add(time.Hour), true), inventory.ErrDeploymentState)
+		_, err := f.h.svc.RequestRecovery(ctx, id)
+		assert.ErrorIs(t, err, inventory.ErrDeploymentState)
+		assert.ErrorIs(t, f.h.svc.RecordOutcome(ctx, id, unc, f.h.clock.Now().Add(time.Hour)), inventory.ErrDeploymentState)
+		assert.NotEqual(t, inventory.DeployStateRecovering, f.get(id).State)
+		assert.Empty(t, f.recoverJobs(id))
+	}
+	assert.Empty(t, f.emails())
+	// Defence in depth: a row in deploying without an operation id (written outside Alice) is
+	// treated as never sent.
+	odd := f.request(f.admin, f.cert.ID, f.loc5)
+	_, err = f.h.db.Owner.Exec(ctx, "UPDATE deployments SET state = 'deploying', status = 'running' WHERE id = $1", odd)
+	require.NoError(t, err)
+	f.jobStatus(f.jobOf(odd), "dead", "ssh.unreachable")
+	assert.ErrorIs(t, f.h.svc.FinishDeployment(ctx, odd, inventory.DeploymentFinish{Status: inventory.DeployStatusRollbackFailed,
+		FailedStep: "restore"}), inventory.ErrDeploymentState, "nothing sent: only failed")
+	_, err = f.h.svc.RequestRecovery(ctx, odd)
+	assert.ErrorIs(t, err, inventory.ErrDeploymentState)
+	_, err = f.h.svc.SweepDeployments(ctx)
+	require.NoError(t, err)
+	d := f.get(odd)
+	assert.Equal(t, inventory.DeployStatusFailed, d.Status)
+	assert.Equal(t, "ssh.unreachable", d.ErrorCode)
+	assert.Empty(t, f.recoverJobs(odd))
 }
 
 func TestRequestRecoveryDoesNotPileUp(t *testing.T) {
@@ -774,7 +856,7 @@ func TestRequestRecoveryDoesNotPileUp(t *testing.T) {
 		&maxAttempts, &payload))
 	assert.Equal(t, "always", class, "R38 #8: recovery is never blocked by the license")
 	assert.Equal(t, "system", kind)
-	assert.Equal(t, 5, maxAttempts)
+	assert.Equal(t, 1, maxAttempts, "one attempt per cycle: the sweep paces recovery")
 	assert.Equal(t, map[string]string{"deployment_id": id.String()}, payload)
 }
 
@@ -855,4 +937,144 @@ func TestListDeploymentsAndDetail(t *testing.T) {
 // The backup root inventory names in emails is the helper's (inventory may not import helperproto).
 func TestBackupRootIsTheHelpers(t *testing.T) {
 	assert.Equal(t, helperproto.BackupRoot, inventory.BackupRoot)
+}
+
+// Minors 1–3, 5: a certificate that is not valid yet, a key algorithm Nginx deployment does not
+// support (whatever the location's key type), and a location whose file hash is unknown (never
+// read, or a success recorded without the new file's hash) are refused before anything is queued.
+func TestRequestDeploymentRefusesUnusableCertificatesAndStaleLocations(t *testing.T) {
+	f := newDeployFixture(t)
+	ctx := f.h.ctx
+	req := func(cert uuid.UUID, loc uuid.UUID) error {
+		_, err := f.h.svc.RequestDeployment(ctx, f.admin, inventory.DeployRequestInput{CertificateID: cert, LocationIDs: []uuid.UUID{loc}})
+		return err
+	}
+	ca := pki.NewCA("Later", pki.ECDSA256, f.h.clock.Now())
+	later := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"},
+		NotBefore: f.h.clock.Now().Add(48 * time.Hour), NotAfter: f.h.clock.Now().Add(90 * 24 * time.Hour)}, f.h.clock.Now())
+	c, _, err := f.h.svc.UploadCertificate(ctx, f.admin, pemUpload(later))
+	require.NoError(t, err)
+	_, err = f.h.svc.RequestDeployment(ctx, f.admin, inventory.DeployRequestInput{CertificateID: c.ID, LocationIDs: []uuid.UUID{f.loc1},
+		ConfirmIncompleteChain: true})
+	assert.ErrorIs(t, err, inventory.ErrCertificateNotYetValid)
+
+	// An "other" key algorithm with a key row (as the owner), into a location of unknown key type.
+	keyID, certID := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	pub := sha([]byte("other-public-key"))
+	_, err = f.h.db.Owner.Exec(ctx, `INSERT INTO managed_private_keys (id, owner_type, algorithm, bits, public_key_sha256, ciphertext, nonce,
+wrapped_dek, key_version, created_at) VALUES ($1, 'certificate', 'ecdsa', 256, $2, '\x01', decode('000000000000000000000000', 'hex'), '\x01', 1, $3)`,
+		keyID, pub, f.h.clock.Now())
+	require.NoError(t, err)
+	_, err = f.h.db.Owner.Exec(ctx, `INSERT INTO certificates (id, fingerprint_sha256, not_before, not_after, key_algorithm, public_key_sha256,
+pem_chain, chain_complete, source, private_key_id, first_seen_at, last_seen_at, created_at)
+VALUES ($1, $2, $3, $4, 'ed25519', $5, 'x', true, 'uploaded', $6, $3, $3, $3)`, certID, sha([]byte("ed")), f.h.clock.Now().Add(-time.Hour),
+		f.h.clock.Now().Add(time.Hour*24), pub, keyID)
+	require.NoError(t, err)
+	_, err = f.h.db.Owner.Exec(ctx, "UPDATE certificate_locations SET key_type = '' WHERE id = $1", f.loc5)
+	require.NoError(t, err)
+	assert.ErrorIs(t, req(certID, f.loc5), inventory.ErrUnsupportedKey)
+
+	_, err = f.h.db.Owner.Exec(ctx, "UPDATE certificate_locations SET cert_file_sha256 = '' WHERE id = $1", f.loc2)
+	require.NoError(t, err)
+	assert.ErrorIs(t, req(f.cert.ID, f.loc2), inventory.ErrLocationNeedsDiscovery)
+
+	// A success recorded without the new file's hash leaves it unknown: discover first.
+	id := f.deploying(f.loc1)
+	require.NoError(t, f.h.svc.FinishDeployment(ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusSucceeded, Verified: "remote"}))
+	loc, err := f.h.svc.GetLocation(ctx, f.loc1)
+	require.NoError(t, err)
+	assert.Empty(t, loc.CertFileSHA256, "never a hash of the mutable stored chain")
+	assert.Equal(t, pki.Fingerprint(f.nw.Cert), loc.DeployedFingerprint)
+	assert.ErrorIs(t, req(f.cert.ID, f.loc1), inventory.ErrLocationNeedsDiscovery)
+
+	reasons := []string{}
+	for _, d := range f.h.auditDetails("deployment.denied") {
+		reasons = append(reasons, d["reason"])
+	}
+	assert.Equal(t, []string{"not_yet_valid", "unsupported_key", "rescan_needed", "rescan_needed"}, reasons)
+}
+
+// Minor 6: "skipped" is a success only where the Administrator turned verification off.
+func TestSkippedVerificationNeedsTheSetting(t *testing.T) {
+	f := newDeployFixture(t)
+	ctx := f.h.ctx
+	skipped := providers.DeployOutcome{Result: providers.DeployCommitted, Phase: providers.PhaseCommitted, Verified: "skipped"}
+	id := f.deploying(f.loc1)
+	assert.ErrorIs(t, f.h.svc.FinishDeployment(ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusSucceeded, Verified: "skipped"}),
+		inventory.ErrDeploymentState)
+	require.NoError(t, f.h.svc.RecordOutcome(ctx, id, inventory.DeployOutcomeRecord(skipped, nil, false), f.h.clock.Now().Add(time.Minute)))
+	d := f.get(id)
+	assert.Equal(t, inventory.DeployStateRecovering, d.State, "an unrequested skip is not a success")
+	assert.Equal(t, "uncertain", d.Result)
+
+	_, err := f.h.db.Owner.Exec(ctx, "UPDATE certificate_locations SET skip_verify = true WHERE id = $1", f.loc2)
+	require.NoError(t, err)
+	id2 := f.deploying(f.loc2)
+	rec := inventory.DeployOutcomeRecord(skipped, nil, false)
+	rec.Finish.CertFileSHA256 = sha([]byte("written"))
+	require.NoError(t, f.h.svc.RecordOutcome(ctx, id2, rec, time.Time{}))
+	assert.Equal(t, inventory.DeployStatusSucceeded, f.get(id2).Status)
+}
+
+// Important 1: the email of a rollback_failed deployment says what happened.
+func TestRollbackFailedEmailsByCause(t *testing.T) {
+	f := newDeployFixture(t)
+	ctx := f.h.ctx
+	finish := func(loc uuid.UUID, rec inventory.OutcomeRecord) (uuid.UUID, outboxRow) {
+		t.Helper()
+		id := f.deploying(loc)
+		require.True(t, rec.Terminal)
+		require.Equal(t, inventory.DeployStatusRollbackFailed, rec.Finish.Status)
+		require.NoError(t, f.h.svc.RecordOutcome(ctx, id, rec, time.Time{}))
+		e := f.emails()
+		return id, e[len(e)-1]
+	}
+	base := func(id uuid.UUID, path string) map[string]string {
+		return map[string]string{"target_name": "web-01", "cert_path": path, "deployment_id": id.String()}
+	}
+	// A true restore failure: the helper's restore_failed.
+	id, e := finish(f.loc1, inventory.DeployOutcomeRecord(providers.DeployOutcome{Result: providers.DeployRollbackFailed,
+		Phase: providers.PhaseRestoreFailed, FailedStep: "rollback_reload", CauseStep: "reload", Reason: "deployment.rollback_reload_failed"}, nil, false))
+	want := base(id, "/etc/nginx/ssl/www.crt")
+	want["backup_dir"] = inventory.BackupRoot + "/" + id.String()
+	assert.Equal(t, outboxRow{"deployment.rollback_failed", want}, e)
+	// HASH_MISMATCH on the restore: a restore failure as well.
+	_, e = finish(f.loc5, inventory.RollbackOutcomeRecord(providers.RollbackOutcome{Result: providers.DeployRollbackFailed, FailedStep: "restore",
+		Error: providers.DeployErrFileChanged, Reason: "deployment.rollback_failed"}, nil, "deployment.verify_failed"))
+	assert.Equal(t, "deployment.rollback_failed", e.Template)
+	// The files are back, the website does not serve the previous certificate.
+	id, e = finish(f.loc1, inventory.RollbackOutcomeRecord(providers.RollbackOutcome{Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestored,
+		FailedStep: "verify_old", Reason: "deployment.rollback_failed"}, nil, "deployment.verify_failed"))
+	assert.Equal(t, outboxRow{"deployment.restored_unverified", base(id, "/etc/nginx/ssl/www.crt")}, e)
+	// A later operation replaced the files.
+	id, e = finish(f.loc5, inventory.RollbackOutcomeRecord(providers.RollbackOutcome{Result: providers.DeployNoChange, Reason: "deployment.superseded"},
+		providers.NewError("deployment.superseded", false, nil, nil), "deployment.verify_failed"))
+	assert.Equal(t, outboxRow{"deployment.superseded", base(id, "/etc/nginx/ssl/b.crt")}, e)
+	assert.Equal(t, inventory.DeployStatusRollbackFailed, f.get(id).Status, "the status stays unknown/mixed for discovery")
+	// Recovery gave up or the server was deleted after a send: the outcome is unknown.
+	id = f.deploying(f.loc2)
+	f.jobStatus(f.jobOf(id), "dead", "ssh.unreachable")
+	require.NoError(t, f.h.svc.DeleteTarget(ctx, f.admin, f.target2))
+	_, err := f.h.svc.SweepDeployments(ctx)
+	require.NoError(t, err)
+	e2 := f.emails()
+	want = map[string]string{"target_name": "web-02", "cert_path": "/etc/nginx/ssl/www.crt", "deployment_id": id.String(),
+		"backup_dir": inventory.BackupRoot + "/" + id.String()}
+	assert.Equal(t, outboxRow{"deployment.outcome_unknown", want}, e2[len(e2)-1])
+}
+
+// Minor 4: a rollback after a failed verification keeps the step that failed.
+func TestRolledBackKeepsTheFailedStep(t *testing.T) {
+	f := newDeployFixture(t)
+	ctx := f.h.ctx
+	id := f.deploying(f.loc1)
+	unc := inventory.DeployOutcomeRecord(providers.DeployOutcome{Result: providers.DeployUncertain, Reason: "deployment.verify_failed",
+		Params: map[string]string{"port": "443", "failed_step": "verify"}}, errors.New("lost"), false)
+	require.NoError(t, f.h.svc.RecordOutcome(ctx, id, unc, time.Time{}))
+	rb := inventory.RollbackOutcomeRecord(providers.RollbackOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestored}, nil,
+		f.get(id).VerifyFailedReason)
+	require.NoError(t, f.h.svc.RecordOutcome(ctx, id, rb, time.Time{}))
+	d := f.get(id)
+	assert.Equal(t, "verify", d.FailedStep)
+	assert.Equal(t, "verify", f.h.auditDetails("deployment.failed")[0]["failed_step"])
 }

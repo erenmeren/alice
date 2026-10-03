@@ -74,6 +74,13 @@ var (
 	// a success that was never sent, the key asked for after the first send, a step of a finished
 	// deployment). The engine reads the deployment again and follows its state.
 	ErrDeploymentState = errors.New("inventory: the deployment is not in a state that allows this")
+	// ErrCertificateNotYetValid: the certificate's validity has not begun; browsers would refuse
+	// it (a probe comparing fingerprints would still pass).
+	ErrCertificateNotYetValid = errors.New("inventory: the certificate is not valid yet")
+	// ErrLocationNeedsDiscovery: Alice does not know the hash of the location's certificate file
+	// (never read, or a deployment ended without the new file's hash); the compare-and-swap needs
+	// it, so the server must be discovered again first.
+	ErrLocationNeedsDiscovery = errors.New("inventory: the location must be discovered again before a deployment")
 )
 
 // KeyTypeMismatchError is ErrKeyTypeMismatch with the two key types ("rsa", "ecdsa"): the type

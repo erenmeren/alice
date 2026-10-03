@@ -5,26 +5,35 @@ package inventory
 //
 //  1. d := Deployment(id); a done deployment is left alone. In deploying or recovering a send may
 //     have happened: never send again, recover (read DeploymentStatus first).
-//  2. BeginDeployment (queued -> precheck), then m := DeploymentMaterial(id, true): the record, the
+//  2. CheckRecoveryPending(id): another deployment on the server is being recovered (it was queued
+//     before that recovery began) → FinishDeployment(failed, "deployment.recovery_pending") or a
+//     retryable error; StartDeployment checks it again under the lock.
+//  3. BeginDeployment (queued -> precheck), then m := DeploymentMaterial(id, true): the record, the
 //     location, the certificate and the key (unsealed for this first send only).
-//  3. The pre-check: VerifyDeployment(m.PrecheckRequest()) with the currently deployed
-//     fingerprint and key type (the only "cannot check -> no change" guard). A refusal ends the
-//     deployment with FinishDeployment(failed): nothing was sent.
-//  4. v := m.SendValues(served fingerprint, served chain length); StartDeploymentWith(id, v) records
-//     everything recovery needs in ONE update before the first send (precheck -> deploying).
-//  5. DeployCertificate(m.DeployRequest(v)), the steps through RecordDeploymentStep; zero
+//  4. The pre-check: VerifyDeployment(m.PrecheckRequest()) with the currently deployed
+//     fingerprint and key type (the only "cannot check -> no change" guard). A refusal, and any
+//     failure before the send, ends the deployment with FinishDeployment(failed): nothing was sent
+//     (MarkRecovering, RequestRecovery and an uncertain RecordOutcome refuse it).
+//  5. v := m.SendValues(served fingerprint, served chain length); StartDeployment(id, v) records
+//     exactly what will be sent, in ONE update before the first send (precheck -> deploying).
+//  6. DeployCertificate(m.DeployRequest(v)), the steps through RecordDeploymentStep; zero
 //     m.PrivateKeyPEM as soon as the call returns.
-//  6. rec := DeployOutcomeRecord(outcome, err, false); after a helper restore_failed
+//  7. rec := DeployOutcomeRecord(outcome, err, false); after a helper restore_failed
 //     (rec.RetryRollback) run RollbackDeployment once more and record RollbackOutcomeRecord of that
-//     instead; then RecordOutcome(id, rec, now + first recovery delay). An uncertain outcome stays
-//     in recovery: the sweep queues the recovery when recover_after passes (D22: a job request has
-//     no run-at).
+//     instead; for a success set rec.Finish.CertFileSHA256 = m.NewCertSHA256; then
+//     RecordOutcome(id, rec, now + FirstRecoveryDelay). An uncertain outcome stays in recovery:
+//     the sweep queues the recovery when recover_after passes (D22: a job request has no run-at).
 //
-// A recovery job: m := DeploymentMaterial(id, false) (the RECORDED values; never re-derived),
-// DeploymentStatus, then re-verify with m.VerifyRequest() (a committed journal is never success
-// without it), roll back with m.RollbackRequest(), and RecordOutcome with the mapped record; a
-// server it cannot reach is MarkRecovering(id, next, true) once the attempts run low.
-// deployment.superseded is final (RollbackOutcomeRecord ends the deployment with it).
+// A recovery job (one attempt; the sweep queues the next RecoveryRetryInterval later):
+// m := DeploymentMaterial(id, false) (the RECORDED values; never re-derived), DeploymentStatus,
+// then re-verify with m.VerifyRequest() (a committed journal is never success without it), roll
+// back with m.RollbackRequest(), and RecordOutcome with the mapped record (a success's
+// CertFileSHA256 is the journal's NewCertSHA256). It returns nil when it recorded an outcome
+// (terminal or uncertain), and the provider's error (jobs.FromProvider) when it could not reach
+// or use the server: the job then ends failed, never dead, and the sweep escalates
+// (needs_attention after RecoveryAttentionAfter attempts, rollback_failed after
+// MaxRecoveryAttempts). deployment.superseded is final (RollbackOutcomeRecord ends the deployment
+// with it).
 
 import (
 	"context"
@@ -98,14 +107,14 @@ func (m Material) PrecheckRequest() providers.VerifyRequest {
 		Verify: m.Verify}
 }
 
-// SendValues are the values to record with StartDeploymentWith, given what the pre-check found
+// SendValues are the values to record with StartDeployment, given what the pre-check found
 // served (its fingerprint and chain length).
 func (m Material) SendValues(previousFingerprint string, previousChainLength int) SendValues {
 	return SendValues{OperationID: m.Deployment.ID, ExpectCertSHA256: m.ExpectCertSHA256, NewChainLength: m.NewChainLength,
 		PreviousFingerprint: previousFingerprint, PreviousChainLength: previousChainLength}
 }
 
-// DeployRequest is the first send of v (after StartDeploymentWith recorded it). It shares
+// DeployRequest is the first send of v (after StartDeployment recorded it). It shares
 // PrivateKeyPEM's holder: zeroing either zeroes both.
 func (m Material) DeployRequest(v SendValues) providers.DeployRequest {
 	return providers.DeployRequest{OperationID: v.OperationID, Location: m.Location, ExpectCertSHA256: v.ExpectCertSHA256,
@@ -276,15 +285,22 @@ type lockedDeployment struct {
 	newFingerprint, previous          string
 	operation                         *uuid.UUID
 	attempts                          int
+	errorCode                         string
+}
+
+// wasSent reports whether a send may have happened: deploying or recovering with an operation id
+// recorded by StartDeployment. A row without one never sent anything, whatever its state says.
+func (d lockedDeployment) wasSent() bool {
+	return (d.state == DeployStateDeploying || d.state == DeployStateRecovering) && d.operation != nil
 }
 
 const lockedDeploymentColumns = `d.id, d.location_id, d.target_id, d.certificate_id, d.state, d.status, d.cert_path, d.new_fingerprint,
-d.previous_fingerprint, d.operation_id, d.recovery_attempts`
+d.previous_fingerprint, d.operation_id, d.recovery_attempts, d.error_code`
 
 func scanLocked(row pgx.Row, extra ...any) (lockedDeployment, error) {
 	var d lockedDeployment
 	err := row.Scan(append([]any{&d.id, &d.location, &d.target, &d.certificate, &d.state, &d.status, &d.certPath, &d.newFingerprint,
-		&d.previous, &d.operation, &d.attempts}, extra...)...)
+		&d.previous, &d.operation, &d.attempts, &d.errorCode}, extra...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return lockedDeployment{}, ErrNotFound
 	}
@@ -328,35 +344,42 @@ WHERE id = $1 AND state = $5`, id, s.clock.Now().UTC(), DeployStatePrecheck, Dep
 	return s.Deployment(ctx, id)
 }
 
-// StartDeployment is StartDeploymentWith with the values read now from the database: the
-// location's file hash, the chain length of the certificate's PEM and the previous certificate's
-// fingerprint given (its chain length is not compared). backup.OperationID must be the deployment
-// id (or nil). The engine should call StartDeploymentWith with the values it sends.
-func (s *Service) StartDeployment(ctx context.Context, id uuid.UUID, previousFingerprint string, backup providers.BackupRef) error {
-	if backup.OperationID != uuid.Nil && backup.OperationID != id {
-		return errors.New("inventory: the operation id is the deployment id")
-	}
-	return s.startDeployment(ctx, id, func(tx pgx.Tx) (SendValues, error) {
-		var fileSHA, pemChain string
-		err := tx.QueryRow(ctx, `SELECT l.cert_file_sha256, c.pem_chain FROM deployments d
-JOIN certificate_locations l ON l.id = d.location_id JOIN certificates c ON c.id = d.certificate_id WHERE d.id = $1`, id).Scan(&fileSHA, &pemChain)
-		if err != nil {
-			return SendValues{}, fmt.Errorf("inventory: read the send values: %w", err)
-		}
-		return SendValues{OperationID: id, ExpectCertSHA256: fileSHA, NewChainLength: chainLength([]byte(pemChain)),
-			PreviousFingerprint: previousFingerprint}, nil
-	})
-}
-
-// StartDeploymentWith records the send values in ONE update before the first send and moves the
+// StartDeployment records the send values in ONE update before the first send and moves the
 // deployment from precheck to deploying (from then on a send may have happened, and recovery reads
-// these values back). rollback_info is the helper's backup of the operation (spec §6.3 item 3).
-// Only from precheck (ErrDeploymentState otherwise, so a second start never overwrites a record).
-func (s *Service) StartDeploymentWith(ctx context.Context, id uuid.UUID, v SendValues) error {
-	return s.startDeployment(ctx, id, func(pgx.Tx) (SendValues, error) { return v, nil })
+// these values back). v must be exactly what the engine sends (Material.SendValues with the
+// pre-check's served fingerprint and chain length): nothing here is re-read from the location or
+// the certificate. rollback_info is the helper's backup of the operation (spec §6.3 item 3). Only
+// from precheck (ErrDeploymentState otherwise, so a second start never overwrites a record), and
+// never while another deployment on the server is being recovered (ErrRecoveryPending: the
+// deployment was queued before that recovery began; finish it failed with
+// deployment.recovery_pending, or retry later).
+func (s *Service) StartDeployment(ctx context.Context, id uuid.UUID, v SendValues) error {
+	return s.startDeployment(ctx, id, v)
 }
 
-func (s *Service) startDeployment(ctx context.Context, id uuid.UUID, values func(tx pgx.Tx) (SendValues, error)) error {
+// CheckRecoveryPending is ErrRecoveryPending when another deployment on the deployment's server
+// is being recovered (state recovering): the deploy job checks it before its pre-check, and
+// StartDeployment checks it again under the deployment's lock.
+func (s *Service) CheckRecoveryPending(ctx context.Context, id uuid.UUID) error {
+	return recoveryPending(ctx, s.pool, id)
+}
+
+func recoveryPending(ctx context.Context, q db.Querier, id uuid.UUID) error {
+	var exists, pending bool
+	err := q.QueryRow(ctx, `SELECT true, EXISTS (SELECT 1 FROM deployments o WHERE o.target_id = d.target_id AND o.id <> d.id AND o.state = $2)
+FROM deployments d WHERE d.id = $1`, id, DeployStateRecovering).Scan(&exists, &pending)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrNotFound
+	case err != nil:
+		return fmt.Errorf("inventory: read the server's recoveries: %w", err)
+	case pending:
+		return ErrRecoveryPending
+	}
+	return nil
+}
+
+func (s *Service) startDeployment(ctx context.Context, id uuid.UUID, v SendValues) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		d, err := lockDeployment(ctx, tx, id)
 		if err != nil {
@@ -365,8 +388,7 @@ func (s *Service) startDeployment(ctx context.Context, id uuid.UUID, values func
 		if d.state != DeployStatePrecheck {
 			return ErrDeploymentState
 		}
-		v, err := values(tx)
-		if err != nil {
+		if err := recoveryPending(ctx, tx, id); err != nil {
 			return err
 		}
 		switch {
@@ -495,8 +517,10 @@ type DeploymentFinish struct {
 	HelperError        string
 	VerifyFailedReason string // "" keeps the recorded one
 	VerifyFailedPort   *int   // nil keeps the recorded one
-	// CertFileSHA256 is the certificate file's hash after a success (the helper writes the PEM
-	// sent verbatim: Material.NewCertSHA256); "" = the hash of the certificate's stored chain.
+	// CertFileSHA256 is the certificate file's hash after a success: Material.NewCertSHA256 after
+	// the first send (the helper writes the PEM sent verbatim), the journal's NewCertSHA256 after a
+	// recovery. "" leaves the location's hash unknown: the next deployment is refused
+	// (ErrLocationNeedsDiscovery) until a discovery reads the file again.
 	CertFileSHA256 string
 }
 
@@ -531,18 +555,22 @@ func sanitizeCode(code, fallback string) string {
 // errAlreadyFinished ends a transaction that found the deployment done: the caller succeeds.
 var errAlreadyFinished = errors.New("inventory: the deployment has already finished")
 
-// allowedFrom are the states a terminal status may be reached from: only failed may end a
-// deployment that never sent anything; unchanged also from precheck when the pre-check verified it.
-func allowedFrom(status, state string, verified bool) bool {
+// allowedFrom: only failed may end a deployment that never sent anything (queued, precheck, or a
+// row without an operation id); unchanged also from precheck when the pre-check verified it;
+// succeeded, rolled_back and rollback_failed need a send.
+func allowedFrom(status string, d lockedDeployment, verified bool) bool {
 	switch status {
 	case DeployStatusFailed:
-		return state != DeployStateDone
+		return d.state != DeployStateDone
 	case DeployStatusUnchanged:
-		return state == DeployStateDeploying || state == DeployStateRecovering || (state == DeployStatePrecheck && verified)
+		return d.wasSent() || (d.state == DeployStatePrecheck && verified)
 	default:
-		return state == DeployStateDeploying || state == DeployStateRecovering
+		return d.wasSent()
 	}
 }
+
+// errSkipNotAllowed: a "skipped" verification where the location's settings do not skip it.
+var errSkipNotAllowed = fmt.Errorf("%w: verification was skipped but the location does not skip it", ErrDeploymentState)
 
 // FinishDeployment records a deployment's end in one transaction: the location (locked first,
 // as RequestDeployment and discovery lock it, so a request racing the end cannot deadlock with
@@ -552,7 +580,8 @@ func allowedFrom(status, state string, verified bool) bool {
 // (failed and rolled_back: deployment.failed; rollback_failed: deployment.rollback_failed; none
 // for a deployment the license lock stopped). A finished deployment is left as it is and nil
 // returned (Z1003 counts as finished). A status that is not terminal, or a success without a
-// verification, is an error; a status the current state cannot reach is ErrDeploymentState.
+// verification, is an error; a status the current state cannot reach, or a success "skipped" where
+// the location's verification settings do not skip verification, is ErrDeploymentState.
 func (s *Service) FinishDeployment(ctx context.Context, id uuid.UUID, f DeploymentFinish) error {
 	if !slices.Contains(TerminalStatuses(), f.Status) {
 		return errors.New("inventory: not a terminal deployment status")
@@ -597,10 +626,19 @@ func (s *Service) finishLocked(ctx context.Context, tx pgx.Tx, d lockedDeploymen
 		return errAlreadyFinished
 	}
 	verified := oneOf(f.Verified, verifies)
-	if !allowedFrom(f.Status, d.state, verified != "") {
+	if !allowedFrom(f.Status, d, verified != "") {
 		return ErrDeploymentState
 	}
 	success := f.Status == DeployStatusSucceeded || f.Status == DeployStatusUnchanged
+	if success && verified == "skipped" {
+		var skip bool
+		if err := tx.QueryRow(ctx, "SELECT skip_verify FROM certificate_locations WHERE id = $1", d.location).Scan(&skip); err != nil {
+			return fmt.Errorf("inventory: read the location's verification settings: %w", err)
+		}
+		if !skip {
+			return errSkipNotAllowed
+		}
+	}
 	code := ""
 	if !success {
 		code = sanitizeCode(f.ErrorCode, "internal.unexpected")
@@ -614,13 +652,19 @@ func (s *Service) finishLocked(ctx context.Context, tx pgx.Tx, d lockedDeploymen
 		port = f.VerifyFailedPort
 	}
 	now := s.clock.Now().UTC()
-	_, err = tx.Exec(ctx, `UPDATE deployments SET state = $2, status = $3, result = $4, phase = $5, error_code = $6, error_params = $7,
-    failed_step = $8, cause_step = $9, helper_error = $10, verified = $11,
+	// A finish without a failed step keeps the recorded one, or names the verification whose
+	// failure the deployment was recovered from (a rollback's outcome carries no step).
+	var failedStep string
+	err = tx.QueryRow(ctx, `UPDATE deployments SET state = $2, status = $3, result = $4, phase = $5, error_code = $6, error_params = $7,
+    failed_step = CASE WHEN $8::text <> '' OR $3 IN ('succeeded', 'unchanged') THEN $8::text
+                       WHEN failed_step <> '' THEN failed_step
+                       WHEN verify_failed_reason <> '' OR $12::text <> '' THEN 'verify' ELSE '' END,
+    cause_step = $9, helper_error = $10, verified = $11,
     verify_failed_reason = CASE WHEN $12::text = '' THEN verify_failed_reason ELSE $12::text END,
     verify_failed_port = coalesce($13::integer, verify_failed_port), finished_at = $14, recover_after = NULL
-WHERE id = $1`, d.id, DeployStateDone, f.Status, oneOf(f.Result, results), oneOf(f.Phase, phases), code, params,
+WHERE id = $1 RETURNING failed_step`, d.id, DeployStateDone, f.Status, oneOf(f.Result, results), oneOf(f.Phase, phases), code, params,
 		stepOrBlank(f.FailedStep), stepOrBlank(f.CauseStep), stepOrBlank(f.HelperError), verified,
-		sanitizeCode(f.VerifyFailedReason, ""), port, now)
+		sanitizeCode(f.VerifyFailedReason, ""), port, now).Scan(&failedStep)
 	if isFrozen(err) {
 		return errAlreadyFinished
 	}
@@ -628,13 +672,12 @@ WHERE id = $1`, d.id, DeployStateDone, f.Status, oneOf(f.Result, results), oneOf
 		return fmt.Errorf("inventory: finish the deployment: %w", err)
 	}
 	if success {
-		fileSHA := f.CertFileSHA256
-		if !hex64RE.MatchString(fileSHA) {
-			var pemChain string
-			if err := tx.QueryRow(ctx, "SELECT pem_chain FROM certificates WHERE id = $1", d.certificate).Scan(&pemChain); err != nil {
-				return fmt.Errorf("inventory: read the certificate: %w", err)
-			}
-			fileSHA = sha256Hex([]byte(pemChain))
+		// The hash of the file Alice wrote, when the engine knows it; never derived from the stored
+		// chain (which may have changed since the send). Unknown: the next deployment waits for a
+		// discovery (ErrLocationNeedsDiscovery).
+		fileSHA := ""
+		if hex64RE.MatchString(f.CertFileSHA256) {
+			fileSHA = f.CertFileSHA256
 		}
 		// The file now holds the deployed certificate: the location says so at once, so the next
 		// deployment's pre-check and compare-and-swap expect what Alice wrote (the next discovery
@@ -646,11 +689,25 @@ WHERE id = $1`, d.location, d.newFingerprint, d.certificate, fileSHA); err != ni
 			return fmt.Errorf("inventory: record the deployed certificate: %w", err)
 		}
 	}
-	return s.finishRecords(ctx, tx, d, f.Status, code, stepOrBlank(f.FailedStep), verified)
+	return s.finishRecords(ctx, tx, d, f.Status, code, failedStep, verified, oneOf(f.Phase, phases))
+}
+
+// rollbackFailedTemplate chooses the email of a rollback_failed deployment by what happened
+// (the status stays rollback_failed, "unknown or mixed", for the changed-outside check).
+func rollbackFailedTemplate(code, phase string) string {
+	switch {
+	case code == "deployment.recovery_exhausted" || code == "deployment.target_deleted":
+		return TemplateDeploymentOutcomeUnknown
+	case code == "deployment.superseded":
+		return TemplateDeploymentSuperseded
+	case phase == providers.PhaseRestored:
+		return TemplateDeploymentRestoredUnverified
+	}
+	return TemplateDeploymentRollbackFailed
 }
 
 // finishRecords writes a finished deployment's audit rows and emails.
-func (s *Service) finishRecords(ctx context.Context, tx pgx.Tx, d lockedDeployment, status, code, failedStep, verified string) error {
+func (s *Service) finishRecords(ctx context.Context, tx pgx.Tx, d lockedDeployment, status, code, failedStep, verified, phase string) error {
 	type ev struct {
 		action  string
 		result  audit.Result
@@ -673,14 +730,14 @@ func (s *Service) finishRecords(ctx context.Context, tx pgx.Tx, d lockedDeployme
 		template = TemplateDeploymentFailed
 	case DeployStatusRollbackFailed:
 		events = []ev{{"deployment.rollback_failed", audit.Failure, map[string]string{"reason": code, "failed_step": failedStep}}}
-		template = TemplateDeploymentRollbackFailed
+		template = rollbackFailedTemplate(code, phase)
 	}
 	if template != "" && code != "license.locked" {
 		params, err := s.emailParams(ctx, tx, d)
 		if err != nil {
 			return err
 		}
-		if template == TemplateDeploymentRollbackFailed {
+		if template == TemplateDeploymentRollbackFailed || template == TemplateDeploymentOutcomeUnknown {
 			op := d.id
 			if d.operation != nil {
 				op = *d.operation
@@ -720,11 +777,14 @@ func (s *Service) notify(ctx context.Context, tx pgx.Tx, template string, params
 	return nil
 }
 
-// MarkRecovering moves an unfinished deployment to recovering with the next recovery not before
-// retryAt. needsAttention flags it (status needs_attention: the server cannot be reached to finish
+// MarkRecovering moves a deployment that may have sent (deploying or recovering) to recovering
+// with the next recovery not before retryAt; a zero or past retryAt means now +
+// RecoveryRetryInterval (name now + FirstRecoveryDelay for a first recovery soon). A deployment
+// that never sent anything is ErrDeploymentState (a failure before the send is
+// FinishDeployment(failed)). needsAttention flags it (status needs_attention: Alice cannot finish
 // or undo it); the flag stays until the deployment ends, and its first setting audits
-// deployment.needs_attention and emails every Administrator once. A finished deployment is left
-// as it is (nil).
+// deployment.needs_attention and emails every Administrator once, by cause (a lost connection, or
+// an answer Alice could not use). A finished deployment is left as it is (nil).
 func (s *Service) MarkRecovering(ctx context.Context, id uuid.UUID, retryAt time.Time, needsAttention bool) error {
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		d, err := lockDeployment(ctx, tx, id)
@@ -734,7 +794,7 @@ func (s *Service) MarkRecovering(ctx context.Context, id uuid.UUID, retryAt time
 		if d.state == DeployStateDone {
 			return errAlreadyFinished
 		}
-		return s.markRecoveringLocked(ctx, tx, d, retryAt.UTC(), needsAttention)
+		return s.markRecoveringLocked(ctx, tx, d, s.paced(retryAt), needsAttention)
 	})
 	if errors.Is(err, errAlreadyFinished) {
 		return nil
@@ -742,7 +802,34 @@ func (s *Service) MarkRecovering(ctx context.Context, id uuid.UUID, retryAt time
 	return err
 }
 
+// paced is retryAt, or now + RecoveryRetryInterval for a zero or past time.
+func (s *Service) paced(retryAt time.Time) time.Time {
+	now := s.clock.Now().UTC()
+	if retryAt.IsZero() || !retryAt.After(now) {
+		return now.Add(RecoveryRetryInterval)
+	}
+	return retryAt.UTC()
+}
+
+// needsAttentionTemplate: the lost-connection text when the last known cause is an SSH reason
+// (the latest recovery job's error, else the deployment's), else the unconfirmed-outcome text.
+func needsAttentionTemplate(ctx context.Context, tx pgx.Tx, d lockedDeployment) (string, error) {
+	var cause string
+	err := tx.QueryRow(ctx, `SELECT coalesce((SELECT last_error_code FROM jobs WHERE dedupe_key = $1 AND last_error_code <> ''
+ORDER BY created_at DESC, id DESC LIMIT 1), $2)`, recoverDedupePrefix+d.id.String(), d.errorCode).Scan(&cause)
+	if err != nil {
+		return "", fmt.Errorf("inventory: read the recovery's cause: %w", err)
+	}
+	if strings.HasPrefix(cause, "ssh.") {
+		return TemplateDeploymentNeedsAttention, nil
+	}
+	return TemplateDeploymentNeedsAttentionUnconfirmed, nil
+}
+
 func (s *Service) markRecoveringLocked(ctx context.Context, tx pgx.Tx, d lockedDeployment, retryAt time.Time, needsAttention bool) error {
+	if !d.wasSent() {
+		return ErrDeploymentState
+	}
 	status := DeployStatusRunning
 	if needsAttention || d.status == DeployStatusNeedsAttention {
 		status = DeployStatusNeedsAttention
@@ -761,7 +848,11 @@ func (s *Service) markRecoveringLocked(ctx context.Context, tx pgx.Tx, d lockedD
 		if err != nil {
 			return err
 		}
-		if err := s.notify(ctx, tx, TemplateDeploymentNeedsAttention, params); err != nil {
+		template, err := needsAttentionTemplate(ctx, tx, d)
+		if err != nil {
+			return err
+		}
+		if err := s.notify(ctx, tx, template, params); err != nil {
 			return err
 		}
 		if err := s.appendAudit(ctx, tx, "deployment.needs_attention", audit.Failure, d.id,
@@ -778,7 +869,8 @@ func (s *Service) markRecoveringLocked(ctx context.Context, tx pgx.Tx, d lockedD
 // job answers instead (nothing piles up). A new one moves the deployment to recovering, counts the
 // attempt, spaces the next by RecoveryRetryInterval (recover_after) and audits
 // deployment.recovery_started; after RecoveryAttentionAfter attempts it needs attention (one
-// email). A finished deployment needs none: (uuid.Nil, nil).
+// email). A deployment that never sent anything is ErrDeploymentState; a finished one needs no
+// recovery: (uuid.Nil, nil).
 func (s *Service) RequestRecovery(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
 	var jobID uuid.UUID
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -799,6 +891,9 @@ func (s *Service) RequestRecovery(ctx context.Context, id uuid.UUID) (uuid.UUID,
 }
 
 func (s *Service) requestRecoveryLocked(ctx context.Context, tx pgx.Tx, d lockedDeployment) (uuid.UUID, error) {
+	if !d.wasSent() {
+		return uuid.Nil, ErrDeploymentState
+	}
 	dedupe := recoverDedupePrefix + d.id.String()
 	var live uuid.UUID
 	err := tx.QueryRow(ctx, "SELECT id FROM jobs WHERE dedupe_key = $1 AND status IN ('queued', 'running', 'blocked_license')", dedupe).Scan(&live)
@@ -825,16 +920,20 @@ func (s *Service) requestRecoveryLocked(ctx context.Context, tx pgx.Tx, d locked
 }
 
 // RecordOutcome records what a provider outcome means (DeployOutcomeRecord,
-// RollbackOutcomeRecord): a terminal record finishes the deployment (FinishDeployment); an
-// uncertain one keeps it in recovery with result uncertain, the reason and the earlier
-// verification failure, the next recovery not before retryAt (zero: now). A finished deployment
-// is left as it is (nil).
+// RollbackOutcomeRecord): a terminal record finishes the deployment (FinishDeployment); a success
+// "skipped" where the location does not skip verification is recorded as uncertain instead. An
+// uncertain record keeps a deployment that may have sent in recovery with result uncertain, the
+// reason and the earlier verification failure, the next recovery not before retryAt (zero or past:
+// now + RecoveryRetryInterval; name now + FirstRecoveryDelay for a first recovery soon); for a
+// deployment that never sent anything it is ErrDeploymentState. A finished deployment is left as
+// it is (nil).
 func (s *Service) RecordOutcome(ctx context.Context, id uuid.UUID, rec OutcomeRecord, retryAt time.Time) error {
 	if rec.Terminal {
-		return s.FinishDeployment(ctx, id, rec.Finish)
-	}
-	if retryAt.IsZero() {
-		retryAt = s.clock.Now()
+		err := s.FinishDeployment(ctx, id, rec.Finish)
+		if !errors.Is(err, errSkipNotAllowed) {
+			return err
+		}
+		rec = uncertainRecord(interruptedCode, nil)
 	}
 	f := rec.Finish
 	params, err := json.Marshal(boundParams(f.Params, errorParamKeys))
@@ -853,15 +952,20 @@ func (s *Service) RecordOutcome(ctx context.Context, id uuid.UUID, rec OutcomeRe
 		if d.state == DeployStateDone {
 			return errAlreadyFinished
 		}
+		if !d.wasSent() {
+			return ErrDeploymentState
+		}
+		code := sanitizeCode(f.ErrorCode, interruptedCode)
 		_, err = tx.Exec(ctx, `UPDATE deployments SET result = 'uncertain', phase = '', failed_step = '', cause_step = '', helper_error = '',
     error_code = $2, error_params = $3,
     verify_failed_reason = CASE WHEN $4::text = '' THEN verify_failed_reason ELSE $4::text END,
     verify_failed_port = coalesce($5::integer, verify_failed_port)
-WHERE id = $1`, id, sanitizeCode(f.ErrorCode, "deployment.interrupted"), params, sanitizeCode(f.VerifyFailedReason, ""), port)
+WHERE id = $1`, id, code, params, sanitizeCode(f.VerifyFailedReason, ""), port)
 		if err != nil {
 			return fmt.Errorf("inventory: record the uncertain outcome: %w", err)
 		}
-		return s.markRecoveringLocked(ctx, tx, d, retryAt.UTC(), false)
+		d.errorCode = code
+		return s.markRecoveringLocked(ctx, tx, d, s.paced(retryAt), false)
 	})
 	if errors.Is(err, errAlreadyFinished) {
 		return nil

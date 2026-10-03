@@ -13,25 +13,34 @@ package inventory
 //	                                       deployment.requested commit together
 //	queued    -> precheck [running]        BeginDeployment (idempotent in precheck; any other state
 //	                                       returns the row unchanged); deployment.precheck_started
-//	precheck  -> deploying [running]       StartDeployment / StartDeploymentWith: records operation_id,
+//	precheck  -> deploying [running]       StartDeployment(id, SendValues): records operation_id,
 //	                                       expect_cert_sha256, new_chain_length, previous_fingerprint,
-//	                                       previous_chain_length and rollback_info in ONE update before
-//	                                       the first send; deployment.started. Refused from any other
-//	                                       state (ErrDeploymentState): deploying means "a send may have
-//	                                       happened", and only queued/precheck mean "nothing was sent"
-//	queued|precheck|deploying|recovering
+//	                                       previous_chain_length (exactly the values sent) and
+//	                                       rollback_info in ONE update before the first send;
+//	                                       deployment.started. Refused from any other state
+//	                                       (ErrDeploymentState), and while another deployment on the
+//	                                       server is recovering (ErrRecoveryPending). Deploying with an
+//	                                       operation id means "a send may have happened"; queued,
+//	                                       precheck or no operation id mean "nothing was sent"
+//	deploying|recovering (sent)
 //	          -> recovering [running|needs_attention]
 //	                                       MarkRecovering, RequestRecovery, RecordOutcome (uncertain),
-//	                                       SweepDeployments: recover_after, recovery_attempts;
+//	                                       SweepDeployments: recover_after (a zero or past time is now +
+//	                                       RecoveryRetryInterval), recovery_attempts;
 //	                                       deployment.recovering on entry, deployment.recovery_started
-//	                                       per recovery job, deployment.needs_attention (and its email)
-//	                                       on the first needs_attention, which then stays until done
+//	                                       per recovery job, deployment.needs_attention (and its email,
+//	                                       by cause) on the first needs_attention, which then stays
+//	                                       until done. From queued or precheck (or without an operation
+//	                                       id) these are refused with ErrDeploymentState: a failure
+//	                                       before the send is FinishDeployment(failed)
 //	any unfinished -> done [terminal]      FinishDeployment / RecordOutcome (terminal) / the sweep:
 //	                                       every final value in the single UPDATE that sets done;
 //	                                       failed from any unfinished state; unchanged from precheck
-//	                                       (with a verification), deploying or recovering; succeeded,
-//	                                       rolled_back, rollback_failed only from deploying or
-//	                                       recovering (a send happened). Others: ErrDeploymentState.
+//	                                       (with a verification) or after a send; succeeded,
+//	                                       rolled_back, rollback_failed only after a send (deploying
+//	                                       or recovering with an operation id); "skipped" counts as a
+//	                                       verification only where the location skips it. Others:
+//	                                       ErrDeploymentState.
 //	done      -> (nothing)                 FinishDeployment, MarkRecovering, RequestRecovery and
 //	                                       RecordOutcome on a done row are no-op successes (Z1003 is
 //	                                       "already finished"); BeginDeployment returns it unchanged;
@@ -53,9 +62,10 @@ package inventory
 //     hands the deployment to a certificate.deploy_recover job (ClassAlways: never held by the
 //     license) at once.
 //   - recovering: a recovery job is queued or running, or the sweep queues one when recover_after
-//     has passed (RecoveryRetryInterval after the last one); after RecoveryAttentionAfter attempts
-//     the Administrators are emailed once (needs_attention); after MaxRecoveryAttempts the sweep
-//     ends it rollback_failed (deployment.recovery_exhausted) and emails for manual action.
+//     has passed (RecoveryRetryInterval after the last one); a recovery job has one attempt and
+//     its failure is never a dead-job alert; after RecoveryAttentionAfter attempts the
+//     Administrators are emailed once (needs_attention); after MaxRecoveryAttempts (about a day)
+//     the sweep ends it rollback_failed (deployment.recovery_exhausted, the outcome-unknown email).
 //   - a deleted server's unfinished deployments end (deployment.target_deleted) once no job runs.
 
 import (
@@ -121,6 +131,10 @@ const (
 	// RecoveryRetryInterval); then the sweep ends it rollback_failed (deployment.recovery_exhausted:
 	// the files may hold either certificate) and asks for manual action.
 	MaxRecoveryAttempts = 96
+	// FirstRecoveryDelay is what the engine names for the first recovery after an uncertain first
+	// send (RecordOutcome / MarkRecovering with now + FirstRecoveryDelay): soon, but after the
+	// helper's own budget has likely ended. A zero or past time means RecoveryRetryInterval.
+	FirstRecoveryDelay = 30 * time.Second
 	// BackupRoot is helperproto.BackupRoot (inventory may not import it; a test compares them):
 	// the helper keeps an operation's backup in BackupRoot/<operation id>.
 	BackupRoot = "/var/lib/alice-helper/backups"
@@ -254,18 +268,19 @@ type deployDenial struct {
 }
 
 type deployCertificate struct {
-	id            uuid.UUID
-	keyID         *uuid.UUID
-	fingerprint   string
-	algorithm     string
-	sans          []string
-	notAfter      time.Time
-	chainComplete bool
+	id                  uuid.UUID
+	keyID               *uuid.UUID
+	fingerprint         string
+	algorithm           string
+	sans                []string
+	notBefore, notAfter time.Time
+	chainComplete       bool
 }
 
 type deployLocation struct {
 	id, target         uuid.UUID
 	certPath, keyPath  string
+	fileSHA            string
 	keyType            string
 	servers            []providers.CertServer
 	supported, missing bool
@@ -318,8 +333,12 @@ func (s *Service) RequestDeployment(ctx context.Context, a Actor, in DeployReque
 		switch {
 		case c.keyID == nil:
 			return deny(uuid.Nil, "no_private_key", ErrNoPrivateKey)
+		case c.algorithm != "rsa" && c.algorithm != "ecdsa":
+			return deny(uuid.Nil, "unsupported_key", ErrUnsupportedKey)
 		case !now.Before(c.notAfter):
 			return deny(uuid.Nil, "expired", ErrCertificateExpired)
+		case now.Before(c.notBefore):
+			return deny(uuid.Nil, "not_yet_valid", ErrCertificateNotYetValid)
 		case !c.chainComplete && (!in.ConfirmIncompleteChain || a.Role != rbac.Admin):
 			return deny(uuid.Nil, "chain_unconfirmed", ErrChainUnconfirmed)
 		}
@@ -358,8 +377,8 @@ func (s *Service) RequestDeployment(ctx context.Context, a Actor, in DeployReque
 
 func readDeployCertificate(ctx context.Context, q db.Querier, id uuid.UUID) (deployCertificate, error) {
 	var c deployCertificate
-	err := q.QueryRow(ctx, `SELECT id, private_key_id, fingerprint_sha256, key_algorithm, sans, not_after, chain_complete
-FROM certificates WHERE id = $1`, id).Scan(&c.id, &c.keyID, &c.fingerprint, &c.algorithm, &c.sans, &c.notAfter, &c.chainComplete)
+	err := q.QueryRow(ctx, `SELECT id, private_key_id, fingerprint_sha256, key_algorithm, sans, not_before, not_after, chain_complete
+FROM certificates WHERE id = $1`, id).Scan(&c.id, &c.keyID, &c.fingerprint, &c.algorithm, &c.sans, &c.notBefore, &c.notAfter, &c.chainComplete)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return deployCertificate{}, ErrNotFound
 	}
@@ -384,13 +403,16 @@ func (s *Service) lockDeployTargets(ctx context.Context, tx pgx.Tx, ids []uuid.U
 	}
 	targets := map[uuid.UUID]Target{}
 	for _, id := range targetIDs {
-		t, err := getTarget(ctx, tx, id, true)
+		// FOR NO KEY UPDATE: nothing here changes the target's key, and the KEY SHARE locks that
+		// job and deployment rows take on it (their foreign keys) do not conflict with it, so a
+		// request never waits on the sweep's job insert while the sweep waits on its audit lock.
+		t, err := scanTarget(tx.QueryRow(ctx, "SELECT "+targetColumns+" FROM targets WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE", id))
 		if err != nil {
 			return nil, nil, err
 		}
 		targets[id] = t
 	}
-	rows, err = tx.Query(ctx, `SELECT id, target_id, cert_path, key_path, key_type, servers, supported, missing_since IS NOT NULL
+	rows, err = tx.Query(ctx, `SELECT id, target_id, cert_path, key_path, cert_file_sha256, key_type, servers, supported, missing_since IS NOT NULL
 FROM certificate_locations WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, ids)
 	if err != nil {
 		return nil, nil, fmt.Errorf("inventory: lock the locations: %w", err)
@@ -400,7 +422,7 @@ FROM certificate_locations WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, id
 	for rows.Next() {
 		var l deployLocation
 		var servers []byte
-		if err := rows.Scan(&l.id, &l.target, &l.certPath, &l.keyPath, &l.keyType, &servers, &l.supported, &l.missing); err != nil {
+		if err := rows.Scan(&l.id, &l.target, &l.certPath, &l.keyPath, &l.fileSHA, &l.keyType, &servers, &l.supported, &l.missing); err != nil {
 			return nil, nil, fmt.Errorf("inventory: read a location: %w", err)
 		}
 		if err := json.Unmarshal(servers, &l.servers); err != nil {
@@ -428,6 +450,8 @@ func (s *Service) checkDeployLocation(ctx context.Context, tx pgx.Tx, c deployCe
 		return "target_not_ready", ErrTargetNotReady
 	case t.Facts.Nginx == nil || !t.Facts.Nginx.ConfigValid:
 		return "config_invalid", ErrNginxConfigInvalid
+	case !hex64RE.MatchString(l.fileSHA):
+		return "rescan_needed", ErrLocationNeedsDiscovery
 	case l.keyType != "" && l.keyType != c.algorithm:
 		return "key_type_mismatch", &KeyTypeMismatchError{Expected: l.keyType, Actual: c.algorithm}
 	}
