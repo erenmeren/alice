@@ -80,6 +80,10 @@ type Env struct {
 	Clock    clock.Clock
 	HostKeys HostKeyStore
 	Log      *slog.Logger // already redacting
+	// FreshConnection asks for a new connection instead of a reused one: an explicit connection
+	// test must see the host key the server presents now (R37 item 21). The connection may be
+	// kept for reuse afterwards.
+	FreshConnection bool
 }
 
 // Provider is one kind of managed system.

@@ -85,13 +85,18 @@ func (p *Provider) SetupSnippets(authorizedKeysLine string) map[string]providers
 func (p *Provider) HelperInfo() (string, int) { return helperproto.HelperPath, helperproto.Protocol }
 
 // Open connects through the pool (the pool's dialer holds the host-key store, so env.HostKeys is
-// not used) and checks that alice-helper answers with a protocol this Alice can use.
-func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred providers.CredentialSource, _ providers.Env) (providers.Session, error) {
+// not used) and checks that alice-helper answers with a protocol this Alice can use. With
+// env.FreshConnection it dials a new connection instead of reusing an idle one.
+func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred providers.CredentialSource, env providers.Env) (providers.Session, error) {
 	cfg, errs := ParseConfig(t.Config)
 	if len(errs) > 0 {
 		return nil, providers.NewError("target.invalid_config", false, validate.Errors(errs), nil)
 	}
-	conn, release, err := p.pool.Acquire(ctx, t.ID, cfg, cred)
+	acquire := p.pool.Acquire
+	if env.FreshConnection {
+		acquire = p.pool.AcquireFresh
+	}
+	conn, release, err := acquire(ctx, t.ID, cfg, cred)
 	if err != nil {
 		return nil, err
 	}

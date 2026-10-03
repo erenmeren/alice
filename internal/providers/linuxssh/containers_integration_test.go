@@ -253,14 +253,6 @@ func (h *ctrHost) sha(path string) string {
 	return strings.Fields(h.mustExec("sha256sum", path))[0]
 }
 
-// connOf is the pooled connection behind a session of this provider.
-func connOf(t *testing.T, s providers.Session) *Conn {
-	t.Helper()
-	ls, ok := s.(*session)
-	require.True(t, ok, "a linuxssh session")
-	return ls.conn
-}
-
 func TestRealOpenSSH(t *testing.T) {
 	images := ctrSelectedDistros(t)
 	helper := ctrBuildHelper(t)

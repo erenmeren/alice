@@ -137,3 +137,11 @@ func providerCode(t testing.TB, err error) *providers.Error {
 func versionJSON(protocol int) linuxsshtest.Response {
 	return linuxsshtest.Response{Stdout: []byte(`{"ok":true,"helper":"1.0.0","protocol":` + strconv.Itoa(protocol) + `}`)}
 }
+
+// connOf is the pooled connection behind a session of this provider.
+func connOf(t *testing.T, s providers.Session) *Conn {
+	t.Helper()
+	ls, ok := s.(*session)
+	require.True(t, ok, "a linuxssh session")
+	return ls.conn
+}

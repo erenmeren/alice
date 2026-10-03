@@ -97,6 +97,36 @@ func (p closeErrProvider) Open(ctx context.Context, t providers.TargetRef, c pro
 	return closeErrSession{s}, nil
 }
 
+// envProvider records the Env of every Open.
+type envProvider struct {
+	*fake.Provider
+	envs *[]providers.Env
+}
+
+func (p envProvider) Open(ctx context.Context, t providers.TargetRef, c providers.CredentialSource, e providers.Env) (providers.Session, error) {
+	*p.envs = append(*p.envs, e)
+	return p.Provider.Open(ctx, t, c, e)
+}
+
+// A-4 (R37 item 21): the explicit connection test asks for a fresh connection; scans and removals
+// may reuse one.
+func TestOnlyTheConnectionTestAsksForAFreshConnection(t *testing.T) {
+	var envs []providers.Env
+	prov := fake.New(providers.KindLinuxSSH)
+	reg := providers.NewRegistry()
+	reg.Register(envProvider{prov, &envs})
+	reg.Freeze()
+	inv := &stubInventory{target: inventory.Target{Name: "web-01", Status: inventory.StatusOK, LastDiscoveryAt: &time.Time{}}}
+	h := newHandlers(Deps{Inventory: inv, Registry: reg, Clock: clock.NewFake(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC))})
+	_, err := h.testConnection(context.Background(), testJob, nil)
+	require.NoError(t, err)
+	_, err = h.discover(context.Background(), testJob, nil)
+	require.NoError(t, err)
+	require.Len(t, envs, 2)
+	assert.True(t, envs[0].FreshConnection, "test connection")
+	assert.False(t, envs[1].FreshConnection, "discovery")
+}
+
 type unit struct {
 	inv  *stubInventory
 	prov *fake.Provider

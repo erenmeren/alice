@@ -35,8 +35,6 @@
   embed them, and a build without them offers no setup commands.
 
 ### Known issues
-- For up to 60 seconds after Alice's last work on a server, **Test connection** can reuse an open connection and
-  report success although the server's host key just changed (fix scheduled before this release).
 - Accounts that exist only in LDAP or SSSD are not inventoried.
 - The full list is in `docs/security/reviews/phase-3.md` ("Known limitations").
 

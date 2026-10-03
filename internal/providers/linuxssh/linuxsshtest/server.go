@@ -52,8 +52,26 @@ type Server struct {
 	commands   []string
 	sessionIDs [][]byte
 	conns      map[net.Conn]struct{}
+	accepted   int
 	noPubkey   bool
 	noAuth     bool
+	hangGlobal bool
+}
+
+// Connections is the number of TCP connections the server accepted (every dial, whether or not
+// it got as far as authentication).
+func (s *Server) Connections() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.accepted
+}
+
+// HangGlobalRequests makes the server leave global requests (OpenSSH's keepalive probe)
+// unanswered on connections opened from now on.
+func (s *Server) HangGlobalRequests() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hangGlobal = true
 }
 
 // DisablePublicKeyAuth makes the server offer password authentication only (never accepted).
@@ -209,6 +227,7 @@ func (s *Server) serve() {
 		}
 		s.mu.Lock()
 		s.conns[c] = struct{}{}
+		s.accepted++
 		s.mu.Unlock()
 		s.wg.Add(1)
 		go func() {
@@ -247,6 +266,7 @@ func (s *Server) handleConn(c net.Conn) {
 		}
 	}
 	cfg.NoClientAuth = s.noAuth
+	hang := s.hangGlobal
 	s.mu.Unlock()
 	sc, chans, reqs, err := ssh.NewServerConn(c, cfg)
 	if err != nil {
@@ -255,7 +275,14 @@ func (s *Server) handleConn(c net.Conn) {
 	s.mu.Lock()
 	s.sessionIDs = append(s.sessionIDs, append([]byte(nil), sc.SessionID()...))
 	s.mu.Unlock()
-	go ssh.DiscardRequests(reqs)
+	if hang {
+		go func() {
+			for range reqs { // never replied: the client's probe waits until it gives up
+			}
+		}()
+	} else {
+		go ssh.DiscardRequests(reqs)
+	}
 	closed := make(chan struct{})
 	go func() {
 		_ = sc.Wait()

@@ -74,8 +74,9 @@ var connectionReasons = []string{"ssh.auth_failed", "ssh.unreachable", "ssh.time
 // is not confirmed yet (discovery, removal); a connection test may run on it: that is how the
 // fingerprint is shown in the first place. A changed host key refuses everything without
 // connecting (F-31); only a re-pin (or a dismissal) leaves that status. A disabled target runs
-// nothing.
-func (h *handlers) open(ctx context.Context, id uuid.UUID, needConfirmed bool) (providers.Session, inventory.Target, error) {
+// nothing. fresh asks the provider for a new connection rather than a reused one (the explicit
+// connection test, R37 item 21).
+func (h *handlers) open(ctx context.Context, id uuid.UUID, needConfirmed, fresh bool) (providers.Session, inventory.Target, error) {
 	ref, t, err := h.d.Inventory.TargetRef(ctx, id)
 	switch {
 	case errors.Is(err, inventory.ErrNotFound):
@@ -93,7 +94,8 @@ func (h *handlers) open(ctx context.Context, id uuid.UUID, needConfirmed bool) (
 	if !ok {
 		return nil, t, jobs.Fail("internal.unexpected", nil, fmt.Errorf("targetjobs: no provider %q", ref.Kind))
 	}
-	sess, err := p.Open(ctx, ref, h.d.Inventory.Credentials(), providers.Env{Clock: h.d.Clock, HostKeys: h.d.Inventory.HostKeyStore(), Log: h.d.Log})
+	sess, err := p.Open(ctx, ref, h.d.Inventory.Credentials(), providers.Env{Clock: h.d.Clock, HostKeys: h.d.Inventory.HostKeyStore(), Log: h.d.Log,
+		FreshConnection: fresh})
 	if err != nil {
 		h.recordFailure(ctx, id, err)
 		return nil, t, jobs.FromProvider(err)
@@ -120,7 +122,7 @@ func (h *handlers) close(s providers.Session) {
 }
 
 func (h *handlers) testConnection(ctx context.Context, j jobs.Job, _ jobs.StepRecorder) (map[string]any, error) {
-	sess, t, err := h.open(ctx, j.TargetID, false)
+	sess, t, err := h.open(ctx, j.TargetID, false, true)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +156,7 @@ func (h *handlers) testConnection(ctx context.Context, j jobs.Job, _ jobs.StepRe
 }
 
 func (h *handlers) discover(ctx context.Context, j jobs.Job, _ jobs.StepRecorder) (map[string]any, error) {
-	sess, _, err := h.open(ctx, j.TargetID, true)
+	sess, _, err := h.open(ctx, j.TargetID, true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +237,7 @@ func (h *handlers) removeKey(ctx context.Context, j jobs.Job, steps jobs.StepRec
 		h.removalFailed(ctx, locID, actor, "sshkey.own_key_protected")
 		return nil, jobs.Fail("sshkey.own_key_protected", nil, nil)
 	}
-	sess, _, err := h.open(ctx, j.TargetID, true)
+	sess, _, err := h.open(ctx, j.TargetID, true, false)
 	if err != nil {
 		reason, _ := reasonOf(err)
 		h.removalFailed(ctx, locID, actor, reason)

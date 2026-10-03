@@ -230,3 +230,38 @@ func TestPoolAcquireWaitingDuringCloseDoesNotDial(t *testing.T) {
 	}
 	assert.Equal(t, before, e.srv.AuthAttempts(), "no connection was opened after Close")
 }
+
+// A-4 (R37 item 21): AcquireFresh never reuses an idle connection; the new connection goes back to
+// the pool. When the fresh dial finds a changed host key, the idle connections of the target
+// (opened with the old key, still alive) are closed too.
+func TestPoolAcquireFreshDialsAndDropsIdleConnectionsOnAChangedKey(t *testing.T) {
+	e := newPoolEnv(t, clock.Real{}, 4, 2)
+	ctx := context.Background()
+	c1, rel1, err := e.pool.Acquire(ctx, testTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	rel1(true)
+	dials := e.srv.Connections()
+
+	c2, rel2, err := e.pool.AcquireFresh(ctx, testTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	assert.NotSame(t, c1, c2, "an idle connection exists, but a fresh one is dialed")
+	assert.Equal(t, dials+1, e.srv.Connections())
+	assert.True(t, c1.Healthy(), "the idle connection stays")
+	rel2(true)
+	e.pool.mu.Lock()
+	assert.Len(t, e.pool.idle[testTarget], 2, "the fresh connection is kept for reuse")
+	e.pool.mu.Unlock()
+
+	// The server now presents another key; the idle connections were opened before and are alive.
+	e.srv.SetHostKeyAlgorithms(linuxsshtest.NewHostKey(t))
+	_, _, err = e.pool.AcquireFresh(ctx, testTarget, e.cfg, e.cred)
+	assert.Equal(t, "target.host_key_changed", providerCode(t, err).Code)
+	assert.False(t, c1.Healthy(), "idle connections of the old key are closed")
+	assert.False(t, c2.Healthy())
+	e.pool.mu.Lock()
+	assert.Empty(t, e.pool.idle[testTarget])
+	assert.Zero(t, e.pool.idleN)
+	e.pool.mu.Unlock()
+	_, _, err = e.pool.Acquire(ctx, testTarget, e.cfg, e.cred)
+	assert.Equal(t, "target.host_key_changed", providerCode(t, err).Code, "nothing old is handed out afterwards")
+}

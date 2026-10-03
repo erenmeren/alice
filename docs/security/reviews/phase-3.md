@@ -62,7 +62,7 @@ Playwright: the e2e build has no deterministic way to queue a job before the loc
 | P3-01 | High (residual, spec SC-6) | Whoever controls Alice (or its database plus the master key) can sign in to every managed server as `alice-svc` and use the helper's subcommands there. | Accepted residual risk of the product (decisions "Threat model"); mitigations: restricted sudoers, the helper's own validation, optional `from=` in the `authorized_keys` line, audit forwarding. Recorded in `SECURITY-REPORT.md` (Phase 8). |
 | P3-02 | Medium (spec SC-1) | Trust on first use: an attacker between Alice and a new server at the moment it is added can present their own key; the administrator must compare the fingerprint out of band. | Accepted; the UI shows the exact command to run on the server and never pins without an administrator's click. |
 | P3-03 | Medium (spec J-1) | The job payload MAC is derived from the master key; an attacker with the database and the master key can insert a valid job. | Accepted (same trust boundary as every secret). |
-| P3-04 | Medium | Until the scheduled fix lands, an explicit **Test connection** within 60 s of the previous use reuses an idle pooled connection, so it can report success for a server whose host key has just changed. No new connection is ever made with a changed key, and the change is detected on the next new connection. | Fix scheduled before the Phase 3 merge (controller ruling): the test job dials a fresh connection. See "Known limitations". |
+| P3-04 | Medium | An explicit **Test connection** within 60 s of the previous use reused an idle pooled connection, so it could report success for a server whose host key had just changed. | Fixed before the Phase 3 merge (controller ruling): the test job dials a fresh connection (`providers.Env.FreshConnection`), and a dial that finds a changed key closes the target's idle connections. Scans and removals within 60 s may still reuse a connection opened with the old key (see "Known limitations"). |
 | P3-05 | Low | Accounts known only to LDAP/SSSD are not listed, so their keys are not inventoried. | Accepted for v1 (R37 item 4); a warning names the gap on each such server. |
 | P3-06 | Low | The `nginx` sudoers profile keeps `*` wildcards that accept any arguments; the helper is the enforcement point. The `linux` profile lines are narrowed (R37 item 3). | Accepted (spec §12.3); helper validation is tested on three distributions; the Nginx lines are narrowed with their command builders in Phase 4. |
 | P3-07 | Low | Helper backups of `authorized_keys` (public data) stay on the server for up to 30 days; Alice does not call `cleanup` in Phase 3. | Accepted; they are root-only (0700/0600). |
@@ -89,11 +89,11 @@ No High finding is open except the documented product residual P3-01.
 - **Servers without readable sshd settings.** Alice refuses key removal on a server (or for a user) when the last
   scan could not run `sshd -T`, because it cannot know which file sshd honours. A server whose `sshd -T` fails
   permanently cannot have keys removed through Alice.
-- **Test connection over a pooled connection (P3-04; fix scheduled before merge).** As built, for up to 60 s after
-  Alice last used a server, **Test connection** reuses the idle pooled connection (after a liveness probe), so a
-  host key that changed in that window is detected only after the pool idle time, on the next new connection.
-  Scans and key removals in that window also use the pooled connection. The e2e test moves the demo clock past the
-  idle time before it tests a rotated key.
+- **Pooled connections (P3-04).** **Test connection** always dials a new connection, so it sees the host key the
+  server presents now. Scans and key removals within 60 s of Alice's last work on a server may reuse an idle
+  connection (after a liveness probe) that was opened with the previous key; a server that was reinstalled drops
+  those connections, and a changed key is detected on the next new connection. The e2e test still moves the demo
+  clock past the idle time before it tests a rotated key (it is not needed any more, but harmless).
 - **Missing keys per path.** A key location is marked "no longer found" only when its file was read in the scan,
   matching on the file path and not the user, so an absolute `AuthorizedKeysFile` shared by several users is
   tracked per path (R37 item 23).
@@ -155,7 +155,7 @@ If `deploy/.env` sets `ALICE_PORT`, open `https://localhost:<port>` instead of `
    Expected: "Alice needs this key to connect to this server and will not remove it." Nothing changes on the server
    (`sudo sha256sum /var/lib/alice-svc/.ssh/authorized_keys` prints the same value before and after), and the
    **Audit log** shows "SSH key removal refused".
-5. **Changed host key.** Wait at least one minute after the last action on this server (see P3-04). On the test
+5. **Changed host key.** On the test
    server run `sudo rm /etc/ssh/ssh_host_*` and `sudo ssh-keygen -A`, then restart the SSH service
    (`sudo systemctl restart ssh` on Ubuntu and Debian, `sudo systemctl restart sshd` on Rocky). In Alice choose
    **Test connection**.

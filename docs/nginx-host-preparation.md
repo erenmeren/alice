@@ -108,9 +108,8 @@ ended only through the API: an administrator, signed in to the browser, re-pins 
 (`POST /api/v1/targets/{id}/host-keys/{pinned key id}/actions/repin`, with its fingerprint and a reason). Alice
 records this as `hostkey.change_dismissed`.
 
-Alice reuses an open SSH connection for up to 60 seconds. Until a fix scheduled for this release is in place,
-**Test connection** within 60 seconds of Alice's last work on the server can still report success over the old
-connection; the change is detected on the next new connection.
+Alice reuses an open SSH connection for up to 60 seconds for its own work. **Test connection** always opens a new
+connection, so it shows a changed host key at once.
 
 ## Removing Alice from a server
 

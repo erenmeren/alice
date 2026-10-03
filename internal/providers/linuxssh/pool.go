@@ -134,6 +134,17 @@ func (p *Pool) targetSlots(target uuid.UUID) (chan struct{}, error) {
 // Acquire returns a connection to target and its release function. release(healthy) must be called
 // exactly once (later calls do nothing); a connection that is not healthy is closed, never reused.
 func (p *Pool) Acquire(ctx context.Context, target uuid.UUID, cfg Config, cred providers.CredentialSource) (*Conn, func(healthy bool), error) {
+	return p.acquire(ctx, target, cfg, cred, false)
+}
+
+// AcquireFresh is Acquire without reuse: it always dials, so the host key the server presents now
+// is checked against the pin (an explicit connection test, R37 item 21). Released, the new
+// connection is kept for reuse like any other.
+func (p *Pool) AcquireFresh(ctx context.Context, target uuid.UUID, cfg Config, cred providers.CredentialSource) (*Conn, func(healthy bool), error) {
+	return p.acquire(ctx, target, cfg, cred, true)
+}
+
+func (p *Pool) acquire(ctx context.Context, target uuid.UUID, cfg Config, cred providers.CredentialSource, fresh bool) (*Conn, func(healthy bool), error) {
 	tsem, err := p.targetSlots(target)
 	if err != nil {
 		return nil, nil, err
@@ -156,15 +167,37 @@ func (p *Pool) Acquire(ctx context.Context, target uuid.UUID, cfg Config, cred p
 		slots()
 		return nil, nil, closedError()
 	}
-	if c := p.takeIdle(ctx, target, cfg); c != nil {
-		return c, p.releaser(target, c, slots), nil
+	if !fresh {
+		if c := p.takeIdle(ctx, target, cfg); c != nil {
+			return c, p.releaser(target, c, slots), nil
+		}
 	}
 	c, err := p.dialer.Dial(ctx, target, cfg, cred)
 	if err != nil {
 		slots()
+		if hostKeyChanged(err) {
+			p.dropIdle(target) // opened with a key the server no longer presents: never reuse them
+		}
 		return nil, nil, err
 	}
 	return c, p.releaser(target, c, slots), nil
+}
+
+func hostKeyChanged(err error) bool {
+	var pe *providers.Error
+	return errors.As(err, &pe) && pe.Code == "target.host_key_changed"
+}
+
+// dropIdle closes the idle connections of target.
+func (p *Pool) dropIdle(target uuid.UUID) {
+	p.mu.Lock()
+	list := p.idle[target]
+	delete(p.idle, target)
+	p.idleN -= len(list)
+	p.mu.Unlock()
+	for _, ic := range list {
+		_ = ic.conn.Close()
+	}
 }
 
 // takeIdle hands out an idle connection of target opened with cfg whose key is still pinned.

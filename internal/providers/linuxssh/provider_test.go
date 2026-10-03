@@ -237,6 +237,32 @@ func TestTestConnectionWarnsWhenSSHDCannotBeRead(t *testing.T) {
 	assert.True(t, hasWarning(rep.Warnings, "sshd_unreadable", ""))
 }
 
+// A-4 (R37 item 21): Env.FreshConnection (the explicit connection test) dials a new connection
+// although an idle one exists; without it the idle connection is reused.
+func TestOpenWithFreshConnectionDials(t *testing.T) {
+	e := newProvEnv(t)
+	ctx := context.Background()
+	env := providers.Env{Clock: clock.Real{}, HostKeys: e.hk}
+	s1, err := e.prov.Open(ctx, e.ref, e.cred, env)
+	require.NoError(t, err)
+	c1 := connOf(t, s1)
+	require.NoError(t, s1.Close())
+	dials := e.srv.Connections()
+
+	s2, err := e.prov.Open(ctx, e.ref, e.cred, env)
+	require.NoError(t, err)
+	assert.Same(t, c1, connOf(t, s2), "reused without FreshConnection")
+	require.NoError(t, s2.Close())
+	assert.Equal(t, dials, e.srv.Connections())
+
+	env.FreshConnection = true
+	s3, err := e.prov.Open(ctx, e.ref, e.cred, env)
+	require.NoError(t, err)
+	defer func() { _ = s3.Close() }()
+	assert.NotSame(t, c1, connOf(t, s3))
+	assert.Equal(t, dials+1, e.srv.Connections())
+}
+
 func TestOpenHelperMissing(t *testing.T) {
 	e := newProvEnv(t)
 	e.emu.SetHelperMissing(true)

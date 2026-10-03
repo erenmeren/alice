@@ -88,7 +88,7 @@ seconds, doubling up to 30 minutes (connection tests are not retried; scans get 
 sign-in is not retried: the server is marked "Sign-in refused" until someone tests it again.
 
 At most 10 SSH connections are in use at once (2 per server); an idle connection is kept for up to 60 seconds and
-reused. Each step has its own time limit: 10 seconds to connect, 15 seconds for the SSH handshake, 30 seconds per
+reused, except by **Test connection**, which always opens a new connection. Each step has its own time limit: 10 seconds to connect, 15 seconds for the SSH handshake, 30 seconds per
 command (60 seconds for reading the SSH settings and listing the key files). Every job payload carries an HMAC; a job
 changed in the database is never run (`job.tampered`).
 
