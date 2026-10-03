@@ -795,6 +795,45 @@ func TestRecoveryTimesArePaced(t *testing.T) {
 	assert.Equal(t, now.Add(inventory.RecoveryRetryInterval), *f.get(b).RecoverAfter, "a past time too")
 	require.NoError(t, f.h.svc.MarkRecovering(ctx, b, now.Add(inventory.FirstRecoveryDelay), false))
 	assert.Equal(t, now.Add(inventory.FirstRecoveryDelay), *f.get(b).RecoverAfter, "a named time is kept")
+
+	// Pacing guard (Task 15 re-review): once a recovery was requested, FirstRecoveryDelay cannot
+	// shorten the next one; only the first recovery comes sooner than RecoveryRetryInterval.
+	_, err := f.h.svc.RequestRecovery(ctx, b)
+	require.NoError(t, err)
+	f.jobStatus(f.recoverJobID(b), "failed", "ssh.unreachable")
+	require.Equal(t, 1, f.get(b).RecoveryAttempts)
+	require.NoError(t, f.h.svc.MarkRecovering(ctx, b, now.Add(inventory.FirstRecoveryDelay), false))
+	assert.Equal(t, now.Add(inventory.RecoveryRetryInterval), *f.get(b).RecoverAfter, "MarkRecovering after an attempt")
+	require.NoError(t, f.h.svc.RecordOutcome(ctx, b, inventory.DeployOutcomeRecord(providers.DeployOutcome{}, nil, false),
+		now.Add(inventory.FirstRecoveryDelay)))
+	assert.Equal(t, now.Add(inventory.RecoveryRetryInterval), *f.get(b).RecoverAfter, "RecordOutcome after an attempt")
+	require.NoError(t, f.h.svc.MarkRecovering(ctx, b, now.Add(time.Hour), false))
+	assert.Equal(t, now.Add(time.Hour), *f.get(b).RecoverAfter, "a later time is kept")
+}
+
+// The start record carries its time (S6): started_at is when StartDeployment recorded the send
+// values, so a recovery can tell how long ago the first send may have reached the helper.
+func TestStartDeploymentStampsTheStartRecord(t *testing.T) {
+	f := newDeployFixture(t)
+	id := f.request(f.admin, f.cert.ID, f.loc1)
+	_, err := f.h.svc.BeginDeployment(f.h.ctx, id)
+	require.NoError(t, err)
+	begun := *f.get(id).StartedAt
+	f.h.clock.Advance(90 * time.Second) // the pre-check took a while
+	m, err := f.h.svc.DeploymentMaterial(f.h.ctx, id, false)
+	require.NoError(t, err)
+	assert.Equal(t, f.nw.Cert.NotBefore.UTC(), m.NotBefore, "the material carries the validity start (re-checked at run time)")
+	require.NoError(t, f.h.svc.StartDeployment(f.h.ctx, id, m.SendValues(pki.Fingerprint(f.old.Cert), 2)))
+	got := *f.get(id).StartedAt
+	assert.Equal(t, begun.Add(90*time.Second), got)
+}
+
+func (f *deployFixture) recoverJobID(id uuid.UUID) uuid.UUID {
+	f.h.t.Helper()
+	var job uuid.UUID
+	require.NoError(f.h.t, f.h.db.Owner.QueryRow(f.h.ctx, `SELECT id FROM jobs WHERE dedupe_key = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+		"certificate.deploy_recover:"+id.String()).Scan(&job))
+	return job
 }
 
 // Important 2: a deployment that never sent anything cannot be moved into recovery; a failure

@@ -410,12 +410,12 @@
         "body": "Alice {{target_name}} sunucusunda bir sertifika dağıtmaya başladı (dosya: {{cert_path}}) ancak dağıtımın nasıl sonuçlandığını doğrulayamadı ve denemeyi bıraktı.\n\nWeb sitesini hemen denetleyin ve sunucuda nginx -t komutunu çalıştırın. Değişiklik sunucuya ulaştıysa önceki dosyalar şu klasördedir: {{backup_dir}}. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
       },
       "restored_unverified": {
-        "subject": "{{target_name}} sunucusunda önceki sertifika geri kondu ancak web sitesi onu sunmuyor",
-        "body": "{{target_name}} sunucusundaki bir sertifika dağıtımı başarısız oldu (dosya: {{cert_path}}) ve Alice önceki dosyaları geri koydu. Web sitesi hâlâ önceki sertifikayı sunmuyor; örneğin başka bir server bloğu veya bir yük dengeleyici yanıt veriyor olabilir.\n\nWeb sitesini denetleyin ve sunucuda systemctl status nginx komutunu çalıştırın. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
+        "subject": "{{target_name}} sunucusunda önceki sertifika geri yüklendi ancak Alice web sitesinin onu sunduğunu doğrulayamadı",
+        "body": "{{target_name}} sunucusundaki bir sertifika dağıtımı başarısız oldu (dosya: {{cert_path}}) ve Alice önceki dosyaları geri yükledi. Alice web sitesinin önceki sertifikayı sunduğunu doğrulayamadı; örneğin başka bir server bloğu veya bir yük dengeleyici yanıt veriyor ya da denetim bağlantı kuramamış olabilir.\n\nWeb sitesini denetleyin ve sunucuda systemctl status nginx komutunu çalıştırın. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
       },
       "superseded": {
-        "subject": "{{target_name}} sunucusunda sonraki bir değişiklik bir dağıtımın dosyalarını değiştirdi",
-        "body": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımını tamamlayamadı veya geri alamadı (dosya: {{cert_path}}), çünkü daha sonraki bir işlem dosyaları zaten değiştirdi. Alice hiçbir şeyi geri yüklemedi.\n\nWeb sitesinin şu anda hangi sertifikayı sunduğunu denetleyin, sonra Alice'te sunucunun sayfasında Keşfet'i seçin. Dağıtım: {{deployment_id}}"
+        "subject": "{{target_name}} sunucusunda sonraki bir işlem bir dağıtımın dosyalarının üzerine yazdı",
+        "body": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımını tamamlayamadı veya geri alamadı (dosya: {{cert_path}}), çünkü daha sonraki bir işlem dosyaları zaten değiştirdi. Alice hiçbir şeyi geri yüklemedi.\n\nWeb sitesinin şu anda hangi sertifikayı sunduğunu denetleyin, sonra Alice'te sunucunun sayfasında SSH anahtarlarını tara düğmesini seçin. Dağıtım: {{deployment_id}}"
       },
       "needs_attention": {
         "subject": "Alice {{target_name}} sunucusundaki bir dağıtımı tamamlayamıyor",

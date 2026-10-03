@@ -84,6 +84,7 @@ type Material struct {
 	PrivateKeyPEM      secrets.Plaintext
 	Fingerprint        string    // the new leaf
 	SANs               []string  // the new leaf's
+	NotBefore          time.Time // the new leaf's (the engine re-checks the validity at run time)
 	NotAfter           time.Time // the new leaf's
 	KeyType            string    // "rsa" | "ecdsa" (the new leaf's algorithm)
 	CurrentFingerprint string    // the leaf in the location's file at the last discovery ("" when unknown)
@@ -195,7 +196,7 @@ func (s *Service) DeploymentMaterial(ctx context.Context, id uuid.UUID, withKey 
 	err = s.pool.QueryRow(ctx, `SELECT l.servers, l.supported AND l.missing_since IS NULL, l.resolved_cert_path, l.inherited, l.symlinked,
     l.custom_location, l.key_exists, l.key_mode, l.key_owner, l.key_group, l.cert_file_sha256, l.verify_port, coalesce(l.verify_sni, ''),
     l.skip_verify, coalesce(oc.fingerprint_sha256, ''), coalesce(oc.sans, '{}'), l.key_type,
-    c.pem_chain, c.fingerprint_sha256, c.sans, c.not_after, c.key_algorithm, c.private_key_id, c.public_key_sha256, t.facts
+    c.pem_chain, c.fingerprint_sha256, c.sans, c.not_before, c.not_after, c.key_algorithm, c.private_key_id, c.public_key_sha256, t.facts
 FROM certificate_locations l
 JOIN certificates c ON c.id = $2
 JOIN targets t ON t.id = l.target_id
@@ -203,7 +204,7 @@ LEFT JOIN certificates oc ON oc.id = l.certificate_id
 WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supported, &m.Location.ResolvedCertPath, &m.Location.Inherited,
 		&m.Location.Symlinked, &m.Location.CustomLocation, &m.Location.KeyExists, &m.Location.KeyMode, &m.Location.KeyOwner,
 		&m.Location.KeyGroup, &fileSHA, &verifyPort, &m.Verify.SNI, &m.Verify.Skip, &m.CurrentFingerprint, &m.OldSANs, &currentType,
-		&pemChain, &m.Fingerprint, &m.SANs, &m.NotAfter, &m.KeyType, &keyID, &publicKey, &facts)
+		&pemChain, &m.Fingerprint, &m.SANs, &m.NotBefore, &m.NotAfter, &m.KeyType, &keyID, &publicKey, &facts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Material{}, ErrNotFound
 	}
@@ -222,7 +223,7 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 	if verifyPort != nil {
 		m.Verify.Port = *verifyPort
 	}
-	m.NotAfter = m.NotAfter.UTC()
+	m.NotBefore, m.NotAfter = m.NotBefore.UTC(), m.NotAfter.UTC()
 	m.CertificatePEM = []byte(pemChain)
 	m.NewCertSHA256 = sha256Hex(m.CertificatePEM)
 	oldType = currentType
@@ -323,7 +324,8 @@ func (s *Service) appendAudit(ctx context.Context, tx pgx.Tx, action string, res
 	return err
 }
 
-// BeginDeployment moves a queued deployment to precheck (status running, started_at set once) and
+// BeginDeployment moves a queued deployment to precheck (status running, started_at set when the
+// pre-check begins; StartDeployment moves it to the start record) and
 // returns it. It is idempotent: a deployment in any other state is returned unchanged, and the
 // caller follows its state (deploying or recovering: recover; done: nothing to do).
 func (s *Service) BeginDeployment(ctx context.Context, id uuid.UUID) (Deployment, error) {
@@ -352,14 +354,22 @@ WHERE id = $1 AND state = $5`, id, s.clock.Now().UTC(), DeployStatePrecheck, Dep
 // from precheck (ErrDeploymentState otherwise, so a second start never overwrites a record), and
 // never while another deployment on the server is being recovered (ErrRecoveryPending: the
 // deployment was queued before that recovery began; finish it failed with
-// deployment.recovery_pending, or retry later).
+// deployment.recovery_pending, or retry later). started_at becomes the time of this start record
+// (BeginDeployment set it when the pre-check began): a recovery that finds no journal on the server
+// treats that as final only once the helper's budget has passed since then (S6).
+//
+// The recovery-pending check here and in CheckRecoveryPending is best-effort: it sees recoveries
+// that have committed. A sibling deployment entering recovery in a concurrent transaction that has
+// not committed yet is not seen, and both may start. That is safe: the per-target job lock (one job
+// per server at a time) and the helper's own lock serialise the actual work on the server; the
+// check only keeps new changes from starting while a recovery is known to be pending.
 func (s *Service) StartDeployment(ctx context.Context, id uuid.UUID, v SendValues) error {
 	return s.startDeployment(ctx, id, v)
 }
 
 // CheckRecoveryPending is ErrRecoveryPending when another deployment on the deployment's server
 // is being recovered (state recovering): the deploy job checks it before its pre-check, and
-// StartDeployment checks it again under the deployment's lock.
+// StartDeployment checks it again under the deployment's lock. Best-effort: see StartDeployment.
 func (s *Service) CheckRecoveryPending(ctx context.Context, id uuid.UUID) error {
 	return recoveryPending(ctx, s.pool, id)
 }
@@ -408,9 +418,9 @@ func (s *Service) startDeployment(ctx context.Context, id uuid.UUID, v SendValue
 			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE deployments SET state = $2, operation_id = $3, expect_cert_sha256 = $4, new_chain_length = $5,
-    previous_fingerprint = $6, previous_chain_length = $7, rollback_info = $8
+    previous_fingerprint = $6, previous_chain_length = $7, rollback_info = $8, started_at = $9
 WHERE id = $1`, id, DeployStateDeploying, v.OperationID, v.ExpectCertSHA256, v.NewChainLength, v.PreviousFingerprint,
-			v.PreviousChainLength, backup); err != nil {
+			v.PreviousChainLength, backup, s.clock.Now().UTC()); err != nil {
 			return fmt.Errorf("inventory: record the send: %w", err)
 		}
 		return s.appendAudit(ctx, tx, "deployment.started", audit.Success, id, map[string]string{"operation_id": id.String(),
@@ -779,7 +789,8 @@ func (s *Service) notify(ctx context.Context, tx pgx.Tx, template string, params
 
 // MarkRecovering moves a deployment that may have sent (deploying or recovering) to recovering
 // with the next recovery not before retryAt; a zero or past retryAt means now +
-// RecoveryRetryInterval (name now + FirstRecoveryDelay for a first recovery soon). A deployment
+// RecoveryRetryInterval (name now + FirstRecoveryDelay for a first recovery soon; once a recovery
+// was requested, nothing sooner than now + RecoveryRetryInterval is kept). A deployment
 // that never sent anything is ErrDeploymentState (a failure before the send is
 // FinishDeployment(failed)). needsAttention flags it (status needs_attention: Alice cannot finish
 // or undo it); the flag stays until the deployment ends, and its first setting audits
@@ -794,7 +805,7 @@ func (s *Service) MarkRecovering(ctx context.Context, id uuid.UUID, retryAt time
 		if d.state == DeployStateDone {
 			return errAlreadyFinished
 		}
-		return s.markRecoveringLocked(ctx, tx, d, s.paced(retryAt), needsAttention)
+		return s.markRecoveringLocked(ctx, tx, d, s.paced(retryAt, d.attempts), needsAttention)
 	})
 	if errors.Is(err, errAlreadyFinished) {
 		return nil
@@ -802,11 +813,15 @@ func (s *Service) MarkRecovering(ctx context.Context, id uuid.UUID, retryAt time
 	return err
 }
 
-// paced is retryAt, or now + RecoveryRetryInterval for a zero or past time.
-func (s *Service) paced(retryAt time.Time) time.Time {
+// paced is retryAt, or now + RecoveryRetryInterval for a zero or past time. Once a recovery was
+// requested (attempts > 0) it is never sooner than now + RecoveryRetryInterval: FirstRecoveryDelay
+// can only shorten the first recovery, and no caller can make the recoveries of one deployment
+// poll the server faster than the sweep paces them.
+func (s *Service) paced(retryAt time.Time, attempts int) time.Time {
 	now := s.clock.Now().UTC()
-	if retryAt.IsZero() || !retryAt.After(now) {
-		return now.Add(RecoveryRetryInterval)
+	floor := now.Add(RecoveryRetryInterval)
+	if retryAt.IsZero() || !retryAt.After(now) || (attempts > 0 && retryAt.Before(floor)) {
+		return floor
 	}
 	return retryAt.UTC()
 }
@@ -965,7 +980,7 @@ WHERE id = $1`, id, code, params, sanitizeCode(f.VerifyFailedReason, ""), port)
 			return fmt.Errorf("inventory: record the uncertain outcome: %w", err)
 		}
 		d.errorCode = code
-		return s.markRecoveringLocked(ctx, tx, d, s.paced(retryAt), false)
+		return s.markRecoveringLocked(ctx, tx, d, s.paced(retryAt, d.attempts), false)
 	})
 	if errors.Is(err, errAlreadyFinished) {
 		return nil

@@ -15,9 +15,9 @@ package inventory
 //	                                       returns the row unchanged); deployment.precheck_started
 //	precheck  -> deploying [running]       StartDeployment(id, SendValues): records operation_id,
 //	                                       expect_cert_sha256, new_chain_length, previous_fingerprint,
-//	                                       previous_chain_length (exactly the values sent) and
-//	                                       rollback_info in ONE update before the first send;
-//	                                       deployment.started. Refused from any other state
+//	                                       previous_chain_length (exactly the values sent),
+//	                                       rollback_info and started_at (the start record's time) in
+//	                                       ONE update before the first send; deployment.started. Refused from any other state
 //	                                       (ErrDeploymentState), and while another deployment on the
 //	                                       server is recovering (ErrRecoveryPending). Deploying with an
 //	                                       operation id means "a send may have happened"; queued,
@@ -26,7 +26,8 @@ package inventory
 //	          -> recovering [running|needs_attention]
 //	                                       MarkRecovering, RequestRecovery, RecordOutcome (uncertain),
 //	                                       SweepDeployments: recover_after (a zero or past time is now +
-//	                                       RecoveryRetryInterval), recovery_attempts;
+//	                                       RecoveryRetryInterval; after the first recovery request never
+//	                                       sooner than that), recovery_attempts;
 //	                                       deployment.recovering on entry, deployment.recovery_started
 //	                                       per recovery job, deployment.needs_attention (and its email,
 //	                                       by cause) on the first needs_attention, which then stays
