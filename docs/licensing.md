@@ -62,9 +62,11 @@ backups, the audit log and its export, inventory export, user administration, AP
 would change a server are refused with `ALC-LIC-0001` ("Not available while the license is expired."). Uploading a
 renewal ends lock mode at once.
 
-This release does not yet manage servers, so in lock mode you only see the banner. Refused changes, certificate
-expiry alerts by email with a note that the license expired, and paused work that waits for an administrator's
-confirmation after the renewal arrive with the releases that add targets, deployments and alerts.
+In lock mode adding or removing servers, confirming fingerprints, **Test connection**, **Scan for SSH keys** and
+key removals are refused, and the daily scans are not started. Key removals that were already waiting in the queue
+are paused; after the renewal they appear under **Waiting for an administrator** on **Servers**, and an
+administrator chooses **Run now** or **Discard** for each (nothing starts on its own). Certificate expiry alerts by
+email with a note that the license expired arrive with the releases that add deployments and alerts.
 
 ## Clock changes
 

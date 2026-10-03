@@ -1,7 +1,7 @@
 # Administrator Guide
 
-This guide covers day-to-day administration. Sections for targets, certificates, SSH keys, alerts and SSO are
-added in later releases. First-time setup is described in [first-run.md](first-run.md); server commands are in
+This guide covers day-to-day administration. Sections for certificates, alerts and SSO are added in later
+releases. First-time setup is described in [first-run.md](first-run.md); server commands are in
 [operator-guide.md](operator-guide.md).
 
 ## Users and roles
@@ -11,7 +11,7 @@ Alice has three roles:
 | Role | Can do | Cannot do |
 |---|---|---|
 | Administrator | Everything: users, settings, audit log, API tokens of other people | — |
-| Operator | View inventory; run discovery, deploy certificates and add or remove SSH keys (from later releases); own API tokens | Manage users, see the audit log, change settings |
+| Operator | View inventory; test servers, run discovery and remove SSH keys; deploy certificates and add SSH keys (from later releases); own API tokens | Manage users, see the audit log, change settings |
 | Auditor | View inventory read-only, view and export the audit log, verify its integrity; own read-only API tokens | Change anything, manage users |
 
 The full list of which role may call which API operation is in [authz-matrix.md](authz-matrix.md).
