@@ -124,7 +124,8 @@ func (s *Service) RecordConnectionOK(ctx context.Context, id uuid.UUID, r provid
 // statusFor maps a failure reason to the target status (contract "Reason strings"; a permanent
 // failure such as ssh.auth_failed marks the target, §8.4, R37 item 13). Only a re-pin leaves
 // host_key_changed, which only HostKeyStore.Observed enters (with its alert), and disabled stays
-// disabled. Host-key reasons are owned by the store and the confirmation: a report that the key is
+// disabled. A target waiting for its first confirmation (pending_host_key, nothing pinned) stays
+// there when the server cannot be reached, so its recorded candidate can still be confirmed. Host-key reasons are owned by the store and the confirmation: a report that the key is
 // unconfirmed is stale once a key is pinned. Any other failure of a target in checking makes it
 // unreachable (it never stays checking); in other statuses it keeps the status.
 func statusFor(reason, current string, pinned bool) string {
@@ -135,6 +136,9 @@ func statusFor(reason, current string, pinned bool) string {
 	case "ssh.auth_failed":
 		return StatusAuthFailed
 	case "ssh.unreachable", "ssh.timeout":
+		if current == StatusPendingHostKey && !pinned {
+			return current // the recorded candidate stays confirmable (ConfirmHostKey needs pending_host_key)
+		}
 		return StatusUnreachable
 	case reasonUnconfirmed:
 		if pinned {
@@ -165,11 +169,9 @@ func (s *Service) RecordConnectionFailure(ctx context.Context, id uuid.UUID, rea
 		if err != nil {
 			return err
 		}
-		pinned := ""
-		if reason == reasonUnconfirmed {
-			if pinned, err = pinnedFingerprint(ctx, tx, id); err != nil {
-				return err
-			}
+		pinned, err := pinnedFingerprint(ctx, tx, id)
+		if err != nil {
+			return err
 		}
 		to := statusFor(reason, t.Status, pinned != "")
 		errorCode := reason

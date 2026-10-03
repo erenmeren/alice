@@ -131,3 +131,24 @@ func TestCheckingAndDisabledStatuses(t *testing.T) {
 	require.NoError(t, h.svc.HostKeyStore().Observed(h.ctx, tg.ID, ed25519HostKey(t), true))
 	assert.Equal(t, inventory.StatusHostKeyChanged, statusOf(t, h, tg.ID))
 }
+
+// A new server that cannot be reached while its key waits for a confirmation stays
+// pending_host_key (with the reason): an unreachable status would make ConfirmHostKey refuse the
+// candidate that is already recorded.
+func TestUnreachableTargetWithoutAPinnedKeyStaysPending(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	k := ed25519HostKey(t)
+	tg := h.add(admin, "web-01", "web-01.example.com")
+	require.NoError(t, h.svc.HostKeyStore().Observed(h.ctx, tg.ID, k, false))
+	for _, reason := range []string{"ssh.timeout", "ssh.unreachable"} {
+		require.NoError(t, h.svc.RecordConnectionFailure(h.ctx, tg.ID, reason))
+		got, err := h.svc.GetTarget(h.ctx, tg.ID)
+		require.NoError(t, err)
+		assert.Equal(t, inventory.StatusPendingHostKey, got.Status, reason)
+		assert.Equal(t, reason, got.LastErrorCode)
+	}
+	_, err := h.svc.ConfirmHostKey(h.ctx, admin, tg.ID, keyID(t, h, tg.ID, k.Fingerprint), k.Fingerprint)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.StatusChecking, statusOf(t, h, tg.ID))
+}
