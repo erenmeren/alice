@@ -47,7 +47,11 @@ func (s *stubInventory) TargetRef(_ context.Context, id uuid.UUID) (providers.Ta
 	if s.refCalls > 1 && s.refAfter != nil {
 		t, err = s.refAfter(s.refCalls)
 	}
-	return providers.TargetRef{ID: id, Name: t.Name, Kind: providers.KindLinuxSSH}, t, err
+	kind := providers.KindLinuxSSH
+	if k, ok := providers.KindForTargetType(t.Type); ok {
+		kind = k
+	}
+	return providers.TargetRef{ID: id, Name: t.Name, Kind: kind}, t, err
 }
 func (s *stubInventory) Credentials() providers.CredentialSource { return nil }
 func (s *stubInventory) HostKeyStore() providers.HostKeyStore    { return nil }
@@ -64,8 +68,12 @@ func (s *stubInventory) RecordConnectionFailure(_ context.Context, _ uuid.UUID, 
 	s.failures = append(s.failures, reason)
 	return s.failErr
 }
-func (s *stubInventory) Reconcile(context.Context, uuid.UUID, providers.DiscoveryResult) (inventory.ReconcileSummary, error) {
-	return inventory.ReconcileSummary{Keys: 1}, s.reconcileErr
+func (s *stubInventory) Reconcile(_ context.Context, _ uuid.UUID, res providers.DiscoveryResult) (inventory.ReconcileSummary, error) {
+	sum := inventory.ReconcileSummary{Keys: 1}
+	if res.Nginx != nil {
+		sum.Certificates, sum.Locations, sum.NewLocations = 2, 3, 1
+	}
+	return sum, s.reconcileErr
 }
 func (s *stubInventory) RequestDiscovery(context.Context, inventory.Actor, uuid.UUID) (uuid.UUID, error) {
 	return uuid.New(), s.discoveryErr
@@ -451,4 +459,57 @@ func TestRemoveUnverifiedIsNotRecordedAsRemoved(t *testing.T) {
 	assert.Equal(t, jobs.NeedsAttention, c)
 	assert.Equal(t, map[string]any{"changed": true, "removed": 1, "verified": false}, out)
 	assert.Equal(t, []string{"sshkey.verify_failed"}, u.inv.removals)
+}
+
+// requestProvider records the DiscoverRequest of every session's Discover.
+type requestProvider struct {
+	*fake.Provider
+	reqs *[]providers.DiscoverRequest
+}
+
+type requestSession struct {
+	providers.Session
+	reqs *[]providers.DiscoverRequest
+}
+
+func (p requestProvider) Open(ctx context.Context, t providers.TargetRef, c providers.CredentialSource, e providers.Env) (providers.Session, error) {
+	s, err := p.Provider.Open(ctx, t, c, e)
+	if err != nil {
+		return nil, err
+	}
+	return requestSession{s, p.reqs}, nil
+}
+
+func (s requestSession) Discover(ctx context.Context, req providers.DiscoverRequest) (providers.DiscoveryResult, error) {
+	*s.reqs = append(*s.reqs, req)
+	return s.Session.Discover(ctx, req)
+}
+
+// A target whose capabilities include discover_certificates is scanned for both halves; a Linux
+// target for its SSH keys only. The job result of a certificate scan carries its counts.
+func TestDiscoverReadsCertificatesOfNginxTargets(t *testing.T) {
+	var reqs []providers.DiscoverRequest
+	linux, nginx := fake.New(providers.KindLinuxSSH), fake.New(providers.KindNginx, providers.CapTestConnection,
+		providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys, providers.CapDiscoverCerts)
+	nginx.Configure(func(c *fake.Config) {
+		c.Discovery = providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigValid: true}}
+	})
+	reg := providers.NewRegistry()
+	reg.Register(requestProvider{linux, &reqs})
+	reg.Register(requestProvider{nginx, &reqs})
+	reg.Freeze()
+	inv := &stubInventory{target: inventory.Target{Name: "web-01", Type: inventory.TypeNginx, Status: inventory.StatusOK,
+		Capabilities: []string{"authorized_keys", "discover_certificates", "discover_ssh_keys", "test_connection"}}}
+	h := newHandlers(Deps{Inventory: inv, Registry: reg, Clock: clock.NewFake(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC))})
+	out, err := h.discover(context.Background(), testJob, nil)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"key_count": 1, "new_count": 0, "missing_count": 0, "partial": false,
+		"certificate_count": 2, "location_count": 3}, out)
+
+	inv.target = inventory.Target{Name: "web-02", Type: inventory.TypeLinux, Status: inventory.StatusOK,
+		Capabilities: []string{"authorized_keys", "discover_ssh_keys", "test_connection"}}
+	out, err = h.discover(context.Background(), testJob, nil)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"key_count": 1, "new_count": 0, "missing_count": 0, "partial": false}, out)
+	assert.Equal(t, []providers.DiscoverRequest{{SSHKeys: true, Certificates: true}, {SSHKeys: true}}, reqs)
 }

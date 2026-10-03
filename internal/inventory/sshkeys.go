@@ -78,9 +78,13 @@ type KeyPage struct {
 	NextCursor string
 }
 
-// ReconcileSummary counts what one discovery changed.
+// ReconcileSummary counts what one discovery changed. Keys, New and Missing are SSH key
+// locations; Certificates (distinct certificates read), Locations (certificate files stored or
+// recognised), NewLocations, MissingLocations and SkippedLocations (reported locations that could
+// not be stored, see reconcileLocations) are the certificate half.
 type ReconcileSummary struct {
-	Keys, New, Missing int
+	Keys, New, Missing                                                        int
+	Certificates, Locations, NewLocations, MissingLocations, SkippedLocations int
 }
 
 const (
@@ -170,8 +174,27 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL
 			f.SSHD, f.HostKeys, f.Warnings, f.Unreadable = &sshd, res.HostKeys, res.Warnings, res.UnreadableLines
 			f.UID0Users = append([]string(nil), res.UID0Users...)
 		}
+		// The certificate half (D19: after the SSH facts, before they are stored). Only a usable
+		// configuration's certificates are stored; any other Nginx result (invalid, untrusted or
+		// unsupported configuration, Nginx not found) changes the facts only, which say why.
+		var certEvents []audit.Event
 		if res.Nginx != nil {
 			f.Nginx = mergeNginxFacts(f.Nginx, *res.Nginx)
+			if configUsable(res.Nginx) {
+				cs, events, err := s.reconcileLocations(ctx, tx, t, res.Certificates, scanCoversLocations(res), now)
+				if err != nil {
+					return err
+				}
+				certEvents = events
+				sum.Certificates, sum.Locations, sum.NewLocations = cs.Certificates, cs.Locations, cs.NewLocations
+				sum.MissingLocations, sum.SkippedLocations = cs.MissingLocations, cs.Skipped
+				if cs.Skipped > 0 && sshHalfRead(res) && !slices.ContainsFunc(f.Warnings, func(w providers.Warning) bool {
+					return w.Code == providers.WarnListTruncated
+				}) {
+					// A reported location that could not be stored: what is shown is incomplete.
+					f.Warnings = append(slices.Clone(f.Warnings), providers.Warning{Code: providers.WarnListTruncated, Params: map[string]string{}})
+				}
+			}
 		}
 		raw, err := json.Marshal(f)
 		if err != nil {
@@ -187,10 +210,20 @@ WHERE id = $1`, id, raw, res.SSHD.KeysManagedElsewhere, now, res.SSHD.Read); err
 		if err := s.markConnected(ctx, tx, t, now, false, "discovery_ok", nil); err != nil {
 			return err
 		}
+		for _, e := range certEvents {
+			if _, err := s.audit.Append(ctx, tx, e); err != nil {
+				return err
+			}
+		}
+		details := map[string]string{"key_count": strconv.Itoa(sum.Keys), "new_count": strconv.Itoa(sum.New),
+			"missing_count": strconv.Itoa(sum.Missing), "partial": strconv.FormatBool(res.Partial)}
+		if res.Nginx != nil { // a scan that asked for certificates
+			details["certificate_count"], details["location_count"] = strconv.Itoa(sum.Certificates), strconv.Itoa(sum.Locations)
+			details["new_location_count"], details["missing_location_count"] = strconv.Itoa(sum.NewLocations), strconv.Itoa(sum.MissingLocations)
+			details["skipped_location_count"] = strconv.Itoa(sum.SkippedLocations)
+		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("jobs"), Action: "target.discovered",
-			ObjectType: "target", ObjectID: id.String(), Result: audit.Success, Details: map[string]string{
-				"key_count": strconv.Itoa(sum.Keys), "new_count": strconv.Itoa(sum.New),
-				"missing_count": strconv.Itoa(sum.Missing), "partial": strconv.FormatBool(res.Partial)}})
+			ObjectType: "target", ObjectID: id.String(), Result: audit.Success, Details: details})
 		return err
 	})
 	return sum, err

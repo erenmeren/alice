@@ -1,0 +1,804 @@
+//go:build integration
+
+package inventory_test
+
+import (
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"alice/internal/inventory"
+	"alice/internal/platform/validate"
+	"alice/internal/providers"
+	"alice/internal/rbac"
+	"alice/internal/testutil/pki"
+)
+
+var nginxOK = &providers.NginxFacts{Found: true, ConfigValid: true, Version: "1.22.1"}
+
+// cl builds a supported location with one server on port 443 using the names.
+func cl(path, key string, names ...string) providers.CertLocation {
+	return providers.CertLocation{CertPath: path, KeyPath: key, ResolvedCertPath: path, Supported: true, KeyExists: true,
+		KeyMode: "0600", KeyOwner: "root", KeyGroup: "root",
+		Servers: []providers.CertServer{{Names: names, Listens: []providers.CertListen{{Port: 443}}, File: "/etc/nginx/sites-enabled/default", Line: 1}}}
+}
+
+func sha(b []byte) string {
+	s := sha256.Sum256(b)
+	return hex.EncodeToString(s[:])
+}
+
+// dc is the discovered file at loc holding leaf's full chain.
+func dc(loc providers.CertLocation, leaf pki.Leaf) providers.DiscoveredCertificate {
+	return providers.DiscoveredCertificate{Location: loc, PEMChain: leaf.FullchainPEM, FileSHA256: sha(leaf.FullchainPEM)}
+}
+
+func byPath(t *testing.T, h *harness, target uuid.UUID, missing bool) map[string]inventory.CertificateLocation {
+	t.Helper()
+	locs, err := h.svc.ListLocations(h.ctx, target, missing)
+	require.NoError(t, err)
+	out := map[string]inventory.CertificateLocation{}
+	for _, l := range locs {
+		out[l.CertPath] = l
+	}
+	return out
+}
+
+// locationRows is every stored column of the target's locations (as the owner reads them), less
+// the columns named in without.
+func locationRows(t *testing.T, h *harness, target uuid.UUID, without ...string) []string {
+	t.Helper()
+	if without == nil {
+		without = []string{}
+	}
+	rows, err := h.db.Owner.Query(h.ctx, "SELECT (to_jsonb(l) - $2::text[])::text FROM certificate_locations l WHERE target_id = $1 ORDER BY id",
+		target, without)
+	require.NoError(t, err)
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		require.NoError(t, rows.Scan(&s))
+		out = append(out, s)
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
+func withRoots(pool *x509.CertPool) harnessOption {
+	return func(c *inventory.Config) { c.Roots = pool }
+}
+
+func TestReconcileStoresCertificatesAndLocations(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	web1, web2 := okTarget(t, h, admin, "web-01"), okTarget(t, h, admin, "web-02")
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	shared := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
+	for _, tg := range []inventory.Target{web1, web2} {
+		sum, err := h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{Nginx: nginxOK,
+			Certificates: []providers.DiscoveredCertificate{dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), shared)}})
+		require.NoError(t, err)
+		assert.Equal(t, inventory.ReconcileSummary{Certificates: 1, Locations: 1, NewLocations: 1}, sum)
+	}
+	page, err := h.svc.ListCertificates(h.ctx, inventory.CertificateFilter{})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1, "the same certificate on two servers is one certificate")
+	c := page.Items[0]
+	assert.Equal(t, pki.Fingerprint(shared.Cert), c.Fingerprint)
+	assert.Equal(t, "discovered", c.Source)
+	assert.Equal(t, 2, c.LocationCount)
+	assert.False(t, c.HasPrivateKey, "a discovered certificate never brings its key")
+	assert.Equal(t, "www.example.test", c.SubjectCN)
+	assert.Equal(t, []string{"www.example.test"}, c.SANs)
+	assert.Equal(t, "ecdsa", c.KeyAlgorithm)
+	assert.Equal(t, 256, c.KeyBits)
+	assert.Equal(t, shared.Cert.NotAfter.UTC(), c.NotAfter)
+	assert.Empty(t, c.PEMChain, "the list leaves the chain out")
+	locs, err := h.svc.ListLocations(h.ctx, web1.ID, false)
+	require.NoError(t, err)
+	require.Len(t, locs, 1)
+	l := locs[0]
+	assert.Equal(t, "ecdsa", l.KeyType)
+	require.NotNil(t, l.Certificate)
+	assert.Equal(t, pki.Fingerprint(shared.Cert), l.Certificate.Fingerprint)
+	assert.Equal(t, c.ID, l.Certificate.ID)
+	assert.True(t, l.Supported)
+	assert.Equal(t, sha(shared.FullchainPEM), l.CertFileSHA256, "the helper's file hash, verbatim")
+	assert.Equal(t, "web-01", l.TargetName)
+	assert.Equal(t, "/etc/nginx/ssl/www.key", l.KeyPath)
+	assert.Equal(t, []providers.CertServer{{Names: []string{"www.example.test"}, Listens: []providers.CertListen{{Port: 443}},
+		File: "/etc/nginx/sites-enabled/default", Line: 1}}, l.Servers)
+	assert.Equal(t, []string{}, l.Warnings)
+	assert.Equal(t, 1, l.Version)
+	assert.Nil(t, l.ActiveDeploymentID)
+	full, err := h.svc.GetCertificate(h.ctx, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(shared.FullchainPEM), full.PEMChain)
+	assert.Len(t, full.Locations, 2)
+
+	// A second identical run updates, never duplicates (S3 AC4), and changes nothing else.
+	before := locationRows(t, h, web1.ID, "last_seen_at")
+	h.clock.Advance(time.Hour)
+	sum, err := h.svc.Reconcile(h.ctx, web1.ID, providers.DiscoveryResult{Nginx: nginxOK,
+		Certificates: []providers.DiscoveredCertificate{dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), shared)}})
+	require.NoError(t, err)
+	assert.Equal(t, inventory.ReconcileSummary{Certificates: 1, Locations: 1}, sum)
+	assert.Equal(t, 2, h.count("SELECT count(*) FROM certificate_locations"))
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM certificates"))
+	got, err := h.svc.GetLocation(h.ctx, l.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, got.Version, "an unchanged location keeps its version (an If-Match stays valid)")
+	assert.Equal(t, h.clock.Now(), got.LastSeenAt)
+	assert.Equal(t, l.FirstSeenAt, got.FirstSeenAt)
+	assert.Equal(t, before, locationRows(t, h, web1.ID, "last_seen_at"), "only last_seen_at moved")
+	assert.Zero(t, h.audits("location.changed_outside"))
+	d := h.auditDetails("target.discovered")
+	require.Len(t, d, 3)
+	assert.Equal(t, map[string]string{"key_count": "0", "new_count": "0", "missing_count": "0", "partial": "false",
+		"certificate_count": "1", "location_count": "1", "new_location_count": "0", "missing_location_count": "0",
+		"skipped_location_count": "0"}, d[2])
+}
+
+// The discovery order of the certificates changes nothing.
+func TestReconcileIsOrderIndependent(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	web := okTarget(t, h, admin, "web-01")
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	var found []providers.DiscoveredCertificate
+	for i := range 6 {
+		name := fmt.Sprintf("s%d.example.test", i)
+		found = append(found, dc(cl("/etc/nginx/ssl/"+name+".crt", "/etc/nginx/ssl/"+name+".key", name),
+			ca.Issue(pki.Opts{CommonName: name, SANs: []string{name}}, h.clock.Now())))
+	}
+	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: found})
+	require.NoError(t, err)
+	before := locationRows(t, h, web.ID)
+	reversed := slices.Clone(found)
+	slices.Reverse(reversed)
+	sum, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: reversed})
+	require.NoError(t, err)
+	assert.Equal(t, inventory.ReconcileSummary{Certificates: 6, Locations: 6}, sum)
+	assert.Equal(t, before, locationRows(t, h, web.ID), "the same clock: nothing changed at all")
+}
+
+func TestReconcileMissingChangedOutsideAndInvalidConfiguration(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	web := okTarget(t, h, admin, "web-01")
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	a, b, a2 := ca.Issue(pki.Opts{CommonName: "a.example.test"}, h.clock.Now()), ca.Issue(pki.Opts{CommonName: "b.example.test"}, h.clock.Now()),
+		ca.Issue(pki.Opts{CommonName: "a.example.test"}, h.clock.Now())
+	locA, locB := cl("/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key", "a.example.test"), cl("/etc/nginx/ssl/b.crt", "/etc/nginx/ssl/b.key", "b.example.test")
+	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{dc(locA, a), dc(locB, b)}})
+	require.NoError(t, err)
+
+	// An invalid configuration changes no location (F-20 spirit: no partial data).
+	sum, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigValid: false}})
+	require.NoError(t, err)
+	assert.Zero(t, sum.MissingLocations)
+	locs, _ := h.svc.ListLocations(h.ctx, web.ID, false)
+	assert.Len(t, locs, 2)
+
+	// b disappears; a's file now holds another certificate Alice did not deploy.
+	sum, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{dc(locA, a2)}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, sum.MissingLocations)
+	paths := byPath(t, h, web.ID, true)
+	assert.NotNil(t, paths["/etc/nginx/ssl/b.crt"].MissingSince)
+	assert.Equal(t, 2, paths["/etc/nginx/ssl/b.crt"].Version)
+	require.NotNil(t, paths["/etc/nginx/ssl/a.crt"].ChangedOutsideAt)
+	assert.Equal(t, pki.Fingerprint(a2.Cert), paths["/etc/nginx/ssl/a.crt"].Certificate.Fingerprint, "the location moves to the new certificate")
+	assert.Equal(t, 2, paths["/etc/nginx/ssl/a.crt"].Version)
+	assert.Len(t, byPath(t, h, web.ID, false), 1, "missing locations only when asked")
+	d := h.auditDetails("location.changed_outside")
+	require.Len(t, d, 1)
+	assert.Equal(t, pki.Fingerprint(a.Cert), d[0]["previous_fingerprint"])
+	assert.Equal(t, pki.Fingerprint(a2.Cert), d[0]["fingerprint"])
+	assert.Equal(t, "/etc/nginx/ssl/a.crt", d[0]["cert_path"])
+	assert.Equal(t, web.ID.String(), d[0]["target_id"])
+	assert.Equal(t, 3, h.count("SELECT count(*) FROM certificates"), "a certificate no longer used stays in the inventory")
+	old, err := h.svc.ListCertificates(h.ctx, inventory.CertificateFilter{Query: pki.Fingerprint(a.Cert)})
+	require.NoError(t, err)
+	require.Len(t, old.Items, 1)
+	assert.Zero(t, old.Items[0].LocationCount)
+
+	// b comes back: no longer missing; the same scan again audits nothing new.
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{dc(locA, a2), dc(locB, b)}})
+	require.NoError(t, err)
+	l, err := h.svc.GetLocation(h.ctx, paths["/etc/nginx/ssl/b.crt"].ID)
+	require.NoError(t, err)
+	assert.Nil(t, l.MissingSince)
+	assert.Equal(t, 1, h.audits("location.changed_outside"))
+
+	// A certificate Alice deployed (deployed_fingerprint) is not a change outside Alice.
+	a3 := ca.Issue(pki.Opts{CommonName: "a.example.test"}, h.clock.Now())
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE certificate_locations SET deployed_fingerprint = $2, changed_outside_at = NULL WHERE id = $1",
+		paths["/etc/nginx/ssl/a.crt"].ID, pki.Fingerprint(a3.Cert))
+	require.NoError(t, err)
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{dc(locA, a3), dc(locB, b)}})
+	require.NoError(t, err)
+	l, err = h.svc.GetLocation(h.ctx, paths["/etc/nginx/ssl/a.crt"].ID)
+	require.NoError(t, err)
+	assert.Nil(t, l.ChangedOutsideAt)
+	assert.Equal(t, pki.Fingerprint(a3.Cert), l.Certificate.Fingerprint)
+	assert.Equal(t, 1, h.audits("location.changed_outside"))
+
+	// A file that is gone is no certificate any more; one Alice cannot read keeps the last one known.
+	gone, unreadable := locA, locB
+	gone.Supported, gone.Unsupported, gone.Problem = false, providers.UnsupportedFile, providers.CertProblemMissing
+	unreadable.Supported, unreadable.Unsupported, unreadable.Problem = false, providers.UnsupportedFile, providers.CertProblemUnreadable
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+		{Location: gone}, {Location: unreadable}}})
+	require.NoError(t, err)
+	paths = byPath(t, h, web.ID, false)
+	assert.Nil(t, paths["/etc/nginx/ssl/a.crt"].Certificate)
+	assert.Empty(t, paths["/etc/nginx/ssl/a.crt"].CertFileSHA256)
+	require.NotNil(t, paths["/etc/nginx/ssl/b.crt"].Certificate)
+	assert.Equal(t, pki.Fingerprint(b.Cert), paths["/etc/nginx/ssl/b.crt"].Certificate.Fingerprint)
+	assert.False(t, paths["/etc/nginx/ssl/b.crt"].Supported)
+	assert.Equal(t, providers.CertProblemUnreadable, paths["/etc/nginx/ssl/b.crt"].Problem)
+	assert.Equal(t, 1, h.audits("location.changed_outside"))
+}
+
+// Requirement: locations are marked missing only from a result that covers them (a valid Nginx
+// configuration in a complete scan); any other result leaves every known location as it is.
+func TestReconcileNeverDestroysOnABadScan(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	web := okTarget(t, h, admin, "web-01")
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	a, b := ca.Issue(pki.Opts{CommonName: "a.example.test", SANs: []string{"a.example.test"}}, h.clock.Now()),
+		ca.Issue(pki.Opts{CommonName: "b.example.test", SANs: []string{"b.example.test"}}, h.clock.Now())
+	locA, locB := cl("/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key", "a.example.test"), cl("/etc/nginx/ssl/b.crt", "/etc/nginx/ssl/b.key", "b.example.test")
+	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{dc(locA, a), dc(locB, b)}})
+	require.NoError(t, err)
+	known := locationRows(t, h, web.ID)
+
+	// Every case reports a with another certificate and b gone, plus a new location c.
+	a2 := ca.Issue(pki.Opts{CommonName: "a.example.test", SANs: []string{"a.example.test"}}, h.clock.Now())
+	cert := ca.Issue(pki.Opts{CommonName: "c.example.test", SANs: []string{"c.example.test"}}, h.clock.Now())
+	locC := cl("/etc/nginx/ssl/c.crt", "/etc/nginx/ssl/c.key", "c.example.test")
+	changed := []providers.DiscoveredCertificate{dc(locA, a2), dc(locC, cert)}
+	untrusted := &providers.NginxFacts{Found: true, ConfigError: providers.ConfigErrUntrusted, ConfigErrorReason: providers.ConfigReasonNotRootControlled,
+		ConfigErrorFile: "/etc/nginx/conf.d/x.conf"}
+	cases := []struct {
+		name     string
+		res      providers.DiscoveryResult
+		newOne   bool // the new location c is stored (a scan of a valid configuration that is incomplete)
+		facts    *providers.NginxFacts
+		warnings bool
+	}{
+		{name: "ssh only", res: providers.DiscoveryResult{SSHD: sshdRead, Certificates: changed}},
+		{name: "syntax error", res: providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigError: providers.ConfigErrSyntax}},
+			facts: &providers.NginxFacts{Found: true, ConfigError: providers.ConfigErrSyntax, Version: "1.22.1"}},
+		{name: "untrusted", res: providers.DiscoveryResult{Nginx: untrusted}, facts: &providers.NginxFacts{Found: true, ConfigError: providers.ConfigErrUntrusted,
+			ConfigErrorReason: providers.ConfigReasonNotRootControlled, ConfigErrorFile: "/etc/nginx/conf.d/x.conf", Version: "1.22.1"}},
+		{name: "unsupported with certificates", res: providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigError: providers.ConfigErrUnsupported},
+			Certificates: changed}},
+		{name: "valid flag with an error class", res: providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigValid: true,
+			ConfigError: providers.ConfigErrUnsupported}, Certificates: changed}},
+		{name: "nginx not found", res: providers.DiscoveryResult{Nginx: &providers.NginxFacts{ConfigValid: true}, Certificates: changed}},
+		{name: "partial", res: providers.DiscoveryResult{Nginx: nginxOK, Partial: true, SSHD: sshdRead, Certificates: changed}, newOne: true},
+		{name: "list truncated", res: providers.DiscoveryResult{Nginx: nginxOK, Certificates: changed,
+			Warnings: []providers.Warning{{Code: providers.WarnListTruncated, Params: map[string]string{}}}}, newOne: true},
+		{name: "too many files", res: providers.DiscoveryResult{Nginx: nginxOK, Certificates: changed, SSHD: sshdRead,
+			Warnings: []providers.Warning{{Code: providers.WarnTooManyFiles, Params: map[string]string{}}}}, newOne: true, warnings: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h.clock.Advance(time.Hour)
+			sum, err := h.svc.Reconcile(h.ctx, web.ID, tc.res)
+			require.NoError(t, err)
+			assert.Zero(t, sum.MissingLocations)
+			assert.Equal(t, known, locationRows(t, h, web.ID)[:2], "the known locations are untouched")
+			assert.Zero(t, h.audits("location.changed_outside"))
+			paths := byPath(t, h, web.ID, true)
+			_, stored := paths["/etc/nginx/ssl/c.crt"]
+			assert.Equal(t, tc.newOne, stored)
+			if tc.newOne {
+				assert.Equal(t, 1, sum.NewLocations)
+				_, err := h.db.Owner.Exec(h.ctx, "DELETE FROM certificate_locations WHERE cert_path = '/etc/nginx/ssl/c.crt'")
+				require.NoError(t, err)
+			}
+			got, err := h.svc.GetTarget(h.ctx, web.ID)
+			require.NoError(t, err)
+			if tc.facts != nil {
+				assert.Equal(t, tc.facts, got.Facts.Nginx, "the facts say why")
+			}
+			if tc.warnings {
+				assert.Equal(t, providers.WarnTooManyFiles, got.Facts.Warnings[0].Code)
+			}
+		})
+	}
+	// A failed scan never reaches Reconcile (the job fails); nothing above marked anything.
+	assert.Equal(t, 0, h.count("SELECT count(*) FROM certificate_locations WHERE missing_since IS NOT NULL"))
+}
+
+// A certificates-only result says nothing about SSH: stored sshd, host-key, account and warning
+// facts and the key locations stay; the SSH-only scan leaves the Nginx facts and locations.
+func TestReconcileHalvesKeepTheOtherHalf(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	web := okTarget(t, h, admin, "web-01")
+	hk := providers.DiscoveredHostKey{KeyType: "ssh-ed25519", Bits: 256, Fingerprint: "SHA256:host"}
+	ssh := providers.DiscoveryResult{SSHD: sshdRead, HostKeys: []providers.DiscoveredHostKey{hk}, ReadFiles: []string{deployFile},
+		SSHKeys:   []providers.DiscoveredSSHKey{dk("deploy", deployFile, 1, "SHA256:dep0000000000000000000000000000000000000000", "x")},
+		UID0Users: []string{"root"}, Warnings: []providers.Warning{{Code: "strict_modes", Params: map[string]string{"user": "deploy"}}},
+		Accounts: []string{"deploy", "root"}, AccountsComplete: true}
+	_, err := h.svc.Reconcile(h.ctx, web.ID, ssh)
+	require.NoError(t, err)
+	before, err := h.svc.GetTarget(h.ctx, web.ID)
+	require.NoError(t, err)
+	keysBefore := locations(t, h, web.ID, true)
+
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
+	h.clock.Advance(time.Hour)
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Warnings: []providers.Warning{{Code: "stream_tls"}},
+		Certificates: []providers.DiscoveredCertificate{dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), leaf)}})
+	require.NoError(t, err)
+	after, err := h.svc.GetTarget(h.ctx, web.ID)
+	require.NoError(t, err)
+	assert.Equal(t, before.Facts.SSHD, after.Facts.SSHD)
+	assert.Equal(t, before.Facts.HostKeys, after.Facts.HostKeys)
+	assert.Equal(t, before.Facts.UID0Users, after.Facts.UID0Users)
+	assert.Equal(t, before.Facts.Warnings, after.Facts.Warnings)
+	assert.Equal(t, nginxOK, after.Facts.Nginx)
+	assert.Equal(t, keysBefore, locations(t, h, web.ID, true))
+	require.NotNil(t, after.LastDiscoveryAt)
+	assert.Equal(t, h.clock.Now(), *after.LastDiscoveryAt)
+
+	// The SSH-only scan replaces the SSH facts and keeps Nginx's and the locations.
+	ssh.UID0Users = []string{"root", "toor"}
+	_, err = h.svc.Reconcile(h.ctx, web.ID, ssh)
+	require.NoError(t, err)
+	after, err = h.svc.GetTarget(h.ctx, web.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"root", "toor"}, after.Facts.UID0Users)
+	assert.Equal(t, nginxOK, after.Facts.Nginx)
+	assert.Len(t, byPath(t, h, web.ID, false), 1)
+}
+
+func TestReconcileUnsupportedLocationsAndWarnings(t *testing.T) {
+	h := newHarness(t)
+	web := okTarget(t, h, h.user("ada", rbac.Admin, ""), "web-01")
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	expired := ca.Issue(pki.Opts{CommonName: "old.example.test", SANs: []string{"old.example.test"},
+		NotBefore: h.clock.Now().AddDate(0, -3, 0), NotAfter: h.clock.Now().Add(-time.Hour)}, h.clock.Now())
+	other := ca.Issue(pki.Opts{CommonName: "x.example.test", SANs: []string{"x.example.test"}}, h.clock.Now())
+	ed := ca.Issue(pki.Opts{CommonName: "ed.example.test", KeyType: pki.Ed25519}, h.clock.Now())
+	rsa := ca.Issue(pki.Opts{CommonName: "rsa.example.test", SANs: []string{"*.example.test"}, KeyType: pki.RSA2048}, h.clock.Now())
+	variable := providers.CertLocation{CertPath: "/etc/nginx/ssl/$ssl_server_name.crt", Unsupported: providers.UnsupportedVariable,
+		Servers: []providers.CertServer{{Names: []string{"files.example.test"}, Listens: []providers.CertListen{{Port: 443}}}}}
+	openKey := cl("/etc/nginx/ssl/x.crt", "/etc/nginx/ssl/x.key", "www.example.test")
+	openKey.KeyMode, openKey.Warnings = "0644", []string{providers.WarnKeyModeOpen}
+	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+		{Location: variable},
+		dc(cl("/etc/nginx/ssl/old.crt", "/etc/nginx/ssl/old.key", "old.example.test"), expired),
+		dc(openKey, other),
+		dc(cl("/etc/nginx/ssl/ed.crt", "/etc/nginx/ssl/ed.key", "ed.example.test"), ed),
+		dc(cl("/etc/nginx/ssl/rsa.crt", "/etc/nginx/ssl/rsa.key", "_", "", "~^w+\\.example\\.test$", "app.example.test", "APP.Example.Test"), rsa),
+	}})
+	require.NoError(t, err)
+	paths := byPath(t, h, web.ID, false)
+	v := paths["/etc/nginx/ssl/$ssl_server_name.crt"]
+	assert.False(t, v.Supported)
+	assert.Equal(t, providers.UnsupportedVariable, v.UnsupportedReason)
+	assert.Nil(t, v.Certificate)
+	assert.Equal(t, []string{"certificate_expired"}, paths["/etc/nginx/ssl/old.crt"].Warnings)
+	assert.True(t, paths["/etc/nginx/ssl/old.crt"].Supported, "an expired certificate is a warning: deploying a new one fixes it")
+	assert.ElementsMatch(t, []string{providers.WarnKeyModeOpen, "san_mismatch"}, paths["/etc/nginx/ssl/x.crt"].Warnings)
+	assert.Equal(t, "0644", paths["/etc/nginx/ssl/x.crt"].KeyMode)
+	assert.False(t, paths["/etc/nginx/ssl/ed.crt"].Supported)
+	assert.Equal(t, providers.UnsupportedKeyType, paths["/etc/nginx/ssl/ed.crt"].UnsupportedReason)
+	assert.Empty(t, paths["/etc/nginx/ssl/ed.crt"].KeyType)
+	assert.Equal(t, "rsa", paths["/etc/nginx/ssl/rsa.crt"].KeyType)
+	assert.Equal(t, []string{}, paths["/etc/nginx/ssl/rsa.crt"].Warnings, "catch-all, empty and regex names are not checked; a wildcard covers")
+	assert.True(t, paths["/etc/nginx/ssl/rsa.crt"].Supported)
+}
+
+func TestReconcileStoresTheBetterChain(t *testing.T) {
+	ca := pki.NewCA("Inv", pki.ECDSA256, start)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.Root)
+	h := newHarness(t, withRoots(roots))
+	web := okTarget(t, h, h.user("ada", rbac.Admin, ""), "web-01")
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
+	loc := cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test")
+	leafOnly := providers.DiscoveredCertificate{Location: loc, PEMChain: leaf.CertPEM, FileSHA256: sha(leaf.CertPEM)}
+	run := func(d providers.DiscoveredCertificate) inventory.Certificate {
+		t.Helper()
+		_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{d}})
+		require.NoError(t, err)
+		page, err := h.svc.ListCertificates(h.ctx, inventory.CertificateFilter{})
+		require.NoError(t, err)
+		require.Len(t, page.Items, 1)
+		c, err := h.svc.GetCertificate(h.ctx, page.Items[0].ID)
+		require.NoError(t, err)
+		return c
+	}
+	c := run(leafOnly)
+	assert.False(t, c.ChainComplete)
+	assert.Equal(t, string(leaf.CertPEM), c.PEMChain)
+	c = run(dc(loc, leaf))
+	assert.True(t, c.ChainComplete, "the intermediate leads to a trusted root")
+	assert.Equal(t, string(leaf.FullchainPEM), c.PEMChain)
+	c = run(leafOnly)
+	assert.True(t, c.ChainComplete, "a complete chain is never replaced by an incomplete one")
+	assert.Equal(t, string(leaf.FullchainPEM), c.PEMChain)
+	l := byPath(t, h, web.ID, false)["/etc/nginx/ssl/www.crt"]
+	assert.Equal(t, sha(leaf.CertPEM), l.CertFileSHA256, "the location follows the file")
+}
+
+// Two servers that share certificates, scanned at the same time with the certificates in opposite
+// orders, never deadlock (rows are locked in fingerprint order).
+func TestReconcileConcurrentTargetsSharingCertificates(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	targets := []inventory.Target{okTarget(t, h, admin, "web-01"), okTarget(t, h, admin, "web-02"), okTarget(t, h, admin, "web-03")}
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	var found []providers.DiscoveredCertificate
+	for i := range 12 {
+		name := fmt.Sprintf("s%d.example.test", i)
+		found = append(found, dc(cl("/etc/nginx/ssl/"+name+".crt", "/etc/nginx/ssl/"+name+".key", name),
+			ca.Issue(pki.Opts{CommonName: name, SANs: []string{name}}, h.clock.Now())))
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 3*8)
+	for i, tg := range targets {
+		list := slices.Clone(found)
+		if i%2 == 1 {
+			slices.Reverse(list)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 8 {
+				_, err := h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: list})
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 12, h.count("SELECT count(*) FROM certificates"))
+	assert.Equal(t, 36, h.count("SELECT count(*) FROM certificate_locations"))
+}
+
+// Requirement: what a server reports is data. The worst shapes the provider can emit, and some it
+// cannot, are stored bounded (or skipped and counted) without failing the scan, SSH keys included.
+func TestReconcileHostileDiscoveryData(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	web := okTarget(t, h, admin, "web-01")
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	leaf := ca.Issue(pki.Opts{CommonName: "nul\x00cn.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
+	other := ca.Issue(pki.Opts{CommonName: "other.example.test"}, h.clock.Now())
+
+	// The provider's bounds: 500 servers per location, 100 names of 253 characters, 100 listens.
+	big := cl("/etc/nginx/ssl/big.crt", "/etc/nginx/ssl/big.key")
+	big.Servers = nil
+	for s := range 500 {
+		srv := providers.CertServer{File: "/etc/nginx/" + strings.Repeat("f", 4000), Line: s}
+		for n := range 100 {
+			srv.Names = append(srv.Names, fmt.Sprintf("%s%03d", strings.Repeat("n", 250), n))
+			srv.Listens = append(srv.Listens, providers.CertListen{Addr: strings.Repeat("a", 253), Port: 443 + n})
+		}
+		big.Servers = append(big.Servers, srv)
+	}
+	invalid := strings.Repeat("\xff", 4096)
+	quoted := strconv.QuoteToASCII(invalid) // the provider's longest shown path: 16386 characters
+	require.Len(t, quoted, 16386)
+	pathNotAllowed := providers.CertLocation{CertPath: quoted, KeyPath: quoted, Unsupported: providers.UnsupportedPathNotAllowed,
+		Servers: []providers.CertServer{{Names: []string{"x"}}}}
+	newReason := providers.CertLocation{CertPath: "/etc/nginx/ssl/new.crt", Unsupported: "brand_new_reason"}
+	badReason := providers.CertLocation{CertPath: "/etc/nginx/ssl/bad.crt", Unsupported: "Not A Reason!", Problem: "weird-problem",
+		KeyProblem: strings.Repeat("k", 41)}
+	lying := cl("/etc/nginx/ssl/lying.crt", "/etc/nginx/ssl/lying.key", "www.example.test")
+	lying.Unsupported = providers.UnsupportedVariable // Supported is true as well: the reason wins
+	lyingProblem := cl("/etc/nginx/ssl/lyingp.crt", "/etc/nginx/ssl/lyingp.key", "www.example.test")
+	lyingProblem.KeyProblem = providers.CertProblemNotRootControlled
+	reasonless := providers.CertLocation{CertPath: "/etc/nginx/ssl/reasonless.crt"}
+	emptyChain := providers.CertLocation{CertPath: "/etc/nginx/ssl/empty.crt", Unsupported: providers.UnsupportedFile, Problem: providers.CertProblemMissing}
+	odd := cl("/etc/nginx/ssl/odd\x00.crt", "/etc/nginx/ssl/odd.key\x00", "nul\x00name", "www.example.test")
+	odd.KeyMode, odd.KeyOwner, odd.KeyGroup = "rwxr-xr-x", strings.Repeat("ö", 100), "grp\x00"
+	odd.ResolvedCertPath = "/" + strings.Repeat("r", 5000)
+	odd.Servers[0].File = "/etc/nginx/\x00file"
+	odd.Servers[0].Listens = nil
+	for i := range 40 {
+		odd.Warnings = append(odd.Warnings, fmt.Sprintf("warning_%c", 'a'+rune(i%26))+strings.Repeat("x", i/26))
+	}
+	odd.Warnings = append(odd.Warnings, "BAD", "", "a,b", strings.Repeat("w", 41))
+	longKey := cl("/etc/nginx/ssl/longkey.crt", "/"+strings.Repeat("k", 16400), "www.example.test")
+	garbage := providers.DiscoveredCertificate{Location: cl("/etc/nginx/ssl/garbage.crt", "/etc/nginx/ssl/garbage.key", "www.example.test"),
+		PEMChain: []byte("not a certificate"), FileSHA256: sha([]byte("x"))}
+	badHash := dc(cl("/etc/nginx/ssl/badhash.crt", "/etc/nginx/ssl/badhash.key", "other.example.test"), other)
+	badHash.FileSHA256 = "zz"
+	upperHash := dc(cl("/etc/nginx/ssl/upper.crt", "/etc/nginx/ssl/upper.key", "www.example.test"), leaf)
+	upperHash.FileSHA256 = strings.NewReplacer("a", "A", "b", "B", "c", "C", "d", "D", "e", "E", "f", "F").Replace(upperHash.FileSHA256)
+	tooLong := providers.CertLocation{CertPath: "/" + strings.Repeat("p", 16400)}
+	empty := providers.CertLocation{}
+	dup1 := dc(cl("/etc/nginx/ssl/dup.crt", "/etc/nginx/ssl/dup.key", "www.example.test"), leaf)
+	dup2 := dc(cl("/etc/nginx/ssl/dup.crt", "/etc/nginx/ssl/other.key", "other.example.test"), other)
+
+	res := providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigValid: true, Version: "1.2\x003", ConfPath: "/etc/nginx/nginx.conf"},
+		SSHD: sshdRead, ReadFiles: []string{deployFile},
+		SSHKeys: []providers.DiscoveredSSHKey{dk("deploy", deployFile, 1, "SHA256:dep0000000000000000000000000000000000000000", "x")},
+		Certificates: []providers.DiscoveredCertificate{dc(big, leaf), {Location: pathNotAllowed}, {Location: newReason}, {Location: badReason},
+			dc(lying, leaf), dc(lyingProblem, leaf), {Location: reasonless}, {Location: emptyChain}, dc(odd, leaf), dc(longKey, leaf), garbage,
+			badHash, upperHash, {Location: tooLong}, {Location: empty}, dup1, dup2}}
+	sum, err := h.svc.Reconcile(h.ctx, web.ID, res)
+	require.NoError(t, err)
+	assert.Equal(t, 1, sum.Keys, "the SSH half is stored too")
+	assert.Equal(t, 14, sum.Locations)
+	assert.Equal(t, 2, sum.Certificates)
+	got, err := h.svc.GetTarget(h.ctx, web.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "1.2�3", got.Facts.Nginx.Version)
+	assert.Equal(t, providers.WarnListTruncated, got.Facts.Warnings[len(got.Facts.Warnings)-1].Code, "skipped locations are reported")
+	d := h.auditDetails("target.discovered")
+	assert.Equal(t, "2", d[len(d)-1]["skipped_location_count"])
+
+	paths := byPath(t, h, web.ID, false)
+	require.Len(t, paths, 14)
+	assert.Len(t, paths["/etc/nginx/ssl/big.crt"].Servers, 500)
+	assert.Len(t, paths["/etc/nginx/ssl/big.crt"].Servers[499].Names, 100)
+	pna := paths[quoted]
+	assert.False(t, pna.Supported)
+	assert.Equal(t, quoted, pna.KeyPath)
+	assert.Equal(t, "brand_new_reason", paths["/etc/nginx/ssl/new.crt"].UnsupportedReason, "a well-formed new reason is kept")
+	bad := paths["/etc/nginx/ssl/bad.crt"]
+	assert.Equal(t, []string{providers.UnsupportedUnknown, providers.CertProblemUnknown}, []string{bad.UnsupportedReason, bad.Problem})
+	assert.Equal(t, providers.CertProblemUnknown, bad.KeyProblem)
+	assert.False(t, paths["/etc/nginx/ssl/lying.crt"].Supported)
+	assert.Equal(t, providers.UnsupportedVariable, paths["/etc/nginx/ssl/lying.crt"].UnsupportedReason)
+	assert.False(t, paths["/etc/nginx/ssl/lyingp.crt"].Supported)
+	assert.Equal(t, providers.UnsupportedFile, paths["/etc/nginx/ssl/lyingp.crt"].UnsupportedReason)
+	assert.Equal(t, providers.UnsupportedUnknown, paths["/etc/nginx/ssl/reasonless.crt"].UnsupportedReason)
+	assert.Nil(t, paths["/etc/nginx/ssl/empty.crt"].Certificate)
+	o := paths["/etc/nginx/ssl/odd�.crt"]
+	assert.Equal(t, "/etc/nginx/ssl/odd.key�", o.KeyPath)
+	assert.Empty(t, o.KeyMode)
+	assert.Equal(t, strings.Repeat("ö", 64), o.KeyOwner)
+	assert.Equal(t, "grp�", o.KeyGroup)
+	assert.Empty(t, o.ResolvedCertPath)
+	assert.Equal(t, []string{"nul�name", "www.example.test"}, o.Servers[0].Names)
+	assert.Equal(t, []providers.CertListen{}, o.Servers[0].Listens)
+	assert.Len(t, o.Warnings, 32)
+	assert.Contains(t, o.Warnings, "warning_a")
+	assert.NotContains(t, o.Warnings, "BAD")
+	lk := paths["/etc/nginx/ssl/longkey.crt"]
+	assert.Empty(t, lk.KeyPath)
+	assert.Equal(t, providers.UnsupportedPathNotAllowed, lk.UnsupportedReason)
+	g := paths["/etc/nginx/ssl/garbage.crt"]
+	assert.Nil(t, g.Certificate)
+	assert.Equal(t, []string{providers.UnsupportedFile, providers.CertProblemNotACertificate}, []string{g.UnsupportedReason, g.Problem})
+	assert.Empty(t, g.CertFileSHA256)
+	bh := paths["/etc/nginx/ssl/badhash.crt"]
+	assert.False(t, bh.Supported)
+	assert.Equal(t, providers.CertProblemUnreadable, bh.Problem)
+	assert.Empty(t, bh.CertFileSHA256)
+	assert.Equal(t, sha(leaf.FullchainPEM), paths["/etc/nginx/ssl/upper.crt"].CertFileSHA256)
+	dup := paths["/etc/nginx/ssl/dup.crt"]
+	assert.Equal(t, "/etc/nginx/ssl/dup.key", dup.KeyPath, "the first of duplicate locations wins")
+	assert.Equal(t, pki.Fingerprint(leaf.Cert), dup.Certificate.Fingerprint)
+	page, err := h.svc.ListCertificates(h.ctx, inventory.CertificateFilter{Query: "nul"})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, "nul�cn.example.test", page.Items[0].SubjectCN)
+
+	// The same hostile scan again changes nothing (idempotent, nothing missing, no audit noise).
+	before := locationRows(t, h, web.ID)
+	sum, err = h.svc.Reconcile(h.ctx, web.ID, res)
+	require.NoError(t, err)
+	assert.Zero(t, sum.NewLocations+sum.MissingLocations)
+	assert.Equal(t, before, locationRows(t, h, web.ID))
+	assert.Zero(t, h.audits("location.changed_outside"))
+}
+
+func TestListCertificatesFilters(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	web1, web2 := okTarget(t, h, admin, "web-01"), okTarget(t, h, admin, "web-02")
+	now := h.clock.Now()
+	ca := pki.NewCA("Inv", pki.ECDSA256, now)
+	// The SANs are ASCII (IA5String): the dotted capital I is only in a subject CN.
+	issue := func(cn, san string, notAfter time.Time) pki.Leaf {
+		return ca.Issue(pki.Opts{CommonName: cn, SANs: []string{san}, NotBefore: notAfter.AddDate(-1, 0, 0), NotAfter: notAfter}, now)
+	}
+	expired := issue("expired.example.test", "alt-expired.example.test", now.Add(-time.Hour))
+	d10 := issue("İzmir.example.test", "alt-city.example.test", now.AddDate(0, 0, 10))
+	d45 := issue("istanbul.example.test", "alt-istanbul.example.test", now.AddDate(0, 0, 45))
+	d200 := issue("ankara.example.test", "alt-ankara.example.test", now.AddDate(0, 0, 200))
+	var found []providers.DiscoveredCertificate
+	for i, l := range []pki.Leaf{d200, expired, d45, d10} {
+		found = append(found, dc(cl(fmt.Sprintf("/etc/nginx/ssl/%d.crt", i), fmt.Sprintf("/etc/nginx/ssl/%d.key", i), l.Cert.Subject.CommonName), l))
+	}
+	_, err := h.svc.Reconcile(h.ctx, web1.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: found})
+	require.NoError(t, err)
+	uploaded := issue("uploaded.example.test", "uploaded.example.test", now.AddDate(0, 0, 300))
+	_, err = h.db.Owner.Exec(h.ctx, `INSERT INTO certificates (id, fingerprint_sha256, subject_cn, not_before, not_after, key_algorithm,
+public_key_sha256, pem_chain, source, label, first_seen_at, last_seen_at, created_at)
+VALUES ($1, $2, 'uploaded.example.test', $3, $4, 'ecdsa', $5, $6, 'uploaded', 'Shop', $7, $7, $7)`, uuid.Must(uuid.NewV7()),
+		pki.Fingerprint(uploaded.Cert), uploaded.Cert.NotBefore, uploaded.Cert.NotAfter, sha([]byte("pub")), string(uploaded.CertPEM), now)
+	require.NoError(t, err)
+
+	cns := func(f inventory.CertificateFilter) []string {
+		t.Helper()
+		page, err := h.svc.ListCertificates(h.ctx, f)
+		require.NoError(t, err)
+		out := []string{}
+		for _, c := range page.Items {
+			out = append(out, c.SubjectCN)
+		}
+		return out
+	}
+	all := []string{"expired.example.test", "İzmir.example.test", "istanbul.example.test", "ankara.example.test", "uploaded.example.test"}
+	for _, tc := range []struct {
+		f    inventory.CertificateFilter
+		want []string
+	}{
+		{inventory.CertificateFilter{}, all},
+		{inventory.CertificateFilter{Expiry: "expired"}, all[:1]},
+		{inventory.CertificateFilter{Expiry: "30"}, all[:2]},
+		{inventory.CertificateFilter{Expiry: "60"}, all[:3]},
+		{inventory.CertificateFilter{Source: "uploaded"}, all[4:]},
+		{inventory.CertificateFilter{Source: "discovered"}, all[:4]},
+		{inventory.CertificateFilter{Source: "csr"}, []string{}},
+		{inventory.CertificateFilter{TargetID: web1.ID}, all[:4]},
+		{inventory.CertificateFilter{TargetID: web2.ID}, []string{}},
+		{inventory.CertificateFilter{Query: "ISTANBUL"}, []string{"istanbul.example.test"}},
+		{inventory.CertificateFilter{Query: "izmir"}, []string{"İzmir.example.test"}},
+		{inventory.CertificateFilter{Query: "İZMİR"}, []string{"İzmir.example.test"}},
+		{inventory.CertificateFilter{Query: "alt-ankara"}, []string{"ankara.example.test"}},
+		{inventory.CertificateFilter{Query: "shop"}, []string{"uploaded.example.test"}},
+		{inventory.CertificateFilter{Query: pki.Fingerprint(d45.Cert)[:16]}, []string{"istanbul.example.test"}},
+		{inventory.CertificateFilter{Query: "%"}, []string{}},
+		{inventory.CertificateFilter{Query: "  "}, all},
+		{inventory.CertificateFilter{Expiry: "60", Source: "discovered", TargetID: web1.ID, Query: "example"}, all[:3]},
+	} {
+		assert.Equal(t, tc.want, cns(tc.f), "%+v", tc.f)
+	}
+
+	// Paging: two at a time through all five.
+	var seen []string
+	cursor := ""
+	for range 3 {
+		page, err := h.svc.ListCertificates(h.ctx, inventory.CertificateFilter{Limit: 2, Cursor: cursor})
+		require.NoError(t, err)
+		for _, c := range page.Items {
+			seen = append(seen, c.SubjectCN)
+		}
+		cursor = page.NextCursor
+	}
+	assert.Equal(t, all, seen)
+	assert.Empty(t, cursor)
+
+	// A location on a deleted target or a missing one does not count; the target filter ignores them.
+	_, err = h.svc.Reconcile(h.ctx, web2.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: found[:1]})
+	require.NoError(t, err)
+	page, err := h.svc.ListCertificates(h.ctx, inventory.CertificateFilter{Query: "ankara"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, page.Items[0].LocationCount)
+	require.NoError(t, h.svc.DeleteTarget(h.ctx, admin, web2.ID))
+	_, err = h.svc.Reconcile(h.ctx, web1.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: found[1:]})
+	require.NoError(t, err)
+	page, err = h.svc.ListCertificates(h.ctx, inventory.CertificateFilter{Query: "ankara"})
+	require.NoError(t, err)
+	assert.Zero(t, page.Items[0].LocationCount)
+	assert.Equal(t, []string{}, cns(inventory.CertificateFilter{Query: "ankara", TargetID: web1.ID}))
+
+	for _, tc := range []struct {
+		f     inventory.CertificateFilter
+		field string
+	}{
+		{inventory.CertificateFilter{Expiry: "90"}, "expiry"},
+		{inventory.CertificateFilter{Cursor: "!!"}, "cursor"},
+		{inventory.CertificateFilter{Limit: 201}, "limit"},
+		{inventory.CertificateFilter{Limit: -1}, "limit"},
+		{inventory.CertificateFilter{Source: "azure"}, "source"},
+		{inventory.CertificateFilter{Query: strings.Repeat("q", 201)}, "q"},
+		{inventory.CertificateFilter{Query: "a\x00"}, "q"},
+	} {
+		_, err := h.svc.ListCertificates(h.ctx, tc.f)
+		var verrs validate.Errors
+		require.ErrorAs(t, err, &verrs, "%+v", tc.f)
+		assert.Equal(t, tc.field, verrs[0].Field)
+	}
+}
+
+func TestGetCertificateAndLocations(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	web1, web2 := okTarget(t, h, admin, "web-01"), okTarget(t, h, admin, "web-02")
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
+	for _, tg := range []inventory.Target{web1, web2} {
+		_, err := h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+			dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "b.example.test", "www.example.test"), leaf),
+			dc(cl("/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key", "a.example.test"), leaf),
+			dc(cl("/etc/nginx/ssl/0.crt", "/etc/nginx/ssl/0.key", "a.example.test"), leaf),
+		}})
+		require.NoError(t, err)
+		h.clock.Advance(time.Minute)
+	}
+	locs, err := h.svc.ListLocations(h.ctx, web1.ID, false)
+	require.NoError(t, err)
+	order := []string{}
+	for _, l := range locs {
+		order = append(order, l.CertPath)
+	}
+	assert.Equal(t, []string{"/etc/nginx/ssl/0.crt", "/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/www.crt"}, order, "by first server name, then path")
+
+	// An active deployment is shown on its location.
+	depID := uuid.Must(uuid.NewV7())
+	_, err = h.db.Owner.Exec(h.ctx, `INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, state, status,
+new_fingerprint, cert_path, key_path, created_at) VALUES ($1, $2, $3, $4, 'manual', 'queued', 'pending', $5, $6, $7, $8)`,
+		depID, locs[0].Certificate.ID, locs[0].ID, web1.ID, pki.Fingerprint(leaf.Cert), locs[0].CertPath, locs[0].KeyPath, h.clock.Now())
+	require.NoError(t, err)
+	l, err := h.svc.GetLocation(h.ctx, locs[0].ID)
+	require.NoError(t, err)
+	require.NotNil(t, l.ActiveDeploymentID)
+	assert.Equal(t, depID, *l.ActiveDeploymentID)
+
+	c, err := h.svc.GetCertificate(h.ctx, locs[0].Certificate.ID)
+	require.NoError(t, err)
+	assert.Len(t, c.Locations, 6)
+	assert.Equal(t, 6, c.LocationCount)
+	assert.Equal(t, web2.ID, c.Locations[0].TargetID, "newest first")
+
+	require.NoError(t, h.svc.DeleteTarget(h.ctx, admin, web2.ID))
+	c, err = h.svc.GetCertificate(h.ctx, c.ID)
+	require.NoError(t, err)
+	assert.Len(t, c.Locations, 3, "locations of a deleted target are not shown")
+	_, err = h.svc.GetLocation(h.ctx, c.Locations[0].ID)
+	require.NoError(t, err)
+	web2Locs := h.count("SELECT count(*) FROM certificate_locations WHERE target_id = $1", web2.ID)
+	assert.Equal(t, 3, web2Locs, "nothing is deleted")
+	var gone uuid.UUID
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT id FROM certificate_locations WHERE target_id = $1 LIMIT 1", web2.ID).Scan(&gone))
+	_, err = h.svc.GetLocation(h.ctx, gone)
+	require.ErrorIs(t, err, inventory.ErrNotFound)
+	_, err = h.svc.ListLocations(h.ctx, web2.ID, true)
+	require.ErrorIs(t, err, inventory.ErrNotFound)
+	_, err = h.svc.GetLocation(h.ctx, uuid.New())
+	require.ErrorIs(t, err, inventory.ErrNotFound)
+	_, err = h.svc.GetCertificate(h.ctx, uuid.New())
+	require.ErrorIs(t, err, inventory.ErrNotFound)
+}
+
+// The size bound boundServers uses is never below PostgreSQL's own rendering of the servers, for
+// text that needs escaping, non-ASCII text and the empty lists.
+func TestServersSizeBoundCoversPostgreSQL(t *testing.T) {
+	h := newHarness(t)
+	for _, servers := range [][]providers.CertServer{
+		{},
+		{{Names: []string{}, Listens: []providers.CertListen{}}},
+		{{Names: []string{"a<b>&c", "q\"uote\\", "\x01\x1f\t\n\r\b\f", "\u2028\u2029", "İzmir ığdır 𝔘"}, File: "/x\x7f",
+			Listens: []providers.CertListen{{Addr: "[::1]", Port: 443, DefaultServer: true}, {Port: 8443}}, Line: -1}},
+		{{Names: []string{"a"}}, {Names: []string{"b", "c"}, Listens: []providers.CertListen{{Port: 1}}}},
+	} {
+		raw, err := json.Marshal(servers)
+		require.NoError(t, err)
+		var rendered int
+		require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT octet_length($1::jsonb::text)", raw).Scan(&rendered))
+		assert.GreaterOrEqual(t, inventory.ServersTextBound(servers), rendered, "%s", raw)
+	}
+}

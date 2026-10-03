@@ -1,11 +1,12 @@
-// Package inventory owns targets, credentials (the platform SSH key), pinned host keys and the
-// SSH key inventory (spec §7.2, §7.3). It orchestrates providers only through the providers
+// Package inventory owns targets, credentials (the platform SSH key), pinned host keys, the SSH
+// key inventory and the certificate inventory of Nginx servers (spec §7.2, §7.3). It orchestrates providers only through the providers
 // interface package and checks the license limit in the transaction that inserts a target.
 package inventory
 
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"io"
 	"log/slog"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"alice/internal/audit"
+	"alice/internal/certs"
 	"alice/internal/platform/clock"
 	"alice/internal/providers"
 	"alice/internal/secrets"
@@ -43,6 +45,9 @@ type Config struct {
 	Notifier Notifier // nil = no emails
 	Log      *slog.Logger
 	Rand     io.Reader // platform key generation; nil = crypto/rand
+	// Roots are the trusted roots that decide whether a discovered chain is complete; nil = the
+	// operating system's (certs.SystemRoots).
+	Roots *x509.CertPool
 }
 
 // Service is the inventory module.
@@ -58,17 +63,21 @@ type Service struct {
 	log      *slog.Logger
 	randMu   sync.Mutex // Config.Rand need not be safe for concurrent use
 	rand     io.Reader
+	roots    *x509.CertPool
 }
 
 // New builds the service.
 func New(c Config) *Service {
 	s := &Service{pool: c.Pool, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, license: c.License,
-		registry: c.Registry, jobs: c.Jobs, notifier: c.Notifier, log: c.Log, rand: c.Rand}
+		registry: c.Registry, jobs: c.Jobs, notifier: c.Notifier, log: c.Log, rand: c.Rand, roots: c.Roots}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
 	}
 	if s.rand == nil {
 		s.rand = rand.Reader
+	}
+	if s.roots == nil {
+		s.roots = certs.SystemRoots()
 	}
 	return s
 }

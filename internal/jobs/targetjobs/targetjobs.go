@@ -178,12 +178,15 @@ func (h *handlers) testConnection(ctx context.Context, j jobs.Job, _ jobs.StepRe
 }
 
 func (h *handlers) discover(ctx context.Context, j jobs.Job, _ jobs.StepRecorder) (map[string]any, error) {
-	sess, _, err := h.open(ctx, j.TargetID, true, false)
+	sess, t, err := h.open(ctx, j.TargetID, true, false)
 	if err != nil {
 		return nil, err
 	}
 	defer h.close(sess)
-	res, err := sess.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+	// A target that can discover certificates (an Nginx server) is scanned for both halves in one
+	// discovery, scheduled or not; inventory reconciles them in one transaction.
+	req := providers.DiscoverRequest{SSHKeys: true, Certificates: slices.Contains(t.Capabilities, string(providers.CapDiscoverCerts))}
+	res, err := sess.Discover(ctx, req)
 	if err != nil {
 		h.recordFailure(ctx, j.TargetID, err)
 		return nil, jobs.FromProvider(err)
@@ -195,7 +198,11 @@ func (h *handlers) discover(ctx context.Context, j jobs.Job, _ jobs.StepRecorder
 	if err != nil {
 		return nil, jobs.Retry("internal.unexpected", nil, err)
 	}
-	return map[string]any{"key_count": sum.Keys, "new_count": sum.New, "missing_count": sum.Missing, "partial": res.Partial}, nil
+	out := map[string]any{"key_count": sum.Keys, "new_count": sum.New, "missing_count": sum.Missing, "partial": res.Partial}
+	if req.Certificates {
+		out["certificate_count"], out["location_count"] = sum.Certificates, sum.Locations
+	}
+	return out, nil
 }
 
 // writeTracker forwards steps and remembers whether the provider started the write step, after
