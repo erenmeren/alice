@@ -309,6 +309,12 @@ function Facts({ target }: { target: Target }) {
   );
 }
 
+// oneLine collapses every run of whitespace, line breaks included, to one space: the server refuses
+// control characters in a reason, and the reason field wraps over several lines.
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 function RepinDialog({
   target,
   pinned,
@@ -335,7 +341,7 @@ function RepinDialog({
     setError(null);
     try {
       // hostkeys.repin needs a fresh step-up (§25.1): run asks for a code when the server says so.
-      onAccepted(await run(() => repinHostKey(target.id, observed.id, observed.fingerprint, reason.trim())));
+      onAccepted(await run(() => repinHostKey(target.id, observed.id, observed.fingerprint, oneLine(reason))));
     } catch (err) {
       setError(err);
       setBusy(false);
@@ -392,7 +398,7 @@ function RepinDialog({
               {t('hostKeys.cancel')}
             </Button>
             {observed && (
-              <Button type="submit" color="red.9" loading={busy} disabled={reason.trim().length < 10}>
+              <Button type="submit" color="red.9" loading={busy} disabled={oneLine(reason).length < 10}>
                 {t('hostKeys.repin')}
               </Button>
             )}

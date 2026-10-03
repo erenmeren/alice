@@ -128,6 +128,25 @@ describe('TargetDetailPage', () => {
     expect(screen.queryByTestId('host-key-changed')).not.toBeInTheDocument();
   });
 
+  it('sends the re-pin reason on one line even when it was typed over several lines', async () => {
+    const target = targetWith({ status: 'host_key_changed' });
+    onServer('admin', target);
+    let body: unknown = null;
+    server.use(
+      http.post('/api/v1/targets/:id/host-keys/:keyId/actions/repin', async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ job_id: 'job-r', status_url: '/api/v1/jobs/job-r' }, { status: 202 });
+      }),
+      http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-r' }))),
+    );
+    await renderRoute(path);
+    await userEvent.click(await screen.findByRole('button', { name: 'Review the new fingerprint' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Accept the new server fingerprint' });
+    await userEvent.type(within(dialog).getByLabelText(/^Reason/), 'CHG-2026-0412{Enter}  server   reinstalled{Enter}');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Accept new fingerprint' }));
+    await waitFor(() => expect(body).toEqual({ fingerprint: observed.fingerprint, reason: 'CHG-2026-0412 server reinstalled' }));
+  });
+
   it('refuses to remove Alice’s own key and says why', async () => {
     onServer('admin');
     server.use(http.post('/api/v1/ssh-keys/locations/:id/actions/remove', () => errorResponse(409, 'ALC-KEY-0001', 'sshkey.own_key_protected')));
