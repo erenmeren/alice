@@ -69,6 +69,7 @@ func run(args []string, s *sys) int {
 	defer cancel()
 	if c.privileged {
 		s.sweepBackups()
+		s.sweepLocks()
 	}
 	out, err := c.handle(ctx, s, args[1:])
 	return reply(s, out, err)

@@ -1118,3 +1118,83 @@ func TestSweepSkipsNonDirectories(t *testing.T) {
 	assert.Equal(t, float64(1), m["removed"])
 	assert.False(t, f.exists(helperproto.BackupRoot+"/"+op1))
 }
+
+// A-8: lock files are swept like backups. A lock file not used for 30 days is removed, but only
+// while nobody holds it; a recent one, a held one and names that are not lock files stay.
+func TestStaleLockFilesAreSwept(t *testing.T) {
+	f, _ := newWriteFixture(t)
+	locks := "/var/lib/alice-helper/locks"
+	f.mkdir("/var/lib/alice-helper", 0o700)
+	f.mkdir(locks, 0o700)
+	f.write("/etc/target", "keep\n", 0o600)
+	for _, n := range []string{"1-2.lock", "3-4.lock", "5-6.lock", "notes"} {
+		f.write(locks+"/"+n, "", 0o600)
+	}
+	require.NoError(t, os.Symlink(f.host("/etc/target"), f.host(locks+"/7-8.lock")))
+	for n, age := range map[string]time.Duration{"1-2.lock": 31 * 24 * time.Hour, "3-4.lock": 24 * time.Hour,
+		"5-6.lock": 31 * 24 * time.Hour, "notes": 400 * 24 * time.Hour} {
+		at := testNow.Add(-age)
+		require.NoError(t, os.Chtimes(f.host(locks+"/"+n), at, at))
+	}
+	held, err := os.Open(f.host(locks + "/5-6.lock"))
+	require.NoError(t, err)
+	defer func() { _ = held.Close() }()
+	require.NoError(t, unix.Flock(int(held.Fd()), unix.LOCK_EX))
+
+	code, _ := f.run("version")
+	require.Equal(t, 0, code)
+	assert.True(t, f.exists(locks+"/1-2.lock"), "an unprivileged call does not sweep")
+
+	code, m := f.run("authkeys-list")
+	require.Equal(t, 0, code, "%v", m)
+	assert.False(t, f.exists(locks+"/1-2.lock"), "unused for 31 days: removed")
+	assert.True(t, f.exists(locks+"/3-4.lock"), "used a day ago: kept")
+	assert.True(t, f.exists(locks+"/5-6.lock"), "held by a writer: kept")
+	assert.True(t, f.exists(locks+"/notes"))
+	assert.True(t, f.exists(locks+"/7-8.lock"), "not a regular file: left alone")
+	assert.Equal(t, "keep\n", f.read("/etc/target"))
+}
+
+// A-8: every write marks its lock file as used (the helper's clock), so only unused ones age out.
+func TestWriteMarksItsLockAsUsed(t *testing.T) {
+	f, _ := newWriteFixture(t)
+	f.write(keysPath, "old\n", 0o600)
+	code, m := f.runWith("new\n", writeArgs(keysPath, hexOf("old\n"), op1)...)
+	require.Equal(t, 0, code, "%v", m)
+	st, err := os.Stat(f.host(f.lockFile("/home/deploy/.ssh")))
+	require.NoError(t, err)
+	assert.True(t, st.ModTime().Equal(testNow), "%v", st.ModTime())
+}
+
+// A-8: the sweep may remove a lock file while a writer waits for it. The writer that then gets
+// the flock of the removed file must not trust it (a second writer could lock a new file of the
+// same name): it takes the lock again on the file the name refers to now.
+func TestWriteRetakesALockRemovedWhileItWaited(t *testing.T) {
+	f, _ := newWriteFixture(t)
+	f.write(keysPath, "old\n", 0o600)
+	f.mkdir("/var/lib/alice-helper", 0o700)
+	f.mkdir("/var/lib/alice-helper/locks", 0o700)
+	lock := f.lockFile("/home/deploy/.ssh")
+	f.write(lock, "", 0o600)
+	l, err := os.Open(f.host(lock))
+	require.NoError(t, err)
+	require.NoError(t, unix.Flock(int(l.Fd()), unix.LOCK_EX))
+
+	done := make(chan int, 1)
+	s := *f.s
+	var out strings.Builder
+	s.stdout = &out
+	s.stdin = strings.NewReader("new\n")
+	go func() { done <- run(withContent(writeArgs(keysPath, hexOf("old\n"), op1), "new\n"), &s) }()
+	time.Sleep(100 * time.Millisecond) // the writer is waiting for the flock
+	require.NoError(t, os.Remove(f.host(lock)))
+	require.NoError(t, l.Close()) // releases the flock of the removed file
+	select {
+	case code := <-done:
+		require.Equal(t, 0, code, out.String())
+	case <-time.After(10 * time.Second):
+		t.Fatal("the writer did not finish")
+	}
+	assert.Equal(t, "new\n", f.read(keysPath))
+	assert.True(t, f.exists(lock), "the writer locked a file that the name refers to")
+}

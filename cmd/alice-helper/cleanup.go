@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -77,6 +78,47 @@ func (s *sys) sweepBackups() {
 
 // lockDirName is the directory of the key directory locks, next to the backups.
 const lockDirName = "locks"
+
+// lockName matches the lock files lockKeyDir creates (<dev>-<ino>.lock).
+var lockName = regexp.MustCompile(`^[0-9]+-[0-9]+\.lock$`)
+
+// sweepLocks removes lock files that no write used for backupRetention (their times are set on
+// every use). A lock file is removed only while the sweep holds its flock, so it never pulls the
+// lock away from a writer; a writer that waited for a removed file locks again (lockKeyDir).
+// Failures are ignored, as for the backups.
+func (s *sys) sweepLocks() {
+	locks, err := s.openStateDir(lockDirName, false)
+	if err != nil {
+		return
+	}
+	defer func() { _ = locks.Close() }()
+	ldfd := int(locks.Fd()) //nolint:gosec // G115: a descriptor fits an int
+	names, err := locks.Readdirnames(-1)
+	if err != nil {
+		return
+	}
+	for _, name := range names {
+		if !lockName.MatchString(name) {
+			continue
+		}
+		var st unix.Stat_t
+		if unix.Fstatat(ldfd, name, &st, unix.AT_SYMLINK_NOFOLLOW) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG ||
+			s.now().Sub(time.Unix(st.Mtim.Unix())) <= backupRetention {
+			continue
+		}
+		f, err := openLockFile(ldfd, name, false)
+		if err != nil {
+			continue
+		}
+		var mine, now unix.Stat_t
+		if unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB) == nil && unix.Fstat(int(f.Fd()), &mine) == nil && //nolint:gosec // G115: a descriptor fits an int
+			unix.Fstatat(ldfd, name, &now, unix.AT_SYMLINK_NOFOLLOW) == nil && sameFile(mine, now) &&
+			s.now().Sub(time.Unix(now.Mtim.Unix())) > backupRetention {
+			_ = unix.Unlinkat(ldfd, name, 0)
+		}
+		_ = f.Close()
+	}
+}
 
 // openBackupRoot opens BackupRoot (with create: making it when missing).
 func (s *sys) openBackupRoot(create bool) (*os.File, error) {

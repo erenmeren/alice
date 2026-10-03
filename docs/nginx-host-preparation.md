@@ -35,7 +35,8 @@ safe.
    `alice-svc` to run **only** `alice-helper` with a fixed list of subcommands, without a password.
 6. Create `/var/lib/alice-helper` and `/var/lib/alice-helper/backups` (root only, mode 0700). Before Alice changes an
    `authorized_keys` file, the helper keeps a copy of the previous file there; copies older than 30 days are removed
-   automatically. The helper also keeps its lock files in `/var/lib/alice-helper/locks`.
+   automatically. The helper also keeps its lock files in `/var/lib/alice-helper/locks`; lock files not used for 30
+   days are removed the same way.
 
 A restriction to Alice's source address (`from="…"` in the key line) is not added by the **Servers** page. If you
 want it, ask for the commands through the API with `GET /api/v1/ssh-keys/platform-key?from=<Alice's IP address>`.

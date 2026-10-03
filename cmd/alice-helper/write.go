@@ -281,6 +281,11 @@ func mkdirAs(dirfd int, name string, uid, gid int) error {
 // <state>/locks/<dev>-<ino>.lock, never the key directory itself: any user who can open a 0755
 // directory could hold a flock on it and block every write there. The wait is bounded by
 // lockWait. Closing the returned file releases the lock.
+//
+// The backup sweep removes lock files nobody used for a long time (sweepLocks), but only while it
+// holds their flock. A writer that waited for such a file holds the flock of a removed inode, which
+// no longer excludes anyone: after locking, it checks that the name still refers to its file and
+// otherwise locks again. A held lock is marked as used (its times are set to the helper's clock).
 func (s *sys) lockKeyDir(ctx context.Context, d keyDir) (*os.File, error) {
 	var st unix.Stat_t
 	if err := unix.Fstat(d.fd, &st); err != nil {
@@ -291,8 +296,40 @@ func (s *sys) lockKeyDir(ctx context.Context, d keyDir) (*os.File, error) {
 		return nil, err
 	}
 	defer func() { _ = locks.Close() }()
+	ldfd := int(locks.Fd()) //nolint:gosec // G115: a descriptor fits an int
 	name := fmt.Sprintf("%d-%d.lock", st.Dev, st.Ino)
-	fd, err := unix.Openat(int(locks.Fd()), name, unix.O_RDWR|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0o600) //nolint:gosec // G115: a descriptor fits an int
+	ctx, cancel := context.WithTimeout(ctx, lockWait)
+	defer cancel()
+	for {
+		f, err := openLockFile(ldfd, name, true)
+		if err != nil {
+			return nil, err
+		}
+		if err := flockWait(ctx, int(f.Fd())); err != nil { //nolint:gosec // G115: a descriptor fits an int
+			_ = f.Close()
+			return nil, err
+		}
+		var mine, now unix.Stat_t
+		if unix.Fstat(int(f.Fd()), &mine) == nil && unix.Fstatat(ldfd, name, &now, unix.AT_SYMLINK_NOFOLLOW) == nil && sameFile(mine, now) { //nolint:gosec // G115: a descriptor fits an int
+			ts := unix.NsecToTimespec(s.now().UnixNano())
+			_ = unix.UtimesNanoAt(ldfd, name, []unix.Timespec{ts, ts}, unix.AT_SYMLINK_NOFOLLOW)
+			return f, nil
+		}
+		_ = f.Close() // the sweep removed it while this writer waited: lock the current file
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+}
+
+// openLockFile opens (with create: creating it when missing) a lock file below the locks
+// directory: a regular file of the helper's user with one link, never through a symlink.
+func openLockFile(ldfd int, name string, create bool) (*os.File, error) {
+	flags := unix.O_RDWR | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC
+	if create {
+		flags |= unix.O_CREAT
+	}
+	fd, err := unix.Openat(ldfd, name, flags, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -302,17 +339,11 @@ func (s *sys) lockKeyDir(ctx context.Context, d keyDir) (*os.File, error) {
 		_ = f.Close()
 		return nil, errUnsafe
 	}
-	if err := flockWait(ctx, fd); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
 	return f, nil
 }
 
-// flockWait takes an exclusive flock, giving up after lockWait.
+// flockWait takes an exclusive flock, giving up when ctx ends (lockKeyDir bounds it by lockWait).
 func flockWait(ctx context.Context, fd int) error {
-	ctx, cancel := context.WithTimeout(ctx, lockWait)
-	defer cancel()
 	for {
 		err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
 		if !errors.Is(err, unix.EWOULDBLOCK) {
