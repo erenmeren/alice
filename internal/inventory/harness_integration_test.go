@@ -34,16 +34,28 @@ func TestMain(m *testing.M) { os.Exit(pgtest.Main(m)) }
 var start = time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 
 // recordingJobs is the inventory.Enqueuer of these tests: it records every request made inside
-// a committed or rolled-back transaction (the tests only look at committed outcomes).
+// a committed or rolled-back transaction (the tests only look at committed outcomes). With next
+// set it also passes the request on (the real queue, which writes the job row in tx); fail makes
+// the next request fail.
 type recordingJobs struct {
 	mu   sync.Mutex
 	reqs []inventory.JobRequest
+	next inventory.Enqueuer
+	fail error
 }
 
-func (r *recordingJobs) EnqueueTx(_ context.Context, _ pgx.Tx, req inventory.JobRequest) (uuid.UUID, error) {
+func (r *recordingJobs) EnqueueTx(ctx context.Context, tx pgx.Tx, req inventory.JobRequest) (uuid.UUID, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.reqs = append(r.reqs, req)
+	next, fail := r.next, r.fail
+	r.fail = nil
+	r.mu.Unlock()
+	if fail != nil {
+		return uuid.Nil, fail
+	}
+	if next != nil {
+		return next.EnqueueTx(ctx, tx, req)
+	}
 	return uuid.New(), nil
 }
 

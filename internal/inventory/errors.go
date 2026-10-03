@@ -52,3 +52,35 @@ var (
 	ErrCSRMismatch         = certs.ErrCSRMismatch
 	ErrCertificateTooLarge = certs.ErrTooLarge
 )
+
+// Errors of deployments (Task 15). RequestDeployment refuses with the first that applies; the
+// API maps each to its code (Task 17).
+var (
+	// ErrDeploymentInProgress: the location already has an unfinished deployment (F-15;
+	// deployments_one_active is the backstop for concurrent requests).
+	ErrDeploymentInProgress = errors.New("inventory: another deployment to this location is in progress")
+	// ErrRecoveryPending: a deployment on the same server is being recovered; nothing new starts
+	// there until it ends (R38 item 8, F-09).
+	ErrRecoveryPending  = errors.New("inventory: an earlier deployment on this server is being recovered")
+	ErrNoPrivateKey     = errors.New("inventory: Alice does not hold this certificate's private key")
+	ErrKeyTypeMismatch  = errors.New("inventory: the certificate's key type does not fit the location")
+	ErrChainUnconfirmed = errors.New("inventory: an Administrator must confirm the incomplete chain")
+	// ErrNginxConfigInvalid: the server's last test or scan found nginx -t failing.
+	ErrNginxConfigInvalid = errors.New("inventory: the server's Nginx configuration has an error")
+	// ErrTargetNotReady: the server is not connected (pending or changed host key, failed sign-in,
+	// disabled).
+	ErrTargetNotReady = errors.New("inventory: the server is not connected")
+	// ErrDeploymentState: the deployment is not in a state that allows the step (a second start,
+	// a success that was never sent, the key asked for after the first send, a step of a finished
+	// deployment). The engine reads the deployment again and follows its state.
+	ErrDeploymentState = errors.New("inventory: the deployment is not in a state that allows this")
+)
+
+// KeyTypeMismatchError is ErrKeyTypeMismatch with the two key types ("rsa", "ecdsa"): the type
+// the location's current certificate has and the type of the certificate asked for.
+type KeyTypeMismatchError struct{ Expected, Actual string }
+
+func (e *KeyTypeMismatchError) Error() string { return ErrKeyTypeMismatch.Error() }
+
+// Is makes errors.Is(err, ErrKeyTypeMismatch) hold.
+func (e *KeyTypeMismatchError) Is(target error) bool { return target == ErrKeyTypeMismatch }
