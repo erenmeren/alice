@@ -27,10 +27,11 @@ RUN for arch in amd64 arm64; do \
         -o /out/helper/alice-helper-linux-$arch ./cmd/alice-helper || exit 1; \
     done \
  && cd /out/helper && sha256sum alice-helper-linux-amd64 alice-helper-linux-arm64 > alice-helper.sha256
-# No image is built without both checksums: the setup script would then refuse to exist (R37 item 2).
+# No image is built without both checksums, each 64 lower-case hex digits as the Makefile's build
+# target checks: the setup script would otherwise refuse to exist (R37 item 2).
 RUN sum() { awk -v f="alice-helper-linux-$1" '$2 == f { print $1 }' /out/helper/alice-helper.sha256; } \
  && a=$(sum amd64) && b=$(sum arm64) \
- && { [ ${#a} -eq 64 ] && [ ${#b} -eq 64 ] || { echo "missing alice-helper checksums" >&2; exit 1; }; } \
+ && for s in "$a" "$b"; do echo "$s" | grep -Eqx '[0-9a-f]{64}' || { echo "missing alice-helper checksums" >&2; exit 1; }; done \
  && CGO_ENABLED=0 go build -trimpath -tags "${GO_TAGS}" \
     -ldflags "-s -w -X alice/internal/version.Version=${VERSION} -X alice/internal/version.Commit=${COMMIT} -X alice/internal/version.BuildTime=${BUILD_TIME} -X alice/internal/providers/linuxssh.helperSHA256LinuxAMD64=$a -X alice/internal/providers/linuxssh.helperSHA256LinuxARM64=$b" \
     -o /out/alice ./cmd/alice \
