@@ -405,3 +405,27 @@ func TestUnreadSSHDKeepsKeysManagedElsewhere(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, got.KeysManagedElsewhere, "a scan that read sshd decides")
 }
+
+// Carry 4: a key whose every matching location is missing carries Missing; a key present
+// somewhere does not.
+func TestListSSHKeysMarksMissingKeys(t *testing.T) {
+	f := newRemovalFixture(t)
+	h := f.h
+	_, err := h.svc.Reconcile(h.ctx, f.target.ID, providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{
+		dk("root", rootFile, 1, "SHA256:root000000000000000000000000000000000000000", "root@bastion"),
+	}, SSHD: sshdRead, ReadFiles: []string{deployFile, rootFile}})
+	require.NoError(t, err)
+	page, err := h.svc.ListSSHKeys(h.ctx, inventory.KeyFilter{IncludeMissing: true})
+	require.NoError(t, err)
+	missing := map[string]bool{}
+	for _, k := range page.Items {
+		missing[k.Fingerprint] = k.Missing
+	}
+	assert.True(t, missing["SHA256:dep0000000000000000000000000000000000000000"], "deploy's key is no longer in its file")
+	assert.False(t, missing["SHA256:root000000000000000000000000000000000000000"])
+	page, err = h.svc.ListSSHKeys(h.ctx, inventory.KeyFilter{})
+	require.NoError(t, err)
+	for _, k := range page.Items {
+		assert.False(t, k.Missing, "without missing keys requested no item is missing: %s", k.Fingerprint)
+	}
+}

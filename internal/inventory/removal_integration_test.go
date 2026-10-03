@@ -276,3 +276,31 @@ func TestMarkKeyRemovedRecordsTheConnection(t *testing.T) {
 	assert.Equal(t, []map[string]string{{"from_status": "unreachable", "to_status": "ok", "reason": "removal_ok"}},
 		h.auditDetails("target.status_changed"))
 }
+
+// Carry 3: the pre-check treats every uid-0 account of the last scan like root.
+func TestRequestKeyRemovalGuardsTheLastKeyOfEveryUID0Account(t *testing.T) {
+	f := newRemovalFixture(t)
+	h := f.h
+	const toorFile = "/var/toor/.ssh/authorized_keys"
+	_, err := h.svc.Reconcile(h.ctx, f.target.ID, providers.DiscoveryResult{SSHKeys: []providers.DiscoveredSSHKey{
+		dk("deploy", deployFile, 1, "SHA256:dep0000000000000000000000000000000000000000", "deploy@laptop"),
+		dk("root", rootFile, 1, "SHA256:root000000000000000000000000000000000000000", "root@bastion"),
+		dk("toor", toorFile, 1, "SHA256:toor000000000000000000000000000000000000000", "toor@x"),
+	}, SSHD: sshdRead, ReadFiles: []string{deployFile, rootFile, toorFile}, UID0Users: []string{"root", "toor"}})
+	require.NoError(t, err)
+	toor := locations(t, h, f.target.ID, false)["toor SHA256:toor000000000000000000000000000000000000000"].ID
+
+	_, err = h.svc.RequestKeyRemoval(h.ctx, f.operator, toor, false)
+	require.ErrorIs(t, err, inventory.ErrLastRootKey)
+	_, err = h.svc.RequestKeyRemoval(h.ctx, f.admin, toor, true)
+	require.NoError(t, err, "an Administrator may confirm, as for root")
+	d := h.auditDetails("sshkey.remove.denied")
+	require.Len(t, d, 1)
+	assert.Equal(t, "last_root_key", d[0]["reason"])
+	assert.Equal(t, "toor", d[0]["os_user"])
+
+	// The scan stored the uid-0 names in the target's facts.
+	var facts map[string]any
+	require.NoError(t, h.db.App.QueryRow(h.ctx, "SELECT facts FROM targets WHERE id = $1", f.target.ID).Scan(&facts))
+	assert.Equal(t, []any{"root", "toor"}, facts["uid0_users"])
+}

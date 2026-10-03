@@ -1510,7 +1510,7 @@ components:
     SSHKey:
       type: object
       required: [id, fingerprint, key_type, bits, public_key, managed, is_platform_key, weak, comment, location_count,
-        target_count, first_seen_at]
+        target_count, missing, first_seen_at]
       properties:
         id: { type: string, format: uuid }
         fingerprint: { type: string }
@@ -1523,6 +1523,7 @@ components:
         comment: { type: string }
         location_count: { type: integer }
         target_count: { type: integer }
+        missing: { type: boolean, description: Every location of the key is missing or removed }
         first_seen_at: { type: string, format: date-time }
         locations: { type: array, items: { $ref: "#/components/schemas/KeyLocation" }, description: "Only on GET /ssh-keys/{id}" }
     SSHKeyPage:

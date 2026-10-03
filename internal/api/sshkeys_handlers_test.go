@@ -202,3 +202,22 @@ func TestRemoveAcceptsAChunkedBody(t *testing.T) {
 	}
 	assert.Equal(t, []bool{false, true}, confirms)
 }
+
+func TestListSSHKeysCarriesMissing(t *testing.T) {
+	d, inv := inventoryDeps(t)
+	inv.ListSSHKeysFn = func(context.Context, inventory.KeyFilter) (inventory.KeyPage, error) {
+		return inventory.KeyPage{Items: []inventory.SSHKey{
+			{ID: keyID, Fingerprint: "SHA256:gone", Missing: true},
+			{ID: uuid.New(), Fingerprint: "SHA256:here"},
+		}}, nil
+	}
+	rec := call(NewHandler(d), http.MethodGet, "/api/v1/ssh-keys?missing=true", "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var body struct {
+		Items []map[string]any `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body.Items, 2)
+	assert.Equal(t, true, body.Items[0]["missing"])
+	assert.Equal(t, false, body.Items[1]["missing"], "the field is present on every item")
+}

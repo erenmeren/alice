@@ -89,6 +89,7 @@ type Facts struct {
 	HostKeys       []providers.DiscoveredHostKey `json:"host_keys,omitempty"`
 	Warnings       []providers.Warning           `json:"warnings,omitempty"`
 	Unreadable     []providers.UnreadableLine    `json:"unreadable,omitempty"`
+	UID0Users      []string                      `json:"uid0_users,omitempty"` // listed accounts with uid 0 (last-root-key guard)
 }
 
 // NewTarget is the input of CreateTarget.

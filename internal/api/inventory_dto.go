@@ -222,6 +222,7 @@ type sshKeyDTO struct {
 	Comment       string           `json:"comment"`
 	LocationCount int              `json:"location_count"`
 	TargetCount   int              `json:"target_count"`
+	Missing       bool             `json:"missing"`
 	FirstSeenAt   time.Time        `json:"first_seen_at"`
 	Locations     []keyLocationDTO `json:"locations,omitempty"`
 }
@@ -231,7 +232,7 @@ func sshKeyJSON(k inventory.SSHKey, withLocations bool) sshKeyDTO {
 	d := sshKeyDTO{
 		ID: k.ID.String(), Fingerprint: k.Fingerprint, KeyType: k.KeyType, Bits: k.Bits, PublicKey: k.PublicKey,
 		Managed: k.Managed, IsPlatformKey: k.IsPlatformKey, Weak: k.Weak, Comment: k.Comment,
-		LocationCount: k.LocationCount, TargetCount: k.TargetCount, FirstSeenAt: k.FirstSeenAt.UTC(),
+		LocationCount: k.LocationCount, TargetCount: k.TargetCount, Missing: k.Missing, FirstSeenAt: k.FirstSeenAt.UTC(),
 	}
 	if withLocations {
 		d.Locations = make([]keyLocationDTO, 0, len(k.Locations))

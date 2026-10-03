@@ -25,6 +25,7 @@ type DiscoveryResult struct {
 	UnreadableLines []UnreadableLine
 	Warnings        []Warning
 	Partial         bool     // some source failed (a file could not be read); reported, it does not stop missing marking
+	UID0Users       []string // listed accounts with uid 0 (root and any other); their last key is guarded like root's
 	ReadFiles       []string // files read completely: missing marking is limited to these, also in a partial scan (R37 #23)
 }
 

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"regexp"
+	"slices"
 	"strconv"
 
 	"alice/internal/providers"
@@ -190,6 +191,12 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 			res.Warnings = append(res.Warnings, warn(w))
 		}
 	}
+	for _, u := range list.Users {
+		if u.UID == 0 && helperproto.ValidUser(u.User) {
+			res.UID0Users = append(res.UID0Users, u.User)
+		}
+	}
+	slices.Sort(res.UID0Users)
 	for _, u := range list.Users {
 		if u.SSHDUnreadable && res.SSHD.Read {
 			// A Match block could not be evaluated for this user: the listed files come from the

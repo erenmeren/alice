@@ -643,3 +643,16 @@ func TestSetupSnippetsNeedTheHelperChecksumsInARelease(t *testing.T) {
 		assert.Contains(t, s.Script, "sha256sum -c", s.Profile)
 	}
 }
+
+// Carry 3: Discover names the listed accounts with uid 0 so inventory's pre-check can protect the
+// last key of every one of them, not only of "root".
+func TestDiscoverReportsUID0Users(t *testing.T) {
+	e := newProvEnv(t)
+	e.emu.AddUser("toor", 0, "/var/toor")
+	s, err := e.prov.Open(context.Background(), e.ref, e.cred, providers.Env{})
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+	res, err := s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"root", "toor"}, res.UID0Users)
+}

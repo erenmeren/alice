@@ -257,6 +257,7 @@ export function sshKeyFixture(o: Partial<SSHKey> = {}): SSHKey {
     comment: 'deploy@laptop',
     location_count: 2,
     target_count: 2,
+    missing: false,
     first_seen_at: '2026-10-01T08:01:00Z',
     ...o,
   };

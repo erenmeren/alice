@@ -369,6 +369,7 @@ export interface SSHKey {
   comment: string;
   location_count: number;
   target_count: number;
+  missing: boolean;
   first_seen_at: string;
   locations?: KeyLocation[];
 }

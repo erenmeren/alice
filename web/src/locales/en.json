@@ -597,6 +597,7 @@
     "flag": "Finding",
     "allFlags": "All keys",
     "showMissing": "Show keys that are no longer found",
+    "missingBadge": "No longer found",
     "keyType": "{{type}}, {{bits}} bits",
     "locationCount": "Places used",
     "targetCount": "Servers",

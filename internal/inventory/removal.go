@@ -105,11 +105,11 @@ WHERE l.id = $1 AND l.target_id = $2 FOR UPDATE OF l`, locationID, targetID), &i
 		case sshdUnreadFor(t.Facts, loc.OSUser):
 			return &denial{reason: "sshd_unreadable", err: ErrSSHDUnreadable, loc: loc}
 		}
-		if loc.OSUser == "root" && !allowLastRoot {
+		if (loc.OSUser == "root" || slices.Contains(t.Facts.UID0Users, loc.OSUser)) && !allowLastRoot {
 			var others int
 			if err := tx.QueryRow(ctx, `SELECT count(*) FROM ssh_key_locations
-WHERE target_id = $1 AND os_user = 'root' AND file_path = $2 AND id <> $3 AND missing_since IS NULL AND removed_by_alice_at IS NULL`,
-				loc.TargetID, loc.FilePath, loc.ID).Scan(&others); err != nil {
+WHERE target_id = $1 AND os_user = $4 AND file_path = $2 AND id <> $3 AND missing_since IS NULL AND removed_by_alice_at IS NULL`,
+				loc.TargetID, loc.FilePath, loc.ID, loc.OSUser).Scan(&others); err != nil {
 				return fmt.Errorf("inventory: count root keys: %w", err)
 			}
 			if others == 0 {

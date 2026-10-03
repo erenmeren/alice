@@ -90,6 +90,11 @@ export function SSHKeysPage() {
                             {t('sshKeys.flags.weak')}
                           </Badge>
                         )}
+                        {k.missing && (
+                          <Badge variant="light" color="gray" tt="none">
+                            {t('sshKeys.missingBadge')}
+                          </Badge>
+                        )}
                       </Group>
                     </Stack>
                   </Table.Td>

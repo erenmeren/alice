@@ -114,4 +114,24 @@ describe('SSHKeysPage', () => {
     expect(await screen.findAllByText('ssh-ed25519, 256 bit')).not.toHaveLength(0);
     expect(screen.getByLabelText('Artık bulunmayan anahtarları göster')).toBeInTheDocument();
   });
+
+  it('marks keys that are no longer found', async () => {
+    keysServer();
+    server.use(
+      http.get('/api/v1/ssh-keys', () =>
+        HttpResponse.json({
+          items: [
+            sshKeyFixture({ id: 'k1', missing: true }),
+            sshKeyFixture({ id: 'k2', fingerprint: 'SHA256:' + 'b'.repeat(43) }),
+          ],
+          next_cursor: null,
+        }),
+      ),
+    );
+    await renderRoute('/ssh-keys');
+    const table = await screen.findByTestId('ssh-keys-table');
+    const rows = await within(table).findAllByRole('row');
+    expect(within(rows[1]).getByText('No longer found')).toBeInTheDocument();
+    expect(within(rows[2]).queryByText('No longer found')).not.toBeInTheDocument();
+  });
 });

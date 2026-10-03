@@ -35,6 +35,7 @@ type SSHKey struct {
 	Comment       string
 	LocationCount int
 	TargetCount   int
+	Missing       bool // every location of the key is missing or removed
 	FirstSeenAt   time.Time
 	Locations     []KeyLocation
 }
@@ -166,6 +167,7 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL
 		f := t.Facts
 		sshd := res.SSHD
 		f.SSHD, f.HostKeys, f.Warnings, f.Unreadable = &sshd, res.HostKeys, res.Warnings, res.UnreadableLines
+		f.UID0Users = append([]string(nil), res.UID0Users...)
 		raw, err := json.Marshal(f)
 		if err != nil {
 			return err
@@ -382,7 +384,8 @@ func (s *Service) ListSSHKeys(ctx context.Context, f KeyFilter) (KeyPage, error)
 		pattern = likePattern(foldSearch(q))
 	}
 	rows, err := s.pool.Query(ctx, `SELECT k.id, k.fingerprint_sha256, k.key_type, k.bits, k.public_key, k.managed, k.is_platform_key, k.weak,
-    k.first_seen_at, count(*), count(DISTINCT l.target_id), (array_agg(l.comment ORDER BY l.last_seen_at DESC, l.id DESC))[1]
+    k.first_seen_at, count(*), count(DISTINCT l.target_id), (array_agg(l.comment ORDER BY l.last_seen_at DESC, l.id DESC))[1],
+    bool_and(l.missing_since IS NOT NULL OR l.removed_by_alice_at IS NOT NULL)
 FROM ssh_keys k
 JOIN ssh_key_locations l ON l.ssh_key_id = k.id
 JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
@@ -406,7 +409,7 @@ LIMIT $8`, target, f.OSUser, pattern, f.Flag, f.IncludeMissing, afterAt, afterID
 	for rows.Next() {
 		var k SSHKey
 		if err := rows.Scan(&k.ID, &k.Fingerprint, &k.KeyType, &k.Bits, &k.PublicKey, &k.Managed, &k.IsPlatformKey, &k.Weak,
-			&k.FirstSeenAt, &k.LocationCount, &k.TargetCount, &k.Comment); err != nil {
+			&k.FirstSeenAt, &k.LocationCount, &k.TargetCount, &k.Comment, &k.Missing); err != nil {
 			return KeyPage{}, fmt.Errorf("inventory: read ssh key: %w", err)
 		}
 		k.FirstSeenAt = k.FirstSeenAt.UTC()
@@ -444,7 +447,11 @@ FROM ssh_keys WHERE id = $1`, id).Scan(&k.ID, &k.Fingerprint, &k.KeyType, &k.Bit
 	}
 	targets := map[uuid.UUID]bool{}
 	var newest time.Time
+	k.Missing = len(k.Locations) > 0
 	for _, l := range k.Locations {
+		if l.MissingSince == nil && l.RemovedAt == nil {
+			k.Missing = false
+		}
 		targets[l.TargetID] = true
 		if l.LastSeenAt.After(newest) {
 			newest, k.Comment = l.LastSeenAt, l.Comment
