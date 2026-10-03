@@ -187,12 +187,18 @@ func (h *handlers) discover(ctx context.Context, j jobs.Job, _ jobs.StepRecorder
 	// discovery, scheduled or not; inventory reconciles them in one transaction.
 	req := providers.DiscoverRequest{SSHKeys: true, Certificates: slices.Contains(t.Capabilities, string(providers.CapDiscoverCerts))}
 	res, err := sess.Discover(ctx, req)
-	if err != nil && req.Certificates && isCode(err, "nginx.not_found") {
-		// Nginx is not installed (or no longer): the server's SSH keys are still scanned, and the
-		// Nginx facts say "not found" (inventory leaves the certificate locations as they are).
+	if err != nil && req.Certificates && (isCode(err, "nginx.not_found") || isCode(err, "nginx.profile_missing")) {
+		// The certificate half cannot run, but the server's SSH keys are still scanned (inventory
+		// leaves the certificate locations as they are). Nginx not installed (or no longer): the
+		// Nginx facts say "not found". The nginx sudoers profile not installed: nothing is known of
+		// Nginx (no facts, the stored ones stay) and the warning nginx_profile_missing says why.
+		notFound := isCode(err, "nginx.not_found")
 		if res, err = sess.Discover(ctx, providers.DiscoverRequest{SSHKeys: true}); err == nil {
-			res.Nginx = &providers.NginxFacts{}
-			res.Warnings = append(res.Warnings, providers.Warning{Code: "nginx_not_found", Params: map[string]string{}})
+			code := "nginx_profile_missing"
+			if notFound {
+				res.Nginx, code = &providers.NginxFacts{}, "nginx_not_found"
+			}
+			res.Warnings = append(res.Warnings, providers.Warning{Code: code, Params: map[string]string{}})
 		}
 	}
 	if err != nil {

@@ -586,9 +586,20 @@ func TestDiscoverWithoutNginxStillScansSSHKeys(t *testing.T) {
 	assert.Equal(t, "ssh.timeout", r)
 	assert.Empty(t, inv.reconciled)
 
+	// The nginx sudoers profile is not installed: the SSH half is still scanned; nothing is known of
+	// Nginx (no facts, the stored ones stay) and the warning says why.
 	inv, reqs, _, err = run("nginx.profile_missing", nil)
+	require.NoError(t, err)
+	assert.Equal(t, []providers.DiscoverRequest{{SSHKeys: true, Certificates: true}, {SSHKeys: true}}, reqs)
+	require.Len(t, inv.reconciled, 1)
+	assert.Nil(t, inv.reconciled[0].Nginx)
+	assert.Len(t, inv.reconciled[0].SSHKeys, 1)
+	assert.Equal(t, "nginx_profile_missing", inv.reconciled[0].Warnings[len(inv.reconciled[0].Warnings)-1].Code)
+	assert.Empty(t, inv.failures)
+
+	inv, reqs, _, err = run("nginx.config_changed", nil)
 	r, _ = reason(t, err)
-	assert.Equal(t, "nginx.profile_missing", r)
-	assert.Len(t, reqs, 1)
+	assert.Equal(t, "nginx.config_changed", r)
+	assert.Len(t, reqs, 1, "any other failure of the certificate half fails the job")
 	assert.Empty(t, inv.reconciled)
 }
