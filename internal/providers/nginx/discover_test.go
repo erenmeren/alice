@@ -146,29 +146,31 @@ func TestDiscoverSharedDualAndUnsupportedLocations(t *testing.T) {
 	assert.True(t, res.Nginx.ConfigValid)
 }
 
+// unsupportedRaws gives, per reason of the parser, the directive argument that makes the real
+// parser (inside the emulator) arrive at it.
+var unsupportedRaws = map[string]string{
+	nginxconf.ReasonVariable:           "/etc/nginx/ssl/$host.crt",
+	nginxconf.ReasonDataValue:          "data:$ssl_cert",
+	nginxconf.ReasonEngineKey:          "/etc/nginx/ssl/u.crt",
+	nginxconf.ReasonKeyMissing:         "/etc/nginx/ssl/u.crt",
+	nginxconf.ReasonPasswordFile:       "/etc/nginx/ssl/u.crt",
+	nginxconf.ReasonPathNotAllowed:     "ssl/",
+	nginxconf.ReasonStream:             "/etc/nginx/ssl/u.crt",
+	nginxconf.ReasonCombinedFile:       "/etc/nginx/ssl/u.pem",
+	nginxconf.ReasonConfigFileWritable: "/etc/nginx/ssl/u.crt",
+}
+
 func TestDiscoverEveryUnsupportedReasonIsCarried(t *testing.T) {
-	// The raw value is the directive's argument: the emulated configuration text makes the real
-	// parser arrive at the reason.
-	for _, tc := range []struct{ reason, raw string }{
-		{nginxconf.ReasonVariable, "/etc/nginx/ssl/$host.crt"},
-		{nginxconf.ReasonDataValue, "data:$ssl_cert"},
-		{nginxconf.ReasonEngineKey, "/etc/nginx/ssl/u.crt"},
-		{nginxconf.ReasonKeyMissing, "/etc/nginx/ssl/u.crt"},
-		{nginxconf.ReasonPasswordFile, "/etc/nginx/ssl/u.crt"},
-		{nginxconf.ReasonPathNotAllowed, "ssl/"},
-		{nginxconf.ReasonStream, "/etc/nginx/ssl/u.crt"},
-		{nginxconf.ReasonCombinedFile, "/etc/nginx/ssl/u.pem"},
-		{nginxconf.ReasonConfigFileWritable, "/etc/nginx/ssl/u.crt"},
-	} {
-		t.Run(tc.reason, func(t *testing.T) {
+	for reason, raw := range unsupportedRaws {
+		t.Run(reason, func(t *testing.T) {
 			e := newEnv(t)
-			e.emu.AddUnsupported([]string{"u.example.test"}, 443, tc.raw, tc.reason)
+			e.emu.AddUnsupported([]string{"u.example.test"}, 443, raw, reason)
 			res := discover(t, e, providers.DiscoverRequest{Certificates: true})
 			require.Len(t, res.Certificates, 2)
 			u := res.Certificates[1].Location
 			assert.False(t, u.Supported)
-			assert.Equal(t, tc.reason, u.Unsupported)
-			assert.Equal(t, tc.raw, u.CertPath, "the location key is the certificate path, else the raw value")
+			assert.Equal(t, reason, u.Unsupported)
+			assert.Equal(t, raw, u.CertPath, "the location key is the certificate path, else the raw value")
 			assert.Empty(t, res.Certificates[1].PEMChain)
 			assert.True(t, res.Certificates[0].Location.Supported, "the other website is untouched")
 		})

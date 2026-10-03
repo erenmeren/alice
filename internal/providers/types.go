@@ -189,8 +189,14 @@ const (
 
 // DiscoveredCertificate is one certificate file Nginx uses.
 type DiscoveredCertificate struct {
-	Location   CertLocation
-	PEMChain   []byte // CERTIFICATE blocks of the file in file order; empty when Location.Problem != ""
+	Location CertLocation
+	// PEMChain is the file's CERTIFICATE blocks that parse as X.509, re-encoded in file order (not
+	// the file's bytes: text around the blocks is gone); empty when Location.Problem != "".
+	PEMChain []byte
+	// FileSHA256 is the SHA-256 of the file's bytes on disk as the helper read them. It is NOT the
+	// hash of PEMChain (the two differ whenever the file holds anything but canonical blocks), and
+	// it is the value a deployment sends as the compare-and-swap expectation. Never compare it with
+	// a hash of PEMChain.
 	FileSHA256 string
 }
 
@@ -245,6 +251,9 @@ const (
 	UnsupportedKeyConflict        = "key_conflict"         // one certificate file used with different key files
 	UnsupportedFile               = "file_problem"         // see Problem / KeyProblem
 	UnsupportedKeyType            = "unsupported_key"      // the certificate is not RSA or ECDSA (set by inventory)
+	// UnsupportedUnknown: the helper gave a reason Alice does not know (a newer helper, or a broken
+	// one). The location is unsupported; the UI shows a generic text.
+	UnsupportedUnknown = "unknown"
 )
 
 // Certificate and key file problems of CertLocation.Problem / KeyProblem (helperproto.File*).
@@ -258,6 +267,8 @@ const (
 	CertProblemUnreadable        = "unreadable"
 	CertProblemBadName           = "bad_name"
 	CertProblemSpecialFS         = "special_filesystem" // on FUSE or a pseudo file system
+	// CertProblemUnknown: the helper gave a problem Alice does not know; the file is not used.
+	CertProblemUnknown = "unknown"
 )
 
 // Warnings of CertLocation.Warnings (location level) and of Warning.Code in a discovery (server
@@ -276,6 +287,9 @@ const (
 	WarnMailTLS                 = "mail_tls"             // TLS in mail {} is listed, not supported
 	WarnConfigFileWritable      = "config_file_writable" // a configuration file can be changed by users other than root
 	WarnTooManyFiles            = "too_many_files"       // more referenced files than the helper describes
+	// WarnListTruncated: Alice cut a list of the dump at its bound (server names, listens or
+	// servers of a location, writable files); what is shown is incomplete.
+	WarnListTruncated = "list_truncated"
 )
 
 // VerifyOptions are a location's verification settings (Administrator, R38 item 6).

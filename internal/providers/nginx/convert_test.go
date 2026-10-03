@@ -73,7 +73,7 @@ func TestConvertPairShapes(t *testing.T) {
 		got, _ := convert(validDump([]helperproto.NginxServer{server([]string{"a"}, 443, helperproto.NginxPair{Unsupported: "variable"})}))
 		assert.Empty(t, got)
 	})
-	t.Run("an unknown reason or an unmarked empty certificate is path_not_allowed", func(t *testing.T) {
+	t.Run("an unknown reason or an unmarked empty certificate is unknown", func(t *testing.T) {
 		got, _ := convert(validDump([]helperproto.NginxServer{
 			server([]string{"a"}, 443, helperproto.NginxPair{Unsupported: "weird", Raw: "/r1"}),
 			server([]string{"b"}, 443, helperproto.NginxPair{Raw: "/r2"}),
@@ -81,7 +81,7 @@ func TestConvertPairShapes(t *testing.T) {
 		}))
 		require.Len(t, got, 3)
 		for _, l := range got {
-			assert.Equal(t, providers.UnsupportedPathNotAllowed, l.Location.Unsupported)
+			assert.Equal(t, providers.UnsupportedUnknown, l.Location.Unsupported)
 			assert.False(t, l.Location.Supported)
 		}
 	})
@@ -198,10 +198,18 @@ func TestConvertCertificateFileHandling(t *testing.T) {
 		assert.Equal(t, providers.CertProblemNotACertificate, got.Location.Problem)
 		assert.Empty(t, got.PEMChain)
 	})
-	t.Run("a block with headers is dropped", func(t *testing.T) {
+	t.Run("a dropped first block makes the file a problem, a later one keeps a warning", func(t *testing.T) {
 		withHeader := strings.Replace(string(u.chain), "-----BEGIN CERTIFICATE-----\n", "-----BEGIN CERTIFICATE-----\nProc-Type: 4,ENCRYPTED\n\n", 1)
 		got := one(certFile(c, []byte(withHeader)), keyFile(k))
-		assert.NotContains(t, string(got.PEMChain), "Proc-Type")
+		assert.Equal(t, providers.CertProblemNotACertificate, got.Location.Problem, "the intermediate must not become the leaf")
+		assert.Empty(t, got.PEMChain)
+		assert.False(t, got.Location.Supported)
+		first := one(certFile(c, []byte(bad+string(u.chain))), keyFile(k))
+		assert.Equal(t, providers.CertProblemNotACertificate, first.Location.Problem)
+		assert.False(t, first.Location.Supported)
+		later := one(certFile(c, []byte(string(u.chain)+bad)), keyFile(k))
+		assert.True(t, later.Location.Supported)
+		assert.Equal(t, []string{providers.WarnCertificateBlockDropped}, later.Location.Warnings)
 	})
 	t.Run("too many certificates", func(t *testing.T) {
 		got := one(certFile(c, []byte(strings.Repeat(string(u.leaf.CertPEM), maxChainCerts+1))), keyFile(k))
@@ -231,14 +239,17 @@ func TestConvertCertificateFileHandling(t *testing.T) {
 		assert.False(t, got[0].Location.Supported)
 		assert.Empty(t, got[0].PEMChain)
 	})
-	t.Run("a problem that is not in the set is unreadable", func(t *testing.T) {
+	t.Run("a problem that is not in the set is unknown", func(t *testing.T) {
 		cf := certFile(c, u.chain)
 		cf.Problem = "made_up"
 		got := one(cf, keyFile(k))
-		assert.Equal(t, providers.CertProblemUnreadable, got.Location.Problem)
+		assert.Equal(t, providers.CertProblemUnknown, got.Location.Problem)
+		assert.False(t, got.Location.Supported)
 		kf := keyFile(k)
 		kf.Problem = "made_up"
-		assert.Equal(t, providers.CertProblemUnreadable, one(certFile(c, u.chain), kf).Location.KeyProblem)
+		k2 := one(certFile(c, u.chain), kf)
+		assert.Equal(t, providers.CertProblemUnknown, k2.Location.KeyProblem)
+		assert.False(t, k2.Location.Supported)
 	})
 	t.Run("a missing certificate", func(t *testing.T) {
 		cf := helperproto.NginxFile{Path: c, Kind: "cert", Problem: "missing"}
@@ -378,7 +389,7 @@ func TestConvertWarnings(t *testing.T) {
 			d.Writable = append(d.Writable, fmt.Sprintf("/etc/nginx/conf.d/w%d.conf", i))
 		}
 		_, warns := convert(d)
-		assert.Len(t, warns, maxWritable)
+		assert.Len(t, warns, maxWritable+1, "the paths and the truncation warning")
 	})
 
 	t.Run("key_group_open: attached to the location, never both", func(t *testing.T) {
@@ -446,5 +457,68 @@ func TestPairState(t *testing.T) {
 	assert.Equal(t, providers.UnsupportedStream, pairState(helperproto.NginxPair{Cert: "/a", Key: "/b"}, true))
 	assert.Equal(t, providers.UnsupportedKeyMissing, pairState(helperproto.NginxPair{Cert: "/a"}, false), "a certificate without a key is key_missing")
 	assert.Equal(t, providers.UnsupportedVariable, pairState(helperproto.NginxPair{Unsupported: "variable", Raw: "/$x"}, true))
-	assert.Equal(t, providers.UnsupportedPathNotAllowed, pairState(helperproto.NginxPair{Raw: "/x"}, false))
+	assert.Equal(t, providers.UnsupportedUnknown, pairState(helperproto.NginxPair{Raw: "/x"}, false))
+	assert.Equal(t, providers.UnsupportedUnknown, pairState(helperproto.NginxPair{Unsupported: "weird"}, false))
+}
+
+// A pair path the helper hands over is validated raw: never rewritten, never supported when invalid.
+func TestConvertPairPathsAreValidatedRaw(t *testing.T) {
+	u := newUnitCerts(t)
+	const good = "/etc/nginx/ssl/a.crt"
+	for _, tc := range []struct{ name, cert, key string }{
+		{"relative cert", "ssl/a.crt", "/etc/nginx/ssl/a.key"},
+		{"dot-dot cert", "/a/../b.crt", "/etc/nginx/ssl/a.key"},
+		{"newline cert", "/etc/x\n.crt", "/etc/nginx/ssl/a.key"},
+		{"control cert", "/etc/x\x1b.crt", "/etc/nginx/ssl/a.key"},
+		{"long cert", "/" + strings.Repeat("a", 5000) + ".crt", "/etc/nginx/ssl/a.key"},
+		{"relative key", good, "ssl/a.key"},
+		{"dot-dot key", good, "/a/../b.key"},
+		{"newline key", good, "/etc/x\n.key"},
+		{"long key", good, "/" + strings.Repeat("a", 5000) + ".key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The files carry entries for every spelling, cleaned or not, so only validation can refuse.
+			files := []helperproto.NginxFile{certFile(tc.cert, u.chain), keyFile(tc.key)}
+			cleaned := []helperproto.NginxFile{certFile(clean(tc.cert, maxPathLength), u.chain), keyFile(clean(tc.key, maxPathLength))}
+			got, _ := convert(validDump([]helperproto.NginxServer{server([]string{"a"}, 443, pair(tc.cert, tc.key))}, append(files, cleaned...)...))
+			require.Len(t, got, 1)
+			assert.False(t, got[0].Location.Supported)
+			assert.Equal(t, providers.UnsupportedPathNotAllowed, got[0].Location.Unsupported)
+			assert.Empty(t, got[0].PEMChain)
+			assert.NotContains(t, got[0].Location.CertPath, "\n")
+		})
+	}
+}
+
+func TestConvertTruncationIsReported(t *testing.T) {
+	u := newUnitCerts(t)
+	const c, k = "/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key"
+	many := server(nil, 443, pair(c, k))
+	for i := range maxNames + 1 {
+		many.Names = append(many.Names, fmt.Sprintf("n%d", i))
+	}
+	_, w := convert(validDump([]helperproto.NginxServer{many}, certFile(c, u.chain), keyFile(k)))
+	assert.Equal(t, []string{providers.WarnListTruncated}, warningCodes(w))
+	many = server([]string{"a"}, 443, pair(c, k))
+	for i := range maxListens + 1 {
+		many.Listens = append(many.Listens, helperproto.NginxListen{Port: 1000 + i})
+	}
+	_, w = convert(validDump([]helperproto.NginxServer{many}, certFile(c, u.chain), keyFile(k)))
+	assert.Equal(t, []string{providers.WarnListTruncated}, warningCodes(w))
+	var servers []helperproto.NginxServer
+	for i := range maxServersPerLocation + 1 {
+		s := server([]string{"a"}, 443, pair(c, k))
+		s.Line = i + 1
+		servers = append(servers, s)
+	}
+	_, w = convert(validDump(servers, certFile(c, u.chain), keyFile(k)))
+	assert.Equal(t, []string{providers.WarnListTruncated}, warningCodes(w))
+	d := validDump(nil)
+	for i := range maxWritable + 1 {
+		d.Writable = append(d.Writable, fmt.Sprintf("/etc/nginx/conf.d/w%d.conf", i))
+	}
+	_, w = convert(d)
+	assert.Len(t, warningsOf(w, providers.WarnListTruncated), 1)
+	_, w = convert(validDump([]helperproto.NginxServer{server([]string{"a"}, 443, pair(c, k))}, certFile(c, u.chain), keyFile(k)))
+	assert.Empty(t, w, "nothing cut, nothing said")
 }

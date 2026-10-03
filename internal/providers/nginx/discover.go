@@ -52,7 +52,10 @@ var (
 
 // Discover is linuxssh's discovery plus, when asked, the certificates of nginx-dump (spec §12.4).
 // Each half runs only when requested: a certificates-only request runs no SSH-key discovery, and
-// an SSH-keys-only request runs no Nginx command. Nginx missing fails the whole discovery (F-20:
+// an SSH-keys-only request runs no Nginx command. A certificates-only result carries no SSH facts:
+// HostKeys, SSHD, Accounts, AccountsComplete (false), UID0Users, ReadFiles and the SSH warnings are
+// empty or unknown, not "none found". A caller must not overwrite stored host-key, sshd or account
+// facts, or mark anything missing, from such a result. Nginx missing fails the whole discovery (F-20:
 // no partial data); an invalid, untrusted or unsupported configuration is a result that says so.
 func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (providers.DiscoveryResult, error) {
 	if err := s.open(); err != nil {
@@ -80,7 +83,11 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 	res.Nginx = &facts
 	if !d.ConfigValid {
 		res.Warnings = append(res.Warnings, warning("nginx_config_invalid"))
-		res.Warnings = append(res.Warnings, dumpWarnings(d, nil)...)
+		warns, cut := dumpWarnings(d, nil)
+		res.Warnings = append(res.Warnings, warns...)
+		if cut {
+			res.Warnings = append(res.Warnings, warning(providers.WarnListTruncated))
+		}
 		return res, nil
 	}
 	certs, warns := convert(d)
@@ -148,9 +155,12 @@ type build struct {
 func pairState(p helperproto.NginxPair, stream bool) string {
 	switch {
 	case p.Unsupported != "":
-		return knownOrDefault(p.Unsupported, pairReasons, providers.UnsupportedPathNotAllowed)
+		return knownOrDefault(p.Unsupported, pairReasons, providers.UnsupportedUnknown)
 	case p.Cert == "":
-		return providers.UnsupportedPathNotAllowed // neither a pair nor a reason: not usable
+		return providers.UnsupportedUnknown // neither a pair nor a reason: not usable
+	case !helperproto.ValidPath(p.Cert) || (p.Key != "" && !helperproto.ValidPath(p.Key)):
+		// The raw paths are validated before any cleaning: a path is never rewritten into another one.
+		return providers.UnsupportedPathNotAllowed
 	case p.Key == "":
 		return providers.UnsupportedKeyMissing
 	case stream:
@@ -166,20 +176,29 @@ func knownOrDefault(v string, set []string, def string) string {
 	return def
 }
 
-// certServer is a server block as Alice shows it: only its SSL listens, cleaned and bounded.
-func certServer(s helperproto.NginxServer) providers.CertServer {
-	cs := providers.CertServer{Names: []string{}, Listens: []providers.CertListen{}, File: clean(s.File, maxPathLength), Line: max(s.Line, 0)}
+// certServer is a server block as Alice shows it, cleaned and bounded. The helper lists SSL listens
+// only (nginxconf.SSLListens), so none is filtered here; truncated reports a list cut at its bound.
+func certServer(s helperproto.NginxServer) (cs providers.CertServer, truncated bool) {
+	cs = providers.CertServer{Names: []string{}, Listens: []providers.CertListen{}, File: clean(s.File, maxPathLength), Line: max(s.Line, 0)}
 	for _, n := range s.Names {
-		if n = clean(n, maxNameLength); n != "" && len(cs.Names) < maxNames {
+		if n = clean(n, maxNameLength); n != "" {
+			if len(cs.Names) >= maxNames {
+				truncated = true
+				continue
+			}
 			cs.Names = append(cs.Names, n)
 		}
 	}
 	for _, l := range s.Listens {
-		if l.Port >= 1 && l.Port <= 65535 && len(cs.Listens) < maxListens {
+		if l.Port >= 1 && l.Port <= 65535 {
+			if len(cs.Listens) >= maxListens {
+				truncated = true
+				continue
+			}
 			cs.Listens = append(cs.Listens, providers.CertListen{Addr: clean(l.Addr, maxNameLength), Port: l.Port, DefaultServer: l.DefaultServer})
 		}
 	}
-	return cs
+	return cs, truncated
 }
 
 func sameServer(a, b providers.CertServer) bool {
@@ -196,9 +215,10 @@ func convert(d helperproto.NginxDumpResponse) ([]providers.DiscoveredCertificate
 	}
 	builds := map[string]*build{}
 	var order []*build
-	tooMany := false
+	tooMany, truncated := false, false
 	for _, s := range d.Servers {
-		cs := certServer(s)
+		cs, cut := certServer(s)
+		truncated = truncated || cut
 		for _, p := range s.Pairs {
 			certPath := clean(p.Cert, maxPathLength)
 			if certPath == "" {
@@ -217,9 +237,12 @@ func convert(d helperproto.NginxDumpResponse) ([]providers.DiscoveredCertificate
 				builds[certPath] = b
 				order = append(order, b)
 			}
-			if !slices.ContainsFunc(b.loc.Servers, func(o providers.CertServer) bool { return sameServer(o, cs) }) &&
-				len(b.loc.Servers) < maxServersPerLocation {
-				b.loc.Servers = append(b.loc.Servers, cs)
+			if !slices.ContainsFunc(b.loc.Servers, func(o providers.CertServer) bool { return sameServer(o, cs) }) {
+				if len(b.loc.Servers) >= maxServersPerLocation {
+					truncated = true
+				} else {
+					b.loc.Servers = append(b.loc.Servers, cs)
+				}
 			}
 			b.loc.Inherited = b.loc.Inherited || p.Inherited
 			reason := pairState(p, s.Stream)
@@ -241,9 +264,13 @@ func convert(d helperproto.NginxDumpResponse) ([]providers.DiscoveredCertificate
 	for _, b := range order {
 		out = append(out, finish(b, files))
 	}
-	warns := dumpWarnings(d, out)
+	warns, cutWritable := dumpWarnings(d, out)
+	truncated = truncated || cutWritable
 	if tooMany && !slices.ContainsFunc(warns, func(w providers.Warning) bool { return w.Code == providers.WarnTooManyFiles }) {
 		warns = append(warns, warning(providers.WarnTooManyFiles))
+	}
+	if truncated {
+		warns = append(warns, warning(providers.WarnListTruncated))
 	}
 	return out, warns
 }
@@ -314,7 +341,7 @@ func fileProblem(f helperproto.NginxFile, have bool) string {
 	case !have:
 		return providers.CertProblemUnreadable
 	case f.Problem != "":
-		return knownOrDefault(f.Problem, fileProblems, providers.CertProblemUnreadable)
+		return knownOrDefault(f.Problem, fileProblems, providers.CertProblemUnknown)
 	case !f.Exists:
 		return providers.CertProblemMissing
 	}
@@ -333,7 +360,7 @@ func certificateChain(f helperproto.NginxFile) (chain []byte, sum string, droppe
 		return nil, "", false, providers.CertProblemTooLarge
 	}
 	rest := []byte(f.PEM)
-	n := 0
+	n, seen := 0, false
 	for {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
@@ -343,11 +370,14 @@ func certificateChain(f helperproto.NginxFile) (chain []byte, sum string, droppe
 		if block.Type != "CERTIFICATE" {
 			continue
 		}
-		if len(block.Headers) > 0 {
-			dropped = true
-			continue
-		}
-		if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+		first := !seen
+		seen = true
+		_, perr := x509.ParseCertificate(block.Bytes)
+		if len(block.Headers) > 0 || perr != nil {
+			if first {
+				// The next certificate would become the leaf: the file is not usable.
+				return nil, "", false, providers.CertProblemNotACertificate
+			}
 			dropped = true
 			continue
 		}
@@ -420,8 +450,7 @@ func locationWarnings(cf, kf helperproto.NginxFile) []string {
 // format. config_file_writable comes from the writable list, one per path (the helper's own
 // parameterless warning would duplicate it). key_group_open is derived per location; the helper's
 // warning is kept at server level only when no location carries it.
-func dumpWarnings(d helperproto.NginxDumpResponse, locs []providers.DiscoveredCertificate) []providers.Warning {
-	var out []providers.Warning
+func dumpWarnings(d helperproto.NginxDumpResponse, locs []providers.DiscoveredCertificate) (out []providers.Warning, truncated bool) {
 	var seen []string
 	keyGroupOpen := false
 	for _, w := range d.Warnings {
@@ -444,10 +473,14 @@ func dumpWarnings(d helperproto.NginxDumpResponse, locs []providers.DiscoveredCe
 	}
 	var paths []string
 	for _, p := range d.Writable {
-		if p = cleanPath(p); p != "" && !slices.Contains(paths, p) && len(paths) < maxWritable {
+		if p = cleanPath(p); p != "" && !slices.Contains(paths, p) {
+			if len(paths) >= maxWritable {
+				truncated = true
+				continue
+			}
 			paths = append(paths, p)
 			out = append(out, providers.Warning{Code: providers.WarnConfigFileWritable, Params: map[string]string{"path": p}})
 		}
 	}
-	return out
+	return out, truncated
 }
