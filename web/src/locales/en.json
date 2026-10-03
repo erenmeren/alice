@@ -370,6 +370,7 @@
       "job_dead": "Task stopped after repeated failures",
       "job_tampered": "Task changed outside Alice; not run",
       "job_blocked_license": "Task paused: license expired",
+      "job_cancelled_license": "Task cancelled: license expired",
       "job_confirmed": "Paused task confirmed by an administrator",
       "job_discarded": "Paused task discarded",
       "platform_key_created": "Alice's SSH key created"

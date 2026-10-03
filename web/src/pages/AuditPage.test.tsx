@@ -91,6 +91,7 @@ const PHASE3_ACTIONS = [
   'job.dead',
   'job.tampered',
   'job.blocked_license',
+  'job.cancelled_license',
   'job.confirmed',
   'job.discarded',
   'platform_key.created',

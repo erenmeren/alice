@@ -370,6 +370,7 @@
       "job_dead": "İş tekrarlanan hatalardan sonra durduruldu",
       "job_tampered": "İş Alice dışında değiştirildi; çalıştırılmadı",
       "job_blocked_license": "İş duraklatıldı: lisans süresi doldu",
+      "job_cancelled_license": "İş iptal edildi: lisans süresi doldu",
       "job_confirmed": "Duraklatılan iş bir yönetici tarafından onaylandı",
       "job_discarded": "Duraklatılan işten vazgeçildi",
       "platform_key_created": "Alice'in SSH anahtarı oluşturuldu"
