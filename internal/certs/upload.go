@@ -151,12 +151,15 @@ func checkLeaf(p Parsed, now time.Time) error {
 	return nil
 }
 
-// checkPublicKey accepts RSA of at least 2048 bits and ECDSA on P-256 or P-384.
+// checkPublicKey accepts RSA of 2048 to 16384 bits and ECDSA on P-256 or P-384.
 func checkPublicKey(pub crypto.PublicKey) error {
 	switch k := pub.(type) {
 	case *rsa.PublicKey:
-		if k.N.BitLen() < 2048 {
+		switch bits := k.N.BitLen(); {
+		case bits < 2048:
 			return ErrWeak
+		case bits > maxRSABits:
+			return ErrUnsupportedKey
 		}
 		return nil
 	case *ecdsa.PublicKey:
@@ -253,6 +256,9 @@ func parsePrivateKeyPEM(data []byte) (any, error) {
 		}
 		if found++; found > 1 {
 			return nil, invalid("expected exactly one private key")
+		}
+		if len(b.Bytes) > maxKeyDER {
+			return nil, ErrUnsupportedKey // larger than any key Alice accepts: never parsed
 		}
 		var err error
 		if parsed, err = parse(b.Bytes); err != nil {

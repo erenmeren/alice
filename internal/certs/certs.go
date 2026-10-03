@@ -21,6 +21,14 @@ import (
 // MaxInputSize bounds every PEM field and a PFX file.
 const MaxInputSize = 256 << 10
 
+// maxRSABits is the largest RSA modulus Alice accepts: OpenSSL (and so Nginx) refuses larger
+// ones, and parsing a private key costs roughly the square of its size.
+const maxRSABits = 16384
+
+// maxKeyDER bounds a private key block before it is parsed: a 16384-bit RSA key in PKCS#8 is about
+// 9.4 KiB, every key Alice accepts is smaller.
+const maxKeyDER = 16 << 10
+
 // maxCertificates bounds how many certificates one input may carry, so that
 // ordering a hostile chain stays cheap.
 const maxCertificates = 32
@@ -33,7 +41,7 @@ var (
 	ErrKeyEncrypted   = errors.New("certs: the private key is protected with a password")
 	ErrPFXPassword    = errors.New("certs: the PFX password is wrong or the file is damaged")
 	ErrWeak           = errors.New("certs: weak key or signature")
-	ErrUnsupportedKey = errors.New("certs: only RSA and ECDSA (P-256, P-384) keys are supported")
+	ErrUnsupportedKey = errors.New("certs: only RSA (2048 to 16384 bits) and ECDSA (P-256, P-384) keys are supported")
 	ErrNoKey          = errors.New("certs: no private key was given")
 	ErrTooLarge       = errors.New("certs: the input is larger than 256 KiB")
 	ErrCSRMismatch    = errors.New("certs: the certificate was not issued for this signing request's key")
@@ -72,13 +80,18 @@ func certificatesOf(data []byte) ([]*x509.Certificate, error) {
 		return nil, ErrTooLarge
 	}
 	var out []*x509.Certificate
-	for rest := normalize(data); ; {
+	// The field may also hold a pasted private key: the normalised copy and every block that is not
+	// a certificate are cleared (a parsed certificate keeps only its own decoded block).
+	buf := normalize(data)
+	defer clear(buf)
+	for rest := buf; ; {
 		var b *pem.Block
 		b, rest = pem.Decode(rest)
 		if b == nil {
 			break
 		}
 		if b.Type != "CERTIFICATE" {
+			clear(b.Bytes)
 			continue
 		}
 		c, err := x509.ParseCertificate(b.Bytes)
@@ -94,6 +107,28 @@ func certificatesOf(data []byte) ([]*x509.Certificate, error) {
 		return nil, invalid("no certificate found")
 	}
 	return out, nil
+}
+
+// ContainsPrivateKey reports whether data has a PEM private key block (PRIVATE KEY, RSA/EC/
+// ENCRYPTED PRIVATE KEY, …). It reads only the BEGIN lines: nothing is decoded or copied.
+func ContainsPrivateKey(data []byte) bool {
+	const begin, dashes = "-----BEGIN ", "-----"
+	for rest := data; ; {
+		i := bytes.Index(rest, []byte(begin))
+		if i < 0 {
+			return false
+		}
+		rest = rest[i+len(begin):]
+		end := bytes.Index(rest, []byte(dashes))
+		if end < 0 {
+			return false
+		}
+		typ := rest[:end]
+		if bytes.Equal(typ, []byte("PRIVATE KEY")) || bytes.HasSuffix(typ, []byte(" PRIVATE KEY")) {
+			return true
+		}
+		rest = rest[end:]
+	}
 }
 
 // ParseChainPEM reads the CERTIFICATE blocks of data and ignores every other
