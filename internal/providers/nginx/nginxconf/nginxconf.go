@@ -8,6 +8,14 @@
 // markers, parses each file on its own and splices the files back in at their include directives,
 // so the tree is the one nginx sees. A file that no include reaches is not part of the
 // configuration and is ignored.
+//
+// The markers are NOT authenticated: any file can contain a line that looks like one. Parse
+// refuses a dump that names a file twice (nginx prints each file once), but a forged marker with
+// a new name still lets its text be spliced where an include glob matches it. A caller that acts
+// on the result (the root helper) must therefore compare every section the parse used, byte for
+// byte, with the real file (Config.Sections gives the name and the exact bytes of each) before it
+// relies on the parse. Paths are decided on the raw text: a "." or ".." segment is never
+// accepted, so no textual folding can differ from what the kernel opens.
 package nginxconf
 
 import (
@@ -29,25 +37,30 @@ const (
 	MaxLine    = 1 << 20  // bytes of one line, and of one token
 	MaxTokens  = 1 << 20  // tokens of the whole dump
 	MaxFiles   = 4096     // "# configuration file" sections
-	maxNodes   = 1 << 20  // directives visited while splicing includes
-	maxWork    = 1 << 28  // glob matching effort while splicing includes
+	maxNodes   = 1 << 17  // kept directives visited while splicing includes
+	maxWork    = 1 << 26  // glob matching effort while splicing includes
+	maxSegment = 255      // longest path segment that is glob matched
 	maxPath    = 4096     // longest file name in a marker
 	maxPattern = 512      // longest include pattern that is matched
 )
 
-// WarnStreamTLS is the warning code for TLS in a stream block (the web catalog key warnings.stream_tls).
-// helperproto does not define it yet, so it lives here until the protocol task adds it.
-const WarnStreamTLS = "stream_tls"
+// Warning codes (the web catalog keys warnings.<code>). helperproto does not define them yet, so
+// they live here until the protocol task adds them.
+const (
+	WarnStreamTLS = "stream_tls" // TLS in a stream block
+	WarnMailTLS   = "mail_tls"   // TLS in a mail block
+)
 
 // Errors.
 var (
-	ErrTooLarge    = errors.New("nginxconf: the configuration dump is larger than 20 MiB")
-	ErrTooDeep     = errors.New("nginxconf: blocks are nested deeper than 100 levels")
-	ErrLineTooLong = errors.New("nginxconf: a line or a token is longer than 1 MiB")
-	ErrSyntax      = errors.New("nginxconf: unbalanced braces or an unterminated directive or string")
-	ErrNUL         = errors.New("nginxconf: the configuration dump contains a NUL byte")
-	ErrTooComplex  = errors.New("nginxconf: the configuration has too many tokens, files or includes")
-	ErrIncludeLoop = errors.New("nginxconf: configuration files include each other in a loop")
+	ErrTooLarge      = errors.New("nginxconf: the configuration dump is larger than 20 MiB")
+	ErrTooDeep       = errors.New("nginxconf: blocks are nested deeper than 100 levels")
+	ErrLineTooLong   = errors.New("nginxconf: a line or a token is longer than 1 MiB")
+	ErrSyntax        = errors.New("nginxconf: unbalanced braces or an unterminated directive or string")
+	ErrNUL           = errors.New("nginxconf: the configuration dump contains a NUL byte")
+	ErrTooComplex    = errors.New("nginxconf: the configuration has too many tokens, files or includes")
+	ErrIncludeLoop   = errors.New("nginxconf: configuration files include each other in a loop")
+	ErrDuplicateFile = errors.New("nginxconf: the dump names the same configuration file twice")
 )
 
 // Reasons a pair is not supported (spec §12.4 step 4, R38 item 4).
@@ -93,6 +106,17 @@ type Config struct {
 	Servers  []Server
 	Files    []string
 	Warnings []string
+	// Sections is every file of the dump with the exact bytes printed for it, so that a caller
+	// can compare them with the real files (the markers are not authenticated).
+	Sections []Section
+}
+
+// Section is one "# configuration file" part of the dump. File is the name as printed (raw
+// bytes, "" for text before the first marker); Body is the dump text after the marker line up to
+// the next marker line, a sub-slice of the dump.
+type Section struct {
+	File string
+	Body []byte
 }
 
 const markerPrefix = "# configuration file "
@@ -114,7 +138,7 @@ type node struct {
 	children []node
 }
 
-// section is one file of the dump.
+// section is one file of the dump while it is parsed.
 type section struct {
 	file  string
 	body  []byte
@@ -122,12 +146,12 @@ type section struct {
 }
 
 // splitSections splits the dump at the "# configuration file <path>:" marker lines (column 0, as
-// nginx prints them) and rejects lines longer than MaxLine. Text before the first marker is a
-// section without a file name.
-func splitSections(dump []byte) ([]section, []string, error) {
+// nginx prints them), rejects lines longer than MaxLine and a file name that appears twice. Text
+// before the first marker is a section without a file name.
+func splitSections(dump []byte) ([]section, error) {
 	var (
 		secs  []section
-		files []string
+		seen  = map[string]bool{}
 		start int // start of the current section's body
 		cur   = -1
 	)
@@ -146,21 +170,24 @@ func splitSections(dump []byte) ([]section, []string, error) {
 			next = end + 1
 		}
 		if end-pos > MaxLine {
-			return nil, nil, ErrLineTooLong
+			return nil, ErrLineTooLong
 		}
 		text := bytes.TrimSuffix(dump[pos:end], []byte("\r"))
 		if bytes.HasPrefix(text, []byte(markerPrefix)) && bytes.HasSuffix(text, []byte(":")) {
 			file := string(text[len(markerPrefix) : len(text)-1])
 			if len(file) > maxPath {
-				return nil, nil, ErrSyntax
+				return nil, ErrSyntax
 			}
 			if len(secs) >= MaxFiles {
-				return nil, nil, ErrTooComplex
+				return nil, ErrTooComplex
+			}
+			if key := filepath.Clean(file); seen[key] {
+				return nil, ErrDuplicateFile
+			} else {
+				seen[key] = true
 			}
 			closeSection(pos)
-			file = strings.ToValidUTF8(file, "�")
 			secs = append(secs, section{file: file})
-			files = append(files, file)
 			cur = len(secs) - 1
 			start = next
 		} else if cur < 0 && len(bytes.TrimSpace(text)) > 0 {
@@ -172,7 +199,7 @@ func splitSections(dump []byte) ([]section, []string, error) {
 		pos = next
 	}
 	closeSection(len(dump))
-	return secs, files, nil
+	return secs, nil
 }
 
 // escape writes the character after a backslash the way nginx unescapes it (\" \' \\ \t \r \n);
@@ -200,141 +227,264 @@ func escape(b *strings.Builder, next byte, inWord bool) {
 	}
 }
 
-// tokenize splits one file into tokens, following nginx's ngx_conf_read_token: '#' starts a
-// comment where a token could start, "..." and '...' are one token, a backslash escapes the next
+// lexer reads the tokens of one file, following nginx's ngx_conf_read_token: '#' starts a comment
+// where a token could start, "..." and '...' are one token, a backslash escapes the next
 // character, a word ends at white space, ';' or '{' (not at "${"), and a closing quote must be
-// followed by white space, ';' or '{'. left is the remaining token budget of the whole dump.
-func tokenize(data []byte, file string, left *int) ([]token, error) {
-	var toks []token
-	line := 1
-	add := func(t token) error {
-		if *left--; *left < 0 {
-			return ErrTooComplex
-		}
-		t.text = strings.ToValidUTF8(t.text, "�")
-		toks = append(toks, t)
-		return nil
-	}
-	n := len(data)
-	for i := 0; i < n; {
-		c := data[i]
+// followed by white space, ';', '{' or ')'. left is the remaining token budget of the dump.
+type lexer struct {
+	data []byte
+	i    int
+	line int
+	file string
+	left *int
+}
+
+func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
+
+// next returns the next token; ok is false at the end of the file.
+func (l *lexer) next() (t token, ok bool, err error) {
+	d, n := l.data, len(l.data)
+	for l.i < n {
+		c := d[l.i]
 		switch c {
 		case '\n':
-			line++
-			i++
+			l.line++
+			l.i++
 			continue
 		case ' ', '\t', '\r':
-			i++
+			l.i++
 			continue
 		case '#':
-			for i < n && data[i] != '\n' {
-				i++
+			for l.i < n && d[l.i] != '\n' {
+				l.i++
 			}
-			continue
-		case ';', '{', '}':
-			if err := add(token{text: string(c), punct: true, file: file, line: line}); err != nil {
-				return nil, err
-			}
-			i++
 			continue
 		}
+		if *l.left--; *l.left < 0 {
+			return token{}, false, ErrTooComplex
+		}
+		if c == ';' || c == '{' || c == '}' {
+			l.i++
+			return token{text: string(c), punct: true, file: l.file, line: l.line}, true, nil
+		}
 		var b strings.Builder
-		startLine := line
+		startLine := l.line
 		if c == '"' || c == '\'' {
-			i++
+			l.i++
 			closed := false
-			for i < n && !closed {
-				ch := data[i]
+			for l.i < n && !closed {
+				ch := d[l.i]
 				switch {
-				case ch == '\\' && i+1 < n:
-					if data[i+1] == '\n' {
-						line++
+				case ch == '\\' && l.i+1 < n:
+					if d[l.i+1] == '\n' {
+						l.line++
 					}
-					escape(&b, data[i+1], false)
-					i += 2
+					escape(&b, d[l.i+1], false)
+					l.i += 2
 				case ch == c:
 					closed = true
-					i++
+					l.i++
 				default:
 					if ch == '\n' {
-						line++
+						l.line++
 					}
 					b.WriteByte(ch)
-					i++
+					l.i++
 				}
 				if b.Len() > MaxLine {
-					return nil, ErrLineTooLong
+					return token{}, false, ErrLineTooLong
 				}
 			}
 			if !closed {
-				return nil, ErrSyntax
+				return token{}, false, ErrSyntax
 			}
-			if i < n {
-				if f := data[i]; f != ' ' && f != '\t' && f != '\r' && f != '\n' && f != ';' && f != '{' {
-					return nil, ErrSyntax
+			if l.i < n {
+				switch f := d[l.i]; {
+				case f == ')':
+					l.i++ // nginx treats ')' after a quoted string as white space: if ($a ~ "x") {
+				case !isSpace(f) && f != ';' && f != '{':
+					return token{}, false, ErrSyntax
 				}
 			}
 		} else {
-			for i < n {
-				ch := data[i]
-				if ch == '\\' && i+1 < n {
-					if data[i+1] == '\n' {
-						line++
+			variable := false
+			for l.i < n {
+				ch := d[l.i]
+				if ch == '\\' && l.i+1 < n {
+					if d[l.i+1] == '\n' {
+						l.line++
 					}
-					escape(&b, data[i+1], true)
-					i += 2
-				} else if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == ';' ||
-					(ch == '{' && data[i-1] != '$') {
+					escape(&b, d[l.i+1], true)
+					l.i += 2
+					variable = false
+				} else if isSpace(ch) || ch == ';' || (ch == '{' && !variable) {
 					break
 				} else {
 					b.WriteByte(ch)
-					i++
+					l.i++
+					if ch != '{' { // "${" keeps the word open, nginx's variable flag
+						variable = ch == '$'
+					}
 				}
 				if b.Len() > MaxLine {
-					return nil, ErrLineTooLong
+					return token{}, false, ErrLineTooLong
 				}
 			}
 		}
-		if err := add(token{text: b.String(), file: file, line: startLine}); err != nil {
-			return nil, err
+		return token{text: b.String(), file: l.file, line: startLine}, true, nil
+	}
+	return token{}, false, nil
+}
+
+// skipLua skips the body of an OpenResty "*_by_lua_block {" directive; the opening brace is
+// consumed. OpenResty's own lexer counts braces outside Lua strings ('..', "..", [[..]]) and
+// comments (-- and --[[..]]), and so does this.
+func (l *lexer) skipLua() error {
+	d, n := l.data, len(l.data)
+	depth := 1
+	for l.i < n {
+		c := d[l.i]
+		switch {
+		case c == '\n':
+			l.line++
+			l.i++
+		case c == '-' && l.i+1 < n && d[l.i+1] == '-':
+			l.i += 2
+			if lvl, ok := longBracket(d, l.i); ok {
+				if err := l.skipLong(lvl); err != nil {
+					return err
+				}
+			} else {
+				for l.i < n && d[l.i] != '\n' {
+					l.i++
+				}
+			}
+		case c == '[':
+			if lvl, ok := longBracket(d, l.i); ok {
+				if err := l.skipLong(lvl); err != nil {
+					return err
+				}
+			} else {
+				l.i++
+			}
+		case c == '"' || c == '\'':
+			l.i++
+			for l.i < n && d[l.i] != c && d[l.i] != '\n' {
+				if d[l.i] == '\\' && l.i+1 < n {
+					if d[l.i+1] == '\n' {
+						l.line++
+					}
+					l.i++
+				}
+				l.i++
+			}
+			if l.i < n && d[l.i] == c {
+				l.i++
+			}
+		case c == '{':
+			depth++
+			l.i++
+		case c == '}':
+			depth--
+			l.i++
+			if depth == 0 {
+				return nil
+			}
+		default:
+			l.i++
 		}
 	}
-	return toks, nil
+	return ErrSyntax
 }
+
+// longBracket reports whether d[i:] starts a Lua long bracket "[" "="* "[" and its level.
+func longBracket(d []byte, i int) (int, bool) {
+	if i >= len(d) || d[i] != '[' {
+		return 0, false
+	}
+	lvl := 0
+	for j := i + 1; j < len(d); j++ {
+		switch d[j] {
+		case '=':
+			lvl++
+		case '[':
+			return lvl, true
+		default:
+			return 0, false
+		}
+	}
+	return 0, false
+}
+
+// skipLong skips a Lua long bracket of the given level that starts at l.i.
+func (l *lexer) skipLong(lvl int) error {
+	closer := "]" + strings.Repeat("=", lvl) + "]"
+	rest := l.data[l.i+lvl+2:]
+	end := bytes.Index(rest, []byte(closer))
+	if end < 0 {
+		return ErrSyntax
+	}
+	l.line += bytes.Count(rest[:end], []byte("\n"))
+	l.i += lvl + 2 + end + len(closer)
+	return nil
+}
+
+// Only these blocks and directives are read later; everything else is lexed for its syntax and
+// dropped, so a dump of millions of other directives costs no memory.
+var (
+	keptBlocks     = map[string]bool{"http": true, "server": true, "stream": true, "mail": true}
+	keptDirectives = map[string]bool{"include": true, "listen": true, "server_name": true, "ssl": true,
+		"ssl_certificate": true, "ssl_certificate_key": true, "ssl_password_file": true}
+)
 
 type parser struct {
-	toks []token
-	i    int
+	lx *lexer
 }
 
-// block reads directives until the matching "}" (closing) or the end of input (top level).
-func (p *parser) block(depth int, closing bool) ([]node, error) {
+// block reads directives until the matching "}" (closing) or the end of input (top level). keep is
+// false inside blocks whose content is not read: their directives are checked and dropped.
+func (p *parser) block(depth int, closing, keep bool) ([]node, error) {
 	if depth > MaxDepth {
 		return nil, ErrTooDeep
 	}
 	var out []node
 	var cur []token
-	for p.i < len(p.toks) {
-		t := p.toks[p.i]
-		p.i++
+	for {
+		t, ok, err := p.lx.next()
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			break
+		}
 		if t.punct {
 			switch t.text {
 			case ";":
-				if len(cur) > 0 {
-					out = append(out, node{name: cur[0].text, args: cur[1:], file: cur[0].file, line: cur[0].line})
+				if len(cur) > 0 && keep && keptDirectives[cur[0].text] {
+					out = append(out, node{name: cur[0].text, args: keepArgs(cur), file: cur[0].file, line: cur[0].line})
 				}
-				cur = nil
+				cur = cur[:0]
 				continue
 			case "{":
 				if len(cur) == 0 {
 					return nil, ErrSyntax
 				}
-				children, err := p.block(depth+1, true)
+				if strings.HasSuffix(cur[0].text, "_by_lua_block") {
+					if err := p.lx.skipLua(); err != nil {
+						return nil, err
+					}
+					cur = cur[:0]
+					continue
+				}
+				kept := keep && keptBlocks[cur[0].text]
+				children, err := p.block(depth+1, true, kept)
 				if err != nil {
 					return nil, err
 				}
-				out = append(out, node{name: cur[0].text, args: cur[1:], file: cur[0].file, line: cur[0].line, block: true, children: children})
-				cur = nil
+				if kept {
+					out = append(out, node{name: cur[0].text, args: keepArgs(cur), file: cur[0].file, line: cur[0].line, block: true, children: children})
+				}
+				cur = cur[:0]
 				continue
 			case "}":
 				if !closing || len(cur) > 0 {
@@ -351,16 +501,30 @@ func (p *parser) block(depth int, closing bool) ([]node, error) {
 	return out, nil
 }
 
+// keepArgs copies the arguments of a directive; text that is shown or stored is made valid UTF-8,
+// include patterns stay raw bytes (they are compared with the raw marker names).
+func keepArgs(cur []token) []token {
+	args := slices.Clone(cur[1:])
+	if cur[0].text != "include" {
+		for i := range args {
+			args[i].text = strings.ToValidUTF8(args[i].text, "�")
+		}
+	}
+	return args
+}
+
 // expander splices the files of the dump in at their include directives.
 type expander struct {
 	secs    []section
-	byName  map[string][]int // cleaned file name -> sections
+	byName  map[string][]int // raw file name -> sections
+	segs    [][]string       // path segments of each section's file name
+	active  []bool           // sections being expanded, to refuse include loops
 	confDir string
 	nodes   int // remaining directive budget
 	work    int // remaining glob matching budget
 }
 
-func (e *expander) expand(nodes []node, depth int, stack []int) ([]node, error) {
+func (e *expander) expand(nodes []node, depth int) ([]node, error) {
 	if depth > MaxDepth {
 		return nil, ErrTooDeep
 	}
@@ -371,7 +535,7 @@ func (e *expander) expand(nodes []node, depth int, stack []int) ([]node, error) 
 		}
 		switch {
 		case n.block:
-			kids, err := e.expand(n.children, depth+1, stack)
+			kids, err := e.expand(n.children, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -383,10 +547,15 @@ func (e *expander) expand(nodes []node, depth int, stack []int) ([]node, error) 
 				return nil, err
 			}
 			for _, i := range idx {
-				if slices.Contains(stack, i) {
+				if e.nodes--; e.nodes < 0 {
+					return nil, ErrTooComplex
+				}
+				if e.active[i] {
 					return nil, ErrIncludeLoop
 				}
-				sub, err := e.expand(e.secs[i].nodes, depth, append(stack, i))
+				e.active[i] = true
+				sub, err := e.expand(e.secs[i].nodes, depth)
+				e.active[i] = false
 				if err != nil {
 					return nil, err
 				}
@@ -399,39 +568,69 @@ func (e *expander) expand(nodes []node, depth int, stack []int) ([]node, error) 
 	return out, nil
 }
 
-// match returns the sections whose file name matches the include pattern (a relative pattern is
-// relative to confDir, like nginx's configuration prefix).
+// match returns the sections whose file name matches the include pattern, sorted by name like
+// glob(3) does. A relative pattern is relative to confDir (nginx's configuration prefix). Names
+// are compared as raw text, as nginx prints and opens them.
 func (e *expander) match(raw string) ([]int, error) {
 	if raw == "" || len(raw) > maxPattern || strings.Contains(raw, "$") {
 		return nil, nil
 	}
 	p := raw
-	if !filepath.IsAbs(p) {
+	if !strings.HasPrefix(p, "/") {
 		if !filepath.IsAbs(e.confDir) {
 			return nil, nil
 		}
-		p = filepath.Join(e.confDir, p)
+		p = strings.TrimRight(e.confDir, "/") + "/" + p
 	}
-	p = filepath.Clean(p)
-	if !strings.ContainsAny(p, `*?[\`) {
-		if e.work--; e.work < 0 {
+	if !strings.ContainsAny(p, "*?[") {
+		if e.work -= 32; e.work < 0 {
 			return nil, ErrTooComplex
 		}
 		return e.byName[p], nil
 	}
+	psegs := strings.Split(p, "/")
 	var out []int
 	for i, s := range e.secs {
 		if s.file == "" {
 			continue
 		}
-		if e.work -= len(p) * len(s.file); e.work < 0 {
+		cost, ok := 32, len(e.segs[i]) == len(psegs)
+		for k := 0; ok && k < len(psegs); k++ {
+			cost += len(psegs[k])*len(e.segs[i][k]) + 1
+			if e.work-cost < 0 {
+				return nil, ErrTooComplex
+			}
+			ok = segMatch(psegs[k], e.segs[i][k])
+		}
+		if e.work -= cost; e.work < 0 {
 			return nil, ErrTooComplex
 		}
-		if ok, err := filepath.Match(p, filepath.Clean(s.file)); err == nil && ok {
+		if ok {
 			out = append(out, i)
 		}
 	}
+	slices.SortFunc(out, func(a, b int) int { return strings.Compare(e.secs[a].file, e.secs[b].file) })
 	return out, nil
+}
+
+// segMatch matches one path segment like glob(3): a leading '.' of the name is matched only by a
+// literal '.' of the pattern, never by *, ? or [.
+func segMatch(pat, name string) bool {
+	if len(pat) > maxSegment || len(name) > maxSegment {
+		return false
+	}
+	if strings.IndexByte("*?[", firstByte(pat)) >= 0 && strings.HasPrefix(name, ".") {
+		return false
+	}
+	ok, err := filepath.Match(pat, name)
+	return err == nil && ok
+}
+
+func firstByte(s string) byte {
+	if s == "" {
+		return 0
+	}
+	return s[0]
 }
 
 // Parse parses an "nginx -T" dump. confDir resolves relative certificate and include paths (the
@@ -443,34 +642,35 @@ func Parse(dump []byte, confDir string) (Config, error) {
 	if bytes.IndexByte(dump, 0) >= 0 {
 		return Config{}, ErrNUL
 	}
-	secs, files, err := splitSections(dump)
+	secs, err := splitSections(dump)
 	if err != nil {
 		return Config{}, err
 	}
 	left := MaxTokens
+	c := Config{}
 	for i := range secs {
-		toks, err := tokenize(secs[i].body, secs[i].file, &left)
-		if err != nil {
+		p := &parser{lx: &lexer{data: secs[i].body, line: 1, file: secs[i].file, left: &left}}
+		if secs[i].nodes, err = p.block(0, false, true); err != nil {
 			return Config{}, err
 		}
-		p := &parser{toks: toks}
-		if secs[i].nodes, err = p.block(0, false); err != nil {
-			return Config{}, err
+		c.Sections = append(c.Sections, Section{File: secs[i].file, Body: secs[i].body})
+		if secs[i].file != "" || i > 0 {
+			c.Files = append(c.Files, strings.ToValidUTF8(secs[i].file, "�"))
 		}
-		secs[i].body = nil
 	}
-	c := Config{Files: files}
 	if len(secs) == 0 {
 		return c, nil
 	}
-	e := &expander{secs: secs, byName: map[string][]int{}, confDir: confDir, nodes: maxNodes, work: maxWork}
+	e := &expander{secs: secs, byName: map[string][]int{}, segs: make([][]string, len(secs)),
+		active: make([]bool, len(secs)), confDir: confDir, nodes: maxNodes, work: maxWork}
 	for i, s := range secs {
 		if s.file != "" {
-			k := filepath.Clean(s.file)
-			e.byName[k] = append(e.byName[k], i)
+			e.byName[s.file] = append(e.byName[s.file], i)
+			e.segs[i] = strings.Split(s.file, "/")
 		}
 	}
-	tree, err := e.expand(secs[0].nodes, 0, []int{0})
+	e.active[0] = true
+	tree, err := e.expand(secs[0].nodes, 0)
 	if err != nil {
 		return Config{}, err
 	}
@@ -480,6 +680,8 @@ func Parse(dump []byte, confDir string) (Config, error) {
 			c.http(n.children, confDir)
 		case n.block && n.name == "stream":
 			c.stream(n.children)
+		case n.block && n.name == "mail":
+			c.mail(n.children)
 		}
 	}
 	return c, nil
@@ -488,6 +690,8 @@ func Parse(dump []byte, confDir string) (Config, error) {
 type sslDirs struct {
 	certs, keys []string
 	password    bool
+	sslSet      bool // an "ssl on|off" directive is present
+	sslOn       bool
 }
 
 func collect(nodes []node) sslDirs {
@@ -503,6 +707,8 @@ func collect(nodes []node) sslDirs {
 			d.keys = append(d.keys, n.args[0].text)
 		case "ssl_password_file":
 			d.password = true
+		case "ssl":
+			d.sslSet, d.sslOn = true, len(n.args) == 1 && n.args[0].text == "on"
 		}
 	}
 	return d
@@ -515,7 +721,11 @@ func (c *Config) http(children []node, confDir string) {
 			continue
 		}
 		own := collect(n.children)
-		s := server(n)
+		sslOn := top.sslOn // nginx merges "ssl" from the enclosing level
+		if own.sslSet {
+			sslOn = own.sslOn
+		}
+		s := server(n, sslOn)
 		if !hasSSL(s) {
 			continue
 		}
@@ -544,33 +754,67 @@ func (c *Config) http(children []node, confDir string) {
 }
 
 func (c *Config) stream(children []node) {
+	top := collect(children)
 	for _, n := range children {
 		if !n.block || n.name != "server" {
 			continue
 		}
 		own := collect(n.children)
-		if len(own.certs) == 0 {
+		certs, inhC := own.certs, false
+		if len(certs) == 0 {
+			certs, inhC = top.certs, true
+		}
+		keys, inhK := own.keys, false
+		if len(keys) == 0 {
+			keys, inhK = top.keys, true
+		}
+		if len(certs) == 0 {
 			continue
 		}
-		s := server(n)
+		sslOn := top.sslOn
+		if own.sslSet {
+			sslOn = own.sslOn
+		}
+		s := server(n, sslOn)
+		if inhC && !hasSSL(s) {
+			continue // certificates inherited by a server that does not listen with ssl are unused
+		}
 		s.Stream = true
-		for i, cr := range own.certs {
-			pr := Pair{CertRaw: cr, Unsupported: ReasonStream}
-			if i < len(own.keys) {
-				pr.KeyRaw = own.keys[i]
+		for i, cr := range certs {
+			pr := Pair{CertRaw: cr, Unsupported: ReasonStream, Inherited: inhC || (inhK && len(top.keys) > 0)}
+			if i < len(keys) {
+				pr.KeyRaw = keys[i]
 			}
 			s.Pairs = append(s.Pairs, pr)
 		}
 		c.Servers = append(c.Servers, s)
-		if !contains(c.Warnings, WarnStreamTLS) {
-			c.Warnings = append(c.Warnings, WarnStreamTLS)
+		c.warn(WarnStreamTLS)
+	}
+}
+
+// mail records only a warning: Alice does not manage certificates of mail proxies.
+func (c *Config) mail(children []node) {
+	if len(collect(children).certs) > 0 {
+		c.warn(WarnMailTLS)
+		return
+	}
+	for _, n := range children {
+		if n.block && n.name == "server" && len(collect(n.children).certs) > 0 {
+			c.warn(WarnMailTLS)
+			return
 		}
 	}
 }
 
-func server(n node) Server {
-	s := Server{File: n.file, Line: n.line}
-	sslOn := false
+func (c *Config) warn(code string) {
+	if !contains(c.Warnings, code) {
+		c.Warnings = append(c.Warnings, code)
+	}
+}
+
+// server reads the names and listens of a server block; sslOn is the effective "ssl on" setting.
+func server(n node, sslOn bool) Server {
+	s := Server{File: strings.ToValidUTF8(n.file, "\uFFFD"), Line: n.line}
 	for _, d := range n.children {
 		if d.block {
 			continue
@@ -584,8 +828,6 @@ func server(n node) Server {
 			if l, ok := parseListen(d.args); ok {
 				s.Listens = append(s.Listens, l)
 			}
-		case "ssl":
-			sslOn = len(d.args) == 1 && d.args[0].text == "on"
 		}
 	}
 	if len(s.Listens) == 0 {
@@ -654,7 +896,7 @@ func parseListen(args []token) (Listen, bool) {
 	}
 	for _, f := range args[1:] {
 		switch f.text {
-		case "ssl":
+		case "ssl", "quic": // QUIC always needs a certificate
 			l.SSL = true
 		case "default_server", "default":
 			l.DefaultServer = true
@@ -705,9 +947,17 @@ func resolvePair(certRaw, keyRaw, confDir string, password bool) (cert, key, rea
 }
 
 func resolvePath(raw, confDir string) (string, bool) {
-	// A path that names a directory ("", ".", "ssl/", "x/..") is never a certificate file.
-	if last := raw[strings.LastIndexByte(raw, '/')+1:]; last == "" || last == "." || last == ".." {
+	// A path that names a directory ("", "ssl/") is never a certificate file, and a "." or ".."
+	// segment is refused on the raw text: folding it textually could name a different file than
+	// the kernel opens (a symbolic link before the "..").
+	segs := strings.Split(raw, "/")
+	if segs[len(segs)-1] == "" {
 		return "", false
+	}
+	for _, seg := range segs {
+		if seg == "." || seg == ".." {
+			return "", false
+		}
 	}
 	p := raw
 	if !filepath.IsAbs(p) {

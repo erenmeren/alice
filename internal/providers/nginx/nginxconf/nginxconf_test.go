@@ -4,9 +4,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -155,20 +157,22 @@ func TestRobustnessErrors(t *testing.T) {
 		in  string
 		err error
 	}{
-		"NUL byte":                   {"http { server { " + okServer + " } }\x00", ErrNUL},
-		"unterminated single quote":  {"http { server_name 'abc; }", ErrSyntax},
-		"unterminated brace":         {"http {", ErrSyntax},
-		"stray closing brace":        {"}", ErrSyntax},
-		"quote glued to a word":      {`http { server_name "a"b; }`, ErrSyntax},
-		"block without a name":       {"{ }", ErrSyntax},
-		"missing semicolon at end":   {"http { x }", ErrSyntax},
-		"missing semicolon at EOF":   {"worker_processes 1", ErrSyntax},
-		"overlong line":              {strings.Repeat(" ", MaxLine+1), ErrLineTooLong},
-		"overlong quoted token":      {`a "` + strings.Repeat("x\n", MaxLine/2+1) + `";`, ErrLineTooLong},
-		"include loop":               {"# configuration file /a:\ninclude /b;\n# configuration file /b:\ninclude /a;\n", ErrIncludeLoop},
-		"too many tokens":            {strings.Repeat(";\n", MaxTokens+1), ErrTooComplex},
-		"too many files":             {strings.Repeat("# configuration file /a:\n", MaxFiles+1), ErrTooComplex},
-		"deep nesting through files": {deepIncludes(), ErrTooDeep},
+		"NUL byte":                       {"http { server { " + okServer + " } }\x00", ErrNUL},
+		"unterminated single quote":      {"http { server_name 'abc; }", ErrSyntax},
+		"unterminated brace":             {"http {", ErrSyntax},
+		"stray closing brace":            {"}", ErrSyntax},
+		"quote glued to a word":          {`http { server_name "a"b; }`, ErrSyntax},
+		"block without a name":           {"{ }", ErrSyntax},
+		"missing semicolon at end":       {"http { x }", ErrSyntax},
+		"missing semicolon at EOF":       {"worker_processes 1", ErrSyntax},
+		"overlong line":                  {strings.Repeat(" ", MaxLine+1), ErrLineTooLong},
+		"overlong quoted token":          {`a "` + strings.Repeat("x\n", MaxLine/2+1) + `";`, ErrLineTooLong},
+		"include loop":                   {"# configuration file /a:\ninclude /b;\n# configuration file /b:\ninclude /a;\n", ErrIncludeLoop},
+		"too many tokens":                {strings.Repeat(";\n", MaxTokens+1), ErrTooComplex},
+		"too many files":                 {manyFiles(MaxFiles + 1), ErrTooComplex},
+		"same file named twice":          {"# configuration file /a:\n# configuration file /a:\n", ErrDuplicateFile},
+		"same file named twice, unclean": {"# configuration file /a/b:\n# configuration file /a//b:\n", ErrDuplicateFile},
+		"deep nesting through files":     {deepIncludes(), ErrTooDeep},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Parse([]byte(tc.in), "/etc/nginx")
@@ -177,11 +181,25 @@ func TestRobustnessErrors(t *testing.T) {
 	}
 }
 
+func manyFiles(n int) string {
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		b.WriteString("# configuration file /m" + strconv.Itoa(i) + ":\n")
+	}
+	return b.String()
+}
+
 // deepIncludes builds MaxDepth+2 files that each open one block and include the next one.
 func deepIncludes() string {
 	var b strings.Builder
 	for i := 0; i <= MaxDepth+1; i++ {
-		b.WriteString("# configuration file /d" + strconv.Itoa(i) + ":\nx { include /d" + strconv.Itoa(i+1) + "; }\n")
+		b.WriteString("# configuration file /d" + strconv.Itoa(i) + ":\n")
+		if i == 0 {
+			b.WriteString("http ")
+		} else {
+			b.WriteString("server ")
+		}
+		b.WriteString("{ include /d" + strconv.Itoa(i+1) + "; }\n")
 	}
 	return b.String()
 }
@@ -298,28 +316,212 @@ func TestMultilineQuotedStringKeepsLineNumbers(t *testing.T) {
 
 func TestHostileSizesFinishQuickly(t *testing.T) {
 	for name, in := range map[string]string{
-		"semicolons":   strings.Repeat(";\n", MaxInput/2),
-		"open braces":  strings.Repeat("a{\n", MaxInput/3),
-		"short words":  strings.Repeat("a\n", MaxInput/2),
-		"markers":      strings.Repeat("# configuration file /a:\n", MaxInput/24),
-		"empty blocks": strings.Repeat("a{}", MaxInput/3),
+		"semicolons":      strings.Repeat(";\n", MaxInput/2),
+		"open braces":     strings.Repeat("a{\n", MaxInput/3),
+		"short words":     strings.Repeat("a\n", MaxInput/2),
+		"markers":         manyFiles(MaxFiles * 2),
+		"empty blocks":    strings.Repeat("a{}", MaxInput/3),
+		"include chain":   includeChain(),
+		"quoted garbage":  strings.Repeat(`"a" `, MaxInput/4),
+		"lua braces":      "content_by_lua_block " + strings.Repeat("{ ", MaxInput/2),
+		"include storm":   includeStorm(),
+		"glob everything": globStorm(),
 	} {
 		t.Run(name, func(t *testing.T) {
+			start := time.Now()
 			_, err := Parse([]byte(in), "/etc/nginx")
 			assert.Error(t, err)
+			assert.Less(t, time.Since(start), 2*time.Second)
 		})
 	}
 }
 
-func TestBlankLinesBeforeTheFirstMarkerDoNotHideTheMainFile(t *testing.T) {
-	in := "\n  \n# configuration file /etc/nginx/nginx.conf:\nhttp { server { " + okServer + " } }\n"
+// includeChain is 2000 files that include the next one, the last with 200k wildcard includes
+// that each match 2000 empty files.
+func includeChain() string {
+	var b strings.Builder
+	for i := 0; i < 2000; i++ {
+		b.WriteString("# configuration file /c" + strconv.Itoa(i) + ":\n")
+		if i < 1999 {
+			b.WriteString("include /c" + strconv.Itoa(i+1) + ";\n")
+		} else {
+			b.WriteString(strings.Repeat("include /l*;\n", 200000))
+		}
+	}
+	for i := 0; i < 2000; i++ {
+		b.WriteString("# configuration file /l" + strconv.Itoa(i) + ":\n")
+	}
+	return b.String()
+}
+
+// includeStorm includes one small file a million times.
+func includeStorm() string {
+	return "# configuration file /a:\n" + strings.Repeat("include /b;", 500000) + "\n# configuration file /b:\nlisten 1;\n"
+}
+
+// globStorm has many files and a few wildcard includes with long patterns.
+func globStorm() string {
+	var b strings.Builder
+	b.WriteString("# configuration file /a:\n" + strings.Repeat("include /*/*/*/*/*/*/*/*/*/*/*/*.conf;\n", 20000))
+	for i := 0; i < MaxFiles-1; i++ {
+		b.WriteString("# configuration file /d/d/d/d/d/d/d/d/d/d/d/" + strconv.Itoa(i) + ".conf:\n")
+	}
+	return b.String()
+}
+
+func TestLargeIncludedFileCostsLittleMemory(t *testing.T) {
+	// 1 MB: /a includes /b twice, /b is 500000 directives nobody reads.
+	in := "# configuration file /a:\nhttp { include /b; include /b; }\n# configuration file /b:\n" + strings.Repeat("a;", 500000) + "\n"
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	c, err := Parse([]byte(in), "/etc/nginx")
+	runtime.ReadMemStats(&after)
+	require.NoError(t, err)
+	assert.Empty(t, c.Servers)
+	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20))
+}
+
+func TestForgedMarkerCannotChangeAnotherServersPairs(t *testing.T) {
+	in := "# configuration file /etc/nginx/nginx.conf:\n" +
+		"http { include /etc/nginx/sites-enabled/*; server { listen 443 ssl; server_name bank; include /etc/nginx/snippets/bank-tls.conf; } }\n" +
+		"# configuration file /etc/nginx/sites-enabled/evil:\n" +
+		"server { listen 8443 ssl; ssl_certificate /etc/nginx/ssl/own.crt; ssl_certificate_key /etc/nginx/ssl/own.key; }\n" +
+		"# configuration file /etc/nginx/snippets/bank-tls.conf:\n" +
+		"ssl_certificate /etc/nginx/ssl/evil2.crt;\n" +
+		"# configuration file /etc/nginx/snippets/bank-tls.conf:\n" +
+		"ssl_certificate /etc/nginx/ssl/bank.crt;\nssl_certificate_key /etc/nginx/ssl/bank.key;\n"
+	_, err := Parse([]byte(in), "/etc/nginx")
+	assert.ErrorIs(t, err, ErrDuplicateFile)
+}
+
+func TestSectionsExposeNamesAndBytes(t *testing.T) {
+	in := "# configuration file /etc/nginx/nginx.conf:\nhttp { include /s; }\n# configuration file /s:\nlisten 1;\n"
+	c := parseInline(t, in)
+	require.Len(t, c.Sections, 2)
+	assert.Equal(t, "/etc/nginx/nginx.conf", c.Sections[0].File)
+	assert.Equal(t, "http { include /s; }\n", string(c.Sections[0].Body))
+	assert.Equal(t, "/s", c.Sections[1].File)
+	assert.Equal(t, "listen 1;\n", string(c.Sections[1].Body))
+}
+
+func TestGlobFollowsGlob3(t *testing.T) {
+	srv := func(n string) string {
+		return "server { listen 443 ssl; ssl_certificate /etc/nginx/ssl/" + n + ".crt; ssl_certificate_key /etc/nginx/ssl/" + n + ".key; }\n"
+	}
+	in := "# configuration file /etc/nginx/nginx.conf:\nhttp { include /etc/nginx/sites/*; include /etc/nginx/deep/*.conf; }\n" +
+		"# configuration file /etc/nginx/sites/.hidden:\n" + srv("hidden") +
+		"# configuration file /etc/nginx/sites/vis:\n" + srv("vis") +
+		"# configuration file /etc/nginx/deep/x/y.conf:\n" + srv("deep")
+	c := parseInline(t, in)
+	assert.Equal(t, []string{"/etc/nginx/ssl/vis.crt"}, c.CertPaths(), "* never matches a leading dot nor a slash")
+	in = "# configuration file /etc/nginx/nginx.conf:\nhttp { include /etc/nginx/sites/.h*; }\n# configuration file /etc/nginx/sites/.hidden:\n" + srv("hidden")
+	assert.Equal(t, []string{"/etc/nginx/ssl/hidden.crt"}, parseInline(t, in).CertPaths(), "a literal dot matches")
+}
+
+func TestGlobMatchesAreSortedByName(t *testing.T) {
+	srv := func(n string) string {
+		return "server { listen 443 ssl; ssl_certificate /etc/nginx/ssl/" + n + ".crt; ssl_certificate_key /etc/nginx/ssl/" + n + ".key; }\n"
+	}
+	// z.conf is dumped first because an earlier include named it; the glob still yields a, z.
+	in := "# configuration file /etc/nginx/nginx.conf:\nhttp { include /etc/nginx/c/z.conf; include /etc/nginx/c/*.conf; }\n" +
+		"# configuration file /etc/nginx/c/z.conf:\n" + srv("z") +
+		"# configuration file /etc/nginx/c/a.conf:\n" + srv("a")
+	assert.Equal(t, []string{"/etc/nginx/ssl/z.crt", "/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/z.crt"}, certPathsInOrder(parseInline(t, in)))
+	in = "# configuration file /etc/nginx/nginx.conf:\nhttp { include /etc/nginx/c/*.conf; }\n" +
+		"# configuration file /etc/nginx/c/z.conf:\n" + srv("z") +
+		"# configuration file /etc/nginx/c/a.conf:\n" + srv("a")
+	assert.Equal(t, []string{"/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/z.crt"}, certPathsInOrder(parseInline(t, in)))
+}
+
+func certPathsInOrder(c Config) []string {
+	var out []string
+	for _, s := range c.Servers {
+		for _, p := range s.Pairs {
+			out = append(out, p.Cert)
+		}
+	}
+	return out
+}
+
+func TestIncludePatternsAreComparedAsRawBytes(t *testing.T) {
+	in := "# configuration file /etc/nginx/nginx.conf:\nhttp { include /etc/nginx/\xff.conf; }\n# configuration file /etc/nginx/\xfe.conf:\nserver { " + okServer + " }\n"
+	assert.Empty(t, parseInline(t, in).Servers, "two different invalid bytes must not both become U+FFFD and match")
+	in = "# configuration file /etc/nginx/nginx.conf:\nhttp { include /etc/nginx/\xff.conf; }\n# configuration file /etc/nginx/\xff.conf:\nserver { " + okServer + " }\n"
 	assert.Len(t, parseInline(t, in).Servers, 1)
 }
 
-func TestDirectoryPathsAreNotCertificateFiles(t *testing.T) {
-	for _, raw := range []string{`""`, ".", "..", "ssl/", "/etc/nginx/ssl/.", "/etc/nginx/ssl/x/.."} {
+func TestIfConditionWithAQuotedString(t *testing.T) {
+	c := parseInline(t, `http { server { listen 443 ssl; if ($http_user_agent ~* "(bot|crawler)") { return 403; } `+
+		`if ($a = 'x') { return 404; } ssl_certificate /etc/nginx/ssl/x.crt; ssl_certificate_key /etc/nginx/ssl/x.key; } }`)
+	require.Len(t, c.Servers, 1)
+	assert.True(t, c.HasPair("/etc/nginx/ssl/x.crt", "/etc/nginx/ssl/x.key"))
+}
+
+func TestDotSegmentsAreNeverAccepted(t *testing.T) {
+	for _, raw := range []string{"/lib/../etc/shadow", "/etc/nginx/./ssl/x.crt", "../nginx/ssl/rel.crt", "ssl/../x.crt", "./x.crt", "/etc/nginx/ssl/.."} {
 		c := parseInline(t, "http { server { listen 443 ssl; ssl_certificate "+raw+"; ssl_certificate_key /etc/nginx/ssl/x.key; } }")
 		require.Len(t, c.Servers, 1, raw)
 		assert.Equal(t, ReasonPathNotAllowed, c.Servers[0].Pairs[0].Unsupported, raw)
+		c = parseInline(t, "http { server { listen 443 ssl; ssl_certificate /etc/nginx/ssl/x.crt; ssl_certificate_key "+raw+"; } }")
+		require.Len(t, c.Servers, 1, raw)
+		assert.Equal(t, ReasonPathNotAllowed, c.Servers[0].Pairs[0].Unsupported, raw)
 	}
+	c := parseInline(t, "http { server { listen 443 ssl; ssl_certificate ssl/rel.crt; ssl_certificate_key ssl/rel.key; } }")
+	assert.True(t, c.HasPair("/etc/nginx/ssl/rel.crt", "/etc/nginx/ssl/rel.key"), "relative paths without dot segments resolve")
+}
+
+func TestEscapedDollarBraceIsNotAVariableBrace(t *testing.T) {
+	// nginx clears its variable flag after a backslash, so "{" ends the word and opens a block.
+	c := parseInline(t, `http { x \${ listen 1; } server { `+okServer+` } }`)
+	assert.Len(t, c.Servers, 1)
+}
+
+func TestLuaBlocksAreSkipped(t *testing.T) {
+	lua := `content_by_lua_block {
+  local s = "}" -- } in a comment
+  local t = '{'
+  --[[ multi
+  } line ]]
+  local l = [==[ } ]] ]==]
+  if x then ngx.say("a") end
+  # not nginx syntax 'quote
+}
+init_by_lua_block { local x = { a = { 1 } } }
+`
+	c := parseInline(t, "http { server { "+okServer+"\n"+lua+" } "+lua+" }")
+	require.Len(t, c.Servers, 1)
+	assert.True(t, c.HasPair("/etc/nginx/ssl/x.crt", "/etc/nginx/ssl/x.key"))
+	_, err := Parse([]byte("http { content_by_lua_block { local x = {"), "/etc/nginx")
+	assert.ErrorIs(t, err, ErrSyntax)
+	_, err = Parse([]byte("http { content_by_lua_block { local x = [[ unterminated }"), "/etc/nginx")
+	assert.ErrorIs(t, err, ErrSyntax)
+}
+
+func TestSSLOnIsInheritedFromHTTP(t *testing.T) {
+	c := parseInline(t, "http { ssl on; server { listen 7443; ssl_certificate /etc/nginx/ssl/a.crt; ssl_certificate_key /etc/nginx/ssl/a.key; } "+
+		"server { listen 8443; ssl off; ssl_certificate /etc/nginx/ssl/b.crt; ssl_certificate_key /etc/nginx/ssl/b.key; } }")
+	require.Len(t, c.Servers, 1)
+	assert.Equal(t, []Listen{{Port: 7443, SSL: true}}, SSLListens(c.Servers[0]))
+}
+
+func TestQUICListenCountsAsTLS(t *testing.T) {
+	c := parseInline(t, "http { server { listen 443 quic reuseport; ssl_certificate /etc/nginx/ssl/a.crt; ssl_certificate_key /etc/nginx/ssl/a.key; } }")
+	require.Len(t, c.Servers, 1)
+	assert.Equal(t, []Listen{{Port: 443, SSL: true}}, SSLListens(c.Servers[0]))
+}
+
+func TestStreamServerInheritingCertificatesWarns(t *testing.T) {
+	c := parseInline(t, "stream { ssl_certificate /etc/ssl/m.crt; ssl_certificate_key /etc/ssl/m.key; server { listen 993 ssl; } server { listen 25; } }")
+	require.Len(t, c.Servers, 1, "the plain-TCP server does not use the certificate")
+	assert.True(t, c.Servers[0].Stream)
+	assert.True(t, c.Servers[0].Pairs[0].Inherited)
+	assert.Equal(t, ReasonStream, c.Servers[0].Pairs[0].Unsupported)
+	assert.Equal(t, []string{WarnStreamTLS}, c.Warnings)
+}
+
+func TestMailTLSWarns(t *testing.T) {
+	assert.Equal(t, []string{WarnMailTLS}, parseInline(t, "mail { server { listen 993 ssl; ssl_certificate /etc/ssl/m.crt; ssl_certificate_key /etc/ssl/m.key; } }").Warnings)
+	assert.Equal(t, []string{WarnMailTLS}, parseInline(t, "mail { ssl_certificate /etc/ssl/m.crt; server { listen 993; } }").Warnings)
+	assert.Empty(t, parseInline(t, "mail { server { listen 143; } }").Warnings)
 }

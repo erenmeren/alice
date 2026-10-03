@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"alice/internal/providers/linuxssh/helperproto"
@@ -26,6 +27,7 @@ func FuzzParseNginxConfig(f *testing.F) {
 		f.Add(b)
 	}
 	f.Add([]byte("http { server { listen 443 ssl; ssl_certificate \"/a b\"; ssl_certificate_key ${x}; } }"))
+	f.Add([]byte("http { x { y; } server { listen 443 ssl; if ($a ~ \"(b)\") { return 1; } content_by_lua_block { local s = \"}\" } ssl_certificate /lib/../etc/s; } }"))
 	f.Add([]byte("# configuration file /a:\ninclude /b;\n# configuration file /b:\ninclude /a;\n"))
 	f.Add([]byte("http { server { listen 443 ssl; ssl_certificate /etc/a\\.crt; ssl_certificate_key /etc/a#.key; } }\r\n"))
 	f.Fuzz(func(t *testing.T, in []byte) {
@@ -37,11 +39,30 @@ func FuzzParseNginxConfig(f *testing.F) {
 		if err1 != nil {
 			return
 		}
+		markers := bytes.Count(in, []byte("\n"+markerPrefix))
+		if bytes.HasPrefix(in, []byte(markerPrefix)) {
+			markers++
+		}
+		if len(c1.Files) > markers {
+			t.Fatalf("%d files for %d marker lines", len(c1.Files), markers)
+		}
 		for _, s := range c1.Servers {
 			for _, p := range s.Pairs {
 				for _, path := range []string{p.Cert, p.Key} {
 					if path != "" && !helperproto.ValidPath(path) {
 						t.Fatalf("invalid path %q", path)
+					}
+				}
+				if p.Unsupported == "" {
+					if p.Cert == p.Key {
+						t.Fatalf("a supported pair with one file for both: %+v", p)
+					}
+					for _, raw := range []string{p.CertRaw, p.KeyRaw} {
+						for _, seg := range strings.Split(raw, "/") {
+							if seg == "." || seg == ".." {
+								t.Fatalf("a supported pair with a dot segment: %+v", p)
+							}
+						}
 					}
 				}
 				// Without escapes every supported path's file name appears in the input as written.
