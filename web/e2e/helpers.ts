@@ -1,6 +1,7 @@
+import { execFileSync } from 'node:child_process';
 import { createHmac } from 'node:crypto';
 import AxeBuilder from '@axe-core/playwright';
-import { test as base, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import { test as base, expect, type APIRequestContext, type APIResponse, type Locator, type Page } from '@playwright/test';
 
 declare global {
   interface Window {
@@ -496,4 +497,98 @@ export async function seriousViolations(page: Page): Promise<string[]> {
   return results.violations
     .filter((v) => v.impact === 'serious' || v.impact === 'critical')
     .map((v) => `${v.impact}: ${v.id} (${v.nodes.map((n) => n.target.join(' ')).join(', ')})`);
+}
+
+// --- Phase 3: the e2e SSH target, background jobs and API calls as the signed-in browser user ---
+
+// E2E_PROJECT is the compose project of the e2e stack (make e2e-up; the Makefile passes it as
+// ALICE_E2E_PROJECT). The owner's own stack is the project "alice"; tests never address it.
+const E2E_PROJECT = process.env.ALICE_E2E_PROJECT || 'alice-e2e';
+
+// COMPOSE addresses the e2e stack of this repository; tests run from web/.
+const COMPOSE = [
+  'compose',
+  '-p',
+  E2E_PROJECT,
+  '-f',
+  '../deploy/docker-compose.yml',
+  '-f',
+  '../deploy/docker-compose.e2e.yml',
+  '--env-file',
+  '../deploy/.env',
+];
+
+// targetExec runs a command as root in the e2e SSH target service "sshtarget" and returns its
+// standard output. It never addresses any other service or compose project.
+export function targetExec(args: string[], input?: string): string {
+  if (E2E_PROJECT === 'alice') throw new Error('targetExec refuses the compose project "alice" (the owner stack)');
+  return execFileSync('docker', [...COMPOSE, 'exec', '-T', 'sshtarget', ...args], {
+    input,
+    encoding: 'utf8',
+    timeout: 120_000,
+  });
+}
+
+// drainJobs runs every due background job now (e2e build: serve starts no job workers).
+export async function drainJobs(request: APIRequestContext): Promise<void> {
+  const res = await request.post('/test/jobs/drain');
+  expect(res.ok(), 'POST /test/jobs/drain (is this the Phase 3 e2e build?)').toBe(true);
+}
+
+// settle runs due jobs until done is visible: a job finishes, then the page's polling shows its result.
+export async function settle(request: APIRequestContext, done: Locator): Promise<void> {
+  await expect(async () => {
+    await drainJobs(request);
+    await expect(done).toBeVisible({ timeout: 1_500 });
+  }).toPass({ timeout: 90_000 });
+}
+
+// fingerprintOf extracts "SHA256:…" from the output of ssh-keygen -lf.
+export function fingerprintOf(sshKeygenOutput: string): string {
+  const m = sshKeygenOutput.match(/SHA256:[A-Za-z0-9+/]+/);
+  expect(m, `fingerprint in: ${sshKeygenOutput}`).not.toBeNull();
+  return m![0];
+}
+
+export interface Api {
+  get(path: string): Promise<APIResponse>;
+  post(path: string, data?: unknown): Promise<APIResponse>;
+  // stepUp confirms the session with a fresh code. The server rotates the session cookie and so the
+  // CSRF token; reload the page afterwards before using the UI (the SPA keeps the old token in memory).
+  stepUp(totpSecret: string): Promise<void>;
+}
+
+// apiAs calls the API as the user signed in on page (same cookies), with the session's CSRF token.
+export async function apiAs(page: Page): Promise<Api> {
+  const session = await page.request.get('/api/v1/auth/session');
+  expect(session.ok(), 'GET /api/v1/auth/session (signed in?)').toBe(true);
+  let csrf = ((await session.json()) as { csrf_token: string }).csrf_token;
+  const api: Api = {
+    get: (path) => page.request.get(path, { headers: { 'X-CSRF-Token': csrf } }),
+    post: (path, data) => page.request.post(path, { headers: { 'X-CSRF-Token': csrf }, data: data ?? {} }),
+    stepUp: async (totpSecret) => {
+      const res = await api.post('/api/v1/auth/stepup', { code: await freshCode(page.request, totpSecret) });
+      expect(res.ok(), await res.text()).toBe(true);
+      csrf = ((await res.json()) as { csrf_token: string }).csrf_token;
+    },
+  };
+  return api;
+}
+
+// PHONE_WIDTH is the narrowest width the Servers and SSH keys screens must work at.
+export const PHONE_WIDTH = 375;
+
+// expectWide checks a screen with axe and for horizontal overflow on a 375 px phone and at every
+// width of expectAccessible (tables scroll inside their own container, never the page).
+export async function expectWide(page: Page, screen: string): Promise<void> {
+  const original = page.viewportSize();
+  try {
+    await page.setViewportSize({ width: PHONE_WIDTH, height: original?.height ?? 720 });
+    expect(await seriousViolations(page), `axe: ${screen} at ${PHONE_WIDTH} px`).toEqual([]);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow, `horizontal overflow: ${screen} at ${PHONE_WIDTH} px`).toBeLessThanOrEqual(0);
+  } finally {
+    if (original) await page.setViewportSize(original);
+  }
+  await expectAccessible(page, screen);
 }
