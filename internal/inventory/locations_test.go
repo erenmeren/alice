@@ -189,3 +189,19 @@ func TestBoundSANs(t *testing.T) {
 	assert.Equal(t, []string{}, got)
 	assert.Len(t, []rune(boundText(strings.Repeat("ş", maxCertificateText+5))), maxCertificateText)
 }
+
+func TestAliceFingerprints(t *testing.T) {
+	d := func(status string) *deploymentFingerprints {
+		return &deploymentFingerprints{status: status, newFP: "new", previousFP: "old"}
+	}
+	assert.Empty(t, (&existingLocation{fingerprint: "old"}).aliceFingerprints())
+	assert.Equal(t, []string{"new", "old"}, (&existingLocation{unfinished: d("needs_attention")}).aliceFingerprints())
+	for _, status := range []string{"succeeded", "unchanged"} {
+		assert.Empty(t, (&existingLocation{fingerprint: "old", latestFinished: d(status)}).aliceFingerprints(), status)
+	}
+	for _, status := range []string{"rolled_back", "failed"} {
+		assert.Equal(t, []string{"old"}, (&existingLocation{fingerprint: "new", latestFinished: d(status)}).aliceFingerprints(), status)
+		assert.Empty(t, (&existingLocation{fingerprint: "old", latestFinished: d(status)}).aliceFingerprints(), status)
+	}
+	assert.Equal(t, []string{"new", "old"}, (&existingLocation{fingerprint: "x", latestFinished: d("rollback_failed")}).aliceFingerprints())
+}

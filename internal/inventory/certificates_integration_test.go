@@ -968,6 +968,43 @@ new_fingerprint, previous_fingerprint, cert_path, key_path, created_at) VALUES (
 	require.Len(t, d, 1)
 	assert.Equal(t, map[string]string{"location_id": l.ID.String(), "target_id": web.ID.String(), "cert_path": "/etc/nginx/ssl/www.crt",
 		"fingerprint": pki.Fingerprint(z.Cert), "previous_fingerprint": pki.Fingerprint(a.Cert)}, d[0])
+
+	// A finished deployment accepts only what its outcome left in the file, in that direction.
+	w := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
+	other := func(path string) providers.CertLocation { return cl(path, path+".key", "www.example.test") }
+	scanAt := func(path string, leaf pki.Leaf) inventory.CertificateLocation {
+		t.Helper()
+		_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK,
+			Certificates: []providers.DiscoveredCertificate{dc(loc, z), dc(other(path), leaf)}})
+		require.NoError(t, err)
+		return byPath(t, h, web.ID, true)[path]
+	}
+	finished := func(l inventory.CertificateLocation, newFP, prevFP, status string) {
+		t.Helper()
+		_, err := h.db.Owner.Exec(h.ctx, `INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, state, status,
+new_fingerprint, previous_fingerprint, cert_path, key_path, created_at, finished_at)
+VALUES ($1, $2, $3, $4, 'manual', 'done', $5, $6, $7, $8, $9, $10, $10)`, uuid.Must(uuid.NewV7()), xID, l.ID, web.ID, status, newFP, prevFP,
+			"/etc/nginx/ssl/deployed.crt", "/etc/nginx/ssl/deployed.key", h.clock.Now())
+		require.NoError(t, err)
+	}
+	// (a) Alice deploys X over W and succeeds; later somebody puts W back by hand: flagged.
+	reverted := scanAt("/etc/nginx/ssl/reverted.crt", w)
+	finished(reverted, pki.Fingerprint(x.Cert), pki.Fingerprint(w.Cert), "succeeded")
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE certificate_locations SET deployed_fingerprint = $2 WHERE id = $1", reverted.ID, pki.Fingerprint(x.Cert))
+	require.NoError(t, err)
+	assert.Nil(t, scanAt("/etc/nginx/ssl/reverted.crt", x).ChangedOutsideAt, "Alice's deployment")
+	assert.NotNil(t, scanAt("/etc/nginx/ssl/reverted.crt", w).ChangedOutsideAt, "a manual revert after a successful deployment")
+	// (b) A deployment of X rolls back before any scan saw X; later somebody installs X by hand: flagged.
+	manual := scanAt("/etc/nginx/ssl/manual.crt", w)
+	finished(manual, pki.Fingerprint(x.Cert), pki.Fingerprint(w.Cert), "rolled_back")
+	assert.Nil(t, scanAt("/etc/nginx/ssl/manual.crt", w).ChangedOutsideAt)
+	assert.NotNil(t, scanAt("/etc/nginx/ssl/manual.crt", x).ChangedOutsideAt, "a manual install of the certificate a deployment rolled back")
+	// (c) rollback_failed leaves either certificate: neither is flagged.
+	broken := scanAt("/etc/nginx/ssl/broken.crt", w)
+	finished(broken, pki.Fingerprint(x.Cert), pki.Fingerprint(w.Cert), "rollback_failed")
+	assert.Nil(t, scanAt("/etc/nginx/ssl/broken.crt", x).ChangedOutsideAt)
+	assert.Nil(t, scanAt("/etc/nginx/ssl/broken.crt", w).ChangedOutsideAt)
+	assert.Equal(t, 3, h.audits("location.changed_outside"))
 }
 
 // The certificate half of a result is stored for Nginx targets only.

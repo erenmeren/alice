@@ -317,11 +317,46 @@ type existingLocation struct {
 	deployed    string
 	fileSHA     string
 	keyType     string
-	// alice holds the fingerprints Alice's own deployments put in the file: the new and previous
-	// certificate of the location's unfinished deployment and of its latest finished one. A
-	// deployment records deployed_fingerprint only when it finishes, so a scan during its
-	// verification or recovery, or after a rollback, sees one of these.
-	alice []string
+	// The location's unfinished deployment (state not done) and its latest finished one, as far
+	// as the changed-outside check needs them (aliceFingerprints).
+	unfinished     *deploymentFingerprints
+	latestFinished *deploymentFingerprints
+}
+
+// deploymentFingerprints is what a deployment put or would put in a location's file.
+type deploymentFingerprints struct {
+	status, newFP, previousFP string
+}
+
+// aliceFingerprints are the certificates a scan may find in the file because of Alice's own
+// deployments (deployed_fingerprint aside), given the certificate the location held before this
+// scan. A deployment records deployed_fingerprint only when it finishes, and its outcome decides
+// what it can have left:
+//   - an unfinished deployment (state not done, whatever its status: pending, running,
+//     needs_attention): either certificate, the outcome is still open;
+//   - the latest finished one, by status: succeeded or unchanged leave the new certificate, which
+//     deployed_fingerprint names already; rolled_back or failed leave the previous one, accepted only
+//     when the location held the new one before (an earlier scan saw the certificate in flight and
+//     this scan sees the restore); rollback_failed may leave either.
+//
+// Anything else, such as the previous certificate put back by hand after a success, or the new one
+// installed by hand after a rollback, is a change outside Alice.
+func (e *existingLocation) aliceFingerprints() []string {
+	var out []string
+	if d := e.unfinished; d != nil {
+		out = append(out, d.newFP, d.previousFP)
+	}
+	if d := e.latestFinished; d != nil {
+		switch d.status {
+		case "rolled_back", "failed":
+			if e.fingerprint == d.newFP {
+				out = append(out, d.previousFP)
+			}
+		case "rollback_failed":
+			out = append(out, d.newFP, d.previousFP)
+		}
+	}
+	return out
 }
 
 // reconcileLocations stores the certificate locations of one discovery of the locked target t
@@ -334,9 +369,9 @@ type existingLocation struct {
 //     (never deleted); otherwise nothing is marked missing.
 //
 // A location whose file now holds another certificate moves to it; when the old one was known and
-// the new one is not Alice's (deployed_fingerprint, or the new or previous certificate of the
-// location's unfinished or latest finished deployment), changed_outside_at is set and an audit
-// event is returned for the caller to append last.
+// the new one is not Alice's (deployed_fingerprint, or what a deployment of the location can have
+// left, see aliceFingerprints), changed_outside_at is set and an audit event is returned for the
+// caller to append last.
 func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, found []providers.DiscoveredCertificate, markMissing bool,
 	now time.Time) (certSummary, []audit.Event, error) {
 	var sum certSummary
@@ -393,7 +428,7 @@ func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, f
 			continue
 		}
 		seen = append(seen, prev.id)
-		changedOutside := prev.fingerprint != "" && fp != "" && fp != prev.fingerprint && fp != prev.deployed && !slices.Contains(prev.alice, fp)
+		changedOutside := prev.fingerprint != "" && fp != "" && fp != prev.fingerprint && fp != prev.deployed && !slices.Contains(prev.aliceFingerprints(), fp)
 		if err := updateLocation(ctx, tx, prev.id, p, certID, fileSHA, keyType, changedOutside, now); err != nil {
 			return certSummary{}, nil, err
 		}
@@ -431,20 +466,26 @@ FOR UPDATE OF l`, target, locationKind, path).Scan(&e.id, &e.certID, &e.fingerpr
 	}
 	// The deployments are read, not locked (the location row lock above orders this scan with a
 	// deployment that changes the location).
-	rows, err := tx.Query(ctx, `(SELECT new_fingerprint, previous_fingerprint FROM deployments WHERE location_id = $1 AND state <> 'done' LIMIT 1)
+	rows, err := tx.Query(ctx, `(SELECT false, status, new_fingerprint, previous_fingerprint FROM deployments
+ WHERE location_id = $1 AND state <> 'done' LIMIT 1)
 UNION ALL
-(SELECT new_fingerprint, previous_fingerprint FROM deployments WHERE location_id = $1 AND state = 'done' ORDER BY created_at DESC, id DESC LIMIT 1)`,
-		e.id)
+(SELECT true, status, new_fingerprint, previous_fingerprint FROM deployments
+ WHERE location_id = $1 AND state = 'done' ORDER BY created_at DESC, id DESC LIMIT 1)`, e.id)
 	if err != nil {
 		return nil, fmt.Errorf("inventory: read the location's deployments: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var n, p string
-		if err := rows.Scan(&n, &p); err != nil {
+		var done bool
+		var d deploymentFingerprints
+		if err := rows.Scan(&done, &d.status, &d.newFP, &d.previousFP); err != nil {
 			return nil, fmt.Errorf("inventory: read the location's deployments: %w", err)
 		}
-		e.alice = append(e.alice, n, p)
+		if done {
+			e.latestFinished = &d
+		} else {
+			e.unfinished = &d
+		}
 	}
 	return &e, rows.Err()
 }
