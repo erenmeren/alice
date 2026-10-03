@@ -57,11 +57,13 @@
 - **Test connection** always opens a new SSH connection; removing a server closes the connections Alice kept open to
   it.
 - Scheduled work runs at most once per discovery interval per server, whatever its outcome; a failed scheduled
-  re-test ends without a dead-job email.
+  re-test ends without a dead-job email (Alice never emails because a server cannot be reached); a confirmed server
+  left at **Checking…** by a restart or the license lock is tested again by the scheduler.
 - A new server that cannot be reached before its fingerprint is confirmed stays "Waiting for fingerprint
   confirmation"; confirm, re-pin and dismissal always start a new connection test.
 - A job whose lease cannot be renewed is stopped and handed back before the lease runs out; a key removal applied
-  while its server was deleted is still recorded.
+  while its server was deleted is still recorded, and a removal retry that finds its server deleted is recorded as
+  failed and stops for a person.
 - The database checks server addresses, ports and fingerprint formats; local-use NAT64 addresses
   (`64:ff9b:1::/48`) that translate to link-local, multicast or broadcast addresses are refused.
 - Web: progress waits through network errors, a stopped task says so, the setup wizard no longer reports success

@@ -29,8 +29,9 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 - **"Connecting to the server…" ends with "Cannot be reached".** Check the address and port, that the server's SSH
   service runs, and that a firewall lets the Alice server through (`ALC-SSH-0001`, `ALC-SSH-0003`). Then choose
   **Test connection** on the server's page. Alice also tests a server that cannot be reached once per discovery
-  interval on its own and scans it as soon as the test succeeds; a new server whose fingerprint is not confirmed yet
-  is not tested on its own.
+  interval on its own and scans it as soon as the test succeeds; a failed scheduled test sends no email (a server
+  that cannot be reached is shown on **Servers** and in the audit log, not emailed). A new server whose fingerprint
+  is not confirmed yet is not tested on its own.
 - **"Sign-in refused" (`ALC-SSH-0002`).** The server does not accept Alice's key for the user you entered. Run the
   setup commands again (they put the key in `/var/lib/alice-svc/.ssh/authorized_keys`), check that the user
   name is `alice-svc`, then choose **Test connection**. Alice does not try a server with a refused key again on its

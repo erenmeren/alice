@@ -126,7 +126,8 @@ per interval, whatever its outcome: a scheduled scan that fails (for example bec
 license lock cancelled it) is tried again only after a full interval. A server that **Cannot be reached** gets a
 connection test at its discovery interval instead; when it succeeds, the server is **Connected** again and Alice
 scans it at once. A scheduled test that fails ends as failed, without a dead-job email; the server keeps its status
-and the next interval tests it again. A server left at **Checking…** after its fingerprint was confirmed (because
+and the next interval tests it again. Alice sends no email when a server becomes unreachable; the audit log records
+one `target.status_changed` entry per change of status. A server left at **Checking…** after its fingerprint was confirmed (because
 Alice restarted, or the license lock cancelled the test) is tested the same way, at once the first time. Any
 successful scan or key removal also returns a server that could not be
 reached to **Connected** (audited as `target.status_changed` with the reason `discovery_ok` or `removal_ok`). A
@@ -136,8 +137,10 @@ disabled one are never tried automatically: a person must act first.
 If Alice cannot renew a running job's lease (for example because the database cannot be reached) and the lease
 would run out before the next renewal, Alice stops the job's work and hands the job back to the queue; with the
 defaults this happens about 30 seconds after the last renewal. When a server is removed while a job runs on it, a
-key removal that already changed the server is still recorded in the audit log, and a connection test ends as
-failed (`ALC-SYS-0001`) without a retry or an email.
+key removal that already changed the server is still recorded in the audit log; a removal whose retry finds the
+server removed is recorded as `sshkey.remove_failed` (reason `system.not_found`) and stops for a person, because the
+earlier attempt may have changed the server; and a connection test ends as failed (`ALC-SYS-0001`) without a retry
+or an email.
 
 At most 10 SSH connections are in use at once (2 per server); an idle connection is kept for up to 60 seconds and
 reused, except by **Test connection**, which always opens a new connection. Each step has its own time limit: 10 seconds to connect, 15 seconds for the SSH handshake, 30 seconds per
