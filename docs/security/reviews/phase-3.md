@@ -38,7 +38,9 @@ Playwright: the e2e build has no deterministic way to queue a job before the loc
 - [ ] The only command lines are `cat /etc/os-release`, `/usr/local/libexec/alice-helper version` and
       `sudo -n /usr/local/libexec/alice-helper <subcommand> '<arg>'…` with arguments from `[A-Za-z0-9._/@:+-]`.
 - [ ] The helper refuses every path it did not compute itself from `/etc/passwd` and `sshd -T`, resolves symlinks
-      and keeps them inside the user's home (or the configured directory), never prints private key material, and
+      and keeps them inside the user's home (also for an absolute pattern that points into the home) or inside a
+      root-controlled directory of an absolute pattern, reads or writes a file reached through a symlink only in a
+      directory of its user, follows no symlink that appeared after the scan, never prints private key material, and
       writes with a root-private lock file, hash check of the current file, hash check of the received content
       (`--content-sha256`, protocol 3: a connection dropped mid-transfer never leaves a truncated file), backup,
       temporary file, `fsync`, rename and directory `fsync`.
