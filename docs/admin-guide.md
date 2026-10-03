@@ -130,7 +130,9 @@ confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **S
 - Alice scans every **Connected** server on its own once per discovery interval (one day unless it was changed
   through the API; at least one hour), and starts at most one scheduled job per server per interval whatever its
   outcome. A server that **Cannot be reached** is tested again at that interval; when the test succeeds it is
-  **Connected** again and Alice scans it at once; Alice sends no email about a server that cannot be reached. A
+  **Connected** again and Alice scans it at once. Becoming unreachable sends no email of its own, and neither does a
+  failed scheduled re-test; a scan, or a **Test connection** you started, that fails on its last attempt still sends
+  the usual email about a stopped task. A
   successful scan or key removal also brings it back to **Connected**. A server left at **Checking…** after its
   fingerprint was confirmed (for example because Alice restarted) is tested again on its own. A server with **Sign-in refused** or **Server identity changed** is never tried again
   automatically: fix the cause, then choose **Test connection** (Sign-in refused) or review the fingerprint (Server

@@ -149,6 +149,8 @@ No High finding is open except the documented product residual P3-01.
   removing them through Alice is refused. A fix needs a helper protocol change (the helper reporting every account
   name it read and whether `/etc/passwd` was read completely). `docs/operator-guide.md` describes how to spot and
   handle it.
+- **Accounts with an empty shell field are not listed.** The helper skips an account whose `/etc/passwd` shell
+  field is empty, although sshd treats it as `/bin/sh` and the account can sign in; its keys are not inventoried.
 - **Key options shown verbatim.** `authorized_keys` options (for example `environment=` or `command=`, which can
   carry values an administrator considers sensitive) are stored and shown exactly as in the file to every role that
   can read the inventory, Auditors included.
@@ -169,7 +171,8 @@ No High finding is open except the documented product residual P3-01.
   /56, /64, /96) is one of those, because Alice cannot know the prefix length the network uses.
 - **Packaging (Phase 8).** The helper is built with `make helper`; the release bundle and its signature arrive in
   Phase 8. Master-key rotation (which must re-seal the installation record and the time record, and re-encrypt the
-  platform key) is not built. Replacing the platform SSH key is a manual procedure (`docs/operator-guide.md`).
+  platform key) is not built. Replacing the platform SSH key is a manual procedure that needs the vendor in this release; there is no command
+  for it (`docs/operator-guide.md`, "Alice's SSH key").
 - **Coverage of root-only helper paths.** `make coverage` runs as a normal user, so the helper's root-only tests
   are skipped there; the real-OpenSSH suite (row 8) exercises the helper as root inside the test containers.
 - The Phase 1 and Phase 2 findings still open stay as recorded in their review notes.

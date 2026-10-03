@@ -57,7 +57,7 @@
 - **Test connection** always opens a new SSH connection; removing a server closes the connections Alice kept open to
   it.
 - Scheduled work runs at most once per discovery interval per server, whatever its outcome; a failed scheduled
-  re-test ends without a dead-job email (Alice never emails because a server cannot be reached); a confirmed server
+  re-test ends without a dead-job email (becoming unreachable sends no email of its own; a scan, or a test a person started, that fails on its last attempt still sends the `job.dead` email); a confirmed server
   left at **Checking…** by a restart or the license lock is tested again by the scheduler.
 - A new server that cannot be reached before its fingerprint is confirmed stays "Waiting for fingerprint
   confirmation"; confirm, re-pin and dismissal always start a new connection test.

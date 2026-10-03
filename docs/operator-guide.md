@@ -126,8 +126,10 @@ per interval, whatever its outcome: a scheduled scan that fails (for example bec
 license lock cancelled it) is tried again only after a full interval. A server that **Cannot be reached** gets a
 connection test at its discovery interval instead; when it succeeds, the server is **Connected** again and Alice
 scans it at once. A scheduled test that fails ends as failed, without a dead-job email; the server keeps its status
-and the next interval tests it again. Alice sends no email when a server becomes unreachable; the audit log records
-one `target.status_changed` entry per change of status. A server left at **Checking…** after its fingerprint was confirmed (because
+and the next interval tests it again. A server becoming unreachable sends no email of its own (the audit log records
+one `target.status_changed` entry per change of status), and a failed scheduled re-test sends none either. A scan,
+or a connection test a person started, that fails on its last attempt still ends as a stopped job and sends the
+usual `job.dead` email. A server left at **Checking…** after its fingerprint was confirmed (because
 Alice restarted, or the license lock cancelled the test) is tested the same way, at once the first time. Any
 successful scan or key removal also returns a server that could not be
 reached to **Connected** (audited as `target.status_changed` with the reason `discovery_ok` or `removal_ok`). A
