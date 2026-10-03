@@ -57,6 +57,15 @@ type Emulator struct {
 	beforeWrite func(path string)
 	writes      []string
 	backups     map[string]int // operation id -> backups written
+	maxUsers    int            // accounts listed at most (the helper's 200 when 0)
+}
+
+// SetMaxUsers makes the emulator list at most n accounts (in uid order) and warn
+// too_many_users when there are more, as the helper does above 200.
+func (e *Emulator) SetMaxUsers(n int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.maxUsers = n
 }
 
 // NewEmulator returns an emulator with the users root, deploy (uid 1001) and alice-svc (uid 998,
@@ -382,6 +391,14 @@ func (e *Emulator) scanLocked() emuScan {
 		}
 		return users[i].name < users[j].name
 	})
+	limit := e.maxUsers
+	if limit <= 0 {
+		limit = 200
+	}
+	if len(users) > limit {
+		users = users[:limit]
+		s.warn(helperproto.WarnTooManyUsers)
+	}
 	for _, u := range users {
 		cfg := global
 		us := emuUserScan{user: u, unreadable: !gok}

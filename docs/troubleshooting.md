@@ -523,7 +523,9 @@ leaves the user's home), or the file is not a regular file.
 
 `CONTENT_MISMATCH` means the new file content reached the server incomplete (the connection dropped while Alice
 sent it); the helper wrote nothing. `HOME_NOT_WRITABLE` means the user has no `.ssh` directory yet and may not create
-one in their home directory (for example a home owned by root); the helper wrote nothing.
+one in their home directory (for example a home owned by root); the helper wrote nothing. `params.reason`
+`too_many_users` means the server has more accounts than the helper lists (200) and the requested user is not among
+them, so Alice cannot check that a new key file belongs to that user.
 
 **What to do.** Scan the server again. If the refusal stays, check the named file on the server; contact support with
 the request ID if needed. After `CONTENT_MISMATCH`, check the network path to the server and run the action again.

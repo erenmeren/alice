@@ -456,6 +456,26 @@ func TestDialRefusesAServerThatAcceptsWithoutTheClientKey(t *testing.T) {
 	assert.Equal(t, "publickey_not_offered", pe.Params["reason"])
 }
 
+// A-13: when the helper lists only the first 200 accounts and the requested user is not among
+// them, the refusal says so (reason too_many_users) instead of blaming the user name.
+func TestAddForAnUnlistedUserOfATruncatedListNamesTheTruncation(t *testing.T) {
+	e := newProvEnv(t)
+	// A file shared by every account (no %u): it does not exist yet, so the helper reads it as
+	// missing (it is root's candidate) and Alice checks that the requested user lists it.
+	const shared = "/etc/ssh/shared_keys"
+	e.emu.SetSSHD(strings.Replace(linuxsshtest.DefaultSSHD, "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2",
+		"authorizedkeysfile "+shared, 1))
+	e.emu.SetMaxUsers(2) // root and alice-svc; deploy (uid 1001) is not listed
+	add, _ := keyLine(t, "ed25519", "", "n@x")
+	_, err := e.open(t).AddAuthorizedKey(context.Background(),
+		providers.AuthKeyChange{OperationID: keyOp, OSUser: "deploy", FilePath: shared, Line: add}, nil)
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.helper_refused", pe.Code)
+	assert.Equal(t, "too_many_users", pe.Params["reason"])
+	assert.NotContains(t, pe.Params, "field", "not an os_user refusal")
+	assert.Empty(t, e.emu.Writes())
+}
+
 // A missing file has no owner to compare: the helper must list it for the requested user.
 func TestAddToAMissingFileOfAnotherUserIsRefused(t *testing.T) {
 	e := newProvEnv(t)

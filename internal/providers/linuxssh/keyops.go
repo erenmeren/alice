@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -61,7 +62,9 @@ func writeRefused(err error) bool {
 
 // checkListedFor refuses a file that does not exist yet unless the helper lists it among the
 // candidate files of the requested user: the missing file has no owner to compare, and the write
-// would otherwise create another account's file labelled with the wrong user.
+// would otherwise create another account's file labelled with the wrong user. When the user is not
+// listed at all because the helper lists only its first 200 accounts (too_many_users), the refusal
+// names that reason instead of the user name.
 func (s *session) checkListedFor(ctx context.Context, req providers.AuthKeyChange) error {
 	list, err := runHelper[helperproto.AuthKeysListResponse](ctx, s.conn, CmdAuthKeysList())
 	if err != nil {
@@ -76,6 +79,11 @@ func (s *session) checkListedFor(ctx context.Context, req providers.AuthKeyChang
 				return nil
 			}
 		}
+		return refusedRequest("os_user")
+	}
+	if slices.Contains(list.Warnings, helperproto.WarnTooManyUsers) {
+		return providers.NewError("ssh.helper_refused", false, nil,
+			map[string]string{"helper_code": helperproto.CodeInvalidArgument, "reason": helperproto.WarnTooManyUsers})
 	}
 	return refusedRequest("os_user")
 }
