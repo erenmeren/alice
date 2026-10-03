@@ -3,6 +3,7 @@ package linuxssh
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -70,7 +71,15 @@ func TestCommandBudgets(t *testing.T) {
 	assert.Equal(t, DefaultCommandTimeout, CmdVersion().timeout)
 	assert.Equal(t, LongCommandTimeout, CmdSSHDDump().timeout)
 	assert.Equal(t, LongCommandTimeout, CmdAuthKeysList().timeout)
-	assert.Equal(t, DefaultCommandTimeout, read.timeout)
+	// A-5: authkeys-read and authkeys-write run the same scan as authkeys-list (sshd -T per user),
+	// so they get its budget; the helper gives up on its own (helperproto.HelperBudget) well before
+	// Alice does, so a write never completes after Alice reported ssh.timeout.
+	write, err := CmdAuthKeysWrite("/root/.ssh/authorized_keys", helperproto.AbsentSHA256, testOp, []byte("x\n"))
+	require.NoError(t, err)
+	assert.Equal(t, LongCommandTimeout, read.timeout)
+	assert.Equal(t, LongCommandTimeout, write.timeout)
+	assert.LessOrEqual(t, helperproto.HelperBudget+10*time.Second, LongCommandTimeout, "margin for the connection")
+	assert.LessOrEqual(t, helperproto.HelperBudget+10*time.Second, DefaultCommandTimeout+30*time.Second)
 	assert.Equal(t, int64(DefaultMaxOutput), CmdAuthKeysList().maxOutput)
 	// authkeys-read answers base64 of up to 1 MiB plus JSON: 2 MiB is enough and bounded.
 	assert.Equal(t, int64(2<<20), read.maxOutput)

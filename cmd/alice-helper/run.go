@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"time"
 
 	"alice/internal/providers/linuxssh/helperproto"
 )
@@ -50,8 +49,9 @@ var commands = map[string]command{
 	helperproto.SubCleanup:       {privileged: true, handle: cmdCleanup},
 }
 
-// commandBudget bounds one call; Alice gives up after 30–60 s (R37 item 17).
-const commandBudget = 55 * time.Second
+// commandBudget bounds one call. Alice gives authkeys-list, -read and -write 60 s (R37 item 17);
+// the helper stops 10 s earlier and never replaces a file after the deadline (replace).
+const commandBudget = helperproto.HelperBudget
 
 // run executes one call and returns the exit code. It prints exactly one JSON line.
 func run(args []string, s *sys) int {

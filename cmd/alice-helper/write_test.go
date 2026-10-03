@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -435,6 +436,31 @@ func TestWriteRefusesBadRequests(t *testing.T) {
 	assert.Equal(t, "root:HASH:1::::::\n", f.read("/etc/shadow"))
 	assert.Empty(t, chowns())
 	assert.False(t, f.exists(helperproto.BackupRoot), "no refused request creates backups")
+}
+
+// A-5: the helper's own budget (helperproto.HelperBudget) ran out before the rename: Alice is
+// about to give up, so nothing is replaced and the backup is discarded. The lock wait is shorter
+// than the budget.
+func TestWriteNeverReplacesAfterTheBudget(t *testing.T) {
+	assert.Less(t, lockWait, helperproto.HelperBudget)
+	assert.Equal(t, helperproto.HelperBudget, commandBudget)
+	f, _ := newWriteFixture(t)
+	f.write(keysPath, "old\n", 0o600)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.s.beforeRename = func() error {
+		cancel() // the deadline passes while the staging file is written
+		return nil
+	}
+	f.s.stdin = strings.NewReader("new\n")
+	_, err := cmdAuthKeysWrite(ctx, f.s, withContent(writeArgs(keysPath, hexOf("old\n"), op1), "new\n")[1:])
+	var he *helperError
+	require.ErrorAs(t, err, &he)
+	assert.Equal(t, helperproto.ExitFailed, he.exit)
+	assert.Equal(t, helperproto.CodeIOError, he.code)
+	assert.Equal(t, "old\n", f.read(keysPath))
+	assert.Equal(t, []string{"authorized_keys"}, f.sshDirEntries())
+	assert.Empty(t, f.dirEntries(helperproto.BackupRoot+"/"+op1))
 }
 
 // A-2: the connection dies while Alice sends the new content. The helper sees EOF after a prefix

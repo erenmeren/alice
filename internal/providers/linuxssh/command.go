@@ -82,7 +82,8 @@ func CmdAuthKeysRead(path string) (HelperCommand, error) {
 	if err != nil {
 		return HelperCommand{}, err
 	}
-	return privileged(helperproto.SubAuthKeysRead, DefaultCommandTimeout, readOutput, q), nil
+	// The helper scans every listed user (sshd -T each) before it reads, as for authkeys-list.
+	return privileged(helperproto.SubAuthKeysRead, LongCommandTimeout, readOutput, q), nil
 }
 
 // CmdAuthKeysWrite replaces one authorized_keys file with content when its current SHA-256 is
@@ -114,7 +115,8 @@ func CmdAuthKeysWrite(path, expectSHA256 string, op uuid.UUID, content []byte) (
 	if err != nil {
 		return HelperCommand{}, err
 	}
-	c := privileged(helperproto.SubAuthKeysWrite, DefaultCommandTimeout, smallOutput, qp, "--expect-sha256", qh, "--content-sha256", qc, "--op", qo)
+	// The scan of authkeys-list plus the lock wait; the helper stops after helperproto.HelperBudget.
+	c := privileged(helperproto.SubAuthKeysWrite, LongCommandTimeout, smallOutput, qp, "--expect-sha256", qh, "--content-sha256", qc, "--op", qo)
 	c.stdin = append([]byte(nil), content...)
 	return c, nil
 }

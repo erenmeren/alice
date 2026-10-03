@@ -35,8 +35,9 @@ const maxDirDepth = 256
 var errInsecure = errors.New("insecure permissions")
 
 // lockWait bounds the wait for the key directory lock: a user can hold a flock on their own .ssh
-// forever, and the helper must answer within Alice's budget (tests shorten it).
-var lockWait = 45 * time.Second
+// forever, and the helper must answer within Alice's budget. It is well below commandBudget, which
+// also bounds it, so the scan before it keeps time too (tests shorten it).
+var lockWait = 30 * time.Second
 
 // cmdAuthKeysWrite replaces one candidate authorized_keys file with stdin, but only when its
 // current content still has the hash Alice read (spec §13.4 step 4) and stdin has the hash Alice
@@ -161,7 +162,7 @@ func (s *sys) writeCandidate(ctx context.Context, c candidate, expect, op string
 		return nil, failed(helperproto.CodeIOError, "the backup cannot be written")
 	}
 	defer b.close()
-	if replaced, err := s.replace(c, d, cur, content); err != nil {
+	if replaced, err := s.replace(ctx, c, d, cur, content); err != nil {
 		if !replaced {
 			b.discard() // the file is unchanged: the backup describes nothing
 		}
@@ -583,8 +584,10 @@ func writeNewAt(dir *os.File, name string, data []byte) error {
 // renames it over the real file; then it syncs the directory. Before the rename any failure
 // removes the staging file, so the real file is always the old or the new version. It reports
 // whether the rename happened. Everything
-// happens through d.fd and the staging file's descriptor.
-func (s *sys) replace(c candidate, d keyDir, cur current, content []byte) (bool, error) {
+// happens through d.fd and the staging file's descriptor. Once ctx (the helper's budget) has
+// ended, the rename does not happen: Alice is about to report ssh.timeout and must be able to rely
+// on the file being unchanged.
+func (s *sys) replace(ctx context.Context, c candidate, d keyDir, cur current, content []byte) (bool, error) {
 	var rnd [8]byte
 	_, _ = rand.Read(rnd[:])
 	tmp := ".authorized_keys.alice-" + hex.EncodeToString(rnd[:])
@@ -626,6 +629,9 @@ func (s *sys) replace(c candidate, d keyDir, cur current, content []byte) (bool,
 	}
 	if !cur.unchanged(d) {
 		return false, precondition(helperproto.CodeHashMismatch, "the file changed since it was read")
+	}
+	if ctx.Err() != nil {
+		return false, failed(helperproto.CodeIOError, "the time budget ended before the file was replaced")
 	}
 	if err := renameInto(d, tmp, cur.absent); err != nil {
 		if errors.Is(err, unix.EEXIST) {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Protocol and file locations.
@@ -19,6 +20,11 @@ const (
 	HelperPath = "/usr/local/libexec/alice-helper"
 	BackupRoot = "/var/lib/alice-helper/backups"
 )
+
+// HelperBudget bounds one helper call on the server (R37 item 17): the helper gives up before
+// Alice's longest command budget (60 s) ends, with a margin for the connection, and never replaces
+// a file after it, so a write never completes after Alice reported ssh.timeout.
+const HelperBudget = 50 * time.Second
 
 // Subcommands of protocol 3 (R37 item 3).
 const (

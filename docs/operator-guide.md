@@ -89,7 +89,8 @@ sign-in is not retried: the server is marked "Sign-in refused" until someone tes
 
 At most 10 SSH connections are in use at once (2 per server); an idle connection is kept for up to 60 seconds and
 reused, except by **Test connection**, which always opens a new connection. Each step has its own time limit: 10 seconds to connect, 15 seconds for the SSH handshake, 30 seconds per
-command (60 seconds for reading the SSH settings and listing the key files). Every job payload carries an HMAC; a job
+command (60 seconds for reading the SSH settings and for listing, reading and changing key files; the helper on
+the server stops after 50 seconds, so a change never completes after Alice reported a timeout). Every job payload carries an HMAC; a job
 changed in the database is never run (`job.tampered`).
 
 While the license is locked, nothing new can be requested on servers (`ALC-LIC-0001`), scheduled scans are not
