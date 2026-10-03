@@ -108,6 +108,14 @@ var explicitGrants = map[string][]string{
 	"public.host_keys":         {"INSERT", "SELECT"},
 	"public.ssh_keys":          {"INSERT", "SELECT"},
 	"public.ssh_key_locations": {"INSERT", "SELECT"},
+	// Phase 4: private keys and step events are append-only for the application; certificates,
+	// locations, signing requests and deployments are history and are never deleted.
+	"public.managed_private_keys":  {"INSERT", "SELECT"},
+	"public.certificates":          {"INSERT", "SELECT"},
+	"public.csr_requests":          {"INSERT", "SELECT"},
+	"public.certificate_locations": {"INSERT", "SELECT"},
+	"public.deployments":           {"INSERT", "SELECT"},
+	"public.deployment_steps":      {"INSERT", "SELECT"},
 }
 
 // Column-level grants of alice_app (a privilege it holds on some columns but not on the
@@ -124,6 +132,18 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.ssh_keys":  {"UPDATE": {"is_platform_key", "weak"}},
 	"public.ssh_key_locations": {"UPDATE": {"comment", "flags", "is_alice_connection_key", "last_seen_at", "line_no",
 		"missing_since", "options", "removed_by_alice_at"}},
+	// Phase 4: identity columns (fingerprints, public key hashes, paths of a location or a
+	// deployment, the certificate, location and target of a deployment, every envelope column) are
+	// never updated; the lists are the columns the inventory and deployment services write.
+	"public.certificates": {"UPDATE": {"chain_complete", "label", "last_seen_at", "pem_chain", "private_key_id"}},
+	"public.csr_requests": {"UPDATE": {"certificate_id", "finished_at", "status"}},
+	"public.certificate_locations": {"UPDATE": {"cert_file_sha256", "certificate_id", "changed_outside_at", "custom_location",
+		"deployed_fingerprint", "inherited", "key_exists", "key_group", "key_mode", "key_owner", "key_path", "key_problem", "key_type",
+		"last_seen_at", "missing_since", "problem", "resolved_cert_path", "servers", "skip_verify", "supported", "symlinked",
+		"unsupported_reason", "verify_port", "verify_sni", "version", "warnings"}},
+	"public.deployments": {"UPDATE": {"cause_step", "error_code", "error_params", "failed_step", "finished_at", "helper_error",
+		"job_id", "operation_id", "phase", "previous_chain_length", "previous_fingerprint", "recover_after", "recovery_attempts",
+		"result", "rollback_info", "started_at", "state", "status", "verified", "verify_failed_port", "verify_failed_reason"}},
 }
 
 var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}
