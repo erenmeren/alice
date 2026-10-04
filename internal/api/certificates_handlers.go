@@ -134,7 +134,8 @@ type uploadResult struct {
 // with its password). The request body is the only place the key and the password appear: it is
 // size-capped before decoding, never logged, decoded into a local value that is not used after the
 // service call, and the answer is built from the stored certificate, which carries no key
-// material. A duplicate is refused (ALC-CRT-0008). When the certificate was stored but could not be
+// material. A duplicate is refused (ALC-CRT-0008), except an upload of a held certificate with a
+// complete chain where Alice's is incomplete: the chain is completed (200, warning chain_completed). When the certificate was stored but could not be
 // read back, the request fails; sending it again is then refused as a duplicate, and the
 // certificate is in the list.
 func (s *server) uploadCertificate(w http.ResponseWriter, r *http.Request) {
@@ -155,14 +156,21 @@ func (s *server) uploadCertificate(w http.ResponseWriter, r *http.Request) {
 	s.writeUpload(w, r, c, warnings, err)
 }
 
-// writeUpload answers an upload or a signing request's completion.
+// writeUpload answers an upload or a signing request's completion: 201 with Location for a stored
+// certificate, 200 when an upload only completed the chain of a certificate Alice already held
+// (warning chain_completed).
 func (s *server) writeUpload(w http.ResponseWriter, r *http.Request, c inventory.Certificate, warnings []string, err error) {
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	w.Header().Set("Location", "/api/v1/certificates/"+c.ID.String())
-	writeJSON(w, http.StatusCreated, uploadResult{Certificate: certificateDetailJSON(c), Warnings: nonNil(warnings)})
+	status := http.StatusCreated
+	if slices.Contains(warnings, inventory.WarnChainCompleted) {
+		status = http.StatusOK
+	} else {
+		w.Header().Set("Location", "/api/v1/certificates/"+c.ID.String())
+	}
+	writeJSON(w, status, uploadResult{Certificate: certificateDetailJSON(c), Warnings: nonNil(warnings)})
 }
 
 func (s *server) deployCertificate(w http.ResponseWriter, r *http.Request) {

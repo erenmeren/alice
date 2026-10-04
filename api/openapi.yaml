@@ -1115,7 +1115,9 @@ paths:
         ALC-SYS-0007; each field at most 256 KiB). Refusals: 422 ALC-CRT-0001..0007 (unreadable, key mismatch,
         expired, encrypted key, wrong PFX password, weak, unsupported key), 422 validation.failed (field errors,
         for example validation.key_in_certificate when a private key is pasted into certificate_pem), 409
-        ALC-CRT-0008 when Alice already holds this certificate with its key, 503 ALC-CRT-0015 (retryable) when
+        ALC-CRT-0008 when Alice already holds this certificate with its key (except: when the chain Alice holds is
+        incomplete and this upload's chain is complete, the chain is completed and the answer is 200 with the
+        warning chain_completed and no Location), 503 ALC-CRT-0015 (retryable) when
         too many PFX files are being read. If the certificate was stored but could not be read back the request
         fails; sending it again is then refused with ALC-CRT-0008 and the certificate is in the list. Refused with
         403 ALC-LIC-0001 while the license is locked, before the body is read.
@@ -1130,6 +1132,11 @@ paths:
           description: Stored; Location names the certificate
           headers:
             Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificateStored" }
+        "200":
+          description: The certificate was already held with its key; this upload completed its chain (warning chain_completed)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CertificateStored" }
@@ -2025,7 +2032,8 @@ components:
           type: array
           description: >-
             Conditions that did not block. Known values: chain_incomplete, chain_certificate_expired, not_yet_valid,
-            csr_name_mismatch; a newer server may add others.
+            csr_name_mismatch, chain_completed (an upload completed the chain of a certificate Alice already held;
+            answered with 200); a newer server may add others.
           items: { type: string }
     CertificateServer:
       type: object

@@ -171,6 +171,17 @@ func TestUploadCertificate(t *testing.T) {
 	}
 	rec = call(h, http.MethodPost, "/api/v1/certificates/upload", "operator", `{"pfx_base64":"AAAA"}`)
 	assert.Contains(t, rec.Body.String(), `"warnings":[]`)
+
+	// AUD-17: an upload that only completed the chain of a held certificate answers 200 with the
+	// detail form and no Location (nothing was created).
+	inv.UploadCertificateFn = func(context.Context, inventory.Actor, inventory.UploadInput) (inventory.Certificate, []string, error) {
+		return sampleCertificate(), []string{inventory.WarnChainCompleted}, nil
+	}
+	rec = call(h, http.MethodPost, "/api/v1/certificates/upload", "operator", `{"pfx_base64":"AAAA"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, rec.Header().Get("Location"))
+	assert.Contains(t, rec.Body.String(), `"warnings":["chain_completed"]`)
+	assert.Contains(t, rec.Body.String(), `"pem_chain"`)
 }
 
 // The body caps: an upload or a completion larger than its cap is refused unread with 413, and

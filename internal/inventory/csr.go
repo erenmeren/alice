@@ -380,7 +380,7 @@ JOIN managed_private_keys k ON k.id = r.private_key_id WHERE r.id = $1`, id).Sca
 		if cur.Status != CSRPending {
 			return ErrCSRNotPending
 		}
-		placed, err = s.placeCertificate(ctx, tx, p, complete, label, "csr", a.UserID, func() (uuid.UUID, error) { return keyID, nil })
+		placed, err = s.placeCertificate(ctx, tx, p, complete, false, label, "csr", a.UserID, func() (uuid.UUID, error) { return keyID, nil })
 		if err != nil {
 			return err
 		}

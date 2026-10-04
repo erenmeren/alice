@@ -104,8 +104,8 @@ var notReasons = map[string]bool{
 	// email templates (target.host_key_changed is also a reason and stays checked)
 	"target.auth_failed": true,
 	// Phase 4 audit actions
-	"certificate.uploaded": true, "certificate.key_attached": true, "certificate.upload_rejected": true, "csr.created": true,
-	"csr.completed": true, "csr.cancelled": true, "deployment.requested": true, "deployment.denied": true,
+	"certificate.uploaded": true, "certificate.key_attached": true, "certificate.chain_completed": true, "certificate.upload_rejected": true,
+	"csr.created": true, "csr.completed": true, "csr.cancelled": true, "deployment.requested": true, "deployment.denied": true,
 	"deployment.precheck_started": true, "deployment.started": true, "deployment.recovering": true, "deployment.recovery_started": true,
 	"deployment.succeeded": true, "deployment.unchanged": true, "deployment.rolled_back": true,
 	// Phase 4 job types

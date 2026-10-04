@@ -181,9 +181,12 @@ func (s *Service) auditRejection(ctx context.Context, a Actor, r rejected) {
 // UploadCertificate validates an uploaded certificate with its chain and private key (certs:
 // everything is checked before anything is stored) and stores it with the key sealed. A
 // certificate Alice knows without a key (found on a server) gets the key attached; one Alice holds
-// with its key is refused with ErrCertificateDuplicate. Every refusal of a read upload, and every
-// PFX attempt whatever its outcome, is audited. It returns the certificate and the warnings
-// (not_yet_valid, chain_incomplete, chain_certificate_expired), which never block.
+// with its key is refused with ErrCertificateDuplicate, except that an upload of the same
+// certificate with a complete chain completes a stored chain that is incomplete (the key is not
+// stored again; audited certificate.chain_completed, and the warnings say WarnChainCompleted).
+// Every refusal of a read upload, and every PFX attempt whatever its outcome, is audited. It
+// returns the certificate and the warnings (not_yet_valid, chain_incomplete,
+// chain_certificate_expired, chain_completed), which never block.
 func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput) (Certificate, []string, error) {
 	pfxText := strings.TrimSpace(in.PFXBase64)
 	format := formatPEM
@@ -272,10 +275,17 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 	var placed placement
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
-		placed, err = s.placeCertificate(ctx, tx, v.Parsed, v.ChainComplete, label, "uploaded", a.UserID, func() (uuid.UUID, error) {
+		placed, err = s.placeCertificate(ctx, tx, v.Parsed, v.ChainComplete, true, label, "uploaded", a.UserID, func() (uuid.UUID, error) {
 			return s.storeKey(ctx, tx, "certificate", v.PrivateKeyDER, info, a.UserID)
 		})
 		if err != nil {
+			return err
+		}
+		if placed.chainCompleted {
+			ev := audit.Event{Actor: a.Audit, ObjectType: "certificate", ObjectID: placed.id.String(), Result: audit.Success,
+				Details: map[string]string{"certificate_id": placed.id.String(), "fingerprint": v.Fingerprint, "format": format}}
+			ev.Action = "certificate.chain_completed"
+			_, err = s.audit.Append(ctx, tx, ev)
 			return err
 		}
 		ev := audit.Event{Actor: a.Audit, Action: "certificate.uploaded", ObjectType: "certificate", ObjectID: placed.id.String(),
@@ -308,8 +318,16 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 	if err != nil {
 		return Certificate{}, nil, err
 	}
+	if placed.chainCompleted {
+		return c, append(heldWarnings(v.Warnings, true), WarnChainCompleted), nil
+	}
 	return c, heldWarnings(v.Warnings, placed.complete), nil
 }
+
+// WarnChainCompleted: the upload was a certificate Alice already holds with its key, and its
+// complete chain replaced the incomplete one Alice had (nothing else changed; the key was not
+// stored again).
+const WarnChainCompleted = "chain_completed"
 
 // heldWarnings are an upload's warnings for what Alice holds: chain_incomplete is left out when the
 // stored chain is complete (an upload never downgrades it). Never nil. They are not stored with
@@ -374,10 +392,11 @@ func decodePFXText(text string) ([]byte, error) {
 
 // placement is where placeCertificate put a certificate.
 type placement struct {
-	id       uuid.UUID
-	complete bool      // the chain Alice now holds for it is complete
-	attached bool      // the key was attached to a certificate Alice knew without one
-	existing uuid.UUID // the certificate that already had a key (ErrCertificateDuplicate)
+	id             uuid.UUID
+	complete       bool      // the chain Alice now holds for it is complete
+	attached       bool      // the key was attached to a certificate Alice knew without one
+	chainCompleted bool      // a certificate held with its key got this upload's complete chain
+	existing       uuid.UUID // the certificate that already had a key (ErrCertificateDuplicate)
 }
 
 // placeCertificate stores the certificate p with a key, in tx. key stores (or names) the key row;
@@ -386,14 +405,17 @@ type placement struct {
 //   - absent: inserted with source, label, the key and created_by (ON CONFLICT DO NOTHING: a scan
 //     may insert the same row concurrently; it is then read again and handled as present);
 //   - present with a key: ErrCertificateDuplicate, nothing changes (a key is never replaced, and
-//     the same certificate's key is the same key);
+//     the same certificate's key is the same key); except, when completeChain (an upload), a stored
+//     chain that is incomplete is replaced by this one when it is complete (chainCompleted; the key
+//     is not stored again: the same leaf has the same public key, so the uploaded key is the held
+//     one) — AUD-17 of the independent audit of 2026-10-04;
 //   - present without a key: the key is attached; the label is set only when the row has none;
 //     the chain replaces the stored one only when it is complete and the stored one is not.
 //     Source, subject, SANs, validity, sightings and created_by are never rewritten.
 //
 // Only this certificate row is locked, never a target (lock order: target, certificates, locations).
-func (s *Service) placeCertificate(ctx context.Context, tx pgx.Tx, p certs.Parsed, complete bool, label, source string, by uuid.UUID,
-	key func() (uuid.UUID, error)) (placement, error) {
+func (s *Service) placeCertificate(ctx context.Context, tx pgx.Tx, p certs.Parsed, complete, completeChain bool, label, source string,
+	by uuid.UUID, key func() (uuid.UUID, error)) (placement, error) {
 	pemChain := p.PEMChain
 	if len(pemChain) > maxPEMChain {
 		pemChain, complete = leafPEM(p), false
@@ -409,7 +431,7 @@ func (s *Service) placeCertificate(ctx context.Context, tx pgx.Tx, p certs.Parse
 		}
 		return keyID, nil
 	}
-	existing, hasKey, err := lockCertificate(ctx, tx, p.Fingerprint)
+	existing, hasKey, stored, err := lockCertificate(ctx, tx, p.Fingerprint)
 	if err != nil {
 		return placement{}, err
 	}
@@ -436,7 +458,7 @@ RETURNING id`, id, p.Fingerprint, boundText(p.SubjectCN), boundText(p.Subject), 
 			return placement{}, fmt.Errorf("inventory: store certificate: %w", keyTriggerError(err))
 		}
 		// A scan inserted it meanwhile (committed: the insert waited for it).
-		if existing, hasKey, err = lockCertificate(ctx, tx, p.Fingerprint); err != nil {
+		if existing, hasKey, stored, err = lockCertificate(ctx, tx, p.Fingerprint); err != nil {
 			return placement{}, err
 		}
 		if existing == uuid.Nil {
@@ -444,6 +466,12 @@ RETURNING id`, id, p.Fingerprint, boundText(p.SubjectCN), boundText(p.Subject), 
 		}
 	}
 	if hasKey {
+		if completeChain && complete && !stored {
+			if _, err := tx.Exec(ctx, "UPDATE certificates SET pem_chain = $2, chain_complete = true WHERE id = $1", existing, pemChain); err != nil {
+				return placement{}, fmt.Errorf("inventory: complete the certificate's chain: %w", err)
+			}
+			return placement{id: existing, complete: true, chainCompleted: true}, nil
+		}
 		return placement{existing: existing}, ErrCertificateDuplicate
 	}
 	kid, err := useKey()
@@ -463,22 +491,21 @@ WHERE id = $1 RETURNING chain_complete`, existing, kid, label, pemChain, complet
 	return placement{id: existing, attached: true, complete: held}, nil
 }
 
-// lockCertificate finds the certificate of a fingerprint and locks it (uuid.Nil when absent). FOR NO
-// KEY UPDATE: the foreign-key checks of rows inserted meanwhile that reference the certificate
-// (locations, deployments) take KEY SHARE and are not blocked; attaching the key changes the unique
-// private_key_id and takes the stronger lock only at that UPDATE.
-func lockCertificate(ctx context.Context, tx pgx.Tx, fingerprint string) (uuid.UUID, bool, error) {
-	var id uuid.UUID
-	var hasKey bool
-	err := tx.QueryRow(ctx, "SELECT id, private_key_id IS NOT NULL FROM certificates WHERE fingerprint_sha256 = $1 FOR NO KEY UPDATE", fingerprint).
-		Scan(&id, &hasKey)
+// lockCertificate finds the certificate of a fingerprint and locks it (uuid.Nil when absent), with
+// whether it has a key and whether its stored chain is complete. FOR NO KEY UPDATE: the foreign-key
+// checks of rows inserted meanwhile that reference the certificate (locations, deployments) take
+// KEY SHARE and are not blocked; attaching the key changes the unique private_key_id and takes the
+// stronger lock only at that UPDATE.
+func lockCertificate(ctx context.Context, tx pgx.Tx, fingerprint string) (id uuid.UUID, hasKey, complete bool, err error) {
+	err = tx.QueryRow(ctx, "SELECT id, private_key_id IS NOT NULL, chain_complete FROM certificates WHERE fingerprint_sha256 = $1 FOR NO KEY UPDATE",
+		fingerprint).Scan(&id, &hasKey, &complete)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, false, nil
+		return uuid.Nil, false, false, nil
 	}
 	if err != nil {
-		return uuid.Nil, false, fmt.Errorf("inventory: read certificate: %w", err)
+		return uuid.Nil, false, false, fmt.Errorf("inventory: read certificate: %w", err)
 	}
-	return id, hasKey, nil
+	return id, hasKey, complete, nil
 }
 
 func keyLocation(id uuid.UUID) secrets.Location {

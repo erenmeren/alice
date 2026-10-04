@@ -538,3 +538,39 @@ func TestDecoderPanicIsAnAuditedInternalError(t *testing.T) {
 	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT coalesce(string_agg(details::text, ' '), '') FROM audit_log").Scan(&details))
 	assert.NotContains(t, details, "SECRET-INPUT")
 }
+
+// AUD-17 (independent audit of 2026-10-04): an incomplete chain is completed by uploading the same
+// certificate again with a complete chain (audited certificate.chain_completed, the key not stored
+// again); every other repeated upload stays a duplicate.
+func TestUploadCompletesTheIncompleteChainOfAHeldCertificate(t *testing.T) {
+	ca := pki.NewCA("Pub", pki.ECDSA256, start)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.Root)
+	h := newHarness(t, withRoots(roots))
+	op := h.user("oya", rbac.Operator, "")
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
+	leafOnly := inventory.UploadInput{CertificatePEM: string(leaf.CertPEM), PrivateKeyPEM: string(leaf.KeyPEM)}
+
+	c, warnings, err := h.svc.UploadCertificate(h.ctx, op, leafOnly)
+	require.NoError(t, err)
+	require.Equal(t, []string{"chain_incomplete"}, warnings)
+	_, _, err = h.svc.UploadCertificate(h.ctx, op, leafOnly)
+	require.ErrorIs(t, err, inventory.ErrCertificateDuplicate, "an incomplete chain again is a duplicate")
+	keys := h.count("SELECT count(*) FROM managed_private_keys")
+
+	got, warnings, err := h.svc.UploadCertificate(h.ctx, op, pemUpload(leaf))
+	require.NoError(t, err)
+	assert.Equal(t, []string{inventory.WarnChainCompleted}, warnings)
+	assert.Equal(t, c.ID, got.ID)
+	assert.True(t, got.ChainComplete)
+	assert.Equal(t, string(leaf.FullchainPEM), got.PEMChain)
+	assert.Equal(t, keys, h.count("SELECT count(*) FROM managed_private_keys"), "the key is not stored again")
+	assert.Equal(t, []map[string]string{{"certificate_id": c.ID.String(), "fingerprint": c.Fingerprint, "format": "pem"}},
+		h.auditDetails("certificate.chain_completed"))
+
+	_, _, err = h.svc.UploadCertificate(h.ctx, op, pemUpload(leaf))
+	require.ErrorIs(t, err, inventory.ErrCertificateDuplicate, "a complete chain is never replaced")
+	_, _, err = h.svc.UploadCertificate(h.ctx, op, leafOnly)
+	require.ErrorIs(t, err, inventory.ErrCertificateDuplicate)
+	assert.Len(t, h.auditDetails("certificate.chain_completed"), 1)
+}
