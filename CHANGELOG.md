@@ -1,5 +1,58 @@
 # Changelog
 
+## Unreleased — Phase 4: Nginx certificates
+
+### Added
+- **Nginx servers**: add a server as **Nginx server** (prepared with the `nginx` setup commands). **Discover** reads
+  its SSH keys and its websites together: every `ssl_certificate`/`ssl_certificate_key` pair Nginx uses, with the
+  certificate, its expiry, the file's owner and mode, and a plain reason for each place Alice cannot manage.
+- **Certificates**: one list of the certificates found on servers and the ones you added, with filters, details,
+  chain check and where each is used.
+- Certificate upload as PEM text or PFX file (administrators and operators), checked before anything is stored;
+  private keys are stored encrypted and never shown again.
+- Signing requests: Alice creates the key (ECDSA P-256, RSA 3072 or RSA 4096) and the request; you add the signed
+  certificate when it arrives.
+- **Deploy certificate**: to one website from the server's page, or to up to 20 websites that use a certificate from
+  its page. The helper backs up the current files, writes the new key and certificate, runs `nginx -t`, reloads Nginx
+  and puts everything back when a step fails; Alice checks the website before and after, from its own network or
+  from the server itself.
+- **Deployment history** with every step, the result, the verification, and the backup folder on the server.
+- Interrupted deployments are finished or undone automatically from the helper's journal on the server, also while
+  the license is expired; administrators get emails for failed deployments, deployments that need manual action and
+  deployments Alice cannot finish.
+- **Verification settings** per website (administrators): the port and name Alice checks, or no check.
+- Helper protocol 4 (`alice-helper` 1.3.0): `nginx-dump`, `nginx-test`, `nginx-deploy`, `nginx-restore`,
+  `nginx-status` (sudo, with narrow sudoers lines) and `tls-probe` (no sudo).
+- Error codes `ALC-NGX-0001..0009`, `ALC-CRT-0001..0015`, `ALC-DEP-0001..0021` and the audit actions
+  `certificate.*`, `csr.*`, `location.*` and `deployment.*`.
+- Developer targets: `make fuzz-nginx`, `make fuzz-certs`; `make test-ssh` also runs a real-Nginx matrix on Ubuntu
+  22.04, Debian 12 and Rocky 9 and is part of `make ci` and of a new CI job; `go run ./tools/testcerts` writes a test
+  certificate pack.
+- Guides: certificates and deployments in `docs/operator-guide.md`, verification settings and deployment emails in
+  `docs/admin-guide.md`, the Nginx profile, backups and manual restore in `docs/nginx-host-preparation.md`.
+
+### Changed
+- Every server needs the new helper (protocol 4): copy the `alice-helper` of this release next to the setup commands
+  and run them again on each server (Alice reports older helpers with `ALC-SSH-0005`). The `nginx` sudoers lines
+  changed with it.
+- SSH keys: keys of accounts deleted from a server are now marked **No longer found** when the server's account list
+  is complete (no LDAP or SSSD accounts, not more accounts than Alice lists); every uid-0 account and accounts with an empty shell field are
+  scanned; the root last-key guard covers every uid-0 account; the **SSH keys** list marks keys that are no longer
+  found.
+- Lock mode also refuses certificate uploads, signing requests, deployments and verification settings; deployments
+  waiting in the queue are held for an administrator.
+- `make coverage` enforces floors for `internal/api`, `internal/certs`, `internal/providers/nginx` and its parser;
+  several existing floors were raised.
+
+### Known issues
+- A website whose `listen` names a host name resolving to another address of the server cannot be verified;
+  deployments to it are refused unless an administrator turns the check off.
+- Configuration files that users other than root can change make their websites (or the whole server) unmanaged.
+- No private-key download, and no retry or undo button on a deployment (deploy again, or deploy the earlier
+  certificate).
+- Real systemd is not part of the automated tests yet.
+- The full list is in `docs/security/reviews/phase-4.md` ("Known limitations").
+
 ## Unreleased — Phase 3: Servers and SSH key inventory
 
 ### Added
