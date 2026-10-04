@@ -52,8 +52,10 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -91,6 +93,10 @@ type Inventory interface {
 	// vault's sign-in, and the check of the deployment's version secret that yields the first send's
 	// material (the caller zeroes its PrivateKeyPEM; KVDeployMaterial zeroes the secret).
 	VaultCredentials(id uuid.UUID) inventory.VaultCredentialSource
+	// KVDeployPrecheck judges, without writing or reading the vault, whether the deployment may still
+	// have its secret read (binding, website, automatic deployment, vault, certificate and version as
+	// they are now); the engine asks before any vault call (kv.go).
+	KVDeployPrecheck(ctx context.Context, id uuid.UUID) error
 	KVDeployMaterial(ctx context.Context, id uuid.UUID, secret providers.CertificateSecret) (inventory.Material, error)
 }
 
@@ -214,18 +220,9 @@ func deploymentID(j jobs.Job) (uuid.UUID, error) {
 // system.not_found, a changed host key, an unconfirmed one or a disabled target refuses without
 // connecting (F-31); a provider failure is recorded on the target and returned classified.
 func (h *handlers) open(ctx context.Context, id uuid.UUID) (providers.Session, error) {
-	ref, t, err := h.d.Inventory.TargetRef(ctx, id)
-	switch {
-	case errors.Is(err, inventory.ErrNotFound):
-		return nil, jobs.Fail(reasonNotFound, nil, err)
-	case err != nil:
-		return nil, jobs.Retry(reasonUnexpected, nil, err)
-	case t.Status == inventory.StatusHostKeyChanged:
-		return nil, jobs.Fail("target.host_key_changed", nil, nil)
-	case t.Status == inventory.StatusDisabled:
-		return nil, jobs.Fail("target.disabled", nil, nil)
-	case t.Status == inventory.StatusPendingHostKey:
-		return nil, jobs.Fail("target.host_key_unconfirmed", nil, nil)
+	ref, err := h.serverRef(ctx, id)
+	if err != nil {
+		return nil, err
 	}
 	p, ok := h.d.Registry.Get(ref.Kind)
 	if !ok {
@@ -237,6 +234,26 @@ func (h *handlers) open(ctx context.Context, id uuid.UUID) (providers.Session, e
 		return nil, jobs.FromProvider(err)
 	}
 	return sess, nil
+}
+
+// serverRef is the target checks of open, without dialling: a deleted target is system.not_found,
+// a changed host key, an unconfirmed one or a disabled target refuses (F-31). They are the record's
+// own facts, so a Key Vault deployment asks them before it reads its secret.
+func (h *handlers) serverRef(ctx context.Context, id uuid.UUID) (providers.TargetRef, error) {
+	ref, t, err := h.d.Inventory.TargetRef(ctx, id)
+	switch {
+	case errors.Is(err, inventory.ErrNotFound):
+		return ref, jobs.Fail(reasonNotFound, nil, err)
+	case err != nil:
+		return ref, jobs.Retry(reasonUnexpected, nil, err)
+	case t.Status == inventory.StatusHostKeyChanged:
+		return ref, jobs.Fail("target.host_key_changed", nil, nil)
+	case t.Status == inventory.StatusDisabled:
+		return ref, jobs.Fail("target.disabled", nil, nil)
+	case t.Status == inventory.StatusPendingHostKey:
+		return ref, jobs.Fail("target.host_key_unconfirmed", nil, nil)
+	}
+	return ref, nil
 }
 
 // recordConnectionFailure stores a provider failure's reason on the target (its status).
@@ -296,10 +313,30 @@ func jobParams(in map[string]string) map[string]string {
 			if out == nil {
 				out = map[string]string{}
 			}
-			out[k] = v
+			out[k] = boundValue(v)
 		}
 	}
 	return out
+}
+
+// maxParamValue is the longest param value, the bound inventory's record applies (boundParams): a
+// job's params and the deployment's say the same.
+const maxParamValue = 256
+
+// boundValue is a param value as the deployment record keeps it: valid UTF-8 without control
+// characters, at most maxParamValue bytes (cut at a rune boundary).
+func boundValue(v string) string {
+	v = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == utf8.RuneError {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(v, ""))
+	for len(v) > maxParamValue {
+		_, size := utf8.DecodeLastRuneInString(v)
+		v = v[:len(v)-size]
+	}
+	return v
 }
 
 // mode says which job runs the recovery logic.

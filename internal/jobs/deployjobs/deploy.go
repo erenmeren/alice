@@ -211,6 +211,9 @@ func (h *handlers) first(ctx context.Context, j jobs.Job, d inventory.Deployment
 	case errors.Is(err, inventory.ErrNotFound):
 		return h.refuse(ctx, d, reasonNotFound, nil)
 	case err != nil:
+		if reason, ok := kvRefusal(err); ok {
+			return h.refuse(ctx, d, reason, nil) // a Key Vault deployment whose request no longer holds
+		}
 		return h.beforeSend(ctx, j, d, jobs.Retry(reasonUnexpected, nil, err))
 	}
 	// The key is handed out for this first send only; it is zeroed on every path (and right after
@@ -219,11 +222,27 @@ func (h *handlers) first(ctx context.Context, j jobs.Job, d inventory.Deployment
 	defer func() { m.PrivateKeyPEM.Zero() }()
 	rec := h.recorder(ctx, d.ID, steps)
 	if m.KV != nil {
+		// What the record alone refuses is refused before the vault is asked for a key (and again below,
+		// once the material is in: the record may have moved).
+		if reason := h.runtimeRefusal(m); reason != "" {
+			return h.refuse(ctx, d, reason, nil)
+		}
+		if _, err := h.serverRef(ctx, d.TargetID); err != nil {
+			return h.beforeSend(ctx, j, d, err)
+		}
 		// A Key Vault deployment reads its secret before anything can touch the server (kv.go).
 		rec.Step(stepKVSecret, providers.StepStarted, nil)
+		stepOpen := true
+		defer func() {
+			if stepOpen { // a panic: the step is closed while it unwinds
+				rec.Step(stepKVSecret, providers.StepFailed, map[string]string{"reason": reasonUnexpected})
+			}
+		}()
 		out, err := h.kvMaterial(ctx, m)
+		stepOpen = false
 		switch {
 		case errors.Is(err, inventory.ErrDeploymentState):
+			rec.Step(stepKVSecret, providers.StepSkipped, map[string]string{"reason": "state_changed"})
 			return h.refollow(ctx, j, d, steps, depth)
 		case errors.Is(err, inventory.ErrClaimLost):
 			return h.beforeSendAt(ctx, j, d, err, stepKVSecret) // a stale run records nothing
@@ -238,16 +257,8 @@ func (h *handlers) first(ctx context.Context, j jobs.Job, d inventory.Deployment
 		}
 		rec.Step(stepKVSecret, providers.StepOK, params)
 	}
-	now := h.d.Clock.Now()
-	switch {
-	case !now.Before(m.NotAfter):
-		return h.refuse(ctx, d, reasonExpired, nil) // F-19, also at run time
-	case now.Before(m.NotBefore):
-		return h.refuse(ctx, d, reasonNotYetValid, nil)
-	case !m.ConfigValid:
-		return h.refuse(ctx, d, reasonConfigInvalid, nil)
-	case !m.Location.Supported:
-		return h.refuse(ctx, d, reasonUnsupported, nil)
+	if reason := h.runtimeRefusal(m); reason != "" {
+		return h.refuse(ctx, d, reason, nil) // F-19, also at run time
 	}
 	sess, err := h.open(ctx, d.TargetID)
 	if err != nil {
@@ -293,6 +304,24 @@ func (h *handlers) first(ctx context.Context, j jobs.Job, d inventory.Deployment
 	}
 	m.PrivateKeyPEM.Zero()
 	return h.afterSend(ctx, d, m, sess, rec, out, derr)
+}
+
+// runtimeRefusal is the reason the record alone refuses a send now ("" when it does not): the
+// certificate expired or not yet valid (F-19, also at run time), the configuration invalid, the
+// location no longer deployable.
+func (h *handlers) runtimeRefusal(m inventory.Material) string {
+	now := h.d.Clock.Now()
+	switch {
+	case !now.Before(m.NotAfter):
+		return reasonExpired
+	case now.Before(m.NotBefore):
+		return reasonNotYetValid
+	case !m.ConfigValid:
+		return reasonConfigInvalid
+	case !m.Location.Supported:
+		return reasonUnsupported
+	}
+	return ""
 }
 
 // stepRecoverPending is the step of a deployment that met an interrupted operation Alice no

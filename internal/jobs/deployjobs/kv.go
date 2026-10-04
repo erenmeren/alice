@@ -19,29 +19,43 @@ import (
 // version that was disabled or deleted meanwhile, or a secret that is not the recorded version ends
 // the deployment with its closed reason and the website unchanged: no SSH call was made at all.
 //
+//	before the step (record only)    expired by the stored row, not yet      finish failed with the        Fail that reason; the
+//	                                 valid, configuration invalid, location  reason (no step, no vault    vault is never called
+//	                                 unsupported, server target deleted /    call)
+//	                                 disabled / host key changed
 //	step kv_secret                   result                                   recorded                      job returns
 //	-------------------------------  ---------------------------------------  ----------------------------  ---------------------
-//	vault target (TargetRef)         deleted                                  finish failed                 Fail kv.certificate_
-//	                                                                                                        not_found
-//	                                 disabled                                 finish failed target.disabled Fail target.disabled
+//	KVDeployPrecheck (read-only,     ErrBindingGone, ErrAutoDeployOff,        step failed; finish failed    Fail kv.binding_gone, kv.
+//	 before any vault call)          ErrVaultUnavailable, ErrKVCertificate-   (kv_secret)                   auto_deploy_off, kv.vault_
+//	                                 Missing, ErrVersionDisabled, ErrVersion-                               unavailable, kv.certificate_
+//	                                 Held, ErrCertificateExpired / NotYet-                                  not_found, kv.version_
+//	                                 Valid, ErrNotFound                                                     disabled, kv.version_held,
+//	                                                                                                        certificate.expired /
+//	                                                                                                        not_yet_valid, system.not_found
+//	                                 ErrDeploymentState                       step skipped {state_changed}  follow the re-read state
+//	                                 ErrClaimLost                             nothing                       stale run
+//	                                 an error nobody knows (database)         step failed                   Retry internal.unexpected
+//	                                                                                                        (nothing was read: cheap)
+//	vault target (TargetRef)         deleted or disabled                      finish failed                 Fail kv.vault_unavailable
 //	                                 other error                              -                             pre-send failure
 //	azurekv provider                 none registered                          finish failed                 Fail internal.unexpected
-//	                                                                          internal.unexpected
 //	Open + ReadCertificateSecret     provider error (closed code, allowlisted step failed; finish failed    Fail that reason (the
 //	 (one minute for both, S3;       params, F-41: azure.forbidden {role})    with it unless retryable      provider's class; a
 //	 name and exact version of the                                            with attempts left            retryable one is retried)
 //	 deployment's record)            the budget ran out                       step failed                   Retry azure.unreachable
 //	                                 the job's context ended                  step failed (no finish)       Retry deployment.interrupted
-//	KVDeployMaterial                 ErrSecretMismatch / ErrSecretUnreadable  step failed; finish failed    Fail kv.secret_mismatch /
+//	KVDeployMaterial                 the refusals of the pre-check again      as above                      as above (permanent)
+//	                                 ErrSecretMismatch / ErrSecretUnreadable  step failed; finish failed    Fail kv.secret_mismatch /
 //	                                                                                                        kv.secret_unreadable
 //	                                 ErrChainUnconfirmed (F-17; an automatic  step failed; finish failed    Fail certificate.
 //	                                  deployment's version is held too)                                     chain_unconfirmed
-//	                                 ErrCertificateExpired (F-19)             step failed; finish failed    Fail certificate.expired
 //	                                 ErrPFXBusy                               step failed                   Retry certificate.pfx_busy
-//	                                 ErrNotFound (the version row is gone)    step failed; finish failed    Fail system.not_found
-//	                                 ErrDeploymentState (raced)               -                             follow the re-read state
 //	                                 ErrClaimLost                             nothing                       stale run
-//	                                 other error                              step failed                   pre-send failure
+//	                                 any other error (the secret was read)    step failed; finish failed    Fail internal.unexpected: an
+//	                                                                                                        unknown error is final, so no
+//	                                                                                                        attempt reads the vault again
+//	                                 material of another deployment, version  step failed; finish failed    Fail internal.unexpected
+//	                                  or location (checked here); key zeroed
 //	                                 ok                                       step ok ({reason:             the Phase 4 run continues
 //	                                                                           chain_incomplete} for an
 //	                                                                           Administrator-confirmed
@@ -70,26 +84,70 @@ var kvReadBudget = time.Minute
 const (
 	reasonKVMismatch       = "kv.secret_mismatch"
 	reasonKVUnreadable     = "kv.secret_unreadable"
-	reasonKVNotFound       = "kv.certificate_not_found"
+	reasonVaultGone        = "kv.vault_unavailable"
 	reasonChainUnconfirmed = "certificate.chain_unconfirmed"
 	reasonPFXBusy          = "certificate.pfx_busy"
-	reasonDisabled         = "target.disabled"
 	reasonUnreachable      = "azure.unreachable"
 )
+
+// kvRefusals maps every refusal the inventory can give for a Key Vault deployment (the pre-check, the
+// material step and DeploymentMaterial) to its closed reason. The words are the vault's: a disabled
+// vault is not a disabled server. Each is permanent: the state the deployment was requested in no
+// longer holds, and a retry would only ask again.
+var kvRefusals = []struct {
+	err    error
+	reason string
+}{
+	{inventory.ErrBindingGone, "kv.binding_gone"},
+	{inventory.ErrAutoDeployOff, "kv.auto_deploy_off"},
+	{inventory.ErrVaultUnavailable, reasonVaultGone},
+	{inventory.ErrKVCertificateMissing, "kv.certificate_not_found"},
+	{inventory.ErrVersionDisabled, "kv.version_disabled"},
+	{inventory.ErrVersionHeld, "kv.version_held"},
+	{inventory.ErrCertificateExpired, reasonExpired},
+	{inventory.ErrCertificateNotYetValid, reasonNotYetValid},
+	{inventory.ErrSecretMismatch, reasonKVMismatch},
+	{inventory.ErrSecretUnreadable, reasonKVUnreadable},
+	{inventory.ErrChainUnconfirmed, reasonChainUnconfirmed},
+	{inventory.ErrNotFound, reasonNotFound},
+}
+
+// kvRefusal is the closed reason of an inventory refusal in kvRefusals.
+func kvRefusal(err error) (string, bool) {
+	for _, r := range kvRefusals {
+		if errors.Is(err, r.err) {
+			return r.reason, true
+		}
+	}
+	return "", false
+}
 
 // kvMaterial reads the backing secret of a Key Vault deployment's version and returns the material of
 // the first send (see the table above). m is the Phase 4 material (it names the vault source and has no
 // key); on success the returned material has the delivered chain and the key, which the caller zeroes.
 func (h *handlers) kvMaterial(ctx context.Context, m inventory.Material) (inventory.Material, error) {
 	src := m.KV
+	// Before any vault call: is the deployment still what was requested? Read-only, so an error nobody
+	// knows is retried (nothing was read yet); the refusals are final.
+	if err := h.d.Inventory.KVDeployPrecheck(ctx, m.Deployment.ID); err != nil {
+		switch reason, known := kvRefusal(err); {
+		case errors.Is(err, inventory.ErrClaimLost), errors.Is(err, inventory.ErrDeploymentState):
+			return m, err
+		case ctx.Err() != nil:
+			return m, jobs.Retry(reasonInterrupted, nil, ctx.Err())
+		case known:
+			return m, jobs.Fail(reason, nil, err)
+		}
+		return m, jobs.Retry(reasonUnexpected, nil, err)
+	}
 	ref, t, err := h.d.Inventory.TargetRef(ctx, src.VaultID)
 	switch {
 	case errors.Is(err, inventory.ErrNotFound):
-		return m, jobs.Fail(reasonKVNotFound, nil, err)
+		return m, jobs.Fail(reasonVaultGone, nil, err)
 	case err != nil:
 		return m, jobs.Retry(reasonUnexpected, nil, err)
 	case t.Status == inventory.StatusDisabled:
-		return m, jobs.Fail(reasonDisabled, nil, nil)
+		return m, jobs.Fail(reasonVaultGone, nil, nil)
 	}
 	p, ok := h.d.Registry.Get(providers.KindAzureKV)
 	if !ok {
@@ -103,31 +161,35 @@ func (h *handlers) kvMaterial(ctx context.Context, m inventory.Material) (invent
 	// an inventory that did not.
 	defer sec.Value.Zero()
 	out, err := h.d.Inventory.KVDeployMaterial(ctx, m.Deployment.ID, sec)
-	switch {
-	case err == nil:
-		return out, nil
-	case errors.Is(err, inventory.ErrClaimLost), errors.Is(err, inventory.ErrDeploymentState):
-		return m, err // the caller: a stale run, or a state to follow
-	case ctx.Err() != nil:
-		return m, jobs.Retry(reasonInterrupted, nil, ctx.Err())
-	case errors.Is(err, inventory.ErrPFXBusy):
-		return m, jobs.Retry(reasonPFXBusy, nil, err)
-	case errors.Is(err, inventory.ErrSecretMismatch):
-		return m, jobs.Fail(reasonKVMismatch, nil, err)
-	case errors.Is(err, inventory.ErrSecretUnreadable):
-		return m, jobs.Fail(reasonKVUnreadable, nil, err)
-	case errors.Is(err, inventory.ErrChainUnconfirmed):
-		return m, jobs.Fail(reasonChainUnconfirmed, nil, err)
-	case errors.Is(err, inventory.ErrCertificateExpired):
-		return m, jobs.Fail(reasonExpired, nil, err)
-	case errors.Is(err, inventory.ErrNotFound):
-		return m, jobs.Fail(reasonNotFound, nil, err)
+	if err != nil {
+		// The secret was read: only what is known to be transient is retried, so that an error nobody
+		// foresaw never costs a fresh read of the vault per attempt.
+		reason, known := kvRefusal(err)
+		switch {
+		case errors.Is(err, inventory.ErrClaimLost), errors.Is(err, inventory.ErrDeploymentState):
+			return m, err // the caller: a stale run, or a state to follow
+		case ctx.Err() != nil:
+			return m, jobs.Retry(reasonInterrupted, nil, ctx.Err())
+		case errors.Is(err, inventory.ErrPFXBusy):
+			return m, jobs.Retry(reasonPFXBusy, nil, err)
+		case known:
+			return m, jobs.Fail(reason, nil, err)
+		}
+		return m, jobs.Fail(reasonUnexpected, nil, err)
 	}
-	return m, err // a database error: retryable, as DeploymentMaterial's
+	// Defence in depth: what comes back is this deployment's material (the inventory is trusted, a
+	// mix-up is not): else no send, and the key is zeroed here.
+	if out.Deployment.ID != m.Deployment.ID || out.Fingerprint != m.Fingerprint || out.Location.CertPath != m.Location.CertPath ||
+		out.Location.KeyPath != m.Location.KeyPath || out.KV == nil || out.KV.VersionID != src.VersionID {
+		out.PrivateKeyPEM.Zero()
+		return m, jobs.Fail(reasonUnexpected, nil, errors.New("deployjobs: the vault material is not the deployment's"))
+	}
+	return out, nil
 }
 
 // readSecret opens one vault session, reads the exact version the deployment names and closes the
-// session, all inside kvReadBudget. A value that comes back with an error is zeroed here.
+// session, all inside kvReadBudget. A value that comes back with an error, or while Close panics, is
+// zeroed here.
 func (h *handlers) readSecret(ctx context.Context, p providers.Provider, ref providers.TargetRef, src *inventory.KVSource) (providers.CertificateSecret, error) {
 	rctx, cancel := context.WithTimeout(ctx, kvReadBudget)
 	defer cancel()
@@ -136,11 +198,19 @@ func (h *handlers) readSecret(ctx context.Context, p providers.Provider, ref pro
 		return providers.CertificateSecret{}, readFailure(ctx, rctx, err)
 	}
 	sec, err := sess.ReadCertificateSecret(rctx, providers.SecretRequest{Name: src.Name, Version: src.Version})
+	handedOver := false
+	// Registered before Close runs: a panic in Close, or a value that came back with an error, leaves
+	// nothing behind. Once handed over the caller owns the value.
+	defer func() {
+		if !handedOver {
+			sec.Value.Zero()
+		}
+	}()
 	h.close(sess)
 	if err != nil {
-		sec.Value.Zero()
 		return providers.CertificateSecret{}, readFailure(ctx, rctx, err)
 	}
+	handedOver = true
 	return sec, nil
 }
 

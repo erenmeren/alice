@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -25,11 +26,12 @@ import (
 // trace is one ordered log of what the engine called on the inventory and on both providers, so a
 // test can say "the vault was read before the first SSH call". A nil trace records nothing.
 type trace struct {
-	mu       sync.Mutex
-	ev       []string
-	deadline map[string]time.Time // ctx deadline seen by azurekv Open and ReadCertificateSecret
-	onRead   func()               // runs inside ReadCertificateSecret, before the provider answers
-	readHook func(ctx context.Context) (providers.CertificateSecret, error, bool)
+	mu          sync.Mutex
+	ev          []string
+	deadline    map[string]time.Time // ctx deadline seen by azurekv Open and ReadCertificateSecret
+	closePanics bool                 // the azurekv session's Close panics
+	onRead      func()               // runs inside ReadCertificateSecret, before the provider answers
+	readHook    func(ctx context.Context) (providers.CertificateSecret, error, bool)
 }
 
 func (t *trace) add(s string) {
@@ -83,6 +85,9 @@ type traceSession struct {
 func (s traceSession) Close() error {
 	if s.name == "azurekv" {
 		s.t.add("azurekv:Close")
+		if s.t.closePanics {
+			panic("close crashed")
+		}
 	}
 	return s.Session.Close()
 }
@@ -121,15 +126,20 @@ type kvFake struct {
 	vaultID    uuid.UUID
 	vault      inventory.Target
 	vaultErr   error
-	key        []byte   // the key PEM KVDeployMaterial hands out
-	warnings   []string // Material.Warnings
-	entry      []byte   // the secret as KVDeployMaterial received it
-	secret     []byte   // the very slice the engine handed over (checked for zeroing)
-	noZero     bool     // a KVDeployMaterial that does not zero the secret (the engine must)
+	key        []byte                      // the key PEM KVDeployMaterial hands out
+	warnings   []string                    // Material.Warnings
+	entry      []byte                      // the secret as KVDeployMaterial received it
+	secret     []byte                      // the very slice the engine handed over (checked for zeroing)
+	noZero     bool                        // a KVDeployMaterial that does not zero the secret (the engine must)
+	mutate     func(m *inventory.Material) // changes the material KVDeployMaterial returns (a misbehaving inventory)
 	stepParams map[string]map[string]string
 }
 
 func (f *fakeInv) VaultCredentials(uuid.UUID) inventory.VaultCredentialSource { return nil }
+
+func (f *fakeInv) KVDeployPrecheck(ctx context.Context, _ uuid.UUID) error {
+	return f.call(ctx, "KVDeployPrecheck")
+}
 
 // KVDeployMaterial is the inventory's contract in miniature: the secret is zeroed on every path,
 // only a queued or precheck deployment gets material, the key is a fresh holder.
@@ -156,6 +166,9 @@ func (f *fakeInv) KVDeployMaterial(ctx context.Context, _ uuid.UUID, secret prov
 	f.key = slices.Clone(f.kv.key)
 	f.keyOut = secrets.NewPlaintext(f.key)
 	m.PrivateKeyPEM = f.keyOut
+	if f.kv.mutate != nil {
+		f.kv.mutate(&m)
+	}
 	return m, nil
 }
 
@@ -315,12 +328,12 @@ func TestKVMaterialFailures(t *testing.T) {
 			"certificate.pfx_busy", jobs.Permanent, true, nil, stepKVSecret, false},
 		{"the deployment's version row is gone", func(k *kvFixture) { k.inv.errs["KVDeployMaterial"] = inventory.ErrNotFound }, 0,
 			"system.not_found", jobs.Permanent, true, nil, stepKVSecret, false},
-		{"the database fails", func(k *kvFixture) { k.inv.errs["KVDeployMaterial"] = errors.New("database down") }, 1,
-			"internal.unexpected", jobs.Retryable, false, nil, "", false},
+		{"an unknown error of the inventory after the read is final (rule: no fresh read per attempt)", func(k *kvFixture) { k.inv.errs["KVDeployMaterial"] = errors.New("database down") }, 0,
+			"internal.unexpected", jobs.Permanent, true, nil, stepKVSecret, false},
 		{"the vault was deleted", func(k *kvFixture) { k.inv.kv.vaultErr = inventory.ErrNotFound }, 0,
-			"kv.certificate_not_found", jobs.Permanent, true, nil, stepKVSecret, true},
+			"kv.vault_unavailable", jobs.Permanent, true, nil, stepKVSecret, true},
 		{"the vault is disabled", func(k *kvFixture) { k.inv.kv.vault.Status = inventory.StatusDisabled }, 0,
-			"target.disabled", jobs.Permanent, true, nil, stepKVSecret, true},
+			"kv.vault_unavailable", jobs.Permanent, true, nil, stepKVSecret, true},
 		{"the vault cannot be read from the database", func(k *kvFixture) { k.inv.kv.vaultErr = errors.New("database down") }, 1,
 			"internal.unexpected", jobs.Retryable, false, nil, "", true},
 		{"no azurekv provider in this build", func(k *kvFixture) { k.registry(false) }, 0,
@@ -475,6 +488,7 @@ func TestKVStepEdges(t *testing.T) {
 // D6: the vault's key is zeroed on every path, whether the run ends before the send, at it, after it
 // or in a panic. Each row keeps the holder KVDeployMaterial handed out and checks it afterwards.
 func TestKVKeyIsZeroedOnEveryPath(t *testing.T) {
+	recordOnly := map[string]bool{"expired at run time": true, "not valid yet": true, "configuration invalid": true, "location unsupported": true}
 	committed := func(providers.DeployRequest) (providers.DeployOutcome, error) {
 		return providers.DeployOutcome{Result: providers.DeployCommitted, Phase: providers.PhaseCommitted, Verified: "local"}, nil
 	}
@@ -524,6 +538,13 @@ func TestKVKeyIsZeroedOnEveryPath(t *testing.T) {
 			k.prov.Configure(func(c *fake.Config) { c.Deploy = committed })
 			tc.setup(k)
 			_, _ = k.h.deploy(k.ctx, k.job(), k.steps)
+			if recordOnly[tc.name] {
+				// M-1 (these rows used to require a handed-out key): the record alone refuses, so the
+				// vault is never asked and no key exists to zero.
+				assert.Zero(t, len(k.az.Calls()), "no vault call")
+				assert.Nil(t, k.inv.key, "no key was handed out")
+				return
+			}
 			require.NotNil(t, k.inv.key, "the vault step handed out a key")
 			assert.True(t, k.keyZeroed(), "the vault's key is zeroed when the run ends")
 			assert.True(t, allZero(k.inv.kv.secret), "and so is the vault secret")
@@ -708,4 +729,278 @@ func TestKVResumeReadsTheVaultAgain(t *testing.T) {
 	assert.Equal(t, "azure.forbidden", failureOf(t, err).Reason)
 	assert.Equal(t, baseline, k.sshCalls(), "the second run made no SSH call: the vault refused first")
 	assert.Equal(t, inventory.DeployStatusFailed, k.inv.lastFinish().Status)
+}
+
+// Every refusal the inventory can give is a closed reason, Permanent, in both places it can come from:
+// the pre-check, asked before any vault call (zero vault calls, zero SSH calls), and KVDeployMaterial,
+// which judges again after the read (one read, no retry).
+var kvSentinels = []struct {
+	err    error
+	reason string
+}{
+	{inventory.ErrBindingGone, "kv.binding_gone"},
+	{inventory.ErrAutoDeployOff, "kv.auto_deploy_off"},
+	{inventory.ErrVaultUnavailable, "kv.vault_unavailable"},
+	{inventory.ErrKVCertificateMissing, "kv.certificate_not_found"},
+	{inventory.ErrVersionDisabled, "kv.version_disabled"},
+	{inventory.ErrVersionHeld, "kv.version_held"},
+	{inventory.ErrCertificateExpired, "certificate.expired"},
+	{inventory.ErrCertificateNotYetValid, "certificate.not_yet_valid"},
+	{inventory.ErrNotFound, "system.not_found"},
+}
+
+func TestKVRefusalsOfTheInventory(t *testing.T) {
+	for _, sc := range kvSentinels {
+		t.Run("precheck "+sc.reason, func(t *testing.T) {
+			k := newKVFixture(t)
+			k.inv.errs["KVDeployPrecheck"] = fmt.Errorf("wrapped: %w", sc.err)
+			res, err := k.h.deploy(k.ctx, k.job(), k.steps)
+			jf := failureOf(t, err)
+			assert.Equal(t, jobs.Permanent, jf.Class)
+			assert.Equal(t, sc.reason, jf.Reason)
+			assert.Equal(t, "failed", res["outcome"])
+			assert.Zero(t, len(k.az.Calls()), "not one vault call: no Open, no read")
+			assert.Zero(t, k.sshCalls())
+			assert.NotContains(t, k.inv.calls(), "KVDeployMaterial")
+			fin := k.inv.lastFinish()
+			assert.Equal(t, sc.reason, fin.ErrorCode)
+			assert.Equal(t, stepKVSecret, fin.FailedStep)
+			assert.Nil(t, k.inv.key, "no key was handed out")
+		})
+		t.Run("material "+sc.reason, func(t *testing.T) {
+			k := newKVFixture(t)
+			k.inv.errs["KVDeployMaterial"] = fmt.Errorf("wrapped: %w", sc.err)
+			_, err := k.h.deploy(k.ctx, k.job(), k.steps)
+			jf := failureOf(t, err)
+			assert.Equal(t, jobs.Permanent, jf.Class)
+			assert.Equal(t, sc.reason, jf.Reason)
+			assert.Equal(t, 1, k.az.Count("ReadCertificateSecret"))
+			assert.Zero(t, k.sshCalls())
+			assert.Equal(t, stepKVSecret, k.inv.lastFinish().FailedStep)
+		})
+	}
+
+	t.Run("an unknown error of the pre-check reads nothing and is retried", func(t *testing.T) {
+		k := newKVFixture(t)
+		k.inv.errs["KVDeployPrecheck"] = errors.New("database down")
+		_, err := k.h.deploy(k.ctx, k.job(), k.steps)
+		jf := failureOf(t, err)
+		assert.Equal(t, jobs.Retryable, jf.Class)
+		assert.Equal(t, "internal.unexpected", jf.Reason)
+		assert.Zero(t, len(k.az.Calls()), "nothing was read: a retry costs no secret")
+		assert.Empty(t, k.inv.finishes)
+	})
+
+	t.Run("an unknown error after the read: one attempt, one read", func(t *testing.T) {
+		k := newKVFixture(t)
+		k.inv.errs["KVDeployMaterial"] = errors.New("surprise")
+		_, err := k.h.deploy(k.ctx, k.job(), k.steps)
+		jf := failureOf(t, err)
+		assert.Equal(t, jobs.Permanent, jf.Class)
+		assert.Equal(t, "internal.unexpected", jf.Reason)
+		assert.Equal(t, 1, k.az.Count("ReadCertificateSecret"))
+		assert.Equal(t, inventory.DeployStateDone, k.inv.dep.State, "the deployment ended: no second attempt reads again")
+	})
+
+	t.Run("a state that changed under the pre-check is followed", func(t *testing.T) {
+		k := newKVFixture(t)
+		k.inv.errs["KVDeployPrecheck"] = inventory.ErrDeploymentState
+		k.inv.hooks["KVDeployPrecheck"] = func(context.Context) {
+			k.inv.mu.Lock()
+			k.inv.dep.State, k.inv.dep.Status, k.inv.dep.ErrorCode = inventory.DeployStateDone, inventory.DeployStatusFailed, "deployment.cancelled"
+			k.inv.mu.Unlock()
+		}
+		_, err := k.h.deploy(k.ctx, k.job(), k.steps)
+		assert.Equal(t, "deployment.cancelled", failureOf(t, err).Reason)
+		assert.Zero(t, len(k.az.Calls()))
+	})
+
+	t.Run("a stale run in the pre-check records nothing", func(t *testing.T) {
+		k := newKVFixture(t)
+		k.inv.errs["KVDeployPrecheck"] = inventory.ErrClaimLost
+		_, err := k.h.deploy(k.ctx, k.job(), k.steps)
+		assert.Equal(t, "job.lease_expired", failureOf(t, err).Reason)
+		assert.Empty(t, k.inv.finishes)
+		assert.Zero(t, len(k.az.Calls()))
+	})
+
+	t.Run("a context that ends in the pre-check releases the job", func(t *testing.T) {
+		k := newKVFixture(t)
+		ctx, cancel := context.WithCancel(k.ctx)
+		defer cancel()
+		k.inv.hooks["KVDeployPrecheck"] = func(context.Context) { cancel() }
+		k.inv.errs["KVDeployPrecheck"] = context.Canceled
+		_, err := k.h.deploy(ctx, k.job(), k.steps)
+		assert.Equal(t, "deployment.interrupted", failureOf(t, err).Reason)
+		assert.Zero(t, len(k.az.Calls()))
+	})
+
+	t.Run("the material step of the first read refuses the same way", func(t *testing.T) {
+		k := newKVFixture(t)
+		k.inv.errs["DeploymentMaterial(true)"] = inventory.ErrBindingGone
+		_, err := k.h.deploy(k.ctx, k.job(), k.steps)
+		assert.Equal(t, "kv.binding_gone", failureOf(t, err).Reason)
+		assert.Zero(t, len(k.az.Calls()))
+	})
+}
+
+// M-1: what the record alone can refuse is refused before the vault is asked for a key, and again
+// after the read (the record may have changed meanwhile).
+func TestKVRecordOnlyRefusalsComeBeforeTheVault(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		setup  func(k *kvFixture)
+		reason string
+	}{
+		{"expired by the stored row", func(k *kvFixture) { k.inv.material.NotAfter = k.clock.Now().Add(-time.Minute) }, "certificate.expired"},
+		{"not valid yet", func(k *kvFixture) { k.inv.material.NotBefore = k.clock.Now().Add(time.Minute) }, "certificate.not_yet_valid"},
+		{"configuration invalid", func(k *kvFixture) { k.inv.material.ConfigValid = false }, "nginx.config_invalid"},
+		{"location unsupported", func(k *kvFixture) { k.inv.material.Location.Supported = false }, "nginx.location_unsupported"},
+		{"server disabled", func(k *kvFixture) { k.inv.target.Status = inventory.StatusDisabled }, "target.disabled"},
+		{"server host key changed", func(k *kvFixture) { k.inv.target.Status = inventory.StatusHostKeyChanged }, "target.host_key_changed"},
+		{"server deleted", func(k *kvFixture) { k.inv.errs["TargetRef"] = inventory.ErrNotFound }, "system.not_found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k := newKVFixture(t)
+			tc.setup(k)
+			_, err := k.h.deploy(k.ctx, k.job(), k.steps)
+			assert.Equal(t, tc.reason, failureOf(t, err).Reason)
+			assert.Zero(t, len(k.az.Calls()), "the vault was not called")
+			assert.NotContains(t, k.inv.calls(), "KVDeployMaterial")
+			assert.NotContains(t, k.inv.calls(), "KVDeployPrecheck")
+			assert.Nil(t, k.inv.key, "no key was handed out")
+			assert.Zero(t, k.sshCalls())
+		})
+	}
+	t.Run("the record changes during the read: refused again after it, key zeroed", func(t *testing.T) {
+		k := newKVFixture(t)
+		k.tr.onRead = func() { k.inv.material.NotAfter = k.clock.Now().Add(-time.Minute) }
+		_, err := k.h.deploy(k.ctx, k.job(), k.steps)
+		assert.Equal(t, "certificate.expired", failureOf(t, err).Reason)
+		assert.True(t, k.keyZeroed())
+		assert.Zero(t, k.sshCalls())
+	})
+}
+
+// M-2: a panic in the vault session's Close leaves no secret behind.
+func TestKVSecretIsZeroedWhenCloseCrashes(t *testing.T) {
+	k := newKVFixture(t)
+	k.tr.closePanics = true
+	var held []byte
+	k.tr.readHook = func(context.Context) (providers.CertificateSecret, error, bool) {
+		held = bytes.Clone(k.canary)
+		k.inv.kv.secret = held
+		return providers.CertificateSecret{ContentType: "application/x-pkcs12", Value: providers.NewSecret(held)}, nil, true
+	}
+	assert.PanicsWithValue(t, "close crashed", func() { _, _ = k.h.deploy(k.ctx, k.job(), k.steps) })
+	assert.True(t, allZero(held), "the value the vault returned is zero after the panic")
+	assert.Zero(t, k.sshCalls())
+}
+
+// M-3: the key is zero the moment the send returns, before anything else runs: not at the end of the run.
+func TestKVKeyIsZeroBeforeTheOutcomeIsRecordedAndBeforeTheRestore(t *testing.T) {
+	t.Run("before RecordOutcome", func(t *testing.T) {
+		k := newKVFixture(t)
+		var zero bool
+		k.inv.hooks["RecordOutcome"] = func(context.Context) { zero = k.keyZeroed() }
+		_, err := k.h.deploy(k.ctx, k.job(), k.steps)
+		require.NoError(t, err)
+		assert.True(t, zero, "the key was already zero when the outcome was recorded")
+	})
+	t.Run("before the restore over SSH", func(t *testing.T) {
+		k := newKVFixture(t)
+		var zero bool
+		k.prov.Configure(func(c *fake.Config) {
+			c.Deploy = func(providers.DeployRequest) (providers.DeployOutcome, error) {
+				return providers.DeployOutcome{Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestoreFailed, FailedStep: "restore",
+					CauseStep: "verify", Reason: "deployment.rollback_failed"}, nil
+			}
+			c.Rollback = func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
+				zero = k.keyZeroed()
+				return providers.RollbackOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestored}, nil
+			}
+		})
+		_, _ = k.h.deploy(k.ctx, k.job(), k.steps)
+		assert.Equal(t, 1, k.prov.Count("RollbackDeployment"))
+		assert.True(t, zero, "the key was already zero when the restore was sent")
+	})
+}
+
+// M-4: the material the inventory returns is checked against the record the run started from.
+func TestKVMaterialOfAnotherDeploymentIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(m *inventory.Material)
+	}{
+		{"another fingerprint", func(m *inventory.Material) { m.Fingerprint = strings.Repeat("d", 64) }},
+		{"another deployment", func(m *inventory.Material) { m.Deployment.ID = uuid.Must(uuid.NewV7()) }},
+		{"another certificate path", func(m *inventory.Material) { m.Location.CertPath = "/etc/nginx/ssl/other.crt" }},
+		{"another key path", func(m *inventory.Material) { m.Location.KeyPath = "/etc/nginx/ssl/other.key" }},
+		{"another vault version", func(m *inventory.Material) {
+			kv := *m.KV
+			kv.VersionID = uuid.Must(uuid.NewV7())
+			m.KV = &kv
+		}},
+		{"no vault source", func(m *inventory.Material) { m.KV = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k := newKVFixture(t)
+			k.inv.kv.mutate = tc.mutate
+			_, err := k.h.deploy(k.ctx, k.job(), k.steps)
+			jf := failureOf(t, err)
+			assert.Equal(t, jobs.Permanent, jf.Class)
+			assert.Equal(t, "internal.unexpected", jf.Reason)
+			assert.Zero(t, k.sshCalls())
+			assert.True(t, k.keyZeroed(), "the key of the refused material is zeroed")
+			assert.Equal(t, stepKVSecret, k.inv.lastFinish().FailedStep)
+		})
+	}
+}
+
+// M-5: a job error's param values are bounded as the deployment record bounds them: valid UTF-8, no
+// control characters, at most 256 bytes.
+func TestJobParamValuesAreBounded(t *testing.T) {
+	long := "x" + strings.Repeat("é", 400) // cuts inside no rune
+	in := map[string]string{"role": "Key Vault\nSecrets\x00 User" + long, "port": "44\r3", "model": "ok", "azure_code": string([]byte{0xff, 'A'})}
+	out := jobParams(in)
+	assert.Equal(t, "ok", out["model"])
+	assert.Equal(t, "443", out["port"])
+	assert.Equal(t, "A", out["azure_code"], "invalid UTF-8 dropped")
+	assert.NotContains(t, out["role"], "\n")
+	assert.NotContains(t, out["role"], "\x00")
+	assert.LessOrEqual(t, len(out["role"]), 256)
+	assert.True(t, utf8.ValidString(out["role"]))
+	assert.True(t, strings.HasPrefix(out["role"], "Key VaultSecrets User"))
+	assert.Equal(t, 5015, len(strings.Repeat("a", 5000)+"\n"+strings.Repeat("b", 14)))
+	assert.Len(t, jobParams(map[string]string{"role": strings.Repeat("a", 5000) + "\n" + strings.Repeat("b", 14)})["role"], 256)
+}
+
+// M-7: a step that was started is closed: on a state that changed under the run, and on a panic; a lost
+// claim writes nothing.
+func TestKVStepIsClosedOnEveryPath(t *testing.T) {
+	t.Run("a state that changed", func(t *testing.T) {
+		k := newKVFixture(t)
+		k.inv.errs["KVDeployMaterial"] = inventory.ErrDeploymentState
+		k.inv.hooks["KVDeployMaterial"] = func(context.Context) {
+			k.inv.mu.Lock()
+			k.inv.dep.State, k.inv.dep.Status, k.inv.dep.ErrorCode = inventory.DeployStateDone, inventory.DeployStatusFailed, "x.y"
+			k.inv.mu.Unlock()
+		}
+		_, _ = k.h.deploy(k.ctx, k.job(), k.steps)
+		assert.Equal(t, []string{stepKVSecret + ":started", stepKVSecret + ":skipped"}, k.inv.stepNames())
+		assert.Equal(t, "state_changed", k.inv.kv.stepParams[stepKVSecret+":skipped"]["reason"])
+	})
+	t.Run("a panic", func(t *testing.T) {
+		k := newKVFixture(t)
+		k.inv.hooks["KVDeployMaterial"] = func(context.Context) { panic("inventory crashed") }
+		assert.Panics(t, func() { _, _ = k.h.deploy(k.ctx, k.job(), k.steps) })
+		assert.Equal(t, []string{stepKVSecret + ":started", stepKVSecret + ":failed"}, k.inv.stepNames())
+		assert.Equal(t, "internal.unexpected", k.inv.kv.stepParams[stepKVSecret+":failed"]["reason"])
+	})
+	t.Run("a lost claim writes nothing", func(t *testing.T) {
+		k := newKVFixture(t)
+		k.inv.errs["KVDeployMaterial"] = inventory.ErrClaimLost
+		_, _ = k.h.deploy(k.ctx, k.job(), k.steps)
+		assert.Equal(t, []string{stepKVSecret + ":started"}, k.inv.stepNames(), "a stale run writes no closing step")
+	})
 }

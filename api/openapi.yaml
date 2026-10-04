@@ -2306,7 +2306,7 @@ components:
             and as deployment.rollback_file_changed (ALC-DEP-0020) when another program changed the files (Alice put
             back at most what it had written: the pair may not match). A deployment whose waiting job an
             Administrator discarded ends failed with deployment.cancelled (ALC-DEP-0022; nothing was sent).
-        failed_step: { type: string, description: "The step that failed (verify_current when the pre-check refused; verify when the new certificate was not confirmed); \"\" when none" }
+        failed_step: { type: string, description: "The step that failed (verify_current when the pre-check refused; verify when the new certificate was not confirmed; kv_secret when a Key Vault deployment could not read or accept its certificate secret); \"\" when none" }
         cause_step: { type: string }
         helper_error: { type: string, description: "A configuration error class or file_changed; \"\" when none" }
         backup_dir: { type: string, description: 'Where the server keeps the previous files (/var/lib/alice-helper/backups/<id>); "" before a change' }

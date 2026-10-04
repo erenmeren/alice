@@ -250,8 +250,48 @@ func TestKVDeploymentOfADeletedVault(t *testing.T) {
 	require.NoError(t, w.inv.DeleteVault(w.ctx, w.admin, w.vault, true))
 	d := w.settle(id)
 	assert.Equal(t, inventory.DeployStatusFailed, d.Status)
-	assert.Equal(t, "kv.certificate_not_found", d.ErrorCode)
+	assert.Equal(t, "kv.binding_gone", d.ErrorCode, "deleting the vault removed the binding the deployment was requested through")
+	assert.Equal(t, stepKVSecret, d.FailedStep)
 	assert.Zero(t, w.reads())
+	w.untouched(s, cmds)
+}
+
+// Judged again when the job runs: a queued deployment whose binding was removed gets no secret and
+// no key; the vault is not called and the server not spoken to.
+func TestKVBindingRemovedWhileQueued(t *testing.T) {
+	w := newKVWorld(t)
+	s := w.addServer("web-01", wwwSite())
+	b := w.bind(s.locs[wwwCert])
+	cmds, calls := len(s.srv.Commands()), len(w.az.Calls()) // the vault's own sign-up check made some
+	id := w.deploy(b, false)[0]
+	require.NoError(t, w.inv.DeleteBinding(w.ctx, w.admin, b.ID))
+	d := w.settle(id)
+	assert.Equal(t, inventory.DeployStatusFailed, d.Status)
+	assert.Equal(t, "kv.binding_gone", d.ErrorCode)
+	assert.Equal(t, stepKVSecret, d.FailedStep)
+	assert.Equal(t, calls, len(w.az.Calls()), "not one vault call")
+	assert.Equal(t, 1, w.audits("deployment.failed"))
+	w.untouched(s, cmds)
+}
+
+// An automatic deployment whose binding's automatic deployment was switched off while it waited
+// ends the same way (the planner's trigger is set by hand here: no planner exists yet in this tree).
+func TestKVAutoDeploySwitchedOffWhileQueued(t *testing.T) {
+	w := newKVWorld(t)
+	s := w.addServer("web-01", wwwSite())
+	b := w.bind(s.locs[wwwCert])
+	b, err := w.inv.SetAutoDeploy(w.ctx, w.admin, b.ID, b.Version, true)
+	require.NoError(t, err)
+	cmds, calls := len(s.srv.Commands()), len(w.az.Calls())
+	id := w.deploy(b, false)[0]
+	_, err = w.db.Owner.Exec(w.ctx, "UPDATE deployments SET trigger = 'kv_renewal' WHERE id = $1", id)
+	require.NoError(t, err)
+	_, err = w.inv.SetAutoDeploy(w.ctx, w.admin, b.ID, b.Version, false)
+	require.NoError(t, err)
+	d := w.settle(id)
+	assert.Equal(t, inventory.DeployStatusFailed, d.Status)
+	assert.Equal(t, "kv.auto_deploy_off", d.ErrorCode)
+	assert.Equal(t, calls, len(w.az.Calls()), "not one vault call")
 	w.untouched(s, cmds)
 }
 
