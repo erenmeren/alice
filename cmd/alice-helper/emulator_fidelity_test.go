@@ -952,6 +952,39 @@ func TestEmulatorFidelityRestoreAndSuperseded(t *testing.T) {
 		assert.Equal(t, helperproto.CodeHashMismatch, tw.restore(opA).m["code"], "the same refusal again")
 		tw.sameFiles("")
 	})
+	t.Run("the key changed between the restore's renames: restore_failed, not a refusal (A1-I2)", func(t *testing.T) {
+		tw := newTwin(t, true)
+		tw.deploy(opA)
+		point := "renamed " + stagedName(opA, kindCert)
+		tw.w.f.s.afterDeployStep = func(name string) error {
+			if name == point {
+				require.NoError(t, os.WriteFile(tw.w.f.host(fidKey), []byte("someone else's"), 0o600))
+			}
+			return nil
+		}
+		tw.e.InterfereAt(point, fidKey, []byte("someone else's"))
+		a := tw.restore(opA)
+		tw.w.f.s.afterDeployStep = nil
+		assert.Equal(t, helperproto.PhaseRestoreFailed, a.m["phase"])
+		assert.Equal(t, helperproto.RestoreErrFileChanged, a.m["error"])
+		tw.status(opA)
+		assert.Equal(t, helperproto.CodeHashMismatch, tw.restore(opA).m["code"], "nothing more to do: the refusal")
+	})
+	t.Run("the restoring journal cannot be written: nothing restored (m6)", func(t *testing.T) {
+		tw := newTwin(t, true)
+		tw.deploy(opA)
+		tw.w.f.s.afterDeployStep = func(name string) error {
+			if name == "journal restoring staged" {
+				return errors.New("disk")
+			}
+			return nil
+		}
+		tw.e.FailJournalWrite(helperproto.PhaseRestoring)
+		assert.Equal(t, helperproto.CodeIOError, tw.restore(opA).m["code"])
+		tw.w.f.s.afterDeployStep = nil
+		tw.sameFiles("new")
+		tw.status(opA)
+	})
 	// A, B, C: only the operation that last replaced the pair's files can be restored.
 	chain := func(t *testing.T) (*twin, string) {
 		tw := newTwin(t, true)

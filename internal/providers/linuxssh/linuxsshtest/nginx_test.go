@@ -1031,7 +1031,8 @@ func TestEmulatedFaultKnobs(t *testing.T) {
 	// FailJournalWrite is for the phases the helper answers an error for.
 	e := NewEmulator()
 	assert.Panics(t, func() { e.FailJournalWrite(helperproto.PhaseUnchanged) })
-	assert.Panics(t, func() { e.FailJournalWrite(helperproto.PhaseRestoring) })
+	assert.Panics(t, func() { e.FailJournalWrite(helperproto.PhaseRestored) })
+	assert.NotPanics(t, func() { e.FailJournalWrite(helperproto.PhaseRestoring) }, "nginx-restore refuses when it cannot write restoring (m6)")
 
 	// Armed transaction faults are consumed by the next transaction command, fired or not.
 	w := newWorld(t)

@@ -228,6 +228,12 @@ func TestDeployOutcomeTable(t *testing.T) {
 			beforeOn(e, restoreSub, func() { e.emu.SetNginxFile(wwwCert, other.FullchainPEM) })
 		}, nil, wantDeploy{result: providers.DeployRollbackFailed, failed: "restore", cause: "verify", cls: "file_changed",
 			steps: cat(helperOK, []string{"verify:failed"}), reason: "deployment.rollback_failed", restoreSent: true}},
+		{"inline restore: the key changed between the restore's renames (A1-I2): restore_failed, partly restored", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
+			e.emu.NoopReload(true)
+			e.emu.InterfereAt("renamed "+".alice-"+e.op.String()+"-cert", wwwKey, []byte("someone else's key"))
+			e.emu.ArmFaultsFor(restoreSub)
+		}, nil, wantDeploy{result: providers.DeployRollbackFailed, phase: "restore_failed", failed: "restore", cause: "verify", cls: "file_changed",
+			steps: cat(helperOK, []string{"verify:failed", "restore:failed"}), reason: "deployment.rollback_failed", restoreSent: true}},
 		{"inline restore BUSY once: retried, rolled back", func(t *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
 			e.emu.NoopReload(true)
 			scriptOn(e, restoreSub, refusal(t, 4, helperproto.CodeBusy))
@@ -792,6 +798,10 @@ func TestRollbackOutcomeTable(t *testing.T) {
 		{"HASH_MISMATCH: someone else's file, nothing restored", afterCommit(func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.RollbackRequest) {
 			e.emu.SetNginxFile(wwwCert, []byte("someone else"))
 		}), nil, wantRollback{result: providers.DeployRollbackFailed, failed: "restore", cls: "file_changed", reason: "deployment.rollback_failed", backupDir: true}},
+		{"partly restored: the key changed between the restore's renames (A1-I2)", afterCommit(func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.RollbackRequest) {
+			e.emu.InterfereAt("renamed "+".alice-"+e.op.String()+"-cert", wwwKey, []byte("someone else's key"))
+		}), nil, wantRollback{result: providers.DeployRollbackFailed, phase: "restore_failed", failed: "restore", cls: "file_changed",
+			steps: []string{"restore:failed"}, reason: "deployment.rollback_failed", backupDir: true}},
 		{"nothing to restore: prepared", func(t *testing.T, e *env, nw pki.Leaf, _ *providers.RollbackRequest) {
 			e.emu.KillAt("pair record renamed")
 			_, err := e.open(t).DeployCertificate(context.Background(), e.req(t, nw), nil)

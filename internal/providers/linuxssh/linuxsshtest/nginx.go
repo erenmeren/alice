@@ -475,8 +475,8 @@ func (e *Emulator) FailRestoreFile(p string) {
 // FailJournalWrite makes the next write of a journal in the given phase (prepared, writing or
 // committed) fail: a refusal for the first two, the journal step's rollback for committed.
 func (e *Emulator) FailJournalWrite(phase string) {
-	if !slices.Contains([]string{helperproto.PhasePrepared, helperproto.PhaseWriting, helperproto.PhaseCommitted}, phase) {
-		panic("linuxsshtest: FailJournalWrite: the helper answers a failed journal write only in the phases prepared, writing and committed, not " + phase)
+	if !slices.Contains([]string{helperproto.PhasePrepared, helperproto.PhaseWriting, helperproto.PhaseCommitted, helperproto.PhaseRestoring}, phase) {
+		panic("linuxsshtest: FailJournalWrite: the helper answers a failed journal write only in the phases prepared, writing, committed and restoring, not " + phase)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()

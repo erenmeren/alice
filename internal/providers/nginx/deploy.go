@@ -757,9 +757,10 @@ func (s *session) restore(ctx context.Context, op uuid.UUID, log providers.StepL
 //     no failed_step, cause_step or error (the helper echoes the deployment's; they are dropped);
 //   - restored, another certificate served: rollback_failed, Phase restored, FailedStep verify_old;
 //   - restore_failed: rollback_failed, Phase restore_failed, the helper's failed_step, cause_step
-//     and error;
-//   - HASH_MISMATCH (someone else's file; nothing restored): rollback_failed, Phase "",
-//     FailedStep restore, Error file_changed;
+//     and error (failed_step restore with error file_changed: a file was put back, then the other
+//     one was found changed by someone else, A1-I2: partly restored);
+//   - HASH_MISMATCH (someone else's file found before any rename; nothing restored):
+//     rollback_failed, Phase "", FailedStep restore, Error file_changed;
 //   - nothing to restore (prepared, unchanged): no_change with that Phase and a nil error;
 //   - UNKNOWN_OP, SUPERSEDED and every other well-formed refusal, and a refusal before sending:
 //     no_change, Phase "", a *providers.Error ("nothing was restored", not "files unchanged");

@@ -31,7 +31,9 @@ var (
 	errCannotWrite = errors.New("the file cannot be written")
 	errJournalIO   = errors.New("the journal cannot be written")
 	errBadJournal  = errors.New("the journal is not valid")
-	errTarget      = errors.New("the file cannot be read")
+	// errJournalUnwritten: the restoring journal could not be written; nothing was put back.
+	errJournalUnwritten = errors.New("the restoring journal cannot be written")
+	errTarget           = errors.New("the file cannot be read")
 )
 
 // emuKilled is the panic that unwinds a transaction killed at a point (the helper's errKilled).
@@ -465,21 +467,30 @@ func (h *nginxHost) restoreOp(op *opDir, j *emuJournal, partial bool) (*emuJourn
 		}
 	}
 	j.phase = helperproto.PhaseRestoring
-	_ = h.writeJournal(op, j)
+	if err := h.writeJournal(op, j); err != nil {
+		return failRestore(errJournalUnwritten) // m6: nothing is renamed without the restoring journal
+	}
+	renamedAny := false
 	for _, f := range files {
 		if !f.restore {
 			continue
 		}
 		data := f.backup.bytes()
 		var err error
+		renamed := false
 		if f.backup == nil || sum(data) != f.oldSHA {
 			err = errBadJournal
 		} else {
-			_, err = h.replaceFile(f.t, data, f.meta.mode, f.meta, stagedName(j.op, f.kind), true, nil)
+			renamed, err = h.replaceFile(f.t, data, f.meta.mode, f.meta, stagedName(j.op, f.kind), true, nil)
 		}
 		if err != nil {
+			if renamedAny || renamed {
+				j, _ = failRestore(err) // A1-I2: something was put back: the outcome, never a refusal
+				return j, nil
+			}
 			return failRestore(err)
 		}
+		renamedAny = true
 	}
 	j.steps = append(j.steps, stepOK(helperproto.StepRestore))
 	h.point(helperproto.StepRestore)
@@ -902,8 +913,11 @@ func (e *Emulator) nginxRestore(args []string) (resp Response) {
 	j.steps = trimSteps(j.steps)
 	before := len(j.steps)
 	j, err := h.restoreOp(dir, j, false)
-	if errors.Is(err, errChanged) {
+	switch {
+	case errors.Is(err, errChanged):
 		return refuse(helperproto.ExitPrecondition, helperproto.CodeHashMismatch)
+	case errors.Is(err, errJournalUnwritten):
+		return refuse(helperproto.ExitFailed, helperproto.CodeIOError)
 	}
 	return answer(helperproto.NginxRestoreResponse{OK: true, Phase: j.phase, FailedStep: j.failedStep, CauseStep: j.causeStep, Error: j.errClass,
 		Steps: append([]helperproto.NginxStep{}, j.steps[min(before, len(j.steps)):]...)})

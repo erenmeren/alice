@@ -35,6 +35,8 @@ var (
 	errChangedByOthers = errors.New("the file was changed by someone else")
 	errUnstable        = errors.New("the file changed while it was read")
 	errDeadline        = errors.New("the time budget ended before the file was replaced")
+	// errJournalUnwritten: the restoring journal could not be written, so nothing was put back.
+	errJournalUnwritten = errors.New("the journal cannot be written")
 )
 
 // stagedName is the deterministic name of the staged file of one operation and one file of the
@@ -714,8 +716,13 @@ func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal, partial bo
 		}
 	}
 	j.Phase = helperproto.PhaseRestoring
-	_ = s.writeJournal(dir, j)
+	if err := s.writeJournal(dir, j); err != nil {
+		// m6: nothing is renamed while the journal does not say restoring: a helper that died during
+		// the restore would otherwise leave a journal (committed) that does not describe a mixed pair.
+		return failRestore(errJournalUnwritten)
+	}
 	s.cleanStaged(j)
+	renamedAny := false
 	for _, f := range files {
 		if !f.restore {
 			continue
@@ -724,13 +731,22 @@ func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal, partial bo
 		if err == nil && hexSHA(data) != f.oldSHA {
 			err = errBadJournal // the backup does not match its journal
 		}
+		renamed := false
 		if err == nil {
-			_, err = s.replaceFile(f.t, data, f.meta.Mode, f.meta, stagedName(j.Op, f.kind), nil, nil)
+			renamed, err = s.replaceFile(f.t, data, f.meta.Mode, f.meta, stagedName(j.Op, f.kind), nil, nil)
 		}
 		clear(data)
 		if err != nil {
+			if renamedAny || renamed {
+				// A1-I2: something was already put back, so this is the restore's outcome (restore_failed,
+				// failed_step restore; error file_changed when the other file was changed meanwhile), never
+				// a refusal that reads "nothing was restored".
+				j, _ = failRestore(err)
+				return j, nil
+			}
 			return failRestore(err)
 		}
+		renamedAny = true
 		if f.kind == kindKey {
 			j.KeyIDs.Restored = f.t.installed
 		}
@@ -949,8 +965,12 @@ func cmdNginxRestore(ctx context.Context, s *sys, args []string) (out any, err e
 	j.Steps = trimSteps(j.Steps) // as restoreOp does: the steps it adds follow
 	before := len(j.Steps)
 	j, err = s.restoreOp(context.WithoutCancel(ctx), dir, j, false)
-	if errors.Is(err, errChangedByOthers) {
+	switch {
+	case errors.Is(err, errChangedByOthers):
+		// Only before any rename (A1-I2): restoreOp answers a later change as its outcome.
 		return nil, precondition(helperproto.CodeHashMismatch, "a file was changed after the deployment; it is left as it is")
+	case errors.Is(err, errJournalUnwritten):
+		return nil, failed(helperproto.CodeIOError, "the journal cannot be written; nothing was restored")
 	}
 	return helperproto.NginxRestoreResponse{OK: true, Phase: j.Phase, FailedStep: j.FailedStep, CauseStep: j.CauseStep, Error: j.Error,
 		Steps: append([]helperproto.NginxStep{}, j.Steps[min(before, len(j.Steps)):]...)}, nil

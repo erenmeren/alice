@@ -131,3 +131,93 @@ func TestCleanupKeepsAnOperationWhoseJournalCannotBeRead(t *testing.T) {
 	assert.FileExists(t, w.opPath(opA)+"/"+certBackup)
 	assert.FileExists(t, w.opPath(opA)+"/"+keyBackup)
 }
+
+// A1-I2: once nginx-restore has put a file back, a key changed by someone else before its own
+// rename is not "HASH_MISMATCH, left as it is" (Alice would read "nothing was restored"): the
+// answer is exit 0, restore_failed, failed_step restore, error file_changed, as the journal says.
+func TestRestoreKeyChangedBetweenTheRestoreRenames(t *testing.T) {
+	w := newDeployWorld(t)
+	code, m := w.deploy(opA, w.newInput(), w.oldSHA())
+	require.Equal(t, helperproto.ExitOK, code, m)
+	require.Equal(t, helperproto.PhaseCommitted, m["phase"])
+	w.f.s.afterDeployStep = func(name string) error {
+		if name == "renamed "+stagedName(opA, kindCert) {
+			w.f.write("/etc/nginx/ssl/www.key", "someone else's key\n", 0o600)
+		}
+		return nil
+	}
+	code, m = w.f.run("nginx-restore", "--op", opA)
+	w.f.s.afterDeployStep = nil
+	assert.Equal(t, helperproto.ExitOK, code, m)
+	assert.Equal(t, helperproto.PhaseRestoreFailed, m["phase"])
+	assert.Equal(t, helperproto.StepRestore, m["failed_step"])
+	assert.Equal(t, helperproto.RestoreErrFileChanged, m["error"])
+	assert.Equal(t, string(w.leaf.FullchainPEM), w.f.read("/etc/nginx/ssl/www.crt"), "the certificate was put back")
+	assert.Equal(t, "someone else's key\n", w.f.read("/etc/nginx/ssl/www.key"), "the other party's key is left")
+	_, st := w.f.run("nginx-status", "--op", opA)
+	assert.Equal(t, helperproto.PhaseRestoreFailed, st["phase"])
+	assert.Equal(t, helperproto.RestoreErrFileChanged, st["error"])
+
+	// Another nginx-restore changes nothing now: that one is the refusal.
+	code, m = w.f.run("nginx-restore", "--op", opA)
+	assert.Equal(t, helperproto.ExitPrecondition, code, m)
+	assert.Equal(t, helperproto.CodeHashMismatch, m["code"])
+}
+
+// A1-I2 before any rename: the refusal stays HASH_MISMATCH and nothing is restored.
+func TestRestoreFileChangedBeforeAnyRenameIsARefusal(t *testing.T) {
+	w := newDeployWorld(t)
+	code, m := w.deploy(opA, w.newInput(), w.oldSHA())
+	require.Equal(t, helperproto.ExitOK, code, m)
+	w.f.s.afterDeployStep = func(name string) error {
+		if name == "staged "+stagedName(opA, kindCert) {
+			w.f.write("/etc/nginx/ssl/www.crt", "someone else's certificate\n", 0o644)
+		}
+		return nil
+	}
+	code, m = w.f.run("nginx-restore", "--op", opA)
+	w.f.s.afterDeployStep = nil
+	assert.Equal(t, helperproto.ExitPrecondition, code, m)
+	assert.Equal(t, helperproto.CodeHashMismatch, m["code"])
+	assert.Equal(t, string(w.newLeaf.KeyPEM), w.f.read("/etc/nginx/ssl/www.key"), "nothing restored")
+}
+
+// m6: nothing is renamed while the journal cannot say restoring; nginx-restore refuses (nothing was
+// restored) and the deployment's own rollback answers restore_failed at its restore step.
+func TestRestoreRefusesWhenTheRestoringJournalCannotBeWritten(t *testing.T) {
+	w := newDeployWorld(t)
+	code, m := w.deploy(opA, w.newInput(), w.oldSHA())
+	require.Equal(t, helperproto.ExitOK, code, m)
+	w.f.s.afterDeployStep = func(name string) error {
+		if strings.HasPrefix(name, "journal restoring") {
+			return errFailedWrite
+		}
+		return nil
+	}
+	code, m = w.f.run("nginx-restore", "--op", opA)
+	assert.Equal(t, helperproto.ExitFailed, code, m)
+	assert.Equal(t, helperproto.CodeIOError, m["code"])
+	w.assertPair(t, true)
+
+	// Inside a deployment's own rollback (nginx -t fails), the answer is restore_failed / restore.
+	w.f.s.afterDeployStep = func(name string) error {
+		if strings.HasPrefix(name, "journal restoring") {
+			return errFailedWrite
+		}
+		return nil
+	}
+	w.testFail = 1
+	in := input(w.leaf.FullchainPEM, w.leaf.KeyPEM)
+	code, m = w.deploy(opB, in, hexOf(string(w.newLeaf.FullchainPEM)))
+	w.f.s.afterDeployStep = nil
+	assert.Equal(t, helperproto.ExitOK, code, m)
+	assert.Equal(t, helperproto.PhaseRestoreFailed, m["phase"])
+	assert.Equal(t, helperproto.StepRestore, m["failed_step"])
+	assert.Equal(t, helperproto.StepConfigTest, m["cause_step"])
+}
+
+var errFailedWrite = errorString("disk full (test)")
+
+type errorString string
+
+func (e errorString) Error() string { return string(e) }
