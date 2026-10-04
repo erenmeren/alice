@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"maps"
 	"net/http"
@@ -201,4 +203,81 @@ func TestSecretBodiesNeedExactUniqueKeys(t *testing.T) {
 	assert.Zero(t, calls)
 	require.Equal(t, http.StatusCreated, call(h, http.MethodPost, "/api/v1/certificates/upload", "admin", `{"label":"x","pfx_base64":"AAAA","pfx_password":"p"}`).Code)
 	require.Equal(t, http.StatusCreated, call(h, http.MethodPost, complete, "admin", ` { "certificate_pem" : "c" } `).Code)
+}
+
+// The exact-key check runs while the keys are scanned: a body is refused at its first key that is
+// not allowed or repeats, and a junk key without an escape is neither unescaped nor copied.
+func TestExactKeysAreCheckedWhileScanning(t *testing.T) {
+	allowed := []string{"certificate_pem", "label"}
+	check := func(raw []byte, earlier []string) (string, bool) { return exactKey(raw, allowed, earlier) }
+	for body, want := range map[string]bool{
+		`{"label":"a","certificate_pem":"b"}`: true, `{"\u006cabel":"a"}`: true, `{}`: true,
+		`{"Label":"a"}`: false, `{"label":"a","label":"b"}`: false, `{"x":1,"label":"a"}`: false, `{"lab\u0065l":1,"label":2}`: false,
+	} {
+		_, ok := scanKeys([]byte(body), check)
+		assert.Equal(t, want, ok, body)
+	}
+	junk := []byte(`{"` + strings.Repeat("j", 4096) + `":1}`)
+	assert.Zero(t, testing.AllocsPerRun(5, func() { scanKeys(junk, check) }), "a junk key is refused without a copy")
+}
+
+// FuzzTopLevelKeys compares the key scanner with encoding/json's own token walk (Task 17 ledger
+// item): for every valid JSON object within the nesting bound, the scanner reports the same keys in
+// the same order, repeats included. (The scanner may accept some invalid bodies; json.Unmarshal
+// refuses those afterwards.)
+func FuzzTopLevelKeys(f *testing.F) {
+	for _, seed := range []string{`{"label":"a\"b\\","pfx_base64":"x"}`, `{"label":{"private_key_pem":"x","n":[1,{"a":"]"}]},"pfx_password":null}`,
+		`{"label":"x"}`, ` { "label" : ""}" } `, "{\"la\xffbel\":\"x\"}", `{"label":"a","label":"b"}`, `{}`, `[]`, `{"a":1e5,"b":-0.5}`} {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, b []byte) {
+		want, ok := tokenKeys(b)
+		if !ok {
+			return
+		}
+		got, scanned := topLevelKeys(b)
+		require.True(t, scanned, "%q", b)
+		assert.Equal(t, want, got, "%q", b)
+	})
+}
+
+// tokenKeys is the top-level keys of b by encoding/json's decoder, when b is exactly one valid
+// object whose nesting stays within maxJSONDepth.
+func tokenKeys(b []byte) ([]string, bool) {
+	if !json.Valid(b) {
+		return nil, false
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	keys := []string{}
+	depth, deepest, isKey := 0, 0, false
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, false
+		}
+		d, delim := tok.(json.Delim)
+		switch {
+		case delim && (d == '{' || d == '['):
+			if depth == 0 && d != '{' {
+				return nil, false
+			}
+			depth++
+			deepest = max(deepest, depth)
+			isKey = depth == 1
+		case delim:
+			depth--
+			isKey = depth == 1
+		case depth == 0:
+			return nil, false
+		case depth == 1 && isKey:
+			keys = append(keys, tok.(string))
+			isKey = false
+		case depth == 1:
+			isKey = true
+		}
+	}
+	return keys, deepest <= maxJSONDepth
 }

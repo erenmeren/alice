@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -176,10 +177,12 @@ func isTrusted(a netip.Addr, trusted []netip.Prefix) bool {
 // letting one of the values win silently. The body is read into one buffer (readBounded: a single allocation when the length
 // is declared; otherwise every outgrown array is cleared before it is dropped), its top level must
 // be one object whose keys are exactly the documented names, each at most once (encoding/json alone
-// matches keys in any case and lets a repeated key win), checked by topLevelKeys, which allocates
-// the keys only; json.Unmarshal then decodes in place. The buffer is cleared on every path. What
-// cannot be cleared: the strings of dst (Go strings are immutable), the bytes net/http and TLS
-// buffered on the way in, and the copies the service makes.
+// matches keys in any case and lets a repeated key win), checked while the keys are scanned
+// (scanKeys stops at the first key that is not allowed or repeats, and allocates only a key that
+// has an escape in it); json.Unmarshal then decodes in place. The buffer is cleared on every path.
+// What cannot be cleared: the strings of dst (Go strings are immutable), the temporary slice
+// encoding/json makes to unescape each string value with an escape in it (a PEM's \n line breaks
+// included), the bytes net/http and TLS buffered on the way in, and the copies the service makes.
 func (s *server) decodeExact(w http.ResponseWriter, r *http.Request, dst any, limit int64, keys ...string) bool {
 	if r.ContentLength > limit {
 		s.writeError(w, r, ErrBodyTooLarge)
@@ -195,22 +198,40 @@ func (s *server) decodeExact(w http.ResponseWriter, r *http.Request, dst any, li
 		s.writeError(w, r, ErrBadRequest)
 		return false
 	}
-	got, ok := topLevelKeys(buf)
-	if !ok || !exactKeys(got, keys) || json.Unmarshal(buf, dst) != nil {
+	_, ok := scanKeys(buf, func(k []byte, earlier []string) (string, bool) { return exactKey(k, keys, earlier) })
+	if !ok || json.Unmarshal(buf, dst) != nil {
 		s.writeError(w, r, ErrBadRequest)
 		return false
 	}
 	return true
 }
 
-// exactKeys reports whether every key is allowed (exactly) and none repeats.
-func exactKeys(got, allowed []string) bool {
-	for i, k := range got {
-		if !slices.Contains(allowed, k) || slices.Contains(got[:i], k) {
-			return false
+// exactKey reads one raw key (its JSON string, quotes included) and reports it when it is one of
+// allowed, exactly, and not among earlier. A key without an escape is compared as it stands (the
+// allowed keys are plain ASCII), so a junk key is refused without being unescaped or copied.
+func exactKey(raw []byte, allowed, earlier []string) (string, bool) {
+	inner := raw[1 : len(raw)-1]
+	k, found := "", false
+	if bytes.IndexByte(inner, '\\') < 0 {
+		for _, a := range allowed {
+			if a == string(inner) { // compared without a copy
+				k, found = a, true
+				break
+			}
 		}
+	} else {
+		k, found = unescapedKey(raw, allowed)
 	}
-	return true
+	return k, found && !slices.Contains(earlier, k)
+}
+
+// unescapedKey reads a raw key with an escape as encoding/json does and reports it when allowed.
+func unescapedKey(raw []byte, allowed []string) (string, bool) {
+	var k string
+	if json.Unmarshal(raw, &k) != nil || !slices.Contains(allowed, k) {
+		return "", false
+	}
+	return k, true
 }
 
 // errTooLarge: a body is larger than its route allows.
@@ -273,6 +294,16 @@ const maxJSONDepth = 32
 // place without being copied; only the keys are unescaped (json.Unmarshal of the key's bytes, so
 // escapes and invalid UTF-8 read as encoding/json reads them). json.Unmarshal validates the rest.
 func topLevelKeys(b []byte) ([]string, bool) {
+	return scanKeys(b, func(raw []byte, _ []string) (string, bool) {
+		var k string
+		return k, json.Unmarshal(raw, &k) == nil
+	})
+}
+
+// scanKeys is topLevelKeys with key reads the caller decides: key gets each raw key (its JSON
+// string, quotes included) and the keys before it, and returns the key or false to stop the scan
+// (ok=false).
+func scanKeys(b []byte, key func(raw []byte, earlier []string) (string, bool)) ([]string, bool) {
 	i := skipSpace(b, 0)
 	if i >= len(b) || b[i] != '{' {
 		return nil, false
@@ -287,8 +318,8 @@ func topLevelKeys(b []byte) ([]string, bool) {
 		if end < 0 {
 			return nil, false
 		}
-		var k string
-		if json.Unmarshal(b[i:end], &k) != nil {
+		k, ok := key(b[i:end], keys)
+		if !ok {
 			return nil, false
 		}
 		keys = append(keys, k)
