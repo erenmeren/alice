@@ -324,7 +324,8 @@ func TestAuthKeysListUsersAndFiles(t *testing.T) {
 	require.Len(t, deploy, 2)
 	assert.Equal(t, map[string]any{"path": "/home/deploy/.ssh/authorized_keys", "exists": true, "size": float64(31),
 		"sha256": hexOf("ssh-ed25519 AAAA deploy@laptop\n"), "mode": "0600", "owner": owner, "strict_modes_ok": true,
-		"too_large": false, "unsupported": false, "inline": false}, deploy[0])
+		"too_large": false, "unsupported": false, "inline": true,
+		"content_b64": base64.StdEncoding.EncodeToString([]byte("ssh-ed25519 AAAA deploy@laptop\n"))}, deploy[0])
 	assert.Equal(t, "/etc/ssh/keys/deploy", deploy[1]["path"])
 	assert.Equal(t, true, deploy[1]["exists"])
 	assert.Equal(t, "0644", deploy[1]["mode"])
@@ -665,13 +666,21 @@ func TestTooManyUsers(t *testing.T) {
 	assert.Len(t, m["users"], 200)
 }
 
-// Carry 1: every valid account name is reported, and whether the list is complete.
+// Carry 1: every valid account name is reported, and whether the list is complete. AUD-03: an
+// entry whose name is not an account name (the base fixture's "Bad Name") is reported by uid in
+// unlisted and makes the list incomplete.
 func TestAuthKeysListReportsEveryAccountName(t *testing.T) {
 	f := newFixture(t)
 	code, m := f.run("authkeys-list")
 	require.Equal(t, 0, code, "%v", m)
 	assert.Equal(t, []any{"alice-svc", "daemon", "deploy", "ghost", "nobody", "nologin", "root"}, m["accounts"],
 		"sorted; Bad Name and the broken line are not account names")
+	assert.Equal(t, []any{map[string]any{"uid": 1004.0, "reason": "name"}}, m["unlisted"])
+	assert.Equal(t, false, m["accounts_complete"], "Bad Name could not be listed")
+
+	f.write("/etc/passwd", strings.Replace(f.read("/etc/passwd"), "Bad Name:x:1004:1004::/home/deploy:/bin/bash\n", "", 1), 0o644)
+	_, m = f.run("authkeys-list")
+	assert.Equal(t, []any{}, m["unlisted"])
 	assert.Equal(t, true, m["accounts_complete"])
 
 	f.write("/etc/nsswitch.conf", "passwd: files sss\n", 0o644)
@@ -685,6 +694,11 @@ func TestAccountsAreAnEmptyListNotNull(t *testing.T) {
 	_, m := f.run("authkeys-list")
 	assert.Equal(t, []any{}, m["accounts"])
 	assert.Contains(t, f.out.String(), `"accounts":[]`)
+	assert.Contains(t, f.out.String(), `"unlisted":[{"uid":1004,"reason":"name"}]`, "AUD-03")
+	f.write("/etc/passwd", "root:x:0:0:root:/root:/bin/bash\n", 0o644)
+	_, m = f.run("authkeys-list")
+	assert.Contains(t, f.out.String(), `"unlisted":[]`, "never null")
+	assert.Equal(t, true, m["accounts_complete"])
 }
 
 func TestAccountsIncompleteWhenTooMany(t *testing.T) {

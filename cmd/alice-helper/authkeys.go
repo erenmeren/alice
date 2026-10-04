@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -59,6 +60,7 @@ type scanResult struct {
 	owners   map[int]string
 	names    []string // every valid account name (accountNames)
 	namesFit bool     // names holds every account name
+	unlisted []helperproto.UnlistedAccount
 }
 
 func (r *scanResult) warn(code string) {
@@ -98,7 +100,8 @@ func (s *sys) scan(ctx context.Context) (scanResult, error) {
 	if s.directoryUsers() {
 		r.warn(helperproto.WarnDirectoryUsers)
 	}
-	selected, truncated := s.toScan(accts)
+	selected, unlisted, truncated := s.toScan(accts)
+	r.unlisted = unlisted
 	if truncated {
 		r.warn(helperproto.WarnTooManyUsers)
 	}
@@ -300,10 +303,12 @@ func cmdAuthKeysList(ctx context.Context, s *sys, args []string) (any, error) {
 	}
 	resp := helperproto.AuthKeysListResponse{OK: true, Users: []helperproto.UserFiles{}, AuthorizedKeysCommand: r.command, Warnings: r.warnings,
 		Accounts: r.names, AccountsComplete: r.namesFit && !slices.Contains(r.warnings, helperproto.WarnTooManyUsers) &&
-			!slices.Contains(r.warnings, helperproto.WarnDirectoryUsers)}
+			!slices.Contains(r.warnings, helperproto.WarnDirectoryUsers) && len(r.unlisted) == 0,
+		Unlisted: append([]helperproto.UnlistedAccount{}, r.unlisted...)}
 	if resp.Accounts == nil {
 		resp.Accounts = []string{}
 	}
+	inline := helperproto.MaxListInline // AUD-22: raw bytes of file content the answer still carries
 	for _, u := range r.users {
 		uf := helperproto.UserFiles{User: u.acct.name, UID: u.acct.uid, Home: u.acct.home, Files: []helperproto.FileInfo{},
 			SSHDUnreadable: u.unreadable, AuthorizedKeysCommand: u.command}
@@ -312,16 +317,74 @@ func cmdAuthKeysList(ctx context.Context, s *sys, args []string) (any, error) {
 				uf.Files = append(uf.Files, helperproto.FileInfo{Path: it.path, Exists: true, Unsupported: true})
 				continue
 			}
-			uf.Files = append(uf.Files, s.fileInfo(it.c, r.owners))
+			uf.Files = append(uf.Files, s.fileInfo(it.c, r.owners, &inline))
 		}
 		resp.Users = append(resp.Users, uf)
 	}
-	return resp, nil
+	return fitList(resp), nil
 }
 
-// fileInfo describes a candidate without returning its content. Everything comes from one opened
-// descriptor (fstat), never from a second look at the path.
-func (s *sys) fileInfo(c candidate, names map[int]string) helperproto.FileInfo {
+// fitList keeps the whole answer, its newline included, within helperproto.MaxListOutput (S8), so
+// a large but legal configuration never makes Alice's read fail: first files give up their inline
+// content, the last listed first (Alice reads them with authkeys-read; their hash stays); then
+// users are left out from the end (the highest uids), and finally the account names; the answer
+// then says Truncated and the account list is not complete. Every round gives something up, so it
+// ends.
+func fitList(resp helperproto.AuthKeysListResponse) helperproto.AuthKeysListResponse {
+	for {
+		b, err := json.Marshal(resp)
+		if err != nil {
+			return resp // writeJSON answers IO_ERROR for an answer it cannot encode
+		}
+		excess := len(b) + 1 - helperproto.MaxListOutput
+		if excess <= 0 {
+			return resp
+		}
+		if dropInline(&resp, excess) {
+			continue
+		}
+		resp.Truncated, resp.AccountsComplete = true, false
+		if n := len(resp.Users); n > 0 {
+			freed := 0
+			for n > 0 && freed < excess {
+				u, _ := json.Marshal(resp.Users[n-1])
+				freed += len(u) + 1
+				n--
+			}
+			resp.Users = resp.Users[:n]
+			continue
+		}
+		if len(resp.Accounts) == 0 {
+			return resp
+		}
+		resp.Accounts = []string{}
+	}
+}
+
+// dropInline removes the inline content of the last listed files until at least excess bytes of
+// the encoded answer are freed (or none is left); it reports whether it removed any.
+func dropInline(resp *helperproto.AuthKeysListResponse, excess int) bool {
+	freed, dropped := 0, false
+	for i := len(resp.Users) - 1; i >= 0 && freed < excess; i-- {
+		files := resp.Users[i].Files
+		for j := len(files) - 1; j >= 0 && freed < excess; j-- {
+			if !files[j].Inline {
+				continue
+			}
+			// `,"content_b64":"…"` goes; `"inline":true` becomes `"inline":false` (one byte more).
+			freed += len(files[j].ContentB64) + len(`,"content_b64":""`) - 1
+			files[j].Inline, files[j].ContentB64 = false, ""
+			dropped = true
+		}
+	}
+	return dropped
+}
+
+// fileInfo describes a candidate. Everything comes from one opened descriptor (fstat), never from
+// a second look at the path. With inline (protocol 6, AUD-22) the content the helper read for the
+// hash is returned too while it fits the remaining budget *inline: the same descriptor, checks and
+// bytes authkeys-read would use (readCandidate), so it changes no trust decision.
+func (s *sys) fileInfo(c candidate, names map[int]string, inline *int) helperproto.FileInfo {
 	fi := helperproto.FileInfo{Path: c.path}
 	f, parent, err := s.openCandidate(c)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -352,6 +415,10 @@ func (s *sys) fileInfo(c candidate, names map[int]string) helperproto.FileInfo {
 		fi.TooLarge = true
 	} else if data, err := io.ReadAll(io.LimitReader(f, helperproto.MaxAuthorizedKeysSize+1)); err == nil && len(data) <= helperproto.MaxAuthorizedKeysSize {
 		fi.SHA256 = hexSHA(data)
+		if inline != nil && len(data) <= *inline {
+			fi.Inline, fi.ContentB64 = true, base64.StdEncoding.EncodeToString(data)
+			*inline -= len(data)
+		}
 	}
 	fi.StrictModesOK = s.strictModes(c, st)
 	return fi
