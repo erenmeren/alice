@@ -95,7 +95,7 @@ func (h *rnHost) keyOf(cert string) string {
 // accepts its sudoers file, the helper and the sudoers file are root's, and a connection test passes
 // through the real sudo with the nginx profile.
 func (h *rnHost) testSetup(t *testing.T) {
-	for _, v := range []string{nginxBin + " -v 2>&1", "sudo -V | head -1", "ssh -V 2>&1 || rpm -q openssh-server", "openssl version"} {
+	for _, v := range []string{nginxBin + " -v 2>&1", "sudo -V | head -1", "command -v ssh >/dev/null && ssh -V 2>&1 || rpm -q openssh-server", "openssl version"} {
 		_, out := h.exec("sh", "-c", v)
 		t.Logf("%s: %s", h.image, strings.TrimSpace(out))
 	}
