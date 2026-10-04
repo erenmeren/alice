@@ -27,6 +27,16 @@ func TestMapBindingError(t *testing.T) {
 	assert.Equal(t, plain, mapBindingError(plain))
 }
 
+// m5: only the composite key of bindings means "the certificate is not in the vault"; any other
+// foreign key violation is not mislabelled.
+func TestMapBindingErrorByConstraint(t *testing.T) {
+	other := &pgconn.PgError{Code: "23503", ConstraintName: "bindings_created_by_fkey"}
+	got := mapBindingError(other)
+	assert.NotErrorIs(t, got, ErrKVCertificateMissing)
+	assert.ErrorIs(t, got, other, "the database's error stays reachable for the log")
+	assert.ErrorIs(t, mapBindingError(&pgconn.PgError{Code: "23503", ConstraintName: "bindings_vault"}), ErrKVCertificateMissing)
+}
+
 func TestVersionRefusalTable(t *testing.T) {
 	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	cert, row := uuid.New(), uuid.New()

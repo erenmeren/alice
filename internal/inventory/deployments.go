@@ -406,24 +406,31 @@ FROM certificates WHERE id = $1`, id).Scan(&c.id, &c.keyID, &c.fingerprint, &c.a
 // order of discovery, target then location. A location that does not exist or whose target is
 // deleted is ErrNotFound.
 func (s *Service) lockDeployTargets(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) (map[uuid.UUID]Target, map[uuid.UUID]deployLocation, error) {
-	rows, err := tx.Query(ctx, "SELECT DISTINCT target_id FROM certificate_locations WHERE id = ANY($1) ORDER BY target_id", ids)
+	rows, err := tx.Query(ctx, "SELECT DISTINCT ON (target_id) target_id, id FROM certificate_locations WHERE id = ANY($1) ORDER BY target_id, id", ids)
 	if err != nil {
 		return nil, nil, fmt.Errorf("inventory: read the locations' servers: %w", err)
 	}
-	targetIDs, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	type serverOf struct{ target, location uuid.UUID }
+	servers, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (serverOf, error) {
+		var o serverOf
+		return o, r.Scan(&o.target, &o.location)
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("inventory: read the locations' servers: %w", err)
 	}
 	targets := map[uuid.UUID]Target{}
-	for _, id := range targetIDs {
+	for _, sv := range servers {
 		// FOR NO KEY UPDATE: nothing here changes the target's key, and the KEY SHARE locks that
 		// job and deployment rows take on it (their foreign keys) do not conflict with it, so a
 		// request never waits on the sweep's job insert while the sweep waits on its audit lock.
-		t, err := scanTarget(tx.QueryRow(ctx, "SELECT "+targetColumns+" FROM targets WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE", id))
+		t, err := scanTarget(tx.QueryRow(ctx, "SELECT "+targetColumns+" FROM targets WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE", sv.target))
+		if errors.Is(err, ErrNotFound) { // the server was deleted: name a website of it
+			return nil, nil, &LocationRefusalError{LocationID: sv.location, Err: ErrNotFound}
+		}
 		if err != nil {
 			return nil, nil, err
 		}
-		targets[id] = t
+		targets[sv.target] = t
 	}
 	rows, err = tx.Query(ctx, `SELECT id, target_id, cert_path, key_path, cert_file_sha256, key_type, servers, supported, missing_since IS NOT NULL
 FROM certificate_locations WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, ids)

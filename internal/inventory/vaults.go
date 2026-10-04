@@ -837,6 +837,13 @@ func (s *Service) DeleteVault(ctx context.Context, a Actor, id uuid.UUID, remove
 		if len(bindings) > 0 && !removeBindings {
 			return ErrVaultHasBindings
 		}
+		if len(bindings) > 0 {
+			// Every website of every binding is locked before the first audit row is appended: a request
+			// takes website locks and then the audit chain's, so this order cannot deadlock with it.
+			if _, err := tx.Exec(ctx, "SELECT 1 FROM certificate_locations WHERE binding_id = ANY($1) ORDER BY id FOR NO KEY UPDATE", bindings); err != nil {
+				return fmt.Errorf("inventory: lock the connected websites: %w", err)
+			}
+		}
 		now := s.clock.Now().UTC()
 		for _, b := range bindings {
 			if err := s.releaseBindingTx(ctx, tx, a, b, now, map[string]string{"vault_url": cur.Vault.URL, "reason": "vault_deleted"}); err != nil {

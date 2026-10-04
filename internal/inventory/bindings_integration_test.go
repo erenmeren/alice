@@ -805,14 +805,14 @@ func TestReleaseHeldVersion(t *testing.T) {
 	deploymentsBefore := h.count("SELECT count(*) FROM deployments")
 
 	// Not held: nothing to release.
-	_, err := h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VersionID: v1})
+	_, err := h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VaultID: b.vault, KVCertificateID: b.web, VersionID: v1})
 	assert.ErrorIs(t, err, inventory.ErrVersionNotHeld)
-	_, err = h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VersionID: uuid.New()})
+	_, err = h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VaultID: b.vault, KVCertificateID: b.web, VersionID: uuid.New()})
 	assert.ErrorIs(t, err, inventory.ErrNotFound)
 
 	// A held version is released by an Administrator only (S8); the Operator is refused and audited.
 	hold("license")
-	_, err = h.svc.ReleaseVersion(ctx, b.operator, inventory.ReleaseInput{VersionID: v1})
+	_, err = h.svc.ReleaseVersion(ctx, b.operator, inventory.ReleaseInput{VaultID: b.vault, KVCertificateID: b.web, VersionID: v1})
 	assert.ErrorIs(t, err, inventory.ErrHeldNeedsAdmin)
 	assert.Equal(t, 1, h.count("SELECT count(*) FROM kv_certificate_versions WHERE id = $1 AND held", v1))
 	d := h.auditDetails("kv.version.release_denied")
@@ -822,12 +822,12 @@ func TestReleaseHeldVersion(t *testing.T) {
 	// while the license still refuses changes).
 	h.clock.Advance(40 * 24 * time.Hour)
 	require.NoError(t, h.lic.Tick(ctx))
-	_, err = h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VersionID: v1})
+	_, err = h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VaultID: b.vault, KVCertificateID: b.web, VersionID: v1})
 	assert.ErrorIs(t, err, license.ErrLocked)
 	h.installLicense("LIC-REL", 5, 365)
 	require.NoError(t, h.lic.Allow(license.ClassChange))
 
-	got, err := h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VersionID: v1})
+	got, err := h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VaultID: b.vault, KVCertificateID: b.web, VersionID: v1})
 	require.NoError(t, err)
 	assert.False(t, got.Held)
 	assert.Empty(t, got.HeldReason)
@@ -847,12 +847,12 @@ func TestReleaseHeldVersion(t *testing.T) {
 
 	// An incomplete chain: the Administrator's confirmation (F-17) is not relaxed.
 	hold("incomplete_chain")
-	_, err = h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VersionID: v1})
+	_, err = h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VaultID: b.vault, KVCertificateID: b.web, VersionID: v1})
 	assert.ErrorIs(t, err, inventory.ErrChainUnconfirmed)
 	assert.Equal(t, 1, h.count("SELECT count(*) FROM kv_certificate_versions WHERE id = $1 AND held_reason = 'incomplete_chain'", v1))
-	_, err = h.svc.ReleaseVersion(ctx, b.operator, inventory.ReleaseInput{VersionID: v1, ConfirmIncompleteChain: true})
+	_, err = h.svc.ReleaseVersion(ctx, b.operator, inventory.ReleaseInput{VaultID: b.vault, KVCertificateID: b.web, VersionID: v1, ConfirmIncompleteChain: true})
 	assert.ErrorIs(t, err, inventory.ErrHeldNeedsAdmin, "an Operator's confirmation counts for nothing")
-	_, err = h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VersionID: v1, ConfirmIncompleteChain: true})
+	_, err = h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VaultID: b.vault, KVCertificateID: b.web, VersionID: v1, ConfirmIncompleteChain: true})
 	require.NoError(t, err)
 	ev = h.auditDetails("kv.version.released")
 	require.Len(t, ev, 2)
@@ -862,7 +862,7 @@ func TestReleaseHeldVersion(t *testing.T) {
 	// A deleted vault's version.
 	hold("license")
 	require.NoError(t, h.svc.DeleteVault(ctx, b.admin, b.vault, true))
-	_, err = h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VersionID: v1})
+	_, err = h.svc.ReleaseVersion(ctx, b.admin, inventory.ReleaseInput{VaultID: b.vault, KVCertificateID: b.web, VersionID: v1})
 	assert.ErrorIs(t, err, inventory.ErrNotFound)
 }
 
@@ -923,15 +923,23 @@ func TestHeldVersionIsFencedAndTolerantOfADeletedVault(t *testing.T) {
 		return reqs[0].ID
 	}
 	held := func() int { return h.count("SELECT count(*) FROM kv_certificate_versions WHERE id = $1 AND held", v1) }
+	_, err := h.svc.SetAutoDeploy(ctx, b.admin, bind.ID, bind.Version, true)
+	require.NoError(t, err)
 
 	id := auto()
 	_, secret := pemSecret(leafOnly)
 	claimed := inventory.WithClaim(ctx, inventory.Claim{JobID: uuid.New(), Attempt: 1})
-	_, err := h.svc.KVDeployMaterial(claimed, id, secret)
+	_, err = h.svc.KVDeployMaterial(claimed, id, secret)
 	assert.ErrorIs(t, err, inventory.ErrClaimLost)
 	assert.Zero(t, held(), "a run that lost its job holds nothing")
 
-	require.NoError(t, h.svc.DeleteVault(ctx, b.admin, b.vault, true))
+	// The vault is deleted while the secret is being judged (after the pre-read check passed).
+	restore := inventory.SetKVMaterialHook(func(stage string, _ []byte) {
+		if stage == "der" {
+			b.exec("UPDATE targets SET deleted_at = now() WHERE id = $1", b.vault)
+		}
+	})
+	defer restore()
 	_, secret = pemSecret(leafOnly)
 	_, err = h.svc.KVDeployMaterial(ctx, id, secret)
 	assert.ErrorIs(t, err, inventory.ErrChainUnconfirmed, "the deployment still ends with the closed refusal")

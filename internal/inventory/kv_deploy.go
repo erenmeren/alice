@@ -113,9 +113,16 @@ func (s *Service) RequestKVDeployment(ctx context.Context, a Actor, in KVDeployI
 	)
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		out, denial = nil, nil
-		_, b, err := lockBinding(ctx, tx, in.BindingID)
+		vault, b, err := lockBinding(ctx, tx, in.BindingID)
 		if err != nil {
 			return err
+		}
+		var vaultStatus string
+		if err := tx.QueryRow(ctx, "SELECT status FROM targets WHERE id = $1", vault.id).Scan(&vaultStatus); err != nil {
+			return fmt.Errorf("inventory: read the vault's status: %w", err)
+		}
+		if vaultStatus == StatusDisabled {
+			return denyWith(&denial, "vault_disabled", uuid.Nil, ErrVaultUnavailable)
 		}
 		c, err := kvCertificateOf(ctx, tx, b.certificate)
 		if err != nil {
@@ -174,7 +181,9 @@ FROM kv_certificate_versions WHERE id = $1 FOR SHARE`, in.VersionID).Scan(&v.cer
 			}
 		}
 		src := deploySource{Trigger: "manual", BindingID: &in.BindingID, KVVersionID: &in.VersionID, Version: v.version,
-			Confirmed: in.ConfirmIncompleteChain && a.Role == rbac.Admin}
+			// The confirmation is kept only while the chain is not known to be complete (as Phase 4 does): the
+			// leaf's row holds the chain of the last secret read, or the leaf alone before the first one.
+			Confirmed: in.ConfirmIncompleteChain && a.Role == rbac.Admin && !leaf.chainComplete}
 		for _, id := range ids {
 			r, err := s.insertDeployment(ctx, tx, a, leaf, locs[id], src, now)
 			if errors.Is(err, ErrDeploymentInProgress) {
@@ -196,8 +205,9 @@ FROM kv_certificate_versions WHERE id = $1 FOR SHARE`, in.VersionID).Scan(&v.cer
 // ReleaseInput names a held version. ConfirmIncompleteChain is the Administrator's confirmation (F-17)
 // that a version held for its incomplete chain may be deployed automatically.
 type ReleaseInput struct {
-	VersionID              uuid.UUID
-	ConfirmIncompleteChain bool
+	VaultID, KVCertificateID uuid.UUID // the version must belong to this certificate of this vault
+	VersionID                uuid.UUID
+	ConfirmIncompleteChain   bool
 }
 
 // ReleaseVersion lifts the hold of a version (spec §11.6 item 8): held and held_reason are cleared together.
@@ -211,7 +221,22 @@ type ReleaseInput struct {
 // secret is read. Audited kv.version.released (who, which version, which reason was released); a
 // refusal that is a matter of authority, the lock or the confirmation is audited kv.version.release_denied.
 func (s *Service) ReleaseVersion(ctx context.Context, a Actor, in ReleaseInput) (KVVersion, error) {
-	kv := func() map[string]string { return map[string]string{"version_id": in.VersionID.String()} }
+	var errs validate.Errors
+	if in.VaultID == uuid.Nil {
+		errs.Add("vault_id", validate.Required, nil)
+	}
+	if in.KVCertificateID == uuid.Nil {
+		errs.Add("kv_certificate_id", validate.Required, nil)
+	}
+	if in.VersionID == uuid.Nil {
+		errs.Add("version_id", validate.Required, nil)
+	}
+	if len(errs) > 0 {
+		return KVVersion{}, errs
+	}
+	kv := func() map[string]string {
+		return map[string]string{"version_id": in.VersionID.String(), "kv_certificate_id": in.KVCertificateID.String()}
+	}
 	deny := func(reason string, err error) (KVVersion, error) {
 		s.auditBindingDenial(ctx, a, "kv.version.release_denied", "kv_certificate_version", in.VersionID, denialDetails(bindingDenial{reason: reason}, kv()))
 		return KVVersion{}, err
@@ -240,6 +265,9 @@ func (s *Service) ReleaseVersion(ctx context.Context, a Actor, in ReleaseInput) 
 		if err != nil {
 			return err
 		}
+		if cert != in.KVCertificateID || vaultID != in.VaultID { // the route named another certificate or vault
+			return ErrNotFound
+		}
 		if _, err := lockVault(ctx, tx, vaultID); err != nil {
 			return err
 		}
@@ -265,8 +293,8 @@ JOIN kv_certificates kc ON kc.id = v.kv_certificate_id WHERE v.id = $1 FOR UPDAT
 		if reason == heldIncompleteChain {
 			details["confirm_incomplete_chain"] = "true"
 		}
-		if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "kv.version.released", ObjectType: "kv_certificate",
-			ObjectID: cert.String(), Result: audit.Success, Details: details}); err != nil {
+		if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "kv.version.released", ObjectType: "kv_certificate_version",
+			ObjectID: in.VersionID.String(), Result: audit.Success, Details: details}); err != nil {
 			return err
 		}
 		out, err = readKVVersion(ctx, tx, in.VersionID)

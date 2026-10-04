@@ -136,3 +136,10 @@ func SetKVBatchHook(f func(kind string, batch int)) (restore func()) {
 
 // MaxPFXDecodes is how many PFX files the process decodes at once.
 func MaxPFXDecodes() int { return maxPFXDecodes }
+
+// SetKVMaterialHook installs the observer of KVDeployMaterial's buffers and returns its restore.
+func SetKVMaterialHook(f func(stage string, b []byte)) (restore func()) {
+	old := kvMaterialHook
+	kvMaterialHook = f
+	return func() { kvMaterialHook = old }
+}

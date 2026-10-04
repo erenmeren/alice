@@ -4,7 +4,6 @@ package inventory_test
 
 import (
 	"encoding/base64"
-	"errors"
 	"testing"
 	"time"
 
@@ -281,7 +280,7 @@ func TestKVDeployMaterial(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, allZero(raw), "the secret's value is zeroed")
 	assert.Equal(t, string(b.webLeaf.FullchainPEM), string(m.CertificatePEM), "leaf + intermediate, the root dropped")
-	assert.Equal(t, string(b.webLeaf.KeyPEM), string(m.PrivateKeyPEM.Bytes()))
+	assert.True(t, string(b.webLeaf.KeyPEM) == string(m.PrivateKeyPEM.Bytes()))
 	assert.Equal(t, 2, m.NewChainLength)
 	assert.Equal(t, sha(m.CertificatePEM), m.NewCertSHA256)
 	assert.Equal(t, fp, m.Fingerprint)
@@ -312,27 +311,32 @@ func TestKVDeployMaterial(t *testing.T) {
 
 	// Refusals; each zeroes the secret and writes nothing.
 	reads := h.audits("kv.secret_read")
-	check := func(what string, want error, id uuid.UUID, ct string, text string) {
+	check := func(what string, want error, reason string, id uuid.UUID, ct string, text string) {
 		t.Helper()
 		raw := []byte(text)
 		_, err := h.svc.KVDeployMaterial(ctx, id, providers.CertificateSecret{ContentType: ct, Value: providers.NewSecret(raw)})
 		assert.ErrorIs(t, err, want, what)
 		assert.True(t, allZero(raw), "%s: zeroed", what)
-		assert.Equal(t, reads, h.audits("kv.secret_read"), "%s: no audit row", what)
+		// The secret reached Alice's memory: the read is audited as a failure with the closed reason (R40 row 34).
+		reads++
+		assert.Equal(t, reads, h.audits("kv.secret_read"), "%s: an audit row", what)
+		last := h.auditDetails("kv.secret_read")
+		assert.Equal(t, reason, last[len(last)-1]["reason"], what)
+		assert.Equal(t, "deploy", last[len(last)-1]["purpose"], what)
 	}
 	otherLeaf := b.issue("web.example.test", pki.ECDSA256)
-	check("another leaf", inventory.ErrSecretMismatch, dep[b.loc3], certs.ContentTypePEM, string(otherLeaf.KeyPEM)+string(otherLeaf.FullchainPEM))
-	check("a key that does not match", inventory.ErrSecretUnreadable, dep[b.loc3], certs.ContentTypePEM,
+	check("another leaf", inventory.ErrSecretMismatch, "secret_mismatch", dep[b.loc3], certs.ContentTypePEM, string(otherLeaf.KeyPEM)+string(otherLeaf.FullchainPEM))
+	check("a key that does not match", inventory.ErrSecretUnreadable, "secret_unreadable", dep[b.loc3], certs.ContentTypePEM,
 		string(otherLeaf.KeyPEM)+string(b.webLeaf.FullchainPEM))
-	check("plain text", inventory.ErrSecretUnreadable, dep[b.loc3], "text/plain", "hello")
-	check("a certificate without its key", inventory.ErrSecretUnreadable, dep[b.loc3], certs.ContentTypePEM, string(b.webLeaf.FullchainPEM))
-	check("garbage PFX", inventory.ErrSecretUnreadable, dep[b.loc3], certs.ContentTypePKCS12, "!!!")
+	check("plain text", inventory.ErrSecretUnreadable, "secret_unreadable", dep[b.loc3], "text/plain", "hello")
+	check("a certificate without its key", inventory.ErrSecretUnreadable, "secret_unreadable", dep[b.loc3], certs.ContentTypePEM, string(b.webLeaf.FullchainPEM))
+	check("garbage PFX", inventory.ErrSecretUnreadable, "secret_unreadable", dep[b.loc3], certs.ContentTypePKCS12, "!!!")
 	rsaLeaf := b.issue("web.example.test", pki.RSA2048)
-	check("another key type, another leaf", inventory.ErrSecretMismatch, dep[b.loc3], certs.ContentTypePEM, string(rsaLeaf.KeyPEM)+string(rsaLeaf.FullchainPEM))
+	check("another key type, another leaf", inventory.ErrSecretMismatch, "secret_mismatch", dep[b.loc3], certs.ContentTypePEM, string(rsaLeaf.KeyPEM)+string(rsaLeaf.FullchainPEM))
 
 	release, ok := inventory.HoldPFXSlots(inventory.MaxPFXDecodes())
 	require.True(t, ok)
-	check("both PFX slots taken", inventory.ErrPFXBusy, dep[b.loc3], certs.ContentTypePKCS12, string(base64.StdEncoding.EncodeToString(pki.PFX(b.webLeaf, b.ca, ""))))
+	check("both PFX slots taken", inventory.ErrPFXBusy, "pfx_busy", dep[b.loc3], certs.ContentTypePKCS12, string(base64.StdEncoding.EncodeToString(pki.PFX(b.webLeaf, b.ca, ""))))
 	release()
 
 	claimed := inventory.WithClaim(ctx, inventory.Claim{JobID: uuid.New(), Attempt: 1})
@@ -425,7 +429,8 @@ func TestKVDeployMaterialIncompleteChain(t *testing.T) {
 	assert.True(t, allZero(raw))
 	now, _ := b.certPEM(fp)
 	assert.Equal(t, pemBefore, now)
-	assert.Zero(t, h.audits("kv.secret_read"))
+	assert.Equal(t, 1, h.secretReads("failure"), "the refused read is audited")
+	assert.Zero(t, h.secretReads("success"))
 	assert.Zero(t, h.count("SELECT count(*) FROM kv_certificate_versions WHERE held"))
 
 	// An Operator's confirmation counts for nothing (the request records it only for an Administrator).
@@ -445,7 +450,7 @@ func TestKVDeployMaterialIncompleteChain(t *testing.T) {
 	assert.Equal(t, 1, m.NewChainLength)
 	m.PrivateKeyPEM.Zero()
 	assert.False(t, b.certRowChainComplete(fp))
-	assert.Equal(t, 1, h.audits("kv.secret_read"))
+	assert.Equal(t, 1, h.secretReads("success"))
 
 	// An automatic deployment (the planner's trigger) never proceeds: the version is held until an
 	// Administrator deploys or releases it; a hold of another reason is kept (the first reason wins).
@@ -459,6 +464,10 @@ func TestKVDeployMaterialIncompleteChain(t *testing.T) {
 		require.NoError(t, err)
 		return reqs[0].ID
 	}
+	cur, err := h.svc.Binding(ctx, bind.ID)
+	require.NoError(t, err)
+	_, err = h.svc.SetAutoDeploy(ctx, b.admin, bind.ID, cur.Version, true)
+	require.NoError(t, err)
 	autoID := auto()
 	_, secret = pemSecret(leafOnly)
 	_, err = h.svc.KVDeployMaterial(ctx, autoID, secret)
@@ -473,13 +482,27 @@ func TestKVDeployMaterialIncompleteChain(t *testing.T) {
 	assert.Equal(t, map[string]string{"kv_certificate_id": b.web.String(), "certificate_name": "web-cert", "version": ver(1),
 		"reason": "incomplete_chain", "held": "true", "deployment_id": autoID.String()}, ev[0])
 	b.finishQueued(inventory.RequestedDeployment{ID: autoID})
-	b.exec("UPDATE kv_certificate_versions SET held_reason = 'license' WHERE id = $1", v1)
+	// A version that is held already is refused before anything is read.
 	autoID = auto()
+	reads := h.audits("kv.secret_read")
+	_, secret = pemSecret(leafOnly)
+	_, err = h.svc.KVDeployMaterial(ctx, autoID, secret)
+	assert.ErrorIs(t, err, inventory.ErrVersionHeld)
+	assert.Equal(t, reads, h.audits("kv.secret_read"))
+	b.finishQueued(inventory.RequestedDeployment{ID: autoID})
+	// A hold of another reason that appears while the secret is being judged is kept: the first reason wins.
+	b.exec("UPDATE kv_certificate_versions SET held = false, held_reason = '' WHERE id = $1", v1)
+	autoID = auto()
+	restore := inventory.SetKVMaterialHook(func(stage string, _ []byte) {
+		if stage == "der" {
+			b.exec("UPDATE kv_certificate_versions SET held = true, held_reason = 'license' WHERE id = $1", v1)
+		}
+	})
+	defer restore()
 	_, secret = pemSecret(leafOnly)
 	_, err = h.svc.KVDeployMaterial(ctx, autoID, secret)
 	assert.ErrorIs(t, err, inventory.ErrChainUnconfirmed)
 	require.NoError(t, h.db.Owner.QueryRow(ctx, "SELECT held_reason FROM kv_certificate_versions WHERE id = $1", v1).Scan(&reason))
 	assert.Equal(t, "license", reason, "the first reason wins")
 	assert.Len(t, h.auditDetails("kv.version.held"), 1)
-	assert.True(t, errors.Is(err, inventory.ErrChainUnconfirmed))
 }

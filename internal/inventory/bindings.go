@@ -147,8 +147,10 @@ func mapBindingError(err error) error {
 		switch {
 		case pgErr.Code == "23505" && pgErr.ConstraintName == "bindings_one_live":
 			return ErrBindingExists
-		case pgErr.Code == "23503":
+		case pgErr.Code == "23503" && pgErr.ConstraintName == "bindings_vault":
 			return ErrKVCertificateMissing
+		case pgErr.Code == "23503": // another foreign key (a user, a website): not "the certificate is not in the vault"
+			return fmt.Errorf("inventory: the database refused the binding: %w", err)
 		}
 	}
 	return err
@@ -504,6 +506,10 @@ func (s *Service) UpdateBindingLocations(ctx context.Context, a Actor, id uuid.U
 			}
 		}
 		if len(removed) > 0 {
+			// Row locks in id order, like every other writer of websites.
+			if _, err := tx.Exec(ctx, "SELECT 1 FROM certificate_locations WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE", removed); err != nil {
+				return fmt.Errorf("inventory: lock the websites to release: %w", err)
+			}
 			if _, err := tx.Exec(ctx, "UPDATE certificate_locations SET binding_id = NULL WHERE id = ANY($1) AND binding_id = $2", removed, id); err != nil {
 				return fmt.Errorf("inventory: release the websites: %w", err)
 			}

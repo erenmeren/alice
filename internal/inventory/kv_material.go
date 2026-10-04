@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -37,8 +38,10 @@ const WarnChainIncomplete = "chain_incomplete"
 // material of its first send: the chain as the vault delivered it without a self-signed root, and the
 // key as PEM, only in memory (the caller zeroes Material.PrivateKeyPEM). secret.Value is zeroed on
 // every path. The deployment must be queued or in its pre-check (ErrDeploymentState otherwise: after
-// the first send nothing is read again) and from a vault (ErrDeploymentState). Refusals, none of which
-// writes anything: ErrPFXBusy (retryable: the PFX decode slots are taken); ErrSecretUnreadable (not a
+// the first send nothing is read again) and from a vault (ErrDeploymentState). KVDeployPrecheck runs
+// first: its refusals read, write and audit nothing. After it, a refusal does not change the database
+// except for a failure row of kv.secret_read (closed reason secret_mismatch, secret_unreadable, expired,
+// chain_unconfirmed or pfx_busy; not written by a run that lost its claim): ErrPFXBusy (retryable: the PFX decode slots are taken); ErrSecretUnreadable (not a
 // certificate with a matching key in a known container, or too large); ErrCertificateExpired (the
 // secret's leaf expired); ErrSecretMismatch (another leaf, thumbprint or key type than the recorded
 // version); ErrChainUnconfirmed (the chain is incomplete and an Administrator did not confirm it when
@@ -59,21 +62,36 @@ func (s *Service) KVDeployMaterial(ctx context.Context, id uuid.UUID, secret pro
 	if m.KV == nil || m.Recorded {
 		return Material{}, ErrDeploymentState
 	}
+	// Whatever the request relied on is judged again before the secret is looked at (C1, I1): a
+	// refusal here reads nothing, writes nothing and audits nothing.
+	if err := s.KVDeployPrecheck(ctx, id); err != nil {
+		return Material{}, err
+	}
+	// From here on the vault's secret is in Alice's memory: a refusal is audited (R40 row 34).
+	refuse := func(reason string, err error) (Material, error) {
+		if aerr := s.auditSecretReadFailure(ctx, m, reason); aerr != nil {
+			return Material{}, aerr
+		}
+		return Material{}, err
+	}
 	release, ok := acquirePFXSlot()
 	if !ok {
-		return Material{}, ErrPFXBusy
+		return refuse("pfx_busy", ErrPFXBusy)
 	}
 	v, err := s.parseKVSecret(secret)
 	release()
 	if err != nil {
 		if errors.Is(err, certs.ErrExpired) {
-			return Material{}, ErrCertificateExpired
+			return refuse("expired", ErrCertificateExpired)
 		}
-		return Material{}, ErrSecretUnreadable
+		return refuse("secret_unreadable", ErrSecretUnreadable)
 	}
 	defer v.PrivateKeyDER.Zero()
+	if kvMaterialHook != nil {
+		kvMaterialHook("der", v.PrivateKeyDER.Bytes())
+	}
 	if v.Fingerprint != m.Fingerprint || azureid.ThumbprintOf(v.Leaf.Raw) != m.KV.Thumbprint || v.Algorithm != m.KeyType {
-		return Material{}, ErrSecretMismatch
+		return refuse("secret_mismatch", ErrSecretMismatch)
 	}
 	if !v.ChainComplete && !m.Deployment.ConfirmIncompleteChain {
 		if m.Deployment.Trigger == triggerKVRenewal {
@@ -81,17 +99,25 @@ func (s *Service) KVDeployMaterial(ctx context.Context, id uuid.UUID, secret pro
 				return Material{}, err
 			}
 		}
-		return Material{}, ErrChainUnconfirmed
+		return refuse("chain_unconfirmed", ErrChainUnconfirmed)
 	}
 	if len(v.PEMChain) > maxPEMChain {
-		return Material{}, ErrSecretUnreadable
+		return refuse("secret_unreadable", ErrSecretUnreadable)
 	}
 	key, err := certs.KeyPEM(v.PrivateKeyDER)
 	if err != nil {
-		return Material{}, ErrSecretUnreadable
+		return refuse("secret_unreadable", ErrSecretUnreadable)
+	}
+	handedOut := false
+	defer func() {
+		if !handedOut { // an error, or a panic: the key PEM never leaves
+			key.Zero()
+		}
+	}()
+	if kvMaterialHook != nil {
+		kvMaterialHook("pem", key.Bytes())
 	}
 	if err := s.recordSecretRead(ctx, m, v); err != nil {
-		key.Zero()
 		return Material{}, err
 	}
 	m.CertificatePEM = []byte(v.PEMChain)
@@ -101,7 +127,94 @@ func (s *Service) KVDeployMaterial(ctx context.Context, id uuid.UUID, secret pro
 	if !v.ChainComplete {
 		m.Warnings = append(m.Warnings, WarnChainIncomplete)
 	}
+	handedOut = true
 	return m, nil
+}
+
+// kvMaterialHook observes the buffers KVDeployMaterial wipes: "der" (the decoded key, right after the
+// secret was decoded; runs before the comparison with the recorded version) and "pem" (the key PEM
+// that is handed to the caller on success). Tests only: it is nil in production.
+var kvMaterialHook func(stage string, b []byte)
+
+// KVDeployPrecheck judges, without reading the vault, whether the deployment may still have its secret
+// read and its key handed out. The engine calls it before it reads the secret (so no key reaches memory
+// and no sibling of a wave reads in vain); KVDeployMaterial calls it again as its own first step.
+// Nothing is written. Refusals, in this order: ErrNotFound (no such deployment); ErrDeploymentState (not a
+// Key Vault deployment); ErrBindingGone (the binding was removed, or the website no longer belongs to
+// it); ErrAutoDeployOff (an automatic deployment of a binding whose automatic deployment is off);
+// ErrVaultUnavailable (vault disabled or deleted); ErrKVCertificateMissing; ErrVersionDisabled;
+// ErrCertificateExpired and ErrCertificateNotYetValid (as far as the stored rows know); and
+// ErrVersionHeld: an automatic deployment never deploys a held version, a manual one only when the user
+// who requested it is still an enabled Administrator (the request recorded who asked: an Operator can
+// request only a version that was not held, so a hold that came later stops it).
+func (s *Service) KVDeployPrecheck(ctx context.Context, id uuid.UUID) error {
+	var (
+		trigger                           string
+		binding, locBinding               *uuid.UUID
+		bindingLive, auto, vaultDeleted   bool
+		certMissing, enabled, held, admin bool
+		vaultStatus                       string
+		vExpires, vNotBefore              *time.Time
+		cNotBefore, cNotAfter             time.Time
+	)
+	err := s.pool.QueryRow(ctx, `SELECT d.trigger, d.binding_id, l.binding_id, b.id IS NOT NULL AND b.deleted_at IS NULL, coalesce(b.auto_deploy, false),
+    vt.status, vt.deleted_at IS NOT NULL, kc.missing_since IS NOT NULL, v.enabled, v.expires, v.not_before, v.held,
+    c.not_before, c.not_after, coalesce(u.role = 'admin' AND u.disabled_at IS NULL, false)
+FROM deployments d
+JOIN kv_certificate_versions v ON v.id = d.kv_version_id
+JOIN kv_certificates kc ON kc.id = v.kv_certificate_id
+JOIN targets vt ON vt.id = kc.target_id
+JOIN certificate_locations l ON l.id = d.location_id
+JOIN certificates c ON c.id = d.certificate_id
+LEFT JOIN bindings b ON b.id = d.binding_id
+LEFT JOIN users u ON u.id = d.requested_by
+WHERE d.id = $1`, id).Scan(&trigger, &binding, &locBinding, &bindingLive, &auto, &vaultStatus, &vaultDeleted, &certMissing, &enabled,
+		&vExpires, &vNotBefore, &held, &cNotBefore, &cNotAfter, &admin)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var one int
+		if e := s.pool.QueryRow(ctx, "SELECT 1 FROM deployments WHERE id = $1", id).Scan(&one); e == nil {
+			return ErrDeploymentState // a deployment without a vault version
+		}
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("inventory: judge the deployment's vault source: %w", err)
+	}
+	now := s.clock.Now().UTC()
+	switch {
+	case binding == nil || !bindingLive || locBinding == nil || *locBinding != *binding:
+		return ErrBindingGone
+	case trigger == triggerKVRenewal && !auto:
+		return ErrAutoDeployOff
+	case vaultDeleted || vaultStatus == StatusDisabled:
+		return ErrVaultUnavailable
+	case certMissing:
+		return ErrKVCertificateMissing
+	case !enabled:
+		return ErrVersionDisabled
+	case !now.Before(cNotAfter) || (vExpires != nil && !now.Before(*vExpires)):
+		return ErrCertificateExpired
+	case now.Before(cNotBefore) || (vNotBefore != nil && now.Before(*vNotBefore)):
+		return ErrCertificateNotYetValid
+	case held && (trigger == triggerKVRenewal || !admin):
+		return ErrVersionHeld
+	}
+	return nil
+}
+
+// auditSecretReadFailure audits a read of the vault's secret that ended in a refusal: result failure
+// and the closed reason, fenced to the job's claim (a run that lost its job writes nothing and gets
+// ErrClaimLost).
+func (s *Service) auditSecretReadFailure(ctx context.Context, m Material, reason string) error {
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := checkClaim(ctx, tx); err != nil {
+			return err
+		}
+		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "kv.secret_read", ObjectType: "deployment", ObjectID: m.Deployment.ID.String(),
+			Result: audit.Failure, Details: map[string]string{"purpose": "deploy", "deployment_id": m.Deployment.ID.String(),
+				"kv_certificate_id": m.KV.KVCertificateID.String(), "certificate_name": m.KV.Name, "version": m.KV.Version, "reason": reason}})
+		return err
+	})
 }
 
 // triggerKVRenewal is the trigger of a deployment the planner created (migration 00006).

@@ -20,7 +20,8 @@ import (
 // listed too: readiness is checked by every deployment.
 
 // LocationFilter selects deployable locations. KeyType is "", "rsa" or "ecdsa" (the key type of the
-// certificate the location holds; locations of an unknown type match "" only); Unbound hides the
+// certificate the location holds; a location of an unknown type fits every certificate, as binding and
+// deploying judge it, and is listed under every key type); Unbound hides the
 // websites that already belong to a binding; Query is a case-insensitive substring of the server's
 // name, the certificate path or a server name of the location (% and _ are literal); Limit is
 // 1..200 (0 = 50).
@@ -124,7 +125,7 @@ JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL AND t.type = 'ngin
 WHERE l.supported AND l.missing_since IS NULL
   AND length(l.cert_path) <= 4096 AND length(l.key_path) <= 4096
   AND l.cert_path COLLATE "C" ~ $1 AND l.key_path COLLATE "C" ~ $1
-  AND ($2 = '' OR l.key_type = $2)
+  AND ($2 = '' OR l.key_type = $2 OR l.key_type = '')
   AND (NOT $3 OR l.binding_id IS NULL)
   AND ($4 = '' OR lower(t.name::text COLLATE "C") LIKE $4 ESCAPE '\'
        OR lower(l.cert_path COLLATE "C") LIKE $4 ESCAPE '\'

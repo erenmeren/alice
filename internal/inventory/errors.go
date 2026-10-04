@@ -164,3 +164,18 @@ var (
 	// leaf, thumbprint or key type).
 	ErrSecretMismatch = errors.New("inventory: the vault secret is not the recorded version")
 )
+
+// Errors of the material step of a Key Vault deployment (Task 12 review fixes): the state the
+// deployment was requested in no longer holds, so no secret is read and no key is handed out. None
+// writes anything; the engine ends the deployment with the matching closed reason.
+var (
+	// ErrBindingGone: the deployment's binding was removed, or its website no longer belongs to it.
+	ErrBindingGone = errors.New("inventory: the website is no longer connected to the deployment's binding")
+	// ErrAutoDeployOff: an automatic deployment of a binding whose automatic deployment was switched off.
+	ErrAutoDeployOff = errors.New("inventory: automatic deployment of the binding is switched off")
+	// ErrVersionHeld: the version is held (an automatic deployment never deploys it; a manual one only
+	// when an Administrator asked for it).
+	ErrVersionHeld = errors.New("inventory: the version is held")
+	// ErrVaultUnavailable: the vault is disabled or deleted.
+	ErrVaultUnavailable = errors.New("inventory: the vault is disabled or deleted")
+)
