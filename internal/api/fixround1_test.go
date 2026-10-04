@@ -60,6 +60,9 @@ func TestProviderParamsApplyValueRulesToEveryKey(t *testing.T) {
 func TestStepReasonMustBeRegistered(t *testing.T) {
 	assert.Equal(t, map[string]string{"reason": "deployment.verify_failed"}, stepParams(map[string]string{"reason": "deployment.verify_failed"}))
 	assert.Empty(t, stepParams(map[string]string{"reason": "deployment.made_up"}))
+	op := "0190f3a2-7b1c-7d4e-8f00-1234567890ab"
+	assert.Equal(t, map[string]string{"operation_id": op}, stepParams(map[string]string{"operation_id": op}))
+	assert.Empty(t, stepParams(map[string]string{"operation_id": "../etc/passwd"}))
 }
 
 // countingBody records how many bytes a handler read.

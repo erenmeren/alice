@@ -267,11 +267,13 @@ var (
 	verifiedValues = []string{"", "remote", "local", "skipped"}
 )
 
-// stepParamRules are the step params the API shows (inventory keeps error, port, mode, served and
-// reason) with their value rule: an error class, a port, a verification mode, a served leaf's
-// fingerprint and a verification reason code. Any other key or value is dropped.
+// stepParamRules are the step params the API shows (inventory keeps error, port, mode, served,
+// reason and operation_id) with their value rule: an error class, a port, a verification mode, a
+// served leaf's fingerprint, a verification reason code and the unfinished earlier change a
+// recover_pending step put back. Any other key or value is dropped.
 var stepParamRules = map[string]*regexp.Regexp{
 	"error": codeValueRE, "port": paramPortRE, "mode": codeValueRE, "served": hex64ValueRE, "reason": reasonValueRE,
+	"operation_id": paramOperationRE,
 }
 
 func stepParams(in map[string]string) map[string]string {
