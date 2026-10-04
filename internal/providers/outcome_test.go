@@ -103,6 +103,8 @@ func TestRollbackOutcomeValidate(t *testing.T) {
 		{"no change with failed step", providers.RollbackOutcome{Result: providers.DeployNoChange, Reason: "r", FailedStep: "x"}, "no_change: failed_step"},
 		{"uncertain with phase", providers.RollbackOutcome{Result: providers.DeployUncertain, Phase: providers.PhaseRestoring}, "uncertain: phase"},
 		{"uncertain with error class", providers.RollbackOutcome{Result: providers.DeployUncertain, Error: "syntax"}, "uncertain: error"},
+		{"step without name", providers.RollbackOutcome{Result: providers.DeployRolledBack, Steps: []providers.DeployStep{{Status: providers.StepOK}}}, "rollback outcome: step 0: no name"},
+		{"step with unknown status", providers.RollbackOutcome{Result: providers.DeployUncertain, Steps: []providers.DeployStep{{Name: "restore", Status: "weird"}}}, "rollback outcome: step 0: unknown status"},
 	}
 	for _, tc := range invalid {
 		t.Run(tc.name, func(t *testing.T) {
@@ -120,6 +122,10 @@ func TestDeploymentStateValidate(t *testing.T) {
 	}
 	assert.NoError(t, providers.DeploymentState{Phase: providers.PhaseNone, Active: true}.Validate(), "another operation holds the lock")
 	assert.NoError(t, providers.DeploymentState{Phase: providers.PhaseRestored, FailedStep: "reload", CauseStep: "reload", Error: "syntax", NewCertSHA256: "a", BackupDir: "/b"}.Validate())
+	// A tombstone is a bare marker: it may name the backup directory it sits in and may be held
+	// by the lock, but carries no step, error or hash.
+	assert.NoError(t, providers.DeploymentState{Phase: providers.PhaseFenced}.Validate())
+	assert.NoError(t, providers.DeploymentState{Phase: providers.PhaseFenced, BackupDir: "/b", Active: true}.Validate())
 	for name, tc := range map[string]struct {
 		s    providers.DeploymentState
 		want string
@@ -131,6 +137,11 @@ func TestDeploymentStateValidate(t *testing.T) {
 		"none with failed step":      {providers.DeploymentState{Phase: providers.PhaseNone, FailedStep: "x"}, "none: no journal"},
 		"committed with failed step": {providers.DeploymentState{Phase: providers.PhaseCommitted, FailedStep: "reload"}, "committed: failed_step"},
 		"unchanged with error":       {providers.DeploymentState{Phase: providers.PhaseUnchanged, Error: "syntax"}, "unchanged: error"},
+		"fenced with failed step":    {providers.DeploymentState{Phase: providers.PhaseFenced, FailedStep: "reload"}, "fenced: a tombstone"},
+		"fenced with cause step":     {providers.DeploymentState{Phase: providers.PhaseFenced, CauseStep: "reload"}, "fenced: a tombstone"},
+		"fenced with error":          {providers.DeploymentState{Phase: providers.PhaseFenced, Error: "syntax"}, "fenced: a tombstone"},
+		"fenced with new hash":       {providers.DeploymentState{Phase: providers.PhaseFenced, NewCertSHA256: "a"}, "fenced: a tombstone"},
+		"fenced with current hash":   {providers.DeploymentState{Phase: providers.PhaseFenced, CurrentCertSHA256: "a"}, "fenced: a tombstone"},
 	} {
 		err := tc.s.Validate()
 		require.Error(t, err, name)

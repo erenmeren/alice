@@ -133,6 +133,15 @@ func TestRegistryRefusesBrokenProviders(t *testing.T) {
 	t.Run("nil provider", func(t *testing.T) {
 		assert.Panics(t, func() { providers.NewRegistry().Register(nil) })
 	})
+	// An anchored pattern that is not a regular expression passes the ^...$ check and is refused
+	// by the compile check, so a schema never carries a pattern that would accept nothing.
+	t.Run("anchored pattern that does not compile", func(t *testing.T) {
+		s := validStub(providers.KindLinuxSSH)
+		s.config.Fields[2].Pattern = `^[a$`
+		assert.PanicsWithValue(t, `providers: linuxssh config schema: field "mode" has a pattern that does not compile`, func() {
+			providers.NewRegistry().Register(s)
+		})
+	})
 }
 
 func TestKindForTargetType(t *testing.T) {
@@ -298,6 +307,9 @@ func TestUnsupportedSessionAnswersErrUnsupportedForDeployMethods(t *testing.T) {
 	assert.ErrorIs(t, err, providers.ErrUnsupported)
 	_, err = s.DeploymentStatus(ctx, uuid.New())
 	assert.ErrorIs(t, err, providers.ErrUnsupported)
+	state, err := s.FenceDeployment(ctx, uuid.New())
+	assert.ErrorIs(t, err, providers.ErrUnsupported, "a provider without deployments cannot fence one")
+	assert.Equal(t, providers.DeploymentState{}, state, "no tombstone is claimed")
 }
 
 const keyCanary = "KEY-MATERIAL-CANARY"
