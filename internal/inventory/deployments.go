@@ -303,7 +303,8 @@ var targetReady = []string{StatusOK, StatusUnreachable, StatusChecking}
 // unsupported, a path the helper cannot take, or not on a server whose provider deploys);
 // ErrTargetNotReady; ErrNginxConfigInvalid; *KeyTypeMismatchError; ErrRecoveryPending (a
 // deployment on the server is being recovered); ErrDeploymentInProgress (F-15; the unique index
-// deployments_one_active decides between concurrent requests). Each refusal is audited
+// deployments_one_active decides between concurrent requests). A refusal decided for one location
+// (and an unknown location) is a *LocationRefusalError naming it. Each refusal is audited
 // deployment.denied after the rollback. Whether the website can be verified is the engine's
 // pre-check (Task 16), not decided here. A server name the certificate does not cover is a
 // warning (san_mismatch), not a refusal.
@@ -370,6 +371,9 @@ func (s *Service) RequestDeployment(ctx context.Context, a Actor, in DeployReque
 	})
 	if denial != nil {
 		s.auditDeployDenial(ctx, a, in.CertificateID, *denial)
+		if err != nil && denial.location != uuid.Nil {
+			err = &LocationRefusalError{LocationID: denial.location, Err: err}
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -436,6 +440,11 @@ FROM certificate_locations WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, id
 		return nil, nil, fmt.Errorf("inventory: lock the locations: %w", err)
 	}
 	if len(locs) != len(ids) {
+		for _, id := range ids {
+			if _, ok := locs[id]; !ok {
+				return nil, nil, &LocationRefusalError{LocationID: id, Err: ErrNotFound}
+			}
+		}
 		return nil, nil, ErrNotFound
 	}
 	return targets, locs, nil

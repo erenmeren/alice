@@ -335,6 +335,17 @@ func TestRequestDeploymentRefusals(t *testing.T) {
 	denied := f.h.auditDetails("deployment.denied")
 	assert.Equal(t, map[string]string{"certificate_id": f.cert.ID.String(), "location_id": f.loc1.String(), "reason": "in_progress"}, denied[0])
 	assert.Equal(t, 1, f.h.count("SELECT count(*) FROM audit_log WHERE action = 'deployment.denied' AND result = 'denied' AND details->>'reason' = 'in_progress'"))
+	// The refusal names the location it is about (the API shows it as params.location_id).
+	var refused *inventory.LocationRefusalError
+	require.ErrorAs(t, req(f.admin, f.cert.ID, false, f.loc5, f.unsupported), &refused)
+	assert.Equal(t, f.unsupported, refused.LocationID)
+	assert.ErrorIs(t, refused, inventory.ErrLocationUnsupported)
+	require.ErrorAs(t, req(f.operator, f.cert.ID, false, f.loc1), &refused)
+	assert.Equal(t, f.loc1, refused.LocationID, "in progress")
+	missingLoc := uuid.New()
+	require.ErrorAs(t, req(f.admin, f.cert.ID, false, f.loc5, missingLoc), &refused)
+	assert.Equal(t, missingLoc, refused.LocationID, "an unknown location")
+	assert.NotErrorAs(t, req(f.admin, f.discovered.ID, false, f.loc5), &refused, "a refusal of the certificate names no location")
 }
 
 // A location that went missing at the last scan, a deleted server and a target type without a

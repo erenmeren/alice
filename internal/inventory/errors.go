@@ -3,6 +3,8 @@ package inventory
 import (
 	"errors"
 
+	"github.com/google/uuid"
+
 	"alice/internal/certs"
 )
 
@@ -91,3 +93,17 @@ func (e *KeyTypeMismatchError) Error() string { return ErrKeyTypeMismatch.Error(
 
 // Is makes errors.Is(err, ErrKeyTypeMismatch) hold.
 func (e *KeyTypeMismatchError) Is(target error) bool { return target == ErrKeyTypeMismatch }
+
+// LocationRefusalError names the location a RequestDeployment refusal is about (an unknown
+// location, or a refusal decided for one location). Err is the refusal; errors.Is and errors.As
+// see through it. A refusal of the certificate itself (no key, expired, an unconfirmed chain) is
+// returned bare: it applies to every location of the request.
+type LocationRefusalError struct {
+	LocationID uuid.UUID
+	Err        error
+}
+
+func (e *LocationRefusalError) Error() string { return e.Err.Error() }
+
+// Unwrap returns the refusal.
+func (e *LocationRefusalError) Unwrap() error { return e.Err }
