@@ -3,6 +3,9 @@
 package main
 
 import (
+	"errors"
+	"io"
+	"io/fs"
 	"os"
 	"sort"
 	"strconv"
@@ -198,31 +201,130 @@ func (s *sys) isDir(guest string) bool {
 }
 
 // localSources are the nsswitch passwd sources whose accounts the helper sees or that hold no
-// login accounts with keys: files (/etc/passwd), systemd (dynamic service users) and mymachines
-// (container users). Stock Debian, Ubuntu and RHEL configurations name only these besides sss.
+// login accounts with keys: files (/etc/passwd), systemd (dynamic service users; its userdb
+// records are checked separately, userdbRecords) and mymachines (container users). Stock Debian,
+// Ubuntu and RHEL configurations name only these besides sss.
 var localSources = map[string]bool{"files": true, "systemd": true, "mymachines": true}
 
-// directoryUsers reports whether accounts may come from a source the helper cannot list (I2): any
-// passwd source other than localSources (sss, ldap, winbind, nis, compat, extrausers, altfiles,
-// db, ...). Action items in brackets are not sources.
+// maxUserdbEntries bounds the entries read from one userdb directory.
+const maxUserdbEntries = 4096
+
+// userdbDirs are systemd's userdb drop-in directories (and homed's identity directory) with the
+// suffix of an account record there.
+var userdbDirs = []struct{ dir, suffix string }{
+	{"/etc/userdb", ".user"}, {"/run/userdb", ".user"}, {"/run/host/userdb", ".user"},
+	{"/usr/local/lib/userdb", ".user"}, {"/usr/lib/userdb", ".user"}, {"/var/lib/systemd/home", ".identity"},
+}
+
+// directoryUsers reports whether accounts may come from a source the helper cannot list (I2, fix
+// round 2). Whenever the helper cannot be sure that the passwd sources are only the local files it
+// reads, the answer is true:
+//   - nsswitch.conf is read through the root-controlled walk (a root's link, such as authselect's
+//     /etc/nsswitch.conf, is followed; a link or directory others can change is refused) and must
+//     be a regular file of root's that others cannot write, within nsswitchLimit; only a missing
+//     file is glibc's default ("files"), any other failure is true;
+//   - any passwd source other than localSources is true, also a token glibc would not take as a
+//     source (a bare ":") and an action item in brackets that never ends; the database name is the
+//     text up to the first blank or colon, as glibc reads it, and every passwd line counts;
+//   - with systemd as a source, any userdb account record (userdbRecords) is true.
 func (s *sys) directoryUsers() bool {
-	data, err := s.readRegular("/etc/nsswitch.conf", nsswitchLimit)
-	if err != nil {
+	data, err := s.readNSSwitch()
+	if errors.Is(err, fs.ErrNotExist) {
 		return false
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "passwd:")
-		if !ok {
+	if err != nil {
+		return true
+	}
+	nonLocal, systemd := passwdSources(string(data))
+	if nonLocal {
+		return true
+	}
+	return systemd && s.userdbRecords()
+}
+
+// readNSSwitch reads /etc/nsswitch.conf through the root-controlled walk.
+func (s *sys) readNSSwitch() ([]byte, error) {
+	rf, err := s.walkRoot("/etc/nsswitch.conf")
+	if err != nil {
+		return nil, err
+	}
+	defer rf.close()
+	f, st, err := rf.openLinked(true) // only read: a second name of a root-owned file changes nothing
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	if int(st.Uid) != s.rootUID || st.Mode&0o022 != 0 {
+		return nil, errNotRootControlled
+	}
+	data, err := io.ReadAll(io.LimitReader(f, nsswitchLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > nsswitchLimit {
+		return nil, errTooLarge
+	}
+	return data, nil
+}
+
+// passwdSources reads the sources of every passwd line: nonLocal when one is not in localSources,
+// systemd when systemd is one.
+func passwdSources(data string) (nonLocal, systemd bool) {
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimLeft(line, " \t")
+		if line == "" || line[0] == '#' {
 			continue
+		}
+		end := strings.IndexAny(line, " \t:")
+		if end < 0 || line[:end] != "passwd" {
+			continue
+		}
+		rest := line[end:]
+		if rest[0] == ':' {
+			rest = rest[1:]
 		}
 		inAction := false
 		for _, src := range strings.Fields(rest) {
 			switch {
-			case strings.HasPrefix(src, "["):
+			case inAction || strings.HasPrefix(src, "["):
 				inAction = !strings.HasSuffix(src, "]")
-			case inAction:
-				inAction = !strings.HasSuffix(src, "]")
+			case src == "systemd":
+				systemd = true
 			case !localSources[src]:
+				nonLocal = true
+			}
+		}
+		if inAction {
+			nonLocal = true // an action item that never ends: glibc's reading of the line is unclear
+		}
+	}
+	return nonLocal, systemd
+}
+
+// userdbRecords reports whether systemd's userdb can serve an account the helper cannot see: an
+// account record in a drop-in directory, or a systemd-homed identity. A missing directory has
+// none; a directory others can change, a path that is not a directory, more than
+// maxUserdbEntries entries or any other error counts as a record.
+func (s *sys) userdbRecords() bool {
+	for _, d := range userdbDirs {
+		st, err := os.Stat(s.host(d.dir))
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			continue
+		case err != nil || !st.IsDir() || !s.rootControlled(d.dir):
+			return true
+		}
+		dir, err := os.Open(s.host(d.dir))
+		if err != nil {
+			return true
+		}
+		names, err := dir.Readdirnames(maxUserdbEntries + 1)
+		_ = dir.Close()
+		if err != nil && !errors.Is(err, io.EOF) || len(names) > maxUserdbEntries {
+			return true
+		}
+		for _, n := range names {
+			if strings.HasSuffix(n, d.suffix) {
 				return true
 			}
 		}

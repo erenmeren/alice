@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"alice/internal/providers/linuxssh/helperproto"
 )
@@ -666,4 +668,131 @@ func TestAuthKeysReadNamesTheOwnersUID(t *testing.T) {
 	code, r := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys")
 	require.Equal(t, 0, code, "%v", r)
 	assert.Equal(t, float64(f.uid), r["uid"])
+}
+
+// Fix round 2: whenever the helper cannot be sure the account sources are only the local files it
+// reads, the list is incomplete with directory_users_not_listed — never the reverse.
+
+// N4: glibc takes the database name up to the first blank or colon; any other token is a source.
+func TestPasswdLineSpellings(t *testing.T) {
+	f := newFixture(t)
+	for line, want := range map[string]bool{
+		"passwd sss":                     true,
+		"passwd : sss":                   true,
+		"passwd : files":                 true, // a bare ":" is not a source the helper knows
+		"passwd\tsss":                    true,
+		"passwd:files:":                  true,
+		"passwd: files [NOTFOUND=return": true, // an action that never ends
+		"passwd: files [ NOTFOUND=return ] systemd": false,
+		"passwd:files":       false,
+		"passwd_compat: nis": false, // another database
+		"passwdx: sss":       false,
+	} {
+		f.write("/etc/nsswitch.conf", line+"\n", 0o644)
+		assert.Equal(t, want, f.s.directoryUsers(), "%q", line)
+	}
+}
+
+// N2: a symlinked nsswitch.conf (authselect) is followed when the link and its target are root's
+// under root-controlled directories; a link the walk refuses is never "local only".
+func TestSymlinkedNSSwitchIsFollowedOrRefused(t *testing.T) {
+	f := newFixture(t)
+	f.mkdir("/etc/authselect", 0o755)
+	f.write("/etc/authselect/nsswitch.conf", "passwd: files sss\n", 0o644)
+	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))
+	require.NoError(t, os.Symlink("/etc/authselect/nsswitch.conf", f.host("/etc/nsswitch.conf")))
+	assert.True(t, f.s.directoryUsers(), "the target names sss")
+	f.write("/etc/authselect/nsswitch.conf", "passwd: files systemd\n", 0o644)
+	assert.False(t, f.s.directoryUsers(), "a followed link to a local configuration is local")
+
+	// The target's directory can be changed by others: refused, so incomplete.
+	require.NoError(t, os.Chmod(f.host("/etc/authselect"), 0o777))
+	assert.True(t, f.s.directoryUsers())
+	require.NoError(t, os.Chmod(f.host("/etc/authselect"), 0o755))
+	// The target itself is writable by others.
+	require.NoError(t, os.Chmod(f.host("/etc/authselect/nsswitch.conf"), 0o666))
+	assert.True(t, f.s.directoryUsers())
+	require.NoError(t, os.Chmod(f.host("/etc/authselect/nsswitch.conf"), 0o644))
+	// A link into a directory others control.
+	f.mkdir("/tmp", 0o777)
+	f.write("/tmp/nss", "passwd: files\n", 0o644)
+	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))
+	require.NoError(t, os.Symlink("/tmp/nss", f.host("/etc/nsswitch.conf")))
+	assert.True(t, f.s.directoryUsers())
+	// A dangling link reads as a missing file: glibc's default, files.
+	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))
+	require.NoError(t, os.Symlink("/etc/nowhere", f.host("/etc/nsswitch.conf")))
+	assert.False(t, f.s.directoryUsers())
+
+	_, m := f.run("authkeys-list")
+	assert.Equal(t, []any{}, m["warnings"])
+	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))
+	require.NoError(t, os.Symlink("/tmp/nss", f.host("/etc/nsswitch.conf")))
+	_, m = f.run("authkeys-list")
+	assert.Equal(t, []any{helperproto.WarnDirectoryUsers}, m["warnings"])
+	assert.Equal(t, false, m["accounts_complete"])
+}
+
+// N3: only a missing nsswitch.conf is glibc's default (files); an unreadable or oversized one is
+// never "local only".
+func TestUnreadableNSSwitchIsNotLocal(t *testing.T) {
+	f := newFixture(t)
+	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))
+	assert.False(t, f.s.directoryUsers(), "missing: files")
+	f.write("/etc/nsswitch.conf", strings.Repeat("# padding\n", 7000)+"passwd: sss\n", 0o644)
+	assert.True(t, f.s.directoryUsers(), "oversized")
+	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))
+	f.mkdir("/etc/nsswitch.conf", 0o755)
+	assert.True(t, f.s.directoryUsers(), "not a regular file")
+	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))
+	require.NoError(t, unix.Mkfifo(f.host("/etc/nsswitch.conf"), 0o644))
+	assert.True(t, f.s.directoryUsers(), "a FIFO is never opened and never local")
+	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))
+	f.write("/etc/nsswitch.conf", "passwd: files\n", 0o644)
+	require.NoError(t, os.Link(f.host("/etc/nsswitch.conf"), f.host("/etc/nsswitch.hard")))
+	assert.False(t, f.s.directoryUsers(), "a second name of a root-owned file changes nothing")
+}
+
+// N1: systemd's userdb serves accounts the helper cannot see (drop-in *.user records, homed's
+// *.identity). With systemd as a passwd source, any such record makes the list incomplete.
+func TestUserdbRecordsMakeTheListIncomplete(t *testing.T) {
+	f := newFixture(t)
+	f.write("/etc/nsswitch.conf", "passwd: files systemd\n", 0o644)
+	assert.False(t, f.s.directoryUsers(), "no userdb directory: local")
+	for _, dir := range []string{"/run/userdb", "/run/host/userdb", "/usr/local/lib/userdb", "/usr/lib/userdb", "/var/lib/systemd/home"} {
+		f.mkdir(dir, 0o755)
+	}
+	f.write("/run/userdb/io.systemd.Multiplexer", "", 0o644) // a socket's name: not a record
+	f.write("/run/userdb/hidden.group", "{}", 0o644)
+	assert.False(t, f.s.directoryUsers(), "directories without user records")
+	for _, rec := range []string{"/etc/userdb/x.user", "/run/userdb/hidden.user", "/run/host/userdb/h.user",
+		"/usr/local/lib/userdb/l.user", "/usr/lib/userdb/u.user", "/var/lib/systemd/home/alice.identity"} {
+		f.mkdir(filepath.Dir(rec), 0o755)
+		f.write(rec, "{}", 0o644)
+		assert.True(t, f.s.directoryUsers(), rec)
+		require.NoError(t, os.Remove(f.host(rec)))
+	}
+	f.write("/etc/nsswitch.conf", "passwd: files\n", 0o644)
+	f.write("/etc/userdb/x.user", "{}", 0o644)
+	assert.False(t, f.s.directoryUsers(), "without systemd as a source glibc never asks userdb")
+
+	f.write("/etc/nsswitch.conf", "passwd: files systemd\n", 0o644)
+	_, m := f.run("authkeys-list")
+	assert.Equal(t, []any{helperproto.WarnDirectoryUsers}, m["warnings"])
+	assert.Equal(t, false, m["accounts_complete"])
+	require.NoError(t, os.Remove(f.host("/etc/userdb/x.user")))
+
+	// A userdb directory others can change, one that is not a directory, or one too large to list
+	// is never "no records".
+	require.NoError(t, os.Chmod(f.host("/etc/userdb"), 0o777))
+	assert.True(t, f.s.directoryUsers(), "writable by others")
+	require.NoError(t, os.Chmod(f.host("/etc/userdb"), 0o755))
+	require.NoError(t, os.Remove(f.host("/usr/lib/userdb")))
+	f.write("/usr/lib/userdb", "", 0o644)
+	assert.True(t, f.s.directoryUsers(), "not a directory")
+	require.NoError(t, os.Remove(f.host("/usr/lib/userdb")))
+	for i := 0; i <= maxUserdbEntries; i++ {
+		f.write(fmt.Sprintf("/run/userdb/s%d.group", i), "", 0o644)
+	}
+	assert.True(t, f.s.directoryUsers(), "more entries than the helper lists")
 }
