@@ -55,7 +55,7 @@ func (s *server) setupStartSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.deps.Log.Info("setup session started", "request_id", m.RequestID, "ip", m.IP.String())
-	setSetupCookie(w, token)
+	s.issueSetupCookie(w, token)
 	writeJSON(w, http.StatusOK, map[string]string{"csrf_token": s.deps.Auth.CSRFToken(token)})
 }
 
@@ -105,7 +105,8 @@ func (s *server) setupCreateAdmin(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	setSessionCookie(w, res.Token)
+	s.issueSessionCookie(w, res.Token)
+	s.recent.Remove(setupTokenFrom(r))
 	clearSetupCookie(w)
 	writeJSON(w, http.StatusOK, sessionJSON(res.Info, res.RecoveryCodes))
 }

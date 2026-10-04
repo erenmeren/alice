@@ -224,7 +224,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 
 ## ALC-SYS-0004: Request could not be read
 
-**Meaning.** The request body is not valid JSON, contains fields the endpoint does not accept, or has data after the JSON value (HTTP 400). The same answer refuses text Alice cannot store: a query parameter (name or value) holding a NUL character or bytes that are not valid UTF-8, or a JSON body whose text holds the escape `\u0000`. Then `details` names the parameter (or `query` when the name itself is the problem) or `body`, with the code `validation.pattern`; the value is never repeated. Such a sign-in is not an attempt and is not audited; such a license upload is audited as `license.upload.invalid` (problem `encoding`).
+**Meaning.** The request body is not valid JSON, contains fields the endpoint does not accept, or has data after the JSON value (HTTP 400). The same answer refuses text Alice cannot store: a query parameter (name or value) holding a NUL character or bytes that are not valid UTF-8, a query that does not parse (a bad percent escape such as `%zz`, or `;` between parameters), or a JSON body whose text holds the escape `\u0000`. Then `details` names the parameter (or `query` when the name itself is the problem) or `body`, with the code `validation.pattern`; the value is never repeated. Such a sign-in is not an attempt and is not audited; such a license upload is audited as `license.upload.invalid` (problem `not_json`, as the license module records such a file).
 
 **Likely cause.** An outdated browser tab after an upgrade, an API client sending extra or misspelled fields, or a client that sends binary data as text.
 
@@ -234,7 +234,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 
 **Meaning.** A rate limit was reached (HTTP 429, retryable). The `Retry-After` header says how many seconds to wait.
 
-**Likely cause.** More than 300 requests per minute for one session or token, more than 60 per minute from one address without signing in, more than 10 sign-in attempts or 5 verification codes per minute from one address.
+**Likely cause.** More than 300 requests per minute for one session or token, more than 60 per minute from one address without signing in (`/healthz` on the public port included), more than 60 per minute from one address with a session cookie or API token Alice does not accept (sessions and tokens Alice accepted in the last five minutes are exempt), more than 10 sign-in attempts or 5 verification codes per minute from one address.
 
 **What to do.** Wait for the time in `Retry-After`. If many people share one address through a proxy, ask the administrator to set `ALICE_TRUSTED_PROXIES` so Alice sees real client addresses.
 

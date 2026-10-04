@@ -193,7 +193,16 @@ type server struct {
 	anon    *ratelimit.Limiter // anonymous and setup subjects, per IP: 60/min
 	login   *ratelimit.Limiter // per IP: 10/min
 	mfa     *ratelimit.Limiter // per IP: 5/min
+	// badCreds: per IP, lookups of credentials that did not resolve: 60/min (AUD-16).
+	badCreds *ratelimit.Limiter
+	// recent: credentials validated or issued in the last recentLifetime; they skip badCreds.
+	recent *ratelimit.Recent
 }
+
+const (
+	recentLifetime = 5 * time.Minute // S2: "a few minutes"; every successful lookup starts it over
+	recentMax      = 4096            // entries; each is a 32-byte keyed hash and a time
+)
 
 func newServer(d Deps) *server {
 	if d.Clock == nil {
@@ -205,6 +214,9 @@ func newServer(d Deps) *server {
 		anon:    ratelimit.New(d.Clock, 60, time.Minute),
 		login:   ratelimit.New(d.Clock, 10, time.Minute),
 		mfa:     ratelimit.New(d.Clock, 5, time.Minute),
+
+		badCreds: ratelimit.New(d.Clock, 60, time.Minute),
+		recent:   ratelimit.NewRecent(d.Clock, recentLifetime, recentMax),
 	}
 }
 
@@ -231,6 +243,8 @@ func (s *Server) ResetLimits() {
 	s.s.anon.Reset()
 	s.s.login.Reset()
 	s.s.mfa.Reset()
+	s.s.badCreds.Reset()
+	s.s.recent.Reset()
 }
 
 // NewHandler returns the public HTTPS handler.
@@ -240,7 +254,7 @@ func NewHandler(d Deps) http.Handler { return New(d).Handler() }
 func NewHealthHandler(d Deps) http.Handler {
 	s := newServer(d)
 	mux := http.NewServeMux()
-	s.register(mux, s.probeRoutes())
+	s.register(mux, s.probeRoutes(false))
 	return s.requestID(securityHeaders(s.recoverer(mux)))
 }
 
@@ -271,13 +285,19 @@ func (s *server) register(mux *http.ServeMux, routes []route) {
 	}
 }
 
-// probeRoutes are served on both the public and the internal health listener.
-func (s *server) probeRoutes() []route {
+// probeRoutes are served on both the public and the internal health listener. /healthz asks the
+// database, so on the public listener it has the anonymous per-address limit (AUD-16); the
+// internal listener (container healthcheck, orchestrators) and /livez stay unlimited.
+func (s *server) probeRoutes(public bool) []route {
+	health := limitNone
+	if public {
+		health = limitDefault
+	}
 	return []route{
 		{method: http.MethodGet, pattern: "/livez", perm: rbac.Public, limit: limitNone, handler: func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		}},
-		{method: http.MethodGet, pattern: "/healthz", perm: rbac.Public, limit: limitNone, handler: func(w http.ResponseWriter, r *http.Request) {
+		{method: http.MethodGet, pattern: "/healthz", perm: rbac.Public, limit: health, handler: func(w http.ResponseWriter, r *http.Request) {
 			if err := s.deps.Health.Check(r.Context()); err != nil {
 				s.deps.Log.Warn("health check failed", "request_id", RequestID(r.Context()), "reason", healthReason(err))
 				s.writeError(w, r, ErrUnavailable)
@@ -305,7 +325,7 @@ func (s *server) systemRoutes() []route {
 // fallback) are registered separately in handler and are not operations.
 func (s *server) apiRoutes() []route {
 	var routes []route
-	routes = append(routes, s.probeRoutes()...)
+	routes = append(routes, s.probeRoutes(true)...)
 	routes = append(routes, s.systemRoutes()...)
 	routes = append(routes, s.setupRoutes()...)
 	routes = append(routes, s.authRoutes()...)

@@ -135,6 +135,19 @@ func setSetupCookie(w http.ResponseWriter, token string)   { setCookie(w, setupC
 func clearSetupCookie(w http.ResponseWriter)               { setCookie(w, setupCookie, "", -1) }
 
 // pathUUID parses a UUID path parameter.
+// issueSessionCookie sets a session cookie this server just created and remembers it as valid,
+// so its holder passes the failed-credential limit at once (AUD-16).
+func (s *server) issueSessionCookie(w http.ResponseWriter, token string) {
+	setSessionCookie(w, token)
+	s.recent.Add(token)
+}
+
+// issueSetupCookie is issueSessionCookie for the setup wizard's cookie.
+func (s *server) issueSetupCookie(w http.ResponseWriter, token string) {
+	setSetupCookie(w, token)
+	s.recent.Add(token)
+}
+
 func pathUUID(r *http.Request, name string) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue(name))
 	return id, err == nil

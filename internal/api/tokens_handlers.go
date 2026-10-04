@@ -101,6 +101,7 @@ func (s *server) createToken(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	s.recent.Add(secret) // its first use passes the failed-credential limit (AUD-16)
 	writeJSON(w, http.StatusCreated, map[string]any{"token": secret, "item": tokenJSON(t)})
 }
 

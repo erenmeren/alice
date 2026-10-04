@@ -77,6 +77,18 @@ func (l *Limiter) Allow(key string) (bool, time.Duration) {
 	return false, ceilSecond(wait)
 }
 
+// Refund gives back one token taken by Allow for key (up to the limit): the guard reserves a
+// token before a credential lookup and refunds it when the credential resolved (AUD-16). An
+// unknown key is ignored.
+func (l *Limiter) Refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b, ok := l.buckets[key]; ok {
+		l.refill(b, l.clock.Now())
+		b.tokens = min(l.limit, b.tokens+1)
+	}
+}
+
 // Reset forgets every key.
 func (l *Limiter) Reset() {
 	l.mu.Lock()

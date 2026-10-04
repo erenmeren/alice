@@ -154,3 +154,26 @@ func TestIPKeyGroupsIPv6By64(t *testing.T) {
 	}
 	assert.Equal(t, "unknown", IPKey(netip.Addr{}))
 }
+
+// AUD-16: the guard takes a token before a credential lookup and gives it back when the
+// credential resolved, so valid credentials never count and concurrent requests cannot overrun.
+func TestRefundGivesATokenBack(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 4, 9, 0, 0, 0, time.UTC))
+	l := New(clk, 2, time.Minute)
+	l.Refund("unknown")
+	assert.Empty(t, l.buckets, "refunding an unknown key creates no bucket")
+	ok, _ := l.Allow("ip")
+	require.True(t, ok)
+	ok, _ = l.Allow("ip")
+	require.True(t, ok)
+	ok, wait := l.Allow("ip")
+	assert.False(t, ok)
+	assert.Equal(t, 30*time.Second, wait)
+	l.Refund("ip")
+	ok, _ = l.Allow("ip")
+	assert.True(t, ok, "the refunded token can be taken again")
+	l.Refund("ip")
+	l.Refund("ip")
+	l.Refund("ip")
+	assert.InDelta(t, 2.0, l.buckets["ip"].tokens, 1e-9, "never more than the limit")
+}

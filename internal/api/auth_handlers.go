@@ -57,7 +57,7 @@ func (s *server) authLogin(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	setSessionCookie(w, res.SessionToken) // pending session: only MFA routes accept it
+	s.issueSessionCookie(w, res.SessionToken) // pending session: only MFA routes accept it
 	// The MFA enroll/verify calls that follow are cookie-authenticated POSTs, so
 	// the client needs the CSRF token bound to the pending session.
 	writeJSON(w, http.StatusOK, map[string]string{"status": res.Status, "csrf_token": s.deps.Auth.CSRFToken(res.SessionToken)})
@@ -91,7 +91,7 @@ func (s *server) authVerify(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	setSessionCookie(w, res.Token) // new session ID after MFA (fixation defence)
+	s.issueSessionCookie(w, res.Token) // new session ID after MFA (fixation defence)
 	writeJSON(w, http.StatusOK, sessionJSON(res.Info, res.RecoveryCodes))
 }
 
@@ -109,6 +109,7 @@ func (s *server) authLogout(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	s.recent.Remove(sessionTokenFrom(r))
 	clearSessionCookie(w)
 	noContent(w)
 }
@@ -125,7 +126,7 @@ func (s *server) authStepUp(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	setSessionCookie(w, res.Token) // session ID is regenerated on step-up (SEC-019)
+	s.issueSessionCookie(w, res.Token) // session ID is regenerated on step-up (SEC-019)
 	writeJSON(w, http.StatusOK, sessionJSON(res.Info, nil))
 }
 
@@ -142,7 +143,7 @@ func (s *server) authPassword(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	setSessionCookie(w, res.Token) // every other session was revoked
+	s.issueSessionCookie(w, res.Token) // every other session was revoked
 	writeJSON(w, http.StatusOK, sessionJSON(res.Info, nil))
 }
 

@@ -18,9 +18,14 @@ paths:
     get:
       operationId: getHealthz
       summary: Readiness (database reachable and migrations current)
+      description: >-
+        On the public listener this answers at most 60 requests a minute per client address (429
+        with Retry-After after that). The internal health listener (ALICE_HEALTH_ADDR) is not
+        limited; container healthchecks and orchestrators use that one.
       x-permission: public
       responses:
         "200": { $ref: "#/components/responses/StatusOK" }
+        "429": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/version:
