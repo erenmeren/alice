@@ -609,7 +609,9 @@ func TestConvertResolvedPathOutsideTheVocabularyIsUnsupported(t *testing.T) {
 }
 
 // A2-I3: the dump's warnings are bounded: a hostile list of 100,000 distinct codes costs linear
-// time, keeps at most maxDumpWarnings of them and reports the cut.
+// time, keeps at most maxDumpWarnings of them and reports the cut. The time limit only has to tell
+// linear from quadratic (which takes far longer than this for 100,000 codes), so it is generous
+// enough for a loaded machine running the race detector.
 func TestDumpWarningsAreBounded(t *testing.T) {
 	d := validDump(nil)
 	d.Warnings = append(d.Warnings, helperproto.WarnStreamTLS, helperproto.WarnStreamTLS, helperproto.WarnMailTLS)
@@ -618,7 +620,7 @@ func TestDumpWarningsAreBounded(t *testing.T) {
 	}
 	start := time.Now()
 	out, truncated := dumpWarnings(d, nil)
-	assert.Less(t, time.Since(start), time.Second)
+	assert.Less(t, time.Since(start), 10*time.Second)
 	assert.True(t, truncated)
 	assert.Len(t, out, maxDumpWarnings)
 	assert.Equal(t, helperproto.WarnStreamTLS, out[0].Code)

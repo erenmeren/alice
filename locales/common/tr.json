@@ -340,7 +340,7 @@
       "address_not_allowed": {
         "title": "Alice bu sunucunun adresine bağlanmıyor.",
         "cause": "Sunucunun adı artık Alice'in hiçbir zaman bağlanmadığı bir adrese çözümleniyor: bulut meta veri adresi 169.254.169.254 gibi bağlantı-yerel bir adres, çoklu yayın adresi veya 0.0.0.0 gibi belirtilmemiş bir adres. DNS kaydı değişmiş olabilir ya da biri Alice'i erişmemesi gereken bir hizmete yönlendirmeye çalışıyor olabilir.",
-        "action": "Sunucunun DNS kaydını denetleyin veya sunucuyu düzenleyip gerçek adresini girin. Ardından bağlantıyı sınayın."
+        "action": "Sunucunun DNS kaydını denetleyin veya sunucuyu kaldırıp gerçek adresiyle yeniden ekleyin. Ardından bağlantıyı sınayın."
       }
     },
     "sshkey": {

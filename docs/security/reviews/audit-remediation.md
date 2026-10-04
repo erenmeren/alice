@@ -113,7 +113,7 @@ accepted, unless the last column says otherwise.
 | R-D26 | Minor | `image-check` failed (instead of skipping) when the host's Go differed from the image's. | 41ce75e |
 | R-D27 | Minor | A pending activity mark was lost when the tab was hidden; StrictMode and GET-only polling were not pinned. | 9e76d52 |
 | R-D28 | Info | Process: two commits carried another agent's uncommitted hunks through the shared index (7dc8b6c took a troubleshooting text of AUD-13; 7cf6218 took OpenAPI text of AUD-12, taken out again by 683bc85 and committed by 4a02ac1). Nothing was lost; history was not rewritten. | — |
-| R-D29 | Low (open, text) | The catalogue's action for `ALC-SSH-0012` (`locales/common`, shown in the UI) says "edit the server and enter its real address", but a server's address cannot be changed in Alice (`PATCH /targets/{id}` takes only the name and the discovery interval). `docs/troubleshooting.md` says the right thing (remove the server and add it again). | open: locale text to correct |
+| R-D29 | Low (text) | The catalogue's action for `ALC-SSH-0012` (`locales/common`, shown in the UI) says "edit the server and enter its real address", but a server's address cannot be changed in Alice (`PATCH /targets/{id}` takes only the name and the discovery interval). `docs/troubleshooting.md` says the right thing (remove the server and add it again). | fixed: the locale text (EN and TR) now says to remove the server and add it again with its real address |
 
 ## Findings of the remediation
 
