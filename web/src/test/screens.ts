@@ -52,5 +52,18 @@ export const SCREENS: Screen[] = [
     status: installedStatus,
     ready: { en: 'Where this key is used', tr: 'Bu anahtarın kullanıldığı yerler' },
   },
+  {
+    path: '/certificates',
+    session: sessionFor('operator'),
+    status: installedStatus,
+    ready: { en: 'Open signing requests', tr: 'Açık imzalama istekleri' },
+  },
+  { path: '/certificates', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'www.example.test', tr: 'www.example.test' } },
+  {
+    path: '/certificates/0192c000-0000-7000-8000-0000000000c1',
+    session: sessionFor('operator'),
+    status: installedStatus,
+    ready: { en: 'Where this certificate is used', tr: 'Bu sertifikanın kullanıldığı yerler' },
+  },
   { path: '/missing', session: null, status: installedStatus, ready: { en: 'Page not found', tr: 'Sayfa bulunamadı' } },
 ];

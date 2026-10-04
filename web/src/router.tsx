@@ -5,6 +5,8 @@ import { StepUpProvider } from './components/StepUpProvider';
 import { AppLayout } from './layout/AppLayout';
 import { AccountPage } from './pages/AccountPage';
 import { AuditPage } from './pages/AuditPage';
+import { CertificateDetailPage } from './pages/CertificateDetailPage';
+import { CertificatesPage } from './pages/CertificatesPage';
 import { HomePage } from './pages/HomePage';
 import { LicensePage } from './pages/LicensePage';
 import { LoginPage } from './pages/LoginPage';
@@ -47,6 +49,8 @@ export function routes(): RouteObject[] {
             { path: 'account', element: <AccountPage /> },
             { path: 'servers', element: <TargetsPage /> },
             { path: 'servers/:id', element: <TargetDetailPage /> },
+            { path: 'certificates', element: <CertificatesPage /> },
+            { path: 'certificates/:id', element: <CertificateDetailPage /> },
             { path: 'ssh-keys', element: <SSHKeysPage /> },
             { path: 'ssh-keys/:id', element: <SSHKeyDetailPage /> },
             {
