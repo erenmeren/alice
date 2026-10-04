@@ -149,7 +149,10 @@ func checkLeaf(p Parsed, now time.Time) error {
 		// A root's own signature is never used to trust it, so it is exempt: the last certificate
 		// of the path when it names itself as issuer. (Its signature cannot always be checked: many
 		// roots are signed with SHA-1, which Go refuses to verify.) A certificate that names itself
-		// but sits inside the path was trusted through its signature and is not exempt.
+		// but sits inside the path was trusted through its signature and is not exempt. A last
+		// certificate that names itself but whose self-signature does not verify gains nothing from
+		// the exemption: ChainComplete adds the last certificate as a root only when it is verifiably
+		// self-signed, so such a chain counts as incomplete (unless a trusted root issued it).
 		root := i == len(p.Chain)-1 && bytes.Equal(c.RawIssuer, c.RawSubject)
 		if !root && weakSignature(c) {
 			return ErrWeak

@@ -283,7 +283,11 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 		}
 		if placed.chainCompleted {
 			ev := audit.Event{Actor: a.Audit, ObjectType: "certificate", ObjectID: placed.id.String(), Result: audit.Success,
-				Details: map[string]string{"certificate_id": placed.id.String(), "fingerprint": v.Fingerprint, "format": format}}
+				Details: map[string]string{"certificate_id": placed.id.String(), "fingerprint": v.Fingerprint, "format": format,
+					"chain_length": strconv.Itoa(1 + len(v.Chain)), "issuer": truncRunes(boundText(v.Issuer), maxAuditIssuer)}}
+			if label != "" {
+				ev.Details["label"] = label
+			}
 			ev.Action = "certificate.chain_completed"
 			_, err = s.audit.Append(ctx, tx, ev)
 			return err
@@ -323,6 +327,9 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 	}
 	return c, heldWarnings(v.Warnings, placed.complete), nil
 }
+
+// maxAuditIssuer bounds the issuer text a chain_completed audit row keeps.
+const maxAuditIssuer = 256
 
 // WarnChainCompleted: the upload was a certificate Alice already holds with its key, and its
 // complete chain replaced the incomplete one Alice had (nothing else changed; the key was not
@@ -471,7 +478,9 @@ RETURNING id`, id, p.Fingerprint, boundText(p.SubjectCN), boundText(p.Subject), 
 	}
 	if hasKey {
 		if completeChain && complete && !stored {
-			if _, err := tx.Exec(ctx, "UPDATE certificates SET pem_chain = $2, chain_complete = true WHERE id = $1", existing, pemChain); err != nil {
+			// A label sent with the completing upload replaces the stored one (an empty one keeps it).
+			if _, err := tx.Exec(ctx, `UPDATE certificates SET pem_chain = $2, chain_complete = true,
+    label = CASE WHEN $3 <> '' THEN $3 ELSE label END WHERE id = $1`, existing, pemChain, label); err != nil {
 				return placement{}, fmt.Errorf("inventory: complete the certificate's chain: %w", err)
 			}
 			return placement{id: existing, complete: true, chainCompleted: true}, nil

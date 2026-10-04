@@ -927,6 +927,10 @@ and without the confirmation for root's last key.
 **Meaning.** Alice already has this certificate with its key. (HTTP 409, reason `certificate.duplicate`.)
 
 **Likely cause.** This certificate and its key are already stored, from an earlier upload or a signing request.
+One upload of a stored certificate is accepted: when the chain Alice holds is incomplete and the upload brings the
+certificate with its complete chain (and its key), Alice completes the stored chain instead (answer "chain
+completed", audit `certificate.chain_completed`). A certificate from a signing request cannot be uploaded (its key
+never leaves Alice), so its chain cannot be completed this way.
 
 **What to do.** Open the certificate in the list and deploy it from there.
 
@@ -998,7 +1002,7 @@ and without the confirmation for root's last key.
 
 **Meaning.** There are too many open signing requests. (HTTP 409, reason `csr.too_many_pending`.)
 
-**Likely cause.** Alice keeps at most 1000 open signing requests (each holds a private key that waits for its certificate), and that limit was reached. Nothing was created.
+**Likely cause.** Alice keeps at most 1000 open signing requests for the whole installation, all users together (each holds a private key that waits for its certificate), and that limit was reached. Nothing was created.
 
 **What to do.** Complete or cancel the signing requests you no longer need (under **Open signing requests** on the Certificates page), then create this one again.
 
@@ -1178,7 +1182,7 @@ A deployment may show `ALC-DEP-0019` (the files are back but the website was not
 
 ## ALC-DEP-0022: Deployment cancelled by an administrator
 
-**Meaning.** An administrator cancelled this deployment before it started. (HTTP 409, reason `deployment.cancelled`.)
+**Meaning.** An administrator cancelled this deployment before anything was sent to the server. (HTTP 409, reason `deployment.cancelled`.)
 
 **Likely cause.** An administrator chose **Discard** for the deployment's waiting job (for example a job held while the license was expired), so Alice sent nothing to the server. The website keeps its previous certificate, and no failure email is sent.
 

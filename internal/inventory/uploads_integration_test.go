@@ -573,12 +573,26 @@ func TestUploadCompletesTheIncompleteChainOfAHeldCertificate(t *testing.T) {
 	assert.True(t, got.ChainComplete)
 	assert.Equal(t, string(leaf.FullchainPEM), got.PEMChain)
 	assert.Equal(t, keys, h.count("SELECT count(*) FROM managed_private_keys"), "the key is not stored again")
-	assert.Equal(t, []map[string]string{{"certificate_id": c.ID.String(), "fingerprint": c.Fingerprint, "format": "pem"}},
-		h.auditDetails("certificate.chain_completed"))
+	assert.Equal(t, []map[string]string{{"certificate_id": c.ID.String(), "fingerprint": c.Fingerprint, "format": "pem",
+		"chain_length": "2", "issuer": leaf.Cert.Issuer.String()}}, h.auditDetails("certificate.chain_completed"))
+	assert.Equal(t, "", got.Label, "no label sent: the stored one stays")
 
 	_, _, err = h.svc.UploadCertificate(h.ctx, op, pemUpload(leaf))
 	require.ErrorIs(t, err, inventory.ErrCertificateDuplicate, "a complete chain is never replaced")
+
+	// A label sent with a completing upload replaces the stored one.
+	other := ca.Issue(pki.Opts{CommonName: "api.example.test", SANs: []string{"api.example.test"}}, h.clock.Now())
+	_, _, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{CertificatePEM: string(other.CertPEM), PrivateKeyPEM: string(other.KeyPEM),
+		Label: "Old"})
+	require.NoError(t, err)
+	in := pemUpload(other)
+	in.Label = "New"
+	o, warnings, err := h.svc.UploadCertificate(h.ctx, op, in)
+	require.NoError(t, err)
+	assert.Equal(t, []string{inventory.WarnChainCompleted}, warnings)
+	assert.Equal(t, "New", o.Label)
+	assert.Equal(t, "New", h.auditDetails("certificate.chain_completed")[1]["label"])
 	_, _, err = h.svc.UploadCertificate(h.ctx, op, leafOnly)
 	require.ErrorIs(t, err, inventory.ErrCertificateDuplicate)
-	assert.Len(t, h.auditDetails("certificate.chain_completed"), 1)
+	assert.Len(t, h.auditDetails("certificate.chain_completed"), 2)
 }

@@ -517,7 +517,7 @@
       },
       "too_many_pending": {
         "title": "There are too many open signing requests.",
-        "cause": "Alice keeps at most 1000 open signing requests, and that limit was reached. Nothing was created.",
+        "cause": "Alice keeps at most 1000 open signing requests for the whole installation (for all users together), and that limit was reached. Nothing was created.",
         "action": "Complete or cancel the signing requests you no longer need, then create this one again."
       }
     },
@@ -628,7 +628,7 @@
         "action": "Choose Discover on the server's page, then deploy again."
       },
       "cancelled": {
-        "title": "An administrator cancelled this deployment before it started.",
+        "title": "An administrator cancelled this deployment before anything was sent to the server.",
         "cause": "An administrator chose Discard for the deployment's waiting job, so Alice sent nothing to the server. The website keeps its previous certificate.",
         "action": "Deploy the certificate again if it is still needed."
       },
@@ -650,7 +650,7 @@
     "host_port": "Enter only the server's name or address here. Put the port in the SSH port field.",
     "host_not_allowed": "This address cannot be a managed server (it is a link-local, group or broadcast address, or no address at all).",
     "host_ascii": "Use the server's plain host name (for international names, the form that starts with xn--) or its IP address.",
-    "key_in_certificate": "The certificate field contains a private key. Put only the certificate and its chain here, and the private key in the private key field.",
+    "key_in_certificate": "The certificate field contains a private key. Paste only the certificate and its chain here. When you upload a certificate, the private key goes in its own field; for a signing request, Alice already has the key.",
     "duplicate": "This value is listed more than once."
   },
   "email": {

@@ -323,6 +323,9 @@ func TestPhase4TextsAreTruthfulForEveryCause(t *testing.T) {
 	assert.Contains(t, en("errors.deployment.rollback_file_changed.cause"), "may not belong together")
 	// C m4: a deployment an Administrator cancelled is not reported as a failure of the server.
 	assert.Contains(t, en("errors.deployment.cancelled.cause"), "sent nothing")
+	assert.Contains(t, en("errors.deployment.cancelled.title"), "before anything was sent to the server")
+	assert.Contains(t, cat.T("tr", "errors.deployment.cancelled.title", nil), "hiçbir şey gönderilmeden önce")
+	assert.Contains(t, en("errors.csr.too_many_pending.cause"), "whole installation")
 	// The existing SSH text that Nginx dumps now share no longer names SSH files only.
 	assert.Contains(t, en("errors.ssh.output_too_large.action"), "Nginx")
 }

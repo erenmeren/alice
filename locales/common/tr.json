@@ -517,7 +517,7 @@
       },
       "too_many_pending": {
         "title": "Açık imzalama isteği sayısı çok fazla.",
-        "cause": "Alice en fazla 1000 açık imzalama isteği tutar ve bu sınıra ulaşıldı. Hiçbir şey oluşturulmadı.",
+        "cause": "Alice kurulumun tamamı için (tüm kullanıcılar birlikte) en fazla 1000 açık imzalama isteği tutar ve bu sınıra ulaşıldı. Hiçbir şey oluşturulmadı.",
         "action": "Artık gerekmeyen imzalama isteklerini tamamlayın veya iptal edin, sonra bu isteği yeniden oluşturun."
       }
     },
@@ -628,7 +628,7 @@
         "action": "Sunucunun sayfasında Keşfet'i seçin, sonra yeniden dağıtın."
       },
       "cancelled": {
-        "title": "Bir yönetici bu dağıtımı başlamadan önce iptal etti.",
+        "title": "Bir yönetici bu dağıtımı sunucuya hiçbir şey gönderilmeden önce iptal etti.",
         "cause": "Bir yönetici dağıtımın bekleyen işi için Vazgeç'i seçti; bu yüzden Alice sunucuya hiçbir şey göndermedi. Web sitesi önceki sertifikasını kullanmaya devam ediyor.",
         "action": "Sertifika hâlâ gerekiyorsa yeniden dağıtın."
       },
@@ -650,7 +650,7 @@
     "host_port": "Buraya yalnızca sunucunun adını veya adresini girin. Bağlantı noktasını SSH bağlantı noktası alanına yazın.",
     "host_not_allowed": "Bu adres yönetilen bir sunucu olamaz (yerel bağlantı, grup veya yayın adresi ya da hiç adres değil).",
     "host_ascii": "Sunucunun düz ana bilgisayar adını (uluslararası adlarda xn-- ile başlayan biçimi) veya IP adresini kullanın.",
-    "key_in_certificate": "Sertifika alanında bir özel anahtar var. Buraya yalnızca sertifikayı ve zincirini, özel anahtarı ise özel anahtar alanına girin.",
+    "key_in_certificate": "Sertifika alanında bir özel anahtar var. Buraya yalnızca sertifikayı ve zincirini yapıştırın. Bir sertifika yüklerken özel anahtar kendi alanına girilir; bir imzalama isteğinde anahtar zaten Alice'tedir.",
     "duplicate": "Bu değer listede birden fazla kez var."
   },
   "email": {
