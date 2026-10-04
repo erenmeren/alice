@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"io"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -39,6 +40,10 @@ const (
 	MaxKVVersions      = 100
 	VaultRate          = 5 // requests per second per vault
 	VaultConcurrency   = 4
+	// MaxListPages bounds the pages of one listing: the largest bound (MaxKVSecrets 10,000 secrets,
+	// plus the managed ones of up to MaxKVCertificates certificates) at the page size of 25 is about
+	// 600 pages; 1000 leaves room and still ends a cycling vault within seconds.
+	MaxListPages = 1000
 )
 
 // Options configures the provider.
@@ -63,13 +68,14 @@ type Provider struct {
 	o Options
 
 	mu       sync.Mutex
-	limiters map[string]*vaultLimiter // by vault host
-	hosts    map[uuid.UUID]string     // target -> vault host
+	limiters map[string]*vaultLimiter      // by vault host
+	hosts    map[uuid.UUID]string          // target -> vault host
+	users    map[string]map[uuid.UUID]bool // vault host -> the targets that share its limiter
 }
 
 // New builds the provider.
 func New(o Options) *Provider {
-	return &Provider{o: o, limiters: map[string]*vaultLimiter{}, hosts: map[uuid.UUID]string{}}
+	return &Provider{o: o, limiters: map[string]*vaultLimiter{}, hosts: map[uuid.UUID]string{}, users: map[string]map[uuid.UUID]bool{}}
 }
 
 var (
@@ -124,21 +130,35 @@ func (*Provider) ValidateConfig(cfg providers.TargetConfig) []validate.FieldErro
 	return nil
 }
 
-// ForgetTarget implements providers.ConnectionCache: it drops the limiter of the target's vault.
-// A session in flight keeps the limiter it holds.
+// ForgetTarget implements providers.ConnectionCache: it drops the target's claim on its vault's
+// limiter, and the limiter itself when no other target of the same vault host remains. A session in
+// flight keeps the limiter it holds.
 func (p *Provider) ForgetTarget(target uuid.UUID) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if host, ok := p.hosts[target]; ok {
+	host, ok := p.hosts[target]
+	if !ok {
+		return
+	}
+	delete(p.hosts, target)
+	delete(p.users[host], target)
+	if len(p.users[host]) == 0 {
+		delete(p.users, host)
 		delete(p.limiters, host)
-		delete(p.hosts, target)
 	}
 }
 
 func (p *Provider) limiterFor(target uuid.UUID, host string, clk clock.Clock) *vaultLimiter {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if old, ok := p.hosts[target]; ok && old != host { // a target that moved to another vault
+		delete(p.users[old], target)
+	}
 	p.hosts[target] = host
+	if p.users[host] == nil {
+		p.users[host] = map[uuid.UUID]bool{}
+	}
+	p.users[host][target] = true
 	l, ok := p.limiters[host]
 	if !ok {
 		l = newVaultLimiter(clk, VaultRate, VaultConcurrency)
@@ -156,6 +176,16 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 	vault, err := azureid.ParseVault(raw)
 	if err != nil {
 		return nil, providers.NewError(codeAddressNotAllowed, false, nil, nil)
+	}
+	// A region variable makes MSAL detect its region with a bare http.Client: a request to the
+	// metadata address through http.DefaultTransport (and any HTTP_PROXY), outside every guard.
+	// Neither variable is ever honoured: the session is refused before anything is decrypted.
+	// azure.address_not_allowed is the closest closed code: the SDK would otherwise connect to an
+	// address this provider does not allow.
+	for _, name := range []string{"AZURE_REGIONAL_AUTHORITY_NAME", "MSAL_FORCE_REGION"} {
+		if os.Getenv(name) != "" {
+			return nil, providers.NewError(codeAddressNotAllowed, false, nil, nil)
+		}
 	}
 	src, ok := cred.(providers.AzureCredentialSource)
 	if !ok {
@@ -191,6 +221,9 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 	if err != nil {
 		for _, c := range closers {
 			c()
+		}
+		if id.Auth == providers.AzureAuthManagedIdentity { // the SDK picked another source (App Service, Service Fabric, MSI_ENDPOINT): fail closed
+			return nil, providers.NewError(codeManagedIdentityGone, false, nil, nil)
 		}
 		return nil, providers.NewError(codeAuthFailed, false, nil, nil)
 	}

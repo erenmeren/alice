@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"testing"
@@ -183,4 +184,104 @@ func TestManagedIdentityUnknownIdentity(t *testing.T) {
 	var pe *providers.Error
 	require.ErrorAs(t, err, &pe)
 	assert.Equal(t, "azure.managed_identity_unavailable", pe.Code)
+}
+
+// TestRegionEnvironmentNeverLeavesTheGuard: a region variable makes MSAL detect its region with a
+// bare http.Client (http.DefaultTransport) against the metadata address. Open refuses it first.
+func TestRegionEnvironmentNeverLeavesTheGuard(t *testing.T) {
+	sp := rsaSP(t)
+	key, err := x509.MarshalPKCS8PrivateKey(sp.Key)
+	require.NoError(t, err)
+	for _, env := range []string{"AZURE_REGIONAL_AUTHORITY_NAME", "MSAL_FORCE_REGION"} {
+		for _, auth := range []string{providers.AzureAuthClientSecret, providers.AzureAuthCertificate, providers.AzureAuthManagedIdentity} {
+			t.Run(env+"/"+auth, func(t *testing.T) {
+				t.Setenv(env, "TryAutoDetect")
+				s := fakekv.Start(t, fakekv.Options{ClientCert: sp.Cert, ManagedIdentity: true})
+				id := secretIdentity(s)
+				switch auth {
+				case providers.AzureAuthCertificate:
+					id = providers.AzureIdentity{Auth: auth, TenantID: s.TenantID(), ClientID: s.ClientID(),
+						CertificateDER: sp.Cert.Raw, PrivateKeyDER: providers.NewSecret(append([]byte(nil), key...))}
+				case providers.AzureAuthManagedIdentity:
+					id = providers.AzureIdentity{Auth: auth}
+				}
+				before := bypassed.Load()
+				src := &idSource{id: id}
+				sess, err := testProvider(s).Open(context.Background(), target(), src, providers.Env{Clock: nearNow()})
+				require.Error(t, err)
+				assert.Nil(t, sess)
+				var pe *providers.Error
+				require.ErrorAs(t, err, &pe)
+				assert.Equal(t, "azure.address_not_allowed", pe.Code)
+				assert.False(t, pe.Retryable)
+				assert.Equal(t, before, bypassed.Load(), "nothing reached http.DefaultTransport")
+				assert.Empty(t, s.Requests(), "nothing was sent")
+			})
+		}
+	}
+}
+
+// The SDK can pick another managed-identity source than IMDS from the environment: App Service,
+// Service Fabric, the legacy MSI endpoint. Whatever stage fails, the answer is the same closed code
+// and nothing leaves for another host.
+func TestManagedIdentityOtherSourcesFailClosed(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"MSI_ENDPOINT with a user-assigned identity": {"MSI_ENDPOINT": "https://evil.test/msi", "MSI_SECRET": "canary-secret"},
+		"Service Fabric": {"IDENTITY_ENDPOINT": "https://evil.test/sf", "IDENTITY_HEADER": "canary-header", "IDENTITY_SERVER_THUMBPRINT": "AA"},
+		"App Service":    {"IDENTITY_ENDPOINT": "https://evil.test/msi", "IDENTITY_HEADER": "canary-header"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
+			s := fakekv.Start(t, fakekv.Options{ExtraHosts: []string{"evil.test"}, ManagedIdentity: true})
+			id := providers.AzureIdentity{Auth: providers.AzureAuthManagedIdentity, ClientID: uuid.NewString()}
+			sess, err := testProvider(s).Open(context.Background(), target(), &idSource{id: id}, providers.Env{Clock: nearNow()})
+			if err == nil {
+				defer func() { _ = sess.Close() }()
+				_, err = sess.(*session).api.Token(context.Background())
+			}
+			var pe *providers.Error
+			require.ErrorAs(t, err, &pe)
+			assert.Equal(t, "azure.managed_identity_unavailable", pe.Code)
+			assert.False(t, pe.Retryable)
+			for _, r := range s.Requests() {
+				assert.NotEqual(t, "evil.test", r.Host)
+			}
+		})
+	}
+}
+
+func upperASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'a' <= c && c <= 'z' {
+			b[i] = c - ('a' - 'A')
+		}
+	}
+	return string(b)
+}
+
+// The vault names the tenant in upper case: the credential asks the SDK for its own spelling, so
+// the SDK's case-sensitive comparison passes.
+func TestChallengeTenantInUpperCaseWorks(t *testing.T) {
+	s := fakekv.Start(t, fakekv.Options{})
+	addSeed(s)
+	s.SetChallenge(`Bearer authorization="https://login.microsoftonline.com/` + upperASCII(s.TenantID()) + `", resource="https://vault.azure.net"`)
+	sess := openSession(t, testProvider(s), &idSource{id: secretIdentity(s)}, nearNow())
+	_, err := sess.api.GetCertificate(context.Background(), "web-cert", "")
+	require.NoError(t, err)
+}
+
+func TestEveryTransportRequiresTLS12(t *testing.T) {
+	for _, g := range []*guardedTransport{
+		newGuardedTransport([]string{testVaultHost}, nil, nil), newGuardedTransport([]string{"login.microsoftonline.com"}, nil, nil),
+	} {
+		require.NotNil(t, g.tr.TLSClientConfig)
+		assert.GreaterOrEqual(t, int(g.tr.TLSClientConfig.MinVersion), int(tls.VersionTLS12))
+		assert.False(t, g.tr.TLSClientConfig.InsecureSkipVerify)
+	}
+	// The metadata transport speaks plain http to one address and has no TLS configuration to weaken.
+	im := newIMDSTransport(nil)
+	assert.Nil(t, im.tr.TLSClientConfig)
 }

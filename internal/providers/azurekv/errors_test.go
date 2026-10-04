@@ -7,13 +7,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -21,6 +25,7 @@ import (
 
 	"alice/internal/platform/azureid"
 	"alice/internal/platform/clock"
+	"alice/internal/platform/netaddr"
 	"alice/internal/providers"
 	"alice/internal/testutil/fakekv"
 )
@@ -280,6 +285,7 @@ func checkParams(t *testing.T, want map[string]string, pe *providers.Error) {
 func assertNoLeak(t *testing.T, pe *providers.Error, s *fakekv.Server) {
 	t.Helper()
 	assert.Equal(t, "providers: "+pe.Code, pe.Error())
+	assertCauseChainIsOurs(t, pe)
 	js, err := json.Marshal(pe)
 	require.NoError(t, err)
 	var buf bytes.Buffer
@@ -350,4 +356,80 @@ func TestMapErrorTenantMismatchAndForeignResource(t *testing.T) {
 	require.ErrorAs(t, err, &pe)
 	assert.Equal(t, codeUnexpected, pe.Code)
 	assert.ErrorIs(t, pe, providers.ErrUnexpectedAnswer)
+}
+
+// assertCauseChainIsOurs: every node of the cause chain of a mapped error is a package sentinel, one
+// of this package's cause types, a context error or a standard-library marker, never an SDK, MSAL
+// or HTTP error (whose Error() holds Azure's text).
+func assertCauseChainIsOurs(t *testing.T, err error) {
+	t.Helper()
+	known := []error{errNotSent, errDNS, errTLS, errDial, errMalformed, errUnclassified, errChallenge, errPanic,
+		errHostNotAllowed, errRedirect, errBodyTooLarge, errTenantMismatch, errChallengeScope, errBadIdentity,
+		errPageCap, errPageLoop, providers.ErrUnexpectedAnswer, netaddr.ErrNotAllowed, context.Canceled,
+		context.DeadlineExceeded, io.ErrUnexpectedEOF}
+	var walk func(e error)
+	walk = func(e error) {
+		if e == nil {
+			return
+		}
+		switch x := e.(type) { //nolint:errorlint // the walk visits each node itself; errors.As would skip nodes
+		case *providers.Error:
+			walk(x.Cause)
+			return
+		case *answerError, *transportError:
+			return
+		case interface{ Unwrap() []error }: // errors.Join
+			assert.Equal(t, "*errors.joinError", fmt.Sprintf("%T", e))
+			for _, c := range x.Unwrap() {
+				walk(c)
+			}
+			return
+		}
+		for _, k := range known {
+			if e == k { //nolint:errorlint // identity of a sentinel is the point
+				return
+			}
+		}
+		assert.Fail(t, "a node of the cause chain is not one of ours", "%T", e)
+	}
+	walk(err)
+}
+
+func TestHostileHeadersAndCodesAreDropped(t *testing.T) {
+	hdr := http.Header{"X-Ms-Request-Id": {"id with spaces\r\n<script>"}}
+	body, _ := json.Marshal(map[string]any{"error": map[string]any{"code": "Not Valid", "message": canary,
+		"innererror": map[string]any{"code": "bad code!\n" + canary}}})
+	re := &azcore.ResponseError{StatusCode: 403, ErrorCode: "Not Valid <x>", RawResponse: response(403, hdr, string(body))} //nolint:bodyclose // in-memory body
+	pe := mapError(re, actionListCertificates)
+	assert.Equal(t, codeForbidden, pe.Code)
+	assert.NotContains(t, pe.Params, paramRequestID)
+	assert.NotContains(t, pe.Params, paramAzureCode)
+	assert.Equal(t, "unknown", pe.Params[paramModel])
+	assertCauseChainIsOurs(t, pe)
+	// The same through an Entra answer.
+	af := &azidentity.AuthenticationFailedError{RawResponse: response(401, hdr, entraBody(7000215, "x"))} //nolint:bodyclose // in-memory body
+	pe = mapError(af, actionSignIn)
+	assert.NotContains(t, pe.Params, paramRequestID)
+	// A request id of the strict shape is kept in any letter case.
+	hdr.Set("x-ms-request-id", "6B8E2C1A-0F3D-4C2B-9A7E-1D2C3B4A5F60")
+	re.RawResponse = response(403, hdr, string(body)) //nolint:bodyclose // in-memory body
+	assert.Equal(t, "6B8E2C1A-0F3D-4C2B-9A7E-1D2C3B4A5F60", mapError(re, actionListCertificates).Params[paramRequestID])
+}
+
+func TestCompleteRefusal(t *testing.T) {
+	refusal := func(status int, code string) error {
+		return perr(codeUnexpected, true, &answerError{status: status, code: code}, nil)
+	}
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{refusal(400, "BadParameter"), true}, {refusal(409, "Conflict"), true}, {refusal(403, "Forbidden"), true},
+		{refusal(401, "Unauthorized"), true}, {refusal(404, "NotFound"), true},
+		{refusal(400, ""), false}, {refusal(408, "RequestTimeout"), false}, {refusal(429, "Throttled"), false},
+		{refusal(500, "Internal"), false}, {refusal(503, "Unavailable"), false}, {refusal(302, "x"), false},
+		{perr(codeUnreachable, true, &transportError{}, nil), false}, {errors.New("x"), false}, {nil, false},
+	} {
+		assert.Equal(t, tc.want, completeRefusal(tc.err), "%v", tc.err)
+	}
 }

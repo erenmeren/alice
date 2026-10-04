@@ -49,6 +49,9 @@ func (c *signInCredential) GetToken(ctx context.Context, tro policy.TokenRequest
 	if len(tro.Scopes) != 1 || tro.Scopes[0] != azureid.VaultScope {
 		return azcore.AccessToken{}, &tokenError{c.auth, errChallengeScope}
 	}
+	if c.auth != providers.AzureAuthManagedIdentity {
+		tro.TenantID = c.tenant // the SDK compares case-sensitively: ask for the configured spelling
+	}
 	tok, err := c.inner.GetToken(ctx, tro)
 	if err != nil {
 		return azcore.AccessToken{}, &tokenError{c.auth, err}
@@ -80,7 +83,8 @@ func newCredential(id providers.AzureIdentity, opts, imds azcore.ClientOptions) 
 		if len(id.ClientSecret.Bytes()) == 0 {
 			return nil, errBadIdentity
 		}
-		// The SDK keeps the secret as a Go string for this session's lifetime (R40 row 33).
+		// The SDK keeps the secret as a Go string for this session's lifetime and Alice cannot zero
+		// that copy (R40 row 33).
 		inner, err = azidentity.NewClientSecretCredential(id.TenantID, id.ClientID, string(id.ClientSecret.Bytes()),
 			&azidentity.ClientSecretCredentialOptions{ClientOptions: opts, DisableInstanceDiscovery: true})
 	case providers.AzureAuthCertificate:
@@ -93,6 +97,8 @@ func newCredential(id providers.AzureIdentity, opts, imds azcore.ClientOptions) 
 		if kerr != nil || !ok {
 			return nil, errBadIdentity
 		}
+		// Likewise the SDK keeps its own copy of the RSA private key (the *rsa.PrivateKey parsed
+		// above and what MSAL derives from it) for the session's lifetime; Alice zeroes only the DER.
 		inner, err = azidentity.NewClientCertificateCredential(id.TenantID, id.ClientID, []*x509.Certificate{cert}, rsaKey,
 			&azidentity.ClientCertificateCredentialOptions{ClientOptions: opts, DisableInstanceDiscovery: true})
 	case providers.AzureAuthManagedIdentity:

@@ -380,3 +380,12 @@ func classifySignIn(te *tokenError, sn wireSnapshot) failure {
 	}
 	return f
 }
+
+// completeRefusal reports an error that is a complete, parsed 4xx answer of Azure that carries a
+// validated Azure code, other than 408 and 429 (timeouts and throttling say nothing about whether
+// the request was carried out): the one kind of failure an import may treat as "refused". Anything
+// else, including a 5xx, a transport failure or an answer without a code, is uncertain.
+func completeRefusal(err error) bool {
+	status, code, ok := answerOf(err)
+	return ok && code != "" && status >= 400 && status < 500 && status != http.StatusRequestTimeout && status != http.StatusTooManyRequests
+}

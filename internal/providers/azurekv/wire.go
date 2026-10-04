@@ -130,14 +130,103 @@ func kindOf(err error) wireKind {
 	}
 }
 
-// ownChallenge reports a 401 of the vault's own host whose challenge names the vault resource of
-// the public cloud and the Entra authority: positive evidence that a challenge error of the SDK is
-// the SDK's own host check on a port-qualified host, not a hostile challenge.
+// challengeParams parses the parameters of a WWW-Authenticate challenge as a quoted-string aware
+// list: `Bearer name="value", name2=token`. A backslash escapes inside quotes. It returns every
+// occurrence of each name, so a duplicated parameter is visible, and false for an unterminated quote.
+func challengeParams(h string) (map[string][]string, bool) {
+	out := map[string][]string{}
+	h = strings.TrimSpace(h)
+	if sp := strings.IndexAny(h, " \t"); sp >= 0 && !strings.Contains(h[:sp], "=") {
+		h = h[sp:] // the scheme
+	}
+	for i := 0; i < len(h); {
+		for i < len(h) && (h[i] == ' ' || h[i] == '\t' || h[i] == ',') {
+			i++
+		}
+		start := i
+		for i < len(h) && h[i] != '=' && h[i] != ' ' && h[i] != ',' {
+			i++
+		}
+		name := h[start:i]
+		if i >= len(h) || h[i] != '=' {
+			continue // a token without a value
+		}
+		i++
+		var val strings.Builder
+		if i < len(h) && h[i] == '"' {
+			i++
+			for i < len(h) && h[i] != '"' {
+				if h[i] == '\\' && i+1 < len(h) {
+					i++
+				}
+				val.WriteByte(h[i])
+				i++
+			}
+			if i >= len(h) {
+				return out, false // an unterminated quote
+			}
+			i++ // the closing quote
+		} else {
+			for i < len(h) && h[i] != ',' && h[i] != ' ' {
+				val.WriteByte(h[i])
+				i++
+			}
+		}
+		out[foldASCII(name)] = append(out[foldASCII(name)], val.String())
+	}
+	return out, true
+}
+
+// sdkChallengeValue reproduces how the SDK's challenge policy reads the header (it splits on blanks
+// and equal signs, the last occurrence wins, scope before resource), so that evidence is only
+// accepted when the SDK and this package read the same resource.
+func sdkChallengeValue(h string) string {
+	h = strings.ReplaceAll(h, "Bearer ", "")
+	vals := map[string]string{}
+	for _, part := range strings.Split(h, " ") {
+		if sub := strings.Split(part, "="); len(sub) == 2 {
+			vals[sub[0]] = strings.TrimSuffix(strings.ReplaceAll(sub[1], "\"", ""), ",")
+		}
+	}
+	if v, ok := vals["scope"]; ok {
+		return v
+	}
+	return vals["resource"]
+}
+
+// ownChallenge reports a 401 whose single WWW-Authenticate header carries exactly one authority
+// (the Entra login host) and exactly one resource (or scope) naming the vault resource of the public
+// cloud, read the same way by this package and by the SDK: positive evidence that a challenge error
+// of the SDK is its own host check on a port-qualified host, not a hostile challenge. Anything
+// odd (a second header, a duplicated or decoy parameter, other quoting) is not evidence.
 func ownChallenge(status int, h http.Header) bool {
-	if status != http.StatusUnauthorized {
+	if status != http.StatusUnauthorized || len(h.Values("WWW-Authenticate")) != 1 {
 		return false
 	}
-	v := h.Get("WWW-Authenticate")
-	res := strings.Contains(v, `resource="https://vault.azure.net"`) || strings.Contains(v, `scope="`+azureid.VaultScope+`"`)
-	return res && strings.Contains(v, `authorization="https://`+azureid.AuthorityHost+`/`)
+	raw := h.Get("WWW-Authenticate")
+	p, wellFormed := challengeParams(raw)
+	if !wellFormed {
+		return false
+	}
+	one := func(name string) (string, bool) {
+		v := p[name]
+		if len(v) != 1 {
+			return "", false
+		}
+		return v[0], true
+	}
+	auth, ok := one("authorization")
+	if !ok || !strings.HasPrefix(auth, "https://"+azureid.AuthorityHost+"/") {
+		return false
+	}
+	res, hasRes := one("resource")
+	scope, hasScope := one("scope")
+	if len(p["resource"]) > 1 || len(p["scope"]) > 1 || (!hasRes && !hasScope) {
+		return false
+	}
+	if hasRes && res != "https://vault.azure.net" || hasScope && scope != azureid.VaultScope {
+		return false
+	}
+	sdk := sdkChallengeValue(raw)
+	return sdk == "https://vault.azure.net" || sdk == azureid.VaultScope
 }

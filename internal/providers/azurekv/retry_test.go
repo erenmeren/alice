@@ -116,6 +116,15 @@ func TestRetryLoop(t *testing.T) {
 		w.waitsExactly(t, 5*time.Second, 1)
 		require.NoError(t, <-ch)
 	})
+	t.Run("Retry-After 0 or a past date keeps the jittered wait", func(t *testing.T) {
+		for _, v := range []string{"0", "Mon, 02 Jan 2006 15:04:05 GMT"} {
+			w := newRetryWorld(t, 0)
+			w.s.FailNext("/certificates/web-cert", fakekv.Fault{Status: 429, RetryAfter: v})
+			ch := w.get(context.Background())
+			w.waitsExactly(t, 5*time.Second, 1) // the full jitter, not an immediate retry
+			require.NoError(t, <-ch, v)
+		}
+	})
 	t.Run("429 without the header: jittered back-off, three attempts", func(t *testing.T) {
 		w := newRetryWorld(t, 0)
 		var maxes []time.Duration

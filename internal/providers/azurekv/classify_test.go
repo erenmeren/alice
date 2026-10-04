@@ -12,12 +12,15 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/platform/clock"
 	"alice/internal/providers"
+	"alice/internal/testutil/fakekv"
 )
 
 func response(status int, header http.Header, body string) *http.Response {
@@ -160,3 +163,63 @@ func TestCallRespectsATotalBudget(t *testing.T) {
 type iotestErrReader struct{}
 
 func (iotestErrReader) Read([]byte) (int, error) { return 0, errors.New("broken") }
+
+func TestOwnChallengeEvidenceIsParsedNotMatched(t *testing.T) {
+	const auth = `authorization="https://login.microsoftonline.com/6b8e2c1a-0f3d-4c2b-9a7e-1d2c3b4a5f60"`
+	cases := []struct {
+		name   string
+		status int
+		values []string
+		want   bool
+	}{
+		{"the standard challenge", 401, []string{`Bearer ` + auth + `, resource="https://vault.azure.net"`}, true},
+		{"with a scope", 401, []string{`Bearer ` + auth + `, scope="https://vault.azure.net/.default"`}, true},
+		{"without commas", 401, []string{`Bearer ` + auth + ` resource="https://vault.azure.net"`}, true},
+		{"not a 401", 403, []string{`Bearer ` + auth + `, resource="https://vault.azure.net"`}, false},
+		{"foreign resource", 401, []string{`Bearer ` + auth + `, resource="https://evil.test"`}, false},
+		{"decoy inside another quoted value", 401, []string{`Bearer ` + auth + `, error_description="resource=\"https://vault.azure.net\"", resource="https://evil.test"`}, false},
+		{"decoy parameter after the real one", 401, []string{`Bearer ` + auth + `, resource="https://evil.test", x="resource=\"https://vault.azure.net\""`}, false},
+		{"duplicated resource", 401, []string{`Bearer ` + auth + `, resource="https://vault.azure.net", resource="https://evil.test"`}, false},
+		{"duplicated scope", 401, []string{`Bearer ` + auth + `, scope="https://vault.azure.net/.default", scope="https://vault.azure.net/.default"`}, false},
+		{"duplicated authorization", 401, []string{`Bearer ` + auth + `, ` + auth + `, resource="https://vault.azure.net"`}, false},
+		{"scope for another resource beside the vault's", 401, []string{`Bearer ` + auth + `, scope="https://evil.test/.default", resource="https://vault.azure.net"`}, false},
+		{"foreign authority", 401, []string{`Bearer authorization="https://evil.test/x", resource="https://vault.azure.net"`}, false},
+		{"no authority", 401, []string{`Bearer resource="https://vault.azure.net"`}, false},
+		{"no resource", 401, []string{`Bearer ` + auth}, false},
+		{"two headers", 401, []string{`Bearer ` + auth + `, resource="https://vault.azure.net"`, `Bearer ` + auth + `, resource="https://evil.test"`}, false},
+		{"no header", 401, nil, false},
+		{"escaped quotes in a value", 401, []string{`Bearer ` + auth + `, resource="https://vault.azure.net", e="a \" b"`}, true},
+		{"the SDK reads another resource than we do", 401, []string{`Bearer ` + auth + `, resource="https://vault.azure.net" x=" resource=https://evil.test"`}, false},
+		{"unterminated quote", 401, []string{`Bearer ` + auth + `, resource="https://vault.azure.net`}, false},
+		{"an upper-case parameter name is the same parameter", 401, []string{`Bearer ` + auth + `, Resource="https://vault.azure.net", resource="https://evil.test"`}, false},
+	}
+	for _, tc := range cases {
+		h := http.Header{}
+		for _, v := range tc.values {
+			h.Add("WWW-Authenticate", v)
+		}
+		assert.Equal(t, tc.want, ownChallenge(tc.status, h), tc.name)
+	}
+	p, ok := challengeParams("")
+	assert.True(t, ok)
+	assert.Empty(t, p)
+	p, ok = challengeParams("Bearer junk, a=b")
+	assert.True(t, ok)
+	assert.Equal(t, map[string][]string{"a": {"b"}}, p, "a token without a value is skipped")
+}
+
+// Seeding a resumed pager cannot send a request, even if azcore stopped serving the seed from memory.
+func TestResumingAPagerSendsNothing(t *testing.T) {
+	s := fakekv.Start(t, fakekv.Options{})
+	addSeed(s)
+	sess := openSession(t, testProvider(s), &idSource{id: secretIdentity(s)}, nearNow())
+	api := sess.api.(*sdkAPI)
+	s.ClearRequests()
+	l := link("bulk-00")
+	p, err := resumePager(func() *runtime.Pager[azcertificates.ListCertificatePropertiesResponse] {
+		return api.certs.NewListCertificatePropertiesPager(nil)
+	}, &l)
+	require.NoError(t, err)
+	assert.True(t, p.More(), "positioned at the next page")
+	assert.Empty(t, s.Requests(), "seeding sent nothing")
+}

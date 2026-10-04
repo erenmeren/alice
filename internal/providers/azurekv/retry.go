@@ -30,7 +30,9 @@ var (
 
 const backoffBase = 5 * time.Second
 
-// retryer is Alice's single retry loop of a session: it takes the vault's limiter slot, bounds
+// retryer is Alice's single retry loop of a session (the limiter counts attempts: one attempt can be
+// the SDK's unauthenticated challenge probe, the token request and the call itself, and takes one
+// rate token and one concurrency slot): it takes the vault's limiter slot, bounds
 // each try, maps the error, honours Retry-After and waits on the injected clock.
 type retryer struct {
 	clock      clock.Clock
@@ -38,6 +40,7 @@ type retryer struct {
 	log        *slog.Logger
 	jitter     func(max time.Duration) time.Duration // a delay in [0, max]; nil: random
 	tryTimeout time.Duration                         // 0: TryTimeout
+	maxPages   int                                   // pages of one listing; 0: MaxListPages
 }
 
 func (r *retryer) jittered(max time.Duration) time.Duration {
@@ -85,7 +88,9 @@ func call[T any](ctx context.Context, r *retryer, b budget, action string, fn fu
 				r.logFailure(ctx, action, f.err, attempt, false)
 				return zero, f.err
 			}
-			wait = d
+			if d > 0 { // "0" or a date in the past asks for no pause: keep the jittered wait
+				wait = d
+			}
 		}
 		if b.total > 0 && r.clock.Now().Sub(start)+wait > b.total {
 			r.logFailure(ctx, action, f.err, attempt, false)

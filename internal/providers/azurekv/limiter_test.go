@@ -121,9 +121,26 @@ func TestForgetTargetDropsTheLimiter(t *testing.T) {
 	ta, tb := uuid.New(), uuid.New()
 	la := p.limiterFor(ta, "a.vault.azure.net", clk)
 	lb := p.limiterFor(tb, "b.vault.azure.net", clk)
-	assert.Same(t, la, p.limiterFor(uuid.New(), "a.vault.azure.net", clk), "one limiter per vault")
 	p.ForgetTarget(ta)
-	assert.NotSame(t, la, p.limiterFor(ta, "a.vault.azure.net", clk))
+	assert.NotSame(t, la, p.limiterFor(ta, "a.vault.azure.net", clk), "A's limiter was dropped with its only target")
 	assert.Same(t, lb, p.limiterFor(tb, "b.vault.azure.net", clk), "B keeps its limiter")
 	p.ForgetTarget(uuid.New()) // unknown target: nothing happens
+}
+
+// Two targets can name the same vault: forgetting one must not give the other a fresh limiter (that
+// would double the allowed rate on the vault).
+func TestForgetTargetKeepsALimiterAnotherTargetShares(t *testing.T) {
+	p := New(Options{})
+	clk := clock.NewFake(time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
+	t1, t2 := uuid.New(), uuid.New()
+	l := p.limiterFor(t1, "a.vault.azure.net", clk)
+	assert.Same(t, l, p.limiterFor(t2, "a.vault.azure.net", clk))
+	p.ForgetTarget(t1)
+	assert.Same(t, l, p.limiterFor(t2, "a.vault.azure.net", clk), "t2 still shares it")
+	p.ForgetTarget(t2)
+	assert.NotSame(t, l, p.limiterFor(t1, "a.vault.azure.net", clk), "no target remained")
+	// A target that moves to another vault leaves the first one's claim.
+	p.limiterFor(t1, "b.vault.azure.net", clk)
+	p.ForgetTarget(t2)
+	assert.NotContains(t, p.users["a.vault.azure.net"], t1)
 }

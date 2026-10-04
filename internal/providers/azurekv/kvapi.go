@@ -3,6 +3,7 @@ package azurekv
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -12,6 +13,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 
 	"alice/internal/platform/azureid"
+	"alice/internal/providers"
 )
 
 // kvAPI is what the provider asks of one vault (spec §11.2): sdkAPI over the SDK clients in
@@ -59,34 +61,61 @@ func newSDKAPI(v azureid.Vault, cred azcore.TokenCredential, opts azcore.ClientO
 	return &sdkAPI{cred: cred, certs: certs, keys: keys, secrets: secrets, r: r}, nil
 }
 
-// pages runs a listing one page per call: retry, limiter slot and deadline are per page, so a failed
-// page is asked again without restarting the listing (D26).
-//
-// azcore's Pager enters a terminal state after an error (every later NextPage returns the same
-// error without a request), so after a failure the pager is rebuilt at the same position: a new
-// pager seeded, through its UnmarshalJSON, with the nextLink of the last page that succeeded (the
-// first page needs no seed). The link is the server's; the vault transport still refuses a host
-// that is not the session's own.
-func pages[R any](ctx context.Context, r *retryer, action string, newPager func() *runtime.Pager[R], nextLink func(R) *string, each func(R) error) error {
-	var last *string
-	seed := func() *runtime.Pager[R] {
-		p := newPager()
-		if last != nil {
-			if b, err := json.Marshal(map[string]string{"nextLink": *last}); err == nil {
-				_ = json.Unmarshal(b, p) // sets the pager's current page: only its next link matters
-				// A pager resumed this way hands back that seed once, with no request (the resume path
-				// of long-running operations); take it so the next NextPage fetches the real next page.
-				_, _ = p.NextPage(context.Background())
-			}
-		}
-		return p
+var (
+	errPageCap  = errors.New("azurekv: a listing has more pages than any vault Alice supports")
+	errPageLoop = errors.New("azurekv: a listing repeats a next link")
+)
+
+// resumePager builds a pager positioned after the page whose nextLink is link: a new pager seeded,
+// through its UnmarshalJSON, with that link (azcore's Pager is terminal after an error, so a failed
+// page is asked again through a fresh one). A pager resumed this way hands back the seed once, with
+// no request; the seed is taken here with an already-cancelled context, so that call cannot send
+// anything even if azcore changes: a request would fail before it left, and resumePager would
+// report it.
+func resumePager[R any](newPager func() *runtime.Pager[R], link *string) (*runtime.Pager[R], error) {
+	p := newPager()
+	if link == nil {
+		return p, nil
 	}
-	pager := seed()
-	for pager.More() {
+	b, _ := json.Marshal(map[string]string{"nextLink": *link}) // a map of strings always encodes
+	_ = json.Unmarshal(b, p)                                   // the pager's response types are flat structs with a nextLink
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := p.NextPage(dead); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// pages runs a listing one page per call: retry, limiter slot and deadline are per page, so a failed
+// page is asked again without restarting the listing (D26). The first page needs no seed; later
+// pages resume at the nextLink of the last page that succeeded. The link is the server's; the vault
+// transport still refuses a host that is not the session's own.
+//
+// A hostile or broken vault could answer with a nextLink cycle forever, so a listing ends as
+// azure.unexpected_response when a nextLink repeats within it or when it has more than maxPages
+// pages (MaxListPages unless the retryer says otherwise).
+func pages[R any](ctx context.Context, r *retryer, action string, newPager func() *runtime.Pager[R], nextLink func(R) *string, each func(R) error) error {
+	unexpected := func(cause error) error {
+		return perr(codeUnexpected, true, errors.Join(providers.ErrUnexpectedAnswer, cause), nil)
+	}
+	limit := r.maxPages
+	if limit <= 0 {
+		limit = MaxListPages
+	}
+	var last *string
+	seen := map[string]bool{}
+	pager := newPager()
+	for n := 0; pager.More(); n++ {
+		if n >= limit {
+			return unexpected(errPageCap)
+		}
 		page, err := call(ctx, r, readBudget, action, func(c context.Context) (R, error) {
 			pg, err := pager.NextPage(c)
 			if err != nil {
-				pager = seed()
+				if np, rerr := resumePager(newPager, last); rerr == nil {
+					pager = np
+				}
 			}
 			return pg, err
 		})
@@ -94,6 +123,12 @@ func pages[R any](ctx context.Context, r *retryer, action string, newPager func(
 			return err
 		}
 		last = nextLink(page)
+		if last != nil {
+			if seen[*last] {
+				return unexpected(errPageLoop)
+			}
+			seen[*last] = true
+		}
 		if err := each(page); err != nil {
 			return err
 		}
