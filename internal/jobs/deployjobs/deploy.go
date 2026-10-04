@@ -349,6 +349,12 @@ func (h *handlers) rollbackAgain(ctx context.Context, sess providers.Session, m 
 	if cause == "" {
 		cause = causeReason(first.Finish.CauseStep, first.Finish.HelperError)
 	}
+	if c := rec.lastVerifyFailure(); cause == "" && c.reason != "" {
+		// The rollback failed at a later step, so the outcome does not name the verification that
+		// started it; the step recorded before the restore does (as the recovery reads it).
+		cause = c.reason
+		first.Finish.VerifyFailedReason, first.Finish.VerifyFailedPort = c.reason, c.port
+	}
 	if err := h.d.Inventory.CheckClaim(ctx); err != nil {
 		// A stale run restores nothing; its record write is refused the same way. The record of the
 		// first answer (restore_failed) is kept as the outcome to try to write.

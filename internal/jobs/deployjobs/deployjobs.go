@@ -43,6 +43,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -368,6 +369,12 @@ type recorder struct {
 	// provider does not send its inline restore (the provider checks its context before every
 	// command; its steps are recorded before the commands that follow them).
 	lost context.CancelFunc
+	// verifyFail is the last failed verification of the new certificate this run recorded (step
+	// verify, failed, with its reason): when the helper's own rollback ends restore_failed and
+	// the engine's one more restore succeeds, the outcome knows no cause, and this is the reason
+	// the deployment was rolled back.
+	mu         sync.Mutex
+	verifyFail rollbackCause
 }
 
 func (h *handlers) recorder(ctx context.Context, id uuid.UUID, steps jobs.StepRecorder) *recorder {
@@ -376,6 +383,11 @@ func (h *handlers) recorder(ctx context.Context, id uuid.UUID, steps jobs.StepRe
 
 // Step implements providers.StepLogger.
 func (r *recorder) Step(name string, status providers.StepStatus, params map[string]string) {
+	if name == providers.StepNameVerify && status == providers.StepFailed && reasonRE.MatchString(params["reason"]) {
+		r.mu.Lock()
+		r.verifyFail = rollbackCause{reason: params["reason"], port: portOf(params), step: providers.StepNameVerify}
+		r.mu.Unlock()
+	}
 	if r.next != nil {
 		r.next.Step(name, status, params)
 	}
@@ -390,6 +402,13 @@ func (r *recorder) Step(name string, status providers.StepStatus, params map[str
 	if err != nil {
 		r.log.Error("could not record a deployment step", "deployment_id", r.id.String(), "step", name, "error_type", fmt.Sprintf("%T", err))
 	}
+}
+
+// lastVerifyFailure is the last failed verification of the new certificate this run recorded.
+func (r *recorder) lastVerifyFailure() rollbackCause {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.verifyFail
 }
 
 // causeReason is the reason of the helper's own rollback by the step that started it (as the nginx

@@ -334,3 +334,27 @@ func TestF17IncompleteChainNeedsAnAdministrator(t *testing.T) {
 	assert.Equal(t, 2, d.NewChainLength, "the chain as uploaded is what was sent and verified")
 	assert.Equal(t, pki.Fingerprint(other.Cert), s.emu.Served(443, wwwName))
 }
+
+// The verification of the new certificate fails and the helper's own rollback ends restore_failed
+// (its reload fails, so Nginx still holds the new certificate); the engine's one more nginx-restore
+// puts everything back. The record keeps why the deployment was rolled back: the verification
+// failure the run recorded before the restore, not "interrupted".
+func TestRollbackAfterARestoreFailureKeepsTheVerificationCause(t *testing.T) {
+	e := newEnv(t)
+	s := e.addServer("web-01", wwwSite())
+	// Something else answers after the deployment's reload; the rollback's first reload fails.
+	s.emu.ServeOtherAfterReload(443, sha([]byte("balancer")))
+	s.emu.ArmFaultsFor(helperproto.SubNginxRestore)
+	s.emu.FailReload(1)
+	id := e.request(s.locs[wwwCert])[0]
+	e.drain()
+	d := e.deployment(id)
+	assert.Equal(t, inventory.DeployStateDone, d.State)
+	assert.Equal(t, inventory.DeployStatusRolledBack, d.Status)
+	assert.Equal(t, "deployment.verify_other", d.ErrorCode, "the cause is the verification that failed, not an interruption")
+	assert.Equal(t, "deployment.verify_other", d.VerifyFailedReason)
+	require.NotNil(t, d.VerifyFailedPort)
+	assert.Equal(t, 443, *d.VerifyFailedPort)
+	assert.Equal(t, "verify", d.CauseStep)
+	e.assertPair(s, wwwCert, wwwKey, wwwName, e.old)
+}
