@@ -129,6 +129,17 @@ const (
 	// later operation for the same certificate and key files replaced (exit 3, nothing changed):
 	// only the latest operation of a pair can be rolled back.
 	CodeSuperseded = "SUPERSEDED"
+	// CodeRecoveryPending: nginx-deploy for a pair whose latest operation was interrupted (its
+	// journal says writing or restoring): a new operation would supersede it and make its rollback
+	// impossible. Exit 3, nothing changed; nginx-restore of that operation comes first.
+	CodeRecoveryPending = "RECOVERY_PENDING"
+	// CodeNginxNotRunning: nginx-deploy found /usr/bin/systemctl missing or "systemctl is-active
+	// nginx" failing before anything was written: a reload could not work. Exit 3, nothing changed.
+	CodeNginxNotRunning = "NGINX_NOT_RUNNING"
+	// CodeOutcomeUnknown: nginx-deploy or nginx-restore met an unexpected error after it had
+	// renamed a file: the answer is not a refusal (Alice treats it as uncertain and reads
+	// nginx-status). Exit 4. No refusal table holds it.
+	CodeOutcomeUnknown = "OUTCOME_UNKNOWN"
 )
 
 // MaxAccountNames bounds AuthKeysListResponse.Accounts (R38 item 20).

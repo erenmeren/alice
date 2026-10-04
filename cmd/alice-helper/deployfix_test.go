@@ -181,6 +181,19 @@ func TestRestoreFailedWithAMixedPairKeepsItsBackups(t *testing.T) {
 }
 
 // deployFrom deploys a new pair over the current one (expected: the current certificate).
+// setPhase rewrites an operation's journal phase (a state an older helper could leave).
+func (w *deployWorld) setPhase(t *testing.T, op, phase string) {
+	t.Helper()
+	dir, err := w.f.s.opDir(op, false)
+	require.NoError(t, err)
+	defer func() { _ = dir.Close() }()
+	j, found, err := readJournal(dir, op)
+	require.NoError(t, err)
+	require.True(t, found)
+	j.Phase = phase
+	require.NoError(t, w.f.s.writeJournal(dir, j))
+}
+
 func (w *deployWorld) deployFrom(t *testing.T, op string, cur, next pki.Leaf) map[string]any {
 	t.Helper()
 	in := input(next.FullchainPEM, next.KeyPEM)
@@ -250,8 +263,19 @@ func TestInterruptedOperationSupersededLater(t *testing.T) {
 	require.Equal(t, helperproto.ExitFailed, code)
 	w.revive()
 	third := pki.NewCA("Third", pki.ECDSA256, testNow).Issue(pki.Opts{CommonName: "www.example.test"}, testNow)
-	w.deployFrom(t, opB, w.newLeaf, third)
-	code, m := w.deploy(opA, w.newInput(), w.oldSHA())
+	// Final review A1 m1: the helper itself refuses B while A is interrupted. The state the rest of
+	// this test checks (an interrupted A that a later B superseded, as a helper before that fix could
+	// leave it) is made by hand: A finished, B committed, then A's journal set back to writing.
+	in := input(third.FullchainPEM, third.KeyPEM)
+	code, m := w.f.runWith(in, "nginx-deploy", "--op", opB, "--cert", "/etc/nginx/ssl/www.crt", "--key", "/etc/nginx/ssl/www.key",
+		"--expect-cert-sha256", hexOf(string(w.newLeaf.FullchainPEM)), "--content-sha256", hexOf(in))
+	require.Equal(t, helperproto.ExitPrecondition, code, "%v", m)
+	require.Equal(t, helperproto.CodeRecoveryPending, m["code"])
+	_, m = w.f.run("nginx-restore", "--op", opA)
+	require.Equal(t, helperproto.PhaseRestored, m["phase"])
+	w.deployFrom(t, opB, w.leaf, third)
+	w.setPhase(t, opA, helperproto.PhaseWriting)
+	code, m = w.deploy(opA, w.newInput(), w.oldSHA())
 	assert.Equal(t, helperproto.ExitPrecondition, code, "%v", m)
 	assert.Equal(t, helperproto.CodeSuperseded, m["code"])
 	assert.Equal(t, string(third.FullchainPEM), w.f.read("/etc/nginx/ssl/www.crt"))

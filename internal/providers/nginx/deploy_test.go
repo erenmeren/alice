@@ -543,8 +543,11 @@ func TestDeployRefusalCodes(t *testing.T) {
 		helperproto.CodeNotFound: "nginx.location_unsupported", helperproto.CodeHashMismatch: "nginx.file_changed",
 		helperproto.CodeNoSpace: "nginx.no_space", helperproto.CodeSuperseded: "ssh.helper_refused",
 		helperproto.CodeBusy: "nginx.busy", helperproto.CodeIOError: "nginx.io_error",
+		helperproto.CodeRecoveryPending: "deployment.recovery_pending", helperproto.CodeNginxNotRunning: "nginx.not_running",
 	}
 	require.Len(t, deployRefusals, len(want))
+	assert.NotContains(t, deployRefusals, helperproto.CodeOutcomeUnknown, "the helper's guard after a rename is never a refusal")
+	assert.NotContains(t, restoreRefusals, helperproto.CodeOutcomeUnknown)
 	e := newEnv(t)
 	nw := e.ca.Issue(pki.Opts{CommonName: "www.example.test"}, e.now)
 	s := e.session(t) // a scripted refusal keeps the connection

@@ -38,7 +38,8 @@ const (
 // Refusal codes per subcommand with the exit status the helper gives each (cmd/alice-helper
 // deploy.go, run.go; the Task 6 contract). Only such an answer (well-formed JSON, ok false, a code
 // of this table at its exit status) is a refusal that changed nothing; any other code, or a known
-// code at another exit status, is an answer Alice does not understand: uncertain.
+// code at another exit status, is an answer Alice does not understand: uncertain. OUTCOME_UNKNOWN
+// (the helper's guard after a rename) is in no table on purpose.
 var (
 	deployRefusals = map[string]int{
 		helperproto.CodeUsage: helperproto.ExitRefused, helperproto.CodeUnknownSubcommand: helperproto.ExitRefused,
@@ -50,6 +51,7 @@ var (
 		helperproto.CodeConfigInvalid: helperproto.ExitPrecondition, helperproto.CodeConfigChanged: helperproto.ExitPrecondition,
 		helperproto.CodeNotFound: helperproto.ExitPrecondition, helperproto.CodeHashMismatch: helperproto.ExitPrecondition,
 		helperproto.CodeNoSpace: helperproto.ExitPrecondition, helperproto.CodeSuperseded: helperproto.ExitPrecondition,
+		helperproto.CodeRecoveryPending: helperproto.ExitPrecondition, helperproto.CodeNginxNotRunning: helperproto.ExitPrecondition,
 		helperproto.CodeBusy: helperproto.ExitFailed, helperproto.CodeIOError: helperproto.ExitFailed,
 	}
 	restoreRefusals = map[string]int{

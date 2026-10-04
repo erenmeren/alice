@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"math/rand/v2"
 	"os"
 	"strings"
@@ -221,3 +222,98 @@ var errFailedWrite = errorString("disk full (test)")
 type errorString string
 
 func (e errorString) Error() string { return string(e) }
+
+// m1: the helper itself refuses a new operation on a pair whose latest operation was interrupted
+// (writing or restoring): a new one would supersede it, and its rollback would never be possible.
+func TestDeployRefusesAPairWhoseLatestOperationWasInterrupted(t *testing.T) {
+	for _, point := range []string{helperproto.StepReload, "journal restoring renamed"} {
+		t.Run(point, func(t *testing.T) {
+			w := newDeployWorld(t)
+			if point != helperproto.StepReload {
+				w.reloadFail = 1 // the deployment rolls back; it dies during that rollback
+			}
+			w.f.s.afterDeployStep = func(name string) error {
+				if name == point {
+					return errKilled
+				}
+				return nil
+			}
+			code, _ := w.deploy(opA, w.newInput(), w.oldSHA())
+			require.Equal(t, helperproto.ExitFailed, code)
+			w.revive()
+			_, st := w.f.run("nginx-status", "--op", opA)
+			require.Contains(t, []string{helperproto.PhaseWriting, helperproto.PhaseRestoring}, st["phase"])
+			before := w.f.read("/etc/nginx/ssl/www.crt")
+
+			cur := hexOf(before)
+			in := input(w.leaf.FullchainPEM, w.leaf.KeyPEM)
+			if before == string(w.leaf.FullchainPEM) {
+				in = w.newInput()
+			}
+			code, m := w.deploy(opB, in, cur)
+			assert.Equal(t, helperproto.ExitPrecondition, code, m)
+			assert.Equal(t, helperproto.CodeRecoveryPending, m["code"])
+			assert.NoDirExists(t, w.opPath(opB))
+			assert.Equal(t, before, w.f.read("/etc/nginx/ssl/www.crt"))
+
+			// The interrupted operation is still the pair's latest: nginx-restore repairs it, and then
+			// a new operation goes through.
+			code, r := w.f.run("nginx-restore", "--op", opA)
+			require.Equal(t, helperproto.ExitOK, code, r)
+			w.assertPair(t, false)
+			code, m = w.deploy(opB, w.newInput(), w.oldSHA())
+			assert.Equal(t, helperproto.ExitOK, code, m)
+			assert.Equal(t, helperproto.PhaseCommitted, m["phase"])
+		})
+	}
+}
+
+// m3: without systemctl, or with Nginx not running, a reload cannot work: refused before anything
+// is written.
+func TestDeployRefusesWhenNginxIsNotRunning(t *testing.T) {
+	for name, fail := range map[string]error{
+		"inactive":          errorString("exit status 3"),
+		"systemctl missing": &os.PathError{Op: "fork/exec", Path: systemctlPath, Err: os.ErrNotExist},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newDeployWorld(t)
+			var calls []string
+			w.f.s.runSystemctl = func(_ context.Context, args ...string) error {
+				calls = append(calls, strings.Join(args, " "))
+				return fail
+			}
+			code, m := w.deploy(opA, w.newInput(), w.oldSHA())
+			assert.Equal(t, helperproto.ExitPrecondition, code, m)
+			assert.Equal(t, helperproto.CodeNginxNotRunning, m["code"])
+			assert.Equal(t, []string{"is-active --quiet nginx"}, calls)
+			w.assertPair(t, false)
+			assert.NoDirExists(t, w.opPath(opA))
+		})
+	}
+	t.Run("systemctl killed: nothing changed, IO_ERROR", func(t *testing.T) {
+		w := newDeployWorld(t)
+		w.f.s.runSystemctl = func(context.Context, ...string) error { return errProgramKilled }
+		code, m := w.deploy(opA, w.newInput(), w.oldSHA())
+		assert.Equal(t, helperproto.ExitFailed, code, m)
+		assert.Equal(t, helperproto.CodeIOError, m["code"])
+		w.assertPair(t, false)
+	})
+}
+
+// The typed-error guard: once a file was renamed, nginx-deploy and nginx-restore never answer an
+// error that reads as a refusal (nothing changed); an unexpected one becomes OUTCOME_UNKNOWN, which
+// no refusal table of Alice holds.
+func TestNoRefusalAfterTheFirstRename(t *testing.T) {
+	s := &sys{}
+	for _, err := range []error{errorString("untyped"), refused(helperproto.CodePathNotAllowed, "x"),
+		precondition(helperproto.CodeHashMismatch, "x"), failed(helperproto.CodeIOError, "x")} {
+		s.renamed = false
+		assert.Equal(t, err, s.afterRename(err), "before a rename an error passes")
+		s.renamed = true
+		var he *helperError
+		require.ErrorAs(t, s.afterRename(err), &he)
+		assert.Equal(t, helperproto.CodeOutcomeUnknown, he.code)
+		assert.Equal(t, helperproto.ExitFailed, he.exit)
+	}
+	assert.NoError(t, s.afterRename(nil))
+}

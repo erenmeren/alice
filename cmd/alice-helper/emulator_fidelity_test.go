@@ -627,6 +627,13 @@ func TestEmulatorFidelityDeploy(t *testing.T) {
 			assert.Equal(t, helperproto.CodePathNotAllowed, a.m["code"])
 			assert.Equal(t, helperproto.PhaseNone, tw.status(opA).m["phase"])
 		}},
+		{"refusal: nginx is not running (A1 m3)", func(t *testing.T, tw *twin) {
+			tw.w.f.s.runSystemctl = func(context.Context, ...string) error { return errors.New("exit status 3") }
+			tw.e.SetNginxNotRunning(true)
+			assert.Equal(t, helperproto.CodeNginxNotRunning, tw.deploy(opA).m["code"])
+			tw.status(opA)
+			tw.sameFiles("old")
+		}},
 		{"operation id of another deployment", func(t *testing.T, tw *twin) {
 			tw.deploy(opA)
 			in := input(tw.w.leaf.FullchainPEM, tw.w.leaf.KeyPEM)
@@ -1055,12 +1062,16 @@ func TestEmulatorFidelityRestoreAndSuperseded(t *testing.T) {
 		_ = tw.runEmu(helperproto.SubNginxDeploy, in, argsA...)
 		tw.revive()
 		assert.Equal(t, helperproto.PhaseWriting, tw.status(opA).m["phase"])
-		// B replaces the pair (A replaced nothing yet) and commits.
+		// A1 m1: B is refused while A, the pair's latest, is interrupted.
 		inB := input(tw.third.FullchainPEM, tw.third.KeyPEM)
 		a := tw.same(helperproto.SubNginxDeploy, inB, tw.deployArgs(opB, inB, tw.w.oldSHA())...)
+		assert.Equal(t, helperproto.CodeRecoveryPending, a.m["code"])
+		assert.Equal(t, helperproto.PhaseRestored, tw.restore(opA).m["phase"])
+		// B replaces the pair and commits; A (restored) is now superseded.
+		a = tw.same(helperproto.SubNginxDeploy, inB, tw.deployArgs(opB, inB, tw.w.oldSHA())...)
 		assert.Equal(t, helperproto.PhaseCommitted, a.m["phase"])
-		assert.Equal(t, helperproto.CodeSuperseded, tw.same(helperproto.SubNginxDeploy, in, argsA...).m["code"])
-		assert.Equal(t, helperproto.CodeSuperseded, tw.restore(opA).m["code"])
+		assert.Equal(t, helperproto.PhaseRestored, tw.same(helperproto.SubNginxDeploy, in, argsA...).m["phase"])
+		tw.restore(opA)
 		assert.Equal(t, 1.0, tw.same(helperproto.SubCleanup, "", "--op", opA).m["removed"], "a superseded operation is not kept for recovery")
 	})
 	t.Run("a mixed pair left by a kill: nginx -T fails, a new deployment is refused, nginx-restore repairs it", func(t *testing.T) {

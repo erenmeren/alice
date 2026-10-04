@@ -208,7 +208,21 @@ func cmdNginxDeploy(ctx context.Context, s *sys, args []string) (out any, err er
 	if err := checkDeployContent(d.cert, d.key); err != nil {
 		return nil, refused(helperproto.CodeBadContent, "the new content is not a certificate chain and its private key")
 	}
-	return s.deploy(ctx, d)
+	s.renamed = false
+	out, err = s.deploy(ctx, d)
+	return out, s.afterRename(err)
+}
+
+// afterRename is the typed-error guard of nginx-deploy and nginx-restore: once this call renamed a
+// file, an error must never read as a refusal ("nothing changed"; reply would also turn an untyped
+// error into IO_ERROR, which Alice's tables hold as one). Every path after the first rename answers
+// the journal's outcome; anything else that reaches here becomes OUTCOME_UNKNOWN (uncertain for
+// Alice, which then reads nginx-status).
+func (s *sys) afterRename(err error) error {
+	if err == nil || !s.renamed {
+		return err
+	}
+	return failed(helperproto.CodeOutcomeUnknown, "files were changed and the outcome could not be reported; read nginx-status")
 }
 
 // deploy runs the transaction under the lock.
@@ -305,6 +319,15 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 	if prior != nil && rec == d.op {
 		j.PrevRecord = prior.PrevRecord
 	}
+	// m1: the pair's latest operation may not be an interrupted one (writing, restoring): this one
+	// would supersede it, and nginx-restore could then never repair the pair. The invariant does not
+	// rest on Alice's own recovery check alone.
+	switch pending, err := s.interruptedLatest(j); {
+	case err != nil:
+		return nil, failed(helperproto.CodeIOError, "the record of the latest deployment cannot be read")
+	case pending:
+		return nil, precondition(helperproto.CodeRecoveryPending, "the latest deployment of these files was interrupted; restore it first")
+	}
 	if bytes.Equal(cert.data, d.cert) && bytes.Equal(key.data, d.key) {
 		// §12.9 "Same cert already deployed": no write, no reload.
 		j.Phase = helperproto.PhaseUnchanged
@@ -338,6 +361,14 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 	}
 	if !s.spaceFor(int(dir.Fd()), int64(len(cert.data)+len(key.data))+helperproto.MinFreeBytes) { //nolint:gosec // G115: a descriptor fits an int
 		return refuse(precondition(helperproto.CodeNoSpace, "the server has not enough free disk space for the backup"))
+	}
+	// m3: the reload at the end needs systemctl and a running Nginx; without them the transaction
+	// would replace the files and then fail its reload and its rollback's reload. Refused first.
+	switch err := s.nginxActive(ctx); {
+	case errors.Is(err, errProgramKilled):
+		return refuse(failed(helperproto.CodeIOError, "systemctl could not be run to the end"))
+	case err != nil:
+		return refuse(precondition(helperproto.CodeNginxNotRunning, "systemctl is missing or nginx is not running"))
 	}
 	if ctx.Err() != nil {
 		return refuse(failed(helperproto.CodeIOError, "the time budget ended before anything was changed"))
@@ -542,6 +573,32 @@ func (s *sys) configTest(ctx context.Context) (string, error) {
 	return classifyNginxError(stderr), err
 }
 
+// nginxActive runs systemctl is-active nginx (bounded by stepTimeout): nil when Nginx runs.
+func (s *sys) nginxActive(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, stepTimeout)
+	defer cancel()
+	return s.runSystemctl(ctx, "is-active", "--quiet", "nginx")
+}
+
+// interruptedLatest reports that the pair's latest operation (the one that last replaced its
+// files) is another one whose journal says writing or restoring.
+func (s *sys) interruptedLatest(j journal) (bool, error) {
+	op, ok, err := s.latestOp(j)
+	if err != nil || !ok || op == "" || op == j.Op {
+		return false, err
+	}
+	dir, err := s.opDir(op, false)
+	if err != nil {
+		return false, nil //nolint:nilerr // latestOp read it a moment ago; gone now: not pending
+	}
+	defer func() { _ = dir.Close() }()
+	other, found, err := readJournal(dir, op)
+	if err != nil || !found {
+		return false, nil //nolint:nilerr // as above
+	}
+	return other.Phase == helperproto.PhaseWriting || other.Phase == helperproto.PhaseRestoring, nil
+}
+
 // reload runs systemctl reload nginx, then systemctl is-active nginx.
 func (s *sys) reload(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, stepTimeout)
@@ -609,6 +666,7 @@ func (s *sys) replaceFile(t *target, content []byte, mode uint32, meta fileMeta,
 		return false, err
 	}
 	renamed = true
+	s.renamed = true
 	t.installed = idOf(sst)
 	s.point("renamed " + staged)
 	return true, unix.Fsync(dfd)
@@ -964,7 +1022,11 @@ func cmdNginxRestore(ctx context.Context, s *sys, args []string) (out any, err e
 	}
 	j.Steps = trimSteps(j.Steps) // as restoreOp does: the steps it adds follow
 	before := len(j.Steps)
+	s.renamed = false
 	j, err = s.restoreOp(context.WithoutCancel(ctx), dir, j, false)
+	if s.renamed && err != nil {
+		err = nil // restoreOp answers its outcome once it renamed (A1-I2); the journal says it
+	}
 	switch {
 	case errors.Is(err, errChangedByOthers):
 		// Only before any rename (A1-I2): restoreOp answers a later change as its outcome.

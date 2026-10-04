@@ -373,6 +373,17 @@ func (h *nginxHost) keepForRecovery(j *emuJournal) bool {
 	return false
 }
 
+// interruptedLatest is the helper's interruptedLatest: the pair's latest operation is another one
+// whose journal says writing or restoring.
+func (h *nginxHost) interruptedLatest(j *emuJournal) bool {
+	op, ok := h.latestOp(j)
+	if !ok || op == "" || op == j.op {
+		return false
+	}
+	other := h.ops[op]
+	return other != nil && other.j != nil && (other.j.phase == helperproto.PhaseWriting || other.j.phase == helperproto.PhaseRestoring)
+}
+
 // ---- nginx -t, reload ---------------------------------------------------------------------
 
 func (h *nginxHost) configTest() (string, error) { return h.testConfig(true) }
@@ -381,6 +392,9 @@ func (h *nginxHost) configTest() (string, error) { return h.testConfig(true) }
 // what it served; a success makes it serve the files now on disk (unless NoopReload).
 func (h *nginxHost) reload() error {
 	h.reloads++ // systemctl: independent of the nginx binary (SetNginxKilled does not touch it)
+	if h.notRunning {
+		return errors.New("nginx is not running")
+	}
 	if h.failReload > 0 {
 		h.failReload--
 		return errors.New("reload failed")
@@ -775,6 +789,9 @@ func (h *nginxHost) deploy(opID, certPath, keyPath, expect string, newCert, newK
 	if prior != nil && rec == opID {
 		j.prevRecord = prior.prevRecord
 	}
+	if h.interruptedLatest(j) {
+		return refuse(helperproto.ExitPrecondition, helperproto.CodeRecoveryPending) // A1 m1
+	}
 	if bytes.Equal(cert.data, newCert) && bytes.Equal(key.data, newKey) {
 		// "Same cert already deployed": no write, no reload.
 		j.phase = helperproto.PhaseUnchanged
@@ -806,6 +823,9 @@ func (h *nginxHost) deploy(opID, certPath, keyPath, expect string, newCert, newK
 	}
 	if h.free() < int64(len(cert.data)+len(key.data))+helperproto.MinFreeBytes {
 		return refuseDrop(refuse(helperproto.ExitPrecondition, helperproto.CodeNoSpace))
+	}
+	if h.notRunning {
+		return refuseDrop(refuse(helperproto.ExitPrecondition, helperproto.CodeNginxNotRunning)) // A1 m3
 	}
 
 	// 1. The journal, then the backups (nothing is replaced yet: a failure is a refusal).

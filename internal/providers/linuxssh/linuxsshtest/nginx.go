@@ -92,6 +92,7 @@ type nginxHost struct {
 	failTest      int
 	failReload    int
 	noopReload    bool
+	notRunning    bool // SetNginxNotRunning: systemctl is-active fails (and so does a reload)
 	other         map[int]string
 	after         map[int]string
 	afterActive   map[int]bool
@@ -396,6 +397,15 @@ func (e *Emulator) NoopReload(on bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.nginx().noopReload = on
+}
+
+// SetNginxNotRunning makes "systemctl is-active nginx" fail (Nginx stopped, or no systemctl): the
+// helper refuses nginx-deploy with NGINX_NOT_RUNNING before writing anything (A1 m3); a reload
+// fails too.
+func (e *Emulator) SetNginxNotRunning(on bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.nginx().notRunning = on
 }
 
 // ServeOther makes something else answer on port with the given leaf (a load balancer, F-06);

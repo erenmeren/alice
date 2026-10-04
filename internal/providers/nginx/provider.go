@@ -205,6 +205,12 @@ func mapHelper(err error, sub string) error {
 		return providers.NewError("nginx.no_space", false, err, nil)
 	case helperproto.CodeBusy:
 		return providers.NewError("nginx.busy", true, err, nil)
+	case helperproto.CodeRecoveryPending:
+		// The pair's latest operation on the server was interrupted (A1 m1): the same reason as
+		// Alice's own recovery check.
+		return providers.NewError("deployment.recovery_pending", false, err, nil)
+	case helperproto.CodeNginxNotRunning:
+		return providers.NewError("nginx.not_running", false, err, nil)
 	case helperproto.CodeIOError:
 		if sub != helperproto.SubNginxDeploy {
 			return err // a killed or timed-out nginx: the retryable ssh.helper_refused stays
