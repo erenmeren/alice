@@ -61,6 +61,10 @@ web: ## Build the web UI into internal/webui/dist/app
 web-test: ## Run web unit tests
 	cd web && npm test
 
+.PHONY: web-coverage
+web-coverage: ## Run web unit tests under coverage and enforce the thresholds of web/vite.config.ts (AUD-23)
+	cd web && npm run coverage
+
 .PHONY: web-lint
 web-lint: ## Lint the web UI
 	cd web && npm run lint
@@ -231,7 +235,7 @@ image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
 # ALICE_E2E_PORT (default 9443), so it runs beside the make up stack, which ci never touches.
 .PHONY: ci
 ci: ## Run the full CI pipeline locally
-	$(MAKE) lint test coverage test-ssh build release-symcheck i18n-check web-lint web-test vuln secrets-scan fs-scan
+	$(MAKE) lint test coverage test-ssh build release-symcheck i18n-check web-lint web-coverage vuln secrets-scan fs-scan
 	@status=0; $(MAKE) e2e-up e2e-hardening-check e2e || status=$$?; $(MAKE) e2e-down; exit $$status
 	$(MAKE) image-check image-scan
 

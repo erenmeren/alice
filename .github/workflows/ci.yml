@@ -71,7 +71,8 @@ jobs:
         with: { node-version: 24, cache: npm, cache-dependency-path: web/package-lock.json }
       - run: make web-install
       - run: make web-lint
-      - run: make web-test
+      # The unit tests under coverage, with the thresholds of web/vite.config.ts (AUD-23).
+      - run: make web-coverage
       - run: make web
       - run: cd web && npm audit --omit=dev --audit-level=high
 

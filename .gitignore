@@ -5,6 +5,7 @@
 /web/node_modules/
 /web/test-results/
 /web/playwright-report/
+/web/coverage/
 /web/*.tsbuildinfo
 /internal/webui/dist/app/
 # Local environment
