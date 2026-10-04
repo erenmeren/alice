@@ -459,6 +459,11 @@ func rollbackRequestOf(req providers.DeployRequest, oldChain int) providers.Roll
 		OldChainLength: oldChain, OldSANs: req.OldSANs, KeyType: req.KeyType, Verify: req.Verify}
 }
 
+func verifyRequestOf(req providers.DeployRequest) providers.VerifyRequest {
+	return providers.VerifyRequest{Location: req.Location, Fingerprint: req.Fingerprint, ChainLength: req.ChainLength,
+		PreviousFingerprint: req.OldFingerprint, SANs: req.SANs, KeyType: req.KeyType, Verify: req.Verify}
+}
+
 // deploy runs DeployCertificate on a new session.
 func (h *rnHost) deploy(p *Provider, req providers.DeployRequest) (providers.DeployOutcome, []string, error) {
 	h.t.Helper()
@@ -470,6 +475,134 @@ func (h *rnHost) deploy(p *Provider, req providers.DeployRequest) (providers.Dep
 
 func (h *rnHost) leaf(cn string, kt pki.KeyType) pki.Leaf {
 	return h.ca.Issue(pki.Opts{CommonName: cn, SANs: []string{cn}, KeyType: kt}, time.Now())
+}
+
+// arm makes the next "nginx -t" (what "test") or "systemctl reload nginx" (what "reload") stop
+// and wait for the test (the block-once mode of the e2e target's wrapper and shim).
+func (h *rnHost) arm(what string) {
+	h.t.Helper()
+	file := map[string]string{"test": "test-mode", "reload": "reload-mode"}[what]
+	require.NotEmpty(h.t, file)
+	h.sh("rm -f /etc/alice-e2e/blocked /etc/alice-e2e/release && mkfifo -m 0600 /etc/alice-e2e/release && echo block-once > /etc/alice-e2e/" + file)
+}
+
+// waitBlocked waits until the helper's nginx -t or reload stopped at the armed point.
+func (h *rnHost) waitBlocked(want string) {
+	h.t.Helper()
+	require.Eventually(h.t, func() bool {
+		_, out := h.exec("cat", "/etc/alice-e2e/blocked")
+		return strings.TrimSpace(out) == want
+	}, 60*time.Second, 50*time.Millisecond, "the helper reached %q", want)
+}
+
+// release lets the blocked program go on ("go") or end without running (anything else).
+func (h *rnHost) release(word string) {
+	h.t.Helper()
+	h.sh("timeout 10 sh -c 'echo " + word + " > /etc/alice-e2e/release'")
+	require.Eventually(h.t, func() bool {
+		code, _ := h.exec("test", "-e", "/etc/alice-e2e/blocked")
+		return code != 0
+	}, 10*time.Second, 50*time.Millisecond, "the blocked program went on")
+}
+
+// helperRunning reports whether an alice-helper process (or the sudo that runs one) is alive.
+func (h *rnHost) helperRunning() bool {
+	h.t.Helper()
+	code, _ := h.exec("pgrep", "-f", helperproto.HelperPath+" nginx-")
+	return code == 0
+}
+
+// killHelper sends sig to the running alice-helper and waits until it is gone.
+func (h *rnHost) killHelper(sig string) {
+	h.t.Helper()
+	h.sh("pkill -" + sig + " -x alice-helper")
+	require.Eventually(h.t, func() bool {
+		code, _ := h.exec("pgrep", "-x", "alice-helper")
+		return code != 0
+	}, 10*time.Second, 50*time.Millisecond, "alice-helper is gone after SIG%s", sig)
+}
+
+// staged lists files a helper transaction stages next to the pair (S2: none may be left behind).
+func (h *rnHost) staged() []string {
+	h.t.Helper()
+	_, out := h.exec("sh", "-c", "find /etc/nginx /etc/ssl /etc/pki /etc/letsencrypt -name '.alice-*' 2>/dev/null")
+	return strings.Fields(out)
+}
+
+// rnRecovery is what the deploy engine's recovery (deployjobs.recoverDeployment) does, at the
+// provider level: wait for a running helper, read the journal, then verify a committed operation
+// or roll back an interrupted or restored one.
+type rnRecovery struct {
+	state    providers.DeploymentState
+	verify   *providers.VerifyResult
+	rollback *providers.RollbackOutcome
+	err      error
+}
+
+func (h *rnHost) recover(req providers.DeployRequest, oldChain int) rnRecovery {
+	h.t.Helper()
+	sess := h.session(nil)
+	ctx := context.Background()
+	var st providers.DeploymentState
+	require.Eventually(h.t, func() bool {
+		if h.helperRunning() {
+			return false
+		}
+		var err error
+		st, err = sess.DeploymentStatus(ctx, req.OperationID)
+		require.NoError(h.t, err)
+		return !st.Active
+	}, 60*time.Second, 100*time.Millisecond, "the operation's helper ended")
+	require.NoError(h.t, st.Validate())
+	r := rnRecovery{state: st}
+	switch st.Phase {
+	case providers.PhaseNone, providers.PhasePrepared:
+		return r
+	case providers.PhaseCommitted, providers.PhaseUnchanged:
+		vr, err := sess.VerifyDeployment(ctx, verifyRequestOf(req))
+		require.NoError(h.t, err)
+		r.verify = &vr
+		if vr.OK {
+			return r
+		}
+	}
+	out, err := sess.RollbackDeployment(ctx, rollbackRequestOf(req, oldChain), &steps{})
+	require.NoError(h.t, providers.CheckRollbackReturn(out, err), "a legal RollbackDeployment return")
+	r.rollback, r.err = &out, err
+	return r
+}
+
+// background runs DeployCertificate (or any call) on its own goroutine; wait returns its result.
+type rnCall[T any] struct {
+	done chan struct{}
+	out  T
+	err  error
+}
+
+func rnGo[T any](fn func() (T, error)) *rnCall[T] {
+	c := &rnCall[T]{done: make(chan struct{})}
+	go func() {
+		defer close(c.done)
+		c.out, c.err = fn()
+	}()
+	return c
+}
+
+func (c *rnCall[T]) wait(t *testing.T) (T, error) {
+	t.Helper()
+	select {
+	case <-c.done:
+	case <-time.After(5 * time.Minute):
+		t.Fatal("the call did not return")
+	}
+	return c.out, c.err
+}
+
+func rnReason(t *testing.T, err error) string {
+	t.Helper()
+	var pe *providers.Error
+	require.ErrorAs(t, err, &pe)
+	return pe.Code
 }
 
 func TestRealNginx(t *testing.T) {
@@ -511,6 +644,20 @@ func TestRealNginx(t *testing.T) {
 			run("verify_unreachable_port", h.testVerifyUnreachable)
 			run("fail_safe_other_block", h.testOtherBlock)
 			run("F-07_verify_local", h.testVerifyLocal)
+			run("kill_deploy_sigterm_at_config_test", func(t *testing.T) { h.testKillDeploy(t, "test", "TERM") })
+			run("kill_deploy_sigkill_at_reload", func(t *testing.T) { h.testKillDeploy(t, "reload", "KILL") })
+			run("kill_restore_sigkill_at_config_test", func(t *testing.T) { h.testKillRestore(t, "test", "KILL") })
+			run("kill_restore_sigterm_at_reload", func(t *testing.T) { h.testKillRestore(t, "reload", "TERM") })
+			run("superseded_after_interruption", h.testSuperseded)
+			run("F-08_connection_dropped_lock_held", h.testConnectionDroppedLockHeld)
+			run("F-08_connection_dropped_100ms", h.testConnectionDropped100ms)
+			run("F-10_no_space", h.testNoSpace)
+			run("hard_link", h.testHardLink)
+			run("user_owned_symlink", h.testUserSymlink)
+			run("user_owned_directory", h.testUserDirectory)
+			run("config_file_writable", h.testWritableConfig)
+			run("busy", h.testBusy)
+			assert.Empty(t, h.staged(), "no staged file of any transaction is left behind (S2)")
 		})
 	}
 }

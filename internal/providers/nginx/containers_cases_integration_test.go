@@ -880,3 +880,312 @@ func (h *rnHost) testVerifyLocal(t *testing.T) {
 	h.committed(out, err, req, l, "local")
 	h.servesRecorded(rnWWW, 443)
 }
+
+// oldChain is the number of certificates in the file at cert (the previous chain a recovery checks).
+func (h *rnHost) oldChain(cert string) int { return chainLength([]byte(h.sh("cat " + cert))) }
+
+// blockedAt is the text the wrapper or the shim writes when it stops.
+var blockedAt = map[string]string{"test": "nginx -t", "reload": "reload"}
+
+// testKillDeploy (carry 5): the helper is killed (sig) inside nginx-deploy while its nginx -t or
+// reload runs (both files are already replaced; the journal says writing). Alice's answer is
+// uncertain; the recovery reads writing, rolls back, and the previous pair is on disk and served.
+func (h *rnHost) testKillDeploy(t *testing.T, at, sig string) {
+	cert := map[string]string{"test": rnWWW, "reload": rnAPI}[at]
+	c := h.location(cert)
+	same := h.unchangedFiles(cert)
+	l := h.leaf(h.leaves[cert].Cert.DNSNames[0], pki.ECDSA256)
+	req := h.request(c, l, true)
+	oldChain := h.oldChain(cert)
+	sess, status := h.session(nil), h.session(nil)
+	h.arm(at)
+	call := rnGo(func() (providers.DeployOutcome, error) {
+		return sess.DeployCertificate(context.Background(), req, &steps{})
+	})
+	h.waitBlocked(blockedAt[at])
+	st, err := status.DeploymentStatus(context.Background(), req.OperationID)
+	require.NoError(t, err)
+	assert.True(t, st.Active, "the helper holds the lock")
+	assert.Equal(t, providers.PhaseWriting, st.Phase)
+	assert.Equal(t, pki.Fingerprint(l.Cert), firstLeaf(t, h.sh("cat "+cert)), "both files are replaced before %s", blockedAt[at])
+	h.killHelper(sig)
+	h.release("stop")
+	out, err := call.wait(t)
+	require.NoError(t, providers.CheckDeployReturn(out, err))
+	require.Error(t, err)
+	assert.Equal(t, providers.DeployUncertain, out.Result, "a killed helper answers nothing")
+	t.Logf("SIG%s in nginx-deploy: %v", sig, err)
+
+	r := h.recover(req, oldChain)
+	assert.Equal(t, providers.PhaseWriting, r.state.Phase)
+	require.NotNil(t, r.rollback)
+	require.NoError(t, r.err)
+	assert.Equal(t, providers.DeployRolledBack, r.rollback.Result, "%+v", *r.rollback)
+	assert.Equal(t, providers.PhaseRestored, r.rollback.Phase)
+	assert.Equal(t, "remote", r.rollback.Verified)
+	same()
+	h.servesRecorded(cert, 443)
+	assert.Empty(t, h.staged())
+}
+
+// testKillRestore (carry 5): a committed deployment is rolled back (nginx-restore) and the helper
+// is killed (sig) while its nginx -t or reload runs (the files are already the old ones; the journal
+// says restoring). The recovery restores again: the previous pair on disk and served.
+func (h *rnHost) testKillRestore(t *testing.T, at, sig string) {
+	c := h.location(rnWWW)
+	same := h.unchangedFiles(rnWWW)
+	old := h.leaves[rnWWW]
+	oldChain := h.oldChain(rnWWW)
+	l := h.leaf("www.example.test", pki.ECDSA256)
+	req := h.request(c, l, true)
+	out, _, err := h.deploy(nil, req)
+	h.committed(out, err, req, l, "remote")
+	h.leaves[rnWWW] = old // rolled back below
+	sess, status := h.session(nil), h.session(nil)
+	h.arm(at)
+	call := rnGo(func() (providers.RollbackOutcome, error) {
+		return sess.RollbackDeployment(context.Background(), rollbackRequestOf(req, oldChain), &steps{})
+	})
+	h.waitBlocked(blockedAt[at])
+	st, err := status.DeploymentStatus(context.Background(), req.OperationID)
+	require.NoError(t, err)
+	assert.True(t, st.Active)
+	assert.Equal(t, providers.PhaseRestoring, st.Phase)
+	same() // the files are already back when nginx -t and the reload run
+	h.killHelper(sig)
+	h.release("stop")
+	ro, err := call.wait(t)
+	require.NoError(t, providers.CheckRollbackReturn(ro, err))
+	require.Error(t, err)
+	t.Logf("SIG%s in nginx-restore: %v", sig, err)
+	assert.Equal(t, providers.DeployUncertain, ro.Result)
+
+	r := h.recover(req, oldChain)
+	assert.Equal(t, providers.PhaseRestoring, r.state.Phase)
+	require.NotNil(t, r.rollback)
+	require.NoError(t, r.err)
+	assert.Equal(t, providers.DeployRolledBack, r.rollback.Result, "%+v", *r.rollback)
+	assert.Equal(t, "remote", r.rollback.Verified)
+	same()
+	h.servesRecorded(rnWWW, 443)
+	assert.Empty(t, h.staged())
+}
+
+// testSuperseded: an interrupted deployment (killed at nginx -t: its files are on disk, unserved)
+// is followed by another deployment of the same pair; the first one's recovery is refused
+// (SUPERSEDED: only the latest operation of a pair is rolled back) and the second pair stays, on
+// disk and served.
+func (h *rnHost) testSuperseded(t *testing.T) {
+	c := h.location(rnAPI)
+	first := h.leaf("api.example.test", pki.ECDSA256)
+	req1 := h.request(c, first, true)
+	oldChain := h.oldChain(rnAPI)
+	sess := h.session(nil)
+	h.arm("test")
+	call := rnGo(func() (providers.DeployOutcome, error) {
+		return sess.DeployCertificate(context.Background(), req1, &steps{})
+	})
+	h.waitBlocked("nginx -t")
+	h.killHelper("KILL")
+	h.release("stop")
+	out, err := call.wait(t)
+	require.Error(t, err)
+	assert.Equal(t, providers.DeployUncertain, out.Result)
+
+	c = h.location(rnAPI)
+	assert.Equal(t, h.fileSHA(rnAPI), c.FileSHA256)
+	second := h.leaf("api.example.test", pki.ECDSA256)
+	req2 := h.request(c, second, true) // the previous pair is still the one served
+	out, _, err = h.deploy(nil, req2)
+	h.committed(out, err, req2, second, "remote")
+
+	r := h.recover(req1, oldChain)
+	assert.Equal(t, providers.PhaseWriting, r.state.Phase)
+	require.NotNil(t, r.rollback)
+	assert.Equal(t, providers.DeployNoChange, r.rollback.Result, "%+v", *r.rollback)
+	assert.Equal(t, reasonSuperseded, r.rollback.Reason)
+	assert.Equal(t, reasonSuperseded, rnReason(t, r.err))
+	h.servesRecorded(rnAPI, 443)
+}
+
+// testConnectionDroppedLockHeld (F-08, D32): Alice's connection drops while the helper holds the
+// lock in the middle of its transaction (stopped at nginx -t, journal writing). The helper finishes
+// on its own (it ignores the hang-up); the recovery reads committed and verifies.
+func (h *rnHost) testConnectionDroppedLockHeld(t *testing.T) {
+	c := h.location(rnWWW)
+	l := h.leaf("www.example.test", pki.ECDSA256)
+	req := h.request(c, l, true)
+	oldChain := h.oldChain(rnWWW)
+	sess, status := h.session(nil), h.session(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.arm("test")
+	call := rnGo(func() (providers.DeployOutcome, error) { return sess.DeployCertificate(ctx, req, &steps{}) })
+	h.waitBlocked("nginx -t")
+	st, err := status.DeploymentStatus(context.Background(), req.OperationID)
+	require.NoError(t, err)
+	require.True(t, st.Active, "the lock is held")
+	cancel()
+	out, err := call.wait(t)
+	require.NoError(t, providers.CheckDeployReturn(out, err))
+	assert.Equal(t, providers.DeployUncertain, out.Result)
+	assert.Equal(t, "ssh.timeout", rnReason(t, err))
+	h.release("go")
+
+	r := h.recover(req, oldChain)
+	assert.Equal(t, providers.PhaseCommitted, r.state.Phase, "the helper finished after the hang-up")
+	require.NotNil(t, r.verify)
+	assert.True(t, r.verify.OK, "%+v", *r.verify)
+	assert.Nil(t, r.rollback)
+	h.pair(rnWWW, rnWWWKey, l)
+	h.leaves[rnWWW] = l
+	h.servesRecorded(rnWWW, 443)
+}
+
+// testConnectionDropped100ms (F-08 as the brief has it, with D32's correction): the call's context
+// ends 100 ms after it starts. Whatever point that hits, the journal ends in none, committed or
+// restored (never writing or restoring), and the files, the served certificate and the outcome agree.
+func (h *rnHost) testConnectionDropped100ms(t *testing.T) {
+	c := h.location(rnWWW)
+	l := h.leaf("www.example.test", pki.ECDSA256)
+	req := h.request(c, l, true)
+	oldChain := h.oldChain(rnWWW)
+	sess := h.session(nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	out, err := sess.DeployCertificate(ctx, req, &steps{})
+	require.NoError(t, providers.CheckDeployReturn(out, err))
+	t.Logf("outcome after 100 ms: %s (%v)", out.Result, err)
+	// A helper started from the dropped session may still be on its way: wait until none has run
+	// for a while before reading the journal.
+	quiet := time.Time{}
+	require.Eventually(t, func() bool {
+		if h.helperRunning() {
+			quiet = time.Time{}
+			return false
+		}
+		if quiet.IsZero() {
+			quiet = time.Now()
+		}
+		return time.Since(quiet) > 2*time.Second
+	}, 90*time.Second, 100*time.Millisecond)
+	r := h.recover(req, oldChain)
+	t.Logf("journal: %s", r.state.Phase)
+	assert.Contains(t, []string{providers.PhaseNone, providers.PhaseCommitted, providers.PhaseRestored}, r.state.Phase)
+	switch r.state.Phase {
+	case providers.PhaseCommitted:
+		require.NotNil(t, r.verify)
+		assert.True(t, r.verify.OK)
+		h.leaves[rnWWW] = l
+	case providers.PhaseRestored:
+		require.NotNil(t, r.rollback)
+		assert.Equal(t, providers.DeployRolledBack, r.rollback.Result)
+	}
+	h.servesRecorded(rnWWW, 443)
+}
+
+// refusedUnchanged checks a refusal that changed nothing.
+func (h *rnHost) refusedUnchanged(out providers.DeployOutcome, err error, reason string, same func()) {
+	t := h.t
+	t.Helper()
+	require.Error(t, err)
+	assert.Equal(t, providers.DeployNoChange, out.Result, "%+v", out)
+	assert.Equal(t, reason, out.Reason, "%+v %v", out, err)
+	assert.Empty(t, out.Phase)
+	same()
+}
+
+// forced is the request a deploy engine would send if the location had been supported when it was
+// discovered (a change made after the discovery): the helper itself must refuse it.
+func (h *rnHost) forced(cert string) providers.DeployRequest {
+	h.t.Helper()
+	c := h.location(cert)
+	if c.FileSHA256 == "" {
+		c.FileSHA256 = h.fileSHA(cert)
+	}
+	c.Location.Supported, c.Location.Unsupported, c.Location.KeyPath = true, "", h.keyOf(cert)
+	return h.request(c, h.leaf(h.leaves[cert].Cert.DNSNames[0], pki.ECDSA256), false)
+}
+
+// testNoSpace (F-10): the pair's file system has less free space than the helper keeps: NO_SPACE,
+// nothing changed.
+func (h *rnHost) testNoSpace(t *testing.T) {
+	c := h.location(rnNS)
+	same := h.unchangedFiles(rnNS)
+	out, _, err := h.deploy(nil, h.request(c, h.leaf("ns.example.test", pki.ECDSA256), false))
+	h.refusedUnchanged(out, err, "nginx.no_space", same)
+	h.servesRecorded(rnNS, 443)
+}
+
+// testHardLink: a hard-linked key file is unsupported, and the helper refuses it when asked anyway.
+func (h *rnHost) testHardLink(t *testing.T) {
+	same := h.unchangedFiles(rnHL)
+	c := h.location(rnHL)
+	out, _, err := h.deploy(nil, h.request(c, h.leaf("hl.example.test", pki.ECDSA256), false))
+	h.refusedUnchanged(out, err, reasonLocationUnsupported, same)
+	out, _, err = h.deploy(nil, h.forced(rnHL))
+	h.refusedUnchanged(out, err, reasonLocationUnsupported, same)
+	assert.Equal(t, "2", strings.TrimSpace(h.sh("stat -c %h "+rnHLKey)), "the hard link is still there")
+}
+
+// testUserSymlink: a key reached through a link a user owns is refused.
+func (h *rnHost) testUserSymlink(t *testing.T) {
+	same := h.unchangedFiles(rnLink)
+	out, _, err := h.deploy(nil, h.forced(rnLink))
+	h.refusedUnchanged(out, err, reasonLocationUnsupported, same)
+	assert.Equal(t, "deploy", strings.TrimSpace(h.sh("stat -c %U "+rnLinkKey)))
+}
+
+// testUserDirectory: a pair in a directory a user owns (nginx loads it as root) is listed without
+// its content and never written.
+func (h *rnHost) testUserDirectory(t *testing.T) {
+	same := h.unchangedFiles(rnUD)
+	out, _, err := h.deploy(nil, h.forced(rnUD))
+	h.refusedUnchanged(out, err, reasonLocationUnsupported, same)
+}
+
+// testWritableConfig (S1): the pair of a configuration file other users can change is refused by
+// the helper even when asked.
+func (h *rnHost) testWritableConfig(t *testing.T) {
+	same := h.unchangedFiles(rnWR)
+	out, _, err := h.deploy(nil, h.forced(rnWR))
+	h.refusedUnchanged(out, err, "nginx.config_changed", same)
+}
+
+// testBusy: another process holds the helper's Nginx lock (as a running deployment does): the
+// connection test's status says active, and a deployment answers BUSY after the helper's wait,
+// changing nothing.
+func (h *rnHost) testBusy(t *testing.T) {
+	const lock = "/var/lib/alice-helper/locks/nginx.lock"
+	// flock -o: only flock itself holds the lock, so ending it (and its sleep) releases it.
+	h.sh("test -f " + lock + " && { flock -o " + lock + " sleep 300 >/dev/null 2>&1 & echo $! > /root/holder.pid; }")
+	defer func() {
+		h.sh("kill $(cat /root/holder.pid); pkill -x sleep || true; rm -f /root/holder.pid")
+		require.Eventually(t, func() bool {
+			code, _ := h.exec("flock", "-n", lock, "true")
+			return code == 0
+		}, 10*time.Second, 50*time.Millisecond, "the lock is free again")
+	}()
+	require.Eventually(t, func() bool {
+		code, _ := h.exec("flock", "-n", lock, "true")
+		return code != 0
+	}, 10*time.Second, 50*time.Millisecond, "the lock is held")
+	st, err := h.session(nil).DeploymentStatus(context.Background(), uuid.New())
+	require.NoError(t, err)
+	assert.True(t, st.Active)
+	assert.Equal(t, providers.PhaseNone, st.Phase)
+	c := h.location(rnWWW)
+	same := h.unchangedFiles(rnWWW)
+	start := time.Now()
+	out, _, err := h.deploy(nil, h.request(c, h.leaf("www.example.test", pki.ECDSA256), true))
+	h.refusedUnchanged(out, err, "nginx.busy", same)
+	assert.GreaterOrEqual(t, time.Since(start), 25*time.Second, "the helper waited for the lock")
+}
+
+// firstLeaf is the fingerprint of the first certificate of a PEM text.
+func firstLeaf(t *testing.T, pemText string) string {
+	t.Helper()
+	fp, ok := leafFingerprint([]byte(pemText))
+	require.True(t, ok)
+	return fp
+}
