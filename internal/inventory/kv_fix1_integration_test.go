@@ -136,15 +136,13 @@ func TestAPollThatSignedInClearsAuthFailed(t *testing.T) {
 			require.NotEqual(t, inventory.StatusOK, h.vaultRow(v).Status)
 			h.clock.Advance(time.Minute)
 			r := kvResult()
-			object := "keys"
-			if reason == "azure.unexpected_response" {
-				object = "certificates" // on keys it would degrade (N4)
-			}
-			r.KV.Failures = rows(reason, object)
+			r.KV.Failures = rows(reason, "keys")
 			h.reconcile(v, r)
 			assert.Equal(t, inventory.StatusOK, h.vaultRow(v).Status, "%s after %s", reason, first)
 			if reason == "azure.throttled" {
 				assert.Empty(t, h.vaultRow(v).Code)
+			} else {
+				assert.Equal(t, reason, h.vaultRow(v).Code, "R3: the unexpected answer leaves its code on the cleared vault (N6)")
 			}
 		}
 	}

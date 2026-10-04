@@ -361,6 +361,7 @@ func TestNewVersionInLockIsHeld(t *testing.T) {
 	ev := h.auditDetails("kv.certificate.new_version")
 	require.Len(t, ev, 1)
 	assert.Equal(t, "true", ev[0]["held"])
+	assert.Equal(t, "gate_closed", ev[0]["hold_rule"])
 	assert.Equal(t, jobsBefore, len(h.jobs.requests()), "nothing is queued")
 	assert.Equal(t, ver(2), h.certRow(vault, "web-cert").Version, "the metadata is stored")
 

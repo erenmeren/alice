@@ -431,6 +431,11 @@ WHERE event IN ('state_change', 'installed', 'renewed') AND from_state IN ('lock
 //   - (c) its creation time is unknown and no poll with a complete certificate listing has run
 //     since the gate reopened (facts.kv_reconciled_at moves only with such a poll).
 //
+// Rule (b) can also hold a version when the licence is renewed out of grace although the gate was
+// never closed (a renewal from grace counts as a reopening, because the end of grace refuses
+// changes before the tick records "locked"): versions created within about one poll interval before
+// the upload are held then. That is fail-safe, not a bug: an Administrator releases them.
+//
 // A certificate Alice sees for the first time (or whose details it never read) is a baseline: no
 // binding can name it yet, so no automatic deployment can exist for it, and only (a) holds it. A
 // poll never releases a held version: only the Administrator does.
@@ -440,16 +445,29 @@ type kvHold struct {
 	completeSince bool
 }
 
-func (h kvHold) held(known bool, created *time.Time) bool {
+// Why a version is held (the audit detail hold_rule of kv.certificate.new_version).
+const (
+	holdGateClosed       = "gate_closed"                 // rule (a)
+	holdCreatedBefore    = "created_before_reopening"    // rule (b)
+	holdUnconfirmedSince = "unconfirmed_since_reopening" // rule (c)
+)
+
+// rule says which rule holds the version ("" = not held).
+func (h kvHold) rule(known bool, created *time.Time) string {
 	switch {
 	case h.closed:
-		return true
+		return holdGateClosed
 	case !known || h.reopened == nil:
-		return false
+		return ""
 	case created != nil:
-		return !created.After(*h.reopened)
+		if !created.After(*h.reopened) {
+			return holdCreatedBefore
+		}
+		return ""
+	case !h.completeSince:
+		return holdUnconfirmedSince
 	}
-	return !h.completeSince
+	return ""
 }
 
 // holdRule reads what decides the holds of this poll: the gate now, the time it last reopened and
@@ -534,7 +552,10 @@ func kvPollOutcome(t Target, p *preparedKV) kvOutcome {
 	case o.cycles >= kvThrottledCycles:
 		o.status, o.code = StatusDegraded, "azure.throttled"
 	case t.Status == StatusAuthFailed || t.Status == StatusUnreachable:
-		o.status, o.code = StatusOK, ""
+		o.status, o.code = StatusOK, "" // the poll got an answer: the sign-in and the network work
+		if other != nil {
+			o.code = other.Reason // ... but an unexpected answer leaves its code, as on a vault that was ok (N6)
+		}
 	case other != nil:
 		o.code = other.Reason // unexpected answers: transient (F-52), the status stays, the code says why
 	}

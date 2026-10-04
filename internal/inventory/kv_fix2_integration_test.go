@@ -110,6 +110,7 @@ func TestRenewalSeenAfterALockIsHeld(t *testing.T) {
 	ev := h.auditDetails("kv.certificate.new_version")
 	require.Len(t, ev, 1)
 	assert.Equal(t, "true", ev[0]["held"])
+	assert.Equal(t, "created_before_reopening", ev[0]["hold_rule"], "rule (b) says why")
 	// A renewal created after the reopening is not held.
 	h.clock.Advance(15 * time.Minute)
 	after := h.clock.Now()
@@ -129,11 +130,16 @@ func TestRenewalSeenAfterALockIsHeld(t *testing.T) {
 	h.clock.Advance(time.Minute)
 	sum = h.reconcile(unr, kvResult(renewal(2, nil, ver(1)), h.kvc("other", h.kvLeaf("o.example.test"), "", t0, false)))
 	assert.Equal(t, 1, sum.HeldVersions, "after a failed list the first complete poll still holds")
+	evs := h.auditDetails("kv.certificate.new_version")
+	assert.Equal(t, "unconfirmed_since_reopening", evs[len(evs)-1]["hold_rule"], "rule (c) says why")
 	// ... and once a complete poll has run, a renewal without a creation time is not held.
 	h.clock.Advance(time.Minute)
 	sum = h.reconcile(unr, kvResult(renewal(3, nil, ver(2), ver(1))))
 	assert.Equal(t, 1, sum.NewVersions)
 	assert.Zero(t, sum.HeldVersions)
+	evs = h.auditDetails("kv.certificate.new_version")
+	assert.Equal(t, "false", evs[len(evs)-1]["held"])
+	assert.NotContains(t, evs[len(evs)-1], "hold_rule", "a version that is not held names no rule")
 
 	// N1: a poll truncated before the renewed certificate is no complete poll either.
 	r = kvResult(h.kvc("other", h.kvLeaf("o.example.test"), "", t0, false))
@@ -214,6 +220,9 @@ func TestAHeldVersionIsNeverReleasedByAPoll(t *testing.T) {
 	isHeld, reason := h.held(c.ID, ver(2))
 	require.True(t, isHeld)
 	require.Equal(t, "license", reason)
+	ev := h.auditDetails("kv.certificate.new_version")
+	require.Len(t, ev, 1)
+	assert.Equal(t, "gate_closed", ev[0]["hold_rule"], "rule (a) says why")
 	// The gate is open again and no reopening is on record: the rule would not hold this version.
 	g.set(nil)
 	h.clock.Advance(time.Hour)
@@ -284,7 +293,13 @@ func TestOnlyAClosedToOpenTransitionIsAReopening(t *testing.T) {
 		row(at, r[0], r[1], r[2])
 		assert.True(t, probe(3+i, at.Add(-time.Minute)), "%v is a reopening", r)
 		assert.False(t, probe(10+i, at.Add(time.Minute)), "created after it: not held")
+		assert.True(t, probe(20+i, at), "created at the very time of the reopening: not later than it, held (R4)")
 	}
+	// Azure's creation time has whole seconds: a reopening at 12:00:00.4 holds a version created at 12:00:00.
+	at = at.Add(time.Hour).Add(400 * time.Millisecond)
+	row(at, "installed", "locked", "active")
+	assert.True(t, probe(40, at.Truncate(time.Second)), "created in the second of the reopening")
+	assert.False(t, probe(41, at.Truncate(time.Second).Add(time.Second)), "created in the next second")
 }
 
 // N4, N5, N6: the status follows the list that failed. The certificate list's own failure decides

@@ -392,7 +392,8 @@ WHERE id = $1 AND last_seen_at <= $17`,
 			}
 		}
 		// New on a certificate Alice already had a current version of (rule kvHold); else a baseline.
-		held := hold.held(known && prev.currentVersion != "", d.attrs.created)
+		rule := hold.rule(known && prev.currentVersion != "", d.attrs.created)
+		held := rule != ""
 		heldReason := ""
 		if held {
 			heldReason = "license"
@@ -423,10 +424,14 @@ RETURNING id, (xmax = 0)`, uuid.Must(uuid.NewV7()), certID, d.version, d.thumb, 
 		}
 		if inserted && known && prev.currentVersion != "" {
 			st.newVersions++
+			details := map[string]string{
+				"kv_certificate_id": certID.String(), "certificate_name": c.name, "version": d.version, "thumbprint": d.thumb,
+				"fingerprint": d.leaf.Fingerprint, "held": fmt.Sprint(held), "vault_url": t.url}
+			if held {
+				details["hold_rule"] = rule // which rule held it: gate_closed, created_before_reopening, unconfirmed_since_reopening
+			}
 			*events = append(*events, audit.Event{Actor: audit.SystemActor("jobs"), Action: "kv.certificate.new_version",
-				ObjectType: "kv_certificate", ObjectID: certID.String(), Result: audit.Success, Details: map[string]string{
-					"kv_certificate_id": certID.String(), "certificate_name": c.name, "version": d.version, "thumbprint": d.thumb,
-					"fingerprint": d.leaf.Fingerprint, "held": fmt.Sprint(held), "vault_url": t.url}})
+				ObjectType: "kv_certificate", ObjectID: certID.String(), Result: audit.Success, Details: details})
 		}
 		hist := d.history[:0:0]
 		for _, h := range d.history {
