@@ -24,6 +24,14 @@ export const WARNING_PARAMS: Readonly<Record<string, readonly string[]>> = {
   file_too_large: ['path'],
   directory_users_not_listed: [],
   too_many_users: [],
+  // Alice's warnings for the accounts the helper could not list (protocol 6, AUD-03): the uid only,
+  // the name may hold any byte. Only a broken helper sends one without its uid (the neutral text).
+  account_name_unsupported: ['uid'],
+  account_home_unsupported: ['uid'],
+  account_id_unsupported: ['uid'],
+  accounts_nul_byte: [],
+  // list_truncated from a cut SSH listing names the account it stopped at.
+  list_truncated_uid: ['uid'],
   // Nginx servers
   nginx_not_found: [],
   nginx_profile_missing: [],
@@ -46,6 +54,7 @@ export function warningKey(w: Warning): string {
   if (code === 'unsupported_path' && !w.params.path) code = 'unsupported_path_unnamed';
   if (code === 'keys_managed_elsewhere' && w.params.user) code = 'keys_managed_elsewhere_user';
   if (code === 'sshd_unreadable' && w.params.user) code = 'sshd_unreadable_user';
+  if (code === 'list_truncated' && w.params.uid) code = 'list_truncated_uid';
   const need = WARNING_PARAMS[code];
   if (!need) return 'warnings.unknown';
   return need.every((p) => w.params[p]) ? `warnings.${code}` : 'warnings.incomplete';

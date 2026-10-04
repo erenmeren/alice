@@ -198,7 +198,7 @@
     "manageTitle": "Yönetilen kullanıcı: {{name}}",
     "editTitle": "Düzenlenen kullanıcı: {{name}}",
     "resetPasswordTitle": "Yeni parola belirlenecek kullanıcı: {{name}}",
-    "resetPasswordText": "Kişinin tüm oturumları kapatılır ve bir sonraki girişte bu parolayı kullanması gerekir. Parolayı kişiye güvenli bir yolla iletin.",
+    "resetPasswordText": "Kişinin tüm oturumları kapatılır, API anahtarları çalışmaz olur ve bir sonraki girişte bu parolayı kullanması gerekir. Parolayı kişiye güvenli bir yolla iletin.",
     "columns": {
       "username": "Kullanıcı adı",
       "name": "Ad soyad",
@@ -237,9 +237,9 @@
       "resetMfaTitle": "İki adımlı giriş sıfırlanacak kullanıcı: {{name}}",
       "resetMfaText": "Kişinin oturumları kapatılır ve bir sonraki girişte doğrulama uygulamasını yeniden kurması gerekir.",
       "revokeTitle": "Tüm oturumları kapatılacak kullanıcı: {{name}}",
-      "revokeText": "Bu kişinin açık oturumlarının hepsi şimdi sona erer. Kişi yeniden giriş yapabilir.",
+      "revokeText": "Bu kişinin tüm cihazlardaki oturumları şimdi sona erer ve tüm API anahtarları çalışmaz olur.",
       "disableTitle": "Devre dışı bırakılacak kullanıcı: {{name}}",
-      "disableText": "Kişinin oturumları kapatılır ve hesabı yeniden etkinleştirene kadar giriş yapamaz.",
+      "disableText": "Kişinin oturumları kapatılır, API anahtarları çalışmaz olur ve hesabı yeniden etkinleştirene kadar giriş yapamaz.",
       "disableButton": "Kullanıcıyı devre dışı bırak",
       "enableTitle": "Etkinleştirilecek kullanıcı: {{name}}",
       "enableText": "Kişi parolası ve doğrulama uygulamasıyla yeniden giriş yapabilir.",
@@ -607,7 +607,7 @@
     "unsupported_path": "Alice bu yoldaki anahtar dosyasını okuyamıyor: {{path}}",
     "file_unreadable": "Alice bu anahtar dosyasını okuyamadı: {{path}}",
     "file_too_large": "Bu anahtar dosyası 1 MiB'tan büyük olduğu için okunmadı: {{path}}",
-    "directory_users_not_listed": "Dizin hizmetinden (LDAP veya SSSD) gelen kullanıcılar listelenmez.",
+    "directory_users_not_listed": "Bir dizin hizmetinden (örneğin LDAP veya SSSD), systemd kullanıcı kayıtlarından veya Alice'in denetleyemediği bir kaynaktan gelen hesaplar listelenmez.",
     "unreadable_line": "{{file_path}} dosyasının {{line_no}}. satırı okunamadı. Alice bu satırı değiştirmez.",
     "too_many_users": "Bu sunucuda Alice'in listelediğinden fazla kullanıcı hesabı var, bu yüzden bazı hesaplar taranmadı.",
     "sshd_unreadable_user": "{{user}} için SSH sunucusu ayarları okunamadı; yalnızca varsayılan anahtar dosyaları denetlendi.",
@@ -627,7 +627,12 @@
     "symlinked": "Bir sertifika dosyası bağlantı. Başka bir araç (örneğin certbot) dosyayı değiştirebilir.",
     "custom_location": "Bir sertifika dosyası alışılmış sertifika klasörlerinin dışında.",
     "key_group_open": "Bir özel anahtar dosyası root dışında bir kullanıcıya ait veya bir grup ya da diğer kullanıcılar tarafından okunabiliyor.",
-    "certificate_block_dropped": "Bir sertifika dosyası sertifika olmayan bir blok içeriyor. Alice bu bloğu yok saydı."
+    "certificate_block_dropped": "Bir sertifika dosyası sertifika olmayan bir blok içeriyor. Alice bu bloğu yok saydı.",
+    "account_name_unsupported": "Kullanıcı kimliği {{uid}} olan hesabın SSH anahtarları listelenmedi: hesap adı 32 karakterden uzun veya Alice'in desteklemediği karakterler içeriyor. Hesabı bulmak için sunucuda getent passwd {{uid}} komutunu çalıştırın.",
+    "account_home_unsupported": "Kullanıcı kimliği {{uid}} olan hesabın SSH anahtarları listelenmedi: /etc/passwd içindeki ev dizini yalın bir mutlak yol değil. Hesabı bulmak için sunucuda getent passwd {{uid}} komutunu çalıştırın.",
+    "account_id_unsupported": "Kullanıcı kimliği {{uid}} olan hesabın SSH anahtarları listelenmedi: /etc/passwd içindeki kullanıcı veya grup kimliği yalın bir sayı olarak yazılmamış. Hesabı bulmak için sunucuda getent passwd {{uid}} komutunu çalıştırın.",
+    "accounts_nul_byte": "Bu sunucudaki /etc/passwd dosyası bir NUL baytı içeriyor, bu yüzden hesap listesi eksik olabilir. Dosyayı denetleyin.",
+    "list_truncated_uid": "Alice bu sunucudaki SSH anahtarlarını listelemeyi kullanıcı kimliği {{uid}} olan hesapta durdurdu, bu yüzden bu hesaptan sonraki anahtarlar gösterilmiyor."
   },
   "targets": {
     "title": "Sunucular",

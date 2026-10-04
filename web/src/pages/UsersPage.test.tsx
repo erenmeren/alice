@@ -140,6 +140,8 @@ describe('UsersPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Manage operator1' }));
     await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Sign out everywhere' }));
     dialog = await screen.findByRole('dialog');
+    // AUD-12: signing someone out everywhere also revokes their API tokens.
+    expect(dialog).toHaveTextContent('The person is signed out on every device and all their API tokens stop working.');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
     await waitFor(() => expect(calls).toEqual([`${operator.id} reset-mfa`, `${operator.id} revoke-sessions`]));
   });
@@ -158,8 +160,31 @@ describe('UsersPage', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Manage operator1' }));
     await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Disable' }));
     const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('API tokens');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Disable user' }));
     await waitFor(() => expect(body).toEqual({ disabled: true }));
+  });
+
+  it('says that setting a new password revokes the API tokens (AUD-12)', async () => {
+    signedInAs(adminSession);
+    withUsers([operator]);
+    await renderRoute('/users');
+    await userEvent.click(await screen.findByRole('button', { name: 'Manage operator1' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Set a new password' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent(
+      'The person is signed out everywhere, their API tokens stop working, and they must use this password at the next sign-in. Give it to them in a safe way.',
+    );
+  });
+
+  it('says it in Turkish with the established term for API tokens', async () => {
+    signedInAs(sessionFor('admin', 'tr'));
+    withUsers([operator]);
+    await renderRoute('/users', { languages: ['tr-TR'] });
+    await userEvent.click(await screen.findByRole('button', { name: 'Yönet: operator1' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Yeni parola belirle' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent(
+      'Kişinin tüm oturumları kapatılır, API anahtarları çalışmaz olur ve bir sonraki girişte bu parolayı kullanması gerekir.',
+    );
   });
 });
 

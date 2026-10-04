@@ -156,6 +156,8 @@ describe('Nginx deployment, website and fact labels cover the specification and 
     ...goFiles('internal/jobs/deployjobs').flatMap((f) => goConsts(f, /^step[A-Z]\w*$/)),
   ];
   const typesWarnings = goConsts('internal/providers/types.go', /^Warn/);
+  // The SSH helper's warnings and the ones Alice makes from its unlisted accounts (protocol 6).
+  const helperWarnings = goConsts('internal/providers/linuxssh/helperproto/helperproto.go', /^Warn/);
   const inventoryWarnings = goConsts('internal/inventory/locations.go', /^Warn/);
   const nginxWarnings = goFiles('internal/providers/nginx').flatMap((f) => callArgsIn(readRepoFile(f), 'warning'));
   const jobWarnings = [...readRepoFile('internal/jobs/targetjobs/targetjobs.go').matchAll(/"(nginx_[a-z_]+)"/g)].map((m) => m[1]);
@@ -207,8 +209,26 @@ describe('Nginx deployment, website and fact labels cover the specification and 
     const nginxOnly = ['nginx_not_found', 'nginx_profile_missing', 'nginx_config_invalid', 'locations_dropped', 'list_truncated', 'too_many_files', 'stream_tls', 'mail_tls', 'config_file_writable', 'key_mode_open', 'symlinked', 'custom_location', 'key_group_open', 'certificate_block_dropped'];
     for (const w of nginxOnly) expect(server.has(w), `server warning ${w} has no source`).toBe(true);
     // every Nginx entry of the table is one of those (the rest are the SSH warnings of Phase 3)
-    const ssh = new Set(['keys_managed_elsewhere', 'keys_managed_elsewhere_user', 'certificates_in_use', 'pubkey_disabled', 'sshd_unreadable', 'sshd_unreadable_user', 'strict_modes', 'unsupported_path', 'unsupported_path_unnamed', 'file_unreadable', 'file_unparseable', 'file_too_large', 'directory_users_not_listed', 'too_many_users']);
+    const ssh = new Set(['keys_managed_elsewhere', 'keys_managed_elsewhere_user', 'certificates_in_use', 'pubkey_disabled', 'sshd_unreadable', 'sshd_unreadable_user', 'strict_modes', 'unsupported_path', 'unsupported_path_unnamed', 'file_unreadable', 'file_unparseable', 'file_too_large', 'directory_users_not_listed', 'too_many_users', 'account_name_unsupported', 'account_home_unsupported', 'account_id_unsupported', 'accounts_nul_byte', 'list_truncated_uid']);
     for (const w of Object.keys(WARNING_PARAMS)) expect(ssh.has(w) || nginxOnly.includes(w), `warning ${w} is in no group`).toBe(true);
+  });
+
+  it('knows every warning of the SSH helper and of its unlisted accounts (protocol 6, AUD-03)', () => {
+    expect(helperWarnings).toEqual(expect.arrayContaining(['account_name_unsupported', 'account_home_unsupported', 'account_id_unsupported', 'accounts_nul_byte']));
+    for (const w of helperWarnings) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
+    for (const code of ['account_name_unsupported', 'account_home_unsupported', 'account_id_unsupported']) {
+      expect(warningKey({ code, params: { uid: '1001' } })).toBe(`warnings.${code}`);
+      // Only a broken helper sends one without its uid: a neutral text, never a {{uid}} placeholder.
+      expect(warningKey({ code, params: {} })).toBe('warnings.incomplete');
+    }
+    expect(warningKey({ code: 'accounts_nul_byte', params: {} })).toBe('warnings.accounts_nul_byte');
+    // A cut SSH listing names the account it stopped at; other cut lists name nothing.
+    expect(warningKey({ code: 'list_truncated', params: { uid: '1500' } })).toBe('warnings.list_truncated_uid');
+    expect(warningKey({ code: 'list_truncated', params: {} })).toBe('warnings.list_truncated');
+    for (const lang of ['en', 'tr'] as const) {
+      expect(t(lang, 'warnings.account_id_unsupported')).toContain('getent passwd {{uid}}');
+      expect(t(lang, 'warnings.list_truncated_uid')).toContain('{{uid}}');
+    }
   });
 
   it('knows the warnings of a deploy answer, as the specification and the inventory list them', () => {
@@ -260,7 +280,7 @@ describe('Nginx deployment, website and fact labels cover the specification and 
     it('words every location warning and every server-level warning', () => {
       for (const w of Object.keys(LOCATION_WARNINGS)) expect(typeof t(lang, locationWarningKey(w)), w).toBe('string');
       for (const [code, params] of Object.entries(WARNING_PARAMS)) {
-        if (code === 'unsupported_path_unnamed' || code.endsWith('_user')) continue;
+        if (code === 'unsupported_path_unnamed' || code.endsWith('_user') || code.endsWith('_uid')) continue;
         const key = warningKey({ code, params: Object.fromEntries(params.map((p) => [p, 'x'])) });
         expect(key, code).toBe(`warnings.${code}`);
         expect(typeof t(lang, key), code).toBe('string');

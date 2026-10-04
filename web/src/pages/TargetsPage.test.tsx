@@ -131,6 +131,28 @@ describe('TargetsPage', () => {
     expect(within(dialog).getByRole('button', { name: 'Connect' })).toBeInTheDocument();
   });
 
+  it('names a server whose address Alice refuses to connect to (ALC-SSH-0012)', async () => {
+    withTargets('admin', [targetWith({ ...pending, status: 'unreachable', last_error: { code: 'ALC-SSH-0012', reason: 'ssh.address_not_allowed' } })]);
+    server.use(
+      http.post('/api/v1/targets', () => HttpResponse.json({ target: pending, job_id: 'job-1', status_url: '/api/v1/jobs/job-1' }, { status: 201 })),
+      http.get('/api/v1/jobs/:id', () =>
+        HttpResponse.json(jobFixture({ id: 'job-1', status: 'failed', error: { code: 'ALC-SSH-0012', reason: 'ssh.address_not_allowed' } })),
+      ),
+    );
+    await renderRoute('/servers');
+    const row = (await screen.findByText('db-01')).closest('tr')!;
+    expect(within(row).getByText(commonEn.errors.ssh.address_not_allowed.title)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add server' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add server' });
+    await userEvent.type(within(dialog).getByLabelText(/^Name/), 'meta');
+    await userEvent.type(within(dialog).getByLabelText(/^Address/), 'metadata.example.test');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
+    expect(await within(dialog).findByText(commonEn.errors.ssh.address_not_allowed.title)).toBeInTheDocument();
+    expect(within(dialog).getByText(commonEn.errors.ssh.address_not_allowed.action)).toBeInTheDocument();
+    expect(within(dialog).getByText('Error code: ALC-SSH-0012')).toBeInTheDocument();
+  });
+
   it('explains a failed connection test', async () => {
     withTargets('admin', []);
     server.use(

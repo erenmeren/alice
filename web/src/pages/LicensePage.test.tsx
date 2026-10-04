@@ -125,6 +125,19 @@ describe("license page", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("asks to update Alice for a license in a newer format", async () => {
+    server.use(
+      ...sessionHandlers(sessionFor("admin")),
+      http.post("/api/v1/license/preview", () => errorResponse(422, "ALC-LIC-0006", "license.unsupported_format")),
+    );
+    await renderRoute("/license");
+    await screen.findByTestId("installation-id");
+    await chooseFile();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("This license needs a newer version of Alice.");
+    expect(alert).toHaveTextContent("Update Alice, then upload the file again. The current license stays in use meanwhile.");
+  });
+
   it("says so when the installed license has already expired (L-32)", async () => {
     server.use(
       ...sessionHandlers(sessionFor("admin")),

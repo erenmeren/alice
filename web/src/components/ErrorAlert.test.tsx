@@ -33,6 +33,34 @@ describe('ErrorAlert', () => {
     expect(screen.getByText('İstek kimliği: req-42')).toBeInTheDocument();
   });
 
+  it('shows an unchecked license as a pause to retry later, not as a locked license (ALC-LIC-0009)', async () => {
+    const err = new ApiError(503, {
+      code: 'ALC-LIC-0009', reason: 'license.unverified', message_key: 'errors.license.unverified',
+      message: 'm', request_id: 'req-9', retryable: true,
+    });
+    await renderApp(<ErrorAlert error={err} />);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('The license could not be checked.');
+    expect(alert).toHaveTextContent('changes resume after the next successful check');
+    expect(alert).not.toHaveTextContent('License expired');
+  });
+
+  it('shows a refused server address (ALC-SSH-0012) and a rate limit in words', async () => {
+    const refused = new ApiError(502, {
+      code: 'ALC-SSH-0012', reason: 'ssh.address_not_allowed', message_key: 'errors.ssh.address_not_allowed',
+      message: 'm', request_id: 'req-12', retryable: false,
+    });
+    const { unmount } = await renderApp(<ErrorAlert error={refused} />);
+    expect(screen.getByRole('alert')).toHaveTextContent("Alice does not connect to this server's address.");
+    unmount();
+    const limited = new ApiError(429, {
+      code: 'ALC-SYS-0005', reason: 'rate.limited', message_key: 'errors.rate.limited',
+      message: 'm', request_id: 'req-5', retryable: true,
+    }, 30);
+    await renderApp(<ErrorAlert error={limited} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Too many requests in a short time.');
+  });
+
   it('falls back to the server message for an unknown key', async () => {
     await renderApp(<ErrorAlert error={apiError('brand.new_reason')} />);
     expect(screen.getByRole('alert')).toHaveTextContent('server fallback text');

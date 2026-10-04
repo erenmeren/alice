@@ -198,7 +198,7 @@
     "manageTitle": "Manage {{name}}",
     "editTitle": "Edit {{name}}",
     "resetPasswordTitle": "Set a new password for {{name}}",
-    "resetPasswordText": "The person is signed out everywhere and must use this password at the next sign-in. Give it to them in a safe way.",
+    "resetPasswordText": "The person is signed out everywhere, their API tokens stop working, and they must use this password at the next sign-in. Give it to them in a safe way.",
     "columns": {
       "username": "Username",
       "name": "Full name",
@@ -237,9 +237,9 @@
       "resetMfaTitle": "Reset two-factor sign-in for {{name}}?",
       "resetMfaText": "The person is signed out and must set up their authenticator app again at the next sign-in.",
       "revokeTitle": "Sign {{name}} out everywhere?",
-      "revokeText": "All open sessions of this person end now. They can sign in again.",
+      "revokeText": "The person is signed out on every device and all their API tokens stop working.",
       "disableTitle": "Disable {{name}}?",
-      "disableText": "The person is signed out and cannot sign in until you enable the account again.",
+      "disableText": "The person is signed out, their API tokens stop working, and they cannot sign in until you enable the account again.",
       "disableButton": "Disable user",
       "enableTitle": "Enable {{name}}?",
       "enableText": "The person can sign in again with their password and authenticator app.",
@@ -607,7 +607,7 @@
     "unsupported_path": "Alice cannot read a key file at this path: {{path}}",
     "file_unreadable": "Alice could not read this key file: {{path}}",
     "file_too_large": "This key file is larger than 1 MiB and was not read: {{path}}",
-    "directory_users_not_listed": "Users from a directory service (LDAP or SSSD) are not listed.",
+    "directory_users_not_listed": "Accounts from a directory service (for example LDAP or SSSD), from systemd user records or from a source Alice cannot check are not listed.",
     "unreadable_line": "Line {{line_no}} of {{file_path}} could not be read. Alice leaves it unchanged.",
     "too_many_users": "This server has more user accounts than Alice lists, so some accounts were not scanned.",
     "sshd_unreadable_user": "Could not read the SSH server settings for {{user}}; only the default key files were checked.",
@@ -627,7 +627,12 @@
     "symlinked": "A certificate file is a link. Another tool (for example certbot) may replace it.",
     "custom_location": "A certificate file is outside the usual certificate folders.",
     "key_group_open": "A private key file belongs to a user other than root or can be read by a group or by others.",
-    "certificate_block_dropped": "A certificate file contains a block that is not a certificate. Alice ignored it."
+    "certificate_block_dropped": "A certificate file contains a block that is not a certificate. Alice ignored it.",
+    "account_name_unsupported": "Alice did not list the SSH keys of the account with user ID {{uid}}: its name is longer than 32 characters or has characters Alice does not support. Run getent passwd {{uid}} on the server to find it.",
+    "account_home_unsupported": "Alice did not list the SSH keys of the account with user ID {{uid}}: its home directory in /etc/passwd is not a plain absolute path. Run getent passwd {{uid}} on the server to find it.",
+    "account_id_unsupported": "Alice did not list the SSH keys of the account with user ID {{uid}}: its user or group ID in /etc/passwd is not written as a plain number. Run getent passwd {{uid}} on the server to find it.",
+    "accounts_nul_byte": "The file /etc/passwd on this server contains a NUL byte, so the list of accounts may be incomplete. Check the file.",
+    "list_truncated_uid": "Alice stopped listing the SSH keys of this server at the account with user ID {{uid}}, so the keys from there on are not shown."
   },
   "targets": {
     "title": "Servers",
