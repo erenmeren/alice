@@ -262,6 +262,19 @@ describe('UploadCertificateDialog', () => {
       spy.mockRestore();
     });
 
+    it('says that the upload completed the chain of a certificate Alice already held (200 chain_completed)', async () => {
+      upload(() => HttpResponse.json({ certificate: certificateDetailFixture({ id: 'c1', chain_complete: true }), warnings: ['chain_completed'] }, { status: 200 }));
+      const onDone = vi.fn();
+      await renderApp(<UploadCertificateDialog opened onClose={() => {}} onUploaded={onDone} />);
+      await fillPem();
+      await userEvent.click(screen.getByRole('button', { name: 'Upload' }));
+      expect(await screen.findByText('Alice already had this certificate. Its chain is now complete.')).toBeInTheDocument();
+      expect(screen.queryByText('Certificate uploaded.')).not.toBeInTheDocument();
+      // It is the result, not a warning: no generic "condition this version cannot describe".
+      expect(screen.queryByText(/a condition that this version cannot describe/)).not.toBeInTheDocument();
+      expect(onDone).toHaveBeenCalledWith('c1');
+    });
+
     it('explains a certificate Alice already holds', async () => {
       upload(() => errorResponse(409, 'ALC-CRT-0008', 'certificate.duplicate'));
       await renderApp(<UploadCertificateDialog opened onClose={() => {}} onUploaded={() => {}} />);

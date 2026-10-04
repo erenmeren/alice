@@ -1,9 +1,9 @@
 import { Alert, Badge, Stack, Text } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
-import { deploymentView } from '../api/deployments';
-import { deploymentStatusKey } from '../api/enums';
+import { deploymentStatusText, deploymentView, isCancelled, PENDING_CHANGE_RESTORED } from '../api/deployments';
 import type { Deployment, ErrorRef } from '../api/types';
 import { formatDateTime } from '../datetime';
+import { LabelledCode } from './LabelledCode';
 import { WRAP } from './wrap';
 
 const COLORS: Record<string, string> = {
@@ -19,12 +19,20 @@ const COLORS: Record<string, string> = {
 
 // DeploymentStatusBadge is the deployment's status in words (a colour is only a cue). A status this
 // version does not know, or '', reads "Unknown".
-export function DeploymentStatusBadge({ status, testId }: { status: string; testId?: string }) {
+export function DeploymentStatusBadge({ d, testId }: { d: Pick<Deployment, 'status' | 'error'>; testId?: string }) {
   const { t } = useTranslation();
+  const cancelled = isCancelled(d);
   return (
     // tt="none": no CSS upper-casing of translated text (Turkish dotted/dotless i).
-    <Badge variant="light" color={COLORS[status] ?? 'gray'} tt="none" data-status={status} data-testid={testId}>
-      {t(deploymentStatusKey(status))}
+    <Badge
+      variant="light"
+      color={cancelled ? 'gray' : (COLORS[d.status] ?? 'gray')}
+      tt="none"
+      data-status={d.status}
+      data-cancelled={cancelled ? 'true' : undefined}
+      data-testid={testId}
+    >
+      {t(deploymentStatusText(d))}
     </Badge>
   );
 }
@@ -34,8 +42,20 @@ const UNRESOLVED = /\{\{\s*\w+\s*\}\}/;
 // DeploymentErrorAlert shows an ErrorRef of a deployment (error or verify_failed). The server gives
 // {code, reason, params} without a message key, so the texts are errors.<reason>.title|cause|action
 // of the shared catalogue; a reason without text, or a text whose parameters the server did not
-// give, shows the generic message. The code is detail below the texts.
-export function DeploymentErrorAlert({ error, heading, withCause = true }: { error: ErrorRef | null; heading?: string; withCause?: boolean }) {
+// give, shows the generic message. The code is detail below the texts. An operation id (the
+// unfinished earlier change on the server that ALC-DEP-0023/0024 name) is shown as data, because the
+// action tells the operator to use it. neutral: a decision, not a failure (a cancelled deployment).
+export function DeploymentErrorAlert({
+  error,
+  heading,
+  withCause = true,
+  neutral = false,
+}: {
+  error: ErrorRef | null;
+  heading?: string;
+  withCause?: boolean;
+  neutral?: boolean;
+}) {
   const { t, i18n } = useTranslation();
   if (!error) return null;
   const params = error.params ?? {};
@@ -48,8 +68,9 @@ export function DeploymentErrorAlert({ error, heading, withCause = true }: { err
   const title = text('title') || t('ui.unexpectedError');
   const cause = withCause ? text('cause') : '';
   const action = text('action');
+  const operation = params.operation_id ?? '';
   return (
-    <Alert color="red" role="alert" title={title} data-reason={error.reason}>
+    <Alert color={neutral ? 'gray' : 'red'} role={neutral ? 'status' : 'alert'} title={title} data-reason={error.reason}>
       <Stack gap={4}>
         {heading && (
           <Text size="xs" c="gray.7">
@@ -58,6 +79,7 @@ export function DeploymentErrorAlert({ error, heading, withCause = true }: { err
         )}
         {cause && <Text size="sm">{cause}</Text>}
         {action && <Text size="sm">{action}</Text>}
+        {operation && <LabelledCode text={t('deployments.operation', { id: '' })} value={operation} />}
         {error.code && (
           <Text size="xs" c="gray.7" style={WRAP}>
             {t('jobs.errorCode', { code: error.code })}
@@ -89,12 +111,13 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
         headline = t('deploy.unchanged');
         break;
       case 'failed':
-        color = 'red';
+        // A cancelled deployment sent nothing: a decision, not a failure of the server.
+        color = isCancelled(d) ? 'gray' : 'red';
         headline = t('deploy.noChange');
         break;
       case 'rolled_back':
         color = 'orange';
-        headline = t('deploy.rolledBack');
+        headline = t(d.error?.reason === PENDING_CHANGE_RESTORED ? 'deploy.pendingChangeRestored' : 'deploy.rolledBack');
         break;
       default:
         // rollback_failed: the headline follows the phase, so it never contradicts the cause. With
@@ -131,7 +154,7 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
           <Text size="sm">{t('deployments.recovery.next', { time: formatDateTime(d.recover_after, i18n.language) })}</Text>
         )}
       </Alert>
-      {d.status !== 'succeeded' && <DeploymentErrorAlert error={d.error} />}
+      {d.status !== 'succeeded' && <DeploymentErrorAlert error={d.error} neutral={isCancelled(d)} />}
       {d.verify_failed && d.status !== 'succeeded' && <DeploymentErrorAlert error={d.verify_failed} heading={t('deployments.verifyFailedTitle')} withCause={false} />}
     </Stack>
   );

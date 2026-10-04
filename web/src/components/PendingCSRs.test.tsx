@@ -83,6 +83,22 @@ describe('PendingCSRs', () => {
     expect(screen.getByLabelText('Signed certificate and chain (PEM)')).toHaveValue('SIGNED');
   });
 
+  it('clears a private key pasted into the certificate field when the server refuses it', async () => {
+    server.use(
+      ...sessionHandlers(operatorSession),
+      http.post('/api/v1/certificates/csr/:id/actions/complete', () =>
+        errorResponse(422, 'ALC-SYS-0006', 'validation.failed', { details: [{ field: 'certificate_pem', code: 'validation.key_in_certificate' }] }),
+      ),
+    );
+    csrs();
+    await renderApp(<PendingCSRs canOperate onCompleted={() => {}} />);
+    await userEvent.click((await screen.findAllByRole('button', { name: /Add signed certificate/ }))[0]);
+    await userEvent.type(await screen.findByLabelText('Signed certificate and chain (PEM)'), 'PASTED-KEY');
+    await userEvent.click(screen.getByRole('button', { name: 'Add certificate' }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByLabelText('Signed certificate and chain (PEM)')).toHaveValue('');
+  });
+
   it('cancels a request only after a confirmation, and keeps it on "Keep request"', async () => {
     let cancelled: string | undefined;
     let list = [csrFixture(), other];

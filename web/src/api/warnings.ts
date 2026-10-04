@@ -66,6 +66,7 @@ export const LOCATION_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   config_file_writable: [],
   stream_tls: [],
   mail_tls: [],
+  chain_unresolved: [],
 };
 
 // locationWarningKey is the text key of a location warning; a code from a newer server gets the

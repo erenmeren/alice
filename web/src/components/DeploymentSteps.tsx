@@ -78,6 +78,22 @@ function StepDetails({ step }: { step: DeploymentStep }) {
   }
   if (p.port) lines.push(<Text key="port" size="xs">{t('deployments.stepDetail.port', { port: p.port })}</Text>);
   if (p.mode) lines.push(<Text key="mode" size="xs">{t('deployments.stepDetail.mode', { mode: t(`deployments.verified.${['remote', 'local', 'skipped'].includes(p.mode) ? p.mode : 'none'}`) })}</Text>);
+  if (step.name === 'recover_pending' && (step.status === 'ok' || step.status === 'skipped' || step.status === 'failed')) {
+    lines.push(
+      <Text key="recover" size="xs">
+        {t(`deployments.stepDetail.recoverPending.${step.status}`)}
+      </Text>,
+    );
+  }
+  // The unfinished earlier change on the server (not this deployment's own backup folder).
+  if (p.operation_id) {
+    lines.push(
+      <Text key="operation" size="xs" style={WRAP}>
+        {t('deployments.operation', { id: '' }).replace(/\s*$/, ' ')}
+        <code translate="no">{p.operation_id}</code>
+      </Text>,
+    );
+  }
   if (p.served) {
     lines.push(
       <Text key="served" size="xs" style={WRAP}>

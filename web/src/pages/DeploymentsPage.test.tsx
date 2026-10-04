@@ -36,6 +36,9 @@ describe('DeploymentsPage', () => {
             deploymentFixture({ id: 'r', status: 'needs_attention', state: 'recovering' }),
             deploymentFixture({ id: 'h', status: 'pending', state: 'queued', job_status: 'blocked_license' }),
             deploymentFixture({ id: 'u', status: '', state: '' }),
+            // Sent, being recovered, its original job held by the license (C-I1): recovering, never held.
+            deploymentFixture({ id: 's', status: 'running', state: 'recovering', job_status: 'blocked_license', finished_at: null }),
+            deploymentFixture({ id: 'c', status: 'failed', error: { code: 'ALC-DEP-0022', reason: 'deployment.cancelled' } }),
           ],
           next_cursor: null,
         }),
@@ -47,6 +50,10 @@ describe('DeploymentsPage', () => {
     expect(within(rows[0]).getByText('Confirming the outcome')).toBeInTheDocument();
     expect(within(rows[1]).getByText('On hold for the license')).toBeInTheDocument();
     expect(within(rows[2]).getByText('Unknown')).toBeInTheDocument();
+    expect(within(rows[3]).getByText('Confirming the outcome')).toBeInTheDocument();
+    expect(within(rows[3]).queryByText('On hold for the license')).not.toBeInTheDocument();
+    expect(within(rows[4]).getByText('Cancelled')).toBeInTheDocument();
+    expect(within(rows[4]).queryByText('Failed, nothing changed')).not.toBeInTheDocument();
   });
 
   it('pages with Show more using next_cursor', async () => {

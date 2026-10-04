@@ -19,14 +19,20 @@ export const DEPLOYMENT_STATUSES: readonly DeploymentStatus[] = [
 ];
 
 // UPLOAD_WARNING_KEYS maps a warning code of an upload or a signing request's completion to its text.
-// Source: internal/certs/upload.go (not_yet_valid, chain_incomplete, chain_certificate_expired) and
-// internal/inventory/csr.go (csr_name_mismatch).
+// Source: internal/certs/upload.go (not_yet_valid, chain_incomplete, chain_certificate_expired),
+// internal/inventory/csr.go (csr_name_mismatch) and the inventory's chain completion (chain_completed).
 export const UPLOAD_WARNING_KEYS: Readonly<Record<string, string>> = {
   chain_incomplete: 'certificates.upload.chainWarning',
   chain_certificate_expired: 'certificates.upload.chainExpiredWarning',
   not_yet_valid: 'certificates.upload.notYetValid',
   csr_name_mismatch: 'certificates.upload.nameMismatchWarning',
+  // Not a problem: the upload completed the chain of a certificate Alice already held (HTTP 200
+  // instead of 201). The dialogs show it as the result itself, not as a warning.
+  chain_completed: 'certificates.upload.chainCompleted',
 };
+
+// CHAIN_COMPLETED is the upload warning that says the upload completed a stored certificate's chain.
+export const CHAIN_COMPLETED = 'chain_completed';
 
 // uploadWarningKey is the text for a warning code; a code from a newer server gets a generic text.
 export function uploadWarningKey(code: string): string {
@@ -52,7 +58,9 @@ export const DEPLOYMENT_STATES: readonly DeploymentState[] = ['queued', 'prechec
 export const STEP_STATUSES: readonly StepStatus[] = ['started', 'ok', 'failed', 'skipped'];
 
 // DEPLOYMENT_STEP_NAMES are the steps a deployment reports: the helper's (helperproto.Step*), the
-// provider's (providers.StepName*) and the pre-check of internal/jobs/deployjobs.
+// provider's (providers.StepName*) and the engine's own in internal/jobs/deployjobs: the pre-check
+// and recover_pending (Alice puts back the files of an unfinished earlier change it no longer follows
+// before it deploys; param operation_id).
 export const DEPLOYMENT_STEP_NAMES: readonly string[] = [
   'verify_current',
   'backup',
@@ -66,6 +74,7 @@ export const DEPLOYMENT_STEP_NAMES: readonly string[] = [
   'rollback_reload',
   'verify',
   'verify_old',
+  'recover_pending',
 ];
 
 // UNSUPPORTED_REASONS: CertificateLocation.unsupported_reason (providers.Unsupported*).
@@ -95,6 +104,7 @@ export const FILE_PROBLEMS: readonly string[] = [
   'not_a_certificate',
   'unreadable',
   'bad_name',
+  'name_not_allowed',
   'special_filesystem',
   'unknown',
 ];

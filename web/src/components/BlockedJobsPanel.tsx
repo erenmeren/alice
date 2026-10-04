@@ -1,12 +1,20 @@
 import { Button, Card, Group, Stack, Table, Text, Title } from '@mantine/core';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { confirmJob, discardJob, listJobs } from '../api/endpoints';
-import { BLOCKED_JOBS_KEY, SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
-import type { Job } from '../api/types';
+import { wasSent } from '../api/deployments';
+import { confirmJob, discardJob, listDeployments, listJobs } from '../api/endpoints';
+import { BLOCKED_JOBS_KEY, DEPLOYMENTS_KEY, SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
+import type { Deployment, Job } from '../api/types';
 import { formatDateTime } from '../datetime';
 import { ErrorAlert } from './ErrorAlert';
+import { InternalLink } from './InternalLink';
+
+// DEPLOY_JOB is the job type of a deployment (internal/inventory/jobs.go JobCertificateDeploy).
+const DEPLOY_JOB = 'certificate.deploy';
+// The deployments of a server read to find the one a held job belongs to (the newest first; a held
+// job's deployment is among the recent ones).
+const DEPLOYMENTS_PER_SERVER = 200;
 
 // BlockedJobsPanel lists changes that were paused while the license was expired. After a renewal
 // they never start on their own: an Administrator runs or discards each one (R29, L-81).
@@ -16,6 +24,24 @@ export function BlockedJobsPanel() {
   const jobs = useQuery({ queryKey: BLOCKED_JOBS_KEY, queryFn: () => listJobs({ status: 'blocked_license' }) });
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // A held deployment job may belong to a deployment that was already sent and is being recovered
+  // by a job of its own (the API reports the original job's status): discarding it then undoes
+  // nothing, so the row says so. The job does not name its deployment; the deployments of its server
+  // do (job_id).
+  const deployTargets = [...new Set((jobs.data?.items ?? []).filter((j) => j.type === DEPLOY_JOB && j.target_id).map((j) => j.target_id as string))];
+  const deployments = useQueries({
+    queries: deployTargets.map((target) => ({
+      queryKey: [...DEPLOYMENTS_KEY, { target_id: target, limit: DEPLOYMENTS_PER_SERVER }],
+      queryFn: () => listDeployments({ target_id: target, limit: DEPLOYMENTS_PER_SERVER }),
+    })),
+  });
+  const deploymentOf = (job: Job): Deployment | undefined => {
+    for (const q of deployments) {
+      const d = q.data?.items.find((x) => x.job_id === job.id);
+      if (d) return d;
+    }
+    return undefined;
+  };
 
   const typeLabel = (job: Job) => (i18n.exists(`jobs.types.${job.type}`) ? t(`jobs.types.${job.type}`) : job.type);
   const act = async (job: Job, fn: (id: string) => Promise<Job>) => {
@@ -24,7 +50,7 @@ export function BlockedJobsPanel() {
     try {
       await fn(job.id);
       // Running or discarding a change moves a server or a key, so those lists are read again too.
-      await Promise.all([BLOCKED_JOBS_KEY, TARGETS_KEY, SSH_KEYS_KEY].map((queryKey) => client.invalidateQueries({ queryKey })));
+      await Promise.all([BLOCKED_JOBS_KEY, TARGETS_KEY, SSH_KEYS_KEY, DEPLOYMENTS_KEY].map((queryKey) => client.invalidateQueries({ queryKey })));
     } catch (e) {
       setError(e);
     } finally {
@@ -44,9 +70,25 @@ export function BlockedJobsPanel() {
         <Table.ScrollContainer minWidth={480}>
           <Table>
             <Table.Tbody>
-              {jobs.data.items.map((job) => (
-                <Table.Tr key={job.id}>
-                  <Table.Td>{typeLabel(job)}</Table.Td>
+              {jobs.data.items.map((job) => {
+                const dep = job.type === DEPLOY_JOB ? deploymentOf(job) : undefined;
+                return (
+                <Table.Tr key={job.id} data-testid="blocked-job">
+                  <Table.Td>
+                    <Stack gap={2}>
+                      <Text size="sm">{typeLabel(job)}</Text>
+                      {dep && (
+                        <>
+                          <Text size="xs" data-sent={wasSent(dep) ? 'true' : 'false'}>
+                            {t(wasSent(dep) ? 'jobs.deploymentSent' : 'jobs.deploymentNotSent')}
+                          </Text>
+                          <InternalLink to={`/deployments/${dep.id}`} size="xs">
+                            {t('deploy.openDeployment')}
+                          </InternalLink>
+                        </>
+                      )}
+                    </Stack>
+                  </Table.Td>
                   <Table.Td>{t('jobs.created', { time: formatDateTime(job.created_at, i18n.language) })}</Table.Td>
                   <Table.Td>
                     <Group gap="xs" wrap="nowrap">
@@ -59,7 +101,8 @@ export function BlockedJobsPanel() {
                     </Group>
                   </Table.Td>
                 </Table.Tr>
-              ))}
+                );
+              })}
             </Table.Tbody>
           </Table>
         </Table.ScrollContainer>

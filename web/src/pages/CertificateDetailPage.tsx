@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router';
-import { deploymentStatusKey, keyAlgorithmKey } from '../api/enums';
+import { deploymentStatusText } from '../api/deployments';
+import { keyAlgorithmKey } from '../api/enums';
 import { getCertificate, listDeployments } from '../api/endpoints';
 import { certificateKey, DEPLOYMENTS_KEY } from '../api/queryKeys';
 import type { CertificateDetail } from '../api/types';
@@ -78,7 +79,14 @@ export function CertificateDetailPage() {
         <Text size="sm">{t('certificates.detail.chainComplete')}</Text>
       ) : (
         <Alert color="yellow" role="status">
-          {t('certificates.detail.chainIncomplete')}
+          <Text size="sm">{t('certificates.detail.chainIncomplete')}</Text>
+          {/* Alice completes a stored chain when the same certificate is uploaded again with the full
+              chain; a certificate from a signing request cannot be completed that way. */}
+          {canOperate && (c.source === 'uploaded' || c.source === 'discovered') && (
+            <Text size="sm" data-testid="chain-hint">
+              {t('certificates.detail.chainCompleteByUpload')}
+            </Text>
+          )}
         </Alert>
       )}
       {!c.has_private_key && (
@@ -145,8 +153,6 @@ export function CertificateDetailPage() {
         <Alert color="blue" role="note" data-testid="deploy-hint">
           <Stack gap={4} align="flex-start">
             <Text size="sm">{t('certificates.detail.deployHint')}</Text>
-            {/* Black and underlined like the license banner links: the primary color on the blue
-                tint is below 4.5:1 (axe, e2e). */}
             {/* Black and underlined like the license banner links: the primary color on the blue
                 tint is below 4.5:1 (axe, e2e). */}
             <Anchor component={Link} to="/servers" size="sm" c="black" underline="always">
@@ -220,7 +226,7 @@ export function CertificateDetailPage() {
                   </Table.Td>
                   <Table.Td>
                     <Anchor component={Link} to={`/deployments/${d.id}`}>
-                      {t(deploymentStatusKey(d.status))}
+                      {t(deploymentStatusText(d))}
                     </Anchor>
                   </Table.Td>
                 </Table.Tr>

@@ -189,6 +189,9 @@ function DeployForm({
     // screen stopped following are still open.
     const open = runs.length - views.filter((v) => v === 'final').length;
     const ok = runs.filter((r) => r.deployment?.status === 'succeeded').length;
+    // Runs that found the certificate already in place changed nothing: said apart, so a batch of
+    // them does not read as "0 updated" only.
+    const unchanged = runs.filter((r) => r.deployment?.status === 'unchanged').length;
     const multi = runs.length > 1;
     return (
       <Stack gap="md" ref={runsRef} tabIndex={-1} aria-label={t('deploy.title')} style={{ outline: 'none' }}>
@@ -247,6 +250,7 @@ function DeployForm({
             <Text size="sm" fw={600}>
               {t('deploy.partial', { ok, total: runs.length })}
             </Text>
+            {unchanged > 0 && <Text size="sm">{t('deploy.partialUnchanged', { count: unchanged })}</Text>}
             {!allFinal && <Text size="sm">{t('deploy.partialOpen', { open })}</Text>}
           </Stack>
         )}

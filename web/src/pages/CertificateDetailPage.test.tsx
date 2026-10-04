@@ -63,6 +63,29 @@ describe('CertificateDetailPage', () => {
     await renderRoute(`/certificates/${ID}`);
     expect(await screen.findByText('The certificate chain is incomplete: some browsers may not trust this certificate.')).toBeInTheDocument();
     expect(screen.getByText('Self-signed certificate')).toBeInTheDocument();
+    // An uploaded certificate is completed by uploading it again with its full chain.
+    expect(screen.getByTestId('chain-hint')).toHaveTextContent('To complete the chain, upload this certificate again with its full chain and its private key.');
+  });
+
+  it('does not offer completing the chain by a new upload for a certificate from a signing request', async () => {
+    certServer(certificateDetailFixture({ id: ID, chain_complete: false, source: 'csr' }));
+    await renderRoute(`/certificates/${ID}`);
+    expect(await screen.findByText('The certificate chain is incomplete: some browsers may not trust this certificate.')).toBeInTheDocument();
+    expect(screen.queryByTestId('chain-hint')).not.toBeInTheDocument();
+  });
+
+  it('does not show the chain hint to an Auditor, who cannot upload', async () => {
+    certServer(certificateDetailFixture({ id: ID, chain_complete: false }), undefined, auditorSession);
+    await renderRoute(`/certificates/${ID}`);
+    expect(await screen.findByText('The certificate chain is incomplete: some browsers may not trust this certificate.')).toBeInTheDocument();
+    expect(screen.queryByTestId('chain-hint')).not.toBeInTheDocument();
+  });
+
+  it('calls a deployment an administrator cancelled Cancelled in the latest deployments', async () => {
+    certServer(undefined, [deploymentFixture({ id: 'd1', status: 'failed', error: { code: 'ALC-DEP-0022', reason: 'deployment.cancelled' } })]);
+    await renderRoute(`/certificates/${ID}`);
+    const table = await screen.findByRole('table', { name: 'Deployments' });
+    expect(within(table).getByRole('link', { name: 'Cancelled' })).toBeInTheDocument();
   });
 
   it('lists the latest deployments with their result', async () => {

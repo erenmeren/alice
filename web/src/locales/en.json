@@ -406,7 +406,8 @@
       "deployment_needs_attention": "Deployment needs attention",
       "deployment_precheck_started": "Deployment check started",
       "deployment_started": "Deployment started",
-      "deployment_recovering": "Interrupted deployment being checked"
+      "deployment_recovering": "Interrupted deployment being checked",
+      "certificate_chain_completed": "Certificate chain completed"
     }
   },
   "license": {
@@ -545,7 +546,7 @@
     "config_file_writable": "An Nginx configuration file can be changed by users other than root: {{path}}",
     "too_many_files": "This server uses more certificate files than Alice lists, so some were not read.",
     "locations_dropped": "This server has more websites than Alice lists, so the list is incomplete and no website is marked as no longer found.",
-    "list_truncated": "Alice cut some long lists of the Nginx configuration, so what is shown is incomplete.",
+    "list_truncated": "Alice cut some long lists of this server (for example user accounts, key files or parts of the Nginx configuration), so what is shown is incomplete.",
     "key_mode_open": "A private key file can be read by more users than needed.",
     "symlinked": "A certificate file is a link. Another tool (for example certbot) may replace it.",
     "custom_location": "A certificate file is outside the usual certificate folders.",
@@ -734,7 +735,9 @@
       }
     },
     "blockedNotice": "This task is paused and waits for an administrator to run it.",
-    "stopped": "This task was stopped before it finished."
+    "stopped": "This task was stopped before it finished.",
+    "deploymentSent": "Alice already sent this deployment to the server and is confirming how it ended. Discarding this job does not undo it.",
+    "deploymentNotSent": "Nothing has been sent to the server yet. Discarding this job cancels the deployment."
   },
   "enum": {
     "targetStatus": {
@@ -861,7 +864,8 @@
       "facts": "Certificate details",
       "deployHint": "To deploy this certificate, open the server of the website, choose Deploy certificate there and pick this certificate.",
       "openServers": "Open the servers",
-      "deployHelp": "Deploy sends this certificate to the websites listed below."
+      "deployHelp": "Deploy sends this certificate to the websites listed below.",
+      "chainCompleteByUpload": "To complete the chain, upload this certificate again with its full chain and its private key."
     },
     "upload": {
       "title": "Upload a certificate",
@@ -890,7 +894,8 @@
       "readFailed": "Alice could not read this file. Choose it again.",
       "otherWarning": "Alice stored the certificate and noted a condition that this version cannot describe.",
       "clearFile": "Remove the chosen file",
-      "networkUnknown": "The connection was lost. The upload may or may not have reached Alice. Check the certificate list before you try again."
+      "networkUnknown": "The connection was lost. The upload may or may not have reached Alice. Check the certificate list before you try again.",
+      "chainCompleted": "Alice already had this certificate. Its chain is now complete."
     },
     "csr": {
       "title": "Create a signing request",
@@ -1018,7 +1023,8 @@
       "config_file_writable": "A configuration file of this website can be changed by users other than root.",
       "stream_tls": "TLS in a stream block is listed, but not supported in this version.",
       "mail_tls": "TLS in a mail block is listed, but not supported in this version.",
-      "unknown": "Alice reported a note about this website that this version cannot describe."
+      "unknown": "Alice reported a note about this website that this version cannot describe.",
+      "chain_unresolved": "Alice could not work out the chain of this file within its limits, so it keeps only the website's certificate; its chain counts as incomplete."
     },
     "unsupported": {
       "variable": "The path uses a variable, so Alice cannot know which file is used.",
@@ -1045,7 +1051,8 @@
       "unreadable": "Alice could not read the file.",
       "bad_name": "The file name does not end in .pem, .crt, .cer, .cert, .key, .chained or .fullchain.",
       "special_filesystem": "The file is on a special file system.",
-      "unknown": "Alice cannot use the file for a reason this version does not know."
+      "unknown": "Alice cannot use the file for a reason this version does not know.",
+      "name_not_allowed": "The file's real location (after links) has a character Alice cannot pass to the helper (a space, *, ~, comma or a non-ASCII letter), for example an acme.sh folder like *.example.com."
     },
     "problemCertificate": "Certificate file: {{problem}}",
     "problemKey": "Key file: {{problem}}",
@@ -1109,7 +1116,10 @@
     "rollbackFailedRestored": "The previous files are back, but Alice could not confirm that the website serves the previous certificate. Check the website now.",
     "finishing": "The background job has finished. Alice is recording the result.",
     "partialOpen": "Websites not finished yet: {{open}}. Follow them in the deployment history.",
-    "listCut": "The list of certificates was cut after {{count}} entries, so some certificates are not offered here."
+    "listCut": "The list of certificates was cut after {{count}} entries, so some certificates are not offered here.",
+    "pendingChangeRestored": "The new certificate was not written. Alice put back the files from before an unfinished earlier change, so the website now serves the certificate it had before that change. That may not be the certificate it served when you chose Deploy.",
+    "partialUnchanged_one": "Websites that already had this certificate: {{count}}",
+    "partialUnchanged_other": "Websites that already had this certificate: {{count}}"
   },
   "deployments": {
     "title": "Deployment history",
@@ -1180,7 +1190,8 @@
       "rollback_config_test": "Check again",
       "rollback_reload": "Reload again",
       "verify_old": "Verify the previous certificate",
-      "unknown": "Other step"
+      "unknown": "Other step",
+      "recover_pending": "Undo an unfinished earlier change"
     },
     "stepStatus": {
       "started": "Running",
@@ -1196,8 +1207,15 @@
       "port": "Port: {{port}}",
       "mode": "Checked: {{mode}}",
       "served": "Served certificate: {{fingerprint}}",
-      "reason": "Cause: {{reason}}"
+      "reason": "Cause: {{reason}}",
+      "recoverPending": {
+        "ok": "Alice put back the files from before the unfinished earlier change.",
+        "skipped": "There was nothing to put back.",
+        "failed": "The unfinished earlier change still blocks these files."
+      }
     },
-    "currentStep": "Current step: {{step}}"
+    "currentStep": "Current step: {{step}}",
+    "operation": "Unfinished earlier change on the server (operation ID): {{id}}",
+    "cancelled": "Cancelled"
   }
 }

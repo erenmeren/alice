@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isApiError, NetworkError } from '../api/client';
 import { uploadCertificate } from '../api/endpoints';
+import { CHAIN_COMPLETED } from '../api/enums';
 import type { UploadRequest, UploadResult } from '../api/types';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
@@ -125,7 +126,9 @@ function UploadForm({ onClose, onUploaded }: { onClose: () => void; onUploaded: 
       {result ? (
         <Stack gap="sm">
           <Alert color="green" role="status">
-            {t('certificates.upload.uploaded')}
+            {/* The server answers 200 with chain_completed (not 201) when Alice already held this
+                certificate and the upload only completed its chain. */}
+            {t(result.warnings.includes(CHAIN_COMPLETED) ? 'certificates.upload.chainCompleted' : 'certificates.upload.uploaded')}
           </Alert>
           <UploadWarnings warnings={result.warnings} />
           <Group justify="flex-end">

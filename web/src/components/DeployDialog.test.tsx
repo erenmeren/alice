@@ -526,6 +526,51 @@ describe('DeployDialog states', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
     expect(await screen.findByText('Updated websites: 1 of 2')).toBeInTheDocument();
     expect(screen.getByText('Websites not finished yet: 1. Follow them in the deployment history.')).toBeInTheDocument();
+    expect(screen.queryByText(/Websites that already had this certificate/)).not.toBeInTheDocument();
+  });
+
+  it('counts the websites that already had the certificate apart from the updated ones', async () => {
+    asRole('operator');
+    const ids = [1, 2, 3, 4, 5].map((n) => [`0192c000-0000-7000-8000-0000000000d${n}`, `0192c000-0000-7000-8000-0000000000e${n}`] as [string, string]);
+    const locations = ids.map(([, loc], i) => locationFixture({ id: loc, cert_path: `/etc/nginx/ssl/s${i + 1}.crt` }));
+    server.use(
+      http.get(`/api/v1/certificates/${NEW_ID}`, () => HttpResponse.json(certificateDetailFixture({ id: NEW_ID, locations }))),
+      http.post(`/api/v1/certificates/${NEW_ID}/deploy`, () => HttpResponse.json(accepted(...ids), { status: 202 })),
+      ...ids.map(([id, loc]) =>
+        http.get(`/api/v1/deployments/${id}`, () => HttpResponse.json(deploymentDetailFixture({ id, location_id: loc, status: 'unchanged', result: 'unchanged' }))),
+      ),
+    );
+    await showDialog({ certificate: NEW_CERT });
+    for (const box of await screen.findAllByRole('checkbox')) await userEvent.click(box);
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
+    expect(await screen.findByText('Updated websites: 0 of 5', {}, { timeout: 10_000 })).toBeInTheDocument();
+    expect(screen.getByText('Websites that already had this certificate: 5')).toBeInTheDocument();
+    expect(screen.getAllByText('This certificate was already in place. Nothing was changed.')).toHaveLength(5);
+  });
+
+  it('does not call an undone earlier change "restored to its previous certificate", and names that change', async () => {
+    const op = '0192c000-0000-7000-8000-00000000abcd';
+    await runWith({
+      status: 'rolled_back',
+      phase: 'restored',
+      failed_step: 'recover_pending',
+      error: { code: 'ALC-DEP-0024', reason: 'deployment.pending_change_restored', params: { operation_id: op } },
+      steps: [stepFixture(1, 'recover_pending', 'started', { operation_id: op }), stepFixture(2, 'recover_pending', 'ok', { operation_id: op })],
+    });
+    expect(await screen.findByText(/The new certificate was not written\. Alice put back the files from before an unfinished earlier change/)).toBeInTheDocument();
+    expect(screen.queryByText('Your server was restored to its previous certificate.')).not.toBeInTheDocument();
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('ALC-DEP-0024');
+    expect(within(alert).getByText(op).tagName).toBe('CODE');
+    expect(within(alert).getByText(op)).toHaveAttribute('translate', 'no');
+    expect(alert).toHaveTextContent('Unfinished earlier change on the server (operation ID):');
+  });
+
+  it('shows a deployment an administrator cancelled as cancelled, without a failure alert', async () => {
+    await runWith({ status: 'failed', error: { code: 'ALC-DEP-0022', reason: 'deployment.cancelled' } });
+    expect(await screen.findByText('Nothing was changed on the server.')).toBeInTheDocument();
+    expect(screen.getByText('An administrator cancelled this deployment before anything was sent to the server.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('follows 20 websites with one loop, far below the session request limit', async () => {

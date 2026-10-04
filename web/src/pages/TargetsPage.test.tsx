@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import commonEn from '@locales/common/en.json';
 import {
+  deploymentFixture,
   errorResponse,
   hostKeyFixture,
   jobFixture,
@@ -171,6 +172,32 @@ describe('TargetsPage', () => {
     await userEvent.click(within(panel).getByRole('button', { name: 'Run now: SSH key removal' }));
     await waitFor(() => expect(calls).toEqual(['confirm job-b']));
     await waitFor(() => expect(screen.queryByTestId('blocked-jobs')).not.toBeInTheDocument());
+  });
+
+  it('says whether a held deployment job was already sent, so Discard is not taken for "nothing ran" (C-I1)', async () => {
+    withTargets('admin');
+    const sent = jobFixture({ id: 'job-sent', type: 'certificate.deploy', target_id: targetFixture.id, status: 'blocked_license', finished_at: null });
+    const held = jobFixture({ id: 'job-held', type: 'certificate.deploy', target_id: targetFixture.id, status: 'blocked_license', finished_at: null });
+    let deploymentQuery = '';
+    server.use(
+      http.get('/api/v1/jobs', () => HttpResponse.json({ items: [sent, held], next_cursor: null })),
+      http.get('/api/v1/deployments', ({ request }) => {
+        deploymentQuery = new URL(request.url).search;
+        return HttpResponse.json({
+          items: [
+            deploymentFixture({ id: 'dep-sent', job_id: 'job-sent', job_status: 'blocked_license', status: 'running', state: 'recovering', finished_at: null }),
+            deploymentFixture({ id: 'dep-held', job_id: 'job-held', job_status: 'blocked_license', status: 'pending', state: 'queued', finished_at: null }),
+          ],
+          next_cursor: null,
+        });
+      }),
+    );
+    await renderRoute('/servers');
+    const rows = await screen.findAllByTestId('blocked-job');
+    expect(await within(rows[0]).findByText(/Alice already sent this deployment to the server .* Discarding this job does not undo it\./)).toBeInTheDocument();
+    expect(within(rows[0]).getByRole('link', { name: 'Open this deployment' })).toHaveAttribute('href', '/deployments/dep-sent');
+    expect(within(rows[1]).getByText('Nothing has been sent to the server yet. Discarding this job cancels the deployment.')).toBeInTheDocument();
+    expect(deploymentQuery).toContain(`target_id=${targetFixture.id}`);
   });
 
   it('refreshes the server list after a paused change is run', async () => {

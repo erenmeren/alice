@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { keyAlgorithmKey } from '../api/enums';
+import { isApiError } from '../api/client';
 import { cancelCSR, completeCSR, listCSRs } from '../api/endpoints';
 import { CERTIFICATES_KEY, CSRS_KEY } from '../api/queryKeys';
 import type { CSR, UploadResult } from '../api/types';
@@ -51,6 +52,9 @@ function CompleteDialog({
       onStored();
     } catch (e) {
       setError(e);
+      // A private key pasted into the certificate field must not survive its refusal (the server
+      // refuses it with validation.key_in_certificate, as an upload does).
+      if (isApiError(e) && e.details.some((d) => d.code === 'validation.key_in_certificate')) setPem('');
     }
     setBusy(false);
   };

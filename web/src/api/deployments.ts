@@ -1,4 +1,5 @@
 import { ApiError } from './client';
+import { deploymentStatusKey } from './enums';
 import { getDeployment } from './endpoints';
 import { isTransient } from './jobs';
 import type { Deployment, DeploymentDetail } from './types';
@@ -9,9 +10,12 @@ export const FINAL_STATUSES: ReadonlySet<string> = new Set(['succeeded', 'unchan
 
 // What a screen shows for a deployment:
 //   final      a result: succeeded, unchanged, failed, rolled_back or rollback_failed
-//   held       the license is expired and the job waits for an Administrator (job status blocked_license)
 //   recovering the connection was lost; Alice checks the server and finishes or undoes the change
-//              (state recovering, or status needs_attention when Alice cannot reach the server)
+//              (state recovering, or status needs_attention when Alice cannot reach the server). It
+//              wins over a held job: the API reports the status of the deployment's ORIGINAL job, which
+//              can be blocked_license while a recovery job of its own follows a deployment that was sent.
+//   held       nothing was sent yet (state queued or precheck) and the job waits for an Administrator
+//              because the license expired (job status blocked_license)
 //   finishing  the job succeeded but the record is not final yet (the result is being recorded)
 //   stopped    the job ended (failed, cancelled or given up) while the record is still not final
 //   unknown    the status is a value this version does not know ('' or newer)
@@ -20,11 +24,35 @@ export type DeploymentView = 'final' | 'held' | 'recovering' | 'finishing' | 'st
 
 const KNOWN_ACTIVE: ReadonlySet<string> = new Set(['pending', 'running', 'needs_attention']);
 const ENDED_JOBS: ReadonlySet<string> = new Set(['failed', 'cancelled', 'dead']);
+// NOT_SENT are the states in which nothing has been sent to the server yet.
+const NOT_SENT: ReadonlySet<string> = new Set(['queued', 'precheck']);
+
+// CANCELLED_REASON is the error reason of a deployment an Administrator cancelled (discarded its
+// waiting job) before anything was sent (ALC-DEP-0022). Its status is failed; screens call it
+// cancelled, never a failure of the server.
+export const CANCELLED_REASON = 'deployment.cancelled';
+
+export const isCancelled = (d: Pick<Deployment, 'status' | 'error'>): boolean => d.status === 'failed' && d.error?.reason === CANCELLED_REASON;
+
+// PENDING_CHANGE_RESTORED (ALC-DEP-0024): the deployment put back the files from before an unfinished
+// EARLIER change on the server and did not write its own certificate. Its status is rolled_back, but
+// "restored to its previous certificate" would read as the certificate that was live when Deploy was
+// chosen, so screens give it its own headline.
+export const PENDING_CHANGE_RESTORED = 'deployment.pending_change_restored';
+
+// deploymentStatusText is the text key of a deployment's status: a failed deployment that an
+// Administrator cancelled before anything was sent reads "Cancelled", never as a failure.
+export function deploymentStatusText(d: Pick<Deployment, 'status' | 'error'>): string {
+  return isCancelled(d) ? 'deployments.cancelled' : deploymentStatusKey(d.status);
+}
+
+// wasSent: the deployment may have reached the server (it left the queued and pre-check states).
+export const wasSent = (d: Pick<Deployment, 'state'>): boolean => d.state !== '' && !NOT_SENT.has(d.state);
 
 export function deploymentView(d: Pick<Deployment, 'status' | 'state' | 'job_status'>): DeploymentView {
   if (FINAL_STATUSES.has(d.status)) return 'final';
-  if (d.job_status === 'blocked_license') return 'held';
   if (d.state === 'recovering' || d.status === 'needs_attention') return 'recovering';
+  if (d.job_status === 'blocked_license' && NOT_SENT.has(d.state)) return 'held';
   if (d.job_status === 'succeeded' && KNOWN_ACTIVE.has(d.status)) return 'finishing';
   if (ENDED_JOBS.has(d.job_status)) return 'stopped';
   if (!KNOWN_ACTIVE.has(d.status)) return 'unknown';

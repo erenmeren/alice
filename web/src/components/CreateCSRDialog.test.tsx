@@ -70,6 +70,29 @@ describe('CreateCSRDialog', () => {
     expect(await screen.findByText(/Main domain name: This value contains characters that are not allowed./)).toBeInTheDocument();
   });
 
+  it('keeps the form when Alice is busy creating other requests (503, retryable), and shows the cap as the server says it', async () => {
+    let answer = 0;
+    server.use(
+      ...sessionHandlers(operatorSession),
+      http.post('/api/v1/certificates/csr', () => {
+        answer += 1;
+        return answer === 1
+          ? errorResponse(503, 'ALC-CRT-0016', 'csr.busy', { retryable: true })
+          : errorResponse(409, 'ALC-CRT-0017', 'csr.too_many_pending');
+      }),
+    );
+    await renderApp(<CreateCSRDialog opened onClose={() => {}} onCreated={() => {}} />);
+    await userEvent.type(screen.getByLabelText('Main domain name'), 'www.example.test');
+    await userEvent.type(screen.getByLabelText(/Other domain names/), 'example.test');
+    await userEvent.click(screen.getByRole('button', { name: 'Create request' }));
+    expect(await screen.findByText('Alice is busy creating other signing requests.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Main domain name')).toHaveValue('www.example.test');
+    expect(screen.getByLabelText(/Other domain names/)).toHaveValue('example.test');
+    await userEvent.click(screen.getByRole('button', { name: 'Create request' }));
+    expect(await screen.findByText('There are too many open signing requests.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Main domain name')).toHaveValue('www.example.test');
+  });
+
   it('starts empty again after it was closed', async () => {
     function Host() {
       const [opened, setOpened] = useState(true);

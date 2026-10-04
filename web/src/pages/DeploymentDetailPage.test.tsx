@@ -152,6 +152,59 @@ describe('DeploymentDetailPage', () => {
     expect(within(headline()).getByText('On hold for the license')).toBeInTheDocument();
   });
 
+  it('shows a sent deployment that is being recovered as recovering, not on hold, although its original job is held (C-I1)', async () => {
+    show(deploymentDetailFixture({ id: ID, status: 'running', state: 'recovering', job_status: 'blocked_license', recovery_attempts: 1, recover_after: '2026-10-02T10:15:00Z', finished_at: null }));
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText(/Alice has not yet confirmed how this deployment ended/)).toBeInTheDocument();
+    expect(screen.queryByText(/The license has expired, so this deployment is on hold/)).not.toBeInTheDocument();
+    expect(within(headline()).queryByText('On hold for the license')).not.toBeInTheDocument();
+    expect(screen.getByTestId('recovery')).toBeInTheDocument();
+  });
+
+  it('shows a deployment an administrator cancelled as Cancelled, with the reason as information', async () => {
+    show(deploymentDetailFixture({ id: ID, status: 'failed', error: { code: 'ALC-DEP-0022', reason: 'deployment.cancelled' }, steps: [] }));
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByTestId('deployment-status')).toHaveTextContent('Cancelled');
+    expect(screen.getByText('An administrator cancelled this deployment before anything was sent to the server.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
+  it('shows the step that undid an unfinished earlier change, with its end and the change it names', async () => {
+    const op = '0192c000-0000-7000-8000-00000000abcd';
+    show(
+      deploymentDetailFixture({
+        id: ID,
+        status: 'failed',
+        backup_dir: '/var/lib/alice-helper/backups/own',
+        failed_step: 'recover_pending',
+        error: { code: 'ALC-DEP-0023', reason: 'deployment.server_operation_pending', params: { operation_id: op } },
+        steps: [stepFixture(1, 'verify_current'), stepFixture(2, 'recover_pending', 'started', { operation_id: op }), stepFixture(3, 'recover_pending', 'failed', { operation_id: op })],
+      }),
+    );
+    await renderRoute(`/deployments/${ID}`);
+    const list = await screen.findByRole('list', { name: 'Steps' });
+    const row = within(list).getByText('Undo an unfinished earlier change').closest('li') as HTMLElement;
+    expect(row).toHaveAttribute('data-status', 'failed');
+    expect(row).toHaveTextContent('The unfinished earlier change still blocks these files.');
+    expect(within(row).getByText(op)).toHaveAttribute('translate', 'no');
+    // The change on the server is named apart from this deployment's own backup folder.
+    expect(within(screen.getByRole('alert')).getByText(op)).toBeInTheDocument();
+    expect(screen.getByText(/Backup on the server/)).toHaveTextContent('/var/lib/alice-helper/backups/own');
+    expect(screen.getByText(/Backup on the server/)).not.toHaveTextContent(op);
+    expect(screen.getByText("Failed at: Undo an unfinished earlier change")).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
+  it.each([
+    ['ok', 'Alice put back the files from before the unfinished earlier change.'],
+    ['skipped', 'There was nothing to put back.'],
+  ] as const)('says how the undo step ended: %s', async (status, text) => {
+    show(deploymentDetailFixture({ id: ID, steps: [stepFixture(1, 'recover_pending', 'started'), stepFixture(2, 'recover_pending', status, { operation_id: '0192c000-0000-7000-8000-00000000abcd' }), ...okSteps.slice(1).map((s, i) => ({ ...s, n: i + 3 }))] }));
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText(text)).toBeInTheDocument();
+  });
+
   it('shows Unknown for a status, a state and a step status this version does not know', async () => {
     show(deploymentDetailFixture({ id: ID, status: '', state: '', steps: [{ ...stepFixture(1, 'backup'), status: '' }, stepFixture(2, 'made_up_step')], finished_at: null }));
     await renderRoute(`/deployments/${ID}`);

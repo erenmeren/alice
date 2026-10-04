@@ -1,7 +1,7 @@
 import { http, HttpResponse } from 'msw';
 import { deploymentDetailFixture } from '../test/fixtures';
 import { server } from '../test/server';
-import { deploymentView, watchDeployments } from './deployments';
+import { CANCELLED_REASON, deploymentView, isCancelled, wasSent, watchDeployments } from './deployments';
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => `0192c000-0000-7000-8000-${String(i).padStart(12, '0')}`);
 
@@ -106,5 +106,34 @@ describe('deploymentView', () => {
     expect(deploymentView({ status: 'running', state: 'deploying', job_status: 'dead' })).toBe('stopped');
     expect(deploymentView({ status: 'needs_attention', state: 'recovering', job_status: 'succeeded' })).toBe('recovering');
     expect(deploymentView({ status: '', state: '', job_status: '' })).toBe('unknown');
+  });
+
+  // The API reports the status of a deployment's ORIGINAL job: it can be blocked_license while the
+  // deployment, already sent, is followed by a recovery job of its own (final review C-I1). Such a
+  // deployment is never "on hold for the license"; held is only for one that has not been sent.
+  it.each([
+    // status, state, job_status, view
+    ['pending', 'queued', 'blocked_license', 'held'],
+    ['running', 'precheck', 'blocked_license', 'held'],
+    ['running', 'recovering', 'blocked_license', 'recovering'],
+    ['needs_attention', 'recovering', 'blocked_license', 'recovering'],
+    ['needs_attention', 'deploying', 'blocked_license', 'recovering'],
+    ['running', 'deploying', 'blocked_license', 'working'],
+    ['pending', 'queued', 'queued', 'working'],
+    ['running', 'recovering', 'running', 'recovering'],
+    ['rolled_back', 'done', 'blocked_license', 'final'],
+    ['failed', 'done', 'cancelled', 'final'],
+  ] as const)('status %s in state %s with job %s is %s', (status, state, job_status, view) => {
+    expect(deploymentView({ status, state, job_status })).toBe(view);
+  });
+
+  it('tells a deployment an administrator cancelled from a failed one, and a sent one from one that was not', () => {
+    const cancelled = { status: 'failed' as const, error: { code: 'ALC-DEP-0022', reason: CANCELLED_REASON } };
+    expect(isCancelled(cancelled)).toBe(true);
+    expect(isCancelled({ status: 'failed', error: { code: 'ALC-DEP-0010', reason: 'deployment.interrupted' } })).toBe(false);
+    expect(isCancelled({ status: 'rolled_back', error: { code: 'ALC-DEP-0022', reason: CANCELLED_REASON } })).toBe(false);
+    expect(isCancelled({ status: 'failed', error: null })).toBe(false);
+    expect(['queued', 'precheck', ''].map((state) => wasSent({ state: state as never }))).toEqual([false, false, false]);
+    expect(['deploying', 'recovering', 'done'].map((state) => wasSent({ state: state as never }))).toEqual([true, true, true]);
   });
 });

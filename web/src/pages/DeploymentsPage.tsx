@@ -86,7 +86,7 @@ function Row({ d, when }: { d: Deployment; when: string }) {
       </Table.Td>
       <Table.Td>
         <Stack gap={2}>
-          <DeploymentStatusBadge status={d.status} />
+          <DeploymentStatusBadge d={d} />
           {view === 'recovering' && <Text size="xs">{t(deploymentStateKey(d.state))}</Text>}
           {view === 'held' && <Text size="xs">{t('deployments.held')}</Text>}
         </Stack>

@@ -95,7 +95,7 @@ export function DeploymentDetailPage() {
           <Text size="sm" fw={600}>
             {t('deployments.statusLabel')}
           </Text>
-          <DeploymentStatusBadge status={d.status} testId="deployment-status" />
+          <DeploymentStatusBadge d={d} testId="deployment-status" />
         </Group>
         <Group gap={6}>
           <Text size="sm" fw={600}>

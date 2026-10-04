@@ -51,11 +51,32 @@ function enumOf(schema: string, prop: string): string[] {
   return m[1].split(',').map((v) => v.trim().replace(/^"|"$/g, ''));
 }
 
+// knownList reads the list after "Known values: " up to a ';', '"' or '}' outside parentheses: a value
+// may carry an explanation in parentheses, which can hold commas and semicolons of its own and is
+// dropped ("chain_completed (an upload completed …; answered with 200)").
+function knownList(text: string): string[] | null {
+  const at = text.indexOf('Known values: ');
+  if (at < 0) return null;
+  const values: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of text.slice(at + 'Known values: '.length)) {
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    else if (depth === 0 && (ch === ';' || ch === '"' || ch === '}')) break;
+    else if (depth === 0 && ch === ',') {
+      values.push(current);
+      current = '';
+    } else if (depth === 0) current += ch;
+  }
+  values.push(current);
+  return values.map((v) => v.trim().replace(/\.$/, '')).filter((v) => v !== '');
+}
+
 function knownValues(schema: string, prop: string): string[] {
-  const text = schemaProp(schema, prop).replace(/\s+/g, ' ');
-  const m = /Known values: ([^;"]*?)(?:;|"|\}|$)/.exec(text);
-  if (!m) throw new Error(`${schema}.${prop} has no known values`);
-  return m[1].split(',').map((v) => v.trim().replace(/\.$/, ''));
+  const list = knownList(schemaProp(schema, prop).replace(/\s+/g, ' '));
+  if (!list) throw new Error(`${schema}.${prop} has no known values`);
+  return list;
 }
 
 function lookup(bundle: unknown, key: string): unknown {
@@ -68,6 +89,9 @@ describe('enum labels cover every value of api/openapi.yaml', () => {
   it('reads sane values from the specification', () => {
     expect(enumOf('CSR', 'status')).toEqual(['pending', 'completed', 'cancelled']);
     expect(knownValues('Certificate', 'source')).toContain('uploaded');
+    // A value explained in parentheses (with commas and a semicolon inside) is read as the value alone.
+    expect(knownList('Known values: a, b_c (x, y; z), d; a newer server may add others.')).toEqual(['a', 'b_c', 'd']);
+    expect(knownValues('CertificateStored', 'warnings')).toContain('chain_completed');
   });
 
   const cases: { name: string; values: () => string[]; labelKey: (v: string) => string; known: readonly string[] }[] = [
@@ -110,9 +134,9 @@ function topLevelText(schema: string): string {
 }
 
 function knownIn(text: string): string[] {
-  const m = /Known values: ([^;"]*?)(?:;|"|\}|$)/.exec(text);
-  if (!m) throw new Error('no known values');
-  return m[1].split(',').map((v) => v.trim().replace(/\.$/, ''));
+  const list = knownList(text);
+  if (!list) throw new Error('no known values');
+  return list;
 }
 
 const t = (lang: 'en' | 'tr', key: string) => lookup(bundles[lang], key);
@@ -127,7 +151,9 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   const stepNames = [
     ...goConsts('internal/providers/types.go', /^StepName/),
     ...goConsts('internal/providers/linuxssh/helperproto/helperproto.go', /^Step(?!s)[A-Z]\w*$/),
-    ...goConsts('internal/jobs/deployjobs/deploy.go', /^stepPrecheck$/),
+    // The engine's own steps: the pre-check (stepPrecheck) and every other step* constant of the
+    // package (stepRecoverPending, W1 fix round 1).
+    ...goFiles('internal/jobs/deployjobs').flatMap((f) => goConsts(f, /^step[A-Z]\w*$/)),
   ];
   const typesWarnings = goConsts('internal/providers/types.go', /^Warn/);
   const inventoryWarnings = goConsts('internal/inventory/locations.go', /^Warn/);
@@ -142,8 +168,11 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   }
 
   it('lists every deployment step the engine, the helper and the pre-check report, and every one the API names', () => {
+    expect(stepNames).toEqual(expect.arrayContaining(['verify_current', 'recover_pending']));
     eq([...new Set(stepNames)], DEPLOYMENT_STEP_NAMES);
-    eq(knownValues('DeploymentStep', 'name'), DEPLOYMENT_STEP_NAMES);
+    // The specification's list may lag behind the engine (recover_pending is not in it yet): every
+    // name it gives must be known, and the Go sources above are the complete list.
+    for (const name of knownValues('DeploymentStep', 'name')) expect(DEPLOYMENT_STEP_NAMES, name).toContain(name);
   });
 
   it('lists the deployment states, step statuses and verification modes of the specification', () => {

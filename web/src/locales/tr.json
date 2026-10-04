@@ -406,7 +406,8 @@
       "deployment_needs_attention": "Dağıtımla ilgilenilmesi gerekiyor",
       "deployment_precheck_started": "Dağıtım denetimi başladı",
       "deployment_started": "Dağıtım başladı",
-      "deployment_recovering": "Yarım kalan dağıtım denetleniyor"
+      "deployment_recovering": "Yarım kalan dağıtım denetleniyor",
+      "certificate_chain_completed": "Sertifika zinciri tamamlandı"
     }
   },
   "license": {
@@ -545,7 +546,7 @@
     "config_file_writable": "Bir Nginx yapılandırma dosyası root dışındaki kullanıcılar tarafından değiştirilebiliyor: {{path}}",
     "too_many_files": "Bu sunucu Alice'in listelediğinden fazla sertifika dosyası kullanıyor, bu yüzden bazıları okunmadı.",
     "locations_dropped": "Bu sunucuda Alice'in listelediğinden fazla web sitesi var, bu yüzden liste eksik ve hiçbir web sitesi artık bulunmuyor olarak işaretlenmiyor.",
-    "list_truncated": "Alice Nginx yapılandırmasının bazı uzun listelerini kısalttı, bu yüzden gösterilenler eksik.",
+    "list_truncated": "Alice bu sunucunun bazı uzun listelerini (örneğin kullanıcı hesaplarını, anahtar dosyalarını veya Nginx yapılandırmasının bölümlerini) kısalttı, bu yüzden gösterilenler eksik.",
     "key_mode_open": "Bir özel anahtar dosyasını gerekenden fazla kullanıcı okuyabiliyor.",
     "symlinked": "Bir sertifika dosyası bağlantı. Başka bir araç (örneğin certbot) dosyayı değiştirebilir.",
     "custom_location": "Bir sertifika dosyası alışılmış sertifika klasörlerinin dışında.",
@@ -734,7 +735,9 @@
       }
     },
     "blockedNotice": "Bu iş duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",
-    "stopped": "Bu iş bitmeden durduruldu."
+    "stopped": "Bu iş bitmeden durduruldu.",
+    "deploymentSent": "Alice bu dağıtımı sunucuya zaten gönderdi ve nasıl sonuçlandığını doğruluyor. Bu işten vazgeçmek dağıtımı geri almaz.",
+    "deploymentNotSent": "Sunucuya henüz hiçbir şey gönderilmedi. Bu işten vazgeçmek dağıtımı iptal eder."
   },
   "enum": {
     "targetStatus": {
@@ -861,7 +864,8 @@
       "facts": "Sertifika ayrıntıları",
       "deployHint": "Bu sertifikayı dağıtmak için web sitesinin sunucusunu açın, orada Sertifika dağıt düğmesine basın ve bu sertifikayı seçin.",
       "openServers": "Sunucuları aç",
-      "deployHelp": "Dağıt düğmesi bu sertifikayı aşağıda listelenen web sitelerine gönderir."
+      "deployHelp": "Dağıt düğmesi bu sertifikayı aşağıda listelenen web sitelerine gönderir.",
+      "chainCompleteByUpload": "Zinciri tamamlamak için bu sertifikayı tam zinciriyle ve özel anahtarıyla yeniden yükleyin."
     },
     "upload": {
       "title": "Sertifika yükleyin",
@@ -890,7 +894,8 @@
       "readFailed": "Alice bu dosyayı okuyamadı. Dosyayı yeniden seçin.",
       "otherWarning": "Alice sertifikayı kaydetti; bu sürümün açıklayamadığı bir uyarı da var.",
       "clearFile": "Seçilen dosyayı kaldır",
-      "networkUnknown": "Bağlantı kesildi. Yükleme Alice'e ulaşmış olabilir veya ulaşmamış olabilir. Yeniden denemeden önce sertifika listesini denetleyin."
+      "networkUnknown": "Bağlantı kesildi. Yükleme Alice'e ulaşmış olabilir veya ulaşmamış olabilir. Yeniden denemeden önce sertifika listesini denetleyin.",
+      "chainCompleted": "Alice bu sertifikaya zaten sahipti. Sertifikanın zinciri artık eksiksiz."
     },
     "csr": {
       "title": "İmzalama isteği oluşturun",
@@ -1018,7 +1023,8 @@
       "config_file_writable": "Bu web sitesinin bir yapılandırma dosyası root dışındaki kullanıcılar tarafından değiştirilebiliyor.",
       "stream_tls": "Bir stream bloğundaki TLS listeleniyor, ancak bu sürümde desteklenmiyor.",
       "mail_tls": "Bir mail bloğundaki TLS listeleniyor, ancak bu sürümde desteklenmiyor.",
-      "unknown": "Alice bu web sitesi hakkında bu sürümün açıklayamadığı bir not bildirdi."
+      "unknown": "Alice bu web sitesi hakkında bu sürümün açıklayamadığı bir not bildirdi.",
+      "chain_unresolved": "Alice bu dosyanın zincirini kendi sınırları içinde çıkaramadı; bu yüzden yalnızca web sitesinin sertifikasını tutuyor ve zinciri eksik sayılıyor."
     },
     "unsupported": {
       "variable": "Yol bir değişken kullanıyor, bu yüzden Alice hangi dosyanın kullanıldığını bilemez.",
@@ -1045,7 +1051,8 @@
       "unreadable": "Alice dosyayı okuyamadı.",
       "bad_name": "Dosya adı .pem, .crt, .cer, .cert, .key, .chained veya .fullchain ile bitmiyor.",
       "special_filesystem": "Dosya özel bir dosya sisteminde.",
-      "unknown": "Alice dosyayı, bu sürümün bilmediği bir nedenle kullanamıyor."
+      "unknown": "Alice dosyayı, bu sürümün bilmediği bir nedenle kullanamıyor.",
+      "name_not_allowed": "Dosyanın gerçek konumu (bağlantılar izlendikten sonra) Alice'in yardımcı programa iletemediği bir karakter içeriyor (boşluk, *, ~, virgül veya ASCII dışı bir harf); örneğin *.example.com gibi bir acme.sh klasörü."
     },
     "problemCertificate": "Sertifika dosyası: {{problem}}",
     "problemKey": "Anahtar dosyası: {{problem}}",
@@ -1109,7 +1116,10 @@
     "rollbackFailedRestored": "Önceki dosyalar geri yüklendi, ancak Alice web sitesinin önceki sertifikayı sunduğunu doğrulayamadı. Web sitesini şimdi denetleyin.",
     "finishing": "Arka plandaki iş tamamlandı. Alice sonucu kaydediyor.",
     "partialOpen": "Henüz tamamlanmayan web siteleri: {{open}}. Bunları dağıtım geçmişinden izleyin.",
-    "listCut": "Sertifika listesi {{count}} kayıttan sonra kesildi, bu yüzden bazı sertifikalar burada sunulmuyor."
+    "listCut": "Sertifika listesi {{count}} kayıttan sonra kesildi, bu yüzden bazı sertifikalar burada sunulmuyor.",
+    "pendingChangeRestored": "Yeni sertifika yazılmadı. Alice tamamlanmamış önceki bir değişiklikten önceki dosyaları geri koydu; bu yüzden web sitesi artık o değişiklikten önceki sertifikayı sunuyor. Bu, Dağıt'ı seçtiğinizde sunulan sertifika olmayabilir.",
+    "partialUnchanged_one": "Bu sertifikayı zaten kullanan web siteleri: {{count}}",
+    "partialUnchanged_other": "Bu sertifikayı zaten kullanan web siteleri: {{count}}"
   },
   "deployments": {
     "title": "Dağıtım geçmişi",
@@ -1180,7 +1190,8 @@
       "rollback_config_test": "Yeniden denetim",
       "rollback_reload": "Yeniden yükleme (tekrar)",
       "verify_old": "Önceki sertifikayı doğrulama",
-      "unknown": "Başka bir adım"
+      "unknown": "Başka bir adım",
+      "recover_pending": "Tamamlanmamış önceki değişikliği geri alma"
     },
     "stepStatus": {
       "started": "Çalışıyor",
@@ -1196,8 +1207,15 @@
       "port": "Bağlantı noktası: {{port}}",
       "mode": "Denetim: {{mode}}",
       "served": "Sunulan sertifika: {{fingerprint}}",
-      "reason": "Neden: {{reason}}"
+      "reason": "Neden: {{reason}}",
+      "recoverPending": {
+        "ok": "Alice tamamlanmamış önceki değişiklikten önceki dosyaları geri koydu.",
+        "skipped": "Geri konacak bir şey yoktu.",
+        "failed": "Tamamlanmamış önceki değişiklik bu dosyaları hâlâ engelliyor."
+      }
     },
-    "currentStep": "Geçerli adım: {{step}}"
+    "currentStep": "Geçerli adım: {{step}}",
+    "operation": "Sunucudaki tamamlanmamış önceki değişiklik (işlem kimliği): {{id}}",
+    "cancelled": "İptal edildi"
   }
 }
