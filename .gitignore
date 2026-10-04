@@ -8,8 +8,10 @@
 /web/coverage/
 /web/*.tsbuildinfo
 /internal/webui/dist/app/
-# Local environment
+# Local environment (the operator's Compose override and the secret files it mounts)
 /deploy/.env
+/deploy/docker-compose.override.yml
+/deploy/secrets/
 .DS_Store
 # Local tooling
 /.superpowers/

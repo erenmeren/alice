@@ -219,6 +219,12 @@ The compose stack reads `deploy/.env`:
 | `ALICE_PORT` | `443` | Host port published for the HTTPS listener (container port 8443) |
 | `ALICE_E2E_PORT` | `9443` | Host port of the e2e stack (`make e2e-up`, project `alice-e2e`); must differ from `ALICE_PORT` |
 | `ALICE_TLS_HOSTS` | empty | Passed through to Alice |
+| `ALICE_TRUSTED_PROXIES`, `ALICE_LOG_LEVEL` | empty | Passed through to Alice (empty: no trusted proxy, level `info`) |
+| `ALICE_SMTP_*` | empty | Passed through to Alice; see `docs/operator-guide.md#email` |
+
+`make up` and the other targets of the `make up` stack also read `deploy/docker-compose.override.yml` when it
+exists (the operator guide mounts the SMTP secrets with it); the e2e stack never does. Both the override file and
+`deploy/secrets/` are ignored by git.
 
 ## Notes
 

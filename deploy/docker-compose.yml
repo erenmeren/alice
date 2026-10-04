@@ -51,6 +51,11 @@ services:
       ALICE_MIGRATE_DATABASE_URL: postgres://alice:${ALICE_DB_PASSWORD}@postgres:5432/alice?sslmode=disable
       ALICE_TLS_HOSTS: ${ALICE_TLS_HOSTS:-}
       ALICE_STATE_DIR: /opt/alice/state
+      # Set in deploy/.env; see docs/operator-guide.md. Empty means the default (no trusted proxy:
+      # X-Forwarded-For is ignored; log level info). Behind a reverse proxy, name it in
+      # ALICE_TRUSTED_PROXIES, or every client shares the proxy's address and its rate limits.
+      ALICE_TRUSTED_PROXIES: ${ALICE_TRUSTED_PROXIES:-}
+      ALICE_LOG_LEVEL: ${ALICE_LOG_LEVEL:-}
       # Phase 2 email (R36): set these in deploy/.env to send license warnings. The password and
       # a private CA are read from files; mount them with a compose override (see docs/operator-guide.md).
       ALICE_SMTP_HOST: ${ALICE_SMTP_HOST:-}

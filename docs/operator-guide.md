@@ -420,7 +420,12 @@ The password and CA files must be mounted into the container. Add a `docker-comp
           - ./secrets/smtp_ca.pem:/run/secrets/smtp_ca.pem:ro
 
 and set `ALICE_SMTP_PASSWORD_FILE=/run/secrets/smtp_password` (and `ALICE_SMTP_CA_FILE=/run/secrets/smtp_ca.pem`)
-in `deploy/.env`. Alice refuses to start with a clear message when the settings are inconsistent or a file cannot
+in `deploy/.env`. `make up` (and `make down`, `make reset`, `make logs` and the other targets of that stack) adds
+the override file when it exists, and `docker compose` run by hand in `deploy/` reads it by itself; keep the file
+and `deploy/secrets/` out of git (both are ignored). The e2e stack (`make e2e-up`) never reads it.
+`ALICE_TRUSTED_PROXIES` and `ALICE_LOG_LEVEL` set in `deploy/.env` reach Alice the same way as the email
+settings (see `docs/dev/getting-started.md`, Configuration).
+Alice refuses to start with a clear message when the settings are inconsistent or a file cannot
 be read; the recovery commands (`alice admin …`, `alice audit verify`) do not read the email settings and keep
 working. A failed send is retried for about 2 hours (10 attempts, 30 seconds doubling up to 30 minutes); every
 failed attempt is logged with a reason code (never the password), and the email is then marked `failed`.

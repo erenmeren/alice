@@ -119,7 +119,11 @@ helper: ## Build the static alice-helper for Linux amd64 and arm64 into bin/ wit
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GOARM64=v8.0 go build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/alice-helper-linux-arm64 ./cmd/alice-helper
 	cd bin && sha256sum alice-helper-linux-amd64 alice-helper-linux-arm64 > alice-helper.sha256
 
-COMPOSE := docker compose -f deploy/docker-compose.yml --env-file deploy/.env
+# The make up stack also reads deploy/docker-compose.override.yml when it exists, as docker compose
+# does by itself in deploy/ (AUD-24): docs/operator-guide.md mounts the SMTP password and CA file
+# with it. The file is the operator's and ignored by git. COMPOSE_E2E never reads it: the e2e
+# project names its files explicitly.
+COMPOSE := docker compose -f deploy/docker-compose.yml $(if $(wildcard deploy/docker-compose.override.yml),-f deploy/docker-compose.override.yml) --env-file deploy/.env
 
 # make image builds alice:$(IMAGE_TAG) only. It never writes alice:dev, the tag the make up stack
 # runs (image: alice:$${ALICE_VERSION:-dev}), so a CI build cannot replace the image of a running

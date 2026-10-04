@@ -2,6 +2,9 @@ package main
 
 import (
 	"os"
+	"regexp"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,11 +13,12 @@ import (
 )
 
 type composeService struct {
-	Image           string   `yaml:"image"`
-	Ports           []any    `yaml:"ports"`
-	Networks        []string `yaml:"networks"`
-	Init            bool     `yaml:"init"`
-	StopGracePeriod string   `yaml:"stop_grace_period"`
+	Image           string            `yaml:"image"`
+	Environment     map[string]string `yaml:"environment"`
+	Ports           []any             `yaml:"ports"`
+	Networks        []string          `yaml:"networks"`
+	Init            bool              `yaml:"init"`
+	StopGracePeriod string            `yaml:"stop_grace_period"`
 	Healthcheck     struct {
 		Test []string `yaml:"test"`
 	} `yaml:"healthcheck"`
@@ -81,5 +85,69 @@ func TestReleaseImageHasNoTestTarget(t *testing.T) {
 	for _, s := range []string{"test/images", "e2e-target", "alice-e2e", "alice-test-ca", "nginx-wrapper", "/usr/bin/systemctl",
 		"nginx-www.conf", "dpkg-divert"} {
 		assert.NotContains(t, string(raw), s)
+	}
+}
+
+// AUD-24: the variables the configuration reads reach the container, and make up uses the
+// documented override file while the e2e project never does.
+func TestComposePassesConfigurationAndUsesTheOverride(t *testing.T) {
+	base := readCompose(t, "../../deploy/docker-compose.yml")
+	env := base.Services["alice"].Environment
+	assert.Equal(t, "${ALICE_TRUSTED_PROXIES:-}", env["ALICE_TRUSTED_PROXIES"])
+	assert.Equal(t, "${ALICE_LOG_LEVEL:-}", env["ALICE_LOG_LEVEL"])
+	mk, err := os.ReadFile("../../Makefile")
+	require.NoError(t, err)
+	var compose, composeE2E string
+	for _, line := range strings.Split(string(mk), "\n") {
+		switch {
+		case strings.HasPrefix(line, "COMPOSE :="):
+			compose = line
+		case strings.HasPrefix(line, "COMPOSE_E2E :="):
+			composeE2E = line
+		}
+	}
+	assert.Contains(t, compose, "$(wildcard deploy/docker-compose.override.yml)")
+	assert.Contains(t, compose, "-f deploy/docker-compose.override.yml")
+	assert.NotContains(t, composeE2E, "override", "the e2e project never reads the developer's override")
+	assert.Contains(t, composeE2E, "-p $(E2E_PROJECT)")
+}
+
+// Every variable internal/platform/config reads reaches the alice container through the Compose
+// file, except the ones whose image or built-in default is the right value there.
+func TestComposePassesEveryConfigurationVariable(t *testing.T) {
+	notInCompose := map[string]string{
+		"ALICE_HEALTH_ADDR": "the default 127.0.0.1:8081 is what alice healthcheck in the image asks",
+		"ALICE_KEYS_DIR":    "the default /opt/alice/keys is the alice-keys volume",
+		"ALICE_LISTEN_ADDR": "the default :8443 is the published container port",
+	}
+	dir := "../../internal/platform/config"
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	re := regexp.MustCompile(`"(ALICE_[A-Z0-9_]+)"`)
+	read := map[string]bool{}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(dir + "/" + e.Name())
+		require.NoError(t, err)
+		for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+			read[m[1]] = true
+		}
+	}
+	require.Contains(t, read, "ALICE_DATABASE_URL", "the configuration reader moved; this test reads nothing")
+	env := readCompose(t, "../../deploy/docker-compose.yml").Services["alice"].Environment
+	var missing []string
+	for name := range read {
+		if _, ok := env[name]; !ok && notInCompose[name] == "" {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	assert.Empty(t, missing, "read by internal/platform/config but not passed by deploy/docker-compose.yml")
+	for name := range notInCompose {
+		assert.True(t, read[name], "%s is no longer read; remove it from the exceptions", name)
+		_, inCompose := env[name]
+		assert.False(t, inCompose, "%s is passed now; remove it from the exceptions", name)
 	}
 }
