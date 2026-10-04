@@ -12,7 +12,11 @@ export default defineConfig({
   fullyParallel: false,
   timeout: 180_000,
   expect: { timeout: 15_000 },
-  retries: process.env.CI ? 1 : 0,
+  // One retry. In CI it applies to any failure (unchanged). Locally the networkChangeGuard fixture in
+  // e2e/helpers.ts lets a retry run only when the failed attempt saw Chromium abort requests with
+  // net::ERR_NETWORK_CHANGED (a host network change; docs/dev/getting-started.md); any other failure
+  // fails its retry at once with that reason.
+  retries: 1,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL,

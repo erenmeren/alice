@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHmac, X509Certificate } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import AxeBuilder from '@axe-core/playwright';
 import { test as base, expect, type APIRequestContext, type APIResponse, type Locator, type Page } from '@playwright/test';
 
@@ -10,11 +11,58 @@ declare global {
   }
 }
 
-// test is Playwright's test with one automatic check: a Content Security Policy violation on any
-// page the test visits fails the test (the SPA must run under the strict CSP). It watches both the
-// console ("… violates the following Content Security Policy directive …") and the DOM
-// securitypolicyviolation event, which also fires for violations Chromium does not log.
-export const test = base.extend<{ cspGuard: void }>({
+// networkChangedMarker is where a failed attempt records that Chromium aborted requests with
+// net::ERR_NETWORK_CHANGED; the next attempt of the same test looks for it.
+function networkChangedMarker(testInfo: { project: { outputDir: string }; testId: string }): string {
+  return join(testInfo.project.outputDir, '.network-changed', testInfo.testId);
+}
+
+// test is Playwright's test with two automatic fixtures.
+//
+// cspGuard: a Content Security Policy violation on any page the test visits fails the test (the SPA
+// must run under the strict CSP). It watches both the console ("… violates the following Content
+// Security Policy directive …") and the DOM securitypolicyviolation event, which also fires for
+// violations Chromium does not log.
+//
+// networkChangeGuard: a MITIGATION, not a fix (docs/dev/getting-started.md, "net::ERR_NETWORK_CHANGED").
+// Chromium on Linux aborts every in-flight request with net::ERR_NETWORK_CHANGED when any host
+// interface gains or loses an IP address, including requests to localhost; no Chromium switch turns
+// this off. On a developer laptop that happens without the suite's involvement (an IPv6 address on
+// Wi-Fi expiring and coming back, a container started by another process adding a veth). The guard
+// records such aborts and annotates the test. Outside CI a test is retried only when its failed
+// attempt saw such an abort: playwright.config.ts allows one retry, and a retry of an attempt that
+// failed without one fails at once with the reason, so no other failure is retried. In CI the
+// retry policy is unchanged (one retry for any failure).
+export const test = base.extend<{ cspGuard: void; networkChangeGuard: void }>({
+  networkChangeGuard: [
+    async ({ context }, use, testInfo) => {
+      const marker = networkChangedMarker(testInfo);
+      if (testInfo.retry > 0 && !process.env.CI) {
+        if (!existsSync(marker)) {
+          throw new Error(
+            'not retried: the previous attempt failed without net::ERR_NETWORK_CHANGED; only failures caused by a ' +
+              'host network change are retried (see the error of the previous attempt above)',
+          );
+        }
+        testInfo.annotations.push({
+          type: 'retried after network change',
+          description: `the previous attempt failed while Chromium aborted: ${readFileSync(marker, 'utf8')}`,
+        });
+      }
+      const aborted: string[] = [];
+      context.on('requestfailed', (r) => {
+        if (r.failure()?.errorText === 'net::ERR_NETWORK_CHANGED') aborted.push(`${r.method()} ${new URL(r.url()).pathname}`);
+      });
+      await use();
+      if (aborted.length === 0) return;
+      testInfo.annotations.push({ type: 'net::ERR_NETWORK_CHANGED', description: aborted.join(', ') });
+      if (testInfo.status !== testInfo.expectedStatus) {
+        mkdirSync(join(marker, '..'), { recursive: true });
+        writeFileSync(marker, aborted.join(', '));
+      }
+    },
+    { auto: true },
+  ],
   cspGuard: [
     async ({ page }, use) => {
       const violations: string[] = [];

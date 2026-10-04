@@ -152,6 +152,25 @@ Playwright tests use the same port (`ALICE_BASE_URL` overrides the whole address
 at the end, also when an e2e stage fails. `make up` rebuilds the Go layer on every run because the build time is passed to the image (it is the
 floor of the license clock, L-53).
 
+#### net::ERR_NETWORK_CHANGED ("Alice cannot be reached" in a browser test)
+
+Chromium on Linux watches the host's IP addresses over netlink. When any interface gains or loses an
+address, it aborts every in-flight request with `net::ERR_NETWORK_CHANGED`, including requests to
+`localhost`. A test then fails at the next step, typically in `enrollTotp` ("Set up your authenticator app"
+never appears), and the SPA shows "Alice cannot be reached". The suite itself causes no such change. On a
+developer laptop two things cause them: a Wi-Fi IPv6 address whose router-advertised lifetime runs out
+before the next advertisement (the address is removed and added again), and containers that another
+process starts or stops (each adds or removes a veth with an IPv6 link-local address), for example the
+Go integration tests (`make coverage`, `make test-ssh`, `go test -tags integration`; they use Testcontainers). Chromium 153 has no switch to turn
+this off. So avoid running those tests in parallel with `make e2e`.
+
+As a mitigation (not a fix), the suite allows one retry, and outside CI only for this cause: the
+`networkChangeGuard` fixture in `web/e2e/helpers.ts` records requests Chromium aborted with
+`net::ERR_NETWORK_CHANGED`. A test whose failed attempt saw such an abort runs once more and is
+reported as flaky, with the annotation "retried after network change". The retry of any other failure
+fails at once with "not retried: …", so the original error stays the result. In CI the retry policy is
+unchanged (one retry for any failure).
+
 The release key gate `make release-keycheck` fails until the vendor's public key is committed to
 `internal/license/keys/production.json` (see `docs/vendor/licensing-vendor.md`); it is not part of `make ci`.
 `make coverage` runs every Go test with the integration tag under coverage and enforces `coverage-floors.json`.
