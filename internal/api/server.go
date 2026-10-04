@@ -202,6 +202,8 @@ type server struct {
 	// them never deletes the cookie (it would delete the new one in a response race).
 	rotated *ratelimit.Recent
 	healthz *ratelimit.Limiter // public /healthz, per IP: 60/min
+	// denials coalesces the guard's denial audit rows (AUD-06).
+	denials *denialCoalescer
 }
 
 const (
@@ -228,6 +230,8 @@ func newServer(d Deps) *server {
 		recent:   ratelimit.NewRecent(d.Clock, recentLifetime, recentMax),
 		rotated:  ratelimit.NewRecent(d.Clock, rotatedLifetime, rotatedMax),
 		healthz:  ratelimit.New(d.Clock, 60, time.Minute),
+
+		denials: newDenialCoalescer(d.Clock),
 	}
 }
 
@@ -248,7 +252,8 @@ func New(d Deps) *Server {
 // Handler returns the HTTP handler.
 func (s *Server) Handler() http.Handler { return s.h }
 
-// ResetLimits clears all in-memory rate limiters (used by the e2e reset endpoint).
+// ResetLimits clears all in-memory rate limiters and the open denial windows, without writing
+// their summaries (used by the e2e reset endpoint).
 func (s *Server) ResetLimits() {
 	s.s.general.Reset()
 	s.s.anon.Reset()
@@ -258,6 +263,7 @@ func (s *Server) ResetLimits() {
 	s.s.recent.Reset()
 	s.s.rotated.Reset()
 	s.s.healthz.Reset()
+	s.s.denials.reset()
 }
 
 // NewHandler returns the public HTTPS handler.

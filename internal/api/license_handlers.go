@@ -75,7 +75,8 @@ func (s *server) decodeLicense(w http.ResponseWriter, r *http.Request, install b
 // (license.upload.invalid, problem "not_json": a NUL byte is not valid JSON, and the module's
 // structure check is the first to read past it), for an upload refused before the module saw it
 // (S9, AUD-13; M3: one vocabulary with the module). The history row of the module is not written: no file reached it. Failures to write
-// are logged, never shown to the caller.
+// are logged, never shown to the caller. Like a refusal of the guard, the row is written even if the
+// client has gone (AUD-15); it is not coalesced.
 func (s *server) auditUnreadableLicense(r *http.Request) {
 	ev := audit.Event{
 		Actor:      principalFrom(r.Context()).Actor(s.meta(r)),
@@ -84,9 +85,7 @@ func (s *server) auditUnreadableLicense(r *http.Request) {
 		Result:     audit.Failure,
 		Details:    map[string]string{"reason": "invalid", "problem": "not_json"},
 	}
-	if err := s.deps.Audit.Write(r.Context(), ev); err != nil {
-		s.deps.Log.Error("audit write failed", append([]any{"request_id", RequestID(r.Context()), "action", ev.Action}, errorAttrs(err)...)...)
-	}
+	s.writeAuditDetached(r, ev)
 }
 
 // licensePreview checks a file and says what uploading it would do, storing nothing (§19.1).

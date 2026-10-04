@@ -295,11 +295,19 @@ type fakeAudit struct {
 	ListFn    func(ctx context.Context, f audit.Filter) ([]audit.Entry, int64, error)
 	IterateFn func(ctx context.Context, fn func(audit.Entry) error) error
 	VerifyFn  func(ctx context.Context, actor audit.Actor) (audit.Report, error)
+	// WriteFn, when set, sees every write first; an error it returns is the write's error and
+	// nothing is recorded.
+	WriteFn func(ctx context.Context, e audit.Event) error
 
 	VerifyReadOnlyFn func(ctx context.Context) (audit.Report, error)
 }
 
-func (f *fakeAudit) Write(_ context.Context, e audit.Event) error {
+func (f *fakeAudit) Write(ctx context.Context, e audit.Event) error {
+	if f.WriteFn != nil {
+		if err := f.WriteFn(ctx, e); err != nil {
+			return err
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events = append(f.events, e)

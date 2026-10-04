@@ -112,6 +112,7 @@ type stack struct {
 	ca        *pki.CA // issues every certificate of the Nginx journeys; its root is the inventory's trust anchor
 	stateDir  string
 	handler   http.Handler
+	api       *Server // the server behind handler as start built it (denial summaries, AUD-06)
 	setupCode string
 
 	mu        sync.Mutex
@@ -167,7 +168,8 @@ func (s *stack) start() {
 	})
 	s.auditSvc = audit.NewService(auditLog, s.db.App)
 	s.startInventory(keyring, auditLog)
-	s.handler = New(s.deps()).Handler()
+	s.api = New(s.deps())
+	s.handler = s.api.Handler()
 }
 
 // startInventory builds the Phase 3 services the way cmd/alice does: the job queue, the inventory

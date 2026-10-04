@@ -291,6 +291,8 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		close(runnerDone)
 		log.Info("job workers are not started in the e2e build; POST /test/jobs/drain runs due jobs")
 	}
+	// Summaries of coalesced denial audit rows are written once their 10-minute window ends (AUD-06).
+	go apiServer.RunDenialSummaries(ctx)
 	errCh := make(chan error, 2)
 	go func() { errCh <- ignoreClosed(public.ListenAndServeTLS("", "")) }()
 	go func() { errCh <- ignoreClosed(internal.ListenAndServe()) }()
@@ -311,6 +313,9 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	stopRunner()
 	_ = public.Shutdown(shutdownCtx)
 	_ = internal.Shutdown(shutdownCtx)
+	// No request can be refused any more: write the counts of open denial windows, best effort
+	// within the same deadline (counts not written by then are lost, as on a crash; R39).
+	apiServer.FlushDenials(shutdownCtx)
 	stopSched()
 	waitForScheduler(shutdownCtx, schedDone, log)
 	// Wait order (§8.8): HTTP, scheduler, workers (Run releases the leases of jobs that did not

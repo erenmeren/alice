@@ -22,6 +22,7 @@ func TestCheckDetailsKeys(t *testing.T) {
 		"reason", "failed_logins", "minutes", "method", "username", "role", "display_name", "email", "role_from", "role_to",
 		"disabled", "scope", "owner_id", "format", "intact", "permission", "path", "checked", "head_seq", "problem",
 		"first_bad_seq", "i", "city", "a", "b",
+		"class", "suppressed_count", "window_start", "window_end", // coalesced denial rows (AUD-06)
 	}
 	for _, k := range allowed {
 		assert.NoError(t, checkDetails(map[string]string{k: "v"}), k)

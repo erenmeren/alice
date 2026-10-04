@@ -1675,7 +1675,14 @@ components:
         object_type: { type: string }
         object_id: { type: string }
         result: { type: string, enum: [success, failure, denied] }
-        details: { type: object, additionalProperties: { type: string } }
+        details:
+          type: object
+          additionalProperties: { type: string }
+          description: >-
+            Keys and parameters of the action, never secrets. authz.denied and request.denied_license are
+            recorded once per person (or API token), permission or license class, reason and route per 10
+            minutes; when such a window ends with refusals left out, one more entry of the same action follows
+            with suppressed_count (how many), window_start and window_end (RFC 3339), and no ip or request_id.
         request_id: { type: string }
         hash: { type: string, description: Hex SHA-256 of this entry in the chain }
     AuditReport:

@@ -76,7 +76,14 @@ func TestLockAndCertificateDeployments(t *testing.T) {
 	n.stepUp(n.admin, n.adminAcct)
 	requireError(t, n.admin.do(http.MethodPatch, "/api/v1/locations/"+n.locs[wwwCert], map[string]any{"verify_port": 8443}, ifMatchOf("1")),
 		http.StatusForbidden, "ALC-LIC-0001")
-	assert.Equal(t, denied+len(refused)+2, n.auditCount("request.denied_license"), "every refusal is audited")
+	// AUD-06: the second refused upload (same person, class, reason and route, within 10 minutes) is
+	// left out; every other refusal has its own row, and the left-out one is counted when the window
+	// is summarised (here: at shutdown).
+	assert.Equal(t, denied+len(refused)+1, n.auditCount("request.denied_license"), "every route's refusal is audited")
+	n.api.FlushDenials(context.Background())
+	assert.Equal(t, denied+len(refused)+2, n.auditCount("request.denied_license"))
+	assert.Equal(t, 1, n.countWhere("audit_log", "action = 'request.denied_license' AND details->>'suppressed_count' = '1'"+
+		" AND details->>'path' = '/api/v1/certificates/upload' AND details->>'reason' = 'locked'"))
 	assert.Equal(t, before, map[string]int{"certificates": n.count("certificates"), "managed_private_keys": n.count("managed_private_keys"),
 		"csr_requests": n.count("csr_requests"), "deployments": n.count("deployments"), "location_updates": n.auditCount("location.updated")})
 

@@ -372,6 +372,14 @@ Entries appended while the export was being written are not covered by `verifica
 `X-Alice-Audit-Intact` carries the same result. Very large logs may not finish within the server's 60-second
 response limit; use `alice audit verify` on the server in that case.
 
+Repeated refusals are recorded once per 10 minutes: when the same person (or API token) is refused the same
+permission (`authz.denied`) or the same change by the license (`request.denied_license`) for the same reason on
+the same API route again within 10 minutes of the recorded refusal, no new entry is written. When those
+10 minutes end (or Alice stops), one more entry of the same action records how many were left out:
+`suppressed_count`, `window_start` and `window_end` in its details (no address or request ID: it stands for many
+requests). Counts not yet written when the Alice process dies are lost, and each Alice process counts its own
+refusals.
+
 To recompute the chain yourself, for each entry in `seq` order:
 
 1. Build the JSON object with exactly these keys in this order: `seq`, `at`, `actor_type`, `actor_id`,

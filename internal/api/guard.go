@@ -310,8 +310,10 @@ func (s *server) writeRateLimited(w http.ResponseWriter, r *http.Request, retry 
 	s.writeError(w, r, ErrRateLimited)
 }
 
-// auditDenied records an authorization failure of an authenticated user or
-// token (spec §25.1). Failures to write are logged, never shown to the caller.
+// auditDenied records an authorization failure of an authenticated user or token (spec §25.1,
+// SEC-070 as changed by R39): once per subject, permission, reason and route per denialWindow, the
+// left-out repeats counted in a later summary row (AUD-06). The row is written on a context the
+// client cannot cancel (AUD-15). Failures to write are logged, never shown to the caller.
 func (s *server) auditDenied(r *http.Request, rt route, p auth.Principal, reason string) {
 	if p.Kind != rbac.UserSession && p.Kind != rbac.APIToken {
 		return
@@ -327,9 +329,7 @@ func (s *server) auditDenied(r *http.Request, rt route, p auth.Principal, reason
 			"reason":     reason,
 		},
 	}
-	if err := s.deps.Audit.Write(r.Context(), ev); err != nil {
-		s.deps.Log.Error("audit write failed", append([]any{"request_id", RequestID(r.Context()), "action", ev.Action}, errorAttrs(err)...)...)
-	}
+	s.recordDenial(r, denialKey(p, string(rt.perm), reason, rt), ev)
 }
 
 // licenseGate asks the single lock gate (license.Service.Allow). Without a license service the
@@ -366,20 +366,20 @@ func gated(c license.Class) bool { return c == license.ClassChange || c == licen
 
 // auditLicenseDenied records a request refused by the license gate (L-26): reason "locked",
 // "lock_due" (the gate's own clock reached the lock time; no evaluation confirmed it yet) or
-// "unverified" (the license could not be checked recently) (AUD-02).
+// "unverified" (the license could not be checked recently) (AUD-02). Coalesced and written like
+// auditDenied (AUD-06, AUD-15).
 func (s *server) auditLicenseDenied(r *http.Request, rt route, p auth.Principal, cause error) {
 	if p.Kind != rbac.UserSession && p.Kind != rbac.APIToken {
 		return
 	}
+	reason := licenseDenialReason(cause)
 	ev := audit.Event{
 		Actor:   p.Actor(s.meta(r)),
 		Action:  "request.denied_license",
 		Result:  audit.Denied,
-		Details: map[string]string{"method": rt.method, "path": rt.pattern, "class": rt.lic.String(), "reason": licenseDenialReason(cause)},
+		Details: map[string]string{"method": rt.method, "path": rt.pattern, "class": rt.lic.String(), "reason": reason},
 	}
-	if err := s.deps.Audit.Write(r.Context(), ev); err != nil {
-		s.deps.Log.Error("audit write failed", append([]any{"request_id", RequestID(r.Context()), "action", ev.Action}, errorAttrs(err)...)...)
-	}
+	s.recordDenial(r, denialKey(p, "license:"+rt.lic.String(), reason, rt), ev)
 }
 
 func safeMethod(m string) bool { return m == http.MethodGet || m == http.MethodHead }
