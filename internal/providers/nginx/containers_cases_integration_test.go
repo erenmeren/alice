@@ -986,10 +986,10 @@ func (h *rnHost) testKillRestore(t *testing.T, at, sig string) {
 	assert.Empty(t, h.staged())
 }
 
-// testSuperseded: an interrupted deployment (killed at nginx -t: its files are on disk, unserved)
-// is followed by another deployment of the same pair; the first one's recovery is refused
-// (SUPERSEDED: only the latest operation of a pair is rolled back) and the second pair stays, on
-// disk and served.
+// testSuperseded (final review A1 m1): an interrupted deployment (killed at nginx -t: its files are
+// on disk, unserved) blocks another deployment of the same pair on the server itself
+// (RECOVERY_PENDING, nothing changed), so it can never be superseded and left without a rollback;
+// its recovery rolls it back, and then the next deployment goes through.
 func (h *rnHost) testSuperseded(t *testing.T) {
 	c := h.location(rnAPI)
 	first := h.leaf("api.example.test", pki.ECDSA256)
@@ -1009,17 +1009,22 @@ func (h *rnHost) testSuperseded(t *testing.T) {
 
 	c = h.location(rnAPI)
 	assert.Equal(t, h.fileSHA(rnAPI), c.FileSHA256)
+	same := h.unchangedFiles(rnAPI)
 	second := h.leaf("api.example.test", pki.ECDSA256)
-	req2 := h.request(c, second, true) // the previous pair is still the one served
-	out, _, err = h.deploy(nil, req2)
-	h.committed(out, err, req2, second, "remote")
+	out, _, err = h.deploy(nil, h.request(c, second, true))
+	h.refusedUnchanged(out, err, "deployment.recovery_pending", same)
 
 	r := h.recover(req1, oldChain)
 	assert.Equal(t, providers.PhaseWriting, r.state.Phase)
 	require.NotNil(t, r.rollback)
-	assert.Equal(t, providers.DeployNoChange, r.rollback.Result, "%+v", *r.rollback)
-	assert.Equal(t, reasonSuperseded, r.rollback.Reason)
-	assert.Equal(t, reasonSuperseded, rnReason(t, r.err))
+	require.NoError(t, r.err)
+	assert.Equal(t, providers.DeployRolledBack, r.rollback.Result, "%+v", *r.rollback)
+	h.servesRecorded(rnAPI, 443)
+
+	c = h.location(rnAPI)
+	req2 := h.request(c, second, true)
+	out, _, err = h.deploy(nil, req2)
+	h.committed(out, err, req2, second, "remote")
 	h.servesRecorded(rnAPI, 443)
 }
 

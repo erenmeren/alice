@@ -104,19 +104,25 @@ func asProviderError(err error) *providers.Error {
 // (uncertain != nil).
 type call[T any] struct {
 	answer    T
-	code      string           // the refusal's helper code ("" for sudo's refusal)
+	code      string           // the refusal's helper code
 	refusal   *providers.Error // as DecodeHelper gives it, not mapped yet
 	uncertain error
 }
 
-// decodeCall sorts what Conn.Run returned for sub. A refusal is (a) the helper's JSON error with a
-// code of refusals at the exit status the table gives it, or (b) sudo's refusal before the helper
-// started (exit 1 with nothing on stdout: the helper itself never exits 1; pre-flight D16; exit 1
-// with any output is uncertain). Everything
-// else that is not an exit-0 answer is uncertain: a transport error, a timeout or cancellation
-// after the command was sent, a signal, exit 137 or any other status without JSON
-// (ssh.helper_missing), malformed JSON (ssh.protocol_error), an unknown code, or a known code at
-// the wrong exit status.
+// decodeCall sorts what Conn.Run returned for sub (nginx-deploy or nginx-restore, the two commands
+// that write). A refusal is only the helper's JSON error with a code of refusals at the exit
+// status the table gives it. Everything else that is not an exit-0 answer is uncertain: a
+// transport error, a timeout or cancellation after the command was sent, a signal, exit 137 or any
+// other status without JSON (ssh.helper_missing), malformed JSON (ssh.protocol_error), an unknown
+// code, or a known code at the wrong exit status.
+//
+// Exit 1 with nothing on stdout is uncertain too (final review): it is what sudo's own refusal
+// looks like, before the helper starts (the helper never exits 1), but with "Defaults log_output"
+// sudo can also fail after the command ran (its I/O log) and forward nothing; and whether stdin
+// reached the helper cannot be known on Alice's side (the bytes are written to the channel
+// whether or not sudo consumed them). Only for these two commands does the difference matter, so
+// only here is it uncertain (the error is still mapped: nginx.profile_missing names the likely
+// cause); the read-only commands keep sudo's refusal as nginx.profile_missing.
 func decodeCall[T any](res linuxssh.Result, runErr error, sub string, refusals map[string]int) call[T] {
 	if runErr != nil {
 		return call[T]{uncertain: runErr}
@@ -129,7 +135,7 @@ func decodeCall[T any](res linuxssh.Result, runErr error, sub string, refusals m
 	code := pe.Params["helper_code"]
 	switch {
 	case pe.Code == "ssh.helper_missing" && pe.Params["exit_code"] == "1" && len(res.Stdout) == 0:
-		return call[T]{refusal: pe}
+		return call[T]{uncertain: mapHelper(pe, sub)}
 	case code == "":
 		return call[T]{uncertain: pe}
 	case refusals[code] != res.ExitCode:
@@ -500,8 +506,9 @@ func (d *deployment) verifyNew(ctx context.Context, phase string) (providers.Dep
 		step(d.log, providers.StepNameVerify, providers.StepFailed, map[string]string{"error": "interrupted"})
 		d.out.Steps = append(d.out.Steps, providers.DeployStep{Name: providers.StepNameVerify, Status: providers.StepFailed})
 		if phase == helperproto.PhaseUnchanged {
-			d.out.Result, d.out.Phase, d.out.FailedStep, d.out.Reason = providers.DeployNoChange, providers.PhaseUnchanged, providers.StepNameVerify, reasonInterrupted
-			return d.out, providers.NewError(reasonInterrupted, true, verr, nil)
+			// B2 m2: not a failed check either: uncertain, so the recovery reads the journal
+			// (unchanged) and verifies again, instead of a failed deployment and its email.
+			return d.uncertain(providers.NewError(reasonInterrupted, true, verr, nil))
 		}
 		// Cancelled after the change: no rollback can be sent. The journal says committed.
 		return d.uncertainAfterVerify(reasonInterrupted, nil, verr)

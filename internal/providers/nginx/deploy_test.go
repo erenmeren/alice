@@ -165,9 +165,13 @@ func TestDeployOutcomeTable(t *testing.T) {
 			r.Location.CertPath = "/etc/nginx/ssl/gone.crt"
 		},
 			nil, wantDeploy{result: providers.DeployNoChange, reason: "nginx.config_changed", errCode: "nginx.config_changed", files: "old"}},
-		{"F-14 profile missing (sudo refuses, exit 1)", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) { e.emu.SetNginxProfile(false) },
-			nil, wantDeploy{result: providers.DeployNoChange, reason: "nginx.profile_missing", params: map[string]string{"subcommand": deploySub, "profile": "nginx"},
-				errCode: "nginx.profile_missing", files: "old"}},
+		// Exit 1 without output from a writing command is uncertain (sudo's refusal looks the same as
+		// sudo failing after the command ran; final review): the recovery reads the journal.
+		{"F-14 profile missing (sudo refuses, exit 1): uncertain", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) { e.emu.SetNginxProfile(false) },
+			nil, wantDeploy{result: providers.DeployUncertain, errCode: "nginx.profile_missing", files: "old"}},
+		{"exit 1 without output after the send: uncertain", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) {
+			scriptOn(e, deploySub, linuxsshtest.Response{Exit: 1})
+		}, nil, wantDeploy{result: providers.DeployUncertain, errCode: "nginx.profile_missing", files: "old"}},
 		{"busy", func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.DeployRequest) { e.emu.HoldLock(true) },
 			nil, wantDeploy{result: providers.DeployNoChange, reason: "nginx.busy", errCode: "nginx.busy", retryable: true, files: "old"}},
 
@@ -836,8 +840,8 @@ func TestRollbackOutcomeTable(t *testing.T) {
 		}, nil, wantRollback{result: providers.DeployNoChange, reason: "deployment.superseded", errCode: "deployment.superseded"}},
 		{"busy", afterCommit(func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.RollbackRequest) { e.emu.HoldLock(true) }), nil,
 			wantRollback{result: providers.DeployNoChange, reason: "nginx.busy", errCode: "nginx.busy", retryable: true, files: "new"}},
-		{"profile missing", afterCommit(func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.RollbackRequest) { e.emu.SetNginxProfile(false) }), nil,
-			wantRollback{result: providers.DeployNoChange, reason: "nginx.profile_missing", errCode: "nginx.profile_missing", files: "new"}},
+		{"profile missing (exit 1 without output): uncertain", afterCommit(func(_ *testing.T, e *env, _ pki.Leaf, _ *providers.RollbackRequest) { e.emu.SetNginxProfile(false) }), nil,
+			wantRollback{result: providers.DeployUncertain, errCode: "nginx.profile_missing", files: "new"}},
 		{"cancelled before the send", afterCommit(nil), func(t *testing.T) context.Context {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
@@ -1275,4 +1279,21 @@ func TestFenceDeployment(t *testing.T) {
 		require.Error(t, err)
 		assert.Equal(t, "ssh.helper_outdated", providerErr(t, err).Code)
 	})
+}
+
+// B2 m2: a context that ends while an "unchanged" answer is being verified is uncertain, never a
+// failed no_change (that would end the deployment failed with the failure email; the recovery
+// reads the journal, unchanged, and verifies again).
+func TestUnchangedInterruptedDuringTheVerificationIsUncertain(t *testing.T) {
+	e := newEnv(t)
+	nw := e.ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, e.now)
+	s := e.session(t)
+	d := deployment{s: s, req: e.req(t, nw), fingerprint: pki.Fingerprint(nw.Cert)}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	out, err := d.verifyNew(ctx, helperproto.PhaseUnchanged)
+	providertest.CheckDeployOutcome(t, out, err)
+	assert.Equal(t, providers.DeployUncertain, out.Result)
+	assert.Empty(t, out.Phase)
+	assert.ErrorIs(t, err, context.Canceled)
 }
