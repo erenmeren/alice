@@ -1085,7 +1085,8 @@
     "connectionLost": "Alice şu anda kendisine ulaşamıyor. Dağıtım arka planda sürüyor. Sonucu görmek için bir dakika sonra dağıtım geçmişini açın.",
     "openHistory": "Dağıtım geçmişini aç",
     "openDeployment": "Bu dağıtımı aç",
-    "partial": "Güncellenen web siteleri: {{ok}} / {{total}}"
+    "partial": "Güncellenen web siteleri: {{ok}} / {{total}}",
+    "succeededUnverified": "Yeni sertifika dağıtıldı ve Nginx yeniden yüklendi."
   },
   "deployments": {
     "title": "Dağıtım geçmişi",
@@ -1173,6 +1174,7 @@
       "mode": "Denetim: {{mode}}",
       "served": "Sunulan sertifika: {{fingerprint}}",
       "reason": "Neden: {{reason}}"
-    }
+    },
+    "currentStep": "Geçerli adım: {{step}}"
   }
 }

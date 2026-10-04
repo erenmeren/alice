@@ -5,12 +5,15 @@ import type {
   CertificateLocation,
   CSR,
   Deployment,
+  DeploymentDetail,
+  DeploymentStep,
   HostKey,
   Job,
   KeyLocation,
   LicenseBanner,
   LicenseDetail,
   LicenseStatus,
+  NginxFacts,
   PlatformKeyInfo,
   Role,
   SessionInfo,
@@ -394,4 +397,32 @@ export function deploymentFixture(o: Partial<Deployment> = {}): Deployment {
     finished_at: '2026-10-02T10:00:09Z',
     ...o,
   };
+}
+
+// stepFixture is one deployment event (the API reports one record per event: started, ok, failed).
+export function stepFixture(n: number, name: string, status: DeploymentStep['status'] = 'ok', params: Record<string, string> = {}): DeploymentStep {
+  return { n, name, status, at: `2026-10-02T10:00:${String(n).padStart(2, '0')}Z`, params };
+}
+
+export function deploymentDetailFixture(o: Partial<DeploymentDetail> = {}): DeploymentDetail {
+  return { ...deploymentFixture(), steps: [], ...o };
+}
+
+// nginxTargetFixture is an Nginx server whose last scan was fine; nginxFacts builds its facts.
+export function nginxFacts(o: Partial<NginxFacts> = {}): NginxFacts {
+  return { version: '1.24.0', conf_path: '/etc/nginx/nginx.conf', config_valid: true, config_error: '', config_error_reason: '', config_error_file: '', found: true, ...o };
+}
+
+export const nginxTargetFixture: Target = {
+  ...targetFixture,
+  id: '0192b000-0000-7000-8000-0000000000a2',
+  name: 'web-nginx',
+  type: 'nginx',
+  host: 'nginx-01.example.com',
+  capabilities: ['discover_certs', 'deploy_certs', 'test_connection'],
+  facts: { ...targetFixture.facts, nginx: nginxFacts() },
+};
+
+export function nginxTargetWith(o: Partial<Target>, facts: Partial<Target['facts']> = {}): Target {
+  return { ...nginxTargetFixture, ...o, facts: { ...nginxTargetFixture.facts, ...facts } };
 }

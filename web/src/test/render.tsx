@@ -5,6 +5,7 @@ import { I18nextProvider } from 'react-i18next';
 import { createMemoryRouter, RouterProvider, type InitialEntry } from 'react-router';
 import { StrictMode, type ReactElement } from 'react';
 import { createI18n } from '../i18n';
+import { AuthProvider } from '../auth/AuthProvider';
 import { routes } from '../router';
 
 function newClient() {
@@ -35,4 +36,13 @@ export async function renderRoute(path: InitialEntry, opts: { languages?: readon
   const client = newClient();
   const ui = providers(<RouterProvider router={router} />, i18n, client);
   return { ...render(opts.strict ? <StrictMode>{ui}</StrictMode> : ui), i18n, router, client };
+}
+
+// renderWithAuth renders one component inside a router and the AuthProvider (the session comes from
+// the sessionHandlers of the test), for dialogs that read the signed-in role.
+export async function renderWithAuth(ui: ReactElement, languages: readonly string[] = ['en-US']) {
+  const i18n = await createI18n(languages);
+  const client = newClient();
+  const router = createMemoryRouter([{ path: '*', element: <AuthProvider>{ui}</AuthProvider> }], { initialEntries: ['/'] });
+  return { ...render(providers(<RouterProvider router={router} />, i18n, client)), i18n, router, client };
 }

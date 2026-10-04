@@ -1,4 +1,5 @@
 import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import {
   auditorSession,
@@ -110,25 +111,27 @@ describe('CertificateDetailPage', () => {
   });
 
   describe('Deploy', () => {
-    it.each(['operator', 'admin'] as const)('is a link to the first server for %s when the certificate can be deployed', async (role) => {
+    it.each(['operator', 'admin'] as const)('opens the deploy dialog for %s when the certificate can be deployed', async (role) => {
       certServer(undefined, [], sessionFor(role));
       await renderRoute(`/certificates/${ID}`);
-      const deploy = await screen.findByRole('link', { name: 'Deploy' });
-      expect(deploy).toHaveAttribute('href', '/servers/0192b000-0000-7000-8000-0000000000a1');
+      await userEvent.click(await screen.findByRole('button', { name: 'Deploy' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Deploy a certificate' });
+      expect(await within(dialog).findByRole('checkbox', { name: /www\.example\.test/ })).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: 'Deploy' })).toBeDisabled();
     });
 
     it('is not shown to Auditors', async () => {
       certServer(undefined, [], auditorSession);
       await renderRoute(`/certificates/${ID}`);
       await screen.findByRole('heading', { level: 1 });
-      expect(screen.queryByRole('link', { name: 'Deploy' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Deploy' })).not.toBeInTheDocument();
     });
 
     it('is replaced by a notice when Alice has no private key', async () => {
       certServer(certificateDetailFixture({ id: ID, has_private_key: false, source: 'discovered' }));
       await renderRoute(`/certificates/${ID}`);
       expect(await screen.findByText('Alice does not have the private key of this certificate, so it cannot deploy it.')).toBeInTheDocument();
-      expect(screen.queryByRole('link', { name: 'Deploy' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Deploy' })).not.toBeInTheDocument();
       expect(screen.getByText('Not in Alice')).toBeInTheDocument();
     });
 
@@ -136,14 +139,14 @@ describe('CertificateDetailPage', () => {
       certServer(certificateDetailFixture({ id: ID, not_after: '2026-09-01T00:00:00Z' }));
       await renderRoute(`/certificates/${ID}`);
       expect(await screen.findByText('This certificate has expired and cannot be deployed.')).toBeInTheDocument();
-      expect(screen.queryByRole('link', { name: 'Deploy' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Deploy' })).not.toBeInTheDocument();
     });
 
     it('is not shown when no server uses the certificate yet', async () => {
       certServer(certificateDetailFixture({ id: ID, locations: [] }));
       await renderRoute(`/certificates/${ID}`);
       await screen.findByRole('heading', { level: 1 });
-      expect(screen.queryByRole('link', { name: 'Deploy' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Deploy' })).not.toBeInTheDocument();
     });
   });
 

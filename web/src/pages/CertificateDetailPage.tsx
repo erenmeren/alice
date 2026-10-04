@@ -1,5 +1,6 @@
 import { Alert, Anchor, Badge, Box, Button, Code, Group, Stack, Table, Text, Title } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router';
 import { deploymentStatusKey, keyAlgorithmKey } from '../api/enums';
@@ -8,6 +9,7 @@ import { certificateKey, DEPLOYMENTS_KEY } from '../api/queryKeys';
 import type { CertificateDetail } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { PageLoader } from '../auth/guards';
+import { DeployDialog } from '../components/DeployDialog';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { Expiry, useNow } from '../components/Expiry';
 import { WRAP } from '../components/wrap';
@@ -25,14 +27,15 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
 }
 
 // CertificateDetailPage is one certificate (public data only: the private key never reaches the
-// browser) with the websites that use it and its latest deployments. Deploying starts from a
-// server's page, which this page links to.
+// browser) with the websites that use it and its latest deployments. Deploy opens the dialog for
+// the websites that already use the certificate; a new certificate is deployed from a server's page.
 export function CertificateDetailPage() {
   const { t, i18n } = useTranslation();
   const { id = '' } = useParams();
   const { session } = useAuth();
   const canOperate = session?.user.role === 'admin' || session?.user.role === 'operator';
   const now = useNow();
+  const [deploying, setDeploying] = useState(false);
   const cert = useQuery({ queryKey: certificateKey(id), queryFn: () => getCertificate(id) });
   const deployments = useQuery({
     queryKey: [...DEPLOYMENTS_KEY, { certificate_id: id, limit: 5 }],
@@ -131,7 +134,7 @@ export function CertificateDetailPage() {
         </Fact>
       </Box>
       {canDeploy && (
-        <Button component={Link} to={`/servers/${first.target_id}`} w="fit-content">
+        <Button w="fit-content" onClick={() => setDeploying(true)}>
           {t('certificates.detail.deploy')}
         </Button>
       )}
@@ -198,13 +201,18 @@ export function CertificateDetailPage() {
                   <Table.Td>
                     <Code translate="no" style={WRAP}>{d.cert_path}</Code>
                   </Table.Td>
-                  <Table.Td>{t(deploymentStatusKey(d.status))}</Table.Td>
+                  <Table.Td>
+                    <Anchor component={Link} to={`/deployments/${d.id}`}>
+                      {t(deploymentStatusKey(d.status))}
+                    </Anchor>
+                  </Table.Td>
                 </Table.Tr>
               ))}
             </Table.Tbody>
           </Table>
         </Table.ScrollContainer>
       )}
+      {canDeploy && <DeployDialog opened={deploying} onClose={() => setDeploying(false)} certificate={c} />}
     </Stack>
   );
 }

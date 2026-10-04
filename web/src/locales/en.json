@@ -1085,7 +1085,8 @@
     "connectionLost": "Alice cannot reach itself right now. The deployment goes on in the background. Open the deployment history in a minute to see the result.",
     "openHistory": "Open deployment history",
     "openDeployment": "Open this deployment",
-    "partial": "Updated websites: {{ok}} of {{total}}"
+    "partial": "Updated websites: {{ok}} of {{total}}",
+    "succeededUnverified": "The new certificate was deployed and Nginx was reloaded."
   },
   "deployments": {
     "title": "Deployment history",
@@ -1173,6 +1174,7 @@
       "mode": "Checked: {{mode}}",
       "served": "Served certificate: {{fingerprint}}",
       "reason": "Cause: {{reason}}"
-    }
+    },
+    "currentStep": "Current step: {{step}}"
   }
 }
