@@ -17,7 +17,7 @@ import (
 // release image whose binary holds the helper checksums when withSums is set, go reports hostGo as
 // its own version and binGo as the version that built the binary. It returns the output and the
 // exit status.
-func runImageCheck(t *testing.T, hostGo, binGo string, withSums bool) (string, int) {
+func runImageCheck(t *testing.T, hostGo, binGo string, withSums, ci bool) (string, int) {
 	t.Helper()
 	for _, tool := range []string{"bash", "tar", "awk", "grep", "find", "sort", "tr"} {
 		if _, err := exec.LookPath(tool); err != nil {
@@ -79,7 +79,16 @@ esac
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go"), []byte(fakeGo), 0o700))         //nolint:gosec // a test script
 
 	cmd := exec.Command("bash", "../../deploy/dev/check-image.sh", "ci")
-	cmd.Env = append(os.Environ(),
+	env := []string{}
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "CI=") {
+			env = append(env, kv)
+		}
+	}
+	if ci {
+		env = append(env, "CI=true")
+	}
+	cmd.Env = append(env,
 		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_DIR="+dir, "FAKE_HOST_GO="+hostGo, "FAKE_BIN_GO="+binGo,
 		"TEST_LICENSE_LABEL=test-license-label", "TEST_ROUTE_MARKER=/test/clock",
@@ -98,20 +107,28 @@ esac
 // The helper checksums are compared only when the host's Go built them with the same version as
 // the image's binary; otherwise the two checks are skipped with a message, never failed.
 func TestImageCheckComparesHelperChecksumsOnlyWithTheSameGo(t *testing.T) {
-	out, status := runImageCheck(t, "go1.27.1", "go1.27.1", true)
+	out, status := runImageCheck(t, "go1.27.1", "go1.27.1", true, false)
 	assert.Equal(t, 0, status, out)
 	assert.Contains(t, out, "ok:   binary holds the amd64 helper checksum of make helper")
 	assert.Contains(t, out, "ok:   binary holds the arm64 helper checksum of make helper")
 	assert.NotContains(t, out, "skip:")
 	assert.Contains(t, out, "image-check: ok (alice:ci)")
 
-	out, status = runImageCheck(t, "go1.27.1", "go1.27.1", false)
+	out, status = runImageCheck(t, "go1.27.1", "go1.27.1", false, false)
 	assert.Equal(t, 1, status, out)
 	assert.Contains(t, out, "FAIL: binary holds the amd64 helper checksum of make helper")
 
-	out, status = runImageCheck(t, "go1.27.2", "go1.27.1", false)
+	out, status = runImageCheck(t, "go1.27.2", "go1.27.1", false, false)
 	assert.Equal(t, 0, status, out)
 	assert.Contains(t, out, "skip: binary holds the helper checksums of make helper (host Go go1.27.2, image binary built with go1.27.1;")
 	assert.NotContains(t, out, "helper checksum of make helper")
 	assert.Equal(t, 0, strings.Count(out, "FAIL:"), out)
+
+	// In CI both Go versions must match: a difference fails instead of skipping.
+	out, status = runImageCheck(t, "go1.27.2", "go1.27.1", true, true)
+	assert.Equal(t, 1, status, out)
+	assert.Contains(t, out, "FAIL: host Go go1.27.2 differs from the Go that built the image's binary (go1.27.1); in CI they must match")
+	assert.NotContains(t, out, "skip:")
+	out, status = runImageCheck(t, "go1.27.1", "go1.27.1", true, true)
+	assert.Equal(t, 0, status, out)
 }

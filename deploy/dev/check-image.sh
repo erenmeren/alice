@@ -89,12 +89,16 @@ check "binary links no testify or testcontainers" "$(count -Ec '\s(github.com/st
 # The setup script checks the helper an administrator installs against these checksums. The helper
 # build is reproducible only with the same Go version: when the host's Go (which built the checksums
 # of make helper) differs from the Go that built the image's binary, the two checks are skipped with
-# a message instead of failing. CI installs the Go of go.mod for both, so there they always run.
+# a message instead of failing, except in CI (CI set), where both Go versions must match and a
+# difference fails.
 host_go="$(go env GOVERSION)"
 bin_go="$(awk 'NR == 1 { print $2 }' <<<"$info")"
 if [[ "$host_go" == "$bin_go" ]]; then
   check "binary holds the amd64 helper checksum of make helper" "$(count -acF "$sum_amd64" "$bin")" "1"
   check "binary holds the arm64 helper checksum of make helper" "$(count -acF "$sum_arm64" "$bin")" "1"
+elif [[ -n "${CI:-}" ]]; then
+  echo "FAIL: host Go $host_go differs from the Go that built the image's binary ($bin_go); in CI they must match (deploy/Dockerfile's Go image and go.mod), so the helper checksums cannot be skipped"
+  fail=1
 else
   echo "skip: binary holds the helper checksums of make helper (host Go $host_go, image binary built with $bin_go; the helper build is reproducible only with the same Go version)"
 fi
