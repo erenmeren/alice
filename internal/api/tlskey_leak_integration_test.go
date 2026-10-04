@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
@@ -120,15 +121,20 @@ func (s *stack) storedKeys() (secs []secretValue, rows map[string]storedKey) {
 		pt.Zero()
 		k.der = der
 		rows[id.String()] = k
-		name := "stored key " + k.owner
-		secs = append(secs,
-			secretValue{name: name + " (plaintext DER)", forms: binaryForms(der)[1:]},
-			secretValue{name: name + " (PEM)", forms: pemForms(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))},
-			secretValue{name: name + " (DEK)", forms: binaryForms(unwrapDEK(s.t, s.masterKey(), loc, k.env))},
-		)
+		secs = append(secs, storedKeySecrets("stored key "+k.owner, der, unwrapDEK(s.t, s.masterKey(), loc, k.env))...)
 	}
 	require.NoError(s.t, res.Err())
 	return secs, rows
+}
+
+// storedKeySecrets are the spellings of a key Alice stored: its plaintext DER, its PEM and the
+// data-encryption key that seals it (TestKeyScannerFlagsEverySpelling checks the same constructor).
+func storedKeySecrets(name string, der, dek []byte) []secretValue {
+	return []secretValue{
+		{name: name + " (plaintext DER)", forms: binaryForms(der)[1:]},
+		{name: name + " (PEM)", forms: pemForms(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))},
+		{name: name + " (DEK)", forms: binaryForms(dek)},
+	}
 }
 
 type storedKey struct {
@@ -461,6 +467,25 @@ func TestKeyScannerFlagsEverySpelling(t *testing.T) {
 		assert.Contains(t, pem8, string(c.pem8))
 		assert.Contains(t, pem8, strings.ReplaceAll(string(c.pem8), "\n", `\n`))
 		assert.Contains(t, pem8, strings.ReplaceAll(string(c.pem8), "\n", "\r\n"))
+	}
+	// The stored-key and master-key secrets the suite scans for are built by the same constructors
+	// (Task 18 ledger item: the self-test did not cover them).
+	dek, master := make([]byte, secrets.KeySize), make([]byte, secrets.KeySize)
+	_, err := rand.Read(dek)
+	require.NoError(t, err)
+	_, err = rand.Read(master)
+	require.NoError(t, err)
+	stored := newKeyCanary("stored", ecKey).der8
+	secs = append(secs, storedKeySecrets("stored key csr", stored, dek)...)
+	secs = append(secs, masterKeySecretOf(master))
+	for _, f := range []string{hex.EncodeToString(stored), base64.StdEncoding.EncodeToString(stored), hex.EncodeToString(dek),
+		base64.StdEncoding.EncodeToString(master), hex.EncodeToString(master)} {
+		hit := false
+		for _, sec := range secs {
+			_, found := sec.leakedIn("x " + f + " y")
+			hit = hit || found
+		}
+		assert.True(t, hit, "a stored-key or master-key spelling is scanned for")
 	}
 	for _, pw := range []string{canary("pfx-password"), canary("pfx-wrong-password")} {
 		sec := secretValue{name: "PFX password", value: pw}

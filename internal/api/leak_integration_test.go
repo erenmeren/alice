@@ -178,7 +178,12 @@ func (s *stack) masterKey() []byte {
 // masterKeySecret is the master key file content and the key in every text spelling.
 func (s *stack) masterKeySecret() secretValue {
 	s.t.Helper()
-	key := s.masterKey()
+	return masterKeySecretOf(s.masterKey())
+}
+
+// masterKeySecretOf is a master key in every text spelling (TestKeyScannerFlagsEverySpelling checks
+// this constructor).
+func masterKeySecretOf(key []byte) secretValue {
 	return secretValue{name: "master key", forms: binaryForms(key)}
 }
 
