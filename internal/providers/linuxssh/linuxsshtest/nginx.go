@@ -88,6 +88,7 @@ type nginxHost struct {
 	freeSet       bool
 	dumpBudget    int
 	maxOps        int
+	maxFences     int // SetMaxNginxFences (the helper's maxNginxFences when 0)
 
 	failTest      int
 	failReload    int
@@ -153,6 +154,13 @@ func (h *nginxHost) free() int64 {
 		return h.freeBytes
 	}
 	return defaultFreeBytes
+}
+
+func (h *nginxHost) fencesCap() int {
+	if h.maxFences > 0 {
+		return h.maxFences
+	}
+	return 10000
 }
 
 func (h *nginxHost) opsCap() int {
@@ -454,6 +462,25 @@ func (e *Emulator) SetMaxNginxOps(n int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.nginx().maxOps = n
+}
+
+// SetMaxNginxFences sets how many fence tombstones the server keeps (the helper's 10000 when 0); a
+// fence beyond it answers NO_SPACE. Tombstones do not count against SetMaxNginxOps.
+func (e *Emulator) SetMaxNginxFences(n int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.nginx().maxFences = n
+}
+
+// CorruptNginxJournal makes op's journal unreadable (a journal an older helper wrote for a path the
+// vocabulary cannot carry, A1-I1): nginx-status, nginx-restore, nginx-fence, cleanup and a deploy
+// of op answer IO_ERROR, and op blocks its pair as pending when it is the pair's latest.
+func (e *Emulator) CorruptNginxJournal(op string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if o := e.nginx().ops[op]; o != nil && o.j != nil {
+		o.unreadable = true
+	}
 }
 
 // FailWriteIn makes nginx-deploy and nginx-restore unable to create files in dir (IO_ERROR when

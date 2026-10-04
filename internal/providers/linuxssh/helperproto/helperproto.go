@@ -139,8 +139,9 @@ const (
 	// only the latest operation of a pair can be rolled back.
 	CodeSuperseded = "SUPERSEDED"
 	// CodeRecoveryPending: nginx-deploy for a pair whose latest operation was interrupted (its
-	// journal says writing or restoring): a new operation would supersede it and make its rollback
-	// impossible. Exit 3, nothing changed; nginx-restore of that operation comes first.
+	// journal says writing or restoring, or cannot be read): a new operation would supersede it and
+	// make its rollback impossible. Exit 3, nothing changed; ErrorResponse.PendingOp names that
+	// operation, and nginx-restore of it comes first.
 	CodeRecoveryPending = "RECOVERY_PENDING"
 	// CodeNginxNotRunning: nginx-deploy found /usr/bin/systemctl missing or "systemctl is-active
 	// nginx" failing before anything was written: a reload could not work. Exit 3, nothing changed.
@@ -276,6 +277,9 @@ type ErrorResponse struct {
 	OK      bool   `json:"ok"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// PendingOp is set with CodeRecoveryPending only: the interrupted operation (a ValidOpID) that
+	// blocks the pair, so Alice can restore it (final review fix round 1, Important 1).
+	PendingOp string `json:"pending_op,omitempty"`
 }
 
 // VersionResponse answers "version" (runs without sudo).

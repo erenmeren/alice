@@ -67,6 +67,9 @@ func (j *emuJournal) clone() *emuJournal {
 type opDir struct {
 	j               *emuJournal
 	certBak, keyBak *secretBuf
+	// unreadable: the journal exists but cannot be read (CorruptNginxJournal): status, restore,
+	// fence, cleanup and a deploy of this operation answer IO_ERROR; it blocks its pair as pending.
+	unreadable bool
 }
 
 func stagedName(op, kind string) string { return ".alice-" + op + "-" + kind }
@@ -373,15 +376,24 @@ func (h *nginxHost) keepForRecovery(j *emuJournal) bool {
 	return false
 }
 
-// interruptedLatest is the helper's interruptedLatest: the pair's latest operation is another one
-// whose journal says writing or restoring.
-func (h *nginxHost) interruptedLatest(j *emuJournal) bool {
-	op, ok := h.latestOp(j)
-	if !ok || op == "" || op == j.op {
-		return false
+// interruptedLatest is the helper's interruptedLatest: the pair's latest operation when it is
+// another one whose journal says writing or restoring or cannot be read; "" otherwise.
+func (h *nginxHost) interruptedLatest(j *emuJournal) string {
+	op, _ := h.latestOp(j)
+	if op == "" || op == j.op {
+		return ""
 	}
 	other := h.ops[op]
-	return other != nil && other.j != nil && (other.j.phase == helperproto.PhaseWriting || other.j.phase == helperproto.PhaseRestoring)
+	if other != nil && other.j != nil && (other.unreadable || other.j.phase == helperproto.PhaseWriting || other.j.phase == helperproto.PhaseRestoring) {
+		return op
+	}
+	return ""
+}
+
+// isFenced is the helper's isFenced.
+func (h *nginxHost) isFenced(op string) bool {
+	o := h.ops[op]
+	return o != nil && o.j != nil && !o.unreadable && o.j.phase == helperproto.PhaseFenced
 }
 
 // ---- nginx -t, reload ---------------------------------------------------------------------
@@ -693,6 +705,9 @@ func (h *nginxHost) deployCommand(args []string, stdin []byte) Response {
 	if h.locked {
 		return refuse(helperproto.ExitFailed, helperproto.CodeBusy)
 	}
+	if h.isFenced(op) {
+		return refuse(helperproto.ExitPrecondition, helperproto.CodeFenced) // before the input is read
+	}
 	switch {
 	case len(stdin) > helperproto.MaxDeployInput:
 		return refuse(helperproto.ExitRefused, helperproto.CodeTooLarge)
@@ -711,15 +726,32 @@ func (h *nginxHost) deployCommand(args []string, stdin []byte) Response {
 	return h.deploy(op, certPath, keyPath, expect, cert, key)
 }
 
-// opCount is the number of operation directories that hold a journal.
+// opCount is the number of operation directories that hold a journal, except fence tombstones
+// (the helper's nginxOps); fenceCount counts the tombstones.
 func (h *nginxHost) opCount() int {
 	n := 0
 	for _, o := range h.ops {
-		if o.j != nil {
+		if o.j != nil && (o.unreadable || o.j.phase != helperproto.PhaseFenced) {
 			n++
 		}
 	}
 	return n
+}
+
+func (h *nginxHost) fenceCount() int {
+	n := 0
+	for _, o := range h.ops {
+		if o.j != nil && !o.unreadable && o.j.phase == helperproto.PhaseFenced {
+			n++
+		}
+	}
+	return n
+}
+
+// refusePending is RECOVERY_PENDING naming the pending operation.
+func refusePending(op string) Response {
+	b, _ := json.Marshal(helperproto.ErrorResponse{OK: false, Code: helperproto.CodeRecoveryPending, Message: "refused by the emulator", PendingOp: op})
+	return Response{Stdout: append(b, '\n'), Exit: helperproto.ExitPrecondition}
 }
 
 // newOpDir creates the directory of a new operation unless the cap is reached.
@@ -740,6 +772,9 @@ func (h *nginxHost) deploy(opID, certPath, keyPath, expect string, newCert, newK
 		dir   = h.ops[opID]
 		prior *emuJournal
 	)
+	if dir != nil && dir.unreadable {
+		return refuse(helperproto.ExitFailed, helperproto.CodeIOError)
+	}
 	if dir != nil && dir.j != nil && dir.j.phase == helperproto.PhaseFenced {
 		return refuse(helperproto.ExitPrecondition, helperproto.CodeFenced) // AUD-05
 	}
@@ -792,8 +827,8 @@ func (h *nginxHost) deploy(opID, certPath, keyPath, expect string, newCert, newK
 	if prior != nil && rec == opID {
 		j.prevRecord = prior.prevRecord
 	}
-	if h.interruptedLatest(j) {
-		return refuse(helperproto.ExitPrecondition, helperproto.CodeRecoveryPending) // A1 m1
+	if pending := h.interruptedLatest(j); pending != "" {
+		return refusePending(pending) // A1 m1
 	}
 	if bytes.Equal(cert.data, newCert) && bytes.Equal(key.data, newKey) {
 		// "Same cert already deployed": no write, no reload.
@@ -924,6 +959,9 @@ func (e *Emulator) nginxRestore(args []string) (resp Response) {
 	if dir == nil || dir.j == nil {
 		return refuse(helperproto.ExitPrecondition, helperproto.CodeUnknownOp)
 	}
+	if dir.unreadable {
+		return refuse(helperproto.ExitFailed, helperproto.CodeIOError)
+	}
 	j := dir.j.clone()
 	switch j.phase {
 	case helperproto.PhasePrepared, helperproto.PhaseUnchanged, helperproto.PhaseRestored, helperproto.PhaseFenced:
@@ -961,6 +999,9 @@ func (e *Emulator) nginxStatus(args []string) Response {
 	dir := h.ops[op]
 	if dir == nil || dir.j == nil {
 		return answer(resp)
+	}
+	if dir.unreadable {
+		return refuse(helperproto.ExitFailed, helperproto.CodeIOError)
 	}
 	return answer(h.statusOf(dir.j, resp))
 }
@@ -1001,6 +1042,12 @@ func (e *Emulator) nginxFence(args []string) (resp Response) {
 	h.fences++
 	fenced := helperproto.NginxStatusResponse{OK: true, Phase: helperproto.PhaseFenced, BackupDir: helperproto.BackupRoot + "/" + op}
 	dir := h.ops[op]
+	switch {
+	case dir != nil && dir.unreadable:
+		return refuse(helperproto.ExitFailed, helperproto.CodeIOError)
+	case (dir == nil || dir.j == nil) && h.fenceCount() >= h.fencesCap():
+		return refuse(helperproto.ExitPrecondition, helperproto.CodeNoSpace)
+	}
 	if dir == nil {
 		dir = &opDir{}
 		h.ops[op] = dir
@@ -1042,6 +1089,9 @@ func (h *nginxHost) cleanupOp(op string) (resp Response, known bool) {
 	}()
 	if h.locked {
 		return refuse(helperproto.ExitFailed, helperproto.CodeBusy), true
+	}
+	if dir.unreadable {
+		return refuse(helperproto.ExitFailed, helperproto.CodeIOError), true
 	}
 	if dir.j != nil && dir.j.phase == helperproto.PhaseFenced {
 		return answer(helperproto.CleanupResponse{OK: true}), true // the tombstone stays (AUD-05)

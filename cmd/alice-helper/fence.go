@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"golang.org/x/sys/unix"
 
@@ -25,7 +26,12 @@ import (
 //	any other journal               nothing changes; the answer is nginx-status's for it
 //	journal unreadable              IO_ERROR, nothing changes
 //
-// nginx-deploy of a fenced operation refuses (FENCED) before reading its input. The answer is an
+// A directory that holds another kind of operation (authkeys-write backups under the same id) is
+// refused (INVALID_ARGUMENT): a tombstone there would shorten that backup's retention to
+// NginxBackupKeep. At maxNginxFences tombstones the answer is NO_SPACE.
+//
+// nginx-deploy of a fenced operation refuses (FENCED) under the lock, before it reads its input
+// (the key never enters the process). The answer is an
 // NginxStatusResponse; Active is false (the fence holds the lock). Nothing depends on a clock: the
 // tombstone is permanent until the sweep removes it after NginxBackupKeep like a finished
 // operation (cleanup --op keeps it). A crash leaves either the earlier state or the tombstone
@@ -52,8 +58,10 @@ func cmdNginxFence(ctx context.Context, s *sys, args []string) (out any, err err
 	resp := helperproto.NginxStatusResponse{OK: true, Phase: helperproto.PhaseFenced, BackupDir: helperproto.BackupRoot + "/" + op}
 	dir, err := s.opDir(op, false)
 	if errors.Is(err, unix.ENOENT) {
-		// The tombstone needs no space beyond its journal: maxNginxOps (a bound on backups) does
-		// not apply.
+		// maxNginxOps (a bound on backups) does not apply to a tombstone; maxNginxFences does.
+		if _, fences := s.countOps(); fences >= maxNginxFences {
+			return nil, precondition(helperproto.CodeNoSpace, "too many fenced operations are kept on this server")
+		}
 		dir, err = s.opDir(op, true)
 	}
 	if err != nil {
@@ -65,6 +73,14 @@ func cmdNginxFence(ctx context.Context, s *sys, args []string) (out any, err err
 		return nil, failed(helperproto.CodeIOError, "the journal cannot be read")
 	}
 	tomb := journal{Op: op, Phase: helperproto.PhaseFenced, Steps: []helperproto.NginxStep{}}
+	if !found {
+		if names, err := dir.Readdirnames(-1); err != nil || slices.ContainsFunc(names, authKeysEntry.MatchString) {
+			return nil, refused(helperproto.CodeInvalidArgument, "the operation id belongs to another kind of operation")
+		}
+		if _, fences := s.countOps(); fences >= maxNginxFences {
+			return nil, precondition(helperproto.CodeNoSpace, "too many fenced operations are kept on this server")
+		}
+	}
 	if found {
 		switch j.Phase {
 		case helperproto.PhaseFenced:

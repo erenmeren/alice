@@ -17,6 +17,7 @@ type helperError struct {
 	exit    int
 	code    string
 	message string
+	op      string // ErrorResponse.PendingOp (RECOVERY_PENDING only)
 }
 
 func (e *helperError) Error() string { return e.code + ": " + e.message }
@@ -90,7 +91,7 @@ func reply(s *sys, out any, err error) int {
 		if !errors.As(err, &he) {
 			he = &helperError{exit: helperproto.ExitFailed, code: helperproto.CodeIOError, message: "the operation failed"}
 		}
-		writeJSON(s.stdout, helperproto.ErrorResponse{OK: false, Code: he.code, Message: he.message})
+		writeJSON(s.stdout, helperproto.ErrorResponse{OK: false, Code: he.code, Message: he.message, PendingOp: he.op})
 		return he.exit
 	}
 	writeJSON(s.stdout, out)

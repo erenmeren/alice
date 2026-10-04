@@ -24,6 +24,11 @@ const stepTimeout = 30 * time.Second
 // disk with backups. Tests lower it.
 var maxNginxOps = 1000
 
+// maxNginxFences bounds the fence tombstones kept (AUD-05; each is one small journal, removed by the
+// sweep after NginxBackupKeep). At the bound nginx-fence answers NO_SPACE, which proves nothing to
+// Alice's recovery (it records nothing and tries again later). Tests lower it.
+var maxNginxFences = 10000
+
 const (
 	kindCert = "cert"
 	kindKey  = "key"
@@ -186,6 +191,11 @@ func cmdNginxDeploy(ctx context.Context, s *sys, args []string) (out any, err er
 		return nil, failed(helperproto.CodeBusy, "another certificate change is running on this server")
 	}
 	defer func() { _ = lock.Close() }()
+	// AUD-05: a fenced operation is refused before its input is read (the key never enters this
+	// process); checked under the lock, so no fence can come between this and the transaction.
+	if s.isFenced(d.op) {
+		return nil, precondition(helperproto.CodeFenced, "this deployment was ended by Alice's recovery; it is not carried out")
+	}
 	raw, err := readInput(ctx, s.stdin, helperproto.MaxDeployInput)
 	defer clear(raw)
 	switch {
@@ -330,8 +340,9 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 	switch pending, err := s.interruptedLatest(j); {
 	case err != nil:
 		return nil, failed(helperproto.CodeIOError, "the record of the latest deployment cannot be read")
-	case pending:
-		return nil, precondition(helperproto.CodeRecoveryPending, "the latest deployment of these files was interrupted; restore it first")
+	case pending != "":
+		return nil, &helperError{exit: helperproto.ExitPrecondition, code: helperproto.CodeRecoveryPending,
+			message: "the latest deployment of these files was interrupted; restore it first", op: pending}
 	}
 	if bytes.Equal(cert.data, d.cert) && bytes.Equal(key.data, d.key) {
 		// §12.9 "Same cert already deployed": no write, no reload.
@@ -521,25 +532,49 @@ func (s *sys) newOpDir(op string) (*os.File, error) {
 	return dir, nil
 }
 
-// nginxOps counts the operation directories that hold a journal.
+// isFenced reports an operation whose journal is a fence's tombstone (an unreadable or missing one
+// is not: deploy decides on it).
+func (s *sys) isFenced(op string) bool {
+	dir, err := s.opDir(op, false)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = dir.Close() }()
+	j, found, err := readJournal(dir, op)
+	return err == nil && found && j.Phase == helperproto.PhaseFenced
+}
+
+// nginxOps counts the operation directories that hold a journal, except a fence's tombstones
+// (they hold no backup; fences have their own bound, maxNginxFences).
 func (s *sys) nginxOps() int {
+	n, _ := s.countOps()
+	return n
+}
+
+// countOps counts the operation directories with a journal: ops (anything but a tombstone, an
+// unreadable journal included) and fences (tombstones).
+func (s *sys) countOps() (ops, fences int) {
 	root, err := s.openBackupRoot(false)
 	if err != nil {
-		return 0
+		return 0, 0
 	}
 	defer func() { _ = root.Close() }()
 	names, err := root.Readdirnames(-1)
 	if err != nil {
-		return 0
+		return 0, 0
 	}
-	n := 0
 	for _, name := range names {
 		var st unix.Stat_t
-		if helperproto.ValidOpID(name) && unix.Fstatat(int(root.Fd()), name+"/"+journalName, &st, unix.AT_SYMLINK_NOFOLLOW) == nil { //nolint:gosec // G115: a descriptor fits an int
-			n++
+		if !helperproto.ValidOpID(name) || unix.Fstatat(int(root.Fd()), name+"/"+journalName, &st, unix.AT_SYMLINK_NOFOLLOW) != nil { //nolint:gosec // G115: a descriptor fits an int
+			continue
 		}
+		if j, ok := s.nginxJournal(root, name); ok && j.Phase == helperproto.PhaseFenced {
+			fences++
+			continue
+		}
+		ops++
 	}
-	return n
+	return ops, fences
 }
 
 // writeBackups stores both old files, 0600 in the 0700 root-only operation directory, and syncs
@@ -585,23 +620,27 @@ func (s *sys) nginxActive(ctx context.Context) error {
 	return s.runSystemctl(ctx, "is-active", "--quiet", "nginx")
 }
 
-// interruptedLatest reports that the pair's latest operation (the one that last replaced its
-// files) is another one whose journal says writing or restoring.
-func (s *sys) interruptedLatest(j journal) (bool, error) {
-	op, ok, err := s.latestOp(j)
-	if err != nil || !ok || op == "" || op == j.Op {
-		return false, err
+// interruptedLatest returns the pair's latest operation (the one that last replaced its files)
+// when it is another one whose journal says writing or restoring, or exists and cannot be read
+// (cleanup keeps such an operation as possibly interrupted too, fix round 1 minor 5); "" otherwise.
+func (s *sys) interruptedLatest(j journal) (string, error) {
+	op, _, err := s.latestOp(j)
+	if err != nil || op == "" || op == j.Op {
+		return "", err
 	}
 	dir, err := s.opDir(op, false)
 	if err != nil {
-		return false, nil //nolint:nilerr // latestOp read it a moment ago; gone now: not pending
+		return "", nil //nolint:nilerr // the record names an operation that is gone: nothing to restore
 	}
 	defer func() { _ = dir.Close() }()
 	other, found, err := readJournal(dir, op)
-	if err != nil || !found {
-		return false, nil //nolint:nilerr // as above
+	switch {
+	case err != nil:
+		return op, nil
+	case found && (other.Phase == helperproto.PhaseWriting || other.Phase == helperproto.PhaseRestoring):
+		return op, nil
 	}
-	return other.Phase == helperproto.PhaseWriting || other.Phase == helperproto.PhaseRestoring, nil
+	return "", nil
 }
 
 // reload runs systemctl reload nginx, then systemctl is-active nginx.

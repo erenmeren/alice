@@ -254,3 +254,92 @@ func TestLateDeployAfterTheRecoveryFenceIsRefused(t *testing.T) {
 	assert.Zero(t, w.reloads)
 	w.assertPair(t, false)
 }
+
+// Fix round 1, Important 2: tombstones do not count against maxNginxOps (at the cap every
+// deployment would answer NO_SPACE for 7 days); fences have their own bound, which answers an error.
+func TestTombstonesDoNotCountAgainstTheBackupCap(t *testing.T) {
+	w := newDeployWorld(t)
+	oldOps, oldFences := maxNginxOps, maxNginxFences
+	maxNginxOps, maxNginxFences = 1, 2
+	defer func() { maxNginxOps, maxNginxFences = oldOps, oldFences }()
+	for _, op := range []string{opA, opB} {
+		_, m := w.fence(t, op)
+		require.Equal(t, helperproto.PhaseFenced, m["phase"])
+	}
+	const opC, opD = "0190f5a0-0000-7000-8000-0000000000d3", "0190f5a0-0000-7000-8000-0000000000d4"
+	code, m := w.deploy(opC, w.newInput(), w.oldSHA())
+	require.Equal(t, helperproto.ExitOK, code, m)
+	assert.Equal(t, helperproto.PhaseCommitted, m["phase"])
+	code, m = w.fence(t, opD)
+	assert.Equal(t, helperproto.ExitPrecondition, code, m)
+	assert.Equal(t, helperproto.CodeNoSpace, m["code"])
+	assert.NoDirExists(t, w.opPath(opD))
+	_, m = w.fence(t, opA)
+	assert.Equal(t, helperproto.PhaseFenced, m["phase"], "an existing tombstone still answers at the bound")
+}
+
+// Fix round 1, minor 1: a fenced operation is refused before its input is read: even an input that
+// does not match its hash answers FENCED.
+func TestFencedDeployIsRefusedBeforeItsInputIsRead(t *testing.T) {
+	w := newDeployWorld(t)
+	w.fence(t, opA)
+	in := w.newInput()
+	read := false
+	w.f.s.stdin = readerFunc(func([]byte) (int, error) { read = true; return 0, errFailedWrite })
+	code, m := w.f.run("nginx-deploy", "--op", opA, "--cert", "/etc/nginx/ssl/www.crt", "--key", "/etc/nginx/ssl/www.key",
+		"--expect-cert-sha256", w.oldSHA(), "--content-sha256", hexOf(in+"x"))
+	assert.Equal(t, helperproto.ExitPrecondition, code, m)
+	assert.Equal(t, helperproto.CodeFenced, m["code"])
+	assert.False(t, read, "stdin was not read")
+}
+
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
+
+// Fix round 1, minor 3: an id whose directory holds authorized_keys backups is not fenced (a
+// tombstone there would shorten their 30-day retention to 7 days).
+func TestFenceRefusesAnotherKindOfOperation(t *testing.T) {
+	w := newDeployWorld(t)
+	w.f.mkdir(helperproto.BackupRoot, 0o700)
+	w.f.mkdir(helperproto.BackupRoot+"/"+opA, 0o700)
+	w.f.write(helperproto.BackupRoot+"/"+opA+"/1.bak", "ssh-ed25519 AAAA x\n", 0o600)
+	code, m := w.fence(t, opA)
+	assert.Equal(t, helperproto.ExitRefused, code, m)
+	assert.Equal(t, helperproto.CodeInvalidArgument, m["code"])
+	assert.NoFileExists(t, w.opPath(opA)+"/"+journalName)
+	assert.FileExists(t, w.opPath(opA)+"/1.bak")
+}
+
+// Fix round 1, Important 1 (a) and minor 5: RECOVERY_PENDING names the blocking operation, also
+// when its journal cannot be read.
+func TestRecoveryPendingNamesTheOperation(t *testing.T) {
+	w := newDeployWorld(t)
+	w.f.s.afterDeployStep = func(name string) error {
+		if name == helperproto.StepReload {
+			return errKilled
+		}
+		return nil
+	}
+	w.deploy(opA, w.newInput(), w.oldSHA())
+	w.revive()
+	in := input(w.leaf.FullchainPEM, w.leaf.KeyPEM)
+	code, m := w.deploy(opB, in, hexOf(string(w.newLeaf.FullchainPEM)))
+	assert.Equal(t, helperproto.ExitPrecondition, code, m)
+	assert.Equal(t, helperproto.CodeRecoveryPending, m["code"])
+	assert.Equal(t, opA, m["pending_op"])
+
+	// The same with A's journal unreadable (an older helper wrote it): still pending, named.
+	w.f.write(helperproto.BackupRoot+"/"+opA+"/journal.json", "{garbled", 0o600)
+	code, m = w.deploy(opB, in, hexOf(string(w.newLeaf.FullchainPEM)))
+	assert.Equal(t, helperproto.CodeRecoveryPending, m["code"], code)
+	assert.Equal(t, opA, m["pending_op"])
+	code, r := w.f.run("nginx-restore", "--op", opA)
+	assert.Equal(t, helperproto.ExitFailed, code, r)
+	assert.Equal(t, helperproto.CodeIOError, r["code"], "the restore of an unreadable journal")
+
+	// Every other error answer carries no pending_op.
+	_, m = w.f.run("nginx-status", "--op", "bad")
+	_, has := m["pending_op"]
+	assert.False(t, has)
+}

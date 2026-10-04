@@ -1328,6 +1328,32 @@ func TestEmulatorFidelityFence(t *testing.T) {
 		_ = lock.Close()
 		tw.e.HoldLock(false)
 	})
+	t.Run("tombstones do not count against the backup cap; fences have their own (fix round 1)", func(t *testing.T) {
+		tw := newTwin(t, true)
+		oldOps, oldFences := maxNginxOps, maxNginxFences
+		maxNginxOps, maxNginxFences = 1, 2
+		defer func() { maxNginxOps, maxNginxFences = oldOps, oldFences }()
+		tw.e.SetMaxNginxOps(1)
+		tw.e.SetMaxNginxFences(2)
+		fence(tw, opA)
+		fence(tw, opB)
+		const opC, opD = "0190f5a0-0000-7000-8000-0000000000d3", "0190f5a0-0000-7000-8000-0000000000d4"
+		assert.Equal(t, helperproto.PhaseCommitted, tw.deploy(opC).m["phase"])
+		assert.Equal(t, helperproto.CodeNoSpace, fence(tw, opD).m["code"])
+		assert.Equal(t, helperproto.PhaseFenced, fence(tw, opA).m["phase"])
+	})
+	t.Run("RECOVERY_PENDING names the blocking operation (fix round 1)", func(t *testing.T) {
+		tw := newTwin(t, true)
+		tw.kill(helperproto.StepReload)
+		in := tw.w.newInput()
+		args := tw.deployArgs(opA, in, tw.w.oldSHA())
+		_ = tw.runHelper(helperproto.SubNginxDeploy, in, args...)
+		_ = tw.runEmu(helperproto.SubNginxDeploy, in, args...)
+		tw.revive()
+		inB := input(tw.third.FullchainPEM, tw.third.KeyPEM)
+		a := tw.same(helperproto.SubNginxDeploy, inB, tw.deployArgs(opB, inB, hexOf(string(tw.w.newLeaf.FullchainPEM)))...)
+		assert.Equal(t, opA, a.m["pending_op"])
+	})
 	for _, p := range []string{"journal fenced staged", "journal fenced renamed"} {
 		t.Run("killed at "+p, func(t *testing.T) {
 			tw := newTwin(t, true)
