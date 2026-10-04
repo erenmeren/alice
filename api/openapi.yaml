@@ -2219,7 +2219,7 @@ components:
             phase, profile, backup_dir, helper_code, subcommand, ...). deployment.rollback_failed is reported as
             deployment.restored_unverified (ALC-DEP-0019) when the files are back but the website was not confirmed,
             and as deployment.rollback_file_changed (ALC-DEP-0020) when another program changed the files.
-        failed_step: { type: string }
+        failed_step: { type: string, description: "The step that failed (verify_current when the pre-check refused; verify when the new certificate was not confirmed); \"\" when none" }
         cause_step: { type: string }
         helper_error: { type: string, description: "A configuration error class or file_changed; \"\" when none" }
         backup_dir: { type: string, description: 'Where the server keeps the previous files (/var/lib/alice-helper/backups/<id>); "" before a change' }

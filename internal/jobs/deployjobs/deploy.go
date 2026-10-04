@@ -220,7 +220,9 @@ func (h *handlers) first(ctx context.Context, j jobs.Job, d inventory.Deployment
 	rec := h.recorder(ctx, d.ID, steps)
 	served, chain, err := h.precheck(ctx, sess, m, rec)
 	if err != nil {
-		return h.beforeSend(ctx, j, d, err)
+		// The pre-check is the step that refused (distinct from "verify", the check of the new
+		// certificate: the verification-failure readers key off that name).
+		return h.beforeSendAt(ctx, j, d, err, stepPrecheck)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, jobs.Retry(reasonInterrupted, nil, err) // nothing recorded: a re-run deploys
@@ -259,7 +261,7 @@ func (h *handlers) first(ctx context.Context, j jobs.Job, d inventory.Deployment
 // applies). It returns the served leaf and chain length to record, or a failure: a refusal
 // (jobs.Fail with the verification reason and params) or the provider's error.
 func (h *handlers) precheck(ctx context.Context, sess providers.Session, m inventory.Material, rec *recorder) (string, int, error) {
-	const step = "verify_current"
+	const step = stepPrecheck
 	if m.Verify.Skip {
 		rec.Step(step, providers.StepSkipped, nil)
 		return "", 0, nil
@@ -296,6 +298,16 @@ func (h *handlers) lostBeforeSend(ctx context.Context, _ jobs.Job, d inventory.D
 
 // beforeSend handles a failure before anything was sent (see deploy).
 func (h *handlers) beforeSend(ctx context.Context, j jobs.Job, d inventory.Deployment, err error) (map[string]any, error) {
+	return h.beforeSendAt(ctx, j, d, err, "")
+}
+
+// stepPrecheck is the step name of the pre-check (verify_current), also the failed step of a
+// deployment the pre-check refused.
+const stepPrecheck = "verify_current"
+
+// beforeSendAt is beforeSend for a failure of step (the failed step the record keeps; "" when no
+// step ran).
+func (h *handlers) beforeSendAt(ctx context.Context, j jobs.Job, d inventory.Deployment, err error, step string) (map[string]any, error) {
 	if errors.Is(err, inventory.ErrClaimLost) {
 		return staleRun(err)
 	}
@@ -306,14 +318,19 @@ func (h *handlers) beforeSend(ctx context.Context, j jobs.Job, d inventory.Deplo
 	if f.Class == jobs.Retryable && j.Attempt < j.MaxAttempts {
 		return nil, f
 	}
-	return h.refuse(ctx, d, f.Reason, f.Params)
+	return h.refuseAt(ctx, d, f.Reason, f.Params, step)
 }
 
 // refuse ends a deployment that sent nothing: failed with reason (nothing was written).
 func (h *handlers) refuse(ctx context.Context, d inventory.Deployment, reason string, params map[string]string) (map[string]any, error) {
+	return h.refuseAt(ctx, d, reason, params, "")
+}
+
+// refuseAt is refuse with the step that failed ("" when none did).
+func (h *handlers) refuseAt(ctx context.Context, d inventory.Deployment, reason string, params map[string]string, step string) (map[string]any, error) {
 	wctx, cancel := detached(ctx)
 	err := h.d.Inventory.FinishDeployment(wctx, d.ID, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: reason,
-		Params: params})
+		Params: params, FailedStep: step})
 	cancel()
 	if errors.Is(err, inventory.ErrClaimLost) {
 		return staleRun(err)
