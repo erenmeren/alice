@@ -14,9 +14,12 @@ The tag stays in the reference for readability; Docker verifies the digest, not 
 of the multi-architecture index, so amd64 and arm64 both keep working.
 
 `make lint` runs `go run ./tools/pincheck`, which needs no network. It fails when a `uses:`, a
-`FROM`, a `COPY --from=`, a Compose `image:` (of a service without `build:`), a `docker run` in the
-Makefile or a script, or a Go test image names something not pinned, or when the PostgreSQL
-reference in a Go test differs from the one in the Compose file. Each message names the file and
+workflow job's `container:` or `services.<name>.image:`, a `FROM`, a `COPY --from=`, a Compose
+`image:` (of a service without `build:`), the image operand of a `docker run` / `docker create` in
+the Makefile, a script or a workflow `run:` step, a `docker://` reference, or a Go test image names
+something not pinned, or when the PostgreSQL reference in a Go test differs from the one in the
+Compose file. Only the image operand of a `docker run` counts (a digest in a trailing comment or in
+an option value does not), and the locally built `alice:` image is accepted only as that operand. Each message names the file and
 line. Fix it by pinning as below; do not add exceptions without a decision recorded here.
 
 ## Updating a pin by hand
@@ -32,6 +35,12 @@ Docker image (index digest; the `Docker-Content-Digest` header of the manifest l
     curl -sI -H "Authorization: Bearer $tok" \
       -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
       https://registry-1.docker.io/v2/library/postgres/manifests/16-alpine | grep -i docker-content-digest
+    # GitHub Container Registry (gitleaks) and Google Container Registry (distroless): the same
+    # manifest request, with the token from the registry's own endpoint.
+    tok=$(curl -s 'https://ghcr.io/token?service=ghcr.io&scope=repository:gitleaks/gitleaks:pull' | jq -r .token)
+    #   then https://ghcr.io/v2/gitleaks/gitleaks/manifests/v8.30.1
+    tok=$(curl -s 'https://gcr.io/v2/token?service=gcr.io&scope=repository:distroless/static-debian12:pull' | jq -r .token)
+    #   then https://gcr.io/v2/distroless/static-debian12/manifests/latest
 
 Write `postgres:16-alpine@sha256:<digest>`. The PostgreSQL reference appears three times (Compose,
 `pgtest.go`, `internal/platform/db/db_integration_test.go`); Dependabot edits only the Compose file,
@@ -52,6 +61,10 @@ use that peeled commit. Write `uses: actions/checkout@<sha> # v7.x.y`.
 Go modules and `web/` npm packages, with a limit of five open pull requests per ecosystem. It does
 nothing until the repository has a GitHub remote. Dependabot's Docker updater may not read
 `test/images/sshd/*.Dockerfile` (they are not named `Dockerfile`); update those three by hand.
+
+Updated by hand, always (Dependabot does not read them): the Makefile tool images
+`GITLEAKS_IMAGE` and `TRIVY_IMAGE`, and the `# syntax=docker/dockerfile:1@sha256:...` frontend
+line of every Dockerfile.
 
 Reviewing a Dependabot pull request: read the release notes; for an image, compare
 `docker buildx imagetools inspect <tag>` with the digest in the diff; run `make ci`.

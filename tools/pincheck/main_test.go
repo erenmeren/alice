@@ -102,7 +102,8 @@ func TestComposeForms(t *testing.T) {
 	assert.Empty(t, messages(t, f, "services:\n  a:\n    image: &img redis:7@"+dg+"\n  b:\n    image: *img\n"))
 	assert.Len(t, messages(t, f, "x-base: &base\n  image: redis:7\nservices:\n  a:\n    <<: *base\n  b:\n    <<: *base\n"), 2, "merged anchors count per service")
 	assert.Len(t, messages(t, "compose.yaml", "services:\n  a:\n    image: ${IMG:-redis:7}\n"), 1, "variable default is not a digest")
-	assert.Empty(t, messages(t, "other.yml", "services:\n  a:\n    image: redis:7\n"), "not a compose file name")
+	assert.Len(t, messages(t, "other.yml", "services:\n  a:\n    image: redis:7\n"), 1, "a Compose file by content, whatever its name")
+	assert.Empty(t, messages(t, "other.yml", "services:\n  a:\n    ports: []\n"), "services without image: or build: are not a Compose file")
 }
 
 func TestMakefileAndShellRun(t *testing.T) {
@@ -134,4 +135,79 @@ func TestSkippedDirectories(t *testing.T) {
 	write(t, root, ".claude/worktrees/w/Dockerfile", "FROM alpine:3\n")
 	write(t, root, ".git/Dockerfile", "FROM alpine:3\n")
 	assert.Empty(t, check(root))
+}
+
+// Review fold-in (1): a run split as "docker \" + "run" is still a docker run, and a digest that
+// appears only in a trailing comment pins nothing.
+func TestDockerRunSplitAndComments(t *testing.T) {
+	vars := "GITLEAKS_IMAGE ?= g:1@" + dg + "\nTRIVY_IMAGE ?= t:1@" + dg + "\n"
+	assert.Len(t, messages(t, "Makefile", vars+"a:\n\tdocker \\\n\t  run --rm alpine:3 true\n"), 1, "docker \\ + run")
+	assert.Len(t, messages(t, "Makefile", vars+"a:\n\tdocker\trun   --rm alpine:3 true\n"), 1, "tabs and repeated blanks")
+	assert.Len(t, messages(t, "Makefile", vars+"a:\n\tdocker run --rm alpine:3 true # alpine@"+dg+"\n"), 1, "digest only in a comment")
+	assert.Len(t, messages(t, "Makefile", vars+"a:\n\tdocker run --rm \\\n\t  alpine:3 \\\n\t  true # @"+dg+"\n"), 1, "digest only in a comment of a continued line")
+	assert.Len(t, messages(t, "deploy/dev/s.sh", "docker container run --rm alpine:3 true\n"), 1, "docker container run")
+	assert.Len(t, messages(t, "deploy/dev/s.sh", "id=$(docker create alpine:3)\n"), 1, "docker create pulls too")
+	assert.Empty(t, messages(t, "deploy/dev/s.sh", "id=$(docker create alice:ci)\necho 'x#y' && docker run --rm \"alpine@"+dg+"\" true # done\n"))
+	assert.Empty(t, messages(t, "deploy/dev/s.sh", "docker run --rm alpine@"+dg+" sh -c 'echo # not a comment'\n"))
+}
+
+// Review fold-in (2): only the image operand counts, so an alice: volume, a digest in an option
+// value or alice: in the command do not pin an unpinned image.
+func TestDockerRunImageOperand(t *testing.T) {
+	vars := "GITLEAKS_IMAGE ?= g:1@" + dg + "\nTRIVY_IMAGE ?= t:1@" + dg + "\n"
+	for name, line := range map[string]string{
+		"alice: volume":         "docker run -v alice:/x alpine:3 true",
+		"alice: in a label":     "docker run --label=src=alice:ci alpine:3 true",
+		"digest in a value":     "docker run -e PIN=x@" + dg + " alpine:3 true",
+		"alice: in the command": "docker run --rm alpine:3 inspect alice:ci",
+		"variable in a value":   "docker run --name $(TRIVY_IMAGE) alpine:3",
+		"bare alice:":           "docker run --rm alice: true",
+		"no image at all":       "docker run --rm",
+	} {
+		assert.Len(t, messages(t, "Makefile", vars+"a:\n\t"+line+"\n"), 1, name)
+	}
+	for name, line := range map[string]string{
+		"options with values":  "docker run --rm -it --network none -v \"$(CURDIR):/repo\" --user \"$$(id -u):$$(id -g)\" -w /src $(TRIVY_IMAGE) fs .",
+		"option=value":         "docker run --rm --network=none --entrypoint=/x alice:$(IMAGE_TAG) version",
+		"quoted pinned image":  "docker run --rm \"x@" + dg + "\" y",
+		"inside a subshell":    "v=$$(docker run --rm --network none alice:$(IMAGE_TAG) version); echo \"$$v\"",
+		"two runs in one line": "docker run --rm $(GITLEAKS_IMAGE) a; docker run --rm alice:ci b",
+	} {
+		assert.Empty(t, messages(t, "Makefile", vars+"a:\n\t"+line+"\n"), name)
+	}
+	assert.Len(t, messages(t, "Makefile", vars+"a:\n\tdocker run --rm $(GITLEAKS_IMAGE) a; docker run --rm alpine:3 b\n"), 1, "the second of two runs")
+	// The running-container form is accepted only as the operand, not anywhere on the line.
+	assert.Len(t, messages(t, "deploy/dev/s.sh", "docker run --rm -l \"$(docker inspect -f '{{.Config.Image}}' x)\" alpine:3 true\n"), 1)
+}
+
+// Review fold-in (3): workflows also pull through container:, services and run: scripts.
+func TestWorkflowContainersServicesAndRunSteps(t *testing.T) {
+	const w = ".github/workflows/w.yml"
+	pinned := "postgres:16@" + dg
+	assert.Empty(t, messages(t, w, "jobs:\n  a:\n    container: "+pinned+"\n    services:\n      db:\n        image: "+pinned+"\n      c: "+pinned+"\n    steps:\n      - run: docker run --rm alice:ci version\n      - run: |\n          make lint\n          docker run --rm x@"+dg+" y\n"))
+	got := messages(t, w, "jobs:\n  a:\n    container: node:24\n    steps:\n      - run: make ci\n")
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], "w.yml:3: job a container image node:24")
+	assert.Len(t, messages(t, w, "jobs:\n  a:\n    container:\n      image: node:24\n      options: --user 1001\n"), 1, "container mapping")
+	assert.Len(t, messages(t, w, "jobs:\n  a:\n    services:\n      db:\n        image: postgres:16\n"), 1, "service by tag")
+	assert.Len(t, messages(t, w, "jobs:\n  a:\n    services:\n      db:\n        image: ${{ matrix.img }}\n"), 1, "service by expression")
+	got = messages(t, w, "jobs:\n  a:\n    steps:\n      - run: |\n          make lint\n          docker \\\n            run --rm alpine:3 true\n")
+	require.Len(t, got, 1, "docker run in a run: block")
+	assert.Contains(t, got[0], "w.yml:6:")
+	assert.Len(t, messages(t, w, "jobs:\n  a:\n    steps:\n      - run: skopeo inspect docker://alpine:3\n"), 1, "docker:// in a run: step")
+	assert.Len(t, messages(t, w, "x: &s\n  run: docker run alpine:3\njobs:\n  a:\n    steps:\n      - *s\n"), 1, "a step that is an alias")
+	assert.Len(t, messages(t, ".github/actions/x/action.yml", "runs:\n  using: composite\n  steps:\n    - run: docker run alpine:3\n      shell: bash\n"), 1, "composite action run:")
+}
+
+// Trivial gaps closed with the fold-ins: Containerfile names, Compose files with other names,
+// and Go literals on the line after Image: or postgres.Run(ctx,.
+func TestOtherNamesAndMultiLineGo(t *testing.T) {
+	assert.Len(t, messages(t, "Containerfile", "FROM alpine:3\n"), 1)
+	assert.Len(t, messages(t, "x/app.Containerfile", "FROM alpine:3\n"), 1)
+	assert.Len(t, messages(t, "deploy/stack.yml", "services:\n  a:\n    image: redis:7\n"), 1, "a Compose file by content")
+	assert.Empty(t, messages(t, "deploy/other.yml", "services: [a, b]\nimage: redis:7\n"), "not a Compose file")
+	got := messages(t, "a_test.go", "package a\nvar r = testcontainers.ContainerRequest{\n\tImage:\n\t\t\"nginx:1\",\n}\n")
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], "a_test.go:4:")
+	assert.Len(t, messages(t, "b_test.go", "package a\nvar c, _ = postgres.Run(ctx,\n\t\"postgres:16-alpine\")\n"), 1)
 }
