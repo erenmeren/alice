@@ -433,13 +433,14 @@ current) on two listeners:
 - The **internal health listener** (`ALICE_HEALTH_ADDR`, default `127.0.0.1:8081`, inside the container) has no
   request limit. The container healthcheck (`alice healthcheck`) and orchestrators use it.
 - The **public HTTPS listener** serves both too. There `/healthz` asks the database, so it answers at most 60
-  requests a minute per client address and then `ALC-SYS-0005` (429 with `Retry-After`). Point external
-  monitoring at it no more than once a second, or use `/livez`, which is not limited.
+  requests a minute per client address and then `ALC-SYS-0005` (429 with `Retry-After`). This limit is counted
+  on its own: probes never make sign-in from the same address wait. Point external monitoring at it no more
+  than once a second, or use `/livez`, which is not limited.
 
 Requests that carry a session cookie, a setup cookie or an API token that Alice does not know (wrong, expired,
 revoked) are limited to 60 a minute per client address, counted before the database is asked; after that such
-requests get `ALC-SYS-0005` without a lookup. People whose session or token Alice accepted in the last five
-minutes are not affected, nor are requests without any credential (the sign-in page and sign-in itself have their
+requests get `ALC-SYS-0005` without a lookup. People whose session or token this Alice process accepted in the
+last 30 minutes (the session idle timeout) are not affected, nor are requests without any credential (the sign-in page and sign-in itself have their
 own limits). When Alice refuses a session cookie it tells the browser to delete it, so a stale cookie stops
 counting. Alice tells clients apart by address: behind a reverse proxy, set `ALICE_TRUSTED_PROXIES` to the
 proxy's address, otherwise everyone shares the proxy's address and one client's bad credentials can make others

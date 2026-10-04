@@ -170,6 +170,7 @@ const (
 	limitNone                      // no limit (health probes)
 	limitLogin                     // 10 per minute per IP (password and setup-code guessing)
 	limitMFA                       // 5 per minute per IP (verification codes)
+	limitHealth                    // 60 per minute per IP in a bucket of its own (public /healthz, AUD-16)
 )
 
 // route is one documented operation. The route table is the single source of
@@ -197,11 +198,19 @@ type server struct {
 	badCreds *ratelimit.Limiter
 	// recent: credentials validated or issued in the last recentLifetime; they skip badCreds.
 	recent *ratelimit.Recent
+	// rotated: session cookies replaced by a rotation in the last rotatedLifetime; a 401 for
+	// them never deletes the cookie (it would delete the new one in a response race).
+	rotated *ratelimit.Recent
+	healthz *ratelimit.Limiter // public /healthz, per IP: 60/min
 }
 
 const (
-	recentLifetime = 5 * time.Minute // S2: "a few minutes"; every successful lookup starts it over
-	recentMax      = 4096            // entries; each is a 32-byte keyed hash and a time
+	// recentLifetime is the session idle timeout (ruling on S2): every session this process
+	// validated and that has not idled out passes the block; each successful lookup slides it.
+	recentLifetime  = auth.SessionIdle
+	recentMax       = 16384 // entries; each is a 32-byte keyed hash and a time (Recent)
+	rotatedLifetime = time.Minute
+	rotatedMax      = 4096
 )
 
 func newServer(d Deps) *server {
@@ -217,6 +226,8 @@ func newServer(d Deps) *server {
 
 		badCreds: ratelimit.New(d.Clock, 60, time.Minute),
 		recent:   ratelimit.NewRecent(d.Clock, recentLifetime, recentMax),
+		rotated:  ratelimit.NewRecent(d.Clock, rotatedLifetime, rotatedMax),
+		healthz:  ratelimit.New(d.Clock, 60, time.Minute),
 	}
 }
 
@@ -245,6 +256,8 @@ func (s *Server) ResetLimits() {
 	s.s.mfa.Reset()
 	s.s.badCreds.Reset()
 	s.s.recent.Reset()
+	s.s.rotated.Reset()
+	s.s.healthz.Reset()
 }
 
 // NewHandler returns the public HTTPS handler.
@@ -286,12 +299,12 @@ func (s *server) register(mux *http.ServeMux, routes []route) {
 }
 
 // probeRoutes are served on both the public and the internal health listener. /healthz asks the
-// database, so on the public listener it has the anonymous per-address limit (AUD-16); the
+// database, so on the public listener it has a per-address limit of its own (AUD-16); the
 // internal listener (container healthcheck, orchestrators) and /livez stay unlimited.
 func (s *server) probeRoutes(public bool) []route {
 	health := limitNone
 	if public {
-		health = limitDefault
+		health = limitHealth
 	}
 	return []route{
 		{method: http.MethodGet, pattern: "/livez", perm: rbac.Public, limit: limitNone, handler: func(w http.ResponseWriter, _ *http.Request) {

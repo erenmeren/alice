@@ -234,7 +234,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 
 **Meaning.** A rate limit was reached (HTTP 429, retryable). The `Retry-After` header says how many seconds to wait.
 
-**Likely cause.** More than 300 requests per minute for one session or token, more than 60 per minute from one address without signing in (`/healthz` on the public port included), more than 60 per minute from one address with a session cookie or API token Alice does not accept (sessions and tokens Alice accepted in the last five minutes are exempt), more than 10 sign-in attempts or 5 verification codes per minute from one address.
+**Likely cause.** More than 300 requests per minute for one session or token, more than 60 per minute from one address without signing in, more than 60 calls of `/healthz` on the public port per minute from one address, more than 60 per minute from one address with a session cookie or API token Alice does not accept (sessions and tokens Alice accepted in the last 30 minutes are exempt), more than 10 sign-in attempts or 5 verification codes per minute from one address.
 
 **What to do.** Wait for the time in `Retry-After`. If many people share one address through a proxy, ask the administrator to set `ALICE_TRUSTED_PROXIES` so Alice sees real client addresses.
 

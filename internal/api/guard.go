@@ -77,7 +77,7 @@ func (s *server) guard(rt route) http.HandlerFunc {
 			}
 			rt.handler(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
 		case rbac.DenyUnauthenticated:
-			a.clearStaleCookies(w)
+			s.clearStaleCookies(w, a)
 			if policy.Setup {
 				s.writeError(w, r, ErrSetupSessionExpired)
 				return
@@ -120,14 +120,18 @@ type presentedCred struct {
 	value  string
 }
 
-// clearStaleCookies deletes, with the attributes they were set with, the cookies whose lookup
+// clearStaleCookies deletes, with the attributes they were set with, the cookies of a whose lookup
 // failed, so a browser stops sending a dead session (AUD-16). A cookie that resolved is kept:
-// a pending session refused by a route that needs a signed-in user still needs it for MFA.
-func (a authResult) clearStaleCookies(w http.ResponseWriter) {
+// a pending session refused by a route that needs a signed-in user still needs it for MFA. A
+// session cookie that a rotation replaced within the last minute (s.rotated) is kept too: the
+// answer to a request sent just before the rotation may arrive after the new cookie, and
+// deleting by name would then delete the new one; that request still gets its 401.
+func (s *server) clearStaleCookies(w http.ResponseWriter, a authResult) {
 	for _, c := range a.failed {
-		if c.cookie != "" {
-			setCookie(w, c.cookie, "", -1)
+		if c.cookie == "" || (c.cookie == sessionCookie && s.rotated.Contains(c.value)) {
+			continue
 		}
+		setCookie(w, c.cookie, "", -1)
 	}
 }
 
@@ -148,17 +152,21 @@ func presentedCredentials(r *http.Request) []presentedCred {
 }
 
 // authenticateLimited is authenticate behind the per-address limit on failing credentials
-// (AUD-16). A request without any credential is never limited here. A request whose credential
-// this process validated or issued in the last few minutes (s.recent) is not limited either; that
-// only skips the limit, as authenticate still looks the credential up and alone decides who the
-// caller is. Any other request with a credential takes a token from s.badCreds before the lookup,
-// so no more than the bucket allows reaches the database even under concurrency; the token is
-// given back when the credential resolves, so only failures count. It writes the 429 or 503
-// itself and returns false then.
+// (AUD-16). A request without any credential is never limited here. A request whose first looked-up
+// credential this process validated or issued within the session idle timeout (s.recent) is not
+// limited either; that only skips the limit, as authenticate still looks the credential up and
+// alone decides who the caller is. Any other request with a credential takes a token from
+// s.badCreds before the lookup, so no more than the bucket allows reaches the database even under
+// concurrency. The token is given back only when the lookup completed and no presented
+// credential failed: a lookup that ends in an error (the client went away, the database failed)
+// keeps it, so aborted requests cannot buy unlimited lookups. It writes the 429 or 503 itself and
+// returns false then.
 func (s *server) authenticateLimited(w http.ResponseWriter, r *http.Request, ipKey string) (authResult, bool) {
 	creds := presentedCredentials(r)
 	reserved := false
-	if len(creds) > 0 && !s.anyRecent(creds) {
+	// Only the first credential decides: authenticate looks them up in order, so a remembered
+	// second credential must not shield a garbage first one.
+	if len(creds) > 0 && !s.recent.Contains(creds[0].value) {
 		ok, retry := s.badCreds.Allow(ipKey)
 		if !ok {
 			s.writeRateLimited(w, r, retry)
@@ -168,10 +176,7 @@ func (s *server) authenticateLimited(w http.ResponseWriter, r *http.Request, ipK
 	}
 	a, err := s.authenticate(r)
 	if err != nil {
-		if reserved {
-			s.badCreds.Refund(ipKey) // the backend failed, not the credential
-		}
-		s.authUnavailable(w, r, err)
+		s.authUnavailable(w, r, err) // the token stays spent
 		return authResult{}, false
 	}
 	for _, c := range a.failed {
@@ -179,27 +184,17 @@ func (s *server) authenticateLimited(w http.ResponseWriter, r *http.Request, ipK
 	}
 	if a.p.Kind != rbac.Anonymous {
 		s.recent.Add(a.credential)
+	}
+	switch {
+	case len(a.failed) == 0:
 		if reserved {
 			s.badCreds.Refund(ipKey)
 		}
-		return a, true
+	case !reserved:
+		s.badCreds.Allow(ipKey) // a remembered credential failed: it counts like any other
 	}
-	if len(a.failed) > 0 {
-		if !reserved {
-			s.badCreds.Allow(ipKey) // a remembered credential failed: it counts like any other
-		}
-		a.failedCharged = true
-	}
+	a.failedCharged = len(a.failed) > 0 && a.p.Kind == rbac.Anonymous
 	return a, true
-}
-
-func (s *server) anyRecent(creds []presentedCred) bool {
-	for _, c := range creds {
-		if s.recent.Contains(c.value) {
-			return true
-		}
-	}
-	return false
 }
 
 // authenticate resolves the caller: the principal, the cookie value the CSRF token must be bound
@@ -271,7 +266,14 @@ func (s *server) authUnavailable(w http.ResponseWriter, r *http.Request, err err
 // sign-in of others behind the same address uses (AUD-16).
 // It writes the 429 response itself and returns false when the caller is over a limit.
 func (s *server) allowRate(w http.ResponseWriter, r *http.Request, class limitClass, p auth.Principal, ipKey string, failedCharged bool) bool {
-	if class == limitNone {
+	switch class {
+	case limitNone:
+		return true
+	case limitHealth: // its own per-address bucket: probes never make sign-in wait
+		if ok, retry := s.healthz.Allow(ipKey); !ok {
+			s.writeRateLimited(w, r, retry)
+			return false
+		}
 		return true
 	}
 	checks := make([]func() (bool, time.Duration), 0, 2)

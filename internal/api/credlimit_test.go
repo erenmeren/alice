@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,11 +10,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/auth"
+	"alice/internal/platform/clock"
 	"alice/internal/rbac"
 	"alice/internal/setup"
 )
@@ -384,4 +387,140 @@ func TestResetLimitsClearsTheFailedCredentialBucket(t *testing.T) {
 	require.Equal(t, map[int]int{http.StatusUnauthorized: 60, http.StatusTooManyRequests: 1}, floodGarbage(h, "/api/v1/version", 61, nil))
 	srv.ResetLimits()
 	assert.Equal(t, map[int]int{http.StatusUnauthorized: 1}, floodGarbage(h, "/api/v1/version", 1, nil))
+}
+
+// Fix round 1: a lookup that ends in an error (the client went away, or the database failed)
+// keeps its token: aborting requests mid-lookup must not buy unlimited lookups.
+func TestFailedLookupsKeepTheirToken(t *testing.T) {
+	for name, cause := range map[string]error{
+		"cancelled": fmt.Errorf("read session: %w", context.Canceled),
+		"database":  errors.New("read session: connection reset"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := testDeps(t, nil)
+			lookups := 0
+			d.Auth.(*fakeAuth).AuthenticateFn = func(context.Context, string) (auth.Principal, error) {
+				lookups++
+				return auth.Principal{}, cause
+			}
+			h := NewHandler(d)
+			codes := floodGarbage(h, "/api/v1/version", 500, nil)
+			assert.Equal(t, 60, lookups)
+			assert.Equal(t, 440, codes[http.StatusTooManyRequests])
+		})
+	}
+}
+
+// Fix round 1: a garbage session cookie next to a valid setup cookie is looked up first, so it
+// is limited like any garbage (the valid setup cookie does not shield it).
+func TestGarbageSessionNextToValidSetupCookieIsBounded(t *testing.T) {
+	d := testDeps(t, nil)
+	c := newCountingAuth(&d)
+	h, _ := guardedHandler(t, d, rbac.Setup, limitDefault)
+	codes := map[int]int{}
+	for i := range 100 {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/probe", nil)
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: fmt.Sprintf("garbage-%d", i)})
+		req.AddCookie(&http.Cookie{Name: setupCookie, Value: "setup-ok"})
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		codes[rec.Code]++
+	}
+	assert.Equal(t, 60, c.count())
+	assert.Equal(t, 40, codes[http.StatusTooManyRequests])
+}
+
+// Fix round 1 (ruling): a credential stays remembered for the session idle timeout, sliding.
+func TestRecentlyValidatedForTheSessionIdleTimeout(t *testing.T) {
+	d := testDeps(t, nil)
+	newCountingAuth(&d)
+	fake := d.Clock.(*clock.Fake)
+	h := NewHandler(d)
+	require.Equal(t, http.StatusOK, call(h, http.MethodGet, "/api/v1/version", "operator", "").Code)
+	fake.Advance(10 * time.Minute)
+	require.Equal(t, map[int]int{http.StatusUnauthorized: 60}, floodGarbage(h, "/api/v1/version", 60, nil))
+	require.Equal(t, map[int]int{http.StatusTooManyRequests: 1}, floodGarbage(h, "/api/v1/version", 1, nil))
+	assert.Equal(t, http.StatusOK, call(h, http.MethodGet, "/api/v1/version", "operator", "").Code, "10 minutes idle: still passes")
+	fake.Advance(auth.SessionIdle - time.Second)
+	require.Equal(t, map[int]int{http.StatusUnauthorized: 60}, floodGarbage(h, "/api/v1/version", 60, nil), "the bucket refilled")
+	assert.Equal(t, http.StatusOK, call(h, http.MethodGet, "/api/v1/version", "operator", "").Code, "the lifetime slid with the last lookup")
+	fake.Advance(auth.SessionIdle)
+	require.Equal(t, map[int]int{http.StatusUnauthorized: 60}, floodGarbage(h, "/api/v1/version", 60, nil))
+	assert.Equal(t, http.StatusTooManyRequests, call(h, http.MethodGet, "/api/v1/version", "operator", "").Code, "idle longer than a session can be")
+}
+
+// Fix round 1: a stray request with a session cookie that a rotation (step-up, password change,
+// MFA verify) just replaced gets its 401 without the deleting Set-Cookie, so a late answer can
+// never delete the new cookie; an unrelated stale cookie is still deleted.
+func TestRotatedAwayCookieIsNotDeleted(t *testing.T) {
+	type rotation struct {
+		path, from, to, body string
+		setup                func(fa *fakeAuth, rotate func() auth.SessionResult)
+	}
+	for name, rt := range map[string]rotation{
+		"step-up": {"/api/v1/auth/stepup", "admin", "admin2", `{"code":"123456"}`, func(fa *fakeAuth, rotate func() auth.SessionResult) {
+			fa.StepUpFn = func(context.Context, auth.Principal, string, auth.Meta) (auth.SessionResult, error) {
+				return rotate(), nil
+			}
+		}},
+		"password change": {"/api/v1/auth/password", "operator", "operator2", `{"current_password":"a","new_password":"b"}`, func(fa *fakeAuth, rotate func() auth.SessionResult) {
+			fa.ChangePasswordFn = func(context.Context, auth.Principal, string, string, auth.Meta) (auth.SessionResult, error) {
+				return rotate(), nil
+			}
+		}},
+		"mfa verify": {"/api/v1/auth/mfa/verify", "pending", "signed-in", `{"code":"123456"}`, func(fa *fakeAuth, rotate func() auth.SessionResult) {
+			fa.VerifyMFAFn = func(context.Context, auth.Principal, auth.MFAInput, auth.Meta) (auth.SessionResult, error) {
+				return rotate(), nil
+			}
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := testDeps(t, nil)
+			c := newCountingAuth(&d)
+			fake := d.Clock.(*clock.Fake)
+			rt.setup(d.Auth.(*fakeAuth), func() auth.SessionResult {
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				p := c.sessions[rt.from]
+				p.Kind = rbac.UserSession
+				delete(c.sessions, rt.from)
+				c.sessions[rt.to] = p
+				return auth.SessionResult{Token: rt.to}
+			})
+			h := NewHandler(d)
+			rec := call(h, http.MethodPost, rt.path, rt.from, rt.body)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+			stray := call(h, http.MethodGet, "/api/v1/auth/session", rt.from, "")
+			assert.Equal(t, http.StatusUnauthorized, stray.Code)
+			assert.Empty(t, stray.Header().Values("Set-Cookie"), "a late answer must not delete the new cookie")
+			assert.Equal(t, http.StatusOK, call(h, http.MethodGet, "/api/v1/version", rt.to, "").Code)
+
+			other := call(h, http.MethodGet, "/api/v1/auth/session", "expired", "")
+			assert.NotNil(t, clearedCookie(other, sessionCookie), "an unrelated stale cookie is still deleted")
+
+			fake.Advance(61 * time.Second)
+			late := call(h, http.MethodGet, "/api/v1/auth/session", rt.from, "")
+			assert.NotNil(t, clearedCookie(late, sessionCookie), "after a minute the old cookie is just stale")
+		})
+	}
+}
+
+// Fix round 1: the public /healthz has its own per-address bucket; a load balancer probing from
+// the clients' shared address never makes their sign-in or anonymous requests wait.
+func TestHealthzHasItsOwnBucket(t *testing.T) {
+	d := testDeps(t, nil)
+	d.Auth.(*fakeAuth).LoginFn = func(context.Context, string, string, auth.Meta) (auth.LoginResult, error) {
+		return auth.LoginResult{}, auth.ErrInvalidCredentials
+	}
+	h := NewHandler(d)
+	for range 60 {
+		require.Equal(t, http.StatusOK, do(h, http.MethodGet, "/healthz", nil).Code)
+	}
+	require.Equal(t, http.StatusTooManyRequests, do(h, http.MethodGet, "/healthz", nil).Code)
+	assert.Equal(t, http.StatusOK, call(h, http.MethodGet, "/api/v1/i18n/locales", "", "").Code)
+	assert.Equal(t, http.StatusUnauthorized, call(h, http.MethodPost, "/api/v1/auth/login", "", `{"username":"x","password":"y"}`).Code)
+	for range 58 { // with the two above: the anonymous bucket's whole 60, untouched by /healthz
+		require.Equal(t, http.StatusOK, call(h, http.MethodGet, "/api/v1/i18n/locales", "", "").Code)
+	}
 }
