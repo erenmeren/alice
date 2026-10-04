@@ -12,7 +12,7 @@ import { formatDateTime } from '../datetime';
 const COLORS: Record<BannerSeverity, string> = { info: 'blue', warning: 'yellow', caution: 'orange', danger: 'red' };
 
 // Banner parameters that are instants; they are shown in the reader's language and time zone.
-const TIME_PARAMS = new Set(['ends_at', 'ended_at', 'valid_until', 'valid_from', 'locks_at', 'system_time', 'last_seen']);
+const TIME_PARAMS = new Set(['ends_at', 'ended_at', 'valid_until', 'valid_from', 'locks_at', 'system_time', 'last_seen', 'last_checked']);
 
 // bannerValues turns the server's parameters into translation values. days_left and
 // jump_days also become "count", so i18next picks the singular or plural sentence.

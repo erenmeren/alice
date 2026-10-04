@@ -50,6 +50,34 @@ describe('license banners', () => {
     expect(within(banner).getByRole('link', { name: 'Open the License page' })).toHaveAttribute('href', '/license');
   });
 
+  it('announces an unchecked license to everyone, with the time of the last check, next to a lock (AUD-02)', async () => {
+    const unverified: LicenseBanner = { kind: 'unverified', severity: 'danger', params: { last_checked: '2026-10-04T06:15:00Z' } };
+    server.use(...sessionHandlers(sessionFor('operator')));
+    useStatus(locked, unverified);
+    await renderRoute('/');
+    const banner = await screen.findByTestId('license-banner-unverified');
+    expect(banner).toHaveAttribute('role', 'alert');
+    expect(banner).toHaveTextContent(/^Alice could not check its license since \w{3} \d{1,2}, 2026, \d{1,2}:\d{2}/);
+    expect(banner).toHaveTextContent('Changes to managed systems are paused until the check succeeds.');
+    // Tasks paused by it are not held: they stay queued and start by themselves.
+    expect(banner).toHaveTextContent('show as “Waiting to start” and start by themselves');
+    expect(banner).not.toHaveTextContent('2026-10-04T06:15:00Z');
+    expect(screen.getByTestId('license-banner-locked')).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
+  it('words the unchecked license in Turkish', async () => {
+    const unverified: LicenseBanner = { kind: 'unverified', severity: 'danger', params: { last_checked: '2026-10-04T06:15:00Z' } };
+    server.use(...sessionHandlers(sessionFor('auditor', 'tr')));
+    useStatus(unverified);
+    await renderRoute('/', { languages: ['tr-TR'] });
+    const banner = await screen.findByTestId('license-banner-unverified');
+    expect(banner).toHaveTextContent('Alice lisansını');
+    expect(banner).toHaveTextContent('Denetim başarılı olana kadar yönetilen sistemlerdeki değişiklikler duraklatıldı.');
+    expect(banner).not.toHaveTextContent('2026-10-04T06:15:00Z');
+    expectNoRawKeys();
+  });
+
   it('announces grace and lock as alerts', async () => {
     server.use(...sessionHandlers(sessionFor('auditor')));
     useStatus(grace, locked);

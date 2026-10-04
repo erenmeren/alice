@@ -502,7 +502,8 @@
       "clock_jump_other": "Sunucu saati {{count}} gün ileri atladı. Alice 24 saat boyunca lisans denetimlerinde önceki zamanı kullanır. Saatin doğru olduğunu doğrulayın veya satıcınızla iletişime geçin.",
       "pending": "Yeni bir lisans ({{license_id}}) şu tarihte başlıyor: {{valid_from}}. O zamana kadar mevcut lisans kullanılır.",
       "over_limit": "Kullanımdaki hedef sayısı {{used}}, lisanslı hedef sayısı {{max}}. Sınırın altına inene kadar yeni hedef eklenemez.",
-      "limit_reached": "Lisanslı {{max}} hedefin tamamını kullanıyorsunuz. Daha fazla hedef için satıcınızdan lisansınızı artırmasını isteyin."
+      "limit_reached": "Lisanslı {{max}} hedefin tamamını kullanıyorsunuz. Daha fazla hedef için satıcınızdan lisansınızı artırmasını isteyin.",
+      "unverified": "Alice lisansını {{last_checked}} tarihinden beri denetleyemedi. Denetim başarılı olana kadar yönetilen sistemlerdeki değişiklikler duraklatıldı. Bu sırada istenen görevler “Başlamayı bekliyor” olarak görünür ve denetimden sonra kendiliğinden başlar."
     },
     "title": "Lisans",
     "change": "{{from}} → {{to}}",

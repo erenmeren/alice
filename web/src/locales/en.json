@@ -502,7 +502,8 @@
       "clock_jump_other": "The server clock jumped forward by {{count}} days. For 24 hours Alice keeps using the previous time for license checks. Confirm the time is correct, or contact your vendor.",
       "pending": "A new license ({{license_id}}) starts on {{valid_from}}. The current license stays in use until then.",
       "over_limit": "You use {{used}} of {{max}} licensed targets. You cannot add more until you are within the limit.",
-      "limit_reached": "You are using all {{max}} licensed targets. To add more, ask your vendor to increase your license."
+      "limit_reached": "You are using all {{max}} licensed targets. To add more, ask your vendor to increase your license.",
+      "unverified": "Alice could not check its license since {{last_checked}}. Changes to managed systems are paused until the check succeeds. Tasks requested meanwhile show as “Waiting to start” and start by themselves after it."
     },
     "title": "License",
     "change": "{{from}} → {{to}}",
