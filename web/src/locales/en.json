@@ -642,7 +642,7 @@
     "custom_location": "A certificate file is outside the usual certificate folders.",
     "key_group_open": "A private key file belongs to a user other than root or can be read by a group or by others.",
     "certificate_block_dropped": "A certificate file contains a block that is not a certificate. Alice ignored it.",
-    "account_name_unsupported": "Alice did not list the SSH keys of the account with user ID {{uid}}: its name is longer than 32 characters or has characters Alice does not support. Run getent passwd {{uid}} on the server to find it.",
+    "account_name_unsupported": "Alice did not list the SSH keys of the account with user ID {{uid}}: its name is longer than 32 characters, starts with a dot or a hyphen, is made only of digits, or has characters Alice does not support. Run getent passwd {{uid}} on the server to find it.",
     "account_home_unsupported": "Alice did not list the SSH keys of the account with user ID {{uid}}: its home directory in /etc/passwd is not a plain absolute path. Run getent passwd {{uid}} on the server to find it.",
     "account_id_unsupported": "Alice did not list the SSH keys of the account with user ID {{uid}}: its user or group ID in /etc/passwd is not written as a plain number. Run getent passwd {{uid}} on the server to find it.",
     "accounts_nul_byte": "The file /etc/passwd on this server contains a NUL byte, so the list of accounts may be incomplete. Check the file.",
