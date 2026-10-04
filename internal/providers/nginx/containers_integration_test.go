@@ -669,6 +669,9 @@ func TestRealNginx(t *testing.T) {
 			run("user_owned_directory", h.testUserDirectory)
 			run("config_file_writable", h.testWritableConfig)
 			run("busy", h.testBusy)
+			run("name_outside_vocabulary", h.testNameOutsideVocabulary)
+			run("fence", h.testFence)
+			run("nginx_not_running", h.testNginxNotRunning)
 			assert.Empty(t, h.staged(), "no staged file of any transaction is left behind (S2)")
 		})
 	}

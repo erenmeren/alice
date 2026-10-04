@@ -141,10 +141,12 @@ func (h *rnHost) testSudo(t *testing.T) {
 	require.NoError(t, err)
 	probe, err := linuxssh.CmdTLSProbe("127.0.0.1", 9, "", helperproto.ProbeAny)
 	require.NoError(t, err)
+	fence, err := linuxssh.CmdNginxFence(uuid.New()) // its own operation: the status below reads op's
+	require.NoError(t, err)
 	// Every built line: sudo lets it through and the helper answers (stdin is empty, so nothing is
 	// written: nginx-deploy and authkeys-write refuse the content).
 	for _, c := range []linuxssh.HelperCommand{linuxssh.CmdSSHDDump(), linuxssh.CmdHostKeys(), linuxssh.CmdAuthKeysList(), read, write, cleanup,
-		linuxssh.CmdNginxDump(), linuxssh.CmdNginxTest(), deploy, restore, status} {
+		linuxssh.CmdNginxDump(), linuxssh.CmdNginxTest(), deploy, restore, status, fence} {
 		_, out := h.execAs(asSvc, "sh", "-c", c.Line()+" </dev/null")
 		assert.NotRegexp(t, sudoRefused, out, "%s: sudo lets the built line through", c.Subcommand())
 		assert.Contains(t, out, `"ok":`, "%s: the helper ran and answered", c.Subcommand())
@@ -179,6 +181,7 @@ func (h *rnHost) testSudo(t *testing.T) {
 		{"nginx-restore", "sudo"}, {"nginx-restore " + o, "sudo"}, {"nginx-restore --op " + o + " extra", "sudo"},
 		{"nginx-restore --op " + o[:35], "sudo"}, {"nginx-status --op", "sudo"}, {"nginx-status --op " + o + " --op " + o, "sudo"},
 		{"nginx-status --op " + o + " extra", "sudo"},
+		{"nginx-fence", "sudo"}, {"nginx-fence --op", "sudo"}, {"nginx-fence --op " + o + " extra", "sudo"}, {"nginx-fence --op " + o[:35], "sudo"},
 		{dep(rnWWW, rnWWWKey, "extra"), "sudo"}, {dep(rnWWW, rnWWWKey) + "0", "sudo"},
 		{"nginx-deploy --op " + o + " --key " + rnWWWKey + " --cert " + rnWWW + " --expect-cert-sha256 " + sha + " --content-sha256 " + sha, "sudo"},
 		{"nginx-deploy --op " + o + " --cert " + rnWWW + " --key " + rnWWWKey + " --expect-cert-sha256 " + sha, "sudo"},
@@ -1224,4 +1227,90 @@ func outcomeMatchesJournal(t *testing.T, out providers.DeployOutcome, phase stri
 	w, ok := want[out.Result]
 	require.True(t, ok, "an outcome F-08 can give: %+v", out)
 	assert.Equal(t, w, phase, "the outcome %s agrees with the journal", out.Result)
+}
+
+
+// testNameOutsideVocabulary (final review A1-I1): a pair whose root-owned links resolve into an
+// acme.sh-style "*.example.test" directory is discovered unsupported (name_not_allowed) and a
+// deployment forced onto it is refused before anything is written (no operation directory).
+func (h *rnHost) testNameOutsideVocabulary(t *testing.T) {
+	const dir, conf = "/etc/nginx/ssl/*.wild.example.test", "/etc/nginx/conf.d/zz-wild.conf"
+	const crt, key = rnSSL + "/wild.crt", rnSSL + "/wild.key"
+	l := h.leaf("wild.example.test", pki.ECDSA256)
+	h.sh("install -d -m 0755 -o root -g root '" + dir + "'")
+	h.write("/root/wild-cert", l.FullchainPEM, "root:root", 0o644)
+	h.write("/root/wild-key", l.KeyPEM, "root:root", 0o600)
+	h.sh("mv /root/wild-cert '" + dir + "/fullchain.cer' && mv /root/wild-key '" + dir + "/wild.example.test.key'" +
+		" && ln -s '" + dir + "/fullchain.cer' " + crt + " && ln -s '" + dir + "/wild.example.test.key' " + key)
+	h.write(conf, []byte("server {\n    listen 443 ssl;\n    server_name wild.example.test;\n    ssl_certificate "+crt+";\n    ssl_certificate_key "+key+";\n}\n"),
+		"root:root", 0o644)
+	h.reloadNginx()
+	defer func() {
+		h.sh("rm -f " + conf + " " + crt + " " + key + " && rm -rf '" + dir + "'")
+		delete(h.leaves, crt)
+		h.reloadNginx()
+	}()
+	h.leaves[crt] = l
+	c := h.location(crt)
+	assert.False(t, c.Location.Supported)
+	assert.Equal(t, providers.UnsupportedFile, c.Location.Unsupported)
+	assert.Equal(t, providers.CertProblemNameNotAllowed, c.Location.Problem)
+	before := h.sh("sha256sum '" + dir + "/fullchain.cer' '" + dir + "/wild.example.test.key'")
+	req := h.forced(crt)
+	out, _, err := h.deploy(nil, req)
+	require.Error(t, err)
+	assert.Equal(t, providers.DeployNoChange, out.Result, "%+v", out)
+	assert.Equal(t, reasonLocationUnsupported, out.Reason)
+	assert.Equal(t, before, h.sh("sha256sum '"+dir+"/fullchain.cer' '"+dir+"/wild.example.test.key'"))
+	code, _ := h.exec("test", "-e", helperproto.BackupRoot+"/"+req.OperationID.String())
+	assert.NotZero(t, code, "nothing was written: no operation directory")
+}
+
+// testFence (AUD-05) on a real host: a fenced operation is never carried out (the deployment of
+// that operation id is refused, nothing written), the fence is idempotent and status reports it; a
+// fence of a committed operation changes nothing and answers its journal.
+func (h *rnHost) testFence(t *testing.T) {
+	sess := h.session(nil)
+	c := h.location(rnWWW)
+	same := h.unchangedFiles(rnWWW)
+	req := h.request(c, h.leaf("www.example.test", pki.ECDSA256), true)
+	for range 2 {
+		st, err := sess.FenceDeployment(context.Background(), req.OperationID)
+		require.NoError(t, err)
+		assert.Equal(t, providers.PhaseFenced, st.Phase)
+	}
+	st, err := sess.DeploymentStatus(context.Background(), req.OperationID)
+	require.NoError(t, err)
+	assert.Equal(t, providers.PhaseFenced, st.Phase)
+	out, _, err := h.deploy(nil, req)
+	h.refusedUnchanged(out, err, reasonInterrupted, same)
+	h.servesRecorded(rnWWW, 443)
+
+	c = h.location(rnWWW)
+	next := h.leaf("www.example.test", pki.ECDSA256)
+	req2 := h.request(c, next, true)
+	out, _, err = h.deploy(nil, req2)
+	h.committed(out, err, req2, next, "remote")
+	st, err = h.session(nil).FenceDeployment(context.Background(), req2.OperationID)
+	require.NoError(t, err)
+	assert.Equal(t, providers.PhaseCommitted, st.Phase, "a journal found: answered, not fenced")
+	h.servesRecorded(rnWWW, 443)
+}
+
+// testNginxNotRunning (final review A1 m3): with Nginx stopped, a deployment is refused before
+// anything is written (systemctl is-active fails), not written and then failed at its reload.
+func (h *rnHost) testNginxNotRunning(t *testing.T) {
+	c := h.location(rnWWW)
+	same := h.unchangedFiles(rnWWW)
+	h.sh(nginxBin + " -s quit")
+	require.Eventually(t, func() bool {
+		code, _ := h.exec("pgrep", "-x", "nginx")
+		return code != 0
+	}, 30*time.Second, 100*time.Millisecond, "nginx stopped")
+	defer func() {
+		h.sh(nginxBin)
+		require.Eventually(t, func() bool { return len(h.workers()) > 0 }, 30*time.Second, 100*time.Millisecond, "nginx runs again")
+	}()
+	out, _, err := h.deploy(nil, h.request(c, h.leaf("www.example.test", pki.ECDSA256), true))
+	h.refusedUnchanged(out, err, "nginx.not_running", same)
 }
