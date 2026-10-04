@@ -105,10 +105,12 @@ func startCtrHost(t *testing.T, image, helper string) *ctrHost {
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			FromDockerfile: testcontainers.FromDockerfile{
-				Context:    filepath.Join("..", "..", "..", "test", "images", "sshd"),
-				Dockerfile: image + ".Dockerfile",
+				// The images TestRealNginx (internal/providers/nginx) uses too: Nginx is installed but
+				// not started, which changes nothing for these tests.
+				Context:    filepath.Join("..", "..", "..", "test", "images"),
+				Dockerfile: "sshd/" + image + ".Dockerfile",
 				Repo:       "alice-test/sshd-" + image,
-				Tag:        "phase3",
+				Tag:        "phase4",
 				KeepImage:  true,
 			},
 			ExposedPorts: []string{"22/tcp"},
@@ -363,7 +365,7 @@ func TestRealOpenSSH(t *testing.T) {
 
 			// Protocol 4 (Task 7): the nginx profile's sudoers lines let exactly the constructed
 			// command lines through, and sudo itself refuses every variation. The helper's own
-			// answer is not the point here (nginx is not installed): what matters is that the
+			// answer is not the point here (TestRealNginx drives nginx): what matters is that the
 			// helper ran, or did not.
 			alicePub := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(h.signer.PublicKey())))
 			nginxScript, err := SetupScript("nginx", AuthorizedKeysLine(alicePub, ""), true)

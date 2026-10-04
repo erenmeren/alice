@@ -1,11 +1,17 @@
 #!/bin/sh
-# TEST ONLY (the e2e SSH target image; never part of a release or of a real server).
+# TEST ONLY (the e2e SSH target image and the real-Nginx container matrix, test/images/sshd; never
+# part of a release or of a real server).
 # Installed as /usr/sbin/nginx, the fixed path alice-helper runs; the distribution's binary is
-# diverted to /usr/lib/alice-e2e/nginx (dpkg-divert) and every call is passed on to it unchanged,
-# except "nginx -t" while /etc/alice-e2e/test-mode (alice-e2e-test-mode) asks for a fault:
-#   fail-once  the next "nginx -t" fails as a broken configuration would, then ok (ANY nginx -t
-#              consumes it, including a connection test's nginx-test)
-#   fail       every "nginx -t" fails
+# moved to /usr/lib/alice-e2e/nginx (dpkg-divert on Debian and Ubuntu, mv on Rocky) and every call
+# is passed on to it unchanged, except "nginx -t" while /etc/alice-e2e/test-mode
+# (alice-e2e-test-mode) asks for a fault:
+#   fail-once   the next "nginx -t" fails as a broken configuration would, then ok (ANY nginx -t
+#               consumes it, including a connection test's nginx-test)
+#   fail        every "nginx -t" fails
+#   block-once  (the container matrix only) the next "nginx -t" writes "nginx -t" to
+#               /etc/alice-e2e/blocked and waits for one line on the FIFO /etc/alice-e2e/release
+#               (the test creates it): "go" runs nginx -t, anything else exits 1 without running it.
+#               It lets a test kill alice-helper at a known point of its transaction.
 # "nginx -T" (discovery and the deployment's configuration read) and "-s reload" are never changed,
 # so under fail discovery still reports the configuration valid.
 if [ "$#" -eq 1 ] && [ "$1" = "-t" ]; then
@@ -16,6 +22,13 @@ if [ "$#" -eq 1 ] && [ "$1" = "-t" ]; then
 		echo 'nginx: [emerg] unexpected "}" in /etc/nginx/conf.d/www.conf:1 (alice-e2e fault injection)' >&2
 		echo 'nginx: configuration file /etc/nginx/nginx.conf test failed' >&2
 		exit 1
+		;;
+	block-once)
+		echo ok >/etc/alice-e2e/test-mode
+		echo "nginx -t" >/etc/alice-e2e/blocked
+		read -r release </etc/alice-e2e/release || release=
+		rm -f /etc/alice-e2e/blocked
+		[ "$release" = go ] || exit 1
 		;;
 	esac
 fi

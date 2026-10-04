@@ -1,5 +1,6 @@
 #!/bin/sh
-# TEST ONLY (the e2e SSH target image; never part of a release or of a real server).
+# TEST ONLY (the e2e SSH target image and the real-Nginx container matrix, test/images/sshd; never
+# part of a release or of a real server).
 # The container runs no systemd, so this stands in for /usr/bin/systemctl, the fixed path
 # alice-helper runs. It handles exactly the two calls the helper makes and refuses anything else:
 #   systemctl reload nginx              -> /usr/sbin/nginx -s reload (what nginx.service's
@@ -9,7 +10,9 @@
 # serialised with other unit jobs. /etc/alice-e2e/reload-mode (alice-e2e-reload-mode) injects
 # faults for the deployment failure journeys: ok (default), fail-once (the next reload exits 1,
 # then ok), fail (every reload exits 1), noop (exit 0 without reloading: nginx keeps serving the
-# old certificate).
+# old certificate), and block-once (the container matrix only: the next reload writes "reload" to
+# /etc/alice-e2e/blocked and waits for one line on the FIFO /etc/alice-e2e/release; "go" reloads,
+# anything else exits 1 without reloading).
 mode=$(cat /etc/alice-e2e/reload-mode 2>/dev/null || echo ok)
 case "$*" in
 "reload nginx")
@@ -24,6 +27,13 @@ case "$*" in
 		exit 1
 		;;
 	noop) exit 0 ;;
+	block-once)
+		echo ok >/etc/alice-e2e/reload-mode
+		echo reload >/etc/alice-e2e/blocked
+		read -r release </etc/alice-e2e/release || release=
+		rm -f /etc/alice-e2e/blocked
+		[ "$release" = go ] || exit 1
+		;;
 	esac
 	exec /usr/sbin/nginx -s reload
 	;;
