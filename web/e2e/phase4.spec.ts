@@ -7,6 +7,7 @@ import {
   browserLocale,
   configMode,
   drainJobs,
+  drainUntil,
   expect,
   expectAccessible,
   expectWide,
@@ -14,7 +15,6 @@ import {
   fingerprintHex,
   fingerprintOf,
   firstSignIn,
-  freshCode,
   newCert,
   nginxReset,
   reloadMode,
@@ -57,6 +57,26 @@ const AUDITOR: Account = { username: 'deniz', fullName: 'Deniz Aksoy', password:
 // A Phase 4 journey prepares, discovers and deploys several times: more than the default 3 minutes.
 const JOURNEY_TIMEOUT = 8 * 60_000;
 
+// A few contract strings pinned as literals in both languages: most copy is read from the locale
+// files at run time (translator), which would follow an accidental change of these texts too.
+const PINNED: Record<Lang, { discover: string; verified: string; rolledBack: string }> = {
+  en: { discover: 'Discover', verified: 'The new certificate is live and verified.', rolledBack: 'Your server was restored to its previous certificate.' },
+  tr: { discover: 'Keşfet', verified: 'Yeni sertifika yayında ve doğrulandı.', rolledBack: 'Sunucunuz önceki sertifikasına geri döndürüldü.' },
+};
+
+// TIME matches a date and time as the app shows them (Intl medium date, short time), in English
+// ("Oct 4, 2026, 8:30 AM") and Turkish ("4 Eki 2026 08:30"): a year, then hours and minutes.
+const TIME = String.raw`\S[^.]*?\b20\d\d\b[^.]*?\b\d{1,2}[:.]\d{2}(?!\d)(?:[\s\u202f]?[AP]M)?`;
+
+// withTime is a locale text whose {{time}} must be an actual date and time.
+function withTime(t: Translate, key: string): RegExp {
+  const [before, after] = t(key, { time: '\u0000' }).split('\u0000');
+  return new RegExp(`${escapeRegExp(before)}${TIME}${escapeRegExp(after.replace(/\s+$/, ''))}`);
+}
+
+// The nginx helper subcommands of the profile today (cmd/alice-helper); the script must grant each.
+const NGINX_SUBCOMMANDS = ['nginx-dump', 'nginx-test', 'nginx-deploy', 'nginx-restore', 'nginx-status', 'nginx-fence'];
+
 async function json<T>(res: APIResponse, status?: number): Promise<T> {
   const text = await res.text();
   if (status !== undefined) expect(res.status(), text).toBe(status);
@@ -64,10 +84,24 @@ async function json<T>(res: APIResponse, status?: number): Promise<T> {
   return (text ? JSON.parse(text) : {}) as T;
 }
 
-// expectNginxSudoers proves the target got the nginx profile: its sudoers allow the deploy subcommand.
-function expectNginxSudoers(): void {
-  const lines = Number(targetExec(['sh', '-c', 'cat /etc/sudoers.d/* | grep -c "alice-helper nginx-deploy" || true']).trim());
-  expect(lines, 'nginx-deploy in the sudoers of the target (nginx profile installed)').toBeGreaterThan(0);
+// nginxSudoersLines are the nginx helper command lines the setup script installs, read from the
+// script itself (the sudoers text it writes), so the check follows the product.
+function nginxSudoersLines(script: string): string[] {
+  const lines = [...script.matchAll(/\/usr\/local\/libexec\/alice-helper nginx-[a-z]+[^\n]*/g)].map((m) => m[0].replace(/,?\s*\\?\s*$/, '').trim());
+  const subcommands = [...new Set(lines.map((l) => l.split(' ')[1]))].sort();
+  expect(subcommands, 'the nginx subcommands the setup script grants').toEqual([...NGINX_SUBCOMMANDS].sort());
+  return lines;
+}
+
+// expectNginxSudoers proves the target got the nginx profile: every nginx command line of the script
+// (nginx-fence included) is in the target's sudoers.
+function expectNginxSudoers(script: string): void {
+  const installed = targetExec(['sh', '-c', 'cat /etc/sudoers.d/*']);
+  for (const line of nginxSudoersLines(script)) expect(installed, `sudoers of the target grant: ${line}`).toContain(line);
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function chooseLanguage(page: Page, lang: Lang): Promise<void> {
@@ -81,18 +115,6 @@ async function nav(page: Page, t: Translate, key: string): Promise<void> {
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 }
 
-// answerStepUp confirms a step-up dialog with a fresh code if the server asks for one before done appears.
-async function answerStepUp(page: Page, request: APIRequestContext, lang: Lang, secret: string, done: Locator): Promise<void> {
-  const c = COPY[lang];
-  const stepUp = page.getByRole('dialog', { name: c.stepUpHeading });
-  await expect(stepUp.or(done).first()).toBeVisible();
-  if (await stepUp.isVisible()) {
-    await field(stepUp, c.code).fill(await freshCode(request, secret));
-    await stepUp.getByRole('button', { name: c.stepUpConfirm }).click();
-  }
-  await expect(done).toBeVisible();
-}
-
 // prepareAndAddInUI is owner steps 1–2 for an Nginx server, as a person does it: the nginx
 // profile's commands from the Servers page run on the target, then Add server with the type Nginx
 // server and the fingerprint compared with the one the server shows. It returns the server's id.
@@ -100,10 +122,10 @@ async function prepareAndAddInUI(page: Page, request: APIRequestContext, t: Tran
   await nav(page, t, 'nav.servers');
   await field(page, t('targets.prepare.profile')).selectOption('nginx');
   const script = (await page.getByTestId('setup-script').textContent()) ?? '';
-  expect(script).toContain('nginx-deploy');
+  expect(script).toContain('nginx-fence');
   await expect(page.getByRole('button', { name: t('targets.prepare.copy') })).toBeVisible();
   targetExec(['/usr/local/sbin/alice-e2e-prepare'], script);
-  expectNginxSudoers();
+  expectNginxSudoers(script);
 
   await page.getByRole('button', { name: t('targets.add') }).click();
   const dialog = page.getByRole('dialog', { name: t('targets.add') });
@@ -135,7 +157,7 @@ interface Target {
 async function prepareAndAddByApi(api: Api, request: APIRequestContext): Promise<string> {
   const key = await json<{ profiles: { nginx: { script: string } } }>(await api.get('/api/v1/ssh-keys/platform-key'));
   targetExec(['/usr/local/sbin/alice-e2e-prepare'], key.profiles.nginx.script);
-  expectNginxSudoers();
+  expectNginxSudoers(key.profiles.nginx.script);
   const created = await json<{ target: Target }>(
     await api.post('/api/v1/targets', { type: 'nginx', name: SERVER, host: 'sshtarget', port: 22, username: 'alice-svc' }),
     201,
@@ -143,19 +165,28 @@ async function prepareAndAddByApi(api: Api, request: APIRequestContext): Promise
   const id = created.target.id;
   const onServer = fingerprintOf(targetExec(['ssh-keygen', '-lf', HOST_KEY_PUB]));
   let hostKey: { id: string; fingerprint: string } | undefined;
-  await expect(async () => {
-    await drainJobs(request);
+  await drainUntil(request, async () => {
     const keys = await json<{ items: { id: string; status: string; fingerprint: string }[] }>(await api.get(`/api/v1/targets/${id}/host-keys`));
     hostKey = keys.items.find((k) => k.status === 'observed' && k.fingerprint === onServer);
     expect(hostKey).toBeDefined();
-  }).toPass({ timeout: 90_000 });
+  });
   await json(await api.post(`/api/v1/targets/${id}/host-keys/${hostKey!.id}/actions/confirm`, { fingerprint: hostKey!.fingerprint }), 202);
-  await expect(async () => {
-    await drainJobs(request);
+  await drainUntil(request, async () => {
     const locs = await json<{ items: { servers: { names: string[] }[] }[] }>(await api.get(`/api/v1/targets/${id}/certificate-locations`));
     expect(locs.items.flatMap((l) => l.servers.flatMap((s) => s.names))).toEqual(expect.arrayContaining([WWW, FILES, ...SITES]));
-  }).toPass({ timeout: 90_000 });
+  });
   return id;
+}
+
+// leafOf is the first certificate of a PEM chain (the website's own certificate, without the CA).
+function leafOf(pem: string): string {
+  const end = '-----END CERTIFICATE-----';
+  return pem.slice(0, pem.indexOf(end) + end.length) + '\n';
+}
+
+// certificatesInFile counts the certificates in a file on the target.
+function certificatesInFile(path: string): number {
+  return Number(targetExec(['sh', '-c', `grep -c 'BEGIN CERTIFICATE' ${path} || true`]).trim());
 }
 
 async function uploadByApi(api: Api, pair: PemPair, label: string): Promise<string> {
@@ -218,10 +249,6 @@ async function openDeployFromWebsite(page: Page, t: Translate, site: string, lab
   return dialog;
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 // openDeployment opens a deployment from the history by its certificate's name ("Open deployment:
 // <certificate>, <time>").
 async function openDeployment(page: Page, t: Translate, certificate: string): Promise<void> {
@@ -272,9 +299,14 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await runWizard(page, request, lang);
       const targetId = await prepareAndAddInUI(page, request, t);
 
+      // The pinned contract strings are still what the app shows (a locale drift fails here).
+      expect(t('locations.discover')).toBe(PINNED[lang].discover);
+      expect(t('deploy.succeeded')).toBe(PINNED[lang].verified);
+      expect(t('deploy.rolledBack')).toBe(PINNED[lang].rolledBack);
+
       // Discover: the websites with their state; the one with a variable path is not supported, says
       // why and offers no Deploy.
-      await page.getByRole('button', { name: t('locations.discover'), exact: true }).click();
+      await page.getByRole('button', { name: PINNED[lang].discover, exact: true }).click();
       await settle(request, page.getByText(t('targets.jobDone')));
       const www = websiteRow(page, t, WWW);
       await expect(www).toContainText(t('locations.ready'));
@@ -298,7 +330,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       const dialog = await openDeployFromWebsite(page, t, WWW, 'renewal-1');
       await expectAccessible(page, 'deploy dialog');
       await dialog.getByRole('button', { name: t('deploy.submit'), exact: true }).click();
-      await settle(request, dialog.getByText(t('deploy.succeeded')));
+      await settle(request, dialog.getByText(PINNED[lang].verified, { exact: true }));
       for (const step of ['backup', 'write', 'config_test', 'reload', 'verify']) await expectStep(dialog, t, step, 'ok');
       await expectAccessible(page, 'deploy dialog, live and verified');
       expect(served(WWW), 'the target serves the uploaded certificate').toBe(fingerprintHex(renewed.cert));
@@ -321,7 +353,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       const reloadDialog = await openDeployFromWebsite(page, t, WWW, 'renewal-2');
       await reloadDialog.getByRole('button', { name: t('deploy.submit'), exact: true }).click();
       reloadMode('fail-once');
-      await settle(request, reloadDialog.getByText(t('deploy.rolledBack')));
+      await settle(request, reloadDialog.getByText(PINNED[lang].rolledBack, { exact: true }));
       await expect(reloadDialog.getByRole('alert')).toContainText(t('errors.deployment.reload_failed.title'));
       await expectStep(reloadDialog, t, 'reload', 'failed');
       await expectStep(reloadDialog, t, 'restore', 'ok');
@@ -340,8 +372,14 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(testDialog.getByRole('alert')).toContainText(t('errors.deployment.config_test_failed.title'));
       await expectStep(testDialog, t, 'config_test', 'failed');
       await expectStep(testDialog, t, 'reload', 'notRun');
+      await expectAccessible(page, 'deploy dialog, restored after nginx -t failed');
       expect(served(WWW), 'the previous certificate is served again').toBe(fingerprintHex(renewed.cert));
       await closeDeployDialog(testDialog, t);
+
+      // The certificate list in its normal state, at every width (375 px included).
+      await nav(page, t, 'nav.certificates');
+      await expect(page.getByTestId('certificates-table').getByRole('link', { name: 'renewal-3' })).toBeVisible();
+      await expectWide(page, 'certificates');
 
       // Owner step 5: the history lists the three deployments (the broken pair never became one).
       await nav(page, t, 'nav.deployments');
@@ -390,7 +428,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(page.getByTestId('deployment-state')).toHaveText(t('enum.deploymentState.recovering'));
       const recovery = page.getByTestId('recovery');
       await expect(recovery).toContainText(t('deployments.recovery.running'));
-      await expect(recovery).toContainText(t('deployments.recovery.next', { time: '' }).trim());
+      await expect(recovery).toContainText(withTime(t, 'deployments.recovery.next'));
       await expectAccessible(page, 'deployment page, outcome being confirmed');
 
       // Past the first-recovery delay the sweep queues the recovery, which reads the server's journal.
@@ -460,29 +498,50 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       const api = await apiAs(page);
       await api.stepUp(totpSecret);
       const targetId = await prepareAndAddByApi(api, request);
-      // One certificate for the five websites, first put in place through the API.
+      // A certificate's page deploys only to the websites that already use it (by design), so the
+      // five websites first get this certificate WITHOUT its chain, through the API (an incomplete
+      // chain confirmed by the Administrator). Uploading it again with the full chain completes the
+      // stored chain, and the batch from the UI then really writes, tests, reloads and verifies five
+      // websites: their files gain the CA certificate.
       const pair = newCert(SITES.join(','));
-      const certId = await uploadByApi(api, pair, 'five-sites');
+      const certId = await uploadByApi(api, { cert: leafOf(pair.cert), key: pair.key }, 'five-sites');
       const ids = await locationIds(api, targetId);
       const first = await json<{ deployments: { id: string }[] }>(
-        await api.post(`/api/v1/certificates/${certId}/deploy`, { location_ids: SITES.map((s) => ids[s]) }),
+        await api.post(`/api/v1/certificates/${certId}/deploy`, { location_ids: SITES.map((s) => ids[s]), confirm_incomplete_chain: true }),
         202,
       );
       expect(first.deployments).toHaveLength(SITES.length);
-      await expect(async () => {
-        await drainJobs(request);
+      await drainUntil(request, async () => {
         for (const d of first.deployments) {
           expect((await json<{ status: string }>(await api.get(`/api/v1/deployments/${d.id}`))).status).toBe('succeeded');
         }
-      }).toPass({ timeout: 120_000 });
-      for (const s of SITES) expect(served(s), s).toBe(fingerprintHex(pair.cert));
+      }, 120_000);
+      for (const s of SITES) {
+        expect(served(s), s).toBe(fingerprintHex(pair.cert));
+        expect(certificatesInFile(`/etc/nginx/ssl/${s.split('.')[0]}.crt`), `${s}: the leaf alone`).toBe(1);
+      }
 
-      // From the certificate's page: deploy it again to its five websites in one request.
-      const throttled: string[] = [];
+      // The same certificate uploaded again with its full chain: Alice completes the stored chain (200).
+      await page.reload();
+      const upload = await openUpload(page, t, pair, 'five-sites');
+      await upload.getByRole('button', { name: t('certificates.upload.submit') }).click();
+      await expect(upload.getByText(t('certificates.upload.chainCompleted'))).toBeVisible();
+      await expect(upload.getByText(t('certificates.upload.uploaded'))).toHaveCount(0);
+      await expectAccessible(page, 'upload dialog, chain completed');
+      await upload.getByRole('button', { name: t('ui.close') }).last().click();
+      await expect(page.getByRole('heading', { level: 1, name: 'five-sites' })).toBeVisible();
+      await expect(page.getByText(t('certificates.detail.chainComplete'))).toBeVisible();
+
+      // Every API response the browser gets from now on, with the time it arrived.
+      const responses: { at: number; path: string; method: string; status: number }[] = [];
       page.on('response', (r) => {
-        if (r.status() === 429) throttled.push(r.url());
+        const url = new URL(r.url());
+        if (url.pathname.startsWith('/api/')) responses.push({ at: Date.now(), path: url.pathname, method: r.request().method(), status: r.status() });
       });
-      await page.goto(`/certificates/${certId}`);
+      const deploymentReads = () => responses.filter((r) => r.method === 'GET' && r.path.startsWith('/api/v1/deployments/'));
+      // most is the largest number of the given responses within any 60 s.
+      const most = (rs: { at: number }[]) => Math.max(0, ...rs.map((r) => rs.filter((x) => x.at >= r.at && x.at < r.at + 60_000).length));
+
       await expect(page.getByRole('table', { name: t('certificates.detail.usedWhere') }).getByRole('row')).toHaveCount(SITES.length + 1);
       await page.getByRole('button', { name: t('certificates.detail.deploy'), exact: true }).click();
       const dialog = page.getByRole('dialog', { name: t('deploy.title') });
@@ -492,12 +551,42 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expectAccessible(page, 'deploy dialog with five websites');
       await dialog.getByRole('button', { name: t('deploy.submit'), exact: true }).click();
       const runs = dialog.getByTestId('deployment-run');
-      await settle(request, dialog.getByText(t('deploy.partial', { ok: 0, total: SITES.length })));
       await expect(runs).toHaveCount(SITES.length);
-      await expect(runs.filter({ hasText: t('deploy.unchanged') })).toHaveCount(SITES.length);
+      await expect(dialog.getByText(t('deploy.working'))).toBeVisible();
+      await expectAccessible(page, 'deploy dialog, deploying (working)');
+
+      // The five runs stay queued (nothing drains): the dialog keeps polling. Before the fix it read
+      // each deployment every second, 5 x 60 = 300 reads a minute, the whole session limit (300 a
+      // minute, internal/api/server.go). The budget (task 22) is one loop of at most 2 reads a second
+      // for any batch: at most 120 deployment reads in any minute (asserted: 125, timer slack), and
+      // 150 API requests of every kind together. The wait lasts a full minute of polling.
+      const pollStart = () => deploymentReads()[0]?.at ?? Date.now();
+      await expect
+        .poll(() => (deploymentReads().at(-1)?.at ?? 0) - pollStart(), { message: 'the dialog polls for a full minute', timeout: 100_000, intervals: [1_000] })
+        .toBeGreaterThanOrEqual(61_000);
+      test.info().annotations.push({
+        type: 'polling budget',
+        description: `${deploymentReads().length} deployment reads in ${Math.round(((deploymentReads().at(-1)?.at ?? 0) - pollStart()) / 1000)} s; most in a minute: ${most(deploymentReads())} deployment reads, ${most(responses)} API requests`,
+      });
+      expect(most(deploymentReads()), 'deployment reads in any minute (budget 120; before the fix 300)').toBeLessThanOrEqual(125);
+      expect(most(responses), 'API requests of every kind in any minute').toBeLessThanOrEqual(150);
+      expect(most(deploymentReads()), 'the dialog kept polling all minute').toBeGreaterThanOrEqual(60);
+      for (const id of new Set(deploymentReads().map((r) => r.path))) {
+        expect(deploymentReads().filter((r) => r.path === id).length, `${id} read during the minute`).toBeGreaterThanOrEqual(10);
+      }
+      expect(new Set(deploymentReads().map((r) => r.path)).size, 'every run is followed').toBe(SITES.length);
+      expect(responses.filter((r) => r.status === 429), 'no request was answered 429').toEqual([]);
+
+      // Now the jobs run: five real deployments, each verified.
+      await settle(request, dialog.getByText(t('deploy.partial', { ok: SITES.length, total: SITES.length })));
+      await expect(runs.filter({ hasText: PINNED[lang].verified })).toHaveCount(SITES.length);
+      await expect(dialog.getByText(t('deploy.partialUnchanged', { count: SITES.length }))).toHaveCount(0);
       await expectAccessible(page, 'deploy dialog, five websites finished');
-      expect(throttled, 'no request was answered 429').toEqual([]);
-      for (const s of SITES) expect(served(s), s).toBe(fingerprintHex(pair.cert));
+      expect(responses.filter((r) => r.status === 429), 'no request was answered 429').toEqual([]);
+      for (const s of SITES) {
+        expect(served(s), s).toBe(fingerprintHex(pair.cert));
+        expect(certificatesInFile(`/etc/nginx/ssl/${s.split('.')[0]}.crt`), `${s}: leaf and CA written by the batch`).toBe(2);
+      }
     });
 
     test('roles: an Administrator sets verification, an Operator deploys, an Auditor only reads', async ({ page, request }) => {
@@ -535,7 +624,9 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await field(settings, t('locations.verify.sni')).fill(WWW);
       await expectAccessible(page, 'verification settings');
       await settings.getByRole('button', { name: t('locations.verify.save') }).click();
-      await answerStepUp(page, request, lang, totpSecret, settings.getByText(t('locations.verify.saved')));
+      // Verification settings need no step-up (permission targets.manage): saved at once, never asked.
+      await expect(settings.getByText(t('locations.verify.saved'))).toBeVisible();
+      await expect(page.getByRole('dialog', { name: COPY[lang].stepUpHeading })).toHaveCount(0);
       await expectAccessible(page, 'verification settings saved');
       await page.keyboard.press('Escape');
       await expect(settings).toHaveCount(0);
@@ -594,11 +685,11 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await page.goto(`/servers/${targetId}`);
       await expect(websiteRow(page, t, WWW)).toBeVisible();
       configMode('broken');
-      await page.getByRole('button', { name: t('locations.discover'), exact: true }).click();
+      await page.getByRole('button', { name: PINNED[lang].discover, exact: true }).click();
       await settle(request, page.getByTestId('config-invalid'));
       const stale = page.getByTestId('stale-websites');
       await expect(stale).toContainText(t('locations.stale.title'));
-      await expect(stale).toContainText(t('locations.stale.help', { time: 'TIME' }).split('TIME')[0]);
+      await expect(stale).toContainText(withTime(t, 'locations.stale.help'));
       await expect(stale).toContainText(t('locations.deployUnavailable'));
       await expect(websiteRow(page, t, WWW)).toContainText(t('locations.ready'));
       await expect(page.getByRole('button', { name: t('locations.deployNamed', { site: WWW }) })).toBeDisabled();
@@ -653,6 +744,63 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await refused.getByRole('button', { name: t('deploy.submit'), exact: true }).click();
       await expect(refused.getByRole('alert')).toContainText(t('errors.license.locked.title'));
       await expectAccessible(page, 'deploy dialog refused by the license');
+    });
+
+    test('a deployment an administrator cancels while the license holds it ends cancelled and sends no failure email', async ({ page, request }) => {
+      test.setTimeout(JOURNEY_TIMEOUT);
+      const { totpSecret } = await runWizard(page, request, lang);
+      const api = await apiAs(page);
+      await api.stepUp(totpSecret);
+      const targetId = await prepareAndAddByApi(api, request);
+      await uploadByApi(api, newCert(WWW), 'cancel-me');
+      const before = served(WWW);
+      await page.goto(`/servers/${targetId}`);
+      const dialog = await openDeployFromWebsite(page, t, WWW, 'cancel-me');
+      await dialog.getByRole('button', { name: t('deploy.submit'), exact: true }).click();
+      await expect(dialog.getByText(t('deploy.working'))).toBeVisible();
+      await closeDeployDialog(dialog, t);
+
+      // The evaluation ends while the deployment waits: held, nothing sent.
+      await advanceClock(request, 31 * DAY_SECONDS);
+      await signIn(page, request, ADMIN, totpSecret);
+      await drainJobs(request);
+      // A new license unlocks Alice; the held job still waits for an Administrator (it never starts on its own).
+      const issued = await request.post('/test/license', { data: {} });
+      expect(issued.ok(), await issued.text()).toBe(true);
+      const admin = await apiAs(page);
+      await admin.stepUp(totpSecret);
+      await json(await admin.post('/api/v1/license', { license: ((await issued.json()) as { license: string }).license }));
+      await page.goto('/servers');
+      const panel = page.getByTestId('blocked-jobs');
+      const job = t('jobs.types.certificate.deploy');
+      await expect(panel.getByText(t('jobs.deploymentNotSent'))).toBeVisible();
+      await expectWide(page, 'servers with a held deployment');
+      await panel.getByRole('button', { name: t('jobs.discardNamed', { job }) }).click();
+      await expect(panel).toHaveCount(0);
+
+      // The sweep ends the deployment: cancelled, not a server failure; nothing was sent.
+      await runScheduled(request, 'deployment.recovery_sweep');
+      await drainJobs(request);
+      await nav(page, t, 'nav.deployments');
+      const row = page.getByTestId('deployment-row');
+      await expect(row).toHaveCount(1);
+      await expect(row).toContainText(t('deployments.cancelled'));
+      await openDeployment(page, t, 'cancel-me');
+      await expect(page.getByTestId('deployment-status')).toHaveText(t('deployments.cancelled'));
+      await expect(page.getByText(t('deploy.noChange'))).toBeVisible();
+      const note = page.locator('[data-reason="deployment.cancelled"]');
+      await expect(note).toContainText(t('errors.deployment.cancelled.title'));
+      await expect(note).toHaveAttribute('role', 'status');
+      await expectAccessible(page, 'deployment page, cancelled by an administrator');
+      expect(served(WWW), 'a cancelled deployment changed nothing').toBe(before);
+
+      // No deployment email of any kind went out (the outbox of the e2e build).
+      const res = await request.get('/test/mail');
+      expect(res.ok()).toBe(true);
+      const subjects = ((await res.json()) as { messages: { subject: string }[] }).messages.map((m) => m.subject);
+      const deploymentSubjects = ['failed', 'rollback_failed', 'outcome_unknown', 'restored_unverified', 'superseded', 'needs_attention', 'pending_change_restored', 'needs_attention_unconfirmed']
+        .flatMap((k) => (['en', 'tr'] as Lang[]).map((l) => translator(l)(`email.deployment.${k}.subject`, { target_name: SERVER })));
+      for (const subject of subjects) expect(deploymentSubjects, `email sent: ${subject}`).not.toContain(subject);
     });
   });
 }
