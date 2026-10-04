@@ -2202,7 +2202,8 @@ components:
           type: object
           description: >-
             Allowlisted values only: error (a configuration error class or file_changed), port, mode (remote, local,
-            skipped), served (a fingerprint), reason (a reason code).
+            skipped), served (a fingerprint), reason (a reason code), operation_id (on recover_pending: the
+            unfinished earlier change).
           additionalProperties: { type: string }
     Deployment:
       type: object
