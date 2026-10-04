@@ -12,3 +12,7 @@
 6f5cd8f76826252c8e3450a2ce964d08157aeb34:internal/api/leak_integration_test.go:generic-api-key:139
 # An earlier version of this file quoting the providers tests' password canary in a comment.
 ac265acc933833b663d937a31ac9abdcadb0b346:.gitleaksignore:generic-api-key:6
+# Translation key names ("…keyRsa3072", "…keyRsa4096") in the list of strings equal in EN and TR.
+2683d33b2d8f49bea09528d74859293674b292f2:web/src/locales/.i18n-identical.json:generic-api-key:2
+# PEM header lines only (no key body): the scanner self-test checks that the leak suite flags them.
+f641cfd81bc7320a78e1dcb08b32bcb837ce1e68:internal/api/tlskey_leak_integration_test.go:private-key:492
