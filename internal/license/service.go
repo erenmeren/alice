@@ -52,11 +52,13 @@ const (
 	// MaxEvaluationAge is how long the gate trusts the last successful evaluation, in process
 	// uptime: after it, gated work is refused with ErrUnverified until an evaluation succeeds.
 	// The evaluation runs hourly and a failed one is retried after 1, 2, 4, 8 minutes, then every
-	// 10 minutes (jobs.MaxRetryGap); a failed hourly run never postpones a pending retry. So the
-	// first success comes at most 10 minutes after a failure ends, and a failure never stops
-	// changes when it ends within 2 h 50 min of the last successful evaluation (an outage of up
-	// to 2 h 40 min right after one, of up to 1 h 50 min anywhere). A stalled evaluation is
-	// visible the same morning.
+	// 10 minutes (jobs.MaxRetryGap); a failed hourly run never postpones a pending retry. A retry
+	// is armed when the failed attempt returns, which can be up to tickTimeout (2 minutes) after
+	// it started, so the first success comes at most about 12 minutes after a failure ends, and a
+	// failure never stops changes when it ends within about 2 h 48 min of the last successful
+	// evaluation (an outage of up to about 2 h 48 min right after one, of up to about 1 h 48 min
+	// anywhere, since the last success may be up to an hour before it starts). A stalled
+	// evaluation is visible the same morning.
 	MaxEvaluationAge = 3 * time.Hour
 	// defaultRowLockTimeout bounds every wait for the license row lock (lock_timeout), so a
 	// session holding the row cannot stop evaluations, uploads and the shutdown save for ever.
