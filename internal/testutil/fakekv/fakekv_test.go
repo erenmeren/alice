@@ -530,6 +530,16 @@ func TestObjectNamesAreCaseInsensitive(t *testing.T) {
 	assert.Equal(t, 200, c.Get(t, "/keys/signing/").Status)
 	s.AddSecret("DB-Pass", "text/plain")
 	assert.Panics(t, func() { s.AddSecret("web-CERT", "text/plain") }, "a certificate owns the name in any case")
+	assert.Panics(t, func() { s.AddKey("WEB-cert", fakekv.KeyOptions{KeyType: "EC"}) }, "a certificate's backing key owns the name")
+	assert.Panics(t, func() { s.AddCertificate("db-PASS", fakekv.CertOptions{CommonName: "x"}) }, "a plain secret owns the name")
+	assert.Panics(t, func() { s.AddCertificate("SIGNING", fakekv.CertOptions{CommonName: "x"}) }, "a plain key owns the name")
+	// An import never creates the collision: 409.
+	assert.Equal(t, 409, c.Do(t, http.MethodPost, "/certificates/DB-pass/import", string(b)).Status)
+	assert.Equal(t, 409, c.Do(t, http.MethodPost, "/certificates/SIGNING/import", string(b)).Status)
+	// An absent certificate's versions are 404 even when pages are empty-with-nextLink.
+	s.SetEmptyPages(true)
+	assert.Equal(t, 404, c.Get(t, "/certificates/absent/versions").Status)
+	s.SetEmptyPages(false)
 }
 
 func TestReset(t *testing.T) {

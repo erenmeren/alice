@@ -141,6 +141,7 @@ func (s *Server) AddCertificate(name string, o CertOptions) string {
 		policy: policyState{exportable: o.Exportable, contentType: o.ContentType, issuer: "Self", actionType: "AutoRenew", actionPct: 80}}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.checkFreeLocked(name, "certificate")
 	s.certs[foldASCII(name)] = e
 	return v.id
 }
@@ -237,6 +238,9 @@ func (s *Server) AddKey(name string, o KeyOptions) {
 	pub := s.publicKey(o)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.certs[foldASCII(name)] != nil || s.secrets[foldASCII(name)] != nil {
+		panic("fakekv: the name " + name + " is owned by a certificate or a secret (names fold to ASCII lower case)")
+	}
 	s.keys[foldASCII(name)] = &keyEntry{name: name, id: newVersionID(), o: o, pub: pub, created: now, updated: now}
 }
 
@@ -434,4 +438,12 @@ func (s *Server) liveCertNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// checkFreeLocked panics when a key or a plain secret already owns the (folded) name a certificate wants:
+// the certificate's backing key and secret would collide with it.
+func (s *Server) checkFreeLocked(name, kind string) {
+	if s.keys[foldASCII(name)] != nil || s.secrets[foldASCII(name)] != nil {
+		panic("fakekv: a key or a secret named " + name + " owns the name of the " + kind + "'s backing objects")
+	}
 }

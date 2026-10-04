@@ -289,6 +289,13 @@ func (s *Server) listCertificates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listCertificateVersions(w http.ResponseWriter, r *http.Request, name string) {
+	s.mu.Lock()
+	known := s.certs[foldASCII(name)]
+	s.mu.Unlock()
+	if known == nil || known.deleted {
+		s.notFound(w, "CertificateNotFound", "certificate", name) // before paging: no empty page for an absent name
+		return
+	}
 	marker, max, ok := s.pageRequest(w, r)
 	if !ok {
 		return
@@ -456,6 +463,10 @@ func (s *Server) importCertificate(w http.ResponseWriter, r *http.Request, name 
 		s.mu.Unlock()
 		kvFail(w, http.StatusConflict, "Conflict", "", "Certificate "+name+" is currently in a deleted but recoverable state, and its name cannot be reused; "+
 			"in this state, the certificate can only be recovered or purged.") // GUESS: code and text
+		return
+	case e == nil && (s.keys[foldASCII(name)] != nil || s.secrets[foldASCII(name)] != nil):
+		s.mu.Unlock()
+		kvFail(w, http.StatusConflict, "Conflict", "", "The name "+name+" is already used by a key or a secret of this vault.") // GUESS
 		return
 	case e == nil:
 		ct := "application/x-pkcs12"
