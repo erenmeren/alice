@@ -859,7 +859,7 @@
       "moreLocations": "Bazı web siteleri gösterilmiyor.",
       "noNames": "(yok)",
       "facts": "Sertifika ayrıntıları",
-      "deployHint": "Bu sertifikayı dağıtmak için web sitesinin sunucusunu açın, orada Sertifika dağıt düğmesini seçin ve bu sertifikayı seçin.",
+      "deployHint": "Bu sertifikayı dağıtmak için web sitesinin sunucusunu açın, orada Sertifika dağıt düğmesine basın ve bu sertifikayı seçin.",
       "openServers": "Sunucuları aç",
       "deployHelp": "Dağıt düğmesi bu sertifikayı aşağıda listelenen web sitelerine gönderir."
     },
@@ -955,7 +955,7 @@
     "inherited": "Sertifika http bloğundaki tüm web siteleri için ayarlanmış.",
     "changedOutside": "Sertifika Alice dışında değiştirildi.",
     "changedOutsideAt": "Alice dışında değiştirildi: {{time}}",
-    "definedIn": "Tanımlandığı yer: {{file}}, satır {{line}}",
+    "definedIn": "Tanımlandığı dosya: {{file}}",
     "showMissing": "Artık bulunmayan web sitelerini göster",
     "truncated": "Bu liste eksik: artık bulunmayan web sitelerinin yalnızca ilk 1000'i gösteriliyor.",
     "configInvalid": "Bu sunucudaki Nginx yapılandırmasında bir hata var. Hata giderilene kadar Alice dağıtım yapmaz.",
@@ -1067,7 +1067,8 @@
       "sniWildcard": "Joker karakter (*) olmadan tek bir alan adı girin.",
       "sniInvalid": "Yalnızca harf, rakam, nokta ve tire içeren bir alan adı girin. Noktalar arasındaki bir bölüm tireyle başlayıp bitemez.",
       "notSaved": "Bu web sitesi bu sırada değiştiği için değişikliğiniz kaydedilmedi. Güncel değerler gösteriliyor. Denetleyip yeniden kaydedin."
-    }
+    },
+    "definedLine": "Satır: {{line}}"
   },
   "deploy": {
     "title": "Sertifika dağıtın",
@@ -1095,7 +1096,7 @@
     "rolledBack": "Sunucunuz önceki sertifikasına geri döndürüldü.",
     "noChange": "Sunucuda hiçbir şey değiştirilmedi.",
     "rollbackFailed": "Alice web sitesinin hangi sertifikayı sunduğunu doğrulayamıyor. Elle müdahale gerekiyor.",
-    "recovering": "Alice bu dağıtımın nasıl sonuçlandığını henüz doğrulayamadı. Sunucuyu denetliyor ve değişikliği tamamlayacak veya geri alacak.",
+    "recovering": "Alice bu dağıtımın nasıl sonuçlandığını henüz doğrulamadı. Sunucuyu denetliyor ve değişikliği tamamlayacak veya geri alacak.",
     "held": "Lisansın süresi dolduğu için bu dağıtım bekletiliyor. Bir yönetici lisansı yenilediğinde veya dağıtımı çalıştırdığında devam eder.",
     "jobStopped": "Arka plandaki iş dağıtımdan önce sona erdi. Durumunu görmek için dağıtım geçmişini açın.",
     "unknownStatus": "Alice bu dağıtımın durumunu belirleyemiyor. Görmek için dağıtım geçmişini açın.",
@@ -1158,7 +1159,9 @@
       "needsAttention": "Alice birkaç denemeden sonra da sonucu doğrulayamıyor ve denemeye devam ediyor. Sunucuyu ve ağını denetleyin.",
       "running": "Alice değişikliği tamamlamak veya geri almak için sunucuyu denetliyor.",
       "confirmed_one": "Alice sonucu {{count}} kurtarma denemesinden sonra doğruladı.",
-      "confirmed_other": "Alice sonucu {{count}} kurtarma denemesinden sonra doğruladı."
+      "confirmed_other": "Alice sonucu {{count}} kurtarma denemesinden sonra doğruladı.",
+      "ended_one": "Kurtarma {{count}} denemeden sonra sona erdi.",
+      "ended_other": "Kurtarma {{count}} denemeden sonra sona erdi."
     },
     "verifyFailedTitle": "Doğrulama sonucu",
     "technical": "Teknik ayrıntılar",
@@ -1175,7 +1178,7 @@
       "verify": "Doğrulama",
       "restore": "Geri yükleme",
       "rollback_config_test": "Yeniden denetim",
-      "rollback_reload": "Tekrar yükleme",
+      "rollback_reload": "Yeniden yükleme (tekrar)",
       "verify_old": "Önceki sertifikayı doğrulama",
       "unknown": "Başka bir adım"
     },

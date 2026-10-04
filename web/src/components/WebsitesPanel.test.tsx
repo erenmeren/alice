@@ -64,7 +64,9 @@ describe('WebsitesPanel on an Nginx server', () => {
     expect(within(rows[0]).getByText('*:443')).toBeInTheDocument();
     expect(within(rows[0]).getByText('[::]:443')).toBeInTheDocument();
     expect(within(rows[0]).getByText('/etc/nginx/ssl/www.crt')).toBeInTheDocument();
-    expect(within(rows[0]).getByText('Defined in /etc/nginx/conf.d/www.conf, line 4')).toBeInTheDocument();
+    expect(rows[0]).toHaveTextContent('Defined in: /etc/nginx/conf.d/www.conf');
+    expect(within(rows[0]).getByText('/etc/nginx/conf.d/www.conf').closest('code')).toHaveAttribute('translate', 'no');
+    expect(within(rows[0]).getByText('Line: 4')).toBeInTheDocument();
     expect(within(rows[0]).getByRole('link', { name: 'www.example.test' })).toHaveAttribute('href', `/certificates/${CERT.id}`);
     expect(within(rows[0]).getByText('Ready')).toBeInTheDocument();
     expect(within(rows[0]).getByText(/Sep 1, 2027/)).toBeInTheDocument();

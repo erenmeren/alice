@@ -124,7 +124,9 @@ function DeployForm({
 
   const refresh = () => {
     void client.invalidateQueries({ queryKey: DEPLOYMENTS_KEY });
-    void client.invalidateQueries({ queryKey: CERTIFICATES_KEY });
+    // The paged list of deploy candidates is left alone: refetching up to 50 pages at each settle
+    // would defeat the request budget.
+    void client.invalidateQueries({ queryKey: CERTIFICATES_KEY, predicate: (q) => q.queryKey[1] !== 'deploy-candidates' });
     void client.invalidateQueries({ queryKey: ['locations'] });
   };
 
@@ -140,7 +142,7 @@ function DeployForm({
         signal: abort.signal(),
         onUpdate: (id, dep) => patch(id, { deployment: dep }),
         onDone: (id, r) => {
-          patch(id, { deployment: r.deployment, timedOut: r.timedOut, connectionLost: r.connectionLost });
+          patch(id, { deployment: r.deployment, timedOut: r.timedOut, connectionLost: r.connectionLost, failed: r.error ?? null });
           refresh();
         },
       },

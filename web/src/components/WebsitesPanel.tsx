@@ -192,9 +192,12 @@ function LocationRow({
             </Group>
           )}
           {first && (
-            <Text size="xs" c="gray.7">
-              {t('locations.definedIn', { file: first.file, line: first.line })}
-            </Text>
+            <Stack gap={0}>
+              <LabelledCode size="xs" text={t('locations.definedIn', { file: '' })} value={first.file} />
+              <Text size="xs" c="gray.7">
+                {t('locations.definedLine', { line: first.line })}
+              </Text>
+            </Stack>
           )}
           {l.inherited && <Text size="xs">{t('locations.inherited')}</Text>}
         </Stack>

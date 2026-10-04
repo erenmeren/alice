@@ -122,7 +122,7 @@ describe('DeploymentDetailPage', () => {
       }),
     );
     await renderRoute(`/deployments/${ID}`);
-    expect(await screen.findByText('Alice could not confirm yet how this deployment ended. It is checking the server and will finish or undo the change.')).toBeInTheDocument();
+    expect(await screen.findByText('Alice has not yet confirmed how this deployment ended. It is checking the server and will finish or undo the change.')).toBeInTheDocument();
     expect(within(headline()).getByText('Needs attention')).toBeInTheDocument();
     expect(within(headline()).getByText('Confirming the outcome')).toBeInTheDocument();
     const recovery = screen.getByTestId('recovery');
@@ -139,7 +139,7 @@ describe('DeploymentDetailPage', () => {
       deploymentDetailFixture({ id: ID, status: 'running', state: 'recovering', job_status: 'succeeded', recovery_attempts: 1, error: { code: 'ALC-DEP-0010', reason: 'deployment.interrupted' }, finished_at: null }),
     );
     await renderRoute(`/deployments/${ID}`);
-    expect(await screen.findByText('Alice could not confirm yet how this deployment ended. It is checking the server and will finish or undo the change.')).toBeInTheDocument();
+    expect(await screen.findByText('Alice has not yet confirmed how this deployment ended. It is checking the server and will finish or undo the change.')).toBeInTheDocument();
     expect(screen.getByTestId('recovery')).toHaveTextContent('Alice is checking the server to finish or undo the change.');
     expect(screen.getByRole('alert')).toHaveTextContent('ALC-DEP-0010');
   });
@@ -186,6 +186,14 @@ describe('DeploymentDetailPage', () => {
     expect(card).not.toHaveTextContent('Next attempt');
     expect(card).not.toHaveTextContent('keeps trying');
     expect(card).not.toHaveTextContent('Alice is checking the server');
+  });
+
+  it('says recovery ended, not that the outcome was confirmed, when a deployment gave up', async () => {
+    show(deploymentDetailFixture({ id: ID, status: 'rollback_failed', phase: 'restore_failed', recovery_attempts: 5, error: { code: 'ALC-DEP-0017', reason: 'deployment.recovery_exhausted' } }));
+    await renderRoute(`/deployments/${ID}`);
+    const card = await screen.findByTestId('recovery');
+    expect(card).toHaveTextContent('Recovery ended after 5 attempts.');
+    expect(card).not.toHaveTextContent('confirmed');
   });
 
   it('shows no recovery card for a finished deployment that never needed one', async () => {

@@ -955,7 +955,7 @@
     "inherited": "The certificate is set for all websites in the http block.",
     "changedOutside": "The certificate changed outside Alice.",
     "changedOutsideAt": "Changed outside Alice: {{time}}",
-    "definedIn": "Defined in {{file}}, line {{line}}",
+    "definedIn": "Defined in: {{file}}",
     "showMissing": "Show websites that are no longer found",
     "truncated": "This list is incomplete: only the first 1000 websites that are no longer found are shown.",
     "configInvalid": "Nginx's configuration on this server has an error. Alice will not deploy until it is fixed.",
@@ -1067,7 +1067,8 @@
       "sniWildcard": "Enter one domain name without a wildcard (*).",
       "sniInvalid": "Enter a domain name with letters, digits, dots and hyphens only. A part between dots cannot start or end with a hyphen.",
       "notSaved": "Your change was not saved because this website changed in the meantime. The current values are shown now. Check them and save again."
-    }
+    },
+    "definedLine": "Line: {{line}}"
   },
   "deploy": {
     "title": "Deploy a certificate",
@@ -1095,7 +1096,7 @@
     "rolledBack": "Your server was restored to its previous certificate.",
     "noChange": "Nothing was changed on the server.",
     "rollbackFailed": "Alice cannot confirm which certificate the website serves. Manual action is needed.",
-    "recovering": "Alice could not confirm yet how this deployment ended. It is checking the server and will finish or undo the change.",
+    "recovering": "Alice has not yet confirmed how this deployment ended. It is checking the server and will finish or undo the change.",
     "held": "The license has expired, so this deployment is on hold. It continues when an administrator renews the license or runs it.",
     "jobStopped": "The background job ended before the deployment did. Open the deployment history to see where it stands.",
     "unknownStatus": "Alice cannot tell the state of this deployment. Open the deployment history to see it.",
@@ -1158,7 +1159,9 @@
       "needsAttention": "Alice still cannot confirm the outcome after several attempts and keeps trying. Check the server and its network.",
       "running": "Alice is checking the server to finish or undo the change.",
       "confirmed_one": "Alice confirmed the outcome after {{count}} recovery attempt.",
-      "confirmed_other": "Alice confirmed the outcome after {{count}} recovery attempts."
+      "confirmed_other": "Alice confirmed the outcome after {{count}} recovery attempts.",
+      "ended_one": "Recovery ended after {{count}} attempt.",
+      "ended_other": "Recovery ended after {{count}} attempts."
     },
     "verifyFailedTitle": "Verification result",
     "technical": "Technical details",

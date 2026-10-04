@@ -359,6 +359,39 @@ describe('DeployDialog from a certificate', () => {
   });
 });
 
+describe('DeployDialog request budget with settling runs', () => {
+  it('keeps ALL requests of a 20-website batch, settles included, below 150 a minute', async () => {
+    asRole('operator');
+    const places = Array.from({ length: 20 }, (_, i) => locationFixture({ id: `q${i}`, cert_path: `/etc/nginx/ssl/q${i}.crt` }));
+    let all = 0;
+    const settledAt: Record<string, number> = {};
+    const reads: Record<string, number> = {};
+    server.use(
+      http.get(`/api/v1/certificates/${NEW_ID}`, () => HttpResponse.json(certificateDetailFixture({ id: NEW_ID, locations: places }))),
+      http.post(`/api/v1/certificates/${NEW_ID}/deploy`, () => HttpResponse.json(accepted(...places.map((p, i): [string, string] => [`e${i}`, p.id])), { status: 202 })),
+      http.get('/api/v1/deployments/:id', ({ params }) => {
+        const id = String(params.id);
+        reads[id] = (reads[id] ?? 0) + 1;
+        const done = reads[id] >= 2;
+        if (done) settledAt[id] = settledAt[id] ?? Date.now();
+        return HttpResponse.json(deploymentDetailFixture({ id, status: done ? 'succeeded' : 'running', state: done ? 'done' : 'deploying', job_status: done ? 'succeeded' : 'running', finished_at: null }));
+      }),
+    );
+    server.events.on('request:start', () => {
+      all += 1;
+    });
+    await showDialog({ certificate: NEW_CERT });
+    for (const b of await screen.findAllByRole('checkbox')) await userEvent.click(b);
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
+    await screen.findAllByRole('list', { name: 'Steps' });
+    all = 0;
+    await vi.advanceTimersByTimeAsync(60_000);
+    server.events.removeAllListeners();
+    expect(Object.keys(settledAt).length).toBeGreaterThan(5);
+    expect(all).toBeLessThanOrEqual(150);
+  }, 30_000);
+});
+
 describe('DeployDialog states', () => {
   async function runWith(d: Partial<DeploymentDetail>) {
     asRole('operator');
@@ -585,7 +618,7 @@ describe('DeployDialog polling', () => {
       }),
     );
     await start();
-    expect(await screen.findByText('Alice could not confirm yet how this deployment ended. It is checking the server and will finish or undo the change.')).toBeInTheDocument();
+    expect(await screen.findByText('Alice has not yet confirmed how this deployment ended. It is checking the server and will finish or undo the change.')).toBeInTheDocument();
     const seen = polls;
     await vi.advanceTimersByTimeAsync(5_000);
     expect(polls).toBe(seen);

@@ -69,6 +69,8 @@ export interface WatchResult {
   timedOut: boolean;
   // connectionLost: the last answer was a dropped connection or a retryable error.
   connectionLost: boolean;
+  // error: reading this deployment failed for good (for example a 404); the others are still followed.
+  error?: unknown;
 }
 
 // The request budget of one batch: one tick per second, and at most PER_TICK deployment reads in a
@@ -95,7 +97,7 @@ export interface BatchOptions {
 // one is settled (deploymentView is not working) or the deadline passes. Every read goes to
 // onUpdate, so a screen shows the steps as they arrive. A dropped connection or a retryable answer
 // is waited out until the deadline; for a 429 or 503 the next request waits at least Retry-After.
-// Any other error rejects. A cancelled signal rejects with an AbortError (see isAbort in jobs.ts).
+// Any other error ends that one deployment (WatchResult.error) and not the batch. A cancelled signal rejects with an AbortError (see isAbort in jobs.ts).
 export async function watchDeployments(ids: string[], opts: BatchOptions = {}): Promise<Record<string, WatchResult>> {
   const interval = opts.intervalMs ?? POLL_TICK_MS;
   const perTick = Math.max(1, opts.perTick ?? POLL_PER_TICK);
@@ -129,7 +131,11 @@ export async function watchDeployments(ids: string[], opts: BatchOptions = {}): 
         if (isSettled(d)) finish(id, { deployment: d, timedOut: false, connectionLost: false });
       } catch (e) {
         if (opts.signal?.aborted) throw abortError();
-        if (!isTransient(e)) throw e;
+        if (!isTransient(e)) {
+          // This deployment cannot be read: it is marked with its error, the rest of the batch goes on.
+          finish(id, { deployment: last[id], timedOut: false, connectionLost: false, error: e });
+          continue;
+        }
         lost = true;
         const wait = e instanceof ApiError && e.retryAfter !== null ? Math.min(e.retryAfter * 1000, MAX_RETRY_AFTER_MS) : 0;
         waitUntil = Math.max(waitUntil, Date.now() + wait);

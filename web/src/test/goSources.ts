@@ -98,8 +98,8 @@ export function errorPairsIn(source: string): string[] {
     .filter((l) => !l.includes('not in the error table'))
     .join('\n');
   const out: string[] = [];
-  for (const m of src.matchAll(/errorResponse\(\s*\d+,\s*'(ALC-[A-Z]+-\d{4})',\s*'([a-z][a-z0-9_.]*)'/g)) out.push(`${m[1]} ${m[2]}`);
-  for (const m of src.matchAll(/code:\s*'(ALC-[A-Z]+-\d{4})',\s*reason:\s*'([a-z][a-z0-9_.]*)'/g)) out.push(`${m[1]} ${m[2]}`);
+  for (const m of src.matchAll(/errorResponse\(\s*\d+,\s*(['"`])(ALC-[A-Z]+-\d{4})\1,\s*(['"`])([a-z][a-z0-9_.]*)\3/g)) out.push(`${m[2]} ${m[4]}`);
+  for (const m of src.matchAll(/code:\s*(['"`])(ALC-[A-Z]+-\d{4})\1,\s*reason:\s*(['"`])([a-z][a-z0-9_.]*)\3/g)) out.push(`${m[2]} ${m[4]}`);
   return out;
 }
 

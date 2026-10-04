@@ -80,6 +80,25 @@ describe('watchDeployments request budget', () => {
   });
 });
 
+describe('watchDeployments with one unreadable deployment', () => {
+  it('marks that deployment with its error and keeps following the others', async () => {
+    const [a, b] = ids(2);
+    server.use(
+      http.get('/api/v1/deployments/:id', ({ params }) =>
+        params.id === a
+          ? HttpResponse.json({ error: { code: 'ALC-SYS-0001', reason: 'system.not_found', message_key: 'errors.system.not_found', message: 'x', request_id: 'r', retryable: false } }, { status: 404 })
+          : HttpResponse.json(deploymentDetailFixture({ id: b })),
+      ),
+    );
+    const res = watchDeployments([a, b]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    const out = await res;
+    expect(out[a].error).toBeDefined();
+    expect(out[b].error).toBeUndefined();
+    expect(out[b].deployment?.status).toBe('succeeded');
+  });
+});
+
 describe('deploymentView', () => {
   it('tells a job that succeeded while the record still runs from a running one', () => {
     expect(deploymentView({ status: 'running', state: 'deploying', job_status: 'succeeded' })).toBe('finishing');

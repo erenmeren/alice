@@ -14,6 +14,17 @@ describe('error codes used in web tests', () => {
     expect(errorPairsIn("errorResponse(403, 'ALC-X-0001', 'a.b', {})\nerror: { code: 'ALC-Y-0002', reason: 'c.d' }")).toEqual(['ALC-X-0001 a.b', 'ALC-Y-0002 c.d']);
   });
 
+  it('catches an invented pair in any quote style', () => {
+    const invented = [
+      'errorResponse(403, "ALC-FAKE-0001", "fake.reason")',
+      'errorResponse(403, `ALC-FAKE-0002`, `fake.other`)',
+      'error: { code: "ALC-FAKE-0003", reason: "fake.third" }',
+    ].join('\n');
+    const pairs = errorPairsIn(invented);
+    expect(pairs).toEqual(['ALC-FAKE-0001 fake.reason', 'ALC-FAKE-0002 fake.other', 'ALC-FAKE-0003 fake.third']);
+    expect(pairs.filter((p) => !table.has(p))).toHaveLength(3);
+  });
+
   it('exist for every pair a test file uses', () => {
     const bad: string[] = [];
     for (const f of webTestFiles()) {

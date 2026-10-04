@@ -131,7 +131,9 @@ export function DeploymentDetailPage() {
                 <Text size="sm">{t(d.status === 'needs_attention' ? 'deployments.recovery.needsAttention' : 'deployments.recovery.running')}</Text>
               </>
             ) : (
-              <Text size="sm">{t('deployments.recovery.confirmed', { count: d.recovery_attempts })}</Text>
+              <Text size="sm">
+                {t(d.status === 'rollback_failed' ? 'deployments.recovery.ended' : 'deployments.recovery.confirmed', { count: d.recovery_attempts })}
+              </Text>
             )}
           </Stack>
         </Card>
