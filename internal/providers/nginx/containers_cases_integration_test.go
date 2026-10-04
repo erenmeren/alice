@@ -216,9 +216,10 @@ func (h *rnHost) testUntouchedLayout(t *testing.T) {
 	assert.Contains(t, res.Nginx.Version, rnNginxVersions[h.image])
 	assert.Equal(t, "/etc/nginx/nginx.conf", res.Nginx.ConfPath)
 	assert.Empty(t, res.Certificates, "the default layout has no TLS server")
-	// No Nginx warning; the SSH half's only: the fixture user linky's authorized_keys is a link, and
+	// No Nginx warning; the SSH half's only: the fixture user linky's authorized_keys is a link, the
+	// fixture's two entries the helper cannot list (uids 1009 and 1010, AUD-03) are reported, and
 	// only Rocky's nsswitch.conf also asks sss for users (directory_users_not_listed).
-	wantWarnings := []string{helperproto.WarnUnsupportedPath}
+	wantWarnings := []string{helperproto.WarnUnsupportedPath, helperproto.WarnAccountNameUnsupported, helperproto.WarnAccountHomeUnsupported}
 	if h.image == "rocky9" {
 		wantWarnings = append(wantWarnings, helperproto.WarnDirectoryUsers)
 	}

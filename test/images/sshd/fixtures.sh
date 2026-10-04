@@ -59,6 +59,39 @@ k5="$(newkey ed25519 - root@bastion)"
 printf 'from="10.0.0.0/8" %s\n' "$k5" > /root/.ssh/authorized_keys
 record root "$k5"
 
+# AUD-03: account names Linux and sshd accept beyond SEC-062's pattern (a dot, a capital, a final
+# $: useradd creates them on all three images) and a home written with a trailing slash; each has
+# one key the inventory must list. The home is written into /etc/passwd as given (useradd may clean
+# it), and the build stops if it is not there verbatim.
+odd_user() { # odd_user <name> <uid> <home as in /etc/passwd>
+	useradd --uid "$2" --home-dir "$3" --create-home --shell /bin/bash "$1"
+	awk -F: -v OFS=: -v n="$1" -v h="$3" '$1 == n { $6 = h } { print }' /etc/passwd > /etc/passwd.alice
+	cat /etc/passwd.alice > /etc/passwd
+	rm -f /etc/passwd.alice
+	[ "$(awk -F: -v n="$1" '$1 == n { print $6 }' /etc/passwd)" = "$3" ]
+	g="$(id -gn "$1")"
+	install -d -m 0700 -o "$1" -g "$g" "$3/.ssh"
+	k="$(newkey ed25519 - "$1@laptop")"
+	printf '%s\n' "$k" > "$3/.ssh/authorized_keys"
+	chown "$1:$g" "$3/.ssh/authorized_keys"
+	chmod 0600 "$3/.ssh/authorized_keys"
+	record "$1" "$k"
+}
+odd_user john.doe 1005 /home/john.doe
+odd_user Deploy2 1006 /home/Deploy2
+odd_user 'svc$' 1007 /home/svc
+odd_user trail 1008 /home/trail/
+
+# AUD-03: two entries the helper must report by uid instead of listing: a name outside the account
+# rule (useradd refuses a comma, so the lines are written directly) and a home with a ".." element.
+passwd_user() { # passwd_user <name> <uid> <home>
+	printf '%s:x:%s:%s::%s:/bin/bash\n' "$1" "$2" "$2" "$3" >> /etc/passwd
+	printf '%s:x:%s:\n' "$1" "$2" >> /etc/group
+	printf '%s:!:19000::::::\n' "$1" >> /etc/shadow
+}
+passwd_user 'bad,name' 1009 /home/badname
+passwd_user dotdot 1010 /home/x/../dotdot
+
 for u in deploy noshell nonl; do
 	chown "$u:$u" "/home/$u/.ssh/authorized_keys"
 	chmod 0600 "/home/$u/.ssh/authorized_keys"

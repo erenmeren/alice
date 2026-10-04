@@ -248,7 +248,7 @@ func (h *ctrHost) fixtureKeys() []ctrKeyRow {
 		rows = append(rows, ctrKeyRow{f[0], f[1], f[2]})
 	}
 	require.NoError(h.t, sc.Err())
-	require.Len(h.t, rows, 4, "deploy ×2, nonl, root")
+	require.Len(h.t, rows, 8, "deploy ×2, nonl, root, and (AUD-03) john.doe, Deploy2, svc$, trail")
 	return rows
 }
 
@@ -318,9 +318,20 @@ func TestRealOpenSSH(t *testing.T) {
 			h.assertNoNewLogin(logins, "no new login for a reused connection")
 
 			// Exit criterion "inventory matches the seeded fixtures exactly": every fixture key with
-			// its user, plus Alice's own key for alice-svc; nothing for noshell or linky.
+			// its user, plus Alice's own key for alice-svc; nothing for noshell or linky. AUD-22: the
+			// discovery reads the key files from the listing alone: sudo's I/O log (log_output) shows
+			// one more authkeys-list and no authkeys-read.
+			sudoLogged := func(sub string) int {
+				out := h.mustExec("sh", "-c", "grep -rlsw -- '"+sub+"' /var/log/sudo-io | grep -c '/log$' || true")
+				n, err := strconv.Atoi(strings.TrimSpace(out))
+				require.NoError(t, err, out)
+				return n
+			}
+			lists, reads := sudoLogged(helperproto.SubAuthKeysList), sudoLogged(helperproto.SubAuthKeysRead)
 			res, err := sess.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
 			require.NoError(t, err)
+			assert.Equal(t, lists+1, sudoLogged(helperproto.SubAuthKeysList), "sudo logs the listing (the control)")
+			assert.Equal(t, reads, sudoLogged(helperproto.SubAuthKeysRead), "no authkeys-read during the discovery")
 			want := append(h.fixtureKeys(), ctrKeyRow{ServiceUser, h.platform, ""})
 			var got []ctrKeyRow
 			for _, k := range res.SSHKeys {
@@ -345,6 +356,48 @@ func TestRealOpenSSH(t *testing.T) {
 				}
 			}
 			assert.True(t, linky, "the symlinked file of linky is reported, not read: %+v", res.Warnings)
+			// AUD-03: the accounts outside SEC-062's pattern are listed (their keys are among the fixture
+			// keys above, trail's under its cleaned home); the two that cannot be are reported by uid,
+			// and the account list is incomplete. The name with the comma is nowhere.
+			assert.False(t, res.AccountsComplete)
+			assert.Contains(t, res.Warnings, providers.Warning{Code: helperproto.WarnAccountNameUnsupported, Params: map[string]string{"uid": "1009"}})
+			assert.Contains(t, res.Warnings, providers.Warning{Code: helperproto.WarnAccountHomeUnsupported, Params: map[string]string{"uid": "1010"}})
+			assert.Subset(t, res.Accounts, []string{"john.doe", "Deploy2", "svc$", "trail", "dotdot"})
+			for _, k := range res.SSHKeys {
+				if k.OSUser == "trail" {
+					assert.Equal(t, "/home/trail/.ssh/authorized_keys", k.FilePath)
+				}
+			}
+			assert.NotContains(t, res.Accounts, "bad,name")
+			for _, w := range res.Warnings {
+				for _, v := range w.Params {
+					assert.NotContains(t, v, "bad,name")
+				}
+			}
+			// AUD-03: keys of those accounts can be changed through the real sudo and helper (the sudoers
+			// lines match paths with dots and capitals), and owner and mode are kept.
+			for _, u := range []struct{ name, file, owner string }{
+				{"Deploy2", "/home/Deploy2/.ssh/authorized_keys", "Deploy2:Deploy2 600"},
+				{"svc$", "/home/svc/.ssh/authorized_keys", "svc$:svc$ 600"},
+				{"trail", "/home/trail/.ssh/authorized_keys", "trail:trail 600"},
+			} {
+				before := h.sha(u.file)
+				_, priv, err := ed25519.GenerateKey(rand.Reader)
+				require.NoError(t, err)
+				extra, err := ssh.NewSignerFromKey(priv)
+				require.NoError(t, err)
+				line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(extra.PublicKey()))) + " added@alice"
+				added, err := sess.AddAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: uuid.New(), OSUser: u.name, FilePath: u.file, Line: line}, ctrNoSteps{})
+				require.NoError(t, err, u.name)
+				assert.True(t, added.Changed && added.Verified, u.name)
+				assert.Contains(t, h.mustExec("cat", u.file), "added@alice", u.name)
+				removed, err := sess.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: uuid.New(), OSUser: u.name, FilePath: u.file,
+					Fingerprint: ssh.FingerprintSHA256(extra.PublicKey()), ProtectedFingerprints: []string{h.platform}}, ctrNoSteps{})
+				require.NoError(t, err, u.name)
+				assert.Equal(t, 1, removed.Removed, u.name)
+				assert.Equal(t, before, h.sha(u.file), "%s: back to the fixture's content", u.name)
+				assert.Equal(t, u.owner, strings.TrimSpace(h.mustExec("stat", "-c", "%U:%G %a", u.file)), u.name)
+			}
 
 			// The sudoers profile allows only the helper's linux subcommands.
 			// A refusal by sudo itself (not some other failure): with -n, sudo answers a command
