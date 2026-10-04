@@ -125,6 +125,17 @@ func TestDeployOutcomeRecordCoversEveryLegalShape(t *testing.T) {
 		"8 uncertain": {providers.DeployOutcome{Result: providers.DeployUncertain, Steps: okSteps("backup")}, lost, uncertain},
 		"8 uncertain with the provider's reason": {providers.DeployOutcome{Result: providers.DeployUncertain},
 			providers.NewError("ssh.timeout", true, nil, nil), rec{result: "uncertain", errorCode: "ssh.timeout"}},
+		// A killed helper, a dropped connection and a malformed answer reach Alice as protocol errors
+		// or "helper missing" (no JSON at an exit status): neither text is true of a deployment being
+		// recovered, so the record says only that the outcome is not known.
+		"8 uncertain, lost or malformed answer": {providers.DeployOutcome{Result: providers.DeployUncertain},
+			providers.NewError("ssh.protocol_error", false, nil, map[string]string{"subcommand": "nginx-deploy"}),
+			rec{result: "uncertain", errorCode: "deployment.interrupted"}},
+		"8 uncertain, killed helper (exit 137)": {providers.DeployOutcome{Result: providers.DeployUncertain},
+			providers.NewError("ssh.helper_missing", false, nil, map[string]string{"exit_code": "137"}),
+			rec{result: "uncertain", errorCode: "deployment.interrupted"}},
+		"8 uncertain, unreachable": {providers.DeployOutcome{Result: providers.DeployUncertain},
+			providers.NewError("ssh.unreachable", true, nil, nil), rec{result: "uncertain", errorCode: "ssh.unreachable"}},
 		"8 uncertain after a failed verification": {providers.DeployOutcome{Result: providers.DeployUncertain, Reason: "deployment.verify_other",
 			Params: map[string]string{"port": "443", "failed_step": "verify"}}, providers.NewError("nginx.busy", true, nil, nil),
 			rec{result: "uncertain", errorCode: "deployment.verify_other", verifyReason: "deployment.verify_other", verifyPort: 443}},

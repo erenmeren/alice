@@ -63,11 +63,25 @@ func verifyFailure(f *DeploymentFinish, failedStep, reason string, params map[st
 	}
 }
 
+// uncertainCode is the code an uncertain outcome is recorded with. An answer Alice lost or could
+// not read (a dropped connection, a killed helper, malformed output: ssh.protocol_error, and
+// ssh.helper_missing for an exit status without JSON, which a killed helper also produces) says
+// nothing true about a deployment that is being recovered, so it is recorded as "not known yet".
+// Causes that name something real stay: ssh.unreachable, ssh.timeout, nginx.busy, and a verification
+// reason. A final state never goes through here.
+func uncertainCode(code string) string {
+	switch code {
+	case "ssh.protocol_error", "ssh.helper_missing":
+		return interruptedCode
+	}
+	return firstCode(code)
+}
+
 func uncertainRecord(code string, params map[string]string) OutcomeRecord {
 	if params == nil {
 		params = map[string]string{}
 	}
-	return OutcomeRecord{Finish: DeploymentFinish{Result: string(providers.DeployUncertain), ErrorCode: firstCode(code), Params: params}}
+	return OutcomeRecord{Finish: DeploymentFinish{Result: string(providers.DeployUncertain), ErrorCode: uncertainCode(code), Params: params}}
 }
 
 // DeployOutcomeRecord maps what DeployCertificate returned (outcome.go's shapes) to the record:

@@ -59,6 +59,9 @@ func TestHelperKilledAndConnectionLost(t *testing.T) {
 			require.Equal(t, "recovering", d.State)
 			assert.Equal(t, "running", d.Status)
 			assert.Equal(t, "uncertain", d.Result)
+			// Whatever reached Alice (a signal, exit 137, a dropped connection), the deployment says only
+			// that the outcome is not known yet.
+			assert.Equal(t, "ALC-DEP-0010", d.errorCode(), "the deployment's own error while it is recovered")
 			require.NotNil(t, d.RecoverAfter)
 			assert.Equal(t, start.Add(inventory.FirstRecoveryDelay), *d.RecoverAfter)
 			assert.Empty(t, n.deploymentEmails(), "no email while the outcome is being recovered")
@@ -174,12 +177,13 @@ func TestUnreachableServerDuringRecovery(t *testing.T) {
 		if d.Status == "needs_attention" && attention == 0 {
 			attention = round
 		}
-		// The latest recovery attempt failed because the server cannot be reached; the deployment itself
-		// keeps saying what is known of the send (its state is recovering).
+		// The latest recovery attempt failed because the server cannot be reached (the recovery job's
+		// error only); the deployment itself keeps saying that the outcome is not known yet.
 		var recoverJob string
 		require.NoError(t, n.db.Owner.QueryRow(context.Background(),
 			"SELECT id::text FROM jobs WHERE type = 'certificate.deploy_recover' ORDER BY created_at DESC, id DESC LIMIT 1").Scan(&recoverJob))
 		assert.Equal(t, "ALC-SSH-0001", jobErrorCode(n.job(n.op, recoverJob)), "round %d", round)
+		assert.Equal(t, "ALC-DEP-0010", d.errorCode(), "the deployment's own error does not change with the retries (round %d)", round)
 	}
 	require.NotZero(t, attention, "the deployment asks for attention")
 	assert.Equal(t, inventory.RecoveryAttentionAfter+1, attention)
