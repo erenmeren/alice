@@ -53,7 +53,8 @@ func TestEveryInventoryTemplateRendersInBothLanguages(t *testing.T) {
 	require.NoError(t, err)
 	s := &notify.Sender{Catalog: cat}
 	params := map[string]string{"target_name": "web-01 (İzmir)", "old_fingerprint": "SHA256:oldOLDold", "new_fingerprint": "SHA256:newNEWnew",
-		"cert_path": "/etc/nginx/ssl/www.crt", "deployment_id": "0190f5a0-0000-7000-8000-00000000abcd", "backup_dir": "/var/lib/alice-helper/backups/x"}
+		"cert_path": "/etc/nginx/ssl/www.crt", "deployment_id": "0190f5a0-0000-7000-8000-00000000abcd", "backup_dir": "/var/lib/alice-helper/backups/x",
+		"operation_id": "0190f5a0-0000-7000-8000-00000000beef"}
 	for _, tpl := range inventory.Templates() {
 		for _, lang := range []string{"en", "tr"} {
 			m := s.Render("ada@example.com", tpl, lang, params)
@@ -77,8 +78,9 @@ func TestDeploymentTemplatesRenderInBothLanguages(t *testing.T) {
 	require.NoError(t, err)
 	s := &notify.Sender{Catalog: cat}
 	params := map[string]string{"target_name": "web-01 (İzmir)", "cert_path": "/etc/nginx/ssl/www.crt",
-		"deployment_id": "0190f5a0-0000-7000-8000-00000000abcd", "backup_dir": "/var/lib/alice-helper/backups/0190f5a0-0000-7000-8000-00000000abcd"}
-	templates := []string{inventory.TemplateDeploymentFailed, inventory.TemplateDeploymentRollbackFailed, inventory.TemplateDeploymentNeedsAttention,
+		"deployment_id": "0190f5a0-0000-7000-8000-00000000abcd", "backup_dir": "/var/lib/alice-helper/backups/0190f5a0-0000-7000-8000-00000000abcd",
+		"operation_id": "0190f5a0-0000-7000-8000-00000000beef"}
+	templates := []string{inventory.TemplateDeploymentFailed, inventory.TemplateDeploymentPendingChangeRestored, inventory.TemplateDeploymentRollbackFailed, inventory.TemplateDeploymentNeedsAttention,
 		inventory.TemplateDeploymentNeedsAttentionUnconfirmed, inventory.TemplateDeploymentOutcomeUnknown,
 		inventory.TemplateDeploymentRestoredUnverified, inventory.TemplateDeploymentSuperseded}
 	for _, tpl := range templates {

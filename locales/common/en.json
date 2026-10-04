@@ -685,6 +685,10 @@
         "subject": "Alice cannot finish a deployment on {{target_name}}",
         "body": "The connection to the server {{target_name}} was lost during a certificate deployment (file {{cert_path}}), and Alice cannot reach the server to finish or undo it.\n\nAlice tries again every 15 minutes for about a day, then asks for manual action. Until then, check the website and the server's connection. Deployment: {{deployment_id}}"
       },
+      "pending_change_restored": {
+        "subject": "Alice put back older certificate files on {{target_name}}; your certificate was not deployed",
+        "body": "A certificate deployment on the server {{target_name}} (file {{cert_path}}) found an unfinished earlier change of the same files that Alice no longer followed. Alice put back the files from before that earlier change, so the website now serves the certificate from before it. That certificate may be older than the one the website served when the deployment was requested, and it may even have expired. The certificate of this deployment was not written.\n\nCheck the website now. Then choose Discover on the server's page in Alice and deploy the certificate again. Earlier change: {{operation_id}}. Deployment: {{deployment_id}}"
+      },
       "needs_attention_unconfirmed": {
         "subject": "Alice cannot confirm a deployment on {{target_name}} yet",
         "body": "Alice cannot yet confirm how a certificate deployment on the server {{target_name}} ended (file {{cert_path}}): the server did not answer as expected.\n\nAlice tries again every 15 minutes for about a day, then asks for manual action. Until then, check the website. Deployment: {{deployment_id}}"

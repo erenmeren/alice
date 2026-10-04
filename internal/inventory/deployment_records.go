@@ -747,7 +747,7 @@ WHERE id = $1`, d.location, d.newFingerprint, d.certificate, fileSHA); err != ni
 			return fmt.Errorf("inventory: record the deployed certificate: %w", err)
 		}
 	}
-	return s.finishRecords(ctx, tx, d, f.Status, code, failedStep, verified, oneOf(f.Phase, phases))
+	return s.finishRecords(ctx, tx, d, f.Status, code, failedStep, verified, oneOf(f.Phase, phases), f.Params["operation_id"])
 }
 
 // rollbackFailedTemplate chooses the email of a rollback_failed deployment by what happened
@@ -765,7 +765,8 @@ func rollbackFailedTemplate(code, phase string) string {
 }
 
 // finishRecords writes a finished deployment's audit rows and emails.
-func (s *Service) finishRecords(ctx context.Context, tx pgx.Tx, d lockedDeployment, status, code, failedStep, verified, phase string) error {
+func (s *Service) finishRecords(ctx context.Context, tx pgx.Tx, d lockedDeployment, status, code, failedStep, verified, phase,
+	operationParam string) error {
 	type ev struct {
 		action  string
 		result  audit.Result
@@ -786,6 +787,11 @@ func (s *Service) finishRecords(ctx context.Context, tx pgx.Tx, d lockedDeployme
 		events = []ev{{"deployment.failed", audit.Failure, map[string]string{"reason": code, "failed_step": failedStep}},
 			{"deployment.rolled_back", audit.Failure, map[string]string{"reason": code}}}
 		template = TemplateDeploymentFailed
+		if code == pendingChangeRestoredCode {
+			// Not "the server keeps its previous certificate": the website went back to the
+			// certificate from before an unfinished earlier change.
+			template = TemplateDeploymentPendingChangeRestored
+		}
 	case DeployStatusRollbackFailed:
 		events = []ev{{"deployment.rollback_failed", audit.Failure, map[string]string{"reason": code, "failed_step": failedStep}}}
 		template = rollbackFailedTemplate(code, phase)
@@ -801,6 +807,12 @@ func (s *Service) finishRecords(ctx context.Context, tx pgx.Tx, d lockedDeployme
 				op = *d.operation
 			}
 			params["backup_dir"] = BackupRoot + "/" + op.String()
+		}
+		if template == TemplateDeploymentPendingChangeRestored {
+			params["operation_id"] = "-"
+			if op, err := uuid.Parse(operationParam); err == nil {
+				params["operation_id"] = op.String()
+			}
 		}
 		if err := s.notify(ctx, tx, template, params); err != nil {
 			return err

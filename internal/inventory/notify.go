@@ -23,6 +23,11 @@ const (
 	// TemplateDeploymentSuperseded: a later operation replaced the files; nothing was restored
 	// (rollback_failed with deployment.superseded).
 	TemplateDeploymentSuperseded = "deployment.superseded"
+	// TemplateDeploymentPendingChangeRestored: a deployment put back the files from before an
+	// unfinished earlier change and then ended without writing its own certificate (rolled_back with
+	// deployment.pending_change_restored); the website serves an older certificate. Params also
+	// operation_id (the earlier change, a UUID of Alice's or the helper's validated form).
+	TemplateDeploymentPendingChangeRestored = "deployment.pending_change_restored"
 	// TemplateDeploymentNeedsAttention: Alice cannot reach the server to finish or undo a
 	// deployment and keeps trying (about a day); sent once per deployment.
 	TemplateDeploymentNeedsAttention = "deployment.needs_attention"
@@ -34,6 +39,6 @@ const (
 // Templates lists the inventory's email templates (render tests).
 func Templates() []string {
 	return []string{TemplateHostKeyChanged, TemplateAuthFailed, TemplateDeploymentFailed, TemplateDeploymentRollbackFailed,
-		TemplateDeploymentOutcomeUnknown, TemplateDeploymentRestoredUnverified, TemplateDeploymentSuperseded,
+		TemplateDeploymentOutcomeUnknown, TemplateDeploymentRestoredUnverified, TemplateDeploymentSuperseded, TemplateDeploymentPendingChangeRestored,
 		TemplateDeploymentNeedsAttention, TemplateDeploymentNeedsAttentionUnconfirmed}
 }

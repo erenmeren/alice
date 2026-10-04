@@ -364,7 +364,7 @@ var discoverKeys = []string{
 	"errors.nginx.location_unsupported.action", "errors.deployment.verify_other.action", "errors.deployment.superseded.action",
 	"errors.deployment.unknown_operation.action", "errors.deployment.recovery_exhausted.action",
 	"errors.deployment.outcome_unknown.action", "errors.deployment.rollback_file_changed.action",
-	"errors.deployment.rescan_needed.action", "email.deployment.superseded.body", "errors.deployment.pending_change_restored.action",
+	"errors.deployment.rescan_needed.action", "email.deployment.superseded.body", "email.deployment.pending_change_restored.body", "errors.deployment.pending_change_restored.action",
 }
 
 // Every text that names the control names it the same way in both languages, and no other text does.

@@ -22,11 +22,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
+	"alice/internal/notify"
 	"alice/internal/providers"
 	"alice/internal/rbac"
 	"alice/internal/testutil/pki"
+	"alice/locales"
 )
 
 // B1-I1 (and the independent audit of 2026-10-04, AUD-17): a discovery on one server never
@@ -495,4 +498,37 @@ func TestDiscoveryBoundsChainOrderingAndFollowsItsContext(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(c.PEMChain, "BEGIN CERTIFICATE"), "the leaf alone")
 	assert.False(t, c.ChainComplete)
+}
+
+// A deployment that ended rolled_back with deployment.pending_change_restored has its own email: the
+// website went back to the certificate from before an unfinished earlier change (not "the server
+// keeps its previous certificate"), with the earlier change's id (W1 re-review, Important 1).
+func TestPendingChangeRestoredHasItsOwnEmail(t *testing.T) {
+	f := newDeployFixture(t)
+	id := f.deploying(f.loc1)
+	op := uuid.New()
+	require.NoError(t, f.h.svc.FinishDeployment(f.h.ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusRolledBack,
+		ErrorCode: "deployment.pending_change_restored", Phase: providers.PhaseRestored, FailedStep: "recover_pending",
+		Params: map[string]string{"operation_id": op.String()}}))
+	emails := f.emails()
+	require.Len(t, emails, 1)
+	assert.Equal(t, inventory.TemplateDeploymentPendingChangeRestored, emails[0].Template)
+	assert.Equal(t, map[string]string{"target_name": "web-01", "cert_path": "/etc/nginx/ssl/www.crt", "deployment_id": id.String(),
+		"operation_id": op.String()}, emails[0].Params)
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	sender := &notify.Sender{Catalog: cat}
+	for lang, want := range map[string][]string{
+		"en": {"Alice put back the files from before that earlier change", "The certificate of this deployment was not written", "Discover"},
+		"tr": {"Alice o önceki değişiklikten önceki dosyaları geri koydu", "Bu dağıtımın sertifikası yazılmadı", "Keşfet"},
+	} {
+		m := sender.Render("ada@example.com", emails[0].Template, lang, emails[0].Params)
+		assert.NotContains(t, m.Subject+m.Body, "{{", lang)
+		assert.NotContains(t, m.Body, "keeps its previous certificate", lang)
+		assert.Contains(t, m.Body, op.String(), lang)
+		assert.Contains(t, m.Body, id.String(), lang)
+		for _, w := range want {
+			assert.Contains(t, m.Body, w, lang)
+		}
+	}
 }

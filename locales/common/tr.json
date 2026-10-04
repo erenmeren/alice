@@ -685,6 +685,10 @@
         "subject": "Alice {{target_name}} sunucusundaki bir dağıtımı tamamlayamıyor",
         "body": "Bir sertifika dağıtımı sırasında {{target_name}} sunucusuyla bağlantı kesildi (dosya: {{cert_path}}) ve Alice dağıtımı tamamlamak veya geri almak için sunucuya erişemiyor.\n\nAlice yaklaşık bir gün boyunca 15 dakikada bir yeniden dener, sonra elle müdahale ister. O zamana kadar web sitesini ve sunucunun bağlantısını denetleyin. Dağıtım: {{deployment_id}}"
       },
+      "pending_change_restored": {
+        "subject": "Alice {{target_name}} sunucusunda daha eski sertifika dosyalarını geri koydu; sertifikanız dağıtılmadı",
+        "body": "{{target_name}} sunucusundaki bir sertifika dağıtımı (dosya: {{cert_path}}), aynı dosyalarda Alice'in artık izlemediği, tamamlanmamış daha önceki bir değişiklik buldu. Alice o önceki değişiklikten önceki dosyaları geri koydu; bu yüzden web sitesi artık o değişiklikten önceki sertifikayı sunuyor. Bu sertifika, dağıtım istendiğinde sunulandan daha eski olabilir, hatta süresi dolmuş olabilir. Bu dağıtımın sertifikası yazılmadı.\n\nWeb sitesini hemen denetleyin. Sonra Alice'te sunucunun sayfasında Keşfet düğmesine tıklayın ve sertifikayı yeniden dağıtın. Önceki değişiklik: {{operation_id}}. Dağıtım: {{deployment_id}}"
+      },
       "needs_attention_unconfirmed": {
         "subject": "Alice {{target_name}} sunucusundaki bir dağıtımın sonucunu henüz doğrulayamıyor",
         "body": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımının nasıl sonuçlandığını henüz doğrulayamıyor (dosya: {{cert_path}}): sunucu beklendiği gibi yanıt vermedi.\n\nAlice yaklaşık bir gün boyunca 15 dakikada bir yeniden dener, sonra elle müdahale ister. O zamana kadar web sitesini denetleyin. Dağıtım: {{deployment_id}}"
