@@ -1,0 +1,10 @@
+#!/bin/sh
+# Test only: how the next "nginx -t" behaves (see the /usr/sbin/nginx wrapper): ok | fail-once | fail.
+set -eu
+case "${1:-}" in
+ok | fail-once | fail) echo "$1" >/etc/alice-e2e/test-mode ;;
+*)
+	echo "usage: alice-e2e-test-mode ok|fail-once|fail" >&2
+	exit 2
+	;;
+esac

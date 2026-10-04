@@ -1,0 +1,20 @@
+#!/bin/sh
+# TEST ONLY (the e2e SSH target image; never part of a release or of a real server).
+# Installed as /usr/sbin/nginx, the fixed path alice-helper runs; the distribution's binary is
+# diverted to /usr/lib/alice-e2e/nginx (dpkg-divert) and every call is passed on to it unchanged,
+# except "nginx -t" while /etc/alice-e2e/test-mode (alice-e2e-test-mode) asks for a fault:
+#   fail-once  the next "nginx -t" fails as a broken configuration would, then ok
+#   fail       every "nginx -t" fails
+# "nginx -T" (discovery and the deployment's configuration read) and "-s reload" are never changed.
+if [ "$#" -eq 1 ] && [ "$1" = "-t" ]; then
+	mode=$(cat /etc/alice-e2e/test-mode 2>/dev/null || echo ok)
+	case "$mode" in
+	fail-once | fail)
+		[ "$mode" = fail ] || echo ok >/etc/alice-e2e/test-mode
+		echo 'nginx: [emerg] unexpected "}" in /etc/nginx/conf.d/www.conf:1 (alice-e2e fault injection)' >&2
+		echo 'nginx: configuration file /etc/nginx/nginx.conf test failed' >&2
+		exit 1
+		;;
+	esac
+fi
+exec /usr/lib/alice-e2e/nginx "$@"

@@ -1,0 +1,72 @@
+#!/bin/sh
+# Test only: the throwaway test CA of the e2e SSH target and the certificates it signs. Nothing
+# here is committed or baked into an image layer: the CA is created when the container starts,
+# and its key never leaves the container.
+#   alice-e2e-pki init        create the CA (if missing) and the www.example.test pair (if missing)
+#   alice-e2e-pki leaf NAME DIR   write DIR/leaf.pem (leaf + CA) and DIR/leaf.key for NAME
+set -eu
+ca=/opt/alice-test-ca
+umask 077
+
+valid_name() {
+	printf '%s' "$1" | grep -Eqx '[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?' || {
+		echo "alice-e2e-pki: invalid name: $1" >&2
+		exit 2
+	}
+}
+
+ensure_ca() {
+	[ -f "$ca/ca.key" ] && [ -f "$ca/ca.pem" ] && return 0
+	install -d -m 0700 -o root -g root "$ca"
+	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -sha256 -days 3650 \
+		-subj "/CN=Alice e2e test CA $(openssl rand -hex 4)" \
+		-addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign \
+		-keyout "$ca/ca.key" -out "$ca/ca.pem" 2>/dev/null
+	chmod 0600 "$ca/ca.key"
+	chmod 0644 "$ca/ca.pem"
+}
+
+# leaf NAME DIR: a fresh P-256 key and a 90-day leaf for NAME signed by the test CA.
+leaf() {
+	valid_name "$1"
+	ensure_ca
+	cat >"$2/ext" <<EXT
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:$1
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid
+EXT
+	openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=$1" \
+		-keyout "$2/leaf.key" -out "$2/leaf.csr" 2>/dev/null
+	openssl x509 -req -in "$2/leaf.csr" -CA "$ca/ca.pem" -CAkey "$ca/ca.key" \
+		-set_serial "0x$(openssl rand -hex 16)" -days 90 -sha256 -extfile "$2/ext" -out "$2/leaf.crt" 2>/dev/null
+	cat "$2/leaf.crt" "$ca/ca.pem" >"$2/leaf.pem"
+}
+
+# www: install a fresh www.example.test pair as nginx's files (root-owned; key 0600).
+www() {
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' EXIT
+	leaf www.example.test "$tmp"
+	install -d -m 0755 -o root -g root /etc/nginx/ssl
+	install -m 0644 -o root -g root "$tmp/leaf.pem" /etc/nginx/ssl/www.crt
+	install -m 0600 -o root -g root "$tmp/leaf.key" /etc/nginx/ssl/www.key
+}
+
+case "${1:-}" in
+init)
+	ensure_ca
+	[ -f /etc/nginx/ssl/www.crt ] && [ -f /etc/nginx/ssl/www.key ] || www
+	;;
+www) www ;;
+leaf)
+	[ "$#" -eq 3 ] || { echo "usage: alice-e2e-pki leaf NAME DIR" >&2; exit 2; }
+	leaf "$2" "$3"
+	;;
+*)
+	echo "usage: alice-e2e-pki init | www | leaf NAME DIR" >&2
+	exit 2
+	;;
+esac

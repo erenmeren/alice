@@ -12,11 +12,15 @@ services:
     build:
       args:
         GO_TAGS: e2e testlicense
-  # Test-only SSH target for the Phase 3 journeys (web/e2e/phase3.spec.ts): Ubuntu 22.04 with
-  # OpenSSH, sudo, fixture users and keys generated at image build time, and alice-helper built
-  # from this repository in /opt/alice-bundle. Playwright prepares it with the setup script Alice
-  # shows (alice-e2e-prepare) and rotates its host key (alice-e2e-rotate-hostkey) through
-  # "docker compose exec". Alice reaches it as sshtarget:22 on the internal backend network.
+  # Test-only SSH target for the Phase 3 and Phase 4 journeys (web/e2e/phase3.spec.ts and later):
+  # Ubuntu 22.04 with OpenSSH, sudo, fixture users and keys generated at image build time, alice-helper
+  # built from this repository in /opt/alice-bundle, and the distribution's Nginx with two TLS
+  # websites (www.example.test, supported; files.example.test, deliberately unsupported) whose test
+  # CA and certificates are created at container start. No systemd: /usr/bin/systemctl is a test
+  # shim. Playwright prepares it with the setup script Alice shows (alice-e2e-prepare), rotates its
+  # host key (alice-e2e-rotate-hostkey) and drives Nginx (alice-e2e-newcert, -served, -reload-mode,
+  # -test-mode, -nginx-reset) through "docker compose exec". Alice reaches it as sshtarget:22 and
+  # sshtarget:443 on the internal backend network; it publishes nothing.
   sshtarget:
     image: alice-e2e-sshtarget
     build:
@@ -25,7 +29,7 @@ services:
     init: true
     networks: [backend]
     healthcheck:
-      test: ["CMD", "pgrep", "-x", "sshd"]
+      test: ["CMD-SHELL", "pgrep -x sshd >/dev/null && pgrep -x nginx >/dev/null"]
       interval: 5s
       timeout: 3s
       retries: 10

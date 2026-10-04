@@ -1,0 +1,23 @@
+#!/bin/sh
+# Test only: print a fresh certificate for NAME signed by the target's test CA, and its key, for a
+# test to upload to Alice. Output:
+#   -----ALICE CERT-----  the leaf, then the CA certificate (PEM)
+#   -----ALICE KEY-----   the leaf's private key (PEM; with --broken an unrelated key instead)
+#   -----ALICE END-----
+# Nothing is kept: the files live in a temporary directory that is deleted on exit.
+set -eu
+[ "$#" -ge 1 ] && [ "$#" -le 2 ] || { echo "usage: alice-e2e-newcert NAME [--broken]" >&2; exit 2; }
+broken=no
+[ "$#" -eq 2 ] && { [ "$2" = --broken ] || { echo "usage: alice-e2e-newcert NAME [--broken]" >&2; exit 2; }; broken=yes; }
+umask 077
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+/usr/local/sbin/alice-e2e-pki leaf "$1" "$tmp"
+if [ "$broken" = yes ]; then
+	openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$tmp/leaf.key" 2>/dev/null
+fi
+echo '-----ALICE CERT-----'
+cat "$tmp/leaf.pem"
+echo '-----ALICE KEY-----'
+cat "$tmp/leaf.key"
+echo '-----ALICE END-----'

@@ -1,0 +1,37 @@
+#!/bin/sh
+# TEST ONLY (the e2e SSH target image; never part of a release or of a real server).
+# The container runs no systemd, so this stands in for /usr/bin/systemctl, the fixed path
+# alice-helper runs. It handles exactly the two calls the helper makes and refuses anything else:
+#   systemctl reload nginx              -> /usr/sbin/nginx -s reload (what nginx.service's
+#                                          ExecReload does on Ubuntu 22.04)
+#   systemctl is-active --quiet nginx   -> exit 0 while an nginx process runs
+# Differences from systemd: is-active looks for a process, not the unit's state; reload is not
+# serialised with other unit jobs. /etc/alice-e2e/reload-mode (alice-e2e-reload-mode) injects
+# faults for the deployment failure journeys: ok (default), fail-once (the next reload exits 1,
+# then ok), fail (every reload exits 1), noop (exit 0 without reloading: nginx keeps serving the
+# old certificate).
+mode=$(cat /etc/alice-e2e/reload-mode 2>/dev/null || echo ok)
+case "$*" in
+"reload nginx")
+	case "$mode" in
+	fail-once)
+		echo ok >/etc/alice-e2e/reload-mode
+		echo "Job for nginx.service failed (alice-e2e fault injection)." >&2
+		exit 1
+		;;
+	fail)
+		echo "Job for nginx.service failed (alice-e2e fault injection)." >&2
+		exit 1
+		;;
+	noop) exit 0 ;;
+	esac
+	exec /usr/sbin/nginx -s reload
+	;;
+"is-active --quiet nginx")
+	exec pgrep -x nginx >/dev/null
+	;;
+*)
+	echo "systemctl (alice-e2e test shim): unsupported: $*" >&2
+	exit 1
+	;;
+esac

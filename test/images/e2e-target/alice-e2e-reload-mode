@@ -1,0 +1,11 @@
+#!/bin/sh
+# Test only: how the next "systemctl reload nginx" behaves (see /usr/bin/systemctl, the shim):
+# ok | fail-once | fail | noop.
+set -eu
+case "${1:-}" in
+ok | fail-once | fail | noop) echo "$1" >/etc/alice-e2e/reload-mode ;;
+*)
+	echo "usage: alice-e2e-reload-mode ok|fail-once|fail|noop" >&2
+	exit 2
+	;;
+esac

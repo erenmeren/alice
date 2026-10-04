@@ -1,0 +1,10 @@
+#!/bin/sh
+# Test only: put the target's Nginx back to its start state for the next test: a fresh
+# www.example.test pair from the test CA, no injected faults, configuration reloaded.
+# (alice-helper's own state in /var/lib/alice-helper is kept, as on a real server.)
+set -eu
+echo ok >/etc/alice-e2e/reload-mode
+echo ok >/etc/alice-e2e/test-mode
+/usr/local/sbin/alice-e2e-pki www
+/usr/sbin/nginx -t -q
+/usr/sbin/nginx -s reload

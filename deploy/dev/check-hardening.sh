@@ -55,6 +55,21 @@ if "${compose[@]}" config --services | grep -qx sshtarget; then
     check "sshtarget publishes no ports" "$(docker port "$target" | wc -l | tr -d ' ')" "0"
     check "sshtarget is only on the internal backend network" \
       "$(docker inspect -f '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}' "$target")" "${project}_backend "
+    check "sshtarget is healthy (sshd and nginx run)" "$(docker inspect -f '{{.State.Health.Status}}' "$target")" "healthy"
+    check "sshtarget's test CA key is root-only" \
+      "$(docker exec "$target" stat -c '%U %a' /opt/alice-test-ca/ca.key 2>/dev/null)" "root 600"
+    check "sshtarget's website key is root-only" \
+      "$(docker exec "$target" stat -c '%U %a' /etc/nginx/ssl/www.key 2>/dev/null)" "root 600"
+    # The test PKI is created at container start, never in an image layer: a fresh container of the
+    # image (no network, removed at once) has none of it.
+    check "sshtarget's image holds no test key or certificate" \
+      "$(docker run --rm --network none --entrypoint /bin/sh "$(docker inspect -f '{{.Config.Image}}' "$target")" \
+        -c 'ls /opt/alice-test-ca /etc/nginx/ssl 2>/dev/null | wc -l')" "0"
   fi
 fi
+# The test shims and the test PKI exist only in the SSH target, never in the Alice image.
+check "alice image has no systemctl shim" \
+  "$(docker cp "$alice:/usr/bin/systemctl" - >/dev/null 2>&1 && echo present || echo absent)" "absent"
+check "alice image has no test CA" \
+  "$(docker cp "$alice:/opt/alice-test-ca" - >/dev/null 2>&1 && echo present || echo absent)" "absent"
 exit "$fail"

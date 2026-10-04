@@ -15,7 +15,10 @@ type composeService struct {
 	Networks        []string `yaml:"networks"`
 	Init            bool     `yaml:"init"`
 	StopGracePeriod string   `yaml:"stop_grace_period"`
-	Build           struct {
+	Healthcheck     struct {
+		Test []string `yaml:"test"`
+	} `yaml:"healthcheck"`
+	Build struct {
 		Context    string `yaml:"context"`
 		Dockerfile string `yaml:"dockerfile"`
 	} `yaml:"build"`
@@ -48,6 +51,11 @@ func TestE2ETargetIsTestOnlyAndUnpublished(t *testing.T) {
 	assert.Equal(t, "90s", base.Services["alice"].StopGracePeriod)
 
 	overlay := readCompose(t, "../../deploy/docker-compose.e2e.yml")
+	names := make([]string, 0, len(overlay.Services))
+	for name := range overlay.Services {
+		names = append(names, name)
+	}
+	assert.ElementsMatch(t, []string{"alice", "sshtarget"}, names, "the overlay adds only the SSH target (which also runs Nginx)")
 	target, ok := overlay.Services["sshtarget"]
 	require.True(t, ok)
 	assert.Empty(t, target.Ports, "the SSH target publishes no port on the host")
@@ -58,4 +66,16 @@ func TestE2ETargetIsTestOnlyAndUnpublished(t *testing.T) {
 	assert.Equal(t, "test/images/e2e-target/Dockerfile", target.Build.Dockerfile)
 	_, err := os.Stat("../../" + target.Build.Dockerfile)
 	assert.NoError(t, err)
+	assert.Equal(t, []string{"CMD-SHELL", "pgrep -x sshd >/dev/null && pgrep -x nginx >/dev/null"}, target.Healthcheck.Test,
+		"the target is healthy only while sshd and nginx run")
+}
+
+// The test-only shims and fixtures of the SSH target are copied into its image only: the release
+// Dockerfile never names them.
+func TestReleaseImageHasNoTestTarget(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/Dockerfile")
+	require.NoError(t, err)
+	for _, s := range []string{"test/images", "e2e-target", "systemctl", "alice-e2e", "nginx"} {
+		assert.NotContains(t, string(raw), s)
+	}
 }
