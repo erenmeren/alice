@@ -89,8 +89,8 @@ var reasonCalls = map[string]int{"Fail": 0, "Attention": 0, "Retry": 0, "NewErro
 // error that a person cannot act on (contract: target.invalid_config maps to ALC-SYS-0003).
 var unregisteredReasons = map[string]bool{"target.invalid_config": true, "license.unclassified": true}
 
-// reasonShapeRE matches the stored reasons of the Phase 3 areas.
-var reasonShapeRE = regexp.MustCompile(`^(ssh|sshkey|target|job|hostkey)\.[a-z_]+$`)
+// reasonShapeRE matches the stored reasons of the Phase 3 and Phase 4 areas.
+var reasonShapeRE = regexp.MustCompile(`^(ssh|sshkey|target|job|hostkey|nginx|certificate|csr|deployment)\.[a-z_]+$`)
 
 // notReasons are reason-shaped literals that are audit actions, job types or email templates.
 var notReasons = map[string]bool{
@@ -103,6 +103,16 @@ var notReasons = map[string]bool{
 	"target.test_connection": true, "target.discover": true, "sshkey.remove": true,
 	// email templates (target.host_key_changed is also a reason and stays checked)
 	"target.auth_failed": true,
+	// Phase 4 audit actions
+	"certificate.uploaded": true, "certificate.key_attached": true, "certificate.upload_rejected": true, "csr.created": true,
+	"csr.completed": true, "csr.cancelled": true, "deployment.requested": true, "deployment.denied": true,
+	"deployment.precheck_started": true, "deployment.started": true, "deployment.recovering": true, "deployment.recovery_started": true,
+	"deployment.succeeded": true, "deployment.unchanged": true, "deployment.rolled_back": true,
+	// Phase 4 job types
+	"certificate.deploy": true, "certificate.deploy_recover": true, "deployment.recovery_sweep": true,
+	// Phase 4 email templates (deployment.rollback_failed, outcome_unknown, restored_unverified and superseded are also
+	// reasons and stay checked)
+	"deployment.failed": true, "deployment.needs_attention": true, "deployment.needs_attention_unconfirmed": true,
 }
 
 // storedReasons collects the literal reasons (and package string constants) passed to reasonCalls
@@ -185,7 +195,8 @@ func storedReasons(t *testing.T, dir string) map[string]string {
 // and a troubleshooting section), so the UI never shows a bare reason.
 func TestJobResultReasonsAreRegistered(t *testing.T) {
 	seen := 0
-	for _, dir := range []string{"../jobs", "../jobs/targetjobs", "../providers", "../providers/linuxssh", "../inventory"} {
+	for _, dir := range []string{"../jobs", "../jobs/targetjobs", "../providers", "../providers/linuxssh", "../inventory",
+		"../providers/nginx", "../jobs/deployjobs", "../certs"} {
 		for reason, pos := range storedReasons(t, dir) {
 			seen++
 			if reason == "" || unregisteredReasons[reason] { // "" settles a success

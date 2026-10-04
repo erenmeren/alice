@@ -313,7 +313,7 @@
       "output_too_large": {
         "title": "The server sent more data than Alice accepts.",
         "cause": "A file or a command on the server produced an unusually large answer.",
-        "action": "Check the authorized_keys files and the SSH server settings on the server for unusually large content."
+        "action": "Check the server for unusually large content in what Alice reads there: the authorized_keys files, the SSH server settings or the Nginx configuration."
       },
       "protocol_error": {
         "title": "Alice could not understand the server's answer.",
@@ -378,6 +378,239 @@
         "title": "The same task is already waiting with other options.",
         "cause": "A task of this kind is already queued for this item, and it was requested with different options.",
         "action": "Wait until the queued task has finished, then try again."
+      }
+    },
+    "nginx": {
+      "not_found": {
+        "title": "Nginx was not found on this server.",
+        "cause": "Alice looked for /usr/sbin/nginx, where the standard packages install it.",
+        "action": "Install Nginx from your distribution or nginx.org, or add this server as a Linux server."
+      },
+      "config_invalid": {
+        "title": "Nginx's configuration already has an error, so Alice will not make it worse.",
+        "cause": "The command nginx -t fails on this server before Alice changed anything.",
+        "action": "Run nginx -t on the server, fix the error, then choose Discover again."
+      },
+      "config_changed": {
+        "title": "The Nginx configuration changed since Alice last looked.",
+        "cause": "This website no longer uses the certificate and key files Alice found. Nothing was changed.",
+        "action": "Choose Discover on the server's page, then deploy again."
+      },
+      "profile_missing": {
+        "title": "This server is not prepared for Nginx work.",
+        "cause": "The Alice account may run alice-helper for SSH keys only (Linux profile), not for certificates.",
+        "action": "On the Servers page choose Server type Nginx server, copy the commands and run them on the server again."
+      },
+      "no_space": {
+        "title": "The server has no free disk space.",
+        "cause": "Alice needs room for the new files and a backup of the old ones. Nothing was changed.",
+        "action": "Free some space on the server, then deploy again."
+      },
+      "file_changed": {
+        "title": "The certificate file changed since Alice last looked.",
+        "cause": "Someone or another tool replaced the file after the last discovery. Nothing was changed.",
+        "action": "Choose Discover on the server's page, check the website, then deploy again."
+      },
+      "location_unsupported": {
+        "title": "Alice cannot change certificates at this place.",
+        "cause": "The website's certificate setup is one Alice does not support, or its files no longer meet Alice's safety rules (for example a folder that users other than root can change). Nothing was changed.",
+        "action": "Choose Discover on the server's page to see the reason next to the website, and change the setup on the server if you want Alice to manage it."
+      },
+      "busy": {
+        "title": "Another certificate change is running on this server.",
+        "cause": "alice-helper changes one website at a time on a server.",
+        "action": "Wait a minute and try again."
+      },
+      "io_error": {
+        "title": "The server could not complete the file work. Nothing was changed.",
+        "cause": "alice-helper reported an input or output error before it replaced any file, for example a folder it cannot write, a read-only file system, or Nginx stopping while it was checked.",
+        "action": "Check the server's disks and certificate folders, then deploy again."
+      }
+    },
+    "certificate": {
+      "invalid": {
+        "title": "This is not a certificate Alice can read.",
+        "cause": "Alice expects PEM text with BEGIN CERTIFICATE blocks, or a PFX file.",
+        "action": "Check that you chose the certificate file, not a request or another file."
+      },
+      "key_mismatch": {
+        "title": "The certificate does not match its private key.",
+        "cause": "The private key belongs to another certificate. During a deployment, Nginx reported this after the new files were written.",
+        "action": "Upload the key that was created together with this certificate. For a deployment, its status shows whether the previous files are back."
+      },
+      "expired": {
+        "title": "This certificate has already expired.",
+        "cause": "Its validity period has ended, so browsers would refuse it.",
+        "action": "Get a renewed certificate from your certificate authority and upload that one."
+      },
+      "key_encrypted": {
+        "title": "The private key is protected with a password.",
+        "cause": "Alice cannot store a key it cannot read.",
+        "action": "Remove the password from the key, or upload a PFX file and enter its password."
+      },
+      "pfx_password": {
+        "title": "The PFX password is wrong or the file is damaged.",
+        "cause": "Alice could not open the PFX file with this password.",
+        "action": "Check the password, or export the PFX file again."
+      },
+      "weak": {
+        "title": "This certificate uses a weak key or signature.",
+        "cause": "RSA keys shorter than 2048 bits and MD5 or SHA-1 signatures are no longer safe.",
+        "action": "Ask your certificate authority for a certificate with a stronger key and a SHA-256 signature."
+      },
+      "unsupported_key": {
+        "title": "Alice supports RSA and ECDSA certificates only.",
+        "cause": "This certificate uses another key type (for example Ed25519), another curve, or an RSA key larger than 16384 bits.",
+        "action": "Use a certificate with an RSA key of 2048 to 16384 bits, or an ECDSA P-256 or P-384 key."
+      },
+      "duplicate": {
+        "title": "Alice already has this certificate with its key.",
+        "cause": "This certificate and its key are already stored, from an earlier upload or a signing request.",
+        "action": "Open the certificate in the list and deploy it from there."
+      },
+      "no_private_key": {
+        "title": "Alice does not have the private key of this certificate.",
+        "cause": "Alice found this certificate on a server, and private keys are never read from servers.",
+        "action": "Upload the certificate together with its key, then deploy it."
+      },
+      "key_type_mismatch": {
+        "title": "This certificate's key type does not fit this place.",
+        "cause": "Key type the website uses here: {{expected}}. Key type of this certificate: {{actual}}.",
+        "action": "Choose a certificate with the same key type, or the website's other certificate place."
+      },
+      "chain_unconfirmed": {
+        "title": "An administrator must confirm the incomplete chain of this certificate.",
+        "cause": "The certificate chain does not reach a trusted root, so some browsers may not trust it.",
+        "action": "Ask an administrator to deploy it and confirm the chain."
+      },
+      "not_yet_valid": {
+        "title": "This certificate is not valid yet.",
+        "cause": "Its validity period has not started, so browsers would refuse it.",
+        "action": "Deploy it once its validity period has started, or check the clock of the Alice host."
+      },
+      "pfx_busy": {
+        "title": "Alice is busy reading other PFX files.",
+        "cause": "Alice reads at most two PFX files at a time, and that limit was reached. Nothing was stored.",
+        "action": "Wait a moment and upload the file again."
+      }
+    },
+    "csr": {
+      "not_pending": {
+        "title": "This signing request is no longer open.",
+        "cause": "It was completed or cancelled.",
+        "action": "Create a new signing request if you need one."
+      },
+      "certificate_mismatch": {
+        "title": "This certificate was not issued for this signing request.",
+        "cause": "Its public key is not the one Alice created for the request.",
+        "action": "Paste the certificate your certificate authority returned for this request."
+      }
+    },
+    "deployment": {
+      "in_progress": {
+        "title": "Another deployment to this website is in progress.",
+        "cause": "Alice runs one deployment per certificate file at a time.",
+        "action": "Wait until it finishes; its progress is in the deployment history."
+      },
+      "recovery_pending": {
+        "title": "Alice is still finishing an earlier deployment on this server.",
+        "cause": "An earlier deployment on this server did not end normally, and Alice must first find out how it ended and finish it.",
+        "action": "Wait until that deployment shows its result in the deployment history, then deploy again."
+      },
+      "verify_failed": {
+        "title": "The website still serves the previous certificate.",
+        "cause": "After the change the website kept serving the previous certificate, for example because another server block answers for this name or Nginx was not reloaded. The deployment's status shows whether the previous files are back.",
+        "action": "Check which server block answers for this name, then deploy again."
+      },
+      "verify_other": {
+        "title": "Alice could not confirm which certificate the website serves.",
+        "cause": "The website served a certificate that is neither the previous nor the new one (for example from a load balancer in front of it), or Alice has not read the website's current certificate yet. The deployment's status shows whether anything was changed.",
+        "action": "Choose Discover on the server's page. If the website is behind another server, an administrator can set the port and name to check in its verification settings."
+      },
+      "verify_unreachable": {
+        "title": "Alice could not reach the website on port {{port}}.",
+        "cause": "Neither Alice nor the server itself could connect to the website, so the certificate it serves could not be checked. The deployment's status shows whether anything was changed.",
+        "action": "Allow Alice to reach this port, or ask an administrator to change the website's verification settings."
+      },
+      "reload_failed": {
+        "title": "Nginx did not reload.",
+        "cause": "systemctl reload nginx failed after the new files were written. The deployment's status shows whether the previous files are back.",
+        "action": "Run systemctl status nginx on the server to see why, then deploy again."
+      },
+      "config_test_failed": {
+        "title": "Nginx rejected the new files.",
+        "cause": "nginx -t failed after the new certificate and key were written. The deployment's status shows whether the previous files are back.",
+        "action": "Check the certificate file format and the chain, then deploy again."
+      },
+      "rollback_failed": {
+        "title": "Alice could not confirm that the previous certificate is back. Manual action is needed.",
+        "cause": "The deployment failed, and putting the previous certificate and key back did not finish or could not be confirmed. A backup of the previous files is on the server in /var/lib/alice-helper/backups, in the folder named with this deployment's ID.",
+        "action": "Check the website now. Compare the files with the backup on the server, then run nginx -t and systemctl reload nginx."
+      },
+      "rollback_reload_failed": {
+        "title": "Files are back in place but Nginx did not reload.",
+        "cause": "Alice restored the previous certificate and key, but systemctl reload nginx failed afterwards.",
+        "action": "Run systemctl status nginx on the server, fix the cause, then reload Nginx."
+      },
+      "interrupted": {
+        "title": "The deployment did not finish normally.",
+        "cause": "The connection to the server or Alice itself stopped, or the server could not finish writing the files, while the deployment ran. The deployment's status shows which certificate the server has; if Alice does not know yet, it keeps checking.",
+        "action": "Check the deployment history. Once it shows a result, deploy again if needed."
+      },
+      "target_not_ready": {
+        "title": "Alice cannot deploy to this server now.",
+        "cause": "The server is not connected: its fingerprint is not confirmed or has changed, Alice cannot sign in, or the server is disabled.",
+        "action": "Open the server's page, solve the problem shown there, then deploy again."
+      },
+      "verify_chain": {
+        "title": "The website serves the expected certificate with a different chain (port {{port}}).",
+        "cause": "The number of certificates the website sends differs from the chain Alice expected, for example because another file or a proxy adds or drops intermediate certificates. The deployment's status shows whether anything was changed.",
+        "action": "Check which certificate files the server blocks for this name use, then deploy again."
+      },
+      "nothing_to_restore": {
+        "title": "There was nothing to restore.",
+        "cause": "alice-helper found that this deployment had not changed any file, so there was nothing to put back.",
+        "action": "Check the deployment's result in the deployment history, then deploy again if needed."
+      },
+      "superseded": {
+        "title": "A later change replaced the files, so Alice did not restore them.",
+        "cause": "While Alice was finishing this deployment, a later operation on the server replaced the certificate files. Alice cannot tell what they hold now.",
+        "action": "Check which certificate the website serves now, then choose Discover on the server's page."
+      },
+      "unknown_operation": {
+        "title": "The server has no record of this deployment.",
+        "cause": "alice-helper has no journal for this deployment, for example because it never received it or the record was removed after 30 days.",
+        "action": "Check which certificate the website serves now, then choose Discover on the server's page."
+      },
+      "target_deleted": {
+        "title": "The server was deleted before the deployment finished.",
+        "cause": "The server was removed from Alice while this deployment was waiting or running. If a change had already reached the server, Alice cannot check it any more.",
+        "action": "If the server still exists, check its website and the certificate files on it."
+      },
+      "recovery_exhausted": {
+        "title": "Alice stopped trying to finish this deployment. Manual action is needed.",
+        "cause": "For about a day Alice could not find out how the deployment ended, usually because it could not reach the server. If the change reached the server, a backup of the previous files is there in /var/lib/alice-helper/backups, in the folder named with this deployment's ID.",
+        "action": "Check the website and the server's connection now, then choose Discover on the server's page."
+      },
+      "outcome_unknown": {
+        "title": "Alice cannot tell how this deployment ended. Manual action is needed.",
+        "cause": "Alice no longer has the records it needs to check or undo this deployment. If the change reached the server, a backup of the previous files is there in /var/lib/alice-helper/backups, in the folder named with this deployment's ID.",
+        "action": "Check the website now, then choose Discover on the server's page."
+      },
+      "restored_unverified": {
+        "title": "The previous files are back, but the website was not confirmed.",
+        "cause": "Alice put the previous certificate and key back, but then could not confirm that the website serves the previous certificate again.",
+        "action": "Check the website now. If it is wrong, run nginx -t and systemctl reload nginx on the server."
+      },
+      "rollback_file_changed": {
+        "title": "Another program changed the certificate files during the deployment. Manual action is needed.",
+        "cause": "Alice did not put the previous files back, because the files on the server are neither the ones it wrote nor the previous ones. A backup of the previous files is on the server in /var/lib/alice-helper/backups, in the folder named with this deployment's ID.",
+        "action": "Find out which program changed the files (for example certbot), check the website now, then choose Discover on the server's page."
+      },
+      "rescan_needed": {
+        "title": "Alice must read this website's files again before deploying.",
+        "cause": "Alice does not know the current content of the certificate file, which it needs to make sure nobody changed the file in the meantime.",
+        "action": "Choose Discover on the server's page, then deploy again."
       }
     }
   },

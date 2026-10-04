@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -104,6 +106,62 @@ var (
 	ErrJobTampered     = ErrorCode{Code: "ALC-JOB-0003", Reason: "job.tampered", Status: http.StatusInternalServerError}
 	ErrJobUnknownType  = ErrorCode{Code: "ALC-JOB-0004", Reason: "job.unknown_type", Status: http.StatusInternalServerError}
 	ErrJobConflict     = ErrorCode{Code: "ALC-JOB-0005", Reason: "job.conflict", Status: http.StatusConflict}
+
+	// Phase 4: Nginx, certificates, signing requests and deployments (R38). The nginx.* and most
+	// deployment.* reasons are carried by deployment and job records; the API answers with the
+	// request refusals (inventory sentinels) directly.
+	ErrNginxNotFound            = ErrorCode{Code: "ALC-NGX-0001", Reason: "nginx.not_found", Status: http.StatusBadGateway}
+	ErrNginxConfigInvalid       = ErrorCode{Code: "ALC-NGX-0002", Reason: "nginx.config_invalid", Status: http.StatusConflict}
+	ErrNginxConfigChanged       = ErrorCode{Code: "ALC-NGX-0003", Reason: "nginx.config_changed", Status: http.StatusConflict}
+	ErrNginxProfileMissing      = ErrorCode{Code: "ALC-NGX-0004", Reason: "nginx.profile_missing", Status: http.StatusBadGateway}
+	ErrNginxNoSpace             = ErrorCode{Code: "ALC-NGX-0005", Reason: "nginx.no_space", Status: http.StatusBadGateway}
+	ErrNginxFileChanged         = ErrorCode{Code: "ALC-NGX-0006", Reason: "nginx.file_changed", Status: http.StatusConflict}
+	ErrNginxLocationUnsupported = ErrorCode{Code: "ALC-NGX-0007", Reason: "nginx.location_unsupported", Status: http.StatusConflict}
+	ErrNginxBusy                = ErrorCode{Code: "ALC-NGX-0008", Reason: "nginx.busy", Status: http.StatusConflict, Retryable: true}
+	// ErrNginxIOError replaces the plan's nginx.write_failed (never produced): nginx-deploy's
+	// IO_ERROR, whose causes the helper's answer does not tell apart; nothing was changed.
+	ErrNginxIOError = ErrorCode{Code: "ALC-NGX-0009", Reason: "nginx.io_error", Status: http.StatusBadGateway, Retryable: true}
+
+	ErrCertInvalid            = ErrorCode{Code: "ALC-CRT-0001", Reason: "certificate.invalid", Status: http.StatusUnprocessableEntity}
+	ErrCertKeyMismatch        = ErrorCode{Code: "ALC-CRT-0002", Reason: "certificate.key_mismatch", Status: http.StatusUnprocessableEntity}
+	ErrCertExpired            = ErrorCode{Code: "ALC-CRT-0003", Reason: "certificate.expired", Status: http.StatusUnprocessableEntity}
+	ErrCertKeyEncrypted       = ErrorCode{Code: "ALC-CRT-0004", Reason: "certificate.key_encrypted", Status: http.StatusUnprocessableEntity}
+	ErrCertPFXPassword        = ErrorCode{Code: "ALC-CRT-0005", Reason: "certificate.pfx_password", Status: http.StatusUnprocessableEntity}
+	ErrCertWeak               = ErrorCode{Code: "ALC-CRT-0006", Reason: "certificate.weak", Status: http.StatusUnprocessableEntity}
+	ErrCertUnsupportedKey     = ErrorCode{Code: "ALC-CRT-0007", Reason: "certificate.unsupported_key", Status: http.StatusUnprocessableEntity}
+	ErrCertDuplicate          = ErrorCode{Code: "ALC-CRT-0008", Reason: "certificate.duplicate", Status: http.StatusConflict}
+	ErrCertNoPrivateKey       = ErrorCode{Code: "ALC-CRT-0009", Reason: "certificate.no_private_key", Status: http.StatusConflict}
+	ErrCertKeyTypeMismatch    = ErrorCode{Code: "ALC-CRT-0010", Reason: "certificate.key_type_mismatch", Status: http.StatusConflict}
+	ErrCertChainUnconfirmed   = ErrorCode{Code: "ALC-CRT-0011", Reason: "certificate.chain_unconfirmed", Status: http.StatusConflict}
+	ErrCSRNotPending          = ErrorCode{Code: "ALC-CRT-0012", Reason: "csr.not_pending", Status: http.StatusConflict}
+	ErrCSRCertificateMismatch = ErrorCode{Code: "ALC-CRT-0013", Reason: "csr.certificate_mismatch", Status: http.StatusUnprocessableEntity}
+	ErrCertNotYetValid        = ErrorCode{Code: "ALC-CRT-0014", Reason: "certificate.not_yet_valid", Status: http.StatusConflict}
+	ErrCertPFXBusy            = ErrorCode{Code: "ALC-CRT-0015", Reason: "certificate.pfx_busy", Status: http.StatusServiceUnavailable, Retryable: true}
+
+	ErrDeployInProgress           = ErrorCode{Code: "ALC-DEP-0001", Reason: "deployment.in_progress", Status: http.StatusConflict, Retryable: true}
+	ErrDeployRecoveryPending      = ErrorCode{Code: "ALC-DEP-0002", Reason: "deployment.recovery_pending", Status: http.StatusConflict, Retryable: true}
+	ErrDeployVerifyFailed         = ErrorCode{Code: "ALC-DEP-0003", Reason: "deployment.verify_failed", Status: http.StatusBadGateway}
+	ErrDeployVerifyOther          = ErrorCode{Code: "ALC-DEP-0004", Reason: "deployment.verify_other", Status: http.StatusBadGateway}
+	ErrDeployVerifyUnreachable    = ErrorCode{Code: "ALC-DEP-0005", Reason: "deployment.verify_unreachable", Status: http.StatusBadGateway}
+	ErrDeployReloadFailed         = ErrorCode{Code: "ALC-DEP-0006", Reason: "deployment.reload_failed", Status: http.StatusBadGateway}
+	ErrDeployConfigTestFailed     = ErrorCode{Code: "ALC-DEP-0007", Reason: "deployment.config_test_failed", Status: http.StatusBadGateway}
+	ErrDeployRollbackFailed       = ErrorCode{Code: "ALC-DEP-0008", Reason: "deployment.rollback_failed", Status: http.StatusBadGateway}
+	ErrDeployRollbackReloadFailed = ErrorCode{Code: "ALC-DEP-0009", Reason: "deployment.rollback_reload_failed", Status: http.StatusBadGateway}
+	ErrDeployInterrupted          = ErrorCode{Code: "ALC-DEP-0010", Reason: "deployment.interrupted", Status: http.StatusBadGateway}
+	ErrDeployTargetNotReady       = ErrorCode{Code: "ALC-DEP-0011", Reason: "deployment.target_not_ready", Status: http.StatusConflict}
+	ErrDeployVerifyChain          = ErrorCode{Code: "ALC-DEP-0012", Reason: "deployment.verify_chain", Status: http.StatusBadGateway}
+	ErrDeployNothingToRestore     = ErrorCode{Code: "ALC-DEP-0013", Reason: "deployment.nothing_to_restore", Status: http.StatusBadGateway}
+	ErrDeploySuperseded           = ErrorCode{Code: "ALC-DEP-0014", Reason: "deployment.superseded", Status: http.StatusBadGateway}
+	ErrDeployUnknownOperation     = ErrorCode{Code: "ALC-DEP-0015", Reason: "deployment.unknown_operation", Status: http.StatusBadGateway}
+	ErrDeployTargetDeleted        = ErrorCode{Code: "ALC-DEP-0016", Reason: "deployment.target_deleted", Status: http.StatusConflict}
+	ErrDeployRecoveryExhausted    = ErrorCode{Code: "ALC-DEP-0017", Reason: "deployment.recovery_exhausted", Status: http.StatusBadGateway}
+	ErrDeployOutcomeUnknown       = ErrorCode{Code: "ALC-DEP-0018", Reason: "deployment.outcome_unknown", Status: http.StatusBadGateway}
+	// ErrDeployRestoredUnverified and ErrDeployRollbackFileChanged split deployment.rollback_failed
+	// by what the record says happened (refineReason): the files are back but the old certificate
+	// was not confirmed, or the restore was refused because another program changed the files.
+	ErrDeployRestoredUnverified  = ErrorCode{Code: "ALC-DEP-0019", Reason: "deployment.restored_unverified", Status: http.StatusBadGateway}
+	ErrDeployRollbackFileChanged = ErrorCode{Code: "ALC-DEP-0020", Reason: "deployment.rollback_file_changed", Status: http.StatusBadGateway}
+	ErrDeployRescanNeeded        = ErrorCode{Code: "ALC-DEP-0021", Reason: "deployment.rescan_needed", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -123,6 +181,16 @@ func AllErrorCodes() []ErrorCode {
 		ErrFileChanged, ErrKeysManagedElsewhere, ErrOutputTooLarge, ErrSSHProtocol, ErrHelperChecksums,
 		ErrOwnKeyProtected, ErrLastRootKey, ErrKeyNotRemovable, ErrSSHDUnreadable, ErrKeyVerifyFailed,
 		ErrJobNotWaiting, ErrJobLeaseExpired, ErrJobTampered, ErrJobUnknownType, ErrJobConflict,
+		ErrNginxNotFound, ErrNginxConfigInvalid, ErrNginxConfigChanged, ErrNginxProfileMissing, ErrNginxNoSpace,
+		ErrNginxFileChanged, ErrNginxLocationUnsupported, ErrNginxBusy, ErrNginxIOError,
+		ErrCertInvalid, ErrCertKeyMismatch, ErrCertExpired, ErrCertKeyEncrypted, ErrCertPFXPassword, ErrCertWeak,
+		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
+		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy,
+		ErrDeployInProgress, ErrDeployRecoveryPending, ErrDeployVerifyFailed, ErrDeployVerifyOther, ErrDeployVerifyUnreachable,
+		ErrDeployReloadFailed, ErrDeployConfigTestFailed, ErrDeployRollbackFailed, ErrDeployRollbackReloadFailed,
+		ErrDeployInterrupted, ErrDeployTargetNotReady, ErrDeployVerifyChain, ErrDeployNothingToRestore, ErrDeploySuperseded,
+		ErrDeployUnknownOperation, ErrDeployTargetDeleted, ErrDeployRecoveryExhausted, ErrDeployOutcomeUnknown,
+		ErrDeployRestoredUnverified, ErrDeployRollbackFileChanged, ErrDeployRescanNeeded,
 	}
 }
 
@@ -196,6 +264,30 @@ var errorMap = []struct {
 	{jobs.ErrNotWaiting, ErrJobNotWaiting, nil},
 	{jobs.ErrBadCursor, ErrBadRequest, nil}, // a cursor that does not decode
 	{jobs.ErrUnknownType, ErrJobUnknownType, nil},
+	// Phase 4. *inventory.KeyTypeMismatchError is matched in classify with its params; the bare
+	// sentinel still gets its code.
+	{inventory.ErrCertificateDuplicate, ErrCertDuplicate, nil},
+	{inventory.ErrCSRNotPending, ErrCSRNotPending, nil},
+	{inventory.ErrLocationUnsupported, ErrNginxLocationUnsupported, nil},
+	{inventory.ErrPFXBusy, ErrCertPFXBusy, nil},
+	{inventory.ErrCertificateInvalid, ErrCertInvalid, nil},
+	{inventory.ErrKeyMismatch, ErrCertKeyMismatch, nil},
+	{inventory.ErrCertificateExpired, ErrCertExpired, nil},
+	{inventory.ErrKeyEncrypted, ErrCertKeyEncrypted, nil},
+	{inventory.ErrPFXPassword, ErrCertPFXPassword, nil},
+	{inventory.ErrWeakCertificate, ErrCertWeak, nil},
+	{inventory.ErrUnsupportedKey, ErrCertUnsupportedKey, nil},
+	{inventory.ErrCSRMismatch, ErrCSRCertificateMismatch, nil},
+	{inventory.ErrCertificateTooLarge, ErrBodyTooLarge, nil},
+	{inventory.ErrDeploymentInProgress, ErrDeployInProgress, nil},
+	{inventory.ErrRecoveryPending, ErrDeployRecoveryPending, nil},
+	{inventory.ErrNoPrivateKey, ErrCertNoPrivateKey, nil},
+	{inventory.ErrKeyTypeMismatch, ErrCertKeyTypeMismatch, nil},
+	{inventory.ErrChainUnconfirmed, ErrCertChainUnconfirmed, nil},
+	{inventory.ErrNginxConfigInvalid, ErrNginxConfigInvalid, nil},
+	{inventory.ErrTargetNotReady, ErrDeployTargetNotReady, nil},
+	{inventory.ErrCertificateNotYetValid, ErrCertNotYetValid, nil},
+	{inventory.ErrLocationNeedsDiscovery, ErrDeployRescanNeeded, nil},
 }
 
 type errorPayload struct {
@@ -252,55 +344,102 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		s.writeError(w, r, ErrTryAgain)
 		return
 	}
+	ec, params, ok := classify(err)
+	if !ok {
+		s.deps.Log.Error("request failed", append([]any{"request_id", RequestID(r.Context()), "path", r.URL.Path}, errorAttrs(err)...)...)
+		s.writeError(w, r, ErrUnexpected)
+		return
+	}
+	if ec == ErrCertPFXBusy {
+		w.Header().Set("Retry-After", "1") // a PFX decode slot frees within the decode's time
+	}
+	var refused *inventory.LocationRefusalError
+	if errors.As(err, &refused) {
+		// A deployment request is all or nothing: name the location that refused it.
+		params = maps.Clone(params)
+		if params == nil {
+			params = map[string]string{}
+		}
+		params["location_id"] = refused.LocationID.String()
+	}
+	s.writeErrorWith(w, r, ec, params, nil)
+}
+
+// classify maps a domain error to its API code and params; ok is false for an error no table
+// knows (answered as ErrUnexpected by fail).
+func classify(err error) (ErrorCode, map[string]string, bool) {
 	var wrong *license.WrongInstallationError
 	if errors.As(err, &wrong) {
 		// Only the six-character ID suffixes, never file content (L-43).
-		s.writeErrorWith(w, r, ErrLicenseWrongInstallation, map[string]string{"expected": wrong.Expected, "got": wrong.Got}, nil)
-		return
+		return ErrLicenseWrongInstallation, map[string]string{"expected": wrong.Expected, "got": wrong.Got}, true
 	}
 	var limit *license.TargetLimitError
 	if errors.As(err, &limit) {
-		s.writeErrorWith(w, r, ErrLicenseTargetLimit, map[string]string{"used": strconv.Itoa(limit.Used), "max": strconv.Itoa(limit.Max)}, nil)
-		return
+		return ErrLicenseTargetLimit, map[string]string{"used": strconv.Itoa(limit.Used), "max": strconv.Itoa(limit.Max)}, true
+	}
+	var keyType *inventory.KeyTypeMismatchError
+	if errors.As(err, &keyType) {
+		// Key type codes ("rsa", "ecdsa") from Alice's own records, never text from a server.
+		return ErrCertKeyTypeMismatch, map[string]string{"expected": keyType.Expected, "actual": keyType.Actual}, true
 	}
 	var perr *providers.Error
 	if errors.As(err, &perr) {
 		// Only the stable reason and its allowlisted primitive params reach the client; the
 		// provider's cause (remote output, driver text) is never shown nor logged as text.
 		if ec := codeForReason(perr.Code); ec != ErrUnexpected {
-			s.writeErrorWith(w, r, ec, providerParams(perr.Params), nil)
-			return
+			return ec, providerParams(perr.Params), true
 		}
 	}
 	for _, m := range errorMap {
 		if errors.Is(err, m.err) {
-			s.writeErrorWith(w, r, m.code, m.params, nil)
-			return
+			return m.code, m.params, true
 		}
 	}
-	s.deps.Log.Error("request failed", append([]any{"request_id", RequestID(r.Context()), "path", r.URL.Path}, errorAttrs(err)...)...)
-	s.writeError(w, r, ErrUnexpected)
+	return ErrorCode{}, nil, false
 }
 
 // providerParamKeys are the provider error params a client may see: fixed labels, numbers and
 // fingerprints (which are not secret). Any other key is dropped, so a provider that ever puts
-// remote text or a key line into its params cannot leak it through the API.
+// remote text or a key line into its params cannot leak it through the API. The Phase 4 keys
+// (pre-flight D26) have a value rule as well (providerParamRules).
 var providerParamKeys = map[string]bool{
 	"helper_code": true, "subcommand": true, "exit_code": true, "reason": true, "field": true, "attempts": true,
 	"wait": true, "fingerprint": true, "old_fingerprint": true, "new_fingerprint": true,
 	"helper_protocol": true, "required_protocol": true, // ssh.helper_outdated
+	"port": true, "failed_step": true, "profile": true, "phase": true, "directory": true, "backup_dir": true,
+	"expected": true, "actual": true, "mode": true,
+}
+
+var (
+	paramCodeRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
+	// paramPathRE: an absolute path of the characters helper paths may hold; at most 256 bytes
+	// (inventory's bound of a stored param value) is checked by the rule's length bound.
+	paramPathRE = regexp.MustCompile(`^/[A-Za-z0-9._/@:+-]{0,255}$`)
+	paramPortRE = regexp.MustCompile(`^[1-9][0-9]{0,4}$`)
+)
+
+// providerParamRules bound the values of the Phase 4 params: a port number, a fixed code (a step,
+// phase, profile, key type or verification mode) or an absolute path Alice itself chose (the
+// backup folder). A value that does not fit is dropped with its key.
+var providerParamRules = map[string]*regexp.Regexp{
+	"port": paramPortRE, "failed_step": paramCodeRE, "profile": paramCodeRE, "phase": paramCodeRE, "mode": paramCodeRE,
+	"expected": paramCodeRE, "actual": paramCodeRE, "directory": paramPathRE, "backup_dir": paramPathRE,
 }
 
 // providerParams returns the allowlisted params of a provider error (nil when none remain).
 func providerParams(in map[string]string) map[string]string {
 	var out map[string]string
 	for k, v := range in {
-		if providerParamKeys[k] {
-			if out == nil {
-				out = map[string]string{}
-			}
-			out[k] = v
+		if !providerParamKeys[k] {
+			continue
 		}
+		if rule, ok := providerParamRules[k]; ok && !rule.MatchString(v) {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[k] = v
 	}
 	return out
 }
