@@ -95,7 +95,8 @@ installation signed with the test key, which only this build trusts; fields `val
 (run due jobs now: it claims jobs for 20 s, at most 20 per call, and lets the last one run until 50 s, so give the
 request a 60 s timeout; a client that gives up does not cancel the running job; the answer is `{"ran": n}`, plus
 `"cut_off": true` exactly when the budget ended before the running job returned, which is then retried like any
-interrupted job; one drain runs at a time, a second one meanwhile answers 409, which the Playwright helper retries) and `POST /test/scheduler/run` with `{"task": "<job type>"}` (run one periodic task now,
+interrupted job; one drain runs at a time, a second one meanwhile answers 409 "a drain is already running", the only answer the
+Playwright helper waits out; a cut-off the test did not ask for fails the test, also inside a retried step) and `POST /test/scheduler/run` with `{"task": "<job type>"}` (run one periodic task now,
 for example `deployment.recovery_sweep`; 404 for a name that is not a scheduled task). The e2e build starts no job
 workers: queued jobs (connection tests, discovery, key removals, certificate deployments and their recoveries, and
 the jobs the scheduler enqueues) run only when a test calls `/test/jobs/drain`, so every job state is reproducible.
@@ -147,7 +148,9 @@ faulted `nginx -t`, so the master process shows that path in `ps`. alice-helper 
 fixed paths as on a real server. Both shims exist only in this image; `make e2e-hardening-check` checks that the
 Alice image has neither them nor the test CA, that the target's keys are root-only and that its image holds no
 test key. The e2e stack publishes its own host port, `ALICE_E2E_PORT`
-(default 9443; open https://localhost:9443), never `ALICE_PORT`, so it runs beside the `make up` stack; the
+(default 9443; open https://localhost:9443), never `ALICE_PORT`, so it runs beside the `make up` stack. It is
+bound to 127.0.0.1 only, because the e2e build answers the unauthenticated `/test/*` endpoints (`make
+e2e-hardening-check` fails on any other binding); the
 Playwright tests use the same port (`ALICE_BASE_URL` overrides the whole address). `make ci` runs `make e2e-down`
 at the end, also when an e2e stage fails. `make up` rebuilds the Go layer on every run because the build time is passed to the image (it is the
 floor of the license clock, L-53).
@@ -170,6 +173,12 @@ As a mitigation (not a fix), the suite allows one retry, and outside CI only for
 reported as flaky, with the annotation "retried after network change". The retry of any other failure
 fails at once with "not retried: …", so the original error stays the result. In CI the retry policy is
 unchanged (one retry for any failure).
+
+Playwright keeps a trace of a failed test (`web/test-results/`, and `web/playwright-report/`). The traces of
+the certificate journeys contain the private keys those tests generated and pasted into the upload form:
+throwaway test keys of the throwaway test CA, created at run time inside the e2e target and worthless outside
+that container's life. They are still key material: do not attach those traces to an issue or share them
+outside the team, and never commit `web/test-results/` or `web/playwright-report/`.
 
 The release key gate `make release-keycheck` fails until the vendor's public key is committed to
 `internal/license/keys/production.json` (see `docs/vendor/licensing-vendor.md`); it is not part of `make ci`.
