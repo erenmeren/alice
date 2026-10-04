@@ -61,6 +61,8 @@ const P = {
     repinTitle: 'Accept the new server fingerprint',
     reason: 'Reason',
     accept: 'Accept new fingerprint',
+    keep: 'The server still shows the previous fingerprint',
+    dismissed: 'Server identity change dismissed',
     usedWhere: 'Where this key is used',
     noKeys: 'No SSH keys match these filters.',
     limit: (n: number) => `Your license allows ${n} targets.`,
@@ -94,6 +96,8 @@ const P = {
     repinTitle: 'Yeni sunucu parmak izini kabul et',
     reason: 'Gerekçe',
     accept: 'Yeni parmak izini kabul et',
+    keep: 'Sunucu hâlâ önceki parmak izini gösteriyor',
+    dismissed: 'Sunucu kimlik değişikliği yok sayıldı',
     usedWhere: 'Bu anahtarın kullanıldığı yerler',
     noKeys: 'Bu filtrelere uyan SSH anahtarı yok.',
     limit: (n: number) => `Lisansınız en fazla ${n} hedefe izin veriyor.`,
@@ -293,6 +297,57 @@ for (const lang of ['en', 'tr'] as Lang[]) {
           console.error('could not restore the deploy user authorized_keys on sshtarget:', e);
         }
       }
+    });
+
+    test('a dismissed identity change: the server still shows the previous fingerprint', async ({ page, request }) => {
+      const { totpSecret } = await runWizard(page, request, lang);
+      await openServers(page, p);
+      targetExec(['/usr/local/sbin/alice-e2e-prepare'], (await page.getByTestId('setup-script').textContent()) ?? '');
+      await addServerInDialog(page, p, 'e2e-target', 'sshtarget');
+      const confirm = page.getByRole('dialog', { name: p.confirmTitle });
+      await settle(request, confirm);
+      const onServer = fingerprintOf(targetExec(['ssh-keygen', '-lf', HOST_KEY_PUB]));
+      await expect(confirm.getByTestId('host-key-fingerprint')).toHaveText(onServer);
+      await confirm.getByRole('button', { name: p.yes }).click();
+      await settle(request, page.getByTestId('target-status').filter({ hasText: p.connected }));
+      const targetId = new URL(page.url()).pathname.split('/').pop() ?? '';
+
+      // The server shows another key for a while (for example a connection that reached another
+      // machine), then its previous key again.
+      targetExec(['/usr/local/sbin/alice-e2e-rotate-hostkey']);
+      await advanceClock(request, SSH_IDLE_SECONDS + 1);
+      await page.getByRole('button', { name: p.test }).click();
+      await settle(request, page.getByTestId('host-key-changed'));
+      await expect(page.getByTestId('target-status')).toHaveText(p.identityChanged);
+      targetExec(['/usr/local/sbin/alice-e2e-restore-hostkey']);
+      expect(fingerprintOf(targetExec(['ssh-keygen', '-lf', HOST_KEY_PUB]))).toBe(onServer);
+
+      // An Administrator keeps the previous fingerprint with a reason and a fresh code; work resumes.
+      await page.getByRole('button', { name: p.review }).click();
+      const repin = page.getByRole('dialog', { name: p.repinTitle });
+      await expect(repin).toContainText(onServer);
+      await field(repin, p.reason).fill('False alarm: the load balancer briefly routed to the standby');
+      await expectAccessible(page, 're-pin dialog with the keep choice');
+      await advanceClock(request, STEP_UP_SECONDS + 1);
+      await repin.getByRole('button', { name: p.keep }).click();
+      const stepUp = page.getByRole('dialog', { name: c.stepUpHeading });
+      await field(stepUp, c.code).fill(await freshCode(request, totpSecret));
+      await stepUp.getByRole('button', { name: c.stepUpConfirm }).click();
+      await expect(stepUp).toHaveCount(0);
+      await expect(repin).toHaveCount(0);
+      await settle(request, page.getByTestId('target-status').filter({ hasText: p.connected }));
+      await expect(page.getByTestId('host-key-changed')).toHaveCount(0);
+      await expect(page.getByRole('button', { name: p.review })).toHaveCount(0);
+
+      // The previous fingerprint stays confirmed and the other key is no candidate any more.
+      const hostKeys = (await (await (await apiAs(page)).get(`/api/v1/targets/${targetId}/host-keys`)).json()) as {
+        items: { status: string; fingerprint: string }[];
+      };
+      expect(hostKeys.items.filter((k) => k.status === 'pinned').map((k) => k.fingerprint)).toEqual([onServer]);
+      expect(hostKeys.items.filter((k) => k.status === 'observed')).toEqual([]);
+      await page.getByRole('link', { name: c.navAudit, exact: true }).click();
+      await expect(page.getByRole('heading', { name: c.auditHeading })).toBeVisible();
+      await expect(page.getByText(p.dismissed, { exact: true }).first()).toBeVisible();
     });
 
     test('license limit, over-limit and damaged license banners (owner step 6, carry 5)', async ({ page, request }) => {
