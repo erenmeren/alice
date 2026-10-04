@@ -213,13 +213,3 @@ func dialFailingTune(hostPrefix string, err error) func(*fakekv.Server, *Provide
 var netDNS = net.DNSError{Err: "no such host", Name: testVaultHost, IsNotFound: true}
 
 var _ kvAPI = (*stubAPI)(nil)
-
-// upperASCII is the upper-case spelling of an ASCII name (strings.ToUpper is forbidden).
-func upperASCII(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' {
-			return r - 32
-		}
-		return r
-	}, s)
-}
