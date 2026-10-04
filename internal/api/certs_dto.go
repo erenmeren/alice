@@ -277,9 +277,14 @@ var stepParamRules = map[string]*regexp.Regexp{
 func stepParams(in map[string]string) map[string]string {
 	out := map[string]string{}
 	for k, v := range in {
-		if rule, ok := stepParamRules[k]; ok && rule.MatchString(v) {
-			out[k] = v
+		rule, ok := stepParamRules[k]
+		if !ok || !rule.MatchString(v) {
+			continue
 		}
+		if k == "reason" && codeForReason(v) == ErrUnexpected {
+			continue // an unregistered reason never reaches the UI as a raw key
+		}
+		out[k] = v
 	}
 	return out
 }

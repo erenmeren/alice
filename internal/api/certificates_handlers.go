@@ -54,6 +54,7 @@ const (
 	maxCSRBody         = 32 << 10 // a common name, at most 50 names and a key type
 	maxDeployBody      = 8 << 10  // at most 20 ids
 	maxLocationBody    = 4 << 10
+	maxCancelBody      = 4 << 10 // empty or {}
 )
 
 var (
@@ -144,7 +145,7 @@ func (s *server) uploadCertificate(w http.ResponseWriter, r *http.Request) {
 		PFXBase64      string `json:"pfx_base64"`
 		PFXPassword    string `json:"pfx_password"`
 	}
-	if !s.decodeLimit(w, r, &req, maxUploadBody) {
+	if !s.decodeExact(w, r, &req, maxUploadBody, "label", "certificate_pem", "private_key_pem", "pfx_base64", "pfx_password") {
 		return
 	}
 	c, warnings, err := s.deps.Inventory.UploadCertificate(r.Context(), s.actor(r), inventory.UploadInput{
@@ -271,7 +272,7 @@ func (s *server) completeCSR(w http.ResponseWriter, r *http.Request) {
 		CertificatePEM string `json:"certificate_pem"`
 		Label          string `json:"label"`
 	}
-	if !s.decodeLimit(w, r, &req, maxCSRCompleteBody) {
+	if !s.decodeExact(w, r, &req, maxCSRCompleteBody, "certificate_pem", "label") {
 		return
 	}
 	c, warnings, err := s.deps.Inventory.CompleteCSR(r.Context(), s.actor(r), id, req.CertificatePEM, req.Label)
@@ -285,7 +286,7 @@ func (s *server) cancelCSR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct{} // no fields: an empty body or {}
-	if !s.decodeOptional(w, r, &req) {
+	if !s.decodeOptionalLimit(w, r, &req, maxCancelBody) {
 		return
 	}
 	c, err := s.deps.Inventory.CancelCSR(r.Context(), s.actor(r), id)

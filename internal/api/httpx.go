@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -43,7 +44,16 @@ func (s *server) decodeOptional(w http.ResponseWriter, r *http.Request, dst any)
 	return s.decodeBody(w, r, dst, maxBody, true)
 }
 
+// decodeOptionalLimit is decodeOptional with a smaller body cap than maxBody.
+func (s *server) decodeOptionalLimit(w http.ResponseWriter, r *http.Request, dst any, limit int64) bool {
+	return s.decodeBody(w, r, dst, limit, true)
+}
+
 func (s *server) decodeBody(w http.ResponseWriter, r *http.Request, dst any, limit int64, optional bool) bool {
+	if r.ContentLength > limit {
+		s.writeError(w, r, ErrBodyTooLarge) // declared too large: refused unread
+		return false
+	}
 	body := http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(body)
 	dec.DisallowUnknownFields()
@@ -159,4 +169,84 @@ func isTrusted(a netip.Addr, trusted []netip.Prefix) bool {
 		}
 	}
 	return false
+}
+
+// decodeExact is decodeLimit for the bodies that carry key material (uploads, signing request
+// completions): the body is read into a buffer the handler owns and clears, its top level must be
+// one object whose keys are exactly the documented names, each at most once (encoding/json alone
+// matches keys in any case and lets a repeated key win), and it is then decoded strictly.
+func (s *server) decodeExact(w http.ResponseWriter, r *http.Request, dst any, limit int64, keys ...string) bool {
+	if r.ContentLength > limit {
+		s.writeError(w, r, ErrBodyTooLarge)
+		return false
+	}
+	buf, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	defer clear(buf)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.writeError(w, r, ErrBodyTooLarge)
+		} else {
+			s.writeError(w, r, ErrBadRequest)
+		}
+		return false
+	}
+	if !exactTopLevelKeys(buf, keys) {
+		s.writeError(w, r, ErrBadRequest)
+		return false
+	}
+	dec := json.NewDecoder(bytes.NewReader(buf))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		s.writeError(w, r, ErrBadRequest)
+		return false
+	}
+	if _, tail := dec.Token(); !errors.Is(tail, io.EOF) {
+		s.writeError(w, r, ErrBadRequest)
+		return false
+	}
+	return true
+}
+
+// exactTopLevelKeys reports whether buf is one JSON object whose keys are among allowed, matched
+// exactly, none twice. Values are skipped token by token (never copied into a value Alice keeps).
+func exactTopLevelKeys(buf []byte, allowed []string) bool {
+	dec := json.NewDecoder(bytes.NewReader(buf))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		key, ok := tok.(string)
+		if err != nil || !ok || seen[key] || !slices.Contains(allowed, key) {
+			return false
+		}
+		seen[key] = true
+		if !skipValue(dec) {
+			return false
+		}
+	}
+	tok, err := dec.Token()
+	return err == nil && tok == json.Delim('}')
+}
+
+// skipValue reads one JSON value from dec.
+func skipValue(dec *json.Decoder) bool {
+	depth := 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		switch tok {
+		case json.Delim('{'), json.Delim('['):
+			depth++
+		case json.Delim('}'), json.Delim(']'):
+			depth--
+		}
+		if depth == 0 {
+			return true
+		}
+	}
 }

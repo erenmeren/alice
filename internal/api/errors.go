@@ -400,8 +400,8 @@ func classify(err error) (ErrorCode, map[string]string, bool) {
 
 // providerParamKeys are the provider error params a client may see: fixed labels, numbers and
 // fingerprints (which are not secret). Any other key is dropped, so a provider that ever puts
-// remote text or a key line into its params cannot leak it through the API. The Phase 4 keys
-// (pre-flight D26) have a value rule as well (providerParamRules).
+// remote text or a key line into its params cannot leak it through the API; every key also has a
+// value rule (providerParamRules). The Phase 4 keys are pre-flight D26's.
 var providerParamKeys = map[string]bool{
 	"helper_code": true, "subcommand": true, "exit_code": true, "reason": true, "field": true, "attempts": true,
 	"wait": true, "fingerprint": true, "old_fingerprint": true, "new_fingerprint": true,
@@ -412,28 +412,37 @@ var providerParamKeys = map[string]bool{
 
 var (
 	paramCodeRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
-	// paramPathRE: an absolute path of the characters helper paths may hold; at most 256 bytes
-	// (inventory's bound of a stored param value) is checked by the rule's length bound.
-	paramPathRE = regexp.MustCompile(`^/[A-Za-z0-9._/@:+-]{0,255}$`)
-	paramPortRE = regexp.MustCompile(`^[1-9][0-9]{0,4}$`)
+	// paramPathRE: an absolute path of the characters helper paths may hold, at most 256 bytes
+	// (inventory's bound of a stored param value).
+	paramPathRE       = regexp.MustCompile(`^/[A-Za-z0-9._/@:+-]{0,255}$`)
+	paramPortRE       = regexp.MustCompile(`^[1-9][0-9]{0,4}$`)
+	paramNumberRE     = regexp.MustCompile(`^-?[0-9]{1,6}$`)
+	paramReasonRE     = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}(\.[a-z][a-z0-9_]{0,59})?$`)
+	paramSubcommandRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	paramHelperCodeRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,39}$`)
+	// paramFingerprintRE: an OpenSSH SHA256 fingerprint or a certificate's hex SHA-256.
+	paramFingerprintRE = regexp.MustCompile(`^(SHA256:[A-Za-z0-9+/=]{1,64}|[0-9a-f]{64})$`)
 )
 
-// providerParamRules bound the values of the Phase 4 params: a port number, a fixed code (a step,
-// phase, profile, key type or verification mode) or an absolute path Alice itself chose (the
-// backup folder). A value that does not fit is dropped with its key.
+// providerParamRules bound every allowlisted param's value, whichever producer wrote it: a number,
+// a fixed code (a step, phase, profile, key type, field, verification mode, wait), a reason code, a
+// helper subcommand or code, a fingerprint, or an absolute path Alice itself chose (the backup
+// folder). A value that does not fit is dropped with its key.
 var providerParamRules = map[string]*regexp.Regexp{
-	"port": paramPortRE, "failed_step": paramCodeRE, "profile": paramCodeRE, "phase": paramCodeRE, "mode": paramCodeRE,
+	"helper_code": paramHelperCodeRE, "subcommand": paramSubcommandRE, "exit_code": paramNumberRE, "reason": paramReasonRE,
+	"field": paramCodeRE, "attempts": paramNumberRE, "wait": paramCodeRE, "fingerprint": paramFingerprintRE,
+	"old_fingerprint": paramFingerprintRE, "new_fingerprint": paramFingerprintRE, "helper_protocol": paramNumberRE,
+	"required_protocol": paramNumberRE,
+	"port":              paramPortRE, "failed_step": paramCodeRE, "profile": paramCodeRE, "phase": paramCodeRE, "mode": paramCodeRE,
 	"expected": paramCodeRE, "actual": paramCodeRE, "directory": paramPathRE, "backup_dir": paramPathRE,
 }
 
-// providerParams returns the allowlisted params of a provider error (nil when none remain).
+// providerParams returns the allowlisted params of a provider error whose values fit their rule
+// (nil when none remain).
 func providerParams(in map[string]string) map[string]string {
 	var out map[string]string
 	for k, v := range in {
-		if !providerParamKeys[k] {
-			continue
-		}
-		if rule, ok := providerParamRules[k]; ok && !rule.MatchString(v) {
+		if rule, ok := providerParamRules[k]; !ok || !providerParamKeys[k] || !rule.MatchString(v) {
 			continue
 		}
 		if out == nil {
