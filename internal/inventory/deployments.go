@@ -55,9 +55,10 @@ package inventory
 //
 // Progress of every unfinished state (see SweepDeployments for the details):
 //   - queued: its certificate.deploy job is queued (same transaction), held for an Administrator
-//     in lock (blocked_license: the license emails and the blocked-jobs panel tell them; a
-//     discarded job ends the deployment failed through the sweep), or finished without finishing
-//     the deployment (dead, failed, cancelled, succeeded, pruned): the sweep ends it failed.
+//     in lock (blocked_license: the license emails and the blocked-jobs panel tell them; a job an
+//     Administrator discarded ends the deployment failed with deployment.cancelled through the
+//     sweep, without a failure email), or finished without finishing the deployment (dead,
+//     failed, succeeded, pruned): the sweep ends it failed.
 //   - precheck: as queued (nothing has been sent yet).
 //   - deploying: the job runs; when it does not (dead, queued for a retry, held, pruned) the sweep
 //     hands the deployment to a certificate.deploy_recover job (ClassAlways: never held by the

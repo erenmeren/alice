@@ -104,18 +104,19 @@ func TestSweepFailurePoints(t *testing.T) {
 	// 4. A job's error code that does not fit the column is not copied.
 	odd := f.request(f.admin, f.cert.ID, f.loc3onTarget2)
 	f.jobStatus(f.jobOf(odd), "failed", "weird code with spaces/and \"quotes\"")
-	// 5. The license held the job and an Administrator discarded it.
+	// 5. The license held the job and an Administrator discarded it (C m4): cancelled, not a failure
+	// to report by email.
 	locked := f.request(f.admin, f.cert.ID, f.loc4)
 	f.jobStatus(f.jobOf(locked), "cancelled", "license.locked")
 	emailsBefore := len(f.emails())
 	assert.Equal(t, 5, sweep())
 	for id, code := range map[uuid.UUID]string{pre: "job.lease_expired", pruned: "deployment.interrupted", lost: "deployment.interrupted",
-		odd: "deployment.interrupted", locked: "license.locked"} {
+		odd: "deployment.interrupted", locked: "deployment.cancelled"} {
 		d := f.get(id)
 		assert.Equal(t, inventory.DeployStatusFailed, d.Status, code)
 		assert.Equal(t, code, d.ErrorCode)
 	}
-	assert.Len(t, f.emails(), emailsBefore+4, "a deployment the license stopped sends no failure email")
+	assert.Len(t, f.emails(), emailsBefore+4, "a deployment an Administrator cancelled sends no failure email")
 
 	// 6. A send happened (deploying) and the deploy job's row was pruned: recovery.
 	sent := f.deploying(f.loc1)

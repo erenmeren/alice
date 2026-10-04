@@ -22,6 +22,10 @@ type OutcomeRecord struct {
 // interruptedCode is the reason of an uncertain outcome that names none.
 const interruptedCode = "deployment.interrupted"
 
+// CancelledCode is the reason of a deployment whose job an Administrator discarded before anything
+// was sent (the sweep ends it failed; no failure email).
+const CancelledCode = "deployment.cancelled"
+
 // providerCode is err's *providers.Error code, or "".
 func providerCode(err error) string {
 	var pe *providers.Error

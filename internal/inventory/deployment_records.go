@@ -601,7 +601,7 @@ var errSkipNotAllowed = fmt.Errorf("%w: verification was skipped but the locatio
 // done; for succeeded and unchanged the location's deployed_fingerprint, certificate, key type and
 // file hash, changed_outside_at cleared; the audit rows; the emails to every Administrator
 // (failed and rolled_back: deployment.failed; rollback_failed: deployment.rollback_failed; none
-// for a deployment the license lock stopped). A finished deployment is left as it is and nil
+// for a deployment the license lock stopped or an Administrator cancelled). A finished deployment is left as it is and nil
 // returned (Z1003 counts as finished). A status that is not terminal, or a success without a
 // verification, is an error; a status the current state cannot reach, or a success "skipped" where
 // the location's verification settings do not skip verification, is ErrDeploymentState.
@@ -758,7 +758,7 @@ func (s *Service) finishRecords(ctx context.Context, tx pgx.Tx, d lockedDeployme
 		events = []ev{{"deployment.rollback_failed", audit.Failure, map[string]string{"reason": code, "failed_step": failedStep}}}
 		template = rollbackFailedTemplate(code, phase)
 	}
-	if template != "" && code != "license.locked" {
+	if template != "" && code != "license.locked" && code != CancelledCode {
 		params, err := s.emailParams(ctx, tx, d)
 		if err != nil {
 			return err

@@ -41,8 +41,10 @@ WHERE d.state <> 'done'
 //   - its server was deleted: it ends (deployment.target_deleted): failed when nothing was sent,
 //     rollback_failed when a send may have happened (deployment.outcome_unknown email);
 //   - nothing was sent (queued, precheck, or no operation id recorded) and its job ended without
-//     ending it (dead, failed, cancelled, succeeded) or was pruned: it ends failed with the job's
-//     error code when that fits the column (else deployment.interrupted);
+//     ending it (dead, failed, succeeded) or was pruned: it ends failed with the job's error code
+//     when that fits the column (else deployment.interrupted); a job an Administrator discarded
+//     (cancelled: a deploy job is never cancelled otherwise) ends it failed with
+//     deployment.cancelled, which sends no failure email;
 //   - a send may have happened (deploying or recovering with an operation id) and recover_after
 //     has passed: a recovery job is queued as RequestRecovery does; after MaxRecoveryAttempts it
 //     ends rollback_failed (deployment.recovery_exhausted, deployment.outcome_unknown email).
@@ -125,7 +127,12 @@ func (s *Service) sweepOne(ctx context.Context, tx pgx.Tx, d lockedDeployment, d
 		// written by Alice's engine and counts as never sent): failed, with the code of the job
 		// that ended without ending it.
 		code := interruptedCode
-		if jobStatus != nil && *jobStatus != "queued" && *jobStatus != "blocked_license" {
+		switch {
+		case jobStatus != nil && *jobStatus == "cancelled":
+			// Discarded by an Administrator (jobs.Queue.Discard; the license cancels read-only work
+			// only, and a deploy job is a change): a decision, not a failure.
+			code = CancelledCode
+		case jobStatus != nil && *jobStatus != "queued" && *jobStatus != "blocked_license":
 			code = sanitizeCode(jobCode, interruptedCode)
 		}
 		return s.finishLocked(ctx, tx, d, DeploymentFinish{Status: DeployStatusFailed, ErrorCode: code})
