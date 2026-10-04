@@ -26,7 +26,8 @@
     "setupBanner": "Finish setting up: choose a recovery passphrase.",
     "setupBannerFinish": "Finish setting up: open the setup wizard to confirm the last step.",
     "setupBannerLicense": "Finish setting up: add a license or start the evaluation.",
-    "certificates": "Certificates"
+    "certificates": "Certificates",
+    "deployments": "Deployment history"
   },
   "ui": {
     "loading": "Loading…",
@@ -69,7 +70,10 @@
       "common_name": "Main domain name",
       "sans": "Other domain names",
       "key_type": "Key type",
-      "label": "Name"
+      "label": "Name",
+      "verify_port": "Port to check",
+      "verify_sni": "Name to check",
+      "location_ids": "Websites"
     },
     "continue": "Continue",
     "verify": "Verify",
@@ -532,7 +536,21 @@
     "sshd_unreadable_user": "Could not read the SSH server settings for {{user}}; only the default key files were checked.",
     "unsupported_path_unnamed": "Alice cannot read a key file at one of the paths that the SSH server uses.",
     "unknown": "Alice reported a note about this server that this version cannot describe.",
-    "incomplete": "Alice reported a note about this server without its details."
+    "incomplete": "Alice reported a note about this server without its details.",
+    "stream_tls": "TLS in stream blocks is not supported in this version. The websites in http blocks are still listed.",
+    "mail_tls": "TLS in mail blocks is not supported in this version. The websites in http blocks are still listed.",
+    "nginx_config_invalid": "Nginx's configuration has an error. Alice will not deploy until it is fixed.",
+    "nginx_not_found": "Nginx was not found on this server.",
+    "nginx_profile_missing": "The Nginx permissions are not installed on this server, so Alice cannot read its websites. Run the Nginx commands for server preparation, then choose Discover.",
+    "config_file_writable": "An Nginx configuration file can be changed by users other than root: {{path}}",
+    "too_many_files": "This server uses more certificate files than Alice lists, so some were not read.",
+    "locations_dropped": "This server has more websites than Alice lists, so the list is incomplete and no website is marked as no longer found.",
+    "list_truncated": "Alice cut some long lists of the Nginx configuration, so what is shown is incomplete.",
+    "key_mode_open": "A private key file can be read by more users than needed.",
+    "symlinked": "A certificate file is a link. Another tool (for example certbot) may replace it.",
+    "custom_location": "A certificate file is outside the usual certificate folders.",
+    "key_group_open": "A private key file belongs to a user other than root or can be read by a group or by others.",
+    "certificate_block_dropped": "A certificate file contains a block that is not a certificate. Alice ignored it."
   },
   "targets": {
     "title": "Servers",
@@ -562,7 +580,12 @@
       "hostHelp": "Host name or IP address only. Enter the port in the next field.",
       "port": "SSH port",
       "username": "User name on the server",
-      "submit": "Connect"
+      "submit": "Connect",
+      "type": "Server type",
+      "typeLinux": "Linux server",
+      "typeNginx": "Nginx server",
+      "typeHelp": "Choose Nginx server to manage its certificates too. Prepare the server with the Nginx commands first.",
+      "script": "Commands to prepare this server type"
     },
     "connecting": "Connecting to the server…",
     "stillWorking": "Alice is still working on this. Open the server's page in a minute to see the result.",
@@ -584,9 +607,16 @@
       "os": "Operating system: {{name}}",
       "helper": "alice-helper version: {{version}}",
       "lastDiscovery": "Last scan: {{time}}",
-      "neverScanned": "Not scanned yet."
+      "neverScanned": "Not scanned yet.",
+      "nginx": "Nginx version: {{version}}",
+      "nginxStale": "The Nginx details below are from the last successful scan on {{time}}.",
+      "nginxNotFound": "Nginx was not found on this server."
     },
-    "openServer": "Open the server"
+    "openServer": "Open the server",
+    "typeLabel": {
+      "linux": "Linux server",
+      "nginx": "Nginx server"
+    }
   },
   "hostKeys": {
     "confirmTitle": "Is this your server?",
@@ -675,7 +705,7 @@
     "types": {
       "target": {
         "test_connection": "Connection test",
-        "discover": "SSH key scan"
+        "discover": "Server scan"
       },
       "sshkey": {
         "remove": "SSH key removal"
@@ -734,7 +764,14 @@
       "completed": "Completed",
       "cancelled": "Cancelled"
     },
-    "unknown": "Unknown"
+    "unknown": "Unknown",
+    "deploymentState": {
+      "queued": "Waiting to start",
+      "precheck": "Checking the current certificate",
+      "deploying": "Deploying",
+      "recovering": "Being finished after a lost connection",
+      "done": "Finished"
+    }
   },
   "certificates": {
     "title": "Certificates",
@@ -865,6 +902,277 @@
       "viewPem": "Show request",
       "download": "Download request",
       "createdColumn": "Created"
+    }
+  },
+  "locations": {
+    "title": "Websites on this server",
+    "intro": "Each row is a certificate file that Nginx uses. Alice never changes the Nginx configuration, only these files.",
+    "discover": "Discover",
+    "tableLabel": "Websites on this server",
+    "empty": "Alice has not found any certificates on this server yet. Choose Discover.",
+    "columns": {
+      "website": "Website",
+      "port": "Port",
+      "file": "Certificate file",
+      "certificate": "Certificate",
+      "expires": "Expires",
+      "state": "State",
+      "actions": "Actions"
+    },
+    "defaultServer": "(default server)",
+    "noWebsite": "(no server name)",
+    "ready": "Ready",
+    "notSupported": "Not supported",
+    "missing": "No longer found",
+    "missingSince": "No longer found since {{time}}",
+    "deploying": "Deployment in progress",
+    "deploy": "Deploy certificate",
+    "deployNamed": "Deploy certificate: {{site}}",
+    "settings": "Verification settings",
+    "settingsNamed": "Verification settings: {{site}}",
+    "noCertificate": "No readable certificate",
+    "inherited": "The certificate is set for all websites in the http block.",
+    "changedOutside": "The certificate changed outside Alice.",
+    "changedOutsideAt": "Changed outside Alice: {{time}}",
+    "definedIn": "Defined in {{file}}, line {{line}}",
+    "showMissing": "Show websites that are no longer found",
+    "truncated": "This list is incomplete: only the first 1000 websites that are no longer found are shown.",
+    "configInvalid": "Nginx's configuration on this server has an error. Alice will not deploy until it is fixed.",
+    "configFile": "File with the problem",
+    "stale": {
+      "title": "These websites may be out of date",
+      "help": "Alice shows what it found in its last successful scan on {{time}}. Choose Discover again after the problem is fixed.",
+      "neverScanned": "Alice has no successful scan of this server yet."
+    },
+    "deployUnavailable": "Deploying is unavailable for now.",
+    "unavailable": {
+      "status": "The server is not connected right now (see its status above).",
+      "profile_missing": "The Nginx permissions are not installed on this server.",
+      "nginx_not_found": "Nginx was not found on this server.",
+      "config_invalid": "Nginx's configuration has an error.",
+      "last_error": "The last scan failed."
+    },
+    "rowUnavailable": {
+      "unsupported": "Alice cannot deploy to this place.",
+      "missing": "This website is no longer found.",
+      "deploying": "A deployment to this place is in progress."
+    },
+    "configError": {
+      "key_mismatch": "The certificate and the private key do not belong together.",
+      "file_missing": "A certificate or key file is missing.",
+      "cert_load": "Nginx could not load a certificate.",
+      "key_load": "Nginx could not load a private key.",
+      "syntax": "The configuration has a syntax error.",
+      "untrusted": "Alice cannot trust Nginx's output for this configuration.",
+      "unsupported": "Alice cannot read this configuration safely.",
+      "file_changed": "Another program changed the certificate or key files.",
+      "unknown": "Nginx reported a configuration problem that this version cannot describe."
+    },
+    "configReason": {
+      "not_root_controlled": "A file or folder of the configuration can be changed by users other than root.",
+      "special_filesystem": "A file of the configuration is on a special file system.",
+      "missing": "A file the configuration refers to does not exist.",
+      "not_regular": "A file of the configuration is not a regular file.",
+      "changed": "A file of the configuration changed while Alice read it.",
+      "name_not_allowed": "A file name of the configuration is not allowed.",
+      "unexpected_text": "A file of the configuration contains unexpected text.",
+      "wrong_first_file": "The first configuration file is not the expected one.",
+      "duplicate_file": "A configuration file is included twice.",
+      "no_conf_path": "Nginx did not report where its configuration is.",
+      "too_large": "The configuration is too large for Alice.",
+      "too_complex": "The configuration is too complex for Alice.",
+      "include_loop": "Configuration files include each other in a loop.",
+      "nul_byte": "A file of the configuration contains a NUL byte.",
+      "unknown": "Alice cannot say why; this version does not know the reason."
+    },
+    "warnings": {
+      "symlinked": "This file is a link. Another tool (for example certbot) may replace it.",
+      "custom_location": "Custom location: outside the usual certificate folders.",
+      "key_mode_open": "The private key file can be read by more users than needed: {{mode}}",
+      "key_group_open": "The private key file belongs to a user other than root or can be read by a group or by others. A deployment keeps these permissions.",
+      "certificate_block_dropped": "The certificate file contains a block that is not a certificate. Alice ignored it.",
+      "list_truncated": "Some long lists of this website were cut, so what is shown is incomplete.",
+      "certificate_expired": "The certificate has expired.",
+      "san_mismatch": "The certificate does not name this website: {{site}}",
+      "config_file_writable": "A configuration file of this website can be changed by users other than root.",
+      "stream_tls": "TLS in a stream block is listed, but not supported in this version.",
+      "mail_tls": "TLS in a mail block is listed, but not supported in this version.",
+      "unknown": "Alice reported a note about this website that this version cannot describe."
+    },
+    "unsupported": {
+      "variable": "The path uses a variable, so Alice cannot know which file is used.",
+      "data_value": "The certificate is written into the configuration itself.",
+      "engine_key": "The private key is kept in a hardware module.",
+      "key_missing": "No private key file is set for this certificate.",
+      "password_file": "The private key is protected with a password file.",
+      "path_not_allowed": "The path contains characters Alice cannot pass safely.",
+      "stream": "TLS in stream blocks is not supported in this version.",
+      "combined_file": "The certificate and the key are in one file.",
+      "config_file_writable": "A configuration file can be changed by users other than root.",
+      "key_conflict": "This certificate file is used with different key files.",
+      "unsupported_key": "Alice supports RSA and ECDSA certificates only.",
+      "file_problem": "Alice cannot use the files at this place.",
+      "unknown": "Alice cannot use this place for a reason this version does not know."
+    },
+    "problems": {
+      "missing": "The file does not exist.",
+      "not_root_controlled": "A folder or link on the path can be changed by users other than root.",
+      "not_regular": "The path is not a regular file.",
+      "hard_linked": "The file has more than one name (hard link).",
+      "too_large": "The file is larger than 256 KiB.",
+      "not_a_certificate": "The file does not contain a certificate.",
+      "unreadable": "Alice could not read the file.",
+      "bad_name": "The file name does not end in .pem, .crt, .cer, .cert, .key, .chained or .fullchain.",
+      "special_filesystem": "The file is on a special file system.",
+      "unknown": "Alice cannot use the file for a reason this version does not know."
+    },
+    "problemCertificate": "Certificate file: {{problem}}",
+    "problemKey": "Key file: {{problem}}",
+    "verify": {
+      "title": "Verification settings",
+      "help": "After a deployment Alice connects to the website and checks that the new certificate is served. Change these only when Alice cannot reach the website directly, for example behind a load balancer.",
+      "port": "Port to check (empty: the port from the configuration)",
+      "sni": "Name to check (empty: from the configuration)",
+      "skip": "Skip the check for this website",
+      "skipHelp": "Not recommended: a wrong certificate would not be noticed or restored automatically.",
+      "save": "Save",
+      "saved": "Settings saved.",
+      "cancel": "Cancel",
+      "close": "Close",
+      "readOnly": "Only an administrator can change these settings.",
+      "nothingChanged": "Change a value before saving.",
+      "portInvalid": "Enter a port from 1 to 65535, or leave the field empty.",
+      "sniIp": "Enter a domain name, not an IP address.",
+      "sniWildcard": "Enter one domain name without a wildcard (*).",
+      "sniInvalid": "Enter a domain name with letters, digits, dots and hyphens only. A part between dots cannot start or end with a hyphen.",
+      "notSaved": "Your change was not saved because this website changed in the meantime. The current values are shown now. Check them and save again.",
+      "current": "Current values: port {{port}}, name {{sni}}"
+    }
+  },
+  "deploy": {
+    "title": "Deploy a certificate",
+    "certificate": "Certificate",
+    "chooseCertificate": "Choose a certificate",
+    "noCandidates": "Alice holds no certificate with a private key that fits this website. Upload one first.",
+    "option": "{{name}} ({{keyType}}, valid until {{date}})",
+    "websites": "Websites",
+    "website": "Website",
+    "summary": "Alice backs up the current files, writes the new certificate and key, checks the Nginx configuration, reloads Nginx and checks that the new certificate is served. If any step fails, Alice restores the previous files.",
+    "confirmChain": "I confirm that this incomplete chain is intended",
+    "chainAdminOnly": "The chain of this certificate is incomplete. An administrator must deploy it.",
+    "noWebsites": "This certificate is not used on any website that Alice can deploy to. Open the server of the website and choose Deploy certificate there.",
+    "notYetValid": "This certificate is not valid yet and cannot be deployed.",
+    "limit": "You can deploy to at most {{max}} websites at once. Untick some websites.",
+    "selectWebsite": "Choose at least one website.",
+    "refused": "Alice stopped here. A request names only the first website that stops it, so other websites may need attention too. Nothing was deployed; fix this website or untick it and try again.",
+    "submit": "Deploy",
+    "cancel": "Cancel",
+    "close": "Close",
+    "working": "Alice is deploying the certificate…",
+    "progress": "Progress of each deployment",
+    "succeeded": "The new certificate is live and verified.",
+    "verifiedLocally": "Alice checked it from the server itself because it cannot reach the website directly.",
+    "verifySkipped": "The check was skipped for this website, so Alice did not confirm that the new certificate is served.",
+    "unchanged": "This certificate was already in place. Nothing was changed.",
+    "rolledBack": "Your server was restored to its previous certificate.",
+    "noChange": "Nothing was changed on the server.",
+    "rollbackFailed": "Automatic restore failed. Manual action is needed.",
+    "recovering": "The connection to the server was lost. Alice will check the server and finish or undo the change.",
+    "held": "The license has expired, so this deployment is on hold. It continues when an administrator renews the license or runs it.",
+    "jobStopped": "The background task ended before the deployment did. Open the deployment history to see where it stands.",
+    "unknownStatus": "Alice cannot tell the state of this deployment. Open the deployment history to see it.",
+    "stillWorking": "Alice is still working on this. Open the deployment history in a minute to see the result.",
+    "connectionLost": "Alice cannot reach itself right now. The deployment goes on in the background. Open the deployment history in a minute to see the result.",
+    "openHistory": "Open deployment history",
+    "openDeployment": "Open this deployment",
+    "partial": "Updated websites: {{ok}} of {{total}}"
+  },
+  "deployments": {
+    "title": "Deployment history",
+    "intro": "Every certificate deployment with its result. Open one to see each step.",
+    "tableLabel": "Deployments",
+    "columns": {
+      "when": "When",
+      "server": "Server",
+      "file": "Certificate file",
+      "certificate": "Certificate",
+      "result": "Result"
+    },
+    "empty": "No deployments yet.",
+    "loadMore": "Show more",
+    "open": "Open",
+    "openNamed": "Open deployment: {{name}}",
+    "detailTitle": "Deployment",
+    "backToList": "Back to deployment history",
+    "requestedBy": "Requested by: {{name}}",
+    "requestedBySystem": "Requested by: Alice",
+    "previous": "Previous certificate: {{fingerprint}}",
+    "new": "New certificate: {{fingerprint}}",
+    "backup": "Backup on the server: {{path}}",
+    "stepsTitle": "Steps",
+    "statusLabel": "Status",
+    "stateLabel": "State",
+    "certificateLabel": "Certificate",
+    "serverLabel": "Server",
+    "fileLabel": "Certificate file",
+    "keyFileLabel": "Key file",
+    "startedLabel": "Started",
+    "finishedLabel": "Finished",
+    "createdLabel": "Requested",
+    "verifiedLabel": "Verification",
+    "verified": {
+      "remote": "Checked from Alice",
+      "local": "Checked from the server itself",
+      "skipped": "Skipped",
+      "none": "Not done"
+    },
+    "failedStep": "Failed at: {{step}}",
+    "causeStep": "Cause: {{step}}",
+    "recovery": {
+      "title": "Recovery",
+      "attempts": "Recovery attempts: {{attempts}}",
+      "next": "Next attempt after: {{time}}",
+      "needsAttention": "Alice cannot reach the server and keeps trying. If this continues, check the server and its network.",
+      "running": "Alice is checking the server to finish or undo the change."
+    },
+    "verifyFailedTitle": "Why the new certificate was rolled back",
+    "errorTitle": "Why it did not succeed",
+    "causeLabel": "What happened",
+    "technical": "Technical details",
+    "held": "On hold for the license",
+    "openCertificate": "Open the certificate",
+    "openServer": "Open the server",
+    "steps": {
+      "verify_current": "Check the current certificate",
+      "backup": "Backup",
+      "write": "Write",
+      "write_key": "Write the private key",
+      "write_cert": "Write the certificate",
+      "config_test": "Check",
+      "reload": "Reload",
+      "journal": "Record the change",
+      "verify": "Verify",
+      "restore": "Restore",
+      "rollback_config_test": "Check again",
+      "rollback_reload": "Reload again",
+      "verify_old": "Verify the previous certificate",
+      "unknown": "Other step"
+    },
+    "stepStatus": {
+      "started": "Running",
+      "ok": "Done",
+      "failed": "Failed",
+      "skipped": "Skipped",
+      "waiting": "Waiting",
+      "notRun": "Not run",
+      "unknown": "Unknown"
+    },
+    "stepDetail": {
+      "error": "Reason: {{reason}}",
+      "port": "Port: {{port}}",
+      "mode": "Checked: {{mode}}",
+      "served": "Served certificate: {{fingerprint}}",
+      "reason": "Cause: {{reason}}"
     }
   }
 }

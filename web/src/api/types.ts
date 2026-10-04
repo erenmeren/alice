@@ -274,6 +274,19 @@ export interface SSHDSettings {
   certificates_in_use: boolean;
 }
 
+// NginxFacts are what the last scan or test learned about Nginx on an Nginx server (absent on other
+// servers and before the first scan). config_error and config_error_reason are codes (see
+// CONFIG_ERRORS and CONFIG_REASONS); config_error_file is text from the server.
+export interface NginxFacts {
+  version: string;
+  conf_path: string;
+  config_valid: boolean;
+  config_error: string;
+  config_error_reason: string;
+  config_error_file: string;
+  found: boolean;
+}
+
 export interface TargetFacts {
   os: OSRelease;
   helper_version: string;
@@ -282,6 +295,7 @@ export interface TargetFacts {
   host_keys: DiscoveredHostKey[];
   warnings: Warning[];
   unreadable: UnreadableLine[];
+  nginx?: NginxFacts;
 }
 
 export interface Target {
@@ -306,7 +320,7 @@ export interface Target {
 
 export interface TargetCreateRequest {
   name: string;
-  type: 'linux';
+  type: 'linux' | 'nginx';
   host: string;
   port: number;
   username: string;

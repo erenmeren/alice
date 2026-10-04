@@ -56,3 +56,18 @@ export function backendAuditActions(): string[] {
 export function backendJobTypes(): string[] {
   return jobTypesIn(readRepoFile('internal/inventory/jobs.go'));
 }
+
+// goStringConsts finds the string constants of a Go source whose names match nameRe (for example
+// /^StepName\w+$/): `Name = "value"` on its own line, with any spacing before the equals sign.
+export function goStringConsts(src: string, nameRe: RegExp): string[] {
+  const found = new Set<string>();
+  for (const m of src.matchAll(/^\s*(?:const\s+)?([A-Za-z]\w*)\s*=\s*"([^"\n]*)"/gm)) if (nameRe.test(m[1])) found.add(m[2]);
+  return [...found].sort();
+}
+
+export const goConsts = (rel: string, nameRe: RegExp): string[] => goStringConsts(readRepoFile(rel), nameRe);
+
+// callArgsIn finds every string literal passed to a call such as warning("x").
+export function callArgsIn(src: string, fn: string): string[] {
+  return [...src.matchAll(new RegExp(`\\b${fn}\\("([^"\\n]*)"`, 'g'))].map((m) => m[1]).sort();
+}
