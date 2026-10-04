@@ -93,13 +93,15 @@ default below `/var/log/sudo-io`) is the server administrator's job.
 ## Keys of accounts Alice no longer lists
 
 The helper scans only some accounts of a server (see "What Alice reads and changes" in
-[nginx-host-preparation.md](nginx-host-preparation.md#what-alice-reads-and-changes)), but it reports the name of
-every account in `/etc/passwd`. When an account is deleted and that list is complete, Alice marks its keys **No
+[nginx-host-preparation.md](nginx-host-preparation.md#what-alice-reads-and-changes)), but it reports every account
+in `/etc/passwd`: by name when the name follows the rule below, otherwise by user ID only. Lines the system itself
+does not read as accounts (fewer than four fields, a user or group ID that is not a number, `+`/`-` lines, comments)
+are skipped, as glibc skips them. When an account is deleted and that list is complete, Alice marks its keys **No
 longer found**. The list is not complete (the server's page shows a warning for each reason) when:
 
 - an entry of `/etc/passwd` cannot be listed: a name longer than 32 characters, with characters other than letters,
   digits, `_`, `.` and `-` (and one final `$`), starting with `.` or `-`, or made only of digits; a user or group ID
-  that is not a plain number; or, for an account Alice would scan, a home directory that is not a plain absolute
+  written with a sign (`+1000`, `-1`) or of 4294967295 or more; or, for an account Alice would scan, a home directory that is not a plain absolute
   path (for example one with `..`). The warning names the user ID: `getent passwd <user ID>` on the server shows the
   account. Rename the account or fix its line, then scan again;
 - `/etc/passwd` contains a NUL byte;
@@ -119,7 +121,9 @@ In these cases **Remove key** fails because the helper refuses a file of an acco
 
 Accounts with a user ID from 1 to 999 (other than `alice-svc`), `nobody`, accounts whose shell ends in `/nologin` or
 `/false` and accounts without an existing home directory are never inventoried and not reported, even where the SSH
-server could accept a key for them (for example through an `AuthorizedKeysFile` outside the home). The helper reads
+server could accept a key for them (for example through an `AuthorizedKeysFile` outside the home). Keys a server
+offers only through `AuthorizedKeysCommand` are not inventoried either (Alice lists the keys it finds in files and
+changes nothing on such a server). The helper reads
 `/etc/passwd` the way glibc does; servers with another C library (for example Alpine's musl) are not supported.
 
 To spot it: on the key's page (**SSH keys**, then the key), **Where this key is used** shows a **Last seen** time that
@@ -387,11 +391,17 @@ lock.
 Alice also stops changes when it cannot check its license. Each Alice process checks the license at start, every
 hour and after an upload; a failed check is tried again after 1, 2, 4 and 8 minutes, then every 10 minutes. When no
 check has succeeded for 3 hours (counted in the time the process was running, so a suspended host does not count),
-requests that change servers are refused with `ALC-LIC-0009` and everyone sees "Alice could not check its license
-since …". Queued work is neither cancelled nor held: it waits in the queue and starts by itself after the next
-successful check. Deployment recovery and rollback keep running. Between checks Alice also counts the time itself:
-when the license reaches its lock time before the next check, changes are refused at once (`ALC-LIC-0001`) and a
-check starts immediately; nothing is held until that check confirms the lock. A database outage that ends within
+everyone sees "Alice could not check its license since …" and every request that works on a server is refused with
+`ALC-LIC-0009`: not only changes (adding, changing or removing a server, confirming a fingerprint, **Remove key**,
+certificate uploads, signing requests, deployments, verification settings, **Run now** of a waiting job) but also
+**Test connection**, **Scan for SSH keys** and **Discover**. Queued jobs of these kinds are neither cancelled nor
+held: they stay queued and start by themselves after the next successful check; the daily scans are not started
+meanwhile. What keeps running: reading everything in the web UI and the API, signing in, user and token
+administration, license upload, the audit log (check, export, the daily check), **Discard** of a waiting job,
+emails, clean-up, and the finishing or undoing of a deployment that already reached a server. Between checks Alice
+also counts the time itself: when the license reaches its lock time before the next check, the same requests are
+refused at once (`ALC-LIC-0001`), queued jobs wait the same way, and a check starts immediately; queued jobs are held
+for an administrator (or cancelled) only after that check confirmed the lock. A database outage that ends within
 about 2 hours 48 minutes of the last successful check never stops changes. Every wait for the license row is limited
 to 30 seconds: if another database session keeps that row locked, a check fails (and is retried), and Alice does not
 start at all (it exits after 30 seconds). See `ALC-LIC-0009` in [troubleshooting.md](troubleshooting.md).
@@ -540,7 +550,9 @@ restarts everyone from that address waits until they sign in again. This happens
 
 - behind a reverse proxy: set `ALICE_TRUSTED_PROXIES` in `deploy/.env` to the proxy's address or network (comma-
   separated); Alice then takes the client address from the proxy's `X-Forwarded-For` header. Without it everyone
-  has the proxy's address;
+  has the proxy's address. List only your proxies, never a client network: Alice believes the `X-Forwarded-For`
+  header of every address in these ranges, so a client inside them can claim any address. It could then escape the
+  per-address limits (sign-in attempts, bad credentials, `/healthz`) and write a false address into the audit log;
 - when the published port is forwarded by a proxy process instead of the kernel (rootless Docker's default port
   forwarding, or Docker's userland proxy, which handles connections from the Docker host itself): Alice then sees
   one internal address for those clients. Check the **IP address** column of a few audit entries: if different

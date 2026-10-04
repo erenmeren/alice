@@ -232,8 +232,9 @@ this server".
   login shell, because the SSH server treats it as `/bin/sh`), at most 200 accounts. Account names may use letters of
   either case, digits, `_`, `.` and `-` (not first) and one final `$`, up to 32 characters, and must not be only
   digits (`john.doe`, `Deploy2`, `host$`); `John` and `john` are two accounts. A home directory with a trailing `/` is
-  read as without it. An entry Alice cannot list (another name, a user or group ID that is not a plain number, or a
-  home directory with `..` or other characters) is never skipped silently: the server's page shows a warning with its
+  read as without it. An entry Alice cannot list (any entry whose name breaks this rule, or whose user or group ID is written with a
+  sign or is 4294967295 or more; and, for an account Alice would scan, a home directory with `..` or other
+  characters) is never skipped silently: the server's page shows a warning with its
   user ID, and Alice then treats the account list as incomplete (see
   [operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists)). The helper reads `/etc/passwd` as
   glibc does (the first line of a name counts; `+`/`-` lines are not accounts); only glibc distributions are
@@ -255,9 +256,10 @@ this server".
     its target contains no `..`, and the directories it leads to pass the same check, so `/home -> /data/home` and
     Fedora's `/home -> var/home` work; a home that is itself a symbolic link must lead to a directory that the
     account owns.
-- The helper also reports the name of every account in `/etc/passwd` (at most 5000). When an account was deleted
-  and that list is complete (no directory service in use, no "more user accounts than Alice lists" warning), its
-  keys are marked **No longer found**. An account that still exists but got a shell such as `/usr/sbin/nologin` or
+- The helper also reports every account in `/etc/passwd` (at most 5000 names; an account whose name breaks the
+  rule above only by its user ID). When an account was deleted and that list is complete (no warning about accounts
+  Alice did not list, no directory service or systemd accounts, no "more user accounts than Alice lists" warning),
+  its keys are marked **No longer found**. An account that still exists but got a shell such as `/usr/sbin/nologin` or
   lost its home directory is not scanned any more: its keys stay in Alice as they were last seen, and Alice cannot
   remove them. How to spot and handle this: [operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists).
 - Accounts that exist only in a directory service (LDAP, SSSD or any other source in the `passwd:` line of

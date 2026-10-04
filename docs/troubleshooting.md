@@ -19,10 +19,12 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 - **Alice does not start on a new installation: "no installation in the database and the time record file cannot be
   read".** The state volume (`/opt/alice/state`) or its `hwm.dat` cannot be read by user 10001, so Alice cannot tell
   whether an installation existed before; it creates nothing. Fix the volume's owner and permissions and start again.
-- **Alice does not start on a new installation: "sync keys directory …".** The file system of the keys volume
-  refused to make the new master key's directory entry durable (`fsync` on a directory). Alice keeps the key file and
-  tries again at the next start; on a file system that never allows it, put the keys volume on an ordinary local
-  file system (ext4, XFS).
+- **Alice does not start on a new installation: "sync keys directory <directory>: …" or "sync parent of keys
+  directory <directory>: …".** The file system refused to make the new master key's directory entry durable
+  (`fsync` on the keys directory, or on its parent when Alice had just created the keys directory). Alice keeps the
+  key file. After the first message the next start tries the sync of the keys directory again; after the second it
+  does not repeat the parent's sync (run `sync` on the host once). On a file system that never allows a directory
+  sync, put the keys volume on an ordinary local file system (ext4, XFS).
 - **The setup wizard says the setup code is wrong or the session expired.** Create a new code with
   `alice setup-token --reset` (development: `make setup-token`). After five wrong codes the wizard waits
   15 minutes (`ALC-SET-0002`). Once an administrator exists the wizard no longer accepts codes: sign in instead.
@@ -63,8 +65,8 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   [operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists).
 - **"Alice did not list the SSH keys of the account with user ID N".** The account's name, its user or group ID, or
   its home directory in `/etc/passwd` is outside what Alice supports (the warning says which). Run
-  `getent passwd N` on the server to find the account; rename it, write its ID as a plain number, or give it a plain
-  absolute home directory, then choose **Scan for SSH keys**. Until then the server's account list is incomplete.
+  `getent passwd N` on the server to find the account; rename it, write its user and group ID as plain numbers below
+  4294967295 (without `+` or `-`), or give it a plain absolute home directory, then choose **Scan for SSH keys**. Until then the server's account list is incomplete.
 - **"The file /etc/passwd on this server contains a NUL byte".** Remove the NUL byte (as root, for example with
   `vipw`); Alice reads each line only up to it, as the system does.
 - **"Accounts from a directory service (for example LDAP or SSSD), from systemd user records or from a source Alice
@@ -569,11 +571,13 @@ for a correction license (it names the license it replaces and is always accepte
 ## ALC-LIC-0009: The license could not be checked
 
 **Meaning.** Alice checks its license at start, after every upload and every hour, in every Alice process; a failed
-check is tried again after 1, 2, 4 and 8 minutes, then every 10 minutes. No check has succeeded for more than 3 hours of the process's running time (time while the host was suspended does not count) (`license.unverified`, HTTP 503, retryable), so the action, which changes a
-managed server, key or certificate, was refused. Nothing was changed. Everyone sees a red banner with the time of
-the last successful check. Signing in, uploading a license, the audit log, exports, user administration and the
-recovery and rollback of deployments keep working. Queued jobs that change servers are not cancelled and need no
-confirmation: they wait and start by themselves after the next successful check if the license is still valid.
+check is tried again after 1, 2, 4 and 8 minutes, then every 10 minutes. No check has succeeded for more than 3 hours of the process's running time (time while the host was suspended does not count) (`license.unverified`, HTTP 503, retryable), so the action was refused. Nothing was changed. Every action that works on a managed server is refused
+meanwhile: changes to servers, keys and certificates, and also **Test connection**, **Scan for SSH keys** and
+**Discover**; the daily scans are not started. Everyone sees a red banner with the time of the last successful
+check. Reading everything, signing in, uploading a license, the audit log and its export, user and API token
+administration, **Discard** of a waiting job, and the recovery and rollback of deployments keep working. Queued jobs
+are not cancelled and need no confirmation: they wait and start by themselves after the next successful check if
+the license is still valid.
 
 **Likely cause.** The database was unreachable or overloaded for hours, or another database session keeps the
 `license` row locked (a check waits at most 30 seconds for it and gives up after 2 minutes). Alice logs "the

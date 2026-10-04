@@ -2,7 +2,7 @@
 
 Scope: the 25 findings (AUD-01 to AUD-25) of the independent audit of 2026-10-04
 (`docs/security/reviews/independent-audit-2026-10-04.md`, kept as written and not part of the repository's history,
-with its proof-of-concept notes next to it). Seven of them were already closed in the Phase 4 fix wave; this
+with its proof-of-concept notes next to it). Six of them (AUD-04, AUD-05, AUD-07, AUD-10, AUD-14, AUD-17) were already closed in the Phase 4 fix wave; this
 remediation (branch `audit-remediation`, from `master` at `57b11fb`) fixes or records the others. Exit criterion: no
 finding of the audit open without a fix, an owner action or a recorded decision; no new High finding.
 
@@ -18,11 +18,11 @@ finding (`git log --grep 'AUD-NN' master..HEAD`), plus the Phase 4 commits for t
 | AUD | Severity | Outcome | Commits | Tests that pin it | Decision or reason |
 |---|---|---|---|---|---|
 | AUD-01 idle timeout defeated by polling | Medium | Fixed here | 580b7dc, 7b94d31, 61d092b, 9e76d52 | `TestBackgroundPollsDoNotExtendTheIdleTimeout`, `TestActivitySlidesAndPollsDoNotTouchTheSession`, `TestRecordActivityNeverRevivesOrOutlivesASession` (auth, integration); `TestOnlyActivitySlidesTheSession`, `TestRefusedRequestsAndActivity`, `TestRecordActivityFailureIsUnavailable`; `TestA02BackgroundPollsDoNotKeepASessionAlive`, `TestA02ActivityAmongPollsSlides`, `TestA02OnlyAcceptedRequestsSlide`, `TestA02MarkerOnAnEndedSessionAndTokens` (api, integration); Vitest `activity`, `client`, `LicenseBanners`, `SessionActivity`, `polling`; Playwright `phase1.spec.ts` "a tab left open is signed out 30 minutes after the last input although it keeps polling (AUD-01)" and "a person who keeps reading stays signed in until the 12-hour limit (AUD-01)" (EN, TR) | [1] |
-| AUD-02 license gate trusts a stale evaluation | Medium | Fixed here | a6d56de, ae993e8, d64f402, 00a3d36, eacabae, 6f40137 | `TestGateLocksAtLocksAtWhileTheRowIsHeld`, `TestGateFailsClosedWhenEvaluationsStop`, `TestForeignLeaderLockDoesNotStopEvaluation`, `TestGateIgnoresTheWallClockBetweenEvaluations`, `TestStartGivesUpWhenTheRowIsHeld`, `TestLockDueIsNotAConfirmedLock`, `TestLockDueInAnotherProcessHoldsNothing`, `TestFailedEvaluationsAreRetriedWithinMinutes`, `TestRetriesNeverLeaveThreeHoursWithoutASuccess`, `TestTwoEvaluatorsRecordEachTransitionOnce`, `TestAProcessWithoutTheHoldLeavesTheStateToTheHolder`, `TestShutdownGivesUpBehindARunningEvaluation` (license); `TestUnverifiedPausesQueuedWorkWithoutHoldingIt`, `TestUnverifiedAfterTheClaimQueuesTheJobAgain`, `TestRecoveryRunsWhileTheLicenseIsUnverified` (jobs); `TestDiscardWorksInEveryLicenseState` (api); Vitest `LicenseBanners` | [2] |
+| AUD-02 license gate trusts a stale evaluation | Medium | Fixed here | a6d56de, ae993e8, d64f402, 00a3d36, eacabae, 6f40137, 3b9d826 | `TestGateLocksAtLocksAtWhileTheRowIsHeld`, `TestGateFailsClosedWhenEvaluationsStop`, `TestForeignLeaderLockDoesNotStopEvaluation`, `TestGateIgnoresTheWallClockBetweenEvaluations`, `TestStartGivesUpWhenTheRowIsHeld`, `TestLockDueIsNotAConfirmedLock`, `TestLockDueInAnotherProcessHoldsNothing`, `TestFailedEvaluationsAreRetriedWithinMinutes`, `TestRetriesNeverLeaveThreeHoursWithoutASuccess`, `TestTwoEvaluatorsRecordEachTransitionOnce`, `TestAProcessWithoutTheHoldLeavesTheStateToTheHolder`, `TestShutdownGivesUpBehindARunningEvaluation` (license); `TestUnverifiedPausesQueuedWorkWithoutHoldingIt`, `TestUnverifiedAfterTheClaimQueuesTheJobAgain`, `TestRecoveryRunsWhileTheLicenseIsUnverified` (jobs); `TestDiscardWorksInEveryLicenseState` (api); Vitest `LicenseBanners` | [2] |
 | AUD-03 accounts outside the old name rule skipped silently | Medium | Fixed here | ac71c89, f2b86dd, 78dc937, e200376, b14cd4b, 5857518, 514e6e6, d0af08d, e4df392, c49d1ad, 6f40137 | `TestAccountsOutsideTheOldGrammarAreListed`, `TestUnlistedAccountsAreReportedNeverSilent`, `TestPasswdNULBytesAreReadAsGlibcReadsThem`, `TestOddIDsAreReported`, `TestNISCompatLinesAreNoAccounts`, `TestDirectoryUsersAreAnySourceButFiles`, `TestUserdbRecordsMakeTheListIncomplete`, `TestSymlinkedNSSwitchIsFollowedOrRefused`, `TestUnreadableNSSwitchIsNotLocal`, `TestPasswdLineSpellings` (helper); `TestDiscoverReportsUnlistedAccounts`, `TestLastKeyOfAnyUID0AccountNeedsConfirmationInAFreshSession`, `TestEmulatorFidelityAuthKeysList`, `TestEmulatorFidelityAuthKeysListTruncated` (linuxssh); `TestRealOpenSSH` (real matrix, Ubuntu 22.04, Debian 12, Rocky 9: dotted, capitalised and `$` names, a trailing-slash home, two unlisted entries, and a complete list with `John`, `john` and a shared uid) | [3] |
-| AUD-04 discovery data unbounded; RSA size | Medium | Fixed in Phase 4 | d375100, 73e71c8, 1191814 (P4-45, P4-26) | as recorded in `phase-4.md` | — |
+| AUD-04 discovery data unbounded; RSA size | Medium | Fixed in Phase 4 | d375100, 73e71c8, 92c5e10, 1191814 (P4-45, P4-26) | as recorded in `phase-4.md` | — |
 | AUD-05 late-starting helper applies a "nothing written" deployment | Medium | Fixed in Phase 4 | 83522dd, 59601fe, d44d50f, e0cd19e (P4-38, P4-49) | as recorded in `phase-4.md` | — |
-| AUD-06 refusal rows grow the log; scans reread everything | Medium | Fixed here (verification stays a full recomputation) | 3d919fd, f7a09b2, 1f8ce8f, a3f9d8d, ab72da0, 6a95367 | `TestDenialCoalescer`, `TestDenialCoalescerIsBoundedAndNeverDropsARow`, `TestGuardCoalescesRepeatedRefusals`, `TestTokensOfOneOwnerShareAWindow`, `TestForeignTokenListsAreCoalesced`, `TestChainScansRunOneAtATime`, `TestStopScansEndsARunningScan`, `TestStopScansAbortsAStartedExport`, `TestDistinctSetIsBounded`, `TestChainScanRoutesMatchTheRouteTable` (api); `TestRepeatedDenialsAreCoalesced`, `TestForeignTokenListEnumerationIsCoalesced` (api, integration); `TestShutdownStopsScansThenDrainsThenFlushes` (cmd/alice); Vitest `AuditPage` | [4], [7] |
+| AUD-06 refusal rows grow the log; scans reread everything | Medium | Fixed here (verification stays a full recomputation) | 3d919fd, f7a09b2, 1f8ce8f, a3f9d8d, ab72da0, 6a95367, 3b9d826 | `TestDenialCoalescer`, `TestDenialCoalescerIsBoundedAndNeverDropsARow`, `TestGuardCoalescesRepeatedRefusals`, `TestTokensOfOneOwnerShareAWindow`, `TestForeignTokenListsAreCoalesced`, `TestChainScansRunOneAtATime`, `TestStopScansEndsARunningScan`, `TestStopScansAbortsAStartedExport`, `TestDistinctSetIsBounded`, `TestChainScanRoutesMatchTheRouteTable` (api); `TestRepeatedDenialsAreCoalesced`, `TestForeignTokenListEnumerationIsCoalesced` (api, integration); `TestShutdownStopsScansThenDrainsThenFlushes` (cmd/alice); Vitest `AuditPage` | [4], [7] |
 | AUD-07 e2e stack published on every interface | Medium | Fixed in Phase 4 | 5d187b1 | `TestE2ETargetIsTestOnlyAndUnpublished`; `check-hardening.sh` "alice (e2e) publishes only on 127.0.0.1" | — |
 | AUD-08 CI never runs on the branches used; no remote | Medium | Fixed here (the trigger); the remote, the first run and branch protection are owner-pending | b5cf2a4 | actionlint (0 findings, recorded by the implementer) | [9] |
 | AUD-09 build inputs pinned by mutable tags | Medium | Fixed here | 0071dca, 4da6947, a3ab994 | `TestRepositoryIsPinned` and the form tables of `tools/pincheck` (`TestDockerRunImageOperand`, `TestWorkflowContainersServicesAndRunSteps`, `TestDockerPullAndDockerfileCase`, …) | [9] |
@@ -32,7 +32,7 @@ finding (`git log --grep 'AUD-NN' master..HEAD`), plus the Phase 4 commits for t
 | AUD-13 NUL or invalid UTF-8 reaches PostgreSQL (500) | Low | Fixed here | e8576a1, 15b76d7, b09b9d2, 11dbe1d | `TestEveryRouteRefusesUnstorableQueryText`, `TestEveryRouteWithABodyRefusesNULText`, `TestOnlyTheDecodeHelpersReadRequests`, `TestChunkedBodyOverTheCapIsTooLargeEvenWithNUL`, `TestLicenseUploadWithNULTextIsAudited`, `TestWriteJSONNeverTruncatesAnAnswer`, `FuzzNULEscape` (api); `TestUnstorableTextIsRefusedAtTheEdge`, `TestUploadRefusesCertificatesOutsideYears1To9999` (api, integration); `TestCursorTimeRange`, `TestCertificateCursorAtTheEndsOfItsRange`, `TestDiscoveryRefusesCertificatesOutsideYears1To9999` (inventory); `internal/certs/validity_test.go`; `internal/providers/nginx/chainrange_test.go` | [10] |
 | AUD-14 signing-request key generation unbounded | Low | Fixed in Phase 4 | 715c908, 8a163c9 (P4-27) | as recorded in `phase-4.md` | — |
 | AUD-15 refusals lost when the client leaves | Low | Fixed here | 3d919fd, 1f8ce8f, 6a95367 | `TestRefusalIsAuditedAfterTheClientLeft`, `TestFailedRefusalAuditStillRefusesAndRetries` (api); `TestDenialIsRecordedWhenTheClientDisconnects` (api, integration); `TestTokenObjectLevelAccess` (auth, the cancelled-context case) | [4] |
-| AUD-16 rate limit after the credential lookup; `/healthz` unlimited | Low | Fixed here | 7dc8b6c, b68dc10, 9e76d52 | `TestValidSessionsNeverMeetTheFailedCredentialBucket`, `TestConcurrentGarbageCannotOverrunTheBucket`, `TestFailedLookupsKeepTheirToken`, `TestGarbageSessionNextToValidSetupCookieIsBounded`, `TestRotatedAwayCookieIsNotDeleted`, `TestRecentlyValidatedForTheSessionIdleTimeout`, `TestHealthzHasItsOwnBucket`, `TestHealthzLimitedOnlyOnThePublicListener` (api); `TestFailedCredentialLimitWithRealSessions` (api, integration); Vitest `client`, `retry`, `App` | [11] |
+| AUD-16 rate limit after the credential lookup; `/healthz` unlimited | Low | Fixed here | 7dc8b6c, b68dc10, 9e76d52, 3b9d826 | `TestValidSessionsNeverMeetTheFailedCredentialBucket`, `TestConcurrentGarbageCannotOverrunTheBucket`, `TestFailedLookupsKeepTheirToken`, `TestGarbageSessionNextToValidSetupCookieIsBounded`, `TestRotatedAwayCookieIsNotDeleted`, `TestRecentlyValidatedForTheSessionIdleTimeout`, `TestHealthzHasItsOwnBucket`, `TestHealthzLimitedOnlyOnThePublicListener` (api); `TestFailedCredentialLimitWithRealSessions` (api, integration); Vitest `client`, `retry`, `App` | [11] |
 | AUD-17 a scan rewrites an uploaded chain; incomplete chain not completable | Low | Fixed in Phase 4 | 92c5e10, 1191814, 2854564, a6a5ee7 (P4-25, P4-46) | as recorded in `phase-4.md` | — |
 | AUD-18 evaluation restartable with the owner role | Low | Fixed here | dcce48f, 765b90d | `TestEvaluationRestartAttempts`, `TestRemovedSealIsTamperingOnEveryInstallation`, `TestRemovedInstallationIsNotAFreshEvaluation`, `TestUnreadableStateDirectoryStopsTheFirstStart`, `TestUnreadableStateDirectoryWithAnInstallation`, `TestAppRoleCannotRewriteTheInstallation` (license, integration); `TestMigration00007SealIsReadOnly` (migrations) | [6] |
 | AUD-19 newer format with new fields reported as invalid | Low | Fixed here | 9c80313 | `TestNewerFormatWithNewFieldsAsksForAnUpdate`, `TestNewerFormatFromARevokedKey`, `TestCanonicalJSONIsRFC8785`, `TestStoredNewerFormatIsNotTampering`, `FuzzParseLicense` (license); `TestNewerFormatLicenseAnswers` (api); `TestNewerFormatIsReportedOnlyWhenSigned` (licensectl) | [14] |
@@ -41,10 +41,10 @@ finding (`git log --grep 'AUD-NN' master..HEAD`), plus the Phase 4 commits for t
 | AUD-22 every read and write rescans all accounts | Low | Fixed here for discovery (key reads and writes still scan) | ac71c89, f2b86dd, 78dc937, e200376, b14cd4b, 5857518, 514e6e6 | `TestRealOpenSSH` (sudo's I/O log: one more `authkeys-list` and no `authkeys-read` during a discovery); the inline-content tests of the helper and of `protocol6_test.go`; `TestEmulatorTruncatesLikeTheHelper` | [3] |
 | AUD-23 release image never inspected; gates missing | Low | Fixed here: `make image-check`, build-tag checks in `release-symcheck` and `internal/archtest`, `npm ci --ignore-scripts`, `go mod verify`, Dependabot, Vitest thresholds, Go coverage floors; `osv-scanner` deferred to Phase 8 | b3bc908, 8b22874, efe74eb, 517b4cd, 41ce75e, 7727fd2 | `make image-check` (26 checks), `TestImageCheckComparesHelperChecksumsOnlyWithTheSameGo`, `TestTestOnlyFilesRequireTheirTag`, `TestReleaseBinariesLinkNoTestPackages` and the other `internal/archtest/buildtags_test.go` rules, `make release-symcheck`, `make web-coverage`, `make coverage` | [9] |
 | AUD-24 Compose override ignored; two variables not passed | Low | Fixed here | efe9e7e | `TestComposePassesConfigurationAndUsesTheOverride`, `TestComposePassesEveryConfigurationVariable` | [9] |
-| AUD-25 (a) names bypass the address rule | Low | Fixed here (loopback still allowed: residual) | 88622c7, 7cf6218, 683bc85 | `TestAllowedEveryAddressForm`, `TestControl`, `TestDialContextChecksTheResolvedAddress`, `TestDialContextReportsARefusalAmongFailures` (netaddr); `TestDialRefusesAResolvedLinkLocalAddress`, `TestDialRefusesANameThatNowResolvesToARefusedAddress`, `TestProbeChangedRefusesANameThatMoved`, `TestPoolRedialRefusesANameThatMoved` (linuxssh); `TestTLSProberRefusesAnAddressAliceNeverConnectsTo`, `TestVerifyFallsBackToTheServerProbeWhenAlicesProbeIsRefused` (nginx); `TestStatusForAddressNotAllowed`; `TestRemoveKeyRecordsARefusedAddressOnTheTarget` | [8] |
+| AUD-25 (a) names bypass the address rule | Low | Fixed here (loopback still allowed: residual) | 88622c7, 7cf6218, 683bc85, a961f9d | `TestAllowedEveryAddressForm`, `TestControl`, `TestDialContextChecksTheResolvedAddress`, `TestDialContextReportsARefusalAmongFailures` (netaddr); `TestDialRefusesAResolvedLinkLocalAddress`, `TestDialRefusesANameThatNowResolvesToARefusedAddress`, `TestProbeChangedRefusesANameThatMoved`, `TestPoolRedialRefusesANameThatMoved` (linuxssh); `TestTLSProberRefusesAnAddressAliceNeverConnectsTo`, `TestVerifyFallsBackToTheServerProbeWhenAlicesProbeIsRefused` (nginx); `TestStatusForAddressNotAllowed`; `TestRemoveKeyRecordsARefusedAddressOnTheTarget` | [8] |
 | AUD-25 (b) lockout scope written too narrowly | Low | Recorded, not fixed | — | — | [15]: separating the counters needs a schema change and the SEC-020 semantics of R35's addendum; lockout alerting arrives in Phase 7 |
 | AUD-25 (c) CSV export lacks the verification status | Low | Fixed here | f7a09b2 | `TestExportCSV`, `TestExportCSVFirstLineOfABrokenChain` (api) | [7] |
-| AUD-25 (d) web robustness | Low | Fixed here | b28f373, 6f40137, eacabae, 9e76d52, b6e8226, ab72da0 | Vitest `RouteErrorPage`, `i18n`, `start`, `TargetsPage` (held jobs), `StepUpProvider`, `AuditPage`, `labels`, `client`, `retry`, `polling`; Playwright `phase1.spec.ts` "new screens have no serious accessibility violations" (audit details at phone width) | [16] |
+| AUD-25 (d) web robustness | Low | Fixed here | b28f373, 6f40137, eacabae, 9e76d52, b6e8226, ab72da0, 3b9d826 | Vitest `RouteErrorPage`, `i18n`, `start`, `TargetsPage` (held jobs), `StepUpProvider`, `AuditPage`, `labels`, `client`, `retry`, `polling`; Playwright `phase1.spec.ts` "new screens have no serious accessibility violations" (audit details at phone width) | [16] |
 
 ## Evidence
 
@@ -66,14 +66,14 @@ fix was built (the commit is named), not from a run made for this review.
 | 10 | Go and npm vulnerabilities, module integrity | `make vuln` | `all modules verified`, no vulnerability | recorded after 8b22874: ok; run by `make ci` |
 | 11 | Unit tests | `go test ./... -count=1` | ok | run for this review (see the task report): ok |
 | 12 | Lint, translations, authorization matrix, web | `make lint`, `make i18n-check`, `make authz-doc` (no diff), `make web-lint web-test` | ok | run for this review (see the task report) |
-| 13 | Coverage floors (also runs rows 5 and the integration suites of every package under `-race`) | `make coverage` | every package ok | run for this review: the first run failed on a timing assertion of a Phase 4 test (`TestDumpWarningsAreBounded`: 1.096 s against its 1 s bound under `-race` and load) and showed `internal/secrets` at 81.5 % below its floor of 82; tests for the new AUD-20 branches were added (d2bb792), the two packages were measured again (secrets 83.0 %, nginx 98.2 %, the flaky test passing) and every floor is met (`covercheck` exit 0); floors below |
+| 13 | Coverage floors (also runs rows 5 and the integration suites of every package under `-race`) | `make coverage` | every package ok | run for this review: the first run failed on a timing assertion of a Phase 4 test (`TestDumpWarningsAreBounded`: 1.096 s against its then 1 s bound under `-race` and load; the bound is 10 s since a961f9d) and showed `internal/secrets` at 81.5 % below its floor of 82; tests for the new AUD-20 branches were added (d2bb792), the two packages were measured again (secrets 83.0 %, nginx 98.2 %, the flaky test passing) and every floor is met (`covercheck` exit 0); floors below |
 | 14 | E2E EN/TR incl. the AUD-01 journeys and axe, on the compose project `alice-e2e` | `make e2e-up && make e2e-hardening-check && make e2e`, then `make e2e-down` | all passed | recorded after b6e8226: 62 passed, 0 retried, 0 failed; after ab72da0: `phase1.spec.ts` 18 passed; run by `make ci` |
-| 15 | The whole pipeline | `make ci` | every stage passes | run by the controller after this review was written; result recorded in the remediation's rulings |
+| 15 | The whole pipeline | `make ci` | every stage passes | run by the controller at a961f9d: passed (the documentation fixes after it change no product code except one comment and `check-image.sh`'s CI rule) |
 
 Coverage (row 13, measured for this review; floors are the measured values rounded down, never lowered): new floors
 `cmd/alice` 90 (90.5 %), `internal/setup` 82 (82.8 %), `internal/platform/tlscert` 73 (73.6 %),
 `internal/platform/netaddr` 97 (97.8 %), `internal/platform/validate` 100 (100 %); raised `cmd/alice-helper` 90
-(90.1 %), `internal/api` 93 (93.7 %), `internal/auth/ratelimit` 96 (96.5 %), `internal/certs` 97 (97.9 %),
+(90.1 %), `internal/api` 93 (93.7 %), `internal/auth/ratelimit` 96 (96.5 %), `internal/certs` 97 (97.96 %),
 `internal/jobs/deployjobs` 99 (99.1 %), `internal/providers` 100, `internal/providers/linuxssh` 92 (92.8 %),
 `internal/secrets` 83 (83.0 %). Vitest thresholds stay at 93/90/93/95 (statements, branches, functions, lines;
 measured 94.46/91.48/94.21/96 after ab72da0).
@@ -112,8 +112,12 @@ accepted, unless the last column says otherwise.
 | R-D25 | Minor | `pincheck` could be evaded by a continued line, a trailing comment, `alice:` elsewhere on the line, and workflow containers, services and `run:` steps; it ignored `docker pull` and lower-case Dockerfile names. | 4da6947, a3ab994 |
 | R-D26 | Minor | `image-check` failed (instead of skipping) when the host's Go differed from the image's. | 41ce75e |
 | R-D27 | Minor | A pending activity mark was lost when the tab was hidden; StrictMode and GET-only polling were not pinned. | 9e76d52 |
+| R-D30 | Minor | Task 4 review: the OpenAPI text did not say that only an unmarked read leaves the idle deadline alone. | 7b94d31 |
+| R-D31 | Minor | Task 14 review follow-ups: a missing key was hidden in production builds only (an empty label; now the raw key everywhere, as in tests); Turkish terms (İş, Kurulum kimliği, Bağlantı noktası, dışa aktarım, doğrulama); the error page did not move focus to its heading; the unverified banner promised "Waiting to start", which only deployments show; the summary sentence had no plural form; an action refused by the renewed session showed a session-ended text (now "Your session was renewed while this was being sent." / "Nothing was changed. Try again."). | 3b9d826 |
+| R-D32 | Minor | Found by this review's coverage run: `internal/secrets` (81.5 %) was below its floor (82) because the AUD-20 sync branches had no tests. | d2bb792 (83.0 %) |
+| R-D33 | Minor | Found by this review's coverage run: the Phase 4 test `TestDumpWarningsAreBounded` failed its 1 s wall-clock bound under `-race` and load. | a961f9d (bound 10 s) |
 | R-D28 | Info | Process: two commits carried another agent's uncommitted hunks through the shared index (7dc8b6c took a troubleshooting text of AUD-13; 7cf6218 took OpenAPI text of AUD-12, taken out again by 683bc85 and committed by 4a02ac1). Nothing was lost; history was not rewritten. | — |
-| R-D29 | Low (text) | The catalogue's action for `ALC-SSH-0012` (`locales/common`, shown in the UI) says "edit the server and enter its real address", but a server's address cannot be changed in Alice (`PATCH /targets/{id}` takes only the name and the discovery interval). `docs/troubleshooting.md` says the right thing (remove the server and add it again). | fixed: the locale text (EN and TR) now says to remove the server and add it again with its real address |
+| R-D29 | Low (text) | The catalogue's action for `ALC-SSH-0012` (`locales/common`, shown in the UI) said "edit the server and enter its real address", but a server's address cannot be changed in Alice (`PATCH /targets/{id}` takes only the name and the discovery interval). | a961f9d: the EN and TR texts now say to remove the server and add it again with its real address (`docs/troubleshooting.md` likewise) |
 
 ## Findings of the remediation
 
@@ -128,13 +132,21 @@ New or remaining risks the remediation accepts; each is also under "Known limita
 | R-5 | Low | The testcontainers Ryuk image and Playwright's browser download are not pinned; the npm lockfile is not scanned for secrets. | Accepted [9]; the lockfile scan needs a decision |
 | R-6 | Low | A server name an Administrator added that later resolves to 127.0.0.1 is still connected to (SSH banner and key exchange, or a TLS ClientHello, to Alice's own host). | Accepted [8]: loopback allowed in v1 (R37 item 24) |
 | R-7 | Low | The license gate's 3-hour bound counts awake time; a stalled monotonic clock, or a frozen clock with the process killed before each hourly evaluation, keeps changes possible (root on the host). | Accepted [2]: within Phase 2's P2-01 and "downtime not counted" |
-| R-8 | Low | The holder of `master.key` and the database can carry a seal over from a scratch database, or remove every trace of the installation (eight places) and start a fresh evaluation. | Accepted [6]: P2-10, P2-01 |
+| R-8 | Low | The holder of `master.key` and the database can carry a seal over from a scratch database, or remove every trace of the installation and start a fresh evaluation: the record, `settings` keys `time.hwm` and `setup.completed_at`, `<ALICE_STATE_DIR>/hwm.dat`, the audit rows `platform_key.created` and those with `object_type = 'license'` (append-only triggers disabled), and every row of `users`, `credentials` and `targets` (R39 item 6). | Accepted [6]: P2-10, P2-01 |
 | R-9 | Info | A small sign-in timing difference remains between existing and unknown names (one or two `UPDATE`s, legacy hashes, the row-lock wait). | Accepted [12] |
 
 No High finding is open.
 
 ## Known limitations
 
+- **The activity marker is client-asserted** (R-1): whoever holds a session cookie can keep that session alive,
+  and input through the browser's own pipeline (automation, remote desktop, accessibility tools) counts [1].
+- **Coalesced refusal counts** (R-2) are kept in memory per process: lost when the process dies; N processes write
+  up to N times the rows [4].
+- **The CSV export's first line** (R-3) is one extra one-cell row for a strict CSV reader [7].
+- **Sign-in timing residual** (R-9): a real account's failed attempt does one or two small `UPDATE`s (and at the
+  tenth an audit row) that an unknown name does not; legacy hashes verify faster until rehashed; the row-lock wait
+  during the real user's own check [12].
 - **Accounts not inventoried.** Accounts with uid 1–999 (other than `alice-svc`), `nobody`, a `nologin`/`false`
   shell or a home that does not exist are neither scanned nor reported, even where sshd could accept a key for them
   (for example through an absolute `AuthorizedKeysFile`) [3].
@@ -161,7 +173,7 @@ No High finding is open.
   kicked evaluation [2].
 - **License gate, other.** With an unhealthy database the banner can show the grace period while the API refuses
   with `ALC-LIC-0001` (lock due) for up to 3 hours; after 3 hours the API says `ALC-LIC-0009` even for a license that
-  really is locked; the bound is awake time (a suspended host does not count) [2].
+  really is locked; the bound is awake time (a suspended host does not count), and a stalled monotonic clock or a frozen clock with the process killed before every hourly check keeps changes possible (R-7, root on the host) [2].
 - **An outage longer than about 2 h 48 min** pauses changes until the first successful evaluation after it [2].
 - **The edge refusal of a license upload** writes the audit row but no license history row [10].
 - **Refusal rows.** Inventory's own denial rows (`target.add.denied_license`, `deployment.denied`,
@@ -193,9 +205,10 @@ No High finding is open.
 - **CI has never run on GitHub:** the workflow (including `ssh-matrix` and the macOS `licensectl` job) has no remote
   run yet; actionlint ran locally only.
 - **`make image-check` needs the host's Go equal to the image's** for the two helper-checksum checks (otherwise they
-  are skipped with a message).
-- **A flaky timing assertion:** `TestDumpWarningsAreBounded` (Phase 4, `internal/providers/nginx`) asserts under 1 s
-  for 100,000 warnings and failed once under `-race` and machine load (1.096 s) during this review.
+  are skipped with a message locally, and fail when `CI` is set).
+- **Timing assertions in tests:** `TestDumpWarningsAreBounded` (Phase 4) failed once at 1.096 s against its then 1 s
+  bound under `-race` and load during this review; a961f9d widened it to 10 s (it only has to tell linear from
+  quadratic work). Other wall-clock bounds in tests may still be sensitive to machine load.
 - The Phase 1–4 findings and limitations still open stay as recorded in their review notes, except what this
   remediation changed: the upgrade seal of Phase 2 (P2-10's last bypass) is gone, a leftover damaged `hwm.dat` is now
   evidence, and a stored newer-format license is no longer tampering (`phase-2.md` carries notes).
@@ -212,8 +225,7 @@ No High finding is open.
 - **A full `make ci` on a clean, idle machine**, including `image-check` and `image-scan` (the audit saw 54/56
   Playwright passes under load and no image scan).
 - **Real-systemd Nginx job:** Phase 8 (R38 item 16; spec §26.6 carries the pointer).
-- **Decisions to take:** the npm lockfile secret scan (R-5); whether loopback targets should be refusable (R-6); the
-  `ALC-SSH-0012` locale action text (R-D29).
+- **Decisions to take:** the npm lockfile secret scan (R-5); whether loopback targets should be refusable (R-6).
 
 | Item | Result | Date and person |
 |---|---|---|

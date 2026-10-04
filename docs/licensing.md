@@ -78,11 +78,13 @@ once, and queued work waits for an administrator only after that check confirmed
 ## When Alice cannot check its license
 
 If no license check has succeeded for 3 hours (for example because the database was unreachable or overloaded for a
-long time), everyone sees the red banner "Alice could not check its license since …" and changes to servers are
-refused with `ALC-LIC-0009` ("The license could not be checked."), even if the license is valid. Signing in,
-uploading a license, the audit log, exports and user administration keep working, and so does the finishing or
-undoing of a deployment that already reached a server. Nothing is cancelled and nothing needs an administrator:
-work requested meanwhile waits and starts by itself after the next successful check. A failed check is tried again
+long time), everyone sees the red banner "Alice could not check its license since …" and everything that works on
+a server is refused with `ALC-LIC-0009` ("The license could not be checked."), even if the license is valid: the
+changes refused in lock mode (above), and also **Test connection**, **Scan for SSH keys** and **Discover**; the daily
+scans are not started. Reading everything, signing in, uploading a license, the audit log and its export, user and
+API token administration and **Discard** keep working, and so does the finishing or undoing of a deployment that
+already reached a server. Nothing is cancelled and nothing needs an administrator: queued work waits and starts by
+itself after the next successful check. A failed check is tried again
 after 1, 2, 4 and 8 minutes and then every 10 minutes, so after the database is back changes resume within minutes.
 An outage that ends within about 2 hours 48 minutes of the last successful check does not stop changes at all.
 What to check is in [troubleshooting.md](troubleshooting.md) under `ALC-LIC-0009`.
@@ -131,9 +133,11 @@ only administrator still cannot sign in, the server operator runs `alice admin r
   the audit log remain. What remains is what someone who controls the whole server can always do, like running a
   modified program: remove every trace of the installation from both the database and the state volume (which is
   the same as a new installation), or use the master key file to write a new protected record.
-- **Can someone keep Alice from noticing that the license ended, by stopping its checks?** No. If no check succeeds
-  for 3 hours, changes stop ("Alice could not check its license since …"), and between checks Alice counts the time
-  itself.
+- **Can someone keep Alice from noticing that the license ended, by stopping its checks?** Not without control of
+  the whole server. If no check succeeds for 3 hours, work on servers stops ("Alice could not check its license
+  since …"), and between checks Alice counts the time itself. Someone with root on the Alice host can still stop
+  Alice's clock or patch the program, like any check that runs on a machine the customer controls (see "What cannot
+  be prevented" in the design, §16.6, and the review of the audit remediation).
 - **Can someone edit the license file to get more targets?** No. The file is signed; any change makes it "not a
   valid Alice license". An edited file already stored in the database is ignored, and administrators see "License
   data was changed outside Alice …".

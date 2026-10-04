@@ -17,6 +17,10 @@ Fixes for the independent audit of 2026-10-04; the full record is `docs/security
 - Migration `00007` (applied at start) makes the installation record's protection read-only for the application
   role. A development database that was never started since before Phase 2 reads as tampered: `make reset`.
 - The CSV audit export has a new first line; readers that expect the column names on line 1 must skip it.
+- Behind a reverse proxy, set `ALICE_TRUSTED_PROXIES` (now passed to the container) to the proxy's address only;
+  otherwise every client shares the proxy's address for the request limits.
+- A new installation needs an empty state volume: a time record left by an earlier installation ends the new
+  installation's evaluation.
 
 ### Security
 - Idle timeout: only a person's activity extends a session (a change, or a page request the web marks after real
@@ -40,7 +44,9 @@ Fixes for the independent audit of 2026-10-04; the full record is `docs/security
 - Text PostgreSQL cannot store (NUL, invalid UTF-8 in queries, `\u0000` in JSON) is refused before any handler
   (`ALC-SYS-0004`); list cursors are bounded; certificates dated outside the years 1 to 9999 are refused; an answer
   that cannot be encoded is a complete 500, never a cut-off 200.
-- Sign-in timing no longer tells whether a user name exists.
+- Parallel sign-in attempts for an existing and for an unknown user name now queue and do the same work, so their
+  timing no longer tells the names apart; a small residual (a millisecond-scale database write for a real account,
+  weaker legacy password hashes) is recorded in R39 item 12.
 - Resetting the setup code wins against an administrator creation in progress; the master key file's directory is
   synced when the key is created.
 - An installation record without its protection is never trusted, and more traces show that an installation

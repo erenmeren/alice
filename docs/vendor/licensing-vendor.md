@@ -19,6 +19,9 @@ and never get `licensectl`. `licensectl` never uses the network.
   the outer object `{format, key_id, payload, signature}` with exactly these key names, an integer outer `format`
   equal to `payload.format`, and the Ed25519 signature over `"ALICE-LICENSE-v1\n"` followed by the RFC 8785
   canonical bytes of the whole payload object (every member, numbers that are IEEE doubles, nesting at most 16).
+  The file as a whole also stays within what every build checks before it looks at the format: at most 64 KiB
+  (65,536 bytes), valid UTF-8 (a leading byte order mark is ignored), exactly one JSON object with no key repeated
+  in any object at any level, and nesting at most 16.
   Then a customer on an older Alice who uploads a newer license is told to update Alice (`ALC-LIC-0006`); a format
   that breaks any of this is reported to them as "not a valid license" (`ALC-LIC-0002`). An older build reports a
   newer format only after the signature verified, so an unsigned or edited file is always "not valid".

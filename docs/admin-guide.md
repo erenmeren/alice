@@ -52,17 +52,25 @@ break-glass account available.
 
 ### If an account may be compromised
 
-1. **Disable** the account. This ends its sessions and revokes its API tokens at once. If the person must keep
-   working, **Sign out everywhere** instead: it also ends every session and revokes every API token, but the
-   person can sign in again with their password and code.
-2. Open **Audit log** and check the entries that show the person in the **User** column (use **Load more** for
-   older entries, or **Export JSON** and search the file). Open **Details** of an entry to see what it changed.
-3. Before enabling it again, **Set a new password** and **Reset two-factor sign-in**, and give the new password
-   to the person through a separate channel.
+First decide what may be known to someone else:
+
+- **The password, the authenticator or the recovery codes may be known** (or you do not know): choose **Set a new
+  password** and then **Reset two-factor sign-in**. **Set a new password** ends every session and revokes every API
+  token of the person; **Reset two-factor sign-in** removes their authenticator and recovery codes, so they set up a
+  new one at the next sign-in. Give the new password to the person through a separate channel. If the person should
+  not sign in at all for now, choose **Disable** (it also ends the sessions and revokes the tokens; **Enable**
+  later, after the two steps above).
+- **Only a signed-in device was lost or stolen, and the password and authenticator are believed safe:** choose
+  **Sign out everywhere**. It ends every session and revokes every API token; the person signs in again with their
+  password and code. Do not use it when the credentials may be known: whoever knows them signs in again just as
+  easily.
+
+Then open **Audit log** and check the entries that show the person in the **User** column (use **Load more** for
+older entries, or **Export JSON** and search the file); **Details** of an entry shows what it changed.
 
 **Reset two-factor sign-in** and a role change on their own end the sessions but do **not** revoke API tokens: a
-token keeps working with the person's current role. Use **Sign out everywhere**, **Set a new password** or
-**Disable** whenever the person or their scripts should lose access. Their scripts then need new tokens.
+token keeps working with the person's current role. Only **Set a new password**, **Sign out everywhere** and
+**Disable** revoke them; the person's scripts then need new tokens.
 
 ## Multi-factor authentication and recovery codes
 
