@@ -2,6 +2,8 @@ package providers
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -49,13 +51,25 @@ func (r ImportResult) Validate() error {
 	return nil
 }
 
+// ErrUnexpectedAnswer marks a cause: something answered, but not with a complete, usable Azure
+// answer (a truncated, malformed or oversized body, a redirect, a failed protocol). The request
+// may have been carried out, so an import that failed this way is uncertain.
+var ErrUnexpectedAnswer = errors.New("providers: the answer could not be used")
+
 // transportFailure reports an error chain that says the request may have been sent: a context
-// that ended, a network error or a connection that closed in the middle of an answer. An import
-// that failed this way is uncertain, whatever code the provider put on it.
+// that ended, a network error, a connection that closed in the middle of an answer, a TLS record
+// or alert error, or an answer that could not be parsed. An import that failed this way is
+// uncertain, whatever code the provider put on it.
 func transportFailure(err error) bool {
 	var ne net.Error
+	var syn *json.SyntaxError
+	var typ *json.UnmarshalTypeError
+	var alert tls.AlertError
+	var rec tls.RecordHeaderError
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &ne)
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, ErrUnexpectedAnswer) ||
+		errors.As(err, &ne) || errors.As(err, &syn) || errors.As(err, &typ) ||
+		errors.As(err, &alert) || errors.As(err, &rec)
 }
 
 // CheckImportReturn checks what ImportCertificate returned: Validate, then created with a nil

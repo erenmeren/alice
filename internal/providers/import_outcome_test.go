@@ -2,6 +2,8 @@ package providers_test
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -59,6 +61,16 @@ func TestImportResultRules(t *testing.T) {
 			providers.NewError("azure.unexpected_response", true, io.ErrUnexpectedEOF, nil), false},
 		{"refused by a closed connection", providers.ImportResult{Outcome: providers.ImportRefused},
 			providers.NewError("azure.unreachable", true, io.EOF, nil), false},
+		{"refused by an unusable answer", providers.ImportResult{Outcome: providers.ImportRefused},
+			providers.NewError("azure.unexpected_response", true, providers.ErrUnexpectedAnswer, nil), false},
+		{"refused by malformed JSON", providers.ImportResult{Outcome: providers.ImportRefused},
+			providers.NewError("azure.unexpected_response", true, &json.SyntaxError{}, nil), false},
+		{"refused by a mistyped answer", providers.ImportResult{Outcome: providers.ImportRefused},
+			providers.NewError("azure.unexpected_response", true, &json.UnmarshalTypeError{}, nil), false},
+		{"refused by a TLS alert", providers.ImportResult{Outcome: providers.ImportRefused},
+			providers.NewError("azure.unreachable", true, tls.AlertError(80), nil), false},
+		{"refused by a TLS record error", providers.ImportResult{Outcome: providers.ImportRefused},
+			providers.NewError("azure.unreachable", true, tls.RecordHeaderError{}, nil), false},
 		// uncertain: the request may have reached the vault; an error says why.
 		{"uncertain", providers.ImportResult{Outcome: providers.ImportUncertain}, errors.New("timeout"), true},
 		{"uncertain with a provider error", providers.ImportResult{Outcome: providers.ImportUncertain},

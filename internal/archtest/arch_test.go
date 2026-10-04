@@ -155,6 +155,16 @@ func TestAllowed(t *testing.T) {
 		ok             bool
 	}{
 		{"provider sibling denied", nginx, azurekv, false},
+		{"azurekv to azureid allowed", azurekv, "alice/internal/platform/azureid", true},
+		{"azurekv to platform/netaddr allowed", azurekv, "alice/internal/platform/netaddr", true},
+		{"azurekv to the interface package allowed", azurekv, "alice/internal/providers", true},
+		{"azurekv to certs denied", azurekv, "alice/internal/certs", false},
+		{"azurekv to secrets denied", azurekv, "alice/internal/secrets", false},
+		{"azurekv to the nginx provider denied", azurekv, nginx, false},
+		{"azurekv to platform/db denied", azurekv, "alice/internal/platform/db", false},
+		{"fakekv to the interface package denied", "alice/internal/testutil/fakekv", "alice/internal/providers", false},
+		{"fakekv to azureid allowed", "alice/internal/testutil/fakekv", "alice/internal/platform/azureid", true},
+		{"azureid to anything of Alice denied", "alice/internal/platform/azureid", "alice/internal/providers", false},
 		{"provider to platform/db denied", nginx, "alice/internal/platform/db", false},
 		{"provider interface pkg to platform/db denied", "alice/internal/providers", "alice/internal/platform/db", false},
 		{"provider to platform/clock allowed", nginx, "alice/internal/platform/clock", true},
