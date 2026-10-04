@@ -232,22 +232,24 @@ func testHandler(d testDeps) http.Handler {
 			e2eMailbox.reset()
 			d.Setup.ResetLockouts()
 			d.ResetLimits()
-			if d.Inventory != nil {
-				// The credentials table was emptied: the new installation gets a new platform key.
-				if _, err := d.Inventory.EnsurePlatformKey(ctx); err != nil {
-					return fmt.Errorf("create the platform key: %w", err)
-				}
-			}
 			return nil
 		}
 		// The license service runs the reset while no evaluation is in flight (an in-flight
-		// Tick could write the old time record back) and starts again on the emptied tables:
-		// a fresh installation row, time record and evaluation.
+		// Tick could write the old time record back) and starts again on the emptied tables and
+		// time record: a new installation, sealed when it is created, with a fresh evaluation.
+		// The platform key comes after, as at serve: its audit event shows that an installation
+		// existed, so a license start after it would find the installation removed (AUD-18).
 		var err error
 		if d.License != nil {
 			err = d.License.Restart(r.Context(), reset)
 		} else {
 			err = reset(r.Context())
+		}
+		if err == nil && d.Inventory != nil {
+			// The credentials table was emptied: the new installation gets a new platform key.
+			if _, kerr := d.Inventory.EnsurePlatformKey(r.Context()); kerr != nil {
+				err = fmt.Errorf("create the platform key: %w", kerr)
+			}
 		}
 		if err != nil {
 			d.Log.Error("test reset failed", "error", err.Error())

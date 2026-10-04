@@ -401,9 +401,6 @@ func (s *Service) startLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := s.sealUnsealed(ctx); err != nil {
-		return err
-	}
 	row, err := s.loadInstallation(ctx, s.pool, false)
 	if err != nil {
 		return err

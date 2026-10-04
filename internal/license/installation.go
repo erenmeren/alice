@@ -17,14 +17,17 @@ import (
 )
 
 // The installation row (installation ID and timestamp, spec §16.4) carries a seal:
-// HMAC-SHA256 under the HKDF sub-key alice/installation/v1 over both values. A row whose seal
-// does not match is never trusted (spec §16.1(a)): changing the timestamp would restart the
-// evaluation and changing the ID would let a license issued for another installation work.
+// HMAC-SHA256 under the HKDF sub-key alice/installation/v1 over both values, written in the
+// transaction that creates the row. A row whose seal does not match, or has no seal, is never
+// trusted (spec §16.1(a), AUD-18): changing the timestamp would restart the evaluation and
+// changing the ID would let a license issued for another installation work. Nothing ever seals
+// an existing row: the only row that gets a seal is a new one, and a new row starts a fresh
+// evaluation only when nothing shows that an installation existed (see ensureInstallation).
 
 // Installation problems, as audited in license.installation_tampered.
 const (
 	problemSealMismatch        = "seal_mismatch"        // the ID or the timestamp no longer matches the seal
-	problemSealMissing         = "seal_missing"         // the seal was removed after it had been written
+	problemSealMissing         = "seal_missing"         // the seal was removed (every row is sealed when it is created)
 	problemInstallationMissing = "installation_missing" // the row was removed from an existing installation
 )
 
@@ -38,7 +41,6 @@ type installationRow struct {
 	State       Phase
 	ClockJump   []byte
 	Tampered    string // "" or the problem; such a row is not trusted
-	unsealed    bool   // created before the seal existed and not sealed yet (sealed at Start)
 }
 
 // seal computes the installation seal. The key is derived for this purpose only and cleared
@@ -49,16 +51,6 @@ func (s *Service) seal(id string, installedAt time.Time) []byte {
 	m := hmac.New(sha256.New, key)
 	m.Write([]byte("alice-installation-v1\n" + id + "\n" + strconv.FormatInt(installedAt.UTC().UnixMicro(), 10)))
 	return m.Sum(nil)
-}
-
-// everSealed reports whether an installation of this database was sealed on the first start
-// after the upgrade that introduced the seal (the audit chain records it).
-func everSealed(ctx context.Context, q db.Querier) (bool, error) {
-	var ok bool
-	if err := q.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM audit_log WHERE action = 'license.installation_sealed')").Scan(&ok); err != nil {
-		return false, fmt.Errorf("read the installation seal record: %w", err)
-	}
-	return ok, nil
 }
 
 // loadInstallation reads the installation row. forUpdate takes the license row lock that
@@ -97,15 +89,10 @@ func (s *Service) loadInstallation(ctx context.Context, q db.Querier, forUpdate 
 	r.State, r.InstalledAt = Phase(state), r.InstalledAt.UTC()
 	switch {
 	case stored == nil:
-		sealed, err := everSealed(ctx, q)
-		if err != nil {
-			return installationRow{}, err
-		}
-		if sealed {
-			r.Tampered = problemSealMissing
-		} else {
-			r.unsealed = true
-		}
+		// Every row is sealed in the transaction that creates it. There is no "not sealed yet"
+		// (AUD-18): the upgrade path that sealed such a row let the database owner restart the
+		// evaluation by clearing the seal.
+		r.Tampered = problemSealMissing
 	case !hmac.Equal(stored, s.seal(r.ID, r.InstalledAt)): // constant time
 		r.Tampered = problemSealMismatch
 	}
@@ -114,9 +101,9 @@ func (s *Service) loadInstallation(ctx context.Context, q db.Querier, forUpdate 
 
 // ensureInstallation creates the installation row on the first start (spec §16.4) and reports
 // whether it did. A missing row is a new installation only when nothing shows that one
-// existed: with a valid time record or a completed setup, the row was removed, and the new
-// row's evaluation has already ended (audited as license.installation_tampered), so removing
-// the row never grants a fresh evaluation.
+// existed (see priorInstallation): otherwise the row was removed, and the new row's evaluation
+// has already ended (audited as license.installation_tampered), so removing the row never
+// grants a fresh evaluation.
 func (s *Service) ensureInstallation(ctx context.Context) (bool, error) {
 	now := later(s.clock.Now().UTC(), s.buildTime).Truncate(time.Microsecond)
 	if now.IsZero() {
@@ -169,44 +156,51 @@ VALUES (1, $1, $2, 'evaluation', $3, $4) ON CONFLICT (id) DO NOTHING`, id, insta
 	return fresh, nil
 }
 
-// priorInstallation reports what shows that an installation existed on this database: a
-// valid time record ("time_record", with its time) or a completed setup ("setup_completed").
+// priorInstallation reports what shows that an installation existed on this database or this
+// state volume, when the installation row is missing (AUD-18):
+//   - "time_record" (with its time): a valid time record in the database or in the state
+//     directory. The state directory's copy survives a database recreated empty.
+//   - "time_record_damaged": a copy that exists but does not verify. A new installation has
+//     none; a leftover one means a database recreated next to an old state volume whose key
+//     was replaced too.
+//   - "setup_completed": the setup module's completion marker.
+//   - "audit_log": an audit event that only a started installation writes (the platform key,
+//     created right after the first start, or any license event).
+//
+// A database and a state directory emptied of every one of these is indistinguishable from a
+// new installation (accepted, R36 addendum (j)).
 func (s *Service) priorInstallation(ctx context.Context) (string, time.Time, error) {
-	hwm, _, err := s.readHWM(ctx)
+	hwm, damaged, err := s.readHWM(ctx)
 	if err != nil {
 		return "", time.Time{}, err
 	}
 	if hwm.best != nil {
 		return "time_record", hwm.best.At, nil
 	}
-	var completed bool
+	if len(damaged) > 0 {
+		return "time_record_damaged", time.Time{}, nil
+	}
+	var completed, audited bool
 	if err := s.pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM settings WHERE key = $1)", settingSetupCompleted).Scan(&completed); err != nil {
 		return "", time.Time{}, fmt.Errorf("read the setup state: %w", err)
 	}
 	if completed {
 		return "setup_completed", time.Time{}, nil
 	}
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM audit_log WHERE action = $1 OR object_type = 'license')`,
+		auditPlatformKeyCreated).Scan(&audited); err != nil {
+		return "", time.Time{}, fmt.Errorf("read the audit log: %w", err)
+	}
+	if audited {
+		return "audit_log", time.Time{}, nil
+	}
 	return "", time.Time{}, nil
 }
 
-// sealUnsealed seals an installation created before the seal existed, once: on the first
-// start after the upgrade (audited as license.installation_sealed). A seal removed after
-// that is tampering and is never written again.
-func (s *Service) sealUnsealed(ctx context.Context) error {
-	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		row, err := s.loadInstallation(ctx, tx, true)
-		if err != nil || !row.unsealed {
-			return err
-		}
-		if _, err := tx.Exec(ctx, "UPDATE license SET installation_seal = $1 WHERE id = 1", s.seal(row.ID, row.InstalledAt)); err != nil {
-			return fmt.Errorf("seal the installation: %w", err)
-		}
-		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: systemActor, Action: "license.installation_sealed",
-			ObjectType: "license", ObjectID: row.ID, Result: audit.Success,
-			Details: map[string]string{"reason": "upgrade", "installation_id": row.ID}})
-		return err
-	})
-}
+// auditPlatformKeyCreated is the inventory's audit action for the platform SSH key, which serve
+// creates right after the license service's first start (cmd/alice): every installation that
+// ever served has it.
+const auditPlatformKeyCreated = "platform_key.created"
 
 // Notice kinds of the installation record episodes: "<kind>:<installation id>:<n>". They only feed
 // the license page; the episode state comes from the audit log (see lastEpisode).

@@ -761,8 +761,13 @@ func TestRestartWaitsForAnInFlightTick(t *testing.T) {
 		restartErr <- e.svc.Restart(e.ctx, func(ctx context.Context) error {
 			called.Store(true)
 			savedBy = e.loadHWM(true).At // what the finished tick left behind
-			if _, err := e.db.Owner.Exec(ctx, "TRUNCATE license, license_files, license_history, settings"); err != nil {
-				return err
+			// As the e2e reset: every trace of the installation goes, the audit log included
+			// (AUD-18: an audit event of a started installation shows that one existed).
+			for _, stmt := range []string{"ALTER TABLE audit_log DISABLE TRIGGER USER",
+				"TRUNCATE license, license_files, license_history, settings, audit_log", "ALTER TABLE audit_log ENABLE TRIGGER USER"} {
+				if _, err := e.db.Owner.Exec(ctx, stmt); err != nil {
+					return err
+				}
 			}
 			e.clk.Set(installedAt)
 			return os.Remove(filepath.Join(e.stateDir, license.HWMFileName))
@@ -778,6 +783,7 @@ func TestRestartWaitsForAnInFlightTick(t *testing.T) {
 	assert.False(t, savedBy.Before(installedAt.Add(23*day)), "the tick saved its record before the reset ran")
 	assert.True(t, e.loadHWM(true).At.Before(installedAt.Add(day)), "the old time record did not come back")
 	assert.NotEqual(t, oldInstallation, e.installation(), "a fresh installation exists after the reset")
+	assert.Equal(t, license.PhaseEvaluation, e.svc.Snapshot().Eval.Phase, "with a fresh evaluation")
 	assert.Equal(t, 1, e.countWhere("license", "true"))
 	assert.True(t, e.svc.Snapshot().Ready)
 }

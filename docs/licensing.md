@@ -100,10 +100,15 @@ only administrator still cannot sign in, the server operator runs `alice admin r
 - **Which build accepts our license?** Every release from your vendor. `alice license keys` shows the vendor key
   fingerprints the build trusts; compare them with the fingerprint in the vendor's email.
 - **Can someone restart the evaluation by editing or deleting the installation record in the database?** No. The
-  Installation ID and the evaluation start are protected with a key derived from the master key. A changed record
-  is ignored: Alice treats the evaluation as ended (lock mode) until the original record is restored, and the audit
-  log lists "Installation record changed outside Alice". A deleted record gets a new Installation ID whose
-  evaluation has already ended, so a license for the new ID is needed.
+  Installation ID and the evaluation start are protected with a key derived from the master key, and a record
+  without that protection is never trusted. A changed record, or one whose protection was removed, is ignored:
+  Alice treats the evaluation as ended (lock mode) until the original record is restored, and the audit log lists
+  "Installation record changed outside Alice". A deleted record gets a new Installation ID whose evaluation has
+  already ended, so a license for the new ID is needed. The same happens when the database is replaced by an empty
+  one while Alice's state volume is kept, and when the record is deleted together with the state volume while the
+  rest of the database is kept. What remains is what someone who controls the whole server can always do, like
+  running a modified program: remove every trace of the installation from both the database and the state volume
+  (which is the same as a new installation), or use the master key file to write a new protected record.
 - **Can someone edit the license file to get more targets?** No. The file is signed; any change makes it "not a
   valid Alice license". An edited file already stored in the database is ignored, and administrators see "License
   data was changed outside Alice …".

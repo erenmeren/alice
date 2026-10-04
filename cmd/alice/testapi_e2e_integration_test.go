@@ -129,6 +129,17 @@ func TestE2EResetStartsAFreshInstallation(t *testing.T) {
 	snap := s.svc.license.Snapshot()
 	assert.True(t, snap.Ready)
 	assert.NotEqual(t, oldID, snap.InstallationID, "a new installation ID")
+	// AUD-18: a properly new, sealed installation with a fresh evaluation, not a removed one; the
+	// platform key (whose audit event marks a started installation) is created after the start.
+	assert.False(t, snap.InstallationTampered)
+	assert.Equal(t, license.PhaseEvaluation, snap.Eval.Phase)
+	assert.Equal(t, 30, snap.Eval.DaysLeft)
+	assert.Zero(t, s.count("SELECT count(*) FROM audit_log WHERE action = 'license.installation_tampered'"))
+	assert.Equal(t, 1, s.count("SELECT count(*) FROM audit_log WHERE action = 'platform_key.created'"))
+	require.Equal(t, http.StatusNoContent, s.post("/test/reset", ``).Code, "a second reset")
+	assert.Equal(t, license.PhaseEvaluation, s.svc.license.Snapshot().Eval.Phase)
+	assert.Zero(t, s.count("SELECT count(*) FROM audit_log WHERE action = 'license.installation_tampered'"))
+	snap = s.svc.license.Snapshot()
 	assert.Equal(t, 1, s.count("SELECT count(*) FROM license"), "the installation row exists again")
 	assert.Zero(t, s.count("SELECT count(*) FROM license_files"))
 	assert.Empty(t, s.mail())

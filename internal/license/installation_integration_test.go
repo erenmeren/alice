@@ -54,8 +54,11 @@ func (e *env) requireTamperedLock() {
 	assert.True(e.t, snap.InstallationTampered)
 	assert.Equal(e.t, license.PhaseEvaluationExpired, snap.Eval.Phase)
 	assert.Nil(e.t, snap.Eval.Current, "no license file counts for an untrusted installation")
-	assert.ErrorIs(e.t, e.svc.Allow(license.ClassChange), license.ErrLocked)
+	err := e.svc.Allow(license.ClassChange)
+	assert.ErrorIs(e.t, err, license.ErrLocked)
+	assert.True(e.t, license.ConfirmedLock(err), "an evaluated lock: the runner holds queued changes as in any lock")
 	assert.Equal(e.t, "evaluation_expired", e.state())
+	assert.Equal(e.t, "evaluation_ended", snap.Banners(false)[0].Kind, "the banner of an ended evaluation, for everyone")
 }
 
 func TestStartSealsTheInstallation(t *testing.T) {
@@ -123,7 +126,8 @@ func TestChangedInstallationIDLocks(t *testing.T) {
 	assert.Zero(t, e.auditCount("license.tampered"), "the stored file is not reported as changed")
 }
 
-// (b) A seal changed or removed after it was written is tampering, not an old installation.
+// (b) A seal changed or removed is tampering. There is no installation "not sealed yet": every
+// row is sealed when it is created, and nothing seals an existing row (AUD-18).
 func TestDamagedOrRemovedSealLocks(t *testing.T) {
 	t.Run("changed", func(t *testing.T) {
 		e := newEnv(t)
@@ -131,65 +135,115 @@ func TestDamagedOrRemovedSealLocks(t *testing.T) {
 		e.restart()
 		e.requireTamperedLock()
 	})
-	t.Run("removed after the upgrade seal", func(t *testing.T) {
+	t.Run("removed", func(t *testing.T) {
 		e := newEnv(t)
 		e.ownerExec("UPDATE license SET installation_seal = NULL")
-		e.restart() // the one-time upgrade seal
-		require.Equal(t, 1, e.auditCount("license.installation_sealed"))
-		e.ownerExec("UPDATE license SET installation_seal = NULL, installed_at = $1", installedAt.Add(20*day))
+		snap, err := e.newService().Inspect(e.ctx)
+		require.NoError(t, err)
+		assert.True(t, snap.InstallationTampered, "alice license status reports it too")
+		assert.Equal(t, license.PhaseEvaluationExpired, snap.Eval.Phase)
+
 		e.restart()
 		e.requireTamperedLock()
-		assert.Equal(t, "seal_missing", e.auditDetails("license.installation_tampered")["problem"])
-		assert.Equal(t, 1, e.auditCount("license.installation_sealed"), "never sealed a second time")
-		assert.Nil(t, e.storedSeal())
+		assert.Equal(t, map[string]string{"problem": "seal_missing", "installation_id": e.installation(), "episode": "1"},
+			e.auditDetails("license.installation_tampered"))
+		e.clk.Advance(day)
+		e.restart()
+		e.requireTamperedLock()
+		assert.Nil(t, e.storedSeal(), "never sealed again")
+		assert.Equal(t, 1, e.auditCount("license.installation_tampered"), "one episode")
+		assert.Zero(t, e.auditCount("license.installation_sealed"))
 	})
 }
 
-// (a) An installation created before the seal existed is sealed once, on the first start
-// after the upgrade, and keeps its ID, timestamp and evaluation.
-func TestInstallationFromBeforeTheSealIsSealedOnce(t *testing.T) {
+// AUD-18 (audit PoC 3, inverted): on day 29 of the evaluation the database owner clears the
+// seal and moves the installation time to now. Before, the next start sealed the edited row as
+// "an installation from before the seal" and the evaluation began again with 30 days. Now the
+// evaluation counts as ended, during the run and after every restart, and the row is never sealed.
+func TestRemovedSealIsTamperingOnEveryInstallation(t *testing.T) {
 	e := newEnv(t)
-	before := e.svc.Snapshot()
-	e.ownerExec("UPDATE license SET installation_seal = NULL") // the row as an older version left it
+	e.tickAt(installedAt.Add(29 * day))
+	require.Equal(t, 1, e.svc.Snapshot().Eval.DaysLeft)
 
-	_, err := e.newService().Inspect(e.ctx)
-	require.NoError(t, err, "alice license status works before the first start after the upgrade")
-	assert.Nil(t, e.storedSeal(), "Inspect writes nothing")
-
-	e.clk.Advance(day)
-	e.restart()
-	assert.Equal(t, e.wantSeal(before.InstallationID, before.InstalledAt), e.storedSeal())
-	assert.Equal(t, 1, e.auditCount("license.installation_sealed"))
-	assert.Equal(t, map[string]string{"reason": "upgrade", "installation_id": before.InstallationID},
-		e.auditDetails("license.installation_sealed"))
-	snap := e.svc.Snapshot()
-	assert.False(t, snap.InstallationTampered)
-	assert.Equal(t, before.InstallationID, snap.InstallationID)
-	assert.True(t, snap.InstalledAt.Equal(before.InstalledAt))
-	assert.Equal(t, license.PhaseEvaluation, snap.Eval.Phase)
-	assert.Equal(t, 29, snap.Eval.DaysLeft)
+	e.ownerExec("UPDATE license SET installation_seal = NULL, installed_at = $1", installedAt.Add(29*day))
+	e.tickAt(installedAt.Add(29*day + time.Hour))
+	e.requireTamperedLock()
 
 	e.restart()
-	assert.Equal(t, 1, e.auditCount("license.installation_sealed"), "sealed once")
+	e.requireTamperedLock()
+	assert.Equal(t, "seal_missing", e.auditDetails("license.installation_tampered")["problem"])
+	assert.Zero(t, e.auditCount("license.installation_sealed"))
+	assert.Nil(t, e.storedSeal())
+	assert.NotEqual(t, 30, e.svc.Snapshot().Eval.DaysLeft)
 }
 
-// (c) A removed installation row is not a fresh evaluation when the installation existed.
+// AUD-18: a seal cleared on a database whose audit log has an old one-time upgrade seal, or
+// none, is the same tampering (the upgrade path and its audit marker are gone).
+func TestRemovedSealDoesNotDependOnTheAuditLog(t *testing.T) {
+	e := newEnv(t)
+	e.appendAudit("license.installation_sealed", audit.Success, map[string]string{"reason": "upgrade", "installation_id": e.installation()})
+	e.ownerExec("UPDATE license SET installation_seal = NULL")
+	e.restart()
+	e.requireTamperedLock()
+	assert.Equal(t, 1, e.auditCount("license.installation_sealed"), "nothing new written")
+}
+
+// emptyAuditLog removes every audit event (the owner role, with the append-only triggers off).
+func (e *env) emptyAuditLog() {
+	e.t.Helper()
+	e.ownerExec("ALTER TABLE audit_log DISABLE TRIGGER USER")
+	e.ownerExec("TRUNCATE audit_log")
+	e.ownerExec("ALTER TABLE audit_log ENABLE TRIGGER USER")
+}
+
+// removeTimeRecords removes both copies of the time record.
+func (e *env) removeTimeRecords() {
+	e.t.Helper()
+	e.ownerExec("DELETE FROM settings WHERE key = 'time.hwm'")
+	require.NoError(e.t, os.Remove(filepath.Join(e.stateDir, license.HWMFileName)))
+}
+
+// served writes what serve writes right after the license service's first start: the
+// platform key's audit event (cmd/alice; the license tests run without the inventory).
+func (e *env) served() {
+	e.t.Helper()
+	require.NoError(e.t, db.InTx(e.ctx, e.db.App, func(tx pgx.Tx) error {
+		_, err := audit.New(e.clk).Append(e.ctx, tx, audit.Event{Actor: audit.SystemActor("inventory"),
+			Action: "platform_key.created", ObjectType: "credential", ObjectID: "platform", Result: audit.Success})
+		return err
+	}))
+}
+
+// (c) A removed installation row is not a fresh evaluation when the installation existed
+// (AUD-18: also when only the audit log, or a time record that no longer verifies, shows it).
 func TestRemovedInstallationIsNotAFreshEvaluation(t *testing.T) {
-	cases := map[string]func(e *env){
-		"time record left": func(*env) {},
-		"only setup completion left": func(e *env) {
+	cases := map[string]struct {
+		extra    func(e *env)
+		evidence string
+	}{
+		"time record left":           {func(*env) {}, "time_record"},
+		"license tables truncated":   {func(e *env) { e.ownerExec("TRUNCATE license_files, license_history") }, "time_record"},
+		"state directory copy only":  {func(e *env) { e.ownerExec("DELETE FROM settings WHERE key = 'time.hwm'") }, "time_record"},
+		"database copy only":         {func(e *env) { require.NoError(e.t, os.Remove(filepath.Join(e.stateDir, license.HWMFileName))) }, "time_record"},
+		"only setup completion left": {func(e *env) { e.removeTimeRecords(); e.setupCompleted() }, "setup_completed"},
+		"only the audit log left": {func(e *env) {
+			e.removeTimeRecords()
+			e.ownerExec("TRUNCATE license_files, license_history")
+		}, "audit_log"},
+		"a damaged time record left": {func(e *env) {
 			e.ownerExec("DELETE FROM settings WHERE key = 'time.hwm'")
-			require.NoError(e.t, os.Remove(filepath.Join(e.stateDir, license.HWMFileName)))
-			e.ownerExec(`INSERT INTO settings (key, value, updated_at) VALUES ('setup.completed_at', '"2026-10-01T09:00:00Z"', now())`)
-		},
+			require.NoError(e.t, os.WriteFile(filepath.Join(e.stateDir, license.HWMFileName), []byte(`{"v":1,"data":"x","mac":"y"}`), 0o600))
+			e.emptyAuditLog()
+		}, "time_record_damaged"},
 	}
-	for name, extra := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := newEnv(t)
+			e.served()
 			old := e.installation()
 			e.tickAt(installedAt.Add(10 * day))
 			e.ownerExec("DELETE FROM license")
-			extra(e)
+			tc.extra(e)
 			e.restart()
 
 			snap := e.svc.Snapshot()
@@ -200,6 +254,7 @@ func TestRemovedInstallationIsNotAFreshEvaluation(t *testing.T) {
 			assert.Equal(t, 1, e.auditCount("license.installation_tampered"))
 			details := e.auditDetails("license.installation_tampered")
 			assert.Equal(t, "installation_missing", details["problem"])
+			assert.Equal(t, tc.evidence, details["evidence"])
 			assert.Equal(t, snap.InstallationID, details["installation_id"])
 
 			e.clk.Advance(time.Hour)
@@ -216,15 +271,152 @@ func TestRemovedInstallationIsNotAFreshEvaluation(t *testing.T) {
 	}
 }
 
-// Accepted bypass (R36): with every trace of the installation gone, the database is new.
+// Accepted bypass (R36): with every trace of the installation gone from the database and the
+// state directory, the installation is new (the e2e reset does exactly this).
 func TestEmptiedDatabaseStartsAFreshEvaluation(t *testing.T) {
 	e := newEnv(t)
-	e.ownerExec("DELETE FROM license")
-	e.ownerExec("DELETE FROM settings WHERE key = 'time.hwm'")
+	e.served()
+	e.setupCompleted()
+	e.ownerExec("TRUNCATE license, license_files, license_history, settings")
+	e.emptyAuditLog()
 	require.NoError(t, os.Remove(filepath.Join(e.stateDir, license.HWMFileName)))
 	e.restart()
 	assert.Equal(t, license.PhaseEvaluation, e.svc.Snapshot().Eval.Phase)
+	assert.Equal(t, 30, e.svc.Snapshot().Eval.DaysLeft)
+	assert.False(t, e.svc.Snapshot().InstallationTampered)
 	assert.Zero(t, e.auditCount("license.installation_tampered"))
+}
+
+// setupCompleted writes the setup module's completion marker.
+func (e *env) setupCompleted() {
+	e.t.Helper()
+	e.ownerExec(`INSERT INTO settings (key, value, updated_at) VALUES ('setup.completed_at', '"2026-10-01T09:00:00Z"', now())`)
+}
+
+// AUD-18: every way the database owner (who also controls the state volume) could try to get a
+// fresh evaluation, and what Alice does. The trial runs 20 days, then the attempt is made.
+func TestEvaluationRestartAttempts(t *testing.T) {
+	newKey := keyring(t, 9)
+	cases := map[string]struct {
+		attempt func(e *env)
+		// want: "tampered" (the row is kept, not trusted), "removed" (a new row whose evaluation
+		// has ended, evidence named), "continues" (nothing gained), "fresh" (indistinguishable).
+		want, evidence string
+	}{
+		"seal cleared": {func(e *env) { e.ownerExec("UPDATE license SET installation_seal = NULL") }, "tampered", ""},
+		"seal cleared and the time moved": {func(e *env) {
+			e.ownerExec("UPDATE license SET installation_seal = NULL, installed_at = $1", e.clk.Now())
+		}, "tampered", ""},
+		"time moved under the old seal":     {func(e *env) { e.ownerExec("UPDATE license SET installed_at = $1", e.clk.Now()) }, "tampered", ""},
+		"installation row deleted":          {func(e *env) { e.ownerExec("DELETE FROM license") }, "removed", "time_record"},
+		"all license tables truncated":      {func(e *env) { e.ownerExec("TRUNCATE license, license_files, license_history") }, "removed", "time_record"},
+		"license rows and settings deleted": {func(e *env) { e.ownerExec("TRUNCATE license, license_files, license_history, settings") }, "removed", "time_record"},
+		"database recreated empty, state directory kept": {func(e *env) {
+			e.ownerExec("TRUNCATE license, license_files, license_history, settings")
+			e.emptyAuditLog()
+		}, "removed", "time_record"},
+		"database recreated empty and master key replaced, state directory kept": {func(e *env) {
+			e.ownerExec("TRUNCATE license, license_files, license_history, settings")
+			e.emptyAuditLog()
+			e.keyring = newKey
+		}, "removed", "time_record_damaged"},
+		"state directory wiped, database kept": {func(e *env) {
+			require.NoError(e.t, os.RemoveAll(e.stateDir))
+		}, "continues", ""},
+		"state directory wiped, installation records deleted, audit log kept": {func(e *env) {
+			require.NoError(e.t, os.RemoveAll(e.stateDir))
+			e.ownerExec("TRUNCATE license, license_files, license_history, settings")
+		}, "removed", "audit_log"},
+		"both wiped": {func(e *env) {
+			require.NoError(e.t, os.RemoveAll(e.stateDir))
+			e.ownerExec("TRUNCATE license, license_files, license_history, settings")
+			e.emptyAuditLog()
+		}, "fresh", ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			e.served()
+			e.setupCompleted()
+			old := e.installation()
+			e.tickAt(installedAt.Add(20 * day))
+			require.Equal(t, 10, e.svc.Snapshot().Eval.DaysLeft)
+
+			tc.attempt(e)
+			e.clk.Advance(time.Minute)
+			e.restart()
+			snap := e.svc.Snapshot()
+			switch tc.want {
+			case "tampered":
+				e.requireTamperedLock()
+				assert.Equal(t, old, snap.InstallationID)
+				assert.Equal(t, 1, e.auditCount("license.installation_tampered"))
+			case "removed":
+				assert.NotEqual(t, old, snap.InstallationID)
+				assert.False(t, snap.InstallationTampered, "the new row is sealed and trusted")
+				assert.Equal(t, license.PhaseEvaluationExpired, snap.Eval.Phase, "its evaluation has already ended")
+				assert.ErrorIs(t, e.svc.Allow(license.ClassChange), license.ErrLocked)
+				assert.Equal(t, "evaluation_ended", snap.Banners(false)[0].Kind)
+				d := e.auditDetails("license.installation_tampered")
+				assert.Equal(t, map[string]string{"problem": "installation_missing", "evidence": tc.evidence, "installation_id": snap.InstallationID}, d)
+			case "continues":
+				assert.Equal(t, old, snap.InstallationID)
+				assert.False(t, snap.InstallationTampered)
+				assert.Equal(t, 10, snap.Eval.DaysLeft, "the evaluation goes on from where it was")
+			case "fresh":
+				assert.NotEqual(t, old, snap.InstallationID)
+				assert.Equal(t, license.PhaseEvaluation, snap.Eval.Phase)
+				assert.Equal(t, 30, snap.Eval.DaysLeft, "accepted: nothing is left to tell it from a new installation")
+				assert.Zero(t, e.auditCount("license.installation_tampered"))
+			}
+			assert.Zero(t, e.auditCount("license.installation_sealed"), "no row is ever sealed after its creation")
+
+			// Restarting changes nothing.
+			e.clk.Advance(time.Hour)
+			e.restart()
+			assert.Equal(t, snap.InstallationID, e.installation())
+			assert.Equal(t, snap.Eval.Phase, e.svc.Snapshot().Eval.Phase)
+		})
+	}
+}
+
+// AUD-18: how an honest customer recovers. A changed or unsealed record comes back by restoring
+// the original row (from a backup); a record that cannot be restored is removed, and the next
+// start creates a new Installation ID whose evaluation has ended, for which the vendor issues a
+// license (the same path as a database lost without a backup while the state volume remains).
+func TestRecoveryFromAnUnsealedRecord(t *testing.T) {
+	t.Run("restore the original record", func(t *testing.T) {
+		e := newEnv(t)
+		seal := e.storedSeal()
+		e.ownerExec("UPDATE license SET installation_seal = NULL")
+		e.restart()
+		e.requireTamperedLock()
+		e.ownerExec("UPDATE license SET installation_seal = $1", seal)
+		e.restart()
+		assert.False(t, e.svc.Snapshot().InstallationTampered)
+		assert.Equal(t, license.PhaseEvaluation, e.svc.Snapshot().Eval.Phase)
+		assert.Equal(t, 1, e.auditCount("license.installation_restored"))
+	})
+	t.Run("a vendor license for a new Installation ID", func(t *testing.T) {
+		e := newEnv(t)
+		old := e.installation()
+		e.ownerExec("UPDATE license SET installation_seal = NULL")
+		e.restart()
+		e.requireTamperedLock()
+		now := e.clk.Now()
+		_, err := e.upload(e.payload("LIC-OLD", now, now.AddDate(1, 0, 0), 10))
+		require.NoError(t, err)
+		e.requireTamperedLock() // a license for the unsealed record does not count
+
+		e.ownerExec("DELETE FROM license")
+		e.restart()
+		require.NotEqual(t, old, e.installation())
+		assert.Equal(t, license.PhaseEvaluationExpired, e.svc.Snapshot().Eval.Phase)
+		_, err = e.upload(e.payload("LIC-NEW", now, now.AddDate(1, 0, 0), 10))
+		require.NoError(t, err)
+		assert.Equal(t, license.PhaseActive, e.svc.Snapshot().Eval.Phase)
+		assert.NoError(t, e.svc.Allow(license.ClassChange))
+	})
 }
 
 // The application role cannot change the installation ID or timestamp at all (B1(d)).
@@ -243,22 +435,13 @@ func TestAppRoleCannotRewriteTheInstallation(t *testing.T) {
 // A seal or tamper record that cannot be written stops the start and changes nothing; the
 // next start does the work.
 func TestInstallationSealFaults(t *testing.T) {
-	t.Run("upgrade seal refused", func(t *testing.T) {
+	t.Run("audit log unreadable", func(t *testing.T) {
 		e := newEnv(t)
-		e.ownerExec("UPDATE license SET installation_seal = NULL")
-		undo := e.failOn("audit_log", "INSERT", "NEW.action = 'license.installation_sealed'")
-		requireInjected(t, e.newService().Start(e.ctx))
-		assert.Nil(t, e.storedSeal(), "the seal and its audit row are written together")
-		undo()
-		e.restart()
-		assert.NotNil(t, e.storedSeal())
-		assert.False(t, e.svc.Snapshot().InstallationTampered)
-	})
-	t.Run("seal record unreadable", func(t *testing.T) {
-		e := newEnv(t)
-		e.ownerExec("UPDATE license SET installation_seal = NULL")
+		e.ownerExec("DELETE FROM license")
+		e.removeTimeRecords()
 		e.revoke("SELECT", "audit_log")
-		require.ErrorContains(t, e.newService().Start(e.ctx), "read the installation seal record")
+		require.ErrorContains(t, e.newService().Start(e.ctx), "read the audit log")
+		assert.Zero(t, e.countWhere("license", "true"), "no installation is created on a guess")
 	})
 	t.Run("removed installation not recorded", func(t *testing.T) {
 		e := newEnv(t)
