@@ -243,6 +243,10 @@ func TestChangedOutside(t *testing.T) {
 	assert.False(t, loc("new", "", d("rolled_back", "new", "old"), deploymentFingerprints{status: "failed", newFP: "other"}).changedOutside("old"))
 	// A success, then a rollback of a later deployment over it.
 	assert.False(t, loc("old", "", d("succeeded", "a", "old"), d("rolled_back", "a", "b")).changedOutside("b"))
+	// A deployment that put back the files from before an unfinished earlier change: unknown.
+	restored := d("rolled_back", "new", "old")
+	restored.errorCode = "deployment.pending_change_restored"
+	assert.False(t, loc("x", "", restored).changedOutside("whatever"))
 	// More finished deployments than a scan consults: nothing is flagged.
 	assert.False(t, (&existingLocation{fingerprint: "old", finishedCut: true}).changedOutside("x"))
 }

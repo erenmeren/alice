@@ -342,8 +342,13 @@ const maxConsultedDeployments = 100
 // deploymentFingerprints is what a deployment put or would put in a location's file.
 type deploymentFingerprints struct {
 	status, newFP, previousFP string
+	errorCode                 string
 	sent                      bool // an operation was sent (operation_id recorded)
 }
+
+// pendingChangeRestoredCode: a deployment that put back the files from before an unfinished earlier
+// change (deployjobs' automatic restore) before it could write its own certificate.
+const pendingChangeRestoredCode = "deployment.pending_change_restored"
 
 // baseline is the certificate the location is known to have held before this scan: the one the
 // last scan read, or, when that scan read none (the file was missing or unreadable), the one Alice
@@ -368,7 +373,9 @@ func (e *existingLocation) baseline() string {
 //
 // unknown is true when Alice cannot tell what its deployments left: a rollback whose previous
 // certificate was not recorded (previous_fingerprint is empty when the verification was skipped),
-// or more finished deployments than a scan consults. The scan then flags nothing.
+// a deployment that put back the files from before an unfinished earlier change
+// (deployment.pending_change_restored), or more finished deployments than a scan consults. The scan
+// then flags nothing.
 //
 // Anything else, such as the previous certificate put back by hand after a success, or the new one
 // installed by hand after a rollback, is a change outside Alice.
@@ -384,6 +391,12 @@ func (e *existingLocation) aliceFingerprints() (fps []string, unknown bool) {
 		case "rolled_back", "failed":
 			if d.status == "failed" && !d.sent {
 				continue
+			}
+			if d.errorCode == pendingChangeRestoredCode {
+				// Alice put back the files from before an unfinished earlier change, which no
+				// recorded fingerprint names: the file now holds an unknown certificate of Alice's
+				// making, not a change outside Alice.
+				return nil, true
 			}
 			if slices.Contains(possible, d.newFP) {
 				if d.previousFP == "" {
@@ -567,10 +580,10 @@ FOR UPDATE OF l`, target, locationKind, path).Scan(&e.id, &e.certID, &e.fingerpr
 	// deployment that changes the location): the unfinished one, then the finished ones since the
 	// last scan, newest first (at most maxConsultedDeployments+1). One that finished before the last
 	// scan is not consulted: that scan already saw what it left.
-	rows, err := tx.Query(ctx, `(SELECT false, status, new_fingerprint, previous_fingerprint, operation_id IS NOT NULL, NULL::timestamptz, NULL::uuid
+	rows, err := tx.Query(ctx, `(SELECT false, status, new_fingerprint, previous_fingerprint, operation_id IS NOT NULL, NULL::timestamptz, NULL::uuid, error_code
  FROM deployments WHERE location_id = $1 AND state <> 'done' LIMIT 1)
 UNION ALL
-(SELECT true, status, new_fingerprint, previous_fingerprint, operation_id IS NOT NULL, finished_at, id FROM deployments
+(SELECT true, status, new_fingerprint, previous_fingerprint, operation_id IS NOT NULL, finished_at, id, error_code FROM deployments
  WHERE location_id = $1 AND state = 'done'
    AND finished_at >= $2
  ORDER BY finished_at DESC, created_at DESC, id DESC LIMIT $3)`, e.id, lastSeen, maxConsultedDeployments+1)
@@ -585,7 +598,7 @@ UNION ALL
 			at   *time.Time
 			id   *uuid.UUID
 		)
-		if err := rows.Scan(&done, &d.status, &d.newFP, &d.previousFP, &d.sent, &at, &id); err != nil {
+		if err := rows.Scan(&done, &d.status, &d.newFP, &d.previousFP, &d.sent, &at, &id, &d.errorCode); err != nil {
 			return nil, fmt.Errorf("inventory: read the location's deployments: %w", err)
 		}
 		if done {

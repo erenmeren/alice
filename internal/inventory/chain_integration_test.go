@@ -234,7 +234,7 @@ func TestChangedOutsideBaselinesAndDeploymentsSinceTheLastScan(t *testing.T) {
 		require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT id FROM certificates WHERE fingerprint_sha256 = $1", pki.Fingerprint(l.Cert)).Scan(&id))
 		return id
 	}
-	finished := func(l inventory.CertificateLocation, cert pki.Leaf, status, prevFP string, sent bool) {
+	finishedWith := func(l inventory.CertificateLocation, cert pki.Leaf, status, prevFP, code string, sent bool) {
 		t.Helper()
 		h.clock.Advance(time.Second)
 		var op *uuid.UUID
@@ -243,10 +243,14 @@ func TestChangedOutsideBaselinesAndDeploymentsSinceTheLastScan(t *testing.T) {
 			op = &id
 		}
 		_, err := h.db.Owner.Exec(h.ctx, `INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, state, status,
-new_fingerprint, previous_fingerprint, operation_id, cert_path, key_path, created_at, finished_at)
-VALUES ($1, $2, $3, $4, 'manual', 'done', $5, $6, $7, $8, '/etc/nginx/ssl/d.crt', '/etc/nginx/ssl/d.key', $9, $9)`, id, certOf(cert), l.ID, web.ID,
-			status, pki.Fingerprint(cert.Cert), prevFP, op, h.clock.Now())
+new_fingerprint, previous_fingerprint, operation_id, cert_path, key_path, created_at, finished_at, error_code)
+VALUES ($1, $2, $3, $4, 'manual', 'done', $5, $6, $7, $8, '/etc/nginx/ssl/d.crt', '/etc/nginx/ssl/d.key', $9, $9, $10)`, id, certOf(cert), l.ID, web.ID,
+			status, pki.Fingerprint(cert.Cert), prevFP, op, h.clock.Now(), code)
 		require.NoError(t, err)
+	}
+	finished := func(l inventory.CertificateLocation, cert pki.Leaf, status, prevFP string, sent bool) {
+		t.Helper()
+		finishedWith(l, cert, status, prevFP, "", sent)
 	}
 
 	// M2: Alice deployed X, a scan found the file missing, the next one finds Z.
@@ -283,6 +287,21 @@ VALUES ($1, $2, $3, $4, 'manual', 'done', $5, $6, $7, $8, '/etc/nginx/ssl/d.crt'
 	finished(l, y, "rollback_failed", "", true)
 	assert.False(t, scan("/etc/nginx/ssl/rf.crt", &x), "unknown right after the rollback_failed")
 	assert.True(t, scan("/etc/nginx/ssl/rf.crt", &z), "a later foreign certificate is flagged")
+
+	// An automatic restore of an unfinished earlier change (ALC-DEP-0024): a discovery saw the earlier
+	// change's certificate Y; the new deployment of X put back W (from before Y) and ended
+	// rolled_back pending_change_restored. The scan that sees W flags nothing; a later foreign one is.
+	scan("/etc/nginx/ssl/pc.crt", &w)
+	scan("/etc/nginx/ssl/pc.crt", &y)
+	before := h.audits("location.changed_outside")
+	l = location("/etc/nginx/ssl/pc.crt")
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE certificate_locations SET changed_outside_at = NULL WHERE id = $1", l.ID)
+	require.NoError(t, err)
+	finishedWith(l, x, "rolled_back", pki.Fingerprint(y.Cert), "deployment.pending_change_restored", true)
+	assert.False(t, scan("/etc/nginx/ssl/pc.crt", &w), "Alice's own restore is not a change outside Alice")
+	assert.Nil(t, location("/etc/nginx/ssl/pc.crt").ChangedOutsideAt)
+	assert.Equal(t, before, h.audits("location.changed_outside"))
+	assert.True(t, scan("/etc/nginx/ssl/pc.crt", &z))
 }
 
 // B1 M4: boundParams bounds what PostgreSQL stores, which writes a space after every ':' and ','
