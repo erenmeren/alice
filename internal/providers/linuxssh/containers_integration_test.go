@@ -248,7 +248,7 @@ func (h *ctrHost) fixtureKeys() []ctrKeyRow {
 		rows = append(rows, ctrKeyRow{f[0], f[1], f[2]})
 	}
 	require.NoError(h.t, sc.Err())
-	require.Len(h.t, rows, 8, "deploy ×2, nonl, root, and (AUD-03) john.doe, Deploy2, svc$, trail")
+	require.Len(h.t, rows, 11, "deploy ×2, nonl, root, and (AUD-03) john.doe, Deploy2, svc$, trail, John, john, jdoe")
 	return rows
 }
 
@@ -362,7 +362,7 @@ func TestRealOpenSSH(t *testing.T) {
 			assert.False(t, res.AccountsComplete)
 			assert.Contains(t, res.Warnings, providers.Warning{Code: helperproto.WarnAccountNameUnsupported, Params: map[string]string{"uid": "1009"}})
 			assert.Contains(t, res.Warnings, providers.Warning{Code: helperproto.WarnAccountHomeUnsupported, Params: map[string]string{"uid": "1010"}})
-			assert.Subset(t, res.Accounts, []string{"john.doe", "Deploy2", "svc$", "trail", "dotdot"})
+			assert.Subset(t, res.Accounts, []string{"john.doe", "Deploy2", "svc$", "trail", "dotdot", "John", "john", "jdoe"})
 			for _, k := range res.SSHKeys {
 				if k.OSUser == "trail" {
 					assert.Equal(t, "/home/trail/.ssh/authorized_keys", k.FilePath)
@@ -397,6 +397,25 @@ func TestRealOpenSSH(t *testing.T) {
 				assert.Equal(t, 1, removed.Removed, u.name)
 				assert.Equal(t, before, h.sha(u.file), "%s: back to the fixture's content", u.name)
 				assert.Equal(t, u.owner, strings.TrimSpace(h.mustExec("stat", "-c", "%U:%G %a", u.file)), u.name)
+			}
+			// M4: without the two entries the helper cannot list, the account list of a server with these
+			// names is complete on real sshd (Rocky's nsswitch also asks sss: never complete there).
+			if image != "rocky9" {
+				h.mustExec("sh", "-c", `for f in /etc/passwd /etc/group /etc/shadow; do grep -v -e '^bad,name:' -e '^dotdot:' "$f" > "$f.alice" && cat "$f.alice" > "$f" && rm -f "$f.alice"; done`)
+				full, err := sess.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+				require.NoError(t, err)
+				assert.True(t, full.AccountsComplete, "%+v", full.Warnings)
+				assert.False(t, full.Partial)
+				for _, w := range full.Warnings {
+					assert.NotContains(t, []string{helperproto.WarnAccountNameUnsupported, helperproto.WarnAccountHomeUnsupported}, w.Code)
+				}
+				users := map[string]bool{}
+				for _, k := range full.SSHKeys {
+					users[k.OSUser] = true
+				}
+				for _, n := range []string{"john.doe", "Deploy2", "svc$", "trail", "John", "john", "jdoe"} {
+					assert.True(t, users[n], "%s's key is listed", n)
+				}
 			}
 
 			// The sudoers profile allows only the helper's linux subcommands.

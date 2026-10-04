@@ -63,8 +63,11 @@ record root "$k5"
 # $: useradd creates them on all three images) and a home written with a trailing slash; each has
 # one key the inventory must list. The home is written into /etc/passwd as given (useradd may clean
 # it), and the build stops if it is not there verbatim.
-odd_user() { # odd_user <name> <uid> <home as in /etc/passwd>
-	useradd --uid "$2" --home-dir "$3" --create-home --shell /bin/bash "$1"
+odd_user() { # odd_user <name> <uid> <home as in /etc/passwd> [useradd options]
+	n="$1" u="$2" h="$3"
+	shift 3
+	useradd --uid "$u" --home-dir "$h" --create-home --shell /bin/bash "$@" "$n"
+	set -- "$n" "$u" "$h"
 	awk -F: -v OFS=: -v n="$1" -v h="$3" '$1 == n { $6 = h } { print }' /etc/passwd > /etc/passwd.alice
 	cat /etc/passwd.alice > /etc/passwd
 	rm -f /etc/passwd.alice
@@ -81,6 +84,10 @@ odd_user john.doe 1005 /home/john.doe
 odd_user Deploy2 1006 /home/Deploy2
 odd_user 'svc$' 1007 /home/svc
 odd_user trail 1008 /home/trail/
+# Fix round 1 (M4): two names that differ only in case, and a second name for john.doe's uid.
+odd_user John 1011 /home/John
+odd_user john 1012 /home/john
+odd_user jdoe 1005 /home/jdoe --non-unique
 
 # AUD-03: two entries the helper must report by uid instead of listing: a name outside the account
 # rule (useradd refuses a comma, so the lines are written directly) and a home with a ".." element.
