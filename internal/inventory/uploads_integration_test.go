@@ -509,8 +509,15 @@ func TestPFXSizeBoundIgnoresLineBreaks(t *testing.T) {
 	assert.NotErrorIs(t, err, inventory.ErrCertificateTooLarge, "a file of exactly 256 KiB is read")
 	_, _, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{PFXBase64: wrap(limit + 1), PFXPassword: "pw"})
 	require.ErrorIs(t, err, inventory.ErrCertificateTooLarge)
-	_, _, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{PFXBase64: "ZW Fz\neQ==", PFXPassword: "pw"})
-	require.ErrorIs(t, err, inventory.ErrPFXPassword, "blanks inside the text are ignored")
+	// Blanks inside the text are ignored: a real file with spaces and line breaks in its base64 is
+	// read (a file that is not a PFX is refused as unreadable since the guard refuses what it cannot
+	// read, so the check uses a real one).
+	ca := pki.NewCA("Blanks", pki.ECDSA256, h.clock.Now())
+	l := ca.Issue(pki.Opts{CommonName: "www.example.test"}, h.clock.Now())
+	text := base64.StdEncoding.EncodeToString(pki.PFX(l, ca, "pw"))
+	spaced := text[:10] + " \n\t" + text[10:20] + "\r\n" + text[20:]
+	_, _, err = h.svc.UploadCertificate(h.ctx, op, inventory.UploadInput{PFXBase64: spaced, PFXPassword: "pw"})
+	require.NoError(t, err, "blanks inside the text are ignored")
 }
 
 // A panic while a file is decoded becomes an internal error: the attempt is audited, the PFX slot
