@@ -1,0 +1,11 @@
+{
+  "value": [
+    {
+      "id": "https://<vault>.vault.azure.net/certificates/<name>/<version>",
+      "x5t": "<x5t>",
+      "attributes": {"enabled": true, "nbf": 1700000000, "exp": 1731536000, "created": 1700000600, "updated": 1700000600, "recoveryLevel": "Recoverable+Purgeable", "recoverableDays": 90},
+      "tags": {}
+    }
+  ],
+  "nextLink": "https://<vault>.vault.azure.net:443/certificates/<name>/versions?api-version=2025-07-01&$skiptoken=<token>&maxresults=25"
+}

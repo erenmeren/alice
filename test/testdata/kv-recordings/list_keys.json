@@ -1,0 +1,11 @@
+{
+  "value": [
+    {
+      "kid": "https://<vault>.vault.azure.net/keys/<name>",
+      "attributes": {"enabled": true, "created": 1700000600, "updated": 1700000600, "recoveryLevel": "Recoverable+Purgeable", "recoverableDays": 90},
+      "tags": {},
+      "managed": false
+    }
+  ],
+  "nextLink": "https://<vault>.vault.azure.net:443/keys?api-version=2025-07-01&$skiptoken=<token>&maxresults=25"
+}

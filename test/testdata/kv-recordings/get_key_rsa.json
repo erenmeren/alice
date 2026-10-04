@@ -1,0 +1,5 @@
+{
+  "key": {"kid": "https://<vault>.vault.azure.net/keys/<name>/<version>", "kty": "RSA", "key_ops": ["sign"], "n": "<n>", "e": "<e>"},
+  "attributes": {"enabled": true, "created": 1700000600, "updated": 1700000600, "recoveryLevel": "Recoverable+Purgeable", "recoverableDays": 90},
+  "tags": {}
+}
