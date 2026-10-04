@@ -27,6 +27,10 @@ const (
 	// WarnSANMismatch: a server name of the location is not covered by the certificate's SANs
 	// (catch-all "_", empty and regular-expression names are not checked).
 	WarnSANMismatch = "san_mismatch"
+	// WarnChainUnresolved: the file's other certificates could not be ordered within the signature
+	// checks Alice makes for one file (certs.ParseServedChain): Alice keeps the leaf alone and counts
+	// the chain as incomplete.
+	WarnChainUnresolved = "chain_unresolved"
 )
 
 // locationKind is certificate_locations.kind of an Nginx certificate file.
@@ -172,6 +176,9 @@ func prepareLocation(d providers.DiscoveredCertificate, now time.Time) (prepared
 		}
 		if !now.Before(p.cert.NotAfter) {
 			added = append(added, WarnCertificateExpired)
+		}
+		if p.cert.ChainUnresolved {
+			added = append(added, WarnChainUnresolved)
 		}
 	}
 	servers, cut := boundServers(cleanServers(in.Servers), maxServersJSON)
@@ -425,14 +432,18 @@ type preparedScan struct {
 var prepareHook func()
 
 // prepareScan prepares the reported locations of one discovery (see preparedScan). Reported
-// duplicates keep the first; the items are in path order.
-func (s *Service) prepareScan(found []providers.DiscoveredCertificate, now time.Time) preparedScan {
+// duplicates keep the first; the items are in path order. It stops with ctx's error when ctx ends
+// (the discovery job's own time limit and cancellation cover the parsing too).
+func (s *Service) prepareScan(ctx context.Context, found []providers.DiscoveredCertificate, now time.Time) (preparedScan, error) {
 	if prepareHook != nil {
 		prepareHook()
 	}
 	var out preparedScan
 	paths := map[string]bool{}
 	for _, d := range found {
+		if err := ctx.Err(); err != nil {
+			return preparedScan{}, err
+		}
 		p, ok := prepareLocation(d, now)
 		if !ok {
 			out.skipped++
@@ -450,6 +461,9 @@ func (s *Service) prepareScan(found []providers.DiscoveredCertificate, now time.
 		if p.cert == nil {
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			return preparedScan{}, err
+		}
 		// Several files may hold the same leaf with different chains: a complete one is kept.
 		if prev, ok := out.read[p.cert.Fingerprint]; !ok || !prev.complete {
 			if d := (discoveredCertificate{p: *p.cert, complete: certs.ChainComplete(*p.cert, s.roots, now)}); !ok || d.complete {
@@ -457,7 +471,7 @@ func (s *Service) prepareScan(found []providers.DiscoveredCertificate, now time.
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // reconcileLocations stores the certificate locations of one discovery of the locked target t

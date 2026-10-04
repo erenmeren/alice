@@ -118,7 +118,7 @@ func ValidateSigned(certPEM []byte, key KeyInfo, now time.Time, roots *x509.Cert
 		return Parsed{}, false, err
 	}
 	idx := pickLeaf(all, now, func(c *x509.Certificate) bool {
-		return describe(c, nil).PublicKeySHA256 == key.PublicKeySHA256
+		return publicKeySHA256(c) == key.PublicKeySHA256
 	})
 	if idx < 0 {
 		return Parsed{}, false, ErrCSRMismatch
@@ -128,7 +128,11 @@ func ValidateSigned(certPEM []byte, key KeyInfo, now time.Time, roots *x509.Cert
 		return Parsed{}, false, err
 	}
 	others := append(append([]*x509.Certificate(nil), all[:idx]...), all[idx+1:]...)
-	p := describe(leaf, orderChain(leaf, others, now))
+	chain, ok := orderChain(leaf, others, now)
+	if !ok {
+		return Parsed{}, false, invalid("the chain has too many candidate issuers to order")
+	}
+	p := describe(leaf, chain)
 	if err := checkLeaf(p, now); err != nil {
 		return Parsed{}, false, err
 	}

@@ -3,6 +3,9 @@
 package inventory_test
 
 import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -424,4 +427,45 @@ func TestKeyAttachTakesTheUploadersChain(t *testing.T) {
 	assert.Equal(t, []string{}, warnings)
 	assert.Equal(t, string(benign.FullchainPEM), b.PEMChain)
 	assert.True(t, b.ChainComplete)
+}
+
+// W2 review, minor 2: a file whose certificates cannot be ordered within the signature-check bound
+// (32 CA certificates of one name with two alternating keys) keeps its leaf alone with the warning
+// chain_unresolved; and the parsing stops when the scan's context ends.
+func TestDiscoveryBoundsChainOrderingAndFollowsItsContext(t *testing.T) {
+	h := newHarness(t)
+	web := nginxTarget(t, h, h.user("ada", rbac.Admin, ""), "web-01")
+	keys := []*ecdsa.PrivateKey{}
+	for range 2 {
+		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		require.NoError(t, err)
+		keys = append(keys, k)
+	}
+	name := pkix.Name{CommonName: "Same"}
+	var file []byte
+	for i := range 32 {
+		der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(int64(i + 10)), Subject: name,
+			DNSNames: []string{"www.example.test"}, NotBefore: h.clock.Now().Add(-time.Hour), NotAfter: h.clock.Now().Add(24 * time.Hour),
+			IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}, &x509.Certificate{Subject: name}, keys[i%2].Public(), keys[(i+1)%2])
+		require.NoError(t, err)
+		file = append(file, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
+	}
+	res := providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+		{Location: cl("/etc/nginx/ssl/same.crt", "/etc/nginx/ssl/same.key", "www.example.test"), PEMChain: file, FileSHA256: sha(file)}}}
+
+	gone, cancel := context.WithCancel(h.ctx)
+	cancel()
+	_, err := h.svc.Reconcile(gone, web.ID, res)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, h.count("SELECT count(*) FROM certificate_locations"))
+
+	_, err = h.svc.Reconcile(h.ctx, web.ID, res)
+	require.NoError(t, err)
+	l := byPath(t, h, web.ID, false)["/etc/nginx/ssl/same.crt"]
+	assert.Contains(t, l.Warnings, inventory.WarnChainUnresolved)
+	require.NotNil(t, l.Certificate)
+	c, err := h.svc.GetCertificate(h.ctx, l.Certificate.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(c.PEMChain, "BEGIN CERTIFICATE"), "the leaf alone")
+	assert.False(t, c.ChainComplete)
 }

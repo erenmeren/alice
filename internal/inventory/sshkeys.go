@@ -125,7 +125,10 @@ func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.Dis
 	// target's row lock.
 	var scan preparedScan
 	if res.Nginx != nil && configUsable(res.Nginx) {
-		scan = s.prepareScan(res.Certificates, now)
+		var err error
+		if scan, err = s.prepareScan(ctx, res.Certificates, now); err != nil {
+			return ReconcileSummary{}, err
+		}
 	}
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		// A discovery job's run writes only while it holds its job (Claim): a run that stalled past

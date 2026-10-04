@@ -1,6 +1,8 @@
 package certs
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -79,20 +81,105 @@ func TestHugeRSACertificateIsRefusedBeforeAnySignatureCheck(t *testing.T) {
 	assert.Less(t, time.Since(start), 2*time.Second, "no signature was checked with the huge key")
 }
 
-// The largest key Alice accepts stays cheap even in the worst file the bounds allow: 32 certificates
-// that all name the same subject and issuer (every one a candidate issuer of every other) with
-// 16384-bit moduli and the largest exponent.
-func TestWorstChainWithinTheBoundsStaysCheap(t *testing.T) {
-	one := selfSignedLookingRSA(t, maxRSABits/8, "same.example.test")
-	var file []byte
-	for range maxCertificates {
-		file = append(file, one...)
+// sameNameChain is n CA certificates that all name "Same" as subject and issuer, with two keys that
+// alternate: certificate i has key i%2 and is signed by the other key, so each is a valid issuer of
+// every certificate of the other key, and none is self-signed (W2 review, minor 2: about 950
+// signature checks before the bound).
+func sameNameChain(t *testing.T, n int) []*x509.Certificate {
+	t.Helper()
+	keys := []*ecdsa.PrivateKey{mustECKey(t), mustECKey(t)}
+	name := pkix.Name{CommonName: "Same"}
+	var out []*x509.Certificate
+	for i := range n {
+		tmpl := &x509.Certificate{SerialNumber: big.NewInt(int64(i + 10)), Subject: name, NotBefore: now.Add(-time.Hour),
+			NotAfter: now.Add(24 * time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+		parent := &x509.Certificate{Subject: name}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, keys[i%2].Public(), keys[(i+1)%2])
+		require.NoError(t, err)
+		c, err := x509.ParseCertificate(der)
+		require.NoError(t, err)
+		out = append(out, c)
 	}
-	start := time.Now()
+	return out
+}
+
+func mustECKey(t *testing.T) *ecdsa.PrivateKey {
+	t.Helper()
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	return k
+}
+
+// The worst file the bounds allow (32 certificates, every one an issuer candidate of half the
+// others) costs at most maxChainSignatureChecks signature checks; the search then gives up and the
+// chain is unresolved (a discovered file keeps its leaf alone; an upload is refused).
+func TestOrderingTheWorstChainIsBounded(t *testing.T) {
+	all := sameNameChain(t, maxCertificates)
+	s := &chainSearch{at: now, self: map[*x509.Certificate]bool{}}
+	_, _ = s.extend(all[0], all[1:])
+	assert.LessOrEqual(t, s.checks, maxChainSignatureChecks)
+	assert.True(t, s.cut, "the alternating chain needs more checks than the bound")
+
+	var file []byte
+	for _, c := range all {
+		file = append(file, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})...)
+	}
 	p, err := ParseServedChain(file, now)
 	require.NoError(t, err)
-	_ = ChainComplete(p, x509.NewCertPool(), now)
-	assert.Less(t, time.Since(start), 5*time.Second)
+	assert.True(t, p.ChainUnresolved)
+	assert.Empty(t, p.Chain)
+	assert.False(t, ChainComplete(p, x509.NewCertPool(), now))
+
+	// A short chain of the same shape is ordered within the bound.
+	short := sameNameChain(t, 4)
+	path, ok := orderChain(short[0], short[1:], now)
+	assert.True(t, ok)
+	assert.Len(t, path, 3)
+}
+
+// W2 review, minor 6: two issuers with the same name and key; only the second leads to a root in the
+// input. The search tries it after the first fails.
+func TestOrderChainBacktracksToTheIssuerThatReachesARoot(t *testing.T) {
+	interKey, leafKey := mustECKey(t), mustECKey(t)
+	rootA, rootAKey := selfSignedCA(t, "Root A")
+	rootB, rootBKey := selfSignedCA(t, "Root B")
+	interName := pkix.Name{CommonName: "Shared Intermediate"}
+	issue := func(parent *x509.Certificate, parentKey *ecdsa.PrivateKey, serial int64) *x509.Certificate {
+		der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: interName,
+			NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour), IsCA: true, BasicConstraintsValid: true,
+			KeyUsage: x509.KeyUsageCertSign}, parent, interKey.Public(), parentKey)
+		require.NoError(t, err)
+		c, err := x509.ParseCertificate(der)
+		require.NoError(t, err)
+		return c
+	}
+	viaA, viaB := issue(rootA, rootAKey, 2), issue(rootB, rootBKey, 3)
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(4), Subject: pkix.Name{CommonName: "www.example.test"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)}, viaA, leafKey.Public(), interKey)
+	require.NoError(t, err)
+	leaf, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	path, ok := orderChain(leaf, []*x509.Certificate{viaA, viaB, rootB}, now)
+	require.True(t, ok)
+	require.Len(t, path, 2)
+	assert.Equal(t, viaB.Raw, path[0].Raw, "the issuer whose root is in the input")
+	assert.Equal(t, rootB.Raw, path[1].Raw)
+	// Without any root the first issuer is kept.
+	path, ok = orderChain(leaf, []*x509.Certificate{viaA, viaB}, now)
+	require.True(t, ok)
+	assert.Equal(t, []*x509.Certificate{viaA}, path)
+}
+
+func selfSignedCA(t *testing.T, cn string) (*x509.Certificate, *ecdsa.PrivateKey) {
+	t.Helper()
+	k := mustECKey(t)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: cn}, NotBefore: now.Add(-time.Hour),
+		NotAfter: now.Add(24 * time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, k.Public(), k)
+	require.NoError(t, err)
+	c, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return c, k
 }
 
 // A discovered file is stored as the path from its first certificate (the one Nginx serves) to the

@@ -2090,7 +2090,8 @@ components:
           type: array
           description: >-
             Known values: key_mode_open, symlinked, custom_location, key_group_open, certificate_block_dropped,
-            list_truncated, certificate_expired, san_mismatch; a newer server may add others.
+            list_truncated, certificate_expired, san_mismatch, chain_unresolved (the file's chain could not be ordered
+            within the signature checks Alice makes per file; the leaf alone is kept); a newer server may add others.
           items: { type: string }
         deployed_fingerprint: { type: string }
         changed_outside_at: { type: [string, "null"], format: date-time }

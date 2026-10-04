@@ -64,6 +64,9 @@ type Parsed struct {
 	NotBefore       time.Time
 	NotAfter        time.Time
 	SelfSigned      bool
+	// ChainUnresolved: ordering the chain needed more signature checks than Alice makes for one
+	// input (maxChainSignatureChecks); Chain is empty and the chain counts as incomplete.
+	ChainUnresolved bool
 }
 
 func invalid(reason string) error { return fmt.Errorf("%w: %s", ErrInvalid, reason) }
@@ -170,7 +173,10 @@ func ParseServedChain(data []byte, now time.Time) (Parsed, error) {
 	if err != nil {
 		return Parsed{}, err
 	}
-	return describe(all[0], orderChain(all[0], all[1:], now)), nil
+	chain, ok := orderChain(all[0], all[1:], now)
+	p := describe(all[0], chain)
+	p.ChainUnresolved = !ok
+	return p, nil
 }
 
 func describe(leaf *x509.Certificate, chain []*x509.Certificate) Parsed {
@@ -187,11 +193,7 @@ func describe(leaf *x509.Certificate, chain []*x509.Certificate) Parsed {
 		SelfSigned:  selfSigned(leaf),
 	}
 	p.Algorithm, p.Bits = algorithmOf(leaf.PublicKey)
-	spki := leaf.RawSubjectPublicKeyInfo
-	if der, err := x509.MarshalPKIXPublicKey(leaf.PublicKey); err == nil {
-		spki = der // canonical, and what KeyInfoOf hashes
-	}
-	p.PublicKeySHA256 = fingerprint(spki)
+	p.PublicKeySHA256 = publicKeySHA256(leaf)
 	p.SANs = append(p.SANs, leaf.DNSNames...)
 	for _, ip := range leaf.IPAddresses {
 		p.SANs = append(p.SANs, ip.String())
@@ -202,6 +204,16 @@ func describe(leaf *x509.Certificate, chain []*x509.Certificate) Parsed {
 	}
 	p.PEMChain = buf.String()
 	return p
+}
+
+// publicKeySHA256 is the hex SHA-256 of c's canonical PKIX public key (what KeyInfoOf hashes). It
+// checks no signature.
+func publicKeySHA256(c *x509.Certificate) string {
+	spki := c.RawSubjectPublicKeyInfo
+	if der, err := x509.MarshalPKIXPublicKey(c.PublicKey); err == nil {
+		spki = der
+	}
+	return fingerprint(spki)
 }
 
 func fingerprint(der []byte) string {

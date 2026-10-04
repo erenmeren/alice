@@ -72,7 +72,11 @@ func ValidateUpload(u Upload, now time.Time, roots *x509.CertPool) (Validated, e
 		return Validated{}, ErrKeyMismatch
 	}
 	others := append(append([]*x509.Certificate(nil), all[:leafIdx]...), all[leafIdx+1:]...)
-	p := describe(all[leafIdx], orderChain(all[leafIdx], others, now))
+	chain, ok := orderChain(all[leafIdx], others, now)
+	if !ok {
+		return Validated{}, invalid("the chain has too many candidate issuers to order")
+	}
+	p := describe(all[leafIdx], chain)
 	if err := checkLeaf(p, now); err != nil {
 		return Validated{}, err
 	}
