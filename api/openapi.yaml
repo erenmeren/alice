@@ -902,6 +902,27 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/KeyLocationList" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/targets/{id}/certificate-locations:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: listTargetCertificateLocations
+      summary: The certificate files an Nginx server's websites use (in use first; missing ones with ?missing=true)
+      description: >-
+        At most 1000 locations; truncated is true when some (missing ones) were left out. 404 when the server does
+        not exist or was deleted. A Linux server has none.
+      x-permission: read
+      parameters:
+        - { name: missing, in: query, required: false, schema: { type: boolean } }
+      responses:
+        "200":
+          description: Certificate locations
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificateLocationList" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/ssh-keys:
     get:
       operationId: listSSHKeys
@@ -1062,6 +1083,282 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/certificates:
+    get:
+      operationId: listCertificates
+      summary: Certificate inventory, soonest expiry first (no chain, no locations; see GET /certificates/{id})
+      x-permission: read
+      parameters:
+        - { name: target_id, in: query, required: false, schema: { type: string, format: uuid }, description: 'Certificates in use on this server' }
+        - { name: source, in: query, required: false, schema: { type: string, enum: [discovered, uploaded, csr] } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 }, description: 'Part of the subject CN, a SAN, the label or the fingerprint' }
+        - { name: expiry, in: query, required: false, schema: { type: string, enum: [expired, "30", "60"] }, description: 'Expired, or expiring within 30 or 60 days (expired ones included)' }
+        - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page of certificates
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificatePage" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/certificates/upload:
+    post:
+      operationId: uploadCertificate
+      summary: Store a certificate with its private key (PEM fields, or a PFX file in base64 with its password)
+      description: >-
+        Send certificate_pem (leaf first, then the chain) with private_key_pem, or pfx_base64 with pfx_password,
+        never both. The key is stored sealed and is never returned by any operation; the answer carries the stored
+        certificate (public data) and the warnings that did not block it. The body is limited to 768 KiB (413
+        ALC-SYS-0007; each field at most 256 KiB). Refusals: 422 ALC-CRT-0001..0007 (unreadable, key mismatch,
+        expired, encrypted key, wrong PFX password, weak, unsupported key), 422 validation.failed (field errors,
+        for example validation.key_in_certificate when a private key is pasted into certificate_pem), 409
+        ALC-CRT-0008 when Alice already holds this certificate with its key, 503 ALC-CRT-0015 (retryable) when
+        too many PFX files are being read. If the certificate was stored but could not be read back the request
+        fails; sending it again is then refused with ALC-CRT-0008 and the certificate is in the list. Refused with
+        403 ALC-LIC-0001 while the license is locked, before the body is read.
+      x-permission: certificates.operate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CertificateUpload" }
+      responses:
+        "201":
+          description: Stored; Location names the certificate
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificateStored" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/certificates/csr:
+    get:
+      operationId: listCSRs
+      summary: Signing requests (every pending one, newest first, then the 50 most recently finished)
+      x-permission: read
+      responses:
+        "200":
+          description: Signing requests
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CSRList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createCSR
+      summary: Generate a private key in Alice and a signing request for it
+      description: >-
+        The key never leaves Alice. 422 validation.failed for a common name or SAN that is not a DNS name (at most
+        64 characters for the common name, at most 50 SANs) or an unknown key type. Refused with 403 ALC-LIC-0001
+        while the license is locked.
+      x-permission: certificates.operate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CSRCreate" }
+      responses:
+        "201":
+          description: The signing request; Location names it
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CSR" }
+        "403": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/certificates/csr/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getCSR
+      summary: One signing request
+      x-permission: read
+      responses:
+        "200":
+          description: The signing request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CSR" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/certificates/csr/{id}/actions/complete:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: completeCSR
+      summary: Store the certificate a certificate authority issued for a pending signing request
+      description: >-
+        The certificate gets the request's key. 409 ALC-CRT-0012 when the request is no longer pending, 422
+        ALC-CRT-0013 when the certificate is not for this request's key, the upload refusals otherwise. A
+        certificate whose names differ from the request is stored with the warning csr_name_mismatch. The body is
+        limited to 384 KiB (413 ALC-SYS-0007). Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: certificates.operate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CSRComplete" }
+      responses:
+        "201":
+          description: Stored; Location names the certificate
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificateStored" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/certificates/csr/{id}/actions/cancel:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: cancelCSR
+      summary: Close a pending signing request without a certificate
+      description: >-
+        No body (or {}). 409 ALC-CRT-0012 when the request is no longer pending. Refused with 403 ALC-LIC-0001 while
+        the license is locked.
+      x-permission: certificates.operate
+      responses:
+        "200":
+          description: The cancelled signing request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CSR" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/certificates/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getCertificate
+      summary: One certificate with its chain and the locations that use it
+      x-permission: read
+      responses:
+        "200":
+          description: The certificate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificateDetail" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/certificates/{id}/deploy:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: deployCertificate
+      summary: Deploy a certificate to 1 to 20 websites (one deployment and one job per location)
+      description: >-
+        All or nothing: either every location is queued (202, one item per location in request order) or none is,
+        and the error names the refusal; a refusal decided for one location carries params.location_id. Refusals:
+        404 (the certificate or a location does not exist), 409 ALC-CRT-0009 (no private key), 422 ALC-CRT-0003
+        (expired), 409 ALC-CRT-0014 (not valid yet), 422 ALC-CRT-0007 (key type), 409 ALC-CRT-0011 (an incomplete
+        chain needs an Administrator's confirm_incomplete_chain; an Operator's confirmation does not count), 409
+        ALC-NGX-0007 (location unsupported or missing), 409 ALC-DEP-0011 (server not ready), 409 ALC-NGX-0002
+        (Nginx configuration invalid), 409 ALC-DEP-0021 (the location must be discovered again), 409 ALC-CRT-0010
+        (key type of the place, params expected and actual), 409 ALC-DEP-0002 (a deployment on the server is being
+        recovered; retryable), 409 ALC-DEP-0001 (a deployment to this location is in progress; retryable: a
+        repeated request while one runs answers this, never a second deployment). A san_mismatch warning does not
+        block. There is no retry or rollback operation: request again to deploy again. Refused with 403
+        ALC-LIC-0001 while the license is locked, before the body is read.
+      x-permission: certificates.operate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeployRequest" }
+      responses:
+        "202":
+          description: Queued; follow each job (status_url) or deployment (deployment_url)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeployAccepted" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/locations/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    patch:
+      operationId: updateLocation
+      summary: Change a website's verification settings (If-Match with the location's version is required)
+      description: >-
+        If-Match must be a single strong validator with the location's current version (its version field), for
+        example "3"; a missing or malformed If-Match, a weak validator, a list or * answers 412 ALC-SYS-0008, as does
+        a version that is no longer current. At least one field; verify_port 0 and verify_sni "" clear the value.
+        Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: targets.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LocationPatch" }
+      responses:
+        "200":
+          description: The changed location
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificateLocation" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/deployments:
+    get:
+      operationId: listDeployments
+      summary: Deployment history, newest first
+      x-permission: read
+      parameters:
+        - { name: target_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: certificate_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: location_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page of deployments (without steps)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentPage" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/deployments/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getDeployment
+      summary: One deployment with its steps
+      x-permission: read
+      responses:
+        "200":
+          description: The deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentDetail" }
+        "404": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
 components:
   parameters:
@@ -1353,7 +1650,7 @@ components:
       additionalProperties: false
       properties:
         name: { type: string, minLength: 1, maxLength: 100 }
-        type: { type: string, enum: [linux], default: linux }
+        type: { type: string, enum: [linux, nginx], default: linux, description: Fixed at creation }
         host: { type: string, maxLength: 253, description: Host name or IP address; no scheme and no port }
         port: { type: integer, minimum: 0, maximum: 65535, description: 0 or absent means 22 }
         username: { type: string, maxLength: 32, description: Absent means alice-svc }
@@ -1414,6 +1711,7 @@ components:
               os_user: { type: string }
               file_path: { type: string }
               line_no: { type: integer }
+        nginx: { $ref: "#/components/schemas/NginxFacts" }
     Target:
       type: object
       required: [id, name, type, host, port, username, status, last_error, last_success_at, last_discovery_at,
@@ -1613,3 +1911,322 @@ components:
       required: [items]
       properties:
         items: { type: array, items: { $ref: "#/components/schemas/Provider" } }
+    NginxFacts:
+      type: object
+      description: Present for Nginx servers that were tested or scanned
+      required: [version, conf_path, config_valid, config_error, config_error_reason, config_error_file, found]
+      properties:
+        version: { type: string, examples: [1.24.0] }
+        conf_path: { type: string, examples: [/etc/nginx/nginx.conf] }
+        config_valid: { type: boolean }
+        config_error:
+          type: string
+          description: >-
+            Error class when config_valid is false, "" otherwise. Known values: key_mismatch, file_missing,
+            cert_load, key_load, syntax, untrusted, unsupported; a newer server may add others.
+        config_error_reason:
+          type: string
+          description: >-
+            Why for untrusted and unsupported. Known values: not_root_controlled, special_filesystem, missing,
+            not_regular, changed, name_not_allowed, unexpected_text, wrong_first_file, duplicate_file, no_conf_path,
+            too_large, too_complex, include_loop, nul_byte; a newer server may add others.
+        config_error_file: { type: string, description: 'The file concerned (text from the server; shown as is, never interpolated)' }
+        found: { type: boolean }
+    CertificateRef:
+      type: [object, "null"]
+      required: [id, subject_cn, label, fingerprint, not_after]
+      properties:
+        id: { type: string, format: uuid }
+        subject_cn: { type: string }
+        label: { type: string }
+        fingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
+        not_after: { type: string, format: date-time }
+    Certificate:
+      type: object
+      description: A certificate (public data). A held private key is only indicated by has_private_key.
+      required: [id, fingerprint, subject_cn, subject, issuer, serial, sans, not_before, not_after, key_algorithm, key_bits, source,
+        label, has_private_key, chain_complete, self_signed, location_count, first_seen_at, last_seen_at]
+      properties:
+        id: { type: string, format: uuid }
+        fingerprint: { type: string, pattern: "^[0-9a-f]{64}$", description: 'SHA-256 of the leaf (DER), hex' }
+        subject_cn: { type: string }
+        subject: { type: string }
+        issuer: { type: string }
+        serial: { type: string }
+        sans: { type: array, items: { type: string } }
+        not_before: { type: string, format: date-time }
+        not_after: { type: string, format: date-time }
+        key_algorithm: { type: string, description: "Known values: rsa, ecdsa, ed25519, other" }
+        key_bits: { type: integer }
+        source: { type: string, description: "Known values: discovered, uploaded, csr" }
+        label: { type: string }
+        has_private_key: { type: boolean }
+        chain_complete: { type: boolean }
+        self_signed: { type: boolean }
+        location_count: { type: integer }
+        first_seen_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+    CertificateDetail:
+      allOf:
+        - { $ref: "#/components/schemas/Certificate" }
+        - type: object
+          required: [pem_chain, locations, locations_truncated]
+          properties:
+            pem_chain: { type: string, description: 'Leaf first, then the chain (public PEM)' }
+            locations: { type: array, items: { $ref: "#/components/schemas/CertificateLocation" }, maxItems: 1000 }
+            locations_truncated: { type: boolean }
+    CertificatePage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Certificate" } }
+        next_cursor: { type: [string, "null"] }
+    CertificateUpload:
+      type: object
+      additionalProperties: false
+      properties:
+        label: { type: string, maxLength: 100 }
+        certificate_pem: { type: string, maxLength: 262144, description: 'Leaf first, then the chain' }
+        private_key_pem: { type: string, maxLength: 262144, writeOnly: true, description: 'Unencrypted PKCS#8, PKCS#1 or SEC 1' }
+        pfx_base64: { type: string, writeOnly: true, description: 'A PFX (PKCS#12) file in standard base64, at most 256 KiB decoded' }
+        pfx_password: { type: string, writeOnly: true }
+    CertificateStored:
+      type: object
+      required: [certificate, warnings]
+      properties:
+        certificate: { $ref: "#/components/schemas/CertificateDetail" }
+        warnings:
+          type: array
+          description: >-
+            Conditions that did not block. Known values: chain_incomplete, chain_certificate_expired, not_yet_valid,
+            csr_name_mismatch; a newer server may add others.
+          items: { type: string }
+    CertificateServer:
+      type: object
+      required: [names, listens, file, line]
+      properties:
+        names: { type: array, items: { type: string } }
+        listens:
+          type: array
+          items:
+            type: object
+            required: [addr, port, default_server]
+            properties:
+              addr: { type: string }
+              port: { type: integer }
+              default_server: { type: boolean }
+        file: { type: string }
+        line: { type: integer }
+    CertificateLocation:
+      type: object
+      description: >-
+        A certificate file an Nginx website uses, with its key file. Paths, names, files and accounts are text from
+        the server (shown as is, never interpolated into a message).
+      required: [id, target_id, target_name, cert_path, key_path, resolved_cert_path, key_type, certificate, servers, supported,
+        unsupported_reason, problem, key_problem, inherited, custom_location, symlinked, key_exists, key_mode, key_owner, key_group,
+        warnings, deployed_fingerprint, changed_outside_at, verify_port, verify_sni, skip_verify, first_seen_at, last_seen_at,
+        missing_since, version, active_deployment_id]
+      properties:
+        id: { type: string, format: uuid }
+        target_id: { type: string, format: uuid }
+        target_name: { type: string }
+        cert_path: { type: string }
+        key_path: { type: string }
+        resolved_cert_path: { type: string, description: 'The file a symbolic link leads to; "" when not known' }
+        key_type: { type: string, description: "The key type of the certificate in the file: rsa, ecdsa or \"\"" }
+        certificate: { $ref: "#/components/schemas/CertificateRef" }
+        servers: { type: array, items: { $ref: "#/components/schemas/CertificateServer" } }
+        supported: { type: boolean }
+        unsupported_reason:
+          type: string
+          description: >-
+            "" when supported. Known values: variable, data_value, engine_key, key_missing, password_file,
+            path_not_allowed, stream, combined_file, config_file_writable, key_conflict, file_problem (see problem and
+            key_problem), unsupported_key, unknown; a newer server may add others.
+        problem: { $ref: "#/components/schemas/FileProblem" }
+        key_problem: { $ref: "#/components/schemas/FileProblem" }
+        inherited: { type: boolean }
+        custom_location: { type: boolean }
+        symlinked: { type: boolean }
+        key_exists: { type: boolean }
+        key_mode: { type: string, examples: ["0640"] }
+        key_owner: { type: string }
+        key_group: { type: string }
+        warnings:
+          type: array
+          description: >-
+            Known values: key_mode_open, symlinked, custom_location, key_group_open, certificate_block_dropped,
+            list_truncated, certificate_expired, san_mismatch; a newer server may add others.
+          items: { type: string }
+        deployed_fingerprint: { type: string }
+        changed_outside_at: { type: [string, "null"], format: date-time }
+        verify_port: { type: [integer, "null"], minimum: 1, maximum: 65535 }
+        verify_sni: { type: string }
+        skip_verify: { type: boolean }
+        first_seen_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        missing_since: { type: [string, "null"], format: date-time }
+        version: { type: integer, minimum: 1, description: 'The value If-Match names for PATCH /locations/{id}' }
+        active_deployment_id: { type: [string, "null"], format: uuid }
+    FileProblem:
+      type: string
+      description: >-
+        A certificate or key file Alice cannot use; "" when none. Known values: missing, not_root_controlled,
+        not_regular, hard_linked, too_large, not_a_certificate, unreadable, bad_name, special_filesystem, unknown; a
+        newer server may add others.
+    CertificateLocationList:
+      type: object
+      required: [items, truncated]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/CertificateLocation" }, maxItems: 1000 }
+        truncated: { type: boolean }
+    LocationPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        verify_port: { type: integer, minimum: 0, maximum: 65535, description: '0 clears (the website''s own ports are probed)' }
+        verify_sni: { type: string, maxLength: 253, description: 'A DNS name; "" clears (the first server name is sent)' }
+        skip_verify: { type: boolean }
+    CSR:
+      type: object
+      description: A signing request (public). Its key stays in Alice.
+      required: [id, common_name, sans, key_algorithm, key_bits, csr_pem, status, certificate_id, created_at, finished_at]
+      properties:
+        id: { type: string, format: uuid }
+        common_name: { type: string }
+        sans: { type: array, items: { type: string }, description: 'The request''s DNS names, the common name first' }
+        key_algorithm: { type: string, enum: [rsa, ecdsa] }
+        key_bits: { type: integer }
+        csr_pem: { type: string }
+        status: { type: string, enum: [pending, completed, cancelled] }
+        certificate_id: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+    CSRList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/CSR" } }
+    CSRCreate:
+      type: object
+      required: [common_name, key_type]
+      additionalProperties: false
+      properties:
+        common_name: { type: string, maxLength: 64 }
+        sans: { type: array, maxItems: 50, items: { type: string } }
+        key_type: { type: string, enum: [ecdsa-p256, rsa-3072, rsa-4096] }
+    CSRComplete:
+      type: object
+      required: [certificate_pem]
+      additionalProperties: false
+      properties:
+        certificate_pem: { type: string, maxLength: 262144 }
+        label: { type: string, maxLength: 100 }
+    DeployRequest:
+      type: object
+      required: [location_ids]
+      additionalProperties: false
+      properties:
+        location_ids: { type: array, minItems: 1, maxItems: 20, uniqueItems: true, items: { type: string, format: uuid } }
+        confirm_incomplete_chain: { type: boolean, description: 'Counts for an Administrator only' }
+    DeployAccepted:
+      type: object
+      required: [deployments]
+      properties:
+        deployments:
+          type: array
+          items:
+            type: object
+            required: [id, job_id, location_id, status_url, deployment_url, warnings]
+            properties:
+              id: { type: string, format: uuid }
+              job_id: { type: string, format: uuid }
+              location_id: { type: string, format: uuid }
+              status_url: { type: string, examples: [/api/v1/jobs/0192b000-0000-7000-8000-0000000000b1] }
+              deployment_url: { type: string, examples: [/api/v1/deployments/0192c000-0000-7000-8000-0000000000d4] }
+              warnings:
+                type: array
+                description: "Known values: san_mismatch; a newer server may add others."
+                items: { type: string }
+    DeploymentStep:
+      type: object
+      required: [n, name, status, at, params]
+      properties:
+        n: { type: integer, minimum: 1 }
+        name:
+          type: string
+          description: >-
+            Known values: verify_current, backup, write_key, write_cert, config_test, reload, journal, restore,
+            rollback_config_test, rollback_reload, verify, verify_old; a newer server may add others.
+        status: { type: string, enum: [started, ok, failed, skipped] }
+        at: { type: string, format: date-time }
+        params:
+          type: object
+          description: >-
+            Allowlisted values only: error (a configuration error class or file_changed), port, mode (remote, local,
+            skipped), served (a fingerprint), reason (a reason code).
+          additionalProperties: { type: string }
+    Deployment:
+      type: object
+      description: >-
+        One deployment. Show state and status, not the job's: a deployment being recovered is state recovering
+        while its job may already have ended. status failed = nothing was written; rolled_back = the previous files
+        are back; rollback_failed = the outcome is unknown or mixed (see error); needs_attention = Alice cannot
+        reach the server to finish it and keeps trying.
+      required: [id, certificate_id, certificate_name, location_id, target_id, target_name, cert_path, key_path, job_id, job_status,
+        trigger, state, status, result, phase, new_fingerprint, previous_fingerprint, confirm_incomplete_chain, verified,
+        verify_failed, error, failed_step, cause_step, helper_error, backup_dir, requested_by, requested_by_name, recovery_attempts,
+        recover_after, created_at, started_at, finished_at]
+      properties:
+        id: { type: string, format: uuid }
+        certificate_id: { type: string, format: uuid }
+        certificate_name: { type: string, description: 'The label, else the subject CN, else the start of the fingerprint' }
+        location_id: { type: string, format: uuid }
+        target_id: { type: string, format: uuid }
+        target_name: { type: string }
+        cert_path: { type: string }
+        key_path: { type: string }
+        job_id: { type: [string, "null"], format: uuid }
+        job_status: { type: string, description: 'The job''s status ("" once it was pruned); blocked_license means held in lock' }
+        trigger: { type: string, examples: [manual] }
+        state: { type: string, enum: [queued, precheck, deploying, recovering, done] }
+        status: { type: string, enum: [pending, running, succeeded, unchanged, failed, rolled_back, rollback_failed, needs_attention] }
+        result: { type: string, enum: ["", committed, unchanged, no_change, rolled_back, rollback_failed, uncertain] }
+        phase: { type: string, enum: ["", none, prepared, writing, committed, unchanged, restoring, restored, restore_failed] }
+        new_fingerprint: { type: string }
+        previous_fingerprint: { type: string }
+        confirm_incomplete_chain: { type: boolean }
+        verified: { type: string, enum: ["", remote, local, skipped] }
+        verify_failed: { $ref: "#/components/schemas/ErrorRef", description: 'The verification failure that started a rollback (params.port)' }
+        error:
+          $ref: "#/components/schemas/ErrorRef"
+          description: >-
+            Why it did not succeed, as a documented code; null on success. Params are allowlisted (port, failed_step,
+            phase, profile, backup_dir, helper_code, subcommand, ...). deployment.rollback_failed is reported as
+            deployment.restored_unverified (ALC-DEP-0019) when the files are back but the website was not confirmed,
+            and as deployment.rollback_file_changed (ALC-DEP-0020) when another program changed the files.
+        failed_step: { type: string }
+        cause_step: { type: string }
+        helper_error: { type: string, description: "A configuration error class or file_changed; \"\" when none" }
+        backup_dir: { type: string, description: 'Where the server keeps the previous files (/var/lib/alice-helper/backups/<id>); "" before a change' }
+        requested_by: { type: [string, "null"], format: uuid }
+        requested_by_name: { type: string }
+        recovery_attempts: { type: integer }
+        recover_after: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        started_at: { type: [string, "null"], format: date-time, description: 'When the change started (the start record)' }
+        finished_at: { type: [string, "null"], format: date-time }
+    DeploymentDetail:
+      allOf:
+        - { $ref: "#/components/schemas/Deployment" }
+        - type: object
+          required: [steps]
+          properties:
+            steps: { type: array, items: { $ref: "#/components/schemas/DeploymentStep" } }
+    DeploymentPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Deployment" } }
+        next_cursor: { type: [string, "null"] }

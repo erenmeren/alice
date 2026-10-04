@@ -110,6 +110,21 @@ type InventoryService interface {
 	GetSSHKey(ctx context.Context, id uuid.UUID) (inventory.SSHKey, error)
 	SetupGuide(ctx context.Context, from string) (inventory.Guide, error)
 	RequestKeyRemoval(ctx context.Context, a inventory.Actor, locationID uuid.UUID, confirmLastRootKey bool) (uuid.UUID, error)
+
+	// Phase 4: certificates, signing requests, locations and deployments.
+	ListCertificates(ctx context.Context, f inventory.CertificateFilter) (inventory.CertificatePage, error)
+	GetCertificate(ctx context.Context, id uuid.UUID) (inventory.Certificate, error)
+	UploadCertificate(ctx context.Context, a inventory.Actor, in inventory.UploadInput) (inventory.Certificate, []string, error)
+	CreateCSR(ctx context.Context, a inventory.Actor, in inventory.CSRInput) (inventory.CSR, error)
+	ListCSRs(ctx context.Context) ([]inventory.CSR, error)
+	GetCSR(ctx context.Context, id uuid.UUID) (inventory.CSR, error)
+	CompleteCSR(ctx context.Context, a inventory.Actor, id uuid.UUID, certificatePEM, label string) (inventory.Certificate, []string, error)
+	CancelCSR(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.CSR, error)
+	ListLocations(ctx context.Context, targetID uuid.UUID, includeMissing bool) (inventory.LocationList, error)
+	UpdateLocation(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, p inventory.LocationPatch) (inventory.CertificateLocation, error)
+	RequestDeployment(ctx context.Context, a inventory.Actor, in inventory.DeployRequestInput) ([]inventory.RequestedDeployment, error)
+	ListDeployments(ctx context.Context, f inventory.DeploymentFilter) (inventory.DeploymentPage, error)
+	Deployment(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
 }
 
 // JobsService is the part of jobs.Queue the HTTP layer uses.
@@ -299,6 +314,9 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.targetRoutes()...)
 	routes = append(routes, s.sshKeyRoutes()...)
 	routes = append(routes, s.jobRoutes()...)
+	routes = append(routes, s.certificateRoutes()...)
+	routes = append(routes, s.locationRoutes()...)
+	routes = append(routes, s.deploymentRoutes()...)
 	return routes
 }
 

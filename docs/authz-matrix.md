@@ -62,6 +62,7 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | POST | `/api/v1/targets/{id}/host-keys/{key_id}/actions/confirm` | `hostkeys.confirm` | no | yes | no | no | no | no | no |
 | POST | `/api/v1/targets/{id}/host-keys/{key_id}/actions/repin` | `hostkeys.repin` | no | yes | no | no | no | yes | no |
 | GET | `/api/v1/targets/{id}/ssh-keys` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/targets/{id}/certificate-locations` | `read` | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/ssh-keys` | `read` | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/ssh-keys/platform-key` | `targets.manage` | no | yes | no | no | operate | no | yes |
 | GET | `/api/v1/ssh-keys/{id}` | `read` | no | yes | yes | yes | read | no | yes |
@@ -70,3 +71,15 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | GET | `/api/v1/jobs/{id}` | `read` | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/jobs/{id}/actions/confirm` | `jobs.confirm` | no | yes | no | no | no | no | no |
 | POST | `/api/v1/jobs/{id}/actions/discard` | `jobs.confirm` | no | yes | no | no | no | no | no |
+| GET | `/api/v1/certificates` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/certificates/{id}` | `read` | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/certificates/upload` | `certificates.operate` | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/certificates/{id}/deploy` | `certificates.operate` | no | yes | yes | no | operate | no | no |
+| GET | `/api/v1/certificates/csr` | `read` | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/certificates/csr` | `certificates.operate` | no | yes | yes | no | operate | no | no |
+| GET | `/api/v1/certificates/csr/{id}` | `read` | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/certificates/csr/{id}/actions/complete` | `certificates.operate` | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/certificates/csr/{id}/actions/cancel` | `certificates.operate` | no | yes | yes | no | operate | no | no |
+| PATCH | `/api/v1/locations/{id}` | `targets.manage` | no | yes | no | no | operate | no | no |
+| GET | `/api/v1/deployments` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/deployments/{id}` | `read` | no | yes | yes | yes | read | no | yes |

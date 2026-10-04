@@ -30,6 +30,7 @@ func (s *server) targetRoutes() []route {
 		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/confirm", perm: rbac.HostKeysConfirm, lic: license.ClassChange, handler: s.confirmHostKey},
 		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/repin", perm: rbac.HostKeysRepin, lic: license.ClassChange, handler: s.repinHostKey},
 		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/ssh-keys", perm: rbac.Read, handler: s.listTargetKeys},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", perm: rbac.Read, handler: s.listTargetLocations},
 	}
 }
 

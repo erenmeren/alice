@@ -64,6 +64,8 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 	rbac.HostKeysRepin:    row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 	rbac.InventoryOperate: row(unau, unau, unau, unau, unau, allw, allw, forb, allw, allw, forb, forb, allw, forb, allw),
 	rbac.JobsConfirm:      row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+
+	rbac.CertificatesOperate: row(unau, unau, unau, unau, unau, allw, allw, forb, allw, allw, forb, forb, allw, forb, allw),
 }
 
 func row(codes ...int) map[string]int {
@@ -281,7 +283,14 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.InventoryOperate
 		case under(p, "/api/v1/jobs") && !safeMethod(rt.method):
 			want = rbac.JobsConfirm
-		case under(p, "/api/v1/targets"), under(p, "/api/v1/ssh-keys"), under(p, "/api/v1/jobs"), under(p, "/api/v1/providers"):
+		case under(p, "/api/v1/certificates") && !safeMethod(rt.method):
+			want = rbac.CertificatesOperate
+		case under(p, "/api/v1/locations") && !safeMethod(rt.method):
+			want = rbac.TargetsManage
+		case under(p, "/api/v1/deployments") && !safeMethod(rt.method):
+			want = rbac.CertificatesOperate
+		case under(p, "/api/v1/targets"), under(p, "/api/v1/ssh-keys"), under(p, "/api/v1/jobs"), under(p, "/api/v1/providers"),
+			under(p, "/api/v1/certificates"), under(p, "/api/v1/locations"), under(p, "/api/v1/deployments"):
 			want = rbac.Read
 		case under(p, "/api/v1/users") && !safeMethod(rt.method):
 			want = rbac.UsersManage
@@ -357,6 +366,19 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 		"GET /api/v1/jobs/{id}",
 		"POST /api/v1/jobs/{id}/actions/confirm",
 		"POST /api/v1/jobs/{id}/actions/discard",
+		"GET /api/v1/certificates",
+		"GET /api/v1/certificates/{id}",
+		"POST /api/v1/certificates/upload",
+		"POST /api/v1/certificates/{id}/deploy",
+		"GET /api/v1/certificates/csr",
+		"POST /api/v1/certificates/csr",
+		"GET /api/v1/certificates/csr/{id}",
+		"POST /api/v1/certificates/csr/{id}/actions/complete",
+		"POST /api/v1/certificates/csr/{id}/actions/cancel",
+		"GET /api/v1/targets/{id}/certificate-locations",
+		"PATCH /api/v1/locations/{id}",
+		"GET /api/v1/deployments",
+		"GET /api/v1/deployments/{id}",
 	} {
 		assert.Contains(t, table, k)
 	}
@@ -388,6 +410,13 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/discard", perm: rbac.InventoryOperate},
 		{method: http.MethodGet, pattern: "/api/v1/jobs", perm: rbac.JobsConfirm},
 		{method: http.MethodGet, pattern: "/api/v1/providers", perm: rbac.Session},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/upload", perm: rbac.InventoryOperate},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/deploy", perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/cancel", perm: rbac.TargetsManage},
+		{method: http.MethodPatch, pattern: "/api/v1/locations/{id}", perm: rbac.CertificatesOperate},
+		{method: http.MethodGet, pattern: "/api/v1/deployments", perm: rbac.CertificatesOperate},
+		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", perm: rbac.CertificatesOperate},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", perm: rbac.TargetsManage},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))
 	good := []route{
@@ -409,6 +438,13 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/{id}", perm: rbac.Read},
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/platform-key", perm: rbac.TargetsManage},
 		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/discard", perm: rbac.JobsConfirm},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/upload", perm: rbac.CertificatesOperate},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/deploy", perm: rbac.CertificatesOperate},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/cancel", perm: rbac.CertificatesOperate},
+		{method: http.MethodPatch, pattern: "/api/v1/locations/{id}", perm: rbac.TargetsManage},
+		{method: http.MethodGet, pattern: "/api/v1/deployments", perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", perm: rbac.Read},
 	}
 	assert.Empty(t, routeRuleViolations(good))
 }

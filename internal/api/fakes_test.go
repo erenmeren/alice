@@ -471,6 +471,111 @@ type fakeInventory struct {
 	GetSSHKeyFn         func(ctx context.Context, id uuid.UUID) (inventory.SSHKey, error)
 	SetupGuideFn        func(ctx context.Context, from string) (inventory.Guide, error)
 	RequestKeyRemovalFn func(ctx context.Context, a inventory.Actor, locationID uuid.UUID, confirmLastRootKey bool) (uuid.UUID, error)
+
+	ListCertificatesFn  func(ctx context.Context, f inventory.CertificateFilter) (inventory.CertificatePage, error)
+	GetCertificateFn    func(ctx context.Context, id uuid.UUID) (inventory.Certificate, error)
+	UploadCertificateFn func(ctx context.Context, a inventory.Actor, in inventory.UploadInput) (inventory.Certificate, []string, error)
+	CreateCSRFn         func(ctx context.Context, a inventory.Actor, in inventory.CSRInput) (inventory.CSR, error)
+	ListCSRsFn          func(ctx context.Context) ([]inventory.CSR, error)
+	GetCSRFn            func(ctx context.Context, id uuid.UUID) (inventory.CSR, error)
+	CompleteCSRFn       func(ctx context.Context, a inventory.Actor, id uuid.UUID, certificatePEM, label string) (inventory.Certificate, []string, error)
+	CancelCSRFn         func(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.CSR, error)
+	ListLocationsFn     func(ctx context.Context, targetID uuid.UUID, includeMissing bool) (inventory.LocationList, error)
+	UpdateLocationFn    func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, p inventory.LocationPatch) (inventory.CertificateLocation, error)
+	RequestDeploymentFn func(ctx context.Context, a inventory.Actor, in inventory.DeployRequestInput) ([]inventory.RequestedDeployment, error)
+	ListDeploymentsFn   func(ctx context.Context, f inventory.DeploymentFilter) (inventory.DeploymentPage, error)
+	DeploymentFn        func(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
+}
+
+func (f *fakeInventory) ListCertificates(ctx context.Context, fl inventory.CertificateFilter) (inventory.CertificatePage, error) {
+	if f.ListCertificatesFn != nil {
+		return f.ListCertificatesFn(ctx, fl)
+	}
+	return inventory.CertificatePage{}, errNotConfigured
+}
+
+func (f *fakeInventory) GetCertificate(ctx context.Context, id uuid.UUID) (inventory.Certificate, error) {
+	if f.GetCertificateFn != nil {
+		return f.GetCertificateFn(ctx, id)
+	}
+	return inventory.Certificate{}, errNotConfigured
+}
+
+func (f *fakeInventory) UploadCertificate(ctx context.Context, a inventory.Actor, in inventory.UploadInput) (inventory.Certificate, []string, error) {
+	if f.UploadCertificateFn != nil {
+		return f.UploadCertificateFn(ctx, a, in)
+	}
+	return inventory.Certificate{}, nil, errNotConfigured
+}
+
+func (f *fakeInventory) CreateCSR(ctx context.Context, a inventory.Actor, in inventory.CSRInput) (inventory.CSR, error) {
+	if f.CreateCSRFn != nil {
+		return f.CreateCSRFn(ctx, a, in)
+	}
+	return inventory.CSR{}, errNotConfigured
+}
+
+func (f *fakeInventory) ListCSRs(ctx context.Context) ([]inventory.CSR, error) {
+	if f.ListCSRsFn != nil {
+		return f.ListCSRsFn(ctx)
+	}
+	return nil, errNotConfigured
+}
+
+func (f *fakeInventory) GetCSR(ctx context.Context, id uuid.UUID) (inventory.CSR, error) {
+	if f.GetCSRFn != nil {
+		return f.GetCSRFn(ctx, id)
+	}
+	return inventory.CSR{}, errNotConfigured
+}
+
+func (f *fakeInventory) CompleteCSR(ctx context.Context, a inventory.Actor, id uuid.UUID, pemText, label string) (inventory.Certificate, []string, error) {
+	if f.CompleteCSRFn != nil {
+		return f.CompleteCSRFn(ctx, a, id, pemText, label)
+	}
+	return inventory.Certificate{}, nil, errNotConfigured
+}
+
+func (f *fakeInventory) CancelCSR(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.CSR, error) {
+	if f.CancelCSRFn != nil {
+		return f.CancelCSRFn(ctx, a, id)
+	}
+	return inventory.CSR{}, errNotConfigured
+}
+
+func (f *fakeInventory) ListLocations(ctx context.Context, targetID uuid.UUID, includeMissing bool) (inventory.LocationList, error) {
+	if f.ListLocationsFn != nil {
+		return f.ListLocationsFn(ctx, targetID, includeMissing)
+	}
+	return inventory.LocationList{}, errNotConfigured
+}
+
+func (f *fakeInventory) UpdateLocation(ctx context.Context, a inventory.Actor, id uuid.UUID, v int, p inventory.LocationPatch) (inventory.CertificateLocation, error) {
+	if f.UpdateLocationFn != nil {
+		return f.UpdateLocationFn(ctx, a, id, v, p)
+	}
+	return inventory.CertificateLocation{}, errNotConfigured
+}
+
+func (f *fakeInventory) RequestDeployment(ctx context.Context, a inventory.Actor, in inventory.DeployRequestInput) ([]inventory.RequestedDeployment, error) {
+	if f.RequestDeploymentFn != nil {
+		return f.RequestDeploymentFn(ctx, a, in)
+	}
+	return nil, errNotConfigured
+}
+
+func (f *fakeInventory) ListDeployments(ctx context.Context, fl inventory.DeploymentFilter) (inventory.DeploymentPage, error) {
+	if f.ListDeploymentsFn != nil {
+		return f.ListDeploymentsFn(ctx, fl)
+	}
+	return inventory.DeploymentPage{}, errNotConfigured
+}
+
+func (f *fakeInventory) Deployment(ctx context.Context, id uuid.UUID) (inventory.Deployment, error) {
+	if f.DeploymentFn != nil {
+		return f.DeploymentFn(ctx, id)
+	}
+	return inventory.Deployment{}, errNotConfigured
 }
 
 func (f *fakeInventory) ListTargets(ctx context.Context) ([]inventory.Target, error) {

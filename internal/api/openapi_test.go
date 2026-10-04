@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 
 	apispec "alice/api"
 )
@@ -153,10 +154,12 @@ func TestRoutePermissionsMatchSpec(t *testing.T) {
 // answer (401 for protected routes, 400 for public ones without a body) and
 // never the SPA or the catch-all 404.
 func TestEveryDocumentedPathIsServed(t *testing.T) {
-	h := NewHandler(testDeps(t, nil))
+	srv := New(testDeps(t, nil))
+	h := srv.Handler()
 	ops := specOps()
 	assert.NotEmpty(t, ops)
 	for _, o := range ops {
+		srv.ResetLimits() // more operations than the anonymous limit allows per minute
 		target := pathParamRE.ReplaceAllString(o.path, uuid.NewString())
 		rec := do(h, httpMethod(o.method), target, nil)
 		assert.Contains(t, []int{http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized}, rec.Code, o.key())
@@ -231,4 +234,38 @@ func TestParseOperationsIgnoresPathLevelKeys(t *testing.T) {
 	assert.Equal(t, "session", ops[1].permission())
 	assert.Equal(t, []string{"GET /items/{id}", "DELETE /items/{id}"}, missing(ops, errorDefaultRef),
 		"the default line under parameters belongs to no operation")
+}
+
+// The spec is valid YAML and every $ref names a component that exists.
+func TestSpecParsesAndEveryRefResolves(t *testing.T) {
+	var doc map[string]any
+	require.NoError(t, yaml.Unmarshal(apispec.YAML, &doc))
+	components, ok := doc["components"].(map[string]any)
+	require.True(t, ok)
+	var refs []string
+	var walk func(v any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			for k, c := range x {
+				if s, ok := c.(string); ok && k == "$ref" {
+					refs = append(refs, s)
+				}
+				walk(c)
+			}
+		case []any:
+			for _, c := range x {
+				walk(c)
+			}
+		}
+	}
+	walk(doc)
+	require.NotEmpty(t, refs)
+	for _, ref := range refs {
+		parts := strings.Split(strings.TrimPrefix(ref, "#/components/"), "/")
+		require.Len(t, parts, 2, ref)
+		group, ok := components[parts[0]].(map[string]any)
+		require.True(t, ok, ref)
+		assert.Contains(t, group, parts[1], "unresolved %s", ref)
+	}
 }
