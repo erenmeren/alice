@@ -14,6 +14,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
+	"alice/internal/jobs/kvjobs"
 	"alice/internal/license"
 	"alice/internal/platform/clock"
 	"alice/internal/providers"
@@ -63,8 +64,11 @@ func TestJobDepsCarryEveryDependency(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
 	requireEveryFieldSet(t, deployDeps(svc, clock.Real{}, log), "FirstRecovery")
 	requireEveryFieldSet(t, targetDeps(svc, clock.Real{}, log))
+	requireEveryFieldSet(t, kvDeps(svc, clock.Real{}, log))
 	assert.Same(t, svc.registry, deployDeps(svc, clock.Real{}, log).Registry)
 	assert.Same(t, svc.inventory, deployDeps(svc, clock.Real{}, log).Inventory)
+	assert.Same(t, svc.registry, kvDeps(svc, clock.Real{}, log).Registry)
+	assert.Same(t, svc.inventory, kvDeps(svc, clock.Real{}, log).Inventory)
 }
 
 // The product as serve builds it is completely wired: every provider this build ships is
@@ -82,14 +86,16 @@ func TestServeWiringIsComplete(t *testing.T) {
 		assert.True(t, ok, "provider %s", k)
 	}
 	for _, typ := range []jobs.Type{jobs.TargetTestConnection, jobs.TargetDiscover, jobs.SSHKeyRemove,
-		jobs.CertificateDeploy, jobs.CertificateDeployRecover} {
+		jobs.CertificateDeploy, jobs.CertificateDeployRecover, jobs.KVTestConnection, jobs.KVPoll, jobs.KVImport} {
 		assert.True(t, runner.Handles(typ), "the runner handles %s", typ.Name)
 	}
 	for _, typ := range []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.AuditVerify, jobs.MaintenanceCleanup,
-		jobs.DiscoverySchedule, jobs.DeploymentRecoverySweep} {
+		jobs.DiscoverySchedule, jobs.DeploymentRecoverySweep, jobs.KVSchedule, jobs.KVAutoDeploy} {
 		assert.True(t, sched.Schedules(typ), "%s is scheduled", typ.Name)
 	}
 	assert.Positive(t, sweepEvery, "the sweep has an interval in every build (release: services_test.go; e2e: testapi_e2e_test.go)")
+	assert.Positive(t, kvScheduleEvery, "the poll scheduler has an interval in every build")
+	assert.Positive(t, kvAutoDeployEvery, "the automatic deployment planner has an interval in every build")
 	// Every job type is either a queue type with a handler or a listed periodic type that is
 	// scheduled: iterate the registry so a type added later without either fails here.
 	for _, typ := range jobs.Types() {
@@ -124,6 +130,12 @@ func TestCheckWiringRefusesAnIncompleteProduct(t *testing.T) {
 		assert.Contains(t, err.Error(), "queue job type "+typ+" has no handler")
 	}
 	assert.Contains(t, err.Error(), "periodic job type deployment.recovery_sweep is not scheduled")
+	for _, typ := range []string{"kv.test_connection", "kv.poll", "kv.import"} {
+		assert.Contains(t, err.Error(), "queue job type "+typ+" has no handler")
+	}
+	for _, typ := range []string{"kv.schedule", "kv.auto_deploy"} {
+		assert.Contains(t, err.Error(), "periodic job type "+typ+" is not scheduled")
+	}
 	assert.NotContains(t, err.Error(), "notify.send")
 
 	// A queue type is not satisfied by a periodic task, nor a periodic type by a handler.
@@ -136,9 +148,20 @@ func TestCheckWiringRefusesAnIncompleteProduct(t *testing.T) {
 	assert.True(t, strings.HasPrefix(err.Error(), "alice is not completely wired"), err.Error())
 }
 
-// deployjobs.Register panics on a missing dependency: a build that forgot one never starts.
+// deployjobs.Register and kvjobs.Register panic on a missing dependency: a build that forgot one never
+// starts.
 func TestBuildRunnerPanicsOnAMissingDeployDependency(t *testing.T) {
 	svc := wiringServices(t)
 	svc.inventory = nil
 	assert.Panics(t, func() { buildRunner(nil, svc, clock.Real{}, slog.New(slog.DiscardHandler)) })
+}
+
+// A nil *inventory.Service must stay a nil interface in the Key Vault dependencies, so Register
+// refuses it.
+func TestKeyVaultDepsKeepANilInventoryANilInterface(t *testing.T) {
+	svc := wiringServices(t)
+	svc.inventory = nil
+	deps := kvDeps(svc, clock.Real{}, slog.New(slog.DiscardHandler))
+	assert.Nil(t, deps.Inventory)
+	assert.Panics(t, func() { kvjobs.Register(jobs.NewRunner(jobs.RunnerConfig{}), deps) })
 }

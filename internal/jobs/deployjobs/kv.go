@@ -84,26 +84,29 @@ var kvReadBudget = time.Minute
 const (
 	reasonKVMismatch       = "kv.secret_mismatch"
 	reasonKVUnreadable     = "kv.secret_unreadable"
-	reasonVaultGone        = "kv.vault_unavailable"
-	reasonChainUnconfirmed = "certificate.chain_unconfirmed"
+	reasonVaultGone        = inventory.ReasonVaultUnavailable
+	reasonChainUnconfirmed = inventory.ReasonChainUnconfirmed
 	reasonPFXBusy          = "certificate.pfx_busy"
 	reasonUnreachable      = "azure.unreachable"
 )
 
 // kvRefusals maps every refusal the inventory can give for a Key Vault deployment (the pre-check, the
-// material step and DeploymentMaterial) to its closed reason. The words are the vault's: a disabled
+// material step and DeploymentMaterial) to its closed reason. The reasons the automatic deployment
+// planner treats as neutral (it neither counts them toward its three-failure stop nor stops for them)
+// are inventory's own constants, so the planner and this engine cannot drift apart
+// (TestEveryNeutralReasonCanBeProducedByTheEngine). The words are the vault's: a disabled
 // vault is not a disabled server. Each is permanent: the state the deployment was requested in no
 // longer holds, and a retry would only ask again.
 var kvRefusals = []struct {
 	err    error
 	reason string
 }{
-	{inventory.ErrBindingGone, "kv.binding_gone"},
-	{inventory.ErrAutoDeployOff, "kv.auto_deploy_off"},
+	{inventory.ErrBindingGone, inventory.ReasonBindingGone},
+	{inventory.ErrAutoDeployOff, inventory.ReasonAutoDeployOff},
 	{inventory.ErrVaultUnavailable, reasonVaultGone},
-	{inventory.ErrKVCertificateMissing, "kv.certificate_not_found"},
-	{inventory.ErrVersionDisabled, "kv.version_disabled"},
-	{inventory.ErrVersionHeld, "kv.version_held"},
+	{inventory.ErrKVCertificateMissing, inventory.ReasonCertificateMissing},
+	{inventory.ErrVersionDisabled, inventory.ReasonVersionDisabled},
+	{inventory.ErrVersionHeld, inventory.ReasonVersionHeld},
 	{inventory.ErrCertificateExpired, reasonExpired},
 	{inventory.ErrCertificateNotYetValid, reasonNotYetValid},
 	{inventory.ErrSecretMismatch, reasonKVMismatch},

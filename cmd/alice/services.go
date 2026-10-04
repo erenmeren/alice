@@ -18,6 +18,7 @@ import (
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/jobs/deployjobs"
+	"alice/internal/jobs/kvjobs"
 	"alice/internal/jobs/targetjobs"
 	"alice/internal/license"
 	"alice/internal/notify"
@@ -137,15 +138,16 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 const jobRetention = 90 * 24 * time.Hour
 
 // buildRunner builds the job workers with every queue handler: the Phase 3 target jobs (spec
-// §8.1–§8.8) and the Phase 4 certificate deployment and its recovery (§12.6, §8.8). Every claim
-// passes the license gate; a job that runs out of attempts or fails its integrity check emails
-// the Administrators. deployjobs.Register panics on a missing dependency, so a build that lacks
-// one never starts.
+// §8.1–§8.8), the Phase 4 certificate deployment and its recovery (§12.6, §8.8) and the Phase 5 Key
+// Vault jobs (access check, poll, import; §11). Every claim passes the license gate; a job that runs
+// out of attempts or fails its integrity check emails the Administrators. deployjobs.Register and
+// kvjobs.Register panic on a missing dependency, so a build that lacks one never starts.
 func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.Logger) *jobs.Runner {
 	runner := jobs.NewRunner(jobs.RunnerConfig{Pool: pool, Queue: svc.queue, Gate: svc.license, Audit: svc.auditLog,
 		Clock: clk, Log: log, Notifier: notify.AdminNotifier{Clock: clk}, ShutdownGrace: jobsShutdownGrace})
 	targetjobs.Register(runner, targetDeps(svc, clk, log))
 	deployjobs.Register(runner, deployDeps(svc, clk, log))
+	kvjobs.Register(runner, kvDeps(svc, clk, log))
 	return runner
 }
 
@@ -168,6 +170,17 @@ func deployDeps(svc *services, clk clock.Clock, log *slog.Logger) deployjobs.Dep
 	return d
 }
 
+// kvDeps are the dependencies of the Key Vault jobs. The registry may lack the Key Vault provider (it
+// is registered in providers.go once the build ships it): a vault's jobs then end with a closed
+// reason, they do not panic.
+func kvDeps(svc *services, clk clock.Clock, log *slog.Logger) kvjobs.Deps {
+	d := kvjobs.Deps{Registry: svc.registry, Clock: clk, Log: log}
+	if svc.inventory != nil { // a nil *inventory.Service must stay a nil interface, so Register refuses it
+		d.Inventory = svc.inventory
+	}
+	return d
+}
+
 // buildScheduler is the periodic work of serve (spec §8.2, R37 item 15); every run passes the
 // license gate, and serve runs it under the scheduling lock (WithLeader), so one process runs
 // each task at a time; license.evaluate runs hourly in every process regardless of the lock
@@ -175,8 +188,11 @@ func deployDeps(svc *services, clk clock.Clock, log *slog.Logger) deployjobs.Dep
 // verification is 23 hours old (jobs.AuditVerifyTask). The deployment recovery sweep (ClassAlways:
 // it runs in lock too) queues the recovery of interrupted deployments and ends the ones whose job
 // ended; it runs on the scheduler's context, which carries no job claim, every sweepEvery (one
-// minute; the e2e build never ticks it: tests run it with POST /test/scheduler/run). The e2e tests
-// use the same tasks.
+// minute; the e2e build never ticks it: tests run it with POST /test/scheduler/run). The Key Vault
+// tasks queue the polls that are due (kv.schedule) and plan the deployments of renewed vault versions
+// (kv.auto_deploy) every kvScheduleEvery and kvAutoDeployEvery (a minute; the e2e build never ticks
+// them); both are ReadOnly work, so the gate pauses them in lock like the discovery scheduler. The e2e
+// tests use the same tasks.
 func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *slog.Logger) *jobs.Scheduler {
 	return jobs.NewScheduler(clk, svc.license, log,
 		// A failed evaluation is retried after 1, 2, 4, 8, then every 10 minutes (AUD-02): the gate refuses changes
@@ -200,6 +216,8 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 			_, err := svc.inventory.SweepDeployments(ctx)
 			return err
 		}},
+		kvjobs.ScheduleTask(svc.inventory, kvScheduleEvery),
+		kvjobs.AutoDeployTask(svc.inventory, kvAutoDeployEvery, log),
 	)
 }
 

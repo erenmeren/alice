@@ -209,3 +209,9 @@ func TestBuildTime(t *testing.T) {
 func TestReleaseSweepsEveryMinute(t *testing.T) {
 	assert.Equal(t, time.Minute, sweepEvery)
 }
+
+// The release build schedules due vault polls and plans automatic deployments every minute (R40 row 29).
+func TestReleaseSchedulesKeyVaultWorkEveryMinute(t *testing.T) {
+	assert.Equal(t, time.Minute, kvScheduleEvery)
+	assert.Equal(t, time.Minute, kvAutoDeployEvery)
+}

@@ -1078,3 +1078,21 @@ func TestEveryInventoryRefusalOfTheVaultStepHasAReason(t *testing.T) {
 		}
 	}
 }
+
+// The planner (inventory) decides which deployment reasons are neutral from its own constants; the
+// engine must be able to produce every one of them, with exactly that spelling, and must not invent a
+// vault reason of its own that the planner would count as a failure by mistake.
+func TestEveryNeutralReasonCanBeProducedByTheEngine(t *testing.T) {
+	produced := map[string]bool{}
+	for _, r := range kvRefusals {
+		produced[r.reason] = true
+	}
+	for _, neutral := range inventory.NeutralDeploymentReasons() {
+		assert.True(t, produced[neutral], "the engine can end a deployment with %s", neutral)
+	}
+	assert.Equal(t, inventory.ReasonVaultUnavailable, reasonVaultGone)
+	assert.Equal(t, inventory.ReasonChainUnconfirmed, reasonChainUnconfirmed)
+	for _, vault := range []string{"kv.binding_gone", "kv.auto_deploy_off", "kv.vault_unavailable", "kv.version_held"} {
+		assert.Contains(t, inventory.NeutralDeploymentReasons(), vault, "the spelling the engine and the plan agree on")
+	}
+}

@@ -853,7 +853,9 @@
       "kv": {
         "test_connection": "Key Vault access check",
         "poll": "Key Vault check",
-        "import": "Import into Key Vault"
+        "import": "Import into Key Vault",
+        "schedule": "Scheduled Key Vault checks",
+        "auto_deploy": "Automatic deployment of new Key Vault versions"
       },
       "deployment": {
         "recovery_sweep": "Check for interrupted deployments"

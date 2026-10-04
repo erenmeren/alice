@@ -92,11 +92,21 @@ var (
 
 // Phase 5 queue job types (Key Vault, spec §8.2, §11): the access check and the poll of a vault are
 // read-only work (paused in lock); an import into a vault changes a managed system (refused in
-// lock). Task 10 registers the types so inventory can queue them; their runners arrive with Task 15.
+// lock). The runners are in internal/jobs/kvjobs.
 var (
 	KVTestConnection = Register(inventory.JobKVTest, license.ClassReadOnly)
 	KVPoll           = Register(inventory.JobKVPoll, license.ClassReadOnly)
 	KVImport         = Register(inventory.JobKVImport, license.ClassChange)
+)
+
+// Phase 5 periodic tasks (R40 row 29): the poll scheduler and the automatic deployment planner. Both
+// are ReadOnly: the scheduler refuses a ClassChange task (external-change work waits for a person),
+// and the gate treats ReadOnly and Change alike (unverified, locked and lock due stop both), so the
+// tick pauses in exactly the same states. The planner only queues certificate.deploy jobs (ClassChange,
+// refused and held in lock) and returns at once while the gate refuses changes (PlanKVAutoDeploy).
+var (
+	KVSchedule   = Register("kv.schedule", license.ClassReadOnly)
+	KVAutoDeploy = Register("kv.auto_deploy", license.ClassReadOnly)
 )
 
 // Kind says who asks for a job (jobs.kind).
@@ -127,14 +137,16 @@ const (
 )
 
 // MaxAttemptsFor is the default number of attempts of a job type (spec §8.4): a connection
-// test is shown to the user at once and not retried; discovery tolerates a flaky network. A
+// test (an access check of a vault, a poll of it) is shown to the user at once and not retried (the
+// vault's own back-off paces polls); discovery tolerates a flaky network. An import into a vault runs
+// at most 3 times and is retried only before its request was sent. A
 // deployment's job runs at most 3 times (a run after the first send never sends again: it reads
 // the deployment's state and recovers). A recovery job runs once: the deployment sweep paces
 // recovery (a new job every inventory.RecoveryRetryInterval, at most inventory.MaxRecoveryAttempts),
 // so a failed attempt waits for the sweep instead of polling the server on the queue's backoff.
 func MaxAttemptsFor(t Type) int {
 	switch t.Name {
-	case inventory.JobTestConnection, inventory.JobDeployRecover:
+	case inventory.JobTestConnection, inventory.JobDeployRecover, inventory.JobKVTest, inventory.JobKVPoll:
 		return 1
 	case inventory.JobDiscover:
 		return 5
@@ -147,5 +159,9 @@ func MaxAttemptsFor(t Type) int {
 // is dead with the job.dead email to every Administrator (spec §8.4). A recovery job is not: its
 // failure ends the job as a plain failure (failed, no email), the deployment sweep queues the next
 // one, and the deployment's own needs-attention email, sent once, is the alert. Otherwise an
-// unreachable server would send one job.dead email per recovery cycle (plan decision 15).
-func AlertsWhenExhausted(t Type) bool { return t.Name != inventory.JobDeployRecover }
+// unreachable server would send one job.dead email per recovery cycle (plan decision 15). A poll of a
+// vault is not either: its failure is on the vault (status, last error, its own email) and polls repeat
+// on the vault's interval, so a dead-job email per cycle would only repeat it.
+func AlertsWhenExhausted(t Type) bool {
+	return t.Name != inventory.JobDeployRecover && t.Name != inventory.JobKVPoll
+}

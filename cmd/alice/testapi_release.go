@@ -25,5 +25,12 @@ const startJobWorkers = true
 // sweepEvery is the interval of the deployment recovery sweep (spec R38 item 8).
 const sweepEvery = time.Minute
 
+// kvScheduleEvery and kvAutoDeployEvery are the intervals of the Key Vault poll scheduler and the
+// automatic deployment planner (R40 row 29).
+const (
+	kvScheduleEvery   = time.Minute
+	kvAutoDeployEvery = time.Minute
+)
+
 // testHandler returns nil: release builds have no /test endpoints.
 func testHandler(testDeps) http.Handler { return nil }

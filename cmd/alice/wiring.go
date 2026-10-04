@@ -15,7 +15,7 @@ var shippedProviders = []providers.Kind{providers.KindLinuxSSH, providers.KindNg
 // every other job type is a queue type and needs a handler on the runner. A new type is a queue
 // type until it is listed here.
 var periodicTypes = []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.AuditVerify, jobs.MaintenanceCleanup,
-	jobs.DiscoverySchedule, jobs.DeploymentRecoverySweep}
+	jobs.DiscoverySchedule, jobs.DeploymentRecoverySweep, jobs.KVSchedule, jobs.KVAutoDeploy}
 
 // checkWiring refuses to start a server that is not completely wired: a provider this build ships
 // is not registered, a queue job type has no handler on the runner (a queued job of that type is

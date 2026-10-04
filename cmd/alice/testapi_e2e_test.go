@@ -222,6 +222,13 @@ func TestE2EBuildNeverTicksTheSweep(t *testing.T) {
 	assert.GreaterOrEqual(t, sweepEvery, 50*365*24*time.Hour)
 }
 
+// Nor does it tick the poll scheduler or the automatic deployment planner on the wall clock: the
+// journeys run them with POST /test/scheduler/run, so nothing polls or deploys between two steps.
+func TestE2EBuildNeverTicksTheKeyVaultTasks(t *testing.T) {
+	assert.GreaterOrEqual(t, kvScheduleEvery, 50*365*24*time.Hour)
+	assert.GreaterOrEqual(t, kvAutoDeployEvery, 50*365*24*time.Hour)
+}
+
 type countingGate struct {
 	locked bool
 	calls  int

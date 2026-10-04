@@ -224,3 +224,28 @@ func TestJobsEmailTemplatesRenderInBothLanguages(t *testing.T) {
 	en := s.Render("ada@example.com", TemplateJobTampered, "en", tamperedAlertParams(id, "sshkey.remove"))
 	assert.NotContains(t, en.Body, "attempts", "a tampered job is not an exhausted one")
 }
+
+// Phase 5 (R40 row 29, scan D1): the access check and the poll are read-only work with one attempt
+// each; an import changes a vault (three attempts, retried only before the send); the poll
+// scheduler and the auto-deploy planner are periodic and therefore ReadOnly (the scheduler refuses a
+// ClassChange task; the gate treats both classes alike and the planner re-checks ClassChange itself).
+func TestPhase5JobTypes(t *testing.T) {
+	assert.Equal(t, license.ClassReadOnly, KVTestConnection.Class)
+	assert.Equal(t, license.ClassReadOnly, KVPoll.Class)
+	assert.Equal(t, license.ClassChange, KVImport.Class)
+	assert.Equal(t, license.ClassReadOnly, KVSchedule.Class)
+	assert.Equal(t, license.ClassReadOnly, KVAutoDeploy.Class, "a ClassChange periodic task would panic at start-up")
+	assert.Equal(t, "kv.schedule", KVSchedule.Name)
+	assert.Equal(t, "kv.auto_deploy", KVAutoDeploy.Name)
+	assert.Equal(t, 1, MaxAttemptsFor(KVTestConnection))
+	assert.Equal(t, 1, MaxAttemptsFor(KVPoll))
+	assert.Equal(t, 3, MaxAttemptsFor(KVImport))
+	assert.False(t, AlertsWhenExhausted(KVPoll), "the vault's status and its own email carry a failed poll")
+	assert.True(t, AlertsWhenExhausted(KVImport))
+	assert.True(t, AlertsWhenExhausted(KVTestConnection))
+	assert.NotPanics(t, func() {
+		NewScheduler(nil, &fakeGate{}, quiet,
+			Task{Type: KVSchedule, Every: time.Minute, Run: func(context.Context) error { return nil }},
+			Task{Type: KVAutoDeploy, Every: time.Minute, Run: func(context.Context) error { return nil }})
+	})
+}

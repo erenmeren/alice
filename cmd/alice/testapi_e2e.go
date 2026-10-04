@@ -44,6 +44,15 @@ const startJobWorkers = false
 // POST /test/scheduler/run instead. The task stays scheduled (checkWiring, RunNow).
 const sweepEvery = 100 * 365 * 24 * time.Hour
 
+// kvScheduleEvery and kvAutoDeployEvery are the intervals of the Key Vault poll scheduler and the
+// automatic deployment planner in the e2e build: in effect never, like the sweep (the demo clock
+// would otherwise poll and deploy between two Playwright steps). The tasks stay scheduled
+// (checkWiring, RunNow): tests run them with POST /test/scheduler/run.
+const (
+	kvScheduleEvery   = 100 * 365 * 24 * time.Hour
+	kvAutoDeployEvery = 100 * 365 * 24 * time.Hour
+)
+
 // maxTestBody is the request body limit of the API (SEC-023), applied to /test too.
 const maxTestBody = 1 << 20
 
@@ -95,6 +104,7 @@ const resetSQL = `TRUNCATE users, user_mfa, recovery_codes, sessions, api_tokens
 license, license_files, license_history, notifications_outbox,
 target_locks, job_attempts, jobs, ssh_key_locations, ssh_keys, host_keys,
 deployment_steps, deployments, certificate_locations, csr_requests, certificates, managed_private_keys,
+kv_imports, bindings, kv_certificate_versions, kv_certificates, kv_keys, kv_secrets,
 targets, credentials`
 
 // decodeTest reads a JSON body strictly; an empty body is an empty object.

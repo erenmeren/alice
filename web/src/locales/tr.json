@@ -853,7 +853,9 @@
       "kv": {
         "test_connection": "Key Vault erişim denetimi",
         "poll": "Key Vault denetimi",
-        "import": "Key Vault'a aktarma"
+        "import": "Key Vault'a aktarma",
+        "schedule": "Zamanlanmış Key Vault denetimleri",
+        "auto_deploy": "Yeni Key Vault sürümlerinin otomatik dağıtımı"
       },
       "deployment": {
         "recovery_sweep": "Yarım kalan dağıtımları denetleme"
