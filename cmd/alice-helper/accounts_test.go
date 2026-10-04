@@ -492,3 +492,62 @@ func TestInlineContentOnlyForFilesTheHelperWouldRead(t *testing.T) {
 	assert.NotContains(t, f.out.String(), "SECRET-HASH")
 	assert.NotContains(t, f.out.String(), base64.StdEncoding.EncodeToString([]byte("root:SECRET")))
 }
+
+// Homes shared with another account: an account whose home is another user's directory gets that
+// user's file listed as a candidate, but never its content unless sshd would accept the file for
+// it too (fileOK: its own, or root's in a root-controlled directory). A home of "/" is listed.
+func TestHomesSharedWithAnotherAccount(t *testing.T) {
+	skipOddUID(t)
+	f := newFixture(t)
+	f.write("/home/deploy/.ssh/authorized_keys", "ssh-ed25519 AAAA deploy@laptop\n", 0o600)
+	if os.Getuid() == 0 { // make the file deploy's, as on a real server
+		require.NoError(t, os.Chown(f.host("/home/deploy/.ssh"), f.uid, f.uid))
+		require.NoError(t, os.Chown(f.host("/home/deploy/.ssh/authorized_keys"), f.uid, f.uid))
+	}
+	f.write("/etc/passwd", f.read("/etc/passwd")+"intruder:x:4242:4242::/home/deploy/:/bin/bash\nslash:x:4243:4243::/:/bin/bash\n", 0o644)
+	_, m := f.run("authkeys-list")
+	mine := filesOf(listUser(t, m, "deploy"))[0]
+	assert.Equal(t, true, mine["inline"])
+	theirs := filesOf(listUser(t, m, "intruder"))[0]
+	assert.Equal(t, "/home/deploy/.ssh/authorized_keys", theirs["path"])
+	assert.Equal(t, "/home/deploy", listUser(t, m, "intruder")["home"])
+	assert.Equal(t, true, theirs["unsupported"], "another user's file is not intruder's")
+	assert.NotContains(t, theirs, "content_b64")
+	assert.Equal(t, "/.ssh/authorized_keys", filesOf(listUser(t, m, "slash"))[0]["path"])
+	code, r := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys")
+	require.Equal(t, 0, code)
+	assert.Equal(t, "deploy", r["owner"], "the first account in uid order")
+}
+
+// A local user who swaps their file for a link to /etc/shadow (or a hard link) after the scan
+// chose it and before the listing reads it gets it listed unsupported: the content is taken only
+// from a descriptor that passed the same checks as authkeys-read.
+func TestASwapAfterTheScanNeverInlinesAnotherFile(t *testing.T) {
+	skipOddUID(t)
+	for _, swap := range []string{"symlink", "hardlink"} {
+		t.Run(swap, func(t *testing.T) {
+			f := newFixture(t)
+			f.write("/etc/shadow", "root:SECRET-HASH:19000::::::\n", 0o600)
+			f.write("/home/deploy/.ssh/authorized_keys", "ssh-ed25519 AAAA deploy@laptop\n", 0o600)
+			f.mkdir("/home/zz", 0o755)
+			f.write("/etc/passwd", f.read("/etc/passwd")+fmt.Sprintf("zz:x:%d:%d::/home/zz:/bin/bash\n", f.uid+10, f.uid+10), 0o644)
+			ak := f.host("/home/deploy/.ssh/authorized_keys")
+			f.onSSHD = func(args []string) {
+				if len(args) == 3 && strings.HasPrefix(args[2], "user=zz,") { // the last account: deploy's file is chosen
+					require.NoError(t, os.Remove(ak))
+					if swap == "symlink" {
+						require.NoError(t, os.Symlink("../../../etc/shadow", ak))
+					} else {
+						require.NoError(t, os.Link(f.host("/etc/shadow"), ak))
+					}
+				}
+			}
+			_, m := f.run("authkeys-list")
+			fi := filesOf(listUser(t, m, "deploy"))[0]
+			assert.Equal(t, true, fi["unsupported"])
+			assert.NotContains(t, fi, "content_b64")
+			assert.NotContains(t, f.out.String(), "SECRET-HASH")
+			assert.NotContains(t, f.out.String(), base64.StdEncoding.EncodeToString([]byte("root:SECRET")))
+		})
+	}
+}
