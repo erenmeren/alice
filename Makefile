@@ -21,10 +21,19 @@ test: ## Run Go unit tests with the race detector (release build, plus the e2e a
 test-integration: ## Run integration tests (needs Docker)
 	go test -race -count=1 -tags integration ./...
 
+# The real-Nginx matrix installs the release-built helper (make helper) through the nginx profile's
+# setup script, which checks it against the checksums linked into the test binary exactly as make
+# build links them into alice. A -run pattern that matches no test passes silently ("[no tests to
+# run]"), so each matrix line fails on that text instead.
+SSH_MATRIX_RAN = 2>&1 | awk '{ print } /no tests to run/ { none = 1 } END { exit none }'
+
 .PHONY: test-ssh
-test-ssh: ## Run the real OpenSSH and Nginx matrix (Ubuntu 22.04, Debian 12, Rocky 9; needs Docker). ALICE_SSH_IMAGES=ubuntu22 limits it
-	go test -count=1 -tags integration -run TestRealOpenSSH ./internal/providers/linuxssh/
-	go test -count=1 -tags integration -run TestRealNginx ./internal/providers/nginx/
+test-ssh: helper ## Run the real OpenSSH and Nginx matrices (Ubuntu 22.04, Debian 12, Rocky 9; needs Docker). ALICE_SSH_IMAGES=ubuntu22 limits them
+	@for sum in '$(call HELPER_SUM,amd64)' '$(call HELPER_SUM,arm64)'; do \
+	  echo "$$sum" | grep -Eqx '[0-9a-f]{64}' || { echo "bin/alice-helper.sha256 lacks a helper checksum; run make helper"; exit 1; }; \
+	done
+	set -o pipefail; go test -count=1 -tags integration -run '^TestRealOpenSSH$$' ./internal/providers/linuxssh/ $(SSH_MATRIX_RAN)
+	set -o pipefail; go test -count=1 -timeout 30m -tags integration -ldflags "$(HELPER_LDFLAGS)" -run '^TestRealNginx' ./internal/providers/nginx/ $(SSH_MATRIX_RAN)
 
 .PHONY: i18n-check
 i18n-check: ## Verify EN/TR translation catalogs have identical keys and placeholders

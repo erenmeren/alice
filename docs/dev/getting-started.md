@@ -56,7 +56,7 @@ creates when its data volume is new. Run `make reset` once (this deletes the dev
 | `make e2e-down` | Stop the e2e stack and delete its volumes (never touches the `make up` stack) |
 | `make helper` | Build the static `alice-helper` for linux/amd64 and linux/arm64 into `bin/` with `bin/alice-helper.sha256` |
 | `make fuzz-ssh` | Fuzz the `authorized_keys` and `sshd -T` parsers for 60 s each |
-| `make test-ssh` | Run the real-OpenSSH suite on Ubuntu 22.04, Debian 12 and Rocky 9 (needs Docker; builds three images on first run); it also runs `TestRealNginx` in `internal/providers/nginx`, the real-Nginx suite Phase 4 adds (until it exists that line runs no test). `ALICE_SSH_IMAGES=ubuntu22 make test-ssh` limits it to one distribution |
+| `make test-ssh` | Run the real-OpenSSH suite (`TestRealOpenSSH`) and the real-Nginx suite (`TestRealNginx`: discovery, deployment, rollback and recovery through Alice's Nginx provider against each distribution's real Nginx) on Ubuntu 22.04, Debian 12 and Rocky 9 (needs Docker and a host that can reach containers at their bridge addresses, as Linux Docker can; builds three images on first run). It first runs `make helper`: the Nginx suite installs that release-built helper through the setup script, which checks it against the checksums linked into the test. Each line fails if its `-run` pattern matches no test. `ALICE_SSH_IMAGES=ubuntu22 make test-ssh` limits it to one distribution |
 | `make coverage` | Every Go test with the integration tag under coverage; enforces `coverage-floors.json` |
 | `make lint` / `make web-lint` | Linters |
 | `make i18n-check` | English and Turkish catalogs have the same keys and placeholders |
