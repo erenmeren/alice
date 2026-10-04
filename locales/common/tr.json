@@ -387,9 +387,9 @@
         "action": "Nginx'i dağıtımınızdan veya nginx.org'dan kurun ya da bu sunucuyu Linux sunucu olarak ekleyin."
       },
       "config_invalid": {
-        "title": "Nginx yapılandırmasında zaten bir hata var, bu yüzden Alice durumu daha kötüleştirmeyecek.",
-        "cause": "Alice hiçbir şeyi değiştirmeden önce nginx -t komutu bu sunucuda başarısız oluyor.",
-        "action": "Sunucuda nginx -t komutunu çalıştırın, hatayı giderin, sonra Keşfet'i yeniden seçin."
+        "title": "Nginx yapılandırmasında bir sorun var, bu yüzden Alice yapılandırmayı değiştirmeyecek.",
+        "cause": "Nginx yapılandırmasında bir hata var ya da Alice'in güvenle okuyamadığı dosyalar veya ayarlar kullanılıyor. Hiçbir şey değiştirilmedi.",
+        "action": "Sunucuda nginx -t komutunu çalıştırın ve varsa hatayı giderin. Komut başarılıysa sunucunun sayfasında adı geçen dosyayı denetleyin, sonra Keşfet'i yeniden seçin."
       },
       "config_changed": {
         "title": "Alice son baktığından bu yana Nginx yapılandırması değişti.",
@@ -402,7 +402,7 @@
         "action": "Sunucular sayfasında Sunucu türü olarak Nginx sunucu seçeneğini seçin, komutları kopyalayın ve sunucuda yeniden çalıştırın."
       },
       "no_space": {
-        "title": "Sunucuda boş disk alanı yok.",
+        "title": "Sunucuda yeterli boş disk alanı yok.",
         "cause": "Alice'in yeni dosyalar ve eski dosyaların yedeği için yere ihtiyacı var. Hiçbir şey değiştirilmedi.",
         "action": "Sunucuda biraz yer açın, sonra yeniden dağıtın."
       },
@@ -413,7 +413,7 @@
       },
       "location_unsupported": {
         "title": "Alice bu konumdaki sertifikaları değiştiremez.",
-        "cause": "Web sitesinin sertifika düzeni Alice'in desteklemediği bir düzen ya da dosyaları artık Alice'in güvenlik kurallarına uymuyor (örneğin root dışındaki kullanıcıların değiştirebildiği bir klasör). Hiçbir şey değiştirilmedi.",
+        "cause": "Web sitesinin sertifika düzeni Alice'in desteklemediği bir düzen, dosyaları artık Alice'in güvenlik kurallarına uymuyor (örneğin root dışındaki kullanıcıların değiştirebildiği bir klasör) ya da web sitesi artık bu dosyayı kullanmıyor. Hiçbir şey değiştirilmedi.",
         "action": "Nedeni web sitesinin yanında görmek için sunucunun sayfasında Keşfet'i seçin; Alice'in yönetmesini istiyorsanız sunucudaki düzeni değiştirin."
       },
       "busy": {
@@ -430,13 +430,13 @@
     "certificate": {
       "invalid": {
         "title": "Bu, Alice'in okuyabildiği bir sertifika değil.",
-        "cause": "Alice, BEGIN CERTIFICATE blokları içeren PEM metni veya bir PFX dosyası bekler.",
-        "action": "İmzalama isteğini veya başka bir dosyayı değil, sertifika dosyasını seçtiğinizden emin olun."
+        "cause": "Alice, BEGIN CERTIFICATE blokları içeren PEM metni veya bir PFX dosyası bekler. Bir dağıtımda, kayıtlı sertifika sunucuya bu biçimde gönderilemedi.",
+        "action": "Yüklerken imzalama isteğini veya başka bir dosyayı değil, sertifika dosyasını seçtiğinizden emin olun. Bir dağıtımdan sonra sertifikayı yeniden yükleyin, sonra dağıtın."
       },
       "key_mismatch": {
         "title": "Sertifika özel anahtarıyla eşleşmiyor.",
-        "cause": "Özel anahtar başka bir sertifikaya ait. Bir dağıtım sırasında Nginx bunu yeni dosyalar yazıldıktan sonra bildirdi.",
-        "action": "Bu sertifikayla birlikte oluşturulan anahtarı yükleyin. Bir dağıtımda, önceki dosyaların geri konup konmadığını dağıtımın durumu gösterir."
+        "cause": "Yüklemede: özel anahtar başka bir sertifikaya ait. Dağıtımda: yeni dosyalar yazıldıktan sonra nginx -t, sunucudaki bir sertifikanın anahtar dosyasıyla eşleşmediğini bildirdi.",
+        "action": "Yüklerken bu sertifikayla birlikte oluşturulan anahtarı kullanın. Bir dağıtımdan sonra sunucudaki web sitelerinin hangi sertifika ve anahtar dosyalarını kullandığını denetleyin; önceki dosyaların geri konup konmadığını dağıtımın durumu gösterir."
       },
       "expired": {
         "title": "Bu sertifikanın süresi zaten doldu.",
@@ -454,7 +454,7 @@
         "action": "Parolayı denetleyin ya da PFX dosyasını yeniden dışa aktarın."
       },
       "weak": {
-        "title": "Bu sertifika zayıf bir anahtar veya imza kullanıyor.",
+        "title": "Bu sertifika ya da zincirindeki bir sertifika zayıf bir anahtar veya imza kullanıyor.",
         "cause": "2048 bitten kısa RSA anahtarları ile MD5 veya SHA-1 imzaları artık güvenli değil.",
         "action": "Sertifika yetkilinizden daha güçlü anahtarlı ve SHA-256 imzalı bir sertifika isteyin."
       },
@@ -465,7 +465,7 @@
       },
       "duplicate": {
         "title": "Bu sertifika ve anahtarı Alice'te zaten var.",
-        "cause": "Bu sertifika ve anahtarı, önceki bir yüklemeden veya bir imzalama isteğinden zaten kayıtlı.",
+        "cause": "Bu sertifika ve anahtarı daha önce bir yükleme ya da imzalama isteği yoluyla zaten kaydedilmiş.",
         "action": "Listede sertifikayı açın ve oradan dağıtın."
       },
       "no_private_key": {
@@ -519,17 +519,17 @@
       },
       "verify_failed": {
         "title": "Web sitesi hâlâ önceki sertifikayı sunuyor.",
-        "cause": "Değişiklikten sonra web sitesi önceki sertifikayı sunmaya devam etti; örneğin bu ad için başka bir server bloğu yanıt veriyor ya da Nginx yeniden yüklenmedi. Önceki dosyaların geri konup konmadığını dağıtımın durumu gösterir.",
-        "action": "Bu ad için hangi server bloğunun yanıt verdiğini denetleyin, sonra yeniden dağıtın."
+        "cause": "Değişiklikten sonra web sitesi önceki sertifikayı sunmaya devam etti; örneğin web sitesinin yapılandırması bu adı başka bir web sitesine yönlendiriyor ya da Nginx yeniden yüklenmedi. Önceki dosyaların geri konup konmadığını dağıtımın durumu gösterir.",
+        "action": "Bu web sitesinin adına Nginx yapılandırmasının hangi bölümünün yanıt verdiğini denetleyin, sonra yeniden dağıtın."
       },
       "verify_other": {
         "title": "Alice web sitesinin hangi sertifikayı sunduğunu doğrulayamadı.",
-        "cause": "Web sitesi ne önceki ne de yeni olan bir sertifika sundu (örneğin önündeki bir yük dengeleyiciden) ya da Alice web sitesinin şu anki sertifikasını henüz okumadı. Bir şeyin değiştirilip değiştirilmediğini dağıtımın durumu gösterir.",
+        "cause": "Web sitesi ne önceki ne de yeni sertifikayı sundu (örneğin önünde bir yük dengeleyici olduğu için) ya da Alice web sitesinin mevcut sertifikasını henüz okumadı. Bir şeyin değiştirilip değiştirilmediğini dağıtımın durumu gösterir.",
         "action": "Sunucunun sayfasında Keşfet'i seçin. Web sitesi başka bir sunucunun arkasındaysa, bir yönetici doğrulama ayarlarında denetlenecek bağlantı noktasını ve adı belirleyebilir."
       },
       "verify_unreachable": {
         "title": "Web sitesine şu bağlantı noktasından ulaşılamadı: {{port}}.",
-        "cause": "Ne Alice ne de sunucunun kendisi web sitesine bağlanabildi; bu yüzden sunulan sertifika denetlenemedi. Bir şeyin değiştirilip değiştirilmediğini dağıtımın durumu gösterir.",
+        "cause": "Ne Alice ne de sunucunun kendisi web sitesine bağlanabildi ya da web sitesinin Alice'in denetleyebileceği bir HTTPS adresi yok; bu yüzden sunulan sertifika denetlenemedi. Bir şeyin değiştirilip değiştirilmediğini dağıtımın durumu gösterir.",
         "action": "Alice'in bu bağlantı noktasına erişmesine izin verin ya da bir yöneticiden web sitesinin doğrulama ayarlarını değiştirmesini isteyin."
       },
       "reload_failed": {
@@ -554,18 +554,18 @@
       },
       "interrupted": {
         "title": "Dağıtım olağan şekilde tamamlanmadı.",
-        "cause": "Dağıtım sürerken sunucuyla bağlantı ya da Alice'in kendisi durdu veya sunucu dosyaları yazmayı bitiremedi. Sunucuda hangi sertifikanın olduğunu dağıtımın durumu gösterir; Alice bunu henüz bilmiyorsa denetlemeyi sürdürür.",
+        "cause": "Dağıtım sürerken sunucuyla bağlantı kesildi, Alice yeniden başladı ya da sunucu dosyaları yazmayı bitiremedi. Sunucuda hangi sertifikanın olduğunu dağıtımın durumu gösterir; Alice bunu henüz bilmiyorsa denetlemeyi sürdürür.",
         "action": "Dağıtım geçmişini denetleyin. Bir sonuç gösterdiğinde, gerekiyorsa yeniden dağıtın."
       },
       "target_not_ready": {
         "title": "Alice şu anda bu sunucuya dağıtım yapamaz.",
-        "cause": "Sunucu bağlı değil: parmak izi onaylanmadı veya değişti, Alice oturum açamıyor ya da sunucu devre dışı.",
+        "cause": "Sunucu bağlı değil: ana bilgisayar anahtarının parmak izi onaylanmadı veya değişti, Alice oturum açamıyor ya da sunucu devre dışı.",
         "action": "Sunucunun sayfasını açın, orada gösterilen sorunu çözün, sonra yeniden dağıtın."
       },
       "verify_chain": {
         "title": "Web sitesi beklenen sertifikayı farklı bir zincirle sunuyor (bağlantı noktası: {{port}}).",
         "cause": "Web sitesinin gönderdiği sertifika sayısı Alice'in beklediği zincirden farklı; örneğin başka bir dosya veya bir vekil sunucu ara sertifika ekliyor ya da çıkarıyor. Bir şeyin değiştirilip değiştirilmediğini dağıtımın durumu gösterir.",
-        "action": "Bu ad için server bloklarının hangi sertifika dosyalarını kullandığını denetleyin, sonra yeniden dağıtın."
+        "action": "Bu web sitesinin yapılandırmasının hangi sertifika dosyalarını kullandığını denetleyin, sonra yeniden dağıtın."
       },
       "nothing_to_restore": {
         "title": "Geri yüklenecek bir şey yoktu.",
@@ -573,13 +573,13 @@
         "action": "Dağıtımın sonucunu dağıtım geçmişinde denetleyin, gerekiyorsa yeniden dağıtın."
       },
       "superseded": {
-        "title": "Sonraki bir değişiklik dosyaların yerini aldı, bu yüzden Alice onları geri yüklemedi.",
+        "title": "Daha sonraki bir değişiklik dosyaları değiştirdi, bu yüzden Alice onları geri yüklemedi.",
         "cause": "Alice bu dağıtımı tamamlarken sunucudaki sonraki bir işlem sertifika dosyalarını değiştirdi. Alice dosyaların şu anda ne içerdiğini bilemiyor.",
         "action": "Web sitesinin şu anda hangi sertifikayı sunduğunu denetleyin, sonra sunucunun sayfasında Keşfet'i seçin."
       },
       "unknown_operation": {
         "title": "Sunucuda bu dağıtıma ait bir kayıt yok.",
-        "cause": "alice-helper'da bu dağıtım için bir günlük yok; örneğin dağıtımı hiç almadı ya da kayıt 30 gün sonra silindi.",
+        "cause": "alice-helper'da bu dağıtımın kaydı yok; örneğin dağıtımı hiç almadı ya da kaydı 7 gün sonra sildi.",
         "action": "Web sitesinin şu anda hangi sertifikayı sunduğunu denetleyin, sonra sunucunun sayfasında Keşfet'i seçin."
       },
       "target_deleted": {
@@ -648,7 +648,7 @@
       },
       "superseded": {
         "subject": "{{target_name}} sunucusunda sonraki bir işlem bir dağıtımın dosyalarının üzerine yazdı",
-        "body": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımını tamamlayamadı veya geri alamadı (dosya: {{cert_path}}), çünkü daha sonraki bir işlem dosyaları zaten değiştirdi. Alice hiçbir şeyi geri yüklemedi.\n\nWeb sitesinin şu anda hangi sertifikayı sunduğunu denetleyin, sonra Alice'te sunucunun sayfasında SSH anahtarlarını tara düğmesine tıklayın: bu tarama sunucunun sertifikalarını da yeniler. Dağıtım: {{deployment_id}}"
+        "body": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımını tamamlayamadı veya geri alamadı (dosya: {{cert_path}}), çünkü daha sonraki bir işlem dosyaları zaten değiştirdi. Alice hiçbir şeyi geri yüklemedi.\n\nWeb sitesinin şu anda hangi sertifikayı sunduğunu denetleyin, sonra Alice'te sunucunun sayfasında Keşfet düğmesine tıklayın. Dağıtım: {{deployment_id}}"
       },
       "needs_attention": {
         "subject": "Alice {{target_name}} sunucusundaki bir dağıtımı tamamlayamıyor",

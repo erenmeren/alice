@@ -156,7 +156,15 @@ func TestPhase4TextPlaceholdersAreAllowlisted(t *testing.T) {
 	cat, err := i18n.Load(locales.FS)
 	require.NoError(t, err)
 	codes := phase4Codes()
-	require.Len(t, codes, 45)
+	// Every ALC-NGX/CRT/DEP code, derived from AllErrorCodes: the Phase 4 reasons scanned from the
+	// sources (TestJobResultReasonsAreRegistered) and the request refusals all land here.
+	for _, ec := range AllErrorCodes() {
+		if strings.HasPrefix(ec.Reason, "nginx.") || strings.HasPrefix(ec.Reason, "certificate.") || strings.HasPrefix(ec.Reason, "csr.") ||
+			strings.HasPrefix(ec.Reason, "deployment.") {
+			assert.Contains(t, codes, ec, "%s is a Phase 4 reason outside the NGX/CRT/DEP areas", ec.Reason)
+		}
+	}
+	require.NotEmpty(t, codes)
 	for _, ec := range codes {
 		for _, part := range []string{"title", "cause", "action"} {
 			key := "errors." + ec.Reason + "." + part
@@ -195,7 +203,6 @@ func TestPhase4ErrorTextsRenderWithTheirParams(t *testing.T) {
 	provided := map[string]map[string]string{
 		"deployment.verify_unreachable": {"port": "443"},
 		"deployment.verify_chain":       {"port": "8443"},
-		"deployment.rollback_failed":    {"backup_dir": inventory.BackupRoot + "/" + uuid.NewString()},
 		"nginx.profile_missing":         {"subcommand": "nginx-dump", "profile": "nginx"},
 	}
 	// requestOnly reasons are answered to a request only (from a typed inventory error that carries
@@ -257,6 +264,32 @@ func TestPhase4TextsAreTruthfulForEveryCause(t *testing.T) {
 		"deployment.config_test_failed", "certificate.key_mismatch"} {
 		assert.NotContains(t, en("errors."+r+".cause"), "Your server was restored", r)
 	}
+	// Fix round 1: the configuration refusal covers untrusted and unsupported configurations (where
+	// nginx -t passes); the helper forgets finished operations after 7 days; no endpoint to probe is
+	// unreachable too; a missing location is unsupported; no Nginx jargon; key mismatch and invalid
+	// cover upload and deployment; a weak chain certificate counts.
+	assert.Contains(t, en("errors.nginx.config_invalid.cause"), "cannot safely read")
+	assert.NotContains(t, en("errors.nginx.config_invalid.cause"), "fails")
+	assert.Contains(t, en("errors.deployment.unknown_operation.cause"), "after 7 days")
+	assert.Contains(t, en("errors.deployment.verify_unreachable.cause"), "no HTTPS address")
+	assert.Contains(t, en("errors.nginx.location_unsupported.cause"), "no longer uses this file")
+	assert.Contains(t, en("errors.nginx.no_space.title"), "enough")
+	assert.Contains(t, en("errors.certificate.weak.title"), "in its chain")
+	assert.Contains(t, en("errors.deployment.target_not_ready.cause"), "host key fingerprint")
+	for _, ec := range phase4Codes() {
+		for _, part := range []string{"title", "cause", "action"} {
+			for _, lang := range []string{"en", "tr"} {
+				text := cat.T(lang, "errors."+ec.Reason+"."+part, nil)
+				for _, jargon := range []string{"journal", "günlük", "server block", "server bloğ", "Scan for SSH keys", "SSH anahtarlarını tara"} {
+					assert.NotContains(t, text, jargon, "%s %s %s", ec.Code, lang, part)
+				}
+			}
+		}
+	}
+	for _, r := range []string{"certificate.key_mismatch", "certificate.invalid"} {
+		assert.Contains(t, en("errors."+r+".action"), "When uploading", r)
+		assert.Contains(t, en("errors."+r+".action"), "After a deployment", r)
+	}
 	// The existing SSH text that Nginx dumps now share no longer names SSH files only.
 	assert.Contains(t, en("errors.ssh.output_too_large.action"), "Nginx")
 }
@@ -268,4 +301,43 @@ func TestPhase4CodesHaveTroubleshootingSections(t *testing.T) {
 	for _, ec := range phase4Codes() {
 		assert.Regexp(t, regexp.MustCompile(`(?m)^## `+ec.Code+`: .+\n\n\*\*Meaning\.\*\* .*reason `+"`"+regexp.QuoteMeta(ec.Reason)+"`"), string(doc), ec.Code)
 	}
+}
+
+// discoverKeys are the common-locale keys that tell the reader to choose the Nginx server page's
+// scan action, labelled Discover / Keşfet (controller ruling; Task 22 creates the control with
+// exactly this label and should pin it against this list).
+var discoverKeys = []string{
+	"errors.nginx.config_invalid.action", "errors.nginx.config_changed.action", "errors.nginx.file_changed.action",
+	"errors.nginx.location_unsupported.action", "errors.deployment.verify_other.action", "errors.deployment.superseded.action",
+	"errors.deployment.unknown_operation.action", "errors.deployment.recovery_exhausted.action",
+	"errors.deployment.outcome_unknown.action", "errors.deployment.rollback_file_changed.action",
+	"errors.deployment.rescan_needed.action", "email.deployment.superseded.body",
+}
+
+// Every text that names the control names it the same way in both languages, and no other text does.
+func TestDiscoverIsNamedConsistently(t *testing.T) {
+	en := map[string]string{}
+	tr := map[string]string{}
+	for lang, dst := range map[string]map[string]string{"en": en, "tr": tr} {
+		raw, err := locales.FS.ReadFile("common/" + lang + ".json")
+		require.NoError(t, err)
+		flat, err := i18n.Flatten(raw)
+		require.NoError(t, err)
+		for k, v := range flat {
+			dst[k] = v
+		}
+	}
+	var got []string
+	for k, v := range en {
+		if strings.Contains(v, "Discover") {
+			got = append(got, k)
+			assert.Contains(t, tr[k], "Keşfet", k)
+		}
+	}
+	for k, v := range tr {
+		if strings.Contains(v, "Keşfet") {
+			assert.Contains(t, en[k], "Discover", k)
+		}
+	}
+	assert.ElementsMatch(t, discoverKeys, got)
 }

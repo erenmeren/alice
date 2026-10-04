@@ -1110,7 +1110,7 @@ paths:
       summary: Store a certificate with its private key (PEM fields, or a PFX file in base64 with its password)
       description: >-
         Send certificate_pem (leaf first, then the chain) with private_key_pem, or pfx_base64 with pfx_password,
-        never both. The key is stored sealed and is never returned by any operation; the answer carries the stored
+        never both. Keys are matched exactly (lower case) and each may appear once; anything else is 400. The key is stored sealed and is never returned by any operation; the answer carries the stored
         certificate (public data) and the warnings that did not block it. The body is limited to 768 KiB (413
         ALC-SYS-0007; each field at most 256 KiB). Refusals: 422 ALC-CRT-0001..0007 (unreadable, key mismatch,
         expired, encrypted key, wrong PFX password, weak, unsupported key), 422 validation.failed (field errors,
@@ -1156,7 +1156,7 @@ paths:
       operationId: createCSR
       summary: Generate a private key in Alice and a signing request for it
       description: >-
-        The key never leaves Alice. 422 validation.failed for a common name or SAN that is not a DNS name (at most
+        The key never leaves Alice. The body is limited to 32 KiB (413 ALC-SYS-0007). 422 validation.failed for a common name or SAN that is not a DNS name (at most
         64 characters for the common name, at most 50 SANs) or an unknown key type. Refused with 403 ALC-LIC-0001
         while the license is locked.
       x-permission: certificates.operate
@@ -1174,6 +1174,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/CSR" }
         "403": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/certificates/csr/{id}:
@@ -1229,7 +1230,7 @@ paths:
       operationId: cancelCSR
       summary: Close a pending signing request without a certificate
       description: >-
-        No body (or {}). 409 ALC-CRT-0012 when the request is no longer pending. Refused with 403 ALC-LIC-0001 while
+        No body (or {}; at most 4 KiB). 409 ALC-CRT-0012 when the request is no longer pending. Refused with 403 ALC-LIC-0001 while
         the license is locked.
       x-permission: certificates.operate
       responses:
@@ -1241,6 +1242,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/certificates/{id}:
     parameters:
@@ -1264,7 +1266,7 @@ paths:
       operationId: deployCertificate
       summary: Deploy a certificate to 1 to 20 websites (one deployment and one job per location)
       description: >-
-        All or nothing: either every location is queued (202, one item per location in request order) or none is,
+        The body is limited to 8 KiB (413 ALC-SYS-0007). All or nothing: either every location is queued (202, one item per location in request order) or none is,
         and the error names the refusal; a refusal decided for one location carries params.location_id. Refusals:
         404 (the certificate or a location does not exist), 409 ALC-CRT-0009 (no private key), 422 ALC-CRT-0003
         (expired), 409 ALC-CRT-0014 (not valid yet), 422 ALC-CRT-0007 (key type), 409 ALC-CRT-0011 (an incomplete
@@ -1292,6 +1294,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/locations/{id}:
@@ -1304,7 +1307,7 @@ paths:
         If-Match must be a single strong validator with the location's current version (its version field), for
         example "3"; a missing or malformed If-Match, a weak validator, a list or * answers 412 ALC-SYS-0008, as does
         a version that is no longer current. At least one field; verify_port 0 and verify_sni "" clear the value.
-        Refused with 403 ALC-LIC-0001 while the license is locked.
+        The body is limited to 4 KiB (413 ALC-SYS-0007). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: targets.manage
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
@@ -1324,6 +1327,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "412": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/deployments:
@@ -1998,6 +2002,9 @@ components:
         pfx_password: { type: string, writeOnly: true }
     CertificateStored:
       type: object
+      description: >-
+        The answer of an upload and of a signing request's completion. certificate is the detail form (pem_chain,
+        locations, locations_truncated) as GET /certificates/{id} returns it: public data, saving a second request.
       required: [certificate, warnings]
       properties:
         certificate: { $ref: "#/components/schemas/CertificateDetail" }

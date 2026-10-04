@@ -387,9 +387,9 @@
         "action": "Install Nginx from your distribution or nginx.org, or add this server as a Linux server."
       },
       "config_invalid": {
-        "title": "Nginx's configuration already has an error, so Alice will not make it worse.",
-        "cause": "The command nginx -t fails on this server before Alice changed anything.",
-        "action": "Run nginx -t on the server, fix the error, then choose Discover again."
+        "title": "Nginx's configuration has a problem, so Alice will not change it.",
+        "cause": "Nginx's configuration has an error, or it uses files or settings Alice cannot safely read. Nothing was changed.",
+        "action": "Run nginx -t on the server and fix any error. If it passes, check the file named on the server's page, then choose Discover again."
       },
       "config_changed": {
         "title": "The Nginx configuration changed since Alice last looked.",
@@ -402,7 +402,7 @@
         "action": "On the Servers page choose Server type Nginx server, copy the commands and run them on the server again."
       },
       "no_space": {
-        "title": "The server has no free disk space.",
+        "title": "The server does not have enough free disk space.",
         "cause": "Alice needs room for the new files and a backup of the old ones. Nothing was changed.",
         "action": "Free some space on the server, then deploy again."
       },
@@ -413,7 +413,7 @@
       },
       "location_unsupported": {
         "title": "Alice cannot change certificates at this place.",
-        "cause": "The website's certificate setup is one Alice does not support, or its files no longer meet Alice's safety rules (for example a folder that users other than root can change). Nothing was changed.",
+        "cause": "The website's certificate setup is one Alice does not support, its files no longer meet Alice's safety rules (for example a folder that users other than root can change), or the website no longer uses this file. Nothing was changed.",
         "action": "Choose Discover on the server's page to see the reason next to the website, and change the setup on the server if you want Alice to manage it."
       },
       "busy": {
@@ -430,13 +430,13 @@
     "certificate": {
       "invalid": {
         "title": "This is not a certificate Alice can read.",
-        "cause": "Alice expects PEM text with BEGIN CERTIFICATE blocks, or a PFX file.",
-        "action": "Check that you chose the certificate file, not a request or another file."
+        "cause": "Alice expects PEM text with BEGIN CERTIFICATE blocks, or a PFX file. During a deployment, the stored certificate could not be sent to the server in that form.",
+        "action": "When uploading, check that you chose the certificate file, not a request or another file. After a deployment, upload the certificate again, then deploy it."
       },
       "key_mismatch": {
         "title": "The certificate does not match its private key.",
-        "cause": "The private key belongs to another certificate. During a deployment, Nginx reported this after the new files were written.",
-        "action": "Upload the key that was created together with this certificate. For a deployment, its status shows whether the previous files are back."
+        "cause": "When uploading: the private key belongs to another certificate. During a deployment: after the new files were written, nginx -t reported that a certificate and its key file on the server do not belong together.",
+        "action": "When uploading, use the key that was created together with this certificate. After a deployment, check which certificate and key files the websites on this server use; the deployment's status shows whether the previous files are back."
       },
       "expired": {
         "title": "This certificate has already expired.",
@@ -454,7 +454,7 @@
         "action": "Check the password, or export the PFX file again."
       },
       "weak": {
-        "title": "This certificate uses a weak key or signature.",
+        "title": "This certificate or one in its chain uses a weak key or signature.",
         "cause": "RSA keys shorter than 2048 bits and MD5 or SHA-1 signatures are no longer safe.",
         "action": "Ask your certificate authority for a certificate with a stronger key and a SHA-256 signature."
       },
@@ -519,8 +519,8 @@
       },
       "verify_failed": {
         "title": "The website still serves the previous certificate.",
-        "cause": "After the change the website kept serving the previous certificate, for example because another server block answers for this name or Nginx was not reloaded. The deployment's status shows whether the previous files are back.",
-        "action": "Check which server block answers for this name, then deploy again."
+        "cause": "After the change the website kept serving the previous certificate, for example because the website's configuration sends this name to another website, or Nginx was not reloaded. The deployment's status shows whether the previous files are back.",
+        "action": "Check which part of the Nginx configuration answers for this website's name, then deploy again."
       },
       "verify_other": {
         "title": "Alice could not confirm which certificate the website serves.",
@@ -529,7 +529,7 @@
       },
       "verify_unreachable": {
         "title": "Alice could not reach the website on port {{port}}.",
-        "cause": "Neither Alice nor the server itself could connect to the website, so the certificate it serves could not be checked. The deployment's status shows whether anything was changed.",
+        "cause": "Neither Alice nor the server itself could connect to the website, or the website has no HTTPS address Alice can check. The certificate it serves could not be checked. The deployment's status shows whether anything was changed.",
         "action": "Allow Alice to reach this port, or ask an administrator to change the website's verification settings."
       },
       "reload_failed": {
@@ -554,18 +554,18 @@
       },
       "interrupted": {
         "title": "The deployment did not finish normally.",
-        "cause": "The connection to the server or Alice itself stopped, or the server could not finish writing the files, while the deployment ran. The deployment's status shows which certificate the server has; if Alice does not know yet, it keeps checking.",
+        "cause": "While the deployment ran, the connection to the server was lost, Alice restarted, or the server could not finish writing the files. The deployment's status shows which certificate the server has; if Alice does not know yet, it keeps checking.",
         "action": "Check the deployment history. Once it shows a result, deploy again if needed."
       },
       "target_not_ready": {
         "title": "Alice cannot deploy to this server now.",
-        "cause": "The server is not connected: its fingerprint is not confirmed or has changed, Alice cannot sign in, or the server is disabled.",
+        "cause": "The server is not connected: its host key fingerprint is not confirmed or has changed, Alice cannot sign in, or the server is disabled.",
         "action": "Open the server's page, solve the problem shown there, then deploy again."
       },
       "verify_chain": {
         "title": "The website serves the expected certificate with a different chain (port {{port}}).",
         "cause": "The number of certificates the website sends differs from the chain Alice expected, for example because another file or a proxy adds or drops intermediate certificates. The deployment's status shows whether anything was changed.",
-        "action": "Check which certificate files the server blocks for this name use, then deploy again."
+        "action": "Check which certificate files this website's configuration uses, then deploy again."
       },
       "nothing_to_restore": {
         "title": "There was nothing to restore.",
@@ -579,7 +579,7 @@
       },
       "unknown_operation": {
         "title": "The server has no record of this deployment.",
-        "cause": "alice-helper has no journal for this deployment, for example because it never received it or the record was removed after 30 days.",
+        "cause": "alice-helper has no record of this deployment, for example because it never received it or because it removed the record after 7 days.",
         "action": "Check which certificate the website serves now, then choose Discover on the server's page."
       },
       "target_deleted": {
@@ -648,7 +648,7 @@
       },
       "superseded": {
         "subject": "A later operation overwrote the files of a deployment on {{target_name}}",
-        "body": "Alice could not finish or undo a certificate deployment on the server {{target_name}} (file {{cert_path}}) because a later operation has already replaced the files. Alice did not restore anything.\n\nCheck which certificate the website serves now, then choose Scan for SSH keys on the server's page in Alice: the scan also refreshes the server's certificates. Deployment: {{deployment_id}}"
+        "body": "Alice could not finish or undo a certificate deployment on the server {{target_name}} (file {{cert_path}}) because a later operation has already replaced the files. Alice did not restore anything.\n\nCheck which certificate the website serves now, then choose Discover on the server's page in Alice. Deployment: {{deployment_id}}"
       },
       "needs_attention": {
         "subject": "Alice cannot finish a deployment on {{target_name}}",

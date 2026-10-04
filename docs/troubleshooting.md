@@ -683,17 +683,17 @@ and without the confirmation for root's last key.
 
 **Meaning.** Nginx was not found on this server. (HTTP 502, reason `nginx.not_found`.)
 
-**Likely cause.** Alice looked for /usr/sbin/nginx, where the standard packages install it.
+**Likely cause.** Alice looked for `/usr/sbin/nginx`, where the standard packages install it.
 
 **What to do.** Install Nginx from your distribution or nginx.org, or add this server as a Linux server.
 
-## ALC-NGX-0002: Nginx configuration already has an error
+## ALC-NGX-0002: Nginx configuration has a problem
 
-**Meaning.** Nginx's configuration already has an error, so Alice will not make it worse. (HTTP 409, reason `nginx.config_invalid`.)
+**Meaning.** Nginx's configuration has a problem, so Alice will not change it. (HTTP 409, reason `nginx.config_invalid`.)
 
-**Likely cause.** The command nginx -t fails on this server before Alice changed anything.
+**Likely cause.** Nginx's configuration has an error, or it uses files or settings Alice cannot safely read. Nothing was changed.
 
-**What to do.** Run nginx -t on the server, fix the error, then choose Discover again.
+**What to do.** Run `nginx -t` on the server and fix any error. If it passes, check the file named on the server's page, then choose Discover again.
 
 ## ALC-NGX-0003: Nginx configuration changed
 
@@ -707,13 +707,13 @@ and without the confirmation for root's last key.
 
 **Meaning.** This server is not prepared for Nginx work. (HTTP 502, reason `nginx.profile_missing`.)
 
-**Likely cause.** The Alice account may run alice-helper for SSH keys only (Linux profile), not for certificates.
+**Likely cause.** The Alice account may run `alice-helper` for SSH keys only (Linux profile), not for certificates.
 
 **What to do.** On the Servers page choose Server type Nginx server, copy the commands and run them on the server again.
 
-## ALC-NGX-0005: No free disk space
+## ALC-NGX-0005: Not enough free disk space
 
-**Meaning.** The server has no free disk space. (HTTP 502, reason `nginx.no_space`.)
+**Meaning.** The server does not have enough free disk space. (HTTP 502, reason `nginx.no_space`.)
 
 **Likely cause.** Alice needs room for the new files and a backup of the old ones. Nothing was changed.
 
@@ -731,7 +731,7 @@ and without the confirmation for root's last key.
 
 **Meaning.** Alice cannot change certificates at this place. (HTTP 409, reason `nginx.location_unsupported`.)
 
-**Likely cause.** The website's certificate setup is one Alice does not support, or its files no longer meet Alice's safety rules (for example a folder that users other than root can change). Nothing was changed.
+**Likely cause.** The website's certificate setup is one Alice does not support, its files no longer meet Alice's safety rules (for example a folder that users other than root can change), or the website no longer uses this file. Nothing was changed.
 
 **What to do.** Choose Discover on the server's page to see the reason next to the website, and change the setup on the server if you want Alice to manage it.
 
@@ -739,7 +739,7 @@ and without the confirmation for root's last key.
 
 **Meaning.** Another certificate change is running on this server. (HTTP 409, reason `nginx.busy`.)
 
-**Likely cause.** alice-helper changes one website at a time on a server.
+**Likely cause.** `alice-helper` changes one website at a time on a server.
 
 **What to do.** Wait a minute and try again.
 
@@ -747,7 +747,7 @@ and without the confirmation for root's last key.
 
 **Meaning.** The server could not complete the file work. Nothing was changed. (HTTP 502, reason `nginx.io_error`.)
 
-**Likely cause.** alice-helper reported an input or output error before it replaced any file, for example a folder it cannot write, a read-only file system, or Nginx stopping while it was checked.
+**Likely cause.** `alice-helper` reported an input or output error before it replaced any file, for example a folder it cannot write, a read-only file system, or Nginx stopping while it was checked.
 
 **What to do.** Check the server's disks and certificate folders, then deploy again.
 
@@ -755,17 +755,17 @@ and without the confirmation for root's last key.
 
 **Meaning.** This is not a certificate Alice can read. (HTTP 422, reason `certificate.invalid`.)
 
-**Likely cause.** Alice expects PEM text with BEGIN CERTIFICATE blocks, or a PFX file.
+**Likely cause.** Alice expects PEM text with `BEGIN CERTIFICATE` blocks, or a PFX file. During a deployment, the stored certificate could not be sent to the server in that form.
 
-**What to do.** Check that you chose the certificate file, not a request or another file.
+**What to do.** When uploading, check that you chose the certificate file, not a request or another file. After a deployment, upload the certificate again, then deploy it.
 
 ## ALC-CRT-0002: Certificate and key do not match
 
 **Meaning.** The certificate does not match its private key. (HTTP 422, reason `certificate.key_mismatch`.)
 
-**Likely cause.** The private key belongs to another certificate. During a deployment, Nginx reported this after the new files were written.
+**Likely cause.** When uploading: the private key belongs to another certificate. During a deployment: after the new files were written, `nginx -t` reported that a certificate and its key file on the server do not belong together.
 
-**What to do.** Upload the key that was created together with this certificate. For a deployment, its status shows whether the previous files are back.
+**What to do.** When uploading, use the key that was created together with this certificate. After a deployment, check which certificate and key files the websites on this server use; the deployment's status shows whether the previous files are back.
 
 ## ALC-CRT-0003: Certificate expired
 
@@ -793,7 +793,7 @@ and without the confirmation for root's last key.
 
 ## ALC-CRT-0006: Weak key or signature
 
-**Meaning.** This certificate uses a weak key or signature. (HTTP 422, reason `certificate.weak`.)
+**Meaning.** This certificate or one in its chain uses a weak key or signature. (HTTP 422, reason `certificate.weak`.)
 
 **Likely cause.** RSA keys shorter than 2048 bits and MD5 or SHA-1 signatures are no longer safe.
 
@@ -827,7 +827,7 @@ and without the confirmation for root's last key.
 
 **Meaning.** This certificate's key type does not fit this place. (HTTP 409, reason `certificate.key_type_mismatch`.)
 
-**Likely cause.** Key type the website uses here: <expected>. Key type of this certificate: <actual>.
+**Likely cause.** Key type the website uses here: `<expected>`. Key type of this certificate: `<actual>`.
 
 **What to do.** Choose a certificate with the same key type, or the website's other certificate place.
 
@@ -891,9 +891,9 @@ and without the confirmation for root's last key.
 
 **Meaning.** The website still serves the previous certificate. (HTTP 502, reason `deployment.verify_failed`.)
 
-**Likely cause.** After the change the website kept serving the previous certificate, for example because another server block answers for this name or Nginx was not reloaded. The deployment's status shows whether the previous files are back.
+**Likely cause.** After the change the website kept serving the previous certificate, for example because the website's configuration sends this name to another website, or Nginx was not reloaded. The deployment's status shows whether the previous files are back.
 
-**What to do.** Check which server block answers for this name, then deploy again.
+**What to do.** Check which part of the Nginx configuration answers for this website's name, then deploy again.
 
 ## ALC-DEP-0004: Served certificate could not be confirmed
 
@@ -905,9 +905,9 @@ and without the confirmation for root's last key.
 
 ## ALC-DEP-0005: Website could not be reached for the check
 
-**Meaning.** Alice could not reach the website on port <port>. (HTTP 502, reason `deployment.verify_unreachable`.)
+**Meaning.** Alice could not reach the website on port `<port>`. (HTTP 502, reason `deployment.verify_unreachable`.)
 
-**Likely cause.** Neither Alice nor the server itself could connect to the website, so the certificate it serves could not be checked. The deployment's status shows whether anything was changed.
+**Likely cause.** Neither Alice nor the server itself could connect to the website, or the website has no HTTPS address Alice can check. The certificate it serves could not be checked. The deployment's status shows whether anything was changed.
 
 **What to do.** Allow Alice to reach this port, or ask an administrator to change the website's verification settings.
 
@@ -915,15 +915,15 @@ and without the confirmation for root's last key.
 
 **Meaning.** Nginx did not reload. (HTTP 502, reason `deployment.reload_failed`.)
 
-**Likely cause.** systemctl reload nginx failed after the new files were written. The deployment's status shows whether the previous files are back.
+**Likely cause.** `systemctl reload nginx` failed after the new files were written. The deployment's status shows whether the previous files are back.
 
-**What to do.** Run systemctl status nginx on the server to see why, then deploy again.
+**What to do.** Run `systemctl status nginx` on the server to see why, then deploy again.
 
 ## ALC-DEP-0007: Nginx rejected the new files
 
 **Meaning.** Nginx rejected the new files. (HTTP 502, reason `deployment.config_test_failed`.)
 
-**Likely cause.** nginx -t failed after the new certificate and key were written. The deployment's status shows whether the previous files are back.
+**Likely cause.** `nginx -t` failed after the new certificate and key were written. The deployment's status shows whether the previous files are back.
 
 **What to do.** Check the certificate file format and the chain, then deploy again.
 
@@ -931,23 +931,25 @@ and without the confirmation for root's last key.
 
 **Meaning.** Alice could not confirm that the previous certificate is back. Manual action is needed. (HTTP 502, reason `deployment.rollback_failed`.)
 
-**Likely cause.** The deployment failed, and putting the previous certificate and key back did not finish or could not be confirmed. A backup of the previous files is on the server in /var/lib/alice-helper/backups, in the folder named with this deployment's ID.
+**Likely cause.** The deployment failed, and putting the previous certificate and key back did not finish or could not be confirmed. A backup of the previous files is on the server in `/var/lib/alice-helper/backups`, in the folder named with this deployment's ID.
 
-**What to do.** Check the website now. Compare the files with the backup on the server, then run nginx -t and systemctl reload nginx.
+A deployment may show `ALC-DEP-0019` (the files are back but the website was not confirmed) or `ALC-DEP-0020` (another program changed the files) instead; a task (job) record always shows this code.
+
+**What to do.** Check the website now. Compare the files with the backup on the server, then run `nginx -t` and `systemctl reload nginx`.
 
 ## ALC-DEP-0009: Files restored but Nginx did not reload
 
 **Meaning.** Files are back in place but Nginx did not reload. (HTTP 502, reason `deployment.rollback_reload_failed`.)
 
-**Likely cause.** Alice restored the previous certificate and key, but systemctl reload nginx failed afterwards.
+**Likely cause.** Alice restored the previous certificate and key, but `systemctl reload nginx` failed afterwards.
 
-**What to do.** Run systemctl status nginx on the server, fix the cause, then reload Nginx.
+**What to do.** Run `systemctl status nginx` on the server, fix the cause, then reload Nginx.
 
 ## ALC-DEP-0010: Deployment did not finish normally
 
 **Meaning.** The deployment did not finish normally. (HTTP 502, reason `deployment.interrupted`.)
 
-**Likely cause.** The connection to the server or Alice itself stopped, or the server could not finish writing the files, while the deployment ran. The deployment's status shows which certificate the server has; if Alice does not know yet, it keeps checking.
+**Likely cause.** While the deployment ran, the connection to the server was lost, Alice restarted, or the server could not finish writing the files. The deployment's status shows which certificate the server has; if Alice does not know yet, it keeps checking.
 
 **What to do.** Check the deployment history. Once it shows a result, deploy again if needed.
 
@@ -955,23 +957,23 @@ and without the confirmation for root's last key.
 
 **Meaning.** Alice cannot deploy to this server now. (HTTP 409, reason `deployment.target_not_ready`.)
 
-**Likely cause.** The server is not connected: its fingerprint is not confirmed or has changed, Alice cannot sign in, or the server is disabled.
+**Likely cause.** The server is not connected: its host key fingerprint is not confirmed or has changed, Alice cannot sign in, or the server is disabled.
 
 **What to do.** Open the server's page, solve the problem shown there, then deploy again.
 
 ## ALC-DEP-0012: Website serves a different chain
 
-**Meaning.** The website serves the expected certificate with a different chain (port <port>). (HTTP 502, reason `deployment.verify_chain`.)
+**Meaning.** The website serves the expected certificate with a different chain (port `<port>`). (HTTP 502, reason `deployment.verify_chain`.)
 
 **Likely cause.** The number of certificates the website sends differs from the chain Alice expected, for example because another file or a proxy adds or drops intermediate certificates. The deployment's status shows whether anything was changed.
 
-**What to do.** Check which certificate files the server blocks for this name use, then deploy again.
+**What to do.** Check which certificate files this website's configuration uses, then deploy again.
 
 ## ALC-DEP-0013: Nothing to restore
 
 **Meaning.** There was nothing to restore. (HTTP 502, reason `deployment.nothing_to_restore`.)
 
-**Likely cause.** alice-helper found that this deployment had not changed any file, so there was nothing to put back.
+**Likely cause.** `alice-helper` found that this deployment had not changed any file, so there was nothing to put back.
 
 **What to do.** Check the deployment's result in the deployment history, then deploy again if needed.
 
@@ -987,7 +989,7 @@ and without the confirmation for root's last key.
 
 **Meaning.** The server has no record of this deployment. (HTTP 502, reason `deployment.unknown_operation`.)
 
-**Likely cause.** alice-helper has no journal for this deployment, for example because it never received it or the record was removed after 30 days.
+**Likely cause.** `alice-helper` has no record of this deployment, for example because it never received it or because it removed the record after 7 days.
 
 **What to do.** Check which certificate the website serves now, then choose Discover on the server's page.
 
@@ -1003,7 +1005,7 @@ and without the confirmation for root's last key.
 
 **Meaning.** Alice stopped trying to finish this deployment. Manual action is needed. (HTTP 502, reason `deployment.recovery_exhausted`.)
 
-**Likely cause.** For about a day Alice could not find out how the deployment ended, usually because it could not reach the server. If the change reached the server, a backup of the previous files is there in /var/lib/alice-helper/backups, in the folder named with this deployment's ID.
+**Likely cause.** For about a day Alice could not find out how the deployment ended, usually because it could not reach the server. If the change reached the server, a backup of the previous files is there in `/var/lib/alice-helper/backups`, in the folder named with this deployment's ID.
 
 **What to do.** Check the website and the server's connection now, then choose Discover on the server's page.
 
@@ -1011,7 +1013,7 @@ and without the confirmation for root's last key.
 
 **Meaning.** Alice cannot tell how this deployment ended. Manual action is needed. (HTTP 502, reason `deployment.outcome_unknown`.)
 
-**Likely cause.** Alice no longer has the records it needs to check or undo this deployment. If the change reached the server, a backup of the previous files is there in /var/lib/alice-helper/backups, in the folder named with this deployment's ID.
+**Likely cause.** Alice no longer has the records it needs to check or undo this deployment. If the change reached the server, a backup of the previous files is there in `/var/lib/alice-helper/backups`, in the folder named with this deployment's ID.
 
 **What to do.** Check the website now, then choose Discover on the server's page.
 
@@ -1021,13 +1023,13 @@ and without the confirmation for root's last key.
 
 **Likely cause.** Alice put the previous certificate and key back, but then could not confirm that the website serves the previous certificate again.
 
-**What to do.** Check the website now. If it is wrong, run nginx -t and systemctl reload nginx on the server.
+**What to do.** Check the website now. If it is wrong, run `nginx -t` and `systemctl reload nginx` on the server.
 
 ## ALC-DEP-0020: Files changed by another program during the deployment
 
 **Meaning.** Another program changed the certificate files during the deployment. Manual action is needed. (HTTP 502, reason `deployment.rollback_file_changed`.)
 
-**Likely cause.** Alice did not put the previous files back, because the files on the server are neither the ones it wrote nor the previous ones. A backup of the previous files is on the server in /var/lib/alice-helper/backups, in the folder named with this deployment's ID.
+**Likely cause.** Alice did not put the previous files back, because the files on the server are neither the ones it wrote nor the previous ones. A backup of the previous files is on the server in `/var/lib/alice-helper/backups`, in the folder named with this deployment's ID.
 
 **What to do.** Find out which program changed the files (for example certbot), check the website now, then choose Discover on the server's page.
 
