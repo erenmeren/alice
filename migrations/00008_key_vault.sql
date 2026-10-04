@@ -5,7 +5,9 @@
 -- owns, no clock defaults. Nothing here can hold a client secret, a private key, a token, a PFX or a
 -- vault secret's value: credentials stay in the Phase 3 envelope and the vault inventory is metadata.
 -- Key Vault object names are case-insensitive in Azure (and ASCII-only here), so their uniqueness
--- is on lower(name); an upsert names the conflict target as (target_id, lower(name)).
+-- is on lower(name COLLATE "C"), an ASCII fold that does not follow the database's locale (a Turkish
+-- collation folds I to a dotless i). An upsert names the conflict target exactly as
+-- (target_id, lower(name COLLATE "C")); for imports with WHERE state IN ('queued', 'running', 'uncertain').
 
 -- A vault's credential belongs to its vault (R37 item 11, R40 row 9): target_id is set in the
 -- transaction that inserts the vault, so the foreign key is checked at commit. Credentials stay
@@ -92,9 +94,10 @@ CREATE TABLE kv_certificates (
     first_seen_at       timestamptz NOT NULL,
     last_seen_at        timestamptz NOT NULL,
     missing_since       timestamptz,
-    removed_notified_at timestamptz
+    removed_notified_at timestamptz,
+    CONSTRAINT kv_certificates_id_target UNIQUE (id, target_id) -- the target of a binding's certificate (bindings_vault)
 );
-CREATE UNIQUE INDEX kv_certificates_name ON kv_certificates (target_id, lower(name));
+CREATE UNIQUE INDEX kv_certificates_name ON kv_certificates (target_id, lower(name COLLATE "C"));
 
 -- One row per version Alice listed (spec certificate_versions). certificate_id is the leaf's row once
 -- Alice read the version's details (only versions Alice saw as current have one; R40 row 17).
@@ -146,7 +149,7 @@ CREATE TABLE kv_keys (
     last_seen_at       timestamptz NOT NULL,
     missing_since      timestamptz
 );
-CREATE UNIQUE INDEX kv_keys_name ON kv_keys (target_id, lower(name));
+CREATE UNIQUE INDEX kv_keys_name ON kv_keys (target_id, lower(name COLLATE "C"));
 CREATE TABLE kv_secrets (
     id            uuid PRIMARY KEY,
     target_id     uuid NOT NULL REFERENCES targets (id),
@@ -162,7 +165,7 @@ CREATE TABLE kv_secrets (
     last_seen_at  timestamptz NOT NULL,
     missing_since timestamptz
 );
-CREATE UNIQUE INDEX kv_secrets_name ON kv_secrets (target_id, lower(name));
+CREATE UNIQUE INDEX kv_secrets_name ON kv_secrets (target_id, lower(name COLLATE "C"));
 CREATE INDEX kv_certificates_expires ON kv_certificates (expires) WHERE missing_since IS NULL;
 CREATE INDEX kv_keys_expires ON kv_keys (expires) WHERE missing_since IS NULL;
 
@@ -171,6 +174,8 @@ CREATE TABLE bindings (
     id                uuid PRIMARY KEY,
     kv_certificate_id uuid NOT NULL REFERENCES kv_certificates (id),
     kv_target_id      uuid NOT NULL REFERENCES targets (id),
+    -- kv_target_id is the vault of the certificate, not any target: a vault cannot be deleted under a live binding
+    CONSTRAINT bindings_vault FOREIGN KEY (kv_certificate_id, kv_target_id) REFERENCES kv_certificates (id, target_id),
     auto_deploy       boolean NOT NULL DEFAULT false,
     auto_since        timestamptz,           -- when automatic deployment was last turned on
     stopped_version   text NOT NULL DEFAULT '' CHECK (stopped_version ~ '^([0-9a-f]{32})?$'), -- the wave of this version stopped (R40 row 20)
@@ -220,8 +225,41 @@ CREATE TABLE kv_imports (
     CHECK (state NOT IN ('running', 'uncertain', 'succeeded') OR sent_at IS NOT NULL)
 );
 -- One active import per vault and name; names compare case-insensitively like the vault's.
-CREATE UNIQUE INDEX kv_imports_one_active ON kv_imports (target_id, lower(name)) WHERE state IN ('queued', 'running', 'uncertain');
+CREATE UNIQUE INDEX kv_imports_one_active ON kv_imports (target_id, lower(name COLLATE "C")) WHERE state IN ('queued', 'running', 'uncertain');
 CREATE INDEX kv_imports_job ON kv_imports (job_id) WHERE job_id IS NOT NULL; -- the foreign key of a pruned job
+
+-- An import is history and is never sent twice. A finished import (succeeded or failed) changes only in
+-- job_id going to NULL (the foreign key's ON DELETE SET NULL when maintenance.cleanup prunes the job, run
+-- as the table owner, passes through here); sent_at, once set, never changes; state never returns to
+-- queued; an uncertain import is settled (succeeded or failed) or stays uncertain, it is never run again.
+-- SQLSTATE Z1007. Same shape as deployments_protect_done: the invoking role, a pinned search path.
+-- +goose StatementBegin
+CREATE FUNCTION kv_imports_protect_history() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    IF OLD.finished_at IS NOT NULL THEN
+        IF NEW.job_id IS NOT NULL AND NEW.job_id IS DISTINCT FROM OLD.job_id THEN
+            RAISE EXCEPTION 'a finished import gains no job' USING ERRCODE = 'Z1007';
+        END IF;
+        IF to_jsonb(NEW) - 'job_id' IS DISTINCT FROM to_jsonb(OLD) - 'job_id' THEN
+            RAISE EXCEPTION 'a finished import is history' USING ERRCODE = 'Z1007';
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF OLD.sent_at IS NOT NULL AND NEW.sent_at IS DISTINCT FROM OLD.sent_at THEN
+        RAISE EXCEPTION 'the send time of an import never changes' USING ERRCODE = 'Z1007';
+    END IF;
+    IF NEW.state = 'queued' AND OLD.state <> 'queued' THEN
+        RAISE EXCEPTION 'an import that left the queue is never queued again' USING ERRCODE = 'Z1007';
+    END IF;
+    IF OLD.state = 'uncertain' AND NEW.state NOT IN ('uncertain', 'succeeded', 'failed') THEN
+        RAISE EXCEPTION 'an uncertain import is settled, never sent again' USING ERRCODE = 'Z1007';
+    END IF;
+    RETURN NEW;
+END $$;
+-- +goose StatementEnd
+CREATE TRIGGER kv_imports_history_frozen BEFORE UPDATE ON kv_imports
+    FOR EACH ROW EXECUTE FUNCTION kv_imports_protect_history();
 CREATE INDEX kv_imports_certificate ON kv_imports (certificate_id, created_at DESC);
 
 -- History is never deleted; vault inventory rows are marked missing, bindings soft-deleted.
@@ -241,8 +279,23 @@ GRANT UPDATE (binding_id) ON certificate_locations TO alice_app;
 GRANT UPDATE (state, version, error_code, error_params, job_id, sent_at, finished_at) ON kv_imports TO alice_app;
 
 -- +goose Down
--- Correct only on a database without vault rows (as 00006's): a vault's credential and status break the
--- restored constraints, and the whole Down is then refused and rolled back.
+-- Correct only on a database without Key Vault data (as 00006's). The Down refuses, with a clear message and
+-- SQLSTATE Z1008, when a vault target (soft-deleted ones too: targets are never deleted) or a vault
+-- credential exists, or when a server has the status degraded (the restored check would refuse it); nothing
+-- is changed then (goose runs the Down in one transaction).
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM credentials WHERE purpose = 'azure_vault') OR EXISTS (SELECT 1 FROM targets WHERE type = 'azure_key_vault') THEN
+        RAISE EXCEPTION 'cannot migrate down: Key Vault data exists (vault targets or their credentials); remove it first or restore a backup taken before 00008' USING ERRCODE = 'Z1008';
+    END IF;
+    IF EXISTS (SELECT 1 FROM targets WHERE status = 'degraded') THEN
+        RAISE EXCEPTION 'cannot migrate down: a target has the status degraded, which 00007 and earlier do not know; give it another status first' USING ERRCODE = 'Z1008';
+    END IF;
+END $$;
+-- +goose StatementEnd
+DROP TRIGGER kv_imports_history_frozen ON kv_imports;
+DROP FUNCTION kv_imports_protect_history();
 DROP TRIGGER targets_credential_check ON targets;
 DROP FUNCTION targets_check_credential();
 REVOKE UPDATE (binding_id) ON certificate_locations FROM alice_app;

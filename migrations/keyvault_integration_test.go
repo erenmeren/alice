@@ -5,6 +5,7 @@ package migrations_test
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/platform/db"
 	"alice/internal/testutil/pgtest"
 	"alice/migrations"
 )
@@ -314,10 +316,10 @@ VALUES (gen_random_uuid(), $1, $2, repeat('a', 40), true, now(), now())`, vault,
 			assert.Equal(t, "23514", sqlState(insert(table, v.target, bad)), "%s name %q", table, bad)
 		}
 	}
-	// An exact upsert key exists for the application: ON CONFLICT (target_id, lower(name)).
+	// The exact upsert key the application writes: ON CONFLICT (target_id, lower(name COLLATE "C")).
 	require.NoError(t, exec(t, d.App, `INSERT INTO kv_certificates (id, target_id, name, listed_thumbprint, enabled, first_seen_at, last_seen_at)
 VALUES (gen_random_uuid(), $1, 'WEB-CERT', repeat('d', 40), false, now(), now())
-ON CONFLICT (target_id, lower(name)) DO UPDATE SET enabled = EXCLUDED.enabled, listed_thumbprint = EXCLUDED.listed_thumbprint`, v.target))
+ON CONFLICT (target_id, lower(name COLLATE "C")) DO UPDATE SET enabled = EXCLUDED.enabled, listed_thumbprint = EXCLUDED.listed_thumbprint`, v.target))
 }
 
 func TestKeyVaultInventoryChecks(t *testing.T) {
@@ -362,6 +364,12 @@ func TestKeyVaultInventoryChecks(t *testing.T) {
 	assert.Equal(t, "23514", sqlState(exec(t, d.App, `INSERT INTO kv_keys (id, target_id, name, details_problem, enabled, first_seen_at, last_seen_at) VALUES (gen_random_uuid(), $1, 'k3', 'broken', true, now(), now())`, v.target)))
 	require.NoError(t, exec(t, d.App, `INSERT INTO kv_keys (id, target_id, name, key_type, curve, details_problem, enabled, first_seen_at, last_seen_at) VALUES (gen_random_uuid(), $1, 'k4', 'ec', 'P-384', 'forbidden', true, now(), now())`, v.target))
 	assert.Equal(t, "23514", sqlState(exec(t, d.App, `INSERT INTO kv_secrets (id, target_id, name, content_type, enabled, first_seen_at, last_seen_at) VALUES (gen_random_uuid(), $1, 's1', repeat('x', 256), true, now(), now())`, v.target)))
+
+	// bindings: kv_target_id is the vault of the certificate (composite foreign key).
+	w := addVault(t, d, "kv2")
+	server := seedTarget(t, d, "web-01", "web-01.example.com")
+	assert.Equal(t, "23503", sqlState(insertBinding(t, d, cert, w.target)), "a binding naming another vault than its certificate's")
+	assert.Equal(t, "23503", sqlState(insertBinding(t, d, cert, server)), "a binding naming a server")
 
 	// bindings: one live binding per vault certificate; automatic deployment needs its start time.
 	require.NoError(t, insertBinding(t, d, cert, v.target))
@@ -676,6 +684,8 @@ VALUES (gen_random_uuid(), $1, $2, $3, 'manual', 'queued', 'pending', repeat('e'
 	_, err = p.DownTo(ctx, 7)
 	require.NoError(t, err)
 	assert.Equal(t, want, count(), "earlier data survives the Down")
+	assert.Equal(t, "42501", sqlState(exec(t, d.App, "UPDATE targets SET credential_id = credential_id")),
+		"the Down takes UPDATE (credential_id) back from the application")
 	_, err = p.Up(ctx)
 	require.NoError(t, err)
 
@@ -683,6 +693,8 @@ VALUES (gen_random_uuid(), $1, $2, $3, 'manual', 'queued', 'pending', repeat('e'
 	addVault(t, d, "kv1")
 	_, err = p.DownTo(ctx, 7)
 	require.Error(t, err, "a Down over vault data is refused")
+	assert.Equal(t, "Z1008", sqlState(err), "by the Down's own first statement, not by whichever restored CHECK fails first")
+	assert.ErrorContains(t, err, "Key Vault data exists")
 	version, err = p.GetDBVersion(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, int64(8), version)
@@ -700,4 +712,195 @@ func scanInt(t *testing.T, d *pgtest.DB, sql string) int {
 	var n int
 	require.NoError(t, d.Owner.QueryRow(context.Background(), sql).Scan(&n))
 	return n
+}
+
+// The Down refuses explicitly and for exactly two reasons: Key Vault data exists (a vault target,
+// soft-deleted or not, or a vault credential), or a server has the status degraded (00008 added it
+// and the restored check would refuse it). Both leave the schema at 00008; without them it goes down.
+func TestMigration00008DownRefusals(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	p, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(d.Owner), migrations.FS)
+	require.NoError(t, err)
+	refused := func(contains string) {
+		t.Helper()
+		_, err := p.DownTo(ctx, 7)
+		require.Error(t, err)
+		assert.Equal(t, "Z1008", sqlState(err), contains)
+		assert.ErrorContains(t, err, contains)
+		version, err := p.GetDBVersion(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(8), version)
+		assert.True(t, tableExists(t, d, "kv_certificates"))
+	}
+
+	server := seedTarget(t, d, "web-01", "web-01.example.com")
+	require.NoError(t, exec(t, d.App, "UPDATE targets SET status = 'degraded' WHERE id = $1", server))
+	refused("degraded")
+	require.NoError(t, exec(t, d.App, "UPDATE targets SET status = 'ok' WHERE id = $1", server))
+
+	v := addVault(t, d, "kv1")
+	require.NoError(t, exec(t, d.App, "UPDATE targets SET deleted_at = now() WHERE id = $1", v.target))
+	refused("Key Vault data exists") // a soft-deleted vault is still vault data
+
+	// No vault data and no degraded server: the Down goes through.
+	d2 := pgtest.New(t)
+	p2, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(d2.Owner), migrations.FS)
+	require.NoError(t, err)
+	seedTarget(t, d2, "web-01", "web-01.example.com")
+	_, err = p2.DownTo(ctx, 7)
+	require.NoError(t, err, "no vault data and no degraded server: the Down goes through")
+	assert.False(t, tableExists(t, d2, "kv_certificates"))
+}
+
+// Imports are history. A finished import (succeeded or failed) changes only in job_id going to NULL
+// (a pruned job); sent_at, once set, never changes; state never returns to queued; an uncertain
+// import is settled (succeeded, failed) or stays uncertain, it is not re-run. SQLSTATE Z1007.
+func TestFinishedImportsAreFrozen(t *testing.T) {
+	d := pgtest.New(t)
+	v := addVault(t, d, "kv1")
+	leaf := insertCertificate(t, d)
+	n := 0
+	newImport := func() string {
+		n++
+		return scanID(t, d, `INSERT INTO kv_imports (id, certificate_id, target_id, name, new_version, state, thumbprint, created_at)
+VALUES (gen_random_uuid(), $1, $2, $3, false, 'queued', repeat('f', 40), now()) RETURNING id::text`, leaf, v.target, fmt.Sprintf("imp-%d", n))
+	}
+	up := func(id, set string, args ...any) string {
+		return sqlState(exec(t, d.App, "UPDATE kv_imports SET "+set+" WHERE id = '"+id+"'", args...))
+	}
+	version := strings.Repeat("a", 32)
+	sent := func(id string) { require.Equal(t, "", up(id, "state = 'running', sent_at = now()")) }
+
+	// Legal paths.
+	ok := newImport()
+	require.Equal(t, "", up(ok, "job_id = NULL, error_code = 'x'"), "queued rows change freely")
+	sent(ok)
+	require.Equal(t, "", up(ok, "state = 'succeeded', version = $1, finished_at = now()", version), "running -> succeeded")
+	refusedQueued := newImport()
+	require.Equal(t, "", up(refusedQueued, "state = 'failed', finished_at = now(), error_code = 'azure.forbidden'"), "queued -> failed: refused before any send")
+	lost := newImport()
+	sent(lost)
+	require.Equal(t, "", up(lost, "state = 'uncertain'"), "running -> uncertain")
+	require.Equal(t, "", up(lost, "state = 'uncertain', error_code = 'azure.unreachable'"), "an uncertain import may be annotated")
+	require.Equal(t, "", up(lost, "state = 'succeeded', version = $1, finished_at = now()", version), "uncertain -> succeeded (a poll saw it)")
+	timeout := newImport()
+	sent(timeout)
+	require.Equal(t, "", up(timeout, "state = 'uncertain'"))
+	require.Equal(t, "", up(timeout, "state = 'failed', finished_at = now(), error_code = 'kv.import_outcome_unknown'"), "uncertain -> failed (24 hours)")
+	failedSent := newImport()
+	sent(failedSent)
+	require.Equal(t, "", up(failedSent, "state = 'failed', finished_at = now(), error_code = 'azure.forbidden'"), "running -> failed")
+
+	// Finished rows: nothing reopens or changes.
+	for name, id := range map[string]string{"succeeded": ok, "failed before the send": refusedQueued, "failed": failedSent, "settled from uncertain": lost, "timed out": timeout} {
+		assert.Equal(t, "Z1007", up(id, "state = 'queued', finished_at = NULL, sent_at = NULL"), name+": reopened")
+		assert.Equal(t, "Z1007", up(id, "state = 'running', finished_at = NULL"), name+": reopened as running")
+		assert.Equal(t, "Z1007", up(id, "state = 'uncertain', finished_at = NULL"), name+": reopened as uncertain")
+		if id != refusedQueued { // never sent: its sent_at is NULL already
+			assert.Equal(t, "Z1007", up(id, "sent_at = NULL"), name+": sent_at cleared")
+		}
+		assert.Equal(t, "Z1007", up(id, "sent_at = now() + interval '1 hour'"), name+": sent_at changed")
+		assert.Equal(t, "Z1007", up(id, "error_code = 'other'"), name+": error rewritten")
+		assert.Equal(t, "Z1007", up(id, "version = repeat('b', 32)"), name+": version rewritten")
+		assert.Equal(t, "Z1007", up(id, "finished_at = now() + interval '1 day'"), name+": finish time moved")
+	}
+	assert.Equal(t, "Z1007", up(ok, "state = 'failed', error_code = 'x'"), "succeeded cannot become failed")
+	assert.Equal(t, "Z1007", up(failedSent, "state = 'succeeded', version = repeat('a', 32)"), "failed cannot become succeeded")
+
+	// Unfinished rows: sent_at is fixed once set, state never goes back to queued, uncertain is not re-run.
+	run := newImport()
+	sent(run)
+	assert.Equal(t, "Z1007", up(run, "sent_at = NULL"), "running: sent_at cleared")
+	assert.Equal(t, "Z1007", up(run, "sent_at = now() + interval '1 minute'"), "running: sent_at changed")
+	assert.Equal(t, "Z1007", up(run, "state = 'queued', sent_at = NULL"), "running -> queued")
+	assert.Equal(t, "", up(run, "sent_at = sent_at, error_code = 'retrying'"), "an unchanged sent_at is fine")
+	assert.Equal(t, "", up(run, "state = 'uncertain'"))
+	assert.Equal(t, "Z1007", up(run, "state = 'running'"), "uncertain -> running: an uncertain import is never sent again")
+	assert.Equal(t, "Z1007", up(run, "state = 'queued', sent_at = NULL"), "uncertain -> queued")
+	assert.Equal(t, "Z1007", up(run, "sent_at = NULL"), "uncertain: sent_at cleared")
+
+	// A finished import loses its pruned job, whoever prunes it; it never gains or swaps one.
+	jobID, err := seedJob(t, d, nil, "succeeded")
+	require.NoError(t, err)
+	withJob := newImport()
+	require.Equal(t, "", up(withJob, "job_id = $1", jobID))
+	require.Equal(t, "", up(withJob, "state = 'failed', finished_at = now(), error_code = 'x'"))
+	other, err := seedJob(t, d, nil, "succeeded")
+	require.NoError(t, err)
+	assert.Equal(t, "Z1007", up(withJob, "job_id = $1", other), "a finished import's job is not swapped")
+	require.NoError(t, exec(t, d.App, "DELETE FROM jobs WHERE id = $1", jobID), "pruning the job of a finished import works (ON DELETE SET NULL)")
+	var jobNull bool
+	require.NoError(t, d.Owner.QueryRow(context.Background(), "SELECT job_id IS NULL FROM kv_imports WHERE id = $1", withJob).Scan(&jobNull))
+	assert.True(t, jobNull)
+	assert.Equal(t, "", up(withJob, "job_id = NULL"), "clearing the job by hand is the same legal change")
+	assert.Equal(t, "Z1007", up(ok, "job_id = $1", other), "a finished import never gains a job")
+	assert.Equal(t, "Z1007", sqlState(exec(t, d.Owner, "UPDATE kv_imports SET state = 'queued', finished_at = NULL, sent_at = NULL WHERE id = $1", ok)), "the owner role too")
+}
+
+// Names compare by an ASCII fold that does not depend on the database's locale: under a Turkish
+// collation lower('WEB-I') is 'web-ı', while Go folds ASCII. The four name indexes use
+// lower(name COLLATE "C"), and so must every conflict target.
+func TestKeyVaultNameIndexesAreLocaleIndependent(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	for _, idx := range []string{"kv_certificates_name", "kv_keys_name", "kv_secrets_name", "kv_imports_one_active"} {
+		var def string
+		require.NoError(t, d.Owner.QueryRow(ctx, "SELECT indexdef FROM pg_indexes WHERE indexname = $1", idx).Scan(&def))
+		assert.Contains(t, def, `lower((name COLLATE "C"))`, idx)
+	}
+
+	// The upsert forms the application writes, run as alice_app, including the partial index of imports.
+	v := addVault(t, d, "kv1")
+	leaf := insertCertificate(t, d)
+	for i := 0; i < 2; i++ {
+		require.NoError(t, exec(t, d.App, `INSERT INTO kv_certificates (id, target_id, name, listed_thumbprint, enabled, first_seen_at, last_seen_at)
+VALUES (gen_random_uuid(), $1, 'WEB-I', repeat('a', 40), true, now(), now())
+ON CONFLICT (target_id, lower(name COLLATE "C")) DO UPDATE SET enabled = EXCLUDED.enabled`, v.target))
+	}
+	require.NoError(t, exec(t, d.App, `INSERT INTO kv_imports (id, certificate_id, target_id, name, new_version, state, thumbprint, created_at)
+VALUES (gen_random_uuid(), $1, $2, 'WEB-I', false, 'queued', repeat('f', 40), now())
+ON CONFLICT (target_id, lower(name COLLATE "C")) WHERE state IN ('queued', 'running', 'uncertain') DO NOTHING`, leaf, v.target))
+	require.NoError(t, exec(t, d.App, `INSERT INTO kv_imports (id, certificate_id, target_id, name, new_version, state, thumbprint, created_at)
+VALUES (gen_random_uuid(), $1, $2, 'web-i', false, 'queued', repeat('f', 40), now())
+ON CONFLICT (target_id, lower(name COLLATE "C")) WHERE state IN ('queued', 'running', 'uncertain') DO NOTHING`, leaf, v.target))
+	assert.Equal(t, 1, scanInt(t, d, "SELECT count(*) FROM kv_imports"))
+	assert.Equal(t, 1, scanInt(t, d, "SELECT count(*) FROM kv_certificates"))
+
+	// A database whose default collation is Turkish: lower() there folds I to a dotless i, so an
+	// index on lower(name) would let WEB-I and web-i live side by side. Skipped without ICU.
+	var turkish string
+	if err := d.Owner.QueryRow(ctx, `SELECT lower('WEB-I' COLLATE "tr-TR-x-icu")`).Scan(&turkish); err != nil || turkish == "web-i" {
+		t.Skipf("no Turkish ICU collation here (%v, %q): the index definitions above are the check", err, turkish)
+	}
+	own, err := url.Parse(d.OwnerURL)
+	require.NoError(t, err)
+	name := "tr_" + strings.TrimPrefix(strings.TrimPrefix(own.Path, "/"), "test_")
+	_, err = d.Owner.Exec(ctx, "CREATE DATABASE "+name+" TEMPLATE template0 LOCALE_PROVIDER icu ICU_LOCALE 'tr-TR' LOCALE 'C' ENCODING 'UTF8'")
+	if err != nil {
+		t.Skipf("cannot create a Turkish database: %v", err)
+	}
+	own.Path = "/" + name
+	pool, err := db.Open(ctx, own.String())
+	require.NoError(t, err)
+	defer pool.Close()
+	require.NoError(t, db.Migrate(ctx, pool, migrations.FS))
+	var lowered string
+	require.NoError(t, pool.QueryRow(ctx, "SELECT lower('WEB-I')").Scan(&lowered))
+	require.NotEqual(t, "web-i", lowered, "this database really folds the Turkish way")
+	var target, cred = "00000000-0000-0000-0000-0000000000e1", "00000000-0000-0000-0000-0000000000e2"
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, insertVaultCredential, cred, "azure_sp_secret", target)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, insertVaultTarget, target, "vault tr", "https://kv-tr.vault.azure.net", "kv-tr.vault.azure.net", cred)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+	ins := func(name string) error {
+		_, err := pool.Exec(ctx, `INSERT INTO kv_certificates (id, target_id, name, listed_thumbprint, enabled, first_seen_at, last_seen_at)
+VALUES (gen_random_uuid(), $1, $2, repeat('a', 40), true, now(), now())`, target, name)
+		return err
+	}
+	require.NoError(t, ins("WEB-I"))
+	assert.Equal(t, "23505", sqlState(ins("web-i")), "WEB-I and web-i collide even in a Turkish database")
 }
