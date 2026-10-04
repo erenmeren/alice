@@ -2,7 +2,7 @@ import { http, HttpResponse } from 'msw';
 import { QueryClient } from '@tanstack/react-query';
 import { errorResponse } from '../test/fixtures';
 import { server } from '../test/server';
-import { apiFetch, ApiError } from './client';
+import { apiFetch, ApiError, NetworkError } from './client';
 import { queryDefaults, retryDelay, shouldRetry } from './retry';
 
 function apiError(status: number, retryable: boolean, retryAfter: number | null = null) {
@@ -18,7 +18,7 @@ describe('retry policy', () => {
     expect(shouldRetry(0, apiError(503, true))).toBe(true);
     expect(shouldRetry(1, apiError(503, true))).toBe(true);
     expect(shouldRetry(2, apiError(503, true))).toBe(false);
-    expect(shouldRetry(0, new TypeError('Failed to fetch'))).toBe(true);
+    expect(shouldRetry(0, new NetworkError('network failure'))).toBe(true);
     expect(shouldRetry(0, new Error('boom'))).toBe(false);
   });
 
@@ -32,8 +32,8 @@ describe('retry policy', () => {
     expect(retryDelay(0, apiError(503, true, 0))).toBe(0);
     expect(retryDelay(0, apiError(503, true, 600))).toBe(30000);
     expect(retryDelay(0, apiError(503, true))).toBe(1000);
-    expect(retryDelay(1, new TypeError('x'))).toBe(2000);
-    expect(retryDelay(10, new TypeError('x'))).toBe(30000);
+    expect(retryDelay(1, new NetworkError('x'))).toBe(2000);
+    expect(retryDelay(10, new NetworkError('x'))).toBe(30000);
   });
 
   it('never retries mutations', () => {

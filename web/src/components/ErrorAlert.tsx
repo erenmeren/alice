@@ -1,6 +1,6 @@
 import { Alert, List, Text } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
-import { ApiError } from '../api/client';
+import { ApiError, NetworkError } from '../api/client';
 
 // ErrorAlert shows an error in the user's language: what happened, what to do, and the request ID.
 export function ErrorAlert({ error }: { error: unknown }) {
@@ -8,8 +8,8 @@ export function ErrorAlert({ error }: { error: unknown }) {
   if (!error) return null;
 
   if (!(error instanceof ApiError)) {
-    // fetch() rejects with a TypeError when the network or the server is unreachable.
-    if (error instanceof TypeError) {
+    // fetch() rejects when the network or the server is unreachable (apiFetch wraps it in NetworkError).
+    if (error instanceof NetworkError || error instanceof TypeError) {
       return (
         <Alert color="red" role="alert" title={t('ui.networkErrorTitle')}>
           {t('ui.networkErrorAction')}

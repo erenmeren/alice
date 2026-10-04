@@ -29,6 +29,15 @@ export class ApiError extends Error {
   }
 }
 
+// NetworkError is a fetch() that rejected: the network or the server was unreachable. It is the
+// only non-API failure the screens treat as transient (a TypeError from our own code is a bug).
+export class NetworkError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'NetworkError';
+  }
+}
+
 export function isApiError(e: unknown, reason?: string): e is ApiError {
   return e instanceof ApiError && (reason === undefined || e.reason === reason);
 }
@@ -62,6 +71,8 @@ export interface FetchOptions {
   signal?: AbortSignal;
   // quietUnauthorized suppresses the session-ended event (used by the initial session probe).
   quietUnauthorized?: boolean;
+  // headers are extra request headers (for example If-Match); they never replace the fixed ones.
+  headers?: Record<string, string>;
 }
 
 function parseRetryAfter(value: string | null): number | null {
@@ -80,17 +91,24 @@ function parseErrorBody(text: string): ApiErrorBody['error'] | null {
 
 export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
   const method = opts.method ?? 'GET';
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const headers: Record<string, string> = { ...opts.headers, Accept: 'application/json' };
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (method !== 'GET' && csrfToken) headers['X-CSRF-Token'] = csrfToken;
 
-  const res = await fetch(new URL(path, window.location.origin), {
-    method,
-    headers,
-    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-    credentials: 'same-origin',
-    signal: opts.signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(new URL(path, window.location.origin), {
+      method,
+      headers,
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+      credentials: 'same-origin',
+      signal: opts.signal,
+    });
+  } catch (e) {
+    // An aborted request stays an AbortError: the caller cancelled it, nothing failed.
+    if (e instanceof Error && e.name === 'AbortError') throw e;
+    throw new NetworkError('network failure', { cause: e });
+  }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   if (!res.ok) {

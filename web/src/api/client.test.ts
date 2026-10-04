@@ -1,7 +1,7 @@
 import { http, HttpResponse } from 'msw';
 import { server } from '../test/server';
 import { errorResponse } from '../test/fixtures';
-import { apiFetch, ApiError, onUnauthorized, setCsrfToken } from './client';
+import { apiFetch, ApiError, NetworkError, onUnauthorized, setCsrfToken } from './client';
 
 describe('apiFetch', () => {
   it('sends JSON with the CSRF token on state-changing requests only', async () => {
@@ -71,5 +71,14 @@ describe('apiFetch', () => {
     off();
     await apiFetch('/api/v1/ended').catch(() => undefined);
     expect(calls).toEqual(['ended']);
+  });
+
+  it('wraps a rejected fetch in NetworkError and sends extra headers', async () => {
+    server.use(http.get('/api/v1/down', () => HttpResponse.error()));
+    await expect(apiFetch('/api/v1/down')).rejects.toBeInstanceOf(NetworkError);
+    let ifMatch: string | null = null;
+    server.use(http.patch('/api/v1/etag', ({ request }) => { ifMatch = request.headers.get('If-Match'); return HttpResponse.json({}); }));
+    await apiFetch('/api/v1/etag', { method: 'PATCH', body: {}, headers: { 'If-Match': '"3"' } });
+    expect(ifMatch).toBe('"3"');
   });
 });

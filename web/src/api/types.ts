@@ -437,3 +437,224 @@ export interface JobQuery {
   target_id?: string;
   cursor?: string | null;
 }
+
+// --- Phase 4: TLS certificates, signing requests, Nginx locations and deployments ---
+// Shapes follow api/openapi.yaml (the source of truth); fields the API documents with "known
+// values" are typed as unions plus string where "a newer server may add others".
+
+// 'azure_kv' is reserved by the inventory (a later phase); the API lists the other three today.
+export type CertificateSource = 'discovered' | 'uploaded' | 'csr' | 'azure_kv';
+export type KeyAlgorithm = 'rsa' | 'ecdsa' | 'ed25519' | 'other';
+export type CSRStatus = 'pending' | 'completed' | 'cancelled';
+export type CSRKeyType = 'ecdsa-p256' | 'rsa-3072' | 'rsa-4096';
+export type ExpiryFilter = '' | 'expired' | '30' | '60';
+
+export interface Certificate {
+  id: string;
+  fingerprint: string;
+  subject_cn: string;
+  subject: string;
+  issuer: string;
+  serial: string;
+  sans: string[];
+  not_before: string;
+  not_after: string;
+  key_algorithm: KeyAlgorithm;
+  key_bits: number;
+  source: CertificateSource;
+  label: string;
+  has_private_key: boolean;
+  chain_complete: boolean;
+  self_signed: boolean;
+  location_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+// CertificateDetail is GET /certificates/{id} and the certificate of an upload or a completion.
+export interface CertificateDetail extends Certificate {
+  pem_chain: string;
+  locations: CertificateLocation[];
+  locations_truncated: boolean;
+}
+
+export interface CertificateRef {
+  id: string;
+  subject_cn: string;
+  label: string;
+  fingerprint: string;
+  not_after: string;
+}
+
+export interface CertListen {
+  addr: string;
+  port: number;
+  default_server: boolean;
+}
+
+export interface CertServer {
+  names: string[];
+  listens: CertListen[];
+  file: string;
+  line: number;
+}
+
+export interface CertificateLocation {
+  id: string;
+  target_id: string;
+  target_name: string;
+  cert_path: string;
+  key_path: string;
+  resolved_cert_path: string;
+  key_type: '' | 'rsa' | 'ecdsa';
+  certificate: CertificateRef | null;
+  servers: CertServer[];
+  supported: boolean;
+  unsupported_reason: string;
+  problem: string;
+  key_problem: string;
+  inherited: boolean;
+  custom_location: boolean;
+  symlinked: boolean;
+  key_exists: boolean;
+  key_mode: string;
+  key_owner: string;
+  key_group: string;
+  warnings: string[];
+  deployed_fingerprint: string;
+  changed_outside_at: string | null;
+  verify_port: number | null;
+  verify_sni: string;
+  skip_verify: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+  missing_since: string | null;
+  version: number;
+  active_deployment_id: string | null;
+}
+
+export interface CertificateLocationList {
+  items: CertificateLocation[];
+  // truncated is true when missing locations were left out (at most 1000 are returned).
+  truncated: boolean;
+}
+
+export type DeploymentStatus = 'pending' | 'running' | 'succeeded' | 'unchanged' | 'failed' | 'rolled_back' | 'rollback_failed' | 'needs_attention';
+export type DeploymentState = 'queued' | 'precheck' | 'deploying' | 'recovering' | 'done';
+export type StepStatus = 'started' | 'ok' | 'failed' | 'skipped';
+
+export interface DeploymentStep {
+  n: number;
+  // name is a code from the server; a newer server may add names (see DEPLOYMENT_STEP_NAMES).
+  name: string;
+  status: StepStatus;
+  at: string;
+  params: Record<string, string>;
+}
+
+export interface ErrorRef {
+  code: string;
+  reason: string;
+  params?: Record<string, string>;
+}
+
+export interface Deployment {
+  id: string;
+  certificate_id: string;
+  certificate_name: string;
+  location_id: string;
+  target_id: string;
+  target_name: string;
+  cert_path: string;
+  key_path: string;
+  job_id: string | null;
+  job_status: string;
+  trigger: string;
+  state: DeploymentState;
+  status: DeploymentStatus;
+  result: '' | 'committed' | 'unchanged' | 'no_change' | 'rolled_back' | 'rollback_failed' | 'uncertain';
+  phase: '' | 'none' | 'prepared' | 'writing' | 'committed' | 'unchanged' | 'restoring' | 'restored' | 'restore_failed';
+  new_fingerprint: string;
+  previous_fingerprint: string;
+  confirm_incomplete_chain: boolean;
+  verified: '' | 'remote' | 'local' | 'skipped';
+  verify_failed: ErrorRef | null;
+  error: ErrorRef | null;
+  failed_step: string;
+  cause_step: string;
+  helper_error: string;
+  backup_dir: string;
+  requested_by: string | null;
+  requested_by_name: string;
+  recovery_attempts: number;
+  recover_after: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface DeploymentDetail extends Deployment {
+  steps: DeploymentStep[];
+}
+
+export interface CSR {
+  id: string;
+  common_name: string;
+  sans: string[];
+  key_algorithm: 'rsa' | 'ecdsa';
+  key_bits: number;
+  csr_pem: string;
+  status: CSRStatus;
+  certificate_id: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface CertificateQuery {
+  target_id?: string;
+  source?: CertificateSource | '';
+  q?: string;
+  expiry?: ExpiryFilter;
+  cursor?: string | null;
+  limit?: number;
+}
+
+export interface DeploymentQuery {
+  target_id?: string;
+  certificate_id?: string;
+  location_id?: string;
+  cursor?: string | null;
+  limit?: number;
+}
+
+// UploadRequest holds secrets (private key, PFX bytes, PFX password): it exists only in the upload
+// dialog's component state and in the one request body.
+export interface UploadRequest {
+  label?: string;
+  certificate_pem?: string;
+  private_key_pem?: string;
+  pfx_base64?: string;
+  pfx_password?: string;
+}
+
+export interface UploadResult {
+  certificate: CertificateDetail;
+  // warnings: not_yet_valid, chain_incomplete, chain_certificate_expired, csr_name_mismatch (see UPLOAD_WARNINGS).
+  warnings: string[];
+}
+
+export interface DeployResult {
+  deployments: { id: string; job_id: string; location_id: string; status_url: string; deployment_url: string; warnings: string[] }[];
+}
+
+export interface CSRCreateRequest {
+  common_name: string;
+  sans: string[];
+  key_type: CSRKeyType;
+}
+
+export interface LocationPatch {
+  verify_port?: number;
+  verify_sni?: string;
+  skip_verify?: boolean;
+}

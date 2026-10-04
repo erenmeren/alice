@@ -32,6 +32,20 @@ import type {
   SSHKeyPage,
   SSHKeyQuery,
   Target,
+  Certificate,
+  CertificateDetail,
+  CertificateLocation,
+  CertificateLocationList,
+  CertificateQuery,
+  CSR,
+  CSRCreateRequest,
+  DeployResult,
+  Deployment,
+  DeploymentDetail,
+  DeploymentQuery,
+  LocationPatch,
+  UploadRequest,
+  UploadResult,
   TargetCreated,
   TargetCreateRequest,
 } from './types';
@@ -246,3 +260,66 @@ export async function listAllTargets(): Promise<{ items: Target[]; next_cursor: 
   }
   return { items, next_cursor: null };
 }
+
+// Certificates (Phase 4)
+// The query string order is fixed (target_id, source, q, expiry, cursor, limit; empty values omitted).
+export function listCertificates(q: CertificateQuery = {}): Promise<{ items: Certificate[]; next_cursor: string | null }> {
+  const params = new URLSearchParams();
+  if (q.target_id) params.set('target_id', q.target_id);
+  if (q.source) params.set('source', q.source);
+  if (q.q) params.set('q', q.q);
+  if (q.expiry) params.set('expiry', q.expiry);
+  if (q.cursor) params.set('cursor', q.cursor);
+  if (q.limit) params.set('limit', String(q.limit));
+  const qs = params.toString();
+  return apiFetch(`${v1}/certificates${qs ? `?${qs}` : ''}`);
+}
+
+export const getCertificate = (id: string) => apiFetch<CertificateDetail>(`${v1}/certificates/${enc(id)}`);
+
+// uploadCertificate sends secrets (private key, PFX bytes, password). The caller keeps them in
+// component state only and never in a query key or cache.
+export const uploadCertificate = (req: UploadRequest) =>
+  apiFetch<UploadResult>(`${v1}/certificates/upload`, { method: 'POST', body: req });
+
+export const deployCertificate = (id: string, locationIds: string[], confirmIncompleteChain: boolean) =>
+  apiFetch<DeployResult>(`${v1}/certificates/${enc(id)}/deploy`, {
+    method: 'POST',
+    body: { location_ids: locationIds, confirm_incomplete_chain: confirmIncompleteChain },
+  });
+
+export const listCSRs = () => apiFetch<{ items: CSR[] }>(`${v1}/certificates/csr`);
+
+export const createCSR = (req: CSRCreateRequest) => apiFetch<CSR>(`${v1}/certificates/csr`, { method: 'POST', body: req });
+
+export const completeCSR = (id: string, certificatePem: string, label?: string) =>
+  apiFetch<UploadResult>(`${v1}/certificates/csr/${enc(id)}/actions/complete`, {
+    method: 'POST',
+    body: label ? { certificate_pem: certificatePem, label } : { certificate_pem: certificatePem },
+  });
+
+export const cancelCSR = (id: string) => apiFetch<CSR>(`${v1}/certificates/csr/${enc(id)}/actions/cancel`, { method: 'POST' });
+
+export const listLocations = (targetId: string, missing = false) =>
+  apiFetch<CertificateLocationList>(`${v1}/targets/${enc(targetId)}/certificate-locations${missing ? '?missing=true' : ''}`);
+
+// updateLocation needs the location's current version as a strong If-Match validator ("3").
+export const updateLocation = (id: string, version: number, patch: LocationPatch) =>
+  apiFetch<CertificateLocation>(`${v1}/locations/${enc(id)}`, {
+    method: 'PATCH',
+    body: patch,
+    headers: { 'If-Match': `"${version}"` },
+  });
+
+export function listDeployments(q: DeploymentQuery = {}): Promise<{ items: Deployment[]; next_cursor: string | null }> {
+  const params = new URLSearchParams();
+  if (q.target_id) params.set('target_id', q.target_id);
+  if (q.certificate_id) params.set('certificate_id', q.certificate_id);
+  if (q.location_id) params.set('location_id', q.location_id);
+  if (q.cursor) params.set('cursor', q.cursor);
+  if (q.limit) params.set('limit', String(q.limit));
+  const qs = params.toString();
+  return apiFetch(`${v1}/deployments${qs ? `?${qs}` : ''}`);
+}
+
+export const getDeployment = (id: string) => apiFetch<DeploymentDetail>(`${v1}/deployments/${enc(id)}`);

@@ -1,4 +1,4 @@
-import { isApiError } from './client';
+import { isApiError, NetworkError } from './client';
 import { getJob } from './endpoints';
 import type { Job, JobStatus } from './types';
 
@@ -8,6 +8,12 @@ const TERMINAL: ReadonlySet<JobStatus> = new Set<JobStatus>(['succeeded', 'faile
 
 export function isTerminal(status: JobStatus): boolean {
   return TERMINAL.has(status);
+}
+
+// isTransient is a failure worth polling through: a dropped connection or a retryable API answer.
+// Any other error (a bug, a 404) ends the wait.
+export function isTransient(e: unknown): boolean {
+  return isApiError(e) ? e.retryable : e instanceof NetworkError;
 }
 
 // JobTimeoutError means the job did not finish while the screen waited; job is its last state.
@@ -68,7 +74,7 @@ export async function waitForJob(
     } catch (e) {
       // A dropped connection or a retryable answer (for example while Alice restarts) must not
       // end the wait: the job goes on without us. Anything else, or the deadline, rejects.
-      const transient = isApiError(e) ? e.retryable : e instanceof TypeError;
+      const transient = isTransient(e);
       if (opts.signal?.aborted) throw abortError();
       if (!transient || Date.now() > deadline) throw e;
       await sleep(interval, opts.signal);

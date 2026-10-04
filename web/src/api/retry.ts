@@ -1,13 +1,13 @@
 import type { DefaultOptions } from '@tanstack/react-query';
-import { isApiError } from './client';
+import { isApiError, NetworkError } from './client';
 
 const MAX_RETRIES = 2;
 const MAX_DELAY_MS = 30_000;
 
 // shouldRetry retries what the server marked retryable (503 and similar) and network
-// failures (fetch throws TypeError). 401, 403 and validation errors are never retried.
+// failures (NetworkError). 401, 403 and validation errors are never retried.
 export function shouldRetry(failureCount: number, error: unknown): boolean {
-  const retryable = isApiError(error) ? error.retryable : error instanceof TypeError;
+  const retryable = isApiError(error) ? error.retryable : error instanceof NetworkError;
   return retryable && failureCount < MAX_RETRIES;
 }
 

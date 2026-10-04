@@ -1,7 +1,9 @@
 import { http, HttpResponse } from 'msw';
 import { errorResponse, jobFixture } from '../test/fixtures';
 import { server } from '../test/server';
-import { isTerminal, JobTimeoutError, waitForJob } from './jobs';
+import type { ApiErrorBody } from './types';
+import { ApiError, NetworkError } from './client';
+import { isTerminal, isTransient, JobTimeoutError, waitForJob } from './jobs';
 
 describe('waitForJob', () => {
   it('polls until the job has finished', async () => {
@@ -81,6 +83,20 @@ describe('waitForJob', () => {
 
   it('gives up on a failing server when the deadline has passed', async () => {
     server.use(http.get('/api/v1/jobs/:id', () => HttpResponse.error()));
-    await expect(waitForJob('job-6', { intervalMs: 1, timeoutMs: 20 })).rejects.toBeInstanceOf(TypeError);
+    await expect(waitForJob('job-6', { intervalMs: 1, timeoutMs: 20 })).rejects.toBeInstanceOf(NetworkError);
+  });
+
+  it('treats only network failures and retryable API errors as transient', () => {
+    expect(isTransient(new NetworkError('offline', { cause: new TypeError('Failed to fetch') }))).toBe(true);
+    expect(isTransient(new TypeError("Cannot read properties of undefined (reading 'status')"))).toBe(false);
+    expect(isTransient(new ApiError(503, { code: 'ALC-SYS-0002', reason: 'system.unavailable', retryable: true } as ApiErrorBody['error']))).toBe(true);
+    expect(isTransient(new ApiError(404, { code: 'ALC-SYS-0001', reason: 'system.not_found', retryable: false } as ApiErrorBody['error']))).toBe(false);
+  });
+
+  it('retries a network failure until the job ends', async () => {
+    let calls = 0;
+    server.use(http.get('/api/v1/jobs/j2', () => (++calls < 3 ? HttpResponse.error() : HttpResponse.json(jobFixture({ id: 'j2', status: 'succeeded' })))));
+    await expect(waitForJob('j2', { intervalMs: 1 })).resolves.toMatchObject({ status: 'succeeded' });
+    expect(calls).toBe(3);
   });
 });
