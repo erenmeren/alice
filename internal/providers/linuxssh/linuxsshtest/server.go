@@ -59,6 +59,7 @@ type Server struct {
 	noPubkey   bool
 	noAuth     bool
 	hangGlobal bool
+	holdOpens  bool
 }
 
 // Connections is the number of TCP connections the server accepted (every dial, whether or not
@@ -75,6 +76,15 @@ func (s *Server) HangGlobalRequests() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.hangGlobal = true
+}
+
+// HoldChannelOpens makes the server leave every channel open from now on unanswered (neither
+// confirmed nor refused), on every connection: the client's new session waits for an answer that
+// never comes while the connection stays up.
+func (s *Server) HoldChannelOpens() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.holdOpens = true
 }
 
 // DisablePublicKeyAuth makes the server offer password authentication only (never accepted).
@@ -293,6 +303,12 @@ func (s *Server) handleConn(c net.Conn) {
 	}()
 	var sessions sync.WaitGroup
 	for nc := range chans {
+		s.mu.Lock()
+		hold := s.holdOpens
+		s.mu.Unlock()
+		if hold {
+			continue // never answered: the open stays pending until the connection closes
+		}
 		if nc.ChannelType() != "session" {
 			_ = nc.Reject(ssh.UnknownChannelType, "only session channels")
 			continue

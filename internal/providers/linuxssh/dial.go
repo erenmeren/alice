@@ -360,7 +360,13 @@ func (d *Dialer) Dial(ctx context.Context, target uuid.UUID, cfg Config, cred pr
 		return nil, providers.NewError("ssh.auth_failed", false, errors.New("linuxssh: server accepted the connection without the client key"),
 			map[string]string{"reason": "publickey_not_offered"})
 	}
-	return &Conn{client: r.client, target: target, cfg: cfg, hostKey: presented, clientFP: auth.fingerprint(), clock: d.clk()}, nil
+	c := &Conn{client: r.client, target: target, cfg: cfg, hostKey: presented, clientFP: auth.fingerprint(), clock: d.clk(),
+		dead: make(chan struct{})}
+	go func() {
+		_ = c.client.Wait() // returns once the connection is gone, whoever closed it
+		close(c.dead)
+	}()
+	return c, nil
 }
 
 func changedError(old, presented providers.HostKey) error {
@@ -463,6 +469,8 @@ type Conn struct {
 	// clientFP is the fingerprint of the key this connection authenticated with: Alice's own key.
 	clientFP string
 	clock    clock.Clock
+	// dead is closed once the SSH connection has ended (closed by Alice or dropped by the server).
+	dead chan struct{}
 
 	mu     sync.Mutex
 	broken bool
@@ -483,6 +491,11 @@ func (c *Conn) HostKey() providers.HostKey { return c.hostKey }
 
 // Healthy reports whether the connection may run further commands.
 func (c *Conn) Healthy() bool {
+	select {
+	case <-c.dead:
+		return false
+	default:
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return !c.broken && !c.closed
@@ -550,26 +563,26 @@ func (c *Conn) Run(ctx context.Context, cmd HelperCommand) (Result, error) {
 	if !c.Healthy() {
 		return Result{}, providers.NewError("ssh.unreachable", true, errConnClosed, params)
 	}
-	sess, err := c.client.NewSession()
+	timeout := cmd.timeout
+	if timeout <= 0 {
+		timeout = DefaultCommandTimeout
+	}
+	deadline := c.clock.After(timeout) // the budget covers opening the session too
+	sess, err := c.newSession(ctx, deadline, params)
 	if err != nil {
-		c.markBroken()
-		return Result{}, providers.NewError("ssh.unreachable", true, err, params)
+		return Result{}, err
 	}
 	defer func() { _ = sess.Close() }()
 	stdout := &cappedWriter{max: cmd.maxOutput, onOverflow: func() { _ = sess.Close() }}
 	sess.Stdout = stdout
 	sess.Stderr = &cappedWriter{max: maxStderr, discard: true}
 	sess.Stdin = bytes.NewReader(cmd.input())
-	timeout := cmd.timeout
-	if timeout <= 0 {
-		timeout = DefaultCommandTimeout
-	}
 	done := make(chan error, 1)
 	go func() { done <- sess.Run(line) }()
 	var runErr error
 	select {
 	case runErr = <-done:
-	case <-c.clock.After(timeout):
+	case <-deadline:
 		c.markBroken()
 		<-done
 		return Result{}, providers.NewError("ssh.timeout", true, nil, params)
@@ -596,6 +609,43 @@ func (c *Conn) Run(ctx context.Context, cmd HelperCommand) (Result, error) {
 	default:
 		c.markBroken()
 		return Result{}, providers.NewError("ssh.unreachable", true, runErr, params)
+	}
+}
+
+// newSession opens the session of one command within the command's budget (deadline) and ctx; a
+// connection that ends meanwhile fails it at once. Every failure closes the connection.
+//
+// ssh.Client.NewSession takes no context and can wait forever: x/crypto/ssh registers the new
+// channel and then waits for the server's answer, and a channel registered after the connection's
+// read loop dropped its channels (the server closed the connection a moment earlier) is never
+// answered nor closed. That opener goroutine then stays blocked (one goroutine for the life of
+// the process); the call returns once the connection is seen dead (dead), or at ctx or deadline.
+func (c *Conn) newSession(ctx context.Context, deadline <-chan time.Time, params map[string]string) (*ssh.Session, error) {
+	type opened struct {
+		sess *ssh.Session
+		err  error
+	}
+	ch := make(chan opened, 1)
+	go func() {
+		s, err := c.client.NewSession() // a session opened after the caller gave up dies with the connection
+		ch <- opened{s, err}
+	}()
+	select {
+	case o := <-ch:
+		if o.err != nil {
+			c.markBroken()
+			return nil, providers.NewError("ssh.unreachable", true, o.err, params)
+		}
+		return o.sess, nil
+	case <-c.dead:
+		c.markBroken()
+		return nil, providers.NewError("ssh.unreachable", true, errConnClosed, params)
+	case <-deadline:
+		c.markBroken()
+		return nil, providers.NewError("ssh.timeout", true, nil, params)
+	case <-ctx.Done():
+		c.markBroken()
+		return nil, providers.NewError("ssh.timeout", true, ctx.Err(), params)
 	}
 }
 

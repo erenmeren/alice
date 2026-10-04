@@ -231,6 +231,68 @@ func TestRunHonoursContextCancellation(t *testing.T) {
 	assert.False(t, c.Healthy())
 }
 
+// runWithin runs c.Run in a goroutine and fails the test when it has not returned within d (a Run
+// that hangs fails here instead of at the package's test timeout).
+func runWithin(t *testing.T, d time.Duration, c *Conn, ctx context.Context, cmd HelperCommand) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Run(ctx, cmd)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(d):
+		t.Fatalf("Run did not return within %s", d)
+		return nil
+	}
+}
+
+// Opening the command's session is bounded like the command: a server that never answers the
+// channel open fails the call on the context, and the connection is not reused.
+func TestRunBoundsTheSessionOpenByTheContext(t *testing.T) {
+	srv, c := pinnedConn(t, okHandler)
+	srv.HoldChannelOpens()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	err := runWithin(t, 5*time.Second, c, ctx, CmdVersion())
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.timeout", pe.Code)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.False(t, c.Healthy())
+}
+
+// The command's time budget covers opening its session too.
+func TestRunBoundsTheSessionOpenByTheCommandTimeout(t *testing.T) {
+	srv, c := pinnedConn(t, okHandler)
+	srv.HoldChannelOpens()
+	cmd := CmdVersion()
+	cmd.timeout = 300 * time.Millisecond
+	err := runWithin(t, 5*time.Second, c, context.Background(), cmd)
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.timeout", pe.Code)
+	assert.Equal(t, "version", pe.Params["subcommand"])
+	assert.False(t, c.Healthy())
+}
+
+// A connection the server dropped during a command is not healthy afterwards, however the command
+// ended (a dropped connection can end the session without an exit status, which alone does not
+// break the connection): the next command runs nothing. Opening a session on a dead connection
+// can wait forever in x/crypto/ssh (a channel registered after the connection's channels were
+// dropped is never answered), so the next command must not try.
+func TestRunAfterTheServerDroppedTheConnection(t *testing.T) {
+	srv, c := pinnedConn(t, func(string, []byte) linuxsshtest.Response { return linuxsshtest.Response{Hangup: true} })
+	_, err := c.Run(context.Background(), CmdVersion())
+	require.Error(t, err)
+	require.Eventually(t, func() bool { return !c.Healthy() }, 5*time.Second, 5*time.Millisecond,
+		"the dropped connection is noticed without another command")
+	before := len(srv.Commands())
+	err = runWithin(t, 5*time.Second, c, context.Background(), CmdVersion())
+	assert.Equal(t, "ssh.unreachable", providerCode(t, err).Code)
+	assert.Len(t, srv.Commands(), before, "nothing was sent")
+}
+
 // A context cancelled before the call runs nothing (no random pick against a fast answer) and
 // leaves the connection usable.
 func TestRunWithACancelledContextRunsNothing(t *testing.T) {
