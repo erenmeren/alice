@@ -65,6 +65,7 @@ type Server struct {
 	noAuth     bool
 	hangGlobal bool
 	holdOpens  bool
+	maxAuth    int // SetMaxAuthTries
 }
 
 // Connections is the number of TCP connections the server accepted (every dial, whether or not
@@ -90,6 +91,15 @@ func (s *Server) HoldChannelOpens() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.holdOpens = true
+}
+
+// SetMaxAuthTries sets x/crypto's MaxAuthTries for connections from now on: after n failed
+// attempts the server disconnects with "too many authentication failures" (as OpenSSH's
+// MaxAuthTries does).
+func (s *Server) SetMaxAuthTries(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maxAuth = n
 }
 
 // DisablePublicKeyAuth makes the server offer password authentication only (never accepted).
@@ -284,6 +294,7 @@ func (s *Server) handleConn(c net.Conn) {
 		}
 	}
 	cfg.NoClientAuth = s.noAuth
+	cfg.MaxAuthTries = s.maxAuth
 	hang := s.hangGlobal
 	s.mu.Unlock()
 	sc, chans, reqs, err := ssh.NewServerConn(c, cfg)

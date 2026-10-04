@@ -363,6 +363,10 @@ func (d *Dialer) Dial(ctx context.Context, target uuid.UUID, cfg Config, cred pr
 	}
 	if r.err != nil {
 		switch {
+		case credErr != nil && (errors.Is(credErr, context.DeadlineExceeded) || errors.Is(credErr, context.Canceled)):
+			// Fix round 1, minor 6: the platform key did not arrive within the handshake (a slow vault
+			// or key store): nothing is wrong with the server or the key, so a later attempt may work.
+			return nil, providers.NewError("internal.unexpected", true, credentialError{credErr}, nil)
 		case credErr != nil:
 			return nil, providers.NewError("internal.unexpected", false, credentialError{credErr}, nil)
 		case refused:
@@ -460,12 +464,17 @@ func (d *Dialer) probeChanged(ctx context.Context, target uuid.UUID, cfg Config,
 	return changedError(pinned, *seen)
 }
 
-// authRefused reports x/crypto's answer that authentication failed because the server accepted
-// none of the methods offered ("ssh: unable to authenticate, attempted methods ..., no supported
-// methods remain"); x/crypto has no typed error for it. Anything else after the host key matched
-// (EOF, a reset) is a lost connection.
+// authRefusedRE matches the handshake errors that are the server's refusal of authentication, which
+// x/crypto reports only as text (no typed error): its own "ssh: unable to authenticate, attempted
+// methods ..., no supported methods remain", and a disconnect for too many failed attempts (x/crypto's
+// and OpenSSH's MaxAuthTries: "too many authentication failures", and OpenSSH's reason 14, no more
+// authentication methods). TestAuthRefusalWordingOfXCrypto pins them against the real library.
+var authRefusedRE = regexp.MustCompile(`ssh: unable to authenticate|(?i:too many authentication failures)|ssh: disconnect, reason 14:`)
+
+// authRefused reports the server's refusal of authentication (see authRefusedRE). Anything else after
+// the host key matched (EOF, a reset) is a lost connection.
 func authRefused(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "ssh: unable to authenticate")
+	return err != nil && authRefusedRE.MatchString(err.Error())
 }
 
 // dropped reports an error of a connection the other side closed or reset.

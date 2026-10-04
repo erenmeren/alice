@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
+	"alice/internal/platform/clock"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh/helperproto"
@@ -518,9 +520,14 @@ func TestNginxHelperCodesMapToProviderErrors(t *testing.T) {
 // not wake that loop, so Run gives up after a short grace and abandons the goroutine.
 func TestRunReturnsWhenTheServerStallsTheReadLoop(t *testing.T) {
 	_, c := pinnedConn(t, func(string, []byte) linuxsshtest.Response { return linuxsshtest.Response{StallReadLoop: true} })
-	cmd := CmdVersion()
+	// Fix round 1, minor 8: a command with stdin (as nginx-deploy's key), wiped by the caller once Run
+	// returned while the session goroutine is abandoned; run under -race.
+	input := bytes.Repeat([]byte("k"), 256<<10)
+	cmd, err := CmdNginxDeploy(testTarget, "/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key", strings.Repeat("a", 64), input)
+	require.NoError(t, err)
 	cmd.timeout = 300 * time.Millisecond
-	err := runWithin(t, 5*time.Second+abandonGrace, c, context.Background(), cmd)
+	err = runWithin(t, 5*time.Second+abandonGrace, c, context.Background(), cmd)
+	cmd.WipeInput()
 	pe := providerCode(t, err)
 	assert.Equal(t, "ssh.timeout", pe.Code)
 	assert.False(t, c.Healthy())
@@ -569,7 +576,9 @@ func TestHungCredentialSourceDoesNotHangDial(t *testing.T) {
 	}()
 	select {
 	case err := <-done:
-		require.Error(t, err)
+		pe := providerCode(t, err)
+		assert.Equal(t, "internal.unexpected", pe.Code)
+		assert.True(t, pe.Retryable, "fix round 1 minor 6: a key that came too late may come in time later")
 	case <-time.After(5 * time.Second):
 		close(bc.release)
 		t.Fatal("Dial hung on the credential source")
@@ -645,4 +654,56 @@ func TestConnectionClosedBeforeTheBannerIsUnreachable(t *testing.T) {
 		assert.Equal(t, "ssh.unreachable", pe.Code, name)
 		assert.True(t, pe.Retryable, name)
 	}
+}
+
+// Fix round 1, minor 4: AUD-10 tells an authentication refusal from a lost connection by
+// x/crypto's message text. This pins the wording against the real library: a rejected key, a server
+// without public-key authentication and a disconnect for too many attempts are each recognised; if
+// x/crypto changes its wording this fails loudly.
+func TestAuthRefusalWordingOfXCrypto(t *testing.T) {
+	refusal := func(t *testing.T, srv *linuxsshtest.Server, cfg Config, cred *fakeCred) error {
+		t.Helper()
+		conf := &ssh.ClientConfig{User: cfg.Username, Auth: []ssh.AuthMethod{ssh.PublicKeys(cred.signer)},
+			HostKeyCallback: ssh.FixedHostKey(srv.HostKey())}
+		r := (&Dialer{Clock: clock.Real{}}).handshake(context.Background(), cfg.addr(), conf)
+		if r.client != nil {
+			_ = r.client.Close()
+		}
+		require.Error(t, r.err)
+		return r.err
+	}
+	t.Run("key rejected", func(t *testing.T) {
+		srv, cfg, _ := testServer(t, okHandler)
+		err := refusal(t, srv, cfg, newFakeCred(t))
+		assert.True(t, authRefused(err), "%v", err)
+		assert.Contains(t, err.Error(), "ssh: unable to authenticate")
+	})
+	t.Run("no public-key authentication", func(t *testing.T) {
+		srv, cfg, cred := testServer(t, okHandler)
+		srv.DisablePublicKeyAuth()
+		err := refusal(t, srv, cfg, cred)
+		assert.True(t, authRefused(err), "%v", err)
+	})
+	t.Run("too many authentication failures", func(t *testing.T) {
+		srv, cfg, _ := testServer(t, okHandler)
+		srv.SetMaxAuthTries(1)
+		err := refusal(t, srv, cfg, newFakeCred(t))
+		assert.Contains(t, err.Error(), "too many authentication failures")
+		assert.True(t, authRefused(err), "%v", err)
+	})
+	t.Run("a lost connection is not a refusal", func(t *testing.T) {
+		assert.False(t, authRefused(errors.New("ssh: handshake failed: EOF")))
+	})
+}
+
+// Dial classifies the disconnect for too many attempts as the authentication failure it is.
+func TestTooManyAuthenticationFailuresIsAuthFailed(t *testing.T) {
+	srv, cfg, _ := testServer(t, okHandler)
+	srv.SetMaxAuthTries(1)
+	hk := &memHostKeys{}
+	hk.pin(srv.HostKey())
+	_, err := newDialer(hk).Dial(context.Background(), testTarget, cfg, newFakeCred(t))
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.auth_failed", pe.Code)
+	assert.False(t, pe.Retryable)
 }
