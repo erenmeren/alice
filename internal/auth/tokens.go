@@ -93,6 +93,16 @@ func (s *Service) CreateToken(ctx context.Context, p Principal, m Meta, in NewTo
 		if err != nil {
 			return fmt.Errorf("read token owner: %w", err)
 		}
+		// The caller's session is checked again under the row lock: a sign-out-everywhere or
+		// password reset that held the row (FOR UPDATE) and committed while this request waited
+		// has ended it, and a token minted now would outlive it (AUD-12).
+		live, err := sessionLive(ctx, tx, p, "full", now)
+		if err != nil {
+			return err
+		}
+		if !live {
+			return ErrUnauthenticated
+		}
 		if !rbac.Role(role).AllowsScope(in.Scope) {
 			return ErrTokenScopeNotAllowed
 		}

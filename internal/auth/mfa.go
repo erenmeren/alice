@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -151,11 +152,19 @@ func (s *Service) replaceRecoveryCodes(ctx context.Context, tx pgx.Tx, userID uu
 // one account are serialized by the account lock, so a session consumed by a concurrent
 // successful VerifyMFA is seen as gone.
 func pendingSessionExists(ctx context.Context, tx pgx.Tx, p Principal, now time.Time) (bool, error) {
+	return sessionLive(ctx, tx, p, "pending", now)
+}
+
+// sessionLive reports whether p's session of the given kind is still stored, not revoked and
+// unexpired at now. Paths that write something lasting for a user from a session (an API
+// token, recovery codes) call it while they hold the user's row lock, so a sign-out-everywhere
+// or password reset that committed in the meantime is seen and the write is refused (AUD-12).
+func sessionLive(ctx context.Context, tx pgx.Tx, p Principal, kind string, now time.Time) (bool, error) {
 	var ok bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM sessions WHERE id_hash = $1 AND user_id = $2 AND kind = 'pending'
-AND revoked_at IS NULL AND expires_at > $3 AND idle_expires_at > $3)`, p.SessionHash, p.UserID, now).Scan(&ok)
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM sessions WHERE id_hash = $1 AND user_id = $2 AND kind = $3
+AND revoked_at IS NULL AND expires_at > $4 AND idle_expires_at > $4)`, p.SessionHash, p.UserID, kind, now).Scan(&ok)
 	if err != nil {
-		return false, fmt.Errorf("read pending session: %w", err)
+		return false, fmt.Errorf("read %s session: %w", kind, err)
 	}
 	return ok, nil
 }
@@ -327,10 +336,28 @@ func (s *Service) RegenerateRecoveryCodes(ctx context.Context, p Principal, m Me
 		return nil, err
 	}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// The user's row lock orders this after a concurrent sign-out-everywhere, password or
+		// MFA reset (FOR UPDATE); the session is then checked again, so a session ended in
+		// the meantime cannot leave fresh recovery codes behind (AUD-12).
+		var locked uuid.UUID
+		err := tx.QueryRow(ctx, "SELECT id FROM users WHERE id = $1 AND disabled_at IS NULL FOR SHARE", p.UserID).Scan(&locked)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrUnauthenticated
+		}
+		if err != nil {
+			return fmt.Errorf("lock user: %w", err)
+		}
+		live, err := sessionLive(ctx, tx, p, "full", s.clock.Now().UTC())
+		if err != nil {
+			return err
+		}
+		if !live {
+			return ErrUnauthenticated
+		}
 		if err := s.replaceRecoveryCodes(ctx, tx, p.UserID, hashes); err != nil {
 			return err
 		}
-		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: p.Actor(m), Action: "auth.recovery_codes_regenerated", ObjectType: "user", ObjectID: p.UserID.String(), Result: audit.Success})
+		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: p.Actor(m), Action: "auth.recovery_codes_regenerated", ObjectType: "user", ObjectID: p.UserID.String(), Result: audit.Success})
 		return err
 	})
 	if err != nil {

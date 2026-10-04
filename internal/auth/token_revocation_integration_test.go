@@ -5,6 +5,7 @@ package auth_test
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -99,7 +100,7 @@ func TestAdminPasswordResetRevokesTheUsersAPITokens(t *testing.T) {
 		assert.False(t, e.tokenWorks(t, s), "the user's tokens are refused at once")
 	}
 	assert.True(t, e.tokenWorks(t, adminTokens[0]), "another user's token is untouched")
-	assert.Equal(t, "2", *e.lastDetail(t, "user.password_reset", "revoked_token_count"), "an already revoked token is not counted again")
+	assert.Equal(t, "2", *e.lastDetail(t, "user.password_reset", "revoked_tokens_count"), "an already revoked token is not counted again")
 	revs := e.tokenRevocations(t, op.ID)
 	revs = slices.DeleteFunc(revs, func(r tokenRevocation) bool { return r.tokenID == goneIDs[0] }) // the user's own earlier revocation
 	requireRevokedBy(t, revs, op.ID, liveIDs, "password_reset", "admin")
@@ -130,11 +131,11 @@ func TestSignOutEverywhereRevokesTheUsersAPITokens(t *testing.T) {
 		assert.False(t, e.tokenWorks(t, s))
 	}
 	assert.True(t, e.tokenWorks(t, adminTokens[0]))
-	assert.Equal(t, "2", *e.lastDetail(t, "user.sessions_revoked", "revoked_token_count"))
+	assert.Equal(t, "2", *e.lastDetail(t, "user.sessions_revoked", "revoked_tokens_count"))
 	requireRevokedBy(t, e.tokenRevocations(t, op.ID), op.ID, opIDs, "sessions_revoked", "admin")
 
 	require.NoError(t, e.svc.RevokeSessions(e.ctx, admin, meta, op.ID))
-	assert.Equal(t, "0", *e.lastDetail(t, "user.sessions_revoked", "revoked_token_count"), "nothing left to revoke")
+	assert.Equal(t, "0", *e.lastDetail(t, "user.sessions_revoked", "revoked_tokens_count"), "nothing left to revoke")
 
 	// An administrator signing themselves out everywhere loses their own tokens as well.
 	require.NoError(t, e.svc.RevokeSessions(e.ctx, admin, meta, admin.UserID))
@@ -156,7 +157,7 @@ func TestOwnPasswordChangeKeepsAPITokens(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, e.tokenWorks(t, tokens[0]))
 	assert.Empty(t, e.tokenRevocations(t, op.ID))
-	assert.Nil(t, e.lastDetail(t, "auth.password_changed", "revoked_token_count"))
+	assert.Nil(t, e.lastDetail(t, "auth.password_changed", "revoked_tokens_count"))
 }
 
 // TestATokenReadBeforeTheRevocationCommitsIsRefusedAfterIt: a request that reads the token
@@ -203,4 +204,91 @@ func TestATokenReadBeforeTheRevocationCommitsIsRefusedAfterIt(t *testing.T) {
 		require.NoError(t, <-done)
 		assert.False(t, e.tokenWorks(t, tokens[0]), "%s: the first read after the commit is refused", c.name)
 	}
+}
+
+// TestNoLastingCredentialFromASessionBeingRevoked (AUD-12, review I1): a token creation or a
+// recovery-code regeneration that arrives while an administrator's sign-out-everywhere or
+// password reset is still open used to pass its session check (the delete was not visible yet)
+// and, once the revocation committed, write a live credential for the signed-out session. Both
+// now re-check the caller's session under the user's row lock and are refused.
+func TestNoLastingCredentialFromASessionBeingRevoked(t *testing.T) {
+	e := newEnv(t)
+	admin, _ := e.adminPrincipal(t)
+	op := e.createUser(t, admin, "op", rbac.Operator)
+	opSecret, _ := e.enroll(t, "op", adminPassword)
+	password := adminPassword
+
+	revocations := []struct {
+		name   string
+		revoke func() error
+	}{
+		{"sign out everywhere", func() error { return e.svc.RevokeSessions(e.ctx, admin, meta, op.ID) }},
+		{"password reset", func() error { return e.svc.ResetPassword(e.ctx, admin, meta, op.ID, adminPassword+" again") }},
+	}
+	writes := []struct {
+		name  string
+		write func(p auth.Principal) error
+	}{
+		{"create a token", func(p auth.Principal) error {
+			_, _, err := e.svc.CreateToken(e.ctx, p, meta, auth.NewToken{Name: "late", Scope: rbac.ScopeRead, ExpiresInDays: 365})
+			return err
+		}},
+		{"regenerate recovery codes", func(p auth.Principal) error {
+			_, err := e.svc.RegenerateRecoveryCodes(e.ctx, p, meta)
+			return err
+		}},
+	}
+	codeHashes := func() []string {
+		rows, err := e.db.Owner.Query(e.ctx, "SELECT code_hash FROM recovery_codes WHERE user_id = $1 ORDER BY 1", op.ID)
+		require.NoError(t, err)
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var h string
+			require.NoError(t, rows.Scan(&h))
+			out = append(out, h)
+		}
+		require.NoError(t, rows.Err())
+		return out
+	}
+	for _, r := range revocations {
+		for _, w := range writes {
+			label := r.name + " / " + w.name
+			p := e.principal(t, e.signIn(t, "op", password, opSecret).Token)
+			codesBefore := codeHashes()
+
+			// Park the revocation after its updates, before its commit (audit rows come last).
+			holder, err := e.db.Owner.Begin(e.ctx)
+			require.NoError(t, err)
+			_, err = holder.Exec(e.ctx, "SELECT pg_advisory_xact_lock($1)", auditChainLockKey)
+			require.NoError(t, err)
+			revoked := make(chan error, 1)
+			go func() { revoked <- r.revoke() }()
+			e.waitForBlockedLocks(t, 1)
+			written := make(chan error, 1)
+			go func() { written <- w.write(p) }()
+			e.waitForBlockedLocks(t, 2) // the write waits too (for the user row, or before the fix for the chain)
+
+			require.NoError(t, holder.Rollback(e.ctx))
+			require.NoError(t, <-revoked, label)
+			assert.ErrorIs(t, <-written, auth.ErrUnauthenticated, label)
+			var live int
+			require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT count(*) FROM api_tokens WHERE user_id = $1 AND revoked_at IS NULL", op.ID).Scan(&live))
+			assert.Zero(t, live, "%s: no live token", label)
+			assert.Equal(t, codesBefore, codeHashes(), "%s: the recovery codes are unchanged", label)
+			if r.name == "password reset" {
+				password = adminPassword + " again"
+			}
+		}
+	}
+}
+
+// waitForBlockedLocks waits until at least n lock requests of any kind are waiting.
+func (e *env) waitForBlockedLocks(t *testing.T, n int) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var got int
+		require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT count(*) FROM pg_locks WHERE NOT granted").Scan(&got))
+		return got >= n
+	}, 5*time.Second, 5*time.Millisecond)
 }

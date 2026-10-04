@@ -1,12 +1,12 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -227,11 +227,9 @@ func (s *Service) UpdateUser(ctx context.Context, p Principal, m Meta, id uuid.U
 		if disable {
 			// Disabling revokes the user's API tokens for good: re-enabling does not bring
 			// them back. A role change keeps them; their scope is checked on every use.
-			tag, err := tx.Exec(ctx, "UPDATE api_tokens SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL", id, now)
-			if err != nil {
-				return fmt.Errorf("revoke tokens: %w", err)
+			if err := s.revokeUserTokens(ctx, tx, p.Actor(m), id, now, "user_disabled", details); err != nil {
+				return err
 			}
-			details["revoked_tokens_count"] = strconv.FormatInt(tag.RowsAffected(), 10)
 		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: p.Actor(m), Action: "user.updated", ObjectType: "user", ObjectID: id.String(),
 			Result: audit.Success, Details: details})
@@ -363,14 +361,23 @@ func (s *Service) RevokeSessions(ctx context.Context, p Principal, m Meta, id uu
 }
 
 // signOutEverywhere ends every session of a user and revokes every live API token, inside the
-// caller's transaction (which holds the user's row lock, see adminChange). Each revoked token
-// is audited as token.revoked by ID with reason; the caller's own audit row gets
-// revoked_token_count in details. Token lookups read the database on every request, so the
-// tokens are refused as soon as the transaction commits.
+// caller's transaction (which holds the user's row lock, see adminChange). Token lookups read
+// the database on every request, so the tokens are refused as soon as the transaction commits;
+// a token creation or recovery-code regeneration waiting for the row lock re-checks its
+// session afterwards and is refused (sessionLive).
 func (s *Service) signOutEverywhere(ctx context.Context, tx pgx.Tx, actor audit.Actor, id uuid.UUID, now time.Time, reason string, details map[string]string) error {
 	if err := revokeUserSessions(ctx, tx, id); err != nil {
 		return err
 	}
+	return s.revokeUserTokens(ctx, tx, actor, id, now, reason, details)
+}
+
+// revokeUserTokens revokes every live API token of a user inside the caller's transaction,
+// which holds the user's row lock. Each revoked token is audited as token.revoked by its ID
+// with reason (password_reset, sessions_revoked or user_disabled), and details, the caller's
+// own audit row, gets revoked_tokens_count (AUD-12). The audit rows come after every row
+// update, so the chain lock is never held while waiting for a row.
+func (s *Service) revokeUserTokens(ctx context.Context, tx pgx.Tx, actor audit.Actor, id uuid.UUID, now time.Time, reason string, details map[string]string) error {
 	rows, err := tx.Query(ctx, "UPDATE api_tokens SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL RETURNING id", id, now)
 	if err != nil {
 		return fmt.Errorf("revoke tokens: %w", err)
@@ -379,15 +386,13 @@ func (s *Service) signOutEverywhere(ctx context.Context, tx pgx.Tx, actor audit.
 	if err != nil {
 		return fmt.Errorf("revoke tokens: %w", err)
 	}
-	slices.SortFunc(tokens, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
-	// The audit rows come after every row update, so the chain lock is never held while
-	// waiting for a row (the order recordFailure and adminChange keep).
+	slices.SortFunc(tokens, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
 	for _, tok := range tokens {
 		if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "token.revoked", ObjectType: "api_token", ObjectID: tok.String(),
 			Result: audit.Success, Details: map[string]string{"token_id": tok.String(), "owner_id": id.String(), "reason": reason}}); err != nil {
 			return err
 		}
 	}
-	details["revoked_token_count"] = strconv.Itoa(len(tokens))
+	details["revoked_tokens_count"] = strconv.Itoa(len(tokens))
 	return nil
 }

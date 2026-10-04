@@ -474,7 +474,7 @@ paths:
       description: >-
         In one transaction: sets the password, clears the sign-in delay or lockout, ends every session of the
         user and revokes every API token of the user (each audited as token.revoked by its ID; the
-        user.password_reset row carries revoked_token_count). The tokens are refused from the next request on.
+        user.password_reset row carries revoked_tokens_count). The tokens are refused from the next request on.
         A user changing their own password (POST /api/v1/auth/password) keeps their tokens.
       x-permission: users.manage
       requestBody:
@@ -500,7 +500,7 @@ paths:
       summary: Sign the user out everywhere; ends their sessions and revokes their API tokens
       description: >-
         In one transaction: ends every session of the user and revokes every API token of the user (each
-        audited as token.revoked by its ID; the user.sessions_revoked row carries revoked_token_count). The
+        audited as token.revoked by its ID; the user.sessions_revoked row carries revoked_tokens_count). The
         tokens are refused from the next request on. Also applies when administrators use it on themselves.
       x-permission: users.manage
       responses:

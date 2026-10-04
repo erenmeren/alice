@@ -187,6 +187,7 @@ func TestDisablingRevokesTokensForGood(t *testing.T) {
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT details->>'revoked_tokens_count' FROM audit_log
 WHERE action = 'user.updated' ORDER BY seq DESC LIMIT 1`).Scan(&count))
 	assert.Equal(t, "1", count)
+	requireRevokedBy(t, e.tokenRevocations(t, op.ID), op.ID, []string{tok.ID.String()}, "user_disabled", "admin")
 
 	_, err = e.svc.UpdateUser(e.ctx, admin, meta, op.ID, auth.UserUpdate{Disabled: ptr(false)})
 	require.NoError(t, err)
