@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -151,6 +152,10 @@ func jsonFieldNames(v any, out map[string]bool) {
 	}
 }
 
+// tlsKeyMarkers are the PEM headers of every kind of private key, and Phase 3's markers.
+var tlsKeyMarkers = append([]string{"BEGIN " + "PRIVATE", "BEGIN RSA " + "PRIVATE", "BEGIN EC " + "PRIVATE", "BEGIN ENCRYPTED " + "PRIVATE"},
+	privateKeyMarkers...)
+
 // secretFieldNames are field names no response may have (has_private_key says only that a key is held).
 var secretFieldNames = []string{"private_key", "private_key_pem", "private_key_id", "key_pem", "pfx_base64", "pfx_password", "password",
 	"ciphertext", "nonce", "wrapped_dek", "dek", "key_version"}
@@ -254,7 +259,6 @@ func TestTLSKeysNeverLeak(t *testing.T) {
 	assert.Equal(t, "rollback_failed", run(rsaCert2, n.locs[apiCert]).Status)
 	n.setWrap(nil)
 	n.f.emu.ServeOther(443, "")
-	_ = ecCert2
 
 	// Every read that shows what these flows made, so that its response is scanned too.
 	var jobIDs []string
@@ -296,21 +300,33 @@ func TestTLSKeysNeverLeak(t *testing.T) {
 	secs = append(secs, rsaCanary.secrets()...)
 	secs = append(secs, stored...)
 
-	// The scan is not vacuous: the key reached the emulated server (its stdin), and the files hold it.
+	// The scan is not vacuous: each canary key really reached the system. The emulated server
+	// received it on stdin (the one place it belongs), and the rows Alice sealed open to it; the PFX
+	// password opened the PFX (201 with a key held) while the wrong one was refused above.
 	stdins := n.f.emu.DeployStdins()
 	require.NotEmpty(t, stdins)
-	var sent bool
-	for _, in := range stdins {
-		for _, c := range []keyCanary{ecCanary, rsaCanary} {
-			sent = sent || bytes.Contains(in, []byte(strings.Split(strings.TrimSpace(string(c.pem8)), "\n")[1]))
+	for _, c := range []keyCanary{ecCanary, rsaCanary} {
+		line := []byte(strings.Split(strings.TrimSpace(string(c.pem8)), "\n")[1])
+		var onServer bool
+		for _, in := range stdins {
+			onServer = onServer || bytes.Contains(in, line)
 		}
+		assert.True(t, onServer, "%s reached the server's stdin", c.name)
+		var sealed int
+		for _, k := range keyRows {
+			if bytes.Equal(k.der, c.der8) {
+				sealed++
+			}
+		}
+		assert.Equal(t, 2, sealed, "%s was sealed twice (two uploads) and opens to the canary", c.name)
 	}
-	assert.True(t, sent, "the server received a canary key on stdin: it is the one place the key belongs")
+	pfxCert := decodeBody[map[string]any](t, n.op.do(http.MethodGet, "/api/v1/certificates/"+rsaCert, nil))
+	assert.Equal(t, true, pfxCert["has_private_key"], "the PFX password opened the PFX and its key is held")
 
 	scan := func(where, text string) {
 		t.Helper()
 		assertNoSecret(t, where, text, secs)
-		for _, m := range append([]string{"BEGIN " + "PRIVATE", "BEGIN RSA " + "PRIVATE", "BEGIN EC " + "PRIVATE", "BEGIN ENCRYPTED " + "PRIVATE"}, privateKeyMarkers...) {
+		for _, m := range tlsKeyMarkers {
 			assert.NotContains(t, text, m, where)
 		}
 	}
@@ -410,4 +426,75 @@ func seenRoute(seen map[string]bool, route string) bool {
 		}
 	}
 	return false
+}
+
+// The scanner itself: every spelling it claims to look for is flagged when it is in a text, so a
+// scanner that silently stops matching a form (a PEM variant, hex, an alphabet of base64, a
+// password) fails here and not by finding nothing in the suite above.
+func TestKeyScannerFlagsEverySpelling(t *testing.T) {
+	ecKey, ok := pki.NewKey(pki.ECDSA256).(*ecdsa.PrivateKey)
+	require.True(t, ok)
+	rsaKey, ok := pki.NewKey(pki.RSA2048).(*rsa.PrivateKey)
+	require.True(t, ok)
+	var secs []secretValue
+	for _, c := range []keyCanary{newKeyCanary("EC", ecKey), newKeyCanary("RSA", rsaKey)} {
+		secs = append(secs, c.secrets()...)
+		// Each kind of spelling the scanner must hold for this key.
+		for _, der := range [][]byte{c.der8, c.derOld} {
+			want := map[string]bool{hex.EncodeToString(der): false, base64.StdEncoding.EncodeToString(der): false,
+				base64.RawStdEncoding.EncodeToString(der): false, base64.URLEncoding.EncodeToString(der): false,
+				base64.RawURLEncoding.EncodeToString(der): false}
+			for _, sec := range c.secrets() {
+				for _, f := range sec.forms {
+					if _, ok := want[f]; ok {
+						want[f] = true
+					}
+				}
+			}
+			for f, found := range want {
+				// Alphabets that spell a DER the same way (no "+", "/" or padding in it) collapse into one.
+				assert.True(t, found || len(f) == 0, "%s: a spelling of the DER is not scanned for", c.name)
+			}
+		}
+		pem8 := pemForms(c.pem8)
+		assert.GreaterOrEqual(t, len(pem8), 6, "PEM as is, CRLF, escaped (two ways), body lines and the joined body")
+		assert.Contains(t, pem8, string(c.pem8))
+		assert.Contains(t, pem8, strings.ReplaceAll(string(c.pem8), "\n", `\n`))
+		assert.Contains(t, pem8, strings.ReplaceAll(string(c.pem8), "\n", "\r\n"))
+	}
+	for _, pw := range []string{canary("pfx-password"), canary("pfx-wrong-password")} {
+		sec := secretValue{name: "PFX password", value: pw}
+		secs = append(secs, sec)
+		assert.Contains(t, variants(pw), pw)
+		assert.Contains(t, variants(pw), hex.EncodeToString([]byte(pw)))
+		assert.Contains(t, variants(pw), base64.StdEncoding.EncodeToString([]byte(pw)))
+		assert.Contains(t, variants(pw), base64.RawURLEncoding.EncodeToString([]byte(pw)))
+	}
+	for _, sec := range secs {
+		forms := sec.forms
+		if forms == nil {
+			forms = variants(sec.value)
+		}
+		require.NotEmpty(t, forms, sec.name)
+		for i, f := range forms {
+			if f == "" {
+				continue
+			}
+			sample := "log line: user=ada msg=" + f + " end"
+			_, found := sec.leakedIn(sample)
+			assert.True(t, found, "%s spelling #%d is not flagged", sec.name, i)
+			assert.Contains(t, sample, f)
+		}
+		_, found := sec.leakedIn("a harmless text with no key, certificate or password in it")
+		assert.False(t, found, sec.name)
+	}
+	// And the marker scan: a PEM header of any private key kind is flagged by the suite's markers.
+	for _, header := range []string{"-----BEGIN PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN EC PRIVATE KEY-----",
+		"-----BEGIN ENCRYPTED PRIVATE KEY-----"} {
+		var hit bool
+		for _, m := range tlsKeyMarkers {
+			hit = hit || strings.Contains(header, m)
+		}
+		assert.True(t, hit, header)
+	}
 }

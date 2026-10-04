@@ -72,7 +72,7 @@ func TestDeployFailureJourneys(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			n := newNJ(t, wwwSite())
 			tc.setup(n)
-			_, id, d := n.deployOne()
+			_, _, d := n.deployOne()
 			assert.Equal(t, "done", d.State)
 			assert.Equal(t, tc.status, d.Status)
 			assert.Equal(t, tc.code, d.errorCode())
@@ -84,9 +84,9 @@ func TestDeployFailureJourneys(t *testing.T) {
 			}
 			assert.Equal(t, tc.emails, n.deploymentEmails())
 			assert.Equal(t, 1, n.auditCount("deployment.rolled_back"))
+			assert.Equal(t, 1, n.auditCount("deployment.failed"), "a rolled-back deployment audits both events")
 			assert.Equal(t, "", n.location(n.admin, n.targetID, wwwCert)["deployed_fingerprint"], "the location was not changed")
 			assert.Equal(t, "failed", n.job(n.admin, d.JobID)["status"], "the deployment's email is the alert; the job is not dead")
-			_ = id
 		})
 	}
 }
@@ -192,6 +192,8 @@ func TestPrecheckRefusesWebsitesAliceCannotCheck(t *testing.T) {
 			assert.Equal(t, map[string]int{"deployment.failed": 1}, n.deploymentEmails())
 			assert.Zero(t, n.auditCount("deployment.started"))
 			assert.Equal(t, 1, n.auditCount("deployment.failed"))
+			assert.Equal(t, "verify_current", d.FailedStep, "the pre-check is the step that refused")
+			assert.Equal(t, 1, n.countWhere("audit_log", "action = 'deployment.failed' AND details->>'failed_step' = 'verify_current'"))
 			assert.Equal(t, "", n.location(n.admin, n.targetID, wwwCert)["deployed_fingerprint"])
 		})
 	}

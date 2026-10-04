@@ -5,7 +5,6 @@ package api
 import (
 	"context"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -30,16 +29,6 @@ func (n *nj) lockNow() {
 	n.signIn(n.op, n.opAcct)
 }
 
-func nginxCommands(f *nginxFixture) []string {
-	var out []string
-	for _, c := range f.server.Commands() {
-		if strings.Contains(c, "nginx-") || strings.Contains(c, "tls-probe") {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
 // In lock nothing on a server is changed and no certificate is stored, reads work, a deployment
 // that was already sent is still recovered (recovery is never gated), and a deployment queued
 // before the lock is held until an Administrator confirms it after the renewal.
@@ -61,7 +50,7 @@ func TestLockAndCertificateDeployments(t *testing.T) {
 	require.True(t, ran)
 	require.Equal(t, "recovering", n.deployment(n.op, sent.ID).State)
 	require.Equal(t, "queued", n.deployment(n.op, queued.ID).State)
-	bCommands, bNginx := len(b.server.Commands()), len(nginxCommands(b))
+	bCommands := len(b.server.Commands())
 
 	n.lockNow()
 	before := map[string]int{"certificates": n.count("certificates"), "managed_private_keys": n.count("managed_private_keys"),
@@ -103,11 +92,14 @@ func TestLockAndCertificateDeployments(t *testing.T) {
 	b.requirePair(t, apiCert, apiKey, apiName, leaf)
 	assert.Equal(t, 1, b.emu.DeployCount())
 	assert.Greater(t, len(b.server.Commands()), bCommands, "the recovery talked to web-02")
-	recoveryCommands := nginxCommands(b)[bNginx:]
-	assert.NotEmpty(t, recoveryCommands)
-	for _, c := range recoveryCommands {
-		assert.NotContains(t, c, "nginx-deploy", "no deployment is sent in lock")
-	}
+	// Exactly what a recovery of a committed journal needs, and nothing that changes the server: the
+	// helper's version (the protocol check of every new connection), the journal's status, then the website's certificate as the server sees it (the reload had worked;
+	// no restore was needed).
+	recovery := b.server.Commands()[bCommands:]
+	require.Len(t, recovery, 3, "every command the recovery sent in lock: %v", recovery)
+	assert.Equal(t, "/usr/local/libexec/alice-helper version", recovery[0])
+	assert.Regexp(t, `^sudo -n /usr/local/libexec/alice-helper nginx-status --op '[0-9a-f-]{36}'$`, recovery[1])
+	assert.Regexp(t, `^/usr/local/libexec/alice-helper tls-probe --addr '127\.0\.0\.1' --port '443' --sni 'api\.example\.test' --key-type 'any'$`, recovery[2])
 
 	// L-81: the queued deployment is held; web-01 never saw a command in lock.
 	assert.Equal(t, aBefore, len(n.f.server.Commands()), "L-29: no command reached web-01 in lock")
@@ -147,12 +139,14 @@ func TestLockAndCertificateDeployments(t *testing.T) {
 // the helper runs.
 type lockDuring struct {
 	providers.Session
-	n *nj
+	n    *nj
+	tick *error // the license service's answer, read by the test goroutine
 }
 
 func (l lockDuring) DeployCertificate(ctx context.Context, req providers.DeployRequest, log providers.StepLogger) (providers.DeployOutcome, error) {
 	l.n.clock.Advance(31 * 24 * time.Hour)
-	require.NoError(l.n.t, l.n.license.Tick(ctx))
+	// Not the test goroutine: the answer is recorded and asserted there.
+	*l.tick = l.n.license.Tick(ctx)
 	return l.Session.DeployCertificate(ctx, req, log)
 }
 
@@ -164,13 +158,15 @@ func TestInFlightDeploymentFinishesAcrossTheLock(t *testing.T) {
 	leaf := n.issue()
 	certID := n.uploadCertificate(n.op, certBody(leaf, "Renewed"))
 	deps := n.deploy(n.op, certID, n.locs[wwwCert], n.locs[apiCert])
+	var tickErr error
 	n.setWrap(func(_ providers.TargetRef, s providers.Session) providers.Session {
-		return lockDuring{Session: s, n: n}
+		return lockDuring{Session: s, n: n, tick: &tickErr}
 	})
 	ran, err := n.runner.RunOnce(context.Background())
 	require.NoError(t, err)
 	require.True(t, ran)
 	n.setWrap(nil)
+	require.NoError(t, tickErr)
 	require.True(t, n.license.Snapshot().Eval.Locked())
 	n.signIn(n.op, n.opAcct)
 

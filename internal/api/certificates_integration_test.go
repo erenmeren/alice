@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/providers/linuxssh/linuxsshtest"
+
 	"alice/internal/testutil/pki"
 )
 
@@ -177,6 +179,9 @@ func TestUploadVariantsAndBatchDeploy(t *testing.T) {
 func TestDiscoverShowsSupportAndInvalidConfiguration(t *testing.T) {
 	s, admin, adminAcct := installed(t)
 	f := s.nginxFixture(wwwSite())
+	// A website whose certificate does not cover its name is supported, with a warning.
+	f.emu.AddSite(linuxsshtest.NginxSite{Names: []string{"other.example.test"}, Port: 443, CertPath: "/etc/nginx/ssl/other.crt",
+		KeyPath: "/etc/nginx/ssl/other.key"}, f.old.FullchainPEM, f.old.KeyPEM)
 	f.emu.AddUnsupported([]string{"vars.example.test"}, 443, "/etc/nginx/ssl/$host.crt", "variable")
 	f.emu.AddUnsupported(nil, 8443, "/etc/nginx/ssl/stream.crt", "stream")
 	f.emu.AddUnsupported([]string{"pw.example.test"}, 443, "/etc/nginx/ssl/pw.crt", "password_file")
@@ -186,15 +191,22 @@ func TestDiscoverShowsSupportAndInvalidConfiguration(t *testing.T) {
 	s.pinServer(admin, targetID)
 
 	locs := s.certificateLocations(admin, targetID, false)
-	require.Len(t, locs, 4)
+	require.Len(t, locs, 5)
 	reasons := map[string]string{}
 	for _, l := range locs {
 		reasons[l["cert_path"].(string)] = l["unsupported_reason"].(string)
 		assert.Equal(t, l["unsupported_reason"] == "", l["supported"], "supported follows the reason: %v", l["cert_path"])
 	}
-	assert.Equal(t, map[string]string{wwwCert: "", "/etc/nginx/ssl/$host.crt": "variable", "/etc/nginx/ssl/stream.crt": "stream",
+	assert.Equal(t, map[string]string{wwwCert: "", "/etc/nginx/ssl/other.crt": "", "/etc/nginx/ssl/$host.crt": "variable", "/etc/nginx/ssl/stream.crt": "stream",
 		"/etc/nginx/ssl/pw.crt": "password_file"}, reasons)
 	assert.Equal(t, true, s.location(admin, targetID, wwwCert)["supported"])
+	for _, l := range locs {
+		want := []any{}
+		if l["cert_path"] == "/etc/nginx/ssl/other.crt" {
+			want = []any{"san_mismatch"}
+		}
+		assert.Equal(t, want, l["warnings"], "warnings of %v", l["cert_path"])
+	}
 	var warned []string
 	for _, w := range s.target(admin, targetID)["facts"].(map[string]any)["warnings"].([]any) {
 		warned = append(warned, w.(map[string]any)["code"].(string))
@@ -207,7 +219,7 @@ func TestDiscoverShowsSupportAndInvalidConfiguration(t *testing.T) {
 	facts := s.target(admin, targetID)["facts"].(map[string]any)["nginx"].(map[string]any)
 	assert.Equal(t, false, facts["config_valid"])
 	assert.Equal(t, "syntax", facts["config_error"])
-	assert.Len(t, s.certificateLocations(admin, targetID, false), 4, "an invalid configuration removes no known location")
+	assert.Len(t, s.certificateLocations(admin, targetID, false), 5, "an invalid configuration removes no known location")
 	assert.Empty(t, withMissing(s.certificateLocations(admin, targetID, true)))
 
 	// Nothing is deployed to a server whose configuration is invalid (before any change).
@@ -223,7 +235,7 @@ func TestDiscoverShowsSupportAndInvalidConfiguration(t *testing.T) {
 	assert.Equal(t, true, s.target(admin, targetID)["facts"].(map[string]any)["nginx"].(map[string]any)["config_valid"])
 	oldCertID := s.location(admin, targetID, wwwCert)["certificate"].(map[string]any)["id"].(string)
 	before := decodeBody[map[string]any](t, admin.do(http.MethodGet, "/api/v1/certificates/"+oldCertID, nil))
-	require.Len(t, before["locations"], 1)
+	require.Len(t, before["locations"], 2)
 	s.stepUp(admin, adminAcct)
 	requireStatus(t, admin.do(http.MethodDelete, "/api/v1/targets/"+targetID, nil), http.StatusNoContent)
 	after := decodeBody[map[string]any](t, admin.do(http.MethodGet, "/api/v1/certificates/"+oldCertID, nil))
@@ -278,7 +290,8 @@ func TestUploadJourneyRefusesWithExactMessages(t *testing.T) {
 	assert.Equal(t, 6, s.auditCount("certificate.upload_rejected"), "every refusal is audited (the mismatch twice)")
 	assert.Zero(t, s.auditCount("certificate.uploaded"))
 
-	// A body over the cap is refused unread.
+	// A body over the cap is refused with 413 whatever it holds (that it is not read at all is pinned by
+	// TestDeclaredOversizedBodyIsRefusedUnread).
 	requireError(t, admin.do(http.MethodPost, "/api/v1/certificates/upload", strings.Repeat("A", 2<<20)), http.StatusRequestEntityTooLarge, "ALC-SYS-0007")
 
 	// A PEM saved on Windows (BOM, CRLF) is accepted.
