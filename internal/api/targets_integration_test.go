@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -460,7 +461,11 @@ func TestLockRefusesInfrastructureChanges(t *testing.T) {
 		}
 		return out
 	}
+	rec = admin.do(http.MethodPost, "/api/v1/certificates/csr", map[string]any{"common_name": "www.example.test", "key_type": "ecdsa-p256"})
+	requireStatus(t, rec, http.StatusCreated)
+	csrID := decodeBody[map[string]any](t, rec)["id"].(string)
 	before, commands := counts(), len(f.server.Commands())
+	storedKeys, csrs := s.count("managed_private_keys"), s.count("csr_requests")
 
 	s.clock.Advance(31 * 24 * time.Hour) // the evaluation ends (R1)
 	require.NoError(t, s.license.Tick(t.Context()))
@@ -487,6 +492,14 @@ func TestLockRefusesInfrastructureChanges(t *testing.T) {
 			"reason": "False alarm reported by the monitoring team"}},
 		{http.MethodPost, "/api/v1/ssh-keys/locations/" + laptop["id"].(string) + "/actions/remove", nil},
 		{http.MethodPost, "/api/v1/jobs/" + queuedDiscovery + "/actions/confirm", nil},
+		// Phase 4: certificates, signing requests, deployments and location settings (the lock is
+		// decided before the body is read, so no body has to be valid).
+		{http.MethodPost, "/api/v1/certificates/upload", map[string]any{"certificate_pem": "x", "private_key_pem": "y"}},
+		{http.MethodPost, "/api/v1/certificates/csr", map[string]any{"common_name": "www.example.test", "key_type": "ecdsa-p256"}},
+		{http.MethodPost, "/api/v1/certificates/csr/" + csrID + "/actions/complete", map[string]any{"certificate_pem": "x"}},
+		{http.MethodPost, "/api/v1/certificates/csr/" + csrID + "/actions/cancel", nil},
+		{http.MethodPost, "/api/v1/certificates/" + uuid.NewString() + "/deploy", map[string]any{"location_ids": []string{uuid.NewString()}}},
+		{http.MethodPatch, "/api/v1/locations/" + uuid.NewString(), map[string]any{"skip_verify": true}},
 	}
 	for _, rq := range requests {
 		requireError(t, admin.do(rq.method, rq.path, rq.body), http.StatusForbidden, "ALC-LIC-0001")
@@ -494,7 +507,9 @@ func TestLockRefusesInfrastructureChanges(t *testing.T) {
 	assert.Equal(t, denied+len(requests), s.auditCount("request.denied_license"))
 	assert.Equal(t, "web-01", s.target(admin, targetID)["name"])
 	for _, path := range []string{"/api/v1/targets", "/api/v1/targets/" + targetID, "/api/v1/targets/" + targetID + "/ssh-keys",
-		"/api/v1/targets/" + targetID + "/host-keys", "/api/v1/ssh-keys", "/api/v1/jobs"} {
+		"/api/v1/targets/" + targetID + "/host-keys", "/api/v1/ssh-keys", "/api/v1/jobs",
+		"/api/v1/certificates", "/api/v1/certificates/csr", "/api/v1/certificates/csr/" + csrID, "/api/v1/deployments",
+		"/api/v1/targets/" + targetID + "/certificate-locations"} {
 		requireStatus(t, admin.do(http.MethodGet, path, nil), http.StatusOK)
 	}
 
@@ -502,6 +517,9 @@ func TestLockRefusesInfrastructureChanges(t *testing.T) {
 	assert.Equal(t, "cancelled", s.job(admin, queuedDiscovery)["status"], "§8.6: queued read-only work is cancelled in lock")
 	assert.Equal(t, commands, len(f.server.Commands()), "L-29: no remote command in lock")
 	assert.Equal(t, before, counts(), "L-29: nothing deleted or added")
+	assert.Equal(t, storedKeys, s.count("managed_private_keys"), "L-29: no key was stored in lock")
+	assert.Equal(t, csrs, s.count("csr_requests"), "L-29: no signing request was changed in lock")
+	assert.Equal(t, "pending", decodeBody[map[string]any](t, admin.do(http.MethodGet, "/api/v1/certificates/csr/"+csrID, nil))["status"])
 }
 
 // L-81, R29: a removal queued before the lock is not run; after the renewal it waits for an
