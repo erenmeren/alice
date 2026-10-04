@@ -11,7 +11,7 @@
 
 ```bash
 make tools        # golangci-lint and govulncheck at pinned versions
-make web-install  # web dependencies from the lockfile
+make web-install  # web dependencies from the lockfile (npm ci --ignore-scripts)
 make up           # creates deploy/.env, builds the image, starts Alice and PostgreSQL
 make setup-token  # prints the one-time setup code for the wizard
 ```

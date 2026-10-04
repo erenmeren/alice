@@ -73,7 +73,9 @@ Reviewing a Dependabot pull request: read the release notes; for an image, compa
 
 - Go tools (`golangci-lint`, `govulncheck`) are `go install ...@vX.Y.Z`: a version, verified by the
   Go module checksum database. `go.sum` pins the module graph.
-- npm packages are pinned by `web/package-lock.json` (`npm ci`).
+- npm packages are pinned by `web/package-lock.json` (`npm ci --ignore-scripts`: no package runs
+  code at install time). Go modules are pinned by `go.sum`; `make vuln` and the workflow run
+  `go mod verify` first.
 - The testcontainers Ryuk reaper image is chosen by the library version, not named in this
   repository.
 - Playwright downloads its browsers (`npx playwright install`); the version follows

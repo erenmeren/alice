@@ -4,7 +4,8 @@ FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b533
 WORKDIR /src
 COPY locales/ locales/
 COPY web/package.json web/package-lock.json web/
-RUN cd web && npm ci
+# No install scripts (SEC-103): see the web-install target of the Makefile.
+RUN cd web && npm ci --ignore-scripts
 COPY web/ web/
 RUN mkdir -p internal/webui/dist && cd web && npm run build
 

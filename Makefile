@@ -45,9 +45,13 @@ i18n-check: ## Verify EN/TR translation catalogs have identical keys and placeho
 authz-doc: ## Regenerate docs/authz-matrix.md from the route table
 	go test ./internal/api -run TestAuthzMatrixDocIsCurrent -count=1 -update
 
+# --ignore-scripts (SEC-103, AUD-23): no package runs code at install time. Only fsevents (macOS)
+# and msw (copies its worker only when package.json sets msw.workerDirectory) declare install
+# scripts; native tools (rolldown, lightningcss, esbuild) come as optional platform packages.
+# Playwright's browsers are a separate step (make e2e).
 .PHONY: web-install
-web-install: ## Install web dependencies from the lockfile
-	cd web && npm ci
+web-install: ## Install web dependencies from the lockfile, without install scripts
+	cd web && npm ci --ignore-scripts
 
 .PHONY: web
 web: ## Build the web UI into internal/webui/dist/app
@@ -206,7 +210,8 @@ lint: ## Run golangci-lint (gosec, forbidigo, ...) on the release and the e2e bu
 	golangci-lint run --build-tags integration,testlicense ./internal/license/...
 
 .PHONY: vuln
-vuln: ## Check Go dependencies and code for known vulnerabilities
+vuln: ## Verify the Go module cache against go.sum, then check Go and npm dependencies for known vulnerabilities
+	go mod verify
 	govulncheck ./...
 	cd web && npm audit --omit=dev --audit-level=high
 
