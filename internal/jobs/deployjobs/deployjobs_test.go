@@ -820,6 +820,12 @@ func TestDeployRefusesForeignJobsAndBadPayloads(t *testing.T) {
 	j.Payload = map[string]string{"deployment_id": "nope"}
 	_, err = f.h.deploy(f.ctx, j, f.steps)
 	assert.Equal(t, jobs.Permanent, failureOf(t, err).Class)
+	r := f.recoverJob()
+	r.Payload = map[string]string{"deployment_id": "nope"}
+	before := len(f.inv.calls())
+	_, err = f.h.recoverJob(f.ctx, r, f.steps)
+	assert.Equal(t, jobs.Permanent, failureOf(t, err).Class)
+	assert.Len(t, f.inv.calls(), before, "a recovery without a deployment id reads nothing")
 	f.inv.errs["Deployment"] = inventory.ErrNotFound
 	_, err = f.h.deploy(f.ctx, f.job(), f.steps)
 	assert.Equal(t, "system.not_found", failureOf(t, err).Reason)
@@ -1180,6 +1186,20 @@ type brokenStatus struct{ providers.Session }
 
 func (brokenStatus) DeploymentStatus(context.Context, uuid.UUID) (providers.DeploymentState, error) {
 	return providers.DeploymentState{Phase: providers.PhaseNone, BackupDir: "/x"}, nil
+}
+
+// brokenFence answers a fence with a tombstone that carries a hash (the fake refuses to).
+type brokenFence struct{ providers.Session }
+
+func (brokenFence) FenceDeployment(context.Context, uuid.UUID) (providers.DeploymentState, error) {
+	return providers.DeploymentState{Phase: providers.PhaseFenced, NewCertSHA256: strings.Repeat("e", 64)}, nil
+}
+
+// brokenRollback answers a restore with rolled_back AND an error (the fake refuses to).
+type brokenRollback struct{ providers.Session }
+
+func (brokenRollback) RollbackDeployment(context.Context, providers.RollbackRequest, providers.StepLogger) (providers.RollbackOutcome, error) {
+	return providers.RollbackOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestored}, errors.New("and an error")
 }
 
 func TestRecoveryRefusesAJournalThatBreaksTheContract(t *testing.T) {
@@ -1565,6 +1585,20 @@ func TestRecoveryWithoutMaterialEndsOutcomeUnknown(t *testing.T) {
 	assert.Equal(t, 1, f.prov.Count("FenceDeployment"), "fix round 1 minor 2: fenced, best effort; its failure changes nothing")
 }
 
+// The best-effort fence before an outcome-unknown record opens its own session; when the server
+// cannot be reached the outcome is recorded all the same, without a fence.
+func TestRecoveryWithoutMaterialOnAnUnreachableServerEndsOutcomeUnknown(t *testing.T) {
+	f := newFixture(t)
+	f.sent(inventory.DeployStateRecovering, time.Hour)
+	f.inv.errs["DeploymentMaterial(false)"] = inventory.ErrNotFound
+	f.openErr = providers.NewError("ssh.unreachable", true, nil, nil)
+	res, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+	require.NoError(t, err)
+	assert.Equal(t, "rollback_failed", res["outcome"])
+	assert.Equal(t, "deployment.outcome_unknown", f.inv.lastFinish().ErrorCode)
+	assert.Zero(t, f.prov.Count("FenceDeployment"))
+}
+
 // A sent deployment whose journal is gone is "nothing was written" only shortly after the send: the
 // helper sweeps a committed journal after helperproto.NginxBackupKeep (7 days), so the threshold
 // after which a missing journal means "outcome unknown" must stay well below that retention (and
@@ -1633,6 +1667,23 @@ func TestRecoveryFencesBeforeNothingWasWritten(t *testing.T) {
 			}
 		})
 	}
+	t.Run("the fence answers a state that breaks the contract: nothing recorded, never failed", func(t *testing.T) {
+		for _, m := range []string{"recovery", "deploy"} {
+			f := newFixture(t)
+			f.sent(inventory.DeployStateRecovering, 2*time.Minute)
+			f.status = providers.DeploymentState{Phase: providers.PhaseNone}
+			f.wrap = func(s providers.Session) providers.Session { return brokenFence{s} }
+			var err error
+			if m == "recovery" {
+				_, err = f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+			} else {
+				_, err = f.h.deploy(f.ctx, f.job(), f.steps)
+			}
+			assert.Equal(t, "ssh.protocol_error", failureOf(t, err).Reason, m)
+			assert.Empty(t, f.inv.outcomes, m)
+			assert.NotContains(t, f.inv.calls(), "FinishDeployment", m)
+		}
+	})
 	t.Run("the fence finds a committed journal: verified from it", func(t *testing.T) {
 		f := newFixture(t)
 		f.sent(inventory.DeployStateRecovering, 2*time.Minute)
@@ -1800,6 +1851,10 @@ func TestDeployMeetsAPendingOperation(t *testing.T) {
 		return providers.RollbackOutcome{Result: providers.DeployRollbackFailed, FailedStep: "restore", Error: providers.DeployErrFileChanged,
 			Reason: "deployment.rollback_failed"}, nil
 	}
+	superseded := func() (providers.RollbackOutcome, error) { // a later operation owns the files: nothing put back
+		e := providers.NewError("deployment.superseded", false, nil, nil)
+		return providers.RollbackOutcome{Result: providers.DeployNoChange, Reason: e.Code}, e
+	}
 	type tc struct {
 		name       string
 		owner      *inventory.OperationOwner // the deployment Alice knows for pendingOp (nil: none)
@@ -1859,6 +1914,12 @@ func TestDeployMeetsAPendingOperation(t *testing.T) {
 			status: inventory.DeployStatusFailed, code: "deployment.recovery_pending", sends: 1},
 		{name: "the lookup fails: today's refusal", ownerErr: errors.New("db down"), status: inventory.DeployStatusFailed,
 			code: "deployment.recovery_pending", sends: 1},
+		{name: "unknown: nothing put back, refused RECOVERY_PENDING again: server_operation_pending (not pending_change_restored)",
+			rollback: superseded, second: pending, status: inventory.DeployStatusFailed, code: "deployment.server_operation_pending",
+			sends: 2, rollbacks: 1, stepStates: []string{"started", "skipped"}},
+		{name: "unknown: nothing put back, the claim check before the second send fails: the first refusal, no send",
+			claimErrAt: 3, rollback: hashMismatch, status: inventory.DeployStatusFailed, code: "deployment.recovery_pending",
+			sends: 1, rollbacks: 1, stepStates: []string{"started", "skipped"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixture(t)
@@ -1973,4 +2034,172 @@ func TestBeforeSendRefusalOnASentDeploymentRecordsNothing(t *testing.T) {
 	assert.Empty(t, f.inv.finishes, "no record written")
 	assert.Equal(t, inventory.DeployStateDeploying, f.inv.dep.State)
 	assert.Contains(t, f.inv.calls(), "FinishDeployment", "the guard refused it")
+}
+
+// The run's claim and the record's state are checked on every path before the send:
+// a claim lost at the begin record or at a refusal's record stops the run with nothing written; a
+// claim check that fails (not lost) right before the send ends the deployment failed with the proof
+// that nothing was written; a deployment that finished while the run began it is answered from its
+// record. None of them sends.
+func TestDeployBeforeTheSendClaimAndStateEdges(t *testing.T) {
+	t.Run("claim lost at the begin record: stale, nothing recorded", func(t *testing.T) {
+		f := newFixture(t)
+		f.inv.lost = true
+		_, err := f.h.deploy(f.ctx, f.job(), f.steps)
+		assert.Equal(t, "job.lease_expired", failureOf(t, err).Reason)
+		assert.Empty(t, f.inv.finishes)
+		assert.Equal(t, inventory.DeployStateQueued, f.inv.dep.State)
+		assert.Zero(t, f.prov.Count("Open"))
+	})
+	t.Run("claim lost when the refusal is recorded: stale, nothing recorded", func(t *testing.T) {
+		f := newFixture(t)
+		f.inv.material.ConfigValid = false
+		f.inv.hooks["DeploymentMaterial(true)"] = func(context.Context) {
+			f.inv.mu.Lock()
+			f.inv.lost = true
+			f.inv.mu.Unlock()
+		}
+		_, err := f.h.deploy(f.ctx, f.job(), f.steps)
+		assert.Equal(t, "job.lease_expired", failureOf(t, err).Reason)
+		assert.Contains(t, f.inv.calls(), "FinishDeployment")
+		assert.Empty(t, f.inv.finishes)
+		assert.Zero(t, f.prov.Count("DeployCertificate"))
+		assert.True(t, f.keyZeroed())
+	})
+	t.Run("the claim check before the send fails: failed interrupted, nothing written", func(t *testing.T) {
+		f := newFixture(t)
+		f.inv.errs["CheckClaim"] = errors.New("db blip")
+		res, err := f.h.deploy(f.ctx, f.job(), f.steps)
+		assert.Equal(t, inventory.DeployStatusFailed, res["outcome"])
+		assert.Equal(t, "deployment.interrupted", failureOf(t, err).Reason)
+		fin := f.inv.lastFinish()
+		assert.Equal(t, inventory.DeployStatusFailed, fin.Status)
+		assert.Equal(t, "deployment.interrupted", fin.ErrorCode)
+		assert.True(t, fin.NothingWritten, "the send is known not to have happened")
+		assert.Zero(t, f.prov.Count("DeployCertificate"))
+		assert.True(t, f.keyZeroed())
+	})
+	t.Run("finished while the run began it: answered from the record", func(t *testing.T) {
+		f := newFixture(t)
+		f.inv.hooks["BeginDeployment"] = func(context.Context) {
+			f.inv.mu.Lock()
+			f.inv.dep.State, f.inv.dep.Status, f.inv.dep.ErrorCode = inventory.DeployStateDone, inventory.DeployStatusFailed, "deployment.interrupted"
+			f.inv.mu.Unlock()
+		}
+		res, err := f.h.deploy(f.ctx, f.job(), f.steps)
+		assert.Equal(t, inventory.DeployStatusFailed, res["outcome"])
+		assert.Equal(t, "deployment.interrupted", failureOf(t, err).Reason)
+		assert.NotContains(t, f.inv.calls(), "DeploymentMaterial(true)", "the key is never handed out")
+		assert.Empty(t, f.inv.finishes)
+		assert.Zero(t, f.prov.Count("DeployCertificate"))
+	})
+}
+
+// A recovery whose claim check before the restore fails transiently (not lost) restores nothing and
+// records nothing: the next recovery reads the journal again.
+func TestRecoveryTransientClaimErrorBeforeTheRestoreRecordsNothing(t *testing.T) {
+	f := newFixture(t)
+	f.sent(inventory.DeployStateRecovering, time.Hour)
+	f.status = providers.DeploymentState{Phase: providers.PhaseWriting, NewCertSHA256: strings.Repeat("e", 64), BackupDir: "/b"}
+	f.inv.errs["CheckClaim"] = errors.New("db blip")
+	_, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+	jf := failureOf(t, err)
+	assert.Equal(t, jobs.Retryable, jf.Class)
+	assert.Equal(t, "internal.unexpected", jf.Reason)
+	assert.Zero(t, f.prov.Count("RollbackDeployment"))
+	assert.Empty(t, f.inv.outcomes)
+	assert.Equal(t, inventory.DeployStateRecovering, f.inv.dep.State)
+}
+
+// A committed journal whose verification the location skips (verification off) ends succeeded with
+// verified "skipped" and the verify step recorded as skipped, not ok.
+func TestRecoveryOfACommittedJournalWithVerificationSkipped(t *testing.T) {
+	f := newFixture(t)
+	f.sent(inventory.DeployStateRecovering, time.Hour)
+	newSHA := strings.Repeat("e", 64)
+	f.status = providers.DeploymentState{Phase: providers.PhaseCommitted, NewCertSHA256: newSHA, BackupDir: "/b"}
+	f.prov.Configure(func(c *fake.Config) {
+		c.Verify = func(providers.VerifyRequest) (providers.VerifyResult, error) {
+			return providers.VerifyResult{OK: true, Mode: "skipped"}, nil
+		}
+	})
+	res, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.DeployStatusSucceeded, res["outcome"])
+	fin := f.inv.lastFinish()
+	assert.Equal(t, "skipped", fin.Verified)
+	assert.Equal(t, newSHA, fin.CertFileSHA256)
+	assert.Contains(t, f.inv.stepNames(), providers.StepNameVerify+":"+string(providers.StepSkipped))
+	assert.NotContains(t, f.inv.stepNames(), providers.StepNameVerify+":"+string(providers.StepOK))
+}
+
+// Only a provider's own error is recorded on the server as a connection failure; a failure to record
+// it is logged (without the cause) and changes nothing for the deployment, which is retried.
+func TestConnectionFailureRecording(t *testing.T) {
+	f := newFixture(t)
+	f.openErr = errors.New("not a provider error")
+	_, err := f.h.deploy(f.ctx, f.job(), f.steps)
+	assert.Equal(t, jobs.Retryable, failureOf(t, err).Class)
+	assert.NotContains(t, f.inv.log, "RecordConnectionFailure")
+
+	f = newFixture(t)
+	f.openErr = providers.NewError("ssh.unreachable", true, nil, nil)
+	f.inv.errs["RecordConnectionFailure"] = errors.New("db down")
+	_, err = f.h.deploy(f.ctx, f.job(), f.steps)
+	assert.Equal(t, "ssh.unreachable", failureOf(t, err).Reason)
+	assert.Contains(t, f.inv.log, "RecordConnectionFailure")
+	assert.Contains(t, f.logs.String(), "could not record a connection failure")
+	assert.NotContains(t, f.logs.String(), "db down", "only the error type is logged")
+	assert.Zero(t, f.prov.Count("DeployCertificate"))
+}
+
+// A restore of a pending operation whose answer breaks the provider contract is not relied on: the
+// recover_pending step fails, nothing is sent again, and the deployment ends failed
+// server_operation_pending (nothing written by this deployment).
+func TestDeployPendingOperationRestoreThatBreaksTheContract(t *testing.T) {
+	pendingOp := uuid.MustParse("0190f5a0-0000-7000-8000-00000000abcd")
+	f := newFixture(t)
+	sends := 0
+	f.prov.Configure(func(cfg *fake.Config) {
+		cfg.Deploy = func(providers.DeployRequest) (providers.DeployOutcome, error) {
+			sends++
+			p := map[string]string{"operation_id": pendingOp.String()}
+			e := providers.NewError("deployment.recovery_pending", false, nil, p)
+			return providers.DeployOutcome{Result: providers.DeployNoChange, Reason: e.Code, Params: maps.Clone(p)}, e
+		}
+	})
+	f.wrap = func(s providers.Session) providers.Session { return brokenRollback{s} }
+	res, _ := f.h.deploy(f.ctx, f.job(), f.steps)
+	assert.Equal(t, inventory.DeployStatusFailed, res["outcome"])
+	assert.Equal(t, 1, sends, "not sent again")
+	fin := f.inv.lastFinish()
+	assert.Equal(t, "deployment.server_operation_pending", fin.ErrorCode)
+	assert.Equal(t, pendingOp.String(), fin.Params["operation_id"])
+	assert.True(t, fin.NothingWritten)
+	assert.Equal(t, []string{stepRecoverPending + ":started", stepRecoverPending + ":failed"},
+		slices.DeleteFunc(f.inv.stepNames(), func(s string) bool { return !strings.HasPrefix(s, stepRecoverPending+":") }))
+	assert.True(t, f.keyZeroed())
+}
+
+// A location whose verification is off skips the pre-check: the step is recorded skipped, nothing
+// is asked of the website before the send, and no served certificate is recorded as the previous
+// one (Alice did not see it).
+func TestDeployWithVerificationOffSkipsThePrecheck(t *testing.T) {
+	f := newFixture(t)
+	f.inv.material.Verify.Skip = true
+	res, err := f.h.deploy(f.ctx, f.job(), f.steps)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.DeployStatusSucceeded, res["outcome"])
+	require.NotEmpty(t, f.inv.stepNames())
+	assert.Equal(t, stepPrecheck+":"+string(providers.StepSkipped), f.inv.stepNames()[0])
+	assert.NotContains(t, f.inv.stepNames(), stepPrecheck+":"+string(providers.StepStarted))
+	for _, c := range f.prov.Calls() {
+		if c.Method == "VerifyDeployment" {
+			assert.NotEqual(t, f.current, c.Verify.Fingerprint, "the served certificate is not checked")
+		}
+	}
+	require.NotNil(t, f.inv.started)
+	assert.Empty(t, f.inv.started.PreviousFingerprint)
+	assert.Zero(t, f.inv.started.PreviousChainLength)
+	assert.Equal(t, 1, f.prov.Count("DeployCertificate"))
 }
