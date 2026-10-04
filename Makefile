@@ -165,8 +165,9 @@ e2e: ## Run Playwright tests against the e2e stack (make e2e-up first)
 
 GOLANGCI_LINT_VERSION ?= v2.14.0
 GOVULNCHECK_VERSION   ?= v1.8.0
-GITLEAKS_VERSION      ?= 8.30.1
-TRIVY_VERSION         ?= 0.74.0
+# Tool images are pinned by tag and by index digest (AUD-09; docs/dev/dependency-updates.md).
+GITLEAKS_IMAGE        ?= ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+TRIVY_IMAGE           ?= aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
 
 .PHONY: tools
 tools: ## Install pinned Go developer tools into $(HOME)/go/bin
@@ -175,6 +176,7 @@ tools: ## Install pinned Go developer tools into $(HOME)/go/bin
 
 .PHONY: lint
 lint: ## Run golangci-lint (gosec, forbidigo, ...) on the release and the e2e build
+	go run ./tools/pincheck
 	golangci-lint run ./...
 	golangci-lint run --build-tags e2e,testlicense ./cmd/...
 	golangci-lint run --build-tags integration,testlicense ./cmd/...
@@ -187,15 +189,15 @@ vuln: ## Check Go dependencies and code for known vulnerabilities
 
 .PHONY: secrets-scan
 secrets-scan: ## Scan git history for committed secrets
-	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/repo" ghcr.io/gitleaks/gitleaks:v$(GITLEAKS_VERSION) git /repo --config /repo/.gitleaks.toml --gitleaks-ignore-path /repo/.gitleaksignore --redact
+	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/repo" $(GITLEAKS_IMAGE) git /repo --config /repo/.gitleaks.toml --gitleaks-ignore-path /repo/.gitleaksignore --redact
 
 .PHONY: fs-scan
 fs-scan: ## Scan the source tree for HIGH/CRITICAL vulnerabilities and secrets (trivy fs)
-	docker run --rm -v "$(CURDIR):/src:ro" -w /src aquasec/trivy:$(TRIVY_VERSION) fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 --skip-dirs '**/node_modules',.superpowers,.git,web/playwright-report,web/test-results,bin .
+	docker run --rm -v "$(CURDIR):/src:ro" -w /src $(TRIVY_IMAGE) fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 --skip-dirs '**/node_modules',.superpowers,.git,web/playwright-report,web/test-results,bin .
 
 .PHONY: image-scan
 image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
-	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:$(TRIVY_VERSION) image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed alice:$(IMAGE_TAG)
+	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock $(TRIVY_IMAGE) image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed alice:$(IMAGE_TAG)
 
 # The e2e stack is always removed at the end, also when a stage of it fails. It publishes
 # ALICE_E2E_PORT (default 9443), so it runs beside the make up stack, which ci never touches.

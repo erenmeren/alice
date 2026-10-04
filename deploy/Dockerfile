@@ -1,6 +1,6 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 
-FROM node:24-alpine AS web
+FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS web
 WORKDIR /src
 COPY locales/ locales/
 COPY web/package.json web/package-lock.json web/
@@ -8,7 +8,7 @@ RUN cd web && npm ci
 COPY web/ web/
 RUN mkdir -p internal/webui/dist && cd web && npm run build
 
-FROM golang:1.27.1-alpine AS build
+FROM golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -37,7 +37,7 @@ RUN sum() { awk -v f="alice-helper-linux-$1" '$2 == f { print $1 }' /out/helper/
     -o /out/alice ./cmd/alice \
  && mkdir -p /out/keys /out/opt-alice/state && chmod 0700 /out/keys /out/opt-alice/state
 
-FROM gcr.io/distroless/static-debian12
+FROM gcr.io/distroless/static-debian12:latest@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
 COPY --from=build /out/alice /usr/local/bin/alice
 COPY --from=build --chown=10001:10001 /out/keys /opt/alice/keys
 # The state directory is copied as a subdirectory so it keeps mode 0700 (COPY creates its

@@ -33,7 +33,7 @@ func TestMain(m *testing.M) {
 
 func run(m *testing.M) int {
 	ctx := context.Background()
-	ctr, err := postgres.Run(ctx, "postgres:16-alpine",
+	ctr, err := postgres.Run(ctx, "postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea",
 		postgres.WithDatabase("alice"),
 		postgres.WithUsername("alice"),
 		postgres.WithPassword("s3cret-pw"),

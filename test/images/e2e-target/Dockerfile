@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 # Test-only SSH target for the Playwright suite (deploy/docker-compose.e2e.yml). Never part of a
 # release and never pushed. SSH fixture keys are generated at build time and their private halves
 # deleted at once, so nothing secret is committed (gitleaks) and every build has fresh fixture keys.
@@ -7,7 +7,7 @@
 # key is in any image layer. The container has no systemd: /usr/bin/systemctl is a test shim and
 # /usr/sbin/nginx a pass-through wrapper with fault injection for "nginx -t" (see both files).
 
-FROM golang:1.27.1-alpine AS helper
+FROM golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS helper
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY cmd/alice-helper/ cmd/alice-helper/
@@ -18,7 +18,7 @@ COPY internal/providers/nginx/nginxconf/ internal/providers/nginx/nginxconf/
 # e2e Alice image embeds and the setup script accepts it (R37 item 2).
 RUN CGO_ENABLED=0 GOOS=linux GOAMD64=v1 GOARM64=v8.0 go build -trimpath -buildvcs=false -ldflags "-s -w" -o /out/alice-helper ./cmd/alice-helper
 
-FROM ubuntu:22.04
+FROM ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server sudo procps nginx openssl \
  && rm -rf /var/lib/apt/lists/* \

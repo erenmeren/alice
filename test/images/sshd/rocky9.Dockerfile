@@ -7,7 +7,7 @@
 # target's test shims (test/images/e2e-target; the distribution's binaries move to
 # /usr/lib/alice-e2e/). The nginx package pulls in the systemd package here, so its systemctl is
 # moved aside, not missing.
-FROM rockylinux/rockylinux:9
+FROM rockylinux/rockylinux:9@sha256:8101994123cf3d0a8fee517bee7f39e555c7d92bd2d9eb3303cc988a0eeed00f
 RUN dnf install -y openssh-server sudo shadow-utils procps-ng util-linux nginx nginx-mod-stream nginx-mod-mail openssl \
  && dnf clean all \
  && mkdir -p /run/sshd \

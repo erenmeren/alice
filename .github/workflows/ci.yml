@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 24, cache: npm, cache-dependency-path: web/package-lock.json }
       - run: make tools
       - run: make lint
@@ -36,8 +36,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
       - run: make test-ssh
 
@@ -49,8 +49,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
       - run: go test -race -count=1 ./cmd/licensectl/... ./internal/license/...
       - run: go build -trimpath -o bin/licensectl ./cmd/licensectl
@@ -59,8 +59,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 24, cache: npm, cache-dependency-path: web/package-lock.json }
       - run: make web-install
       - run: make web-lint
@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
       - run: make secrets-scan
       - run: make fs-scan
@@ -82,8 +82,8 @@ jobs:
     timeout-minutes: 30
     needs: [go, web]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 24, cache: npm, cache-dependency-path: web/package-lock.json }
       - run: make web-install
       - run: ./deploy/dev/init-env.sh
@@ -94,5 +94,5 @@ jobs:
       - if: failure()
         run: docker compose -p alice-e2e -f deploy/docker-compose.yml -f deploy/docker-compose.e2e.yml --env-file deploy/.env logs
       - if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with: { name: playwright-report, path: web/playwright-report }

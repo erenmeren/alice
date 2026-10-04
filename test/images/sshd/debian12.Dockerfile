@@ -8,7 +8,7 @@
 # image layer. The container has no systemd: /usr/bin/systemctl and /usr/sbin/nginx are the e2e
 # target's test shims (test/images/e2e-target; the distribution's binary moves to
 # /usr/lib/alice-e2e/nginx).
-FROM debian:12
+FROM debian:12@sha256:f37a335e82bca302e955fa39f9dfe28f1be618f016f8a2b56318e5a5111afc26
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server sudo procps nginx libnginx-mod-stream libnginx-mod-mail openssl ssl-cert \
  && rm -rf /var/lib/apt/lists/* \

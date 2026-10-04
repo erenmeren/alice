@@ -7,7 +7,7 @@
 # key is in any image layer. The container has no systemd: /usr/bin/systemctl and /usr/sbin/nginx
 # are the e2e target's test shims (test/images/e2e-target; the distribution's binary moves to
 # /usr/lib/alice-e2e/nginx).
-FROM ubuntu:22.04
+FROM ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server sudo procps nginx openssl ssl-cert \
  && rm -rf /var/lib/apt/lists/* \

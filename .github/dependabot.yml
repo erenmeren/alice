@@ -1,0 +1,48 @@
+# Dependabot proposes updates to every pinned input (audit AUD-09). It is inert until this
+# repository has a GitHub remote; see docs/dev/dependency-updates.md.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      actions: { patterns: ["*"] }
+
+  # Base images of the release image, the e2e target and the SSH matrix. Dependabot's Docker
+  # updater reads files named Dockerfile; the matrix files test/images/sshd/*.Dockerfile may not be
+  # picked up, in which case they are updated by hand (docs/dev/dependency-updates.md).
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+  - package-ecosystem: docker
+    directory: /test/images/e2e-target
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+  - package-ecosystem: docker
+    directory: /test/images/sshd
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+
+  # PostgreSQL in deploy/docker-compose.yml. internal/testutil/pgtest and
+  # internal/platform/db name the same reference in Go and are edited by hand (tools/pincheck
+  # fails until they match).
+  - package-ecosystem: docker-compose
+    directory: /deploy
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      go-minor-patch: { update-types: [minor, patch] }
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch: { update-types: [minor, patch] }
