@@ -39,8 +39,9 @@ func TestCursorRoundTrip(t *testing.T) {
 	}
 }
 
-// AUD-13, D19: a cursor's time is bounded by what the lists can hold, years 0000 to 9999 (an X.509
-// GeneralizedTime NotAfter, UTCTime from 1950: certificates before 1970 page too), which PostgreSQL
+// AUD-13, D19: a cursor's time is bounded by what the lists can hold, years 0000 to 9999 widened by
+// a day each side (an X.509 GeneralizedTime NotAfter with a zone offset; UTCTime from 1950:
+// certificates before 1970 page too), which PostgreSQL
 // timestamptz stores; outside that range, or with an id that is not a UUID, a cursor is refused
 // instead of reaching the database. Every cursor the lists hand out decodes to the same values.
 func TestCursorTimeRange(t *testing.T) {
@@ -54,6 +55,11 @@ func TestCursorTimeRange(t *testing.T) {
 		time.Date(2049, 12, 31, 23, 59, 59, 0, time.UTC),
 		time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC),
 		time.Date(2026, 10, 4, 15, 0, 0, 0, time.FixedZone("TRT", 3*3600)),
+		// GeneralizedTime with a zone offset (I1): 00000101000000+2359 and 99991231235959-2359.
+		time.Date(0, 1, 1, 0, 0, 0, 0, time.FixedZone("", 23*3600+59*60)),
+		time.Date(9999, 12, 31, 23, 59, 59, 0, time.FixedZone("", -(23*3600+59*60))),
+		time.Date(-1, 12, 31, 0, 0, 0, 0, time.UTC),
+		time.Date(10000, 1, 1, 23, 59, 59, 999999000, time.UTC),
 	}
 	for i := range 200 {
 		times = append(times, time.UnixMicro(cursorMinMicros+int64(i)*((cursorMaxMicros-cursorMinMicros)/199)))

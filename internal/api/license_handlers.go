@@ -71,9 +71,10 @@ func (s *server) decodeLicense(w http.ResponseWriter, r *http.Request, install b
 	return []byte(req.License), true
 }
 
-// auditUnreadableLicense writes the row the license module writes for a file that is not valid
-// text (license.upload.invalid, problem "encoding"), for an upload refused before the module saw it
-// (S9, AUD-13). The history row of the module is not written: no file reached it. Failures to write
+// auditUnreadableLicense writes the row the license module writes for a file whose text holds NUL
+// (license.upload.invalid, problem "not_json": a NUL byte is not valid JSON, and the module's
+// structure check is the first to read past it), for an upload refused before the module saw it
+// (S9, AUD-13; M3: one vocabulary with the module). The history row of the module is not written: no file reached it. Failures to write
 // are logged, never shown to the caller.
 func (s *server) auditUnreadableLicense(r *http.Request) {
 	ev := audit.Event{
@@ -81,7 +82,7 @@ func (s *server) auditUnreadableLicense(r *http.Request) {
 		Action:     "license.upload.invalid", // "license.upload." + license.RejectReason of an *InvalidError
 		ObjectType: "license",
 		Result:     audit.Failure,
-		Details:    map[string]string{"reason": "invalid", "problem": "encoding"},
+		Details:    map[string]string{"reason": "invalid", "problem": "not_json"},
 	}
 	if err := s.deps.Audit.Write(r.Context(), ev); err != nil {
 		s.deps.Log.Error("audit write failed", append([]any{"request_id", RequestID(r.Context()), "action", ev.Action}, errorAttrs(err)...)...)

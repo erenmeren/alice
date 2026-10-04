@@ -100,11 +100,11 @@ func TestUnstorableTextIsRefusedAtTheEdge(t *testing.T) {
 	}
 
 	// S9: an upload refused at the edge still writes license.upload.invalid.
-	const encodingRows = "action = 'license.upload.invalid' AND result = 'failure' AND details->>'problem' = 'encoding'"
-	invalid := s.countWhere("audit_log", encodingRows)
+	const notJSONRows = "action = 'license.upload.invalid' AND result = 'failure' AND details->>'problem' = 'not_json'"
+	invalid := s.countWhere("audit_log", notJSONRows)
 	rec = admin.do(http.MethodPost, "/api/v1/license", map[string]any{"license": "{\"format\":1\x00}"})
 	assert.True(t, unstorableRefusal(t, rec.Code, rec.Body.Bytes(), "body"), "%d %s", rec.Code, rec.Body)
-	assert.Equal(t, invalid+1, s.countWhere("audit_log", encodingRows))
+	assert.Equal(t, invalid+1, s.countWhere("audit_log", notJSONRows))
 
 	assert.NotContains(t, s.logs.String(), "request failed")
 	require.NotContains(t, s.logs.String(), "22021")

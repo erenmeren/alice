@@ -56,7 +56,7 @@ func TestEveryRouteRefusesUnstorableQueryText(t *testing.T) {
 		id := edgeIdentity(t, rt)
 		for _, tc := range []struct{ query, field string }{
 			{"q=a%00b", "q"}, {"os_user=%ff", "os_user"}, {"actor=%C3%28", "actor"}, {"%ff=1", "query"}, {"a%00=1", "query"},
-			{"limit=10&cursor=x%00", "cursor"},
+			{"limit=10&cursor=x%00", "cursor"}, {"q=%zz", "query"}, {"a=1;b=2", "query"}, {"from=192.0.2.1%zz", "query"},
 		} {
 			(&Server{s: s}).ResetLimits()
 			called = false
@@ -199,8 +199,15 @@ func TestLicenseUploadWithNULTextIsAudited(t *testing.T) {
 	}
 	assert.Equal(t, audit.Failure, ev.Result)
 	assert.Equal(t, "license", ev.ObjectType)
-	assert.Equal(t, map[string]string{"reason": "invalid", "problem": "encoding"}, ev.Details)
-	assert.Equal(t, "invalid", license.RejectReason(&license.InvalidError{Problem: "encoding"}), "the row the license module writes")
+	assert.Equal(t, map[string]string{"reason": "invalid", "problem": "not_json"}, ev.Details)
+	// M3: the label is the one the license module itself gives such a file.
+	for _, file := range []string{"\x00", "{\"format\":1\x00}", "{\"format\":1,\"payload\":\"\x00\"}", "\uFEFF{\"a\x00\":1}"} {
+		_, err := license.ParseFile([]byte(file))
+		var inv *license.InvalidError
+		require.ErrorAs(t, err, &inv, "%q", file)
+		assert.Equal(t, "not_json", inv.Problem, "%q", file)
+		assert.Equal(t, "invalid", license.RejectReason(err), "%q", file)
+	}
 	assert.Equal(t, "admin", ev.Actor.Name)
 	assert.Zero(t, installs, "the license module never sees the file")
 

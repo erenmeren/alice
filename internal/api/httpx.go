@@ -59,9 +59,10 @@ func (s *server) decodeBody(w http.ResponseWriter, r *http.Request, dst any, lim
 }
 
 // readJSON is decodeBody without the answer: errTooLarge, errUnstorableText (AUD-13) or another
-// error for a malformed body. The order is the size cap (a declared length over limit is refused
-// unread; nothing past limit is ever read), then the text check on the bytes as they are read, then
-// the DTO; a body holding the NUL escape is refused as such even when it is malformed otherwise.
+// error for a malformed body. The size cap wins: a declared length over limit is refused unread,
+// nothing past limit is ever read, and a body over the cap is errTooLarge even when it holds the NUL
+// escape; then the text check on the bytes as they are read; then the DTO. A body within the cap
+// holding the NUL escape is refused as such even when it is malformed otherwise.
 func readJSON(w http.ResponseWriter, r *http.Request, dst any, limit int64, optional bool) error {
 	if r.ContentLength > limit {
 		return errTooLarge // declared too large: refused unread
@@ -82,8 +83,8 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any, limit int64, opti
 	switch {
 	case errors.As(err, &tooLarge):
 		return errTooLarge
-	case text.found():
-		return errUnstorableText
+	case text.refusal() != nil:
+		return text.refusal() // errTooLarge when the body is also over the cap
 	case err != nil:
 		return fmt.Errorf("api: malformed body: %w", err)
 	}

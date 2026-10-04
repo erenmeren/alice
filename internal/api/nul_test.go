@@ -3,7 +3,9 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -230,7 +232,35 @@ func TestNULCheckRunsAfterTheSizeCap(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-// The streaming check sees an escape split across reads and stops reading the body once found.
+// M1: a chunked body (no declared length) over the cap is 413 even when a NUL escape lies within
+// the cap, on every helper, whatever the read sizes; within the cap the same body is the NUL refusal.
+func TestChunkedBodyOverTheCapIsTooLargeEvenWithNUL(t *testing.T) {
+	h, _ := probeServer(t)
+	send := func(path, body string, oneByte bool) *httptest.ResponseRecorder {
+		var r io.Reader = strings.NewReader(body)
+		if oneByte {
+			r = iotest.OneByteReader(r)
+		}
+		req := httptest.NewRequest(http.MethodPost, path, io.NopCloser(r))
+		req.ContentLength = -1
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	big := `{"name":"\u0000` + strings.Repeat("a", maxBody) + `"}`
+	small := `{"name":"\u0000` + strings.Repeat("a", 1000) + `"}`
+	for _, path := range probePaths {
+		for _, oneByte := range []bool{false, true} {
+			rec := send(path, big, oneByte)
+			assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code, "%s one byte at a time: %v", path, oneByte)
+			rec = send(path, small, oneByte)
+			assert.True(t, unstorableRefusal(t, rec.Code, rec.Body.Bytes(), "body"), "%s: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+}
+
+// The streaming check sees an escape split across reads; once found it answers the refusal.
 func TestNULCheckOnSplitReads(t *testing.T) {
 	body := `{"name":"x\u0000` + strings.Repeat("y", 4096) + `"}`
 	r := &textCheck{r: iotest.OneByteReader(strings.NewReader(body))}
@@ -238,6 +268,9 @@ func TestNULCheckOnSplitReads(t *testing.T) {
 	err := json.NewDecoder(r).Decode(&probe)
 	require.ErrorIs(t, err, errUnstorableText)
 	assert.True(t, r.found())
-	assert.Less(t, r.read, 64, "nothing after the escape is read")
+	assert.Equal(t, len(body), r.read, "the rest is read once to tell the size cap, then nothing more")
+	n, err := r.Read(make([]byte, 8))
+	assert.Zero(t, n)
+	assert.ErrorIs(t, err, errUnstorableText)
 	assert.False(t, hasNULEscape(bytes.Repeat([]byte(`\\u0000`), 3)))
 }

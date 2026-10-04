@@ -417,13 +417,16 @@ func encodeCursor(at time.Time, id uuid.UUID) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(at.UTC().UnixMicro(), 10) + "." + id.String()))
 }
 
-// cursorMinMicros and cursorMaxMicros bound the time of a list cursor (AUD-13): years 0000 to 9999,
-// every time a list can hand out (a certificate's NotAfter is an X.509 time, years 0000-9999 and
-// from 1950 for UTCTime, so it may lie before 1970: D19; first sightings and deployments are recent).
-// PostgreSQL timestamptz holds the whole range; a time outside it never reaches a query.
+// cursorMinMicros and cursorMaxMicros bound the time of a list cursor (AUD-13) to every time a list
+// can hand out: a certificate's NotAfter is an X.509 time whose digits name years 0000-9999 (UTCTime
+// from 1950, so it may lie before 1970: D19), but a GeneralizedTime may carry a zone offset of up
+// to ±23:59, which Go accepts: in UTC that is from -0001-12-31T00:01Z to 10000-01-01T23:59Z. The
+// bounds are therefore one day wider on each side than years 0000-9999. First sightings and
+// deployments are recent. PostgreSQL timestamptz holds the whole range; a time outside it never
+// reaches a query.
 var (
-	cursorMinMicros = time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro()
-	cursorMaxMicros = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro() - 1
+	cursorMinMicros = time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC).Add(-24 * time.Hour).UnixMicro()
+	cursorMaxMicros = time.Date(10000, 1, 2, 0, 0, 0, 0, time.UTC).UnixMicro() - 1
 )
 
 func decodeCursor(c string) (time.Time, uuid.UUID, error) {
