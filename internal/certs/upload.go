@@ -199,6 +199,11 @@ func decodePFX(data []byte, password string) ([]*x509.Certificate, any, error) {
 	if len(cas)+1 > maxCertificates {
 		return nil, nil, invalid("too many certificates")
 	}
+	for _, c := range append([]*x509.Certificate{leaf}, cas...) {
+		if err := checkCertificateKeySize(c); err != nil {
+			return nil, nil, err
+		}
+	}
 	return append([]*x509.Certificate{leaf}, cas...), key, nil
 }
 

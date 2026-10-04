@@ -99,6 +99,9 @@ func certificatesOf(data []byte) ([]*x509.Certificate, error) {
 		if err != nil {
 			return nil, invalid("a certificate block cannot be parsed")
 		}
+		if err := checkCertificateKeySize(c); err != nil {
+			return nil, err
+		}
 		if len(out) == maxCertificates {
 			return nil, invalid("too many certificates")
 		}
@@ -108,6 +111,19 @@ func certificatesOf(data []byte) ([]*x509.Certificate, error) {
 		return nil, invalid("no certificate found")
 	}
 	return out, nil
+}
+
+// checkCertificateKeySize refuses a certificate whose RSA modulus is larger than maxRSABits. It
+// runs on every certificate Alice reads (uploads, signed requests, PFX files and files discovered
+// on a server) before any signature is checked with that key: verifying a signature costs roughly
+// the square of the modulus size times the exponent's length, and a hostile file can carry a
+// modulus of several hundred thousand bits (seconds of CPU per certificate). No such certificate
+// is usable: OpenSSL, and so Nginx, refuses it.
+func checkCertificateKeySize(c *x509.Certificate) error {
+	if k, ok := c.PublicKey.(*rsa.PublicKey); ok && k.N.BitLen() > maxRSABits {
+		return ErrUnsupportedKey
+	}
+	return nil
 }
 
 // ContainsPrivateKey reports whether data has a PEM private key block (PRIVATE KEY, RSA/EC/
@@ -142,6 +158,19 @@ func ParseChainPEM(data []byte) (Parsed, error) {
 		return Parsed{}, err
 	}
 	return describe(all[0], all[1:]), nil
+}
+
+// ParseServedChain reads a certificate file as a server uses it: the first certificate is the leaf
+// (the one Nginx serves), and the chain is only the path from that leaf towards its root that the
+// other certificates of the file form (orderChain, at now): certificates off that path, and the
+// file's order, are not kept. It is what Alice stores for a certificate found on a server, so a
+// file's unrelated or misordered certificates never become part of what Alice deploys elsewhere.
+func ParseServedChain(data []byte, now time.Time) (Parsed, error) {
+	all, err := certificatesOf(data)
+	if err != nil {
+		return Parsed{}, err
+	}
+	return describe(all[0], orderChain(all[0], all[1:], now)), nil
 }
 
 func describe(leaf *x509.Certificate, chain []*x509.Certificate) Parsed {
