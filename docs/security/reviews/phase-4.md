@@ -170,6 +170,18 @@ value rules.
 | P4-22 | Low (fixed) | The `nginx -T` parser used about 382 MB of heap on a 1 MB hostile dump, and later about 185 MB for one long directive. | Fixed: b8e253d (allocation ceiling, token and node budgets), a44c347 (arguments of directives that are not kept are counted, not stored; kept arguments capped at 4096). |
 | P4-23 | Low (fixed) | Matching `include` patterns against a hostile dump took about 3.9 s. | Fixed: b8e253d (bounded include and glob work; `TestHostileSizesFinishQuickly`). |
 | P4-24 | Medium (fixed) | After an Alice outage longer than the helper keeps a journal (7 days after a success), recovery found no journal and recorded the deployment as "failed, nothing written" although the new files could be live and unverified. | Fixed: 08e0f3a (a missing journal more than 24 hours after the send is an unknown outcome, `ALC-DEP-0018`, R38 item 47). |
+| P4-25 | Medium (fixed) | A discovery on one server replaced the stored chain of an uploaded certificate (or one whose key Alice holds) with whatever that server's file held for the same leaf, unrelated and misordered certificates included; `chain_complete` could turn true from server content (lifting the Administrator's incomplete-chain confirmation) and other servers would then be sent that chain. Final review B1-I1; the independent audit of 2026-10-04, AUD-17 (proof of concept). | Fixed: 92c5e10, 1191814 (a scan never changes the chain of a certificate a person brought or whose key Alice holds; a certificate found only on servers stores the ordered path from the served leaf). The legitimate way to complete such a chain, uploading the same certificate with its complete chain, now works instead of answering `ALC-CRT-0008`: a6a5ee7 (`certificate.chain_completed`). |
+| P4-26 | Medium (fixed) | Discovery parsed certificate files from the server without the RSA size bound of uploads: a 753,664-bit modulus cost about 22 s of CPU per file, inside the transaction holding the target's row lock (independent audit of 2026-10-04, AUD-04(b), proof of concept). | Fixed: 92c5e10 (every certificate Alice reads is refused above 16384 bits before any signature check), 1191814 (files parsed before the scan's transaction; `TestDiscoveryParsesFilesCheaplyAndOutsideTheTransaction`). |
+| P4-27 | Low (fixed) | Signing-request key generation was unbounded, ignored cancellation and shared a mutex with platform key generation, so a burst of RSA 4096 requests could pin the cores (independent audit of 2026-10-04, AUD-14; final review C m3). | Fixed: 715c908, 8a163c9 (two generation slots, `ALC-CRT-0016` retryable; at most 1000 open requests, `ALC-CRT-0017`; nothing generated once the caller has gone). |
+| P4-28 | Low (fixed) | A discovery run that stalled past its lease could still store its old scan after a newer one or after a deployment finished (a false "changed outside"). Final review B1 M1. | Fixed: 6b49090 (the scan is fenced to the discovery job's claim). |
+| P4-29 | Low (fixed) | The changed-outside check missed a foreign certificate after a scan that found the file missing, flagged a rollback whose previous certificate was not recorded, and consulted only the latest finished deployment. Final review B1 M2, M3; Task 13 ledger. | Fixed: 648b63c. |
+| P4-30 | Low (fixed) | Deployment params were bounded by Go's JSON length while the column's CHECK measures PostgreSQL's rendering (a space after every `:` and `,`), so near-limit params failed the write. Final review B1 M4. | Fixed: c2fc10c. |
+| P4-31 | Low (fixed) | Step rows could be inserted for a finished deployment at the database level (the application refused, the schema did not). Final review B1 M5. | Fixed: 4dd44b4 (trigger, `Z1003`). |
+| P4-32 | Low (fixed) | The sweep and a recovery request disagreed on which recovery job statuses are live (held ones). Final review B2 m5. | Fixed: 11297cd. |
+| P4-33 | Low (fixed) | `ALC-DEP-0020` said Alice did not put the previous files back, while the helper's rollback puts back what Alice wrote and leaves the other program's file, so the pair may not belong together; the advice did not ask for `nginx -t`. Final review C-I2. | Fixed: 8a163c9 (texts EN/TR, troubleshooting, manual-restore guide). |
+| P4-34 | Low (fixed) | The deploy, location-settings and signing-request bodies accepted repeated and case-variant keys (one silently won); a signing request's completion took a pasted private key into its parse; a repeated location id answered `validation.pattern`; the OpenAPI lacked several 400 answers. Final review C m1, m2, m5, m6. | Fixed: 8a163c9, 715c908, af0e6f7 (keys checked while scanned; `FuzzTopLevelKeys`). |
+| P4-35 | Low (fixed) | A held or queued deployment an Administrator discarded ended `deployment.interrupted` (or `license.locked`), the former with the failure email. Final review C m4. | Fixed: cc7de78, 8a163c9 (`deployment.cancelled`, `ALC-DEP-0022`, no email). |
+| P4-36 | Info (fixed) | Smaller certificate items deferred from Task 2: the weak-signature root exemption applied to any self-naming certificate in the path; a still-valid cross-sign listed first hid an uploaded root; `chain_certificate_expired` fired for an expired copy of the leaf's own key; the PFX pre-parse skipped structures it could not read (a BER file read as "wrong password"). The leak scanner's self-test did not cover stored-key and master-key secrets (Task 18 ledger). | Fixed: 00a1c57, d88d980; the finish-overwrites-phase invariant the API relies on is pinned by f8136b8. |
 
 No High finding is open except the documented product residual P4-01.
 
@@ -277,18 +289,36 @@ No High finding is open except the documented product residual P4-01.
 - **Signing requests.** The key of a cancelled or abandoned signing request stays sealed in the database (no
   deletion). A completed request accepts a certificate whose names differ from the request, with a warning.
 - **Upload retries.** If the answer to a successful upload is lost, uploading again answers "Alice already has this
-  certificate" (`ALC-CRT-0008`).
+  certificate" (`ALC-CRT-0008`) (unless it completes an incomplete chain, which answers 200).
 - **A deploy request is all-or-nothing** and names only the first website that stops it.
 - **Held deployments.** A deployment queued before the license locked stays held (and its website reserved) until an
   Administrator runs or discards it.
 - **sudo I/O logs.** `log_output` now also records `nginx-dump` answers (public certificates, paths); they grow with
   every scan and are the server administrator's to rotate.
-- **Smaller items deferred** (no security effect): the issuer choice in a chain can drop a valid uploaded root when a
-  still-valid cross-sign comes first; `chain_certificate_expired` also fires for an expired old copy of the leaf with
-  the same key; a BER-encoded PFX is reported as a wrong password; after two helper crashes, cleaning up a
-  passed-over operation can make the true latest one `SUPERSEDED`; the sweep's stat-only key decision can keep a
-  backup longer than needed; an I/O error reading the pair records fails an otherwise unchanged deployment; the
-  changed-outside check looks at the latest finished deployment only (a rare false "changed outside").
+- **Smaller items deferred** (no security effect): after two helper crashes, cleaning up a passed-over operation can
+  make the true latest one `SUPERSEDED`; the sweep's stat-only key decision can keep a backup longer than needed; an
+  I/O error reading the pair records fails an otherwise unchanged deployment.
+- **`nginx-status` during another helper's sweep.** While another helper process sweeps old backups, `nginx-status`
+  may report the operation as still active (`active: true`) for that moment; recovery then simply tries again later.
+- **`tls-probe` accepts any IP literal.** The unprivileged probe connects to the address and port it is given, so the
+  service account (or whoever controls Alice) can use it to tell open from closed TCP ports reachable from the
+  server. It sends only a TLS client hello and needs no sudo.
+- **The default Nginx configuration only.** The helper tests and dumps the configuration of `/usr/sbin/nginx` with its
+  built-in defaults. A unit that starts Nginx with `-c` or `-p` serves another configuration than the one Alice reads
+  and deploys to; the TLS verification after a deployment catches it (the website does not serve the new
+  certificate) and the deployment is rolled back.
+- **Verification through NAT or a load balancer.** A check from Alice's network may reach another backend behind the
+  same address; it can then fail or, if that backend already serves the same certificate, pass for the wrong
+  server. Set the port and name to check, or skip verification, for such websites.
+- **A server clock that jumps forward.** The helper's backup sweep uses the server's clock: a jump of more than 7 days
+  forward can remove journals and backups of recent operations early; recovery then finds no journal (see "A long
+  Alice outage").
+- **A certificate re-issued for a completed signing request.** The request's key belongs only to the certificate that
+  completed it; a later certificate issued for the same key cannot be attached to that key (the request is closed and
+  the key is not exportable). Create a new signing request instead.
+- **Shutdown between the start record and the send.** When Alice stops (or loses its lease) after it recorded the
+  start but before the command was sent, the deployment ends failed ("nothing was sent", which is true); deploy
+  again.
 - **Coverage of root-only helper paths.** `make coverage` runs as a normal user; the root suites (row 2) and the
   real-Nginx matrix (row 3) exercise the helper as root.
 - The Phase 1–3 findings and limitations still open stay as recorded in their review notes, except what this phase

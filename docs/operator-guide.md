@@ -141,8 +141,13 @@ Alice may store the certificate with a warning:
 - "This certificate is not valid yet": it cannot be deployed before its start date.
 
 Uploading a certificate Alice already holds with its key is refused ("Alice already has this certificate with its
-key"); open it from the list instead. If your browser lost the answer to an upload, check the list before you try
-again.
+key"); open it from the list instead. One exception: when the chain Alice holds is incomplete, upload the same
+certificate again with its complete chain (and its key) to complete it; Alice keeps the key it has and records
+`certificate.chain_completed`. If your browser lost the answer to an upload, check the list before you try again.
+
+A chain read from a server never replaces the chain of a certificate you uploaded or whose key Alice holds: what
+Alice deploys is what you gave it. For a certificate found only on servers, Alice keeps the certificate the server
+serves and the certificates that lead from it to its root, in order, never the other certificates of the file.
 
 ### Signing requests
 
@@ -152,10 +157,12 @@ most 64 characters), **Other domain names (one per line)** and the **Key type** 
 and send it to your certificate authority. The private key never leaves Alice.
 
 When the certificate arrives, open **Open signing requests**, choose **Add signed certificate** in the request's row,
-paste the certificate with its chain and choose **Add certificate**. Alice accepts only a certificate for the
-request's key; if its domain names differ from the request (certificate authorities sometimes change them), Alice
+paste the certificate with its chain (never a private key: Alice refuses a key pasted here) and choose **Add
+certificate**. Alice accepts only a certificate for the request's key; if its domain names differ from the request (certificate authorities sometimes change them), Alice
 adds it with a warning, so check that it is the certificate you ordered. **Cancel request** ends a request you no
-longer need.
+longer need. Alice keeps at most 1000 open requests (`ALC-CRT-0017`) and creates at most two keys at a time
+(`ALC-CRT-0016`: wait a moment and try again). A request's key belongs only to the certificate that completes it: a
+certificate re-issued later for the same key cannot be added, so create a new request for it.
 
 ### Websites on an Nginx server
 
@@ -243,7 +250,8 @@ certificate the website serves; deploy again if needed.
 While a deployment on a server is being finished, new deployments to that server are refused (`ALC-DEP-0002`); scans
 and SSH key work go on. Finishing a deployment also runs when the license has expired. A deployment that was
 waiting to start when the license locked is held as "On hold for the license" until an administrator runs or
-discards it after the next license is installed.
+discards it after the next license is installed. A discarded deployment ends **cancelled** (`ALC-DEP-0022`): nothing
+was sent, the website keeps its certificate, and no failure email is sent.
 
 ## Master-key rotation and the installation record
 

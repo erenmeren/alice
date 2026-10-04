@@ -66,7 +66,8 @@ In lock mode adding or removing servers, confirming fingerprints, **Test connect
 **Discover**, key removals, certificate uploads, signing requests, deployments and verification settings are
 refused, and the daily scans are not started. Key removals and deployments that were already waiting in the queue
 are paused; after the renewal they appear under **Waiting for an administrator** on **Servers**, and an
-administrator chooses **Run now** or **Discard** for each (nothing starts on its own). A deployment that had already
+administrator chooses **Run now** or **Discard** for each (nothing starts on its own; a discarded deployment ends
+cancelled, `ALC-DEP-0022`, without a failure email). A deployment that had already
 reached a server when the lock began is still finished or undone, so no server is left half-changed. Certificate
 expiry alerts by email with a note that the license expired arrive with the release that adds alerts.
 

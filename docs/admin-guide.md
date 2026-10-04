@@ -217,7 +217,9 @@ A certificate whose chain does not lead to a trusted root is marked "The certifi
 browsers may not trust this certificate." (an expired certificate on the way counts as a gap). Operators cannot
 deploy it. An administrator can, after ticking **I confirm that this incomplete chain is intended** in the deploy
 dialog; the confirmation is recorded with the deployment. Prefer uploading the certificate again with its full
-chain from your certificate authority.
+chain from your certificate authority: when Alice already holds the certificate with its key, that upload completes
+the stored chain (`certificate.chain_completed`). A chain found on a server never completes it: what Alice deploys
+is what a person uploaded.
 
 ### Emails about deployments
 
@@ -227,13 +229,14 @@ Every administrator with an email address gets these emails (when email is set u
 | Email | Sent when |
 |---|---|
 | "Certificate deployment failed on <server>" | A deployment failed and nothing changed, or the previous certificate was put back. |
-| "Manual action needed: certificate restore failed on <server>" | The previous files could not be put back, or another program changed them during the deployment. It names the backup on the server. |
+| "Manual action needed: certificate restore failed on <server>" | The previous files could not be put back, or another program changed them during the deployment (Alice then put back at most what it had written: run `nginx -t`, the pair may not match). It names the backup on the server. |
 | "The previous certificate is back on <server> but Alice could not confirm the website serves it" | The files are back, but the check of the previous certificate did not succeed. Check the website. |
 | "A later operation overwrote the files of a deployment on <server>" | Alice could not finish or undo a deployment because a later change replaced the files. |
 | "Alice cannot finish a deployment on <server>" or "Alice cannot confirm a deployment on <server> yet" | Once per deployment, after four failed attempts to find out how an interrupted deployment ended. Alice keeps trying every 15 minutes. |
 | "Alice could not confirm a certificate deployment on <server>" | Alice stopped trying after about a day, or the server was removed after the change was sent. Check the website and the backup on the server. |
 
-A successful deployment sends no email. Every deployment, refusal and outcome is in the audit log
+A successful deployment, and one an administrator cancelled by discarding its waiting job (`ALC-DEP-0022`), sends no
+email. Every deployment, refusal and outcome is in the audit log
 (`deployment.*`, `certificate.*`, `csr.*`, `location.*`).
 
 ## License

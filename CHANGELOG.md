@@ -23,8 +23,10 @@
 - **Verification settings** per website (administrators): the port and name Alice checks, or no check.
 - Helper protocol 4 (`alice-helper` 1.3.0): `nginx-dump`, `nginx-test`, `nginx-deploy`, `nginx-restore`,
   `nginx-status` (sudo, with narrow sudoers lines) and `tls-probe` (no sudo).
-- Error codes `ALC-NGX-0001..0009`, `ALC-CRT-0001..0015`, `ALC-DEP-0001..0021` and the audit actions
+- Error codes `ALC-NGX-0001..0009`, `ALC-CRT-0001..0017`, `ALC-DEP-0001..0022` and the audit actions
   `certificate.*`, `csr.*`, `location.*` and `deployment.*`.
+- Uploading a certificate Alice already holds with an incomplete chain, now with its complete chain, completes the
+  stored chain (`certificate.chain_completed`); any other repeated upload is still refused (`ALC-CRT-0008`).
 - Developer targets: `make fuzz-nginx`, `make fuzz-certs`; `make test-ssh` also runs a real-Nginx matrix on Ubuntu
   22.04, Debian 12 and Rocky 9 and is part of `make ci` and of a new CI job; `go run ./tools/testcerts` writes a test
   certificate pack.
@@ -40,7 +42,12 @@
   scanned; the root last-key guard covers every uid-0 account; the **SSH keys** list marks keys that are no longer
   found.
 - Lock mode also refuses certificate uploads, signing requests, deployments and verification settings; deployments
-  waiting in the queue are held for an administrator.
+  waiting in the queue are held for an administrator. A held deployment an administrator discards ends
+  **cancelled** (`ALC-DEP-0022`) without a failure email.
+- A scan never changes the chain of a certificate you uploaded or whose key Alice holds; a certificate found only on
+  servers keeps the leaf and its ordered chain, without other certificates of the file.
+- Alice creates at most two signing-request keys at once (`ALC-CRT-0016`, try again) and keeps at most 1000 open
+  signing requests (`ALC-CRT-0017`).
 - `make coverage` enforces floors for `internal/api`, `internal/certs`, `internal/providers/nginx` and its parser;
   several existing floors were raised.
 
