@@ -94,7 +94,8 @@ installation signed with the test key, which only this build trusts; fields `val
 (damage the newest stored license file so the "changed outside Alice" banner appears), `POST /test/jobs/drain`
 (run due jobs now: it claims jobs for 20 s, at most 20 per call, and lets the last one run until 50 s, so give the
 request a 60 s timeout; a client that gives up does not cancel the running job; the answer is `{"ran": n}`, plus
-`"cut_off": true` when the budget ended with a job still running, which is then retried like any interrupted job) and `POST /test/scheduler/run` with `{"task": "<job type>"}` (run one periodic task now,
+`"cut_off": true` exactly when the budget ended before the running job returned, which is then retried like any
+interrupted job; one drain runs at a time, a second one meanwhile answers 409, which the Playwright helper retries) and `POST /test/scheduler/run` with `{"task": "<job type>"}` (run one periodic task now,
 for example `deployment.recovery_sweep`; 404 for a name that is not a scheduled task). The e2e build starts no job
 workers: queued jobs (connection tests, discovery, key removals, certificate deployments and their recoveries, and
 the jobs the scheduler enqueues) run only when a test calls `/test/jobs/drain`, so every job state is reproducible.
@@ -115,24 +116,28 @@ removes it with its volumes. `sshtarget` is an Ubuntu 22.04 SSH server that Alic
 with the helper copied to `/opt/alice-bundle/alice-helper` (built like `make helper`, so its checksum is the one the
 e2e image embeds). The Playwright tests prepare it with
 `docker compose -p alice-e2e … exec -T sshtarget /usr/local/sbin/alice-e2e-prepare` (the setup script on stdin) and
-change its host key with `/usr/local/sbin/alice-e2e-rotate-hostkey`; their helper `targetExec` refuses the project
+change its host key with `/usr/local/sbin/alice-e2e-rotate-hostkey` (it keeps the previous keys, which
+`/usr/local/sbin/alice-e2e-restore-hostkey` puts back); their helper `targetExec` refuses the project
 `alice`, and no test touches any other container.
 
 From Phase 4 `sshtarget` also runs Ubuntu's Nginx (`test/images/e2e-target/nginx-www.conf`) on port 443, which
 Alice reaches as `sshtarget:443` on the internal network: `www.example.test` (a fixed certificate and key pair in
 `/etc/nginx/ssl`, a supported location) and `files.example.test` (files chosen by `$ssl_server_name`, deliberately
-unsupported). Prepare it with the setup script of the `nginx` profile. A throwaway test CA
-(`/opt/alice-test-ca`) and the `www.example.test` pair are created when the container starts, so no key is
+unsupported), plus `s1.example.test` … `s5.example.test` (five more supported websites, each with its own files,
+for a deployment to several websites at once). Prepare it with the setup script of the `nginx` profile. A throwaway test CA
+(`/opt/alice-test-ca`) and the website pairs are created when the container starts, so no key is
 committed or in an image layer. Commands for tests (as root, through `docker compose -p alice-e2e … exec -T
 sshtarget`):
 
 | Command | What it does |
 |---|---|
-| `alice-e2e-newcert <name> [--broken]` | Prints a fresh certificate for `<name>` from the test CA (leaf and CA) and its key between `-----ALICE CERT-----`, `-----ALICE KEY-----` and `-----ALICE END-----` markers; `--broken` prints an unrelated key |
+| `alice-e2e-newcert <name>[,<name>…] [--broken]` | Prints a fresh certificate for `<name>` (several names separated by commas: one certificate for all, the first is the CN) from the test CA (leaf and CA) and its key between `-----ALICE CERT-----`, `-----ALICE KEY-----` and `-----ALICE END-----` markers; `--broken` prints an unrelated key |
 | `alice-e2e-served <name>` | The SHA-256 fingerprint (64 lower-case hex digits) of the certificate Nginx serves for `<name>` |
 | `alice-e2e-test-mode ok\|fail-once\|fail` | Makes the next (`fail-once`) or every (`fail`) `nginx -t` fail. `fail-once` is consumed by ANY `nginx -t`, including the one a connection test runs (`nginx-test`), so arm it right before the deployment. `nginx -T` is never faulted: under `fail`, discovery still reports the configuration valid |
-| `alice-e2e-reload-mode ok\|fail-once\|fail\|noop` | Makes the next or every `systemctl reload nginx` fail, or succeed without reloading (`noop`: Nginx keeps serving the old certificate) |
-| `alice-e2e-nginx-reset` | A fresh `www.example.test` pair, no faults, Nginx reloaded. `POST /test/reset` resets only Alice: it does not touch the target's Nginx files, fault modes, helper journals or sudoers, so call this between tests |
+| `alice-e2e-reload-mode ok\|fail-once\|fail\|noop\|drop-once` | Makes the next or every `systemctl reload nginx` fail, or succeed without reloading (`noop`: Nginx keeps serving the old certificate); `drop-once` first ends Alice's SSH session (as a dropped network would) and then reloads, so the deployment is interrupted and the recovery sweep finishes it |
+| `alice-e2e-pki sign <name>[,<name>…]` | Signs the certificate signing request on stdin with the test CA for the given names (the request's own names are ignored) and prints the certificate and the CA certificate |
+| `alice-e2e-config-mode broken\|ok` | Adds (or removes) a configuration file with a syntax error: `nginx -T` and `nginx -t` fail, the running Nginx keeps serving |
+| `alice-e2e-nginx-reset` | Fresh pairs for every website, no faults, no broken configuration file, Nginx reloaded. `POST /test/reset` resets only Alice: it does not touch the target's Nginx files, fault modes, helper journals or sudoers, so call this between tests |
 
 How the target differs from a real server: the container has no systemd, so `/usr/bin/systemctl` is a test
 shim that handles exactly `reload nginx` (runs `nginx -s reload`, as `nginx.service` does) and
