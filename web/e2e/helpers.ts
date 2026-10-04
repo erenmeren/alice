@@ -33,7 +33,27 @@ function networkChangedMarker(testInfo: { project: { outputDir: string }; testId
 // attempt saw such an abort: playwright.config.ts allows one retry, and a retry of an attempt that
 // failed without one fails at once with the reason, so no other failure is retried. In CI the
 // retry policy is unchanged (one retry for any failure).
-export const test = base.extend<{ cspGuard: void; networkChangeGuard: void }>({
+// unexpectedCutOffs records every drain that cut off a running job while the test did not mean to
+// interrupt one (drainJobs, drainUntil, settle). A cut-off fails at once where it happens, but a
+// caller's toPass would retry past that failure; the cutOffGuard fixture fails the test at its end
+// whenever one was recorded, so a cut-off can never be swallowed.
+const unexpectedCutOffs: string[] = [];
+
+function recordCutOff(where: string): void {
+  unexpectedCutOffs.push(where);
+}
+
+export const test = base.extend<{ cspGuard: void; networkChangeGuard: void; cutOffGuard: void }>({
+  cutOffGuard: [
+    // Playwright reads a fixture's dependencies from this pattern: it needs none.
+    // eslint-disable-next-line no-empty-pattern
+    async ({}, use) => {
+      unexpectedCutOffs.length = 0;
+      await use();
+      expect(unexpectedCutOffs, 'a drain cut off a running job (it goes to recovery) although the test did not mean to interrupt one').toEqual([]);
+    },
+    { auto: true },
+  ],
   networkChangeGuard: [
     async ({ context }, use, testInfo) => {
       const marker = networkChangedMarker(testInfo);
@@ -586,34 +606,65 @@ export interface DrainResult {
   cut_off?: boolean;
 }
 
+// DRAIN_RUNNING is the body of the drain endpoint's 409 while another drain runs (cmd/alice
+// testapi_e2e.go); only that answer is waited out. Its other 409 ("no job runner"), a 5xx or a
+// failed request fail the step at once.
+const DRAIN_RUNNING = 'a drain is already running';
+
 // drainJobs runs every due background job now (e2e build: serve starts no job workers). The server
 // claims jobs for 20 s and lets the last one run until 50 s, so the request waits up to 60 s (the
 // default 30 s would give up while a deployment still runs). The answer is {"ran": n}, plus
 // "cut_off": true when the server's budget ended with a job still running. Only one drain runs at a
-// time: a 409 (another drain, for example one whose client gave up, is still running) is retried.
+// time: while another one runs (for example one whose client gave up) the server answers 409 "a
+// drain is already running", and only that answer is retried.
 // A cut-off fails the test unless opts.allowCutOff (a journey that means to interrupt a job).
 export async function drainJobs(request: APIRequestContext, opts: { allowCutOff?: boolean } = {}): Promise<DrainResult> {
-  let result: DrainResult = { ran: 0 };
-  await expect(async () => {
-    const res = await request.post('/test/jobs/drain', { timeout: 60_000 });
-    expect(res.status(), 'POST /test/jobs/drain: 409 means another drain still runs').not.toBe(409);
-    expect(res.ok(), 'POST /test/jobs/drain (is this the Phase 3 e2e build?)').toBe(true);
-    result = (await res.json()) as DrainResult;
-  }).toPass({ timeout: 120_000 });
-  if (!opts.allowCutOff) expect(result.cut_off ?? false, 'a drain cut off a running job (it goes to recovery)').toBe(false);
+  let status = 0;
+  let body = '';
+  let failure = '';
+  await expect
+    .poll(
+      async () => {
+        try {
+          const res = await request.post('/test/jobs/drain', { timeout: 60_000 });
+          status = res.status();
+          body = await res.text();
+        } catch (e) {
+          failure = String(e);
+          return 'answered';
+        }
+        return status === 409 && body.includes(DRAIN_RUNNING) ? 'another drain runs' : 'answered';
+      },
+      { message: 'POST /test/jobs/drain: another drain is still running', timeout: 120_000, intervals: [250, 500, 1_000] },
+    )
+    .toBe('answered');
+  expect(failure, 'POST /test/jobs/drain failed').toBe('');
+  expect(status, `POST /test/jobs/drain (is this the e2e build?): ${body}`).toBe(200);
+  const result = JSON.parse(body) as DrainResult;
+  if (result.cut_off && !opts.allowCutOff) {
+    recordCutOff('drainJobs');
+    expect(result.cut_off, 'a drain cut off a running job (it goes to recovery)').toBe(false);
+  }
   return result;
 }
 
-// settle runs due jobs until done is visible: a job finishes, then the page's polling shows its result.
-// A drain that cuts a job off ends the wait with a failure (toPass would otherwise retry past it).
-export async function settle(request: APIRequestContext, done: Locator): Promise<void> {
+// drainUntil runs due jobs until check passes (a job finishes, then the page or the API shows its
+// result). A drain that cuts a job off ends the wait with a failure (toPass would otherwise retry
+// past it) and is recorded, so it fails the test even when drainUntil runs inside a caller's toPass.
+export async function drainUntil(request: APIRequestContext, check: () => Promise<void>, timeout = 90_000): Promise<void> {
   let cutOff = false;
   await expect(async () => {
     cutOff = (await drainJobs(request, { allowCutOff: true })).cut_off ?? false;
     if (cutOff) return; // stop waiting: reported below
-    await expect(done).toBeVisible({ timeout: 1_500 });
-  }).toPass({ timeout: 90_000 });
+    await check();
+  }).toPass({ timeout });
+  if (cutOff) recordCutOff('drainUntil');
   expect(cutOff, 'a drain cut off a running job (it goes to recovery)').toBe(false);
+}
+
+// settle runs due jobs until done is visible: a job finishes, then the page's polling shows its result.
+export async function settle(request: APIRequestContext, done: Locator): Promise<void> {
+  await drainUntil(request, () => expect(done).toBeVisible({ timeout: 1_500 }));
 }
 
 // fingerprintOf extracts "SHA256:…" from the output of ssh-keygen -lf.
