@@ -78,12 +78,26 @@ build: web helper ## Build the alice binary with the embedded UI (and the helper
 # positive control: if it lacks the symbols, the names here are stale and the guard proves nothing.
 E2E_SYMBOLS := main\.(damageLicenseFile|tamperNewestLicenseFile|resetInstall|e2eClock|e2eMailbox|drainJobs|runWithinBudget|drainMu|errDrainBudget|runScheduledTask|scheduled)$$
 
+# Test-only data a release binary must not hold (AUD-23): the label the test license signing key is
+# derived from (testKeyLabel in internal/license/keys_testlicense.go) and a route only the e2e build
+# serves (cmd/alice/testapi_e2e.go). release-symcheck proves an e2e build holds both, so their
+# absence from the release build and from the image (image-check) means something.
+# internal/archtest/buildtags_test.go checks that both values still match the source.
+TEST_LICENSE_LABEL := alice test license signing key v1
+TEST_ROUTE_MARKER := /test/clock
+
 .PHONY: release-symcheck
-release-symcheck: ## Fail if the release build of alice links e2e-only test code
+release-symcheck: ## Fail if the release build of alice links e2e-only test code, has build tags or trusts the test license key
 	CGO_ENABLED=0 go build -trimpath -o bin/.symcheck-release ./cmd/alice
 	CGO_ENABLED=0 go build -trimpath -tags "e2e testlicense" -o bin/.symcheck-e2e ./cmd/alice
 	@go tool nm bin/.symcheck-e2e | grep -E ' $(E2E_SYMBOLS)' >/dev/null || { echo "release-symcheck: the e2e build lacks the guarded symbols; update E2E_SYMBOLS"; exit 1; }
 	@! go tool nm bin/.symcheck-release | grep -E ' $(E2E_SYMBOLS)' || { echo "release-symcheck: the release build links e2e-only code"; exit 1; }
+	@go version -m bin/.symcheck-e2e | grep -Eq '^\s+build\s+-tags=.*testlicense' || { echo "release-symcheck: cannot see build tags in the build info"; exit 1; }
+	@! go version -m bin/.symcheck-release | grep -Eq '^\s+build\s+-tags=' || { echo "release-symcheck: the release build has build tags"; exit 1; }
+	@grep -aqF '$(TEST_LICENSE_LABEL)' bin/.symcheck-e2e || { echo "release-symcheck: cannot see the test key label in the e2e build; update TEST_LICENSE_LABEL"; exit 1; }
+	@! grep -aqF '$(TEST_LICENSE_LABEL)' bin/.symcheck-release || { echo "release-symcheck: the release build trusts the test license key"; exit 1; }
+	@grep -aqF '$(TEST_ROUTE_MARKER)' bin/.symcheck-e2e || { echo "release-symcheck: cannot see $(TEST_ROUTE_MARKER) in the e2e build; update TEST_ROUTE_MARKER"; exit 1; }
+	@! grep -aqF '$(TEST_ROUTE_MARKER)' bin/.symcheck-release || { echo "release-symcheck: the release build serves the e2e /test routes"; exit 1; }
 	@rm -f bin/.symcheck-release bin/.symcheck-e2e
 	@echo "release-symcheck: ok"
 
@@ -108,6 +122,15 @@ IMAGE_TAG ?= ci
 image: ## Build the alice container image as alice:$(IMAGE_TAG) (default alice:ci; never alice:dev)
 	@[ "$(IMAGE_TAG)" != dev ] || { echo "make image never writes alice:dev (the make up stack's tag); use make up"; exit 1; }
 	docker build -f deploy/Dockerfile --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t alice:$(IMAGE_TAG) .
+
+# make image-check inspects the image make image just built (alice:$(IMAGE_TAG), never alice:dev):
+# deploy/dev/check-image.sh lists what it checks. It needs Docker and Go, no database, no network.
+# The helper build is reproducible, so the image must hold the checksums make helper writes.
+.PHONY: image-check
+image-check: image helper ## Check the release image: non-root, no shell or test artefacts, a release binary without build tags, test key or /test routes (AUD-23)
+	TEST_LICENSE_LABEL='$(TEST_LICENSE_LABEL)' TEST_ROUTE_MARKER='$(TEST_ROUTE_MARKER)' \
+	  HELPER_SHA256_AMD64='$(call HELPER_SUM,amd64)' HELPER_SHA256_ARM64='$(call HELPER_SUM,arm64)' \
+	  ./deploy/dev/check-image.sh $(IMAGE_TAG)
 
 .PHONY: up
 up: ## Build and start Alice with PostgreSQL (https://localhost)
@@ -205,7 +228,7 @@ image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
 ci: ## Run the full CI pipeline locally
 	$(MAKE) lint test coverage test-ssh build release-symcheck i18n-check web-lint web-test vuln secrets-scan fs-scan
 	@status=0; $(MAKE) e2e-up e2e-hardening-check e2e || status=$$?; $(MAKE) e2e-down; exit $$status
-	$(MAKE) image-scan
+	$(MAKE) image-check image-scan
 
 .PHONY: fuzz-license
 fuzz-license: ## Fuzz the license parser for 60 s (spec §25.6)
