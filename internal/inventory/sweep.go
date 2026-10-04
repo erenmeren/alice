@@ -12,6 +12,12 @@ import (
 	"alice/internal/platform/db"
 )
 
+// liveRecoveryJob is the condition, on a jobs row r, of a recovery job that is still live: queued,
+// running, or held (a recovery is ClassAlways and is never held by the license, but a held one would
+// still be live). The sweep (sweepWhere) and RequestRecovery (requestRecoveryLocked) use this one
+// list, so neither queues a recovery while the other sees one live.
+const liveRecoveryJob = `r.status IN ('queued', 'running', 'blocked_license')`
+
 // sweepWhere selects the deployments the sweep handles ($1 now, $2 the recovery dedupe prefix):
 // unfinished, their job not running, no live recovery job, and either on a deleted server, or
 // possibly sent with recover_after passed, or never sent with a job that ended (or was pruned). A
@@ -21,7 +27,7 @@ JOIN targets t ON t.id = d.target_id
 LEFT JOIN jobs j ON j.id = d.job_id
 WHERE d.state <> 'done'
   AND (j.status IS NULL OR j.status <> 'running')
-  AND NOT EXISTS (SELECT 1 FROM jobs r WHERE r.dedupe_key = $2 || d.id::text AND r.status IN ('queued', 'running'))
+  AND NOT EXISTS (SELECT 1 FROM jobs r WHERE r.dedupe_key = $2 || d.id::text AND ` + liveRecoveryJob + `)
   AND (t.deleted_at IS NOT NULL
     OR (d.state IN ('deploying', 'recovering') AND (d.recover_after IS NULL OR d.recover_after <= $1))
     OR (d.state IN ('queued', 'precheck') AND (j.status IS NULL OR j.status NOT IN ('queued', 'blocked_license'))))`

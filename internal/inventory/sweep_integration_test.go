@@ -68,6 +68,14 @@ func TestSweepDeployments(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, n, "a live recovery is never doubled")
 	assert.Equal(t, []string{"queued"}, f.recoverJobs(a))
+
+	// B2 m5: the sweep and RequestRecovery agree on what a live recovery is: a held one counts too.
+	f.jobStatus(f.recoverJobID(a), "blocked_license", "")
+	f.h.clock.Advance(16 * time.Minute)
+	n, err = f.h.svc.SweepDeployments(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, n, "a held recovery is live: the sweep leaves the deployment")
+	assert.Equal(t, []string{"blocked_license"}, f.recoverJobs(a))
 }
 
 // Every way a deployment can be left behind ends in recovery or a terminal state.

@@ -933,7 +933,7 @@ func (s *Service) requestRecoveryLocked(ctx context.Context, tx pgx.Tx, d locked
 	}
 	dedupe := recoverDedupePrefix + d.id.String()
 	var live uuid.UUID
-	err := tx.QueryRow(ctx, "SELECT id FROM jobs WHERE dedupe_key = $1 AND status IN ('queued', 'running', 'blocked_license')", dedupe).Scan(&live)
+	err := tx.QueryRow(ctx, "SELECT r.id FROM jobs r WHERE r.dedupe_key = $1 AND "+liveRecoveryJob, dedupe).Scan(&live)
 	if err == nil {
 		return live, nil
 	}
