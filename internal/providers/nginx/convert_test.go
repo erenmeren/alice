@@ -573,3 +573,56 @@ func TestConvertTruncationIsReported(t *testing.T) {
 	_, w = convert(validDump([]helperproto.NginxServer{server([]string{"a"}, 443, pair(c, k))}, certFile(c, u.chain), keyFile(k)))
 	assert.Empty(t, w, "nothing cut, nothing said")
 }
+
+// A1-I1 (Alice side): a file whose resolved path is outside the helper's vocabulary makes the
+// location unsupported, even when an older helper did not say so (it would be deployed, and its
+// journal could not be read back).
+func TestConvertResolvedPathOutsideTheVocabularyIsUnsupported(t *testing.T) {
+	u := newUnitCerts(t)
+	const c, k = "/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key"
+	for name, files := range map[string][]helperproto.NginxFile{
+		"certificate": {func() helperproto.NginxFile {
+			f := certFile(c, u.chain)
+			f.Resolved, f.Symlinked = "/etc/acme/*.example.test/fullchain.cer", true
+			return f
+		}(), keyFile(k)},
+		"key": {certFile(c, u.chain), func() helperproto.NginxFile {
+			f := keyFile(k)
+			f.Resolved, f.Symlinked = "/etc/acme/*.example.test/key.key", true
+			return f
+		}()},
+		"helper's own problem": {func() helperproto.NginxFile {
+			f := certFile(c, nil)
+			f.Resolved, f.SHA256, f.PEM, f.Problem = "/etc/acme/a b/fullchain.cer", "", "", helperproto.FileNameNotAllowed
+			return f
+		}(), keyFile(k)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, _ := convert(validDump([]helperproto.NginxServer{server([]string{"a"}, 443, pair(c, k))}, files...))
+			require.Len(t, got, 1)
+			loc := got[0].Location
+			assert.False(t, loc.Supported)
+			assert.Equal(t, providers.UnsupportedFile, loc.Unsupported)
+			assert.Contains(t, []string{loc.Problem, loc.KeyProblem}, providers.CertProblemNameNotAllowed)
+		})
+	}
+}
+
+// A2-I3: the dump's warnings are bounded: a hostile list of 100,000 distinct codes costs linear
+// time, keeps at most maxDumpWarnings of them and reports the cut.
+func TestDumpWarningsAreBounded(t *testing.T) {
+	d := validDump(nil)
+	d.Warnings = append(d.Warnings, helperproto.WarnStreamTLS, helperproto.WarnStreamTLS, helperproto.WarnMailTLS)
+	for i := range 100_000 {
+		d.Warnings = append(d.Warnings, "w_"+strings.Repeat("a", i%30)+strings.Map(func(r rune) rune { return 'a' + r - '0' }, fmt.Sprint(i)))
+	}
+	start := time.Now()
+	out, truncated := dumpWarnings(d, nil)
+	assert.Less(t, time.Since(start), time.Second)
+	assert.True(t, truncated)
+	assert.Len(t, out, maxDumpWarnings)
+	assert.Equal(t, helperproto.WarnStreamTLS, out[0].Code)
+	assert.Equal(t, helperproto.WarnMailTLS, out[1].Code)
+	_, warns := convert(d)
+	assert.Equal(t, providers.WarnListTruncated, warns[len(warns)-1].Code, "the cut is reported")
+}

@@ -28,6 +28,9 @@ const (
 	maxPathLength         = 4096
 	maxNameLength         = 253
 	maxAccountLength      = 64
+	// maxDumpWarnings bounds the distinct server-level warning codes kept from a dump (A2-I3: the
+	// list is the remote's; the helper gives at most six today, a newer one may add some).
+	maxDumpWarnings = 32
 )
 
 var warningCodeRE = regexp.MustCompile(`^[a-z][a-z_]{0,39}$`)
@@ -46,7 +49,7 @@ var (
 		providers.UnsupportedConfigFileWritable}
 	fileProblems = []string{providers.CertProblemMissing, providers.CertProblemNotRootControlled, providers.CertProblemNotRegular,
 		providers.CertProblemHardLinked, providers.CertProblemTooLarge, providers.CertProblemNotACertificate, providers.CertProblemUnreadable,
-		providers.CertProblemBadName, providers.CertProblemSpecialFS}
+		providers.CertProblemBadName, providers.CertProblemSpecialFS, providers.CertProblemNameNotAllowed}
 	usualFolders = []string{"/etc/ssl/", "/etc/nginx/", "/etc/pki/", "/etc/letsencrypt/"}
 )
 
@@ -311,6 +314,9 @@ func finish(b *build, files map[string]helperproto.NginxFile) providers.Discover
 		cf, haveCert := files["cert\x00"+loc.CertPath]
 		kf, haveKey := files["key\x00"+loc.KeyPath]
 		loc.Problem = fileProblem(cf, haveCert)
+		if loc.Problem == "" && resolvedOutsideVocabulary(cf, haveCert) {
+			loc.Problem = providers.CertProblemNameNotAllowed
+		}
 		if haveCert {
 			loc.ResolvedCertPath = cleanPath(cf.Resolved)
 			loc.Symlinked = cf.Symlinked
@@ -321,6 +327,9 @@ func finish(b *build, files map[string]helperproto.NginxFile) providers.Discover
 			dc.PEMChain, dc.FileSHA256, dropped, loc.Problem = certificateChain(cf)
 		}
 		loc.KeyProblem = fileProblem(kf, haveKey)
+		if loc.KeyProblem == "" && resolvedOutsideVocabulary(kf, haveKey) {
+			loc.KeyProblem = providers.CertProblemNameNotAllowed
+		}
 		if haveKey {
 			loc.KeyExists = kf.Exists
 			loc.KeyMode = cleanMode(kf.Mode)
@@ -359,6 +368,14 @@ func descriptionOf(f helperproto.NginxFile, have bool) helperproto.NginxFile {
 		return helperproto.NginxFile{}
 	}
 	return f
+}
+
+// resolvedOutsideVocabulary reports a described file whose resolved path the helper's argument
+// vocabulary cannot carry (A1-I1): the helper refuses to deploy to it, and a helper before that
+// fix would have deployed and then been unable to read its own journal. Alice treats it as
+// unsupported whatever the helper said.
+func resolvedOutsideVocabulary(f helperproto.NginxFile, have bool) bool {
+	return have && f.Resolved != "" && !helperproto.ValidPath(f.Resolved)
 }
 
 // fileProblem is the CertProblem* of a described file: the helper's problem (a value outside the
@@ -477,20 +494,26 @@ func locationWarnings(cf, kf helperproto.NginxFile) []string {
 // format. config_file_writable comes from the writable list, one per path (the helper's own
 // parameterless warning would duplicate it). key_group_open is derived per location; the helper's
 // warning is kept at server level only when no location carries it.
+//
+// A2-I3: the loop is linear in the helper's list (a set of the codes seen) and at most
+// maxDumpWarnings distinct codes are kept; more set truncated (list_truncated).
 func dumpWarnings(d helperproto.NginxDumpResponse, locs []providers.DiscoveredCertificate) (out []providers.Warning, truncated bool) {
-	var seen []string
+	seen := map[string]bool{}
 	keyGroupOpen := false
 	for _, w := range d.Warnings {
 		switch {
-		case !warningCodeRE.MatchString(w) || slices.Contains(seen, w):
+		case !warningCodeRE.MatchString(w) || seen[w]:
 			continue
 		case w == providers.WarnConfigFileWritable:
 			continue
 		case w == providers.WarnKeyGroupOpen:
 			keyGroupOpen = true
 			continue
+		case len(seen) >= maxDumpWarnings:
+			truncated = true
+			continue
 		}
-		seen = append(seen, w)
+		seen[w] = true
 		out = append(out, warning(w))
 	}
 	if keyGroupOpen && !slices.ContainsFunc(locs, func(c providers.DiscoveredCertificate) bool {
