@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -325,7 +327,10 @@ func (s *Service) UnlockByUsername(ctx context.Context, username string) error {
 	})
 }
 
-// ResetPassword sets a new password chosen by an administrator, clears the lockout and ends sessions.
+// ResetPassword sets a new password chosen by an administrator, clears the lockout, ends the
+// user's sessions and revokes every API token of the user, all in one transaction (AUD-12, R39):
+// it is the administrator's answer to a suspected takeover, and a token is another way in. A
+// user changing their own password (ChangePassword) keeps their tokens.
 func (s *Service) ResetPassword(ctx context.Context, p Principal, m Meta, id uuid.UUID, password string) error {
 	if err := CheckPasswordPolicy(password); err != nil {
 		return err
@@ -335,16 +340,54 @@ func (s *Service) ResetPassword(ctx context.Context, p Principal, m Meta, id uui
 		return err
 	}
 	now := s.clock.Now().UTC()
-	return s.adminChange(ctx, p.Actor(m), id, "user.password_reset", nil, func(tx pgx.Tx) error {
+	actor := p.Actor(m)
+	details := map[string]string{}
+	return s.adminChange(ctx, actor, id, "user.password_reset", details, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `UPDATE users SET password_hash = $2, password_changed_at = $3, updated_at = $3,
 failed_logins = 0, locked_until = NULL WHERE id = $1`, id, hash, now); err != nil {
 			return fmt.Errorf("reset password: %w", err)
 		}
-		return revokeUserSessions(ctx, tx, id)
+		return s.signOutEverywhere(ctx, tx, actor, id, now, "password_reset", details)
 	})
 }
 
-// RevokeSessions signs a user out everywhere.
+// RevokeSessions signs a user out everywhere: it ends every session and revokes every API
+// token of the user in one transaction (AUD-12, R39).
 func (s *Service) RevokeSessions(ctx context.Context, p Principal, m Meta, id uuid.UUID) error {
-	return s.adminChange(ctx, p.Actor(m), id, "user.sessions_revoked", nil, func(tx pgx.Tx) error { return revokeUserSessions(ctx, tx, id) })
+	now := s.clock.Now().UTC()
+	actor := p.Actor(m)
+	details := map[string]string{}
+	return s.adminChange(ctx, actor, id, "user.sessions_revoked", details, func(tx pgx.Tx) error {
+		return s.signOutEverywhere(ctx, tx, actor, id, now, "sessions_revoked", details)
+	})
+}
+
+// signOutEverywhere ends every session of a user and revokes every live API token, inside the
+// caller's transaction (which holds the user's row lock, see adminChange). Each revoked token
+// is audited as token.revoked by ID with reason; the caller's own audit row gets
+// revoked_token_count in details. Token lookups read the database on every request, so the
+// tokens are refused as soon as the transaction commits.
+func (s *Service) signOutEverywhere(ctx context.Context, tx pgx.Tx, actor audit.Actor, id uuid.UUID, now time.Time, reason string, details map[string]string) error {
+	if err := revokeUserSessions(ctx, tx, id); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, "UPDATE api_tokens SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL RETURNING id", id, now)
+	if err != nil {
+		return fmt.Errorf("revoke tokens: %w", err)
+	}
+	tokens, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("revoke tokens: %w", err)
+	}
+	slices.SortFunc(tokens, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	// The audit rows come after every row update, so the chain lock is never held while
+	// waiting for a row (the order recordFailure and adminChange keep).
+	for _, tok := range tokens {
+		if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "token.revoked", ObjectType: "api_token", ObjectID: tok.String(),
+			Result: audit.Success, Details: map[string]string{"token_id": tok.String(), "owner_id": id.String(), "reason": reason}}); err != nil {
+			return err
+		}
+	}
+	details["revoked_token_count"] = strconv.Itoa(len(tokens))
+	return nil
 }
