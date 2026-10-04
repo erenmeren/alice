@@ -25,11 +25,22 @@ func validAt(c *x509.Certificate, t time.Time) bool {
 // orderChain returns the certificates of others that lead from leaf to its
 // root, in issuing order. Certificates off that path are dropped; a self-signed
 // root at the end is kept. Where several certificates could issue the current
-// one (a cross-sign beside the regular intermediate), one that is valid at
-// "at" wins.
+// one (a cross-sign beside the regular intermediate, or beside the root it
+// cross-signs), one that is valid at "at" wins, and among those a self-signed
+// root: a still-valid cross-sign listed first must not hide the uploaded root.
 func orderChain(leaf *x509.Certificate, others []*x509.Certificate, at time.Time) []*x509.Certificate {
 	var out []*x509.Certificate
 	remaining := append([]*x509.Certificate(nil), others...)
+	rank := func(c *x509.Certificate) int {
+		r := 0
+		if validAt(c, at) {
+			r += 2
+		}
+		if selfSigned(c) {
+			r++
+		}
+		return r
+	}
 	cur := leaf
 	for !selfSigned(cur) {
 		next := -1
@@ -37,7 +48,7 @@ func orderChain(leaf *x509.Certificate, others []*x509.Certificate, at time.Time
 			if !bytes.Equal(cand.RawSubject, cur.RawIssuer) || cur.CheckSignatureFrom(cand) != nil {
 				continue
 			}
-			if next < 0 || (!validAt(remaining[next], at) && validAt(cand, at)) {
+			if next < 0 || rank(cand) > rank(remaining[next]) {
 				next = i
 			}
 		}

@@ -214,3 +214,26 @@ func TestNormalPFXIterationCountsPass(t *testing.T) {
 		}
 	}
 }
+
+// The guard refuses a structure it cannot read instead of skipping it (Task 2 ledger items): a file
+// in BER (indefinite lengths, which the DER-only decoder cannot read) or with a damaged inner
+// structure is unreadable, not "wrong password".
+func TestUnreadablePFXIsInvalidNotAWrongPassword(t *testing.T) {
+	ca := pki.NewCA("Alice PFX", pki.ECDSA256, now)
+	l := ca.Issue(pki.Opts{CommonName: "www.example.test"}, now)
+	good := pki.PFX(l, ca, "pw")
+	ber := append([]byte{0x30, 0x80}, append(append([]byte{}, good[2:]...), 0, 0)...) // indefinite length
+	for name, data := range map[string][]byte{
+		"ber":     ber,
+		"garbage": []byte("not a pfx file at all"),
+		"cut":     good[:len(good)/2],
+	} {
+		_, err := ValidateUpload(Upload{PFX: data, PFXPassword: "pw"}, now, nil)
+		assert.ErrorIs(t, err, ErrInvalid, name)
+	}
+	_, err := ValidateUpload(Upload{PFX: good, PFXPassword: "wrong"}, now, nil)
+	assert.ErrorIs(t, err, ErrPFXPassword, "a readable file with a wrong password")
+	v, err := ValidateUpload(Upload{PFX: good, PFXPassword: "pw"}, now, nil)
+	require.NoError(t, err)
+	v.PrivateKeyDER.Zero()
+}

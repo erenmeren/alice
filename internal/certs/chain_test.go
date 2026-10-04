@@ -72,5 +72,8 @@ func TestCheckLeafSignatureRules(t *testing.T) {
 	sha1Root := cert(x509.SHA1WithRSA, "root", "root")
 	assert.NoError(t, checkLeaf(Parsed{Leaf: good, Chain: []*x509.Certificate{cert(x509.SHA256WithRSA, "inter", "root"), sha1Root}, NotAfter: future}, now),
 		"a root's own signature does not matter")
+	// A certificate that names itself but is inside the path was trusted through its (weak) signature.
+	assert.ErrorIs(t, checkLeaf(Parsed{Leaf: good, Chain: []*x509.Certificate{sha1Root, cert(x509.SHA256WithRSA, "root", "other")}, NotAfter: future}, now),
+		ErrWeak, "only the last certificate of the path is exempt")
 	assert.ErrorIs(t, checkLeaf(Parsed{Leaf: good, NotAfter: now}, now), ErrExpired)
 }

@@ -88,7 +88,7 @@ func ValidateUpload(u Upload, now time.Time, roots *x509.CertPool) (Validated, e
 	if !v.ChainComplete {
 		v.Warnings = append(v.Warnings, "chain_incomplete")
 	}
-	if anyExpired(others, now) {
+	if anyExpired(others, signer.Public(), now) {
 		v.Warnings = append(v.Warnings, "chain_certificate_expired")
 	}
 	return v, nil
@@ -122,10 +122,12 @@ func pickLeaf(all []*x509.Certificate, now time.Time, match func(*x509.Certifica
 
 // anyExpired reports whether one of the uploaded certificates other than the
 // leaf has expired. Such an upload is accepted (old bundles carry a harmless
-// expired cross-sign) but flagged.
-func anyExpired(others []*x509.Certificate, now time.Time) bool {
+// expired cross-sign) but flagged. An expired certificate of the leaf's own key
+// (the old certificate of a reused key, left in the file) is not a chain
+// certificate and is not counted.
+func anyExpired(others []*x509.Certificate, leafKey crypto.PublicKey, now time.Time) bool {
 	for _, c := range others {
-		if !now.Before(c.NotAfter) {
+		if !now.Before(c.NotAfter) && !samePublicKey(c.PublicKey, leafKey) {
 			return true
 		}
 	}
@@ -139,9 +141,13 @@ func checkLeaf(p Parsed, now time.Time) error {
 	if weakSignature(p.Leaf) {
 		return ErrWeak
 	}
-	for _, c := range p.Chain {
-		// A root's own signature is never used to trust it, so it is exempt.
-		if !bytes.Equal(c.RawIssuer, c.RawSubject) && weakSignature(c) {
+	for i, c := range p.Chain {
+		// A root's own signature is never used to trust it, so it is exempt: the last certificate
+		// of the path when it names itself as issuer. (Its signature cannot always be checked: many
+		// roots are signed with SHA-1, which Go refuses to verify.) A certificate that names itself
+		// but sits inside the path was trusted through its signature and is not exempt.
+		root := i == len(p.Chain)-1 && bytes.Equal(c.RawIssuer, c.RawSubject)
+		if !root && weakSignature(c) {
 			return ErrWeak
 		}
 	}

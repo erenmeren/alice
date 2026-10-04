@@ -12,8 +12,11 @@ import (
 const maxKDFIterations = 1_000_000
 
 // The structures mirror the ones go-pkcs12 decodes, so that whatever iteration
-// count the library would use is found here first. When a structure does not
-// parse here, the library cannot parse it either and fails cheaply.
+// count the library would use is found here first. A structure that does not
+// parse here is refused (unreadable) rather than skipped: the library cannot
+// parse it either, and skipping would let a structure the guard misreads reach
+// the library unchecked. (This also reports a BER-encoded file, which the
+// DER-only library cannot read, as unreadable instead of as a wrong password.)
 type (
 	guardPfx struct {
 		Version  int
@@ -79,6 +82,8 @@ var (
 
 func tooMany() error { return invalid("a key derivation iteration count is unreasonably high") }
 
+func unreadable() error { return invalid("the PFX file cannot be read") }
+
 // checkPFXIterations refuses a PFX whose MAC, encrypted content or shrouded key
 // bag asks for more than maxKDFIterations. It derives nothing.
 //
@@ -90,7 +95,7 @@ func tooMany() error { return invalid("a key derivation iteration count is unrea
 func checkPFXIterations(pfx []byte) error {
 	var p guardPfx
 	if _, err := asn1.Unmarshal(pfx, &p); err != nil {
-		return nil
+		return unreadable()
 	}
 	if p.MacData.Iterations > maxKDFIterations {
 		return tooMany()
@@ -102,39 +107,41 @@ func checkPFXIterations(pfx []byte) error {
 	}
 	var octets asn1.RawValue
 	if _, err := asn1.Unmarshal(p.AuthSafe.Content.Bytes, &octets); err != nil {
-		return nil
+		return unreadable()
 	}
 	var items []guardContentInfo
 	if _, err := asn1.Unmarshal(octets.Bytes, &items); err != nil {
-		return nil
+		return unreadable()
 	}
 	for _, ci := range items {
 		switch {
 		case ci.ContentType.Equal(oidGuardEncData):
 			var ed guardEncryptedData
-			if _, err := asn1.Unmarshal(ci.Content.Bytes, &ed); err == nil {
-				if err := checkAlgorithmIterations(ed.Info.Algorithm); err != nil {
-					return err
-				}
+			if _, err := asn1.Unmarshal(ci.Content.Bytes, &ed); err != nil {
+				return unreadable()
+			}
+			if err := checkAlgorithmIterations(ed.Info.Algorithm); err != nil {
+				return err
 			}
 		case ci.ContentType.Equal(oidGuardData):
 			var inner []byte
 			if _, err := asn1.Unmarshal(ci.Content.Bytes, &inner); err != nil {
-				continue
+				return unreadable()
 			}
 			var bags []guardSafeBag
 			if _, err := asn1.Unmarshal(inner, &bags); err != nil {
-				continue
+				return unreadable()
 			}
 			for _, b := range bags {
 				if !b.ID.Equal(oidGuardShroud) {
 					continue
 				}
 				var sh guardShrouded
-				if _, err := asn1.Unmarshal(b.Value.Bytes, &sh); err == nil {
-					if err := checkAlgorithmIterations(sh.Algorithm); err != nil {
-						return err
-					}
+				if _, err := asn1.Unmarshal(b.Value.Bytes, &sh); err != nil {
+					return unreadable()
+				}
+				if err := checkAlgorithmIterations(sh.Algorithm); err != nil {
+					return err
 				}
 			}
 		}
@@ -149,10 +156,13 @@ func checkAlgorithmIterations(a pkix.AlgorithmIdentifier) error {
 	case a.Algorithm.Equal(oidGuardPBES2), a.Algorithm.Equal(oidGuardPBMAC1):
 		var two guardTwoAlgorithms
 		if _, err := asn1.Unmarshal(a.Parameters.FullBytes, &two); err != nil {
-			return nil
+			return unreadable()
 		}
 		var k guardPBKDF2
-		if _, err := asn1.Unmarshal(two.First.Parameters.FullBytes, &k); err == nil && k.Iterations > maxKDFIterations {
+		switch _, err := asn1.Unmarshal(two.First.Parameters.FullBytes, &k); {
+		case err != nil:
+			return unreadable()
+		case k.Iterations > maxKDFIterations:
 			return tooMany()
 		}
 	default:
@@ -161,7 +171,10 @@ func checkAlgorithmIterations(a pkix.AlgorithmIdentifier) error {
 				continue
 			}
 			var pbe guardPBE
-			if _, err := asn1.Unmarshal(a.Parameters.FullBytes, &pbe); err == nil && pbe.Iterations > maxKDFIterations {
+			switch _, err := asn1.Unmarshal(a.Parameters.FullBytes, &pbe); {
+			case err != nil:
+				return unreadable()
+			case pbe.Iterations > maxKDFIterations:
 				return tooMany()
 			}
 		}

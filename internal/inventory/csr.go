@@ -296,7 +296,9 @@ func signedWarnings(pemText []byte, p certs.Parsed, complete bool, requested []s
 	}
 	if all, err := certs.ParseChainPEM(pemText); err == nil {
 		for _, c := range append([]*x509.Certificate{all.Leaf}, all.Chain...) {
-			if !bytes.Equal(c.Raw, p.Leaf.Raw) && !now.Before(c.NotAfter) {
+			// The leaf and any other certificate of its key (an old one of a reused key) are not
+			// chain certificates.
+			if !bytes.Equal(c.RawSubjectPublicKeyInfo, p.Leaf.RawSubjectPublicKeyInfo) && !now.Before(c.NotAfter) {
 				out = append(out, "chain_certificate_expired")
 				break
 			}

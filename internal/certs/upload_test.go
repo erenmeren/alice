@@ -187,6 +187,7 @@ func TestValidateUploadPrefersTheValidCertificateOfAReusedKey(t *testing.T) {
 	require.NoError(t, err)
 	defer v.PrivateKeyDER.Zero()
 	assert.Equal(t, pki.Fingerprint(renewed.Cert), v.Fingerprint)
+	assert.NotContains(t, v.Warnings, "chain_certificate_expired", "the old certificate of the key is not a chain certificate")
 	_, err = ValidateUpload(Upload{CertificatePEM: old.CertPEM, PrivateKeyPEM: old.KeyPEM}, now, rootsOf(ca))
 	assert.ErrorIs(t, err, ErrExpired, "still refused when none is valid")
 }
@@ -251,4 +252,30 @@ func TestChainCertificateValidity(t *testing.T) {
 			v.PrivateKeyDER.Zero()
 		}
 	})
+}
+
+// A still-valid cross-sign of the root listed before the uploaded root does not hide the root: the
+// path ends at the self-signed root and the chain is complete without a system root.
+func TestOrderChainPrefersTheUploadedRootOverACrossSign(t *testing.T) {
+	ca := pki.NewCA("Alice Test", pki.ECDSA256, now)
+	old := pki.NewCA("Alice Old", pki.ECDSA256, now)
+	cross := crossSign(t, ca, old)
+	l := ca.Issue(pki.Opts{CommonName: "www.example.test"}, now)
+	in := append(append(append([]byte{}, l.FullchainPEM...), cross...), ca.RootPEM...)
+	v, err := ValidateUpload(Upload{CertificatePEM: in, PrivateKeyPEM: l.KeyPEM}, now, x509.NewCertPool())
+	require.NoError(t, err)
+	defer v.PrivateKeyDER.Zero()
+	require.Len(t, v.Chain, 2)
+	assert.Equal(t, ca.Root.Raw, v.Chain[1].Raw, "the uploaded root, not the cross-sign")
+	assert.True(t, v.ChainComplete)
+}
+
+// crossSign is ca's root certificate re-issued by other's root (same subject and key).
+func crossSign(t *testing.T, ca, other *pki.CA) []byte {
+	t.Helper()
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(99), Subject: ca.Root.Subject,
+		NotBefore: now.Add(-time.Hour), NotAfter: now.AddDate(1, 0, 0), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign}, other.Root, ca.RootKey.Public(), other.RootKey)
+	require.NoError(t, err)
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
