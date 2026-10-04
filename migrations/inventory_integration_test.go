@@ -71,7 +71,6 @@ func TestInventoryTablesGrantOnlyWhatTheAppNeeds(t *testing.T) {
 		"UPDATE host_keys SET public_key = '\\x01'",
 		"UPDATE host_keys SET target_id = target_id",
 		"UPDATE targets SET config = '{}'",
-		"UPDATE targets SET credential_id = credential_id",
 		"UPDATE ssh_keys SET public_key = 'x'",
 		"UPDATE ssh_keys SET fingerprint_sha256 = 'x'",
 		"UPDATE ssh_key_locations SET file_path = 'x'",
@@ -79,6 +78,10 @@ func TestInventoryTablesGrantOnlyWhatTheAppNeeds(t *testing.T) {
 	} {
 		assert.Equal(t, "42501", sqlState(exec(t, d.App, stmt)), "%s must be refused for alice_app", stmt)
 	}
+	// 00008 opens UPDATE (credential_id) to the application for vault credential replacement and
+	// narrows it by trigger: a server's credential is still refused (Z1005, whatever the value).
+	assert.Equal(t, "Z1005", sqlState(exec(t, d.App, "UPDATE targets SET credential_id = credential_id WHERE id = $1", target)),
+		"a server's credential cannot be changed by the application")
 	require.NoError(t, exec(t, d.App, "UPDATE targets SET deleted_at = now() WHERE id = $1", target), "soft delete")
 	jobID, err := seedJob(t, d, nil, "succeeded")
 	require.NoError(t, err)
@@ -268,7 +271,11 @@ VALUES (gen_random_uuid(), gen_random_uuid()::text, $1, $2::jsonb, $3, 'ok', now
 	}
 	assert.Equal(t, "23505", sqlState(ins("linux", `{"host": "WEB-01.example.com", "port": 22}`)), "host compares case-insensitively")
 	require.NoError(t, ins("linux", `{"host": "web-01.example.com", "port": 2222}`))
-	require.NoError(t, ins("azure_key_vault", `{"vault": "v"}`))
+	// A Key Vault target carries its canonical address and its own credential row (00008): the
+	// placeholder this test inserted before the vault schema existed (a vault configured as
+	// {"vault": "v"} with the platform key) is refused now, by the credential trigger first. The
+	// address checks are in keyvault_integration_test.go.
+	assert.Equal(t, "Z1006", sqlState(ins("azure_key_vault", `{"vault": "v"}`)))
 }
 
 // The trigger runs as the invoking role, so it must not resolve credentials or ssh_keys through

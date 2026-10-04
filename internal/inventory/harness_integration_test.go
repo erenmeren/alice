@@ -210,6 +210,24 @@ func (h *harness) seedTarget(name, typ, host string) uuid.UUID {
 	pk, err := h.svc.EnsurePlatformKey(h.ctx)
 	require.NoError(h.t, err)
 	id := uuid.Must(uuid.NewV7())
+	if typ == "azure_key_vault" {
+		// A vault has its own credential row (migration 00008): both rows in one transaction, the
+		// credential's foreign key to the vault being deferred. The envelope bytes are placeholders:
+		// nothing here opens them.
+		tx, err := h.db.Owner.Begin(h.ctx)
+		require.NoError(h.t, err)
+		defer func() { _ = tx.Rollback(h.ctx) }()
+		cred := uuid.Must(uuid.NewV7())
+		_, err = tx.Exec(h.ctx, `INSERT INTO credentials (id, purpose, kind, public_info, ciphertext, nonce, wrapped_dek, key_version, created_at, target_id)
+VALUES ($1, 'azure_vault', 'azure_sp_secret', '{}', '\x01', decode(repeat('00', 12), 'hex'), '\x02', 1, $2, $3)`, cred, h.clock.Now(), id)
+		require.NoError(h.t, err)
+		_, err = tx.Exec(h.ctx, `INSERT INTO targets (id, name, type, config, credential_id, status, discovery_interval_seconds, created_at, updated_at)
+VALUES ($1, $2, 'azure_key_vault', jsonb_build_object('vault_url', 'https://' || $3::text, 'host', $3::text, 'port', 443), $4, 'ok', 900, $5, $5)`,
+			id, name, host, cred, h.clock.Now())
+		require.NoError(h.t, err)
+		require.NoError(h.t, tx.Commit(h.ctx))
+		return id
+	}
 	_, err = h.db.Owner.Exec(h.ctx, `INSERT INTO targets (id, name, type, config, credential_id, status, created_at, updated_at)
 VALUES ($1, $2, $3, jsonb_build_object('host', $4::text, 'port', 22, 'username', 'alice-svc'), $5, 'ok', $6, $6)`,
 		id, name, typ, host, pk.ID, h.clock.Now())

@@ -116,6 +116,14 @@ var explicitGrants = map[string][]string{
 	"public.certificate_locations": {"INSERT", "SELECT"},
 	"public.deployments":           {"INSERT", "SELECT"},
 	"public.deployment_steps":      {"INSERT", "SELECT"},
+	// Phase 5 (R40): vault inventory, bindings and imports are never deleted (rows are marked
+	// missing, bindings soft-deleted, imports finished); only the listed columns change.
+	"public.kv_certificates":         {"INSERT", "SELECT"},
+	"public.kv_certificate_versions": {"INSERT", "SELECT"},
+	"public.kv_keys":                 {"INSERT", "SELECT"},
+	"public.kv_secrets":              {"INSERT", "SELECT"},
+	"public.bindings":                {"INSERT", "SELECT"},
+	"public.kv_imports":              {"INSERT", "SELECT"},
 }
 
 // Column-level grants of alice_app (a privilege it holds on some columns but not on the
@@ -126,8 +134,10 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.license": {"UPDATE": {"clock_jump", "state", "updated_at"}},
 	// Phase 3: only the columns the services write; identity columns (key material, fingerprints,
 	// target and credential references, the host key bytes) are never updated.
-	"public.targets": {"UPDATE": {"deleted_at", "discovery_interval_seconds", "facts", "keys_managed_elsewhere",
-		"last_discovery_at", "last_error_code", "last_scheduled_at", "last_success_at", "name", "status", "updated_at", "version"}},
+	// Phase 5 adds credential_id (a vault's credential moves to its replacement; a trigger refuses it
+	// for any other kind of target) and poll_failures (it delays the next poll).
+	"public.targets": {"UPDATE": {"credential_id", "deleted_at", "discovery_interval_seconds", "facts", "keys_managed_elsewhere",
+		"last_discovery_at", "last_error_code", "last_scheduled_at", "last_success_at", "name", "poll_failures", "status", "updated_at", "version"}},
 	"public.host_keys": {"UPDATE": {"confirmed_at", "confirmed_by", "observed_at", "status", "superseded_at"}},
 	"public.ssh_keys":  {"UPDATE": {"is_platform_key", "weak"}},
 	"public.ssh_key_locations": {"UPDATE": {"comment", "flags", "is_alice_connection_key", "last_seen_at", "line_no",
@@ -137,7 +147,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 	// never updated; the lists are the columns the inventory and deployment services write.
 	"public.certificates": {"UPDATE": {"chain_complete", "label", "last_seen_at", "pem_chain", "private_key_id", "source"}},
 	"public.csr_requests": {"UPDATE": {"certificate_id", "finished_at", "status"}},
-	"public.certificate_locations": {"UPDATE": {"cert_file_sha256", "certificate_id", "changed_outside_at", "custom_location",
+	"public.certificate_locations": {"UPDATE": {"binding_id", "cert_file_sha256", "certificate_id", "changed_outside_at", "custom_location",
 		"deployed_fingerprint", "inherited", "key_exists", "key_group", "key_mode", "key_owner", "key_path", "key_problem", "key_type",
 		"last_seen_at", "missing_since", "problem", "resolved_cert_path", "servers", "skip_verify", "supported", "symlinked",
 		"unsupported_reason", "verify_port", "verify_sni", "version", "warnings"}},
@@ -145,6 +155,19 @@ var explicitColumnGrants = map[string]map[string][]string{
 		"helper_error", "job_id", "new_chain_length", "operation_id", "phase", "previous_chain_length", "previous_fingerprint",
 		"recover_after", "recovery_attempts", "result", "rollback_info", "started_at", "state", "status", "verified",
 		"verify_failed_port", "verify_failed_reason"}},
+	// Phase 5: a location joins or leaves a binding; everything that names a vault object, a
+	// version, a thumbprint, a binding's certificate or an import's request is fixed at INSERT.
+	"public.kv_certificates": {"UPDATE": {"auto_renew", "content_type", "current_thumbprint", "current_version", "details_pending",
+		"enabled", "expires", "exportable", "issuer_name", "key_size", "key_type", "kv_created_at", "kv_updated_at", "last_seen_at",
+		"listed_thumbprint", "listed_updated_at", "missing_since", "not_before", "removed_notified_at"}},
+	"public.kv_certificate_versions": {"UPDATE": {"certificate_id", "content_type", "enabled", "expires", "exportable", "held",
+		"held_reason", "key_type", "not_before", "notified_at", "skipped_notified_at"}},
+	"public.kv_keys": {"UPDATE": {"curve", "details_problem", "details_updated_at", "enabled", "expires", "hsm", "key_size", "key_type",
+		"kv_created_at", "kv_updated_at", "last_seen_at", "managed", "missing_since", "not_before", "version"}},
+	"public.kv_secrets": {"UPDATE": {"content_type", "enabled", "expires", "kv_created_at", "kv_updated_at", "last_seen_at", "managed",
+		"missing_since", "not_before"}},
+	"public.bindings":   {"UPDATE": {"auto_deploy", "auto_since", "deleted_at", "stopped_version", "version"}},
+	"public.kv_imports": {"UPDATE": {"error_code", "error_params", "finished_at", "job_id", "sent_at", "state", "version"}},
 }
 
 var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}
