@@ -5,6 +5,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ import (
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
+	"alice/internal/jobs/deployjobs"
 	"alice/internal/jobs/targetjobs"
 	"alice/internal/license"
 	"alice/internal/license/licensetest"
@@ -38,9 +40,11 @@ import (
 	"alice/internal/platform/logging"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
+	"alice/internal/providers/nginx"
 	"alice/internal/secrets"
 	"alice/internal/setup"
 	"alice/internal/testutil/pgtest"
+	"alice/internal/testutil/pki"
 	"alice/internal/version"
 	"alice/locales"
 	"alice/migrations"
@@ -104,11 +108,14 @@ type stack struct {
 	queue     *jobs.Queue
 	runner    *jobs.Runner
 	registry  *providers.Registry
+	ca        *pki.CA // issues every certificate of the Nginx journeys; its root is the inventory's trust anchor
 	stateDir  string
 	handler   http.Handler
 	setupCode string
 
 	mu        sync.Mutex
+	nginxSrvs []*nginxFixture // the emulated Nginx hosts Alice's own TLS probe can reach
+	wrap      func(providers.TargetRef, providers.Session) providers.Session
 	exchanges []exchange
 	totpCodes []string // every code totpNow handed out (leak canaries)
 	ips       atomic.Int64
@@ -125,6 +132,7 @@ func newStack(t *testing.T, trusted ...netip.Prefix) *stack {
 		logs:     &syncBuffer{},
 		trusted:  trusted,
 	}
+	s.ca = pki.NewCA("API Test CA", pki.ECDSA256, s.clock.Now())
 	s.start()
 	return s
 }
@@ -169,14 +177,20 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	log := logging.New(s.logs, slog.LevelDebug)
 	s.queue = jobs.NewQueue(jobs.QueueConfig{Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Gate: s.license})
 	s.registry = providers.NewRegistry()
+	roots := x509.NewCertPool()
+	roots.AddCert(s.ca.Root)
 	s.inv = inventory.New(inventory.Config{
 		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, License: s.license, Registry: s.registry,
-		Jobs: s.queue, Notifier: notify.AdminNotifier{Clock: s.clock}, Log: log,
+		Jobs: s.queue, Notifier: notify.AdminNotifier{Clock: s.clock}, Log: log, Roots: roots,
 	})
 	pool := linuxssh.NewPool(&linuxssh.Dialer{Clock: clock.Real{}, HostKeys: s.inv.HostKeyStore()},
 		linuxssh.MaxConnections, linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)
 	t.Cleanup(pool.Close)
-	s.registry.Register(linuxssh.New(linuxssh.Options{Pool: pool, AllowUnverifiedHelper: true}))
+	ssh := linuxssh.New(linuxssh.Options{Pool: pool, AllowUnverifiedHelper: true})
+	s.registry.Register(ssh)
+	// One verification attempt per endpoint: the provider's waits run on the session clock, which is
+	// the fake clock here.
+	s.registry.Register(stackNginx{Provider: nginx.New(nginx.Options{SSH: ssh, Prober: stackProber{s}, Attempts: 1}), s: s})
 	s.registry.Freeze()
 	_, err := s.inv.EnsurePlatformKey(context.Background())
 	require.NoError(t, err)
@@ -185,6 +199,7 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 		Jitter: func() float64 { return 0 },
 	})
 	targetjobs.Register(s.runner, targetjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})
+	deployjobs.Register(s.runner, deployjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})
 }
 
 // deps are the handler dependencies of the current services. Tests that need
