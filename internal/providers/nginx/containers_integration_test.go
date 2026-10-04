@@ -54,7 +54,7 @@ import (
 // by a unit; the network is Docker's bridge, reached directly from the host at the container's
 // address (no NAT, no firewall); certificates come from a throwaway test CA.
 //
-//	ALICE_SSH_IMAGES=ubuntu22 go test -count=1 -tags integration -run '^TestRealNginx' ./internal/providers/nginx/
+//	ALICE_REAL_MATRIX=1 ALICE_SSH_IMAGES=ubuntu22 go test -count=1 -tags integration -run '^TestRealNginx' ./internal/providers/nginx/
 //
 // Only containers created here through testcontainers are touched. Every helper of this file is
 // prefixed with rn (real Nginx) so it cannot clash with the emulator tests of the package.
@@ -193,7 +193,7 @@ func startNginxHost(t *testing.T, image, helper string, verified bool) *rnHost {
 	script, err := linuxssh.SetupScript("nginx", linuxssh.AuthorizedKeysLine(pub, ""), !verified)
 	require.NoError(t, err)
 	require.NoError(t, ctr.CopyToContainer(ctx, []byte(script), "/root/bundle/setup.sh", 0o700))
-	helperBytes, err := os.ReadFile(helper) //nolint:gosec // G304: the helper this test built or make helper wrote
+	helperBytes, err := os.ReadFile(helper)
 	require.NoError(t, err)
 	if verified {
 		require.NoError(t, ctr.CopyToContainer(ctx, append(append([]byte{}, helperBytes...), 0), "/root/bad/alice-helper", 0o755))
@@ -608,7 +608,15 @@ func rnReason(t *testing.T, err error) string {
 	return pe.Code
 }
 
+// rnMatrixEnv gates the matrix: it runs only through make test-ssh, which sets it (never in make
+// coverage or make test-integration, which run every integration test under -race and without the
+// helper checksums).
+const rnMatrixEnv = "ALICE_REAL_MATRIX"
+
 func TestRealNginx(t *testing.T) {
+	if os.Getenv(rnMatrixEnv) != "1" {
+		t.Skip("the real-Nginx matrix runs only through make test-ssh (it sets " + rnMatrixEnv + "=1)")
+	}
 	images := rnSelectedDistros(t)
 	helper, verified := rnHelper(t)
 	for _, image := range images {
@@ -647,8 +655,9 @@ func TestRealNginx(t *testing.T) {
 			run("verify_unreachable_port", h.testVerifyUnreachable)
 			run("fail_safe_other_block", h.testOtherBlock)
 			run("F-07_verify_local", h.testVerifyLocal)
-			run("kill_deploy_sigterm_at_config_test", func(t *testing.T) { h.testKillDeploy(t, "test", "TERM") })
-			run("kill_deploy_sigkill_at_reload", func(t *testing.T) { h.testKillDeploy(t, "reload", "KILL") })
+			run("kill_deploy_sigterm_at_config_test", func(t *testing.T) { h.testKillDeploy(t, "test", "TERM", false) })
+			run("kill_deploy_sigkill_at_reload", func(t *testing.T) { h.testKillDeploy(t, "reload", "KILL", false) })
+			run("kill_deploy_sigkill_at_reload_new_pair_served", func(t *testing.T) { h.testKillDeploy(t, "reload", "KILL", true) })
 			run("kill_restore_sigkill_at_config_test", func(t *testing.T) { h.testKillRestore(t, "test", "KILL") })
 			run("kill_restore_sigterm_at_reload", func(t *testing.T) { h.testKillRestore(t, "reload", "TERM") })
 			run("superseded_after_interruption", h.testSuperseded)

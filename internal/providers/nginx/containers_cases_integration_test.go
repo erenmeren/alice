@@ -178,6 +178,7 @@ func (h *rnHost) testSudo(t *testing.T) {
 		{"nginx-dump extra", "sudo"}, {"nginx-dump -c /tmp/x", "sudo"}, {"nginx-test extra", "sudo"}, {"nginx-test -c /tmp/x", "sudo"},
 		{"nginx-restore", "sudo"}, {"nginx-restore " + o, "sudo"}, {"nginx-restore --op " + o + " extra", "sudo"},
 		{"nginx-restore --op " + o[:35], "sudo"}, {"nginx-status --op", "sudo"}, {"nginx-status --op " + o + " --op " + o, "sudo"},
+		{"nginx-status --op " + o + " extra", "sudo"},
 		{dep(rnWWW, rnWWWKey, "extra"), "sudo"}, {dep(rnWWW, rnWWWKey) + "0", "sudo"},
 		{"nginx-deploy --op " + o + " --key " + rnWWWKey + " --cert " + rnWWW + " --expect-cert-sha256 " + sha + " --content-sha256 " + sha, "sudo"},
 		{"nginx-deploy --op " + o + " --cert " + rnWWW + " --key " + rnWWWKey + " --expect-cert-sha256 " + sha, "sudo"},
@@ -213,11 +214,12 @@ func (h *rnHost) testUntouchedLayout(t *testing.T) {
 	assert.Equal(t, "/etc/nginx/nginx.conf", res.Nginx.ConfPath)
 	assert.Empty(t, res.Certificates, "the default layout has no TLS server")
 	// No Nginx warning; the SSH half's only: the fixture user linky's authorized_keys is a link, and
-	// on Rocky nsswitch.conf also asks sss for users (directory_users_not_listed).
-	for _, code := range warningCodes(res.Warnings) {
-		assert.Contains(t, []string{helperproto.WarnUnsupportedPath, helperproto.WarnDirectoryUsers}, code)
+	// only Rocky's nsswitch.conf also asks sss for users (directory_users_not_listed).
+	wantWarnings := []string{helperproto.WarnUnsupportedPath}
+	if h.image == "rocky9" {
+		wantWarnings = append(wantWarnings, helperproto.WarnDirectoryUsers)
 	}
-	assert.Contains(t, warningCodes(res.Warnings), helperproto.WarnUnsupportedPath)
+	assert.ElementsMatch(t, wantWarnings, warningCodes(res.Warnings))
 	// The SSH keys of the fixture users (the linuxssh half of the discovery) are listed too.
 	var got []string
 	for _, k := range res.SSHKeys {
@@ -463,9 +465,8 @@ func (h *rnHost) testDiscovery(t *testing.T) {
 	assert.Empty(t, ud.PEMChain, "nothing is read from a user's directory")
 	unsupported(rnWR, providers.UnsupportedConfigFileWritable)
 	unsupported(rnStream, providers.UnsupportedStream)
-	if c, ok := locs[rnMail]; ok {
-		assert.False(t, c.Location.Supported, "TLS in mail {} is never deployable")
-	}
+	_, mailListed := locs[rnMail]
+	assert.False(t, mailListed, "TLS in mail {} is never a location: only the mail_tls warning")
 	codes := warningCodes(res.Warnings)
 	assert.Contains(t, codes, providers.WarnStreamTLS)
 	assert.Contains(t, codes, providers.WarnMailTLS)
@@ -886,10 +887,21 @@ func (h *rnHost) oldChain(cert string) int { return chainLength([]byte(h.sh("cat
 // blockedAt is the text the wrapper or the shim writes when it stops.
 var blockedAt = map[string]string{"test": "nginx -t", "reload": "reload"}
 
+// Timing: the kill and lock-held tests hold the helper inside its nginx -t or reload on the shims'
+// FIFO. The helper kills a program after programTimeout (30 s, cmd/alice-helper/nginx.go) and would
+// then roll back on its own, so each test must kill, cancel or release within those 30 s of
+// waitBlocked; they do so within a second or two.
+
 // testKillDeploy (carry 5): the helper is killed (sig) inside nginx-deploy while its nginx -t or
 // reload runs (both files are already replaced; the journal says writing). Alice's answer is
 // uncertain; the recovery reads writing, rolls back, and the previous pair is on disk and served.
-func (h *rnHost) testKillDeploy(t *testing.T, at, sig string) {
+// With reloadNew, nginx is reloaded once the helper is dead (by someone else: logrotate's
+// postrotate, an administrator), so it serves the NEW pair while the journal still says writing;
+// the old pair served after the recovery then proves the recovery's own reload. (Letting the
+// orphaned, blocked reload go instead is not deterministic: its nginx -s reload writes to the dead
+// helper's pipes, and Debian's nginx 1.22 dies of SIGPIPE on its "signal process started" notice
+// before it signals the master.)
+func (h *rnHost) testKillDeploy(t *testing.T, at, sig string, reloadNew bool) {
 	cert := map[string]string{"test": rnWWW, "reload": rnAPI}[at]
 	c := h.location(cert)
 	same := h.unchangedFiles(cert)
@@ -914,6 +926,10 @@ func (h *rnHost) testKillDeploy(t *testing.T, at, sig string) {
 	require.Error(t, err)
 	assert.Equal(t, providers.DeployUncertain, out.Result, "a killed helper answers nothing")
 	t.Logf("SIG%s in nginx-deploy: %v", sig, err)
+	if reloadNew {
+		h.reloadNginx()
+		h.settledServed(h.ip, 443, l.Cert.DNSNames[0], "", pki.Fingerprint(l.Cert), "nginx serves the new pair before the recovery")
+	}
 
 	r := h.recover(req, oldChain)
 	assert.Equal(t, providers.PhaseWriting, r.state.Phase)
@@ -1033,6 +1049,7 @@ func (h *rnHost) testConnectionDroppedLockHeld(t *testing.T) {
 
 	r := h.recover(req, oldChain)
 	assert.Equal(t, providers.PhaseCommitted, r.state.Phase, "the helper finished after the hang-up")
+	outcomeMatchesJournal(t, out, r.state.Phase)
 	require.NotNil(t, r.verify)
 	assert.True(t, r.verify.OK, "%+v", *r.verify)
 	assert.Nil(t, r.rollback)
@@ -1070,6 +1087,7 @@ func (h *rnHost) testConnectionDropped100ms(t *testing.T) {
 	}, 90*time.Second, 100*time.Millisecond)
 	r := h.recover(req, oldChain)
 	t.Logf("journal: %s", r.state.Phase)
+	outcomeMatchesJournal(t, out, r.state.Phase)
 	assert.Contains(t, []string{providers.PhaseNone, providers.PhaseCommitted, providers.PhaseRestored}, r.state.Phase)
 	switch r.state.Phase {
 	case providers.PhaseCommitted:
@@ -1187,4 +1205,18 @@ func firstLeaf(t *testing.T, pemText string) string {
 	fp, ok := leafFingerprint([]byte(pemText))
 	require.True(t, ok)
 	return fp
+}
+
+// outcomeMatchesJournal (D32): an outcome Alice knows (not uncertain) must be the journal's: committed
+// with phase committed, rolled_back with restored, no_change with none (nothing reached the journal).
+func outcomeMatchesJournal(t *testing.T, out providers.DeployOutcome, phase string) {
+	t.Helper()
+	want := map[providers.DeployResult]string{providers.DeployCommitted: providers.PhaseCommitted,
+		providers.DeployRolledBack: providers.PhaseRestored, providers.DeployNoChange: providers.PhaseNone}
+	if out.Result == providers.DeployUncertain {
+		return
+	}
+	w, ok := want[out.Result]
+	require.True(t, ok, "an outcome F-08 can give: %+v", out)
+	assert.Equal(t, w, phase, "the outcome %s agrees with the journal", out.Result)
 }
