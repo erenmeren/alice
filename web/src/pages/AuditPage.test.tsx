@@ -7,6 +7,7 @@ import tr from '../locales/tr.json';
 import { actionKey } from './AuditPage';
 import type { AuditEntry, SessionInfo } from '../api/types';
 import { adminSession, sessionFor } from '../test/fixtures';
+import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
 
@@ -214,6 +215,83 @@ describe('AuditPage', () => {
     const { container } = await renderRoute('/audit');
     expect(await screen.findByText('<img src=x onerror=alert(1)>')).toBeInTheDocument();
     expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('shows the object of a row and its details as labelled values (AUD-25 d)', async () => {
+    signedInAs(adminSession);
+    const revoked: AuditEntry = {
+      ...entry(2, 'token.revoked'),
+      object_type: 'api_token',
+      object_id: '0192f000-0000-7000-8000-0000000000t1',
+      details: { token_id: '0192f000-0000-7000-8000-0000000000t1', reason: 'password_reset', owner_id: 'u-7' },
+    };
+    const reset: AuditEntry = { ...entry(1, 'user.password_reset'), object_id: 'u-7', details: { revoked_tokens_count: '2' } };
+    server.use(http.get('/api/v1/audit', () => HttpResponse.json({ items: [revoked, reset], next_cursor: null })));
+    await renderRoute('/audit');
+    expect(await screen.findByRole('columnheader', { name: 'Object' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Details' })).toBeInTheDocument();
+    const row = screen.getByText('API token revoked').closest('tr')!;
+    const type = within(row).getByText('api_token');
+    expect(type.tagName).toBe('CODE');
+    expect(type.closest('[translate="no"]')).not.toBeNull();
+    expect(within(row).getAllByText('0192f000-0000-7000-8000-0000000000t1')[0].tagName).toBe('CODE');
+
+    // The details are behind a disclosure, closed at first.
+    const toggle = within(row).getByRole('button', { name: 'Details (3)' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(within(row).queryByText('Reason')).not.toBeInTheDocument();
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const list = within(row).getByRole('group', { name: 'Details' });
+    const terms = within(list).getAllByRole('term').map((e) => e.textContent);
+    expect(terms).toEqual(['Owner', 'Reason', 'API token']); // sorted by key: owner_id, reason, token_id
+    expect(within(list).getByText('New password set by an administrator')).toBeInTheDocument();
+
+    const resetRow = screen.getByText('Password set by an administrator').closest('tr')!;
+    await userEvent.click(within(resetRow).getByRole('button', { name: 'Details (1)' }));
+    expect(within(resetRow).getByRole('term')).toHaveTextContent('API tokens revoked');
+    expect(within(resetRow).getByRole('definition')).toHaveTextContent('2');
+    expectNoRawKeys();
+  });
+
+  it('shows details it has no label for as data, never as markup', async () => {
+    signedInAs(adminSession);
+    const odd: AuditEntry = {
+      ...entry(1, 'custom.future_action'),
+      object_type: '',
+      object_id: '',
+      details: { zz_new_key: '<b onclick=alert(1)>x</b>', 'weird.key:with': 'v', reason: 'brand_new_reason', constructor: 'c' },
+    };
+    server.use(http.get('/api/v1/audit', () => HttpResponse.json({ items: [odd], next_cursor: null })));
+    const { container } = await renderRoute('/audit');
+    const row = (await screen.findByText('custom.future_action')).closest('tr')!;
+    await userEvent.click(within(row).getByRole('button', { name: 'Details (4)' }));
+    const list = within(row).getByRole('group', { name: 'Details' });
+    expect(within(list).getByText('zz_new_key').closest('[translate="no"]')).not.toBeNull();
+    expect(within(list).getByText('<b onclick=alert(1)>x</b>')).toBeInTheDocument();
+    expect(within(list).getByText('weird.key:with')).toBeInTheDocument();
+    expect(within(list).getByText('brand_new_reason').closest('[translate="no"]')).not.toBeNull();
+    expect(within(list).getByText('constructor')).toBeInTheDocument();
+    expect(container.querySelector('b')).toBeNull();
+    expectNoRawKeys();
+  });
+
+  it('formats time details in the reader\'s language and labels details in Turkish', async () => {
+    signedInAs(sessionFor('auditor', 'tr'));
+    const denied: AuditEntry = {
+      ...entry(1, 'authz.denied', 'denied'),
+      details: { suppressed_count: '12', window_start: '2026-09-30T07:50:00Z', reason: 'unverified' },
+    };
+    server.use(http.get('/api/v1/audit', () => HttpResponse.json({ items: [denied], next_cursor: null })));
+    await renderRoute('/audit', { languages: ['tr-TR'] });
+    const row = (await screen.findByText('Erişim reddedildi')).closest('tr')!;
+    await userEvent.click(within(row).getByRole('button', { name: 'Ayrıntılar (3)' }));
+    const list = within(row).getByRole('group', { name: 'Ayrıntılar' });
+    expect(within(list).getAllByRole('term').map((e) => e.textContent)).toEqual(['Neden', 'Kaydedilmeyen benzer kayıt sayısı', 'Dönem başlangıcı']);
+    expect(within(list).getByText('Lisans denetlenemedi')).toBeInTheDocument();
+    expect(within(list).queryByText('2026-09-30T07:50:00Z')).not.toBeInTheDocument();
+    expect(within(list).getByText(/2026/)).toBeInTheDocument();
+    expectNoRawKeys();
   });
 
   it('shows system actors with their name and hides the page from operators', async () => {

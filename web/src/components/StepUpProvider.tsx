@@ -1,7 +1,7 @@
 import { Button, Group, Stack, Text, TextInput } from '@mantine/core';
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { isApiError } from '../api/client';
+import { isApiError, onUnauthorized } from '../api/client';
 import { stepUp } from '../api/endpoints';
 import { useAuth } from '../auth/AuthProvider';
 import { ErrorAlert } from './ErrorAlert';
@@ -28,6 +28,10 @@ interface Pending {
   original: unknown;
 }
 
+// StepUpProvider asks for a fresh authenticator code when the server wants one. The dialog closes
+// with the session (AUD-25 d): when the session ends (expired or revoked elsewhere), the dialog
+// closes and the waiting call gives up with its original error. The typed code is cleared whenever
+// the dialog closes, and with the provider when it unmounts.
 export function StepUpProvider({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   const { setSession } = useAuth();
@@ -69,11 +73,25 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
     [askForCode],
   );
 
-  const cancel = () => {
+  // giveUp closes the dialog, clears what was typed and rejects the waiting call with its error.
+  const giveUp = useCallback(() => {
     setOpened(false);
+    setCode('');
+    setError(null);
     pending.current?.reject(pending.current.original);
     pending.current = null;
-  };
+  }, []);
+  const cancel = giveUp;
+
+  // The session ended (a request answered 401 auth.unauthenticated: it expired or was revoked): a
+  // confirmation for it can no longer succeed.
+  useEffect(() => onUnauthorized(giveUp), [giveUp]);
+
+  // Unmounted with a dialog open (the whole application went away): nobody can answer it.
+  useEffect(() => () => {
+    pending.current?.reject(pending.current.original);
+    pending.current = null;
+  }, []);
 
   const submit = async (ev: FormEvent) => {
     ev.preventDefault();
@@ -82,6 +100,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
     try {
       setSession(await stepUp(code.trim()));
       setOpened(false);
+      setCode('');
       pending.current?.resolve();
       pending.current = null;
     } catch (e) {

@@ -1,5 +1,5 @@
 import { Button, Card, Group, Stack, Table, Text, Title } from '@mantine/core';
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueries, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { wasSent } from '../api/deployments';
@@ -17,18 +17,26 @@ const DEPLOY_JOB = 'certificate.deploy';
 const DEPLOYMENTS_PER_SERVER = 200;
 
 // BlockedJobsPanel lists changes that were paused while the license was expired. After a renewal
-// they never start on their own: an Administrator runs or discards each one (R29, L-81).
+// they never start on their own: an Administrator runs or discards each one (R29, L-81). Every held
+// job can be reached (AUD-25 d): the list is read a page at a time (the API's default page size)
+// and "Show more" reads the next page while the server reports one.
 export function BlockedJobsPanel() {
   const { t, i18n } = useTranslation();
   const client = useQueryClient();
-  const jobs = useQuery({ queryKey: BLOCKED_JOBS_KEY, queryFn: () => listJobs({ status: 'blocked_license' }) });
+  const jobs = useInfiniteQuery({
+    queryKey: BLOCKED_JOBS_KEY,
+    queryFn: ({ pageParam }) => listJobs({ status: 'blocked_license', cursor: pageParam ?? undefined }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  });
+  const items = jobs.data?.pages.flatMap((p) => p.items) ?? [];
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState<string | null>(null);
   // A held deployment job may belong to a deployment that was already sent and is being recovered
   // by a job of its own (the API reports the original job's status): discarding it then undoes
   // nothing, so the row says so. The job does not name its deployment; the deployments of its server
   // do (job_id).
-  const deployTargets = [...new Set((jobs.data?.items ?? []).filter((j) => j.type === DEPLOY_JOB && j.target_id).map((j) => j.target_id as string))];
+  const deployTargets = [...new Set(items.filter((j) => j.type === DEPLOY_JOB && j.target_id).map((j) => j.target_id as string))];
   const deployments = useQueries({
     queries: deployTargets.map((target) => ({
       queryKey: [...DEPLOYMENTS_KEY, { target_id: target, limit: DEPLOYMENTS_PER_SERVER }],
@@ -58,7 +66,7 @@ export function BlockedJobsPanel() {
     }
   };
 
-  if (!jobs.data || jobs.data.items.length === 0) return null;
+  if (items.length === 0) return null;
   return (
     <Card withBorder padding="md" data-testid="blocked-jobs">
       <Stack gap="xs">
@@ -70,7 +78,7 @@ export function BlockedJobsPanel() {
         <Table.ScrollContainer minWidth={480}>
           <Table>
             <Table.Tbody>
-              {jobs.data.items.map((job) => {
+              {items.map((job) => {
                 const dep = job.type === DEPLOY_JOB ? deploymentOf(job) : undefined;
                 return (
                 <Table.Tr key={job.id} data-testid="blocked-job">
@@ -106,6 +114,11 @@ export function BlockedJobsPanel() {
             </Table.Tbody>
           </Table>
         </Table.ScrollContainer>
+        {jobs.hasNextPage && (
+          <Button variant="default" w="fit-content" onClick={() => void jobs.fetchNextPage()} loading={jobs.isFetchingNextPage}>
+            {t('jobs.blockedShowMore')}
+          </Button>
+        )}
       </Stack>
     </Card>
   );

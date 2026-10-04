@@ -12,7 +12,7 @@ export const LANGUAGES: { code: Lang; name: string }[] = manifest.locales.map((l
 
 const STORAGE_KEY = 'alice.lang';
 
-interface Bundle {
+export interface Bundle {
   web: Record<string, unknown>;
   common: Record<string, unknown>;
 }
@@ -57,15 +57,27 @@ async function loadBundle(lang: Lang): Promise<Bundle> {
   return lazyBundles[lang]();
 }
 
-async function ensureLoaded(i18n: I18n, lang: Lang): Promise<void> {
+// LoadBundle reads the texts of one language (tests pass a failing one).
+export type LoadBundle = (lang: Lang) => Promise<Bundle>;
+
+export interface I18nOptions {
+  load?: LoadBundle;
+  // hideMissingKeys renders a text missing in every language as empty instead of its key (AUD-25 d).
+  // It is on in production builds only: in development and tests the raw key stays visible, so the
+  // raw-key checks (test/i18nAssert.ts) find a missing text.
+  hideMissingKeys?: boolean;
+}
+
+async function ensureLoaded(i18n: I18n, lang: Lang, load: LoadBundle = loadBundle): Promise<void> {
   if (i18n.hasResourceBundle(lang, 'web')) return;
-  const bundle = await loadBundle(lang);
+  const bundle = await load(lang);
   i18n.addResourceBundle(lang, 'web', bundle.web, true, true);
   i18n.addResourceBundle(lang, 'common', bundle.common, true, true);
 }
 
-export async function createI18n(browserLanguages: readonly string[]): Promise<I18n> {
-  const lng = pickLanguage(readStored(), browserLanguages);
+// createEnglishI18n makes an instance with the bundled English texts only; it loads nothing.
+export async function createEnglishI18n(opts: I18nOptions = {}): Promise<I18n> {
+  const hide = opts.hideMissingKeys ?? import.meta.env.PROD;
   const instance = i18next.createInstance();
   await instance.use(initReactI18next).init({
     resources: { en: { web: webEn, common: commonEn } },
@@ -76,17 +88,34 @@ export async function createI18n(browserLanguages: readonly string[]): Promise<I
     defaultNS: 'web',
     fallbackNS: 'common',
     interpolation: { escapeValue: false }, // React escapes output
+    ...(hide ? { parseMissingKeyHandler: (_key: string, defaultValue?: string) => defaultValue ?? '' } : {}),
   });
-  if (lng !== 'en') {
-    await ensureLoaded(instance, lng);
-    await instance.changeLanguage(lng);
-  }
-  document.documentElement.lang = lng;
+  document.documentElement.lang = 'en';
   return instance;
 }
 
-export async function setLanguage(i18n: I18n, lang: Lang): Promise<void> {
-  await ensureLoaded(i18n, lang);
+// createI18n starts in the stored or the browser language. A language whose texts cannot be loaded
+// (a failed chunk download) leaves the page in English, which is always bundled (AUD-25 d); a text
+// missing in a language falls back to English.
+export async function createI18n(browserLanguages: readonly string[], opts: I18nOptions = {}): Promise<I18n> {
+  const lng = pickLanguage(readStored(), browserLanguages);
+  const instance = await createEnglishI18n(opts);
+  if (lng !== 'en') {
+    try {
+      await ensureLoaded(instance, lng, opts.load);
+      await instance.changeLanguage(lng);
+      document.documentElement.lang = lng;
+    } catch {
+      // English stays in use; the language switcher can try again.
+    }
+  }
+  return instance;
+}
+
+// setLanguage switches the language once its texts are loaded; when they cannot be loaded it
+// rejects and the current language stays.
+export async function setLanguage(i18n: I18n, lang: Lang, opts: Pick<I18nOptions, 'load'> = {}): Promise<void> {
+  await ensureLoaded(i18n, lang, opts.load);
   await i18n.changeLanguage(lang);
   document.documentElement.lang = lang;
   try {

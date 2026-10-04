@@ -200,6 +200,42 @@ describe('TargetsPage', () => {
     expect(deploymentQuery).toContain(`target_id=${targetFixture.id}`);
   });
 
+  it('shows every held job: "Show more" reads the next page and appends it, then goes away (AUD-25 d)', async () => {
+    withTargets('admin');
+    const first = Array.from({ length: 50 }, (_, i) => jobFixture({ id: `job-${i}`, type: 'sshkey.remove', status: 'blocked_license', finished_at: null }));
+    const second = [jobFixture({ id: 'job-last', type: 'target.discover', status: 'blocked_license', finished_at: null })];
+    const cursors: (string | null)[] = [];
+    server.use(
+      http.get('/api/v1/jobs', ({ request }) => {
+        const q = new URL(request.url).searchParams;
+        expect(q.get('status')).toBe('blocked_license');
+        cursors.push(q.get('cursor'));
+        return q.get('cursor') === 'page-2'
+          ? HttpResponse.json({ items: second, next_cursor: null })
+          : HttpResponse.json({ items: first, next_cursor: 'page-2' });
+      }),
+    );
+    await renderRoute('/servers');
+    const panel = await screen.findByTestId('blocked-jobs');
+    expect(within(panel).getAllByTestId('blocked-job')).toHaveLength(50);
+    expect(within(panel).queryByRole('button', { name: 'Run now: Server scan' })).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole('button', { name: 'Show more' }));
+    expect(await within(panel).findByRole('button', { name: 'Run now: Server scan' })).toBeInTheDocument();
+    expect(within(panel).getAllByTestId('blocked-job')).toHaveLength(51);
+    expect(within(panel).queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+    expect(cursors).toEqual([null, 'page-2']);
+  });
+
+  it('offers no "Show more" when all held jobs fit on one page', async () => {
+    withTargets('admin');
+    const blocked = jobFixture({ id: 'job-b', type: 'sshkey.remove', status: 'blocked_license', finished_at: null });
+    server.use(http.get('/api/v1/jobs', () => HttpResponse.json({ items: [blocked], next_cursor: null })));
+    await renderRoute('/servers');
+    const panel = await screen.findByTestId('blocked-jobs');
+    expect(within(panel).getAllByTestId('blocked-job')).toHaveLength(1);
+    expect(within(panel).queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+  });
+
   it('refreshes the server list after a paused change is run', async () => {
     withTargets('admin');
     const blocked = jobFixture({ id: 'job-b', type: 'sshkey.remove', status: 'blocked_license', finished_at: null });

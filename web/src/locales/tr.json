@@ -307,7 +307,9 @@
       "user": "Kullanıcı",
       "action": "İşlem",
       "result": "Sonuç",
-      "ip": "IP adresi"
+      "ip": "IP adresi",
+      "object": "Nesne",
+      "details": "Ayrıntılar"
     },
     "result": {
       "success": "Başarılı",
@@ -407,7 +409,81 @@
       "deployment_precheck_started": "Dağıtım denetimi başladı",
       "deployment_started": "Dağıtım başladı",
       "deployment_recovering": "Yarım kalan dağıtım denetleniyor",
-      "certificate_chain_completed": "Sertifika zinciri tamamlandı"
+      "certificate_chain_completed": "Sertifika zinciri tamamlandı",
+      "license_upload_error": "Lisans yüklemesi reddedildi"
+    },
+    "detailsToggle": "Ayrıntılar ({{n}})",
+    "detailKeys": {
+      "owner_id": "Sahibi",
+      "reason": "Neden",
+      "token_id": "API anahtarı",
+      "revoked_tokens_count": "İptal edilen API anahtarları",
+      "suppressed_count": "Kaydedilmeyen benzer kayıt sayısı",
+      "window_start": "Dönem başlangıcı",
+      "window_end": "Dönem sonu",
+      "problem": "Sorun",
+      "method": "Yöntem",
+      "class": "Lisans sınıfı",
+      "permission": "Yetki",
+      "path": "Yol",
+      "role": "Rol",
+      "role_to": "Yeni rol",
+      "username": "Kullanıcı adı",
+      "display_name": "Ad soyad",
+      "email": "E-posta",
+      "disabled": "Devre dışı",
+      "scope": "Erişim",
+      "via": "Kullanılan araç",
+      "failed_logins": "Başarısız girişler",
+      "minutes": "Dakika",
+      "target_id": "Sunucu",
+      "target_name": "Sunucu adı",
+      "host": "Ana makine",
+      "port": "Port",
+      "fingerprint": "Parmak izi",
+      "old_fingerprint": "Önceki parmak izi",
+      "previous_fingerprint": "Önceki parmak izi",
+      "new_fingerprint": "Yeni parmak izi",
+      "certificate_id": "Sertifika",
+      "location_id": "Sertifika konumu",
+      "deployment_id": "Dağıtım",
+      "job_id": "Görev",
+      "csr_id": "İmzalama isteği",
+      "license_id": "Lisans kimliği",
+      "installation_id": "Kurulum Kimliği",
+      "from_status": "Önceki durum",
+      "to_status": "Yeni durum",
+      "type": "Tür",
+      "label": "Etiket",
+      "format": "Biçim",
+      "intact": "Bozulmamış",
+      "checked": "Denetlenen kayıt sayısı",
+      "head_seq": "Son kayıt",
+      "first_bad_seq": "İlk bozuk kayıt",
+      "evidence": "Kanıt",
+      "valid_from": "Geçerlilik başlangıcı",
+      "valid_until": "Geçerlilik sonu",
+      "max_targets": "Lisanslı hedef sayısı",
+      "customer": "Müşteri"
+    },
+    "detailValues": {
+      "reason": {
+        "password_reset": "Parola bir yönetici tarafından yenilendi",
+        "sessions_revoked": "Tüm oturumlar bir yönetici tarafından kapatıldı",
+        "user_disabled": "Kullanıcı devre dışı bırakıldı",
+        "locked": "Lisans süresi doldu",
+        "lock_due": "Lisans kilidi zamanı geldi",
+        "unverified": "Lisans denetlenemedi"
+      },
+      "problem": {
+        "seal_missing": "Kurulum kaydının koruması kaldırılmış",
+        "seal_mismatch": "Kurulum kaydı korumasıyla eşleşmiyor",
+        "installation_missing": "Kurulum kaydı silinmiş"
+      },
+      "via": {
+        "ui": "Web arayüzü",
+        "cli": "Komut satırı"
+      }
     }
   },
   "license": {
@@ -737,7 +813,8 @@
     "blockedNotice": "Bu iş duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",
     "stopped": "Bu iş bitmeden durduruldu.",
     "deploymentSent": "Alice bu dağıtımı sunucuya zaten gönderdi ve nasıl sonuçlandığını doğruluyor. Bu işten vazgeçmek dağıtımı geri almaz.",
-    "deploymentNotSent": "Sunucuya henüz hiçbir şey gönderilmedi. Bu işten vazgeçmek dağıtımı iptal eder."
+    "deploymentNotSent": "Sunucuya henüz hiçbir şey gönderilmedi. Bu işten vazgeçmek dağıtımı iptal eder.",
+    "blockedShowMore": "Daha fazla göster"
   },
   "enum": {
     "targetStatus": {
@@ -1218,5 +1295,10 @@
     "currentStep": "Geçerli adım: {{step}}",
     "operation": "Sunucudaki tamamlanmamış önceki değişiklik (işlem kimliği): {{id}}",
     "cancelled": "İptal edildi"
+  },
+  "routeError": {
+    "title": "Bir sorun oluştu",
+    "text": "Bu sayfa gösterilemedi. Sayfayı yeniden yükleyin; yine olursa saati not edip yöneticinize bildirin.",
+    "reload": "Yeniden yükle"
   }
 }

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 import { Alert, Badge, Button, Code, Group, NativeSelect, Stack, Table, Text, TextInput, Title } from '@mantine/core';
 import { useInfiniteQuery, useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -20,6 +20,82 @@ export function actionKey(action: string): string {
   return `audit.actions.${action.replace(/\./g, '_')}`;
 }
 
+// Details whose value is an instant; they are shown in the reader's language and time zone.
+const TIME_DETAILS = new Set(['at', 'window_start', 'window_end', 'valid_from', 'valid_until', 'ends_at', 'locks_at', 'system_time', 'last_seen']);
+// A detail key or value is looked up in the catalog only when it is a plain identifier: anything else
+// (a dot or a colon would be read as a path or a namespace) is shown as data.
+const PLAIN = /^[a-z][a-z0-9_]*$/;
+
+// catalogLookup finds a string at a dotted path through own properties only (i18next's own lookup
+// also finds inherited ones: a detail named "constructor" would "exist").
+function catalogLookup(bundle: unknown, key: string): string | undefined {
+  let node = bundle;
+  for (const part of key.split('.')) {
+    if (!node || typeof node !== 'object' || !Object.prototype.hasOwnProperty.call(node, part)) return undefined;
+    node = (node as Record<string, unknown>)[part];
+  }
+  return typeof node === 'string' ? node : undefined;
+}
+
+// useCatalogText returns the text of a key built from server data, or null when neither the active
+// language nor English (the fallback) has a text there.
+function useCatalogText(): (key: string) => string | null {
+  const { t, i18n } = useTranslation();
+  return (key: string) =>
+    catalogLookup(i18n.getResourceBundle(i18n.language, 'web'), key) !== undefined || catalogLookup(i18n.getResourceBundle('en', 'web'), key) !== undefined
+      ? t(key)
+      : null;
+}
+
+// AuditDetails shows the details of one entry behind a disclosure (AUD-25 d): each key with its
+// label, or the key itself as data when this version has no label for it; each value as data, a
+// known value (a reason, a problem) in words and an instant in the reader's time zone. Values are
+// text, never markup.
+function AuditDetails({ details }: { details: Record<string, string> }) {
+  const { t, i18n } = useTranslation();
+  const text = useCatalogText();
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const pairs = Object.entries(details).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  if (pairs.length === 0) return null;
+  const keyLabel = (k: string) => (PLAIN.test(k) ? text(`audit.detailKeys.${k}`) : null);
+  const valueText = (k: string, v: string) => {
+    if (TIME_DETAILS.has(k)) return formatDateTime(v, i18n.language);
+    return PLAIN.test(k) && PLAIN.test(v) ? text(`audit.detailValues.${k}.${v}`) : null;
+  };
+  return (
+    <Stack gap={4}>
+      <Button variant="subtle" size="compact-xs" w="fit-content" aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)}>
+        {t('audit.detailsToggle', { n: pairs.length })}
+      </Button>
+      {open && (
+        <div id={id} role="group" aria-label={t('audit.columns.details')}>
+          <dl style={{ margin: 0 }}>
+            {pairs.map(([k, v]) => {
+              const label = keyLabel(k);
+              const value = valueText(k, v);
+              return (
+                <div key={k} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <Text component="dt" size="xs" fw={600}>
+                    {label ?? (
+                      <Code translate="no">{k}</Code>
+                    )}
+                  </Text>
+                  <Text component="dd" size="xs" m={0} style={{ overflowWrap: 'anywhere' }}>
+                    {value ?? (
+                      <Code translate="no">{v}</Code>
+                    )}
+                  </Text>
+                </div>
+              );
+            })}
+          </dl>
+        </div>
+      )}
+    </Stack>
+  );
+}
+
 export function AuditPage() {
   const { t, i18n } = useTranslation();
   const [draft, setDraft] = useState<Filters>({ action: '', result: '' });
@@ -34,7 +110,9 @@ export function AuditPage() {
   });
   const verify = useMutation({ mutationFn: verifyAudit });
 
-  const label = (e: AuditEntry) => (i18n.exists(actionKey(e.action)) ? t(actionKey(e.action)) : e.action);
+  const text = useCatalogText();
+  // An action from a newer server is shown as the data it is.
+  const label = (e: AuditEntry) => (/^[a-z][a-z0-9_.]*$/.test(e.action) && text(actionKey(e.action))) || <Code translate="no">{e.action}</Code>;
   const actor = (e: AuditEntry) => (e.actor_type === 'system' ? t('audit.systemActor', { name: e.actor_name }) : e.actor_name);
   const apply = (ev: FormEvent) => {
     ev.preventDefault();
@@ -107,14 +185,17 @@ export function AuditPage() {
       {entries.isError && <ErrorAlert error={entries.error} />}
       {entries.isSuccess && items.length === 0 && <Text c="gray.7">{t('audit.empty')}</Text>}
       {items.length > 0 && (
+        <Table.ScrollContainer minWidth={900}>
         <Table striped>
           <Table.Thead>
             <Table.Tr>
               <Table.Th>{t('audit.columns.time')}</Table.Th>
               <Table.Th>{t('audit.columns.user')}</Table.Th>
               <Table.Th>{t('audit.columns.action')}</Table.Th>
+              <Table.Th>{t('audit.columns.object')}</Table.Th>
               <Table.Th>{t('audit.columns.result')}</Table.Th>
               <Table.Th>{t('audit.columns.ip')}</Table.Th>
+              <Table.Th>{t('audit.columns.details')}</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -123,6 +204,18 @@ export function AuditPage() {
                 <Table.Td>{formatDateTime(e.at, i18n.language)}</Table.Td>
                 <Table.Td>{actor(e)}</Table.Td>
                 <Table.Td>{label(e)}</Table.Td>
+                <Table.Td>
+                  {(e.object_type || e.object_id) && (
+                    <Group gap={4} wrap="wrap">
+                      {e.object_type && <Code translate="no">{e.object_type}</Code>}
+                      {e.object_id && (
+                        <Code translate="no" style={{ overflowWrap: 'anywhere' }}>
+                          {e.object_id}
+                        </Code>
+                      )}
+                    </Group>
+                  )}
+                </Table.Td>
                 <Table.Td>
                   <Badge color={RESULT_COLORS[e.result]} variant="light">
                     {t(`audit.result.${e.result}`)}
@@ -133,10 +226,14 @@ export function AuditPage() {
                     {e.ip ?? ''}
                   </Text>
                 </Table.Td>
+                <Table.Td>
+                  <AuditDetails details={e.details ?? {}} />
+                </Table.Td>
               </Table.Tr>
             ))}
           </Table.Tbody>
         </Table>
+        </Table.ScrollContainer>
       )}
       {entries.hasNextPage && (
         <Button variant="default" onClick={() => void entries.fetchNextPage()} loading={entries.isFetchingNextPage}>

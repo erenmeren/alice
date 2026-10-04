@@ -8,7 +8,13 @@ import { LANGUAGES, setLanguage, type Lang } from './i18n';
 export function LanguageSwitcher({ signedIn = false }: { signedIn?: boolean }) {
   const { t, i18n } = useTranslation();
   const change = async (value: string) => {
-    await setLanguage(i18n, value as Lang);
+    try {
+      await setLanguage(i18n, value as Lang);
+    } catch {
+      // The texts could not be loaded (a failed download): the current language stays, and the
+      // switch shows it; choosing the language again retries.
+      return;
+    }
     if (signedIn) {
       try {
         await setMyLocale(value);

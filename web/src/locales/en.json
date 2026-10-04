@@ -307,7 +307,9 @@
       "user": "User",
       "action": "Action",
       "result": "Result",
-      "ip": "IP address"
+      "ip": "IP address",
+      "object": "Object",
+      "details": "Details"
     },
     "result": {
       "success": "Success",
@@ -407,7 +409,81 @@
       "deployment_precheck_started": "Deployment check started",
       "deployment_started": "Deployment started",
       "deployment_recovering": "Interrupted deployment being checked",
-      "certificate_chain_completed": "Certificate chain completed"
+      "certificate_chain_completed": "Certificate chain completed",
+      "license_upload_error": "License upload refused"
+    },
+    "detailsToggle": "Details ({{n}})",
+    "detailKeys": {
+      "owner_id": "Owner",
+      "reason": "Reason",
+      "token_id": "API token",
+      "revoked_tokens_count": "API tokens revoked",
+      "suppressed_count": "Similar entries left out",
+      "window_start": "Period start",
+      "window_end": "Period end",
+      "problem": "Problem",
+      "method": "Method",
+      "class": "License class",
+      "permission": "Permission",
+      "path": "Path",
+      "role": "Role",
+      "role_to": "New role",
+      "username": "Username",
+      "display_name": "Full name",
+      "email": "Email",
+      "disabled": "Disabled",
+      "scope": "Access",
+      "via": "Done through",
+      "failed_logins": "Failed sign-ins",
+      "minutes": "Minutes",
+      "target_id": "Server",
+      "target_name": "Server name",
+      "host": "Host",
+      "port": "Port",
+      "fingerprint": "Fingerprint",
+      "old_fingerprint": "Previous fingerprint",
+      "previous_fingerprint": "Previous fingerprint",
+      "new_fingerprint": "New fingerprint",
+      "certificate_id": "Certificate",
+      "location_id": "Certificate location",
+      "deployment_id": "Deployment",
+      "job_id": "Task",
+      "csr_id": "Signing request",
+      "license_id": "License ID",
+      "installation_id": "Installation ID",
+      "from_status": "Previous status",
+      "to_status": "New status",
+      "type": "Type",
+      "label": "Label",
+      "format": "Format",
+      "intact": "Intact",
+      "checked": "Entries checked",
+      "head_seq": "Latest entry",
+      "first_bad_seq": "First damaged entry",
+      "evidence": "Evidence",
+      "valid_from": "Valid from",
+      "valid_until": "Valid until",
+      "max_targets": "Licensed targets",
+      "customer": "Customer"
+    },
+    "detailValues": {
+      "reason": {
+        "password_reset": "New password set by an administrator",
+        "sessions_revoked": "Signed out everywhere by an administrator",
+        "user_disabled": "User disabled",
+        "locked": "License expired",
+        "lock_due": "License lock time reached",
+        "unverified": "License could not be checked"
+      },
+      "problem": {
+        "seal_missing": "The protection of the installation record was removed",
+        "seal_mismatch": "The installation record does not match its protection",
+        "installation_missing": "The installation record was removed"
+      },
+      "via": {
+        "ui": "Web interface",
+        "cli": "Command line"
+      }
     }
   },
   "license": {
@@ -737,7 +813,8 @@
     "blockedNotice": "This task is paused and waits for an administrator to run it.",
     "stopped": "This task was stopped before it finished.",
     "deploymentSent": "Alice already sent this deployment to the server and is confirming how it ended. Discarding this job does not undo it.",
-    "deploymentNotSent": "Nothing has been sent to the server yet. Discarding this job cancels the deployment."
+    "deploymentNotSent": "Nothing has been sent to the server yet. Discarding this job cancels the deployment.",
+    "blockedShowMore": "Show more"
   },
   "enum": {
     "targetStatus": {
@@ -1218,5 +1295,10 @@
     "currentStep": "Current step: {{step}}",
     "operation": "Unfinished earlier change on the server (operation ID): {{id}}",
     "cancelled": "Cancelled"
+  },
+  "routeError": {
+    "title": "Something went wrong",
+    "text": "This page could not be shown. Reload it; if it happens again, note the time and tell your administrator.",
+    "reload": "Reload"
   }
 }

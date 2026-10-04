@@ -23,20 +23,39 @@ export function readRepoFile(rel: string): string {
 
 // Every way the backend writes an audit action as a literal: an audit.Event field (Action: "x"),
 // an assignment (ev.Action = "x"), the deployment recorder (appendAudit(ctx, tx, "x", ...)), the
-// jobs runner (jobEvent("x", ...)) and an event table ({"x", audit.Success, ...}). An action
-// computed at run time is not found here.
+// jobs runner (jobEvent("x", ...), terminate(ctx, c, reason, "x")), an event table
+// ({"x", audit.Success, ...}), the auth helpers (s.adminChange, s.adminFailure, s.auditFailure,
+// s.recordFailure: the first dotted literal of the call) and a variable named action chosen by an
+// assignment (action := "x"; action, result := "x", ...; event, action := "e", "x").
+// "license.upload." + RejectReason(err) is expanded by backendAuditActions. An action computed in
+// any other way is not found here.
 const ACTION_PATTERNS = [
   /\bAction:\s*"([a-z][a-z0-9_.]*)"/g,
   /\.Action\s*=\s*"([a-z][a-z0-9_.]*)"/g,
   /\bappendAudit\([^"\n]*"([a-z][a-z0-9_.]*)"/g,
   /\bjobEvent\("([a-z][a-z0-9_.]*)"/g,
+  /\bterminate\([^"\n]*"[^"\n]*",\s*"([a-z][a-z0-9_.]*)"/g,
   /\{"([a-z][a-z0-9_]*\.[a-z0-9_.]+)",\s*audit\.(?:Success|Failure|Denied)\b/g,
+  /\bs\.(?:adminChange|adminFailure|auditFailure|recordFailure)\([^"\n]*"([a-z][a-z0-9_]*\.[a-z0-9_.]+)"/g,
+  /\baction(?:,\s*\w+)?\s*:?=\s*"([a-z][a-z0-9_]*\.[a-z0-9_.]+)"/g,
+  /\b\w+,\s*action\s*:?=\s*"[^"\n]*",\s*"([a-z][a-z0-9_]*\.[a-z0-9_.]+)"/g,
 ];
 
+// auditActionsIn finds the audit actions written as literals in a Go source. A prefix that is
+// completed at run time ("license.upload." + reason) is left out.
 export function auditActionsIn(src: string): string[] {
   const found = new Set<string>();
-  for (const re of ACTION_PATTERNS) for (const m of src.matchAll(re)) found.add(m[1]);
+  for (const re of ACTION_PATTERNS) for (const m of src.matchAll(re)) if (!m[1].endsWith('.')) found.add(m[1]);
   return [...found].sort();
+}
+
+// rejectReasonsIn finds the values RejectReason returns (internal/license/errors.go): a refused
+// license upload is audited as "license.upload." + RejectReason(err).
+export function rejectReasonsIn(src: string): string[] {
+  const start = src.indexOf('func RejectReason(');
+  if (start < 0) return [];
+  const body = src.slice(start, src.indexOf('\n}\n', start) + 2);
+  return [...new Set([...body.matchAll(/\breturn\s+"([a-z][a-z0-9_]*)"/g)].map((m) => m[1]))].sort();
 }
 
 // jobTypesIn finds the job type constants of internal/inventory/jobs.go (JobXxx = "type").
@@ -44,12 +63,13 @@ export function jobTypesIn(src: string): string[] {
   return [...src.matchAll(/^\s*Job\w*\s*=\s*"([a-z][a-z0-9_.]*)"/gm)].map((m) => m[1]).sort();
 }
 
-// backendAuditActions is every audit action literal in the packages that emit them.
+// backendAuditActions is every audit action the backend writes (all of internal/ and cmd/).
 export function backendAuditActions(): string[] {
   const found = new Set<string>();
-  for (const dir of ['internal/inventory', 'internal/jobs', 'internal/api']) {
+  for (const dir of ['internal', 'cmd']) {
     for (const f of goFiles(dir)) for (const a of auditActionsIn(readRepoFile(f))) found.add(a);
   }
+  for (const r of rejectReasonsIn(readRepoFile('internal/license/errors.go'))) found.add(`license.upload.${r}`);
   return [...found].sort();
 }
 

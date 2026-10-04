@@ -14,6 +14,7 @@ import { HomePage } from './pages/HomePage';
 import { LicensePage } from './pages/LicensePage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { RouteErrorPage } from './pages/RouteErrorPage';
 import { TargetDetailPage } from './pages/TargetDetailPage';
 import { TargetsPage } from './pages/TargetsPage';
 import { SetupPage } from './pages/SetupPage';
@@ -38,6 +39,8 @@ export function routes(): RouteObject[] {
   return [
     {
       element: <Root />,
+      // An error thrown while any screen renders shows a translated error page, not a blank one.
+      errorElement: <RouteErrorPage />,
       children: [
         { path: '/setup', element: <SetupPage /> },
         { path: '/login', element: <LoginPage /> },

@@ -1,4 +1,4 @@
-import { auditActionsIn, backendAuditActions, backendJobTypes, jobTypesIn, registeredJobTypes } from '../test/goSources';
+import { auditActionsIn, backendAuditActions, backendJobTypes, jobTypesIn, registeredJobTypes, rejectReasonsIn } from '../test/goSources';
 import en from './en.json';
 import tr from './tr.json';
 
@@ -35,6 +35,38 @@ describe('the Go source readers', () => {
     ]);
   });
 
+  it('find the actions passed to the audit helpers and chosen in assignments (AUD-25 d)', () => {
+    const src = `
+      return s.adminChange(ctx, actor, id, "user.password_reset", details, func(tx pgx.Tx) error {
+      return s.auditFailure(ctx, tx, actor, "auth.mfa_verify", p.UserID.String(), reason)
+      return s.recordFailure(ctx, tx, actor, p.UserID, "auth.stepup", "bad_totp")
+      if aerr := s.adminFailure(ctx, p, m, "user.created", "", "username_taken"); aerr != nil {
+      r.terminate(ctx, c, "job.unknown_type", "job.dead")
+      action, result := "job.recovered", audit.Success
+      event, action := "renewed", "license.renewed"
+      problem, action = "jump_cleared", "clock.jump_cleared"
+      action = "license.expired"
+      h.recordFailure(jobCtx, j.TargetID, providers.NewError("ssh.timeout", true, err, nil))
+      return action == "license.installation_tampered", n, legacy, nil
+      Action: "license.upload." + reason,`;
+    expect(auditActionsIn(src)).toEqual([
+      'auth.mfa_verify',
+      'auth.stepup',
+      'clock.jump_cleared',
+      'job.dead',
+      'job.recovered',
+      'license.expired',
+      'license.renewed',
+      'user.created',
+      'user.password_reset',
+    ]);
+  });
+
+  it('find the reasons of a refused license upload', () => {
+    const src = 'func RejectReason(err error) string {\n\tswitch {\n\tcase x:\n\t\treturn "invalid_signature"\n\tdefault:\n\t\treturn "error"\n\t}\n}\n\nfunc other() string {\n\treturn "nope"\n}';
+    expect(rejectReasonsIn(src)).toEqual(['error', 'invalid_signature']);
+  });
+
   it('find job type constants', () => {
     expect(jobTypesIn('const (\n\tJobDiscover = "target.discover"\n\t// JobX is documented\n\tJobCertificateDeploy = "certificate.deploy"\n)')).toEqual([
       'certificate.deploy',
@@ -50,7 +82,29 @@ describe('the Go source readers', () => {
   });
 
   it('read the real sources', () => {
-    expect(backendAuditActions()).toEqual(expect.arrayContaining(['certificate.uploaded', 'csr.completed', 'deployment.recovery_started', 'location.updated']));
+    expect(backendAuditActions()).toEqual(
+      expect.arrayContaining([
+        'certificate.uploaded',
+        'csr.completed',
+        'deployment.recovery_started',
+        'location.updated',
+        // written by internal/auth, internal/license and internal/setup, through helpers and assignments
+        'auth.login',
+        'user.mfa_reset',
+        'user.sessions_revoked',
+        'token.revoked',
+        'license.activated',
+        'license.state_changed',
+        'license.upload.invalid_signature',
+        'license.upload.older_than_installed',
+        'clock.jump_cleared',
+        'setup.completed',
+        'job.recovered',
+        'job.tampered',
+      ]),
+    );
+    // "license.upload." + RejectReason(err) is expanded, never kept as a bare prefix.
+    expect(backendAuditActions().filter((a) => a.endsWith('.'))).toEqual([]);
     expect(backendJobTypes()).toEqual(expect.arrayContaining(['certificate.deploy', 'certificate.deploy_recover', 'license.evaluate', 'discovery.schedule', 'deployment.recovery_sweep']));
   });
 

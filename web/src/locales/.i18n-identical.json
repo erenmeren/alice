@@ -1,4 +1,5 @@
 [
+  "audit.detailKeys.port",
   "certificates.csr.keyRsa3072",
   "certificates.csr.keyRsa4096",
   "certificates.detail.keyValue",

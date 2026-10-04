@@ -68,7 +68,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!userLocale || appliedLocale.current === userLocale) return;
     appliedLocale.current = userLocale;
-    if (userLocale !== i18n.language && isSupported(userLocale)) void setLanguage(i18n, userLocale);
+    if (userLocale !== i18n.language && isSupported(userLocale)) {
+      // Texts that cannot be loaded leave the current language (i18n.ts).
+      setLanguage(i18n, userLocale).catch(() => undefined);
+    }
   }, [userLocale, i18n]);
 
   const refreshSetupStatus = useCallback(async () => {

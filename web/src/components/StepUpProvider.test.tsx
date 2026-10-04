@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
@@ -123,6 +123,90 @@ describe('StepUpProvider', () => {
     await screen.findByRole('dialog', { name: "Confirm it's you" });
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('failed: auth.stepup_required'));
+  });
+
+  it('closes with the session: the dialog goes away, the wait gives up with the original error and the typed code is gone (AUD-25 d)', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.post('/api/v1/sensitive', () => errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required')),
+      http.get('/api/v1/other', () => errorResponse(401, 'ALC-AUTH-0001', 'auth.unauthenticated')),
+    );
+    await renderHarness();
+    await userEvent.click(await screen.findByRole('button', { name: 'Do it' }));
+    await screen.findByRole('dialog', { name: "Confirm it's you" });
+    await userEvent.type(screen.getByLabelText('6-digit code'), '123');
+
+    // Any request learns that the session ended (it expired or was revoked elsewhere).
+    await act(async () => {
+      await apiFetch('/api/v1/other').catch(() => undefined);
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('failed: auth.stepup_required'));
+
+    // Asked again later, the field starts empty.
+    await userEvent.click(screen.getByRole('button', { name: 'Do it' }));
+    await screen.findByRole('dialog', { name: "Confirm it's you" });
+    expect(screen.getByLabelText('6-digit code')).toHaveValue('');
+  });
+
+  it('closes and gives up when the step-up itself finds the session ended', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.post('/api/v1/sensitive', () => errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required')),
+      http.post('/api/v1/auth/stepup', () => errorResponse(401, 'ALC-AUTH-0001', 'auth.unauthenticated')),
+    );
+    await renderHarness();
+    await userEvent.click(await screen.findByRole('button', { name: 'Do it' }));
+    await screen.findByRole('dialog', { name: "Confirm it's you" });
+    await userEvent.type(screen.getByLabelText('6-digit code'), '123456');
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('failed: auth.stepup_required'));
+  });
+
+  it('clears the typed code when the dialog is cancelled', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.post('/api/v1/sensitive', () => errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required')),
+    );
+    await renderHarness();
+    await userEvent.click(await screen.findByRole('button', { name: 'Do it' }));
+    await screen.findByRole('dialog', { name: "Confirm it's you" });
+    await userEvent.type(screen.getByLabelText('6-digit code'), '654');
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Do it' }));
+    await screen.findByRole('dialog', { name: "Confirm it's you" });
+    expect(screen.getByLabelText('6-digit code')).toHaveValue('');
+  });
+
+  it('gives up a pending wait when the provider goes away', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.post('/api/v1/sensitive', () => errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required')),
+    );
+    let outcome = '';
+    function Starter() {
+      const { run } = useStepUp();
+      return (
+        <button onClick={() => void run(() => apiFetch('/api/v1/sensitive', { method: 'POST' })).catch((e) => (outcome = isApiError(e) ? e.reason : 'other'))}>
+          start
+        </button>
+      );
+    }
+    const { unmount } = await renderApp(
+      <MemoryRouter>
+        <AuthProvider>
+          <StepUpProvider>
+            <Starter />
+          </StepUpProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+    await userEvent.click(await screen.findByRole('button', { name: 'start' }));
+    await screen.findByRole('dialog', { name: "Confirm it's you" });
+    unmount();
+    await waitFor(() => expect(outcome).toBe('auth.stepup_required'));
   });
 
   it('asks once for concurrent calls and completes all of them', async () => {
