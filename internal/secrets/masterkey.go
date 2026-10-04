@@ -74,6 +74,12 @@ func LoadOrCreateMasterKey(ctx context.Context, q db.Querier, dir string, now ti
 		if err := createKeyFile(dir, path); err != nil {
 			return nil, err
 		}
+	default:
+		// An adopted file (an installer's, or one a failed first start left behind): its directory entry
+		// may never have been synced, and the database is about to start depending on it (AUD-20).
+		if err := syncDir(dir); err != nil {
+			return nil, fmt.Errorf("sync keys directory %s: %w", dir, err)
+		}
 	}
 	k, err := loadKeyFile(path)
 	if err != nil {
@@ -148,7 +154,12 @@ func createKeyFile(dir, path string) error {
 
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o400) //nolint:gosec // G304: path is dir from configuration + fixed file name
 	if errors.Is(err, fs.ErrExist) {
-		return nil // another process created it first; it is loaded and verified next
+		// Another process created it first; it is loaded and verified next. Its directory entry may not
+		// be durable yet, so this start syncs it too.
+		if err := syncDir(dir); err != nil {
+			return fmt.Errorf("sync keys directory %s: %w", dir, err)
+		}
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("create master key file %s: %w", path, err)
@@ -168,14 +179,13 @@ func createKeyFile(dir, path string) error {
 	}
 	// AUD-20: the file's own sync does not make its directory entry durable. Without this a power loss
 	// right after the first start can lose the file while rows encrypted under it exist. An unsynced
-	// file is removed, so a retry creates and syncs it again.
+	// file is left in place (another starting process may already use it): startup fails, and the
+	// next start adopts the file and syncs the directory before recording it.
 	if err := syncDir(dir); err != nil {
-		_ = os.Remove(path)
 		return fmt.Errorf("sync keys directory %s: %w", dir, err)
 	}
 	if dirCreated {
 		if err := syncDir(filepath.Dir(dir)); err != nil {
-			_ = os.Remove(path)
 			return fmt.Errorf("sync parent of keys directory %s: %w", dir, err)
 		}
 	}

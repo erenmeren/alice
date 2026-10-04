@@ -24,13 +24,13 @@ func TestCreateKeyFileSyncsItsDirectory(t *testing.T) {
 
 	synced = nil
 	require.NoError(t, createKeyFile(dir, path), "an existing key file is left alone")
-	assert.Empty(t, synced, "nothing new, nothing to sync")
+	assert.Equal(t, []string{dir}, synced, "the winner's entry may not be durable yet: the loser syncs the directory too")
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o400), info.Mode().Perm())
 }
 
-func TestCreateKeyFileSyncsOnlyTheDirectoryOfAnExistingOne(t *testing.T) {
+func TestCreateKeyFileSyncsOnlyTheDirectoryOfAnExistingDirectory(t *testing.T) {
 	var synced []string
 	old := syncDir
 	syncDir = func(dir string) error { synced = append(synced, dir); return nil }
@@ -50,5 +50,11 @@ func TestCreateKeyFileFailsWhenTheDirectorySyncFails(t *testing.T) {
 	err := createKeyFile(dir, path)
 	require.ErrorIs(t, err, boom)
 	_, statErr := os.Stat(path)
-	assert.ErrorIs(t, statErr, os.ErrNotExist, "an unsynced key file is not left behind")
+	assert.NoError(t, statErr, "the file stays: another starting process may already use it")
+
+	// The retry adopts the file and must still sync the directory.
+	var synced []string
+	syncDir = func(d string) error { synced = append(synced, d); return nil }
+	require.NoError(t, createKeyFile(dir, path))
+	assert.Equal(t, []string{dir}, synced)
 }
