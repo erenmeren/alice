@@ -270,7 +270,7 @@ func TestPhase4TextsAreTruthfulForEveryCause(t *testing.T) {
 	// cover upload and deployment; a weak chain certificate counts.
 	assert.Contains(t, en("errors.nginx.config_invalid.cause"), "cannot safely read")
 	assert.NotContains(t, en("errors.nginx.config_invalid.cause"), "fails")
-	assert.Contains(t, en("errors.deployment.unknown_operation.cause"), "after 7 days")
+	assert.Contains(t, en("errors.deployment.unknown_operation.cause"), "after 7 days or more")
 	assert.Contains(t, en("errors.deployment.verify_unreachable.cause"), "no HTTPS address")
 	assert.Contains(t, en("errors.nginx.location_unsupported.cause"), "no longer uses this file")
 	assert.Contains(t, en("errors.nginx.no_space.title"), "enough")
@@ -381,4 +381,33 @@ func TestDiscoverIsNamedConsistently(t *testing.T) {
 		}
 	}
 	assert.ElementsMatch(t, discoverKeys, got)
+}
+
+// quotedTitle is a quoted error title followed by its code in the troubleshooting guide, for example
+// "Alice already has this certificate with its key." (`ALC-CRT-0008`).
+var quotedTitle = regexp.MustCompile("\"([^\"]+)\"\\s*\\(`(ALC-(?:NGX|CRT|DEP)-[0-9]{4})`\\)")
+
+// Every Phase 4 error title the troubleshooting guide quotes is the catalogue's English title (a
+// placeholder such as {{port}} stands for any word; the final period may be left out).
+func TestTroubleshootingQuotesTheRealTitles(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/troubleshooting.md")
+	require.NoError(t, err)
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	reasons := map[string]string{}
+	for _, ec := range phase4Codes() {
+		reasons[ec.Code] = ec.Reason
+	}
+	matches := quotedTitle.FindAllStringSubmatch(string(doc), -1)
+	require.NotEmpty(t, matches)
+	for _, m := range matches {
+		quote := strings.Join(strings.Fields(m[1]), " ")
+		reason, ok := reasons[m[2]]
+		if !assert.True(t, ok, "%s is not a Phase 4 code", m[2]) {
+			continue
+		}
+		title := cat.T("en", "errors."+reason+".title", nil)
+		pattern := regexp.MustCompile(`\\\{\\\{[a-z_]+\\}\\}`).ReplaceAllString(regexp.QuoteMeta(strings.TrimSuffix(title, ".")), `\S+`)
+		assert.Regexp(t, "^"+pattern+`\.?$`, quote, "%s: the guide quotes %q, the title is %q", m[2], quote, title)
+	}
 }

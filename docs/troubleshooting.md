@@ -110,7 +110,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   certificate changed since the last scan (choose **Discover**), or another `server` block listens on the server's
   own address and port and answers for this name (Nginx prefers a `listen` with an explicit address; give both blocks
   the same kind of `listen`).
-- **"The website serves the expected certificate with a different chain" (`ALC-DEP-0012`).** The number of certificates
+- **"The website serves the expected certificate with a different chain (port N)." (`ALC-DEP-0012`).** The number of certificates
   the website sends differs from the uploaded chain. Check that the website's `ssl_certificate` file is the one Alice
   replaced and that no proxy changes the chain.
 - **A deployment shows "Confirming the outcome" or "Needs attention".** Alice did not get a clear answer from the
@@ -125,16 +125,23 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   deployment's page. On the server, compare the files with the backup in
   `/var/lib/alice-helper/backups/<deployment ID>` (`sha256sum`), restore by hand if needed
   ([nginx-host-preparation.md](nginx-host-preparation.md#restoring-a-previous-certificate-by-hand)), run `nginx -t` and
-  `systemctl reload nginx`, then choose **Discover**. The error code tells which case it is (`ALC-DEP-0008`, `0017`,
-  `0018`, `0019`, `0020`).
-- **"Files restored but the website was not confirmed" (`ALC-DEP-0019`) although the website looks right.** This
+  `systemctl reload nginx`, then choose **Discover**. The error code tells which case it is (`ALC-DEP-0008`, `0014`,
+  `0017`, `0018`, `0019`, `0020`).
+
+  Do **not** restore the backup after `ALC-DEP-0014` (a later deployment replaced the files: restoring would put
+  back a key that the later deployment replaced) or after `ALC-DEP-0020` (another program, for example certbot,
+  changed the files: restoring would overwrite its file). In those cases find out which certificate is meant to be
+  there and deploy it, or leave the files to the other program. Restore by hand only when the files on the server
+  still hold what this deployment wrote (`sha256sum` of the certificate file equals `new_cert_sha256` in the
+  folder's `journal.json`) and the website is broken.
+- **"The previous files are back, but the website was not confirmed." (`ALC-DEP-0019`) although the website looks right.** This
   happens when another `server` block answers on the server's own address and port: Alice's check reaches that
   block instead. Check the website in a browser and see the previous point.
 - **"Alice is still finishing an earlier deployment on this server" (`ALC-DEP-0002`).** Wait until that deployment
   shows a result in **Deployment history**; at most about a day when the server stays unreachable.
 - **"The certificate file changed since Alice last looked" (`ALC-NGX-0006`).** Another tool (for example certbot)
   replaced the file. Decide which tool manages this website; choose **Discover** before deploying again.
-- **"Not enough free disk space" (`ALC-NGX-0005`).** The server needs room for the new files, their backups and 10 MiB
+- **"The server does not have enough free disk space." (`ALC-NGX-0005`).** The server needs room for the new files, their backups and 10 MiB
   more. The same answer comes when the helper already keeps 1000 deployment backups: old ones are removed
   automatically after 7 days.
 - **"Another certificate change is running on this server" (`ALC-NGX-0008`).** The helper changes one website at a
@@ -1087,7 +1094,7 @@ A deployment may show `ALC-DEP-0019` (the files are back but the website was not
 
 **Meaning.** The server has no record of this deployment. (HTTP 502, reason `deployment.unknown_operation`.)
 
-**Likely cause.** `alice-helper` has no record of this deployment, for example because it never received it or because it removed the record after 7 days.
+**Likely cause.** `alice-helper` has no record of this deployment, for example because it never received it or because it removed the record after 7 days or more.
 
 **What to do.** Check which certificate the website serves now, then choose Discover on the server's page.
 

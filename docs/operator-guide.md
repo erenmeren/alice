@@ -128,7 +128,8 @@ Choose **Upload certificate**, then the **File format**:
 **Name (optional)** is a label for the list. Choose **Upload**. Alice checks everything before it stores anything:
 the key must belong to one of the certificates (that one becomes the website certificate, the others its chain),
 the certificate must not have expired, keys must be RSA of 2048 to 16384 bits or ECDSA P-256 or P-384, and no
-certificate in the chain may be signed with MD5 or SHA-1. Each field is limited to 256 KiB. The private key is stored
+certificate in the chain may be signed with MD5 or SHA-1 (a root certificate in the chain, one that names itself as its issuer, is exempt: its own
+signature is not checked by browsers). Each field is limited to 256 KiB. The private key is stored
 encrypted and is never shown again. A refused upload says why ([troubleshooting.md](troubleshooting.md), codes
 `ALC-CRT-…`) and stores nothing; every attempt is in the audit log.
 
@@ -233,6 +234,11 @@ cannot be reached Alice tries again every 15 minutes; after four failed attempts
 attention** and the administrators get one email. After about a day (96 attempts) Alice stops trying: the deployment
 ends **Outcome not confirmed** (`ALC-DEP-0017`) with an email, and the website can be deployed to again. Check the
 website and the files on the server yourself then.
+
+If Alice itself was stopped for more than a day while a deployment was being sent, the helper may meanwhile have
+removed the deployment's journal (it keeps it 7 days after a success). Alice then cannot learn what happened: the
+deployment ends **Outcome not confirmed** (`ALC-DEP-0018`) with an email. Choose **Discover** and check which
+certificate the website serves; deploy again if needed.
 
 While a deployment on a server is being finished, new deployments to that server are refused (`ALC-DEP-0002`); scans
 and SSH key work go on. Finishing a deployment also runs when the license has expired. A deployment that was

@@ -134,18 +134,21 @@ deployments until old ones are removed. They contain private keys: treat them li
 
 ### Restoring a previous certificate by hand
 
-Alice restores the previous files on its own when a deployment fails. To go back after a deployment that
-**succeeded**, the easiest way is to deploy the previous certificate again (Alice needs its private key: upload it
-first). If that is not possible, restore the backup by hand, as root, while the folder still exists:
+Alice restores the previous files on its own when a deployment fails. Never restore a backup when a later
+deployment changed the same files, or when the deployment shows `ALC-DEP-0014` (a later change replaced the files)
+or `ALC-DEP-0020` (another program changed them): you would put back an older key or overwrite the other program's
+file. To go back after a deployment that **succeeded**, the easiest way is to deploy the previous certificate
+again (Alice needs its private key: upload it first). If that is not possible, restore the backup by hand, as root, while the folder still exists:
 
 1. Find the deployment in Alice (**Deployment history**) and note its **Certificate file**, **Key file** and
    **Backup on the server**.
-2. On the server look at `journal.json` in that folder: `cert_resolved` and `key_resolved` name the files that were
-   replaced (for a Let's Encrypt link, the file the link points to), and `cert_meta` and `key_meta` hold their
-   previous owner (`uid`, `gid`) and mode (in decimal: 420 is 0644, 416 is 0640, 384 is 0600).
-3. Copy the backups over those files with the same owner and mode, the key first, for example
-   `install -o 0 -g 0 -m 0600 /var/lib/alice-helper/backups/<deployment ID>/key.bak <key_resolved>` and
-   `install -o 0 -g 0 -m 0644 /var/lib/alice-helper/backups/<deployment ID>/cert.bak <cert_resolved>`.
+2. On the server read `journal.json` in that folder (`cat /var/lib/alice-helper/backups/<deployment ID>/journal.json`):
+   `cert_resolved` and `key_resolved` name the files that were replaced (for a Let's Encrypt link, the file the link
+   points to); `cert_meta` and `key_meta` hold each file's previous owner and mode, for example
+   `"key_meta":{"mode":416,"uid":0,"gid":110}`. The mode is written in decimal: `printf '%o\n' 416` prints `640`.
+3. Copy the backups over those files with exactly those values, the key first. With the example above:
+   `install -o 0 -g 110 -m 0640 /var/lib/alice-helper/backups/<deployment ID>/key.bak <key_resolved>`, then the
+   same for `cert.bak` and `<cert_resolved>` with the values of `cert_meta`.
 4. Run `nginx -t` and, if it passes, `systemctl reload nginx`.
 5. In Alice choose **Discover** on the server's page. The website then shows **The certificate changed outside
    Alice.**, which is expected after a manual change.
