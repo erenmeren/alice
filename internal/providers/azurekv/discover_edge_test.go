@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/providers"
+	"alice/internal/testutil/fakekv"
 	"alice/internal/testutil/pki"
 )
 
@@ -34,9 +35,15 @@ func TestParseObjectID(t *testing.T) {
 		{"https://v.vault.azure.net/certificates/bad name", "certificates", "", "", false},
 		{"%zz", "certificates", "", "", false},
 		{"", "certificates", "", "", false},
+		{"https://evil.test/certificates/web-cert", "certificates", "", "", false},
+		{"http://v.vault.azure.net/certificates/web-cert", "certificates", "", "", false},
+		{"https://v.vault.azure.net:8443/certificates/web-cert", "certificates", "", "", false},
+		{"https://user@v.vault.azure.net/certificates/web-cert", "certificates", "", "", false},
+		{"https://V.VAULT.AZURE.NET/certificates/web-cert", "certificates", "web-cert", "", true},
+		{"https://v.vault.azure.net.evil.test/certificates/web-cert", "certificates", "", "", false},
 	}
 	for _, c := range cases {
-		name, ver, ok := parseObjectID(c.raw, c.kind)
+		name, ver, ok := parseObjectID(c.raw, c.kind, "v.vault.azure.net")
 		assert.Equal(t, c.ok, ok, c.raw)
 		assert.Equal(t, c.name, name, c.raw)
 		assert.Equal(t, c.version, ver, c.raw)
@@ -369,4 +376,83 @@ func TestConnectionEdges(t *testing.T) {
 		assert.ErrorIs(t, err, context.Canceled)
 	})
 	assert.Equal(t, codeUnexpected, toProviderError(errors.New("x")).Code)
+}
+
+// m7: a version item whose id names another certificate, another host or another shape is not a
+// version of this certificate; it is dropped (kv_item_unreadable, "versions" truncated).
+func TestDiscoverDropsVersionsOfOtherObjects(t *testing.T) {
+	when := time.Unix(1_700_000_000, 0)
+	leaf := pki.NewCA("t", pki.ECDSA256, time.Now()).Issue(pki.Opts{CommonName: "x.example.test", KeyType: pki.ECDSA256}, time.Now())
+	thumb := sha1sum(leaf.Cert.Raw)
+	ver := func(id string) *azcertificates.CertificateProperties {
+		raw := azcertificates.ID(id)
+		return &azcertificates.CertificateProperties{ID: &raw, X509Thumbprint: thumb, Attributes: &azcertificates.CertificateAttributes{Created: &when}}
+	}
+	mine := strings.Repeat("a", 32)
+	api := &stubAPI{}
+	api.certs = func(p func([]*azcertificates.CertificateProperties) error) error {
+		return p([]*azcertificates.CertificateProperties{certProps("web", thumb, when)})
+	}
+	api.get = func(name, _ string) (azcertificates.Certificate, error) {
+		return azcertificates.Certificate{ID: certID(name, mine), CER: leaf.Cert.Raw, X509Thumbprint: thumb}, nil
+	}
+	host := "https://" + testVaultHost
+	api.versions = func(_ string, p func([]*azcertificates.CertificateProperties) error) error {
+		return p([]*azcertificates.CertificateProperties{
+			ver(host + "/certificates/web/" + strings.Repeat("b", 32)),
+			ver(host + "/certificates/OTHER/" + strings.Repeat("c", 32)),         // another certificate
+			ver("https://evil.test/certificates/web/" + strings.Repeat("d", 32)), // another host
+			ver(host + "/keys/web/" + strings.Repeat("e", 32)),                   // another kind
+		})
+	}
+	sess, _ := stubSession(api)
+	res, err := sess.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
+	require.NoError(t, err)
+	var got []string
+	for _, v := range res.KV.Certificates[0].Versions {
+		got = append(got, v.Version)
+	}
+	assert.ElementsMatch(t, []string{mine, strings.Repeat("b", 32)}, got)
+	assert.Contains(t, res.KV.Truncated, "versions")
+	require.Len(t, res.Warnings, 1)
+	assert.Equal(t, "versions", res.Warnings[0].Params["object"])
+	assert.Equal(t, "3", res.Warnings[0].Params["count"])
+}
+
+// m9: a list that fails halfway returns none of its items, for keys and secrets as for certificates.
+func TestDiscoverReturnsNoPartialKeysOrSecrets(t *testing.T) {
+	w := newWorld(t, fakekv.Options{})
+	w.s.AddBulkCertificates("bulk", 60)
+	for _, path := range []string{"/keys", "/secrets"} {
+		w.s.FailNext(path, fakekv.Fault{}) // page one passes
+		w.s.FailAll(path, fakekv.Fault{Status: 500})
+	}
+	res, err := w.discover(providers.DiscoverRequest{KVKeys: true, KVSecrets: true})
+	require.NoError(t, err)
+	require.Len(t, res.KV.Failures, 2)
+	assert.Empty(t, res.KV.Keys)
+	assert.Empty(t, res.KV.Secrets)
+	assert.False(t, res.KV.KeysListed)
+	assert.False(t, res.KV.SecretsListed)
+}
+
+// m10: the same version id with another thumbprint is a change: its details are read again.
+func TestDiscoverReadsDetailsWhenOnlyTheThumbprintChanged(t *testing.T) {
+	when := time.Unix(1_700_000_000, 0)
+	listed := make([]byte, 20)
+	listed[0] = 1
+	api := &stubAPI{}
+	api.certs = func(p func([]*azcertificates.CertificateProperties) error) error {
+		return p([]*azcertificates.CertificateProperties{certProps("web", listed, when)})
+	}
+	sess, _ := stubSession(api)
+	known := func(thumb string) map[string]providers.KVKnown {
+		return map[string]providers.KVKnown{"web": {Version: strings.Repeat("a", 32), Thumbprint: thumb, Updated: when}}
+	}
+	_, err := sess.Discover(context.Background(), providers.DiscoverRequest{Certificates: true, KVKnown: known("0100000000000000000000000000000000000000")})
+	require.NoError(t, err)
+	assert.NotContains(t, api.calls, "get_certificate", "everything equal: no details")
+	_, err = sess.Discover(context.Background(), providers.DiscoverRequest{Certificates: true, KVKnown: known(strings.Repeat("0", 40))})
+	require.NoError(t, err)
+	assert.Contains(t, api.calls, "get_certificate", "same version, same updated, another thumbprint")
 }

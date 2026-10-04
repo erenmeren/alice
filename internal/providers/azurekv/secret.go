@@ -44,7 +44,7 @@ func (s *session) ReadCertificateSecret(ctx context.Context, req providers.Secre
 	unreadable := func() (providers.CertificateSecret, error) {
 		return providers.CertificateSecret{}, perr(codeSecretUnreadable, false, providers.ErrUnexpectedAnswer, nil)
 	}
-	name, version, ok := parseObjectID(idStr(sec.ID), "secrets")
+	name, version, ok := parseObjectID(idStr(sec.ID), "secrets", s.vault.Host)
 	if !ok || version != req.Version || foldASCII(name) != foldASCII(req.Name) { // the vault answered for another object
 		return unreadable()
 	}

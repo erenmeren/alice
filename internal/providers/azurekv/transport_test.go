@@ -185,8 +185,16 @@ func TestManagedIdentityTalksOnlyToIMDS(t *testing.T) {
 		assert.Nil(t, resp)
 	}
 	assert.Empty(t, s.Requests())
+	// A Host header that is not the URL's host is refused too (the address is the right one).
+	hreq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/x", nil)
+	require.NoError(t, err)
+	hreq.Host = "evil.test"
+	resp, err := g.Do(hreq) //nolint:bodyclose // refused: no response
+	assert.ErrorIs(t, err, errHostNotAllowed)
+	assert.Nil(t, resp)
+	assert.Empty(t, dialed, "every refusal of Do comes before any dial: the request check is its own guard, not the dialer's")
 	// The dialer itself accepts one address only, before any mapping.
-	_, err := g.tr.DialContext(context.Background(), "tcp", "10.0.0.1:80")
+	_, err = g.tr.DialContext(context.Background(), "tcp", "10.0.0.1:80")
 	assert.ErrorIs(t, err, errHostNotAllowed)
 	_, err = g.tr.DialContext(context.Background(), "tcp", "169.254.169.254:443")
 	assert.ErrorIs(t, err, errHostNotAllowed)

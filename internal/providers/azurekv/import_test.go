@@ -372,6 +372,7 @@ func TestImportOutcomes(t *testing.T) {
 			}
 			assertCauseChainIsOurs(t, pe)
 			assertNoLeak(t, pe, w.s)
+			assert.NotErrorIs(t, err, errNoBody, "a request body was handed to the transport: never proof that nothing was sent")
 			last := steps.steps[len(steps.steps)-1]
 			assert.Equal(t, "import:failed", last)
 		})
@@ -432,6 +433,7 @@ func TestImportFailsBeforeTheSend(t *testing.T) {
 		require.Error(t, err)
 		assert.Equal(t, providers.ImportUncertain, res.Outcome)
 		assert.ErrorIs(t, err, context.Canceled)
+		assert.NotErrorIs(t, err, errNoBody)
 		assert.Equal(t, 1, w.posts())
 	})
 }
@@ -447,4 +449,32 @@ func TestImportWithAWrongLeafThumbprintIsNeverCreated(t *testing.T) {
 	assert.Equal(t, providers.ImportUncertain, res.Outcome)
 	assert.Equal(t, codeUnexpected, asProviderError(t, err).Code)
 	assert.Len(t, w.s.Versions("new-cert"), 1, "the vault did carry it out")
+}
+
+type hookSteps struct {
+	on func(name string, st providers.StepStatus)
+}
+
+func (h hookSteps) Step(name string, st providers.StepStatus, _ map[string]string) { h.on(name, st) }
+
+// I2: "sent once" is Alice's one attempt. Inside it the SDK may re-send the body once after a 401
+// challenge (azcore rewinds the body and calls the next policy again). This is pinned, not
+// prevented: a token that expires between the existence check and the POST is an ordinary event,
+// and forbidding the re-send would turn it into a 24-hour block on the name. It is safe only while a
+// vault does not carry out a request it answers 401 (a guess, listed in the report).
+func TestImportMayBeRepostedBySDKAfterAChallenge(t *testing.T) {
+	w := newWorld(t, fakekv.Options{})
+	pfx, _ := testPFX(t, pki.ECDSA256)
+	steps := hookSteps{on: func(name string, st providers.StepStatus) {
+		if name == "import" && st == providers.StepStarted {
+			w.clk.Advance(2 * time.Hour) // the fake vault now finds the token expired
+		}
+	}}
+	res, err := w.doImport(t, context.Background(), importReq("new-cert", pfx, "ecdsa", 256), steps)
+	require.Error(t, err)
+	assert.Equal(t, providers.ImportRefused, res.Outcome, "the vault answered 401 to both: it carried nothing out")
+	assert.Equal(t, codeAuthFailed, asProviderError(t, err).Code)
+	assert.Equal(t, 2, w.posts(), "one attempt of Alice's, two POSTs of the SDK's (a pinned fact, not a promise)")
+	assert.LessOrEqual(t, len(w.s.Versions("new-cert")), 1)
+	assert.Empty(t, w.s.Versions("new-cert"))
 }

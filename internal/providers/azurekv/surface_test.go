@@ -111,6 +111,9 @@ func scanSource(rel, src string) []string {
 		if isTest {
 			continue
 		}
+		if im.Name != nil && im.Name.Name == "." && !isTest && (p == "net/http" || strings.HasPrefix(p, sdkPrefix)) {
+			add("dot-imports " + p)
+		}
 		if inKV && p == pkcs12Path {
 			add("imports go-pkcs12: the provider never decodes a PFX (the caller states the leaf's thumbprint)")
 		}
@@ -124,6 +127,58 @@ func scanSource(rel, src string) []string {
 		case p == azidentityPath && !azidentityFiles[rel]:
 			add("imports azidentity outside identity.go and errors.go")
 		}
+	}
+	// Syntax facts the identifier rules need: which selectors are called, which name a parameter's
+	// type, and which SDK option literals are the guarded argument of a NewClient call in kvapi.go.
+	callFuns := map[*ast.SelectorExpr]bool{}
+	paramTypes := map[*ast.SelectorExpr]bool{}
+	guardedLits := map[*ast.SelectorExpr]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+				callFuns[sel] = true
+			}
+		}
+		return true
+	})
+	for _, decl := range f.Decls {
+		params := map[string]bool{}
+		if x, ok := decl.(*ast.FuncDecl); ok && x.Type.Params != nil {
+			for _, fld := range x.Type.Params.List {
+				for _, nm := range fld.Names {
+					params[nm.Name] = true
+				}
+				ast.Inspect(fld.Type, func(m ast.Node) bool {
+					if sel, ok := m.(*ast.SelectorExpr); ok {
+						paramTypes[sel] = true
+					}
+					return true
+				})
+			}
+		}
+		ast.Inspect(decl, func(m ast.Node) bool {
+			c, ok := m.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := c.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "NewClient" {
+				return true
+			}
+			if id, ok := sel.X.(*ast.Ident); !ok || !strings.HasPrefix(imports[id.Name], sdkPrefix) || rel != azurekvDir+"kvapi.go" {
+				return true
+			}
+			// the options argument must be &X.ClientOptions{ClientOptions: <a parameter>}
+			if len(c.Args) >= 3 {
+				if lit := guardedOptions(c.Args[len(c.Args)-1], params); lit != nil {
+					guardedLits[lit] = true
+					return true
+				}
+			}
+			add("builds an SDK client without options from the guarded constructor (a nil, local or unrelated options value)")
+			return true
+		})
 	}
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
@@ -151,58 +206,91 @@ func scanSource(rel, src string) []string {
 				}
 			}
 		case *ast.SelectorExpr:
-			if id, ok := x.X.(*ast.Ident); ok && inKV && imports[id.Name] == "net/http" {
-				switch x.Sel.Name {
-				case "DefaultClient", "DefaultTransport", "Get", "Post", "PostForm", "Head":
-					add("uses the default HTTP client: http." + x.Sel.Name)
-				}
-			}
-		case *ast.CompositeLit:
-			s, ok := x.Type.(*ast.SelectorExpr)
-			if !ok {
-				break
-			}
-			id, ok := s.X.(*ast.Ident)
+			id, ok := x.X.(*ast.Ident)
 			if !ok {
 				break
 			}
 			p := imports[id.Name]
-			if inKV && p == "net/http" && (s.Sel.Name == "Transport" || s.Sel.Name == "Client") && rel != azurekvDir+"transport.go" {
-				add("builds an http." + s.Sel.Name + " outside transport.go")
+			if inKV && p == "net/http" {
+				switch x.Sel.Name {
+				case "DefaultClient", "DefaultTransport", "Get", "Post", "PostForm", "Head":
+					add("uses the default HTTP client: http." + x.Sel.Name)
+				case "Client", "Transport":
+					if rel != azurekvDir+"transport.go" {
+						add("references http." + x.Sel.Name + " outside transport.go")
+					}
+				}
 			}
-			// Client options of the SDK carry the transport: only identity.go builds them, from the
-			// guarded transports. A literal elsewhere is a client on azcore's own transport.
-			if !isTest && (p == azcorePath || p == azcorePolicy) && s.Sel.Name == "ClientOptions" && rel != azurekvDir+"identity.go" {
-				add("builds " + id.Name + ".ClientOptions outside identity.go")
+			if isTest {
+				break
+			}
+			isSDK := strings.HasPrefix(p, sdkPrefix)
+			switch {
+			case isSDK && x.Sel.Name == "NewClient":
+				switch {
+				case rel != azurekvDir+"kvapi.go":
+					add("builds an SDK client outside kvapi.go: " + id.Name + ".NewClient")
+				case !callFuns[x]:
+					add("uses an SDK client constructor as a value: " + id.Name + ".NewClient")
+				}
+			case x.Sel.Name == "ClientOptions" && (p == azcorePath || p == azcorePolicy):
+				// identity.go builds the guarded options; kvapi.go only names the type of its parameter.
+				if rel != azurekvDir+"identity.go" && (rel != azurekvDir+"kvapi.go" || !paramTypes[x]) {
+					add("references " + id.Name + ".ClientOptions outside identity.go")
+				}
+			case x.Sel.Name == "ClientOptions" && isSDK:
+				if rel != azurekvDir+"kvapi.go" || !guardedLits[x] {
+					add("references " + id.Name + ".ClientOptions outside the guarded client construction of kvapi.go")
+				}
+			case x.Sel.Name == "NewPipeline" && strings.HasSuffix(p, "/azcore/runtime"):
+				add("builds an SDK pipeline: " + id.Name + ".NewPipeline")
 			}
 		case *ast.CallExpr:
-			switch fn := x.Fun.(type) {
-			case *ast.SelectorExpr:
-				id, ok := fn.X.(*ast.Ident)
-				if !ok || isTest || fn.Sel.Name != "NewClient" || !strings.HasPrefix(imports[id.Name], sdkPrefix) {
-					break
-				}
-				if rel != azurekvDir+"kvapi.go" {
-					add("builds an SDK client outside kvapi.go: " + id.Name + ".NewClient")
-				} else if len(x.Args) >= 3 {
-					if o, ok := x.Args[len(x.Args)-1].(*ast.Ident); ok && o.Name == "nil" {
-						add("builds an SDK client without options (its own transport): " + id.Name + ".NewClient")
-					}
-				}
-			case *ast.Ident:
-				if fn.Name != "new" || len(x.Args) != 1 || !inKV || rel == azurekvDir+"transport.go" {
-					break
-				}
-				if t, ok := x.Args[0].(*ast.SelectorExpr); ok {
-					if id, ok := t.X.(*ast.Ident); ok && imports[id.Name] == "net/http" && (t.Sel.Name == "Transport" || t.Sel.Name == "Client") {
-						add("builds an http." + t.Sel.Name + " outside transport.go")
-					}
+			if fn, ok := x.Fun.(*ast.Ident); ok && fn.Name == "newSDKAPI" && !isTest && inKV {
+				if len(x.Args) < 3 || !isCallTo(x.Args[2], "clientOptions") {
+					add("newSDKAPI is not given the options of clientOptions(...)")
 				}
 			}
 		}
 		return true
 	})
 	return out
+}
+
+// guardedOptions returns the type selector of &X.ClientOptions{ClientOptions: <param>}, or nil.
+func guardedOptions(e ast.Expr, params map[string]bool) *ast.SelectorExpr {
+	u, ok := e.(*ast.UnaryExpr)
+	if !ok || u.Op != token.AND {
+		return nil
+	}
+	lit, ok := u.X.(*ast.CompositeLit)
+	if !ok || len(lit.Elts) != 1 {
+		return nil
+	}
+	sel, ok := lit.Type.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "ClientOptions" {
+		return nil
+	}
+	kv, ok := lit.Elts[0].(*ast.KeyValueExpr)
+	if !ok {
+		return nil
+	}
+	if k, ok := kv.Key.(*ast.Ident); !ok || k.Name != "ClientOptions" {
+		return nil
+	}
+	if v, ok := kv.Value.(*ast.Ident); !ok || !params[v.Name] {
+		return nil
+	}
+	return sel
+}
+
+func isCallTo(e ast.Expr, name string) bool {
+	c, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	id, ok := c.Fun.(*ast.Ident)
+	return ok && id.Name == name
 }
 
 func TestSurfaceRulesCatchEvasions(t *testing.T) {
@@ -272,7 +360,54 @@ import k "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
 var _, _ = k.NewClient("u", nil, &k.ClientOptions{})`, "outside kvapi.go"},
 		{"an SDK client without options in kvapi.go", azurekvDir + "kvapi.go", `package p
 import "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
-var _, _ = azsecrets.NewClient("u", nil, nil)`, "without options"},
+var _, _ = azsecrets.NewClient("u", nil, nil)`, "without options from the guarded constructor"},
+		{"var of http.Client", kv, `package p
+import "net/http"
+var c http.Client`, "http.Client outside transport.go"},
+		{"http.Client as a struct field", kv, `package p
+import "net/http"
+type t struct{ c *http.Client }`, "http.Client outside transport.go"},
+		{"a slice of http.Transport", kv, `package p
+import "net/http"
+var _ = []http.Transport{{}}`, "http.Transport outside transport.go"},
+		{"a client constructor as a value", "x/y.go", `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates"
+var mk = azcertificates.NewClient`, "outside kvapi.go"},
+		{"a client constructor as a value in kvapi.go", azurekvDir + "kvapi.go", `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates"
+var mk = azcertificates.NewClient`, "as a value"},
+		{"a var of azcore.ClientOptions", kv, `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/azcore"
+var o azcore.ClientOptions`, "ClientOptions outside identity.go"},
+		{"azcore.ClientOptions as a var in kvapi.go", azurekvDir + "kvapi.go", `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/azcore"
+func f() { var o azcore.ClientOptions; _ = o }`, "ClientOptions outside identity.go"},
+		{"SDK client options as a var elsewhere", "x/y.go", `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates"
+var o azcertificates.ClientOptions`, "guarded client construction"},
+		{"SDK client options as a var in kvapi.go", azurekvDir + "kvapi.go", `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
+var o azkeys.ClientOptions`, "guarded client construction"},
+		{"a pipeline built by hand", kv, `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
+var _ = runtime.NewPipeline`, "NewPipeline"},
+		{"a pipeline through an alias in another package", "x/y.go", `package p
+import r "github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
+var _ = r.NewPipeline`, "NewPipeline"},
+		{"the SDK options built elsewhere in kvapi.go", azurekvDir + "kvapi.go", `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates"
+func f(opts int) { o := &azcertificates.ClientOptions{}; _, _ = azcertificates.NewClient("u", nil, o) }`, "guarded"},
+		{"a nil options variable in kvapi.go", azurekvDir + "kvapi.go", `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
+func f() { var o *azkeys.ClientOptions; _, _ = azkeys.NewClient("u", nil, o) }`, "without options from the guarded constructor"},
+		{"options with another value than the parameter", azurekvDir + "kvapi.go", `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
+func f(opts int) { _, _ = azkeys.NewClient("u", nil, &azkeys.ClientOptions{ClientOptions: other}) }`, "without options from the guarded constructor"},
+		{"newSDKAPI given other options", azurekvDir + "provider.go", `package p
+func f() { _, _ = newSDKAPI(v, c, opts, r) }`, "newSDKAPI"},
+		{"a dot import of net/http", kv, `package p
+import . "net/http"
+var _ = Client{}`, "dot-imports"},
 		{"an http.Client literal in the package", kv, `package p
 import "net/http"
 var _ = &http.Client{}`, "http.Client outside transport.go"},
@@ -303,8 +438,13 @@ var _, _ = azidentity.NewClientSecretCredential("", "", "", nil)`))
 import "github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 var _ *azidentity.AuthenticationFailedError`))
 	assert.Empty(t, scanSource(azurekvDir+"kvapi.go", `package p
-import "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates"
-var _, _ = azcertificates.NewClient("u", nil, &azcertificates.ClientOptions{})`), "kvapi.go builds the clients")
+import (
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates"
+)
+func newSDKAPI(opts azcore.ClientOptions) { _, _ = azcertificates.NewClient("u", nil, &azcertificates.ClientOptions{ClientOptions: opts}) }`), "kvapi.go builds the clients from the guarded options")
+	assert.Empty(t, scanSource(azurekvDir+"provider.go", `package p
+func f() { _, _ = newSDKAPI(v, c, clientOptions(t), r) }`))
 	assert.Empty(t, scanSource(azurekvDir+"transport.go", `package p
 import "net/http"
 var _ = &http.Client{}

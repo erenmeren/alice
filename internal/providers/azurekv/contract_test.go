@@ -66,6 +66,16 @@ func runContract(t *testing.T, env contractEnv) {
 	assert.Contains(t, []string{"pkcs12", "pem"}, d.ContentType)
 	assert.NotEmpty(t, found.Versions)
 
+	// 2b. Keys and secrets: a list is complete only when the vault sent "value" (an empty list carries
+	// "value": [], never a bare {}). A vault without keys or secrets must therefore list them as
+	// complete and empty, with no failure.
+	kres, err := sess.Discover(ctx, providers.DiscoverRequest{KVKeys: true, KVSecrets: true})
+	require.NoError(t, err)
+	for _, f := range kres.KV.Failures {
+		assert.Fail(t, "a list failed", "%s: %s (a real vault must send value [] for an empty list)", f.Object, f.Err.Code)
+	}
+	assert.True(t, kres.KV.KeysListed && kres.KV.SecretsListed)
+
 	// 3. The secret of that version decodes to the leaf the details name.
 	sec, err := sess.ReadCertificateSecret(ctx, providers.SecretRequest{Name: env.certName, Version: d.Version})
 	require.NoError(t, err)

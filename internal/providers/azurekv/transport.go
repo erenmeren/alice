@@ -74,6 +74,7 @@ func (g *guardedTransport) Do(req *http.Request) (*http.Response, error) {
 		st.fail(wireHostNotAllowed)
 		return nil, errHostNotAllowed
 	}
+	st.bodyHandedOn(req)
 	resp, err := g.client.Do(req) //nolint:gosec // G704: the host was checked against the session's allow-list above
 	return finish(req, st, resp, err)
 }
@@ -165,6 +166,7 @@ func (t *imdsTransport) Do(req *http.Request) (*http.Response, error) {
 		st.fail(wireHostNotAllowed)
 		return nil, errHostNotAllowed
 	}
+	st.bodyHandedOn(req)
 	resp, err := t.client.Do(req) //nolint:gosec // G704: scheme, host and port are pinned to the metadata endpoint above and in the dialer
 	return finish(req, st, resp, err)
 }

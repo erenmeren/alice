@@ -41,6 +41,10 @@ test-ssh: helper ## Run the real OpenSSH and Nginx matrices (Ubuntu 22.04, Debia
 test-azure: ## Optional real Azure Key Vault suite; needs ALICE_AZURE_TEST_* (see internal/providers/azurekv/real_azure_test.go); never part of ci
 	go test -count=1 -v -tags azure -run '^TestRealAzure' ./internal/providers/azurekv/
 
+.PHONY: record-azure
+record-azure: ## Optional: rewrite test/testdata/kv-recordings from a real vault's answers (shapes and placeholders only); needs ALICE_AZURE_TEST_*; never part of ci
+	ALICE_AZURE_RECORD=1 go test -count=1 -v -tags azure -run '^TestRecordShapes$$' ./internal/providers/azurekv/
+
 .PHONY: i18n-check
 i18n-check: ## Verify EN/TR translation catalogs have identical keys and placeholders
 	go run ./tools/i18n-check locales/common web/src/locales

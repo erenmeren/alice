@@ -13,26 +13,37 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"alice/internal/platform/azureid"
 )
 
 // TestRecordShapes rewrites the reference shapes in test/testdata/kv-recordings from a real vault's
-// answers when ALICE_AZURE_RECORD=1 (and the TestRealAzure variables are set): every string value is
-// replaced by a placeholder, numbers, booleans and the keys stay. The owner reviews the diff and
-// commits it. Nothing but the shape is written: no key, certificate, secret value or token.
+// answers when ALICE_AZURE_RECORD=1 and the TestRealAzure variables are set (`make record-azure`;
+// `make test-azure` never selects it). The requests go through the provider's own guarded vault
+// transport (https, the vault's host only, no proxy, no redirect), never a bare http.Client.
+//
+// Only the shape is written, with the placeholders of the README of that directory: ids keep their
+// form with <vault>, <name> and <version>; <cer>, <x5t>, <value>, <n> and the like replace key
+// material; every map with customer-chosen keys (tags) is emptied; strings of free text become
+// "<string>"; numbers and booleans stay. The owner reviews the diff and commits it.
 func TestRecordShapes(t *testing.T) {
 	if os.Getenv("ALICE_AZURE_RECORD") != "1" {
 		t.Skip("set ALICE_AZURE_RECORD=1 to record the shapes of a real vault")
 	}
 	v := realConfig(t)
+	vault, err := azureid.ParseVault(v.url)
+	require.NoError(t, err)
 	sess := v.open(t, v.identity(t))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	tok, err := sess.api.Token(ctx)
 	require.NoError(t, err)
-
 	cert, err := sess.api.GetCertificate(ctx, v.certName, "")
 	require.NoError(t, err)
 	ver := cert.ID.Version()
+	guarded := newGuardedTransport([]string{vault.Host}, nil, nil)
+	defer guarded.CloseIdleConnections()
+
 	files := map[string]string{
 		"list_certificates.json":         "/certificates?api-version=2025-07-01&maxresults=2",
 		"list_certificate_versions.json": "/certificates/" + v.certName + "/versions?api-version=2025-07-01&maxresults=2",
@@ -43,41 +54,20 @@ func TestRecordShapes(t *testing.T) {
 	}
 	dir := filepath.Join(moduleRoot(t), "test", "testdata", "kv-recordings")
 	for name, path := range files {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.url+path, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, vault.URL+path, nil)
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "Bearer "+tok.Token)
-		resp, err := (&http.Client{}).Do(req)
+		resp, err := guarded.Do(req)
 		require.NoError(t, err, name)
-		body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBody))
+		body, err := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		require.NoError(t, err, name)
 		require.Equal(t, http.StatusOK, resp.StatusCode, name)
 		var doc any
 		require.NoError(t, json.Unmarshal(body, &doc), name)
-		out, err := json.MarshalIndent(shapeOf(doc), "", "  ")
+		out, err := encodeShape(shapeOf("", doc))
 		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(dir, name), append(out, '\n'), 0o644)) //nolint:gosec // G306: a test data file in the repository
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), out, 0o644)) //nolint:gosec // G306: test data in the repository
 		t.Logf("recorded %s", name)
 	}
-}
-
-// shapeOf keeps the keys and the JSON types of a document: strings become "<string>".
-func shapeOf(v any) any {
-	switch x := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, e := range x {
-			out[k] = shapeOf(e)
-		}
-		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, e := range x {
-			out[i] = shapeOf(e)
-		}
-		return out
-	case string:
-		return "<string>"
-	}
-	return v
 }

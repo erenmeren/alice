@@ -48,9 +48,14 @@ var wholeVaultCodes = map[string]bool{
 
 // parseObjectID reads "https://<vault>/<kind>/<name>[/<version>]": only the path is used, and the
 // name must pass azureid.ValidObjectName. (The SDK's ID.Name dereferences nil on a malformed id.)
-func parseObjectID(raw, kind string) (name, version string, ok bool) {
+//
+// It also requires that the id is on the session's own vault: https, the vault's host, port 443 or
+// none. An id for another host or another shape is never used (Alice requests none of them, but
+// stores what they name).
+func parseObjectID(raw, kind, vaultHost string) (name, version string, ok bool) {
 	u, err := url.Parse(raw)
-	if err != nil {
+	if err != nil || u.Scheme != "https" || u.User != nil || foldASCII(u.Hostname()) != foldASCII(vaultHost) ||
+		(u.Port() != "" && u.Port() != "443") {
 		return "", "", false
 	}
 	segs := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
@@ -255,7 +260,7 @@ func (d *discovery) certificates(req providers.DiscoverRequest) error {
 			d.dropItem(kindCertificates)
 			continue
 		}
-		name, _, ok := parseObjectID(idStr(it.ID), kindCertificates)
+		name, _, ok := parseObjectID(idStr(it.ID), kindCertificates, d.s.vault.Host)
 		thumb, tok := azureid.Thumbprint(it.X509Thumbprint)
 		if !ok || !tok {
 			d.dropItem(kindCertificates)
@@ -315,9 +320,10 @@ func (d *discovery) certificateDetails(name, knownVersion string, isKnown bool) 
 		}
 		return nil, nil, false, err
 	}
-	det, cur, ok := certDetails(name, b)
-	if !ok {
+	det, cur, ok := certDetails(name, b, d.s.vault.Host)
+	if !ok { // the certificate stays listed without details; they are counted as waiting
 		d.drop(kindCertificates)
+		d.inv.DetailsPending++
 		return nil, nil, false, nil
 	}
 	if isKnown && knownVersion == det.Version {
@@ -347,9 +353,9 @@ func policyKeyType(t string) string {
 
 // certDetails maps a certificate bundle; ok is false when it cannot be stored (no leaf, a leaf that
 // is not the one x5t names, a version that is not 32 hex).
-func certDetails(name string, b azcertificates.Certificate) (*providers.KVCertificateDetails, providers.KVCertificateVersion, bool) {
+func certDetails(name string, b azcertificates.Certificate, host string) (*providers.KVCertificateDetails, providers.KVCertificateVersion, bool) {
 	var none providers.KVCertificateVersion
-	n, ver, ok := parseObjectID(idStr(b.ID), kindCertificates)
+	n, ver, ok := parseObjectID(idStr(b.ID), kindCertificates, host)
 	thumb, tok := azureid.Thumbprint(b.X509Thumbprint)
 	if !ok || !tok || !azureid.ValidVersion(ver) || foldASCII(n) != foldASCII(name) ||
 		len(b.CER) == 0 || len(b.CER) > maxCER || azureid.ThumbprintOf(b.CER) != thumb {
@@ -419,9 +425,10 @@ func (d *discovery) certificateVersions(name string, current providers.KVCertifi
 				d.dropItem(kindVersions)
 				continue
 			}
-			_, ver, ok := parseObjectID(idStr(it.ID), kindCertificates)
+			n, ver, ok := parseObjectID(idStr(it.ID), kindCertificates, d.s.vault.Host)
 			thumb, tok := azureid.Thumbprint(it.X509Thumbprint)
-			if !ok || !tok || !azureid.ValidVersion(ver) {
+			// a version of another certificate (or of another vault) is not a version of this one
+			if !ok || !tok || !azureid.ValidVersion(ver) || foldASCII(n) != foldASCII(name) {
 				d.dropItem(kindVersions)
 				continue
 			}
@@ -499,7 +506,7 @@ func (d *discovery) keys(req providers.DiscoverRequest) error {
 			d.dropItem(kindKeys)
 			continue
 		}
-		name, _, ok := parseObjectID(idStr(it.KID), kindKeys)
+		name, _, ok := parseObjectID(idStr(it.KID), kindKeys, d.s.vault.Host)
 		if !ok {
 			d.dropItem(kindKeys)
 			continue
@@ -519,7 +526,7 @@ func (d *discovery) keys(req providers.DiscoverRequest) error {
 			b, err := d.s.api.GetKey(d.ctx, name)
 			switch {
 			case err == nil:
-				k.Details = keyDetails(b)
+				k.Details = keyDetails(b, name, d.s.vault.Host)
 			case d.parent.Err() != nil:
 				return ctxError(d.parent.Err())
 			default:
@@ -539,13 +546,13 @@ func (d *discovery) keys(req providers.DiscoverRequest) error {
 	return nil
 }
 
-func keyDetails(b azkeys.KeyBundle) *providers.KVKeyDetails {
+func keyDetails(b azkeys.KeyBundle, name, host string) *providers.KVKeyDetails {
 	det := &providers.KVKeyDetails{}
 	j := b.Key
 	if j == nil {
 		return det
 	}
-	if _, ver, ok := parseObjectID(idStr(j.KID), kindKeys); ok && azureid.ValidVersion(ver) {
+	if n, ver, ok := parseObjectID(idStr(j.KID), kindKeys, host); ok && azureid.ValidVersion(ver) && foldASCII(n) == foldASCII(name) {
 		det.Version = ver
 	}
 	if j.Kty != nil {
@@ -600,7 +607,7 @@ func (d *discovery) secrets(providers.DiscoverRequest) error {
 			d.dropItem(kindSecrets)
 			continue
 		}
-		name, _, ok := parseObjectID(idStr(it.ID), kindSecrets)
+		name, _, ok := parseObjectID(idStr(it.ID), kindSecrets, d.s.vault.Host)
 		if !ok {
 			d.dropItem(kindSecrets)
 			continue

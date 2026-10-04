@@ -14,6 +14,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/platform/azureid"
 	"alice/internal/platform/clock"
 	"alice/internal/providers"
 	"alice/internal/testutil/fakekv"
@@ -192,7 +193,8 @@ func (a *stubAPI) ImportCertificate(ctx context.Context, name string, p azcertif
 // stubSession is a session over a stub api on a fake clock.
 func stubSession(api kvAPI) (*session, *clock.Fake) {
 	clk := nearNow()
-	return &session{api: api, clock: clk, log: nopLogger()}, clk
+	vault, _ := azureid.ParseVault(testVaultHost)
+	return &session{vault: vault, api: api, clock: clk, log: nopLogger()}, clk
 }
 
 func base64RawURL(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }

@@ -365,7 +365,7 @@ func assertCauseChainIsOurs(t *testing.T, err error) {
 	t.Helper()
 	known := []error{errNotSent, errDNS, errTLS, errDial, errMalformed, errUnclassified, errChallenge, errPanic,
 		errHostNotAllowed, errRedirect, errBodyTooLarge, errTenantMismatch, errChallengeScope, errEnvironment, errBadIdentity,
-		errPageCap, errPageLoop, errLinkLong, providers.ErrUnexpectedAnswer, netaddr.ErrNotAllowed, context.Canceled,
+		errPageCap, errPageLoop, errLinkLong, errNoBody, providers.ErrUnexpectedAnswer, netaddr.ErrNotAllowed, context.Canceled,
 		context.DeadlineExceeded, io.ErrUnexpectedEOF}
 	var walk func(e error)
 	walk = func(e error) {

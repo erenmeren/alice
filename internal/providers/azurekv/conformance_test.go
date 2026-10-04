@@ -36,6 +36,27 @@ func TestConformanceAgainstTheFake(t *testing.T) {
 	providertest.CheckProvider(t, p)
 	providertest.CheckSession(t, providertest.SessionHarness{Capabilities: p.Capabilities(), Open: open, Secrets: secrets})
 
+	// The suite reads no secret value (an empty request is refused): read one, so that the value is
+	// really at risk of showing up in the result or the error, and look for it everywhere.
+	sess, err = open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, rerr := sess.ReadCertificateSecret(context.Background(), providers.SecretRequest{Name: "web-cert", Version: ver})
+	if rerr != nil || string(sec.Value.Bytes()) != string(s.SecretValue("web-cert", ver)) {
+		t.Fatalf("the secret was not read: %v", rerr)
+	}
+	providertest.CheckNoSecrets(t, secrets, sec, rerr)
+	sec.Zero()
+	s.DisableVersion("web-cert", ver)
+	_, derr := sess.ReadCertificateSecret(context.Background(), providers.SecretRequest{Name: "web-cert", Version: ver})
+	if derr == nil {
+		t.Fatal("a disabled version was read")
+	}
+	providertest.CheckNoSecrets(t, secrets, derr)
+	s.EnableVersion("web-cert", ver)
+	_ = sess.Close()
+
 	// The suite cannot call ImportCertificate (it changes the vault): once here, with the same needles.
 	pfx, _ := testPFX(t, "ecdsa256")
 	sess, err = open(context.Background())

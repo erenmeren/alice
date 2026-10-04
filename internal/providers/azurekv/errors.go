@@ -83,6 +83,9 @@ var (
 	errUnclassified = errors.New("azurekv: failure without a classification")
 	// errChallenge: a Key Vault challenge the SDK refused.
 	errChallenge = errors.New("azurekv: the vault's challenge was refused")
+	// errNoBody marks a failed import call during which no request body was handed to the HTTP
+	// client (the transport's own record): the vault cannot have carried the import out.
+	errNoBody = errors.New("azurekv: no request body was sent")
 	// errPanic: the SDK panicked on an answer (a malformed challenge).
 	errPanic = errors.New("azurekv: the SDK failed on an answer")
 )
@@ -123,6 +126,8 @@ type failure struct {
 	err   *providers.Error
 	retry bool   // another attempt may help
 	after string // the Retry-After header of the answer, verbatim ("" none)
+	// noBody: the attempt ended without any request body having been handed to the transport.
+	noBody bool
 }
 
 // mapError maps any failure of an SDK call to one *providers.Error with a closed code and

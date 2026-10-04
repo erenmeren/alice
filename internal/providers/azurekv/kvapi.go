@@ -140,6 +140,16 @@ func pages[R any](ctx context.Context, r *retryer, action string, newPager func(
 	return nil
 }
 
+// withValue hands a page's items to the caller. A page without a "value" array (absent or null) is
+// not an empty page: Azure sends "value": [] for that, and taking the other for "end of list" would
+// present a partial list as complete (and inventory would mark certificates missing).
+func withValue[T any](v []T, page func([]T) error) error {
+	if v == nil {
+		return perr(codeUnexpected, true, providers.ErrUnexpectedAnswer, nil)
+	}
+	return page(v)
+}
+
 func (a *sdkAPI) Token(ctx context.Context) (azcore.AccessToken, error) {
 	return call(ctx, a.r, readBudget, actionSignIn, func(c context.Context) (azcore.AccessToken, error) {
 		return a.cred.GetToken(c, policy.TokenRequestOptions{Scopes: []string{azureid.VaultScope}})
@@ -150,7 +160,7 @@ func (a *sdkAPI) ListCertificates(ctx context.Context, page func([]*azcertificat
 	return pages(ctx, a.r, actionListCertificates, func() *runtime.Pager[azcertificates.ListCertificatePropertiesResponse] {
 		return a.certs.NewListCertificatePropertiesPager(nil)
 	}, func(p azcertificates.ListCertificatePropertiesResponse) *string { return p.NextLink },
-		func(p azcertificates.ListCertificatePropertiesResponse) error { return page(p.Value) })
+		func(p azcertificates.ListCertificatePropertiesResponse) error { return withValue(p.Value, page) })
 }
 
 func (a *sdkAPI) GetCertificate(ctx context.Context, name, version string) (azcertificates.Certificate, error) {
@@ -164,13 +174,15 @@ func (a *sdkAPI) ListCertificateVersions(ctx context.Context, name string, page 
 	return pages(ctx, a.r, actionListVersions, func() *runtime.Pager[azcertificates.ListCertificatePropertiesVersionsResponse] {
 		return a.certs.NewListCertificatePropertiesVersionsPager(name, nil)
 	}, func(p azcertificates.ListCertificatePropertiesVersionsResponse) *string { return p.NextLink },
-		func(p azcertificates.ListCertificatePropertiesVersionsResponse) error { return page(p.Value) })
+		func(p azcertificates.ListCertificatePropertiesVersionsResponse) error {
+			return withValue(p.Value, page)
+		})
 }
 
 func (a *sdkAPI) ListKeys(ctx context.Context, page func([]*azkeys.KeyProperties) error) error {
 	return pages(ctx, a.r, actionListKeys, func() *runtime.Pager[azkeys.ListKeyPropertiesResponse] { return a.keys.NewListKeyPropertiesPager(nil) },
 		func(p azkeys.ListKeyPropertiesResponse) *string { return p.NextLink },
-		func(p azkeys.ListKeyPropertiesResponse) error { return page(p.Value) })
+		func(p azkeys.ListKeyPropertiesResponse) error { return withValue(p.Value, page) })
 }
 
 func (a *sdkAPI) GetKey(ctx context.Context, name string) (azkeys.KeyBundle, error) {
@@ -185,7 +197,7 @@ func (a *sdkAPI) ListSecrets(ctx context.Context, page func([]*azsecrets.SecretP
 		return a.secrets.NewListSecretPropertiesPager(nil)
 	},
 		func(p azsecrets.ListSecretPropertiesResponse) *string { return p.NextLink },
-		func(p azsecrets.ListSecretPropertiesResponse) error { return page(p.Value) })
+		func(p azsecrets.ListSecretPropertiesResponse) error { return withValue(p.Value, page) })
 }
 
 // GetSecret has the short budget of ruling S3: a deployment holds a server's lock meanwhile.

@@ -522,6 +522,7 @@ func TestDiscoverSkipsUnusableItems(t *testing.T) {
 	assert.Equal(t, []string{"good", "good-two"}, names, "unusable items are never stored")
 	got := byName(res.KV.Certificates)
 	assert.Nil(t, got["good"].Details, "details with a version that is not 32 hex are dropped, the listed certificate stays")
+	assert.Equal(t, 1, res.KV.DetailsPending, "unusable details are counted as waiting")
 	require.NotNil(t, got["good-two"].Details)
 	require.Len(t, got["good-two"].Versions, 1, "only the usable version")
 	assert.Len(t, res.KV.Keys, 1)
@@ -672,4 +673,70 @@ func secretProps(name, contentType string, managed bool) *azsecrets.SecretProper
 	id := azsecrets.ID("https://" + testVaultHost + "/secrets/" + name)
 	now := time.Unix(1_700_000_000, 0)
 	return &azsecrets.SecretProperties{ID: &id, ContentType: &contentType, Managed: &managed, Attributes: &azsecrets.SecretAttributes{Enabled: to.Ptr(true), Updated: &now}}
+}
+
+// I1: a 200 page without a "value" array is not "end of list": `{}`, `{"value":null}` and `null` fail
+// that list on page one and on page two, whatever the kind; a real empty array is a complete, empty list.
+func TestDiscoverRefusesAPageWithoutValue(t *testing.T) {
+	kinds := []struct {
+		name, path string
+		req        providers.DiscoverRequest
+	}{
+		{"certificates", "/certificates", providers.DiscoverRequest{Certificates: true}},
+		{"keys", "/keys", providers.DiscoverRequest{KVKeys: true}},
+		{"secrets", "/secrets", providers.DiscoverRequest{KVSecrets: true}},
+	}
+	for _, k := range kinds {
+		for _, body := range []string{`{}`, `{"value":null}`, `null`} {
+			for _, page := range []int{1, 2} {
+				t.Run(fmt.Sprintf("%s %s page %d", k.name, body, page), func(t *testing.T) {
+					w := newWorld(t, fakekv.Options{})
+					w.s.AddBulkCertificates("bulk", 60) // two or three pages of each kind
+					if page == 2 {
+						w.s.FailNext(k.path, fakekv.Fault{}) // page one passes
+					}
+					w.s.FailNext(k.path, fakekv.Fault{Body: body})
+					res, err := w.discover(k.req)
+					require.NoError(t, err)
+					require.Len(t, res.KV.Failures, 1)
+					assert.Equal(t, k.name, res.KV.Failures[0].Object)
+					assert.Equal(t, codeUnexpected, res.KV.Failures[0].Err.Code)
+					assert.ErrorIs(t, res.KV.Failures[0].Err, providers.ErrUnexpectedAnswer)
+					assert.Empty(t, res.KV.Certificates)
+					assert.Empty(t, res.KV.Keys)
+					assert.Empty(t, res.KV.Secrets)
+					assert.False(t, res.KV.KeysListed)
+					assert.False(t, res.KV.SecretsListed)
+				})
+			}
+		}
+	}
+	t.Run("an empty vault answers value [] and is complete and empty", func(t *testing.T) {
+		w := newWorld(t, fakekv.Options{})
+		res, err := w.discover(providers.DiscoverRequest{Certificates: true, KVKeys: true, KVSecrets: true})
+		require.NoError(t, err)
+		assert.Empty(t, res.KV.Failures)
+		assert.Empty(t, res.KV.Truncated)
+		assert.True(t, res.KV.KeysListed)
+		assert.True(t, res.KV.SecretsListed)
+		assert.Empty(t, res.KV.Certificates)
+	})
+	t.Run("a scripted value [] is the same", func(t *testing.T) {
+		w := newWorld(t, fakekv.Options{})
+		w.s.AddBulkCertificates("bulk", 3)
+		w.s.FailAll("/certificates", fakekv.Fault{Body: `{"value":[]}`})
+		res, err := w.discover(providers.DiscoverRequest{Certificates: true})
+		require.NoError(t, err)
+		assert.Empty(t, res.KV.Failures)
+		assert.Empty(t, res.KV.Certificates)
+	})
+	t.Run("versions without a value", func(t *testing.T) {
+		w := newWorld(t, fakekv.Options{})
+		w.s.AddCertificate("web-cert", fakekv.CertOptions{CommonName: "www.example.test", Exportable: true})
+		w.s.FailAll("/certificates/web-cert/versions", fakekv.Fault{Body: `{}`})
+		res, err := w.discover(providers.DiscoverRequest{Certificates: true})
+		require.NoError(t, err)
+		require.Len(t, res.KV.Failures, 1)
+		assert.Equal(t, codeUnexpected, res.KV.Failures[0].Err.Code)
+	})
 }

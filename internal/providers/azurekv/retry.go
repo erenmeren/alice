@@ -76,11 +76,11 @@ func call[T any](ctx context.Context, r *retryer, b budget, action string, fn fu
 			return res, nil
 		}
 		if ctx.Err() != nil {
-			return zero, perr(codeUnreachable, true, ctx.Err(), nil)
+			return zero, evidence(action, f, perr(codeUnreachable, true, ctx.Err(), nil))
 		}
 		if !f.retry || attempt >= b.attempts {
 			r.logFailure(ctx, action, f.err, attempt, false)
-			return zero, f.err
+			return zero, evidence(action, f, f.err)
 		}
 		wait := r.jittered(backoffBase << (attempt - 1))
 		if d, ok := parseRetryAfter(f.after, r.clock.Now()); ok {
@@ -107,11 +107,22 @@ func call[T any](ctx context.Context, r *retryer, b budget, action string, fn fu
 	}
 }
 
+// evidence adds the "no body was sent" marker to an import's error: the one call whose caller needs
+// to know whether the vault can have carried the request out.
+func evidence(action string, f failure, e *providers.Error) *providers.Error {
+	if action != actionImport || !f.noBody {
+		return e
+	}
+	return perr(e.Code, e.Retryable, errors.Join(e.Cause, errNoBody), e.Params)
+}
+
 // attemptOnce is one attempt. The returned error is non-nil only with a failure.
 func attemptOnce[T any](ctx context.Context, r *retryer, action string, fn func(context.Context) (T, error)) (res T, f failure, err error) {
 	release, err := r.limiter.acquire(ctx)
-	if err != nil {
-		return res, ctxFailure(err), err
+	if err != nil { // the request never reached a transport
+		f := ctxFailure(err)
+		f.noBody = true
+		return res, f, err
 	}
 	defer release()
 	timeout := r.tryTimeout
@@ -133,10 +144,13 @@ func attemptOnce[T any](ctx context.Context, r *retryer, action string, fn func(
 		return res, failure{}, nil
 	}
 	var zero T
+	noBody := st.noBodySent()
 	if ctx.Err() == nil && tctx.Err() != nil && errors.Is(tctx.Err(), context.DeadlineExceeded) {
-		return zero, failure{err: perr(codeUnreachable, true, context.DeadlineExceeded, nil), retry: true}, err
+		return zero, failure{err: perr(codeUnreachable, true, context.DeadlineExceeded, nil), retry: true, noBody: noBody}, err
 	}
-	return zero, classify(err, action, st), err
+	f = classify(err, action, st)
+	f.noBody = noBody
+	return zero, f, err
 }
 
 func (r *retryer) logFailure(ctx context.Context, action string, e *providers.Error, attempt int, willRetry bool) {

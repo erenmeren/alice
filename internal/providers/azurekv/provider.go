@@ -23,13 +23,16 @@ import (
 
 // Limits (R40 rows 3, 8, 15, 16; ruling S15 sets the retry model: three attempts per page).
 const (
-	MaxAttempts        = 3                // attempts of one request (page)
-	TryTimeout         = 30 * time.Second // one attempt
-	MaxRetryAfter      = 60 * time.Second // the longest Retry-After Alice waits for
-	PollBudget         = 11 * time.Minute // a Discover call
-	PreflightBudget    = 45 * time.Second // inventory's add check uses it as its context bound
-	SecretReadAttempts = 2                // ruling S3: a deployment's secret read
-	SecretReadBudget   = time.Minute      // ruling S3: its total
+	MaxAttempts     = 3                // attempts of one request (page)
+	TryTimeout      = 30 * time.Second // one attempt
+	MaxRetryAfter   = 60 * time.Second // the longest Retry-After Alice waits for
+	PollBudget      = 11 * time.Minute // a Discover call
+	PreflightBudget = 45 * time.Second // inventory's add check uses it as its context bound
+	// ImportSendBudget bounds an import's POST (a limiter wait and one 30 s try); its sign-in and
+	// existence check run under PreflightBudget, so an import takes at most about 105 s.
+	ImportSendBudget   = time.Minute
+	SecretReadAttempts = 2           // ruling S3: a deployment's secret read
+	SecretReadBudget   = time.Minute // ruling S3: its total
 	MaxBody            = 4 << 20
 	MaxHeaderBytes     = 64 << 10
 	MaxKVCertificates  = 5000

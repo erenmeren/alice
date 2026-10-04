@@ -3,6 +3,7 @@ package azurekv
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"slices"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
@@ -72,10 +73,16 @@ func importUncertain(err error) (providers.ImportResult, error) {
 }
 
 // ImportCertificate adds a version to the certificate Name from a PFX with an empty password. The
-// vault has no idempotency key, so the request is sent exactly once (the SDK's retries are off and
-// Alice's loop runs in its send-once mode); the outcome follows positive evidence only:
+// vault has no idempotency key, so Alice makes ONE attempt (the SDK's retries are off and Alice's
+// loop runs in its send-once mode). Within that attempt the SDK may send the body a second time,
+// once, after a 401 challenge (azcore rewinds the body and calls the next policy again, also for a
+// CAE challenge); that is safe only if the vault does not carry out a request it answers with 401,
+// which no document here proves. It is pinned by a test, not prevented: a token that expires just
+// before the POST would otherwise block the name for 24 hours. The outcome follows positive
+// evidence only:
 //
-//	refused    before the send (invalid request, a name that exists without ReplaceExisting, a
+//	refused    before the send, or when the transport's own record shows that no request body was
+//	           handed to it (invalid request, a name that exists without ReplaceExisting, a
 //	           sign-in or existence-check failure, a cancelled context), or a complete 4xx answer of
 //	           the vault with a validated Azure code other than 408/429
 //	created    a complete, parsed 2xx that names this certificate, a 32-hex version and a certificate
@@ -138,11 +145,17 @@ func (s *session) ImportCertificate(ctx context.Context, req providers.ImportReq
 			IssuerParameters: &azcertificates.IssuerParameters{Name: to.Ptr("Unknown")},
 		},
 	}
+	// The POST has its own budget even when the caller has none: one limiter wait and one try.
+	send, cancelSend := context.WithTimeout(ctx, ImportSendBudget)
+	defer cancelSend()
 	step("import", providers.StepStarted)
-	resp, err := s.api.ImportCertificate(ctx, req.Name, params)
+	resp, err := s.api.ImportCertificate(send, req.Name, params)
 	if err != nil {
 		step("import", providers.StepFailed)
 		pe := toProviderError(err)
+		if errors.Is(pe, errNoBody) { // the transport's own record: no body was handed on, nothing can have been created
+			return importRefused(pe.Code, pe.Retryable, errNotSent, pe.Params)
+		}
 		if !completeRefusal(pe) {
 			return importUncertain(pe)
 		}
@@ -158,7 +171,7 @@ func (s *session) ImportCertificate(ctx context.Context, req providers.ImportReq
 		}
 		return importRefused(codeImportRejected, false, pe.Cause, keep)
 	}
-	version, thumb, ok := confirmImport(req.Name, plan, resp)
+	version, thumb, ok := confirmImport(req.Name, s.vault.Host, plan, resp)
 	if !ok {
 		step("import", providers.StepFailed)
 		return importUncertain(perr(codeUnexpected, true, providers.ErrUnexpectedAnswer, nil))
@@ -169,8 +182,8 @@ func (s *session) ImportCertificate(ctx context.Context, req providers.ImportReq
 
 // confirmImport accepts an answer only when it is for this certificate and carries the leaf that was
 // sent: anything else leaves the import uncertain.
-func confirmImport(name string, plan importPlan, resp azcertificates.Certificate) (version, thumb string, ok bool) {
-	n, version, idOK := parseObjectID(idStr(resp.ID), kindCertificates)
+func confirmImport(name, host string, plan importPlan, resp azcertificates.Certificate) (version, thumb string, ok bool) {
+	n, version, idOK := parseObjectID(idStr(resp.ID), kindCertificates, host)
 	thumb, thumbOK := azureid.Thumbprint(resp.X509Thumbprint)
 	if !idOK || !thumbOK || foldASCII(n) != foldASCII(name) || !azureid.ValidVersion(version) ||
 		len(resp.CER) == 0 || len(resp.CER) > maxCER || azureid.ThumbprintOf(resp.CER) != thumb || thumb != plan.thumb {

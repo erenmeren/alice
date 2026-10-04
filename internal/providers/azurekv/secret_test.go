@@ -152,7 +152,15 @@ func TestReadCertificateSecretUnusableAnswers(t *testing.T) {
 		"a value above a bound": func(s *azsecrets.Secret) { s.Value = to.Ptr("123456789") },
 		"another version":       func(s *azsecrets.Secret) { s.ID = secretID("web-cert", strings.Repeat("c", 32)) },
 		"another certificate":   func(s *azsecrets.Secret) { s.ID = secretID("other", ver) },
-		"no id":                 func(s *azsecrets.Secret) { s.ID = nil },
+		"another host": func(s *azsecrets.Secret) {
+			id := azsecrets.ID("https://evil.test/secrets/web-cert/" + ver)
+			s.ID = &id
+		},
+		"another scheme": func(s *azsecrets.Secret) {
+			id := azsecrets.ID("http://" + testVaultHost + "/secrets/web-cert/" + ver)
+			s.ID = &id
+		},
+		"no id": func(s *azsecrets.Secret) { s.ID = nil },
 		"an id without version": func(s *azsecrets.Secret) {
 			id := azsecrets.ID("https://" + testVaultHost + "/secrets/web-cert")
 			s.ID = &id

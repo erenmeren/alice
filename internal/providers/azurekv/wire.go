@@ -41,6 +41,9 @@ type wireState struct {
 	kind      wireKind
 	ctxErr    error
 	ownVaultC bool // the last answer was a challenge of the vault's own host naming the vault resource
+	// bodyOut: a request that carries a body was handed to the HTTP client in this attempt. It is
+	// not reset by begin (each request of the attempt): it answers "may the body have been written".
+	bodyOut bool
 }
 
 type wireKey struct{}
@@ -62,6 +65,26 @@ func (w *wireState) begin(host string) {
 	w.mu.Lock()
 	w.host, w.status, w.kind, w.ctxErr, w.ownVaultC = host, 0, wireNone, nil, false
 	w.mu.Unlock()
+}
+
+// bodyHandedOn records that req, which carries a body, goes to the HTTP client now.
+func (w *wireState) bodyHandedOn(req *http.Request) {
+	if w == nil || req.Body == nil || req.Body == http.NoBody || req.ContentLength == 0 {
+		return
+	}
+	w.mu.Lock()
+	w.bodyOut = true
+	w.mu.Unlock()
+}
+
+// noBodySent reports positive evidence that no request body left for the vault in this attempt.
+func (w *wireState) noBodySent() bool {
+	if w == nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return !w.bodyOut
 }
 
 func (w *wireState) fail(k wireKind) {
