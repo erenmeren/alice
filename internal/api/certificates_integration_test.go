@@ -3,7 +3,10 @@
 package api
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"net/http"
 	"strings"
 	"testing"
@@ -290,4 +293,108 @@ func TestUploadJourneyRefusesWithExactMessages(t *testing.T) {
 	// The same certificate again is a duplicate, not a second copy.
 	requireError(t, admin.do(http.MethodPost, "/api/v1/certificates/upload", certBody(good, "Again")), http.StatusConflict, "ALC-CRT-0008")
 	assert.Equal(t, 1, s.count("certificates"))
+}
+
+// parseCSR reads the request Alice made.
+func parseCSR(t *testing.T, csrPEM string) *x509.CertificateRequest {
+	t.Helper()
+	block, _ := pem.Decode([]byte(csrPEM))
+	require.NotNil(t, block)
+	req, err := x509.ParseCertificateRequest(block.Bytes)
+	require.NoError(t, err)
+	return req
+}
+
+type csrView struct {
+	ID            string   `json:"id"`
+	CommonName    string   `json:"common_name"`
+	SANs          []string `json:"sans"`
+	KeyAlgorithm  string   `json:"key_algorithm"`
+	CSRPEM        string   `json:"csr_pem"`
+	Status        string   `json:"status"`
+	CertificateID *string  `json:"certificate_id"`
+}
+
+// Owner step 5 with a signing request: Alice makes the key and the request, the CA signs it, the
+// certificate is attached to the key Alice kept, and it is deployed.
+func TestSigningRequestJourney(t *testing.T) {
+	n := newNJ(t, wwwSite())
+	rec := n.op.do(http.MethodPost, "/api/v1/certificates/csr", map[string]any{"common_name": wwwName, "sans": []string{wwwName, apiName}, "key_type": "ecdsa-p256"})
+	requireStatus(t, rec, http.StatusCreated)
+	csr := decodeBody[csrView](t, rec)
+	assert.Equal(t, "pending", csr.Status)
+	assert.Equal(t, "ecdsa", csr.KeyAlgorithm)
+	assert.Nil(t, csr.CertificateID)
+	assert.Equal(t, 1, n.count("managed_private_keys"), "the key is kept by Alice")
+	req := parseCSR(t, csr.CSRPEM)
+	assert.Equal(t, wwwName, req.Subject.CommonName)
+	assert.Equal(t, []string{wwwName, apiName}, req.DNSNames)
+	assert.Equal(t, 1, n.auditCount("csr.created"))
+
+	// A certificate for another key is refused and the request stays open.
+	certificates := n.count("certificates") // the one the scan found on the server
+	foreign := n.issue(wwwName, apiName)
+	rec = n.op.do(http.MethodPost, "/api/v1/certificates/csr/"+csr.ID+"/actions/complete", map[string]any{"certificate_pem": string(foreign.FullchainPEM)})
+	requireError(t, rec, http.StatusUnprocessableEntity, "ALC-CRT-0013")
+	assert.Equal(t, "pending", decodeBody[csrView](t, n.op.do(http.MethodGet, "/api/v1/certificates/csr/"+csr.ID, nil)).Status)
+	assert.Equal(t, certificates, n.count("certificates"))
+
+	// The CA signs the request.
+	signed := n.ca.IssueForCSR(req, n.clock.Now())
+	rec = n.op.do(http.MethodPost, "/api/v1/certificates/csr/"+csr.ID+"/actions/complete", map[string]any{"certificate_pem": string(signed.FullchainPEM), "label": "Signed"})
+	requireStatus(t, rec, http.StatusCreated)
+	done := decodeBody[struct {
+		Certificate struct {
+			ID            string `json:"id"`
+			Source        string `json:"source"`
+			HasPrivateKey bool   `json:"has_private_key"`
+			Fingerprint   string `json:"fingerprint"`
+		} `json:"certificate"`
+		Warnings []string `json:"warnings"`
+	}](t, rec)
+	assert.Equal(t, "csr", done.Certificate.Source)
+	assert.True(t, done.Certificate.HasPrivateKey, "the certificate has the key Alice made")
+	assert.Equal(t, pki.Fingerprint(signed.Cert), done.Certificate.Fingerprint)
+	assert.Empty(t, done.Warnings)
+	got := decodeBody[csrView](t, n.op.do(http.MethodGet, "/api/v1/certificates/csr/"+csr.ID, nil))
+	assert.Equal(t, "completed", got.Status)
+	require.NotNil(t, got.CertificateID)
+	assert.Equal(t, done.Certificate.ID, *got.CertificateID)
+	requireError(t, n.op.do(http.MethodPost, "/api/v1/certificates/csr/"+csr.ID+"/actions/complete", map[string]any{"certificate_pem": string(signed.FullchainPEM)}),
+		http.StatusConflict, "ALC-CRT-0012")
+
+	// The signed certificate deploys like any other: Alice sends the key she kept.
+	ref := n.deploy(n.op, done.Certificate.ID, n.locs[wwwCert])[0]
+	n.runJobs()
+	d := n.deployment(n.op, ref.ID)
+	assert.Equal(t, "succeeded", d.Status)
+	assert.Equal(t, pki.Fingerprint(signed.Cert), n.f.served(wwwName))
+	pair, err := tls.X509KeyPair(n.f.emu.NginxFile(wwwCert), n.f.emu.NginxFile(wwwKey))
+	require.NoError(t, err, "the key Alice made belongs to the certificate on the server")
+	assert.Equal(t, signed.Cert.Raw, pair.Certificate[0])
+
+	// A cancelled request cannot be completed.
+	rec = n.op.do(http.MethodPost, "/api/v1/certificates/csr", map[string]any{"common_name": apiName, "key_type": "rsa-3072"})
+	requireStatus(t, rec, http.StatusCreated)
+	second := decodeBody[csrView](t, rec)
+	rec = n.op.do(http.MethodPost, "/api/v1/certificates/csr/"+second.ID+"/actions/cancel", nil)
+	requireStatus(t, rec, http.StatusOK)
+	assert.Equal(t, "cancelled", decodeBody[csrView](t, rec).Status)
+	assert.Equal(t, 1, n.auditCount("csr.cancelled"))
+	cancelled := n.ca.IssueForCSR(parseCSR(t, second.CSRPEM), n.clock.Now())
+	requireError(t, n.op.do(http.MethodPost, "/api/v1/certificates/csr/"+second.ID+"/actions/complete", map[string]any{"certificate_pem": string(cancelled.FullchainPEM)}),
+		http.StatusConflict, "ALC-CRT-0012")
+
+	// A certificate for the right key but other names is accepted with a warning.
+	rec = n.op.do(http.MethodPost, "/api/v1/certificates/csr", map[string]any{"common_name": "shop.example.test", "key_type": "ecdsa-p256"})
+	requireStatus(t, rec, http.StatusCreated)
+	third := decodeBody[csrView](t, rec)
+	changed := *parseCSR(t, third.CSRPEM)
+	changed.Subject.CommonName, changed.DNSNames = "other.example.test", []string{"other.example.test"}
+	other := n.ca.IssueForCSR(&changed, n.clock.Now())
+	rec = n.op.do(http.MethodPost, "/api/v1/certificates/csr/"+third.ID+"/actions/complete", map[string]any{"certificate_pem": string(other.FullchainPEM)})
+	requireStatus(t, rec, http.StatusCreated)
+	assert.Contains(t, decodeBody[struct {
+		Warnings []string `json:"warnings"`
+	}](t, rec).Warnings, "csr_name_mismatch")
 }

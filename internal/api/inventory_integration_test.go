@@ -42,7 +42,7 @@ func TestPlatformKeyLineMatchesTheProvider(t *testing.T) {
 	}
 }
 
-func TestProvidersListTheCompiledInProvider(t *testing.T) {
+func TestProvidersListTheCompiledInProviders(t *testing.T) {
 	_, c, _ := installed(t)
 	rec := c.do(http.MethodGet, "/api/v1/providers", nil)
 	requireStatus(t, rec, http.StatusOK)
@@ -53,7 +53,12 @@ func TestProvidersListTheCompiledInProvider(t *testing.T) {
 		} `json:"items"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Len(t, body.Items, 1)
-	assert.Equal(t, "linuxssh", body.Items[0].Kind)
-	assert.Contains(t, body.Items[0].Capabilities, "test_connection")
+	caps := map[string][]string{}
+	for _, it := range body.Items {
+		caps[it.Kind] = it.Capabilities
+	}
+	require.Len(t, body.Items, 2)
+	assert.Contains(t, caps["linuxssh"], "test_connection")
+	assert.NotContains(t, caps["linuxssh"], "deploy_certificate", "a Linux server only manages SSH keys")
+	assert.Subset(t, caps["nginx"], []string{"test_connection", "discover_certificates", "deploy_certificate", "verify_deployment"})
 }

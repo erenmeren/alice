@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -102,6 +103,12 @@ type stackNginx struct {
 }
 
 func (p stackNginx) Open(ctx context.Context, t providers.TargetRef, c providers.CredentialSource, e providers.Env) (providers.Session, error) {
+	p.s.mu.Lock()
+	down := p.s.down
+	p.s.mu.Unlock()
+	if down {
+		return nil, providers.NewError("ssh.unreachable", true, errors.New("test: the network is down"), nil)
+	}
 	sess, err := p.Provider.Open(ctx, t, c, e)
 	if err != nil {
 		return sess, err
@@ -113,6 +120,13 @@ func (p stackNginx) Open(ctx context.Context, t providers.TargetRef, c providers
 		return sess, nil
 	}
 	return wrap(t, sess), nil
+}
+
+// setDown makes every connection to an Nginx server fail as an unreachable network does.
+func (s *stack) setDown(down bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.down = down
 }
 
 // setWrap makes every nginx session opened from now on pass through w (nil: none).
@@ -265,24 +279,25 @@ func (s *stack) deploy(c *client, certID string, locationIDs ...string) []deploy
 
 // depView is the part of a deployment the journeys assert.
 type depView struct {
-	ID                  string `json:"id"`
-	CertificateID       string `json:"certificate_id"`
-	LocationID          string `json:"location_id"`
-	TargetID            string `json:"target_id"`
-	CertPath            string `json:"cert_path"`
-	JobID               string `json:"job_id"`
-	JobStatus           string `json:"job_status"`
-	State               string `json:"state"`
-	Status              string `json:"status"`
-	Result              string `json:"result"`
-	Phase               string `json:"phase"`
-	Verified            string `json:"verified"`
-	FailedStep          string `json:"failed_step"`
-	HelperError         string `json:"helper_error"`
-	BackupDir           string `json:"backup_dir"`
-	NewFingerprint      string `json:"new_fingerprint"`
-	PreviousFingerprint string `json:"previous_fingerprint"`
-	RecoveryAttempts    int    `json:"recovery_attempts"`
+	ID                  string     `json:"id"`
+	CertificateID       string     `json:"certificate_id"`
+	LocationID          string     `json:"location_id"`
+	TargetID            string     `json:"target_id"`
+	CertPath            string     `json:"cert_path"`
+	JobID               string     `json:"job_id"`
+	JobStatus           string     `json:"job_status"`
+	State               string     `json:"state"`
+	Status              string     `json:"status"`
+	Result              string     `json:"result"`
+	Phase               string     `json:"phase"`
+	Verified            string     `json:"verified"`
+	FailedStep          string     `json:"failed_step"`
+	HelperError         string     `json:"helper_error"`
+	BackupDir           string     `json:"backup_dir"`
+	NewFingerprint      string     `json:"new_fingerprint"`
+	PreviousFingerprint string     `json:"previous_fingerprint"`
+	RecoveryAttempts    int        `json:"recovery_attempts"`
+	RecoverAfter        *time.Time `json:"recover_after"`
 	Error               *struct {
 		Code   string            `json:"code"`
 		Reason string            `json:"reason"`

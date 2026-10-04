@@ -105,6 +105,7 @@ type stack struct {
 	auditSvc  *audit.Service
 	license   *license.Service
 	inv       *inventory.Service
+	auditLog  *audit.Log
 	queue     *jobs.Queue
 	runner    *jobs.Runner
 	registry  *providers.Registry
@@ -116,6 +117,7 @@ type stack struct {
 	mu        sync.Mutex
 	nginxSrvs []*nginxFixture // the emulated Nginx hosts Alice's own TLS probe can reach
 	wrap      func(providers.TargetRef, providers.Session) providers.Session
+	down      bool // Nginx servers are unreachable
 	exchanges []exchange
 	totpCodes []string // every code totpNow handed out (leak canaries)
 	ips       atomic.Int64
@@ -194,12 +196,22 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	s.registry.Freeze()
 	_, err := s.inv.EnsurePlatformKey(context.Background())
 	require.NoError(t, err)
-	s.runner = jobs.NewRunner(jobs.RunnerConfig{
-		Pool: s.db.App, Queue: s.queue, Gate: s.license, Audit: auditLog, Clock: s.clock, Log: log,
-		Jitter: func() float64 { return 0 },
+	s.auditLog = auditLog
+	s.runner = s.newRunner("", 0)
+}
+
+// newRunner builds a job runner with the target and deployment handlers, the way cmd/alice does
+// (the sweep of unfinished deployments is driven by the tests). A second runner with its own worker
+// name and a heartbeat that never beats on the fake clock stands for a process that dies.
+func (s *stack) newRunner(worker string, heartbeat time.Duration) *jobs.Runner {
+	log := logging.New(s.logs, slog.LevelDebug)
+	r := jobs.NewRunner(jobs.RunnerConfig{
+		Pool: s.db.App, Queue: s.queue, Gate: s.license, Audit: s.auditLog, Clock: s.clock, Log: log,
+		Jitter: func() float64 { return 0 }, WorkerID: worker, Heartbeat: heartbeat, Notifier: notify.AdminNotifier{Clock: s.clock},
 	})
-	targetjobs.Register(s.runner, targetjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})
-	deployjobs.Register(s.runner, deployjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})
+	targetjobs.Register(r, targetjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})
+	deployjobs.Register(r, deployjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})
+	return r
 }
 
 // deps are the handler dependencies of the current services. Tests that need
