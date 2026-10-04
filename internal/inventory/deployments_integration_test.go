@@ -37,6 +37,7 @@ import (
 // rows) and are recorded.
 type deployFixture struct {
 	h                           *harness
+	ca                          *pki.CA
 	admin, operator             inventory.Actor
 	target1, target2            uuid.UUID
 	loc1, loc5                  uuid.UUID // web-01: www.crt, b.crt
@@ -54,7 +55,7 @@ func newDeployFixture(t *testing.T) *deployFixture {
 	roots.AddCert(ca.Root)
 	h := newHarness(t, withNginxProvider(), withRoots(roots))
 	h.jobs.next = jobs.NewQueue(jobs.QueueConfig{Pool: h.db.App, Keyring: h.keyring, Audit: h.audit, Clock: h.clock, Gate: h.lic})
-	f := &deployFixture{h: h}
+	f := &deployFixture{h: h, ca: ca}
 	f.admin = h.user("ada", rbac.Admin, "ada@example.com")
 	f.operator = h.user("oya", rbac.Operator, "")
 	now := h.clock.Now()

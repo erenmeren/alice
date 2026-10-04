@@ -100,6 +100,9 @@ type Material struct {
 	PreviousFingerprint string // recorded; "" before the first send
 	PreviousChainLength int    // recorded; 0 before the first send
 	Recorded            bool   // state deploying, recovering or done: the send values come from the record
+	// Task 12 additions.
+	KV       *KVSource // set for a Key Vault deployment (nil: an uploaded or discovered certificate)
+	Warnings []string  // closed warnings of the material step ("chain_incomplete")
 }
 
 // PrecheckRequest verifies what the website serves now, before any change: the location's current
@@ -176,7 +179,10 @@ func sha256Hex(b []byte) string {
 // DeploymentMaterial reads what a job needs (see Material). withKey unseals the certificate's
 // private key through loadKey with the certificate's own private_key_id, checks that it is the
 // key of the certificate (its public key hash) and returns it as PEM; only before the first send
-// (queued or precheck: recovery and rollback never need the key), else ErrDeploymentState.
+// (queued or precheck: recovery and rollback never need the key), else ErrDeploymentState. A Key Vault
+// deployment (binding_id set) has Material.KV and never a key here (no ErrNoPrivateKey): the engine reads the
+// vault secret and calls KVDeployMaterial, which also fills the chain; before that CertificatePEM is the leaf's
+// stored chain, and once a send was recorded it is the chain KVDeployMaterial stored.
 func (s *Service) DeploymentMaterial(ctx context.Context, id uuid.UUID, withKey bool) (Material, error) {
 	d, err := scanDeployment(s.pool.QueryRow(ctx, deploymentSelect+" WHERE d.id = $1", id))
 	if err != nil {
@@ -249,7 +255,13 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 	if m.OldSANs == nil {
 		m.OldSANs = []string{}
 	}
-	if withKey {
+	if d.BindingID != nil {
+		// A Key Vault deployment: the vault holds the key; the engine reads the secret itself
+		// (KVDeployMaterial) and Alice never has a key for the certificate.
+		if m.KV, err = s.kvSource(ctx, id); err != nil {
+			return Material{}, err
+		}
+	} else if withKey {
 		if keyID == nil {
 			return Material{}, ErrNoPrivateKey
 		}
@@ -258,6 +270,23 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 		}
 	}
 	return m, nil
+}
+
+// kvSource reads the vault, certificate and version a Key Vault deployment names.
+func (s *Service) kvSource(ctx context.Context, deployment uuid.UUID) (*KVSource, error) {
+	var k KVSource
+	err := s.pool.QueryRow(ctx, `SELECT kc.target_id, kc.id, v.id, kc.name, v.version, v.thumbprint
+FROM deployments d
+JOIN kv_certificate_versions v ON v.id = d.kv_version_id
+JOIN kv_certificates kc ON kc.id = v.kv_certificate_id
+WHERE d.id = $1`, deployment).Scan(&k.VaultID, &k.KVCertificateID, &k.VersionID, &k.Name, &k.Version, &k.Thumbprint)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inventory: read the deployment's vault version: %w", err)
+	}
+	return &k, nil
 }
 
 // errForeignKey: the sealed key is not the certificate's (its public key hash differs).

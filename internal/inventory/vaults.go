@@ -839,16 +839,7 @@ func (s *Service) DeleteVault(ctx context.Context, a Actor, id uuid.UUID, remove
 		}
 		now := s.clock.Now().UTC()
 		for _, b := range bindings {
-			if _, err := tx.Exec(ctx, "UPDATE bindings SET deleted_at = $2, version = version + 1 WHERE id = $1", b, now); err != nil {
-				return fmt.Errorf("inventory: remove a binding: %w", err)
-			}
-			tag, err := tx.Exec(ctx, "UPDATE certificate_locations SET binding_id = NULL WHERE binding_id = $1", b)
-			if err != nil {
-				return fmt.Errorf("inventory: release a binding's locations: %w", err)
-			}
-			if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "binding.deleted", ObjectType: "binding",
-				ObjectID: b.String(), Result: audit.Success, Details: map[string]string{"binding_id": b.String(),
-					"vault_url": cur.Vault.URL, "reason": "vault_deleted", "location_count": strconv.FormatInt(tag.RowsAffected(), 10)}}); err != nil {
+			if err := s.releaseBindingTx(ctx, tx, a, b, now, map[string]string{"vault_url": cur.Vault.URL, "reason": "vault_deleted"}); err != nil {
 				return err
 			}
 		}

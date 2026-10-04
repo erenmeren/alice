@@ -133,3 +133,6 @@ func SetKVBatchHook(f func(kind string, batch int)) (restore func()) {
 	kvBatchHook = f
 	return func() { kvBatchHook = old }
 }
+
+// MaxPFXDecodes is how many PFX files the process decodes at once.
+func MaxPFXDecodes() int { return maxPFXDecodes }

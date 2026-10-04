@@ -230,6 +230,12 @@ type Deployment struct {
 	ExpectCertSHA256    string     // the file hash the first send expected to replace
 	RecoverAfter        *time.Time // the next recovery is not requested before this
 	RecoveryAttempts    int        // recovery jobs requested
+
+	// Task 12 additions: a Key Vault deployment names its binding and the vault version it deploys.
+	BindingID *uuid.UUID // nil unless the deployment is from a vault
+	KVVersion string     // the vault version (32 hex) or ""
+	VaultName string     // the vault's name or ""
+	Source    string     // "key_vault" when BindingID is set, else "upload"
 }
 
 // DeploymentFilter selects deployments, newest first.
@@ -359,7 +365,7 @@ func (s *Service) RequestDeployment(ctx context.Context, a Actor, in DeployReque
 		}
 		for _, id := range in.LocationIDs {
 			l := locs[id]
-			r, err := s.insertDeployment(ctx, tx, a, c, l, in.ConfirmIncompleteChain && !c.chainComplete, now)
+			r, err := s.insertDeployment(ctx, tx, a, c, l, deploySource{Trigger: "manual", Confirmed: in.ConfirmIncompleteChain && !c.chainComplete}, now)
 			if errors.Is(err, ErrDeploymentInProgress) {
 				return deny(id, "in_progress", err)
 			}
@@ -492,13 +498,25 @@ func (s *Service) canDeploy(typ string) bool {
 	return ok && p.Capabilities().Has(providers.CapDeployCertificate)
 }
 
-func (s *Service) insertDeployment(ctx context.Context, tx pgx.Tx, a Actor, c deployCertificate, l deployLocation, confirmed bool,
+// deploySource says where a deployment comes from: its trigger ("manual" for a person's request,
+// "kv_renewal" for the automatic planner), whether an Administrator confirmed an incomplete chain
+// (F-17), and, for a Key Vault deployment, the binding and the stored version it deploys (written
+// together: deployments_kv_source). Version is the vault's version string, for the audit row.
+type deploySource struct {
+	Trigger     string
+	BindingID   *uuid.UUID
+	KVVersionID *uuid.UUID
+	Confirmed   bool
+	Version     string
+}
+
+func (s *Service) insertDeployment(ctx context.Context, tx pgx.Tx, a Actor, c deployCertificate, l deployLocation, src deploySource,
 	now time.Time) (RequestedDeployment, error) {
 	id := uuid.Must(uuid.NewV7())
 	_, err := tx.Exec(ctx, `INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, requested_by, state, status,
-    new_fingerprint, cert_path, key_path, confirm_incomplete_chain, created_at)
-VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, $8, $9, $10, $11, $12)`, id, c.id, l.id, l.target, nullableUser(a.UserID),
-		DeployStateQueued, DeployStatusPending, c.fingerprint, l.certPath, l.keyPath, confirmed, now)
+    new_fingerprint, cert_path, key_path, confirm_incomplete_chain, binding_id, kv_version_id, created_at)
+VALUES ($1, $2, $3, $4, $13, $5, $6, $7, $8, $9, $10, $11, $14, $15, $12)`, id, c.id, l.id, l.target, nullableUser(a.UserID),
+		DeployStateQueued, DeployStatusPending, c.fingerprint, l.certPath, l.keyPath, src.Confirmed, now, src.Trigger, src.BindingID, src.KVVersionID)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "deployments_one_active" {
 		return RequestedDeployment{}, ErrDeploymentInProgress
@@ -519,10 +537,15 @@ VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, $8, $9, $10, $11, $12)`, id, c.id,
 	if sanMismatch(c.sans, l.servers) {
 		warnings = append(warnings, WarnSANMismatch)
 	}
+	details := map[string]string{"deployment_id": id.String(),
+		"certificate_id": c.id.String(), "location_id": l.id.String(), "cert_path": l.certPath, "job_id": jobID.String(),
+		"confirm_incomplete_chain": strconv.FormatBool(src.Confirmed)}
+	if src.BindingID != nil {
+		details["binding_id"] = src.BindingID.String()
+		details["version"] = src.Version
+	}
 	_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "deployment.requested", ObjectType: "deployment",
-		ObjectID: id.String(), Result: audit.Success, Details: map[string]string{"deployment_id": id.String(),
-			"certificate_id": c.id.String(), "location_id": l.id.String(), "cert_path": l.certPath, "job_id": jobID.String(),
-			"confirm_incomplete_chain": strconv.FormatBool(confirmed)}})
+		ObjectID: id.String(), Result: audit.Success, Details: details})
 	if err != nil {
 		return RequestedDeployment{}, err
 	}
@@ -554,12 +577,15 @@ d.location_id, d.target_id, t.name::text, d.cert_path, d.key_path, d.job_id, d.t
 d.state, d.status, d.new_fingerprint, d.previous_fingerprint, d.confirm_incomplete_chain, d.rollback_info, d.verified, d.error_code,
 d.error_params, d.failed_step, d.created_at, d.started_at, d.finished_at, d.result, d.phase, d.cause_step, d.helper_error,
 d.verify_failed_reason, d.verify_failed_port, d.operation_id, d.new_chain_length, d.previous_chain_length, d.expect_cert_sha256,
-d.recover_after, d.recovery_attempts, coalesce(j.status, '')
+d.recover_after, d.recovery_attempts, coalesce(j.status, ''), d.binding_id, coalesce(v.version, ''), coalesce(vt.name::text, '')
 FROM deployments d
 JOIN certificates c ON c.id = d.certificate_id
 JOIN targets t ON t.id = d.target_id
 LEFT JOIN users u ON u.id = d.requested_by
-LEFT JOIN jobs j ON j.id = d.job_id`
+LEFT JOIN jobs j ON j.id = d.job_id
+LEFT JOIN kv_certificate_versions v ON v.id = d.kv_version_id
+LEFT JOIN kv_certificates kc ON kc.id = v.kv_certificate_id
+LEFT JOIN targets vt ON vt.id = kc.target_id`
 
 func scanDeployment(row pgx.Row) (Deployment, error) {
 	var (
@@ -570,7 +596,7 @@ func scanDeployment(row pgx.Row) (Deployment, error) {
 		&d.JobID, &d.Trigger, &d.RequestedBy, &d.RequestedByName, &d.State, &d.Status, &d.NewFingerprint, &d.PreviousFingerprint,
 		&d.ConfirmIncompleteChain, &backup, &d.Verified, &d.ErrorCode, &params, &d.FailedStep, &d.CreatedAt, &d.StartedAt, &d.FinishedAt,
 		&d.Result, &d.Phase, &d.CauseStep, &d.HelperError, &d.VerifyFailedReason, &d.VerifyFailedPort, &d.OperationID, &d.NewChainLength,
-		&d.PreviousChainLength, &d.ExpectCertSHA256, &d.RecoverAfter, &d.RecoveryAttempts, &d.JobStatus)
+		&d.PreviousChainLength, &d.ExpectCertSHA256, &d.RecoverAfter, &d.RecoveryAttempts, &d.JobStatus, &d.BindingID, &d.KVVersion, &d.VaultName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
@@ -589,6 +615,10 @@ func scanDeployment(row pgx.Row) (Deployment, error) {
 	}
 	if d.ErrorParams == nil {
 		d.ErrorParams = map[string]string{}
+	}
+	d.Source = "upload"
+	if d.BindingID != nil {
+		d.Source = "key_vault"
 	}
 	d.CreatedAt = d.CreatedAt.UTC()
 	d.StartedAt, d.FinishedAt, d.RecoverAfter = utcPtr(d.StartedAt), utcPtr(d.FinishedAt), utcPtr(d.RecoverAfter)

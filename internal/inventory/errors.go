@@ -138,3 +138,29 @@ var (
 	// errNotAnSSHTarget: a vault's credential source offers no SSH key.
 	errNotAnSSHTarget = errors.New("inventory: a Key Vault has no SSH credential")
 )
+
+// Errors of bindings and Key Vault deployments (Task 12). The API maps each to its code (Task 17).
+var (
+	// ErrLocationBound: the website (certificate location) is already connected to a vault certificate.
+	// A *LocationRefusalError names the location.
+	ErrLocationBound = errors.New("inventory: the website is already connected to a vault certificate")
+	// ErrBindingExists: the vault certificate already has connected websites; change that binding.
+	ErrBindingExists = errors.New("inventory: the vault certificate already has connected websites")
+	// ErrVersionDisabled: the version is disabled in the vault.
+	ErrVersionDisabled = errors.New("inventory: the vault certificate version is disabled")
+	// ErrKVCertificateMissing: the vault certificate is unknown, or no longer listed by its vault.
+	ErrKVCertificateMissing = errors.New("inventory: the vault certificate is not in the vault")
+	// ErrHeldNeedsAdmin: a held version is deployed or released by an Administrator only (rulings S6, S8).
+	ErrHeldNeedsAdmin = errors.New("inventory: only an Administrator can deploy or release a held version")
+	// ErrAdminRequired: only an Administrator may switch automatic deployment or add websites to a
+	// binding that deploys automatically (ruling S6).
+	ErrAdminRequired = errors.New("inventory: only an Administrator can do this")
+	// ErrVersionNotHeld: the version is not held, so there is nothing to release.
+	ErrVersionNotHeld = errors.New("inventory: the version is not held")
+	// ErrSecretUnreadable: the vault secret behind a version cannot be used (not a certificate with
+	// its key, an unsupported container or a key that does not fit the certificate).
+	ErrSecretUnreadable = errors.New("inventory: the vault secret cannot be read as a certificate with its key")
+	// ErrSecretMismatch: the vault secret is not the certificate version Alice recorded (another
+	// leaf, thumbprint or key type).
+	ErrSecretMismatch = errors.New("inventory: the vault secret is not the recorded version")
+)
