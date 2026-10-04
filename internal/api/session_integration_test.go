@@ -25,6 +25,7 @@ import (
 	"alice/internal/auth"
 	"alice/internal/inventory"
 	"alice/internal/providers"
+	"alice/internal/testutil/pki"
 )
 
 // Session, CSRF and rate-limit suite (spec §25.3 R-01..R-10, §25.4 A-01..A-09).
@@ -324,6 +325,9 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 	// One server (with its first job) and one discovered SSH key, so every GET of an item answers
 	// 200 with a real record (Phase 3, preflight D8).
 	ids := phase3Records(t, s, c)
+	for k, v := range phase4Records(t, s, c, ids["/api/v1/targets/"]) {
+		ids[k] = v
+	}
 	ids["/api/v1/users/"] = admin.id
 	// Store an audit checkpoint first, so a GET that moved it would be caught.
 	requireStatus(t, c.do(http.MethodPost, "/api/v1/audit/verify", nil), http.StatusOK)
@@ -352,10 +356,10 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 		gets++
 		path := op.path
 		if strings.Contains(path, "{id}") {
-			id := ""
+			id, longest := "", 0
 			for prefix, v := range ids {
-				if strings.HasPrefix(path, prefix) {
-					id = v
+				if strings.HasPrefix(path, prefix) && len(prefix) > longest {
+					id, longest = v, len(prefix) // /certificates/csr/{id} is not /certificates/{id}
 				}
 			}
 			require.NotEmpty(t, id, "no record for %s", op.path)
@@ -416,6 +420,49 @@ func phase3Records(t *testing.T, s *stack, c *client) map[string]string {
 		"/api/v1/targets/":  created.Target.ID,
 		"/api/v1/jobs/":     created.JobID,
 		"/api/v1/ssh-keys/": page.Items[0].ID.String(),
+	}
+}
+
+// phase4Records adds a certificate (uploaded), a signing request, a certificate location on the
+// server and a deployment, so every Phase 4 GET of an item answers 200 with a real record. The
+// location and the deployment are inserted as the owner: the stack registers no Nginx provider
+// (the Nginx journeys are the next task's integration suite).
+func phase4Records(t *testing.T, s *stack, c *client, targetID string) map[string]string {
+	t.Helper()
+	ca := pki.NewCA("API Test CA", pki.ECDSA256, s.clock.Now())
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.com", SANs: []string{"www.example.com"}}, s.clock.Now())
+	rec := c.do(http.MethodPost, "/api/v1/certificates/upload", map[string]any{"label": "Web",
+		"certificate_pem": string(leaf.FullchainPEM), "private_key_pem": string(leaf.KeyPEM)})
+	requireStatus(t, rec, http.StatusCreated)
+	var stored struct {
+		Certificate struct {
+			ID          string `json:"id"`
+			Fingerprint string `json:"fingerprint"`
+		} `json:"certificate"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &stored))
+	rec = c.do(http.MethodPost, "/api/v1/certificates/csr", map[string]any{"common_name": "shop.example.com", "key_type": "ecdsa-p256"})
+	requireStatus(t, rec, http.StatusCreated)
+	var csr struct {
+		ID string `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &csr))
+
+	ctx := context.Background()
+	loc, dep := uuid.New(), uuid.Must(uuid.NewV7())
+	_, err := s.db.Owner.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported,
+servers, first_seen_at, last_seen_at) VALUES ($1, $2, 'nginx_file', '/etc/nginx/ssl/www.crt', '/etc/nginx/ssl/www.key', $3, true,
+'[{"names":["www.example.com"],"listens":[{"addr":"*","port":443,"default_server":false}],"file":"/etc/nginx/conf.d/www.conf","line":3}]',
+$4, $4)`, loc, targetID, stored.Certificate.ID, s.clock.Now())
+	require.NoError(t, err)
+	_, err = s.db.Owner.Exec(ctx, `INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, state, status,
+new_fingerprint, cert_path, key_path, created_at) VALUES ($1, $2, $3, $4, 'manual', 'queued', 'pending', $5, '/etc/nginx/ssl/www.crt',
+'/etc/nginx/ssl/www.key', $6)`, dep, stored.Certificate.ID, loc, targetID, stored.Certificate.Fingerprint, s.clock.Now())
+	require.NoError(t, err)
+	return map[string]string{
+		"/api/v1/certificates/":     stored.Certificate.ID,
+		"/api/v1/certificates/csr/": csr.ID,
+		"/api/v1/deployments/":      dep.String(),
 	}
 }
 

@@ -1700,7 +1700,13 @@ components:
             type: object
             required: [code, params]
             properties:
-              code: { type: string, examples: [keys_managed_elsewhere] }
+              code:
+                type: string
+                examples: [keys_managed_elsewhere]
+                description: >-
+                  Phase 4 values for Nginx servers include nginx_not_found, nginx_profile_missing, locations_dropped,
+                  list_truncated, too_many_files, stream_tls, mail_tls and config_file_writable (params.path); a newer
+                  server may add others.
               params: { type: object, additionalProperties: { type: string } }
         unreadable:
           type: array
