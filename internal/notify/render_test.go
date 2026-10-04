@@ -175,4 +175,16 @@ func TestKeyVaultTemplatesRenderInBothLanguages(t *testing.T) {
 	assert.Contains(t, bound.Body, "Alice bu web sitelerinde hiçbir şeyi değiştirmez")
 	more := s.Render("ada@example.com", inventory.TemplateKVCertificatesRemovedMore, "en", params)
 	assert.Contains(t, more.Body, "37 more certificates")
+	// Exactly one more: the singular text, in both languages, no "1 more certificates".
+	one := map[string]string{"target_name": "Üretim kasası", "count": "1"}
+	for _, lang := range []string{"en", "tr"} {
+		m := s.Render("ada@example.com", inventory.TemplateKVCertificatesRemovedOne, lang, one)
+		assert.NotContains(t, m.Subject+m.Body, "{{", lang)
+		assert.NotContains(t, m.Subject, "email.", lang)
+		assert.Contains(t, m.Body, "Üretim kasası", lang)
+		assert.Contains(t, m.Body, "1", lang)
+	}
+	oneEN := s.Render("ada@example.com", inventory.TemplateKVCertificatesRemovedOne, "en", one)
+	assert.Contains(t, oneEN.Body, "1 more certificate disappeared")
+	assert.NotContains(t, oneEN.Body, "certificates disappeared in the same check")
 }

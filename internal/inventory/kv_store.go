@@ -117,7 +117,7 @@ func chunks[T any](items []T, size int) [][]T {
 // then secrets. A reader sees, between batches, only whole certificates (the row, its version rows
 // and its leaf together); status, last success and every missing mark change afterwards, in the
 // final transaction of ReconcileKV. It returns the reason the result was dropped ("" when stored).
-func (s *Service) storeKV(ctx context.Context, id uuid.UUID, p *preparedKV, now time.Time, held bool, st *kvStored) (string, error) {
+func (s *Service) storeKV(ctx context.Context, id uuid.UUID, p *preparedKV, now time.Time, hold kvHold, st *kvStored) (string, error) {
 	run := func(kind string, n int, fn func(tx pgx.Tx, t kvTarget) error) (string, error) {
 		err := s.batch(ctx, id, kind, n, fn)
 		var d kvDropped
@@ -128,7 +128,7 @@ func (s *Service) storeKV(ctx context.Context, id uuid.UUID, p *preparedKV, now 
 	}
 	for i, items := range chunks(p.certs, kvBatchCerts) {
 		if d, err := run(kvCertificates, i+1, func(tx pgx.Tx, t kvTarget) error {
-			return s.storeCertBatch(ctx, tx, id, t, items, now, held, st)
+			return s.storeCertBatch(ctx, tx, id, t, items, now, hold, st)
 		}); d != "" || err != nil {
 			return d, err
 		}
@@ -164,7 +164,7 @@ type kvExisting struct {
 // details (the listing alone) are one multi-row upsert; those with details are handled one by one
 // (the row, the leaf in certificates, the current version's row and the older versions), and a
 // version that is new on a known certificate is audited in the same transaction.
-func (s *Service) storeCertBatch(ctx context.Context, tx pgx.Tx, vault uuid.UUID, t kvTarget, items []kvCert, now time.Time, held bool, st *kvStored) error {
+func (s *Service) storeCertBatch(ctx context.Context, tx pgx.Tx, vault uuid.UUID, t kvTarget, items []kvCert, now time.Time, hold kvHold, st *kvStored) error {
 	var detailed []kvCert
 	var listed []kvCert
 	for _, c := range items {
@@ -176,7 +176,7 @@ func (s *Service) storeCertBatch(ctx context.Context, tx pgx.Tx, vault uuid.UUID
 	}
 	var events []audit.Event
 	if len(detailed) > 0 {
-		moved, err := s.storeDetailedCerts(ctx, tx, vault, t, detailed, now, held, st, &events)
+		moved, err := s.storeDetailedCerts(ctx, tx, vault, t, detailed, now, hold, st, &events)
 		if err != nil {
 			return err
 		}
@@ -249,7 +249,7 @@ RETURNING (xmax = 0)`, vault, now, ids, names, thumbs, updated, enabled, nbf, ex
 // knows with another thumbprint is never silently replaced (the stored row is kept, the conflict
 // is counted and, when the listing is new, audited).
 func (s *Service) storeDetailedCerts(ctx context.Context, tx pgx.Tx, vault uuid.UUID, t kvTarget, items []kvCert, now time.Time,
-	held bool, st *kvStored, events *[]audit.Event) ([]kvCert, error) {
+	hold kvHold, st *kvStored, events *[]audit.Event) ([]kvCert, error) {
 	folds := make([]string, len(items))
 	for i, c := range items {
 		folds[i] = c.fold
@@ -391,6 +391,8 @@ WHERE id = $1 AND last_seen_at <= $17`,
 				continue // a later poll already stored newer knowledge
 			}
 		}
+		// New on a certificate Alice already had a current version of (rule kvHold); else a baseline.
+		held := hold.held(known && prev.currentVersion != "", d.attrs.created)
 		heldReason := ""
 		if held {
 			heldReason = "license"

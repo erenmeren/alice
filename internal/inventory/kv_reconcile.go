@@ -199,16 +199,12 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 		return sum, err
 	}
 	// Decided before anything is stored, once for the whole poll (L-87, rulings S8 and I4).
-	held := s.gateClosedNow()
-	byReopen := false
-	if !held {
-		if byReopen, err = s.heldByReopen(ctx, id); err != nil {
-			return sum, err
-		}
-		held = byReopen
+	hold, err := s.holdRule(ctx, id)
+	if err != nil {
+		return sum, err
 	}
 	var st kvStored
-	dropped, err := s.storeKV(ctx, id, p, now, held, &st)
+	dropped, err := s.storeKV(ctx, id, p, now, hold, &st)
 	sum.NewCertificates, sum.NewVersions, sum.HeldVersions, sum.VersionConflicts = st.newCerts, st.newVersions, st.heldVersions, st.conflicts
 	sum.NewKeys, sum.NewSecrets = st.newKeys, st.newSecrets
 	if err != nil {
@@ -242,7 +238,7 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 		// no mass-disappearance rule). The first is recorded (facts.kv_empty_*, warning
 		// kv_listing_empty); two polls that overlap count as one.
 		f := t.Facts
-		hold := false
+		emptyHold := false
 		if p.certsAnswered && len(p.certs) > 0 {
 			f.KVEmptyPolls, f.KVEmptyAt = 0, nil
 		}
@@ -255,16 +251,16 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 			case present == 0:
 				f.KVEmptyPolls, f.KVEmptyAt = 0, nil
 			case f.KVEmptyPolls == 0 || f.KVEmptyAt == nil:
-				f.KVEmptyPolls, hold = 1, true
+				f.KVEmptyPolls, emptyHold = 1, true
 				end := s.clock.Now().UTC()
 				f.KVEmptyAt = &end
 			case !now.After(*f.KVEmptyAt):
-				hold = true // started before the first empty poll finished: the same observation
+				emptyHold = true // started before the first empty poll finished: the same observation
 			default:
 				f.KVEmptyPolls, f.KVEmptyAt = 0, nil // the second empty listing is believed
 			}
 		}
-		if p.certsComplete && !hold {
+		if p.certsComplete && !emptyHold {
 			if removed, err = markMissingCerts(ctx, tx, id, foldedNames(p.certs, func(c kvCert) string { return c.fold }), now); err != nil {
 				return err
 			}
@@ -290,16 +286,15 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 			f.KVMetadataAt = &now
 		}
 		f.KVAuthFailures, f.KVThrottledCycles = o.auth, o.cycles
-		f.KVReconciledAt = &now
-		// Renewals seen while certificates still wait for their details stay held (I4).
-		var pending int
-		if err := tx.QueryRow(ctx, "SELECT count(*) FROM kv_certificates WHERE target_id = $1 AND missing_since IS NULL AND details_pending", id).Scan(&pending); err != nil {
-			return fmt.Errorf("inventory: count the pending certificates: %w", err)
+		// The mark of the last poll that listed every certificate while the gate was open: a poll
+		// whose certificate list failed, was cut, or ran with the gate closed or unverified is no
+		// evidence that renewals made while the gate was closed have been seen (rule I4 (c)).
+		if p.certsComplete && !hold.closed {
+			f.KVReconciledAt = &now
 		}
-		f.KVHoldRenewals = byReopen && pending > 0
 		f.KVPoll = &KVPollFacts{At: now, Failures: p.failures, Truncated: p.truncated, DetailsPending: p.detailsPending}
 		f.Warnings = p.warnings()
-		if hold {
+		if emptyHold {
 			f.Warnings = append(f.Warnings, providers.Warning{Code: WarnKVListingEmpty, Params: map[string]string{}})
 		}
 		if sum.VersionConflicts > 0 {
@@ -311,12 +306,11 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 			return err
 		}
 		pollOK := p.certsAnswered && !p.certsBudgetCut
-		counted := (!p.certsAnswered || p.budgetCut) && o.class != classRefused
 		if _, err := tx.Exec(ctx, `UPDATE targets SET status = $2, last_error_code = $3,
     last_success_at = CASE WHEN $4::boolean THEN $5::timestamptz ELSE last_success_at END,
     last_discovery_at = CASE WHEN $4::boolean THEN $5::timestamptz ELSE last_discovery_at END,
     poll_failures = CASE WHEN $8::boolean THEN LEAST(poll_failures + 1, $6::integer) ELSE 0 END,
-    facts = $7, updated_at = $5 WHERE id = $1`, id, o.status, o.code, pollOK, now, maxPollFailures, raw, counted); err != nil {
+    facts = $7, updated_at = $5 WHERE id = $1`, id, o.status, o.code, pollOK, now, maxPollFailures, raw, o.counted); err != nil {
 			return fmt.Errorf("inventory: store the poll's outcome: %w", err)
 		}
 		if o.mail && s.notifier != nil {
@@ -343,7 +337,11 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 				noticeIDs = append(noticeIDs, r.id)
 			}
 			if more := len(removed) - len(noticeIDs); more > 0 {
-				if err := s.notifier.NotifyAdmins(ctx, tx, TemplateKVCertificatesRemovedMore,
+				tpl := TemplateKVCertificatesRemovedMore
+				if more == 1 {
+					tpl = TemplateKVCertificatesRemovedOne // the singular text (the mail has no plural mechanism)
+				}
+				if err := s.notifier.NotifyAdmins(ctx, tx, tpl,
 					map[string]string{"target_name": cur.name, "count": strconv.Itoa(more)}); err != nil {
 					return fmt.Errorf("inventory: queue the removal summary email: %w", err)
 				}
@@ -403,61 +401,96 @@ func foldedNames[T any](items []T, fold func(T) string) []string {
 // gateClosedNow reports that the license gate refuses changes at this moment.
 func (s *Service) gateClosedNow() bool { return s.license.Allow(license.ClassChange) != nil }
 
-// gateReopenedAt is the last time the license gate opened after having been closed (locked or
-// evaluation ended): the latest stored transition (license_history: state_change, installed or
-// renewed) from a closed phase to an open one. nil when it never did.
+// TemplateKVCertificatesRemovedOne is the summary mail of exactly one more removed certificate
+// (TemplateKVCertificatesRemovedMore with the plural text; same params).
+const TemplateKVCertificatesRemovedOne = "kv.certificates_removed_more_one"
+
+// gateReopenedAt is the last time the license gate opened after it had been, or could have been,
+// closed: the latest stored license_history row that moves from locked, evaluation_expired or grace
+// (whose end locks before the tick records it, so a renewal in that window leaves grace while the gate
+// was already closed) into evaluation, active or grace, recorded as a state change, an install or a
+// renewal. Rows that stay in a state (a renewal active to active, grace to grace), leave an open state
+// for a closed one, or are not those events do not count. nil when it never did.
 func (s *Service) gateReopenedAt(ctx context.Context) (*time.Time, error) {
 	var at *time.Time
 	if err := s.pool.QueryRow(ctx, `SELECT max(at) FROM license_history
-WHERE event IN ('state_change', 'installed', 'renewed') AND from_state IN ('locked', 'evaluation_expired')
-  AND to_state <> '' AND to_state NOT IN ('locked', 'evaluation_expired')`).Scan(&at); err != nil {
+WHERE event IN ('state_change', 'installed', 'renewed') AND from_state IN ('locked', 'evaluation_expired', 'grace')
+  AND to_state IN ('evaluation', 'active', 'grace') AND from_state <> to_state`).Scan(&at); err != nil {
 		return nil, fmt.Errorf("inventory: read when the license gate reopened: %w", err)
 	}
 	return utcPtr(at), nil
 }
 
-// heldByReopen reports whether versions first seen by this poll must be held although the gate is
-// open (ruling I4): polls do not run while the gate is closed, so a renewal made in Azure during a
-// lock is first seen by the first poll after the license returned. That is the vault's first poll
-// since the gate last opened (its previous complete poll is older than the reopening), or a later
-// poll while certificates still wait for details that the first one could not read. A vault that
-// never completed a poll (a baseline) is not affected.
-func (s *Service) heldByReopen(ctx context.Context, id uuid.UUID) (bool, error) {
+// kvHold is the rule that holds a version a poll detects (ruling S8 and I4). Polls stop while the
+// gate is closed, so a renewal made in Azure during a lock is first seen by a poll that runs with the
+// gate open; it is recognised by its Azure creation time. A version that is new on a certificate
+// Alice already has a current version of is stored held (held_reason license) when
+//   - (a) the gate is not open at the poll (locked, lock due, unverified), or
+//   - (b) its creation time is known and not later than the time the gate last reopened, however
+//     late the poll detects it, or
+//   - (c) its creation time is unknown and no poll with a complete certificate listing has run
+//     since the gate reopened (facts.kv_reconciled_at moves only with such a poll).
+//
+// A certificate Alice sees for the first time (or whose details it never read) is a baseline: no
+// binding can name it yet, so no automatic deployment can exist for it, and only (a) holds it. A
+// poll never releases a held version: only the Administrator does.
+type kvHold struct {
+	closed        bool
+	reopened      *time.Time
+	completeSince bool
+}
+
+func (h kvHold) held(known bool, created *time.Time) bool {
+	switch {
+	case h.closed:
+		return true
+	case !known || h.reopened == nil:
+		return false
+	case created != nil:
+		return !created.After(*h.reopened)
+	}
+	return !h.completeSince
+}
+
+// holdRule reads what decides the holds of this poll: the gate now, the time it last reopened and
+// the vault's last complete poll.
+func (s *Service) holdRule(ctx context.Context, id uuid.UUID) (kvHold, error) {
+	h := kvHold{closed: s.gateClosedNow()}
+	var err error
+	if h.reopened, err = s.gateReopenedAt(ctx); err != nil {
+		return h, err
+	}
+	if h.reopened == nil {
+		return h, nil
+	}
 	t, err := getVault(ctx, s.pool, id, false)
 	if err != nil {
-		return false, err
+		return h, err
 	}
-	if t.Facts.KVHoldRenewals {
-		return true, nil
-	}
-	if t.Facts.KVReconciledAt == nil {
-		return false, nil
-	}
-	reopened, err := s.gateReopenedAt(ctx)
-	if err != nil || reopened == nil {
-		return false, err
-	}
-	return t.Facts.KVReconciledAt.Before(*reopened), nil
+	h.completeSince = t.Facts.KVReconciledAt != nil && t.Facts.KVReconciledAt.After(*h.reopened)
+	return h, nil
 }
 
 // kvOutcome is the vault's state after a poll that reached it.
 type kvOutcome struct {
 	status, code string
-	auth, cycles int // the sign-in failures in a row and the throttled cycles in a row after the poll
-	mail         bool
-	class        kvClass // the dominant class of the poll's failures (classOther when none)
+	auth, cycles int  // the sign-in failures in a row and the throttled cycles in a row after the poll
+	mail         bool // the third failed sign-in of an episode
+	counted      bool // the poll delays the next one (poll_failures + 1)
 }
 
-// kvPollOutcome classifies the failures of a poll (rows of KVInventory.Failures, plus a list cut
-// by the budget) with the table RecordKVFailure uses (kvClassOf). The dominant failure decides, by
-// precedence: sign-in, unreachable, forbidden/firewall, throttled, anything else. Then: sign-in
-// -> auth_failed (the mail at the third in a row); unreachable -> unreachable; forbidden/firewall
-// -> degraded; throttled -> degraded at the third cycle in a row, otherwise (and for anything
-// else) the status stays, except that a poll that got an answer proves the sign-in and the
-// network, so it clears auth_failed and unreachable (ok). No failure: ok, the last error is
-// cleared. A disabled vault stays disabled.
+// kvPollOutcome classifies the failures of a poll (rows of KVInventory.Failures, plus a list cut by
+// the budget) with the table RecordKVFailure uses (kvClassOf). The certificate list's own failure
+// decides first (sign-in -> auth_failed, the mail at the third in an episode; unreachable ->
+// unreachable; forbidden/firewall -> degraded); a keys or secrets list that failed as refused, unreachable or sign-in only degrades (plan
+// row 12: a partial failure is degraded) with the reason of the dominant one; throttled lists count cycles and degrade at the third in a row
+// (azure.throttled). Otherwise the status stays, except that a poll that got an answer proves the
+// sign-in and the network, so it clears auth_failed and unreachable (ok); a list that
+// answered something unexpected (F-52) leaves its code and the status stays. No failure: ok, the last error is
+// cleared. A disabled vault stays disabled. The backoff follows the certificate list (its failure,
+// unless forbidden/firewall) or a budget cut.
 func kvPollOutcome(t Target, p *preparedKV) kvOutcome {
-	o := kvOutcome{status: t.Status, code: t.LastErrorCode, class: classOther}
+	o := kvOutcome{status: t.Status, code: t.LastErrorCode}
 	if p.throttled {
 		o.cycles = min(t.Facts.KVThrottledCycles+1, maxPollFailures)
 	}
@@ -468,27 +501,42 @@ func kvPollOutcome(t Target, p *preparedKV) kvOutcome {
 		o.status, o.code = StatusOK, ""
 		return o
 	}
-	dom := p.failures[0]
-	o.class = kvClassOf(dom.Reason)
-	for _, f := range p.failures[1:] {
-		if c := kvClassOf(f.Reason); c > o.class {
-			dom, o.class = f, c
+	var cert, rest, other *KVPollFailure
+	for i := range p.failures {
+		f := &p.failures[i]
+		c := kvClassOf(f.Reason)
+		switch {
+		case f.Object == kvCertificates:
+			cert = f
+		case c > classThrottled && (rest == nil || c > kvClassOf(rest.Reason)):
+			rest = f // keys or secrets refused, unreachable or sign-in: the vault works in part
+		}
+		if c == classOther && other == nil {
+			other = f
 		}
 	}
-	switch o.class {
-	case classSignIn:
-		o.status, o.code, o.auth = StatusAuthFailed, dom.Reason, kvAuthStreak(t)
+	certClass := classOther
+	if cert != nil {
+		certClass = kvClassOf(cert.Reason)
+		o.counted = certClass != classRefused && !p.certsAnswered
+	}
+	o.counted = o.counted || p.budgetCut
+	switch {
+	case cert != nil && certClass == classSignIn:
+		o.status, o.code, o.auth = StatusAuthFailed, cert.Reason, kvAuthStreak(t)
 		o.mail = o.auth == kvAuthNotice
-	case classUnreachable:
-		o.status, o.code = StatusUnreachable, dom.Reason
-	case classRefused:
-		o.status, o.code = StatusDegraded, dom.Reason
-	default:
-		if o.class == classThrottled && o.cycles >= kvThrottledCycles {
-			o.status, o.code = StatusDegraded, dom.Reason
-		} else if t.Status == StatusAuthFailed || t.Status == StatusUnreachable {
-			o.status, o.code = StatusOK, ""
-		}
+	case cert != nil && certClass == classUnreachable:
+		o.status, o.code = StatusUnreachable, cert.Reason
+	case cert != nil && certClass == classRefused:
+		o.status, o.code = StatusDegraded, cert.Reason
+	case rest != nil:
+		o.status, o.code = StatusDegraded, rest.Reason
+	case o.cycles >= kvThrottledCycles:
+		o.status, o.code = StatusDegraded, "azure.throttled"
+	case t.Status == StatusAuthFailed || t.Status == StatusUnreachable:
+		o.status, o.code = StatusOK, ""
+	case other != nil:
+		o.code = other.Reason // unexpected answers: transient (F-52), the status stays, the code says why
 	}
 	return o
 }

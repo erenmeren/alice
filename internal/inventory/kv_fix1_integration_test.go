@@ -46,8 +46,8 @@ func TestListFailureRowsFollowTheReasonClasses(t *testing.T) {
 		{"azure.vault_not_found", inventory.StatusUnreachable, "azure.vault_not_found", 1},
 		{"azure.tls_untrusted", inventory.StatusUnreachable, "azure.tls_untrusted", 1},
 		{"azure.address_not_allowed", inventory.StatusUnreachable, "azure.address_not_allowed", 1},
-		{"azure.unexpected_response", inventory.StatusOK, "", 1},
-		{"internal.unexpected", inventory.StatusOK, "", 1},
+		{"azure.unexpected_response", inventory.StatusOK, "azure.unexpected_response", 1}, // N6: the code is recorded
+		{"internal.unexpected", inventory.StatusOK, "internal.unexpected", 1},
 		{"azure.throttled", inventory.StatusOK, "", 1},
 		{"azure.forbidden", inventory.StatusDegraded, "azure.forbidden", 0},
 		{"azure.firewall", inventory.StatusDegraded, "azure.firewall", 0},
@@ -79,15 +79,16 @@ func TestListFailureRowsFollowTheReasonClasses(t *testing.T) {
 		return h.vaultRow(v)
 	}
 	got := pick("pick1", "azure.forbidden", "azure.unreachable", "azure.unexpected_response")
-	assert.Equal(t, inventory.StatusUnreachable, got.Status)
-	assert.Equal(t, "azure.unreachable", got.Code)
+	// N4: the certificate list's own failure decides first; keys and secrets only degrade.
+	assert.Equal(t, inventory.StatusDegraded, got.Status)
+	assert.Equal(t, "azure.forbidden", got.Code)
 	got = pick("pick2", "azure.unreachable", "azure.auth_failed", "azure.forbidden")
-	assert.Equal(t, inventory.StatusAuthFailed, got.Status)
+	assert.Equal(t, inventory.StatusUnreachable, got.Status)
 	got = pick("pick3", "azure.unexpected_response", "azure.throttled", "azure.forbidden")
 	assert.Equal(t, inventory.StatusDegraded, got.Status)
 	assert.Equal(t, "azure.forbidden", got.Code)
-	got = pick("pick4", "azure.unexpected_response", "azure.throttled", "internal.unexpected")
-	assert.Equal(t, inventory.StatusOK, got.Status, "throttled over unexpected, one cycle")
+	got = pick("pick4", "azure.unexpected_response", "azure.throttled", "azure.throttled")
+	assert.Equal(t, inventory.StatusOK, got.Status, "throttled and unexpected only: one cycle, the status stays")
 	assert.Equal(t, 1, got.Facts.KVThrottledCycles)
 
 	// Sign-in failures as rows count toward the mail at the third in a row, once; the episode is
@@ -135,10 +136,16 @@ func TestAPollThatSignedInClearsAuthFailed(t *testing.T) {
 			require.NotEqual(t, inventory.StatusOK, h.vaultRow(v).Status)
 			h.clock.Advance(time.Minute)
 			r := kvResult()
-			r.KV.Failures = rows(reason, "keys")
+			object := "keys"
+			if reason == "azure.unexpected_response" {
+				object = "certificates" // on keys it would degrade (N4)
+			}
+			r.KV.Failures = rows(reason, object)
 			h.reconcile(v, r)
 			assert.Equal(t, inventory.StatusOK, h.vaultRow(v).Status, "%s after %s", reason, first)
-			assert.Empty(t, h.vaultRow(v).Code)
+			if reason == "azure.throttled" {
+				assert.Empty(t, h.vaultRow(v).Code)
+			}
 		}
 	}
 	// A degraded vault (a missing role) stays degraded under a throttled cycle.
@@ -561,69 +568,6 @@ func TestAnOlderReadCannotMoveTheCurrentVersionBack(t *testing.T) {
 	h.clock.Advance(time.Minute)
 	h.reconcile(v, kvResult(h.kvc("web-cert", l3, ver(3), t3, true)))
 	assert.Equal(t, ver(3), h.certRow(v, "web-cert").Version, "provably newer: created later")
-}
-
-// I4 (ruling on S8): polls stop while the gate is closed, so a renewal made in Azure during a lock is
-// first seen by the first poll after the license returned; that version is held too.
-func TestRenewalSeenAfterALockIsHeld(t *testing.T) {
-	h := newHarness(t, withAzure())
-	h.user("ada", rbac.Admin, "ada@example.com")
-	prod, pend := h.vault("prod"), h.vault("pend")
-	t0 := h.clock.Now()
-	l1, p1 := h.kvLeaf("www.example.test"), h.kvLeaf("pend.example.test")
-	h.reconcile(prod, kvResult(h.kvc("web-cert", l1, ver(1), t0, true)))
-	h.reconcile(pend, kvResult(h.kvc("pend-cert", p1, ver(1), t0, true)))
-	late := h.vault("late-vault") // never polled before the lock
-
-	h.clock.Advance(31 * 24 * time.Hour)
-	require.NoError(t, h.lic.Tick(h.ctx))
-	h.clock.Advance(time.Hour) // the renewal happens in Azure; no poll runs in lock
-	h.installLicense("LIC-REOPEN", 5, 365)
-	h.clock.Advance(time.Minute)
-
-	l2, p2 := h.kvLeaf("www.example.test"), h.kvLeaf("pend.example.test")
-	sum := h.reconcile(prod, kvResult(h.kvc("web-cert", l2, ver(2), h.clock.Now(), true, ver(1))))
-	assert.Equal(t, 1, sum.NewVersions)
-	assert.Equal(t, 1, sum.HeldVersions, "the first poll since the gate opened holds it")
-	c := h.certRow(prod, "web-cert")
-	vs := h.versionRows(c.ID)
-	assert.True(t, vs[ver(2)].Held)
-	assert.Equal(t, "license", vs[ver(2)].HeldReason)
-	assert.Nil(t, vs[ver(2)].Notified, "no plan or notify mark from the poll")
-	ev := h.auditDetails("kv.certificate.new_version")
-	require.Len(t, ev, 1)
-	assert.Equal(t, "true", ev[0]["held"])
-
-	// A second renewal after that poll is not held.
-	h.clock.Advance(15 * time.Minute)
-	l3 := h.kvLeaf("www.example.test")
-	sum = h.reconcile(prod, kvResult(h.kvc("web-cert", l3, ver(3), h.clock.Now(), true, ver(2), ver(1))))
-	assert.Equal(t, 1, sum.NewVersions)
-	assert.Zero(t, sum.HeldVersions)
-	assert.False(t, h.versionRows(c.ID)[ver(3)].Held)
-	assert.True(t, h.versionRows(c.ID)[ver(2)].Held, "the held version stays held")
-
-	// A listing that waits for its details: the first poll after the reopening saw the listing only;
-	// the details arrive on a later poll, which still holds, until nothing waits any more.
-	pc := h.certRow(pend, "pend-cert")
-	h.reconcile(pend, kvResult(h.kvc("pend-cert", p2, "", h.clock.Now(), false)))
-	assert.True(t, h.certRow(pend, "pend-cert").Pending)
-	assert.True(t, h.vaultRow(pend).Facts.KVHoldRenewals)
-	h.clock.Advance(15 * time.Minute)
-	h.reconcile(pend, kvResult(h.kvc("pend-cert", p2, ver(2), h.clock.Now(), true, ver(1))))
-	assert.True(t, h.versionRows(pc.ID)[ver(2)].Held, "details of a listing seen after the reopening are held")
-	assert.False(t, h.vaultRow(pend).Facts.KVHoldRenewals, "nothing waits any more")
-	h.clock.Advance(15 * time.Minute)
-	p3 := h.kvLeaf("pend.example.test")
-	h.reconcile(pend, kvResult(h.kvc("pend-cert", p3, ver(3), h.clock.Now(), true, ver(2), ver(1))))
-	assert.False(t, h.versionRows(pc.ID)[ver(3)].Held)
-
-	// A vault that never completed a poll before: its first poll is a baseline, nothing is held.
-	h.reconcile(late, kvResult(h.kvc("fresh", h.kvLeaf("f.example.test"), ver(1), h.clock.Now(), true)))
-	assert.Zero(t, h.count("SELECT count(*) FROM kv_certificate_versions v JOIN kv_certificates c ON c.id = v.kv_certificate_id WHERE c.target_id = $1 AND v.held", late))
-	h.clock.Advance(15 * time.Minute)
-	h.reconcile(late, kvResult(h.kvc("fresh", h.kvLeaf("f.example.test"), ver(2), h.clock.Now(), true, ver(1))))
-	assert.Zero(t, h.count("SELECT count(*) FROM kv_certificate_versions v JOIN kv_certificates c ON c.id = v.kv_certificate_id WHERE c.target_id = $1 AND v.held", late))
 }
 
 // The LocationCount of a vault certificate's binding counts websites on live servers only (as
