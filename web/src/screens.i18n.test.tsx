@@ -6,12 +6,16 @@ import {
   certificateDetailFixture,
   certificateFixture,
   csrFixture,
+  deploymentDetailFixture,
   deploymentFixture,
   hostKeyFixture,
   keyLocationFixture,
+  locationFixture,
+  nginxTargetFixture,
   platformKeyFixture,
   sessionHandlers,
   sshKeyFixture,
+  stepFixture,
   targetFixture,
   userFor,
 } from './test/fixtures';
@@ -52,7 +56,17 @@ const dataHandlers = [
   http.get('/api/v1/users', () => HttpResponse.json({ items: [userFor('admin'), userFor('operator'), userFor('auditor')] })),
   http.get('/api/v1/tokens', () => HttpResponse.json({ items: [token] })),
   http.get('/api/v1/targets', () => HttpResponse.json({ items: [targetFixture], next_cursor: null })),
-  http.get('/api/v1/targets/:id', () => HttpResponse.json(targetFixture)),
+  http.get('/api/v1/targets/:id', ({ params }) => HttpResponse.json(params.id === nginxTargetFixture.id ? nginxTargetFixture : targetFixture)),
+  http.get('/api/v1/targets/:id/certificate-locations', () =>
+    HttpResponse.json({
+      items: [
+        locationFixture({ warnings: ['symlinked', 'key_mode_open', 'san_mismatch'], key_mode: '0644', changed_outside_at: '2026-10-02T09:00:00Z' }),
+        locationFixture({ id: 'l2', supported: false, unsupported_reason: 'file_problem', problem: 'hard_linked', key_problem: 'unreadable' }),
+        locationFixture({ id: 'l3', missing_since: '2026-10-01T00:00:00Z', active_deployment_id: 'x' }),
+      ],
+      truncated: true,
+    }),
+  ),
   http.get('/api/v1/targets/:id/host-keys', () => HttpResponse.json({ items: [hostKeyFixture()] })),
   http.get('/api/v1/targets/:id/ssh-keys', () => HttpResponse.json({ items: [keyLocationFixture(), aliceKeyLocation] })),
   http.get('/api/v1/ssh-keys', () =>
@@ -68,6 +82,22 @@ const dataHandlers = [
   http.get('/api/v1/certificates', () => HttpResponse.json({ items: [certificateFixture(), certificateFixture({ id: 'c2', has_private_key: false, not_after: '2020-01-01T00:00:00Z' })], next_cursor: 'next' })),
   http.get('/api/v1/certificates/:id', () => HttpResponse.json(certificateDetailFixture({ id: '0192c000-0000-7000-8000-0000000000c1', chain_complete: false }))),
   http.get('/api/v1/deployments', () => HttpResponse.json({ items: [deploymentFixture(), deploymentFixture({ id: 'd2', status: 'needs_attention' })], next_cursor: null })),
+  http.get('/api/v1/deployments/:id', () =>
+    HttpResponse.json(
+      deploymentDetailFixture({
+        status: 'rollback_failed',
+        state: 'recovering',
+        recovery_attempts: 2,
+        recover_after: '2026-10-04T13:00:00Z',
+        backup_dir: '/var/lib/alice-helper/backups/x',
+        failed_step: 'verify_current',
+        helper_error: 'file_changed',
+        error: { code: 'ALC-DEP-0020', reason: 'deployment.rollback_file_changed' },
+        verify_failed: { code: 'ALC-DEP-0004', reason: 'deployment.verify_unreachable', params: { port: '443' } },
+        steps: [stepFixture(1, 'verify_current'), stepFixture(2, 'backup'), stepFixture(3, 'journal', 'failed', { error: 'file_changed' }), stepFixture(4, 'restore')],
+      }),
+    ),
+  ),
   http.get('/api/v1/audit', () => HttpResponse.json({ items: [auditEntry], next_cursor: null })),
 ];
 

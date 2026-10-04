@@ -1,5 +1,5 @@
 import type { SessionInfo, SetupStatus } from '../api/types';
-import { freshStatus, installedStatus, sessionFor, targetFixture } from './fixtures';
+import { freshStatus, installedStatus, nginxTargetFixture, sessionFor, targetFixture } from './fixtures';
 
 export interface Screen {
   path: string;
@@ -64,6 +64,19 @@ export const SCREENS: Screen[] = [
     session: sessionFor('operator'),
     status: installedStatus,
     ready: { en: 'Where this certificate is used', tr: 'Bu sertifikanın kullanıldığı yerler' },
+  },
+  {
+    path: `/servers/${nginxTargetFixture.id}`,
+    session: sessionFor('operator'),
+    status: installedStatus,
+    ready: { en: 'Websites on this server', tr: 'Bu sunucudaki web siteleri' },
+  },
+  { path: '/deployments', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'Needs attention', tr: 'İlgilenilmesi gerekiyor' } },
+  {
+    path: '/deployments/0192c000-0000-7000-8000-0000000000d1',
+    session: sessionFor('operator'),
+    status: installedStatus,
+    ready: { en: 'Steps', tr: 'Adımlar' },
   },
   { path: '/missing', session: null, status: installedStatus, ready: { en: 'Page not found', tr: 'Sayfa bulunamadı' } },
 ];

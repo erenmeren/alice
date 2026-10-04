@@ -21,6 +21,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/', labelKey: 'nav.home', roles: ALL },
   { to: '/servers', labelKey: 'nav.servers', roles: ALL },
   { to: '/certificates', labelKey: 'nav.certificates', roles: ALL },
+  { to: '/deployments', labelKey: 'nav.deployments', roles: ALL },
   { to: '/ssh-keys', labelKey: 'nav.sshKeys', roles: ALL },
   { to: '/users', labelKey: 'nav.users', roles: ['admin'] },
   { to: '/audit', labelKey: 'nav.audit', roles: ['admin', 'auditor'] },

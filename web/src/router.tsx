@@ -7,6 +7,8 @@ import { AccountPage } from './pages/AccountPage';
 import { AuditPage } from './pages/AuditPage';
 import { CertificateDetailPage } from './pages/CertificateDetailPage';
 import { CertificatesPage } from './pages/CertificatesPage';
+import { DeploymentDetailPage } from './pages/DeploymentDetailPage';
+import { DeploymentsPage } from './pages/DeploymentsPage';
 import { HomePage } from './pages/HomePage';
 import { LicensePage } from './pages/LicensePage';
 import { LoginPage } from './pages/LoginPage';
@@ -51,6 +53,8 @@ export function routes(): RouteObject[] {
             { path: 'servers/:id', element: <TargetDetailPage /> },
             { path: 'certificates', element: <CertificatesPage /> },
             { path: 'certificates/:id', element: <CertificateDetailPage /> },
+            { path: 'deployments', element: <DeploymentsPage /> },
+            { path: 'deployments/:id', element: <DeploymentDetailPage /> },
             { path: 'ssh-keys', element: <SSHKeysPage /> },
             { path: 'ssh-keys/:id', element: <SSHKeyDetailPage /> },
             {
