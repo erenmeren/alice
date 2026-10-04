@@ -60,7 +60,7 @@ describe('DeployDialog from a website', () => {
         body = await request.json();
         return HttpResponse.json(accepted([D1, L1]), { status: 202 });
       }),
-      http.get(`/api/v1/deployments/${D1}`, () => HttpResponse.json(deploymentDetailFixture({ id: D1, status, state: 'deploying', steps: [...steps], finished_at: null }))),
+      http.get(`/api/v1/deployments/${D1}`, () => HttpResponse.json(deploymentDetailFixture({ id: D1, status, state: 'deploying', job_status: 'running', steps: [...steps], finished_at: null }))),
     );
     await showDialog({ location: locationFixture({ id: L1, key_type: 'ecdsa' }) });
     await userEvent.selectOptions(await screen.findByLabelText('Certificate'), NEW_ID);
@@ -343,11 +343,11 @@ describe('DeployDialog from a certificate', () => {
   it('shows a server refusal of the whole request and stays open', async () => {
     asRole('operator');
     certServer([l1]);
-    server.use(http.post(`/api/v1/certificates/${NEW_ID}/deploy`, () => errorResponse(403, 'ALC-AUTH-0004', 'auth.forbidden')));
+    server.use(http.post(`/api/v1/certificates/${NEW_ID}/deploy`, () => errorResponse(403, 'ALC-AUTH-0002', 'auth.forbidden')));
     await showDialog({ certificate: NEW_CERT });
     await userEvent.click(await screen.findByRole('checkbox'));
     await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
-    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('You do not have permission to do this.');
     expect(screen.getByRole('button', { name: 'Deploy' })).toBeEnabled();
   });
 
@@ -357,6 +357,165 @@ describe('DeployDialog from a certificate', () => {
     await showDialog({ certificate: NEW_CERT });
     expect(await screen.findByText(/not used on any website that Alice can deploy to/)).toBeInTheDocument();
   });
+});
+
+describe('DeployDialog states', () => {
+  async function runWith(d: Partial<DeploymentDetail>) {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    server.use(
+      http.post(`/api/v1/certificates/${NEW_ID}/deploy`, () => HttpResponse.json(accepted([D1, L1]), { status: 202 })),
+      http.get(`/api/v1/deployments/${D1}`, () => HttpResponse.json(deploymentDetailFixture({ id: D1, ...d }))),
+    );
+    await showDialog({ location: locationFixture({ id: L1 }) });
+    await userEvent.selectOptions(await screen.findByLabelText('Certificate'), NEW_ID);
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
+  }
+
+  it('says "no change needed" for an unchanged deployment', async () => {
+    await runWith({ status: 'unchanged', result: 'unchanged', verified: 'skipped' });
+    expect(await screen.findByText('This certificate was already in place. Nothing was changed.')).toBeInTheDocument();
+    expect(screen.queryByText('The new certificate is live and verified.')).not.toBeInTheDocument();
+  });
+
+  it('says nothing was changed for a failed deployment and shows the error', async () => {
+    await runWith({ status: 'failed', error: { code: 'ALC-DEP-0007', reason: 'deployment.config_test_failed' }, steps: [stepFixture(1, 'backup'), stepFixture(2, 'config_test', 'failed')] });
+    expect(await screen.findByText('Nothing was changed on the server.')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('ALC-DEP-0007');
+  });
+
+  it('words rollback_failed by what is known: the files are back but the website is unconfirmed', async () => {
+    await runWith({ status: 'rollback_failed', phase: 'restored', backup_dir: '/var/lib/alice-helper/backups/x', error: { code: 'ALC-DEP-0019', reason: 'deployment.restored_unverified' } });
+    expect(await screen.findByText(/The previous files are back, but Alice could not confirm that the website serves the previous certificate/)).toBeInTheDocument();
+    expect(screen.queryByText(/Automatic restore failed/)).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('ALC-DEP-0019');
+  });
+
+  it('words rollback_failed without a restored phase as: Alice cannot confirm which certificate the website serves', async () => {
+    await runWith({ status: 'rollback_failed', phase: 'restore_failed', error: { code: 'ALC-DEP-0008', reason: 'deployment.rollback_failed' } });
+    expect(await screen.findByText('Alice cannot confirm which certificate the website serves. Manual action is needed.')).toBeInTheDocument();
+    expect(screen.queryByText(/The previous files are back/)).not.toBeInTheDocument();
+  });
+
+  it('says a job that ended while the record is not final is stopped, and stops polling', async () => {
+    await runWith({ status: 'running', state: 'deploying', job_status: 'dead', finished_at: null });
+    expect(await screen.findByText(/The background job ended before the deployment did/)).toBeInTheDocument();
+  });
+
+  it('says a job that succeeded while the record still runs is being finished, and keeps following', async () => {
+    let polls = 0;
+    server.use(
+      http.get(`/api/v1/deployments/${D1}`, () => {
+        polls += 1;
+        return HttpResponse.json(deploymentDetailFixture({ id: D1, status: polls < 3 ? 'running' : 'succeeded', state: 'deploying', job_status: 'succeeded', finished_at: null }));
+      }),
+    );
+    asRole('operator');
+    certificates([NEW_CERT]);
+    server.use(http.post(`/api/v1/certificates/${NEW_ID}/deploy`, () => HttpResponse.json(accepted([D1, L1]), { status: 202 })));
+    await showDialog({ location: locationFixture({ id: L1 }) });
+    await userEvent.selectOptions(await screen.findByLabelText('Certificate'), NEW_ID);
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
+    expect(await screen.findByText('The background job has finished. Alice is recording the result.')).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(await screen.findByText('The new certificate is live and verified.')).toBeInTheDocument();
+  });
+
+  it('moves focus to the progress view when the deployments start', async () => {
+    await runWith({ status: 'running', state: 'deploying', job_status: 'running', finished_at: null });
+    await screen.findByRole('list', { name: 'Steps' });
+    const view = screen.getByRole('list', { name: 'Steps' }).closest('[tabindex="-1"]') as HTMLElement;
+    expect(view).toHaveFocus();
+  });
+
+  it('forgets the incomplete-chain confirmation when another certificate is chosen', async () => {
+    asRole('admin');
+    certificates([certificateFixture({ id: NEW_ID, chain_complete: false }), certificateFixture({ id: 'other', chain_complete: false })]);
+    await showDialog({ location: locationFixture({ id: L1 }) });
+    const select = await screen.findByLabelText('Certificate');
+    await userEvent.selectOptions(select, NEW_ID);
+    await userEvent.click(await screen.findByLabelText('I confirm that this incomplete chain is intended'));
+    expect(screen.getByRole('button', { name: 'Deploy' })).toBeEnabled();
+    await userEvent.selectOptions(select, 'other');
+    expect(screen.getByLabelText('I confirm that this incomplete chain is intended')).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Deploy' })).toBeDisabled();
+  });
+
+  it('cannot be cancelled or closed while the request is on its way', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    server.use(
+      http.post(`/api/v1/certificates/${NEW_ID}/deploy`, async () => {
+        await gate;
+        return HttpResponse.json(accepted([D1, L1]), { status: 202 });
+      }),
+      http.get(`/api/v1/deployments/${D1}`, () => HttpResponse.json(deploymentDetailFixture({ id: D1 }))),
+    );
+    await showDialog({ location: locationFixture({ id: L1 }) });
+    await userEvent.selectOptions(await screen.findByLabelText('Certificate'), NEW_ID);
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByText('The new certificate is live and verified.')).toBeInTheDocument();
+  });
+
+  it('does not offer a key type the server does not deploy when the website does not report one', async () => {
+    asRole('operator');
+    certificates([certificateFixture({ id: 'ed', key_algorithm: 'ed25519' }), certificateFixture({ id: 'ok', key_algorithm: 'rsa' })]);
+    await showDialog({ location: locationFixture({ id: L1, key_type: '' }) });
+    const options = within(await screen.findByLabelText('Certificate')).getAllByRole('option').map((o) => o.getAttribute('value'));
+    expect(options).toEqual(['', 'ok']);
+  });
+
+  it('says when the list of certificates was cut', async () => {
+    asRole('operator');
+    let page = 0;
+    server.use(http.get('/api/v1/certificates', () => HttpResponse.json({ items: [NEW_CERT], next_cursor: String((page += 1)) })));
+    await showDialog({ location: locationFixture({ id: L1 }) });
+    expect(await screen.findByText(/The list of certificates was cut after 10000 entries/)).toBeInTheDocument();
+  });
+
+  it('counts only succeeded deployments as updated, and says which are still open', async () => {
+    asRole('operator');
+    const l2 = locationFixture({ id: L2, cert_path: '/etc/nginx/ssl/api.crt' });
+    server.use(
+      http.get(`/api/v1/certificates/${NEW_ID}`, () => HttpResponse.json(certificateDetailFixture({ id: NEW_ID, locations: [locationFixture({ id: L1 }), l2] }))),
+      http.post(`/api/v1/certificates/${NEW_ID}/deploy`, () => HttpResponse.json(accepted([D1, L1], [D2, L2]), { status: 202 })),
+      http.get(`/api/v1/deployments/${D1}`, () => HttpResponse.json(deploymentDetailFixture({ id: D1, location_id: L1 }))),
+      http.get(`/api/v1/deployments/${D2}`, () => HttpResponse.json(deploymentDetailFixture({ id: D2, location_id: L2, status: 'needs_attention', state: 'recovering', finished_at: null }))),
+    );
+    await showDialog({ certificate: NEW_CERT });
+    await userEvent.click(await screen.findAllByRole('checkbox').then((b) => b[0]));
+    await userEvent.click(screen.getAllByRole('checkbox')[1]);
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
+    expect(await screen.findByText('Updated websites: 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Websites not finished yet: 1. Follow them in the deployment history.')).toBeInTheDocument();
+  });
+
+  it('follows 20 websites with one loop, far below the session request limit', async () => {
+    asRole('operator');
+    const places = Array.from({ length: 20 }, (_, i) => locationFixture({ id: `p${i}`, cert_path: `/etc/nginx/ssl/${i}.crt` }));
+    let reads = 0;
+    server.use(
+      http.get(`/api/v1/certificates/${NEW_ID}`, () => HttpResponse.json(certificateDetailFixture({ id: NEW_ID, locations: places }))),
+      http.post(`/api/v1/certificates/${NEW_ID}/deploy`, () => HttpResponse.json(accepted(...places.map((p, i): [string, string] => [`d${i}`, p.id])), { status: 202 })),
+      http.get('/api/v1/deployments/:id', ({ params }) => {
+        reads += 1;
+        return HttpResponse.json(deploymentDetailFixture({ id: String(params.id), status: 'running', state: 'deploying', job_status: 'running', finished_at: null }));
+      }),
+    );
+    await showDialog({ certificate: NEW_CERT });
+    for (const b of await screen.findAllByRole('checkbox')) await userEvent.click(b);
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
+    await screen.findAllByRole('list', { name: 'Steps' });
+    reads = 0;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reads).toBeLessThanOrEqual(125);
+    expect(reads).toBeGreaterThan(40);
+  }, 30_000);
 });
 
 describe('DeployDialog polling', () => {
@@ -371,7 +530,7 @@ describe('DeployDialog polling', () => {
 
   it('stops after the deadline with "still working" and a link to the history', async () => {
     let polls = 0;
-    server.use(http.get(`/api/v1/deployments/${D1}`, () => ((polls += 1), HttpResponse.json(deploymentDetailFixture({ id: D1, status: 'running', state: 'deploying', finished_at: null })))));
+    server.use(http.get(`/api/v1/deployments/${D1}`, () => ((polls += 1), HttpResponse.json(deploymentDetailFixture({ id: D1, status: 'running', state: 'deploying', job_status: 'running', finished_at: null })))));
     await start();
     await screen.findByRole('list', { name: 'Steps' });
     await vi.advanceTimersByTimeAsync(125_000);
@@ -403,7 +562,7 @@ describe('DeployDialog polling', () => {
     server.use(http.get(`/api/v1/deployments/${D1}`, () => HttpResponse.error()));
     await start();
     await vi.advanceTimersByTimeAsync(125_000);
-    expect(await screen.findByText(/Alice cannot reach itself right now/)).toBeInTheDocument();
+    expect(await screen.findByText(/Your browser cannot reach Alice right now/)).toBeInTheDocument();
   });
 
   it('shows a deployment that Alice is finishing after a lost connection, and stops polling', async () => {
@@ -419,13 +578,14 @@ describe('DeployDialog polling', () => {
             recovery_attempts: 3,
             recover_after: '2026-10-04T12:05:00Z',
             error: { code: 'ALC-SSH-0001', reason: 'ssh.unreachable' },
+            job_status: 'failed',
             finished_at: null,
           }),
         );
       }),
     );
     await start();
-    expect(await screen.findByText('The connection to the server was lost. Alice will check the server and finish or undo the change.')).toBeInTheDocument();
+    expect(await screen.findByText('Alice could not confirm yet how this deployment ended. It is checking the server and will finish or undo the change.')).toBeInTheDocument();
     const seen = polls;
     await vi.advanceTimersByTimeAsync(5_000);
     expect(polls).toBe(seen);
@@ -440,7 +600,7 @@ describe('DeployDialog polling', () => {
 
   it('stops following when the dialog closes', async () => {
     let polls = 0;
-    server.use(http.get(`/api/v1/deployments/${D1}`, () => ((polls += 1), HttpResponse.json(deploymentDetailFixture({ id: D1, status: 'running', state: 'deploying', finished_at: null })))));
+    server.use(http.get(`/api/v1/deployments/${D1}`, () => ((polls += 1), HttpResponse.json(deploymentDetailFixture({ id: D1, status: 'running', state: 'deploying', job_status: 'running', finished_at: null })))));
     await start();
     await screen.findByRole('list', { name: 'Steps' });
     await userEvent.click(screen.getAllByRole('button', { name: 'Close' })[1]);

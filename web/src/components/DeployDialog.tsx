@@ -1,9 +1,9 @@
 import { Alert, Badge, Box, Button, Checkbox, Code, Group, Loader, NativeSelect, Stack, Text } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { certificateBlock, deployCandidates, listAllCertificates, MAX_DEPLOY_LOCATIONS } from '../api/deployable';
-import { isSettled, watchDeployment } from '../api/deployments';
+import { certificateBlock, deployCandidates, listAllCertificates, MAX_CERTIFICATES, MAX_DEPLOY_LOCATIONS } from '../api/deployable';
+import { deploymentView, isSettled, watchDeployments } from '../api/deployments';
 import { deployCertificate, getCertificate } from '../api/endpoints';
 import { keyAlgorithmKey, unsupportedReasonKey, fileProblemKey } from '../api/enums';
 import { isApiError } from '../api/client';
@@ -21,6 +21,7 @@ import { ErrorAlert } from './ErrorAlert';
 import { useNow } from './Expiry';
 import { InternalLink } from './InternalLink';
 import { LocationWarning } from './LocationWarning';
+import { SiteName } from './SiteName';
 import { useSiteLabel } from './useSiteLabel';
 import { WRAP } from './wrap';
 
@@ -39,9 +40,20 @@ export interface DeployDialogProps {
 // deployment says succeeded.
 export function DeployDialog({ opened, onClose, certificate, location }: DeployDialogProps) {
   const { t } = useTranslation();
+  // While the request is on its way the dialog cannot be closed: closing then would orphan
+  // deployments the person has not seen.
+  const [sending, setSending] = useState(false);
   return (
-    <AppModal opened={opened} onClose={onClose} title={t('deploy.title')} size="lg">
-      {opened && <DeployForm certificate={certificate} location={location} onClose={onClose} />}
+    <AppModal
+      opened={opened}
+      onClose={onClose}
+      title={t('deploy.title')}
+      size="lg"
+      closeOnClickOutside={!sending}
+      closeOnEscape={!sending}
+      withCloseButton={!sending}
+    >
+      {opened && <DeployForm certificate={certificate} location={location} onClose={onClose} onSending={setSending} />}
     </AppModal>
   );
 }
@@ -56,7 +68,17 @@ interface Run {
   failed: unknown;
 }
 
-function DeployForm({ certificate, location, onClose }: { certificate?: Certificate; location?: CertificateLocation; onClose: () => void }) {
+function DeployForm({
+  certificate,
+  location,
+  onClose,
+  onSending,
+}: {
+  certificate?: Certificate;
+  location?: CertificateLocation;
+  onClose: () => void;
+  onSending: (sending: boolean) => void;
+}) {
   const { t, i18n } = useTranslation();
   const { session } = useAuth();
   const client = useQueryClient();
@@ -79,8 +101,14 @@ function DeployForm({ certificate, location, onClose }: { certificate?: Certific
   const [error, setError] = useState<unknown>(null);
   const [refused, setRefused] = useState<string | null>(null);
   const [runs, setRuns] = useState<Run[] | null>(null);
+  const runsRef = useRef<HTMLDivElement>(null);
+  const started = runs !== null;
+  // The runs view replaces the form: focus moves to it so keyboard and screen reader users follow.
+  useEffect(() => {
+    if (started) runsRef.current?.focus();
+  }, [started]);
 
-  const candidates = certs.data && location ? deployCandidates(certs.data, location, now) : [];
+  const candidates = certs.data && location ? deployCandidates(certs.data.items, location, now) : [];
   const chosen: Certificate | undefined = certificate ?? candidates.find((c) => c.id === chosenId);
   const block = chosen ? certificateBlock(chosen, now) : null;
   const incompleteChain = chosen !== undefined && !chosen.chain_complete;
@@ -102,23 +130,31 @@ function DeployForm({ certificate, location, onClose }: { certificate?: Certific
 
   const patch = (id: string, change: Partial<Run>) => setRuns((rs) => (rs ? rs.map((r) => (r.id === id ? { ...r, ...change } : r)) : rs));
 
+  // follow reads the whole batch with ONE loop (see watchDeployments): the request rate does not
+  // grow with the number of websites.
   const follow = (res: DeployResult) => {
     setRuns(res.deployments.map((d) => ({ id: d.id, locationId: d.location_id, warnings: d.warnings, deployment: null, timedOut: false, connectionLost: false, failed: null })));
-    for (const d of res.deployments) {
-      watchDeployment(d.id, { signal: abort.signal(), onUpdate: (dep) => patch(d.id, { deployment: dep }) })
-        .then((r) => {
-          patch(d.id, { deployment: r.deployment, timedOut: r.timedOut, connectionLost: r.connectionLost });
+    watchDeployments(
+      res.deployments.map((d) => d.id),
+      {
+        signal: abort.signal(),
+        onUpdate: (id, dep) => patch(id, { deployment: dep }),
+        onDone: (id, r) => {
+          patch(id, { deployment: r.deployment, timedOut: r.timedOut, connectionLost: r.connectionLost });
           refresh();
-        })
-        .catch((e: unknown) => {
-          if (!isAbort(e)) patch(d.id, { failed: e });
-        });
-    }
+        },
+      },
+    ).catch((e: unknown) => {
+      if (isAbort(e)) return;
+      // A read that cannot succeed (not a dropped connection): the runs still open show the error.
+      setRuns((rs) => (rs ? rs.map((r) => (r.deployment !== null && isSettled(r.deployment) ? r : { ...r, failed: e })) : rs));
+    });
   };
 
   const submit = async () => {
     if (!chosen || !ready) return;
     setBusy(true);
+    onSending(true);
     setError(null);
     setRefused(null);
     try {
@@ -134,6 +170,7 @@ function DeployForm({ certificate, location, onClose }: { certificate?: Certific
       if (isApiError(e) && e.params.location_id) setRefused(e.params.location_id);
     }
     setBusy(false);
+    onSending(false);
   };
 
   const close = () => {
@@ -144,11 +181,15 @@ function DeployForm({ certificate, location, onClose }: { certificate?: Certific
 
   if (runs) {
     const anyWorking = runs.some((r) => !r.failed && !r.timedOut && (r.deployment === null || !isSettled(r.deployment)));
-    const allSettled = runs.every((r) => r.deployment !== null && isSettled(r.deployment));
-    const ok = runs.filter((r) => r.deployment?.status === 'succeeded' || r.deployment?.status === 'unchanged').length;
+    const views = runs.map((r) => (r.deployment ? deploymentView(r.deployment) : null));
+    const allFinal = views.every((v) => v === 'final');
+    // Runs that are settled for polling but not over (recovering, held, stopped, unknown) or that the
+    // screen stopped following are still open.
+    const open = runs.length - views.filter((v) => v === 'final').length;
+    const ok = runs.filter((r) => r.deployment?.status === 'succeeded').length;
     const multi = runs.length > 1;
     return (
-      <Stack gap="md">
+      <Stack gap="md" ref={runsRef} tabIndex={-1} aria-label={t('deploy.title')} style={{ outline: 'none' }}>
         {anyWorking && (
           <Group gap="sm" role="status" aria-live="polite">
             <Loader size="sm" aria-hidden />
@@ -164,8 +205,8 @@ function DeployForm({ certificate, location, onClose }: { certificate?: Certific
               <Stack gap="xs">
                 {multi && loc && (
                   <Group gap="xs">
-                    <Text size="sm" fw={600} translate="no">
-                      {siteLabel(loc)}
+                    <Text size="sm" fw={600}>
+                      <SiteName loc={loc} />
                     </Text>
                     <Text size="sm" c="gray.7" translate="no">
                       {loc.target_name}
@@ -199,10 +240,13 @@ function DeployForm({ certificate, location, onClose }: { certificate?: Certific
             </Box>
           );
         })}
-        {multi && allSettled && (
-          <Text size="sm" fw={600} role="status">
-            {t('deploy.partial', { ok, total: runs.length })}
-          </Text>
+        {multi && !anyWorking && (
+          <Stack gap={2} role="status">
+            <Text size="sm" fw={600}>
+              {t('deploy.partial', { ok, total: runs.length })}
+            </Text>
+            {!allFinal && <Text size="sm">{t('deploy.partialOpen', { open })}</Text>}
+          </Stack>
         )}
         <Group justify="space-between">
           <InternalLink to="/deployments" size="sm">
@@ -229,12 +273,16 @@ function DeployForm({ certificate, location, onClose }: { certificate?: Certific
           <>
             {certs.isPending && <Loader size="sm" aria-label={t('ui.loading')} />}
             <ErrorAlert error={certs.error} />
+            {certs.data?.cut && <Alert color="yellow" role="status">{t('deploy.listCut', { count: MAX_CERTIFICATES })}</Alert>}
             {certs.isSuccess && candidates.length === 0 && <Text size="sm">{t('deploy.noCandidates')}</Text>}
             {candidates.length > 0 && (
               <NativeSelect
                 label={t('deploy.certificate')}
                 value={chosenId}
-                onChange={(e) => setChosenId(e.currentTarget.value)}
+                onChange={(e) => {
+                  setChosenId(e.currentTarget.value);
+                  setConfirmChain(false);
+                }}
                 data={[
                   { value: '', label: t('deploy.chooseCertificate') },
                   ...candidates.map((c) => ({
@@ -267,8 +315,11 @@ function DeployForm({ certificate, location, onClose }: { certificate?: Certific
               p="xs"
               style={refused === location.id ? { border: '2px solid var(--mantine-color-red-9)', borderRadius: 4 } : undefined}
             >
-              <Text size="sm" translate="no">
-                {siteLabel(location)} <Text span c="gray.7">{location.target_name}</Text>
+              <Text size="sm">
+                <SiteName loc={location} />{' '}
+                <Text span c="gray.7" translate="no">
+                  {location.target_name}
+                </Text>
               </Text>
               <Code translate="no" style={WRAP}>
                 {location.cert_path}
@@ -289,7 +340,7 @@ function DeployForm({ certificate, location, onClose }: { certificate?: Certific
               <ErrorAlert error={detail.error} />
               {detail.isSuccess && places.length === 0 && <Text size="sm">{t('deploy.noWebsites')}</Text>}
               {places.map((p) => (
-                <WebsiteChoice key={p.id} place={p} name={siteLabel(p)} refused={refused === p.id} refusedText={refusedText} disabled={!canDeployTo(p)} />
+                <WebsiteChoice key={p.id} place={p} refused={refused === p.id} refusedText={refusedText} disabled={!canDeployTo(p)} />
               ))}
             </Stack>
           </Checkbox.Group>
@@ -311,7 +362,7 @@ function DeployForm({ certificate, location, onClose }: { certificate?: Certific
         <ErrorAlert error={error} />
 
         <Group justify="flex-end">
-          <Button variant="default" onClick={close}>
+          <Button variant="default" onClick={close} disabled={busy}>
             {t('deploy.cancel')}
           </Button>
           <Button type="submit" loading={busy} disabled={!ready}>
@@ -325,7 +376,7 @@ function DeployForm({ certificate, location, onClose }: { certificate?: Certific
 
 // WebsiteChoice is one tickable website of a certificate: where it is, why it cannot be chosen, and
 // (after a refusal) that the server stopped here.
-function WebsiteChoice({ place, name, refused, refusedText, disabled }: { place: CertificateLocation; name: string; refused: boolean; refusedText: string; disabled: boolean }) {
+function WebsiteChoice({ place, refused, refusedText, disabled }: { place: CertificateLocation; refused: boolean; refusedText: string; disabled: boolean }) {
   const { t } = useTranslation();
   const reason = !place.supported
     ? t(unsupportedReasonKey(place.unsupported_reason))
@@ -343,8 +394,12 @@ function WebsiteChoice({ place, name, refused, refusedText, disabled }: { place:
         disabled={disabled}
         error={refused ? refusedText : undefined}
         label={
-          <span translate="no">
-            {name} <Text span c="gray.7">{place.target_name}</Text> <Code>{place.cert_path}</Code>
+          <span>
+            <SiteName loc={place} />{' '}
+            <Text span c="gray.7" translate="no">
+              {place.target_name}
+            </Text>{' '}
+            <Code translate="no">{place.cert_path}</Code>
           </span>
         }
       />
