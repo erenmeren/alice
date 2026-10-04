@@ -64,15 +64,17 @@ func (s *Service) KVDeployMaterial(ctx context.Context, id uuid.UUID, secret pro
 	}
 	// Whatever the request relied on is judged again before the secret is looked at (C1, I1): a
 	// refusal here reads nothing, writes nothing and audits nothing.
-	if err := s.KVDeployPrecheck(ctx, id); err != nil {
-		return Material{}, err
-	}
-	// From here on the vault's secret is in Alice's memory: a refusal is audited (R40 row 34).
+	// From here on the vault's secret is in Alice's memory (the engine read it, ideally after its own
+	// KVDeployPrecheck): every refusal, the shared check's included, is audited (R40 row 34) and the
+	// secret is zeroed.
 	refuse := func(reason string, err error) (Material, error) {
 		if aerr := s.auditSecretReadFailure(ctx, m, reason); aerr != nil {
 			return Material{}, aerr
 		}
 		return Material{}, err
+	}
+	if err := s.KVDeployPrecheck(ctx, id); err != nil {
+		return refuse(precheckReason(err), err)
 	}
 	release, ok := acquirePFXSlot()
 	if !ok {
@@ -136,11 +138,34 @@ func (s *Service) KVDeployMaterial(ctx context.Context, id uuid.UUID, secret pro
 // that is handed to the caller on success). Tests only: it is nil in production.
 var kvMaterialHook func(stage string, b []byte)
 
+// precheckReason is the closed reason an audit row gives for a refusal of KVDeployPrecheck.
+func precheckReason(err error) string {
+	switch {
+	case errors.Is(err, ErrBindingGone):
+		return "binding_gone"
+	case errors.Is(err, ErrAutoDeployOff):
+		return "auto_deploy_off"
+	case errors.Is(err, ErrVaultUnavailable):
+		return "vault_unavailable"
+	case errors.Is(err, ErrKVCertificateMissing):
+		return "certificate_missing"
+	case errors.Is(err, ErrVersionDisabled):
+		return "version_disabled"
+	case errors.Is(err, ErrCertificateExpired):
+		return "expired"
+	case errors.Is(err, ErrCertificateNotYetValid):
+		return "not_yet_valid"
+	case errors.Is(err, ErrVersionHeld):
+		return "version_held"
+	}
+	return "refused"
+}
+
 // KVDeployPrecheck judges, without reading the vault, whether the deployment may still have its secret
 // read and its key handed out. The engine calls it before it reads the secret (so no key reaches memory
 // and no sibling of a wave reads in vain); KVDeployMaterial calls it again as its own first step.
 // Nothing is written. Refusals, in this order: ErrNotFound (no such deployment); ErrDeploymentState (not a
-// Key Vault deployment); ErrBindingGone (the binding was removed, or the website no longer belongs to
+// Key Vault deployment, or past its pre-check: only a queued or pre-check deployment may read); ErrBindingGone (the binding was removed, or the website no longer belongs to
 // it); ErrAutoDeployOff (an automatic deployment of a binding whose automatic deployment is off);
 // ErrVaultUnavailable (vault disabled or deleted); ErrKVCertificateMissing; ErrVersionDisabled;
 // ErrCertificateExpired and ErrCertificateNotYetValid (as far as the stored rows know); and
@@ -149,7 +174,7 @@ var kvMaterialHook func(stage string, b []byte)
 // request only a version that was not held, so a hold that came later stops it).
 func (s *Service) KVDeployPrecheck(ctx context.Context, id uuid.UUID) error {
 	var (
-		trigger                           string
+		trigger, state                    string
 		binding, locBinding               *uuid.UUID
 		bindingLive, auto, vaultDeleted   bool
 		certMissing, enabled, held, admin bool
@@ -157,7 +182,7 @@ func (s *Service) KVDeployPrecheck(ctx context.Context, id uuid.UUID) error {
 		vExpires, vNotBefore              *time.Time
 		cNotBefore, cNotAfter             time.Time
 	)
-	err := s.pool.QueryRow(ctx, `SELECT d.trigger, d.binding_id, l.binding_id, b.id IS NOT NULL AND b.deleted_at IS NULL, coalesce(b.auto_deploy, false),
+	err := s.pool.QueryRow(ctx, `SELECT d.trigger, d.state, d.binding_id, l.binding_id, b.id IS NOT NULL AND b.deleted_at IS NULL, coalesce(b.auto_deploy, false),
     vt.status, vt.deleted_at IS NOT NULL, kc.missing_since IS NOT NULL, v.enabled, v.expires, v.not_before, v.held,
     c.not_before, c.not_after, coalesce(u.role = 'admin' AND u.disabled_at IS NULL, false)
 FROM deployments d
@@ -168,7 +193,7 @@ JOIN certificate_locations l ON l.id = d.location_id
 JOIN certificates c ON c.id = d.certificate_id
 LEFT JOIN bindings b ON b.id = d.binding_id
 LEFT JOIN users u ON u.id = d.requested_by
-WHERE d.id = $1`, id).Scan(&trigger, &binding, &locBinding, &bindingLive, &auto, &vaultStatus, &vaultDeleted, &certMissing, &enabled,
+WHERE d.id = $1`, id).Scan(&trigger, &state, &binding, &locBinding, &bindingLive, &auto, &vaultStatus, &vaultDeleted, &certMissing, &enabled,
 		&vExpires, &vNotBefore, &held, &cNotBefore, &cNotAfter, &admin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var one int
@@ -182,6 +207,8 @@ WHERE d.id = $1`, id).Scan(&trigger, &binding, &locBinding, &bindingLive, &auto,
 	}
 	now := s.clock.Now().UTC()
 	switch {
+	case state != DeployStateQueued && state != DeployStatePrecheck:
+		return ErrDeploymentState
 	case binding == nil || !bindingLive || locBinding == nil || *locBinding != *binding:
 		return ErrBindingGone
 	case trigger == triggerKVRenewal && !auto:

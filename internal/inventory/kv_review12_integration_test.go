@@ -44,6 +44,13 @@ func (b *bindFixture) fullSecret() ([]byte, providers.CertificateSecret) {
 	return pemSecret(string(b.webLeaf.KeyPEM) + string(b.webLeaf.FullchainPEM))
 }
 
+// reasonOfRefusal is the closed reason of the failure row of a refusal that came with a secret in hand.
+var reasonOfRefusal = map[error]string{
+	inventory.ErrBindingGone: "binding_gone", inventory.ErrAutoDeployOff: "auto_deploy_off", inventory.ErrVaultUnavailable: "vault_unavailable",
+	inventory.ErrKVCertificateMissing: "certificate_missing", inventory.ErrVersionDisabled: "version_disabled",
+	inventory.ErrCertificateExpired: "expired", inventory.ErrCertificateNotYetValid: "not_yet_valid", inventory.ErrVersionHeld: "version_held",
+}
+
 // C1: a queued deployment gets no key once its binding is gone, its website left the binding, or (for
 // an automatic deployment) automatic deployment was switched off. Nothing is read, written or audited.
 func TestKVDeployMaterialRefusesAfterUnbinding(t *testing.T) {
@@ -59,10 +66,13 @@ func TestKVDeployMaterialRefusesAfterUnbinding(t *testing.T) {
 			assert.ErrorIs(t, err, want)
 			assert.Zero(t, len(m.PrivateKeyPEM.Bytes()), "no key is handed out")
 			assert.True(t, allZero(raw), "the secret is zeroed")
-			assert.Zero(t, h.count("SELECT count(*) FROM audit_log WHERE action = 'kv.secret_read'"), "a pre-read refusal is not a read")
+			assert.Equal(t, 1, h.secretReads("failure"), "the secret was in hand: the refusal is audited")
+			assert.Zero(t, h.secretReads("success"))
+			assert.Equal(t, reasonOfRefusal[want], h.auditDetails("kv.secret_read")[0]["reason"])
 			after, _ := b.certPEM(pki.Fingerprint(b.webLeaf.Cert))
 			assert.Equal(t, before, after, "nothing is written")
 			assert.ErrorIs(t, h.svc.KVDeployPrecheck(ctx, id), want, "the engine can ask before it reads the vault")
+			assert.Equal(t, 1, h.count("SELECT count(*) FROM audit_log WHERE action = 'kv.secret_read'"), "asking writes nothing")
 			require.NoError(t, h.svc.FinishDeployment(ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: "deployment.binding_gone"}),
 				"the deployment ends failed cleanly")
 		})
@@ -171,8 +181,10 @@ func TestKVDeployMaterialRefusesWhatChangedSinceTheRequest(t *testing.T) {
 			}
 			assert.ErrorIs(t, err, tc.want)
 			assert.Zero(t, len(m.PrivateKeyPEM.Bytes()))
-			assert.Zero(t, h.count("SELECT count(*) FROM audit_log WHERE action = 'kv.secret_read'"), "no read happened")
+			assert.Equal(t, 1, h.secretReads("failure"), "the secret was in hand: audited, with the closed reason")
+			assert.Equal(t, reasonOfRefusal[tc.want], h.auditDetails("kv.secret_read")[0]["reason"])
 			assert.ErrorIs(t, h.svc.KVDeployPrecheck(ctx, id), tc.want)
+			assert.Equal(t, 1, h.count("SELECT count(*) FROM audit_log WHERE action = 'kv.secret_read'"), "asking writes nothing")
 		})
 	}
 
@@ -189,12 +201,13 @@ func TestKVDeployMaterialRefusesWhatChangedSinceTheRequest(t *testing.T) {
 		_, err = h.svc.KVDeployMaterial(ctx, ids[0], s)
 		require.ErrorIs(t, err, inventory.ErrChainUnconfirmed)
 		reads := h.count("SELECT count(*) FROM audit_log WHERE action = 'kv.secret_read'")
+		assert.ErrorIs(t, h.svc.KVDeployPrecheck(ctx, ids[1]), inventory.ErrVersionHeld, "the engine's check refuses before any read")
+		assert.Equal(t, reads, h.count("SELECT count(*) FROM audit_log WHERE action = 'kv.secret_read'"), "and writes nothing")
 		raw, secret := b.fullSecret()
 		_, err = h.svc.KVDeployMaterial(ctx, ids[1], secret)
 		assert.ErrorIs(t, err, inventory.ErrVersionHeld)
 		assert.True(t, allZero(raw))
-		assert.Equal(t, reads, h.count("SELECT count(*) FROM audit_log WHERE action = 'kv.secret_read'"), "the sibling never read")
-		assert.ErrorIs(t, h.svc.KVDeployPrecheck(ctx, ids[1]), inventory.ErrVersionHeld)
+		assert.Equal(t, reads+1, h.count("SELECT count(*) FROM audit_log WHERE action = 'kv.secret_read'"), "a caller that skipped the check is audited")
 	})
 }
 
@@ -456,4 +469,93 @@ func TestKVDeployPrecheckKnowsItsDeployments(t *testing.T) {
 	assert.NoError(t, h.svc.KVDeployPrecheck(ctx, id))
 	b.exec("UPDATE kv_certificates SET missing_since = now() WHERE id = $1", b.web)
 	assert.ErrorIs(t, h.svc.KVDeployPrecheck(ctx, id), inventory.ErrKVCertificateMissing)
+}
+
+// TestKVDeployPrecheck: every state the engine's pre-read check judges, without a secret and without a
+// write (no audit row, no change).
+func TestKVDeployPrecheck(t *testing.T) {
+	type row struct {
+		name   string
+		auto   bool
+		mutate func(b *bindFixture, bind inventory.Binding, id, v1 uuid.UUID)
+		want   error
+	}
+	for _, tc := range []row{
+		{"untouched", false, func(*bindFixture, inventory.Binding, uuid.UUID, uuid.UUID) {}, nil},
+		{"binding removed", false, func(b *bindFixture, bind inventory.Binding, _, _ uuid.UUID) {
+			require.NoError(b.h.t, b.h.svc.DeleteBinding(b.h.ctx, b.admin, bind.ID))
+		}, inventory.ErrBindingGone},
+		{"website released", false, func(b *bindFixture, bind inventory.Binding, _, _ uuid.UUID) {
+			_, err := b.h.svc.UpdateBindingLocations(b.h.ctx, b.admin, bind.ID, bind.Version, []uuid.UUID{b.loc2})
+			require.NoError(b.h.t, err)
+		}, inventory.ErrBindingGone},
+		{"automatic deployment off", true, func(b *bindFixture, bind inventory.Binding, _, _ uuid.UUID) {
+			cur, err := b.h.svc.Binding(b.h.ctx, bind.ID)
+			require.NoError(b.h.t, err)
+			_, err = b.h.svc.SetAutoDeploy(b.h.ctx, b.admin, bind.ID, cur.Version, false)
+			require.NoError(b.h.t, err)
+		}, inventory.ErrAutoDeployOff},
+		{"vault disabled", false, func(b *bindFixture, _ inventory.Binding, _, _ uuid.UUID) {
+			b.exec("UPDATE targets SET status = 'disabled' WHERE id = $1", b.vault)
+		}, inventory.ErrVaultUnavailable},
+		{"vault deleted", false, func(b *bindFixture, _ inventory.Binding, _, _ uuid.UUID) {
+			b.exec("UPDATE targets SET deleted_at = now() WHERE id = $1", b.vault)
+		}, inventory.ErrVaultUnavailable},
+		{"certificate missing", false, func(b *bindFixture, _ inventory.Binding, _, _ uuid.UUID) {
+			b.exec("UPDATE kv_certificates SET missing_since = now() WHERE id = $1", b.web)
+		}, inventory.ErrKVCertificateMissing},
+		{"version disabled", false, func(b *bindFixture, _ inventory.Binding, _, v1 uuid.UUID) {
+			b.exec("UPDATE kv_certificate_versions SET enabled = false WHERE id = $1", v1)
+		}, inventory.ErrVersionDisabled},
+		{"version expired", false, func(b *bindFixture, _ inventory.Binding, _, v1 uuid.UUID) {
+			b.exec("UPDATE kv_certificate_versions SET expires = $2 WHERE id = $1", v1, b.h.clock.Now().Add(-time.Second))
+		}, inventory.ErrCertificateExpired},
+		{"version not yet valid", false, func(b *bindFixture, _ inventory.Binding, _, v1 uuid.UUID) {
+			b.exec("UPDATE kv_certificate_versions SET not_before = $2 WHERE id = $1", v1, b.h.clock.Now().Add(time.Hour))
+		}, inventory.ErrCertificateNotYetValid},
+		{"automatic, held", true, func(b *bindFixture, _ inventory.Binding, _, v1 uuid.UUID) {
+			b.exec("UPDATE kv_certificate_versions SET held = true, held_reason = 'license' WHERE id = $1", v1)
+		}, inventory.ErrVersionHeld},
+		{"manual by an Operator, held", false, func(b *bindFixture, _ inventory.Binding, _, v1 uuid.UUID) {
+			b.exec("UPDATE kv_certificate_versions SET held = true, held_reason = 'incomplete_chain' WHERE id = $1", v1)
+		}, inventory.ErrVersionHeld},
+		{"deployment already started", false, func(b *bindFixture, _ inventory.Binding, id, _ uuid.UUID) {
+			m, err := b.h.svc.DeploymentMaterial(b.h.ctx, id, false)
+			require.NoError(b.h.t, err)
+			require.NoError(b.h.t, b.h.svc.StartDeployment(b.h.ctx, id, m.SendValues("", 0)))
+		}, inventory.ErrDeploymentState},
+		{"deployment finished", false, func(b *bindFixture, _ inventory.Binding, id, _ uuid.UUID) {
+			b.finishQueued(inventory.RequestedDeployment{ID: id})
+		}, inventory.ErrDeploymentState},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBindFixture(t)
+			h, ctx := b.h, b.h.ctx
+			bind := b.create(b.admin, b.web, b.loc1)
+			v1 := b.versionID(b.web, ver(1))
+			requester := b.operator
+			if tc.auto {
+				requester = b.admin
+			}
+			id := b.beginKV(requester, bind.ID, v1, tc.auto, b.loc1)[0]
+			if tc.auto {
+				cur, err := h.svc.Binding(ctx, bind.ID)
+				require.NoError(t, err)
+				on, err := h.svc.SetAutoDeploy(ctx, b.admin, bind.ID, cur.Version, true)
+				require.NoError(t, err)
+				bind = on
+			}
+			tc.mutate(b, bind, id, v1)
+			audits := h.count("SELECT count(*) FROM audit_log")
+			err := h.svc.KVDeployPrecheck(ctx, id)
+			if tc.want == nil {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorIs(t, err, tc.want)
+			}
+			assert.Equal(t, audits, h.count("SELECT count(*) FROM audit_log"), "the check writes nothing")
+		})
+	}
+	b := newBindFixture(t)
+	assert.ErrorIs(t, b.h.svc.KVDeployPrecheck(b.h.ctx, uuid.New()), inventory.ErrNotFound)
 }

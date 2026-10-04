@@ -482,13 +482,15 @@ func TestKVDeployMaterialIncompleteChain(t *testing.T) {
 	assert.Equal(t, map[string]string{"kv_certificate_id": b.web.String(), "certificate_name": "web-cert", "version": ver(1),
 		"reason": "incomplete_chain", "held": "true", "deployment_id": autoID.String()}, ev[0])
 	b.finishQueued(inventory.RequestedDeployment{ID: autoID})
-	// A version that is held already is refused before anything is read.
+	// A version that is held already is refused before anything is used.
 	autoID = auto()
 	reads := h.audits("kv.secret_read")
 	_, secret = pemSecret(leafOnly)
 	_, err = h.svc.KVDeployMaterial(ctx, autoID, secret)
 	assert.ErrorIs(t, err, inventory.ErrVersionHeld)
-	assert.Equal(t, reads, h.audits("kv.secret_read"))
+	assert.Equal(t, reads+1, h.audits("kv.secret_read"), "a caller that skipped the engine's check is audited")
+	last := h.auditDetails("kv.secret_read")
+	assert.Equal(t, "version_held", last[len(last)-1]["reason"])
 	b.finishQueued(inventory.RequestedDeployment{ID: autoID})
 	// A hold of another reason that appears while the secret is being judged is kept: the first reason wins.
 	b.exec("UPDATE kv_certificate_versions SET held = false, held_reason = '' WHERE id = $1", v1)
