@@ -179,3 +179,25 @@ var (
 	// ErrVaultUnavailable: the vault is disabled or deleted.
 	ErrVaultUnavailable = errors.New("inventory: the vault is disabled or deleted")
 )
+
+// Errors of imports into a vault (Task 14). The API maps each to its code (Task 17).
+var (
+	// ErrImportConfirmNeeded: the certificate name already exists in the vault and the request did not
+	// confirm that a new version may be added (ruling S9). The error is an *ImportConfirmError naming it.
+	ErrImportConfirmNeeded = errors.New("inventory: the vault already has a certificate with this name; confirm to add a version")
+	// ErrImportInProgress: an import of this name into this vault is queued, running or not confirmed yet.
+	ErrImportInProgress = errors.New("inventory: an import of this certificate name into this vault is still open")
+	// ErrImportState: the import is not in a state that allows the step (a second send, a result for an
+	// import that was never sent, anything for a finished import).
+	ErrImportState = errors.New("inventory: the import is not in a state that allows this")
+	// ErrImportChanged: the certificate Alice holds is no longer the one the import was requested for.
+	ErrImportChanged = errors.New("inventory: the certificate changed since the import was requested")
+)
+
+// ImportConfirmError is ErrImportConfirmNeeded with the certificate name the vault already has.
+type ImportConfirmError struct{ CertificateName string }
+
+func (e *ImportConfirmError) Error() string { return ErrImportConfirmNeeded.Error() }
+
+// Is makes errors.Is(err, ErrImportConfirmNeeded) hold.
+func (e *ImportConfirmError) Is(target error) bool { return target == ErrImportConfirmNeeded }

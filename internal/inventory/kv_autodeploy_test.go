@@ -85,11 +85,31 @@ func TestAutoDeployPlanTable(t *testing.T) {
 			deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.b, f.c} }, budget: AutoDeployWave},
 		{name: "failed 61 minutes ago: one more attempt, after the fresh websites", mutate: func(f *planFixture) { f.failed(f.a, 61*time.Minute, "deployment.interrupted") },
 			deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.b, f.c, f.a} }, budget: AutoDeployWave},
-		{name: "a website that failed three times gets no fourth attempt (even when neutral)", mutate: func(f *planFixture) {
+		{name: "three internal faults on one website stop the wave: one notice, after the cap", mutate: func(f *planFixture) {
 			for i := 0; i < AutoDeployMaxFailed; i++ {
-				f.failed(f.a, time.Duration(3+i)*time.Hour, "certificate.chain_unconfirmed")
+				f.failed(f.a, time.Duration(3+i)*time.Hour, "internal.unexpected")
 			}
-		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.b, f.c} }, budget: AutoDeployWave},
+		}, deploy: func(f *planFixture) []uuid.UUID { return nil }, stopped: true},
+		{name: "two internal faults are retried under the hourly rule and do not stop anything", mutate: func(f *planFixture) {
+			f.failed(f.a, 3*time.Hour, "internal.unexpected")
+			f.failed(f.a, 4*time.Hour, "internal.unexpected")
+		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.b, f.c, f.a} }, budget: AutoDeployWave},
+		{name: "internal faults on three websites are not three failures of the version", mutate: func(f *planFixture) {
+			f.failed(f.a, 3*time.Hour, "internal.unexpected")
+			f.failed(f.b, 3*time.Hour, "internal.unexpected")
+			f.failed(f.c, 3*time.Hour, "internal.unexpected")
+		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave},
+		{name: "state-change refusals repeated on one website never cap it or stop the wave", mutate: func(f *planFixture) {
+			for i, code := range []string{"kv.binding_gone", "kv.auto_deploy_off", "kv.version_held", "kv.vault_unavailable", "certificate.chain_unconfirmed"} {
+				f.failed(f.a, time.Duration(3+i)*time.Hour, code)
+			}
+		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.b, f.c, f.a} }, budget: AutoDeployWave},
+		{name: "a real failure still counts with the others around it", mutate: func(f *planFixture) {
+			f.failed(f.a, 3*time.Hour, "deployment.failed")
+			f.failed(f.b, 3*time.Hour, "kv.version_held")
+			f.failed(f.c, 3*time.Hour, "deployment.failed")
+			f.failed(f.c, 4*time.Hour, "deployment.failed")
+		}, deploy: func(f *planFixture) []uuid.UUID { return nil }, stopped: true},
 		{name: "three failures of the version stop the wave, with one notice of the stop", mutate: func(f *planFixture) {
 			f.failed(f.a, 3*time.Hour, "deployment.failed")
 			f.failed(f.b, 3*time.Hour, "deployment.failed")

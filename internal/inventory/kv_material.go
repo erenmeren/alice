@@ -67,9 +67,12 @@ func (s *Service) KVDeployMaterial(ctx context.Context, id uuid.UUID, secret pro
 	// From here on the vault's secret is in Alice's memory (the engine read it, ideally after its own
 	// KVDeployPrecheck): every refusal, the shared check's included, is audited (R40 row 34) and the
 	// secret is zeroed.
+	// The refusal reaches the caller as itself even when its audit row cannot be written (the engine maps
+	// the sentinel); the failed write is joined to it and logged by type.
 	refuse := func(reason string, err error) (Material, error) {
 		if aerr := s.auditSecretReadFailure(ctx, m, reason); aerr != nil {
-			return Material{}, aerr
+			s.log.Error("could not audit a refused secret read", "reason", reason, "error_type", fmt.Sprintf("%T", aerr))
+			return Material{}, errors.Join(err, aerr)
 		}
 		return Material{}, err
 	}
@@ -96,12 +99,14 @@ func (s *Service) KVDeployMaterial(ctx context.Context, id uuid.UUID, secret pro
 		return refuse("secret_mismatch", ErrSecretMismatch)
 	}
 	if !v.ChainComplete && !m.Deployment.ConfirmIncompleteChain {
+		var herr error
 		if m.Deployment.Trigger == triggerKVRenewal {
-			if err := s.holdIncompleteChain(ctx, m); err != nil {
-				return Material{}, err
+			if herr = s.holdIncompleteChain(ctx, m); herr != nil {
+				s.log.Error("could not hold a version for its incomplete chain", "error_type", fmt.Sprintf("%T", herr))
 			}
 		}
-		return refuse("chain_unconfirmed", ErrChainUnconfirmed)
+		m2, rerr := refuse("chain_unconfirmed", ErrChainUnconfirmed)
+		return m2, errors.Join(rerr, herr)
 	}
 	if len(v.PEMChain) > maxPEMChain {
 		return refuse("secret_unreadable", ErrSecretUnreadable)

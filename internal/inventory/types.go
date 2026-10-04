@@ -110,7 +110,6 @@ type Facts struct {
 	KVAuthFailures    int                   `json:"kv_auth_failures,omitempty"`
 	KVThrottledCycles int                   `json:"kv_throttled_cycles,omitempty"`
 	KVReconciledAt    *time.Time            `json:"kv_reconciled_at,omitempty"` // start of the last poll that was stored completely
-	KVHoldRenewals    bool                  `json:"kv_hold_renewals,omitempty"` // new versions stay held while details of the first poll after a reopening are pending
 	KVEmptyAt         *time.Time            `json:"kv_empty_at,omitempty"`      // when the first empty certificate listing was stored
 	KVEmptyPolls      int                   `json:"kv_empty_polls,omitempty"`   // empty complete certificate listings in a row
 	KVPoll            *KVPollFacts          `json:"kv_poll,omitempty"`          // what the last poll found wrong

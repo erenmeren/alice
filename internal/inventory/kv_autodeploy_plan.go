@@ -102,9 +102,11 @@ type autoPlan struct {
 }
 
 // Closed reasons of a deployment (deployments.error_code) that say the state a deployment was
-// requested in no longer held, or that a version needs a person. They are not failures of the
-// deployment machinery: they never count toward AutoDeployMaxFailed (the "three failures stop the
-// wave" rule), but a website still gets at most AutoDeployMaxFailed attempts per version.
+// requested in no longer held, or that a version needs a person. They are not failures of the version
+// on a website: they count toward neither the "three failures stop the wave" rule nor a website's cap,
+// and the website is tried again under the hourly rule (what they mean is decided elsewhere: a binding
+// that is gone or switched off, a version that is held or disabled and a vault that is unavailable are
+// not planned for).
 const (
 	ReasonChainUnconfirmed   = "certificate.chain_unconfirmed"
 	ReasonBindingGone        = "kv.binding_gone"
@@ -115,6 +117,9 @@ const (
 	ReasonCertificateMissing = "kv.certificate_not_found"
 	ReasonCertificateExpired = "certificate.expired"
 	ReasonNotYetValid        = "certificate.not_yet_valid"
+	// ReasonInternal is a fault of Alice's own: it is retried under the hourly rule but each website gets
+	// AutoDeployMaxFailed of them, after which the wave of the version stops with one mail.
+	ReasonInternal = "internal.unexpected"
 )
 
 // NeutralDeploymentReasons lists the reasons that are not counted as failures of a wave.
@@ -157,7 +162,8 @@ func failedStatus(s string) bool {
 //     type it cannot deploy) is left alone silently; a disabled, expired or not yet valid one is
 //     skipped with one mail;
 //   - three failed automatic deployments of the version since auto_since (neutral reasons excluded)
-//     stop the wave: no more deployments, one notice;
+//     stop the wave: no more deployments, one notice; so do three internal faults (internal.unexpected,
+//     retried hourly until then, not counted across websites) on one website;
 //   - otherwise the websites: not those with an unfinished deployment of any kind, not those that serve
 //     the leaf already or got the version, not those with three attempts; a website whose certificate
 //     ends later than the version's is skipped (one mail); a failed website waits AutoDeployRetryAfter;
@@ -246,7 +252,9 @@ func planAutoDeploy(sn planSnapshot) autoPlan {
 
 	failed := 0
 	busy := map[uuid.UUID]bool{}
-	attempts := map[uuid.UUID]int{}
+	attempted := map[uuid.UUID]bool{}
+	capped := map[uuid.UUID]int{}   // real failures and internal faults of a website
+	internal := map[uuid.UUID]int{} // internal faults of a website
 	deployed := map[uuid.UUID]bool{}
 	lastFailure := map[uuid.UUID]time.Time{}
 	inFlight := 0
@@ -264,14 +272,23 @@ func planAutoDeploy(sn planSnapshot) autoPlan {
 			deployed[d.location] = true
 		}
 		if d.automatic && d.done && failedStatus(d.status) && !d.createdAt.Before(*sn.autoSince) {
-			attempts[d.location]++
-			if !neutralReason(d.errorCode) {
+			attempted[d.location] = true
+			switch {
+			case neutralReason(d.errorCode):
+			case d.errorCode == ReasonInternal:
+				internal[d.location]++
+				capped[d.location]++
+			default:
 				failed++
+				capped[d.location]++
 			}
 			if d.finishedAt != nil && d.finishedAt.After(lastFailure[d.location]) {
 				lastFailure[d.location] = *d.finishedAt
 			}
 		}
+	}
+	for _, n := range internal { // a permanent fault of Alice's: no silent retries for ever
+		failed = max(failed, n)
 	}
 	if failed >= AutoDeployMaxFailed {
 		p.stop = &planStop{version: cur.id, name: cur.version, failed: failed}
@@ -285,8 +302,8 @@ func planAutoDeploy(sn planSnapshot) autoPlan {
 		case l.served != nil && *l.served == *cur.leaf:
 		case l.servedNotAfter != nil && cur.leafNotAfter != nil && l.servedNotAfter.After(*cur.leafNotAfter):
 			older = true
-		case attempts[l.id] >= AutoDeployMaxFailed:
-		case attempts[l.id] == 0:
+		case capped[l.id] >= AutoDeployMaxFailed:
+		case !attempted[l.id]:
 			fresh = append(fresh, l.id)
 		case !lastFailure[l.id].Add(AutoDeployRetryAfter).After(now):
 			retries = append(retries, l.id)

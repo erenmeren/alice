@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/certs"
 	"alice/internal/inventory"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
@@ -558,4 +559,44 @@ func TestKVDeployPrecheck(t *testing.T) {
 	}
 	b := newBindFixture(t)
 	assert.ErrorIs(t, b.h.svc.KVDeployPrecheck(b.h.ctx, uuid.New()), inventory.ErrNotFound)
+}
+
+// A refusal reaches the engine as itself even when writing its audit row fails: the engine must still
+// see the sentinel (retryable or not) it maps. The audit write fails here because the job run lost its
+// claim, which is also a fact the engine learns.
+func TestKVDeployMaterialRefusalSurvivesAFailedAudit(t *testing.T) {
+	b := newBindFixture(t)
+	h := b.h
+	bind := b.create(b.admin, b.web, b.loc1)
+	id := b.beginKV(b.operator, bind.ID, b.versionID(b.web, ver(1)), false, b.loc1)[0]
+	claimed := inventory.WithClaim(h.ctx, inventory.Claim{JobID: uuid.New(), Attempt: 1})
+	other := b.issue("web.example.test", pki.ECDSA256)
+	for name, tc := range map[string]struct {
+		secret func() providers.CertificateSecret
+		want   error
+	}{
+		"a mismatch": {func() providers.CertificateSecret {
+			_, s := pemSecret(string(other.KeyPEM) + string(other.FullchainPEM))
+			return s
+		}, inventory.ErrSecretMismatch},
+		"plain text": {func() providers.CertificateSecret {
+			return providers.CertificateSecret{ContentType: "text/plain", Value: providers.NewSecret([]byte("x"))}
+		}, inventory.ErrSecretUnreadable},
+		"an incomplete chain": {func() providers.CertificateSecret {
+			_, s := pemSecret(string(b.webLeaf.KeyPEM) + string(b.webLeaf.CertPEM))
+			return s
+		}, inventory.ErrChainUnconfirmed},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := h.svc.KVDeployMaterial(claimed, id, tc.secret())
+			assert.ErrorIs(t, err, tc.want, "the refusal is not masked")
+			assert.ErrorIs(t, err, inventory.ErrClaimLost, "and the failed write stays visible")
+		})
+	}
+	release, ok := inventory.HoldPFXSlots(inventory.MaxPFXDecodes())
+	require.True(t, ok)
+	defer release()
+	_, err := h.svc.KVDeployMaterial(claimed, id, providers.CertificateSecret{ContentType: certs.ContentTypePKCS12, Value: providers.NewSecret([]byte("x"))})
+	assert.ErrorIs(t, err, inventory.ErrPFXBusy, "a retryable refusal stays retryable")
+	assert.Zero(t, h.count("SELECT count(*) FROM audit_log WHERE action = 'kv.secret_read'"))
 }
