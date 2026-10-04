@@ -267,6 +267,10 @@ const (
 	CertProblemUnreadable        = "unreadable"
 	CertProblemBadName           = "bad_name"
 	CertProblemSpecialFS         = "special_filesystem" // on FUSE or a pseudo file system
+	// CertProblemNameNotAllowed: the file resolves (through root's links) to a path outside the
+	// helper's argument vocabulary (a space, "*", "~", ",", non-ASCII; an acme.sh "*.example.com"
+	// directory). The helper never deploys to it.
+	CertProblemNameNotAllowed = "name_not_allowed"
 	// CertProblemUnknown: the helper gave a problem Alice does not know; the file is not used.
 	CertProblemUnknown = "unknown"
 )

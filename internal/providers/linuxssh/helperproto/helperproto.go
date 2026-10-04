@@ -192,6 +192,10 @@ const (
 	// FileSpecialFS: the file or a directory on its path is on FUSE or a pseudo file system
 	// (procfs, sysfs, ...), whose owners, modes and contents a daemon or the kernel reports.
 	FileSpecialFS = "special_filesystem"
+	// FileNameNotAllowed: the file's resolved path (after root's links, e.g. an acme.sh directory
+	// "*.example.com") has a character outside the helper's argument vocabulary. The helper never
+	// reads, replaces or journals such a file (a journal naming it could not be read back).
+	FileNameNotAllowed = "name_not_allowed"
 )
 
 // Deployment journal phases (nginx-status, nginx-deploy outcome).

@@ -234,7 +234,7 @@ func (h *nginxHost) readTarget(p string) (*target, string) {
 		return nil, "specialfs"
 	case wp != "":
 		return nil, "other"
-	case !certName(path.Base(p)):
+	case !certName(path.Base(p)), !helperproto.ValidPath(h.resolvedOf(p)):
 		return nil, "other"
 	}
 	data, ok := h.fileLocked(p)

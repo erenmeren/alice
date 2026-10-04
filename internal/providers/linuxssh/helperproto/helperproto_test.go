@@ -218,8 +218,8 @@ func TestProtocol4WireNames(t *testing.T) {
 	assert.JSONEq(t, `{"path":"/p","kind":"key","exists":true,"resolved":"","symlinked":false,"mode":"","owner":"","group":"","size":0,
 		"sha256":"","pem":"","problem":"","free_bytes":0}`, string(b))
 	assert.Equal(t, []string{"missing", "not_root_controlled", "not_regular", "hard_linked", "too_large", "not_a_certificate",
-		"unreadable", "bad_name", "special_filesystem"}, []string{FileMissing, FileNotRootControlled, FileNotRegular,
-		FileHardLinked, FileTooLarge, FileNotACertificate, FileUnreadable, FileBadName, FileSpecialFS})
+		"unreadable", "bad_name", "special_filesystem", "name_not_allowed"}, []string{FileMissing, FileNotRootControlled, FileNotRegular,
+		FileHardLinked, FileTooLarge, FileNotACertificate, FileUnreadable, FileBadName, FileSpecialFS, FileNameNotAllowed})
 	assert.Equal(t, "key_group_open", WarnKeyGroupOpen)
 	assert.Equal(t, "SUPERSEDED", CodeSuperseded)
 	b, err = json.Marshal(NginxStatusResponse{OK: true, Phase: PhaseRestoreFailed, FailedStep: StepRestore, CauseStep: StepConfigTest})

@@ -260,6 +260,15 @@ func (tw *twin) chmod(guest string, mode os.FileMode) {
 	tw.e.SetNginxFileMode(guest, "root", "root", uint32(mode))
 }
 
+// linkWildcard moves the pair into an acme.sh-style "*.example.test" directory and makes the
+// configured names root's links to it (A1-I1).
+func (tw *twin) linkWildcard() {
+	tw.t.Helper()
+	linkIntoWildcardDir(tw.t, tw.w)
+	tw.e.SetNginxFileResolved(fidCrt, wildcardDir+"/fullchain.cer")
+	tw.e.SetNginxFileResolved(fidKey, wildcardDir+"/*.example.test.key")
+}
+
 func (tw *twin) failTest(n int) { tw.failTests = n; tw.e.FailConfigTest(n) }
 
 func (tw *twin) failReload(n int) { tw.w.reloadFail = n; tw.e.FailReload(n) }
@@ -608,6 +617,15 @@ func TestEmulatorFidelityDeploy(t *testing.T) {
 			assert.Equal(t, helperproto.PhaseUnchanged, a.m["phase"])
 			tw.status(opA)
 			tw.restore(opA)
+		}},
+		{"refusal: the pair resolves to a name the vocabulary cannot carry (A1-I1)", func(t *testing.T, tw *twin) {
+			tw.linkWildcard()
+			files := asList(tw.dump().m["files"])
+			assert.Equal(t, helperproto.FileNameNotAllowed, files[0]["problem"])
+			assert.Equal(t, helperproto.FileNameNotAllowed, files[1]["problem"])
+			a := tw.deploy(opA)
+			assert.Equal(t, helperproto.CodePathNotAllowed, a.m["code"])
+			assert.Equal(t, helperproto.PhaseNone, tw.status(opA).m["phase"])
 		}},
 		{"operation id of another deployment", func(t *testing.T, tw *twin) {
 			tw.deploy(opA)

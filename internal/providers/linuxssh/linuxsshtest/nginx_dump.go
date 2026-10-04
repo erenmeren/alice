@@ -654,7 +654,12 @@ func (h *nginxHost) describeCert(p string) (fi helperproto.NginxFile, dropped bo
 		fi.Exists, fi.Problem = true, wp
 		return fi, false
 	}
-	fi.Resolved = p
+	fi.Resolved = h.resolvedOf(p)
+	fi.Symlinked = fi.Resolved != p
+	if !helperproto.ValidPath(fi.Resolved) {
+		fi.Exists, fi.Problem, fi.FreeBytes = true, helperproto.FileNameNotAllowed, h.free()
+		return fi, false
+	}
 	if !certName(path.Base(p)) {
 		fi.Exists, fi.Problem, fi.FreeBytes = true, helperproto.FileBadName, h.free()
 		return fi, false
@@ -692,7 +697,8 @@ func (h *nginxHost) describeKey(p string) (fi helperproto.NginxFile, open bool) 
 		fi.Exists, fi.Problem = true, wp
 		return fi, false
 	}
-	fi.Resolved, fi.FreeBytes = p, h.free()
+	fi.Resolved, fi.FreeBytes = h.resolvedOf(p), h.free()
+	fi.Symlinked = fi.Resolved != p
 	data, exists := h.fileLocked(p)
 	if !exists {
 		fi.Problem = helperproto.FileMissing
@@ -702,6 +708,8 @@ func (h *nginxHost) describeKey(p string) (fi helperproto.NginxFile, open bool) 
 	fi.Exists, fi.Size = true, int64(len(data))
 	fi.Mode, fi.Owner, fi.Group = modeString(m.mode), m.owner, m.group
 	switch {
+	case !helperproto.ValidPath(fi.Resolved):
+		fi.Problem = helperproto.FileNameNotAllowed
 	case !certName(path.Base(p)):
 		fi.Problem = helperproto.FileBadName
 	case m.problem == helperproto.FileNotRegular:

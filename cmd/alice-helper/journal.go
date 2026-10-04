@@ -161,9 +161,15 @@ func readJournal(dir *os.File, op string) (j journal, found bool, err error) {
 // writeJournal replaces the journal atomically and durably: journal.tmp (O_EXCL, 0600) written and
 // synced, renamed over journal.json, then the directory synced. A crash at any point leaves the
 // previous journal or the new one, never a mix; a stale journal.tmp is removed by the next write.
+//
+// A journal readJournal would refuse (A1-I1: a path outside the vocabulary, too many steps, an
+// unknown phase) is never written: errBadJournal, and the previous journal stays.
 func (s *sys) writeJournal(dir *os.File, j journal) error {
 	if j.Steps == nil {
 		j.Steps = []helperproto.NginxStep{}
+	}
+	if !j.valid(j.Op) || !helperproto.ValidOpID(j.Op) || dir.Name() != j.Op {
+		return errBadJournal // dir is <BackupRoot>/<op> (opDir): its journal is read as op's
 	}
 	raw, err := json.Marshal(j)
 	if err != nil {

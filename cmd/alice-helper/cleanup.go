@@ -64,6 +64,13 @@ func cmdCleanup(ctx context.Context, s *sys, args []string) (any, error) {
 		return nil, failed(helperproto.CodeBusy, "a certificate change is running on this server")
 	}
 	defer func() { _ = lock.Close() }()
+	if unix.Fstatat(int(root.Fd()), op+"/"+journalName, &st, unix.AT_SYMLINK_NOFOLLOW) == nil { //nolint:gosec // G115: a descriptor fits an int
+		if _, ok := s.nginxJournal(root, op); !ok {
+			// A1-I1: a journal that exists but cannot be read may describe an interrupted
+			// deployment; its backups may be the only way back (the sweep keeps it 30 days).
+			return nil, failed(helperproto.CodeIOError, "the journal of this operation cannot be read; its backups are kept")
+		}
+	}
 	if j, ok := s.nginxJournal(root, op); ok {
 		if s.keepForRecovery(j, true) {
 			return nil, failed(helperproto.CodeBusy, "the deployment is not finished; restore it before its backups are removed")

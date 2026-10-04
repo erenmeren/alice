@@ -482,6 +482,12 @@ func (s *sys) describeCert(p string, names, groups map[int]string) (fi helperpro
 	}
 	defer rf.close()
 	fi.Resolved, fi.Symlinked = rf.resolved, rf.symlinked
+	if !helperproto.ValidPath(rf.resolved) {
+		// A1-I1: never read, replaced or journaled (readTarget refuses it): unsupported.
+		fi.Exists, fi.Problem = true, helperproto.FileNameNotAllowed
+		fi.FreeBytes, _ = s.statfs(rf.dirfd)
+		return fi, false
+	}
 	if !certName(rf.name) {
 		fi.Exists, fi.Problem = true, helperproto.FileBadName
 		fi.FreeBytes, _ = s.statfs(rf.dirfd)
@@ -584,6 +590,8 @@ func (s *sys) describeKey(p string, names, groups map[int]string) (fi helperprot
 	fi.Exists, fi.Size = true, st.Size
 	fi.Mode, fi.Owner, fi.Group = fmt.Sprintf("%04o", st.Mode&0o777), ownerName(names, int(st.Uid)), ownerName(groups, int(st.Gid))
 	switch {
+	case !helperproto.ValidPath(rf.resolved):
+		fi.Problem = helperproto.FileNameNotAllowed // A1-I1, as describeCert
 	case !certName(rf.name):
 		fi.Problem = helperproto.FileBadName
 	case st.Mode&unix.S_IFMT != unix.S_IFREG:

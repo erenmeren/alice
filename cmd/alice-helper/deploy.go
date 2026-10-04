@@ -30,7 +30,7 @@ const (
 )
 
 var (
-	errBadName         = errors.New("the file name has no certificate or key extension")
+	errBadName         = errors.New("the file name has no certificate or key extension, or resolves to a path the vocabulary cannot carry")
 	errBadContent      = errors.New("the new content is not a certificate chain and its private key")
 	errChangedByOthers = errors.New("the file was changed by someone else")
 	errUnstable        = errors.New("the file changed while it was read")
@@ -75,7 +75,10 @@ func (s *sys) readTarget(p string) (*target, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !certName(rf.name) {
+	// A1-I1: a resolved path outside the argument vocabulary (an acme.sh "*.example.com" directory)
+	// could not be journaled (readJournal would refuse the journal): such a file is never read or
+	// replaced (PATH_NOT_ALLOWED before anything is written).
+	if !certName(rf.name) || !helperproto.ValidPath(rf.resolved) {
 		rf.close()
 		return nil, errBadName
 	}

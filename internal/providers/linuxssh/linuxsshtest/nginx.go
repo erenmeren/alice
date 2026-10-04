@@ -53,6 +53,8 @@ type emuFile struct {
 	owner, group string
 	mode         uint32
 	problem      string // "", not_root_controlled, special_filesystem, not_regular or hard_linked
+	// resolved is where root's links lead ("" = the path itself): SetNginxFileResolved.
+	resolved string
 }
 
 // emuServer is one server block the emulated configuration holds: a site, or an entry the helper
@@ -303,6 +305,24 @@ func (e *Emulator) SetFileProblem(p, problem string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.nginx().metaOf(p).problem = problem
+}
+
+// SetNginxFileResolved makes the file at p a root-owned link that resolves to resolved (a path
+// the helper's argument vocabulary may not carry, such as an acme.sh "*.example.test" directory).
+// nginx-dump reports it (resolved, symlinked; name_not_allowed when the vocabulary cannot carry
+// it) and nginx-deploy refuses it with PATH_NOT_ALLOWED before writing anything (A1-I1).
+func (e *Emulator) SetNginxFileResolved(p, resolved string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.nginx().metaOf(p).resolved = resolved
+}
+
+// resolvedOf is where the file at p resolves to.
+func (h *nginxHost) resolvedOf(p string) string {
+	if m := h.meta[p]; m != nil && m.resolved != "" {
+		return m.resolved
+	}
+	return p
 }
 
 // SetNginxConfPath sets the --conf-path nginx -V reports ("" = a build without one, which the
