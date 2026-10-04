@@ -80,6 +80,20 @@ Recovery runs in license lock (`ClassAlways`), is paced (30 s, then every 15 min
 with an "outcome could not be confirmed" email (R38 item 27). Every engine write is fenced to the job claim, so a run
 that lost its lease cannot record over another run's outcome or send after the deployment ended (R38 item 28).
 
+### Interrupted changes Alice no longer tracks
+
+A managed server can name an operation in its `RECOVERY_PENDING` refusal. Alice restores it (one `nginx-restore`
+of that id, then one more send of the same deployment) only when the id is unknown to Alice or belongs to a
+finished `rollback_failed` deployment of the same server and the same location (R38 item 58), after a fenced claim
+check. A hostile server can therefore make Alice run `nginx-restore` of an id of its own choosing on that same
+server, which the helper there would also accept from its own root user; it cannot make Alice restore a deployment
+Alice is still finishing, one that ended otherwise, or one of another website or server, cannot change what Alice
+sends (the same operation id, content and expected hash), and cannot make Alice record a success: a restore that put
+files back without the new certificate being written ends `rolled_back` with `ALC-DEP-0024`, never "nothing
+changed". Two locations whose paths resolve to the same files are serialised by the per-server job lock; that case is
+covered by reasoning (the second deployment's expected hash no longer matches and is refused), not by an end-to-end
+test, because the emulator cannot give two configured paths one file.
+
 ### Path validation
 
 The helper writes only the two files of a pair that its own `nginx -T` names (never a path chosen by the caller),
@@ -207,6 +221,9 @@ value rules.
 | P4-45 | Low (fixed) | An SSH-key discovery had no upper bound on users, files, keys or warnings, and discovery jobs no time limit (a hostile helper or server could make a scan arbitrarily large or long). Independent audit of 2026-10-04, AUD-04(a). | Fixed: d375100 (bounds, `list_truncated`), 73e71c8 (20-minute job limit). |
 | P4-46 | Medium (fixed) | Attaching a key to a certificate first found on a server (an upload or a signing request's completion) kept the server's chain whenever it looked complete: a server could forge a "complete" chain around the real intermediate's public key under a root of its own, the uploader's chain was discarded, and the forged certificates were deployed with Alice's key from then on. W2 review, Important 1. | Fixed: 2854564 (the row takes the upload's chain and completeness and becomes `uploaded`/`csr`; trigger `Z1004`; `TestKeyAttachTakesTheUploadersChain`). |
 | P4-47 | Low (fixed) | Chain ordering could cost about 950 signature checks for one hostile file (32 same-name certificates with alternating keys) and did not try a second issuer of the same name and key; a rollback_failed without a recorded previous certificate disabled the changed-outside check for good; the open signing-request bound could be passed by concurrent requests; a discovery timeout was not shown on the server. W2 review, minors 2, 3, 4, 6, 7. | Fixed: cb87524 (at most 100 checks, `chain_unresolved`, backtracking), d220504, c031807, ae9c2f2. |
+| P4-48 | Medium (fixed) | The helper's refusal of a pair whose latest operation was interrupted (A1 m1) locked the pair for good when Alice no longer tracked that operation (outcome recorded unknown, server added again, database restored): nobody could deploy to it again through Alice. W1 review, Important 1. | Fixed: 8f88be3 (the refusal names the pending operation, also for an unreadable journal, checked before the certificate hash), 0e2e537 (the engine restores such an operation once under the new deployment and sends again), 4c7b393 (restored only when Alice does not know the operation or knows it as an unknown-outcome deployment of the same location; the outcome after a restore is truthful, `ALC-DEP-0024`), 4174b77 (its own email), 374c7e5 (no false "changed outside Alice" afterwards). |
+| P4-49 | Low (fixed) | Fence tombstones counted against the helper's 1000-operation cap, so fences could block deployments; a fence could be written into a directory holding another kind of backup; `nginx-deploy` of a fenced operation read the key from stdin before refusing; outcome-unknown records were made without a fence. W1 review, Important 2 and minors. | Fixed: 8f88be3 (own bound of 10,000, `NO_SPACE` proves nothing; refused for authorized_keys directories; fence checked before stdin), d37c44f (best-effort fence before an outcome-unknown record). |
+| P4-50 | Low (fixed) | "Too many authentication failures" was classified as unreachable (retried, no alert); a credential fetch cut by the handshake deadline was not retryable; the "nothing written" proof flag was set by callers that had no proof. W1 review minors. | Fixed: 02fbc36, 79d0382. |
 
 No High finding is open except the documented product residual P4-01.
 
@@ -285,6 +302,18 @@ No High finding is open except the documented product residual P4-01.
   is no longer fenced. A server whose sudoers lacks the `nginx-fence` line (the helper was updated without the setup
   commands) leaves such deployments **Confirming the outcome** until the line exists or about a day has passed
   (**Outcome not confirmed**).
+- **An unreadable latest journal blocks its pair for 30 days.** A change whose `journal.json` cannot be read (for
+  example one written by an older helper for a file name the helper no longer accepts) blocks every new change of
+  that certificate/key pair: `nginx-restore` and `nginx-status` answer `IO_ERROR`, `cleanup --op` refuses, Alice
+  ends deployments with `ALC-DEP-0023`, and the helper's sweep removes it only after 30 days. The manual way out (as
+  root: copy the folder aside, check that the pair matches and put back `cert.bak`/`key.bak` if not, `nginx -t`,
+  reload, then remove only that operation's folder) is in `docs/troubleshooting.md` under `ALC-DEP-0023`; it removes
+  the backup of the previous key, so the copy comes first.
+- **The recovery-exhausted path does not fence.** When the sweep ends a deployment after about a day of failed
+  recovery attempts (`deployment.recovery_exhausted`), no fence is sent (the server was unreachable all that time);
+  the engine's other outcome-unknown paths fence best effort.
+- **Two locations resolving to the same files** (two configured paths, one real file) are handled by the per-server
+  job lock and the hash check, shown by reasoning, not by an end-to-end test.
 - **TLS on another block's listen (A2 m2).** A TLS `server` block whose own `listen` lacks `ssl` on an address and
   port that another block made TLS is not listed (Nginx shares the socket; matching its address equivalences is not
   built), so its certificate is neither shown nor deployable.

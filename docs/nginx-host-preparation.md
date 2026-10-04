@@ -87,7 +87,7 @@ the helper checks its whole argument list itself and refuses anything that is no
 | `nginx-deploy` | Replaces one certificate file and its key file with the content Alice sends on standard input, as one transaction (below). The two paths must be a pair that the current Nginx configuration uses. |
 | `nginx-restore` | Puts back the previous files of one earlier `nginx-deploy`, from its backup. |
 | `nginx-status` | Reports how one earlier `nginx-deploy` ended (from its journal) and whether the helper is busy. |
-| `nginx-fence` | Makes sure one earlier `nginx-deploy` can never run any more. Alice uses it when it finds no journal for a deployment whose answer it never got: the helper writes a small "fenced" journal under the lock, after which a late `nginx-deploy` of that deployment (for example one stuck in `sudo` while the connection dropped) refuses without changing anything. If the deployment had started after all, the helper answers its journal instead and Alice finishes or undoes it. |
+| `nginx-fence` | Makes sure one earlier `nginx-deploy` can never run any more. Alice uses it when it finds no journal for a deployment whose answer it never got, and (when the server answers) before it records an outcome as not confirmed: the helper writes a small "fenced" journal under the lock, after which a late `nginx-deploy` of that deployment (for example one stuck in `sudo` while the connection dropped) refuses before it reads the new key and without changing anything. If the deployment had started after all, the helper answers its journal instead and Alice finishes or undoes it. |
 
 `tls-probe` (no `sudo`) connects to a website on the server itself (for example `127.0.0.1:443`) and reports the
 certificate it serves. Alice uses it to check a website it cannot reach from its own network.
@@ -149,6 +149,18 @@ server's clock:
 
 Alice never removes these folders itself. The helper keeps at most 1000 of them; beyond that it refuses new
 deployments until old ones are removed. They contain private keys: treat them like the key files themselves.
+
+A folder written by `nginx-fence` (a "tombstone") holds only a `journal.json` with the phase `fenced` and no file
+copies: it records that the deployment with that ID must never run. Tombstones do not count against the 1000
+folders; the helper keeps at most 10,000 of them (beyond that `nginx-fence` answers that there is no space, and
+Alice then records nothing for the deployment it wanted to fence and tries again later). `cleanup --op` never removes
+a tombstone; the sweep removes it 7 days after it was written (server clock). The helper refuses to fence an ID whose
+folder holds backups of another kind (`authorized_keys` copies).
+
+A change of a certificate/key pair that is still unfinished (its journal says `writing` or `restoring`, or cannot
+be read) blocks every new `nginx-deploy` of the same files: the helper answers with the ID of that change, and Alice
+undoes it or tells you how (`ALC-DEP-0002`, `ALC-DEP-0023`, `ALC-DEP-0024` in
+[troubleshooting.md](troubleshooting.md)).
 
 ### Restoring a previous certificate by hand
 

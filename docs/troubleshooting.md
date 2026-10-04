@@ -158,8 +158,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   is the one Alice read at the time shown. Fix the reason and choose **Discover**.
 - **A website shows "The certificate changed outside Alice."** Its file holds a certificate Alice did not deploy (for
   example renewed by certbot, or restored by hand). Expected after a manual change; otherwise find out which program
-  changed it. It can also appear once after a deployment that ended `ALC-DEP-0024` (Alice put back the files from
-  before an unfinished earlier change): the file then holds that older certificate.
+  changed it.
 - **A website's warning says Alice could not order the certificates of its file** (warning code `chain_unresolved`).
   The certificate file holds many certificates with the same name that could each have issued the others; Alice
   stops after 100 signature checks per file, keeps only the website's own certificate and counts its chain as
@@ -596,7 +595,8 @@ tasks).
 
 **Likely cause.** The server is off, the address or port is wrong, or a firewall blocks the Alice host. A connection
 that is closed or reset while Alice signs in also counts as unreachable (it is retried), not as a refused sign-in;
-only the server's explicit refusal of every sign-in method is `ALC-SSH-0002`.
+only the server's explicit refusal of every sign-in method (or "too many authentication failures") is
+`ALC-SSH-0002`.
 
 **What to do.** Check the server and the network path to its SSH port, then click **Test connection**.
 
@@ -1032,9 +1032,9 @@ never leaves Alice), so its chain cannot be completed this way.
 
 **Meaning.** Alice is still finishing an earlier deployment on this server. (HTTP 409, reason `deployment.recovery_pending`.)
 
-**Likely cause.** An earlier deployment on this server did not end normally, and Alice must first find out how it ended and finish it.
+**Likely cause.** An earlier deployment on this server did not end normally, and Alice must first find out how it ended and finish it. The server's helper gives the same answer when an earlier change of the same files that Alice is still finishing blocks them.
 
-**What to do.** Wait until that deployment shows its result in the deployment history, then deploy again.
+**What to do.** Wait until that deployment shows its result in the deployment history, then deploy again. (When the blocking change is one Alice no longer follows, the deployment ends with `ALC-DEP-0023` or `ALC-DEP-0024` instead.)
 
 ## ALC-DEP-0003: Website still serves the previous certificate
 
@@ -1204,12 +1204,29 @@ A deployment may show `ALC-DEP-0019` (the files are back but the website was not
 
 ## ALC-DEP-0023: An unfinished change of the files on the server stops new changes
 
-**Meaning.** The server refused the deployment because an earlier change of the same certificate and key files did not finish there, and Alice could not put the previous files back. Nothing was changed by this deployment. (HTTP 409, reason `deployment.server_operation_pending`; the parameter `operation_id` names the unfinished change.)
+**Meaning.** An unfinished change of these certificate files on the server stops new changes. The server refused the deployment because an earlier change of the same certificate and key files did not finish there; this deployment's certificate was not written. (HTTP 409, reason `deployment.server_operation_pending`; the parameter `operation_id` names the unfinished change.)
 
-**Likely cause.** A deployment was interrupted on the server (for example the helper was killed between writing the key and the certificate) and Alice no longer follows it: its outcome was recorded as unknown after a day of recovery attempts, the server was deleted and added again, or Alice's database was restored from a backup. alice-helper keeps refusing new changes of those files until that change is rolled back. When a deployment meets such a change, Alice runs the restore itself once (the deployment's history shows the step `recover_pending` with the operation id) and deploys again; this message means that restore did not succeed, for example because the change's journal cannot be read.
+**Likely cause.** An earlier change was interrupted on the server (for example the helper was killed between writing the key and the certificate) and Alice no longer follows it, and `alice-helper` refuses new changes of those files until that change is undone. Alice undoes such a change by itself, once, only when it does not know the change at all (the server was deleted and added again, or Alice's database was restored from a backup) or knows it as a deployment of this same website whose outcome was not confirmed; it then deploys again. This message means one of:
 
-**What to do.** On the server, as root, run `/usr/local/libexec/alice-helper nginx-restore --op <operation_id>` and read its answer. Then run `nginx -t`, and deploy again. If the restore answers an error, keep the folder `/var/lib/alice-helper/backups/<operation_id>`: it holds the files that change replaced.
+- Alice does not undo that change because it knows it otherwise: from another website, or as a change that ended normally.
+- Alice tried and the undo did not finish (the step **recover_pending** in the deployment's history shows it failed). It may have put back one of the two files.
+- The change's record on the server cannot be read (see below).
 
+**Where to find the operation id.** Open the deployment in **Deployment history**: the error's details show `operation_id`, and so does the step **recover_pending** if Alice tried the undo. It is a deployment ID; if Alice still has a deployment with that ID, the history shows it.
+
+**What to do.** On the server, as root:
+
+1. Run `/usr/local/libexec/alice-helper nginx-restore --op <operation_id>` and read its answer. A `restored` phase means the files from before that change are back.
+2. Run `nginx -t` and, if it passes, `systemctl reload nginx`.
+3. In Alice choose **Discover** on the server's page, then deploy again.
+
+If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-helper/backups/<operation_id>/journal.json`) cannot be read, typically one written by an older helper for a file name the helper no longer accepts. The helper keeps such a record, and keeps refusing changes of those files, for 30 days; `cleanup --op` refuses to remove it. To unblock the files before that, by hand:
+
+1. **Warning: this folder holds the previous private key.** Copy the whole folder somewhere only root can read first, for example `cp -a /var/lib/alice-helper/backups/<operation_id> /root/alice-backup-<operation_id>`.
+2. Find the certificate and key files of the website (from the Nginx configuration, or `cat journal.json` if it can still be read as text). Check that they belong together: `openssl x509 -in <certificate file> -noout -pubkey` and `openssl pkey -in <key file> -pubout` must print the same key. If they do not, put back both previous files from `cert.bak` and `key.bak` in that folder with the owner, group and mode the current files have (`install -o … -g … -m … key.bak <key file>`, the key first; see [nginx-host-preparation.md](nginx-host-preparation.md#restoring-a-previous-certificate-by-hand)), and check again.
+3. Run `nginx -t` and `systemctl reload nginx`.
+4. Remove the change's folder: `rm -r /var/lib/alice-helper/backups/<operation_id>`. Only this removal unblocks the files (the helper then no longer finds an unfinished change for them). Do not remove any other folder.
+5. In Alice choose **Discover**, then deploy again.
 
 ## ALC-DEP-0024: Alice undid an unfinished earlier change; the certificate was not deployed
 

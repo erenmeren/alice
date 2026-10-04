@@ -24,7 +24,7 @@
 - Helper protocol 5 (`alice-helper` 1.4.0): `nginx-dump`, `nginx-test`, `nginx-deploy`, `nginx-restore`,
   `nginx-status`, `nginx-fence` (sudo, with narrow sudoers lines) and `tls-probe` (no sudo). `nginx-fence` lets
   Alice prove that an interrupted deployment it has no journal for can never be applied later.
-- Error codes `ALC-NGX-0001..0010`, `ALC-CRT-0001..0017`, `ALC-DEP-0001..0022` and the audit actions
+- Error codes `ALC-NGX-0001..0010`, `ALC-CRT-0001..0017`, `ALC-DEP-0001..0024` and the audit actions
   `certificate.*`, `csr.*`, `location.*` and `deployment.*`.
 - Uploading a certificate Alice already holds with an incomplete chain, now with its complete chain, completes the
   stored chain (`certificate.chain_completed`); any other repeated upload is still refused (`ALC-CRT-0008`).
@@ -41,7 +41,10 @@
   (new `nginx-fence` line).
 - The helper refuses a deployment while the website's previous change is still being finished, when Nginx is not
   running (`ALC-NGX-0010`), and for a certificate or key file whose real name (after links) has characters it does
-  not accept (shown as **Not supported**).
+  not accept (shown as **Not supported**). When the unfinished change is one Alice no longer follows (for example
+  after a deployment whose outcome was not confirmed), a new deployment of that website undoes it once and deploys
+  again (`ALC-DEP-0024` with its own email when only the undo succeeded, `ALC-DEP-0023` when it cannot undo it).
+- Too many authentication failures on a server count as a refused sign-in (`ALC-SSH-0002`).
 - A connection lost while signing in to a server is now "cannot be reached" (`ALC-SSH-0001`, retried), not "sign-in
   refused"; an SSH-key scan is bounded (users, files, keys, warnings, 10 minutes of reading; a cut scan says so) and
   a discovery job stops after 20 minutes.

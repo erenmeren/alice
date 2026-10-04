@@ -263,7 +263,24 @@ website and the files on the server yourself then.
 If Alice itself was stopped for more than a day while a deployment was being sent, the helper may meanwhile have
 removed the deployment's journal (it keeps it 7 days after a success). Alice then cannot learn what happened: the
 deployment ends **Outcome not confirmed** (`ALC-DEP-0018`) with an email. Choose **Discover** and check which
-certificate the website serves; deploy again if needed.
+certificate the website serves; deploy again if needed. Before it records that, Alice also tries to fence the
+deployment on the server (when the server answers), so that it can never be applied later.
+
+An unfinished change can also be one Alice no longer follows: its outcome was recorded as not confirmed, or the
+server was removed and added again, or Alice's database was restored from a backup. The helper then refuses every
+new change of those files and names the unfinished change (its operation ID). A new deployment of that website
+handles it like this:
+
+- When Alice does not know that change at all, or knows it only as a deployment of this same website whose outcome
+  was not confirmed, it undoes it once, as a step of the new deployment (the deployment history shows a step for
+  restoring the unfinished earlier change, with its operation ID, followed by the restore's own steps), and sends
+  the new certificate again. If the new certificate is then written, the deployment ends as usual.
+- If the files were put back but the new certificate could not be written, the deployment ends **Failed, restored**
+  with `ALC-DEP-0024` and an email: the website now serves the certificate from before the unfinished change
+  (possibly an older one). Choose **Discover** and deploy again.
+- If Alice does not undo the change (it knows it from another website or as a change that ended normally) or the
+  undo did not finish, the deployment ends **Failed** with `ALC-DEP-0023`; the steps to take on the server are in
+  [troubleshooting.md](troubleshooting.md).
 
 While a deployment on a server is being finished, new deployments to that server are refused (`ALC-DEP-0002`; the
 helper also refuses a new change of the same files while the earlier one is unfinished); scans and SSH key work go
