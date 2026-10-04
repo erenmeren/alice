@@ -167,12 +167,13 @@ process starts or stops (each adds or removes a veth with an IPv6 link-local add
 Go integration tests (`make coverage`, `make test-ssh`, `go test -tags integration`; they use Testcontainers). Chromium 153 has no switch to turn
 this off. So avoid running those tests in parallel with `make e2e`.
 
-As a mitigation (not a fix), the suite allows one retry, and outside CI only for this cause: the
+As a mitigation (not a fix), the suite allows one retry, only for this cause, locally and in CI: the
 `networkChangeGuard` fixture in `web/e2e/helpers.ts` records requests Chromium aborted with
 `net::ERR_NETWORK_CHANGED`. A test whose failed attempt saw such an abort runs once more and is
 reported as flaky, with the annotation "retried after network change". The retry of any other failure
-fails at once with "not retried: …", so the original error stays the result. In CI the retry policy is
-unchanged (one retry for any failure).
+fails at once with "not retried: …", so the original error stays the result. CI applies the same gate, so a
+real flake fails the run instead of passing on a second attempt; a retried test is reported as flaky with the
+annotation there too.
 
 Playwright keeps a trace of a failed test (`web/test-results/`, and `web/playwright-report/`). The traces of
 the certificate journeys contain the private keys those tests generated and pasted into the upload form:

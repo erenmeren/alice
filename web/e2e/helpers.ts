@@ -17,7 +17,17 @@ function networkChangedMarker(testInfo: { project: { outputDir: string }; testId
   return join(testInfo.project.outputDir, '.network-changed', testInfo.testId);
 }
 
-// test is Playwright's test with two automatic fixtures.
+// unexpectedCutOffs records every drain that cut off a running job while the test did not mean to
+// interrupt one (drainJobs, drainUntil, settle). A cut-off fails at once where it happens, but a
+// caller's toPass would retry past that failure; the cutOffGuard fixture fails the test at its end
+// whenever one was recorded, so a cut-off can never be swallowed.
+const unexpectedCutOffs: string[] = [];
+
+function recordCutOff(where: string): void {
+  unexpectedCutOffs.push(where);
+}
+
+// test is Playwright's test with three automatic fixtures (cutOffGuard: see unexpectedCutOffs above).
 //
 // cspGuard: a Content Security Policy violation on any page the test visits fails the test (the SPA
 // must run under the strict CSP). It watches both the console ("… violates the following Content
@@ -29,20 +39,10 @@ function networkChangedMarker(testInfo: { project: { outputDir: string }; testId
 // interface gains or loses an IP address, including requests to localhost; no Chromium switch turns
 // this off. On a developer laptop that happens without the suite's involvement (an IPv6 address on
 // Wi-Fi expiring and coming back, a container started by another process adding a veth). The guard
-// records such aborts and annotates the test. Outside CI a test is retried only when its failed
-// attempt saw such an abort: playwright.config.ts allows one retry, and a retry of an attempt that
-// failed without one fails at once with the reason, so no other failure is retried. In CI the
-// retry policy is unchanged (one retry for any failure).
-// unexpectedCutOffs records every drain that cut off a running job while the test did not mean to
-// interrupt one (drainJobs, drainUntil, settle). A cut-off fails at once where it happens, but a
-// caller's toPass would retry past that failure; the cutOffGuard fixture fails the test at its end
-// whenever one was recorded, so a cut-off can never be swallowed.
-const unexpectedCutOffs: string[] = [];
-
-function recordCutOff(where: string): void {
-  unexpectedCutOffs.push(where);
-}
-
+// records such aborts and annotates the test. A test is retried only when its failed attempt saw
+// such an abort: playwright.config.ts allows one retry, and a retry of an attempt that
+// failed without one fails at once with the reason, so no other failure is retried, locally and in
+// CI alike (a real flake is never hidden by a retry).
 export const test = base.extend<{ cspGuard: void; networkChangeGuard: void; cutOffGuard: void }>({
   cutOffGuard: [
     // Playwright reads a fixture's dependencies from this pattern: it needs none.
@@ -57,7 +57,7 @@ export const test = base.extend<{ cspGuard: void; networkChangeGuard: void; cutO
   networkChangeGuard: [
     async ({ context }, use, testInfo) => {
       const marker = networkChangedMarker(testInfo);
-      if (testInfo.retry > 0 && !process.env.CI) {
+      if (testInfo.retry > 0) {
         if (!existsSync(marker)) {
           throw new Error(
             'not retried: the previous attempt failed without net::ERR_NETWORK_CHANGED; only failures caused by a ' +
