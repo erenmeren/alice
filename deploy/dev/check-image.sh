@@ -8,7 +8,8 @@
 # TEST_LICENSE_LABEL and TEST_ROUTE_MARKER come from the Makefile, whose release-symcheck proves
 # that an e2e build contains both (so their absence here means something). HELPER_SHA256_AMD64 and
 # HELPER_SHA256_ARM64 are the checksums of make helper: the helper build is reproducible, so the
-# image's binary must hold exactly the checksums of the helper built from the same source.
+# image's binary must hold exactly the checksums of the helper built from the same source with the
+# same Go version (the two checks are skipped, with a skip: line, when the host's Go differs).
 #
 # Docker: one stopped container (docker create, for docker export and docker cp) and short-lived
 # docker run --rm containers of alice:<tag> only, with no network, a read-only root file system and
@@ -85,9 +86,18 @@ info="$(go version -m "$bin")"
 check "binary was built without build tags" "$(count -Ec '^\s+build\s+-tags=' <<<"$info")" "0"
 check "binary is static (CGO_ENABLED=0)" "$(count -Ec '^\s+build\s+CGO_ENABLED=0$' <<<"$info")" "1"
 check "binary links no testify or testcontainers" "$(count -Ec '\s(github.com/stretchr/testify|github.com/testcontainers)' <<<"$info")" "0"
-# The setup script checks the helper an administrator installs against these checksums.
-check "binary holds the amd64 helper checksum of make helper" "$(count -acF "$sum_amd64" "$bin")" "1"
-check "binary holds the arm64 helper checksum of make helper" "$(count -acF "$sum_arm64" "$bin")" "1"
+# The setup script checks the helper an administrator installs against these checksums. The helper
+# build is reproducible only with the same Go version: when the host's Go (which built the checksums
+# of make helper) differs from the Go that built the image's binary, the two checks are skipped with
+# a message instead of failing. CI installs the Go of go.mod for both, so there they always run.
+host_go="$(go env GOVERSION)"
+bin_go="$(awk 'NR == 1 { print $2 }' <<<"$info")"
+if [[ "$host_go" == "$bin_go" ]]; then
+  check "binary holds the amd64 helper checksum of make helper" "$(count -acF "$sum_amd64" "$bin")" "1"
+  check "binary holds the arm64 helper checksum of make helper" "$(count -acF "$sum_arm64" "$bin")" "1"
+else
+  echo "skip: binary holds the helper checksums of make helper (host Go $host_go, image binary built with $bin_go; the helper build is reproducible only with the same Go version)"
+fi
 check "binary does not hold the test license key label" "$(count -acF "$label" "$bin")" "0"
 check "binary does not hold the e2e /test routes" "$(count -acF "$marker" "$bin")" "0"
 
