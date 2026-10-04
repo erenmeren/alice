@@ -199,6 +199,13 @@ func (r *Runner) handler(name string) HandlerFunc {
 	return r.handlers[name]
 }
 
+// Handles reports whether the runner has a handler for t. It claims only such jobs, so a job of a
+// type without a handler stays queued; serve refuses to start with one (cmd/alice checkWiring).
+func (r *Runner) Handles(t Type) bool {
+	reg, ok := lookup(t.Name)
+	return ok && reg == t && r.handler(t.Name) != nil
+}
+
 // handled returns the job types this runner can run; it never claims others.
 func (r *Runner) handled() []string {
 	r.mu.Lock()

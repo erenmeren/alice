@@ -209,15 +209,21 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		return err
 	}
 	runner := buildRunner(pool, svc, clk, log)
+	// While it leads, the leader holds one connection of the pool for good (db.Open sizes the
+	// pool for it). Every periodic task, the deployment recovery sweep included, runs only in the
+	// process that holds it.
+	leader := jobs.NewLeader(pool, log)
+	sched := buildScheduler(svc, sender, clk, log).WithLeader(leader)
+	// A provider or a job type that is not wired fails the start (never a degraded server whose
+	// deployments wait forever).
+	if err := checkWiring(svc.registry, runner, sched); err != nil {
+		return err
+	}
 	// Jobs whose worker died with the previous process are queued again before any request
 	// can list them (§8.8); Run repeats the pass before its workers start.
 	if _, err := runner.Recover(ctx); err != nil {
 		return err
 	}
-	// While it leads, the leader holds one connection of the pool for good (db.Open sizes the
-	// pool for it).
-	leader := jobs.NewLeader(pool, log)
-	sched := buildScheduler(svc, sender, clk, log).WithLeader(leader)
 
 	var apiServer *api.Server
 	td := testDeps{

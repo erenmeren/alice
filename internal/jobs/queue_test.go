@@ -144,7 +144,10 @@ func TestHandleRefusesUnregisteredAndDuplicateHandlers(t *testing.T) {
 	h := func(_ context.Context, _ Job, _ StepRecorder) (map[string]any, error) { return nil, nil }
 	assert.Panics(t, func() { r.Handle(Type{Name: "never.registered", Class: license.ClassAlways}, h) })
 	assert.Panics(t, func() { r.Handle(Type{Name: TargetDiscover.Name, Class: license.ClassAlways}, h) }, "class must match the registry")
+	assert.False(t, r.Handles(TargetDiscover))
 	r.Handle(TargetDiscover, h)
+	assert.True(t, r.Handles(TargetDiscover), "the composition root checks every job type has a handler")
+	assert.False(t, r.Handles(TargetTestConnection))
 	assert.Panics(t, func() { r.Handle(TargetDiscover, h) })
 }
 

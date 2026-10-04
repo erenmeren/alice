@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -20,29 +23,73 @@ func newTestPool() *linuxssh.Pool {
 		linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)
 }
 
-// The shipped provider set is visible in one place (spec §6.4): exactly linuxssh in Phase 3,
-// with the capabilities the SSH key inventory needs, and the registry is frozen afterwards.
-func TestRegisterProvidersShipsExactlyLinuxSSH(t *testing.T) {
+// The shipped provider set is visible in one place (spec §6.4): linuxssh with the capabilities
+// the SSH key inventory needs and, from Phase 4, nginx with the certificate capabilities on top;
+// the registry is frozen afterwards.
+func TestRegisterProvidersShipsLinuxSSHAndNginx(t *testing.T) {
 	pool := newTestPool()
 	t.Cleanup(pool.Close)
 	reg := providers.NewRegistry()
 	registerProviders(reg, pool, slog.New(slog.DiscardHandler))
 
 	list := reg.List()
-	require.Len(t, list, 1)
+	require.Len(t, list, 2)
 	assert.Equal(t, providers.KindLinuxSSH, list[0].Kind)
 	assert.Equal(t, []providers.Capability{providers.CapAuthorizedKeys, providers.CapDiscoverSSHKeys, providers.CapTestConnection},
 		list[0].Capabilities)
-	_, ok := reg.Get(providers.KindNginx)
-	assert.False(t, ok, "nginx arrives in Phase 4")
+	assert.Equal(t, providers.KindNginx, list[1].Kind)
+	assert.ElementsMatch(t, []providers.Capability{providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
+		providers.CapDiscoverCerts, providers.CapDeployCertificate, providers.CapVerifyDeployment}, list[1].Capabilities)
 
 	p, ok := reg.Get(providers.KindLinuxSSH)
 	require.True(t, ok)
 	providertest.CheckProvider(t, p)
 	_, isGuide := p.(providers.SetupGuide)
 	assert.True(t, isGuide, "the setup snippets come from the linuxssh provider")
+	n, ok := reg.Get(providers.KindNginx)
+	require.True(t, ok)
+	providertest.CheckProvider(t, n)
+	_, isCache := n.(providers.ConnectionCache)
+	assert.True(t, isCache, "deleting an Nginx server closes its connections")
 
 	assert.Panics(t, func() { reg.Register(linuxssh.New(linuxssh.Options{Pool: pool})) }, "the registry is frozen")
+}
+
+// Both providers share one connection pool: forgetting a deleted target through the nginx provider
+// reaches the pool the linuxssh provider dials with, so neither reconnects to it.
+func TestNginxAndLinuxSSHShareOnePool(t *testing.T) {
+	pool := newTestPool()
+	t.Cleanup(pool.Close)
+	reg := providers.NewRegistry()
+	registerProviders(reg, pool, slog.New(slog.DiscardHandler))
+	ssh, _ := reg.Get(providers.KindLinuxSSH)
+	ngx, _ := reg.Get(providers.KindNginx)
+
+	gone, kept := uuid.New(), uuid.New()
+	ngx.(providers.ConnectionCache).ForgetTarget(gone)
+	// Port 1 on the loopback refuses at once: a target that is not forgotten is dialled.
+	cfg := providers.TargetConfig{"host": "127.0.0.1", "port": 1, "username": "alice-svc"}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := ssh.Open(ctx, providers.TargetRef{ID: gone, Kind: providers.KindLinuxSSH, Config: cfg}, nil, providers.Env{})
+	assert.Equal(t, "linuxssh: the target was deleted", causeOf(t, err), "the linuxssh pool refuses the target the nginx provider forgot")
+	_, err = ssh.Open(ctx, providers.TargetRef{ID: kept, Kind: providers.KindLinuxSSH, Config: cfg}, nil, providers.Env{})
+	assert.NotEqual(t, "linuxssh: the target was deleted", causeOf(t, err), "another target is dialled")
+
+	pool.Close()
+	_, err = ngx.Open(ctx, providers.TargetRef{ID: kept, Kind: providers.KindNginx, Config: cfg}, nil, providers.Env{})
+	assert.Equal(t, "linuxssh: connection pool closed", causeOf(t, err), "the nginx provider dials through the same (now closed) pool")
+}
+
+// causeOf is the cause of a provider error (its message names only the code).
+func causeOf(t *testing.T, err error) string {
+	t.Helper()
+	var pe *providers.Error
+	require.ErrorAs(t, err, &pe)
+	if pe.Cause == nil {
+		return ""
+	}
+	return pe.Cause.Error()
 }
 
 // Only a development build ("dev", what go build and go test produce) may offer a setup script

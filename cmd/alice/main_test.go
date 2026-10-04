@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +21,7 @@ import (
 	"alice/internal/auth"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
+	"alice/internal/jobs/deployjobs"
 	"alice/internal/license"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/config"
@@ -140,13 +144,71 @@ func TestCloseWithinIsBounded(t *testing.T) {
 // Every shutdown step is bounded and together they end before Docker's stop_grace_period sends
 // SIGKILL (I-2): the HTTP drain, scheduler and job wait share one deadline from the signal, which
 // also covers the runner's own grace; the leader, SSH pool, time record and database pool each
-// have a small budget after it.
+// have a small budget after it. The sum is taken over every constant of the shutdown block in
+// main.go, so a wait added there counts without editing this test.
+//
+// A running deployment is not waited for beyond the runner's grace (a deploy command may take up
+// to 240 s): the runner lets running jobs end for half of it, then cancels them and gives them the
+// second half to record what they know; jobs that still run are handed back (releaseAll) and the
+// deployment recovery sweep finishes them after the restart. Recording an outcome after the
+// cancellation (deployjobs: the write and its re-read, each bounded by RecordTimeout) fits in that
+// second half.
 func TestShutdownFitsTheStopGracePeriod(t *testing.T) {
 	grace, err := time.ParseDuration(readCompose(t, "../../deploy/docker-compose.yml").Services["alice"].StopGracePeriod)
 	require.NoError(t, err)
-	total := serveShutdownBudget + leaderCloseBudget + sshPoolCloseBudget + timeRecordSaveBudget + dbCloseBudget
+	budgets := shutdownBudgetConstants(t)
+	require.Equal(t, []string{"serveShutdownBudget", "jobsShutdownGrace", "leaderCloseBudget", "sshPoolCloseBudget",
+		"timeRecordSaveBudget", "dbCloseBudget"}, budgetNames(budgets), "the shutdown constants of main.go")
+	values := map[string]time.Duration{"serveShutdownBudget": serveShutdownBudget, "jobsShutdownGrace": jobsShutdownGrace,
+		"leaderCloseBudget": leaderCloseBudget, "sshPoolCloseBudget": sshPoolCloseBudget,
+		"timeRecordSaveBudget": timeRecordSaveBudget, "dbCloseBudget": dbCloseBudget}
+	var total time.Duration
+	for _, name := range budgetNames(budgets) {
+		if name == "jobsShutdownGrace" {
+			continue // inside serveShutdownBudget (asserted below)
+		}
+		total += values[name]
+	}
+	assert.Equal(t, 83*time.Second, total)
 	assert.Less(t, total, grace, "worst-case shutdown %s must end before stop_grace_period %s", total, grace)
 	assert.Less(t, jobsShutdownGrace, serveShutdownBudget, "running jobs get their grace inside the shutdown deadline")
+	assert.LessOrEqual(t, 2*deployjobs.RecordTimeout, jobsShutdownGrace/2,
+		"a deployment cut off by the shutdown can record its outcome inside the runner's grace")
+}
+
+// shutdownBudgetConstants returns the names of the constants declared in main.go's shutdown block
+// (the const block that declares serveShutdownBudget), in order.
+func shutdownBudgetConstants(t *testing.T) []*ast.Ident {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	require.NoError(t, err)
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		var names []*ast.Ident
+		found := false
+		for _, spec := range gd.Specs {
+			for _, n := range spec.(*ast.ValueSpec).Names {
+				names = append(names, n)
+				found = found || n.Name == "serveShutdownBudget"
+			}
+		}
+		if found {
+			return names
+		}
+	}
+	t.Fatal("main.go has no shutdown const block")
+	return nil
+}
+
+func budgetNames(ids []*ast.Ident) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id.Name
+	}
+	return out
 }
 
 // At shutdown serve waits for running scheduled tasks only until the shutdown deadline.

@@ -78,6 +78,13 @@ func NewScheduler(clk clock.Clock, gate Gate, log *slog.Logger, tasks ...Task) *
 	return s
 }
 
+// Schedules reports whether t is one of the scheduler's tasks (serve refuses to start when a
+// periodic job type is not scheduled: cmd/alice checkWiring).
+func (s *Scheduler) Schedules(t Type) bool {
+	tk, ok := s.tasks[t.Name]
+	return ok && tk.Type == t
+}
+
 // Run runs every task on its interval until ctx ends. A tick that finds the task still
 // running is skipped.
 func (s *Scheduler) Run(ctx context.Context) {

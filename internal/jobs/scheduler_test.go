@@ -81,6 +81,15 @@ func TestNewSchedulerRefusesBadTasks(t *testing.T) {
 	}, "duplicate task")
 }
 
+// Schedules lets the composition root check that every periodic job type is scheduled.
+func TestSchedulesReportsTheScheduledTasks(t *testing.T) {
+	run := func(context.Context) error { return nil }
+	s := NewScheduler(nil, &fakeGate{}, quiet, Task{Type: NotifySend, Every: time.Minute, Run: run})
+	assert.True(t, s.Schedules(NotifySend))
+	assert.False(t, s.Schedules(LicenseEvaluate))
+	assert.False(t, s.Schedules(Type{Name: NotifySend.Name, Class: license.ClassChange}), "a type differing in class is not the scheduled one")
+}
+
 // advanceUntil moves the fake clock by every until ran reports a run (the loop goroutine
 // may not have created its ticker yet on the first move).
 func advanceUntil(t *testing.T, clk *clock.Fake, every time.Duration, ran <-chan struct{}) {

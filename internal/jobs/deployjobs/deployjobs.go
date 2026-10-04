@@ -126,10 +126,12 @@ const (
 	// ("nothing was written") only when the start record is at least this old (the budget plus a
 	// margin, S6).
 	noJournalFinalAfter = HelperBudget + 10*time.Second
-	// writeTimeout bounds a record written with a context detached from the job's: the outcome of
-	// a completed call is recorded even when the job's context ended meanwhile (lease lost,
-	// shutdown).
-	writeTimeout = 15 * time.Second
+	// RecordTimeout bounds a record written with a context detached from the job's: the outcome
+	// of a completed call is recorded even when the job's context ended meanwhile (lease lost,
+	// shutdown). Recording an outcome takes at most two of them (the write and its re-read); the
+	// shutdown grace of the runner leaves them that time after cancelling the job (cmd/alice
+	// TestShutdownFitsTheStopGracePeriod).
+	RecordTimeout = 15 * time.Second
 	// stepTimeout bounds one step record.
 	stepTimeout = 5 * time.Second
 )
@@ -153,11 +155,11 @@ const (
 	reasonOutcomeUnknown  = "deployment.outcome_unknown"
 )
 
-// detached is ctx without its cancellation, bounded by writeTimeout: for the records that must
+// detached is ctx without its cancellation, bounded by RecordTimeout: for the records that must
 // outlive the job's context (the outcome of a call that completed; a refusal that is already
 // known), as targetjobs and inventory do for the same reason.
 func detached(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
+	return context.WithTimeout(context.WithoutCancel(ctx), RecordTimeout)
 }
 
 // deploymentID is the job payload's deployment id.

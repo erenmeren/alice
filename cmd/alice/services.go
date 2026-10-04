@@ -17,6 +17,7 @@ import (
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
+	"alice/internal/jobs/deployjobs"
 	"alice/internal/jobs/targetjobs"
 	"alice/internal/license"
 	"alice/internal/notify"
@@ -135,19 +136,48 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 // jobRetention is how long finished jobs are kept before maintenance.cleanup prunes them (§8.2).
 const jobRetention = 90 * 24 * time.Hour
 
-// buildRunner builds the job workers with every Phase 3 handler (spec §8.1–§8.8). Every claim
+// buildRunner builds the job workers with every queue handler: the Phase 3 target jobs (spec
+// §8.1–§8.8) and the Phase 4 certificate deployment and its recovery (§12.6, §8.8). Every claim
 // passes the license gate; a job that runs out of attempts or fails its integrity check emails
-// the Administrators.
+// the Administrators. deployjobs.Register panics on a missing dependency, so a build that lacks
+// one never starts.
 func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.Logger) *jobs.Runner {
 	runner := jobs.NewRunner(jobs.RunnerConfig{Pool: pool, Queue: svc.queue, Gate: svc.license, Audit: svc.auditLog,
 		Clock: clk, Log: log, Notifier: notify.AdminNotifier{Clock: clk}, ShutdownGrace: jobsShutdownGrace})
-	targetjobs.Register(runner, targetjobs.Deps{Inventory: svc.inventory, Registry: svc.registry, Clock: clk, Log: log})
+	targetjobs.Register(runner, targetDeps(svc, clk, log))
+	deployjobs.Register(runner, deployDeps(svc, clk, log))
 	return runner
 }
 
+// targetDeps are the dependencies of the Phase 3 target jobs (TestJobDepsCarryEveryDependency).
+func targetDeps(svc *services, clk clock.Clock, log *slog.Logger) targetjobs.Deps {
+	d := targetjobs.Deps{Registry: svc.registry, Clock: clk, Log: log}
+	if svc.inventory != nil { // a nil *inventory.Service must stay a nil interface
+		d.Inventory = svc.inventory
+	}
+	return d
+}
+
+// deployDeps are the dependencies of the deployment jobs. FirstRecovery keeps its default
+// (inventory.FirstRecoveryDelay, 30 s).
+func deployDeps(svc *services, clk clock.Clock, log *slog.Logger) deployjobs.Deps {
+	d := deployjobs.Deps{Registry: svc.registry, Clock: clk, Log: log}
+	if svc.inventory != nil { // a nil *inventory.Service must stay a nil interface, so Register refuses it
+		d.Inventory = svc.inventory
+	}
+	return d
+}
+
+// sweepEvery is the interval of the deployment recovery sweep (spec R38 item 8).
+const sweepEvery = time.Minute
+
 // buildScheduler is the periodic work of serve (spec §8.2, R37 item 15); every run passes the
-// license gate. The audit verification ticks hourly and verifies when the last intact
-// verification is 23 hours old (jobs.AuditVerifyTask). The e2e tests use the same tasks.
+// license gate, and serve runs it under the scheduling lock (WithLeader), so one process runs
+// each task at a time. The audit verification ticks hourly and verifies when the last intact
+// verification is 23 hours old (jobs.AuditVerifyTask). The deployment recovery sweep (ClassAlways:
+// it runs in lock too) queues the recovery of interrupted deployments and ends the ones whose job
+// ended; it runs on the scheduler's context, which carries no job claim. The e2e tests use the
+// same tasks.
 func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *slog.Logger) *jobs.Scheduler {
 	return jobs.NewScheduler(clk, svc.license, log,
 		jobs.Task{Type: jobs.LicenseEvaluate, Every: time.Hour, Run: svc.license.Tick},
@@ -163,6 +193,10 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 		}},
 		jobs.Task{Type: jobs.DiscoverySchedule, Every: time.Minute, Run: func(ctx context.Context) error {
 			_, err := svc.inventory.ScheduleDiscovery(ctx)
+			return err
+		}},
+		jobs.Task{Type: jobs.DeploymentRecoverySweep, Every: sweepEvery, Run: func(ctx context.Context) error {
+			_, err := svc.inventory.SweepDeployments(ctx)
 			return err
 		}},
 	)
