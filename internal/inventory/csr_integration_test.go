@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -407,4 +408,34 @@ func TestCompleteCSRRefusesAPastedPrivateKey(t *testing.T) {
 	assert.Zero(t, h.audits("certificate.upload_rejected"), "a field error, as for a PEM upload")
 	_, _, err = h.svc.CompleteCSR(h.ctx, op, csr.ID, string(signed.FullchainPEM), "")
 	require.NoError(t, err)
+}
+
+// W2 review, minor 4: the open-request bound is exact under concurrency (the count and the insert
+// are serialized), whatever the timing of two requests that both got a generation slot.
+func TestPendingSigningRequestBoundIsExact(t *testing.T) {
+	h := newHarness(t)
+	op := h.user("oya", rbac.Operator, "")
+	defer inventory.SetMaxPendingCSRs(1)()
+	for round := range 5 {
+		_, err := h.db.Owner.Exec(h.ctx, "UPDATE csr_requests SET status = 'cancelled', finished_at = now() WHERE status = 'pending'")
+		require.NoError(t, err)
+		errs := make(chan error, 2)
+		for range 2 {
+			go func() {
+				_, err := h.svc.CreateCSR(h.ctx, op, inventory.CSRInput{CommonName: "www.example.test", KeyType: "ecdsa-p256"})
+				errs <- err
+			}()
+		}
+		ok := 0
+		for range 2 {
+			err := <-errs
+			if err == nil {
+				ok++
+				continue
+			}
+			assert.True(t, errors.Is(err, inventory.ErrTooManyPendingCSRs) || errors.Is(err, inventory.ErrCSRBusy), "round %d: %v", round, err)
+		}
+		assert.LessOrEqual(t, ok, 1, "round %d", round)
+		assert.LessOrEqual(t, h.count("SELECT count(*) FROM csr_requests WHERE status = 'pending'"), 1, "round %d", round)
+	}
 }

@@ -84,11 +84,16 @@ func acquireCSRSlot() (release func(), ok bool) {
 	}
 }
 
-// maxPendingCSRs bounds the open signing requests (each holds a sealed key nobody uses until the
-// request is completed): CreateCSR refuses with ErrTooManyPendingCSRs beyond it. It equals what
-// ListCSRs lists, so every open request stays visible. Concurrent requests may pass the check
-// together, at most maxCSRKeygens of them.
+// maxPendingCSRs bounds the open signing requests of the whole installation (not per user; each holds
+// a sealed key nobody uses until the request is completed): CreateCSR refuses with
+// ErrTooManyPendingCSRs beyond it. It equals what ListCSRs lists, so every open request stays
+// visible. The bound is exact: the inserting transaction counts under pendingCSRLock. (A check
+// before the key is generated only saves the work when the bound is already reached.)
 var maxPendingCSRs = maxListedPendingCSRs
+
+// pendingCSRLock is the pg_advisory_xact_lock key that serializes the count and the insert of a
+// signing request (an arbitrary constant beside the other Alice lock keys).
+const pendingCSRLock int64 = 7160927315633811306
 
 // WarnCSRNameMismatch: the signed certificate does not cover every name of its request (a CA may
 // change the names; the completion is accepted and says so).
@@ -185,6 +190,9 @@ func (s *Service) CreateCSR(ctx context.Context, a Actor, in CSRInput) (CSR, err
 	id := uuid.Must(uuid.NewV7())
 	var out CSR
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", pendingCSRLock); err != nil {
+			return fmt.Errorf("inventory: lock the signing request count: %w", err)
+		}
 		if err := checkPendingCSRs(ctx, tx); err != nil {
 			return err
 		}
