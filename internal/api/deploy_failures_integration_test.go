@@ -163,9 +163,10 @@ func TestPrecheckRefusesWebsitesAliceCannotCheck(t *testing.T) {
 		name  string
 		setup func(n *nj)
 		code  string
+		port  bool // the reason's text names the port probed
 	}{
-		{"F-07 the website cannot be reached", func(n *nj) { n.f.emu.LocalProbeFails(true) }, "ALC-DEP-0005"},
-		{"F-06 something else answers", func(n *nj) { n.f.emu.ServeOther(443, strings.Repeat("ab", 32)) }, "ALC-DEP-0004"},
+		{"F-07 the website cannot be reached", func(n *nj) { n.f.emu.LocalProbeFails(true) }, "ALC-DEP-0005", true},
+		{"F-06 something else answers", func(n *nj) { n.f.emu.ServeOther(443, strings.Repeat("ab", 32)) }, "ALC-DEP-0004", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n := newNJ(t, wwwSite())
@@ -176,7 +177,16 @@ func TestPrecheckRefusesWebsitesAliceCannotCheck(t *testing.T) {
 			assert.Equal(t, "done", d.State)
 			assert.Equal(t, "failed", d.Status)
 			assert.Equal(t, tc.code, d.errorCode())
-			assert.Equal(t, map[string]string{"port": "443"}, d.Error.Params)
+			if tc.port {
+				assert.Equal(t, map[string]string{"port": "443"}, d.Error.Params)
+			}
+			// The job's error keeps the port too (the text of these reasons names it).
+			jobError, _ := n.job(n.op, d.JobID)["error"].(map[string]any)
+			require.NotNil(t, jobError)
+			assert.Equal(t, tc.code, jobError["code"])
+			if tc.port {
+				assert.Equal(t, map[string]any{"port": "443"}, jobError["params"], "the job's error carries the port")
+			}
 			assert.Equal(t, []string{"verify_current:started", "verify_current:failed"}, d.stepList())
 			assert.Zero(t, n.f.emu.DeployCount(), "nothing was sent")
 			assert.Equal(t, map[string]int{"deployment.failed": 1}, n.deploymentEmails())
@@ -277,4 +287,27 @@ func TestDeployRefusalsAtRequestTime(t *testing.T) {
 		refused(t, n, n.requestDeploy(n.op, uuid.NewString(), n.locs[wwwCert]), http.StatusNotFound, "ALC-SYS-0001", "")
 		noDeployments(t, n)
 	})
+}
+
+// The new certificate is served, but with one certificate instead of the chain of two: the
+// verification fails with the port, the deployment is rolled back and the job's error keeps the
+// port for its text.
+func TestVerifyChainFailureKeepsThePort(t *testing.T) {
+	n := newNJ(t, wwwSite())
+	leaf := n.issue()
+	certID := n.uploadCertificate(n.op, certBody(leaf, "Renewed"))
+	n.f.emu.ServeOtherAfterReload(443, pki.Fingerprint(leaf.Cert))
+	ref := n.deploy(n.op, certID, n.locs[wwwCert])[0]
+	n.runJobs()
+	d := n.deployment(n.op, ref.ID)
+	assert.Equal(t, "rolled_back", d.Status)
+	assert.Equal(t, "ALC-DEP-0012", d.errorCode())
+	assert.Equal(t, map[string]string{"port": "443"}, d.Error.Params)
+	require.NotNil(t, d.VerifyFailed)
+	assert.Equal(t, "ALC-DEP-0012", d.VerifyFailed.Code)
+	jobError, _ := n.job(n.op, ref.JobID)["error"].(map[string]any)
+	require.NotNil(t, jobError)
+	assert.Equal(t, "ALC-DEP-0012", jobError["code"])
+	assert.Equal(t, map[string]any{"port": "443"}, jobError["params"], "the job's error carries the port")
+	n.f.requirePair(t, wwwCert, wwwKey, wwwName, n.f.old)
 }

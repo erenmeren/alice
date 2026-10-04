@@ -50,11 +50,29 @@ type nginxFixture struct {
 	host   string
 	port   int
 	old    pki.Leaf
+	// rsaOld is the certificate of the sites that serve an RSA key (nil: none); every other site
+	// serves old.
+	rsaOld *pki.Leaf
+	rsaAt  map[string]bool // certificate paths served with rsaOld
+}
+
+// oldAt is the certificate the site with certPath served before any deployment.
+func (f *nginxFixture) oldAt(certPath string) pki.Leaf {
+	if f.rsaAt[certPath] {
+		return *f.rsaOld
+	}
+	return f.old
 }
 
 // nginxFixture starts an emulated Nginx host with the given sites, authorizes Alice's platform
 // key on it and makes it reachable for Alice's own TLS probe.
 func (s *stack) nginxFixture(sites ...linuxsshtest.NginxSite) *nginxFixture {
+	return s.nginxFixtureRSA(nil, sites...)
+}
+
+// nginxFixtureRSA is nginxFixture where the sites with a certificate path in rsaPaths serve an RSA
+// certificate (a location only takes a certificate of its key type).
+func (s *stack) nginxFixtureRSA(rsaPaths []string, sites ...linuxsshtest.NginxSite) *nginxFixture {
 	t := s.t
 	t.Helper()
 	pk, err := s.inv.PlatformKey(context.Background())
@@ -64,8 +82,16 @@ func (s *stack) nginxFixture(sites ...linuxsshtest.NginxSite) *nginxFixture {
 	f := &nginxFixture{emu: linuxsshtest.NewEmulator()}
 	f.emu.EnableNginx("1.22.1")
 	f.old = s.ca.Issue(pki.Opts{CommonName: wwwName, SANs: []string{wwwName, apiName}}, s.clock.Now())
+	if len(rsaPaths) > 0 {
+		rsaOld := s.ca.Issue(pki.Opts{CommonName: wwwName, SANs: []string{wwwName, apiName}, KeyType: pki.RSA2048}, s.clock.Now())
+		f.rsaOld, f.rsaAt = &rsaOld, map[string]bool{}
+		for _, p := range rsaPaths {
+			f.rsaAt[p] = true
+		}
+	}
 	for _, site := range sites {
-		f.emu.AddSite(site, f.old.FullchainPEM, f.old.KeyPEM)
+		old := f.oldAt(site.CertPath)
+		f.emu.AddSite(site, old.FullchainPEM, old.KeyPEM)
 	}
 	f.server = linuxsshtest.NewServer(t, f.emu.Handler())
 	f.server.Authorize(pub)
@@ -152,6 +178,13 @@ type nj struct {
 // outbox), creates an operator and adds the first Nginx server with the given sites.
 func newNJ(t *testing.T, sites ...linuxsshtest.NginxSite) *nj {
 	t.Helper()
+	return newNJRSA(t, nil, sites...)
+}
+
+// newNJRSA is newNJ where the first server's sites with a certificate path in rsaPaths serve an RSA
+// certificate.
+func newNJRSA(t *testing.T, rsaPaths []string, sites ...linuxsshtest.NginxSite) *nj {
+	t.Helper()
 	s, admin, adminAcct := installed(t)
 	s.stepUp(admin, adminAcct)
 	requireStatus(t, admin.do(http.MethodPatch, "/api/v1/users/"+adminAcct.id, map[string]string{"email": "ada@example.com"}), http.StatusOK)
@@ -159,16 +192,20 @@ func newNJ(t *testing.T, sites ...linuxsshtest.NginxSite) *nj {
 	oc := s.freshClient()
 	s.firstSignIn(oc, operator)
 	n := &nj{stack: s, admin: admin, op: oc, adminAcct: adminAcct, opAcct: operator}
-	n.f, n.targetID, n.locs = n.addNginx("web-01", sites...)
+	n.f, n.targetID, n.locs = n.addNginxRSA("web-01", rsaPaths, sites...)
 	return n
 }
 
 // addNginx adds another Nginx server: the emulated host, the target, the host-key confirmation
 // and the first discovery. It returns the host, the target id and the discovered locations.
 func (s *stack) addNginxAs(c *client, name string, sites ...linuxsshtest.NginxSite) (*nginxFixture, string, map[string]string) {
+	return s.addNginxRSAAs(c, name, nil, sites...)
+}
+
+func (s *stack) addNginxRSAAs(c *client, name string, rsaPaths []string, sites ...linuxsshtest.NginxSite) (*nginxFixture, string, map[string]string) {
 	t := s.t
 	t.Helper()
-	f := s.nginxFixture(sites...)
+	f := s.nginxFixtureRSA(rsaPaths, sites...)
 	rec := c.do(http.MethodPost, "/api/v1/targets", map[string]any{"type": "nginx", "name": name, "host": f.host, "port": f.port, "username": "alice-svc"})
 	requireStatus(t, rec, http.StatusCreated)
 	targetID := decodeBody[map[string]any](t, rec)["target"].(map[string]any)["id"].(string)
@@ -178,6 +215,10 @@ func (s *stack) addNginxAs(c *client, name string, sites ...linuxsshtest.NginxSi
 
 func (n *nj) addNginx(name string, sites ...linuxsshtest.NginxSite) (*nginxFixture, string, map[string]string) {
 	return n.addNginxAs(n.admin, name, sites...)
+}
+
+func (n *nj) addNginxRSA(name string, rsaPaths []string, sites ...linuxsshtest.NginxSite) (*nginxFixture, string, map[string]string) {
+	return n.addNginxRSAAs(n.admin, name, rsaPaths, sites...)
 }
 
 // certificateLocations lists a server's certificate locations over the API.
