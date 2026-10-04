@@ -6,6 +6,7 @@ import {
   browserLocale,
   either,
   expectAccessible,
+  expectWide,
   field,
   firstSignIn,
   freshCode,
@@ -17,6 +18,7 @@ import {
   tabTo,
   test,
   totp,
+  translator,
   serverNow,
   uiLang,
   type Account,
@@ -129,6 +131,7 @@ async function closeDialog(page: Page, dialog: Locator) {
 
 for (const lang of ['en', 'tr'] as Lang[]) {
   const c = COPY[lang];
+  const tr = translator(lang);
 
   test.describe(`Phase 1 owner journey (${lang})`, () => {
     test.use({ locale: browserLocale(lang) });
@@ -345,6 +348,12 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await page.getByRole('button', { name: c.verifyIntegrity }).click();
       await expect(page.getByText(c.intact)).toBeVisible();
       await expectAccessible(page, 'audit');
+      // AUD-25 d: an entry's object and details; the table scrolls inside its container on a phone.
+      const detailsToggle = new RegExp(`^${tr('audit.detailsToggle', { n: 0 }).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace('0', '\\d+')}$`);
+      await page.getByRole('button', { name: detailsToggle }).first().click();
+      await expect(page.getByRole('group', { name: tr('audit.columns.details') }).first()).toBeVisible();
+      await expect(page.getByRole('columnheader', { name: tr('audit.columns.object') })).toBeVisible();
+      await expectWide(page, 'audit entry details');
 
       await signOut(page);
       await expectAccessible(page, 'login');
@@ -402,7 +411,15 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       const setPassword = page.getByRole('dialog', { name: c.setPasswordTitle(OPERATOR.username) });
       await expect(setPassword).toBeVisible();
       await expectAccessible(page, 'set password dialog');
+      // AUD-12: setting a new password and signing out everywhere also revoke the API tokens.
+      await expect(setPassword).toContainText(tr('users.resetPasswordText'));
       await closeDialog(page, setPassword);
+      await openManage();
+      await manage.getByRole('button', { name: tr('users.actions.revokeSessions') }).click();
+      const revokeAll = page.getByRole('dialog', { name: tr('users.confirm.revokeTitle', { name: OPERATOR.username }) });
+      await expect(revokeAll).toContainText(tr('users.confirm.revokeText'));
+      await revokeAll.getByRole('button', { name: c.cancel }).click();
+      await expect(revokeAll).toHaveCount(0);
       await openManage();
       await manage.getByRole('button', { name: c.resetMfa }).click();
       const confirm = page.getByRole('dialog', { name: c.resetMfaTitle(OPERATOR.username) });
