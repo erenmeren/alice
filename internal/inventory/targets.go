@@ -64,6 +64,15 @@ func scanTarget(row pgx.Row) (Target, error) {
 	return t, nil
 }
 
+// requireServer refuses a Key Vault: the SSH record paths (connection results, host keys, key and
+// certificate scans) belong to servers, and a vault's status and facts are its own.
+func requireServer(t Target) error {
+	if t.Type == TypeAzureKeyVault {
+		return ErrNotAServer
+	}
+	return nil
+}
+
 func utcPtr(t *time.Time) *time.Time {
 	if t == nil {
 		return nil

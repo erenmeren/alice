@@ -308,19 +308,34 @@ func vaultCheckOutcome(f *providers.AzureFacts) (status, errorCode string) {
 
 // refusalFromRows is the refusal a provider's rows imply when it reports the failure of the sign-in or
 // of the first vault call (the listing of certificates) as rows instead of an error: only forbidden
-// and firewall answers leave a vault addable (ruling S5). nil when the rows allow the vault.
+// and firewall answers leave a vault addable (ruling S5). A report that lacks the sign-in row or the
+// certificate listing row, or says the listing was not checked or failed without a reason, is
+// incomplete and refuses too. nil when the rows allow the vault.
 func refusalFromRows(f *providers.AzureFacts) *providers.Error {
+	incomplete := providers.NewError(reasonInternal, false, nil, nil)
 	if f == nil {
-		return nil
+		return incomplete
 	}
+	var signedIn, listed bool
 	for _, c := range f.Checks {
-		switch {
-		case c.Name == providers.AzureCheckSignIn && c.Result != providers.AzureResultOK && c.Result != providers.AzureResultNotChecked:
-			return providers.NewError(rowReason(c.Reason, "azure.auth_failed"), false, nil, nil)
-		case c.Name == providers.AzureCheckListCertificates && c.Result == providers.AzureResultFailed &&
-			c.Reason != reasonFirewall && c.Reason != reasonForbidden && c.Reason != "":
-			return providers.NewError(rowReason(c.Reason, reasonInternal), false, nil, nil)
+		switch c.Name {
+		case providers.AzureCheckSignIn:
+			if c.Result != providers.AzureResultOK {
+				return providers.NewError(rowReason(c.Reason, "azure.auth_failed"), false, nil, nil)
+			}
+			signedIn = true
+		case providers.AzureCheckListCertificates:
+			switch {
+			case c.Result == providers.AzureResultNotChecked:
+				return incomplete
+			case c.Result == providers.AzureResultFailed && c.Reason != reasonFirewall && c.Reason != reasonForbidden:
+				return providers.NewError(rowReason(c.Reason, reasonInternal), false, nil, nil)
+			}
+			listed = true
 		}
+	}
+	if !signedIn || !listed {
+		return incomplete
 	}
 	return nil
 }
@@ -344,17 +359,39 @@ func degradedFacts(e *providers.Error, now time.Time) *providers.AzureFacts {
 }
 
 // preflightVault signs in and makes the vault's first call with ident, through the azurekv provider
-// and an in-memory credential source. A non-nil error refuses the vault (the *providers.Error of the
-// provider, unchanged); nil means the vault may be stored, and the report's access check says whether
-// it works in full.
-func (s *Service) preflightVault(ctx context.Context, name, vaultURL string, ident providers.AzureIdentity) (providers.ConnectionReport, error) {
+// and an in-memory credential source. id is the vault's own id (a new vault's, chosen before the
+// call): the provider keeps nothing per target for a refused vault because the caller forgets the id.
+// A non-nil error refuses the vault: the provider's *providers.Error unchanged, or a closed
+// internal.unexpected error for anything else, a panic included (logged by type only, like a
+// decoder panic of an upload); nothing foreign is reachable through it. nil means the vault may be
+// stored, and the report's access check says whether it works in full.
+func (s *Service) preflightVault(ctx context.Context, id uuid.UUID, name, vaultURL string, ident providers.AzureIdentity) (rep providers.ConnectionReport, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Error("a vault pre-flight panicked", "panic_type", fmt.Sprintf("%T", r))
+			rep, err = providers.ConnectionReport{}, providers.NewError(reasonInternal, false, nil, nil)
+		}
+	}()
+	rep, err = s.runPreflight(ctx, id, name, vaultURL, ident)
+	if err != nil {
+		var pe *providers.Error
+		if !errors.As(err, &pe) {
+			s.log.Error("a vault pre-flight failed", "error_type", fmt.Sprintf("%T", err))
+			err = providers.NewError(reasonInternal, false, nil, nil)
+		}
+		return providers.ConnectionReport{}, err
+	}
+	return rep, nil
+}
+
+func (s *Service) runPreflight(ctx context.Context, id uuid.UUID, name, vaultURL string, ident providers.AzureIdentity) (providers.ConnectionReport, error) {
 	p, ok := s.registry.Get(providers.KindAzureKV)
 	if !ok {
 		return providers.ConnectionReport{}, errors.New("inventory: the azurekv provider is not registered")
 	}
 	ctx, cancel := context.WithTimeout(ctx, vaultPreflightBudget)
 	defer cancel()
-	sess, err := p.Open(ctx, providers.TargetRef{Name: name, Kind: providers.KindAzureKV,
+	sess, err := p.Open(ctx, providers.TargetRef{ID: id, Name: name, Kind: providers.KindAzureKV,
 		Config: providers.TargetConfig{"vault_url": vaultURL}}, memorySource{id: ident}, providers.Env{Clock: s.clock, Log: s.log})
 	if err != nil {
 		return providers.ConnectionReport{}, err
@@ -407,6 +444,38 @@ func (s *Service) auditVaultRefused(ctx context.Context, a Actor, vaultURL, auth
 	}
 }
 
+// checkVaultFree refuses a vault whose name or address is already taken, before the pre-flight (one
+// sign-in less for a duplicate). The unique indexes stay the real guard: a race still ends in
+// ErrDuplicateTarget at the insert.
+func (s *Service) checkVaultFree(ctx context.Context, name, host string) error {
+	var taken bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM targets WHERE deleted_at IS NULL
+AND (name = $1::citext OR (type = 'azure_key_vault' AND lower(config->>'host') = $2)))`, name, host).Scan(&taken)
+	if err != nil {
+		return fmt.Errorf("inventory: look for a duplicate vault: %w", err)
+	}
+	if taken {
+		return ErrDuplicateTarget
+	}
+	return nil
+}
+
+// auditVaultCredentialsRefused records a credential replacement that the pre-flight refused (SEC-070)
+// in its own transaction, as auditVaultRefused does for an add; only the closed reason is recorded.
+func (s *Service) auditVaultCredentialsRefused(ctx context.Context, a Actor, vault Target, auth string, cause error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedTimeout)
+	defer cancel()
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "vault.credentials_refused", ObjectType: "target",
+			ObjectID: vault.ID.String(), Result: audit.Failure,
+			Details: map[string]string{"vault_url": vault.Vault.URL, "auth": auth, "reason": reasonOf(cause)}})
+		return err
+	})
+	if err != nil {
+		s.log.Error("could not audit a refused credential replacement", "error_type", fmt.Sprintf("%T", err))
+	}
+}
+
 // checkTargetLimit refuses early, before any call to Azure, when the license has no free slot (the
 // insert transaction checks again and decides: L-74).
 func (s *Service) checkTargetLimit(ctx context.Context) error {
@@ -432,6 +501,9 @@ func (s *Service) CreateVault(ctx context.Context, a Actor, in NewVault) (Target
 		s.auditLicenseDenial(ctx, a, n.Name, err)
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
 	}
+	if err := s.checkVaultFree(ctx, n.Name, vault.Host); err != nil {
+		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
+	}
 	p, ok := s.registry.Get(providers.KindAzureKV)
 	if !ok {
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, errors.New("inventory: the azurekv provider is not registered")
@@ -442,8 +514,10 @@ func (s *Service) CreateVault(ctx context.Context, a Actor, in NewVault) (Target
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
 	}
 	defer cleanup()
-	rep, err := s.preflightVault(ctx, n.Name, vault.URL, ident)
+	id := uuid.Must(uuid.NewV7()) // the pre-flight opens the vault under the id it will get
+	rep, err := s.preflightVault(ctx, id, n.Name, vault.URL, ident)
 	if err != nil {
+		s.forgetTarget(TypeAzureKeyVault, id)
 		s.auditVaultRefused(ctx, a, vault.URL, n.Auth, err)
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
 	}
@@ -456,11 +530,14 @@ func (s *Service) CreateVault(ctx context.Context, a Actor, in NewVault) (Target
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
 	}
 	status, errorCode := vaultCheckOutcome(rep.Azure)
+	var lastSuccess *time.Time // only a vault that answered the certificate listing has one
+	if listingAnswered(rep.Azure) {
+		lastSuccess = &now
+	}
 	caps := make([]string, 0, len(p.Capabilities()))
 	for _, c := range p.Capabilities().Sorted() {
 		caps = append(caps, string(c))
 	}
-	id := uuid.Must(uuid.NewV7())
 	var jobID uuid.UUID
 	var created Target
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -469,7 +546,7 @@ func (s *Service) CreateVault(ctx context.Context, a Actor, in NewVault) (Target
 		}
 		if err := s.insertTarget(ctx, tx, targetRow{ID: id, Name: n.Name, Type: TypeAzureKeyVault,
 			Config:       targetConfig{Host: vault.Host, Port: 443, VaultURL: vault.URL},
-			CredentialID: cred.ID, Status: status, LastErrorCode: errorCode, LastSuccessAt: &now, Capabilities: caps,
+			CredentialID: cred.ID, Status: status, LastErrorCode: errorCode, LastSuccessAt: lastSuccess, Capabilities: caps,
 			IntervalSeconds: n.PollIntervalMinutes * 60, Facts: facts, By: a.UserID}); err != nil {
 			return err
 		}
@@ -547,8 +624,10 @@ func (s *Service) ReplaceVaultCredentials(ctx context.Context, a Actor, id uuid.
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
 	}
 	defer cleanup()
-	rep, err := s.preflightVault(ctx, cur.Name, cur.Vault.URL, ident)
+	rep, err := s.preflightVault(ctx, cur.ID, cur.Name, cur.Vault.URL, ident)
 	if err != nil {
+		s.forgetTarget(TypeAzureKeyVault, id)
+		s.auditVaultCredentialsRefused(ctx, a, cur, c.Auth, err)
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
 	}
 	cred, err := s.sealVaultCredential(info, payload)
@@ -576,14 +655,16 @@ func (s *Service) ReplaceVaultCredentials(ctx context.Context, a Actor, id uuid.
 		if locked.Status == StatusDisabled {
 			status, errorCode = StatusDisabled, locked.LastErrorCode
 		}
-		if err := s.moveVaultCredential(ctx, tx, id, cred.ID, status, errorCode, rep.Azure, now, ifVersion); err != nil {
+		if err := s.moveVaultCredential(ctx, tx, id, cred.ID, status, errorCode, rep.Azure, now, ifVersion, listingAnswered(rep.Azure)); err != nil {
 			return err
 		}
 		if updated, err = getTarget(ctx, tx, id, false); err != nil {
 			return err
 		}
-		if jobID, err = s.jobs.EnqueueTx(ctx, tx, s.pollRequest(a, id)); err != nil {
-			return err
+		if locked.Status != StatusDisabled { // a disabled vault is not polled (as RequestDiscovery refuses it)
+			if jobID, err = s.jobs.EnqueueTx(ctx, tx, s.pollRequest(a, id)); err != nil {
+				return err
+			}
 		}
 		details := map[string]string{"name": locked.Name, "vault_url": locked.Vault.URL, "auth": c.Auth,
 			"credential_id": cred.ID.String(), "previous_credential_id": previous.String(), "status": status}
@@ -600,7 +681,8 @@ func (s *Service) ReplaceVaultCredentials(ctx context.Context, a Actor, id uuid.
 	if err != nil {
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
 	}
-	s.forgetTarget(TypeAzureKeyVault, id) // a session built with the old credential must not outlive it
+	// Drop what the provider keeps for the vault, so nothing cached for the old credential is reused.
+	s.forgetTarget(TypeAzureKeyVault, id)
 	return updated, rep, jobID, nil
 }
 
@@ -608,15 +690,15 @@ func (s *Service) ReplaceVaultCredentials(ctx context.Context, a Actor, id uuid.
 // database refuses (SQLSTATE Z1006) a credential that is not the vault's own; the caller sees
 // ErrCredentialNotTheTargets, never the SQLSTATE.
 func (s *Service) moveVaultCredential(ctx context.Context, tx pgx.Tx, id, credential uuid.UUID, status, errorCode string,
-	access *providers.AzureFacts, now time.Time, ifVersion int) error {
+	access *providers.AzureFacts, now time.Time, ifVersion int, answered bool) error {
 	rawAccess, err := json.Marshal(access)
 	if err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `UPDATE targets SET credential_id = $2, status = $3, last_error_code = $4,
-facts = jsonb_set(facts - 'kv_auth_failures' - 'kv_throttled_cycles', '{azure}', $5::jsonb), last_success_at = $6,
+facts = jsonb_set(facts - 'kv_auth_failures' - 'kv_throttled_cycles', '{azure}', $5::jsonb), last_success_at = CASE WHEN $8 THEN $6 ELSE last_success_at END,
 poll_failures = 0, version = version + 1, updated_at = $6 WHERE id = $1 AND version = $7 AND deleted_at IS NULL`,
-		id, credential, status, errorCode, rawAccess, now, ifVersion)
+		id, credential, status, errorCode, rawAccess, now, ifVersion, answered)
 	if e, ok := closedTargetWriteError(err); ok {
 		return e
 	}
@@ -664,8 +746,8 @@ func (s *Service) RecordKVConnection(ctx context.Context, id uuid.UUID, r provid
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE targets SET status = $2, last_error_code = $3, last_success_at = $4, updated_at = $4, facts = $5
-WHERE id = $1`, id, to, errorCode, now, raw); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE targets SET status = $2, last_error_code = $3, last_success_at = CASE WHEN $6 THEN $4 ELSE last_success_at END, updated_at = $4, facts = $5
+WHERE id = $1`, id, to, errorCode, now, raw, listingAnswered(access)); err != nil {
 			return fmt.Errorf("inventory: record a vault access check: %w", err)
 		}
 		reason := "kv_check_ok"
@@ -775,4 +857,18 @@ func (s *Service) DeleteVault(ctx context.Context, a Actor, id uuid.UUID, remove
 	s.forgetTarget(TypeAzureKeyVault, id)
 	s.refreshLicense(ctx)
 	return nil
+}
+
+// listingAnswered reports whether the vault answered the certificate listing successfully: the
+// meaning of last_success_at for a vault (a forbidden or firewalled vault never has one).
+func listingAnswered(f *providers.AzureFacts) bool {
+	if f == nil {
+		return false
+	}
+	for _, c := range f.Checks {
+		if c.Name == providers.AzureCheckListCertificates {
+			return c.Result == providers.AzureResultOK
+		}
+	}
+	return false
 }

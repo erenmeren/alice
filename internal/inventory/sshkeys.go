@@ -140,6 +140,9 @@ func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.Dis
 		if err != nil {
 			return err
 		}
+		if err := requireServer(t); err != nil {
+			return err
+		}
 		if t.Type != TypeNginx {
 			// Certificates belong to Nginx targets only: another target type's result is its SSH half.
 			res.Nginx, res.Certificates = nil, nil

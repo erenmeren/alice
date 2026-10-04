@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -77,8 +78,29 @@ func withAzure() harnessOption {
 // spyAzure is the fake azurekv provider that also records the identity each Open was handed.
 type spyAzure struct {
 	*fake.Provider
-	mu   sync.Mutex
-	seen []seenIdentity
+	mu        sync.Mutex
+	seen      []seenIdentity
+	refs      []uuid.UUID
+	forgotten []uuid.UUID
+}
+
+// ForgetTarget makes the spy a providers.ConnectionCache and records what was forgotten.
+func (s *spyAzure) ForgetTarget(id uuid.UUID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forgotten = append(s.forgotten, id)
+}
+
+func (s *spyAzure) refIDs() []uuid.UUID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]uuid.UUID(nil), s.refs...)
+}
+
+func (s *spyAzure) forgottenIDs() []uuid.UUID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]uuid.UUID(nil), s.forgotten...)
 }
 
 type seenIdentity struct {
@@ -91,6 +113,9 @@ func newSpyAzure() *spyAzure {
 }
 
 func (s *spyAzure) Open(ctx context.Context, t providers.TargetRef, cred providers.CredentialSource, env providers.Env) (providers.Session, error) {
+	s.mu.Lock()
+	s.refs = append(s.refs, t.ID)
+	s.mu.Unlock()
 	if az, ok := cred.(providers.AzureCredentialSource); ok {
 		if id, release, err := az.AzureIdentity(ctx); err == nil {
 			s.mu.Lock()
@@ -649,10 +674,12 @@ facts = facts || '{"kv_auth_failures": 3, "kv_throttled_cycles": 2}' WHERE id = 
 	require.NoError(t, err)
 
 	newSecret := fakekv.NewClientSecret()
+	newBytes := []byte(newSecret)
 	h.clock.Advance(time.Hour)
 	got, rep, jobID, err := h.svc.ReplaceVaultCredentials(h.ctx, admin, tgt.ID, cur.Version, inventory.VaultCredentialInput{
-		Auth: providers.AzureAuthClientSecret, TenantID: kvTenant, ClientID: kvClient, ClientSecret: secrets.NewPlaintext([]byte(newSecret))})
+		Auth: providers.AzureAuthClientSecret, TenantID: kvTenant, ClientID: kvClient, ClientSecret: secrets.NewPlaintext(newBytes)})
 	require.NoError(t, err)
+	assert.Equal(t, make([]byte, len(newSecret)), newBytes, "the replacement's secret is zeroed after a success")
 	assert.NotEqual(t, uuid.Nil, jobID)
 	assert.Equal(t, cur.Version+1, got.Version)
 	assert.Equal(t, inventory.StatusOK, got.Status)
@@ -687,11 +714,22 @@ facts = facts || '{"kv_auth_failures": 3, "kv_throttled_cycles": 2}' WHERE id = 
 
 	// A wrong secret is refused by the pre-flight and nothing changes.
 	h.failWith("azure.auth_failed")
+	wrong := []byte(fakekv.NewClientSecret())
 	_, _, _, err = h.svc.ReplaceVaultCredentials(h.ctx, admin, tgt.ID, got.Version, inventory.VaultCredentialInput{
-		Auth: providers.AzureAuthClientSecret, TenantID: kvTenant, ClientID: kvClient, ClientSecret: secrets.NewPlaintext([]byte(fakekv.NewClientSecret()))})
+		Auth: providers.AzureAuthClientSecret, TenantID: kvTenant, ClientID: kvClient, ClientSecret: secrets.NewPlaintext(wrong)})
 	var pe *providers.Error
 	require.ErrorAs(t, err, &pe)
 	assert.Equal(t, "azure.auth_failed", pe.Code)
+	assert.Equal(t, make([]byte, len(wrong)), wrong, "the secret of a refused replacement is zeroed too")
+	// The refusal is audited (SEC-070): one row, a closed reason, no Azure text.
+	refused := h.auditDetails("vault.credentials_refused")
+	require.Len(t, refused, 1)
+	assert.Equal(t, map[string]string{"vault_url": "https://prod.vault.azure.net", "auth": "client_secret", "reason": "azure.auth_failed"}, refused[0])
+	var refusedObject uuid.UUID
+	var refusedResult string
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT object_id::uuid, result FROM audit_log WHERE action = 'vault.credentials_refused'").Scan(&refusedObject, &refusedResult))
+	assert.Equal(t, tgt.ID, refusedObject)
+	assert.Equal(t, "failure", refusedResult)
 	assert.Equal(t, 2, h.vaultCredentials())
 	now, err := h.svc.GetTarget(h.ctx, tgt.ID)
 	require.NoError(t, err)
@@ -1121,4 +1159,242 @@ func pgxTx(h *harness, fn func(tx pgx.Tx) error) error {
 		return err
 	}
 	return tx.Commit(h.ctx)
+}
+
+func TestReplaceVaultCredentialsClearsCertificateInput(t *testing.T) {
+	h := newHarness(t, withAzure())
+	h.azureOK()
+	admin := h.user("ada", rbac.Admin, "")
+	tgt := h.newVault(admin, "Prod", "https://prod.vault.azure.net")
+	leaf := pki.SelfSigned("sp.example.test", pki.RSA2048, h.clock.Now())
+	key := append([]byte(nil), leaf.KeyPEM...)
+	_, _, _, err := h.svc.ReplaceVaultCredentials(h.ctx, admin, tgt.ID, tgt.Version, inventory.VaultCredentialInput{Auth: providers.AzureAuthCertificate,
+		TenantID: kvTenant, ClientID: kvClient, Certificate: certs.Upload{CertificatePEM: leaf.CertPEM, PrivateKeyPEM: key}})
+	require.NoError(t, err)
+	assert.Equal(t, make([]byte, len(key)), key, "the key PEM is zeroed after a success")
+	cur, err := h.svc.GetTarget(h.ctx, tgt.ID)
+	require.NoError(t, err)
+	h.failWith("azure.auth_failed")
+	key = append([]byte(nil), leaf.KeyPEM...)
+	_, _, _, err = h.svc.ReplaceVaultCredentials(h.ctx, admin, tgt.ID, cur.Version, inventory.VaultCredentialInput{Auth: providers.AzureAuthCertificate,
+		TenantID: kvTenant, ClientID: kvClient, Certificate: certs.Upload{CertificatePEM: leaf.CertPEM, PrivateKeyPEM: key}})
+	require.Error(t, err)
+	assert.Equal(t, make([]byte, len(key)), key, "and after a refusal")
+}
+
+// I2: the SSH record paths never accept a vault.
+func TestSSHPathsRefuseAVault(t *testing.T) {
+	h := newHarness(t, withAzure())
+	h.azureOK()
+	admin := h.user("ada", rbac.Admin, "")
+	vault := h.newVault(admin, "Prod", "https://prod.vault.azure.net")
+	hk := ed25519HostKey(t)
+	calls := map[string]func() error{
+		"RecordConnectionOK":      func() error { return h.svc.RecordConnectionOK(h.ctx, vault.ID, providers.ConnectionReport{}) },
+		"RecordConnectionFailure": func() error { return h.svc.RecordConnectionFailure(h.ctx, vault.ID, "ssh.unreachable") },
+		"HostKeyStore.Observed":   func() error { return h.svc.HostKeyStore().Observed(h.ctx, vault.ID, hk, false) },
+		"Reconcile":               func() error { _, err := h.svc.Reconcile(h.ctx, vault.ID, providers.DiscoveryResult{}); return err },
+		"ConfirmHostKey": func() error {
+			_, err := h.svc.ConfirmHostKey(h.ctx, admin, vault.ID, uuid.New(), hk.Fingerprint)
+			return err
+		},
+		"RepinHostKey": func() error {
+			_, err := h.svc.RepinHostKey(h.ctx, admin, vault.ID, uuid.New(), hk.Fingerprint, "The server was rebuilt on purpose")
+			return err
+		},
+	}
+	for name, call := range calls {
+		before, err := h.svc.GetTarget(h.ctx, vault.ID)
+		require.NoError(t, err)
+		require.ErrorIs(t, call(), inventory.ErrNotAServer, name)
+		after, err := h.svc.GetTarget(h.ctx, vault.ID)
+		require.NoError(t, err)
+		assert.Equal(t, before, after, name+": the vault row is unchanged")
+	}
+	assert.Equal(t, 0, h.count("SELECT count(*) FROM host_keys"))
+	assert.Equal(t, 0, h.count("SELECT count(*) FROM audit_log WHERE action = 'target.status_changed'"))
+}
+
+// m1: an incomplete report never creates a vault.
+func TestCreateVaultRefusesAnIncompleteReport(t *testing.T) {
+	h := newHarness(t, withAzure())
+	admin := h.user("ada", rbac.Admin, "")
+	for name, checks := range map[string][]providers.AzureCheck{
+		"only a sign-in row": {{Name: providers.AzureCheckSignIn, Result: providers.AzureResultOK}},
+		"listing failed without a reason": {{Name: providers.AzureCheckSignIn, Result: providers.AzureResultOK},
+			{Name: providers.AzureCheckListCertificates, Result: providers.AzureResultFailed}},
+	} {
+		h.script(func(c *fake.Config) { c.Report = azureReport(checks) })
+		_, _, _, err := h.svc.CreateVault(h.ctx, admin, secretVault("v", "https://oops.vault.azure.net"))
+		var pe *providers.Error
+		require.ErrorAs(t, err, &pe, name)
+		assert.Equal(t, "internal.unexpected", pe.Code, name)
+		assert.Equal(t, 0, h.vaultCount(), name)
+		assert.Equal(t, 0, h.vaultCredentials(), name)
+	}
+	assert.Equal(t, 2, h.audits("vault.add_refused"))
+}
+
+// m2, m7: a provider that fails with foreign text or panics gives a closed error and an audit row.
+func TestPreflightFailuresAreClosedErrors(t *testing.T) {
+	h := newHarness(t, withAzure())
+	h.azureOK()
+	admin := h.user("ada", rbac.Admin, "")
+	tgt := h.newVault(admin, "Prod", "https://prod.vault.azure.net")
+	canary := "AADSTS70011 CANARY-" + fakekv.NewClientSecret()
+	render := func(err error) string { return fmt.Sprintf("%v|%+v|%#v|%s", err, err, err, err.Error()) }
+	for _, replace := range []bool{false, true} {
+		h.script(func(c *fake.Config) { c.Report, c.TestErr = providers.ConnectionReport{}, errors.New(canary) })
+		var err error
+		if replace {
+			_, _, _, err = h.svc.ReplaceVaultCredentials(h.ctx, admin, tgt.ID, tgt.Version, inventory.VaultCredentialInput{Auth: providers.AzureAuthManagedIdentity})
+		} else {
+			_, _, _, err = h.svc.CreateVault(h.ctx, admin, secretVault("v", "https://oops.vault.azure.net"))
+		}
+		var pe *providers.Error
+		require.ErrorAs(t, err, &pe, replace)
+		assert.Equal(t, "internal.unexpected", pe.Code)
+		assert.NotContains(t, render(err), "CANARY")
+		assert.Nil(t, errors.Unwrap(err), "no cause is reachable")
+	}
+	assert.NotContains(t, h.dump(t), "CANARY")
+	assert.NotContains(t, h.logs.String(), "CANARY")
+
+	// A panic in the provider is recovered, audited and logged by type only.
+	panicking := &panicAzure{Provider: fake.New(providers.KindAzureKV, azureCaps...), on: true}
+	h2 := newHarness(t, withAzureProvider(panicking))
+	admin2 := h2.user("ada", rbac.Admin, "")
+	_, _, _, err := h2.svc.CreateVault(h2.ctx, admin2, secretVault("v", "https://oops.vault.azure.net"))
+	var pe *providers.Error
+	require.ErrorAs(t, err, &pe)
+	assert.Equal(t, "internal.unexpected", pe.Code)
+	assert.NotContains(t, render(err), "CANARY")
+	assert.Equal(t, 0, h2.vaultCount())
+	assert.Equal(t, 0, h2.vaultCredentials())
+	require.Len(t, h2.auditDetails("vault.add_refused"), 1)
+	assert.Equal(t, "internal.unexpected", h2.auditDetails("vault.add_refused")[0]["reason"])
+	assert.NotContains(t, h2.logs.String(), "CANARY")
+	// The same for a replacement.
+	h2.azure = panicking.Provider
+	h2.azureOK()
+	panicking.on = false
+	good := h2.newVault(admin2, "Good", "https://good.vault.azure.net")
+	panicking.on = true
+	_, _, _, err = h2.svc.ReplaceVaultCredentials(h2.ctx, admin2, good.ID, good.Version, inventory.VaultCredentialInput{Auth: providers.AzureAuthManagedIdentity})
+	require.ErrorAs(t, err, &pe)
+	assert.Equal(t, "internal.unexpected", pe.Code)
+	require.Len(t, h2.auditDetails("vault.credentials_refused"), 1)
+	cur, err := h2.svc.GetTarget(h2.ctx, good.ID)
+	require.NoError(t, err)
+	assert.Equal(t, good, cur)
+}
+
+// panicAzure panics in Open while on.
+type panicAzure struct {
+	*fake.Provider
+	on bool
+}
+
+func (p *panicAzure) Open(ctx context.Context, t providers.TargetRef, c providers.CredentialSource, env providers.Env) (providers.Session, error) {
+	if p.on {
+		panic("AADSTS CANARY panic text")
+	}
+	return p.Provider.Open(ctx, t, c, env)
+}
+
+// m3: last_success_at means the vault answered a listing.
+func TestLastSuccessIsSetOnlyByAnAnsweredListing(t *testing.T) {
+	h := newHarness(t, withAzure())
+	admin := h.user("ada", rbac.Admin, "")
+	checks := okChecks()
+	checks[1] = providers.AzureCheck{Name: providers.AzureCheckListCertificates, Result: providers.AzureResultForbidden, Reason: "azure.forbidden", Role: providers.RoleKeyVaultReader}
+	h.script(func(c *fake.Config) { c.Report = azureReport(checks) })
+	deg, _, _, err := h.svc.CreateVault(h.ctx, admin, secretVault("Deg", "https://deg-vault.vault.azure.net"))
+	require.NoError(t, err)
+	assert.Equal(t, inventory.StatusDegraded, deg.Status)
+	assert.Nil(t, deg.LastSuccessAt, "a vault that never listed has no last success")
+	h.script(func(c *fake.Config) {
+		c.Report, c.TestErr = providers.ConnectionReport{}, providers.NewError("azure.firewall", false, nil, nil)
+	})
+	fw, _, _, err := h.svc.CreateVault(h.ctx, admin, secretVault("Fw", "https://fw-vault.vault.azure.net"))
+	require.NoError(t, err)
+	assert.Nil(t, fw.LastSuccessAt)
+
+	// A listing that works sets it; a replacement that ends degraded leaves it as it was.
+	h.azureOK()
+	h.clock.Advance(time.Minute)
+	good := h.newVault(admin, "Good", "https://good-vault.vault.azure.net")
+	require.NotNil(t, good.LastSuccessAt)
+	first := *good.LastSuccessAt
+	h.clock.Advance(time.Hour)
+	h.script(func(c *fake.Config) { c.Report = azureReport(checks) })
+	rep, _, _, err := h.svc.ReplaceVaultCredentials(h.ctx, admin, good.ID, good.Version, inventory.VaultCredentialInput{Auth: providers.AzureAuthManagedIdentity})
+	require.NoError(t, err)
+	assert.Equal(t, inventory.StatusDegraded, rep.Status)
+	assert.Equal(t, first, *rep.LastSuccessAt)
+	// RecordKVConnection follows the same rule.
+	h.clock.Advance(time.Hour)
+	require.NoError(t, h.svc.RecordKVConnection(h.ctx, good.ID, azureReport(checks)))
+	again, err := h.svc.GetTarget(h.ctx, good.ID)
+	require.NoError(t, err)
+	assert.Equal(t, first, *again.LastSuccessAt)
+	require.NoError(t, h.svc.RecordKVConnection(h.ctx, good.ID, azureReport(okChecks())))
+	again, err = h.svc.GetTarget(h.ctx, good.ID)
+	require.NoError(t, err)
+	assert.Equal(t, h.clock.Now(), *again.LastSuccessAt)
+}
+
+// m5: the pre-flight names the vault; nothing per-target stays in the provider after a refusal.
+func TestPreflightNamesTheVaultAndForgetsIt(t *testing.T) {
+	spy := newSpyAzure()
+	h := newHarness(t, withAzureProvider(spy))
+	h.azure = spy.Provider
+	admin := h.user("ada", rbac.Admin, "")
+	h.failWith("azure.auth_failed")
+	_, _, _, err := h.svc.CreateVault(h.ctx, admin, secretVault("v", "https://oops.vault.azure.net"))
+	require.Error(t, err)
+	refs := spy.refIDs()
+	require.Len(t, refs, 1)
+	assert.NotEqual(t, uuid.Nil, refs[0], "a new vault is opened under the id it would get")
+	assert.Equal(t, refs, spy.forgottenIDs(), "a refused add leaves nothing per-target in the provider")
+
+	h.azureOK()
+	tgt := h.newVault(admin, "Prod", "https://prod.vault.azure.net")
+	_, _, _, err = h.svc.ReplaceVaultCredentials(h.ctx, admin, tgt.ID, tgt.Version, inventory.VaultCredentialInput{Auth: providers.AzureAuthManagedIdentity})
+	require.NoError(t, err)
+	refs = spy.refIDs()
+	assert.Equal(t, tgt.ID, refs[len(refs)-1], "a replacement is opened under the vault's own id")
+	assert.Contains(t, spy.forgottenIDs(), tgt.ID)
+}
+
+// m6: a disabled vault is not polled by a replacement.
+func TestReplaceOnADisabledVaultQueuesNoPoll(t *testing.T) {
+	h := newHarness(t, withAzure())
+	h.azureOK()
+	admin := h.user("ada", rbac.Admin, "")
+	tgt := h.newVault(admin, "Prod", "https://prod.vault.azure.net")
+	_, err := h.db.Owner.Exec(h.ctx, "UPDATE targets SET status = 'disabled' WHERE id = $1", tgt.ID)
+	require.NoError(t, err)
+	cur, err := h.svc.GetTarget(h.ctx, tgt.ID)
+	require.NoError(t, err)
+	n := len(h.jobs.requests())
+	got, _, jobID, err := h.svc.ReplaceVaultCredentials(h.ctx, admin, tgt.ID, cur.Version, inventory.VaultCredentialInput{Auth: providers.AzureAuthManagedIdentity})
+	require.NoError(t, err)
+	assert.Equal(t, inventory.StatusDisabled, got.Status)
+	assert.Equal(t, uuid.Nil, jobID)
+	assert.Len(t, h.jobs.requests(), n)
+}
+
+// A duplicate is found before the pre-flight: no sign-in happens for it.
+func TestDuplicateVaultIsFoundBeforeThePreflight(t *testing.T) {
+	h := newHarness(t, withAzure())
+	h.azureOK()
+	admin := h.user("ada", rbac.Admin, "")
+	h.newVault(admin, "Prod", "https://prod.vault.azure.net")
+	opens := h.azure.Count("Open")
+	for _, in := range []inventory.NewVault{secretVault("Other", "PROD"), secretVault("prod", "https://another.vault.azure.net")} {
+		_, _, _, err := h.svc.CreateVault(h.ctx, admin, in)
+		require.ErrorIs(t, err, inventory.ErrDuplicateTarget)
+	}
+	assert.Equal(t, opens, h.azure.Count("Open"), "no call to Azure for a vault that is already there")
 }

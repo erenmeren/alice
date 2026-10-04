@@ -376,6 +376,7 @@
       "target_discovered": "SSH anahtarları tarandı",
       "vault_add_refused": "Key Vault eklenmedi: ilk denetim başarısız oldu",
       "vault_credentials_replaced": "Key Vault oturum açma bilgileri değiştirildi",
+      "vault_credentials_refused": "Key Vault oturum açma bilgileri değiştirilmedi: ilk denetim başarısız oldu",
       "binding_deleted": "Bağlı web siteleri kaldırıldı",
       "hostkey_observed": "Sunucu engelliyken başka bir yeni parmak izi görüldü",
       "hostkey_pinned": "Sunucu parmak izi onaylandı",

@@ -105,6 +105,9 @@ func (s *Service) RecordConnectionOK(ctx context.Context, id uuid.UUID, r provid
 		if err != nil {
 			return err
 		}
+		if err := requireServer(t); err != nil {
+			return err
+		}
 		if t.Status == StatusHostKeyChanged && r.HostKey.Fingerprint != "" {
 			pinned, err := pinnedFingerprint(ctx, tx, id)
 			if err != nil {
@@ -195,6 +198,9 @@ func (s *Service) RecordConnectionFailure(ctx context.Context, id uuid.UUID, rea
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		t, err := getTarget(ctx, tx, id, true)
 		if err != nil {
+			return err
+		}
+		if err := requireServer(t); err != nil {
 			return err
 		}
 		pinned, err := pinnedFingerprint(ctx, tx, id)

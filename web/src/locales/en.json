@@ -376,6 +376,7 @@
       "target_discovered": "SSH keys scanned",
       "vault_add_refused": "Key Vault not added: the first check failed",
       "vault_credentials_replaced": "Key Vault sign-in replaced",
+      "vault_credentials_refused": "Key Vault sign-in not replaced: the first check failed",
       "binding_deleted": "Connected websites removed",
       "hostkey_observed": "Another new server fingerprint seen while the server is blocked",
       "hostkey_pinned": "Server fingerprint confirmed",

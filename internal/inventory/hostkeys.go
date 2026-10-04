@@ -118,6 +118,9 @@ func (h hostKeyStore) Observed(ctx context.Context, target uuid.UUID, key provid
 		if err != nil {
 			return err
 		}
+		if err := requireServer(t); err != nil {
+			return err
+		}
 		var old string
 		err = tx.QueryRow(ctx, "SELECT fingerprint_sha256 FROM host_keys WHERE target_id = $1 AND status = $2", target, keyPinned).Scan(&old)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -239,6 +242,9 @@ func (s *Service) ConfirmHostKey(ctx context.Context, a Actor, targetID, keyID u
 		if err != nil {
 			return err
 		}
+		if err := requireServer(t); err != nil {
+			return err
+		}
 		var pinnedExists bool
 		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM host_keys WHERE target_id = $1 AND status = $2)",
 			targetID, keyPinned).Scan(&pinnedExists); err != nil {
@@ -285,6 +291,9 @@ func (s *Service) RepinHostKey(ctx context.Context, a Actor, targetID, keyID uui
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		t, err := getTarget(ctx, tx, targetID, true)
 		if err != nil {
+			return err
+		}
+		if err := requireServer(t); err != nil {
 			return err
 		}
 		if t.Status != StatusHostKeyChanged {

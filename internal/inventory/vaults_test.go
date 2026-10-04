@@ -190,10 +190,10 @@ func TestRowsThatRefuseTheVault(t *testing.T) {
 	refused := func(checks ...providers.AzureCheck) *providers.Error {
 		return refusalFromRows(&providers.AzureFacts{Checks: checks})
 	}
-	assert.Nil(t, refused(row("sign_in", "ok", "")))
+	assert.Nil(t, refused(row("sign_in", "ok", ""), row("list_certificates", "ok", "")))
 	assert.Nil(t, refused(row("sign_in", "ok", ""), row("list_certificates", "forbidden", "azure.forbidden")))
 	assert.Nil(t, refused(row("sign_in", "ok", ""), row("list_certificates", "failed", "azure.firewall")))
-	assert.Nil(t, refused(row("sign_in", "ok", ""), row("list_keys", "failed", "azure.vault_not_found")), "only the first vault call decides")
+	assert.Nil(t, refused(row("sign_in", "ok", ""), row("list_certificates", "ok", ""), row("list_keys", "failed", "azure.vault_not_found")), "only the first vault call decides")
 
 	e := refused(row("sign_in", "failed", "azure.auth_failed"))
 	require.NotNil(t, e)
@@ -207,7 +207,33 @@ func TestRowsThatRefuseTheVault(t *testing.T) {
 	e = refused(row("sign_in", "ok", ""), row("list_certificates", "failed", "Bad: text"))
 	require.NotNil(t, e)
 	assert.Equal(t, "internal.unexpected", e.Code)
-	assert.Nil(t, refusalFromRows(nil))
+	// An incomplete report refuses (the first vault call was never reported), and so does a failed
+	// first call without any reason.
+	for name, checks := range map[string][]providers.AzureCheck{
+		"no rows":                       nil,
+		"only a sign-in row":            {row("sign_in", "ok", "")},
+		"no sign-in row":                {row("list_certificates", "ok", "")},
+		"the listing was not checked":   {row("sign_in", "ok", ""), row("list_certificates", "not_checked", "")},
+		"the listing failed, no reason": {row("sign_in", "ok", ""), row("list_certificates", "failed", "")},
+	} {
+		e := refused(checks...)
+		require.NotNil(t, e, name)
+		assert.Equal(t, "internal.unexpected", e.Code, name)
+	}
+	e = refusalFromRows(nil)
+	require.NotNil(t, e)
+	assert.Equal(t, "internal.unexpected", e.Code)
+}
+
+func TestListingAnsweredDecidesLastSuccess(t *testing.T) {
+	ok := &providers.AzureFacts{Checks: []providers.AzureCheck{{Name: "sign_in", Result: "ok"}, {Name: "list_certificates", Result: "ok"}}}
+	assert.True(t, listingAnswered(ok))
+	ok.Checks = append(ok.Checks, providers.AzureCheck{Name: "list_keys", Result: "forbidden"})
+	assert.True(t, listingAnswered(ok), "only the certificate listing counts")
+	assert.False(t, listingAnswered(&providers.AzureFacts{Checks: []providers.AzureCheck{{Name: "sign_in", Result: "ok"},
+		{Name: "list_certificates", Result: "forbidden"}}}))
+	assert.False(t, listingAnswered(&providers.AzureFacts{}))
+	assert.False(t, listingAnswered(nil))
 }
 
 func TestStorageErrorsAreMappedToClosedErrors(t *testing.T) {

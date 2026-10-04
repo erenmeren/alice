@@ -107,7 +107,7 @@ func SetMaxPendingCSRs(n int) (restore func()) {
 // database's refusal reaches the caller.
 func (s *Service) MoveVaultCredentialTo(ctx context.Context, id, credential uuid.UUID, version int) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		return s.moveVaultCredential(ctx, tx, id, credential, StatusOK, "", &providers.AzureFacts{}, s.clock.Now().UTC(), version)
+		return s.moveVaultCredential(ctx, tx, id, credential, StatusOK, "", &providers.AzureFacts{}, s.clock.Now().UTC(), version, false)
 	})
 }
 
