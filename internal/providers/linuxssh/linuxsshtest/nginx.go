@@ -629,6 +629,15 @@ func (e *Emulator) DeployStdins() [][]byte {
 	return out
 }
 
+// SweepOperation removes an operation's directory (journal and backups) as the helper's backup
+// sweep does once its retention has passed: nginx-status then answers phase none for it. The
+// files of the pair stay as they are.
+func (e *Emulator) SweepOperation(op string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.nginx().ops, op)
+}
+
 // NginxPhase is the phase of an operation's journal ("" when there is none).
 func (e *Emulator) NginxPhase(op string) string {
 	e.mu.Lock()

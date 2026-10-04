@@ -579,7 +579,7 @@
       },
       "unknown_operation": {
         "title": "Sunucuda bu dağıtıma ait bir kayıt yok.",
-        "cause": "alice-helper'da bu dağıtımın kaydı yok; örneğin dağıtımı hiç almadı ya da kaydı 7 gün sonra sildi.",
+        "cause": "alice-helper'da bu dağıtımın kaydı yok; örneğin dağıtımı hiç almadı ya da kaydı 7 gün ya da daha uzun bir süre sonra sildi.",
         "action": "Web sitesinin şu anda hangi sertifikayı sunduğunu denetleyin, sonra sunucunun sayfasında Keşfet'i seçin."
       },
       "target_deleted": {

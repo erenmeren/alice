@@ -126,6 +126,15 @@ const (
 	// ("nothing was written") only when the start record is at least this old (the budget plus a
 	// margin, S6).
 	noJournalFinalAfter = HelperBudget + 10*time.Second
+	// noJournalUnknownAfter: a journal reading none or prepared for a deployment that was sent
+	// longer ago than this proves nothing any more: the helper's sweep removes a committed (or
+	// restored, unchanged, prepared) journal after helperproto.NginxBackupKeep (7 days), so after an
+	// outage the new pair may be live and unverified with its journal gone. Recovery then records the
+	// outcome as unknown (rollback_failed, deployment.outcome_unknown), never "nothing was written".
+	// Live recovery ends after inventory.MaxRecoveryAttempts × RecoveryRetryInterval (about a day),
+	// so a later recovery can only follow an outage; the day is well below the helper's retention
+	// and absorbs clock skew (TestNoJournalThresholdIsWellBelowTheHelpersRetention).
+	noJournalUnknownAfter = 24 * time.Hour
 	// RecordTimeout bounds a record written with a context detached from the job's: the outcome
 	// of a completed call is recorded even when the job's context ended meanwhile (lease lost,
 	// shutdown). Recording an outcome takes at most two of them (the write and its re-read); the
@@ -432,4 +441,10 @@ func causeReason(causeStep, class string) string {
 // now is taken before the journal was read, so the elapsed time is a lower bound (M-2).
 func (h *handlers) sendWithin(d inventory.Deployment, now time.Time) bool {
 	return d.StartedAt != nil && now.Sub(*d.StartedAt) < noJournalFinalAfter
+}
+
+// sentLongAgo reports whether the start record is older than noJournalUnknownAfter: a missing
+// journal may then have been swept by the helper after a change it made.
+func (h *handlers) sentLongAgo(d inventory.Deployment, now time.Time) bool {
+	return d.StartedAt != nil && now.Sub(*d.StartedAt) > noJournalUnknownAfter
 }

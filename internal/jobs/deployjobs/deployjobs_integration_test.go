@@ -362,3 +362,53 @@ func TestRollbackAfterARestoreFailureKeepsTheVerificationCause(t *testing.T) {
 	assert.Equal(t, "verify", d.CauseStep)
 	e.assertPair(s, wwwCert, wwwKey, wwwName, e.old)
 }
+
+// A sent deployment whose answer was lost, then Alice stays down for 8 days: the helper's sweep
+// removed the committed journal, so nginx-status answers none although the new pair is live and
+// was never verified. That is not "nothing was written": the outcome is unknown (rollback_failed,
+// deployment.outcome_unknown, the outcome-unknown email), the location is released, and nothing is
+// sent or restored.
+func TestRecoveryAfterALongOutageWithoutAJournalIsUnknown(t *testing.T) {
+	e := newEnv(t)
+	s := e.addServer("web-01", wwwSite())
+	id := e.request(s.locs[wwwCert])[0]
+	s.emu.HangupAfter(helperproto.StepReload)
+	e.drain()
+	require.Equal(t, inventory.DeployStateRecovering, e.deployment(id).State)
+	require.Equal(t, helperproto.PhaseCommitted, s.emu.NginxPhase(id.String()))
+
+	e.clock.Advance(8 * 24 * time.Hour)
+	s.emu.SweepOperation(id.String())
+	d := e.settle(id)
+	assert.Equal(t, inventory.DeployStatusRollbackFailed, d.Status)
+	assert.Equal(t, "deployment.outcome_unknown", d.ErrorCode)
+	assert.Equal(t, 1, e.count("SELECT count(*) FROM notifications_outbox WHERE template_key = 'deployment.outcome_unknown'"))
+	assert.Zero(t, e.count("SELECT count(*) FROM notifications_outbox WHERE template_key = 'deployment.failed'"), "never \"nothing changed\"")
+	assert.Equal(t, 1, e.audits("deployment.rollback_failed"))
+	assert.Zero(t, e.audits("deployment.failed"))
+	assert.Equal(t, 1, s.emu.DeployCount(), "never sent twice")
+	e.assertPair(s, wwwCert, wwwKey, wwwName, e.nw) // the files were left as the outage found them
+
+	// The location is released: a new deployment can be requested.
+	again := e.request(s.locs[wwwCert])
+	assert.Len(t, again, 1)
+}
+
+// Just under the threshold a missing journal still means "nothing was written" (S6 rule).
+func TestRecoveryWithoutAJournalJustUnderADayIsNothingWritten(t *testing.T) {
+	e := newEnv(t)
+	s := e.addServer("web-01", wwwSite())
+	id := e.request(s.locs[wwwCert])[0]
+	s.emu.HangupAfter(helperproto.StepReload)
+	e.drain()
+	require.Equal(t, inventory.DeployStateRecovering, e.deployment(id).State)
+	started := *e.deployment(id).StartedAt
+
+	s.emu.SweepOperation(id.String())
+	e.clock.Advance(noJournalUnknownAfter - 5*time.Minute - e.clock.Now().Sub(started))
+	d := e.settle(id)
+	assert.Equal(t, inventory.DeployStatusFailed, d.Status)
+	assert.Equal(t, "deployment.interrupted", d.ErrorCode)
+	require.NotNil(t, d.FinishedAt)
+	assert.Less(t, d.FinishedAt.Sub(started), noJournalUnknownAfter)
+}

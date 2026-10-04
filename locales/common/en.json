@@ -579,7 +579,7 @@
       },
       "unknown_operation": {
         "title": "The server has no record of this deployment.",
-        "cause": "alice-helper has no record of this deployment, for example because it never received it or because it removed the record after 7 days.",
+        "cause": "alice-helper has no record of this deployment, for example because it never received it or because it removed the record after 7 days or more.",
         "action": "Check which certificate the website serves now, then choose Discover on the server's page."
       },
       "target_deleted": {

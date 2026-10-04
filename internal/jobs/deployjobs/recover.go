@@ -80,8 +80,11 @@ func (h *handlers) recoverJob(ctx context.Context, j jobs.Job, steps jobs.StepRe
 //	  the clock is read before the journal: a lower bound)
 //	                                                               deployment.interrupted)
 //	none | prepared, no helper running, start record older         failed deployment.interrupted (nothing     resultOf
-//	                                                               was written: the journal never passed
+//	  than the budget and at most noJournalUnknownAfter (a day)    was written: the journal never passed
 //	                                                               prepared)
+//	none | prepared, no helper running, start record older than    rollback_failed deployment.outcome_unknown resultOf
+//	  noJournalUnknownAfter (after an outage the helper may have   (outcome-unknown email)
+//	  swept the journal of a change it made)
 //	committed | unchanged: VerifyDeployment(VerifyRequest: the
 //	  RECORDED fingerprint and chain length; never success from
 //	  the journal alone):
@@ -134,8 +137,7 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 		// alone cannot verify or check a rollback (it holds no endpoints or SANs), so the outcome is
 		// unknown now, not after a day of attempts: rollback_failed deployment.outcome_unknown
 		// (the outcome-unknown email names the backup directory).
-		return h.recordFor(ctx, d, inventory.OutcomeRecord{Terminal: true, Finish: inventory.DeploymentFinish{
-			Status: inventory.DeployStatusRollbackFailed, ErrorCode: reasonOutcomeUnknown, Params: map[string]string{}}}, m, nil)
+		return h.recordFor(ctx, d, outcomeUnknownRecord(), m, nil)
 	case err != nil:
 		return unresolved(m, jobs.Retry(reasonUnexpected, nil, err))
 	}
@@ -166,6 +168,11 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 				code = reasonInterrupted
 			}
 			return h.recordFor(ctx, d, uncertainRecord(code), m, nil)
+		}
+		if h.sentLongAgo(d, now) {
+			// After an outage longer than a day the helper may have swept the journal of a change
+			// it made: the outcome is unknown, never "nothing was written" (outcome-unknown email).
+			return h.recordFor(ctx, d, outcomeUnknownRecord(), m, nil)
 		}
 		return h.recordFor(ctx, d, failedRecord(reasonInterrupted, st.Phase), m, nil)
 	case providers.PhaseCommitted, providers.PhaseUnchanged:
@@ -337,4 +344,12 @@ func portOf(params map[string]string) *int {
 		return nil
 	}
 	return &p
+}
+
+// outcomeUnknownRecord is the terminal record of a deployment whose outcome Alice cannot learn:
+// rollback_failed with deployment.outcome_unknown (the outcome-unknown email names the backup
+// directory; the location is released).
+func outcomeUnknownRecord() inventory.OutcomeRecord {
+	return inventory.OutcomeRecord{Terminal: true, Finish: inventory.DeploymentFinish{
+		Status: inventory.DeployStatusRollbackFailed, ErrorCode: reasonOutcomeUnknown, Params: map[string]string{}}}
 }

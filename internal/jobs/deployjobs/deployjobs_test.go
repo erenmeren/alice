@@ -25,6 +25,7 @@ import (
 	"alice/internal/platform/clock"
 	"alice/internal/providers"
 	"alice/internal/providers/fake"
+	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/secrets"
 	"alice/internal/testutil/pki"
 )
@@ -940,6 +941,12 @@ func TestRecoveryDecisions(t *testing.T) {
 		{name: "none, within the budget (S6)", phase: providers.PhaseNone, age: 30 * time.Second, code: "deployment.interrupted"},
 		{name: "prepared, within the budget (S6)", phase: providers.PhasePrepared, age: 59 * time.Second, code: "deployment.interrupted"},
 		{name: "none, active", phase: providers.PhaseNone, active: true, age: time.Hour, code: "nginx.busy"},
+		{name: "none, just under a day", phase: providers.PhaseNone, age: noJournalUnknownAfter - time.Minute, status: inventory.DeployStatusFailed,
+			code: "deployment.interrupted"},
+		{name: "none, after a long outage (journal swept)", phase: providers.PhaseNone, age: 8 * 24 * time.Hour,
+			status: inventory.DeployStatusRollbackFailed, code: "deployment.outcome_unknown"},
+		{name: "prepared, after a long outage", phase: providers.PhasePrepared, age: noJournalUnknownAfter + time.Minute,
+			status: inventory.DeployStatusRollbackFailed, code: "deployment.outcome_unknown"},
 		{name: "committed, verified", phase: providers.PhaseCommitted, verifyOK: true, status: inventory.DeployStatusSucceeded},
 		{name: "committed, not served", phase: providers.PhaseCommitted, status: inventory.DeployStatusRolledBack, code: "deployment.verify_failed", rollback: 1},
 		{name: "committed, active", phase: providers.PhaseCommitted, active: true, verifyOK: true, code: "nginx.busy"},
@@ -1521,4 +1528,15 @@ func TestRecoveryWithoutMaterialEndsOutcomeUnknown(t *testing.T) {
 	assert.Equal(t, "rollback_failed", res["outcome"])
 	assert.Equal(t, "deployment.outcome_unknown", f.inv.lastFinish().ErrorCode)
 	assert.Zero(t, f.prov.Count("Open"))
+}
+
+// A sent deployment whose journal is gone is "nothing was written" only shortly after the send: the
+// helper sweeps a committed journal after helperproto.NginxBackupKeep (7 days), so the threshold
+// after which a missing journal means "outcome unknown" must stay well below that retention (and
+// above the helper's budget rule and a day of live recovery attempts).
+func TestNoJournalThresholdIsWellBelowTheHelpersRetention(t *testing.T) {
+	assert.LessOrEqual(t, 4*noJournalUnknownAfter, helperproto.NginxBackupKeep, "at most a quarter of the helper's shortest retention")
+	assert.Greater(t, noJournalUnknownAfter, noJournalFinalAfter)
+	assert.GreaterOrEqual(t, noJournalUnknownAfter, time.Duration(inventory.MaxRecoveryAttempts)*inventory.RecoveryRetryInterval,
+		"live recovery ends within the threshold, so a later recovery only follows an outage")
 }
