@@ -261,10 +261,10 @@ func TestUploadAttachesTheKeyOfADiscoveredCertificate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{}, warnings, "the chain is complete with the configured roots")
 	assert.Equal(t, discovered.ID, c.ID, "the same certificate")
-	assert.Equal(t, "discovered", c.Source, "the source is not rewritten")
+	assert.Equal(t, "uploaded", c.Source, "the row becomes the upload's")
 	assert.True(t, c.HasPrivateKey)
 	assert.Equal(t, "Web", c.Label, "an empty label takes the upload's")
-	assert.True(t, c.ChainComplete, "a complete chain replaces an incomplete one")
+	assert.True(t, c.ChainComplete, "the upload's chain")
 	assert.Equal(t, string(l.FullchainPEM), c.PEMChain)
 	assert.Equal(t, firstSeen, c.FirstSeenAt)
 	assert.Equal(t, 1, c.LocationCount)
@@ -284,20 +284,21 @@ func TestUploadAttachesTheKeyOfADiscoveredCertificate(t *testing.T) {
 	assert.Equal(t, []string{"duplicate"}, rejectReasons(h))
 	assert.Equal(t, c.Fingerprint, h.auditDetails("certificate.upload_rejected")[0]["fingerprint"])
 
-	// A later scan keeps the key, the label, the source and the better chain.
+	// A later scan keeps the key, the label, the source and the uploaded chain.
 	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{leafOnly}})
 	require.NoError(t, err)
 	got, err = h.svc.GetCertificate(h.ctx, c.ID)
 	require.NoError(t, err)
 	assert.True(t, got.HasPrivateKey)
 	assert.Equal(t, "Web", got.Label)
-	assert.Equal(t, "discovered", got.Source)
+	assert.Equal(t, "uploaded", got.Source)
 	assert.Equal(t, string(l.FullchainPEM), got.PEMChain)
 }
 
-// An upload whose chain is worse than the stored one never replaces it, and the warnings describe
-// what Alice holds.
-func TestUploadNeverDowngradesAChain(t *testing.T) {
+// Attaching a key takes the uploader's chain, even a shorter one than the server's file had: what
+// Alice deploys with a key a person gave is what that person gave (W2 review, Important 1); the
+// warnings describe what Alice holds.
+func TestKeyAttachKeepsTheUploadersShorterChain(t *testing.T) {
 	ca := pki.NewCA("Up", pki.ECDSA256, start)
 	roots := x509.NewCertPool()
 	roots.AddCert(ca.Root)
@@ -310,9 +311,9 @@ func TestUploadNeverDowngradesAChain(t *testing.T) {
 	require.NoError(t, err)
 	c, warnings, err := h.svc.UploadCertificate(h.ctx, admin, inventory.UploadInput{CertificatePEM: string(l.CertPEM), PrivateKeyPEM: string(l.KeyPEM)})
 	require.NoError(t, err)
-	assert.Equal(t, []string{}, warnings, "Alice holds the complete chain")
-	assert.True(t, c.ChainComplete)
-	assert.Equal(t, string(l.FullchainPEM), c.PEMChain)
+	assert.Equal(t, []string{"chain_incomplete"}, warnings, "Alice holds the uploaded leaf alone")
+	assert.False(t, c.ChainComplete)
+	assert.Equal(t, string(l.CertPEM), c.PEMChain)
 }
 
 // SANs and text are bounded as discovery bounds them: a SAN longer than a DNS name is dropped.
@@ -396,7 +397,7 @@ pem_chain, source, first_seen_at, last_seen_at, created_at) VALUES ($1, $2, $3, 
 	r := <-done
 	require.NoError(t, r.err)
 	assert.Equal(t, scanned, r.c.ID)
-	assert.Equal(t, "discovered", r.c.Source)
+	assert.Equal(t, "uploaded", r.c.Source)
 	assert.True(t, r.c.HasPrivateKey)
 	assert.Equal(t, 1, h.audits("certificate.key_attached"))
 	assert.Equal(t, 1, h.count("SELECT count(*) FROM managed_private_keys"), "the key stored before the insert is the one attached")

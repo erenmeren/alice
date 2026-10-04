@@ -352,3 +352,76 @@ func TestFailedAfterASendNeedsProofThatNothingWasWritten(t *testing.T) {
 	pre := f.request(f.admin, f.cert.ID, f.loc2)
 	require.NoError(t, f.h.svc.FinishDeployment(f.h.ctx, pre, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: "x.y"}))
 }
+
+// forgedIntermediate is a certificate with ca's intermediate subject and public key, issued by a root
+// the server made up: the leaf verifies through it, and with the made-up root in the same file the
+// server's chain looks complete.
+func forgedIntermediate(t *testing.T, ca *pki.CA, now time.Time) (inter, root []byte) {
+	t.Helper()
+	fake := pki.NewCA("Forger", pki.ECDSA256, now)
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(77), Subject: ca.Intermediate.Subject,
+		NotBefore: now.Add(-time.Hour), NotAfter: now.AddDate(1, 0, 0), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign}, fake.Root, ca.IntermediateKey.Public(), fake.RootKey)
+	require.NoError(t, err)
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), fake.RootPEM
+}
+
+// W2 review, Important 1: attaching a key to a certificate first seen on a server takes the
+// uploader's chain and completeness, never the server's (here a "complete" chain forged around the
+// real intermediate's key); the benign case stores the upload's chain too.
+func TestKeyAttachTakesTheUploadersChain(t *testing.T) {
+	ca := pki.NewCA("Pub", pki.ECDSA256, start)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.Root)
+	h := newHarness(t, withNginxProvider(), withRoots(roots))
+	h.jobs.next = jobs.NewQueue(jobs.QueueConfig{Pool: h.db.App, Keyring: h.keyring, Audit: h.audit, Clock: h.clock, Gate: h.lic})
+	admin := h.user("ada", rbac.Admin, "")
+	www := pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}
+	leaf, benign := ca.Issue(www, h.clock.Now()), ca.Issue(www, h.clock.Now())
+	inter, fakeRoot := forgedIntermediate(t, ca, h.clock.Now())
+	forged := append(append(append([]byte{}, leaf.CertPEM...), inter...), fakeRoot...)
+	full := append(append([]byte{}, benign.FullchainPEM...), ca.RootPEM...)
+	hostile := nginxTarget(t, h, admin, "web-hostile")
+	_, err := h.svc.Reconcile(h.ctx, hostile.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+		{Location: cl("/etc/nginx/ssl/x.crt", "/etc/nginx/ssl/x.key", "www.example.test"), PEMChain: forged, FileSHA256: sha(forged)},
+		{Location: cl("/etc/nginx/ssl/b.crt", "/etc/nginx/ssl/b.key", "www.example.test"), PEMChain: full, FileSHA256: sha(full)}}})
+	require.NoError(t, err)
+	var before bool
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT chain_complete FROM certificates WHERE fingerprint_sha256 = $1",
+		pki.Fingerprint(leaf.Cert)).Scan(&before))
+	require.True(t, before, "the forged chain looks complete to a scan")
+
+	c, warnings, err := h.svc.UploadCertificate(h.ctx, admin, inventory.UploadInput{CertificatePEM: string(leaf.CertPEM), PrivateKeyPEM: string(leaf.KeyPEM)})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"chain_incomplete"}, warnings)
+	assert.Equal(t, string(leaf.CertPEM), c.PEMChain, "the uploader's chain: the leaf alone")
+	assert.False(t, c.ChainComplete)
+	assert.Equal(t, "uploaded", c.Source)
+
+	// A deployment to another server sends no certificate of the scanned server's file.
+	web := nginxTarget(t, h, admin, "web-02")
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+		dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), ca.Issue(www, h.clock.Now()))}})
+	require.NoError(t, err)
+	reqd, err := h.svc.RequestDeployment(h.ctx, admin, inventory.DeployRequestInput{CertificateID: c.ID,
+		LocationIDs: []uuid.UUID{byPath(t, h, web.ID, false)["/etc/nginx/ssl/www.crt"].ID}, ConfirmIncompleteChain: true})
+	require.NoError(t, err)
+	m, err := h.svc.DeploymentMaterial(h.ctx, reqd[0].ID, false)
+	require.NoError(t, err)
+	assert.Equal(t, string(leaf.CertPEM), string(m.CertificatePEM))
+
+	// A later scan with the forged file changes nothing.
+	_, err = h.svc.Reconcile(h.ctx, hostile.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+		{Location: cl("/etc/nginx/ssl/x.crt", "/etc/nginx/ssl/x.key", "www.example.test"), PEMChain: forged, FileSHA256: sha(forged)}}})
+	require.NoError(t, err)
+	got, err := h.svc.GetCertificate(h.ctx, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(leaf.CertPEM), got.PEMChain)
+
+	// Benign: the server's file had leaf, intermediate and root; the upload's leaf and intermediate are stored.
+	b, warnings, err := h.svc.UploadCertificate(h.ctx, admin, pemUpload(benign))
+	require.NoError(t, err)
+	assert.Equal(t, []string{}, warnings)
+	assert.Equal(t, string(benign.FullchainPEM), b.PEMChain)
+	assert.True(t, b.ChainComplete)
+}

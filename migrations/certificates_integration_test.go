@@ -30,6 +30,7 @@ const (
 	keyMismatch = "Z1001" // the private key does not belong to the certificate
 	keyAttached = "Z1002" // a certificate's key is never replaced or detached
 	doneFrozen  = "Z1003" // a finished deployment is never rewritten
+	sourceFixed = "Z1004" // a source changes only when a discovered certificate gets its key
 )
 
 func hex64(c string) string { return strings.Repeat(c, 64) }
@@ -645,6 +646,19 @@ func TestCertificateKeyAttachmentIsChecked(t *testing.T) {
 	assert.Equal(t, keyAttached, sqlState(exec(t, d.App, "UPDATE certificates SET private_key_id = $1 WHERE id = $2", third, plain)), "no replacement")
 	assert.Equal(t, keyAttached, sqlState(exec(t, d.App, "UPDATE certificates SET private_key_id = NULL WHERE id = $1", plain)), "no detaching")
 	require.NoError(t, exec(t, d.App, "UPDATE certificates SET label = 'x', last_seen_at = now(), chain_complete = true, pem_chain = 'y' WHERE id = $1", plain))
+
+	// The source changes only in the update that attaches the key to a certificate found on a server,
+	// to uploaded or csr.
+	found := uuid.New()
+	row = certRow()
+	row["id"], row["fingerprint_sha256"], row["public_key_sha256"], row["source"] = found, hex64("3"), hex64("c"), "discovered"
+	require.NoError(t, insertRow(t, d.App, "certificates", row))
+	assert.Equal(t, sourceFixed, sqlState(exec(t, d.App, "UPDATE certificates SET source = 'uploaded' WHERE id = $1", found)), "not without a key")
+	assert.Equal(t, sourceFixed, sqlState(exec(t, d.App, "UPDATE certificates SET source = 'azure_kv', private_key_id = $1 WHERE id = $2",
+		seedManagedKey(t, d), found)), "only to uploaded or csr")
+	require.NoError(t, exec(t, d.App, "UPDATE certificates SET source = 'csr', private_key_id = $1 WHERE id = $2", seedManagedKey(t, d), found))
+	assert.Equal(t, sourceFixed, sqlState(exec(t, d.App, "UPDATE certificates SET source = 'discovered' WHERE id = $1", found)), "never back")
+	assert.Equal(t, sourceFixed, sqlState(exec(t, d.Owner, "UPDATE certificates SET source = 'csr' WHERE id = $1", plain)), "the owner role too")
 	var fn string
 	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT array_to_string(p.proconfig, ',') FROM pg_proc p WHERE p.proname = 'certificates_check_key'`).Scan(&fn))
 	assert.Contains(t, fn, "search_path=pg_catalog, pg_temp", "the trigger pins its search path")

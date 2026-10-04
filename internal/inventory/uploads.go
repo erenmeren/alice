@@ -409,9 +409,13 @@ type placement struct {
 //     chain that is incomplete is replaced by this one when it is complete (chainCompleted; the key
 //     is not stored again: the same leaf has the same public key, so the uploaded key is the held
 //     one) — AUD-17 of the independent audit of 2026-10-04;
-//   - present without a key: the key is attached; the label is set only when the row has none;
-//     the chain replaces the stored one only when it is complete and the stored one is not.
-//     Source, subject, SANs, validity, sightings and created_by are never rewritten.
+//   - present without a key (found on a server): the key is attached and the row becomes this
+//     upload's: its chain and completeness replace the stored ones whatever they were (a server's
+//     file never decides what Alice deploys with a key a person gave, not even a "complete" chain a
+//     server forged around a real intermediate's key), and its source becomes source (uploaded or
+//     csr; the trigger allows exactly this change); from then on scans never touch the chain. The
+//     label is set only when the row has none. Subject, SANs, validity, sightings and created_by are
+//     never rewritten.
 //
 // Only this certificate row is locked, never a target (lock order: target, certificates, locations).
 func (s *Service) placeCertificate(ctx context.Context, tx pgx.Tx, p certs.Parsed, complete, completeChain bool, label, source string,
@@ -480,8 +484,8 @@ RETURNING id`, id, p.Fingerprint, boundText(p.SubjectCN), boundText(p.Subject), 
 	}
 	var held bool
 	err = tx.QueryRow(ctx, `UPDATE certificates SET private_key_id = $2, label = CASE WHEN label = '' THEN $3 ELSE label END,
-    pem_chain = CASE WHEN NOT chain_complete AND $5 THEN $4 ELSE pem_chain END, chain_complete = chain_complete OR $5
-WHERE id = $1 RETURNING chain_complete`, existing, kid, label, pemChain, complete).Scan(&held)
+    pem_chain = $4, chain_complete = $5, source = CASE WHEN source = 'discovered' THEN $6 ELSE source END
+WHERE id = $1 RETURNING chain_complete`, existing, kid, label, pemChain, complete, source).Scan(&held)
 	if err != nil {
 		if mapped := keyTriggerError(err); errors.Is(mapped, ErrKeyMismatch) || errors.Is(mapped, ErrCertificateDuplicate) {
 			return placement{existing: existing}, mapped

@@ -135,7 +135,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 	// Phase 4: identity columns (fingerprints, public key hashes, paths of a location or a
 	// deployment, the certificate, location and target of a deployment, every envelope column) are
 	// never updated; the lists are the columns the inventory and deployment services write.
-	"public.certificates": {"UPDATE": {"chain_complete", "label", "last_seen_at", "pem_chain", "private_key_id"}},
+	"public.certificates": {"UPDATE": {"chain_complete", "label", "last_seen_at", "pem_chain", "private_key_id", "source"}},
 	"public.csr_requests": {"UPDATE": {"certificate_id", "finished_at", "status"}},
 	"public.certificate_locations": {"UPDATE": {"cert_file_sha256", "certificate_id", "changed_outside_at", "custom_location",
 		"deployed_fingerprint", "inherited", "key_exists", "key_group", "key_mode", "key_owner", "key_path", "key_problem", "key_type",

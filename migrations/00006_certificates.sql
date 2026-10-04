@@ -66,7 +66,8 @@ CREATE INDEX certificates_public_key ON certificates (public_key_sha256);
 -- SQLSTATEs: Z1001 the key does not belong to the certificate, Z1002 a key is already attached
 -- (class Z1, Alice's own: the SQL standard reserves classes beginning 0-4 and A-H, implementation-
 -- defined classes begin 5-9 or I-Z; Z1003 is the frozen deployment below, also raised for a new step of
--- a finished deployment).
+-- a finished deployment), Z1004 a source that changes other than when a certificate found on a server
+-- gets its key (discovered -> uploaded or csr, in the update that attaches the key).
 -- It runs as the invoking role (alice_app can read managed_private_keys), so every name is
 -- schema-qualified and the search path is pinned with pg_temp last.
 -- +goose StatementBegin
@@ -75,6 +76,11 @@ SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
     IF TG_OP = 'UPDATE' AND OLD.private_key_id IS NOT NULL AND NEW.private_key_id IS DISTINCT FROM OLD.private_key_id THEN
         RAISE EXCEPTION 'the private key of a certificate cannot be replaced or detached' USING ERRCODE = 'Z1002';
+    END IF;
+    IF TG_OP = 'UPDATE' AND NEW.source IS DISTINCT FROM OLD.source
+       AND NOT (OLD.source = 'discovered' AND OLD.private_key_id IS NULL AND NEW.private_key_id IS NOT NULL
+                AND NEW.source IN ('uploaded', 'csr')) THEN
+        RAISE EXCEPTION 'the source of a certificate changes only when its key is attached' USING ERRCODE = 'Z1004';
     END IF;
     IF NEW.private_key_id IS NOT NULL AND (TG_OP = 'INSERT' OR NEW.private_key_id IS DISTINCT FROM OLD.private_key_id) THEN
         IF NOT EXISTS (SELECT 1 FROM public.managed_private_keys k
@@ -85,7 +91,7 @@ BEGIN
     RETURN NEW;
 END $$;
 -- +goose StatementEnd
-CREATE TRIGGER certificates_key_check BEFORE INSERT OR UPDATE OF private_key_id, public_key_sha256 ON certificates
+CREATE TRIGGER certificates_key_check BEFORE INSERT OR UPDATE OF private_key_id, public_key_sha256, source ON certificates
     FOR EACH ROW EXECUTE FUNCTION certificates_check_key();
 
 CREATE TABLE csr_requests (
@@ -270,7 +276,7 @@ CREATE TRIGGER deployment_steps_open BEFORE INSERT ON deployment_steps
 -- and deployments are never deleted (history) and are updated only in the columns listed.
 GRANT SELECT, INSERT ON managed_private_keys, certificates, csr_requests, certificate_locations, deployments,
     deployment_steps TO alice_app;
-GRANT UPDATE (label, private_key_id, last_seen_at, pem_chain, chain_complete) ON certificates TO alice_app;
+GRANT UPDATE (label, private_key_id, last_seen_at, pem_chain, chain_complete, source) ON certificates TO alice_app;
 GRANT UPDATE (status, certificate_id, finished_at) ON csr_requests TO alice_app;
 GRANT UPDATE (key_path, resolved_cert_path, certificate_id, key_type, servers, supported, unsupported_reason, problem,
     key_problem, inherited, custom_location, symlinked, cert_file_sha256, key_exists, key_mode, key_owner, key_group,

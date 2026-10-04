@@ -201,7 +201,8 @@ func TestCompleteSigningRequestForADiscoveredCertificate(t *testing.T) {
 	c, _, err := h.svc.CompleteCSR(h.ctx, admin, csr.ID, string(signed.FullchainPEM), "")
 	require.NoError(t, err)
 	assert.Equal(t, page.Items[0].ID, c.ID)
-	assert.Equal(t, "discovered", c.Source)
+	assert.Equal(t, "csr", c.Source, "the row becomes the completion's (the key is Alice's)")
+	assert.Equal(t, string(signed.FullchainPEM), c.PEMChain, "with the chain the completion gave")
 	assert.True(t, c.HasPrivateKey)
 	assert.Equal(t, "key_attached", h.auditDetails("csr.completed")[0]["outcome"])
 
