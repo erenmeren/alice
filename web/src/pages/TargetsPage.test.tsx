@@ -313,4 +313,46 @@ describe('TargetsPage', () => {
     expect(await within(dialog).findByRole('button', { name: 'Open the server' })).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Yes, this is my server' })).not.toBeInTheDocument();
   });
+
+  describe('the server type of a new server', () => {
+    it('offers Linux server and Nginx server, shows the commands of the chosen type and sends it', async () => {
+      withTargets('admin', []);
+      let body: unknown = null;
+      server.use(
+        http.post('/api/v1/targets', async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ target: { ...pending, type: 'nginx' }, job_id: 'job-1', status_url: '/api/v1/jobs/job-1' }, { status: 201 });
+        }),
+        http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-1', status: 'succeeded' }))),
+        http.get('/api/v1/targets/:id', () => HttpResponse.json(targetWith({ ...pending, type: 'nginx', status: 'ok' }))),
+        http.get('/api/v1/targets/:id/host-keys', () => HttpResponse.json({ items: [] })),
+        http.get('/api/v1/targets/:id/ssh-keys', () => HttpResponse.json({ items: [] })),
+        http.get('/api/v1/targets/:id/certificate-locations', () => HttpResponse.json({ items: [], truncated: false })),
+      );
+      const { router } = await renderRoute('/servers');
+      await userEvent.click(await screen.findByRole('button', { name: 'Add server' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Add server' });
+      const type = within(dialog).getByLabelText('Server type');
+      expect(type).toHaveValue('linux');
+      expect(within(dialog).getAllByRole('option').map((o) => o.textContent)).toEqual(['Linux server', 'Nginx server']);
+      expect(within(dialog).getByText('Choose Nginx server to manage its certificates too. Prepare the server with the Nginx commands first.')).toBeInTheDocument();
+      expect(await within(dialog).findByTestId('add-server-script')).toHaveTextContent('# linux setup script');
+      await userEvent.selectOptions(type, 'nginx');
+      expect(within(dialog).getByTestId('add-server-script')).toHaveTextContent('# nginx setup script');
+      await userEvent.type(within(dialog).getByLabelText(/^Name/), 'db-01');
+      await userEvent.type(within(dialog).getByLabelText(/^Address/), 'db-01.example.com');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
+      await waitFor(() => expect(router.state.location.pathname).toBe(`/servers/${pending.id}`));
+      expect(body).toEqual({ name: 'db-01', type: 'nginx', host: 'db-01.example.com', port: 22, username: 'alice-svc' });
+    });
+
+    it('shows the choice in Turkish', async () => {
+      withTargets('admin', [], 'tr');
+      await renderRoute('/servers', { languages: ['tr-TR'] });
+      await userEvent.click(await screen.findByRole('button', { name: 'Sunucu ekle' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Sunucu ekle' });
+      expect(within(dialog).getByLabelText('Sunucu türü')).toBeInTheDocument();
+      expect(within(dialog).getAllByRole('option').map((o) => o.textContent)).toEqual(['Linux sunucu', 'Nginx sunucu']);
+    });
+  });
 });

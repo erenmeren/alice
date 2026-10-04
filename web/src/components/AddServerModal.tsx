@@ -1,23 +1,26 @@
-import { Button, Group, Loader, NumberInput, Stack, Text, TextInput } from '@mantine/core';
-import { useQueryClient } from '@tanstack/react-query';
+import { Button, Code, CopyButton, Group, Loader, NativeSelect, NumberInput, Stack, Text, TextInput } from '@mantine/core';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { confirmHostKey, createTarget, listHostKeys } from '../api/endpoints';
+import { confirmHostKey, createTarget, getPlatformKey, listHostKeys } from '../api/endpoints';
 import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
-import { TARGETS_KEY } from '../api/queryKeys';
+import { PLATFORM_KEY_KEY, TARGETS_KEY } from '../api/queryKeys';
 import { useAbort } from '../api/useAbort';
 import type { HostKey, Job, JobError, Target } from '../api/types';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { HostKeyConfirm } from './HostKeyConfirm';
 import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert } from './JobErrorAlert';
+import { WRAP } from './wrap';
 
 // form: nothing exists yet. working: a request or a job is running. confirm: waiting for the
 // Administrator's comparison. failed: the server exists but the check did not succeed (the dialog
 // can only be left, never resubmitted).
 type Phase = 'form' | 'working' | 'confirm' | 'failed';
 
-// AddServerModal creates a Linux server, waits for the first connection test and, when the server
+type ServerType = 'linux' | 'nginx';
+
+// AddServerModal creates a Linux or an Nginx server, waits for the first connection test and, when the server
 // presented a fingerprint nobody confirmed yet, asks the Administrator to compare and confirm it.
 // The server counts toward the license as soon as it is created (spec §7.3), so after the create
 // call succeeds the form never comes back: problems end in the "failed" phase with a way to open
@@ -37,6 +40,7 @@ export function AddServerModal({
 }) {
   const { t } = useTranslation();
   const client = useQueryClient();
+  const [type, setType] = useState<ServerType>('linux');
   const [name, setName] = useState('');
   const [host, setHost] = useState('');
   const [port, setPort] = useState<number | string>(22);
@@ -117,7 +121,7 @@ export function AddServerModal({
     setPhase('working');
     let created;
     try {
-      created = await createTarget({ name: name.trim(), type: 'linux', host: host.trim(), port: Number(port), username: username.trim() });
+      created = await createTarget({ name: name.trim(), type, host: host.trim(), port: Number(port), username: username.trim() });
     } catch (err) {
       if (signal.aborted) return;
       setError(err);
@@ -154,6 +158,17 @@ export function AddServerModal({
       {phase === 'form' && (
         <form onSubmit={(e) => void submit(e)}>
           <Stack gap="sm">
+            <NativeSelect
+              label={t('targets.form.type')}
+              description={t('targets.form.typeHelp')}
+              value={type}
+              onChange={(e) => setType(e.currentTarget.value as ServerType)}
+              data={[
+                { value: 'linux', label: t('targets.form.typeLinux') },
+                { value: 'nginx', label: t('targets.form.typeNginx') },
+              ]}
+            />
+            <ProfileScript type={type} />
             <TextInput label={t('targets.form.name')} value={name} onChange={(e) => setName(e.currentTarget.value)} required maxLength={100} data-autofocus />
             <TextInput
               label={t('targets.form.host')}
@@ -192,5 +207,31 @@ export function AddServerModal({
         </Stack>
       )}
     </AppModal>
+  );
+}
+
+// ProfileScript shows the commands that prepare a server of the chosen type (the profile's setup
+// script from Alice, the same text the Servers page shows). The script is not secret.
+function ProfileScript({ type }: { type: ServerType }) {
+  const { t } = useTranslation();
+  const key = useQuery({ queryKey: PLATFORM_KEY_KEY, queryFn: getPlatformKey });
+  const script = key.data?.profiles[type].script;
+  if (!script) return <ErrorAlert error={key.error} />;
+  return (
+    <Stack gap={4}>
+      <Text size="sm" fw={600}>
+        {t('targets.form.script')}
+      </Text>
+      <Code block tabIndex={0} aria-label={t('targets.form.script')} data-testid="add-server-script" style={{ ...WRAP, maxHeight: 160, overflow: 'auto' }} translate="no">
+        {script}
+      </Code>
+      <CopyButton value={script}>
+        {({ copied, copy }) => (
+          <Button size="xs" variant="light" onClick={copy} w="fit-content">
+            {copied ? t('targets.prepare.copied') : t('targets.prepare.copy')}
+          </Button>
+        )}
+      </CopyButton>
+    </Stack>
   );
 }
