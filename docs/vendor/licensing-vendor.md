@@ -15,6 +15,14 @@ and never get `licensectl`. `licensectl` never uses the network.
 - Only the **public** key goes into Alice builds, through `internal/license/keys/production.json`.
 - Until that file lists a key, release builds accept **no** license (every upload is refused as an unknown key;
   the evaluation still works) and `make release-keycheck` fails.
+- **Every license format keeps the envelope.** A future format may add payload fields, but every format must keep
+  the outer object `{format, key_id, payload, signature}` with exactly these key names, an integer outer `format`
+  equal to `payload.format`, and the Ed25519 signature over `"ALICE-LICENSE-v1\n"` followed by the RFC 8785
+  canonical bytes of the whole payload object (every member, numbers that are IEEE doubles, nesting at most 16).
+  Then a customer on an older Alice who uploads a newer license is told to update Alice (`ALC-LIC-0006`); a format
+  that breaks any of this is reported to them as "not a valid license" (`ALC-LIC-0002`). An older build reports a
+  newer format only after the signature verified, so an unsigned or edited file is always "not valid".
+  `licensectl verify` on such a file prints `SIGNATURE OK, NEWER FORMAT (…)` and exits 1.
 
 ## Build licensectl
 

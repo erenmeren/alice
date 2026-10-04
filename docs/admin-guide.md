@@ -40,23 +40,29 @@ Open **Users**, choose **Manage** on the person's row and choose the action: **E
 one of these asks for a fresh 6-digit code if you have not confirmed your identity in the last five minutes.
 
 Changing a role, disabling a person, resetting their MFA or password, and **Sign out everywhere** end all their
-current sessions immediately. Disabling a person also revokes all their API tokens; enabling the account again
-does not bring the tokens back.
+current sessions immediately. **Set a new password**, **Sign out everywhere** and **Disable** also revoke all their
+API tokens (the dialogs say so); enabling the account again does not bring the tokens back. A token is refused from
+its next request on; a task a token or session already queued still runs. A role change and **Reset two-factor
+sign-in** keep the tokens (they follow the new role), and so does a person's own password change on **My account**.
+The audit log records one "API token revoked" entry per token (with the reason) and the number of revoked tokens
+on the reset, sign-out or disable entry.
 
 Alice never lets you remove the last enabled local administrator (disable or change role). This keeps a
 break-glass account available.
 
 ### If an account may be compromised
 
-1. **Disable** the account. This ends its sessions and revokes its API tokens at once.
+1. **Disable** the account. This ends its sessions and revokes its API tokens at once. If the person must keep
+   working, **Sign out everywhere** instead: it also ends every session and revokes every API token, but the
+   person can sign in again with their password and code.
 2. Open **Audit log** and check the entries that show the person in the **User** column (use **Load more** for
-   older entries, or **Export JSON** and search the file).
+   older entries, or **Export JSON** and search the file). Open **Details** of an entry to see what it changed.
 3. Before enabling it again, **Set a new password** and **Reset two-factor sign-in**, and give the new password
    to the person through a separate channel.
 
-A role change, a password reset or an MFA reset on its own ends the sessions but does **not** revoke API tokens:
-a token keeps working with the person's current role. Disable the account (or revoke the tokens) whenever the
-person or their scripts should lose access.
+**Reset two-factor sign-in** and a role change on their own end the sessions but do **not** revoke API tokens: a
+token keeps working with the person's current role. Use **Sign out everywhere**, **Set a new password** or
+**Disable** whenever the person or their scripts should lose access. Their scripts then need new tokens.
 
 ## Multi-factor authentication and recovery codes
 
@@ -80,6 +86,24 @@ administrator (so nobody can open **Users**), the server operator runs `alice ad
 audit log (`user.unlocked`, actor `cli`).
 Every sign-in, failure and block is in the audit log (`auth.lockout`). Email notification of blocks arrives in a
 later release.
+
+The same failure count also covers **Confirm it's you** codes and the current password on **Change password**: while
+an account is blocked, its owner cannot confirm their identity for administrator actions either, even in a session
+that is still open, and someone who keeps guessing an administrator's password can keep it that way. `alice admin
+unlock` ends one block, but the next wrong attempts start a new one; check the audit log for where they come from.
+
+## Staying signed in
+
+A session ends after 30 minutes without activity, and always 12 hours after sign-in. Activity means clicking,
+typing, scrolling with the wheel or touching the page, or saving a change. Pages that refresh themselves (the
+license status, a server or deployment you are watching, a running task) do not count, so a page left open is
+signed out 30 minutes after the last input although it keeps refreshing. Moving the mouse alone does not count
+either: someone who only reads one page for 30 minutes is signed out. Input reaches Alice within about a minute;
+when you switch to another tab or close it, Alice sends any input it has not reported yet. After a timeout the
+sign-in page says "Your session ended. Please sign in again."; what was typed into an open dialog is lost.
+
+Tools that drive the browser's real input (remote desktop, browser automation) count as activity; a script or
+browser extension that fakes events does not. For automation use API tokens, which have no idle timeout.
 
 ## API tokens
 
@@ -106,9 +130,20 @@ chain.
 - **Verify integrity** checks the whole chain. Expected: "The audit log is intact." If it reports "Audit log
   integrity problem at entry N", keep a copy of the database and of an export, and contact your security team.
 - **Export CSV** / **Export JSON** download the whole log with its verification result. Exports are recorded in
-  the audit log. Use the JSON export to re-check the chain outside Alice: the CSV export protects spreadsheet
+  the audit log. The CSV file's first line carries the result (`# alice audit export: intact=true …`); the column
+  names are on line 2. Use the JSON export to re-check the chain outside Alice: the CSV export protects spreadsheet
   users by prefixing cells that start with `=`, `+`, `-` or `@` with an apostrophe, so its cells are not always
   the original values (see [operator-guide.md](operator-guide.md#checking-an-audit-export-outside-alice)).
+- Alice runs one check or export of the audit log at a time. If someone else's is running, **Verify integrity**
+  answers "Alice is already checking or exporting the audit log." and an export download fails: wait until the other
+  one has finished and try again. Such refusals are recorded too ("Audit log export refused: another check or export
+  was running").
+- The **Object** column names what an entry is about, and **Details** opens its recorded values.
+- Repeated refusals are recorded once per 10 minutes. When the same person is refused the same thing on the same
+  page or API operation again within 10 minutes (permission denied, or blocked by the license), Alice writes no new
+  entry; when the 10 minutes end it adds one entry whose details say how many more refusals like it there were and
+  between which times, and from how many addresses (and, where it applies, for how many objects or API tokens).
+  All sessions of a person count together, and all API tokens of a person count together.
 - After verification Alice shows the **Fingerprint of the latest entry**. Record it somewhere outside Alice (for
   example in a ticket) from time to time: a later fingerprint that does not continue from it shows that entries
   were removed. Syslog forwarding arrives in a later release.
@@ -153,8 +188,10 @@ confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **S
 - **Remove server** (administrators) makes Alice forget the server, closes the SSH connections Alice kept open to it
   and frees its license slot. Nothing is changed on the server.
 - **Waiting for an administrator** lists work that was paused while the license had expired (for example a key
-  removal). After a new license is installed, an administrator chooses **Run now** or **Discard** for each item;
-  nothing starts on its own (R29).
+  removal), 50 at a time (**Show more** for the rest). After a new license is installed, an administrator chooses
+  **Run now** or **Discard** for each item; nothing starts on its own. **Discard** is possible at any time, also
+  while the license is expired. Work requested while Alice could not check its license (see [License](#license)) is
+  not listed here: it waits and starts by itself after the next successful check.
 
 ## SSH keys
 
@@ -167,7 +204,7 @@ never deletes them from its records.
 Open a key to see **Where this key is used**: server, user, file, line, options, last seen and state.
 Administrators and operators can remove a key from one place with **Remove key** (on the server's page and on the
 key's page). Alice removes only that key's lines from that file. It refuses to remove its own key ("Alice needs this
-key to connect to this server and will not remove it."), refuses the last key of `root` in a file unless an
+key to connect to this server and will not remove it."), refuses the last key of `root` (or of another account with user ID 0) in a file unless an
 administrator ticks "This is the last key of the root account. Remove it anyway.", and refuses changes on servers
 that get their keys from a program (`AuthorizedKeysCommand`) or whose SSH settings the last scan could not read.
 Every refusal that protects access is recorded in the audit log. Generating, deploying and rotating keys arrive in a
@@ -177,7 +214,10 @@ The **SSH keys** list marks a key **No longer found** when every place it was us
 state of each place. The keys of an account deleted from a server are marked **No longer found** when the server's
 account list is complete; otherwise, and for an account that got a `nologin` shell or lost its home, the keys stay
 listed as they were last seen and cannot be removed through Alice (see
-[operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists)). Key options such as `command=` or
+[operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists)). A server's page warns when Alice could
+not list an account (for example a name with characters Alice does not support): the warning names its user ID, and
+`getent passwd <user ID>` on the server shows the account. While such a warning is shown, Alice does not mark keys of
+deleted accounts **No longer found** on that server. Key options such as `command=` or
 `environment=` are shown exactly as they are in the file, to everyone who can see the key, auditors included.
 
 ## Certificates
@@ -254,7 +294,8 @@ under **Upload a license**: **Check the file**, read **Confirm the license**, th
 6-digit code may be asked first). Every upload, refused or accepted, is recorded in the audit log. The full guide,
 including what lock mode does and how clock changes are handled, is [licensing.md](licensing.md).
 
-License banners appear at the top of every page: the evaluation, the grace period and lock mode for everyone;
+License banners appear at the top of every page: the evaluation, the grace period, lock mode and "Alice could not
+check its license since …" for everyone;
 warnings 60/30/14/7/1 days before the end, clock problems, damaged license data, a license that starts later and
 the target limit for administrators only. Administrators with an email address also get the warnings by email when
 the server operator has set up email ([operator-guide.md](operator-guide.md#email)).

@@ -14,7 +14,15 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   recovery codes, ask an administrator to reset your MFA (**Users**). If you are the only administrator, the
   server operator runs `alice admin reset-mfa <username>` ([operator-guide.md](operator-guide.md)).
 - **"Your session ended. Please sign in again."** Sessions end after 30 minutes without activity and always after
-  12 hours. Sign in again.
+  12 hours. Pages that refresh themselves do not count as activity; clicking, typing, scrolling with the wheel or
+  touching the page does (see [admin-guide.md](admin-guide.md#staying-signed-in)). Sign in again.
+- **Alice does not start on a new installation: "no installation in the database and the time record file cannot be
+  read".** The state volume (`/opt/alice/state`) or its `hwm.dat` cannot be read by user 10001, so Alice cannot tell
+  whether an installation existed before; it creates nothing. Fix the volume's owner and permissions and start again.
+- **Alice does not start on a new installation: "sync keys directory …".** The file system of the keys volume
+  refused to make the new master key's directory entry durable (`fsync` on a directory). Alice keeps the key file and
+  tries again at the next start; on a file system that never allows it, put the keys volume on an ordinary local
+  file system (ext4, XFS).
 - **The setup wizard says the setup code is wrong or the session expired.** Create a new code with
   `alice setup-token --reset` (development: `make setup-token`). After five wrong codes the wizard waits
   15 minutes (`ALC-SET-0002`). Once an administrator exists the wizard no longer accepts codes: sign in instead.
@@ -40,7 +48,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 - **"The Alice account on this server is not allowed to run the helper" (`ALC-SSH-0004`) or "The alice-helper on
   this server is outdated" (`ALC-SSH-0005`).** Copy the `alice-helper` file of this Alice version next to the
   commands from **Servers → Prepare a server for Alice** and run them again as root; they install the helper and the
-  sudoers file.
+  sudoers file. Next time, update the helpers before Alice: a new helper works with the previous Alice.
 - **The setup commands stop with "./alice-helper is not the alice-helper of this Alice version".** The file's
   checksum differs from the one built into Alice. Copy `alice-helper-linux-amd64` (x86_64) or
   `alice-helper-linux-arm64` (aarch64) built by `make helper` from the same Alice version, renamed to
@@ -49,9 +57,21 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   Never accept a new fingerprint you have not compared on the server itself. If the server shows its previous
   fingerprint again, choose **Review the new fingerprint** and **The server still shows the previous fingerprint**.
 - **A key of a deleted account is still listed as found.** Alice marks the keys of a deleted account **No longer
-  found** only when the server's account list is complete (no LDAP or SSSD accounts, not more accounts than Alice
-  lists), and keeps the keys of an account that got a `nologin` shell or lost its home as last seen; see
+  found** only when the server's account list is complete (no warning about accounts Alice did not list, no
+  directory-service or systemd accounts, not more accounts than Alice lists), and keeps the keys of an account that
+  got a `nologin` shell or lost its home as last seen; see
   [operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists).
+- **"Alice did not list the SSH keys of the account with user ID N".** The account's name, its user or group ID, or
+  its home directory in `/etc/passwd` is outside what Alice supports (the warning says which). Run
+  `getent passwd N` on the server to find the account; rename it, write its ID as a plain number, or give it a plain
+  absolute home directory, then choose **Scan for SSH keys**. Until then the server's account list is incomplete.
+- **"The file /etc/passwd on this server contains a NUL byte".** Remove the NUL byte (as root, for example with
+  `vipw`); Alice reads each line only up to it, as the system does.
+- **"Accounts from a directory service (for example LDAP or SSSD), from systemd user records or from a source Alice
+  cannot check are not listed."** The `passwd:` line of `/etc/nsswitch.conf` names a source other than `files`,
+  `systemd` or `mymachines`; or the server has systemd user records or systemd-homed accounts; or
+  `/etc/nsswitch.conf` is missing, larger than 64 KiB, or not a plain file of root's that only root can change. The
+  warning stays as long as that is so.
 - **"This server gets its SSH keys from a program" (`ALC-SSH-0008`).** The server uses `AuthorizedKeysCommand`;
   Alice lists keys but does not change them there.
 - **A key removal says "The file changed while Alice was working" (`ALC-SSH-0007`).** Someone or something edited
@@ -184,10 +204,16 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   the **License** page; everything works again at once.
 - **"The evaluation period has ended" right after a database change, and the Audit log lists "Installation record
   changed outside Alice" (`license.installation_tampered`).** The Installation ID or the evaluation start in the
-  database no longer matches its protection (problem `seal_mismatch` or `seal_missing`), or the record was deleted
-  (`installation_missing`). Alice does not trust a changed record and ignores every license until the original
-  record is restored, for example from a backup. After a deleted record, Alice created a new Installation ID: send
-  it to your vendor for a license.
+  database no longer matches its protection (problem `seal_mismatch`), its protection was removed (`seal_missing`),
+  or the record was deleted while something else still shows that Alice ran before (`installation_missing`; the
+  entry's `evidence` names what: a time record in the database or on the state volume, a damaged time record, the
+  completed setup, earlier audit entries, or users, credentials or servers in the database). Alice does not trust a
+  changed record and ignores every license until the original record is restored, for example from a backup (restore
+  the whole database, not single tables). If the original record cannot be restored, the database owner removes the
+  record (`DELETE FROM license`); at the next start Alice creates a new Installation ID whose evaluation has already
+  ended: send it to your vendor for a license. The same happens when a new installation starts on a new database
+  next to the state volume of an earlier one.
+- **Everyone sees "Alice could not check its license since …".** See `ALC-LIC-0009` below.
 - **Alice logs "this build has no build time".** The image was built without `ALICE_BUILD_TIME` (for example with a
   plain `docker compose build`). Rebuild with `make up`; see `docs/dev/getting-started.md`.
 - **Every upload says "This license was issued with a key this version of Alice does not know."** If this happens
@@ -236,7 +262,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 
 **Likely cause.** More than 300 requests per minute for one session or token, more than 60 per minute from one address without signing in, more than 60 calls of `/healthz` on the public port per minute from one address, more than 60 per minute from one address with a session cookie or API token Alice does not accept (sessions and tokens Alice accepted in the last 30 minutes are exempt), more than 10 sign-in attempts or 5 verification codes per minute from one address.
 
-**What to do.** Wait for the time in `Retry-After`. If many people share one address through a proxy, ask the administrator to set `ALICE_TRUSTED_PROXIES` so Alice sees real client addresses.
+**What to do.** Wait for the time in `Retry-After`. If many people share one address through a proxy, ask the administrator to set `ALICE_TRUSTED_PROXIES` so Alice sees real client addresses; when Docker forwards the port through a proxy process (rootless Docker), all clients also share one address (see [operator-guide.md](operator-guide.md#health-endpoints-and-request-limits)). After Alice restarts, people behind an address that sends many bad credentials may have to sign in again.
 
 ## ALC-SYS-0006: Some fields need attention
 
@@ -258,13 +284,14 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 
 **Meaning.** The request has no valid session or API token (HTTP 401).
 
-**Likely cause.** The user signed out, was idle for 30 minutes, reached the 12-hour session limit, was disabled, or an administrator ended their sessions; or an API token expired or was revoked.
+**Likely cause.** The user signed out, was idle for 30 minutes (pages that refresh themselves do not count as activity), reached the 12-hour session limit, was disabled, or an administrator ended their sessions (**Sign out everywhere** or **Set a new password**); or an API token expired or was revoked, also by **Set a new password**, **Sign out everywhere** or **Disable** for its owner.
 
-**What to do.** Sign in again. API users: create a new token.
+**What to do.** Sign in again. API users: create a new token. A browser that keeps sending a cookie Alice refused
+is told to delete it.
 
 ## ALC-AUTH-0002: Permission denied
 
-**Meaning.** The signed-in user or token is not allowed to perform this action (HTTP 403). The attempt is recorded in the audit log as `authz.denied`.
+**Meaning.** The signed-in user or token is not allowed to perform this action (HTTP 403). The attempt is recorded in the audit log as `authz.denied`; repeats of the same refusal by the same person within 10 minutes are counted in one later entry (`suppressed_count`) instead of one entry each.
 
 **Likely cause.** The user's role (Administrator, Operator, Auditor) does not include the action, or an API token is used for an action that needs a browser session.
 
@@ -467,7 +494,10 @@ choose **Go to the dashboard**. The evaluation has been running since Alice was 
 ended (HTTP 403). Alice is in lock mode: automatic tasks are paused and such changes are refused. Signing in,
 uploading a license, backups, the audit log, exports and user administration keep working. Nothing was changed.
 
-**Likely cause.** The license expired more than 7 days ago (168 hours), or the evaluation ended.
+**Likely cause.** The license expired more than 7 days ago (168 hours), or the evaluation ended. Between its hourly
+checks Alice also counts the time itself: when the lock time is reached before the next check, changes are refused
+at once and a check starts; queued work is only held for an administrator after that check confirmed the lock (if
+the check finds a renewal, everything continues by itself).
 
 **What to do.** Ask your vendor for a renewed license (send the Installation ID shown on the **License** page) and
 upload it there. Everything works again immediately; work that was paused waits for an administrator's confirmation.
@@ -539,7 +569,7 @@ for a correction license (it names the license it replaces and is always accepte
 ## ALC-LIC-0009: The license could not be checked
 
 **Meaning.** Alice checks its license at start, after every upload and every hour, in every Alice process; a failed
-check is tried again after 1, 2, 4 and 8 minutes, then every 10 minutes. No check has succeeded for more than 3 hours (`license.unverified`, HTTP 503, retryable), so the action, which changes a
+check is tried again after 1, 2, 4 and 8 minutes, then every 10 minutes. No check has succeeded for more than 3 hours of the process's running time (time while the host was suspended does not count) (`license.unverified`, HTTP 503, retryable), so the action, which changes a
 managed server, key or certificate, was refused. Nothing was changed. Everyone sees a red banner with the time of
 the last successful check. Signing in, uploading a license, the audit log, exports, user administration and the
 recovery and rollback of deployments keep working. Queued jobs that change servers are not cancelled and need no
@@ -666,11 +696,14 @@ connection.
 ## ALC-SSH-0005: Helper outdated
 
 **Meaning.** The helper on the server speaks an older protocol than this Alice version needs (this release needs
-protocol 5, `alice-helper` 1.4.0).
+protocol 6, `alice-helper` 1.5.0; `params.required_protocol` is `6`). Alice does nothing on that server: no scan, no
+key removal, no deployment, and a deployment that is being finished there waits.
 
 **Likely cause.** Alice was updated but the helper on the server was not.
 
-**What to do.** Copy the helper from the current Alice bundle and run the preparation commands again.
+**What to do.** Copy the helper from the current Alice bundle and run the preparation commands again, then choose
+**Test connection**. The new helper also works with the previous Alice release, so update the helpers first next
+time ([nginx-host-preparation.md](nginx-host-preparation.md#updating-the-helper)).
 
 ## ALC-SSH-0006: Helper refused the request
 
@@ -756,9 +789,10 @@ Alice logs a warning with this reason.
 address), or someone is trying to make Alice reach a service of its own host or the cloud metadata service through a
 name that resolves differently over time (DNS rebinding).
 
-**What to do.** Check the server's DNS record (`dig +short <name>` from Alice's host). If the name is wrong, edit the
-server and enter its real address or a name that resolves to it, then **Test connection**. If you did not change the
-record, treat it as a possible attack on Alice's network position.
+**What to do.** Check the server's DNS record (`dig +short <name>` from Alice's host). Fix the record, then choose
+**Test connection**. A server's address cannot be changed in Alice: if the name itself is wrong, remove the server and
+add it again with its real address or a name that resolves to it. If you did not change the record, treat it as a
+possible attack on Alice's network position.
 
 ## ALC-KEY-0001: Alice's own key is protected
 
@@ -771,9 +805,11 @@ refusal is recorded in the audit log.
 
 ## ALC-KEY-0002: Last key of root
 
-**Meaning.** Removing this key would leave the root account without any key (HTTP 409).
+**Meaning.** Removing this key would leave the root account (or another account with user ID 0) without any key
+(HTTP 409).
 
-**Likely cause.** The key is the only line in root's `authorized_keys`.
+**Likely cause.** The key is the only line in the `authorized_keys` file of `root` or of another account with user
+ID 0 (for example `toor`).
 
 **What to do.** Add another key for root first, or let an administrator confirm the removal on purpose.
 

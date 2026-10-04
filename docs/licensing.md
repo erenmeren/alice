@@ -71,6 +71,22 @@ cancelled, `ALC-DEP-0022`, without a failure email). A deployment that had alrea
 reached a server when the lock began is still finished or undone, so no server is left half-changed. Certificate
 expiry alerts by email with a note that the license expired arrive with the release that adds alerts.
 
+Alice checks the license when it starts, every hour, and after every upload. Between two checks it also counts the
+time itself, so a license that ends between two checks stops changes at the right minute; Alice then checks again at
+once, and queued work waits for an administrator only after that check confirmed the end.
+
+## When Alice cannot check its license
+
+If no license check has succeeded for 3 hours (for example because the database was unreachable or overloaded for a
+long time), everyone sees the red banner "Alice could not check its license since …" and changes to servers are
+refused with `ALC-LIC-0009` ("The license could not be checked."), even if the license is valid. Signing in,
+uploading a license, the audit log, exports and user administration keep working, and so does the finishing or
+undoing of a deployment that already reached a server. Nothing is cancelled and nothing needs an administrator:
+work requested meanwhile waits and starts by itself after the next successful check. A failed check is tried again
+after 1, 2, 4 and 8 minutes and then every 10 minutes, so after the database is back changes resume within minutes.
+An outage that ends within about 2 hours 48 minutes of the last successful check does not stop changes at all.
+What to check is in [troubleshooting.md](troubleshooting.md) under `ALC-LIC-0009`.
+
 ## Clock changes
 
 Alice remembers the latest time it has seen, in the database and in a protected file on the `alice-state` volume.
@@ -94,7 +110,12 @@ only administrator still cannot sign in, the server operator runs `alice admin r
 ## Frequently asked questions
 
 - **We restored a backup onto a new server. Do we need a new license?** No. The Installation ID, the evaluation
-  start and the license are restored with the database.
+  start and the license are restored with the database. Restore the whole database together with the keys and state
+  volumes: a database restored without its license data (for example only some tables) counts as a removed
+  installation record, and Alice then starts with a new Installation ID whose evaluation has ended.
+- **We installed Alice again on the same server.** Start the new installation with empty volumes. A new database
+  next to the state volume (`alice-state`) of the earlier installation counts as an earlier installation: the new one
+  starts with an evaluation that has already ended, and needs a license for its new Installation ID.
 - **We copied the whole installation to a test server.** The copy has the same Installation ID; your license terms
   decide whether that is allowed.
 - **Which build accepts our license?** Every release from your vendor. `alice license keys` shows the vendor key
@@ -106,9 +127,13 @@ only administrator still cannot sign in, the server operator runs `alice admin r
   "Installation record changed outside Alice". A deleted record gets a new Installation ID whose evaluation has
   already ended, so a license for the new ID is needed. The same happens when the database is replaced by an empty
   one while Alice's state volume is kept, and when the record is deleted together with the state volume while the
-  rest of the database is kept. What remains is what someone who controls the whole server can always do, like
-  running a modified program: remove every trace of the installation from both the database and the state volume
-  (which is the same as a new installation), or use the master key file to write a new protected record.
+  rest of the database is kept, or when only the record and the time records are removed while users, servers or
+  the audit log remain. What remains is what someone who controls the whole server can always do, like running a
+  modified program: remove every trace of the installation from both the database and the state volume (which is
+  the same as a new installation), or use the master key file to write a new protected record.
+- **Can someone keep Alice from noticing that the license ended, by stopping its checks?** No. If no check succeeds
+  for 3 hours, changes stop ("Alice could not check its license since …"), and between checks Alice counts the time
+  itself.
 - **Can someone edit the license file to get more targets?** No. The file is signed; any change makes it "not a
   valid Alice license". An edited file already stored in the database is ignored, and administrators see "License
   data was changed outside Alice …".

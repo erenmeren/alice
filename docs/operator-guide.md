@@ -49,6 +49,12 @@ keys directory (`/opt/alice/keys`). On the very first start Alice creates it (mo
 - If the file permissions are wider than 0400, the file belongs to another user, or it is a symbolic link, Alice
   refuses to start and prints the command that fixes it (for example `chmod 0400 master.key`).
 
+When Alice creates the file, or finds one an installer put there before the database knows it, it makes the file's
+directory entry durable (`fsync` of the keys directory, and of its parent when it created the directory) before the
+database starts to depend on the key. If that fails, Alice refuses to start and keeps the file; the next start tries
+again. A file system that does not allow `fsync` on a directory therefore cannot hold the keys directory: Alice
+never gets past its first start there. Use an ordinary local file system (ext4, XFS) for the keys volume.
+
 The server disk must use full-disk encryption: anyone who can read both the database and this file can decrypt the
 secrets. The `alice` container has core dumps disabled so a crash never writes key material to disk.
 
@@ -89,11 +95,32 @@ default below `/var/log/sudo-io`) is the server administrator's job.
 The helper scans only some accounts of a server (see "What Alice reads and changes" in
 [nginx-host-preparation.md](nginx-host-preparation.md#what-alice-reads-and-changes)), but it reports the name of
 every account in `/etc/passwd`. When an account is deleted and that list is complete, Alice marks its keys **No
-longer found**. The list is not complete when the server also has accounts in a directory service (LDAP, SSSD) or
-more accounts than Alice lists (the server's page shows a warning in both cases); then the keys of a deleted account
-stay as they were last seen. An account that still exists but gets a shell such as `/usr/sbin/nologin` or loses its
-home directory is not scanned any more either. In these cases **Remove key** fails because the helper refuses a file
-of an account it does not scan (`ALC-SSH-0006`).
+longer found**. The list is not complete (the server's page shows a warning for each reason) when:
+
+- an entry of `/etc/passwd` cannot be listed: a name longer than 32 characters, with characters other than letters,
+  digits, `_`, `.` and `-` (and one final `$`), starting with `.` or `-`, or made only of digits; a user or group ID
+  that is not a plain number; or, for an account Alice would scan, a home directory that is not a plain absolute
+  path (for example one with `..`). The warning names the user ID: `getent passwd <user ID>` on the server shows the
+  account. Rename the account or fix its line, then scan again;
+- `/etc/passwd` contains a NUL byte;
+- accounts may come from somewhere else than `/etc/passwd`: a directory service (LDAP, SSSD, winbind, NIS and any
+  other source in the `passwd:` line of `/etc/nsswitch.conf`), systemd user records or systemd-homed accounts
+  (files in `/etc/userdb`, `/run/userdb`, `/run/host/userdb`, `/usr/local/lib/userdb`, `/usr/lib/userdb` or
+  `/var/lib/systemd/home`), or a `/etc/nsswitch.conf` that is missing or that the helper cannot read safely (not a
+  plain file of root's that only root can change, or larger than 64 KiB);
+- the server has more accounts than Alice lists (more than 200 accounts to scan, or more than 5000 names), or the
+  helper's answer had to be cut.
+
+Several of these never go away by themselves (for example an account whose name has a space, or a server that uses
+LDAP or systemd-homed): on such a server the keys of a deleted account stay as they were last seen. An account that
+still exists but gets a shell such as `/usr/sbin/nologin` or loses its home directory is not scanned any more either.
+In these cases **Remove key** fails because the helper refuses a file of an account it does not scan
+(`ALC-SSH-0006`).
+
+Accounts with a user ID from 1 to 999 (other than `alice-svc`), `nobody`, accounts whose shell ends in `/nologin` or
+`/false` and accounts without an existing home directory are never inventoried and not reported, even where the SSH
+server could accept a key for them (for example through an `AuthorizedKeysFile` outside the home). The helper reads
+`/etc/passwd` the way glibc does; servers with another C library (for example Alpine's musl) are not supported.
 
 To spot it: on the key's page (**SSH keys**, then the key), **Where this key is used** shows a **Last seen** time that
 stays behind the server's latest scan. To handle it, check the account on the server (`getent passwd <user>`):
@@ -344,20 +371,43 @@ after 50 seconds, before Alice gives up, and a certificate deployment that alrea
 a change that timed out is still treated as an uncertain outcome). Every job payload carries an HMAC; a job
 changed in the database is never run (`job.tampered`).
 
+Each time Alice connects to a server (SSH, and its own check of a website's certificate), it checks the address the
+server's name resolves to at that moment, and never connects to a link-local address (such as the cloud metadata
+address `169.254.169.254`), a multicast, unspecified or reserved address, or an IPv6 form that only carries such an
+IPv4 address (`ALC-SSH-0012`). Loopback and private addresses are allowed: a server name that later resolves to
+`127.0.0.1` makes Alice open an SSH connection (or a TLS check) to its own host; only administrators can add servers.
+Already open connections are not affected by a DNS change.
+
 While the license is locked, nothing new can be requested on servers (`ALC-LIC-0001`), scheduled scans are not
 queued, queued tests and scans are cancelled (each recorded as `job.cancelled_license`), and queued key removals and
 deployments are held as "Waiting for an administrator" on **Servers** until an administrator runs or discards them
 after the next license is installed. A deployment that already reached a server is still finished or undone in
 lock.
 
+Alice also stops changes when it cannot check its license. Each Alice process checks the license at start, every
+hour and after an upload; a failed check is tried again after 1, 2, 4 and 8 minutes, then every 10 minutes. When no
+check has succeeded for 3 hours (counted in the time the process was running, so a suspended host does not count),
+requests that change servers are refused with `ALC-LIC-0009` and everyone sees "Alice could not check its license
+since …". Queued work is neither cancelled nor held: it waits in the queue and starts by itself after the next
+successful check. Deployment recovery and rollback keep running. Between checks Alice also counts the time itself:
+when the license reaches its lock time before the next check, changes are refused at once (`ALC-LIC-0001`) and a
+check starts immediately; nothing is held until that check confirms the lock. A database outage that ends within
+about 2 hours 48 minutes of the last successful check never stops changes. Every wait for the license row is limited
+to 30 seconds: if another database session keeps that row locked, a check fails (and is retried), and Alice does not
+start at all (it exits after 30 seconds). See `ALC-LIC-0009` in [troubleshooting.md](troubleshooting.md).
+
 If two Alice processes run against the same database (for example during an update), only one of them schedules
-periodic work (a PostgreSQL advisory lock); both may run queued jobs, and each job still runs exactly once. On
+periodic work (a PostgreSQL advisory lock), except the license check, which runs in every process; both may run
+queued jobs, and each job still runs exactly once. A license uploaded in one process reaches the other one at its
+next check (within an hour, or at once when that process refuses a change); until then the other process may refuse
+or pause changes, never allow them past a lock. On
 shutdown Alice stops taking new jobs and gives running jobs up to 60 seconds to finish (the Compose file allows 90
 seconds before it kills the container). A job that the shutdown cuts off counts the attempt like a crash does; if it
 was the last attempt, the job is stopped and recorded as `job.dead` with `shutdown=true`, but no email is sent,
 because the stop was planned. A job stopped after a crash or a killed process is announced by email as usual.
 
-Periodic work: license evaluation (hourly), email sending (every minute), audit chain verification (checked every
+Periodic work: license evaluation (hourly in every process, retried within minutes when it fails), email sending
+(every minute), audit chain verification (checked every
 hour, run once a day, recorded as `audit.verified` by `scheduler`), clean-up (hourly: expired sessions and setup
 sessions, finished jobs older than 90 days), scheduling of the daily server scans (every minute) and the check for
 interrupted deployments (every minute). Administrators
@@ -417,7 +467,13 @@ get a leading apostrophe, so use the JSON export for this check.
 
 Alice keeps its license time record (the latest time it has seen, encrypted and protected with a MAC derived from
 the master key) in `ALICE_STATE_DIR` (default `/opt/alice/state`, the `alice-state` volume, owned by user 10001)
-in addition to the database. Back it up with the other volumes. If the file is lost or damaged, Alice uses the copy
+in addition to the database. Back it up with the other volumes, and restore the database as a whole: a database
+restored without its `license` table (or only some tables) counts as a removed installation record and ends the
+evaluation. On a new, empty database Alice refuses to start when the file exists but cannot be read (for example
+because the volume's permissions are wrong): it creates nothing and says "make the state directory readable by
+Alice and start again". A new installation must also start with an empty state volume: a time record left by an
+earlier installation counts as an earlier installation, and the new one starts with an
+ended evaluation (ask the vendor for a license for the new Installation ID). If the file is lost or damaged, Alice uses the copy
 in the database and records "time record damaged" (`clock.hwm_damaged`) in the audit log; if both are lost on an
 existing installation, Alice starts from the later of the system clock and the release's build time and records
 "time reference reset" (`clock.time_reference_reset`). Neither ever extends a license.
@@ -470,13 +526,26 @@ current) on two listeners:
   than once a second, or use `/livez`, which is not limited.
 
 Requests that carry a session cookie, a setup cookie or an API token that Alice does not know (wrong, expired,
-revoked) are limited to 60 a minute per client address, counted before the database is asked; after that such
-requests get `ALC-SYS-0005` without a lookup. People whose session or token this Alice process accepted in the
-last 30 minutes (the session idle timeout) are not affected, nor are requests without any credential (the sign-in page and sign-in itself have their
-own limits). When Alice refuses a session cookie it tells the browser to delete it, so a stale cookie stops
-counting. Alice tells clients apart by address: behind a reverse proxy, set `ALICE_TRUSTED_PROXIES` to the
-proxy's address, otherwise everyone shares the proxy's address and one client's bad credentials can make others
-wait.
+revoked) are limited to 60 a minute per client address (an IPv6 client counts by its /64), counted before the
+database is asked; after that such requests get `ALC-SYS-0005` without a lookup. People whose session or token this
+Alice process accepted (or issued) in the last 30 minutes (the session idle timeout) are not affected, nor are
+requests without any credential (the sign-in page and sign-in itself have their own limits). When Alice refuses a
+session cookie it tells the browser to delete it, so a stale cookie stops counting (a cookie replaced a moment ago,
+when someone confirmed their identity or changed their password, is left alone).
+
+Alice tells clients apart by address. When many clients reach Alice from one address, they share these limits: while
+one of them sends many bad credentials, the others wait (`ALC-SYS-0005`, `Retry-After`) if Alice has not accepted
+their own session or token in the last 30 minutes, for example a nightly script's API token, and after Alice
+restarts everyone from that address waits until they sign in again. This happens:
+
+- behind a reverse proxy: set `ALICE_TRUSTED_PROXIES` in `deploy/.env` to the proxy's address or network (comma-
+  separated); Alice then takes the client address from the proxy's `X-Forwarded-For` header. Without it everyone
+  has the proxy's address;
+- when the published port is forwarded by a proxy process instead of the kernel (rootless Docker's default port
+  forwarding, or Docker's userland proxy, which handles connections from the Docker host itself): Alice then sees
+  one internal address for those clients. Check the **IP address** column of a few audit entries: if different
+  people show the same address, this is the case;
+- behind NAT, where many people share one public address.
 
 ## Development stack reset
 

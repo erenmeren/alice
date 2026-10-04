@@ -23,9 +23,10 @@ safe.
    development build of Alice without checksums prints a warning instead and installs the file unchecked.)
 2. Install the checked copy as `/usr/local/libexec/alice-helper`, owned by root, mode 0755. Alice cannot change this
    file; you update it yourself when a new Alice release asks for it ("helper outdated"). This release needs helper
-   protocol 5 (`alice-helper` 1.4.0): the Nginx certificate commands with `nginx-fence` (protocol 5), plus the
-   protocol 3 rule that a key-file change whose content did not arrive complete is refused. See "Updating the
-   helper".
+   protocol 6 (`alice-helper` 1.5.0): accounts with dots, capitals or a final `$` in their names are listed, accounts
+   it cannot list are reported by user ID, and a scan reads the key files in one pass (protocol 6); the Nginx
+   certificate commands with `nginx-fence` (protocol 5); and the protocol 3 rule that a key-file change whose content
+   did not arrive complete is refused. See "Updating the helper".
 3. Create the system user `alice-svc` (home `/var/lib/alice-svc`, shell `/bin/bash`, no files from `/etc/skel`) if
    it does not exist. If a user `alice-svc` already exists with another home directory, the script stops. The
    account gets no password (`usermod -p '*'`): nobody can sign in with a password, but the SSH server still accepts
@@ -228,8 +229,16 @@ this server".
 - Alice reads the `authorized_keys` files of `root`, of `alice-svc` itself, and of every account in `/etc/passwd`
   with user ID 0 or a user ID of 1000 or more (except `nobody`, user ID 65534) that has an existing home directory
   and a login shell (a shell field that does not end in `/nologin` or `/false`; an empty shell field counts as a
-  login shell, because the SSH server treats it as `/bin/sh`), at most 200 accounts, in the places that the SSH server's
-  `AuthorizedKeysFile` setting names (also per user, through `Match` blocks). Alice also reads the server's host key
+  login shell, because the SSH server treats it as `/bin/sh`), at most 200 accounts. Account names may use letters of
+  either case, digits, `_`, `.` and `-` (not first) and one final `$`, up to 32 characters, and must not be only
+  digits (`john.doe`, `Deploy2`, `host$`); `John` and `john` are two accounts. A home directory with a trailing `/` is
+  read as without it. An entry Alice cannot list (another name, a user or group ID that is not a plain number, or a
+  home directory with `..` or other characters) is never skipped silently: the server's page shows a warning with its
+  user ID, and Alice then treats the account list as incomplete (see
+  [operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists)). The helper reads `/etc/passwd` as
+  glibc does (the first line of a name counts; `+`/`-` lines are not accounts); only glibc distributions are
+  supported. Keys are read in the places that the SSH server's
+  `AuthorizedKeysFile` setting names (also per user, through `Match` blocks), in one pass over the accounts. Alice also reads the server's host key
   fingerprints and its SSH settings (`sshd -T`). It never reads private keys. One scan reads at most 1000 key files
   and 10,000 keys and spends at most 10 minutes reading files; beyond that the scan is marked incomplete (a warning says
   that lists were cut) and keys of files it did not read are not marked **No longer found**. A whole discovery stops after 20
@@ -251,8 +260,10 @@ this server".
   keys are marked **No longer found**. An account that still exists but got a shell such as `/usr/sbin/nologin` or
   lost its home directory is not scanned any more: its keys stay in Alice as they were last seen, and Alice cannot
   remove them. How to spot and handle this: [operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists).
-- Accounts that exist only in a directory service (LDAP, SSSD) are not listed; Alice shows a warning when the
-  server uses one.
+- Accounts that exist only in a directory service (LDAP, SSSD or any other source in the `passwd:` line of
+  `/etc/nsswitch.conf`) or as systemd user records or systemd-homed accounts are not listed; Alice shows a warning
+  when the server may have such accounts, and also when it cannot read `/etc/nsswitch.conf` safely or the file is
+  missing.
 - If the SSH server gets keys from a program (`AuthorizedKeysCommand`), Alice shows the keys it finds in files but
   does not change keys on that server ("This server gets its SSH keys from a program").
 - Alice changes an `authorized_keys` file only when an administrator or operator asks it to remove a key. It
@@ -260,8 +271,8 @@ this server".
   checks that nobody changed the file in the meantime (it tries up to three times), and keeps the previous version
   in the backup directory. It refuses to change a file when its last scan could not read the SSH server settings
   for that user, and it never changes `cert-authority` lines.
-- Alice never removes its own key, on any account. Removing the last key of `root` needs an administrator's
-  explicit confirmation.
+- Alice never removes its own key, on any account. Removing the last key of `root`, or of another account with
+  user ID 0, needs an administrator's explicit confirmation.
 
 ## What Alice reads and changes on an Nginx server
 
@@ -334,16 +345,22 @@ deployment whose outcome Alice must check and that left no journal stays **Confi
 and then ends **Outcome not confirmed** (`ALC-DEP-0018`), because Alice cannot fence it.
 
 Each Alice release names the helper protocol it needs. When it needs a newer one than a server has, Alice shows the
-server's error "The alice-helper on this server is outdated." (`ALC-SSH-0005`, `required_protocol` 5) and does nothing more on it: no scan, no key
-removal, no deployment, no recovery. To update, repeat steps 1 to 3 of "Steps" with the `alice-helper` of the new
+server's error "The alice-helper on this server is outdated." (`ALC-SSH-0005`, `required_protocol` 6) and does nothing more on it: no scan, no key
+removal, no deployment, no recovery.
+
+**Update the helpers first, then Alice.** The helper of this release (`alice-helper` 1.5.0, protocol 6) also works
+with the previous Alice release, so you can update every server ahead of time. If you update Alice first, every
+server whose helper is older shows "The alice-helper on this server is outdated." and a deployment that was being
+finished waits (**Confirming the outcome**) until that server's helper is updated. To update, repeat steps 1 to 3 of "Steps" with the `alice-helper` of the new
 release and the commands from the **Servers** page (same **Server type**), then choose **Test connection** on the
 server's page. The commands install the new helper and the new sudoers file together. After any change to
 `/etc/sudoers.d/alice` (by these commands or by hand), choose **Test connection** and **Discover** before deploying:
 a deployment that sudo refuses is not a clean failure (sudo may already have read the new key), it goes to
 **Confirming the outcome** until the lines are back.
 
-This release (protocol 5, `alice-helper` 1.4.0) adds `nginx-fence` and its sudoers line. A deployment that was
-interrupted before the update is finished by the new helper as usual.
+This release (protocol 6, `alice-helper` 1.5.0) changes what the helper reports about accounts and how a scan reads
+key files; the sudoers file is the same as for protocol 5 (which added `nginx-fence` and its line). A deployment
+that was interrupted before the update is finished by the new helper as usual.
 
 ## Removing Alice from a server
 
