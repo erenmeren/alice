@@ -532,21 +532,39 @@ export function targetExec(args: string[], input?: string): string {
   });
 }
 
+export interface DrainResult {
+  ran: number;
+  cut_off?: boolean;
+}
+
 // drainJobs runs every due background job now (e2e build: serve starts no job workers). The server
 // claims jobs for 20 s and lets the last one run until 50 s, so the request waits up to 60 s (the
 // default 30 s would give up while a deployment still runs). The answer is {"ran": n}, plus
-// "cut_off": true when the server's budget ended with a job still running.
-export async function drainJobs(request: APIRequestContext): Promise<void> {
-  const res = await request.post('/test/jobs/drain', { timeout: 60_000 });
-  expect(res.ok(), 'POST /test/jobs/drain (is this the Phase 3 e2e build?)').toBe(true);
+// "cut_off": true when the server's budget ended with a job still running. Only one drain runs at a
+// time: a 409 (another drain, for example one whose client gave up, is still running) is retried.
+// A cut-off fails the test unless opts.allowCutOff (a journey that means to interrupt a job).
+export async function drainJobs(request: APIRequestContext, opts: { allowCutOff?: boolean } = {}): Promise<DrainResult> {
+  let result: DrainResult = { ran: 0 };
+  await expect(async () => {
+    const res = await request.post('/test/jobs/drain', { timeout: 60_000 });
+    expect(res.status(), 'POST /test/jobs/drain: 409 means another drain still runs').not.toBe(409);
+    expect(res.ok(), 'POST /test/jobs/drain (is this the Phase 3 e2e build?)').toBe(true);
+    result = (await res.json()) as DrainResult;
+  }).toPass({ timeout: 120_000 });
+  if (!opts.allowCutOff) expect(result.cut_off ?? false, 'a drain cut off a running job (it goes to recovery)').toBe(false);
+  return result;
 }
 
 // settle runs due jobs until done is visible: a job finishes, then the page's polling shows its result.
+// A drain that cuts a job off ends the wait with a failure (toPass would otherwise retry past it).
 export async function settle(request: APIRequestContext, done: Locator): Promise<void> {
+  let cutOff = false;
   await expect(async () => {
-    await drainJobs(request);
+    cutOff = (await drainJobs(request, { allowCutOff: true })).cut_off ?? false;
+    if (cutOff) return; // stop waiting: reported below
     await expect(done).toBeVisible({ timeout: 1_500 });
   }).toPass({ timeout: 90_000 });
+  expect(cutOff, 'a drain cut off a running job (it goes to recovery)').toBe(false);
 }
 
 // fingerprintOf extracts "SHA256:…" from the output of ssh-keygen -lf.

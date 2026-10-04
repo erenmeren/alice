@@ -291,6 +291,11 @@ func testHandler(d testDeps) http.Handler {
 			writeTestJSON(w, http.StatusConflict, map[string]string{"error": "no job runner"})
 			return
 		}
+		if !drainMu.TryLock() {
+			writeTestJSON(w, http.StatusConflict, map[string]string{"error": "a drain is already running; drain again when it has ended"})
+			return
+		}
+		defer drainMu.Unlock()
 		// The drain is detached from the request: a client that gives up (its own timeout) must
 		// not cancel the job it runs, which would send a deployment to recovery.
 		res, err := drainJobs(context.WithoutCancel(r.Context()), d.Runner)
@@ -388,29 +393,89 @@ type drainResult struct {
 	CutOff bool `json:"cut_off,omitempty"`
 }
 
+// drainMu lets one drain run at a time. A drain that cuts a job off waits for the job to record
+// its outcome, which can outlast the client's timeout; a client that retries then gets 409
+// instead of a second drain claiming jobs beside the first.
+var drainMu sync.Mutex
+
+// errDrainBudget is the cause a drain gives the context of a job it cuts off.
+var errDrainBudget = errors.New("the drain's budget ended while the job ran")
+
 // drainJobs runs due jobs one after the other (the e2e build has no workers). ctx must not end
 // with the HTTP request (serve passes it detached); the drain's own budgets bound it.
 func drainJobs(ctx context.Context, runner jobRunner) (drainResult, error) {
 	claimCtx, stopClaiming := context.WithTimeout(ctx, drainClaimWindow)
 	defer stopClaiming()
-	jobCtx, cancel := context.WithTimeout(ctx, drainBudget)
-	defer cancel()
+	budget := time.NewTimer(drainBudget)
+	defer budget.Stop()
 	var res drainResult
 	for res.Ran < maxDrain && claimCtx.Err() == nil {
-		ok, err := runner.RunOnce(jobCtx)
-		if jobCtx.Err() != nil {
-			res.CutOff = ok
+		run := runWithinBudget(ctx, runner, budget.C)
+		if run.cutOff {
+			// Only a claimed job counts as cut off; a claim the budget ended is no job.
+			res.CutOff = run.ok
 			break
 		}
-		if err != nil {
-			return res, err
+		if run.err != nil {
+			return res, run.err
 		}
-		if !ok {
+		if !run.ok {
 			break
 		}
 		res.Ran++
+		if run.budgetEnded {
+			break
+		}
 	}
 	return res, nil
+}
+
+// drainRun is one RunOnce of a drain: cutOff says the drain cancelled the job's context before
+// RunOnce returned; budgetEnded that the budget ended after it returned (the job is counted, the
+// drain stops).
+type drainRun struct {
+	ok, cutOff, budgetEnded bool
+	err                     error
+}
+
+// runWithinBudget runs one job and cancels its context only if the budget ends before the job
+// returns. Whether the job returned and whether its context is cancelled are decided under one
+// lock, so cut_off is reported exactly when the job's context was cancelled while it ran: a job
+// that returns just before the budget ends is counted, not cut off (a check of the context after
+// RunOnce returned reported it cut off and left it out of "ran").
+func runWithinBudget(ctx context.Context, runner jobRunner, budgetEnded <-chan time.Time) drainRun {
+	jobCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	var (
+		mu       sync.Mutex
+		returned bool
+		out      drainRun
+	)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ok, err := runner.RunOnce(jobCtx)
+		mu.Lock()
+		defer mu.Unlock()
+		returned = true
+		out.ok, out.err = ok, err
+	}()
+	select {
+	case <-done:
+	case <-budgetEnded:
+		mu.Lock()
+		if returned {
+			out.budgetEnded = true
+		} else {
+			out.cutOff = true
+			cancel(errDrainBudget)
+		}
+		mu.Unlock()
+		<-done
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return out
 }
 
 // runScheduledTask runs one periodic task of serve at once (the e2e build's scheduler still ticks

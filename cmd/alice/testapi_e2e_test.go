@@ -345,3 +345,64 @@ func TestE2EDrainReportsACutOff(t *testing.T) {
 	assert.JSONEq(t, `{"ran":0,"cut_off":true}`, rec.Body.String())
 	assert.True(t, <-f.cancelled)
 }
+
+// A second drain while one runs is refused with 409 (a client that timed out and retries must not
+// start a drain beside the first one, which may still be recording a cut-off job); once the first
+// one ended, draining works again.
+func TestE2EDrainRefusesASecondDrain(t *testing.T) {
+	withDrainBudgets(t, 5*time.Second, 10*time.Second)
+	f := newFakeRunner()
+	h := testHandler(testDeps{Runner: f, Log: slog.New(slog.DiscardHandler)})
+	first := make(chan *httptest.ResponseRecorder)
+	go func() { first <- postTest(t, h, "/test/jobs/drain", ``) }()
+	<-f.started
+	second := postTest(t, h, "/test/jobs/drain", ``)
+	assert.Equal(t, http.StatusConflict, second.Code)
+	assert.Contains(t, second.Body.String(), "a drain is already running")
+	close(f.release)
+	assert.JSONEq(t, `{"ran":1}`, (<-first).Body.String())
+	third := postTest(t, h, "/test/jobs/drain", ``)
+	assert.Equal(t, http.StatusOK, third.Code)
+	assert.JSONEq(t, `{"ran":0}`, third.Body.String())
+}
+
+// edgeRunner runs one job that ignores its context and returns after d (a job finishing right at
+// the drain's deadline), then has nothing more to run. It keeps the job's context.
+type edgeRunner struct {
+	d     time.Duration
+	calls int
+	ctx   context.Context
+}
+
+func (e *edgeRunner) RunOnce(ctx context.Context) (bool, error) {
+	e.calls++
+	if e.calls > 1 {
+		return false, nil
+	}
+	e.ctx = ctx
+	time.Sleep(e.d)
+	return true, nil
+}
+
+// cut_off is exact at the deadline: it is reported exactly when the drain cancelled the context of
+// the job while the job ran, and otherwise the job is counted. Jobs finishing right at the
+// deadline land on both sides; neither side may be misreported.
+func TestE2EDrainCutOffIsExactAtTheDeadline(t *testing.T) {
+	const budget = 2 * time.Millisecond
+	withDrainBudgets(t, budget, budget)
+	var cut, ran int
+	for i := 0; i < 200; i++ {
+		e := &edgeRunner{d: budget}
+		res, err := drainJobs(context.Background(), e)
+		require.NoError(t, err)
+		cancelled := errors.Is(context.Cause(e.ctx), errDrainBudget)
+		require.Equal(t, cancelled, res.CutOff, "run %d: cut_off must say whether the job's context was cancelled while it ran", i)
+		require.Equal(t, !cancelled, res.Ran == 1, "run %d: a job not cut off is counted", i)
+		if cancelled {
+			cut++
+		} else {
+			ran++
+		}
+	}
+	t.Logf("at the deadline: %d cut off, %d counted", cut, ran)
+}

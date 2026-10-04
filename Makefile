@@ -76,7 +76,7 @@ build: web helper ## Build the alice binary with the embedded UI (and the helper
 
 # Release symbol guard: the release build (no tags) links no e2e-only code. The e2e build is the
 # positive control: if it lacks the symbols, the names here are stale and the guard proves nothing.
-E2E_SYMBOLS := main\.(damageLicenseFile|tamperNewestLicenseFile|resetInstall|e2eClock|e2eMailbox|drainJobs|runScheduledTask|scheduled)$$
+E2E_SYMBOLS := main\.(damageLicenseFile|tamperNewestLicenseFile|resetInstall|e2eClock|e2eMailbox|drainJobs|runWithinBudget|drainMu|errDrainBudget|runScheduledTask|scheduled)$$
 
 .PHONY: release-symcheck
 release-symcheck: ## Fail if the release build of alice links e2e-only test code
