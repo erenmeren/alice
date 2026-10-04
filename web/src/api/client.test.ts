@@ -81,4 +81,18 @@ describe('apiFetch', () => {
     await apiFetch('/api/v1/etag', { method: 'PATCH', body: {}, headers: { 'If-Match': '"3"' } });
     expect(ifMatch).toBe('"3"');
   });
+
+  it('wraps a connection that drops while the body is read in NetworkError too', async () => {
+    server.use(
+      http.get('/api/v1/cut', () => {
+        const body = new ReadableStream({
+          start(c) {
+            c.error(new TypeError('terminated'));
+          },
+        });
+        return new HttpResponse(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }),
+    );
+    await expect(apiFetch('/api/v1/cut')).rejects.toBeInstanceOf(NetworkError);
+  });
 });

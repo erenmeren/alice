@@ -73,6 +73,13 @@ describe('CertificateDetailPage', () => {
     expect(within(table).getAllByText('web-01')).toHaveLength(2);
   });
 
+  it('shows a neutral label for a deployment status the server did not recognise', async () => {
+    certServer(undefined, [deploymentFixture({ id: 'd1', status: '' })]);
+    await renderRoute(`/certificates/${ID}`);
+    const table = await screen.findByRole('table', { name: 'Deployments' });
+    expect(within(table).getByText('Unknown')).toBeInTheDocument();
+  });
+
   it('says so when it was never deployed and when no server uses it', async () => {
     certServer(certificateDetailFixture({ id: ID, locations: [], location_count: 0 }), []);
     await renderRoute(`/certificates/${ID}`);

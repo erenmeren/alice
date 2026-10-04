@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router';
 import { listAllTargets, listCertificates } from '../api/endpoints';
 import { CERTIFICATES_KEY, CSRS_KEY, TARGETS_KEY } from '../api/queryKeys';
-import type { CertificateQuery, CertificateSource, ExpiryFilter } from '../api/types';
+import type { CertificateQuery, CertificateSourceFilter, ExpiryFilter } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { CreateCSRDialog } from '../components/CreateCSRDialog';
 import { ErrorAlert } from '../components/ErrorAlert';
@@ -16,7 +16,7 @@ import { UploadCertificateDialog } from '../components/UploadCertificateDialog';
 import { WRAP } from '../components/wrap';
 
 // The sources the list can be filtered by (openapi: listCertificates source).
-const SOURCES: { value: Exclude<CertificateSource, 'azure_kv'>; key: string }[] = [
+const SOURCES: { value: CertificateSourceFilter; key: string }[] = [
   { value: 'discovered', key: 'sourceDiscovered' },
   { value: 'uploaded', key: 'sourceUploaded' },
   { value: 'csr', key: 'sourceCsr' },
@@ -38,7 +38,7 @@ export function CertificatesPage() {
   const canOperate = session?.user.role === 'admin' || session?.user.role === 'operator';
   const [search, setSearch] = useState('');
   const [targetId, setTargetId] = useState('');
-  const [source, setSource] = useState<CertificateSource | ''>('');
+  const [source, setSource] = useState<CertificateSourceFilter | ''>('');
   const [expiry, setExpiry] = useState<ExpiryFilter>('');
   const [q] = useDebouncedValue(search.trim(), 300);
   const [uploading, setUploading] = useState(false);
@@ -91,7 +91,7 @@ export function CertificatesPage() {
         <NativeSelect
           label={t('certificates.source')}
           value={source}
-          onChange={(e) => setSource(e.currentTarget.value as CertificateSource | '')}
+          onChange={(e) => setSource(e.currentTarget.value as CertificateSourceFilter | '')}
           data={[{ value: '', label: t('certificates.sourceAll') }, ...SOURCES.map((s) => ({ value: s.value, label: t(`certificates.${s.key}`) }))]}
         />
         <NativeSelect
@@ -105,7 +105,7 @@ export function CertificatesPage() {
       {certs.isSuccess && items.length === 0 && <Text c="gray.7">{t('certificates.empty')}</Text>}
       {items.length > 0 && (
         <Table.ScrollContainer minWidth={720}>
-          <Table striped data-testid="certificates-table">
+          <Table striped data-testid="certificates-table" aria-label={t('certificates.title')}>
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>{t('certificates.columns.name')}</Table.Th>
@@ -120,7 +120,7 @@ export function CertificatesPage() {
                 <Table.Tr key={c.id}>
                   <Table.Td style={WRAP}>
                     <Anchor component={Link} to={`/certificates/${c.id}`}>
-                      {c.label || c.subject_cn ? <Code style={WRAP}>{c.label || c.subject_cn}</Code> : t('certificates.noName')}
+                      {c.label || c.subject_cn ? <Code translate="no" style={WRAP}>{c.label || c.subject_cn}</Code> : t('certificates.noName')}
                     </Anchor>
                   </Table.Td>
                   <Table.Td>
@@ -131,7 +131,7 @@ export function CertificatesPage() {
                   </Table.Td>
                   <Table.Td>{t('certificates.usedOn', { count: c.location_count })}</Table.Td>
                   <Table.Td>
-                    <Badge variant="light" color={c.has_private_key ? 'green.9' : 'gray.8'} tt="none">
+                    <Badge variant="light" color={c.has_private_key ? 'green' : 'gray'} tt="none">
                       {c.has_private_key ? t('certificates.keyHeld') : t('certificates.keyNotHeld')}
                     </Badge>
                   </Table.Td>

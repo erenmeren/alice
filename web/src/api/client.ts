@@ -110,7 +110,14 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
     throw new NetworkError('network failure', { cause: e });
   }
   if (res.status === 204) return undefined as T;
-  const text = await res.text();
+  let text: string;
+  try {
+    text = await res.text();
+  } catch (e) {
+    // The connection can drop after the headers; that is the same transient failure.
+    if (e instanceof Error && e.name === 'AbortError') throw e;
+    throw new NetworkError('network failure', { cause: e });
+  }
   if (!res.ok) {
     const err = new ApiError(res.status, parseErrorBody(text), parseRetryAfter(res.headers.get('Retry-After')));
     if (err.status === 401 && err.reason === 'auth.unauthenticated' && !opts.quietUnauthorized) {

@@ -1,20 +1,11 @@
-import { Alert, Button, CopyButton, Group, NativeSelect, Stack, Text, Textarea, TextInput } from '@mantine/core';
+import { Alert, Button, Group, NativeSelect, Stack, Text, Textarea, TextInput } from '@mantine/core';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createCSR } from '../api/endpoints';
 import type { CSR, CSRKeyType } from '../api/types';
 import { AppModal } from './AppModal';
+import { CSRPem } from './CSRPem';
 import { ErrorAlert } from './ErrorAlert';
-
-// downloadText saves text as a file through a temporary link (the pattern RecoveryCodes uses).
-function downloadText(name: string, text: string) {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
-}
 
 // namesOf turns "one name per line" into the list the API takes: trimmed, no empty lines.
 function namesOf(text: string): string[] {
@@ -62,30 +53,9 @@ function CSRForm({ onClose, onCreated }: { onClose: () => void; onCreated: (csr:
           <Alert color="green" role="status">
             {t('certificates.csr.created')}
           </Alert>
-          <Textarea
-            label={t('certificates.csr.pem')}
-            value={created.csr_pem}
-            readOnly
-            autosize
-            minRows={4}
-            maxRows={12}
-            spellCheck={false}
-            styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }}
-          />
-          <Group>
-            <CopyButton value={created.csr_pem}>
-              {({ copied, copy }) => (
-                <Button variant="light" onClick={copy}>
-                  {copied ? t('certificates.csr.copied') : t('certificates.csr.copy')}
-                </Button>
-              )}
-            </CopyButton>
-            <Button variant="default" onClick={() => downloadText(`${created.common_name}.csr`, created.csr_pem)}>
-              {t('certificates.csr.download')}
-            </Button>
-          </Group>
+          <CSRPem csr={created} />
           <Group justify="flex-end">
-            <Button onClick={onClose}>{t('certificates.upload.close')}</Button>
+            <Button onClick={onClose}>{t('ui.close')}</Button>
           </Group>
         </Stack>
       ) : (
@@ -125,7 +95,7 @@ function CSRForm({ onClose, onCreated }: { onClose: () => void; onCreated: (csr:
             <ErrorAlert error={error} />
             <Group justify="flex-end">
               <Button variant="default" onClick={onClose}>
-                {t('ui.cancel')}
+                {t('certificates.upload.cancel')}
               </Button>
               <Button type="submit" loading={busy}>
                 {t('certificates.csr.submit')}

@@ -8,6 +8,7 @@ import { CERTIFICATES_KEY, CSRS_KEY } from '../api/queryKeys';
 import type { CSR, UploadResult } from '../api/types';
 import { formatDateTime } from '../datetime';
 import { AppModal } from './AppModal';
+import { CSRPem } from './CSRPem';
 import { ErrorAlert } from './ErrorAlert';
 import { UploadWarnings } from './UploadWarnings';
 import { WRAP } from './wrap';
@@ -19,7 +20,17 @@ const namesOf = (c: CSR) => (c.sans.length > 0 ? c.sans.join(', ') : c.common_na
 
 // CompleteDialog adds the certificate an authority issued for one pending request. The certificate
 // is public data; the request's key stays in Alice and is never involved here.
-function CompleteDialog({ csr, onClose, onCompleted }: { csr: CSR; onClose: () => void; onCompleted: (certificateId: string) => void }) {
+function CompleteDialog({
+  csr,
+  onClose,
+  onStored,
+  onCompleted,
+}: {
+  csr: CSR;
+  onClose: () => void;
+  onStored: () => void;
+  onCompleted: (certificateId: string) => void;
+}) {
   const { t } = useTranslation();
   const [pem, setPem] = useState('');
   const [problem, setProblem] = useState('');
@@ -37,15 +48,21 @@ function CompleteDialog({ csr, onClose, onCompleted }: { csr: CSR; onClose: () =
     try {
       const res = await completeCSR(csr.id, pem);
       setResult(res);
-      onCompleted(res.certificate.id);
+      onStored();
     } catch (e) {
       setError(e);
     }
     setBusy(false);
   };
 
+  // The result (and its warnings) stays on screen; the caller moves on only when it is closed.
+  const close = () => {
+    if (result) onCompleted(result.certificate.id);
+    else onClose();
+  };
+
   return (
-    <AppModal opened onClose={onClose} title={t('certificates.csr.completeTitle')} size="lg">
+    <AppModal opened onClose={close} title={t('certificates.csr.completeTitle')} size="lg">
       {result ? (
         <Stack gap="sm">
           <Alert color="green" role="status">
@@ -53,7 +70,7 @@ function CompleteDialog({ csr, onClose, onCompleted }: { csr: CSR; onClose: () =
           </Alert>
           <UploadWarnings warnings={result.warnings} />
           <Group justify="flex-end">
-            <Button onClick={onClose}>{t('certificates.upload.close')}</Button>
+            <Button onClick={close}>{t('ui.close')}</Button>
           </Group>
         </Stack>
       ) : (
@@ -76,7 +93,7 @@ function CompleteDialog({ csr, onClose, onCompleted }: { csr: CSR; onClose: () =
             <ErrorAlert error={error} />
             <Group justify="flex-end">
               <Button variant="default" onClick={onClose}>
-                {t('ui.cancel')}
+                {t('certificates.upload.cancel')}
               </Button>
               <Button type="submit" loading={busy}>
                 {t('certificates.csr.completeSubmit')}
@@ -85,6 +102,24 @@ function CompleteDialog({ csr, onClose, onCompleted }: { csr: CSR; onClose: () =
           </Stack>
         </form>
       )}
+    </AppModal>
+  );
+}
+
+// ShowDialog shows a request again: the PEM is public, so every role may copy it.
+function ShowDialog({ csr, onClose }: { csr: CSR; onClose: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <AppModal opened onClose={onClose} title={t('certificates.csr.pem')} size="lg">
+      <Stack gap="sm">
+        <Code translate="no" style={WRAP}>
+          {namesOf(csr)}
+        </Code>
+        <CSRPem csr={csr} />
+        <Group justify="flex-end">
+          <Button onClick={onClose}>{t('ui.close')}</Button>
+        </Group>
+      </Stack>
     </AppModal>
   );
 }
@@ -111,7 +146,7 @@ function CancelDialog({ csr, onClose, onCancelled }: { csr: CSR; onClose: () => 
     <AppModal opened onClose={onClose} title={t('certificates.csr.cancelTitle')}>
       <Stack gap="sm">
         <Text size="sm">{t('certificates.csr.cancelHelp')}</Text>
-        <Code style={WRAP}>{namesOf(csr)}</Code>
+        <Code translate="no" style={WRAP}>{namesOf(csr)}</Code>
         <ErrorAlert error={error} />
         <Group justify="flex-end">
           <Button variant="default" data-autofocus onClick={onClose}>
@@ -136,6 +171,7 @@ export function PendingCSRs({ canOperate, onCompleted }: { canOperate: boolean; 
   const list = useQuery({ queryKey: CSRS_KEY, queryFn: listCSRs });
   const [completing, setCompleting] = useState<CSR | null>(null);
   const [cancelling, setCancelling] = useState<CSR | null>(null);
+  const [showing, setShowing] = useState<CSR | null>(null);
   const pending = (list.data?.items ?? []).filter((c) => c.status === 'pending');
 
   const refresh = () => Promise.all([client.invalidateQueries({ queryKey: CSRS_KEY }), client.invalidateQueries({ queryKey: CERTIFICATES_KEY })]);
@@ -156,22 +192,26 @@ export function PendingCSRs({ canOperate, onCompleted }: { canOperate: boolean; 
                     <Table.Th>{t('certificates.csr.names')}</Table.Th>
                     <Table.Th>{t('certificates.detail.key')}</Table.Th>
                     <Table.Th>{t('certificates.csr.createdColumn')}</Table.Th>
-                    {canOperate && <Table.Th>{t('sshKeys.actions')}</Table.Th>}
+                    <Table.Th>{t('sshKeys.actions')}</Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
                   {pending.map((c) => (
                     <Table.Tr key={c.id}>
                       <Table.Td>
-                        <Code style={WRAP} id={`csr-names-${c.id}`}>
+                        <Code translate="no" style={WRAP} id={`csr-names-${c.id}`}>
                           {namesOf(c)}
                         </Code>
                       </Table.Td>
                       <Table.Td>{t('certificates.detail.keyValue', { algorithm: t(keyAlgorithmKey(c.key_algorithm)), bits: c.key_bits })}</Table.Td>
                       <Table.Td>{formatDateTime(c.created_at, i18n.language)}</Table.Td>
-                      {canOperate && (
-                        <Table.Td>
-                          <Group gap="xs" wrap="nowrap">
+                      <Table.Td>
+                        <Group gap="xs" wrap="nowrap">
+                          <Button size="xs" variant="default" onClick={() => setShowing(c)} id={`csr-show-${c.id}`} aria-labelledby={`csr-show-${c.id} csr-names-${c.id}`}>
+                            {t('certificates.csr.viewPem')}
+                          </Button>
+                          {canOperate && (
+                            <>
                             {/* The name of each button is its text plus the request's names (data, so not an aria-label text). */}
                             <Button size="xs" variant="light" onClick={() => setCompleting(c)} id={`csr-complete-${c.id}`} aria-labelledby={`csr-complete-${c.id} csr-names-${c.id}`}>
                               {t('certificates.csr.complete')}
@@ -179,9 +219,10 @@ export function PendingCSRs({ canOperate, onCompleted }: { canOperate: boolean; 
                             <Button size="xs" variant="subtle" color="red.9" onClick={() => setCancelling(c)} id={`csr-cancel-${c.id}`} aria-labelledby={`csr-cancel-${c.id} csr-names-${c.id}`}>
                               {t('certificates.csr.cancelRequest')}
                             </Button>
-                          </Group>
-                        </Table.Td>
-                      )}
+                            </>
+                          )}
+                        </Group>
+                      </Table.Td>
                     </Table.Tr>
                   ))}
                 </Table.Tbody>
@@ -194,12 +235,14 @@ export function PendingCSRs({ canOperate, onCompleted }: { canOperate: boolean; 
         <CompleteDialog
           csr={completing}
           onClose={() => setCompleting(null)}
+          onStored={() => void refresh()}
           onCompleted={(id) => {
-            void refresh();
+            setCompleting(null);
             onCompleted(id);
           }}
         />
       )}
+      {showing && <ShowDialog csr={showing} onClose={() => setShowing(null)} />}
       {cancelling && (
         <CancelDialog
           csr={cancelling}

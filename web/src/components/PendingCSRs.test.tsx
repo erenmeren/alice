@@ -53,6 +53,10 @@ describe('PendingCSRs', () => {
       await within(dialog).findByText('The domain names in the certificate differ from the signing request. Check that it is the certificate you ordered.'),
     ).toBeInTheDocument();
     expect(seen).toEqual({ path: 'r2', body: { certificate_pem: 'SIGNED' } });
+    expect(within(dialog).getByText('Certificate added.')).toBeInTheDocument();
+    // The result stays on screen until it is closed; only then the caller moves on.
+    expect(onCompleted).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getAllByRole('button', { name: 'Close' })[0]);
     expect(onCompleted).toHaveBeenCalledWith('c7');
   });
 
@@ -118,11 +122,43 @@ describe('PendingCSRs', () => {
     expect(await within(dialog).findByRole('alert')).toBeInTheDocument();
   });
 
-  it('shows no actions when the user cannot operate', async () => {
+  it('shows no operating actions when the user cannot operate, but still lets them see a request', async () => {
     server.use(...sessionHandlers(auditorSession));
     csrs();
     await renderApp(<PendingCSRs canOperate={false} onCompleted={() => {}} />);
     expect(await screen.findByText('shop.example.test')).toBeInTheDocument();
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add signed certificate/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Cancel request/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Show request/ })).toHaveLength(2);
+  });
+
+  it('shows a pending request again with its PEM to copy and download', async () => {
+    server.use(...sessionHandlers(auditorSession));
+    csrs();
+    const user = userEvent.setup();
+    await renderApp(<PendingCSRs canOperate={false} onCompleted={() => {}} />);
+    await user.click((await screen.findAllByRole('button', { name: /Show request/ }))[0]);
+    const dialog = await screen.findByRole('dialog', { name: 'Signing request (CSR)' });
+    const pem = within(dialog).getByLabelText('Signing request (CSR)');
+    expect(pem).toHaveAttribute('readonly');
+    expect(pem).toHaveValue(csrFixture().csr_pem);
+    await user.click(within(dialog).getByRole('button', { name: 'Copy request' }));
+    expect(await within(dialog).findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Download request' })).toBeInTheDocument();
+  });
+
+  it('shows the server text for a refused cancel (403) and keeps the dialog', async () => {
+    server.use(
+      ...sessionHandlers(operatorSession),
+      http.post('/api/v1/certificates/csr/:id/actions/cancel', () => errorResponse(403, 'ALC-AUTHZ-0001', 'authz.forbidden')),
+    );
+    csrs();
+    await renderApp(<PendingCSRs canOperate onCompleted={() => {}} />);
+    await userEvent.click((await screen.findAllByRole('button', { name: /Cancel request/ }))[0]);
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel request' }));
+    expect(await within(dialog).findByRole('alert')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Cancel request' })).toBeEnabled();
+    expect(within(dialog).getByRole('button', { name: 'Keep request' })).toBeInTheDocument();
   });
 });

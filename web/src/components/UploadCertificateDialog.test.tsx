@@ -87,9 +87,13 @@ describe('UploadCertificateDialog', () => {
       errorResponse(422, 'ALC-VAL-0001', 'validation.failed', { details: [{ field: 'certificate_pem', code: 'validation.key_in_certificate' }] }),
     );
     await renderApp(<UploadCertificateDialog opened onClose={() => {}} onUploaded={() => {}} />);
-    await fillPem();
+    await fillPem('KEY-PASTED', 'KEY');
     await userEvent.click(screen.getByRole('button', { name: 'Upload' }));
     expect(await screen.findByText(/Certificate: The certificate field contains a private key/)).toBeInTheDocument();
+    // A private key that was pasted into the certificate field must not stay on screen.
+    expect(screen.getByLabelText('Certificate and chain (PEM)')).toHaveValue('');
+    expect(screen.getByLabelText('Private key (PEM)')).toHaveValue('');
+    expect(document.body.innerHTML).not.toContain('KEY-PASTED');
   });
 
   it('has a secret warning and a password field that browsers do not remember', async () => {
@@ -98,10 +102,15 @@ describe('UploadCertificateDialog', () => {
     const key = screen.getByLabelText('Private key (PEM)');
     expect(key).toHaveAttribute('autocomplete', 'off');
     expect(key).toHaveAttribute('spellcheck', 'false');
+    expect(key).toHaveAttribute('data-gramm', 'false');
+    expect(screen.getByLabelText('Name (optional)')).toHaveAttribute('autocomplete', 'off');
     await userEvent.click(screen.getByRole('radio', { name: 'PFX file' }));
     const password = screen.getByLabelText('PFX password');
     expect(password).toHaveAttribute('type', 'password');
-    expect(password).toHaveAttribute('autocomplete', 'new-password');
+    // Not a login credential: no "save" or "generate" offer from a password manager.
+    expect(password).toHaveAttribute('autocomplete', 'off');
+    expect(password).toHaveAttribute('data-1p-ignore');
+    expect(password).toHaveAttribute('data-lpignore', 'true');
   });
 
   it('reads a PFX file as base64', async () => {
@@ -207,6 +216,50 @@ describe('UploadCertificateDialog', () => {
       expect(await screen.findByText('The PFX password is wrong or the file is damaged.')).toBeInTheDocument();
       expect(screen.getByLabelText('PFX password')).toHaveValue('');
       expect(screen.getByText('site.pfx')).toBeInTheDocument();
+    });
+
+    it('shows the server text for a refused upload (403), clears the key and keeps the form', async () => {
+      upload(() => errorResponse(403, 'ALC-AUTHZ-0001', 'authz.forbidden'));
+      await renderApp(<UploadCertificateDialog opened onClose={() => {}} onUploaded={() => {}} />);
+      await fillPem();
+      await userEvent.click(screen.getByRole('button', { name: 'Upload' }));
+      expect(await screen.findByRole('alert')).toBeInTheDocument();
+      expect(screen.getByLabelText('Private key (PEM)')).toHaveValue('');
+      expect(screen.getByLabelText('Certificate and chain (PEM)')).toHaveValue('CERT');
+      expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled();
+    });
+
+    it('keeps the whole form when the connection drops and says the upload may or may not have arrived', async () => {
+      let calls = 0;
+      upload(() => {
+        calls += 1;
+        return HttpResponse.error();
+      });
+      await renderApp(<UploadCertificateDialog opened onClose={() => {}} onUploaded={() => {}} />);
+      await fillPem();
+      await userEvent.click(screen.getByRole('button', { name: 'Upload' }));
+      expect(await screen.findByText(/may or may not have reached Alice/)).toBeInTheDocument();
+      expect(screen.getByLabelText('Private key (PEM)')).toHaveValue('KEY');
+      expect(screen.getByLabelText('Certificate and chain (PEM)')).toHaveValue('CERT');
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls).toBe(1); // no automatic retry
+    });
+
+    it('shows a read failure of the chosen file and sends nothing', async () => {
+      let sent = false;
+      upload(() => {
+        sent = true;
+        return stored();
+      });
+      const spy = vi.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementation(function (this: FileReader) {
+        setTimeout(() => this.onerror?.(new ProgressEvent('error') as ProgressEvent<FileReader>), 0);
+      });
+      await renderApp(<UploadCertificateDialog opened onClose={() => {}} onUploaded={() => {}} />);
+      await choosePfx(pfxFile());
+      await userEvent.click(screen.getByRole('button', { name: 'Upload' }));
+      expect(await screen.findByText('Alice could not read this file. Choose it again.')).toBeInTheDocument();
+      expect(sent).toBe(false);
+      spy.mockRestore();
     });
 
     it('explains a certificate Alice already holds', async () => {

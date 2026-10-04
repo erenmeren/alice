@@ -733,7 +733,8 @@
       "pending": "Açık",
       "completed": "Tamamlandı",
       "cancelled": "İptal edildi"
-    }
+    },
+    "unknown": "Bilinmiyor"
   },
   "certificates": {
     "title": "Sertifikalar",
@@ -802,7 +803,6 @@
       },
       "moreLocations": "Bazı web siteleri gösterilmiyor.",
       "noNames": "(yok)",
-      "deployFrom": "Dağıtmak için sunucuyu açın",
       "facts": "Sertifika ayrıntıları"
     },
     "upload": {
@@ -831,9 +831,9 @@
       "textTooLarge": "Bu metin 256 KiB'tan uzun.",
       "pfxPlaceholder": "Bir .pfx veya .p12 dosyası seçin",
       "readFailed": "Alice bu dosyayı okuyamadı. Dosyayı yeniden seçin.",
-      "otherWarning": "Alice sertifikayı kaydetti ve bu sürümün açıklayamadığı bir durum not etti.",
-      "close": "Kapat",
-      "clearFile": "Seçilen dosyayı kaldır"
+      "otherWarning": "Alice sertifikayı kaydetti; bu sürümün açıklayamadığı bir uyarı da var.",
+      "clearFile": "Seçilen dosyayı kaldır",
+      "networkUnknown": "Bağlantı kesildi. Yükleme Alice'e ulaşmış olabilir veya ulaşmamış olabilir. Yeniden denemeden önce sertifika listesini denetleyin."
     },
     "csr": {
       "title": "İmzalama isteği oluşturun",
@@ -849,7 +849,6 @@
       "copy": "İsteği kopyala",
       "copied": "Kopyalandı",
       "pendingTitle": "Açık imzalama istekleri",
-      "createdAt": "Oluşturulma: {{time}}",
       "complete": "İmzalı sertifikayı ekle",
       "completeTitle": "İmzalı sertifikayı ekleyin",
       "completeHelp": "Sertifika yetkilinizin döndürdüğü sertifikayı zinciriyle birlikte yapıştırın. İstek: {{name}}",
@@ -865,7 +864,7 @@
       "completed": "Sertifika eklendi.",
       "viewPem": "İsteği göster",
       "download": "İsteği indir",
-      "createdColumn": "Oluşturulma"
+      "createdColumn": "Oluşturulma zamanı"
     }
   }
 }

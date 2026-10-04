@@ -1,7 +1,7 @@
 import { Alert, Button, FileInput, Group, PasswordInput, SegmentedControl, Stack, Text, Textarea, TextInput } from '@mantine/core';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { isApiError } from '../api/client';
+import { isApiError, NetworkError } from '../api/client';
 import { uploadCertificate } from '../api/endpoints';
 import type { UploadRequest, UploadResult } from '../api/types';
 import { AppModal } from './AppModal';
@@ -20,11 +20,14 @@ function tooLarge(text: string): boolean {
   return new Blob([text]).size > MAX_BYTES;
 }
 
+// ReadError is a chosen file that the browser could not read.
+class ReadError extends Error {}
+
 // readBase64 reads a file as standard base64 (the form the API's pfx_base64 expects).
 function readBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
+    reader.onerror = () => reject(new ReadError('read failed', { cause: reader.error }));
     reader.onload = () => {
       const url = String(reader.result);
       resolve(url.slice(url.indexOf(',') + 1));
@@ -104,12 +107,16 @@ function UploadForm({ onClose, onUploaded }: { onClose: () => void; onUploaded: 
       if (!alive.current) return;
       setError(e);
       setBusy(false);
-      // A retryable answer (Alice is busy with other PFX files) stored nothing: the form stays so
-      // the person can send it again. Any other answer clears the secrets.
-      if (!(isApiError(e) && e.retryable)) {
+      // The form stays for a retryable answer (Alice is busy with other PFX files: nothing was
+      // stored), a dropped connection (nothing was learned) and an unreadable file (nothing was
+      // sent). Any other answer clears the secrets.
+      const keep = (isApiError(e) && e.retryable) || e instanceof NetworkError || e instanceof ReadError;
+      if (!keep) {
         setPrivateKey('');
         setPfxPassword('');
       }
+      // A private key pasted into the certificate field must not survive its refusal either.
+      if (isApiError(e) && e.details.some((d) => d.code === 'validation.key_in_certificate')) setCertificate('');
     }
   };
 
@@ -122,7 +129,7 @@ function UploadForm({ onClose, onUploaded }: { onClose: () => void; onUploaded: 
           </Alert>
           <UploadWarnings warnings={result.warnings} />
           <Group justify="flex-end">
-            <Button onClick={onClose}>{t('certificates.upload.close')}</Button>
+            <Button onClick={onClose}>{t('ui.close')}</Button>
           </Group>
         </Stack>
       ) : (
@@ -159,6 +166,7 @@ function UploadForm({ onClose, onUploaded }: { onClose: () => void; onUploaded: 
                   styles={MONO}
                 />
                 <Textarea
+                  data-gramm="false"
                   label={t('certificates.upload.privateKey')}
                   description={t('certificates.upload.secretWarning')}
                   value={privateKey}
@@ -188,12 +196,24 @@ function UploadForm({ onClose, onUploaded }: { onClose: () => void; onUploaded: 
                   label={t('certificates.upload.pfxPassword')}
                   value={pfxPassword}
                   onChange={(e) => setPfxPassword(e.currentTarget.value)}
-                  autoComplete="new-password"
+                  autoComplete="off"
+                  data-1p-ignore
+                  data-lpignore="true"
                 />
               </>
             )}
-            <TextInput label={t('certificates.upload.label')} value={label} onChange={(e) => setLabel(e.currentTarget.value)} maxLength={100} />
-            <ErrorAlert error={error} />
+            <TextInput label={t('certificates.upload.label')} value={label} onChange={(e) => setLabel(e.currentTarget.value)} maxLength={100} autoComplete="off" />
+            {error instanceof NetworkError ? (
+              <Alert color="yellow" role="alert">
+                {t('certificates.upload.networkUnknown')}
+              </Alert>
+            ) : error instanceof ReadError ? (
+              <Alert color="red" role="alert">
+                {t('certificates.upload.readFailed')}
+              </Alert>
+            ) : (
+              <ErrorAlert error={error} />
+            )}
             <Group justify="flex-end">
               <Button variant="default" onClick={onClose}>
                 {t('certificates.upload.cancel')}

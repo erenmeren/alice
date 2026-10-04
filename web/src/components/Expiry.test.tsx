@@ -1,6 +1,6 @@
 import { screen } from '@testing-library/react';
 import { renderApp } from '../test/render';
-import { daysLeft, Expiry } from './Expiry';
+import { daysLeft, Expiry, expiryState } from './Expiry';
 
 const now = Date.parse('2026-10-03T12:00:00Z');
 
@@ -10,6 +10,20 @@ describe('daysLeft', () => {
     expect(daysLeft('2026-10-15T11:59:00Z', now)).toBe(11);
     expect(daysLeft('2026-10-03T12:00:00Z', now)).toBe(0);
     expect(daysLeft('2026-09-01T00:00:00Z', now)).toBeLessThan(0);
+  });
+});
+
+describe('expiryState', () => {
+  const at = (ms: number) => new Date(now + ms).toISOString();
+  const DAY = 86_400_000;
+  it('agrees with the server filter at the boundaries', () => {
+    expect(expiryState(at(0), now)).toBe('expired'); // not_after <= now
+    expect(expiryState(at(1), now)).toBe('within30');
+    expect(expiryState(at(30 * DAY - 1), now)).toBe('within30'); // not_after < now + 30d
+    expect(expiryState(at(30 * DAY), now)).toBe('within60');
+    expect(expiryState(at(60 * DAY - 1), now)).toBe('within60');
+    expect(expiryState(at(60 * DAY), now)).toBe('ok');
+    expect(expiryState(at(-DAY), now)).toBe('expired');
   });
 });
 

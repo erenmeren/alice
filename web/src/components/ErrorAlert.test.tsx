@@ -1,5 +1,5 @@
 import { screen } from '@testing-library/react';
-import { ApiError } from '../api/client';
+import { ApiError, NetworkError } from '../api/client';
 import { renderApp } from '../test/render';
 import { ErrorAlert } from './ErrorAlert';
 
@@ -49,7 +49,7 @@ describe('ErrorAlert', () => {
   });
 
   it('explains network failures', async () => {
-    await renderApp(<ErrorAlert error={new TypeError('Failed to fetch')} />);
+    await renderApp(<ErrorAlert error={new NetworkError('network failure')} />);
     expect(screen.getByRole('alert')).toHaveTextContent('Alice cannot be reached.');
   });
 

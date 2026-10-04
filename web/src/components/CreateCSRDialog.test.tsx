@@ -6,6 +6,7 @@ import { csrFixture, errorResponse, operatorSession, sessionHandlers } from '../
 import { renderApp } from '../test/render';
 import { server } from '../test/server';
 import { CreateCSRDialog } from './CreateCSRDialog';
+import { csrFileName } from './CSRPem';
 
 describe('CreateCSRDialog', () => {
   it('creates a request from the names and shows its PEM to copy', async () => {
@@ -85,5 +86,12 @@ describe('CreateCSRDialog', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: 'reopen' }));
     expect(await screen.findByLabelText('Main domain name')).toHaveValue('');
+  });
+
+  it('names the downloaded file safely, also for a wildcard name', () => {
+    expect(csrFileName('www.example.test')).toBe('www.example.test.csr');
+    expect(csrFileName('*.example.test')).toBe('wildcard.example.test.csr');
+    expect(csrFileName('../a b/ü*')).toBe('_a_b__wildcard.csr');
+    expect(csrFileName('')).toBe('request.csr');
   });
 });

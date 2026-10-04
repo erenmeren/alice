@@ -17,13 +17,20 @@ export function useNow(): number {
   return now;
 }
 
-// expiryColor is a cue only: the badge text always says "N days" or "Expired".
-function expiryColor(days: number, expired: boolean): string {
-  if (expired) return 'red.9';
-  if (days <= 30) return 'orange.9';
-  if (days <= 60) return 'yellow.9';
-  return 'green.9';
+export type ExpiryState = 'expired' | 'within30' | 'within60' | 'ok';
+
+// expiryState uses the server's rule for the "within N days" filter, in milliseconds: expired is
+// not_after <= now, within N days is not_after < now + N days (expired ones included there).
+export function expiryState(notAfter: string, now: number): ExpiryState {
+  const left = Date.parse(notAfter) - now;
+  if (left <= 0) return 'expired';
+  if (left < 30 * DAY_MS) return 'within30';
+  if (left < 60 * DAY_MS) return 'within60';
+  return 'ok';
 }
+
+// The color is a cue only: the badge text always says "N days" or "Expired".
+const COLORS: Record<ExpiryState, string> = { expired: 'red', within30: 'orange', within60: 'yellow', ok: 'green' };
 
 // Expiry shows when a certificate ends: the date and a badge with the days left, or "Expired".
 // part limits it to the date or the badge when a table has a column for each.
@@ -32,12 +39,13 @@ export function Expiry({ notAfter, part = 'both' }: { notAfter: string; part?: '
   const now = useNow();
   const end = Date.parse(notAfter);
   if (Number.isNaN(end)) return <>{notAfter}</>;
-  const expired = end <= now;
+  const state = expiryState(notAfter, now);
+  const expired = state === 'expired';
   const days = daysLeft(notAfter, now);
   const date = <span>{formatDate(notAfter, i18n.language)}</span>;
   const badge = (
     // tt="none": no CSS upper-casing of translated text (Turkish dotted/dotless i).
-    <Badge variant="light" color={expiryColor(days, expired)} tt="none">
+    <Badge variant="light" color={COLORS[state]} data-state={state} tt="none">
       {expired ? t('certificates.expired') : t('certificates.daysLeft', { count: days })}
     </Badge>
   );

@@ -37,3 +37,9 @@ export function uploadWarningKey(code: string): string {
 export function keyAlgorithmKey(code: string): string {
   return `enum.keyAlgorithm.${KEY_ALGORITHMS.includes(code as KeyAlgorithm) ? code : 'other'}`;
 }
+
+// deploymentStatusKey is the label of a deployment status; '' (a status the server did not
+// recognise) or a value from a newer server gets the neutral "Unknown".
+export function deploymentStatusKey(status: string): string {
+  return DEPLOYMENT_STATUSES.includes(status as DeploymentStatus) ? `enum.deploymentStatus.${status}` : 'enum.unknown';
+}

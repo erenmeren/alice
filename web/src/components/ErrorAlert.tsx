@@ -9,8 +9,8 @@ export function ErrorAlert({ error }: { error: unknown }) {
   if (!error) return null;
 
   if (!(error instanceof ApiError)) {
-    // fetch() rejects when the network or the server is unreachable (apiFetch wraps it in NetworkError).
-    if (error instanceof NetworkError || error instanceof TypeError) {
+    // apiFetch wraps a rejected fetch or a dropped body read in NetworkError.
+    if (error instanceof NetworkError) {
       return (
         <Alert color="red" role="alert" title={t('ui.networkErrorTitle')}>
           {t('ui.networkErrorAction')}

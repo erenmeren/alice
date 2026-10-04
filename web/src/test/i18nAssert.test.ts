@@ -27,10 +27,12 @@ describe('expectNoRawKeys', () => {
     expect(() => expectNoRawKeys()).not.toThrow();
   });
 
-  it('does not check technical data shown in <code>, but still checks the text around it', () => {
-    document.body.innerHTML = '<main><p>Used on <a><code>www.example.test</code></a>, <code>/etc/nginx/ssl/www.crt</code></p></main>';
+  it('does not check data marked translate="no", but still checks the text around it and other code', () => {
+    document.body.innerHTML = '<main><p>Used on <a><code translate="no">www.example.test</code></a>, <code translate="no">/etc/nginx/ssl/www.crt</code></p></main>';
     expect(() => expectNoRawKeys()).not.toThrow();
-    document.body.innerHTML = '<main><p>nav.home <code>www.example.test</code></p></main>';
+    document.body.innerHTML = '<main><p>nav.home <code translate="no">www.example.test</code></p></main>';
+    expect(() => expectNoRawKeys()).toThrow();
+    document.body.innerHTML = '<main><p><code>nav.home</code></p></main>';
     expect(() => expectNoRawKeys()).toThrow();
   });
 });

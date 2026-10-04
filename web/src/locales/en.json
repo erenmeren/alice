@@ -733,7 +733,8 @@
       "pending": "Open",
       "completed": "Completed",
       "cancelled": "Cancelled"
-    }
+    },
+    "unknown": "Unknown"
   },
   "certificates": {
     "title": "Certificates",
@@ -802,7 +803,6 @@
       },
       "moreLocations": "Some websites are not shown.",
       "noNames": "(none)",
-      "deployFrom": "Open the server to deploy",
       "facts": "Certificate details"
     },
     "upload": {
@@ -832,8 +832,8 @@
       "pfxPlaceholder": "Choose a .pfx or .p12 file",
       "readFailed": "Alice could not read this file. Choose it again.",
       "otherWarning": "Alice stored the certificate and noted a condition that this version cannot describe.",
-      "close": "Close",
-      "clearFile": "Remove the chosen file"
+      "clearFile": "Remove the chosen file",
+      "networkUnknown": "The connection was lost. The upload may or may not have reached Alice. Check the certificate list before you try again."
     },
     "csr": {
       "title": "Create a signing request",
@@ -849,7 +849,6 @@
       "copy": "Copy request",
       "copied": "Copied",
       "pendingTitle": "Open signing requests",
-      "createdAt": "Created: {{time}}",
       "complete": "Add signed certificate",
       "completeTitle": "Add the signed certificate",
       "completeHelp": "Paste the certificate your certificate authority returned, with its chain. Request: {{name}}",

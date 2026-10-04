@@ -444,6 +444,9 @@ export interface JobQuery {
 
 // 'azure_kv' is reserved by the inventory (a later phase); the API lists the other three today.
 export type CertificateSource = 'discovered' | 'uploaded' | 'csr' | 'azure_kv';
+// CertificateSourceFilter is what GET /certificates accepts for source (azure_kv would be a 422);
+// azure_kv is only ever displayed.
+export type CertificateSourceFilter = Exclude<CertificateSource, 'azure_kv'>;
 export type KeyAlgorithm = 'rsa' | 'ecdsa' | 'ed25519' | 'other';
 export type CSRStatus = 'pending' | 'completed' | 'cancelled';
 export type CSRKeyType = 'ecdsa-p256' | 'rsa-3072' | 'rsa-4096';
@@ -540,8 +543,9 @@ export interface CertificateLocationList {
 }
 
 export type DeploymentStatus = 'pending' | 'running' | 'succeeded' | 'unchanged' | 'failed' | 'rolled_back' | 'rollback_failed' | 'needs_attention';
-export type DeploymentState = 'queued' | 'precheck' | 'deploying' | 'recovering' | 'done';
-export type StepStatus = 'started' | 'ok' | 'failed' | 'skipped';
+// The API shows '' for a code it does not recognise (codeOrBlank), so state and status can be ''.
+export type DeploymentState = '' | 'queued' | 'precheck' | 'deploying' | 'recovering' | 'done';
+export type StepStatus = '' | 'started' | 'ok' | 'failed' | 'skipped';
 
 export interface DeploymentStep {
   n: number;
@@ -571,7 +575,7 @@ export interface Deployment {
   job_status: string;
   trigger: string;
   state: DeploymentState;
-  status: DeploymentStatus;
+  status: DeploymentStatus | '';
   result: '' | 'committed' | 'unchanged' | 'no_change' | 'rolled_back' | 'rollback_failed' | 'uncertain';
   phase: '' | 'none' | 'prepared' | 'writing' | 'committed' | 'unchanged' | 'restoring' | 'restored' | 'restore_failed';
   new_fingerprint: string;
@@ -612,7 +616,7 @@ export interface CSR {
 
 export interface CertificateQuery {
   target_id?: string;
-  source?: CertificateSource | '';
+  source?: CertificateSourceFilter | '';
   q?: string;
   expiry?: ExpiryFilter;
   cursor?: string | null;

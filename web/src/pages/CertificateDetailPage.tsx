@@ -2,7 +2,7 @@ import { Alert, Anchor, Badge, Box, Button, Code, Group, Stack, Table, Text, Tit
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router';
-import { keyAlgorithmKey } from '../api/enums';
+import { deploymentStatusKey, keyAlgorithmKey } from '../api/enums';
 import { getCertificate, listDeployments } from '../api/endpoints';
 import { certificateKey, DEPLOYMENTS_KEY } from '../api/queryKeys';
 import type { CertificateDetail } from '../api/types';
@@ -62,11 +62,11 @@ export function CertificateDetailPage() {
         {t('certificates.detail.backToList')}
       </Anchor>
       <Title order={1} style={WRAP}>
-        {c.label || c.subject_cn ? <Code fz="inherit" fw="inherit" style={WRAP}>{c.label || c.subject_cn}</Code> : t('certificates.noName')}
+        {c.label || c.subject_cn ? <Code translate="no" fz="inherit" fw="inherit" style={WRAP}>{c.label || c.subject_cn}</Code> : t('certificates.noName')}
       </Title>
       {c.self_signed && (
         <Group>
-          <Badge variant="light" color="gray.8" tt="none">
+          <Badge variant="light" color="gray" tt="none">
             {t('certificates.detail.selfSigned')}
           </Badge>
         </Group>
@@ -90,10 +90,10 @@ export function CertificateDetailPage() {
       )}
       <Box component="ul" p={0} m={0} aria-label={t('certificates.detail.facts')} style={{ display: 'grid', gap: 'var(--mantine-spacing-sm)' }}>
         <Fact label={t('certificates.detail.subject')}>
-          <Code style={WRAP}>{c.subject}</Code>
+          <Code translate="no" style={WRAP}>{c.subject}</Code>
         </Fact>
         <Fact label={t('certificates.detail.issuer')}>
-          <Code style={WRAP}>{c.issuer}</Code>
+          <Code translate="no" style={WRAP}>{c.issuer}</Code>
         </Fact>
         <Fact label={t('certificates.detail.names')}>
           {c.sans.length === 0 ? (
@@ -101,7 +101,7 @@ export function CertificateDetailPage() {
           ) : (
             <Group gap={4}>
               {c.sans.map((n) => (
-                <Code key={n} style={WRAP}>
+                <Code translate="no" key={n} style={WRAP}>
                   {n}
                 </Code>
               ))}
@@ -109,7 +109,7 @@ export function CertificateDetailPage() {
           )}
         </Fact>
         <Fact label={t('certificates.detail.serial')}>
-          <Code style={WRAP}>{c.serial}</Code>
+          <Code translate="no" style={WRAP}>{c.serial}</Code>
         </Fact>
         <Fact label={t('certificates.detail.validFrom')}>
           <Text size="sm">{formatDateTime(c.not_before, i18n.language)}</Text>
@@ -124,7 +124,7 @@ export function CertificateDetailPage() {
           <Text size="sm">{c.has_private_key ? t('certificates.keyHeld') : t('certificates.keyNotHeld')}</Text>
         </Fact>
         <Fact label={t('certificates.detail.fingerprint')}>
-          <Code style={WRAP}>{c.fingerprint}</Code>
+          <Code translate="no" style={WRAP}>{c.fingerprint}</Code>
         </Fact>
         <Fact label={t('certificates.detail.source')}>
           <Text size="sm">{i18n.exists(sourceKey) ? t(sourceKey) : c.source}</Text>
@@ -161,9 +161,9 @@ export function CertificateDetailPage() {
                         {l.target_name}
                       </Anchor>
                     </Table.Td>
-                    <Table.Td>{name ? <Code style={WRAP}>{name}</Code> : t('certificates.detail.noNames')}</Table.Td>
+                    <Table.Td>{name ? <Code translate="no" style={WRAP}>{name}</Code> : t('certificates.detail.noNames')}</Table.Td>
                     <Table.Td>
-                      <Code style={WRAP}>{l.cert_path}</Code>
+                      <Code translate="no" style={WRAP}>{l.cert_path}</Code>
                     </Table.Td>
                   </Table.Tr>
                 );
@@ -196,9 +196,9 @@ export function CertificateDetailPage() {
                   <Table.Td>{formatDateTime(d.created_at, i18n.language)}</Table.Td>
                   <Table.Td>{d.target_name}</Table.Td>
                   <Table.Td>
-                    <Code style={WRAP}>{d.cert_path}</Code>
+                    <Code translate="no" style={WRAP}>{d.cert_path}</Code>
                   </Table.Td>
-                  <Table.Td>{i18n.exists(`enum.deploymentStatus.${d.status}`) ? t(`enum.deploymentStatus.${d.status}`) : d.status}</Table.Td>
+                  <Table.Td>{t(deploymentStatusKey(d.status))}</Table.Td>
                 </Table.Tr>
               ))}
             </Table.Tbody>

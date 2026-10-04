@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import {
   auditorSession,
+  certificateDetailFixture,
   certificateFixture,
   csrFixture,
   errorResponse,
@@ -190,5 +191,31 @@ describe('CertificatesPage', () => {
     // Closing after a successful upload opens the new certificate.
     await userEvent.click(within(dialog).getAllByRole('button', { name: 'Close' })[0]);
     await waitFor(() => expect(router.state.location.pathname).toBe('/certificates/c9'));
+  });
+
+  it('shows the result of adding a signed certificate and opens the certificate only when it is closed', async () => {
+    vi.useRealTimers();
+    server.use(
+      ...sessionHandlers(operatorSession),
+      targets,
+      http.get('/api/v1/certificates/csr', () => HttpResponse.json({ items: [csrFixture()] })),
+      http.get('/api/v1/certificates', () => HttpResponse.json({ items: [], next_cursor: null })),
+      http.post('/api/v1/certificates/csr/:id/actions/complete', () =>
+        HttpResponse.json({ certificate: certificateDetailFixture({ id: 'c7' }), warnings: ['csr_name_mismatch', 'chain_incomplete'] }, { status: 201 }),
+      ),
+      http.get('/api/v1/certificates/c7', () => HttpResponse.json(certificateDetailFixture({ id: 'c7' }))),
+      http.get('/api/v1/deployments', () => HttpResponse.json({ items: [], next_cursor: null })),
+    );
+    const { router } = await renderRoute('/certificates');
+    await userEvent.click(await screen.findByRole('button', { name: /Add signed certificate/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add the signed certificate' });
+    await userEvent.type(within(dialog).getByLabelText('Signed certificate and chain (PEM)'), 'SIGNED');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add certificate' }));
+    expect(await within(dialog).findByText('Certificate added.')).toBeInTheDocument();
+    expect(within(dialog).getByText(/domain names in the certificate differ/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/The chain is incomplete/)).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/certificates');
+    await userEvent.click(within(dialog).getAllByRole('button', { name: 'Close' })[0]);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/certificates/c7'));
   });
 });
