@@ -1005,8 +1005,8 @@ func TestRecoveryDecisions(t *testing.T) {
 			assert.Zero(t, f.prov.Count("DeployCertificate"))
 			assert.NotContains(t, f.inv.calls(), "DeploymentMaterial(true)")
 			fences := 0
-			if (tc.phase == providers.PhaseNone || tc.phase == providers.PhasePrepared) && !tc.active && tc.status == inventory.DeployStatusFailed {
-				fences = 1 // AUD-05: fenced before "nothing was written" is recorded
+			if (tc.phase == providers.PhaseNone || tc.phase == providers.PhasePrepared) && !tc.active {
+				fences = 1 // AUD-05: fenced before "nothing was written"; best effort before "outcome unknown"
 			}
 			assert.Equal(t, fences, f.prov.Count("FenceDeployment"))
 			if tc.status == "" {
@@ -1552,11 +1552,16 @@ func TestRecoveryWithoutMaterialEndsOutcomeUnknown(t *testing.T) {
 	f := newFixture(t)
 	f.sent(inventory.DeployStateRecovering, time.Hour)
 	f.inv.errs["DeploymentMaterial(false)"] = inventory.ErrNotFound
+	f.prov.Configure(func(c *fake.Config) {
+		c.Fence = func(uuid.UUID) (providers.DeploymentState, error) {
+			return providers.DeploymentState{}, providers.NewError("ssh.timeout", true, nil, nil)
+		}
+	})
 	res, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
 	require.NoError(t, err)
 	assert.Equal(t, "rollback_failed", res["outcome"])
 	assert.Equal(t, "deployment.outcome_unknown", f.inv.lastFinish().ErrorCode)
-	assert.Zero(t, f.prov.Count("Open"))
+	assert.Equal(t, 1, f.prov.Count("FenceDeployment"), "fix round 1 minor 2: fenced, best effort; its failure changes nothing")
 }
 
 // A sent deployment whose journal is gone is "nothing was written" only shortly after the send: the
@@ -1684,6 +1689,7 @@ func TestRecoveryFencesBeforeNothingWasWritten(t *testing.T) {
 		require.Len(t, f.inv.outcomes, 1)
 		assert.Equal(t, inventory.DeployStatusRollbackFailed, f.inv.outcomes[0].Finish.Status)
 		assert.Equal(t, "deployment.outcome_unknown", f.inv.outcomes[0].Finish.ErrorCode)
+		assert.Equal(t, 1, f.prov.Count("FenceDeployment"), "fenced, best effort")
 	})
 }
 

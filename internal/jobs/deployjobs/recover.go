@@ -143,6 +143,7 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 		// alone cannot verify or check a rollback (it holds no endpoints or SANs), so the outcome is
 		// unknown now, not after a day of attempts: rollback_failed deployment.outcome_unknown
 		// (the outcome-unknown email names the backup directory).
+		h.fenceBestEffort(ctx, d, nil)
 		return h.recordFor(ctx, d, outcomeUnknownRecord(), m, nil)
 	case err != nil:
 		return unresolved(m, jobs.Retry(reasonUnexpected, nil, err))
@@ -173,7 +174,9 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 		if d.StartedAt == nil || h.sentLongAgo(d, now) {
 			// After an outage longer than a day the helper may have swept the journal of a change
 			// it made: the outcome is unknown, never "nothing was written" (outcome-unknown email).
-			// A start record without a time cannot be placed at all (B2 m1): the same.
+			// A start record without a time cannot be placed at all (B2 m1): the same. The operation
+			// is still fenced, best effort, so a late helper cannot carry it out after Alice gave up.
+			h.fenceBestEffort(ctx, d, sess)
 			return h.recordFor(ctx, d, outcomeUnknownRecord(), m, nil)
 		}
 		// AUD-05: no journal proves nothing about a helper that has not started yet (a sudo or PAM
@@ -377,4 +380,23 @@ func portOf(params map[string]string) *int {
 func outcomeUnknownRecord() inventory.OutcomeRecord {
 	return inventory.OutcomeRecord{Terminal: true, Finish: inventory.DeploymentFinish{
 		Status: inventory.DeployStatusRollbackFailed, ErrorCode: reasonOutcomeUnknown, Params: map[string]string{}}}
+}
+
+// fenceBestEffort fences d's operation before an outcome-unknown record (fix round 1, minor 2): a
+// helper that starts late cannot carry out the operation after Alice gave up on it. Its answer
+// changes nothing that is recorded (still outcome unknown), so every failure is ignored. sess nil:
+// a session is opened for it (and closed).
+func (h *handlers) fenceBestEffort(ctx context.Context, d inventory.Deployment, sess providers.Session) {
+	if d.OperationID == nil {
+		return
+	}
+	if sess == nil {
+		s, err := h.open(ctx, d.TargetID)
+		if err != nil {
+			return
+		}
+		defer h.close(s)
+		sess = s
+	}
+	_, _ = sess.FenceDeployment(ctx, *d.OperationID)
 }
