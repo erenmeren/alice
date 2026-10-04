@@ -450,7 +450,9 @@ const (
 
 // boundParams keeps the allowed keys, each value valid UTF-8 without control characters and at
 // most maxParamValue bytes, and drops keys (last in order first) until the JSON fits
-// maxParamsJSON. The result is never nil.
+// maxParamsJSON as PostgreSQL renders it (the columns' CHECK measures params::text): Go's encoding
+// is never shorter than PostgreSQL's for such values, but PostgreSQL writes a space after every ':'
+// and ',', so Go's encoding must fit maxParamsJSON - 2*len(keys). The result is never nil.
 func boundParams(in map[string]string, allowed []string) map[string]string {
 	out := map[string]string{}
 	for _, k := range allowed {
@@ -473,7 +475,7 @@ func boundParams(in map[string]string, allowed []string) map[string]string {
 	keys := slices.Sorted(maps.Keys(out))
 	for len(keys) > 0 {
 		b, err := json.Marshal(out)
-		if err == nil && len(b) <= maxParamsJSON {
+		if err == nil && len(b) <= maxParamsJSON-2*len(out) {
 			break
 		}
 		delete(out, keys[len(keys)-1])

@@ -73,3 +73,7 @@ func SetPrepareHook(f func()) (restore func()) {
 	prepareHook = f
 	return func() { prepareHook = old }
 }
+
+// BoundParams exposes boundParams with the error params' allowlist to the test that measures
+// PostgreSQL's rendering of the result.
+func BoundParams(in map[string]string) map[string]string { return boundParams(in, errorParamKeys) }

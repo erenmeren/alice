@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/json"
 	"encoding/pem"
 	"math/big"
 	"strings"
@@ -271,4 +272,39 @@ VALUES ($1, $2, $3, $4, 'manual', 'done', $5, $6, $7, $8, '/etc/nginx/ssl/d.crt'
 	finished(l, x, "failed", "", false)
 	assert.False(t, scan("/etc/nginx/ssl/seq.crt", &w), "the rollback before the latest deployment still counts")
 	assert.True(t, scan("/etc/nginx/ssl/seq.crt", &z))
+}
+
+// B1 M4: boundParams bounds what PostgreSQL stores, which writes a space after every ':' and ','
+// of the object: values whose Go encoding is just under the bound (every allowed key, values of
+// quote characters, escaped as two bytes by both) fit the columns' CHECK as PostgreSQL renders them.
+func TestBoundParamsFitPostgreSQLsRendering(t *testing.T) {
+	h := newHarness(t)
+	keys := []string{"port", "failed_step", "profile", "phase", "directory", "backup_dir", "expected", "actual", "mode", "helper_code", "subcommand"}
+	in := map[string]string{}
+	for _, k := range keys {
+		in[k] = ""
+	}
+	size := func(m map[string]string) int {
+		b, err := json.Marshal(m)
+		require.NoError(t, err)
+		return len(b)
+	}
+	// Fill the values until Go's encoding is 4095 bytes, at most 256 bytes per value.
+	for _, k := range keys {
+		for len(in[k]) < 256 && size(in) < 4094 {
+			in[k] += `"`
+		}
+	}
+	if size(in) < 4095 {
+		in[keys[len(keys)-1]] += "a"
+	}
+	require.LessOrEqual(t, size(in), 4096, "Go's encoding alone fits the bound")
+	require.Greater(t, size(in), 4096-2*len(keys))
+	out := inventory.BoundParams(in)
+	require.NotEmpty(t, out)
+	raw, err := json.Marshal(out)
+	require.NoError(t, err)
+	var n int
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT octet_length($1::jsonb::text)", string(raw)).Scan(&n))
+	assert.LessOrEqual(t, n, 4096, "PostgreSQL's rendering fits the CHECK")
 }
