@@ -938,8 +938,11 @@ func TestRecoveryDecisions(t *testing.T) {
 	}{
 		{name: "none, old", phase: providers.PhaseNone, age: 2 * time.Minute, status: inventory.DeployStatusFailed, code: "deployment.interrupted"},
 		{name: "prepared, old", phase: providers.PhasePrepared, age: 2 * time.Minute, status: inventory.DeployStatusFailed, code: "deployment.interrupted"},
-		{name: "none, within the budget (S6)", phase: providers.PhaseNone, age: 30 * time.Second, code: "deployment.interrupted"},
-		{name: "prepared, within the budget (S6)", phase: providers.PhasePrepared, age: 59 * time.Second, code: "deployment.interrupted"},
+		// AUD-05: the fence, not a 60-second wait, makes "nothing was written" final: a young start
+		// record is fenced and ends failed like an old one.
+		{name: "none, young (fenced)", phase: providers.PhaseNone, age: 30 * time.Second, status: inventory.DeployStatusFailed, code: "deployment.interrupted"},
+		{name: "prepared, young (fenced)", phase: providers.PhasePrepared, age: 59 * time.Second, status: inventory.DeployStatusFailed, code: "deployment.interrupted"},
+		{name: "fenced by an earlier recovery", phase: providers.PhaseFenced, age: time.Hour, status: inventory.DeployStatusFailed, code: "deployment.interrupted"},
 		{name: "none, active", phase: providers.PhaseNone, active: true, age: time.Hour, code: "nginx.busy"},
 		{name: "none, just under a day", phase: providers.PhaseNone, age: noJournalUnknownAfter - time.Minute, status: inventory.DeployStatusFailed,
 			code: "deployment.interrupted"},
@@ -962,7 +965,7 @@ func TestRecoveryDecisions(t *testing.T) {
 			f := newFixture(t)
 			f.sent(inventory.DeployStateRecovering, tc.age)
 			st := providers.DeploymentState{Phase: tc.phase, Active: tc.active}
-			if tc.phase != providers.PhaseNone {
+			if tc.phase != providers.PhaseNone && tc.phase != providers.PhaseFenced {
 				st.NewCertSHA256, st.BackupDir = newSHA, "/var/lib/alice-helper/backups/"+f.id.String()
 			}
 			f.status = st
@@ -986,6 +989,11 @@ func TestRecoveryDecisions(t *testing.T) {
 			assert.Equal(t, tc.rollback, f.prov.Count("RollbackDeployment"))
 			assert.Zero(t, f.prov.Count("DeployCertificate"))
 			assert.NotContains(t, f.inv.calls(), "DeploymentMaterial(true)")
+			fences := 0
+			if (tc.phase == providers.PhaseNone || tc.phase == providers.PhasePrepared) && !tc.active && tc.status == inventory.DeployStatusFailed {
+				fences = 1 // AUD-05: fenced before "nothing was written" is recorded
+			}
+			assert.Equal(t, fences, f.prov.Count("FenceDeployment"))
 			if tc.status == "" {
 				assert.Equal(t, "uncertain", res["outcome"])
 				assert.Equal(t, f.clock.Now().Add(inventory.RecoveryRetryInterval), f.inv.retryAt[0])
@@ -1198,6 +1206,11 @@ func TestRecoveryInADeployJobUsesTheFirstRecoveryDelay(t *testing.T) {
 	f := newFixture(t)
 	f.sent(inventory.DeployStateDeploying, 10*time.Second)
 	f.status = providers.DeploymentState{Phase: providers.PhaseNone}
+	f.prov.Configure(func(c *fake.Config) {
+		c.Fence = func(uuid.UUID) (providers.DeploymentState, error) { // the late helper holds the lock now
+			return providers.DeploymentState{Phase: providers.PhaseNone, Active: true}, nil
+		}
+	})
 	_, err := f.h.deploy(f.ctx, f.job(), f.steps)
 	assert.Equal(t, jobs.NeedsAttention, failureOf(t, err).Class)
 	assert.Equal(t, f.clock.Now().Add(inventory.FirstRecoveryDelay), f.inv.retryAt[0], "S6: looked again soon")
@@ -1477,17 +1490,18 @@ func TestJobErrorsKeepOnlyAllowedParams(t *testing.T) {
 	assert.Equal(t, want, failureOf(t, err).Params)
 }
 
-// M-2: the start record's age is measured from before the journal was read.
+// M-2: the start record's age is measured from before the journal was read (the day rule: with
+// the fence, no shorter rule is left).
 func TestNoJournalAgeIsMeasuredBeforeTheRead(t *testing.T) {
 	f := newFixture(t)
-	f.sent(inventory.DeployStateRecovering, 40*time.Second)
+	f.sent(inventory.DeployStateRecovering, noJournalUnknownAfter-time.Minute)
 	f.statusFn = func() (providers.DeploymentState, error) {
-		f.clock.Advance(30 * time.Second) // a slow answer
+		f.clock.Advance(2 * time.Minute) // a slow answer
 		return providers.DeploymentState{Phase: providers.PhaseNone}, nil
 	}
 	_, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
 	require.NoError(t, err)
-	assert.False(t, f.inv.outcomes[0].Terminal, "40 s before the read: not final yet")
+	assert.Equal(t, inventory.DeployStatusFailed, f.inv.outcomes[0].Finish.Status, "under a day before the read: fenced, nothing was written")
 }
 
 // M-3: a verification failure recorded only as a step (the run died during the rollback) is why the
@@ -1533,10 +1547,208 @@ func TestRecoveryWithoutMaterialEndsOutcomeUnknown(t *testing.T) {
 // A sent deployment whose journal is gone is "nothing was written" only shortly after the send: the
 // helper sweeps a committed journal after helperproto.NginxBackupKeep (7 days), so the threshold
 // after which a missing journal means "outcome unknown" must stay well below that retention (and
-// above the helper's budget rule and a day of live recovery attempts).
+// at least a day of live recovery attempts).
 func TestNoJournalThresholdIsWellBelowTheHelpersRetention(t *testing.T) {
 	assert.LessOrEqual(t, 4*noJournalUnknownAfter, helperproto.NginxBackupKeep, "at most a quarter of the helper's shortest retention")
-	assert.Greater(t, noJournalUnknownAfter, noJournalFinalAfter)
 	assert.GreaterOrEqual(t, noJournalUnknownAfter, time.Duration(inventory.MaxRecoveryAttempts)*inventory.RecoveryRetryInterval,
 		"live recovery ends within the threshold, so a later recovery only follows an outage")
+}
+
+// AUD-05: "nothing was written" is recorded only after a fence answered fenced. A fence that fails
+// or is uncertain records nothing (never failed); a fence that finds a journal after all goes on
+// from that journal; a start record without a time is an unknown outcome (B2 m1).
+func TestRecoveryFencesBeforeNothingWasWritten(t *testing.T) {
+	newSHA := strings.Repeat("e", 64)
+	t.Run("the fence comes before the failed record", func(t *testing.T) {
+		f := newFixture(t)
+		f.sent(inventory.DeployStateRecovering, 2*time.Minute)
+		f.status = providers.DeploymentState{Phase: providers.PhaseNone}
+		_, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+		require.NoError(t, err)
+		var methods []string
+		for _, c := range f.prov.Calls() {
+			methods = append(methods, c.Method)
+		}
+		assert.Less(t, slices.Index(methods, "DeploymentStatus"), slices.Index(methods, "FenceDeployment"))
+		require.Len(t, f.inv.outcomes, 1)
+		assert.Equal(t, inventory.DeployStatusFailed, f.inv.outcomes[0].Finish.Status)
+		assert.Equal(t, providers.PhaseNone, f.inv.outcomes[0].Finish.Phase, "the journal phase recovery saw, never fenced")
+	})
+	for name, fence := range map[string]func(uuid.UUID) (providers.DeploymentState, error){
+		"BUSY": func(uuid.UUID) (providers.DeploymentState, error) {
+			return providers.DeploymentState{}, providers.NewError("nginx.busy", true, nil, nil)
+		},
+		"transport": func(uuid.UUID) (providers.DeploymentState, error) {
+			return providers.DeploymentState{}, providers.NewError("ssh.timeout", true, nil, nil)
+		},
+		"sudo refused": func(uuid.UUID) (providers.DeploymentState, error) {
+			return providers.DeploymentState{}, providers.NewError("nginx.profile_missing", false, nil, nil)
+		},
+		"still no fence": func(uuid.UUID) (providers.DeploymentState, error) {
+			return providers.DeploymentState{Phase: providers.PhaseNone}, nil
+		},
+		"unsupported": func(uuid.UUID) (providers.DeploymentState, error) {
+			return providers.DeploymentState{}, providers.ErrUnsupported
+		},
+	} {
+		t.Run("fence fails: "+name+": nothing recorded, never failed", func(t *testing.T) {
+			for _, m := range []string{"recovery", "deploy"} {
+				f := newFixture(t)
+				f.sent(inventory.DeployStateRecovering, 2*time.Minute)
+				f.status = providers.DeploymentState{Phase: providers.PhasePrepared, NewCertSHA256: newSHA, BackupDir: "/b"}
+				f.prov.Configure(func(c *fake.Config) { c.Fence = fence })
+				var err error
+				if m == "recovery" {
+					_, err = f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+				} else {
+					_, err = f.h.deploy(f.ctx, f.job(), f.steps)
+				}
+				require.Error(t, err, m)
+				for _, o := range f.inv.outcomes {
+					assert.NotEqual(t, inventory.DeployStatusFailed, o.Finish.Status, m)
+				}
+				assert.NotContains(t, f.inv.calls(), "FinishDeployment", m)
+				assert.Equal(t, 1, f.prov.Count("FenceDeployment"), m)
+			}
+		})
+	}
+	t.Run("the fence finds a committed journal: verified from it", func(t *testing.T) {
+		f := newFixture(t)
+		f.sent(inventory.DeployStateRecovering, 2*time.Minute)
+		f.status = providers.DeploymentState{Phase: providers.PhaseNone}
+		f.prov.Configure(func(c *fake.Config) {
+			c.Fence = func(uuid.UUID) (providers.DeploymentState, error) {
+				return providers.DeploymentState{Phase: providers.PhaseCommitted, NewCertSHA256: newSHA, BackupDir: "/b"}, nil
+			}
+		})
+		_, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+		require.NoError(t, err)
+		require.Len(t, f.inv.outcomes, 1)
+		assert.Equal(t, inventory.DeployStatusSucceeded, f.inv.outcomes[0].Finish.Status)
+		assert.Equal(t, newSHA, f.inv.outcomes[0].Finish.CertFileSHA256)
+	})
+	t.Run("the fence finds a writing journal: rolled back", func(t *testing.T) {
+		f := newFixture(t)
+		f.sent(inventory.DeployStateRecovering, 2*time.Minute)
+		f.status = providers.DeploymentState{Phase: providers.PhaseNone}
+		f.prov.Configure(func(c *fake.Config) {
+			c.Fence = func(uuid.UUID) (providers.DeploymentState, error) {
+				return providers.DeploymentState{Phase: providers.PhaseWriting, NewCertSHA256: newSHA, BackupDir: "/b"}, nil
+			}
+		})
+		_, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+		require.NoError(t, err)
+		assert.Equal(t, 1, f.prov.Count("RollbackDeployment"))
+		require.Len(t, f.inv.outcomes, 1)
+		assert.Equal(t, inventory.DeployStatusRolledBack, f.inv.outcomes[0].Finish.Status)
+	})
+	t.Run("the fence answers active: busy, uncertain", func(t *testing.T) {
+		f := newFixture(t)
+		f.sent(inventory.DeployStateRecovering, 2*time.Minute)
+		f.status = providers.DeploymentState{Phase: providers.PhaseNone}
+		f.prov.Configure(func(c *fake.Config) {
+			c.Fence = func(uuid.UUID) (providers.DeploymentState, error) {
+				return providers.DeploymentState{Phase: providers.PhaseNone, Active: true}, nil
+			}
+		})
+		res, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+		require.NoError(t, err)
+		assert.Equal(t, "uncertain", res["outcome"])
+		assert.NotContains(t, f.inv.calls(), "FinishDeployment")
+		require.Len(t, f.inv.outcomes, 1)
+		assert.False(t, f.inv.outcomes[0].Terminal)
+		assert.Equal(t, "nginx.busy", f.inv.outcomes[0].Finish.ErrorCode)
+	})
+	t.Run("B2 m1: no start time: the outcome is unknown, never failed", func(t *testing.T) {
+		f := newFixture(t)
+		f.sent(inventory.DeployStateRecovering, time.Hour)
+		f.inv.dep.StartedAt = nil
+		f.status = providers.DeploymentState{Phase: providers.PhaseNone}
+		_, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+		require.NoError(t, err)
+		require.Len(t, f.inv.outcomes, 1)
+		assert.Equal(t, inventory.DeployStatusRollbackFailed, f.inv.outcomes[0].Finish.Status)
+		assert.Equal(t, "deployment.outcome_unknown", f.inv.outcomes[0].Finish.ErrorCode)
+	})
+}
+
+// B2-I1: a re-read that fails in refollow records nothing (it may follow a send): a retry, never
+// "failed, nothing written", also on the last attempt.
+func TestRefollowReadErrorRecordsNothing(t *testing.T) {
+	f := newFixture(t)
+	f.inv.errs["StartDeployment"] = inventory.ErrDeploymentState // raced: the state changed under the run
+	reads := 0
+	f.inv.hooks["Deployment"] = func(context.Context) {
+		reads++
+		if reads == 2 {
+			f.inv.mu.Lock()
+			f.inv.errs["Deployment"] = errors.New("db down")
+			f.inv.mu.Unlock()
+		}
+	}
+	j := f.job()
+	j.Attempt = j.MaxAttempts
+	_, err := f.h.deploy(f.ctx, j, f.steps)
+	require.Error(t, err)
+	assert.NotContains(t, f.inv.calls(), "FinishDeployment")
+	assert.Empty(t, f.inv.outcomes)
+	assert.Zero(t, f.prov.Count("DeployCertificate"))
+}
+
+// B2 m3: a transient claim-check error before the one more restore does not skip it silently: the
+// deployment stays in recovery (uncertain), whose rollback sends it.
+func TestRollbackAgainTransientClaimErrorIsUncertain(t *testing.T) {
+	f := newFixture(t)
+	f.prov.Configure(func(c *fake.Config) {
+		c.Deploy = func(providers.DeployRequest) (providers.DeployOutcome, error) {
+			return providers.DeployOutcome{Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestoreFailed, FailedStep: "restore",
+				CauseStep: "verify", Reason: "deployment.rollback_failed"}, nil
+		}
+	})
+	checks := 0
+	f.inv.hooks["CheckClaim"] = func(context.Context) {
+		checks++
+		if checks == 2 { // the check before the one more restore
+			f.inv.mu.Lock()
+			f.inv.errs["CheckClaim"] = errors.New("db blip")
+			f.inv.mu.Unlock()
+		}
+	}
+	_, err := f.h.deploy(f.ctx, f.job(), f.steps)
+	require.Error(t, err)
+	require.Len(t, f.inv.outcomes, 1)
+	assert.False(t, f.inv.outcomes[0].Terminal, "not rollback_failed without the one more restore")
+	assert.Equal(t, inventory.DeployStateRecovering, f.inv.dep.State)
+	assert.Zero(t, f.prov.Count("RollbackDeployment"))
+}
+
+// The cross-area note of B1: a terminal "unchanged, verification skipped" that the location no
+// longer allows (ErrDeploymentState) ends the deployment failed, not in a retryable job error.
+func TestUnchangedSkippedThatIsNoLongerAllowedEndsFailed(t *testing.T) {
+	f := newFixture(t)
+	f.prov.Configure(func(c *fake.Config) {
+		c.Deploy = func(providers.DeployRequest) (providers.DeployOutcome, error) {
+			return providers.DeployOutcome{Result: providers.DeployUnchanged, Phase: providers.PhaseUnchanged, Verified: "skipped"}, nil
+		}
+	})
+	calls := 0
+	f.inv.hooks["RecordOutcome"] = func(context.Context) {
+		calls++
+		f.inv.mu.Lock()
+		defer f.inv.mu.Unlock()
+		if calls == 1 {
+			f.inv.errs["RecordOutcome"] = inventory.ErrDeploymentState
+		} else {
+			delete(f.inv.errs, "RecordOutcome")
+		}
+	}
+	res, err := f.h.deploy(f.ctx, f.job(), f.steps)
+	assert.Equal(t, "failed", res["outcome"])
+	jf := failureOf(t, err)
+	assert.Equal(t, jobs.Permanent, jf.Class)
+	assert.Equal(t, "deployment.verify_other", jf.Reason)
+	require.Len(t, f.inv.outcomes, 1)
+	assert.Equal(t, inventory.DeployStatusFailed, f.inv.outcomes[0].Finish.Status)
+	assert.Equal(t, providers.PhaseUnchanged, f.inv.outcomes[0].Finish.Phase)
+	assert.Equal(t, 2, calls)
 }

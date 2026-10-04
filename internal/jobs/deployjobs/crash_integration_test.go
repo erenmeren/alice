@@ -40,7 +40,7 @@ func TestDeploymentSurvivesAKillAtEveryPoint(t *testing.T) {
 		// D23: nothing was recorded as started; the re-queued job deploys normally.
 		{name: "after the pre-check, before the start record", point: "before:StartDeployment",
 			status: inventory.DeployStatusSucceeded, want: newLeaf, sends: 1},
-		// Recorded as started, nothing sent: no journal; final only after the helper's budget (S6).
+		// Recorded as started, nothing sent: no journal; final once the operation is fenced (AUD-05).
 		{name: "after the start record, before the send", point: "after:StartDeployment",
 			status: inventory.DeployStatusFailed, reason: "deployment.interrupted", want: oldLeaf, sends: 0},
 		// The helper finished on its own; the answer was never recorded: the journal and a fresh
@@ -88,11 +88,13 @@ func TestDeploymentSurvivesAKillAtEveryPoint(t *testing.T) {
 			e.restart()
 			assert.Equal(t, 1, e.audits("job.recovered"), "the killed job was taken back")
 			if tc.point == "after:StartDeployment" {
-				// S6: right after the restart the start record is younger than the helper's budget:
-				// "no journal" is not final yet.
+				// AUD-05: right after the restart there is no journal; the recovery fences the
+				// operation, after which "nothing was written" is final without waiting for any budget.
 				e.drain()
 				d := e.deployment(id)
-				assert.Equal(t, inventory.DeployStateRecovering, d.State, "no journal within the budget is not final")
+				assert.Equal(t, inventory.DeployStateDone, d.State, "fenced: final at once")
+				assert.Equal(t, 1, s.emu.FenceCount())
+				assert.Equal(t, helperproto.PhaseFenced, s.emu.NginxPhase(d.OperationID.String()))
 			}
 			d := e.settle(id)
 			assert.Equal(t, tc.status, d.Status)

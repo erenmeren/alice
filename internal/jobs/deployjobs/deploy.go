@@ -49,6 +49,7 @@ import (
 //	                                                                         precheck; a re-run deploys)      (released by the runner)
 //	 StartDeployment(SendValues)     ErrRecoveryPending                      finish failed recovery_pending   Fail recovery_pending
 //	                                 ErrDeploymentState (raced)              -                                follow the re-read state
+//	                                   (the re-read fails: B2-I1)            nothing (it may be deploying)    Retry internal.unexpected
 //	                                 other error (may have committed)        -                                pre-send failure (a re-run
 //	                                                                                                          finds deploying: recovers)
 //	 context ended after the start   nothing was sent (known)                finish failed interrupted        Fail deployment.interrupted
@@ -166,7 +167,10 @@ func (h *handlers) follow(ctx context.Context, j jobs.Job, d inventory.Deploymen
 func (h *handlers) refollow(ctx context.Context, j jobs.Job, d inventory.Deployment, steps jobs.StepRecorder, depth int) (map[string]any, error) {
 	again, err := h.d.Inventory.Deployment(ctx, d.ID)
 	if err != nil {
-		return h.beforeSend(ctx, j, d, jobs.Retry(reasonUnexpected, nil, err))
+		// B2-I1: the state changed under this run and cannot be read: it may be deploying (a send
+		// may have happened), so nothing is recorded; the job is retried (on its last attempt it
+		// ends failed and the sweep finishes the deployment from its state).
+		return nil, jobs.Retry(reasonUnexpected, nil, err)
 	}
 	return h.follow(ctx, j, again, steps, depth+1)
 }
@@ -373,9 +377,17 @@ func (h *handlers) rollbackAgain(ctx context.Context, sess providers.Session, m 
 		first.Finish.VerifyFailedReason, first.Finish.VerifyFailedPort = c.reason, c.port
 	}
 	if err := h.d.Inventory.CheckClaim(ctx); err != nil {
-		// A stale run restores nothing; its record write is refused the same way. The record of the
-		// first answer (restore_failed) is kept as the outcome to try to write.
-		return first
+		if errors.Is(err, inventory.ErrClaimLost) {
+			// A stale run restores nothing; its record write is refused the same way. The record of
+			// the first answer (restore_failed) is kept as the outcome to try to write.
+			return first
+		}
+		// B2 m3: the check itself failed: no restore is sent behind a claim that is not confirmed,
+		// and restore_failed is not recorded without the one more restore. Uncertain: the recovery
+		// reads the journal (restore_failed) and sends it.
+		r := uncertainRecord(reasonInterrupted)
+		r.Finish.VerifyFailedReason, r.Finish.VerifyFailedPort = first.Finish.VerifyFailedReason, first.Finish.VerifyFailedPort
+		return r
 	}
 	out, err := sess.RollbackDeployment(ctx, m.RollbackRequest(), rec)
 	r := rollbackRecord(out, err, cause)

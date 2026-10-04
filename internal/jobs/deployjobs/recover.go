@@ -76,15 +76,21 @@ func (h *handlers) recoverJob(ctx context.Context, j jobs.Job, steps jobs.StepRe
 //	  a state that fails Validate
 //	active, any phase (a helper holds the lock: this operation     uncertain nginx.busy                       resultOf (uncertain)
 //	  still running, or another one)
-//	none | prepared, start record younger than the budget (S6;     uncertain (the recorded reason, else       resultOf (uncertain)
-//	  the clock is read before the journal: a lower bound)
-//	                                                               deployment.interrupted)
-//	none | prepared, no helper running, start record older         failed deployment.interrupted (nothing     resultOf
-//	  than the budget and at most noJournalUnknownAfter (a day)    was written: the journal never passed
-//	                                                               prepared)
+//	fenced (an earlier recovery fenced it, then could not record)  failed deployment.interrupted (phase none) resultOf
 //	none | prepared, no helper running, start record older than    rollback_failed deployment.outcome_unknown resultOf
 //	  noJournalUnknownAfter (after an outage the helper may have   (outcome-unknown email)
-//	  swept the journal of a change it made)
+//	  swept the journal of a change it made), or without a time
+//	  (B2 m1)
+//	none | prepared, no helper running, otherwise: FenceDeployment
+//	  (AUD-05: a helper that starts late, after a sudo or PAM
+//	  stall, must find the operation fenced):
+//	    error (transport, BUSY, sudo, protocol) or a state that    nothing                                    unresolved with its reason
+//	      fails Validate, or none/prepared (not fenced)
+//	    active                                                     uncertain nginx.busy                       resultOf (uncertain)
+//	    fenced                                                     failed deployment.interrupted (nothing     resultOf
+//	                                                               was written and nothing will be; phase
+//	                                                               the status read before the fence)
+//	    any other phase (a journal after all)                      as that phase below
 //	committed | unchanged: VerifyDeployment(VerifyRequest: the
 //	  RECORDED fingerprint and chain length; never success from
 //	  the journal alone):
@@ -146,7 +152,7 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 		return unresolved(m, err)
 	}
 	defer h.close(sess)
-	now := h.d.Clock.Now() // before the journal is read: the budget check below is conservative (M-2)
+	now := h.d.Clock.Now() // before the journal is read: the age check below is conservative (M-2)
 	st, err := sess.DeploymentStatus(ctx, *d.OperationID)
 	if err != nil {
 		return unresolved(m, err)
@@ -160,21 +166,38 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 	}
 	rec := h.recorder(ctx, d.ID, steps)
 	switch st.Phase {
+	case providers.PhaseFenced:
+		// An earlier recovery fenced it and could not record: nothing was written, nothing will be.
+		return h.recordFor(ctx, d, failedRecord(reasonInterrupted, providers.PhaseNone), m, nil)
 	case providers.PhaseNone, providers.PhasePrepared:
-		if h.sendWithin(d, now) {
-			// S6: the helper may not have reached its lock yet; final only after its budget.
-			code := d.ErrorCode
-			if code == "" {
-				code = reasonInterrupted
-			}
-			return h.recordFor(ctx, d, uncertainRecord(code), m, nil)
-		}
-		if h.sentLongAgo(d, now) {
+		if d.StartedAt == nil || h.sentLongAgo(d, now) {
 			// After an outage longer than a day the helper may have swept the journal of a change
 			// it made: the outcome is unknown, never "nothing was written" (outcome-unknown email).
+			// A start record without a time cannot be placed at all (B2 m1): the same.
 			return h.recordFor(ctx, d, outcomeUnknownRecord(), m, nil)
 		}
-		return h.recordFor(ctx, d, failedRecord(reasonInterrupted, st.Phase), m, nil)
+		// AUD-05: no journal proves nothing about a helper that has not started yet (a sudo or PAM
+		// stall): the operation is fenced on the server first. Only a fence that answers fenced
+		// makes "nothing was written" final; a journal it finds after all is acted on.
+		fst, err := sess.FenceDeployment(ctx, *d.OperationID)
+		if err != nil {
+			return unresolved(m, err)
+		}
+		if verr := fst.Validate(); verr != nil {
+			return unresolved(m, providers.NewError("ssh.protocol_error", false, verr, nil))
+		}
+		switch {
+		case fst.Active:
+			return h.recordFor(ctx, d, uncertainRecord(reasonBusy), m, nil)
+		case fst.Phase == providers.PhaseFenced:
+			return h.recordFor(ctx, d, failedRecord(reasonInterrupted, st.Phase), m, nil)
+		case fst.Phase == providers.PhaseNone || fst.Phase == providers.PhasePrepared:
+			// A fence that did not fence (it cannot answer these): proves nothing.
+			return unresolved(m, providers.NewError("ssh.protocol_error", false, errors.New("deployjobs: the fence answered "+fst.Phase), nil))
+		}
+		st = fst
+	}
+	switch st.Phase {
 	case providers.PhaseCommitted, providers.PhaseUnchanged:
 		return h.verified(ctx, sess, d, mat, st, rec, m)
 	}

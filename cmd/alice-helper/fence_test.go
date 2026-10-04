@@ -235,3 +235,22 @@ func TestFenceArguments(t *testing.T) {
 	assert.Equal(t, helperproto.ExitRefused, code)
 	assert.Equal(t, helperproto.CodeNotRoot, m["code"])
 }
+
+// The audit's PoC (AUD-05), adapted: status reads none, Alice's recovery fences, then the stalled
+// nginx-deploy starts ten minutes later with the stdin it was sent: refused, nothing written.
+func TestLateDeployAfterTheRecoveryFenceIsRefused(t *testing.T) {
+	w := newDeployWorld(t)
+	code, st := w.f.run("nginx-status", "--op", opA)
+	require.Equal(t, helperproto.ExitOK, code)
+	require.Equal(t, helperproto.PhaseNone, st["phase"])
+	_, m := w.fence(t, opA)
+	require.Equal(t, helperproto.PhaseFenced, m["phase"])
+
+	base := w.f.s.now()
+	w.f.s.now = func() time.Time { return base.Add(10 * time.Minute) }
+	code, out := w.deploy(opA, w.newInput(), w.oldSHA())
+	assert.Equal(t, helperproto.ExitPrecondition, code, out)
+	assert.Equal(t, helperproto.CodeFenced, out["code"])
+	assert.Zero(t, w.reloads)
+	w.assertPair(t, false)
+}

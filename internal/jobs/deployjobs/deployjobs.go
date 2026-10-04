@@ -16,10 +16,11 @@
 //     fingerprint and chain length passed (recover.go, verified), never from the journal alone.
 //  3. Nothing is recorded as failed ("nothing was written") after a send unless the journal or the
 //     helper's answer proves nothing was written: a refusal (no_change with a *providers.Error, a
-//     well-formed answer), the journal phase none or prepared with no helper running and the start
-//     record older than the helper's budget (S6), the journal phase unchanged (the files already
-//     held the new pair), or a restore answering "nothing to restore". Every other doubt is
-//     uncertain and stays in recovery.
+//     well-formed answer), the journal phase none or prepared with no helper running and a fence
+//     that answered fenced (AUD-05: the operation can no longer run), or the journal phase
+//     unchanged (the files already held the new pair). A restore answering "nothing to restore"
+//     is uncertain (it contradicts the journal recovery read). Every other doubt is uncertain and
+//     stays in recovery.
 //  4. An interrupted deployment always ends in recovery or a terminal state: before the send the
 //     record is queued or precheck (the job runs again, or the sweep ends it failed when the job
 //     ended); from StartDeployment on it is deploying or recovering with an operation id, and the
@@ -118,28 +119,31 @@ func newHandlers(d Deps) *handlers {
 }
 
 const (
-	// HelperBudget is how long the helper may take for one nginx-deploy after Alice sent it (its
-	// own budget, Task 6): until then a journal that reads none or prepared may only mean that the
-	// helper has not reached its lock yet (S6).
-	HelperBudget = 50 * time.Second
-	// noJournalFinalAfter: a journal reading none or prepared, with no helper running, is final
-	// ("nothing was written") only when the start record is at least this old (the budget plus a
-	// margin, S6).
-	noJournalFinalAfter = HelperBudget + 10*time.Second
+	// A journal reading none or prepared with no helper running used to be final ("nothing was
+	// written") 60 s after the start record (the helper's 50 s budget plus a margin). That rule
+	// relied on the helper's budget starting when Alice sent the command, which a sudo or PAM
+	// stall breaks (AUD-05); recovery now fences the operation on the server instead
+	// (FenceDeployment), which needs no clock agreement and makes a wait redundant.
+	//
 	// noJournalUnknownAfter: a journal reading none or prepared for a deployment that was sent
 	// longer ago than this proves nothing any more: the helper's sweep removes a committed (or
 	// restored, unchanged, prepared) journal after helperproto.NginxBackupKeep (7 days), so after an
 	// outage the new pair may be live and unverified with its journal gone. Recovery then records the
 	// outcome as unknown (rollback_failed, deployment.outcome_unknown), never "nothing was written".
-	// Live recovery ends after inventory.MaxRecoveryAttempts × RecoveryRetryInterval (about a day),
-	// so a later recovery can only follow an outage; the day is well below the helper's retention
-	// and absorbs clock skew (TestNoJournalThresholdIsWellBelowTheHelpersRetention).
+	// Live recovery ends after inventory.MaxRecoveryAttempts × RecoveryRetryInterval (96 × 15 min,
+	// exactly 24 h, equal to this threshold: the last attempts may fall either side of it, both
+	// answers are safe), so a recovery well after it can only follow an outage; the day is well
+	// below the helper's retention and absorbs clock skew
+	// (TestNoJournalThresholdIsWellBelowTheHelpersRetention).
 	noJournalUnknownAfter = 24 * time.Hour
 	// RecordTimeout bounds a record written with a context detached from the job's: the outcome
 	// of a completed call is recorded even when the job's context ended meanwhile (lease lost,
-	// shutdown). Recording an outcome takes at most two of them (the write and its re-read); the
-	// shutdown grace of the runner leaves them that time after cancelling the job (cmd/alice
-	// TestShutdownFitsTheStopGracePeriod).
+	// shutdown). Recording an outcome usually takes two of them (the write and its re-read; three
+	// when an unchanged-skipped outcome is rewritten as failed), and the runner's shutdown grace
+	// leaves at least that time after cancelling the job (cmd/alice
+	// TestShutdownFitsTheStopGracePeriod). It is not a guarantee: step records, a provider call
+	// still unwinding and a slow database can use the grace first; a record cut off then leaves
+	// the deployment deploying or recovering, and a recovery reads the truth from the journal.
 	RecordTimeout = 15 * time.Second
 	// stepTimeout bounds one step record.
 	stepTimeout = 5 * time.Second
@@ -339,6 +343,17 @@ func (h *handlers) record(ctx context.Context, d inventory.Deployment, rec inven
 	wctx, cancel := detached(ctx)
 	err := h.d.Inventory.RecordOutcome(wctx, d.ID, rec, retryAt)
 	cancel()
+	if errors.Is(err, inventory.ErrDeploymentState) && rec.Terminal && rec.Finish.Status == inventory.DeployStatusUnchanged {
+		// "Unchanged, verification skipped" where the location no longer skips verification (its
+		// settings changed meanwhile): nothing was changed, and the verification the location now
+		// asks for was not made. The deployment ends failed (verify_other), not in a retryable job
+		// error that only retries and the sweep would end.
+		rec = inventory.OutcomeRecord{Terminal: true, Finish: inventory.DeploymentFinish{Status: inventory.DeployStatusFailed,
+			Result: string(providers.DeployNoChange), Phase: rec.Finish.Phase, ErrorCode: reasonVerifyOther, Params: map[string]string{}}}
+		wctx, cancel = detached(ctx)
+		err = h.d.Inventory.RecordOutcome(wctx, d.ID, rec, retryAt)
+		cancel()
+	}
 	if errors.Is(err, inventory.ErrClaimLost) {
 		h.d.Log.Warn("a stale run did not record its outcome: its job is held by another run", "deployment_id", d.ID.String())
 		return staleRun(err)
@@ -434,13 +449,6 @@ func causeReason(causeStep, class string) string {
 		return reasonReload
 	}
 	return ""
-}
-
-// sendWithin reports whether the start record is younger than the helper's budget: a send may
-// still be on its way to the helper's lock (S6).
-// now is taken before the journal was read, so the elapsed time is a lower bound (M-2).
-func (h *handlers) sendWithin(d inventory.Deployment, now time.Time) bool {
-	return d.StartedAt != nil && now.Sub(*d.StartedAt) < noJournalFinalAfter
 }
 
 // sentLongAgo reports whether the start record is older than noJournalUnknownAfter: a missing

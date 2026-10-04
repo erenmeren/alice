@@ -394,7 +394,8 @@ func TestRecoveryAfterALongOutageWithoutAJournalIsUnknown(t *testing.T) {
 	assert.Len(t, again, 1)
 }
 
-// Just under the threshold a missing journal still means "nothing was written" (S6 rule).
+// Just under the threshold a missing journal is fenced and means "nothing was written" (a journal
+// swept within the day by a server clock jump is the documented limitation this pins).
 func TestRecoveryWithoutAJournalJustUnderADayIsNothingWritten(t *testing.T) {
 	e := newEnv(t)
 	s := e.addServer("web-01", wwwSite())
