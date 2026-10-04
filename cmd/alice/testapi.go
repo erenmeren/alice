@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -23,7 +24,12 @@ type testDeps struct {
 	Log         *slog.Logger
 	ResetLimits func()
 	Inventory   *inventory.Service // the reset creates a new platform key
-	Runner      *jobs.Runner       // POST /test/jobs/drain
+	Runner      jobRunner          // POST /test/jobs/drain
+}
+
+// jobRunner runs one due job (*jobs.Runner).
+type jobRunner interface {
+	RunOnce(ctx context.Context) (bool, error)
 }
 
 // testLicenseSuffix marks a build that trusts the test license key but is not the e2e

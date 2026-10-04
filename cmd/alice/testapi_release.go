@@ -4,6 +4,7 @@ package main
 
 import (
 	"net/http"
+	"time"
 
 	"alice/internal/notify"
 	"alice/internal/platform/clock"
@@ -20,6 +21,9 @@ var testMailer notify.Mailer
 
 // startJobWorkers is true: serve runs the job workers (runner.Run).
 const startJobWorkers = true
+
+// sweepEvery is the interval of the deployment recovery sweep (spec R38 item 8).
+const sweepEvery = time.Minute
 
 // testHandler returns nil: release builds have no /test endpoints.
 func testHandler(testDeps) http.Handler { return nil }

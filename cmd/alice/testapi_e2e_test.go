@@ -216,6 +216,12 @@ func TestE2EBuildStartsNoJobWorkers(t *testing.T) {
 	assert.False(t, startJobWorkers)
 }
 
+// The e2e build never ticks the deployment recovery sweep on the wall clock (the demo clock moves
+// recover_after past by itself); tests run it with POST /test/scheduler/run.
+func TestE2EBuildNeverTicksTheSweep(t *testing.T) {
+	assert.GreaterOrEqual(t, sweepEvery, 50*365*24*time.Hour)
+}
+
 type countingGate struct {
 	locked bool
 	calls  int
@@ -269,4 +275,73 @@ func TestE2EDrainBudgets(t *testing.T) {
 	assert.Less(t, drainClaimWindow, drainBudget)
 	assert.Less(t, drainBudget, 60*time.Second, "a drain answers before the server's WriteTimeout")
 	assert.GreaterOrEqual(t, drainBudget-drainClaimWindow, 30*time.Second, "a deployment claimed last can still verify and record")
+}
+
+// fakeRunner runs one job that blocks until its context ends or release is closed, and then has
+// nothing more to run.
+type fakeRunner struct {
+	release   chan struct{}
+	started   chan struct{}
+	calls     int
+	cancelled chan bool // the running job's context ended before release
+}
+
+func newFakeRunner() *fakeRunner {
+	return &fakeRunner{release: make(chan struct{}), started: make(chan struct{}), cancelled: make(chan bool, 1)}
+}
+
+func (f *fakeRunner) RunOnce(ctx context.Context) (bool, error) {
+	f.calls++
+	if f.calls > 1 {
+		return false, nil
+	}
+	close(f.started)
+	select {
+	case <-ctx.Done():
+		f.cancelled <- true
+	case <-f.release:
+		f.cancelled <- false
+	}
+	return true, nil
+}
+
+func withDrainBudgets(t *testing.T, claim, budget time.Duration) {
+	t.Helper()
+	savedClaim, savedBudget := drainClaimWindow, drainBudget
+	drainClaimWindow, drainBudget = claim, budget
+	t.Cleanup(func() { drainClaimWindow, drainBudget = savedClaim, savedBudget })
+}
+
+// A client that gives up (Playwright's request timeout) does not cancel the job the drain runs:
+// the job keeps its own budget, so a deployment is never cut off by a test's HTTP timeout.
+func TestE2EDrainOutlivesTheClient(t *testing.T) {
+	withDrainBudgets(t, 5*time.Second, 10*time.Second)
+	f := newFakeRunner()
+	h := testHandler(testDeps{Runner: f, Log: slog.New(slog.DiscardHandler)})
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/test/jobs/drain", nil)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		h.ServeHTTP(rec, req)
+		close(done)
+	}()
+	<-f.started
+	cancel() // the client went away
+	time.Sleep(50 * time.Millisecond)
+	close(f.release)
+	assert.False(t, <-f.cancelled, "the job's context did not end with the request")
+	<-done
+	assert.JSONEq(t, `{"ran":1}`, rec.Body.String())
+}
+
+// A drain whose budget ends while a job still runs says so ("cut_off"), so a test can tell that
+// the job was interrupted (a deployment then goes to recovery).
+func TestE2EDrainReportsACutOff(t *testing.T) {
+	withDrainBudgets(t, 20*time.Millisecond, 50*time.Millisecond)
+	f := newFakeRunner()
+	rec := postTest(t, testHandler(testDeps{Runner: f, Log: slog.New(slog.DiscardHandler)}), "/test/jobs/drain", ``)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"ran":0,"cut_off":true}`, rec.Body.String())
+	assert.True(t, <-f.cancelled)
 }

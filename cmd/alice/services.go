@@ -168,16 +168,14 @@ func deployDeps(svc *services, clk clock.Clock, log *slog.Logger) deployjobs.Dep
 	return d
 }
 
-// sweepEvery is the interval of the deployment recovery sweep (spec R38 item 8).
-const sweepEvery = time.Minute
-
 // buildScheduler is the periodic work of serve (spec §8.2, R37 item 15); every run passes the
 // license gate, and serve runs it under the scheduling lock (WithLeader), so one process runs
 // each task at a time. The audit verification ticks hourly and verifies when the last intact
 // verification is 23 hours old (jobs.AuditVerifyTask). The deployment recovery sweep (ClassAlways:
 // it runs in lock too) queues the recovery of interrupted deployments and ends the ones whose job
-// ended; it runs on the scheduler's context, which carries no job claim. The e2e tests use the
-// same tasks.
+// ended; it runs on the scheduler's context, which carries no job claim, every sweepEvery (one
+// minute; the e2e build never ticks it: tests run it with POST /test/scheduler/run). The e2e tests
+// use the same tasks.
 func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *slog.Logger) *jobs.Scheduler {
 	return jobs.NewScheduler(clk, svc.license, log,
 		jobs.Task{Type: jobs.LicenseEvaluate, Every: time.Hour, Run: svc.license.Tick},

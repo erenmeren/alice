@@ -204,3 +204,8 @@ func TestBuildTime(t *testing.T) {
 	assert.Equal(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), buildTime(log))
 	assert.Empty(t, logs.String())
 }
+
+// The release build sweeps for interrupted deployments every minute (R38 item 8).
+func TestReleaseSweepsEveryMinute(t *testing.T) {
+	assert.Equal(t, time.Minute, sweepEvery)
+}

@@ -532,9 +532,12 @@ export function targetExec(args: string[], input?: string): string {
   });
 }
 
-// drainJobs runs every due background job now (e2e build: serve starts no job workers).
+// drainJobs runs every due background job now (e2e build: serve starts no job workers). The server
+// claims jobs for 20 s and lets the last one run until 50 s, so the request waits up to 60 s (the
+// default 30 s would give up while a deployment still runs). The answer is {"ran": n}, plus
+// "cut_off": true when the server's budget ended with a job still running.
 export async function drainJobs(request: APIRequestContext): Promise<void> {
-  const res = await request.post('/test/jobs/drain');
+  const res = await request.post('/test/jobs/drain', { timeout: 60_000 });
   expect(res.ok(), 'POST /test/jobs/drain (is this the Phase 3 e2e build?)').toBe(true);
 }
 

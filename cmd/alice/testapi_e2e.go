@@ -38,6 +38,12 @@ const versionSuffix = "+e2e"
 // background worker.
 const startJobWorkers = false
 
+// sweepEvery is the deployment recovery sweep's interval in the e2e build: in effect never. The
+// demo clock is an offset of the wall clock, so a sweep ticking every real minute would requeue
+// recoveries, count attempts and end deployments between two Playwright steps; tests run it with
+// POST /test/scheduler/run instead. The task stays scheduled (checkWiring, RunNow).
+const sweepEvery = 100 * 365 * 24 * time.Hour
+
 // maxTestBody is the request body limit of the API (SEC-023), applied to /test too.
 const maxTestBody = 1 << 20
 
@@ -285,13 +291,15 @@ func testHandler(d testDeps) http.Handler {
 			writeTestJSON(w, http.StatusConflict, map[string]string{"error": "no job runner"})
 			return
 		}
-		ran, err := drainJobs(r.Context(), d.Runner)
+		// The drain is detached from the request: a client that gives up (its own timeout) must
+		// not cancel the job it runs, which would send a deployment to recovery.
+		res, err := drainJobs(context.WithoutCancel(r.Context()), d.Runner)
 		if err != nil {
 			d.Log.Error("test job drain failed", "error_type", fmt.Sprintf("%T", err))
 			writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "drain failed"})
 			return
 		}
-		writeTestJSON(w, http.StatusOK, map[string]int{"ran": ran})
+		writeTestJSON(w, http.StatusOK, res)
 	})
 	mux.HandleFunc("POST /test/scheduler/run", func(w http.ResponseWriter, r *http.Request) {
 		if d.Scheduler == nil {
@@ -363,35 +371,46 @@ func writeTestJSON(w http.ResponseWriter, status int, v any) {
 // answer must come before the server's 60 s WriteTimeout. A drain claims jobs only during the
 // claim window and lets the job it claimed last run until drainBudget, so a certificate deployment
 // claimed late in a drain still gets at least drainBudget - drainClaimWindow to finish its
-// verification and record its outcome. A test that needs more calls drain again.
-const (
-	maxDrain         = 20
+// verification and record its outcome. A test that needs more calls drain again. (Variables only
+// so the unit tests can shorten them.)
+const maxDrain = 20
+
+var (
 	drainClaimWindow = 20 * time.Second
 	drainBudget      = 50 * time.Second
 )
 
-// drainJobs runs due jobs one after the other (the e2e build has no workers) and reports how many
-// ran. A job cut off at drainBudget is retried like any interrupted job (a deployment: recovered).
-func drainJobs(ctx context.Context, runner *jobs.Runner) (int, error) {
+// drainResult is the answer of POST /test/jobs/drain: the jobs that ran to the end, and CutOff
+// when the budget ended while a job still ran (it is retried like any interrupted job; a
+// deployment goes to recovery).
+type drainResult struct {
+	Ran    int  `json:"ran"`
+	CutOff bool `json:"cut_off,omitempty"`
+}
+
+// drainJobs runs due jobs one after the other (the e2e build has no workers). ctx must not end
+// with the HTTP request (serve passes it detached); the drain's own budgets bound it.
+func drainJobs(ctx context.Context, runner jobRunner) (drainResult, error) {
 	claimCtx, stopClaiming := context.WithTimeout(ctx, drainClaimWindow)
 	defer stopClaiming()
 	jobCtx, cancel := context.WithTimeout(ctx, drainBudget)
 	defer cancel()
-	ran := 0
-	for ran < maxDrain && claimCtx.Err() == nil {
+	var res drainResult
+	for res.Ran < maxDrain && claimCtx.Err() == nil {
 		ok, err := runner.RunOnce(jobCtx)
 		if jobCtx.Err() != nil {
+			res.CutOff = ok
 			break
 		}
 		if err != nil {
-			return ran, err
+			return res, err
 		}
 		if !ok {
 			break
 		}
-		ran++
+		res.Ran++
 	}
-	return ran, nil
+	return res, nil
 }
 
 // runScheduledTask runs one periodic task of serve at once (the e2e build's scheduler still ticks
