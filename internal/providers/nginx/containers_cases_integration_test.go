@@ -1229,7 +1229,6 @@ func outcomeMatchesJournal(t *testing.T, out providers.DeployOutcome, phase stri
 	assert.Equal(t, w, phase, "the outcome %s agrees with the journal", out.Result)
 }
 
-
 // testNameOutsideVocabulary (final review A1-I1): a pair whose root-owned links resolve into an
 // acme.sh-style "*.example.test" directory is discovered unsupported (name_not_allowed) and a
 // deployment forced onto it is refused before anything is written (no operation directory).
