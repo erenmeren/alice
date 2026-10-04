@@ -5,6 +5,7 @@ package nginx
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -89,7 +90,7 @@ func (p *Provider) ForgetTarget(target uuid.UUID) { p.ssh.ForgetTarget(target) }
 // Open opens a linuxssh session (same pool, pinned host key and helper protocol check) and keeps
 // its connection for the Nginx subcommands, the target's host for Alice's own TLS probes and the
 // environment's clock (the real one when none is given) for the waits between verification
-// attempts.
+// attempts, and the environment's logger (none: discarded).
 func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred providers.CredentialSource, env providers.Env) (providers.Session, error) {
 	s, err := p.ssh.Open(ctx, t, cred, env)
 	if err != nil {
@@ -105,7 +106,11 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 	if clk == nil {
 		clk = clock.Real{}
 	}
-	return &session{Session: s, conn: conn, p: p, host: cfg.Host, clock: clk}, nil
+	log := env.Log
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	return &session{Session: s, conn: conn, p: p, host: cfg.Host, clock: clk, log: log}, nil
 }
 
 // session is a linuxssh session with the certificate methods. It never keeps a helper command:
@@ -116,6 +121,7 @@ type session struct {
 	p      *Provider
 	host   string // the target's address, for Alice's own TLS probes
 	clock  clock.Clock
+	log    *slog.Logger
 	closed atomic.Bool
 }
 

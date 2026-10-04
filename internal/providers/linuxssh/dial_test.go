@@ -780,10 +780,11 @@ func TestProbeChangedRefusesANameThatMoved(t *testing.T) {
 	hk := &memHostKeys{}
 	hk.pin(srv.HostKey())
 	srv.SetHostKeyAlgorithms(linuxsshtest.NewECDSAHostKey(t))
-	var queries atomic.Int64
 	d := newDialer(hk)
+	// The name moves once the server has seen the first dial: the first handshake fails only after
+	// the server accepted it, so the key-only probe's lookup is the first one that sees the move.
 	d.resolver = netaddrtest.Resolver(func(string) []netip.Addr {
-		if queries.Add(1) <= 2 { // the first lookup (its A and AAAA queries)
+		if srv.Connections() == 0 {
 			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}
 		}
 		return []netip.Addr{netip.MustParseAddr("0.0.0.0")}

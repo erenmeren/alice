@@ -138,7 +138,26 @@ func TestTLSProberIsBounded(t *testing.T) {
 func TestTLSProberRefusesAnAddressAliceNeverConnectsTo(t *testing.T) {
 	ca := pki.NewCA("Probe", pki.ECDSA256, unitNow)
 	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, unitNow)
-	port := tlsServer(t, leaf, tls.VersionTLS12)
+	pair, err := tls.X509KeyPair(leaf.FullchainPEM, leaf.KeyPEM)
+	require.NoError(t, err)
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	var accepted atomic.Int64
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			go func() {
+				_ = c.(*tls.Conn).Handshake()
+				_ = c.Close()
+			}()
+		}
+	}()
+	port := ln.Addr().(*net.TCPAddr).Port
 	var rebound atomic.Bool
 	p := TLSProber{resolver: netaddrtest.Resolver(func(name string) []netip.Addr {
 		switch {
@@ -152,6 +171,7 @@ func TestTLSProberRefusesAnAddressAliceNeverConnectsTo(t *testing.T) {
 	got, err := p.Probe(context.Background(), "www.example.test", port, "www.example.test", helperproto.ProbeAny)
 	require.NoError(t, err)
 	assert.Equal(t, pki.Fingerprint(leaf.Cert), got.LeafSHA256)
+	require.Eventually(t, func() bool { return accepted.Load() == 1 }, 5*time.Second, 5*time.Millisecond)
 
 	rebound.Store(true)
 	_, err = p.Probe(context.Background(), "www.example.test", port, "www.example.test", helperproto.ProbeAny)
@@ -164,4 +184,12 @@ func TestTLSProberRefusesAnAddressAliceNeverConnectsTo(t *testing.T) {
 		_, err = TLSProber{}.Probe(context.Background(), host, port, "", helperproto.ProbeAny)
 		assert.ErrorIs(t, err, ErrProbeNotAllowed, host)
 	}
+	// Without the check, 0.0.0.0 would reach this listener (Linux routes it to loopback); with it,
+	// nothing arrived after the rebind. A last allowed probe proves the listener still counts.
+	rebound.Store(false)
+	_, err = p.Probe(context.Background(), "www.example.test", port, "www.example.test", helperproto.ProbeAny)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return accepted.Load() >= 2 }, 5*time.Second, 5*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int64(2), accepted.Load(), "no connection reached the listener while the name was rebound")
 }

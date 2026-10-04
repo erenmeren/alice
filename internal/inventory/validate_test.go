@@ -57,6 +57,13 @@ func TestNormalizeHostTable(t *testing.T) {
 		{"fe80::1", "", CodeHostNotAllowed},
 		{"255.255.255.255", "", CodeHostNotAllowed},
 		{"::ffff:169.254.169.254", "", CodeHostNotAllowed},
+		// The same rule as at connect time (netaddr.Allowed): reserved IPv4 ranges and IPv6 forms
+		// that never name a server are refused as typed too.
+		{"0.1.2.3", "", CodeHostNotAllowed},
+		{"240.0.0.1", "", CodeHostNotAllowed},
+		{"::a00:5", "", CodeHostNotAllowed},
+		{"::ffff:0:a00:5", "", CodeHostNotAllowed},
+		{"[2001::1]", "", CodeHostNotAllowed},
 		{"10.0.0.5.", "10.0.0.5", ""},
 		{"[::ffff:169.254.169.254]", "", CodeHostNotAllowed},
 		{"[::1]", "::1", ""},

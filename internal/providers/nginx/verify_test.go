@@ -1,8 +1,10 @@
 package nginx
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/platform/clock"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/linuxssh/linuxsshtest"
@@ -102,12 +105,20 @@ func TestVerifyFallsBackToTheServerProbeWhenAlicesProbeIsRefused(t *testing.T) {
 	e.prober.mu.Lock()
 	e.prober.notAllowed = true
 	e.prober.mu.Unlock()
-	s := e.open(t)
-	vr, err := s.VerifyDeployment(context.Background(), providers.VerifyRequest{Location: e.location(t), Fingerprint: pki.Fingerprint(e.leaf.Cert), ChainLength: 2})
+	loc := e.location(t)
+	var logs bytes.Buffer
+	s, err := e.prov.Open(context.Background(), e.ref, e.cred, providers.Env{Clock: clock.Real{}, HostKeys: e.hk,
+		Log: slog.New(slog.NewTextHandler(&logs, nil))})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	vr, err := s.VerifyDeployment(context.Background(), providers.VerifyRequest{Location: loc, Fingerprint: pki.Fingerprint(e.leaf.Cert), ChainLength: 2})
 	require.NoError(t, err)
 	assert.True(t, vr.OK)
 	assert.Equal(t, "local", vr.Mode)
 	assert.Len(t, e.prober.probes(), 1, "Alice's probe is not repeated once refused")
+	// The refusal is visible: one warning naming the reason and the endpoint, nothing else.
+	assert.Equal(t, 1, strings.Count(logs.String(), "level=WARN"), logs.String())
+	assert.Contains(t, logs.String(), "reason=ssh.address_not_allowed port=443 sni=www.example.test")
 	assert.Contains(t, strings.Join(e.srv.Commands(), "\n"), "/usr/local/libexec/alice-helper tls-probe --addr '127.0.0.1' --port '443'")
 }
 

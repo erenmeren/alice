@@ -315,7 +315,13 @@ func (s *session) probeOnce(ctx context.Context, ep Endpoint, keyType string, lo
 			return served{}, false, providers.NewError("ssh.timeout", true, ctx.Err(), nil)
 		case err == nil && isHexSHA256(pr.LeafSHA256) && pr.ChainLength >= 1:
 			return served{leaf: pr.LeafSHA256, chain: pr.ChainLength}, true, nil
-		case errors.Is(err, ErrProbeUnreachable), errors.Is(err, ErrProbeNotAllowed):
+		case errors.Is(err, ErrProbeNotAllowed):
+			// Made visible here: the server-side probe still decides, so the verification does not
+			// show it, and the next SSH dial to the same name marks the target.
+			s.log.Warn("Alice's own TLS probe was refused: the server's name resolves to an address Alice does not connect to; the server-side probe decides",
+				"reason", "ssh.address_not_allowed", "port", ep.Port, "sni", ep.SNI)
+			*localOnly = true
+		case errors.Is(err, ErrProbeUnreachable):
 			*localOnly = true
 		}
 	}

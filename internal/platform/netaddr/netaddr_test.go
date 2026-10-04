@@ -38,6 +38,17 @@ func TestAllowedEveryAddressForm(t *testing.T) {
 		// A zone never names a managed server: target validation refuses it as typed, and a resolver
 		// never returns one from DNS.
 		"fe80::1%eth0": false, "2001:db8::1%eth0": false, "::1%lo": false,
+		// IPv4 "this network" and the reserved 240.0.0.0/4, also embedded.
+		"0.0.0.1": false, "0.1.2.3": false, "0.255.255.255": false, "240.0.0.1": false, "250.1.2.3": false,
+		"255.255.255.254": false, "::ffff:0.1.2.3": false, "::ffff:240.0.0.1": false, "64:ff9b::1": false,
+		"64:ff9b::f000:1": false, "2002:f000:1::1": false, "2002:1:2::1": false, "64:ff9b:1::f000:1": false,
+		"1.0.0.0": true, "239.255.255.255": false, "223.255.255.255": true,
+		// IPv4-compatible ::/96 (deprecated; :: is unspecified, ::1 loopback), IPv4-translated
+		// ::ffff:0:0:0/96 and Teredo 2001::/32 never name a managed server.
+		"::a00:5": false, "::127.0.0.1": false, "::169.254.169.254": false, "::2": false,
+		"::ffff:0:a00:5": false, "::ffff:0:a9fe:a9fe": false,
+		"2001::1": false, "2001:0:4136:e378:8000:63bf:3fff:fdd2": false, "2001:0:ffff:ffff:ffff:ffff:ffff:ffff": false,
+		"2001:1::1": true, "2001:db8:0:1::5": true, "2001:470::1": true,
 	} {
 		assert.Equal(t, want, netaddr.Allowed(netip.MustParseAddr(a)), a)
 	}

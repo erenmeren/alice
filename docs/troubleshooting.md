@@ -728,12 +728,16 @@ already prepared keep working.
 **Meaning.** When Alice connected, the server's name resolved to an address Alice never connects to, so Alice opened
 no connection (nothing was sent). These are the addresses that are refused when a server is added by address: link-local
 addresses, including the cloud metadata address `169.254.169.254` and its IPv6 forms, multicast addresses, unspecified
-addresses (`0.0.0.0`, `::`, which reach services of Alice's own host) and `255.255.255.255`. Loopback and private
-addresses are allowed. Alice checks every address the name resolves to, at every connection (SSH and its own TLS
-check of a website), on the address it actually connects to; a refused address is never connected, another address of
-the same name may be. The server's status becomes **Cannot be reached** with this reason (a server still waiting for its
-fingerprint confirmation keeps that status); the job is not retried, and the next scheduled test or a **Test
-connection** tries again.
+addresses (`0.0.0.0`, `::`, which reach services of Alice's own host), `0.0.0.0/8`, `240.0.0.0/4` (with
+`255.255.255.255`), and the IPv6 forms that never name a server (IPv4-compatible `::a.b.c.d`, IPv4-translated
+`::ffff:0:a.b.c.d`, Teredo `2001::/32`). Loopback and private addresses are allowed. Alice checks every address the
+name resolves to, at every connection (SSH and its own TLS check of a website), on the address it actually connects
+to; a refused address is never connected, another address of the same name may be. The reason is also shown when the
+name has a refused address and its other addresses failed to connect (one address down, one refused): the refused
+record is what needs fixing. The server's status becomes **Cannot be reached** with this reason (a server still waiting
+for its fingerprint confirmation keeps that status); the job is not retried, and the next scheduled test or a **Test
+connection** tries again. When only Alice's own TLS check of a website is refused, the check on the server decides and
+Alice logs a warning with this reason.
 
 **Likely cause.** The server's DNS record changed (by mistake, or a wildcard DNS name such as `*.nip.io` that encodes an
 address), or someone is trying to make Alice reach a service of its own host or the cloud metadata service through a
