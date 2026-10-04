@@ -308,6 +308,10 @@ const (
 	// helperproto.MaxNginxFiles): the list is not every location of the server, so inventory marks
 	// none missing. Only the provider emits it (too_many_files is the helper's own warning).
 	WarnLocationsDropped = "locations_dropped"
+	// WarnKVItemUnreadable: a vault listing held items Alice could not use (a name, version or
+	// thumbprint outside the shapes Alice stores, details that did not fit); they were left out.
+	// Params: object (certificates | versions | keys | secrets) and count. Only the azurekv provider emits it.
+	WarnKVItemUnreadable = "kv_item_unreadable"
 )
 
 // VerifyOptions are a location's verification settings (Administrator, R38 item 6).

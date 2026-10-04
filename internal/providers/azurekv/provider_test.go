@@ -56,7 +56,7 @@ func TestSessionStaysUnsupportedBeyondItsCapabilities(t *testing.T) {
 		providers.CapAuthorizedKeys))
 	require.NoError(t, sess.Close())
 	_, err := sess.TestConnection(context.Background())
-	assert.ErrorIs(t, err, providers.ErrUnsupported, "Task 7 implements it")
+	assert.NotErrorIs(t, err, providers.ErrUnsupported, "an advertised operation is implemented")
 }
 
 // The SDK implementation of kvAPI against the fake: every method once.

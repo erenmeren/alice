@@ -38,7 +38,8 @@ const (
 	MaxKVDetails       = 100
 	MaxKVKeyDetails    = 100
 	MaxKVVersions      = 100
-	VaultRate          = 5 // requests per second per vault
+	MaxKVVersionRead   = 1000 // versions read of one certificate before its listing is cut (D28)
+	VaultRate          = 5    // requests per second per vault
 	VaultConcurrency   = 4
 	// MaxListPages bounds the pages of one listing: the largest bound (MaxKVSecrets 10,000 secrets,
 	// plus the managed ones of up to MaxKVCertificates certificates) at the page size of 25 is about
