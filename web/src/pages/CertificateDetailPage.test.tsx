@@ -152,6 +152,14 @@ describe('CertificateDetailPage', () => {
       expect(within(hint).getByRole('link', { name: 'Open the servers' })).toHaveAttribute('href', '/servers');
     });
 
+    it('draws the hint link black and underlined, readable on the blue tint (axe color-contrast)', async () => {
+      certServer(certificateDetailFixture({ id: ID, locations: [] }));
+      await renderRoute(`/certificates/${ID}`);
+      const link = within(await screen.findByTestId('deploy-hint')).getByRole('link', { name: 'Open the servers' });
+      expect(link).toHaveAttribute('data-underline', 'always');
+      expect(link.style.getPropertyValue('color')).toBe('var(--mantine-color-black)');
+    });
+
     it('shows no hint to Auditors, for a certificate without a key or one that is already used', async () => {
       certServer(certificateDetailFixture({ id: ID, locations: [] }), [], auditorSession);
       const view = await renderRoute(`/certificates/${ID}`);

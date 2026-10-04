@@ -145,7 +145,11 @@ export function CertificateDetailPage() {
         <Alert color="blue" role="note" data-testid="deploy-hint">
           <Stack gap={4} align="flex-start">
             <Text size="sm">{t('certificates.detail.deployHint')}</Text>
-            <Anchor component={Link} to="/servers" size="sm">
+            {/* Black and underlined like the license banner links: the primary color on the blue
+                tint is below 4.5:1 (axe, e2e). */}
+            {/* Black and underlined like the license banner links: the primary color on the blue
+                tint is below 4.5:1 (axe, e2e). */}
+            <Anchor component={Link} to="/servers" size="sm" c="black" underline="always">
               {t('certificates.detail.openServers')}
             </Anchor>
           </Stack>
