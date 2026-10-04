@@ -248,7 +248,7 @@ func (s *Service) afterRefusal(snap Snapshot, err error) {
 
 // kick starts one evaluation in the background unless one it started is still running, the
 // service is closed, or the last one started less than the current gap ago (one minute, doubled
-// after each failure up to an hour; reset by any successful evaluation). The evaluation does not
+// after each failure up to 10 minutes, kickMaxGap; reset by any successful evaluation). The evaluation does not
 // depend on the request that caused it and is bounded like every Tick.
 func (s *Service) kick() {
 	s.kickMu.Lock()
