@@ -35,7 +35,7 @@ export function bannerValues(b: LicenseBanner, lang: string): Record<string, str
 export function LicenseBanners() {
   const { t, i18n } = useTranslation();
   const { session } = useAuth();
-  const status = useQuery({ queryKey: LICENSE_STATUS_KEY, queryFn: getLicenseStatus, enabled: !!session });
+  const status = useQuery({ queryKey: LICENSE_STATUS_KEY, queryFn: () => getLicenseStatus(), enabled: !!session });
   if (!status.data) return null;
   const admin = session?.user.role === 'admin';
   const shown = status.data.banners

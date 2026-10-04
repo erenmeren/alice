@@ -90,3 +90,89 @@ describe('session activity (AUD-01)', () => {
     }
   });
 });
+
+describe('session activity: hidden tabs and StrictMode (AUD-01 follow-ups)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    setVisibility('visible');
+  });
+
+  function setVisibility(state: DocumentVisibilityState) {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+  }
+
+  function countStatus(): { marks: (string | null)[]; keepalive: boolean[] } {
+    const out = { marks: [] as (string | null)[], keepalive: [] as boolean[] };
+    server.use(
+      http.get('/api/v1/license/status', ({ request }) => {
+        out.marks.push(request.headers.get('X-Alice-Activity'));
+        out.keepalive.push(request.keepalive);
+        return HttpResponse.json(statusWith());
+      }),
+    );
+    return out;
+  }
+
+  it('sends a pending mark with one license status request when the tab is hidden or closed', async () => {
+    server.use(...sessionHandlers(sessionFor('admin')));
+    const seen = countStatus();
+    await renderRoute('/');
+    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
+    await waitFor(() => expect(seen.marks.length).toBeGreaterThan(0));
+    const before = seen.marks.length;
+
+    activity.noteInput(keydown); // typed, then switched tabs before any request went out
+    setVisibility('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new Event('pagehide'));
+    await waitFor(() => expect(seen.marks.length).toBe(before + 1));
+    expect(seen.marks[before]).toBe('1');
+    expect(seen.keepalive[before]).toBe(true); // it may outlive a closing page
+
+    // Nothing pending: hiding the tab again sends nothing.
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new Event('pagehide'));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(seen.marks.length).toBe(before + 1);
+  });
+
+  it('sends nothing when the tab is shown again', async () => {
+    server.use(...sessionHandlers(sessionFor('operator')));
+    await renderRoute('/');
+    await screen.findByRole('heading', { name: /^Welcome/ });
+    const seen = countStatus();
+    activity.noteInput(keydown);
+    setVisibility('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(seen.marks).toEqual([]);
+  });
+
+  it('installs the listeners and the poll once under StrictMode', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const add = vi.spyOn(window, 'addEventListener');
+    const remove = vi.spyOn(window, 'removeEventListener');
+    const net = (type: string) =>
+      add.mock.calls.filter(([t, fn]) => t === type && fn === activity.noteInput).length -
+      remove.mock.calls.filter(([t, fn]) => t === type && fn === activity.noteInput).length;
+    server.use(...sessionHandlers(sessionFor('admin')));
+    const seen = countStatus();
+    await renderRoute('/', { strict: true });
+    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
+    for (const type of ['pointerdown', 'click', 'keydown', 'wheel', 'touchstart']) expect(net(type), type).toBe(1);
+    await vi.waitFor(() => expect(seen.marks.length).toBe(1));
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(seen.marks.length).toBe(2));
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(seen.marks.length).toBe(3));
+    // The hidden-tab flush is not doubled either: one request for one pending mark.
+    activity.noteInput(keydown);
+    setVisibility('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() => expect(seen.marks.length).toBe(4));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(seen.marks.length).toBe(4);
+    expect(seen.marks[3]).toBe('1');
+  });
+});

@@ -33,6 +33,11 @@ export function takeActivity(): boolean {
   return p;
 }
 
+// hasActivity reports whether a mark is waiting, without consuming it.
+export function hasActivity(): boolean {
+  return pending;
+}
+
 // returnActivity puts back a mark whose request never reached Alice (the network failed, the
 // request was cancelled, or the server refused it before recording anything), so the next request
 // carries it instead.

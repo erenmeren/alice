@@ -74,6 +74,34 @@ describe('apiFetch', () => {
     expect(calls).toEqual(['ended']);
   });
 
+  it('ignores a session-ended answer to a request sent before the session was replaced (AUD-16 rotation race)', async () => {
+    const calls: string[] = [];
+    const off = onUnauthorized(() => calls.push('ended'));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    server.use(
+      http.get('/api/v1/slow-old-cookie', async () => {
+        await gate; // answered after the step-up rotated the cookie: the old cookie is refused
+        return errorResponse(401, 'ALC-AUTH-0001', 'auth.unauthenticated');
+      }),
+      http.get('/api/v1/ended', () => errorResponse(401, 'ALC-AUTH-0001', 'auth.unauthenticated')),
+    );
+    setCsrfToken('csrf-old');
+    const stale = apiFetch('/api/v1/slow-old-cookie').catch((e: unknown) => e);
+    setCsrfToken('csrf-new'); // a step-up or a password change set the new session
+    release();
+    const err = (await stale) as ApiError;
+    expect(err.reason).toBe('auth.unauthenticated');
+    expect(err.staleSession).toBe(true);
+    expect(calls).toEqual([]);
+
+    // A request sent with the new session that is refused does end it.
+    const fresh = (await apiFetch('/api/v1/ended').catch((e: unknown) => e)) as ApiError;
+    expect(fresh.staleSession).toBe(false);
+    expect(calls).toEqual(['ended']);
+    off();
+  });
+
   it('wraps a rejected fetch in NetworkError and sends extra headers', async () => {
     server.use(http.get('/api/v1/down', () => HttpResponse.error()));
     await expect(apiFetch('/api/v1/down')).rejects.toBeInstanceOf(NetworkError);

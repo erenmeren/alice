@@ -4,9 +4,12 @@ import { isApiError, NetworkError } from './client';
 const MAX_RETRIES = 2;
 const MAX_DELAY_MS = 30_000;
 
-// shouldRetry retries what the server marked retryable (503 and similar) and network
-// failures (NetworkError). 401, 403 and validation errors are never retried.
+// shouldRetry retries what the server marked retryable (503, a 429 rate limit and similar) and
+// network failures (NetworkError). 401, 403 and validation errors are never retried, except a 401
+// to a request sent before the session was replaced.
 export function shouldRetry(failureCount: number, error: unknown): boolean {
+  // A refusal of a replaced session's cookie (client.ts) is read again once with the current one.
+  if (isApiError(error) && error.staleSession) return failureCount < 1;
   const retryable = isApiError(error) ? error.retryable : error instanceof NetworkError;
   return retryable && failureCount < MAX_RETRIES;
 }

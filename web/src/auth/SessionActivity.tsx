@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { installActivityListeners } from '../api/activity';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { hasActivity, installActivityListeners } from '../api/activity';
 import { getLicenseStatus } from '../api/endpoints';
 import { LICENSE_STATUS_KEY } from '../api/queryKeys';
 import { useAuth } from './AuthProvider';
@@ -14,15 +14,35 @@ export const STATUS_POLL_MS = 60_000;
 // sends no request of its own (a form being filled in, a page being read and scrolled) still marks
 // the session as used within a minute of the input, through this poll; no separate heartbeat
 // request exists. The poll pauses while the tab is hidden (nobody can give input there) and
-// refetches when it is shown again. Signed out, nothing of it is mounted: no listeners, no poll,
-// and no query of the previous user left in the cache.
+// refetches when it is shown again. Because the poll pauses, input given just before the tab is
+// hidden or closed is sent at once: one marked license status request (kept alive past the page's
+// end) when the tab becomes hidden or the page is left, only if a mark is waiting. Signed out,
+// nothing of it is mounted: no listeners, no poll, and no query of the previous user left in the
+// cache.
 export function SessionActivity() {
   const { session } = useAuth();
   return session ? <SignedInActivity /> : null;
 }
 
 function SignedInActivity() {
+  const client = useQueryClient();
   useEffect(() => installActivityListeners(window), []);
-  useQuery({ queryKey: LICENSE_STATUS_KEY, queryFn: getLicenseStatus, refetchInterval: STATUS_POLL_MS });
+  useEffect(() => {
+    const flush = (e: Event) => {
+      if (e.type === 'visibilitychange' && document.visibilityState !== 'hidden') return;
+      if (!hasActivity()) return; // a visibilitychange and a pagehide in a row send it once
+      getLicenseStatus({ keepalive: true }).then(
+        (status) => client.setQueryData(LICENSE_STATUS_KEY, status),
+        () => undefined, // the next poll or request carries the mark again (apiFetch returns it)
+      );
+    };
+    document.addEventListener('visibilitychange', flush);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      document.removeEventListener('visibilitychange', flush);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, [client]);
+  useQuery({ queryKey: LICENSE_STATUS_KEY, queryFn: () => getLicenseStatus(), refetchInterval: STATUS_POLL_MS });
   return null;
 }

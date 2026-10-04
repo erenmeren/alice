@@ -162,7 +162,7 @@ export const verifyAudit = () => apiFetch<AuditReport>(`${v1}/audit/verify`, { m
 export const auditExportUrl = (format: 'csv' | 'json') => `${v1}/audit/export?format=${format}`;
 
 // License
-export const getLicenseStatus = () => apiFetch<LicenseStatus>(`${v1}/license/status`);
+export const getLicenseStatus = (opts: { keepalive?: boolean } = {}) => apiFetch<LicenseStatus>(`${v1}/license/status`, opts);
 
 export const getLicense = () => apiFetch<LicenseDetail>(`${v1}/license`);
 

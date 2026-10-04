@@ -237,3 +237,28 @@ describe('application shell', () => {
     expect(await screen.findByTestId('setup-banner')).toHaveTextContent('Finish setting up: add a license or start the evaluation.');
   });
 });
+
+describe('a tab that resumes during a rate limit (AUD-16)', () => {
+  it('stays signed in when its reads are refused with 429 rate.limited, and shows no alerts for them', async () => {
+    const { focusManager } = await import('@tanstack/react-query');
+    server.use(...sessionHandlers(sessionFor('admin')));
+    const { router } = await renderRoute('/');
+    await waitFor(() => expect(screen.getByTestId('server-status')).toHaveTextContent('Server version: 1.2.3'));
+    let refused = 0;
+    const limited = () => {
+      refused += 1;
+      return errorResponse(429, 'ALC-SYS-0005', 'rate.limited', { retryable: true });
+    };
+    server.use(http.get('/api/v1/version', limited), http.get('/api/v1/license/status', limited), http.get('/api/v1/auth/session', limited));
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true); // the tab comes back: every stale query reads again
+    });
+    await waitFor(() => expect(refused).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByTestId('server-status')).toHaveTextContent('The server cannot be reached right now.'));
+    expect(router.state.location.pathname).toBe('/');
+    expect(screen.getByRole('heading', { name: 'Welcome, Ayşe Yılmaz' })).toBeInTheDocument();
+    expect(screen.queryAllByRole('alert')).toHaveLength(0);
+    act(() => focusManager.setFocused(undefined));
+  });
+});

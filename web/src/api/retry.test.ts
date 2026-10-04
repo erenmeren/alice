@@ -27,6 +27,19 @@ describe('retry policy', () => {
     expect(shouldRetry(0, apiError(403, false))).toBe(false);
   });
 
+  it('reads again once after a session-ended answer to a request sent with a replaced session', () => {
+    const stale = apiError(401, false);
+    stale.staleSession = true;
+    expect(shouldRetry(0, stale)).toBe(true);
+    expect(shouldRetry(1, stale)).toBe(false);
+  });
+
+  it('retries a rate limit (429, rate.limited) after its Retry-After instead of failing at once', () => {
+    const limited = apiError(429, true, 7);
+    expect(shouldRetry(0, limited)).toBe(true);
+    expect(retryDelay(0, limited)).toBe(7000);
+  });
+
   it('honours Retry-After, caps it, and otherwise backs off exponentially', () => {
     expect(retryDelay(0, apiError(503, true, 5))).toBe(5000);
     expect(retryDelay(0, apiError(503, true, 0))).toBe(0);
