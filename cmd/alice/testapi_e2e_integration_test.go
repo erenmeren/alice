@@ -37,6 +37,8 @@ type e2eStack struct {
 	d        *pgtest.DB
 	stateDir string
 	svc      *services
+	runner   *jobs.Runner
+	sched    *jobs.Scheduler
 	h        http.Handler
 }
 
@@ -65,7 +67,7 @@ func newE2EStack(t *testing.T) *e2eStack {
 	t.Cleanup(svc.sshPool.Close)
 	sched := buildScheduler(svc, sender, newClock(), log)
 	runner := buildRunner(d.App, svc, newClock(), log)
-	return &e2eStack{t: t, d: d, stateDir: stateDir, svc: svc, h: testHandler(testDeps{
+	return &e2eStack{t: t, d: d, stateDir: stateDir, svc: svc, runner: runner, sched: sched, h: testHandler(testDeps{
 		OwnerURL: d.OwnerURL, Setup: svc.setup, License: svc.license, Scheduler: sched, Sender: sender,
 		StateDir: stateDir, Log: log, ResetLimits: func() {}, Inventory: svc.inventory, Runner: runner,
 	})}
@@ -204,4 +206,38 @@ func TestE2EJobsDrainRunsDueJobs(t *testing.T) {
 	assert.Equal(t, "ssh.unreachable", v.LastErrorCode)
 
 	assert.JSONEq(t, `{"ran":0}`, s.post("/test/jobs/drain", ``).Body.String())
+}
+
+// The runner serve builds runs the Phase 4 jobs (a runner claims only the types it has handlers
+// for: RunOnce reports true) and the scheduler runs the deployment recovery sweep. A job for a
+// deployment that does not exist ends failed with system.not_found.
+func TestWiringRunsDeployJobs(t *testing.T) {
+	s := newE2EStack(t)
+	ctx := context.Background()
+	for _, typ := range []jobs.Type{jobs.CertificateDeployRecover, jobs.CertificateDeploy} {
+		id, _, err := s.svc.queue.Enqueue(ctx, jobs.Spec{Type: typ, Kind: jobs.KindSystem,
+			Payload: map[string]string{"deployment_id": uuid.NewString()}})
+		require.NoError(t, err, typ.Name)
+		ran, err := s.runner.RunOnce(ctx)
+		require.NoError(t, err, typ.Name)
+		require.True(t, ran, "the built runner claims %s", typ.Name)
+		v, err := s.svc.queue.Get(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, jobs.StatusFailed, v.Status, typ.Name)
+		assert.Equal(t, "system.not_found", v.LastErrorCode, typ.Name)
+	}
+	require.NoError(t, s.sched.RunNow(ctx, jobs.DeploymentRecoverySweep.Name), "the sweep is a task of the built scheduler")
+	require.NoError(t, checkWiring(s.svc.registry, s.runner, s.sched))
+}
+
+// POST /test/scheduler/run runs one periodic task at once: the deployment recovery sweep (and any
+// other scheduled task) is drivable from Playwright without waiting for its minute.
+func TestE2ESchedulerRunEndpoint(t *testing.T) {
+	s := newE2EStack(t)
+	rec := s.post("/test/scheduler/run", `{"task":"deployment.recovery_sweep"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"task":"deployment.recovery_sweep"}`, rec.Body.String())
+	assert.Equal(t, http.StatusNotFound, s.post("/test/scheduler/run", `{"task":"nope"}`).Code)
+	assert.Equal(t, http.StatusBadRequest, s.post("/test/scheduler/run", `{}`).Code)
+	assert.Equal(t, http.StatusBadRequest, s.post("/test/scheduler/run", `{"task":"deployment.recovery_sweep","x":1}`).Code)
 }

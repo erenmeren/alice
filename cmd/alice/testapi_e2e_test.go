@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,8 +17,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/jobs"
 	"alice/internal/license"
 	"alice/internal/notify"
+	"alice/internal/platform/clock"
 )
 
 func clockNow(t *testing.T, h http.Handler) time.Time {
@@ -211,4 +214,59 @@ func TestDamageLicenseFileChangesOnlyTheCustomer(t *testing.T) {
 // (POST /test/jobs/drain) and the journeys see every state deterministically.
 func TestE2EBuildStartsNoJobWorkers(t *testing.T) {
 	assert.False(t, startJobWorkers)
+}
+
+type countingGate struct {
+	locked bool
+	calls  int
+}
+
+func (g *countingGate) Allow(license.Class) error {
+	g.calls++
+	if g.locked {
+		return license.ErrLocked
+	}
+	return nil
+}
+
+// POST /test/scheduler/run runs exactly the named periodic task once, through the license gate.
+func TestE2ESchedulerRunRunsTheNamedTask(t *testing.T) {
+	runs := 0
+	gate := &countingGate{}
+	sched := jobs.NewScheduler(clock.Real{}, gate, slog.New(slog.DiscardHandler),
+		jobs.Task{Type: jobs.DeploymentRecoverySweep, Every: time.Minute, Run: func(context.Context) error { runs++; return nil }},
+		jobs.Task{Type: jobs.NotifySend, Every: time.Minute, Run: func(context.Context) error { return errors.New("smtp down") }})
+	h := testHandler(testDeps{Scheduler: sched, Log: slog.New(slog.DiscardHandler)})
+
+	rec := postTest(t, h, "/test/scheduler/run", `{"task":"deployment.recovery_sweep"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"task":"deployment.recovery_sweep"}`, rec.Body.String())
+	assert.Equal(t, 1, runs)
+	assert.Equal(t, 1, gate.calls, "the run passed the license gate")
+
+	for body, want := range map[string]int{
+		`{"task":"license.evaluate"}`: http.StatusNotFound, // a job type, but not a task of this scheduler
+		`{"task":"no.such.task"}`:     http.StatusNotFound,
+		`{}`:                          http.StatusBadRequest,
+		`{"task":"x","extra":true}`:   http.StatusBadRequest,
+		`{"task":"notify.send"}`:      http.StatusInternalServerError,
+	} {
+		rec := postTest(t, h, "/test/scheduler/run", body)
+		assert.Equal(t, want, rec.Code, body)
+		assert.Contains(t, rec.Body.String(), `"error"`, body)
+	}
+	gate.locked = true
+	assert.Equal(t, http.StatusConflict, postTest(t, h, "/test/scheduler/run", `{"task":"deployment.recovery_sweep"}`).Code)
+	assert.Equal(t, 1, runs, "nothing ran while paused")
+
+	assert.Equal(t, http.StatusConflict, postTest(t, testHandler(testDeps{}), "/test/scheduler/run", `{"task":"deployment.recovery_sweep"}`).Code,
+		"no scheduler")
+}
+
+// A drain claims jobs only during its claim window and lets the last job run until drainBudget,
+// which stays below the server's WriteTimeout.
+func TestE2EDrainBudgets(t *testing.T) {
+	assert.Less(t, drainClaimWindow, drainBudget)
+	assert.Less(t, drainBudget, 60*time.Second, "a drain answers before the server's WriteTimeout")
+	assert.GreaterOrEqual(t, drainBudget-drainClaimWindow, 30*time.Second, "a deployment claimed last can still verify and record")
 }

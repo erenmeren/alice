@@ -285,26 +285,35 @@ func testHandler(d testDeps) http.Handler {
 			writeTestJSON(w, http.StatusConflict, map[string]string{"error": "no job runner"})
 			return
 		}
-		// The deadline stays below the server's 60 s WriteTimeout, so the answer always arrives.
-		ctx, cancel := context.WithTimeout(r.Context(), drainBudget)
-		defer cancel()
-		ran := 0
-		for ran < maxDrain && ctx.Err() == nil {
-			ok, err := d.Runner.RunOnce(ctx)
-			if ctx.Err() != nil {
-				break // the job that was cut off is retried like any interrupted job
-			}
-			if err != nil {
-				d.Log.Error("test job drain failed", "error_type", fmt.Sprintf("%T", err))
-				writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "drain failed"})
-				return
-			}
-			if !ok {
-				break
-			}
-			ran++
+		ran, err := drainJobs(r.Context(), d.Runner)
+		if err != nil {
+			d.Log.Error("test job drain failed", "error_type", fmt.Sprintf("%T", err))
+			writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "drain failed"})
+			return
 		}
 		writeTestJSON(w, http.StatusOK, map[string]int{"ran": ran})
+	})
+	mux.HandleFunc("POST /test/scheduler/run", func(w http.ResponseWriter, r *http.Request) {
+		if d.Scheduler == nil {
+			writeTestJSON(w, http.StatusConflict, map[string]string{"error": "no scheduler"})
+			return
+		}
+		var body struct {
+			Task string `json:"task"`
+		}
+		if !decodeTest(w, r, &body) {
+			return
+		}
+		if body.Task == "" {
+			writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "task is required"})
+			return
+		}
+		status, msg := runScheduledTask(r.Context(), d, body.Task)
+		if status != http.StatusOK {
+			writeTestJSON(w, status, map[string]string{"error": msg})
+			return
+		}
+		writeTestJSON(w, http.StatusOK, map[string]string{"task": body.Task})
 	})
 	mux.HandleFunc("/test/", func(w http.ResponseWriter, _ *http.Request) {
 		writeTestJSON(w, http.StatusNotFound, map[string]string{"error": "unknown test endpoint"})
@@ -349,13 +358,70 @@ func writeTestJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// maxDrain and drainBudget bound one POST /test/jobs/drain: a handler that enqueues follow-up
-// jobs (a connection test enqueues discovery) must not loop forever, and the answer must come
-// before the server's 60 s WriteTimeout. A test that needs more calls drain again.
+// maxDrain, drainClaimWindow and drainBudget bound one POST /test/jobs/drain: a handler that
+// enqueues follow-up jobs (a connection test enqueues discovery) must not loop forever, and the
+// answer must come before the server's 60 s WriteTimeout. A drain claims jobs only during the
+// claim window and lets the job it claimed last run until drainBudget, so a certificate deployment
+// claimed late in a drain still gets at least drainBudget - drainClaimWindow to finish its
+// verification and record its outcome. A test that needs more calls drain again.
 const (
-	maxDrain    = 20
-	drainBudget = 30 * time.Second
+	maxDrain         = 20
+	drainClaimWindow = 20 * time.Second
+	drainBudget      = 50 * time.Second
 )
+
+// drainJobs runs due jobs one after the other (the e2e build has no workers) and reports how many
+// ran. A job cut off at drainBudget is retried like any interrupted job (a deployment: recovered).
+func drainJobs(ctx context.Context, runner *jobs.Runner) (int, error) {
+	claimCtx, stopClaiming := context.WithTimeout(ctx, drainClaimWindow)
+	defer stopClaiming()
+	jobCtx, cancel := context.WithTimeout(ctx, drainBudget)
+	defer cancel()
+	ran := 0
+	for ran < maxDrain && claimCtx.Err() == nil {
+		ok, err := runner.RunOnce(jobCtx)
+		if jobCtx.Err() != nil {
+			break
+		}
+		if err != nil {
+			return ran, err
+		}
+		if !ok {
+			break
+		}
+		ran++
+	}
+	return ran, nil
+}
+
+// runScheduledTask runs one periodic task of serve at once (the e2e build's scheduler still ticks
+// on the wall clock; a test that needs the deployment recovery sweep now calls it here after
+// moving the demo clock). It answers the HTTP status and an error text.
+func runScheduledTask(ctx context.Context, d testDeps, task string) (int, string) {
+	if !scheduled(d.Scheduler, task) {
+		return http.StatusNotFound, "no scheduled task " + task
+	}
+	err := d.Scheduler.RunNow(ctx, task)
+	switch {
+	case err == nil:
+		return http.StatusOK, ""
+	case errors.Is(err, license.ErrLocked):
+		return http.StatusConflict, "the task is paused while the license is expired"
+	default:
+		d.Log.Error("test scheduler run failed", "job_type", task, "error_type", fmt.Sprintf("%T", err))
+		return http.StatusInternalServerError, "the task failed"
+	}
+}
+
+// scheduled reports whether name is a task of the scheduler.
+func scheduled(s *jobs.Scheduler, name string) bool {
+	for _, t := range jobs.Types() {
+		if t.Name == name {
+			return s.Schedules(t)
+		}
+	}
+	return false
+}
 
 var (
 	errNoLicenseFile = errors.New("no stored license file")
