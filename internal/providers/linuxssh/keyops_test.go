@@ -95,11 +95,10 @@ func TestRemoveRefusesTheLastKeyOfTheConnectionAccount(t *testing.T) {
 	assert.Empty(t, e.emu.Writes())
 }
 
-// Re-review item 1: the last-key guard covers every uid-0 account a listing of the session showed
-// (toor), not only the one named root, without running another command; a normal account's last
-// key needs no confirmation. The real helper lists no uid-0 account other than root today (its
-// toScan rule); the emulator lists every account it is given, so the test can show the guard
-// would hold if that rule widened.
+// Re-review item 1: the last-key guard covers every uid-0 account (toor), not only the one named
+// root, without running another command: it decides from the uid in the authkeys-read answer
+// (protocol 6, I1); a normal account's last key needs no confirmation. The helper scans every uid-0
+// account with a login shell and an existing home (toScan).
 func TestRemoveLastKeyOfAnotherUID0AccountNeedsConfirmation(t *testing.T) {
 	e := newProvEnv(t)
 	e.emu.AddUser("toor", 0, "/home/toor")

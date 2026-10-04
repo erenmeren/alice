@@ -327,13 +327,13 @@ describe('TargetDetailPage', () => {
     expect(await screen.findByText(commonEn.errors.ssh.unreachable.title)).toBeInTheDocument();
   });
 
-  it('says that the helper on the server is outdated (protocol 5) and what to do, with the code', async () => {
+  it('says that the helper on the server is outdated (protocol 6 required) and what to do, with the code', async () => {
     onServer('operator');
     server.use(
       http.post('/api/v1/targets/:id/actions/test', () => HttpResponse.json({ job_id: 'job-t', status_url: '/api/v1/jobs/job-t' }, { status: 202 })),
       http.get('/api/v1/jobs/:id', () =>
         HttpResponse.json(
-          jobFixture({ id: 'job-t', status: 'failed', error: { code: 'ALC-SSH-0005', reason: 'ssh.helper_outdated', params: { helper_protocol: '4', required_protocol: '5' } } }),
+          jobFixture({ id: 'job-t', status: 'failed', error: { code: 'ALC-SSH-0005', reason: 'ssh.helper_outdated', params: { helper_protocol: '5', required_protocol: '6' } } }),
         ),
       ),
     );

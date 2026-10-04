@@ -109,16 +109,22 @@ func TestDiscoverBoundsUnlistedAccounts(t *testing.T) {
 	res, err := s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
 	require.NoError(t, err)
 	assert.False(t, res.AccountsComplete)
-	n := 0
+	n, unnamed := 0, 0
 	for _, w := range res.Warnings {
-		if w.Code == helperproto.WarnAccountNameUnsupported || w.Code == helperproto.WarnAccountHomeUnsupported {
-			n++
-			uid, err := strconv.Atoi(w.Params["uid"])
-			require.NoError(t, err)
-			assert.GreaterOrEqual(t, uid, 2000, "the negative uid and the unknown reason are dropped")
+		if w.Code != helperproto.WarnAccountNameUnsupported && w.Code != helperproto.WarnAccountHomeUnsupported {
+			continue
 		}
+		if len(w.Params) == 0 {
+			unnamed++ // M6: the negative uid and the unknown reason are not shown, but not silent either
+			continue
+		}
+		n++
+		uid, err := strconv.Atoi(w.Params["uid"])
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, uid, 2000)
 	}
-	assert.Equal(t, helperproto.MaxUnlistedAccounts-2, n, "the list is cut at its bound before the bad entries are dropped")
+	assert.Equal(t, helperproto.MaxUnlistedAccounts-2, n, "the list is cut at its bound first")
+	assert.Equal(t, 1, unnamed, "one warning without a uid for both entries Alice cannot show")
 
 	// An answer with no unlisted field at all (null) is read as an empty list.
 	list.Unlisted = nil
@@ -367,4 +373,112 @@ func TestDiscoverReadsOnlyWhatIsNotInline(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), reads.Load(), "four files fit the 4 MiB budget, two are read")
 	assert.False(t, res.Partial)
+}
+
+// I1: the last-root-key guard knows every uid-0 account from the server's answer at the time of
+// the change: a removal in a fresh session (a removal job's own, which never lists) of the only key
+// of a file that a capitalised uid-0 account shares with root (Toor sorts before root, so the
+// helper resolves the file to it) needs the confirmation; so does a lower-case uid-0 account.
+func TestLastKeyOfAnyUID0AccountNeedsConfirmationInAFreshSession(t *testing.T) {
+	e := newProvEnv(t)
+	e.emu.AddUser("Toor", 0, "/root")
+	e.emu.AddUser("toor", 0, "/home/toor")
+	k, fp := keyLine(t, "ed25519", "", "root@bastion")
+	e.emu.SetFile(rootFile, []byte(k+"\n"))
+	const toorFile = "/home/toor/.ssh/authorized_keys"
+	k2, fp2 := keyLine(t, "ed25519", "", "toor@x")
+	e.emu.SetFile(toorFile, []byte(k2+"\n"))
+	for _, c := range []struct{ user, file, fp string }{{"Toor", rootFile, fp}, {"toor", toorFile, fp2}} {
+		s := e.open(t)
+		_, err := s.RemoveAuthorizedKey(context.Background(), removeReq(c.user, c.file, c.fp), nil)
+		assert.Equal(t, "sshkey.last_root_key", providerCode(t, err).Code, c.user)
+		require.NoError(t, s.Close())
+	}
+	assert.Empty(t, e.emu.Writes())
+	assert.NotContains(t, strings.Join(e.srv.Commands(), "\n"), helperproto.SubAuthKeysList, "decided without a listing")
+	_, err := e.open(t).RemoveAuthorizedKey(context.Background(), removeReq("root", rootFile, fp), nil)
+	assert.Equal(t, "os_user", providerCode(t, err).Params["field"], "the helper resolves the shared file to Toor")
+}
+
+// I1: an answer without a uid (a broken helper) reads as uid 0: the guard asks rather than removes.
+func TestReadWithoutUIDIsTreatedAsUID0(t *testing.T) {
+	e := newProvEnv(t)
+	k, fp := keyLine(t, "ed25519", "", "deploy@x")
+	e.emu.SetFile(deployFile, []byte(k+"\n"))
+	emu := e.emu.Handler()
+	e.srv.SetHandler(func(cmd string, stdin []byte) linuxsshtest.Response {
+		r := emu(cmd, stdin)
+		if strings.Contains(cmd, " "+helperproto.SubAuthKeysRead+" ") {
+			r.Stdout = bytes.Replace(r.Stdout, []byte(`,"uid":1001`), nil, 1)
+		}
+		return r
+	})
+	_, err := e.open(t).RemoveAuthorizedKey(context.Background(), removeReq("deploy", deployFile, fp), nil)
+	assert.Equal(t, "sshkey.last_root_key", providerCode(t, err).Code)
+	assert.Empty(t, e.emu.Writes())
+}
+
+// C1, M1: the NUL warning makes the list incomplete; an entry with an odd uid is shown by uid.
+func TestDiscoverNULAndOddIDs(t *testing.T) {
+	e := newProvEnv(t)
+	rewriteList(t, e, func(l *helperproto.AuthKeysListResponse) {
+		l.Warnings = append(l.Warnings, helperproto.WarnAccountsNUL) // the NUL warning alone
+		l.AccountsComplete = true
+	})
+	res, err := e.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.False(t, res.AccountsComplete, "a passwd file with a NUL is never complete, whatever the helper says")
+	assert.True(t, hasWarning(res.Warnings, helperproto.WarnAccountsNUL, ""))
+
+	e = newProvEnv(t)
+	rewriteList(t, e, func(l *helperproto.AuthKeysListResponse) {
+		l.Unlisted = append(l.Unlisted, helperproto.UnlistedAccount{UID: 4294967295, Reason: helperproto.UnlistedID})
+	})
+	res, err = e.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.False(t, res.AccountsComplete)
+	assert.Contains(t, res.Warnings, providers.Warning{Code: helperproto.WarnAccountIDUnsupported, Params: map[string]string{"uid": "4294967295"}})
+}
+
+// M6: a listed user with an invalid name and a negative uid still leaves a warning (without a uid).
+// M5: a truncated listing names the first user it left out.
+func TestDiscoverNamesWhatItCannotShow(t *testing.T) {
+	e := newProvEnv(t)
+	rewriteList(t, e, func(l *helperproto.AuthKeysListResponse) {
+		l.Users = append(l.Users, helperproto.UserFiles{User: "bad name", UID: -5, Home: "/h", AuthorizedKeysCommand: "none"})
+		uid := 4321
+		l.Truncated, l.TruncatedFromUID = true, &uid
+	})
+	res, err := e.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.False(t, res.AccountsComplete)
+	assert.Contains(t, res.Warnings, providers.Warning{Code: helperproto.WarnAccountNameUnsupported, Params: map[string]string{}})
+	assert.Contains(t, res.Warnings, providers.Warning{Code: providers.WarnListTruncated, Params: map[string]string{"uid": "4321"}})
+}
+
+// M3: the emulator keeps its answer within MaxListOutput like the helper (helperproto.FitList).
+func TestEmulatorTruncatesLikeTheHelper(t *testing.T) {
+	e := newProvEnv(t)
+	var pats strings.Builder
+	pats.WriteString("authorizedkeysfile .ssh/authorized_keys")
+	for i := 0; i < 10; i++ {
+		pats.WriteString(" /etc/ssh/k" + strconv.Itoa(i) + "/" + strings.Repeat("p", 4000) + "/%u")
+	}
+	e.emu.SetSSHD(strings.Replace(linuxsshtest.DefaultSSHD, "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2", pats.String(), 1))
+	for i := 0; i < 195; i++ {
+		e.emu.AddUser("u"+strconv.Itoa(i), 3000+i, "/home/deploy")
+	}
+	res, err := e.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.True(t, res.Partial)
+	assert.False(t, res.AccountsComplete)
+	var w providers.Warning
+	for _, x := range res.Warnings {
+		if x.Code == providers.WarnListTruncated {
+			w = x
+		}
+	}
+	uid, err := strconv.Atoi(w.Params["uid"])
+	require.NoError(t, err)
+	assert.Greater(t, uid, 3000)
 }

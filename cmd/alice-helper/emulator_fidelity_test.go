@@ -1434,3 +1434,41 @@ func TestEmulatorFidelityAuthKeysList(t *testing.T) {
 	assert.Equal(t, []any{map[string]any{"uid": 1009.0, "reason": "name"}, map[string]any{"uid": 1010.0, "reason": "home"}}, want["unlisted"])
 	assert.Equal(t, "/home/trail", want["users"].(map[string]any)["trail"].(map[string]any)["home"])
 }
+
+// S8, M3: a listing over MaxListOutput is cut the same way on both sides (helperproto.FitList):
+// the same users are left out, the first of them is named, and the account list is incomplete.
+func TestEmulatorFidelityAuthKeysListTruncated(t *testing.T) {
+	skipOddUID(t)
+	f := newFixture(t)
+	e := linuxsshtest.NewEmulator()
+	f.global = longPatterns(10)
+	e.SetSSHD(f.global)
+	var passwd strings.Builder
+	for _, l := range strings.Split(f.read("/etc/passwd"), "\n") {
+		for _, keep := range []string{"root:", "daemon:", "alice-svc:", "deploy:", "nobody:"} {
+			if strings.HasPrefix(l, keep) {
+				passwd.WriteString(l + "\n")
+			}
+		}
+	}
+	for i := 0; i < 195; i++ {
+		fmt.Fprintf(&passwd, "u%d:x:%d:%d::/home/deploy:/bin/bash\n", i, 3000+i, 3000+i)
+		e.AddUser(fmt.Sprintf("u%d", i), 3000+i, "/home/deploy")
+	}
+	f.write("/etc/passwd", passwd.String(), 0o644)
+	_, helper := f.run("authkeys-list")
+	var emu map[string]any
+	require.NoError(t, json.Unmarshal(e.Handler()("sudo -n "+helperproto.HelperPath+" authkeys-list", nil).Stdout, &emu))
+	names := func(m map[string]any) []string {
+		var out []string
+		for _, u := range asList(m["users"]) {
+			out = append(out, u["user"].(string))
+		}
+		return out
+	}
+	require.Equal(t, true, helper["truncated"])
+	for _, k := range []string{"truncated", "truncated_from_uid", "accounts_complete", "accounts", "unlisted"} {
+		assert.Equal(t, helper[k], emu[k], k)
+	}
+	assert.ElementsMatch(t, names(helper), names(emu))
+}

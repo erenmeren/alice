@@ -93,33 +93,18 @@ func (s *session) checkListedFor(ctx context.Context, req providers.AuthKeyChang
 	return refusedRequest("os_user")
 }
 
-// listAuthKeys runs authkeys-list and remembers the uid of every listed account for isUID0.
+// listAuthKeys runs authkeys-list.
 func (s *session) listAuthKeys(ctx context.Context) (helperproto.AuthKeysListResponse, error) {
-	list, err := runHelper[helperproto.AuthKeysListResponse](ctx, s.conn, CmdAuthKeysList())
-	if err != nil {
-		return list, err
-	}
-	if s.uids == nil {
-		s.uids = map[string]int{}
-	}
-	for _, u := range list.Users {
-		s.uids[u.User] = u.UID
-	}
-	return list, nil
+	return runHelper[helperproto.AuthKeysListResponse](ctx, s.conn, CmdAuthKeysList())
 }
 
-// isUID0 reports whether user is a superuser account: the name root (always, whatever is known
-// about its uid), or an account an earlier listing of this session showed with uid 0. It runs no
-// command: the helper lists no uid-0 account other than root today (toScan), so the uid only
-// matters if that rule widens. The last key of such an account needs an administrator's
+// superuser reports whether the account the helper resolved a file to is a superuser: the name
+// root, or uid 0 in the same authkeys-read answer (I1). The helper scans every uid-0 account with
+// a login shell and a home (toScan) and may resolve a file shared with root to any of them (Toor
+// sorts before root), so the guard decides from the server's answer at the time of the change,
+// never from an earlier listing. The last key of such an account needs an administrator's
 // confirmation.
-func (s *session) isUID0(user string) bool {
-	if user == "root" {
-		return true
-	}
-	uid, ok := s.uids[user]
-	return ok && uid == 0
-}
+func superuser(r fileRead) bool { return r.owner == "root" || r.uid == 0 }
 
 // transformFailed logs the refusal of the in-memory change as a failed precheck step.
 func transformFailed(log providers.StepLogger, attempt int, err error) (providers.AuthKeyResult, bool, error) {
@@ -231,19 +216,20 @@ func (s *session) RemoveAuthorizedKey(ctx context.Context, req providers.AuthKey
 
 func (s *session) removeOnce(ctx context.Context, req providers.AuthKeyChange, log providers.StepLogger, attempt int) (providers.AuthKeyResult, bool, error) {
 	step(log, "read", "started", attemptParams(attempt))
-	content, h0, owner, exists, err := s.readFileOwner(ctx, req.FilePath)
+	read, err := s.readFileOwner(ctx, req.FilePath)
 	if err != nil {
 		step(log, "read", "failed", failParams(attempt, err))
 		return providers.AuthKeyResult{}, false, err
 	}
 	step(log, "read", "ok", attemptParams(attempt))
-	if !exists {
+	if !read.exists {
 		return providers.AuthKeyResult{OldSHA256: helperproto.AbsentSHA256, NewSHA256: helperproto.AbsentSHA256}, false, nil
 	}
-	if err := checkOwner(owner, req.OSUser); err != nil {
+	if err := checkOwner(read.owner, req.OSUser); err != nil {
 		return transformFailed(log, attempt, err)
 	}
-	ak, err := ParseAuthorizedKeys(content)
+	h0 := read.sum
+	ak, err := ParseAuthorizedKeys(read.content)
 	if err != nil {
 		return transformFailed(log, attempt, providers.NewError("sshkey.not_removable", false, err,
 			map[string]string{"reason": "file_too_large"}))
@@ -263,7 +249,7 @@ func (s *session) removeOnce(ctx context.Context, req providers.AuthKeyChange, l
 			return transformFailed(log, attempt, providers.NewError("sshkey.own_key_protected", false, nil,
 				map[string]string{"reason": "last_key_of_connection_account"}))
 		}
-		if !req.AllowLastRootKey && s.isUID0(req.OSUser) {
+		if !req.AllowLastRootKey && superuser(read) {
 			return transformFailed(log, attempt, providers.NewError("sshkey.last_root_key", false, nil, nil))
 		}
 	}
@@ -294,20 +280,21 @@ func (s *session) AddAuthorizedKey(ctx context.Context, req providers.AuthKeyCha
 
 func (s *session) addOnce(ctx context.Context, req providers.AuthKeyChange, log providers.StepLogger, attempt int) (providers.AuthKeyResult, bool, error) {
 	step(log, "read", "started", attemptParams(attempt))
-	content, h0, owner, exists, err := s.readFileOwner(ctx, req.FilePath)
+	read, err := s.readFileOwner(ctx, req.FilePath)
 	if err != nil {
 		step(log, "read", "failed", failParams(attempt, err))
 		return providers.AuthKeyResult{}, false, err
 	}
 	step(log, "read", "ok", attemptParams(attempt))
-	if exists {
-		if err := checkOwner(owner, req.OSUser); err != nil {
+	if read.exists {
+		if err := checkOwner(read.owner, req.OSUser); err != nil {
 			return transformFailed(log, attempt, err)
 		}
 	} else if err := s.checkListedFor(ctx, req); err != nil {
 		return transformFailed(log, attempt, err)
 	}
-	ak, err := ParseAuthorizedKeys(content)
+	h0 := read.sum
+	ak, err := ParseAuthorizedKeys(read.content)
 	if err != nil {
 		return transformFailed(log, attempt, providers.NewError("sshkey.not_removable", false, err,
 			map[string]string{"reason": "file_too_large"}))

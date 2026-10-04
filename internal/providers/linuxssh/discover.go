@@ -118,40 +118,51 @@ func (s *session) sshd(ctx context.Context) (providers.SSHDSummary, []providers.
 // not exist (helper code NOT_FOUND; the hash is then helperproto.AbsentSHA256); the content's
 // SHA-256 is checked against the helper's.
 func (s *session) readFile(ctx context.Context, path string) ([]byte, string, bool, error) {
-	content, sum, _, exists, err := s.readFileOwner(ctx, path)
-	return content, sum, exists, err
+	r, err := s.readFileOwner(ctx, path)
+	return r.content, r.sum, r.exists, err
 }
 
-// readFileOwner is readFile that also returns the account the helper resolved the file to.
-func (s *session) readFileOwner(ctx context.Context, path string) (content []byte, sum, owner string, exists bool, err error) {
+// fileRead is one authkeys-read answer: the content and its hash, and the account (with its uid,
+// protocol 6) the helper resolved the file to. exists is false for a file that does not exist
+// (sum is then helperproto.AbsentSHA256).
+type fileRead struct {
+	content    []byte
+	sum, owner string
+	uid        int
+	exists     bool
+}
+
+// readFileOwner is readFile that also returns the account the helper resolved the file to and its
+// uid. A missing uid reads as 0: the last-root-key guard then asks for confirmation (fail-safe).
+func (s *session) readFileOwner(ctx context.Context, path string) (fileRead, error) {
 	cmd, err := CmdAuthKeysRead(path)
 	if err != nil {
-		return nil, "", "", false, providers.NewError("ssh.helper_refused", false, err,
+		return fileRead{}, providers.NewError("ssh.helper_refused", false, err,
 			map[string]string{"subcommand": helperproto.SubAuthKeysRead, "helper_code": helperproto.CodeInvalidArgument})
 	}
 	r, err := runHelper[helperproto.AuthKeysReadResponse](ctx, s.conn, cmd)
 	if isHelperCode(err, helperproto.CodeNotFound) {
-		return nil, helperproto.AbsentSHA256, "", false, nil
+		return fileRead{sum: helperproto.AbsentSHA256}, nil
 	}
 	if err != nil {
-		return nil, "", "", false, err
+		return fileRead{}, err
 	}
-	content, err = base64.StdEncoding.DecodeString(r.ContentB64)
+	content, err := base64.StdEncoding.DecodeString(r.ContentB64)
 	if err != nil {
-		return nil, "", "", false, providers.NewError("ssh.protocol_error", false, err,
+		return fileRead{}, providers.NewError("ssh.protocol_error", false, err,
 			map[string]string{"subcommand": helperproto.SubAuthKeysRead})
 	}
 	h := sha256.Sum256(content)
-	sum = hex.EncodeToString(h[:])
+	sum := hex.EncodeToString(h[:])
 	if sum != r.SHA256 {
-		return nil, "", "", false, providers.NewError("ssh.protocol_error", false, errors.New("linuxssh: content does not match its hash"),
+		return fileRead{}, providers.NewError("ssh.protocol_error", false, errors.New("linuxssh: content does not match its hash"),
 			map[string]string{"subcommand": helperproto.SubAuthKeysRead})
 	}
 	if r.Owner == "" {
-		return nil, "", "", false, providers.NewError("ssh.protocol_error", false, errors.New("linuxssh: helper answered without an owner"),
+		return fileRead{}, providers.NewError("ssh.protocol_error", false, errors.New("linuxssh: helper answered without an owner"),
 			map[string]string{"subcommand": helperproto.SubAuthKeysRead})
 	}
-	return content, sum, r.Owner, true, nil
+	return fileRead{content: content, sum: sum, owner: r.Owner, uid: r.UID, exists: true}, nil
 }
 
 // isHelperCode reports whether err is the helper refusing with code.
@@ -224,7 +235,7 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 	// The helper already says false for these; Alice does not rely on it alone. A list that
 	// misses root (or is empty) comes from a broken or hostile helper: every real /etc/passwd has root.
 	if slices.Contains(list.Warnings, helperproto.WarnTooManyUsers) || slices.Contains(list.Warnings, helperproto.WarnDirectoryUsers) ||
-		!slices.Contains(res.Accounts, "root") {
+		slices.Contains(list.Warnings, helperproto.WarnAccountsNUL) || !slices.Contains(res.Accounts, "root") {
 		res.AccountsComplete = false
 	}
 	if len(res.Accounts) > helperproto.MaxAccountNames {
@@ -242,11 +253,18 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 		}
 	}
 	users, cut, stop := list.Users, false, false
+	cutUID := -1 // the uid of the first user whose files were not read because of a bound (M5)
 	if list.Truncated {
 		// S8: the helper left users out to keep its answer within its bound.
 		cut, res.AccountsComplete = true, false
+		if list.TruncatedFromUID != nil {
+			cutUID = *list.TruncatedFromUID
+		}
 	}
 	if len(users) > maxDiscoverUsers {
+		if cutUID < 0 {
+			cutUID = users[maxDiscoverUsers].UID
+		}
 		users, cut, res.AccountsComplete = users[:maxDiscoverUsers], true, false
 	}
 	// S6: a listed name that is not an account name (only a broken or hostile helper lists one) is
@@ -256,9 +274,7 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 			return false
 		}
 		res.AccountsComplete = false
-		if u.UID >= 0 {
-			res.Warnings = append(res.Warnings, warn(helperproto.WarnAccountNameUnsupported, "uid", strconv.Itoa(u.UID)))
-		}
+		res.Warnings = appendUnlisted(res.Warnings, helperproto.WarnAccountNameUnsupported, u.UID)
 		return true
 	})
 	for _, u := range users {
@@ -280,12 +296,18 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 		}
 		for _, f := range u.Files {
 			if stop || entries >= maxDiscoverFiles || s.conn.clock.Now().Sub(start) > discoverBudget {
+				if !stop && cutUID < 0 {
+					cutUID = u.UID
+				}
 				cut, stop = true, true
 				break
 			}
 			entries++
 			err := s.discoverFile(ctx, u, f, &res)
 			if errors.Is(err, errDiscoveryCut) {
+				if cutUID < 0 {
+					cutUID = u.UID
+				}
 				cut, stop = true, true
 				break
 			}
@@ -299,7 +321,11 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 	}
 	if cut {
 		res.Partial = true
-		res.Warnings = append(res.Warnings, warn(providers.WarnListTruncated))
+		if cutUID >= 0 {
+			res.Warnings = append(res.Warnings, warn(providers.WarnListTruncated, "uid", strconv.Itoa(cutUID)))
+		} else {
+			res.Warnings = append(res.Warnings, warn(providers.WarnListTruncated))
+		}
 	}
 	return res, nil
 }
@@ -314,19 +340,34 @@ func unlistedWarnings(unlisted []helperproto.UnlistedAccount) []providers.Warnin
 	}
 	var out []providers.Warning
 	for _, u := range unlisted {
-		code := ""
+		code := helperproto.WarnAccountNameUnsupported // an unknown reason (a broken helper) reads as a name
 		switch u.Reason {
-		case helperproto.UnlistedName:
-			code = helperproto.WarnAccountNameUnsupported
 		case helperproto.UnlistedHome:
 			code = helperproto.WarnAccountHomeUnsupported
+		case helperproto.UnlistedID:
+			code = helperproto.WarnAccountIDUnsupported
 		}
-		if code == "" || u.UID < 0 {
-			continue
+		uid := u.UID
+		if u.Reason != helperproto.UnlistedName && u.Reason != helperproto.UnlistedHome && u.Reason != helperproto.UnlistedID {
+			uid = -1 // the uid of an entry Alice cannot classify is not shown
 		}
-		out = append(out, warn(code, "uid", strconv.Itoa(u.UID)))
+		out = appendUnlisted(out, code, uid)
 	}
 	return out
+}
+
+// appendUnlisted adds the warning for an entry that could not be listed: with its uid, or, when
+// the uid is negative (only a broken or hostile helper sends one), once without it (M6): the list
+// is then incomplete, and the warning says why.
+func appendUnlisted(ws []providers.Warning, code string, uid int) []providers.Warning {
+	if uid >= 0 {
+		return append(ws, warn(code, "uid", strconv.Itoa(uid)))
+	}
+	w := warn(code)
+	if slices.ContainsFunc(ws, func(x providers.Warning) bool { return x.Code == code && len(x.Params) == 0 }) {
+		return ws
+	}
+	return append(ws, w)
 }
 
 // inlineContent returns a listed file's inline content (AUD-22): the helper read it for its hash,

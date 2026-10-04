@@ -463,8 +463,8 @@ func (e *Emulator) scanLocked() emuScan {
 	users := make([]emuUser, 0, len(e.users))
 	seen := map[string]bool{}
 	for _, u := range e.users {
-		if seen[u.name] {
-			continue // the first entry of a name is the account (getpwnam)
+		if seen[u.name] || strings.HasPrefix(u.name, "+") || strings.HasPrefix(u.name, "-") {
+			continue // the first entry of a name is the account (getpwnam); NIS-compat entries are none
 		}
 		seen[u.name] = true
 		if !helperproto.ValidAccount(u.name) {
@@ -569,7 +569,7 @@ func (e *Emulator) listLocked() helperproto.AuthKeysListResponse {
 		}
 		resp.Users = append(resp.Users, uf)
 	}
-	return resp
+	return helperproto.FitList(resp) // like the helper: the answer stays within MaxListOutput (S8)
 }
 
 // findLocked returns the user scan that lists path.
@@ -606,7 +606,7 @@ func (e *Emulator) read(args []string) Response {
 	case len(c) > helperproto.MaxAuthorizedKeysSize:
 		return refuse(helperproto.ExitRefused, helperproto.CodeTooLarge)
 	default:
-		return answer(helperproto.AuthKeysReadResponse{OK: true, Path: path, SHA256: sum(c), ContentB64: base64.StdEncoding.EncodeToString(c), Owner: e.ownerLocked(path, us.user.name)})
+		return answer(helperproto.AuthKeysReadResponse{OK: true, Path: path, SHA256: sum(c), ContentB64: base64.StdEncoding.EncodeToString(c), Owner: e.ownerLocked(path, us.user.name), UID: us.user.uid})
 	}
 }
 
