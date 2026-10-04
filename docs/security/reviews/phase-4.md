@@ -271,7 +271,12 @@ No High finding is open except the documented product residual P4-01.
   changed-outside check looks at the latest finished deployment only (a rare false "changed outside").
 - **Coverage of root-only helper paths.** `make coverage` runs as a normal user; the root suites (row 2) and the
   real-Nginx matrix (row 3) exercise the helper as root.
-- The Phase 1–3 findings and limitations still open stay as recorded in their review notes.
+- The Phase 1–3 findings and limitations still open stay as recorded in their review notes, except what this phase
+  changed: keys of a deleted account are now marked missing when the server's account list is complete (accounts
+  with a `nologin` shell or without a home, and servers with directory-service accounts or more accounts than Alice
+  lists, keep the old behaviour); the last-key guard covers every uid-0 account in both the provider and inventory;
+  the SSH key list marks missing keys; certificate deployments have an automatic restore (an `authorized_keys`
+  change still stops for a person, Phase 6); P3-06 and P3-08 are closed by the narrowed `nginx` sudoers lines.
 
 ## Owner verification
 
