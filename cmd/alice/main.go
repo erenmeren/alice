@@ -292,7 +292,8 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		log.Info("job workers are not started in the e2e build; POST /test/jobs/drain runs due jobs")
 	}
 	// Summaries of coalesced denial audit rows are written once their 10-minute window ends (AUD-06).
-	go apiServer.RunDenialSummaries(ctx)
+	stopDenialSummaries, denialSummariesDone := startDenialSummaries(ctx, apiServer)
+	defer stopDenialSummaries()
 	errCh := make(chan error, 2)
 	go func() { errCh <- ignoreClosed(public.ListenAndServeTLS("", "")) }()
 	go func() { errCh <- ignoreClosed(internal.ListenAndServe()) }()
@@ -311,11 +312,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), serveShutdownBudget)
 	defer cancelShutdown()
 	stopRunner()
-	_ = public.Shutdown(shutdownCtx)
-	_ = internal.Shutdown(shutdownCtx)
-	// No request can be refused any more: write the counts of open denial windows, best effort
-	// within the same deadline (counts not written by then are lost, as on a crash; R39).
-	apiServer.FlushDenials(shutdownCtx)
+	stopServing(shutdownCtx, apiServer, []shutdowner{public, internal}, stopDenialSummaries, denialSummariesDone, log)
 	stopSched()
 	waitForScheduler(shutdownCtx, schedDone, log)
 	// Wait order (§8.8): HTTP, scheduler, workers (Run releases the leases of jobs that did not
@@ -335,6 +332,53 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	poolClosed = true
 	closeWithin("the database pool", pool.Close, dbCloseBudget, log)
 	return runErr
+}
+
+// apiLifecycle is the part of *api.Server that the start and the shutdown use.
+type apiLifecycle interface {
+	RunDenialSummaries(ctx context.Context)
+	StopScans()
+	FlushDenials(ctx context.Context)
+}
+
+// shutdowner is an HTTP server's graceful stop.
+type shutdowner interface {
+	Shutdown(ctx context.Context) error
+}
+
+// startDenialSummaries runs the API's denial-summary writer (AUD-06) until stop is called or ctx
+// ends; done is closed once it has returned.
+func startDenialSummaries(ctx context.Context, a apiLifecycle) (stop context.CancelFunc, done <-chan struct{}) {
+	jctx, cancel := context.WithCancel(ctx)
+	ch := make(chan struct{})
+	go func() {
+		defer close(ch)
+		a.RunDenialSummaries(jctx)
+	}()
+	return cancel, ch
+}
+
+// stopServing stops the HTTP side, all within ctx (serveShutdownBudget, so the budget arithmetic of
+// TestShutdownFitsTheStopGracePeriod covers every wait here), in this order:
+//  1. running audit verifications and exports end at once (StopScans), so the drain never waits
+//     up to 10 minutes for one (I3);
+//  2. the servers drain: no request can be refused any more;
+//  3. the denial-summary writer stops and is waited for, so the flush does not race its last sweep;
+//  4. the counts of every open denial window are written (ruling S3: best effort; counts not
+//     written by the deadline are lost, as on a crash).
+func stopServing(ctx context.Context, a apiLifecycle, servers []shutdowner, stopSummaries context.CancelFunc,
+	summariesDone <-chan struct{}, log *slog.Logger) {
+	a.StopScans()
+	for _, srv := range servers {
+		_ = srv.Shutdown(ctx)
+	}
+	stopSummaries()
+	select {
+	case <-summariesDone:
+	case <-ctx.Done():
+		log.Warn("the denial summary writer did not stop before the shutdown deadline")
+	}
+	a.FlushDenials(ctx)
 }
 
 // Shutdown budgets. docker-compose.yml gives Alice stop_grace_period 90s; their sum stays below

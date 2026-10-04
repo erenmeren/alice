@@ -1695,10 +1695,14 @@ components:
           type: object
           additionalProperties: { type: string }
           description: >-
-            Keys and parameters of the action, never secrets. authz.denied and request.denied_license are
-            recorded once per person (or API token), permission or license class, reason and route per 10
-            minutes; when such a window ends with refusals left out, one more entry of the same action follows
-            with suppressed_count (how many), window_start and window_end (RFC 3339), and no ip or request_id.
+            Keys and parameters of the action, never secrets. authz.denied, request.denied_license and the
+            busy refusals of audit.verified and audit.exported (result denied, reason busy) are recorded once
+            per person (sessions together; that person's API tokens together, each entry naming its token_id),
+            permission or license class, reason and route per 10 minutes; when such a window ends with
+            refusals left out, one more entry of the same action follows with suppressed_count (how many),
+            window_start and window_end (RFC 3339), distinct_ip_count and ip_samples (up to three addresses,
+            comma-separated), and where they apply distinct_object_count and distinct_token_count (a count
+            of 256 or more reads "256+"); it has no ip, request_id or object_id.
         request_id: { type: string }
         hash: { type: string, description: Hex SHA-256 of this entry in the chain }
     AuditReport:

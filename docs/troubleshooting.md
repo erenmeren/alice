@@ -381,8 +381,9 @@ the answer carries `Retry-After`.)
 
 **Likely cause.** Alice reads the whole audit log for one check (**Verify**) or export at a time, and someone
 else's check or export was still running. A large log can take minutes to read; an export may take up to
-10 minutes. Nothing was checked or exported, and nothing was recorded. The limit is per Alice process; the daily
-check and `alice audit verify` on the server do not wait for it.
+10 minutes. Nothing was checked or exported; the refusal is recorded in the audit log (the action with the
+result `denied` and the reason `busy`, once per person every 10 minutes), so an administrator can see who keeps
+asking. The limit is per Alice process; the daily check and `alice audit verify` on the server do not wait for it.
 
 **What to do.** Wait until the other check or export has finished, then try again.
 

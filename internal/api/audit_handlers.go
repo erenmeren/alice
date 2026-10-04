@@ -136,20 +136,60 @@ const chainScanTimeout = 10 * time.Minute
 const chainScanRetryAfter = "30"
 
 // scanChain runs fn in the process's one chain-scan slot. When another verification or export
-// holds it, fn does not run, ErrAuditBusy (retryable) is answered and false is returned. The slot
-// is per process; the scheduled audit.verify task and `alice audit verify` do not take it.
-func (s *server) scanChain(w http.ResponseWriter, r *http.Request, fn func()) bool {
+// holds it, fn does not run, ErrAuditBusy (retryable) is answered and the refusal is recorded once
+// per person (or token owner), route and window through the coalescer (M4): the action that was
+// refused (audit.verified or audit.exported) with result denied and reason busy, so an
+// administrator can see who keeps asking. The slot is per process; the scheduled audit.verify task
+// and `alice audit verify` do not take it.
+func (s *server) scanChain(w http.ResponseWriter, r *http.Request, refused audit.Event, rt route, fn func()) {
 	select {
 	case s.chainScan <- struct{}{}:
 	default:
+		s.auditBusy(r, refused, rt)
 		w.Header().Set("Retry-After", chainScanRetryAfter)
 		s.writeError(w, r, ErrAuditBusy)
-		return false
+		return
 	}
 	defer func() { <-s.chainScan }()
 	fn()
-	return true
 }
+
+// auditBusy records a verification or export refused because the chain-scan slot was taken.
+func (s *server) auditBusy(r *http.Request, ev audit.Event, rt route) {
+	p := principalFrom(r.Context())
+	if p.Kind != rbac.UserSession && p.Kind != rbac.APIToken {
+		return
+	}
+	ev.Details["method"], ev.Details["path"], ev.Details["reason"] = rt.method, rt.pattern, "busy"
+	ev.Actor, ev.Result = s.denialActor(r, p, ev.Details), audit.Denied
+	s.recordDenial(r, denialKey(p, string(rt.perm), "busy", rt), ev)
+}
+
+// scanContext is the context of one chain scan: the request's, for at most chainScanTimeout, and
+// ended by StopScans at shutdown (I3), so a scan never holds the shutdown for its full length.
+func (s *server) scanContext(r *http.Request) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(r.Context(), chainScanTimeout)
+	stop := context.AfterFunc(s.scanCtx, cancel)
+	return ctx, func() { stop(); cancel() }
+}
+
+// failScan answers a scan that failed before its first byte. A scan cut by StopScans is answered
+// 503 (retryable): the server is stopping.
+func (s *server) failScan(w http.ResponseWriter, r *http.Request, err error) {
+	if s.scanCtx.Err() != nil {
+		w.Header().Set("Retry-After", chainScanRetryAfter)
+		s.writeError(w, r, ErrUnavailable)
+		return
+	}
+	s.fail(w, r, err)
+}
+
+// StopScans ends every running audit verification and export of this server at once (I3). cmd/alice
+// calls it at the start of shutdown, so the HTTP drain does not wait up to chainScanTimeout for
+// them: a verification not yet answered gets 503 (retryable); an export whose file has started is
+// aborted (the client sees a failed download, never a short file that looks complete). Their slot
+// is freed. Later scans end at once the same way.
+func (s *Server) StopScans() { s.s.stopScans() }
 
 // extendWriteDeadline lets the response of a chain scan be written for up to chainScanTimeout
 // instead of the server's WriteTimeout. It is an absolute network deadline, so it uses the real
@@ -158,14 +198,20 @@ func extendWriteDeadline(w http.ResponseWriter) {
 	_ = http.NewResponseController(w).SetWriteDeadline(clock.Real{}.Now().Add(chainScanTimeout))
 }
 
+var (
+	exportRoute = route{method: http.MethodGet, pattern: "/api/v1/audit/export", perm: rbac.AuditRead}
+	verifyRoute = route{method: http.MethodPost, pattern: "/api/v1/audit/verify", perm: rbac.AuditRead}
+)
+
 func (s *server) verifyAudit(w http.ResponseWriter, r *http.Request) {
 	extendWriteDeadline(w)
-	ctx, cancel := context.WithTimeout(r.Context(), chainScanTimeout)
+	ctx, cancel := s.scanContext(r)
 	defer cancel()
-	s.scanChain(w, r, func() {
+	refused := audit.Event{Action: "audit.verified", ObjectType: "audit_log", Details: map[string]string{}}
+	s.scanChain(w, r, refused, verifyRoute, func() {
 		report, err := s.deps.Audit.Verify(ctx, principalFrom(r.Context()).Actor(s.meta(r)))
 		if err != nil {
-			s.fail(w, r, err)
+			s.failScan(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, auditReportJSON(report))
@@ -176,7 +222,8 @@ func (s *server) verifyAudit(w http.ResponseWriter, r *http.Request) {
 // (read-only: no checkpoint, no audit.verified row), the export itself is audited before any entry
 // leaves, and the verification result travels with the file (the JSON's verification object, the
 // CSV's first line, the X-Alice-Audit-Intact header). One verification or export runs at a time per
-// process, for at most chainScanTimeout (AUD-06); entries are streamed, never collected.
+// process, for at most chainScanTimeout or until StopScans (AUD-06); entries are streamed, never
+// collected.
 func (s *server) exportAudit(w http.ResponseWriter, r *http.Request) {
 	format := r.URL.Query().Get("format")
 	if format != "csv" && format != "json" {
@@ -186,9 +233,10 @@ func (s *server) exportAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	extendWriteDeadline(w)
-	ctx, cancel := context.WithTimeout(r.Context(), chainScanTimeout)
+	ctx, cancel := s.scanContext(r)
 	defer cancel()
-	s.scanChain(w, r, func() { s.exportScanned(ctx, w, r, format) })
+	refused := audit.Event{Action: "audit.exported", Details: map[string]string{"format": format}}
+	s.scanChain(w, r, refused, exportRoute, func() { s.exportScanned(ctx, w, r, format) })
 }
 
 // exportScanned is exportAudit inside the chain-scan slot. Before the first byte it answers errors
@@ -199,7 +247,7 @@ func (s *server) exportScanned(ctx context.Context, w http.ResponseWriter, r *ht
 	actor := principalFrom(r.Context()).Actor(m)
 	report, err := s.deps.Audit.VerifyReadOnly(ctx)
 	if err != nil {
-		s.fail(w, r, err)
+		s.failScan(w, r, err)
 		return
 	}
 	err = s.deps.Audit.Write(ctx, audit.Event{
@@ -207,7 +255,7 @@ func (s *server) exportScanned(ctx context.Context, w http.ResponseWriter, r *ht
 		Details: map[string]string{"format": format, "intact": strconv.FormatBool(report.Intact)},
 	})
 	if err != nil {
-		s.fail(w, r, err)
+		s.failScan(w, r, err)
 		return
 	}
 

@@ -207,6 +207,9 @@ type server struct {
 	// chainScan is the one slot for reading the whole audit chain (verification, export) in this
 	// process (AUD-06): a second scan is refused with ErrAuditBusy instead of running beside it.
 	chainScan chan struct{}
+	// scanCtx ends every chain scan when stopScans is called (shutdown, I3).
+	scanCtx   context.Context
+	stopScans context.CancelFunc
 }
 
 const (
@@ -222,6 +225,7 @@ func newServer(d Deps) *server {
 	if d.Clock == nil {
 		d.Clock = clock.Real{}
 	}
+	scanCtx, stopScans := context.WithCancel(context.Background())
 	return &server{
 		deps:    d,
 		general: ratelimit.New(d.Clock, 300, time.Minute),
@@ -236,6 +240,8 @@ func newServer(d Deps) *server {
 
 		denials:   newDenialCoalescer(d.Clock),
 		chainScan: make(chan struct{}, 1),
+		scanCtx:   scanCtx,
+		stopScans: stopScans,
 	}
 }
 

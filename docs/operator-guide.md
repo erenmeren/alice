@@ -385,13 +385,19 @@ On a broken chain the line ends with ` first_bad_seq=<n> problem=<hash_mismatch|
 CSV (RFC 4180) has no comments: tell your reader to skip lines starting with `#` (Go `csv.Reader.Comment = '#'`,
 pandas `comment="#"`), or skip the first line; a spreadsheet shows it as one cell in the first row.
 
-Repeated refusals are recorded once per 10 minutes: when the same person (or API token) is refused the same
-permission (`authz.denied`) or the same change by the license (`request.denied_license`) for the same reason on
-the same API route again within 10 minutes of the recorded refusal, no new entry is written. When those
-10 minutes end (or Alice stops), one more entry of the same action records how many were left out:
-`suppressed_count`, `window_start` and `window_end` in its details (no address or request ID: it stands for many
-requests). Counts not yet written when the Alice process dies are lost, and each Alice process counts its own
-refusals.
+Repeated refusals are recorded once per 10 minutes: when the same person is refused the same permission
+(`authz.denied`, also with the reason `not_owner` for another user's token list) or the same change by the
+license (`request.denied_license`) for the same reason on the same API route again within 10 minutes of the
+recorded refusal, no new entry is written. A person's sessions count as one; all API tokens of one person count
+as one more (each recorded entry names its token in `token_id`). A refused **Verify** or export because another
+one was running (`ALC-AUD-0001`) is recorded the same way, as `audit.verified` or `audit.exported` with the
+result `denied` and the reason `busy`. When those 10 minutes end (or Alice stops, or the next refusal after them
+arrives), one more entry of the same action records how many were left out: `suppressed_count`, `window_start`
+and `window_end` in its details, and what the left-out refusals varied in: `distinct_ip_count` with up to three
+addresses in `ip_samples`, `distinct_object_count` (for example how many user IDs were asked for) and
+`distinct_token_count` (a count of 256 or more is written as `256+`). That entry has no address, request ID or
+object ID: it stands for many requests. Counts not yet written when the Alice process dies are lost, and each
+Alice process counts its own refusals.
 
 To recompute the chain yourself, for each entry in `seq` order:
 

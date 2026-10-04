@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -82,6 +83,17 @@ func TestVerifyAudit(t *testing.T) {
 	assert.JSONEq(t, `{"intact":true,"checked":2,"head_seq":2,"head_hash":"01","first_bad_seq":null,"problem":null}`, rec.Body.String())
 }
 
+// exported returns the audit.exported events with result res.
+func exported(fa *fakeAudit, res audit.Result) []audit.Event {
+	var out []audit.Event
+	for _, e := range fa.Events() {
+		if e.Action == "audit.exported" && e.Result == res {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // exportDeps wires fakes so that Iterate fails the test if the export was not
 // audited first.
 func exportDeps(t *testing.T) (Deps, *fakeAudit) {
@@ -89,7 +101,7 @@ func exportDeps(t *testing.T) (Deps, *fakeAudit) {
 	fa := d.Audit.(*fakeAudit)
 	fa.VerifyReadOnlyFn = func(context.Context) (audit.Report, error) { return intactReport(), nil }
 	fa.IterateFn = func(_ context.Context, fn func(audit.Entry) error) error {
-		assert.Equal(t, 1, fa.Count("audit.exported"), "the export must be audited before entries are streamed")
+		assert.Len(t, exported(fa, audit.Success), 1, "the export must be audited before entries are streamed")
 		for _, e := range sampleEntries() {
 			if err := fn(e); err != nil {
 				return err
@@ -176,10 +188,78 @@ func TestChainScansRunOneAtATime(t *testing.T) {
 		assert.True(t, body.Error.Retryable)
 		assert.NotEmpty(t, rec.Header().Get("Retry-After"))
 	}
+	// M4: each busy refusal is recorded once per person, route and window (who keeps the slot busy
+	// is visible to an administrator), as a denied verification or export.
+	require.Equal(t, http.StatusServiceUnavailable, call(h, http.MethodGet, "/api/v1/audit/export?format=csv", "admin", "").Code)
+	busy := exported(fa, audit.Denied)
+	require.Len(t, busy, 1, "a repeated busy refusal is coalesced")
+	assert.Equal(t, map[string]string{"format": "csv", "method": "GET", "path": "/api/v1/audit/export", "reason": "busy"}, busy[0].Details)
+	assert.Equal(t, adminID, busy[0].Actor.ID)
+	verifies := 0
+	for _, e := range fa.Events() {
+		if e.Action == "audit.verified" && e.Result == audit.Denied && e.Details["reason"] == "busy" {
+			verifies++
+		}
+	}
+	assert.Equal(t, 1, verifies)
 	close(release)
 	assert.Equal(t, http.StatusOK, <-first)
-	assert.Equal(t, 1, fa.Count("audit.exported"), "a refused export is not recorded as an export")
+	assert.Len(t, exported(fa, audit.Success), 1, "a refused export is not recorded as an export")
 	assert.Equal(t, http.StatusOK, call(h, http.MethodPost, "/api/v1/audit/verify", "admin", "").Code, "the slot is free again")
+}
+
+// I3: StopScans ends a running verification at once and frees the slot; the answer is 503
+// (retryable), and later scans end the same way.
+func TestStopScansEndsARunningScan(t *testing.T) {
+	d := testDeps(t, nil)
+	fa := d.Audit.(*fakeAudit)
+	started := make(chan struct{})
+	fa.VerifyFn = func(ctx context.Context, _ audit.Actor) (audit.Report, error) {
+		close(started)
+		<-ctx.Done() // a scan that would otherwise run for its full 10 minutes
+		return audit.Report{}, ctx.Err()
+	}
+	srv := New(d)
+	h := srv.Handler()
+	done := make(chan *httptest.ResponseRecorder)
+	go func() { done <- call(h, http.MethodPost, "/api/v1/audit/verify", "admin", "") }()
+	<-started
+	srv.StopScans()
+	select {
+	case rec := <-done:
+		require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		assert.Equal(t, "ALC-SYS-0002", decodeErr(t, rec).Error.Code)
+		assert.NotEmpty(t, rec.Header().Get("Retry-After"))
+	case <-time.After(time.Second):
+		t.Fatal("the verification did not end within a second of StopScans")
+	}
+	select {
+	case srv.s.chainScan <- struct{}{}:
+		<-srv.s.chainScan
+	default:
+		t.Fatal("the slot was not freed")
+	}
+}
+
+// I3: an export cut by StopScans after its first byte is aborted (a failed download), and the slot
+// is freed.
+func TestStopScansAbortsAStartedExport(t *testing.T) {
+	d, fa := exportDeps(t)
+	srv := New(d)
+	fa.IterateFn = func(ctx context.Context, fn func(audit.Entry) error) error {
+		require.NoError(t, fn(sampleEntries()[0]))
+		srv.StopScans()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	assert.PanicsWithValue(t, http.ErrAbortHandler, func() {
+		call(srv.Handler(), http.MethodGet, "/api/v1/audit/export?format=csv", "admin", "")
+	})
+	select {
+	case srv.s.chainScan <- struct{}{}:
+	default:
+		t.Fatal("the slot was not freed")
+	}
 }
 
 // The export's scans and writes are bounded by its own 10-minute limit, not the request's.
