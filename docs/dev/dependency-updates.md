@@ -63,6 +63,31 @@ GitHub Action:
 Take the newest `v7.x.y` tag. If the tag is annotated, the list also shows `refs/tags/v7.x.y^{}`;
 use that peeled commit. Write `uses: actions/checkout@<sha> # v7.x.y`.
 
+## Azure SDK for Go (Phase 5)
+
+Phase 5 (Azure Key Vault) adds five direct modules, pinned by `go.mod` and `go.sum` (R40 row 1,
+SEC-101): `github.com/Azure/azure-sdk-for-go/sdk/azcore` v1.23.2, `.../sdk/azidentity` v1.14.1,
+`.../sdk/security/keyvault/azcertificates` v1.5.0, `.../azkeys` v1.5.0 and `.../azsecrets` v1.5.0
+(all MIT). Why: they are Microsoft's own clients for Entra ID sign-in and the Key Vault data plane;
+writing the protocol by hand would carry more risk than depending on them. The first user is the fake
+Azure service's round-trip test (`internal/testutil/fakekv/sdk_test.go`); the provider imports them
+from Task 6 on.
+
+Seven indirect modules come with them: `sdk/internal` v1.12.0 (MIT), `sdk/security/keyvault/internal`
+v1.2.0 (MIT), `github.com/AzureAD/microsoft-authentication-library-for-go` v1.9.0 (MIT; the plan said
+v1.8.0, v1.9.0 is what resolves), `github.com/golang-jwt/jwt/v5` v5.3.1 (MIT),
+`github.com/kylelemons/godebug` v1.1.0 (Apache-2.0), `github.com/pkg/browser` (BSD-2-Clause) and
+`golang.org/x/net` v0.58.0 (BSD-3-Clause). `pkg/browser` and the interactive credentials of `azidentity`
+are linked but never called: `TestAzureSDKSurface` (Task 6) fails on any use of a credential type other
+than the three Alice needs (client secret, client certificate, managed identity).
+
+Update procedure: `go get <module>@vX.Y.Z` for the five modules, `go mod tidy`, `go mod verify`,
+`go run ./tools/pincheck`, `make test test-integration`, then run the fake's round trip
+(`go test ./internal/testutil/fakekv -run SDK`) again. A new Key Vault api-version in the SDK needs the
+fake's version check (`fakekv.APIVersion`) and the reference answers in `test/testdata/kv-recordings`
+updated first; MSAL's changes to the assertion header or the token request need the fake's token
+endpoint checked.
+
 ## Dependabot
 
 `.github/dependabot.yml` proposes weekly updates for Actions, the Dockerfile and Compose images,

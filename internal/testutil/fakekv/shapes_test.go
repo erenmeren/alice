@@ -3,6 +3,7 @@ package fakekv_test
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -186,4 +187,39 @@ func TestReferenceFilesHoldPlaceholders(t *testing.T) {
 		}
 		walk(v)
 	}
+}
+
+// TestIdentityAndFaultAnswersMatchTheReferenceShapes covers the Entra ID, IMDS, challenge and fault answers.
+func TestIdentityAndFaultAnswersMatchTheReferenceShapes(t *testing.T) {
+	s := fakekv.Start(t, fakekv.Options{ManagedIdentity: true})
+	s.AddCertificate("web-cert", fakekv.CertOptions{CommonName: "w.example.test"})
+	c := s.TestClient()
+	same := func(file string, r fakekv.Response, status int) {
+		t.Helper()
+		assert.Equal(t, status, r.Status, file)
+		assert.Equal(t, keyPaths(readShape(t, file), nil), keyPaths(r.JSON(t), nil), file)
+	}
+	same("token_ok.json", postToken(t, c, s.TenantID(), secretForm(s, s.Secret())), 200)
+	same("token_error_7000215.json", postToken(t, c, s.TenantID(), secretForm(s, "wrong")), 401)
+	s.ExpireSecret()
+	r := postToken(t, c, s.TenantID(), secretForm(s, s.Secret()))
+	same("token_error_7000222.json", r, 401)
+	assert.Contains(t, string(r.Body), "7000222")
+	same("openid_configuration.json", c.Raw(t, http.MethodGet, "https://login.microsoftonline.com/"+s.TenantID()+"/v2.0/.well-known/openid-configuration", nil, ""), 200)
+	same("imds_token.json", c.Raw(t, http.MethodGet, imdsURL+"?api-version=2018-02-01&resource=https://vault.azure.net", http.Header{"Metadata": {"true"}}, ""), 200)
+
+	probe := c.Raw(t, http.MethodGet, s.VaultURL()+"/certificates?api-version="+fakekv.APIVersion, nil, "")
+	same("error_unauthorized.json", probe, 401)
+	want := strings.ReplaceAll(strings.TrimSpace(string(readFile(t, "challenge.txt"))), "<tenant>", s.TenantID())
+	assert.Equal(t, want, probe.Header.Get("WWW-Authenticate"))
+
+	s.FailNext("/certificates", fakekv.Fault{Status: 429, RetryAfter: "7"})
+	same("error_throttled.json", c.Get(t, "/certificates"), 429)
+}
+
+func readFile(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "test", "testdata", "kv-recordings", name))
+	require.NoError(t, err)
+	return b
 }

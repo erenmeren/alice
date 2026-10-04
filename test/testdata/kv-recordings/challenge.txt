@@ -1,0 +1,1 @@
+Bearer authorization="https://login.microsoftonline.com/<tenant>", resource="https://vault.azure.net"

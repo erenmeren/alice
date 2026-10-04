@@ -1,0 +1,9 @@
+{
+  "error": "invalid_client",
+  "error_description": "<description>",
+  "error_codes": [7000215],
+  "timestamp": "<timestamp>",
+  "trace_id": "<guid>",
+  "correlation_id": "<guid>",
+  "error_uri": "<uri>"
+}

@@ -78,6 +78,9 @@ type Request struct {
 	// Status is the status the fake answered (0 while the request is in flight or when the
 	// connection was dropped).
 	Status int
+	// HadAuth reports that the request carried an Authorization header (never its value): the proof
+	// that a bearer token did or did not travel to a host.
+	HadAuth bool
 }
 
 // Server is the fake. Create it with NewServer or Start.
@@ -103,7 +106,11 @@ type Server struct {
 	revoked    map[string]bool
 	firewall   string
 	challenge  string // "" = the standard challenge
+	latency    time.Duration
+	faults     []*scriptedFault
 	holds      []*hold
+	heldNow    int
+	expiredSec bool
 	log        []Request
 	tokenLife  time.Duration
 	testToken  string
@@ -277,7 +284,7 @@ func (s *Server) record(r *http.Request) int {
 	sort.Strings(keys)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.log = append(s.log, Request{Method: r.Method, Host: r.Host, Path: r.URL.Path, Query: keys})
+	s.log = append(s.log, Request{Method: r.Method, Host: r.Host, Path: r.URL.Path, Query: keys, HadAuth: r.Header.Get("Authorization") != ""})
 	return len(s.log) - 1
 }
 

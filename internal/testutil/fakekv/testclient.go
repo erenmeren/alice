@@ -78,6 +78,33 @@ func (c *TestClient) Do(t testing.TB, method, path, body string) Response {
 	return Response{Status: resp.StatusCode, Header: resp.Header, Body: b}
 }
 
+// Raw sends a request to any absolute URL (https for the vault and the login host, http://169.254.169.254
+// for IMDS) through the client, with exactly the given headers: no api-version, no token.
+func (c *TestClient) Raw(t testing.TB, method, target string, header http.Header, body string) Response {
+	t.Helper()
+	var rd io.Reader
+	if body != "" {
+		rd = bytes.NewReader([]byte(body))
+	}
+	req, err := http.NewRequestWithContext(context.Background(), method, target, rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range header {
+		req.Header[k] = v
+	}
+	resp, err := c.c.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, target, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading %s: %v", target, err)
+	}
+	return Response{Status: resp.StatusCode, Header: resp.Header, Body: b}
+}
+
 // Get is Do with GET.
 func (c *TestClient) Get(t testing.TB, path string) Response {
 	return c.Do(t, http.MethodGet, path, "")
@@ -92,3 +119,7 @@ func (c *TestClient) GetJSON(t testing.TB, path string) any {
 	}
 	return r.JSON(t)
 }
+
+// TestClientToken returns a valid vault bearer token the fake issued for tests (it is not the one
+// LastAccessToken reports).
+func (s *Server) TestClientToken() string { return s.testBearer() }

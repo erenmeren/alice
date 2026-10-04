@@ -1,0 +1,10 @@
+{
+  "access_token": "<access_token>",
+  "client_id": "<guid>",
+  "expires_in": "<seconds>",
+  "expires_on": "<unix-seconds>",
+  "ext_expires_in": "<seconds>",
+  "not_before": "<unix-seconds>",
+  "resource": "https://vault.azure.net",
+  "token_type": "Bearer"
+}
