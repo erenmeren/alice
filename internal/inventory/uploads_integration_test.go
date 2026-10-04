@@ -464,7 +464,7 @@ func TestPFXDecodesAreCapped(t *testing.T) {
 	release, ok = inventory.HoldPFXSlots(2)
 	require.True(t, ok, "the slot is back after a success")
 	release()
-	assert.Equal(t, []string{"invalid", "pfx_password", "pfx_password", "busy"}, rejectReasons(h))
+	assert.Equal(t, []string{"invalid", "pfx_password", "invalid", "busy"}, rejectReasons(h), "a file that is not a PFX is unreadable")
 	assert.Equal(t, 1, h.count("SELECT count(*) FROM audit_log WHERE action = 'certificate.uploaded' AND details->>'format' = 'pfx'"))
 }
 
