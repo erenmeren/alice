@@ -44,6 +44,12 @@ else
 fi
 check "alice publishes only host port $want_port" \
   "$(docker port "$alice" | sed 's/.*://' | sort -u | tr '\n' ' ')" "$want_port "
+if [[ " ${ALICE_COMPOSE_FILES:-} " == *" docker-compose.e2e.yml "* ]]; then
+  # The e2e build answers the unauthenticated /test/* endpoints: its port is bound to loopback only
+  # (AUD-07), so every published binding must be 127.0.0.1 (no 0.0.0.0, no [::]).
+  check "alice (e2e) publishes only on 127.0.0.1" \
+    "$(docker port "$alice" | sed 's/.* -> //; s/:[0-9]*$//' | sort -u | tr '\n' ' ')" "127.0.0.1 "
+fi
 check "postgres publishes no ports" "$(docker port "$pg" | wc -l | tr -d ' ')" "0"
 check "backend network is internal" "$(docker network inspect -f '{{.Internal}}' "${project}_backend")" "true"
 # The e2e overlay adds the SSH test target: it must publish nothing and sit only on the internal network.

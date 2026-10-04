@@ -6,9 +6,11 @@ services:
   alice:
     image: alice:e2e
     # Its own host port (ALICE_E2E_PORT, default 9443), never ALICE_PORT: the e2e stack runs beside the
-    # make up stack. !override replaces the base file's port list instead of adding to it.
+    # make up stack. !override replaces the base file's port list instead of adding to it. Loopback
+    # only: this build answers the unauthenticated /test/* endpoints (reset, clock, licenses), which
+    # must never be reachable from the network (AUD-07).
     ports: !override
-      - "${ALICE_E2E_PORT:-9443}:8443"
+      - "127.0.0.1:${ALICE_E2E_PORT:-9443}:8443"
     build:
       args:
         GO_TAGS: e2e testlicense

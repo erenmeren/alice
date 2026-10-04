@@ -56,6 +56,9 @@ func TestE2ETargetIsTestOnlyAndUnpublished(t *testing.T) {
 		names = append(names, name)
 	}
 	assert.ElementsMatch(t, []string{"alice", "sshtarget"}, names, "the overlay adds only the SSH target (which also runs Nginx)")
+	// The e2e build answers the unauthenticated /test/* endpoints: it is published on loopback only (AUD-07).
+	assert.Equal(t, []any{"127.0.0.1:${ALICE_E2E_PORT:-9443}:8443"}, overlay.Services["alice"].Ports,
+		"the e2e Alice is published on 127.0.0.1 only")
 	target, ok := overlay.Services["sshtarget"]
 	require.True(t, ok)
 	assert.Empty(t, target.Ports, "the SSH target publishes no port on the host")
