@@ -117,7 +117,24 @@ func recordVersion(ctx context.Context, q db.Querier, k *Keyring, now time.Time)
 	return nil
 }
 
+// syncDir makes a new directory entry durable; tests replace it (AUD-20).
+var syncDir = syncDirectory
+
+func syncDirectory(dir string) error {
+	d, err := os.Open(dir) //nolint:gosec // G304: the keys directory from configuration, or its parent
+	if err != nil {
+		return err
+	}
+	if err := d.Sync(); err != nil {
+		_ = d.Close()
+		return err
+	}
+	return d.Close()
+}
+
 func createKeyFile(dir, path string) error {
+	_, statErr := os.Stat(dir)
+	dirCreated := errors.Is(statErr, fs.ErrNotExist)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create keys directory %s: %w", dir, err)
 	}
@@ -146,7 +163,23 @@ func createKeyFile(dir, path string) error {
 		_ = os.Remove(path)
 		return fmt.Errorf("sync master key file %s: %w", path, err)
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close master key file %s: %w", path, err)
+	}
+	// AUD-20: the file's own sync does not make its directory entry durable. Without this a power loss
+	// right after the first start can lose the file while rows encrypted under it exist. An unsynced
+	// file is removed, so a retry creates and syncs it again.
+	if err := syncDir(dir); err != nil {
+		_ = os.Remove(path)
+		return fmt.Errorf("sync keys directory %s: %w", dir, err)
+	}
+	if dirCreated {
+		if err := syncDir(filepath.Dir(dir)); err != nil {
+			_ = os.Remove(path)
+			return fmt.Errorf("sync parent of keys directory %s: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 // checkKeyFileInfo enforces C10: a regular file (not a symlink), owned by the
