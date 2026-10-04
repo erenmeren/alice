@@ -172,3 +172,34 @@ func TestKeyFileWithWrongOwnerIsRefused(t *testing.T) {
 	assert.Contains(t, err.Error(), "owned by")
 	assert.Equal(t, 0, versionRows(t, d))
 }
+
+// AUD-20: a key file found without a version row (an installer's file, or one a failed first start
+// left behind) is adopted only after its directory entry is durable; when the sync fails, the
+// start fails and records nothing, and the next start syncs and adopts the same file.
+func TestAdoptedKeyFileIsRecordedOnlyAfterItsDirectorySync(t *testing.T) {
+	d := pgtest.New(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, secrets.MasterKeyFile)
+	require.NoError(t, os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(testKey(6))+"\n"), 0o400))
+
+	var synced []string
+	restore := secrets.SetSyncDirForTest(func(d string) error {
+		synced = append(synced, d)
+		return syscall.EINVAL
+	})
+	_, err := secrets.LoadOrCreateMasterKey(context.Background(), d.App, dir, now)
+	restore()
+	require.ErrorIs(t, err, syscall.EINVAL)
+	assert.Contains(t, err.Error(), "sync keys directory")
+	assert.Equal(t, []string{dir}, synced)
+	assert.Equal(t, 0, versionRows(t, d), "nothing is recorded before the directory is synced")
+
+	k, err := secrets.LoadOrCreateMasterKey(context.Background(), d.App, dir, now)
+	require.NoError(t, err)
+	want, err := secrets.NewKeyring(1, testKey(6))
+	require.NoError(t, err)
+	check, err := want.KeyCheck()
+	require.NoError(t, err)
+	assert.NoError(t, k.VerifyKeyCheck(check))
+	assert.Equal(t, 1, versionRows(t, d))
+}

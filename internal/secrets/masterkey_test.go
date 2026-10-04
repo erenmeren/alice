@@ -58,3 +58,44 @@ func TestCreateKeyFileFailsWhenTheDirectorySyncFails(t *testing.T) {
 	require.NoError(t, createKeyFile(dir, path))
 	assert.Equal(t, []string{dir}, synced)
 }
+
+// A start that loses the O_EXCL race adopts the winner's file, and fails when it cannot make that
+// file's directory entry durable either.
+func TestCreateKeyFileLoserFailsWhenTheDirectorySyncFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, MasterKeyFile)
+	require.NoError(t, createKeyFile(dir, path))
+	boom := errors.New("sync failed")
+	restore := SetSyncDirForTest(func(string) error { return boom })
+	defer restore()
+	err := createKeyFile(dir, path)
+	require.ErrorIs(t, err, boom)
+	assert.Contains(t, err.Error(), "sync keys directory")
+}
+
+// When the keys directory was created by this start, its parent is synced too; a failure there
+// fails the start and names the parent, and the key file stays for the next start to adopt.
+func TestCreateKeyFileFailsWhenTheParentSyncFails(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "keys")
+	path := filepath.Join(dir, MasterKeyFile)
+	boom := errors.New("parent sync failed")
+	restore := SetSyncDirForTest(func(d string) error {
+		if d == base {
+			return boom
+		}
+		return nil
+	})
+	defer restore()
+	err := createKeyFile(dir, path)
+	require.ErrorIs(t, err, boom)
+	assert.Contains(t, err.Error(), "sync parent of keys directory")
+	_, statErr := os.Stat(path)
+	assert.NoError(t, statErr)
+}
+
+// syncDirectory itself: a directory is synced; a missing one is an error, never ignored.
+func TestSyncDirectory(t *testing.T) {
+	require.NoError(t, syncDirectory(t.TempDir()))
+	require.ErrorIs(t, syncDirectory(filepath.Join(t.TempDir(), "missing")), os.ErrNotExist)
+}
