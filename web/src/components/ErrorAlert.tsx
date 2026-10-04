@@ -20,6 +20,16 @@ export function ErrorAlert({ error }: { error: unknown }) {
     return <Alert color="red" role="alert" title={t('ui.unexpectedError')} />;
   }
 
+  // A refusal of a session that has since been renewed (a step-up or a password change rotated the
+  // cookie while this request was on its way): the person is still signed in and nothing changed.
+  if (error.staleSession) {
+    return (
+      <Alert color="yellow" role="alert" title={t('ui.staleSessionTitle')}>
+        <Text size="sm">{t('ui.staleSessionAction')}</Text>
+      </Alert>
+    );
+  }
+
   const base = error.messageKey;
   // ALC-CRT-0010 carries raw key type codes (rsa, ecdsa); the person reads display names.
   const params: Record<string, string> = { ...error.params };

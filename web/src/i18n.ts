@@ -62,10 +62,6 @@ export type LoadBundle = (lang: Lang) => Promise<Bundle>;
 
 export interface I18nOptions {
   load?: LoadBundle;
-  // hideMissingKeys renders a text missing in every language as empty instead of its key (AUD-25 d).
-  // It is on in production builds only: in development and tests the raw key stays visible, so the
-  // raw-key checks (test/i18nAssert.ts) find a missing text.
-  hideMissingKeys?: boolean;
 }
 
 async function ensureLoaded(i18n: I18n, lang: Lang, load: LoadBundle = loadBundle): Promise<void> {
@@ -76,8 +72,7 @@ async function ensureLoaded(i18n: I18n, lang: Lang, load: LoadBundle = loadBundl
 }
 
 // createEnglishI18n makes an instance with the bundled English texts only; it loads nothing.
-export async function createEnglishI18n(opts: I18nOptions = {}): Promise<I18n> {
-  const hide = opts.hideMissingKeys ?? import.meta.env.PROD;
+export async function createEnglishI18n(): Promise<I18n> {
   const instance = i18next.createInstance();
   await instance.use(initReactI18next).init({
     resources: { en: { web: webEn, common: commonEn } },
@@ -88,7 +83,6 @@ export async function createEnglishI18n(opts: I18nOptions = {}): Promise<I18n> {
     defaultNS: 'web',
     fallbackNS: 'common',
     interpolation: { escapeValue: false }, // React escapes output
-    ...(hide ? { parseMissingKeyHandler: (_key: string, defaultValue?: string) => defaultValue ?? '' } : {}),
   });
   document.documentElement.lang = 'en';
   return instance;
@@ -99,7 +93,7 @@ export async function createEnglishI18n(opts: I18nOptions = {}): Promise<I18n> {
 // missing in a language falls back to English.
 export async function createI18n(browserLanguages: readonly string[], opts: I18nOptions = {}): Promise<I18n> {
   const lng = pickLanguage(readStored(), browserLanguages);
-  const instance = await createEnglishI18n(opts);
+  const instance = await createEnglishI18n();
   if (lng !== 'en') {
     try {
       await ensureLoaded(instance, lng, opts.load);

@@ -79,14 +79,7 @@ describe('locale fallback (AUD-25 d)', () => {
     expect(i18n.t('nav.servers')).toBe('Servers');
   });
 
-  it('never renders the raw key of a text missing everywhere in a production build', async () => {
-    const i18n = await createI18n(['en-US'], { hideMissingKeys: true });
-    expect(i18n.t('nav.noSuchText')).toBe('');
-    expect(i18n.t('nav.home')).toBe('Home');
-    expect(i18n.exists('nav.noSuchText')).toBe(false);
-  });
-
-  it('keeps raw keys visible in development and tests, so the raw-key checks stay strict', async () => {
+  it('keeps a missing key visible, the same in production and in tests (the parity and raw-key checks keep it from happening)', async () => {
     const i18n = await createI18n(['en-US']);
     expect(i18n.t('nav.noSuchText')).toBe('nav.noSuchText');
   });

@@ -24,7 +24,7 @@ export interface StartOptions {
 // shown.
 export async function startApp(container: HTMLElement, opts: StartOptions = {}): Promise<() => void> {
   const make = opts.createI18n ?? createI18n;
-  const fallback = opts.createFallback ?? createEnglishI18n;
+  const fallback = opts.createFallback ?? (() => createEnglishI18n());
   const root = createRoot(container);
   let i18n: I18n;
   try {

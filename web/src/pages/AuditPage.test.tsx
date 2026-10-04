@@ -317,7 +317,7 @@ describe('AuditPage', () => {
     await renderRoute('/audit');
     const row = (await screen.findByText('Access denied')).closest('tr')!;
     // Visible without opening the details.
-    expect(within(row).getByText(/^49 more like this between .+ and .+\.$/)).toBeInTheDocument();
+    expect(within(row).getByText(/^49 more like these between .+ and .+\.$/)).toBeInTheDocument();
     await userEvent.click(within(row).getByRole('button', { name: 'Details (9)' }));
     const list = within(row).getByRole('group', { name: 'Details' });
     expect(within(list).getByText('Addresses seen')).toBeInTheDocument();
@@ -331,6 +331,21 @@ describe('AuditPage', () => {
     expectNoRawKeys();
   });
 
+  it('words a summary of one more refusal in the singular, in English and Turkish', async () => {
+    const one: AuditEntry = {
+      ...entry(1, 'authz.denied', 'denied'),
+      details: { suppressed_count: '1', window_start: '2026-09-30T07:50:00Z', window_end: '2026-09-30T08:00:00Z' },
+    };
+    signedInAs(adminSession);
+    server.use(http.get('/api/v1/audit', () => HttpResponse.json({ items: [one], next_cursor: null })));
+    const { unmount } = await renderRoute('/audit');
+    expect(await screen.findByText(/^1 more like this between .+ and .+\.$/)).toBeInTheDocument();
+    unmount();
+    signedInAs(sessionFor('auditor', 'tr'));
+    await renderRoute('/audit', { languages: ['tr-TR'] });
+    expect(await screen.findByText(/^.+ ile .+ arasında buna benzer 1 kayıt daha\.$/)).toBeInTheDocument();
+  });
+
   it('labels a refused export or verification so it never reads as a real one', async () => {
     signedInAs(sessionFor('auditor', 'tr'));
     const busyExport: AuditEntry = { ...entry(2, 'audit.exported', 'denied'), object_type: 'audit_log', details: { format: 'csv', reason: 'busy' } };
@@ -338,8 +353,8 @@ describe('AuditPage', () => {
     const realExport: AuditEntry = { ...entry(3, 'audit.exported'), details: { format: 'json' } };
     server.use(http.get('/api/v1/audit', () => HttpResponse.json({ items: [realExport, busyExport, busyVerify], next_cursor: null })));
     await renderRoute('/audit', { languages: ['tr-TR'] });
-    expect(await screen.findByText('Denetim kaydı dışa aktarması reddedildi: başka bir kontrol veya dışa aktarma sürüyordu')).toBeInTheDocument();
-    expect(screen.getByText('Denetim kaydı bütünlük kontrolü reddedildi: başka bir kontrol veya dışa aktarma sürüyordu')).toBeInTheDocument();
+    expect(await screen.findByText('Denetim kaydı dışa aktarımı reddedildi: başka bir doğrulama veya dışa aktarım sürüyordu')).toBeInTheDocument();
+    expect(screen.getByText('Denetim kaydı bütünlük doğrulaması reddedildi: başka bir doğrulama veya dışa aktarım sürüyordu')).toBeInTheDocument();
     expect(screen.getAllByText(tr.audit.actions.audit_exported)).toHaveLength(1);
   });
 

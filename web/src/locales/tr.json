@@ -90,7 +90,9 @@
       "copy": "Kodları kopyala",
       "copied": "Kopyalandı",
       "download": "Kodları indir"
-    }
+    },
+    "staleSessionTitle": "Bu işlem gönderilirken oturumunuz yenilendi.",
+    "staleSessionAction": "Hiçbir şey değiştirilmedi. Yeniden deneyin."
   },
   "login": {
     "title": "Alice'e giriş yapın",
@@ -411,8 +413,8 @@
       "deployment_recovering": "Yarım kalan dağıtım denetleniyor",
       "certificate_chain_completed": "Sertifika zinciri tamamlandı",
       "license_upload_error": "Lisans yüklemesi reddedildi",
-      "audit_exported_busy": "Denetim kaydı dışa aktarması reddedildi: başka bir kontrol veya dışa aktarma sürüyordu",
-      "audit_verified_busy": "Denetim kaydı bütünlük kontrolü reddedildi: başka bir kontrol veya dışa aktarma sürüyordu"
+      "audit_exported_busy": "Denetim kaydı dışa aktarımı reddedildi: başka bir doğrulama veya dışa aktarım sürüyordu",
+      "audit_verified_busy": "Denetim kaydı bütünlük doğrulaması reddedildi: başka bir doğrulama veya dışa aktarım sürüyordu"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -441,7 +443,7 @@
       "target_id": "Sunucu",
       "target_name": "Sunucu adı",
       "host": "Ana makine",
-      "port": "Port",
+      "port": "Bağlantı noktası",
       "fingerprint": "Parmak izi",
       "old_fingerprint": "Önceki parmak izi",
       "previous_fingerprint": "Önceki parmak izi",
@@ -449,10 +451,10 @@
       "certificate_id": "Sertifika",
       "location_id": "Sertifika konumu",
       "deployment_id": "Dağıtım",
-      "job_id": "Görev",
+      "job_id": "İş",
       "csr_id": "İmzalama isteği",
       "license_id": "Lisans kimliği",
-      "installation_id": "Kurulum Kimliği",
+      "installation_id": "Kurulum kimliği",
       "from_status": "Önceki durum",
       "to_status": "Yeni durum",
       "type": "Tür",
@@ -481,7 +483,7 @@
         "lock_due": "Lisans kilidi zamanı geldi",
         "unverified": "Lisans denetlenemedi",
         "not_owner": "Sahibi değil",
-        "busy": "Başka bir kontrol veya dışa aktarma sürüyordu"
+        "busy": "Başka bir doğrulama veya dışa aktarım sürüyordu"
       },
       "problem": {
         "seal_missing": "Kurulum kaydının koruması kaldırılmış",
@@ -493,8 +495,9 @@
         "cli": "Komut satırı"
       }
     },
-    "summary": "{{from}} ile {{to}} arasında buna benzer {{n}} kayıt daha.",
-    "exportHint": "Denetim kaydı için aynı anda yalnızca bir kontrol veya dışa aktarma çalışır. Bir indirme başarısız olursa diğeri bitene kadar bekleyip yeniden deneyin."
+    "exportHint": "Denetim kaydı için aynı anda yalnızca bir doğrulama veya dışa aktarım çalışır. Bir indirme başarısız olursa diğeri bitene kadar bekleyip yeniden deneyin.",
+    "summary_one": "{{from}} ile {{to}} arasında buna benzer {{n}} kayıt daha.",
+    "summary_other": "{{from}} ile {{to}} arasında buna benzer {{n}} kayıt daha."
   },
   "license": {
     "banner": {
@@ -513,7 +516,7 @@
       "pending": "Yeni bir lisans ({{license_id}}) şu tarihte başlıyor: {{valid_from}}. O zamana kadar mevcut lisans kullanılır.",
       "over_limit": "Kullanımdaki hedef sayısı {{used}}, lisanslı hedef sayısı {{max}}. Sınırın altına inene kadar yeni hedef eklenemez.",
       "limit_reached": "Lisanslı {{max}} hedefin tamamını kullanıyorsunuz. Daha fazla hedef için satıcınızdan lisansınızı artırmasını isteyin.",
-      "unverified": "Alice lisansını {{last_checked}} tarihinden beri denetleyemedi. Denetim başarılı olana kadar yönetilen sistemlerdeki değişiklikler duraklatıldı. Bu sırada istenen görevler “Başlamayı bekliyor” olarak görünür ve denetimden sonra kendiliğinden başlar."
+      "unverified": "Alice lisansını {{last_checked}} tarihinden beri denetleyemedi. Denetim başarılı olana kadar yönetilen sistemlerdeki değişiklikler duraklatıldı. Bu sırada istenen işler bekler ve bir sonraki başarılı denetimden sonra kendiliğinden başlar."
     },
     "title": "Lisans",
     "change": "{{from}} → {{to}}",

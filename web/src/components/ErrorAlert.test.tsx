@@ -61,6 +61,19 @@ describe('ErrorAlert', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Too many requests in a short time.');
   });
 
+  it('asks to try again, not to sign in, when a renewed session refused an older request', async () => {
+    const stale = new ApiError(401, {
+      code: 'ALC-AUTH-0001', reason: 'auth.unauthenticated', message_key: 'errors.auth.unauthenticated',
+      message: 'm', request_id: 'req-1', retryable: false,
+    });
+    stale.staleSession = true;
+    const { unmount } = await renderApp(<ErrorAlert error={stale} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Your session was renewed while this was being sent.Nothing was changed. Try again.');
+    unmount();
+    await renderApp(<ErrorAlert error={stale} />, ['tr-TR']);
+    expect(screen.getByRole('alert')).toHaveTextContent('Hiçbir şey değiştirilmedi. Yeniden deneyin.');
+  });
+
   it('falls back to the server message for an unknown key', async () => {
     await renderApp(<ErrorAlert error={apiError('brand.new_reason')} />);
     expect(screen.getByRole('alert')).toHaveTextContent('server fallback text');

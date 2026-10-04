@@ -90,7 +90,9 @@
       "copy": "Copy codes",
       "copied": "Copied",
       "download": "Download codes"
-    }
+    },
+    "staleSessionTitle": "Your session was renewed while this was being sent.",
+    "staleSessionAction": "Nothing was changed. Try again."
   },
   "login": {
     "title": "Sign in to Alice",
@@ -493,8 +495,9 @@
         "cli": "Command line"
       }
     },
-    "summary": "{{n}} more like this between {{from}} and {{to}}.",
-    "exportHint": "Only one check or export of the audit log runs at a time. If a download fails, wait until the other one has finished and try again."
+    "exportHint": "Only one check or export of the audit log runs at a time. If a download fails, wait until the other one has finished and try again.",
+    "summary_one": "{{n}} more like this between {{from}} and {{to}}.",
+    "summary_other": "{{n}} more like these between {{from}} and {{to}}."
   },
   "license": {
     "banner": {
@@ -513,7 +516,7 @@
       "pending": "A new license ({{license_id}}) starts on {{valid_from}}. The current license stays in use until then.",
       "over_limit": "You use {{used}} of {{max}} licensed targets. You cannot add more until you are within the limit.",
       "limit_reached": "You are using all {{max}} licensed targets. To add more, ask your vendor to increase your license.",
-      "unverified": "Alice could not check its license since {{last_checked}}. Changes to managed systems are paused until the check succeeds. Tasks requested meanwhile show as “Waiting to start” and start by themselves after it."
+      "unverified": "Alice could not check its license since {{last_checked}}. Changes to managed systems are paused until the check succeeds. Tasks requested meanwhile wait and start by themselves after the next successful check."
     },
     "title": "License",
     "change": "{{from}} → {{to}}",

@@ -62,6 +62,8 @@ function AuditDetails({ details }: { details: Record<string, string> }) {
   const summary =
     details.suppressed_count && details.window_start && details.window_end
       ? t('audit.summary', {
+          // count picks the plural form; n is shown as written (a count may read "256+").
+          count: /^\d+$/.test(details.suppressed_count) ? Number(details.suppressed_count) : 2,
           n: details.suppressed_count,
           from: formatDateTime(details.window_start, i18n.language),
           to: formatDateTime(details.window_end, i18n.language),

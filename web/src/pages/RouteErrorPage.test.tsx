@@ -60,7 +60,8 @@ describe('RouteErrorPage', () => {
   it('shows a translated error page with a way back instead of a blank screen, and never the error text', async () => {
     server.use(...sessionHandlers(sessionFor('admin')));
     await renderWithBrokenRoute('/boom');
-    expect(await screen.findByRole('heading', { level: 1, name: 'Something went wrong' })).toBeInTheDocument();
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Something went wrong' });
+    expect(heading).toHaveFocus();
     expect(screen.getByText(/This page could not be shown/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reload' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Go to the home page' })).toHaveAttribute('href', '/');

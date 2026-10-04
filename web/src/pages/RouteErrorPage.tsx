@@ -1,4 +1,5 @@
 import { Anchor, Button, Container, Group, Stack, Text, Title } from '@mantine/core';
+import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 // RouteErrorPage is the error element of the top-level route (AUD-25 d): an error thrown while a
@@ -9,10 +10,15 @@ import { useTranslation } from 'react-i18next';
 // reload of the same address, or the home page.
 export function RouteErrorPage() {
   const { t } = useTranslation();
+  // Focus moves to the heading, so a screen reader announces the page that replaced the screen.
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => heading.current?.focus(), []);
   return (
     <Container size="sm" mt="xl">
       <Stack>
-        <Title order={1}>{t('routeError.title')}</Title>
+        <Title order={1} ref={heading} tabIndex={-1}>
+          {t('routeError.title')}
+        </Title>
         <Text>{t('routeError.text')}</Text>
         <Group>
           <Button onClick={() => window.location.reload()}>{t('routeError.reload')}</Button>
