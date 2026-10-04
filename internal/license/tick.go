@@ -55,8 +55,18 @@ func (s *Service) tickLocked(ctx context.Context) error {
 	g := s.working()
 	var snap Snapshot
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, err := s.loadInstallation(ctx, tx, true); err != nil {
+		row, err := s.loadInstallation(ctx, tx, true)
+		if err != nil {
 			return err
+		}
+		// Every process evaluates (AUD-02): when another process (or a correction license) ended a
+		// held clock jump, this process follows the stored record instead of holding on its own.
+		// The other direction (adopting a hold this process never saw) is not possible: its
+		// high-water mark has already followed the jumped clock, and it never moves back.
+		if _, stored := decodeJump(row.ClockJump); !stored {
+			if _, _, held := g.PendingJump(); held {
+				g.AcceptJump()
+			}
 		}
 		up := s.uptime.Elapsed()
 		reading, clockEvents := g.Observe(s.clock.Now(), up)
@@ -95,7 +105,7 @@ func (s *Service) tickLocked(ctx context.Context) error {
 		return err
 	}
 	s.publish(g, snap)
-	s.staleLogged.Store(false)
+	s.evaluated()
 	return nil
 }
 

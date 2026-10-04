@@ -239,7 +239,7 @@
       "unverified": {
         "title": "The license could not be checked.",
         "cause": "Alice could not check its license for more than 3 hours, so changes to managed systems are paused.",
-        "action": "Check that the database is reachable and that no other database session holds the license row. Changes resume after the next successful check, which runs at least every hour."
+        "action": "Check that the database is reachable and that no other database session holds the license row. If the license is still valid, changes resume after the next successful check, which is retried within minutes."
       }
     },
     "target": {

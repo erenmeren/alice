@@ -23,7 +23,44 @@ var (
 	// true, so every path that refuses locked work refuses it too. It is not a lock decision:
 	// the job runner pauses queued work instead of holding or cancelling it.
 	ErrUnverified error = unverifiedError{}
+	// ErrLockDue: the gate's own clock (the last evaluation's time advanced by uptime) reached
+	// LocksAt, but no evaluation has confirmed the lock yet (AUD-02). Gated work is refused as in
+	// lock (errors.Is(ErrLockDue, ErrLocked) is true, the API answers ALC-LIC-0001), but nothing
+	// lasting is decided from it: the next evaluation, started at once, confirms or refutes it.
+	ErrLockDue error = lockDueError{}
 )
+
+// ConfirmedLock reports whether a refusal of the gate is a lock an evaluation decided, on which
+// lasting decisions may be taken (holding queued changes for a confirmation, cancelling queued
+// read-only work). ErrUnverified and ErrLockDue are refusals without such a decision: the work
+// waits and starts by itself once an evaluation allows it.
+func ConfirmedLock(err error) bool {
+	return errors.Is(err, ErrLocked) && !errors.Is(err, ErrUnverified) && !errors.Is(err, ErrLockDue)
+}
+
+// DenialReason is the audit label of a refusal of the gate: "unverified", "lock_due", "locked",
+// or "" for an error that is not a refusal of the gate.
+func DenialReason(err error) string {
+	switch {
+	case errors.Is(err, ErrUnverified):
+		return "unverified"
+	case errors.Is(err, ErrLockDue):
+		return "lock_due"
+	case errors.Is(err, ErrLocked):
+		return "locked"
+	}
+	return ""
+}
+
+// lockDueError is ErrLockDue: it matches ErrLocked, with its own message.
+type lockDueError struct{}
+
+func (lockDueError) Error() string {
+	return "license: the license reached its lock time; changes are paused until the next check confirms it"
+}
+
+// Is makes ErrLockDue match ErrLocked.
+func (lockDueError) Is(target error) bool { return target == ErrLocked }
 
 // unverifiedError is ErrUnverified: it matches ErrLocked, with its own message.
 type unverifiedError struct{}

@@ -231,10 +231,10 @@ func licenseRefusal(err error) ErrorCode {
 	return ErrLicenseLocked
 }
 
-// licenseDenialReason is the audit label of a gate refusal.
+// licenseDenialReason is the audit label of a gate refusal: locked, lock_due or unverified.
 func licenseDenialReason(err error) string {
-	if errors.Is(err, license.ErrUnverified) {
-		return "unverified"
+	if reason := license.DenialReason(err); reason != "" {
+		return reason
 	}
 	return "locked"
 }
@@ -244,8 +244,9 @@ func licenseDenialReason(err error) string {
 // one definition, so a new class cannot be gated in one place and not in the other.
 func gated(c license.Class) bool { return c == license.ClassChange || c == license.ClassReadOnly }
 
-// auditLicenseDenied records a request refused by the license gate (L-26): reason "locked", or
-// "unverified" when the license could not be checked recently (AUD-02).
+// auditLicenseDenied records a request refused by the license gate (L-26): reason "locked",
+// "lock_due" (the gate's own clock reached the lock time; no evaluation confirmed it yet) or
+// "unverified" (the license could not be checked recently) (AUD-02).
 func (s *server) auditLicenseDenied(r *http.Request, rt route, p auth.Principal, cause error) {
 	if p.Kind != rbac.UserSession && p.Kind != rbac.APIToken {
 		return

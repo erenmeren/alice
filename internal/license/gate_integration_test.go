@@ -5,9 +5,11 @@ package license_test
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -251,4 +253,181 @@ func countOf(list []string, s string) int {
 		}
 	}
 	return n
+}
+
+// runnerFor builds a job queue and a runner whose gate is svc, with a handler for SSHKeyRemove
+// (a change) that counts its runs.
+func (e *env) runnerFor(svc *license.Service, runs *atomic.Int32) (*jobs.Queue, *jobs.Runner) {
+	log := slog.New(slog.DiscardHandler)
+	al := audit.New(e.clk)
+	q := jobs.NewQueue(jobs.QueueConfig{Pool: e.db.App, Keyring: e.keyring, Audit: al, Clock: e.clk, Gate: svc})
+	r := jobs.NewRunner(jobs.RunnerConfig{Pool: e.db.App, Queue: q, Gate: svc, Audit: al, Clock: e.clk, Log: log,
+		WorkerID: "w-" + uuid.NewString(), Jitter: func() float64 { return 0 }})
+	r.Handle(jobs.SSHKeyRemove, func(context.Context, jobs.Job, jobs.StepRecorder) (map[string]any, error) {
+		runs.Add(1)
+		return nil, nil
+	})
+	return q, r
+}
+
+func (e *env) jobStatus(id uuid.UUID) string {
+	e.t.Helper()
+	var s string
+	require.NoError(e.t, e.db.Owner.QueryRow(e.ctx, "SELECT status FROM jobs WHERE id = $1", id).Scan(&s))
+	return s
+}
+
+// AUD-02 fix round (I1): a renewal uploaded in process A shortly before LocksAt; process B, whose
+// last evaluation predates it, reaches LocksAt by its own clock. B refuses the change (lock due),
+// but holds nothing: the job stays queued, no job.blocked_license row is written, B's gate starts
+// an evaluation at once, finds the renewal and the job runs.
+func TestLockDueInAnotherProcessHoldsNothing(t *testing.T) {
+	e := newEnv(t)
+	b := e.newService()
+	require.NoError(t, b.Start(e.ctx))
+	t.Cleanup(b.Close)
+	now := e.clk.Now()
+	_, err := e.upload(e.payload("LIC-A", now, now.Add(24*time.Hour), 10))
+	require.NoError(t, err)
+	locksAt := now.Add(24*time.Hour + license.GracePeriod)
+	e.tickAt(locksAt.Add(-2 * time.Hour))
+	require.NoError(t, b.Tick(e.ctx))
+	var runs atomic.Int32
+	q, r := e.runnerFor(b, &runs)
+	id, _, err := q.Enqueue(e.ctx, jobs.Spec{Type: jobs.SSHKeyRemove, Kind: jobs.KindUser})
+	require.NoError(t, err)
+
+	e.clk.Set(locksAt.Add(-30 * time.Minute))
+	_, err = e.upload(e.payload("LIC-B", e.clk.Now(), e.clk.Now().Add(365*day), 10)) // in process A
+	require.NoError(t, err)
+	e.clk.Set(locksAt.Add(10 * time.Minute))
+	ran, err := r.RunOnce(e.ctx)
+	require.NoError(t, err)
+	assert.False(t, ran)
+	assert.Equal(t, "queued", e.jobStatus(id))
+	assert.Zero(t, e.auditCount("job.blocked_license"))
+	require.Eventually(t, func() bool { return b.Allow(license.ClassChange) == nil }, 10*time.Second, 20*time.Millisecond,
+		"B's gate evaluated at once and found the renewal")
+	ran, err = r.RunOnce(e.ctx)
+	require.NoError(t, err)
+	assert.True(t, ran)
+	assert.Equal(t, int32(1), runs.Load())
+	assert.Equal(t, "succeeded", e.jobStatus(id))
+	assert.Zero(t, e.auditCount("job.blocked_license"))
+}
+
+// AUD-02 fix round (I1): in one process past LocksAt the gate's own clock refuses at once, the
+// evaluation it starts records license.locked, and only then are queued changes held: the audit
+// log shows license.locked before job.blocked_license.
+func TestLockIsRecordedBeforeQueuedChangesAreHeld(t *testing.T) {
+	e := newEnv(t)
+	t.Cleanup(e.svc.Close)
+	now := e.clk.Now()
+	_, err := e.upload(e.payload("LIC-A", now, now.Add(24*time.Hour), 10))
+	require.NoError(t, err)
+	locksAt := now.Add(24*time.Hour + license.GracePeriod)
+	e.tickAt(locksAt.Add(-time.Hour))
+	var runs atomic.Int32
+	q, r := e.runnerFor(e.svc, &runs)
+	id, _, err := q.Enqueue(e.ctx, jobs.Spec{Type: jobs.SSHKeyRemove, Kind: jobs.KindUser})
+	require.NoError(t, err)
+
+	e.clk.Set(locksAt.Add(10 * time.Minute))
+	ran, err := r.RunOnce(e.ctx)
+	require.NoError(t, err)
+	assert.False(t, ran)
+	assert.Equal(t, "queued", e.jobStatus(id), "lock due: not held yet")
+	require.Eventually(t, func() bool { return e.svc.Snapshot().Eval.Phase == license.PhaseLocked }, 10*time.Second, 20*time.Millisecond)
+	ran, err = r.RunOnce(e.ctx)
+	require.NoError(t, err)
+	assert.False(t, ran)
+	assert.Equal(t, "blocked_license", e.jobStatus(id), "a confirmed lock holds the change for a confirmation")
+	assert.Zero(t, runs.Load())
+	var lockedSeq, heldSeq int64
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT seq FROM audit_log WHERE action = 'license.locked'").Scan(&lockedSeq))
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT seq FROM audit_log WHERE action = 'job.blocked_license'").Scan(&heldSeq))
+	assert.Less(t, lockedSeq, heldSeq)
+}
+
+// AUD-02 fix round (I2): a failed evaluation is retried within minutes, so two failed evaluations
+// followed by a success never close the gate.
+func TestFailedEvaluationsAreRetriedWithinMinutes(t *testing.T) {
+	e := newEnv(t)
+	license.SetRowLockTimeout(e.svc, 200*time.Millisecond)
+	now := e.clk.Now()
+	_, err := e.upload(e.payload("LIC-A", now, now.Add(365*day), 10))
+	require.NoError(t, err)
+	results, started := make(chan error, 10), make(chan struct{}, 10)
+	log := slog.New(slog.DiscardHandler)
+	sched := jobs.NewScheduler(e.clk, e.svc, log, jobs.Task{Type: jobs.LicenseEvaluate, Every: time.Hour, Retry: time.Minute,
+		Run: func(ctx context.Context) error {
+			started <- struct{}{}
+			err := e.svc.Tick(ctx)
+			results <- err
+			return err
+		}})
+	ctx, stop := context.WithCancel(e.ctx)
+	done := make(chan struct{})
+	go func() { sched.Run(ctx); close(done) }()
+	defer func() { stop(); <-done }()
+	// next advances the clock in small steps until the scheduler starts the evaluation, then waits
+	// for its result without moving the clock; it returns the fake time that passed.
+	next := func(limit time.Duration) (time.Duration, error) {
+		t.Helper()
+		start := e.clk.Now()
+		for e.clk.Now().Sub(start) <= limit {
+			e.clk.Advance(15 * time.Second)
+			select {
+			case <-started:
+				return e.clk.Now().Sub(start), <-results
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+		t.Fatalf("no evaluation within %s", limit)
+		return 0, nil
+	}
+
+	release := e.holdLicenseRow()
+	_, err = next(time.Hour + time.Minute) // the hourly evaluation fails
+	require.Error(t, err)
+	assert.NoError(t, e.svc.Allow(license.ClassChange))
+	after, err := next(10 * time.Minute) // retried within minutes, fails again
+	require.Error(t, err)
+	assert.LessOrEqual(t, after, 2*time.Minute)
+	assert.NoError(t, e.svc.Allow(license.ClassChange))
+	release()
+	after, err = next(10 * time.Minute) // retried after about two minutes: succeeds
+	require.NoError(t, err)
+	assert.LessOrEqual(t, after, 3*time.Minute)
+	assert.NoError(t, e.svc.Allow(license.ClassChange))
+	assert.False(t, e.svc.Snapshot().Unverified)
+}
+
+// AUD-02 fix round: when another process ends a held clock jump (here a correction license
+// uploaded in A, L-61), B follows the stored record at its next evaluation instead of holding on
+// its own, and records nothing twice.
+func TestAProcessFollowsAHoldEndedElsewhere(t *testing.T) {
+	e := newEnv(t)
+	b := e.newService()
+	require.NoError(t, b.Start(e.ctx))
+	now := e.clk.Now()
+	_, err := e.upload(e.payload("LIC-A", now, now.Add(365*day), 10))
+	require.NoError(t, err)
+	require.NoError(t, b.Tick(e.ctx))
+	e.clk.JumpWall(10 * day)
+	require.NoError(t, e.svc.Tick(e.ctx))
+	require.NoError(t, b.Tick(e.ctx))
+	require.NotNil(t, b.Snapshot().Reading.Jump, "both hold the jump")
+
+	fix := e.payload("LIC-FIX", e.clk.Now(), e.clk.Now().Add(400*day), 10)
+	fix.Replaces = "LIC-A"
+	_, err = e.upload(fix) // in A: the vendor confirms the new time
+	require.NoError(t, err)
+	require.Nil(t, e.svc.Snapshot().Reading.Jump)
+	require.NoError(t, b.Tick(e.ctx))
+	assert.Nil(t, b.Snapshot().Reading.Jump, "B follows the stored record")
+	assert.Equal(t, e.svc.Snapshot().Reading.Effective.Truncate(time.Hour), b.Snapshot().Reading.Effective.Truncate(time.Hour))
+	assert.Equal(t, 1, e.auditCount("clock.forward_jump"))
+	assert.Equal(t, 1, e.auditCount("clock.jump_accepted"))
+	assert.Zero(t, e.auditCount("clock.jump_cleared"))
 }

@@ -22,6 +22,10 @@ type Task struct {
 	Type  Type
 	Every time.Duration
 	Run   func(ctx context.Context) error
+	// Retry, when positive, runs a failed run again after Retry, then after twice as long and so
+	// on up to Every, until a run succeeds (the license evaluation: AUD-02). 0 = wait for the
+	// next interval. A run the license gate refused is not a failure.
+	Retry time.Duration
 }
 
 type task struct {
@@ -109,23 +113,34 @@ func (s *Scheduler) loop(ctx context.Context, t *task) {
 }
 
 func (s *Scheduler) loopWith(ctx context.Context, t *task, ticks <-chan time.Time) {
+	var retry <-chan time.Time // nil: no retry pending
+	backoff := t.Retry
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticks:
-			if ctx.Err() != nil {
-				return
+		case <-retry:
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if s.leader != nil && t.Type != LicenseEvaluate && !s.leader.IsLeader(ctx) {
+			continue // another process schedules (P2-06)
+		}
+		select {
+		case t.sem <- struct{}{}:
+			err := s.run(ctx, t)
+			<-t.sem
+			switch {
+			case t.Retry <= 0:
+			case err == nil || errors.Is(err, license.ErrLocked) || errors.Is(err, license.ErrUnclassified):
+				retry, backoff = nil, t.Retry
+			default:
+				retry = s.clock.After(backoff)
+				backoff = min(2*backoff, t.Every)
 			}
-			if s.leader != nil && t.Type != LicenseEvaluate && !s.leader.IsLeader(ctx) {
-				continue // another process schedules (P2-06)
-			}
-			select {
-			case t.sem <- struct{}{}:
-				_ = s.run(ctx, t)
-				<-t.sem
-			default: // still running: skip this tick
-			}
+		default: // still running: skip this tick
 		}
 	}
 }

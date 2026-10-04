@@ -137,6 +137,8 @@ func (s *Service) install(ctx context.Context, raw []byte, actor audit.Actor, by
 	var res UploadResult
 	s.evalMu.Lock()
 	defer s.evalMu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, tickTimeout) // evalMu is never held without a bound
+	defer cancel()
 	g := s.working()
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := s.loadInstallation(ctx, tx, true); err != nil {

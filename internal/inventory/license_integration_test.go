@@ -19,6 +19,7 @@ import (
 	"alice/internal/license"
 	"alice/internal/platform/db"
 	"alice/internal/rbac"
+	"alice/internal/testutil/pki"
 )
 
 func addN(h *harness, a inventory.Actor, from, n int) {
@@ -274,4 +275,25 @@ func TestLicenseRefreshAfterAChangeIsDetachedButBounded(t *testing.T) {
 	require.False(t, probe.deadline.IsZero(), "the evaluation has a deadline")
 	assert.WithinDuration(t, time.Now().Add(30*time.Second), probe.deadline, 5*time.Second)
 	assert.NoError(t, probe.err)
+}
+
+// AUD-02: the denial audit rows name why the gate refused: "lock_due" while only the gate's own
+// clock reached the lock time, "unverified" while no evaluation succeeded for 3 hours (never
+// "locked" for either: no evaluation decided a lock).
+func TestLicenseDenialsNameTheGateReason(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	h.clock.Advance(license.EvaluationPeriod - time.Hour)
+	require.NoError(t, h.lic.Tick(h.ctx))
+	h.clock.Advance(2 * time.Hour) // the evaluation ended an hour ago by the gate's clock; not evaluated yet
+	_, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "web-01", Type: "linux", Host: "web-01.example.com"})
+	require.ErrorIs(t, err, license.ErrLockDue)
+	assert.Equal(t, []map[string]string{{"reason": "lock_due", "name": "web-01"}}, h.auditDetails("target.add.denied_license"))
+	h.lic.Close() // the evaluation the refusal started has ended; no more of them
+
+	h.clock.Advance(license.MaxEvaluationAge + time.Minute)
+	ca := pki.NewCA("Up", pki.ECDSA256, h.clock.Now())
+	_, _, err = h.svc.UploadCertificate(h.ctx, admin, pemUpload(ca.Issue(pki.Opts{CommonName: "www.example.test"}, h.clock.Now())))
+	require.ErrorIs(t, err, license.ErrUnverified)
+	assert.Equal(t, []string{"unverified"}, rejectReasons(h))
 }

@@ -197,8 +197,8 @@ func (s *Service) auditLicenseDenial(ctx context.Context, a Actor, name string, 
 	switch {
 	case errors.As(cause, &limit):
 		d["reason"], d["used"], d["max"] = "target_limit", strconv.Itoa(limit.Used), strconv.Itoa(limit.Max)
-	case errors.Is(cause, license.ErrLocked):
-		d["reason"] = "locked"
+	case license.DenialReason(cause) != "": // locked, lock_due or unverified (AUD-02)
+		d["reason"] = license.DenialReason(cause)
 	default:
 		return
 	}

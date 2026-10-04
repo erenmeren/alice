@@ -371,7 +371,8 @@ func TestListTargetKeysPassesMissingFlag(t *testing.T) {
 
 // Every state-changing route of the server, SSH key and job groups is refused in lock (R9, §13.4):
 // asking for a connection test or a scan is recurring read-only work (ClassReadOnly, R37 item 8),
-// everything else changes the managed inventory or servers (ClassChange).
+// everything else changes the managed inventory or servers (ClassChange). Discarding a job only
+// reduces what Alice will do and works in every license state (ClassAlways).
 func TestInfrastructureRoutesAreGated(t *testing.T) {
 	readOnly := map[string]bool{
 		"POST /api/v1/targets/{id}/actions/test":     true,
@@ -383,6 +384,10 @@ func TestInfrastructureRoutesAreGated(t *testing.T) {
 			continue
 		}
 		n++
+		if lockAvailableRoutes[rt.method+" "+rt.pattern] {
+			assert.Equal(t, license.ClassAlways, rt.lic, "%s %s", rt.method, rt.pattern)
+			continue
+		}
 		want := license.ClassChange
 		if readOnly[rt.method+" "+rt.pattern] {
 			want = license.ClassReadOnly

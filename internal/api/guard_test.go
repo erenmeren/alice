@@ -563,3 +563,20 @@ func TestRecordActivityFailureIsUnavailable(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "s3cret-pw")
 	assert.False(t, called)
 }
+
+// AUD-02 fix round: a lock due only by the gate's own clock is answered like a lock (403
+// ALC-LIC-0001) and audited with reason "lock_due".
+func TestLicenseGateLockDue(t *testing.T) {
+	d := testDeps(t, nil)
+	d.License.(*fakeLicense).set(license.ErrLockDue)
+	fa := d.Audit.(*fakeAudit)
+	rec := call(gatedHandler(d, license.ClassChange), http.MethodPost, "/api/v1/targets", "admin", `{}`)
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, "ALC-LIC-0001", decodeErr(t, rec).Error.Code)
+	for _, ev := range fa.Events() {
+		if ev.Action == "request.denied_license" {
+			assert.Equal(t, "lock_due", ev.Details["reason"])
+		}
+	}
+	assert.Equal(t, 1, fa.Count("request.denied_license"))
+}

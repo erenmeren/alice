@@ -314,8 +314,8 @@ func (s *Service) RequestDeployment(ctx context.Context, a Actor, in DeployReque
 		return nil, errs
 	}
 	if err := s.license.Allow(license.ClassChange); err != nil {
-		if errors.Is(err, license.ErrLocked) {
-			s.auditDeployDenial(ctx, a, in.CertificateID, deployDenial{reason: "locked"})
+		if reason := license.DenialReason(err); reason != "" { // locked, lock_due or unverified (AUD-02)
+			s.auditDeployDenial(ctx, a, in.CertificateID, deployDenial{reason: reason})
 		}
 		return nil, err
 	}

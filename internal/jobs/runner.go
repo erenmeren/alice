@@ -259,10 +259,11 @@ const maxCandidates = 10
 // is taken over only when no job of that target is running any more, i.e. after the reaper
 // re-queued it (§8.1). In lock it first moves queued external-change jobs to blocked_license and
 // cancels queued read-only jobs (§8.6, in a transaction of its own), then claims only
-// always-class work. While the license cannot be verified (license.ErrUnverified, AUD-02) it
-// claims only always-class work and leaves the rest queued: nothing is known about the license,
-// so nothing is held or cancelled, and the queued work starts by itself after the next
-// successful evaluation.
+// always-class work. While the license cannot be verified (license.ErrUnverified) or its lock is
+// only due by the gate's own clock (license.ErrLockDue, AUD-02) it claims only always-class work
+// and leaves the rest queued: no evaluation decided a lock, so nothing is held or cancelled, and
+// the queued work starts by itself once an evaluation allows it (or is held then, if the
+// evaluation confirms the lock).
 func (r *Runner) claim(ctx context.Context) (*claimed, error) {
 	types := r.handled()
 	if len(types) == 0 {
@@ -271,7 +272,7 @@ func (r *Runner) claim(ctx context.Context) (*claimed, error) {
 	now := r.cfg.Clock.Now().UTC()
 	classes := allClasses
 	if gate := r.cfg.Gate.Allow(license.ClassChange); errors.Is(gate, license.ErrLocked) {
-		if !errors.Is(gate, license.ErrUnverified) {
+		if license.ConfirmedLock(gate) {
 			r.sweepIfDue(ctx, now)
 		}
 		classes = []string{license.ClassAlways.String()}
@@ -508,9 +509,9 @@ func (r *Runner) revert(ctx context.Context, c *claimed, t Type) {
 	}, r.jobEvent("job.cancelled_license", audit.Denied, c.id, map[string]string{"type": c.typ}))
 }
 
-// requeue undoes a claim the gate refused because the license could not be verified (AUD-02):
-// the job is queued again as it was (the refused claim is not an attempt) and starts after the
-// next successful evaluation. Nothing is audited: no decision was made about the job.
+// requeue undoes a claim the gate refused without a confirmed lock (license.ErrUnverified or
+// license.ErrLockDue, AUD-02): the job is queued again as it was (the refused claim is not an
+// attempt) and starts once an evaluation allows it. Nothing is audited: no decision was made.
 func (r *Runner) requeue(ctx context.Context, c *claimed) {
 	r.settle(ctx, c, "license.unverified", func(tx pgx.Tx, _ time.Time) (pgconn.CommandTag, error) {
 		tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'queued', attempts = attempts - 1, locked_by = NULL,
@@ -650,10 +651,10 @@ func (r *Runner) execute(jobCtx context.Context, c *claimed) {
 	}
 	if err := r.cfg.Gate.Allow(t.Class); err != nil {
 		switch {
-		case errors.Is(err, license.ErrUnverified):
-			r.requeue(ctx, c)
-		case errors.Is(err, license.ErrLocked):
+		case license.ConfirmedLock(err):
 			r.revert(ctx, c, t)
+		case errors.Is(err, license.ErrLocked): // unverified or lock due: no lock was decided
+			r.requeue(ctx, c)
 		default:
 			r.terminate(ctx, c, "license.unclassified", "job.dead")
 		}

@@ -91,7 +91,6 @@ VALUES ($1, 'ada', 'ada@example.com', 'Ada Yılmaz', 'x', 'admin', $2, $2)`, id,
 	return e
 }
 
-// drain runs due jobs until none is left.
 // evaluate runs the license evaluation, as a running server does at least hourly in every
 // process: tests move the clock by days, and the gate refuses gated work after 3 hours without
 // an evaluation (AUD-02).
@@ -100,6 +99,7 @@ func (e *env) evaluate() {
 	require.NoError(e.t, e.lic.Tick(e.ctx))
 }
 
+// drain runs the license evaluation, then due jobs until none is left.
 func (e *env) drain() {
 	e.t.Helper()
 	e.evaluate()

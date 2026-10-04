@@ -455,6 +455,9 @@ var (
 		"/api/v1/audit", "/api/v1/backup", "/api/v1/backups", "/api/v1/settings"}
 	lockRefused = []string{"/api/v1/targets", "/api/v1/certificates", "/api/v1/locations", "/api/v1/deployments",
 		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs"}
+	// lockAvailableRoutes are routes of a refused group that work in every license state because
+	// they only reduce what Alice will do (ClassAlways).
+	lockAvailableRoutes = map[string]bool{"POST /api/v1/jobs/{id}/actions/discard": true}
 )
 
 func underAny(pattern string, prefixes []string) bool {
@@ -491,6 +494,9 @@ func lockRuleViolations(routes []route) []string {
 			out = append(out, key+": a route without a signed-in user is never refused by the license gate")
 		}
 		refused, available := underAny(rt.pattern, lockRefused), underAny(rt.pattern, lockAvailable)
+		if lockAvailableRoutes[key] {
+			refused, available = false, true
+		}
 		switch {
 		case !rt.lic.Valid():
 			out = append(out, key+": declares no license class")

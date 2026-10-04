@@ -70,7 +70,7 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | GET | `/api/v1/jobs` | `read` | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/jobs/{id}` | `read` | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/jobs/{id}/actions/confirm` | `jobs.confirm` | no | yes | no | no | no | no | no |
-| POST | `/api/v1/jobs/{id}/actions/discard` | `jobs.confirm` | no | yes | no | no | no | no | no |
+| POST | `/api/v1/jobs/{id}/actions/discard` | `jobs.confirm` | no | yes | no | no | no | no | yes |
 | GET | `/api/v1/certificates` | `read` | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/certificates/{id}` | `read` | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/certificates/upload` | `certificates.operate` | no | yes | yes | no | operate | no | no |

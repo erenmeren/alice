@@ -1,6 +1,8 @@
 package license_test
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -44,8 +46,8 @@ func TestGateDecisionTable(t *testing.T) {
 		{"active, exactly the maximum age", active, license.ClassChange, license.MaxEvaluationAge, nil, nil},
 		{"active, stale", active, license.ClassChange, license.MaxEvaluationAge + time.Nanosecond, license.ErrUnverified, nil},
 		{"active, read-only, stale", active, license.ClassReadOnly, 3*time.Hour + time.Minute, license.ErrUnverified, nil},
-		{"evaluated locked, fresh", locked, license.ClassChange, 0, license.ErrLocked, license.ErrUnverified},
-		{"evaluated locked, read-only", locked, license.ClassReadOnly, time.Minute, license.ErrLocked, license.ErrUnverified},
+		{"evaluated locked, fresh", locked, license.ClassChange, 0, license.ErrLocked, license.ErrLockDue},
+		{"evaluated locked, read-only", locked, license.ClassReadOnly, time.Minute, license.ErrLocked, license.ErrLockDue},
 		{"evaluated locked, stale", locked, license.ClassChange, 4 * time.Hour, license.ErrUnverified, nil},
 		{"grace, 3 h after the evaluation", grace, license.ClassChange, license.MaxEvaluationAge, nil, nil},
 		{"grace, LocksAt reached by uptime but stale", grace, license.ClassChange, untilLock, license.ErrUnverified, nil},
@@ -55,8 +57,8 @@ func TestGateDecisionTable(t *testing.T) {
 	require.Equal(t, license.PhaseGrace, soon.Eval.Phase)
 	rows = append(rows,
 		row{"grace, 59 minutes before LocksAt", soon, license.ClassChange, 59 * time.Minute, nil, nil},
-		row{"grace, LocksAt reached 1 h after the evaluation", soon, license.ClassChange, time.Hour, license.ErrLocked, license.ErrUnverified},
-		row{"grace, LocksAt passed, read-only", soon, license.ClassReadOnly, 2 * time.Hour, license.ErrLocked, license.ErrUnverified},
+		row{"grace, LocksAt reached 1 h after the evaluation", soon, license.ClassChange, time.Hour, license.ErrLockDue, license.ErrUnverified},
+		row{"grace, LocksAt passed, read-only", soon, license.ClassReadOnly, 2 * time.Hour, license.ErrLockDue, license.ErrUnverified},
 		row{"grace, LocksAt passed and stale", soon, license.ClassChange, 5 * time.Hour, license.ErrUnverified, nil},
 	)
 	for _, r := range rows {
@@ -69,7 +71,45 @@ func TestGateDecisionTable(t *testing.T) {
 		if r.not != nil {
 			assert.NotErrorIs(t, got, r.not, r.name)
 		}
+		if r.want != nil && r.not != nil {
+			assert.NotErrorIs(t, got, license.ErrUnverified, r.name)
+		}
+		if errors.Is(r.want, license.ErrLocked) {
+			confirmed := !errors.Is(r.want, license.ErrUnverified) && !errors.Is(r.want, license.ErrLockDue)
+			assert.Equal(t, confirmed, license.ConfirmedLock(got), "%s: only an evaluated lock is confirmed", r.name)
+		}
 	}
+}
+
+// The gate's own clock can be wrong: a pending license that starts between the last evaluation
+// and LocksAt keeps the license active, so a lock estimated from LocksAt is only "due" (refused,
+// nothing lasting decided) until an evaluation confirms or refutes it.
+func TestLockDueIsNotAConfirmedLock(t *testing.T) {
+	at := expiry.Add(7*day - time.Hour) // grace, one hour before LocksAt
+	renewal := lic(2, "LIC-B", at.Add(30*time.Minute), expiry.Add(400*day), 10)
+	snap := snapshotAt(at, append(baseline(), renewal))
+	require.Equal(t, license.PhaseGrace, snap.Eval.Phase)
+	require.NotNil(t, snap.Eval.Pending)
+	later := at.Add(time.Hour)
+	assert.Equal(t, license.PhaseActive, license.Evaluate(later, installedAt, append(baseline(), renewal)).Phase,
+		"an evaluation at that instant finds the renewal in force")
+	err := license.AllowIn(snap, license.ClassChange, time.Hour)
+	assert.ErrorIs(t, err, license.ErrLockDue)
+	assert.ErrorIs(t, err, license.ErrLocked, "refused as in lock (fail closed), answered ALC-LIC-0001")
+	assert.False(t, license.ConfirmedLock(err), "but nothing lasting is decided from it")
+}
+
+func TestDenialReasons(t *testing.T) {
+	assert.Equal(t, "unverified", license.DenialReason(license.ErrUnverified))
+	assert.Equal(t, "lock_due", license.DenialReason(fmt.Errorf("deploy: %w", license.ErrLockDue)))
+	assert.Equal(t, "locked", license.DenialReason(license.ErrLocked))
+	assert.Empty(t, license.DenialReason(license.ErrTargetLimit))
+	assert.Empty(t, license.DenialReason(nil))
+	assert.True(t, license.ConfirmedLock(fmt.Errorf("x: %w", license.ErrLocked)))
+	assert.False(t, license.ConfirmedLock(license.ErrUnverified))
+	assert.False(t, license.ConfirmedLock(nil))
+	assert.ErrorIs(t, license.ErrLockDue, license.ErrLocked)
+	assert.NotErrorIs(t, license.ErrLockDue, license.ErrUnverified)
 }
 
 // Every path that treats a refusal as "held in lock" keeps working: ErrUnverified is an ErrLocked.
@@ -85,5 +125,7 @@ func TestGateAdvancesTheEffectiveTimeNotTheWallClock(t *testing.T) {
 	s.Reading.Wall = expiry.Add(300 * day) // the system clock jumped; the evaluation held it
 	assert.NoError(t, license.AllowIn(s, license.ClassChange, time.Hour))
 	s.Reading.Wall = expiry.Add(-300 * day) // the system clock was set back; license time did not follow
-	assert.ErrorIs(t, license.AllowIn(s, license.ClassChange, day), license.ErrLocked)
+	soon := snapshotAt(expiry.Add(7*day-time.Hour), baseline())
+	soon.Reading.Wall = expiry.Add(-300 * day)
+	assert.ErrorIs(t, license.AllowIn(soon, license.ClassChange, time.Hour), license.ErrLockDue)
 }

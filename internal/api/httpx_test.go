@@ -139,6 +139,7 @@ func TestFailMapsDomainErrors(t *testing.T) {
 		{license.ErrTargetLimit, 409, "ALC-LIC-0008"},
 		{fmt.Errorf("add target: %w", license.ErrUnverified), 503, "ALC-LIC-0009"}, // AUD-02: not ALC-LIC-0001
 		{license.ErrLocked, 403, "ALC-LIC-0001"},
+		{fmt.Errorf("deploy: %w", license.ErrLockDue), 403, "ALC-LIC-0001"},
 		{fmt.Errorf("add target: %w", license.ErrWrongInstallation), 422, "ALC-LIC-0003"},
 		{inventory.ErrNotFound, 404, "ALC-SYS-0001"},
 		{fmt.Errorf("create: %w", inventory.ErrDuplicateTarget), 409, "ALC-TGT-0001"},

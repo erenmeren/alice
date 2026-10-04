@@ -274,3 +274,50 @@ func TestUnverifiedPausesReadOnlyTasksUntilAnEvaluationSucceeds(t *testing.T) {
 	require.NoError(t, s.RunNow(ctx, "test.discover"))
 	assert.Equal(t, int32(1), discovered.Load())
 }
+
+// AUD-02 (I2): a failed run of a task with Retry is run again after 1, then 2 minutes (doubling up
+// to its interval), not an hour later; after a success it waits for its interval again.
+func TestFailedRunsAreRetriedWithBackoff(t *testing.T) {
+	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	clk := clock.NewFake(start)
+	var mu sync.Mutex
+	var at []time.Duration
+	ran := make(chan struct{}, 10)
+	s := NewScheduler(clk, &fakeGate{}, quiet, Task{Type: LicenseEvaluate, Every: time.Hour, Retry: time.Minute,
+		Run: func(context.Context) error {
+			mu.Lock()
+			defer mu.Unlock()
+			at = append(at, clk.Now().Sub(start))
+			ran <- struct{}{}
+			if len(at) <= 2 {
+				return errors.New("the database is down")
+			}
+			return nil
+		}})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		s.Run(ctx)
+		close(done)
+	}()
+	defer func() { cancel(); <-done }()
+	runs := func() []time.Duration {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]time.Duration(nil), at...)
+	}
+	advanceUntil(t, clk, time.Hour, ran) // the hourly run fails
+	for i := 0; i < 600 && len(runs()) < 3; i++ {
+		clk.Advance(5 * time.Second)
+		time.Sleep(2 * time.Millisecond)
+	}
+	got := runs()
+	require.Len(t, got, 3, "two retries within minutes")
+	assert.InDelta(t, time.Minute, got[1]-got[0], float64(30*time.Second), "first retry after a minute")
+	assert.InDelta(t, 2*time.Minute, got[2]-got[1], float64(30*time.Second), "second retry after two minutes")
+	for range 100 { // 50 minutes: the success ended the retries
+		clk.Advance(30 * time.Second)
+		time.Sleep(time.Millisecond)
+	}
+	assert.Len(t, runs(), 3)
+}

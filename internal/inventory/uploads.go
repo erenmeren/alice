@@ -198,7 +198,11 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 		return Certificate{}, nil, err
 	}
 	if err := s.license.Allow(license.ClassChange); err != nil {
-		return reject("locked", err)
+		reason := license.DenialReason(err) // locked, lock_due or unverified (AUD-02)
+		if reason == "" {
+			reason = "locked"
+		}
+		return reject(reason, err)
 	}
 	certText, keyText := strings.TrimSpace(in.CertificatePEM), strings.TrimSpace(in.PrivateKeyPEM)
 	var errs validate.Errors

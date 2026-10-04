@@ -51,14 +51,20 @@ var systemActor = audit.SystemActor("license")
 const (
 	// MaxEvaluationAge is how long the gate trusts the last successful evaluation, in process
 	// uptime: after it, gated work is refused with ErrUnverified until an evaluation succeeds.
-	// Two missed hourly evaluations plus margin: a single failed run or a short database
-	// maintenance does not stop changes, a stalled evaluation is visible the same morning.
+	// The evaluation runs hourly and a failed one is retried after 1, 2, 4 … minutes (the
+	// scheduler's backoff, capped at the hour), so a failure that lasts less than about two and
+	// a half hours never stops changes; a stalled evaluation is visible the same morning.
 	MaxEvaluationAge = 3 * time.Hour
 	// defaultRowLockTimeout bounds every wait for the license row lock (lock_timeout), so a
 	// session holding the row cannot stop evaluations, uploads and the shutdown save for ever.
 	defaultRowLockTimeout = 30 * time.Second
-	// tickTimeout bounds one evaluation as a whole.
+	// tickTimeout bounds one evaluation, upload or shutdown save as a whole.
 	tickTimeout = 2 * time.Minute
+	// kickMinGap and kickMaxGap bound how often the gate starts an evaluation of its own when it
+	// refuses on its own clock (ErrLockDue, ErrUnverified): at most once a minute, doubling after
+	// each failed one up to the hourly interval.
+	kickMinGap = time.Minute
+	kickMaxGap = time.Hour
 )
 
 // Config holds the service dependencies.
@@ -127,6 +133,14 @@ type Service struct {
 
 	rowLockTimeout time.Duration
 	staleLogged    atomic.Bool // the "could not be checked" error was logged for the current stale period
+
+	// The gate's own evaluation (kick): single-flight, rate-limited on uptime, with backoff.
+	kickMu      sync.Mutex
+	kickRunning bool
+	kickClosed  bool
+	kickNext    time.Duration // uptime before which no kick starts
+	kickGap     time.Duration // the gap after the next kick; 0 = kickMinGap
+	kickWG      sync.WaitGroup
 
 	uploadCommitted func() // tests only: runs between an upload's commit and its evaluation
 }
@@ -207,12 +221,73 @@ func (s *Service) publish(g Guard, snap Snapshot) {
 func (s *Service) Allow(c Class) error {
 	snap := s.Snapshot()
 	err := allowIn(snap, c, s.sinceEvaluation(snap))
-	if snap.Ready && errors.Is(err, ErrUnverified) && s.staleLogged.CompareAndSwap(false, true) {
+	s.afterRefusal(snap, err)
+	return err
+}
+
+// afterRefusal logs the first ErrUnverified of a stale period and, for a refusal no evaluation
+// decided (ErrUnverified, ErrLockDue), starts an evaluation so a healthy system confirms or
+// refutes it within seconds instead of at the next hourly run.
+func (s *Service) afterRefusal(snap Snapshot, err error) {
+	if !snap.Ready || err == nil || ConfirmedLock(err) || !errors.Is(err, ErrLocked) {
+		return
+	}
+	if errors.Is(err, ErrUnverified) && s.staleLogged.CompareAndSwap(false, true) {
 		s.log.Error("the license could not be checked for more than "+MaxEvaluationAge.String()+
 			"; changes to managed systems are paused until an evaluation succeeds (check the database and "+
 			"sessions holding the license row)", "last_checked", snap.Reading.Wall.Format(time.RFC3339))
 	}
-	return err
+	s.kick()
+}
+
+// kick starts one evaluation in the background unless one it started is still running, the
+// service is closed, or the last one started less than the current gap ago (one minute, doubled
+// after each failure up to an hour; reset by any successful evaluation). The evaluation does not
+// depend on the request that caused it and is bounded like every Tick.
+func (s *Service) kick() {
+	s.kickMu.Lock()
+	now := s.uptime.Elapsed()
+	if s.kickClosed || s.kickRunning || now < s.kickNext {
+		s.kickMu.Unlock()
+		return
+	}
+	gap := max(s.kickGap, kickMinGap)
+	s.kickRunning, s.kickNext = true, now+gap
+	s.kickWG.Add(1)
+	s.kickMu.Unlock()
+	go func() {
+		defer s.kickWG.Done()
+		err := s.Tick(context.Background())
+		s.kickMu.Lock()
+		defer s.kickMu.Unlock()
+		s.kickRunning = false
+		if err != nil {
+			s.kickGap = min(2*gap, kickMaxGap)
+			s.log.Warn("the license evaluation started by the gate failed; it is tried again later",
+				"error_type", fmt.Sprintf("%T", err))
+		}
+	}()
+}
+
+// evaluated resets the kick's backoff after a successful evaluation.
+func (s *Service) evaluated() {
+	s.staleLogged.Store(false)
+	s.kickMu.Lock()
+	s.kickGap = 0
+	s.kickMu.Unlock()
+}
+
+// stopKicks stops the gate from starting evaluations of its own.
+func (s *Service) stopKicks() {
+	s.kickMu.Lock()
+	s.kickClosed = true
+	s.kickMu.Unlock()
+}
+
+// Close stops the gate's own evaluations and waits for a running one (at most tickTimeout).
+func (s *Service) Close() {
+	s.stopKicks()
+	s.kickWG.Wait()
 }
 
 // allowIn is the gate decision: a pure function of the last successfully evaluated snapshot,
@@ -221,10 +296,11 @@ func (s *Service) Allow(c Class) error {
 //   - not started (no evaluation yet), or no evaluation for more than MaxEvaluationAge:
 //     ErrUnverified. Nothing about the state is known, so nothing is decided from it: the job
 //     runner pauses queued work and resumes it after the next successful evaluation.
-//   - the evaluated phase locks: ErrLocked.
-//   - the evaluated effective time advanced by the uptime since reaches LocksAt: ErrLocked. The
-//     next evaluation's effective time is never earlier (the clock guard only moves it forward
-//     with uptime, or to the wall clock), so the gate never locks before the evaluation would.
+//   - the evaluated phase locks: ErrLocked (a confirmed lock).
+//   - the evaluated effective time advanced by the uptime since reaches LocksAt: ErrLockDue.
+//     This is the gate's own estimate and can be wrong: a pending license may have started in
+//     between, or a renewal may have been uploaded in another process. Gated work is refused
+//     (fail closed), but nothing lasting is decided until an evaluation confirms the lock.
 func allowIn(snap Snapshot, c Class, since time.Duration) error {
 	if !c.Valid() {
 		return ErrUnclassified
@@ -239,7 +315,7 @@ func allowIn(snap Snapshot, c Class, since time.Duration) error {
 		return ErrLocked
 	}
 	if !snap.Eval.LocksAt.IsZero() && !snap.Reading.Effective.Add(since).Before(snap.Eval.LocksAt) {
-		return ErrLocked
+		return ErrLockDue
 	}
 	return nil
 }
@@ -258,6 +334,7 @@ func (s *Service) CheckCanAddTarget(ctx context.Context, tx pgx.Tx) error {
 	}
 	snap := s.Snapshot()
 	if err := allowIn(snap, ClassChange, s.sinceEvaluation(snap)); err != nil {
+		s.afterRefusal(snap, err)
 		return err
 	}
 	if limit := snap.Eval.MaxTargets; n >= limit {
@@ -334,9 +411,13 @@ func (s *Service) startLocked(ctx context.Context) error {
 }
 
 // Shutdown observes the clock and saves the time record (spec §16.5: also on graceful shutdown).
+// The gate starts no evaluation of its own afterwards.
 func (s *Service) Shutdown(ctx context.Context) error {
+	s.stopKicks()
 	s.evalMu.Lock()
 	defer s.evalMu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, tickTimeout) // evalMu is never held without a bound
+	defer cancel()
 	g := s.working()
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := s.loadInstallation(ctx, tx, true); err != nil {

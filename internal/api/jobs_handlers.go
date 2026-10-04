@@ -23,7 +23,9 @@ func (s *server) jobRoutes() []route {
 		{method: http.MethodGet, pattern: "/api/v1/jobs", perm: rbac.Read, handler: s.listJobs},
 		{method: http.MethodGet, pattern: "/api/v1/jobs/{id}", perm: rbac.Read, handler: s.getJob},
 		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/confirm", perm: rbac.JobsConfirm, lic: license.ClassChange, handler: s.confirmJob},
-		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/discard", perm: rbac.JobsConfirm, lic: license.ClassChange, handler: s.discardJob},
+		// Discarding only reduces what Alice will do, so it works in every license state (AUD-02 fix
+		// round: also while the license is locked or could not be checked).
+		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/discard", perm: rbac.JobsConfirm, lic: license.ClassAlways, handler: s.discardJob},
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"alice/internal/audit"
 	"alice/internal/jobs"
+	"alice/internal/license"
 	"alice/internal/providers"
 )
 
@@ -177,4 +178,24 @@ func TestJobActionAnswersAcceptedWhenTheReadBackFails(t *testing.T) {
 		require.Equal(t, http.StatusAccepted, rec.Code, action)
 		assert.JSONEq(t, `{"job_id":"`+jobID.String()+`","status_url":"/api/v1/jobs/`+jobID.String()+`"}`, rec.Body.String())
 	}
+}
+
+// Discarding a job only reduces what Alice will do: it works while the license is locked, its lock
+// is due or it could not be checked (AUD-02 fix round), while confirming stays refused.
+func TestDiscardWorksInEveryLicenseState(t *testing.T) {
+	d, fj := jobsDeps(t)
+	discarded := 0
+	fj.DiscardFn = func(context.Context, audit.Actor, uuid.UUID, uuid.UUID) error { discarded++; return nil }
+	fj.GetFn = func(context.Context, uuid.UUID) (jobs.View, error) {
+		return sampleView(jobs.Status("cancelled"), ""), nil
+	}
+	for _, refusal := range []error{license.ErrLocked, license.ErrLockDue, license.ErrUnverified} {
+		d.License.(*fakeLicense).set(refusal)
+		h := NewHandler(d)
+		rec := call(h, http.MethodPost, "/api/v1/jobs/"+jobID.String()+"/actions/discard", "admin", "")
+		assert.Equal(t, http.StatusOK, rec.Code, refusal.Error())
+		rec = call(h, http.MethodPost, "/api/v1/jobs/"+jobID.String()+"/actions/confirm", "admin", "")
+		assert.Contains(t, []int{http.StatusForbidden, http.StatusServiceUnavailable}, rec.Code, refusal.Error())
+	}
+	assert.Equal(t, 3, discarded)
 }

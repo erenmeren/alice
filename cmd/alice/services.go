@@ -179,7 +179,9 @@ func deployDeps(svc *services, clk clock.Clock, log *slog.Logger) deployjobs.Dep
 // use the same tasks.
 func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *slog.Logger) *jobs.Scheduler {
 	return jobs.NewScheduler(clk, svc.license, log,
-		jobs.Task{Type: jobs.LicenseEvaluate, Every: time.Hour, Run: svc.license.Tick},
+		// A failed evaluation is retried after 1, 2, 4 … minutes (AUD-02): the gate refuses changes
+		// after 3 hours without a successful one.
+		jobs.Task{Type: jobs.LicenseEvaluate, Every: time.Hour, Run: svc.license.Tick, Retry: time.Minute},
 		jobs.Task{Type: jobs.NotifySend, Every: time.Minute, Run: func(ctx context.Context) error {
 			_, err := sender.Drain(ctx)
 			return err
