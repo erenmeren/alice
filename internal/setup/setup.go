@@ -96,6 +96,12 @@ type Service struct {
 	// codeMu makes "is this address locked, compare the code, count the failure" one step,
 	// so parallel wrong codes from one address cannot all pass the lock check.
 	codeMu sync.Mutex
+
+	// Tests only (AUD-21): beforeBootstrap runs between the wizard-session check and the
+	// administrator's creation, inBootstrapTx inside that transaction once it holds the users
+	// lock and has consumed its session, afterCodeCheck inside StartSession's transaction after
+	// the code matched (the setup code's row is locked then).
+	beforeBootstrap, inBootstrapTx, afterCodeCheck func()
 }
 
 // New builds the service.

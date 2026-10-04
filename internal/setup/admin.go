@@ -94,7 +94,25 @@ totp_secret_ct, totp_nonce, totp_wrapped_dek, totp_key_version FROM setup_sessio
 	}
 	in := auth.BootstrapAdmin{Username: *username, DisplayName: deref(displayName), Email: deref(email),
 		PasswordHash: *hash, TOTPSecret: string(secret.Bytes()), Code: code, Locale: locale}
+	if s.beforeBootstrap != nil {
+		s.beforeBootstrap()
+	}
 	res, err := s.auth.BootstrapAdmin(ctx, in, m, func(tx pgx.Tx) error {
+		// AUD-21: BootstrapAdmin holds the users lock here, so a setup code reset (SHARE lock on users)
+		// is either already committed or waits for this commit. A committed reset deleted every wizard
+		// session, so the caller's own session must still exist: otherwise the reset won, and the
+		// administrator is not created. The code the session was opened with is the current one, because
+		// StartSession only inserts a session while the code's row is locked against a reset.
+		tag, err := tx.Exec(ctx, "DELETE FROM setup_sessions WHERE id_hash = $1 AND idle_expires_at > $2", idHash, s.clock.Now().UTC())
+		if err != nil {
+			return fmt.Errorf("consume setup session: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return ErrSessionInvalid
+		}
+		if s.inBootstrapTx != nil {
+			s.inBootstrapTx()
+		}
 		if err := settings.Delete(ctx, tx, keyTokenHash); err != nil {
 			return err
 		}

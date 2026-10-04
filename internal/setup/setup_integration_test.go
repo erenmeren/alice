@@ -549,3 +549,138 @@ func TestCompletingAFinishedInstallNeedsNoLicenseChoice(t *testing.T) {
 	require.NoError(t, err, "no new 409 for a finished install")
 	assert.True(t, st.Completed)
 }
+
+func (e *env) readyToCreate(t *testing.T) (token, code string) {
+	t.Helper()
+	token = e.session(t)
+	enr, err := e.setup.BeginAdminEnrollment(e.ctx, token, setup.AdminInput{Username: "admin", DisplayName: "A", Password: password})
+	require.NoError(t, err)
+	code, err = totp.GenerateCode(enr.Secret, e.clk.Now())
+	require.NoError(t, err)
+	return token, code
+}
+
+func (e *env) userCount(t *testing.T) int {
+	t.Helper()
+	var users int
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT count(*) FROM users").Scan(&users))
+	return users
+}
+
+// waitForLockWait blocks until some backend waits for a lock: the statement under test is queued
+// behind the transaction the test holds open (no sleeps: it polls the server's own wait state).
+func (e *env) waitForLockWait(t *testing.T) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var n int
+		err := e.db.Owner.QueryRow(e.ctx, "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()").Scan(&n)
+		return err == nil && n > 0
+	}, 10*time.Second, 5*time.Millisecond)
+}
+
+// AUD-21: a setup code reset between the session check and the administrator's creation wins: no
+// administrator is created and the old session is refused.
+func TestResetDuringAdminCreationWins(t *testing.T) {
+	e := newEnv(t)
+	token, code := e.readyToCreate(t)
+	setup.SetBeforeBootstrap(e.setup, func() {
+		_, err := e.setup.ResetToken(e.ctx) // the host-root CLI, between the check and the creation
+		require.NoError(t, err)
+	})
+	_, err := e.setup.CreateAdmin(e.ctx, token, code, ip1)
+	require.ErrorIs(t, err, setup.ErrSessionInvalid)
+	assert.Zero(t, e.userCount(t))
+}
+
+// AUD-21: the creation commits first; the reset then finds the administrator and changes nothing.
+func TestResetAfterAdminCreationReportsTheAdministrator(t *testing.T) {
+	e := newEnv(t)
+	token, code := e.readyToCreate(t)
+	_, err := e.setup.CreateAdmin(e.ctx, token, code, ip1)
+	require.NoError(t, err)
+	_, err = e.setup.ResetToken(e.ctx)
+	require.ErrorIs(t, err, setup.ErrAlreadySetUp)
+	assert.Equal(t, 1, e.userCount(t))
+}
+
+// AUD-21: the reset arrives while the creation holds the users lock: it waits, the creation
+// commits, and the reset reports the administrator.
+func TestResetWaitingBehindAdminCreationFindsTheAdministrator(t *testing.T) {
+	e := newEnv(t)
+	token, code := e.readyToCreate(t)
+	resetErr := make(chan error, 1)
+	setup.SetInBootstrapTx(e.setup, func() {
+		go func() {
+			_, err := e.setup.ResetToken(e.ctx)
+			resetErr <- err
+		}()
+		e.waitForLockWait(t) // the reset is queued behind the creating transaction
+		select {
+		case err := <-resetErr:
+			t.Errorf("the reset finished while the creation was open: %v", err)
+		default:
+		}
+	})
+	_, err := e.setup.CreateAdmin(e.ctx, token, code, ip1)
+	require.NoError(t, err)
+	assert.ErrorIs(t, <-resetErr, setup.ErrAlreadySetUp)
+	assert.Equal(t, 1, e.userCount(t))
+}
+
+// AUD-21: a wizard session opened with the old code whose commit races the reset does not
+// survive it: the session cannot create the administrator afterwards.
+func TestSessionOpenedWithTheOldCodeDoesNotSurviveAConcurrentReset(t *testing.T) {
+	e := newEnv(t)
+	old, err := e.setup.ResetToken(e.ctx)
+	require.NoError(t, err)
+	resetDone := make(chan string, 1)
+	setup.SetAfterCodeCheck(e.setup, func() {
+		go func() {
+			c, err := e.setup.ResetToken(e.ctx)
+			assert.NoError(t, err)
+			resetDone <- c
+		}()
+		e.waitForLockWait(t) // the reset is queued behind the code's row lock
+	})
+	token, err := e.setup.StartSession(e.ctx, old, ip1)
+	require.NoError(t, err)
+	fresh := <-resetDone
+	assert.ErrorIs(t, e.setup.Authenticate(e.ctx, token), setup.ErrSessionInvalid, "the reset deleted the session")
+	_, err = e.setup.StartSession(e.ctx, old, ip1)
+	assert.ErrorIs(t, err, setup.ErrCodeInvalid)
+	_, err = e.setup.StartSession(e.ctx, fresh, ip1)
+	assert.NoError(t, err)
+}
+
+// AUD-21: a reset that committed before the comparison makes the old code invalid.
+func TestOldCodeIsRefusedAfterAReset(t *testing.T) {
+	e := newEnv(t)
+	old, err := e.setup.ResetToken(e.ctx)
+	require.NoError(t, err)
+	_, err = e.setup.ResetToken(e.ctx)
+	require.NoError(t, err)
+	_, err = e.setup.StartSession(e.ctx, old, ip1)
+	assert.ErrorIs(t, err, setup.ErrCodeInvalid)
+}
+
+// AUD-21: truly concurrent creation and reset: exactly one outcome, and an administrator only
+// ever exists when the creation committed before the reset (the reset then reports it).
+func TestConcurrentResetAndCreateHaveExactlyOneOutcome(t *testing.T) {
+	for range 5 {
+		e := newEnv(t)
+		token, code := e.readyToCreate(t)
+		var createErr, resetErr error
+		var wg sync.WaitGroup
+		wg.Go(func() { _, createErr = e.setup.CreateAdmin(e.ctx, token, code, ip1) })
+		wg.Go(func() { _, resetErr = e.setup.ResetToken(e.ctx) })
+		wg.Wait()
+		if createErr == nil {
+			assert.ErrorIs(t, resetErr, setup.ErrAlreadySetUp)
+			assert.Equal(t, 1, e.userCount(t))
+		} else {
+			assert.ErrorIs(t, createErr, setup.ErrSessionInvalid)
+			assert.NoError(t, resetErr)
+			assert.Zero(t, e.userCount(t))
+		}
+	}
+}
