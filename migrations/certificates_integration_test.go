@@ -740,9 +740,20 @@ VALUES ($1, 'certificate.deploy', 'change', 'user', $2, $3, 'succeeded', now(), 
 	assert.Equal(t, "ALC-X", code)
 	assert.Equal(t, doneFrozen, sqlState(exec(t, d.App, "UPDATE deployments SET job_id = $2 WHERE id = $1", id, uuid.New())), "a job link is never added to a finished deployment")
 
-	// An unfinished one stays writable, and becomes done in one update.
+	// A finished deployment gets no new step, from either role (B1 M5); its trigger pins its search
+	// path.
+	step := map[string]any{"id": uuid.New(), "deployment_id": id, "n": 1, "name": "verify", "status": "ok", "at": now}
+	assert.Equal(t, doneFrozen, sqlState(insertRow(t, d.App, "deployment_steps", step)))
+	assert.Equal(t, doneFrozen, sqlState(insertRow(t, d.Owner, "deployment_steps", step)), "the owner role too")
+	var fn string
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT array_to_string(p.proconfig, ',') FROM pg_proc p WHERE p.proname = 'deployment_steps_check_open'`).Scan(&fn))
+	assert.Contains(t, fn, "search_path=pg_catalog, pg_temp")
+
+	// An unfinished one stays writable (steps included), and becomes done in one update.
 	open := deploymentRow(w)
 	require.NoError(t, exec(t, d.App, "UPDATE deployments SET state = state WHERE id = $1", id))
 	require.NoError(t, insertRow(t, d.App, "deployments", open))
+	require.NoError(t, insertRow(t, d.App, "deployment_steps", map[string]any{"id": uuid.New(), "deployment_id": open["id"], "n": 1, "name": "verify",
+		"status": "ok", "at": now}))
 	require.NoError(t, exec(t, d.App, "UPDATE deployments SET state = 'done', status = 'succeeded', finished_at = now(), result = 'committed' WHERE id = $1", open["id"]))
 }

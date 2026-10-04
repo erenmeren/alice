@@ -65,7 +65,8 @@ CREATE INDEX certificates_public_key ON certificates (public_key_sha256);
 -- only update of private_key_id: NULL to a key whose public key hash equals the certificate's).
 -- SQLSTATEs: Z1001 the key does not belong to the certificate, Z1002 a key is already attached
 -- (class Z1, Alice's own: the SQL standard reserves classes beginning 0-4 and A-H, implementation-
--- defined classes begin 5-9 or I-Z; Z1003 is the frozen deployment below).
+-- defined classes begin 5-9 or I-Z; Z1003 is the frozen deployment below, also raised for a new step of
+-- a finished deployment).
 -- It runs as the invoking role (alice_app can read managed_private_keys), so every name is
 -- schema-qualified and the search path is pinned with pg_temp last.
 -- +goose StatementBegin
@@ -247,6 +248,24 @@ CREATE TABLE deployment_steps (
     UNIQUE (deployment_id, n)
 );
 
+-- A finished deployment gets no new step either (its history is final; SQLSTATE Z1003, as an update
+-- of it). The parent row is read FOR SHARE: an insert that races the update finishing the
+-- deployment waits for it and then sees it done. It runs as the invoking role (alice_app may lock
+-- deployments rows: it has column UPDATE grants), so names are schema-qualified and the search path
+-- pinned, as certificates_check_key.
+-- +goose StatementBegin
+CREATE FUNCTION deployment_steps_check_open() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.deployments d WHERE d.id = NEW.deployment_id AND d.state = 'done' FOR SHARE OF d) THEN
+        RAISE EXCEPTION 'a finished deployment cannot get new steps' USING ERRCODE = 'Z1003';
+    END IF;
+    RETURN NEW;
+END $$;
+-- +goose StatementEnd
+CREATE TRIGGER deployment_steps_open BEFORE INSERT ON deployment_steps
+    FOR EACH ROW EXECUTE FUNCTION deployment_steps_check_open();
+
 -- Keys and steps are append-only for the application; certificates, locations, signing requests
 -- and deployments are never deleted (history) and are updated only in the columns listed.
 GRANT SELECT, INSERT ON managed_private_keys, certificates, csr_requests, certificate_locations, deployments,
@@ -264,6 +283,7 @@ GRANT UPDATE (job_id, state, status, result, phase, operation_id, new_chain_leng
 
 -- +goose Down
 DROP TABLE deployment_steps;
+DROP FUNCTION deployment_steps_check_open();
 DROP TABLE deployments;
 DROP FUNCTION deployments_protect_done();
 DROP TABLE certificate_locations;
