@@ -581,3 +581,68 @@ func TestHungCredentialSourceDoesNotHangDial(t *testing.T) {
 		return bc.released == 1
 	}, 5*time.Second, 10*time.Millisecond, "the late key is released")
 }
+
+// dropServer (adapted from the audit's PoC, AUD-10) accepts TCP connections and runs the SSH
+// handshake with hostKey; when the client starts public-key authentication it closes the
+// connection (an sshd restart, LoginGraceTime, a firewall state loss). With beforeBanner it closes
+// the connection before any SSH data (sshd over MaxStartups, a load balancer without a backend).
+func dropServer(t *testing.T, hostKey ssh.Signer, beforeBanner bool) Config {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			nc, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			if beforeBanner {
+				_ = nc.Close()
+				continue
+			}
+			go func() {
+				conf := &ssh.ServerConfig{PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
+					_ = nc.Close()
+					return nil, errors.New("dropped")
+				}}
+				conf.AddHostKey(hostKey)
+				_, _, _, _ = ssh.NewServerConn(nc, conf)
+				_ = nc.Close()
+			}()
+		}
+	}()
+	addr := ln.Addr().(*net.TCPAddr)
+	return Config{Host: "127.0.0.1", Port: addr.Port, Username: "alice-svc"}
+}
+
+// AUD-10: a connection lost during authentication (the host key matched its pin) is the retryable
+// ssh.unreachable, not ssh.auth_failed (which marks the target, mails every Administrator and is
+// never retried); only the server's "no more methods" answer is an authentication failure.
+func TestConnectionLostDuringAuthenticationIsUnreachable(t *testing.T) {
+	hostKey := linuxsshtest.NewHostKey(t)
+	cfg := dropServer(t, hostKey, false)
+	hk := &memHostKeys{}
+	hk.pin(hostKey.PublicKey())
+	_, err := newDialer(hk).Dial(context.Background(), testTarget, cfg, newFakeCred(t))
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.unreachable", pe.Code)
+	assert.True(t, pe.Retryable)
+}
+
+// AUD-10: a server that closes the connection before the SSH banner is the retryable
+// ssh.unreachable, with or without a pinned key.
+func TestConnectionClosedBeforeTheBannerIsUnreachable(t *testing.T) {
+	hostKey := linuxsshtest.NewHostKey(t)
+	cfg := dropServer(t, hostKey, true)
+	for name, hk := range map[string]*memHostKeys{"pinned": func() *memHostKeys {
+		hk := &memHostKeys{}
+		hk.pin(hostKey.PublicKey())
+		return hk
+	}(), "unpinned": {}} {
+		_, err := newDialer(hk).Dial(context.Background(), testTarget, cfg, newFakeCred(t))
+		pe := providerCode(t, err)
+		assert.Equal(t, "ssh.unreachable", pe.Code, name)
+		assert.True(t, pe.Retryable, name)
+	}
+}

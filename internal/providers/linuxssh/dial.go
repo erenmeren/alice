@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -377,8 +378,12 @@ func (d *Dialer) Dial(ctx context.Context, target uuid.UUID, cfg Config, cred pr
 			return nil, providers.NewError("ssh.timeout", true, r.err, nil)
 		case havePin && !called:
 			return nil, d.probeChanged(ctx, target, cfg, pinned, r.err)
+		case called && !authRefused(r.err):
+			// AUD-10: the host key matched, then the connection dropped (EOF, a reset: an sshd restart,
+			// LoginGraceTime, a firewall losing state). Not an authentication failure: retryable.
+			return nil, providers.NewError("ssh.unreachable", true, r.err, nil)
 		case called:
-			// The host key matched, so a later failure is the authentication phase.
+			// The server's explicit answer that no authentication method is left.
 			reason := "key_rejected"
 			if !attempted {
 				reason = "publickey_not_offered"
@@ -442,6 +447,10 @@ func (d *Dialer) probeChanged(ctx context.Context, target uuid.UUID, cfg Config,
 		return providers.NewError("ssh.unreachable", true, r.dialErr, nil)
 	case seen == nil && r.timedOut:
 		return providers.NewError("ssh.timeout", true, cause, nil)
+	case seen == nil && (dropped(cause) || dropped(r.err)):
+		// AUD-10: the server closed the connection before it presented any host key (sshd over
+		// MaxStartups, a load balancer without a backend): unreachable, retryable, as without a pin.
+		return providers.NewError("ssh.unreachable", true, cause, nil)
 	case seen == nil, subtle.ConstantTimeCompare(seen.PublicKey, pinned.PublicKey) == 1:
 		return providers.NewError("ssh.protocol_error", false, cause, nil)
 	}
@@ -449,6 +458,20 @@ func (d *Dialer) probeChanged(ctx context.Context, target uuid.UUID, cfg Config,
 		return providers.NewError("internal.unexpected", true, err, nil)
 	}
 	return changedError(pinned, *seen)
+}
+
+// authRefused reports x/crypto's answer that authentication failed because the server accepted
+// none of the methods offered ("ssh: unable to authenticate, attempted methods ..., no supported
+// methods remain"); x/crypto has no typed error for it. Anything else after the host key matched
+// (EOF, a reset) is a lost connection.
+func authRefused(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "ssh: unable to authenticate")
+}
+
+// dropped reports an error of a connection the other side closed or reset.
+func dropped(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE)
 }
 
 type handshakeResult struct {
