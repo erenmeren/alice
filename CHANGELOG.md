@@ -21,9 +21,10 @@
   the license is expired; administrators get emails for failed deployments, deployments that need manual action and
   deployments Alice cannot finish.
 - **Verification settings** per website (administrators): the port and name Alice checks, or no check.
-- Helper protocol 4 (`alice-helper` 1.3.0): `nginx-dump`, `nginx-test`, `nginx-deploy`, `nginx-restore`,
-  `nginx-status` (sudo, with narrow sudoers lines) and `tls-probe` (no sudo).
-- Error codes `ALC-NGX-0001..0009`, `ALC-CRT-0001..0017`, `ALC-DEP-0001..0022` and the audit actions
+- Helper protocol 5 (`alice-helper` 1.4.0): `nginx-dump`, `nginx-test`, `nginx-deploy`, `nginx-restore`,
+  `nginx-status`, `nginx-fence` (sudo, with narrow sudoers lines) and `tls-probe` (no sudo). `nginx-fence` lets
+  Alice prove that an interrupted deployment it has no journal for can never be applied later.
+- Error codes `ALC-NGX-0001..0010`, `ALC-CRT-0001..0017`, `ALC-DEP-0001..0022` and the audit actions
   `certificate.*`, `csr.*`, `location.*` and `deployment.*`.
 - Uploading a certificate Alice already holds with an incomplete chain, now with its complete chain, completes the
   stored chain (`certificate.chain_completed`); any other repeated upload is still refused (`ALC-CRT-0008`).
@@ -34,9 +35,16 @@
   `docs/admin-guide.md`, the Nginx profile, backups and manual restore in `docs/nginx-host-preparation.md`.
 
 ### Changed
-- Every server needs the new helper (protocol 4): copy the `alice-helper` of this release next to the setup commands
-  and run them again on each server (Alice reports older helpers with `ALC-SSH-0005`). The `nginx` sudoers lines
-  changed with it.
+- Every server needs the new helper (protocol 5): copy the `alice-helper` of this release next to the setup commands
+  and run them again on each server (Alice reports older helpers with `ALC-SSH-0005` and does nothing on them until
+  then; see "Updating the helper" in `docs/nginx-host-preparation.md`). The `nginx` sudoers lines changed with it
+  (new `nginx-fence` line).
+- The helper refuses a deployment while the website's previous change is still being finished, when Nginx is not
+  running (`ALC-NGX-0010`), and for a certificate or key file whose real name (after links) has characters it does
+  not accept (shown as **Not supported**).
+- A connection lost while signing in to a server is now "cannot be reached" (`ALC-SSH-0001`, retried), not "sign-in
+  refused"; an SSH-key scan is bounded (users, files, keys, warnings, 10 minutes of reading; a cut scan says so) and
+  a discovery job stops after 20 minutes.
 - SSH keys: keys of accounts deleted from a server are now marked **No longer found** when the server's account list
   is complete (no LDAP or SSSD accounts, not more accounts than Alice lists); every uid-0 account and accounts with an empty shell field are
   scanned; the root last-key guard covers every uid-0 account; the **SSH keys** list marks keys that are no longer

@@ -588,7 +588,9 @@ while the server waits for it, a new one only after the identity changed.
 **Meaning.** Alice could not open an SSH connection (HTTP 502 when returned directly; usually shown on the server and its
 tasks).
 
-**Likely cause.** The server is off, the address or port is wrong, or a firewall blocks the Alice host.
+**Likely cause.** The server is off, the address or port is wrong, or a firewall blocks the Alice host. A connection
+that is closed or reset while Alice signs in also counts as unreachable (it is retried), not as a refused sign-in;
+only the server's explicit refusal of every sign-in method is `ALC-SSH-0002`.
 
 **What to do.** Check the server and the network path to its SSH port, then click **Test connection**.
 
@@ -623,7 +625,7 @@ connection.
 ## ALC-SSH-0005: Helper outdated
 
 **Meaning.** The helper on the server speaks an older protocol than this Alice version needs (this release needs
-protocol 4, `alice-helper` 1.3.0).
+protocol 5, `alice-helper` 1.4.0).
 
 **Likely cause.** Alice was updated but the helper on the server was not.
 

@@ -14,11 +14,11 @@ from a run made for this review.
 
 | # | Check | Command | Expected | Result for this review |
 |---|---|---|---|---|
-| 1 | Helper as a normal user: argument vectors, the root-controlled walk, section authentication, existence oracle, refusals say why, `nginx-dump` never returns key blocks or configuration text, journal, crash matrices (as far as they run without root), retention, superseded operations, the emulator fidelity suite against the real helper code | `go test ./cmd/alice-helper -count=1` | ok (root-only tests skip) | ok, 189 tests passed, 11 skipped (root only) |
-| 2 | Helper as root: owners and modes (`TestDeployAsRootSetsOwnersAndRefusesUserDirectories`, `TestDeployModes`), `TestAttackUserOwnedLinkAndDirectoryAsRoot`, `TestAttackUserOwnedLetsEncryptChainAsRoot`, `TestAttackUserOwnedConfigurationAsRoot`, `TestAttackKeyOutsideRootControl`, `TestAttackDirectorySwappedBeforeTheRename`, `TestAttackRestoreOverANewerDeployment`, the crash, re-send, interference and restore matrices (`TestDeployCrashMatrix`, `TestDeployCrashThenTheSameDeploymentAgain`, `TestDeployCertificateInterferenceMatrix`, `TestRestoreCrashMatrix`, `TestDeployKilledAtEveryStepRecovers`) | `CGO_ENABLED=0 go test -c -o /tmp/alice-helper.test ./cmd/alice-helper` then `docker run --rm --network none -v /tmp/alice-helper.test:/alice-helper.test:ro debian:12 /alice-helper.test -test.count=1` | ok (3 skips: two need a non-root user, one needs `go`) | recorded at 58f897a: 190 passed, 3 skipped; the helper has not changed since |
-| 3 | Real OpenSSH and real Nginx on Ubuntu 22.04 (nginx 1.18), Debian 12 (1.22) and Rocky 9 (1.20): setup script with the checksum check, real `sudo` accepting every built line and refusing 28 variations, discovery of default and hostile layouts, deploy and verification (ECDSA with chain, RSA, 0640 `ssl-cert`, user-owned key, Let's Encrypt links, dual RSA/ECDSA, address-specific listens), F-01 with real `nginx -t`, F-02..F-05, F-07, F-08, F-10, hard link, user-owned link and directory, writable configuration file, busy lock, helper killed with SIGTERM and SIGKILL in `nginx-deploy` and `nginx-restore`, superseded operation, no staged file left | `make test-ssh` | ok, 35 Nginx subtests per distribution | recorded at 5d6379d and again after ea0a4bd: exit 0 (105 Nginx subtests, about 100 s) |
-| 4 | Nginx provider: helper answers mapped through the legal outcome shapes (59 deploy rows, 27 rollback rows), uncertain outcomes, verification per listen address, chain length, inline rollback, the key never printed (`TestDeployNeverLeaksTheKey`, `TestAWrappedCommandNeverPrintsItsStdin`), `TestOnlyProbeTLSConfigSkipsVerification`; command builders and sudoers lines (`TestNginxCommandLinesAreExact`, `TestNginxCommandsRefuseHostileValues`, `TestDeployKeyIsNeverOutsideStdin`, `TestNginxSudoersLinesAreWhatTheSpecSays`, `TestNginxSudoersMatchesEveryBuiltCommand`, `TestSudoersNeverLogsInput`) | `go test ./internal/providers/... ./internal/certs/... -count=1` | ok | ok |
-| 5 | Parsers fuzzed (§25.6) | `make fuzz-nginx` and `make fuzz-certs` | no crasher | ok: 6.9 M and 4.8 M executions in 60 s each |
+| 1 | Helper as a normal user: argument vectors, the root-controlled walk, section authentication, existence oracle, refusals say why, `nginx-dump` never returns key blocks or configuration text, journal, crash matrices (as far as they run without root), retention, superseded operations, the emulator fidelity suite against the real helper code | `go test ./cmd/alice-helper -count=1` | ok (root-only tests skip) | ok (final fix wave, after d1f752f; earlier recorded run: 189 passed, 11 skipped) |
+| 2 | Helper as root: owners and modes (`TestDeployAsRootSetsOwnersAndRefusesUserDirectories`, `TestDeployModes`), `TestAttackUserOwnedLinkAndDirectoryAsRoot`, `TestAttackUserOwnedLetsEncryptChainAsRoot`, `TestAttackUserOwnedConfigurationAsRoot`, `TestAttackKeyOutsideRootControl`, `TestAttackDirectorySwappedBeforeTheRename`, `TestAttackRestoreOverANewerDeployment`, the crash, re-send, interference and restore matrices (`TestDeployCrashMatrix`, `TestDeployCrashThenTheSameDeploymentAgain`, `TestDeployCertificateInterferenceMatrix`, `TestRestoreCrashMatrix`, `TestDeployKilledAtEveryStepRecovers`) | `CGO_ENABLED=0 go test -c -o /tmp/alice-helper.test ./cmd/alice-helper` then `docker run --rm --network none -v /tmp/alice-helper.test:/alice-helper.test:ro debian:12 /alice-helper.test -test.count=1` | ok (3 skips: two need a non-root user, one needs `go`) | recorded in the final fix wave after d1f752f (protocol 5, `nginx-fence`): the root subset and the whole suite as root PASS (earlier at 58f897a: 190 passed, 3 skipped) |
+| 3 | Real OpenSSH and real Nginx on Ubuntu 22.04 (nginx 1.18), Debian 12 (1.22) and Rocky 9 (1.20): setup script with the checksum check, real `sudo` accepting every built line and refusing 28 variations, discovery of default and hostile layouts, deploy and verification (ECDSA with chain, RSA, 0640 `ssl-cert`, user-owned key, Let's Encrypt links, dual RSA/ECDSA, address-specific listens), F-01 with real `nginx -t`, F-02..F-05, F-07, F-08, F-10, hard link, user-owned link and directory, writable configuration file, busy lock, helper killed with SIGTERM and SIGKILL in `nginx-deploy` and `nginx-restore`, superseded operation, no staged file left | `make test-ssh` | ok, 35 Nginx subtests per distribution | recorded twice in the final fix wave after d1f752f: exit 0 on all three distributions, with the new cases `name_outside_vocabulary`, `fence`, `nginx_not_running` and the rewritten `superseded_after_interruption` (earlier at 5d6379d and ea0a4bd: 105 Nginx subtests) |
+| 4 | Nginx provider: helper answers mapped through the legal outcome shapes (59 deploy rows, 27 rollback rows), uncertain outcomes, verification per listen address, chain length, inline rollback, the key never printed (`TestDeployNeverLeaksTheKey`, `TestAWrappedCommandNeverPrintsItsStdin`), `TestOnlyProbeTLSConfigSkipsVerification`; command builders and sudoers lines (`TestNginxCommandLinesAreExact`, `TestNginxCommandsRefuseHostileValues`, `TestDeployKeyIsNeverOutsideStdin`, `TestNginxSudoersLinesAreWhatTheSpecSays`, `TestNginxSudoersMatchesEveryBuiltCommand`, `TestSudoersNeverLogsInput`), the fence (`TestFenceDeployment`) | `go test ./internal/providers/... ./internal/certs/... -count=1` | ok | ok |
+| 5 | Parsers fuzzed (§25.6) | `make fuzz-nginx` and `make fuzz-certs` | no crasher | ok: 6.9 M and 4.8 M executions in 60 s each; final fix wave: `FuzzParseNginxConfig` 4.3 M executions in 60 s with the pair-budget seeds, `FuzzTopLevelKeys` added |
 | 6 | Deploy engine: at most one send per deployment, no success without a passed verification, no `failed` after a send unless the server proves nothing was written, every interrupted deployment ends; kills at every point (F-66: `TestDeploymentSurvivesAKillAtEveryPoint`, `TestDeploymentSurvivesAKillDuringRecovery`), stale runs after a lost lease (`TestStaleRun*`), L-80..L-82 (`TestL80InFlightDeployFinishesAcrossLock`, `TestL81QueuedDeployIsBlockedThenConfirmed`, `TestL82RollbackRunsDespiteLock`), `TestDeployAndRecoveryLeakNoKey` | `go test -tags integration ./internal/jobs/deployjobs/... -count=1` | ok | ok (in row 13's run) |
 | 7 | Inventory: reconcile of hostile discovery data, incomplete scans, changed outside, uploads (`TestNoPrivateKeyOrPasswordLeaks`, `TestPFXDecodesAreCapped`, `TestUploadRefusalsAreAuditedAndStoreNothing`), signing requests and their races, deployment records, sweep, claim fencing (`TestEngineWritesAreFencedToTheJobClaim`) | `go test -tags integration ./internal/inventory/... -count=1` | ok | ok (in row 13's run) |
 | 8 | API journeys: Nginx server end to end, upload refusals with the exact messages, deploy failures and rollback failures, pre-check refusals, interruptions and recovery, unreachable server during recovery, signing requests, roles; license lock refuses every certificate change and lets recovery run | `go test -tags integration ./internal/api -run 'Nginx\|Upload\|Deploy\|Rollback\|Precheck\|Helper\|Restart\|Unreachable\|Signing\|Location\|Auditor\|ObjectIds\|Lock\|InFlight' -count=1` | ok | ok (in row 13's run) |
@@ -51,9 +51,19 @@ injection at every point (journal, each backup, each staged file, each rename, e
 over 250 subtests) leaves a state that `nginx-status` reports truthfully and that `nginx-restore` turns into the
 complete old pair, with no staged file left.
 
+Before the `prepared` journal the helper also refuses a pair whose latest operation is still `writing` or
+`restoring` (`RECOVERY_PENDING`) and a server where `systemctl is-active nginx` fails (`NGINX_NOT_RUNNING`), and a
+pair whose resolved file names leave the argument vocabulary (`PATH_NOT_ALLOWED`): no journal is ever written that
+the helper could not read back. After the first rename no error leaves the helper as a refusal (`OUTCOME_UNKNOWN`).
+
 Alice treats only a well-formed helper refusal as "nothing changed" (R38 item 23); anything else after the send
-goes to recovery, which reads the journal and verifies, finishes or rolls back. A journal that says `committed` is
-never taken as success without a verification of its own.
+goes to recovery, which reads the journal and verifies, finishes or rolls back (exit 1 without output from a writing
+command is uncertain too). A journal that says `committed` is never taken as success without a verification of its
+own. A missing journal is "nothing was written" only after `nginx-fence` (protocol 5) wrote a tombstone for the
+operation under the lock, after which a late `nginx-deploy` of it refuses (`FENCED`): Alice no longer assumes that
+the helper's time budget started when it sent the command (R38 items 23 and 52; the independent audit of
+2026-10-04, AUD-05). Inventory refuses a `failed` record after a possible send unless the caller has that proof
+(R38 item 54).
 
 ### Rollback
 
@@ -62,7 +72,9 @@ group and mode, then `nginx -t` and a reload. A failed verification after a comm
 `nginx-restore` at once and verify the previous certificate (R38 item 44); after the helper's own
 `restore_failed` the engine sends `nginx-restore` once more. If another program changed a file during the
 deployment, the helper puts back only what it wrote and records `file_changed` (R38 item 45); a later
-`nginx-restore` is all-or-nothing and never overwrites someone else's file. Only the operation that last replaced a
+`nginx-restore` never overwrites someone else's file: it refuses (`HASH_MISMATCH`) when a file changed before it
+renamed anything, and once it put a file back it answers that outcome (`restore_failed`, `file_changed`) rather than
+a refusal (R38 item 53); it never renames without its `restoring` journal. Only the operation that last replaced a
 pair's files can be restored (R38 item 24), so a caller cannot walk back through kept operations to an older key.
 Recovery runs in license lock (`ClassAlways`), is paced (30 s, then every 15 minutes) and ends after about a day
 with an "outcome could not be confirmed" email (R38 item 27). Every engine write is fenced to the job claim, so a run
@@ -73,7 +85,8 @@ that lost its lease cannot record over another run's outcome or send after the d
 The helper writes only the two files of a pair that its own `nginx -T` names (never a path chosen by the caller),
 both existing, resolved through a descriptor walk in which every directory and link is root's, no directory is
 group or other writable, nothing is on a pseudo or FUSE file system, and the file is regular with one link and a
-certificate or key extension (R38 item 2). The `nginx -T` output is not trusted as such: every `# configuration
+certificate or key extension, whose resolved name stays inside the argument vocabulary (R38 item 2; otherwise
+`name_not_allowed`). The `nginx -T` output is not trusted as such: every `# configuration
 file` section is compared with the real file read through the same walk, sections no include reaches, repeated
 names and text before the first marker are refused, and once a section from a non-root-writable file appeared every
 later authentication failure is reported the same way (no existence oracle). A pair that a non-root-writable
@@ -138,7 +151,8 @@ value rules.
 - [ ] Recovery (`certificate.deploy_recover`, `deployment.recovery_sweep`) is `ClassAlways`; `certificate.deploy`
       is `ClassChange`.
 - [ ] The sweep cannot deploy: it queues recovery jobs and ends deployments, and recovery never calls
-      `nginx-deploy` (it reads `nginx-status`, verifies and calls `nginx-restore`).
+      `nginx-deploy` (it reads `nginx-status`, fences with `nginx-fence` before it records "nothing was written",
+      verifies and calls `nginx-restore`).
 - [ ] A deploy request runs every check under the location and target locks and is all-or-nothing; a deployment
       never sends twice.
 
@@ -182,6 +196,15 @@ value rules.
 | P4-34 | Low (fixed) | The deploy, location-settings and signing-request bodies accepted repeated and case-variant keys (one silently won); a signing request's completion took a pasted private key into its parse; a repeated location id answered `validation.pattern`; the OpenAPI lacked several 400 answers. Final review C m1, m2, m5, m6. | Fixed: 8a163c9, 715c908, af0e6f7 (keys checked while scanned; `FuzzTopLevelKeys`). |
 | P4-35 | Low (fixed) | A held or queued deployment an Administrator discarded ended `deployment.interrupted` (or `license.locked`), the former with the failure email. Final review C m4. | Fixed: cc7de78, 8a163c9 (`deployment.cancelled`, `ALC-DEP-0022`, no email). |
 | P4-36 | Info (fixed) | Smaller certificate items deferred from Task 2: the weak-signature root exemption applied to any self-naming certificate in the path; a still-valid cross-sign listed first hid an uploaded root; `chain_certificate_expired` fired for an expired copy of the leaf's own key; the PFX pre-parse skipped structures it could not read (a BER file read as "wrong password"). The leak scanner's self-test did not cover stored-key and master-key secrets (Task 18 ledger). | Fixed: 00a1c57, d88d980; the finish-overwrites-phase invariant the API relies on is pinned by f8136b8. |
+| P4-37 | High (fixed) | A certificate or key path that resolves (through a root-owned link) to a name outside the helper's argument vocabulary (for example acme.sh's `*.example.test/` folders) was reported supported and deployed, but the journal written for it could not be read back: status, restore and re-send answered `IO_ERROR` forever, and `cleanup --op` then removed the backups (proof by probe). Final review A1-I1. | Fixed: 751dbfa, 2c3948a (refused before anything is written, `name_not_allowed` at discovery, the helper never writes a journal it cannot read, `cleanup` keeps an unreadable one), d44d50f (real matrix). |
+| P4-38 | Medium (fixed) | A late-starting helper could apply a deployment Alice had recorded "failed, nothing written": recovery treated no journal as final 60 s after the start record, but the helper's budget starts when the helper starts (a sudo/PAM stall plus a dropped connection). Independent audit of 2026-10-04, AUD-05 (proof of concept). | Fixed: 83522dd (`nginx-fence`, protocol 5), 59601fe (recovery fences before "nothing was written"; the 60-second rule removed), d44d50f; e0cd19e (inventory refuses a failed record after a possible send without proof, B2-I1 defence in depth). |
+| P4-39 | Medium (fixed) | `Conn.Run` could block forever after its deadline when a server stalled x/crypto's read loop (malformed `exit-status` plus many channel requests). Final review A2-I1. | Fixed: b180dea (`Run` returns at most 2 s after the deadline; a hung credential source cannot hang the handshake, A2 m4). |
+| P4-40 | Medium (fixed) | `nginxconf` (inside the root helper) built N² pairs for N inherited http-level certificates (a 110 KB dump: 6.7 s, about 1 GiB); Alice's warning merge was quadratic in a hostile warning list. Final review A2-I2, A2-I3. | Fixed: 7b8f334 (pair budget, `too_complex`), 2c3948a (at most 32 distinct warning codes). |
+| P4-41 | Low (fixed) | `nginx-restore` answered `HASH_MISMATCH` ("left as it is") after it had already put the certificate back, when another program changed the key between the two renames. Final review A1-I2 (with A1 m6). | Fixed: 444d536. |
+| P4-42 | Low (fixed) | The helper relied on Alice alone not to start a new operation on a pair whose latest one was interrupted; a stopped Nginx was found only after the files were replaced; an untyped error after the first rename left the helper as a refusal. Final review A1 m1, m3, the typed-error guard. | Fixed: b4086b0 (`RECOVERY_PENDING`, `NGINX_NOT_RUNNING` → `ALC-NGX-0010` 1adcf3b, `OUTCOME_UNKNOWN`). |
+| P4-43 | Low (fixed) | Exit 1 without output from `nginx-deploy`/`nginx-restore` after stdin was sent was read as "sudo refused, nothing changed"; an interrupted verification of an `unchanged` answer ended the deployment failed with an email; a read error in `refollow` could record "failed" after a send; a transient claim error skipped the extra restore. Final review cross-area, B2-I1, B2 m1–m3. | Fixed: 475f721, 59601fe. |
+| P4-44 | Low (fixed) | A connection dropped during the SSH handshake was classified `ssh.auth_failed` (alerts, not retried) or `ssh.protocol_error`. Independent audit of 2026-10-04, AUD-10 (proof of concept). | Fixed: 4abe22d. |
+| P4-45 | Low (fixed) | An SSH-key discovery had no upper bound on users, files, keys or warnings, and discovery jobs no time limit (a hostile helper or server could make a scan arbitrarily large or long). Independent audit of 2026-10-04, AUD-04(a). | Fixed: d375100 (bounds, `list_truncated`), 73e71c8 (20-minute job limit). |
 
 No High finding is open except the documented product residual P4-01.
 
@@ -253,8 +276,24 @@ No High finding is open except the documented product residual P4-01.
   (`deployment.outcome_unknown`, with the email) and releases the website; it does not verify or restore anything.
   The administrator should choose **Discover** and check which certificate the website serves; once the helper
   swept the folder, the backup with the previous key is gone, so going back means deploying the previous
-  certificate again. Between the helper's budget (60 s) and 24 hours a missing journal still means "nothing was
-  written".
+  certificate again. Within 24 hours a missing journal means "nothing was written" only after `nginx-fence`
+  answered.
+- **The fence lives 7 days.** The tombstone `nginx-fence` writes is swept like a finished operation, 7 days later by
+  the server's clock. A `nginx-deploy` that starts more than 7 days late (or after a forward clock jump of that size)
+  is no longer fenced. A server whose sudoers lacks the `nginx-fence` line (the helper was updated without the setup
+  commands) leaves such deployments **Confirming the outcome** until the line exists or about a day has passed
+  (**Outcome not confirmed**).
+- **TLS on another block's listen (A2 m2).** A TLS `server` block whose own `listen` lacks `ssl` on an address and
+  port that another block made TLS is not listed (Nginx shares the socket; matching its address equivalences is not
+  built), so its certificate is neither shown nor deployable.
+- **Discovery bounds.** Beyond the 200 users of §13.2, the SSH-key scan's other bounds (1000 files, 10,000 keys,
+  500 warnings, 10 minutes of reading) and the 20-minute discovery job limit are Alice's own choice; a cut scan is
+  partial and says so (`list_truncated`). An `nginx-dump` keeps at most 32 distinct warning codes.
+- **Exit 1 from sudo for a deploy or restore** is uncertain (sudo may have consumed stdin), so a server whose sudoers
+  lost the Nginx profile after its last scan turns a deployment into a recovery that fails until the profile is back.
+- **An SSH error classified by text.** x/crypto has no typed error for "no supported methods remain"; Alice matches
+  its message to tell an authentication failure from a dropped connection (a changed message would make an
+  authentication failure look retryable, `ssh.unreachable`).
 - **Pseudo file systems.** `devtmpfs` reports the same file-system type as `tmpfs`, so the helper cannot tell them
   apart (device nodes are refused as not regular before any open anyway). Phase 3's `authorized_keys` walk has no
   file-system-type check at all (unchanged in this phase).
@@ -357,7 +396,7 @@ Spec §26.6 "Owner verifies". You need:
    them next to `alice-helper` and run `sudo sh ./prepare-alice.sh`. Then **Add server** with **Server type**
    **Nginx server**, compare and confirm the fingerprint.
    Expected: "This server is ready for Alice."; `sudo -l -U alice-svc` lists the `nginx-dump`, `nginx-test`,
-   `nginx-deploy`, `nginx-restore` and `nginx-status` lines; the server shows **Connected**.
+   `nginx-deploy`, `nginx-restore`, `nginx-status` and `nginx-fence` lines; the server shows **Connected**.
 2. **Discover.** On the server's page choose **Discover**.
    Expected: **Websites on this server** lists `<your test site>`, port 443, the file
    `/etc/nginx/alice-test/site.crt`, state **Ready**; **Certificates** lists the self-signed certificate with

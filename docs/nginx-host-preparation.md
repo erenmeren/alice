@@ -23,7 +23,9 @@ safe.
    development build of Alice without checksums prints a warning instead and installs the file unchecked.)
 2. Install the checked copy as `/usr/local/libexec/alice-helper`, owned by root, mode 0755. Alice cannot change this
    file; you update it yourself when a new Alice release asks for it ("helper outdated"). This release needs helper
-   protocol 4 (`alice-helper` 1.3.0): the Nginx certificate commands, plus the protocol 3 rule that a key-file change whose content did not arrive complete is refused.
+   protocol 5 (`alice-helper` 1.4.0): the Nginx certificate commands with `nginx-fence` (protocol 5), plus the
+   protocol 3 rule that a key-file change whose content did not arrive complete is refused. See "Updating the
+   helper".
 3. Create the system user `alice-svc` (home `/var/lib/alice-svc`, shell `/bin/bash`, no files from `/etc/skel`) if
    it does not exist. If a user `alice-svc` already exists with another home directory, the script stops. The
    account gets no password (`usermod -p '*'`): nobody can sign in with a password, but the SSH server still accepts
@@ -51,7 +53,7 @@ want it, ask for the commands through the API with `GET /api/v1/ssh-keys/platfor
 | Profile | For | Allowed helper subcommands (with `sudo`) |
 |---|---|---|
 | `linux` | Servers where Alice manages SSH keys only | `sshd-dump`, `hostkeys`, `cleanup`, `authkeys-list`, `authkeys-read`, `authkeys-write` |
-| `nginx` | Nginx servers: their certificates and their SSH keys | everything in `linux` plus `nginx-dump`, `nginx-test`, `nginx-deploy`, `nginx-restore`, `nginx-status` |
+| `nginx` | Nginx servers: their certificates and their SSH keys | everything in `linux` plus `nginx-dump`, `nginx-test`, `nginx-deploy`, `nginx-restore`, `nginx-status`, `nginx-fence` |
 
 Choose the profile under **Server type** (**Linux server** or **Nginx server**) on the **Servers** page, and add the
 server in Alice with the same **Server type**. A Linux server never gets the Nginx permissions. Both profiles
@@ -60,7 +62,7 @@ rights and have no sudoers line.
 
 ## The Nginx profile
 
-The `nginx` profile adds these five lines to `/etc/sudoers.d/alice` (exactly as the setup commands write them):
+The `nginx` profile adds these lines to `/etc/sudoers.d/alice` (exactly as the setup commands write them):
 
 ```
 Cmnd_Alias ALICE_NGINX_ONLY = \
@@ -68,7 +70,8 @@ Cmnd_Alias ALICE_NGINX_ONLY = \
     /usr/local/libexec/alice-helper nginx-test, \
     /usr/local/libexec/alice-helper nginx-deploy --op ????????-????-????-????-???????????? --cert /* --key /* --expect-cert-sha256 ???????????????????????????????????????????????????????????????? --content-sha256 ????????????????????????????????????????????????????????????????, \
     /usr/local/libexec/alice-helper nginx-restore --op ????????-????-????-????-????????????, \
-    /usr/local/libexec/alice-helper nginx-status --op ????????-????-????-????-????????????
+    /usr/local/libexec/alice-helper nginx-status --op ????????-????-????-????-????????????, \
+    /usr/local/libexec/alice-helper nginx-fence --op ????????-????-????-????-????????????
 
 alice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_NGINX_ONLY
 ```
@@ -84,6 +87,7 @@ the helper checks its whole argument list itself and refuses anything that is no
 | `nginx-deploy` | Replaces one certificate file and its key file with the content Alice sends on standard input, as one transaction (below). The two paths must be a pair that the current Nginx configuration uses. |
 | `nginx-restore` | Puts back the previous files of one earlier `nginx-deploy`, from its backup. |
 | `nginx-status` | Reports how one earlier `nginx-deploy` ended (from its journal) and whether the helper is busy. |
+| `nginx-fence` | Makes sure one earlier `nginx-deploy` can never run any more. Alice uses it when it finds no journal for a deployment whose answer it never got: the helper writes a small "fenced" journal under the lock, after which a late `nginx-deploy` of that deployment (for example one stuck in `sudo` while the connection dropped) refuses without changing anything. If the deployment had started after all, the helper answers its journal instead and Alice finishes or undoes it. |
 
 `tls-probe` (no `sudo`) connects to a website on the server itself (for example `127.0.0.1:443`) and reports the
 certificate it serves. Alice uses it to check a website it cannot reach from its own network.
@@ -103,8 +107,13 @@ The helper changes only files that Nginx itself uses as a certificate/key pair, 
   never creates a new file and never edits the Nginx configuration.
 - A pair is not used when a configuration file that holds its `server` block or its directives (also through an
   `include`) can be changed by a user other than root.
+- The real location of each file (after the links are followed) must use only the characters the helper accepts in
+  a path (letters, digits and `._/@:+-`): a link into a folder named like `*.example.com` (acme.sh) is shown as
+  **Not supported** ("name not allowed") and never written.
 - Before replacing anything it checks that the certificate file still has the content Alice saw at the last
-  **Discover** and that the new key belongs to the new certificate.
+  **Discover** and that the new key belongs to the new certificate; that the latest change of this pair is not an
+  interrupted one Alice is still finishing (it refuses until then); and that `/usr/bin/systemctl` exists and the
+  `nginx` service is active (a reload could not apply the files otherwise, `ALC-NGX-0010`).
 
 ### What a deployment does on the server
 
@@ -113,7 +122,8 @@ per server). It writes a journal and copies of the current certificate and key f
 new certificate (each through a temporary file next to the original, created root-only, then renamed over it), runs
 `nginx -t`, then `systemctl reload nginx` and `systemctl is-active nginx`. If any of this fails, it puts the previous
 files back and reloads Nginx again. It finishes even if the SSH connection drops; Alice then reads the journal with
-`nginx-status` and finishes or undoes the change.
+`nginx-status` and finishes or undoes the change. When there is no journal at all, Alice runs `nginx-fence` before it
+records "nothing was written", so a `nginx-deploy` that starts late can never change the files afterwards.
 
 The new files keep the owner and group of the files they replace. The key file becomes mode 0600, except a key that
 was 0640 (for example `root:ssl-cert` on Debian), which stays 0640. The certificate keeps its mode, limited to 0644.
@@ -123,11 +133,17 @@ An SELinux label is copied from the replaced file (`restorecon` is not run).
 
 Each deployment has its own folder `/var/lib/alice-helper/backups/<deployment ID>` (root only, 0700) with
 `journal.json`, `cert.bak` (the previous certificate file) and `key.bak` (the previous private key), each root 0600.
-The deployment's page in Alice shows this folder as **Backup on the server**. The helper removes a folder:
+The deployment's page in Alice shows this folder as **Backup on the server**. The helper removes a folder, by the
+server's clock:
 
-- 7 days after the deployment succeeded, changed nothing, or was undone;
-- 30 days after a deployment whose undo failed, unless the helper may still need the backup to finish it;
-- never while a deployment was interrupted and has not been finished or undone yet.
+- 7 days after the deployment succeeded, changed nothing, was undone, stopped before it replaced anything
+  (`prepared`), or was fenced (`nginx-fence`);
+- 30 days after a deployment whose undo failed and that the helper can no longer finish, after a journal it cannot
+  read, or for a folder without a journal;
+- never while a deployment was interrupted (writing or undoing) and has not been finished or undone yet, nor while a
+  failed undo can still be finished, unless a later deployment of the same files replaced it (then after 30 days).
+
+`alice-helper cleanup --op <deployment ID>` refuses to remove a folder whose journal exists but cannot be read.
 
 Alice never removes these folders itself. The helper keeps at most 1000 of them; beyond that it refuses new
 deployments until old ones are removed. They contain private keys: treat them like the key files themselves.
@@ -200,7 +216,10 @@ this server".
   and a login shell (a shell field that does not end in `/nologin` or `/false`; an empty shell field counts as a
   login shell, because the SSH server treats it as `/bin/sh`), at most 200 accounts, in the places that the SSH server's
   `AuthorizedKeysFile` setting names (also per user, through `Match` blocks). Alice also reads the server's host key
-  fingerprints and its SSH settings (`sshd -T`). It never reads private keys.
+  fingerprints and its SSH settings (`sshd -T`). It never reads private keys. One scan reads at most 1000 key files
+  and 10,000 keys and spends at most 10 minutes reading files; beyond that the scan is marked incomplete (a warning says
+  that lists were cut) and keys of files it did not read are not marked **No longer found**. A whole discovery stops after 20
+  minutes.
 - Alice lists some key files as unsupported and never reads or changes them, because another user could redirect
   them to a file of their choosing (for example `root`'s keys):
   - a file reached through a symbolic link that leaves the user's home;
@@ -292,6 +311,19 @@ fingerprint to offer, the dialog says "Alice has not recorded a new fingerprint 
 
 Alice reuses an open SSH connection for up to 60 seconds for its own work. **Test connection** always opens a new
 connection, so it shows a changed host key at once.
+
+## Updating the helper
+
+Each Alice release names the helper protocol it needs. When it needs a newer one than a server has, Alice shows the
+server's error "The alice-helper on this server is outdated." (`ALC-SSH-0005`, `required_protocol` 5) and does nothing more on it: no scan, no key
+removal, no deployment, no recovery. To update, repeat steps 1 to 3 of "Steps" with the `alice-helper` of the new
+release and the commands from the **Servers** page (same **Server type**), then choose **Test connection** on the
+server's page. The commands install the new helper and the new sudoers file together; installing only the helper
+leaves the new `nginx-fence` line missing, and a deployment whose outcome Alice must check then stays **Confirming
+the outcome** until the commands are run (after about a day it ends **Outcome not confirmed**).
+
+This release (protocol 5, `alice-helper` 1.4.0) adds `nginx-fence` and its sudoers line. A deployment that was
+interrupted before the update is finished by the new helper as usual.
 
 ## Removing Alice from a server
 

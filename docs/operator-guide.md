@@ -236,7 +236,10 @@ deployments. There is no button to repeat or undo a deployment: deploy again, or
 When Alice does not get a clear answer from the server (the connection dropped, the helper was killed, Alice
 restarted), it never sends the deployment again. The deployment's state becomes **Confirming the outcome**: about 30
 seconds later Alice asks the helper how the change ended (the helper finishes its work on the server on its own) and
-then either confirms the new certificate (after verifying it), or puts the previous files back. While the server
+then either confirms the new certificate (after verifying it), or puts the previous files back. When the helper has
+no record of the deployment at all (for example the connection dropped before the command reached it), Alice first
+tells the helper to refuse that deployment for good (`nginx-fence`), so it can never be applied later, and only then
+ends it **Failed**: nothing was written. While the server
 cannot be reached Alice tries again every 15 minutes; after four failed attempts the status becomes **Needs
 attention** and the administrators get one email. After about a day (96 attempts) Alice stops trying: the deployment
 ends **Outcome not confirmed** (`ALC-DEP-0017`) with an email, and the website can be deployed to again. Check the
@@ -247,8 +250,9 @@ removed the deployment's journal (it keeps it 7 days after a success). Alice the
 deployment ends **Outcome not confirmed** (`ALC-DEP-0018`) with an email. Choose **Discover** and check which
 certificate the website serves; deploy again if needed.
 
-While a deployment on a server is being finished, new deployments to that server are refused (`ALC-DEP-0002`); scans
-and SSH key work go on. Finishing a deployment also runs when the license has expired. A deployment that was
+While a deployment on a server is being finished, new deployments to that server are refused (`ALC-DEP-0002`; the
+helper also refuses a new change of the same files while the earlier one is unfinished); scans and SSH key work go
+on. Finishing a deployment also runs when the license has expired. A deployment that was
 waiting to start when the license locked is held as "On hold for the license" until an administrator runs or
 discards it after the next license is installed. A discarded deployment ends **cancelled** (`ALC-DEP-0022`): nothing
 was sent, the website keeps its certificate, and no failure email is sent.
