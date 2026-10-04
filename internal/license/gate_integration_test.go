@@ -350,57 +350,39 @@ func TestLockIsRecordedBeforeQueuedChangesAreHeld(t *testing.T) {
 }
 
 // AUD-02 fix round (I2): a failed evaluation is retried within minutes, so two failed evaluations
-// followed by a success never close the gate.
+// followed by a success never close the gate. Deterministic: the fake clock is advanced exactly
+// when the scheduler waits on its ticker or its retry timer.
 func TestFailedEvaluationsAreRetriedWithinMinutes(t *testing.T) {
 	e := newEnv(t)
 	license.SetRowLockTimeout(e.svc, 200*time.Millisecond)
 	now := e.clk.Now()
 	_, err := e.upload(e.payload("LIC-A", now, now.Add(365*day), 10))
 	require.NoError(t, err)
-	results, started := make(chan error, 10), make(chan struct{}, 10)
+	results := make(chan error, 10)
 	log := slog.New(slog.DiscardHandler)
 	sched := jobs.NewScheduler(e.clk, e.svc, log, jobs.Task{Type: jobs.LicenseEvaluate, Every: time.Hour, Retry: time.Minute,
-		Run: func(ctx context.Context) error {
-			started <- struct{}{}
-			err := e.svc.Tick(ctx)
-			results <- err
-			return err
-		}})
+		Run: func(ctx context.Context) error { err := e.svc.Tick(ctx); results <- err; return err }})
 	ctx, stop := context.WithCancel(e.ctx)
 	done := make(chan struct{})
 	go func() { sched.Run(ctx); close(done) }()
 	defer func() { stop(); <-done }()
-	// next advances the clock in small steps until the scheduler starts the evaluation, then waits
-	// for its result without moving the clock; it returns the fake time that passed.
-	next := func(limit time.Duration) (time.Duration, error) {
-		t.Helper()
-		start := e.clk.Now()
-		for e.clk.Now().Sub(start) <= limit {
-			e.clk.Advance(15 * time.Second)
-			select {
-			case <-started:
-				return e.clk.Now().Sub(start), <-results
-			case <-time.After(20 * time.Millisecond):
-			}
-		}
-		t.Fatalf("no evaluation within %s", limit)
-		return 0, nil
-	}
 
 	release := e.holdLicenseRow()
-	_, err = next(time.Hour + time.Minute) // the hourly evaluation fails
-	require.Error(t, err)
+	e.clk.BlockUntil(0, 1) // the scheduler's ticker
+	e.clk.Advance(time.Hour)
+	require.Error(t, <-results, "the hourly evaluation fails")
 	assert.NoError(t, e.svc.Allow(license.ClassChange))
-	after, err := next(10 * time.Minute) // retried within minutes, fails again
-	require.Error(t, err)
-	assert.LessOrEqual(t, after, 2*time.Minute)
+	e.clk.BlockUntil(1, 1) // the retry is armed
+	e.clk.Advance(time.Minute)
+	require.Error(t, <-results, "retried after a minute, fails again")
 	assert.NoError(t, e.svc.Allow(license.ClassChange))
 	release()
-	after, err = next(10 * time.Minute) // retried after about two minutes: succeeds
-	require.NoError(t, err)
-	assert.LessOrEqual(t, after, 3*time.Minute)
+	e.clk.BlockUntil(1, 1)
+	e.clk.Advance(2 * time.Minute)
+	require.NoError(t, <-results, "retried after two minutes: succeeds")
 	assert.NoError(t, e.svc.Allow(license.ClassChange))
 	assert.False(t, e.svc.Snapshot().Unverified)
+	assert.Equal(t, time.Hour+3*time.Minute, e.clk.Now().Sub(now))
 }
 
 // AUD-02 fix round: when another process ends a held clock jump (here a correction license
@@ -430,4 +412,54 @@ func TestAProcessFollowsAHoldEndedElsewhere(t *testing.T) {
 	assert.Equal(t, 1, e.auditCount("clock.forward_jump"))
 	assert.Equal(t, 1, e.auditCount("clock.jump_accepted"))
 	assert.Zero(t, e.auditCount("clock.jump_cleared"))
+}
+
+// AUD-02 fix round 2 (N3): Shutdown does not wait for a running evaluation longer than its own
+// context allows (serve gives the time record save 5 s); the running evaluation saves the time
+// record itself if it succeeds.
+func TestShutdownGivesUpBehindARunningEvaluation(t *testing.T) {
+	e := newEnv(t)
+	license.SetRowLockTimeout(e.svc, 10*time.Second)
+	release := e.holdLicenseRow()
+	ticked := make(chan error, 1)
+	go func() { ticked <- e.svc.Tick(e.ctx) }()
+	require.Eventually(t, func() bool { return license.EvaluationRunning(e.svc) }, 5*time.Second, 5*time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(e.ctx, time.Second)
+	defer cancel()
+	start := time.Now()
+	err := e.svc.Shutdown(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 3*time.Second)
+	release()
+	require.NoError(t, <-ticked, "the running evaluation completes once the row is free")
+}
+
+// AUD-02 fix round 2 (N4): process B started after a forward clock jump that process A holds (B's
+// first observation had nothing to compare with). B's own gate follows the jumped clock and
+// refuses, but B no longer writes its view into the license state, history, audit log or
+// emails: the stored state does not flip every hour between the two processes.
+func TestAProcessWithoutTheHoldLeavesTheStateToTheHolder(t *testing.T) {
+	e := newEnv(t)
+	now := e.clk.Now()
+	_, err := e.upload(e.payload("LIC-A", now, now.Add(24*time.Hour), 10))
+	require.NoError(t, err)
+	e.clk.JumpWall(10 * day) // past LocksAt by the system clock
+	b := e.newService()
+	require.NoError(t, b.Start(e.ctx)) // B's first evaluation: nothing to compare with, no jump
+	require.NoError(t, e.svc.Tick(e.ctx))
+	require.NotNil(t, e.svc.Snapshot().Reading.Jump, "A holds the jump")
+	require.Equal(t, license.PhaseActive, e.svc.Snapshot().Eval.Phase)
+	lockedAudits, lockedMails := e.auditCount("license.locked"), countOf(e.notices.templates(), license.TemplateLocked)
+
+	for range 3 {
+		e.clk.Advance(time.Hour)
+		require.NoError(t, b.Tick(e.ctx))
+		require.NoError(t, e.svc.Tick(e.ctx))
+		assert.Equal(t, "active", e.state(), "the holder's view stays stored")
+	}
+	assert.Equal(t, lockedAudits, e.auditCount("license.locked"), "B records no transition")
+	assert.Equal(t, lockedMails, countOf(e.notices.templates(), license.TemplateLocked), "B sends no lock email")
+	assert.ErrorIs(t, b.Allow(license.ClassChange), license.ErrLocked, "B keeps its own, stricter gate")
+	assert.NoError(t, e.svc.Allow(license.ClassChange))
 }

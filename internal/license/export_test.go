@@ -11,3 +11,6 @@ func SetRowLockTimeout(s *Service, d time.Duration) { s.rowLockTimeout = d }
 
 // AllowIn is the gate's pure decision (AUD-02).
 var AllowIn = allowIn
+
+// EvaluationRunning reports whether an evaluation, upload or shutdown save holds the evaluation lock.
+func EvaluationRunning(s *Service) bool { return len(s.evalMu) == 1 }

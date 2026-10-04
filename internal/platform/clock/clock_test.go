@@ -283,3 +283,24 @@ func TestFakeJumpWallMovesOnlyTheWallClock(t *testing.T) {
 	assert.True(t, f.Now().Equal(start.Add(-26*time.Hour)))
 	assert.Equal(t, 2*time.Hour, f.Elapsed())
 }
+
+func TestFakeBlockUntilWaitsForRegistrations(t *testing.T) {
+	f := clock.NewFake(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	done := make(chan struct{})
+	go func() {
+		f.BlockUntil(1, 1)
+		close(done)
+	}()
+	tk := f.NewTicker(time.Hour)
+	defer tk.Stop()
+	select {
+	case <-done:
+		t.Fatal("BlockUntil returned before the timer was registered")
+	default:
+	}
+	ch := f.After(time.Minute)
+	<-done
+	f.Advance(time.Minute)
+	<-ch
+	f.BlockUntil(0, 1) // the ticker is still registered
+}

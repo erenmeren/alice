@@ -135,8 +135,10 @@ func (s *Service) install(ctx context.Context, raw []byte, actor audit.Actor, by
 		return UploadResult{}, err
 	}
 	var res UploadResult
-	s.evalMu.Lock()
-	defer s.evalMu.Unlock()
+	if err := s.lockEval(ctx); err != nil {
+		return UploadResult{}, err
+	}
+	defer s.unlockEval()
 	ctx, cancel := context.WithTimeout(ctx, tickTimeout) // evalMu is never held without a bound
 	defer cancel()
 	g := s.working()

@@ -43,8 +43,10 @@ func mailTime(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC"
 // bounded (tickTimeout, and the row lock wait by rowLockTimeout); the gate fails closed on its
 // own when evaluations keep failing (MaxEvaluationAge).
 func (s *Service) Tick(ctx context.Context) error {
-	s.evalMu.Lock()
-	defer s.evalMu.Unlock()
+	if err := s.lockEval(ctx); err != nil {
+		return err
+	}
+	defer s.unlockEval()
 	return s.tickLocked(ctx)
 }
 
@@ -63,11 +65,16 @@ func (s *Service) tickLocked(ctx context.Context) error {
 		// held clock jump, this process follows the stored record instead of holding on its own.
 		// The other direction (adopting a hold this process never saw) is not possible: its
 		// high-water mark has already followed the jumped clock, and it never moves back.
-		if _, stored := decodeJump(row.ClockJump); !stored {
-			if _, _, held := g.PendingJump(); held {
-				g.AcceptJump()
-			}
+		_, stored := decodeJump(row.ClockJump)
+		_, _, held := g.PendingJump()
+		if !stored && held {
+			g.AcceptJump()
 		}
+		// A process that never saw a hold the row stores (it started after the jump) computes
+		// license time from the jumped clock. It keeps its own, stricter gate, but leaves the
+		// license state, its history, audit rows and emails to the processes that hold the jump,
+		// so the stored state does not flip every hour between the two views.
+		foreignHold := stored && !held
 		up := s.uptime.Elapsed()
 		reading, clockEvents := g.Observe(s.clock.Now(), up)
 		c, err := s.compute(ctx, tx, reading, false)
@@ -77,8 +84,18 @@ func (s *Service) tickLocked(ctx context.Context) error {
 		now := s.clock.Now().UTC()
 		var audits []audit.Event
 		for _, step := range []func() ([]audit.Event, error){
-			func() ([]audit.Event, error) { return s.recordTransition(ctx, tx, c, now) },
-			func() ([]audit.Event, error) { return s.sendNotices(ctx, tx, c, now) },
+			func() ([]audit.Event, error) {
+				if foreignHold {
+					return nil, nil
+				}
+				return s.recordTransition(ctx, tx, c, now)
+			},
+			func() ([]audit.Event, error) {
+				if foreignHold {
+					return nil, nil
+				}
+				return s.sendNotices(ctx, tx, c, now)
+			},
 			func() ([]audit.Event, error) { return s.recordClockEvents(ctx, tx, c, reading, clockEvents, now) },
 			func() ([]audit.Event, error) { return s.recordTampered(ctx, tx, c, now) },
 			func() ([]audit.Event, error) { return s.recordInstallationEpisode(ctx, tx, c, now) },

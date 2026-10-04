@@ -86,6 +86,7 @@ func (r *realTicker) Stop()               { r.stop() }
 // moves also count as uptime (Elapsed), JumpWall moves only the wall clock.
 type Fake struct {
 	mu      sync.Mutex
+	cond    *sync.Cond // signalled when a timer or ticker is registered; on mu
 	now     time.Time
 	elapsed time.Duration
 	timers  []*fakeTimer
@@ -106,7 +107,29 @@ type fakeTicker struct {
 }
 
 // NewFake returns a Fake set to t.
-func NewFake(t time.Time) *Fake { return &Fake{now: t.UTC()} }
+func NewFake(t time.Time) *Fake {
+	f := &Fake{now: t.UTC()}
+	f.cond = sync.NewCond(&f.mu)
+	return f
+}
+
+// BlockUntil waits until at least timers pending timers (After) and tickers tickers are
+// registered, so a test can advance the clock exactly when the code under test waits on it,
+// without sleeping. Fired timers are no longer pending.
+func (f *Fake) BlockUntil(timers, tickers int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for len(f.timers) < timers || len(f.tickers) < tickers {
+		f.cond.Wait()
+	}
+}
+
+// signal wakes BlockUntil. The caller holds f.mu.
+func (f *Fake) signal() {
+	if f.cond != nil {
+		f.cond.Broadcast()
+	}
+}
 
 // Now returns the fake's current time.
 func (f *Fake) Now() time.Time {
@@ -164,6 +187,7 @@ func (f *Fake) After(d time.Duration) <-chan time.Time {
 		return ch
 	}
 	f.timers = append(f.timers, &fakeTimer{at: f.now.Add(d), ch: ch})
+	f.signal()
 	return ch
 }
 
@@ -177,6 +201,7 @@ func (f *Fake) NewTicker(d time.Duration) Ticker {
 	defer f.mu.Unlock()
 	t := &fakeTicker{f: f, period: d, next: f.now.Add(d), ch: make(chan time.Time, 1)}
 	f.tickers = append(f.tickers, t)
+	f.signal()
 	return t
 }
 

@@ -239,7 +239,7 @@
       "unverified": {
         "title": "Lisans denetlenemedi.",
         "cause": "Alice lisansını 3 saatten uzun süredir denetleyemedi; bu yüzden yönetilen sistemlerdeki değişiklikler duraklatıldı.",
-        "action": "Veritabanına erişilebildiğini ve lisans satırını başka bir veritabanı oturumunun tutmadığını denetleyin. Lisans hâlâ geçerliyse değişiklikler, birkaç dakika içinde yeniden denenen bir sonraki başarılı denetimden sonra yeniden başlar."
+        "action": "Veritabanına erişilebildiğini ve lisans satırını başka bir veritabanı oturumunun tutmadığını denetleyin. Lisans hâlâ geçerliyse değişiklikler, en geç 10 dakikada bir yeniden denenen bir sonraki başarılı denetimden sonra yeniden başlar."
       }
     },
     "target": {

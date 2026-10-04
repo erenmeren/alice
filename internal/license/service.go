@@ -51,9 +51,12 @@ var systemActor = audit.SystemActor("license")
 const (
 	// MaxEvaluationAge is how long the gate trusts the last successful evaluation, in process
 	// uptime: after it, gated work is refused with ErrUnverified until an evaluation succeeds.
-	// The evaluation runs hourly and a failed one is retried after 1, 2, 4 … minutes (the
-	// scheduler's backoff, capped at the hour), so a failure that lasts less than about two and
-	// a half hours never stops changes; a stalled evaluation is visible the same morning.
+	// The evaluation runs hourly and a failed one is retried after 1, 2, 4, 8 minutes, then every
+	// 10 minutes (jobs.MaxRetryGap); a failed hourly run never postpones a pending retry. So the
+	// first success comes at most 10 minutes after a failure ends, and a failure never stops
+	// changes when it ends within 2 h 50 min of the last successful evaluation (an outage of up
+	// to 2 h 40 min right after one, of up to 1 h 50 min anywhere). A stalled evaluation is
+	// visible the same morning.
 	MaxEvaluationAge = 3 * time.Hour
 	// defaultRowLockTimeout bounds every wait for the license row lock (lock_timeout), so a
 	// session holding the row cannot stop evaluations, uploads and the shutdown save for ever.
@@ -62,9 +65,9 @@ const (
 	tickTimeout = 2 * time.Minute
 	// kickMinGap and kickMaxGap bound how often the gate starts an evaluation of its own when it
 	// refuses on its own clock (ErrLockDue, ErrUnverified): at most once a minute, doubling after
-	// each failed one up to the hourly interval.
+	// each failed one up to 10 minutes.
 	kickMinGap = time.Minute
-	kickMaxGap = time.Hour
+	kickMaxGap = 10 * time.Minute
 )
 
 // Config holds the service dependencies.
@@ -122,10 +125,11 @@ type Service struct {
 	codec     HWMCodec
 	hwmFile   *FileHWMStore // nil without a state directory
 
-	// evalMu is held by Tick, uploads and Shutdown from before their transaction until the
-	// guard and the snapshot are published after the commit, so no other evaluation in this
-	// process sees a guard its transaction may still roll back.
-	evalMu sync.Mutex
+	// evalMu (a semaphore, taken with lockEval so a waiter can give up with its context) is held
+	// by Tick, uploads and Shutdown from before their transaction until the guard and the
+	// snapshot are published after the commit, so no other evaluation in this process sees a
+	// guard its transaction may still roll back.
+	evalMu chan struct{}
 
 	mu    sync.Mutex // guards guard and snap
 	guard Guard
@@ -150,7 +154,7 @@ func New(c Config) *Service {
 	s := &Service{
 		pool: c.Pool, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, uptime: c.Uptime, keys: c.Keys,
 		buildTime: c.BuildTime.UTC(), notifier: c.Notifier, targets: c.Targets, log: c.Log, codec: NewHWMCodec(c.Keyring),
-		rowLockTimeout: c.RowLockTimeout,
+		rowLockTimeout: c.RowLockTimeout, evalMu: make(chan struct{}, 1),
 	}
 	if s.rowLockTimeout <= 0 {
 		s.rowLockTimeout = defaultRowLockTimeout
@@ -357,18 +361,34 @@ func (s *Service) Installed(ctx context.Context, q db.Querier) (bool, error) {
 // §16.4), loads the time record from both stores, restores a held clock jump, and runs the
 // first evaluation. Problems with the time record of an existing installation are audited.
 func (s *Service) Start(ctx context.Context) error {
-	s.evalMu.Lock()
-	defer s.evalMu.Unlock()
+	if err := s.lockEval(ctx); err != nil {
+		return err
+	}
+	defer s.unlockEval()
 	return s.startLocked(ctx)
 }
+
+// lockEval takes evalMu, or gives up when ctx ends first.
+func (s *Service) lockEval(ctx context.Context) error {
+	select {
+	case s.evalMu <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("license: wait for a running evaluation: %w", ctx.Err())
+	}
+}
+
+func (s *Service) unlockEval() { <-s.evalMu }
 
 // Restart runs reset while no evaluation, upload or shutdown is in flight, then starts the
 // service again (a fresh installation if reset emptied the license tables). It exists for
 // the e2e full reset: an evaluation in flight could otherwise write the old time record back
 // after reset removed it. Nothing else may evaluate between reset and the restart.
 func (s *Service) Restart(ctx context.Context, reset func(context.Context) error) error {
-	s.evalMu.Lock()
-	defer s.evalMu.Unlock()
+	if err := s.lockEval(ctx); err != nil {
+		return err
+	}
+	defer s.unlockEval()
 	if err := reset(ctx); err != nil {
 		return err
 	}
@@ -411,11 +431,15 @@ func (s *Service) startLocked(ctx context.Context) error {
 }
 
 // Shutdown observes the clock and saves the time record (spec §16.5: also on graceful shutdown).
-// The gate starts no evaluation of its own afterwards.
+// The gate starts no evaluation of its own afterwards. When an evaluation still runs when ctx
+// ends, Shutdown returns without saving: that evaluation saves the time record itself, and
+// otherwise the record of the last evaluation (at most an hour old) stays.
 func (s *Service) Shutdown(ctx context.Context) error {
 	s.stopKicks()
-	s.evalMu.Lock()
-	defer s.evalMu.Unlock()
+	if err := s.lockEval(ctx); err != nil {
+		return err
+	}
+	defer s.unlockEval()
 	ctx, cancel := context.WithTimeout(ctx, tickTimeout) // evalMu is never held without a bound
 	defer cancel()
 	g := s.working()

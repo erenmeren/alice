@@ -275,21 +275,18 @@ func TestUnverifiedPausesReadOnlyTasksUntilAnEvaluationSucceeds(t *testing.T) {
 	assert.Equal(t, int32(1), discovered.Load())
 }
 
-// AUD-02 (I2): a failed run of a task with Retry is run again after 1, then 2 minutes (doubling up
-// to its interval), not an hour later; after a success it waits for its interval again.
+// AUD-02: a failed run of a task with Retry is run again after 1, then 2 minutes, not an hour
+// later; after a success it waits for its interval again. Deterministic: the test advances the
+// fake clock exactly when the scheduler waits on it.
 func TestFailedRunsAreRetriedWithBackoff(t *testing.T) {
 	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	clk := clock.NewFake(start)
-	var mu sync.Mutex
-	var at []time.Duration
-	ran := make(chan struct{}, 10)
+	ran := make(chan time.Duration, 10)
+	var n atomic.Int32
 	s := NewScheduler(clk, &fakeGate{}, quiet, Task{Type: LicenseEvaluate, Every: time.Hour, Retry: time.Minute,
 		Run: func(context.Context) error {
-			mu.Lock()
-			defer mu.Unlock()
-			at = append(at, clk.Now().Sub(start))
-			ran <- struct{}{}
-			if len(at) <= 2 {
+			ran <- clk.Now().Sub(start)
+			if n.Add(1) <= 2 {
 				return errors.New("the database is down")
 			}
 			return nil
@@ -301,23 +298,98 @@ func TestFailedRunsAreRetriedWithBackoff(t *testing.T) {
 		close(done)
 	}()
 	defer func() { cancel(); <-done }()
-	runs := func() []time.Duration {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([]time.Duration(nil), at...)
+
+	clk.BlockUntil(0, 1)
+	clk.Advance(time.Hour)
+	assert.Equal(t, time.Hour, <-ran, "the interval run fails")
+	clk.BlockUntil(1, 1) // the retry is armed
+	clk.Advance(time.Minute)
+	assert.Equal(t, time.Hour+time.Minute, <-ran, "retried after a minute; fails again")
+	clk.BlockUntil(1, 1)
+	clk.Advance(2 * time.Minute)
+	assert.Equal(t, time.Hour+3*time.Minute, <-ran, "retried after two minutes; succeeds")
+	clk.Advance(57 * time.Minute)
+	assert.Equal(t, 2*time.Hour, <-ran, "then the interval again")
+}
+
+// simulate drives a task's retry plan the way loopWith does, with interval runs every hour and
+// ok deciding each run, and returns the times of the successful runs (Start's evaluation at 0
+// included) up to horizon.
+func simulate(ok func(at time.Duration) bool, horizon time.Duration) []time.Duration {
+	plan := newRetryPlan(Task{Every: time.Hour, Retry: time.Minute})
+	successes := []time.Duration{0}
+	nextTick, retryAt := time.Hour, time.Duration(-1)
+	for {
+		at := nextTick
+		fromRetry := retryAt >= 0 && retryAt <= nextTick
+		if fromRetry {
+			at, retryAt = retryAt, -1
+			plan.fired()
+		} else {
+			nextTick += time.Hour
+		}
+		if at > horizon {
+			return successes
+		}
+		good := ok(at)
+		if good {
+			successes = append(successes, at)
+			retryAt = -1
+		}
+		if delay, arm := plan.after(!good); arm {
+			retryAt = at + delay
+		}
 	}
-	advanceUntil(t, clk, time.Hour, ran) // the hourly run fails
-	for i := 0; i < 600 && len(runs()) < 3; i++ {
-		clk.Advance(5 * time.Second)
-		time.Sleep(2 * time.Millisecond)
+}
+
+func maxGap(successes []time.Duration) time.Duration {
+	var gap time.Duration
+	for i := 1; i < len(successes); i++ {
+		gap = max(gap, successes[i]-successes[i-1])
 	}
-	got := runs()
-	require.Len(t, got, 3, "two retries within minutes")
-	assert.InDelta(t, time.Minute, got[1]-got[0], float64(30*time.Second), "first retry after a minute")
-	assert.InDelta(t, 2*time.Minute, got[2]-got[1], float64(30*time.Second), "second retry after two minutes")
-	for range 100 { // 50 minutes: the success ended the retries
-		clk.Advance(30 * time.Second)
-		time.Sleep(time.Millisecond)
+	return gap
+}
+
+// AUD-02 fix round 2 (N1): a failed interval run never postpones a pending retry, and retries are
+// at most 10 minutes apart. A 62-minute outage (0h59 to 2h01) is noticed by 2h05 at the latest.
+// In general the first success comes at most MaxRetryGap after the outage ends, so the time
+// without a successful evaluation is at most (end of the outage - last success before it) + 10
+// minutes: an outage of up to 2h40 that starts right after an evaluation, or of up to 1h50 that
+// starts anywhere, never reaches the license gate's 3 hours.
+func TestRetriesNeverLeaveThreeHoursWithoutASuccess(t *testing.T) {
+	down := func(from, until time.Duration) func(time.Duration) bool {
+		return func(at time.Duration) bool { return at < from || at >= until }
 	}
-	assert.Len(t, runs(), 3)
+	runs := simulate(down(59*time.Minute, 121*time.Minute), 4*time.Hour)
+	require.Greater(t, len(runs), 1)
+	assert.LessOrEqual(t, runs[1], 2*time.Hour+5*time.Minute, "first success after the outage: %v", runs)
+
+	for from := time.Duration(0); from < 2*time.Hour; from += time.Minute {
+		for length := time.Minute; length <= 3*time.Hour; length += 5 * time.Minute {
+			runs := simulate(down(from, from+length), 8*time.Hour)
+			var before time.Duration
+			for _, r := range runs {
+				if r < from {
+					before = r
+				}
+			}
+			bound := max(time.Hour, from+length-before+MaxRetryGap) // an hour apart anyway when nothing fails
+			if gap := maxGap(runs); gap > bound {
+				t.Fatalf("outage from %s for %s: %s without a successful run, more than %s (%v)", from, length, gap, bound, runs)
+			}
+			if length <= time.Hour+50*time.Minute {
+				assert.Less(t, maxGap(runs), 3*time.Hour, "outage from %s for %s", from, length)
+			}
+		}
+	}
+	runs = simulate(down(time.Hour+time.Second, 3*time.Hour+40*time.Minute+time.Second), 8*time.Hour)
+	assert.Less(t, maxGap(runs), 3*time.Hour, "2h40 right after an evaluation: %v", runs)
+	// A dead dependency is asked at most every MaxRetryGap, never more often than once a minute.
+	var asked []time.Duration
+	simulate(func(at time.Duration) bool { asked = append(asked, at); return false }, 3*time.Hour)
+	for i := 1; i < len(asked); i++ {
+		gap := asked[i] - asked[i-1]
+		assert.True(t, gap >= 0 && gap <= MaxRetryGap, "gap %s", gap)
+	}
+	assert.Less(t, len(asked), 30)
 }

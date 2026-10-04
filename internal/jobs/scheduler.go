@@ -23,9 +23,48 @@ type Task struct {
 	Every time.Duration
 	Run   func(ctx context.Context) error
 	// Retry, when positive, runs a failed run again after Retry, then after twice as long and so
-	// on up to Every, until a run succeeds (the license evaluation: AUD-02). 0 = wait for the
-	// next interval. A run the license gate refused is not a failure.
+	// on up to MaxRetryGap (or Every when shorter), until a run succeeds (the license evaluation:
+	// AUD-02). A failed interval run never postpones a retry that is already pending. 0 = wait for
+	// the next interval. A run the license gate refused is not a failure.
 	Retry time.Duration
+}
+
+// MaxRetryGap caps the backoff of Task.Retry: a dependency that comes back is noticed within
+// this time, while a dead one is asked at most every 10 minutes.
+const MaxRetryGap = 10 * time.Minute
+
+// retryPlan is the retry state of one task: the backoff of the next retry and whether one is
+// pending. It decides only; loopWith arms the timers.
+type retryPlan struct {
+	first, max time.Duration // first <= 0: no retries
+	backoff    time.Duration // the delay of the next retry that is armed
+	pending    bool
+}
+
+func newRetryPlan(t Task) retryPlan {
+	return retryPlan{first: t.Retry, max: min(MaxRetryGap, t.Every), backoff: t.Retry}
+}
+
+// fired records that the pending retry fired (its run follows).
+func (p *retryPlan) fired() { p.pending = false }
+
+// after records the outcome of a run and returns the delay of a retry to arm (arm false: none,
+// either because the run succeeded, retries are off, or a retry is already pending; an earlier
+// deadline is never replaced by a later one).
+func (p *retryPlan) after(failed bool) (delay time.Duration, arm bool) {
+	switch {
+	case p.first <= 0:
+		return 0, false
+	case !failed:
+		p.pending, p.backoff = false, p.first
+		return 0, false
+	case p.pending:
+		return 0, false
+	}
+	delay = min(p.backoff, p.max)
+	p.backoff = min(2*p.backoff, p.max)
+	p.pending = true
+	return delay, true
 }
 
 type task struct {
@@ -114,13 +153,15 @@ func (s *Scheduler) loop(ctx context.Context, t *task) {
 
 func (s *Scheduler) loopWith(ctx context.Context, t *task, ticks <-chan time.Time) {
 	var retry <-chan time.Time // nil: no retry pending
-	backoff := t.Retry
+	plan := newRetryPlan(t.Task)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticks:
 		case <-retry:
+			retry = nil
+			plan.fired()
 		}
 		if ctx.Err() != nil {
 			return
@@ -132,13 +173,11 @@ func (s *Scheduler) loopWith(ctx context.Context, t *task, ticks <-chan time.Tim
 		case t.sem <- struct{}{}:
 			err := s.run(ctx, t)
 			<-t.sem
-			switch {
-			case t.Retry <= 0:
-			case err == nil || errors.Is(err, license.ErrLocked) || errors.Is(err, license.ErrUnclassified):
-				retry, backoff = nil, t.Retry
-			default:
-				retry = s.clock.After(backoff)
-				backoff = min(2*backoff, t.Every)
+			failed := err != nil && !errors.Is(err, license.ErrLocked) && !errors.Is(err, license.ErrUnclassified)
+			if delay, arm := plan.after(failed); arm {
+				retry = s.clock.After(delay)
+			} else if !failed {
+				retry = nil
 			}
 		default: // still running: skip this tick
 		}
@@ -166,6 +205,9 @@ func (s *Scheduler) run(ctx context.Context, t *task) (err error) {
 		switch {
 		case errors.Is(err, license.ErrUnverified):
 			s.log.Info("scheduled task paused until the license can be checked", "job_type", t.Type.Name)
+		case errors.Is(err, license.ErrLockDue):
+			s.log.Info("scheduled task paused: the license reached its lock time by Alice's clock; an evaluation is confirming it",
+				"job_type", t.Type.Name)
 		case errors.Is(err, license.ErrLocked):
 			s.log.Info("scheduled task paused while the license is expired", "job_type", t.Type.Name)
 		default:
