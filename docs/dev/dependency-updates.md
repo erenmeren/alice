@@ -15,12 +15,20 @@ of the multi-architecture index, so amd64 and arm64 both keep working.
 
 `make lint` runs `go run ./tools/pincheck`, which needs no network. It fails when a `uses:`, a
 workflow job's `container:` or `services.<name>.image:`, a `FROM`, a `COPY --from=`, a Compose
-`image:` (of a service without `build:`), the image operand of a `docker run` / `docker create` in
-the Makefile, a script or a workflow `run:` step, a `docker://` reference, or a Go test image names
-something not pinned, or when the PostgreSQL reference in a Go test differs from the one in the
-Compose file. Only the image operand of a `docker run` counts (a digest in a trailing comment or in
-an option value does not), and the locally built `alice:` image is accepted only as that operand. Each message names the file and
-line. Fix it by pinning as below; do not add exceptions without a decision recorded here.
+`image:` (of a service without `build:`), the image operand of a `docker run` / `docker create` /
+`docker pull` in the Makefile, a script or a workflow `run:` step, a `docker://` reference, or a Go
+test image names something not pinned, or when the PostgreSQL reference in a Go test differs from
+the one in the Compose file. Only the image operand counts (a digest in a trailing comment or in
+an option value does not), and the locally built `alice:` image is accepted only as that operand.
+Dockerfile names are matched in any letter case (`Dockerfile`, `app.dockerfile`). `docker compose
+run` names a service, not an image; that service's `image:` is checked in its Compose file. Each
+message names the file and line. Fix it by pinning as below; do not add exceptions without a
+decision recorded here.
+
+What the check does not see: an image named only inside a variable other than `GITLEAKS_IMAGE` /
+`TRIVY_IMAGE` (it fails closed: an unknown variable as the operand is reported), images pulled by
+programs (the testcontainers Ryuk image, Playwright's browsers), and commands other than the ones
+listed above that fetch images without a `docker://` reference (`docker buildx build` of a remote context, `crane`).
 
 ## Updating a pin by hand
 

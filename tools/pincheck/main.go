@@ -10,21 +10,26 @@
 //     docker:// references need @sha256:.
 //     The YAML is also parsed: a job's container: and services.<name>.image: need @sha256:, and
 //     every run: script is checked like a shell script (docker run / docker create, docker://).
-//   - Every Dockerfile (Dockerfile, Dockerfile.*, *.Dockerfile, and the same forms of Containerfile):
+//   - Every Dockerfile (Dockerfile, Dockerfile.*, *.Dockerfile, and the same forms of Containerfile,
+//     in any letter case):
 //     the "# syntax=" frontend, every
 //     FROM and every COPY --from= / RUN --mount from= that names an image instead of an earlier
 //     stage. "scratch" passes. FROM ${ARG} is resolved through the ARG default and fails when it
 //     has none.
 //   - Every Compose file (docker-compose*.yml, compose*.yml, and any other YAML file whose top-level
 //     services: entries carry image: or build:): image: of a service without build:.
-//   - The Makefile and shell scripts: the IMAGE operand of every docker run / docker create (options
-//     skipped, continuation lines joined, a trailing # comment ignored) must be pinned (@sha256:),
+//   - The Makefile and shell scripts: the IMAGE operand of every docker run / docker create /
+//     docker pull (options skipped, continuation lines joined, a trailing # comment ignored) must be
+//     pinned (@sha256:),
 //     one of the pinned Makefile variables, the locally built alice: image, or an image read from an
 //     already running container (see imageOperandOK). The Makefile's GITLEAKS_IMAGE and TRIVY_IMAGE
 //     must themselves be pinned.
 //   - Go sources: Image: "..." and postgres.Run(ctx, "...") literals (also split over lines) must be
 //     pinned, and every PostgreSQL literal must equal the image of the postgres service in
 //     deploy/docker-compose.yml.
+//
+// docker compose run names a service, not an image: the service's image: is checked in its Compose
+// file, so the operand of docker compose run is not an image reference and is not checked here.
 //
 // Not scanned, by decision (docs/dev/dependency-updates.md): Go tools (version-pinned, covered by
 // the module checksum database), the testcontainers Ryuk image (chosen by the library, not named
@@ -59,20 +64,21 @@ func main() {
 }
 
 var (
-	digestRe    = regexp.MustCompile(`@sha256:[0-9a-f]{64}(?:$|[^0-9a-f])`)
-	actionSHARe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[^@\s]+)?@[0-9a-f]{40}$`)
-	versionRe   = regexp.MustCompile(`^#\s*v\d+(?:\.\d+)*\s*$`)
-	usesRe      = regexp.MustCompile(`^\s*(?:-\s+)?uses:\s*(.*)$`)
-	fromRe      = regexp.MustCompile(`(?i)^\s*FROM\s+(.*)$`)
-	argRe       = regexp.MustCompile(`(?i)^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)(?:=(.*))?$`)
-	copyFromRe  = regexp.MustCompile(`(?i)^\s*(?:COPY|RUN)\b.*?--(?:from|mount=[^\s]*?\bfrom)=([^\s,]+)`)
-	syntaxRe    = regexp.MustCompile(`(?i)^#\s*syntax\s*=\s*(\S+)`)
-	goImageRe   = regexp.MustCompile(`\bImage:\s*"([^"]+)"`)
-	pgRunRe     = regexp.MustCompile(`postgres\.Run\(\s*[A-Za-z_][A-Za-z0-9_.]*\s*,\s*"([^"]+)"`)
-	makeVarRe   = regexp.MustCompile(`^(GITLEAKS_IMAGE|TRIVY_IMAGE)\s*[?:]?=\s*(\S+)`)
-	dockerRunRe = regexp.MustCompile(`\bdocker\s+(?:container\s+)?(?:run|create)\b`)
-	dockerURLRe = regexp.MustCompile(`docker://[^\s'"]+`)
-	spaceRe     = regexp.MustCompile(`\s+`)
+	digestRe     = regexp.MustCompile(`@sha256:[0-9a-f]{64}(?:$|[^0-9a-f])`)
+	actionSHARe  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[^@\s]+)?@[0-9a-f]{40}$`)
+	versionRe    = regexp.MustCompile(`^#\s*v\d+(?:\.\d+)*\s*$`)
+	usesRe       = regexp.MustCompile(`^\s*(?:-\s+)?uses:\s*(.*)$`)
+	fromRe       = regexp.MustCompile(`(?i)^\s*FROM\s+(.*)$`)
+	argRe        = regexp.MustCompile(`(?i)^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)(?:=(.*))?$`)
+	copyFromRe   = regexp.MustCompile(`(?i)^\s*(?:COPY|RUN)\b.*?--(?:from|mount=[^\s]*?\bfrom)=([^\s,]+)`)
+	syntaxRe     = regexp.MustCompile(`(?i)^#\s*syntax\s*=\s*(\S+)`)
+	goImageRe    = regexp.MustCompile(`\bImage:\s*"([^"]+)"`)
+	pgRunRe      = regexp.MustCompile(`postgres\.Run\(\s*[A-Za-z_][A-Za-z0-9_.]*\s*,\s*"([^"]+)"`)
+	makeVarRe    = regexp.MustCompile(`^(GITLEAKS_IMAGE|TRIVY_IMAGE)\s*[?:]?=\s*(\S+)`)
+	dockerRunRe  = regexp.MustCompile(`\bdocker\s+(?:container\s+)?(?:run|create)\b`)
+	dockerPullRe = regexp.MustCompile(`\bdocker\s+(?:image\s+)?pull\b`)
+	dockerURLRe  = regexp.MustCompile(`docker://[^\s'"]+`)
+	spaceRe      = regexp.MustCompile(`\s+`)
 )
 
 // skipDirs are never scanned: VCS data, dependencies, build output, and the working areas of the
@@ -165,9 +171,17 @@ func isCompose(name string) bool {
 	return strings.HasPrefix(name, "docker-compose") || strings.HasPrefix(name, "compose")
 }
 
+// isDockerfile reports whether name is a Dockerfile or Containerfile name, in any letter case
+// (Dockerfile, dockerfile, Dockerfile.dev, app.Dockerfile, app.dockerfile, ...).
 func isDockerfile(name string) bool {
 	for _, base := range []string{"Dockerfile", "Containerfile"} {
-		if name == base || strings.HasPrefix(name, base+".") || strings.HasSuffix(name, "."+base) {
+		n, b := len(name), len(base)
+		switch {
+		case strings.EqualFold(name, base):
+			return true
+		case n > b+1 && strings.EqualFold(name[:b+1], base+"."):
+			return true
+		case n > b+1 && strings.EqualFold(name[n-b-1:], "."+base):
 			return true
 		}
 	}
@@ -590,6 +604,11 @@ func checkScript(rel string, first int, lines []string) []string {
 			}
 			out = append(out, fmt.Sprintf("%s: %q uses an image that is not pinned (use a digest, $(GITLEAKS_IMAGE), $(TRIVY_IMAGE) or alice:)", pos, stmt))
 		}
+		for _, loc := range dockerPullRe.FindAllStringIndex(text, -1) {
+			if op := pullOperand(text[loc[1]:]); !imageOperandOK(op) {
+				out = append(out, fmt.Sprintf("%s: docker pull %s is not pinned (use a digest, $(GITLEAKS_IMAGE), $(TRIVY_IMAGE) or alice:)", pos, op))
+			}
+		}
 		for _, ref := range dockerURLRe.FindAllString(text, -1) {
 			if !digestRe.MatchString(ref) {
 				out = append(out, fmt.Sprintf("%s: %s is not pinned by @sha256:<digest>", pos, ref))
@@ -620,6 +639,28 @@ func imageOperand(rest string) string {
 		case !strings.HasPrefix(w, "-"):
 			return w
 		case strings.Contains(w, "=") || runFlagsWithoutValue[w] || shortFlagsRe.MatchString(w):
+		default:
+			i++ // the option's value
+		}
+	}
+	return ""
+}
+
+// pullFlagsWithoutValue are the docker pull options that take no value; every other option
+// without "=" (--platform) takes the next word.
+var pullFlagsWithoutValue = map[string]bool{
+	"--all-tags": true, "-a": true, "--disable-content-trust": true, "--quiet": true, "-q": true,
+}
+
+// pullOperand returns the image operand of the words after "docker pull", or "".
+func pullOperand(rest string) string {
+	words := shellWords(rest)
+	for i := 0; i < len(words); i++ {
+		w := words[i]
+		switch {
+		case !strings.HasPrefix(w, "-"):
+			return w
+		case strings.Contains(w, "=") || pullFlagsWithoutValue[w]:
 		default:
 			i++ // the option's value
 		}

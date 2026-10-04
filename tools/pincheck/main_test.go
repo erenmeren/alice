@@ -211,3 +211,39 @@ func TestOtherNamesAndMultiLineGo(t *testing.T) {
 	assert.Contains(t, got[0], "a_test.go:4:")
 	assert.Len(t, messages(t, "b_test.go", "package a\nvar c, _ = postgres.Run(ctx,\n\t\"postgres:16-alpine\")\n"), 1)
 }
+
+// Task 17 fold-in: docker pull pulls an image as surely as docker run, Dockerfile names are matched
+// in any letter case, and docker compose run names a service (its image: is checked in the Compose
+// file), not an image.
+func TestDockerPullAndDockerfileCase(t *testing.T) {
+	vars := "GITLEAKS_IMAGE ?= g:1@" + dg + "\nTRIVY_IMAGE ?= t:1@" + dg + "\n"
+	for name, line := range map[string]string{
+		"pull by tag":              "docker pull alpine:3",
+		"image pull by tag":        "docker image pull alpine:3",
+		"pull with a flag":         "docker pull --platform linux/arm64 alpine:3",
+		"pull -q":                  "docker pull -q alpine:3",
+		"pull, digest in comment":  "docker pull alpine:3 # alpine@" + dg,
+		"pull continued":           "docker \\\n\t  pull alpine:3",
+		"pull without an operand":  "docker pull",
+		"pull after another stmnt": "docker run --rm alice:ci version && docker pull alpine:3",
+	} {
+		assert.Len(t, messages(t, "Makefile", vars+"a:\n\t"+line+"\n"), 1, name)
+	}
+	for name, line := range map[string]string{
+		"pull by digest":        "docker pull alpine@" + dg,
+		"pull a pinned var":     "docker pull --quiet $(TRIVY_IMAGE)",
+		"pull --platform=x":     "docker pull --platform=linux/amd64 x@" + dg,
+		"compose run a service": "docker compose -p alice-e2e run --rm alice version",
+	} {
+		assert.Empty(t, messages(t, "Makefile", vars+"a:\n\t"+line+"\n"), name)
+	}
+	assert.Len(t, messages(t, "deploy/dev/s.sh", "docker pull nginx:1\n"), 1, "shell script")
+	assert.Len(t, messages(t, ".github/workflows/w.yml", "jobs:\n  a:\n    steps:\n      - run: docker pull nginx:1\n"), 1, "workflow run: step")
+
+	for _, name := range []string{"dockerfile", "DOCKERFILE", "dockerfile.dev", "app.dockerfile", "x/app.DockerFile", "containerfile", "app.containerfile"} {
+		assert.Len(t, messages(t, name, "FROM alpine:3\n"), 1, name)
+	}
+	for _, name := range []string{"dockerfiles.txt", "mydockerfile", "Dockerfile_notes", ".dockerfile"} {
+		assert.Empty(t, messages(t, name, "FROM alpine:3\n"), name)
+	}
+}
