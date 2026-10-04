@@ -3,16 +3,11 @@
 package inventory_test
 
 import (
-	"crypto"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/asn1"
-	"encoding/pem"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -22,78 +17,41 @@ import (
 	"alice/internal/testutil/pki"
 )
 
-// withValidity returns leaf's certificate re-signed by signer with the validity replaced by the
-// given raw times (tag 23 UTCTime or 24 GeneralizedTime), as a PEM block: x509.CreateCertificate
-// always writes UTC, so a GeneralizedTime with a zone offset is built by hand.
-func withValidity(t *testing.T, leaf pki.Leaf, signer crypto.Signer, notBefore, notAfter asn1.RawValue) []byte {
-	t.Helper()
-	var outer struct {
-		TBS    asn1.RawValue
-		SigAlg asn1.RawValue
-		Sig    asn1.BitString
-	}
-	_, err := asn1.Unmarshal(leaf.Cert.Raw, &outer)
-	require.NoError(t, err)
-	var fields []asn1.RawValue
-	_, err = asn1.Unmarshal(outer.TBS.FullBytes, &fields)
-	require.NoError(t, err)
-	require.Len(t, fields, 8, "version, serial, signature, issuer, validity, subject, key, extensions")
-	validity, err := asn1.Marshal([]asn1.RawValue{notBefore, notAfter})
-	require.NoError(t, err)
-	fields[4] = asn1.RawValue{FullBytes: validity}
-	tbs, err := asn1.Marshal(fields)
-	require.NoError(t, err)
-	digest := sha256.Sum256(tbs)
-	sig, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256)
-	require.NoError(t, err)
-	der, err := asn1.Marshal(struct {
-		TBS    asn1.RawValue
-		SigAlg asn1.RawValue
-		Sig    asn1.BitString
-	}{asn1.RawValue{FullBytes: tbs}, outer.SigAlg, asn1.BitString{Bytes: sig, BitLength: 8 * len(sig)}})
-	require.NoError(t, err)
-	_, err = x509.ParseCertificate(der)
-	require.NoError(t, err)
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-}
-
-func generalized(s string) asn1.RawValue {
-	return asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagGeneralizedTime, Bytes: []byte(s)}
-}
-
-func utcTime(s string) asn1.RawValue {
-	return asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagUTCTime, Bytes: []byte(s)}
-}
-
-// AUD-13 I1, D19 with stored data: certificates whose NotAfter lies at the ends of what X.509 can
-// say (a GeneralizedTime with a ±23:59 zone offset: in UTC a day outside years 0000-9999) or before
-// 1970 are stored by discovery, and the certificate list pages past each one: every cursor the list
-// hands out is one its decoder accepts.
-func TestCertificatePagingAtTheEndsOfX509Time(t *testing.T) {
+// AUD-13 (fix round 2): a server's file whose certificate says, through a GeneralizedTime zone
+// offset, a time outside 0001-9999 in UTC is an unreadable certificate: the location shows
+// not_a_certificate and nothing with such a time is stored, so the certificates list still encodes.
+// D19 with stored data: a certificate that expired before 1970 is stored and the list pages past it.
+func TestDiscoveryRefusesCertificatesOutsideYears1To9999(t *testing.T) {
 	h := newHarness(t)
 	admin := h.user("ada", rbac.Admin, "")
 	web := nginxTarget(t, h, admin, "web-01")
 	now := h.clock.Now()
 	ca := pki.NewCA("Edge", pki.ECDSA256, now)
-	certs := []struct {
-		cn                  string
-		notBefore, notAfter asn1.RawValue
-		wantAfter           time.Time
+	g, u := pki.GeneralizedTime, pki.UTCTime
+	files := []struct {
+		cn   string
+		leaf pki.Leaf
 	}{
-		{"edge-low.example.test", generalized("00000101000000+2359"), generalized("00000101000000+2359"), time.Date(-1, 12, 31, 0, 1, 0, 0, time.UTC)},
-		{"edge-1965.example.test", utcTime("600101000000Z"), utcTime("650101000000Z"), time.Date(1965, 1, 1, 0, 0, 0, 0, time.UTC)},
-		{"edge-now.example.test", generalized("20260101000000Z"), generalized("20270101000000Z"), time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)},
-		{"edge-high.example.test", generalized("20260101000000Z"), generalized("99991231235959-2359"), time.Date(10000, 1, 1, 23, 58, 59, 0, time.UTC)},
+		{"edge-low.example.test", ca.IssueRawValidity(pki.Opts{CommonName: "edge-low.example.test"}, g("00000101000000+2359"), g("00000101000000+2359"), now)},
+		{"edge-high.example.test", ca.IssueRawValidity(pki.Opts{CommonName: "edge-high.example.test"}, g("20260101000000Z"), g("99991231235959-2359"), now)},
+		{"edge-1965.example.test", ca.IssueRawValidity(pki.Opts{CommonName: "edge-1965.example.test"}, u("600101000000Z"), u("650101000000Z"), now)},
+		{"edge-9999.example.test", ca.IssueRawValidity(pki.Opts{CommonName: "edge-9999.example.test"}, g("20260101000000Z"), g("99991231235959Z"), now)},
 	}
 	var found []providers.DiscoveredCertificate
-	for i, c := range certs {
-		leaf := ca.Issue(pki.Opts{CommonName: c.cn, SANs: []string{c.cn}}, now)
-		chain := append(withValidity(t, leaf, ca.IntermediateKey, c.notBefore, c.notAfter), ca.IntermediatePEM...)
-		loc := cl(fmt.Sprintf("/etc/nginx/ssl/%d.crt", i), fmt.Sprintf("/etc/nginx/ssl/%d.key", i), c.cn)
-		found = append(found, providers.DiscoveredCertificate{Location: loc, PEMChain: chain, FileSHA256: sha(chain)})
+	for i, f := range files {
+		found = append(found, dc(cl(fmt.Sprintf("/etc/nginx/ssl/%d.crt", i), fmt.Sprintf("/etc/nginx/ssl/%d.key", i), f.cn), f.leaf))
 	}
 	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: found})
 	require.NoError(t, err)
+
+	locs := byPath(t, h, web.ID, false)
+	for _, i := range []int{0, 1} {
+		l := locs[fmt.Sprintf("/etc/nginx/ssl/%d.crt", i)]
+		assert.Nil(t, l.Certificate, files[i].cn)
+		assert.Equal(t, []string{providers.UnsupportedFile, providers.CertProblemNotACertificate}, []string{l.UnsupportedReason, l.Problem}, files[i].cn)
+	}
+	assert.Zero(t, h.count(`SELECT count(*) FROM certificates
+WHERE not_before < '0001-01-01T00:00:00Z' OR not_after > '9999-12-31T23:59:59Z' OR not_before > '9999-12-31T23:59:59Z' OR not_after < '0001-01-01T00:00:00Z'`))
 
 	var got []string
 	cursor := ""
@@ -102,13 +60,47 @@ func TestCertificatePagingAtTheEndsOfX509Time(t *testing.T) {
 		require.NoError(t, err, "the cursor after %v", got)
 		for _, c := range page.Items {
 			got = append(got, c.SubjectCN)
-			want := certs[len(got)-1].wantAfter
-			assert.True(t, want.Equal(c.NotAfter), "%s: NotAfter %s, want %s", c.SubjectCN, c.NotAfter.UTC(), want)
 		}
 		if cursor = page.NextCursor; cursor == "" {
 			break
 		}
 	}
-	assert.Equal(t, []string{"edge-low.example.test", "edge-1965.example.test", "edge-now.example.test", "edge-high.example.test"}, got,
-		"every certificate once, in NotAfter order")
+	assert.Equal(t, []string{"edge-1965.example.test", "edge-9999.example.test"}, got, "every stored certificate once, in NotAfter order")
+}
+
+// AUD-13 I1: the cursor code itself holds at the ends of its range. Rows written straight into the
+// table (no ingestion path stores such times any more) with NotAfter a day outside years 0000-9999
+// in UTC — what a GeneralizedTime zone offset can say — still page: every cursor the list hands out
+// is one its decoder accepts.
+func TestCertificateCursorAtTheEndsOfItsRange(t *testing.T) {
+	h := newHarness(t)
+	now := h.clock.Now()
+	ends := []struct {
+		cn       string
+		notAfter time.Time
+	}{
+		{"end-low.example.test", time.Date(-1, 12, 31, 0, 1, 0, 0, time.UTC)},
+		{"end-1965.example.test", time.Date(1965, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{"end-high.example.test", time.Date(10000, 1, 1, 23, 58, 59, 0, time.UTC)},
+	}
+	for i, e := range ends {
+		_, err := h.db.Owner.Exec(h.ctx, `INSERT INTO certificates (id, fingerprint_sha256, subject_cn, not_before, not_after, key_algorithm,
+public_key_sha256, pem_chain, source, first_seen_at, last_seen_at, created_at)
+VALUES ($1, $2, $3, $4, $4, 'ecdsa', $2, '', 'uploaded', $5, $5, $5)`, uuid.Must(uuid.NewV7()), sha([]byte(fmt.Sprint("end", i))), e.cn, e.notAfter, now)
+		require.NoError(t, err)
+	}
+	var got []string
+	cursor := ""
+	for range 10 {
+		page, err := h.svc.ListCertificates(h.ctx, inventory.CertificateFilter{Query: "end-", Limit: 1, Cursor: cursor})
+		require.NoError(t, err, "the cursor after %v", got)
+		for _, c := range page.Items {
+			got = append(got, c.SubjectCN)
+			assert.True(t, ends[len(got)-1].notAfter.Equal(c.NotAfter), c.SubjectCN)
+		}
+		if cursor = page.NextCursor; cursor == "" {
+			break
+		}
+	}
+	assert.Equal(t, []string{"end-low.example.test", "end-1965.example.test", "end-high.example.test"}, got)
 }

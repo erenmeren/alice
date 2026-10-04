@@ -216,6 +216,9 @@ func decodePFX(data []byte, password string) ([]*x509.Certificate, any, error) {
 		if err := checkCertificateKeySize(c); err != nil {
 			return nil, nil, err
 		}
+		if err := checkValidityRange(c); err != nil {
+			return nil, nil, err
+		}
 	}
 	return append([]*x509.Certificate{leaf}, cas...), key, nil
 }

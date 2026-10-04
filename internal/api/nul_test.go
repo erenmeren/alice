@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -273,4 +274,19 @@ func TestNULCheckOnSplitReads(t *testing.T) {
 	assert.Zero(t, n)
 	assert.ErrorIs(t, err, errUnstorableText)
 	assert.False(t, hasNULEscape(bytes.Repeat([]byte(`\\u0000`), 3)))
+}
+
+// AUD-13 fix round 2: an answer whose value encoding/json refuses (a time outside years 0000-9999)
+// is a complete 500 ALC-SYS-0003, never a 200 cut short; every other answer is written as before.
+func TestWriteJSONNeverTruncatesAnAnswer(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeJSON(rec, http.StatusOK, map[string]any{"not_after": time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)})
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, "ALC-SYS-0003", edgeErr(t, rec.Body.Bytes()).Error.Code)
+	rec = httptest.NewRecorder()
+	writeJSON(rec, http.StatusCreated, map[string]any{"a": "<b>", "t": time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)})
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.JSONEq(t, `{"a":"<b>","t":"9999-12-31T23:59:59Z"}`, rec.Body.String())
+	assert.True(t, strings.HasSuffix(rec.Body.String(), "}\n"), "one line, as json.Encoder wrote it")
+	assert.NotContains(t, rec.Body.String(), "<", "HTML characters stay escaped, as json.Encoder wrote them")
 }

@@ -509,9 +509,19 @@ func errorAttrs(err error) []any {
 	return attrs
 }
 
+// writeJSON encodes v before anything is written, so a value encoding/json refuses (a time outside
+// years 0000-9999, AUD-13) can never cut an answer short after its status line: the answer is then
+// 500 ALC-SYS-0003 with a complete error body. Ingestion keeps such values out (internal/certs); this
+// is the second line.
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		status = http.StatusInternalServerError
+		b, _ = json.Marshal(map[string]errorPayload{"error": {Code: ErrUnexpected.Code, Reason: ErrUnexpected.Reason,
+			MessageKey: "errors." + ErrUnexpected.Reason}}) // fixed values always encode
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	_, _ = w.Write(append(b, '\n'))
 }

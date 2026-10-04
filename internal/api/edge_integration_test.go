@@ -4,6 +4,7 @@ package api
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"alice/internal/testutil/pki"
 )
 
 func edgeCursor(sep, micros string) string {
@@ -118,4 +121,25 @@ func stripNUL(s string) string {
 		}
 	}
 	return string(out)
+}
+
+// AUD-13 fix round 2: an uploaded certificate whose validity says a time outside 0001-9999 in UTC
+// (a GeneralizedTime zone offset) is refused as unreadable (ALC-CRT-0001) and never stored, so the
+// certificates list keeps answering with complete JSON.
+func TestUploadRefusesCertificatesOutsideYears1To9999(t *testing.T) {
+	s, admin, _ := installed(t)
+	ca := pki.NewCA("Edge", pki.ECDSA256, s.clock.Now())
+	for _, l := range []pki.Leaf{
+		ca.IssueRawValidity(pki.Opts{CommonName: "high.example.test"}, pki.GeneralizedTime("20260101000000Z"), pki.GeneralizedTime("99991231235959-2359"), s.clock.Now()),
+		ca.IssueRawValidity(pki.Opts{CommonName: "low.example.test"}, pki.GeneralizedTime("00000101000000+2359"), pki.GeneralizedTime("20300101000000Z"), s.clock.Now()),
+	} {
+		rec := admin.do(http.MethodPost, "/api/v1/certificates/upload", map[string]string{
+			"label": "edge", "certificate_pem": string(l.FullchainPEM), "private_key_pem": string(l.KeyPEM)})
+		requireError(t, rec, http.StatusUnprocessableEntity, "ALC-CRT-0001")
+	}
+	assert.Zero(t, s.count("certificates"))
+	rec := admin.do(http.MethodGet, "/api/v1/certificates", nil)
+	requireStatus(t, rec, http.StatusOK)
+	var page map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
 }

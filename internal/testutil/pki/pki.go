@@ -11,8 +11,10 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	_ "crypto/sha512" // SHA-384 and SHA-512 for IssueRawValidity
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
 	"math/big"
@@ -248,4 +250,51 @@ func CSRFor(cn string, sans []string, key crypto.Signer) *x509.CertificateReques
 func Fingerprint(c *x509.Certificate) string {
 	sum := sha256.Sum256(c.Raw)
 	return hex.EncodeToString(sum[:])
+}
+
+// GeneralizedTime is a raw X.509 GeneralizedTime for IssueRawValidity, e.g. "99991231235959-2359"
+// (a zone offset Go's parser accepts, though RFC 5280 asks for "Z").
+func GeneralizedTime(s string) asn1.RawValue {
+	return asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagGeneralizedTime, Bytes: []byte(s)}
+}
+
+// UTCTime is a raw X.509 UTCTime for IssueRawValidity, e.g. "650101000000Z" (1965).
+func UTCTime(s string) asn1.RawValue {
+	return asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagUTCTime, Bytes: []byte(s)}
+}
+
+// IssueRawValidity is Issue with the validity written as the given raw times. x509.CreateCertificate
+// always writes UTC, so the leaf's TBSCertificate is re-encoded with the new validity and signed again
+// with the intermediate, using the hash of the signature algorithm Issue chose.
+func (ca *CA) IssueRawValidity(o Opts, notBefore, notAfter asn1.RawValue, now time.Time) Leaf {
+	leaf := ca.Issue(o, now)
+	var outer struct {
+		TBS    asn1.RawValue
+		SigAlg asn1.RawValue
+		Sig    asn1.BitString
+	}
+	must(asn1.Unmarshal(leaf.Cert.Raw, &outer))
+	var fields []asn1.RawValue
+	must(asn1.Unmarshal(outer.TBS.FullBytes, &fields))
+	if len(fields) != 8 { // version, serial, signature, issuer, validity, subject, key, extensions
+		panic("pki: unexpected TBSCertificate layout")
+	}
+	fields[4] = asn1.RawValue{FullBytes: must(asn1.Marshal([]asn1.RawValue{notBefore, notAfter}))}
+	tbs := must(asn1.Marshal(fields))
+	h := crypto.SHA256
+	switch leaf.Cert.SignatureAlgorithm {
+	case x509.SHA384WithRSA, x509.ECDSAWithSHA384:
+		h = crypto.SHA384
+	case x509.SHA512WithRSA, x509.ECDSAWithSHA512:
+		h = crypto.SHA512
+	}
+	d := h.New()
+	_, _ = d.Write(tbs) // a hash never fails
+	sig := must(ca.IntermediateKey.Sign(rand.Reader, d.Sum(nil), h))
+	der := must(asn1.Marshal(struct {
+		TBS    asn1.RawValue
+		SigAlg asn1.RawValue
+		Sig    asn1.BitString
+	}{asn1.RawValue{FullBytes: tbs}, outer.SigAlg, asn1.BitString{Bytes: sig, BitLength: 8 * len(sig)}}))
+	return newLeaf(must(x509.ParseCertificate(der)), leaf.Key, ca.IntermediatePEM)
 }

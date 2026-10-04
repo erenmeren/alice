@@ -85,3 +85,18 @@ func TestIssueForCSRSignsTheRequestsKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, append(append([]byte{}, l.CertPEM...), ca.IntermediatePEM...), l.FullchainPEM)
 }
+
+// IssueRawValidity writes the validity as given: a GeneralizedTime with a zone offset reads, in
+// UTC, a day outside years 0000-9999; the certificate still verifies against the intermediate.
+func TestIssueRawValidity(t *testing.T) {
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	for _, kt := range []KeyType{ECDSA256, ECDSA384, RSA2048} {
+		ca := NewCA("Raw", kt, now)
+		l := ca.IssueRawValidity(Opts{CommonName: "raw.example.test"}, GeneralizedTime("00000101000000+2359"), GeneralizedTime("99991231235959-2359"), now)
+		assert.True(t, l.Cert.NotBefore.Equal(time.Date(-1, 12, 31, 0, 1, 0, 0, time.UTC)), l.Cert.NotBefore.UTC())
+		assert.True(t, l.Cert.NotAfter.Equal(time.Date(10000, 1, 1, 23, 58, 59, 0, time.UTC)), l.Cert.NotAfter.UTC())
+		require.NoError(t, l.Cert.CheckSignatureFrom(ca.Intermediate), kt)
+		l = ca.IssueRawValidity(Opts{CommonName: "old.example.test"}, UTCTime("600101000000Z"), UTCTime("650101000000Z"), now)
+		assert.Equal(t, 1965, l.Cert.NotAfter.Year())
+	}
+}
