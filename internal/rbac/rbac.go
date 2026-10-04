@@ -96,6 +96,9 @@ const (
 	HostKeysRepin    Permission = "hostkeys.repin"    // accept a changed fingerprint: Admin with step-up (SEC-080, F-32)
 	InventoryOperate Permission = "inventory.operate" // test connection, discovery, key removal: Admin and Operator
 	JobsConfirm      Permission = "jobs.confirm"      // run or discard work paused by the license: Admin (R29)
+
+	// Phase 4 (R38 item 12, §15.4).
+	CertificatesOperate Permission = "certificates.operate" // upload, signing requests, deploy: Admin and Operator
 )
 
 // Policy describes who may use a permission.
@@ -129,6 +132,8 @@ var policies = map[Permission]Policy{
 	HostKeysRepin:    {Roles: []Role{Admin}, StepUp: true},
 	InventoryOperate: {Roles: []Role{Admin, Operator}, TokenScope: ScopeOperate},
 	JobsConfirm:      {Roles: []Role{Admin}},
+
+	CertificatesOperate: {Roles: []Role{Admin, Operator}, TokenScope: ScopeOperate},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.
