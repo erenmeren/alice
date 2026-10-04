@@ -328,7 +328,7 @@ type existingLocation struct {
 	keyType     string
 	// The location's unfinished deployment (state not done) and its finished ones that matter to
 	// the changed-outside check (aliceFingerprints): every one finished since the location was last
-	// scanned, and the latest finished one, oldest first. finishedCut: there were more than
+	// scanned, oldest first. finishedCut: there were more than
 	// maxConsultedDeployments of them.
 	unfinished  *deploymentFingerprints
 	finished    []deploymentFingerprints
@@ -563,14 +563,14 @@ FOR UPDATE OF l`, target, locationKind, path).Scan(&e.id, &e.certID, &e.fingerpr
 	}
 	// The deployments are read, not locked (the location row lock above orders this scan with a
 	// deployment that changes the location): the unfinished one, then the finished ones since the
-	// last scan and the latest finished one, newest first (at most maxConsultedDeployments+1).
+	// last scan, newest first (at most maxConsultedDeployments+1). One that finished before the last
+	// scan is not consulted: that scan already saw what it left.
 	rows, err := tx.Query(ctx, `(SELECT false, status, new_fingerprint, previous_fingerprint, operation_id IS NOT NULL, NULL::timestamptz, NULL::uuid
  FROM deployments WHERE location_id = $1 AND state <> 'done' LIMIT 1)
 UNION ALL
 (SELECT true, status, new_fingerprint, previous_fingerprint, operation_id IS NOT NULL, finished_at, id FROM deployments
  WHERE location_id = $1 AND state = 'done'
-   AND (finished_at >= $2 OR id = (SELECT id FROM deployments WHERE location_id = $1 AND state = 'done'
-                                   ORDER BY finished_at DESC, created_at DESC, id DESC LIMIT 1))
+   AND finished_at >= $2
  ORDER BY finished_at DESC, created_at DESC, id DESC LIMIT $3)`, e.id, lastSeen, maxConsultedDeployments+1)
 	if err != nil {
 		return nil, fmt.Errorf("inventory: read the location's deployments: %w", err)

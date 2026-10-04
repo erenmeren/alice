@@ -275,6 +275,14 @@ VALUES ($1, $2, $3, $4, 'manual', 'done', $5, $6, $7, $8, '/etc/nginx/ssl/d.crt'
 	finished(l, x, "failed", "", false)
 	assert.False(t, scan("/etc/nginx/ssl/seq.crt", &w), "the rollback before the latest deployment still counts")
 	assert.True(t, scan("/etc/nginx/ssl/seq.crt", &z))
+
+	// W2 review, minor 3: a rollback_failed without a recorded previous certificate makes only the next
+	// scan unknown; once a scan saw its effect, a foreign certificate is flagged again.
+	scan("/etc/nginx/ssl/rf.crt", &w)
+	l = location("/etc/nginx/ssl/rf.crt")
+	finished(l, y, "rollback_failed", "", true)
+	assert.False(t, scan("/etc/nginx/ssl/rf.crt", &x), "unknown right after the rollback_failed")
+	assert.True(t, scan("/etc/nginx/ssl/rf.crt", &z), "a later foreign certificate is flagged")
 }
 
 // B1 M4: boundParams bounds what PostgreSQL stores, which writes a space after every ':' and ','
