@@ -148,6 +148,13 @@
         "action": "Salt okunur erişimi seçin."
       }
     },
+    "audit": {
+      "busy": {
+        "title": "Alice denetim kaydını zaten kontrol ediyor veya dışa aktarıyor.",
+        "cause": "Alice denetim kaydının tamamını aynı anda yalnızca tek bir kontrol veya dışa aktarma için okur ve şu anda başka biri sürüyor. Hiçbir şey kontrol edilmedi veya dışa aktarılmadı.",
+        "action": "Diğer kontrol veya dışa aktarma bitene kadar bekleyip yeniden deneyin."
+      }
+    },
     "setup": {
       "code_invalid": {
         "title": "Kurulum kodu hatalı.",

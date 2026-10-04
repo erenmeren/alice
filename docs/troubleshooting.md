@@ -374,6 +374,18 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 
 **What to do.** Create a read-only token.
 
+## ALC-AUD-0001: Audit log check or export already running
+
+**Meaning.** Alice is already checking or exporting the audit log. (HTTP 503, reason `audit.busy`, retryable;
+the answer carries `Retry-After`.)
+
+**Likely cause.** Alice reads the whole audit log for one check (**Verify**) or export at a time, and someone
+else's check or export was still running. A large log can take minutes to read; an export may take up to
+10 minutes. Nothing was checked or exported, and nothing was recorded. The limit is per Alice process; the daily
+check and `alice audit verify` on the server do not wait for it.
+
+**What to do.** Wait until the other check or export has finished, then try again.
+
 ## ALC-SET-0001: Wrong setup code
 
 **Meaning.** The one-time setup code entered in the setup wizard is not correct (HTTP 401).

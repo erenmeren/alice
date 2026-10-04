@@ -369,8 +369,21 @@ database, and when the daily audit check finds a problem.
 The JSON export (`GET /api/v1/audit/export?format=json`, or **Export JSON** on the **Audit log** page) holds a
 `verification` object (the result Alice computed, with `head_seq` and `head_hash`) and all `entries` in order.
 Entries appended while the export was being written are not covered by `verification`. The response header
-`X-Alice-Audit-Intact` carries the same result. Very large logs may not finish within the server's 60-second
-response limit; use `alice audit verify` on the server in that case.
+`X-Alice-Audit-Intact` carries the same result. An export may take up to 10 minutes to write; for a log too large
+for that the download fails (it is aborted, never ended as if complete): use `alice audit verify` on the server in
+that case. Alice runs one check (**Verify**) or export at a time; another one started meanwhile is refused with
+`ALC-AUD-0001` (try again later). The daily check and `alice audit verify` are not counted in that limit.
+
+The CSV export starts (after the UTF-8 byte order mark) with one comment line that carries the same result,
+followed by the header row on line 2:
+
+```
+# alice audit export: intact=true checked=1234 head_seq=1234 head_hash=9f86d0…
+```
+
+On a broken chain the line ends with ` first_bad_seq=<n> problem=<hash_mismatch|sequence_gap|tail_truncated>`.
+CSV (RFC 4180) has no comments: tell your reader to skip lines starting with `#` (Go `csv.Reader.Comment = '#'`,
+pandas `comment="#"`), or skip the first line; a spreadsheet shows it as one cell in the first row.
 
 Repeated refusals are recorded once per 10 minutes: when the same person (or API token) is refused the same
 permission (`authz.denied`) or the same change by the license (`request.denied_license`) for the same reason on

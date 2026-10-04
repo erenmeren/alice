@@ -613,6 +613,17 @@ paths:
       x-permission: audit.read
       parameters:
         - { name: format, in: query, required: true, schema: { type: string, enum: [csv, json] } }
+      description: >-
+        Verifies the chain read-only, records audit.exported, then streams every entry (the response may be
+        written for up to 10 minutes). The verification travels with the file: the JSON export's verification
+        object, the header X-Alice-Audit-Intact, and in the CSV export a first line (after the UTF-8 BOM) that is a
+        comment, not a record (RFC 4180 has no comments; read it with a comment character of #, for example
+        Go's csv.Reader.Comment or pandas' comment="#"):
+        "# alice audit export: intact=<true|false> checked=<n> head_seq=<n> head_hash=<hex>", followed on a
+        broken chain by " first_bad_seq=<n> problem=<hash_mismatch|sequence_gap|tail_truncated>". The header
+        row is the second line. Cells that start with =, +, -, @, a tab or a carriage return get a leading
+        apostrophe. One verification or export runs at a time per Alice process; another one is refused with
+        503 ALC-AUD-0001 (retryable, Retry-After).
       responses:
         "200":
           description: The log. Header X-Alice-Audit-Intact tells whether the chain verified.
@@ -627,11 +638,15 @@ paths:
                   verification: { $ref: "#/components/schemas/AuditReport" }
                   entries: { type: array, items: { $ref: "#/components/schemas/AuditEntry" } }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/audit/verify:
     post:
       operationId: verifyAudit
       summary: Recompute the hash chain and record the result
+      description: >-
+        Recomputes the whole chain from the first entry (for up to 10 minutes). One verification or export runs at a
+        time per Alice process; another one is refused with 503 ALC-AUD-0001 (retryable, Retry-After).
       x-permission: audit.read
       responses:
         "200":
@@ -639,6 +654,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AuditReport" }
+        "503": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/license/status:
     get:

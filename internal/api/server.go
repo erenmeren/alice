@@ -204,6 +204,9 @@ type server struct {
 	healthz *ratelimit.Limiter // public /healthz, per IP: 60/min
 	// denials coalesces the guard's denial audit rows (AUD-06).
 	denials *denialCoalescer
+	// chainScan is the one slot for reading the whole audit chain (verification, export) in this
+	// process (AUD-06): a second scan is refused with ErrAuditBusy instead of running beside it.
+	chainScan chan struct{}
 }
 
 const (
@@ -231,7 +234,8 @@ func newServer(d Deps) *server {
 		rotated:  ratelimit.NewRecent(d.Clock, rotatedLifetime, rotatedMax),
 		healthz:  ratelimit.New(d.Clock, 60, time.Minute),
 
-		denials: newDenialCoalescer(d.Clock),
+		denials:   newDenialCoalescer(d.Clock),
+		chainScan: make(chan struct{}, 1),
 	}
 }
 

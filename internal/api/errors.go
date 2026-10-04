@@ -54,6 +54,8 @@ var (
 	ErrUsernameTaken        = ErrorCode{Code: "ALC-USR-0001", Reason: "user.username_taken", Status: http.StatusConflict}
 	ErrLastAdmin            = ErrorCode{Code: "ALC-USR-0002", Reason: "user.last_admin", Status: http.StatusConflict}
 	ErrTokenScopeNotAllowed = ErrorCode{Code: "ALC-TOK-0001", Reason: "token.scope_not_allowed", Status: http.StatusUnprocessableEntity}
+	// ErrAuditBusy: another verification or export of the audit log is running in this process (AUD-06).
+	ErrAuditBusy = ErrorCode{Code: "ALC-AUD-0001", Reason: "audit.busy", Status: http.StatusServiceUnavailable, Retryable: true}
 
 	ErrSetupCodeInvalid          = ErrorCode{Code: "ALC-SET-0001", Reason: "setup.code_invalid", Status: http.StatusUnauthorized}
 	ErrSetupLocked               = ErrorCode{Code: "ALC-SET-0002", Reason: "setup.locked", Status: http.StatusTooManyRequests, Retryable: true}
@@ -192,7 +194,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrNotFound, ErrUnavailable, ErrUnexpected, ErrBadRequest, ErrRateLimited, ErrValidation, ErrBodyTooLarge, ErrPreconditionFailed,
 		ErrUnauthenticated, ErrForbidden, ErrStepUpRequired, ErrCSRF, ErrInvalidCredentials, ErrMFAInvalid,
 		ErrMFAAlreadyEnrolled, ErrPasswordTooShort, ErrPasswordTooLong, ErrPasswordBreached, ErrCurrentPasswordInvalid, ErrTryAgain,
-		ErrUsernameTaken, ErrLastAdmin, ErrTokenScopeNotAllowed,
+		ErrUsernameTaken, ErrLastAdmin, ErrTokenScopeNotAllowed, ErrAuditBusy,
 		ErrSetupCodeInvalid, ErrSetupLocked, ErrSetupSessionExpired, ErrSetupEnrollmentMissing,
 		ErrPassphraseTooShort, ErrPassphraseMismatch, ErrPassphraseAlreadySet, ErrSetupIncomplete, ErrSetupLicenseChoiceMissing,
 		ErrLicenseLocked,

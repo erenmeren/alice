@@ -148,6 +148,13 @@
         "action": "Choose read-only access."
       }
     },
+    "audit": {
+      "busy": {
+        "title": "Alice is already checking or exporting the audit log.",
+        "cause": "Alice reads the whole audit log for one check or export at a time, and another one is running. Nothing was checked or exported.",
+        "action": "Wait until the other check or export has finished, then try again."
+      }
+    },
     "setup": {
       "code_invalid": {
         "title": "The setup code is not correct.",

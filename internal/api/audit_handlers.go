@@ -1,9 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -12,6 +15,7 @@ import (
 
 	"alice/internal/audit"
 	"alice/internal/license"
+	"alice/internal/platform/clock"
 	"alice/internal/platform/validate"
 	"alice/internal/rbac"
 )
@@ -124,18 +128,55 @@ func (s *server) listAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": cursor})
 }
 
-func (s *server) verifyAudit(w http.ResponseWriter, r *http.Request) {
-	report, err := s.deps.Audit.Verify(r.Context(), principalFrom(r.Context()).Actor(s.meta(r)))
-	if err != nil {
-		s.fail(w, r, err)
-		return
+// chainScanTimeout bounds one verification or export through the API, and replaces the server's
+// 60-second write limit for its response (AUD-06): a large log can take minutes to read and send.
+const chainScanTimeout = 10 * time.Minute
+
+// chainScanRetryAfter is the Retry-After of ErrAuditBusy, in seconds.
+const chainScanRetryAfter = "30"
+
+// scanChain runs fn in the process's one chain-scan slot. When another verification or export
+// holds it, fn does not run, ErrAuditBusy (retryable) is answered and false is returned. The slot
+// is per process; the scheduled audit.verify task and `alice audit verify` do not take it.
+func (s *server) scanChain(w http.ResponseWriter, r *http.Request, fn func()) bool {
+	select {
+	case s.chainScan <- struct{}{}:
+	default:
+		w.Header().Set("Retry-After", chainScanRetryAfter)
+		s.writeError(w, r, ErrAuditBusy)
+		return false
 	}
-	writeJSON(w, http.StatusOK, auditReportJSON(report))
+	defer func() { <-s.chainScan }()
+	fn()
+	return true
 }
 
-// exportAudit streams the whole log as CSV or JSON (SEC-075): the chain is
-// verified first (read-only: no checkpoint, no audit.verified row), the export itself is audited before any entry leaves, and
-// the verification result travels with the file.
+// extendWriteDeadline lets the response of a chain scan be written for up to chainScanTimeout
+// instead of the server's WriteTimeout. It is an absolute network deadline, so it uses the real
+// clock; a writer that cannot set one (httptest) keeps its own.
+func extendWriteDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(clock.Real{}.Now().Add(chainScanTimeout))
+}
+
+func (s *server) verifyAudit(w http.ResponseWriter, r *http.Request) {
+	extendWriteDeadline(w)
+	ctx, cancel := context.WithTimeout(r.Context(), chainScanTimeout)
+	defer cancel()
+	s.scanChain(w, r, func() {
+		report, err := s.deps.Audit.Verify(ctx, principalFrom(r.Context()).Actor(s.meta(r)))
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, auditReportJSON(report))
+	})
+}
+
+// exportAudit streams the whole log as CSV or JSON (SEC-075): the chain is verified first
+// (read-only: no checkpoint, no audit.verified row), the export itself is audited before any entry
+// leaves, and the verification result travels with the file (the JSON's verification object, the
+// CSV's first line, the X-Alice-Audit-Intact header). One verification or export runs at a time per
+// process, for at most chainScanTimeout (AUD-06); entries are streamed, never collected.
 func (s *server) exportAudit(w http.ResponseWriter, r *http.Request) {
 	format := r.URL.Query().Get("format")
 	if format != "csv" && format != "json" {
@@ -144,14 +185,24 @@ func (s *server) exportAudit(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, v)
 		return
 	}
+	extendWriteDeadline(w)
+	ctx, cancel := context.WithTimeout(r.Context(), chainScanTimeout)
+	defer cancel()
+	s.scanChain(w, r, func() { s.exportScanned(ctx, w, r, format) })
+}
+
+// exportScanned is exportAudit inside the chain-scan slot. Before the first byte it answers errors
+// itself; after it, a failure aborts the response so the client sees a broken download instead of
+// a file that looks complete.
+func (s *server) exportScanned(ctx context.Context, w http.ResponseWriter, r *http.Request, format string) {
 	m := s.meta(r)
 	actor := principalFrom(r.Context()).Actor(m)
-	report, err := s.deps.Audit.VerifyReadOnly(r.Context())
+	report, err := s.deps.Audit.VerifyReadOnly(ctx)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	err = s.deps.Audit.Write(r.Context(), audit.Event{
+	err = s.deps.Audit.Write(ctx, audit.Event{
 		Actor: actor, Action: "audit.exported", Result: audit.Success,
 		Details: map[string]string{"format": format, "intact": strconv.FormatBool(report.Intact)},
 	})
@@ -166,21 +217,34 @@ func (s *server) exportAudit(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Disposition", `attachment; filename="alice-audit-`+s.deps.Clock.Now().UTC().Format("2006-01-02")+"."+format+`"`)
 	if format == "csv" {
 		h.Set("Content-Type", "text/csv; charset=utf-8")
-		err = s.writeAuditCSV(w, r)
+		err = s.writeAuditCSV(ctx, w, report)
 	} else {
 		h.Set("Content-Type", "application/json; charset=utf-8")
-		err = s.writeAuditJSON(w, r, report)
+		err = s.writeAuditJSON(ctx, w, report)
 	}
 	if err != nil {
-		// Headers are already sent: log and abort so the client sees a broken
-		// download instead of a file that looks complete.
 		s.deps.Log.Error("audit export failed", append([]any{"request_id", m.RequestID}, errorAttrs(err)...)...)
-		panic(http.ErrAbortHandler)
+		panic(http.ErrAbortHandler) // the deferred release of the chain-scan slot still runs
 	}
 }
 
-func (s *server) writeAuditCSV(w http.ResponseWriter, r *http.Request) error {
+// csvVerificationLine is the CSV export's first line (after the BOM): the verification the JSON
+// export carries, as a comment line (AUD-25 c). Every value is a number, a boolean, hex or a fixed
+// problem label: nothing a user wrote.
+func csvVerificationLine(report audit.Report) string {
+	line := fmt.Sprintf("# alice audit export: intact=%t checked=%d head_seq=%d head_hash=%s",
+		report.Intact, report.Checked, report.HeadSeq, hex.EncodeToString(report.HeadHash))
+	if !report.Intact {
+		line += fmt.Sprintf(" first_bad_seq=%d problem=%s", report.FirstBadSeq, report.Problem)
+	}
+	return line + "\n"
+}
+
+func (s *server) writeAuditCSV(ctx context.Context, w http.ResponseWriter, report audit.Report) error {
 	if _, err := w.Write([]byte("\xEF\xBB\xBF")); err != nil { // BOM so spreadsheet tools read UTF-8 (spec §10.5)
+		return err
+	}
+	if _, err := io.WriteString(w, csvVerificationLine(report)); err != nil {
 		return err
 	}
 	cw := csv.NewWriter(w)
@@ -188,7 +252,7 @@ func (s *server) writeAuditCSV(w http.ResponseWriter, r *http.Request) error {
 	if err := cw.Write(header); err != nil {
 		return err
 	}
-	err := s.deps.Audit.Iterate(r.Context(), func(e audit.Entry) error {
+	err := s.deps.Audit.Iterate(ctx, func(e audit.Entry) error {
 		d := auditEntryJSON(e)
 		details, err := json.Marshal(d.Details)
 		if err != nil {
@@ -230,7 +294,7 @@ func csvSafe(v string) string {
 	return v
 }
 
-func (s *server) writeAuditJSON(w http.ResponseWriter, r *http.Request, report audit.Report) error {
+func (s *server) writeAuditJSON(ctx context.Context, w http.ResponseWriter, report audit.Report) error {
 	head, err := json.Marshal(auditReportJSON(report))
 	if err != nil {
 		return err
@@ -239,7 +303,7 @@ func (s *server) writeAuditJSON(w http.ResponseWriter, r *http.Request, report a
 		return err
 	}
 	first := true
-	err = s.deps.Audit.Iterate(r.Context(), func(e audit.Entry) error {
+	err = s.deps.Audit.Iterate(ctx, func(e audit.Entry) error {
 		b, err := json.Marshal(auditEntryJSON(e))
 		if err != nil {
 			return err

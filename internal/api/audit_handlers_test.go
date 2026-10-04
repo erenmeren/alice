@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -110,7 +111,13 @@ func TestExportCSV(t *testing.T) {
 
 	body := rec.Body.String()
 	require.True(t, strings.HasPrefix(body, "\xEF\xBB\xBF"), "UTF-8 BOM")
-	rows, err := csv.NewReader(strings.NewReader(strings.TrimPrefix(body, "\xEF\xBB\xBF"))).ReadAll()
+	// AUD-25 (c): the first line carries the verification the JSON export has; the header follows.
+	first, rest, _ := strings.Cut(strings.TrimPrefix(body, "\xEF\xBB\xBF"), "\n")
+	assert.Equal(t, "# alice audit export: intact=true checked=2 head_seq=2 head_hash=01", first)
+	assert.True(t, strings.HasPrefix(rest, "seq,at,"), "the header row is the second line")
+	rd := csv.NewReader(strings.NewReader(strings.TrimPrefix(body, "\xEF\xBB\xBF")))
+	rd.Comment = '#'
+	rows, err := rd.ReadAll()
 	require.NoError(t, err)
 	require.Len(t, rows, 3)
 	assert.Equal(t, "seq", rows[0][0])
@@ -123,6 +130,72 @@ func TestExportCSV(t *testing.T) {
 	assert.Equal(t, "audit.exported", events[0].Action)
 	assert.Equal(t, map[string]string{"format": "csv", "intact": "true"}, events[0].Details)
 	assert.Equal(t, auditorID, events[0].Actor.ID)
+}
+
+// A broken chain names the first bad entry and the problem in the CSV's first line too.
+func TestExportCSVFirstLineOfABrokenChain(t *testing.T) {
+	d, _ := exportDeps(t)
+	d.Audit.(*fakeAudit).VerifyReadOnlyFn = func(context.Context) (audit.Report, error) {
+		return audit.Report{Intact: false, Checked: 6, HeadSeq: 6, HeadHash: []byte{0xfe, 0xed}, FirstBadSeq: 7, Problem: audit.ProblemHashMismatch}, nil
+	}
+	rec := call(NewHandler(d), http.MethodGet, "/api/v1/audit/export?format=csv", "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, "false", rec.Header().Get("X-Alice-Audit-Intact"))
+	first, _, _ := strings.Cut(strings.TrimPrefix(rec.Body.String(), "\xEF\xBB\xBF"), "\n")
+	assert.Equal(t, "# alice audit export: intact=false checked=6 head_seq=6 head_hash=feed first_bad_seq=7 problem=hash_mismatch", first)
+}
+
+// AUD-06: one verification or export reads the whole chain at a time in a process; another one
+// is refused at once with a retryable answer instead of running beside it.
+func TestChainScansRunOneAtATime(t *testing.T) {
+	d, fa := exportDeps(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	fa.VerifyReadOnlyFn = func(ctx context.Context) (audit.Report, error) {
+		once.Do(func() { close(started) })
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return intactReport(), nil
+	}
+	fa.VerifyFn = func(context.Context, audit.Actor) (audit.Report, error) { return intactReport(), nil }
+	h := NewHandler(d)
+	first := make(chan int)
+	go func() { first <- call(h, http.MethodGet, "/api/v1/audit/export?format=json", "auditor", "").Code }()
+	<-started
+	for _, rq := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/audit/export?format=csv"},
+		{http.MethodPost, "/api/v1/audit/verify"},
+	} {
+		rec := call(h, rq.method, rq.path, "admin", "")
+		require.Equal(t, http.StatusServiceUnavailable, rec.Code, rq.path)
+		body := decodeErr(t, rec)
+		assert.Equal(t, "ALC-AUD-0001", body.Error.Code)
+		assert.Equal(t, "audit.busy", body.Error.Reason)
+		assert.True(t, body.Error.Retryable)
+		assert.NotEmpty(t, rec.Header().Get("Retry-After"))
+	}
+	close(release)
+	assert.Equal(t, http.StatusOK, <-first)
+	assert.Equal(t, 1, fa.Count("audit.exported"), "a refused export is not recorded as an export")
+	assert.Equal(t, http.StatusOK, call(h, http.MethodPost, "/api/v1/audit/verify", "admin", "").Code, "the slot is free again")
+}
+
+// The export's scans and writes are bounded by its own 10-minute limit, not the request's.
+func TestExportRunsUnderItsOwnDeadline(t *testing.T) {
+	d, fa := exportDeps(t)
+	var left time.Duration
+	fa.VerifyReadOnlyFn = func(ctx context.Context) (audit.Report, error) {
+		dl, ok := ctx.Deadline()
+		require.True(t, ok)
+		left = time.Until(dl)
+		return intactReport(), nil
+	}
+	require.Equal(t, http.StatusOK, call(NewHandler(d), http.MethodGet, "/api/v1/audit/export?format=csv", "admin", "").Code)
+	assert.Greater(t, left, 9*time.Minute)
+	assert.LessOrEqual(t, left, chainScanTimeout)
+	assert.Equal(t, 10*time.Minute, chainScanTimeout)
 }
 
 func TestExportJSON(t *testing.T) {
