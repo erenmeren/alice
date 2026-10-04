@@ -32,12 +32,11 @@ func (s *Service) ChangePassword(ctx context.Context, p Principal, current, next
 	actor := p.Actor(m)
 	cur := NormalizePassword(current)
 	var (
-		token       string
-		failed      bool
-		dummyVerify bool
+		token  string
+		failed bool
 	)
 	err := s.withCredentialSlot(ctx, func() error {
-		err := s.credentialTx(ctx, func(tx pgx.Tx) error {
+		return s.credentialTx(ctx, func(tx pgx.Tx) error {
 			a, err := lockAccountByID(ctx, tx, p.UserID)
 			if err != nil {
 				return err
@@ -47,7 +46,9 @@ func (s *Service) ChangePassword(ctx context.Context, p Principal, current, next
 			}
 			now := s.clock.Now().UTC()
 			if a.blocked(now) {
-				failed, dummyVerify = true, true
+				// The dummy check runs under the account lock, where the real check runs (AUD-11).
+				failed = true
+				s.hasher.DummyVerify(ctx, cur)
 				return s.auditFailure(ctx, tx, actor, "auth.password_changed", p.UserID.String(), "locked")
 			}
 			ok, _, err := s.hasher.Verify(ctx, *a.hash, cur)
@@ -83,10 +84,6 @@ func (s *Service) ChangePassword(ctx context.Context, p Principal, current, next
 			_, err = s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "auth.password_changed", ObjectType: "user", ObjectID: p.UserID.String(), Result: audit.Success})
 			return err
 		})
-		if dummyVerify {
-			s.hasher.DummyVerify(ctx, cur)
-		}
-		return err
 	})
 	if err != nil {
 		return SessionResult{}, err

@@ -214,19 +214,22 @@ func (s *Service) credentialTx(ctx context.Context, fn func(tx pgx.Tx) error) er
 // Login verifies username and password and opens a pending session that can only
 // complete MFA. Every failure returns ErrInvalidCredentials (SEC-004).
 //
-// The whole attempt runs in one transaction holding the account's row lock (see
-// lockAccount), including the Argon2 verification: attempts on one account are
-// serialized, attempts on different accounts are not. Every attempt, for a known,
-// unknown or blocked account, first waits for a credential slot.
+// Every attempt, for a known, unknown or blocked account, runs the same steps in the
+// same order: wait for a credential slot; in one transaction take the per-name lock
+// (lockLoginName), look the account up under its row lock (lockAccount), run exactly one
+// Argon2 check (Verify for a real account, DummyVerify for an unknown or blocked one) and
+// append the audit row. The Argon2 check always runs while the name lock is held, so
+// attempts on one name are serialized whether or not the name exists, and parallel
+// requests cannot tell the two apart by how they overlap (SEC-004, AUD-11). Attempts on
+// different names are not serialized.
 func (s *Service) Login(ctx context.Context, username, password string, m Meta) (LoginResult, error) {
 	pw := NormalizePassword(password)
 	var (
-		res         LoginResult
-		failed      bool
-		dummyVerify bool
+		res    LoginResult
+		failed bool
 	)
 	err := s.withCredentialSlot(ctx, func() error {
-		err := s.credentialTx(ctx, func(tx pgx.Tx) error {
+		return s.credentialTx(ctx, func(tx pgx.Tx) error {
 			if err := lockLoginName(ctx, tx, username); err != nil {
 				return err
 			}
@@ -236,14 +239,18 @@ func (s *Service) Login(ctx context.Context, username, password string, m Meta) 
 				return err
 			}
 			if !found || a.hash == nil {
-				failed, dummyVerify = true, true
+				// SEC-004, AUD-11: the dummy check runs here, under the name lock, where a real
+				// account's check runs, so an unknown name queues exactly like a real one.
+				failed = true
+				s.hasher.DummyVerify(ctx, pw)
 				return s.auditFailure(ctx, tx, audit.Actor{Type: audit.ActorUser, Name: unknownUserName, IP: m.IP, RequestID: m.RequestID}, "auth.login", "", "unknown_user")
 			}
 			actor := userActor(a.id, a.name, m)
 			if a.blocked(now) {
-				// Not counted and the password is not checked; the dummy run after the
-				// transaction keeps the timing identical without holding the lock.
-				failed, dummyVerify = true, true
+				// Not counted and the password is not checked; the dummy check under the same
+				// locks keeps the timing of a real check (AUD-11).
+				failed = true
+				s.hasher.DummyVerify(ctx, pw)
 				return s.auditFailure(ctx, tx, actor, "auth.login", a.id.String(), "locked")
 			}
 			ok, rehash, err := s.hasher.Verify(ctx, *a.hash, pw)
@@ -277,10 +284,6 @@ func (s *Service) Login(ctx context.Context, username, password string, m Meta) 
 			}
 			return nil
 		})
-		if dummyVerify {
-			s.hasher.DummyVerify(ctx, pw) // SEC-004: unknown and blocked accounts cost the same as a real check
-		}
-		return err
 	})
 	if err != nil {
 		return LoginResult{}, err

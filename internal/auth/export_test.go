@@ -14,3 +14,14 @@ func SetLockTimeout(s *Service, d time.Duration) { s.lockTimeout = d }
 
 // LoginNameLockNamespace is the first key of Login's per-name advisory lock.
 const LoginNameLockNamespace = loginNameLockNamespace
+
+// SetHashHook installs f, called with the operation (HashOpHash, HashOpVerify or HashOpDummy)
+// at the start of every Argon2 run of h, while its hash slot is held; nil removes it.
+func SetHashHook(h *Hasher, f func(op string)) { h.hook = f }
+
+// Operations passed to the hash hook.
+const (
+	HashOpHash   = hashOpHash
+	HashOpVerify = hashOpVerify
+	HashOpDummy  = hashOpDummy
+)

@@ -38,6 +38,21 @@ var errMalformedHash = errors.New("auth: malformed password hash")
 type Hasher struct {
 	params Argon2Params
 	sem    chan struct{}
+	hook   func(op string) // tests only: runs once a hash slot is held, before the Argon2 work
+}
+
+// Operations reported to Hasher.hook.
+const (
+	hashOpHash   = "hash"
+	hashOpVerify = "verify"
+	hashOpDummy  = "dummy"
+)
+
+// started reports the start of an Argon2 run to the test hook, if any.
+func (h *Hasher) started(op string) {
+	if h.hook != nil {
+		h.hook(op)
+	}
 }
 
 // NewHasher returns a hasher that runs at most maxConcurrent hashes at a time
@@ -67,6 +82,7 @@ func (h *Hasher) Hash(ctx context.Context, secret string) (string, error) {
 		return "", err
 	}
 	defer h.release()
+	h.started(hashOpHash)
 	salt := make([]byte, h.params.SaltLen)
 	_, _ = rand.Read(salt) // never returns an error since Go 1.24
 	key := argon2.IDKey([]byte(secret), salt, h.params.Time, h.params.MemoryKiB, h.params.Threads, h.params.KeyLen)
@@ -86,6 +102,7 @@ func (h *Hasher) Verify(ctx context.Context, encoded, secret string) (ok, needsR
 		return false, false, err
 	}
 	defer h.release()
+	h.started(hashOpVerify)
 	// Lengths come from decodePHC and are bounded, so the uint32 conversion is safe.
 	got := argon2.IDKey([]byte(secret), salt, p.Time, p.MemoryKiB, p.Threads, uint32(len(want))) //nolint:gosec // G115: len(want) <= 1024
 	ok = subtle.ConstantTimeCompare(got, want) == 1
@@ -95,12 +112,14 @@ func (h *Hasher) Verify(ctx context.Context, encoded, secret string) (ok, needsR
 }
 
 // DummyVerify spends the same work as Verify for an unknown user, so response
-// time does not reveal whether an account exists (SEC-004).
+// time does not reveal whether an account exists (SEC-004). Callers run it where the
+// real check would run, under the same locks (AUD-11).
 func (h *Hasher) DummyVerify(ctx context.Context, secret string) {
 	if err := h.acquire(ctx); err != nil {
 		return
 	}
 	defer h.release()
+	h.started(hashOpDummy)
 	salt := make([]byte, h.params.SaltLen)
 	_ = argon2.IDKey([]byte(secret), salt, h.params.Time, h.params.MemoryKiB, h.params.Threads, h.params.KeyLen)
 }
