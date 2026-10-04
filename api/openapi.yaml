@@ -470,7 +470,12 @@ paths:
       - { $ref: "#/components/parameters/ID" }
     post:
       operationId: resetUserPassword
-      summary: Set a new password for the user; ends their sessions and clears a lockout
+      summary: Set a new password for the user; ends their sessions, revokes their API tokens and clears a lockout
+      description: >-
+        In one transaction: sets the password, clears the sign-in delay or lockout, ends every session of the
+        user and revokes every API token of the user (each audited as token.revoked by its ID; the
+        user.password_reset row carries revoked_token_count). The tokens are refused from the next request on.
+        A user changing their own password (POST /api/v1/auth/password) keeps their tokens.
       x-permission: users.manage
       requestBody:
         required: true
@@ -492,10 +497,14 @@ paths:
       - { $ref: "#/components/parameters/ID" }
     post:
       operationId: revokeUserSessions
-      summary: Sign the user out everywhere
+      summary: Sign the user out everywhere; ends their sessions and revokes their API tokens
+      description: >-
+        In one transaction: ends every session of the user and revokes every API token of the user (each
+        audited as token.revoked by its ID; the user.sessions_revoked row carries revoked_token_count). The
+        tokens are refused from the next request on. Also applies when administrators use it on themselves.
       x-permission: users.manage
       responses:
-        "204": { description: Sessions ended }
+        "204": { description: Sessions ended and API tokens revoked }
         "404": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/tokens:
