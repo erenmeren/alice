@@ -12,6 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/helperproto"
@@ -394,8 +395,9 @@ func fileProblem(f helperproto.NginxFile, have bool) string {
 
 // certificateChain parses the file's CERTIFICATE blocks again (the remote is not trusted): the
 // chain is rebuilt from the certificates that parse, in file order, so nothing else of the remote
-// text is kept. A block that does not parse is dropped (dropped is true); a file with none, too
-// many or a malformed hash reports a problem for its location.
+// text is kept. A block that does not parse, or whose validity dates lie outside the years 1 to 9999
+// in UTC (validate.CertificateTimes, the rule internal/certs applies: AUD-13), is dropped (dropped
+// is true); a file with none, too many or a malformed hash reports a problem for its location.
 func certificateChain(f helperproto.NginxFile) (chain []byte, sum string, dropped bool, problem string) {
 	if !helperproto.ValidSHA256(f.SHA256) || f.SHA256 == helperproto.AbsentSHA256 {
 		return nil, "", false, providers.CertProblemUnreadable
@@ -416,8 +418,8 @@ func certificateChain(f helperproto.NginxFile) (chain []byte, sum string, droppe
 		}
 		first := !seen
 		seen = true
-		_, perr := x509.ParseCertificate(block.Bytes)
-		if len(block.Headers) > 0 || perr != nil {
+		c, perr := x509.ParseCertificate(block.Bytes)
+		if len(block.Headers) > 0 || perr != nil || !validate.CertificateTimes(c.NotBefore, c.NotAfter) {
 			if first {
 				// The next certificate would become the leaf: the file is not usable.
 				return nil, "", false, providers.CertProblemNotACertificate

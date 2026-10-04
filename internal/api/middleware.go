@@ -77,8 +77,13 @@ func (s *server) recoverer(next http.Handler) http.Handler {
 				if err, ok := v.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 					panic(v)
 				}
-				// The panic value is not logged: it may contain request data or secrets.
-				s.deps.Log.Error("request handler panicked", "request_id", RequestID(r.Context()), "path", r.URL.Path)
+				if f, ok := v.(encodeFailure); ok {
+					// writeJSON could not encode an answer (nothing was written): only the Go type.
+					s.deps.Log.Error("response encoding failed", "request_id", RequestID(r.Context()), "path", r.URL.Path, "value_type", f.valueType)
+				} else {
+					// The panic value is not logged: it may contain request data or secrets.
+					s.deps.Log.Error("request handler panicked", "request_id", RequestID(r.Context()), "path", r.URL.Path)
+				}
 				if sw.started {
 					// Headers are gone; appending a JSON error would corrupt the body.
 					// Abort so net/http drops the connection and the client sees a truncated response.

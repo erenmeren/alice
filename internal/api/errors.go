@@ -509,16 +509,18 @@ func errorAttrs(err error) []any {
 	return attrs
 }
 
+// encodeFailure is what writeJSON panics with when encoding/json refuses a value: the recoverer
+// logs the value's Go type (never the value) and answers 500 ALC-SYS-0003.
+type encodeFailure struct{ valueType string }
+
 // writeJSON encodes v before anything is written, so a value encoding/json refuses (a time outside
-// years 0000-9999, AUD-13) can never cut an answer short after its status line: the answer is then
-// 500 ALC-SYS-0003 with a complete error body. Ingestion keeps such values out (internal/certs); this
-// is the second line.
+// years 0000-9999, AUD-13) can never cut an answer short after its status line: nothing has been
+// written when it panics with an encodeFailure, so the recoverer logs it and sends a complete
+// 500 ALC-SYS-0003. Ingestion keeps such values out (internal/certs); this is the second line.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
-		status = http.StatusInternalServerError
-		b, _ = json.Marshal(map[string]errorPayload{"error": {Code: ErrUnexpected.Code, Reason: ErrUnexpected.Reason,
-			MessageKey: "errors." + ErrUnexpected.Reason}}) // fixed values always encode
+		panic(encodeFailure{valueType: fmt.Sprintf("%T", v)})
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

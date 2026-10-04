@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"alice/internal/platform/validate"
 )
 
 // MaxInputSize bounds every PEM field and a PFX file.
@@ -132,26 +134,14 @@ func checkCertificateKeySize(c *x509.Certificate) error {
 	return nil
 }
 
-// Bounds of a certificate's validity dates in UTC (AUD-13). A GeneralizedTime names years 0000-9999
-// in its own digits, and Go's parser accepts a zone offset of up to ±23:59 (RFC 5280 asks for "Z"),
-// so a file can say a time a day outside that range in UTC; and year 0000 is no year of the calendar
-// Alice shows. Such a time cannot be written as an RFC 3339 timestamp by the API, so a certificate
-// with one is not a certificate Alice handles. "99991231235959Z", RFC 5280's "no well-defined
-// expiration", is the latest time allowed.
-var (
-	earliestValidity = time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)
-	latestValidity   = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
-)
-
-// checkValidityRange refuses a certificate whose NotBefore or NotAfter lies outside
-// earliestValidity … latestValidity. It runs on every certificate Alice reads, with the key size
-// check, so such a certificate is unreadable wherever it comes from: an upload, a signed request, a
-// PFX file, a file found on a server, as the leaf or in the chain.
+// checkValidityRange refuses a certificate whose NotBefore or NotAfter lies outside the years 1 to
+// 9999 in UTC (validate.CertificateTimes, AUD-13): such a time cannot be shown or stored as an RFC
+// 3339 timestamp. It runs on every certificate Alice reads, with the key size check, so such a
+// certificate is unreadable wherever it comes from: an upload, a signed request, a PFX file, a file
+// found on a server.
 func checkValidityRange(c *x509.Certificate) error {
-	for _, t := range []time.Time{c.NotBefore, c.NotAfter} {
-		if t.Before(earliestValidity) || t.After(latestValidity) {
-			return invalid("a certificate's validity dates lie outside the years 1 to 9999")
-		}
+	if !validate.CertificateTimes(c.NotBefore, c.NotAfter) {
+		return invalid("a certificate's validity dates lie outside the years 1 to 9999")
 	}
 	return nil
 }

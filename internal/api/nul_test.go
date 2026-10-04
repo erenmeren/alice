@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -277,16 +278,34 @@ func TestNULCheckOnSplitReads(t *testing.T) {
 }
 
 // AUD-13 fix round 2: an answer whose value encoding/json refuses (a time outside years 0000-9999)
-// is a complete 500 ALC-SYS-0003, never a 200 cut short; every other answer is written as before.
+// is a complete 500 ALC-SYS-0003 with its request id, never a 200 cut short, and the log names the
+// value's Go type but never the value; every other answer is written as before.
 func TestWriteJSONNeverTruncatesAnAnswer(t *testing.T) {
-	rec := httptest.NewRecorder()
-	writeJSON(rec, http.StatusOK, map[string]any{"not_after": time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)})
+	d := testDeps(t, nil)
+	var logs bytes.Buffer
+	d.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	s := newServer(d)
+	type secretDTO struct {
+		Name     string    `json:"name"`
+		NotAfter time.Time `json:"not_after"`
+	}
+	h := s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/probe", perm: rbac.Public, handler: func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, secretDTO{Name: "canary-value", NotAfter: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)})
+	}}})
+	rec := call(h, http.MethodGet, "/api/v1/probe", "", "")
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.Equal(t, "ALC-SYS-0003", edgeErr(t, rec.Body.Bytes()).Error.Code)
-	rec = httptest.NewRecorder()
-	writeJSON(rec, http.StatusCreated, map[string]any{"a": "<b>", "t": time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)})
-	assert.Equal(t, http.StatusCreated, rec.Code)
-	assert.JSONEq(t, `{"a":"<b>","t":"9999-12-31T23:59:59Z"}`, rec.Body.String())
-	assert.True(t, strings.HasSuffix(rec.Body.String(), "}\n"), "one line, as json.Encoder wrote it")
-	assert.NotContains(t, rec.Body.String(), "<", "HTML characters stay escaped, as json.Encoder wrote them")
+	e := decodeErr(t, rec)
+	assert.Equal(t, "ALC-SYS-0003", e.Error.Code)
+	assert.NotEmpty(t, e.Error.RequestID)
+	assert.Contains(t, logs.String(), "response encoding failed")
+	assert.Contains(t, logs.String(), "value_type=api.secretDTO")
+	assert.NotContains(t, logs.String(), "canary-value")
+	assert.NotContains(t, rec.Body.String(), "canary-value")
+
+	w := httptest.NewRecorder()
+	writeJSON(w, http.StatusCreated, map[string]any{"a": "<b>", "t": time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)})
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.JSONEq(t, `{"a":"<b>","t":"9999-12-31T23:59:59Z"}`, w.Body.String())
+	assert.True(t, strings.HasSuffix(w.Body.String(), "}\n"), "one line, as json.Encoder wrote it")
+	assert.NotContains(t, w.Body.String(), "<", "HTML characters stay escaped, as json.Encoder wrote them")
 }
