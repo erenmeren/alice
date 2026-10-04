@@ -16,7 +16,7 @@ import (
 // needs step-up; the secret is returned exactly once.
 func (s *server) tokenRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/tokens", perm: rbac.Session, handler: s.listTokens},
+		{method: http.MethodGet, pattern: tokensPattern, perm: rbac.Session, handler: s.listTokens},
 		{method: http.MethodPost, pattern: "/api/v1/tokens", perm: rbac.SessionStepUp, lic: license.ClassAlways, handler: s.createToken},
 		{method: http.MethodDelete, pattern: "/api/v1/tokens/{id}", perm: rbac.Session, lic: license.ClassAlways, handler: s.revokeToken},
 	}
@@ -51,8 +51,14 @@ func tokenJSON(t auth.Token) tokenDTO {
 	}
 }
 
-// listTokens lists the caller's tokens, or another user's when ?user_id= is
-// given (auth answers ErrNotFound unless the caller is an administrator).
+// tokensPattern is the token list route; its refusals are coalesced under it (AUD-06).
+const tokensPattern = "/api/v1/tokens" //nolint:gosec // G101: a route pattern, not a credential
+
+// listTokens lists the caller's tokens, or another user's when ?user_id= is given. Only an
+// administrator may list another user's tokens: anyone else gets 404 like an unknown user (no
+// existence check is made), and the refusal is recorded as authz.denied with reason not_owner,
+// coalesced per person and route like the guard's refusals, the summary counting the distinct
+// user IDs asked for (AUD-06, AUD-15).
 func (s *server) listTokens(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())
 	userID := p.UserID
@@ -65,6 +71,11 @@ func (s *server) listTokens(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		userID = id
+	}
+	if userID != p.UserID && p.Role != rbac.Admin {
+		s.auditNotOwner(r, p, route{method: http.MethodGet, pattern: tokensPattern, perm: rbac.Session}, "user", userID.String())
+		s.fail(w, r, auth.ErrNotFound)
+		return
 	}
 	tokens, err := s.deps.Auth.ListTokens(r.Context(), p, s.meta(r), userID)
 	if err != nil {

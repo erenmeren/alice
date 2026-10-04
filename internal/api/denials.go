@@ -2,11 +2,13 @@ package api
 
 import (
 	"context"
+	"hash/maphash"
 	"maps"
 	"net/http"
 	"net/netip"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,8 +21,10 @@ import (
 // Coalescing of the guard's denial audit rows (AUD-06, R39): within denialWindow, repeated refusals
 // with one key (the subject, the permission or license class, the reason and the route) add no row.
 // The first refusal of a window is written at once. When the window ends with refusals left out,
-// one more row is appended: the same action and details plus suppressed_count, window_start and
-// window_end. No row is ever updated: the chain stays append-only.
+// one more row is appended: the same action and details plus suppressed_count, window_start,
+// window_end and what the left-out refusals varied in (distinct_ip_count with up to
+// maxIPSamples addresses in ip_samples, distinct_object_count, distinct_token_count). No row is
+// ever updated: the chain stays append-only.
 const (
 	// denialWindow is how long repeated refusals of one key are left out after the row written for
 	// the first one.
@@ -30,6 +34,11 @@ const (
 	maxDenialKeys = 10000
 	// denialSweepInterval is how often RunDenialSummaries looks for windows that have ended.
 	denialSweepInterval = time.Minute
+	// maxDistinct bounds each distinct-value set of a window; beyond it the count is written as
+	// "<maxDistinct>+".
+	maxDistinct = 256
+	// maxIPSamples is how many client addresses a summary names.
+	maxIPSamples = 3
 )
 
 // denialState is one open window: the row written for its first refusal and how many refusals of
@@ -39,6 +48,55 @@ type denialState struct {
 	opened     time.Time
 	suppressed int
 	ev         audit.Event
+	// What the window's refusals (the first included) varied in.
+	ips, objects, tokens distinctSet
+	ipSamples            []string
+}
+
+// distinctSet counts distinct values up to maxDistinct, keeping only 64-bit hashes.
+type distinctSet struct {
+	seen map[uint64]struct{}
+	over bool
+}
+
+func (d *distinctSet) add(seed maphash.Seed, v string) {
+	if v == "" {
+		return
+	}
+	h := maphash.String(seed, v)
+	if _, ok := d.seen[h]; ok {
+		return
+	}
+	if len(d.seen) >= maxDistinct {
+		d.over = true
+		return
+	}
+	if d.seen == nil {
+		d.seen = map[uint64]struct{}{}
+	}
+	d.seen[h] = struct{}{}
+}
+
+func (d *distinctSet) count() string {
+	n := strconv.Itoa(len(d.seen))
+	if d.over {
+		n += "+"
+	}
+	return n
+}
+
+// observe adds one refusal's client address, object and token to st. The address is the one the
+// audit row stores (parsed, canonical: never request text).
+func (st *denialState) observe(seed maphash.Seed, ev audit.Event) {
+	if ev.Actor.IP.IsValid() {
+		ip := ev.Actor.IP.Unmap().WithZone("").String()
+		st.ips.add(seed, ip)
+		if len(st.ipSamples) < maxIPSamples && !slices.Contains(st.ipSamples, ip) {
+			st.ipSamples = append(st.ipSamples, ip)
+		}
+	}
+	st.objects.add(seed, ev.ObjectID)
+	st.tokens.add(seed, ev.Details["token_id"])
 }
 
 // denialCoalescer holds the open windows of this process (in memory: each process coalesces on its
@@ -46,12 +104,13 @@ type denialState struct {
 type denialCoalescer struct {
 	mu   sync.Mutex
 	clk  clock.Clock
+	seed maphash.Seed
 	gen  uint64
 	open map[string]*denialState
 }
 
 func newDenialCoalescer(clk clock.Clock) *denialCoalescer {
-	return &denialCoalescer{clk: clk, open: map[string]*denialState{}}
+	return &denialCoalescer{clk: clk, seed: maphash.MakeSeed(), open: map[string]*denialState{}}
 }
 
 // admit decides about one refusal with key, whose row would be ev. write reports whether ev is
@@ -65,6 +124,7 @@ func (c *denialCoalescer) admit(key string, ev audit.Event) (gen uint64, write b
 	if st, ok := c.open[key]; ok {
 		if now.Sub(st.opened) < denialWindow {
 			st.suppressed++
+			st.observe(c.seed, ev)
 			return 0, false, nil
 		}
 		summaries = appendSummary(summaries, st, st.opened.Add(denialWindow))
@@ -74,7 +134,9 @@ func (c *denialCoalescer) admit(key string, ev audit.Event) (gen uint64, write b
 		summaries = append(summaries, c.makeRoom(now)...)
 	}
 	c.gen++
-	c.open[key] = &denialState{gen: c.gen, opened: now, ev: ev}
+	st := &denialState{gen: c.gen, opened: now, ev: ev}
+	st.observe(c.seed, ev)
+	c.open[key] = st
 	return c.gen, true, summaries
 }
 
@@ -167,8 +229,9 @@ func (c *denialCoalescer) reset() {
 }
 
 // appendSummary appends the summary row of st's window ending at end, when refusals were left out.
-// It names the same subject, action and details as the window's first row; the address and the
-// request ID are left out, as the row stands for many requests.
+// It names the same subject, action and details as the window's first row, plus the counts. The
+// address, the request ID and the object ID are left out, as the row stands for many requests;
+// ip_samples names up to maxIPSamples of the addresses.
 func appendSummary(out []audit.Event, st *denialState, end time.Time) []audit.Event {
 	if st.suppressed == 0 {
 		return out
@@ -177,22 +240,43 @@ func appendSummary(out []audit.Event, st *denialState, end time.Time) []audit.Ev
 	if d == nil {
 		d = map[string]string{}
 	}
+	delete(d, "token_id") // the first row names its token; the summary may stand for several
 	d["suppressed_count"] = strconv.Itoa(st.suppressed)
 	d["window_start"] = st.opened.UTC().Format(time.RFC3339Nano)
 	d["window_end"] = end.UTC().Format(time.RFC3339Nano)
+	if len(st.ipSamples) > 0 {
+		d["distinct_ip_count"] = st.ips.count()
+		d["ip_samples"] = strings.Join(st.ipSamples, ",")
+	}
+	if len(st.objects.seen) > 0 {
+		d["distinct_object_count"] = st.objects.count()
+	}
+	if len(st.tokens.seen) > 0 {
+		d["distinct_token_count"] = st.tokens.count()
+	}
 	actor := st.ev.Actor
 	actor.IP, actor.RequestID = netip.Addr{}, ""
 	return append(out, audit.Event{Actor: actor, Action: st.ev.Action, ObjectType: st.ev.ObjectType,
-		ObjectID: st.ev.ObjectID, Result: st.ev.Result, Details: d})
+		Result: st.ev.Result, Details: d})
 }
 
-// denialSubject identifies who was refused: a person by user (all their sessions together), an API
-// token by token.
+// denialSubject identifies who was refused: a person by user, all their sessions together, and
+// all API tokens of one owner together, apart from that owner's sessions. Tokens are unlimited per
+// user, so a per-token subject would multiply the bound on log growth by the number of tokens.
 func denialSubject(p auth.Principal) string {
 	if p.Kind == rbac.APIToken {
-		return "t:" + p.TokenID.String()
+		return "u:" + p.UserID.String() + "|tok"
 	}
 	return "u:" + p.UserID.String()
+}
+
+// denialActor is the audit actor of a refusal, and the details that name the API token of a token
+// principal (the coalescing subject groups an owner's tokens; each first row names its token).
+func (s *server) denialActor(r *http.Request, p auth.Principal, details map[string]string) audit.Actor {
+	if p.Kind == rbac.APIToken {
+		details["token_id"] = p.TokenID.String()
+	}
+	return p.Actor(s.meta(r))
 }
 
 // denialKey is the coalescing key: subject, what was refused (a permission or "license:<class>"),
@@ -200,6 +284,16 @@ func denialSubject(p auth.Principal) string {
 // every route that was probed (ruling S3).
 func denialKey(p auth.Principal, what, reason string, rt route) string {
 	return denialSubject(p) + "|" + what + "|" + reason + "|" + rt.method + " " + rt.pattern
+}
+
+// auditNotOwner records a refused access to another user's object (reason not_owner). The key is
+// the subject, permission, reason and route, never the object: asking for many IDs is one window,
+// whose summary counts the distinct objects (distinct_object_count). The first row names its object.
+func (s *server) auditNotOwner(r *http.Request, p auth.Principal, rt route, objectType, objectID string) {
+	details := map[string]string{"permission": string(rt.perm), "method": rt.method, "path": rt.pattern, "reason": "not_owner"}
+	ev := audit.Event{Actor: s.denialActor(r, p, details), Action: "authz.denied", ObjectType: objectType, ObjectID: objectID,
+		Result: audit.Denied, Details: details}
+	s.recordDenial(r, denialKey(p, string(rt.perm), "not_owner", rt), ev)
 }
 
 // recordDenial writes ev for a refusal unless the window of key already has its row, and first any
@@ -228,7 +322,8 @@ func (s *server) writeAuditDetached(r *http.Request, ev audit.Event) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), auditWriteTimeout)
 	defer cancel()
 	if err := s.deps.Audit.Write(ctx, ev); err != nil {
-		s.deps.Log.Error("audit write failed", append([]any{"request_id", RequestID(r.Context()), "action", ev.Action}, errorAttrs(err)...)...)
+		s.deps.Log.Error("audit write failed", append([]any{"request_id", RequestID(r.Context()), "action", ev.Action,
+			"actor_id", ev.Actor.ID.String(), "route", ev.Details["path"]}, errorAttrs(err)...)...)
 		return false
 	}
 	return true
@@ -246,8 +341,8 @@ func (s *server) writeSummaries(ctx context.Context, evs []audit.Event) {
 		err := s.deps.Audit.Write(wctx, ev)
 		cancel()
 		if err != nil {
-			s.deps.Log.Error("audit write failed", append([]any{"action", ev.Action, "suppressed_count", ev.Details["suppressed_count"]},
-				errorAttrs(err)...)...)
+			s.deps.Log.Error("audit write failed", append([]any{"action", ev.Action, "actor_id", ev.Actor.ID.String(),
+				"route", ev.Details["path"], "suppressed_count", ev.Details["suppressed_count"]}, errorAttrs(err)...)...)
 		}
 	}
 }

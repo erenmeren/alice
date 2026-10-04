@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -132,4 +133,25 @@ func TestDenialIsRecordedWhenTheClientDisconnects(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Equal(t, before+2, s.countWhere("audit_log", "action = 'authz.denied'"), "the second denial is recorded")
 	assert.NotContains(t, s.logs.String()[logged:], "audit write failed")
+}
+
+// AUD-06 (I1): asking for other users' token lists with many user IDs is one authz.denied row per
+// window, never a lookup, and the summary counts the IDs asked for.
+func TestForeignTokenListEnumerationIsCoalesced(t *testing.T) {
+	s, olga := installedWithOperator(t)
+	op := s.freshClient()
+	s.signIn(op, olga)
+	before := s.countWhere("audit_log", "action = 'authz.denied'")
+	for range 50 {
+		requireError(t, op.do(http.MethodGet, "/api/v1/tokens?user_id="+uuid.NewString(), nil), http.StatusNotFound, "ALC-SYS-0001")
+	}
+	assert.Equal(t, before+1, s.countWhere("audit_log", "action = 'authz.denied'"))
+	assert.Equal(t, 1, s.countWhere("audit_log", "action = 'authz.denied' AND details->>'reason' = 'not_owner' AND object_type = 'user'"))
+	s.api.FlushDenials(context.Background())
+	assert.Equal(t, 1, s.countWhere("audit_log", "action = 'authz.denied' AND details->>'suppressed_count' = '49'"+
+		" AND details->>'distinct_object_count' = '50' AND details->>'distinct_ip_count' = '1' AND details->>'ip_samples' <> ''"+
+		" AND details->>'path' = '/api/v1/tokens' AND object_id = ''"))
+	rep, err := s.auditSvc.VerifyReadOnly(context.Background())
+	require.NoError(t, err)
+	assert.True(t, rep.Intact)
 }

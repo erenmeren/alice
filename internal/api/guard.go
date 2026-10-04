@@ -318,17 +318,8 @@ func (s *server) auditDenied(r *http.Request, rt route, p auth.Principal, reason
 	if p.Kind != rbac.UserSession && p.Kind != rbac.APIToken {
 		return
 	}
-	ev := audit.Event{
-		Actor:  p.Actor(s.meta(r)),
-		Action: "authz.denied",
-		Result: audit.Denied,
-		Details: map[string]string{
-			"permission": string(rt.perm),
-			"method":     rt.method,
-			"path":       rt.pattern,
-			"reason":     reason,
-		},
-	}
+	details := map[string]string{"permission": string(rt.perm), "method": rt.method, "path": rt.pattern, "reason": reason}
+	ev := audit.Event{Actor: s.denialActor(r, p, details), Action: "authz.denied", Result: audit.Denied, Details: details}
 	s.recordDenial(r, denialKey(p, string(rt.perm), reason, rt), ev)
 }
 
@@ -373,12 +364,8 @@ func (s *server) auditLicenseDenied(r *http.Request, rt route, p auth.Principal,
 		return
 	}
 	reason := licenseDenialReason(cause)
-	ev := audit.Event{
-		Actor:   p.Actor(s.meta(r)),
-		Action:  "request.denied_license",
-		Result:  audit.Denied,
-		Details: map[string]string{"method": rt.method, "path": rt.pattern, "class": rt.lic.String(), "reason": reason},
-	}
+	details := map[string]string{"method": rt.method, "path": rt.pattern, "class": rt.lic.String(), "reason": reason}
+	ev := audit.Event{Actor: s.denialActor(r, p, details), Action: "request.denied_license", Result: audit.Denied, Details: details}
 	s.recordDenial(r, denialKey(p, "license:"+rt.lic.String(), reason, rt), ev)
 }
 

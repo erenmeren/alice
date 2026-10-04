@@ -40,13 +40,47 @@ func TestListTokensDefaultsToCaller(t *testing.T) {
 	  "name":"CI pipeline","prefix":"alice_Xy12Ab","scope":"read","expires_at":"2026-12-29T12:00:00Z","last_used_at":null,
 	  "created_at":"2026-09-30T12:00:00Z"}]}`, rec.Body.String())
 
+	assert.NotEmpty(t, askedMeta.RequestID, "the service gets the request meta")
+
+	// AUD-06: another user's list is refused by the API itself (404, as for an unknown user), and
+	// recorded through the coalescer; the service is not asked.
+	asked = uuid.Nil
 	rec = call(h, http.MethodGet, "/api/v1/tokens?user_id="+adminID.String(), "operator", "")
 	assert.Equal(t, http.StatusNotFound, rec.Code, "another user's tokens are invisible to non-admins")
-	assert.Equal(t, adminID, asked)
-	assert.NotEmpty(t, askedMeta.RequestID, "the service gets the request meta so it can audit cross-user denials")
+	assert.Equal(t, uuid.Nil, asked)
+	denied := d.Audit.(*fakeAudit).Events()
+	require.Len(t, denied, 1)
+	assert.Equal(t, "authz.denied", denied[0].Action)
+	assert.Equal(t, "user", denied[0].ObjectType)
+	assert.Equal(t, adminID.String(), denied[0].ObjectID)
+	assert.Equal(t, "not_owner", denied[0].Details["reason"])
+
+	call(h, http.MethodGet, "/api/v1/tokens?user_id="+adminID.String(), "admin", "")
+	assert.Equal(t, adminID, asked, "an administrator's request goes to the service")
 
 	rec = call(h, http.MethodGet, "/api/v1/tokens?user_id=garbage", "operator", "")
 	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+}
+
+// AUD-06: enumerating user IDs is one row per window, and the summary counts the distinct IDs.
+func TestForeignTokenListsAreCoalesced(t *testing.T) {
+	d := testDeps(t, nil)
+	fa := d.Audit.(*fakeAudit)
+	s := New(d)
+	h := s.Handler()
+	for range 50 {
+		rec := call(h, http.MethodGet, "/api/v1/tokens?user_id="+uuid.NewString(), "operator", "")
+		require.Equal(t, http.StatusNotFound, rec.Code)
+	}
+	require.Equal(t, 1, fa.Count("authz.denied"))
+	s.FlushDenials(context.Background())
+	sums := eventsWith(fa, "authz.denied", "suppressed_count")
+	require.Len(t, sums, 1)
+	assert.Equal(t, "49", sums[0].Details["suppressed_count"])
+	assert.Equal(t, "50", sums[0].Details["distinct_object_count"])
+	assert.Equal(t, "not_owner", sums[0].Details["reason"])
+	assert.Equal(t, "/api/v1/tokens", sums[0].Details["path"])
+	assert.Empty(t, sums[0].ObjectID, "the summary stands for many objects")
 }
 
 func TestCreateTokenReturnsSecretOnce(t *testing.T) {

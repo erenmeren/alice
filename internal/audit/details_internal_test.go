@@ -23,6 +23,7 @@ func TestCheckDetailsKeys(t *testing.T) {
 		"disabled", "scope", "owner_id", "format", "intact", "permission", "path", "checked", "head_seq", "problem",
 		"first_bad_seq", "i", "city", "a", "b",
 		"class", "suppressed_count", "window_start", "window_end", // coalesced denial rows (AUD-06)
+		"distinct_ip_count", "ip_samples", "distinct_object_count", "distinct_token_count",
 	}
 	for _, k := range allowed {
 		assert.NoError(t, checkDetails(map[string]string{k: "v"}), k)

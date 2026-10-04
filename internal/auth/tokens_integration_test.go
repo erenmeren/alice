@@ -3,6 +3,7 @@
 package auth_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -110,6 +111,14 @@ func TestTokenObjectLevelAccess(t *testing.T) {
 	require.NoError(t, rows.Err())
 	rows.Close()
 	assert.Equal(t, []string{"user:" + admin.UserID.String() + ":not_owner", "api_token:" + adminTok.ID.String() + ":not_owner"}, denials)
+
+	// AUD-15: the refusal is recorded even when the caller's context has already ended (the list
+	// path decides before any query; the revoke path writes its row through the same auditNotOwner).
+	gone, cancel := context.WithCancel(e.ctx)
+	cancel()
+	_, err = e.svc.ListTokens(gone, op, meta, admin.UserID)
+	assert.ErrorIs(t, err, auth.ErrNotFound)
+	assert.Equal(t, 3, e.countAction(t, "authz.denied", "denied"), "a refusal of a client that left is still recorded")
 
 	list, err := e.svc.ListTokens(e.ctx, admin, meta, op.UserID)
 	require.NoError(t, err)

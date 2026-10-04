@@ -5,17 +5,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/audit"
+	"alice/internal/auth"
 	"alice/internal/license"
 	"alice/internal/platform/clock"
 	"alice/internal/rbac"
@@ -286,6 +290,8 @@ func TestFailedRefusalAuditStillRefusesAndRetries(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, call(h, http.MethodGet, "/api/v1/audit", "operator", "").Code)
 	assert.Contains(t, logs.String(), "audit write failed")
 	assert.Contains(t, logs.String(), "error_type=")
+	assert.Contains(t, logs.String(), "actor_id="+operatorID.String(), "the log names who was refused (M2)")
+	assert.Contains(t, logs.String(), "route=/api/v1/audit", "and the route template")
 	assert.NotContains(t, logs.String(), "secret detail")
 	fail = false
 	assert.Equal(t, http.StatusForbidden, call(h, http.MethodGet, "/api/v1/audit", "operator", "").Code)
@@ -293,4 +299,58 @@ func TestFailedRefusalAuditStillRefusesAndRetries(t *testing.T) {
 	assert.Equal(t, 1, fa.Count("authz.denied"))
 	assert.Equal(t, http.StatusForbidden, call(h, http.MethodGet, "/api/v1/audit", "operator", "").Code)
 	assert.Equal(t, 2, attempts, "then the window holds")
+}
+
+// I2: all API tokens of one owner are one subject (tokens are unlimited per user), apart from the
+// owner's sessions; each first row names its token, and the summary counts the tokens. M1: the
+// summary counts the client addresses and names up to three of them.
+func TestTokensOfOneOwnerShareAWindow(t *testing.T) {
+	d := testDeps(t, nil)
+	fa := d.Audit.(*fakeAudit)
+	first, second := uuid.New(), uuid.New()
+	d.Auth.(*fakeAuth).AuthenticateTokenFn = func(_ context.Context, b string) (auth.Principal, error) {
+		id := first
+		if b == "alice_second" {
+			id = second
+		}
+		return auth.Principal{Kind: rbac.APIToken, UserID: operatorID, Username: "operator", Role: rbac.Operator, TokenID: id,
+			Scope: rbac.ScopeOperate}, nil
+	}
+	h, srv := auditGetHandler(d)
+	for i, tok := range []string{"alice_first", "alice_second", "alice_first", "alice_second", "alice_second"} {
+		req := as(httptest.NewRequest(http.MethodGet, "/api/v1/audit", nil), tok)
+		req.RemoteAddr = fmt.Sprintf("198.51.100.%d:4000", 10+i)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusForbidden, rec.Code)
+	}
+	rows := eventsWith(fa, "authz.denied", "")
+	require.Len(t, rows, 1, "two tokens of one owner: one row")
+	assert.Equal(t, first.String(), rows[0].Details["token_id"], "the first row names its token")
+	assert.Equal(t, audit.ActorToken, rows[0].Actor.Type)
+
+	require.Equal(t, http.StatusForbidden, call(h, http.MethodGet, "/api/v1/audit", "operator", "").Code)
+	assert.Len(t, eventsWith(fa, "authz.denied", ""), 2, "the owner's sessions are another subject")
+
+	srv.FlushDenials(context.Background())
+	sums := eventsWith(fa, "authz.denied", "suppressed_count")
+	require.Len(t, sums, 1)
+	sm := sums[0]
+	assert.Equal(t, "4", sm.Details["suppressed_count"])
+	assert.Equal(t, "2", sm.Details["distinct_token_count"])
+	assert.Equal(t, "5", sm.Details["distinct_ip_count"])
+	assert.Equal(t, "198.51.100.10,198.51.100.11,198.51.100.12", sm.Details["ip_samples"])
+	assert.NotContains(t, sm.Details, "token_id", "the summary stands for several tokens")
+	assert.NotContains(t, sm.Details, "distinct_object_count")
+}
+
+func TestDistinctSetIsBounded(t *testing.T) {
+	var d distinctSet
+	seed := maphash.MakeSeed()
+	for i := range maxDistinct + 10 {
+		d.add(seed, strconv.Itoa(i))
+		d.add(seed, strconv.Itoa(i))
+	}
+	assert.Len(t, d.seen, maxDistinct)
+	assert.Equal(t, strconv.Itoa(maxDistinct)+"+", d.count())
 }

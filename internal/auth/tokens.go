@@ -204,9 +204,18 @@ func (s *Service) RevokeToken(ctx context.Context, p Principal, m Meta, id uuid.
 // errNotOwner is RevokeToken's internal signal for another user's token; callers see ErrNotFound.
 var errNotOwner = errors.New("auth: token belongs to another user")
 
+// notOwnerAuditTimeout bounds the denial row of auditNotOwner, which outlives its request (AUD-15).
+const notOwnerAuditTimeout = 5 * time.Second
+
 // auditNotOwner records a refused access to another user's object as an authorization denial
-// (SEC-070). The caller still answers ErrNotFound, so the object's existence is not revealed.
+// (SEC-070). The caller still answers ErrNotFound, so the object's existence is not revealed. The
+// row is written on a context the caller's cancellation does not end, for at most
+// notOwnerAuditTimeout, so a client that disconnects still leaves it (AUD-15). The HTTP layer
+// refuses another user's token list itself, coalesced (AUD-06); this row is for the revoke path and
+// for callers other than the HTTP layer.
 func (s *Service) auditNotOwner(ctx context.Context, p Principal, m Meta, objectType string, id uuid.UUID) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notOwnerAuditTimeout)
+	defer cancel()
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: p.Actor(m), Action: "authz.denied", ObjectType: objectType, ObjectID: id.String(),
 			Result: audit.Denied, Details: map[string]string{"reason": "not_owner"}})
