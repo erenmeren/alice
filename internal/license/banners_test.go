@@ -78,3 +78,20 @@ func TestAdminOnlyBanners(t *testing.T) {
 	full.Targets = 10
 	assert.Equal(t, []string{"limit_reached/info"}, kinds(full.Banners(true)), "§19.3 target limit reached")
 }
+
+// AUD-02: everyone sees that the license could not be checked, with the time of the last check,
+// next to the banner of the last evaluated state.
+func TestUnverifiedBannerForEveryone(t *testing.T) {
+	s := snapshotAt(expiry.Add(-100*day), baseline())
+	s.Reading.Wall = expiry.Add(-100*day + 90*time.Second)
+	assert.Empty(t, s.Banners(false))
+	s.Unverified = true
+	for _, admin := range []bool{false, true} {
+		bs := s.Banners(admin)
+		assert.Equal(t, []string{"unverified/danger"}, kinds(bs), "admin=%v", admin)
+		assert.Equal(t, map[string]string{"last_checked": "2027-06-23T00:01:30Z"}, bs[0].Params, "the system time of the last successful check")
+	}
+	grace := snapshotAt(expiry.Add(2*day), baseline())
+	grace.Unverified = true
+	assert.Equal(t, []string{"grace/danger", "unverified/danger"}, kinds(grace.Banners(false)))
+}

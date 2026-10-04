@@ -259,7 +259,10 @@ const maxCandidates = 10
 // is taken over only when no job of that target is running any more, i.e. after the reaper
 // re-queued it (§8.1). In lock it first moves queued external-change jobs to blocked_license and
 // cancels queued read-only jobs (§8.6, in a transaction of its own), then claims only
-// always-class work.
+// always-class work. While the license cannot be verified (license.ErrUnverified, AUD-02) it
+// claims only always-class work and leaves the rest queued: nothing is known about the license,
+// so nothing is held or cancelled, and the queued work starts by itself after the next
+// successful evaluation.
 func (r *Runner) claim(ctx context.Context) (*claimed, error) {
 	types := r.handled()
 	if len(types) == 0 {
@@ -267,8 +270,10 @@ func (r *Runner) claim(ctx context.Context) (*claimed, error) {
 	}
 	now := r.cfg.Clock.Now().UTC()
 	classes := allClasses
-	if errors.Is(r.cfg.Gate.Allow(license.ClassChange), license.ErrLocked) {
-		r.sweepIfDue(ctx, now)
+	if gate := r.cfg.Gate.Allow(license.ClassChange); errors.Is(gate, license.ErrLocked) {
+		if !errors.Is(gate, license.ErrUnverified) {
+			r.sweepIfDue(ctx, now)
+		}
 		classes = []string{license.ClassAlways.String()}
 	}
 	var c *claimed
@@ -503,6 +508,23 @@ func (r *Runner) revert(ctx context.Context, c *claimed, t Type) {
 	}, r.jobEvent("job.cancelled_license", audit.Denied, c.id, map[string]string{"type": c.typ}))
 }
 
+// requeue undoes a claim the gate refused because the license could not be verified (AUD-02):
+// the job is queued again as it was (the refused claim is not an attempt) and starts after the
+// next successful evaluation. Nothing is audited: no decision was made about the job.
+func (r *Runner) requeue(ctx context.Context, c *claimed) {
+	r.settle(ctx, c, "license.unverified", func(tx pgx.Tx, _ time.Time) (pgconn.CommandTag, error) {
+		tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'queued', attempts = attempts - 1, locked_by = NULL,
+    locked_until = NULL `+mine, c.fence()...)
+		if err != nil || tag.RowsAffected() != 1 {
+			return tag, err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM job_attempts WHERE job_id = $1 AND attempt = $2`, c.id, c.attempts); err != nil {
+			return tag, fmt.Errorf("jobs: drop the refused attempt: %w", err)
+		}
+		return tag, nil
+	})
+}
+
 // stepLog collects a job's steps for its result.
 type stepLog struct {
 	mu    sync.Mutex
@@ -627,11 +649,14 @@ func (r *Runner) execute(jobCtx context.Context, c *claimed) {
 		return
 	}
 	if err := r.cfg.Gate.Allow(t.Class); err != nil {
-		if !errors.Is(err, license.ErrLocked) {
+		switch {
+		case errors.Is(err, license.ErrUnverified):
+			r.requeue(ctx, c)
+		case errors.Is(err, license.ErrLocked):
+			r.revert(ctx, c, t)
+		default:
 			r.terminate(ctx, c, "license.unclassified", "job.dead")
-			return
 		}
-		r.revert(ctx, c, t)
 		return
 	}
 	h := r.handler(c.typ)

@@ -38,8 +38,10 @@ func mailTime(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC"
 // every due notice once, records clock events and damaged files, saves the time record and
 // finally writes the audit rows. The guard and the snapshot are published only after the
 // commit, so a failed Tick changes nothing and the next one repeats its work.
-// It runs at start, hourly (job license.evaluate), after each upload and after the e2e
-// demo clock moves.
+// It runs at start, hourly in every process (job license.evaluate, independent of the
+// scheduling leader: AUD-02), after each upload and after the e2e demo clock moves. Each run is
+// bounded (tickTimeout, and the row lock wait by rowLockTimeout); the gate fails closed on its
+// own when evaluations keep failing (MaxEvaluationAge).
 func (s *Service) Tick(ctx context.Context) error {
 	s.evalMu.Lock()
 	defer s.evalMu.Unlock()
@@ -48,13 +50,16 @@ func (s *Service) Tick(ctx context.Context) error {
 
 // tickLocked is Tick with evalMu held by the caller.
 func (s *Service) tickLocked(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, tickTimeout)
+	defer cancel()
 	g := s.working()
 	var snap Snapshot
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := s.loadInstallation(ctx, tx, true); err != nil {
 			return err
 		}
-		reading, clockEvents := g.Observe(s.clock.Now(), s.uptime.Elapsed())
+		up := s.uptime.Elapsed()
+		reading, clockEvents := g.Observe(s.clock.Now(), up)
 		c, err := s.compute(ctx, tx, reading, false)
 		if err != nil {
 			return err
@@ -83,12 +88,14 @@ func (s *Service) tickLocked(ctx context.Context) error {
 			}
 		}
 		snap = c.snap
+		snap.EvaluatedUptime = up
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 	s.publish(g, snap)
+	s.staleLogged.Store(false)
 	return nil
 }
 
@@ -178,9 +185,12 @@ func (s *Service) sendNotices(ctx context.Context, tx pgx.Tx, c computed, now ti
 
 // recordClockEvents records what the guard noticed: a clock set back (once per day of the
 // system clock, L-51), a forward jump (history, audit, email, persisted hold; L-59), and
-// the end of a hold (accepted after 24 h, or the clock was corrected).
+// the end of a hold (accepted after 24 h, or the clock was corrected). Every process evaluates
+// (AUD-02) and each guard notices the same jump: the persisted hold (license.clock_jump, read
+// under the row lock) decides, so a jump and the end of its hold are recorded once.
 func (s *Service) recordClockEvents(ctx context.Context, tx pgx.Tx, c computed, r Reading, events []ClockEvent, now time.Time) ([]audit.Event, error) {
 	var out []audit.Event
+	_, stored := decodeJump(c.row.ClockJump)
 	for _, ev := range events {
 		switch ev {
 		case EventRollback:
@@ -194,8 +204,8 @@ func (s *Service) recordClockEvents(ctx context.Context, tx pgx.Tx, c computed, 
 					ObjectType: "license", Result: audit.Failure, Details: d})
 			}
 		case EventJumpDetected:
-			if r.Jump == nil {
-				continue
+			if r.Jump == nil || stored {
+				continue // stored: another process recorded this jump
 			}
 			raw, err := json.Marshal(jumpRecord{Expected: r.Jump.Expected, Detected: r.Jump.Detected})
 			if err != nil {
@@ -218,6 +228,9 @@ func (s *Service) recordClockEvents(ctx context.Context, tx pgx.Tx, c computed, 
 			out = append(out, audit.Event{Actor: systemActor, Action: "clock.forward_jump",
 				ObjectType: "license", Result: audit.Failure, Details: d})
 		case EventJumpAccepted, EventJumpCleared:
+			if !stored {
+				continue // another process (or a correction license) already ended the hold
+			}
 			problem, action := "jump_accepted", "clock.jump_accepted"
 			if ev == EventJumpCleared {
 				problem, action = "jump_cleared", "clock.jump_cleared"

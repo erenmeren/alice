@@ -3,6 +3,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -110,4 +111,45 @@ func TestLockKeepsPlatformAdministrationAvailable(t *testing.T) {
 	requireStatus(t, rec, http.StatusOK)
 	assert.Equal(t, "active", decodeBody[map[string]any](t, rec)["phase"], "the renewal works at once (L-30)")
 	assert.Equal(t, false, decodeBody[map[string]any](t, admin.do(http.MethodGet, "/api/v1/license/status", nil))["expired"])
+}
+
+// AUD-02: while no license evaluation succeeds (here a session holds the license row), changes are
+// refused with ALC-LIC-0009 after 3 hours and everyone sees the unverified banner; sign-in and
+// always-class routes keep working, and a license upload works and its evaluation reopens the gate.
+func TestUnverifiedLicenseRefusesChangesAndKeepsUploadsWorking(t *testing.T) {
+	s, admin, adminAcct := installed(t)
+	tx, err := s.db.App.Begin(t.Context())
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	_, err = tx.Exec(t.Context(), "SELECT 1 FROM license WHERE id = 1 FOR UPDATE")
+	require.NoError(t, err)
+
+	s.clock.Advance(license.MaxEvaluationAge + time.Minute)
+	require.Error(t, s.license.Tick(t.Context()), "the evaluation cannot take the license row")
+	s.signIn(admin, adminAcct) // the old session idled out; signing in still works
+
+	rec := admin.do(http.MethodPost, "/api/v1/targets", map[string]any{"name": "web-01", "host": "web-01.example.test"})
+	requireError(t, rec, http.StatusServiceUnavailable, "ALC-LIC-0009")
+	assert.Equal(t, 0, s.count("targets"))
+	assert.Equal(t, 1, s.countWhere("audit_log", "action = 'request.denied_license' AND details->>'reason' = 'unverified'"))
+
+	st := decodeBody[map[string]any](t, admin.do(http.MethodGet, "/api/v1/license/status", nil))
+	var kinds []string
+	for _, b := range st["banners"].([]any) {
+		kinds = append(kinds, b.(map[string]any)["kind"].(string))
+	}
+	assert.Contains(t, kinds, "unverified")
+	assert.Equal(t, false, st["expired"], "the last evaluated state is still shown")
+	requireStatus(t, admin.do(http.MethodPost, "/api/v1/audit/verify", nil), http.StatusOK)
+
+	require.NoError(t, tx.Rollback(t.Context())) // the session ends; the gate stays closed until a check succeeds
+	requireError(t, admin.do(http.MethodPost, "/api/v1/targets", map[string]any{"name": "web-01", "host": "web-01.example.test"}),
+		http.StatusServiceUnavailable, "ALC-LIC-0009")
+
+	now := s.clock.Now()
+	s.stepUp(admin, adminAcct)
+	rec = admin.do(http.MethodPost, "/api/v1/license", map[string]string{"license": s.signedLicense("LIC-A", now, now.AddDate(1, 0, 0), 10)})
+	requireStatus(t, rec, http.StatusOK)
+	requireStatus(t, admin.do(http.MethodPost, "/api/v1/targets", map[string]any{"name": "web-01", "host": "web-01.example.test"}),
+		http.StatusCreated)
 }

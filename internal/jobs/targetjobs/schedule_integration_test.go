@@ -24,6 +24,7 @@ const day = 24 * time.Hour
 // schedule runs the discovery scheduler once and returns how many jobs it queued.
 func (e *env) schedule() int {
 	e.t.Helper()
+	e.evaluate()
 	n, err := e.inv.ScheduleDiscovery(e.ctx)
 	require.NoError(e.t, err)
 	return n

@@ -18,7 +18,22 @@ var (
 	ErrTargetLimit           = errors.New("license: the licensed number of targets is reached")
 	ErrUnclassified          = errors.New("license: work without a license class")
 	ErrInvalidInstallationID = errors.New("license: installation ID is not valid")
+	// ErrUnverified: no evaluation has succeeded for MaxEvaluationAge, or none has run yet
+	// (AUD-02). Gated work is refused until one succeeds; errors.Is(ErrUnverified, ErrLocked) is
+	// true, so every path that refuses locked work refuses it too. It is not a lock decision:
+	// the job runner pauses queued work instead of holding or cancelling it.
+	ErrUnverified error = unverifiedError{}
 )
+
+// unverifiedError is ErrUnverified: it matches ErrLocked, with its own message.
+type unverifiedError struct{}
+
+func (unverifiedError) Error() string {
+	return "license: the license could not be checked recently; changes are paused"
+}
+
+// Is makes ErrUnverified match ErrLocked.
+func (unverifiedError) Is(target error) bool { return target == ErrLocked }
 
 // InvalidError says why a file is not a valid license. Problem is a fixed label
 // for logs and the audit trail; it never contains file content.

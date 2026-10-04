@@ -379,7 +379,33 @@ func TestLicenseDenialAuditDetails(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, audit.Denied, got[0].Result)
 	assert.Equal(t, audit.ActorUser, got[0].Actor.Type)
-	assert.Equal(t, map[string]string{"method": "POST", "path": "/api/v1/targets", "class": "change"}, got[0].Details)
+	assert.Equal(t, map[string]string{"method": "POST", "path": "/api/v1/targets", "class": "change", "reason": "locked"}, got[0].Details)
+}
+
+// AUD-02: while the license could not be checked recently, gated routes answer ALC-LIC-0009
+// (503, retryable: it clears after the next successful evaluation), the refusal is audited with
+// reason "unverified", and ClassAlways routes (sign-in, license upload) still work.
+func TestLicenseGateUnverified(t *testing.T) {
+	d := testDeps(t, nil)
+	d.License.(*fakeLicense).set(license.ErrUnverified)
+	fa := d.Audit.(*fakeAudit)
+	for _, class := range []license.Class{license.ClassChange, license.ClassReadOnly} {
+		rec := call(gatedHandler(d, class), http.MethodPost, "/api/v1/targets", "admin", `{}`)
+		require.Equal(t, http.StatusServiceUnavailable, rec.Code, class.String())
+		body := decodeErr(t, rec)
+		assert.Equal(t, "ALC-LIC-0009", body.Error.Code)
+		assert.Equal(t, "license.unverified", body.Error.Reason)
+		assert.True(t, body.Error.Retryable)
+	}
+	var reasons []string
+	for _, ev := range fa.Events() {
+		if ev.Action == "request.denied_license" {
+			reasons = append(reasons, ev.Details["reason"])
+		}
+	}
+	assert.Equal(t, []string{"unverified", "unverified"}, reasons)
+	assert.Equal(t, http.StatusNoContent, call(gatedHandler(d, license.ClassAlways), http.MethodPost, "/api/v1/targets", "admin", `{}`).Code,
+		"ClassAlways routes (the license upload among them) are never refused")
 }
 
 // Default deny (SEC-016): a state-changing route without a license class never starts,

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,6 +47,20 @@ const targetLimitLock int64 = 7160927315633811302
 
 var systemActor = audit.SystemActor("license")
 
+// Bounds of the lock gate and of each evaluation (AUD-02, R39 item 2).
+const (
+	// MaxEvaluationAge is how long the gate trusts the last successful evaluation, in process
+	// uptime: after it, gated work is refused with ErrUnverified until an evaluation succeeds.
+	// Two missed hourly evaluations plus margin: a single failed run or a short database
+	// maintenance does not stop changes, a stalled evaluation is visible the same morning.
+	MaxEvaluationAge = 3 * time.Hour
+	// defaultRowLockTimeout bounds every wait for the license row lock (lock_timeout), so a
+	// session holding the row cannot stop evaluations, uploads and the shutdown save for ever.
+	defaultRowLockTimeout = 30 * time.Second
+	// tickTimeout bounds one evaluation as a whole.
+	tickTimeout = 2 * time.Minute
+)
+
 // Config holds the service dependencies.
 type Config struct {
 	Pool      *pgxpool.Pool
@@ -59,6 +74,8 @@ type Config struct {
 	Notifier  Notifier  // nil = no emails
 	Targets   TargetCounter
 	Log       *slog.Logger
+	// RowLockTimeout bounds each wait for the license row lock; 0 = 30 s (AUD-02). Tests lower it.
+	RowLockTimeout time.Duration
 }
 
 // Snapshot is the license state as of the last evaluation. The API and the gate read it
@@ -74,6 +91,12 @@ type Snapshot struct {
 	InstallationTampered bool
 	Targets              int
 	Ready                bool // Start has completed
+	// EvaluatedUptime is the process uptime (Config.Uptime) when this snapshot was evaluated; the
+	// gate measures the time since the evaluation with it, never with the wall clock (AUD-02).
+	EvaluatedUptime time.Duration
+	// Unverified is set by Service.Snapshot when no evaluation has succeeded for MaxEvaluationAge:
+	// the evaluated fields describe the state at the last successful evaluation.
+	Unverified bool
 }
 
 // Service is the license module. Every path that changes the license state (upload, Tick,
@@ -102,6 +125,9 @@ type Service struct {
 	guard Guard
 	snap  Snapshot
 
+	rowLockTimeout time.Duration
+	staleLogged    atomic.Bool // the "could not be checked" error was logged for the current stale period
+
 	uploadCommitted func() // tests only: runs between an upload's commit and its evaluation
 }
 
@@ -110,6 +136,10 @@ func New(c Config) *Service {
 	s := &Service{
 		pool: c.Pool, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, uptime: c.Uptime, keys: c.Keys,
 		buildTime: c.BuildTime.UTC(), notifier: c.Notifier, targets: c.Targets, log: c.Log, codec: NewHWMCodec(c.Keyring),
+		rowLockTimeout: c.RowLockTimeout,
+	}
+	if s.rowLockTimeout <= 0 {
+		s.rowLockTimeout = defaultRowLockTimeout
 	}
 	if s.targets == nil {
 		s.targets = NoTargets{}
@@ -133,11 +163,19 @@ func (s *Service) hwmStores(q db.Querier) []HWMStore {
 	return stores
 }
 
-// Snapshot returns the state as of the last evaluation.
+// Snapshot returns the state as of the last successful evaluation, with Unverified computed now.
 func (s *Service) Snapshot() Snapshot {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.snap
+	snap := s.snap
+	s.mu.Unlock()
+	snap.Unverified = snap.Ready && s.sinceEvaluation(snap) > MaxEvaluationAge
+	return snap
+}
+
+// sinceEvaluation is the process uptime since snap was evaluated (never negative). Uptime is
+// monotonic: setting the wall clock back or forward does not move it.
+func (s *Service) sinceEvaluation(snap Snapshot) time.Duration {
+	return max(0, s.uptime.Elapsed()-snap.EvaluatedUptime)
 }
 
 // working returns a copy of the guard for one evaluation. The caller holds evalMu and
@@ -162,21 +200,45 @@ func (s *Service) publish(g Guard, snap Snapshot) {
 	s.guard, s.snap = g, snap
 }
 
-// Allow is the single lock-mode gate (spec §8.6, R9): the API guard calls it for routes of
-// ClassChange, the scheduler before every task, and CheckCanAddTarget before every target
-// insert. It returns ErrLocked while the license or the evaluation has ended,
-// ErrUnclassified for work without a class, and fails closed before Start has completed.
-func (s *Service) Allow(c Class) error { return allowIn(s.Snapshot(), c) }
+// Allow is the single lock-mode gate (spec §8.6, R9): the API guard calls it for gated routes,
+// the scheduler before every task, the job runner before every claim and run, and
+// CheckCanAddTarget before every target insert. It does not trust the last evaluation blindly
+// (AUD-02): see allowIn.
+func (s *Service) Allow(c Class) error {
+	snap := s.Snapshot()
+	err := allowIn(snap, c, s.sinceEvaluation(snap))
+	if snap.Ready && errors.Is(err, ErrUnverified) && s.staleLogged.CompareAndSwap(false, true) {
+		s.log.Error("the license could not be checked for more than "+MaxEvaluationAge.String()+
+			"; changes to managed systems are paused until an evaluation succeeds (check the database and "+
+			"sessions holding the license row)", "last_checked", snap.Reading.Wall.Format(time.RFC3339))
+	}
+	return err
+}
 
-// allowIn is the gate decision for one snapshot.
-func allowIn(snap Snapshot, c Class) error {
+// allowIn is the gate decision: a pure function of the last successfully evaluated snapshot,
+// the uptime since that evaluation and the bounds. Work of ClassAlways is never refused;
+// otherwise, in this order:
+//   - not started (no evaluation yet), or no evaluation for more than MaxEvaluationAge:
+//     ErrUnverified. Nothing about the state is known, so nothing is decided from it: the job
+//     runner pauses queued work and resumes it after the next successful evaluation.
+//   - the evaluated phase locks: ErrLocked.
+//   - the evaluated effective time advanced by the uptime since reaches LocksAt: ErrLocked. The
+//     next evaluation's effective time is never earlier (the clock guard only moves it forward
+//     with uptime, or to the wall clock), so the gate never locks before the evaluation would.
+func allowIn(snap Snapshot, c Class, since time.Duration) error {
 	if !c.Valid() {
 		return ErrUnclassified
 	}
 	if c == ClassAlways {
 		return nil
 	}
-	if !snap.Ready || snap.Eval.Locked() {
+	if !snap.Ready || since > MaxEvaluationAge {
+		return ErrUnverified
+	}
+	if snap.Eval.Locked() {
+		return ErrLocked
+	}
+	if !snap.Eval.LocksAt.IsZero() && !snap.Reading.Effective.Add(since).Before(snap.Eval.LocksAt) {
 		return ErrLocked
 	}
 	return nil
@@ -195,7 +257,7 @@ func (s *Service) CheckCanAddTarget(ctx context.Context, tx pgx.Tx) error {
 		return fmt.Errorf("count targets: %w", err)
 	}
 	snap := s.Snapshot()
-	if err := allowIn(snap, ClassChange); err != nil {
+	if err := allowIn(snap, ClassChange, s.sinceEvaluation(snap)); err != nil {
 		return err
 	}
 	if limit := snap.Eval.MaxTargets; n >= limit {

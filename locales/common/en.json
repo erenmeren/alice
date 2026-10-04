@@ -235,6 +235,11 @@
         "title": "Your license allows {{max}} targets.",
         "cause": "{{used}} targets are in use, so no more can be added. Existing targets keep working.",
         "action": "Remove a target you no longer need, or ask your vendor to increase your license."
+      },
+      "unverified": {
+        "title": "The license could not be checked.",
+        "cause": "Alice could not check its license for more than 3 hours, so changes to managed systems are paused.",
+        "action": "Check that the database is reachable and that no other database session holds the license row. Changes resume after the next successful check, which runs at least every hour."
       }
     },
     "target": {

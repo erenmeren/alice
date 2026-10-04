@@ -42,7 +42,10 @@ type Scheduler struct {
 
 // WithLeader makes ticks run only while this process holds the scheduling lock, so two
 // processes against one database never both run periodic work (P2-06). RunNow is an explicit
-// request (the e2e demo clock, an operator command) and runs regardless. Call it before Run.
+// request (the e2e demo clock, an operator command) and runs regardless. license.evaluate runs
+// in every process regardless (AUD-02): the license gate of each process trusts only its own
+// recent evaluations, and a session holding the scheduling lock must not stop them. Its writes
+// are serialized by the license row lock and recorded once. Call it before Run.
 //
 // Leadership is checked once per tick, before the run starts: a run that has started finishes
 // even when the lock is lost meanwhile, and the new leader may start the same task then. Tasks
@@ -114,7 +117,7 @@ func (s *Scheduler) loopWith(ctx context.Context, t *task, ticks <-chan time.Tim
 			if ctx.Err() != nil {
 				return
 			}
-			if s.leader != nil && !s.leader.IsLeader(ctx) {
+			if s.leader != nil && t.Type != LicenseEvaluate && !s.leader.IsLeader(ctx) {
 				continue // another process schedules (P2-06)
 			}
 			select {
@@ -145,9 +148,12 @@ func (s *Scheduler) RunNow(ctx context.Context, name string) error {
 
 func (s *Scheduler) run(ctx context.Context, t *task) (err error) {
 	if err := s.gate.Allow(t.Type.Class); err != nil {
-		if errors.Is(err, license.ErrLocked) {
+		switch {
+		case errors.Is(err, license.ErrUnverified):
+			s.log.Info("scheduled task paused until the license can be checked", "job_type", t.Type.Name)
+		case errors.Is(err, license.ErrLocked):
 			s.log.Info("scheduled task paused while the license is expired", "job_type", t.Type.Name)
-		} else {
+		default:
 			s.log.Error("scheduled task refused by the license gate", "job_type", t.Type.Name, "error_type", fmt.Sprintf("%T", err))
 		}
 		return err

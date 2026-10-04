@@ -155,6 +155,7 @@ func (s *stack) start() {
 		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Uptime: s.clock,
 		Keys: licensetest.KeySet(), StateDir: s.stateDir, Notifier: notify.AdminNotifier{Clock: s.clock},
 		Log: logging.New(s.logs, slog.LevelDebug), Targets: inventory.Counter{},
+		RowLockTimeout: 200 * time.Millisecond, // tests that hold the license row (AUD-02) do not wait 30 s
 	})
 	require.NoError(t, s.license.Start(ctx))
 	s.auth = auth.NewService(auth.Config{

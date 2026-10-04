@@ -170,7 +170,8 @@ func deployDeps(svc *services, clk clock.Clock, log *slog.Logger) deployjobs.Dep
 
 // buildScheduler is the periodic work of serve (spec §8.2, R37 item 15); every run passes the
 // license gate, and serve runs it under the scheduling lock (WithLeader), so one process runs
-// each task at a time. The audit verification ticks hourly and verifies when the last intact
+// each task at a time; license.evaluate runs hourly in every process regardless of the lock
+// (AUD-02), each run bounded by the license module (2 minutes, 30 s for the license row). The audit verification ticks hourly and verifies when the last intact
 // verification is 23 hours old (jobs.AuditVerifyTask). The deployment recovery sweep (ClassAlways:
 // it runs in lock too) queues the recovery of interrupted deployments and ends the ones whose job
 // ended; it runs on the scheduler's context, which carries no job claim, every sweepEvery (one

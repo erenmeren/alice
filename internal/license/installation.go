@@ -62,12 +62,20 @@ func everSealed(ctx context.Context, q db.Querier) (bool, error) {
 }
 
 // loadInstallation reads the installation row. forUpdate takes the license row lock that
-// serializes uploads, evaluations and time record saves. A stored ID that is not in
+// serializes uploads, evaluations and time record saves, waiting at most rowLockTimeout (q must
+// then be a transaction). A stored ID that is not in
 // canonical form, or a zero installation time, is refused rather than used. A row that does
 // not match its seal is returned with Tampered set; it is evaluated as an ended evaluation.
 func (s *Service) loadInstallation(ctx context.Context, q db.Querier, forUpdate bool) (installationRow, error) {
 	sql := "SELECT installation_id, installed_at, state, clock_jump, installation_seal FROM license WHERE id = 1"
 	if forUpdate {
+		// AUD-02: a session holding the license row must not stop evaluations, uploads and the
+		// shutdown save for ever. The bound holds for every lock wait of the rest of the
+		// transaction; the gate fails closed on its own after MaxEvaluationAge.
+		timeout := strconv.FormatInt(s.rowLockTimeout.Milliseconds(), 10) + "ms"
+		if _, err := q.Exec(ctx, "SELECT set_config('lock_timeout', $1, true)", timeout); err != nil {
+			return installationRow{}, fmt.Errorf("set the license lock timeout: %w", err)
+		}
 		sql += " FOR UPDATE"
 	}
 	var r installationRow

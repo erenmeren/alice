@@ -235,6 +235,11 @@
         "title": "Lisansınız en fazla {{max}} hedefe izin veriyor.",
         "cause": "Kullanımdaki hedef sayısı {{used}}; bu nedenle yeni hedef eklenemez. Mevcut hedefler çalışmaya devam eder.",
         "action": "Artık gerekmeyen bir hedefi kaldırın veya satıcınızdan lisansınızı artırmasını isteyin."
+      },
+      "unverified": {
+        "title": "Lisans denetlenemedi.",
+        "cause": "Alice lisansını 3 saatten uzun süredir denetleyemedi; bu yüzden yönetilen sistemlerdeki değişiklikler duraklatıldı.",
+        "action": "Veritabanına erişilebildiğini ve lisans satırını başka bir veritabanı oturumunun tutmadığını denetleyin. Değişiklikler, en geç saatte bir çalışan bir sonraki başarılı denetimden sonra yeniden başlar."
       }
     },
     "target": {

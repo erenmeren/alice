@@ -211,7 +211,8 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	runner := buildRunner(pool, svc, clk, log)
 	// While it leads, the leader holds one connection of the pool for good (db.Open sizes the
 	// pool for it). Every periodic task, the deployment recovery sweep included, runs only in the
-	// process that holds it.
+	// process that holds it, except the license evaluation, which runs in every process (AUD-02:
+	// each process's license gate trusts only its own evaluations of the last 3 hours).
 	leader := jobs.NewLeader(pool, log)
 	sched := buildScheduler(svc, sender, clk, log).WithLeader(leader)
 	// A provider or a job type that is not wired fails the start (never a degraded server whose

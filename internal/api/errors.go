@@ -73,6 +73,9 @@ var (
 	ErrLicenseUnsupportedFormat  = ErrorCode{Code: "ALC-LIC-0006", Reason: "license.unsupported_format", Status: http.StatusUnprocessableEntity}
 	ErrLicenseOlderThanInstalled = ErrorCode{Code: "ALC-LIC-0007", Reason: "license.older_than_installed", Status: http.StatusConflict}
 	ErrLicenseTargetLimit        = ErrorCode{Code: "ALC-LIC-0008", Reason: "license.target_limit_reached", Status: http.StatusConflict}
+	// ErrLicenseUnverified: no license evaluation has succeeded for 3 hours (AUD-02); changes resume
+	// after the next successful one.
+	ErrLicenseUnverified = ErrorCode{Code: "ALC-LIC-0009", Reason: "license.unverified", Status: http.StatusServiceUnavailable, Retryable: true}
 
 	// Phase 3: servers, SSH, keys and jobs (R37). The SSH and job reasons are mostly carried by job
 	// records and target statuses; the API answers with them when a request fails for that reason.
@@ -191,7 +194,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrPassphraseTooShort, ErrPassphraseMismatch, ErrPassphraseAlreadySet, ErrSetupIncomplete, ErrSetupLicenseChoiceMissing,
 		ErrLicenseLocked,
 		ErrLicenseInvalid, ErrLicenseWrongInstallation, ErrLicenseUnknownKey, ErrLicenseRevokedKey,
-		ErrLicenseUnsupportedFormat, ErrLicenseOlderThanInstalled, ErrLicenseTargetLimit,
+		ErrLicenseUnsupportedFormat, ErrLicenseOlderThanInstalled, ErrLicenseTargetLimit, ErrLicenseUnverified,
 		ErrTargetDuplicate, ErrHostKeyUnconfirmed, ErrHostKeyStale, ErrHostKeyChanged, ErrHostKeyState, ErrTargetDisabled,
 		ErrSSHUnreachable, ErrSSHAuthFailed, ErrSSHTimeout, ErrHelperMissing, ErrHelperOutdated, ErrHelperRefused,
 		ErrFileChanged, ErrKeysManagedElsewhere, ErrOutputTooLarge, ErrSSHProtocol, ErrHelperChecksums,
@@ -222,7 +225,7 @@ func codeForReason(reason string) ErrorCode {
 }
 
 // errorMap translates domain errors into API codes. Order matters only for
-// errors that wrap each other; none of these do.
+// errors that match each other: license.ErrUnverified matches license.ErrLocked.
 var errorMap = []struct {
 	err    error
 	code   ErrorCode
@@ -255,6 +258,7 @@ var errorMap = []struct {
 	{license.ErrRevokedKey, ErrLicenseRevokedKey, nil},
 	{license.ErrUnsupportedFormat, ErrLicenseUnsupportedFormat, nil},
 	{license.ErrOlderThanInstalled, ErrLicenseOlderThanInstalled, nil},
+	{license.ErrUnverified, ErrLicenseUnverified, nil}, // before ErrLocked, which it matches too
 	{license.ErrLocked, ErrLicenseLocked, nil},
 	// The typed errors (*TargetLimitError, *WrongInstallationError) are matched above with their
 	// params; a bare sentinel still gets its own code instead of a 500.

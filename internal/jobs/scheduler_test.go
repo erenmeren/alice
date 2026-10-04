@@ -26,6 +26,7 @@ var (
 type fakeGate struct {
 	mu     sync.Mutex
 	locked bool
+	refuse error // the refusal of gated work while locked; nil = license.ErrLocked
 }
 
 func (g *fakeGate) Allow(c license.Class) error {
@@ -34,6 +35,8 @@ func (g *fakeGate) Allow(c license.Class) error {
 	switch {
 	case !c.Valid():
 		return license.ErrUnclassified
+	case c != license.ClassAlways && g.locked && g.refuse != nil:
+		return g.refuse
 	case c != license.ClassAlways && g.locked:
 		return license.ErrLocked
 	}
@@ -43,7 +46,17 @@ func (g *fakeGate) Allow(c license.Class) error {
 func (g *fakeGate) set(locked bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.locked = locked
+	g.locked, g.refuse = locked, nil
+}
+
+// setUnverified makes the gate refuse gated work as license.ErrUnverified (AUD-02), or opens it.
+func (g *fakeGate) setUnverified(on bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.locked, g.refuse = on, nil
+	if on {
+		g.refuse = license.ErrUnverified
+	}
 }
 
 var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -215,4 +228,49 @@ func TestFailuresAndPanicsAreContained(t *testing.T) {
 	assert.ErrorIs(t, s.RunNow(context.Background(), "notify.send"), boom)
 	assert.Error(t, s.RunNow(context.Background(), "license.evaluate"))
 	assert.Error(t, s.RunNow(context.Background(), "no.such.task"))
+}
+
+// AUD-02: license.evaluate runs in every process, also in one that is not the scheduling leader;
+// every other task still runs only in the leader. A closed Leader never touches the database and
+// is never the leader.
+func TestTheEvaluationRunsWithoutTheLeaderLock(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	leader := NewLeader(nil, quiet)
+	leader.Close()
+	ran, other := make(chan struct{}, 10), make(chan struct{}, 10)
+	s := NewScheduler(clk, &fakeGate{}, quiet,
+		Task{Type: LicenseEvaluate, Every: time.Hour, Run: func(context.Context) error { ran <- struct{}{}; return nil }},
+		Task{Type: NotifySend, Every: time.Hour, Run: func(context.Context) error { other <- struct{}{}; return nil }},
+	).WithLeader(leader)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		s.Run(ctx)
+		close(done)
+	}()
+	advanceUntil(t, clk, time.Hour, ran)
+	advanceUntil(t, clk, time.Hour, ran)
+	cancel()
+	<-done
+	assert.Empty(t, other, "the other tasks run only in the leader")
+}
+
+// AUD-02, S1: while the license cannot be verified, read-only periodic work is paused and resumes
+// by itself after the next successful evaluation; the evaluation itself keeps running.
+func TestUnverifiedPausesReadOnlyTasksUntilAnEvaluationSucceeds(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	gate := &fakeGate{}
+	gate.setUnverified(true)
+	var discovered atomic.Int32
+	s := NewScheduler(clk, gate, quiet,
+		Task{Type: testDiscover, Every: time.Minute, Run: func(context.Context) error { discovered.Add(1); return nil }},
+		Task{Type: LicenseEvaluate, Every: time.Hour, Run: func(context.Context) error { gate.setUnverified(false); return nil }},
+	)
+	ctx := context.Background()
+	err := s.RunNow(ctx, "test.discover")
+	assert.ErrorIs(t, err, license.ErrUnverified)
+	assert.Zero(t, discovered.Load())
+	require.NoError(t, s.RunNow(ctx, "license.evaluate"), "the evaluation is never paused")
+	require.NoError(t, s.RunNow(ctx, "test.discover"))
+	assert.Equal(t, int32(1), discovered.Load())
 }

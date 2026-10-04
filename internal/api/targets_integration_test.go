@@ -356,7 +356,8 @@ func TestChangedHostKeyJourney(t *testing.T) {
 	requireError(t, admin.do(http.MethodPost, "/api/v1/ssh-keys/locations/"+laptop["id"].(string)+"/actions/remove", nil),
 		http.StatusConflict, "ALC-TGT-0004")
 
-	s.clock.Advance(25 * time.Hour) // nightly discovery is due, but the server is blocked
+	s.clock.Advance(25 * time.Hour)                          // nightly discovery is due, but the server is blocked
+	require.NoError(t, s.license.Tick(context.Background())) // the hourly evaluation ran meanwhile (AUD-02)
 	n, err := s.inv.ScheduleDiscovery(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, n)

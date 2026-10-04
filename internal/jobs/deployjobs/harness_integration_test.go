@@ -293,6 +293,7 @@ func (e *env) upload() inventory.Certificate {
 // request asks for the new certificate on the locations and returns the deployments in order.
 func (e *env) request(locs ...uuid.UUID) []uuid.UUID {
 	e.t.Helper()
+	e.evaluate()
 	c := e.upload()
 	got, err := e.inv.RequestDeployment(e.ctx, e.admin, inventory.DeployRequestInput{CertificateID: c.ID, LocationIDs: locs})
 	require.NoError(e.t, err)
@@ -304,8 +305,17 @@ func (e *env) request(locs ...uuid.UUID) []uuid.UUID {
 }
 
 // drain runs due jobs until none is left.
+// evaluate runs the license evaluation, as a running server does at least hourly in every
+// process: tests move the clock by days, and the gate refuses gated work after 3 hours without
+// an evaluation (AUD-02).
+func (e *env) evaluate() {
+	e.t.Helper()
+	require.NoError(e.t, e.lic.Tick(e.ctx))
+}
+
 func (e *env) drain() {
 	e.t.Helper()
+	e.evaluate()
 	for range 50 {
 		ran, err := e.runner.RunOnce(e.ctx)
 		require.NoError(e.t, err)

@@ -24,9 +24,9 @@ type Banner struct {
 	Params   map[string]string
 }
 
-// Banners returns what a viewer sees (spec §19.3). Everyone sees the evaluation, grace, lock
-// and evaluation-ended banners; only Administrators see expiry warnings (L-15), clock
-// problems, damaged license data, pending licenses and the target limit.
+// Banners returns what a viewer sees (spec §19.3). Everyone sees the evaluation, grace, lock,
+// evaluation-ended and unverified (AUD-02) banners; only Administrators see expiry warnings
+// (L-15), clock problems, damaged license data, pending licenses and the target limit.
 func (s Snapshot) Banners(admin bool) []Banner {
 	e := s.Eval
 	ts := func(t time.Time) string { return t.UTC().Format(time.RFC3339) }
@@ -59,6 +59,11 @@ func (s Snapshot) Banners(admin bool) []Banner {
 			"valid_until": ts(e.EndsAt), "locks_at": ts(e.LocksAt), "grace_day": itoa(e.GraceDay)}})
 	case PhaseLocked:
 		out = append(out, Banner{Kind: "locked", Severity: SeverityDanger, Params: map[string]string{"valid_until": ts(e.EndsAt)}})
+	}
+	if s.Unverified {
+		// AUD-02: changes are paused for everyone until an evaluation succeeds; last_checked is the
+		// system time of the last successful one.
+		out = append(out, Banner{Kind: "unverified", Severity: SeverityDanger, Params: map[string]string{"last_checked": ts(s.Reading.Wall)}})
 	}
 	if !admin {
 		return out

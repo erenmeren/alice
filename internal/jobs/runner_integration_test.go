@@ -222,14 +222,97 @@ func TestReadOnlyJobCancelledAfterTheClaimIsAudited(t *testing.T) {
 }
 
 // flipGate allows the first question and refuses everything after it: the lock begins
-// between the claim and the run.
-type flipGate struct{ asked atomic.Int32 }
+// between the claim and the run. refuse is the refusal (nil = license.ErrLocked).
+type flipGate struct {
+	asked  atomic.Int32
+	refuse error
+}
 
 func (g *flipGate) Allow(license.Class) error {
 	if g.asked.Add(1) == 1 {
 		return nil
 	}
+	if g.refuse != nil {
+		return g.refuse
+	}
 	return license.ErrLocked
+}
+
+// AUD-02, S1: while the license cannot be verified, queued changes and read-only work are neither
+// held for a confirmation nor cancelled: they wait queued, always-class work keeps running, and
+// the queued work starts by itself once an evaluation succeeds.
+func TestUnverifiedPausesQueuedWorkWithoutHoldingIt(t *testing.T) {
+	e := newQEnv(t)
+	target := insertTarget(t, e.d)
+	change := e.enqueue(t, Spec{Type: SSHKeyRemove, Kind: KindUser, TargetID: target, Payload: map[string]string{"location_id": "l1"}})
+	readOnly := e.enqueue(t, Spec{Type: testReadOnlyJob, Kind: KindScheduled})
+	always := e.enqueue(t, Spec{Type: testQueueJob})
+	var changeRuns, readOnlyRuns, alwaysRuns atomic.Int32
+	r := e.runner(t, "w1")
+	r.Handle(SSHKeyRemove, func(context.Context, Job, StepRecorder) (map[string]any, error) { changeRuns.Add(1); return nil, nil })
+	r.Handle(testReadOnlyJob, func(context.Context, Job, StepRecorder) (map[string]any, error) { readOnlyRuns.Add(1); return nil, nil })
+	r.Handle(testQueueJob, func(context.Context, Job, StepRecorder) (map[string]any, error) { alwaysRuns.Add(1); return nil, nil })
+	drain := func() {
+		t.Helper()
+		for {
+			ran, err := r.RunOnce(e.ctx)
+			require.NoError(t, err)
+			if !ran {
+				return
+			}
+		}
+	}
+
+	e.gate.setUnverified(true)
+	drain()
+	assert.Equal(t, int32(1), alwaysRuns.Load(), "always-class work (recovery, rollback) is never paused")
+	assert.Zero(t, changeRuns.Load())
+	assert.Zero(t, readOnlyRuns.Load())
+	assert.Equal(t, "queued", e.row(t, change).status, "not held for an Administrator's confirmation")
+	assert.Equal(t, "queued", e.row(t, readOnly).status, "not cancelled")
+	assert.Empty(t, e.row(t, readOnly).lastError)
+	assert.Zero(t, e.audits(t, "job.blocked_license"))
+	assert.Zero(t, e.audits(t, "job.cancelled_license"))
+	assert.ErrorIs(t, e.q.Confirm(e.ctx, admin, admin.ID, change), ErrNotWaiting, "nothing waits for a confirmation")
+
+	e.gate.setUnverified(false) // the next evaluation succeeded
+	drain()
+	assert.Equal(t, int32(1), changeRuns.Load(), "the change resumes by itself")
+	assert.Equal(t, int32(1), readOnlyRuns.Load())
+	assert.Equal(t, "succeeded", e.row(t, change).status)
+	assert.Equal(t, "succeeded", e.row(t, readOnly).status)
+	assert.Equal(t, "succeeded", e.row(t, always).status)
+}
+
+// AUD-02, S1: a job claimed just before the license became unverified is queued again as it was:
+// no attempt is counted, no target lock or attempt row is left, nothing is audited.
+func TestUnverifiedAfterTheClaimQueuesTheJobAgain(t *testing.T) {
+	e := newQEnv(t)
+	target := insertTarget(t, e.d)
+	id := e.enqueue(t, Spec{Type: SSHKeyRemove, Kind: KindUser, TargetID: target})
+	var runs atomic.Int32
+	r := e.runner(t, "w1", func(c *RunnerConfig) { c.Gate = &flipGate{refuse: license.ErrUnverified} })
+	r.Handle(SSHKeyRemove, func(context.Context, Job, StepRecorder) (map[string]any, error) { runs.Add(1); return nil, nil })
+	ran, err := r.RunOnce(e.ctx)
+	require.NoError(t, err)
+	assert.True(t, ran, "it was claimed")
+	assert.Zero(t, runs.Load(), "but not run")
+	got := e.row(t, id)
+	assert.Equal(t, "queued", got.status)
+	assert.Zero(t, got.attempts, "the refused claim is not an attempt")
+	assert.Empty(t, got.lockedBy)
+	assert.Zero(t, e.count(t, `SELECT count(*) FROM target_locks`))
+	assert.Zero(t, e.count(t, `SELECT count(*) FROM job_attempts WHERE job_id = $1`, id))
+	assert.Zero(t, e.count(t, `SELECT count(*) FROM audit_log WHERE object_id = $1`, id.String()))
+
+	r.cfg.Gate = e.gate // the gate opens again
+	ran, err = r.RunOnce(e.ctx)
+	require.NoError(t, err)
+	require.True(t, ran)
+	assert.Equal(t, int32(1), runs.Load())
+	got = e.row(t, id)
+	assert.Equal(t, "succeeded", got.status)
+	assert.Equal(t, 1, got.attempts)
 }
 
 func TestGateIsAskedAgainAfterTheClaim(t *testing.T) {

@@ -245,6 +245,7 @@ func TestDeployRefusalsAtRequestTime(t *testing.T) {
 		short := n.ca.Issue(pki.Opts{CommonName: wwwName, SANs: []string{wwwName}, NotAfter: now.Add(2 * time.Hour)}, now)
 		shortID := n.uploadCertificate(n.op, certBody(short, "Short"))
 		n.clock.Advance(3 * time.Hour)
+		require.NoError(t, n.license.Tick(t.Context())) // the hourly evaluation ran meanwhile (AUD-02)
 		n.signIn(n.op, n.opAcct)
 		refused(t, n, n.requestDeploy(n.op, shortID, n.locs[wwwCert]), http.StatusUnprocessableEntity, "ALC-CRT-0003", "")
 		noDeployments(t, n)

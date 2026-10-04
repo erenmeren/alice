@@ -17,6 +17,7 @@ import (
 
 	"alice/internal/inventory"
 	"alice/internal/jobs"
+	"alice/internal/license/licensetest"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/testutil/pki"
@@ -189,6 +190,12 @@ func TestF19ExpiredAtRunTimeIsRefusedAndAudited(t *testing.T) {
 	e := newEnv(t)
 	s := e.addServer("web-01", wwwSite())
 	id := e.request(s.locs[wwwCert])[0]
+	// The certificate outlives the 30-day evaluation: a license keeps the gate open when the
+	// evaluation that runs before the job (AUD-02) sees the new time.
+	now := e.clock.Now()
+	_, err := e.lic.Install(e.ctx, licensetest.Sign(licensetest.Payload(e.lic.Snapshot().InstallationID, now, now.AddDate(2, 0, 0), 10)),
+		e.admin.Audit, uuid.Nil)
+	require.NoError(t, err)
 	e.clock.Advance(e.nw.Cert.NotAfter.Sub(e.clock.Now()) + time.Minute)
 	e.drain()
 	d := e.deployment(id)

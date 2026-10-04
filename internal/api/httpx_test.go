@@ -137,6 +137,8 @@ func TestFailMapsDomainErrors(t *testing.T) {
 		{fmt.Errorf("login: %w", auth.ErrTryAgain), 503, "ALC-AUTH-0012"},
 		// Carry 2: the bare sentinels (without the typed error that carries the numbers).
 		{license.ErrTargetLimit, 409, "ALC-LIC-0008"},
+		{fmt.Errorf("add target: %w", license.ErrUnverified), 503, "ALC-LIC-0009"}, // AUD-02: not ALC-LIC-0001
+		{license.ErrLocked, 403, "ALC-LIC-0001"},
 		{fmt.Errorf("add target: %w", license.ErrWrongInstallation), 422, "ALC-LIC-0003"},
 		{inventory.ErrNotFound, 404, "ALC-SYS-0001"},
 		{fmt.Errorf("create: %w", inventory.ErrDuplicateTarget), 409, "ALC-TGT-0001"},

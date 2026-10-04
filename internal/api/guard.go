@@ -64,10 +64,12 @@ func (s *server) guard(rt route) http.HandlerFunc {
 		}
 		switch rbac.Decide(rt.perm, p.Subject(s.deps.Clock.Now())) {
 		case rbac.Allow:
-			if gated(rt.lic) && !s.licenseAllows(rt.lic) {
-				s.auditLicenseDenied(r, rt, p)
-				s.writeError(w, r, ErrLicenseLocked)
-				return
+			if gated(rt.lic) {
+				if err := s.licenseGate(rt.lic); err != nil {
+					s.auditLicenseDenied(r, rt, p, err)
+					s.writeError(w, r, licenseRefusal(err))
+					return
+				}
 			}
 			rt.handler(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
 		case rbac.DenyUnauthenticated:
@@ -210,10 +212,31 @@ func (s *server) auditDenied(r *http.Request, rt route, p auth.Principal, reason
 	}
 }
 
-// licenseAllows asks the single lock gate (license.Service.Allow). Without a license
-// service the answer is no: a misconfigured server fails closed.
-func (s *server) licenseAllows(c license.Class) bool {
-	return s.deps.License != nil && s.deps.License.Allow(c) == nil
+// licenseGate asks the single lock gate (license.Service.Allow). Without a license service the
+// answer is no: a misconfigured server fails closed.
+func (s *server) licenseGate(c license.Class) error {
+	if s.deps.License == nil {
+		return license.ErrLocked
+	}
+	return s.deps.License.Allow(c)
+}
+
+// licenseRefusal is the answer to a refusal of the gate: the license could not be verified
+// recently (AUD-02, 503 and retryable) or it is locked. Any other refusal (a class the gate does
+// not know) is answered as locked: the request is refused either way.
+func licenseRefusal(err error) ErrorCode {
+	if errors.Is(err, license.ErrUnverified) {
+		return ErrLicenseUnverified
+	}
+	return ErrLicenseLocked
+}
+
+// licenseDenialReason is the audit label of a gate refusal.
+func licenseDenialReason(err error) string {
+	if errors.Is(err, license.ErrUnverified) {
+		return "unverified"
+	}
+	return "locked"
 }
 
 // gated reports whether lock mode refuses work of class c: changes to managed systems and
@@ -221,8 +244,9 @@ func (s *server) licenseAllows(c license.Class) bool {
 // one definition, so a new class cannot be gated in one place and not in the other.
 func gated(c license.Class) bool { return c == license.ClassChange || c == license.ClassReadOnly }
 
-// auditLicenseDenied records a request refused because the license has expired (L-26).
-func (s *server) auditLicenseDenied(r *http.Request, rt route, p auth.Principal) {
+// auditLicenseDenied records a request refused by the license gate (L-26): reason "locked", or
+// "unverified" when the license could not be checked recently (AUD-02).
+func (s *server) auditLicenseDenied(r *http.Request, rt route, p auth.Principal, cause error) {
 	if p.Kind != rbac.UserSession && p.Kind != rbac.APIToken {
 		return
 	}
@@ -230,7 +254,7 @@ func (s *server) auditLicenseDenied(r *http.Request, rt route, p auth.Principal)
 		Actor:   p.Actor(s.meta(r)),
 		Action:  "request.denied_license",
 		Result:  audit.Denied,
-		Details: map[string]string{"method": rt.method, "path": rt.pattern, "class": rt.lic.String()},
+		Details: map[string]string{"method": rt.method, "path": rt.pattern, "class": rt.lic.String(), "reason": licenseDenialReason(cause)},
 	}
 	if err := s.deps.Audit.Write(r.Context(), ev); err != nil {
 		s.deps.Log.Error("audit write failed", append([]any{"request_id", RequestID(r.Context()), "action", ev.Action}, errorAttrs(err)...)...)

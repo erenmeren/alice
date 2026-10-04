@@ -523,6 +523,27 @@ for a correction license (it names the license it replaces and is always accepte
 
 **What to do.** Remove a target that is no longer needed, or ask your vendor to increase the license.
 
+## ALC-LIC-0009: The license could not be checked
+
+**Meaning.** Alice checks its license at start, after every upload and every hour, in every Alice process. No
+check has succeeded for more than 3 hours (`license.unverified`, HTTP 503, retryable), so the action, which changes a
+managed server, key or certificate, was refused. Nothing was changed. Everyone sees a red banner with the time of
+the last successful check. Signing in, uploading a license, the audit log, exports, user administration and the
+recovery and rollback of deployments keep working. Queued jobs that change servers are not cancelled and need no
+confirmation: they wait and start by themselves after the next successful check.
+
+**Likely cause.** The database was unreachable or overloaded for hours, or another database session keeps the
+`license` row locked (a check waits at most 30 seconds for it and gives up after 2 minutes). Alice logs "the
+license could not be checked for more than 3h0m0s" once, and "scheduled task failed" with `job_type=license.evaluate`
+for each failed check.
+
+**What to do.** Check that the database is reachable and healthy. As the database owner, look for a session that
+holds the license row: `SELECT pid, state, xact_start, query FROM pg_stat_activity WHERE pid = ANY
+(pg_blocking_pids(<pid of a waiting Alice session>))`, or list long transactions with `SELECT pid, usename,
+xact_start, query FROM pg_stat_activity WHERE xact_start < now() - interval '5 minutes'`; end such a session with
+`SELECT pg_terminate_backend(<pid>)`. Changes resume after the next successful check, which runs within the hour (or
+restart Alice to check at once). If the license itself has expired, the answer then becomes ALC-LIC-0001.
+
 ## ALC-SYS-0008: Changed while you were editing
 
 **Meaning.** The item was changed by someone else after you opened it (HTTP 412). Your change was not saved.

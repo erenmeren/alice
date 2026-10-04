@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Alice API
   version: 0.1.0
-  description: "Self-hosted SSH key and TLS certificate management. All timestamps are UTC RFC 3339. A signed-in session's 30-minute idle timeout is extended only by state-changing requests that pass the origin and CSRF checks and by same-origin reads that carry the header X-Alice-Activity: 1 (the web UI sends it after a person's input); other reads leave it unchanged. API tokens have no idle timeout."
+  description: "Self-hosted SSH key and TLS certificate management. All timestamps are UTC RFC 3339. A signed-in session's 30-minute idle timeout is extended only by state-changing requests that pass the origin and CSRF checks and by same-origin reads that carry the header X-Alice-Activity: 1 (the web UI sends it after a person's input); other reads leave it unchanged. API tokens have no idle timeout. Every route refused with 403 ALC-LIC-0001 while the license is locked is also refused with 503 ALC-LIC-0009 (license.unverified, retryable) while no license check has succeeded for 3 hours; it works again after the next successful check."
 servers:
   - url: /
 paths:
@@ -1485,7 +1485,8 @@ components:
       properties:
         kind:
           type: string
-          enum: [evaluation, evaluation_ended, expiry_warning, grace, locked, tampered, clock_behind, clock_jump, pending, over_limit, limit_reached]
+          enum: [evaluation, evaluation_ended, expiry_warning, grace, locked, unverified, tampered, clock_behind, clock_jump, pending, over_limit, limit_reached]
+          description: unverified (everyone, danger, param last_checked) is shown while no license check has succeeded for 3 hours; changes are refused with ALC-LIC-0009 until one does
         severity: { type: string, enum: [info, warning, caution, danger] }
         params: { type: object, additionalProperties: { type: string } }
     LicenseStatus:

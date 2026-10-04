@@ -282,9 +282,11 @@ func TestRequestDeploymentRefusals(t *testing.T) {
 	// A discovered certificate without its key.
 	assert.ErrorIs(t, req(f.operator, f.discovered.ID, false, f.loc2), inventory.ErrNoPrivateKey)
 	// F-19: expired.
-	f.h.clock.Advance(400 * 24 * time.Hour)
+	// Only the wall clock moves (AUD-02): 400 days of uptime without a license evaluation would
+	// close the gate (license.unverified) before the certificate is looked at.
+	f.h.clock.JumpWall(400 * 24 * time.Hour)
 	assert.ErrorIs(t, req(f.operator, f.cert.ID, false, f.loc2), inventory.ErrCertificateExpired)
-	f.h.clock.Advance(-400 * 24 * time.Hour)
+	f.h.clock.JumpWall(-400 * 24 * time.Hour)
 	// Key type: an RSA certificate into an ECDSA place.
 	err := req(f.operator, f.rsaCert.ID, false, f.loc2)
 	var kt *inventory.KeyTypeMismatchError
