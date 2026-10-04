@@ -410,7 +410,9 @@
       "deployment_started": "Deployment started",
       "deployment_recovering": "Interrupted deployment being checked",
       "certificate_chain_completed": "Certificate chain completed",
-      "license_upload_error": "License upload refused"
+      "license_upload_error": "License upload refused",
+      "audit_exported_busy": "Audit log export refused: another check or export was running",
+      "audit_verified_busy": "Audit log integrity check refused: another check or export was running"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -464,7 +466,11 @@
       "valid_from": "Valid from",
       "valid_until": "Valid until",
       "max_targets": "Licensed targets",
-      "customer": "Customer"
+      "customer": "Customer",
+      "distinct_object_count": "Different objects",
+      "distinct_token_count": "Different API tokens",
+      "distinct_ip_count": "Different addresses",
+      "ip_samples": "Addresses seen"
     },
     "detailValues": {
       "reason": {
@@ -473,7 +479,9 @@
         "user_disabled": "User disabled",
         "locked": "License expired",
         "lock_due": "License lock time reached",
-        "unverified": "License could not be checked"
+        "unverified": "License could not be checked",
+        "not_owner": "Not the owner",
+        "busy": "Another check or export was running"
       },
       "problem": {
         "seal_missing": "The protection of the installation record was removed",
@@ -484,7 +492,9 @@
         "ui": "Web interface",
         "cli": "Command line"
       }
-    }
+    },
+    "summary": "{{n}} more like this between {{from}} and {{to}}.",
+    "exportHint": "Only one check or export of the audit log runs at a time. If a download fails, wait until the other one has finished and try again."
   },
   "license": {
     "banner": {

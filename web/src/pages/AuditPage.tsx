@@ -58,6 +58,15 @@ function AuditDetails({ details }: { details: Record<string, string> }) {
   const id = useId();
   const pairs = Object.entries(details).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   if (pairs.length === 0) return null;
+  // A summary row of coalesced refusals (AUD-06) says how many more there were, and when.
+  const summary =
+    details.suppressed_count && details.window_start && details.window_end
+      ? t('audit.summary', {
+          n: details.suppressed_count,
+          from: formatDateTime(details.window_start, i18n.language),
+          to: formatDateTime(details.window_end, i18n.language),
+        })
+      : null;
   const keyLabel = (k: string) => (PLAIN.test(k) ? text(`audit.detailKeys.${k}`) : null);
   const valueText = (k: string, v: string) => {
     if (TIME_DETAILS.has(k)) return formatDateTime(v, i18n.language);
@@ -65,6 +74,7 @@ function AuditDetails({ details }: { details: Record<string, string> }) {
   };
   return (
     <Stack gap={4}>
+      {summary && <Text size="xs">{summary}</Text>}
       <Button variant="subtle" size="compact-xs" w="fit-content" aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)}>
         {t('audit.detailsToggle', { n: pairs.length })}
       </Button>
@@ -112,7 +122,13 @@ export function AuditPage() {
 
   const text = useCatalogText();
   // An action from a newer server is shown as the data it is.
-  const label = (e: AuditEntry) => (/^[a-z][a-z0-9_.]*$/.test(e.action) && text(actionKey(e.action))) || <Code translate="no">{e.action}</Code>;
+  const label = (e: AuditEntry) => {
+    if (!/^[a-z][a-z0-9_.]*$/.test(e.action)) return <Code translate="no">{e.action}</Code>;
+    // An export or a verification refused because another one was running is written with the
+    // action of the real one (result denied, reason busy): it gets its own label (AUD-06).
+    const busy = e.result === 'denied' && e.details?.reason === 'busy' ? text(`${actionKey(e.action)}_busy`) : null;
+    return busy ?? text(actionKey(e.action)) ?? <Code translate="no">{e.action}</Code>;
+  };
   const actor = (e: AuditEntry) => (e.actor_type === 'system' ? t('audit.systemActor', { name: e.actor_name }) : e.actor_name);
   const apply = (ev: FormEvent) => {
     ev.preventDefault();
@@ -137,6 +153,11 @@ export function AuditPage() {
         </Group>
       </Group>
 
+      {/* The exports are plain downloads (a stream may be large); when another check or export is
+          running the server refuses with ALC-AUD-0001 and the browser reports a failed download. */}
+      <Text size="sm" c="gray.7">
+        {t('audit.exportHint')}
+      </Text>
       {verify.isError && <ErrorAlert error={verify.error} />}
       {verify.isSuccess && (
         <Alert

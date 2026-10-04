@@ -6,7 +6,7 @@ import en from '../locales/en.json';
 import tr from '../locales/tr.json';
 import { actionKey } from './AuditPage';
 import type { AuditEntry, SessionInfo } from '../api/types';
-import { adminSession, sessionFor } from '../test/fixtures';
+import { adminSession, errorResponse, sessionFor } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
@@ -292,6 +292,67 @@ describe('AuditPage', () => {
     expect(within(list).queryByText('2026-09-30T07:50:00Z')).not.toBeInTheDocument();
     expect(within(list).getByText(/2026/)).toBeInTheDocument();
     expectNoRawKeys();
+  });
+
+  it('summarises coalesced refusals: how many more, when, from where (AUD-06)', async () => {
+    signedInAs(adminSession);
+    const summary: AuditEntry = {
+      ...entry(3, 'authz.denied', 'denied'),
+      ip: null,
+      request_id: '',
+      object_id: '',
+      details: {
+        permission: 'users.manage',
+        reason: 'not_owner',
+        suppressed_count: '49',
+        window_start: '2026-09-30T07:50:00Z',
+        window_end: '2026-09-30T08:00:00Z',
+        distinct_ip_count: '5',
+        ip_samples: '10.0.0.7,10.0.0.8,2001:db8::1',
+        distinct_object_count: '256+',
+        distinct_token_count: '2',
+      },
+    };
+    server.use(http.get('/api/v1/audit', () => HttpResponse.json({ items: [summary], next_cursor: null })));
+    await renderRoute('/audit');
+    const row = (await screen.findByText('Access denied')).closest('tr')!;
+    // Visible without opening the details.
+    expect(within(row).getByText(/^49 more like this between .+ and .+\.$/)).toBeInTheDocument();
+    await userEvent.click(within(row).getByRole('button', { name: 'Details (9)' }));
+    const list = within(row).getByRole('group', { name: 'Details' });
+    expect(within(list).getByText('Addresses seen')).toBeInTheDocument();
+    const samples = within(list).getByText('10.0.0.7,10.0.0.8,2001:db8::1');
+    expect(samples.closest('[translate="no"]')).not.toBeNull();
+    expect(within(list).getByText('Different objects')).toBeInTheDocument();
+    expect(within(list).getByText('256+')).toBeInTheDocument();
+    expect(within(list).getByText('Different API tokens')).toBeInTheDocument();
+    expect(within(list).getByText('Different addresses')).toBeInTheDocument();
+    expect(within(list).getByText('Not the owner')).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
+  it('labels a refused export or verification so it never reads as a real one', async () => {
+    signedInAs(sessionFor('auditor', 'tr'));
+    const busyExport: AuditEntry = { ...entry(2, 'audit.exported', 'denied'), object_type: 'audit_log', details: { format: 'csv', reason: 'busy' } };
+    const busyVerify: AuditEntry = { ...entry(1, 'audit.verified', 'denied'), object_type: 'audit_log', details: { reason: 'busy' } };
+    const realExport: AuditEntry = { ...entry(3, 'audit.exported'), details: { format: 'json' } };
+    server.use(http.get('/api/v1/audit', () => HttpResponse.json({ items: [realExport, busyExport, busyVerify], next_cursor: null })));
+    await renderRoute('/audit', { languages: ['tr-TR'] });
+    expect(await screen.findByText('Denetim kaydı dışa aktarması reddedildi: başka bir kontrol veya dışa aktarma sürüyordu')).toBeInTheDocument();
+    expect(screen.getByText('Denetim kaydı bütünlük kontrolü reddedildi: başka bir kontrol veya dışa aktarma sürüyordu')).toBeInTheDocument();
+    expect(screen.getAllByText(tr.audit.actions.audit_exported)).toHaveLength(1);
+  });
+
+  it('shows a busy audit log in words and explains a failed download (ALC-AUD-0001)', async () => {
+    signedInAs(adminSession);
+    server.use(
+      http.get('/api/v1/audit', () => HttpResponse.json({ items: [entry(1, 'auth.login')], next_cursor: null })),
+      http.post('/api/v1/audit/verify', () => errorResponse(503, 'ALC-AUD-0001', 'audit.busy', { retryable: true })),
+    );
+    await renderRoute('/audit');
+    expect(await screen.findByText(en.audit.exportHint)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Verify integrity' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Alice is already checking or exporting the audit log.');
   });
 
   it('shows system actors with their name and hides the page from operators', async () => {

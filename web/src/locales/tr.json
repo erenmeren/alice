@@ -410,7 +410,9 @@
       "deployment_started": "Dağıtım başladı",
       "deployment_recovering": "Yarım kalan dağıtım denetleniyor",
       "certificate_chain_completed": "Sertifika zinciri tamamlandı",
-      "license_upload_error": "Lisans yüklemesi reddedildi"
+      "license_upload_error": "Lisans yüklemesi reddedildi",
+      "audit_exported_busy": "Denetim kaydı dışa aktarması reddedildi: başka bir kontrol veya dışa aktarma sürüyordu",
+      "audit_verified_busy": "Denetim kaydı bütünlük kontrolü reddedildi: başka bir kontrol veya dışa aktarma sürüyordu"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -464,7 +466,11 @@
       "valid_from": "Geçerlilik başlangıcı",
       "valid_until": "Geçerlilik sonu",
       "max_targets": "Lisanslı hedef sayısı",
-      "customer": "Müşteri"
+      "customer": "Müşteri",
+      "distinct_object_count": "Farklı nesne sayısı",
+      "distinct_token_count": "Farklı API anahtarı sayısı",
+      "distinct_ip_count": "Farklı adres sayısı",
+      "ip_samples": "Görülen adresler"
     },
     "detailValues": {
       "reason": {
@@ -473,7 +479,9 @@
         "user_disabled": "Kullanıcı devre dışı bırakıldı",
         "locked": "Lisans süresi doldu",
         "lock_due": "Lisans kilidi zamanı geldi",
-        "unverified": "Lisans denetlenemedi"
+        "unverified": "Lisans denetlenemedi",
+        "not_owner": "Sahibi değil",
+        "busy": "Başka bir kontrol veya dışa aktarma sürüyordu"
       },
       "problem": {
         "seal_missing": "Kurulum kaydının koruması kaldırılmış",
@@ -484,7 +492,9 @@
         "ui": "Web arayüzü",
         "cli": "Komut satırı"
       }
-    }
+    },
+    "summary": "{{from}} ile {{to}} arasında buna benzer {{n}} kayıt daha.",
+    "exportHint": "Denetim kaydı için aynı anda yalnızca bir kontrol veya dışa aktarma çalışır. Bir indirme başarısız olursa diğeri bitene kadar bekleyip yeniden deneyin."
   },
   "license": {
     "banner": {
