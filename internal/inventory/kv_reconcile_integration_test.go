@@ -481,7 +481,19 @@ func TestMissingMarkingNeedsACompleteListing(t *testing.T) {
 	// An unbound certificate says binding "no".
 	h.clock.Advance(time.Minute)
 	h.reconcile(vault, full())
+	// An empty complete listing is believed on the second poll in a row only (defence in depth).
 	h.reconcile(vault, kvResult())
+	assert.Zero(t, h.count("SELECT count(*) FROM kv_certificates WHERE missing_since IS NOT NULL"), "the first empty listing marks nothing")
+	assert.Equal(t, 1, h.vaultRow(vault).Facts.KVEmptyPolls)
+	require.Len(t, h.vaultRow(vault).Facts.Warnings, 1)
+	assert.Equal(t, inventory.WarnKVListingEmpty, h.vaultRow(vault).Facts.Warnings[0].Code)
+	h.reconcile(vault, full()) // a non-empty answer resets the count
+	assert.Zero(t, h.vaultRow(vault).Facts.KVEmptyPolls)
+	h.reconcile(vault, kvResult())
+	h.reconcile(vault, kvResult())
+	assert.Equal(t, 2, h.count("SELECT count(*) FROM kv_certificates WHERE missing_since IS NOT NULL"), "the second one in a row marks both")
+	assert.Zero(t, h.vaultRow(vault).Facts.KVEmptyPolls)
+	assert.Empty(t, h.vaultRow(vault).Facts.Warnings)
 	var bindings []string
 	rows, err := h.db.Owner.Query(h.ctx, "SELECT params->>'binding' FROM notifications_outbox WHERE template_key = 'kv.certificate_removed' ORDER BY created_at, id")
 	require.NoError(t, err)
@@ -1179,6 +1191,12 @@ func TestKVPollRequestAsksForKeysAndSecretsEveryFourthInterval(t *testing.T) {
 	assert.True(t, req.KVKeys)
 	assert.True(t, req.KVSecrets)
 	assert.Empty(t, req.KVKnown, "nothing is known yet")
+	// A certificate stored from its listing alone (unusable details) is never "known".
+	h.reconcile(vault, kvResult(h.kvc("listed-only", h.kvLeaf("l.example.test"), "", now, false)))
+	req2, err := h.svc.KVPollRequest(h.ctx, vault)
+	require.NoError(t, err)
+	assert.NotContains(t, req2.KVKnown, "listed-only", "list-only values are not recorded as known")
+	h.clock.Advance(time.Minute)
 	assert.Empty(t, req.KVKnownKeys)
 	assert.False(t, req.SSHKeys)
 	for i := 1; i <= 3; i++ { // the next three polls (15, 30, 45 minutes later) read certificates only
@@ -1216,7 +1234,7 @@ func TestKVPollRequestAsksForKeysAndSecretsEveryFourthInterval(t *testing.T) {
 	assert.True(t, at.Equal(*h.vaultRow(vault).Facts.KVMetadataAt))
 
 	// A disabled vault is not polled; a deleted one, a server and an unknown id are refused.
-	_, err := h.db.Owner.Exec(h.ctx, "UPDATE targets SET status = 'disabled' WHERE id = $1", vault)
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE targets SET status = 'disabled' WHERE id = $1", vault)
 	require.NoError(t, err)
 	_, err = h.svc.KVPollRequest(h.ctx, vault)
 	require.ErrorIs(t, err, inventory.ErrTargetNotReady)

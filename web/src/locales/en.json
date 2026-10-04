@@ -655,7 +655,8 @@
     "accounts_nul_byte": "The file /etc/passwd on this server contains a NUL byte, so the list of accounts may be incomplete. Check the file.",
     "list_truncated_uid": "Alice stopped listing the SSH keys of this server at the account with user ID {{uid}}, so the keys from there on are not shown.",
     "kv_item_unreadable": "Some items of this vault could not be read and were left out, so the list is incomplete. Kind: {{object}}. Items: {{count}}.",
-    "kv_version_conflict": "Azure reported a version that Alice already knows with a different thumbprint. Alice kept what it had stored. Kind: {{object}}. Items: {{count}}."
+    "kv_version_conflict": "Azure reported a version that Alice already knows with a different thumbprint. Alice kept what it had stored. Kind: {{object}}. Items: {{count}}.",
+    "kv_listing_empty": "The last check found no certificates in this vault, although Alice knows some. Alice keeps them until the next check confirms it."
   },
   "targets": {
     "title": "Servers",

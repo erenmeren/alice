@@ -225,7 +225,27 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 			return err
 		}
 		var removed []removedCert
-		if p.certsComplete {
+		// Defence in depth: an empty complete listing of a vault that has stored certificates is
+		// believed only on the second successful poll in a row (the spec has no mass-disappearance
+		// rule). The first is recorded (facts.kv_empty_polls, warning kv_listing_empty).
+		emptyPolls, hold := t.Facts.KVEmptyPolls, false
+		if p.certsAnswered && len(p.certs) > 0 {
+			emptyPolls = 0
+		}
+		if p.certsComplete && len(p.certs) == 0 {
+			var present int
+			if err := tx.QueryRow(ctx, "SELECT count(*) FROM kv_certificates WHERE target_id = $1 AND missing_since IS NULL", id).Scan(&present); err != nil {
+				return fmt.Errorf("inventory: count the stored certificates: %w", err)
+			}
+			if present == 0 {
+				emptyPolls = 0
+			} else if emptyPolls == 0 {
+				emptyPolls, hold = 1, true
+			} else {
+				emptyPolls = 0 // the second empty listing in a row is believed
+			}
+		}
+		if p.certsComplete && !hold {
 			if removed, err = markMissingCerts(ctx, tx, id, foldedNames(p.certs, func(c kvCert) string { return c.fold }), now); err != nil {
 				return err
 			}
@@ -251,9 +271,12 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 		if p.keysAsked || p.secretsAsked {
 			f.KVMetadataAt = &now
 		}
-		f.KVAuthFailures, f.KVThrottledCycles = 0, cycles
+		f.KVAuthFailures, f.KVThrottledCycles, f.KVEmptyPolls = 0, cycles, emptyPolls
 		f.KVPoll = &KVPollFacts{At: now, Failures: p.failures, Truncated: p.truncated, DetailsPending: p.detailsPending}
 		f.Warnings = p.warnings()
+		if hold {
+			f.Warnings = append(f.Warnings, providers.Warning{Code: WarnKVListingEmpty, Params: map[string]string{}})
+		}
 		if sum.VersionConflicts > 0 {
 			f.Warnings = append(f.Warnings, providers.Warning{Code: WarnKVVersionConflict,
 				Params: map[string]string{"object": kvCertificates, "count": strconv.Itoa(sum.VersionConflicts)}})

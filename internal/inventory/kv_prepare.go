@@ -30,6 +30,10 @@ const (
 // Alice already knows with another thumbprint (params object, count). The stored row is kept.
 const WarnKVVersionConflict = "kv_version_conflict"
 
+// WarnKVListingEmpty is the closed warning of a poll whose certificate listing was empty although
+// the vault has stored certificates: nothing was marked missing yet (no params).
+const WarnKVListingEmpty = "kv_listing_empty"
+
 // Kinds of a vault listing (providers.KVInventory.Truncated, KVListFailure.Object).
 const (
 	kvCertificates = "certificates"

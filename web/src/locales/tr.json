@@ -655,7 +655,8 @@
     "accounts_nul_byte": "Bu sunucudaki /etc/passwd dosyası bir NUL baytı içeriyor, bu yüzden hesap listesi eksik olabilir. Dosyayı denetleyin.",
     "list_truncated_uid": "Alice bu sunucudaki SSH anahtarlarını listelemeyi kullanıcı kimliği {{uid}} olan hesapta durdurdu, bu yüzden bu hesaptan sonraki anahtarlar gösterilmiyor.",
     "kv_item_unreadable": "Bu kasadaki bazı öğeler okunamadı ve atlandı, bu yüzden liste eksik. Tür: {{object}}. Öğe sayısı: {{count}}.",
-    "kv_version_conflict": "Azure, Alice'in zaten bildiği bir sürümü farklı bir parmak iziyle bildirdi. Alice kayıtlı olanı korudu. Tür: {{object}}. Öğe sayısı: {{count}}."
+    "kv_version_conflict": "Azure, Alice'in zaten bildiği bir sürümü farklı bir parmak iziyle bildirdi. Alice kayıtlı olanı korudu. Tür: {{object}}. Öğe sayısı: {{count}}.",
+    "kv_listing_empty": "Son denetimde bu kasada hiç sertifika bulunamadı, oysa Alice bazılarını biliyor. Alice, bir sonraki denetim doğrulayana kadar onları korur."
   },
   "targets": {
     "title": "Sunucular",

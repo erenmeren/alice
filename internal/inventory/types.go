@@ -109,7 +109,8 @@ type Facts struct {
 	KVMetadataAt      *time.Time            `json:"kv_metadata_at,omitempty"`
 	KVAuthFailures    int                   `json:"kv_auth_failures,omitempty"`
 	KVThrottledCycles int                   `json:"kv_throttled_cycles,omitempty"`
-	KVPoll            *KVPollFacts          `json:"kv_poll,omitempty"` // what the last poll found wrong
+	KVEmptyPolls      int                   `json:"kv_empty_polls,omitempty"` // empty complete certificate listings in a row
+	KVPoll            *KVPollFacts          `json:"kv_poll,omitempty"`        // what the last poll found wrong
 }
 
 // VaultInfo is what a Key Vault target adds to Target: its address, how Alice signs in and the
