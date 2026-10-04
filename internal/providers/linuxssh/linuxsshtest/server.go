@@ -35,6 +35,11 @@ type Response struct {
 	// Hangup closes the whole SSH connection instead of answering (a dropped connection, F-08):
 	// the client sees a transport error, not an exit status.
 	Hangup bool
+	// StallReadLoop answers with a malformed exit-status (a payload shorter than 4 bytes) and then
+	// more channel requests than x/crypto/ssh buffers, and holds the channel open (final review
+	// A2-I1): the client's session stops reading its requests, the connection's read loop blocks on
+	// a full Go channel, and closing the socket can no longer wake it.
+	StallReadLoop bool
 }
 
 // Handler answers one command line; stdin is everything the client sent before closing its input.
@@ -368,6 +373,17 @@ func (s *Server) serveSession(ch ssh.Channel, reqs <-chan *ssh.Request, closed <
 		}
 		_, _ = ch.Write(resp.Stdout)
 		_, _ = ch.Stderr().Write(resp.Stderr)
+		if resp.StallReadLoop {
+			_, _ = ch.SendRequest("exit-status", false, []byte{0})
+			for range 32 {
+				_, _ = ch.SendRequest("keepalive@openssh.com", false, nil)
+			}
+			select {
+			case <-closed:
+			case <-s.done:
+			}
+			return
+		}
 		if resp.Signal != "" {
 			sig := struct {
 				Signal     string

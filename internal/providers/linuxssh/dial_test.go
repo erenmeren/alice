@@ -512,3 +512,72 @@ func TestNginxHelperCodesMapToProviderErrors(t *testing.T) {
 		assert.Equal(t, "ssh.protocol_error", providerCode(t, err).Code, name)
 	}
 }
+
+// A2-I1: a server that stalls x/crypto's read loop (a malformed exit-status, then more requests
+// than it buffers, the channel held open) cannot hold Run past its budget: closing the socket does
+// not wake that loop, so Run gives up after a short grace and abandons the goroutine.
+func TestRunReturnsWhenTheServerStallsTheReadLoop(t *testing.T) {
+	_, c := pinnedConn(t, func(string, []byte) linuxsshtest.Response { return linuxsshtest.Response{StallReadLoop: true} })
+	cmd := CmdVersion()
+	cmd.timeout = 300 * time.Millisecond
+	err := runWithin(t, 5*time.Second+abandonGrace, c, context.Background(), cmd)
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.timeout", pe.Code)
+	assert.False(t, c.Healthy())
+
+	_, c = pinnedConn(t, func(string, []byte) linuxsshtest.Response { return linuxsshtest.Response{StallReadLoop: true} })
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err = runWithin(t, 5*time.Second+abandonGrace, c, ctx, CmdVersion())
+	assert.Equal(t, "ssh.timeout", providerCode(t, err).Code)
+	assert.False(t, c.Healthy())
+}
+
+// blockingCred is a credential source that ignores its context (a hung vault): it answers only once
+// release is closed.
+type blockingCred struct {
+	inner    *fakeCred
+	release  chan struct{}
+	mu       sync.Mutex
+	released int
+}
+
+func (b *blockingCred) SSHSigner(ctx context.Context) (ssh.Signer, func(), error) {
+	<-b.release
+	s, rel, err := b.inner.SSHSigner(ctx)
+	return s, func() {
+		rel()
+		b.mu.Lock()
+		b.released++
+		b.mu.Unlock()
+	}, err
+}
+
+// A2 m4: the client key is fetched on the handshake path; a credential source that ignores its
+// context cannot hold Dial past the handshake budget, and a key it hands out late is released.
+func TestHungCredentialSourceDoesNotHangDial(t *testing.T) {
+	srv, cfg, cred := testServer(t, okHandler)
+	hk := &memHostKeys{}
+	hk.pin(srv.HostKey())
+	bc := &blockingCred{inner: cred, release: make(chan struct{})}
+	d := newDialer(hk)
+	d.HandshakeTimeout = 300 * time.Millisecond
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.Dial(context.Background(), testTarget, cfg, bc)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		close(bc.release)
+		t.Fatal("Dial hung on the credential source")
+	}
+	close(bc.release)
+	require.Eventually(t, func() bool {
+		bc.mu.Lock()
+		defer bc.mu.Unlock()
+		return bc.released == 1
+	}, 5*time.Second, 10*time.Millisecond, "the late key is released")
+}

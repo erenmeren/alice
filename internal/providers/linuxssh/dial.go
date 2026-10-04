@@ -215,6 +215,9 @@ func (h *hostKeyDecision) snapshot() (called, refused bool, presented providers.
 type lazyAuth struct {
 	cred providers.CredentialSource
 	ctx  context.Context
+	// timeout bounds the credential source's answer (the handshake budget; 0 = ctx alone): it runs
+	// on x/crypto's handshake path, which closing the socket cannot interrupt (A2 m4).
+	timeout time.Duration
 
 	mu        sync.Mutex
 	attempted bool
@@ -230,13 +233,45 @@ func (l *lazyAuth) signers() ([]ssh.Signer, error) {
 	if l.signer != nil { // a second round (AuthenticationMethods publickey,publickey) reuses the key
 		return []ssh.Signer{l.signer}, nil
 	}
-	signer, release, err := l.cred.SSHSigner(l.ctx)
+	signer, release, err := l.fetch()
 	if err != nil {
 		l.err = err
 		return nil, err
 	}
 	l.signer, l.release = signer, release
 	return []ssh.Signer{signer}, nil
+}
+
+// fetch asks the credential source in its own goroutine, bounded by ctx and timeout (as observe
+// does for the host-key store): a source that ignores its context cannot hang the handshake. A key
+// it hands out after the caller gave up is released at once.
+func (l *lazyAuth) fetch() (ssh.Signer, func(), error) {
+	ctx, cancel := l.ctx, context.CancelFunc(func() {})
+	if l.timeout > 0 {
+		ctx, cancel = context.WithTimeout(l.ctx, l.timeout)
+	}
+	defer cancel()
+	type got struct {
+		signer  ssh.Signer
+		release func()
+		err     error
+	}
+	ch := make(chan got, 1)
+	go func() {
+		s, r, err := l.cred.SSHSigner(ctx)
+		ch <- got{s, r, err}
+	}()
+	select {
+	case g := <-ch:
+		return g.signer, g.release, g.err
+	case <-ctx.Done():
+		go func() {
+			if g := <-ch; g.release != nil {
+				g.release()
+			}
+		}()
+		return nil, nil, ctx.Err()
+	}
 }
 
 // fingerprint is the SHA256 fingerprint of the client key that was offered ("" if none was).
@@ -300,7 +335,7 @@ func (d *Dialer) Dial(ctx context.Context, target uuid.UUID, cfg Config, cred pr
 		return nil, providers.NewError("internal.unexpected", true, err, nil)
 	}
 	var dec hostKeyDecision
-	auth := &lazyAuth{cred: cred, ctx: ctx}
+	auth := &lazyAuth{cred: cred, ctx: ctx, timeout: d.handshakeTimeout()}
 	algorithms := allHostKeyAlgorithms
 	if havePin {
 		algorithms = hostKeyAlgorithmsFor(pinned.Type)
@@ -363,7 +398,10 @@ func (d *Dialer) Dial(ctx context.Context, target uuid.UUID, cfg Config, cred pr
 	c := &Conn{client: r.client, target: target, cfg: cfg, hostKey: presented, clientFP: auth.fingerprint(), clock: d.clk(),
 		dead: make(chan struct{})}
 	go func() {
-		_ = c.client.Wait() // returns once the connection is gone, whoever closed it
+		// Returns once the connection is gone, whoever closed it; a server that stalls x/crypto's
+		// read loop (see awaitAbandoned) keeps it waiting for good: dead then never closes, and
+		// Healthy relies on the broken flag markBroken set (this goroutine is abandoned with it).
+		_ = c.client.Wait()
 		close(c.dead)
 	}()
 	return c, nil
@@ -584,11 +622,11 @@ func (c *Conn) Run(ctx context.Context, cmd HelperCommand) (Result, error) {
 	case runErr = <-done:
 	case <-deadline:
 		c.markBroken()
-		<-done
+		c.awaitAbandoned(done)
 		return Result{}, providers.NewError("ssh.timeout", true, nil, params)
 	case <-ctx.Done():
 		c.markBroken()
-		<-done
+		c.awaitAbandoned(done)
 		return Result{}, providers.NewError("ssh.timeout", true, ctx.Err(), params)
 	}
 	if stdout.overflowed() {
@@ -612,14 +650,39 @@ func (c *Conn) Run(ctx context.Context, cmd HelperCommand) (Result, error) {
 	}
 }
 
+// abandonGrace is how long Run waits, after it closed a connection that overran its budget, for
+// the command's goroutine to end.
+const abandonGrace = 2 * time.Second
+
+// awaitAbandoned waits up to abandonGrace for the session goroutine of a command whose connection
+// was just closed (markBroken). Usually it ends at once (the closed socket ends x/crypto's read loop,
+// which ends the session). A server can stall that loop instead (A2-I1: a malformed exit-status
+// leaves the session's request channel unread, further channel requests fill x/crypto's buffer and
+// the loop blocks on a Go channel send that no socket close wakes): then the goroutine is
+// abandoned, blocked for the life of the process, as newSession's opener can be.
+//
+// Callers wipe a command's stdin (WipeInput) once Run returned. An abandoned goroutine may still be
+// copying that stdin into its session: it then reads bytes that are being zeroed (a benign race on
+// a byte slice: the connection is closed, nothing it reads reaches the server any more).
+func (c *Conn) awaitAbandoned(done <-chan error) {
+	select {
+	case <-done:
+	case <-c.clock.After(abandonGrace):
+	}
+}
+
 // newSession opens the session of one command within the command's budget (deadline) and ctx; a
 // connection that ends meanwhile fails it at once. Every failure closes the connection.
 //
 // ssh.Client.NewSession takes no context and can wait forever: x/crypto/ssh registers the new
 // channel and then waits for the server's answer, and a channel registered after the connection's
 // read loop dropped its channels (the server closed the connection a moment earlier) is never
-// answered nor closed. That opener goroutine then stays blocked (one goroutine for the life of
-// the process); the call returns once the connection is seen dead (dead), or at ctx or deadline.
+// answered nor closed; a server that holds the open, or stalls the read loop (see
+// awaitAbandoned), does the same. The opener goroutine then stays blocked, one per such call, for
+// the life of the process (it holds no key material: a session has no stdin yet); the call returns
+// once the connection is seen dead (dead), or at ctx or deadline, and the connection is closed so
+// it is never reused. The leak is bounded by the calls that hit it: each one also breaks its
+// connection, so the pool dials anew.
 func (c *Conn) newSession(ctx context.Context, deadline <-chan time.Time, params map[string]string) (*ssh.Session, error) {
 	type opened struct {
 		sess *ssh.Session
