@@ -9,7 +9,6 @@ import { keyAlgorithmKey, unsupportedReasonKey, fileProblemKey } from '../api/en
 import { isApiError } from '../api/client';
 import { isAbort } from '../api/jobs';
 import { canDeployTo } from '../api/nginx';
-import { locationWarningKey } from '../api/warnings';
 import { CERTIFICATES_KEY, certificateKey, DEPLOYMENTS_KEY } from '../api/queryKeys';
 import { useAbort } from '../api/useAbort';
 import type { Certificate, CertificateLocation, DeployResult, DeploymentDetail } from '../api/types';
@@ -21,6 +20,7 @@ import { currentStep, DeploymentSteps } from './DeploymentSteps';
 import { ErrorAlert } from './ErrorAlert';
 import { useNow } from './Expiry';
 import { InternalLink } from './InternalLink';
+import { LocationWarning } from './LocationWarning';
 import { useSiteLabel } from './useSiteLabel';
 import { WRAP } from './wrap';
 
@@ -174,7 +174,7 @@ function DeployForm({ certificate, location, onClose }: { certificate?: Certific
                 )}
                 {r.warnings.map((w) => (
                   <Alert key={w} color="yellow" role="status">
-                    {t(locationWarningKey(w), { site: loc ? siteLabel(loc) : '', mode: loc?.key_mode ?? '' })}
+                    <LocationWarning code={w} site={loc ? siteLabel(loc) : ''} mode={loc?.key_mode ?? ''} size="sm" />
                   </Alert>
                 ))}
                 <DeploymentSteps steps={dep?.steps ?? []} status={dep?.status ?? 'pending'} />

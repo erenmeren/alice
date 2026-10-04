@@ -1,13 +1,15 @@
 import { Alert, Button, Card, Code, Group, Loader, Stack, Table, Text, Textarea, Title } from '@mantine/core';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { confirmHostKey, deleteTarget, discoverTarget, getTarget, listHostKeys, listTargetKeys, repinHostKey, testTarget } from '../api/endpoints';
 import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
-import { TARGETS_KEY, targetKey } from '../api/queryKeys';
+import { nginxState } from '../api/nginx';
+import { CERTIFICATES_KEY, TARGETS_KEY, targetKey } from '../api/queryKeys';
 import { useAbort } from '../api/useAbort';
-import type { HostKey, JobAccepted, JobError, KeyLocation, Target, Warning } from '../api/types';
+import { warningKey } from '../api/warnings';
+import type { HostKey, JobAccepted, JobError, KeyLocation, Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { PageLoader } from '../auth/guards';
 import { AppModal } from '../components/AppModal';
@@ -18,6 +20,7 @@ import { KeyFlags } from '../components/KeyFlags';
 import { RemoveKeyDialog } from '../components/RemoveKeyDialog';
 import { useStepUp } from '../components/StepUpProvider';
 import { TargetStatusBadge } from '../components/TargetStatusBadge';
+import { WebsitesPanel } from '../components/WebsitesPanel';
 import { WRAP } from '../components/wrap';
 import { formatDateTime } from '../datetime';
 
@@ -51,7 +54,7 @@ export function TargetDetailPage() {
   });
   // The status is part of the key so the host keys are read again when a polled server moves on
   // (for example from checking to pending_host_key and its confirmation card).
-  const hostKeys = useQuery({ queryKey: [...targetKey(id), 'host-keys', target.data?.status ?? null], queryFn: () => listHostKeys(id) });
+  const hostKeys = useQuery({ queryKey: [...targetKey(id), 'host-keys', target.data?.status ?? null], queryFn: () => listHostKeys(id), placeholderData: keepPreviousData });
   const keys = useQuery({
     queryKey: [...targetKey(id), 'ssh-keys', target.data?.last_discovery_at ?? null],
     queryFn: () => listTargetKeys(id),
@@ -63,16 +66,25 @@ export function TargetDetailPage() {
   const [done, setDone] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const [stopped, setStopped] = useState(false);
+  const [discoveryFailed, setDiscoveryFailed] = useState(false);
   const abort = useAbort();
   const [repinning, setRepinning] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [removing, setRemoving] = useState<KeyLocation | null>(null);
 
-  const refresh = () => client.invalidateQueries({ queryKey: TARGETS_KEY });
+  // A scan changes the websites and certificates too, which live under their own query keys.
+  const refresh = async () => {
+    await Promise.all([
+      client.invalidateQueries({ queryKey: TARGETS_KEY }),
+      client.invalidateQueries({ queryKey: ['locations'] }),
+      client.invalidateQueries({ queryKey: CERTIFICATES_KEY }),
+    ]);
+  };
 
   // runJob starts a background job, waits for it and refreshes everything it may have changed.
-  const runJob = async (start: () => Promise<JobAccepted>) => {
+  const runJob = async (start: () => Promise<JobAccepted>, scan = false) => {
     setBusy(true);
+    if (scan) setDiscoveryFailed(false);
     setError(null);
     setJobError(null);
     setDone(false);
@@ -84,8 +96,12 @@ export function TargetDetailPage() {
       else if (job.status === 'blocked_license') setBlocked(true);
       else if (job.error) setJobError(job.error);
       else setStopped(true);
+      if (scan && job.status !== 'succeeded' && job.status !== 'blocked_license') setDiscoveryFailed(true);
     } catch (e) {
-      if (!isAbort(e)) setError(e);
+      if (!isAbort(e)) {
+        setError(e);
+        if (scan) setDiscoveryFailed(true);
+      }
     }
     setBusy(false);
     await refresh();
@@ -97,6 +113,7 @@ export function TargetDetailPage() {
   const pinned = hostKeys.data?.items.find((k) => k.status === 'pinned') ?? null;
   const observed = hostKeys.data?.items.find((k) => k.status === 'observed') ?? null;
   const added = addedNow;
+  const nginx = tg.type === 'nginx';
   const visibleKeys = (keys.data?.items ?? []).filter((k) => !k.removed_at);
 
   return (
@@ -106,6 +123,11 @@ export function TargetDetailPage() {
           <Title order={1} style={WRAP}>
             {tg.name}
           </Title>
+          {(tg.type === 'linux' || tg.type === 'nginx') && (
+            <Text size="xs" c="gray.7">
+              {t(`targets.typeLabel.${tg.type}`)}
+            </Text>
+          )}
           <Text size="sm" style={WRAP}>
             {t('targets.address', { user: tg.username, host: tg.host, port: tg.port })}
           </Text>
@@ -139,14 +161,14 @@ export function TargetDetailPage() {
           </Stack>
         </Card>
       )}
-      <Facts target={tg} />
+      <Facts target={tg} discoveryFailed={discoveryFailed} />
       {canOperate && (
         <Group gap="sm">
           <Button variant="default" disabled={busy} onClick={() => void runJob(() => testTarget(tg.id))}>
             {t('targets.test')}
           </Button>
-          <Button variant="default" disabled={busy} onClick={() => void runJob(() => discoverTarget(tg.id))}>
-            {t('targets.discover')}
+          <Button variant="default" disabled={busy} onClick={() => void runJob(() => discoverTarget(tg.id), true)}>
+            {t(nginx ? 'locations.discover' : 'targets.discover')}
           </Button>
           {admin && (
             <Button variant="light" color="red.9" disabled={busy} onClick={() => setDeleting(true)}>
@@ -170,6 +192,8 @@ export function TargetDetailPage() {
       {blocked && <BlockedJobAlert />}
       {stopped && <StoppedJobAlert />}
       <JobErrorAlert error={jobError} />
+
+      {nginx && <WebsitesPanel target={tg} discoveryFailed={discoveryFailed} />}
 
       <Title order={2} size="h3">
         {t('targets.keysTitle')}
@@ -253,38 +277,7 @@ export function TargetDetailPage() {
   );
 }
 
-// Discovery warnings: the text key and the parameters it needs. Some helper warnings come with and
-// without a parameter (unsupported_path without a path, sshd_unreadable without a user) and have
-// their own text; a missing parameter would show a raw {{placeholder}}, so a warning without its
-// details, and a code this version does not know, get a generic text plus the code.
-const WARNING_PARAMS: Record<string, string[]> = {
-  keys_managed_elsewhere: [],
-  keys_managed_elsewhere_user: ['user'],
-  certificates_in_use: [],
-  pubkey_disabled: [],
-  sshd_unreadable: [],
-  sshd_unreadable_user: ['user'],
-  strict_modes: ['path'],
-  unsupported_path: ['path'],
-  unsupported_path_unnamed: [],
-  file_unreadable: ['path'],
-  file_unparseable: ['path', 'user'],
-  file_too_large: ['path'],
-  directory_users_not_listed: [],
-  too_many_users: [],
-};
-
-function warningKey(w: Warning): string {
-  let code = w.code;
-  if (code === 'unsupported_path' && !w.params.path) code = 'unsupported_path_unnamed';
-  if (code === 'keys_managed_elsewhere' && w.params.user) code = 'keys_managed_elsewhere_user';
-  if (code === 'sshd_unreadable' && w.params.user) code = 'sshd_unreadable_user';
-  const need = WARNING_PARAMS[code];
-  if (!need) return 'warnings.unknown';
-  return need.every((p) => w.params[p]) ? `warnings.${code}` : 'warnings.incomplete';
-}
-
-function Facts({ target }: { target: Target }) {
+function Facts({ target, discoveryFailed }: { target: Target; discoveryFailed: boolean }) {
   const { t, i18n } = useTranslation();
   const f = target.facts;
   // unreadable_line is shown per line from facts.unreadable below, so the summary warning is skipped here.
@@ -293,6 +286,13 @@ function Facts({ target }: { target: Target }) {
     <Stack gap={4}>
       {f.os.pretty_name && <Text size="sm">{t('targets.facts.os', { name: f.os.pretty_name })}</Text>}
       {f.helper_version && <Text size="sm">{t('targets.facts.helper', { version: f.helper_version })}</Text>}
+      {target.type === 'nginx' && f.nginx?.version && <Text size="sm">{t('targets.facts.nginx', { version: f.nginx.version })}</Text>}
+      {target.type === 'nginx' && f.nginx && !f.nginx.found && f.nginx.version === '' && <Text size="sm">{t('targets.facts.nginxNotFound')}</Text>}
+      {target.type === 'nginx' && nginxState(target, discoveryFailed).stale && target.last_discovery_at && (
+        <Text size="sm" role="note">
+          {t('targets.facts.nginxStale', { time: formatDateTime(target.last_discovery_at, i18n.language) })}
+        </Text>
+      )}
       <Text size="sm">
         {target.last_discovery_at
           ? t('targets.facts.lastDiscovery', { time: formatDateTime(target.last_discovery_at, i18n.language) })

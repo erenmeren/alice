@@ -232,7 +232,7 @@ describe('DeployDialog from a website', () => {
     await showDialog({ location: locationFixture({ id: L1 }) });
     await userEvent.selectOptions(await screen.findByLabelText('Certificate'), NEW_ID);
     await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
-    expect(await screen.findByText('The certificate does not name this website: www.example.test')).toBeInTheDocument();
+    expect(await screen.findByText(/The certificate does not name this website:/)).toHaveTextContent('The certificate does not name this website: www.example.test');
   });
 });
 

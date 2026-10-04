@@ -69,6 +69,10 @@ describe.each([
     expect(lookup(bundle, 'jobs.types.certificate_deploy')).toBeUndefined();
   });
 
+  it('words the discovery job so it is true for Linux and Nginx servers', () => {
+    expect(lookup(bundle, 'jobs.types.target.discover')).not.toMatch(/SSH/);
+  });
+
   it('keeps the upload button and the upload dialog texts apart (D35)', () => {
     expect(typeof lookup(bundle, 'certificates.uploadButton')).toBe('string');
     expect(typeof lookup(bundle, 'certificates.upload.title')).toBe('string');

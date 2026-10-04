@@ -8,6 +8,10 @@ import {
   errorResponse,
   hostKeyFixture,
   jobFixture,
+  locationFixture,
+  nginxFacts,
+  nginxTargetFixture,
+  nginxTargetWith,
   keyLocationFixture,
   sessionFor,
   sessionHandlers,
@@ -224,20 +228,54 @@ describe('TargetDetailPage', () => {
   });
 
   it('shows the confirmation card once a server that was being checked starts waiting for confirmation', async () => {
-    let target = targetWith({ status: 'checking' });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let target = targetWith({ status: 'checking' });
+      onServer('admin', target);
+      server.use(
+        http.get('/api/v1/targets/:id', () => HttpResponse.json(target)),
+        http.get('/api/v1/targets/:id/host-keys', () =>
+          HttpResponse.json({ items: target.status === 'pending_host_key' ? [hostKeyFixture({ status: 'observed', confirmed_at: null, confirmed_by_name: '' })] : [] }),
+        ),
+      );
+      await renderRoute(path);
+      await screen.findByTestId('target-status');
+      expect(screen.queryByRole('heading', { name: 'Is this your server?' })).not.toBeInTheDocument();
+      target = targetWith({ status: 'pending_host_key' });
+      await vi.advanceTimersByTimeAsync(3_100);
+      expect(await screen.findByRole('heading', { name: 'Is this your server?' })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the new fingerprint on screen while the host keys are read again after the server moved on', async () => {
+    let target = targetWith({ status: 'host_key_changed' });
     onServer('admin', target);
+    let slow = false;
     server.use(
       http.get('/api/v1/targets/:id', () => HttpResponse.json(target)),
-      http.get('/api/v1/targets/:id/host-keys', () =>
-        HttpResponse.json({ items: target.status === 'pending_host_key' ? [hostKeyFixture({ status: 'observed', confirmed_at: null, confirmed_by_name: '' })] : [] }),
-      ),
+      http.get('/api/v1/targets/:id/host-keys', async () => {
+        if (slow) await new Promise((r) => setTimeout(r, 400));
+        return HttpResponse.json({ items: [pinned, observed] });
+      }),
+      http.post('/api/v1/targets/:id/host-keys/:keyId/actions/repin', () => {
+        // The refusal comes with a server that is no longer in the changed state.
+        target = targetWith({ status: 'checking' });
+        slow = true;
+        return errorResponse(409, 'ALC-INV-0009', 'target.host_key_stale');
+      }),
     );
     await renderRoute(path);
-    await screen.findByTestId('target-status');
-    expect(screen.queryByRole('heading', { name: 'Is this your server?' })).not.toBeInTheDocument();
-    target = targetWith({ status: 'pending_host_key' });
-    expect(await screen.findByRole('heading', { name: 'Is this your server?' }, { timeout: 6000 })).toBeInTheDocument();
-  }, 10_000);
+    await userEvent.click(await screen.findByRole('button', { name: 'Review the new fingerprint' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Accept the new server fingerprint' });
+    await userEvent.type(within(dialog).getByLabelText(/^Reason/), 'CHG-2026-0412 reinstall');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Accept new fingerprint' }));
+    await waitFor(() => expect(screen.getByTestId('target-status')).toHaveTextContent('Checking'));
+    // While the host keys are being read for the new status the candidate stays and "no candidate" never shows.
+    expect(within(dialog).getByTestId('repin-new-fingerprint')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Alice has not recorded a new fingerprint for this server.')).not.toBeInTheDocument();
+  });
 
   it('refuses to remove Alice’s own key and says why', async () => {
     onServer('admin');
@@ -416,5 +454,80 @@ describe('TargetDetailPage', () => {
     expect(await screen.findByTestId('host-key-changed')).toHaveTextContent('Sunucunun kimliği değişti, bu yüzden Alice bu sunucudaki tüm işleri durdurdu.');
     expect(screen.getByRole('button', { name: 'Yeni parmak izini incele' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Bu sunucudaki SSH anahtarları' })).toBeInTheDocument();
+  });
+
+  describe('the scan action and facts of each server type', () => {
+    function nginxServer(role: 'admin' | 'operator' | 'auditor', target: Target = nginxTargetFixture, lang = 'en') {
+      onServer(role, target, [], lang);
+      server.use(http.get('/api/v1/targets/:id/certificate-locations', () => HttpResponse.json({ items: [locationFixture()], truncated: false })));
+    }
+
+    it('labels the scan action Discover on an Nginx server and keeps "Scan for SSH keys" on a Linux server', async () => {
+      nginxServer('operator');
+      const view = await renderRoute(`/servers/${nginxTargetFixture.id}`);
+      expect(await screen.findByRole('button', { name: 'Discover' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Scan for SSH keys' })).not.toBeInTheDocument();
+      expect(screen.getByText('Nginx server')).toBeInTheDocument();
+      view.unmount();
+      onServer('operator');
+      await renderRoute(path);
+      expect(await screen.findByRole('button', { name: 'Scan for SSH keys' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Discover' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Websites on this server' })).not.toBeInTheDocument();
+    });
+
+    it('labels them "Keşfet" and "SSH anahtarlarını tara" in Turkish', async () => {
+      nginxServer('admin', nginxTargetFixture, 'tr');
+      const view = await renderRoute(`/servers/${nginxTargetFixture.id}`, { languages: ['tr-TR'] });
+      expect(await screen.findByRole('button', { name: 'Keşfet' })).toBeInTheDocument();
+      view.unmount();
+      onServer('admin', targetFixture, [], 'tr');
+      await renderRoute(path, { languages: ['tr-TR'] });
+      expect(await screen.findByRole('button', { name: 'SSH anahtarlarını tara' })).toBeInTheDocument();
+    });
+
+    it('shows the Nginx version and the websites above the SSH keys', async () => {
+      nginxServer('operator');
+      await renderRoute(`/servers/${nginxTargetFixture.id}`);
+      expect(await screen.findByText('Nginx version: 1.24.0')).toBeInTheDocument();
+      const websites = screen.getByRole('heading', { name: 'Websites on this server' });
+      const keys = screen.getByRole('heading', { name: 'SSH keys on this server' });
+      expect(websites.compareDocumentPosition(keys) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('shows no Nginx facts that the server never reported', async () => {
+      nginxServer('operator', nginxTargetWith({}, { nginx: undefined }));
+      await renderRoute(`/servers/${nginxTargetFixture.id}`);
+      await screen.findByRole('button', { name: 'Discover' });
+      expect(screen.queryByText(/Nginx version/)).not.toBeInTheDocument();
+    });
+
+    it('marks the websites stale after a failed Discover', async () => {
+      nginxServer('operator');
+      server.use(
+        http.post('/api/v1/targets/:id/actions/discover', () => HttpResponse.json({ job_id: 'job-d', status_url: '/api/v1/jobs/job-d' }, { status: 202 })),
+        http.get('/api/v1/jobs/:id', () =>
+          HttpResponse.json(jobFixture({ id: 'job-d', status: 'failed', error: { code: 'ALC-NGX-0002', reason: 'nginx.config_invalid' } })),
+        ),
+      );
+      await renderRoute(`/servers/${nginxTargetFixture.id}`);
+      await userEvent.click(await screen.findByRole('button', { name: 'Discover' }));
+      const stale = await screen.findByTestId('stale-websites');
+      expect(stale).toHaveTextContent('The last scan failed.');
+      expect(screen.getByRole('button', { name: 'Deploy certificate: www.example.test' })).toBeDisabled();
+    });
+
+    it('lists the Nginx scan warnings in words', async () => {
+      const warnings: Warning[] = [
+        { code: 'stream_tls', params: {} },
+        { code: 'config_file_writable', params: { path: '/etc/nginx/conf.d/w.conf' } },
+        { code: 'locations_dropped', params: {} },
+      ];
+      nginxServer('operator', nginxTargetWith({}, { warnings, nginx: nginxFacts() }));
+      await renderRoute(`/servers/${nginxTargetFixture.id}`);
+      expect(await screen.findByText(/TLS in stream blocks is not supported in this version/)).toBeInTheDocument();
+      expect(screen.getByText('An Nginx configuration file can be changed by users other than root: /etc/nginx/conf.d/w.conf')).toBeInTheDocument();
+      expect(screen.getByText(/more websites than Alice lists/)).toBeInTheDocument();
+    });
   });
 });
