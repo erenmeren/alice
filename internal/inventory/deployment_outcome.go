@@ -123,7 +123,8 @@ func DeployOutcomeRecord(o providers.DeployOutcome, err error, resent bool) Outc
 		if resent {
 			return uncertainRecord(firstCode(o.Reason, providerCode(err)), paramsOf(o.Params, err))
 		}
-		f.Status, f.ErrorCode = DeployStatusFailed, firstCode(o.Reason, providerCode(err))
+		// The helper's well-formed refusal or no_change answer: this operation wrote nothing.
+		f.Status, f.ErrorCode, f.NothingWritten = DeployStatusFailed, firstCode(o.Reason, providerCode(err)), true
 		verifyFailure(&f, o.FailedStep, o.Reason, f.Params)
 		return OutcomeRecord{Terminal: true, Finish: f}
 	case providers.DeployRolledBack, providers.DeployRollbackFailed:
@@ -169,7 +170,8 @@ func RollbackOutcomeRecord(o providers.RollbackOutcome, err error, cause string)
 	case providers.DeployNoChange:
 		switch {
 		case o.Phase != "":
-			f.Status, f.ErrorCode = DeployStatusFailed, causeCode
+			// "Nothing to restore": the helper's journal says the operation wrote nothing.
+			f.Status, f.ErrorCode, f.NothingWritten = DeployStatusFailed, causeCode, true
 			return OutcomeRecord{Terminal: true, Finish: f}
 		case o.Reason == "deployment.superseded":
 			f.Status, f.ErrorCode = DeployStatusRollbackFailed, o.Reason

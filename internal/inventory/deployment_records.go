@@ -540,6 +540,13 @@ type DeploymentFinish struct {
 	HelperError        string
 	VerifyFailedReason string // "" keeps the recorded one
 	VerifyFailedPort   *int   // nil keeps the recorded one
+	// NothingWritten: the caller has proof that this deployment's operation changed no file on the
+	// server (a refusal before the send, a well-formed helper refusal or no_change answer, a fence
+	// that found nothing). Required for a failed finish once an operation id was recorded (a send
+	// may have happened); without it such a finish is ErrDeploymentState (final review B2-I1,
+	// defence in depth: a path that only lost track of the send can never record "nothing written").
+	NothingWritten bool
+
 	// CertFileSHA256 is the certificate file's hash after a success: Material.NewCertSHA256 after
 	// the first send (the helper writes the PEM sent verbatim), the journal's NewCertSHA256 after a
 	// recovery. "" leaves the location's hash unknown: the next deployment is refused
@@ -579,12 +586,13 @@ func sanitizeCode(code, fallback string) string {
 var errAlreadyFinished = errors.New("inventory: the deployment has already finished")
 
 // allowedFrom: only failed may end a deployment that never sent anything (queued, precheck, or a
-// row without an operation id); unchanged also from precheck when the pre-check verified it;
-// succeeded, rolled_back and rollback_failed need a send.
-func allowedFrom(status string, d lockedDeployment, verified bool) bool {
+// row without an operation id), and failed ends one that may have sent only with the caller's proof
+// that nothing was written (DeploymentFinish.NothingWritten); unchanged also from precheck when the
+// pre-check verified it; succeeded, rolled_back and rollback_failed need a send.
+func allowedFrom(status string, d lockedDeployment, verified, nothingWritten bool) bool {
 	switch status {
 	case DeployStatusFailed:
-		return d.state != DeployStateDone
+		return d.state != DeployStateDone && (!d.wasSent() || nothingWritten)
 	case DeployStatusUnchanged:
 		return d.wasSent() || (d.state == DeployStatePrecheck && verified)
 	default:
@@ -652,7 +660,7 @@ func (s *Service) finishLocked(ctx context.Context, tx pgx.Tx, d lockedDeploymen
 		return errAlreadyFinished
 	}
 	verified := oneOf(f.Verified, verifies)
-	if !allowedFrom(f.Status, d, verified != "") {
+	if !allowedFrom(f.Status, d, verified != "", f.NothingWritten) {
 		return ErrDeploymentState
 	}
 	success := f.Status == DeployStatusSucceeded || f.Status == DeployStatusUnchanged

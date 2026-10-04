@@ -221,6 +221,10 @@ func (f *fakeInv) finishLocked(fin inventory.DeploymentFinish) error {
 	}
 	switch fin.Status {
 	case inventory.DeployStatusFailed:
+		// As inventory (B2-I1): failed after a possible send needs the proof that nothing was written.
+		if wasSent(f.dep) && !fin.NothingWritten {
+			return inventory.ErrDeploymentState
+		}
 	case inventory.DeployStatusUnchanged:
 		if !wasSent(f.dep) && (f.dep.State != inventory.DeployStatePrecheck || fin.Verified == "") {
 			return inventory.ErrDeploymentState

@@ -334,3 +334,21 @@ func TestFinishOverwritesPhaseAndHelperError(t *testing.T) {
 		assert.Equal(t, tc.wantHE, d.HelperError, i)
 	}
 }
+
+// B2-I1 (defence in depth): once an operation id is recorded (a send may have happened), a failed
+// finish needs the caller's proof that nothing was written; without it nothing is recorded.
+func TestFailedAfterASendNeedsProofThatNothingWasWritten(t *testing.T) {
+	f := newDeployFixture(t)
+	id := f.deploying(f.loc1)
+	err := f.h.svc.FinishDeployment(f.h.ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: "deployment.interrupted"})
+	require.ErrorIs(t, err, inventory.ErrDeploymentState)
+	assert.Equal(t, inventory.DeployStateDeploying, f.get(id).State, "nothing recorded")
+	require.ErrorIs(t, f.h.svc.RecordOutcome(f.h.ctx, id, inventory.OutcomeRecord{Terminal: true, Finish: inventory.DeploymentFinish{
+		Status: inventory.DeployStatusFailed, ErrorCode: "deployment.interrupted"}}, time.Time{}), inventory.ErrDeploymentState)
+	require.NoError(t, f.h.svc.FinishDeployment(f.h.ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed,
+		ErrorCode: "deployment.interrupted", NothingWritten: true}))
+	assert.Equal(t, inventory.DeployStatusFailed, f.get(id).Status)
+	// Before a send no proof is needed.
+	pre := f.request(f.admin, f.cert.ID, f.loc2)
+	require.NoError(t, f.h.svc.FinishDeployment(f.h.ctx, pre, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: "x.y"}))
+}

@@ -144,6 +144,8 @@ func TestDeployOutcomeRecordCoversEveryLegalShape(t *testing.T) {
 			require.NoError(t, providers.CheckDeployReturn(tc.o, tc.err), "the row is a legal shape")
 			got := inventory.DeployOutcomeRecord(tc.o, tc.err, false)
 			assert.Equal(t, tc.want, recOf(got))
+			// B2-I1: a failed record carries the helper's proof that nothing was written, and only it.
+			assert.Equal(t, got.Terminal && got.Finish.Status == "failed", got.Finish.NothingWritten)
 			assert.NotNil(t, got.Finish.Params)
 			if got.Terminal && (got.Finish.Status == "succeeded" || got.Finish.Status == "unchanged") {
 				assert.NotEmpty(t, got.Finish.Verified, "success only when verified")
@@ -227,6 +229,8 @@ func TestRollbackOutcomeRecordCoversEveryLegalShape(t *testing.T) {
 			require.NoError(t, providers.CheckRollbackReturn(tc.o, tc.err), "the row is a legal shape")
 			got := inventory.RollbackOutcomeRecord(tc.o, tc.err, cause)
 			assert.Equal(t, tc.want, recOf(got))
+			// B2-I1: a failed record carries the helper's proof that nothing was written, and only it.
+			assert.Equal(t, got.Terminal && got.Finish.Status == "failed", got.Finish.NothingWritten)
 			assert.NotEqual(t, "succeeded", got.Finish.Status)
 		})
 	}

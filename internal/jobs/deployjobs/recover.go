@@ -236,7 +236,7 @@ func (h *handlers) verified(ctx context.Context, sess providers.Session, d inven
 		// The files already held the new pair: this operation wrote nothing, nothing to roll back.
 		return h.recordFor(ctx, d, inventory.OutcomeRecord{Terminal: true, Finish: inventory.DeploymentFinish{
 			Status: inventory.DeployStatusFailed, Result: string(providers.DeployNoChange), Phase: providers.PhaseUnchanged,
-			FailedStep: providers.StepNameVerify, ErrorCode: vr.Reason, Params: vr.Params, VerifyFailedReason: vr.Reason,
+			NothingWritten: true, FailedStep: providers.StepNameVerify, ErrorCode: vr.Reason, Params: vr.Params, VerifyFailedReason: vr.Reason,
 			VerifyFailedPort: cause.port}}, m, nil)
 	}
 	return h.rollback(ctx, sess, d, mat, st, rec, m, cause, 1)
@@ -341,9 +341,11 @@ func uncertainRecord(code string) inventory.OutcomeRecord {
 		Params: map[string]string{}}}
 }
 
+// failedRecord ends a deployment failed with nothing written: its callers have that proof (no
+// operation id recorded, or the fence found no journal and now refuses the operation).
 func failedRecord(code, phase string) inventory.OutcomeRecord {
 	return inventory.OutcomeRecord{Terminal: true, Finish: inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: code,
-		Phase: phase, Params: map[string]string{}}}
+		Phase: phase, Params: map[string]string{}, NothingWritten: true}}
 }
 
 // verifyFailureOfSteps is the last failed verification of the new certificate recorded as a step

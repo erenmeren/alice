@@ -333,8 +333,9 @@ func (h *handlers) refuse(ctx context.Context, d inventory.Deployment, reason st
 // refuseAt is refuse with the step that failed ("" when none did).
 func (h *handlers) refuseAt(ctx context.Context, d inventory.Deployment, reason string, params map[string]string, step string) (map[string]any, error) {
 	wctx, cancel := detached(ctx)
+	// Every caller is before the send (see deploy's table): nothing was written.
 	err := h.d.Inventory.FinishDeployment(wctx, d.ID, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: reason,
-		Params: params, FailedStep: step})
+		Params: params, FailedStep: step, NothingWritten: true})
 	cancel()
 	if errors.Is(err, inventory.ErrClaimLost) {
 		return staleRun(err)

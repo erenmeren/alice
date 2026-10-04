@@ -1185,5 +1185,6 @@ func TestEngineWritesAreFencedToTheJobClaim(t *testing.T) {
 	require.ErrorIs(t, f.h.svc.CheckClaim(current), inventory.ErrClaimLost)
 	// Without a claim (the sweep, the API) nothing is fenced.
 	require.NoError(t, f.h.svc.CheckClaim(ctx))
-	require.NoError(t, f.h.svc.FinishDeployment(ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: "x.y"}))
+	require.NoError(t, f.h.svc.FinishDeployment(ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: "x.y",
+		NothingWritten: true}))
 }
