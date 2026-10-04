@@ -1758,7 +1758,10 @@ func TestUnchangedSkippedThatIsNoLongerAllowedEndsFailed(t *testing.T) {
 		f.inv.mu.Lock()
 		defer f.inv.mu.Unlock()
 		if calls == 1 {
+			// As inventory answers it: only for a deployment without a send (the record holds no
+			// operation id), where failed needs no proof of nothing written.
 			f.inv.errs["RecordOutcome"] = inventory.ErrDeploymentState
+			f.inv.dep.State, f.inv.dep.OperationID, f.inv.dep.StartedAt = inventory.DeployStatePrecheck, nil, nil
 		} else {
 			delete(f.inv.errs, "RecordOutcome")
 		}
@@ -1873,4 +1876,19 @@ func TestDeployMeetsAPendingOperation(t *testing.T) {
 			assert.True(t, f.keyZeroed(), "the key is zeroed afterwards")
 		})
 	}
+}
+
+// The proof flag is set only where nothing-written is proven: a refusal before the send that met
+// a deployment which may have sent (state deploying) is refused by the inventory guard and records
+// nothing (W2 review of e0cd19e).
+func TestBeforeSendRefusalOnASentDeploymentRecordsNothing(t *testing.T) {
+	f := newFixture(t)
+	f.sent(inventory.DeployStateDeploying, time.Minute)
+	j := f.job()
+	j.Attempt = j.MaxAttempts
+	_, err := f.h.beforeSend(f.ctx, j, f.inv.dep, jobs.Fail("nginx.no_space", nil, nil))
+	require.Error(t, err)
+	assert.Empty(t, f.inv.finishes, "no record written")
+	assert.Equal(t, inventory.DeployStateDeploying, f.inv.dep.State)
+	assert.Contains(t, f.inv.calls(), "FinishDeployment", "the guard refused it")
 }

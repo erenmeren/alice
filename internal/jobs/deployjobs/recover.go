@@ -133,7 +133,8 @@ func (h *handlers) recoverJob(ctx context.Context, j jobs.Job, steps jobs.StepRe
 // was recorded; the next recovery reads the journal again).
 func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment, steps jobs.StepRecorder, m mode) (map[string]any, error) {
 	if d.OperationID == nil {
-		return h.recordFor(ctx, d, failedRecord(reasonInterrupted, ""), m, nil)
+		// No operation id: nothing was ever sent (inventory needs no proof then).
+		return h.recordFor(ctx, d, failedRecord(reasonInterrupted, "", false), m, nil)
 	}
 	mat, err := h.d.Inventory.DeploymentMaterial(ctx, d.ID, false)
 	switch {
@@ -169,7 +170,7 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 	switch st.Phase {
 	case providers.PhaseFenced:
 		// An earlier recovery fenced it and could not record: nothing was written, nothing will be.
-		return h.recordFor(ctx, d, failedRecord(reasonInterrupted, providers.PhaseNone), m, nil)
+		return h.recordFor(ctx, d, failedRecord(reasonInterrupted, providers.PhaseNone, true), m, nil)
 	case providers.PhaseNone, providers.PhasePrepared:
 		if d.StartedAt == nil || h.sentLongAgo(d, now) {
 			// After an outage longer than a day the helper may have swept the journal of a change
@@ -193,7 +194,7 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 		case fst.Active:
 			return h.recordFor(ctx, d, uncertainRecord(reasonBusy), m, nil)
 		case fst.Phase == providers.PhaseFenced:
-			return h.recordFor(ctx, d, failedRecord(reasonInterrupted, st.Phase), m, nil)
+			return h.recordFor(ctx, d, failedRecord(reasonInterrupted, st.Phase, true), m, nil)
 		case fst.Phase == providers.PhaseNone || fst.Phase == providers.PhasePrepared:
 			// A fence that did not fence (it cannot answer these): proves nothing.
 			return unresolved(m, providers.NewError("ssh.protocol_error", false, errors.New("deployjobs: the fence answered "+fst.Phase), nil))
@@ -344,11 +345,11 @@ func uncertainRecord(code string) inventory.OutcomeRecord {
 		Params: map[string]string{}}}
 }
 
-// failedRecord ends a deployment failed with nothing written: its callers have that proof (no
-// operation id recorded, or the fence found no journal and now refuses the operation).
-func failedRecord(code, phase string) inventory.OutcomeRecord {
+// failedRecord ends a deployment failed; proven (NothingWritten) only after a fence answered
+// fenced, or a status that read fenced: the operation never ran and never will.
+func failedRecord(code, phase string, proven bool) inventory.OutcomeRecord {
 	return inventory.OutcomeRecord{Terminal: true, Finish: inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: code,
-		Phase: phase, Params: map[string]string{}, NothingWritten: true}}
+		Phase: phase, Params: map[string]string{}, NothingWritten: proven}}
 }
 
 // verifyFailureOfSteps is the last failed verification of the new certificate recorded as a step

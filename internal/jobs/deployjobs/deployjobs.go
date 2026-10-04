@@ -357,8 +357,9 @@ func (h *handlers) record(ctx context.Context, d inventory.Deployment, rec inven
 		// asks for was not made. The deployment ends failed (verify_other), not in a retryable job
 		// error that only retries and the sweep would end.
 		rec = inventory.OutcomeRecord{Terminal: true, Finish: inventory.DeploymentFinish{Status: inventory.DeployStatusFailed,
-			Result: string(providers.DeployNoChange), Phase: rec.Finish.Phase, ErrorCode: reasonVerifyOther, Params: map[string]string{},
-			NothingWritten: true}}
+			Result: string(providers.DeployNoChange), Phase: rec.Finish.Phase, ErrorCode: reasonVerifyOther, Params: map[string]string{}}}
+		// No NothingWritten: inventory answers ErrDeploymentState for this record only before a send
+		// (after one it records the skip as uncertain), where failed needs no proof.
 		wctx, cancel = detached(ctx)
 		err = h.d.Inventory.RecordOutcome(wctx, d.ID, rec, retryAt)
 		cancel()

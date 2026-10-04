@@ -248,7 +248,7 @@ func (h *handlers) first(ctx context.Context, j jobs.Job, d inventory.Deployment
 	m.PreviousFingerprint, m.PreviousChainLength = v.PreviousFingerprint, v.PreviousChainLength
 	if err := ctx.Err(); err != nil {
 		// Known: nothing was sent. Waiting for a recovery to read "no journal" would end the same.
-		return h.refuse(ctx, d, reasonInterrupted, nil)
+		return h.refuseSent(ctx, d, reasonInterrupted)
 	}
 	// The last fenced check before the send (I-1): a run that lost its lease after the start record
 	// does not send behind the back of the run (or recovery) that holds the job now.
@@ -389,7 +389,7 @@ func (h *handlers) lostBeforeSend(ctx context.Context, _ jobs.Job, d inventory.D
 	if errors.Is(err, inventory.ErrClaimLost) {
 		return staleRun(err)
 	}
-	return h.refuse(ctx, d, reasonInterrupted, nil)
+	return h.refuseSent(ctx, d, reasonInterrupted)
 }
 
 // beforeSend handles a failure before anything was sent (see deploy).
@@ -414,20 +414,29 @@ func (h *handlers) beforeSendAt(ctx context.Context, j jobs.Job, d inventory.Dep
 	if f.Class == jobs.Retryable && j.Attempt < j.MaxAttempts {
 		return nil, f
 	}
-	return h.refuseAt(ctx, d, f.Reason, f.Params, step)
+	return h.refuseAt(ctx, d, f.Reason, f.Params, step, false)
 }
 
-// refuse ends a deployment that sent nothing: failed with reason (nothing was written).
+// refuse ends a deployment that has no start record yet: failed with reason. It claims no proof
+// that nothing was written (NothingWritten false): inventory requires none before the start record,
+// and refuses (ErrDeploymentState, nothing recorded) a deployment that may have sent.
 func (h *handlers) refuse(ctx context.Context, d inventory.Deployment, reason string, params map[string]string) (map[string]any, error) {
-	return h.refuseAt(ctx, d, reason, params, "")
+	return h.refuseAt(ctx, d, reason, params, "", false)
 }
 
-// refuseAt is refuse with the step that failed ("" when none did).
-func (h *handlers) refuseAt(ctx context.Context, d inventory.Deployment, reason string, params map[string]string, step string) (map[string]any, error) {
+// refuseSent ends a deployment after its start record whose send is known not to have happened
+// (the context ended after the start record, or the fenced check before the send failed): the one
+// pre-send refusal that carries the proof that nothing was written.
+func (h *handlers) refuseSent(ctx context.Context, d inventory.Deployment, reason string) (map[string]any, error) {
+	return h.refuseAt(ctx, d, reason, nil, "", true)
+}
+
+// refuseAt is refuse with the step that failed ("" when none did); proven is NothingWritten.
+func (h *handlers) refuseAt(ctx context.Context, d inventory.Deployment, reason string, params map[string]string, step string,
+	proven bool) (map[string]any, error) {
 	wctx, cancel := detached(ctx)
-	// Every caller is before the send (see deploy's table): nothing was written.
 	err := h.d.Inventory.FinishDeployment(wctx, d.ID, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: reason,
-		Params: params, FailedStep: step, NothingWritten: true})
+		Params: params, FailedStep: step, NothingWritten: proven})
 	cancel()
 	if errors.Is(err, inventory.ErrClaimLost) {
 		return staleRun(err)
