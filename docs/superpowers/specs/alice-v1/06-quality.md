@@ -385,7 +385,7 @@ A set of canary secrets is created per test run and inserted everywhere secrets 
 | ID | Test | Expected result |
 |---|---|---|
 | A-01 | Cookie attributes | `HttpOnly; Secure; SameSite=Strict; Path=/`, `__Host-` prefix; no session ID in URL or response body |
-| A-02 | Idle timeout (fake clock) | 29 min idle: valid; 31 min idle: 401 and re-login; activity resets the idle timer |
+| A-02 | Idle timeout (fake clock) | 29 min idle: valid; 31 min idle: 401 and re-login; activity resets the idle timer (activity as defined by R39 item 1) |
 | A-03 | Absolute timeout | 12 h after login: 401 even when active |
 | A-04 | Session fixation | Session ID changes after login and after MFA completion; old ID invalid |
 | A-05 | Logout | Server-side invalidation; reusing the cookie fails; "log out everywhere" works; role change or disable ends the user's sessions |
@@ -540,7 +540,7 @@ A change is done only when all of the following are true:
 
 **Deliverables:** `nginx` provider on top of `linuxssh`; discovery via `nginx -T` parsing (no private key reading); certificate inventory with expiry; manual upload of certificates and keys; CSR generation; deployment engine (backup, atomic write, `nginx -t`, reload, handshake verification, rollback); deployment history and per-step results; `alice-helper` `nginx` sudoers profile documentation and a helper/profile validation in Test connection.
 
-**Automated tests that must pass:** F-01 to F-20; all nginx configs fixtures for discovery; `FuzzParseNginxConfig`; upload validation (matching key, chain, expired, formats); deploy idempotence test (run twice); crash-step test F-66 for deployment; A-13 path traversal; S-01 to S-05 with TLS keys; L-80 to L-82 with the real deploy job; E2E: discover, upload a certificate, deploy, then deploy a mismatching certificate and see the automatic rollback, in EN and TR. The Nginx real-systemd nightly job runs green.
+**Automated tests that must pass:** F-01 to F-20; all nginx configs fixtures for discovery; `FuzzParseNginxConfig`; upload validation (matching key, chain, expired, formats); deploy idempotence test (run twice); crash-step test F-66 for deployment; A-13 path traversal; S-01 to S-05 with TLS keys; L-80 to L-82 with the real deploy job; E2E: discover, upload a certificate, deploy, then deploy a mismatching certificate and see the automatic rollback, in EN and TR. The Nginx real-systemd nightly job runs green (the real-systemd job moves to Phase 8, R38 item 16).
 
 **Owner verifies:**
 1. Add an Nginx test server. Click "Discover". The list shows each website with its certificate and the days left.
