@@ -55,8 +55,8 @@ func shapeOf(key string, v any) any {
 		if p, ok := placeholders[key]; ok {
 			return p
 		}
-		if literal[key] {
-			return x
+		if literal[key] && (key != "contentType" || x == contentTypePKCS12 || x == contentTypePEM) {
+			return x // a plain secret's content type is the customer's free text
 		}
 		if key == "dns_names" {
 			return "<dns>"
@@ -79,6 +79,7 @@ func TestShapeOfKeepsNoCustomerOrKeyMaterial(t *testing.T) {
 	const doc = `{"id":"https://acme.vault.azure.net/certificates/payroll/0123456789abcdef0123456789abcdef","x5t":"c2VjcmV0","cer":"TUlJ",
 	  "value":"c2VjcmV0cGZ4","attributes":{"enabled":true,"nbf":1700000000,"recoveryLevel":"Recoverable"},
 	  "tags":{"owner-jane-doe":"finance","cost-centre":"1234"},
+	  "contentType":"my payroll export, do not share",
 	  "policy":{"x509_props":{"subject":"CN=payroll.acme.example","sans":{"dns_names":["payroll.acme.example"]}},
 	            "issuer":{"name":"AcmePrivateCA"},"key_props":{"kty":"RSA","key_size":2048}},
 	  "key":{"n":"AQAB","e":"AQAB","kid":"https://acme.vault.azure.net/keys/payroll/0123456789abcdef0123456789abcdef"},
@@ -89,10 +90,10 @@ func TestShapeOfKeepsNoCustomerOrKeyMaterial(t *testing.T) {
 	out, err := encodeShape(shapeOf("", in))
 	require.NoError(t, err)
 	got := string(out)
-	for _, leak := range []string{"acme", "payroll", "owner-jane-doe", "cost-centre", "finance", "c2VjcmV0", "TUlJ", "0123456789abcdef", "AcmePrivateCA", "db-password", "skiptoken=abc", "AQAB"} {
+	for _, leak := range []string{"acme", "payroll", "owner-jane-doe", "cost-centre", "finance", "c2VjcmV0", "TUlJ", "0123456789abcdef", "AcmePrivateCA", "payroll export", "db-password", "skiptoken=abc", "AQAB"} {
 		assert.NotContains(t, got, leak)
 	}
-	for _, kept := range []string{`"enabled": true`, `"nbf": 1700000000`, `"recoveryLevel": "Recoverable"`, `"kty": "RSA"`, `"key_size": 2048`, `"tags": {}`,
+	for _, kept := range []string{`"enabled": true`, `"nbf": 1700000000`, `"contentType": "<string>"`, `"recoveryLevel": "Recoverable"`, `"kty": "RSA"`, `"key_size": 2048`, `"tags": {}`,
 		"https://<vault>.vault.azure.net/certificates/<name>/<version>", "https://<vault>.vault.azure.net/secrets/<name>", `"cer": "<cer>"`} {
 		assert.Contains(t, got, kept)
 	}

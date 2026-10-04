@@ -799,6 +799,18 @@ func TestFakeReadCertificateSecretReturnsACopyPerCall(t *testing.T) {
 	assert.Equal(t, "azure.forbidden", pe.Code)
 }
 
+// goodReq is an import request the default fake accepts: a real PFX, its leaf's thumbprint, its key.
+func goodReq(t *testing.T, name string) providers.ImportRequest {
+	t.Helper()
+	_, der, pfx := selfSignedPFX(t)
+	return providers.ImportRequest{Name: name, PFX: providers.NewSecret(pfx), KeyType: "ecdsa", KeySize: 256, LeafThumbprint: azureid.ThumbprintOf(der)}
+}
+
+func withReplace(r providers.ImportRequest) providers.ImportRequest {
+	r.ReplaceExisting = true
+	return r
+}
+
 // leafTP is a valid LeafThumbprint for requests whose PFX is not a real one.
 var leafTP = strings.Repeat("ab", 20)
 
@@ -806,13 +818,14 @@ func TestFakeImportCertificate(t *testing.T) {
 	p := vaultFake()
 	s := openVault(t, p)
 	op := uuid.New()
-	pfx := []byte("not-really-a-pfx")
-	res, err := s.ImportCertificate(context.Background(), providers.ImportRequest{OperationID: op, Name: "web", PFX: providers.NewSecret(pfx), ReplaceExisting: true, LeafThumbprint: leafTP}, nil)
+	first := goodReq(t, "web")
+	first.OperationID, first.ReplaceExisting = op, true
+	res, err := s.ImportCertificate(context.Background(), first, nil)
 	require.NoError(t, err)
 	assert.Equal(t, providers.ImportCreated, res.Outcome)
 	require.NoError(t, res.Validate())
 	assert.Equal(t, azureid.ThumbprintOf(res.CER), res.Thumbprint, "the default thumbprint is the leaf's SHA-1, as the vault's would be")
-	other, err := s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "web", LeafThumbprint: leafTP}, nil)
+	other, err := s.ImportCertificate(context.Background(), goodReq(t, "web"), nil)
 	require.NoError(t, err)
 	assert.NotEqual(t, res.Version, other.Version, "every default import creates a new version")
 	assert.NotEqual(t, res.Thumbprint, other.Thumbprint)
@@ -828,7 +841,7 @@ func TestFakeImportCertificate(t *testing.T) {
 	assert.Equal(t, op, rec.Import.OperationID)
 	assert.True(t, rec.Import.ReplaceExisting)
 	assert.Empty(t, rec.Import.PFX.Bytes(), "the call log never keeps the PFX")
-	assert.Equal(t, pfx, []byte("not-really-a-pfx"), "the caller's bytes are untouched (the caller zeroes them)")
+	assert.NotEmpty(t, first.PFX.Bytes(), "the caller's bytes are untouched (the caller zeroes them)")
 
 	// A scripted import decides the outcome and sees the request with its PFX.
 	var seen string
@@ -858,7 +871,7 @@ func TestFakeImportUsesTheLeafOfTheRequestedPFX(t *testing.T) {
 	_, leafDER, pfx := selfSignedPFX(t)
 	p := vaultFake()
 	s := openVault(t, p)
-	res, err := s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "web", PFX: providers.NewSecret(pfx), LeafThumbprint: azureid.ThumbprintOf(leafDER)}, nil)
+	res, err := s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "web", PFX: providers.NewSecret(pfx), KeyType: "ecdsa", KeySize: 256, LeafThumbprint: azureid.ThumbprintOf(leafDER)}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, leafDER, res.CER, "a decodable PFX gives the vault's leaf")
 	assert.Equal(t, azureid.ThumbprintOf(leafDER), res.Thumbprint)
@@ -1065,32 +1078,51 @@ func TestFakeImportRefusesAnExistingNameUnlessConfirmed(t *testing.T) {
 	p := vaultFake()
 	p.Configure(func(c *fake.Config) { c.ExistingNames = []string{"Web-Cert"} })
 	s := openVault(t, p)
-	res, err := s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "web-cert", LeafThumbprint: leafTP}, nil)
+	res, err := s.ImportCertificate(context.Background(), goodReq(t, "web-cert"), nil)
 	var pe *providers.Error
 	require.ErrorAs(t, err, &pe)
 	assert.Equal(t, providers.CodeKVImportNameExists, pe.Code)
 	assert.Equal(t, providers.ImportRefused, res.Outcome)
-	res, err = s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "WEB-CERT", ReplaceExisting: true, LeafThumbprint: leafTP}, nil)
+	res, err = s.ImportCertificate(context.Background(), withReplace(goodReq(t, "WEB-CERT")), nil)
 	require.NoError(t, err)
 	assert.Equal(t, providers.ImportCreated, res.Outcome)
-	res, err = s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "new-cert", LeafThumbprint: leafTP}, nil)
+	res, err = s.ImportCertificate(context.Background(), goodReq(t, "new-cert"), nil)
 	require.NoError(t, err)
 	assert.Equal(t, providers.ImportCreated, res.Outcome)
 }
 
 func TestFakeImportValidatesTheLeafThumbprint(t *testing.T) {
-	_, leafDER, pfx := selfSignedPFX(t)
 	s := openVault(t, vaultFake())
-	for _, tp := range []string{"", strings.Repeat("AB", 20), "abc"} {
-		res, err := s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "web", PFX: providers.NewSecret(pfx), LeafThumbprint: tp}, nil)
+	refusedWith := func(name, code string, mutate func(*providers.ImportRequest)) {
+		t.Helper()
+		req := goodReq(t, "web")
+		mutate(&req)
+		res, err := s.ImportCertificate(context.Background(), req, nil)
 		var pe *providers.Error
-		require.ErrorAs(t, err, &pe, tp)
-		assert.Equal(t, providers.CodeKVImportInvalid, pe.Code)
-		assert.Equal(t, providers.ImportRefused, res.Outcome)
+		require.ErrorAs(t, err, &pe, name)
+		assert.Equal(t, code, pe.Code, name)
+		assert.Equal(t, providers.ImportRefused, res.Outcome, name)
 	}
+	for _, tp := range []string{"", strings.Repeat("AB", 20), "abc"} {
+		refusedWith(tp, providers.CodeKVImportInvalid, func(r *providers.ImportRequest) { r.LeafThumbprint = tp })
+	}
+	// What the real provider refuses before sending.
+	refusedWith("empty PFX", providers.CodeKVImportInvalid, func(r *providers.ImportRequest) { r.PFX = providers.NewSecret(nil) })
+	refusedWith("bad key type", providers.CodeKVImportInvalid, func(r *providers.ImportRequest) { r.KeyType = "dsa" })
+	refusedWith("no key type", providers.CodeKVImportInvalid, func(r *providers.ImportRequest) { r.KeyType = "" })
+	refusedWith("ecdsa 521", providers.CodeKVImportInvalid, func(r *providers.ImportRequest) { r.KeySize = 521 })
+	refusedWith("rsa 1024", providers.CodeKVImportInvalid, func(r *providers.ImportRequest) { r.KeyType, r.KeySize = "rsa", 1024 })
+	// An undecodable PFX is what the vault would answer with a 400.
+	refusedWith("undecodable PFX", "kv.import_rejected", func(r *providers.ImportRequest) { r.PFX = providers.NewSecret([]byte("not a pfx")) })
 	// A valid thumbprint of another leaf than the PFX holds is never "created".
-	res, err := s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "web", PFX: providers.NewSecret(pfx), LeafThumbprint: leafTP}, nil)
+	req := goodReq(t, "web")
+	req.LeafThumbprint = leafTP
+	res, err := s.ImportCertificate(context.Background(), req, nil)
 	require.Error(t, err)
 	assert.Equal(t, providers.ImportUncertain, res.Outcome)
-	_ = leafDER
+	// And a created result always carries the stated thumbprint.
+	ok := goodReq(t, "web")
+	res, err = s.ImportCertificate(context.Background(), ok, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ok.LeafThumbprint, res.Thumbprint)
 }

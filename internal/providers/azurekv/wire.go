@@ -69,7 +69,7 @@ func (w *wireState) begin(host string) {
 
 // bodyHandedOn records that req, which carries a body, goes to the HTTP client now.
 func (w *wireState) bodyHandedOn(req *http.Request) {
-	if w == nil || req.Body == nil || req.Body == http.NoBody || req.ContentLength == 0 {
+	if w == nil || req.Body == nil || req.Body == http.NoBody { // a body of unknown length (ContentLength 0) is sent chunked: it counts
 		return
 	}
 	w.mu.Lock()
