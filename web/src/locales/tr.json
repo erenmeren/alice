@@ -1045,8 +1045,7 @@
       "sniIp": "Bir IP adresi değil, alan adı girin.",
       "sniWildcard": "Joker karakter (*) olmadan tek bir alan adı girin.",
       "sniInvalid": "Yalnızca harf, rakam, nokta ve tire içeren bir alan adı girin. Noktalar arasındaki bir bölüm tireyle başlayıp bitemez.",
-      "notSaved": "Bu web sitesi bu sırada değiştiği için değişikliğiniz kaydedilmedi. Güncel değerler gösteriliyor. Denetleyip yeniden kaydedin.",
-      "current": "Geçerli değerler: bağlantı noktası {{port}}, ad {{sni}}"
+      "notSaved": "Bu web sitesi bu sırada değiştiği için değişikliğiniz kaydedilmedi. Güncel değerler gösteriliyor. Denetleyip yeniden kaydedin."
     }
   },
   "deploy": {
