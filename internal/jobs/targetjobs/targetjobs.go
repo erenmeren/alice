@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -177,33 +178,17 @@ func (h *handlers) testConnection(ctx context.Context, j jobs.Job, _ jobs.StepRe
 	return out, nil
 }
 
+// DiscoveryTimeout bounds the server side of one discovery job (connecting, the SSH-key scan and
+// the Nginx dump, the fallback scan included): the provider's own bounds are 10 minutes of
+// authorized_keys reading plus the command in flight (60 s), a 60 s nginx-dump and the connection,
+// so a job past this limit is stuck on a server that does not answer as it should. Storing the
+// result (Reconcile) is not under this limit. A variable so a test can shorten it.
+var DiscoveryTimeout = 20 * time.Minute
+
 func (h *handlers) discover(ctx context.Context, j jobs.Job, _ jobs.StepRecorder) (map[string]any, error) {
-	sess, t, err := h.open(ctx, j.TargetID, true, false)
+	res, req, err := h.scan(ctx, j)
 	if err != nil {
 		return nil, err
-	}
-	defer h.close(sess)
-	// A target that can discover certificates (an Nginx server) is scanned for both halves in one
-	// discovery, scheduled or not; inventory reconciles them in one transaction.
-	req := providers.DiscoverRequest{SSHKeys: true, Certificates: slices.Contains(t.Capabilities, string(providers.CapDiscoverCerts))}
-	res, err := sess.Discover(ctx, req)
-	if err != nil && req.Certificates && (isCode(err, "nginx.not_found") || isCode(err, "nginx.profile_missing")) {
-		// The certificate half cannot run, but the server's SSH keys are still scanned (inventory
-		// leaves the certificate locations as they are). Nginx not installed (or no longer): the
-		// Nginx facts say "not found". The nginx sudoers profile not installed: nothing is known of
-		// Nginx (no facts, the stored ones stay) and the warning nginx_profile_missing says why.
-		notFound := isCode(err, "nginx.not_found")
-		if res, err = sess.Discover(ctx, providers.DiscoverRequest{SSHKeys: true}); err == nil {
-			code := "nginx_profile_missing"
-			if notFound {
-				res.Nginx, code = &providers.NginxFacts{}, "nginx_not_found"
-			}
-			res.Warnings = append(res.Warnings, providers.Warning{Code: code, Params: map[string]string{}})
-		}
-	}
-	if err != nil {
-		h.recordFailure(ctx, j.TargetID, err)
-		return nil, jobs.FromProvider(err)
 	}
 	// The scan is stored only while this run still holds the job (inventory.Claim): a run that
 	// stalled past its lease must not write an old scan over a newer one (a false changed-outside
@@ -224,6 +209,44 @@ func (h *handlers) discover(ctx context.Context, j jobs.Job, _ jobs.StepRecorder
 		out["certificate_count"], out["location_count"] = sum.Certificates, sum.Locations
 	}
 	return out, nil
+}
+
+// scan runs the server side of a discovery under DiscoveryTimeout.
+func (h *handlers) scan(jobCtx context.Context, j jobs.Job) (providers.DiscoveryResult, providers.DiscoverRequest, error) {
+	ctx, cancel := context.WithTimeout(jobCtx, DiscoveryTimeout)
+	defer cancel()
+	sess, t, err := h.open(ctx, j.TargetID, true, false)
+	if err != nil {
+		return providers.DiscoveryResult{}, providers.DiscoverRequest{}, err
+	}
+	defer h.close(sess)
+	// A target that can discover certificates (an Nginx server) is scanned for both halves in one
+	// discovery, scheduled or not; inventory reconciles them in one transaction.
+	req := providers.DiscoverRequest{SSHKeys: true, Certificates: slices.Contains(t.Capabilities, string(providers.CapDiscoverCerts))}
+	res, err := sess.Discover(ctx, req)
+	if err != nil && req.Certificates && (isCode(err, "nginx.not_found") || isCode(err, "nginx.profile_missing")) {
+		// The certificate half cannot run, but the server's SSH keys are still scanned (inventory
+		// leaves the certificate locations as they are). Nginx not installed (or no longer): the
+		// Nginx facts say "not found". The nginx sudoers profile not installed: nothing is known of
+		// Nginx (no facts, the stored ones stay) and the warning nginx_profile_missing says why.
+		notFound := isCode(err, "nginx.not_found")
+		if res, err = sess.Discover(ctx, providers.DiscoverRequest{SSHKeys: true}); err == nil {
+			code := "nginx_profile_missing"
+			if notFound {
+				res.Nginx, code = &providers.NginxFacts{}, "nginx_not_found"
+			}
+			res.Warnings = append(res.Warnings, providers.Warning{Code: code, Params: map[string]string{}})
+		}
+	}
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) && jobCtx.Err() == nil {
+		// The job's own limit, not the server's answer: retried like a timeout.
+		return res, req, jobs.Retry("ssh.timeout", nil, err)
+	}
+	if err != nil {
+		h.recordFailure(jobCtx, j.TargetID, err)
+		return res, req, jobs.FromProvider(err)
+	}
+	return res, req, nil
 }
 
 // isCode reports whether err is a provider error with the reason code.

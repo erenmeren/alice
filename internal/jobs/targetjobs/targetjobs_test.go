@@ -624,3 +624,53 @@ func TestDiscoverWithoutNginxStillScansSSHKeys(t *testing.T) {
 	assert.Len(t, reqs, 1, "any other failure of the certificate half fails the job")
 	assert.Empty(t, inv.reconciled)
 }
+
+// blockingProvider's sessions block in Discover until the context ends and record its deadline.
+type blockingProvider struct {
+	*fake.Provider
+	deadlines *[]time.Time
+}
+
+type blockingSession struct {
+	providers.Session
+	deadlines *[]time.Time
+}
+
+func (p blockingProvider) Open(ctx context.Context, t providers.TargetRef, c providers.CredentialSource, e providers.Env) (providers.Session, error) {
+	s, err := p.Provider.Open(ctx, t, c, e)
+	if err != nil {
+		return nil, err
+	}
+	return blockingSession{s, p.deadlines}, nil
+}
+
+func (s blockingSession) Discover(ctx context.Context, _ providers.DiscoverRequest) (providers.DiscoveryResult, error) {
+	d, _ := ctx.Deadline()
+	*s.deadlines = append(*s.deadlines, d)
+	<-ctx.Done()
+	return providers.DiscoveryResult{}, ctx.Err()
+}
+
+// AUD-04(a): a discovery job's server side has its own time limit (DiscoveryTimeout); a server that
+// keeps the scan busy past it ends the run as a retryable timeout, and nothing is stored.
+func TestDiscoveryHasAJobTimeLimit(t *testing.T) {
+	old := DiscoveryTimeout
+	DiscoveryTimeout = 50 * time.Millisecond
+	defer func() { DiscoveryTimeout = old }()
+	u := newUnit(t, false, false)
+	var deadlines []time.Time
+	reg := providers.NewRegistry()
+	reg.Register(blockingProvider{u.prov, &deadlines})
+	reg.Freeze()
+	u.h.d.Registry = reg
+	started := time.Now()
+	_, err := u.h.discover(context.Background(), jobs.Job{ID: uuid.New(), Type: jobs.TargetDiscover, TargetID: uuid.New(), Attempt: 1}, nil)
+	assert.Less(t, time.Since(started), 5*time.Second)
+	r, c := reason(t, err)
+	assert.Equal(t, "ssh.timeout", r)
+	assert.Equal(t, jobs.Retryable, c)
+	require.Len(t, deadlines, 1)
+	assert.False(t, deadlines[0].IsZero(), "the scan runs under a deadline")
+	assert.Empty(t, u.inv.reconciled, "nothing is stored")
+	assert.Equal(t, 20*time.Minute, old, "sized above the provider's own bounds (10 min reading + commands)")
+}
