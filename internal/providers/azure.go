@@ -2,12 +2,14 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 
+	"alice/internal/platform/azureid"
 	"alice/internal/secrets"
 )
 
@@ -87,6 +89,11 @@ type ImportRequest struct {
 	PFX         secrets.Plaintext `json:"-"` // the caller zeroes it
 	KeyType     string            // "rsa" | "ecdsa"
 	KeySize     int               // RSA bits, or 256/384 for ECDSA
+	// LeafThumbprint is the hex SHA-1 (40 lower-case digits) of the leaf certificate inside PFX,
+	// set by the caller from the leaf it validated. The provider never decodes the PFX: it sends it,
+	// and accepts "created" only for an answer whose certificate has exactly this thumbprint (a
+	// wrong value fails safe: the import is then never "created").
+	LeafThumbprint string
 	// ReplaceExisting is the Administrator's explicit confirmation that Name may already exist in
 	// the vault: an import then adds a version, replaces the certificate's policy and can switch
 	// off the vault's own renewal (ruling S9). A provider that finds Name in the vault while this
@@ -103,6 +110,18 @@ func (r ImportRequest) Format(f fmt.State, _ rune) { _, _ = fmt.Fprint(f, r.reda
 
 // LogValue keeps the PFX out of slog output.
 func (r ImportRequest) LogValue() slog.Value { return slog.StringValue(r.redacted()) }
+
+// ErrImportRequest is the cause of a request Validate refuses.
+var ErrImportRequest = errors.New("providers: the import request is not valid")
+
+// Validate checks what every provider needs before it sends anything: a valid object name and a
+// LeafThumbprint in the stored form (40 lower-case hex digits).
+func (r ImportRequest) Validate() error {
+	if !azureid.ValidObjectName(r.Name) || !azureid.ValidThumbprint(r.LeafThumbprint) {
+		return ErrImportRequest
+	}
+	return nil
+}
 
 // Zero clears the PFX in place.
 func (r ImportRequest) Zero() { r.PFX.Zero() }

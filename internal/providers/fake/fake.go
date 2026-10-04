@@ -565,7 +565,7 @@ func (s *session) ImportCertificate(ctx context.Context, req providers.ImportReq
 		out, err = providers.ImportResult{Outcome: providers.ImportRefused}, providers.NewError("azure.unreachable", true, nil, nil)
 		mustHonour("ImportCertificate", providers.CheckImportReturn(out, err))
 		return out, err
-	case !azureid.ValidObjectName(req.Name):
+	case req.Validate() != nil:
 		out, err = providers.ImportResult{Outcome: providers.ImportRefused}, providers.NewError(providers.CodeKVImportInvalid, false, nil, nil)
 		mustHonour("ImportCertificate", providers.CheckImportReturn(out, err))
 		return out, err
@@ -576,9 +576,18 @@ func (s *session) ImportCertificate(ctx context.Context, req providers.ImportReq
 		out, err = providers.ImportResult{Outcome: providers.ImportRefused}, providers.NewError(providers.CodeKVImportNameExists, false, nil, nil)
 	} else {
 		out = defaultImport(req)
+		if out.Outcome == providers.ImportCreated && out.Thumbprint != req.LeafThumbprint && decodes(req) {
+			// A caller that names another leaf than the PFX holds: never "created" (fail safe).
+			out, err = providers.ImportResult{Outcome: providers.ImportUncertain}, providers.NewError("azure.unexpected_response", true, providers.ErrUnexpectedAnswer, nil)
+		}
 	}
 	mustHonour("ImportCertificate", providers.CheckImportReturn(out, err))
 	return out, err
+}
+
+func decodes(req providers.ImportRequest) bool {
+	_, leaf, _, err := pkcs12.DecodeChain(req.PFX.Bytes(), "")
+	return err == nil && leaf != nil
 }
 
 // defaultImport answers like a vault that accepts the request: a new version whose leaf is the one

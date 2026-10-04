@@ -30,11 +30,20 @@ func testPFX(t testing.TB, kt pki.KeyType) ([]byte, pki.Leaf) {
 	leaf := ca.Issue(pki.Opts{CommonName: "imported.example.test", KeyType: kt}, time.Now())
 	pfx, err := pkcs12.LegacyDES.Encode(leaf.Key, leaf.Cert, []*x509.Certificate{ca.Intermediate}, "")
 	require.NoError(t, err)
+	pfxThumbs.Store(string(pfx), azureid.ThumbprintOf(leaf.Cert.Raw))
 	return pfx, leaf
 }
 
+// pfxThumbs remembers the leaf thumbprint of each test PFX: the caller states it (C1).
+var pfxThumbs sync.Map
+
 func importReq(name string, pfx []byte, kt string, size int) providers.ImportRequest {
-	return providers.ImportRequest{OperationID: uuid.New(), Name: name, PFX: providers.NewSecret(append([]byte(nil), pfx...)), KeyType: kt, KeySize: size}
+	tp, ok := pfxThumbs.Load(string(pfx))
+	if !ok {
+		tp = strings.Repeat("ab", 20) // a PFX that was not built here: any valid thumbprint
+	}
+	return providers.ImportRequest{OperationID: uuid.New(), Name: name, PFX: providers.NewSecret(append([]byte(nil), pfx...)), KeyType: kt, KeySize: size,
+		LeafThumbprint: tp.(string)}
 }
 
 type stepLog struct {
@@ -151,28 +160,31 @@ func TestImportRequestBody(t *testing.T) {
 	assert.Nil(t, got.CertificatePolicy.KeyProperties.KeySize)
 }
 
+func withThumb(r providers.ImportRequest, tp string) providers.ImportRequest {
+	r.LeafThumbprint = tp
+	return r
+}
+
 func TestImportRefusesInvalidRequestsBeforeSending(t *testing.T) {
 	w := newWorld(t, fakekv.Options{})
 	pfx, _ := testPFX(t, pki.ECDSA256)
 	rsa, _ := testPFX(t, pki.RSA2048)
-	p521, _ := testPFX(t, pki.ECDSA521)
 	cases := map[string]providers.ImportRequest{
 		"empty name":            importReq("", pfx, "ecdsa", 256),
 		"name with a space":     importReq("a b", pfx, "ecdsa", 256),
 		"name with a slash":     importReq("a/b", pfx, "ecdsa", 256),
 		"name too long":         importReq(strings.Repeat("a", 128), pfx, "ecdsa", 256),
 		"empty PFX":             importReq("c", nil, "ecdsa", 256),
-		"garbage PFX":           importReq("c", []byte("not a pfx"), "ecdsa", 256),
+		"no thumbprint":         withThumb(importReq("c", pfx, "ecdsa", 256), ""),
+		"upper-case thumbprint": withThumb(importReq("c", pfx, "ecdsa", 256), strings.Repeat("AB", 20)),
+		"short thumbprint":      withThumb(importReq("c", pfx, "ecdsa", 256), strings.Repeat("a", 39)),
 		"PFX above the bound":   importReq("c", make([]byte, maxImportPFX+1), "ecdsa", 256),
 		"unknown key type":      importReq("c", pfx, "dsa", 256),
 		"ecdsa size 521":        importReq("c", pfx, "ecdsa", 521),
-		"a P-521 key":           importReq("c", p521, "ecdsa", 521),
 		"rsa size 1024":         importReq("c", rsa, "rsa", 1024),
 		"rsa size above 16384":  importReq("c", rsa, "rsa", 16385),
 		"rsa size beyond int32": importReq("c", rsa, "rsa", 1<<40),
 		"negative size":         importReq("c", rsa, "rsa", -2048),
-		"key type of the PFX":   importReq("c", pfx, "rsa", 2048),
-		"key size of the PFX":   importReq("c", pfx, "ecdsa", 384),
 	}
 	for name, req := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -422,4 +434,17 @@ func TestImportFailsBeforeTheSend(t *testing.T) {
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.Equal(t, 1, w.posts())
 	})
+}
+
+// C1: the caller states the leaf's thumbprint. A wrong statement can never produce "created": the
+// vault carries the import out, the answer's certificate is not the stated one, the outcome is
+// uncertain (and a poll that sees the real thumbprint settles it).
+func TestImportWithAWrongLeafThumbprintIsNeverCreated(t *testing.T) {
+	w := newWorld(t, fakekv.Options{})
+	pfx, _ := testPFX(t, pki.ECDSA256)
+	res, err := w.doImport(t, context.Background(), withThumb(importReq("new-cert", pfx, "ecdsa", 256), strings.Repeat("cd", 20)), nil)
+	require.Error(t, err)
+	assert.Equal(t, providers.ImportUncertain, res.Outcome)
+	assert.Equal(t, codeUnexpected, asProviderError(t, err).Code)
+	assert.Len(t, w.s.Versions("new-cert"), 1, "the vault did carry it out")
 }

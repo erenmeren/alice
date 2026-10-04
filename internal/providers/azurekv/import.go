@@ -2,14 +2,11 @@ package azurekv
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/rsa"
 	"encoding/base64"
 	"slices"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates"
-	"software.sslmate.com/src/go-pkcs12"
 
 	"alice/internal/platform/azureid"
 	"alice/internal/providers"
@@ -20,39 +17,30 @@ import (
 // base64).
 const maxImportPFX = 192 << 10
 
-// importPlan is what a valid request says, read from the PFX itself.
+// importPlan is what a valid request says: the key policy to send and the thumbprint the answer must carry.
 type importPlan struct {
-	thumb string // SHA-1 of the leaf that is sent
+	thumb string // SHA-1 of the leaf that is sent, as the caller stated it
 	kty   azcertificates.KeyType
 	crv   *azcertificates.CurveName
 	size  *int32 // RSA bits
 }
 
-// planImport validates the request without sending anything and reads the leaf and the key type of
-// the PFX. The parsed key objects cannot be zeroed (a known residual next to the SDK's copies); only
-// the leaf's thumbprint is kept.
+// planImport validates the request without sending anything. The PFX is not decoded here (the
+// caller states its leaf's thumbprint and key type and size): a wrong statement can only make the
+// vault refuse the import or this provider refuse to call it "created".
 func planImport(req providers.ImportRequest) (importPlan, bool) {
 	var p importPlan
-	if !azureid.ValidObjectName(req.Name) || len(req.PFX.Bytes()) == 0 || len(req.PFX.Bytes()) > maxImportPFX {
+	if req.Validate() != nil || len(req.PFX.Bytes()) == 0 || len(req.PFX.Bytes()) > maxImportPFX {
 		return p, false
 	}
-	key, leaf, _, err := pkcs12.DecodeChain(req.PFX.Bytes(), "")
-	if err != nil || leaf == nil {
-		return p, false
-	}
-	switch k := key.(type) {
-	case *rsa.PrivateKey:
-		bits := k.N.BitLen()
-		if req.KeyType != "rsa" || req.KeySize != bits || bits < 2048 || bits > 16384 {
+	switch req.KeyType {
+	case "rsa":
+		if req.KeySize < 2048 || req.KeySize > 16384 {
 			return p, false
 		}
-		p.kty, p.size = azcertificates.KeyTypeRSA, to.Ptr(int32(bits)) //nolint:gosec // G115: 2048..16384 checked above
-	case *ecdsa.PrivateKey:
-		bits := k.Curve.Params().BitSize
-		if req.KeyType != "ecdsa" || req.KeySize != bits {
-			return p, false
-		}
-		switch bits {
+		p.kty, p.size = azcertificates.KeyTypeRSA, to.Ptr(int32(req.KeySize)) //nolint:gosec // G115: 2048..16384 checked above
+	case "ecdsa":
+		switch req.KeySize {
 		case 256:
 			p.crv = to.Ptr(azcertificates.CurveNameP256)
 		case 384:
@@ -64,7 +52,7 @@ func planImport(req providers.ImportRequest) (importPlan, bool) {
 	default:
 		return p, false
 	}
-	p.thumb = azureid.ThumbprintOf(leaf.Raw)
+	p.thumb = req.LeafThumbprint
 	return p, true
 }
 
@@ -100,7 +88,7 @@ func importUncertain(err error) (providers.ImportResult, error) {
 // import then adds a version to a certificate that appeared meanwhile.
 //
 // req.PFX is the caller's: it is neither kept nor zeroed here. The base64 text is built in a buffer
-// Alice zeroes; the Go string the SDK needs, its request body and the parsed key (planImport) are
+// Alice zeroes; the Go string the SDK needs, its request body and the PFX in memory are
 // copies Alice cannot zero.
 func (s *session) ImportCertificate(ctx context.Context, req providers.ImportRequest, steps providers.StepLogger) (providers.ImportResult, error) {
 	if ctx.Err() != nil { // nothing was sent: not "uncertain", which would block the name for 24 hours

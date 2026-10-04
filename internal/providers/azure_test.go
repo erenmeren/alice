@@ -66,6 +66,24 @@ func TestCertificateSecretAndImportRequestNeverPrint(t *testing.T) {
 	assert.Equal(t, make([]byte, len(value)), req.PFX.Bytes())
 }
 
+func TestImportRequestValidate(t *testing.T) {
+	good := providers.ImportRequest{Name: "web-cert", LeafThumbprint: strings.Repeat("ab", 20)}
+	require.NoError(t, good.Validate())
+	for name, mut := range map[string]func(*providers.ImportRequest){
+		"no thumbprint":     func(r *providers.ImportRequest) { r.LeafThumbprint = "" },
+		"upper case":        func(r *providers.ImportRequest) { r.LeafThumbprint = strings.Repeat("AB", 20) },
+		"short":             func(r *providers.ImportRequest) { r.LeafThumbprint = strings.Repeat("a", 39) },
+		"not hex":           func(r *providers.ImportRequest) { r.LeafThumbprint = strings.Repeat("g", 40) },
+		"colons":            func(r *providers.ImportRequest) { r.LeafThumbprint = strings.Repeat("ab:", 13) + "a" },
+		"empty name":        func(r *providers.ImportRequest) { r.Name = "" },
+		"name with a slash": func(r *providers.ImportRequest) { r.Name = "a/b" },
+	} {
+		r := good
+		mut(&r)
+		require.ErrorIs(t, r.Validate(), providers.ErrImportRequest, name)
+	}
+}
+
 func TestNewSecretHoldsTheBytes(t *testing.T) {
 	b := []byte("x")
 	s := providers.NewSecret(b)

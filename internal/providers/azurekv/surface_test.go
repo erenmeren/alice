@@ -58,6 +58,7 @@ const (
 	azidentityPath = "github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	azcoreLogPath  = "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	msalPath       = "github.com/AzureAD/microsoft-authentication-library-for-go"
+	pkcs12Path     = "software.sslmate.com/src/go-pkcs12"
 	sdkPrefix      = "github.com/Azure/azure-sdk-for-go/sdk/"
 	azcorePath     = sdkPrefix + "azcore"
 	azcorePolicy   = azcorePath + "/policy"
@@ -109,6 +110,9 @@ func scanSource(rel, src string) []string {
 		}
 		if isTest {
 			continue
+		}
+		if inKV && p == pkcs12Path {
+			add("imports go-pkcs12: the provider never decodes a PFX (the caller states the leaf's thumbprint)")
 		}
 		switch {
 		case p == azcoreLogPath || strings.HasPrefix(p, azcoreLogPath+"/"):
@@ -281,6 +285,9 @@ var _ = new(http.Client)`, "http.Client outside transport.go"},
 		{"skip verify in this package", kv, `package p
 import "crypto/tls"
 var _ = tls.Config{InsecureSkipVerify: true}`, "InsecureSkipVerify"},
+		{"the provider decoding a PFX", kv, `package p
+import "software.sslmate.com/src/go-pkcs12"
+var _ = pkcs12.DecodeChain`, "go-pkcs12"},
 		{"unparsable file", "x/y.go", `package p func`, "does not parse"},
 	}
 	for _, tc := range cases {
@@ -305,6 +312,12 @@ var _ = new(http.Transport)`), "transport.go builds the HTTP clients")
 	assert.Empty(t, scanSource(azurekvDir+"identity.go", `package p
 import "github.com/Azure/azure-sdk-for-go/sdk/azcore"
 var _ = azcore.ClientOptions{}`), "identity.go builds the options")
+	assert.Empty(t, scanSource(azurekvDir+"x_test.go", `package p
+import "software.sslmate.com/src/go-pkcs12"
+var _ = pkcs12.Modern`), "tests build PFX files")
+	assert.Empty(t, scanSource("internal/certs/x.go", `package p
+import "software.sslmate.com/src/go-pkcs12"
+var _ = pkcs12.Modern`), "only azurekv is held to it")
 	assert.Empty(t, scanSource("x/y_test.go", `package p
 import "github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 var _, _ = azidentity.NewClientSecretCredential("", "", "", nil)`), "tests may build credentials")
