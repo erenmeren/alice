@@ -395,7 +395,7 @@ result `denied` and the reason `busy`. When those 10 minutes end (or Alice stops
 arrives), one more entry of the same action records how many were left out: `suppressed_count`, `window_start`
 and `window_end` in its details, and what the left-out refusals varied in: `distinct_ip_count` with up to three
 addresses in `ip_samples`, `distinct_object_count` (for example how many user IDs were asked for) and
-`distinct_token_count` (a count of 256 or more is written as `256+`). That entry has no address, request ID or
+`distinct_token_count` (a count above 64 is written as `64+`). That entry has no address, request ID or
 object ID: it stands for many requests. Counts not yet written when the Alice process dies are lost, and each
 Alice process counts its own refusals.
 

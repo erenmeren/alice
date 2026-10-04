@@ -354,3 +354,21 @@ func TestDistinctSetIsBounded(t *testing.T) {
 	assert.Len(t, d.seen, maxDistinct)
 	assert.Equal(t, strconv.Itoa(maxDistinct)+"+", d.count())
 }
+
+// The busy refusal of a chain scan is keyed and labelled by exportRoute / verifyRoute: they must
+// name exactly the operations of the route table (method, pattern, permission), or a refusal would
+// be recorded under a route that does not exist.
+func TestChainScanRoutesMatchTheRouteTable(t *testing.T) {
+	s := &server{}
+	for _, want := range []route{exportRoute, verifyRoute} {
+		var found []route
+		for _, rt := range s.apiRoutes() {
+			if rt.method == want.method && rt.pattern == want.pattern {
+				found = append(found, rt)
+			}
+		}
+		require.Len(t, found, 1, "%s %s in the route table", want.method, want.pattern)
+		assert.Equal(t, want.perm, found[0].perm, "%s %s permission", want.method, want.pattern)
+	}
+	assert.Equal(t, 64, maxDistinct, "distinct counts read 64+ beyond the bound")
+}

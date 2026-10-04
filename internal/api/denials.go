@@ -35,8 +35,9 @@ const (
 	// denialSweepInterval is how often RunDenialSummaries looks for windows that have ended.
 	denialSweepInterval = time.Minute
 	// maxDistinct bounds each distinct-value set of a window; beyond it the count is written as
-	// "<maxDistinct>+".
-	maxDistinct = 256
+	// "<maxDistinct>+" ("64+": more than 64). Three sets of at most 64 hashes per open window keep the
+	// coalescer's memory small at maxDenialKeys windows.
+	maxDistinct = 64
 	// maxIPSamples is how many client addresses a summary names.
 	maxIPSamples = 3
 )

@@ -1702,7 +1702,7 @@ components:
             refusals left out, one more entry of the same action follows with suppressed_count (how many),
             window_start and window_end (RFC 3339), distinct_ip_count and ip_samples (up to three addresses,
             comma-separated), and where they apply distinct_object_count and distinct_token_count (a count
-            of 256 or more reads "256+"); it has no ip, request_id or object_id.
+            above 64 reads "64+"); it has no ip, request_id or object_id.
         request_id: { type: string }
         hash: { type: string, description: Hex SHA-256 of this entry in the chain }
     AuditReport:
