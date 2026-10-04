@@ -425,6 +425,11 @@
         "title": "The server could not complete the file work. Nothing was changed.",
         "cause": "alice-helper reported an input or output error before it replaced any file, for example a folder it cannot write, a read-only file system, or Nginx stopping while it was checked.",
         "action": "Check the server's disks and certificate folders, then deploy again."
+      },
+      "not_running": {
+        "title": "Nginx is not running on the server. Nothing was changed.",
+        "cause": "alice-helper checks before it changes any file that systemctl exists and that the nginx service is active; otherwise a reload could not apply the new certificate.",
+        "action": "Run systemctl status nginx on the server, start Nginx (systemctl start nginx), then deploy again."
       }
     },
     "certificate": {

@@ -121,6 +121,9 @@ var (
 	// ErrNginxIOError replaces the plan's nginx.write_failed (never produced): nginx-deploy's
 	// IO_ERROR, whose causes the helper's answer does not tell apart; nothing was changed.
 	ErrNginxIOError = ErrorCode{Code: "ALC-NGX-0009", Reason: "nginx.io_error", Status: http.StatusBadGateway, Retryable: true}
+	// ErrNginxNotRunning: nginx-deploy refused before writing anything because systemctl is missing or
+	// the nginx unit is not active (a reload could not apply the files).
+	ErrNginxNotRunning = ErrorCode{Code: "ALC-NGX-0010", Reason: "nginx.not_running", Status: http.StatusBadGateway}
 
 	ErrCertInvalid            = ErrorCode{Code: "ALC-CRT-0001", Reason: "certificate.invalid", Status: http.StatusUnprocessableEntity}
 	ErrCertKeyMismatch        = ErrorCode{Code: "ALC-CRT-0002", Reason: "certificate.key_mismatch", Status: http.StatusUnprocessableEntity}
@@ -187,7 +190,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrOwnKeyProtected, ErrLastRootKey, ErrKeyNotRemovable, ErrSSHDUnreadable, ErrKeyVerifyFailed,
 		ErrJobNotWaiting, ErrJobLeaseExpired, ErrJobTampered, ErrJobUnknownType, ErrJobConflict,
 		ErrNginxNotFound, ErrNginxConfigInvalid, ErrNginxConfigChanged, ErrNginxProfileMissing, ErrNginxNoSpace,
-		ErrNginxFileChanged, ErrNginxLocationUnsupported, ErrNginxBusy, ErrNginxIOError,
+		ErrNginxFileChanged, ErrNginxLocationUnsupported, ErrNginxBusy, ErrNginxIOError, ErrNginxNotRunning,
 		ErrCertInvalid, ErrCertKeyMismatch, ErrCertExpired, ErrCertKeyEncrypted, ErrCertPFXPassword, ErrCertWeak,
 		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
 		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,

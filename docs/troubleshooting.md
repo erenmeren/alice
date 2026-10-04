@@ -856,6 +856,14 @@ and without the confirmation for root's last key.
 
 **What to do.** Check the server's disks and certificate folders, then deploy again.
 
+## ALC-NGX-0010: Nginx not running
+
+**Meaning.** Nginx is not running on the server. Nothing was changed. (HTTP 502, reason `nginx.not_running`.)
+
+**Likely cause.** `alice-helper` checks before it changes any file that `/usr/bin/systemctl` exists and that `systemctl is-active nginx` succeeds; otherwise a reload could not apply the new certificate. Nginx was stopped or failed, or the server does not use systemd.
+
+**What to do.** Run `systemctl status nginx` on the server, start Nginx (`systemctl start nginx`), then deploy again.
+
 ## ALC-CRT-0001: Not a readable certificate
 
 **Meaning.** This is not a certificate Alice can read. (HTTP 422, reason `certificate.invalid`.)

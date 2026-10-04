@@ -425,6 +425,11 @@
         "title": "Sunucu dosya işlemlerini tamamlayamadı. Hiçbir şey değiştirilmedi.",
         "cause": "alice-helper, hiçbir dosyayı değiştirmeden önce bir giriş/çıkış hatası bildirdi; örneğin yazılamayan bir klasör, salt okunur bir dosya sistemi ya da denetim sırasında duran Nginx.",
         "action": "Sunucunun disklerini ve sertifika klasörlerini denetleyin, sonra yeniden dağıtın."
+      },
+      "not_running": {
+        "title": "Sunucuda Nginx çalışmıyor. Hiçbir şey değiştirilmedi.",
+        "cause": "alice-helper, herhangi bir dosyayı değiştirmeden önce systemctl'nin bulunduğunu ve nginx hizmetinin etkin olduğunu denetler; aksi halde yeniden yükleme yeni sertifikayı uygulayamazdı.",
+        "action": "Sunucuda systemctl status nginx komutunu çalıştırın, Nginx'i başlatın (systemctl start nginx), sonra yeniden dağıtın."
       }
     },
     "certificate": {
