@@ -13,6 +13,7 @@ import (
 
 	"alice/internal/audit"
 	"alice/internal/platform/db"
+	"alice/internal/platform/validate"
 )
 
 // failureDelay returns how long an account is blocked after its n-th consecutive failure,
@@ -162,6 +163,10 @@ func (s *Service) auditFailure(ctx context.Context, tx pgx.Tx, actor audit.Actor
 	return err
 }
 
+// unstorableLoginName stands in for a typed name PostgreSQL cannot store (AUD-13). It is outside
+// the username grammar (usernameRE), so no account can ever match it.
+const unstorableLoginName = "\uFFFD"
+
 // loginNameLockNamespace is the first key of the per-name advisory lock Login takes
 // (pg_advisory_xact_lock(int4, int4)); the two-key form is a separate key space from
 // the audit chain's single bigint key.
@@ -223,6 +228,12 @@ func (s *Service) credentialTx(ctx context.Context, fn func(tx pgx.Tx) error) er
 // requests cannot tell the two apart by how they overlap (SEC-004, AUD-11). Attempts on
 // different names are not serialized.
 func (s *Service) Login(ctx context.Context, username, password string, m Meta) (LoginResult, error) {
+	if !validate.StorableText(username) {
+		// AUD-13: PostgreSQL cannot hold this name (NUL or invalid UTF-8), so it never reaches a
+		// query; no account can have it, so it is an unknown user, with the same work and audit row.
+		// The HTTP layer refuses such a body before calling Login; this covers every other caller.
+		username = unstorableLoginName
+	}
 	pw := NormalizePassword(password)
 	var (
 		res    LoginResult

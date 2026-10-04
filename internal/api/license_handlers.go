@@ -1,8 +1,10 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
+	"alice/internal/audit"
 	"alice/internal/license"
 	"alice/internal/rbac"
 )
@@ -54,18 +56,41 @@ type licenseUpload struct {
 	License string `json:"license"`
 }
 
-// decodeLicense reads a license upload body; on failure it has answered the request.
-func (s *server) decodeLicense(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+// decodeLicense reads a license upload body; on failure it has answered the request. install is
+// true for an upload (not a preview): a file refused at the edge because its text holds NUL is
+// audited like any file the license module cannot read (S9).
+func (s *server) decodeLicense(w http.ResponseWriter, r *http.Request, install bool) ([]byte, bool) {
 	var req licenseUpload
-	if !s.decodeLimit(w, r, &req, license.MaxFileSize) {
+	if err := readJSON(w, r, &req, license.MaxFileSize, false); err != nil {
+		if install && errors.Is(err, errUnstorableText) {
+			s.auditUnreadableLicense(r)
+		}
+		s.refuseBody(w, r, err)
 		return nil, false
 	}
 	return []byte(req.License), true
 }
 
+// auditUnreadableLicense writes the row the license module writes for a file that is not valid
+// text (license.upload.invalid, problem "encoding"), for an upload refused before the module saw it
+// (S9, AUD-13). The history row of the module is not written: no file reached it. Failures to write
+// are logged, never shown to the caller.
+func (s *server) auditUnreadableLicense(r *http.Request) {
+	ev := audit.Event{
+		Actor:      principalFrom(r.Context()).Actor(s.meta(r)),
+		Action:     "license.upload.invalid", // "license.upload." + license.RejectReason of an *InvalidError
+		ObjectType: "license",
+		Result:     audit.Failure,
+		Details:    map[string]string{"reason": "invalid", "problem": "encoding"},
+	}
+	if err := s.deps.Audit.Write(r.Context(), ev); err != nil {
+		s.deps.Log.Error("audit write failed", append([]any{"request_id", RequestID(r.Context()), "action", ev.Action}, errorAttrs(err)...)...)
+	}
+}
+
 // licensePreview checks a file and says what uploading it would do, storing nothing (§19.1).
 func (s *server) licensePreview(w http.ResponseWriter, r *http.Request) {
-	raw, ok := s.decodeLicense(w, r)
+	raw, ok := s.decodeLicense(w, r, false)
 	if !ok {
 		return
 	}
@@ -80,7 +105,7 @@ func (s *server) licensePreview(w http.ResponseWriter, r *http.Request) {
 // licenseInstall stores a license and puts it into effect at once. The license module
 // audits accepted and refused uploads; refusals answer with a fixed code and never echo the file.
 func (s *server) licenseInstall(w http.ResponseWriter, r *http.Request) {
-	raw, ok := s.decodeLicense(w, r)
+	raw, ok := s.decodeLicense(w, r, true)
 	if !ok {
 		return
 	}

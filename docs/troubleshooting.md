@@ -224,11 +224,11 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 
 ## ALC-SYS-0004: Request could not be read
 
-**Meaning.** The request body is not valid JSON, contains fields the endpoint does not accept, or has data after the JSON value (HTTP 400).
+**Meaning.** The request body is not valid JSON, contains fields the endpoint does not accept, or has data after the JSON value (HTTP 400). The same answer refuses text Alice cannot store: a query parameter (name or value) holding a NUL character or bytes that are not valid UTF-8, or a JSON body whose text holds the escape `\u0000`. Then `details` names the parameter (or `query` when the name itself is the problem) or `body`, with the code `validation.pattern`; the value is never repeated. Such a sign-in is not an attempt and is not audited; such a license upload is audited as `license.upload.invalid` (problem `encoding`).
 
-**Likely cause.** An outdated browser tab after an upgrade, or an API client sending extra or misspelled fields.
+**Likely cause.** An outdated browser tab after an upgrade, an API client sending extra or misspelled fields, or a client that sends binary data as text.
 
-**What to do.** Reload the page. API users: compare the request with the schemas in `api/openapi.yaml`; unknown fields are always rejected.
+**What to do.** Reload the page. API users: compare the request with the schemas in `api/openapi.yaml`; unknown fields are always rejected. Send binary content (a PFX file) base64-encoded in its documented field, and query values percent-encoded as UTF-8.
 
 ## ALC-SYS-0005: Too many requests
 

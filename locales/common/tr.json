@@ -32,7 +32,7 @@
       },
       "bad_request": {
         "title": "Alice bu isteği okuyamadı.",
-        "cause": "İstek eksikti ya da Alice'in tanımadığı alanlar içeriyordu.",
+        "cause": "İstek eksikti, Alice'in tanımadığı alanlar içeriyordu ya da Alice'in saklayamayacağı bir metin (NUL karakteri veya geçersiz UTF-8) taşıyordu.",
         "action": "Sayfayı yenileyip tekrar deneyin. API kullanıyorsanız isteği API belgelerine göre kontrol edin."
       },
       "body_too_large": {

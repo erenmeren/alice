@@ -417,6 +417,15 @@ func encodeCursor(at time.Time, id uuid.UUID) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(at.UTC().UnixMicro(), 10) + "." + id.String()))
 }
 
+// cursorMinMicros and cursorMaxMicros bound the time of a list cursor (AUD-13): years 0000 to 9999,
+// every time a list can hand out (a certificate's NotAfter is an X.509 time, years 0000-9999 and
+// from 1950 for UTCTime, so it may lie before 1970: D19; first sightings and deployments are recent).
+// PostgreSQL timestamptz holds the whole range; a time outside it never reaches a query.
+var (
+	cursorMinMicros = time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro()
+	cursorMaxMicros = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro() - 1
+)
+
 func decodeCursor(c string) (time.Time, uuid.UUID, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(c)
 	if err != nil {
@@ -425,7 +434,7 @@ func decodeCursor(c string) (time.Time, uuid.UUID, error) {
 	micros, rest, ok := strings.Cut(string(raw), ".")
 	n, err1 := strconv.ParseInt(micros, 10, 64)
 	id, err2 := uuid.Parse(rest)
-	if !ok || err1 != nil || err2 != nil || id.String() != rest {
+	if !ok || err1 != nil || err2 != nil || id.String() != rest || n < cursorMinMicros || n > cursorMaxMicros {
 		return time.Time{}, uuid.Nil, errors.New("inventory: bad cursor")
 	}
 	return time.UnixMicro(n).UTC(), id, nil

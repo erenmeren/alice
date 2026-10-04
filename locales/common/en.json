@@ -32,7 +32,7 @@
       },
       "bad_request": {
         "title": "Alice could not read this request.",
-        "cause": "The request was incomplete or had fields Alice does not know.",
+        "cause": "The request was incomplete, had fields Alice does not know, or contained text Alice cannot store (a NUL character or invalid UTF-8).",
         "action": "Reload the page and try again. If you use the API, check the request against the API documentation."
       },
       "body_too_large": {

@@ -343,6 +343,13 @@ func encodeCursor(at time.Time, id uuid.UUID) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(at.UnixMicro(), 10) + "|" + id.String()))
 }
 
+// cursorMinMicros and cursorMaxMicros bound a cursor's time to years 0000-9999, which PostgreSQL
+// timestamptz holds (AUD-13): a cursor outside them is ErrBadCursor, never a database error.
+var (
+	cursorMinMicros = time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro()
+	cursorMaxMicros = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro() - 1
+)
+
 func decodeCursor(c string) (time.Time, uuid.UUID, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(c)
 	if err != nil {
@@ -353,7 +360,7 @@ func decodeCursor(c string) (time.Time, uuid.UUID, error) {
 		return time.Time{}, uuid.Nil, ErrBadCursor
 	}
 	micros, err := strconv.ParseInt(at, 10, 64)
-	if err != nil {
+	if err != nil || micros < cursorMinMicros || micros > cursorMaxMicros {
 		return time.Time{}, uuid.Nil, ErrBadCursor
 	}
 	u, err := uuid.Parse(id)

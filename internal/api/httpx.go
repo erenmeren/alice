@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -50,32 +51,43 @@ func (s *server) decodeOptionalLimit(w http.ResponseWriter, r *http.Request, dst
 }
 
 func (s *server) decodeBody(w http.ResponseWriter, r *http.Request, dst any, limit int64, optional bool) bool {
-	if r.ContentLength > limit {
-		s.writeError(w, r, ErrBodyTooLarge) // declared too large: refused unread
+	if err := readJSON(w, r, dst, limit, optional); err != nil {
+		s.refuseBody(w, r, err)
 		return false
 	}
-	body := http.MaxBytesReader(w, r.Body, limit)
-	dec := json.NewDecoder(body)
+	return true
+}
+
+// readJSON is decodeBody without the answer: errTooLarge, errUnstorableText (AUD-13) or another
+// error for a malformed body. The order is the size cap (a declared length over limit is refused
+// unread; nothing past limit is ever read), then the text check on the bytes as they are read, then
+// the DTO; a body holding the NUL escape is refused as such even when it is malformed otherwise.
+func readJSON(w http.ResponseWriter, r *http.Request, dst any, limit int64, optional bool) error {
+	if r.ContentLength > limit {
+		return errTooLarge // declared too large: refused unread
+	}
+	text := &textCheck{r: http.MaxBytesReader(w, r.Body, limit)}
+	dec := json.NewDecoder(text)
 	dec.DisallowUnknownFields()
 	err := dec.Decode(dst)
 	if optional && errors.Is(err, io.EOF) {
-		return true // no JSON value at all
+		return nil // no JSON value at all
 	}
 	if err == nil {
 		if _, tail := dec.Token(); !errors.Is(tail, io.EOF) {
 			err = errors.New("trailing data after JSON value")
 		}
 	}
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			s.writeError(w, r, ErrBodyTooLarge)
-		} else {
-			s.writeError(w, r, ErrBadRequest)
-		}
-		return false
+	var tooLarge *http.MaxBytesError
+	switch {
+	case errors.As(err, &tooLarge):
+		return errTooLarge
+	case text.found():
+		return errUnstorableText
+	case err != nil:
+		return fmt.Errorf("api: malformed body: %w", err)
 	}
-	return true
+	return nil
 }
 
 // sessionTokenFrom returns the raw session cookie value, or "".
@@ -94,7 +106,9 @@ func cookieValue(r *http.Request, name string) string {
 
 // meta collects the request facts the services record in sessions and audit events.
 func (s *server) meta(r *http.Request) auth.Meta {
-	ua := strings.ToValidUTF8(r.Header.Get("User-Agent"), "")
+	// Stored in sessions and audit rows: only text PostgreSQL can store (AUD-13; net/http already
+	// refuses control characters in header values, NUL included).
+	ua := strings.ReplaceAll(strings.ToValidUTF8(r.Header.Get("User-Agent"), ""), "\x00", "")
 	if runes := []rune(ua); len(runes) > maxUserAgent {
 		ua = string(runes[:maxUserAgent])
 	}
@@ -196,6 +210,10 @@ func (s *server) decodeExact(w http.ResponseWriter, r *http.Request, dst any, li
 		return false
 	case err != nil:
 		s.writeError(w, r, ErrBadRequest)
+		return false
+	}
+	if hasNULEscape(buf) {
+		s.refuseBody(w, r, errUnstorableText) // AUD-13: after the size cap, before the keys and the DTO
 		return false
 	}
 	_, ok := scanKeys(buf, func(k []byte, earlier []string) (string, bool) { return exactKey(k, keys, earlier) })

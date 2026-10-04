@@ -196,3 +196,18 @@ func TestRoleIsReadFromTheDatabaseOnEveryRequest(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, rbac.Auditor, e.principal(t, res.Token).Role, "SEC-017")
 }
+
+// AUD-13: a name PostgreSQL cannot store is an unknown user for callers below the HTTP layer: the
+// generic answer, the same work (slot, name lock, lookup, dummy check) and an unknown_user audit row,
+// without the name itself ever reaching a query and without counting against any account.
+func TestLoginTreatsAnUnstorableNameAsUnknown(t *testing.T) {
+	e := newEnv(t)
+	e.bootstrap(t)
+	before := e.reasons(t, "auth.login")["unknown_user"]
+	for _, name := range []string{"adm\x00in", "adm\xffin", "\x00", "admin\x00"} {
+		_, err := e.svc.Login(e.ctx, name, adminPassword, meta)
+		assert.ErrorIs(t, err, auth.ErrInvalidCredentials, "%q", name)
+	}
+	assert.Equal(t, before+4, e.reasons(t, "auth.login")["unknown_user"])
+	assert.Zero(t, e.failedLogins(t, "admin"), "no account is charged for a name that cannot be stored")
+}

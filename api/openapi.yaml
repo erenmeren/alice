@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Alice API
   version: 0.1.0
-  description: "Self-hosted SSH key and TLS certificate management. All timestamps are UTC RFC 3339. A signed-in session's 30-minute idle timeout is extended only by state-changing requests that pass the origin and CSRF checks and by same-origin reads that carry the header X-Alice-Activity: 1 (the web UI sends it after a person's input); other reads leave it unchanged. API tokens have no idle timeout. Every route refused with 403 ALC-LIC-0001 while the license is locked is also refused with 503 ALC-LIC-0009 (license.unverified, retryable) while no license check has succeeded for 3 hours; it works again after the next successful check."
+  description: "Self-hosted SSH key and TLS certificate management. All timestamps are UTC RFC 3339. A signed-in session's 30-minute idle timeout is extended only by state-changing requests that pass the origin and CSRF checks and by same-origin reads that carry the header X-Alice-Activity: 1 (the web UI sends it after a person's input); other reads leave it unchanged. API tokens have no idle timeout. Every route refused with 403 ALC-LIC-0001 while the license is locked is also refused with 503 ALC-LIC-0009 (license.unverified, retryable) while no license check has succeeded for 3 hours; it works again after the next successful check. Text Alice cannot store (a NUL character in a query parameter or in a JSON string, or a query parameter that is not valid UTF-8) is refused with 400 ALC-SYS-0004 before any operation runs; binary content travels base64-encoded. List cursors are opaque: one that does not decode, or whose position lies outside the years 0000-9999, is refused with 4xx."
 servers:
   - url: /
 paths:
@@ -1463,7 +1463,11 @@ components:
               description: Values for the placeholders of message_key, e.g. {"min":"12"}
             details:
               type: array
-              description: Per-field problems for validation.failed
+              description: >-
+                Per-field problems for validation.failed. Also on system.bad_request (ALC-SYS-0004) when a query
+                parameter or the JSON body holds text Alice cannot store (a NUL character, or bytes that are not valid
+                UTF-8 in a query): field is the parameter name ("query" when the name itself cannot be named) or
+                "body", code validation.pattern; the value is never repeated.
               items: { $ref: "#/components/schemas/FieldError" }
     FieldError:
       type: object

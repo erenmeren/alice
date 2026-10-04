@@ -26,7 +26,7 @@ func principalFrom(ctx context.Context) auth.Principal {
 	return p
 }
 
-// guard wraps a route handler with, in order: authentication, rate limiting,
+// guard wraps a route handler with, in order: the query text check (AUD-13), authentication, rate limiting,
 // the same-origin check, the CSRF check, recording a person's activity on the
 // session (AUD-01), the permission decision (SEC-016, SEC-017, SEC-021,
 // SEC-024) and the license lock gate (R9). Nothing reaches rt.handler unless
@@ -34,6 +34,9 @@ func principalFrom(ctx context.Context) auth.Principal {
 func (s *server) guard(rt route) http.HandlerFunc {
 	policy, _ := rbac.PolicyFor(rt.perm) // register has checked the permission exists
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.refuseUnstorableQuery(w, r) {
+			return // AUD-13: query text PostgreSQL cannot store; nothing was looked up or counted
+		}
 		ip := clientIP(r, s.deps.TrustedProxies)
 		p, csrfToken := auth.Principal{}, ""
 		if !policy.Anonymous {
