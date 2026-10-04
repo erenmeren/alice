@@ -158,7 +158,13 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   is the one Alice read at the time shown. Fix the reason and choose **Discover**.
 - **A website shows "The certificate changed outside Alice."** Its file holds a certificate Alice did not deploy (for
   example renewed by certbot, or restored by hand). Expected after a manual change; otherwise find out which program
-  changed it.
+  changed it. It can also appear once after a deployment that ended `ALC-DEP-0024` (Alice put back the files from
+  before an unfinished earlier change): the file then holds that older certificate.
+- **A website's warning says Alice could not order the certificates of its file** (warning code `chain_unresolved`).
+  The certificate file holds many certificates with the same name that could each have issued the others; Alice
+  stops after 100 signature checks per file, keeps only the website's own certificate and counts its chain as
+  incomplete. The website still works as before. Put only the certificate and its real chain in the file (for
+  example certbot's `fullchain.pem`) and choose **Discover**.
 - **The website list or the certificate files are incomplete on a very large server** ("This server has more
   websites than Alice lists", "This server uses more certificate files than Alice lists", or `ALC-SSH-0009`). Alice
   reads at most 1000 certificate files and 16 MiB of website summary per server; such servers are not fully managed

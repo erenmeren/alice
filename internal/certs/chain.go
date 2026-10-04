@@ -35,12 +35,15 @@ const maxChainSignatureChecks = 100
 // the root it cross-signs, or two issuers with the same name and key), one that is valid at "at"
 // is tried first, and among those a self-signed root; when the first choice does not lead to a
 // self-signed certificate of the input, the others are tried (a path that ends in an included root
-// wins; otherwise the first path found). ok is false when the search needed more than
-// maxChainSignatureChecks signature checks: the path is then unknown.
+// wins; otherwise the first path found). ok is false, and path empty, when the search needed more
+// than maxChainSignatureChecks signature checks: the path is then unknown.
 func orderChain(leaf *x509.Certificate, others []*x509.Certificate, at time.Time) (path []*x509.Certificate, ok bool) {
 	s := &chainSearch{at: at, self: map[*x509.Certificate]bool{}}
 	path, _ = s.extend(leaf, others)
-	return path, !s.cut
+	if s.cut {
+		return nil, false // not even a verified prefix: the chain is unknown
+	}
+	return path, true
 }
 
 // chainSearch is one orderChain: its signature-check count and the self-signature of each

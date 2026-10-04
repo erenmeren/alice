@@ -187,6 +187,12 @@ A website shows **The certificate changed outside Alice.** when its file holds a
 deploy (for example renewed by certbot or by hand). That is not an error: it tells you that something else manages
 this file.
 
+Warnings next to a website say what Alice noticed in its files, for example that the certificate has expired, that
+it does not cover the website's names, that the key file is readable by others, or (warning code
+`chain_unresolved`) that Alice could not order the other certificates of the file within its limit of 100
+signature checks: it then keeps only the website's certificate and counts its chain as incomplete (see
+[troubleshooting.md](troubleshooting.md)).
+
 ### Deploying a certificate
 
 Two ways lead to the same dialog, **Deploy a certificate**:

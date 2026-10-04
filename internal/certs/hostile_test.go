@@ -10,6 +10,7 @@ import (
 	"encoding/asn1"
 	"encoding/pem"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,6 +88,12 @@ func TestHugeRSACertificateIsRefusedBeforeAnySignatureCheck(t *testing.T) {
 // signature checks before the bound).
 func sameNameChain(t *testing.T, n int) []*x509.Certificate {
 	t.Helper()
+	all, _ := sameNameChainWithKeys(t, n)
+	return all
+}
+
+func sameNameChainWithKeys(t *testing.T, n int) ([]*x509.Certificate, []*ecdsa.PrivateKey) {
+	t.Helper()
 	keys := []*ecdsa.PrivateKey{mustECKey(t), mustECKey(t)}
 	name := pkix.Name{CommonName: "Same"}
 	var out []*x509.Certificate
@@ -100,7 +107,7 @@ func sameNameChain(t *testing.T, n int) []*x509.Certificate {
 		require.NoError(t, err)
 		out = append(out, c)
 	}
-	return out
+	return out, keys
 }
 
 func mustECKey(t *testing.T) *ecdsa.PrivateKey {
@@ -205,4 +212,32 @@ func TestParseServedChainKeepsTheOrderedPathOnly(t *testing.T) {
 	all, err := ParseChainPEM(file)
 	require.NoError(t, err)
 	assert.Len(t, all.Chain, 3)
+}
+
+// W2 re-review, minor 1: when the search is cut, not even a verified prefix is kept. A leaf, one
+// unique intermediate (issued under the tangle's name) and 30 same-name certificates with
+// alternating keys: the chain is empty and incomplete, and ParseServedChain marks it unresolved.
+func TestACutSearchKeepsNoPrefix(t *testing.T) {
+	tangle, keys := sameNameChainWithKeys(t, 30)
+	interKey := mustECKey(t)
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(500), Subject: pkix.Name{CommonName: "Unique"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign}, &x509.Certificate{Subject: pkix.Name{CommonName: "Same"}}, interKey.Public(), keys[0])
+	require.NoError(t, err)
+	inter, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	der, err = x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(501), Subject: pkix.Name{CommonName: "www.example.test"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)}, inter, mustECKey(t).Public(), interKey)
+	require.NoError(t, err)
+	file := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	file = append(file, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: inter.Raw})...)
+	for _, c := range tangle {
+		file = append(file, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})...)
+	}
+	p, err := ParseServedChain(file, now)
+	require.NoError(t, err)
+	assert.True(t, p.ChainUnresolved)
+	assert.Empty(t, p.Chain, "not the verified prefix (the unique intermediate)")
+	assert.Equal(t, 1, strings.Count(p.PEMChain, "BEGIN CERTIFICATE"))
+	assert.False(t, ChainComplete(p, x509.NewCertPool(), now))
 }

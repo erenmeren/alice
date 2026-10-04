@@ -433,7 +433,9 @@ var prepareHook func()
 
 // prepareScan prepares the reported locations of one discovery (see preparedScan). Reported
 // duplicates keep the first; the items are in path order. It stops with ctx's error when ctx ends
-// (the discovery job's own time limit and cancellation cover the parsing too).
+// (Reconcile's context: the discovery job's, so a cancelled or stopped job stops the parsing; the
+// job's 20-minute limit bounds only the server side, and the parsing is bounded by the file and
+// signature-check limits instead).
 func (s *Service) prepareScan(ctx context.Context, found []providers.DiscoveredCertificate, now time.Time) (preparedScan, error) {
 	if prepareHook != nil {
 		prepareHook()
