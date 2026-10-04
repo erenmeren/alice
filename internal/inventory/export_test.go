@@ -119,3 +119,17 @@ func (s *Service) InsertVaultRowWith(ctx context.Context, credential uuid.UUID) 
 			CredentialID: credential, Status: StatusOK, IntervalSeconds: 900})
 	})
 }
+
+// SetKVBatchSizes makes the batches of a stored poll small (tests); restore puts the old sizes back.
+func SetKVBatchSizes(certs, keys, secrets int) (restore func()) {
+	oc, ok, os := kvBatchCerts, kvBatchKeys, kvBatchSecrets
+	kvBatchCerts, kvBatchKeys, kvBatchSecrets = certs, keys, secrets
+	return func() { kvBatchCerts, kvBatchKeys, kvBatchSecrets = oc, ok, os }
+}
+
+// SetKVBatchHook sets the function that runs after each committed batch of a stored poll.
+func SetKVBatchHook(f func(kind string, batch int)) (restore func()) {
+	old := kvBatchHook
+	kvBatchHook = f
+	return func() { kvBatchHook = old }
+}

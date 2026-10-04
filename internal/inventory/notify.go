@@ -34,11 +34,16 @@ const (
 	// TemplateDeploymentNeedsAttentionUnconfirmed: as TemplateDeploymentNeedsAttention when the
 	// server answered but not as expected (the cause is not a lost connection).
 	TemplateDeploymentNeedsAttentionUnconfirmed = "deployment.needs_attention_unconfirmed"
+	// Key Vault (Task 11): the third failed sign-in in a row of a vault (params target_name = the
+	// vault's name, reason = the closed reason code), and a vault certificate that disappeared from a
+	// complete listing (params target_name, certificate_name, binding "yes" | "no"; F-42).
+	TemplateKVAuthFailed         = "kv.auth_failed"
+	TemplateKVCertificateRemoved = "kv.certificate_removed"
 )
 
 // Templates lists the inventory's email templates (render tests).
 func Templates() []string {
 	return []string{TemplateHostKeyChanged, TemplateAuthFailed, TemplateDeploymentFailed, TemplateDeploymentRollbackFailed,
 		TemplateDeploymentOutcomeUnknown, TemplateDeploymentRestoredUnverified, TemplateDeploymentSuperseded, TemplateDeploymentPendingChangeRestored,
-		TemplateDeploymentNeedsAttention, TemplateDeploymentNeedsAttentionUnconfirmed}
+		TemplateDeploymentNeedsAttention, TemplateDeploymentNeedsAttentionUnconfirmed, TemplateKVAuthFailed, TemplateKVCertificateRemoved}
 }

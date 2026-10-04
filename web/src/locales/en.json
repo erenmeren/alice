@@ -377,6 +377,9 @@
       "vault_add_refused": "Key Vault not added: the first check failed",
       "vault_credentials_replaced": "Key Vault sign-in replaced",
       "vault_credentials_refused": "Key Vault sign-in not replaced: the first check failed",
+      "kv_certificate_new_version": "New version of a vault certificate found",
+      "kv_certificate_removed": "Certificate removed from a Key Vault",
+      "kv_certificate_version_conflict": "Key Vault reported a known version with another thumbprint",
       "binding_deleted": "Connected websites removed",
       "hostkey_observed": "Another new server fingerprint seen while the server is blocked",
       "hostkey_pinned": "Server fingerprint confirmed",
@@ -651,7 +654,8 @@
     "account_id_unsupported": "Alice did not list the SSH keys of the account with user ID {{uid}}: its user or group ID in /etc/passwd is not written as a plain number. Run getent passwd {{uid}} on the server to find it.",
     "accounts_nul_byte": "The file /etc/passwd on this server contains a NUL byte, so the list of accounts may be incomplete. Check the file.",
     "list_truncated_uid": "Alice stopped listing the SSH keys of this server at the account with user ID {{uid}}, so the keys from there on are not shown.",
-    "kv_item_unreadable": "Some items of this vault could not be read and were left out, so the list is incomplete. Kind: {{object}}. Items: {{count}}."
+    "kv_item_unreadable": "Some items of this vault could not be read and were left out, so the list is incomplete. Kind: {{object}}. Items: {{count}}.",
+    "kv_version_conflict": "Azure reported a version that Alice already knows with a different thumbprint. Alice kept what it had stored. Kind: {{object}}. Items: {{count}}."
   },
   "targets": {
     "title": "Servers",

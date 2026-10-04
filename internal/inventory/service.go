@@ -69,12 +69,14 @@ type Service struct {
 	rand     io.Reader
 	randSafe bool // rand is crypto/rand's Reader, safe for concurrent use: no randMu needed
 	roots    *x509.CertPool
+	kvSlots  chan struct{} // the slots of concurrent vault polls (AcquireKVPoll)
 }
 
 // New builds the service.
 func New(c Config) *Service {
 	s := &Service{pool: c.Pool, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, license: c.License,
-		registry: c.Registry, jobs: c.Jobs, notifier: c.Notifier, log: c.Log, rand: c.Rand, roots: c.Roots}
+		registry: c.Registry, jobs: c.Jobs, notifier: c.Notifier, log: c.Log, rand: c.Rand, roots: c.Roots,
+		kvSlots: make(chan struct{}, MaxConcurrentKVPolls)}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
 	}

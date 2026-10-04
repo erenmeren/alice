@@ -143,7 +143,10 @@ type discoveredCertificate struct {
 // would otherwise choose what Alice deploys, and could lift the incomplete-chain confirmation).
 // Rows are upserted in fingerprint order: scans of servers that share certificates lock the shared
 // rows in the same order and so never deadlock (as upsertKeys).
-func upsertCertificates(ctx context.Context, tx pgx.Tx, found map[string]discoveredCertificate, now time.Time) (map[string]uuid.UUID, error) {
+//
+// source is the source of a row this call inserts: "discovered" for a server's file and "azure_kv"
+// for the leaf of a vault certificate's version (kv_reconcile.go). An existing row keeps its own.
+func upsertCertificates(ctx context.Context, tx pgx.Tx, found map[string]discoveredCertificate, source string, now time.Time) (map[string]uuid.UUID, error) {
 	fps := make([]string, 0, len(found))
 	for fp := range found {
 		fps = append(fps, fp)
@@ -160,7 +163,7 @@ func upsertCertificates(ctx context.Context, tx pgx.Tx, found map[string]discove
 		var id uuid.UUID
 		err := tx.QueryRow(ctx, `INSERT INTO certificates (id, fingerprint_sha256, subject_cn, subject, issuer, serial, sans, not_before, not_after,
     key_algorithm, key_bits, public_key_sha256, pem_chain, chain_complete, self_signed, source, first_seen_at, last_seen_at, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'discovered', $16, $16, $16)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $17, $16, $16, $16)
 ON CONFLICT (fingerprint_sha256) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at,
     pem_chain = CASE WHEN certificates.source = 'discovered' AND certificates.private_key_id IS NULL
                           AND NOT certificates.chain_complete AND EXCLUDED.chain_complete
@@ -169,7 +172,7 @@ ON CONFLICT (fingerprint_sha256) DO UPDATE SET last_seen_at = EXCLUDED.last_seen
                           THEN certificates.chain_complete OR EXCLUDED.chain_complete ELSE certificates.chain_complete END
 RETURNING id`, uuid.Must(uuid.NewV7()), fp, boundText(d.p.SubjectCN), boundText(d.p.Subject), boundText(d.p.Issuer), boundText(d.p.Serial), sans,
 			d.p.NotBefore.UTC(), d.p.NotAfter.UTC(), d.p.Algorithm, d.p.Bits, d.p.PublicKeySHA256, pemChain, d.complete, d.p.SelfSigned,
-			now).Scan(&id)
+			now, source).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("inventory: store certificate: %w", err)
 		}

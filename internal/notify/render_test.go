@@ -54,7 +54,8 @@ func TestEveryInventoryTemplateRendersInBothLanguages(t *testing.T) {
 	s := &notify.Sender{Catalog: cat}
 	params := map[string]string{"target_name": "web-01 (İzmir)", "old_fingerprint": "SHA256:oldOLDold", "new_fingerprint": "SHA256:newNEWnew",
 		"cert_path": "/etc/nginx/ssl/www.crt", "deployment_id": "0190f5a0-0000-7000-8000-00000000abcd", "backup_dir": "/var/lib/alice-helper/backups/x",
-		"operation_id": "0190f5a0-0000-7000-8000-00000000beef"}
+		"operation_id":     "0190f5a0-0000-7000-8000-00000000beef",
+		"certificate_name": "web-cert", "reason": "azure.auth_failed", "binding": "yes"}
 	for _, tpl := range inventory.Templates() {
 		for _, lang := range []string{"en", "tr"} {
 			m := s.Render("ada@example.com", tpl, lang, params)
@@ -141,4 +142,28 @@ func TestDeploymentTemplatesRenderInBothLanguages(t *testing.T) {
 	hostile := map[string]string{"target_name": "web", "cert_path": "/etc/x.crt\r\nBcc: evil@example.com", "deployment_id": "d"}
 	m := s.Render("ada@example.com", inventory.TemplateDeploymentFailed, "en", hostile)
 	assert.NotContains(t, m.Body, "\nBcc:")
+}
+
+// The Key Vault emails (Task 11) name the vault and what the person needs, in both languages.
+func TestKeyVaultTemplatesRenderInBothLanguages(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	params := map[string]string{"target_name": "Üretim kasası", "certificate_name": "web-cert", "reason": "azure.auth_failed", "binding": "yes"}
+	for _, tpl := range []string{inventory.TemplateKVAuthFailed, inventory.TemplateKVCertificateRemoved} {
+		assert.Contains(t, inventory.Templates(), tpl)
+		for _, lang := range []string{"en", "tr"} {
+			m := s.Render("ada@example.com", tpl, lang, params)
+			assert.NotContains(t, m.Subject+m.Body, "{{", "%s %s", tpl, lang)
+			assert.NotContains(t, m.Subject, "email.", "%s %s", tpl, lang)
+			assert.Contains(t, m.Subject, "Üretim kasası", "%s %s", tpl, lang)
+			assert.Contains(t, m.Body, "Üretim kasası", "%s %s", tpl, lang)
+		}
+	}
+	a := s.Render("ada@example.com", inventory.TemplateKVAuthFailed, "en", params)
+	assert.Contains(t, a.Body, "Reason: azure.auth_failed")
+	assert.Contains(t, a.Body, "at most once an hour")
+	r := s.Render("ada@example.com", inventory.TemplateKVCertificateRemoved, "tr", params)
+	assert.Contains(t, r.Subject, "web-cert")
+	assert.Contains(t, r.Body, "Web sitelerine bağlı mı (yes: evet, no: hayır): yes.")
 }

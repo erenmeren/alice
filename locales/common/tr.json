@@ -721,6 +721,16 @@
         "body": "Şu sunucu Alice'in SSH anahtarını reddetti: {{target_name}}\n\nalice-svc kullanıcısının sunucuda hâlâ bulunduğunu ve Alice'in açık anahtarının bu kullanıcının authorized_keys dosyasında olduğunu denetleyin. Anahtar ve kurulum komutları Alice'teki Sunucular sayfasındadır. Alice bir sonraki taramada yeniden dener."
       }
     },
+    "kv": {
+      "auth_failed": {
+        "subject": "Alice bir Key Vault'ta oturum açamıyor: {{target_name}}",
+        "body": "Alice, {{target_name}} Key Vault kasasında üst üste üç kez oturum açamadı. Neden: {{reason}}\n\nSık görülen nedenler süresi dolan ya da değiştirilen bir istemci gizli anahtarı veya sertifika, silinmiş bir uygulama ya da yanlış bir dizindir. Kasayı Alice'te açın, oturum açma yöntemini kontrol edin ve gerekirse kimlik bilgilerini değiştirin.\n\nAlice arka planda, en fazla saatte bir kez olmak üzere denemeye devam eder; sorun giderildiği anda oturum yeniden açılır."
+      },
+      "certificate_removed": {
+        "subject": "Bir sertifika {{target_name}} Key Vault kasasından kayboldu: {{certificate_name}}",
+        "body": "{{certificate_name}} sertifikası artık {{target_name}} Key Vault kasasında listelenmiyor. Alice geçmişini saklar ve sertifikayı kaldırılmış olarak işaretler.\n\nWeb sitelerine bağlı mı (yes: evet, no: hayır): {{binding}}. Alice bu web sitelerinde hiçbir şeyi değiştirmez; siteler süresi dolana kadar şu anki sertifikayı sunmaya devam eder.\n\nKaldırma bir hataysa sertifikayı Azure'da kurtarın; Alice bir sonraki denetimde onu yeniden gösterir."
+      }
+    },
     "license": {
       "expiry_warning": {
         "subject": "Alice lisansının süresi doluyor: {{ends_at}}",
