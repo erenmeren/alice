@@ -87,6 +87,14 @@ func CheckUnsupported(t testing.TB, s providers.Session, caps providers.Capabili
 		_, err := s.VerifyDeployment(ctx, providers.VerifyRequest{})
 		expect("VerifyDeployment", err)
 	}
+	if !caps.Has(providers.CapReadCertificateSecret) {
+		_, err := s.ReadCertificateSecret(ctx, providers.SecretRequest{})
+		expect("ReadCertificateSecret", err)
+	}
+	if !caps.Has(providers.CapImportCertificate) {
+		_, err := s.ImportCertificate(ctx, providers.ImportRequest{}, nil)
+		expect("ImportCertificate", err)
+	}
 	if !caps.Has(providers.CapAuthorizedKeys) {
 		_, err := s.ListAuthorizedKeys(ctx)
 		expect("ListAuthorizedKeys", err)
@@ -135,6 +143,17 @@ func CheckRollbackOutcome(t testing.TB, out providers.RollbackOutcome, err error
 	}
 }
 
+// CheckImportResult reports an ImportCertificate result that breaks the provider contract
+// (providers.CheckImportReturn: Validate, and how the error relates to the Outcome). A provider
+// runs it on every outcome its own import tests produce: CheckSession cannot call
+// ImportCertificate against a real counterpart, it changes the vault.
+func CheckImportResult(t testing.TB, r providers.ImportResult, err error) {
+	t.Helper()
+	if cerr := providers.CheckImportReturn(r, err); cerr != nil {
+		t.Errorf("ImportCertificate: %v", cerr)
+	}
+}
+
 // CheckDeploymentState reports a DeploymentStatus answer (returned with a nil err) that fails
 // DeploymentState.Validate.
 func CheckDeploymentState(t testing.TB, st providers.DeploymentState, err error) {
@@ -171,6 +190,12 @@ var sessionOps = []sessionOp{
 	{"DeploymentStatus", providers.CapDeployCertificate, func(ctx context.Context, s providers.Session) (any, error) {
 		return s.DeploymentStatus(ctx, uuid.New())
 	}},
+	// An empty request names no certificate version: a provider refuses it before anything is sent
+	// (and, with a cancelled context, with an error wrapping context.Canceled). CheckSession
+	// reports a read that answers it.
+	{"ReadCertificateSecret", providers.CapReadCertificateSecret, func(ctx context.Context, s providers.Session) (any, error) {
+		return s.ReadCertificateSecret(ctx, providers.SecretRequest{})
+	}},
 	{"VerifyDeployment", providers.CapVerifyDeployment, func(ctx context.Context, s providers.Session) (any, error) {
 		return s.VerifyDeployment(ctx, providers.VerifyRequest{})
 	}},
@@ -181,7 +206,9 @@ var sessionOps = []sessionOp{
 // for CapDeployCertificate it calls only the read-only DeploymentStatus and validates its answer.
 // A provider that advertises CapDeployCertificate must therefore carry its own test that
 // DeployCertificate and RollbackDeployment do not return ErrUnsupported, and run CheckDeployOutcome
-// and CheckRollbackOutcome on every outcome those tests produce.
+// and CheckRollbackOutcome on every outcome those tests produce. The same holds for
+// CapImportCertificate: ImportCertificate changes the vault, so a provider carries its own test
+// that it is implemented and runs CheckImportResult on every outcome it produces.
 //
 // The checks: every advertised capability's methods are implemented (never ErrUnsupported) and
 // return only *providers.Error; the others answer ErrUnsupported (CheckUnsupported); Open and
@@ -223,6 +250,9 @@ func CheckSession(t testing.TB, h SessionHarness) {
 		out, err := op.call(context.Background(), s)
 		_ = s.Close()
 		seen = append(seen, out, err)
+		if _, ok := out.(providers.CertificateSecret); ok && err == nil {
+			t.Errorf("%s accepted an empty request: a request without a certificate name and version is refused before anything is sent", op.name)
+		}
 		if st, ok := out.(providers.DeploymentState); ok {
 			CheckDeploymentState(t, st, err)
 		}

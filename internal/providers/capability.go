@@ -19,6 +19,9 @@ const (
 	CapImportCertificate Capability = "import_certificate"
 	CapAuthorizedKeys    Capability = "authorized_keys"
 	CapVerifyDeployment  Capability = "verify_deployment"
+	// CapReadCertificateSecret: read the secret that backs a vault certificate version (the private
+	// key, for a deployment to Nginx; spec §11.5; R40 row 18).
+	CapReadCertificateSecret Capability = "read_certificate_secret" //nolint:gosec // G101 false positive: a capability name, not a credential
 )
 
 // CapabilitySet is the static set a provider advertises.
@@ -54,5 +57,5 @@ func (c CapabilitySet) Clone() CapabilitySet { return maps.Clone(c) }
 
 var knownCapabilities = NewCapabilitySet(
 	CapTestConnection, CapDiscoverCerts, CapDiscoverSSHKeys, CapDiscoverKVKeys, CapDiscoverKVSecrets,
-	CapDeployCertificate, CapImportCertificate, CapAuthorizedKeys, CapVerifyDeployment,
+	CapDeployCertificate, CapImportCertificate, CapAuthorizedKeys, CapVerifyDeployment, CapReadCertificateSecret,
 )

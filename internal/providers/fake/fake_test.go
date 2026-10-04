@@ -7,17 +7,20 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
+	"alice/internal/platform/azureid"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/providers/fake"
 	"alice/internal/providers/providertest"
 	"alice/internal/secrets"
+	"alice/internal/testutil/pki"
 )
 
 type memStore struct {
@@ -702,4 +705,241 @@ func TestFakeCallsOfDeployMethodsAreCopies(t *testing.T) {
 	assert.Equal(t, []byte("PEM"), dep.CertificatePEM)
 	assert.Equal(t, 2, vr.ChainLength)
 	assert.Equal(t, 4, rr.OldChainLength)
+}
+
+// azureCreds is a vault's credential source: a CredentialSource that is also an
+// AzureCredentialSource (the inventory's source implements both; the SSH half must stay unused).
+type azureCreds struct {
+	identities, releases, signers int
+	err                           error
+}
+
+func (c *azureCreds) SSHSigner(context.Context) (ssh.Signer, func(), error) {
+	c.signers++
+	return nil, func() {}, nil
+}
+
+func (c *azureCreds) AzureIdentity(context.Context) (providers.AzureIdentity, func(), error) {
+	c.identities++
+	return providers.AzureIdentity{Auth: providers.AzureAuthManagedIdentity}, func() { c.releases++ }, c.err
+}
+
+func vaultFake() *fake.Provider {
+	return fake.New(providers.KindAzureKV, providers.CapTestConnection, providers.CapDiscoverCerts,
+		providers.CapReadCertificateSecret, providers.CapImportCertificate)
+}
+
+func openVault(t *testing.T, p *fake.Provider) providers.Session {
+	t.Helper()
+	s, err := p.Open(context.Background(), providers.TargetRef{ID: uuid.New()}, &azureCreds{}, providers.Env{})
+	require.NoError(t, err)
+	return s
+}
+
+func TestFakeOpenUsesTheAzureIdentityOfAVault(t *testing.T) {
+	p := vaultFake()
+	creds := &azureCreds{}
+	_, err := p.Open(context.Background(), providers.TargetRef{ID: uuid.New()}, creds, providers.Env{})
+	require.NoError(t, err)
+	assert.Equal(t, azureCreds{identities: 1, releases: 1}, *creds, "the identity is read and released at once, the SSH signer never")
+
+	failing := &azureCreds{err: errors.New("sealed")}
+	_, err = p.Open(context.Background(), providers.TargetRef{ID: uuid.New()}, failing, providers.Env{})
+	var pe *providers.Error
+	require.ErrorAs(t, err, &pe)
+	assert.Equal(t, "azure.auth_failed", pe.Code)
+	assert.Zero(t, failing.releases)
+
+	_, err = p.Open(context.Background(), providers.TargetRef{ID: uuid.New()}, &countingCreds{}, providers.Env{})
+	require.ErrorAs(t, err, &pe, "a vault needs an Azure credential source, as the real provider does")
+	assert.Equal(t, "azure.auth_failed", pe.Code)
+
+	_, err = p.Open(context.Background(), providers.TargetRef{ID: uuid.New()}, nil, providers.Env{})
+	assert.NoError(t, err, "a test may open a fake vault without any source")
+
+	// An SSH fake never calls AzureIdentity, even when the source offers it.
+	ssh := fake.New(providers.KindLinuxSSH)
+	creds = &azureCreds{}
+	_, err = ssh.Open(context.Background(), providers.TargetRef{ID: uuid.New()}, creds, providers.Env{})
+	require.NoError(t, err)
+	assert.Zero(t, creds.identities)
+	assert.Equal(t, 1, creds.signers)
+}
+
+func TestFakeReadCertificateSecretReturnsACopyPerCall(t *testing.T) {
+	p := vaultFake()
+	p.Configure(func(c *fake.Config) {
+		c.Secret = providers.CertificateSecret{ContentType: "application/x-pem-file", Value: providers.NewSecret([]byte("secret-bytes"))}
+	})
+	s := openVault(t, p)
+	first, err := s.ReadCertificateSecret(context.Background(), providers.SecretRequest{Name: "web", Version: strings.Repeat("a", 32)})
+	require.NoError(t, err)
+	assert.Equal(t, "application/x-pem-file", first.ContentType)
+	assert.Equal(t, "secret-bytes", string(first.Value.Bytes()))
+	first.Zero() // what every caller does after use
+
+	second, err := s.ReadCertificateSecret(context.Background(), providers.SecretRequest{Name: "web", Version: strings.Repeat("a", 32)})
+	require.NoError(t, err)
+	assert.Equal(t, "secret-bytes", string(second.Value.Bytes()), "zeroing one answer leaves the script intact")
+
+	calls := p.Calls()
+	var reads []fake.Call
+	for _, c := range calls {
+		if c.Method == "ReadCertificateSecret" {
+			reads = append(reads, c)
+		}
+	}
+	require.Len(t, reads, 2)
+	assert.Equal(t, providers.SecretRequest{Name: "web", Version: strings.Repeat("a", 32)}, reads[0].Secret)
+
+	p.Configure(func(c *fake.Config) { c.SecretErr = providers.NewError("azure.forbidden", false, nil, nil) })
+	_, err = s.ReadCertificateSecret(context.Background(), providers.SecretRequest{})
+	var pe *providers.Error
+	require.ErrorAs(t, err, &pe)
+	assert.Equal(t, "azure.forbidden", pe.Code)
+}
+
+func TestFakeImportCertificate(t *testing.T) {
+	p := vaultFake()
+	s := openVault(t, p)
+	op := uuid.New()
+	pfx := []byte("not-really-a-pfx")
+	res, err := s.ImportCertificate(context.Background(), providers.ImportRequest{OperationID: op, Name: "web", PFX: providers.NewSecret(pfx), ReplaceExisting: true}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, providers.ImportCreated, res.Outcome)
+	require.NoError(t, res.Validate())
+	assert.Equal(t, azureid.ThumbprintOf(res.CER), res.Thumbprint, "the default thumbprint is the leaf's SHA-1, as the vault's would be")
+	other, err := s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "web"}, nil)
+	require.NoError(t, err)
+	assert.NotEqual(t, res.Version, other.Version, "every default import creates a new version")
+	assert.NotEqual(t, res.Thumbprint, other.Thumbprint)
+
+	var rec fake.Call
+	for _, c := range p.Calls() {
+		if c.Method == "ImportCertificate" {
+			rec = c
+			break
+		}
+	}
+	assert.Equal(t, "web", rec.Import.Name)
+	assert.Equal(t, op, rec.Import.OperationID)
+	assert.True(t, rec.Import.ReplaceExisting)
+	assert.Empty(t, rec.Import.PFX.Bytes(), "the call log never keeps the PFX")
+	assert.Equal(t, pfx, []byte("not-really-a-pfx"), "the caller's bytes are untouched (the caller zeroes them)")
+
+	// A scripted import decides the outcome and sees the request with its PFX.
+	var seen string
+	p.Configure(func(c *fake.Config) {
+		c.Import = func(req providers.ImportRequest) (providers.ImportResult, error) {
+			seen = string(req.PFX.Bytes())
+			return providers.ImportResult{Outcome: providers.ImportUncertain}, errors.New("timeout")
+		}
+	})
+	res, err = s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "web", PFX: providers.NewSecret([]byte("pfx"))}, nil)
+	assert.Equal(t, providers.ImportUncertain, res.Outcome)
+	assert.Error(t, err)
+	assert.Equal(t, "pfx", seen)
+
+	// A scripted result that breaks the outcome rules is the test's mistake: the fake fails loudly.
+	p.Configure(func(c *fake.Config) {
+		c.Import = func(providers.ImportRequest) (providers.ImportResult, error) {
+			return providers.ImportResult{Outcome: providers.ImportRefused}, errors.New("plain")
+		}
+	})
+	assert.Panics(t, func() { _, _ = s.ImportCertificate(context.Background(), providers.ImportRequest{}, nil) })
+}
+
+func TestFakeImportUsesTheLeafOfTheRequestedPFX(t *testing.T) {
+	_, leafDER, pfx := selfSignedPFX(t)
+	p := vaultFake()
+	s := openVault(t, p)
+	res, err := s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "web", PFX: providers.NewSecret(pfx)}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, leafDER, res.CER, "a decodable PFX gives the vault's leaf")
+	assert.Equal(t, azureid.ThumbprintOf(leafDER), res.Thumbprint)
+}
+
+func TestFakeVaultMethodsAreUnsupportedWithoutTheirCapabilities(t *testing.T) {
+	p := fake.New(providers.KindAzureKV, providers.CapTestConnection)
+	s := openVault(t, p)
+	providertest.CheckUnsupported(t, s, p.Capabilities())
+	_, err := s.ReadCertificateSecret(context.Background(), providers.SecretRequest{})
+	assert.ErrorIs(t, err, providers.ErrUnsupported)
+	_, err = s.ImportCertificate(context.Background(), providers.ImportRequest{}, nil)
+	assert.ErrorIs(t, err, providers.ErrUnsupported)
+	assert.Equal(t, 2, p.Count("ReadCertificateSecret"), "refused calls are recorded too (the conformance check made one)")
+	assert.Equal(t, 2, p.Count("ImportCertificate"))
+}
+
+func TestFakeDiscoversTheVaultAsScripted(t *testing.T) {
+	now := time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
+	p := vaultFake()
+	p.Configure(func(c *fake.Config) {
+		c.Report = providers.ConnectionReport{Azure: &providers.AzureFacts{ObjectID: "o", Checks: []providers.AzureCheck{{Name: providers.AzureCheckSignIn}}}}
+		c.Discovery = providers.DiscoveryResult{KV: &providers.KVInventory{
+			Certificates: []providers.KVCertificate{{Name: "web", Updated: &now, Details: &providers.KVCertificateDetails{Version: "v", CER: []byte{1, 2}},
+				Versions: []providers.KVCertificateVersion{{Version: "v"}}}},
+			Keys:          []providers.KVKey{{Name: "k", Details: &providers.KVKeyDetails{Version: "kv"}}},
+			Secrets:       []providers.KVSecret{{Name: "s"}},
+			KeysListed:    true,
+			SecretsListed: true,
+			Truncated:     []string{"keys"},
+			Failures:      []providers.KVListFailure{{Object: "keys", Err: providers.NewError("azure.forbidden", false, nil, nil)}},
+		}}
+	})
+	s := openVault(t, p)
+	rep, err := s.TestConnection(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, rep.Azure)
+	rep.Azure.ObjectID = "changed"
+	rep.Azure.Checks[0].Name = "changed"
+	rep, _ = s.TestConnection(context.Background())
+	assert.Equal(t, "o", rep.Azure.ObjectID, "a caller cannot change the script through the report")
+	assert.Equal(t, providers.AzureCheckSignIn, rep.Azure.Checks[0].Name)
+
+	res, err := s.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
+	require.NoError(t, err)
+	require.NotNil(t, res.KV)
+	assert.Len(t, res.KV.Certificates, 1)
+	assert.Empty(t, res.KV.Keys, "keys were not asked for")
+	assert.False(t, res.KV.KeysListed)
+	assert.Empty(t, res.KV.Secrets)
+	assert.False(t, res.KV.SecretsListed)
+	assert.Equal(t, []string{"keys"}, res.KV.Truncated)
+	res.KV.Certificates[0].Details.CER[0] = 9
+	res.KV.Certificates[0].Versions[0].Version = "changed"
+
+	res, err = s.Discover(context.Background(), providers.DiscoverRequest{Certificates: true, KVKeys: true, KVSecrets: true})
+	require.NoError(t, err)
+	assert.Equal(t, []byte{1, 2}, res.KV.Certificates[0].Details.CER, "the script is copied per call")
+	assert.Equal(t, "v", res.KV.Certificates[0].Versions[0].Version)
+	assert.Len(t, res.KV.Keys, 1)
+	assert.True(t, res.KV.KeysListed)
+	assert.Len(t, res.KV.Secrets, 1)
+	assert.True(t, res.KV.SecretsListed)
+	require.Len(t, res.KV.Failures, 1)
+
+	res, err = s.Discover(context.Background(), providers.DiscoverRequest{KVKeys: true})
+	require.NoError(t, err)
+	assert.Empty(t, res.KV.Certificates, "certificates were not asked for")
+	assert.Len(t, res.KV.Keys, 1)
+
+	// An SSH-only request sees no vault half, and a fake without a KV script reports none.
+	res, err = s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.Nil(t, res.KV)
+	plain := vaultFake()
+	s = openVault(t, plain)
+	res, err = s.Discover(context.Background(), providers.DiscoverRequest{Certificates: true, KVKeys: true})
+	require.NoError(t, err)
+	assert.Nil(t, res.KV)
+}
+
+// selfSignedPFX returns a leaf, its DER and a PFX holding it with its intermediate.
+func selfSignedPFX(t *testing.T) (pki.Leaf, []byte, []byte) {
+	t.Helper()
+	now := time.Now().UTC()
+	ca := pki.NewCA("Fake Vault CA", pki.ECDSA256, now)
+	leaf := ca.Issue(pki.Opts{CommonName: "web.example.test", SANs: []string{"web.example.test"}}, now)
+	return leaf, leaf.Cert.Raw, pki.PFX(leaf, ca, "")
 }

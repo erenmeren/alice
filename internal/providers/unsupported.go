@@ -63,4 +63,14 @@ func (UnsupportedSession) DeploymentStatus(context.Context, uuid.UUID) (Deployme
 	return DeploymentState{}, ErrUnsupported
 }
 
+// ReadCertificateSecret is not supported.
+func (UnsupportedSession) ReadCertificateSecret(context.Context, SecretRequest) (CertificateSecret, error) {
+	return CertificateSecret{}, ErrUnsupported
+}
+
+// ImportCertificate is not supported.
+func (UnsupportedSession) ImportCertificate(context.Context, ImportRequest, StepLogger) (ImportResult, error) {
+	return ImportResult{}, ErrUnsupported
+}
+
 var _ Session = UnsupportedSession{}

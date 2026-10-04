@@ -3,6 +3,7 @@ package providers
 import (
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -20,10 +21,18 @@ type ConnectionReport struct {
 	OS             OSRelease
 	Warnings       []Warning
 	Nginx          *NginxFacts // what the Nginx provider found on the server; nil for linuxssh
+	Azure          *AzureFacts // the vault's access check; nil for other providers
 }
 
-// DiscoverRequest selects what Discover reads.
-type DiscoverRequest struct{ SSHKeys, Certificates bool }
+// DiscoverRequest selects what Discover reads. SSHKeys and Certificates are Phase 3/4's; for a
+// Key Vault, Certificates lists the vault's certificates and the KV fields select the rest
+// (spec §11.6; R40 rows 15-17).
+type DiscoverRequest struct {
+	SSHKeys, Certificates bool
+	KVKeys, KVSecrets     bool                 // also list keys / secrets (every fourth poll, §11.6 item 4)
+	KVKnown               map[string]KVKnown   // certificate name -> what Alice stored; details are fetched when the listing differs
+	KVKnownKeys           map[string]time.Time // key name -> attributes.updated whose details Alice read
+}
 
 // DiscoveryResult is read-only data; inventory reconciles it.
 type DiscoveryResult struct {
@@ -38,7 +47,8 @@ type DiscoveryResult struct {
 	AccountsComplete bool     // Accounts is the whole list; only then may inventory mark vanished users' keys missing
 	ReadFiles        []string // files read completely: missing marking is limited to these, also in a partial scan (R37 #23)
 	Certificates     []DiscoveredCertificate
-	Nginx            *NginxFacts // nil when certificates were not read
+	Nginx            *NginxFacts  // nil when certificates were not read
+	KV               *KVInventory // the Key Vault half; nil for other providers
 }
 
 // DiscoveredSSHKey is one authorized_keys entry.

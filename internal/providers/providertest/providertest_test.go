@@ -266,3 +266,112 @@ func TestCheckSessionValidatesDeploymentStatus(t *testing.T) {
 	})
 	assert.Contains(t, fmt.Sprint(r.failures), "DeploymentStatus returned an invalid result: providers: deployment state: blank or unknown phase")
 }
+
+// vaultSession breaks the rules of the Key Vault methods one at a time.
+type vaultSession struct {
+	providers.UnsupportedSession
+	read       bool // ReadCertificateSecret is implemented (an empty request is refused)
+	readOK     bool // ... and answers an empty request with a value
+	readLeak   bool // ... and puts the canary in an error parameter
+	importDone bool // ImportCertificate answers instead of ErrUnsupported
+}
+
+func (s vaultSession) ReadCertificateSecret(ctx context.Context, _ providers.SecretRequest) (providers.CertificateSecret, error) {
+	switch {
+	case !s.read:
+		return providers.CertificateSecret{}, providers.ErrUnsupported
+	case s.readLeak:
+		return providers.CertificateSecret{}, providers.NewError("kv.secret_unreadable", false, nil, map[string]string{"value": canary})
+	case ctx.Err() != nil:
+		return providers.CertificateSecret{}, providers.NewError("azure.unreachable", true, ctx.Err(), nil)
+	case s.readOK:
+		return providers.CertificateSecret{ContentType: "application/x-pkcs12", Value: providers.NewSecret([]byte("v"))}, nil
+	}
+	return providers.CertificateSecret{}, providers.NewError("kv.version_not_deployable", false, nil, nil)
+}
+
+func (s vaultSession) ImportCertificate(context.Context, providers.ImportRequest, providers.StepLogger) (providers.ImportResult, error) {
+	if s.importDone {
+		return providers.ImportResult{Outcome: providers.ImportUncertain}, errors.New("x")
+	}
+	return providers.ImportResult{}, providers.ErrUnsupported
+}
+
+func vaultHarness(s vaultSession, caps ...providers.Capability) providertest.SessionHarness {
+	h := deployHarness(deploySession{}, caps...)
+	h.Open = func(ctx context.Context) (providers.Session, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, providers.NewError("azure.unreachable", true, err, nil)
+		}
+		return s, nil
+	}
+	h.Secrets = []string{canary}
+	return h
+}
+
+func TestCheckSessionCoversTheSecretRead(t *testing.T) {
+	t.Run("an implemented read that refuses an empty request passes", func(t *testing.T) {
+		r := &recorder{TB: t}
+		providertest.CheckSession(r, vaultHarness(vaultSession{read: true}, providers.CapReadCertificateSecret))
+		assert.Empty(t, r.failures)
+	})
+	for _, tc := range []struct {
+		name string
+		s    vaultSession
+		want string
+	}{
+		{"advertised but unsupported", vaultSession{}, "ReadCertificateSecret answers ErrUnsupported although read_certificate_secret is advertised"},
+		{"an empty request is read", vaultSession{read: true, readOK: true}, "ReadCertificateSecret accepted an empty request"},
+		{"a secret in an error", vaultSession{read: true, readLeak: true}, "a secret appears in the output of *providers.Error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &recorder{TB: t}
+			providertest.CheckSession(r, vaultHarness(tc.s, providers.CapReadCertificateSecret))
+			assert.Contains(t, fmt.Sprint(r.failures), tc.want)
+		})
+	}
+}
+
+func TestCheckUnsupportedCoversTheVaultMethods(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		s    vaultSession
+		caps []providers.Capability
+		want string
+	}{
+		{"read", vaultSession{read: true}, nil, "ReadCertificateSecret without its capability"},
+		{"import", vaultSession{importDone: true}, nil, "ImportCertificate without its capability"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &recorder{TB: t}
+			providertest.CheckUnsupported(r, tc.s, providers.NewCapabilitySet(tc.caps...))
+			assert.Contains(t, fmt.Sprint(r.failures), tc.want)
+		})
+	}
+	t.Run("advertised methods are not checked", func(t *testing.T) {
+		r := &recorder{TB: t}
+		providertest.CheckUnsupported(r, vaultSession{read: true, importDone: true},
+			providers.NewCapabilitySet(providers.CapReadCertificateSecret, providers.CapImportCertificate))
+		assert.Empty(t, r.failures)
+	})
+	t.Run("a session without the methods passes", func(t *testing.T) {
+		r := &recorder{TB: t}
+		providertest.CheckUnsupported(r, vaultSession{}, providers.NewCapabilitySet())
+		assert.Empty(t, r.failures)
+	})
+}
+
+func TestCheckImportResultReportsABrokenResult(t *testing.T) {
+	r := &recorder{TB: t}
+	refusal := providers.NewError("azure.forbidden", false, nil, nil)
+	providertest.CheckImportResult(r, providers.ImportResult{Outcome: providers.ImportRefused}, refusal)
+	providertest.CheckImportResult(r, providers.ImportResult{Outcome: providers.ImportUncertain}, errors.New("timeout"))
+	assert.Empty(t, r.failures)
+
+	providertest.CheckImportResult(r, providers.ImportResult{Outcome: providers.ImportRefused}, errors.New("timeout"))
+	providertest.CheckImportResult(r, providers.ImportResult{}, nil)
+	require.Len(t, r.failures, 2, "%v", r.failures)
+	assert.Contains(t, r.failures[0], "ImportCertificate: ")
+	assert.Contains(t, r.failures[0], "refused needs a *providers.Error")
+	assert.Contains(t, r.failures[1], "blank or unknown outcome")
+}

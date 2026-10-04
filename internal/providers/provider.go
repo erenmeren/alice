@@ -100,8 +100,8 @@ type Provider interface {
 }
 
 // Session is one connection scope. Methods of capabilities a provider does not advertise return
-// ErrUnsupported (embed UnsupportedSession). Phase 5 adds import. A provider advertises a
-// capability only when its methods are implemented: the conformance suite fails otherwise.
+// ErrUnsupported (embed UnsupportedSession). A provider advertises a capability only when its
+// methods are implemented: the conformance suite fails otherwise.
 type Session interface {
 	Close() error
 	TestConnection(ctx context.Context) (ConnectionReport, error)
@@ -131,6 +131,16 @@ type Session interface {
 	// nil error proves "nothing was written"; an error, or an answer that fails
 	// DeploymentState.Validate, proves nothing (uncertain).
 	FenceDeployment(ctx context.Context, op uuid.UUID) (DeploymentState, error)
+	// ReadCertificateSecret (CapReadCertificateSecret) reads the secret that backs one version of a
+	// vault certificate: its content type and value (a PFX or PEM with the private key). The caller
+	// zeroes the value. It never reads "latest": Version is required. A request that names no valid
+	// certificate or version is refused with a *Error before anything is sent.
+	ReadCertificateSecret(ctx context.Context, req SecretRequest) (CertificateSecret, error)
+	// ImportCertificate (CapImportCertificate) adds a version to a vault certificate (creating it
+	// when the name is new). The outcome rules are ImportResult.Validate and CheckImportReturn: a
+	// request that may have reached the vault is never answered "refused". The caller zeroes
+	// req.PFX.
+	ImportCertificate(ctx context.Context, req ImportRequest, log StepLogger) (ImportResult, error)
 	// VerifyDeployment (CapVerifyDeployment) checks which certificate the location serves.
 	VerifyDeployment(ctx context.Context, req VerifyRequest) (VerifyResult, error)
 }
