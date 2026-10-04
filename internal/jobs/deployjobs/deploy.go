@@ -282,74 +282,104 @@ func pendingOperation(out providers.DeployOutcome, err error) (uuid.UUID, bool) 
 }
 
 // recoverPending handles a first send the helper refused because the pair's latest operation op
-// is interrupted (final review fix round 1, Important 1). The refusal wrote nothing.
+// is interrupted (final review fix rounds 1 and 2). The refusal wrote nothing.
 //
-//	OperationUnfinished(op)                  result
-//	---------------------------------------  ---------------------------------------------------------
-//	error, or true (Alice still recovers it)  the refusal as it is: failed deployment.recovery_pending
-//	false (Alice finished it, or never knew   step recover_pending started {operation_id}; CheckClaim
-//	  it: outcome unknown, a deleted and      (lost: the refusal as it is, its record is refused too);
-//	  re-added target, a restored database)   RollbackDeployment(op) once (verify_old skipped: Alice
-//	                                          does not know op's previous certificate):
-//	    rolled back (files back), or nothing  step recover_pending ok; the deployment is sent ONCE more
-//	      to restore, superseded, unknown     (same operation id: the refusal created nothing for it);
-//	      operation (op no longer blocks)     its answer is the outcome (RECOVERY_PENDING again: below)
-//	    anything else (restore_failed,        step recover_pending failed; failed
-//	      IO_ERROR of an unreadable journal,  deployment.server_operation_pending {operation_id},
-//	      BUSY, uncertain)                    nothing written by this deployment
+//	OperationDeployment(op)                      result
+//	-------------------------------------------  --------------------------------------------------------
+//	error                                         the refusal as it is: failed deployment.recovery_pending
+//	a deployment Alice has not finished           the refusal as it is (its recovery restores it)
+//	a deployment of another server or location,   no restore; failed deployment.server_operation_pending
+//	  or finished succeeded / unchanged /           {operation_id} (an honest helper never names those)
+//	  rolled_back / failed
+//	unknown to Alice, or a finished               step recover_pending started {operation_id}; CheckClaim
+//	  rollback_failed deployment of this          (lost or failing: the refusal as it is, no restore sent);
+//	  server and location (it may have left       RollbackDeployment(op) once (verify_old skipped):
+//	  an unfinished change)
+//	    files put back (rolled_back, or           step recover_pending ok; CheckClaim; the same operation
+//	      rollback_failed phase restored)         id sent once more: success or the deployment's own
+//	                                              rollback as usual; ANY refusal, or no send because the
+//	                                              claim check failed: rolled_back
+//	                                              deployment.pending_change_restored {operation_id}
+//	    nothing to put back (prepared,            step recover_pending skipped; CheckClaim; sent once more;
+//	      unchanged, superseded, unknown, or      its answer is the outcome (a refusal is truthful then);
+//	      HASH_MISMATCH: someone else's file)     a second RECOVERY_PENDING: server_operation_pending
+//	    anything else (restore_failed, IO_ERROR,  step recover_pending failed; failed
+//	      BUSY, sudo, uncertain)                  deployment.server_operation_pending {operation_id}
 //
-// op's own deployment record (when Alice has one) is finished and is never touched: the restore
-// and its steps are recorded under this deployment only. A crash after the restore and before the
-// second send leaves this deployment deploying with no journal: its recovery fences it and ends
-// it failed (interrupted), and a new deployment no longer meets op (or meets it again, the same
-// path: a restore of a restored operation answers restored).
+// op's own deployment record is never touched: the restore and its steps are recorded under this
+// deployment only. A crash after the restore and before the second send leaves this deployment
+// deploying with no journal: its recovery fences it, finds the recover_pending ok step and records
+// rolled_back deployment.pending_change_restored (pendingRestored in recover.go).
 func (h *handlers) recoverPending(ctx context.Context, m inventory.Material, v inventory.SendValues, sess providers.Session, rec *recorder,
 	op uuid.UUID, out providers.DeployOutcome, derr error) (providers.DeployOutcome, error) {
-	unfinished, err := h.d.Inventory.OperationUnfinished(ctx, op)
-	if err != nil || unfinished {
+	owner, known, err := h.d.Inventory.OperationDeployment(ctx, op)
+	switch {
+	case err != nil:
+		return out, derr
+	case known && owner.State != inventory.DeployStateDone:
 		return out, derr
 	}
 	params := map[string]string{"operation_id": op.String()}
-	rec.Step(stepRecoverPending, providers.StepStarted, params)
-	pending := func() (providers.DeployOutcome, error) {
-		rec.Step(stepRecoverPending, providers.StepFailed, params)
-		e := providers.NewError(reasonServerOperationPending, false, nil, maps.Clone(params))
-		return providers.DeployOutcome{Result: providers.DeployNoChange, Reason: e.Code, Params: maps.Clone(params), Backup: out.Backup}, e
+	if known && (owner.TargetID != m.Deployment.TargetID || owner.LocationID != m.Deployment.LocationID ||
+		owner.Status != inventory.DeployStatusRollbackFailed) {
+		return serverOperationPending(out, params)
 	}
 	if err := h.d.Inventory.CheckClaim(ctx); err != nil {
-		if errors.Is(err, inventory.ErrClaimLost) {
-			return out, derr
-		}
-		return pending()
+		return out, derr // no restore is sent: the refusal is what happened
 	}
+	rec.Step(stepRecoverPending, providers.StepStarted, params)
 	req := m.RollbackRequest()
 	req.OperationID, req.OldFingerprint, req.OldChainLength, req.OldSANs = op, "", 0, nil
 	rb, rerr := sess.RollbackDeployment(ctx, req, rec)
-	if providers.CheckRollbackReturn(rb, rerr) != nil || !pairReleased(rb) {
-		return pending()
+	if providers.CheckRollbackReturn(rb, rerr) != nil {
+		rec.Step(stepRecoverPending, providers.StepFailed, params)
+		return serverOperationPending(out, params)
 	}
-	rec.Step(stepRecoverPending, providers.StepOK, params)
+	putBack := rb.Result == providers.DeployRolledBack || (rb.Result == providers.DeployRollbackFailed && rb.Phase == providers.PhaseRestored)
+	released := putBack || (rb.Result == providers.DeployNoChange && (rb.Phase == providers.PhasePrepared || rb.Phase == providers.PhaseUnchanged ||
+		rb.Reason == reasonSuperseded || rb.Reason == reasonUnknownOperation)) ||
+		(rb.Result == providers.DeployRollbackFailed && rb.Phase == "" && rb.Error == providers.DeployErrFileChanged)
+	switch {
+	case !released:
+		rec.Step(stepRecoverPending, providers.StepFailed, params)
+		return serverOperationPending(out, params)
+	case putBack:
+		rec.Step(stepRecoverPending, providers.StepOK, params)
+	default:
+		rec.Step(stepRecoverPending, providers.StepSkipped, params) // nothing was put back
+	}
+	if err := h.d.Inventory.CheckClaim(ctx); err != nil {
+		if putBack {
+			return pendingRestoredOutcome(params)
+		}
+		return out, derr
+	}
 	again, aerr := sess.DeployCertificate(ctx, m.DeployRequest(v), rec)
+	if putBack && again.Result == providers.DeployNoChange && providers.CheckDeployReturn(again, aerr) == nil {
+		// The website went back to the files from before op, and this certificate was not written.
+		return pendingRestoredOutcome(params)
+	}
 	if _, still := pendingOperation(again, aerr); still {
-		return pending()
+		return serverOperationPending(out, params)
 	}
 	return again, aerr
 }
 
-// pairReleased reports a restore answer after which op no longer blocks its pair: its files are
-// back (rolled back, or rollback_failed with phase restored: only the old certificate's check
-// failed), or there was nothing of op to restore (prepared, unchanged, superseded, unknown).
-func pairReleased(rb providers.RollbackOutcome) bool {
-	switch rb.Result {
-	case providers.DeployRolledBack:
-		return true
-	case providers.DeployRollbackFailed:
-		return rb.Phase == providers.PhaseRestored
-	case providers.DeployNoChange:
-		return rb.Phase == providers.PhasePrepared || rb.Phase == providers.PhaseUnchanged ||
-			rb.Reason == reasonSuperseded || rb.Reason == reasonUnknownOperation
-	}
-	return false
+// serverOperationPending is the refusal deployment.server_operation_pending: op blocks the pair and
+// Alice did not (or could not) restore it; nothing was written by this deployment.
+func serverOperationPending(out providers.DeployOutcome, params map[string]string) (providers.DeployOutcome, error) {
+	e := providers.NewError(reasonServerOperationPending, false, nil, maps.Clone(params))
+	return providers.DeployOutcome{Result: providers.DeployNoChange, Reason: e.Code, Params: maps.Clone(params), Backup: out.Backup}, e
+}
+
+// pendingRestoredOutcome is rolled_back deployment.pending_change_restored: Alice put back the files
+// of the unfinished earlier change op (its step recover_pending), so the website serves the
+// certificate from before op; this deployment's certificate was not written. rolled_back (the
+// "failed, restored" headline), not failed ("nothing changed" would be false: the restore changed
+// the server).
+func pendingRestoredOutcome(params map[string]string) (providers.DeployOutcome, error) {
+	return providers.DeployOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestored, FailedStep: stepRecoverPending,
+		Reason: reasonPendingChangeRestored, Params: maps.Clone(params)}, nil
 }
 
 // precheck verifies what the website serves before any change (F-06, F-07): the location's current

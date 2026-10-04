@@ -174,6 +174,10 @@ var (
 	// operation Alice no longer tracks blocks the files, and Alice could not restore it (param
 	// operation_id; nothing was written).
 	ErrDeployServerOperationPending = ErrorCode{Code: "ALC-DEP-0023", Reason: "deployment.server_operation_pending", Status: http.StatusConflict}
+	// ErrDeployPendingChangeRestored: Alice put back the files of an unfinished earlier change it no
+	// longer tracked (param operation_id); the website serves the certificate from before that
+	// change; this deployment's certificate was not written (status rolled_back).
+	ErrDeployPendingChangeRestored = ErrorCode{Code: "ALC-DEP-0024", Reason: "deployment.pending_change_restored", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -202,7 +206,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrDeployReloadFailed, ErrDeployConfigTestFailed, ErrDeployRollbackFailed, ErrDeployRollbackReloadFailed,
 		ErrDeployInterrupted, ErrDeployTargetNotReady, ErrDeployVerifyChain, ErrDeployNothingToRestore, ErrDeploySuperseded,
 		ErrDeployUnknownOperation, ErrDeployTargetDeleted, ErrDeployRecoveryExhausted, ErrDeployOutcomeUnknown,
-		ErrDeployRestoredUnverified, ErrDeployRollbackFileChanged, ErrDeployRescanNeeded, ErrDeployCancelled, ErrDeployServerOperationPending,
+		ErrDeployRestoredUnverified, ErrDeployRollbackFileChanged, ErrDeployRescanNeeded, ErrDeployCancelled, ErrDeployServerOperationPending, ErrDeployPendingChangeRestored,
 	}
 }
 

@@ -378,18 +378,28 @@ func (s *Service) CheckRecoveryPending(ctx context.Context, id uuid.UUID) error 
 	return recoveryPending(ctx, s.pool, id)
 }
 
-// OperationUnfinished reports whether Alice tracks op as the operation of a deployment that has
-// not finished (any state but done). The deploy engine asks it about the operation a helper names
-// as blocking a pair (RECOVERY_PENDING): one Alice still recovers is left to that recovery; one
-// Alice finished (or never knew) is restored by the deploy that met it (final review fix round 1).
-func (s *Service) OperationUnfinished(ctx context.Context, op uuid.UUID) (bool, error) {
-	var unfinished bool
-	err := s.pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM deployments WHERE operation_id = $1 AND state <> $2)", op,
-		DeployStateDone).Scan(&unfinished)
-	if err != nil {
-		return false, fmt.Errorf("inventory: read the deployments of an operation: %w", err)
+// OperationOwner is the deployment that owns an operation id (OperationDeployment).
+type OperationOwner struct {
+	ID, TargetID, LocationID uuid.UUID
+	State, Status            string
+}
+
+// OperationDeployment returns the deployment whose operation is op (known false: Alice has none).
+// The deploy engine asks it about the operation a helper names as blocking a pair
+// (RECOVERY_PENDING): one Alice has not finished is left to its recovery; Alice restores only an
+// operation it does not know, or a finished rollback_failed one of the same server and location
+// (final review fix rounds 1 and 2).
+func (s *Service) OperationDeployment(ctx context.Context, op uuid.UUID) (OperationOwner, bool, error) {
+	var o OperationOwner
+	err := s.pool.QueryRow(ctx, "SELECT id, target_id, location_id, state, status FROM deployments WHERE operation_id = $1", op).
+		Scan(&o.ID, &o.TargetID, &o.LocationID, &o.State, &o.Status)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return OperationOwner{}, false, nil
+	case err != nil:
+		return OperationOwner{}, false, fmt.Errorf("inventory: read the deployment of an operation: %w", err)
 	}
-	return unfinished, nil
+	return o, true, nil
 }
 
 func recoveryPending(ctx context.Context, q db.Querier, id uuid.UUID) error {

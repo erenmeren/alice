@@ -170,7 +170,7 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 	switch st.Phase {
 	case providers.PhaseFenced:
 		// An earlier recovery fenced it and could not record: nothing was written, nothing will be.
-		return h.recordFor(ctx, d, failedRecord(reasonInterrupted, providers.PhaseNone, true), m, nil)
+		return h.recordFor(ctx, d, fencedRecord(d, providers.PhaseNone), m, nil)
 	case providers.PhaseNone, providers.PhasePrepared:
 		if d.StartedAt == nil || h.sentLongAgo(d, now) {
 			// After an outage longer than a day the helper may have swept the journal of a change
@@ -194,7 +194,7 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 		case fst.Active:
 			return h.recordFor(ctx, d, uncertainRecord(reasonBusy), m, nil)
 		case fst.Phase == providers.PhaseFenced:
-			return h.recordFor(ctx, d, failedRecord(reasonInterrupted, st.Phase, true), m, nil)
+			return h.recordFor(ctx, d, fencedRecord(d, st.Phase), m, nil)
 		case fst.Phase == providers.PhaseNone || fst.Phase == providers.PhasePrepared:
 			// A fence that did not fence (it cannot answer these): proves nothing.
 			return unresolved(m, providers.NewError("ssh.protocol_error", false, errors.New("deployjobs: the fence answered "+fst.Phase), nil))
@@ -343,6 +343,22 @@ func permanent(err error) error {
 func uncertainRecord(code string) inventory.OutcomeRecord {
 	return inventory.OutcomeRecord{Finish: inventory.DeploymentFinish{Result: string(providers.DeployUncertain), ErrorCode: code,
 		Params: map[string]string{}}}
+}
+
+// fencedRecord is the record of a deployment whose operation was fenced (it never ran): failed
+// deployment.interrupted, nothing written; or, when its steps show that it had put back the files
+// of an unfinished earlier change before it died (recover_pending ok, fix round 2), rolled_back
+// deployment.pending_change_restored with that change's operation id ("nothing changed" would be
+// false).
+func fencedRecord(d inventory.Deployment, phase string) inventory.OutcomeRecord {
+	for i := len(d.Steps) - 1; i >= 0; i-- {
+		st := d.Steps[i]
+		if st.Name == stepRecoverPending && st.Status == string(providers.StepOK) && st.Params["operation_id"] != "" {
+			out, _ := pendingRestoredOutcome(map[string]string{"operation_id": st.Params["operation_id"]})
+			return inventory.DeployOutcomeRecord(out, nil, false)
+		}
+	}
+	return failedRecord(reasonInterrupted, phase, true)
 }
 
 // failedRecord ends a deployment failed; proven (NothingWritten) only after a fence answered

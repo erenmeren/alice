@@ -632,9 +632,14 @@
         "cause": "Bir yönetici dağıtımın bekleyen işi için Vazgeç'i seçti; bu yüzden Alice sunucuya hiçbir şey göndermedi. Web sitesi önceki sertifikasını kullanmaya devam ediyor.",
         "action": "Sertifika hâlâ gerekiyorsa yeniden dağıtın."
       },
+      "pending_change_restored": {
+        "title": "Alice bu dosyalardaki tamamlanmamış önceki bir değişikliği geri aldı; bu sertifika dağıtılmadı.",
+        "cause": "Bu sertifika dosyalarında sunucuda yapılan önceki bir değişiklik tamamlanmadı ve Alice onu artık izlemiyordu. Alice o değişikliğin yerini aldığı dosyaları geri koydu; web sitesi artık o değişiklikten önceki sertifikayı sunuyor. Bu dağıtımın sertifikası yazılmadı.",
+        "action": "Alice'in dosyaları yeniden okuması için sunucunun sayfasında Keşfet'i seçin, ardından sertifikayı yeniden dağıtın."
+      },
       "server_operation_pending": {
         "title": "Sunucudaki tamamlanmamış bir değişiklik bu sertifika dosyalarını engelliyor.",
-        "cause": "Bu dosyalarda sunucuda yapılan önceki bir değişiklik tamamlanmadı ve Alice onu artık izlemiyor; bu yüzden sunucu yeni değişiklikleri reddediyor. Alice o değişikliğin yerini aldığı dosyaları geri koymayı denedi, ancak başaramadı. Bu dağıtım hiçbir şeyi değiştirmedi.",
+        "cause": "Bu dosyalarda sunucuda yapılan önceki bir değişiklik tamamlanmadı ve Alice onu artık izlemiyor; bu yüzden sunucu yeni değişiklikleri reddediyor. Alice o değişikliğin yerini aldığı dosyaları geri koymadı: ya o değişikliği geri almaz (Alice onu başka bir web sitesinden ya da normal biten bir değişiklik olarak tanır) ya da denemesi tamamlanmadı; bu durumda iki dosyadan birini geri koymuş olabilir. Bu dağıtımın sertifikası yazılmadı.",
         "action": "Dağıtımın ayrıntıları tamamlanmamış değişikliği (işlem kimliği) gösterir. Sunucuda root olarak /usr/local/libexec/alice-helper nginx-restore --op komutunu bu kimlikle çalıştırın, ardından nginx -t komutunu çalıştırın ve yeniden dağıtın."
       }
     }

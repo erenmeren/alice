@@ -52,8 +52,8 @@ type fakeInv struct {
 	ctxErrs  map[string]error // the context's error when the method was called
 	claims   map[string]inventory.Claim
 	lost     bool // the job run's claim is lost: every write is refused (inventory's fence)
-	// unfinishedOps are the operations of deployments Alice has not finished (OperationUnfinished).
-	unfinishedOps map[uuid.UUID]bool
+	// ops are the deployments that own operation ids (OperationDeployment).
+	ops map[uuid.UUID]inventory.OperationOwner
 }
 
 var fencedWrites = []string{"BeginDeployment", "StartDeployment", "RecordDeploymentStep", "FinishDeployment", "RecordOutcome", "CheckClaim"}
@@ -135,13 +135,14 @@ func (f *fakeInv) CheckRecoveryPending(ctx context.Context, _ uuid.UUID) error {
 	return f.call(ctx, "CheckRecoveryPending")
 }
 
-func (f *fakeInv) OperationUnfinished(ctx context.Context, op uuid.UUID) (bool, error) {
-	if err := f.call(ctx, "OperationUnfinished"); err != nil {
-		return false, err
+func (f *fakeInv) OperationDeployment(ctx context.Context, op uuid.UUID) (inventory.OperationOwner, bool, error) {
+	if err := f.call(ctx, "OperationDeployment"); err != nil {
+		return inventory.OperationOwner{}, false, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.unfinishedOps[op], nil
+	o, ok := f.ops[op]
+	return o, ok, nil
 }
 
 func (f *fakeInv) BeginDeployment(ctx context.Context, _ uuid.UUID) (inventory.Deployment, error) {
@@ -1777,60 +1778,114 @@ func TestUnchangedSkippedThatIsNoLongerAllowedEndsFailed(t *testing.T) {
 	assert.Equal(t, 2, calls)
 }
 
-// Fix round 1, Important 1: a first send refused because an interrupted operation blocks the pair.
+// Fix rounds 1 and 2, Important 1: a first send refused because an interrupted operation blocks
+// the pair.
 func TestDeployMeetsAPendingOperation(t *testing.T) {
 	pendingOp := uuid.MustParse("0190f5a0-0000-7000-8000-00000000abcd")
-	refusal := func() (providers.DeployOutcome, error) {
-		p := map[string]string{"operation_id": pendingOp.String()}
-		e := providers.NewError("deployment.recovery_pending", false, nil, p)
+	refusalOf := func(reason string, p map[string]string) (providers.DeployOutcome, error) {
+		e := providers.NewError(reason, false, nil, p)
 		return providers.DeployOutcome{Result: providers.DeployNoChange, Reason: e.Code, Params: maps.Clone(p)}, e
 	}
-	committed := providers.DeployOutcome{Result: providers.DeployCommitted, Phase: providers.PhaseCommitted, Verified: "remote"}
+	pending := func() (providers.DeployOutcome, error) {
+		return refusalOf("deployment.recovery_pending", map[string]string{"operation_id": pendingOp.String()})
+	}
+	fileChanged := func() (providers.DeployOutcome, error) { return refusalOf("nginx.file_changed", nil) }
+	committed := func() (providers.DeployOutcome, error) {
+		return providers.DeployOutcome{Result: providers.DeployCommitted, Phase: providers.PhaseCommitted, Verified: "remote"}, nil
+	}
+	restored := func() (providers.RollbackOutcome, error) {
+		return providers.RollbackOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestored}, nil
+	}
+	hashMismatch := func() (providers.RollbackOutcome, error) { // someone else's file: nothing restored
+		return providers.RollbackOutcome{Result: providers.DeployRollbackFailed, FailedStep: "restore", Error: providers.DeployErrFileChanged,
+			Reason: "deployment.rollback_failed"}, nil
+	}
 	type tc struct {
 		name       string
-		tracked    bool
-		trackErr   error
-		rollback   func(providers.RollbackRequest) (providers.RollbackOutcome, error)
-		again      bool // the second send is refused again
+		owner      *inventory.OperationOwner // the deployment Alice knows for pendingOp (nil: none)
+		ownerErr   error
+		claimErrAt int // the n-th CheckClaim fails (transiently)
+		rollback   func() (providers.RollbackOutcome, error)
+		second     func() (providers.DeployOutcome, error)
 		status     string
 		code       string
 		sends      int
 		rollbacks  int
 		stepStates []string
 	}
-	restored := func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
-		return providers.RollbackOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestored}, nil
-	}
 	for _, c := range []tc{
-		{name: "not tracked: restored, sent again, committed", rollback: restored, status: inventory.DeployStatusSucceeded, sends: 2, rollbacks: 1,
-			stepStates: []string{"started", "ok"}},
-		{name: "not tracked: superseded (no longer blocks), sent again", rollback: func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
+		{name: "unknown: restored, sent again, committed", rollback: restored, second: committed,
+			status: inventory.DeployStatusSucceeded, sends: 2, rollbacks: 1, stepStates: []string{"started", "ok"}},
+		{name: "unknown: restored, the second send refused file_changed: rolled_back pending_change_restored (round 2 Important 1)",
+			rollback: restored, second: fileChanged, status: inventory.DeployStatusRolledBack, code: "deployment.pending_change_restored",
+			sends: 2, rollbacks: 1, stepStates: []string{"started", "ok"}},
+		{name: "unknown: restored, refused RECOVERY_PENDING again: pending_change_restored", rollback: restored, second: pending,
+			status: inventory.DeployStatusRolledBack, code: "deployment.pending_change_restored", sends: 2, rollbacks: 1, stepStates: []string{"started", "ok"}},
+		{name: "unknown: superseded (nothing put back), sent again", rollback: func() (providers.RollbackOutcome, error) {
 			e := providers.NewError("deployment.superseded", false, nil, nil)
 			return providers.RollbackOutcome{Result: providers.DeployNoChange, Reason: e.Code}, e
-		}, status: inventory.DeployStatusSucceeded, sends: 2, rollbacks: 1, stepStates: []string{"started", "ok"}},
-		{name: "not tracked: the restore fails (an unreadable journal: IO_ERROR)", rollback: func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
+		}, second: committed, status: inventory.DeployStatusSucceeded, sends: 2, rollbacks: 1, stepStates: []string{"started", "skipped"}},
+		{name: "unknown: HASH_MISMATCH (nothing restored) releases the pair: sent again (round 2 minor 2)", rollback: hashMismatch, second: committed,
+			status: inventory.DeployStatusSucceeded, sends: 2, rollbacks: 1, stepStates: []string{"started", "skipped"}},
+		{name: "unknown: HASH_MISMATCH, then refused file_changed: the refusal is truthful", rollback: hashMismatch, second: fileChanged,
+			status: inventory.DeployStatusFailed, code: "nginx.file_changed", sends: 2, rollbacks: 1, stepStates: []string{"started", "skipped"}},
+		{name: "unknown: the restore fails (IO_ERROR of an unreadable journal)", rollback: func() (providers.RollbackOutcome, error) {
 			e := providers.NewError("ssh.helper_refused", true, nil, map[string]string{"helper_code": "IO_ERROR"})
 			return providers.RollbackOutcome{Result: providers.DeployNoChange, Reason: e.Code, Params: maps.Clone(e.Params)}, e
 		}, status: inventory.DeployStatusFailed, code: "deployment.server_operation_pending", sends: 1, rollbacks: 1, stepStates: []string{"started", "failed"}},
-		{name: "not tracked: restore_failed", rollback: func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
+		{name: "unknown: restore_failed", rollback: func() (providers.RollbackOutcome, error) {
 			return providers.RollbackOutcome{Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestoreFailed, FailedStep: "restore",
 				Reason: "deployment.rollback_failed"}, nil
 		}, status: inventory.DeployStatusFailed, code: "deployment.server_operation_pending", sends: 1, rollbacks: 1, stepStates: []string{"started", "failed"}},
-		{name: "not tracked: the restore is uncertain", rollback: func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
+		{name: "unknown: the restore is uncertain", rollback: func() (providers.RollbackOutcome, error) {
 			return providers.RollbackOutcome{Result: providers.DeployUncertain}, providers.NewError("ssh.timeout", true, nil, nil)
 		}, status: inventory.DeployStatusFailed, code: "deployment.server_operation_pending", sends: 1, rollbacks: 1, stepStates: []string{"started", "failed"}},
-		{name: "not tracked: refused again after the restore", rollback: restored, again: true, status: inventory.DeployStatusFailed,
-			code: "deployment.server_operation_pending", sends: 2, rollbacks: 1, stepStates: []string{"started", "ok", "failed"}},
-		{name: "tracked by an unfinished deployment: today's refusal", tracked: true, status: inventory.DeployStatusFailed,
-			code: "deployment.recovery_pending", sends: 1},
-		{name: "the lookup fails: today's refusal", trackErr: errors.New("db down"), status: inventory.DeployStatusFailed,
+		{name: "unknown: the claim check before the restore fails: no restore, the refusal (round 2 minor 4)", claimErrAt: 2,
+			status: inventory.DeployStatusFailed, code: "deployment.recovery_pending", sends: 1},
+		{name: "unknown: the claim check before the second send fails after a restore: pending_change_restored, no send (minor 5)",
+			claimErrAt: 3, rollback: restored, status: inventory.DeployStatusRolledBack, code: "deployment.pending_change_restored",
+			sends: 1, rollbacks: 1, stepStates: []string{"started", "ok"}},
+		{name: "known: a finished rollback_failed deployment of this server and location: restored",
+			owner: &inventory.OperationOwner{State: inventory.DeployStateDone, Status: inventory.DeployStatusRollbackFailed}, rollback: restored,
+			second: committed, status: inventory.DeployStatusSucceeded, sends: 2, rollbacks: 1, stepStates: []string{"started", "ok"}},
+		{name: "known: a succeeded deployment: no restore (round 2 minor 1)",
+			owner:  &inventory.OperationOwner{State: inventory.DeployStateDone, Status: inventory.DeployStatusSucceeded},
+			status: inventory.DeployStatusFailed, code: "deployment.server_operation_pending", sends: 1},
+		{name: "known: rollback_failed of another location: no restore",
+			owner:  &inventory.OperationOwner{State: inventory.DeployStateDone, Status: inventory.DeployStatusRollbackFailed, LocationID: uuid.New()},
+			status: inventory.DeployStatusFailed, code: "deployment.server_operation_pending", sends: 1},
+		{name: "known: an unfinished deployment: today's refusal",
+			owner:  &inventory.OperationOwner{State: inventory.DeployStateRecovering, Status: inventory.DeployStatusRunning},
+			status: inventory.DeployStatusFailed, code: "deployment.recovery_pending", sends: 1},
+		{name: "the lookup fails: today's refusal", ownerErr: errors.New("db down"), status: inventory.DeployStatusFailed,
 			code: "deployment.recovery_pending", sends: 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixture(t)
-			f.inv.unfinishedOps = map[uuid.UUID]bool{pendingOp: c.tracked}
-			if c.trackErr != nil {
-				f.inv.errs["OperationUnfinished"] = c.trackErr
+			f.inv.ops = map[uuid.UUID]inventory.OperationOwner{}
+			if c.owner != nil {
+				o := *c.owner
+				if o.TargetID == uuid.Nil {
+					o.TargetID = f.inv.dep.TargetID
+				}
+				if o.LocationID == uuid.Nil {
+					o.LocationID = f.inv.dep.LocationID
+				}
+				f.inv.ops[pendingOp] = o
+			}
+			if c.ownerErr != nil {
+				f.inv.errs["OperationDeployment"] = c.ownerErr
+			}
+			checks := 0
+			f.inv.hooks["CheckClaim"] = func(context.Context) {
+				checks++
+				f.inv.mu.Lock()
+				defer f.inv.mu.Unlock()
+				if checks == c.claimErrAt {
+					f.inv.errs["CheckClaim"] = errors.New("db blip")
+				} else {
+					delete(f.inv.errs, "CheckClaim")
+				}
 			}
 			sends := 0
 			var keys [][]byte
@@ -1839,15 +1894,15 @@ func TestDeployMeetsAPendingOperation(t *testing.T) {
 					sends++
 					keys = append(keys, append([]byte(nil), req.PrivateKeyPEM.Bytes()...))
 					assert.Equal(t, f.id, req.OperationID, "the same operation id")
-					if sends == 1 || c.again {
-						return refusal()
+					if sends == 1 {
+						return pending()
 					}
-					return committed, nil
+					return c.second()
 				}
 				cfg.Rollback = func(req providers.RollbackRequest) (providers.RollbackOutcome, error) {
 					assert.Equal(t, pendingOp, req.OperationID, "the pending operation is restored, not this deployment's")
 					assert.Empty(t, req.OldFingerprint)
-					return c.rollback(req)
+					return c.rollback()
 				}
 			})
 			res, _ := f.h.deploy(f.ctx, f.job(), f.steps)
@@ -1857,11 +1912,15 @@ func TestDeployMeetsAPendingOperation(t *testing.T) {
 			fin := f.inv.lastFinish()
 			assert.Equal(t, c.status, fin.Status)
 			assert.Equal(t, c.code, fin.ErrorCode)
-			if c.code != "" {
+			if c.status == inventory.DeployStatusFailed {
 				assert.True(t, fin.NothingWritten, "the helper refused before any write")
 			}
-			if c.code == "deployment.server_operation_pending" {
+			if c.code == "deployment.server_operation_pending" || c.code == "deployment.pending_change_restored" {
 				assert.Equal(t, pendingOp.String(), fin.Params["operation_id"])
+			}
+			if c.code == "deployment.pending_change_restored" {
+				assert.Equal(t, providers.PhaseRestored, fin.Phase)
+				assert.Equal(t, stepRecoverPending, fin.FailedStep)
 			}
 			var states []string
 			for _, st := range f.inv.stepNames() {
@@ -1870,10 +1929,33 @@ func TestDeployMeetsAPendingOperation(t *testing.T) {
 				}
 			}
 			assert.Equal(t, c.stepStates, states)
-			if c.sends == 2 {
+			if sends == 2 {
 				assert.Equal(t, keys[0], keys[1], "the second send carries the key")
 			}
 			assert.True(t, f.keyZeroed(), "the key is zeroed afterwards")
+		})
+	}
+}
+
+// Fix round 2, Important 1, the crash path: recovery finds the deployment fenced (no journal) and a
+// recover_pending ok step: rolled_back deployment.pending_change_restored, not "failed, nothing
+// written".
+func TestRecoveryAfterARestoredPendingOperation(t *testing.T) {
+	for _, phase := range []string{providers.PhaseNone, providers.PhaseFenced} {
+		t.Run(phase, func(t *testing.T) {
+			f := newFixture(t)
+			f.sent(inventory.DeployStateRecovering, 2*time.Minute)
+			op := uuid.New().String()
+			f.inv.dep.Steps = []inventory.DeploymentStep{{Name: stepRecoverPending, Status: "started", Params: map[string]string{"operation_id": op}},
+				{Name: stepRecoverPending, Status: "ok", Params: map[string]string{"operation_id": op}}}
+			f.status = providers.DeploymentState{Phase: phase}
+			_, err := f.h.recoverJob(f.ctx, f.recoverJob(), f.steps)
+			require.NoError(t, err)
+			require.Len(t, f.inv.outcomes, 1)
+			fin := f.inv.outcomes[0].Finish
+			assert.Equal(t, inventory.DeployStatusRolledBack, fin.Status)
+			assert.Equal(t, "deployment.pending_change_restored", fin.ErrorCode)
+			assert.Equal(t, op, fin.Params["operation_id"])
 		})
 	}
 }

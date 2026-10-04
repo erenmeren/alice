@@ -632,9 +632,14 @@
         "cause": "An administrator chose Discard for the deployment's waiting job, so Alice sent nothing to the server. The website keeps its previous certificate.",
         "action": "Deploy the certificate again if it is still needed."
       },
+      "pending_change_restored": {
+        "title": "Alice undid an unfinished earlier change of these files; this certificate was not deployed.",
+        "cause": "An earlier change of these certificate files on the server did not finish, and Alice no longer followed it. Alice put back the files that change had replaced, so the website now serves the certificate from before that change. The certificate of this deployment was not written.",
+        "action": "Choose Discover on the server's page so that Alice reads the files again, then deploy the certificate again."
+      },
       "server_operation_pending": {
         "title": "An unfinished change of these certificate files on the server stops new changes.",
-        "cause": "An earlier change of these files on the server did not finish, and Alice no longer follows it, so the server refuses new changes. Alice tried to put back the files that change replaced, and could not. Nothing was changed by this deployment.",
+        "cause": "An earlier change of these files on the server did not finish, and Alice no longer follows it, so the server refuses new changes. Alice did not put back the files that change replaced: either it does not restore that change (Alice knows it from another website, or as a change that ended normally), or its attempt did not finish, in which case it may have put back one of the two files. This deployment's certificate was not written.",
         "action": "The deployment's details name the unfinished change (operation id). On the server, as root, run /usr/local/libexec/alice-helper nginx-restore --op followed by that id, then run nginx -t, and deploy again."
       }
     }

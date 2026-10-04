@@ -67,8 +67,8 @@ type Inventory interface {
 
 	Deployment(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
 	CheckRecoveryPending(ctx context.Context, id uuid.UUID) error
-	// OperationUnfinished reports whether a deployment Alice has not finished owns operation op.
-	OperationUnfinished(ctx context.Context, op uuid.UUID) (bool, error)
+	// OperationDeployment returns the deployment that owns operation op (known false: none).
+	OperationDeployment(ctx context.Context, op uuid.UUID) (inventory.OperationOwner, bool, error)
 	BeginDeployment(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
 	DeploymentMaterial(ctx context.Context, id uuid.UUID, withKey bool) (inventory.Material, error)
 	StartDeployment(ctx context.Context, id uuid.UUID, v inventory.SendValues) error
@@ -172,8 +172,12 @@ const (
 	// operation Alice no longer tracks blocks the pair, and Alice could not restore it (param
 	// operation_id; the manual remedy is alice-helper nginx-restore --op <id> as root).
 	reasonServerOperationPending = "deployment.server_operation_pending"
-	reasonSuperseded             = "deployment.superseded"
-	reasonUnknownOperation       = "deployment.unknown_operation"
+	// reasonPendingChangeRestored: Alice put back the files of an unfinished earlier change it no
+	// longer tracked (param operation_id); the website serves the certificate from before that
+	// change; this deployment's certificate was not written (status rolled_back).
+	reasonPendingChangeRestored = "deployment.pending_change_restored"
+	reasonSuperseded            = "deployment.superseded"
+	reasonUnknownOperation      = "deployment.unknown_operation"
 )
 
 // detached is ctx without its cancellation, bounded by RecordTimeout: for the records that must

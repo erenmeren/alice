@@ -423,12 +423,18 @@ func TestRecoveryWithoutAJournalJustUnderADayIsNothingWritten(t *testing.T) {
 // on disk, Nginx still serves the old one.
 func (e *env) foreignInterrupted(s *server) uuid.UUID {
 	e.t.Helper()
+	return e.foreignInterruptedAt(s, helperproto.StepWriteCert)
+}
+
+// foreignInterruptedAt is foreignInterrupted killed at point.
+func (e *env) foreignInterruptedAt(s *server, point string) uuid.UUID {
+	e.t.Helper()
 	op := uuid.New()
 	third := e.ca.Issue(pki.Opts{CommonName: wwwName, SANs: []string{wwwName}}, e.clock.Now())
 	in, err := json.Marshal(helperproto.NginxDeployInput{CertPEM: string(third.FullchainPEM), KeyPEM: string(third.KeyPEM)})
 	require.NoError(e.t, err)
 	sum := func(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
-	s.emu.KillAt(helperproto.StepWriteCert)
+	s.emu.KillAt(point)
 	line := "sudo -n " + helperproto.HelperPath + " nginx-deploy --op " + op.String() + " --cert " + wwwCert + " --key " + wwwKey +
 		" --expect-cert-sha256 " + sum(e.old.FullchainPEM) + " --content-sha256 " + sum(in)
 	_ = s.emu.Handler()(line, in)
@@ -476,7 +482,7 @@ func TestDeploymentEndsWhenAPendingOperationCannotBeRestored(t *testing.T) {
 }
 
 // A crash between the restore and the second send: the deployment has no journal; its recovery
-// fences it and ends it failed (nothing written by it). The next deployment no longer meets the
+// fences it and, seeing the recover_pending ok step, ends it rolled back pending_change_restored. The next deployment no longer meets the
 // operation (it was restored) and commits without another restore.
 func TestCrashAfterRestoringAPendingOperation(t *testing.T) {
 	e := newEnv(t)
@@ -488,8 +494,11 @@ func TestCrashAfterRestoringAPendingOperation(t *testing.T) {
 	require.Equal(t, "step:recover_pending:ok", k.firedAt())
 	e.restart()
 	d := e.settle(id)
-	assert.Equal(t, inventory.DeployStatusFailed, d.Status)
-	assert.Equal(t, "deployment.interrupted", d.ErrorCode)
+	// Fix round 2: the deployment put back the earlier change's files before it died: not "failed,
+	// nothing written" but rolled back, naming that change.
+	assert.Equal(t, inventory.DeployStatusRolledBack, d.Status)
+	assert.Equal(t, "deployment.pending_change_restored", d.ErrorCode)
+	assert.Equal(t, op.String(), d.ErrorParams["operation_id"])
 	assert.Equal(t, helperproto.PhaseRestored, s.emu.NginxPhase(op.String()))
 	e.assertPair(s, wwwCert, wwwKey, wwwName, e.old)
 
@@ -498,4 +507,37 @@ func TestCrashAfterRestoringAPendingOperation(t *testing.T) {
 	require.Equal(t, inventory.DeployStatusSucceeded, d.Status, "%s", d.ErrorCode)
 	assert.NotContains(t, stepList(d.Steps), "recover_pending:started")
 	e.assertPair(s, wwwCert, wwwKey, wwwName, e.nw)
+}
+
+// Fix round 2, Important 1, with a discovery between the interruption and the new deployment: the
+// discovery records the interrupted change's certificate as the file's; the deployment restores
+// that change, its second send expects that file and is refused: rolled back
+// pending_change_restored, never "failed, nothing changed". A fresh discovery and deployment
+// then commit.
+func TestPendingOperationAfterADiscovery(t *testing.T) {
+	e := newEnv(t)
+	s := e.addServer("web-01", wwwSite())
+	op := e.foreignInterruptedAt(s, helperproto.StepReload) // Nginx serves the interrupted change's pair
+	e.discover(s)
+	id := e.request(s.locs[wwwCert])[0]
+	d := e.settle(id)
+	assert.Equal(t, inventory.DeployStatusRolledBack, d.Status, d.ErrorCode)
+	assert.Equal(t, "deployment.pending_change_restored", d.ErrorCode)
+	assert.Equal(t, op.String(), d.ErrorParams["operation_id"])
+	assert.Contains(t, stepList(d.Steps), "recover_pending:ok")
+	e.assertPair(s, wwwCert, wwwKey, wwwName, e.old)
+
+	e.discover(s)
+	id2 := e.request(s.locs[wwwCert])[0]
+	d = e.settle(id2)
+	require.Equal(t, inventory.DeployStatusSucceeded, d.Status, d.ErrorCode)
+	e.assertPair(s, wwwCert, wwwKey, wwwName, e.nw)
+}
+
+// discover runs a discovery of s's server now.
+func (e *env) discover(s *server) {
+	e.t.Helper()
+	_, err := e.inv.RequestDiscovery(e.ctx, e.admin, s.target)
+	require.NoError(e.t, err)
+	e.drain()
 }

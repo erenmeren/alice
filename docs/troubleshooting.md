@@ -1203,3 +1203,12 @@ A deployment may show `ALC-DEP-0019` (the files are back but the website was not
 **Likely cause.** A deployment was interrupted on the server (for example the helper was killed between writing the key and the certificate) and Alice no longer follows it: its outcome was recorded as unknown after a day of recovery attempts, the server was deleted and added again, or Alice's database was restored from a backup. alice-helper keeps refusing new changes of those files until that change is rolled back. When a deployment meets such a change, Alice runs the restore itself once (the deployment's history shows the step `recover_pending` with the operation id) and deploys again; this message means that restore did not succeed, for example because the change's journal cannot be read.
 
 **What to do.** On the server, as root, run `/usr/local/libexec/alice-helper nginx-restore --op <operation_id>` and read its answer. Then run `nginx -t`, and deploy again. If the restore answers an error, keep the folder `/var/lib/alice-helper/backups/<operation_id>`: it holds the files that change replaced.
+
+
+## ALC-DEP-0024: Alice undid an unfinished earlier change; the certificate was not deployed
+
+**Meaning.** An earlier change of the same certificate and key files on the server did not finish, and Alice no longer followed it. Alice put back the files that change had replaced, so the website now serves the certificate from before that change; the certificate of this deployment was not written. (HTTP 409, reason `deployment.pending_change_restored`, status rolled back; the parameter `operation_id` names the earlier change, and the deployment's history shows the step `recover_pending`.)
+
+**Likely cause.** The earlier change was interrupted on the server (for example the helper was killed after replacing the files), and Alice had stopped following it: its outcome was recorded as unknown, the server was deleted and added again, or Alice's database was restored. The new deployment found the files blocked, restored them, and then could not write its own certificate, typically because the files no longer held what Alice had last read (it had read the earlier change's files).
+
+**What to do.** Choose **Discover** on the server's page so that Alice reads the files again, then deploy the certificate again.
