@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Alice API
   version: 0.1.0
-  description: Self-hosted SSH key and TLS certificate management. All timestamps are UTC RFC 3339.
+  description: "Self-hosted SSH key and TLS certificate management. All timestamps are UTC RFC 3339. A signed-in session's 30-minute idle timeout is extended only by state-changing requests that pass the origin and CSRF checks and by same-origin reads that carry the header X-Alice-Activity: 1 (the web UI sends it after a person's input); other reads leave it unchanged. API tokens have no idle timeout."
 servers:
   - url: /
 paths:
@@ -1604,7 +1604,10 @@ components:
         user: { $ref: "#/components/schemas/User" }
         csrf_token: { type: string }
         expires_at: { type: string, format: date-time }
-        idle_expires_at: { type: string, format: date-time }
+        idle_expires_at:
+          type: string
+          format: date-time
+          description: When the session ends without a person's activity (see the API description; reading it does not extend it)
         stepup_until: { type: [string, "null"], format: date-time }
     SessionWithCodes:
       description: SessionInfo plus the one-time recovery codes (only from administrator creation and MFA verification)

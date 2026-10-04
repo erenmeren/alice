@@ -120,6 +120,106 @@ func TestA02IdleTimeout(t *testing.T) {
 	requireError(t, c.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusUnauthorized, "ALC-AUTH-0001")
 }
 
+// poll is a background read of the web UI: no X-Alice-Activity marker.
+func poll(c *client, path string, opts ...reqOpt) *httptest.ResponseRecorder {
+	return c.do(http.MethodGet, path, nil, append([]reqOpt{withoutHeader(activityHeader)}, opts...)...)
+}
+
+// idleDeadline reads idle_expires_at from GET /auth/session without sliding it.
+func idleDeadline(t *testing.T, c *client) time.Time {
+	t.Helper()
+	rec := poll(c, "/api/v1/auth/session")
+	requireStatus(t, rec, http.StatusOK)
+	return decodeBody[struct {
+		IdleExpiresAt time.Time `json:"idle_expires_at"`
+	}](t, rec).IdleExpiresAt
+}
+
+// AUD-01 (A-02, from the audit's TestZZAuditBackgroundPollDefeatsIdleTimeout): the web UI's
+// minute-by-minute license poll alone does not keep a session open, and the session endpoint
+// reports the deadline it does not move.
+func TestA02BackgroundPollsDoNotKeepASessionAlive(t *testing.T) {
+	s, c, _ := installed(t)
+	requireStatus(t, c.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK) // the last action: the reference point
+	deadline := s.clock.Now().Add(auth.SessionIdle)
+	for i := 1; i <= 29; i++ {
+		s.clock.Advance(time.Minute)
+		requireStatus(t, poll(c, "/api/v1/license/status"), http.StatusOK)
+	}
+	assert.True(t, deadline.Equal(idleDeadline(t, c)), "polls leave idle_expires_at where the last action put it")
+	s.clock.Advance(time.Minute) // 30 minutes after the last action
+	requireError(t, poll(c, "/api/v1/license/status"), http.StatusUnauthorized, "ALC-AUTH-0001")
+	requireError(t, c.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusUnauthorized, "ALC-AUTH-0001")
+}
+
+// A person's read among polls slides the timer again (A-02 "activity resets the idle timer"), and
+// the session endpoint reports the new deadline.
+func TestA02ActivityAmongPollsSlides(t *testing.T) {
+	s, c, _ := installed(t)
+	s.clock.Advance(20 * time.Minute)
+	requireStatus(t, c.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK) // marked
+	assert.True(t, s.clock.Now().Add(auth.SessionIdle).Equal(idleDeadline(t, c)))
+	for i := 0; i < 29; i++ {
+		s.clock.Advance(time.Minute)
+		requireStatus(t, poll(c, "/api/v1/license/status"), http.StatusOK)
+	}
+	s.clock.Advance(time.Minute)
+	requireError(t, poll(c, "/api/v1/license/status"), http.StatusUnauthorized, "ALC-AUTH-0001")
+}
+
+// AUD-01: a state-changing request this origin's page sent slides the session even when it is
+// then refused by validation; requests another page could make the browser send (cross-site,
+// a sibling subdomain, without this session's CSRF token, a marked read from another site)
+// never slide it, so no third-party page can keep an unattended session alive.
+func TestA02OnlyAcceptedRequestsSlide(t *testing.T) {
+	s, c, _ := installed(t)
+	requireStatus(t, c.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK)
+	s.clock.Advance(20 * time.Minute)
+	for name, opt := range map[string]reqOpt{
+		"missing CSRF token": withoutHeader("X-CSRF-Token"),
+		"wrong CSRF token":   withHeader("X-CSRF-Token", "forged"),
+		"foreign Origin":     withHeader("Origin", "https://evil.example"),
+		"sibling subdomain":  withHeader("Sec-Fetch-Site", "same-site"),
+		"cross-site":         withHeader("Sec-Fetch-Site", "cross-site"),
+	} {
+		rec := c.do(http.MethodPut, "/api/v1/auth/locale", map[string]string{"locale": "en"}, opt)
+		assert.Equal(t, http.StatusForbidden, rec.Code, name)
+		assert.Contains(t, rec.Body.String(), `"ALC-AUTH-0004"`, name)
+	}
+	requireStatus(t, poll(c, "/api/v1/license/status", withHeader(activityHeader, "1"), withHeader("Sec-Fetch-Site", "same-site")), http.StatusOK)
+	requireStatus(t, poll(c, "/api/v1/license/status", withHeader(activityHeader, "1"), withHeader("Sec-Fetch-Site", "cross-site")), http.StatusOK)
+	s.clock.Advance(10 * time.Minute)
+	requireError(t, poll(c, "/api/v1/license/status"), http.StatusUnauthorized, "ALC-AUTH-0001")
+
+	s, c, _ = installed(t)
+	s.clock.Advance(20 * time.Minute)
+	requireStatus(t, c.do(http.MethodPut, "/api/v1/auth/locale", map[string]string{"locale": "de"}, withoutHeader(activityHeader)), http.StatusUnprocessableEntity)
+	s.clock.Advance(29 * time.Minute) // 49 minutes after the wizard: the refused change was the person's action
+	requireStatus(t, poll(c, "/api/v1/license/status"), http.StatusOK)
+	requireStatus(t, c.do(http.MethodPut, "/api/v1/auth/locale", map[string]string{"locale": "en"}, withoutHeader(activityHeader)), http.StatusNoContent)
+	s.clock.Advance(29 * time.Minute)
+	requireStatus(t, poll(c, "/api/v1/license/status"), http.StatusOK)
+	s.clock.Advance(time.Minute)
+	requireError(t, poll(c, "/api/v1/license/status"), http.StatusUnauthorized, "ALC-AUTH-0001")
+}
+
+// The marker cannot revive an ended session, and API tokens have no idle timeout at all.
+func TestA02MarkerOnAnEndedSessionAndTokens(t *testing.T) {
+	s, c, admin := installed(t)
+	token, _ := createToken(t, s, c, admin, "read", 1)
+	api := s.client("198.51.100.43")
+	api.bearer = token
+	requireStatus(t, api.do(http.MethodGet, "/api/v1/version", nil, withoutHeader(activityHeader)), http.StatusOK)
+
+	s.clock.Advance(auth.SessionIdle)
+	requireError(t, c.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusUnauthorized, "ALC-AUTH-0001")
+	requireError(t, c.do(http.MethodPost, "/api/v1/auth/logout", nil), http.StatusUnauthorized, "ALC-AUTH-0001")
+	requireError(t, poll(c, "/api/v1/license/status"), http.StatusUnauthorized, "ALC-AUTH-0001")
+
+	s.clock.Advance(2 * time.Hour)
+	requireStatus(t, api.do(http.MethodGet, "/api/v1/version", nil, withoutHeader(activityHeader)), http.StatusOK)
+}
+
 func TestA03AbsoluteTimeout(t *testing.T) {
 	s, c, _ := installed(t)
 	for i := 0; i < 28; i++ { // 28 x 25 min = 11 h 40 min, always active

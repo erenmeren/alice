@@ -429,3 +429,111 @@ func TestLicenseGateRefusesReadOnlyWorkWhileLocked(t *testing.T) {
 	fl.set(nil)
 	assert.Equal(t, http.StatusNoContent, call(h, http.MethodPost, "/api/v1/targets", "admin", `{}`).Code)
 }
+
+// activityCounter wraps identityAuth and counts RecordActivity calls per session.
+func activityCounter(t *testing.T) (Deps, *[]string) {
+	t.Helper()
+	d := testDeps(t, nil)
+	var touched []string
+	d.Auth.(*fakeAuth).RecordActivityFn = func(_ context.Context, p auth.Principal) error {
+		touched = append(touched, string(p.SessionHash))
+		return nil
+	}
+	return d, &touched
+}
+
+// AUD-01: only a person's action slides a session's idle timeout. An unmarked read is
+// background work (a poll); a read marked X-Alice-Activity: 1 from this origin and a
+// state-changing request that passed the origin and CSRF checks are a person's action. A
+// request refused before the permission decision (cross-site, missing CSRF token, rate
+// limit) never slides: a page on another origin or a sibling subdomain cannot keep a
+// victim's session alive.
+func TestOnlyActivitySlidesTheSession(t *testing.T) {
+	mark := func(r *http.Request) { r.Header.Set(activityHeader, "1") }
+	cases := []struct {
+		name   string
+		method string
+		id     string
+		set    func(*http.Request)
+		status int
+		slides bool
+	}{
+		{"unmarked read (poll)", http.MethodGet, "operator", nil, http.StatusOK, false},
+		{"marked read", http.MethodGet, "operator", mark, http.StatusOK, true},
+		{"marked read, same-origin fetch", http.MethodGet, "operator", func(r *http.Request) { mark(r); r.Header.Set("Sec-Fetch-Site", "same-origin") }, http.StatusOK, true},
+		{"marker other than 1", http.MethodGet, "operator", func(r *http.Request) { r.Header.Set(activityHeader, "true") }, http.StatusOK, false},
+		{"marked read from a sibling subdomain", http.MethodGet, "operator", func(r *http.Request) { mark(r); r.Header.Set("Sec-Fetch-Site", "same-site") }, http.StatusOK, false},
+		{"marked read from another site", http.MethodGet, "operator", func(r *http.Request) { mark(r); r.Header.Set("Sec-Fetch-Site", "cross-site") }, http.StatusOK, false},
+		{"marked read with a foreign Origin", http.MethodGet, "operator", func(r *http.Request) { mark(r); r.Header.Set("Origin", "https://evil.example") }, http.StatusOK, false},
+		{"marked HEAD", http.MethodHead, "operator", mark, http.StatusOK, true},
+		{"state change", http.MethodPost, "operator", nil, http.StatusNoContent, true},
+		{"state change without CSRF token", http.MethodPost, "operator", func(r *http.Request) { r.Header.Del("X-CSRF-Token") }, http.StatusForbidden, false},
+		{"state change with a wrong CSRF token, marked", http.MethodPost, "operator", func(r *http.Request) { mark(r); r.Header.Set("X-CSRF-Token", "csrf-admin") }, http.StatusForbidden, false},
+		{"state change from a sibling subdomain", http.MethodPost, "operator", func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "same-site") }, http.StatusForbidden, false},
+		{"state change from a foreign origin", http.MethodPost, "operator", func(r *http.Request) { r.Header.Set("Origin", "https://evil.example") }, http.StatusForbidden, false},
+		{"API token (no idle timeout)", http.MethodPost, "alice_operate_operator", mark, 0, false},
+		{"pending session", http.MethodGet, "pending", mark, http.StatusUnauthorized, false},
+		{"unknown or expired session, marked", http.MethodGet, "expired", mark, http.StatusUnauthorized, false},
+	}
+	for _, tc := range cases {
+		d, touched := activityCounter(t)
+		h, _ := guardedHandler(t, d, rbac.Session, limitDefault)
+		req := as(httptest.NewRequest(tc.method, "/api/v1/probe", nil), tc.id)
+		if tc.set != nil {
+			tc.set(req)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if tc.status != 0 {
+			assert.Equal(t, tc.status, rec.Code, tc.name)
+		}
+		if tc.slides {
+			assert.Equal(t, []string{tc.id}, *touched, tc.name)
+		} else {
+			assert.Empty(t, *touched, tc.name)
+		}
+	}
+}
+
+// A state-changing request that passed the origin and CSRF checks is the person's own action even
+// when it is then refused (permission, step-up, license lock) or fails in the handler: only this
+// origin's page can send it. A rate-limited request does not slide.
+func TestRefusedRequestsAndActivity(t *testing.T) {
+	d, touched := activityCounter(t)
+	h, _ := guardedHandler(t, d, rbac.UsersManage, limitDefault)
+	assert.Equal(t, http.StatusForbidden, call(h, http.MethodPost, "/api/v1/probe", "operator", "").Code)
+	assert.Equal(t, http.StatusForbidden, call(h, http.MethodPost, "/api/v1/probe", "admin", "").Code, "step-up required")
+	assert.Equal(t, []string{"operator", "admin"}, *touched)
+
+	d, touched = activityCounter(t)
+	d.License.(*fakeLicense).set(license.ErrLocked)
+	h = gatedHandler(d, license.ClassChange)
+	assert.Equal(t, http.StatusForbidden, call(h, http.MethodPost, "/api/v1/targets", "operator", `{}`).Code, "license lock")
+	assert.Equal(t, []string{"operator"}, *touched)
+
+	d, touched = activityCounter(t)
+	h, _ = guardedHandler(t, d, rbac.Session, limitDefault)
+	n := 0
+	for call(h, http.MethodPost, "/api/v1/probe", "operator", "").Code != http.StatusTooManyRequests {
+		n++
+		require.Less(t, n, 1000, "the general limit applies")
+	}
+	assert.Len(t, *touched, n, "the rate-limited request does not slide")
+}
+
+// A failure to record activity is a backend failure: 503, the handler does not run.
+func TestRecordActivityFailureIsUnavailable(t *testing.T) {
+	d, _ := activityCounter(t)
+	d.Auth.(*fakeAuth).RecordActivityFn = func(context.Context, auth.Principal) error { return errors.New("db down: password=s3cret-pw") }
+	called := false
+	s := newServer(d)
+	h := s.handler([]route{{method: http.MethodPost, pattern: "/api/v1/probe", perm: rbac.Session, lic: license.ClassAlways, handler: func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}}})
+	rec := call(h, http.MethodPost, "/api/v1/probe", "operator", "")
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Equal(t, "ALC-SYS-0002", decodeErr(t, rec).Error.Code)
+	assert.NotContains(t, rec.Body.String(), "s3cret-pw")
+	assert.False(t, called)
+}

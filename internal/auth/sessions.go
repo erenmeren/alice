@@ -81,9 +81,25 @@ func (s *Service) rotateSession(ctx context.Context, tx pgx.Tx, oldHash []byte, 
 	return s.insertSession(ctx, tx, newSession{userID: userID, kind: "full", createdAt: createdAt.UTC(), expiresAt: expiresAt.UTC(), stepUp: stepUp}, m)
 }
 
-// Authenticate resolves a session cookie. Role and disabled state are read from users on
-// every call (SEC-017). Full sessions slide their idle timeout; pending sessions do not.
+// Authenticate resolves a session cookie for a person's action: AuthenticatePassive followed by
+// RecordActivity. The HTTP layer calls the two separately, so that only a request it accepted
+// slides the session (AUD-01).
 func (s *Service) Authenticate(ctx context.Context, sessionToken string) (Principal, error) {
+	p, err := s.AuthenticatePassive(ctx, sessionToken)
+	if err != nil {
+		return Principal{}, err
+	}
+	if err := s.RecordActivity(ctx, p); err != nil {
+		return Principal{}, err
+	}
+	return p, nil
+}
+
+// AuthenticatePassive resolves a session cookie without touching the session: it never moves
+// last_seen_at or idle_expires_at, so background reads of the web UI (polls) cannot keep an
+// unattended session alive (AUD-01, R39). Role and disabled state are read from users on every
+// call (SEC-017).
+func (s *Service) AuthenticatePassive(ctx context.Context, sessionToken string) (Principal, error) {
 	if sessionToken == "" {
 		return Principal{}, ErrUnauthenticated
 	}
@@ -117,15 +133,25 @@ FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = $1`, h).Scan(
 	p.Kind = rbac.PendingSession
 	if kind == "full" {
 		p.Kind = rbac.UserSession
-		newIdle := now.Add(SessionIdle)
-		if newIdle.After(expires) {
-			newIdle = expires
-		}
-		if _, err := s.pool.Exec(ctx, "UPDATE sessions SET last_seen_at = $2, idle_expires_at = $3 WHERE id_hash = $1", h, now, newIdle); err != nil {
-			return Principal{}, fmt.Errorf("touch session: %w", err)
-		}
 	}
 	return p, nil
+}
+
+// RecordActivity slides the idle timeout of p's full session: a person acted (SEC-019, A-02).
+// The new deadline never passes the absolute one, and a session that has meanwhile ended
+// (idle or absolute expiry, revocation, sign-out) is left ended. Other principals (pending
+// sessions, API tokens, anonymous callers) have no idle timeout to slide.
+func (s *Service) RecordActivity(ctx context.Context, p Principal) error {
+	if p.Kind != rbac.UserSession || len(p.SessionHash) == 0 {
+		return nil
+	}
+	now := s.clock.Now().UTC()
+	if _, err := s.pool.Exec(ctx, `UPDATE sessions SET last_seen_at = $2, idle_expires_at = LEAST($3::timestamptz, expires_at)
+WHERE id_hash = $1 AND kind = 'full' AND revoked_at IS NULL AND expires_at > $2 AND idle_expires_at > $2`,
+		p.SessionHash, now, now.Add(SessionIdle)); err != nil {
+		return fmt.Errorf("touch session: %w", err)
+	}
+	return nil
 }
 
 // SessionInfo returns the caller's session details and CSRF token.

@@ -312,6 +312,7 @@ func (c *client) do(method, path string, body any, opts ...reqOpt) *httptest.Res
 	if c.bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+c.bearer)
 	}
+	req.Header.Set(activityHeader, "1") // the integration clients act like a person; tests of background work remove it
 	for _, o := range opts {
 		o(req)
 	}

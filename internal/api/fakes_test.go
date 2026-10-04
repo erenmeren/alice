@@ -22,11 +22,13 @@ import (
 var errNotConfigured = errors.New("fake: method not configured")
 
 // fakeAuth implements AuthService. Each method calls its function field when
-// set; otherwise it returns zero values and errNotConfigured (Authenticate and
-// AuthenticateToken return auth.ErrUnauthenticated; CSRFToken and CheckCSRF
-// use the "csrf-<token>" convention).
+// set; otherwise it returns zero values and errNotConfigured (AuthenticatePassive
+// and AuthenticateToken return auth.ErrUnauthenticated; RecordActivity returns nil;
+// CSRFToken and CheckCSRF use the "csrf-<token>" convention). AuthenticateFn answers
+// AuthenticatePassive, the guard's session lookup.
 type fakeAuth struct {
 	AuthenticateFn            func(ctx context.Context, sessionToken string) (auth.Principal, error)
+	RecordActivityFn          func(ctx context.Context, p auth.Principal) error
 	AuthenticateTokenFn       func(ctx context.Context, bearer string) (auth.Principal, error)
 	LoginFn                   func(ctx context.Context, username, password string, m auth.Meta) (auth.LoginResult, error)
 	EnrollMFAFn               func(ctx context.Context, p auth.Principal, m auth.Meta) (auth.TOTPEnrollment, error)
@@ -49,11 +51,18 @@ type fakeAuth struct {
 	RevokeTokenFn             func(ctx context.Context, p auth.Principal, m auth.Meta, id uuid.UUID) error
 }
 
-func (f *fakeAuth) Authenticate(ctx context.Context, t string) (auth.Principal, error) {
+func (f *fakeAuth) AuthenticatePassive(ctx context.Context, t string) (auth.Principal, error) {
 	if f.AuthenticateFn != nil {
 		return f.AuthenticateFn(ctx, t)
 	}
 	return auth.Principal{}, auth.ErrUnauthenticated
+}
+
+func (f *fakeAuth) RecordActivity(ctx context.Context, p auth.Principal) error {
+	if f.RecordActivityFn != nil {
+		return f.RecordActivityFn(ctx, p)
+	}
+	return nil
 }
 
 func (f *fakeAuth) AuthenticateToken(ctx context.Context, b string) (auth.Principal, error) {

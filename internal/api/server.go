@@ -35,7 +35,10 @@ type HealthChecker interface {
 
 // AuthService is the part of auth.Service the HTTP layer uses.
 type AuthService interface {
-	Authenticate(ctx context.Context, sessionToken string) (auth.Principal, error)
+	// AuthenticatePassive resolves a session cookie without sliding its idle timeout;
+	// RecordActivity slides it once the guard has accepted the request as a person's action (AUD-01).
+	AuthenticatePassive(ctx context.Context, sessionToken string) (auth.Principal, error)
+	RecordActivity(ctx context.Context, p auth.Principal) error
 	AuthenticateToken(ctx context.Context, bearer string) (auth.Principal, error)
 	CSRFToken(sessionToken string) string
 	CheckCSRF(sessionToken, header string) bool

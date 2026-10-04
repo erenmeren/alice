@@ -27,10 +27,10 @@ func principalFrom(ctx context.Context) auth.Principal {
 }
 
 // guard wraps a route handler with, in order: authentication, rate limiting,
-// the same-origin check, the CSRF check, the permission decision (SEC-016,
-// SEC-017, SEC-021, SEC-024) and the license lock gate (R9). Nothing reaches
-// rt.handler unless rbac allows it and, for ClassChange/ClassReadOnly routes,
-// license.Service.Allow does.
+// the same-origin check, the CSRF check, recording a person's activity on the
+// session (AUD-01), the permission decision (SEC-016, SEC-017, SEC-021,
+// SEC-024) and the license lock gate (R9). Nothing reaches rt.handler unless
+// rbac allows it and, for ClassChange/ClassReadOnly routes, license.Service.Allow does.
 func (s *server) guard(rt route) http.HandlerFunc {
 	policy, _ := rbac.PolicyFor(rt.perm) // register has checked the permission exists
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +53,12 @@ func (s *server) guard(rt route) http.HandlerFunc {
 			}
 			if !policy.Anonymous && csrfToken != "" && !s.deps.Auth.CheckCSRF(csrfToken, r.Header.Get("X-CSRF-Token")) {
 				s.writeError(w, r, ErrCSRF)
+				return
+			}
+		}
+		if p.Kind == rbac.UserSession && isActivity(r) {
+			if err := s.deps.Auth.RecordActivity(r.Context(), p); err != nil {
+				s.authUnavailable(w, r, &authError{reason: "session_touch_failed", err: err})
 				return
 			}
 		}
@@ -109,7 +115,9 @@ func (s *server) authenticate(r *http.Request) (auth.Principal, string, error) {
 		}
 	}
 	if tok := sessionTokenFrom(r); tok != "" {
-		p, err := s.deps.Auth.Authenticate(ctx, tok)
+		// Never slides the idle timeout: guard records activity only after the request passed
+		// the rate limit and the origin and CSRF checks.
+		p, err := s.deps.Auth.AuthenticatePassive(ctx, tok)
 		switch {
 		case err == nil:
 			return p, tok, nil
@@ -230,6 +238,23 @@ func (s *server) auditLicenseDenied(r *http.Request, rt route, p auth.Principal)
 }
 
 func safeMethod(m string) bool { return m == http.MethodGet || m == http.MethodHead }
+
+// activityHeader marks a read of the web UI that follows a person's input (AUD-01, R39).
+const activityHeader = "X-Alice-Activity"
+
+// isActivity reports whether r is a person's action for a session's idle timeout (SEC-019 as
+// changed by R39): a state-changing request, or a read this origin's web UI marked with
+// "X-Alice-Activity: 1". Unmarked reads (polls) never extend a session. guard asks only after a
+// state-changing request passed the same-origin and CSRF checks; a marked read must come from
+// this origin too, so no other site, a sibling subdomain included, can slide a session. The
+// marker is client-sent by design: the only party able to forge it is the client being timed
+// out, which could keep its session alive by acting anyway.
+func isActivity(r *http.Request) bool {
+	if !safeMethod(r.Method) {
+		return true
+	}
+	return r.Header.Get(activityHeader) == "1" && SameOrigin(r)
+}
 
 func hasBearer(r *http.Request) bool {
 	return strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ")
