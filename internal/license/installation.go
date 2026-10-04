@@ -160,24 +160,28 @@ VALUES (1, $1, $2, 'evaluation', $3, $4) ON CONFLICT (id) DO NOTHING`, id, insta
 // state volume, when the installation row is missing (AUD-18):
 //   - "time_record" (with its time): a valid time record in the database or in the state
 //     directory. The state directory's copy survives a database recreated empty.
-//   - "time_record_damaged": a copy that exists but does not verify. A new installation has
+//   - "time_record_damaged": a copy that was read but does not verify. A new installation has
 //     none; a leftover one means a database recreated next to an old state volume whose key
-//     was replaced too.
+//     was replaced too. A file that cannot be read at all is no evidence either way: when
+//     nothing else is evidence, the start fails with ErrTimeRecordUnreadable and creates nothing.
 //   - "setup_completed": the setup module's completion marker.
 //   - "audit_log": an audit event that only a started installation writes (the platform key,
 //     created right after the first start, or any license event).
+//   - "users", "credentials", "targets": a row in one of them. serve starts the license before
+//     it creates the platform key (credentials), and users and targets come from the setup
+//     wizard and the API afterwards, so a genuine first start finds all three empty.
 //
 // A database and a state directory emptied of every one of these is indistinguishable from a
 // new installation (accepted, R36 addendum (j)).
 func (s *Service) priorInstallation(ctx context.Context) (string, time.Time, error) {
-	hwm, damaged, err := s.readHWM(ctx)
+	hwm, _, err := s.readHWM(ctx)
 	if err != nil {
 		return "", time.Time{}, err
 	}
 	if hwm.best != nil {
 		return "time_record", hwm.best.At, nil
 	}
-	if len(damaged) > 0 {
+	if len(hwm.undecodable) > 0 {
 		return "time_record_damaged", time.Time{}, nil
 	}
 	var completed, audited bool
@@ -194,8 +198,35 @@ func (s *Service) priorInstallation(ctx context.Context) (string, time.Time, err
 	if audited {
 		return "audit_log", time.Time{}, nil
 	}
+	// The first start runs before the platform key (credentials) and the setup wizard (users)
+	// exist, and targets need both: a row in any of them is an installation that ran.
+	for _, table := range []string{"users", "credentials", "targets"} {
+		var found bool
+		if err := s.pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM "+table+")").Scan(&found); err != nil {
+			return "", time.Time{}, fmt.Errorf("read %s: %w", table, err)
+		}
+		if found {
+			return table, time.Time{}, nil
+		}
+	}
+	if hwm.unreadable != nil {
+		// Nothing else shows an installation and nothing is known about the file: deciding now
+		// would either grant a fresh evaluation to a removed installation or end the evaluation
+		// of a new one for good (the new row is sealed as it is created). The start stops
+		// instead and creates nothing; the operator fixes the volume and starts again.
+		return "", time.Time{}, fmt.Errorf("%w: %w; make the state directory readable by Alice and start again",
+			ErrTimeRecordUnreadable, hwm.unreadable)
+	}
 	return "", time.Time{}, nil
 }
+
+// ErrTimeRecordUnreadable stops a start on a database without an installation record when
+// nothing in the database shows an earlier installation and the time record file cannot be
+// read (wrong owner or mode of the state volume, an I/O error, not a regular file): Alice cannot
+// tell a new installation from a removed one until it can read it. An existing installation is
+// not stopped by it: the file copy then counts as damaged (clock.hwm_damaged) and the database
+// copy is used, as in Phase 2.
+var ErrTimeRecordUnreadable = errors.New("license: no installation in the database and the time record file cannot be read")
 
 // auditPlatformKeyCreated is the inventory's audit action for the platform SSH key, which serve
 // creates right after the license service's first start (cmd/alice): every installation that

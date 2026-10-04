@@ -121,9 +121,9 @@ var explicitGrants = map[string][]string{
 // Column-level grants of alice_app (a privilege it holds on some columns but not on the
 // table). Every other column-level grant is a problem.
 var explicitColumnGrants = map[string]map[string][]string{
-	// The cached state, a held clock jump and the one-time seal of an installation created
-	// before the seal existed; never installation_id or installed_at (B1, spec §16.1).
-	"public.license": {"UPDATE": {"clock_jump", "installation_seal", "state", "updated_at"}},
+	// The cached state and a held clock jump; never installation_id or installed_at (B1, spec
+	// §16.1), and never the seal, which is written only when the row is created (00007, AUD-18).
+	"public.license": {"UPDATE": {"clock_jump", "state", "updated_at"}},
 	// Phase 3: only the columns the services write; identity columns (key material, fingerprints,
 	// target and credential references, the host key bytes) are never updated.
 	"public.targets": {"UPDATE": {"deleted_at", "discovery_interval_seconds", "facts", "keys_managed_elsewhere",
@@ -278,8 +278,10 @@ func TestLicenseTablesAreAppendOnlyForTheApp(t *testing.T) {
 	_, err = d.App.Exec(ctx, `INSERT INTO license (id, installation_id, installed_at, state, updated_at)
 		VALUES (2, 'ALICE-TWO', now(), 'evaluation', now())`)
 	require.Error(t, err, "the license row is a singleton")
-	_, err = d.App.Exec(ctx, `UPDATE license SET state = 'active', clock_jump = NULL, updated_at = now(), installation_seal = decode(repeat('01', 32), 'hex')`)
-	require.NoError(t, err, "the cached state, the clock jump and the seal stay writable")
+	_, err = d.App.Exec(ctx, `UPDATE license SET state = 'active', clock_jump = NULL, updated_at = now()`)
+	require.NoError(t, err, "the cached state and the clock jump stay writable")
+	_, err = d.App.Exec(ctx, `UPDATE license SET installation_seal = decode(repeat('01', 32), 'hex')`)
+	require.ErrorContains(t, err, "permission denied", "the seal is written only with the row (00007, AUD-18)")
 	_, err = d.App.Exec(ctx, `SELECT 1 FROM license WHERE id = 1 FOR UPDATE`)
 	require.NoError(t, err, "the license row lock needs UPDATE on some column")
 	_, err = d.App.Exec(ctx, `INSERT INTO license_files (id, seq, sha256, raw_file, uploaded_at)

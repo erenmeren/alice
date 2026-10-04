@@ -3,6 +3,7 @@
 package license_test
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"os"
@@ -11,14 +12,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/audit"
 	"alice/internal/license"
+	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
 	"alice/internal/secrets"
+	"alice/internal/testutil/pgtest"
 )
 
 // Tests of the installation seal (Phase 2 final review B1, spec §16.1(a)): the installation
@@ -230,6 +234,17 @@ func TestRemovedInstallationIsNotAFreshEvaluation(t *testing.T) {
 			e.removeTimeRecords()
 			e.ownerExec("TRUNCATE license_files, license_history")
 		}, "audit_log"},
+		"only a user left": {func(e *env) {
+			e.removeTimeRecords()
+			e.emptyAuditLog()
+			e.ownerExec(`INSERT INTO users (id, username, display_name, password_hash, role, created_at, updated_at)
+VALUES (gen_random_uuid(), 'ada', 'Ada', 'x', 'admin', now(), now())`)
+		}, "users"},
+		"only a target and its credential left": {func(e *env) {
+			e.removeTimeRecords()
+			e.emptyAuditLog()
+			e.insertTarget()
+		}, "credentials"},
 		"a damaged time record left": {func(e *env) {
 			e.ownerExec("DELETE FROM settings WHERE key = 'time.hwm'")
 			require.NoError(e.t, os.WriteFile(filepath.Join(e.stateDir, license.HWMFileName), []byte(`{"v":1,"data":"x","mac":"y"}`), 0o600))
@@ -425,6 +440,7 @@ func TestAppRoleCannotRewriteTheInstallation(t *testing.T) {
 	for _, sql := range []string{
 		"UPDATE license SET installed_at = now()",
 		"UPDATE license SET installation_id = 'ALICE-0000'",
+		"UPDATE license SET installation_seal = NULL", // Fix round 1: nothing writes a seal after creation
 		"DELETE FROM license",
 	} {
 		_, err := e.db.App.Exec(e.ctx, sql)
@@ -435,6 +451,15 @@ func TestAppRoleCannotRewriteTheInstallation(t *testing.T) {
 // A seal or tamper record that cannot be written stops the start and changes nothing; the
 // next start does the work.
 func TestInstallationSealFaults(t *testing.T) {
+	t.Run("users unreadable", func(t *testing.T) {
+		e := newEnv(t)
+		e.ownerExec("DELETE FROM license")
+		e.removeTimeRecords()
+		e.emptyAuditLog()
+		e.revoke("SELECT", "users")
+		require.ErrorContains(t, e.newService().Start(e.ctx), "read users")
+		assert.Zero(t, e.countWhere("license", "true"))
+	})
 	t.Run("audit log unreadable", func(t *testing.T) {
 		e := newEnv(t)
 		e.ownerExec("DELETE FROM license")
@@ -590,4 +615,107 @@ VALUES (gen_random_uuid(), now(), 'notice', $1, $2, '{}')`, n.licenseID, n.notic
 	e.restart()
 	e.requireTamperedLock()
 	assert.Equal(t, []string{"1"}, e.auditEpisodes("license.installation_tampered"), "the forged notices did not suppress the audit")
+}
+
+// insertTarget writes a target and the platform credential it references (the owner role).
+func (e *env) insertTarget() {
+	e.t.Helper()
+	cred := uuid.New()
+	e.ownerExec(`INSERT INTO credentials (id, purpose, kind, ciphertext, nonce, wrapped_dek, key_version, created_at)
+VALUES ($1, 'platform_ssh', 'ssh_private_key', $2, $3, $2, 1, now())`, cred, []byte{1}, make([]byte, 12))
+	e.ownerExec(`INSERT INTO targets (id, name, type, config, credential_id, status, created_at, updated_at)
+VALUES (gen_random_uuid(), 'web-1', 'linux', '{"host":"web-1.example.com","port":22,"username":"alice-svc"}'::jsonb, $1, 'ok', now(), now())`, cred)
+}
+
+// newEmptyEnv is newEnv before the first start: no installation in the database yet.
+func newEmptyEnv(t *testing.T) *env {
+	t.Helper()
+	e := &env{
+		t: t, ctx: context.Background(), db: pgtest.New(t), clk: clock.NewFake(installedAt), keyring: keyring(t, 3),
+		stateDir: t.TempDir(), notices: &recordingNotifier{}, targets: license.NoTargets{},
+	}
+	e.svc = e.newService()
+	return e
+}
+
+// lockStateDir makes the state directory unreadable for Alice (a volume not owned by its user)
+// until the returned function restores it.
+func (e *env) lockStateDir() func() {
+	e.t.Helper()
+	if os.Geteuid() == 0 {
+		e.t.Skip("root reads a directory of mode 000")
+	}
+	require.NoError(e.t, os.Chmod(e.stateDir, 0))
+	restore := func() { require.NoError(e.t, os.Chmod(e.stateDir, 0o700)) }
+	e.t.Cleanup(func() { _ = os.Chmod(e.stateDir, 0o700) })
+	return restore
+}
+
+// Fix round 1, I1: a time record file that cannot be READ (a state volume not readable by Alice,
+// a common first-install mistake) is no evidence either way. On a database without an
+// installation and without any other trace, the start fails, naming the path and the cause, and
+// creates nothing; once the volume is fixed, the first start is a normal new installation.
+func TestUnreadableStateDirectoryStopsTheFirstStart(t *testing.T) {
+	e := newEmptyEnv(t)
+	restore := e.lockStateDir()
+	err := e.newService().Start(e.ctx)
+	require.ErrorIs(t, err, license.ErrTimeRecordUnreadable)
+	assert.ErrorContains(t, err, filepath.Join(e.stateDir, license.HWMFileName))
+	assert.ErrorContains(t, err, "permission denied")
+	assert.Zero(t, e.countWhere("license", "true"), "no installation is created")
+	assert.Zero(t, e.countWhere("audit_log", "true"), "nothing is audited")
+
+	restore()
+	e.restart()
+	snap := e.svc.Snapshot()
+	assert.Equal(t, license.PhaseEvaluation, snap.Eval.Phase)
+	assert.Equal(t, 30, snap.Eval.DaysLeft, "a full evaluation")
+	assert.False(t, snap.InstallationTampered)
+	assert.Zero(t, e.auditCount("license.installation_tampered"))
+}
+
+// Fix round 1, I1: an unreadable time record file next to other traces of an installation.
+func TestUnreadableStateDirectoryWithAnInstallation(t *testing.T) {
+	t.Run("existing installation: Phase 2 behaviour", func(t *testing.T) {
+		e := newEnv(t)
+		e.tickAt(installedAt.Add(10 * day))
+		e.lockStateDir()
+		e.restart() // the database copy is used; the file counts as damaged and is audited
+		snap := e.svc.Snapshot()
+		assert.False(t, snap.InstallationTampered)
+		assert.Equal(t, 20, snap.Eval.DaysLeft, "the evaluation goes on")
+		assert.Equal(t, 1, e.auditCount("clock.hwm_damaged"))
+		assert.Equal(t, "file", e.auditDetails("clock.hwm_damaged")["stores"])
+	})
+	t.Run("record removed, the database copy still verifies", func(t *testing.T) {
+		e := newEnv(t)
+		e.ownerExec("DELETE FROM license")
+		e.lockStateDir()
+		e.restart()
+		assert.Equal(t, license.PhaseEvaluationExpired, e.svc.Snapshot().Eval.Phase)
+		assert.Equal(t, "time_record", e.auditDetails("license.installation_tampered")["evidence"])
+	})
+	t.Run("record removed, another trace", func(t *testing.T) {
+		e := newEnv(t)
+		e.ownerExec("DELETE FROM license")
+		e.ownerExec("DELETE FROM settings WHERE key = 'time.hwm'")
+		e.setupCompleted()
+		e.lockStateDir()
+		e.restart()
+		assert.Equal(t, license.PhaseEvaluationExpired, e.svc.Snapshot().Eval.Phase)
+		assert.Equal(t, "setup_completed", e.auditDetails("license.installation_tampered")["evidence"])
+	})
+	t.Run("record removed, nothing but the unreadable file", func(t *testing.T) {
+		e := newEnv(t)
+		e.ownerExec("DELETE FROM license")
+		e.ownerExec("DELETE FROM settings WHERE key = 'time.hwm'")
+		e.emptyAuditLog()
+		restore := e.lockStateDir()
+		require.ErrorIs(t, e.newService().Start(e.ctx), license.ErrTimeRecordUnreadable)
+		assert.Zero(t, e.countWhere("license", "true"))
+		restore()
+		e.restart() // the file is readable again and shows the earlier installation
+		assert.Equal(t, license.PhaseEvaluationExpired, e.svc.Snapshot().Eval.Phase)
+		assert.Equal(t, "time_record", e.auditDetails("license.installation_tampered")["evidence"])
+	})
 }

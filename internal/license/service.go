@@ -479,12 +479,19 @@ func (s *Service) Inspect(ctx context.Context) (Snapshot, error) {
 type storedHWM struct {
 	best   *HWMRecord // the later time, then the higher sequence; nil = no valid record
 	maxSeq uint64     // the highest sequence of any valid record
+	// undecodable names the stores whose copy was read but does not verify.
+	undecodable []string
+	// unreadable is why the file copy could not be read at all (permissions, an I/O error, not a
+	// regular file); nil when it was read or does not exist. Nothing is known about its content.
+	unreadable error
 }
 
 // readHWM loads and decodes both stores (spec §16.5: the larger valid record wins; a
 // replayed older copy loses, L-55). A copy that does not decode, or a file that cannot be
-// read (a symlink, a special file), counts as damaged and the other copy is used; its
-// store name is returned. Only a database error is fatal.
+// read (a symlink, a special file, no permission), counts as damaged and the other copy is
+// used; its store name is returned. The result also tells the two apart (undecodable,
+// unreadable): only a copy that was read can show that an installation existed (AUD-18). Only
+// a database error is fatal.
 func (s *Service) readHWM(ctx context.Context) (storedHWM, []string, error) {
 	var out storedHWM
 	var damaged []string
@@ -496,6 +503,7 @@ func (s *Service) readHWM(ctx context.Context) (storedHWM, []string, error) {
 			}
 			s.log.Error("the time record file cannot be read; check the state volume", "error_type", fmt.Sprintf("%T", err))
 			damaged = append(damaged, st.Name())
+			out.unreadable = err
 			continue
 		}
 		if raw == nil {
@@ -504,6 +512,7 @@ func (s *Service) readHWM(ctx context.Context) (storedHWM, []string, error) {
 		rec, err := s.codec.Decode(raw)
 		if err != nil {
 			damaged = append(damaged, st.Name())
+			out.undecodable = append(out.undecodable, st.Name())
 			continue
 		}
 		out.maxSeq = max(out.maxSeq, rec.Seq)

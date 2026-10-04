@@ -21,10 +21,17 @@ import (
 // and runs by itself after the next successful evaluation.
 func TestRecoveryRunsWhileTheLicenseIsUnverified(t *testing.T) {
 	e := newQEnv(t)
+	// serve starts the license before any user exists, and a user row shows an earlier
+	// installation (AUD-18): the harness's administrator is added after the first start.
+	_, err := e.d.Owner.Exec(e.ctx, "DELETE FROM users")
+	require.NoError(t, err)
 	lic := license.New(license.Config{Pool: e.d.App, Keyring: testKeyring(t), Audit: e.audit, Clock: e.fake, Uptime: e.fake,
 		Keys: licensetest.KeySet(), StateDir: t.TempDir(), RowLockTimeout: 200 * time.Millisecond, Log: quiet})
 	require.NoError(t, lic.Start(e.ctx))
 	t.Cleanup(lic.Close)
+	_, err = e.d.Owner.Exec(e.ctx, `INSERT INTO users (id, username, display_name, password_hash, role, created_at, updated_at)
+VALUES ($1, 'admin', 'Admin', 'x', 'admin', $2, $2)`, admin.ID, queueStart)
+	require.NoError(t, err)
 
 	tx, err := e.d.App.Begin(e.ctx)
 	require.NoError(t, err)

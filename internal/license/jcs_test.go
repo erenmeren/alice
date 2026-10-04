@@ -70,4 +70,6 @@ func TestCanonicalJSONIsRFC8785(t *testing.T) {
 	}
 	_, err = license.CanonicalJSON([]byte(strings.Repeat("[", 16) + strings.Repeat("]", 16)))
 	assert.NoError(t, err, "16 levels are accepted")
+	_, err = license.SignedBytesFor([]byte(`{"a":1,"a":2}`))
+	assert.Error(t, err, "no signed bytes for a payload without a canonical form")
 }

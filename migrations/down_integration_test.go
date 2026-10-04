@@ -52,7 +52,7 @@ VALUES (1, 'ALICE-TEST', now(), 'evaluation', now())`)
 
 	_, err = p.Up(ctx)
 	require.NoError(t, err, "the schema migrates up again")
-	assert.True(t, appColumnPrivilege(t, d, "installation_seal", "UPDATE"), "the seal is writable again")
+	assert.False(t, appColumnPrivilege(t, d, "installation_seal", "UPDATE"), "the seal stays read-only (00007, AUD-18)")
 	assert.False(t, appColumnPrivilege(t, d, "installed_at", "UPDATE"))
 	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT has_table_privilege('alice_app', 'license', 'UPDATE')").Scan(&tableUpdate))
 	assert.False(t, tableUpdate, "no table-wide UPDATE after migrating up again")
@@ -84,7 +84,9 @@ func TestMigration00006UpAndDownKeepPhase3Data(t *testing.T) {
 	for _, tbl := range phase4Tables {
 		assert.False(t, tableExists(t, d, tbl), tbl)
 	}
-	assert.Empty(t, grantProblems(t, d), "no Phase 4 grant is left behind")
+	// Below 00007 the application holds UPDATE on the installation seal again (00004); the
+	// grant check describes the current schema, so that is the one difference it reports.
+	assert.Equal(t, []string{"public.license"}, grantProblems(t, d), "no Phase 4 grant is left behind")
 	target := seedTarget(t, d, "web-01", "web-01.example.com")
 	job, err := seedJob(t, d, nil, "succeeded")
 	require.NoError(t, err)
@@ -119,4 +121,24 @@ func TestMigration00006UpAndDownKeepPhase3Data(t *testing.T) {
 			assert.Equal(t, [3]int{1, 1, 1}, [3]int{targets, jobs, creds}, "Phase 3 data survives the Down")
 		}
 	}
+}
+
+// 00007 (AUD-18) takes UPDATE on the installation seal from the application; its Down gives it
+// back (symmetric), and the Up again takes it.
+func TestMigration00007SealIsReadOnly(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	p, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(d.Owner), migrations.FS)
+	require.NoError(t, err)
+	assert.False(t, appColumnPrivilege(t, d, "installation_seal", "UPDATE"))
+	_, err = p.DownTo(ctx, 6)
+	require.NoError(t, err)
+	assert.True(t, appColumnPrivilege(t, d, "installation_seal", "UPDATE"), "the Down restores the 00004 grant")
+	for _, col := range []string{"state", "clock_jump", "updated_at"} {
+		assert.True(t, appColumnPrivilege(t, d, col, "UPDATE"), col)
+	}
+	_, err = p.Up(ctx)
+	require.NoError(t, err)
+	assert.False(t, appColumnPrivilege(t, d, "installation_seal", "UPDATE"))
+	assert.Empty(t, grantProblems(t, d))
 }

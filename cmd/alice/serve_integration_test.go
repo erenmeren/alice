@@ -70,7 +70,7 @@ func TestServeStartsOnAPhase3Database(t *testing.T) {
 	logs, stop := runServe(t, cfg)
 	version, err = p.GetDBVersion(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, int64(6), version, "serve applied 00006")
+	assert.Equal(t, int64(7), version, "serve applied 00006 and 00007")
 	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM license"), "the same installation")
 	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM credentials WHERE purpose = 'platform_ssh'"), "the same platform key")
 	assert.Zero(t, countRows(t, d, "SELECT count(*) FROM targets"), "no Nginx server is needed")
