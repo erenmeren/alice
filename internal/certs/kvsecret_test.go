@@ -299,3 +299,15 @@ func FuzzParseKVSecret(f *testing.F) {
 		v.PrivateKeyDER.Zero()
 	})
 }
+
+func TestParseKVSecretSkipsAByteOrderMark(t *testing.T) {
+	ca := pki.NewCA("KV Test CA", pki.ECDSA256, now)
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test"}, now)
+	in := append([]byte("\xef\xbb\xbf"), append(append([]byte{}, leaf.KeyPEM...), leaf.FullchainPEM...)...)
+	keep := bytes.Clone(in)
+	v, err := ParseKVSecret(ContentTypePEM, in, now, nil)
+	require.NoError(t, err)
+	assert.Equal(t, pki.Fingerprint(leaf.Cert), v.Fingerprint)
+	assert.Equal(t, keep, in, "the value is not modified")
+	v.PrivateKeyDER.Zero()
+}

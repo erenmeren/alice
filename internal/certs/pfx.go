@@ -11,7 +11,8 @@ import (
 // ExportPFX builds the PFX of an import (R40 row 25): pkcs12.LegacyDES, empty password, the leaf
 // and p.Chain without a self-signed root. keyDER is the key as PKCS #8; it must belong to p.Leaf and
 // pass the key rules of an upload (RSA of 2048 to 16384 bits, ECDSA P-256 or P-384). keyDER and p
-// are not modified. The result holds the private key (an empty password protects nothing): the
+// are not modified. It does not check validity: the caller (the inventory import) refuses an
+// expired or not-yet-valid leaf first. The result holds the private key (an empty password protects nothing): the
 // caller zeroes it as soon as it has been sent. Errors never contain key material.
 func ExportPFX(keyDER secrets.Plaintext, p Parsed) (secrets.Plaintext, error) {
 	if p.Leaf == nil {

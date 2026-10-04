@@ -12,14 +12,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/platform/azureid"
 	"alice/internal/providers"
 )
 
 // TestImportResultRules is the table of every legal and illegal shape of an import: what the
 // provider returned (ImportResult and error) against what CheckImportReturn accepts.
 func TestImportResultRules(t *testing.T) {
-	v, tp := strings.Repeat("a", 32), strings.Repeat("b", 40)
-	created := providers.ImportResult{Outcome: providers.ImportCreated, Version: v, Thumbprint: tp, CER: []byte{1}}
+	v, cer := strings.Repeat("a", 32), []byte{1}
+	tp := azureid.ThumbprintOf(cer)
+	created := providers.ImportResult{Outcome: providers.ImportCreated, Version: v, Thumbprint: tp, CER: cer}
 	refusal := providers.NewError("azure.forbidden", false, nil, nil)
 	cases := []struct {
 		name string
@@ -35,6 +37,7 @@ func TestImportResultRules(t *testing.T) {
 		{"created with an upper-case version", providers.ImportResult{Outcome: providers.ImportCreated, Version: strings.Repeat("A", 32), Thumbprint: tp, CER: []byte{1}}, nil, false},
 		{"created without a thumbprint", providers.ImportResult{Outcome: providers.ImportCreated, Version: v, CER: []byte{1}}, nil, false},
 		{"created with a bad thumbprint", providers.ImportResult{Outcome: providers.ImportCreated, Version: v, Thumbprint: "x", CER: []byte{1}}, nil, false},
+		{"created with another leaf's thumbprint", providers.ImportResult{Outcome: providers.ImportCreated, Version: v, Thumbprint: strings.Repeat("b", 40), CER: []byte{1}}, nil, false},
 		{"created without the leaf", providers.ImportResult{Outcome: providers.ImportCreated, Version: v, Thumbprint: tp}, nil, false},
 		// refused: nothing changed; only a well-formed refusal (*Error) that is no transport failure.
 		{"refused", providers.ImportResult{Outcome: providers.ImportRefused}, refusal, true},
@@ -82,7 +85,7 @@ func TestImportResultRules(t *testing.T) {
 }
 
 func TestImportResultValidateAloneKnowsNothingOfTheError(t *testing.T) {
-	v, tp := strings.Repeat("0", 32), strings.Repeat("f", 40)
+	v, tp := strings.Repeat("0", 32), azureid.ThumbprintOf([]byte{1})
 	require.NoError(t, providers.ImportResult{Outcome: providers.ImportCreated, Version: v, Thumbprint: tp, CER: []byte{1}}.Validate())
 	require.NoError(t, providers.ImportResult{Outcome: providers.ImportRefused}.Validate())
 	require.NoError(t, providers.ImportResult{Outcome: providers.ImportUncertain}.Validate())

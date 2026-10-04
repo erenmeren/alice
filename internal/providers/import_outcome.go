@@ -22,16 +22,22 @@ import (
 //
 // Any other Outcome, including "", and ErrUnsupported are invalid. "refused" is the only word for
 // "nothing changed": the vault has no idempotency key, so an import whose answer was lost is
-// never re-sent and never reported as refused (R40 row 25); a caller treats any violation of these
+// never re-sent and never reported as refused (R40 row 25). The transport-error check in
+// CheckImportReturn is a floor, not a proof: a provider classifies by positive evidence, and only
+// a refusal before anything was sent or a complete, parsed 4xx answer that carries an Azure error
+// code is "refused"; everything else is "uncertain"; a caller treats any violation of these
 // rules as uncertain and reads the truth from a later listing.
 
 // Validate checks ImportResult's invariants: created carries a valid version, a valid thumbprint
-// and the leaf; refused and uncertain carry none of them; any other outcome is invalid.
+// that is the SHA-1 of the leaf, and the leaf; refused and uncertain carry none of them; any other outcome is invalid.
 func (r ImportResult) Validate() error {
 	switch r.Outcome {
 	case ImportCreated:
 		if !azureid.ValidVersion(r.Version) || !azureid.ValidThumbprint(r.Thumbprint) || len(r.CER) == 0 {
 			return errors.New("providers: import result: created needs a version, a thumbprint and the leaf")
+		}
+		if azureid.ThumbprintOf(r.CER) != r.Thumbprint {
+			return errors.New("providers: import result: created: the thumbprint is not the leaf's")
 		}
 	case ImportRefused, ImportUncertain:
 		if r.Version != "" || r.Thumbprint != "" || len(r.CER) > 0 {

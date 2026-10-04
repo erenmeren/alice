@@ -793,7 +793,7 @@ func TestFakeReadCertificateSecretReturnsACopyPerCall(t *testing.T) {
 	assert.Equal(t, providers.SecretRequest{Name: "web", Version: strings.Repeat("a", 32)}, reads[0].Secret)
 
 	p.Configure(func(c *fake.Config) { c.SecretErr = providers.NewError("azure.forbidden", false, nil, nil) })
-	_, err = s.ReadCertificateSecret(context.Background(), providers.SecretRequest{})
+	_, err = s.ReadCertificateSecret(context.Background(), providers.SecretRequest{Name: "web", Version: strings.Repeat("a", 32)})
 	var pe *providers.Error
 	require.ErrorAs(t, err, &pe)
 	assert.Equal(t, "azure.forbidden", pe.Code)
@@ -846,7 +846,7 @@ func TestFakeImportCertificate(t *testing.T) {
 			return providers.ImportResult{Outcome: providers.ImportRefused}, errors.New("plain")
 		}
 	})
-	assert.Panics(t, func() { _, _ = s.ImportCertificate(context.Background(), providers.ImportRequest{}, nil) })
+	assert.Panics(t, func() { _, _ = s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "web"}, nil) })
 }
 
 func TestFakeImportUsesTheLeafOfTheRequestedPFX(t *testing.T) {
@@ -942,4 +942,131 @@ func selfSignedPFX(t *testing.T) (pki.Leaf, []byte, []byte) {
 	ca := pki.NewCA("Fake Vault CA", pki.ECDSA256, now)
 	leaf := ca.Issue(pki.Opts{CommonName: "web.example.test", SANs: []string{"web.example.test"}}, now)
 	return leaf, leaf.Cert.Raw, pki.PFX(leaf, ca, "")
+}
+
+func TestFakeVaultRefusesWhatTheProviderMustRefuse(t *testing.T) {
+	ok := strings.Repeat("a", 32)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	scripted := func() *fake.Provider {
+		p := vaultFake()
+		p.Configure(func(c *fake.Config) {
+			c.Secret = providers.CertificateSecret{ContentType: "application/x-pem-file", Value: providers.NewSecret([]byte("v"))}
+		})
+		return p
+	}
+	reads := []struct {
+		name string
+		ctx  context.Context
+		req  providers.SecretRequest
+		p    *fake.Provider
+	}{
+		{"empty", context.Background(), providers.SecretRequest{}, scripted()},
+		{"name only", context.Background(), providers.SecretRequest{Name: "web"}, scripted()},
+		{"traversal and latest", context.Background(), providers.SecretRequest{Name: "../x", Version: "latest"}, scripted()},
+		{"upper-case version", context.Background(), providers.SecretRequest{Name: "web", Version: strings.Repeat("A", 32)}, scripted()},
+		{"cancelled", cancelled, providers.SecretRequest{Name: "web", Version: ok}, scripted()},
+		{"nothing scripted", context.Background(), providers.SecretRequest{Name: "web", Version: ok}, vaultFake()},
+	}
+	for _, tc := range reads {
+		s := openVault(t, tc.p)
+		got, err := s.ReadCertificateSecret(tc.ctx, tc.req)
+		var pe *providers.Error
+		require.ErrorAs(t, err, &pe, tc.name)
+		assert.Empty(t, got.Value.Bytes(), tc.name)
+		assert.Empty(t, got.ContentType, tc.name)
+	}
+	_, err := openVault(t, scripted()).ReadCertificateSecret(cancelled, providers.SecretRequest{Name: "web", Version: ok})
+	assert.ErrorIs(t, err, context.Canceled, "a cancelled read wraps the context error, as CheckSession wants")
+	got, err := openVault(t, scripted()).ReadCertificateSecret(context.Background(), providers.SecretRequest{Name: "web", Version: ok})
+	require.NoError(t, err)
+	assert.Equal(t, "v", string(got.Value.Bytes()))
+
+	// Imports: an invalid name is a refusal; a cancelled request may have been sent: uncertain.
+	for _, name := range []string{"", "bad name/..", "a_b", strings.Repeat("a", 128)} {
+		res, err := openVault(t, vaultFake()).ImportCertificate(context.Background(), providers.ImportRequest{Name: name}, nil)
+		var pe *providers.Error
+		require.ErrorAs(t, err, &pe, name)
+		assert.Equal(t, providers.ImportRefused, res.Outcome, name)
+		require.NoError(t, providers.CheckImportReturn(res, err), name)
+	}
+	res, err := openVault(t, vaultFake()).ImportCertificate(cancelled, providers.ImportRequest{Name: "web"}, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, providers.ImportUncertain, res.Outcome)
+	require.NoError(t, providers.CheckImportReturn(res, err))
+
+	// The conformance suite sees a provider that refuses an empty read.
+	p := fake.New(providers.KindAzureKV, providers.CapReadCertificateSecret)
+	p.Configure(func(c *fake.Config) {
+		c.Secret = providers.CertificateSecret{ContentType: "application/x-pem-file", Value: providers.NewSecret([]byte("v"))}
+	})
+	r := &recorder{TB: t}
+	providertest.CheckSession(r, providertest.SessionHarness{
+		Capabilities: p.Capabilities(),
+		Open: func(ctx context.Context) (providers.Session, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, providers.NewError("azure.unreachable", true, err, nil)
+			}
+			return p.Open(ctx, providers.TargetRef{ID: uuid.New()}, &azureCreds{}, providers.Env{})
+		},
+	})
+	assert.Empty(t, r.failures)
+}
+
+func TestFakeDiscoverRecordsTheRequest(t *testing.T) {
+	p := vaultFake()
+	s := openVault(t, p)
+	known := map[string]providers.KVKnown{"web": {Version: strings.Repeat("a", 32)}}
+	keys := map[string]time.Time{"k": time.Unix(1, 0)}
+	_, err := s.Discover(context.Background(), providers.DiscoverRequest{Certificates: true, KVKeys: true, KVKnown: known, KVKnownKeys: keys})
+	require.NoError(t, err)
+	known["web"] = providers.KVKnown{Version: "changed"}
+	known["other"] = providers.KVKnown{}
+	keys["k"] = time.Unix(2, 0)
+	var rec fake.Call
+	for _, c := range p.Calls() {
+		if c.Method == "Discover" {
+			rec = c
+		}
+	}
+	assert.True(t, rec.Discover.KVKeys)
+	assert.True(t, rec.Discover.Certificates)
+	assert.Equal(t, map[string]providers.KVKnown{"web": {Version: strings.Repeat("a", 32)}}, rec.Discover.KVKnown)
+	assert.Equal(t, map[string]time.Time{"k": time.Unix(1, 0)}, rec.Discover.KVKnownKeys)
+	rec.Discover.KVKnown["x"] = providers.KVKnown{}
+	for _, c := range p.Calls() {
+		if c.Method == "Discover" {
+			assert.Len(t, c.Discover.KVKnown, 1, "Calls returns copies")
+		}
+	}
+}
+
+func TestFakeVaultValidatesVaultURLNotHost(t *testing.T) {
+	p := vaultFake()
+	assert.Equal(t, []validate.FieldError{{Field: "vault_url", Code: validate.Required}}, p.ValidateConfig(providers.TargetConfig{}))
+	assert.Equal(t, []validate.FieldError{{Field: "vault_url", Code: validate.Required}}, p.ValidateConfig(providers.TargetConfig{"host": "x"}))
+	bad := p.ValidateConfig(providers.TargetConfig{"vault_url": "https://x@evil.test"})
+	require.Len(t, bad, 1)
+	assert.Equal(t, "vault_url", bad[0].Field)
+	assert.Equal(t, validate.Pattern, bad[0].Code)
+	assert.Empty(t, p.ValidateConfig(providers.TargetConfig{"vault_url": "https://contoso.vault.azure.net"}))
+	assert.Empty(t, p.ValidateConfig(providers.TargetConfig{"vault_url": "contoso"}))
+	providertest.CheckProvider(t, p)
+}
+
+func TestFakeImportRefusesAnExistingNameUnlessConfirmed(t *testing.T) {
+	p := vaultFake()
+	p.Configure(func(c *fake.Config) { c.ExistingNames = []string{"Web-Cert"} })
+	s := openVault(t, p)
+	res, err := s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "web-cert"}, nil)
+	var pe *providers.Error
+	require.ErrorAs(t, err, &pe)
+	assert.Equal(t, "kv.import_name_exists", pe.Code)
+	assert.Equal(t, providers.ImportRefused, res.Outcome)
+	res, err = s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "WEB-CERT", ReplaceExisting: true}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, providers.ImportCreated, res.Outcome)
+	res, err = s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "new-cert"}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, providers.ImportCreated, res.Outcome)
 }

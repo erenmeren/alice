@@ -84,10 +84,10 @@ func parseKVSecret(contentType string, value []byte, now time.Time, roots *x509.
 func splitPEM(value []byte, scratch *kvScratch) (certPEM, keyPEM []byte, err error) {
 	keys := scratch.take(len(value))[:0] // never grows: the key blocks are parts of value
 	nCerts, nKeys := 0, 0
-	rest := value
+	rest := bytes.TrimPrefix(value, []byte("\xef\xbb\xbf")) // a BOM before the first block; no copy
 	for {
 		var b *pem.Block
-		start := len(value) - len(rest)
+		start := len(value) - len(rest) // offsets stay relative to value
 		b, rest = pem.Decode(rest)
 		if b == nil {
 			break
