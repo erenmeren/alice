@@ -1607,7 +1607,7 @@ components:
         idle_expires_at:
           type: string
           format: date-time
-          description: When the session ends without a person's activity (see the API description; reading it does not extend it)
+          description: When the session ends without a person's activity (see the API description; a read without the activity marker does not extend it)
         stepup_until: { type: [string, "null"], format: date-time }
     SessionWithCodes:
       description: SessionInfo plus the one-time recovery codes (only from administrator creation and MFA verification)
