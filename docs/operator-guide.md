@@ -142,12 +142,19 @@ Alice may store the certificate with a warning:
 
 Uploading a certificate Alice already holds with its key is refused ("Alice already has this certificate with its
 key"); open it from the list instead. One exception: when the chain Alice holds is incomplete, upload the same
-certificate again with its complete chain (and its key) to complete it; Alice keeps the key it has and records
-`certificate.chain_completed`. If your browser lost the answer to an upload, check the list before you try again.
+certificate again with its complete chain (and its key) to complete it; Alice keeps the key it has, takes the
+**Name** you enter (an empty one keeps the stored name) and records `certificate.chain_completed`. This works only
+for certificates you uploaded: the key of a certificate from a signing request never leaves Alice, so it cannot be
+uploaded again. Paste the full chain when you add a signed certificate; if a signed certificate was added with an
+incomplete chain, only an administrator can deploy it (with the confirmation) and its chain cannot be completed
+later. If your browser lost the answer to an upload, check the list before you try again.
 
-A chain read from a server never replaces the chain of a certificate you uploaded or whose key Alice holds: what
-Alice deploys is what you gave it. For a certificate found only on servers, Alice keeps the certificate the server
-serves and the certificates that lead from it to its root, in order, never the other certificates of the file.
+The chain Alice deploys with a key you gave it is the chain you gave with that key. When you upload the key of a
+certificate Alice first found on a server (or a signing request is completed with a certificate already found on a
+server), the certificate takes the chain of your upload, whatever the server's file held, and from then on it is
+listed as **Uploaded** (or **From a signing request**); later scans never change that chain. For a certificate found
+only on servers, Alice keeps the certificate the server serves and the certificates that lead from it to its root,
+in order, never the other certificates of the file.
 
 ### Signing requests
 
@@ -160,7 +167,9 @@ When the certificate arrives, open **Open signing requests**, choose **Add signe
 paste the certificate with its chain (never a private key: Alice refuses a key pasted here) and choose **Add
 certificate**. Alice accepts only a certificate for the request's key; if its domain names differ from the request (certificate authorities sometimes change them), Alice
 adds it with a warning, so check that it is the certificate you ordered. **Cancel request** ends a request you no
-longer need. Alice keeps at most 1000 open requests (`ALC-CRT-0017`) and creates at most two keys at a time
+longer need. Alice keeps at most 1000 open requests for the whole installation, all users together
+(`ALC-CRT-0017`); a cancelled request's key stays sealed in the database (it is never deleted). Alice creates at most
+two keys at a time
 (`ALC-CRT-0016`: wait a moment and try again). A request's key belongs only to the certificate that completes it: a
 certificate re-issued later for the same key cannot be added, so create a new request for it.
 

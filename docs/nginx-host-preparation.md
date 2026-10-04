@@ -110,6 +110,8 @@ The helper changes only files that Nginx itself uses as a certificate/key pair, 
 - The real location of each file (after the links are followed) must use only the characters the helper accepts in
   a path (letters, digits and `._/@:+-`): a link into a folder named like `*.example.com` (acme.sh) is shown as
   **Not supported** ("name not allowed") and never written.
+- Nginx must run as the systemd unit `nginx` (`/usr/bin/systemctl is-active nginx`); a server that runs it under
+  another unit name or without systemd cannot be deployed to.
 - Before replacing anything it checks that the certificate file still has the content Alice saw at the last
   **Discover** and that the new key belongs to the new certificate; that the latest change of this pair is not an
   interrupted one Alice is still finishing (it refuses until then); and that `/usr/bin/systemctl` exists and the
@@ -314,13 +316,19 @@ connection, so it shows a changed host key at once.
 
 ## Updating the helper
 
+**Always install both: the new `alice-helper` and the new sudoers file.** Running the setup commands of the new
+release does both. A protocol-5 helper without the `nginx-fence` sudoers line works for everything else, but a
+deployment whose outcome Alice must check and that left no journal stays **Confirming the outcome** for about a day
+and then ends **Outcome not confirmed** (`ALC-DEP-0018`), because Alice cannot fence it.
+
 Each Alice release names the helper protocol it needs. When it needs a newer one than a server has, Alice shows the
 server's error "The alice-helper on this server is outdated." (`ALC-SSH-0005`, `required_protocol` 5) and does nothing more on it: no scan, no key
 removal, no deployment, no recovery. To update, repeat steps 1 to 3 of "Steps" with the `alice-helper` of the new
 release and the commands from the **Servers** page (same **Server type**), then choose **Test connection** on the
-server's page. The commands install the new helper and the new sudoers file together; installing only the helper
-leaves the new `nginx-fence` line missing, and a deployment whose outcome Alice must check then stays **Confirming
-the outcome** until the commands are run (after about a day it ends **Outcome not confirmed**).
+server's page. The commands install the new helper and the new sudoers file together. After any change to
+`/etc/sudoers.d/alice` (by these commands or by hand), choose **Test connection** and **Discover** before deploying:
+a deployment that sudo refuses is not a clean failure (sudo may already have read the new key), it goes to
+**Confirming the outcome** until the lines are back.
 
 This release (protocol 5, `alice-helper` 1.4.0) adds `nginx-fence` and its sudoers line. A deployment that was
 interrupted before the update is finished by the new helper as usual.

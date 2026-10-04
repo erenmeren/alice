@@ -52,10 +52,11 @@
 - Lock mode also refuses certificate uploads, signing requests, deployments and verification settings; deployments
   waiting in the queue are held for an administrator. A held deployment an administrator discards ends
   **cancelled** (`ALC-DEP-0022`) without a failure email.
-- A scan never changes the chain of a certificate you uploaded or whose key Alice holds; a certificate found only on
-  servers keeps the leaf and its ordered chain, without other certificates of the file.
+- A scan never changes the chain of a certificate you uploaded or whose key Alice holds; uploading the key of a
+  certificate found on a server stores your chain (the certificate is then listed as uploaded); a certificate found
+  only on servers keeps the leaf and its ordered chain, without other certificates of the file.
 - Alice creates at most two signing-request keys at once (`ALC-CRT-0016`, try again) and keeps at most 1000 open
-  signing requests (`ALC-CRT-0017`).
+  signing requests for the whole installation (`ALC-CRT-0017`).
 - `make coverage` enforces floors for `internal/api`, `internal/certs`, `internal/providers/nginx` and its parser;
   several existing floors were raised.
 

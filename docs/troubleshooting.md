@@ -818,6 +818,12 @@ and without the confirmation for root's last key.
 
 **What to do.** On the Servers page choose Server type Nginx server, copy the commands and run them on the server again.
 
+When the Nginx lines disappear from `/etc/sudoers.d/alice` after the last scan, a deployment cannot tell sudo's refusal
+from a change that started (sudo may already have read the new key): it is not ended as this failure but goes to
+**Confirming the outcome**, whose checks fail with this code until the commands are run again (after about a day it
+ends **Outcome not confirmed**, `ALC-DEP-0018`). After any change to the sudoers file, choose **Test connection** and
+**Discover** on the server's page before deploying.
+
 ## ALC-NGX-0005: Not enough free disk space
 
 **Meaning.** The server does not have enough free disk space. (HTTP 502, reason `nginx.no_space`.)
@@ -865,6 +871,8 @@ and without the confirmation for root's last key.
 **Likely cause.** `alice-helper` checks before it changes any file that `/usr/bin/systemctl` exists and that `systemctl is-active nginx` succeeds; otherwise a reload could not apply the new certificate. Nginx was stopped or failed, or the server does not use systemd.
 
 **What to do.** Run `systemctl status nginx` on the server, start Nginx (`systemctl start nginx`), then deploy again.
+A server that runs Nginx under another systemd unit name, or without systemd, cannot be deployed to (a known
+limitation).
 
 ## ALC-CRT-0001: Not a readable certificate
 

@@ -218,8 +218,13 @@ browsers may not trust this certificate." (an expired certificate on the way cou
 deploy it. An administrator can, after ticking **I confirm that this incomplete chain is intended** in the deploy
 dialog; the confirmation is recorded with the deployment. Prefer uploading the certificate again with its full
 chain from your certificate authority: when Alice already holds the certificate with its key, that upload completes
-the stored chain (`certificate.chain_completed`). A chain found on a server never completes it: what Alice deploys
-is what a person uploaded.
+the stored chain (`certificate.chain_completed`; not possible for a certificate from a signing request, whose key
+never leaves Alice). A chain found on a server never completes it: the chain Alice deploys with a key it holds is the
+chain uploaded (or pasted at a signing request's completion) with that key, also when the key was added to a
+certificate first found on a server.
+
+Signing requests: at most 1000 may be open for the whole installation, all users together (`ALC-CRT-0017`); cancel
+the ones nobody needs.
 
 ### Emails about deployments
 
