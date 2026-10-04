@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -22,8 +23,12 @@ const (
 	// Protocol 5: nginx-fence (AUD-05), the fenced phase, RECOVERY_PENDING, NGINX_NOT_RUNNING,
 	// OUTCOME_UNKNOWN, the name_not_allowed file problem, and nginx-restore answering a partial
 	// restore as its outcome (exit 0) instead of HASH_MISMATCH.
-	Protocol   = 5
-	Version    = "1.4.0"
+	// Protocol 6 (AUD-03, AUD-22): authkeys-list lists account names of ValidAccount (not only
+	// ValidUser), reports the /etc/passwd entries it cannot list (unlisted), returns the content of
+	// the files it read (inline) so a discovery needs no authkeys-read for them, and keeps its whole
+	// answer within MaxListOutput (truncated).
+	Protocol   = 6
+	Version    = "1.5.0"
 	HelperPath = "/usr/local/libexec/alice-helper"
 	BackupRoot = "/var/lib/alice-helper/backups"
 )
@@ -87,6 +92,10 @@ const (
 	WarnDirectoryUsers  = "directory_users_not_listed"
 	WarnUnsupportedPath = "unsupported_path"
 	WarnTooManyUsers    = "too_many_users" // more accounts than the helper lists
+	// Alice's warnings for AuthKeysListResponse.Unlisted (parameter uid); the helper never sends
+	// them in Warnings.
+	WarnAccountNameUnsupported = "account_name_unsupported"
+	WarnAccountHomeUnsupported = "account_home_unsupported"
 )
 
 // Phase 4 warnings of nginx-dump. WarnStreamTLS and WarnMailTLS are also the codes of
@@ -157,6 +166,26 @@ const (
 
 // MaxAccountNames bounds AuthKeysListResponse.Accounts (R38 item 20).
 const MaxAccountNames = 5000
+
+// Protocol 6 limits and reasons (AUD-03, AUD-22).
+const (
+	MaxUnlistedAccounts = 100     // entries of AuthKeysListResponse.Unlisted
+	MaxListInline       = 4 << 20 // total raw bytes of inline file content in one authkeys-list answer
+	// MaxListOutput bounds the whole authkeys-list answer, its newline included (S8): below Alice's
+	// 8 MiB read limit, so a server never turns a listing into a failed discovery. Over it the helper
+	// first returns fewer files inline (Alice reads them with authkeys-read), then lists fewer users
+	// and says Truncated.
+	MaxListOutput = 7 << 20
+	UnlistedName  = "name" // the name is not a ValidAccount
+	UnlistedHome  = "home" // the account would be scanned, but its home is not a path the helper accepts (CleanHome)
+)
+
+// UnlistedAccount is an /etc/passwd entry authkeys-list did not list. Only the uid leaves the
+// server: the name may hold any byte.
+type UnlistedAccount struct {
+	UID    int    `json:"uid"`
+	Reason string `json:"reason"` // UnlistedName or UnlistedHome
+}
 
 // Phase 4 limits.
 const (
@@ -321,6 +350,13 @@ type FileInfo struct {
 	StrictModesOK bool   `json:"strict_modes_ok"`
 	TooLarge      bool   `json:"too_large"`
 	Unsupported   bool   `json:"unsupported"` // a candidate the helper refuses to read or write (escapes its directory, hard link, foreign owner)
+	// Inline is true when ContentB64 holds the file's content (protocol 6): the helper read the
+	// file for SHA256 from the same descriptor and returns it while the answer's inline total stays
+	// within MaxListInline (and the answer within MaxListOutput). SHA256 is the hash of exactly this
+	// content. Files without it are read with authkeys-read. Only discovery uses it: a change always
+	// reads the file again with authkeys-read (its owner and hash guard the write).
+	Inline     bool   `json:"inline"`
+	ContentB64 string `json:"content_b64,omitempty"`
 }
 
 // UserFiles is one account and its candidate files.
@@ -342,10 +378,16 @@ type AuthKeysListResponse struct {
 	Users                 []UserFiles `json:"users"`
 	AuthorizedKeysCommand string      `json:"authorized_keys_command"`
 	Warnings              []string    `json:"warnings"`
-	// Accounts is every valid /etc/passwd name, sorted and deduplicated (at most MaxAccountNames);
-	// AccountsComplete is false when the list was cut or could not be read completely (R38 item 20).
+	// Accounts is every ValidAccount /etc/passwd name, sorted and deduplicated (at most
+	// MaxAccountNames); AccountsComplete is false when the list was cut or could not be read
+	// completely (R38 item 20), when Unlisted is not empty, or when the answer is Truncated.
 	Accounts         []string `json:"accounts"`
 	AccountsComplete bool     `json:"accounts_complete"`
+	// Unlisted names every entry the helper could not list (at most MaxUnlistedAccounts, never
+	// null); AccountsComplete is false when it is not empty (AUD-03).
+	Unlisted []UnlistedAccount `json:"unlisted"`
+	// Truncated is true when the helper left users out to keep the answer within MaxListOutput (S8).
+	Truncated bool `json:"truncated"`
 }
 
 // AuthKeysReadResponse answers "authkeys-read".
@@ -539,8 +581,56 @@ func ValidPath(s string) bool {
 	return ValidArg(s) && strings.HasPrefix(s, "/") && filepath.Clean(s) == s
 }
 
-// ValidUser reports whether s is an acceptable Linux user name (SEC-062).
+// ValidUser reports whether s is an acceptable Linux user name (SEC-062): the names Alice itself
+// configures (the SSH login user, the sudo user).
 func ValidUser(s string) bool { return userRE.MatchString(s) }
+
+// ValidAccount reports whether s is an account name the helper lists from /etc/passwd and Alice
+// stores and shows (protocol 6, AUD-03, R39): 1 to 32 bytes of ASCII letters of either case,
+// digits, "_", "." and "-", not starting with "." or "-", an optional final "$" (Samba machine
+// accounts), and not all digits (it would read as a uid). That is what shadow-utils' useradd
+// accepts on Debian and RHEL within 32 bytes. It never holds a comma, "/", a space, a quote, "="
+// or a control character, so it is safe in "sshd -T -C user=<name>,…"; a "$" that reaches an
+// expanded path is refused there by ValidPath. Case is significant: "John" and "john" are two
+// accounts. Names Alice itself configures keep ValidUser (SEC-062).
+func ValidAccount(s string) bool {
+	if len(s) == 0 || len(s) > 32 {
+		return false
+	}
+	body := strings.TrimSuffix(s, "$")
+	if body == "" {
+		return false
+	}
+	digits := true
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		switch {
+		case c >= '0' && c <= '9':
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '_':
+			digits = false
+		case (c == '.' || c == '-') && i > 0:
+			digits = false
+		default:
+			return false
+		}
+	}
+	return !digits
+}
+
+// CleanHome returns an /etc/passwd home directory as the helper names paths: absolute, without
+// repeated or trailing "/" and "." elements (the kernel and sshd read them the same way), and a
+// ValidPath. A ".." element is refused, never cleaned: through a symbolic link it names another
+// directory than the lexical result (AUD-03).
+func CleanHome(h string) (string, bool) {
+	if !strings.HasPrefix(h, "/") || slices.Contains(strings.Split(h, "/"), "..") {
+		return "", false
+	}
+	c := filepath.Clean(h)
+	if !ValidPath(c) {
+		return "", false
+	}
+	return c, true
+}
 
 // ValidOpID reports whether s is a lowercase UUID in 8-4-4-4-12 form (the backup directory name).
 func ValidOpID(s string) bool {

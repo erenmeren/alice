@@ -324,7 +324,7 @@ func TestAuthKeysListUsersAndFiles(t *testing.T) {
 	require.Len(t, deploy, 2)
 	assert.Equal(t, map[string]any{"path": "/home/deploy/.ssh/authorized_keys", "exists": true, "size": float64(31),
 		"sha256": hexOf("ssh-ed25519 AAAA deploy@laptop\n"), "mode": "0600", "owner": owner, "strict_modes_ok": true,
-		"too_large": false, "unsupported": false}, deploy[0])
+		"too_large": false, "unsupported": false, "inline": false}, deploy[0])
 	assert.Equal(t, "/etc/ssh/keys/deploy", deploy[1]["path"])
 	assert.Equal(t, true, deploy[1]["exists"])
 	assert.Equal(t, "0644", deploy[1]["mode"])
@@ -388,7 +388,7 @@ func TestEscapingSymlinkIsNotACandidate(t *testing.T) {
 	files := filesOf(listUser(t, m, "deploy"))
 	require.Len(t, files, 2)
 	assert.Equal(t, map[string]any{"path": "/home/deploy/.ssh/authorized_keys2", "exists": true, "size": float64(0), "sha256": "",
-		"mode": "", "owner": "", "strict_modes_ok": false, "too_large": false, "unsupported": true}, files[1])
+		"mode": "", "owner": "", "strict_modes_ok": false, "too_large": false, "unsupported": true, "inline": false}, files[1])
 
 	for _, p := range []string{"/home/deploy/.ssh/authorized_keys2", "/etc/shadow", "/root/.ssh/../../etc/shadow"} {
 		code, m := f.run("authkeys-read", p)
