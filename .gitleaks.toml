@@ -1,7 +1,20 @@
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "Test fixtures use obviously fake secrets"
 regexes = ['''s3cret-pw''', '''app-test-pw''', '''0wner-pw''', '''wrong-pw-9f3a''', '''qwerty123456''', '''GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ''', '''correct-horse-battery-2026''', '''amber canyon violet orbit lantern''']
-paths = ['''web/package-lock\.json''']
+
+# The npm lockfile was exempt here as a whole path; now only its integrity lines are (AUD-23): a
+# finding in that file is allowed only when the whole line is an "integrity" sha512 hash of a
+# published package. Note: the default configuration that useDefault pulls in (gitleaks v8.30.1)
+# has its own global allowlist that skips package-lock.json, go.sum and node_modules entirely, and
+# it cannot be switched off without copying every default rule. Until that is decided (recorded in
+# the audit remediation review), gitleaks does not read the lockfile; this entry is what applies
+# the day the default stops skipping it.
+[[allowlists]]
+description = "npm lockfile integrity hashes (sha512 of published packages) and nothing else in that file"
+condition = "AND"
+paths = ['''^web/package-lock\.json$''']
+regexTarget = "line"
+regexes = ['''^\s*"integrity": "sha512-[A-Za-z0-9+/]+={0,2}",?\s*$''']
