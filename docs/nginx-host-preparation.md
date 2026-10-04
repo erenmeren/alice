@@ -7,7 +7,9 @@ five minutes per server and you can undo it completely (see "Removing Alice from
 
 Supported systems: Ubuntu 20.04 or later, Debian 11 or later, RHEL, Rocky Linux or AlmaLinux 8 or later, on x86_64
 or aarch64, with the OpenSSH server, `sudo` and `sha256sum` (coreutils). Alice is tested on Ubuntu 22.04, Debian 12
-and Rocky Linux 9.
+and Rocky Linux 9. For certificates the server also needs Nginx from the distribution's or nginx.org's packages,
+installed as `/usr/sbin/nginx` and run by systemd as `nginx.service` (tested with Nginx 1.18, 1.20 and 1.22).
+Nginx in a container, Nginx Plus and OpenResty builds with other paths are not supported.
 
 ## What the setup commands do
 
@@ -37,21 +39,127 @@ safe.
 6. Create `/var/lib/alice-helper` and `/var/lib/alice-helper/backups` (root only, mode 0700). Before Alice changes an
    `authorized_keys` file, the helper keeps a copy of the previous file there; copies older than 30 days are removed
    automatically. The helper also keeps its lock files in `/var/lib/alice-helper/locks`; lock files not used for 30
-   days are removed the same way.
+   days are removed the same way. On an Nginx server the helper also keeps there the backups of replaced
+   certificate and key files (see "Backups of certificate files") and, in `/var/lib/alice-helper/pairs`, one small
+   record per certificate/key pair it ever changed (which change was the latest).
 
 A restriction to Alice's source address (`from="…"` in the key line) is not added by the **Servers** page. If you
 want it, ask for the commands through the API with `GET /api/v1/ssh-keys/platform-key?from=<Alice's IP address>`.
 
 ## Two profiles
 
-| Profile | For | Allowed helper subcommands |
+| Profile | For | Allowed helper subcommands (with `sudo`) |
 |---|---|---|
 | `linux` | Servers where Alice manages SSH keys only | `sshd-dump`, `hostkeys`, `cleanup`, `authkeys-list`, `authkeys-read`, `authkeys-write` |
-| `nginx` | Nginx servers (certificates arrive in a later release; SSH keys work now) | everything in `linux` plus `nginx-dump`, `nginx-test`, `nginx-reload`, `stat`, `read-cert`, `install-cert`, `backup`, `restore` |
+| `nginx` | Nginx servers: their certificates and their SSH keys | everything in `linux` plus `nginx-dump`, `nginx-test`, `nginx-deploy`, `nginx-restore`, `nginx-status` |
 
-Choose the profile under **Server type** (**Linux server** or **Nginx server**) on the **Servers** page. A Linux
-server never gets the Nginx permissions. The helper of this release answers the Nginx subcommands with
-`UNKNOWN_SUBCOMMAND`; Alice adds every server as a Linux server for now.
+Choose the profile under **Server type** (**Linux server** or **Nginx server**) on the **Servers** page, and add the
+server in Alice with the same **Server type**. A Linux server never gets the Nginx permissions. Both profiles
+also let `alice-svc` run `alice-helper version` and `alice-helper tls-probe` without `sudo`: these need no root
+rights and have no sudoers line.
+
+## The Nginx profile
+
+The `nginx` profile adds these five lines to `/etc/sudoers.d/alice` (exactly as the setup commands write them):
+
+```
+Cmnd_Alias ALICE_NGINX_ONLY = \
+    /usr/local/libexec/alice-helper nginx-dump, \
+    /usr/local/libexec/alice-helper nginx-test, \
+    /usr/local/libexec/alice-helper nginx-deploy --op ????????-????-????-????-???????????? --cert /* --key /* --expect-cert-sha256 ???????????????????????????????????????????????????????????????? --content-sha256 ????????????????????????????????????????????????????????????????, \
+    /usr/local/libexec/alice-helper nginx-restore --op ????????-????-????-????-????????????, \
+    /usr/local/libexec/alice-helper nginx-status --op ????????-????-????-????-????????????
+
+alice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_NGINX_ONLY
+```
+
+Each `?` stands for exactly one character, so the operation ID (the deployment's ID) and the two SHA-256 values have
+a fixed length. sudo's `*` also matches spaces, so `sudo` alone would let a few extra words through after a path;
+the helper checks its whole argument list itself and refuses anything that is not exactly what Alice sends.
+
+| Line | What it allows |
+|---|---|
+| `nginx-dump` | Runs `/usr/sbin/nginx -V` and `nginx -T` and answers a summary: the Nginx version, the configuration's file names, each `server` block's names and HTTPS ports, each `ssl_certificate`/`ssl_certificate_key` pair, and for each certificate file its owner, group, mode, size, SHA-256 and the certificates in it; for each key file only its owner, group, mode and size. It never sends the configuration text, Nginx's own messages or anything from a key file. No arguments. |
+| `nginx-test` | Runs `nginx -t` and answers whether the configuration is valid (and, if not, a short class such as "syntax" or "key does not match"). No arguments. |
+| `nginx-deploy` | Replaces one certificate file and its key file with the content Alice sends on standard input, as one transaction (below). The two paths must be a pair that the current Nginx configuration uses. |
+| `nginx-restore` | Puts back the previous files of one earlier `nginx-deploy`, from its backup. |
+| `nginx-status` | Reports how one earlier `nginx-deploy` ended (from its journal) and whether the helper is busy. |
+
+`tls-probe` (no `sudo`) connects to a website on the server itself (for example `127.0.0.1:443`) and reports the
+certificate it serves. Alice uses it to check a website it cannot reach from its own network.
+
+### How the helper decides what it may change
+
+The helper changes only files that Nginx itself uses as a certificate/key pair, never a path Alice chooses:
+
+- It reads the configuration with its own `nginx -T` and compares every configuration file printed there with the
+  real file on disk. If they differ, or a file cannot be checked, it trusts none of the configuration and changes
+  nothing ("Alice cannot trust Nginx's output for this configuration").
+- Every directory and every symbolic link on the way to a configuration file, a certificate file or a key file must
+  belong to root, and no directory may be writable by its group or by others. Root-owned links are followed, so
+  Let's Encrypt's `live/` links work (the link stays; the file it points to is replaced).
+- A certificate or key file must be a regular file with one name (no hard link), on a normal file system, and its
+  name must end in `.pem`, `.crt`, `.cer`, `.cert`, `.key`, `.chained` or `.fullchain`. Both files must exist; Alice
+  never creates a new file and never edits the Nginx configuration.
+- A pair is not used when a configuration file that holds its `server` block or its directives (also through an
+  `include`) can be changed by a user other than root.
+- Before replacing anything it checks that the certificate file still has the content Alice saw at the last
+  **Discover** and that the new key belongs to the new certificate.
+
+### What a deployment does on the server
+
+`nginx-deploy` runs as one transaction under a lock (`/var/lib/alice-helper/locks/nginx.lock`, one change at a time
+per server). It writes a journal and copies of the current certificate and key file, writes the new key and then the
+new certificate (each through a temporary file next to the original, created root-only, then renamed over it), runs
+`nginx -t`, then `systemctl reload nginx` and `systemctl is-active nginx`. If any of this fails, it puts the previous
+files back and reloads Nginx again. It finishes even if the SSH connection drops; Alice then reads the journal with
+`nginx-status` and finishes or undoes the change.
+
+The new files keep the owner and group of the files they replace. The key file becomes mode 0600, except a key that
+was 0640 (for example `root:ssl-cert` on Debian), which stays 0640. The certificate keeps its mode, limited to 0644.
+An SELinux label is copied from the replaced file (`restorecon` is not run).
+
+### Backups of certificate files
+
+Each deployment has its own folder `/var/lib/alice-helper/backups/<deployment ID>` (root only, 0700) with
+`journal.json`, `cert.bak` (the previous certificate file) and `key.bak` (the previous private key), each root 0600.
+The deployment's page in Alice shows this folder as **Backup on the server**. The helper removes a folder:
+
+- 7 days after the deployment succeeded, changed nothing, or was undone;
+- 30 days after a deployment whose undo failed, unless the helper may still need the backup to finish it;
+- never while a deployment was interrupted and has not been finished or undone yet.
+
+Alice never removes these folders itself. The helper keeps at most 1000 of them; beyond that it refuses new
+deployments until old ones are removed. They contain private keys: treat them like the key files themselves.
+
+### Restoring a previous certificate by hand
+
+Alice restores the previous files on its own when a deployment fails. To go back after a deployment that
+**succeeded**, the easiest way is to deploy the previous certificate again (Alice needs its private key: upload it
+first). If that is not possible, restore the backup by hand, as root, while the folder still exists:
+
+1. Find the deployment in Alice (**Deployment history**) and note its **Certificate file**, **Key file** and
+   **Backup on the server**.
+2. On the server look at `journal.json` in that folder: `cert_resolved` and `key_resolved` name the files that were
+   replaced (for a Let's Encrypt link, the file the link points to), and `cert_meta` and `key_meta` hold their
+   previous owner (`uid`, `gid`) and mode (in decimal: 420 is 0644, 416 is 0640, 384 is 0600).
+3. Copy the backups over those files with the same owner and mode, the key first, for example
+   `install -o 0 -g 0 -m 0600 /var/lib/alice-helper/backups/<deployment ID>/key.bak <key_resolved>` and
+   `install -o 0 -g 0 -m 0644 /var/lib/alice-helper/backups/<deployment ID>/cert.bak <cert_resolved>`.
+4. Run `nginx -t` and, if it passes, `systemctl reload nginx`.
+5. In Alice choose **Discover** on the server's page. The website then shows **The certificate changed outside
+   Alice.**, which is expected after a manual change.
+
+Do not use `alice-helper nginx-restore` by hand for an older deployment: the helper restores only the latest change
+of a certificate/key pair and refuses older ones.
+
+### Changing a Linux server into an Nginx server
+
+The server type cannot be changed in Alice. Run the setup commands again with **Server type** **Nginx server** (this
+adds the Nginx lines to the sudoers file), then remove the server in Alice (**Remove server**) and add it again as an
+**Nginx server**. Its SSH keys are read again by the first scan. If you only add the server as an Nginx server but
+keep the Linux commands on it, Alice still reads its SSH keys and shows "The Nginx permissions are not installed on
+this server".
 
 ## Steps
 
@@ -69,14 +177,16 @@ server never gets the Nginx permissions. The helper of this release answers the 
    `alice-helper`, and run it there as root: `sudo sh ./prepare-alice.sh`. Expected last line: "This server is
    ready for Alice."
 4. In Alice choose **Add server**, enter a **Name**, the server's **Address** (host name or IP address only), the
-   **SSH port** and the **User name on the server** `alice-svc` (already filled in), and choose **Connect**.
+   **SSH port**, the **User name on the server** `alice-svc` (already filled in) and the **Server type** you chose in
+   step 2, and choose **Connect**.
 5. Alice shows **Is this your server?** with the server's **Fingerprint** and a **Command to run on the server**
    (for example `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`). Run it on the server and compare the
    `SHA256:…` value character by character. Only if it is the same, choose **Yes, this is my server**. If it differs,
    choose **No, cancel** and ask your network or security team: someone may be between Alice and the server. A
    cancelled server stays in the list as **Waiting for fingerprint confirmation**; Alice does nothing on it.
 6. Alice tests the connection and then reads the SSH keys. The server shows **Connected** and its keys appear under
-   **SSH keys on this server**.
+   **SSH keys on this server**. On an Nginx server the same scan also reads Nginx's configuration: its websites
+   appear under **Websites on this server**. Choose **Discover** there to scan again at any time.
 
 ## What Alice reads and changes
 
@@ -98,10 +208,11 @@ server never gets the Nginx permissions. The helper of this release answers the 
     its target contains no `..`, and the directories it leads to pass the same check, so `/home -> /data/home` and
     Fedora's `/home -> var/home` work; a home that is itself a symbolic link must lead to a directory that the
     account owns.
-- Alice does not learn that an account was deleted. An account that is deleted, switched to a shell such as
-  `/usr/sbin/nologin` or left without its home directory is simply no longer listed, and the helper cannot tell
-  these cases apart. Its keys stay in Alice as they were last seen (they are not marked **No longer found**), and
-  Alice cannot remove them. How to spot and handle this: [operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists).
+- The helper also reports the name of every account in `/etc/passwd` (at most 5000). When an account was deleted
+  and that list is complete (no directory service in use, no "more user accounts than Alice lists" warning), its
+  keys are marked **No longer found**. An account that still exists but got a shell such as `/usr/sbin/nologin` or
+  lost its home directory is not scanned any more: its keys stay in Alice as they were last seen, and Alice cannot
+  remove them. How to spot and handle this: [operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists).
 - Accounts that exist only in a directory service (LDAP, SSSD) are not listed; Alice shows a warning when the
   server uses one.
 - If the SSH server gets keys from a program (`AuthorizedKeysCommand`), Alice shows the keys it finds in files but
@@ -113,6 +224,46 @@ server never gets the Nginx permissions. The helper of this release answers the 
   for that user, and it never changes `cert-authority` lines.
 - Alice never removes its own key, on any account. Removing the last key of `root` needs an administrator's
   explicit confirmation.
+
+## What Alice reads and changes on an Nginx server
+
+- Alice reads Nginx's configuration through `nginx -T` (on the server, by the helper), the certificates in the
+  certificate files it names, and the owner, group, mode and size of the key files. It never reads a private key
+  from a server.
+- Alice changes only certificate and key files that Nginx already uses, only when an administrator or operator
+  deploys a certificate, and only under the rules of "How the helper decides what it may change". It never edits
+  the Nginx configuration, never creates a certificate directive or file, and never restarts Nginx (it reloads it).
+- Before a deployment Alice checks that it can see the website's current certificate (from its own network, or
+  with `tls-probe` from the server itself); after it, that the website serves the new certificate with the expected
+  chain. An administrator can change the port and name Alice checks, or turn the check off, per website
+  (**Verification settings**).
+
+Alice shows these notes next to a website: **Custom location** (the file is outside `/etc/ssl`, `/etc/nginx`,
+`/etc/pki` and `/etc/letsencrypt`), "This file is a link" (another tool such as certbot may replace it), and "The
+private key file belongs to a user other than root or can be read by a group or by others" (a deployment keeps
+these permissions, so the new key is exactly as exposed as the old one; Debian's `ssl-cert` group also shows it).
+
+## Configurations Alice cannot manage
+
+Alice lists these websites as **Not supported** with the reason, or shows the problem above the list, and changes
+nothing:
+
+- A certificate path with a variable, a `data:` value, an `engine:` key, a key protected with `ssl_password_file`, a
+  certificate and key in one file, one certificate file used with different key files, TLS in `stream {}` or
+  `mail {}` blocks, and a path with a space, a `.` or `..` component or another unusual character.
+- A pair whose configuration file can be changed by a user other than root (for example a site file writable by a
+  deploy group): make the file and its directories root-owned and not group or other writable, then **Discover**.
+- The whole server, when a configuration directory is not root-controlled, a configuration file is included through
+  a path with `..` (write the `include` with an absolute path instead), a configuration file name contains a space,
+  Nginx was built without a configuration path, or a comment in a real file starts exactly like the marker
+  `# configuration file` that `nginx -T` prints. The page names the reason and, where it can, the file.
+- A website whose `listen` names a host name that resolves to an address other than 127.0.0.1: Alice cannot
+  check it, so deployments are refused before anything changes. Change the `listen` to an IP address or to
+  `listen 443 ssl;`, or (if you accept the risk) let an administrator turn the check off for that website.
+- A website whose name is answered by another `server` block that listens on the server's own address and port
+  (Nginx gives such connections to the address-specific block): Alice sees the other block's certificate and
+  refuses the deployment.
+- Websites that offer only TLS 1.0 or 1.1, or only RSA key exchange: Alice's check needs TLS 1.2 or later.
 
 ## When the server is rebuilt
 
@@ -147,6 +298,9 @@ rm -f /etc/sudoers.d/alice /usr/local/libexec/alice-helper
 userdel alice-svc
 rm -rf /var/lib/alice-svc /var/lib/alice-helper
 ```
+
+`/var/lib/alice-helper` also holds the backups of replaced certificate and key files (private keys included); the
+`rm -rf` removes them. Nginx and its certificate files stay as they are.
 
 `userdel -r` is not used because the home directory belongs to root. If `userdel` reports that `alice-svc` is still
 logged in, a job that was already running when you removed the server has not finished yet: wait a minute and run it

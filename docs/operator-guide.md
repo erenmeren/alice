@@ -75,32 +75,169 @@ the old key may stay in use for up to 60 seconds after the switch.
 
 Whoever can run commands as `alice-svc` on a server (Alice itself, or anyone who holds its key or the master key
 and the database) is effectively root there: the helper writes the `authorized_keys` file of any listed account,
-`root` included. Treat Alice's key and `alice-svc` accordingly.
+`root` included, and on an Nginx server it replaces the certificate and key of any website Nginx serves. Treat
+Alice's key and `alice-svc` accordingly.
 
 The sudoers file sets `Defaults:alice-svc log_output`, so sudo keeps an I/O log of every helper call, including
-every answer the helper prints (lists of key files and the content of the `authorized_keys` files Alice read).
-These are public keys, not secrets, but the logs grow with every scan: rotating or removing them (by default below
-`/var/log/sudo-io`) is the server administrator's job.
+every answer the helper prints (lists of key files, the content of the `authorized_keys` files Alice read, and on
+Nginx servers the website summary with the public certificates). These are not secrets: private keys travel only
+on the helper's input, which sudo does not log. The logs grow with every scan: rotating or removing them (by
+default below `/var/log/sudo-io`) is the server administrator's job.
 
 ## Keys of accounts Alice no longer lists
 
-The helper lists only some accounts of a server (see "What Alice reads and changes" in
-[nginx-host-preparation.md](nginx-host-preparation.md#what-alice-reads-and-changes)). When an account is deleted,
-gets a shell such as `/usr/sbin/nologin`, or loses its home directory, it is no longer listed, and the helper does
-not say which of these happened. Alice therefore keeps the account's keys as they were last seen: they are not
-marked **No longer found**, and **Remove key** fails because the helper refuses a file of an account it does not list
-(`ALC-SSH-0006`). A key is marked **No longer found** only when a scan reads its file again and the key is gone.
+The helper scans only some accounts of a server (see "What Alice reads and changes" in
+[nginx-host-preparation.md](nginx-host-preparation.md#what-alice-reads-and-changes)), but it reports the name of
+every account in `/etc/passwd`. When an account is deleted and that list is complete, Alice marks its keys **No
+longer found**. The list is not complete when the server also has accounts in a directory service (LDAP, SSSD) or
+more accounts than Alice lists (the server's page shows a warning in both cases); then the keys of a deleted account
+stay as they were last seen. An account that still exists but gets a shell such as `/usr/sbin/nologin` or loses its
+home directory is not scanned any more either. In these cases **Remove key** fails because the helper refuses a file
+of an account it does not scan (`ALC-SSH-0006`).
 
 To spot it: on the key's page (**SSH keys**, then the key), **Where this key is used** shows a **Last seen** time that
 stays behind the server's latest scan. To handle it, check the account on the server (`getent passwd <user>`):
 
-- The account was deleted: its keys no longer let anyone sign in as that user. If its home directory is still on
-  the server, delete the old `authorized_keys` file there.
+- The account was deleted (on a server whose account list is incomplete): its keys no longer let anyone sign in as
+  that user. If its home directory is still on the server, delete the old `authorized_keys` file there.
 - The account still exists with a `nologin` or `false` shell, or without its home directory: the SSH server may still
   accept its keys (for example for port forwarding). Remove the key lines from the file on the server yourself, or
   give the account a login shell and its home again, choose **Scan for SSH keys**, and remove the key in Alice.
 
 In both cases the entry stays in Alice as last seen; this is a known limitation of this release.
+
+## Certificates
+
+**Certificates** lists every TLS certificate Alice knows, once per certificate: the ones it found on Nginx servers
+and the ones you added. Filter by **Search** (name, domain name or fingerprint), **Server**, **Source** (**Found on
+servers**, **Uploaded**, **From a signing request**) and **Expiry**. The **Private key** column says **In Alice** when
+Alice holds the key (only then can it deploy the certificate) and **Not in Alice** otherwise: Alice never reads a
+private key from a server. Open a certificate to see its details, whether its chain is complete, **Where this
+certificate is used** and its deployments. Administrators and operators add and deploy certificates; auditors only
+read.
+
+### Uploading a certificate
+
+Choose **Upload certificate**, then the **File format**:
+
+- **PEM text**: paste the certificate with its chain into **Certificate and chain (PEM)** and the private key into
+  **Private key (PEM)**. The order of the chain does not matter; Windows line endings are fine. The key may be
+  PKCS #1, PKCS #8 or an EC key, but not protected with a password.
+- **PFX file**: choose the `.pfx` or `.p12` file and enter its **PFX password** (it may be empty).
+
+**Name (optional)** is a label for the list. Choose **Upload**. Alice checks everything before it stores anything:
+the key must belong to one of the certificates (that one becomes the website certificate, the others its chain),
+the certificate must not have expired, keys must be RSA of 2048 to 16384 bits or ECDSA P-256 or P-384, and no
+certificate in the chain may be signed with MD5 or SHA-1. Each field is limited to 256 KiB. The private key is stored
+encrypted and is never shown again. A refused upload says why ([troubleshooting.md](troubleshooting.md), codes
+`ALC-CRT-…`) and stores nothing; every attempt is in the audit log.
+
+Alice may store the certificate with a warning:
+
+- "The chain is incomplete": the chain does not lead to a root that Alice's system trusts or that came with the
+  upload. Some browsers may refuse it; only an administrator can deploy it, with a confirmation.
+- "A certificate in the chain has expired": replace the chain when you can.
+- "This certificate is not valid yet": it cannot be deployed before its start date.
+
+Uploading a certificate Alice already holds with its key is refused ("Alice already has this certificate with its
+key"); open it from the list instead. If your browser lost the answer to an upload, check the list before you try
+again.
+
+### Signing requests
+
+When you want Alice to create the private key, choose **Create signing request**, enter the **Main domain name** (at
+most 64 characters), **Other domain names (one per line)** and the **Key type** (**ECDSA P-256 (recommended)**, **RSA
+3072** or **RSA 4096**), and choose **Create request**. Copy the request (**Copy request** or **Download request**)
+and send it to your certificate authority. The private key never leaves Alice.
+
+When the certificate arrives, open **Open signing requests**, choose **Add signed certificate** in the request's row,
+paste the certificate with its chain and choose **Add certificate**. Alice accepts only a certificate for the
+request's key; if its domain names differ from the request (certificate authorities sometimes change them), Alice
+adds it with a warning, so check that it is the certificate you ordered. **Cancel request** ends a request you no
+longer need.
+
+### Websites on an Nginx server
+
+On an Nginx server's page, **Websites on this server** lists each certificate file that Nginx uses: the website
+(server name; **(default server)** for `_`), the port, the file, the certificate in it, its expiry and a state:
+**Ready**, **Not supported** (with the reason), **No longer found** or **Deployment in progress**. **Discover** reads
+the server again (SSH keys and websites). Alice also does this on its own once per discovery interval. When the last
+scan could not read the websites (Nginx missing, its configuration has an error, or the Nginx permissions are not
+installed), the page says so and that the list may be out of date. Why a website can be **Not supported** is
+explained in [nginx-host-preparation.md](nginx-host-preparation.md#configurations-alice-cannot-manage).
+
+A website shows **The certificate changed outside Alice.** when its file holds a certificate that Alice did not
+deploy (for example renewed by certbot or by hand). That is not an error: it tells you that something else manages
+this file.
+
+### Deploying a certificate
+
+Two ways lead to the same dialog, **Deploy a certificate**:
+
+- On the server's page choose **Deploy certificate** in a website's row, then choose the certificate. Alice offers
+  only certificates it holds the key of and whose key type (RSA or ECDSA) fits that place.
+- On a certificate's page choose **Deploy** and tick the websites (only websites that already use this
+  certificate are offered, at most 20 at once). To put a renewed certificate on a website that uses another one,
+  start from the server's page.
+
+Choose **Deploy**. A request for several websites is all or nothing: if one website cannot take the certificate,
+nothing is queued and the message names that website. Each website then gets its own deployment, which runs in the
+background; the dialog follows them and you can close it at any time.
+
+What happens, step by step (the names are those of the deployment's **Steps**):
+
+| Step | What it means |
+|---|---|
+| **Check the current certificate** | Alice connects to the website and checks that it serves the certificate Alice last saw there. If Alice cannot reach it or sees another certificate, it stops here and changes nothing. |
+| **Backup** | The helper copies the current certificate and key file on the server. |
+| **Write the private key**, **Write the certificate** | The helper replaces the two files (each atomically). |
+| **Check** | `nginx -t` with the new files. |
+| **Reload** | `systemctl reload nginx` (never a restart; open connections are kept) and a check that Nginx is still running. |
+| **Verify** | Alice checks that the website now serves the new certificate with the expected chain, on every HTTPS port of the website, from its own network or, when it cannot reach the website, from the server itself. |
+| **Restore**, **Check again**, **Reload again**, **Verify the previous certificate** | Only when something failed: the previous files are put back, Nginx is checked and reloaded, and Alice checks that the previous certificate is served again. |
+
+The steps from **Backup** to **Reload** (and the restore after a failure) run inside one helper call on the server,
+which finishes even when the connection drops.
+
+### Results and what to do
+
+| Status | Meaning | What to do |
+|---|---|---|
+| **Succeeded** | The new certificate is live and verified ("Checked from Alice" or "Checked from the server itself"; **Skipped** when an administrator turned the check off for that website). | Nothing. |
+| **No change needed** | The website already had this certificate; nothing was written. | Nothing. |
+| **Failed, nothing changed** | Alice stopped before writing (for example the website could not be checked, the file changed since the last scan, the configuration has an error). | Read the error, fix the cause, deploy again. |
+| **Failed, restored** | The files were written but a check failed, and the previous certificate and key are back (Alice reloaded Nginx and, when it could reach the website, checked it). | Read the error (for example `ALC-DEP-0003`), fix the cause, deploy again. |
+| **Outcome not confirmed** | Manual action is needed: the previous files could not be put back, are back but could not be confirmed, another program changed them, or Alice gave up confirming the outcome. | Check the website now; see the error code in [troubleshooting.md](troubleshooting.md) and the backup on the server. |
+| **Needs attention** | Alice is still trying to find out how the deployment ended (see below). | Check the server's connection. |
+
+Administrators with an email address get an email for every deployment that failed or needs manual action, and one
+when a deployment needs attention. A successful deployment sends no email. Every deployment is in the audit log.
+
+### Deployment history
+
+**Deployment history** lists every deployment, newest first, with the server, certificate file, certificate and
+result. **Open** shows the deployment: **Status** and **State**, who requested it, **Previous certificate** and **New
+certificate** (fingerprints), **Verification**, the **Steps** with their results, the error with what to do, and
+**Backup on the server** (`/var/lib/alice-helper/backups/<deployment ID>`). A certificate's page lists its own
+deployments. There is no button to repeat or undo a deployment: deploy again, or deploy the earlier certificate
+(Alice needs its key). Undoing by hand from the backup is described in
+[nginx-host-preparation.md](nginx-host-preparation.md#restoring-a-previous-certificate-by-hand).
+
+### Interrupted deployments
+
+When Alice does not get a clear answer from the server (the connection dropped, the helper was killed, Alice
+restarted), it never sends the deployment again. The deployment's state becomes **Confirming the outcome**: about 30
+seconds later Alice asks the helper how the change ended (the helper finishes its work on the server on its own) and
+then either confirms the new certificate (after verifying it), or puts the previous files back. While the server
+cannot be reached Alice tries again every 15 minutes; after four failed attempts the status becomes **Needs
+attention** and the administrators get one email. After about a day (96 attempts) Alice stops trying: the deployment
+ends **Outcome not confirmed** (`ALC-DEP-0017`) with an email, and the website can be deployed to again. Check the
+website and the files on the server yourself then.
+
+While a deployment on a server is being finished, new deployments to that server are refused (`ALC-DEP-0002`); scans
+and SSH key work go on. Finishing a deployment also runs when the license has expired. A deployment that was
+waiting to start when the license locked is held as "On hold for the license" until an administrator runs or
+discards it after the next license is installed.
 
 ## Master-key rotation and the installation record
 
@@ -113,12 +250,17 @@ and re-compute the job payload MACs (label `alice/job/v1`). Do not replace `mast
 
 ## Background jobs
 
-Work on servers runs in a job queue stored in PostgreSQL: connection tests, scans and key removals. A running job
+Work on servers runs in a job queue stored in PostgreSQL: connection tests, scans, key removals, certificate
+deployments and the finishing of interrupted deployments. A running job
 holds a 45-second lease that it renews every 15 seconds. If Alice stops or crashes, a job whose lease has run out is
 put back in the queue (audited as `job.recovered`) when it has attempts left, and is otherwise stopped
 (`job.dead`). Two jobs for the same server never run at the same time. Failed attempts are retried after 30
 seconds, doubling up to 30 minutes (connection tests are not retried; scans get 5 attempts, other jobs 3). A failed
-sign-in is not retried: the server is marked "Sign-in refused" until someone tests it again.
+sign-in is not retried: the server is marked "Sign-in refused" until someone tests it again. A deployment job that
+runs again after a crash never deploys again once it may have reached the server: it finishes the deployment as
+described in "Interrupted deployments". A job that finishes an interrupted deployment runs once; the next one is
+queued 15 minutes later by a check that runs every minute, and it never sends the stopped-task email (the
+deployment's own email tells the administrators).
 
 Scheduled work per server: every minute Alice looks for servers that are due. A **Connected** server is scanned
 once per discovery interval (default one day, at least one hour). Alice starts at most one scheduled job per server
@@ -146,14 +288,17 @@ or an email.
 
 At most 10 SSH connections are in use at once (2 per server); an idle connection is kept for up to 60 seconds and
 reused, except by **Test connection**, which always opens a new connection. Each step has its own time limit: 10 seconds to connect, 15 seconds for the SSH handshake, 30 seconds per
-command (60 seconds for reading the SSH settings and for listing, reading and changing key files; the helper on
-the server normally stops after 50 seconds, before Alice gives up; a change that timed out is still treated as an
-uncertain outcome and stops for a person). Every job payload carries an HMAC; a job
+command (60 seconds for reading the SSH settings, for listing, reading and changing key files and for reading the
+Nginx configuration; 240 seconds for a certificate deployment or restore; the helper on the server normally stops
+after 50 seconds, before Alice gives up, and a certificate deployment that already replaced a file always finishes;
+a change that timed out is still treated as an uncertain outcome). Every job payload carries an HMAC; a job
 changed in the database is never run (`job.tampered`).
 
 While the license is locked, nothing new can be requested on servers (`ALC-LIC-0001`), scheduled scans are not
-queued, queued tests and scans are cancelled (each recorded as `job.cancelled_license`), and queued key removals are held as "Waiting for an administrator" on
-**Servers** until an administrator runs or discards them after the next license is installed.
+queued, queued tests and scans are cancelled (each recorded as `job.cancelled_license`), and queued key removals and
+deployments are held as "Waiting for an administrator" on **Servers** until an administrator runs or discards them
+after the next license is installed. A deployment that already reached a server is still finished or undone in
+lock.
 
 If two Alice processes run against the same database (for example during an update), only one of them schedules
 periodic work (a PostgreSQL advisory lock); both may run queued jobs, and each job still runs exactly once. On
@@ -164,7 +309,8 @@ because the stop was planned. A job stopped after a crash or a killed process is
 
 Periodic work: license evaluation (hourly), email sending (every minute), audit chain verification (checked every
 hour, run once a day, recorded as `audit.verified` by `scheduler`), clean-up (hourly: expired sessions and setup
-sessions, finished jobs older than 90 days), and scheduling of the daily server scans (every minute). Administrators
+sessions, finished jobs older than 90 days), scheduling of the daily server scans (every minute) and the check for
+interrupted deployments (every minute). Administrators
 with an email address get an email when a job stops after its last attempt, when a job was changed in the
 database, and when the daily audit check finds a problem.
 

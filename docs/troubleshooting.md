@@ -48,8 +48,10 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 - **Server identity changed (`ALC-TGT-0004`).** See [nginx-host-preparation.md](nginx-host-preparation.md#when-the-server-is-rebuilt).
   Never accept a new fingerprint you have not compared on the server itself. If the server shows its previous
   fingerprint again, choose **Review the new fingerprint** and **The server still shows the previous fingerprint**.
-- **A key of a deleted account is still listed as found.** Alice does not learn that an account was deleted (or got a
-  `nologin` shell); see [operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists).
+- **A key of a deleted account is still listed as found.** Alice marks the keys of a deleted account **No longer
+  found** only when the server's account list is complete (no LDAP or SSSD accounts, not more accounts than Alice
+  lists), and keeps the keys of an account that got a `nologin` shell or lost its home as last seen; see
+  [operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists).
 - **"This server gets its SSH keys from a program" (`ALC-SSH-0008`).** The server uses `AuthorizedKeysCommand`;
   Alice lists keys but does not change them there.
 - **A key removal says "The file changed while Alice was working" (`ALC-SSH-0007`).** Someone or something edited
@@ -58,6 +60,98 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   the server, fix what it reports, choose **Scan for SSH keys**, then try again.
 - **"Alice needs this key to connect to this server and will not remove it." (`ALC-KEY-0001`).** This is Alice's
   own key; it is protected on purpose.
+
+## Certificates
+
+- **An upload is refused.** The message says why and nothing is stored; the codes are listed below
+  (`ALC-CRT-0001`…`ALC-CRT-0015`). Common cases: the key belongs to another certificate (`ALC-CRT-0002`; use the key
+  created with this certificate), the key has a password (`ALC-CRT-0004`; remove it with
+  `openssl pkey -in protected.key -out plain.key`, or upload a PFX file with its password), the certificate has
+  expired (`ALC-CRT-0003`), or a weak key or SHA-1 signature (`ALC-CRT-0006`).
+- **"Alice already has this certificate with its key" (`ALC-CRT-0008`) right after an upload that seemed to fail.**
+  The first upload reached Alice but its answer was lost. The certificate is in the list; deploy it from there.
+- **"Alice is busy reading other PFX files" (`ALC-CRT-0015`).** Alice reads at most two PFX files at a time. Wait a
+  moment and upload again. If it keeps happening, someone may be uploading PFX files that take very long to open;
+  check the audit log for `certificate.upload_rejected` and `certificate.uploaded`, and restart Alice if needed.
+- **"The chain is incomplete" after an upload.** Add the intermediate certificates your certificate authority sent
+  (in any order) and upload again, or let an administrator deploy it with a confirmation
+  ([admin-guide.md](admin-guide.md#incomplete-chains)).
+- **The certificate list says "Not in Alice" in the Private key column.** Alice found this certificate on a server and
+  never reads private keys from servers. Upload the certificate with its key to deploy it elsewhere.
+- **A signing request's certificate is refused (`ALC-CRT-0013`).** It was not issued for this request's key: paste the
+  certificate your certificate authority returned for exactly this request.
+
+## Deployments
+
+- **"Deploying is unavailable for now." on a server's websites.** The reason is shown under it: the server is not
+  connected (see its status), the Nginx permissions are not installed (`ALC-NGX-0004`: run the setup commands with
+  **Server type** **Nginx server** again), Nginx was not found (`ALC-NGX-0001`), Nginx's configuration has an error
+  (`ALC-NGX-0002`: run `nginx -t` on the server), or the last scan failed. Fix it, then choose **Discover**.
+- **A website is "Not supported".** The row says why. The cases and what to change are in
+  [nginx-host-preparation.md](nginx-host-preparation.md#configurations-alice-cannot-manage). After a change on the
+  server, choose **Discover**.
+- **"Alice cannot trust Nginx's output for this configuration" or "Alice cannot read this configuration safely".**
+  Alice refuses the whole server and names the reason and, where it can, the file with the problem. Usual causes: a
+  configuration file or folder that users other than root can change (`chmod go-w` on it, owner root), an `include`
+  written with `..` (write the path without `..`), a configuration file name with a space, or a comment in a real
+  configuration file that starts with `# configuration file`. Then choose **Discover**.
+- **"A configuration file of this website can be changed by users other than root."** The website is not supported
+  until the file and its folders belong to root and are not writable by group or others. This is on purpose: whoever
+  can edit that file could otherwise make Alice write a key to a file of their choosing.
+- **The check before the deployment fails with "Alice could not reach the website on port N" (`ALC-DEP-0005`).**
+  Nothing was changed. Check that the website answers on that port from the Alice server or, failing that, on the
+  server itself (`curl -kv https://127.0.0.1:<port>/`). If the website's `listen` names a host name (for example
+  `listen www.example.com:443 ssl;`) that resolves to an address other than 127.0.0.1, Alice cannot check it from
+  either side, although the message suggests a firewall: change the `listen` to an IP address or to `listen 443 ssl;`,
+  or ask an administrator to turn off the check for that website (**Verification settings**, not recommended).
+- **The check before the deployment fails with "Alice could not confirm which certificate the website serves"
+  (`ALC-DEP-0004`).** Nothing was changed. The website served a certificate Alice did not expect: a load balancer or
+  proxy in front of it (an administrator can set the port and name to check in **Verification settings**), the
+  certificate changed since the last scan (choose **Discover**), or another `server` block listens on the server's
+  own address and port and answers for this name (Nginx prefers a `listen` with an explicit address; give both blocks
+  the same kind of `listen`).
+- **"The website serves the expected certificate with a different chain" (`ALC-DEP-0012`).** The number of certificates
+  the website sends differs from the uploaded chain. Check that the website's `ssl_certificate` file is the one Alice
+  replaced and that no proxy changes the chain.
+- **A deployment shows "Confirming the outcome" or "Needs attention".** Alice did not get a clear answer from the
+  server and is finding out how the change ended (see
+  [operator-guide.md](operator-guide.md#interrupted-deployments)). The server is usually unreachable: check its
+  status and its network. The deployment then shows `ALC-DEP-0010` while the latest recovery attempt shows the
+  connection error (`ALC-SSH-0001` or `ALC-SSH-0003`); the same lost connection can appear under either code.
+  Nothing needs to be done once the server is back.
+- **A deployment ended "Outcome not confirmed".** Alice cannot vouch for what the website serves now. Check it:
+  `openssl s_client -connect <server>:443 -servername <website> </dev/null | openssl x509 -noout -fingerprint -sha256`
+  shows the served certificate's fingerprint; compare it with **Previous certificate** and **New certificate** on the
+  deployment's page. On the server, compare the files with the backup in
+  `/var/lib/alice-helper/backups/<deployment ID>` (`sha256sum`), restore by hand if needed
+  ([nginx-host-preparation.md](nginx-host-preparation.md#restoring-a-previous-certificate-by-hand)), run `nginx -t` and
+  `systemctl reload nginx`, then choose **Discover**. The error code tells which case it is (`ALC-DEP-0008`, `0017`,
+  `0018`, `0019`, `0020`).
+- **"Files restored but the website was not confirmed" (`ALC-DEP-0019`) although the website looks right.** This
+  happens when another `server` block answers on the server's own address and port: Alice's check reaches that
+  block instead. Check the website in a browser and see the previous point.
+- **"Alice is still finishing an earlier deployment on this server" (`ALC-DEP-0002`).** Wait until that deployment
+  shows a result in **Deployment history**; at most about a day when the server stays unreachable.
+- **"The certificate file changed since Alice last looked" (`ALC-NGX-0006`).** Another tool (for example certbot)
+  replaced the file. Decide which tool manages this website; choose **Discover** before deploying again.
+- **"Not enough free disk space" (`ALC-NGX-0005`).** The server needs room for the new files, their backups and 10 MiB
+  more. The same answer comes when the helper already keeps 1000 deployment backups: old ones are removed
+  automatically after 7 days.
+- **"Another certificate change is running on this server" (`ALC-NGX-0008`).** The helper changes one website at a
+  time on a server. Wait a minute and try again.
+- **"The certificate file contains a block that is not a certificate. Alice ignored it."** A certificate file holds a
+  block that Alice cannot read as a certificate. The note does not name the file: check the files of the server's
+  websites with `openssl crl2pkcs7 -nocrl -certfile <file> | openssl pkcs7 -print_certs -noout`. If it was the first
+  block of a file, Alice shows the next certificate of that file.
+- **"These websites may be out of date".** The last scan could not read the websites (the reason is shown); the list
+  is the one Alice read at the time shown. Fix the reason and choose **Discover**.
+- **A website shows "The certificate changed outside Alice."** Its file holds a certificate Alice did not deploy (for
+  example renewed by certbot, or restored by hand). Expected after a manual change; otherwise find out which program
+  changed it.
+- **The website list or the certificate files are incomplete on a very large server** ("This server has more
+  websites than Alice lists", "This server uses more certificate files than Alice lists", or `ALC-SSH-0009`). Alice
+  reads at most 1000 certificate files and 16 MiB of website summary per server; such servers are not fully managed
+  in this release.
 
 ## License messages
 
@@ -910,6 +1004,10 @@ and without the confirmation for root's last key.
 **Likely cause.** Neither Alice nor the server itself could connect to the website, or the website has no HTTPS address Alice can check. The certificate it serves could not be checked. The deployment's status shows whether anything was changed.
 
 **What to do.** Allow Alice to reach this port, or ask an administrator to change the website's verification settings.
+
+When the website's `listen` names a host name that resolves to an address other than 127.0.0.1, no firewall change
+helps: Alice cannot check such a website. Change the `listen` to an IP address or to a plain port, or turn the check
+off in its verification settings (see [Deployments](#deployments)).
 
 ## ALC-DEP-0006: Nginx did not reload
 

@@ -324,7 +324,24 @@ func TestPhase4CodesHaveTroubleshootingSections(t *testing.T) {
 	require.NoError(t, err)
 	for _, ec := range phase4Codes() {
 		assert.Regexp(t, regexp.MustCompile(`(?m)^## `+ec.Code+`: .+\n\n\*\*Meaning\.\*\* .*reason `+"`"+regexp.QuoteMeta(ec.Reason)+"`"), string(doc), ec.Code)
+		// The section also says what causes it and what to do about it.
+		section := troubleshootingSection(string(doc), ec.Code)
+		assert.Regexp(t, `(?m)^\*\*Likely cause\.\*\* \S`, section, ec.Code)
+		assert.Regexp(t, `(?m)^\*\*What to do\.\*\* \S`, section, ec.Code)
 	}
+}
+
+// troubleshootingSection returns the text of the "## <code>: …" section, up to the next "## " heading.
+func troubleshootingSection(doc, code string) string {
+	start := strings.Index(doc, "\n## "+code+": ")
+	if start < 0 {
+		return ""
+	}
+	rest := doc[start+1:]
+	if end := strings.Index(rest[3:], "\n## "); end >= 0 {
+		return rest[:end+3]
+	}
+	return rest
 }
 
 // discoverKeys are the common-locale keys that tell the reader to choose the Nginx server page's

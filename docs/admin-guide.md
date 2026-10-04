@@ -1,7 +1,6 @@
 # Administrator Guide
 
-This guide covers day-to-day administration. Sections for certificates, alerts and SSO are added in later
-releases. First-time setup is described in [first-run.md](first-run.md); server commands are in
+This guide covers day-to-day administration. Sections for alerts and SSO are added in later releases. First-time setup is described in [first-run.md](first-run.md); server commands are in
 [operator-guide.md](operator-guide.md).
 
 ## Users and roles
@@ -10,8 +9,8 @@ Alice has three roles:
 
 | Role | Can do | Cannot do |
 |---|---|---|
-| Administrator | Everything: users, settings, audit log, API tokens of other people | — |
-| Operator | View inventory; test servers, run discovery and remove SSH keys; deploy certificates and add SSH keys (from later releases); own API tokens | Manage users, see the audit log, change settings |
+| Administrator | Everything: users, settings, audit log, API tokens of other people, a website's verification settings, deploying a certificate with an incomplete chain | — |
+| Operator | View inventory; test servers, run discovery and remove SSH keys; upload certificates, create signing requests and deploy certificates; own API tokens | Manage users, see the audit log, change settings or verification settings, deploy an incomplete chain |
 | Auditor | View inventory read-only, view and export the audit log, verify its integrity; own read-only API tokens | Change anything, manage users |
 
 The full list of which role may call which API operation is in [authz-matrix.md](authz-matrix.md).
@@ -126,7 +125,10 @@ confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **S
   toward the license; when the license is full, Alice says "Your license allows N targets." and adds nothing. A
   server's address, SSH port and user cannot be changed later: remove the server and add it again.
 - **Test connection** and **Scan for SSH keys** (administrators and operators) run in the background; the page
-  updates when they finish. Test connection always opens a new connection to the server.
+  updates when they finish. Test connection always opens a new connection to the server. On an **Nginx server** the
+  scan is called **Discover** (in **Websites on this server**) and reads the SSH keys and the websites together.
+- A server's **Server type** (**Linux server** or **Nginx server**) is chosen when it is added and cannot be
+  changed; see [nginx-host-preparation.md](nginx-host-preparation.md#changing-a-linux-server-into-an-nginx-server).
 - Alice scans every **Connected** server on its own once per discovery interval (one day unless it was changed
   through the API; at least one hour), and starts at most one scheduled job per server per interval whatever its
   outcome. A server that **Cannot be reached** is tested again at that interval; when the test succeeds it is
@@ -171,11 +173,68 @@ that get their keys from a program (`AuthorizedKeysCommand`) or whose SSH settin
 Every refusal that protects access is recorded in the audit log. Generating, deploying and rotating keys arrive in a
 later release.
 
-The **SSH keys** list shows no **No longer found** mark on its rows; open a key to see the state of each place.
-Alice does not learn that an account was deleted from a server: such an account's keys stay listed as they were
-last seen and cannot be removed through Alice (see
+The **SSH keys** list marks a key **No longer found** when every place it was used is gone; open a key to see the
+state of each place. The keys of an account deleted from a server are marked **No longer found** when the server's
+account list is complete; otherwise, and for an account that got a `nologin` shell or lost its home, the keys stay
+listed as they were last seen and cannot be removed through Alice (see
 [operator-guide.md](operator-guide.md#keys-of-accounts-alice-no-longer-lists)). Key options such as `command=` or
 `environment=` are shown exactly as they are in the file, to everyone who can see the key, auditors included.
+
+## Certificates
+
+How to upload certificates, create signing requests, deploy and read the deployment history is described in
+[operator-guide.md](operator-guide.md#certificates); administrators and operators work the same way there. Three
+things are for administrators only.
+
+### Verification settings
+
+After every deployment Alice checks that the website serves the new certificate, and before it, that it serves the
+current one. By default it connects to the server's address on each HTTPS port that Nginx's configuration names for
+the website, with the website's first server name (for a wildcard name `*.example.com` it uses
+`alice-check.example.com`; for a default server, the certificate's first name). When Alice cannot reach the port from
+its own network, it checks from the server itself. A `listen` on a specific address other than the server's own is
+always checked from the server itself.
+
+Choose **Verification settings** in a website's row (on the server's page) when this does not fit, for example behind
+a load balancer or a port mapping:
+
+- **Port to check**: the port Alice connects to instead of the configured one (empty: the port from the
+  configuration).
+- **Name to check**: the domain name Alice asks for (empty: from the configuration). A domain name, not an IP
+  address, without `*`.
+- **Skip the check for this website**: Alice no longer checks before or after a deployment. Not recommended: a
+  wrong certificate is then neither noticed nor restored automatically, and the deployment shows
+  **Verification** **Skipped**. Use it only when nothing else works, for example for a `listen` on a host name that
+  resolves to another address of the server (see [troubleshooting.md](troubleshooting.md#deployments)).
+
+Choose **Save**. Every change is recorded in the audit log (`location.updated`). If someone else changed the website
+in the meantime, Alice shows the current values and asks you to save again. Operators and auditors see the settings
+read-only.
+
+### Incomplete chains
+
+A certificate whose chain does not lead to a trusted root is marked "The certificate chain is incomplete: some
+browsers may not trust this certificate." (an expired certificate on the way counts as a gap). Operators cannot
+deploy it. An administrator can, after ticking **I confirm that this incomplete chain is intended** in the deploy
+dialog; the confirmation is recorded with the deployment. Prefer uploading the certificate again with its full
+chain from your certificate authority.
+
+### Emails about deployments
+
+Every administrator with an email address gets these emails (when email is set up,
+[operator-guide.md](operator-guide.md#email)):
+
+| Email | Sent when |
+|---|---|
+| "Certificate deployment failed on <server>" | A deployment failed and nothing changed, or the previous certificate was put back. |
+| "Manual action needed: certificate restore failed on <server>" | The previous files could not be put back, or another program changed them during the deployment. It names the backup on the server. |
+| "The previous certificate is back on <server> but Alice could not confirm the website serves it" | The files are back, but the check of the previous certificate did not succeed. Check the website. |
+| "A later operation overwrote the files of a deployment on <server>" | Alice could not finish or undo a deployment because a later change replaced the files. |
+| "Alice cannot finish a deployment on <server>" or "Alice cannot confirm a deployment on <server> yet" | Once per deployment, after four failed attempts to find out how an interrupted deployment ended. Alice keeps trying every 15 minutes. |
+| "Alice could not confirm a certificate deployment on <server>" | Alice stopped trying after about a day, or the server was removed after the change was sent. Check the website and the backup on the server. |
+
+A successful deployment sends no email. Every deployment, refusal and outcome is in the audit log
+(`deployment.*`, `certificate.*`, `csr.*`, `location.*`).
 
 ## License
 
@@ -193,7 +252,7 @@ the server operator has set up email ([operator-guide.md](operator-guide.md#emai
 
 ## For auditors
 
-Auditors sign in like everyone else (password and authenticator app). They see **Home**, **Servers**, **SSH keys**, **Audit log**,
+Auditors sign in like everyone else (password and authenticator app). They see **Home**, **Servers**, **SSH keys**, **Certificates**, **Deployment history**, **Audit log**,
 **License** (read only), **API tokens** and **My account**, and no button that changes anything except their own password, recovery codes,
 language and read-only API tokens. On **Audit log** they can filter, **Verify integrity** and export. A read-only
 API token lets a script fetch `GET /api/v1/audit` or `GET /api/v1/audit/export?format=json` for regular
