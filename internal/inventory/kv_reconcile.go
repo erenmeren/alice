@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -116,7 +115,7 @@ func (s *Service) KVPollRequest(ctx context.Context, id uuid.UUID) (providers.Di
 	req := providers.DiscoverRequest{Certificates: true, KVKeys: asks, KVSecrets: asks,
 		KVKnown: map[string]providers.KVKnown{}, KVKnownKeys: map[string]time.Time{}}
 	rows, err := s.pool.Query(ctx, `SELECT name, current_version, current_thumbprint, kv_updated_at FROM kv_certificates
-WHERE target_id = $1 AND current_version <> '' AND kv_updated_at IS NOT NULL`, id)
+WHERE target_id = $1 AND current_version <> '' AND kv_updated_at IS NOT NULL AND missing_since IS NULL`, id)
 	if err != nil {
 		return providers.DiscoverRequest{}, fmt.Errorf("inventory: read the known certificates: %w", err)
 	}
@@ -138,7 +137,7 @@ WHERE target_id = $1 AND current_version <> '' AND kv_updated_at IS NOT NULL`, i
 		req.KVKnownKeys = nil
 		return req, nil
 	}
-	rows, err = s.pool.Query(ctx, "SELECT name, details_updated_at FROM kv_keys WHERE target_id = $1 AND details_updated_at IS NOT NULL", id)
+	rows, err = s.pool.Query(ctx, "SELECT name, details_updated_at FROM kv_keys WHERE target_id = $1 AND details_updated_at IS NOT NULL AND missing_since IS NULL", id)
 	if err != nil {
 		return providers.DiscoverRequest{}, fmt.Errorf("inventory: read the known keys: %w", err)
 	}
@@ -173,8 +172,14 @@ func (s *Service) resolveImports(_ context.Context, _ pgx.Tx, _ uuid.UUID, _ tim
 //     released by a later poll;
 //   - a version ID that Alice knows with another thumbprint is kept as stored and recorded
 //     (audit kv.certificate.version_conflict, facts warning kv_version_conflict);
-//   - last_success_at and last_discovery_at move only when the certificate listing answered; the
-//     failure transitions are in kvPollStatus.
+//   - last_success_at and last_discovery_at move only when the certificate listing answered (and
+//     the budget did not cut it); the failure transitions are in kvPollOutcome;
+//   - a new version is also held when this is the vault's first poll since the license gate last
+//     opened (ruling I4, see gateReopenedAt): polls stop while the gate is closed, so a renewal made
+//     in Azure during a lock is first seen by a poll that runs with the gate open;
+//   - the pointer to the current version moves to an already known version only when that version
+//     is provably newer (created later than the stored current one): an older read reconciled later
+//     cannot move it back (M1).
 //
 // With a Claim on ctx nothing is written once the run no longer holds its job (ErrClaimLost). A
 // result for a vault deleted or disabled meanwhile is dropped (KVSummary.Dropped, no error).
@@ -193,8 +198,15 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 	if err != nil {
 		return sum, err
 	}
-	// Decided before anything is stored, once for the whole poll (L-87, ruling S8).
-	held := s.license.Allow(license.ClassChange) != nil
+	// Decided before anything is stored, once for the whole poll (L-87, rulings S8 and I4).
+	held := s.gateClosedNow()
+	byReopen := false
+	if !held {
+		if byReopen, err = s.heldByReopen(ctx, id); err != nil {
+			return sum, err
+		}
+		held = byReopen
+	}
 	var st kvStored
 	dropped, err := s.storeKV(ctx, id, p, now, held, &st)
 	sum.NewCertificates, sum.NewVersions, sum.HeldVersions, sum.VersionConflicts = st.newCerts, st.newVersions, st.heldVersions, st.conflicts
@@ -226,23 +238,30 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 		}
 		var removed []removedCert
 		// Defence in depth: an empty complete listing of a vault that has stored certificates is
-		// believed only on the second successful poll in a row (the spec has no mass-disappearance
-		// rule). The first is recorded (facts.kv_empty_polls, warning kv_listing_empty).
-		emptyPolls, hold := t.Facts.KVEmptyPolls, false
+		// believed only on a second such poll that started after the first one finished (the spec has
+		// no mass-disappearance rule). The first is recorded (facts.kv_empty_*, warning
+		// kv_listing_empty); two polls that overlap count as one.
+		f := t.Facts
+		hold := false
 		if p.certsAnswered && len(p.certs) > 0 {
-			emptyPolls = 0
+			f.KVEmptyPolls, f.KVEmptyAt = 0, nil
 		}
 		if p.certsComplete && len(p.certs) == 0 {
 			var present int
 			if err := tx.QueryRow(ctx, "SELECT count(*) FROM kv_certificates WHERE target_id = $1 AND missing_since IS NULL", id).Scan(&present); err != nil {
 				return fmt.Errorf("inventory: count the stored certificates: %w", err)
 			}
-			if present == 0 {
-				emptyPolls = 0
-			} else if emptyPolls == 0 {
-				emptyPolls, hold = 1, true
-			} else {
-				emptyPolls = 0 // the second empty listing in a row is believed
+			switch {
+			case present == 0:
+				f.KVEmptyPolls, f.KVEmptyAt = 0, nil
+			case f.KVEmptyPolls == 0 || f.KVEmptyAt == nil:
+				f.KVEmptyPolls, hold = 1, true
+				end := s.clock.Now().UTC()
+				f.KVEmptyAt = &end
+			case !now.After(*f.KVEmptyAt):
+				hold = true // started before the first empty poll finished: the same observation
+			default:
+				f.KVEmptyPolls, f.KVEmptyAt = 0, nil // the second empty listing is believed
 			}
 		}
 		if p.certsComplete && !hold {
@@ -265,13 +284,19 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 			return err
 		}
 
-		to, code, cycles := kvPollStatus(t, p)
-		sum.Status = to
-		f := t.Facts
+		o := kvPollOutcome(t, p)
+		sum.Status = o.status
 		if p.keysAsked || p.secretsAsked {
 			f.KVMetadataAt = &now
 		}
-		f.KVAuthFailures, f.KVThrottledCycles, f.KVEmptyPolls = 0, cycles, emptyPolls
+		f.KVAuthFailures, f.KVThrottledCycles = o.auth, o.cycles
+		f.KVReconciledAt = &now
+		// Renewals seen while certificates still wait for their details stay held (I4).
+		var pending int
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM kv_certificates WHERE target_id = $1 AND missing_since IS NULL AND details_pending", id).Scan(&pending); err != nil {
+			return fmt.Errorf("inventory: count the pending certificates: %w", err)
+		}
+		f.KVHoldRenewals = byReopen && pending > 0
 		f.KVPoll = &KVPollFacts{At: now, Failures: p.failures, Truncated: p.truncated, DetailsPending: p.detailsPending}
 		f.Warnings = p.warnings()
 		if hold {
@@ -285,27 +310,43 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 		if err != nil {
 			return err
 		}
+		pollOK := p.certsAnswered && !p.certsBudgetCut
+		counted := (!p.certsAnswered || p.budgetCut) && o.class != classRefused
 		if _, err := tx.Exec(ctx, `UPDATE targets SET status = $2, last_error_code = $3,
     last_success_at = CASE WHEN $4::boolean THEN $5::timestamptz ELSE last_success_at END,
     last_discovery_at = CASE WHEN $4::boolean THEN $5::timestamptz ELSE last_discovery_at END,
-    poll_failures = CASE WHEN $4::boolean THEN 0 ELSE LEAST(poll_failures + 1, $6::integer) END,
-    facts = $7, updated_at = $5 WHERE id = $1`, id, to, code, p.certsAnswered, now, maxPollFailures, raw); err != nil {
+    poll_failures = CASE WHEN $8::boolean THEN LEAST(poll_failures + 1, $6::integer) ELSE 0 END,
+    facts = $7, updated_at = $5 WHERE id = $1`, id, o.status, o.code, pollOK, now, maxPollFailures, raw, counted); err != nil {
 			return fmt.Errorf("inventory: store the poll's outcome: %w", err)
 		}
+		if o.mail && s.notifier != nil {
+			if err := s.notifier.NotifyAdmins(ctx, tx, TemplateKVAuthFailed, map[string]string{"target_name": t.Name}); err != nil {
+				return fmt.Errorf("inventory: queue the sign-in email: %w", err)
+			}
+		}
 
-		// The removals: marked above; the first few are announced.
+		// The removals: all are marked above; the first few are announced and audited, and the
+		// rest is counted in one summary mail and in the poll's audit row (M2).
 		var noticeIDs []uuid.UUID
-		for i, r := range removed {
-			if i < maxRemovedNotices && s.notifier != nil {
-				binding := "no"
-				if r.bound {
-					binding = "yes"
+		if s.notifier != nil {
+			for i, r := range removed {
+				if i >= maxRemovedNotices {
+					break
 				}
-				if err := s.notifier.NotifyAdmins(ctx, tx, TemplateKVCertificateRemoved,
-					map[string]string{"target_name": cur.name, "certificate_name": r.name, "binding": binding}); err != nil {
+				tpl := TemplateKVCertificateRemoved
+				if r.bound {
+					tpl = TemplateKVCertificateRemovedBound
+				}
+				if err := s.notifier.NotifyAdmins(ctx, tx, tpl, map[string]string{"target_name": cur.name, "certificate_name": r.name}); err != nil {
 					return fmt.Errorf("inventory: queue the removal email: %w", err)
 				}
 				noticeIDs = append(noticeIDs, r.id)
+			}
+			if more := len(removed) - len(noticeIDs); more > 0 {
+				if err := s.notifier.NotifyAdmins(ctx, tx, TemplateKVCertificatesRemovedMore,
+					map[string]string{"target_name": cur.name, "count": strconv.Itoa(more)}); err != nil {
+					return fmt.Errorf("inventory: queue the removal summary email: %w", err)
+				}
 			}
 		}
 		if len(noticeIDs) > 0 {
@@ -313,8 +354,9 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 				return fmt.Errorf("inventory: record the removal emails: %w", err)
 			}
 		}
-		for i, r := range removed {
-			if i >= maxRemovedAudits {
+		audited := 0
+		for _, r := range removed {
+			if audited >= maxRemovedAudits {
 				break
 			}
 			binding := "no"
@@ -326,6 +368,7 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 					"kv_certificate_id": r.id.String(), "certificate_name": r.name, "vault_url": cur.url, "binding": binding}}); err != nil {
 				return err
 			}
+			audited++
 		}
 		changed := sum.NewCertificates + sum.NewVersions + sum.NewKeys + sum.NewSecrets + sum.MissingCertificates + sum.MissingKeys + sum.MissingSecrets
 		if changed > 0 {
@@ -334,15 +377,17 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 					"certificate_count": strconv.Itoa(sum.Certificates), "item_count": strconv.Itoa(sum.Keys + sum.Secrets),
 					"new_certificate_count": strconv.Itoa(sum.NewCertificates), "new_version_count": strconv.Itoa(sum.NewVersions),
 					"missing_count": strconv.Itoa(sum.MissingCertificates + sum.MissingKeys + sum.MissingSecrets),
-					"partial":       strconv.FormatBool(len(p.failures) > 0 || len(p.truncated) > 0)}}); err != nil {
+					"removed_count": strconv.Itoa(len(removed)), "audited_count": strconv.Itoa(audited),
+					"notified_count": strconv.Itoa(len(noticeIDs)),
+					"partial":        strconv.FormatBool(len(p.failures) > 0 || len(p.truncated) > 0)}}); err != nil {
 				return err
 			}
 		}
-		reason := code
-		if to == StatusOK {
+		reason := o.code
+		if o.status == StatusOK {
 			reason = "kv_poll_ok"
 		}
-		return s.auditStatus(ctx, tx, t, to, reason)
+		return s.auditStatus(ctx, tx, t, o.status, reason)
 	})
 	return sum, err
 }
@@ -355,35 +400,112 @@ func foldedNames[T any](items []T, fold func(T) string) []string {
 	return out
 }
 
-// kvPollStatus is the vault's status after a poll that reached it (the table is in the Task 11
-// report): a list that failed other than by throttling makes it degraded with that reason; the
-// third throttled cycle in a row degrades it (azure.throttled); one or two throttled cycles change
-// nothing; otherwise it is ok and the last error is cleared. A disabled vault stays disabled.
-// cycles is the new count of throttled cycles in a row.
-func kvPollStatus(t Target, p *preparedKV) (status, code string, cycles int) {
+// gateClosedNow reports that the license gate refuses changes at this moment.
+func (s *Service) gateClosedNow() bool { return s.license.Allow(license.ClassChange) != nil }
+
+// gateReopenedAt is the last time the license gate opened after having been closed (locked or
+// evaluation ended): the latest stored transition (license_history: state_change, installed or
+// renewed) from a closed phase to an open one. nil when it never did.
+func (s *Service) gateReopenedAt(ctx context.Context) (*time.Time, error) {
+	var at *time.Time
+	if err := s.pool.QueryRow(ctx, `SELECT max(at) FROM license_history
+WHERE event IN ('state_change', 'installed', 'renewed') AND from_state IN ('locked', 'evaluation_expired')
+  AND to_state <> '' AND to_state NOT IN ('locked', 'evaluation_expired')`).Scan(&at); err != nil {
+		return nil, fmt.Errorf("inventory: read when the license gate reopened: %w", err)
+	}
+	return utcPtr(at), nil
+}
+
+// heldByReopen reports whether versions first seen by this poll must be held although the gate is
+// open (ruling I4): polls do not run while the gate is closed, so a renewal made in Azure during a
+// lock is first seen by the first poll after the license returned. That is the vault's first poll
+// since the gate last opened (its previous complete poll is older than the reopening), or a later
+// poll while certificates still wait for details that the first one could not read. A vault that
+// never completed a poll (a baseline) is not affected.
+func (s *Service) heldByReopen(ctx context.Context, id uuid.UUID) (bool, error) {
+	t, err := getVault(ctx, s.pool, id, false)
+	if err != nil {
+		return false, err
+	}
+	if t.Facts.KVHoldRenewals {
+		return true, nil
+	}
+	if t.Facts.KVReconciledAt == nil {
+		return false, nil
+	}
+	reopened, err := s.gateReopenedAt(ctx)
+	if err != nil || reopened == nil {
+		return false, err
+	}
+	return t.Facts.KVReconciledAt.Before(*reopened), nil
+}
+
+// kvOutcome is the vault's state after a poll that reached it.
+type kvOutcome struct {
+	status, code string
+	auth, cycles int // the sign-in failures in a row and the throttled cycles in a row after the poll
+	mail         bool
+	class        kvClass // the dominant class of the poll's failures (classOther when none)
+}
+
+// kvPollOutcome classifies the failures of a poll (rows of KVInventory.Failures, plus a list cut
+// by the budget) with the table RecordKVFailure uses (kvClassOf). The dominant failure decides, by
+// precedence: sign-in, unreachable, forbidden/firewall, throttled, anything else. Then: sign-in
+// -> auth_failed (the mail at the third in a row); unreachable -> unreachable; forbidden/firewall
+// -> degraded; throttled -> degraded at the third cycle in a row, otherwise (and for anything
+// else) the status stays, except that a poll that got an answer proves the sign-in and the
+// network, so it clears auth_failed and unreachable (ok). No failure: ok, the last error is
+// cleared. A disabled vault stays disabled.
+func kvPollOutcome(t Target, p *preparedKV) kvOutcome {
+	o := kvOutcome{status: t.Status, code: t.LastErrorCode, class: classOther}
 	if p.throttled {
-		cycles = min(t.Facts.KVThrottledCycles+1, 1_000_000)
+		o.cycles = min(t.Facts.KVThrottledCycles+1, maxPollFailures)
 	}
 	if t.Status == StatusDisabled {
-		return StatusDisabled, t.LastErrorCode, cycles
+		return o
 	}
-	for _, f := range p.failures {
-		if f.Reason != "azure.throttled" {
-			return StatusDegraded, f.Reason, cycles
+	if len(p.failures) == 0 {
+		o.status, o.code = StatusOK, ""
+		return o
+	}
+	dom := p.failures[0]
+	o.class = kvClassOf(dom.Reason)
+	for _, f := range p.failures[1:] {
+		if c := kvClassOf(f.Reason); c > o.class {
+			dom, o.class = f, c
 		}
 	}
-	switch {
-	case cycles >= kvThrottledCycles:
-		return StatusDegraded, "azure.throttled", cycles
-	case p.throttled:
-		return t.Status, t.LastErrorCode, cycles
+	switch o.class {
+	case classSignIn:
+		o.status, o.code, o.auth = StatusAuthFailed, dom.Reason, kvAuthStreak(t)
+		o.mail = o.auth == kvAuthNotice
+	case classUnreachable:
+		o.status, o.code = StatusUnreachable, dom.Reason
+	case classRefused:
+		o.status, o.code = StatusDegraded, dom.Reason
+	default:
+		if o.class == classThrottled && o.cycles >= kvThrottledCycles {
+			o.status, o.code = StatusDegraded, dom.Reason
+		} else if t.Status == StatusAuthFailed || t.Status == StatusUnreachable {
+			o.status, o.code = StatusOK, ""
+		}
 	}
-	return StatusOK, "", cycles
+	return o
+}
+
+// kvAuthStreak is the number of failed sign-ins in a row after one more: the count restarts when
+// the vault was not in auth_failed (an access check, a replacement or a poll set it ok since), so
+// the third failure of every episode sends its mail.
+func kvAuthStreak(t Target) int {
+	if t.Status != StatusAuthFailed {
+		return 1
+	}
+	return min(t.Facts.KVAuthFailures+1, maxPollFailures)
 }
 
 const maxPollFailures = 1_000_000
 
-// failure classes of a poll that failed as a whole.
+// failure classes of a poll that failed as a whole or of a failed list.
 var (
 	signInFailures     = []string{"azure.auth_failed", "azure.credentials_expired", "azure.clock_skew", "azure.managed_identity_unavailable"}
 	unreachableReasons = []string{"azure.unreachable", "azure.vault_not_found", "azure.tls_untrusted", "azure.address_not_allowed"}
@@ -391,13 +513,14 @@ var (
 )
 
 // RecordKVFailure records a poll that failed as a whole (the cause is the provider's error; any
-// other error is internal.unexpected, its text never stored). Transitions: a failed sign-in
-// (azure.auth_failed, credentials_expired, clock_skew, managed_identity_unavailable) makes the vault
-// auth_failed and counts toward the email at the third in a row (once per episode); an unreachable
-// vault (unreachable, vault_not_found, tls_untrusted, address_not_allowed) is unreachable; forbidden
-// or firewall is degraded; the third throttled cycle in a row is degraded; anything else leaves the
-// status and counts. Every failure adds one to poll_failures (bounded), which delays the next poll
-// (ScheduleKVPolls), and sets last_error_code. A disabled or deleted vault is left alone.
+// other error is internal.unexpected, its text never stored). The class of the reason (kvClassOf,
+// the table kvPollOutcome uses for failed lists): a failed sign-in makes the vault auth_failed and
+// counts toward the email at the third in a row (once per episode); unreachable is unreachable;
+// forbidden or firewall is degraded and does not delay the next poll (a configuration state, not a
+// transient failure: the plan's row 13 names no backoff for it); the third throttled cycle in a
+// row is degraded; anything else leaves the status. Every failure but forbidden/firewall adds one
+// to poll_failures (bounded), which delays the next poll (ScheduleKVPolls); every one sets
+// last_error_code. A disabled or deleted vault is left alone.
 func (s *Service) RecordKVFailure(ctx context.Context, id uuid.UUID, cause error) error {
 	var pe *providers.Error
 	if !errors.As(cause, &pe) {
@@ -421,15 +544,16 @@ func (s *Service) RecordKVFailure(ctx context.Context, id uuid.UUID, cause error
 			return err
 		}
 		reason := failure.Reason
+		class := kvClassOf(reason)
 		to, auth, cycles := t.Status, 0, 0
-		switch {
-		case slices.Contains(signInFailures, reason):
-			to, auth = StatusAuthFailed, min(t.Facts.KVAuthFailures+1, maxPollFailures)
-		case slices.Contains(unreachableReasons, reason):
+		switch class {
+		case classSignIn:
+			to, auth = StatusAuthFailed, kvAuthStreak(t)
+		case classUnreachable:
 			to = StatusUnreachable
-		case slices.Contains(refusedReasons, reason):
+		case classRefused:
 			to = StatusDegraded
-		case reason == "azure.throttled":
+		case classThrottled:
 			cycles = min(t.Facts.KVThrottledCycles+1, maxPollFailures)
 			if cycles >= kvThrottledCycles {
 				to = StatusDegraded
@@ -442,12 +566,13 @@ func (s *Service) RecordKVFailure(ctx context.Context, id uuid.UUID, cause error
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE targets SET status = $2, last_error_code = $3, poll_failures = LEAST(poll_failures + 1, $4),
-    facts = $5, updated_at = $6 WHERE id = $1`, id, to, reason, maxPollFailures, raw, now); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE targets SET status = $2, last_error_code = $3,
+    poll_failures = CASE WHEN $7::boolean THEN poll_failures ELSE LEAST(poll_failures + 1, $4) END,
+    facts = $5, updated_at = $6 WHERE id = $1`, id, to, reason, maxPollFailures, raw, now, class == classRefused); err != nil {
 			return fmt.Errorf("inventory: record a failed poll: %w", err)
 		}
 		if auth == kvAuthNotice && s.notifier != nil {
-			if err := s.notifier.NotifyAdmins(ctx, tx, TemplateKVAuthFailed, map[string]string{"target_name": t.Name, "reason": reason}); err != nil {
+			if err := s.notifier.NotifyAdmins(ctx, tx, TemplateKVAuthFailed, map[string]string{"target_name": t.Name}); err != nil {
 				return fmt.Errorf("inventory: queue the sign-in email: %w", err)
 			}
 		}

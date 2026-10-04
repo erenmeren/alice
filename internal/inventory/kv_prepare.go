@@ -53,6 +53,32 @@ var (
 	vaultRoles    = []string{providers.RoleKeyVaultReader, providers.RoleKeyVaultSecretsUser, providers.RoleKeyVaultCertificatesOfficer}
 )
 
+// The classes of a failure reason (one table for a poll that failed as a whole and for a list that
+// failed): the dominant class of a poll decides its status; precedence is the order below.
+type kvClass int
+
+const (
+	classOther       kvClass = iota // unexpected answers: the status stays, the failure is counted
+	classThrottled                  // three cycles in a row degrade
+	classRefused                    // forbidden, firewall: degraded, polled at the normal interval
+	classUnreachable                // the vault cannot be reached
+	classSignIn                     // the sign-in failed (the mail rule)
+)
+
+func kvClassOf(reason string) kvClass {
+	switch {
+	case slices.Contains(signInFailures, reason):
+		return classSignIn
+	case slices.Contains(unreachableReasons, reason):
+		return classUnreachable
+	case slices.Contains(refusedReasons, reason):
+		return classRefused
+	case reason == "azure.throttled":
+		return classThrottled
+	}
+	return classOther
+}
+
 // kvVersion is one listed version of a certificate, ready to store.
 type kvVersion struct {
 	version, thumb              string
@@ -115,7 +141,9 @@ type preparedKV struct {
 	secretsComplete bool
 
 	failures       []KVPollFailure
-	throttled      bool
+	throttled      bool // a list was throttled or the poll's budget cut a list: one throttled cycle
+	budgetCut      bool // a kind ended short of its bound without an unusable item: the poll's budget
+	certsBudgetCut bool
 	truncated      []string
 	detailsPending int
 	unreadable     map[string]int // kind -> items Alice could not use
@@ -322,6 +350,22 @@ func (s *Service) prepareKV(res providers.DiscoveryResult, now time.Time) (*prep
 	p.secretsAsked = kv.SecretsListed || failed[kvSecrets] || cut(kvSecrets) || len(kv.Secrets) > 0
 	p.keysComplete = kv.KeysListed && !failed[kvKeys] && !cut(kvKeys)
 	p.secretsComplete = kv.SecretsListed && !failed[kvSecrets] && !cut(kvSecrets)
+	// A kind that ended short of its bound, with no item Alice could not use, was cut by the poll's
+	// budget (ruling S15): it counts as a throttled cycle, not as a plain success (M6). A cut at the
+	// bound itself is permanent and is not a failure.
+	for _, c := range []struct {
+		kind     string
+		n, bound int
+	}{{kvCertificates, len(kv.Certificates), maxKVCertificates}, {kvKeys, len(kv.Keys), maxKVKeys}, {kvSecrets, len(kv.Secrets), maxKVSecrets}} {
+		if cut(c.kind) && p.unreadable[c.kind] == 0 && c.n < c.bound && !failed[c.kind] {
+			if !p.budgetCut {
+				p.failures = append(p.failures, KVPollFailure{Object: c.kind, Reason: "azure.throttled"})
+			}
+			p.budgetCut, p.throttled = true, true
+			p.certsBudgetCut = p.certsBudgetCut || c.kind == kvCertificates
+		}
+	}
+	slices.SortStableFunc(p.failures, func(a, b KVPollFailure) int { return order[a.Object] - order[b.Object] })
 	slices.Sort(p.truncated)
 	return p, nil
 }

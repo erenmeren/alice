@@ -284,24 +284,30 @@ WHERE target_id = $1 AND lower(name COLLATE "C") = ANY($2) ORDER BY lower(name C
 		}
 		ids = append(ids, e.id.String())
 		versions = append(versions, c.details.version)
+		if e.currentVersion != "" {
+			ids = append(ids, e.id.String())
+			versions = append(versions, e.currentVersion)
+		}
 		for _, h := range c.details.history {
 			ids = append(ids, e.id.String())
 			versions = append(versions, h.version)
 		}
 	}
-	stored := map[[2]string]string{} // (certificate id, version) -> thumbprint
-	rows, err = tx.Query(ctx, `SELECT v.kv_certificate_id::text, v.version, v.thumbprint FROM kv_certificate_versions v
+	stored := map[[2]string]string{}       // (certificate id, version) -> thumbprint
+	storedAt := map[[2]string]*time.Time{} // (certificate id, version) -> kv_created_at
+	rows, err = tx.Query(ctx, `SELECT v.kv_certificate_id::text, v.version, v.thumbprint, v.kv_created_at FROM kv_certificate_versions v
 JOIN unnest($1::text[], $2::text[]) AS u(id, version) ON v.kv_certificate_id = u.id::uuid AND v.version = u.version`, ids, versions)
 	if err != nil {
 		return nil, fmt.Errorf("inventory: read the stored versions: %w", err)
 	}
 	for rows.Next() {
 		var id, v, th string
-		if err := rows.Scan(&id, &v, &th); err != nil {
+		var created *time.Time
+		if err := rows.Scan(&id, &v, &th, &created); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("inventory: read a stored version: %w", err)
 		}
-		stored[[2]string{id, v}] = th
+		stored[[2]string{id, v}], storedAt[[2]string{id, v}] = th, created
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -314,6 +320,18 @@ JOIN unnest($1::text[], $2::text[]) AS u(id, version) ON v.kv_certificate_id = u
 	for _, c := range items {
 		e, known := existing[c.fold]
 		if known {
+			// A version Alice already has that is not the stored current one moves the pointer only
+			// when it is provably newer (created later than the current version): an older read that
+			// was reconciled later must not move it back (M1). The listing is stored as it is.
+			key := [2]string{e.id.String(), c.details.version}
+			if _, has := stored[key]; has && e.currentVersion != "" && c.details.version != e.currentVersion {
+				cur := storedAt[[2]string{e.id.String(), e.currentVersion}]
+				if at := storedAt[key]; at == nil || cur == nil || !at.After(*cur) {
+					moved = append(moved, kvCert{name: c.name, fold: c.fold, thumb: c.thumb, enabled: c.enabled, notBefore: c.notBefore,
+						expires: c.expires, created: c.created, updated: c.updated})
+					continue
+				}
+			}
 			if th, has := stored[[2]string{e.id.String(), c.details.version}]; has && th != c.details.thumb {
 				st.conflicts++
 				if listed[c.fold] != c.thumb { // audited when the listing is new, not at every poll

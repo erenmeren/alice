@@ -87,7 +87,7 @@ type BindingSummary struct {
 	AutoDeploy     bool
 	AutoSince      *time.Time
 	StoppedVersion string
-	LocationCount  int
+	LocationCount  int // websites on live servers (as Binding.LocationCount)
 	Version        int
 	CreatedAt      time.Time
 }
@@ -296,7 +296,7 @@ ORDER BY coalesce(kv_created_at, detected_at) DESC, detected_at DESC, version DE
 	}
 	var b BindingSummary
 	err = s.pool.QueryRow(ctx, `SELECT b.id, b.auto_deploy, b.auto_since, b.stopped_version, b.version, b.created_at,
-    (SELECT count(*) FROM certificate_locations l WHERE l.binding_id = b.id)
+    (SELECT count(*) FROM certificate_locations l JOIN targets lt ON lt.id = l.target_id AND lt.deleted_at IS NULL WHERE l.binding_id = b.id)
 FROM bindings b WHERE b.kv_certificate_id = $1 AND b.deleted_at IS NULL`, id).Scan(&b.ID, &b.AutoDeploy, &b.AutoSince, &b.StoppedVersion, &b.Version, &b.CreatedAt, &b.LocationCount)
 	switch {
 	case err == nil:

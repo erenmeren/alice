@@ -149,6 +149,11 @@ FROM targets WHERE id = $1`, id).Scan(&r.Status, &r.Code, &r.LastSuccess, &r.Las
 	return r
 }
 
+// removalEmails counts the one-certificate removal mails (either text).
+func (h *harness) removalEmails() int {
+	return h.emails("kv.certificate_removed") + h.emails("kv.certificate_removed_bound")
+}
+
 func (h *harness) emails(template string) int {
 	return h.count("SELECT count(*) FROM notifications_outbox WHERE template_key = $1", template)
 }
@@ -247,7 +252,7 @@ func TestFirstPollImportsInventoryOnly(t *testing.T) {
 	d := h.auditDetails("target.discovered")
 	require.Len(t, d, 1)
 	assert.Equal(t, map[string]string{"certificate_count": "2", "item_count": "5", "new_version_count": "0", "new_certificate_count": "2",
-		"missing_count": "0", "partial": "false"}, d[0])
+		"missing_count": "0", "removed_count": "0", "audited_count": "0", "notified_count": "0", "partial": "false"}, d[0])
 	assert.Equal(t, 0, h.audits("target.status_changed"), "ok stays ok")
 }
 
@@ -369,6 +374,7 @@ func TestNewVersionInLockIsHeld(t *testing.T) {
 
 	// The license comes back: a later poll with the gate open never releases a held version, and a
 	// version first seen now is not held.
+	h.clock.Advance(time.Minute) // the gate opens after the polls of the lock
 	h.installLicense("LIC-HELD", 5, 365)
 	require.NoError(t, h.lic.Allow(license.ClassChange), "the gate is open again")
 	h.clock.Advance(15 * time.Minute)
@@ -439,7 +445,7 @@ func TestMissingMarkingNeedsACompleteListing(t *testing.T) {
 	h.reconcile(vault, full()) // beta returns
 	assert.Nil(t, h.certRow(vault, "beta").Missing)
 	assert.Equal(t, 1, h.audits("kv.certificate.removed"), "beta's removal was reported once")
-	assert.Equal(t, 1, h.emails("kv.certificate_removed"))
+	assert.Equal(t, 1, h.removalEmails())
 
 	// F-42: alpha disappears from a complete listing.
 	h.clock.Advance(time.Minute)
@@ -453,10 +459,11 @@ func TestMissingMarkingNeedsACompleteListing(t *testing.T) {
 	assert.Equal(t, 2, h.audits("kv.certificate.removed"))
 	ev := h.auditDetails("kv.certificate.removed")
 	assert.Equal(t, map[string]string{"kv_certificate_id": alpha.ID.String(), "certificate_name": "alpha", "vault_url": "https://prod.vault.azure.net", "binding": "yes"}, ev[1])
-	assert.Equal(t, 2, h.emails("kv.certificate_removed"))
+	assert.Equal(t, 2, h.removalEmails())
 	var params string
-	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT params::text FROM notifications_outbox WHERE template_key = 'kv.certificate_removed' AND params->>'certificate_name' = 'alpha'").Scan(&params))
-	assert.JSONEq(t, `{"target_name":"prod","certificate_name":"alpha","binding":"yes"}`, params)
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT params::text FROM notifications_outbox WHERE template_key = 'kv.certificate_removed_bound' AND params->>'certificate_name' = 'alpha'").Scan(&params))
+	assert.JSONEq(t, `{"target_name":"prod","certificate_name":"alpha"}`, params, "a bound certificate has its own text and no yes/no value")
+	assert.Equal(t, 1, h.emails("kv.certificate_removed"), "beta was not bound")
 	// The bound website is untouched.
 	assert.Equal(t, 1, h.count("SELECT count(*) FROM bindings WHERE id = $1 AND deleted_at IS NULL", binding))
 	assert.Equal(t, 1, h.count("SELECT count(*) FROM certificate_locations WHERE id = $1 AND binding_id = $2 AND missing_since IS NULL", loc.ID, binding))
@@ -465,7 +472,7 @@ func TestMissingMarkingNeedsACompleteListing(t *testing.T) {
 	h.clock.Advance(time.Minute)
 	sum = h.reconcile(vault, onlyBeta())
 	assert.Zero(t, sum.MissingCertificates)
-	assert.Equal(t, 2, h.emails("kv.certificate_removed"))
+	assert.Equal(t, 2, h.removalEmails())
 	assert.True(t, removedAt.Equal(*h.certRow(vault, "alpha").Missing))
 	// It returns: the mark clears. A later removal is a new episode (a second email, binding yes).
 	h.clock.Advance(time.Minute)
@@ -475,35 +482,31 @@ func TestMissingMarkingNeedsACompleteListing(t *testing.T) {
 	assert.Nil(t, a.RemovedNotified)
 	h.clock.Advance(time.Minute)
 	h.reconcile(vault, onlyBeta())
-	assert.Equal(t, 3, h.emails("kv.certificate_removed"))
+	assert.Equal(t, 3, h.removalEmails())
 	assert.Equal(t, 3, h.audits("kv.certificate.removed"))
 
 	// An unbound certificate says binding "no".
 	h.clock.Advance(time.Minute)
 	h.reconcile(vault, full())
 	// An empty complete listing is believed on the second poll in a row only (defence in depth).
+	h.clock.Advance(time.Minute)
 	h.reconcile(vault, kvResult())
 	assert.Zero(t, h.count("SELECT count(*) FROM kv_certificates WHERE missing_since IS NOT NULL"), "the first empty listing marks nothing")
 	assert.Equal(t, 1, h.vaultRow(vault).Facts.KVEmptyPolls)
 	require.Len(t, h.vaultRow(vault).Facts.Warnings, 1)
 	assert.Equal(t, inventory.WarnKVListingEmpty, h.vaultRow(vault).Facts.Warnings[0].Code)
+	h.clock.Advance(time.Minute)
 	h.reconcile(vault, full()) // a non-empty answer resets the count
 	assert.Zero(t, h.vaultRow(vault).Facts.KVEmptyPolls)
+	h.clock.Advance(time.Minute)
 	h.reconcile(vault, kvResult())
+	h.clock.Advance(time.Minute)
 	h.reconcile(vault, kvResult())
 	assert.Equal(t, 2, h.count("SELECT count(*) FROM kv_certificates WHERE missing_since IS NOT NULL"), "the second one in a row marks both")
 	assert.Zero(t, h.vaultRow(vault).Facts.KVEmptyPolls)
 	assert.Empty(t, h.vaultRow(vault).Facts.Warnings)
-	var bindings []string
-	rows, err := h.db.Owner.Query(h.ctx, "SELECT params->>'binding' FROM notifications_outbox WHERE template_key = 'kv.certificate_removed' ORDER BY created_at, id")
-	require.NoError(t, err)
-	for rows.Next() {
-		var b string
-		require.NoError(t, rows.Scan(&b))
-		bindings = append(bindings, b)
-	}
-	rows.Close()
-	assert.Contains(t, bindings, "no")
+	assert.Equal(t, 2, h.emails("kv.certificate_removed"), "beta's second removal is a mail without the websites text")
+	assert.Equal(t, 3, h.emails("kv.certificate_removed_bound"))
 
 	// Keys and secrets: a complete list marks, a truncated or failed one does not.
 	h.clock.Advance(time.Minute)
@@ -553,7 +556,7 @@ func TestPartialListingsAndThrottling(t *testing.T) {
 	v := h.vaultRow(vault)
 	assert.Equal(t, inventory.StatusDegraded, v.Status)
 	assert.Equal(t, "azure.forbidden", v.Code)
-	assert.Equal(t, 1, v.PollFailures, "the certificate listing is the heartbeat")
+	assert.Equal(t, 0, v.PollFailures, "forbidden is a configuration state: polled at the normal interval (M7)")
 	require.NotNil(t, v.LastSuccess)
 	assert.True(t, now.Equal(*v.LastSuccess), "last_success_at only moves with an answered listing")
 	require.NotNil(t, v.Facts.KVPoll)
@@ -666,7 +669,7 @@ func TestKVFailureTransitions(t *testing.T) {
 	assert.Equal(t, 1, h.emails("kv.auth_failed"), "once per episode")
 	var params string
 	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT params::text FROM notifications_outbox WHERE template_key = 'kv.auth_failed'").Scan(&params))
-	assert.JSONEq(t, `{"target_name":"prod","reason":"azure.auth_failed"}`, params)
+	assert.JSONEq(t, `{"target_name":"prod"}`, params, "no raw reason code in the mail")
 	assert.Equal(t, []string{"ok>auth_failed:azure.auth_failed"}, statuses(), "one status_changed row per transition")
 	require.NotNil(t, v.Facts.KVPoll)
 	assert.Equal(t, []inventory.KVPollFailure{{Object: "vault", Reason: "azure.auth_failed", Aadsts: "7000215"}}, v.Facts.KVPoll.Failures,
@@ -1192,7 +1195,7 @@ func TestKVPollRequestAsksForKeysAndSecretsEveryFourthInterval(t *testing.T) {
 	assert.True(t, req.KVSecrets)
 	assert.Empty(t, req.KVKnown, "nothing is known yet")
 	// A certificate stored from its listing alone (unusable details) is never "known".
-	h.reconcile(vault, kvResult(h.kvc("listed-only", h.kvLeaf("l.example.test"), "", now, false)))
+	h.reconcile(vault, kvResult(inv.Certificates[0], h.kvc("listed-only", h.kvLeaf("l.example.test"), "", now, false)))
 	req2, err := h.svc.KVPollRequest(h.ctx, vault)
 	require.NoError(t, err)
 	assert.NotContains(t, req2.KVKnown, "listed-only", "list-only values are not recorded as known")

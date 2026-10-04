@@ -724,11 +724,19 @@
     "kv": {
       "auth_failed": {
         "subject": "Alice cannot sign in to a Key Vault: {{target_name}}",
-        "body": "Alice has failed three times in a row to sign in to the Key Vault {{target_name}}. Reason: {{reason}}\n\nThe usual causes are a client secret or certificate that has expired or was replaced, an application that was deleted, or a wrong directory. Open the vault in Alice, check the sign-in method and replace the credentials if needed.\n\nAlice keeps trying in the background, at most once an hour, and sign-in works again as soon as the problem is fixed."
+        "body": "Alice has failed three times in a row to sign in to the Key Vault {{target_name}}.\n\nThe usual causes are a client secret or certificate that has expired or was replaced, an application that was deleted, or a wrong directory. Open the vault in Alice: its page shows the reason and what to do. Replace the credentials there if needed.\n\nAlice keeps trying in the background, at most once an hour, and sign-in works again as soon as the problem is fixed."
       },
       "certificate_removed": {
         "subject": "A certificate disappeared from the Key Vault {{target_name}}: {{certificate_name}}",
-        "body": "The certificate {{certificate_name}} is no longer listed in the Key Vault {{target_name}}. Alice keeps its history and marks it as removed.\n\nConnected to websites (yes or no): {{binding}}. Alice changes nothing on those websites; they keep serving the certificate they have now until it expires.\n\nIf the removal was a mistake, recover the certificate in Azure and Alice will show it again at the next check."
+        "body": "The certificate {{certificate_name}} is no longer listed in the Key Vault {{target_name}}. Alice keeps its history and marks it as removed.\n\nNo website is connected to this certificate in Alice, so nothing else changes.\n\nIf the removal was a mistake, recover the certificate in Azure and Alice will show it again at the next check."
+      },
+      "certificate_removed_bound": {
+        "subject": "A certificate that websites use disappeared from the Key Vault {{target_name}}: {{certificate_name}}",
+        "body": "The certificate {{certificate_name}} is no longer listed in the Key Vault {{target_name}}. Alice keeps its history and marks it as removed.\n\nWebsites are connected to this certificate in Alice. Alice changes nothing on those websites; they keep serving the certificate they have now until it expires, but they will not get a renewal from this certificate.\n\nIf the removal was a mistake, recover the certificate in Azure and Alice will show it again at the next check."
+      },
+      "certificates_removed_more": {
+        "subject": "More certificates disappeared from the Key Vault {{target_name}}",
+        "body": "Alice sent a message for each of the first certificates that disappeared from the Key Vault {{target_name}} in one check. {{count}} more certificates disappeared in the same check and are not listed here. Alice keeps their history and marks them as removed.\n\nOpen the vault in Alice and choose to show removed certificates to see them all. If this was a mistake, recover the certificates in Azure and Alice will show them again at the next check."
       }
     },
     "license": {

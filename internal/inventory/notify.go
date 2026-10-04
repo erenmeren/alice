@@ -34,16 +34,24 @@ const (
 	// TemplateDeploymentNeedsAttentionUnconfirmed: as TemplateDeploymentNeedsAttention when the
 	// server answered but not as expected (the cause is not a lost connection).
 	TemplateDeploymentNeedsAttentionUnconfirmed = "deployment.needs_attention_unconfirmed"
-	// Key Vault (Task 11): the third failed sign-in in a row of a vault (params target_name = the
-	// vault's name, reason = the closed reason code), and a vault certificate that disappeared from a
-	// complete listing (params target_name, certificate_name, binding "yes" | "no"; F-42).
-	TemplateKVAuthFailed         = "kv.auth_failed"
-	TemplateKVCertificateRemoved = "kv.certificate_removed"
+	// Key Vault (Task 11): the third failed sign-in in a row of a vault (param target_name = the
+	// vault's name; the reason is on the vault's page), and vault certificates that disappeared from a
+	// complete listing (F-42).
+	TemplateKVAuthFailed = "kv.auth_failed"
+	// The removal mails come in two texts (no yes/no value to translate): TemplateKVCertificateRemoved
+	// says the certificate is not connected to websites, TemplateKVCertificateRemovedBound that it is
+	// and what that means; both take target_name and certificate_name. TemplateKVCertificatesRemovedMore
+	// is the one summary mail when a poll removed more certificates than it mails about (params
+	// target_name, count = the certificates not mailed).
+	TemplateKVCertificateRemoved      = "kv.certificate_removed"
+	TemplateKVCertificateRemovedBound = "kv.certificate_removed_bound"
+	TemplateKVCertificatesRemovedMore = "kv.certificates_removed_more"
 )
 
 // Templates lists the inventory's email templates (render tests).
 func Templates() []string {
 	return []string{TemplateHostKeyChanged, TemplateAuthFailed, TemplateDeploymentFailed, TemplateDeploymentRollbackFailed,
 		TemplateDeploymentOutcomeUnknown, TemplateDeploymentRestoredUnverified, TemplateDeploymentSuperseded, TemplateDeploymentPendingChangeRestored,
-		TemplateDeploymentNeedsAttention, TemplateDeploymentNeedsAttentionUnconfirmed, TemplateKVAuthFailed, TemplateKVCertificateRemoved}
+		TemplateDeploymentNeedsAttention, TemplateDeploymentNeedsAttentionUnconfirmed, TemplateKVAuthFailed, TemplateKVCertificateRemoved,
+		TemplateKVCertificateRemovedBound, TemplateKVCertificatesRemovedMore}
 }
