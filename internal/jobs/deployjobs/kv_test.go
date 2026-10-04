@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"slices"
 	"strings"
 	"sync"
@@ -13,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -133,6 +137,7 @@ type kvFake struct {
 	noZero     bool                        // a KVDeployMaterial that does not zero the secret (the engine must)
 	mutate     func(m *inventory.Material) // changes the material KVDeployMaterial returns (a misbehaving inventory)
 	stepParams map[string]map[string]string
+	kvCalls    int // calls of KVDeployMaterial
 }
 
 func (f *fakeInv) VaultCredentials(uuid.UUID) inventory.VaultCredentialSource { return nil }
@@ -328,7 +333,12 @@ func TestKVMaterialFailures(t *testing.T) {
 			"certificate.pfx_busy", jobs.Permanent, true, nil, stepKVSecret, false},
 		{"the deployment's version row is gone", func(k *kvFixture) { k.inv.errs["KVDeployMaterial"] = inventory.ErrNotFound }, 0,
 			"system.not_found", jobs.Permanent, true, nil, stepKVSecret, false},
-		{"an unknown error of the inventory after the read is final (rule: no fresh read per attempt)", func(k *kvFixture) { k.inv.errs["KVDeployMaterial"] = errors.New("database down") }, 0,
+		{"database fails after the read, attempts left (reverts the round-1 rule)", func(k *kvFixture) { k.inv.errs["KVDeployMaterial"] = errors.New("database down") }, 1,
+			"internal.unexpected", jobs.Retryable, false, nil, "", false},
+		{"serialization failure after the read, attempts left", func(k *kvFixture) {
+			k.inv.errs["KVDeployMaterial"] = fmt.Errorf("inventory: record: %w", &pgconn.PgError{Code: "40001"})
+		}, 1, "internal.unexpected", jobs.Retryable, false, nil, "", false},
+		{"unknown error after the read on the last attempt", func(k *kvFixture) { k.inv.errs["KVDeployMaterial"] = errors.New("database down") }, 3,
 			"internal.unexpected", jobs.Permanent, true, nil, stepKVSecret, false},
 		{"the vault was deleted", func(k *kvFixture) { k.inv.kv.vaultErr = inventory.ErrNotFound }, 0,
 			"kv.vault_unavailable", jobs.Permanent, true, nil, stepKVSecret, true},
@@ -791,15 +801,27 @@ func TestKVRefusalsOfTheInventory(t *testing.T) {
 		assert.Empty(t, k.inv.finishes)
 	})
 
-	t.Run("an unknown error after the read: one attempt, one read", func(t *testing.T) {
+	t.Run("an unknown error after the read is retried and the second attempt succeeds: two reads", func(t *testing.T) {
 		k := newKVFixture(t)
-		k.inv.errs["KVDeployMaterial"] = errors.New("surprise")
+		k.inv.errs["KVDeployMaterial"] = &pgconn.PgError{Code: "40001"}
+		k.inv.hooks["KVDeployMaterial"] = func(context.Context) {
+			k.inv.mu.Lock()
+			defer k.inv.mu.Unlock()
+			if k.inv.kv.kvCalls++; k.inv.kv.kvCalls > 1 {
+				delete(k.inv.errs, "KVDeployMaterial") // the blip is over
+			}
+		}
 		_, err := k.h.deploy(k.ctx, k.job(), k.steps)
 		jf := failureOf(t, err)
-		assert.Equal(t, jobs.Permanent, jf.Class)
-		assert.Equal(t, "internal.unexpected", jf.Reason)
+		assert.Equal(t, jobs.Retryable, jf.Class)
+		assert.Equal(t, inventory.DeployStatePrecheck, k.inv.dep.State, "the record waits in its pre-check")
+		assert.Empty(t, k.inv.finishes)
+		assert.Zero(t, k.sshCalls())
 		assert.Equal(t, 1, k.az.Count("ReadCertificateSecret"))
-		assert.Equal(t, inventory.DeployStateDone, k.inv.dep.State, "the deployment ended: no second attempt reads again")
+		_, err = k.h.deploy(k.ctx, k.job(), k.steps)
+		require.NoError(t, err)
+		assert.Equal(t, 2, k.az.Count("ReadCertificateSecret"), "the retry reads again: the normal resume")
+		assert.Equal(t, inventory.DeployStatusSucceeded, k.inv.lastFinish().Status)
 	})
 
 	t.Run("a state that changed under the pre-check is followed", func(t *testing.T) {
@@ -1003,4 +1025,56 @@ func TestKVStepIsClosedOnEveryPath(t *testing.T) {
 		_, _ = k.h.deploy(k.ctx, k.job(), k.steps)
 		assert.Equal(t, []string{stepKVSecret + ":started"}, k.inv.stepNames(), "a stale run writes no closing step")
 	})
+}
+
+// Completeness: every Err* the inventory's KVDeployPrecheck and KVDeployMaterial name has a decision
+// here. The test reads the source of kv_material.go (it cannot edit it), lists the Err identifiers those
+// two functions mention, and fails when one is missing from known (a new refusal needs a row in
+// kvRefusals, or an explicit entry in special) or when a known refusal has no reason.
+func TestEveryInventoryRefusalOfTheVaultStepHasAReason(t *testing.T) {
+	known := map[string]error{
+		"ErrBindingGone": inventory.ErrBindingGone, "ErrAutoDeployOff": inventory.ErrAutoDeployOff, "ErrVaultUnavailable": inventory.ErrVaultUnavailable,
+		"ErrKVCertificateMissing": inventory.ErrKVCertificateMissing, "ErrVersionDisabled": inventory.ErrVersionDisabled, "ErrVersionHeld": inventory.ErrVersionHeld,
+		"ErrCertificateExpired": inventory.ErrCertificateExpired, "ErrCertificateNotYetValid": inventory.ErrCertificateNotYetValid,
+		"ErrSecretMismatch": inventory.ErrSecretMismatch, "ErrSecretUnreadable": inventory.ErrSecretUnreadable, "ErrChainUnconfirmed": inventory.ErrChainUnconfirmed,
+		"ErrNotFound": inventory.ErrNotFound,
+		// handled by the engine on purpose, not by a reason of their own
+		"ErrPFXBusy": inventory.ErrPFXBusy, "ErrDeploymentState": inventory.ErrDeploymentState, "ErrClaimLost": inventory.ErrClaimLost,
+	}
+	special := map[string]bool{"ErrPFXBusy": true, "ErrDeploymentState": true, "ErrClaimLost": true}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "../../inventory/kv_material.go", nil, 0)
+	require.NoError(t, err)
+	seen := map[string]bool{}
+	for _, d := range file.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || (fn.Name.Name != "KVDeployPrecheck" && fn.Name.Name != "KVDeployMaterial") {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if _, ok := n.(*ast.SelectorExpr); ok {
+				return false // certs.ErrExpired and the like are other packages' errors, mapped inside the inventory
+			}
+			if id, ok := n.(*ast.Ident); ok && strings.HasPrefix(id.Name, "Err") && len(id.Name) > 3 {
+				seen[id.Name] = true
+			}
+			return true
+		})
+	}
+	require.NotEmpty(t, seen, "the two functions were found")
+	for name := range seen {
+		sentinel, ok := known[name]
+		require.True(t, ok, "inventory.%s is returned by the material step: give it a row in kvRefusals and list it here", name)
+		if special[name] {
+			continue
+		}
+		reason, ok := kvRefusal(sentinel)
+		assert.True(t, ok && reason != "", "inventory.%s has no closed reason", name)
+	}
+	for name := range known {
+		if !special[name] {
+			_, ok := kvRefusal(known[name])
+			assert.True(t, ok, "%s is listed but has no row", name)
+		}
+	}
 }

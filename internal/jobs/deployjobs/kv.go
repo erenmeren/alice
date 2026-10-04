@@ -51,9 +51,9 @@ import (
 //	                                  deployment's version is held too)                                     chain_unconfirmed
 //	                                 ErrPFXBusy                               step failed                   Retry certificate.pfx_busy
 //	                                 ErrClaimLost                             nothing                       stale run
-//	                                 any other error (the secret was read)    step failed; finish failed    Fail internal.unexpected: an
-//	                                                                                                        unknown error is final, so no
-//	                                                                                                        attempt reads the vault again
+//	                                 any other error (the secret was read)    step failed; the record        Retry internal.unexpected (the
+//	                                                                          stays in its pre-check         next attempt reads again; the
+//	                                                                          unless the last attempt        last attempt fails, I-3)
 //	                                 material of another deployment, version  step failed; finish failed    Fail internal.unexpected
 //	                                  or location (checked here); key zeroed
 //	                                 ok                                       step ok ({reason:             the Phase 4 run continues
@@ -162,8 +162,10 @@ func (h *handlers) kvMaterial(ctx context.Context, m inventory.Material) (invent
 	defer sec.Value.Zero()
 	out, err := h.d.Inventory.KVDeployMaterial(ctx, m.Deployment.ID, sec)
 	if err != nil {
-		// The secret was read: only what is known to be transient is retried, so that an error nobody
-		// foresaw never costs a fresh read of the vault per attempt.
+		// The secret was read. A known refusal is final; anything else (a serialization failure, a
+		// connection blip) is not the vault's or the certificate's fault and is retried within the
+		// runner's attempts: at most two more reads, which is the normal resume, the key zeroed on every
+		// path (the last attempt ends the deployment through the engine's I-3 rule).
 		reason, known := kvRefusal(err)
 		switch {
 		case errors.Is(err, inventory.ErrClaimLost), errors.Is(err, inventory.ErrDeploymentState):
@@ -175,7 +177,7 @@ func (h *handlers) kvMaterial(ctx context.Context, m inventory.Material) (invent
 		case known:
 			return m, jobs.Fail(reason, nil, err)
 		}
-		return m, jobs.Fail(reasonUnexpected, nil, err)
+		return m, jobs.Retry(reasonUnexpected, nil, err)
 	}
 	// Defence in depth: what comes back is this deployment's material (the inventory is trusted, a
 	// mix-up is not): else no send, and the key is zeroed here.
