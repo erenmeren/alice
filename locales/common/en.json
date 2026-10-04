@@ -737,6 +737,50 @@
       "certificates_removed_more": {
         "subject": "More certificates disappeared from the Key Vault {{target_name}}",
         "body": "Alice sent a message for each of the first certificates that disappeared from the Key Vault {{target_name}} in one check. {{count}} more certificates disappeared in the same check and are not listed here. Alice keeps their history and marks them as removed.\n\nOpen the vault in Alice and choose to show removed certificates to see them all. If this was a mistake, recover the certificates in Azure and Alice will show them again at the next check."
+      },
+      "certificates_removed_more_one": {
+        "subject": "Another certificate disappeared from the Key Vault {{target_name}}",
+        "body": "Alice sent a message for each of the first certificates that disappeared from the Key Vault {{target_name}} in one check. {{count}} more certificate disappeared in the same check and is not listed here. Alice keeps its history and marks it as removed.\n\nOpen the vault in Alice and choose to show removed certificates to see it. If this was a mistake, recover the certificate in Azure and Alice will show it again at the next check."
+      },
+      "new_version_available": {
+        "subject": "A new version of {{certificate_name}} was found in the Key Vault {{target_name}}",
+        "body": "Alice found a new version of the certificate {{certificate_name}} in the Key Vault {{target_name}}.\n\nAutomatic deployment is off for the websites connected to this certificate, so Alice did not deploy it. To deploy it, open the certificate in Alice and choose Deploy now, or switch on automatic deployment."
+      },
+      "new_version_held_license": {
+        "subject": "A new version of {{certificate_name}} is waiting for an administrator: Key Vault {{target_name}}",
+        "body": "Alice found a new version of the certificate {{certificate_name}} in the Key Vault {{target_name}} while the license did not allow Alice to change anything.\n\nAlice will not deploy this version by itself. When the license is valid again, an administrator can open the certificate in Alice and choose Deploy now."
+      },
+      "new_version_held_chain": {
+        "subject": "A new version of {{certificate_name}} is waiting for an administrator: Key Vault {{target_name}}",
+        "body": "Alice found a new version of the certificate {{certificate_name}} in the Key Vault {{target_name}}, but its certificate chain is incomplete: a certificate between the website's certificate and the trusted root is missing.\n\nAlice will not deploy this version by itself. An administrator can open the certificate in Alice, check the chain and choose Deploy now, confirming the incomplete chain."
+      },
+      "version_skipped_manual": {
+        "subject": "A new version of {{certificate_name}} is not deployed automatically: Key Vault {{target_name}}",
+        "body": "A new version of the certificate {{certificate_name}} in the Key Vault {{target_name}} does not meet the rule for automatic deployment: it was created or found before automatic deployment was switched on for this certificate.\n\nAlice will not deploy it by itself and will not mention it again. To deploy it, open the certificate in Alice and choose Deploy now."
+      },
+      "version_skipped_disabled": {
+        "subject": "A new version of {{certificate_name}} is disabled: Key Vault {{target_name}}",
+        "body": "A new version of the certificate {{certificate_name}} in the Key Vault {{target_name}} is disabled in Azure, so Alice did not deploy it. The websites keep their current certificate.\n\nAlice will not mention this version again. To use it, enable it in Azure and choose Deploy now in Alice."
+      },
+      "version_skipped_expired": {
+        "subject": "A new version of {{certificate_name}} has expired: Key Vault {{target_name}}",
+        "body": "A new version of the certificate {{certificate_name}} in the Key Vault {{target_name}} has already expired, so Alice did not deploy it. The websites keep their current certificate.\n\nAlice will not mention this version again. Renew the certificate in Azure; Alice deploys the next version by itself."
+      },
+      "version_skipped_not_yet_valid": {
+        "subject": "A new version of {{certificate_name}} is not valid yet: Key Vault {{target_name}}",
+        "body": "A new version of the certificate {{certificate_name}} in the Key Vault {{target_name}} is not valid yet, so Alice did not deploy it. Browsers would refuse it. The websites keep their current certificate.\n\nAlice will not mention this version again. When it becomes valid, open the certificate in Alice and choose Deploy now."
+      },
+      "version_skipped_older": {
+        "subject": "A new version of {{certificate_name}} ends earlier than a certificate in use: Key Vault {{target_name}}",
+        "body": "A new version of the certificate {{certificate_name}} in the Key Vault {{target_name}} ends earlier than the certificate that at least one connected website serves now, so Alice did not deploy it to that website.\n\nAlice will not mention this version again. If you want it anyway, open the certificate in Alice and choose Deploy now."
+      },
+      "version_skipped_superseded": {
+        "subject": "A version of {{certificate_name}} was replaced before it was deployed: Key Vault {{target_name}}",
+        "body": "A new version of the certificate {{certificate_name}} in the Key Vault {{target_name}} was replaced by a newer version before Alice deployed it, so Alice skipped it and deploys the newest version instead.\n\nAlice will not mention this version again."
+      },
+      "auto_deploy_stopped": {
+        "subject": "Automatic deployment of {{certificate_name}} stopped: Key Vault {{target_name}}",
+        "body": "Alice stopped deploying the new version of the certificate {{certificate_name}} from the Key Vault {{target_name}} automatically, after {{count}} deployments failed.\n\nWebsites that already received the version keep it; the others keep their current certificate. The deployment history in Alice shows the reason for each failure. Automatic deployment continues with the next version. To try this version again, switch automatic deployment off and on for the certificate, or choose Deploy now."
       }
     },
     "license": {

@@ -48,10 +48,33 @@ const (
 	TemplateKVCertificatesRemovedMore = "kv.certificates_removed_more"
 )
 
+// Key Vault renewals (Task 13). The planner mails each fact once (the version's notified_at or
+// skipped_notified_at) and says what happened in its own text: no raw code, no yes/no value. All take
+// target_name (the vault) and certificate_name; TemplateKVAutoDeployStopped also count (the
+// failed deployments). They name no version: a version ID is 32 hex digits no reader can use, and
+// the certificate's page lists its versions. TemplateKVNewVersion: a version arrived and automatic deployment is off;
+// the held ones: it arrived while Alice could not change anything (licence) or its chain is
+// incomplete; TemplateKVSkippedManual: it arrived but misses the rule for automatic deployment; the
+// other skipped ones say why a version that qualified will not be deployed.
+const (
+	TemplateKVNewVersion            = "kv.new_version_available"
+	TemplateKVNewVersionHeldLicense = "kv.new_version_held_license"
+	TemplateKVNewVersionHeldChain   = "kv.new_version_held_chain"
+	TemplateKVSkippedManual         = "kv.version_skipped_manual"
+	TemplateKVSkippedDisabled       = "kv.version_skipped_disabled"
+	TemplateKVSkippedExpired        = "kv.version_skipped_expired"
+	TemplateKVSkippedNotYetValid    = "kv.version_skipped_not_yet_valid"
+	TemplateKVSkippedOlder          = "kv.version_skipped_older"
+	TemplateKVSkippedSuperseded     = "kv.version_skipped_superseded"
+	TemplateKVAutoDeployStopped     = "kv.auto_deploy_stopped"
+)
+
 // Templates lists the inventory's email templates (render tests).
 func Templates() []string {
 	return []string{TemplateHostKeyChanged, TemplateAuthFailed, TemplateDeploymentFailed, TemplateDeploymentRollbackFailed,
 		TemplateDeploymentOutcomeUnknown, TemplateDeploymentRestoredUnverified, TemplateDeploymentSuperseded, TemplateDeploymentPendingChangeRestored,
 		TemplateDeploymentNeedsAttention, TemplateDeploymentNeedsAttentionUnconfirmed, TemplateKVAuthFailed, TemplateKVCertificateRemoved,
-		TemplateKVCertificateRemovedBound, TemplateKVCertificatesRemovedMore}
+		TemplateKVCertificateRemovedBound, TemplateKVCertificatesRemovedMore, TemplateKVNewVersion, TemplateKVNewVersionHeldLicense,
+		TemplateKVNewVersionHeldChain, TemplateKVSkippedManual, TemplateKVSkippedDisabled, TemplateKVSkippedExpired, TemplateKVSkippedNotYetValid,
+		TemplateKVSkippedOlder, TemplateKVSkippedSuperseded, TemplateKVAutoDeployStopped}
 }

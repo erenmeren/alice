@@ -143,3 +143,10 @@ func SetKVMaterialHook(f func(stage string, b []byte)) (restore func()) {
 	kvMaterialHook = f
 	return func() { kvMaterialHook = old }
 }
+
+// SetAutoDeployBatch lowers the number of deployments one planner run creates.
+func SetAutoDeployBatch(n int) (restore func()) {
+	old := autoDeployBatch
+	autoDeployBatch = n
+	return func() { autoDeployBatch = old }
+}

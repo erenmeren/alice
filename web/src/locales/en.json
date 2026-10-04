@@ -389,6 +389,7 @@
       "kv_version_release_denied": "Release of a held version refused",
       "kv_version_held": "Vault certificate version held: incomplete chain",
       "kv_secret_read": "Certificate read from a Key Vault for a deployment",
+      "kv_auto_deploy_stopped": "Automatic deployment of a vault certificate stopped after failed deployments",
       "hostkey_observed": "Another new server fingerprint seen while the server is blocked",
       "hostkey_pinned": "Server fingerprint confirmed",
       "hostkey_changed": "Server identity changed",

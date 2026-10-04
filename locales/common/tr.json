@@ -737,6 +737,50 @@
       "certificates_removed_more": {
         "subject": "{{target_name}} Key Vault kasasından daha fazla sertifika kayboldu",
         "body": "Alice, {{target_name}} Key Vault kasasından tek bir denetimde kaybolan ilk sertifikaların her biri için ayrı bir ileti gönderdi. Aynı denetimde {{count}} sertifika daha kayboldu ve burada tek tek sayılmıyor. Alice bunların geçmişini saklar ve kaldırılmış olarak işaretler.\n\nHepsini görmek için kasayı Alice'te açın ve kaldırılan sertifikaları göstermeyi seçin. Bu bir hataysa sertifikaları Azure'da kurtarın; Alice bir sonraki denetimde onları yeniden gösterir."
+      },
+      "certificates_removed_more_one": {
+        "subject": "{{target_name}} Key Vault kasasından bir sertifika daha kayboldu",
+        "body": "Alice, {{target_name}} Key Vault kasasından tek bir denetimde kaybolan ilk sertifikaların her biri için ayrı bir ileti gönderdi. Aynı denetimde {{count}} sertifika daha kayboldu ve burada tek tek sayılmıyor. Alice onun geçmişini saklar ve kaldırılmış olarak işaretler.\n\nOnu görmek için kasayı Alice'te açın ve kaldırılan sertifikaları göstermeyi seçin. Bu bir hataysa sertifikayı Azure'da kurtarın; Alice bir sonraki denetimde onu yeniden gösterir."
+      },
+      "new_version_available": {
+        "subject": "{{target_name}} Key Vault kasasında {{certificate_name}} için yeni bir sürüm bulundu",
+        "body": "Alice, {{target_name}} Key Vault kasasında {{certificate_name}} sertifikasının yeni sürümünü buldu.\n\nBu sertifikaya bağlı web siteleri için otomatik dağıtım kapalı olduğundan Alice sürümü dağıtmadı. Dağıtmak için sertifikayı Alice'te açın ve Şimdi dağıt düğmesine tıklayın ya da otomatik dağıtımı açın."
+      },
+      "new_version_held_license": {
+        "subject": "{{certificate_name}} için yeni sürüm bir yöneticiyi bekliyor: {{target_name}} Key Vault kasası",
+        "body": "Alice, lisans herhangi bir değişikliğe izin vermezken {{target_name}} Key Vault kasasında {{certificate_name}} sertifikasının yeni sürümünü buldu.\n\nAlice bu sürümü kendiliğinden dağıtmayacak. Lisans yeniden geçerli olduğunda bir yönetici sertifikayı Alice'te açıp Şimdi dağıt düğmesine tıklayabilir."
+      },
+      "new_version_held_chain": {
+        "subject": "{{certificate_name}} için yeni sürüm bir yöneticiyi bekliyor: {{target_name}} Key Vault kasası",
+        "body": "Alice, {{target_name}} Key Vault kasasında {{certificate_name}} sertifikasının yeni sürümünü buldu, ancak bu sürümün sertifika zinciri eksik: web sitesinin sertifikası ile güvenilen kök arasındaki bir sertifika yok.\n\nAlice bu sürümü kendiliğinden dağıtmayacak. Bir yönetici sertifikayı Alice'te açıp zinciri inceleyebilir ve eksik zinciri onaylayarak Şimdi dağıt düğmesine tıklayabilir."
+      },
+      "version_skipped_manual": {
+        "subject": "{{certificate_name}} için yeni sürüm otomatik dağıtılmıyor: {{target_name}} Key Vault kasası",
+        "body": "{{target_name}} Key Vault kasasında {{certificate_name}} sertifikasının yeni sürümü otomatik dağıtım kuralına uymuyor: sürüm, bu sertifika için otomatik dağıtım açılmadan önce oluşturulmuş ya da bulunmuş.\n\nAlice bu sürümü kendiliğinden dağıtmayacak ve bir daha söz etmeyecek. Dağıtmak için sertifikayı Alice'te açın ve Şimdi dağıt düğmesine tıklayın."
+      },
+      "version_skipped_disabled": {
+        "subject": "{{certificate_name}} için yeni sürüm devre dışı: {{target_name}} Key Vault kasası",
+        "body": "{{target_name}} Key Vault kasasında {{certificate_name}} sertifikasının yeni sürümü Azure'da devre dışı olduğundan Alice onu dağıtmadı. Web siteleri şu anki sertifikalarını kullanmaya devam eder.\n\nAlice bu sürümden bir daha söz etmeyecek. Kullanmak için sürümü Azure'da etkinleştirin ve Alice'te Şimdi dağıt düğmesine tıklayın."
+      },
+      "version_skipped_expired": {
+        "subject": "{{certificate_name}} için yeni sürümün süresi dolmuş: {{target_name}} Key Vault kasası",
+        "body": "{{target_name}} Key Vault kasasında {{certificate_name}} sertifikasının yeni sürümünün süresi dolmuş olduğundan Alice onu dağıtmadı. Web siteleri şu anki sertifikalarını kullanmaya devam eder.\n\nAlice bu sürümden bir daha söz etmeyecek. Sertifikayı Azure'da yenileyin; Alice bir sonraki sürümü kendiliğinden dağıtır."
+      },
+      "version_skipped_not_yet_valid": {
+        "subject": "{{certificate_name}} için yeni sürüm henüz geçerli değil: {{target_name}} Key Vault kasası",
+        "body": "{{target_name}} Key Vault kasasında {{certificate_name}} sertifikasının yeni sürümü henüz geçerli olmadığından Alice onu dağıtmadı; tarayıcılar onu reddederdi. Web siteleri şu anki sertifikalarını kullanmaya devam eder.\n\nAlice bu sürümden bir daha söz etmeyecek. Sürüm geçerli olduğunda sertifikayı Alice'te açın ve Şimdi dağıt düğmesine tıklayın."
+      },
+      "version_skipped_older": {
+        "subject": "{{certificate_name}} için yeni sürüm, kullanımdaki bir sertifikadan önce bitiyor: {{target_name}} Key Vault kasası",
+        "body": "{{target_name}} Key Vault kasasında {{certificate_name}} sertifikasının yeni sürümü, bağlı web sitelerinden en az birinin şu anda sunduğu sertifikadan önce bittiğinden Alice onu o web sitesine dağıtmadı.\n\nAlice bu sürümden bir daha söz etmeyecek. Yine de istiyorsanız sertifikayı Alice'te açın ve Şimdi dağıt düğmesine tıklayın."
+      },
+      "version_skipped_superseded": {
+        "subject": "{{certificate_name}} sürümü dağıtılmadan önce değiştirildi: {{target_name}} Key Vault kasası",
+        "body": "{{target_name}} Key Vault kasasında {{certificate_name}} sertifikasının yeni sürümü, Alice onu dağıtmadan önce daha yeni bir sürümle değiştirildi; Alice bu sürümü atladı ve onun yerine en yeni sürümü dağıtır.\n\nAlice bu sürümden bir daha söz etmeyecek."
+      },
+      "auto_deploy_stopped": {
+        "subject": "{{certificate_name}} için otomatik dağıtım durdu: {{target_name}} Key Vault kasası",
+        "body": "Alice, {{count}} dağıtım başarısız olduğu için {{target_name}} Key Vault kasasındaki {{certificate_name}} sertifikasının yeni sürümünü otomatik dağıtmayı durdurdu.\n\nSürümü zaten alan web siteleri onu korur; diğerleri şu anki sertifikalarını kullanmaya devam eder. Alice'teki dağıtım geçmişi her başarısızlığın nedenini gösterir. Otomatik dağıtım bir sonraki sürümle devam eder. Bu sürümü yeniden denemek için sertifikanın otomatik dağıtımını kapatıp açın ya da Şimdi dağıt düğmesine tıklayın."
       }
     },
     "license": {

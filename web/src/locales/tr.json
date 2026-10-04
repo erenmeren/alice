@@ -389,6 +389,7 @@
       "kv_version_release_denied": "Bekletilen sürümün serbest bırakılması reddedildi",
       "kv_version_held": "Kasa sertifikası sürümü bekletiliyor: zincir eksik",
       "kv_secret_read": "Bir dağıtım için Key Vault'tan sertifika okundu",
+      "kv_auto_deploy_stopped": "Başarısız dağıtımlardan sonra bir kasa sertifikasının otomatik dağıtımı durdu",
       "hostkey_observed": "Sunucu engelliyken başka bir yeni parmak izi görüldü",
       "hostkey_pinned": "Sunucu parmak izi onaylandı",
       "hostkey_changed": "Sunucu kimliği değişti",
