@@ -5,6 +5,10 @@
 // binary). It is an http.Handler plus a small constructor and holds no global state, so the e2e
 // service (cmd/alice-fakeazure) wraps the same Handler.
 //
+// MSAL caches managed-identity tokens in a process-global map keyed by client ID, so every test that
+// uses the managed identity needs its own user-assigned client ID: see Options.ManagedIdentity and
+// UniqueClientID.
+//
 // Fidelity rule: every answer follows the public REST reference of Key Vault api-version 2025-07-01 and
 // the Microsoft identity platform; the reference answer shapes are committed in
 // test/testdata/kv-recordings (placeholders only) and shapes_test.go compares every answer with them.
@@ -55,8 +59,15 @@ type Options struct {
 	ClientCert *x509.Certificate // a registered certificate credential (RSA; PS256 assertions are verified with it)
 	VaultName  string            // default "alice-test"
 	// ManagedIdentity makes the IMDS endpoint answer for the machine's identity.
+	//
+	// MSAL keeps managed-identity tokens in a PROCESS-GLOBAL cache keyed by the identity's client ID: a
+	// second test (or a second run with -count=N) that asks for the same ID gets a token the new fake
+	// never issued, and the vault refuses it. Give every test its own user-assigned MIClientID
+	// (UniqueClientID); a system-assigned identity (MIClientID "") can be exercised at most once per
+	// test binary.
 	ManagedIdentity bool
-	MIClientID      string // a user-assigned identity's client ID ("" = system-assigned)
+	// MIClientID is a user-assigned identity's client ID ("" = system-assigned); see ManagedIdentity.
+	MIClientID string
 	// Model is "rbac" (default) or "access_policy": it picks the inner code of a 403.
 	Model string
 	// ExtraHosts are further host names the fake's TLS certificate names and DialAddr maps to it
@@ -75,8 +86,8 @@ type Options struct {
 type Request struct {
 	Method, Host, Path string
 	Query              []string
-	// Status is the status the fake answered (0 while the request is in flight or when the
-	// connection was dropped).
+	// Status is the status the fake answered: 0 while the request is in flight and when the connection
+	// was reset before any response byte (Fault.Reset); a Fault.Drop logs the status it started to send.
 	Status int
 	// HadAuth reports that the request carried an Authorization header (never its value): the proof
 	// that a bearer token did or did not travel to a host.
@@ -115,6 +126,10 @@ type Server struct {
 	tokenLife  time.Duration
 	testToken  string
 	vaultHostN string
+	secret     string // the application's current client secret (Reset replaces it)
+	pageFill   int    // 0 = full pages
+	emptyPages bool
+	origOID    string
 }
 
 // NewClientSecret returns "fake-" + 40 random hex characters.
@@ -155,6 +170,7 @@ func NewServer(o Options) (*Server, error) {
 		oid: uuid.NewString(), tid: o.TenantID, tokenLife: o.TokenLifetime,
 		vaultHostN: o.VaultName + ".vault.azure.net",
 	}
+	s.secret, s.origOID = o.Secret, s.oid
 	if o.ClientCert != nil {
 		s.extraCerts = append(s.extraCerts, o.ClientCert)
 	}
@@ -252,7 +268,12 @@ func (s *Server) TenantID() string { return s.o.TenantID }
 func (s *Server) ClientID() string { return s.o.ClientID }
 
 // Secret returns the registered application's client secret.
-func (s *Server) Secret() string { return s.o.Secret }
+func (s *Server) Secret() string { return s.currentSecret() }
+
+func (s *Server) currentSecret() string { s.mu.Lock(); defer s.mu.Unlock(); return s.secret }
+
+// UniqueClientID returns a fresh GUID for Options.MIClientID (one per test and per run).
+func UniqueClientID() string { return uuid.NewString() }
 
 // ObjectID returns the oid claim of the tokens it issues.
 func (s *Server) ObjectID() string { s.mu.Lock(); defer s.mu.Unlock(); return s.oid }

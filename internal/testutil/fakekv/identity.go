@@ -144,7 +144,7 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request, tenant string) {
 	endpoint := "https://" + loginHost + "/" + s.o.TenantID + "/oauth2/v2.0/token"
 	switch {
 	case form.Get("client_secret") != "":
-		if form.Get("client_secret") != s.o.Secret {
+		if form.Get("client_secret") != s.currentSecret() {
 			s.entraFail(w, http.StatusUnauthorized, "invalid_client", 7000215, s.o.ClientID)
 			return
 		}
@@ -294,9 +294,18 @@ func (s *Server) imdsToken(w http.ResponseWriter, r *http.Request) {
 	tok, nbf, exp := s.issueToken(aud, false)
 	now := s.o.Now()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"access_token": tok, "client_id": s.o.ClientID,
+		"access_token": tok, "client_id": s.imdsClientID(),
 		"expires_in": strconv.Itoa(int(exp.Sub(now).Seconds())), "expires_on": strconv.FormatInt(exp.Unix(), 10),
 		"ext_expires_in": strconv.Itoa(int(exp.Sub(now).Seconds())), "not_before": strconv.FormatInt(nbf.Unix(), 10),
 		"resource": resource, "token_type": "Bearer",
 	})
+}
+
+// imdsClientID is the client ID the IMDS answer reports: the user-assigned identity's own ID, else the
+// application's (the system-assigned identity's principal).
+func (s *Server) imdsClientID() string {
+	if s.o.MIClientID != "" {
+		return s.o.MIClientID
+	}
+	return s.o.ClientID
 }

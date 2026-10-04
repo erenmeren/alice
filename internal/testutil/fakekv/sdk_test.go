@@ -339,7 +339,10 @@ func TestSDKImportAndPagingAndNextLinks(t *testing.T) {
 		}
 	}
 	assert.True(t, sawEvil, "the request reached the foreign host: only a guarded transport prevents it")
-	t.Logf("the SDK sent its bearer token to the foreign nextLink host: %v (Request.HadAuth)", tokenToEvil)
+	// Pinned SDK behaviour (azcore v1.23.2, keyvault internal v1.2.0): the bearer token travels to a
+	// foreign nextLink host. Only Alice's guarded transport prevents it. If an SDK update changes this,
+	// this assertion fails so the change is noticed (and S1's two guarded transports reviewed).
+	assert.True(t, tokenToEvil, "the SDK sent its bearer token to the foreign nextLink host")
 }
 
 func TestSDKChallengeResourceVerificationStaysOn(t *testing.T) {

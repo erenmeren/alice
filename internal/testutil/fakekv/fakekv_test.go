@@ -217,14 +217,31 @@ func TestSecretOfAVersion(t *testing.T) {
 	last := get(c.GetJSON(t, "/secrets/pem-last/"+lastVer), "value").(string)
 	assert.True(t, strings.HasSuffix(strings.TrimSpace(last), "-----END "+"PRIVATE KEY-----"))
 
-	// Not exportable: 403 Forbidden with the inner code of the vault's model.
-	locked := c.Get(t, "/secrets/locked/"+s.Versions("locked")[0])
-	assert.Equal(t, 403, locked.Status)
-	assert.Equal(t, "Forbidden", get(locked.JSON(t), "error", "code"))
-	assert.Equal(t, "ForbiddenByRbac", get(locked.JSON(t), "error", "innererror", "code"))
+	// Not exportable: 200 with the certificates and NO private key (documented), for both content types.
+	lockedVer := s.Versions("locked")[0]
+	ls := c.GetJSON(t, "/secrets/locked/"+lockedVer)
+	assert.Equal(t, "application/x-pkcs12", get(ls, "contentType"))
+	raw, err = base64.StdEncoding.DecodeString(get(ls, "value").(string))
+	require.NoError(t, err)
+	_, _, _, err = pkcs12.DecodeChain(raw, "")
+	assert.Error(t, err, "no private key in the PFX")
+	certs, err := pkcs12.DecodeTrustStore(raw, "")
+	require.NoError(t, err)
+	require.Len(t, certs, 2, "leaf and intermediate")
+	assert.Equal(t, s.Leaf("locked", lockedVer).Raw, certs[0].Raw)
+	s.AddCertificate("locked-pem", fakekv.CertOptions{CommonName: "l.example.test", ContentType: "application/x-pem-file"})
+	lp := get(c.GetJSON(t, "/secrets/locked-pem/"+s.Versions("locked-pem")[0]), "value").(string)
+	assert.NotContains(t, lp, "PRIVATE KEY")
+	blk, _ = pem.Decode([]byte(lp))
+	require.NotNil(t, blk)
+	assert.Equal(t, "CERTIFICATE", blk.Type)
+	// The value follows the policy: exportable again serves a key.
 	s.SetExportable("locked", true)
-	assert.Equal(t, 200, c.Get(t, "/secrets/locked/"+s.Versions("locked")[0]).Status)
+	raw, _ = base64.StdEncoding.DecodeString(get(c.GetJSON(t, "/secrets/locked/"+lockedVer), "value").(string))
+	_, _, _, err = pkcs12.DecodeChain(raw, "")
+	assert.NoError(t, err)
 	s.SetExportable("locked", false)
+	assert.Equal(t, string(s.SecretValue("locked", lockedVer)), get(c.GetJSON(t, "/secrets/locked/"+lockedVer), "value"))
 
 	// Never "latest".
 	for _, p := range []string{"/secrets/web-cert/", "/secrets/web-cert"} {
@@ -488,4 +505,157 @@ func TestPanicsOnProgrammerErrors(t *testing.T) {
 	assert.Panics(t, func() { s.Renew("absent") })
 	s.AddCertificate("c", fakekv.CertOptions{CommonName: "x"})
 	assert.Panics(t, func() { s.AddSecret("c", "text/plain") })
+}
+
+func TestObjectNamesAreCaseInsensitive(t *testing.T) {
+	s := fakekv.Start(t, fakekv.Options{})
+	c := s.TestClient()
+	ca := pki.NewCA("Import CA", pki.ECDSA256, time.Now())
+	leaf := ca.Issue(pki.Opts{CommonName: "w.example.test"}, time.Now())
+	pfx, _ := pkcs12.Modern.Encode(leaf.Key, leaf.Cert, nil, "")
+	b, _ := json.Marshal(obj{"value": base64.StdEncoding.EncodeToString(pfx)})
+	r := c.Do(t, http.MethodPost, "/certificates/Web-Cert/import", string(b))
+	require.Equal(t, 200, r.Status, string(r.Body))
+	ver := s.Versions("web-cert")[0]
+	got := c.GetJSON(t, "/certificates/web-cert/")
+	assert.Equal(t, "https://alice-test.vault.azure.net/certificates/Web-Cert/"+ver, get(got, "id"), "the stored spelling is kept")
+	assert.Equal(t, 200, c.Get(t, "/secrets/WEB-CERT/"+ver).Status)
+	assert.Equal(t, 200, c.Get(t, "/keys/web-CERT/").Status)
+	assert.Equal(t, "https://alice-test.vault.azure.net/certificates/Web-Cert", get(c.GetJSON(t, "/certificates"), "value", "0", "id"))
+	// A second import under another spelling adds a version to the same certificate.
+	require.Equal(t, 200, c.Do(t, http.MethodPost, "/certificates/WEB-cert/import", string(b)).Status)
+	assert.Len(t, s.Versions("Web-Cert"), 2)
+	s.AddKey("Signing", fakekv.KeyOptions{KeyType: "EC", Enabled: true})
+	assert.Equal(t, "https://alice-test.vault.azure.net/keys/Signing", get(c.GetJSON(t, "/keys"), "value", "0", "kid"))
+	assert.Equal(t, 200, c.Get(t, "/keys/signing/").Status)
+	s.AddSecret("DB-Pass", "text/plain")
+	assert.Panics(t, func() { s.AddSecret("web-CERT", "text/plain") }, "a certificate owns the name in any case")
+}
+
+func TestReset(t *testing.T) {
+	clk := clock.NewFake(time.Now())
+	s := fakekv.Start(t, fakekv.Options{Now: clk.Now})
+	s.AddCertificate("web-cert", fakekv.CertOptions{CommonName: "w.example.test", Exportable: true})
+	s.AddKey("k", fakekv.KeyOptions{KeyType: "EC", Enabled: true})
+	s.AddSecret("p", "text/plain")
+	c := s.TestClient()
+	oldSecret := s.Secret()
+	old := postToken(t, c, s.TenantID(), secretForm(s, oldSecret)).JSON(t).(obj)["access_token"].(string)
+	ca, tenant, client, vault := string(s.CAPEM()), s.TenantID(), s.ClientID(), s.VaultURL()
+	s.RevokeRole("secrets/get")
+	s.Firewall("203.0.113.7")
+	s.SetLatency(time.Hour)
+	s.FailNext("/keys", fakekv.Fault{Status: 503})
+	s.SetTokenClaims("x", "y")
+	s.ExpireSecret()
+	s.SetPageFill(1)
+	release := s.Hold("/secrets")
+
+	fresh := s.Reset()
+	release()
+	assert.NotEqual(t, oldSecret, fresh)
+	assert.Equal(t, fresh, s.Secret())
+	assert.Regexp(t, `^fake-[0-9a-f]{40}$`, fresh)
+	assert.Equal(t, ca, string(s.CAPEM()))
+	assert.Equal(t, tenant, s.TenantID())
+	assert.Equal(t, client, s.ClientID())
+	assert.Equal(t, vault, s.VaultURL())
+	assert.Empty(t, s.Requests())
+	assert.Empty(t, s.LastAccessToken())
+	assert.Nil(t, s.Versions("web-cert"))
+	assert.Equal(t, 0, s.Held())
+
+	// The old secret and the old token are refused; the state is empty; everything else is back to normal.
+	r := postToken(t, c, s.TenantID(), secretForm(s, oldSecret))
+	assert.Equal(t, 401, r.Status)
+	assert.Equal(t, 401, c.Raw(t, http.MethodGet, vault+"/certificates?api-version="+fakekv.APIVersion, http.Header{"Authorization": {"Bearer " + old}}, "").Status)
+	assert.Empty(t, get(c.GetJSON(t, "/certificates"), "value"))
+	assert.Empty(t, get(c.GetJSON(t, "/keys"), "value"))
+	assert.Empty(t, get(c.GetJSON(t, "/secrets"), "value"))
+	tok := postToken(t, c, s.TenantID(), secretForm(s, fresh))
+	require.Equal(t, 200, tok.Status, "the new secret works and ExpireSecret is cleared")
+	assert.Equal(t, s.ObjectID(), claimsOf(t, tok.JSON(t).(obj)["access_token"].(string))["oid"])
+	assert.NotEqual(t, "x", s.ObjectID())
+	v := s.AddCertificate("again", fakekv.CertOptions{CommonName: "a.example.test", Exportable: true})
+	assert.Equal(t, 200, c.Get(t, "/secrets/again/"+v).Status, "role, firewall and fault are gone")
+}
+
+func TestRolePresets(t *testing.T) {
+	s := fakekv.Start(t, fakekv.Options{})
+	v := s.AddCertificate("web-cert", fakekv.CertOptions{CommonName: "w.example.test", Exportable: true})
+	s.AddKey("signing", fakekv.KeyOptions{KeyType: "EC", Enabled: true})
+	c := s.TestClient()
+	ca := pki.NewCA("I", pki.ECDSA256, time.Now())
+	imp := importBody(t, ca.Issue(pki.Opts{CommonName: "i.example.test"}, time.Now()))
+	calls := map[string]func() int{
+		"certificates/list":   func() int { return c.Get(t, "/certificates").Status },
+		"certificates/get":    func() int { return c.Get(t, "/certificates/web-cert/").Status },
+		"keys/list":           func() int { return c.Get(t, "/keys").Status },
+		"keys/get":            func() int { return c.Get(t, "/keys/signing/").Status },
+		"secrets/list":        func() int { return c.Get(t, "/secrets").Status },
+		"secrets/get":         func() int { return c.Get(t, "/secrets/web-cert/"+v).Status },
+		"certificates/import": func() int { return c.Do(t, http.MethodPost, "/certificates/p/import", imp).Status },
+	}
+	for role, allowed := range map[string][]string{
+		fakekv.RoleReader:              {"certificates/list", "certificates/get", "keys/list", "keys/get", "secrets/list"},
+		fakekv.RoleSecretsUser:         {"secrets/list", "secrets/get"},
+		fakekv.RoleCertificatesOfficer: {"certificates/list", "certificates/get", "certificates/import"},
+	} {
+		s.SetRoles(role)
+		for action, call := range calls {
+			want := 403
+			for _, a := range allowed {
+				if a == action {
+					want = 200
+				}
+			}
+			assert.Equal(t, want, call(), "%s: %s", role, action)
+		}
+		s.Reset()
+		v = s.AddCertificate("web-cert", fakekv.CertOptions{CommonName: "w.example.test", Exportable: true})
+		s.AddKey("signing", fakekv.KeyOptions{KeyType: "EC", Enabled: true})
+	}
+	s.SetRoles(fakekv.RoleReader, fakekv.RoleSecretsUser)
+	assert.Equal(t, 200, calls["secrets/get"]())
+	assert.Equal(t, 200, calls["keys/get"]())
+	assert.Equal(t, 403, calls["certificates/import"]())
+	s.SetRoles()
+	for a, call := range calls {
+		assert.Equal(t, 403, call(), a)
+	}
+	s.GrantAllRoles()
+	assert.Equal(t, 200, calls["certificates/list"]())
+	assert.Panics(t, func() { s.SetRoles("Owner") })
+}
+
+func TestShortAndEmptyPagesStillCarryNextLink(t *testing.T) {
+	s := fakekv.Start(t, fakekv.Options{})
+	s.AddBulkCertificates("b", 7)
+	c := s.TestClient()
+	walk := func() (pages int, empty int, total int) {
+		next := "/certificates"
+		for next != "" {
+			p := c.GetJSON(t, next)
+			n := len(get(p, "value").([]any))
+			pages++
+			total += n
+			if n == 0 {
+				empty++
+			}
+			next, _ = get(p, "nextLink").(string)
+		}
+		return
+	}
+	s.SetPageFill(3)
+	pages, empty, total := walk()
+	assert.Equal(t, []int{3, 0, 7}, []int{pages, empty, total})
+	s.SetEmptyPages(true)
+	pages, empty, total = walk()
+	assert.Equal(t, 7, total)
+	assert.Equal(t, 3, empty-0, "an empty page before each real page except none after the last: 3 real pages, 3 empty ones")
+	assert.Equal(t, 6, pages)
+	s.SetPageFill(0)
+	s.SetEmptyPages(false)
+	pages, _, total = walk()
+	assert.Equal(t, []int{1, 7}, []int{pages, total})
 }

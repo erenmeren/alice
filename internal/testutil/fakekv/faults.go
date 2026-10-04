@@ -2,7 +2,9 @@ package fakekv
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -21,7 +23,9 @@ import (
 //	RetryAfter  the Retry-After header, verbatim: "7" (seconds) or an HTTP-date.
 //	Truncate    cut the body in half with the HTTP framing intact (malformed JSON, F-52).
 //	Drop        cut the body in half and close the connection (a dropped connection: the client sees an
-//	            unexpected EOF, the declared Content-Length is not met).
+//	            unexpected EOF, the declared Content-Length is not met). The log keeps the status it started to send.
+//	Reset       close the connection before any response byte (the client's Do fails; with Apply the
+//	            state change happens first, as with an import whose answer never arrives). Logged with Status 0.
 //	Location    a redirect target (use with Status 301/302/307/308).
 //	NextLink    replace the nextLink of a listing (a wrong-host nextLink, A-14).
 //	Apply       process the request first (an import happens), then answer the fault.
@@ -32,6 +36,7 @@ type Fault struct {
 	RetryAfter string
 	Truncate   bool
 	Drop       bool
+	Reset      bool
 	Location   string
 	NextLink   string
 	Apply      bool
@@ -53,7 +58,9 @@ type hold struct {
 
 func (h *hold) releaseLocked() { h.once.Do(func() { close(h.gate) }) }
 
-// FailNext scripts the next AUTHENTICATED request whose path starts with path (any host: the token
+// FailNext scripts the next AUTHENTICATED request whose path starts with path. The prefix matches EVERY
+// route under it ("/certificates" also matches "/certificates/x/import" and "/certificates/x/versions"):
+// use the most specific path. It applies to any host (the token
 // endpoint, IMDS and the vault share the mechanism): it answers f. Several calls queue in order. An
 // unauthenticated vault request (the SDK's challenge probe) never consumes a fault.
 func (s *Server) FailNext(path string, f Fault) {
@@ -182,6 +189,13 @@ func (s *Server) takeFault(path string) *Fault {
 }
 
 func (s *Server) applyFault(w http.ResponseWriter, r *http.Request, f *Fault, route http.HandlerFunc) {
+	if f.Reset {
+		if f.Apply {
+			route(httptest.NewRecorder(), r)
+		}
+		resetConn(w)
+		return
+	}
 	status, body := f.Status, []byte(f.Body)
 	hdr := http.Header{}
 	if f.Status == 0 || f.Apply {
@@ -285,4 +299,20 @@ func defaultFaultBody(r *http.Request, status int) []byte {
 	}
 	b, _ := json.Marshal(kvErrorBody{Error: kvError{Code: code, Message: msg}})
 	return b
+}
+
+// resetConn closes the connection without writing a byte (a TCP RST where the transport allows it).
+func resetConn(w http.ResponseWriter) {
+	conn, _, err := http.NewResponseController(w).Hijack()
+	if err != nil {
+		panic(http.ErrAbortHandler)
+	}
+	raw := conn
+	if tc, ok := conn.(*tls.Conn); ok {
+		raw = tc.NetConn()
+	}
+	if t, ok := raw.(*net.TCPConn); ok {
+		_ = t.SetLinger(0)
+	}
+	_ = raw.Close()
 }

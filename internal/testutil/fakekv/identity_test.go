@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -320,8 +321,12 @@ func TestManagedIdentityEndpoint(t *testing.T) {
 	assert.Equal(t, 405, s.TestClient().Raw(t, http.MethodPost, imdsURL+q, meta, "").Status)
 
 	// A user-assigned identity.
-	ua := fakekv.Start(t, fakekv.Options{ManagedIdentity: true, MIClientID: "11111111-2222-3333-4444-555555555555"})
-	assert.Equal(t, 200, get(ua, q+"&client_id=11111111-2222-3333-4444-555555555555", meta).Status)
+	uaID := fakekv.UniqueClientID()
+	ua := fakekv.Start(t, fakekv.Options{ManagedIdentity: true, MIClientID: uaID})
+	uaAnswer := get(ua, q+"&client_id="+uaID, meta)
+	assert.Equal(t, 200, uaAnswer.Status)
+	assert.Equal(t, uaID, uaAnswer.JSON(t).(obj)["client_id"], "the identity's own ID, not the application's")
+	assert.NotEqual(t, ua.ClientID(), uaID)
 	assert.Equal(t, 400, get(ua, q, meta).Status, "the system-assigned identity does not exist")
 
 	// No managed identity at all.
@@ -442,6 +447,29 @@ func TestFaults(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, s.VaultURL()+"/certificates?api-version="+fakekv.APIVersion, http.NoBody)
 	req.Header.Set("Authorization", "Bearer "+s.TestClientToken())
 	assert.Error(t, drain(c, req), "unexpected EOF")
+
+	// A connection reset before any response byte: the client's Do fails (not a body error), the log shows
+	// Status 0, and with Apply the state change happened first.
+	for _, apply := range []bool{false, true} {
+		name := fmt.Sprintf("reset-%v", apply)
+		s.FailNext("/certificates/"+name+"/import", fakekv.Fault{Reset: true, Apply: apply})
+		req, _ := http.NewRequest(http.MethodPost, s.VaultURL()+"/certificates/"+name+"/import?api-version="+fakekv.APIVersion, strings.NewReader(importBody(t, pki.NewCA("I", pki.ECDSA256, time.Now()).Issue(pki.Opts{CommonName: "i.example.test"}, time.Now()))))
+		req.Header.Set("Authorization", "Bearer "+s.TestClientToken())
+		resp, err := c.HTTPClient().Do(req)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		require.Error(t, err, "Do itself fails: no response was written")
+		reqs := s.Requests()
+		last := reqs[len(reqs)-1]
+		assert.Equal(t, "/certificates/"+name+"/import", last.Path)
+		assert.Equal(t, 0, last.Status)
+		if apply {
+			assert.Len(t, s.Versions(name), 1)
+		} else {
+			assert.Nil(t, s.Versions(name))
+		}
+	}
 
 	// A redirect (not followed by the test client) and a wrong-host nextLink.
 	s.FailNext("/certificates", fakekv.Fault{Status: 302, Location: "https://169.254.169.254/"})

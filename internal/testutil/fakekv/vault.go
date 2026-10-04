@@ -183,7 +183,10 @@ func (s *Server) Firewall(clientAddress string) {
 
 // pageRequest reads maxresults and $skiptoken. The skiptoken is opaque to clients: base64url of a
 // JSON object holding the last name (or version) returned (GUESS: the real token's content differs).
-func pageRequest(w http.ResponseWriter, r *http.Request) (marker string, max int, ok bool) {
+// SetPageFill and SetEmptyPages (GUESS: Azure may answer short or empty pages that still carry a
+// nextLink; the reference promises "up to" 25) shape the page; when the page was answered here (an
+// empty one) ok is false.
+func (s *Server) pageRequest(w http.ResponseWriter, r *http.Request) (marker string, max int, ok bool) {
 	max = pageSize
 	if v := r.URL.Query().Get("maxresults"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -194,16 +197,28 @@ func pageRequest(w http.ResponseWriter, r *http.Request) (marker string, max int
 		}
 		max = n
 	}
+	skip := false
 	if tok := r.URL.Query().Get("$skiptoken"); tok != "" {
 		raw, err := b64url.DecodeString(tok)
 		var m struct {
 			NextMarker string
+			Skip       bool
 		}
-		if err != nil || json.Unmarshal(raw, &m) != nil || m.NextMarker == "" {
+		if err != nil || json.Unmarshal(raw, &m) != nil || (m.NextMarker == "" && !m.Skip) {
 			kvFail(w, http.StatusBadRequest, "BadParameter", "", "The $skiptoken is not valid.") // GUESS
 			return "", 0, false
 		}
-		marker = m.NextMarker
+		marker, skip = m.NextMarker, m.Skip
+	}
+	s.mu.Lock()
+	fill, empty := s.pageFill, s.emptyPages
+	s.mu.Unlock()
+	if fill > 0 && fill < max {
+		max = fill
+	}
+	if empty && !skip {
+		writeJSON(w, http.StatusOK, listResult[certItem]{Value: []certItem{}, NextLink: s.nextLinkTok(r.URL.Path, marker, max, true)})
+		return "", 0, false
 	}
 	return marker, max, true
 }
@@ -211,7 +226,15 @@ func pageRequest(w http.ResponseWriter, r *http.Request) (marker string, max int
 // nextLinkFor builds the link to the page after lastKey. It keeps the api-version and maxresults and
 // names the vault host WITH ":443", as the REST reference's sample does.
 func (s *Server) nextLinkFor(path, lastKey string, max int) *string {
-	tok, _ := json.Marshal(map[string]any{"NextMarker": lastKey, "TargetLocation": 0})
+	return s.nextLinkTok(path, lastKey, max, false)
+}
+
+func (s *Server) nextLinkTok(path, lastKey string, max int, skip bool) *string {
+	m := map[string]any{"NextMarker": lastKey, "TargetLocation": 0}
+	if skip {
+		m["Skip"] = true
+	}
+	tok, _ := json.Marshal(m)
 	l := "https://" + s.vaultHostN + ":443/" + strings.Trim(path, "/") + "?api-version=" + APIVersion +
 		"&$skiptoken=" + b64url.EncodeToString(tok) + "&maxresults=" + strconv.Itoa(max)
 	return &l
@@ -245,7 +268,7 @@ func (s *Server) certID(name, ver string) string {
 }
 
 func (s *Server) listCertificates(w http.ResponseWriter, r *http.Request) {
-	marker, max, ok := pageRequest(w, r)
+	marker, max, ok := s.pageRequest(w, r)
 	if !ok {
 		return
 	}
@@ -255,7 +278,7 @@ func (s *Server) listCertificates(w http.ResponseWriter, r *http.Request) {
 	for _, n := range page {
 		e := s.certs[n]
 		cur := e.versions[len(e.versions)-1]
-		items = append(items, certItem{ID: s.certID(n, ""), X5t: thumbprint(cur.cert.Raw), Attributes: attrsOf(cur), Tags: map[string]any{}})
+		items = append(items, certItem{ID: s.certID(e.name, ""), X5t: thumbprint(cur.cert.Raw), Attributes: attrsOf(cur), Tags: map[string]any{}})
 	}
 	s.mu.Unlock()
 	res := listResult[certItem]{Value: items}
@@ -266,12 +289,12 @@ func (s *Server) listCertificates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listCertificateVersions(w http.ResponseWriter, r *http.Request, name string) {
-	marker, max, ok := pageRequest(w, r)
+	marker, max, ok := s.pageRequest(w, r)
 	if !ok {
 		return
 	}
 	s.mu.Lock()
-	e := s.certs[name]
+	e := s.certs[foldASCII(name)]
 	if e == nil || e.deleted {
 		s.mu.Unlock()
 		s.notFound(w, "CertificateNotFound", "certificate", name)
@@ -301,12 +324,12 @@ func (s *Server) listCertificateVersions(w http.ResponseWriter, r *http.Request,
 	}
 	items := make([]certItem, 0, end-start)
 	for _, v := range order[start:end] {
-		items = append(items, certItem{ID: s.certID(name, v.id), X5t: thumbprint(v.cert.Raw), Attributes: attrsOf(v), Tags: map[string]any{}})
+		items = append(items, certItem{ID: s.certID(e.name, v.id), X5t: thumbprint(v.cert.Raw), Attributes: attrsOf(v), Tags: map[string]any{}})
 	}
 	s.mu.Unlock()
 	res := listResult[certItem]{Value: items}
 	if more {
-		res.NextLink = s.nextLinkFor("/certificates/"+name+"/versions", items[len(items)-1].ID[strings.LastIndexByte(items[len(items)-1].ID, '/')+1:], max)
+		res.NextLink = s.nextLinkFor("/certificates/"+e.name+"/versions", items[len(items)-1].ID[strings.LastIndexByte(items[len(items)-1].ID, '/')+1:], max)
 	}
 	writeJSON(w, http.StatusOK, res)
 }
@@ -427,7 +450,7 @@ func (s *Server) importCertificate(w http.ResponseWriter, r *http.Request, name 
 		v.enabled = *body.Attributes.Enabled
 	}
 	s.mu.Lock()
-	e := s.certs[name]
+	e := s.certs[foldASCII(name)]
 	switch {
 	case e != nil && e.deleted:
 		s.mu.Unlock()
@@ -438,7 +461,7 @@ func (s *Server) importCertificate(w http.ResponseWriter, r *http.Request, name 
 		ct := "application/x-pkcs12"
 		e = &certEntry{name: name, imported: true, created: now, updated: now, o: CertOptions{CommonName: leaf.Subject.CommonName, SANs: leaf.DNSNames, Exportable: true},
 			policy: policyState{exportable: true, contentType: ct, issuer: "Unknown", actionType: "EmailContacts", actionPct: 80}}
-		s.certs[name] = e
+		s.certs[foldASCII(name)] = e
 	}
 	if p := body.Policy; p != nil {
 		if p.KeyProps != nil && p.KeyProps.Exportable != nil {
@@ -471,7 +494,7 @@ func (s *Server) importCertificate(w http.ResponseWriter, r *http.Request, name 
 // ---- secrets ----
 
 func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
-	marker, max, ok := pageRequest(w, r)
+	marker, max, ok := s.pageRequest(w, r)
 	if !ok {
 		return
 	}
@@ -488,13 +511,13 @@ func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
 	items := make([]secretItem, 0, len(page))
 	for _, n := range page {
 		if p := s.secrets[n]; p != nil {
-			items = append(items, secretItem{ID: s.VaultURL() + "/secrets/" + n, ContentType: p.contentType, Tags: map[string]any{},
+			items = append(items, secretItem{ID: s.VaultURL() + "/secrets/" + p.name, ContentType: p.contentType, Tags: map[string]any{},
 				Attributes: attributes{Enabled: true, Created: unix(p.created), Updated: unix(p.created), RecoverableDays: recoverableDays, RecoveryLevel: recoveryLevel}})
 			continue
 		}
 		e := s.certs[n]
 		cur := e.versions[len(e.versions)-1]
-		items = append(items, secretItem{ID: s.VaultURL() + "/secrets/" + n, ContentType: e.policy.contentType, Attributes: attrsOf(cur), Tags: map[string]any{}, Managed: true})
+		items = append(items, secretItem{ID: s.VaultURL() + "/secrets/" + e.name, ContentType: e.policy.contentType, Attributes: attrsOf(cur), Tags: map[string]any{}, Managed: true})
 	}
 	s.mu.Unlock()
 	res := listResult[secretItem]{Value: items}
@@ -512,12 +535,12 @@ func (s *Server) getSecret(w http.ResponseWriter, name, ver string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if p := s.secrets[name]; p != nil {
+	if p := s.secrets[foldASCII(name)]; p != nil {
 		if p.id != ver {
 			s.notFound(w, "SecretNotFound", "secret", name+"/"+ver)
 			return
 		}
-		writeJSON(w, http.StatusOK, secretBundle{Value: p.value, ContentType: p.contentType, ID: s.VaultURL() + "/secrets/" + name + "/" + p.id,
+		writeJSON(w, http.StatusOK, secretBundle{Value: p.value, ContentType: p.contentType, ID: s.VaultURL() + "/secrets/" + p.name + "/" + p.id,
 			Attributes: attributes{Enabled: true, Created: unix(p.created), Updated: unix(p.created), RecoverableDays: recoverableDays, RecoveryLevel: recoveryLevel}, Tags: map[string]any{}})
 		return
 	}
@@ -531,18 +554,8 @@ func (s *Server) getSecret(w http.ResponseWriter, name, ver string) {
 		kvFail(w, http.StatusForbidden, "Forbidden", "SecretDisabled", "Operation get is not allowed on a disabled secret.")
 		return
 	}
-	if !e.policy.exportable {
-		// GUESS (S10 item 3, as the brief fixes it): a non-exportable certificate's secret read is a 403
-		// carrying the inner code of the vault's permission model.
-		inner := "ForbiddenByRbac"
-		if s.o.Model == "access_policy" {
-			inner = "ForbiddenByPolicy"
-		}
-		kvFail(w, http.StatusForbidden, "Forbidden", inner, "The private key of this certificate is not exportable.")
-		return
-	}
-	writeJSON(w, http.StatusOK, secretBundle{Value: s.servedLocked(e, v), ContentType: e.policy.contentType, ID: s.VaultURL() + "/secrets/" + name + "/" + v.id,
-		Kid: s.VaultURL() + "/keys/" + name + "/" + v.id, Managed: true, Attributes: attrsOf(v), Tags: map[string]any{}})
+	writeJSON(w, http.StatusOK, secretBundle{Value: s.servedLocked(e, v), ContentType: e.policy.contentType, ID: s.VaultURL() + "/secrets/" + e.name + "/" + v.id,
+		Kid: s.VaultURL() + "/keys/" + e.name + "/" + v.id, Managed: true, Attributes: attrsOf(v), Tags: map[string]any{}})
 }
 
 // ---- keys ----
@@ -556,7 +569,7 @@ func keyAttrs(k *keyEntry) attributes {
 }
 
 func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
-	marker, max, ok := pageRequest(w, r)
+	marker, max, ok := s.pageRequest(w, r)
 	if !ok {
 		return
 	}
@@ -570,11 +583,11 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 	items := make([]keyItem, 0, len(page))
 	for _, n := range page {
 		if k := s.keys[n]; k != nil {
-			items = append(items, keyItem{Kid: s.VaultURL() + "/keys/" + n, Attributes: keyAttrs(k), Tags: map[string]any{}})
+			items = append(items, keyItem{Kid: s.VaultURL() + "/keys/" + k.name, Attributes: keyAttrs(k), Tags: map[string]any{}})
 			continue
 		}
 		e := s.certs[n]
-		items = append(items, keyItem{Kid: s.VaultURL() + "/keys/" + n, Attributes: attrsOf(e.versions[len(e.versions)-1]), Tags: map[string]any{}, Managed: true})
+		items = append(items, keyItem{Kid: s.VaultURL() + "/keys/" + e.name, Attributes: attrsOf(e.versions[len(e.versions)-1]), Tags: map[string]any{}, Managed: true})
 	}
 	s.mu.Unlock()
 	res := listResult[keyItem]{Value: items}
@@ -587,13 +600,13 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getKey(w http.ResponseWriter, name, ver string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if k := s.keys[name]; k != nil {
+	if k := s.keys[foldASCII(name)]; k != nil {
 		if ver != "" && ver != k.id {
 			s.notFound(w, "KeyNotFound", "key", name+"/"+ver)
 			return
 		}
 		j := k.pub
-		j.Kid = s.VaultURL() + "/keys/" + name + "/" + k.id
+		j.Kid = s.VaultURL() + "/keys/" + k.name + "/" + k.id
 		writeJSON(w, http.StatusOK, keyBundle{Key: j, Attributes: keyAttrs(k), Tags: map[string]any{}})
 		return
 	}
@@ -603,6 +616,6 @@ func (s *Server) getKey(w http.ResponseWriter, name, ver string) {
 		return
 	}
 	j := jwkOfPublic(v.cert.PublicKey)
-	j.Kid = s.VaultURL() + "/keys/" + name + "/" + v.id
+	j.Kid = s.VaultURL() + "/keys/" + e.name + "/" + v.id
 	writeJSON(w, http.StatusOK, keyBundle{Key: j, Attributes: attrsOf(v), Tags: map[string]any{}, Managed: true})
 }

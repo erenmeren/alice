@@ -26,7 +26,7 @@ type CertOptions struct {
 	CommonName string
 	SANs       []string
 	KeyType    pki.KeyType // default ECDSA256
-	Exportable bool        // default false: a non-exportable certificate's secret is refused
+	Exportable bool        // default false: the secret then carries the certificates but no private key
 	// ContentType is "application/x-pkcs12" (default) or "application/x-pem-file".
 	ContentType string
 	IncludeRoot bool // the secret's bundle carries the fake root too
@@ -141,7 +141,7 @@ func (s *Server) AddCertificate(name string, o CertOptions) string {
 		policy: policyState{exportable: o.Exportable, contentType: o.ContentType, issuer: "Self", actionType: "AutoRenew", actionPct: 80}}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.certs[name] = e
+	s.certs[foldASCII(name)] = e
 	return v.id
 }
 
@@ -160,7 +160,7 @@ func (s *Server) AddBulkCertificates(prefix string, n int) {
 		v.created, v.updated = now, now
 		v.served = map[string]string{}
 		name := fmt.Sprintf("%s-%05d", prefix, i)
-		s.certs[name] = &certEntry{name: name, o: CertOptions{CommonName: "bulk.example.test", Exportable: true, ContentType: "application/x-pkcs12"},
+		s.certs[foldASCII(name)] = &certEntry{name: name, o: CertOptions{CommonName: "bulk.example.test", Exportable: true, ContentType: "application/x-pkcs12"},
 			versions: []*version{&v}, created: now, updated: now,
 			policy: policyState{exportable: true, contentType: "application/x-pkcs12", issuer: "Self", actionType: "AutoRenew", actionPct: 80}}
 	}
@@ -170,7 +170,7 @@ func (s *Server) AddBulkCertificates(prefix string, n int) {
 // (Key Vault auto-renewal) and returns its ID. It panics for an unknown name.
 func (s *Server) Renew(name string) string {
 	s.mu.Lock()
-	e := s.certs[name]
+	e := s.certs[foldASCII(name)]
 	if e == nil {
 		s.mu.Unlock()
 		panic("fakekv: Renew of unknown certificate " + name)
@@ -189,7 +189,7 @@ func (s *Server) Renew(name string) string {
 func (s *Server) SetExportable(name string, exportable bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if e := s.certs[name]; e != nil {
+	if e := s.certs[foldASCII(name)]; e != nil {
 		e.policy.exportable = exportable
 		e.updated = s.o.Now()
 	}
@@ -216,7 +216,7 @@ func (s *Server) setEnabled(name, ver string, enabled bool) {
 func (s *Server) DeleteCertificate(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if e := s.certs[name]; e != nil {
+	if e := s.certs[foldASCII(name)]; e != nil {
 		e.deleted = true
 	}
 }
@@ -225,7 +225,7 @@ func (s *Server) DeleteCertificate(name string) {
 func (s *Server) RecoverCertificate(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if e := s.certs[name]; e != nil {
+	if e := s.certs[foldASCII(name)]; e != nil {
 		e.deleted = false
 	}
 }
@@ -237,7 +237,7 @@ func (s *Server) AddKey(name string, o KeyOptions) {
 	pub := s.publicKey(o)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.keys[name] = &keyEntry{name: name, id: newVersionID(), o: o, pub: pub, created: now, updated: now}
+	s.keys[foldASCII(name)] = &keyEntry{name: name, id: newVersionID(), o: o, pub: pub, created: now, updated: now}
 }
 
 // publicKey generates (or reuses, per type) a key pair and returns its public JWK without kid.
@@ -306,10 +306,10 @@ func (s *Server) AddSecret(name, contentType string) {
 	_, _ = rand.Read(b)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.certs[name] != nil {
+	if s.certs[foldASCII(name)] != nil {
 		panic("fakekv: a certificate named " + name + " owns that secret name")
 	}
-	s.secrets[name] = &secretEntry{name: name, id: newVersionID(), contentType: contentType,
+	s.secrets[foldASCII(name)] = &secretEntry{name: name, id: newVersionID(), contentType: contentType,
 		value: "fake-secret-value-" + hex.EncodeToString(b), created: s.o.Now()}
 }
 
@@ -331,7 +331,7 @@ func (s *Server) SecretValue(name, version string) []byte {
 	if e, v := s.find(name, version); v != nil && !e.deleted {
 		return []byte(s.servedLocked(e, v))
 	}
-	if p := s.secrets[name]; p != nil {
+	if p := s.secrets[foldASCII(name)]; p != nil {
 		return []byte(p.value)
 	}
 	return nil
@@ -341,7 +341,7 @@ func (s *Server) SecretValue(name, version string) []byte {
 func (s *Server) Versions(name string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e := s.certs[name]
+	e := s.certs[foldASCII(name)]
 	if e == nil {
 		return nil
 	}
@@ -354,7 +354,7 @@ func (s *Server) Versions(name string) []string {
 
 // find returns the entry (even soft-deleted) and a version ("" = newest). Callers hold s.mu.
 func (s *Server) find(name, ver string) (*certEntry, *version) {
-	e := s.certs[name]
+	e := s.certs[foldASCII(name)]
 	if e == nil || len(e.versions) == 0 {
 		return nil, nil
 	}
@@ -373,35 +373,51 @@ func (s *Server) find(name, ver string) (*certEntry, *version) {
 // computed once per content type, because PFX encoding is randomised and a re-read must serve the same bytes.
 func (s *Server) servedLocked(e *certEntry, v *version) string {
 	ct := e.policy.contentType
-	if val, ok := v.served[ct]; ok {
+	key := ct
+	if !e.policy.exportable {
+		key += "|certs-only" // a policy change must not serve a stale value
+	}
+	if val, ok := v.served[key]; ok {
 		return val
 	}
 	var val string
 	if ct == "application/x-pem-file" {
-		val = pemSecret(v)
-	} else {
+		val = pemSecret(v, e.policy.exportable)
+	} else if e.policy.exportable {
 		pfx, err := pkcs12.Modern.Encode(v.key, v.cert, v.chain, "")
 		if err != nil {
 			panic("fakekv: encoding the PFX: " + err.Error())
 		}
 		val = base64.StdEncoding.EncodeToString(pfx)
+	} else {
+		// DOC: "If the policy indicates that the key is non-exportable, then the private key isn't a
+		// part of the value when it's retrieved as a secret" (re-read by the reviewer on 2026-10-04):
+		// a PFX with the certificates and no key.
+		pfx, err := pkcs12.Modern.EncodeTrustStore(append([]*x509.Certificate{v.cert}, v.chain...), "")
+		if err != nil {
+			panic("fakekv: encoding the PFX: " + err.Error())
+		}
+		val = base64.StdEncoding.EncodeToString(pfx)
 	}
-	v.served[ct] = val
+	v.served[key] = val
 	return val
 }
 
-// pemSecret is the PEM form of a certificate secret: a PKCS #8 PRIVATE KEY block and the certificates,
-// leaf first (GUESS: block order unverified).
-func pemSecret(v *version) string {
+// pemSecret is the PEM form of a certificate secret: a PKCS #8 PRIVATE KEY block (only when the key is
+// exportable) and the certificates, leaf first (GUESS: block order unverified).
+func pemSecret(v *version, withKey bool) string {
+	var certs []byte
+	for _, c := range append([]*x509.Certificate{v.cert}, v.chain...) {
+		certs = append(certs, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})...)
+	}
+	if !withKey {
+		return string(certs)
+	}
 	der, err := x509.MarshalPKCS8PrivateKey(v.key)
 	if err != nil {
 		panic(err)
 	}
 	keyBlock := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-	var certs []byte
-	for _, c := range append([]*x509.Certificate{v.cert}, v.chain...) {
-		certs = append(certs, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})...)
-	}
 	if v.pemKeyLast {
 		return string(certs) + string(keyBlock)
 	}
