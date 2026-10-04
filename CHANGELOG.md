@@ -1,5 +1,88 @@
 # Changelog
 
+## Unreleased — Audit remediation
+
+Fixes for the independent audit of 2026-10-04; the full record is `docs/security/reviews/audit-remediation.md`.
+
+**Upgrade notes**
+- **Update `alice-helper` on every managed server first, then Alice.** This release needs helper protocol 6
+  (`alice-helper` 1.5.0); the new helper also works with the previous Alice. Copy the `alice-helper` of this release
+  next to the setup commands from **Servers** and run them again on each server (the sudoers file does not change).
+  A server whose helper is older shows "The alice-helper on this server is outdated." (`ALC-SSH-0005`) and Alice does
+  nothing on it, deployment recovery included, until it is updated.
+- **Set a new password** and **Sign out everywhere** now also revoke the person's API tokens: scripts of a person
+  whose password an administrator resets need new tokens.
+- **The 30-minute idle timeout now works:** a page left open is signed out 30 minutes after the last click, key,
+  wheel or touch, although it keeps refreshing.
+- Migration `00007` (applied at start) makes the installation record's protection read-only for the application
+  role. A development database that was never started since before Phase 2 reads as tampered: `make reset`.
+- The CSV audit export has a new first line; readers that expect the column names on line 1 must skip it.
+
+### Security
+- Idle timeout: only a person's activity extends a session (a change, or a page request the web marks after real
+  input); background refreshes no longer keep an unattended browser signed in.
+- License gate: Alice counts the time between its license checks itself, stops changes at the lock time without
+  waiting for the next check, and pauses changes ("Alice could not check its license since …", `ALC-LIC-0009`) when
+  no check has succeeded for 3 hours; the check runs in every Alice process and is retried within minutes. Queued
+  work waits and resumes by itself; deployment recovery and rollback keep running.
+- SSH key inventory: accounts with dots, capitals or a final `$` in their names (`john.doe`, `Deploy2`, `host$`) and
+  homes with a trailing `/` are listed; every `/etc/passwd` entry Alice cannot list is shown as a server warning
+  with its user ID, and the server's account list then counts as incomplete (also for a NUL byte in `/etc/passwd`,
+  any non-local account source, systemd user records and an unreadable `nsswitch.conf`). The last-root-key guard
+  covers every account with user ID 0.
+- API tokens are revoked by an administrator's **Set a new password**, **Sign out everywhere** and **Disable**, one
+  audit entry per token; a token or recovery codes can no longer be created by a session that is being signed out.
+- Server addresses are checked again each time Alice connects (SSH and its own website check): a name that
+  resolves to a link-local (cloud metadata), multicast, unspecified or reserved address is refused
+  (`ALC-SSH-0012`).
+- Requests with credentials Alice does not accept are limited per client address before the database is asked;
+  stale session cookies are deleted; the public `/healthz` is limited.
+- Text PostgreSQL cannot store (NUL, invalid UTF-8 in queries, `\u0000` in JSON) is refused before any handler
+  (`ALC-SYS-0004`); list cursors are bounded; certificates dated outside the years 1 to 9999 are refused; an answer
+  that cannot be encoded is a complete 500, never a cut-off 200.
+- Sign-in timing no longer tells whether a user name exists.
+- Resetting the setup code wins against an administrator creation in progress; the master key file's directory is
+  synced when the key is created.
+- An installation record without its protection is never trusted, and more traces show that an installation
+  existed; refusal entries are written even when the client has gone.
+
+### Changed
+- `alice-helper` 1.5.0 (protocol 6) is required; a discovery reads the key files in one pass.
+- Repeated refusals of the same person, permission and request are recorded once per 10 minutes, with a later
+  entry that counts the rest (`suppressed_count`; all sessions of a person together, all their tokens together).
+- One audit log check or export runs at a time (`ALC-AUD-0001`, try again later); an export may take up to 10
+  minutes; the CSV export starts with `# alice audit export: intact=… checked=… head_seq=… head_hash=…`.
+- The public `/healthz` answers at most 60 requests a minute per address; the internal health listener and `/livez`
+  are not limited.
+- A signed license in a newer format asks to update Alice (`ALC-LIC-0006`) also when it has new fields; an unsigned
+  or edited one is "not a valid license".
+- Discarding a waiting job is possible in every license state.
+- `make up` and the other development-stack targets read `deploy/docker-compose.override.yml`; `ALICE_TRUSTED_PROXIES`
+  and `ALICE_LOG_LEVEL` reach Alice.
+- The web interface: an error page instead of a blank screen, English when the Turkish texts cannot load, all
+  waiting jobs (**Show more**), the step-up dialog closes when the session ends, and the audit log shows each entry's
+  object and details.
+
+### Added
+- Error codes `ALC-LIC-0009` (license could not be checked), `ALC-SSH-0012` (address not allowed) and
+  `ALC-AUD-0001` (audit check or export already running).
+- Server warnings for accounts Alice could not list (by name, user or group ID, or home directory, each naming the
+  user ID) and for a NUL byte in `/etc/passwd`.
+- `make image-check` (the release image and its binary checked without network), build-tag checks in
+  `release-symcheck` and `internal/archtest`, `tools/pincheck` (actions by commit, images by digest), Dependabot,
+  `npm ci --ignore-scripts`, `go mod verify`, Vitest coverage thresholds and coverage floors for more Go packages;
+  CI runs on every branch and pull request.
+
+### Known issues
+- Accounts with user IDs 1–999, `nologin` shells or no home are not inventoried; some servers keep an incomplete
+  account list for good (directory services, systemd-homed, unsupported names).
+- Clients behind one address (NAT, a reverse proxy without `ALICE_TRUSTED_PROXIES`, rootless Docker) share the
+  limit for unaccepted credentials.
+- A server name that later resolves to 127.0.0.1 is still connected to.
+- The lockout of an account also blocks its step-up and password change; the CI workflow has never run on GitHub;
+  the npm lockfile is not scanned for secrets.
+- The full list is in `docs/security/reviews/audit-remediation.md` ("Known limitations").
+
 ## Unreleased — Phase 4: Nginx certificates
 
 ### Added
