@@ -46,6 +46,11 @@ func TestNewCSRAndValidateSigned(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalid)
 	_, _, _, err = NewCSR(rand.Reader, CSRRequest{CommonName: "x.example.test", KeyType: "rsa-1024"})
 	assert.ErrorIs(t, err, ErrUnsupportedKey)
+	csrPEM, der, _, err := NewCSR(rand.Reader, CSRRequest{CommonName: "x.example.test", SANs: []string{"ok.example.test", "bad name"}, KeyType: "ecdsa-p256"})
+	require.ErrorIs(t, err, ErrInvalid, "every SAN must be a DNS name")
+	assert.Contains(t, err.Error(), "subject alternative name")
+	assert.Empty(t, csrPEM)
+	assert.Empty(t, der.Bytes(), "no key is generated for a refused request")
 }
 
 func TestKeyPEMIsPKCS8(t *testing.T) {

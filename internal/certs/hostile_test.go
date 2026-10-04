@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/secrets"
 	"alice/internal/testutil/pki"
 )
 
@@ -240,4 +241,66 @@ func TestACutSearchKeepsNoPrefix(t *testing.T) {
 	assert.Empty(t, p.Chain, "not the verified prefix (the unique intermediate)")
 	assert.Equal(t, 1, strings.Count(p.PEMChain, "BEGIN CERTIFICATE"))
 	assert.False(t, ChainComplete(p, x509.NewCertPool(), now))
+}
+
+// tangledUpload is a leaf, one unique intermediate issued under the tangle's name and 30 same-name
+// certificates with alternating keys (the TestACutSearchKeepsNoPrefix shape), with the leaf's key.
+func tangledUpload(t *testing.T) (file []byte, leafKey *ecdsa.PrivateKey) {
+	t.Helper()
+	tangle, keys := sameNameChainWithKeys(t, 30)
+	interKey, leafKey := mustECKey(t), mustECKey(t)
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(500), Subject: pkix.Name{CommonName: "Unique"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign}, &x509.Certificate{Subject: pkix.Name{CommonName: "Same"}}, interKey.Public(), keys[0])
+	require.NoError(t, err)
+	inter, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	der, err = x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(501), Subject: pkix.Name{CommonName: "www.example.test"},
+		DNSNames: []string{"www.example.test"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)}, inter, leafKey.Public(), interKey)
+	require.NoError(t, err)
+	file = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	file = append(file, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: inter.Raw})...)
+	for _, c := range tangle {
+		file = append(file, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})...)
+	}
+	return file, leafKey
+}
+
+// A chain whose ordering would need more than maxChainSignatureChecks checks is refused as an
+// upload and as a signed certificate (never stored with a guessed or partial chain), where a served
+// file only marks its chain unresolved.
+func TestACutSearchRefusesAnUploadAndASignedCertificate(t *testing.T) {
+	file, leafKey := tangledUpload(t)
+	der, err := x509.MarshalPKCS8PrivateKey(leafKey)
+	require.NoError(t, err)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	_, err = ValidateUpload(Upload{CertificatePEM: file, PrivateKeyPEM: keyPEM}, now, x509.NewCertPool())
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "too many candidate issuers")
+
+	info, err := KeyInfoOf(secrets.NewPlaintext(der))
+	require.NoError(t, err)
+	_, complete, err := ValidateSigned(file, info, now, x509.NewCertPool())
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "too many candidate issuers")
+	assert.False(t, complete)
+}
+
+// A self-signature check beyond the budget is not made: it cuts the search, answers "not
+// self-signed" and is not remembered as the certificate's answer.
+func TestASelfSignatureCheckBeyondTheBudgetCutsTheSearch(t *testing.T) {
+	root, _ := selfSignedCA(t, "Root")
+	s := &chainSearch{at: now, checks: maxChainSignatureChecks, self: map[*x509.Certificate]bool{}}
+	assert.False(t, s.selfSigned(root))
+	assert.True(t, s.cut)
+	assert.Equal(t, maxChainSignatureChecks, s.checks, "no check beyond the budget")
+	_, remembered := s.self[root]
+	assert.False(t, remembered, "a skipped check is not an answer")
+
+	fresh := &chainSearch{at: now, self: map[*x509.Certificate]bool{}}
+	assert.True(t, fresh.selfSigned(root), "within the budget the root is self-signed")
+	assert.Equal(t, 1, fresh.checks)
+	assert.True(t, fresh.selfSigned(root))
+	assert.Equal(t, 1, fresh.checks, "the answer is remembered: no second check")
 }

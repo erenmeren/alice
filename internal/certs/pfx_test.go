@@ -237,3 +237,65 @@ func TestUnreadablePFXIsInvalidNotAWrongPassword(t *testing.T) {
 	require.NoError(t, err)
 	v.PrivateKeyDER.Zero()
 }
+
+// guardFile builds a PFX skeleton around authSafe (the bytes inside the outer content) and mac.
+func guardFile(t *testing.T, authSafe []byte, mac tMac) []byte {
+	t.Helper()
+	return mar(t, tPfx{Version: 3, MacData: mac, AuthSafe: tContentInfo{ContentType: oidTData,
+		Content: asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: authSafe}}})
+}
+
+func explicit0(b []byte) asn1.RawValue {
+	return asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: b}
+}
+
+// Each structure the guard reads to find an iteration count is refused as unreadable when it does
+// not parse, at every depth, rather than skipped (which would let the library read, with its own
+// count, a structure the guard could not check). A bag that is not a shrouded key is skipped, and
+// the bags after it are still checked.
+func TestPFXGuardRefusesEveryUnreadableStructure(t *testing.T) {
+	sha1MAC := tMac{Mac: tDigest{Algorithm: pkix.AlgorithmIdentifier{Algorithm: asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}}, Digest: []byte{1}}, MacSalt: []byte{1}, Iterations: 1}
+	notSequence := mar(t, 7) // an INTEGER where a structure is expected
+	pbes2 := func(kdfParams []byte) pkix.AlgorithmIdentifier {
+		kdf := pkix.AlgorithmIdentifier{Algorithm: asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 12}, Parameters: asn1.RawValue{FullBytes: kdfParams}}
+		return pkix.AlgorithmIdentifier{Algorithm: oidTPBES2, Parameters: asn1.RawValue{FullBytes: mar(t, tPBES2{Kdf: kdf, Scheme: kdf})}}
+	}
+	wrap := func(items ...tContentInfo) []byte { return mar(t, mar(t, items)) }
+	dataWith := func(inner []byte) tContentInfo { return tContentInfo{ContentType: oidTData, Content: explicit0(inner)} }
+	bagsOf := func(bags ...tSafeBag) tContentInfo { return dataWith(mar(t, mar(t, bags))) }
+	shroudedWith := func(value []byte) tSafeBag { return tSafeBag{ID: oidTShroud, Value: explicit0(value)} }
+	shrouded := func(a pkix.AlgorithmIdentifier) tSafeBag {
+		return shroudedWith(mar(t, tShrouded{Algorithm: a, Data: []byte{1}}))
+	}
+	legacy := pkix.AlgorithmIdentifier{Algorithm: asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 12, 1, 3}, Parameters: asn1.RawValue{FullBytes: notSequence}}
+	certBag := tSafeBag{ID: asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 12, 10, 1, 3}, Value: explicit0(mar(t, []byte("a certificate")))}
+	pbmac1 := tMac{Mac: tDigest{Algorithm: pkix.AlgorithmIdentifier{Algorithm: oidTPBMAC1, Parameters: asn1.RawValue{FullBytes: notSequence}}, Digest: []byte{1}}, MacSalt: []byte{1}, Iterations: 1}
+
+	for name, tc := range map[string]struct {
+		pfx  []byte
+		want error // nil: the guard lets it through
+	}{
+		"auth safe is not an element":             {guardFile(t, []byte{0x04, 0x7f}, sha1MAC), unreadable()},
+		"auth safe octets hold no content list":   {guardFile(t, mar(t, []byte("junk")), sha1MAC), unreadable()},
+		"encrypted content is not a structure":    {guardFile(t, wrap(tContentInfo{ContentType: oidTEncData, Content: explicit0(notSequence)}), sha1MAC), unreadable()},
+		"data content is not an octet string":     {guardFile(t, wrap(dataWith(notSequence)), sha1MAC), unreadable()},
+		"data content holds no bag list":          {guardFile(t, wrap(dataWith(mar(t, []byte("junk")))), sha1MAC), unreadable()},
+		"shrouded key bag is not a structure":     {guardFile(t, wrap(bagsOf(shroudedWith(notSequence))), sha1MAC), unreadable()},
+		"PBES2 parameters are not two algorithms": {guardFile(t, wrap(bagsOf(shrouded(pkix.AlgorithmIdentifier{Algorithm: oidTPBES2, Parameters: asn1.RawValue{FullBytes: notSequence}}))), sha1MAC), unreadable()},
+		"PBKDF2 parameters do not parse":          {guardFile(t, wrap(bagsOf(shrouded(pbes2(notSequence)))), sha1MAC), unreadable()},
+		"legacy PBE parameters do not parse":      {guardFile(t, wrap(bagsOf(shrouded(legacy))), sha1MAC), unreadable()},
+		"PBMAC1 parameters do not parse":          {guardFile(t, wrap(), pbmac1), unreadable()},
+		"a certificate bag is skipped, the key after it is checked": {
+			guardFile(t, wrap(bagsOf(certBag, shrouded(pbes2(mar(t, tPBKDF2{Salt: asn1.RawValue{Tag: asn1.TagOctetString, Bytes: []byte{1}}, Iterations: 1 << 40}))))), sha1MAC), tooMany()},
+		"a certificate bag alone passes": {guardFile(t, wrap(bagsOf(certBag)), sha1MAC), nil},
+	} {
+		err := checkPFXIterations(tc.pfx)
+		if tc.want == nil {
+			assert.NoError(t, err, name)
+			continue
+		}
+		require.Error(t, err, name)
+		assert.Equal(t, tc.want.Error(), err.Error(), name)
+		assert.ErrorIs(t, err, ErrInvalid, name)
+	}
+}

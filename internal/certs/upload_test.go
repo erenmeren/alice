@@ -2,7 +2,9 @@ package certs
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -16,7 +18,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"software.sslmate.com/src/go-pkcs12"
 
+	"alice/internal/secrets"
 	"alice/internal/testutil/pki"
 )
 
@@ -49,6 +53,24 @@ func TestValidateUploadTable(t *testing.T) {
 	ecParams := pem.EncodeToMemory(&pem.Block{Type: "EC PARAMETERS", Bytes: []byte{0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07}})
 	withParams := append(append([]byte{}, ecParams...), pki.KeyPEMSEC1(mustEC(t, good))...)
 	twoKeys := append(append([]byte{}, good.KeyPEM...), other.KeyPEM...)
+	x25519, err := ecdh.X25519().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	x25519DER, err := x509.MarshalPKCS8PrivateKey(x25519)
+	require.NoError(t, err)
+	x25519PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: x25519DER})
+	damagedKey := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("not a key")})
+	manyCAs := make([]*x509.Certificate, maxCertificates)
+	for i := range manyCAs {
+		manyCAs[i] = ca.Intermediate
+	}
+	tooManyPFX, err := pkcs12.Modern.Encode(good.Key, good.Cert, manyCAs, "pw")
+	require.NoError(t, err)
+	hugeBlock, _ := pem.Decode(selfSignedLookingRSA(t, 4096, "Huge CA"))
+	require.NotNil(t, hugeBlock)
+	huge, err := x509.ParseCertificate(hugeBlock.Bytes)
+	require.NoError(t, err)
+	hugePFX, err := pkcs12.Modern.Encode(good.Key, good.Cert, []*x509.Certificate{huge}, "pw")
+	require.NoError(t, err)
 
 	for _, tc := range []struct {
 		name     string
@@ -78,6 +100,11 @@ func TestValidateUploadTable(t *testing.T) {
 		{"Ed25519", Upload{CertificatePEM: ed.FullchainPEM, PrivateKeyPEM: ed.KeyPEM}, ErrUnsupportedKey, false, nil},
 		{"two private keys", Upload{CertificatePEM: good.FullchainPEM, PrivateKeyPEM: twoKeys}, ErrInvalid, false, nil},
 		{"no key", Upload{CertificatePEM: good.FullchainPEM}, ErrNoKey, false, nil},
+		{"X25519 key (cannot sign)", Upload{CertificatePEM: good.FullchainPEM, PrivateKeyPEM: x25519PEM}, ErrUnsupportedKey, false, nil},
+		{"damaged key block", Upload{CertificatePEM: good.FullchainPEM, PrivateKeyPEM: damagedKey}, ErrInvalid, false, nil},
+		{"EC PARAMETERS without a key", Upload{CertificatePEM: good.FullchainPEM, PrivateKeyPEM: ecParams}, ErrInvalid, false, nil},
+		{"PFX with too many certificates", Upload{PFX: tooManyPFX, PFXPassword: "pw"}, ErrInvalid, false, nil},
+		{"PFX with an oversized RSA chain certificate", Upload{PFX: hugePFX, PFXPassword: "pw"}, ErrUnsupportedKey, false, nil},
 		{"garbage", Upload{CertificatePEM: []byte("hello"), PrivateKeyPEM: good.KeyPEM}, ErrInvalid, false, nil},
 		{"a key in the certificate field", Upload{CertificatePEM: good.KeyPEM, PrivateKeyPEM: good.KeyPEM}, ErrInvalid, false, nil},
 		{"too large", Upload{CertificatePEM: bytes.Repeat([]byte("a"), MaxInputSize+1), PrivateKeyPEM: good.KeyPEM}, ErrTooLarge, false, nil},
@@ -278,4 +305,33 @@ func crossSign(t *testing.T, ca, other *pki.CA) []byte {
 		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign}, other.Root, ca.RootKey.Public(), other.RootKey)
 	require.NoError(t, err)
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// A stored key is described only when it is an RSA or ECDSA signing key: anything else (an
+// Ed25519 key, an X25519 key that cannot sign, bytes that are no key) is refused, and an empty key
+// is never encoded.
+func TestKeyInfoOfAndKeyPEMRefuseWhatIsNoUsableKey(t *testing.T) {
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	edDER, err := x509.MarshalPKCS8PrivateKey(edKey)
+	require.NoError(t, err)
+	xKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	xDER, err := x509.MarshalPKCS8PrivateKey(xKey)
+	require.NoError(t, err)
+	for name, tc := range map[string]struct {
+		der  []byte
+		want error
+	}{
+		"ed25519": {edDER, ErrUnsupportedKey},
+		"x25519":  {xDER, ErrUnsupportedKey},
+		"garbage": {[]byte("not a key"), ErrInvalid},
+	} {
+		info, err := KeyInfoOf(secrets.NewPlaintext(tc.der))
+		require.ErrorIs(t, err, tc.want, name)
+		assert.Equal(t, KeyInfo{}, info, name)
+	}
+	p, err := KeyPEM(secrets.Plaintext{})
+	require.Error(t, err)
+	assert.Empty(t, p.Bytes())
 }

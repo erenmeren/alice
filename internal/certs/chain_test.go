@@ -56,6 +56,19 @@ func TestChainCompleteWithSystemRootsOrSelfSigned(t *testing.T) {
 	assert.True(t, ChainComplete(ps, x509.NewCertPool(), now), "a self-signed certificate is its own chain")
 }
 
+// SystemRoots always answers a pool (never nil, which crypto/x509 would read as "use the system
+// roots" again), and a private CA is not among the operating system's roots.
+func TestSystemRootsIsAPoolThatDoesNotTrustAPrivateCA(t *testing.T) {
+	roots := SystemRoots()
+	require.NotNil(t, roots)
+	ca := pki.NewCA("Alice Private", pki.ECDSA256, now)
+	l := ca.Issue(pki.Opts{CommonName: "www.example.test"}, now)
+	p, err := ParseChainPEM(l.FullchainPEM)
+	require.NoError(t, err)
+	assert.False(t, ChainComplete(p, roots, now))
+	assert.True(t, ChainComplete(p, rootsOf(ca), now))
+}
+
 // The weak-signature rule is wired into the upload path: the leaf and every
 // chain certificate except a self-signed root.
 func TestCheckLeafSignatureRules(t *testing.T) {
