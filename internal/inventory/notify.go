@@ -69,6 +69,14 @@ const (
 	TemplateKVAutoDeployStopped     = "kv.auto_deploy_stopped"
 )
 
+// Imports into a vault (Task 14): an import ended without a version in the vault, with a reason on the
+// import's page (TemplateKVImportFailed), or Alice never learned how it ended (TemplateKVImportOutcomeUnknown,
+// 24 hours after the send). Both take target_name and certificate_name.
+const (
+	TemplateKVImportFailed         = "kv.import_failed"
+	TemplateKVImportOutcomeUnknown = "kv.import_outcome_unknown"
+)
+
 // Templates lists the inventory's email templates (render tests).
 func Templates() []string {
 	return []string{TemplateHostKeyChanged, TemplateAuthFailed, TemplateDeploymentFailed, TemplateDeploymentRollbackFailed,
@@ -76,5 +84,6 @@ func Templates() []string {
 		TemplateDeploymentNeedsAttention, TemplateDeploymentNeedsAttentionUnconfirmed, TemplateKVAuthFailed, TemplateKVCertificateRemoved,
 		TemplateKVCertificateRemovedBound, TemplateKVCertificatesRemovedMore, TemplateKVCertificatesRemovedOne, TemplateKVNewVersion, TemplateKVNewVersionHeldLicense,
 		TemplateKVNewVersionHeldChain, TemplateKVSkippedManual, TemplateKVSkippedDisabled, TemplateKVSkippedExpired, TemplateKVSkippedNotYetValid,
-		TemplateKVSkippedOlder, TemplateKVSkippedSuperseded, TemplateKVAutoDeployStopped}
+		TemplateKVSkippedOlder, TemplateKVSkippedSuperseded, TemplateKVAutoDeployStopped, TemplateKVImportFailed,
+		TemplateKVImportOutcomeUnknown}
 }

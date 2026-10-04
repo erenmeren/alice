@@ -153,13 +153,6 @@ WHERE target_id = $1 AND current_version <> '' AND kv_updated_at IS NOT NULL AND
 	return req, rows.Err()
 }
 
-// resolveImports settles the uncertain imports of the vault from what the poll stored (Task 14).
-// complete says the certificate listing was whole, so the absence of a version means something.
-// Until then it changes nothing.
-func (s *Service) resolveImports(_ context.Context, _ pgx.Tx, _ uuid.UUID, _ time.Time, _ bool) error {
-	return nil
-}
-
 // ReconcileKV stores one poll's result (see the top of this file). Rules:
 //   - an object of a kind is marked missing only when that kind was asked for, listed completely
 //     (not cut at a bound, not missing an item Alice could not store, not failed) and the object is

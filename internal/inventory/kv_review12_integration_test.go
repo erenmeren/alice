@@ -600,3 +600,21 @@ func TestKVDeployMaterialRefusalSurvivesAFailedAudit(t *testing.T) {
 	assert.ErrorIs(t, err, inventory.ErrPFXBusy, "a retryable refusal stays retryable")
 	assert.Zero(t, h.count("SELECT count(*) FROM audit_log WHERE action = 'kv.secret_read'"))
 }
+
+// The deployment that owns an operation id is found by it, and an operation Alice does not know is not.
+func TestOperationDeploymentFindsItsOwner(t *testing.T) {
+	b := newBindFixture(t)
+	h, ctx := b.h, b.h.ctx
+	_, known, err := h.svc.OperationDeployment(ctx, uuid.New())
+	require.NoError(t, err)
+	assert.False(t, known)
+	id := b.request(b.admin, b.cert.ID, b.loc5)
+	op := uuid.New()
+	b.exec("UPDATE deployments SET operation_id = $2 WHERE id = $1", id, op)
+	got, known, err := h.svc.OperationDeployment(ctx, op)
+	require.NoError(t, err)
+	require.True(t, known)
+	assert.Equal(t, id, got.ID)
+	assert.Equal(t, b.loc5, got.LocationID)
+	assert.Equal(t, inventory.DeployStateQueued, got.State)
+}

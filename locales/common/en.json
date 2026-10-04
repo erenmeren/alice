@@ -781,6 +781,14 @@
       "auto_deploy_stopped": {
         "subject": "Automatic deployment of {{certificate_name}} stopped: Key Vault {{target_name}}",
         "body": "Alice stopped deploying the new version of the certificate {{certificate_name}} from the Key Vault {{target_name}} automatically, after {{count}} deployments failed.\n\nWebsites that already received the version keep it; the others keep their current certificate. The deployment history in Alice shows the reason for each failure. Automatic deployment continues with the next version. To try this version again, switch automatic deployment off and on for the certificate, or choose Deploy now."
+      },
+      "import_failed": {
+        "subject": "Importing {{certificate_name}} into the Key Vault {{target_name}} failed",
+        "body": "Alice could not import the certificate {{certificate_name}} into the Key Vault {{target_name}}. Nothing was created in the vault.\n\nOpen the vault in Alice: the import's page shows the reason and what to do. When it is fixed, start the import again."
+      },
+      "import_outcome_unknown": {
+        "subject": "Alice does not know whether {{certificate_name}} was imported into the Key Vault {{target_name}}",
+        "body": "Alice sent the certificate {{certificate_name}} to the Key Vault {{target_name}}, but the answer was lost, and in the 24 hours since, no check of the vault has shown the certificate. Alice never sends an import twice.\n\nOpen the vault in Azure and look for the certificate. If it is there, nothing more is needed: Alice shows it at the next check. If it is not, start the import again in Alice."
       }
     },
     "license": {

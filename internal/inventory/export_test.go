@@ -150,3 +150,10 @@ func SetAutoDeployBatch(n int) (restore func()) {
 	autoDeployBatch = n
 	return func() { autoDeployBatch = old }
 }
+
+// SetImportMaterialHook installs the observer of ImportMaterial's buffers and returns its restore.
+func SetImportMaterialHook(f func(stage string, b []byte)) (restore func()) {
+	old := importMaterialHook
+	importMaterialHook = f
+	return func() { importMaterialHook = old }
+}

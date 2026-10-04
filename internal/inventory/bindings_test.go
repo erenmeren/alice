@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -142,3 +143,25 @@ func TestDenialDetailsNamesTheWebsiteOnlyWhenThereIsOne(t *testing.T) {
 }
 
 func encodeRaw(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+
+func TestMapImportError(t *testing.T) {
+	assert.ErrorIs(t, mapImportError(&pgconn.PgError{Code: "Z1007"}), ErrImportState)
+	assert.ErrorIs(t, mapImportError(fmt.Errorf("wrapped: %w", &pgconn.PgError{Code: "23505", ConstraintName: "kv_imports_one_active"})), ErrImportInProgress)
+	other := &pgconn.PgError{Code: "23505", ConstraintName: "x"}
+	assert.Same(t, other, mapImportError(other))
+	assert.NoError(t, mapImportError(nil))
+}
+
+// The error types say what their sentinel says and nothing from a request; the claim travels on the context.
+func TestErrorTypesKeepTheirSentinelText(t *testing.T) {
+	assert.Equal(t, ErrKeyTypeMismatch.Error(), (&KeyTypeMismatchError{Expected: "rsa", Actual: "ecdsa"}).Error())
+	assert.Equal(t, ErrNotFound.Error(), (&LocationRefusalError{LocationID: uuid.New(), Err: ErrNotFound}).Error())
+	assert.Equal(t, ErrImportConfirmNeeded.Error(), (&ImportConfirmError{CertificateName: "web-cert"}).Error())
+	assert.Equal(t, ErrNotFound.Error(), (&denial{err: ErrNotFound}).Error())
+	id := uuid.New()
+	c, ok := ClaimFrom(WithClaim(context.Background(), Claim{JobID: id, Attempt: 2}))
+	assert.True(t, ok)
+	assert.Equal(t, Claim{JobID: id, Attempt: 2}, c)
+	_, ok = ClaimFrom(context.Background())
+	assert.False(t, ok)
+}

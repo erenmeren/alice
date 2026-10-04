@@ -781,6 +781,14 @@
       "auto_deploy_stopped": {
         "subject": "{{certificate_name}} için otomatik dağıtım durdu: {{target_name}} Key Vault kasası",
         "body": "Alice, {{count}} dağıtım başarısız olduğu için {{target_name}} Key Vault kasasındaki {{certificate_name}} sertifikasının yeni sürümünü otomatik dağıtmayı durdurdu.\n\nSürümü zaten alan web siteleri onu korur; diğerleri şu anki sertifikalarını kullanmaya devam eder. Alice'teki dağıtım geçmişi her başarısızlığın nedenini gösterir. Otomatik dağıtım bir sonraki sürümle devam eder. Bu sürümü yeniden denemek için sertifikanın otomatik dağıtımını kapatıp açın ya da Şimdi dağıt düğmesine tıklayın."
+      },
+      "import_failed": {
+        "subject": "{{certificate_name}} sertifikasının {{target_name}} Key Vault kasasına aktarımı başarısız oldu",
+        "body": "Alice, {{certificate_name}} sertifikasını {{target_name}} Key Vault kasasına aktaramadı. Kasada hiçbir şey oluşturulmadı.\n\nKasayı Alice'te açın: aktarımın sayfası nedeni ve yapılacakları gösterir. Sorun giderildiğinde aktarımı yeniden başlatın."
+      },
+      "import_outcome_unknown": {
+        "subject": "Alice, {{certificate_name}} sertifikasının {{target_name}} Key Vault kasasına aktarılıp aktarılmadığını bilmiyor",
+        "body": "Alice, {{certificate_name}} sertifikasını {{target_name}} Key Vault kasasına gönderdi ancak yanıt kayboldu ve sonraki 24 saat içinde kasanın hiçbir denetimi sertifikayı göstermedi. Alice bir aktarımı asla iki kez göndermez.\n\nKasayı Azure'da açın ve sertifikayı arayın. Sertifika oradaysa başka bir şey gerekmez: Alice onu bir sonraki denetimde gösterir. Değilse aktarımı Alice'te yeniden başlatın."
       }
     },
     "license": {
