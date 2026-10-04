@@ -566,6 +566,14 @@ describe('DeployDialog states', () => {
     expect(alert).toHaveTextContent('Unfinished earlier change on the server (operation ID):');
   });
 
+  it('does not say "nothing was changed" when an unfinished earlier change blocks the files (ALC-DEP-0023)', async () => {
+    const op = '0192c000-0000-7000-8000-00000000abcd';
+    await runWith({ status: 'failed', failed_step: 'recover_pending', error: { code: 'ALC-DEP-0023', reason: 'deployment.server_operation_pending', params: { operation_id: op } } });
+    expect(await screen.findByText('The new certificate was not written. An unfinished earlier change on the server blocks these files; see below.')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing was changed on the server.')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('alert')).getByText(op)).toBeInTheDocument();
+  });
+
   it('shows a deployment an administrator cancelled as cancelled, without a failure alert', async () => {
     await runWith({ status: 'failed', error: { code: 'ALC-DEP-0022', reason: 'deployment.cancelled' } });
     expect(await screen.findByText('Nothing was changed on the server.')).toBeInTheDocument();

@@ -40,6 +40,11 @@ export const isCancelled = (d: Pick<Deployment, 'status' | 'error'>): boolean =>
 // chosen, so screens give it its own headline.
 export const PENDING_CHANGE_RESTORED = 'deployment.pending_change_restored';
 
+// SERVER_OPERATION_PENDING (ALC-DEP-0023): an unfinished earlier change blocks the files; this
+// deployment's certificate was not written, but an unfinished restore attempt may have put back one
+// of the two files, so "nothing was changed" would be false.
+export const SERVER_OPERATION_PENDING = 'deployment.server_operation_pending';
+
 // deploymentStatusText is the text key of a deployment's status: a failed deployment that an
 // Administrator cancelled before anything was sent reads "Cancelled", never as a failure.
 export function deploymentStatusText(d: Pick<Deployment, 'status' | 'error'>): string {

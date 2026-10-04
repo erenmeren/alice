@@ -65,4 +65,32 @@ describe('AppModal focus', () => {
     await userEvent.keyboard('{Escape}');
     await waitFor(() => expect(opener).toHaveFocus());
   });
+
+  it('leaves a modal mounted closed and opened later to Mantine: focus still comes back to its opener', async () => {
+    function Toggle() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Open the toggled dialog
+          </button>
+          <AppModal opened={open} onClose={() => setOpen(false)} title="Toggled">
+            <button type="button" onClick={() => setOpen(false)}>
+              Done
+            </button>
+          </AppModal>
+        </>
+      );
+    }
+    await renderApp(<Toggle />);
+    const opener = screen.getByRole('button', { name: 'Open the toggled dialog' });
+    for (let round = 0; round < 2; round++) {
+      await userEvent.click(opener);
+      const dialog = await screen.findByRole('dialog', { name: 'Toggled' });
+      await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      await waitFor(() => expect(opener).toHaveFocus());
+    }
+  });
 });

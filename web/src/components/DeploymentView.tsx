@@ -1,6 +1,6 @@
 import { Alert, Badge, Stack, Text } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
-import { deploymentStatusText, deploymentView, isCancelled, PENDING_CHANGE_RESTORED } from '../api/deployments';
+import { deploymentStatusText, deploymentView, isCancelled, PENDING_CHANGE_RESTORED, SERVER_OPERATION_PENDING } from '../api/deployments';
 import type { Deployment, ErrorRef } from '../api/types';
 import { formatDateTime } from '../datetime';
 import { LabelledCode } from './LabelledCode';
@@ -113,7 +113,7 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
       case 'failed':
         // A cancelled deployment sent nothing: a decision, not a failure of the server.
         color = isCancelled(d) ? 'gray' : 'red';
-        headline = t('deploy.noChange');
+        headline = t(d.error?.reason === SERVER_OPERATION_PENDING ? 'deploy.serverOperationPending' : 'deploy.noChange');
         break;
       case 'rolled_back':
         color = 'orange';

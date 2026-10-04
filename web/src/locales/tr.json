@@ -1024,7 +1024,7 @@
       "stream_tls": "Bir stream bloğundaki TLS listeleniyor, ancak bu sürümde desteklenmiyor.",
       "mail_tls": "Bir mail bloğundaki TLS listeleniyor, ancak bu sürümde desteklenmiyor.",
       "unknown": "Alice bu web sitesi hakkında bu sürümün açıklayamadığı bir not bildirdi.",
-      "chain_unresolved": "Alice bu dosyanın zincirini kendi sınırları içinde çıkaramadı; bu yüzden yalnızca web sitesinin sertifikasını tutuyor ve zinciri eksik sayılıyor."
+      "chain_unresolved": "Alice bu dosyanın zincirini kendi sınırları içinde belirleyemedi; bu yüzden yalnızca web sitesinin sertifikasını tutuyor ve zinciri eksik sayılıyor."
     },
     "unsupported": {
       "variable": "Yol bir değişken kullanıyor, bu yüzden Alice hangi dosyanın kullanıldığını bilemez.",
@@ -1117,9 +1117,10 @@
     "finishing": "Arka plandaki iş tamamlandı. Alice sonucu kaydediyor.",
     "partialOpen": "Henüz tamamlanmayan web siteleri: {{open}}. Bunları dağıtım geçmişinden izleyin.",
     "listCut": "Sertifika listesi {{count}} kayıttan sonra kesildi, bu yüzden bazı sertifikalar burada sunulmuyor.",
-    "pendingChangeRestored": "Yeni sertifika yazılmadı. Alice tamamlanmamış önceki bir değişiklikten önceki dosyaları geri koydu; bu yüzden web sitesi artık o değişiklikten önceki sertifikayı sunuyor. Bu, Dağıt'ı seçtiğinizde sunulan sertifika olmayabilir.",
+    "pendingChangeRestored": "Yeni sertifika yazılmadı. Alice tamamlanmamış eski bir değişiklikten önceki dosyaları geri koydu; bu yüzden web sitesi artık o değişiklikten önceki sertifikayı sunuyor. Bu, Dağıt'ı seçtiğinizde sunulan sertifika olmayabilir.",
     "partialUnchanged_one": "Bu sertifikayı zaten kullanan web siteleri: {{count}}",
-    "partialUnchanged_other": "Bu sertifikayı zaten kullanan web siteleri: {{count}}"
+    "partialUnchanged_other": "Bu sertifikayı zaten kullanan web siteleri: {{count}}",
+    "serverOperationPending": "Yeni sertifika yazılmadı. Sunucudaki tamamlanmamış önceki bir değişiklik bu dosyaları engelliyor; ayrıntılar aşağıda."
   },
   "deployments": {
     "title": "Dağıtım geçmişi",

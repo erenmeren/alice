@@ -170,9 +170,7 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   it('lists every deployment step the engine, the helper and the pre-check report, and every one the API names', () => {
     expect(stepNames).toEqual(expect.arrayContaining(['verify_current', 'recover_pending']));
     eq([...new Set(stepNames)], DEPLOYMENT_STEP_NAMES);
-    // The specification's list may lag behind the engine (recover_pending is not in it yet): every
-    // name it gives must be known, and the Go sources above are the complete list.
-    for (const name of knownValues('DeploymentStep', 'name')) expect(DEPLOYMENT_STEP_NAMES, name).toContain(name);
+    eq(knownValues('DeploymentStep', 'name'), DEPLOYMENT_STEP_NAMES);
   });
 
   it('lists the deployment states, step statuses and verification modes of the specification', () => {

@@ -1119,7 +1119,8 @@
     "listCut": "The list of certificates was cut after {{count}} entries, so some certificates are not offered here.",
     "pendingChangeRestored": "The new certificate was not written. Alice put back the files from before an unfinished earlier change, so the website now serves the certificate it had before that change. That may not be the certificate it served when you chose Deploy.",
     "partialUnchanged_one": "Websites that already had this certificate: {{count}}",
-    "partialUnchanged_other": "Websites that already had this certificate: {{count}}"
+    "partialUnchanged_other": "Websites that already had this certificate: {{count}}",
+    "serverOperationPending": "The new certificate was not written. An unfinished earlier change on the server blocks these files; see below."
   },
   "deployments": {
     "title": "Deployment history",

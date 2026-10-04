@@ -184,6 +184,9 @@ describe('DeploymentDetailPage', () => {
     );
     await renderRoute(`/deployments/${ID}`);
     const list = await screen.findByRole('list', { name: 'Steps' });
+    // Not "nothing was changed": an unfinished restore attempt may have put back one of the files.
+    expect(screen.getByText('The new certificate was not written. An unfinished earlier change on the server blocks these files; see below.')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing was changed on the server.')).not.toBeInTheDocument();
     const row = within(list).getByText('Undo an unfinished earlier change').closest('li') as HTMLElement;
     expect(row).toHaveAttribute('data-status', 'failed');
     expect(row).toHaveTextContent('The unfinished earlier change still blocks these files.');
