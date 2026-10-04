@@ -75,4 +75,19 @@ describe('ErrorAlert', () => {
     await renderApp(<ErrorAlert error={err} />);
     expect(screen.getByRole('alert')).not.toHaveTextContent('validation.brand_new');
   });
+
+  it('names the key types of a key type mismatch instead of showing raw codes', async () => {
+    const err = apiError('certificate.key_type_mismatch', { params: { expected: 'rsa', actual: 'ecdsa', location_id: 'l1' } });
+    await renderApp(<ErrorAlert error={err} />);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent("This certificate's key type does not fit this place.");
+    expect(alert).toHaveTextContent('Key type the website uses here: RSA. Key type of this certificate: ECDSA.');
+    expect(alert).not.toHaveTextContent('rsa');
+  });
+
+  it('shows an unknown key type as Other', async () => {
+    const err = apiError('certificate.key_type_mismatch', { params: { expected: 'ecdsa', actual: 'dsa' } });
+    await renderApp(<ErrorAlert error={err} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Key type of this certificate: Other.');
+  });
 });

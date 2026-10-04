@@ -1,5 +1,10 @@
 import { http, HttpResponse } from 'msw';
 import type {
+  Certificate,
+  CertificateDetail,
+  CertificateLocation,
+  CSR,
+  Deployment,
   HostKey,
   Job,
   KeyLocation,
@@ -259,6 +264,134 @@ export function sshKeyFixture(o: Partial<SSHKey> = {}): SSHKey {
     target_count: 2,
     missing: false,
     first_seen_at: '2026-10-01T08:01:00Z',
+    ...o,
+  };
+}
+
+// Phase 4 fixtures: a certificate Alice holds with its key, a pending signing request, one Nginx
+// location and one finished deployment.
+export function certificateFixture(o: Partial<Certificate> = {}): Certificate {
+  return {
+    id: '0192c000-0000-7000-8000-0000000000c1',
+    fingerprint: 'ab12'.repeat(16),
+    subject_cn: 'www.example.test',
+    subject: 'CN=www.example.test',
+    issuer: 'CN=Example Test CA',
+    serial: '0a1b2c',
+    sans: ['www.example.test', 'example.test'],
+    not_before: '2026-09-01T00:00:00Z',
+    not_after: '2027-09-01T00:00:00Z',
+    key_algorithm: 'ecdsa',
+    key_bits: 256,
+    source: 'uploaded',
+    label: '',
+    has_private_key: true,
+    chain_complete: true,
+    self_signed: false,
+    location_count: 1,
+    first_seen_at: '2026-10-01T08:00:00Z',
+    last_seen_at: '2026-10-01T08:00:00Z',
+    ...o,
+  };
+}
+
+export function locationFixture(o: Partial<CertificateLocation> = {}): CertificateLocation {
+  return {
+    id: '0192c000-0000-7000-8000-0000000000e1',
+    target_id: targetFixture.id,
+    target_name: targetFixture.name,
+    cert_path: '/etc/nginx/ssl/www.crt',
+    key_path: '/etc/nginx/ssl/www.key',
+    resolved_cert_path: '',
+    key_type: 'ecdsa',
+    certificate: null,
+    servers: [{ names: ['www.example.test'], listens: [{ addr: '*', port: 443, default_server: false }], file: '/etc/nginx/conf.d/www.conf', line: 4 }],
+    supported: true,
+    unsupported_reason: '',
+    problem: '',
+    key_problem: '',
+    inherited: false,
+    custom_location: false,
+    symlinked: false,
+    key_exists: true,
+    key_mode: '0600',
+    key_owner: 'root',
+    key_group: 'root',
+    warnings: [],
+    deployed_fingerprint: '',
+    changed_outside_at: null,
+    verify_port: null,
+    verify_sni: '',
+    skip_verify: false,
+    first_seen_at: '2026-10-01T08:01:00Z',
+    last_seen_at: '2026-10-01T08:01:00Z',
+    missing_since: null,
+    version: 1,
+    active_deployment_id: null,
+    ...o,
+  };
+}
+
+export function certificateDetailFixture(o: Partial<CertificateDetail> = {}): CertificateDetail {
+  return {
+    ...certificateFixture(),
+    pem_chain: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n',
+    locations: [locationFixture()],
+    locations_truncated: false,
+    ...o,
+  };
+}
+
+export function csrFixture(o: Partial<CSR> = {}): CSR {
+  return {
+    id: '0192c000-0000-7000-8000-0000000000r1',
+    common_name: 'www.example.test',
+    sans: ['www.example.test', 'example.test'],
+    key_algorithm: 'ecdsa',
+    key_bits: 256,
+    csr_pem: '-----BEGIN CERTIFICATE REQUEST-----\nMIIB\n-----END CERTIFICATE REQUEST-----\n',
+    status: 'pending',
+    certificate_id: null,
+    created_at: '2026-10-02T09:00:00Z',
+    finished_at: null,
+    ...o,
+  };
+}
+
+export function deploymentFixture(o: Partial<Deployment> = {}): Deployment {
+  return {
+    id: '0192c000-0000-7000-8000-0000000000d1',
+    certificate_id: certificateFixture().id,
+    certificate_name: 'www.example.test',
+    location_id: locationFixture().id,
+    target_id: targetFixture.id,
+    target_name: targetFixture.name,
+    cert_path: '/etc/nginx/ssl/www.crt',
+    key_path: '/etc/nginx/ssl/www.key',
+    job_id: null,
+    job_status: 'succeeded',
+    trigger: 'manual',
+    state: 'done',
+    status: 'succeeded',
+    result: 'committed',
+    phase: 'committed',
+    new_fingerprint: 'ab12'.repeat(16),
+    previous_fingerprint: 'cd34'.repeat(16),
+    confirm_incomplete_chain: false,
+    verified: 'remote',
+    verify_failed: null,
+    error: null,
+    failed_step: '',
+    cause_step: '',
+    helper_error: '',
+    backup_dir: '',
+    requested_by: userFor('operator').id,
+    requested_by_name: 'Olcay Öztürk',
+    recovery_attempts: 0,
+    recover_after: null,
+    created_at: '2026-10-02T10:00:00Z',
+    started_at: '2026-10-02T10:00:01Z',
+    finished_at: '2026-10-02T10:00:09Z',
     ...o,
   };
 }
