@@ -515,9 +515,16 @@ func (s *Service) CreateVault(ctx context.Context, a Actor, in NewVault) (Target
 	}
 	defer cleanup()
 	id := uuid.Must(uuid.NewV7()) // the pre-flight opens the vault under the id it will get
+	// Whatever fails from here on leaves no vault under this id, so the provider must not keep a
+	// limiter claim for it; only a committed insert keeps it.
+	committed := false
+	defer func() {
+		if !committed {
+			s.forgetTarget(TypeAzureKeyVault, id)
+		}
+	}()
 	rep, err := s.preflightVault(ctx, id, n.Name, vault.URL, ident)
 	if err != nil {
-		s.forgetTarget(TypeAzureKeyVault, id)
 		s.auditVaultRefused(ctx, a, vault.URL, n.Auth, err)
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
 	}
@@ -573,6 +580,7 @@ func (s *Service) CreateVault(ctx context.Context, a Actor, in NewVault) (Target
 		s.auditLicenseDenial(ctx, a, n.Name, err)
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
 	}
+	committed = true
 	s.refreshLicense(ctx)
 	return created, rep, jobID, nil
 }
@@ -626,7 +634,8 @@ func (s *Service) ReplaceVaultCredentials(ctx context.Context, a Actor, id uuid.
 	defer cleanup()
 	rep, err := s.preflightVault(ctx, cur.ID, cur.Name, cur.Vault.URL, ident)
 	if err != nil {
-		s.forgetTarget(TypeAzureKeyVault, id)
+		// The stored credential did not change and the vault still exists: nothing is forgotten (that
+		// would drop the claim on the vault's limiter while a poll may be running).
 		s.auditVaultCredentialsRefused(ctx, a, cur, c.Auth, err)
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
 	}
@@ -681,8 +690,8 @@ func (s *Service) ReplaceVaultCredentials(ctx context.Context, a Actor, id uuid.
 	if err != nil {
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
 	}
-	// Drop what the provider keeps for the vault, so nothing cached for the old credential is reused.
-	s.forgetTarget(TypeAzureKeyVault, id)
+	// Nothing is forgotten here either: a session reads the credential when it is opened, and the
+	// provider keeps only a limiter claim per vault, which the vault still needs.
 	return updated, rep, jobID, nil
 }
 

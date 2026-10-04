@@ -1358,13 +1358,33 @@ func TestPreflightNamesTheVaultAndForgetsIt(t *testing.T) {
 	assert.NotEqual(t, uuid.Nil, refs[0], "a new vault is opened under the id it would get")
 	assert.Equal(t, refs, spy.forgottenIDs(), "a refused add leaves nothing per-target in the provider")
 
+	// N1: a failure AFTER a successful pre-flight (here the queue refuses the first poll, so the
+	// transaction rolls back) leaves no target, so the opened id is forgotten too.
 	h.azureOK()
+	h.jobs.fail = errors.New("queue is down")
+	_, _, _, err = h.svc.CreateVault(h.ctx, admin, secretVault("w", "https://late.vault.azure.net"))
+	require.Error(t, err)
+	refs = spy.refIDs()
+	require.Len(t, refs, 2)
+	assert.Contains(t, spy.forgottenIDs(), refs[1], "the id of an add that failed after the pre-flight is forgotten")
+	assert.Zero(t, h.count("SELECT count(*) FROM targets WHERE type = 'azure_key_vault'"))
+
+	// A committed add keeps its id: the vault exists and uses the limiter claim.
 	tgt := h.newVault(admin, "Prod", "https://prod.vault.azure.net")
+	assert.NotContains(t, spy.forgottenIDs(), tgt.ID)
+
+	// N2: neither a refused nor a successful replacement drops the live vault's limiter claim (the
+	// credential is read at every Open, nothing is cached per credential).
+	h.failWith("azure.auth_failed")
+	_, _, _, err = h.svc.ReplaceVaultCredentials(h.ctx, admin, tgt.ID, tgt.Version, inventory.VaultCredentialInput{Auth: providers.AzureAuthManagedIdentity})
+	require.Error(t, err)
+	assert.NotContains(t, spy.forgottenIDs(), tgt.ID, "a refused replacement changes nothing and forgets nothing")
+	h.azureOK()
 	_, _, _, err = h.svc.ReplaceVaultCredentials(h.ctx, admin, tgt.ID, tgt.Version, inventory.VaultCredentialInput{Auth: providers.AzureAuthManagedIdentity})
 	require.NoError(t, err)
 	refs = spy.refIDs()
 	assert.Equal(t, tgt.ID, refs[len(refs)-1], "a replacement is opened under the vault's own id")
-	assert.Contains(t, spy.forgottenIDs(), tgt.ID)
+	assert.NotContains(t, spy.forgottenIDs(), tgt.ID, "the new credential is read at the next Open: no forget needed")
 }
 
 // m6: a disabled vault is not polled by a replacement.
