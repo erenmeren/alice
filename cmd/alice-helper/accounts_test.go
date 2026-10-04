@@ -684,9 +684,16 @@ func TestPasswdLineSpellings(t *testing.T) {
 		"passwd:files:":                  true,
 		"passwd: files [NOTFOUND=return": true, // an action that never ends
 		"passwd: files [ NOTFOUND=return ] systemd": false,
-		"passwd:files":       false,
-		"passwd_compat: nis": false, // another database
-		"passwdx: sss":       false,
+		"passwd:files":                 false,
+		"passwd_compat: nis":           false, // another database
+		"passwdx: sss":                 false,
+		"\rpasswd: sss":                true, // N4b: glibc's blanks are space, tab, CR, VT and FF
+		"\vpasswd: sss":                true,
+		"passwd\r: sss":                true,
+		"passwd\fsss":                  true,
+		"passwd: files\vsss":           true,
+		"passwd: files\r":              false, // a CRLF file
+		"\f passwd:\tfiles\rsystemd\r": false,
 	} {
 		f.write("/etc/nsswitch.conf", line+"\n", 0o644)
 		assert.Equal(t, want, f.s.directoryUsers(), "%q", line)
@@ -719,11 +726,13 @@ func TestSymlinkedNSSwitchIsFollowedOrRefused(t *testing.T) {
 	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))
 	require.NoError(t, os.Symlink("/tmp/nss", f.host("/etc/nsswitch.conf")))
 	assert.True(t, f.s.directoryUsers())
-	// A dangling link reads as a missing file: glibc's default, files.
+	// A dangling link is a missing file: never "local only" (fix round 3).
 	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))
 	require.NoError(t, os.Symlink("/etc/nowhere", f.host("/etc/nsswitch.conf")))
-	assert.False(t, f.s.directoryUsers())
+	assert.True(t, f.s.directoryUsers())
 
+	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))
+	require.NoError(t, os.Symlink("/etc/authselect/nsswitch.conf", f.host("/etc/nsswitch.conf")))
 	_, m := f.run("authkeys-list")
 	assert.Equal(t, []any{}, m["warnings"])
 	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))
@@ -738,7 +747,7 @@ func TestSymlinkedNSSwitchIsFollowedOrRefused(t *testing.T) {
 func TestUnreadableNSSwitchIsNotLocal(t *testing.T) {
 	f := newFixture(t)
 	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))
-	assert.False(t, f.s.directoryUsers(), "missing: files")
+	assert.True(t, f.s.directoryUsers(), "missing: what glibc defaults to differs between versions")
 	f.write("/etc/nsswitch.conf", strings.Repeat("# padding\n", 7000)+"passwd: sss\n", 0o644)
 	assert.True(t, f.s.directoryUsers(), "oversized")
 	require.NoError(t, os.Remove(f.host("/etc/nsswitch.conf")))

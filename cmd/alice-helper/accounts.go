@@ -221,17 +221,16 @@ var userdbDirs = []struct{ dir, suffix string }{
 // reads, the answer is true:
 //   - nsswitch.conf is read through the root-controlled walk (a root's link, such as authselect's
 //     /etc/nsswitch.conf, is followed; a link or directory others can change is refused) and must
-//     be a regular file of root's that others cannot write, within nsswitchLimit; only a missing
-//     file is glibc's default ("files"), any other failure is true;
+//     be a regular file of root's that others cannot write, within nsswitchLimit; any failure,
+//     also a missing or dangling file (what glibc then defaults to differs between versions), is
+//     true;
 //   - any passwd source other than localSources is true, also a token glibc would not take as a
 //     source (a bare ":") and an action item in brackets that never ends; the database name is the
-//     text up to the first blank or colon, as glibc reads it, and every passwd line counts;
+//     text up to the first blank or colon, as glibc reads it (blanks are space, tab, CR, VT and FF),
+//     and every passwd line counts;
 //   - with systemd as a source, any userdb account record (userdbRecords) is true.
 func (s *sys) directoryUsers() bool {
 	data, err := s.readNSSwitch()
-	if errors.Is(err, fs.ErrNotExist) {
-		return false
-	}
 	if err != nil {
 		return true
 	}
@@ -267,15 +266,19 @@ func (s *sys) readNSSwitch() ([]byte, error) {
 	return data, nil
 }
 
+// nssBlanks are the characters glibc's nsswitch parser skips as blanks (isspace without newline).
+const nssBlanks = " \t\r\v\f"
+
 // passwdSources reads the sources of every passwd line: nonLocal when one is not in localSources,
-// systemd when systemd is one.
+// systemd when systemd is one. Blanks are nssBlanks wherever glibc skips them (N4b); a CR after an
+// allowed source (a CRLF file) is a blank too.
 func passwdSources(data string) (nonLocal, systemd bool) {
 	for _, line := range strings.Split(data, "\n") {
-		line = strings.TrimLeft(line, " \t")
+		line = strings.TrimLeft(line, nssBlanks)
 		if line == "" || line[0] == '#' {
 			continue
 		}
-		end := strings.IndexAny(line, " \t:")
+		end := strings.IndexAny(line, nssBlanks+":")
 		if end < 0 || line[:end] != "passwd" {
 			continue
 		}
@@ -284,7 +287,7 @@ func passwdSources(data string) (nonLocal, systemd bool) {
 			rest = rest[1:]
 		}
 		inAction := false
-		for _, src := range strings.Fields(rest) {
+		for _, src := range strings.FieldsFunc(rest, func(r rune) bool { return strings.ContainsRune(nssBlanks, r) }) {
 			switch {
 			case inAction || strings.HasPrefix(src, "["):
 				inAction = !strings.HasSuffix(src, "]")
