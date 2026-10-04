@@ -65,3 +65,11 @@ func SetValidateUpload(f func(certs.Upload, time.Time, *x509.CertPool) (certs.Va
 	validateUpload = f
 	return func() { validateUpload = old }
 }
+
+// SetPrepareHook installs a function that runs while a scan's certificate files are parsed
+// (prepareScan); restore removes it.
+func SetPrepareHook(f func()) (restore func()) {
+	old := prepareHook
+	prepareHook = f
+	return func() { prepareHook = old }
+}

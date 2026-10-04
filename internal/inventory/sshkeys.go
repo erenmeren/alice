@@ -120,6 +120,12 @@ func clean(s string) string {
 func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.DiscoveryResult) (ReconcileSummary, error) {
 	var sum ReconcileSummary
 	now := s.clock.Now().UTC()
+	// The certificate files are parsed before the transaction (prepareScan), never under the
+	// target's row lock.
+	var scan preparedScan
+	if res.Nginx != nil && configUsable(res.Nginx) {
+		scan = s.prepareScan(res.Certificates, now)
+	}
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		t, err := getTarget(ctx, tx, id, true)
 		if err != nil {
@@ -202,7 +208,7 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL A
 		if res.Nginx != nil {
 			f.Nginx = mergeNginxFacts(f.Nginx, *res.Nginx)
 			if configUsable(res.Nginx) {
-				cs, events, err := s.reconcileLocations(ctx, tx, t, res.Certificates, listsEveryLocation(res), now)
+				cs, events, err := s.reconcileLocations(ctx, tx, t, scan, listsEveryLocation(res), now)
 				if err != nil {
 					return err
 				}

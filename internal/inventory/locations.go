@@ -131,7 +131,9 @@ func prepareLocation(d providers.DiscoveredCertificate, now time.Time) (prepared
 	case l.Problem == providers.CertProblemMissing || l.Problem == providers.CertProblemNotACertificate:
 		p.gone = true
 	case l.Problem == "" && len(d.PEMChain) > 0:
-		parsed, err := certs.ParseChainPEM(d.PEMChain)
+		// The leaf the server serves and the ordered path to its root only (B1-I1): what Alice
+		// stores for a certificate it finds, and so what it would deploy elsewhere.
+		parsed, err := certs.ParseServedChain(d.PEMChain, now)
 		switch {
 		case errors.Is(err, certs.ErrTooLarge):
 			l.Problem = providers.CertProblemTooLarge
@@ -359,10 +361,62 @@ func (e *existingLocation) aliceFingerprints() []string {
 	return out
 }
 
+// preparedScan is the certificate half of a discovery made storable before its transaction:
+// every reported location prepared (prepareLocation: the certificate files parsed), the
+// certificates read with whether their chains are complete, and how many locations could not be
+// stored. Parsing and chain checks are CPU work on data a server controls; done here, they never
+// run while the transaction holds the target's row lock (independent audit of 2026-10-04, AUD-04).
+type preparedScan struct {
+	items   []preparedLocation
+	read    map[string]discoveredCertificate
+	skipped int
+}
+
+// prepareHook runs while a scan is prepared (tests: it proves that no transaction of the scan is
+// open then).
+var prepareHook func()
+
+// prepareScan prepares the reported locations of one discovery (see preparedScan). Reported
+// duplicates keep the first; the items are in path order.
+func (s *Service) prepareScan(found []providers.DiscoveredCertificate, now time.Time) preparedScan {
+	if prepareHook != nil {
+		prepareHook()
+	}
+	var out preparedScan
+	paths := map[string]bool{}
+	for _, d := range found {
+		p, ok := prepareLocation(d, now)
+		if !ok {
+			out.skipped++
+			continue
+		}
+		if paths[p.loc.CertPath] {
+			continue
+		}
+		paths[p.loc.CertPath] = true
+		out.items = append(out.items, p)
+	}
+	slices.SortFunc(out.items, func(a, b preparedLocation) int { return strings.Compare(a.loc.CertPath, b.loc.CertPath) })
+	out.read = map[string]discoveredCertificate{}
+	for _, p := range out.items {
+		if p.cert == nil {
+			continue
+		}
+		// Several files may hold the same leaf with different chains: a complete one is kept.
+		if prev, ok := out.read[p.cert.Fingerprint]; !ok || !prev.complete {
+			if d := (discoveredCertificate{p: *p.cert, complete: certs.ChainComplete(*p.cert, s.roots, now)}); !ok || d.complete {
+				out.read[p.cert.Fingerprint] = d
+			}
+		}
+	}
+	return out
+}
+
 // reconcileLocations stores the certificate locations of one discovery of the locked target t
-// (called only for a usable configuration, see configUsable). Locations are identified by
-// (target, kind, certificate path) through the path hash of migration 00006; reported duplicates
-// keep the first. Certificates are upserted first, in fingerprint order. Then, by path:
+// (called only for a usable configuration, see configUsable), prepared before the transaction
+// (prepareScan). Locations are identified by (target, kind, certificate path) through the path
+// hash of migration 00006; reported duplicates keep the first. Certificates are upserted first, in
+// fingerprint order (upsertCertificates). Then, by path:
 //   - a new location is inserted, a known one is updated with everything reported (missing_since
 //     cleared; see updateLocation), whether or not the list is whole;
 //   - when markMissing (listsEveryLocation), the known locations not reported are marked missing
@@ -372,32 +426,11 @@ func (e *existingLocation) aliceFingerprints() []string {
 // the new one is not Alice's (deployed_fingerprint, or what a deployment of the location can have
 // left, see aliceFingerprints), changed_outside_at is set and an audit event is returned for the
 // caller to append last.
-func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, found []providers.DiscoveredCertificate, markMissing bool,
+func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, scan preparedScan, markMissing bool,
 	now time.Time) (certSummary, []audit.Event, error) {
-	var sum certSummary
-	var items []preparedLocation
-	paths := map[string]bool{}
-	for _, d := range found {
-		p, ok := prepareLocation(d, now)
-		if !ok {
-			sum.Skipped++
-			continue
-		}
-		if paths[p.loc.CertPath] {
-			continue
-		}
-		paths[p.loc.CertPath] = true
-		items = append(items, p)
-	}
-	slices.SortFunc(items, func(a, b preparedLocation) int { return strings.Compare(a.loc.CertPath, b.loc.CertPath) })
-	read := map[string]discoveredCertificate{}
-	for _, p := range items {
-		if p.cert != nil {
-			read[p.cert.Fingerprint] = discoveredCertificate{p: *p.cert, complete: certs.ChainComplete(*p.cert, s.roots, now)}
-		}
-	}
-	sum.Certificates = len(read)
-	certIDs, err := upsertCertificates(ctx, tx, read, now)
+	sum := certSummary{Skipped: scan.skipped, Certificates: len(scan.read)}
+	items := scan.items
+	certIDs, err := upsertCertificates(ctx, tx, scan.read, now)
 	if err != nil {
 		return certSummary{}, nil, err
 	}
