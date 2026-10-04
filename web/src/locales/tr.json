@@ -568,8 +568,8 @@
       "publicKey": "Alice'in açık anahtarı",
       "fingerprint": "Alice'in anahtarının parmak izi",
       "profile": "Sunucu türü",
-      "profileLinux": "Linux sunucu",
-      "profileNginx": "Nginx sunucu",
+      "profileLinux": "Linux sunucusu",
+      "profileNginx": "Nginx sunucusu",
       "script": "root olarak çalıştırılacak komutlar",
       "copy": "Komutları kopyala",
       "copied": "Kopyalandı"
@@ -582,9 +582,9 @@
       "username": "Sunucudaki kullanıcı adı",
       "submit": "Bağlan",
       "type": "Sunucu türü",
-      "typeLinux": "Linux sunucu",
-      "typeNginx": "Nginx sunucu",
-      "typeHelp": "Sertifikalarını da yönetmek için Nginx sunucu seçeneğini seçin. Sunucuyu önce Nginx komutlarıyla hazırlayın.",
+      "typeLinux": "Linux sunucusu",
+      "typeNginx": "Nginx sunucusu",
+      "typeHelp": "Sertifikalarını da yönetmek için Nginx sunucusu seçeneğini seçin. Sunucuyu önce Nginx komutlarıyla hazırlayın.",
       "script": "Bu sunucu türünü hazırlayacak komutlar"
     },
     "connecting": "Sunucuya bağlanılıyor…",
@@ -609,13 +609,13 @@
       "lastDiscovery": "Son tarama: {{time}}",
       "neverScanned": "Henüz taranmadı.",
       "nginx": "Nginx sürümü: {{version}}",
-      "nginxStale": "Aşağıdaki Nginx bilgileri {{time}} tarihli son başarılı taramadan alınmıştır.",
+      "nginxStale": "Aşağıdaki Nginx bilgileri güncel olmayabilir. Alice bu sunucudan web sitelerini en son {{time}} tarihinde okudu.",
       "nginxNotFound": "Bu sunucuda Nginx bulunamadı."
     },
     "openServer": "Sunucuyu aç",
     "typeLabel": {
-      "linux": "Linux sunucu",
-      "nginx": "Nginx sunucu"
+      "linux": "Linux sunucusu",
+      "nginx": "Nginx sunucusu"
     }
   },
   "hostKeys": {
@@ -713,6 +713,24 @@
       "certificate": {
         "deploy": "Sertifika dağıtımı",
         "deploy_recover": "Yarım kalan dağıtımı tamamlama"
+      },
+      "license": {
+        "evaluate": "Lisans denetimi"
+      },
+      "notify": {
+        "send": "Bildirim gönderme"
+      },
+      "audit": {
+        "verify": "Denetim kaydı doğrulaması"
+      },
+      "maintenance": {
+        "cleanup": "Bakım temizliği"
+      },
+      "discovery": {
+        "schedule": "Zamanlanmış sunucu taraması"
+      },
+      "deployment": {
+        "recovery_sweep": "Yarım kalan dağıtımları denetleme"
       }
     },
     "blockedNotice": "Bu iş duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",
@@ -744,7 +762,7 @@
       "unchanged": "Değişiklik gerekmedi",
       "failed": "Başarısız, değişiklik yok",
       "rolled_back": "Başarısız, geri yüklendi",
-      "rollback_failed": "Geri yükleme başarısız",
+      "rollback_failed": "Sonuç doğrulanamadı",
       "needs_attention": "İlgilenilmesi gerekiyor"
     },
     "certificateSource": {
@@ -769,7 +787,7 @@
       "queued": "Başlamayı bekliyor",
       "precheck": "Mevcut sertifika denetleniyor",
       "deploying": "Dağıtılıyor",
-      "recovering": "Bağlantı kesintisinden sonra tamamlanıyor",
+      "recovering": "Sonuç doğrulanıyor",
       "done": "Tamamlandı"
     }
   },
@@ -840,7 +858,10 @@
       },
       "moreLocations": "Bazı web siteleri gösterilmiyor.",
       "noNames": "(yok)",
-      "facts": "Sertifika ayrıntıları"
+      "facts": "Sertifika ayrıntıları",
+      "deployHint": "Bu sertifikayı dağıtmak için web sitesinin sunucusunu açın, orada Sertifika dağıt düğmesini seçin ve bu sertifikayı seçin.",
+      "openServers": "Sunucuları aç",
+      "deployHelp": "Dağıt düğmesi bu sertifikayı aşağıda listelenen web sitelerine gönderir."
     },
     "upload": {
       "title": "Sertifika yükleyin",
@@ -854,7 +875,6 @@
       "pfxPassword": "PFX parolası",
       "label": "Ad (isteğe bağlı)",
       "submit": "Yükle",
-      "cancel": "Vazgeç",
       "uploaded": "Sertifika yüklendi.",
       "chainWarning": "Zincir eksik. Bu sertifika dağıtılmadan önce bir yöneticinin onaylaması gerekir.",
       "notYetValid": "Bu sertifika henüz geçerli değil. Başlangıç tarihine kadar web siteleri hata gösterir.",
@@ -902,7 +922,8 @@
       "viewPem": "İsteği göster",
       "download": "İsteği indir",
       "createdColumn": "Oluşturulma zamanı"
-    }
+    },
+    "cancel": "Vazgeç"
   },
   "locations": {
     "title": "Bu sunucudaki web siteleri",
@@ -938,11 +959,11 @@
     "showMissing": "Artık bulunmayan web sitelerini göster",
     "truncated": "Bu liste eksik: artık bulunmayan web sitelerinin yalnızca ilk 1000'i gösteriliyor.",
     "configInvalid": "Bu sunucudaki Nginx yapılandırmasında bir hata var. Hata giderilene kadar Alice dağıtım yapmaz.",
-    "configFile": "Sorunlu dosya",
+    "configFile": "Sorunlu dosya: {{file}}",
     "stale": {
       "title": "Bu web siteleri güncel olmayabilir",
-      "help": "Alice, {{time}} tarihli son başarılı taramada bulduklarını gösteriyor. Sorun giderildikten sonra Keşfet düğmesini yeniden seçin.",
-      "neverScanned": "Alice'in bu sunucuda henüz başarılı bir taraması yok."
+      "help": "Alice web sitelerini en son {{time}} tarihinde okuduğu haliyle gösteriyor. Sorun giderildikten sonra Keşfet düğmesini yeniden seçin.",
+      "neverScanned": "Alice bu sunucudan henüz hiçbir web sitesi okumadı."
     },
     "deployUnavailable": "Dağıtım şu anda yapılamıyor.",
     "unavailable": {
@@ -1073,17 +1094,21 @@
     "unchanged": "Bu sertifika zaten yerindeydi. Hiçbir şey değiştirilmedi.",
     "rolledBack": "Sunucunuz önceki sertifikasına geri döndürüldü.",
     "noChange": "Sunucuda hiçbir şey değiştirilmedi.",
-    "rollbackFailed": "Otomatik geri yükleme başarısız oldu. Elle müdahale gerekiyor.",
-    "recovering": "Sunucuyla bağlantı kesildi. Alice sunucuyu denetleyip değişikliği tamamlayacak veya geri alacak.",
+    "rollbackFailed": "Alice web sitesinin hangi sertifikayı sunduğunu doğrulayamıyor. Elle müdahale gerekiyor.",
+    "recovering": "Alice bu dağıtımın nasıl sonuçlandığını henüz doğrulayamadı. Sunucuyu denetliyor ve değişikliği tamamlayacak veya geri alacak.",
     "held": "Lisansın süresi dolduğu için bu dağıtım bekletiliyor. Bir yönetici lisansı yenilediğinde veya dağıtımı çalıştırdığında devam eder.",
-    "jobStopped": "Arka plan görevi dağıtımdan önce sona erdi. Durumunu görmek için dağıtım geçmişini açın.",
+    "jobStopped": "Arka plandaki iş dağıtımdan önce sona erdi. Durumunu görmek için dağıtım geçmişini açın.",
     "unknownStatus": "Alice bu dağıtımın durumunu belirleyemiyor. Görmek için dağıtım geçmişini açın.",
     "stillWorking": "Alice bu iş üzerinde çalışmaya devam ediyor. Sonucu görmek için bir dakika sonra dağıtım geçmişini açın.",
-    "connectionLost": "Alice şu anda kendisine ulaşamıyor. Dağıtım arka planda sürüyor. Sonucu görmek için bir dakika sonra dağıtım geçmişini açın.",
+    "connectionLost": "Tarayıcınız şu anda Alice'e ulaşamıyor. Dağıtım arka planda sürüyor. Sonucu görmek için bir dakika sonra dağıtım geçmişini açın.",
     "openHistory": "Dağıtım geçmişini aç",
     "openDeployment": "Bu dağıtımı aç",
     "partial": "Güncellenen web siteleri: {{ok}} / {{total}}",
-    "succeededUnverified": "Yeni sertifika dağıtıldı ve Nginx yeniden yüklendi."
+    "succeededUnverified": "Yeni sertifika dağıtıldı ve Nginx yeniden yüklendi.",
+    "rollbackFailedRestored": "Önceki dosyalar geri yüklendi, ancak Alice web sitesinin önceki sertifikayı sunduğunu doğrulayamadı. Web sitesini şimdi denetleyin.",
+    "finishing": "Arka plandaki iş tamamlandı. Alice sonucu kaydediyor.",
+    "partialOpen": "Henüz tamamlanmayan web siteleri: {{open}}. Bunları dağıtım geçmişinden izleyin.",
+    "listCut": "Sertifika listesi {{count}} kayıttan sonra kesildi, bu yüzden bazı sertifikalar burada sunulmuyor."
   },
   "deployments": {
     "title": "Dağıtım geçmişi",
@@ -1129,11 +1154,13 @@
     "recovery": {
       "title": "Kurtarma",
       "attempts": "Kurtarma denemeleri: {{attempts}}",
-      "next": "Sonraki deneme: {{time}} sonrası",
-      "needsAttention": "Alice sunucuya ulaşamıyor ve denemeye devam ediyor. Bu sürerse sunucuyu ve ağını denetleyin.",
-      "running": "Alice değişikliği tamamlamak veya geri almak için sunucuyu denetliyor."
+      "next": "Sonraki deneme şu zamandan sonra: {{time}}",
+      "needsAttention": "Alice birkaç denemeden sonra da sonucu doğrulayamıyor ve denemeye devam ediyor. Sunucuyu ve ağını denetleyin.",
+      "running": "Alice değişikliği tamamlamak veya geri almak için sunucuyu denetliyor.",
+      "confirmed_one": "Alice sonucu {{count}} kurtarma denemesinden sonra doğruladı.",
+      "confirmed_other": "Alice sonucu {{count}} kurtarma denemesinden sonra doğruladı."
     },
-    "verifyFailedTitle": "Yeni sertifika neden geri alındı",
+    "verifyFailedTitle": "Doğrulama sonucu",
     "technical": "Teknik ayrıntılar",
     "held": "Lisans nedeniyle bekletiliyor",
     "steps": {
@@ -1148,7 +1175,7 @@
       "verify": "Doğrulama",
       "restore": "Geri yükleme",
       "rollback_config_test": "Yeniden denetim",
-      "rollback_reload": "Yeniden yükleme (geri alma)",
+      "rollback_reload": "Tekrar yükleme",
       "verify_old": "Önceki sertifikayı doğrulama",
       "unknown": "Başka bir adım"
     },
@@ -1158,11 +1185,11 @@
       "failed": "Başarısız",
       "skipped": "Atlandı",
       "waiting": "Bekliyor",
-      "notRun": "Çalışmadı",
+      "notRun": "Çalıştırılmadı",
       "unknown": "Bilinmiyor"
     },
     "stepDetail": {
-      "error": "Neden: {{reason}}",
+      "error": "Hata türü: {{reason}}",
       "port": "Bağlantı noktası: {{port}}",
       "mode": "Denetim: {{mode}}",
       "served": "Sunulan sertifika: {{fingerprint}}",

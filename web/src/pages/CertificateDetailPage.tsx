@@ -134,9 +134,22 @@ export function CertificateDetailPage() {
         </Fact>
       </Box>
       {canDeploy && (
-        <Button w="fit-content" onClick={() => setDeploying(true)}>
-          {t('certificates.detail.deploy')}
-        </Button>
+        <Stack gap={4}>
+          <Button w="fit-content" onClick={() => setDeploying(true)}>
+            {t('certificates.detail.deploy')}
+          </Button>
+          <Text size="sm">{t('certificates.detail.deployHelp')}</Text>
+        </Stack>
+      )}
+      {canOperate && c.has_private_key && !expired && first === undefined && (
+        <Alert color="blue" role="note" data-testid="deploy-hint">
+          <Stack gap={4} align="flex-start">
+            <Text size="sm">{t('certificates.detail.deployHint')}</Text>
+            <Anchor component={Link} to="/servers" size="sm">
+              {t('certificates.detail.openServers')}
+            </Anchor>
+          </Stack>
+        </Alert>
       )}
 
       <Title order={2} size="h3">

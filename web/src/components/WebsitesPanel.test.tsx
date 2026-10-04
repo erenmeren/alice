@@ -190,24 +190,44 @@ describe('WebsitesPanel on an Nginx server', () => {
 
     it('handles a 403 of the server for the list', async () => {
       onNginx('operator', []);
-      server.use(http.get('/api/v1/targets/:id/certificate-locations', () => errorResponse(403, 'ALC-AUTH-0004', 'auth.forbidden')));
+      server.use(http.get('/api/v1/targets/:id/certificate-locations', () => errorResponse(403, 'ALC-AUTH-0002', 'auth.forbidden')));
       await renderRoute(path);
-      expect(await screen.findByRole('alert')).toBeInTheDocument();
+      expect(await screen.findByRole('alert')).toHaveTextContent('You do not have permission to do this.');
     });
   });
 
   describe('stale facts and a server that cannot be deployed to', () => {
-    it('marks the websites stale with the time of the last good scan when the Nginx permissions are missing', async () => {
+    it('marks the websites stale with the time Alice last read them when the Nginx permissions are missing', async () => {
+      // last_discovery_at moves when only the SSH keys were scanned, so it must not be shown.
       const target = nginxTargetWith({ last_discovery_at: '2026-09-30T08:00:00Z' }, { warnings: [{ code: 'nginx_profile_missing', params: {} }] });
-      onNginx('admin', [locationFixture()], target);
+      onNginx('admin', [locationFixture({ last_seen_at: '2026-09-20T10:00:00Z' }), locationFixture({ id: 'older', last_seen_at: '2026-09-10T10:00:00Z' })], target);
       await renderRoute(path);
       const stale = await screen.findByTestId('stale-websites');
       expect(stale).toHaveTextContent('These websites may be out of date');
-      expect(stale).toHaveTextContent(/last successful scan on .*Sep 30, 2026/);
+      expect(stale).toHaveTextContent(/as it last read them, on .*Sep 20, 2026/);
+      expect(stale).not.toHaveTextContent('Sep 30, 2026');
       expect(stale).toHaveTextContent('Deploying is unavailable for now.');
       expect(stale).toHaveTextContent('The Nginx permissions are not installed on this server.');
-      expect(screen.getByRole('button', { name: 'Deploy certificate: www.example.test' })).toBeDisabled();
-      expect(screen.getByText(/The Nginx details below are from the last successful scan on .*Sep 30, 2026/)).toBeInTheDocument();
+      const buttons = screen.getAllByRole('button', { name: 'Deploy certificate: www.example.test' });
+      for (const b of buttons) expect(b).toBeDisabled();
+      expect(screen.getByText(/Alice last read websites from this server on .*Sep 20, 2026/)).toBeInTheDocument();
+    });
+
+    it('uses the same time for an invalid configuration', async () => {
+      const target = nginxTargetWith({ last_discovery_at: '2026-09-30T08:00:00Z' }, { nginx: nginxFacts({ config_valid: false, config_error: 'syntax' }) });
+      onNginx('operator', [locationFixture({ last_seen_at: '2026-09-22T10:00:00Z' })], target);
+      await renderRoute(path);
+      expect(await screen.findByTestId('stale-websites')).toHaveTextContent(/as it last read them, on .*Sep 22, 2026/);
+    });
+
+    it('gives no time when Alice has not read any website from the server yet', async () => {
+      const target = nginxTargetWith({ last_discovery_at: '2026-09-30T08:00:00Z' }, { warnings: [{ code: 'nginx_profile_missing', params: {} }] });
+      onNginx('operator', [], target);
+      await renderRoute(path);
+      const stale = await screen.findByTestId('stale-websites');
+      expect(stale).toHaveTextContent('Alice has not read any website from this server yet.');
+      expect(stale).not.toHaveTextContent('2026');
+      expect(screen.queryByText(/Alice last read websites from this server/)).not.toBeInTheDocument();
     });
 
     it('shows the invalid configuration with its class, reason and file, and disables Deploy', async () => {

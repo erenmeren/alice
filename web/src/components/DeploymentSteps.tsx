@@ -126,19 +126,20 @@ export function DeploymentSteps({ steps, status, detailed = false }: { steps: De
           <Group gap="xs" wrap="nowrap" align="flex-start">
             <Icon status={r.status} />
             <div style={{ minWidth: 0 }}>
-              <Text size="sm" span fw={500}>
-                {r.label}
-                {r.rawName && (
-                  <>
-                    {' '}
-                    <code translate="no">{r.rawName}</code>
-                  </>
-                )}
-              </Text>
-              {': '}
-              <Text size="sm" span>
-                {t(statusText(r.status))}
-              </Text>
+              <Group gap="xs" wrap="wrap">
+                <Text size="sm" span fw={500}>
+                  {r.label}
+                  {r.rawName && (
+                    <>
+                      {' '}
+                      <code translate="no">{r.rawName}</code>
+                    </>
+                  )}
+                </Text>
+                <Text size="sm" span c="gray.8" data-role="step-status">
+                  {t(statusText(r.status))}
+                </Text>
+              </Group>
               {detailed && r.detail && <StepDetails step={r.detail} />}
             </div>
           </Group>

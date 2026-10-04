@@ -45,8 +45,8 @@ describe('DeploymentDetailPage', () => {
         status: 'rolled_back',
         result: 'rolled_back',
         verified: '',
-        error: { code: 'ALC-DEP-0004', reason: 'deployment.verify_unreachable', params: { port: '443' } },
-        verify_failed: { code: 'ALC-DEP-0004', reason: 'deployment.verify_unreachable', params: { port: '443' } },
+        error: { code: 'ALC-DEP-0005', reason: 'deployment.verify_unreachable', params: { port: '443' } },
+        verify_failed: { code: 'ALC-DEP-0005', reason: 'deployment.verify_unreachable', params: { port: '443' } },
         failed_step: 'verify',
         steps: [...okSteps.slice(0, 6), stepFixture(7, 'verify', 'failed', { port: '443', reason: 'deployment.verify_unreachable' }), stepFixture(8, 'restore'), stepFixture(9, 'rollback_config_test'), stepFixture(10, 'rollback_reload'), stepFixture(11, 'verify_old')],
       }),
@@ -56,8 +56,8 @@ describe('DeploymentDetailPage', () => {
     expect(within(headline()).getByText('Failed, restored')).toBeInTheDocument();
     const alerts = screen.getAllByRole('alert');
     expect(alerts[0]).toHaveTextContent(/443/);
-    expect(alerts[0]).toHaveTextContent('ALC-DEP-0004');
-    expect(screen.getByText('Why the new certificate was rolled back')).toBeInTheDocument();
+    expect(alerts[0]).toHaveTextContent('ALC-DEP-0005');
+    expect(screen.getByText('Verification result')).toBeInTheDocument();
     expect(screen.getByText('Failed at: Verify')).toBeInTheDocument();
     const list = screen.getByRole('list', { name: 'Steps' });
     expect(within(list).getByText('Verify the previous certificate').closest('li')).toHaveTextContent('Done');
@@ -65,15 +65,16 @@ describe('DeploymentDetailPage', () => {
   });
 
   it.each([
-    ['deployment.rollback_failed', 'ALC-DEP-0008', /backup of the previous files is on the server/],
-    ['deployment.restored_unverified', 'ALC-DEP-0019', /could not confirm that the website serves the previous certificate/],
-    ['deployment.rollback_file_changed', 'ALC-DEP-0020', /./],
-  ])('shows the cause-specific text of %s and the backup folder', async (reason, code, cause) => {
+    ['deployment.rollback_failed', 'ALC-DEP-0008', 'restore_failed', /backup of the previous files is on the server/, 'Alice cannot confirm which certificate the website serves. Manual action is needed.'],
+    ['deployment.restored_unverified', 'ALC-DEP-0019', 'restored', /could not confirm that the website serves the previous certificate/, /The previous files are back, but Alice could not confirm/],
+    ['deployment.rollback_file_changed', 'ALC-DEP-0020', 'restore_failed', /./, 'Alice cannot confirm which certificate the website serves. Manual action is needed.'],
+  ])('shows the cause-specific text of %s, a headline that agrees with it, and the backup folder', async (reason, code, phase, cause, headlineText) => {
     show(
       deploymentDetailFixture({
         id: ID,
         status: 'rollback_failed',
         result: 'rollback_failed',
+        phase: phase as DeploymentDetail['phase'],
         backup_dir: '/var/lib/alice-helper/backups/0192c000',
         helper_error: reason === 'deployment.rollback_file_changed' ? 'file_changed' : '',
         error: { code, reason },
@@ -82,8 +83,8 @@ describe('DeploymentDetailPage', () => {
       }),
     );
     await renderRoute(`/deployments/${ID}`);
-    expect(await screen.findByText('Automatic restore failed. Manual action is needed.')).toBeInTheDocument();
-    expect(within(headline()).getByText('Restore failed')).toBeInTheDocument();
+    expect(await screen.findByText(headlineText)).toBeInTheDocument();
+    expect(within(headline()).getByText('Outcome not confirmed')).toBeInTheDocument();
     expect(screen.getByText('/var/lib/alice-helper/backups/0192c000')).toBeInTheDocument();
     expect(screen.getByText(/Backup on the server:/)).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(cause);
@@ -96,7 +97,7 @@ describe('DeploymentDetailPage', () => {
       deploymentDetailFixture({
         id: ID,
         status: 'failed',
-        error: { code: 'ALC-DEP-0005', reason: 'deployment.config_test_failed' },
+        error: { code: 'ALC-DEP-0007', reason: 'deployment.config_test_failed' },
         failed_step: 'config_test',
         helper_error: 'key_mismatch',
         steps: [stepFixture(1, 'backup'), stepFixture(2, 'config_test', 'failed', { error: 'key_mismatch' })],
@@ -115,30 +116,30 @@ describe('DeploymentDetailPage', () => {
         state: 'recovering',
         recovery_attempts: 4,
         recover_after: '2026-10-04T13:15:00Z',
-        error: { code: 'ALC-SSH-0003', reason: 'ssh.connection_lost' },
+        error: { code: 'ALC-SSH-0001', reason: 'ssh.unreachable' },
         finished_at: null,
         steps: [stepFixture(1, 'backup'), stepFixture(2, 'write_key')],
       }),
     );
     await renderRoute(`/deployments/${ID}`);
-    expect(await screen.findByText('The connection to the server was lost. Alice will check the server and finish or undo the change.')).toBeInTheDocument();
+    expect(await screen.findByText('Alice could not confirm yet how this deployment ended. It is checking the server and will finish or undo the change.')).toBeInTheDocument();
     expect(within(headline()).getByText('Needs attention')).toBeInTheDocument();
-    expect(within(headline()).getByText('Being finished after a lost connection')).toBeInTheDocument();
+    expect(within(headline()).getByText('Confirming the outcome')).toBeInTheDocument();
     const recovery = screen.getByTestId('recovery');
     expect(recovery).toHaveTextContent('Recovery attempts: 4');
     expect(recovery).toHaveTextContent(/Next attempt after: .*Oct 4, 2026/);
-    expect(recovery).toHaveTextContent('Alice cannot reach the server and keeps trying.');
-    expect(screen.getByRole('alert')).toHaveTextContent('ALC-SSH-0003');
+    expect(recovery).toHaveTextContent('Alice still cannot confirm the outcome after several attempts and keeps trying.');
+    expect(screen.getByRole('alert')).toHaveTextContent('ALC-SSH-0001');
     // Steps not reached yet are waiting, not "not run": the deployment is not over.
     expect(within(screen.getByRole('list', { name: 'Steps' })).getByText('Reload').closest('li')).toHaveTextContent('Waiting');
   });
 
   it('shows the recovery of a deployment whose code is ALC-DEP-0010 the same way', async () => {
     show(
-      deploymentDetailFixture({ id: ID, status: 'running', state: 'recovering', recovery_attempts: 1, error: { code: 'ALC-DEP-0010', reason: 'deployment.outcome_unknown' }, finished_at: null }),
+      deploymentDetailFixture({ id: ID, status: 'running', state: 'recovering', job_status: 'succeeded', recovery_attempts: 1, error: { code: 'ALC-DEP-0010', reason: 'deployment.interrupted' }, finished_at: null }),
     );
     await renderRoute(`/deployments/${ID}`);
-    expect(await screen.findByText('The connection to the server was lost. Alice will check the server and finish or undo the change.')).toBeInTheDocument();
+    expect(await screen.findByText('Alice could not confirm yet how this deployment ended. It is checking the server and will finish or undo the change.')).toBeInTheDocument();
     expect(screen.getByTestId('recovery')).toHaveTextContent('Alice is checking the server to finish or undo the change.');
     expect(screen.getByRole('alert')).toHaveTextContent('ALC-DEP-0010');
   });
@@ -165,16 +166,56 @@ describe('DeploymentDetailPage', () => {
   });
 
   it('shows a generic message with the code for a reason it has no text for, and never a raw placeholder', async () => {
-    show(deploymentDetailFixture({ id: ID, status: 'failed', error: { code: 'ALC-DEP-0999', reason: 'deployment.from_the_future' } }));
+    show(deploymentDetailFixture({ id: ID, status: 'failed', error: { code: 'ALC-DEP-0999', reason: 'deployment.from_the_future' } })); // not in the error table, on purpose
     const view = await renderRoute(`/deployments/${ID}`);
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Something went wrong.');
     expect(alert).toHaveTextContent('ALC-DEP-0999');
     view.unmount();
     // verify_unreachable needs params.port: without it the text would show {{port}}.
-    show(deploymentDetailFixture({ id: ID, status: 'rolled_back', error: { code: 'ALC-DEP-0004', reason: 'deployment.verify_unreachable' } }));
+    show(deploymentDetailFixture({ id: ID, status: 'rolled_back', error: { code: 'ALC-DEP-0005', reason: 'deployment.verify_unreachable' } }));
     await renderRoute(`/deployments/${ID}`);
     expect((await screen.findAllByRole('alert'))[0]).not.toHaveTextContent(/\{\{/);
+  });
+
+  it('says a finished deployment that went through recovery was confirmed after N attempts, and not that recovery goes on', async () => {
+    show(deploymentDetailFixture({ id: ID, status: 'succeeded', state: 'done', recovery_attempts: 3, recover_after: '2026-10-04T13:15:00Z' }));
+    await renderRoute(`/deployments/${ID}`);
+    const card = await screen.findByTestId('recovery');
+    expect(card).toHaveTextContent('Alice confirmed the outcome after 3 recovery attempts.');
+    expect(card).not.toHaveTextContent('Next attempt');
+    expect(card).not.toHaveTextContent('keeps trying');
+    expect(card).not.toHaveTextContent('Alice is checking the server');
+  });
+
+  it('shows no recovery card for a finished deployment that never needed one', async () => {
+    show(deploymentDetailFixture({ id: ID, recovery_attempts: 0 }));
+    await renderRoute(`/deployments/${ID}`);
+    await screen.findByTestId('deployment-status');
+    expect(screen.queryByTestId('recovery')).not.toBeInTheDocument();
+  });
+
+  it('says "no change needed" for an unchanged deployment and "nothing was changed" for a failed one', async () => {
+    show(deploymentDetailFixture({ id: ID, status: 'unchanged', result: 'unchanged' }));
+    const view = await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText('This certificate was already in place. Nothing was changed.')).toBeInTheDocument();
+    expect(within(headline()).getByText('No change needed')).toBeInTheDocument();
+    view.unmount();
+    show(deploymentDetailFixture({ id: ID, status: 'failed', error: { code: 'ALC-DEP-0007', reason: 'deployment.config_test_failed' } }));
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText('Nothing was changed on the server.')).toBeInTheDocument();
+    expect(within(headline()).getByText('Failed, nothing changed')).toBeInTheDocument();
+  });
+
+  it('shows a deployment whose job ended while the record is not final as stopped, and a finished job with a running record as being finished', async () => {
+    show(deploymentDetailFixture({ id: ID, status: 'running', state: 'deploying', job_status: 'dead', finished_at: null }));
+    const view = await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText(/The background job ended before the deployment did/)).toBeInTheDocument();
+    view.unmount();
+    show(deploymentDetailFixture({ id: ID, status: 'running', state: 'deploying', job_status: 'succeeded', finished_at: null }));
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText('The background job has finished. Alice is recording the result.')).toBeInTheDocument();
+    expect(screen.queryByText('Alice is deploying the certificate…')).not.toBeInTheDocument();
   });
 
   describe('following a deployment that can still change', () => {
@@ -183,7 +224,7 @@ describe('DeploymentDetailPage', () => {
 
     it('polls a running deployment, shows the steps as they arrive and stops when it is settled', async () => {
       let polls = 0;
-      let current = deploymentDetailFixture({ id: ID, status: 'running', state: 'deploying', finished_at: null, steps: [stepFixture(1, 'backup')] });
+      let current = deploymentDetailFixture({ id: ID, status: 'running', state: 'deploying', job_status: 'running', finished_at: null, steps: [stepFixture(1, 'backup')] });
       server.use(...sessionHandlers(sessionFor('operator')), http.get(`/api/v1/deployments/${ID}`, () => ((polls += 1), HttpResponse.json(current))));
       await renderRoute(`/deployments/${ID}`);
       expect(await screen.findByText('Alice is deploying the certificate…')).toBeInTheDocument();
@@ -212,6 +253,24 @@ describe('DeploymentDetailPage', () => {
       expect(screen.queryByTestId('recovery')).not.toBeInTheDocument();
     });
 
+    it('keeps reading a stopped deployment slowly and gives up after a while', async () => {
+      let polls = 0;
+      server.use(
+        ...sessionHandlers(sessionFor('operator')),
+        http.get(`/api/v1/deployments/${ID}`, () => ((polls += 1), HttpResponse.json(deploymentDetailFixture({ id: ID, status: 'running', state: 'deploying', job_status: 'dead', finished_at: null })))),
+      );
+      await renderRoute(`/deployments/${ID}`);
+      await screen.findByText(/The background job ended before the deployment did/);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(polls).toBeGreaterThanOrEqual(4);
+      expect(polls).toBeLessThanOrEqual(6);
+      await vi.advanceTimersByTimeAsync(600_000);
+      const seen = polls;
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(polls).toBe(seen);
+      expect(seen).toBeLessThanOrEqual(25);
+    });
+
     it('keeps the last state while a read fails and carries on', async () => {
       let polls = 0;
       server.use(
@@ -219,7 +278,7 @@ describe('DeploymentDetailPage', () => {
         http.get(`/api/v1/deployments/${ID}`, () => {
           polls += 1;
           if (polls === 2) return HttpResponse.error();
-          return HttpResponse.json(deploymentDetailFixture({ id: ID, status: polls < 3 ? 'running' : 'succeeded', state: polls < 3 ? 'deploying' : 'done', finished_at: null }));
+          return HttpResponse.json(deploymentDetailFixture({ id: ID, status: polls < 3 ? 'running' : 'succeeded', state: polls < 3 ? 'deploying' : 'done', job_status: polls < 3 ? 'running' : 'succeeded', finished_at: null }));
         }),
       );
       await renderRoute(`/deployments/${ID}`);
@@ -232,7 +291,7 @@ describe('DeploymentDetailPage', () => {
   });
 
   it('shows the server text and a way back for a deployment that does not exist', async () => {
-    server.use(...sessionHandlers(sessionFor('operator')), http.get(`/api/v1/deployments/${ID}`, () => errorResponse(404, 'ALC-SYS-0002', 'system.not_found')));
+    server.use(...sessionHandlers(sessionFor('operator')), http.get(`/api/v1/deployments/${ID}`, () => errorResponse(404, 'ALC-SYS-0001', 'system.not_found')));
     await renderRoute(`/deployments/${ID}`);
     expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to deployment history' })).toHaveAttribute('href', '/deployments');

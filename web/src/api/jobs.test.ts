@@ -59,7 +59,7 @@ describe('waitForJob', () => {
     server.use(
       http.get('/api/v1/jobs/:id', () => {
         calls += 1;
-        if (calls === 1) return errorResponse(503, 'ALC-SYS-0003', 'system.unavailable', { retryable: true });
+        if (calls === 1) return errorResponse(503, 'ALC-SYS-0002', 'system.unavailable', { retryable: true });
         if (calls === 2) return HttpResponse.error();
         return HttpResponse.json(jobFixture({ status: 'succeeded' }));
       }),
@@ -74,7 +74,7 @@ describe('waitForJob', () => {
     server.use(
       http.get('/api/v1/jobs/:id', () => {
         calls += 1;
-        return errorResponse(404, 'ALC-SYS-0404', 'system.not_found');
+        return errorResponse(404, 'ALC-SYS-0001', 'system.not_found');
       }),
     );
     await expect(waitForJob('job-5', { intervalMs: 1 })).rejects.toMatchObject({ status: 404 });

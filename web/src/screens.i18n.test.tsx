@@ -93,7 +93,7 @@ const dataHandlers = [
         failed_step: 'verify_current',
         helper_error: 'file_changed',
         error: { code: 'ALC-DEP-0020', reason: 'deployment.rollback_file_changed' },
-        verify_failed: { code: 'ALC-DEP-0004', reason: 'deployment.verify_unreachable', params: { port: '443' } },
+        verify_failed: { code: 'ALC-DEP-0005', reason: 'deployment.verify_unreachable', params: { port: '443' } },
         steps: [stepFixture(1, 'verify_current'), stepFixture(2, 'backup'), stepFixture(3, 'journal', 'failed', { error: 'file_changed' }), stepFixture(4, 'restore')],
       }),
     ),

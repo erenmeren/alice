@@ -214,7 +214,7 @@ describe('application shell', () => {
   it('stays signed in and says so when logout fails for another reason', async () => {
     server.use(
       ...sessionHandlers(sessionFor('admin')),
-      http.post('/api/v1/auth/logout', () => errorResponse(500, 'ALC-SYS-0001', 'system.internal')),
+      http.post('/api/v1/auth/logout', () => errorResponse(500, 'ALC-SYS-0003', 'internal.unexpected')),
     );
     const { router } = await renderRoute('/');
     await userEvent.click(await screen.findByRole('button', { name: 'Sign out' }));

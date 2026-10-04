@@ -1,11 +1,8 @@
 import { Alert, Badge, Box, Button, Code, Group, Stack, Switch, Table, Text, Title } from '@mantine/core';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { fileProblemKey, configErrorKey, configReasonKey, unsupportedReasonKey } from '../api/enums';
-import { listLocations } from '../api/endpoints';
 import { canDeployTo, firstServerName, listenAddrs, nginxState, serverNames, type DeployBlock } from '../api/nginx';
-import { locationsKey } from '../api/queryKeys';
 import type { CertificateLocation, Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { formatDateTime } from '../datetime';
@@ -13,9 +10,12 @@ import { DeployDialog } from './DeployDialog';
 import { ErrorAlert } from './ErrorAlert';
 import { Expiry } from './Expiry';
 import { InternalLink } from './InternalLink';
+import { LabelledCode } from './LabelledCode';
 import { LocationWarning } from './LocationWarning';
 import { LocationSettingsDialog } from './LocationSettingsDialog';
 import { reasonTitle } from './JobErrorAlert';
+import { siteIsData } from './SiteName';
+import { useLocations, websitesAsOf } from './useLocations';
 import { useSiteLabel } from './useSiteLabel';
 import { WRAP } from './wrap';
 
@@ -30,10 +30,10 @@ const BLOCK_KEYS: Record<DeployBlock, string> = {
 
 // RowButton is a button whose accessible name carries the website ("Deploy certificate: name").
 // The name text is data, so it sits in a hidden translate="no" element the button points at.
-function RowButton({ id, label, children, ...rest }: { id: string; label: string; children: string; onClick: () => void; disabled?: boolean; variant?: string }) {
+function RowButton({ id, label, data, children, ...rest }: { id: string; label: string; data: boolean; children: string; onClick: () => void; disabled?: boolean; variant?: string }) {
   return (
     <>
-      <span id={id} hidden translate="no">
+      <span id={id} hidden translate={data ? 'no' : undefined}>
         {label}
       </span>
       <Button size="xs" variant="light" aria-labelledby={id} {...rest}>
@@ -59,16 +59,13 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
   const [deploying, setDeploying] = useState<CertificateLocation | null>(null);
   const [settingsId, setSettingsId] = useState<string | null>(null);
 
-  const locs = useQuery({
-    queryKey: [...locationsKey(target.id), { missing: showMissing }],
-    queryFn: () => listLocations(target.id, showMissing),
-    placeholderData: keepPreviousData,
-  });
+  const locs = useLocations(target.id, showMissing);
   const state = nginxState(target, discoveryFailed);
   const nginx = target.facts.nginx;
   const items = locs.data?.items ?? [];
   const settingsFor = items.find((l) => l.id === settingsId) ?? null;
-  const lastScan = target.last_discovery_at ? formatDateTime(target.last_discovery_at, i18n.language) : '';
+  const asOf = websitesAsOf(items);
+  const lastScan = asOf ? formatDateTime(asOf, i18n.language) : '';
 
   return (
     <Stack gap="sm" aria-labelledby="websites-title" role="region">
@@ -86,9 +83,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
             {nginx && nginx.config_error !== '' && <Text size="sm">{t(configErrorKey(nginx.config_error))}</Text>}
             {nginx && nginx.config_error_reason !== '' && <Text size="sm">{t(configReasonKey(nginx.config_error_reason))}</Text>}
             {nginx && nginx.config_error_file !== '' && (
-              <Text size="sm" style={WRAP}>
-                {t('locations.configFile')}: <Code translate="no">{nginx.config_error_file}</Code>
-              </Text>
+              <LabelledCode text={t('locations.configFile', { file: '' })} value={nginx.config_error_file} />
             )}
           </Stack>
         </Alert>
@@ -149,7 +144,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
       )}
 
       {deploying && <DeployDialog opened onClose={() => setDeploying(null)} location={deploying} />}
-      {settingsFor && <LocationSettingsDialog location={settingsFor} site={siteLabel(settingsFor)} canEdit={admin} onClose={() => setSettingsId(null)} />}
+      {settingsFor && <LocationSettingsDialog location={settingsFor} canEdit={admin} onClose={() => setSettingsId(null)} />}
     </Stack>
   );
 }
@@ -183,11 +178,17 @@ function LocationRow({
             <Text size="sm">{t('locations.noWebsite')}</Text>
           ) : (
             <Group gap={4}>
-              {names.map((n) => (
-                <Code key={n} translate="no">
-                  {n === '_' ? t('locations.defaultServer') : n}
-                </Code>
-              ))}
+              {names.map((n) =>
+                n === '_' ? (
+                  <Text key={n} size="sm" span>
+                    {t('locations.defaultServer')}
+                  </Text>
+                ) : (
+                  <Code key={n} translate="no">
+                    {n}
+                  </Code>
+                ),
+              )}
             </Group>
           )}
           {first && (
@@ -267,11 +268,11 @@ function LocationRow({
       <Table.Td>
         <Group gap="xs">
           {canDeploy && canDeployTo(l) && (
-            <RowButton id={`deploy-${l.id}`} label={t('locations.deployNamed', { site })} onClick={onDeploy} disabled={blocked}>
+            <RowButton id={`deploy-${l.id}`} data={siteIsData(l)} label={t('locations.deployNamed', { site })} onClick={onDeploy} disabled={blocked}>
               {t('locations.deploy')}
             </RowButton>
           )}
-          <RowButton id={`settings-${l.id}`} label={t('locations.settingsNamed', { site })} variant="default" onClick={onSettings}>
+          <RowButton id={`settings-${l.id}`} data={siteIsData(l)} label={t('locations.settingsNamed', { site })} variant="default" onClick={onSettings}>
             {t('locations.settings')}
           </RowButton>
         </Group>

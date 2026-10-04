@@ -173,6 +173,31 @@ describe('Nginx deployment, website and fact labels cover the specification and 
     for (const w of typesWarnings) expect([...Object.keys(LOCATION_WARNINGS), ...Object.keys(WARNING_PARAMS)], w).toContain(w);
   });
 
+  it('has no location warning, and no server-level Nginx warning, that no source reports', () => {
+    const sources = new Set([...knownValues('CertificateLocation', 'warnings'), ...inventoryWarnings, ...typesWarnings]);
+    for (const w of Object.keys(LOCATION_WARNINGS)) expect(sources.has(w), `location warning ${w} has no source`).toBe(true);
+    const server = new Set([...typesWarnings, ...nginxWarnings, ...jobWarnings, ...openapiTargetWarnings]);
+    const nginxOnly = ['nginx_not_found', 'nginx_profile_missing', 'nginx_config_invalid', 'locations_dropped', 'list_truncated', 'too_many_files', 'stream_tls', 'mail_tls', 'config_file_writable', 'key_mode_open', 'symlinked', 'custom_location', 'key_group_open', 'certificate_block_dropped'];
+    for (const w of nginxOnly) expect(server.has(w), `server warning ${w} has no source`).toBe(true);
+    // every Nginx entry of the table is one of those (the rest are the SSH warnings of Phase 3)
+    const ssh = new Set(['keys_managed_elsewhere', 'keys_managed_elsewhere_user', 'certificates_in_use', 'pubkey_disabled', 'sshd_unreadable', 'sshd_unreadable_user', 'strict_modes', 'unsupported_path', 'unsupported_path_unnamed', 'file_unreadable', 'file_unparseable', 'file_too_large', 'directory_users_not_listed', 'too_many_users']);
+    for (const w of Object.keys(WARNING_PARAMS)) expect(ssh.has(w) || nginxOnly.includes(w), `warning ${w} is in no group`).toBe(true);
+  });
+
+  it('knows the warnings of a deploy answer, as the specification and the inventory list them', () => {
+    const start = spec.indexOf('\n    DeployAccepted:');
+    const block = spec.slice(start, spec.indexOf('\n    DeploymentStep:', start)).replace(/\s+/g, ' ');
+    const m = /Known values: ([^;"]*)/.exec(block);
+    expect(m).not.toBeNull();
+    const known = m![1].split(',').map((v) => v.trim());
+    expect(known).toEqual(['san_mismatch']);
+    expect(inventoryWarnings).toEqual(expect.arrayContaining(known));
+    for (const w of known) {
+      expect(Object.keys(LOCATION_WARNINGS), w).toContain(w);
+      for (const lang of ['en', 'tr'] as const) expect(typeof lookup(bundles[lang], locationWarningKey(w)), `${lang} ${w}`).toBe('string');
+    }
+  });
+
   it('knows every server-level warning of the Nginx provider, the scan job and the specification', () => {
     for (const w of [...typesWarnings, ...nginxWarnings, ...jobWarnings, ...openapiTargetWarnings]) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
     expect(openapiTargetWarnings).toEqual(expect.arrayContaining(['nginx_profile_missing', 'stream_tls', 'config_file_writable']));

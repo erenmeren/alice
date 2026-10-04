@@ -59,7 +59,7 @@ describe('CreateCSRDialog', () => {
     server.use(
       ...sessionHandlers(operatorSession),
       http.post('/api/v1/certificates/csr', () =>
-        errorResponse(422, 'ALC-VAL-0001', 'validation.failed', { details: [{ field: 'common_name', code: 'validation.pattern' }] }),
+        errorResponse(422, 'ALC-SYS-0006', 'validation.failed', { details: [{ field: 'common_name', code: 'validation.pattern' }] }),
       ),
     );
     await renderApp(<CreateCSRDialog opened onClose={() => {}} onCreated={() => {}} />);

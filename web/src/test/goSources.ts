@@ -53,8 +53,14 @@ export function backendAuditActions(): string[] {
   return [...found].sort();
 }
 
+// registeredJobTypes finds the literal names passed to Register("name", class) in internal/jobs/types.go
+// (the ones written with a constant, Register(inventory.JobX, ...), are the JobXxx constants above).
+export function registeredJobTypes(src: string): string[] {
+  return [...src.matchAll(/\bRegister\("([a-z][a-z0-9_.]*)"/g)].map((m) => m[1]).sort();
+}
+
 export function backendJobTypes(): string[] {
-  return jobTypesIn(readRepoFile('internal/inventory/jobs.go'));
+  return [...new Set([...jobTypesIn(readRepoFile('internal/inventory/jobs.go')), ...registeredJobTypes(readRepoFile('internal/jobs/types.go'))])].sort();
 }
 
 // goStringConsts finds the string constants of a Go source whose names match nameRe (for example
@@ -70,4 +76,40 @@ export const goConsts = (rel: string, nameRe: RegExp): string[] => goStringConst
 // callArgsIn finds every string literal passed to a call such as warning("x").
 export function callArgsIn(src: string, fn: string): string[] {
   return [...src.matchAll(new RegExp(`\\b${fn}\\("([^"\\n]*)"`, 'g'))].map((m) => m[1]).sort();
+}
+
+// goErrorPairs reads the API error table (internal/api, ErrorCode{Code: "ALC-X-0001", Reason: "a.b"})
+// as "code reason" strings, so a test can check that the pairs it invents really exist.
+export function goErrorPairs(): Set<string> {
+  const found = new Set<string>();
+  for (const f of goFiles('internal/api')) {
+    for (const m of readRepoFile(f).matchAll(/Code:\s*"(ALC-[A-Z]+-\d{4})",\s*Reason:\s*"([a-z][a-z0-9_.]*)"/g)) found.add(`${m[1]} ${m[2]}`);
+  }
+  return found;
+}
+
+// errorPairsIn finds the (code, reason) pairs a test writes: errorResponse(status, 'code', 'reason', ...)
+// and object literals {code: 'code', reason: 'reason'}.
+// A line that says `not in the error table` is skipped: it deliberately sends what a newer server
+// might (a reason this version has no text for).
+export function errorPairsIn(source: string): string[] {
+  const src = source
+    .split('\n')
+    .filter((l) => !l.includes('not in the error table'))
+    .join('\n');
+  const out: string[] = [];
+  for (const m of src.matchAll(/errorResponse\(\s*\d+,\s*'(ALC-[A-Z]+-\d{4})',\s*'([a-z][a-z0-9_.]*)'/g)) out.push(`${m[1]} ${m[2]}`);
+  for (const m of src.matchAll(/code:\s*'(ALC-[A-Z]+-\d{4})',\s*reason:\s*'([a-z][a-z0-9_.]*)'/g)) out.push(`${m[1]} ${m[2]}`);
+  return out;
+}
+
+// webTestFiles lists the test files under web/src (the working directory is web/).
+export function webTestFiles(dir = 'web/src'): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(join(root, dir), { withFileTypes: true })) {
+    const rel = join(dir, e.name);
+    if (e.isDirectory()) out.push(...webTestFiles(rel));
+    else if (/\.test\.tsx?$/.test(e.name)) out.push(rel);
+  }
+  return out;
 }

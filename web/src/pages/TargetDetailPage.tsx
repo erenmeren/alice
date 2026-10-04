@@ -20,6 +20,7 @@ import { KeyFlags } from '../components/KeyFlags';
 import { RemoveKeyDialog } from '../components/RemoveKeyDialog';
 import { useStepUp } from '../components/StepUpProvider';
 import { TargetStatusBadge } from '../components/TargetStatusBadge';
+import { useLocations, websitesAsOf } from '../components/useLocations';
 import { WebsitesPanel } from '../components/WebsitesPanel';
 import { WRAP } from '../components/wrap';
 import { formatDateTime } from '../datetime';
@@ -61,6 +62,7 @@ export function TargetDetailPage() {
     enabled: target.isSuccess,
   });
 
+  const locations = useLocations(id, false, target.data?.type === 'nginx');
   const [error, setError] = useState<unknown>(null);
   const [jobError, setJobError] = useState<JobError | null>(null);
   const [done, setDone] = useState(false);
@@ -161,7 +163,7 @@ export function TargetDetailPage() {
           </Stack>
         </Card>
       )}
-      <Facts target={tg} discoveryFailed={discoveryFailed} />
+      <Facts target={tg} discoveryFailed={discoveryFailed} asOf={websitesAsOf(locations.data?.items ?? [])} />
       {canOperate && (
         <Group gap="sm">
           <Button variant="default" disabled={busy} onClick={() => void runJob(() => testTarget(tg.id))}>
@@ -277,7 +279,7 @@ export function TargetDetailPage() {
   );
 }
 
-function Facts({ target, discoveryFailed }: { target: Target; discoveryFailed: boolean }) {
+function Facts({ target, discoveryFailed, asOf }: { target: Target; discoveryFailed: boolean; asOf: string | null }) {
   const { t, i18n } = useTranslation();
   const f = target.facts;
   // unreadable_line is shown per line from facts.unreadable below, so the summary warning is skipped here.
@@ -288,9 +290,9 @@ function Facts({ target, discoveryFailed }: { target: Target; discoveryFailed: b
       {f.helper_version && <Text size="sm">{t('targets.facts.helper', { version: f.helper_version })}</Text>}
       {target.type === 'nginx' && f.nginx?.version && <Text size="sm">{t('targets.facts.nginx', { version: f.nginx.version })}</Text>}
       {target.type === 'nginx' && f.nginx && !f.nginx.found && f.nginx.version === '' && <Text size="sm">{t('targets.facts.nginxNotFound')}</Text>}
-      {target.type === 'nginx' && nginxState(target, discoveryFailed).stale && target.last_discovery_at && (
+      {target.type === 'nginx' && nginxState(target, discoveryFailed).stale && asOf && (
         <Text size="sm" role="note">
-          {t('targets.facts.nginxStale', { time: formatDateTime(target.last_discovery_at, i18n.language) })}
+          {t('targets.facts.nginxStale', { time: formatDateTime(asOf, i18n.language) })}
         </Text>
       )}
       <Text size="sm">

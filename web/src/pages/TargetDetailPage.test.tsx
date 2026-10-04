@@ -216,7 +216,7 @@ describe('TargetDetailPage', () => {
         hostKeyCalls += 1;
         return HttpResponse.json({ items: [pinned, observed] });
       }),
-      http.post('/api/v1/targets/:id/host-keys/:keyId/actions/repin', () => errorResponse(409, 'ALC-INV-0009', 'target.host_key_stale')),
+      http.post('/api/v1/targets/:id/host-keys/:keyId/actions/repin', () => errorResponse(409, 'ALC-TGT-0003', 'target.host_key_stale')),
     );
     await renderRoute(path);
     await userEvent.click(await screen.findByRole('button', { name: 'Review the new fingerprint' }));
@@ -263,7 +263,7 @@ describe('TargetDetailPage', () => {
         // The refusal comes with a server that is no longer in the changed state.
         target = targetWith({ status: 'checking' });
         slow = true;
-        return errorResponse(409, 'ALC-INV-0009', 'target.host_key_stale');
+        return errorResponse(409, 'ALC-TGT-0003', 'target.host_key_stale');
       }),
     );
     await renderRoute(path);

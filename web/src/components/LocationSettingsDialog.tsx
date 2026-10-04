@@ -9,11 +9,11 @@ import type { CertificateLocation, LocationPatch } from '../api/types';
 import { parsePort, validateSNI } from '../api/validation';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
+import { SiteName } from './SiteName';
 
 interface Props {
   // location is the latest copy of the website (the list refreshes it after a save or a 412).
   location: CertificateLocation;
-  site: string;
   // canEdit: only an Administrator changes verification settings; others see them read-only.
   canEdit: boolean;
   onClose: () => void;
@@ -24,18 +24,18 @@ interface Props {
 // sent; an empty port or name clears it. A form that fails stays as typed, except after a 412
 // (someone changed the website meanwhile): then the current values are loaded and the person is
 // told that their change was not saved.
-export function LocationSettingsDialog({ location, site, canEdit, onClose }: Props) {
+export function LocationSettingsDialog({ location, canEdit, onClose }: Props) {
   const { t } = useTranslation();
   return (
     <AppModal opened onClose={onClose} title={t('locations.verify.title')} size="lg">
-      <SettingsForm location={location} site={site} canEdit={canEdit} onClose={onClose} />
+      <SettingsForm location={location} canEdit={canEdit} onClose={onClose} />
     </AppModal>
   );
 }
 
 const portText = (l: CertificateLocation) => (l.verify_port === null ? '' : String(l.verify_port));
 
-function SettingsForm({ location, site, canEdit, onClose }: Props) {
+function SettingsForm({ location, canEdit, onClose }: Props) {
   const { t } = useTranslation();
   const client = useQueryClient();
   const [port, setPort] = useState(portText(location));
@@ -46,13 +46,15 @@ function SettingsForm({ location, site, canEdit, onClose }: Props) {
   const [saved, setSaved] = useState(false);
   const [notSaved, setNotSaved] = useState(false);
   const [touched, setTouched] = useState(false);
-  const reload = useRef(false);
+  const reloadFrom = useRef<number | null>(null);
 
   // After a 412 the list gives a newer copy: the form takes its values.
   const version = location.version;
   useEffect(() => {
-    if (!reload.current) return;
-    reload.current = false;
+    // Only when the list really moved on from the version that was refused, and only if the person
+    // has not typed since: a later change must never be overwritten.
+    if (reloadFrom.current === null || version === reloadFrom.current) return;
+    reloadFrom.current = null;
     setPort(portText(location));
     setSni(location.verify_sni);
     setSkip(location.skip_verify);
@@ -62,7 +64,8 @@ function SettingsForm({ location, site, canEdit, onClose }: Props) {
   const sniProblem = validateSNI(sni);
   const patch: LocationPatch = {};
   if (portValue !== null && portValue !== (location.verify_port ?? 0)) patch.verify_port = portValue;
-  if (sni.trim() !== location.verify_sni) patch.verify_sni = sni.trim();
+  // The server folds the name to lower case, so "WWW.Example.test" equals what it stored.
+  if (sni.trim().localeCompare(location.verify_sni, 'en', { sensitivity: 'accent' }) !== 0) patch.verify_sni = sni.trim();
   if (skip !== location.skip_verify) patch.skip_verify = skip;
   const changed = Object.keys(patch).length > 0;
   const valid = portValue !== null && sniProblem === null;
@@ -87,7 +90,7 @@ function SettingsForm({ location, site, canEdit, onClose }: Props) {
     } catch (err) {
       setError(err);
       if (isApiError(err) && err.status === 412) {
-        reload.current = true;
+        reloadFrom.current = location.version;
         setNotSaved(true);
       }
     }
@@ -98,8 +101,8 @@ function SettingsForm({ location, site, canEdit, onClose }: Props) {
   return (
     <form onSubmit={(e) => void submit(e)} noValidate>
       <Stack gap="sm">
-        <Text size="sm" fw={600} translate="no">
-          {site}
+        <Text size="sm" fw={600}>
+          <SiteName loc={location} />
         </Text>
         <Text size="sm">{t('locations.verify.help')}</Text>
         {!canEdit && (
@@ -110,7 +113,10 @@ function SettingsForm({ location, site, canEdit, onClose }: Props) {
         <TextInput
           label={t('locations.verify.port')}
           value={port}
-          onChange={(e) => setPort(e.currentTarget.value)}
+          onChange={(e) => {
+            reloadFrom.current = null;
+            setPort(e.currentTarget.value);
+          }}
           inputMode="numeric"
           disabled={!canEdit}
           error={portError}
@@ -120,7 +126,10 @@ function SettingsForm({ location, site, canEdit, onClose }: Props) {
         <TextInput
           label={t('locations.verify.sni')}
           value={sni}
-          onChange={(e) => setSni(e.currentTarget.value)}
+          onChange={(e) => {
+            reloadFrom.current = null;
+            setSni(e.currentTarget.value);
+          }}
           disabled={!canEdit}
           error={sniError}
           maxLength={253}
@@ -131,7 +140,10 @@ function SettingsForm({ location, site, canEdit, onClose }: Props) {
           label={t('locations.verify.skip')}
           description={t('locations.verify.skipHelp')}
           checked={skip}
-          onChange={(e) => setSkip(e.currentTarget.checked)}
+          onChange={(e) => {
+            reloadFrom.current = null;
+            setSkip(e.currentTarget.checked);
+          }}
           disabled={!canEdit}
         />
         {touched && canEdit && valid && !changed && <Text size="sm">{t('locations.verify.nothingChanged')}</Text>}

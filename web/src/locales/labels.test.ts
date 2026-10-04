@@ -1,4 +1,4 @@
-import { auditActionsIn, backendAuditActions, backendJobTypes, jobTypesIn } from '../test/goSources';
+import { auditActionsIn, backendAuditActions, backendJobTypes, jobTypesIn, registeredJobTypes } from '../test/goSources';
 import en from './en.json';
 import tr from './tr.json';
 
@@ -42,9 +42,16 @@ describe('the Go source readers', () => {
     ]);
   });
 
+  it('find job types registered with a literal name', () => {
+    expect(registeredJobTypes('A = Register("license.evaluate", license.ClassAlways)\nB = Register(inventory.JobX, c)\nC = Register("notify.send", c)')).toEqual([
+      'license.evaluate',
+      'notify.send',
+    ]);
+  });
+
   it('read the real sources', () => {
     expect(backendAuditActions()).toEqual(expect.arrayContaining(['certificate.uploaded', 'csr.completed', 'deployment.recovery_started', 'location.updated']));
-    expect(backendJobTypes()).toEqual(expect.arrayContaining(['certificate.deploy', 'certificate.deploy_recover']));
+    expect(backendJobTypes()).toEqual(expect.arrayContaining(['certificate.deploy', 'certificate.deploy_recover', 'license.evaluate', 'discovery.schedule', 'deployment.recovery_sweep']));
   });
 
   it('make the completeness check fail for an action or a job type without a label', () => {

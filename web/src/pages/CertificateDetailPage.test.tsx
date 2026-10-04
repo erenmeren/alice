@@ -142,11 +142,37 @@ describe('CertificateDetailPage', () => {
       expect(screen.queryByRole('button', { name: 'Deploy' })).not.toBeInTheDocument();
     });
 
-    it('is not shown when no server uses the certificate yet', async () => {
+    it('is not shown when no server uses the certificate yet; a hint says how to deploy it instead', async () => {
       certServer(certificateDetailFixture({ id: ID, locations: [] }));
       await renderRoute(`/certificates/${ID}`);
       await screen.findByRole('heading', { level: 1 });
       expect(screen.queryByRole('button', { name: 'Deploy' })).not.toBeInTheDocument();
+      const hint = screen.getByTestId('deploy-hint');
+      expect(hint).toHaveTextContent('open the server of the website, choose Deploy certificate there and pick this certificate');
+      expect(within(hint).getByRole('link', { name: 'Open the servers' })).toHaveAttribute('href', '/servers');
+    });
+
+    it('shows no hint to Auditors, for a certificate without a key or one that is already used', async () => {
+      certServer(certificateDetailFixture({ id: ID, locations: [] }), [], auditorSession);
+      const view = await renderRoute(`/certificates/${ID}`);
+      await screen.findByRole('heading', { level: 1 });
+      expect(screen.queryByTestId('deploy-hint')).not.toBeInTheDocument();
+      view.unmount();
+      certServer(certificateDetailFixture({ id: ID, locations: [], has_private_key: false }));
+      const second = await renderRoute(`/certificates/${ID}`);
+      await screen.findByRole('heading', { level: 1 });
+      expect(screen.queryByTestId('deploy-hint')).not.toBeInTheDocument();
+      second.unmount();
+      certServer();
+      await renderRoute(`/certificates/${ID}`);
+      await screen.findByRole('heading', { level: 1 });
+      expect(screen.queryByTestId('deploy-hint')).not.toBeInTheDocument();
+    });
+
+    it('says that Deploy sends this certificate to the websites listed', async () => {
+      certServer();
+      await renderRoute(`/certificates/${ID}`);
+      expect(await screen.findByText('Deploy sends this certificate to the websites listed below.')).toBeInTheDocument();
     });
   });
 

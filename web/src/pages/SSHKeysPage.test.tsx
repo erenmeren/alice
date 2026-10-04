@@ -101,7 +101,7 @@ describe('SSHKeysPage', () => {
 
   it('shows the error instead of an empty list when loading fails', async () => {
     keysServer();
-    server.use(http.get('/api/v1/ssh-keys', () => errorResponse(500, 'ALC-SYS-0001', 'internal')));
+    server.use(http.get('/api/v1/ssh-keys', () => errorResponse(500, 'ALC-SYS-0003', 'internal.unexpected')));
     await renderRoute('/ssh-keys');
     expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(screen.queryByText('No SSH keys match these filters.')).not.toBeInTheDocument();

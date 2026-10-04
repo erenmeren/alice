@@ -95,7 +95,7 @@ function CSRForm({ onClose, onCreated }: { onClose: () => void; onCreated: (csr:
             <ErrorAlert error={error} />
             <Group justify="flex-end">
               <Button variant="default" onClick={onClose}>
-                {t('certificates.upload.cancel')}
+                {t('certificates.cancel')}
               </Button>
               <Button type="submit" loading={busy}>
                 {t('certificates.csr.submit')}

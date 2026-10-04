@@ -263,7 +263,7 @@ describe('setup wizard edge cases', () => {
       http.get('/api/v1/auth/session', () => errorResponse(401, 'ALC-AUTH-0001', 'auth.unauthenticated')),
       http.post('/api/v1/setup/session', () => {
         over = true;
-        return errorResponse(404, 'ALC-GEN-0404', 'not_found');
+        return errorResponse(404, 'ALC-SYS-0001', 'system.not_found');
       }),
     );
     const { router } = await renderRoute('/setup');

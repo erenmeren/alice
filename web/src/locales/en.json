@@ -609,7 +609,7 @@
       "lastDiscovery": "Last scan: {{time}}",
       "neverScanned": "Not scanned yet.",
       "nginx": "Nginx version: {{version}}",
-      "nginxStale": "The Nginx details below are from the last successful scan on {{time}}.",
+      "nginxStale": "The Nginx details below may be out of date. Alice last read websites from this server on {{time}}.",
       "nginxNotFound": "Nginx was not found on this server."
     },
     "openServer": "Open the server",
@@ -713,6 +713,24 @@
       "certificate": {
         "deploy": "Deploy a certificate",
         "deploy_recover": "Finish an interrupted deployment"
+      },
+      "license": {
+        "evaluate": "License check"
+      },
+      "notify": {
+        "send": "Send a notification"
+      },
+      "audit": {
+        "verify": "Audit log verification"
+      },
+      "maintenance": {
+        "cleanup": "Maintenance cleanup"
+      },
+      "discovery": {
+        "schedule": "Scheduled server scan"
+      },
+      "deployment": {
+        "recovery_sweep": "Check for interrupted deployments"
       }
     },
     "blockedNotice": "This task is paused and waits for an administrator to run it.",
@@ -744,7 +762,7 @@
       "unchanged": "No change needed",
       "failed": "Failed, nothing changed",
       "rolled_back": "Failed, restored",
-      "rollback_failed": "Restore failed",
+      "rollback_failed": "Outcome not confirmed",
       "needs_attention": "Needs attention"
     },
     "certificateSource": {
@@ -769,7 +787,7 @@
       "queued": "Waiting to start",
       "precheck": "Checking the current certificate",
       "deploying": "Deploying",
-      "recovering": "Being finished after a lost connection",
+      "recovering": "Confirming the outcome",
       "done": "Finished"
     }
   },
@@ -840,7 +858,10 @@
       },
       "moreLocations": "Some websites are not shown.",
       "noNames": "(none)",
-      "facts": "Certificate details"
+      "facts": "Certificate details",
+      "deployHint": "To deploy this certificate, open the server of the website, choose Deploy certificate there and pick this certificate.",
+      "openServers": "Open the servers",
+      "deployHelp": "Deploy sends this certificate to the websites listed below."
     },
     "upload": {
       "title": "Upload a certificate",
@@ -854,7 +875,6 @@
       "pfxPassword": "PFX password",
       "label": "Name (optional)",
       "submit": "Upload",
-      "cancel": "Cancel",
       "uploaded": "Certificate uploaded.",
       "chainWarning": "The chain is incomplete. An administrator must confirm before this certificate is deployed.",
       "notYetValid": "This certificate is not valid yet. Websites would show an error until its start date.",
@@ -902,7 +922,8 @@
       "viewPem": "Show request",
       "download": "Download request",
       "createdColumn": "Created"
-    }
+    },
+    "cancel": "Cancel"
   },
   "locations": {
     "title": "Websites on this server",
@@ -938,11 +959,11 @@
     "showMissing": "Show websites that are no longer found",
     "truncated": "This list is incomplete: only the first 1000 websites that are no longer found are shown.",
     "configInvalid": "Nginx's configuration on this server has an error. Alice will not deploy until it is fixed.",
-    "configFile": "File with the problem",
+    "configFile": "File with the problem: {{file}}",
     "stale": {
       "title": "These websites may be out of date",
-      "help": "Alice shows what it found in its last successful scan on {{time}}. Choose Discover again after the problem is fixed.",
-      "neverScanned": "Alice has no successful scan of this server yet."
+      "help": "Alice shows the websites as it last read them, on {{time}}. Choose Discover again after the problem is fixed.",
+      "neverScanned": "Alice has not read any website from this server yet."
     },
     "deployUnavailable": "Deploying is unavailable for now.",
     "unavailable": {
@@ -1073,17 +1094,21 @@
     "unchanged": "This certificate was already in place. Nothing was changed.",
     "rolledBack": "Your server was restored to its previous certificate.",
     "noChange": "Nothing was changed on the server.",
-    "rollbackFailed": "Automatic restore failed. Manual action is needed.",
-    "recovering": "The connection to the server was lost. Alice will check the server and finish or undo the change.",
+    "rollbackFailed": "Alice cannot confirm which certificate the website serves. Manual action is needed.",
+    "recovering": "Alice could not confirm yet how this deployment ended. It is checking the server and will finish or undo the change.",
     "held": "The license has expired, so this deployment is on hold. It continues when an administrator renews the license or runs it.",
-    "jobStopped": "The background task ended before the deployment did. Open the deployment history to see where it stands.",
+    "jobStopped": "The background job ended before the deployment did. Open the deployment history to see where it stands.",
     "unknownStatus": "Alice cannot tell the state of this deployment. Open the deployment history to see it.",
     "stillWorking": "Alice is still working on this. Open the deployment history in a minute to see the result.",
-    "connectionLost": "Alice cannot reach itself right now. The deployment goes on in the background. Open the deployment history in a minute to see the result.",
+    "connectionLost": "Your browser cannot reach Alice right now. The deployment goes on in the background. Open the deployment history in a minute to see the result.",
     "openHistory": "Open deployment history",
     "openDeployment": "Open this deployment",
     "partial": "Updated websites: {{ok}} of {{total}}",
-    "succeededUnverified": "The new certificate was deployed and Nginx was reloaded."
+    "succeededUnverified": "The new certificate was deployed and Nginx was reloaded.",
+    "rollbackFailedRestored": "The previous files are back, but Alice could not confirm that the website serves the previous certificate. Check the website now.",
+    "finishing": "The background job has finished. Alice is recording the result.",
+    "partialOpen": "Websites not finished yet: {{open}}. Follow them in the deployment history.",
+    "listCut": "The list of certificates was cut after {{count}} entries, so some certificates are not offered here."
   },
   "deployments": {
     "title": "Deployment history",
@@ -1130,10 +1155,12 @@
       "title": "Recovery",
       "attempts": "Recovery attempts: {{attempts}}",
       "next": "Next attempt after: {{time}}",
-      "needsAttention": "Alice cannot reach the server and keeps trying. If this continues, check the server and its network.",
-      "running": "Alice is checking the server to finish or undo the change."
+      "needsAttention": "Alice still cannot confirm the outcome after several attempts and keeps trying. Check the server and its network.",
+      "running": "Alice is checking the server to finish or undo the change.",
+      "confirmed_one": "Alice confirmed the outcome after {{count}} recovery attempt.",
+      "confirmed_other": "Alice confirmed the outcome after {{count}} recovery attempts."
     },
-    "verifyFailedTitle": "Why the new certificate was rolled back",
+    "verifyFailedTitle": "Verification result",
     "technical": "Technical details",
     "held": "On hold for the license",
     "steps": {

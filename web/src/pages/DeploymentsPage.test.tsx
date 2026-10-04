@@ -44,7 +44,7 @@ describe('DeploymentsPage', () => {
     await renderRoute('/deployments');
     const rows = await screen.findAllByTestId('deployment-row');
     expect(within(rows[0]).getByText('Needs attention')).toBeInTheDocument();
-    expect(within(rows[0]).getByText('Being finished after a lost connection')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('Confirming the outcome')).toBeInTheDocument();
     expect(within(rows[1]).getByText('On hold for the license')).toBeInTheDocument();
     expect(within(rows[2]).getByText('Unknown')).toBeInTheDocument();
   });
@@ -72,9 +72,9 @@ describe('DeploymentsPage', () => {
     const view = await renderRoute('/deployments');
     expect(await screen.findByText('No deployments yet.')).toBeInTheDocument();
     view.unmount();
-    server.use(http.get('/api/v1/deployments', () => errorResponse(403, 'ALC-AUTH-0004', 'auth.forbidden')));
+    server.use(http.get('/api/v1/deployments', () => errorResponse(403, 'ALC-AUTH-0002', 'auth.forbidden')));
     await renderRoute('/deployments');
-    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('You do not have permission to do this.');
   });
 
   it('is in the navigation for every role', async () => {

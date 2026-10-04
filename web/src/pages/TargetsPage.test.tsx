@@ -220,7 +220,7 @@ describe('TargetsPage', () => {
         creates += 1;
         return HttpResponse.json({ target: pending, job_id: 'job-1', status_url: '/api/v1/jobs/job-1' }, { status: 201 });
       }),
-      http.get('/api/v1/jobs/:id', () => errorResponse(500, 'ALC-INT-0001', 'internal.unexpected')),
+      http.get('/api/v1/jobs/:id', () => errorResponse(500, 'ALC-SYS-0003', 'internal.unexpected')),
       http.get('/api/v1/targets/:id', () => HttpResponse.json(pending)),
       http.get('/api/v1/targets/:id/host-keys', () => HttpResponse.json({ items: [] })),
       http.get('/api/v1/targets/:id/ssh-keys', () => HttpResponse.json({ items: [] })),
@@ -303,7 +303,7 @@ describe('TargetsPage', () => {
         HttpResponse.json(jobFixture({ id: 'job-1', status: 'failed', error: { code: 'ALC-TGT-0002', reason: 'target.host_key_unconfirmed' } })),
       ),
       http.get('/api/v1/targets/:id/host-keys', () => HttpResponse.json({ items: [observed] })),
-      http.post('/api/v1/targets/:id/host-keys/:keyId/actions/confirm', () => errorResponse(500, 'ALC-INT-0001', 'internal.unexpected')),
+      http.post('/api/v1/targets/:id/host-keys/:keyId/actions/confirm', () => errorResponse(500, 'ALC-SYS-0003', 'internal.unexpected')),
     );
     await renderRoute('/servers');
     await addForm();
@@ -352,7 +352,7 @@ describe('TargetsPage', () => {
       await userEvent.click(await screen.findByRole('button', { name: 'Sunucu ekle' }));
       const dialog = await screen.findByRole('dialog', { name: 'Sunucu ekle' });
       expect(within(dialog).getByLabelText('Sunucu türü')).toBeInTheDocument();
-      expect(within(dialog).getAllByRole('option').map((o) => o.textContent)).toEqual(['Linux sunucu', 'Nginx sunucu']);
+      expect(within(dialog).getAllByRole('option').map((o) => o.textContent)).toEqual(['Linux sunucusu', 'Nginx sunucusu']);
     });
   });
 });

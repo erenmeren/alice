@@ -17,7 +17,7 @@ function Harness({ canEdit = true }: { canEdit?: boolean }) {
   const list = useQuery({ queryKey: locationsKey(targetFixture.id), queryFn: () => listLocations(targetFixture.id) });
   const loc = list.data?.items.find((l) => l.id === LID);
   if (!loc) return null;
-  return <LocationSettingsDialog location={loc} site="www.example.test" canEdit={canEdit} onClose={() => {}} />;
+  return <LocationSettingsDialog location={loc} canEdit={canEdit} onClose={() => {}} />;
 }
 
 function listServer(initial: CertificateLocation) {
@@ -112,12 +112,12 @@ describe('LocationSettingsDialog', () => {
 
   it('keeps the form as typed after a server error', async () => {
     listServer(locationFixture({ id: LID }));
-    server.use(http.patch(`/api/v1/locations/${LID}`, () => errorResponse(403, 'ALC-AUTH-0004', 'auth.forbidden')));
+    server.use(http.patch(`/api/v1/locations/${LID}`, () => errorResponse(403, 'ALC-AUTH-0002', 'auth.forbidden')));
     await renderApp(<Harness />);
     const port = await screen.findByLabelText(/Port to check/);
     await userEvent.type(port, '8443');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('You do not have permission to do this.');
     expect(port).toHaveValue('8443');
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
     expect(screen.queryByText('Settings saved.')).not.toBeInTheDocument();
@@ -139,6 +139,32 @@ describe('LocationSettingsDialog', () => {
     expect(await screen.findByText(/Your change was not saved because this website changed in the meantime/)).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('Someone changed this item while you were editing it.');
     await waitFor(() => expect(screen.getByLabelText(/Port to check/)).toHaveValue('9000'));
+  });
+
+  it('does not overwrite what was typed after a 412 when the list did not change', async () => {
+    listServer(locationFixture({ id: LID, version: 3 }));
+    server.use(http.patch(`/api/v1/locations/${LID}`, () => errorResponse(412, 'ALC-SYS-0008', 'system.precondition_failed')));
+    await renderApp(<Harness />);
+    const port = await screen.findByLabelText(/Port to check/);
+    await userEvent.type(port, '8443');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByText(/Your change was not saved/);
+    await userEvent.clear(port);
+    await userEvent.type(port, '9443');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(port).toHaveValue('9443');
+  });
+
+  it('treats a name that differs from the stored one only in case as unchanged', async () => {
+    listServer(locationFixture({ id: LID, verify_sni: 'lb.example.test' }));
+    let sent = 0;
+    server.use(http.patch(`/api/v1/locations/${LID}`, () => ((sent += 1), HttpResponse.json(locationFixture({ id: LID })))));
+    await renderApp(<Harness />);
+    await userEvent.clear(await screen.findByLabelText(/Name to check/));
+    await userEvent.type(screen.getByLabelText(/Name to check/), 'LB.Example.test');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('Change a value before saving.')).toBeInTheDocument();
+    expect(sent).toBe(0);
   });
 
   it('is read-only for someone who cannot change it', async () => {

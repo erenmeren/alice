@@ -97,8 +97,10 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
         headline = t('deploy.rolledBack');
         break;
       default:
+        // rollback_failed: the headline follows the phase, so it never contradicts the cause. With
+        // the files back (phase restored) only the check of the website is missing.
         color = 'red';
-        headline = t('deploy.rollbackFailed');
+        headline = t(d.phase === 'restored' ? 'deploy.rollbackFailedRestored' : 'deploy.rollbackFailed');
     }
   } else if (view === 'held') {
     color = 'yellow';
@@ -106,6 +108,9 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
   } else if (view === 'recovering') {
     color = 'orange';
     headline = t('deploy.recovering');
+  } else if (view === 'finishing') {
+    color = 'blue';
+    headline = t('deploy.finishing');
   } else if (view === 'stopped') {
     color = 'yellow';
     headline = t('deploy.jobStopped');

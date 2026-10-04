@@ -64,7 +64,7 @@ describe('SSHKeyDetailPage', () => {
   });
 
   it('shows the error when the key cannot be loaded', async () => {
-    server.use(...sessionHandlers(sessionFor('admin')), http.get('/api/v1/ssh-keys/:id', () => errorResponse(404, 'ALC-KEY-0404', 'sshkey.not_found')));
+    server.use(...sessionHandlers(sessionFor('admin')), http.get('/api/v1/ssh-keys/:id', () => errorResponse(404, 'ALC-SYS-0001', 'system.not_found')));
     await renderRoute(`/ssh-keys/${key.id}`);
     expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to SSH keys' })).toHaveAttribute('href', '/ssh-keys');

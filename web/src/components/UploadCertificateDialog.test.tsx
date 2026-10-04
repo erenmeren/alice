@@ -84,7 +84,7 @@ describe('UploadCertificateDialog', () => {
 
   it('shows field problems named after the form fields', async () => {
     upload(() =>
-      errorResponse(422, 'ALC-VAL-0001', 'validation.failed', { details: [{ field: 'certificate_pem', code: 'validation.key_in_certificate' }] }),
+      errorResponse(422, 'ALC-SYS-0006', 'validation.failed', { details: [{ field: 'certificate_pem', code: 'validation.key_in_certificate' }] }),
     );
     await renderApp(<UploadCertificateDialog opened onClose={() => {}} onUploaded={() => {}} />);
     await fillPem('KEY-PASTED', 'KEY');
@@ -219,11 +219,11 @@ describe('UploadCertificateDialog', () => {
     });
 
     it('shows the server text for a refused upload (403), clears the key and keeps the form', async () => {
-      upload(() => errorResponse(403, 'ALC-AUTHZ-0001', 'authz.forbidden'));
+      upload(() => errorResponse(403, 'ALC-AUTH-0002', 'auth.forbidden'));
       await renderApp(<UploadCertificateDialog opened onClose={() => {}} onUploaded={() => {}} />);
       await fillPem();
       await userEvent.click(screen.getByRole('button', { name: 'Upload' }));
-      expect(await screen.findByRole('alert')).toBeInTheDocument();
+      expect(await screen.findByRole('alert')).toHaveTextContent('You do not have permission to do this.');
       expect(screen.getByLabelText('Private key (PEM)')).toHaveValue('');
       expect(screen.getByLabelText('Certificate and chain (PEM)')).toHaveValue('CERT');
       expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled();

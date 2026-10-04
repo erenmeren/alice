@@ -150,14 +150,14 @@ describe('PendingCSRs', () => {
   it('shows the server text for a refused cancel (403) and keeps the dialog', async () => {
     server.use(
       ...sessionHandlers(operatorSession),
-      http.post('/api/v1/certificates/csr/:id/actions/cancel', () => errorResponse(403, 'ALC-AUTHZ-0001', 'authz.forbidden')),
+      http.post('/api/v1/certificates/csr/:id/actions/cancel', () => errorResponse(403, 'ALC-AUTH-0002', 'auth.forbidden')),
     );
     csrs();
     await renderApp(<PendingCSRs canOperate onCompleted={() => {}} />);
     await userEvent.click((await screen.findAllByRole('button', { name: /Cancel request/ }))[0]);
     const dialog = await screen.findByRole('dialog');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel request' }));
-    expect(await within(dialog).findByRole('alert')).toBeInTheDocument();
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('You do not have permission to do this.');
     expect(within(dialog).getByRole('button', { name: 'Cancel request' })).toBeEnabled();
     expect(within(dialog).getByRole('button', { name: 'Keep request' })).toBeInTheDocument();
   });

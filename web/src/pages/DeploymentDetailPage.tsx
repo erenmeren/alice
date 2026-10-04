@@ -18,13 +18,22 @@ import { formatDateTime } from '../datetime';
 // How often the page reads the deployment while it can still change: a running deployment moves in
 // seconds, one being recovered or held for the license only when Alice retries or an Administrator
 // acts. A settled deployment is read once.
-function refetchEvery(d: DeploymentDetail | undefined): number | false {
+function refetchEvery(d: DeploymentDetail | undefined, updates: number): number | false {
   if (!d) return false;
-  switch (deploymentView(d)) {
+  // A job that ended or a status this version does not know is read a few more times, slowly, and
+  // then left: nothing is expected to change on its own.
+  const view = deploymentView(d);
+  if ((view === 'stopped' || view === 'unknown' || view === 'finishing') && updates > 20) return false;
+  switch (view) {
     case 'working':
       return 2_000;
     case 'recovering':
       return 10_000;
+    case 'finishing':
+      return 3_000;
+    case 'stopped':
+    case 'unknown':
+      return 15_000;
     case 'held':
       return 30_000;
     default:
@@ -51,7 +60,7 @@ export function DeploymentDetailPage() {
   const dep = useQuery({
     queryKey: deploymentKey(id),
     queryFn: () => getDeployment(id),
-    refetchInterval: (q) => refetchEvery(q.state.data),
+    refetchInterval: (q) => refetchEvery(q.state.data, q.state.dataUpdateCount),
     placeholderData: keepPreviousData,
   });
 
@@ -69,7 +78,10 @@ export function DeploymentDetailPage() {
   const d = dep.data;
   const view = deploymentView(d);
   const time = (v: string | null) => (v ? formatDateTime(v, i18n.language) : '');
-  const showRecovery = view === 'recovering' || d.recovery_attempts > 0 || d.state === 'recovering';
+  // Ongoing recovery is described only while the deployment is not final; a finished one that went
+  // through recovery says only that its outcome was confirmed, and after how many attempts.
+  const recoveringNow = view !== 'final' && (d.state === 'recovering' || d.status === 'needs_attention');
+  const recoveredEarlier = view === 'final' && d.recovery_attempts > 0;
 
   return (
     <Stack gap="md">
@@ -106,15 +118,21 @@ export function DeploymentDetailPage() {
           {t('deploy.working')}
         </Alert>
       )}
-      {showRecovery && (
+      {(recoveringNow || recoveredEarlier) && (
         <Card withBorder padding="sm" data-testid="recovery">
           <Stack gap={4}>
             <Title order={2} size="h4">
               {t('deployments.recovery.title')}
             </Title>
-            <Text size="sm">{t('deployments.recovery.attempts', { attempts: d.recovery_attempts })}</Text>
-            {d.recover_after && <Text size="sm">{t('deployments.recovery.next', { time: time(d.recover_after) })}</Text>}
-            <Text size="sm">{t(d.status === 'needs_attention' ? 'deployments.recovery.needsAttention' : 'deployments.recovery.running')}</Text>
+            {recoveringNow ? (
+              <>
+                <Text size="sm">{t('deployments.recovery.attempts', { attempts: d.recovery_attempts })}</Text>
+                {d.recover_after && <Text size="sm">{t('deployments.recovery.next', { time: time(d.recover_after) })}</Text>}
+                <Text size="sm">{t(d.status === 'needs_attention' ? 'deployments.recovery.needsAttention' : 'deployments.recovery.running')}</Text>
+              </>
+            ) : (
+              <Text size="sm">{t('deployments.recovery.confirmed', { count: d.recovery_attempts })}</Text>
+            )}
           </Stack>
         </Card>
       )}
