@@ -212,6 +212,9 @@ func startNginxHost(t *testing.T, image, helper string, verified bool) *rnHost {
 	if verified {
 		require.NotContains(t, out, "cannot verify alice-helper", "the release helper was checked against its checksum")
 	}
+	// Nginx starts with the distribution's configuration, as its unit would.
+	h.sh(nginxBin)
+	require.Eventually(t, func() bool { return len(h.workers()) > 0 }, 30*time.Second, 100*time.Millisecond, "nginx started")
 	sum := sha256.Sum256(helperBytes)
 	require.Equal(t, hex.EncodeToString(sum[:]), strings.Fields(h.sh("sha256sum " + helperproto.HelperPath))[0], "the installed helper is the one copied")
 

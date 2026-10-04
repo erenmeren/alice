@@ -201,10 +201,9 @@ func (h *rnHost) testSudo(t *testing.T) {
 }
 
 // testUntouchedLayout (carry 1): the distribution's default configuration, as installed, is read
-// and authenticated: nginx -T works, the dump is trusted, no certificate is listed; nginx runs it.
+// and authenticated (nginx runs it: startNginxHost started it): nginx -T works, the dump is trusted,
+// no certificate is listed.
 func (h *rnHost) testUntouchedLayout(t *testing.T) {
-	h.sh(nginxBin)
-	require.Eventually(t, func() bool { return len(h.workers()) > 0 }, 30*time.Second, 100*time.Millisecond, "nginx started")
 	res, _ := h.discover(true)
 	require.NotNil(t, res.Nginx)
 	assert.True(t, res.Nginx.Found)
