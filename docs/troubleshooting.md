@@ -689,7 +689,7 @@ and without the confirmation for root's last key.
 
 ## ALC-NGX-0002: Nginx configuration has a problem
 
-**Meaning.** Nginx's configuration has a problem, so Alice will not change it. (HTTP 409, reason `nginx.config_invalid`.)
+**Meaning.** Nginx's configuration has a problem, so Alice will not deploy to this server until it is fixed. (HTTP 409, reason `nginx.config_invalid`.)
 
 **Likely cause.** Nginx's configuration has an error, or it uses files or settings Alice cannot safely read. Nothing was changed.
 
@@ -757,7 +757,7 @@ and without the confirmation for root's last key.
 
 **Likely cause.** Alice expects PEM text with `BEGIN CERTIFICATE` blocks, or a PFX file. During a deployment, the stored certificate could not be sent to the server in that form.
 
-**What to do.** When uploading, check that you chose the certificate file, not a request or another file. After a deployment, upload the certificate again, then deploy it.
+**What to do.** When uploading, check that you chose the certificate file, not a request or another file. After a deployment, look at the deployment's steps: if the certificate file itself is at fault, upload a corrected certificate and deploy that one. If it happens again, report the request ID.
 
 ## ALC-CRT-0002: Certificate and key do not match
 

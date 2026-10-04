@@ -286,6 +286,30 @@ func TestPhase4TextsAreTruthfulForEveryCause(t *testing.T) {
 			}
 		}
 	}
+	// Fix round 2: a second upload of a held certificate is refused (ALC-CRT-0008), so the deployment
+	// advice must not ask for one; the configuration refusal is about deploying, not editing Nginx.
+	assert.NotContains(t, en("errors.certificate.invalid.action"), "upload the certificate again")
+	assert.Contains(t, en("errors.certificate.invalid.action"), "corrected certificate")
+	assert.Contains(t, en("errors.certificate.invalid.action"), "request ID")
+	assert.Contains(t, cat.T("tr", "errors.certificate.invalid.action", nil), "düzeltilmiş bir sertifika")
+	assert.Contains(t, en("errors.nginx.config_invalid.title"), "will not deploy to this server until it is fixed")
+	for _, lang := range []string{"en", "tr"} {
+		raw, err := locales.FS.ReadFile("common/" + lang + ".json")
+		require.NoError(t, err)
+		flat, err := i18n.Flatten(raw)
+		require.NoError(t, err)
+		emails := 0
+		for k, text := range flat {
+			if !strings.HasPrefix(k, "email.deployment.") {
+				continue
+			}
+			emails++
+			for _, jargon := range []string{"journal", "günlük", "server block", "server bloğ", "Scan for SSH keys", "SSH anahtarlarını tara"} {
+				assert.NotContains(t, text, jargon, "%s %s", lang, k)
+			}
+		}
+		assert.Greater(t, emails, 10, "the Phase 4 emails were checked")
+	}
 	for _, r := range []string{"certificate.key_mismatch", "certificate.invalid"} {
 		assert.Contains(t, en("errors."+r+".action"), "When uploading", r)
 		assert.Contains(t, en("errors."+r+".action"), "After a deployment", r)

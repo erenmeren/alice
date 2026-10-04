@@ -387,7 +387,7 @@
         "action": "Install Nginx from your distribution or nginx.org, or add this server as a Linux server."
       },
       "config_invalid": {
-        "title": "Nginx's configuration has a problem, so Alice will not change it.",
+        "title": "Nginx's configuration has a problem, so Alice will not deploy to this server until it is fixed.",
         "cause": "Nginx's configuration has an error, or it uses files or settings Alice cannot safely read. Nothing was changed.",
         "action": "Run nginx -t on the server and fix any error. If it passes, check the file named on the server's page, then choose Discover again."
       },
@@ -431,7 +431,7 @@
       "invalid": {
         "title": "This is not a certificate Alice can read.",
         "cause": "Alice expects PEM text with BEGIN CERTIFICATE blocks, or a PFX file. During a deployment, the stored certificate could not be sent to the server in that form.",
-        "action": "When uploading, check that you chose the certificate file, not a request or another file. After a deployment, upload the certificate again, then deploy it."
+        "action": "When uploading, check that you chose the certificate file, not a request or another file. After a deployment, look at the deployment's steps: if the certificate file itself is at fault, upload a corrected certificate and deploy that one. If it happens again, report the request ID."
       },
       "key_mismatch": {
         "title": "The certificate does not match its private key.",
@@ -644,7 +644,7 @@
       },
       "restored_unverified": {
         "subject": "The previous certificate is back on {{target_name}} but Alice could not confirm the website serves it",
-        "body": "A certificate deployment on the server {{target_name}} failed (file {{cert_path}}), and Alice put the previous files back. Alice could not confirm that the website serves the previous certificate, for example because another server block or a load balancer answers, or because the check could not connect.\n\nCheck the website and run systemctl status nginx on the server. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
+        "body": "A certificate deployment on the server {{target_name}} failed (file {{cert_path}}), and Alice put the previous files back. Alice could not confirm that the website serves the previous certificate, for example because another website on this server or a load balancer in front of it answers, or because the check could not connect.\n\nCheck the website and run systemctl status nginx on the server. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
       },
       "superseded": {
         "subject": "A later operation overwrote the files of a deployment on {{target_name}}",

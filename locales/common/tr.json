@@ -387,7 +387,7 @@
         "action": "Nginx'i dağıtımınızdan veya nginx.org'dan kurun ya da bu sunucuyu Linux sunucu olarak ekleyin."
       },
       "config_invalid": {
-        "title": "Nginx yapılandırmasında bir sorun var, bu yüzden Alice yapılandırmayı değiştirmeyecek.",
+        "title": "Nginx yapılandırmasında bir sorun var, bu yüzden sorun giderilene kadar Alice bu sunucuya dağıtım yapmayacak.",
         "cause": "Nginx yapılandırmasında bir hata var ya da Alice'in güvenle okuyamadığı dosyalar veya ayarlar kullanılıyor. Hiçbir şey değiştirilmedi.",
         "action": "Sunucuda nginx -t komutunu çalıştırın ve varsa hatayı giderin. Komut başarılıysa sunucunun sayfasında adı geçen dosyayı denetleyin, sonra Keşfet'i yeniden seçin."
       },
@@ -431,7 +431,7 @@
       "invalid": {
         "title": "Bu, Alice'in okuyabildiği bir sertifika değil.",
         "cause": "Alice, BEGIN CERTIFICATE blokları içeren PEM metni veya bir PFX dosyası bekler. Bir dağıtımda, kayıtlı sertifika sunucuya bu biçimde gönderilemedi.",
-        "action": "Yüklerken imzalama isteğini veya başka bir dosyayı değil, sertifika dosyasını seçtiğinizden emin olun. Bir dağıtımdan sonra sertifikayı yeniden yükleyin, sonra dağıtın."
+        "action": "Yüklerken imzalama isteğini veya başka bir dosyayı değil, sertifika dosyasını seçtiğinizden emin olun. Bir dağıtımdan sonra dağıtımın adımlarına bakın: sorun sertifika dosyasının kendisindeyse düzeltilmiş bir sertifika yükleyip onu dağıtın. Sorun yinelenirse istek kimliğini bildirin."
       },
       "key_mismatch": {
         "title": "Sertifika özel anahtarıyla eşleşmiyor.",
@@ -644,7 +644,7 @@
       },
       "restored_unverified": {
         "subject": "{{target_name}} sunucusunda önceki sertifika geri yüklendi ancak Alice web sitesinin onu sunduğunu doğrulayamadı",
-        "body": "{{target_name}} sunucusundaki bir sertifika dağıtımı başarısız oldu (dosya: {{cert_path}}) ve Alice önceki dosyaları geri yükledi. Alice web sitesinin önceki sertifikayı sunduğunu doğrulayamadı; örneğin başka bir server bloğu veya bir yük dengeleyici yanıt veriyor ya da denetim bağlantı kuramamış olabilir.\n\nWeb sitesini denetleyin ve sunucuda systemctl status nginx komutunu çalıştırın. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
+        "body": "{{target_name}} sunucusundaki bir sertifika dağıtımı başarısız oldu (dosya: {{cert_path}}) ve Alice önceki dosyaları geri yükledi. Alice web sitesinin önceki sertifikayı sunduğunu doğrulayamadı; örneğin bu sunucudaki başka bir web sitesi veya önündeki bir yük dengeleyici yanıt veriyor ya da denetim bağlantı kuramamış olabilir.\n\nWeb sitesini denetleyin ve sunucuda systemctl status nginx komutunu çalıştırın. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
       },
       "superseded": {
         "subject": "{{target_name}} sunucusunda sonraki bir işlem bir dağıtımın dosyalarının üzerine yazdı",
