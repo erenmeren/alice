@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -987,4 +988,100 @@ func TestEmulatorParsesProtocol4Lines(t *testing.T) {
 		tokens: []string{"--addr", "'127.0.0.1'", "--port", "'443'", "--sni", "'_'", "--key-type", "'any'"}})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.ExitCode)
+}
+
+// hostileList answers authkeys-list with `files` readable files and `unsupported` refused ones for
+// root, and every authkeys-read with keysPerFile keys (adapted from the audit's PoC, AUD-04(a)).
+func hostileList(t *testing.T, e *provEnv, users, files, unsupported, keysPerFile int) *atomic.Int64 {
+	t.Helper()
+	var content strings.Builder
+	for range keysPerFile {
+		line, _ := keyLine(t, "ed25519", "", "k")
+		content.WriteString(line + "\n")
+	}
+	body := []byte(content.String())
+	sum := sha256.Sum256(body)
+	list := helperproto.AuthKeysListResponse{OK: true, AuthorizedKeysCommand: "none", Warnings: []string{}, Accounts: []string{"root"}, AccountsComplete: true}
+	for n := range users {
+		u := helperproto.UserFiles{User: "root", UID: 0, Home: "/root", AuthorizedKeysCommand: "none"}
+		if n > 0 {
+			u.User, u.UID, u.Home = fmt.Sprintf("u%d", n), 1000+n, fmt.Sprintf("/home/u%d", n)
+		}
+		for i := range files {
+			u.Files = append(u.Files, helperproto.FileInfo{Path: fmt.Sprintf("%s/.ssh/k%d", u.Home, i), Exists: true, StrictModesOK: true})
+		}
+		for i := range unsupported {
+			u.Files = append(u.Files, helperproto.FileInfo{Path: fmt.Sprintf("%s/.ssh/u%d", u.Home, i), Exists: true, Unsupported: true})
+		}
+		list.Users = append(list.Users, u)
+	}
+	listJSON, err := json.Marshal(list)
+	require.NoError(t, err)
+	var reads atomic.Int64
+	emu := e.emu.Handler()
+	e.srv.SetHandler(func(cmd string, stdin []byte) linuxsshtest.Response {
+		switch {
+		case strings.Contains(cmd, " authkeys-list"):
+			return linuxsshtest.Response{Stdout: listJSON}
+		case strings.Contains(cmd, " authkeys-read "):
+			reads.Add(1)
+			path := strings.Trim(cmd[strings.LastIndex(cmd, " ")+1:], "'")
+			out, _ := json.Marshal(helperproto.AuthKeysReadResponse{OK: true, Path: path, SHA256: hex.EncodeToString(sum[:]),
+				ContentB64: base64.StdEncoding.EncodeToString(body), Owner: "root"})
+			return linuxsshtest.Response{Stdout: out}
+		}
+		return emu(cmd, stdin)
+	})
+	return &reads
+}
+
+// AUD-04(a): a hostile helper decides nothing about the size of a discovery: users, files read,
+// keys and warnings are bounded; a cut result is partial (missing marking only for the files read)
+// and says list_truncated.
+func TestDiscoverIsBounded(t *testing.T) {
+	e := newProvEnv(t)
+	reads := hostileList(t, e, 1, 3000, 5000, 20)
+	res, err := e.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, reads.Load(), int64(maxDiscoverFiles))
+	assert.LessOrEqual(t, len(res.SSHKeys), maxDiscoverKeys)
+	assert.LessOrEqual(t, len(res.Warnings), maxDiscoverWarnings)
+	assert.LessOrEqual(t, len(res.ReadFiles), maxDiscoverFiles)
+	assert.True(t, res.Partial)
+	assert.Contains(t, warnCodes(res.Warnings), providers.WarnListTruncated)
+	for _, k := range res.SSHKeys {
+		assert.Contains(t, res.ReadFiles, k.FilePath, "a file is read completely, or not at all")
+	}
+}
+
+func TestDiscoverBoundsTheUsers(t *testing.T) {
+	e := newProvEnv(t)
+	hostileList(t, e, maxDiscoverUsers+20, 1, 0, 1)
+	res, err := e.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.Len(t, res.ReadFiles, maxDiscoverUsers)
+	assert.True(t, res.Partial)
+	assert.False(t, res.AccountsComplete)
+	assert.Contains(t, warnCodes(res.Warnings), providers.WarnListTruncated)
+}
+
+func TestDiscoverStopsReadingAfterItsTimeBudget(t *testing.T) {
+	old := discoverBudget
+	discoverBudget = 0
+	defer func() { discoverBudget = old }()
+	e := newProvEnv(t)
+	reads := hostileList(t, e, 1, 50, 0, 1)
+	res, err := e.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, reads.Load(), int64(1))
+	assert.True(t, res.Partial)
+	assert.Contains(t, warnCodes(res.Warnings), providers.WarnListTruncated)
+}
+
+func warnCodes(ws []providers.Warning) []string {
+	var out []string
+	for _, w := range ws {
+		out = append(out, w.Code)
+	}
+	return out
 }

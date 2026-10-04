@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"time"
 
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh/helperproto"
@@ -16,6 +17,28 @@ import (
 )
 
 var warningCodeRE = regexp.MustCompile(`^[a-z][a-z_]{0,39}$`)
+
+// Bounds of one SSH-key discovery (AUD-04(a): the helper's answer is the server's, so nothing it
+// lists decides how much work or memory a discovery costs). maxDiscoverUsers is the spec's scan
+// bound (§13.2: 200 users, the helper's own); the others have no number in the spec and are set
+// well above a real server's: authorized_keys files read (and listed entries looked at), keys and
+// unreadable lines kept, warnings kept. A discovery cut at a bound is partial (inventory marks
+// keys missing only in the files it read) and carries list_truncated.
+const (
+	maxDiscoverUsers    = 200
+	maxDiscoverFiles    = 1000
+	maxDiscoverKeys     = 10000
+	maxDiscoverWarnings = 500
+)
+
+// discoverBudget bounds the time spent reading authorized_keys files: once it has passed no
+// further file is read (the one in flight finishes within its own command budget), and the result
+// is partial. A per-job deadline for discovery jobs as a whole belongs to the jobs layer
+// (targetjobs); this one bounds the part a hostile server can make long. Tests lower it.
+var discoverBudget = 10 * time.Minute
+
+// errDiscoveryCut: a file's keys would exceed maxDiscoverKeys; it is not read into the result.
+var errDiscoveryCut = errors.New("linuxssh: the discovery reached its key bound")
 
 // warn builds a warning; kv are parameter name/value pairs (values are cleaned remote text).
 func warn(code string, kv ...string) providers.Warning {
@@ -213,13 +236,18 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 			res.Warnings = append(res.Warnings, warn(w))
 		}
 	}
-	for _, u := range list.Users {
+	users, cut, stop := list.Users, false, false
+	if len(users) > maxDiscoverUsers {
+		users, cut, res.AccountsComplete = users[:maxDiscoverUsers], true, false
+	}
+	for _, u := range users {
 		if u.UID == 0 && helperproto.ValidUser(u.User) {
 			res.UID0Users = append(res.UID0Users, u.User)
 		}
 	}
 	slices.Sort(res.UID0Users)
-	for _, u := range list.Users {
+	start, entries := s.conn.clock.Now(), 0
+	for _, u := range users {
 		if u.SSHDUnreadable && res.SSHD.Read {
 			// A Match block could not be evaluated for this user: the listed files come from the
 			// global configuration and may not be the ones sshd reads.
@@ -230,10 +258,27 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 			res.Warnings = append(res.Warnings, warn("keys_managed_elsewhere", "user", u.User))
 		}
 		for _, f := range u.Files {
-			if err := s.discoverFile(ctx, u, f, &res); err != nil {
+			if stop || entries >= maxDiscoverFiles || s.conn.clock.Now().Sub(start) > discoverBudget {
+				cut, stop = true, true
+				break
+			}
+			entries++
+			err := s.discoverFile(ctx, u, f, &res)
+			if errors.Is(err, errDiscoveryCut) {
+				cut, stop = true, true
+				break
+			}
+			if err != nil {
 				return providers.DiscoveryResult{}, err
 			}
 		}
+	}
+	if len(res.Warnings) >= maxDiscoverWarnings {
+		res.Warnings, cut = res.Warnings[:maxDiscoverWarnings-1], true
+	}
+	if cut {
+		res.Partial = true
+		res.Warnings = append(res.Warnings, warn(providers.WarnListTruncated))
 	}
 	return res, nil
 }
@@ -273,6 +318,9 @@ func (s *session) discoverFile(ctx context.Context, u helperproto.UserFiles, f h
 		return nil
 	}
 	keys, bad := ak.Keys(u.User, f.Path)
+	if len(res.SSHKeys)+len(res.UnreadableLines)+len(keys)+len(bad) > maxDiscoverKeys {
+		return errDiscoveryCut // not read into the result: not in ReadFiles, nothing of it marked missing
+	}
 	res.SSHKeys = append(res.SSHKeys, keys...)
 	res.UnreadableLines = append(res.UnreadableLines, bad...)
 	if len(bad) > 0 {
