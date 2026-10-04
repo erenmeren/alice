@@ -23,17 +23,19 @@ test-integration: ## Run integration tests (needs Docker)
 
 # The real-Nginx matrix installs the release-built helper (make helper) through the nginx profile's
 # setup script, which checks it against the checksums linked into the test binary exactly as make
-# build links them into alice. A -run pattern that matches no test passes silently ("[no tests to
-# run]"), so each matrix line fails on that text instead.
-SSH_MATRIX_RAN = 2>&1 | awk '{ print } /no tests to run/ { none = 1 } END { exit none }'
+# build links them into alice. It runs only here (ALICE_REAL_MATRIX=1; make coverage skips it). Each
+# matrix line runs verbose and fails unless its test PASSED: a -run pattern that matches no test
+# ("[no tests to run]", which go test calls ok) or a skipped test fails the line. RUN, PAUSE, CONT
+# and passing subtest lines are not printed.
+SSH_MATRIX_PASSED = 2>&1 | awk -v t=$(1) '!/^=== |^ +--- PASS/ { print } /no tests to run/ || $$0 ~ "^--- SKIP: " t { bad = 1 } $$0 ~ "^--- PASS: " t " " { ok = 1 } END { exit bad || !ok }'
 
 .PHONY: test-ssh
 test-ssh: helper ## Run the real OpenSSH and Nginx matrices (Ubuntu 22.04, Debian 12, Rocky 9; needs Docker). ALICE_SSH_IMAGES=ubuntu22 limits them
 	@for sum in '$(call HELPER_SUM,amd64)' '$(call HELPER_SUM,arm64)'; do \
 	  echo "$$sum" | grep -Eqx '[0-9a-f]{64}' || { echo "bin/alice-helper.sha256 lacks a helper checksum; run make helper"; exit 1; }; \
 	done
-	set -o pipefail; go test -count=1 -tags integration -run '^TestRealOpenSSH$$' ./internal/providers/linuxssh/ $(SSH_MATRIX_RAN)
-	set -o pipefail; go test -count=1 -timeout 30m -tags integration -ldflags "$(HELPER_LDFLAGS)" -run '^TestRealNginx' ./internal/providers/nginx/ $(SSH_MATRIX_RAN)
+	set -o pipefail; go test -count=1 -v -tags integration -run '^TestRealOpenSSH$$' ./internal/providers/linuxssh/ $(call SSH_MATRIX_PASSED,TestRealOpenSSH)
+	set -o pipefail; ALICE_REAL_MATRIX=1 go test -count=1 -v -timeout 30m -tags integration -ldflags "$(HELPER_LDFLAGS)" -run '^TestRealNginx' ./internal/providers/nginx/ $(call SSH_MATRIX_PASSED,TestRealNginx)
 
 .PHONY: i18n-check
 i18n-check: ## Verify EN/TR translation catalogs have identical keys and placeholders
@@ -199,7 +201,7 @@ image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
 # ALICE_E2E_PORT (default 9443), so it runs beside the make up stack, which ci never touches.
 .PHONY: ci
 ci: ## Run the full CI pipeline locally
-	$(MAKE) lint test coverage build release-symcheck i18n-check web-lint web-test vuln secrets-scan fs-scan
+	$(MAKE) lint test coverage test-ssh build release-symcheck i18n-check web-lint web-test vuln secrets-scan fs-scan
 	@status=0; $(MAKE) e2e-up e2e-hardening-check e2e || status=$$?; $(MAKE) e2e-down; exit $$status
 	$(MAKE) image-scan
 

@@ -29,6 +29,18 @@ jobs:
       - run: make build
       - run: make release-symcheck
 
+  ssh-matrix:
+    # The real OpenSSH and Nginx matrices (spec §22.3) on Ubuntu 22.04, Debian 12 and Rocky 9 in
+    # Docker. Measured locally: about 100 s of tests with cached images; building the three images
+    # without a layer cache took 48 s more (base images already pulled).
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version-file: go.mod }
+      - run: make test-ssh
+
   licensectl:
     # Spec §26.4: licensectl is tested on Linux and macOS (the vendor's machines).
     strategy:
