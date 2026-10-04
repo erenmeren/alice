@@ -308,3 +308,29 @@ func TestBoundParamsFitPostgreSQLsRendering(t *testing.T) {
 	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT octet_length($1::jsonb::text)", string(raw)).Scan(&n))
 	assert.LessOrEqual(t, n, 4096, "PostgreSQL's rendering fits the CHECK")
 }
+
+// finishLocked writes phase and helper_error on every finish, whatever an earlier record left: the
+// API's refineReason (ALC-DEP-0019/0020) and the web's rollback_failed headline read them as the
+// final answer's, never a stale one (final review, area C).
+func TestFinishOverwritesPhaseAndHelperError(t *testing.T) {
+	f := newDeployFixture(t)
+	for i, tc := range []struct {
+		loc               uuid.UUID
+		phase, helperErr  string
+		wantPhase, wantHE string
+	}{
+		{f.loc1, "", "", "", ""},
+		{f.loc2, providers.PhaseRestoreFailed, "", providers.PhaseRestoreFailed, ""},
+		{f.loc5, "", providers.DeployErrFileChanged, "", providers.DeployErrFileChanged},
+	} {
+		id := f.deploying(tc.loc)
+		// A stale value from an earlier answer (written as the owner: no engine path leaves one).
+		_, err := f.h.db.Owner.Exec(f.h.ctx, "UPDATE deployments SET phase = 'restored', helper_error = 'syntax' WHERE id = $1", id)
+		require.NoError(t, err)
+		require.NoError(t, f.h.svc.FinishDeployment(f.h.ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusRollbackFailed,
+			ErrorCode: "deployment.rollback_failed", Phase: tc.phase, HelperError: tc.helperErr}))
+		d := f.get(id)
+		assert.Equal(t, tc.wantPhase, d.Phase, i)
+		assert.Equal(t, tc.wantHE, d.HelperError, i)
+	}
+}
