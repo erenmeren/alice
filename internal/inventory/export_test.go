@@ -77,3 +77,25 @@ func SetPrepareHook(f func()) (restore func()) {
 // BoundParams exposes boundParams with the error params' allowlist to the test that measures
 // PostgreSQL's rendering of the result.
 func BoundParams(in map[string]string) map[string]string { return boundParams(in, errorParamKeys) }
+
+// HoldCSRSlots takes every signing-request key generation slot; release gives them back.
+func HoldCSRSlots() (release func()) {
+	var held []func()
+	for range maxCSRKeygens {
+		if r, ok := acquireCSRSlot(); ok {
+			held = append(held, r)
+		}
+	}
+	return func() {
+		for _, r := range held {
+			r()
+		}
+	}
+}
+
+// SetMaxPendingCSRs changes the bound of open signing requests; restore puts it back.
+func SetMaxPendingCSRs(n int) (restore func()) {
+	old := maxPendingCSRs
+	maxPendingCSRs = n
+	return func() { maxPendingCSRs = old }
+}

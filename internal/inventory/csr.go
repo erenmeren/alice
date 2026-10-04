@@ -67,6 +67,29 @@ const (
 	listedFinishedCSRs   = 50
 )
 
+// maxCSRKeygens bounds the signing-request keys generated at once in this process: an RSA 4096 key
+// costs about a second of one core, so a burst of requests could otherwise pin every core. Further
+// requests are refused at once with ErrCSRBusy instead of queueing (as PFX uploads, maxPFXDecodes).
+const maxCSRKeygens = 2
+
+var csrSlots = make(chan struct{}, maxCSRKeygens)
+
+// acquireCSRSlot takes a key generation slot without waiting; release gives it back.
+func acquireCSRSlot() (release func(), ok bool) {
+	select {
+	case csrSlots <- struct{}{}:
+		return func() { <-csrSlots }, true
+	default:
+		return nil, false
+	}
+}
+
+// maxPendingCSRs bounds the open signing requests (each holds a sealed key nobody uses until the
+// request is completed): CreateCSR refuses with ErrTooManyPendingCSRs beyond it. It equals what
+// ListCSRs lists, so every open request stays visible. Concurrent requests may pass the check
+// together, at most maxCSRKeygens of them.
+var maxPendingCSRs = maxListedPendingCSRs
+
 // WarnCSRNameMismatch: the signed certificate does not cover every name of its request (a CA may
 // change the names; the completion is accepted and says so).
 const WarnCSRNameMismatch = "csr_name_mismatch"
@@ -125,7 +148,10 @@ func requestNames(cn string, sans []string) []string {
 }
 
 // CreateCSR generates a key and a signing request for it. The key is sealed in the transaction
-// that stores the request and zeroed before return; only the request (public) is returned.
+// that stores the request and zeroed before return; only the request (public) is returned. At most
+// maxCSRKeygens keys are generated at once (ErrCSRBusy, retryable) and at most maxPendingCSRs
+// requests are open (ErrTooManyPendingCSRs); a request whose caller has gone (ctx done) by the time
+// it gets a slot generates nothing.
 func (s *Service) CreateCSR(ctx context.Context, a Actor, in CSRInput) (CSR, error) {
 	if err := s.license.Allow(license.ClassChange); err != nil {
 		return CSR{}, err
@@ -134,9 +160,22 @@ func (s *Service) CreateCSR(ctx context.Context, a Actor, in CSRInput) (CSR, err
 	if len(errs) > 0 {
 		return CSR{}, errs
 	}
+	if err := checkPendingCSRs(ctx, s.pool); err != nil {
+		return CSR{}, err
+	}
+	release, ok := acquireCSRSlot()
+	if !ok {
+		return CSR{}, ErrCSRBusy
+	}
 	csrPEM, key, info, err := func() (string, secrets.Plaintext, certs.KeyInfo, error) {
-		s.randMu.Lock()
-		defer s.randMu.Unlock()
+		defer release()
+		if err := ctx.Err(); err != nil {
+			return "", secrets.Plaintext{}, certs.KeyInfo{}, err
+		}
+		if !s.randSafe {
+			s.randMu.Lock()
+			defer s.randMu.Unlock()
+		}
 		return certs.NewCSR(s.rand, certs.CSRRequest{CommonName: cn, SANs: sans, KeyType: in.KeyType})
 	}()
 	defer key.Zero()
@@ -146,6 +185,9 @@ func (s *Service) CreateCSR(ctx context.Context, a Actor, in CSRInput) (CSR, err
 	id := uuid.Must(uuid.NewV7())
 	var out CSR
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := checkPendingCSRs(ctx, tx); err != nil {
+			return err
+		}
 		keyID, err := s.storeKey(ctx, tx, "csr", key, info, a.UserID)
 		if err != nil {
 			return err
@@ -167,6 +209,18 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, id, keyID, cn, requestNames(cn, sans),
 		return CSR{}, err
 	}
 	return out, nil
+}
+
+// checkPendingCSRs refuses a new signing request when maxPendingCSRs are open.
+func checkPendingCSRs(ctx context.Context, q db.Querier) error {
+	var n int
+	if err := q.QueryRow(ctx, "SELECT count(*) FROM csr_requests WHERE status = $1", CSRPending).Scan(&n); err != nil {
+		return fmt.Errorf("inventory: count the open signing requests: %w", err)
+	}
+	if n >= maxPendingCSRs {
+		return ErrTooManyPendingCSRs
+	}
+	return nil
 }
 
 const csrSelect = `SELECT r.id, r.common_name, r.sans, k.algorithm, k.bits, r.csr_pem, r.status, r.certificate_id, r.created_at, r.finished_at
@@ -272,8 +326,13 @@ func (s *Service) CompleteCSR(ctx context.Context, a Actor, id uuid.UUID, certif
 		errs = append(errs, *fe)
 	}
 	text := strings.TrimSpace(certificatePEM)
-	if text == "" {
+	switch {
+	case text == "":
 		errs.Add("certificate_pem", validate.Required, nil)
+	case len(text) <= certs.MaxInputSize && certs.ContainsPrivateKey(text):
+		// As for an upload: a private key pasted here is refused, never read (the request's key is
+		// the one Alice generated); the scan reads the string itself, without a byte copy.
+		errs.Add("certificate_pem", CodeKeyInCertificate, nil)
 	}
 	if len(errs) > 0 {
 		return Certificate{}, nil, errs
@@ -301,12 +360,16 @@ JOIN managed_private_keys k ON k.id = r.private_key_id WHERE r.id = $1`, id).Sca
 		return Certificate{}, nil, fmt.Errorf("inventory: read the signing request's key: %w", err)
 	}
 	now := s.clock.Now()
-	p, complete, err := certs.ValidateSigned([]byte(text), info, now, s.roots)
+	// One byte copy of the pasted text, cleared on return (the field is public certificate text, but
+	// a wrongly pasted key must not linger in copies nobody clears).
+	buf := []byte(text)
+	defer clear(buf)
+	p, complete, err := certs.ValidateSigned(buf, info, now, s.roots)
 	if err != nil {
 		reason, out := refusal(err)
 		return reject(rejected{reason: reason}, out)
 	}
-	warnings := signedWarnings([]byte(text), p, complete, req.SANs, now)
+	warnings := signedWarnings(buf, p, complete, req.SANs, now)
 
 	var placed placement
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {

@@ -43,7 +43,13 @@ var (
 	ErrLocationUnsupported  = errors.New("inventory: certificates cannot be deployed to this location")
 	// ErrPFXBusy: the process already decodes as many PFX files as it allows at once
 	// (maxPFXDecodes); retryable.
-	ErrPFXBusy             = errors.New("inventory: too many PFX files are being read; try again shortly")
+	ErrPFXBusy = errors.New("inventory: too many PFX files are being read; try again shortly")
+	// ErrCSRBusy: the process already generates as many signing-request keys as it allows at once
+	// (maxCSRKeygens); retryable.
+	ErrCSRBusy = errors.New("inventory: too many signing-request keys are being generated; try again shortly")
+	// ErrTooManyPendingCSRs: maxPendingCSRs signing requests are open; one must be completed or
+	// cancelled first.
+	ErrTooManyPendingCSRs  = errors.New("inventory: too many signing requests are open")
 	ErrCertificateInvalid  = certs.ErrInvalid
 	ErrKeyMismatch         = certs.ErrKeyMismatch
 	ErrCertificateExpired  = certs.ErrExpired // also returned by RequestDeployment (Task 15)

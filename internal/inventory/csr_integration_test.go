@@ -3,6 +3,7 @@
 package inventory_test
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -352,4 +353,57 @@ func TestCompletionWarnsWhenNamesDifferFromTheRequest(t *testing.T) {
 		d := h.auditDetails("csr.completed")
 		assert.Equal(t, strings.Join(tc.warnings, ","), d[len(d)-1]["warnings"])
 	}
+}
+
+// AUD-14 (independent audit of 2026-10-04; final review C m3): signing-request key generation is
+// bounded. With every generation slot taken a request is refused at once (retryable) and nothing is
+// stored; a request whose caller has gone generates nothing; open requests are capped.
+func TestSigningRequestKeyGenerationIsBounded(t *testing.T) {
+	h := newHarness(t)
+	op := h.user("oya", rbac.Operator, "")
+	in := inventory.CSRInput{CommonName: "www.example.test", KeyType: "ecdsa-p256"}
+
+	release := inventory.HoldCSRSlots()
+	_, err := h.svc.CreateCSR(h.ctx, op, in)
+	require.ErrorIs(t, err, inventory.ErrCSRBusy)
+	release()
+	assert.Zero(t, h.count("SELECT count(*) FROM csr_requests"))
+
+	gone, cancel := context.WithCancel(h.ctx)
+	cancel()
+	_, err = h.svc.CreateCSR(gone, op, in)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, h.count("SELECT count(*) FROM managed_private_keys"), "no key was generated or stored")
+
+	defer inventory.SetMaxPendingCSRs(2)()
+	first, err := h.svc.CreateCSR(h.ctx, op, in)
+	require.NoError(t, err)
+	_, err = h.svc.CreateCSR(h.ctx, op, in)
+	require.NoError(t, err)
+	_, err = h.svc.CreateCSR(h.ctx, op, in)
+	require.ErrorIs(t, err, inventory.ErrTooManyPendingCSRs)
+	assert.Equal(t, 2, h.count("SELECT count(*) FROM csr_requests"))
+	_, err = h.svc.CancelCSR(h.ctx, op, first.ID)
+	require.NoError(t, err)
+	_, err = h.svc.CreateCSR(h.ctx, op, in)
+	require.NoError(t, err, "a cancelled request no longer counts")
+}
+
+// C m2: a private key pasted into a signing request's certificate field is refused as for an upload
+// (validation.key_in_certificate), before the request is read, and nothing is completed.
+func TestCompleteCSRRefusesAPastedPrivateKey(t *testing.T) {
+	h := newHarness(t)
+	op := h.user("oya", rbac.Operator, "")
+	csr, err := h.svc.CreateCSR(h.ctx, op, inventory.CSRInput{CommonName: "www.example.test", KeyType: "ecdsa-p256"})
+	require.NoError(t, err)
+	signed := pki.NewCA("CSR", pki.ECDSA256, h.clock.Now()).IssueForCSR(parseCSR(t, csr), h.clock.Now())
+	other := pki.SelfSigned("other.example.test", pki.ECDSA256, h.clock.Now())
+	_, _, err = h.svc.CompleteCSR(h.ctx, op, csr.ID, string(signed.FullchainPEM)+string(other.KeyPEM), "")
+	assert.Equal(t, map[string]string{"certificate_pem": inventory.CodeKeyInCertificate}, fieldsOf(err))
+	got, err := h.svc.GetCSR(h.ctx, csr.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.CSRPending, got.Status)
+	assert.Zero(t, h.audits("certificate.upload_rejected"), "a field error, as for a PEM upload")
+	_, _, err = h.svc.CompleteCSR(h.ctx, op, csr.ID, string(signed.FullchainPEM), "")
+	require.NoError(t, err)
 }

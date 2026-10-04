@@ -67,6 +67,7 @@ type Service struct {
 	log      *slog.Logger
 	randMu   sync.Mutex // Config.Rand need not be safe for concurrent use
 	rand     io.Reader
+	randSafe bool // rand is crypto/rand's Reader, safe for concurrent use: no randMu needed
 	roots    *x509.CertPool
 }
 
@@ -78,7 +79,7 @@ func New(c Config) *Service {
 		s.log = slog.New(slog.DiscardHandler)
 	}
 	if s.rand == nil {
-		s.rand = rand.Reader
+		s.rand, s.randSafe = rand.Reader, true
 	}
 	if s.roots == nil {
 		s.roots = certs.SystemRoots()
