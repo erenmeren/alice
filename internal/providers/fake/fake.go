@@ -83,8 +83,8 @@ type Config struct {
 	// ID per call. A result that breaks providers.CheckImportReturn panics, like the deploy hooks.
 	Import func(req providers.ImportRequest) (providers.ImportResult, error)
 	// ExistingNames are certificate names that exist in the vault (compared case-insensitively):
-	// the default import of one of them without ReplaceExisting is refused (kv.import_name_exists,
-	// provisional until the contract fixes the code; ruling S9).
+	// the default import of one of them without ReplaceExisting is refused (providers.CodeKVImportNameExists;
+	// ruling S9).
 	ExistingNames []string
 }
 
@@ -560,17 +560,20 @@ func (s *session) ImportCertificate(ctx context.Context, req providers.ImportReq
 	var err error
 	switch {
 	case ctx.Err() != nil:
-		// A cancelled request may have been sent: uncertain, never a refusal that wraps a context error.
-		return providers.ImportResult{Outcome: providers.ImportUncertain}, providers.NewError("azure.unreachable", true, ctx.Err(), nil)
+		// Nothing was sent: refused (like the real provider, so the name is not blocked for 24 hours),
+		// and the refusal never wraps the context error (CheckImportReturn).
+		out, err = providers.ImportResult{Outcome: providers.ImportRefused}, providers.NewError("azure.unreachable", true, nil, nil)
+		mustHonour("ImportCertificate", providers.CheckImportReturn(out, err))
+		return out, err
 	case !azureid.ValidObjectName(req.Name):
-		out, err = providers.ImportResult{Outcome: providers.ImportRefused}, providers.NewError("azure.invalid_request", false, nil, nil)
+		out, err = providers.ImportResult{Outcome: providers.ImportRefused}, providers.NewError(providers.CodeKVImportInvalid, false, nil, nil)
 		mustHonour("ImportCertificate", providers.CheckImportReturn(out, err))
 		return out, err
 	}
 	if cfg.Import != nil {
 		out, err = cfg.Import(req)
 	} else if !req.ReplaceExisting && slices.ContainsFunc(cfg.ExistingNames, func(n string) bool { return strings.EqualFold(n, req.Name) }) {
-		out, err = providers.ImportResult{Outcome: providers.ImportRefused}, providers.NewError("kv.import_name_exists", false, nil, nil)
+		out, err = providers.ImportResult{Outcome: providers.ImportRefused}, providers.NewError(providers.CodeKVImportNameExists, false, nil, nil)
 	} else {
 		out = defaultImport(req)
 	}

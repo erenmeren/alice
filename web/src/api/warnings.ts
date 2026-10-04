@@ -32,6 +32,8 @@ export const WARNING_PARAMS: Readonly<Record<string, readonly string[]>> = {
   accounts_nul_byte: [],
   // list_truncated from a cut SSH listing names the account it stopped at.
   list_truncated_uid: ['uid'],
+  // Key Vault: items of a listing Alice could not use.
+  kv_item_unreadable: ['object', 'count'],
   // Nginx servers
   nginx_not_found: [],
   nginx_profile_missing: [],

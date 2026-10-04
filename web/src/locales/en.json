@@ -649,7 +649,8 @@
     "account_home_unsupported": "Alice did not list the SSH keys of the account with user ID {{uid}}: its home directory in /etc/passwd is not a plain absolute path. Run getent passwd {{uid}} on the server to find it.",
     "account_id_unsupported": "Alice did not list the SSH keys of the account with user ID {{uid}}: its user or group ID in /etc/passwd is not written as a plain number. Run getent passwd {{uid}} on the server to find it.",
     "accounts_nul_byte": "The file /etc/passwd on this server contains a NUL byte, so the list of accounts may be incomplete. Check the file.",
-    "list_truncated_uid": "Alice stopped listing the SSH keys of this server at the account with user ID {{uid}}, so the keys from there on are not shown."
+    "list_truncated_uid": "Alice stopped listing the SSH keys of this server at the account with user ID {{uid}}, so the keys from there on are not shown.",
+    "kv_item_unreadable": "Some items of this vault could not be read and were left out, so the list is incomplete. Kind: {{object}}. Items: {{count}}."
   },
   "targets": {
     "title": "Servers",

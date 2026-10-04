@@ -982,17 +982,19 @@ func TestFakeVaultRefusesWhatTheProviderMustRefuse(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v", string(got.Value.Bytes()))
 
-	// Imports: an invalid name is a refusal; a cancelled request may have been sent: uncertain.
+	// Imports: an invalid name is a refusal; a cancelled request was never sent: refused, without the context error as its cause.
 	for _, name := range []string{"", "bad name/..", "a_b", strings.Repeat("a", 128)} {
 		res, err := openVault(t, vaultFake()).ImportCertificate(context.Background(), providers.ImportRequest{Name: name}, nil)
 		var pe *providers.Error
 		require.ErrorAs(t, err, &pe, name)
 		assert.Equal(t, providers.ImportRefused, res.Outcome, name)
 		require.NoError(t, providers.CheckImportReturn(res, err), name)
+		assert.Equal(t, providers.CodeKVImportInvalid, pe.Code, name)
 	}
 	res, err := openVault(t, vaultFake()).ImportCertificate(cancelled, providers.ImportRequest{Name: "web"}, nil)
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Equal(t, providers.ImportUncertain, res.Outcome)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, context.Canceled)
+	assert.Equal(t, providers.ImportRefused, res.Outcome)
 	require.NoError(t, providers.CheckImportReturn(res, err))
 
 	// The conformance suite sees a provider that refuses an empty read.
@@ -1061,7 +1063,7 @@ func TestFakeImportRefusesAnExistingNameUnlessConfirmed(t *testing.T) {
 	res, err := s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "web-cert"}, nil)
 	var pe *providers.Error
 	require.ErrorAs(t, err, &pe)
-	assert.Equal(t, "kv.import_name_exists", pe.Code)
+	assert.Equal(t, providers.CodeKVImportNameExists, pe.Code)
 	assert.Equal(t, providers.ImportRefused, res.Outcome)
 	res, err = s.ImportCertificate(context.Background(), providers.ImportRequest{Name: "WEB-CERT", ReplaceExisting: true}, nil)
 	require.NoError(t, err)

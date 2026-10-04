@@ -107,6 +107,17 @@ func (r ImportRequest) LogValue() slog.Value { return slog.StringValue(r.redacte
 // Zero clears the PFX in place.
 func (r ImportRequest) Zero() { r.PFX.Zero() }
 
+// Provider error codes of ImportCertificate that are part of the contract (the other codes of the
+// Key Vault provider are its own, listed with its errors).
+const (
+	// CodeKVImportNameExists: Name already exists in the vault and ReplaceExisting is false (ruling
+	// S9). Refused before any call that changes the vault; no params.
+	CodeKVImportNameExists = "kv.import_name_exists"
+	// CodeKVImportInvalid: the request itself is unusable (a name, key type or size outside what the
+	// vault takes, an empty or unreadable PFX). Refused before anything is sent; no params.
+	CodeKVImportInvalid = "kv.import_invalid"
+)
+
 // Import outcomes (a closed set; the rules are ImportResult.Validate and CheckImportReturn).
 const (
 	ImportCreated   = "created"   // the vault answered with the new version

@@ -649,7 +649,8 @@
     "account_home_unsupported": "Kullanıcı kimliği {{uid}} olan hesabın SSH anahtarları listelenmedi: /etc/passwd içindeki ev dizini yalın bir mutlak yol değil. Hesabı bulmak için sunucuda getent passwd {{uid}} komutunu çalıştırın.",
     "account_id_unsupported": "Kullanıcı kimliği {{uid}} olan hesabın SSH anahtarları listelenmedi: /etc/passwd içindeki kullanıcı veya grup kimliği yalın bir sayı olarak yazılmamış. Hesabı bulmak için sunucuda getent passwd {{uid}} komutunu çalıştırın.",
     "accounts_nul_byte": "Bu sunucudaki /etc/passwd dosyası bir NUL baytı içeriyor, bu yüzden hesap listesi eksik olabilir. Dosyayı denetleyin.",
-    "list_truncated_uid": "Alice bu sunucudaki SSH anahtarlarını listelemeyi kullanıcı kimliği {{uid}} olan hesapta durdurdu, bu yüzden bu hesaptan sonraki anahtarlar gösterilmiyor."
+    "list_truncated_uid": "Alice bu sunucudaki SSH anahtarlarını listelemeyi kullanıcı kimliği {{uid}} olan hesapta durdurdu, bu yüzden bu hesaptan sonraki anahtarlar gösterilmiyor.",
+    "kv_item_unreadable": "Bu kasadaki bazı öğeler okunamadı ve atlandı, bu yüzden liste eksik. Tür: {{object}}. Öğe sayısı: {{count}}."
   },
   "targets": {
     "title": "Sunucular",

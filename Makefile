@@ -37,6 +37,10 @@ test-ssh: helper ## Run the real OpenSSH and Nginx matrices (Ubuntu 22.04, Debia
 	set -o pipefail; go test -count=1 -v -tags integration -run '^TestRealOpenSSH$$' ./internal/providers/linuxssh/ $(call SSH_MATRIX_PASSED,TestRealOpenSSH)
 	set -o pipefail; ALICE_REAL_MATRIX=1 go test -count=1 -v -timeout 30m -tags integration -ldflags "$(HELPER_LDFLAGS)" -run '^TestRealNginx' ./internal/providers/nginx/ $(call SSH_MATRIX_PASSED,TestRealNginx)
 
+.PHONY: test-azure
+test-azure: ## Optional real Azure Key Vault suite; needs ALICE_AZURE_TEST_* (see internal/providers/azurekv/real_azure_test.go); never part of ci
+	go test -count=1 -v -tags azure -run '^TestRealAzure' ./internal/providers/azurekv/
+
 .PHONY: i18n-check
 i18n-check: ## Verify EN/TR translation catalogs have identical keys and placeholders
 	go run ./tools/i18n-check locales/common web/src/locales

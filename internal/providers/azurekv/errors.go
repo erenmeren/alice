@@ -23,21 +23,24 @@ import (
 
 // Reason codes this package produces (the closed set of spec §11.9).
 const (
-	codeAuthFailed          = "azure.auth_failed"
-	codeCredentialsExpired  = "azure.credentials_expired" //nolint:gosec // G101 false positive: a reason code, not a credential
-	codeForbidden           = "azure.forbidden"
-	codeFirewall            = "azure.firewall"
-	codeVaultNotFound       = "azure.vault_not_found"
-	codeUnreachable         = "azure.unreachable"
-	codeThrottled           = "azure.throttled"
-	codeUnexpected          = "azure.unexpected_response"
-	codeClockSkew           = "azure.clock_skew"
-	codeManagedIdentityGone = "azure.managed_identity_unavailable"
-	codeAddressNotAllowed   = "azure.address_not_allowed"
-	codeTLSUntrusted        = "azure.tls_untrusted"
-	codeVersionDisabled     = "kv.version_disabled"
-	codeCertificateNotFound = "kv.certificate_not_found"
-	codeInternal            = "internal.unexpected"
+	codeAuthFailed           = "azure.auth_failed"
+	codeCredentialsExpired   = "azure.credentials_expired" //nolint:gosec // G101 false positive: a reason code, not a credential
+	codeForbidden            = "azure.forbidden"
+	codeFirewall             = "azure.firewall"
+	codeVaultNotFound        = "azure.vault_not_found"
+	codeUnreachable          = "azure.unreachable"
+	codeThrottled            = "azure.throttled"
+	codeUnexpected           = "azure.unexpected_response"
+	codeClockSkew            = "azure.clock_skew"
+	codeManagedIdentityGone  = "azure.managed_identity_unavailable"
+	codeAddressNotAllowed    = "azure.address_not_allowed"
+	codeTLSUntrusted         = "azure.tls_untrusted"
+	codeVersionDisabled      = "kv.version_disabled"
+	codeCertificateNotFound  = "kv.certificate_not_found"
+	codeVersionNotDeployable = "kv.version_not_deployable"
+	codeSecretUnreadable     = "kv.secret_unreadable" //nolint:gosec // G101 false positive: a reason code, not a credential
+	codeImportRejected       = "kv.import_rejected"
+	codeInternal             = "internal.unexpected"
 )
 
 // Param names a provider error of this package may carry. mapError never produces another one.
