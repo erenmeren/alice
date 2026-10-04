@@ -378,6 +378,20 @@ func (s *Service) CheckRecoveryPending(ctx context.Context, id uuid.UUID) error 
 	return recoveryPending(ctx, s.pool, id)
 }
 
+// OperationUnfinished reports whether Alice tracks op as the operation of a deployment that has
+// not finished (any state but done). The deploy engine asks it about the operation a helper names
+// as blocking a pair (RECOVERY_PENDING): one Alice still recovers is left to that recovery; one
+// Alice finished (or never knew) is restored by the deploy that met it (final review fix round 1).
+func (s *Service) OperationUnfinished(ctx context.Context, op uuid.UUID) (bool, error) {
+	var unfinished bool
+	err := s.pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM deployments WHERE operation_id = $1 AND state <> $2)", op,
+		DeployStateDone).Scan(&unfinished)
+	if err != nil {
+		return false, fmt.Errorf("inventory: read the deployments of an operation: %w", err)
+	}
+	return unfinished, nil
+}
+
 func recoveryPending(ctx context.Context, q db.Querier, id uuid.UUID) error {
 	var exists, pending bool
 	err := q.QueryRow(ctx, `SELECT true, EXISTS (SELECT 1 FROM deployments o WHERE o.target_id = d.target_id AND o.id <> d.id AND o.state = $2)
@@ -437,11 +451,11 @@ WHERE id = $1`, id, DeployStateDeploying, v.OperationID, v.ExpectCertSHA256, v.N
 
 // stepParamKeys are the step params a record keeps (providers.StepLogger's primitives; reason is the
 // failed verification's reason code, which a recovery reads back after a crash).
-var stepParamKeys = []string{"error", "port", "mode", "served", "reason"}
+var stepParamKeys = []string{"error", "port", "mode", "served", "reason", "operation_id"}
 
 // errorParamKeys are the error params a record keeps (the providers' allowlist, Tasks 11 and 17).
 var errorParamKeys = []string{"port", "failed_step", "profile", "phase", "directory", "backup_dir", "expected", "actual", "mode",
-	"helper_code", "subcommand"}
+	"helper_code", "subcommand", "operation_id"}
 
 const (
 	maxParamValue = 256  // bytes of one param value

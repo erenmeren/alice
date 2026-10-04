@@ -816,6 +816,9 @@ func (h *nginxHost) deploy(opID, certPath, keyPath, expect string, newCert, newK
 	if kind != "" {
 		return targetResponse(kind)
 	}
+	if pending := h.interruptedLatest(&emuJournal{op: opID, certPath: certPath, keyPath: keyPath}); pending != "" {
+		return refusePending(pending) // A1 m1, before the hash
+	}
 	if sum(cert.data) != expect {
 		return refuse(helperproto.ExitPrecondition, helperproto.CodeHashMismatch)
 	}
@@ -826,9 +829,6 @@ func (h *nginxHost) deploy(opID, certPath, keyPath, expect string, newCert, newK
 	j.prevRecord = rec
 	if prior != nil && rec == opID {
 		j.prevRecord = prior.prevRecord
-	}
-	if pending := h.interruptedLatest(j); pending != "" {
-		return refusePending(pending) // A1 m1
 	}
 	if bytes.Equal(cert.data, newCert) && bytes.Equal(key.data, newKey) {
 		// "Same cert already deployed": no write, no reload.

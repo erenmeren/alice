@@ -52,6 +52,8 @@ type fakeInv struct {
 	ctxErrs  map[string]error // the context's error when the method was called
 	claims   map[string]inventory.Claim
 	lost     bool // the job run's claim is lost: every write is refused (inventory's fence)
+	// unfinishedOps are the operations of deployments Alice has not finished (OperationUnfinished).
+	unfinishedOps map[uuid.UUID]bool
 }
 
 var fencedWrites = []string{"BeginDeployment", "StartDeployment", "RecordDeploymentStep", "FinishDeployment", "RecordOutcome", "CheckClaim"}
@@ -131,6 +133,15 @@ func (f *fakeInv) Deployment(ctx context.Context, _ uuid.UUID) (inventory.Deploy
 
 func (f *fakeInv) CheckRecoveryPending(ctx context.Context, _ uuid.UUID) error {
 	return f.call(ctx, "CheckRecoveryPending")
+}
+
+func (f *fakeInv) OperationUnfinished(ctx context.Context, op uuid.UUID) (bool, error) {
+	if err := f.call(ctx, "OperationUnfinished"); err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.unfinishedOps[op], nil
 }
 
 func (f *fakeInv) BeginDeployment(ctx context.Context, _ uuid.UUID) (inventory.Deployment, error) {
@@ -1755,4 +1766,105 @@ func TestUnchangedSkippedThatIsNoLongerAllowedEndsFailed(t *testing.T) {
 	assert.Equal(t, inventory.DeployStatusFailed, f.inv.outcomes[0].Finish.Status)
 	assert.Equal(t, providers.PhaseUnchanged, f.inv.outcomes[0].Finish.Phase)
 	assert.Equal(t, 2, calls)
+}
+
+// Fix round 1, Important 1: a first send refused because an interrupted operation blocks the pair.
+func TestDeployMeetsAPendingOperation(t *testing.T) {
+	pendingOp := uuid.MustParse("0190f5a0-0000-7000-8000-00000000abcd")
+	refusal := func() (providers.DeployOutcome, error) {
+		p := map[string]string{"operation_id": pendingOp.String()}
+		e := providers.NewError("deployment.recovery_pending", false, nil, p)
+		return providers.DeployOutcome{Result: providers.DeployNoChange, Reason: e.Code, Params: maps.Clone(p)}, e
+	}
+	committed := providers.DeployOutcome{Result: providers.DeployCommitted, Phase: providers.PhaseCommitted, Verified: "remote"}
+	type tc struct {
+		name       string
+		tracked    bool
+		trackErr   error
+		rollback   func(providers.RollbackRequest) (providers.RollbackOutcome, error)
+		again      bool // the second send is refused again
+		status     string
+		code       string
+		sends      int
+		rollbacks  int
+		stepStates []string
+	}
+	restored := func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
+		return providers.RollbackOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestored}, nil
+	}
+	for _, c := range []tc{
+		{name: "not tracked: restored, sent again, committed", rollback: restored, status: inventory.DeployStatusSucceeded, sends: 2, rollbacks: 1,
+			stepStates: []string{"started", "ok"}},
+		{name: "not tracked: superseded (no longer blocks), sent again", rollback: func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
+			e := providers.NewError("deployment.superseded", false, nil, nil)
+			return providers.RollbackOutcome{Result: providers.DeployNoChange, Reason: e.Code}, e
+		}, status: inventory.DeployStatusSucceeded, sends: 2, rollbacks: 1, stepStates: []string{"started", "ok"}},
+		{name: "not tracked: the restore fails (an unreadable journal: IO_ERROR)", rollback: func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
+			e := providers.NewError("ssh.helper_refused", true, nil, map[string]string{"helper_code": "IO_ERROR"})
+			return providers.RollbackOutcome{Result: providers.DeployNoChange, Reason: e.Code, Params: maps.Clone(e.Params)}, e
+		}, status: inventory.DeployStatusFailed, code: "deployment.server_operation_pending", sends: 1, rollbacks: 1, stepStates: []string{"started", "failed"}},
+		{name: "not tracked: restore_failed", rollback: func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
+			return providers.RollbackOutcome{Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestoreFailed, FailedStep: "restore",
+				Reason: "deployment.rollback_failed"}, nil
+		}, status: inventory.DeployStatusFailed, code: "deployment.server_operation_pending", sends: 1, rollbacks: 1, stepStates: []string{"started", "failed"}},
+		{name: "not tracked: the restore is uncertain", rollback: func(providers.RollbackRequest) (providers.RollbackOutcome, error) {
+			return providers.RollbackOutcome{Result: providers.DeployUncertain}, providers.NewError("ssh.timeout", true, nil, nil)
+		}, status: inventory.DeployStatusFailed, code: "deployment.server_operation_pending", sends: 1, rollbacks: 1, stepStates: []string{"started", "failed"}},
+		{name: "not tracked: refused again after the restore", rollback: restored, again: true, status: inventory.DeployStatusFailed,
+			code: "deployment.server_operation_pending", sends: 2, rollbacks: 1, stepStates: []string{"started", "ok", "failed"}},
+		{name: "tracked by an unfinished deployment: today's refusal", tracked: true, status: inventory.DeployStatusFailed,
+			code: "deployment.recovery_pending", sends: 1},
+		{name: "the lookup fails: today's refusal", trackErr: errors.New("db down"), status: inventory.DeployStatusFailed,
+			code: "deployment.recovery_pending", sends: 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.inv.unfinishedOps = map[uuid.UUID]bool{pendingOp: c.tracked}
+			if c.trackErr != nil {
+				f.inv.errs["OperationUnfinished"] = c.trackErr
+			}
+			sends := 0
+			var keys [][]byte
+			f.prov.Configure(func(cfg *fake.Config) {
+				cfg.Deploy = func(req providers.DeployRequest) (providers.DeployOutcome, error) {
+					sends++
+					keys = append(keys, append([]byte(nil), req.PrivateKeyPEM.Bytes()...))
+					assert.Equal(t, f.id, req.OperationID, "the same operation id")
+					if sends == 1 || c.again {
+						return refusal()
+					}
+					return committed, nil
+				}
+				cfg.Rollback = func(req providers.RollbackRequest) (providers.RollbackOutcome, error) {
+					assert.Equal(t, pendingOp, req.OperationID, "the pending operation is restored, not this deployment's")
+					assert.Empty(t, req.OldFingerprint)
+					return c.rollback(req)
+				}
+			})
+			res, _ := f.h.deploy(f.ctx, f.job(), f.steps)
+			assert.Equal(t, c.status, res["outcome"])
+			assert.Equal(t, c.sends, sends)
+			assert.Equal(t, c.rollbacks, f.prov.Count("RollbackDeployment"))
+			fin := f.inv.lastFinish()
+			assert.Equal(t, c.status, fin.Status)
+			assert.Equal(t, c.code, fin.ErrorCode)
+			if c.code != "" {
+				assert.True(t, fin.NothingWritten, "the helper refused before any write")
+			}
+			if c.code == "deployment.server_operation_pending" {
+				assert.Equal(t, pendingOp.String(), fin.Params["operation_id"])
+			}
+			var states []string
+			for _, st := range f.inv.stepNames() {
+				if after, ok := strings.CutPrefix(st, stepRecoverPending+":"); ok {
+					states = append(states, after)
+				}
+			}
+			assert.Equal(t, c.stepStates, states)
+			if c.sends == 2 {
+				assert.Equal(t, keys[0], keys[1], "the second send carries the key")
+			}
+			assert.True(t, f.keyZeroed(), "the key is zeroed afterwards")
+		})
+	}
 }

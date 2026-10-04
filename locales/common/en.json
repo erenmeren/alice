@@ -631,6 +631,11 @@
         "title": "An administrator cancelled this deployment before it started.",
         "cause": "An administrator chose Discard for the deployment's waiting job, so Alice sent nothing to the server. The website keeps its previous certificate.",
         "action": "Deploy the certificate again if it is still needed."
+      },
+      "server_operation_pending": {
+        "title": "An unfinished change of these certificate files on the server stops new changes.",
+        "cause": "An earlier change of these files on the server did not finish, and Alice no longer follows it, so the server refuses new changes. Alice tried to put back the files that change replaced, and could not. Nothing was changed by this deployment.",
+        "action": "The deployment's details name the unfinished change (operation id). On the server, as root, run /usr/local/libexec/alice-helper nginx-restore --op followed by that id, then run nginx -t, and deploy again."
       }
     }
   },

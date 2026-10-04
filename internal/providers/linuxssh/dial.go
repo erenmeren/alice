@@ -902,6 +902,9 @@ func DecodeHelper[T any](r Result, sub string) (T, error) {
 			return protocol(errors.New("linuxssh: malformed helper error"))
 		}
 		params["helper_code"] = e.Code
+		if e.Code == helperproto.CodeRecoveryPending && helperproto.ValidOpID(e.PendingOp) {
+			params["operation_id"] = e.PendingOp // the operation that blocks the pair (a lowercase UUID)
+		}
 		reason, retryable := helperReason(sub, r.ExitCode, e.Code)
 		return zero, providers.NewError(reason, retryable, nil, params)
 	default:

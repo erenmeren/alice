@@ -4,6 +4,9 @@ package deployjobs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -412,4 +415,87 @@ func TestRecoveryWithoutAJournalJustUnderADayIsNothingWritten(t *testing.T) {
 	assert.Equal(t, "deployment.interrupted", d.ErrorCode)
 	require.NotNil(t, d.FinishedAt)
 	assert.Less(t, d.FinishedAt.Sub(started), noJournalUnknownAfter)
+}
+
+// foreignInterrupted runs, behind Alice's back, an nginx-deploy of another operation (a deployment
+// Alice no longer tracks: its outcome was recorded unknown, the server was re-added, the database
+// restored) that dies after both renames, before nginx -t: its journal says writing, its pair is
+// on disk, Nginx still serves the old one.
+func (e *env) foreignInterrupted(s *server) uuid.UUID {
+	e.t.Helper()
+	op := uuid.New()
+	third := e.ca.Issue(pki.Opts{CommonName: wwwName, SANs: []string{wwwName}}, e.clock.Now())
+	in, err := json.Marshal(helperproto.NginxDeployInput{CertPEM: string(third.FullchainPEM), KeyPEM: string(third.KeyPEM)})
+	require.NoError(e.t, err)
+	sum := func(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
+	s.emu.KillAt(helperproto.StepWriteCert)
+	line := "sudo -n " + helperproto.HelperPath + " nginx-deploy --op " + op.String() + " --cert " + wwwCert + " --key " + wwwKey +
+		" --expect-cert-sha256 " + sum(e.old.FullchainPEM) + " --content-sha256 " + sum(in)
+	_ = s.emu.Handler()(line, in)
+	require.Equal(e.t, helperproto.PhaseWriting, s.emu.NginxPhase(op.String()))
+	return op
+}
+
+// Fix round 1, Important 1: a deployment that meets an interrupted operation Alice does not track
+// restores it once (step recover_pending), sends again and commits.
+func TestDeploymentRestoresAPendingOperationAliceDoesNotTrack(t *testing.T) {
+	e := newEnv(t)
+	s := e.addServer("web-01", wwwSite())
+	op := e.foreignInterrupted(s)
+	id := e.request(s.locs[wwwCert])[0]
+	d := e.settle(id)
+	require.Equal(t, inventory.DeployStatusSucceeded, d.Status, "%s %v", d.ErrorCode, d.ErrorParams)
+	steps := stepList(d.Steps)
+	assert.Contains(t, steps, "recover_pending:started")
+	assert.Contains(t, steps, "recover_pending:ok")
+	for _, st := range d.Steps {
+		if st.Name == "recover_pending" {
+			assert.Equal(t, op.String(), st.Params["operation_id"])
+		}
+	}
+	assert.Equal(t, helperproto.PhaseRestored, s.emu.NginxPhase(op.String()))
+	e.assertPair(s, wwwCert, wwwKey, wwwName, e.nw)
+	assert.Equal(t, 2, s.emu.DeployCount()-1, "the refused send and the one after the restore (plus the foreign one)")
+}
+
+// When the restore fails (the operation's journal cannot be read), the deployment ends failed with
+// the distinct reason naming the operation, nothing written.
+func TestDeploymentEndsWhenAPendingOperationCannotBeRestored(t *testing.T) {
+	e := newEnv(t)
+	s := e.addServer("web-01", wwwSite())
+	op := e.foreignInterrupted(s)
+	s.emu.CorruptNginxJournal(op.String())
+	before := s.emu.NginxFile(wwwCert)
+	id := e.request(s.locs[wwwCert])[0]
+	d := e.settle(id)
+	assert.Equal(t, inventory.DeployStatusFailed, d.Status)
+	assert.Equal(t, "deployment.server_operation_pending", d.ErrorCode)
+	assert.Equal(t, op.String(), d.ErrorParams["operation_id"])
+	assert.Equal(t, before, s.emu.NginxFile(wwwCert), "nothing written")
+	assert.Contains(t, stepList(d.Steps), "recover_pending:failed")
+}
+
+// A crash between the restore and the second send: the deployment has no journal; its recovery
+// fences it and ends it failed (nothing written by it). The next deployment no longer meets the
+// operation (it was restored) and commits without another restore.
+func TestCrashAfterRestoringAPendingOperation(t *testing.T) {
+	e := newEnv(t)
+	s := e.addServer("web-01", wwwSite())
+	op := e.foreignInterrupted(s)
+	id := e.request(s.locs[wwwCert])[0]
+	k := newKiller("step:recover_pending:ok")
+	e.runDying(k)
+	require.Equal(t, "step:recover_pending:ok", k.firedAt())
+	e.restart()
+	d := e.settle(id)
+	assert.Equal(t, inventory.DeployStatusFailed, d.Status)
+	assert.Equal(t, "deployment.interrupted", d.ErrorCode)
+	assert.Equal(t, helperproto.PhaseRestored, s.emu.NginxPhase(op.String()))
+	e.assertPair(s, wwwCert, wwwKey, wwwName, e.old)
+
+	id2 := e.request(s.locs[wwwCert])[0]
+	d = e.settle(id2)
+	require.Equal(t, inventory.DeployStatusSucceeded, d.Status, "%s", d.ErrorCode)
+	assert.NotContains(t, stepList(d.Steps), "recover_pending:started")
+	e.assertPair(s, wwwCert, wwwKey, wwwName, e.nw)
 }

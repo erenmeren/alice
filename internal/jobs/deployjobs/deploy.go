@@ -3,6 +3,9 @@ package deployjobs
 import (
 	"context"
 	"errors"
+	"maps"
+
+	"github.com/google/uuid"
 
 	"alice/internal/inventory"
 	"alice/internal/jobs"
@@ -256,8 +259,97 @@ func (h *handlers) first(ctx context.Context, j jobs.Job, d inventory.Deployment
 	defer stop()
 	rec.lost = stop
 	out, derr := sess.DeployCertificate(sendCtx, m.DeployRequest(v), rec)
+	if op, ok := pendingOperation(out, derr); ok {
+		out, derr = h.recoverPending(sendCtx, m, v, sess, rec, op, out, derr)
+	}
 	m.PrivateKeyPEM.Zero()
 	return h.afterSend(ctx, d, m, sess, rec, out, derr)
+}
+
+// stepRecoverPending is the step of a deployment that met an interrupted operation Alice no
+// longer tracks and restored it (param operation_id).
+const stepRecoverPending = "recover_pending"
+
+// pendingOperation is the operation a helper's RECOVERY_PENDING refusal names (it blocks the
+// pair): a well-formed refusal, nothing was written by this deployment.
+func pendingOperation(out providers.DeployOutcome, err error) (uuid.UUID, bool) {
+	var pe *providers.Error
+	if out.Result != providers.DeployNoChange || out.Reason != reasonRecoveryPending || !errors.As(err, &pe) {
+		return uuid.Nil, false
+	}
+	op, perr := uuid.Parse(pe.Params["operation_id"])
+	return op, perr == nil && op != uuid.Nil && op.String() == pe.Params["operation_id"]
+}
+
+// recoverPending handles a first send the helper refused because the pair's latest operation op
+// is interrupted (final review fix round 1, Important 1). The refusal wrote nothing.
+//
+//	OperationUnfinished(op)                  result
+//	---------------------------------------  ---------------------------------------------------------
+//	error, or true (Alice still recovers it)  the refusal as it is: failed deployment.recovery_pending
+//	false (Alice finished it, or never knew   step recover_pending started {operation_id}; CheckClaim
+//	  it: outcome unknown, a deleted and      (lost: the refusal as it is, its record is refused too);
+//	  re-added target, a restored database)   RollbackDeployment(op) once (verify_old skipped: Alice
+//	                                          does not know op's previous certificate):
+//	    rolled back (files back), or nothing  step recover_pending ok; the deployment is sent ONCE more
+//	      to restore, superseded, unknown     (same operation id: the refusal created nothing for it);
+//	      operation (op no longer blocks)     its answer is the outcome (RECOVERY_PENDING again: below)
+//	    anything else (restore_failed,        step recover_pending failed; failed
+//	      IO_ERROR of an unreadable journal,  deployment.server_operation_pending {operation_id},
+//	      BUSY, uncertain)                    nothing written by this deployment
+//
+// op's own deployment record (when Alice has one) is finished and is never touched: the restore
+// and its steps are recorded under this deployment only. A crash after the restore and before the
+// second send leaves this deployment deploying with no journal: its recovery fences it and ends
+// it failed (interrupted), and a new deployment no longer meets op (or meets it again, the same
+// path: a restore of a restored operation answers restored).
+func (h *handlers) recoverPending(ctx context.Context, m inventory.Material, v inventory.SendValues, sess providers.Session, rec *recorder,
+	op uuid.UUID, out providers.DeployOutcome, derr error) (providers.DeployOutcome, error) {
+	unfinished, err := h.d.Inventory.OperationUnfinished(ctx, op)
+	if err != nil || unfinished {
+		return out, derr
+	}
+	params := map[string]string{"operation_id": op.String()}
+	rec.Step(stepRecoverPending, providers.StepStarted, params)
+	pending := func() (providers.DeployOutcome, error) {
+		rec.Step(stepRecoverPending, providers.StepFailed, params)
+		e := providers.NewError(reasonServerOperationPending, false, nil, maps.Clone(params))
+		return providers.DeployOutcome{Result: providers.DeployNoChange, Reason: e.Code, Params: maps.Clone(params), Backup: out.Backup}, e
+	}
+	if err := h.d.Inventory.CheckClaim(ctx); err != nil {
+		if errors.Is(err, inventory.ErrClaimLost) {
+			return out, derr
+		}
+		return pending()
+	}
+	req := m.RollbackRequest()
+	req.OperationID, req.OldFingerprint, req.OldChainLength, req.OldSANs = op, "", 0, nil
+	rb, rerr := sess.RollbackDeployment(ctx, req, rec)
+	if providers.CheckRollbackReturn(rb, rerr) != nil || !pairReleased(rb) {
+		return pending()
+	}
+	rec.Step(stepRecoverPending, providers.StepOK, params)
+	again, aerr := sess.DeployCertificate(ctx, m.DeployRequest(v), rec)
+	if _, still := pendingOperation(again, aerr); still {
+		return pending()
+	}
+	return again, aerr
+}
+
+// pairReleased reports a restore answer after which op no longer blocks its pair: its files are
+// back (rolled back, or rollback_failed with phase restored: only the old certificate's check
+// failed), or there was nothing of op to restore (prepared, unchanged, superseded, unknown).
+func pairReleased(rb providers.RollbackOutcome) bool {
+	switch rb.Result {
+	case providers.DeployRolledBack:
+		return true
+	case providers.DeployRollbackFailed:
+		return rb.Phase == providers.PhaseRestored
+	case providers.DeployNoChange:
+		return rb.Phase == providers.PhasePrepared || rb.Phase == providers.PhaseUnchanged ||
+			rb.Reason == reasonSuperseded || rb.Reason == reasonUnknownOperation
+	}
+	return false
 }
 
 // precheck verifies what the website serves before any change (F-06, F-07): the location's current

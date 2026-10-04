@@ -170,6 +170,10 @@ var (
 	// ErrDeployCancelled: an Administrator discarded the deployment's waiting job before anything
 	// was sent (a stored reason; no failure email).
 	ErrDeployCancelled = ErrorCode{Code: "ALC-DEP-0022", Reason: "deployment.cancelled", Status: http.StatusConflict}
+	// ErrDeployServerOperationPending: the server refused the deployment because an interrupted
+	// operation Alice no longer tracks blocks the files, and Alice could not restore it (param
+	// operation_id; nothing was written).
+	ErrDeployServerOperationPending = ErrorCode{Code: "ALC-DEP-0023", Reason: "deployment.server_operation_pending", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -198,7 +202,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrDeployReloadFailed, ErrDeployConfigTestFailed, ErrDeployRollbackFailed, ErrDeployRollbackReloadFailed,
 		ErrDeployInterrupted, ErrDeployTargetNotReady, ErrDeployVerifyChain, ErrDeployNothingToRestore, ErrDeploySuperseded,
 		ErrDeployUnknownOperation, ErrDeployTargetDeleted, ErrDeployRecoveryExhausted, ErrDeployOutcomeUnknown,
-		ErrDeployRestoredUnverified, ErrDeployRollbackFileChanged, ErrDeployRescanNeeded, ErrDeployCancelled,
+		ErrDeployRestoredUnverified, ErrDeployRollbackFileChanged, ErrDeployRescanNeeded, ErrDeployCancelled, ErrDeployServerOperationPending,
 	}
 }
 
@@ -418,6 +422,7 @@ var providerParamKeys = map[string]bool{
 	"helper_protocol": true, "required_protocol": true, // ssh.helper_outdated
 	"port": true, "failed_step": true, "profile": true, "phase": true, "directory": true, "backup_dir": true,
 	"expected": true, "actual": true, "mode": true,
+	"operation_id": true, // deployment.server_operation_pending
 }
 
 var (
@@ -432,6 +437,8 @@ var (
 	paramHelperCodeRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,39}$`)
 	// paramFingerprintRE: an OpenSSH SHA256 fingerprint or a certificate's hex SHA-256.
 	paramFingerprintRE = regexp.MustCompile(`^(SHA256:[A-Za-z0-9+/=]{1,64}|[0-9a-f]{64})$`)
+	// paramOperationRE: an operation id (a lowercase UUID, helperproto.ValidOpID).
+	paramOperationRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 
 // providerParamRules bound every allowlisted param's value, whichever producer wrote it: a number,
@@ -445,6 +452,7 @@ var providerParamRules = map[string]*regexp.Regexp{
 	"required_protocol": paramNumberRE,
 	"port":              paramPortRE, "failed_step": paramCodeRE, "profile": paramCodeRE, "phase": paramCodeRE, "mode": paramCodeRE,
 	"expected": paramCodeRE, "actual": paramCodeRE, "directory": paramPathRE, "backup_dir": paramPathRE,
+	"operation_id": paramOperationRE,
 }
 
 // providerParams returns the allowlisted params of a provider error whose values fit their rule

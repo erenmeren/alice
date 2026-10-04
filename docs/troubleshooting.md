@@ -1183,3 +1183,11 @@ A deployment may show `ALC-DEP-0019` (the files are back but the website was not
 **Likely cause.** An administrator chose **Discard** for the deployment's waiting job (for example a job held while the license was expired), so Alice sent nothing to the server. The website keeps its previous certificate, and no failure email is sent.
 
 **What to do.** Deploy the certificate again if it is still needed.
+
+## ALC-DEP-0023: An unfinished change of the files on the server stops new changes
+
+**Meaning.** The server refused the deployment because an earlier change of the same certificate and key files did not finish there, and Alice could not put the previous files back. Nothing was changed by this deployment. (HTTP 409, reason `deployment.server_operation_pending`; the parameter `operation_id` names the unfinished change.)
+
+**Likely cause.** A deployment was interrupted on the server (for example the helper was killed between writing the key and the certificate) and Alice no longer follows it: its outcome was recorded as unknown after a day of recovery attempts, the server was deleted and added again, or Alice's database was restored from a backup. alice-helper keeps refusing new changes of those files until that change is rolled back. When a deployment meets such a change, Alice runs the restore itself once (the deployment's history shows the step `recover_pending` with the operation id) and deploys again; this message means that restore did not succeed, for example because the change's journal cannot be read.
+
+**What to do.** On the server, as root, run `/usr/local/libexec/alice-helper nginx-restore --op <operation_id>` and read its answer. Then run `nginx -t`, and deploy again. If the restore answers an error, keep the folder `/var/lib/alice-helper/backups/<operation_id>`: it holds the files that change replaced.

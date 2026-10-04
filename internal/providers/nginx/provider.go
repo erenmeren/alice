@@ -207,8 +207,13 @@ func mapHelper(err error, sub string) error {
 		return providers.NewError("nginx.busy", true, err, nil)
 	case helperproto.CodeRecoveryPending:
 		// The pair's latest operation on the server was interrupted (A1 m1): the same reason as
-		// Alice's own recovery check.
-		return providers.NewError("deployment.recovery_pending", false, err, nil)
+		// Alice's own recovery check; operation_id names it (the deploy engine restores it when Alice
+		// no longer tracks it, fix round 1).
+		var params map[string]string
+		if op := pe.Params["operation_id"]; op != "" {
+			params = map[string]string{"operation_id": op}
+		}
+		return providers.NewError("deployment.recovery_pending", false, err, params)
 	case helperproto.CodeNginxNotRunning:
 		return providers.NewError("nginx.not_running", false, err, nil)
 	case helperproto.CodeFenced:

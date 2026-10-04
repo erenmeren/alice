@@ -1297,3 +1297,20 @@ func TestUnchangedInterruptedDuringTheVerificationIsUncertain(t *testing.T) {
 	assert.Empty(t, out.Phase)
 	assert.ErrorIs(t, err, context.Canceled)
 }
+
+// Fix round 1, Important 1: RECOVERY_PENDING is a refusal that names the blocking operation.
+func TestRecoveryPendingCarriesTheOperation(t *testing.T) {
+	e := newEnv(t)
+	nw := e.ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, e.now)
+	e.emu.KillAt(helperproto.StepWriteCert)
+	first := e.req(t, nw)
+	_, _ = e.open(t).DeployCertificate(context.Background(), first, nil)
+	req := e.req(t, nw)
+	req.OperationID = uuid.New()
+	out, err := e.open(t).DeployCertificate(context.Background(), req, nil)
+	providertest.CheckDeployOutcome(t, out, err)
+	assert.Equal(t, providers.DeployNoChange, out.Result)
+	assert.Equal(t, "deployment.recovery_pending", out.Reason)
+	assert.Equal(t, first.OperationID.String(), out.Params["operation_id"])
+	assert.Equal(t, first.OperationID.String(), providerErr(t, err).Params["operation_id"])
+}

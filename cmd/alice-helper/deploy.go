@@ -313,6 +313,18 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 	if cert.rf.resolved == key.rf.resolved || sameFile(cert.st, key.st) {
 		return nil, refused(helperproto.CodePathNotAllowed, "the certificate and the key are one file")
 	}
+	// m1: the pair's latest operation may not be an interrupted one (writing, restoring, or an
+	// unreadable journal): this one would supersede it, and nginx-restore could then never repair the
+	// pair. The invariant does not rest on Alice's own recovery check alone. Checked before the hash:
+	// an interrupted operation may have replaced the files, and the answer must name it (the caller
+	// restores it), not read as a third party's change.
+	switch pending, err := s.interruptedLatest(journal{Op: d.op, CertResolved: cert.rf.resolved, KeyResolved: key.rf.resolved}); {
+	case err != nil:
+		return nil, failed(helperproto.CodeIOError, "the record of the latest deployment cannot be read")
+	case pending != "":
+		return nil, &helperError{exit: helperproto.ExitPrecondition, code: helperproto.CodeRecoveryPending,
+			message: "the latest deployment of these files was interrupted; restore it first", op: pending}
+	}
 	if hexSHA(cert.data) != d.expect {
 		return nil, precondition(helperproto.CodeHashMismatch, "the certificate file changed since it was read")
 	}
@@ -333,16 +345,6 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 	j.PrevRecord = rec
 	if prior != nil && rec == d.op {
 		j.PrevRecord = prior.PrevRecord
-	}
-	// m1: the pair's latest operation may not be an interrupted one (writing, restoring): this one
-	// would supersede it, and nginx-restore could then never repair the pair. The invariant does not
-	// rest on Alice's own recovery check alone.
-	switch pending, err := s.interruptedLatest(j); {
-	case err != nil:
-		return nil, failed(helperproto.CodeIOError, "the record of the latest deployment cannot be read")
-	case pending != "":
-		return nil, &helperError{exit: helperproto.ExitPrecondition, code: helperproto.CodeRecoveryPending,
-			message: "the latest deployment of these files was interrupted; restore it first", op: pending}
 	}
 	if bytes.Equal(cert.data, d.cert) && bytes.Equal(key.data, d.key) {
 		// §12.9 "Same cert already deployed": no write, no reload.
