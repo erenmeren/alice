@@ -583,13 +583,22 @@ func (e *env) waitForLockWait(t *testing.T) {
 func TestResetDuringAdminCreationWins(t *testing.T) {
 	e := newEnv(t)
 	token, code := e.readyToCreate(t)
+	var newCode string
 	setup.SetBeforeBootstrap(e.setup, func() {
-		_, err := e.setup.ResetToken(e.ctx) // the host-root CLI, between the check and the creation
+		var err error
+		newCode, err = e.setup.ResetToken(e.ctx) // the host-root CLI, between the check and the creation
 		require.NoError(t, err)
 	})
+	oldHash := e.settingRaw(t, "setup.token_hash")
 	_, err := e.setup.CreateAdmin(e.ctx, token, code, ip1)
 	require.ErrorIs(t, err, setup.ErrSessionInvalid)
+	require.NotEqual(t, oldHash, e.settingRaw(t, "setup.token_hash"))
+	_, err = e.setup.StartSession(e.ctx, newCode, ip1)
+	assert.NoError(t, err, "the new code opens a session")
 	assert.Zero(t, e.userCount(t))
+	var audits int
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT count(*) FROM audit_log WHERE action = 'setup.admin_created'").Scan(&audits))
+	assert.Zero(t, audits, "no administrator, no audit row")
 }
 
 // AUD-21: the creation commits first; the reset then finds the administrator and changes nothing.
@@ -683,4 +692,44 @@ func TestConcurrentResetAndCreateHaveExactlyOneOutcome(t *testing.T) {
 			assert.Zero(t, e.userCount(t))
 		}
 	}
+}
+
+// AUD-21: a StartSession that matched the old code and then queues behind a reset's uncommitted
+// update of the code row re-reads the new hash after the commit and is refused, leaving no session.
+func TestStartSessionBlockedBehindAResetRereadsTheNewCode(t *testing.T) {
+	e := newEnv(t)
+	old, err := e.setup.ResetToken(e.ctx)
+	require.NoError(t, err)
+	tx, err := e.db.Owner.Begin(e.ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(e.ctx) }()
+	_, err = tx.Exec(e.ctx, `UPDATE settings SET value = '"changed-by-a-reset"'::jsonb WHERE key = 'setup.token_hash'`)
+	require.NoError(t, err)
+	res := make(chan error, 1)
+	go func() { _, err := e.setup.StartSession(e.ctx, old, ip1); res <- err }()
+	e.waitForLockWait(t)
+	require.NoError(t, tx.Commit(e.ctx))
+	assert.ErrorIs(t, <-res, setup.ErrCodeInvalid)
+	var sessions int
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT count(*) FROM setup_sessions").Scan(&sessions))
+	assert.Zero(t, sessions)
+}
+
+// A wrong code takes no lock on the code's row: while it is held right after reading the stored
+// hash, another connection can lock that row NOWAIT.
+func TestWrongCodeTakesNoRowLock(t *testing.T) {
+	e := newEnv(t)
+	_, err := e.setup.ResetToken(e.ctx)
+	require.NoError(t, err)
+	reached, release, res := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	setup.SetAfterCodeRead(e.setup, func() { close(reached); <-release })
+	go func() { _, err := e.setup.StartSession(e.ctx, "WRONG1-WRONG2-WRONG3-WRONG4", ip1); res <- err }()
+	<-reached
+	tx, err := e.db.Owner.Begin(e.ctx)
+	require.NoError(t, err)
+	_, err = tx.Exec(e.ctx, "SELECT 1 FROM settings WHERE key = 'setup.token_hash' FOR UPDATE NOWAIT")
+	assert.NoError(t, err, "the wrong code holds no lock on the code's row")
+	require.NoError(t, tx.Rollback(e.ctx))
+	close(release)
+	assert.ErrorIs(t, <-res, setup.ErrCodeInvalid)
 }

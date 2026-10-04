@@ -101,7 +101,7 @@ type Service struct {
 	// administrator's creation, inBootstrapTx inside that transaction once it holds the users
 	// lock and has consumed its session, afterCodeCheck inside StartSession's transaction after
 	// the code matched (the setup code's row is locked then).
-	beforeBootstrap, inBootstrapTx, afterCodeCheck func()
+	beforeBootstrap, inBootstrapTx, afterCodeCheck, afterCodeRead func()
 }
 
 // New builds the service.

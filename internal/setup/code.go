@@ -98,34 +98,37 @@ func (s *Service) StartSession(ctx context.Context, code string, m auth.Meta) (s
 	if locked, wait := s.lockout.Locked(key); locked {
 		return "", &LockedError{RetryAfter: wait}
 	}
+	// A wrong code never takes a row lock: it is compared without one, so a flood of wrong codes
+	// cannot hold off the operator's reset.
+	var stored string
+	found, err := settings.Get(ctx, s.pool, keyTokenHash, &stored)
+	if err != nil {
+		return "", err
+	}
+	if s.afterCodeRead != nil {
+		s.afterCodeRead()
+	}
+	if err := s.checkCode(key, found, stored, code); err != nil {
+		return "", err
+	}
 	token := newSessionToken()
-	// The setup code's row is locked FOR SHARE from the comparison to the session's commit: a reset
+	// Only a match locks the code's row FOR SHARE, from the re-read to the session's commit: a reset
 	// (which rewrites that row and then deletes all sessions) waits for the session and then deletes
-	// it, or commits first and this comparison sees the new code (AUD-21).
+	// it, or commits first and the re-read sees the new code (AUD-21).
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var raw []byte
-		found := true
-		err := tx.QueryRow(ctx, "SELECT value FROM settings WHERE key = $1 FOR SHARE", keyTokenHash).Scan(&raw)
-		if errors.Is(err, pgx.ErrNoRows) {
-			found = false
-		} else if err != nil {
-			return fmt.Errorf("read setup code: %w", err)
-		}
-		var stored string
-		if found {
-			if err := json.Unmarshal(raw, &stored); err != nil {
-				return fmt.Errorf("decode setup code: %w", err)
-			}
-		}
-		if err := s.checkCode(key, found, stored, code); err != nil {
+		current, now, err := codeHashForShare(ctx, tx)
+		if err != nil {
 			return err
 		}
-		if s.afterCodeCheck != nil {
-			s.afterCodeCheck()
+		if !now || subtle.ConstantTimeCompare([]byte(current), []byte(stored)) != 1 {
+			return ErrCodeInvalid // a reset committed since the comparison
 		}
-		now := s.clock.Now().UTC()
+		if s.afterCodeCheck != nil {
+			s.afterCodeCheck() // tests only: the code's row is share-locked here
+		}
+		at := s.clock.Now().UTC()
 		if _, err := tx.Exec(ctx, "INSERT INTO setup_sessions (id_hash, created_at, idle_expires_at) VALUES ($1, $2, $3)",
-			hashSessionToken(token), now, now.Add(SessionIdle)); err != nil {
+			hashSessionToken(token), at, at.Add(SessionIdle)); err != nil {
 			return fmt.Errorf("create setup session: %w", err)
 		}
 		return nil
@@ -134,6 +137,23 @@ func (s *Service) StartSession(ctx context.Context, code string, m auth.Meta) (s
 		return "", err
 	}
 	return token, nil
+}
+
+// codeHashForShare reads the stored setup code hash and locks its row FOR SHARE.
+func codeHashForShare(ctx context.Context, tx pgx.Tx) (string, bool, error) {
+	var raw []byte
+	err := tx.QueryRow(ctx, "SELECT value FROM settings WHERE key = $1 FOR SHARE", keyTokenHash).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read setup code: %w", err)
+	}
+	var h string
+	if err := json.Unmarshal(raw, &h); err != nil {
+		return "", false, fmt.Errorf("decode setup code: %w", err)
+	}
+	return h, true, nil
 }
 
 // checkCode compares code with the stored hash in constant time and counts a failure
