@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -76,6 +77,6 @@ func TestPrepareKVVersionsAreBoundedAndChecked(t *testing.T) {
 }
 
 func TestMarkMissingNamesRefusesAnUnknownTable(t *testing.T) {
-	_, err := markMissingNames(nil, nil, "targets", uuid.New(), nil, time.Now())
+	_, err := markMissingNames(context.Background(), nil, "targets", uuid.New(), nil, time.Now())
 	assert.Error(t, err)
 }
