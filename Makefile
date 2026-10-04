@@ -22,8 +22,9 @@ test-integration: ## Run integration tests (needs Docker)
 	go test -race -count=1 -tags integration ./...
 
 .PHONY: test-ssh
-test-ssh: ## Run the real OpenSSH matrix (Ubuntu 22.04, Debian 12, Rocky 9; needs Docker). ALICE_SSH_IMAGES=ubuntu22 limits it
+test-ssh: ## Run the real OpenSSH and Nginx matrix (Ubuntu 22.04, Debian 12, Rocky 9; needs Docker). ALICE_SSH_IMAGES=ubuntu22 limits it
 	go test -count=1 -tags integration -run TestRealOpenSSH ./internal/providers/linuxssh/
+	go test -count=1 -tags integration -run TestRealNginx ./internal/providers/nginx/
 
 .PHONY: i18n-check
 i18n-check: ## Verify EN/TR translation catalogs have identical keys and placeholders
@@ -149,7 +150,7 @@ unlock: ## End a sign-in delay or lockout: make unlock ACCOUNT=<username> (audit
 
 .PHONY: e2e
 e2e: ## Run Playwright tests against the e2e stack (make e2e-up first)
-	cd web && npx playwright install chromium && set -a && { [ ! -f ../deploy/.env ] || . ../deploy/.env; } && set +a && ALICE_E2E_PROJECT=$(E2E_PROJECT) npx playwright test
+	cd web && npx playwright install chromium && port="$${ALICE_E2E_PORT:-}" && set -a && { [ ! -f ../deploy/.env ] || . ../deploy/.env; } && set +a && { [ -z "$$port" ] || ALICE_E2E_PORT="$$port"; } && export ALICE_E2E_PORT && ALICE_E2E_PROJECT=$(E2E_PROJECT) npx playwright test
 
 GOLANGCI_LINT_VERSION ?= v2.14.0
 GOVULNCHECK_VERSION   ?= v1.8.0
