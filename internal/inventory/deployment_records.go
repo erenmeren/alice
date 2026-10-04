@@ -494,7 +494,11 @@ var stepParamKeys = []string{"error", "port", "mode", "served", "reason", "opera
 
 // errorParamKeys are the error params a record keeps (the providers' allowlist, Tasks 11 and 17).
 var errorParamKeys = []string{"port", "failed_step", "profile", "phase", "directory", "backup_dir", "expected", "actual", "mode",
-	"helper_code", "subcommand", "operation_id"}
+	"helper_code", "subcommand", "operation_id",
+	// The Key Vault provider's closed params (Phase 5): the role a forbidden secret read lacks (F-41),
+	// the permission model, Azure's strict-shape code and request id, a refused client address, and
+	// "reason" (tenant_mismatch).
+	"role", "model", "aadsts", "azure_code", "azure_request_id", "client_address", "reason"}
 
 const (
 	maxParamValue = 256  // bytes of one param value

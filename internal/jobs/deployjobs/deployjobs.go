@@ -31,8 +31,16 @@
 // (inventory.Claim on the context): a run that stalled past its lease, whose job was taken back,
 // writes nothing and sends nothing more after its next fenced check (see deploy for the residual).
 //
-// Recovery never needs the private key (DeploymentMaterial(id, false)); the deploy job unseals it
-// once, for the first send only, and zeroes it on every path.
+// A Key Vault deployment fails before the send when its secret cannot be read or checked: the deploy
+// job reads the version's secret from the vault before it opens any SSH session (kv.go), so a vault
+// that refuses (F-41: the role Key Vault Secrets User is missing), a version that was disabled or
+// deleted, or a secret that is not the recorded version ends the deployment with the closed reason and
+// nothing written or even connected.
+//
+// Recovery never needs the private key (DeploymentMaterial(id, false)) and never reads the vault; the
+// deploy job obtains the key once, for the first send only (unsealed from Alice's own store for an
+// uploaded certificate, read from the vault for a Key Vault one: never stored), and zeroes it on every
+// path.
 //
 // The complete decision tables of both handlers are in the doc comments of deploy (deploy.go) and
 // recoverDeployment (recover.go).
@@ -78,6 +86,12 @@ type Inventory interface {
 	// CheckClaim is ErrClaimLost when the job run on the context (inventory.WithClaim) no longer
 	// holds its job. Every write above checks the same in its own transaction.
 	CheckClaim(ctx context.Context) error
+
+	// VaultCredentials and KVDeployMaterial serve Key Vault deployments (R40 row 18, kv.go): the
+	// vault's sign-in, and the check of the deployment's version secret that yields the first send's
+	// material (the caller zeroes its PrivateKeyPEM; KVDeployMaterial zeroes the secret).
+	VaultCredentials(id uuid.UUID) inventory.VaultCredentialSource
+	KVDeployMaterial(ctx context.Context, id uuid.UUID, secret providers.CertificateSecret) (inventory.Material, error)
 }
 
 var _ Inventory = (*inventory.Service)(nil)
@@ -269,7 +283,11 @@ func withClaim(ctx context.Context, j jobs.Job) context.Context {
 
 // jobParamKeys are the params a job's error may carry: fixed labels and numbers only, never a path
 // or remote text (the API's allowlist drops anything else too).
-var jobParamKeys = []string{"port", "failed_step", "phase", "helper_code", "subcommand", "exit_code", "operation_id"}
+var jobParamKeys = []string{"port", "failed_step", "phase", "helper_code", "subcommand", "exit_code", "operation_id",
+	// The vault provider's closed params (task 7-8 table): the role a forbidden read lacks (F-41), the
+	// permission model, Azure's strict-shape codes and request id, the caller's address a firewall
+	// refused, and "reason" (tenant_mismatch). None carries remote text.
+	"role", "model", "aadsts", "azure_code", "azure_request_id", "client_address", "reason"}
 
 func jobParams(in map[string]string) map[string]string {
 	var out map[string]string

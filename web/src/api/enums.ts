@@ -60,9 +60,11 @@ export const STEP_STATUSES: readonly StepStatus[] = ['started', 'ok', 'failed', 
 // DEPLOYMENT_STEP_NAMES are the steps a deployment reports: the helper's (helperproto.Step*), the
 // provider's (providers.StepName*) and the engine's own in internal/jobs/deployjobs: the pre-check
 // and recover_pending (Alice puts back the files of an unfinished earlier change it no longer follows
-// before it deploys; param operation_id).
+// before it deploys; param operation_id) and kv_secret (a Key Vault deployment reads its certificate
+// secret from the vault before anything is sent to the server; param reason on an incomplete chain).
 export const DEPLOYMENT_STEP_NAMES: readonly string[] = [
   'verify_current',
+  'kv_secret',
   'backup',
   'write_key',
   'write_cert',

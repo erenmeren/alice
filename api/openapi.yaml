@@ -2253,7 +2253,7 @@ components:
         name:
           type: string
           description: >-
-            Known values: verify_current, recover_pending, backup, write_key, write_cert, config_test, reload,
+            Known values: verify_current, kv_secret, recover_pending, backup, write_key, write_cert, config_test, reload,
             journal, restore, rollback_config_test, rollback_reload, verify, verify_old; a newer server may add
             others.
         status: { type: string, enum: [started, ok, failed, skipped] }

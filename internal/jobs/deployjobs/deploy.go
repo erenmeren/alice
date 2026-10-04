@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -34,6 +35,13 @@ import (
 //	                                 ErrNoPrivateKey / ErrNotFound           finish failed no_private_key /   Fail that reason
 //	                                                                         system.not_found
 //	                                 other error                             -                                pre-send failure
+//	 vault step (a Key Vault deployment: Material.KV set; kv.go has its own table): the secret of
+//	  the recorded version is read and checked BEFORE the SSH session is opened
+//	                                 provider or inventory refusal           step kv_secret failed; finish    Fail the closed reason
+//	                                 (azure.forbidden {role} F-41, kv.*,     failed (kv_secret) unless        (retryable: attempts left
+//	                                 certificate.chain_unconfirmed F-17,     retryable with attempts left     retry, the next attempt
+//	                                 certificate.expired ...)                                                 reads the vault again)
+//	                                 ok                                      step kv_secret ok                continue below
 //	 run-time checks (F-19)          now >= not_after / now < not_before     finish failed certificate.       Fail that reason
 //	                                 configuration invalid / location        expired | not_yet_valid |
 //	                                 not deployable                          nginx.config_invalid |
@@ -206,8 +214,30 @@ func (h *handlers) first(ctx context.Context, j jobs.Job, d inventory.Deployment
 		return h.beforeSend(ctx, j, d, jobs.Retry(reasonUnexpected, nil, err))
 	}
 	// The key is handed out for this first send only; it is zeroed on every path (and right after
-	// the send). DeployRequest shares its holder.
-	defer m.PrivateKeyPEM.Zero()
+	// the send). DeployRequest shares its holder. The call reads m when the run ends, not now: a
+	// Key Vault deployment's key arrives with the vault step below (D6).
+	defer func() { m.PrivateKeyPEM.Zero() }()
+	rec := h.recorder(ctx, d.ID, steps)
+	if m.KV != nil {
+		// A Key Vault deployment reads its secret before anything can touch the server (kv.go).
+		rec.Step(stepKVSecret, providers.StepStarted, nil)
+		out, err := h.kvMaterial(ctx, m)
+		switch {
+		case errors.Is(err, inventory.ErrDeploymentState):
+			return h.refollow(ctx, j, d, steps, depth)
+		case errors.Is(err, inventory.ErrClaimLost):
+			return h.beforeSendAt(ctx, j, d, err, stepKVSecret) // a stale run records nothing
+		case err != nil:
+			rec.Step(stepKVSecret, providers.StepFailed, map[string]string{"reason": failure(err).Reason})
+			return h.beforeSendAt(ctx, j, d, err, stepKVSecret)
+		}
+		m = out
+		var params map[string]string
+		if slices.Contains(m.Warnings, inventory.WarnChainIncomplete) {
+			params = map[string]string{"reason": inventory.WarnChainIncomplete}
+		}
+		rec.Step(stepKVSecret, providers.StepOK, params)
+	}
 	now := h.d.Clock.Now()
 	switch {
 	case !now.Before(m.NotAfter):
@@ -224,7 +254,6 @@ func (h *handlers) first(ctx context.Context, j jobs.Job, d inventory.Deployment
 		return h.beforeSend(ctx, j, d, err)
 	}
 	defer h.close(sess)
-	rec := h.recorder(ctx, d.ID, steps)
 	served, chain, err := h.precheck(ctx, sess, m, rec)
 	if err != nil {
 		// The pre-check is the step that refused (distinct from "verify", the check of the new

@@ -32,6 +32,7 @@ import (
 	"alice/internal/platform/clock"
 	"alice/internal/platform/logging"
 	"alice/internal/providers"
+	"alice/internal/providers/fake"
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/linuxsshtest"
 	"alice/internal/providers/nginx"
@@ -138,6 +139,7 @@ type env struct {
 	queue   *jobs.Queue
 	inv     *inventory.Service
 	prov    *nginx.Provider
+	az      *fake.Provider // the scripted azurekv provider (Key Vault deployments, kv_integration_test.go)
 	reg     *providers.Registry
 	runner  *jobs.Runner
 	admin   inventory.Actor
@@ -177,6 +179,8 @@ func newEnv(t *testing.T) *env {
 	// the fake clock here.
 	e.prov = nginx.New(nginx.Options{SSH: ssh, Prober: emuProber{emus: e.serverList}, Attempts: 1})
 	e.reg.Register(hookProvider{Provider: e.prov, wrap: e.wrapSession})
+	e.az = fake.New(providers.KindAzureKV, providers.CapTestConnection, providers.CapDiscoverCerts, providers.CapReadCertificateSecret)
+	e.reg.Register(e.az)
 	e.reg.Freeze()
 	_, err = e.inv.EnsurePlatformKey(e.ctx)
 	require.NoError(t, err)
@@ -517,6 +521,7 @@ func (e *env) startDying(k *killer) <-chan struct{} {
 	reg.Register(hookProvider{Provider: e.prov, wrap: func(_ providers.TargetRef, s providers.Session) providers.Session {
 		return killSession{Session: s, k: k}
 	}})
+	reg.Register(e.az)
 	reg.Freeze()
 	targetjobs.Register(r, targetjobs.Deps{Inventory: e.inv, Registry: e.reg, Clock: e.clock})
 	Register(r, Deps{Inventory: killInv{Service: e.inv, k: k}, Registry: reg, Clock: e.clock, Log: e.log()})

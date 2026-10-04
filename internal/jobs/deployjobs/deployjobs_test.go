@@ -54,6 +54,7 @@ type fakeInv struct {
 	lost     bool // the job run's claim is lost: every write is refused (inventory's fence)
 	// ops are the deployments that own operation ids (OperationDeployment).
 	ops map[uuid.UUID]inventory.OperationOwner
+	kv  kvFake // Key Vault deployments (kv_test.go)
 }
 
 var fencedWrites = []string{"BeginDeployment", "StartDeployment", "RecordDeploymentStep", "FinishDeployment", "RecordOutcome", "CheckClaim"}
@@ -61,6 +62,7 @@ var fencedWrites = []string{"BeginDeployment", "StartDeployment", "RecordDeploym
 func (f *fakeInv) CheckClaim(ctx context.Context) error { return f.call(ctx, "CheckClaim") }
 
 func (f *fakeInv) call(ctx context.Context, name string) error {
+	f.kv.trace.add("inv:" + name)
 	f.mu.Lock()
 	f.log = append(f.log, name)
 	f.ctxErrs[name] = ctx.Err()
@@ -111,6 +113,12 @@ func (f *fakeInv) lastFinish() inventory.DeploymentFinish {
 func (f *fakeInv) TargetRef(ctx context.Context, id uuid.UUID) (providers.TargetRef, inventory.Target, error) {
 	if err := f.call(ctx, "TargetRef"); err != nil {
 		return providers.TargetRef{}, inventory.Target{}, err
+	}
+	if f.kv.vaultID != uuid.Nil && id == f.kv.vaultID {
+		if f.kv.vaultErr != nil {
+			return providers.TargetRef{}, inventory.Target{}, f.kv.vaultErr
+		}
+		return providers.TargetRef{ID: id, Name: "prod", Kind: providers.KindAzureKV}, f.kv.vault, nil
 	}
 	return providers.TargetRef{ID: id, Name: "web-01", Kind: providers.KindNginx}, f.target, nil
 }
@@ -183,7 +191,7 @@ func (f *fakeInv) DeploymentMaterial(ctx context.Context, _ uuid.UUID, withKey b
 		m.NewChainLength, m.PreviousFingerprint, m.PreviousChainLength = f.dep.NewChainLength, f.dep.PreviousFingerprint, f.dep.PreviousChainLength
 	}
 	m.PrivateKeyPEM = secrets.Plaintext{}
-	if withKey {
+	if withKey && m.KV == nil { // a vault deployment's key comes from KVDeployMaterial, never from here
 		f.key = append([]byte(nil), f.material.PrivateKeyPEM.Bytes()...)
 		f.keyOut = secrets.NewPlaintext(f.key)
 		m.PrivateKeyPEM = f.keyOut
@@ -212,10 +220,14 @@ func (f *fakeInv) StartDeployment(ctx context.Context, id uuid.UUID, v inventory
 	return nil
 }
 
-func (f *fakeInv) RecordDeploymentStep(ctx context.Context, _ uuid.UUID, name string, status providers.StepStatus, _ map[string]string) error {
+func (f *fakeInv) RecordDeploymentStep(ctx context.Context, _ uuid.UUID, name string, status providers.StepStatus, params map[string]string) error {
 	err := f.call(ctx, "RecordDeploymentStep")
 	f.mu.Lock()
 	f.steps = append(f.steps, name+":"+string(status))
+	if f.kv.stepParams == nil {
+		f.kv.stepParams = map[string]map[string]string{}
+	}
+	f.kv.stepParams[name+":"+string(status)] = maps.Clone(params)
 	f.mu.Unlock()
 	if h := f.hooks["step:"+name+":"+string(status)]; h != nil {
 		h(ctx)
