@@ -319,46 +319,94 @@ type existingLocation struct {
 	deployed    string
 	fileSHA     string
 	keyType     string
-	// The location's unfinished deployment (state not done) and its latest finished one, as far
-	// as the changed-outside check needs them (aliceFingerprints).
-	unfinished     *deploymentFingerprints
-	latestFinished *deploymentFingerprints
+	// The location's unfinished deployment (state not done) and its finished ones that matter to
+	// the changed-outside check (aliceFingerprints): every one finished since the location was last
+	// scanned, and the latest finished one, oldest first. finishedCut: there were more than
+	// maxConsultedDeployments of them.
+	unfinished  *deploymentFingerprints
+	finished    []deploymentFingerprints
+	finishedCut bool
 }
+
+// maxConsultedDeployments bounds the finished deployments one scan of a location consults; with
+// more (a location deployed to that often between two scans) the scan does not flag a change.
+const maxConsultedDeployments = 100
 
 // deploymentFingerprints is what a deployment put or would put in a location's file.
 type deploymentFingerprints struct {
 	status, newFP, previousFP string
+	sent                      bool // an operation was sent (operation_id recorded)
+}
+
+// baseline is the certificate the location is known to have held before this scan: the one the
+// last scan read, or, when that scan read none (the file was missing or unreadable), the one Alice
+// last deployed there.
+func (e *existingLocation) baseline() string {
+	if e.fingerprint != "" {
+		return e.fingerprint
+	}
+	return e.deployed
 }
 
 // aliceFingerprints are the certificates a scan may find in the file because of Alice's own
-// deployments (deployed_fingerprint aside), given the certificate the location held before this
-// scan. A deployment records deployed_fingerprint only when it finishes, and its outcome decides
-// what it can have left:
+// deployments (deployed_fingerprint aside), starting from the baseline. A deployment records
+// deployed_fingerprint only when it finishes, and its outcome decides what it can have left:
 //   - an unfinished deployment (state not done, whatever its status: pending, running,
 //     needs_attention): either certificate, the outcome is still open;
-//   - the latest finished one, by status: succeeded or unchanged leave the new certificate, which
-//     deployed_fingerprint names already; rolled_back or failed leave the previous one, accepted only
-//     when the location held the new one before (an earlier scan saw the certificate in flight and
-//     this scan sees the restore); rollback_failed may leave either.
+//   - the finished ones, in the order they finished: succeeded or unchanged leave the new
+//     certificate; rolled_back or a sent failed one leave the previous one, accepted only when the
+//     file may have held the new one before (an earlier scan saw the certificate in flight, or an
+//     earlier deployment put it there); rollback_failed may leave either; a failed deployment that
+//     sent nothing left nothing.
+//
+// unknown is true when Alice cannot tell what its deployments left: a rollback whose previous
+// certificate was not recorded (previous_fingerprint is empty when the verification was skipped),
+// or more finished deployments than a scan consults. The scan then flags nothing.
 //
 // Anything else, such as the previous certificate put back by hand after a success, or the new one
 // installed by hand after a rollback, is a change outside Alice.
-func (e *existingLocation) aliceFingerprints() []string {
-	var out []string
-	if d := e.unfinished; d != nil {
-		out = append(out, d.newFP, d.previousFP)
+func (e *existingLocation) aliceFingerprints() (fps []string, unknown bool) {
+	if e.finishedCut {
+		return nil, true
 	}
-	if d := e.latestFinished; d != nil {
+	possible := []string{e.baseline()}
+	for _, d := range e.finished {
 		switch d.status {
+		case "succeeded", "unchanged":
+			possible = []string{d.newFP}
 		case "rolled_back", "failed":
-			if e.fingerprint == d.newFP {
-				out = append(out, d.previousFP)
+			if d.status == "failed" && !d.sent {
+				continue
+			}
+			if slices.Contains(possible, d.newFP) {
+				if d.previousFP == "" {
+					return nil, true
+				}
+				possible = append(possible, d.previousFP)
 			}
 		case "rollback_failed":
-			out = append(out, d.newFP, d.previousFP)
+			if d.previousFP == "" {
+				return nil, true
+			}
+			possible = append(possible, d.newFP, d.previousFP)
 		}
 	}
-	return out
+	if d := e.unfinished; d != nil {
+		possible = append(possible, d.newFP, d.previousFP)
+	}
+	return possible, false
+}
+
+// changedOutside reports whether fp, the certificate a scan read in the file, is a change outside
+// Alice: the location held a known certificate before (baseline) and fp is neither it, nor what
+// Alice deployed, nor what Alice's deployments can have left.
+func (e *existingLocation) changedOutside(fp string) bool {
+	base := e.baseline()
+	if base == "" || fp == "" || fp == base || fp == e.deployed {
+		return false
+	}
+	expected, unknown := e.aliceFingerprints()
+	return !unknown && !slices.Contains(expected, fp)
 }
 
 // preparedScan is the certificate half of a discovery made storable before its transaction:
@@ -461,7 +509,7 @@ func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, s
 			continue
 		}
 		seen = append(seen, prev.id)
-		changedOutside := prev.fingerprint != "" && fp != "" && fp != prev.fingerprint && fp != prev.deployed && !slices.Contains(prev.aliceFingerprints(), fp)
+		changedOutside := prev.changedOutside(fp)
 		if err := updateLocation(ctx, tx, prev.id, p, certID, fileSHA, keyType, changedOutside, now); err != nil {
 			return certSummary{}, nil, err
 		}
@@ -469,7 +517,7 @@ func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, s
 			events = append(events, audit.Event{Actor: audit.SystemActor("jobs"), Action: "location.changed_outside",
 				ObjectType: "certificate_location", ObjectID: prev.id.String(), Result: audit.Success, Details: map[string]string{
 					"location_id": prev.id.String(), "target_id": t.ID.String(), "cert_path": p.loc.CertPath, "fingerprint": fp,
-					"previous_fingerprint": prev.fingerprint}})
+					"previous_fingerprint": prev.baseline()}})
 		}
 	}
 	if markMissing {
@@ -487,10 +535,12 @@ WHERE target_id = $1 AND kind = $2 AND missing_since IS NULL AND NOT (id = ANY($
 // lookup is the path-hash expression of the unique index (migration 00006).
 func lockLocation(ctx context.Context, tx pgx.Tx, target uuid.UUID, path string) (*existingLocation, error) {
 	var e existingLocation
-	err := tx.QueryRow(ctx, `SELECT l.id, l.certificate_id, coalesce(c.fingerprint_sha256, ''), l.deployed_fingerprint, l.cert_file_sha256, l.key_type
+	var lastSeen time.Time
+	err := tx.QueryRow(ctx, `SELECT l.id, l.certificate_id, coalesce(c.fingerprint_sha256, ''), l.deployed_fingerprint, l.cert_file_sha256, l.key_type,
+    l.last_seen_at
 FROM certificate_locations l LEFT JOIN certificates c ON c.id = l.certificate_id
 WHERE l.target_id = $1 AND l.kind = $2 AND certificate_location_path_hash(l.cert_path) = certificate_location_path_hash($3) AND l.cert_path = $3
-FOR UPDATE OF l`, target, locationKind, path).Scan(&e.id, &e.certID, &e.fingerprint, &e.deployed, &e.fileSHA, &e.keyType)
+FOR UPDATE OF l`, target, locationKind, path).Scan(&e.id, &e.certID, &e.fingerprint, &e.deployed, &e.fileSHA, &e.keyType, &lastSeen)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -498,29 +548,44 @@ FOR UPDATE OF l`, target, locationKind, path).Scan(&e.id, &e.certID, &e.fingerpr
 		return nil, fmt.Errorf("inventory: read certificate location: %w", err)
 	}
 	// The deployments are read, not locked (the location row lock above orders this scan with a
-	// deployment that changes the location).
-	rows, err := tx.Query(ctx, `(SELECT false, status, new_fingerprint, previous_fingerprint FROM deployments
- WHERE location_id = $1 AND state <> 'done' LIMIT 1)
+	// deployment that changes the location): the unfinished one, then the finished ones since the
+	// last scan and the latest finished one, newest first (at most maxConsultedDeployments+1).
+	rows, err := tx.Query(ctx, `(SELECT false, status, new_fingerprint, previous_fingerprint, operation_id IS NOT NULL, NULL::timestamptz, NULL::uuid
+ FROM deployments WHERE location_id = $1 AND state <> 'done' LIMIT 1)
 UNION ALL
-(SELECT true, status, new_fingerprint, previous_fingerprint FROM deployments
- WHERE location_id = $1 AND state = 'done' ORDER BY created_at DESC, id DESC LIMIT 1)`, e.id)
+(SELECT true, status, new_fingerprint, previous_fingerprint, operation_id IS NOT NULL, finished_at, id FROM deployments
+ WHERE location_id = $1 AND state = 'done'
+   AND (finished_at >= $2 OR id = (SELECT id FROM deployments WHERE location_id = $1 AND state = 'done'
+                                   ORDER BY finished_at DESC, created_at DESC, id DESC LIMIT 1))
+ ORDER BY finished_at DESC, created_at DESC, id DESC LIMIT $3)`, e.id, lastSeen, maxConsultedDeployments+1)
 	if err != nil {
 		return nil, fmt.Errorf("inventory: read the location's deployments: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var done bool
-		var d deploymentFingerprints
-		if err := rows.Scan(&done, &d.status, &d.newFP, &d.previousFP); err != nil {
+		var (
+			done bool
+			d    deploymentFingerprints
+			at   *time.Time
+			id   *uuid.UUID
+		)
+		if err := rows.Scan(&done, &d.status, &d.newFP, &d.previousFP, &d.sent, &at, &id); err != nil {
 			return nil, fmt.Errorf("inventory: read the location's deployments: %w", err)
 		}
 		if done {
-			e.latestFinished = &d
+			e.finished = append(e.finished, d)
 		} else {
 			e.unfinished = &d
 		}
 	}
-	return &e, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inventory: read the location's deployments: %w", err)
+	}
+	if len(e.finished) > maxConsultedDeployments {
+		e.finished, e.finishedCut = nil, true
+	}
+	slices.Reverse(e.finished) // oldest first
+	return &e, nil
 }
 
 func insertLocation(ctx context.Context, tx pgx.Tx, target uuid.UUID, p preparedLocation, certID *uuid.UUID, fileSHA, keyType string,

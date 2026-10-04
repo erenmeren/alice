@@ -195,3 +195,80 @@ func TestReconcileIsFencedToTheDiscoveryJobsClaim(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, h.count("SELECT count(*) FROM certificate_locations"))
 }
+
+// The changed-outside check through real scans (final review B1 M2, M3 and the Task 13 ledger
+// item): after a scan that found the file missing, the certificate Alice deployed is the baseline;
+// a rollback whose previous certificate is unknown flags nothing; and every deployment finished
+// since the location's last scan counts, not only the latest.
+func TestChangedOutsideBaselinesAndDeploymentsSinceTheLastScan(t *testing.T) {
+	h := newHarness(t)
+	web := nginxTarget(t, h, h.user("ada", rbac.Admin, ""), "web-01")
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	www := pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}
+	w, x, y, z := ca.Issue(www, h.clock.Now()), ca.Issue(www, h.clock.Now()), ca.Issue(www, h.clock.Now()), ca.Issue(www, h.clock.Now())
+	// scan reads the file at path (nil: missing) and reports whether this scan flagged a change
+	// outside Alice (an earlier flag stays on the location until a deployment succeeds).
+	scan := func(path string, leaf *pki.Leaf) bool {
+		t.Helper()
+		before := h.audits("location.changed_outside")
+		h.clock.Advance(time.Minute)
+		loc := cl(path, path+".key", "www.example.test")
+		d := providers.DiscoveredCertificate{Location: loc}
+		if leaf != nil {
+			d = dc(loc, *leaf)
+		} else {
+			d.Location.Problem = providers.CertProblemMissing
+		}
+		_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{d}})
+		require.NoError(t, err)
+		return h.audits("location.changed_outside") > before
+	}
+	location := func(path string) inventory.CertificateLocation { return byPath(t, h, web.ID, true)[path] }
+	certOf := func(l pki.Leaf) uuid.UUID {
+		t.Helper()
+		var id uuid.UUID
+		require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT id FROM certificates WHERE fingerprint_sha256 = $1", pki.Fingerprint(l.Cert)).Scan(&id))
+		return id
+	}
+	finished := func(l inventory.CertificateLocation, cert pki.Leaf, status, prevFP string, sent bool) {
+		t.Helper()
+		h.clock.Advance(time.Second)
+		var op *uuid.UUID
+		id := uuid.Must(uuid.NewV7())
+		if sent {
+			op = &id
+		}
+		_, err := h.db.Owner.Exec(h.ctx, `INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, state, status,
+new_fingerprint, previous_fingerprint, operation_id, cert_path, key_path, created_at, finished_at)
+VALUES ($1, $2, $3, $4, 'manual', 'done', $5, $6, $7, $8, '/etc/nginx/ssl/d.crt', '/etc/nginx/ssl/d.key', $9, $9)`, id, certOf(cert), l.ID, web.ID,
+			status, pki.Fingerprint(cert.Cert), prevFP, op, h.clock.Now())
+		require.NoError(t, err)
+	}
+
+	// M2: Alice deployed X, a scan found the file missing, the next one finds Z.
+	scan("/etc/nginx/ssl/m2.crt", &w)
+	l := location("/etc/nginx/ssl/m2.crt")
+	scan("/etc/nginx/ssl/x.crt", &x) // X is known
+	finished(l, x, "succeeded", pki.Fingerprint(w.Cert), true)
+	_, err := h.db.Owner.Exec(h.ctx, "UPDATE certificate_locations SET deployed_fingerprint = $2 WHERE id = $1", l.ID, pki.Fingerprint(x.Cert))
+	require.NoError(t, err)
+	assert.False(t, scan("/etc/nginx/ssl/m2.crt", nil))
+	assert.True(t, scan("/etc/nginx/ssl/m2.crt", &z), "a foreign certificate after a scan that read none")
+
+	// M3: a scan saw Y in flight; the deployment rolled back without a recorded previous certificate.
+	scan("/etc/nginx/ssl/m3.crt", &w)
+	l = location("/etc/nginx/ssl/m3.crt")
+	scan("/etc/nginx/ssl/m3.crt", &y)
+	finished(l, y, "rolled_back", "", true)
+	assert.False(t, scan("/etc/nginx/ssl/m3.crt", &w), "the restored certificate was not recorded: not flagged")
+
+	// Ledger: a scan saw Y in flight; that deployment rolled back to W, then a deployment of X failed
+	// in its pre-check (nothing sent) before the next scan.
+	scan("/etc/nginx/ssl/seq.crt", &w)
+	l = location("/etc/nginx/ssl/seq.crt")
+	scan("/etc/nginx/ssl/seq.crt", &y)
+	finished(l, y, "rolled_back", pki.Fingerprint(w.Cert), true)
+	finished(l, x, "failed", "", false)
+	assert.False(t, scan("/etc/nginx/ssl/seq.crt", &w), "the rollback before the latest deployment still counts")
+	assert.True(t, scan("/etc/nginx/ssl/seq.crt", &z))
+}

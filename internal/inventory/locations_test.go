@@ -190,18 +190,59 @@ func TestBoundSANs(t *testing.T) {
 	assert.Len(t, []rune(boundText(strings.Repeat("ş", maxCertificateText+5))), maxCertificateText)
 }
 
-func TestAliceFingerprints(t *testing.T) {
-	d := func(status string) *deploymentFingerprints {
-		return &deploymentFingerprints{status: status, newFP: "new", previousFP: "old"}
+// changedOutside: what Alice's deployments can have left in a file is never a change outside Alice;
+// anything else after a known certificate is.
+func TestChangedOutside(t *testing.T) {
+	d := func(status, newFP, prevFP string) deploymentFingerprints {
+		return deploymentFingerprints{status: status, newFP: newFP, previousFP: prevFP, sent: true}
 	}
-	assert.Empty(t, (&existingLocation{fingerprint: "old"}).aliceFingerprints())
-	assert.Equal(t, []string{"new", "old"}, (&existingLocation{unfinished: d("needs_attention")}).aliceFingerprints())
+	loc := func(fp, deployed string, finished ...deploymentFingerprints) *existingLocation {
+		return &existingLocation{fingerprint: fp, deployed: deployed, finished: finished}
+	}
+	// Nothing known before, nothing read, the same certificate, the deployed one: never a change.
+	assert.False(t, loc("", "").changedOutside("x"))
+	assert.False(t, loc("old", "").changedOutside(""))
+	assert.False(t, loc("old", "").changedOutside("old"))
+	assert.False(t, loc("old", "new").changedOutside("new"))
+	assert.True(t, loc("old", "").changedOutside("x"))
+
+	// An unfinished deployment may leave either certificate.
+	u := loc("old", "")
+	u.unfinished = &deploymentFingerprints{status: "needs_attention", newFP: "new", previousFP: "old"}
+	assert.False(t, u.changedOutside("new"))
+	assert.True(t, u.changedOutside("x"))
+
+	// succeeded / unchanged leave the new certificate only: the previous one put back is a change.
 	for _, status := range []string{"succeeded", "unchanged"} {
-		assert.Empty(t, (&existingLocation{fingerprint: "old", latestFinished: d(status)}).aliceFingerprints(), status)
+		assert.False(t, loc("old", "new", d(status, "new", "old")).changedOutside("new"), status)
+		assert.True(t, loc("new", "new", d(status, "new", "old")).changedOutside("old"), status)
 	}
+	// rolled_back and a sent failed one leave the previous one, when the new one may have been there.
 	for _, status := range []string{"rolled_back", "failed"} {
-		assert.Equal(t, []string{"old"}, (&existingLocation{fingerprint: "new", latestFinished: d(status)}).aliceFingerprints(), status)
-		assert.Empty(t, (&existingLocation{fingerprint: "old", latestFinished: d(status)}).aliceFingerprints(), status)
+		assert.False(t, loc("new", "", d(status, "new", "old")).changedOutside("old"), status)
+		assert.True(t, loc("old", "", d(status, "new", "old")).changedOutside("new"), status+": installed by hand after the rollback")
 	}
-	assert.Equal(t, []string{"new", "old"}, (&existingLocation{fingerprint: "x", latestFinished: d("rollback_failed")}).aliceFingerprints())
+	// A failed deployment that sent nothing left nothing.
+	assert.True(t, loc("new", "", deploymentFingerprints{status: "failed", newFP: "new", previousFP: "old"}).changedOutside("old"))
+	// rollback_failed may leave either.
+	assert.False(t, loc("x", "", d("rollback_failed", "new", "old")).changedOutside("new"))
+	assert.False(t, loc("x", "", d("rollback_failed", "new", "old")).changedOutside("old"))
+
+	// M3: a rollback whose previous certificate was not recorded (verification skipped) left an
+	// unknown certificate: nothing is flagged.
+	assert.False(t, loc("new", "", d("rolled_back", "new", "")).changedOutside("whatever"))
+	assert.False(t, loc("x", "", d("rollback_failed", "new", "")).changedOutside("whatever"))
+
+	// M2: after a scan that read no certificate (the file missing or unreadable), the certificate
+	// Alice deployed is the baseline: a foreign one is a change.
+	assert.True(t, loc("", "dep").changedOutside("x"))
+	assert.False(t, loc("", "dep").changedOutside("dep"))
+
+	// Every deployment finished since the last scan counts, in order: a rollback seen in flight,
+	// then another deployment that failed in its pre-check, still accept the restored certificate.
+	assert.False(t, loc("new", "", d("rolled_back", "new", "old"), deploymentFingerprints{status: "failed", newFP: "other"}).changedOutside("old"))
+	// A success, then a rollback of a later deployment over it.
+	assert.False(t, loc("old", "", d("succeeded", "a", "old"), d("rolled_back", "a", "b")).changedOutside("b"))
+	// More finished deployments than a scan consults: nothing is flagged.
+	assert.False(t, (&existingLocation{fingerprint: "old", finishedCut: true}).changedOutside("x"))
 }
