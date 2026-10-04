@@ -651,12 +651,13 @@ func (s blockingSession) Discover(ctx context.Context, _ providers.DiscoverReque
 	return providers.DiscoveryResult{}, ctx.Err()
 }
 
-// AUD-04(a): a discovery job's server side has its own time limit (DiscoveryTimeout); a server that
-// keeps the scan busy past it ends the run as a retryable timeout, and nothing is stored.
+// AUD-04(a): a discovery job's server side has its own time limit (discoveryTimeout); a server that
+// keeps the scan busy past it ends the run as a retryable timeout recorded on the server (W2 review,
+// minor 7), and nothing is stored.
 func TestDiscoveryHasAJobTimeLimit(t *testing.T) {
-	old := DiscoveryTimeout
-	DiscoveryTimeout = 50 * time.Millisecond
-	defer func() { DiscoveryTimeout = old }()
+	old := discoveryTimeout
+	discoveryTimeout = 50 * time.Millisecond
+	defer func() { discoveryTimeout = old }()
 	u := newUnit(t, false, false)
 	var deadlines []time.Time
 	reg := providers.NewRegistry()
@@ -672,5 +673,6 @@ func TestDiscoveryHasAJobTimeLimit(t *testing.T) {
 	require.Len(t, deadlines, 1)
 	assert.False(t, deadlines[0].IsZero(), "the scan runs under a deadline")
 	assert.Empty(t, u.inv.reconciled, "nothing is stored")
+	assert.Equal(t, []string{"ssh.timeout"}, u.inv.failures, "the server shows the timeout")
 	assert.Equal(t, 20*time.Minute, old, "sized above the provider's own bounds (10 min reading + commands)")
 }

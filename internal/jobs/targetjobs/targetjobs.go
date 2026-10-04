@@ -178,12 +178,12 @@ func (h *handlers) testConnection(ctx context.Context, j jobs.Job, _ jobs.StepRe
 	return out, nil
 }
 
-// DiscoveryTimeout bounds the server side of one discovery job (connecting, the SSH-key scan and
+// discoveryTimeout bounds the server side of one discovery job (connecting, the SSH-key scan and
 // the Nginx dump, the fallback scan included): the provider's own bounds are 10 minutes of
 // authorized_keys reading plus the command in flight (60 s), a 60 s nginx-dump and the connection,
 // so a job past this limit is stuck on a server that does not answer as it should. Storing the
 // result (Reconcile) is not under this limit. A variable so a test can shorten it.
-var DiscoveryTimeout = 20 * time.Minute
+var discoveryTimeout = 20 * time.Minute
 
 func (h *handlers) discover(ctx context.Context, j jobs.Job, _ jobs.StepRecorder) (map[string]any, error) {
 	res, req, err := h.scan(ctx, j)
@@ -211,9 +211,9 @@ func (h *handlers) discover(ctx context.Context, j jobs.Job, _ jobs.StepRecorder
 	return out, nil
 }
 
-// scan runs the server side of a discovery under DiscoveryTimeout.
+// scan runs the server side of a discovery under discoveryTimeout.
 func (h *handlers) scan(jobCtx context.Context, j jobs.Job) (providers.DiscoveryResult, providers.DiscoverRequest, error) {
-	ctx, cancel := context.WithTimeout(jobCtx, DiscoveryTimeout)
+	ctx, cancel := context.WithTimeout(jobCtx, discoveryTimeout)
 	defer cancel()
 	sess, t, err := h.open(ctx, j.TargetID, true, false)
 	if err != nil {
@@ -239,7 +239,9 @@ func (h *handlers) scan(jobCtx context.Context, j jobs.Job) (providers.Discovery
 		}
 	}
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) && jobCtx.Err() == nil {
-		// The job's own limit, not the server's answer: retried like a timeout.
+		// The job's own limit, not the server's answer: recorded on the server like a connection
+		// timeout (its status and last error) and retried like one.
+		h.recordFailure(jobCtx, j.TargetID, providers.NewError("ssh.timeout", true, err, nil))
 		return res, req, jobs.Retry("ssh.timeout", nil, err)
 	}
 	if err != nil {
