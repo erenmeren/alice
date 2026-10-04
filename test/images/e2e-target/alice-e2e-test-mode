@@ -1,5 +1,8 @@
 #!/bin/sh
 # Test only: how the next "nginx -t" behaves (see the /usr/sbin/nginx wrapper): ok | fail-once | fail.
+# fail-once is consumed by ANY "nginx -t", including the one a connection test runs (nginx-test):
+# arm it right before the deployment. "nginx -T" is never faulted, so under fail discovery still
+# reports the configuration valid. POST /test/reset does not reset this: use alice-e2e-nginx-reset.
 set -eu
 case "${1:-}" in
 ok | fail-once | fail) echo "$1" >/etc/alice-e2e/test-mode ;;

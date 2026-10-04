@@ -11,11 +11,17 @@ import (
 // shippedProviders are the provider kinds this build registers (registerProviders).
 var shippedProviders = []providers.Kind{providers.KindLinuxSSH, providers.KindNginx}
 
+// periodicTypes are the job types that run as periodic tasks of the scheduler (buildScheduler);
+// every other job type is a queue type and needs a handler on the runner. A new type is a queue
+// type until it is listed here.
+var periodicTypes = []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.AuditVerify, jobs.MaintenanceCleanup,
+	jobs.DiscoverySchedule, jobs.DeploymentRecoverySweep}
+
 // checkWiring refuses to start a server that is not completely wired: a provider this build ships
-// is not registered, or a job type has neither a handler on the runner nor a periodic task (a
-// queued job of such a type is never claimed and waits forever; a periodic type that is not
-// scheduled never runs, so for the recovery sweep nothing recovers an interrupted deployment).
-// serve calls it before anything runs; it names every gap at once.
+// is not registered, a queue job type has no handler on the runner (a queued job of that type is
+// never claimed and waits forever), or a periodic type is not scheduled (it never runs; for the
+// recovery sweep nothing would recover an interrupted deployment). serve calls it before anything
+// runs; it names every gap at once.
 func checkWiring(reg *providers.Registry, runner *jobs.Runner, sched *jobs.Scheduler) error {
 	var errs []error
 	for _, k := range shippedProviders {
@@ -24,12 +30,27 @@ func checkWiring(reg *providers.Registry, runner *jobs.Runner, sched *jobs.Sched
 		}
 	}
 	for _, t := range jobs.Types() {
-		if !runner.Handles(t) && !sched.Schedules(t) {
-			errs = append(errs, fmt.Errorf("job type %s has no handler and is not scheduled", t.Name))
+		if isPeriodic(t) {
+			if !sched.Schedules(t) {
+				errs = append(errs, fmt.Errorf("periodic job type %s is not scheduled", t.Name))
+			}
+			continue
+		}
+		if !runner.Handles(t) {
+			errs = append(errs, fmt.Errorf("queue job type %s has no handler", t.Name))
 		}
 	}
 	if len(errs) == 0 {
 		return nil
 	}
 	return fmt.Errorf("alice is not completely wired: %w", errors.Join(errs...))
+}
+
+func isPeriodic(t jobs.Type) bool {
+	for _, p := range periodicTypes {
+		if p == t {
+			return true
+		}
+	}
+	return false
 }

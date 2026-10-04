@@ -89,11 +89,15 @@ func TestServeWiringIsComplete(t *testing.T) {
 		jobs.DiscoverySchedule, jobs.DeploymentRecoverySweep} {
 		assert.True(t, sched.Schedules(typ), "%s is scheduled", typ.Name)
 	}
-	assert.Equal(t, time.Minute, sweepEvery, "the recovery sweep runs every minute")
-	// Every job type is either a queue type with a handler or a periodic task: iterate the
-	// registry so a type added later without either fails here.
+	assert.Positive(t, sweepEvery, "the sweep has an interval in every build (release: services_test.go; e2e: testapi_e2e_test.go)")
+	// Every job type is either a queue type with a handler or a listed periodic type that is
+	// scheduled: iterate the registry so a type added later without either fails here.
 	for _, typ := range jobs.Types() {
-		assert.True(t, runner.Handles(typ) || sched.Schedules(typ), "job type %s has no handler and is not scheduled", typ.Name)
+		if isPeriodic(typ) {
+			assert.True(t, sched.Schedules(typ), "periodic job type %s is scheduled", typ.Name)
+		} else {
+			assert.True(t, runner.Handles(typ), "queue job type %s has a handler", typ.Name)
+		}
 	}
 }
 
@@ -116,10 +120,19 @@ func TestCheckWiringRefusesAnIncompleteProduct(t *testing.T) {
 		jobs.Task{Type: jobs.NotifySend, Every: time.Minute, Run: func(context.Context) error { return nil }})
 	err = checkWiring(svc.registry, bare, noSweep)
 	require.Error(t, err)
-	for _, typ := range []string{"certificate.deploy", "certificate.deploy_recover", "deployment.recovery_sweep", "target.discover"} {
-		assert.Contains(t, err.Error(), "job type "+typ+" has no handler and is not scheduled")
+	for _, typ := range []string{"certificate.deploy", "certificate.deploy_recover", "target.discover"} {
+		assert.Contains(t, err.Error(), "queue job type "+typ+" has no handler")
 	}
-	assert.NotContains(t, err.Error(), "job type notify.send ")
+	assert.Contains(t, err.Error(), "periodic job type deployment.recovery_sweep is not scheduled")
+	assert.NotContains(t, err.Error(), "notify.send")
+
+	// A queue type is not satisfied by a periodic task, nor a periodic type by a handler.
+	run := func(context.Context) error { return nil }
+	misplaced := jobs.NewScheduler(clock.Real{}, svc.license, log,
+		jobs.Task{Type: jobs.TargetDiscover, Every: time.Minute, Run: run})
+	err = checkWiring(svc.registry, bare, misplaced)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "queue job type target.discover has no handler")
 	assert.True(t, strings.HasPrefix(err.Error(), "alice is not completely wired"), err.Error())
 }
 

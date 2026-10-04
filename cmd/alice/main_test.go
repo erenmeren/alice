@@ -150,9 +150,12 @@ func TestCloseWithinIsBounded(t *testing.T) {
 // A running deployment is not waited for beyond the runner's grace (a deploy command may take up
 // to 240 s): the runner lets running jobs end for half of it, then cancels them and gives them the
 // second half to record what they know; jobs that still run are handed back (releaseAll) and the
-// deployment recovery sweep finishes them after the restart. Recording an outcome after the
-// cancellation (deployjobs: the write and its re-read, each bounded by RecordTimeout) fits in that
-// second half.
+// deployment recovery sweep finishes them after the restart. A cancelled deployment usually records
+// its outcome in that second half: the write and its re-read are each bounded by
+// deployjobs.RecordTimeout, and the bound is exactly the half (2 × 15 s = 30 s), with no headroom
+// for a step record before it. When it does not finish, nothing is lost: the job is taken back, its
+// late writes are fenced off, and the deployment is recovered from the server's journal. The
+// assertion below only keeps a larger RecordTimeout from making that the normal case.
 func TestShutdownFitsTheStopGracePeriod(t *testing.T) {
 	grace, err := time.ParseDuration(readCompose(t, "../../deploy/docker-compose.yml").Services["alice"].StopGracePeriod)
 	require.NoError(t, err)
@@ -173,7 +176,15 @@ func TestShutdownFitsTheStopGracePeriod(t *testing.T) {
 	assert.Less(t, total, grace, "worst-case shutdown %s must end before stop_grace_period %s", total, grace)
 	assert.Less(t, jobsShutdownGrace, serveShutdownBudget, "running jobs get their grace inside the shutdown deadline")
 	assert.LessOrEqual(t, 2*deployjobs.RecordTimeout, jobsShutdownGrace/2,
-		"a deployment cut off by the shutdown can record its outcome inside the runner's grace")
+		"a deployment cut off by the shutdown usually records its outcome inside the runner's grace")
+
+	// The e2e overlay must not shorten Alice's grace below the budget either.
+	e2e := readCompose(t, "../../deploy/docker-compose.e2e.yml").Services["alice"].StopGracePeriod
+	if e2e != "" {
+		g, err := time.ParseDuration(e2e)
+		require.NoError(t, err)
+		assert.Less(t, total, g, "the e2e overlay's stop_grace_period %s must exceed the shutdown budget %s", g, total)
+	}
 }
 
 // shutdownBudgetConstants returns the names of the constants declared in main.go's shutdown block

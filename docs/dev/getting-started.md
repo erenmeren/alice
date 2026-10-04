@@ -56,7 +56,7 @@ creates when its data volume is new. Run `make reset` once (this deletes the dev
 | `make e2e-down` | Stop the e2e stack and delete its volumes (never touches the `make up` stack) |
 | `make helper` | Build the static `alice-helper` for linux/amd64 and linux/arm64 into `bin/` with `bin/alice-helper.sha256` |
 | `make fuzz-ssh` | Fuzz the `authorized_keys` and `sshd -T` parsers for 60 s each |
-| `make test-ssh` | Run the real-OpenSSH and real-Nginx suites on Ubuntu 22.04, Debian 12 and Rocky 9 (needs Docker; builds three images on first run). `ALICE_SSH_IMAGES=ubuntu22 make test-ssh` limits it to one distribution |
+| `make test-ssh` | Run the real-OpenSSH suite on Ubuntu 22.04, Debian 12 and Rocky 9 (needs Docker; builds three images on first run); it also runs `TestRealNginx` in `internal/providers/nginx`, the real-Nginx suite Phase 4 adds (until it exists that line runs no test). `ALICE_SSH_IMAGES=ubuntu22 make test-ssh` limits it to one distribution |
 | `make coverage` | Every Go test with the integration tag under coverage; enforces `coverage-floors.json` |
 | `make lint` / `make web-lint` | Linters |
 | `make i18n-check` | English and Turkish catalogs have the same keys and placeholders |
@@ -93,12 +93,16 @@ installation signed with the test key, which only this build trusts; fields `val
 `valid_from`, `replaces`, …), `GET /test/mail` (emails the build would have sent), `POST /test/license/tamper`
 (damage the newest stored license file so the "changed outside Alice" banner appears), `POST /test/jobs/drain`
 (run due jobs now: it claims jobs for 20 s, at most 20 per call, and lets the last one run until 50 s, so give the
-request a 60 s timeout) and `POST /test/scheduler/run` with `{"task": "<job type>"}` (run one periodic task now,
+request a 60 s timeout; a client that gives up does not cancel the running job; the answer is `{"ran": n}`, plus
+`"cut_off": true` when the budget ended with a job still running, which is then retried like any interrupted job) and `POST /test/scheduler/run` with `{"task": "<job type>"}` (run one periodic task now,
 for example `deployment.recovery_sweep`; 404 for a name that is not a scheduled task). The e2e build starts no job
 workers: queued jobs (connection tests, discovery, key removals, certificate deployments and their recoveries, and
 the jobs the scheduler enqueues) run only when a test calls `/test/jobs/drain`, so every job state is reproducible.
-The scheduler still ticks on the wall clock; a test that needs a periodic task at a given demo time moves the clock
-(`/test/clock`) and calls `/test/scheduler/run`. Release images are built
+The scheduler still ticks on the wall clock, except for `deployment.recovery_sweep`, which the e2e build never
+ticks (the demo clock is an offset of the wall clock, so a real-minute sweep would change deployments between test
+steps): a test moves the clock (`/test/clock`) and calls `/test/scheduler/run`. The other periodic tasks keep their
+Phase 1–3 behaviour: `discovery.schedule` and `notify.send` tick every real minute (a moved clock can make a
+discovery job due; it runs only at the next drain), the license evaluation, audit verification and cleanup hourly. Release images are built
 without the tags; unit tests in `cmd/alice` fail if the release build has a test endpoint, the demo clock, the
 test key or the test signer. The e2e build reports its version with a `+e2e` suffix and logs a warning at
 startup. A build with `testlicense` but without `e2e` logs "test license key trusted" and reports `+testlicense`.
@@ -126,9 +130,9 @@ sshtarget`):
 |---|---|
 | `alice-e2e-newcert <name> [--broken]` | Prints a fresh certificate for `<name>` from the test CA (leaf and CA) and its key between `-----ALICE CERT-----`, `-----ALICE KEY-----` and `-----ALICE END-----` markers; `--broken` prints an unrelated key |
 | `alice-e2e-served <name>` | The SHA-256 fingerprint (64 lower-case hex digits) of the certificate Nginx serves for `<name>` |
-| `alice-e2e-test-mode ok\|fail-once\|fail` | Makes the next (`fail-once`) or every (`fail`) `nginx -t` fail |
+| `alice-e2e-test-mode ok\|fail-once\|fail` | Makes the next (`fail-once`) or every (`fail`) `nginx -t` fail. `fail-once` is consumed by ANY `nginx -t`, including the one a connection test runs (`nginx-test`), so arm it right before the deployment. `nginx -T` is never faulted: under `fail`, discovery still reports the configuration valid |
 | `alice-e2e-reload-mode ok\|fail-once\|fail\|noop` | Makes the next or every `systemctl reload nginx` fail, or succeed without reloading (`noop`: Nginx keeps serving the old certificate) |
-| `alice-e2e-nginx-reset` | A fresh `www.example.test` pair, no faults, Nginx reloaded |
+| `alice-e2e-nginx-reset` | A fresh `www.example.test` pair, no faults, Nginx reloaded. `POST /test/reset` resets only Alice: it does not touch the target's Nginx files, fault modes, helper journals or sudoers, so call this between tests |
 
 How the target differs from a real server: the container has no systemd, so `/usr/bin/systemctl` is a test
 shim that handles exactly `reload nginx` (runs `nginx -s reload`, as `nginx.service` does) and

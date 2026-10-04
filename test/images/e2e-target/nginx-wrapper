@@ -3,9 +3,11 @@
 # Installed as /usr/sbin/nginx, the fixed path alice-helper runs; the distribution's binary is
 # diverted to /usr/lib/alice-e2e/nginx (dpkg-divert) and every call is passed on to it unchanged,
 # except "nginx -t" while /etc/alice-e2e/test-mode (alice-e2e-test-mode) asks for a fault:
-#   fail-once  the next "nginx -t" fails as a broken configuration would, then ok
+#   fail-once  the next "nginx -t" fails as a broken configuration would, then ok (ANY nginx -t
+#              consumes it, including a connection test's nginx-test)
 #   fail       every "nginx -t" fails
-# "nginx -T" (discovery and the deployment's configuration read) and "-s reload" are never changed.
+# "nginx -T" (discovery and the deployment's configuration read) and "-s reload" are never changed,
+# so under fail discovery still reports the configuration valid.
 if [ "$#" -eq 1 ] && [ "$1" = "-t" ]; then
 	mode=$(cat /etc/alice-e2e/test-mode 2>/dev/null || echo ok)
 	case "$mode" in

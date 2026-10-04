@@ -75,7 +75,8 @@ func TestE2ETargetIsTestOnlyAndUnpublished(t *testing.T) {
 func TestReleaseImageHasNoTestTarget(t *testing.T) {
 	raw, err := os.ReadFile("../../deploy/Dockerfile")
 	require.NoError(t, err)
-	for _, s := range []string{"test/images", "e2e-target", "systemctl", "alice-e2e", "nginx"} {
+	for _, s := range []string{"test/images", "e2e-target", "alice-e2e", "alice-test-ca", "nginx-wrapper", "/usr/bin/systemctl",
+		"nginx-www.conf", "dpkg-divert"} {
 		assert.NotContains(t, string(raw), s)
 	}
 }

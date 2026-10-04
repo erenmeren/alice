@@ -1,6 +1,8 @@
 #!/bin/sh
 # Test only: how the next "systemctl reload nginx" behaves (see /usr/bin/systemctl, the shim):
-# ok | fail-once | fail | noop.
+# ok | fail-once | fail | noop. fail-once is consumed by the next reload, whichever subcommand runs it
+# (a deployment's reload or its rollback's). POST /test/reset does not reset this: use
+# alice-e2e-nginx-reset.
 set -eu
 case "${1:-}" in
 ok | fail-once | fail | noop) echo "$1" >/etc/alice-e2e/reload-mode ;;
