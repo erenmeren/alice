@@ -374,6 +374,9 @@
       "target_add_denied_license": "Server not added: license limit reached or license expired",
       "target_status_changed": "Server status changed",
       "target_discovered": "SSH keys scanned",
+      "vault_add_refused": "Key Vault not added: the first check failed",
+      "vault_credentials_replaced": "Key Vault sign-in replaced",
+      "binding_deleted": "Connected websites removed",
       "hostkey_observed": "Another new server fingerprint seen while the server is blocked",
       "hostkey_pinned": "Server fingerprint confirmed",
       "hostkey_changed": "Server identity changed",
@@ -824,6 +827,11 @@
       },
       "discovery": {
         "schedule": "Scheduled server scan"
+      },
+      "kv": {
+        "test_connection": "Key Vault access check",
+        "poll": "Key Vault check",
+        "import": "Import into Key Vault"
       },
       "deployment": {
         "recovery_sweep": "Check for interrupted deployments"

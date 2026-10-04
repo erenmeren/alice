@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"alice/internal/audit"
 	"alice/internal/license"
@@ -20,15 +21,19 @@ import (
 )
 
 // targetColumns is the column list every target read uses (scanTarget's order).
+//
+// The last column is the public information of a vault's own credential ('null' for a server);
+// every query that uses the list reads FROM targets without an alias.
 const targetColumns = `id, name::text, type, config, status, last_error_code, last_success_at, last_discovery_at,
-discovery_interval_seconds, keys_managed_elsewhere, facts, capabilities, version, created_at, updated_at`
+discovery_interval_seconds, keys_managed_elsewhere, facts, capabilities, version, created_at, updated_at,
+coalesce((SELECT c.public_info FROM credentials c WHERE c.id = targets.credential_id AND c.purpose = 'azure_vault'), 'null'::jsonb)`
 
 func scanTarget(row pgx.Row) (Target, error) {
 	var t Target
-	var cfg, facts []byte
+	var cfg, facts, vaultInfoRaw []byte
 	var interval int
 	err := row.Scan(&t.ID, &t.Name, &t.Type, &cfg, &t.Status, &t.LastErrorCode, &t.LastSuccessAt, &t.LastDiscoveryAt,
-		&interval, &t.KeysManagedElsewhere, &facts, &t.Capabilities, &t.Version, &t.CreatedAt, &t.UpdatedAt)
+		&interval, &t.KeysManagedElsewhere, &facts, &t.Capabilities, &t.Version, &t.CreatedAt, &t.UpdatedAt, &vaultInfoRaw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Target{}, ErrNotFound
 	}
@@ -48,6 +53,13 @@ func scanTarget(row pgx.Row) (Target, error) {
 	t.LastSuccessAt, t.LastDiscoveryAt = utcPtr(t.LastSuccessAt), utcPtr(t.LastDiscoveryAt)
 	if t.Capabilities == nil {
 		t.Capabilities = []string{}
+	}
+	if t.Type == TypeAzureKeyVault {
+		v, err := vaultInfoOf(c, vaultInfoRaw, t.DiscoveryInterval, t.Facts.Azure)
+		if err != nil {
+			return Target{}, err
+		}
+		t.Vault = &v
 	}
 	return t, nil
 }
@@ -136,7 +148,8 @@ func (s *Service) CreateTarget(ctx context.Context, a Actor, in NewTarget) (Targ
 	var jobID uuid.UUID
 	var created Target
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if err := s.insertTarget(ctx, tx, id, n, cfg, pk.ID, caps, a.UserID); err != nil {
+		if err := s.insertTarget(ctx, tx, targetRow{ID: id, Name: n.Name, Type: n.Type, Config: cfg, CredentialID: pk.ID,
+			Status: StatusPendingHostKey, Capabilities: caps, IntervalSeconds: int(defaultInterval / time.Second), By: a.UserID}); err != nil {
 			return err
 		}
 		var err error
@@ -161,30 +174,85 @@ func (s *Service) CreateTarget(ctx context.Context, a Actor, in NewTarget) (Targ
 	return created, jobID, nil
 }
 
+// targetRow is one targets row to insert (insertTarget).
+type targetRow struct {
+	ID              uuid.UUID
+	Name            string
+	Type            string
+	Config          any
+	CredentialID    uuid.UUID
+	Status          string
+	LastErrorCode   string
+	LastSuccessAt   *time.Time
+	Capabilities    []string
+	IntervalSeconds int
+	Facts           []byte // nil = {}
+	By              uuid.UUID
+}
+
 // insertTarget checks the license limit and inserts the row in the same transaction: the check
 // serializes concurrent adds (license.Service takes an advisory lock) and counts the targets the
 // transaction sees, so the count can never pass the limit (L-74). Every insert into targets goes
-// through this function (L-79, internal/archtest/targets_test.go).
-func (s *Service) insertTarget(ctx context.Context, tx pgx.Tx, id uuid.UUID, n NewTarget, cfg targetConfig, credential uuid.UUID, caps []string, by uuid.UUID) error {
+// through this function (L-79, internal/archtest/targets_test.go). A vault's credential row is
+// inserted first in the same transaction (the foreign key to the vault is deferred).
+func (s *Service) insertTarget(ctx context.Context, tx pgx.Tx, r targetRow) error {
 	if err := s.license.CheckCanAddTarget(ctx, tx); err != nil {
 		return err
 	}
-	raw, err := json.Marshal(cfg)
+	raw, err := json.Marshal(r.Config)
 	if err != nil {
 		return err
 	}
+	facts := r.Facts
+	if facts == nil {
+		facts = []byte("{}")
+	}
 	now := s.clock.Now().UTC()
-	_, err = tx.Exec(ctx, `INSERT INTO targets (id, name, type, config, credential_id, status, capabilities, discovery_interval_seconds,
-created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
-		id, n.Name, n.Type, raw, credential, StatusPendingHostKey, caps, int(defaultInterval/time.Second), nullableUser(by), now)
-	if db.IsUniqueViolation(err) {
-		return ErrDuplicateTarget
+	_, err = tx.Exec(ctx, `INSERT INTO targets (id, name, type, config, credential_id, status, last_error_code, last_success_at, capabilities,
+discovery_interval_seconds, facts, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)`,
+		r.ID, r.Name, r.Type, raw, r.CredentialID, r.Status, r.LastErrorCode, r.LastSuccessAt, r.Capabilities, r.IntervalSeconds, facts,
+		nullableUser(r.By), now)
+	if e, ok := closedTargetWriteError(err); ok {
+		return e
 	}
 	if err != nil {
 		return fmt.Errorf("inventory: insert target: %w", err)
 	}
 	return nil
 }
+
+// closedTargetWriteError maps the database's refusals of a write to targets to closed errors, so no
+// SQLSTATE and no database text reaches a caller: a duplicate name or address, a credential that is
+// not the target's own (Z1006) and the application role's attempt to change a server's credential
+// (Z1005). ok is false for every other error (and for nil).
+func closedTargetWriteError(err error) (error, bool) {
+	var pg *pgconn.PgError
+	switch {
+	case err == nil:
+		return nil, false
+	case db.IsUniqueViolation(err):
+		return ErrDuplicateTarget, true
+	case errors.As(err, &pg) && pg.Code == sqlstateCredentialMismatch:
+		return ErrCredentialNotTheTargets, true
+	case errors.As(err, &pg) && pg.Code == sqlstateServerCredential:
+		return ErrNotAVault, true
+	}
+	return nil, false
+}
+
+// mapTargetWriteError is closedTargetWriteError that passes every other error through.
+func mapTargetWriteError(err error) error {
+	if e, ok := closedTargetWriteError(err); ok {
+		return e
+	}
+	return err
+}
+
+// SQLSTATEs of migration 00008's trigger on targets.credential_id.
+const (
+	sqlstateServerCredential   = "Z1005"
+	sqlstateCredentialMismatch = "Z1006"
+)
 
 // auditLicenseDenial records an add refused by the license (L-04) in its own transaction: the
 // add's transaction was rolled back. Other errors are not audited here. The record does not
@@ -229,8 +297,9 @@ func (s *Service) refreshLicense(ctx context.Context) {
 	}
 }
 
-// UpdateTarget changes the name and the discovery interval (R37 item 10). ifVersion must be the
-// version the caller read (If-Match).
+// UpdateTarget changes the name and the scan interval (R37 item 10): the discovery interval of a
+// server, in hours, or the poll interval of a vault, in minutes (R40 row 13); each is refused on the
+// other kind of target. ifVersion must be the version the caller read (If-Match).
 func (s *Service) UpdateTarget(ctx context.Context, a Actor, id uuid.UUID, ifVersion int, p TargetPatch) (Target, error) {
 	var errs validate.Errors
 	var name string
@@ -241,13 +310,18 @@ func (s *Service) UpdateTarget(ctx context.Context, a Actor, id uuid.UUID, ifVer
 		}
 		name = n
 	}
-	if p.Name == nil && p.DiscoveryIntervalHours == nil {
+	if p.Name == nil && p.DiscoveryIntervalHours == nil && p.PollIntervalMinutes == nil {
 		// Nothing to change: refused, so an empty edit neither bumps the version nor is audited.
 		errs.Add("name", validate.Required, nil)
 		errs.Add("discovery_interval_hours", validate.Required, nil)
 	}
 	if p.DiscoveryIntervalHours != nil && (*p.DiscoveryIntervalHours < 1 || *p.DiscoveryIntervalHours > 720) {
 		errs.Add("discovery_interval_hours", validate.OutOfRange, map[string]string{"min": "1", "max": "720"})
+	}
+	if p.PollIntervalMinutes != nil {
+		if fe := validPollMinutes(*p.PollIntervalMinutes); fe != nil {
+			errs = append(errs, *fe)
+		}
 	}
 	if len(errs) > 0 {
 		return Target{}, errs
@@ -261,6 +335,17 @@ func (s *Service) UpdateTarget(ctx context.Context, a Actor, id uuid.UUID, ifVer
 		if cur.Version != ifVersion {
 			return ErrVersionMismatch
 		}
+		// Each interval belongs to one kind of target.
+		var kindErrs validate.Errors
+		if p.DiscoveryIntervalHours != nil && cur.Type == TypeAzureKeyVault {
+			kindErrs.Add("discovery_interval_hours", validate.Pattern, nil)
+		}
+		if p.PollIntervalMinutes != nil && cur.Type != TypeAzureKeyVault {
+			kindErrs.Add("poll_interval_minutes", validate.Pattern, nil)
+		}
+		if len(kindErrs) > 0 {
+			return kindErrs
+		}
 		var fields []string
 		details := map[string]string{}
 		if p.Name != nil {
@@ -272,11 +357,15 @@ func (s *Service) UpdateTarget(ctx context.Context, a Actor, id uuid.UUID, ifVer
 			cur.DiscoveryInterval = time.Duration(*p.DiscoveryIntervalHours) * time.Hour
 			fields = append(fields, "discovery_interval")
 		}
+		if p.PollIntervalMinutes != nil {
+			cur.DiscoveryInterval = time.Duration(*p.PollIntervalMinutes) * time.Minute
+			fields = append(fields, "poll_interval")
+		}
 		details["fields"] = strings.Join(fields, ",")
 		_, err = tx.Exec(ctx, `UPDATE targets SET name = $2, discovery_interval_seconds = $3, version = version + 1, updated_at = $4
 WHERE id = $1`, id, cur.Name, int(cur.DiscoveryInterval/time.Second), s.clock.Now().UTC())
-		if db.IsUniqueViolation(err) {
-			return ErrDuplicateTarget
+		if e, ok := closedTargetWriteError(err); ok {
+			return e
 		}
 		if err != nil {
 			return fmt.Errorf("inventory: update target: %w", err)
@@ -294,14 +383,18 @@ WHERE id = $1`, id, cur.Name, int(cur.DiscoveryInterval/time.Second), s.clock.No
 	return updated, nil
 }
 
-// DeleteTarget soft-deletes a target: its license slot is free at once and nothing is changed on
+// DeleteTarget soft-deletes a server: its license slot is free at once and nothing is changed on
 // the server (§7.3). Queued jobs of the target fail when they run (TargetRef answers ErrNotFound).
+// A Key Vault is deleted with DeleteVault, which deals with its bindings (ErrNotAServer here).
 func (s *Service) DeleteTarget(ctx context.Context, a Actor, id uuid.UUID) error {
 	var typ string
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		cur, err := getTarget(ctx, tx, id, true)
 		if err != nil {
 			return err
+		}
+		if cur.Type == TypeAzureKeyVault {
+			return ErrNotAServer
 		}
 		typ = cur.Type
 		now := s.clock.Now().UTC()
@@ -328,35 +421,51 @@ func (s *Service) DeleteTarget(ctx context.Context, a Actor, id uuid.UUID) error
 
 // RequestTest queues a connection test. It is allowed in every status; on a changed host key (or
 // a disabled target) the job refuses before connecting at all (F-31: nothing runs on that target
-// until an Administrator re-pins), so it only confirms the block (owner step 5).
+// until an Administrator re-pins), so it only confirms the block (owner step 5). For a Key Vault it
+// queues the access check (RequestAccessCheck without a secret read); a disabled vault is refused.
 func (s *Service) RequestTest(ctx context.Context, a Actor, id uuid.UUID) (uuid.UUID, error) {
-	return s.requestJob(ctx, a, id, JobTestConnection, "target.test_connection:"+id.String(), nil)
-}
-
-// RequestDiscovery queues an SSH key scan; it needs a confirmed, unchanged host key (F-30, F-31).
-func (s *Service) RequestDiscovery(ctx context.Context, a Actor, id uuid.UUID) (uuid.UUID, error) {
-	return s.requestJob(ctx, a, id, JobDiscover, "target.discover:"+id.String()+":manual", func(t Target) error {
-		switch t.Status {
-		case StatusPendingHostKey:
-			return ErrHostKeyUnconfirmed
-		case StatusHostKeyChanged:
-			return ErrHostKeyChanged
+	return s.requestJob(ctx, a, id, func(t Target) (string, string, error) {
+		if t.Type == TypeAzureKeyVault {
+			if t.Status == StatusDisabled {
+				return "", "", ErrTargetNotReady
+			}
+			return JobKVTest, "kv.test_connection:" + id.String(), nil
 		}
-		return nil
+		return JobTestConnection, "target.test_connection:" + id.String(), nil
 	})
 }
 
-func (s *Service) requestJob(ctx context.Context, a Actor, id uuid.UUID, typ, dedupe string, check func(Target) error) (uuid.UUID, error) {
+// RequestDiscovery queues an SSH key scan; it needs a confirmed, unchanged host key (F-30, F-31).
+// For a Key Vault it queues a poll of the vault's inventory (a vault has no host key; only a
+// disabled vault is refused).
+func (s *Service) RequestDiscovery(ctx context.Context, a Actor, id uuid.UUID) (uuid.UUID, error) {
+	return s.requestJob(ctx, a, id, func(t Target) (string, string, error) {
+		switch {
+		case t.Type == TypeAzureKeyVault && t.Status == StatusDisabled:
+			return "", "", ErrTargetNotReady
+		case t.Type == TypeAzureKeyVault:
+			return JobKVPoll, "kv.poll:" + id.String(), nil
+		case t.Status == StatusPendingHostKey:
+			return "", "", ErrHostKeyUnconfirmed
+		case t.Status == StatusHostKeyChanged:
+			return "", "", ErrHostKeyChanged
+		}
+		return JobDiscover, "target.discover:" + id.String() + ":manual", nil
+	})
+}
+
+// requestJob locks the target and queues the job that pick chooses for it (its type, dedupe key
+// and refusal).
+func (s *Service) requestJob(ctx context.Context, a Actor, id uuid.UUID, pick func(Target) (typ, dedupe string, err error)) (uuid.UUID, error) {
 	var jobID uuid.UUID
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		t, err := getTarget(ctx, tx, id, true)
 		if err != nil {
 			return err
 		}
-		if check != nil {
-			if err := check(t); err != nil {
-				return err
-			}
+		typ, dedupe, err := pick(t)
+		if err != nil {
+			return err
 		}
 		jobID, err = s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: typ, TargetID: id, Payload: map[string]string{},
 			Kind: a.jobKind(), CreatedBy: a.UserID, CreatedByRole: string(a.Role), DedupeKey: dedupe})

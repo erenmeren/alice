@@ -113,3 +113,28 @@ func (e *LocationRefusalError) Error() string { return e.Err.Error() }
 
 // Unwrap returns the refusal.
 func (e *LocationRefusalError) Unwrap() error { return e.Err }
+
+// Errors of Key Vault targets (Task 10). The API maps each to its code (Task 17).
+var (
+	// ErrVaultHasBindings: the vault still has connected websites; delete them first or ask for
+	// them to be removed with the vault.
+	ErrVaultHasBindings = errors.New("inventory: the vault still has connected websites")
+	// ErrNotAVault: the target is not a Key Vault (a vault-only operation named a server).
+	ErrNotAVault = errors.New("inventory: the target is not a Key Vault")
+	// ErrNotAServer: the target is a Key Vault (a server-only operation named a vault).
+	ErrNotAServer = errors.New("inventory: the target is not a server")
+	// ErrClientCertificateInvalid: the sign-in certificate's key is not an RSA key of 2048 bits or
+	// more (certs.ErrClientCertKey).
+	ErrClientCertificateInvalid = certs.ErrClientCertKey
+	// ErrNotExportable: the vault certificate's private key cannot be read from the vault.
+	ErrNotExportable = errors.New("inventory: the vault certificate is not exportable")
+	// ErrVersionNotDeployable: Alice has not read a current version of the vault certificate yet.
+	ErrVersionNotDeployable = errors.New("inventory: the vault certificate has no known current version")
+	// ErrCredentialNotTheTargets: the database refused a credential that does not belong to the
+	// target it was set on (SQLSTATE Z1006). Correct code never gets it.
+	ErrCredentialNotTheTargets = errors.New("inventory: the credential does not belong to this target")
+	// errForeignCredential: a vault's credential row names another vault; it is never used.
+	errForeignCredential = errors.New("inventory: the vault's credential belongs to another target")
+	// errNotAnSSHTarget: a vault's credential source offers no SSH key.
+	errNotAnSSHTarget = errors.New("inventory: a Key Vault has no SSH credential")
+)

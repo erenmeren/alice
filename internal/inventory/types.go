@@ -18,11 +18,13 @@ const (
 	defaultInterval    = 24 * time.Hour
 )
 
-// Target types (targets.type) a person can add: a Linux server (SSH keys) and an Nginx server
-// (SSH keys and certificates, spec §12).
+// Target types (targets.type): a Linux server (SSH keys), an Nginx server (SSH keys and
+// certificates, spec §12) and an Azure Key Vault (spec §11). CreateTarget adds the servers,
+// CreateVault the vaults; neither accepts the other's type.
 const (
-	TypeLinux = "linux"
-	TypeNginx = "nginx"
+	TypeLinux         = "linux"
+	TypeNginx         = "nginx"
+	TypeAzureKeyVault = "azure_key_vault"
 )
 
 // Target statuses (targets.status, R37 item 6).
@@ -34,6 +36,8 @@ const (
 	StatusHostKeyChanged = "host_key_changed"
 	StatusAuthFailed     = "auth_failed"
 	StatusDisabled       = "disabled"
+	// StatusDegraded is a vault that works only in part (a missing role, a firewall; R40 row 12).
+	StatusDegraded = "degraded"
 )
 
 // Actor is who asks: the audit actor plus the user and role behind it.
@@ -82,6 +86,7 @@ type Target struct {
 	DiscoveryInterval    time.Duration
 	KeysManagedElsewhere bool
 	Facts                Facts
+	Vault                *VaultInfo // set for a Key Vault (Type TypeAzureKeyVault), nil for a server
 	Capabilities         []string
 	Version              int
 	CreatedAt, UpdatedAt time.Time
@@ -98,6 +103,27 @@ type Facts struct {
 	Unreadable     []providers.UnreadableLine    `json:"unreadable,omitempty"`
 	UID0Users      []string                      `json:"uid0_users,omitempty"` // listed accounts with uid 0 (last-root-key guard)
 	Nginx          *providers.NginxFacts         `json:"nginx,omitempty"`      // what the last test or certificate scan learned of Nginx
+	// The vault half (a Key Vault target only): the last access check, when the last poll read
+	// the vault's metadata, and the counters of the failure transitions (Task 11).
+	Azure             *providers.AzureFacts `json:"azure,omitempty"`
+	KVMetadataAt      *time.Time            `json:"kv_metadata_at,omitempty"`
+	KVAuthFailures    int                   `json:"kv_auth_failures,omitempty"`
+	KVThrottledCycles int                   `json:"kv_throttled_cycles,omitempty"`
+}
+
+// VaultInfo is what a Key Vault target adds to Target: its address, how Alice signs in and the
+// public facts of that credential. It never carries a secret.
+type VaultInfo struct {
+	URL             string // https://<name>.vault.azure.net
+	Host            string
+	Auth            string // providers.AzureAuth*
+	TenantID        string
+	ClientID        string
+	SecretExpiresOn *time.Time // the client secret's expiry, when the Administrator told Alice
+	CertThumbprint  string     // the sign-in certificate's SHA-1 thumbprint (certificate method)
+	CertNotAfter    *time.Time
+	PollInterval    time.Duration
+	Access          *providers.AzureFacts // the last access check (Facts.Azure)
 }
 
 // NewTarget is the input of CreateTarget.
@@ -112,12 +138,14 @@ type NewTarget struct {
 // TargetPatch is the input of UpdateTarget; nil fields stay unchanged (R37 item 10).
 type TargetPatch struct {
 	Name                   *string
-	DiscoveryIntervalHours *int // 1..720
+	DiscoveryIntervalHours *int // 1..720, servers only
+	PollIntervalMinutes    *int // 5..1440, vaults only
 }
 
 // targetConfig is targets.config.
 type targetConfig struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
-	Username string `json:"username"`
+	Username string `json:"username,omitempty"`
+	VaultURL string `json:"vault_url,omitempty"` // a Key Vault only (host is its host name, port 443)
 }

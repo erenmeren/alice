@@ -20,6 +20,13 @@ const (
 	// JobDeployRecover finishes or undoes an interrupted deployment (payload deployment_id; dedupe
 	// "certificate.deploy_recover:<id>": at most one live recovery per deployment).
 	JobDeployRecover = "certificate.deploy_recover"
+	// Phase 5 (Key Vault): the access check of a vault (payload read_secret_of, optional: a vault
+	// certificate id whose current version's secret is read once to prove the role), the poll that
+	// reads its inventory (dedupe "kv.poll:<id>") and the import of a certificate into it. The
+	// runners arrive with Task 15; jobs registers the types so a request can be queued.
+	JobKVTest   = "kv.test_connection"
+	JobKVPoll   = "kv.poll"
+	JobKVImport = "kv.import"
 )
 
 // JobRequest asks for one job. Payload holds ids and options only, never secrets.

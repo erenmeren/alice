@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"alice/internal/certs"
+	"alice/internal/platform/db"
 	"alice/internal/providers"
 	"alice/internal/secrets"
 )
@@ -98,4 +100,22 @@ func SetMaxPendingCSRs(n int) (restore func()) {
 	old := maxPendingCSRs
 	maxPendingCSRs = n
 	return func() { maxPendingCSRs = old }
+}
+
+// MoveVaultCredentialTo exposes moveVaultCredential to the integration tests: it points a target's
+// credential_id at any credential row, as a bug (or the owner role) could, to see how the
+// database's refusal reaches the caller.
+func (s *Service) MoveVaultCredentialTo(ctx context.Context, id, credential uuid.UUID, version int) error {
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		return s.moveVaultCredential(ctx, tx, id, credential, StatusOK, "", &providers.AzureFacts{}, s.clock.Now().UTC(), version)
+	})
+}
+
+// InsertVaultRowWith exposes insertTarget with a vault row that uses any credential row.
+func (s *Service) InsertVaultRowWith(ctx context.Context, credential uuid.UUID) error {
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		return s.insertTarget(ctx, tx, targetRow{ID: uuid.Must(uuid.NewV7()), Name: "forged", Type: TypeAzureKeyVault,
+			Config:       targetConfig{Host: "forged.vault.azure.net", Port: 443, VaultURL: "https://forged.vault.azure.net"},
+			CredentialID: credential, Status: StatusOK, IntervalSeconds: 900})
+	})
 }

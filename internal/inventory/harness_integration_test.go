@@ -75,6 +75,7 @@ type harness struct {
 	lic     *license.Service
 	reg     *providers.Registry
 	prov    *fake.Provider
+	azure   *fake.Provider // the registry's fake azurekv provider (withAzure), nil otherwise
 	jobs    *recordingJobs
 	svc     *inventory.Service
 	logs    *bytes.Buffer
@@ -109,6 +110,9 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	}
 	for _, o := range opts {
 		o(&cfg)
+	}
+	if p, ok := cfg.Registry.Get(providers.KindAzureKV); ok {
+		h.azure, _ = p.(*fake.Provider)
 	}
 	h.svc = inventory.New(cfg)
 	return h

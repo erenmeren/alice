@@ -35,6 +35,11 @@ func (s *Service) TargetRef(ctx context.Context, id uuid.UUID) (providers.Target
 	if !ok {
 		return providers.TargetRef{}, Target{}, fmt.Errorf("inventory: target type %q has no provider", t.Type)
 	}
+	if t.Type == TypeAzureKeyVault {
+		// A vault is addressed by its URL; it has no host key, port or user name.
+		return providers.TargetRef{ID: t.ID, Name: t.Name, Kind: k,
+			Config: providers.TargetConfig{"vault_url": t.Vault.URL}}, t, nil
+	}
 	return providers.TargetRef{ID: t.ID, Name: t.Name, Kind: k,
 		Config: providers.TargetConfig{"host": t.Host, "port": t.Port, "username": t.Username}}, t, nil
 }

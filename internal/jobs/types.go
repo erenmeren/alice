@@ -90,7 +90,16 @@ var (
 	DeploymentRecoverySweep  = Register("deployment.recovery_sweep", license.ClassAlways)
 )
 
-// Kind says who asked for a job (jobs.kind).
+// Phase 5 queue job types (Key Vault, spec §8.2, §11): the access check and the poll of a vault are
+// read-only work (paused in lock); an import into a vault changes a managed system (refused in
+// lock). Task 10 registers the types so inventory can queue them; their runners arrive with Task 15.
+var (
+	KVTestConnection = Register(inventory.JobKVTest, license.ClassReadOnly)
+	KVPoll           = Register(inventory.JobKVPoll, license.ClassReadOnly)
+	KVImport         = Register(inventory.JobKVImport, license.ClassChange)
+)
+
+// Kind says who asks for a job (jobs.kind).
 type Kind string
 
 // Job kinds.

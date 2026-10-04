@@ -27,14 +27,15 @@ const maxScheduledPerRun = 500
 // lock), the next one waits a full interval (R37 item 13). A checking target's last discovery
 // does not count (a re-pinned server was scanned before its key changed): it is tested at once
 // when the scheduler never queued anything for it. The dedupe key names the interval slot, so
-// concurrent ticks within one slot are harmless. Targets another transaction holds are skipped
+// concurrent ticks within one slot are harmless. Key Vaults are never scheduled here: they have no
+// SSH scan and no host key; their poll has its own schedule (Task 11). Targets another transaction holds are skipped
 // until the next tick.
 func (s *Service) ScheduleDiscovery(ctx context.Context) (int, error) {
 	now := s.clock.Now().UTC()
 	n := 0
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, status, discovery_interval_seconds FROM targets
-WHERE deleted_at IS NULL
+WHERE deleted_at IS NULL AND type <> 'azure_key_vault'
   AND (last_scheduled_at IS NULL OR last_scheduled_at + make_interval(secs => discovery_interval_seconds) <= $1)
   AND ((status = ANY($3)
         AND (last_discovery_at IS NULL OR last_discovery_at + make_interval(secs => discovery_interval_seconds) <= $1))

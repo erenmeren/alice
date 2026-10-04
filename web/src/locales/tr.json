@@ -374,6 +374,9 @@
       "target_add_denied_license": "Sunucu eklenmedi: lisans sınırına ulaşıldı veya lisans süresi doldu",
       "target_status_changed": "Sunucu durumu değişti",
       "target_discovered": "SSH anahtarları tarandı",
+      "vault_add_refused": "Key Vault eklenmedi: ilk denetim başarısız oldu",
+      "vault_credentials_replaced": "Key Vault oturum açma bilgileri değiştirildi",
+      "binding_deleted": "Bağlı web siteleri kaldırıldı",
       "hostkey_observed": "Sunucu engelliyken başka bir yeni parmak izi görüldü",
       "hostkey_pinned": "Sunucu parmak izi onaylandı",
       "hostkey_changed": "Sunucu kimliği değişti",
@@ -824,6 +827,11 @@
       },
       "discovery": {
         "schedule": "Zamanlanmış sunucu taraması"
+      },
+      "kv": {
+        "test_connection": "Key Vault erişim denetimi",
+        "poll": "Key Vault denetimi",
+        "import": "Key Vault'a aktarma"
       },
       "deployment": {
         "recovery_sweep": "Yarım kalan dağıtımları denetleme"
