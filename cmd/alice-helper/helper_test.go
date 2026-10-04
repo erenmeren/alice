@@ -416,7 +416,7 @@ func TestAuthKeysRead(t *testing.T) {
 	code, m := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys")
 	assert.Equal(t, 0, code)
 	assert.Equal(t, map[string]any{"ok": true, "path": "/home/deploy/.ssh/authorized_keys", "sha256": hexOf(content),
-		"content_b64": base64.StdEncoding.EncodeToString([]byte(content)), "owner": "deploy"}, m)
+		"content_b64": base64.StdEncoding.EncodeToString([]byte(content)), "owner": "deploy", "uid": float64(f.uid)}, m)
 	assert.Equal(t, []string{"authkeys-read /home/deploy/.ssh/authorized_keys"}, f.loggedLines())
 
 	code, m = f.run("authkeys-read", "/root/.ssh/authorized_keys")

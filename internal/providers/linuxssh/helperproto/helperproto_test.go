@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -152,7 +153,7 @@ func TestWireNames(t *testing.T) {
 	assert.JSONEq(t, `{"ok":false,"code":"PATH_NOT_ALLOWED","message":"m"}`, string(b))
 	b, err = json.Marshal(AuthKeysReadResponse{OK: true, Path: "/p", SHA256: "s", ContentB64: "Yw==", Owner: "deploy"})
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"ok":true,"path":"/p","sha256":"s","content_b64":"Yw==","owner":"deploy"}`, string(b))
+	assert.JSONEq(t, `{"ok":true,"path":"/p","sha256":"s","content_b64":"Yw==","owner":"deploy","uid":0}`, string(b))
 	b, err = json.Marshal(HostKeysResponse{OK: true, Keys: []HostKeyInfo{{Type: "ssh-ed25519", Bits: 256, Fingerprint: "SHA256:x", Path: "/k.pub"}}})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"ok":true,"keys":[{"type":"ssh-ed25519","bits":256,"fingerprint":"SHA256:x","path":"/k.pub"}]}`, string(b))
@@ -381,4 +382,74 @@ func TestProtocol6WireShapes(t *testing.T) {
 	// which stays below what Alice reads (linuxssh.DefaultMaxOutput, 8 MiB; checked there).
 	assert.Less(t, (MaxListInline+2)/3*4, MaxListOutput)
 	assert.Equal(t, 7<<20, MaxListOutput)
+}
+
+// Fix round 1: the read answer carries the resolved account's uid (I1), the listing names the
+// first user it left out (M5), and the codes of the round.
+func TestProtocol6FixRoundWireShapes(t *testing.T) {
+	b, err := json.Marshal(AuthKeysReadResponse{OK: true, Path: "/p", SHA256: "s", ContentB64: "", Owner: "Toor", UID: 0})
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"owner":"Toor","uid":0`)
+	uid := 1500
+	b, err = json.Marshal(AuthKeysListResponse{Truncated: true, TruncatedFromUID: &uid})
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"truncated":true,"truncated_from_uid":1500`)
+	b, err = json.Marshal(AuthKeysListResponse{})
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "truncated_from_uid")
+	assert.Equal(t, "id", UnlistedID)
+	assert.Equal(t, "account_id_unsupported", WarnAccountIDUnsupported)
+	assert.Equal(t, "accounts_nul_byte", WarnAccountsNUL)
+}
+
+func bigFile(path string, n int) FileInfo {
+	return FileInfo{Path: path, Exists: true, SHA256: "x", Inline: true, ContentB64: strings.Repeat("A", n)}
+}
+
+// S8: FitList gives up inline content first (the last files first), then users from the end
+// (naming the first one left out), then the account names; it always ends.
+func TestFitList(t *testing.T) {
+	small := AuthKeysListResponse{OK: true, Users: []UserFiles{{User: "root", Files: []FileInfo{bigFile("/a", 10)}}}, AccountsComplete: true}
+	assert.Equal(t, small, FitList(small), "an answer within the bound is unchanged")
+
+	inline := AuthKeysListResponse{OK: true, AccountsComplete: true, Users: []UserFiles{
+		{User: "root", Files: []FileInfo{bigFile("/a", 3<<20), bigFile("/b", 3<<20)}},
+		{User: "deploy", UID: 1001, Files: []FileInfo{{Path: "/c"}, bigFile("/d", 3<<20)}}}}
+	out := FitList(inline)
+	assert.False(t, out.Truncated)
+	assert.True(t, out.AccountsComplete)
+	assert.True(t, out.Users[0].Files[0].Inline)
+	assert.True(t, out.Users[0].Files[1].Inline)
+	assert.False(t, out.Users[1].Files[1].Inline, "the last file gave up its content")
+	assert.Empty(t, out.Users[1].Files[1].ContentB64)
+	assert.Equal(t, "x", out.Users[1].Files[1].SHA256)
+
+	var users []UserFiles
+	for i := 0; i < 9; i++ {
+		users = append(users, UserFiles{User: fmt.Sprintf("u%d", i), UID: 2000 + i, Files: []FileInfo{{Path: "/" + strings.Repeat("p", 1<<20)}}})
+	}
+	out = FitList(AuthKeysListResponse{OK: true, AccountsComplete: true, Users: users})
+	assert.True(t, out.Truncated)
+	assert.False(t, out.AccountsComplete)
+	assert.Len(t, out.Users, 6)
+	require.NotNil(t, out.TruncatedFromUID)
+	assert.Equal(t, 2006, *out.TruncatedFromUID)
+	b, err := json.Marshal(out)
+	require.NoError(t, err)
+	assert.Less(t, len(b), MaxListOutput)
+
+	out = FitList(AuthKeysListResponse{OK: true, Users: []UserFiles{}, Accounts: []string{strings.Repeat("a", MaxListOutput)}, AccountsComplete: true})
+	assert.True(t, out.Truncated)
+	assert.False(t, out.AccountsComplete)
+	assert.Empty(t, out.Accounts)
+	assert.Nil(t, out.TruncatedFromUID)
+
+	// Nothing left to give up: it still ends.
+	out = FitList(AuthKeysListResponse{Warnings: []string{strings.Repeat("w", MaxListOutput)}})
+	assert.True(t, out.Truncated)
+
+	// An answer that cannot be encoded is returned as it is (writeJSON then answers IO_ERROR).
+	marshal = func(any) ([]byte, error) { return nil, errors.New("boom") }
+	t.Cleanup(func() { marshal = json.Marshal })
+	assert.Equal(t, small, FitList(small))
 }

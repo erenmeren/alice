@@ -6,6 +6,7 @@ package helperproto
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"log/slog"
 	"net/netip"
 	"path/filepath"
@@ -96,6 +97,10 @@ const (
 	// them in Warnings.
 	WarnAccountNameUnsupported = "account_name_unsupported"
 	WarnAccountHomeUnsupported = "account_home_unsupported"
+	WarnAccountIDUnsupported   = "account_id_unsupported"
+	// WarnAccountsNUL: /etc/passwd holds a NUL byte. glibc reads each line only up to it (the helper
+	// does the same), but no legitimate file has one, so the account list is not complete (C1).
+	WarnAccountsNUL = "accounts_nul_byte"
 )
 
 // Phase 4 warnings of nginx-dump. WarnStreamTLS and WarnMailTLS are also the codes of
@@ -178,13 +183,16 @@ const (
 	MaxListOutput = 7 << 20
 	UnlistedName  = "name" // the name is not a ValidAccount
 	UnlistedHome  = "home" // the account would be scanned, but its home is not a path the helper accepts (CleanHome)
+	// UnlistedID: the uid or gid field is not a plain decimal number below 4294967295 (a sign, a
+	// "+", 32-bit overflow or (uid_t)-1): glibc reads it, but as a clamped value nobody wrote.
+	UnlistedID = "id"
 )
 
 // UnlistedAccount is an /etc/passwd entry authkeys-list did not list. Only the uid leaves the
 // server: the name may hold any byte.
 type UnlistedAccount struct {
 	UID    int    `json:"uid"`
-	Reason string `json:"reason"` // UnlistedName or UnlistedHome
+	Reason string `json:"reason"` // UnlistedName, UnlistedHome or UnlistedID
 }
 
 // Phase 4 limits.
@@ -386,8 +394,11 @@ type AuthKeysListResponse struct {
 	// Unlisted names every entry the helper could not list (at most MaxUnlistedAccounts, never
 	// null); AccountsComplete is false when it is not empty (AUD-03).
 	Unlisted []UnlistedAccount `json:"unlisted"`
-	// Truncated is true when the helper left users out to keep the answer within MaxListOutput (S8).
-	Truncated bool `json:"truncated"`
+	// Truncated is true when the helper left users out to keep the answer within MaxListOutput (S8);
+	// TruncatedFromUID is then the uid of the first user left out (absent when only account names
+	// were cut).
+	Truncated        bool `json:"truncated"`
+	TruncatedFromUID *int `json:"truncated_from_uid,omitempty"`
 }
 
 // AuthKeysReadResponse answers "authkeys-read".
@@ -399,6 +410,9 @@ type AuthKeysReadResponse struct {
 	// Owner is the account the helper resolved the file to; Alice refuses a change whose request
 	// names another user (it would defeat the last-key guards).
 	Owner string `json:"owner"`
+	// UID is Owner's uid (protocol 6, I1): Alice's last-root-key guard decides from it at the time
+	// of the change, for every uid-0 account, not only the one named root.
+	UID int `json:"uid"`
 }
 
 // AuthKeysWriteResponse answers "authkeys-write".
@@ -742,4 +756,65 @@ func ProbeTLSConfig(sni, keyType string) *tls.Config {
 			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256}
 	}
 	return c
+}
+
+// marshal is json.Marshal (tests replace it to reach FitList's encoding failure).
+var marshal = json.Marshal
+
+// FitList keeps a whole authkeys-list answer, its newline included, within MaxListOutput (S8), so
+// a large but legal configuration never makes Alice's read fail: first files give up their inline
+// content, the last listed first (Alice reads them with authkeys-read; their hash stays); then
+// users are left out from the end (the highest uids; TruncatedFromUID names the first of them),
+// and finally the account names; the answer then says Truncated and the account list is not
+// complete. Every round gives something up or returns, so it ends. The helper and Alice's emulator
+// both use it.
+func FitList(resp AuthKeysListResponse) AuthKeysListResponse {
+	for {
+		b, err := marshal(resp)
+		if err != nil {
+			return resp
+		}
+		excess := len(b) + 1 - MaxListOutput
+		if excess <= 0 {
+			return resp
+		}
+		if dropInline(&resp, excess) {
+			continue
+		}
+		resp.Truncated, resp.AccountsComplete = true, false
+		if n := len(resp.Users); n > 0 {
+			freed := 0
+			for n > 0 && freed < excess {
+				u, _ := marshal(resp.Users[n-1])
+				freed += len(u) + 1
+				n--
+			}
+			uid := resp.Users[n].UID
+			resp.Users, resp.TruncatedFromUID = resp.Users[:n], &uid
+			continue
+		}
+		if len(resp.Accounts) == 0 {
+			return resp
+		}
+		resp.Accounts = []string{}
+	}
+}
+
+// dropInline removes the inline content of the last listed files until at least excess bytes of
+// the encoded answer are freed (or none is left); it reports whether it removed any.
+func dropInline(resp *AuthKeysListResponse, excess int) bool {
+	freed, dropped := 0, false
+	for i := len(resp.Users) - 1; i >= 0 && freed < excess; i-- {
+		files := resp.Users[i].Files
+		for j := len(files) - 1; j >= 0 && freed < excess; j-- {
+			if !files[j].Inline {
+				continue
+			}
+			// `,"content_b64":"…"` goes; `"inline":true` becomes `"inline":false` (one byte more).
+			freed += len(files[j].ContentB64) + len(`,"content_b64":""`) - 1
+			files[j].Inline, files[j].ContentB64 = false, ""
+			dropped = true
+		}
+	}
+	return dropped
 }

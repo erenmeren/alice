@@ -538,11 +538,11 @@ func TestMirroredSetsAreCompleteAgainstTheirSources(t *testing.T) {
 		providers.StepNameRollbackConfigTest, providers.StepNameRollbackReload,
 	}), valueSet(stringConsts(t, hp, "Step")), "helper steps")
 
-	// The nginx-dump warnings; the first six Warn* of helperproto belong to linuxssh (the last two
-	// are Alice's for unlisted accounts, AUD-03).
+	// The nginx-dump warnings; the first eight Warn* of helperproto belong to linuxssh (three are
+	// Alice's for unlisted accounts, AUD-03).
 	warns := stringConsts(t, hp, "Warn")
 	for _, linux := range []string{"WarnSSHDUnreadable", "WarnDirectoryUsers", "WarnUnsupportedPath", "WarnTooManyUsers",
-		"WarnAccountNameUnsupported", "WarnAccountHomeUnsupported"} {
+		"WarnAccountNameUnsupported", "WarnAccountHomeUnsupported", "WarnAccountIDUnsupported", "WarnAccountsNUL"} {
 		delete(warns, linux)
 	}
 	assert.Equal(t, sortedCopy([]string{

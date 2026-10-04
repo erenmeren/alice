@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -85,11 +84,14 @@ func (r scanResult) find(path string) (candidate, bool) {
 // paths for authkeys-read and authkeys-write: a path from the caller is only ever compared to it.
 // The files themselves are opened later through openCandidate, which re-checks containment.
 func (s *sys) scan(ctx context.Context) (scanResult, error) {
-	accts, err := s.accounts()
+	accts, nul, err := s.passwd()
 	if err != nil {
 		return scanResult{}, failed(helperproto.CodeIOError, "cannot read /etc/passwd")
 	}
 	r := scanResult{warnings: []string{}, owners: owners(accts)}
+	if nul {
+		r.warn(helperproto.WarnAccountsNUL) // C1: read as glibc does, but never called complete
+	}
 	r.names, r.namesFit = accountNames(accts)
 	global, _, gerr := s.sshdConfig(ctx)
 	if gerr != nil {
@@ -303,7 +305,8 @@ func cmdAuthKeysList(ctx context.Context, s *sys, args []string) (any, error) {
 	}
 	resp := helperproto.AuthKeysListResponse{OK: true, Users: []helperproto.UserFiles{}, AuthorizedKeysCommand: r.command, Warnings: r.warnings,
 		Accounts: r.names, AccountsComplete: r.namesFit && !slices.Contains(r.warnings, helperproto.WarnTooManyUsers) &&
-			!slices.Contains(r.warnings, helperproto.WarnDirectoryUsers) && len(r.unlisted) == 0,
+			!slices.Contains(r.warnings, helperproto.WarnDirectoryUsers) && !slices.Contains(r.warnings, helperproto.WarnAccountsNUL) &&
+			len(r.unlisted) == 0,
 		Unlisted: append([]helperproto.UnlistedAccount{}, r.unlisted...)}
 	if resp.Accounts == nil {
 		resp.Accounts = []string{}
@@ -321,63 +324,7 @@ func cmdAuthKeysList(ctx context.Context, s *sys, args []string) (any, error) {
 		}
 		resp.Users = append(resp.Users, uf)
 	}
-	return fitList(resp), nil
-}
-
-// fitList keeps the whole answer, its newline included, within helperproto.MaxListOutput (S8), so
-// a large but legal configuration never makes Alice's read fail: first files give up their inline
-// content, the last listed first (Alice reads them with authkeys-read; their hash stays); then
-// users are left out from the end (the highest uids), and finally the account names; the answer
-// then says Truncated and the account list is not complete. Every round gives something up, so it
-// ends.
-func fitList(resp helperproto.AuthKeysListResponse) helperproto.AuthKeysListResponse {
-	for {
-		b, err := json.Marshal(resp)
-		if err != nil {
-			return resp // writeJSON answers IO_ERROR for an answer it cannot encode
-		}
-		excess := len(b) + 1 - helperproto.MaxListOutput
-		if excess <= 0 {
-			return resp
-		}
-		if dropInline(&resp, excess) {
-			continue
-		}
-		resp.Truncated, resp.AccountsComplete = true, false
-		if n := len(resp.Users); n > 0 {
-			freed := 0
-			for n > 0 && freed < excess {
-				u, _ := json.Marshal(resp.Users[n-1])
-				freed += len(u) + 1
-				n--
-			}
-			resp.Users = resp.Users[:n]
-			continue
-		}
-		if len(resp.Accounts) == 0 {
-			return resp
-		}
-		resp.Accounts = []string{}
-	}
-}
-
-// dropInline removes the inline content of the last listed files until at least excess bytes of
-// the encoded answer are freed (or none is left); it reports whether it removed any.
-func dropInline(resp *helperproto.AuthKeysListResponse, excess int) bool {
-	freed, dropped := 0, false
-	for i := len(resp.Users) - 1; i >= 0 && freed < excess; i-- {
-		files := resp.Users[i].Files
-		for j := len(files) - 1; j >= 0 && freed < excess; j-- {
-			if !files[j].Inline {
-				continue
-			}
-			// `,"content_b64":"…"` goes; `"inline":true` becomes `"inline":false` (one byte more).
-			freed += len(files[j].ContentB64) + len(`,"content_b64":""`) - 1
-			files[j].Inline, files[j].ContentB64 = false, ""
-			dropped = true
-		}
-	}
-	return dropped
+	return helperproto.FitList(resp), nil
 }
 
 // fileInfo describes a candidate. Everything comes from one opened descriptor (fstat), never from
@@ -477,5 +424,6 @@ func cmdAuthKeysRead(ctx context.Context, s *sys, args []string) (any, error) {
 	case err != nil:
 		return nil, failed(helperproto.CodeIOError, "the file cannot be read")
 	}
-	return helperproto.AuthKeysReadResponse{OK: true, Path: path, SHA256: hexSHA(data), ContentB64: base64.StdEncoding.EncodeToString(data), Owner: c.acct.name}, nil
+	return helperproto.AuthKeysReadResponse{OK: true, Path: path, SHA256: hexSHA(data), ContentB64: base64.StdEncoding.EncodeToString(data), Owner: c.acct.name,
+		UID: c.acct.uid}, nil
 }

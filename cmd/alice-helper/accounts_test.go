@@ -4,7 +4,6 @@ package main
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -92,7 +91,7 @@ func TestUnlistedAccountsAreReportedNeverSilent(t *testing.T) {
 		"relhome:x:1011:1011::home/relhome:/bin/bash\n"+
 		"emptyhome:x:1012:1012:::/bin/bash\n"+
 		"spacehome:x:1013:1013::/home/a b:/bin/bash\n"+
-		"-dash:x:1014:1014::/home/deploy:/usr/sbin/nologin\n"+ // a system account: its name is still reported
+		".dot:x:1014:1014::/home/deploy:/usr/sbin/nologin\n"+ // a system account: its name is still reported
 		"\x1b[31mred:x:1015:1015::/home/deploy:/bin/bash\n"+
 		"kullanıcı:x:1016:1016::/home/deploy:/bin/bash\n"+
 		strings.Repeat("n", 33)+":x:1017:1017::/home/deploy:/bin/bash\n"+
@@ -120,7 +119,7 @@ func TestUnlistedAccountsAreReportedNeverSilent(t *testing.T) {
 		assert.Contains(t, m["accounts"], n, "a valid name is still an account name")
 	}
 	out := f.out.String()
-	for _, secret := range []string{"bad,name", "Bad Name", "-dash", "\x1b", "\\u001b", "kullan", strings.Repeat("n", 33), "12345"} {
+	for _, secret := range []string{"bad,name", "Bad Name", ".dot", "\x1b", "\\u001b", "kullan", strings.Repeat("n", 33), "12345"} {
 		assert.NotContains(t, out, secret, "an unlisted name never leaves the server")
 	}
 }
@@ -145,7 +144,7 @@ func TestHostilePasswdIsBounded(t *testing.T) {
 	var b strings.Builder
 	b.WriteString(f.read("/etc/passwd"))
 	for i := 0; i < 100000; i++ {
-		fmt.Fprintf(&b, "-%d:x:%d:1::\n", i, 40000+i)
+		fmt.Fprintf(&b, "x %d:x:%d:1::\n", i, 40000+i)
 	}
 	fmt.Fprintf(&b, "%s:x:50:50::/home/deploy:/bin/bash\n", strings.Repeat("z", 1<<20))
 	require.Less(t, b.Len(), passwdLimit, "within the size the helper reads")
@@ -176,7 +175,7 @@ func TestPasswdIsReadAsGlibcReadsIt(t *testing.T) {
 		fmt.Sprintf("short:x:%d:%d::/home/short\n", f.uid, f.uid)+ // six fields: no shell, so /bin/sh
 		fmt.Sprintf("long:x:%d:%d::/home/long:/bin/bash:extra\n", f.uid, f.uid)+ // the shell is the rest
 		fmt.Sprintf("  \tindented:x:%d:%d::/home/indented:/bin/bash\n", f.uid, f.uid)+
-		fmt.Sprintf("plus:x:+%d: %d::/home/plus:/bin/bash\n", f.uid, f.uid)+ // strtoul skips blanks and a +
+		fmt.Sprintf("plus:x: %d: %d::/home/plus:/bin/bash\n", f.uid, f.uid)+ // strtoul skips leading blanks
 		"nouid:x::1021::/home/deploy:/bin/bash\n"+ // glibc refuses the line: no account
 		"badgid:x:1022:x::/home/deploy:/bin/bash\n"+
 		"three:x:1023\n", 0o644)
@@ -192,20 +191,22 @@ func TestPasswdIsReadAsGlibcReadsIt(t *testing.T) {
 
 func TestParseID(t *testing.T) {
 	for _, tc := range []struct {
-		in string
-		id int
-		ok bool
+		in        string
+		id        int
+		plain, ok bool
 	}{
-		{"0", 0, true}, {"1001", 1001, true}, {" 1001", 1001, true}, {"\t+7", 7, true}, {"0001", 1, true},
-		{"4294967295", 4294967295, true}, {"4294967296", 4294967295, true}, {"99999999999999999999999", 4294967295, true},
-		{"-1", 4294967295, true}, {"-0", 0, true},
-		{"", 0, false}, {" ", 0, false}, {"+", 0, false}, {"-", 0, false}, {"1001 ", 0, false}, {"10a", 0, false}, {"0x10", 0, false},
-		{"١٢", 0, false},
+		{"0", 0, true, true}, {"1001", 1001, true, true}, {" 1001", 1001, true, true}, {"0001", 1, true, true},
+		{"4294967294", 4294967294, true, true},
+		{"\t+7", 7, false, true}, {"4294967295", 4294967295, false, true}, {"4294967296", 4294967295, false, true},
+		{"99999999999999999999999", 4294967295, false, true}, {"-1", 4294967295, false, true}, {"-0", 0, false, true},
+		{"", 0, false, false}, {" ", 0, false, false}, {"+", 0, false, false}, {"-", 0, false, false}, {"1001 ", 0, false, false},
+		{"10a", 0, false, false}, {"0x10", 0, false, false}, {"١٢", 0, false, false},
 	} {
-		id, ok := parseID(tc.in)
+		id, plain, ok := parseID(tc.in)
 		assert.Equal(t, tc.ok, ok, "%q", tc.in)
 		if tc.ok {
 			assert.Equal(t, tc.id, id, "%q", tc.in)
+			assert.Equal(t, tc.plain, plain, "%q", tc.in)
 		}
 	}
 }
@@ -418,19 +419,6 @@ func TestListAnswerDropsInlineContentBeforeUsers(t *testing.T) {
 	assert.Equal(t, true, m["accounts_complete"], "nothing is missing")
 }
 
-// fitList always ends, also when nothing is left to give up.
-func TestFitListEnds(t *testing.T) {
-	resp := helperproto.AuthKeysListResponse{OK: true, Users: []helperproto.UserFiles{}, Accounts: []string{strings.Repeat("a", helperproto.MaxListOutput)},
-		AccountsComplete: true, Unlisted: []helperproto.UnlistedAccount{}, Warnings: []string{}}
-	out := fitList(resp)
-	assert.True(t, out.Truncated)
-	assert.False(t, out.AccountsComplete)
-	assert.Empty(t, out.Accounts)
-	b, err := json.Marshal(out)
-	require.NoError(t, err)
-	assert.Less(t, len(b), helperproto.MaxListOutput)
-}
-
 // A file shared by several accounts (an absolute AuthorizedKeysFile) is listed, with its content,
 // for each of them; reads and writes still resolve it to the first account in uid order (root),
 // so the inline listing cannot make the root guards see another owner.
@@ -550,4 +538,132 @@ func TestASwapAfterTheScanNeverInlinesAnotherFile(t *testing.T) {
 			assert.NotContains(t, f.out.String(), base64.StdEncoding.EncodeToString([]byte("root:SECRET")))
 		})
 	}
+}
+
+// C1: a NUL byte in /etc/passwd. glibc reads each line only up to its first NUL (a C string); the
+// helper does the same, so a line glibc refuses never hides a later entry of the same name, a
+// shell after a NUL never makes an account look unscanned, and a line cut short is still the
+// account glibc sees. A file with a NUL is never called complete.
+func TestPasswdNULBytesAreReadAsGlibcReadsThem(t *testing.T) {
+	skipOddUID(t)
+	f := newFixture(t)
+	f.write("/etc/passwd", strings.Replace(f.read("/etc/passwd"), "Bad Name:x:1004:1004::/home/deploy:/bin/bash\n", "", 1), 0o644)
+	f.withKeys("/home/bob", "bob")
+	f.withKeys("/home/carol", "carol")
+	f.write("/etc/passwd", f.read("/etc/passwd")+
+		"bob:x\x00:1500:1500::/nonexistent:/usr/sbin/nologin\n"+ // glibc: two fields, refused
+		fmt.Sprintf("bob:x:%d:%d::/home/bob:/bin/bash\n", f.uid, f.uid)+ // so this is bob
+		fmt.Sprintf("carol:x:%d:%d::/home/carol:/bin/bash\x00/nologin\n", f.uid, f.uid)+ // glibc: shell /bin/bash
+		"eve:x:1503:1503\x00junk\n", 0o644) // glibc: an account with an empty home and shell
+	code, m := f.run("authkeys-list")
+	require.Equal(t, 0, code, "%v", m)
+	assert.Equal(t, "/home/bob", listUser(t, m, "bob")["home"])
+	assert.Equal(t, true, filesOf(listUser(t, m, "bob"))[0]["inline"])
+	assert.Equal(t, "/home/carol", listUser(t, m, "carol")["home"])
+	assert.Equal(t, []any{map[string]any{"uid": 1503.0, "reason": "home"}}, m["unlisted"])
+	assert.Equal(t, []any{helperproto.WarnAccountsNUL}, m["warnings"])
+	assert.Equal(t, false, m["accounts_complete"])
+	assert.Subset(t, m["accounts"], []any{"bob", "carol", "eve"})
+
+	// Without the NUL bytes the same accounts make a complete list.
+	f.write("/etc/passwd", strings.ReplaceAll(strings.Replace(f.read("/etc/passwd"), "bob:x\x00:1500:1500::/nonexistent:/usr/sbin/nologin\n", "", 1),
+		"\x00/nologin", ""), 0o644)
+	f.write("/etc/passwd", strings.Replace(f.read("/etc/passwd"), "eve:x:1503:1503\x00junk\n", "", 1), 0o644)
+	_, m = f.run("authkeys-list")
+	assert.Equal(t, []any{}, m["warnings"])
+	assert.Equal(t, true, m["accounts_complete"])
+}
+
+// C1: no line glibc refuses shadows a later entry of the same name, whatever the reason of the
+// refusal (too few fields, a uid or gid that is not a number, a NIS-compat name).
+func TestRefusedLinesNeverShadowALaterEntry(t *testing.T) {
+	skipOddUID(t)
+	f := newFixture(t)
+	f.withKeys("/home/bob", "bob")
+	for _, refused := range []string{
+		"bob:x:1500\n", "bob:x::1500::/nonexistent:/usr/sbin/nologin\n", "bob:x:1500:x::/nonexistent:/usr/sbin/nologin\n",
+		"bob:x:15 00:1500::/nonexistent:/usr/sbin/nologin\n", "bob\n", "   \t\n", "# bob:x:1500:1500::/nonexistent:/usr/sbin/nologin\n",
+	} {
+		f.write("/etc/passwd", "root:x:0:0:root:/root:/bin/bash\n"+refused+fmt.Sprintf("bob:x:%d:%d::/home/bob:/bin/bash\n", f.uid, f.uid), 0o644)
+		_, m := f.run("authkeys-list")
+		assert.Equal(t, "/home/bob", listUser(t, m, "bob")["home"], "%q", refused)
+		assert.Equal(t, []any{}, m["unlisted"], "%q", refused)
+	}
+}
+
+// M1: a uid or gid glibc reads only as a clamped or signed value is reported, never scanned with
+// a number nobody wrote. The entry is still the first of its name.
+func TestOddIDsAreReported(t *testing.T) {
+	skipOddUID(t)
+	f := newFixture(t)
+	f.withKeys("/home/big", "big")
+	f.write("/etc/passwd", f.read("/etc/passwd")+
+		"big:x:4294967296:1000::/home/big:/bin/bash\n"+
+		fmt.Sprintf("big:x:%d:%d::/home/big:/bin/bash\n", f.uid, f.uid)+
+		"neg:x:-1:1000::/home/big:/bin/bash\n"+
+		"plus:x:+1600:1000::/home/big:/bin/bash\n"+
+		"max:x:4294967295:1000::/home/big:/bin/bash\n"+
+		"gid:x:1601:-5::/home/big:/usr/sbin/nologin\n", 0o644)
+	_, m := f.run("authkeys-list")
+	assert.NotContains(t, listedUsers(m), "big")
+	assert.ElementsMatch(t, []any{
+		map[string]any{"uid": 1004.0, "reason": "name"},
+		map[string]any{"uid": 4294967295.0, "reason": "id"},
+		map[string]any{"uid": 4294967295.0, "reason": "id"},
+		map[string]any{"uid": 1600.0, "reason": "id"},
+		map[string]any{"uid": 4294967295.0, "reason": "id"},
+		map[string]any{"uid": 1601.0, "reason": "id"},
+	}, m["unlisted"])
+	assert.Equal(t, false, m["accounts_complete"])
+}
+
+// M2: glibc's files module never answers an entry whose name starts with "+" or "-" (NIS compat
+// syntax; getpwnam and getpwuid skip them), so they are no accounts and are skipped, not reported.
+// nsswitch "compat" is a source the helper cannot read (I2).
+func TestNISCompatLinesAreNoAccounts(t *testing.T) {
+	f := newFixture(t)
+	f.write("/etc/passwd", f.read("/etc/passwd")+"+\n+:x:0:0:::\n+@admins:x:::::\n-baduser:x:0:0:::\n+deploy::::::\n", 0o644)
+	_, m := f.run("authkeys-list")
+	assert.Equal(t, []any{map[string]any{"uid": 1004.0, "reason": "name"}}, m["unlisted"], "only the base fixture's Bad Name")
+	assert.Equal(t, "/home/deploy", listUser(t, m, "deploy")["home"])
+	assert.NotContains(t, m["accounts"], "+")
+	assert.Equal(t, "root", owners([]account{{name: "+", uid: 0}, {name: "root", uid: 0}})[0], "a compat line is never an owner")
+}
+
+// I2: any passwd source but files, systemd and mymachines can hold accounts the helper cannot see.
+func TestDirectoryUsersAreAnySourceButFiles(t *testing.T) {
+	f := newFixture(t)
+	for line, want := range map[string]bool{
+		"passwd: files":                                    false,
+		"passwd:files systemd":                             false,
+		"passwd: files mymachines systemd":                 false,
+		"passwd:         files systemd\ngroup: files ldap": false,
+		"passwd: files [NOTFOUND=return] systemd":          false,
+		"# passwd: files ldap\npasswd: files":              false,
+		"passwd: files extrausers":                         true,
+		"passwd: files altfiles":                           true,
+		"passwd: compat":                                   true,
+		"passwd: files winbind":                            true,
+		"passwd: nis files":                                true,
+		"passwd: db files":                                 true,
+		"passwd: sss files systemd":                        true,
+		"passwd: files ldap":                               true,
+	} {
+		f.write("/etc/nsswitch.conf", line+"\n", 0o644)
+		assert.Equal(t, want, f.s.directoryUsers(), "%q", line)
+	}
+	f.write("/etc/nsswitch.conf", "passwd: files extrausers\n", 0o644)
+	_, m := f.run("authkeys-list")
+	assert.Equal(t, []any{helperproto.WarnDirectoryUsers}, m["warnings"])
+	assert.Equal(t, false, m["accounts_complete"])
+}
+
+// I1: authkeys-read names the uid of the account it resolved the file to.
+func TestAuthKeysReadNamesTheOwnersUID(t *testing.T) {
+	skipOddUID(t)
+	f := newFixture(t)
+	f.write("/home/deploy/.ssh/authorized_keys", "ssh-ed25519 AAAA deploy@laptop\n", 0o600)
+	code, r := f.run("authkeys-read", "/home/deploy/.ssh/authorized_keys")
+	require.Equal(t, 0, code, "%v", r)
+	assert.Equal(t, float64(f.uid), r["uid"])
 }
