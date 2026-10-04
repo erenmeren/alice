@@ -658,9 +658,10 @@ func (s *Service) verifyStored(f storedFile, installationID string) (Installed, 
 }
 
 // tamperedBy reports whether a stored file failing verification means its content was
-// changed. A key this build no longer trusts is not tampering.
+// changed. A key this build no longer trusts is not tampering, and neither is a genuinely signed
+// file in a newer format (stored by a newer build before a downgrade, AUD-19).
 func tamperedBy(err error) bool {
-	return !errors.Is(err, ErrUnknownKey) && !errors.Is(err, ErrRevokedKey)
+	return !errors.Is(err, ErrUnknownKey) && !errors.Is(err, ErrRevokedKey) && !errors.Is(err, ErrUnsupportedFormat)
 }
 
 // computed is one evaluation with the data it was made from.

@@ -164,9 +164,14 @@ func Verify(f File, keys KeySet) error {
 }
 
 // Check parses raw, verifies its signature and validates the payload: spec §16.3 steps
-// 1, 2, 3 and 5. Step 4 (the installation ID) is checked by Service, which knows it.
+// 1, 2, 3 and 5. Step 4 (the installation ID) is checked by Service, which knows it. A file in a
+// newer format is ErrUnsupportedFormat only when its signature verifies (AUD-19, see checkNewer).
 func Check(raw []byte, keys KeySet) (File, error) {
 	f, err := ParseFile(raw)
+	var inv *InvalidError
+	if errors.As(err, &inv) && inv.Problem == ProblemNewerFormat {
+		return File{}, checkNewer(raw, keys)
+	}
 	if err != nil {
 		return File{}, err
 	}

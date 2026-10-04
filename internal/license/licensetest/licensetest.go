@@ -7,6 +7,8 @@ package licensetest
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"time"
 
 	"alice/internal/license"
@@ -62,4 +64,44 @@ func SignWith(priv ed25519.PrivateKey, keyID string, p license.Payload) []byte {
 		panic("licensetest: " + err.Error())
 	}
 	return raw
+}
+
+// SignFormat signs p as a file of the given format with the test key, adding payloadExtra to
+// the signed payload and fileExtra to the file object outside it. It produces what this build
+// cannot issue: a license in a newer format, or one in the current format with fields it does
+// not know (AUD-19). The payload's "format" is set to format; nothing is validated.
+func SignFormat(p license.Payload, format int, payloadExtra, fileExtra map[string]any) []byte {
+	return SignFormatWith(PrivateKey(), KeyID, p, format, payloadExtra, fileExtra)
+}
+
+// SignFormatWith is SignFormat with any key.
+func SignFormatWith(priv ed25519.PrivateKey, keyID string, p license.Payload, format int, payloadExtra, fileExtra map[string]any) []byte {
+	p.Format = format
+	payload := map[string]any{}
+	must(json.Unmarshal(license.CanonicalPayload(p), &payload))
+	for k, v := range payloadExtra {
+		payload[k] = v
+	}
+	rawPayload, err := json.Marshal(payload)
+	must(err)
+	signed, err := license.SignedBytesFor(rawPayload)
+	must(err)
+	file := map[string]any{
+		"format":    format,
+		"key_id":    keyID,
+		"payload":   json.RawMessage(rawPayload),
+		"signature": base64.RawURLEncoding.EncodeToString(ed25519.Sign(priv, signed)),
+	}
+	for k, v := range fileExtra {
+		file[k] = v
+	}
+	raw, err := json.MarshalIndent(file, "", "  ")
+	must(err)
+	return raw
+}
+
+func must(err error) {
+	if err != nil {
+		panic("licensetest: " + err.Error())
+	}
 }

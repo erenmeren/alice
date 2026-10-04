@@ -227,13 +227,23 @@ func TestUploadRejections(t *testing.T) {
 		"garbage (L-41)":            {[]byte("not a license"), license.ErrInvalid, "license.upload.invalid"},
 		"unknown key (L-42)":        {licensetest.SignWith(otherKey, "vk-2099-01", e.payload("LIC-C", now, now.AddDate(1, 0, 0), 10)), license.ErrUnknownKey, "license.upload.unknown_key"},
 		"other installation (L-43)": {licensetest.Sign(other), license.ErrWrongInstallation, "license.upload.wrong_installation"},
-		"newer format (L-45)":       {bytes.Replace(good, []byte("\"format\": 1,\n  \"key_id\""), []byte("\"format\": 99,\n  \"key_id\""), 1), license.ErrUnsupportedFormat, "license.upload.unsupported_format"},
+		"newer format (L-45)":       {licensetest.SignFormat(e.payload("LIC-D", now, now.AddDate(1, 0, 0), 10), 99, nil, nil), license.ErrUnsupportedFormat, "license.upload.unsupported_format"},
+		// AUD-19: a newer format with fields this version does not know still asks for an update
+		// when it is signed; an unsigned or relabelled one is invalid whatever it carries.
+		"newer format, new fields":    {licensetest.SignFormat(e.payload("LIC-D", now, now.AddDate(1, 0, 0), 10), 2, map[string]any{"seats": 5}, map[string]any{"server": "x"}), license.ErrUnsupportedFormat, "license.upload.unsupported_format"},
+		"newer format, relabelled":    {bytes.Replace(good, []byte("\"format\": 1,\n  \"key_id\""), []byte("\"format\": 99,\n  \"key_id\""), 1), license.ErrInvalid, "license.upload.invalid"},
+		"newer format, forged":        {licensetest.SignFormatWith(otherKey, licensetest.KeyID, e.payload("LIC-D", now, now.AddDate(1, 0, 0), 10), 2, map[string]any{"seats": 5}, nil), license.ErrInvalid, "license.upload.invalid_signature"},
+		"current format, a new field": {licensetest.SignFormat(e.payload("LIC-D", now, now.AddDate(1, 0, 0), 10), 1, map[string]any{"seats": 5}, nil), license.ErrInvalid, "license.upload.invalid"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			before := e.auditCount(tc.action)
 			_, err := e.svc.Install(e.ctx, tc.raw, uploader, uuid.Nil)
 			require.ErrorIs(t, err, tc.is)
-			assert.Equal(t, 1, e.auditCount(tc.action))
+			if errors.Is(tc.is, license.ErrUnsupportedFormat) {
+				assert.NotErrorIs(t, err, license.ErrInvalid)
+			}
+			assert.Equal(t, before+1, e.auditCount(tc.action))
 			assert.Equal(t, 1, e.countWhere("license_files", "true"), "nothing stored")
 			assert.Equal(t, "LIC-A", e.svc.Snapshot().Eval.Key(), "the installed license is untouched")
 		})
@@ -243,7 +253,7 @@ func TestUploadRejections(t *testing.T) {
 	require.ErrorAs(t, err, &wi)
 	assert.Equal(t, license.IDSuffix(e.installation()), wi.Expected)
 	assert.Equal(t, license.IDSuffix(other.InstallationID), wi.Got)
-	assert.Equal(t, 6, e.countWhere("license_history", "event = 'rejected'"))
+	assert.Equal(t, len(cases)+1, e.countWhere("license_history", "event = 'rejected'"))
 }
 
 // §16.3: an older license is refused unless it lasts longer or is a correction (R7).
@@ -793,4 +803,18 @@ func TestRestartKeepsTheStateWhenTheResetFails(t *testing.T) {
 	before := e.installation()
 	require.Error(t, e.svc.Restart(e.ctx, func(context.Context) error { return errors.New("boom") }))
 	assert.Equal(t, before, e.installation())
+}
+
+// AUD-19: a genuinely signed file in a newer format stored by a newer build (then downgraded)
+// does not count and is not reported as changed outside Alice.
+func TestStoredNewerFormatIsNotTampering(t *testing.T) {
+	e := newEnv(t)
+	now := e.clk.Now()
+	raw := licensetest.SignFormat(e.payload("LIC-NEXT", now, now.AddDate(1, 0, 0), 10), 2, map[string]any{"seats": 5}, nil)
+	_, err := e.db.Owner.Exec(e.ctx, `INSERT INTO license_files (id, seq, sha256, raw_file, uploaded_at) VALUES (gen_random_uuid(), 1, sha256($1), $1, now())`, raw)
+	require.NoError(t, err)
+	e.tickAt(now.Add(time.Hour))
+	assert.False(t, e.svc.Snapshot().Tampered)
+	assert.Zero(t, e.auditCount("license.tampered"))
+	assert.Equal(t, license.PhaseEvaluation, e.svc.Snapshot().Eval.Phase, "it does not count")
 }

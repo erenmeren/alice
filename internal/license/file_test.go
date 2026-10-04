@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/license"
+	"alice/internal/license/licensetest"
 )
 
 // fileTestKey is a throw-away key for format tests (the shared test signer is in licensetest).
@@ -146,13 +147,115 @@ func TestParseRejectsMalformedFiles(t *testing.T) {
 	}
 }
 
-// L-45: a newer format is not "invalid": the administrator is told to update Alice.
-func TestParseReportsNewerFormats(t *testing.T) {
-	raw := encodeSigned(t, samplePayload(t))
-	newer := replaceOnce(t, raw, `"format": 1,`+"\n  \"key_id\"", `"format": 99,`+"\n  \"key_id\"")
+// L-45 and AUD-19: ParseFile alone never answers "update Alice": a file in a newer format is
+// unverified there (problem newer_format, still ErrInvalid); Check decides after the signature.
+func TestParseLeavesNewerFormatsToCheck(t *testing.T) {
+	newer := licensetest.SignFormat(licensetest.Payload(license.NewInstallationID(), t0, t0.AddDate(1, 0, 0), 10), 99, nil, nil)
 	_, err := license.ParseFile(newer)
+	require.ErrorIs(t, err, license.ErrInvalid)
+	var inv *license.InvalidError
+	require.ErrorAs(t, err, &inv)
+	assert.Equal(t, "newer_format", inv.Problem)
+	_, err = license.Check(newer, licensetest.KeySet())
 	require.ErrorIs(t, err, license.ErrUnsupportedFormat)
 	assert.NotErrorIs(t, err, license.ErrInvalid)
+}
+
+// requireCheck checks raw with the test key set and asserts the exact answer: a sentinel, or an
+// invalid file with the given problem.
+func requireCheck(t *testing.T, keys license.KeySet, raw []byte, want error, problem, name string) {
+	t.Helper()
+	_, err := license.Check(raw, keys)
+	require.ErrorIs(t, err, want, name)
+	if problem == "" {
+		assert.NotErrorIs(t, err, license.ErrInvalid, name)
+		return
+	}
+	var inv *license.InvalidError
+	require.ErrorAs(t, err, &inv, name)
+	assert.Equal(t, problem, inv.Problem, name)
+}
+
+// AUD-19 (L-45, spec §16.2 "additive changes go in new formats"): a license in a newer format
+// that is genuinely signed by a trusted key asks for an update, also when it carries fields
+// this version does not know. The signature is checked first, over the canonical payload with
+// every member: an unsigned, forged or relabelled file stays invalid whatever fields it carries,
+// so adding fields never changes the answer to a forged file. In the current format an unknown
+// field is invalid even under a valid signature (the vendor never issues one).
+func TestNewerFormatWithNewFieldsAsksForAnUpdate(t *testing.T) {
+	keys := licensetest.KeySet()
+	p := licensetest.Payload(license.NewInstallationID(), t0, t0.AddDate(1, 0, 0), 10)
+	newField := map[string]any{"seats": 5, "limits": map[string]any{"ratio": 1.5, "tags": []any{"a", nil, true}}}
+	newTop := map[string]any{"server": "https://licenses.example"}
+
+	for name, raw := range map[string][]byte{
+		"signed format 2":                      licensetest.SignFormat(p, 2, nil, nil),
+		"signed format 2, new payload field":   licensetest.SignFormat(p, 2, newField, nil),
+		"signed format 2, new top-level field": licensetest.SignFormat(p, 2, nil, newTop),
+		"signed format 99, both":               licensetest.SignFormat(p, 99, newField, newTop),
+	} {
+		requireCheck(t, keys, raw, license.ErrUnsupportedFormat, "", name)
+		assert.Equal(t, "unsupported_format", license.RejectReason(func() error { _, err := license.Check(raw, keys); return err }()), name)
+	}
+
+	zeroSig := base64.RawURLEncoding.EncodeToString(make([]byte, ed25519.SignatureSize))
+	unsign := func(raw []byte) []byte {
+		var top map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &top))
+		top["signature"] = json.RawMessage(`"` + zeroSig + `"`)
+		out, err := json.Marshal(top)
+		require.NoError(t, err)
+		return out
+	}
+	addToPayload := func(raw []byte, member string) []byte {
+		i := bytes.Index(raw, []byte(`"payload": {`))
+		require.Positive(t, i)
+		at := i + len(`"payload": {`)
+		return append(append(append([]byte{}, raw[:at]...), member+","...), raw[at:]...)
+	}
+	relabelled := replaceOnce(t, licensetest.Sign(p), `"format": 1,`+"\n  \"key_id\"", `"format": 2,`+"\n  \"key_id\"")
+	for name, tc := range map[string]struct {
+		raw     []byte
+		want    error
+		problem string
+	}{
+		"unsigned format 2":                         {unsign(licensetest.SignFormat(p, 2, nil, nil)), license.ErrInvalid, "signature"},
+		"unsigned format 2, new fields":             {unsign(licensetest.SignFormat(p, 2, newField, newTop)), license.ErrInvalid, "signature"},
+		"format 2, a field added after signing":     {addToPayload(licensetest.SignFormat(p, 2, nil, nil), `"seats": 5`), license.ErrInvalid, "signature"},
+		"format 2 signed by another key":            {licensetest.SignFormatWith(otherKey, licensetest.KeyID, p, 2, newField, nil), license.ErrInvalid, "signature"},
+		"format 2 from an unknown key":              {licensetest.SignFormatWith(otherKey, "vk-2099-01", p, 2, newField, nil), license.ErrUnknownKey, ""},
+		"a format 1 license relabelled as 2":        {relabelled, license.ErrInvalid, "format"},
+		"format 2, duplicate payload member":        {addToPayload(licensetest.SignFormat(p, 2, nil, nil), `"format": 2`), license.ErrInvalid, "duplicate_key"},
+		"format 2, payload under another case":      {replaceOnce(t, licensetest.SignFormat(p, 2, nil, nil), `"payload":`, `"Payload":`), license.ErrInvalid, "fields"},
+		"format 2 without a signature":              {[]byte(`{"format":2,"key_id":"vk-test-01","payload":{"format":2}}`), license.ErrInvalid, "fields"},
+		"format 2 with a payload that is no object": {[]byte(`{"format":2,"key_id":"vk-test-01","payload":[],"signature":"` + zeroSig + `"}`), license.ErrInvalid, "signature"},
+		"format 2 too deep":                         {[]byte(`{"format":2,"payload":` + strings.Repeat("[", 16) + strings.Repeat("]", 16) + `}`), license.ErrInvalid, "too_deep"},
+		"signed format 1, new payload field":        {licensetest.SignFormat(p, 1, newField, nil), license.ErrInvalid, "fields"},
+		"signed format 1, new top-level field":      {licensetest.SignFormat(p, 1, nil, newTop), license.ErrInvalid, "fields"},
+		"unsigned format 1, new payload field":      {unsign(licensetest.SignFormat(p, 1, newField, nil)), license.ErrInvalid, "fields"},
+		"garbled":                                   {[]byte(`{"format":2,"key_id":"vk-test-01","payload":{"format":2},"signature":"` + zeroSig), license.ErrInvalid, "not_json"},
+		"duplicate format":                          {[]byte(`{"format":2,"format":2,"key_id":"k","payload":{},"signature":""}`), license.ErrInvalid, "duplicate_key"},
+	} {
+		requireCheck(t, keys, tc.raw, tc.want, tc.problem, name)
+	}
+	// The format 1 license itself verifies (the control for "relabelled").
+	_, err := license.Check(licensetest.Sign(p), keys)
+	require.NoError(t, err)
+}
+
+// AUD-19: a revoked key is judged in a newer format as in the current one: by the payload's
+// issued_at against the key's cut-off.
+func TestNewerFormatFromARevokedKey(t *testing.T) {
+	p := licensetest.Payload(license.NewInstallationID(), t0, t0.AddDate(1, 0, 0), 10)
+	raw := licensetest.SignFormat(p, 2, map[string]any{"seats": 5}, nil)
+	revoked := func(from time.Time) license.KeySet {
+		return license.NewKeySet(license.PublicKey{ID: licensetest.KeyID, Key: licensetest.PublicKey(), Status: license.KeyRevoked, RevokedFrom: from})
+	}
+	requireCheck(t, revoked(time.Time{}), raw, license.ErrRevokedKey, "", "no cut-off")
+	requireCheck(t, revoked(t0), raw, license.ErrRevokedKey, "", "issued at the cut-off")
+	requireCheck(t, revoked(t0.Add(time.Second)), raw, license.ErrUnsupportedFormat, "", "issued before the cut-off")
+	noDate := licensetest.SignFormat(p, 2, map[string]any{"issued_at": 0}, nil)
+	requireCheck(t, revoked(t0.Add(time.Second)), noDate, license.ErrRevokedKey, "", "an issued_at that is not a time")
 }
 
 // L-46, L-47 and the §16.3 step 5 rules.

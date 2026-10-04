@@ -20,8 +20,11 @@ const (
 	FormatVersion   = 1
 	MaxTargetsLimit = 100000
 
-	signingPrefix    = "ALICE-LICENSE-v1\n"
-	maxDepth         = 3 // file object > payload object > features array
+	signingPrefix = "ALICE-LICENSE-v1\n"
+	maxDepth      = 3 // file object > payload object > features array
+	// maxNewerDepth bounds the nesting of a file in a newer format, which this version reads
+	// only far enough to verify its signature (AUD-19).
+	maxNewerDepth    = maxCanonicalDepth
 	maxCustomerRunes = 200
 	maxFeatures      = 32
 )
@@ -68,6 +71,19 @@ type File struct {
 // SignedBytes are the bytes the vendor signs: a domain separator and the canonical payload.
 func SignedBytes(p Payload) []byte {
 	return append([]byte(signingPrefix), CanonicalPayload(p)...)
+}
+
+// SignedBytesFor are the signed bytes of a payload object of any format, given as JSON: the
+// domain separator and its RFC 8785 form, unknown members included (spec §16.2). For a format 1
+// payload they equal SignedBytes. Every format keeps this envelope (format, key_id, payload,
+// signature) and this signature, so a build can tell a genuine license in a newer format from a
+// forged or damaged file (AUD-19).
+func SignedBytesFor(payload []byte) ([]byte, error) {
+	canon, err := CanonicalJSON(payload)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(signingPrefix), canon...), nil
 }
 
 // Sign validates p and signs it with priv (used by licensectl and test signers).
@@ -123,38 +139,33 @@ type wirePayload struct {
 	Replaces       json.RawMessage `json:"replaces"`
 }
 
-// ParseFile parses a license file strictly (spec §16.3 step 1): at most 64 KiB, UTF-8
-// (a leading byte-order mark is ignored), exactly one JSON object, no duplicate keys,
-// no unknown fields, integers as JSON integers, timestamps as RFC 3339 UTC with "Z" and
-// whole seconds. A newer outer format returns ErrUnsupportedFormat. The payload is not
-// validated here: callers verify the signature first, then call Payload.Validate.
+// ProblemNewerFormat is the InvalidError problem of a file whose outer format is newer than
+// FormatVersion. ParseFile cannot tell a
+// genuine newer license from a forged one, so it reports the file as invalid; Check verifies the
+// signature and only then answers ErrUnsupportedFormat (AUD-19).
+const ProblemNewerFormat = "newer_format"
+
+// ParseFile parses a license file of the current format strictly (spec §16.3 step 1): at most
+// 64 KiB, UTF-8 (a leading byte-order mark is ignored), exactly one JSON object, no duplicate
+// keys, no unknown fields, integers as JSON integers, timestamps as RFC 3339 UTC with "Z" and
+// whole seconds. A file whose outer format is newer is an *InvalidError with Problem
+// "newer_format": nothing in it is verified yet (Check does that). The payload is not validated
+// here: callers verify the signature first, then call Payload.Validate.
 func ParseFile(raw []byte) (File, error) {
-	if len(raw) == 0 {
-		return File{}, invalid("empty")
-	}
-	if len(raw) > MaxFileSize {
-		return File{}, invalid("too_large")
-	}
-	raw = bytes.TrimPrefix(raw, byteOrderMark)
-	if !utf8.Valid(raw) {
-		return File{}, invalid("encoding")
-	}
-	if err := checkStructure(raw); err != nil {
+	raw, outer, err := readEnvelope(raw)
+	if err != nil {
 		return File{}, err
 	}
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &top); err != nil {
-		return File{}, invalid("not_json")
-	}
-	var outer int64
-	if err := json.Unmarshal(top["format"], &outer); err != nil {
-		return File{}, invalid("format")
-	}
 	if outer > FormatVersion {
-		return File{}, ErrUnsupportedFormat
+		return File{}, invalid(ProblemNewerFormat)
 	}
 	if outer != FormatVersion {
 		return File{}, invalid("format")
+	}
+	// The current format knows every field: an unknown one is refused (spec §16.2), also when
+	// the signature would cover it.
+	if err := checkStructure(raw, true); err != nil {
+		return File{}, err
 	}
 
 	var w wireFile
@@ -181,14 +192,105 @@ func ParseFile(raw []byte) (File, error) {
 	if int64(p.Format) != outer {
 		return File{}, invalid("format")
 	}
-	sig, err := base64.RawURLEncoding.DecodeString(*w.Signature)
+	sig, err := decodeSignature(*w.Signature)
 	if err != nil {
-		sig, err = base64.URLEncoding.DecodeString(*w.Signature)
-	}
-	if err != nil || len(sig) != ed25519.SignatureSize {
-		return File{}, invalid("signature_encoding")
+		return File{}, err
 	}
 	return File{Format: int(outer), KeyID: *w.KeyID, Payload: p, Signature: sig}, nil
+}
+
+// readEnvelope runs the checks every format shares and reads the outer format: size, encoding,
+// one JSON object, no duplicate keys at any level, bounded nesting, an integer "format". It
+// returns raw without its byte-order mark.
+func readEnvelope(raw []byte) ([]byte, int64, error) {
+	if len(raw) == 0 {
+		return nil, 0, invalid("empty")
+	}
+	if len(raw) > MaxFileSize {
+		return nil, 0, invalid("too_large")
+	}
+	raw = bytes.TrimPrefix(raw, byteOrderMark)
+	if !utf8.Valid(raw) {
+		return nil, 0, invalid("encoding")
+	}
+	if err := checkStructure(raw, false); err != nil {
+		return nil, 0, err
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return nil, 0, invalid("not_json")
+	}
+	var outer int64
+	if err := json.Unmarshal(top["format"], &outer); err != nil {
+		return nil, 0, invalid("format")
+	}
+	return raw, outer, nil
+}
+
+// checkNewer answers a file whose outer format is newer than FormatVersion. The signature is
+// verified over the canonical payload first; only a file genuinely signed by a trusted key gets
+// ErrUnsupportedFormat ("update Alice", L-45). Everything else gets the error a file of the
+// current format would get: ErrUnknownKey, an *InvalidError (a forged or damaged file, whatever
+// fields it carries), or ErrRevokedKey.
+func checkNewer(raw []byte, keys KeySet) error {
+	raw, outer, err := readEnvelope(raw)
+	if err != nil {
+		return err
+	}
+	// The envelope every format keeps, read by exact key (encoding/json would match struct
+	// fields case-insensitively). The payload is only canonicalized, never interpreted, except
+	// "format" (bound to the outer format, spec §16.2) and "issued_at" (a revoked key's cut-off).
+	var top map[string]json.RawMessage
+	var keyID, signature string
+	if json.Unmarshal(raw, &top) != nil || json.Unmarshal(top["key_id"], &keyID) != nil ||
+		json.Unmarshal(top["signature"], &signature) != nil || len(top["payload"]) == 0 {
+		return invalid("fields")
+	}
+	if !keyIDPattern.MatchString(keyID) {
+		return invalid("key_id")
+	}
+	sig, err := decodeSignature(signature)
+	if err != nil {
+		return err
+	}
+	pk, ok := keys.keys[keyID]
+	if !ok || len(pk.Key) != ed25519.PublicKeySize {
+		return ErrUnknownKey
+	}
+	signed, err := SignedBytesFor(top["payload"])
+	if err != nil || !ed25519.Verify(pk.Key, signed, sig) {
+		return invalid("signature")
+	}
+	// Signed from here on. The inner format must be the outer one, so a genuine older file
+	// relabelled outside its signature is not reported as newer.
+	var inner map[string]json.RawMessage
+	var format int64
+	if json.Unmarshal(top["payload"], &inner) != nil || json.Unmarshal(inner["format"], &format) != nil || format != outer {
+		return invalid("format")
+	}
+	if pk.Status == KeyRevoked {
+		// Trusted only when issued before the key's cut-off; an issued_at this version cannot
+		// read is not.
+		var at string
+		_ = json.Unmarshal(inner["issued_at"], &at) // not a string: at stays "", which does not parse
+		issued, err := time.Parse(time.RFC3339, at)
+		if pk.RevokedFrom.IsZero() || err != nil || !issued.Before(pk.RevokedFrom) {
+			return ErrRevokedKey
+		}
+	}
+	return ErrUnsupportedFormat
+}
+
+// decodeSignature reads the base64url signature (padding accepted) of 64 bytes.
+func decodeSignature(s string) ([]byte, error) {
+	sig, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		sig, err = base64.URLEncoding.DecodeString(s)
+	}
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return nil, invalid("signature_encoding")
+	}
+	return sig, nil
 }
 
 func (w wirePayload) payload() (Payload, error) {
@@ -245,10 +347,15 @@ type frame struct {
 	wantKey bool
 }
 
-// checkStructure walks the tokens once: exactly one JSON value, nesting at most
-// maxDepth, and no object with the same key twice (encoding/json keeps the last one
-// silently, which would let a file show one value and sign another).
-func checkStructure(raw []byte) error {
+// checkStructure walks the tokens once: exactly one JSON value and no object with the same key
+// twice (encoding/json keeps the last one silently, which would let a file show one value and
+// sign another). strict is the current format: only its keys, nesting at most maxDepth. Without
+// strict (reading the format, or a newer format), any key and nesting up to maxNewerDepth.
+func checkStructure(raw []byte, strict bool) error {
+	depth := maxNewerDepth
+	if strict {
+		depth = maxDepth
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var stack []*frame
@@ -271,7 +378,7 @@ func checkStructure(raw []byte) error {
 			if stack[n-1].keys[key] {
 				return invalid("duplicate_key")
 			}
-			if !stack[n-1].allowed[key] {
+			if strict && !stack[n-1].allowed[key] {
 				return invalid("fields")
 			}
 			stack[n-1].keys[key] = true
@@ -280,7 +387,7 @@ func checkStructure(raw []byte) error {
 		}
 		switch tok {
 		case json.Delim('{'), json.Delim('['):
-			if len(stack) == maxDepth {
+			if len(stack) == depth {
 				return invalid("too_deep")
 			}
 			f := &frame{}

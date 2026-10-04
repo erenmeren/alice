@@ -304,6 +304,12 @@ func inspect(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	f, err := license.ParseFile(raw)
+	var inv *license.InvalidError
+	if errors.As(err, &inv) && inv.Problem == license.ProblemNewerFormat {
+		_, _ = fmt.Fprintln(stderr, "This license file uses a newer format than this licensectl reads; use a newer licensectl "+
+			"(licensectl verify checks its signature).")
+		return 1
+	}
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "Not a readable license file:", err)
 		return 1
@@ -355,7 +361,13 @@ func verify(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if _, err := license.Check(raw, license.NewKeySet(pub)); err != nil {
+	_, err = license.Check(raw, license.NewKeySet(pub))
+	if errors.Is(err, license.ErrUnsupportedFormat) {
+		// Only a genuine signature gets here (AUD-19); the payload rules of that format are unknown.
+		_, _ = fmt.Fprintln(stdout, "SIGNATURE OK, NEWER FORMAT (this licensectl cannot check the rest; use a newer licensectl)")
+		return 1
+	}
+	if err != nil {
 		_, _ = fmt.Fprintf(stdout, "SIGNATURE INVALID (%s)\n", license.RejectReason(err))
 		return 1
 	}

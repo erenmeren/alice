@@ -153,3 +153,31 @@ func TestUnverifiedLicenseRefusesChangesAndKeepsUploadsWorking(t *testing.T) {
 	requireStatus(t, admin.do(http.MethodPost, "/api/v1/targets", map[string]any{"name": "web-01", "host": "web-01.example.test"}),
 		http.StatusCreated)
 }
+
+// AUD-19: the API answer for each newer-format case, on preview and upload. Only a genuinely
+// signed newer format asks for an update (ALC-LIC-0006); unsigned, forged or relabelled files
+// and unknown fields in the current format are not valid licenses (ALC-LIC-0002).
+func TestNewerFormatLicenseAnswers(t *testing.T) {
+	s, admin, adminAcct := installed(t)
+	s.stepUp(admin, adminAcct)
+	now := s.clock.Now()
+	p := licensetest.Payload(s.license.Snapshot().InstallationID, now, now.AddDate(1, 0, 0), 10)
+	signed := string(licensetest.SignFormat(p, 2, map[string]any{"seats": 5}, map[string]any{"server": "x"}))
+	cases := map[string]struct{ file, code string }{
+		"signed, newer format, new fields":   {signed, "ALC-LIC-0006"},
+		"signed, newer format":               {string(licensetest.SignFormat(p, 2, nil, nil)), "ALC-LIC-0006"},
+		"unsigned, newer format, new fields": {strings.Replace(signed, `"seats": 5`, `"seats": 6`, 1), "ALC-LIC-0002"},
+		"signed, current format, new field":  {string(licensetest.SignFormat(p, 1, map[string]any{"seats": 5}, nil)), "ALC-LIC-0002"},
+		"relabelled current format":          {strings.Replace(string(licensetest.Sign(p)), `"format": 1,`, `"format": 2,`, 1), "ALC-LIC-0002"},
+		"garbled":                            {signed[:len(signed)/2], "ALC-LIC-0002"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			for _, path := range []string{"/api/v1/license/preview", "/api/v1/license"} {
+				requireError(t, admin.do(http.MethodPost, path, map[string]string{"license": tc.file}), http.StatusUnprocessableEntity, tc.code)
+			}
+		})
+	}
+	assert.Equal(t, 0, s.count("license_files"), "nothing is stored")
+	assert.Equal(t, license.PhaseEvaluation, s.license.Snapshot().Eval.Phase)
+}

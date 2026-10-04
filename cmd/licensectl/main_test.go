@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/x509"
+	"encoding/pem"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 
 	"alice/internal/license"
 	"alice/internal/license/issuer"
+	"alice/internal/license/licensetest"
 	"alice/internal/platform/clock"
 )
 
@@ -444,4 +447,38 @@ func TestCorrectionForAnotherInstallationIsRefused(t *testing.T) {
 		issueArgs(dir, license.NewInstallationID(), filepath.Join(files, "b.alicelic"), "--replaces", "LIC-2026-000001")...)
 	assert.Equal(t, 1, code)
 	assert.Contains(t, errOut, "another installation")
+}
+
+// AUD-19: a license in a newer format is named as such only when its signature verifies; what
+// licensectl issues is unchanged (format 1, checked in TestInspectAndVerify).
+func TestNewerFormatIsReportedOnlyWhenSigned(t *testing.T) {
+	der, err := x509.MarshalPKIXPublicKey(licensetest.PublicKey())
+	require.NoError(t, err)
+	dir := t.TempDir()
+	pub := filepath.Join(dir, "test.pub")
+	require.NoError(t, os.WriteFile(pub, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Headers: map[string]string{"Key-Id": "vk-2026-09"}, Bytes: der}), 0o600))
+	p := licensetest.Payload(license.NewInstallationID(), testClock.Now(), testClock.Now().AddDate(1, 0, 0), 10)
+	write := func(name string, raw []byte) string {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(path, raw, 0o600))
+		return path
+	}
+	newer := write("newer.alicelic", licensetest.SignFormatWith(licensetest.PrivateKey(), "vk-2026-09", p, 2, map[string]any{"seats": 5}, nil))
+	code, stdout, _ := ctl(t, "", nil, "verify", "--pub", pub, newer)
+	assert.Equal(t, 1, code)
+	assert.Equal(t, "SIGNATURE OK, NEWER FORMAT (this licensectl cannot check the rest; use a newer licensectl)\n", stdout)
+	code, _, errOut := ctl(t, "", nil, "inspect", newer)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, errOut, "newer format than this licensectl reads")
+
+	raw, err := os.ReadFile(newer)
+	require.NoError(t, err)
+	forged := write("forged.alicelic", bytes.Replace(raw, []byte(`"seats": 5`), []byte(`"seats": 500`), 1))
+	code, stdout, _ = ctl(t, "", nil, "verify", "--pub", pub, forged)
+	assert.Equal(t, 1, code)
+	assert.Equal(t, "SIGNATURE INVALID (invalid_signature)\n", stdout)
+
+	code, stdout, _ = ctl(t, "", nil, "verify", "--pub", pub, write("current.alicelic", licensetest.SignWith(licensetest.PrivateKey(), "vk-2026-09", p)))
+	assert.Equal(t, 0, code)
+	assert.Equal(t, "OK\n", stdout)
 }
