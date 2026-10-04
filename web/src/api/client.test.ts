@@ -1,6 +1,7 @@
 import { http, HttpResponse } from 'msw';
 import { server } from '../test/server';
 import { errorResponse } from '../test/fixtures';
+import { noteInput, resetActivity, takeActivity } from './activity';
 import { apiFetch, ApiError, NetworkError, onUnauthorized, setCsrfToken } from './client';
 
 describe('apiFetch', () => {
@@ -94,5 +95,95 @@ describe('apiFetch', () => {
       }),
     );
     await expect(apiFetch('/api/v1/cut')).rejects.toBeInstanceOf(NetworkError);
+  });
+});
+
+describe('activity mark (AUD-01)', () => {
+  const keydown = { isTrusted: true, type: 'keydown' } as unknown as Event;
+  let seen: (string | null)[];
+
+  beforeEach(() => {
+    resetActivity(false);
+    seen = [];
+    server.use(
+      http.all('/api/v1/echo', ({ request }) => {
+        seen.push(request.headers.get('X-Alice-Activity'));
+        return HttpResponse.json({});
+      }),
+    );
+  });
+
+  it('marks a read only after input, once, and every state-changing request', async () => {
+    await apiFetch('/api/v1/echo');
+    noteInput(keydown);
+    await apiFetch('/api/v1/echo');
+    await apiFetch('/api/v1/echo');
+    await apiFetch('/api/v1/echo', { method: 'POST', body: {} });
+    await apiFetch('/api/v1/echo', { method: 'DELETE' });
+    await apiFetch('/api/v1/echo');
+    expect(seen).toEqual([null, '1', null, '1', '1', null]);
+  });
+
+  it('never marks polls without input, however many', async () => {
+    for (let i = 0; i < 10; i++) await apiFetch('/api/v1/echo');
+    expect(seen).toEqual(Array(10).fill(null));
+  });
+
+  it('a state-changing request also uses up the input mark, since it slides the session itself', async () => {
+    noteInput(keydown);
+    await apiFetch('/api/v1/echo', { method: 'POST', body: {} });
+    await apiFetch('/api/v1/echo');
+    expect(seen).toEqual(['1', null]);
+  });
+
+  it('a public route neither carries nor uses up the mark', async () => {
+    let publicMark: string | null = 'unset';
+    server.use(http.get('/api/v1/setup/status', ({ request }) => { publicMark = request.headers.get('X-Alice-Activity'); return HttpResponse.json({}); }));
+    noteInput(keydown);
+    await apiFetch('/api/v1/setup/status', { publicRoute: true });
+    await apiFetch('/api/v1/echo');
+    expect(publicMark).toBeNull();
+    expect(seen).toEqual(['1']);
+  });
+
+  it('gives the mark back when its request fails, so the next one carries it', async () => {
+    server.use(http.get('/api/v1/down', () => HttpResponse.error()));
+    noteInput(keydown);
+    await expect(apiFetch('/api/v1/down')).rejects.toBeInstanceOf(NetworkError);
+    await apiFetch('/api/v1/echo');
+    await apiFetch('/api/v1/echo');
+    expect(seen).toEqual(['1', null]);
+  });
+
+  it('gives the mark back when the request is cancelled', async () => {
+    const abort = new AbortController();
+    abort.abort();
+    noteInput(keydown);
+    await expect(apiFetch('/api/v1/echo', { signal: abort.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(takeActivity()).toBe(true);
+  });
+
+  it.each([429, 503, 500])('gives the mark back on %i (the activity may not have been recorded)', async (status) => {
+    server.use(http.get('/api/v1/busy', () => errorResponse(status, 'ALC-SYS-0002', 'system.unavailable')));
+    noteInput(keydown);
+    await expect(apiFetch('/api/v1/busy')).rejects.toBeInstanceOf(ApiError);
+    expect(takeActivity()).toBe(true);
+  });
+
+  it.each([401, 403, 404, 409, 422])('keeps the mark used on %i (the server recorded it, or there is no session)', async (status) => {
+    server.use(http.get('/api/v1/refused', () => errorResponse(status, 'ALC-SYS-0006', 'validation.failed')));
+    noteInput(keydown);
+    await expect(apiFetch('/api/v1/refused', { quietUnauthorized: true })).rejects.toBeInstanceOf(ApiError);
+    expect(takeActivity()).toBe(false);
+  });
+
+  it('never sends the mark to another origin and keeps it for Alice', async () => {
+    const elsewhere: (string | null)[] = [];
+    server.use(http.get('https://elsewhere.example/x', ({ request }) => { elsewhere.push(request.headers.get('X-Alice-Activity')); return HttpResponse.json({}); }));
+    noteInput(keydown);
+    await apiFetch('https://elsewhere.example/x', { method: 'GET' });
+    await apiFetch('/api/v1/echo');
+    expect(elsewhere).toEqual([null]);
+    expect(seen).toEqual(['1']);
   });
 });

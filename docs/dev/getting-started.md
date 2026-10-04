@@ -110,6 +110,14 @@ test key or the test signer. The e2e build reports its version with a `+e2e` suf
 startup. A build with `testlicense` but without `e2e` logs "test license key trusted" and reports `+testlicense`.
 Never run either for real data.
 
+Moving the clock also moves sessions toward their idle timeout (30 minutes), and only a person's activity restarts
+it (AUD-01): a state-changing request, or the first read after real input. Background polls do not. A test
+that moves the clock by 30 minutes or more in total and expects to stay signed in therefore gives real input in
+between (`page.mouse.wheel`, `page.keyboard.press`, a click), or signs in again. Events dispatched from a script
+(`page.evaluate`, `dispatchEvent`) do not count, and neither do reads (GET) made with `page.request` without the
+`X-Alice-Activity: 1` header. The journeys in `web/e2e/phase1.spec.ts` marked AUD-01
+show both cases.
+
 The e2e stack is a separate compose project, `alice-e2e` (its own database, volumes and networks), because every
 Playwright run empties its database; it never touches the `make up` stack. It also starts the SSH test target
 `sshtarget` (internal network only, no published port). `make e2e-hardening-check` checks it, `make e2e-down`

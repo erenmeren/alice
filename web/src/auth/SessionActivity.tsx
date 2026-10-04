@@ -1,0 +1,28 @@
+import { useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { installActivityListeners } from '../api/activity';
+import { getLicenseStatus } from '../api/endpoints';
+import { LICENSE_STATUS_KEY } from '../api/queryKeys';
+import { useAuth } from './AuthProvider';
+
+// STATUS_POLL_MS is how often the license status is read while someone is signed in.
+export const STATUS_POLL_MS = 60_000;
+
+// SessionActivity carries a person's activity to the server (AUD-01, Decisions 1 and 2). While
+// someone is signed in it listens for input (api/activity.ts) and polls the license status every
+// minute on every signed-in screen, the setup wizard's signed-in steps included. A screen that
+// sends no request of its own (a form being filled in, a page being read and scrolled) still marks
+// the session as used within a minute of the input, through this poll; no separate heartbeat
+// request exists. The poll pauses while the tab is hidden (nobody can give input there) and
+// refetches when it is shown again. Signed out, nothing of it is mounted: no listeners, no poll,
+// and no query of the previous user left in the cache.
+export function SessionActivity() {
+  const { session } = useAuth();
+  return session ? <SignedInActivity /> : null;
+}
+
+function SignedInActivity() {
+  useEffect(() => installActivityListeners(window), []);
+  useQuery({ queryKey: LICENSE_STATUS_KEY, queryFn: getLicenseStatus, refetchInterval: STATUS_POLL_MS });
+  return null;
+}

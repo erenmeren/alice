@@ -3,11 +3,10 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import { getLicenseStatus } from '../api/endpoints';
+import { LICENSE_STATUS_KEY } from '../api/queryKeys';
 import type { BannerSeverity, LicenseBanner } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { formatDateTime } from '../datetime';
-
-export const LICENSE_STATUS_KEY = ['license', 'status'] as const;
 
 // Colors of spec §19.3: blue information, yellow warning, orange for the last days, red when expired.
 const COLORS: Record<BannerSeverity, string> = { info: 'blue', warning: 'yellow', caution: 'orange', danger: 'red' };
@@ -28,12 +27,15 @@ export function bannerValues(b: LicenseBanner, lang: string): Record<string, str
 // LicenseBanners shows the license messages of spec §19.3 on every signed-in screen. The
 // server decides who sees what (warnings only for Administrators, L-15). Text always comes
 // from the catalog; a kind this version does not know is skipped, never shown raw.
-// The status is refreshed every minute; failed refreshes follow the shared retry policy and
-// keep showing the last answer.
+// The status is refreshed every minute by SessionActivity (auth/SessionActivity.tsx), which polls
+// it on every signed-in screen and makes that poll carry a person's activity to the server
+// (AUD-01, Decision 2). This component only reads the same query, so the status is fetched once a
+// minute, not once per observer; failed refreshes follow the shared retry policy and keep showing
+// the last answer.
 export function LicenseBanners() {
   const { t, i18n } = useTranslation();
   const { session } = useAuth();
-  const status = useQuery({ queryKey: LICENSE_STATUS_KEY, queryFn: getLicenseStatus, refetchInterval: 60_000, enabled: !!session });
+  const status = useQuery({ queryKey: LICENSE_STATUS_KEY, queryFn: getLicenseStatus, enabled: !!session });
   if (!status.data) return null;
   const admin = session?.user.role === 'admin';
   const shown = status.data.banners

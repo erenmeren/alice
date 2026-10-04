@@ -1,6 +1,7 @@
 import { Outlet, type RouteObject } from 'react-router';
 import { AuthProvider } from './auth/AuthProvider';
 import { RequireAuth, RequireRole } from './auth/guards';
+import { SessionActivity } from './auth/SessionActivity';
 import { StepUpProvider } from './components/StepUpProvider';
 import { AppLayout } from './layout/AppLayout';
 import { AccountPage } from './pages/AccountPage';
@@ -24,6 +25,7 @@ import { UsersPage } from './pages/UsersPage';
 function Root() {
   return (
     <AuthProvider>
+      <SessionActivity />
       <StepUpProvider>
         <Outlet />
       </StepUpProvider>

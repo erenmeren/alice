@@ -80,6 +80,47 @@ async function confirmWithStepUp(page: Page, request: APIRequestContext, c: Copy
   await expect(done).toBeVisible();
 }
 
+// AUD-01: the session's idle timeout moves only on a person's activity. A read carries it as
+// X-Alice-Activity: 1 when it is the first request after real input (a click, a key, the wheel, a
+// touch); polls without input never do.
+const LICENSE_STATUS = '/api/v1/license/status';
+const IDLE_MINUTES = 30;
+
+// watchActivity records, for every API request of the page, whether it carried the activity mark.
+function watchActivity(page: Page): { path: string; marked: boolean }[] {
+  const seen: { path: string; marked: boolean }[] = [];
+  page.on('request', (r) => {
+    const path = new URL(r.url()).pathname;
+    if (path.startsWith('/api/v1/')) seen.push({ path, marked: r.headers()['x-alice-activity'] === '1' });
+  });
+  return seen;
+}
+
+// backgroundRead makes the open page read again what it shows, as it does by itself every minute
+// and whenever the tab becomes visible: TanStack Query refetches on visibilitychange. The event
+// comes from a script, so it is not input. It returns the status of the license status read, which
+// every signed-in page polls.
+async function backgroundRead(page: Page): Promise<number> {
+  const res = page.waitForResponse((r) => new URL(r.url()).pathname === LICENSE_STATUS);
+  await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+  return (await res).status();
+}
+
+// readAfterInput reads in the background until a request carries the input just given (the
+// browser delivers a wheel event to the page asynchronously, after page.mouse.wheel returns) and
+// checks that exactly one did: the first after the input, whichever query that was.
+async function readAfterInput(page: Page, reads: { path: string; marked: boolean }[]) {
+  await expect.poll(async () => (await backgroundRead(page)) === 200 && reads.some((r) => r.marked)).toBe(true);
+  expect(reads.filter((r) => r.marked), JSON.stringify(reads)).toHaveLength(1);
+}
+
+// expectSessionEnded checks the signed-out path: the sign-in page, with the notice shown once.
+async function expectSessionEnded(page: Page) {
+  await expect(page.getByRole('heading', { name: either('loginHeading') })).toBeVisible();
+  await expect(page).toHaveURL(/\/login\?ended=1$/);
+  await expect(page.getByText(either('sessionEnded'))).toHaveCount(1);
+}
+
 // closeDialog closes an open dialog with Escape and waits until it is gone.
 async function closeDialog(page: Page, dialog: Locator) {
   await page.keyboard.press('Escape');
@@ -121,6 +162,60 @@ for (const lang of ['en', 'tr'] as Lang[]) {
 
       // Signing in again works.
       await signIn(page, request, ADMIN, totpSecret);
+    });
+
+    test('a tab left open is signed out 30 minutes after the last input although it keeps polling (AUD-01)', async ({ page, request }) => {
+      await runWizard(page, request, lang);
+      const reads = watchActivity(page);
+      // The wizard's last click may still mark one request: let it go out. From here on, nobody
+      // touches the page; the server clock moves in steps shorter than the idle timeout.
+      expect(await backgroundRead(page)).toBe(200);
+      reads.length = 0;
+      for (const minutes of [10, 10, 9]) {
+        await advanceClock(request, minutes * 60);
+        expect(await backgroundRead(page)).toBe(200); // still signed in, 29 minutes after the last input
+      }
+      expect(reads.length).toBeGreaterThan(0);
+      expect(reads.filter((r) => r.marked), 'a request without input carried the activity mark').toEqual([]);
+      await expect(page.getByRole('heading', { name: c.welcome(ADMIN.fullName) })).toBeVisible();
+
+      await advanceClock(request, 2 * 60); // 31 minutes after the last input, 2 after the last poll
+      expect(await backgroundRead(page)).toBe(401);
+      await expectSessionEnded(page);
+    });
+
+    test('a person who keeps reading stays signed in until the 12-hour limit (AUD-01)', async ({ page, request }) => {
+      const { totpSecret } = await runWizard(page, request, lang);
+      await signOut(page);
+      await signIn(page, request, ADMIN, totpSecret); // a new session: its 12 hours start now
+      const signedInAt = await serverNow(request);
+      const home = page.getByRole('heading', { name: c.welcome(ADMIN.fullName) });
+      await expect(home).toBeVisible();
+      const reads = watchActivity(page);
+      // Real input between the clock steps, the kinds a person reading gives: a scroll, a key, a click.
+      const inputs = [() => page.mouse.wheel(0, 40), () => page.keyboard.press('Shift'), () => home.click()];
+      for (let i = 0; i < 4; i++) {
+        await advanceClock(request, 10 * 60);
+        reads.length = 0;
+        await inputs[i % inputs.length]();
+        await readAfterInput(page, reads);
+      }
+      // 40 minutes after the sign-in (the last state change), only reads in between.
+      await expect(home).toBeVisible();
+
+      // The absolute lifetime still ends the session, however active the person is.
+      const end = signedInAt + 12 * 3600 * 1000;
+      const step = (IDLE_MINUTES - 5) * 60;
+      while ((await serverNow(request)) + step * 1000 < end) {
+        await advanceClock(request, step);
+        reads.length = 0;
+        await page.mouse.wheel(0, 40);
+        await readAfterInput(page, reads);
+      }
+      await advanceClock(request, Math.ceil((end - (await serverNow(request))) / 1000) + 60);
+      await page.mouse.wheel(0, 40);
+      expect(await backgroundRead(page)).toBe(401);
+      await expectSessionEnded(page);
     });
 
     test('repeated wrong passwords slow down and then lock the account for 15 minutes', async ({ page, request }) => {

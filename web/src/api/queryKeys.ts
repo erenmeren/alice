@@ -14,3 +14,7 @@ export const CSRS_KEY = ['csrs'] as const;
 export const DEPLOYMENTS_KEY = ['deployments'] as const;
 export const deploymentKey = (id: string) => ['deployments', id] as const;
 export const locationsKey = (targetId: string) => ['locations', targetId] as const;
+
+// The license status: polled every minute while someone is signed in (auth/SessionActivity.tsx)
+// and shown by the license banners.
+export const LICENSE_STATUS_KEY = ['license', 'status'] as const;

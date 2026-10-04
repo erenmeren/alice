@@ -1,3 +1,4 @@
+import { ACTIVITY_HEADER, returnActivity, takeActivity } from './activity';
 import type { ApiErrorBody, FieldError } from './types';
 
 // ApiError carries the stable error fields from the server (spec §9.3).
@@ -73,6 +74,9 @@ export interface FetchOptions {
   quietUnauthorized?: boolean;
   // headers are extra request headers (for example If-Match); they never replace the fixed ones.
   headers?: Record<string, string>;
+  // publicRoute marks a route the server answers without resolving the session (rbac.Public). It
+  // neither carries nor consumes the activity mark, which would slide nothing there (AUD-01).
+  publicRoute?: boolean;
 }
 
 function parseRetryAfter(value: string | null): number | null {
@@ -94,10 +98,17 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
   const headers: Record<string, string> = { ...opts.headers, Accept: 'application/json' };
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (method !== 'GET' && csrfToken) headers['X-CSRF-Token'] = csrfToken;
+  const url = new URL(path, window.location.origin);
+  // AUD-01 (activity.ts): the first request after a person's input carries the activity mark, and
+  // so does every state-changing request. Polls without input since the last mark do not, so they
+  // never keep a session alive. Only Alice's own origin ever sees the header.
+  const marks = url.origin === window.location.origin && !opts.publicRoute;
+  const tookMark = marks && takeActivity();
+  if (marks && (tookMark || method !== 'GET')) headers[ACTIVITY_HEADER] = '1';
 
   let res: Response;
   try {
-    res = await fetch(new URL(path, window.location.origin), {
+    res = await fetch(url, {
       method,
       headers,
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
@@ -105,10 +116,14 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
       signal: opts.signal,
     });
   } catch (e) {
+    // The request may never have reached Alice: the next one carries the mark instead.
+    if (tookMark) returnActivity();
     // An aborted request stays an AbortError: the caller cancelled it, nothing failed.
     if (e instanceof Error && e.name === 'AbortError') throw e;
     throw new NetworkError('network failure', { cause: e });
   }
+  // A rate-limited or failed answer may not have recorded the activity either.
+  if (tookMark && (res.status === 429 || res.status >= 500)) returnActivity();
   if (res.status === 204) return undefined as T;
   let text: string;
   try {

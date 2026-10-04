@@ -53,7 +53,9 @@ import type {
 const v1 = '/api/v1';
 
 // Setup wizard
-export const getSetupStatus = () => apiFetch<SetupStatus>(`${v1}/setup/status`);
+// Public route: it never carries the activity mark (AUD-01), so the session probe that runs beside
+// it on a page load gets the page load's mark.
+export const getSetupStatus = () => apiFetch<SetupStatus>(`${v1}/setup/status`, { publicRoute: true });
 
 export async function startSetupSession(code: string): Promise<SetupSessionResponse> {
   const res = await apiFetch<SetupSessionResponse>(`${v1}/setup/session`, { method: 'POST', body: { code } });

@@ -5,6 +5,7 @@ import { sessionFor, sessionHandlers, statusWith } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
+import { noteInput, resetActivity } from '../api/activity';
 import { bannerValues } from './LicenseBanners';
 
 const evaluation: LicenseBanner = {
@@ -83,6 +84,37 @@ describe('license banners', () => {
     await renderRoute('/');
     await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
     expect(screen.queryByTestId(/license-banner-/)).not.toBeInTheDocument();
+  });
+});
+
+// AUD-01, Decision 2: no heartbeat request exists. A screen that sends nothing while a person types
+// or scrolls relies on this poll to carry the activity mark within a minute; if the poll is ever
+// removed or made conditional, this test must fail.
+describe('license status poll carries activity (AUD-01)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('marks the next status read after input, and only that one', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const marks: (string | null)[] = [];
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.get('/api/v1/license/status', ({ request }) => {
+        marks.push(request.headers.get('X-Alice-Activity'));
+        return HttpResponse.json(statusWith());
+      }),
+    );
+    await renderRoute('/');
+    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
+    await vi.waitFor(() => expect(marks.length).toBeGreaterThan(0));
+    resetActivity(false);
+    const before = marks.length;
+    noteInput({ isTrusted: true, type: 'keydown' } as unknown as Event);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(marks.length).toBe(before + 1));
+    expect(marks[before]).toBe('1');
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(marks.length).toBe(before + 2));
+    expect(marks[before + 1]).toBeNull();
   });
 });
 
