@@ -1366,3 +1366,71 @@ func TestEmulatorFidelityFence(t *testing.T) {
 		})
 	}
 }
+
+// AUD-03, AUD-22: authkeys-list on both, for the same accounts and files: users, cleaned homes,
+// paths, hashes, inline content, accounts, accounts_complete, unlisted, truncated and warnings are
+// equal. The helper side keeps the base fixture's root, daemon, alice-svc, deploy and nobody (the
+// emulator's own world) and adds the same entries as the emulator, with files only in homes of
+// the test's uid (run as a normal user, root's and alice-svc's files would be listed
+// unsupported). The emulator diverges on purpose in one respect: it has no shells, so it reports
+// a bad home for every user it has, where the helper reports one only for an account its rule
+// would scan; every entry here is such an account (a login shell, uid >= 1000). Users are
+// compared by name, not in uid order: the emulator's deploy has uid 1001 whatever the test's uid.
+func TestEmulatorFidelityAuthKeysList(t *testing.T) {
+	skipOddUID(t)
+	f := newFixture(t)
+	e := linuxsshtest.NewEmulator()
+	e.SetSSHD(globalSSHD)
+	var passwd strings.Builder
+	for _, l := range strings.Split(f.read("/etc/passwd"), "\n") {
+		for _, keep := range []string{"root:", "daemon:", "alice-svc:", "deploy:", "nobody:"} {
+			if strings.HasPrefix(l, keep) {
+				passwd.WriteString(l + "\n")
+			}
+		}
+	}
+	for _, a := range []struct {
+		name string
+		uid  int
+		home string
+	}{
+		{"john.doe", f.uid, "/home/john.doe"}, {"Deploy2", f.uid, "/home/Deploy2"}, {"svc$", f.uid, "/home/svc"},
+		{"trail", f.uid, "/home/trail/"}, {"bad name", 1009, "/home/bad"}, {"dotdot", 1010, "/home/x/../dotdot"},
+	} {
+		fmt.Fprintf(&passwd, "%s:x:%d:%d::%s:/bin/bash\n", a.name, a.uid, a.uid, a.home)
+		e.AddUser(a.name, a.uid, a.home)
+	}
+	f.write("/etc/passwd", passwd.String(), 0o644)
+	for _, h := range []string{"/home/deploy", "/home/john.doe", "/home/Deploy2", "/home/svc", "/home/trail"} {
+		f.mkdir(h+"/.ssh", 0o700)
+		content := "ssh-ed25519 AAAA " + h + "\n"
+		f.write(h+"/.ssh/authorized_keys", content, 0o600)
+		e.SetFile(h+"/.ssh/authorized_keys", []byte(content))
+	}
+	code, helper := f.run("authkeys-list")
+	require.Equal(t, 0, code, "%v", helper)
+	r := e.Handler()("sudo -n "+helperproto.HelperPath+" authkeys-list", nil)
+	require.Zero(t, r.Exit)
+	var emu map[string]any
+	require.NoError(t, json.Unmarshal(r.Stdout, &emu))
+
+	shape := func(m map[string]any) map[string]any {
+		users := map[string]any{}
+		for _, u := range asList(m["users"]) {
+			var files []any
+			for _, fi := range asList(u["files"]) {
+				files = append(files, map[string]any{"path": fi["path"], "exists": fi["exists"], "sha256": fi["sha256"],
+					"inline": fi["inline"], "content_b64": fi["content_b64"]})
+			}
+			users[u["user"].(string)] = map[string]any{"home": u["home"], "files": files}
+		}
+		return map[string]any{"users": users, "accounts": m["accounts"], "accounts_complete": m["accounts_complete"],
+			"unlisted": m["unlisted"], "truncated": m["truncated"], "warnings": m["warnings"]}
+	}
+	want := shape(helper)
+	assert.Equal(t, want, shape(emu))
+	// The scenario is what it claims: every new kind of entry is there.
+	assert.Len(t, want["users"], 7, "root, alice-svc, deploy, john.doe, Deploy2, svc$, trail")
+	assert.Equal(t, []any{map[string]any{"uid": 1009.0, "reason": "name"}, map[string]any{"uid": 1010.0, "reason": "home"}}, want["unlisted"])
+	assert.Equal(t, "/home/trail", want["users"].(map[string]any)["trail"].(map[string]any)["home"])
+}

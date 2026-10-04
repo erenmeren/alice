@@ -163,8 +163,11 @@ func (e *Emulator) SetHelperMissing(missing bool) {
 	e.missing = missing
 }
 
-// AddUser adds an account with a home directory. Like the helper, users with a name or home the
-// helper vocabulary refuses are never listed.
+// AddUser adds an account with a home directory. Like the helper (protocol 6, AUD-03), a user
+// whose name is not a helperproto.ValidAccount is reported in unlisted (reason name), a user whose
+// home helperproto.CleanHome refuses is reported there too (reason home), and the others are
+// listed with the cleaned home. The emulator has no shells: every user counts as one the helper
+// would scan (the helper reports a bad home only for those).
 func (e *Emulator) AddUser(name string, uid int, home string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -208,7 +211,9 @@ func (e *Emulator) FailWrite(path string) {
 	e.failWrite[path] = true
 }
 
-// FailRead makes authkeys-read of path fail with IO_ERROR.
+// FailRead makes authkeys-read of path fail with IO_ERROR. The file is then also listed without
+// its content (not inline): it stands for a file the helper could hash but not return, so a
+// discovery reads it with authkeys-read (and reports file_unreadable).
 func (e *Emulator) FailRead(path string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -413,6 +418,7 @@ type emuScan struct {
 	users    []emuUserScan
 	command  string
 	warnings []string
+	unlisted []helperproto.UnlistedAccount // AUD-03: the users the helper could not list
 }
 
 type emuUserScan struct {
@@ -448,11 +454,30 @@ func (e *Emulator) scanLocked() emuScan {
 		s.warn(helperproto.WarnSSHDUnreadable)
 	}
 	s.command = global.AuthorizedKeysCommand
-	users := make([]emuUser, 0, len(e.users))
-	for _, u := range e.users {
-		if helperproto.ValidUser(u.name) && helperproto.ValidPath(u.home) {
-			users = append(users, u)
+	s.unlisted = []helperproto.UnlistedAccount{}
+	report := func(uid int, reason string) {
+		if len(s.unlisted) < helperproto.MaxUnlistedAccounts {
+			s.unlisted = append(s.unlisted, helperproto.UnlistedAccount{UID: uid, Reason: reason})
 		}
+	}
+	users := make([]emuUser, 0, len(e.users))
+	seen := map[string]bool{}
+	for _, u := range e.users {
+		if seen[u.name] {
+			continue // the first entry of a name is the account (getpwnam)
+		}
+		seen[u.name] = true
+		if !helperproto.ValidAccount(u.name) {
+			report(u.uid, helperproto.UnlistedName)
+			continue
+		}
+		home, ok := helperproto.CleanHome(u.home)
+		if !ok {
+			report(u.uid, helperproto.UnlistedHome)
+			continue
+		}
+		u.home = home
+		users = append(users, u)
 	}
 	sort.SliceStable(users, func(i, j int) bool {
 		if users[i].uid != users[j].uid {
@@ -498,20 +523,24 @@ func (e *Emulator) scanLocked() emuScan {
 func (e *Emulator) listLocked() helperproto.AuthKeysListResponse {
 	s := e.scanLocked()
 	resp := helperproto.AuthKeysListResponse{OK: true, Users: []helperproto.UserFiles{}, AuthorizedKeysCommand: s.command, Warnings: s.warnings,
-		Accounts: []string{}}
+		Accounts: []string{}, Unlisted: append([]helperproto.UnlistedAccount{}, s.unlisted...)}
 	if e.accounts != nil {
 		resp.Accounts, resp.AccountsComplete = append(resp.Accounts, e.accounts.names...), e.accounts.complete
 	} else {
 		names := []string{"daemon", "nobody"}
 		for _, u := range e.users {
-			names = append(names, u.name)
+			if helperproto.ValidAccount(u.name) {
+				names = append(names, u.name)
+			}
 		}
 		slices.Sort(names)
-		// Like the helper: not complete when it listed fewer accounts than exist or skipped directory users.
+		// Like the helper: not complete when it listed fewer accounts than exist, skipped directory
+		// users, or could not list an entry (AUD-03).
 		resp.Accounts = slices.Compact(names)
 		resp.AccountsComplete = !slices.Contains(s.warnings, helperproto.WarnTooManyUsers) &&
-			!slices.Contains(s.warnings, helperproto.WarnDirectoryUsers)
+			!slices.Contains(s.warnings, helperproto.WarnDirectoryUsers) && len(s.unlisted) == 0
 	}
+	inline := helperproto.MaxListInline // like the helper: content of the files it read, within the budget
 	for _, us := range s.users {
 		u := us.user
 		uf := helperproto.UserFiles{User: u.name, UID: u.uid, Home: u.home, Files: []helperproto.FileInfo{},
@@ -529,6 +558,10 @@ func (e *Emulator) listLocked() helperproto.AuthKeysListResponse {
 				fi.TooLarge = len(c) > helperproto.MaxAuthorizedKeysSize
 				if !fi.TooLarge {
 					fi.SHA256 = sum(c) // the helper hashes only files it would read
+					if !e.failRead[path] && len(c) <= inline {
+						fi.Inline, fi.ContentB64 = true, base64.StdEncoding.EncodeToString(c)
+						inline -= len(c)
+					}
 				}
 				fi.StrictModesOK = !e.insecure[path]
 			}

@@ -85,6 +85,11 @@ func (s *session) checkListedFor(ctx context.Context, req providers.AuthKeyChang
 		return providers.NewError("ssh.helper_refused", false, nil,
 			map[string]string{"helper_code": helperproto.CodeInvalidArgument, "reason": helperproto.WarnTooManyUsers})
 	}
+	if list.Truncated {
+		// S8: the helper left users out to keep its answer within its bound.
+		return providers.NewError("ssh.helper_refused", false, nil,
+			map[string]string{"helper_code": helperproto.CodeInvalidArgument, "reason": providers.WarnListTruncated})
+	}
 	return refusedRequest("os_user")
 }
 
@@ -156,7 +161,8 @@ func (s *session) precheck(ctx context.Context, req providers.AuthKeyChange, rem
 	switch {
 	case req.OperationID == uuid.Nil:
 		return refusedRequest("operation_id")
-	case !helperproto.ValidUser(req.OSUser):
+	case !helperproto.ValidAccount(req.OSUser):
+		// OS account names as the helper lists them (AUD-03); the name is only compared, never sent.
 		return refusedRequest("os_user")
 	case !helperproto.ValidPath(req.FilePath):
 		return refusedRequest("file_path")

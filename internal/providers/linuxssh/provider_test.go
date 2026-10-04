@@ -445,7 +445,7 @@ func TestDiscoverFallsBackToDefaultsWhenSSHDFails(t *testing.T) {
 // D13: a file the helper refuses (hard link, foreign owner, leaving its directory) is reported with
 // its user and path and never read; an oversized file is reported and not read; a pattern whose
 // expansion the helper refuses only adds the helper's unnamed warning; a user with a home outside
-// the helper vocabulary is never listed.
+// the helper vocabulary is never listed (AUD-03: it is reported by uid instead).
 func TestDiscoverSkipsUnsupportedAndOversizedFiles(t *testing.T) {
 	e := newProvEnv(t)
 	e.emu.SetSSHD(strings.Replace(linuxsshtest.DefaultSSHD, "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2",
@@ -477,6 +477,7 @@ func TestDiscoverSkipsUnsupportedAndOversizedFiles(t *testing.T) {
 	assert.True(t, hasWarning(res.Warnings, "file_too_large", deployFile))
 	assert.Empty(t, res.SSHKeys)
 	assert.False(t, res.Partial, "skipped files are reported, not a failed scan")
+	assert.Contains(t, res.Warnings, providers.Warning{Code: helperproto.WarnAccountHomeUnsupported, Params: map[string]string{"uid": "1002"}})
 	assert.NotContains(t, res.ReadFiles, rootFile)
 	assert.NotContains(t, res.ReadFiles, deployFile)
 	for _, c := range e.srv.Commands() {
@@ -517,6 +518,7 @@ func TestDiscoverFailsWhenCancelledMidway(t *testing.T) {
 	for _, f := range []string{rootFile, deployFile, aliceFile} {
 		k, _ := keyLine(t, "ed25519", `from="10.0.0.0/8"`, "x@y")
 		e.emu.SetFile(f, []byte(k+"\n"))
+		e.emu.FailRead(f) // AUD-22: not inlined, so the discovery reads it (and is cancelled there)
 	}
 	s := e.open(t)
 	ctx, cancel := context.WithCancel(context.Background())

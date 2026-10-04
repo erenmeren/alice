@@ -213,7 +213,7 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 	// repaired (an invalid name dropped) or cut at the bound.
 	res.AccountsComplete = list.AccountsComplete
 	for _, a := range list.Accounts {
-		if !helperproto.ValidUser(a) {
+		if !helperproto.ValidAccount(a) {
 			res.AccountsComplete = false
 			continue
 		}
@@ -230,6 +230,11 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 	if len(res.Accounts) > helperproto.MaxAccountNames {
 		res.Accounts, res.AccountsComplete = res.Accounts[:helperproto.MaxAccountNames], false
 	}
+	// AUD-03: what the helper could not list is shown, by uid only, and the list is not complete.
+	if len(list.Unlisted) > 0 {
+		res.AccountsComplete = false
+	}
+	res.Warnings = append(res.Warnings, unlistedWarnings(list.Unlisted)...)
 	for _, w := range list.Warnings {
 		// sshd_unreadable is derived below, globally from sshd-dump and per user from the list.
 		if warningCodeRE.MatchString(w) && w != helperproto.WarnSSHDUnreadable {
@@ -237,11 +242,27 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 		}
 	}
 	users, cut, stop := list.Users, false, false
+	if list.Truncated {
+		// S8: the helper left users out to keep its answer within its bound.
+		cut, res.AccountsComplete = true, false
+	}
 	if len(users) > maxDiscoverUsers {
 		users, cut, res.AccountsComplete = users[:maxDiscoverUsers], true, false
 	}
+	// S6: a listed name that is not an account name (only a broken or hostile helper lists one) is
+	// shown by uid only; its files are not read.
+	users = slices.DeleteFunc(slices.Clone(users), func(u helperproto.UserFiles) bool {
+		if helperproto.ValidAccount(u.User) {
+			return false
+		}
+		res.AccountsComplete = false
+		if u.UID >= 0 {
+			res.Warnings = append(res.Warnings, warn(helperproto.WarnAccountNameUnsupported, "uid", strconv.Itoa(u.UID)))
+		}
+		return true
+	})
 	for _, u := range users {
-		if u.UID == 0 && helperproto.ValidUser(u.User) {
+		if u.UID == 0 {
 			res.UID0Users = append(res.UID0Users, u.User)
 		}
 	}
@@ -283,10 +304,49 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 	return res, nil
 }
 
-// discoverFile adds one listed file to res.
+// unlistedWarnings turns the helper's unlisted entries into warnings (AUD-03): at most
+// helperproto.MaxUnlistedAccounts of them, each with its uid only; an unknown reason or a negative
+// uid (a broken or hostile helper) is dropped. The list is cut at the bound first, so a hostile
+// answer costs bounded work.
+func unlistedWarnings(unlisted []helperproto.UnlistedAccount) []providers.Warning {
+	if len(unlisted) > helperproto.MaxUnlistedAccounts {
+		unlisted = unlisted[:helperproto.MaxUnlistedAccounts]
+	}
+	var out []providers.Warning
+	for _, u := range unlisted {
+		code := ""
+		switch u.Reason {
+		case helperproto.UnlistedName:
+			code = helperproto.WarnAccountNameUnsupported
+		case helperproto.UnlistedHome:
+			code = helperproto.WarnAccountHomeUnsupported
+		}
+		if code == "" || u.UID < 0 {
+			continue
+		}
+		out = append(out, warn(code, "uid", strconv.Itoa(u.UID)))
+	}
+	return out
+}
+
+// inlineContent returns a listed file's inline content (AUD-22): the helper read it for its hash,
+// so it must be exactly that and no larger than a file the helper reads; anything else fails the
+// discovery as a protocol error.
+func inlineContent(f helperproto.FileInfo) ([]byte, error) {
+	raw, err := base64.StdEncoding.DecodeString(f.ContentB64)
+	h := sha256.Sum256(raw)
+	if err != nil || len(raw) > helperproto.MaxAuthorizedKeysSize || hex.EncodeToString(h[:]) != f.SHA256 {
+		return nil, providers.NewError("ssh.protocol_error", false, errors.New("linuxssh: inline content does not match its hash"),
+			map[string]string{"subcommand": helperproto.SubAuthKeysList})
+	}
+	return raw, nil
+}
+
+// discoverFile adds one listed file to res. A file listed with its content (inline, protocol 6)
+// needs no authkeys-read; the others are read.
 func (s *session) discoverFile(ctx context.Context, u helperproto.UserFiles, f helperproto.FileInfo, res *providers.DiscoveryResult) error {
 	switch {
-	case f.Unsupported || !helperproto.ValidUser(u.User) || !helperproto.ValidPath(f.Path):
+	case f.Unsupported || !helperproto.ValidPath(f.Path):
 		res.Warnings = append(res.Warnings, warn(helperproto.WarnUnsupportedPath, "user", u.User, "path", f.Path))
 		return nil
 	case !f.Exists:
@@ -299,18 +359,28 @@ func (s *session) discoverFile(ctx context.Context, u helperproto.UserFiles, f h
 	if !f.StrictModesOK {
 		res.Warnings = append(res.Warnings, warn("strict_modes", "user", u.User, "path", f.Path))
 	}
-	content, _, exists, err := s.readFile(ctx, f.Path)
-	if err != nil {
-		if !s.fileUnreadable(ctx, err) {
+	var content []byte
+	if f.Inline {
+		c, err := inlineContent(f)
+		if err != nil {
 			return err
 		}
-		res.Partial = true
-		res.Warnings = append(res.Warnings, warn("file_unreadable", "user", u.User, "path", f.Path))
-		return nil
-	}
-	if !exists {
-		res.ReadFiles = append(res.ReadFiles, f.Path) // removed since it was listed
-		return nil
+		content = c
+	} else {
+		c, _, exists, err := s.readFile(ctx, f.Path)
+		if err != nil {
+			if !s.fileUnreadable(ctx, err) {
+				return err
+			}
+			res.Partial = true
+			res.Warnings = append(res.Warnings, warn("file_unreadable", "user", u.User, "path", f.Path))
+			return nil
+		}
+		if !exists {
+			res.ReadFiles = append(res.ReadFiles, f.Path) // removed since it was listed
+			return nil
+		}
+		content = c
 	}
 	ak, err := ParseAuthorizedKeys(content)
 	if err != nil {
