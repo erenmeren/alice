@@ -126,6 +126,7 @@ async function prepareAndAddInUI(page: Page, request: APIRequestContext, t: Tran
   await expect(page.getByRole('button', { name: t('targets.prepare.copy') })).toBeVisible();
   targetExec(['/usr/local/sbin/alice-e2e-prepare'], script);
   expectNginxSudoers(script);
+  expectHelperProtocol();
 
   await page.getByRole('button', { name: t('targets.add') }).click();
   const dialog = page.getByRole('dialog', { name: t('targets.add') });
@@ -158,6 +159,7 @@ async function prepareAndAddByApi(api: Api, request: APIRequestContext): Promise
   const key = await json<{ profiles: { nginx: { script: string } } }>(await api.get('/api/v1/ssh-keys/platform-key'));
   targetExec(['/usr/local/sbin/alice-e2e-prepare'], key.profiles.nginx.script);
   expectNginxSudoers(key.profiles.nginx.script);
+  expectHelperProtocol();
   const created = await json<{ target: Target }>(
     await api.post('/api/v1/targets', { type: 'nginx', name: SERVER, host: 'sshtarget', port: 22, username: 'alice-svc' }),
     201,
@@ -176,6 +178,37 @@ async function prepareAndAddByApi(api: Api, request: APIRequestContext): Promise
     expect(locs.items.flatMap((l) => l.servers.flatMap((s) => s.names))).toEqual(expect.arrayContaining([WWW, FILES, ...SITES]));
   });
   return id;
+}
+
+// An Administrator with an email address: deployment emails go only to Administrators who have one.
+const MAILED_ADMIN: Account & { email: string } = { ...ADMIN, email: 'ada@example.com' };
+
+// DEPLOYMENT_SUBJECTS are the subjects of every deployment email template, in both languages.
+const DEPLOYMENT_SUBJECTS = ['failed', 'rollback_failed', 'outcome_unknown', 'restored_unverified', 'superseded', 'needs_attention', 'pending_change_restored', 'needs_attention_unconfirmed'].flatMap(
+  (k) => (['en', 'tr'] as Lang[]).map((l) => translator(l)(`email.deployment.${k}.subject`, { target_name: SERVER })),
+);
+
+// deploymentMails are the deployment emails the e2e build has sent (GET /test/mail).
+async function deploymentMails(request: APIRequestContext): Promise<{ to: string; subject: string }[]> {
+  const res = await request.get('/test/mail');
+  expect(res.ok()).toBe(true);
+  return ((await res.json()) as { messages: { to: string; subject: string }[] }).messages
+    .filter((m) => DEPLOYMENT_SUBJECTS.includes(m.subject))
+    .map((m) => ({ to: m.to, subject: m.subject }));
+}
+
+// servedChainLength is how many certificates Nginx sends for name (openssl s_client -showcerts on
+// the target): the leaf alone is 1, leaf and CA 2.
+function servedChainLength(name: string): number {
+  return Number(
+    targetExec(['sh', '-c', 'openssl s_client -connect 127.0.0.1:443 -servername "$1" -showcerts </dev/null 2>/dev/null | grep -c "BEGIN CERTIFICATE" || true', 'sh', name]).trim(),
+  );
+}
+
+// expectHelperProtocol: the helper installed on the target speaks the protocol Alice requires (5).
+function expectHelperProtocol(): void {
+  const v = JSON.parse(targetExec(['/usr/local/libexec/alice-helper', 'version'])) as { helper: string; protocol: number };
+  expect(v.protocol, `alice-helper ${v.helper} on the target`).toBe(5);
 }
 
 // leafOf is the first certificate of a PEM chain (the website's own certificate, without the CA).
@@ -316,6 +349,10 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(files).toContainText(t('locations.unsupported.variable'));
       await expect(page.getByRole('button', { name: t('locations.deployNamed', { site: FILES }) })).toHaveCount(0);
       await expect(page.getByRole('button', { name: t('locations.deployNamed', { site: WWW }) })).toBeEnabled();
+      // The test target is far below Alice's discovery bounds: no chain left unresolved, no list cut.
+      for (const key of ['locations.warnings.chain_unresolved', 'locations.warnings.list_truncated', 'warnings.list_truncated', 'locations.truncated']) {
+        await expect(page.getByText(t(key)), key).toHaveCount(0);
+      }
       await expectWide(page, 'Nginx server with its websites');
       const original = served(WWW);
 
@@ -519,6 +556,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       for (const s of SITES) {
         expect(served(s), s).toBe(fingerprintHex(pair.cert));
         expect(certificatesInFile(`/etc/nginx/ssl/${s.split('.')[0]}.crt`), `${s}: the leaf alone`).toBe(1);
+        expect(servedChainLength(s), `${s}: Nginx sends the leaf alone before the batch`).toBe(1);
       }
 
       // The same certificate uploaded again with its full chain: Alice completes the stored chain (200).
@@ -586,6 +624,8 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       for (const s of SITES) {
         expect(served(s), s).toBe(fingerprintHex(pair.cert));
         expect(certificatesInFile(`/etc/nginx/ssl/${s.split('.')[0]}.crt`), `${s}: leaf and CA written by the batch`).toBe(2);
+        // The leaf is the same before and after: the chain Nginx sends proves it reloaded the new file.
+        expect(servedChainLength(s), `${s}: Nginx sends leaf and CA after the batch (reloaded)`).toBe(2);
       }
     });
 
@@ -748,13 +788,29 @@ for (const lang of ['en', 'tr'] as Lang[]) {
 
     test('a deployment an administrator cancels while the license holds it ends cancelled and sends no failure email', async ({ page, request }) => {
       test.setTimeout(JOURNEY_TIMEOUT);
-      const { totpSecret } = await runWizard(page, request, lang);
+      // Deployment emails go to every Administrator WITH an email address.
+      const { totpSecret } = await runWizard(page, request, lang, MAILED_ADMIN);
       const api = await apiAs(page);
       await api.stepUp(totpSecret);
       const targetId = await prepareAndAddByApi(api, request);
+      await uploadByApi(api, newCert(WWW), 'control');
       await uploadByApi(api, newCert(WWW), 'cancel-me');
-      const before = served(WWW);
+
+      // Positive control: a deployment that fails and is restored sends the deployment-failed email,
+      // so the outbox path works before the absence of an email below counts.
       await page.goto(`/servers/${targetId}`);
+      const control = await openDeployFromWebsite(page, t, WWW, 'control');
+      await control.getByRole('button', { name: t('deploy.submit'), exact: true }).click();
+      reloadMode('fail-once');
+      await settle(request, control.getByText(PINNED[lang].rolledBack, { exact: true }));
+      await closeDeployDialog(control, t);
+      const failedSubject = t('email.deployment.failed.subject', { target_name: SERVER });
+      await drainUntil(request, async () => {
+        await runScheduled(request, 'notify.send');
+        expect(await deploymentMails(request)).toEqual([{ to: MAILED_ADMIN.email, subject: failedSubject }]);
+      });
+
+      const before = served(WWW);
       const dialog = await openDeployFromWebsite(page, t, WWW, 'cancel-me');
       await dialog.getByRole('button', { name: t('deploy.submit'), exact: true }).click();
       await expect(dialog.getByText(t('deploy.working'))).toBeVisible();
@@ -762,7 +818,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
 
       // The evaluation ends while the deployment waits: held, nothing sent.
       await advanceClock(request, 31 * DAY_SECONDS);
-      await signIn(page, request, ADMIN, totpSecret);
+      await signIn(page, request, MAILED_ADMIN, totpSecret);
       await drainJobs(request);
       // A new license unlocks Alice; the held job still waits for an Administrator (it never starts on its own).
       const issued = await request.post('/test/license', { data: {} });
@@ -782,9 +838,9 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await runScheduled(request, 'deployment.recovery_sweep');
       await drainJobs(request);
       await nav(page, t, 'nav.deployments');
-      const row = page.getByTestId('deployment-row');
-      await expect(row).toHaveCount(1);
-      await expect(row).toContainText(t('deployments.cancelled'));
+      const rows = page.getByTestId('deployment-row');
+      await expect(rows).toHaveCount(2);
+      await expect(rows.filter({ hasText: 'cancel-me' })).toContainText(t('deployments.cancelled'));
       await openDeployment(page, t, 'cancel-me');
       await expect(page.getByTestId('deployment-status')).toHaveText(t('deployments.cancelled'));
       await expect(page.getByText(t('deploy.noChange'))).toBeVisible();
@@ -794,13 +850,10 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expectAccessible(page, 'deployment page, cancelled by an administrator');
       expect(served(WWW), 'a cancelled deployment changed nothing').toBe(before);
 
-      // No deployment email of any kind went out (the outbox of the e2e build).
-      const res = await request.get('/test/mail');
-      expect(res.ok()).toBe(true);
-      const subjects = ((await res.json()) as { messages: { subject: string }[] }).messages.map((m) => m.subject);
-      const deploymentSubjects = ['failed', 'rollback_failed', 'outcome_unknown', 'restored_unverified', 'superseded', 'needs_attention', 'pending_change_restored', 'needs_attention_unconfirmed']
-        .flatMap((k) => (['en', 'tr'] as Lang[]).map((l) => translator(l)(`email.deployment.${k}.subject`, { target_name: SERVER })));
-      for (const subject of subjects) expect(deploymentSubjects, `email sent: ${subject}`).not.toContain(subject);
+      // The sender runs again: the control's email is still the only deployment email.
+      await runScheduled(request, 'notify.send');
+      await drainJobs(request);
+      expect(await deploymentMails(request), 'no email for the cancelled deployment').toEqual([{ to: MAILED_ADMIN.email, subject: failedSubject }]);
     });
   });
 }
