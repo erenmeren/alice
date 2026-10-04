@@ -48,6 +48,17 @@ var (
 	ErrNoKey          = errors.New("certs: no private key was given")
 	ErrTooLarge       = errors.New("certs: the input is larger than 256 KiB")
 	ErrCSRMismatch    = errors.New("certs: the certificate was not issued for this signing request's key")
+	// Key Vault (Phase 5).
+	ErrKVContentType = errors.New("certs: the vault secret is neither a PFX nor a PEM file")
+	ErrClientCertKey = errors.New("certs: the sign-in certificate needs an RSA key of 2048 bits or more")
+)
+
+// Content types of a vault secret that backs a certificate, and the largest secret value Alice
+// decodes (base64 PFX or PEM text; the bound also keeps the decoded PFX below MaxInputSize).
+const (
+	ContentTypePKCS12 = "application/x-pkcs12" // base64 PFX with an empty password
+	ContentTypePEM    = "application/x-pem-file"
+	MaxKVSecretSize   = 256 << 10
 )
 
 // Parsed describes a leaf certificate and the certificates after it.

@@ -257,8 +257,9 @@ fuzz-nginx: ## Fuzz the nginx -T parser for 60 s (spec §25.6)
 	go test -count=1 -run '^$$' -fuzz FuzzParseNginxConfig -fuzztime 60s ./internal/providers/nginx/nginxconf/
 
 .PHONY: fuzz-certs
-fuzz-certs: ## Fuzz the certificate upload parser for 60 s (spec §25.6)
+fuzz-certs: ## Fuzz the certificate upload and Key Vault secret parsers for 60 s each (spec §25.6)
 	go test -count=1 -run '^$$' -fuzz FuzzParseCertificateUpload -fuzztime 60s ./internal/certs/
+	go test -count=1 -run '^$$' -fuzz FuzzParseKVSecret -fuzztime 60s ./internal/certs/
 
 .PHONY: release-keycheck
 release-keycheck: ## Release gate: fails until the vendor's production license key is committed (R36)
