@@ -205,9 +205,16 @@ func (h *handlers) discover(ctx context.Context, j jobs.Job, _ jobs.StepRecorder
 		h.recordFailure(ctx, j.TargetID, err)
 		return nil, jobs.FromProvider(err)
 	}
-	sum, err := h.d.Inventory.Reconcile(ctx, j.TargetID, res)
+	// The scan is stored only while this run still holds the job (inventory.Claim): a run that
+	// stalled past its lease must not write an old scan over a newer one (a false changed-outside
+	// after a deployment, for example).
+	sum, err := h.d.Inventory.Reconcile(inventory.WithClaim(ctx, inventory.Claim{JobID: j.ID, Attempt: j.Attempt}), j.TargetID, res)
 	if errors.Is(err, inventory.ErrNotFound) {
 		return nil, jobs.Fail("system.not_found", nil, err) // deleted while it was scanned
+	}
+	if errors.Is(err, inventory.ErrClaimLost) {
+		// Another run (or the reaper) owns the job now; the runner drops this answer.
+		return nil, jobs.Retry("job.lease_expired", nil, err)
 	}
 	if err != nil {
 		return nil, jobs.Retry("internal.unexpected", nil, err)

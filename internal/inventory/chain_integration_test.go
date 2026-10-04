@@ -167,3 +167,31 @@ func TestDiscoveryParsesFilesCheaplyAndOutsideTheTransaction(t *testing.T) {
 	assert.Nil(t, l.Certificate)
 	assert.Zero(t, h.count("SELECT count(*) FROM certificates"))
 }
+
+// B1 M1: a discovery run stores its scan only while it holds its job: a run that stalled past its
+// lease (the job taken back and claimed again) writes nothing, so an old scan never lands after a
+// newer one or after a deployment finished.
+func TestReconcileIsFencedToTheDiscoveryJobsClaim(t *testing.T) {
+	h := newHarness(t)
+	h.jobs.next = jobs.NewQueue(jobs.QueueConfig{Pool: h.db.App, Keyring: h.keyring, Audit: h.audit, Clock: h.clock, Gate: h.lic})
+	admin := h.user("ada", rbac.Admin, "")
+	web := nginxTarget(t, h, admin, "web-01")
+	job, err := h.svc.RequestDiscovery(h.ctx, admin, web.ID)
+	require.NoError(t, err)
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE jobs SET status = 'running', attempts = 2 WHERE id = $1", job)
+	require.NoError(t, err)
+	leaf := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now()).Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
+	res := providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+		dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), leaf)}}
+
+	stale := inventory.WithClaim(h.ctx, inventory.Claim{JobID: job, Attempt: 1})
+	_, err = h.svc.Reconcile(stale, web.ID, res)
+	require.ErrorIs(t, err, inventory.ErrClaimLost)
+	assert.Zero(t, h.count("SELECT count(*) FROM certificate_locations"), "the stale run wrote nothing")
+	assert.Zero(t, h.audits("target.discovered"))
+
+	live := inventory.WithClaim(h.ctx, inventory.Claim{JobID: job, Attempt: 2})
+	_, err = h.svc.Reconcile(live, web.ID, res)
+	require.NoError(t, err)
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM certificate_locations"))
+}

@@ -116,7 +116,8 @@ func clean(s string) string {
 // checking target is "ok" again. With a complete account list, the keys of users that are no
 // longer accounts are marked missing as well. A result with Nginx facts also carries the
 // certificate half (reconcileLocations), stored in the same transaction; a certificates-only
-// result (sshHalfRead) leaves the stored SSH facts as they are.
+// result (sshHalfRead) leaves the stored SSH facts as they are. With a Claim on ctx (the discovery
+// job's run) nothing is written once that run no longer holds its job: ErrClaimLost.
 func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.DiscoveryResult) (ReconcileSummary, error) {
 	var sum ReconcileSummary
 	now := s.clock.Now().UTC()
@@ -127,6 +128,11 @@ func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.Dis
 		scan = s.prepareScan(res.Certificates, now)
 	}
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// A discovery job's run writes only while it holds its job (Claim): a run that stalled past
+		// its lease must not store an old scan after a newer one, or after a deployment finished.
+		if err := checkClaim(ctx, tx); err != nil {
+			return err
+		}
 		t, err := getTarget(ctx, tx, id, true)
 		if err != nil {
 			return err

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ type stubInventory struct {
 	failures     []string
 	reconcileErr error
 	reconciled   []providers.DiscoveryResult
+	claims       []inventory.Claim // the claim on each Reconcile's context
 	discoveryErr error
 	location     inventory.KeyLocation
 	locationErr  error
@@ -69,8 +71,10 @@ func (s *stubInventory) RecordConnectionFailure(_ context.Context, _ uuid.UUID, 
 	s.failures = append(s.failures, reason)
 	return s.failErr
 }
-func (s *stubInventory) Reconcile(_ context.Context, _ uuid.UUID, res providers.DiscoveryResult) (inventory.ReconcileSummary, error) {
+func (s *stubInventory) Reconcile(ctx context.Context, _ uuid.UUID, res providers.DiscoveryResult) (inventory.ReconcileSummary, error) {
 	s.reconciled = append(s.reconciled, res)
+	c, _ := inventory.ClaimFrom(ctx)
+	s.claims = append(s.claims, c)
 	sum := inventory.ReconcileSummary{Keys: 1}
 	if res.Nginx != nil {
 		sum.Certificates, sum.Locations, sum.NewLocations = 2, 3, 1
@@ -293,6 +297,23 @@ func TestDiscoverBranches(t *testing.T) {
 	out, err := u.h.discover(context.Background(), testJob, nil)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"key_count": 1, "new_count": 0, "missing_count": 0, "partial": true}, out)
+}
+
+// B1 M1: the scan is stored under the discovery job's claim, and a run that lost its job stops as
+// a stale run without anything written.
+func TestDiscoverStoresTheScanUnderTheJobsClaim(t *testing.T) {
+	u := newUnit(t, true, false)
+	j := jobs.Job{ID: uuid.New(), Type: jobs.TargetDiscover, TargetID: uuid.New(), Attempt: 3}
+	_, err := u.h.discover(context.Background(), j, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []inventory.Claim{{JobID: j.ID, Attempt: 3}}, u.inv.claims)
+
+	u = newUnit(t, true, false)
+	u.inv.reconcileErr = fmt.Errorf("wrapped: %w", inventory.ErrClaimLost)
+	_, err = u.h.discover(context.Background(), j, nil)
+	r, c := reason(t, err)
+	assert.Equal(t, "job.lease_expired", r)
+	assert.Equal(t, jobs.Retryable, c)
 }
 
 func removalJob(target uuid.UUID, loc inventory.KeyLocation) jobs.Job {
