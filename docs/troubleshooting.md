@@ -722,6 +722,26 @@ cannot check the helper.)
 **What to do.** Install an official Alice release, or rebuild with `make build` or the image build. Servers that are
 already prepared keep working.
 
+## ALC-SSH-0012: Alice does not connect to this server's address
+
+**Meaning.** When Alice connected, the server's name resolved to an address Alice never connects to, so Alice opened
+no connection (nothing was sent). These are the addresses that are refused when a server is added by address: link-local
+addresses, including the cloud metadata address `169.254.169.254` and its IPv6 forms, multicast addresses, unspecified
+addresses (`0.0.0.0`, `::`, which reach services of Alice's own host) and `255.255.255.255`. Loopback and private
+addresses are allowed. Alice checks every address the name resolves to, at every connection (SSH and its own TLS
+check of a website), on the address it actually connects to; a refused address is never connected, another address of
+the same name may be. The server's status becomes **Cannot be reached** with this reason (a server still waiting for its
+fingerprint confirmation keeps that status); the job is not retried, and the next scheduled test or a **Test
+connection** tries again.
+
+**Likely cause.** The server's DNS record changed (by mistake, or a wildcard DNS name such as `*.nip.io` that encodes an
+address), or someone is trying to make Alice reach a service of its own host or the cloud metadata service through a
+name that resolves differently over time (DNS rebinding).
+
+**What to do.** Check the server's DNS record (`dig +short <name>` from Alice's host). If the name is wrong, edit the
+server and enter its real address or a name that resolves to it, then **Test connection**. If you did not change the
+record, treat it as a possible attack on Alice's network position.
+
 ## ALC-KEY-0001: Alice's own key is protected
 
 **Meaning.** Alice refuses to remove its own connection key (HTTP 409), in any file and whatever its comment says. The

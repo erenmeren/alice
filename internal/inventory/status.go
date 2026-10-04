@@ -156,7 +156,9 @@ func statusFor(reason, current string, pinned bool) string {
 	switch reason {
 	case "ssh.auth_failed":
 		return StatusAuthFailed
-	case "ssh.unreachable", "ssh.timeout":
+	case "ssh.unreachable", "ssh.timeout", "ssh.address_not_allowed":
+		// ssh.address_not_allowed (AUD-25 a): the name now resolves to an address Alice refuses to
+		// connect to; the server cannot be reached by Alice, and its last error says why.
 		if current == StatusPendingHostKey && !pinned {
 			return current // the recorded candidate stays confirmable (ConfirmHostKey needs pending_host_key)
 		}

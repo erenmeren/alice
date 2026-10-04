@@ -419,6 +419,17 @@ func TestRemoveKeyBookkeeping(t *testing.T) {
 		Fingerprint: "SHA256:dep", ProtectedFingerprints: []string{"SHA256:own", "SHA256:old"}, AllowLastRootKey: true}, change)
 }
 
+// AUD-25 (a), ruling S4: a refused address is a connection reason: the target shows it.
+func TestRemoveKeyRecordsARefusedAddressOnTheTarget(t *testing.T) {
+	u, j := removalUnit(t)
+	u.prov.Configure(func(c *fake.Config) { c.RemoveErr = providers.NewError("ssh.address_not_allowed", false, nil, nil) })
+	_, err := u.h.removeKey(context.Background(), j, nil)
+	r, c := reason(t, err)
+	assert.Equal(t, "ssh.address_not_allowed", r)
+	assert.Equal(t, jobs.Permanent, c)
+	assert.Equal(t, []string{"ssh.address_not_allowed"}, u.inv.failures)
+}
+
 // A retryable failure before the write is retried; an unexpected error is too.
 func TestRemoveKeyFailureClasses(t *testing.T) {
 	ctx := context.Background()

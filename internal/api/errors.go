@@ -97,6 +97,9 @@ var (
 	ErrOutputTooLarge       = ErrorCode{Code: "ALC-SSH-0009", Reason: "ssh.output_too_large", Status: http.StatusBadGateway}
 	ErrSSHProtocol          = ErrorCode{Code: "ALC-SSH-0010", Reason: "ssh.protocol_error", Status: http.StatusBadGateway}
 	ErrHelperChecksums      = ErrorCode{Code: "ALC-SSH-0011", Reason: "ssh.helper_checksums_missing", Status: http.StatusInternalServerError}
+	// ErrSSHAddressNotAllowed: the server's name resolved, when Alice connected, to an address the
+	// target rule refuses (AUD-25 a); not retryable.
+	ErrSSHAddressNotAllowed = ErrorCode{Code: "ALC-SSH-0012", Reason: "ssh.address_not_allowed", Status: http.StatusBadGateway}
 
 	ErrOwnKeyProtected = ErrorCode{Code: "ALC-KEY-0001", Reason: "sshkey.own_key_protected", Status: http.StatusConflict}
 	ErrLastRootKey     = ErrorCode{Code: "ALC-KEY-0002", Reason: "sshkey.last_root_key", Status: http.StatusConflict}
@@ -197,7 +200,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrLicenseUnsupportedFormat, ErrLicenseOlderThanInstalled, ErrLicenseTargetLimit, ErrLicenseUnverified,
 		ErrTargetDuplicate, ErrHostKeyUnconfirmed, ErrHostKeyStale, ErrHostKeyChanged, ErrHostKeyState, ErrTargetDisabled,
 		ErrSSHUnreachable, ErrSSHAuthFailed, ErrSSHTimeout, ErrHelperMissing, ErrHelperOutdated, ErrHelperRefused,
-		ErrFileChanged, ErrKeysManagedElsewhere, ErrOutputTooLarge, ErrSSHProtocol, ErrHelperChecksums,
+		ErrFileChanged, ErrKeysManagedElsewhere, ErrOutputTooLarge, ErrSSHProtocol, ErrHelperChecksums, ErrSSHAddressNotAllowed,
 		ErrOwnKeyProtected, ErrLastRootKey, ErrKeyNotRemovable, ErrSSHDUnreadable, ErrKeyVerifyFailed,
 		ErrJobNotWaiting, ErrJobLeaseExpired, ErrJobTampered, ErrJobUnknownType, ErrJobConflict,
 		ErrNginxNotFound, ErrNginxConfigInvalid, ErrNginxConfigChanged, ErrNginxProfileMissing, ErrNginxNoSpace,

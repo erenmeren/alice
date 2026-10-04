@@ -86,12 +86,14 @@ func (m *memHostKeys) Observed(context.Context, uuid.UUID, providers.HostKey, bo
 
 // emuProber stands for Alice's own TLS probe: it answers from what the emulated Nginx serves.
 // remoteDown makes it unable to connect (ErrProbeUnreachable), remoteFails makes every handshake
-// fail (ErrProbeFailed, e.g. a firewall that resets); calls records "port sni keyType" per probe.
+// fail (ErrProbeFailed, e.g. a firewall that resets), notAllowed makes the target's name resolve to
+// an address Alice never connects to (ErrProbeNotAllowed); calls records "port sni keyType" per probe.
 type emuProber struct {
 	emu         *linuxsshtest.Emulator
 	mu          sync.Mutex
 	remoteDown  bool
 	remoteFails bool
+	notAllowed  bool
 	calls       []string
 }
 
@@ -100,6 +102,8 @@ func (p *emuProber) Probe(_ context.Context, host string, port int, sni, keyType
 	defer p.mu.Unlock()
 	p.calls = append(p.calls, fmt.Sprintf("%s %d %s %s", host, port, sni, keyType))
 	switch {
+	case p.notAllowed:
+		return Probe{}, ErrProbeNotAllowed
 	case p.remoteDown:
 		return Probe{}, ErrProbeUnreachable
 	case p.remoteFails:

@@ -1679,7 +1679,7 @@ components:
       properties:
         name: { type: string, minLength: 1, maxLength: 100 }
         type: { type: string, enum: [linux, nginx], default: linux, description: Fixed at creation }
-        host: { type: string, maxLength: 253, description: Host name or IP address; no scheme and no port }
+        host: { type: string, maxLength: 253, description: "Host name or IP address; no scheme and no port. A link-local, multicast, unspecified or broadcast address is refused (validation.host_not_allowed). A host name is checked again on the address it resolves to at every connection Alice opens; a refused address fails the connection with ALC-SSH-0012 (ssh.address_not_allowed), shown as the server's last_error." }
         port: { type: integer, minimum: 0, maximum: 65535, description: 0 or absent means 22 }
         username: { type: string, maxLength: 32, description: Absent means alice-svc }
     TargetPatch:

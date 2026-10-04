@@ -22,6 +22,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"alice/internal/platform/clock"
+	"alice/internal/platform/netaddr"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh/helperproto"
@@ -153,13 +154,18 @@ func toInt(v any) (int, bool) {
 	}
 }
 
-// Dialer opens SSH connections that trust only the pinned host key of a target (SEC-080).
+// Dialer opens SSH connections that trust only the pinned host key of a target (SEC-080). Every
+// TCP connection it opens goes through netaddr.DialContext: the address a host name resolves to is
+// checked against the target address rule on the socket that connects (AUD-25 a). There is no way
+// to dial around that check.
 type Dialer struct {
 	Clock            clock.Clock
 	HostKeys         providers.HostKeyStore
 	DialTimeout      time.Duration
 	HandshakeTimeout time.Duration
-	NetDial          func(ctx context.Context, network, addr string) (net.Conn, error) // nil = net.Dialer
+	// resolver resolves host names (nil = the system's). Tests set it to make a name resolve to a
+	// chosen address; the check applies to whatever it returns.
+	resolver *net.Resolver
 }
 
 func (d *Dialer) clk() clock.Clock {
@@ -359,7 +365,7 @@ func (d *Dialer) Dial(ctx context.Context, target uuid.UUID, cfg Config, cred pr
 	attempted, credErr := auth.done()
 	called, refused, presented := dec.snapshot()
 	if r.dialErr != nil {
-		return nil, providers.NewError("ssh.unreachable", true, r.dialErr, nil)
+		return nil, dialError(r.dialErr)
 	}
 	if r.err != nil {
 		switch {
@@ -448,7 +454,7 @@ func (d *Dialer) probeChanged(ctx context.Context, target uuid.UUID, cfg Config,
 	mu.Unlock()
 	switch {
 	case seen == nil && r.dialErr != nil:
-		return providers.NewError("ssh.unreachable", true, r.dialErr, nil)
+		return dialError(r.dialErr)
 	case seen == nil && r.timedOut:
 		return providers.NewError("ssh.timeout", true, cause, nil)
 	case seen == nil && (dropped(cause) || dropped(r.err)):
@@ -483,6 +489,17 @@ func dropped(err error) bool {
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE)
 }
 
+// dialError classifies a failed TCP connection: an address the target rule refuses is
+// ssh.address_not_allowed (AUD-25 a), not retried (the job fails and the target shows the reason;
+// the next scheduled test or a person's test tries again, so a corrected DNS record heals it);
+// anything else is ssh.unreachable, retryable.
+func dialError(err error) error {
+	if errors.Is(err, netaddr.ErrNotAllowed) {
+		return providers.NewError("ssh.address_not_allowed", false, err, nil)
+	}
+	return providers.NewError("ssh.unreachable", true, err, nil)
+}
+
 type handshakeResult struct {
 	client   *ssh.Client
 	dialErr  error
@@ -490,16 +507,12 @@ type handshakeResult struct {
 	timedOut bool
 }
 
-// handshake dials addr and runs the SSH handshake within the handshake budget of the injected
-// clock; cancelling ctx aborts it.
+// handshake dials addr (every resolved address checked by netaddr) and runs the SSH handshake
+// within the handshake budget of the injected clock; cancelling ctx aborts it.
 func (d *Dialer) handshake(ctx context.Context, addr string, conf *ssh.ClientConfig) handshakeResult {
-	dial := d.NetDial
-	if dial == nil {
-		dial = (&net.Dialer{Timeout: d.dialTimeout()}).DialContext
-	}
 	dctx, cancelDial := context.WithTimeout(ctx, d.dialTimeout())
 	defer cancelDial()
-	nc, err := dial(dctx, "tcp", addr)
+	nc, err := netaddr.DialContext(dctx, &net.Dialer{Timeout: d.dialTimeout(), Resolver: d.resolver}, "tcp", addr)
 	if err != nil {
 		return handshakeResult{dialErr: err}
 	}

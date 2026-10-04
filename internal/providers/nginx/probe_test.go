@@ -5,12 +5,16 @@ import (
 	"crypto/tls"
 	"errors"
 	"net"
+	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/platform/netaddr"
+	"alice/internal/platform/netaddr/netaddrtest"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/testutil/pki"
 )
@@ -126,4 +130,38 @@ func TestTLSProberIsBounded(t *testing.T) {
 	assert.ErrorIs(t, err, ErrProbeUnreachable, "port 0")
 	_, err = TLSProber{}.Probe(context.Background(), "127.0.0.1", port, "", "dsa")
 	assert.True(t, errors.Is(err, ErrProbeFailed), "an unknown key type is refused before dialling")
+}
+
+// AUD-25 (a): Alice's own TLS probe checks the address it connects to with the target rule. A
+// refusal is its own error (ErrProbeNotAllowed), not ErrProbeUnreachable, and nothing reaches the
+// website: the test server on 127.0.0.1 would answer a connection to 0.0.0.0.
+func TestTLSProberRefusesAnAddressAliceNeverConnectsTo(t *testing.T) {
+	ca := pki.NewCA("Probe", pki.ECDSA256, unitNow)
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, unitNow)
+	port := tlsServer(t, leaf, tls.VersionTLS12)
+	var rebound atomic.Bool
+	p := TLSProber{resolver: netaddrtest.Resolver(func(name string) []netip.Addr {
+		switch {
+		case name != "www.example.test":
+			return nil
+		case rebound.Load():
+			return []netip.Addr{netip.MustParseAddr("0.0.0.0")}
+		}
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}
+	})}
+	got, err := p.Probe(context.Background(), "www.example.test", port, "www.example.test", helperproto.ProbeAny)
+	require.NoError(t, err)
+	assert.Equal(t, pki.Fingerprint(leaf.Cert), got.LeafSHA256)
+
+	rebound.Store(true)
+	_, err = p.Probe(context.Background(), "www.example.test", port, "www.example.test", helperproto.ProbeAny)
+	assert.ErrorIs(t, err, ErrProbeNotAllowed)
+	assert.ErrorIs(t, err, netaddr.ErrNotAllowed)
+	assert.NotErrorIs(t, err, ErrProbeUnreachable)
+	assert.NotErrorIs(t, err, ErrProbeFailed)
+
+	for _, host := range []string{"169.254.169.254", "0.0.0.0", "::ffff:169.254.169.254"} {
+		_, err = TLSProber{}.Probe(context.Background(), host, port, "", helperproto.ProbeAny)
+		assert.ErrorIs(t, err, ErrProbeNotAllowed, host)
+	}
 }

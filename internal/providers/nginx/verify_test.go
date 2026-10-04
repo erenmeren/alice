@@ -93,6 +93,24 @@ func TestVerifyFallsBackToTheServerProbe(t *testing.T) {
 	assert.Equal(t, "local", vr.Mode)
 }
 
+// AUD-25 (a): when the target's name now resolves to an address Alice never connects to, Alice's
+// own probe is refused (ErrProbeNotAllowed) and never tried again for that endpoint; the server-side
+// probe, which runs on the server, decides. The SSH connection that follows shows the refusal on the
+// target (ssh.address_not_allowed).
+func TestVerifyFallsBackToTheServerProbeWhenAlicesProbeIsRefused(t *testing.T) {
+	e := newEnv(t)
+	e.prober.mu.Lock()
+	e.prober.notAllowed = true
+	e.prober.mu.Unlock()
+	s := e.open(t)
+	vr, err := s.VerifyDeployment(context.Background(), providers.VerifyRequest{Location: e.location(t), Fingerprint: pki.Fingerprint(e.leaf.Cert), ChainLength: 2})
+	require.NoError(t, err)
+	assert.True(t, vr.OK)
+	assert.Equal(t, "local", vr.Mode)
+	assert.Len(t, e.prober.probes(), 1, "Alice's probe is not repeated once refused")
+	assert.Contains(t, strings.Join(e.srv.Commands(), "\n"), "/usr/local/libexec/alice-helper tls-probe --addr '127.0.0.1' --port '443'")
+}
+
 func TestVerifyReportsWhatIsServed(t *testing.T) {
 	e := newEnv(t)
 	s := e.open(t)

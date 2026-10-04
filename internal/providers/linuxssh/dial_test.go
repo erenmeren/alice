@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +17,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"alice/internal/platform/clock"
+	"alice/internal/platform/netaddr"
+	"alice/internal/platform/netaddr/netaddrtest"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh/helperproto"
@@ -706,4 +710,111 @@ func TestTooManyAuthenticationFailuresIsAuthFailed(t *testing.T) {
 	pe := providerCode(t, err)
 	assert.Equal(t, "ssh.auth_failed", pe.Code)
 	assert.False(t, pe.Retryable)
+}
+
+// AUD-25 (a): an address Alice never connects to is refused when Alice connects, with its own
+// reason, and not retried: the production dialer (no resolver injected) checks the socket's
+// address before anything is sent, so this needs no network.
+func TestDialRefusesAResolvedLinkLocalAddress(t *testing.T) {
+	cred := newFakeCred(t)
+	for _, host := range []string{"169.254.169.254", "0.0.0.0", "::", "fe80::1", "::ffff:169.254.169.254"} {
+		_, err := newDialer(&memHostKeys{}).Dial(context.Background(), testTarget, Config{Host: host, Port: 22, Username: "alice-svc"}, cred)
+		pe := providerCode(t, err)
+		assert.Equal(t, "ssh.address_not_allowed", pe.Code, host)
+		assert.False(t, pe.Retryable, host)
+		assert.ErrorIs(t, err, netaddr.ErrNotAllowed, host)
+	}
+	assert.Zero(t, cred.fetches())
+}
+
+// rebindingResolver answers name with 127.0.0.1 until rebound is set, then with 0.0.0.0 (which on
+// Linux reaches the same loopback listener: without the check the connection would succeed).
+func rebindingResolver(name string, rebound *atomic.Bool) *net.Resolver {
+	return netaddrtest.Resolver(func(n string) []netip.Addr {
+		switch {
+		case n != name:
+			return nil
+		case rebound.Load():
+			return []netip.Addr{netip.MustParseAddr("0.0.0.0")}
+		}
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}
+	})
+}
+
+// AUD-25 (a): a server added by name, whose name later resolves to a refused address (a DNS change
+// or rebinding), is refused at connect time: the address checked is the one the socket connects to,
+// and no TCP connection reaches the listener.
+func TestDialRefusesANameThatNowResolvesToARefusedAddress(t *testing.T) {
+	srv, cfg, cred := testServer(t, okHandler)
+	cfg.Host = "server.alice.test"
+	var rebound atomic.Bool
+	hk := &memHostKeys{}
+	d := newDialer(hk)
+	d.resolver = rebindingResolver(cfg.Host, &rebound)
+
+	_, err := d.Dial(context.Background(), testTarget, cfg, cred)
+	assert.Equal(t, "target.host_key_unconfirmed", providerCode(t, err).Code, "the name resolves to the server")
+	require.Equal(t, 1, srv.Connections())
+
+	rebound.Store(true)
+	_, err = d.Dial(context.Background(), testTarget, cfg, cred)
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.address_not_allowed", pe.Code)
+	assert.False(t, pe.Retryable)
+	assert.Len(t, hk.observations(), 1, "nothing new observed")
+
+	hk.pin(srv.HostKey())
+	_, err = d.Dial(context.Background(), testTarget, cfg, cred)
+	assert.Equal(t, "ssh.address_not_allowed", providerCode(t, err).Code, "a pinned server too")
+	assert.Equal(t, 1, srv.Connections(), "no connection reached the listener after the name moved")
+	assert.Zero(t, srv.AuthAttempts())
+	assert.Zero(t, cred.fetches())
+}
+
+// The second dial of a pinned server that no longer offers the pinned algorithm (probeChanged)
+// goes through the same check: a name that moved between the two dials is refused, not reported as
+// a protocol error or as unreachable.
+func TestProbeChangedRefusesANameThatMoved(t *testing.T) {
+	srv, cfg, cred := testServer(t, okHandler)
+	cfg.Host = "server.alice.test"
+	hk := &memHostKeys{}
+	hk.pin(srv.HostKey())
+	srv.SetHostKeyAlgorithms(linuxsshtest.NewECDSAHostKey(t))
+	var queries atomic.Int64
+	d := newDialer(hk)
+	d.resolver = netaddrtest.Resolver(func(string) []netip.Addr {
+		if queries.Add(1) <= 2 { // the first lookup (its A and AAAA queries)
+			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}
+		}
+		return []netip.Addr{netip.MustParseAddr("0.0.0.0")}
+	})
+	_, err := d.Dial(context.Background(), testTarget, cfg, cred)
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.address_not_allowed", pe.Code)
+	assert.False(t, pe.Retryable)
+	assert.Equal(t, 1, srv.Connections(), "only the first dial reached the server")
+	assert.Empty(t, hk.observations())
+}
+
+// The pool's re-dial (a fresh connection, as the explicit connection test asks for) is checked too;
+// a connection made earlier to an allowed address is not affected by a later DNS change.
+func TestPoolRedialRefusesANameThatMoved(t *testing.T) {
+	srv, cfg, cred := testServer(t, okHandler)
+	cfg.Host = "server.alice.test"
+	hk := &memHostKeys{}
+	hk.pin(srv.HostKey())
+	var rebound atomic.Bool
+	d := newDialer(hk)
+	d.resolver = rebindingResolver(cfg.Host, &rebound)
+	p := NewPool(d, MaxConnections, MaxConnectionsPerTarget, IdleTimeout)
+	t.Cleanup(p.Close)
+
+	c, release, err := p.Acquire(context.Background(), testTarget, cfg, cred)
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	release(true)
+	rebound.Store(true)
+	_, _, err = p.AcquireFresh(context.Background(), testTarget, cfg, cred)
+	assert.Equal(t, "ssh.address_not_allowed", providerCode(t, err).Code)
+	assert.Equal(t, 1, srv.Connections())
 }

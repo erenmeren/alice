@@ -329,6 +329,11 @@
         "title": "Bu Alice sürümü bir sunucuyu hazırlayan komutları gösteremiyor.",
         "cause": "Alice programı alice-helper sağlama toplamları olmadan derlendi; bu yüzden komutlar yardımcı programı root olarak kurmadan önce denetleyemez.",
         "action": "Resmî bir Alice sürümü kurun ya da Alice'i make build veya imaj derlemesiyle derleyin."
+      },
+      "address_not_allowed": {
+        "title": "Alice bu sunucunun adresine bağlanmıyor.",
+        "cause": "Sunucunun adı artık Alice'in hiçbir zaman bağlanmadığı bir adrese çözümleniyor: bulut meta veri adresi 169.254.169.254 gibi bağlantı-yerel bir adres, çoklu yayın adresi veya 0.0.0.0 gibi belirtilmemiş bir adres. DNS kaydı değişmiş olabilir ya da biri Alice'i erişmemesi gereken bir hizmete yönlendirmeye çalışıyor olabilir.",
+        "action": "Sunucunun DNS kaydını denetleyin veya sunucuyu düzenleyip gerçek adresini girin. Ardından bağlantıyı sınayın."
       }
     },
     "sshkey": {

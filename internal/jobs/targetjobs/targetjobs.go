@@ -69,7 +69,7 @@ var jobsActor = inventory.Actor{Audit: audit.SystemActor("jobs")}
 // connectionReasons are the failures of a key operation that say something about the connection
 // itself; only these change the target's status and last error (§8.4, R37 item 13). A refusal of
 // the operation (own key, last root key, file changed, ...) is audited on the key instead.
-var connectionReasons = []string{"ssh.auth_failed", "ssh.unreachable", "ssh.timeout", "ssh.helper_missing", "ssh.helper_outdated"}
+var connectionReasons = []string{"ssh.auth_failed", "ssh.unreachable", "ssh.timeout", "ssh.address_not_allowed", "ssh.helper_missing", "ssh.helper_outdated"}
 
 // open returns a session after the target checks. needConfirmed refuses a target whose host key
 // is not confirmed yet (discovery, removal); a connection test may run on it: that is how the

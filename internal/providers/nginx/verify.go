@@ -259,8 +259,10 @@ func mismatch(sv served, req providers.VerifyRequest) string {
 }
 
 // probeEndpoint returns what an endpoint serves. reached is false when no attempt completed a
-// handshake, from Alice or from the server. Once Alice cannot connect at all (ErrProbeUnreachable)
-// the endpoint is probed from the server only. A failed handshake (ErrProbeFailed) is treated like
+// handshake, from Alice or from the server. Once Alice cannot connect at all (ErrProbeUnreachable),
+// or refuses to (ErrProbeNotAllowed: the target's name now resolves to an address Alice never
+// connects to, AUD-25 a; the server-side probe runs on the server and is not concerned), the
+// endpoint is probed from the server only. A failed handshake (ErrProbeFailed) is treated like
 // a mismatch: the server-side probe is tried in the same attempt, and the endpoint again in the
 // next. The error is a cancelled ctx or a failure of the SSH connection.
 func (s *session) probeEndpoint(ctx context.Context, ep Endpoint, req providers.VerifyRequest) (last served, reached bool, err error) {
@@ -303,8 +305,8 @@ func (s *session) probeEndpoint(ctx context.Context, ep Endpoint, req providers.
 }
 
 // probeOnce probes an endpoint once: from Alice unless *localOnly, then from the server when
-// Alice's probe failed (ErrProbeUnreachable sets *localOnly for the next attempts). ok is false
-// when neither completed a handshake.
+// Alice's probe failed (ErrProbeUnreachable and ErrProbeNotAllowed set *localOnly for the next
+// attempts). ok is false when neither completed a handshake.
 func (s *session) probeOnce(ctx context.Context, ep Endpoint, keyType string, localOnly *bool) (served, bool, error) {
 	if !*localOnly {
 		pr, err := s.p.prober.Probe(ctx, s.host, ep.Port, ep.SNI, keyType)
@@ -313,7 +315,7 @@ func (s *session) probeOnce(ctx context.Context, ep Endpoint, keyType string, lo
 			return served{}, false, providers.NewError("ssh.timeout", true, ctx.Err(), nil)
 		case err == nil && isHexSHA256(pr.LeafSHA256) && pr.ChainLength >= 1:
 			return served{leaf: pr.LeafSHA256, chain: pr.ChainLength}, true, nil
-		case errors.Is(err, ErrProbeUnreachable):
+		case errors.Is(err, ErrProbeUnreachable), errors.Is(err, ErrProbeNotAllowed):
 			*localOnly = true
 		}
 	}

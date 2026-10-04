@@ -329,6 +329,11 @@
         "title": "This build of Alice cannot show the commands that prepare a server.",
         "cause": "The Alice program was built without the alice-helper checksums, so the commands could not check the helper before installing it as root.",
         "action": "Install an official Alice release, or build Alice with make build or the image build."
+      },
+      "address_not_allowed": {
+        "title": "Alice does not connect to this server's address.",
+        "cause": "The server's name now resolves to an address Alice never connects to: a link-local address such as the cloud metadata address 169.254.169.254, a multicast address or an unspecified address such as 0.0.0.0. The DNS record may have changed, or someone may be trying to make Alice reach a service it must not reach.",
+        "action": "Check the server's DNS record, or edit the server and enter its real address. Then test the connection."
       }
     },
     "sshkey": {

@@ -63,3 +63,19 @@ func TestStatusAfterSuccessTable(t *testing.T) {
 		}
 	}
 }
+
+// AUD-25 (a), ruling S4: a server whose name now resolves to an address Alice refuses to connect
+// to shows that as its connection problem, like ssh.unreachable: unreachable, except a target
+// waiting for its first confirmation (its recorded candidate stays confirmable) and the statuses
+// only a person leaves.
+func TestStatusForAddressNotAllowed(t *testing.T) {
+	const reason = "ssh.address_not_allowed"
+	for _, current := range []string{StatusPendingHostKey, StatusChecking, StatusOK, StatusUnreachable, StatusAuthFailed, StatusHostKeyChanged, StatusDisabled} {
+		for _, pinned := range []bool{false, true} {
+			assert.Equal(t, statusFor("ssh.unreachable", current, pinned), statusFor(reason, current, pinned), "%s pinned=%v", current, pinned)
+		}
+	}
+	assert.Equal(t, StatusUnreachable, statusFor(reason, StatusOK, true))
+	assert.Equal(t, StatusPendingHostKey, statusFor(reason, StatusPendingHostKey, false))
+	assert.Equal(t, StatusHostKeyChanged, statusFor(reason, StatusHostKeyChanged, true))
+}
