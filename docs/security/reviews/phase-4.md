@@ -17,7 +17,7 @@ from a run made for this review.
 | 1 | Helper as a normal user: argument vectors, the root-controlled walk, section authentication, existence oracle, refusals say why, `nginx-dump` never returns key blocks or configuration text, journal, crash matrices (as far as they run without root), retention, superseded operations, the emulator fidelity suite against the real helper code | `go test ./cmd/alice-helper -count=1` | ok (root-only tests skip) | ok, 189 tests passed, 11 skipped (root only) |
 | 2 | Helper as root: owners and modes (`TestDeployAsRootSetsOwnersAndRefusesUserDirectories`, `TestDeployModes`), `TestAttackUserOwnedLinkAndDirectoryAsRoot`, `TestAttackUserOwnedLetsEncryptChainAsRoot`, `TestAttackUserOwnedConfigurationAsRoot`, `TestAttackKeyOutsideRootControl`, `TestAttackDirectorySwappedBeforeTheRename`, `TestAttackRestoreOverANewerDeployment`, the crash, re-send, interference and restore matrices (`TestDeployCrashMatrix`, `TestDeployCrashThenTheSameDeploymentAgain`, `TestDeployCertificateInterferenceMatrix`, `TestRestoreCrashMatrix`, `TestDeployKilledAtEveryStepRecovers`) | `CGO_ENABLED=0 go test -c -o /tmp/alice-helper.test ./cmd/alice-helper` then `docker run --rm --network none -v /tmp/alice-helper.test:/alice-helper.test:ro debian:12 /alice-helper.test -test.count=1` | ok (3 skips: two need a non-root user, one needs `go`) | recorded at 58f897a: 190 passed, 3 skipped; the helper has not changed since |
 | 3 | Real OpenSSH and real Nginx on Ubuntu 22.04 (nginx 1.18), Debian 12 (1.22) and Rocky 9 (1.20): setup script with the checksum check, real `sudo` accepting every built line and refusing 28 variations, discovery of default and hostile layouts, deploy and verification (ECDSA with chain, RSA, 0640 `ssl-cert`, user-owned key, Let's Encrypt links, dual RSA/ECDSA, address-specific listens), F-01 with real `nginx -t`, F-02..F-05, F-07, F-08, F-10, hard link, user-owned link and directory, writable configuration file, busy lock, helper killed with SIGTERM and SIGKILL in `nginx-deploy` and `nginx-restore`, superseded operation, no staged file left | `make test-ssh` | ok, 35 Nginx subtests per distribution | recorded at 5d6379d and again after ea0a4bd: exit 0 (105 Nginx subtests, about 100 s) |
-| 4 | Nginx provider: helper answers mapped through the legal outcome shapes (59 deploy rows, 27 rollback rows), uncertain outcomes, verification per listen address, chain length, inline rollback, the key never printed (`TestDeployNeverLeaksTheKey`, `TestAWrappedCommandNeverPrintsItsStdin`), `TestOnlyProbeTLSConfigSkipsVerification`; command builders and sudoers lines (`TestSudoers*`, `TestCmdNginx*`) | `go test ./internal/providers/... ./internal/certs/... -count=1` | ok | ok |
+| 4 | Nginx provider: helper answers mapped through the legal outcome shapes (59 deploy rows, 27 rollback rows), uncertain outcomes, verification per listen address, chain length, inline rollback, the key never printed (`TestDeployNeverLeaksTheKey`, `TestAWrappedCommandNeverPrintsItsStdin`), `TestOnlyProbeTLSConfigSkipsVerification`; command builders and sudoers lines (`TestNginxCommandLinesAreExact`, `TestNginxCommandsRefuseHostileValues`, `TestDeployKeyIsNeverOutsideStdin`, `TestNginxSudoersLinesAreWhatTheSpecSays`, `TestNginxSudoersMatchesEveryBuiltCommand`, `TestSudoersNeverLogsInput`) | `go test ./internal/providers/... ./internal/certs/... -count=1` | ok | ok |
 | 5 | Parsers fuzzed (§25.6) | `make fuzz-nginx` and `make fuzz-certs` | no crasher | ok: 6.9 M and 4.8 M executions in 60 s each |
 | 6 | Deploy engine: at most one send per deployment, no success without a passed verification, no `failed` after a send unless the server proves nothing was written, every interrupted deployment ends; kills at every point (F-66: `TestDeploymentSurvivesAKillAtEveryPoint`, `TestDeploymentSurvivesAKillDuringRecovery`), stale runs after a lost lease (`TestStaleRun*`), L-80..L-82 (`TestL80InFlightDeployFinishesAcrossLock`, `TestL81QueuedDeployIsBlockedThenConfirmed`, `TestL82RollbackRunsDespiteLock`), `TestDeployAndRecoveryLeakNoKey` | `go test -tags integration ./internal/jobs/deployjobs/... -count=1` | ok | ok (in row 13's run) |
 | 7 | Inventory: reconcile of hostile discovery data, incomplete scans, changed outside, uploads (`TestNoPrivateKeyOrPasswordLeaks`, `TestPFXDecodesAreCapped`, `TestUploadRefusalsAreAuditedAndStoreNothing`), signing requests and their races, deployment records, sweep, claim fencing (`TestEngineWritesAreFencedToTheJobClaim`) | `go test -tags integration ./internal/inventory/... -count=1` | ok | ok (in row 13's run) |
@@ -102,8 +102,10 @@ http-level directive list) is unsupported and refused (`config_file_writable`, R
 - **Helper.** stdin is read into one pre-sized buffer, decoded by a strict hand-written JSON parser into
   fixed-capacity buffers, and cleared; the staged key file is root 0600 before any content; the old key's backup is
   `key.bak` (root 0600 in a 0700 directory). No answer, error, journal field or syslog line carries key material
-  (`TestDeployNeverRevealsKeyMaterial`). `nginx-dump`, `nginx-test`, `nginx-status` and the backup sweep never open
-  a key file.
+  (`TestDeployNeverRevealsKeyMaterial`). The helper's own code opens a key file only in `nginx-deploy`,
+  `nginx-restore` and an explicit `cleanup --op`; `nginx-dump`, `nginx-test`, `nginx-status` and the backup sweep
+  only `stat` it. The `nginx -T` and `nginx -t` children that `nginx-dump` and `nginx-test` run as root do load the
+  key files, as Nginx always does; their output never leaves the helper.
 - **On disk.** The new key gets the old key file's owner and group and 0600 (0640 kept) (R38 item 34).
 
 ### Logs, audit, email and database
@@ -126,7 +128,7 @@ value rules.
       `/usr/sbin/nginx` and `/usr/bin/systemctl` with a minimal environment, directory `/` and umask 022.
 - [ ] Key material is only on stdin and in envelopes; never in an argument, a log line, an error, a job row, an
       audit row, an email or a response.
-- [ ] `log_input` is never set in the generated sudoers file (`TestSudoers*`).
+- [ ] `log_input` is never set in the generated sudoers file (`TestSudoersNeverLogsInput`).
 - [ ] The only `InsecureSkipVerify` is in `helperproto.ProbeTLSConfig` (`TestOnlyProbeTLSConfigSkipsVerification`);
       the probe compares the served leaf's SHA-256 and the chain length and never trusts the connection.
 - [ ] Nginx's own error text never leaves the helper: `nginx -t` failures are reduced to a closed class
@@ -147,7 +149,7 @@ value rules.
 | P4-01 | High (residual) | Whoever controls Alice (or its database and the master key) can deploy any certificate and key to every referenced certificate/key pair of every Nginx server, and so serve any of those websites' TLS. Same trust boundary as P3-01. | Accepted residual risk of the product; mitigations: the helper writes only pairs Nginx names, through root-controlled paths, audit of every deployment, emails on failures. Recorded in `SECURITY-REPORT.md` (Phase 8). |
 | P4-02 | Medium | A local user who can edit an Nginx `include` file could make the helper write a certificate or key to any existing root-controlled file with a certificate or key extension that the configuration then names. | Mitigated: pairs touched by a non-root-writable configuration file are unsupported and refused by the helper (`config_file_writable`, with a warning naming the file); the extension rule; the **Custom location** mark for files outside the usual folders. Residual: S7 (see "Known limitations"). |
 | P4-03 | Low | The verification probe connects to the target's address (from Alice) or to a listen address (from the server) on any port the Nginx configuration or an Administrator names, at most 10 endpoints. | Accepted; it sends only a TLS client hello and closes; the port setting needs an Administrator and is audited. |
-| P4-04 | Low | Key material in memory is cleared best-effort only: Go strings (request PEM text, PFX passwords), parsed key objects (`big.Int` in `crypto/*`) and, in the helper, the abandoned stdin buffer after a timeout cannot be zeroed. | Accepted; core dumps are disabled in the container, buffers Alice owns are cleared. |
+| P4-04 | Low | Key material in memory is cleared best-effort only. Not zeroable: Go strings (request PEM text, PFX passwords), parsed key objects (`big.Int` in `crypto/*`), the growth copies `pem.EncodeToMemory` makes while it builds a PEM, the temporary unescape buffers of `encoding/json`, the buffers of `net/http` and of the TLS connection that carried the upload, the buffers of `golang.org/x/crypto/ssh` that carried the deploy stdin, and, in the helper, the abandoned stdin buffer after a timeout. | Accepted; core dumps are disabled in the container, buffers Alice owns are cleared. |
 | P4-05 | Info | Backups of replaced private keys stay root-only on the server for 7 days (30 days when a restore failed; longer while an interrupted operation is waiting for recovery). | Accepted; `/var/lib/alice-helper/backups` is 0700 root, files 0600; the guide explains manual restore and removal. |
 | P4-06 | High (fixed) | `nginx -T` section markers are plain comments: a user who can edit one included file could forge a `# configuration file` marker and re-pair another site's key file (proof of concept). | Fixed before merge: the parser refuses repeated marker names (b8e253d) and the helper compares every section with the real file and refuses the whole dump on any mismatch (Phase 4 helper, 3025fe5..6b6bb34). |
 | P4-07 | Medium (fixed) | Pairs brought in by a writable file through an `include`, and an index shift through http-level directive lists, were still reported as supported. | Fixed: 9ac8b1a, 6b6bb34 (`TestAttackWritableFileThatContributesToAPair`, `TestAttackIndexShiftThroughHTTPLevelArrays`). |
@@ -165,6 +167,9 @@ value rules.
 | P4-19 | Low (fixed) | The helper's pair paths were not validated by Alice (a hostile helper could have a malformed path shown as supported or merged with a real one). | Fixed: 7883cac, 31de3c4. |
 | P4-20 | Low (fixed) | A race between cancelling and completing a signing request was untested; a pasted certificate field that held a key was copied on the heap uncleared. | Fixed: 7f500fc, e11ea56. |
 | P4-21 | Low (fixed) | The web deploy dialog polled each deployment every second (20 websites ≈ 1,200 requests per minute against the 300 per minute session limit). | Fixed: 48ebf91 (one bounded loop per batch, `Retry-After` honoured). |
+| P4-22 | Low (fixed) | The `nginx -T` parser used about 382 MB of heap on a 1 MB hostile dump, and later about 185 MB for one long directive. | Fixed: b8e253d (allocation ceiling, token and node budgets), a44c347 (arguments of directives that are not kept are counted, not stored; kept arguments capped at 4096). |
+| P4-23 | Low (fixed) | Matching `include` patterns against a hostile dump took about 3.9 s. | Fixed: b8e253d (bounded include and glob work; `TestHostileSizesFinishQuickly`). |
+| P4-24 | Medium (fixed) | After an Alice outage longer than the helper keeps a journal (7 days after a success), recovery found no journal and recorded the deployment as "failed, nothing written" although the new files could be live and unverified. | Fixed: 08e0f3a (a missing journal more than 24 hours after the send is an unknown outcome, `ALC-DEP-0018`, R38 item 47). |
 
 No High finding is open except the documented product residual P4-01.
 
@@ -230,9 +235,24 @@ No High finding is open except the documented product residual P4-01.
   operations (`NO_SPACE`). Very large servers need a paging design later.
 - **After the latest operation's backups are gone** (cleanup or the 7-day sweep) there is no helper-side restore for
   that pair; undoing means deploying the earlier certificate again.
-- **A long Alice outage.** If Alice stays down longer than the helper keeps a journal (7 days after a success, 30
-  days otherwise), the recovery of an unfinished deployment finds no journal and records it as failed with nothing
-  written; the next discovery then reports the website as changed outside Alice if the new certificate is in place.
+- **A long Alice outage.** When the recovery of a deployment that was sent finds no journal (or only a `prepared`
+  one) more than 24 hours after the send, the helper may have swept the journal of a change it made (it keeps a
+  committed journal 7 days). Alice then ends the deployment **Outcome not confirmed** with `ALC-DEP-0018`
+  (`deployment.outcome_unknown`, with the email) and releases the website; it does not verify or restore anything.
+  The administrator should choose **Discover** and check which certificate the website serves; once the helper
+  swept the folder, the backup with the previous key is gone, so going back means deploying the previous
+  certificate again. Between the helper's budget (60 s) and 24 hours a missing journal still means "nothing was
+  written".
+- **Pseudo file systems.** `devtmpfs` reports the same file-system type as `tmpfs`, so the helper cannot tell them
+  apart (device nodes are refused as not regular before any open anyway). Phase 3's `authorized_keys` walk has no
+  file-system-type check at all (unchanged in this phase).
+- **A staged key file after a kill.** A helper killed after it created the staged key file (`.alice-<operation>-key`,
+  root 0600, next to the key) leaves it there. A later `nginx-restore` or re-run of the operation, an explicit
+  `cleanup --op`, or the backup sweep when it removes the operation (after 7 days for a `prepared` one) removes it.
+- **Fenced writes need the application role's `UPDATE` privilege on `jobs`** (the fence takes `FOR SHARE` on the job
+  row), so that privilege cannot be narrowed later without redesigning the fence.
+- **`nginx-status` does not report "superseded".** Only `nginx-restore` (and a re-sent `nginx-deploy`) answer
+  `SUPERSEDED`; recovery learns it when it tries to restore.
 - **A crashing recovery job is visible only through the deployment** (its state, attempts and the audit row): a
   recovery job never sends the `job.dead` email.
 - **Lease-loss residue.** The instant between a fenced check and the command it guards, and a command already in
