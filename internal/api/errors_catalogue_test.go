@@ -46,7 +46,7 @@ var inventorySentinels = map[string]error{
 	"ErrChainUnconfirmed": inventory.ErrChainUnconfirmed, "ErrNginxConfigInvalid": inventory.ErrNginxConfigInvalid,
 	"ErrTargetNotReady": inventory.ErrTargetNotReady, "ErrDeploymentState": inventory.ErrDeploymentState,
 	"ErrCertificateNotYetValid": inventory.ErrCertificateNotYetValid, "ErrLocationNeedsDiscovery": inventory.ErrLocationNeedsDiscovery,
-	"ErrClaimLost": inventory.ErrClaimLost,
+	"ErrClaimLost": inventory.ErrClaimLost, "ErrCSRBusy": inventory.ErrCSRBusy, "ErrTooManyPendingCSRs": inventory.ErrTooManyPendingCSRs,
 }
 
 // engineOnlySentinels are returned only by the methods the deployment engine calls (StartDeployment,
@@ -314,6 +314,15 @@ func TestPhase4TextsAreTruthfulForEveryCause(t *testing.T) {
 		assert.Contains(t, en("errors."+r+".action"), "When uploading", r)
 		assert.Contains(t, en("errors."+r+".action"), "After a deployment", r)
 	}
+	// C-I2: after another program changed a file, Alice put back at most what it wrote, so the pair may
+	// not belong together: the action has the reader run nginx -t at once, in both languages.
+	for _, lang := range []string{"en", "tr"} {
+		assert.Contains(t, cat.T(lang, "errors.deployment.rollback_file_changed.action", nil), "nginx -t", lang)
+	}
+	assert.NotContains(t, en("errors.deployment.rollback_file_changed.cause"), "did not put the previous files back")
+	assert.Contains(t, en("errors.deployment.rollback_file_changed.cause"), "may not belong together")
+	// C m4: a deployment an Administrator cancelled is not reported as a failure of the server.
+	assert.Contains(t, en("errors.deployment.cancelled.cause"), "sent nothing")
 	// The existing SSH text that Nginx dumps now share no longer names SSH files only.
 	assert.Contains(t, en("errors.ssh.output_too_large.action"), "Nginx")
 }

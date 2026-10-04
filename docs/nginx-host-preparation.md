@@ -136,8 +136,10 @@ deployments until old ones are removed. They contain private keys: treat them li
 
 Alice restores the previous files on its own when a deployment fails. Never restore a backup when a later
 deployment changed the same files, or when the deployment shows `ALC-DEP-0014` (a later change replaced the files)
-or `ALC-DEP-0020` (another program changed them): you would put back an older key or overwrite the other program's
-file. To go back after a deployment that **succeeded**, the easiest way is to deploy the previous certificate
+or `ALC-DEP-0020` (another program changed one of them): you would put back an older key or overwrite the other
+program's file. After `ALC-DEP-0020` Alice put back at most the file it had written itself, so the certificate and
+key may not belong together: run `nginx -t` first, and let the other program write a matching pair again or deploy
+the intended certificate from Alice. To go back after a deployment that **succeeded**, the easiest way is to deploy the previous certificate
 again (Alice needs its private key: upload it first). If that is not possible, restore the backup by hand, as root, while the folder still exists:
 
 1. Find the deployment in Alice (**Deployment history**) and note its **Certificate file**, **Key file** and

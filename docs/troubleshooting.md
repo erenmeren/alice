@@ -130,8 +130,12 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 
   Do **not** restore the backup after `ALC-DEP-0014` (a later deployment replaced the files: restoring would put
   back a key that the later deployment replaced) or after `ALC-DEP-0020` (another program, for example certbot,
-  changed the files: restoring would overwrite its file). In those cases find out which certificate is meant to be
-  there and deploy it, or leave the files to the other program. Restore by hand only when the files on the server
+  changed the certificate or key file while Alice was deploying or putting the previous files back: Alice put back
+  at most the files it had written itself and left the other program's file, so restoring would overwrite that
+  file). After `ALC-DEP-0020` the certificate and key on the server may not belong together: run `nginx -t` on the
+  server at once; if it fails, let the other program write a matching pair again (for certbot, renew the
+  certificate) or deploy the intended certificate from Alice. In both cases find out which certificate is meant to
+  be there and deploy it, or leave the files to the other program. Restore by hand only when the files on the server
   still hold what this deployment wrote (`sha256sum` of the certificate file equals `new_cert_sha256` in the
   folder's `journal.json`) and the website is broken.
 - **"The previous files are back, but the website was not confirmed." (`ALC-DEP-0019`) although the website looks right.** This
@@ -972,6 +976,22 @@ and without the confirmation for root's last key.
 
 **What to do.** Wait a moment and upload the file again.
 
+## ALC-CRT-0016: Busy creating other signing requests
+
+**Meaning.** Alice is busy creating other signing requests. (HTTP 503, reason `csr.busy`.)
+
+**Likely cause.** Alice creates the keys of at most two signing requests at a time (an RSA 4096 key takes about a second of one processor core), and that limit was reached. Nothing was stored.
+
+**What to do.** Wait a moment and create the signing request again.
+
+## ALC-CRT-0017: Too many open signing requests
+
+**Meaning.** There are too many open signing requests. (HTTP 409, reason `csr.too_many_pending`.)
+
+**Likely cause.** Alice keeps at most 1000 open signing requests (each holds a private key that waits for its certificate), and that limit was reached. Nothing was created.
+
+**What to do.** Complete or cancel the signing requests you no longer need (under **Open signing requests** on the Certificates page), then create this one again.
+
 ## ALC-DEP-0001: Deployment already in progress
 
 **Meaning.** Another deployment to this website is in progress. (HTTP 409, reason `deployment.in_progress`.)
@@ -1134,9 +1154,9 @@ A deployment may show `ALC-DEP-0019` (the files are back but the website was not
 
 **Meaning.** Another program changed the certificate files during the deployment. Manual action is needed. (HTTP 502, reason `deployment.rollback_file_changed`.)
 
-**Likely cause.** Alice did not put the previous files back, because the files on the server are neither the ones it wrote nor the previous ones. A backup of the previous files is on the server in `/var/lib/alice-helper/backups`, in the folder named with this deployment's ID.
+**Likely cause.** While Alice was deploying or putting the previous files back, another program changed the certificate or key file. Alice never overwrites that program's file: it put back at most the files it had written itself, so the certificate and key on the server may not belong together now. A backup of the previous files is on the server in `/var/lib/alice-helper/backups`, in the folder named with this deployment's ID.
 
-**What to do.** Find out which program changed the files (for example certbot), check the website now, then choose Discover on the server's page.
+**What to do.** Run `nginx -t` on the server now: if it fails, the certificate and key do not belong together. Find out which program changed the files (for example certbot), put a matching pair back from that program or from the backup, check the website, then choose Discover on the server's page. Do not restore the backup over the other program's file without checking which certificate is meant to be there (see the deployment points above).
 
 ## ALC-DEP-0021: Files must be read again first
 
@@ -1145,3 +1165,11 @@ A deployment may show `ALC-DEP-0019` (the files are back but the website was not
 **Likely cause.** Alice does not know the current content of the certificate file, which it needs to make sure nobody changed the file in the meantime.
 
 **What to do.** Choose Discover on the server's page, then deploy again.
+
+## ALC-DEP-0022: Deployment cancelled by an administrator
+
+**Meaning.** An administrator cancelled this deployment before it started. (HTTP 409, reason `deployment.cancelled`.)
+
+**Likely cause.** An administrator chose **Discard** for the deployment's waiting job (for example a job held while the license was expired), so Alice sent nothing to the server. The website keeps its previous certificate, and no failure email is sent.
+
+**What to do.** Deploy the certificate again if it is still needed.

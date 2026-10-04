@@ -175,7 +175,7 @@ func (s *server) deployCertificate(w http.ResponseWriter, r *http.Request) {
 		LocationIDs            []string `json:"location_ids"`
 		ConfirmIncompleteChain bool     `json:"confirm_incomplete_chain"`
 	}
-	if !s.decodeLimit(w, r, &req, maxDeployBody) {
+	if !s.decodeExact(w, r, &req, maxDeployBody, "location_ids", "confirm_incomplete_chain") {
 		return
 	}
 	var v validate.Errors
@@ -186,8 +186,12 @@ func (s *server) deployCertificate(w http.ResponseWriter, r *http.Request) {
 	default:
 		for _, raw := range req.LocationIDs {
 			lid, err := uuid.Parse(raw)
-			if err != nil || lid == uuid.Nil || slices.Contains(ids, lid) {
+			if err != nil || lid == uuid.Nil {
 				v.Add("location_ids", validate.Pattern, nil)
+				break
+			}
+			if slices.Contains(ids, lid) {
+				v.Add("location_ids", validate.Duplicate, nil)
 				break
 			}
 			ids = append(ids, lid)
@@ -232,7 +236,7 @@ func (s *server) createCSR(w http.ResponseWriter, r *http.Request) {
 		SANs       []string `json:"sans"`
 		KeyType    string   `json:"key_type"`
 	}
-	if !s.decodeLimit(w, r, &req, maxCSRBody) {
+	if !s.decodeExact(w, r, &req, maxCSRBody, "common_name", "sans", "key_type") {
 		return
 	}
 	// The name rules (a DNS name, at most 64 characters; at most 50 names) and the key types are
@@ -341,7 +345,7 @@ func (s *server) updateLocation(w http.ResponseWriter, r *http.Request) {
 		VerifySNI  *string `json:"verify_sni"`
 		SkipVerify *bool   `json:"skip_verify"`
 	}
-	if !s.decodeLimit(w, r, &req, maxLocationBody) {
+	if !s.decodeExact(w, r, &req, maxLocationBody, "verify_port", "verify_sni", "skip_verify") {
 		return
 	}
 	// The value rules (port 0..65535 with 0 clearing, a DNS name or "" for the name, at least one

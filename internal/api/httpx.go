@@ -171,7 +171,9 @@ func isTrusted(a netip.Addr, trusted []netip.Prefix) bool {
 }
 
 // decodeExact is decodeLimit for the bodies that carry key material (uploads, signing request
-// completions). The body is read into one buffer (readBounded: a single allocation when the length
+// completions) and for the Phase 4 changes whose fields decide what happens (deploy requests,
+// signing request creation, location settings): a repeated or case-variant key is refused instead of
+// letting one of the values win silently. The body is read into one buffer (readBounded: a single allocation when the length
 // is declared; otherwise every outgrown array is cleared before it is dropped), its top level must
 // be one object whose keys are exactly the documented names, each at most once (encoding/json alone
 // matches keys in any case and lets a repeated key win), checked by topLevelKeys, which allocates

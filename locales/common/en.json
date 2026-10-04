@@ -431,7 +431,7 @@
       "invalid": {
         "title": "This is not a certificate Alice can read.",
         "cause": "Alice expects PEM text with BEGIN CERTIFICATE blocks, or a PFX file. During a deployment, the stored certificate could not be sent to the server in that form.",
-        "action": "When uploading, check that you chose the certificate file, not a request or another file. After a deployment, look at the deployment's steps: if the certificate file itself is at fault, upload a corrected certificate and deploy that one. If it happens again, report the request ID."
+        "action": "When uploading, check that you chose the certificate file, not a request or another file. After a deployment, look at the deployment's steps: if the certificate file itself is at fault, upload a corrected certificate and deploy that one. If it happens again, report the deployment's ID (for an upload, the request ID)."
       },
       "key_mismatch": {
         "title": "The certificate does not match its private key.",
@@ -504,6 +504,16 @@
         "title": "This certificate was not issued for this signing request.",
         "cause": "Its public key is not the one Alice created for the request.",
         "action": "Paste the certificate your certificate authority returned for this request."
+      },
+      "busy": {
+        "title": "Alice is busy creating other signing requests.",
+        "cause": "Alice creates the keys of at most two signing requests at a time, and that limit was reached. Nothing was stored.",
+        "action": "Wait a moment and create the signing request again."
+      },
+      "too_many_pending": {
+        "title": "There are too many open signing requests.",
+        "cause": "Alice keeps at most 1000 open signing requests, and that limit was reached. Nothing was created.",
+        "action": "Complete or cancel the signing requests you no longer need, then create this one again."
       }
     },
     "deployment": {
@@ -604,13 +614,18 @@
       },
       "rollback_file_changed": {
         "title": "Another program changed the certificate files during the deployment. Manual action is needed.",
-        "cause": "Alice did not put the previous files back, because the files on the server are neither the ones it wrote nor the previous ones. A backup of the previous files is on the server in /var/lib/alice-helper/backups, in the folder named with this deployment's ID.",
-        "action": "Find out which program changed the files (for example certbot), check the website now, then choose Discover on the server's page."
+        "cause": "While Alice was deploying or putting the previous files back, another program changed the certificate or key file. Alice never overwrites that program's file: it put back at most the files it had written itself, so the certificate and key on the server may not belong together now. A backup of the previous files is on the server in /var/lib/alice-helper/backups, in the folder named with this deployment's ID.",
+        "action": "Run nginx -t on the server now: if it fails, the certificate and key do not belong together. Find out which program changed the files (for example certbot), put a matching pair back from that program or from the backup, check the website, then choose Discover on the server's page."
       },
       "rescan_needed": {
         "title": "Alice must read this website's files again before deploying.",
         "cause": "Alice does not know the current content of the certificate file, which it needs to make sure nobody changed the file in the meantime.",
         "action": "Choose Discover on the server's page, then deploy again."
+      },
+      "cancelled": {
+        "title": "An administrator cancelled this deployment before it started.",
+        "cause": "An administrator chose Discard for the deployment's waiting job, so Alice sent nothing to the server. The website keeps its previous certificate.",
+        "action": "Deploy the certificate again if it is still needed."
       }
     }
   },
@@ -625,7 +640,8 @@
     "host_port": "Enter only the server's name or address here. Put the port in the SSH port field.",
     "host_not_allowed": "This address cannot be a managed server (it is a link-local, group or broadcast address, or no address at all).",
     "host_ascii": "Use the server's plain host name (for international names, the form that starts with xn--) or its IP address.",
-    "key_in_certificate": "The certificate field contains a private key. Put only the certificate and its chain here, and the private key in the private key field."
+    "key_in_certificate": "The certificate field contains a private key. Put only the certificate and its chain here, and the private key in the private key field.",
+    "duplicate": "This value is listed more than once."
   },
   "email": {
     "footer": "This message was sent automatically by Alice. Do not reply to it.",

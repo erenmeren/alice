@@ -1156,9 +1156,11 @@ paths:
       operationId: createCSR
       summary: Generate a private key in Alice and a signing request for it
       description: >-
-        The key never leaves Alice. The body is limited to 32 KiB (413 ALC-SYS-0007). 422 validation.failed for a common name or SAN that is not a DNS name (at most
-        64 characters for the common name, at most 50 SANs) or an unknown key type. Refused with 403 ALC-LIC-0001
-        while the license is locked.
+        The key never leaves Alice. Keys are matched exactly (lower case) and each may appear once; anything else is
+        400. The body is limited to 32 KiB (413 ALC-SYS-0007). 422 validation.failed for a common name or SAN that is not a DNS name (at most
+        64 characters for the common name, at most 50 SANs) or an unknown key type. 503 ALC-CRT-0016 (retryable,
+        Retry-After) when Alice already generates two signing-request keys; 409 ALC-CRT-0017 when 1000 signing
+        requests are open. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.operate
       requestBody:
         required: true
@@ -1173,9 +1175,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CSR" }
+        "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
         "413": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/certificates/csr/{id}:
     parameters:
@@ -1200,9 +1205,10 @@ paths:
       summary: Store the certificate a certificate authority issued for a pending signing request
       description: >-
         The certificate gets the request's key. 409 ALC-CRT-0012 when the request is no longer pending, 422
-        ALC-CRT-0013 when the certificate is not for this request's key, the upload refusals otherwise. A
-        certificate whose names differ from the request is stored with the warning csr_name_mismatch. The body is
-        limited to 384 KiB (413 ALC-SYS-0007). Refused with 403 ALC-LIC-0001 while the license is locked.
+        ALC-CRT-0013 when the certificate is not for this request's key, the upload refusals otherwise (422
+        validation.key_in_certificate when a private key is pasted into certificate_pem). A certificate whose names
+        differ from the request is stored with the warning csr_name_mismatch. Keys are matched exactly (lower case)
+        and each may appear once; anything else is 400. The body is limited to 384 KiB (413 ALC-SYS-0007). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.operate
       requestBody:
         required: true
@@ -1217,6 +1223,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CertificateStored" }
+        "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
@@ -1230,7 +1237,7 @@ paths:
       operationId: cancelCSR
       summary: Close a pending signing request without a certificate
       description: >-
-        No body (or {}; at most 4 KiB). 409 ALC-CRT-0012 when the request is no longer pending. Refused with 403 ALC-LIC-0001 while
+        No body (or {}; at most 4 KiB; anything else is 400). 409 ALC-CRT-0012 when the request is no longer pending. Refused with 403 ALC-LIC-0001 while
         the license is locked.
       x-permission: certificates.operate
       responses:
@@ -1239,6 +1246,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CSR" }
+        "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
@@ -1266,7 +1274,9 @@ paths:
       operationId: deployCertificate
       summary: Deploy a certificate to 1 to 20 websites (one deployment and one job per location)
       description: >-
-        The body is limited to 8 KiB (413 ALC-SYS-0007). All or nothing: either every location is queued (202, one item per location in request order) or none is,
+        Keys are matched exactly (lower case) and each may appear once; anything else is 400. A location id that
+        is not a UUID is 422 validation.pattern, one listed twice 422 validation.duplicate. The body is limited to
+        8 KiB (413 ALC-SYS-0007). All or nothing: either every location is queued (202, one item per location in request order) or none is,
         and the error names the refusal; a refusal decided for one location carries params.location_id. Refusals:
         404 (the certificate or a location does not exist), 409 ALC-CRT-0009 (no private key), 422 ALC-CRT-0003
         (expired), 409 ALC-CRT-0014 (not valid yet), 422 ALC-CRT-0007 (key type), 409 ALC-CRT-0011 (an incomplete
@@ -1307,7 +1317,9 @@ paths:
         If-Match must be a single strong validator with the location's current version (its version field), for
         example "3"; a missing or malformed If-Match, a weak validator, a list or * answers 412 ALC-SYS-0008, as does
         a version that is no longer current. At least one field; verify_port 0 and verify_sni "" clear the value.
-        The body is limited to 4 KiB (413 ALC-SYS-0007). Refused with 403 ALC-LIC-0001 while the license is locked.
+        Keys are matched exactly (lower case) and each may appear once; anything else, or a value of the wrong
+        type, is 400. The body is limited to 4 KiB (413 ALC-SYS-0007). Refused with 403 ALC-LIC-0001 while the
+        license is locked.
       x-permission: targets.manage
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
@@ -1324,6 +1336,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CertificateLocation" }
+        "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "412": { $ref: "#/components/responses/Error" }
@@ -2218,7 +2231,9 @@ components:
             Why it did not succeed, as a documented code; null on success. Params are allowlisted (port, failed_step,
             phase, profile, backup_dir, helper_code, subcommand, ...). deployment.rollback_failed is reported as
             deployment.restored_unverified (ALC-DEP-0019) when the files are back but the website was not confirmed,
-            and as deployment.rollback_file_changed (ALC-DEP-0020) when another program changed the files.
+            and as deployment.rollback_file_changed (ALC-DEP-0020) when another program changed the files (Alice put
+            back at most what it had written: the pair may not match). A deployment whose waiting job an
+            Administrator discarded ends failed with deployment.cancelled (ALC-DEP-0022; nothing was sent).
         failed_step: { type: string, description: "The step that failed (verify_current when the pre-check refused; verify when the new certificate was not confirmed); \"\" when none" }
         cause_step: { type: string }
         helper_error: { type: string, description: "A configuration error class or file_changed; \"\" when none" }

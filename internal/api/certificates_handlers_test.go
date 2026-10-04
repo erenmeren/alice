@@ -323,7 +323,7 @@ func TestDeployAnswersAcceptedWithJobs(t *testing.T) {
 		`{}`:                                                validate.OutOfRange,
 		`{"location_ids":["x"]}`:                            validate.Pattern,
 		`{"location_ids":["` + uuid.Nil.String() + `"]}`:                                 validate.Pattern,
-		`{"location_ids":["` + locationID.String() + `","` + locationID.String() + `"]}`: validate.Pattern,
+		`{"location_ids":["` + locationID.String() + `","` + locationID.String() + `"]}`: validate.Duplicate,
 	} {
 		rec := call(h, http.MethodPost, "/api/v1/certificates/"+certID.String()+"/deploy", "admin", body)
 		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, body)
@@ -344,6 +344,53 @@ func TestDeployAnswersAcceptedWithJobs(t *testing.T) {
 	e := decodeErr(t, rec)
 	assert.Equal(t, "ALC-DEP-0001", e.Error.Code)
 	assert.True(t, e.Error.Retryable)
+}
+
+// C m1: the deploy request, the signing request creation and the location settings refuse a
+// repeated or case-variant top-level key (encoding/json alone would let the last or a differently
+// cased one win) before the service is called.
+func TestChangeBodiesRefuseRepeatedAndCaseVariantKeys(t *testing.T) {
+	d, inv := inventoryDeps(t)
+	calls := 0
+	inv.RequestDeploymentFn = func(context.Context, inventory.Actor, inventory.DeployRequestInput) ([]inventory.RequestedDeployment, error) {
+		calls++
+		return nil, nil
+	}
+	inv.CreateCSRFn = func(context.Context, inventory.Actor, inventory.CSRInput) (inventory.CSR, error) {
+		calls++
+		return sampleCSR(), nil
+	}
+	inv.UpdateLocationFn = func(context.Context, inventory.Actor, uuid.UUID, int, inventory.LocationPatch) (inventory.CertificateLocation, error) {
+		calls++
+		return sampleLocation(), nil
+	}
+	h := NewHandler(d)
+	loc, other := `"`+locationID.String()+`"`, `"`+uuid.NewString()+`"`
+	ifMatch := map[string]string{"If-Match": `"3"`}
+	for _, tc := range []struct{ method, path, body string }{
+		{http.MethodPost, "/api/v1/certificates/" + certID.String() + "/deploy", `{"location_ids":[` + loc + `],"location_ids":[` + other + `]}`},
+		{http.MethodPost, "/api/v1/certificates/" + certID.String() + "/deploy", `{"location_ids":[` + loc + `],"Location_IDs":[` + other + `]}`},
+		{http.MethodPost, "/api/v1/certificates/" + certID.String() + "/deploy",
+			`{"location_ids":[` + loc + `],"confirm_incomplete_chain":false,"confirm_incomplete_chain":true}`},
+		{http.MethodPost, "/api/v1/certificates/" + certID.String() + "/deploy", `{"location_ids":[` + loc + `],"CONFIRM_INCOMPLETE_CHAIN":true}`},
+		{http.MethodPost, "/api/v1/certificates/csr", `{"common_name":"a.example.test","common_name":"b.example.test","key_type":"ecdsa-p256"}`},
+		{http.MethodPost, "/api/v1/certificates/csr", `{"common_name":"a.example.test","Key_Type":"rsa-4096","key_type":"ecdsa-p256"}`},
+		{http.MethodPatch, "/api/v1/locations/" + locationID.String(), `{"skip_verify":false,"skip_verify":true}`},
+		{http.MethodPatch, "/api/v1/locations/" + locationID.String(), `{"Skip_Verify":true}`},
+	} {
+		rec := callWith(h, tc.method, tc.path, "admin", tc.body, ifMatch)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, tc.body)
+		assert.Equal(t, "ALC-SYS-0004", decodeErr(t, rec).Error.Code, tc.body)
+	}
+	assert.Zero(t, calls, "nothing ambiguous reaches the service")
+	// The exact keys still work.
+	rec := callWith(h, http.MethodPost, "/api/v1/certificates/"+certID.String()+"/deploy", "admin", `{"location_ids":[`+loc+`],"confirm_incomplete_chain":true}`, nil)
+	assert.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+	rec = callWith(h, http.MethodPost, "/api/v1/certificates/csr", "admin", `{"common_name":"a.example.test","sans":[],"key_type":"ecdsa-p256"}`, nil)
+	assert.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	rec = callWith(h, http.MethodPatch, "/api/v1/locations/"+locationID.String(), "admin", `{"verify_port":null,"skip_verify":true}`, ifMatch)
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, 3, calls)
 }
 
 func TestCertificateListQueryValidation(t *testing.T) {

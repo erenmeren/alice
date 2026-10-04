@@ -431,7 +431,7 @@
       "invalid": {
         "title": "Bu, Alice'in okuyabildiği bir sertifika değil.",
         "cause": "Alice, BEGIN CERTIFICATE blokları içeren PEM metni veya bir PFX dosyası bekler. Bir dağıtımda, kayıtlı sertifika sunucuya bu biçimde gönderilemedi.",
-        "action": "Yüklerken imzalama isteğini veya başka bir dosyayı değil, sertifika dosyasını seçtiğinizden emin olun. Bir dağıtımdan sonra dağıtımın adımlarına bakın: sorun sertifika dosyasının kendisindeyse düzeltilmiş bir sertifika yükleyip onu dağıtın. Sorun yinelenirse istek kimliğini bildirin."
+        "action": "Yüklerken imzalama isteğini veya başka bir dosyayı değil, sertifika dosyasını seçtiğinizden emin olun. Bir dağıtımdan sonra dağıtımın adımlarına bakın: sorun sertifika dosyasının kendisindeyse düzeltilmiş bir sertifika yükleyip onu dağıtın. Sorun yinelenirse dağıtımın kimliğini (yüklemede istek kimliğini) bildirin."
       },
       "key_mismatch": {
         "title": "Sertifika özel anahtarıyla eşleşmiyor.",
@@ -504,6 +504,16 @@
         "title": "Bu sertifika bu imzalama isteği için düzenlenmedi.",
         "cause": "Sertifikanın açık anahtarı, Alice'in bu istek için oluşturduğu anahtar değil.",
         "action": "Sertifika yetkilinizin bu istek için döndürdüğü sertifikayı yapıştırın."
+      },
+      "busy": {
+        "title": "Alice başka imzalama isteklerini oluşturmakla meşgul.",
+        "cause": "Alice aynı anda en fazla iki imzalama isteğinin anahtarını oluşturur ve bu sınıra ulaşıldı. Hiçbir şey kaydedilmedi.",
+        "action": "Biraz bekleyip imzalama isteğini yeniden oluşturun."
+      },
+      "too_many_pending": {
+        "title": "Açık imzalama isteği sayısı çok fazla.",
+        "cause": "Alice en fazla 1000 açık imzalama isteği tutar ve bu sınıra ulaşıldı. Hiçbir şey oluşturulmadı.",
+        "action": "Artık gerekmeyen imzalama isteklerini tamamlayın veya iptal edin, sonra bu isteği yeniden oluşturun."
       }
     },
     "deployment": {
@@ -604,13 +614,18 @@
       },
       "rollback_file_changed": {
         "title": "Dağıtım sırasında başka bir program sertifika dosyalarını değiştirdi. Elle müdahale gerekiyor.",
-        "cause": "Sunucudaki dosyalar ne Alice'in yazdıkları ne de öncekiler olduğu için Alice önceki dosyaları geri koymadı. Önceki dosyaların yedeği sunucuda /var/lib/alice-helper/backups altında, bu dağıtımın kimliğiyle adlandırılmış klasörde.",
-        "action": "Dosyaları hangi programın değiştirdiğini bulun (örneğin certbot), web sitesini hemen denetleyin, sonra sunucunun sayfasında Keşfet'i seçin."
+        "cause": "Alice dağıtım yaparken ya da önceki dosyaları geri koyarken başka bir program sertifika veya anahtar dosyasını değiştirdi. Alice o programın dosyasının üzerine hiçbir zaman yazmaz: en fazla kendi yazdığı dosyaları geri koydu; bu yüzden sunucudaki sertifika ile anahtar şu anda birbirine uymayabilir. Önceki dosyaların yedeği sunucuda /var/lib/alice-helper/backups altında, bu dağıtımın kimliğiyle adlandırılmış klasörde.",
+        "action": "Sunucuda hemen nginx -t komutunu çalıştırın: başarısız olursa sertifika ile anahtar birbirine uymuyordur. Dosyaları hangi programın değiştirdiğini bulun (örneğin certbot), uyumlu bir çifti o programdan ya da yedekten geri koyun, web sitesini denetleyin, sonra sunucunun sayfasında Keşfet'i seçin."
       },
       "rescan_needed": {
         "title": "Dağıtımdan önce Alice'in bu web sitesinin dosyalarını yeniden okuması gerekiyor.",
         "cause": "Alice sertifika dosyasının şu anki içeriğini bilmiyor; bu bilgi, dosyayı bu arada kimsenin değiştirmediğinden emin olmak için gerekir.",
         "action": "Sunucunun sayfasında Keşfet'i seçin, sonra yeniden dağıtın."
+      },
+      "cancelled": {
+        "title": "Bir yönetici bu dağıtımı başlamadan önce iptal etti.",
+        "cause": "Bir yönetici dağıtımın bekleyen işi için Vazgeç'i seçti; bu yüzden Alice sunucuya hiçbir şey göndermedi. Web sitesi önceki sertifikasını kullanmaya devam ediyor.",
+        "action": "Sertifika hâlâ gerekiyorsa yeniden dağıtın."
       }
     }
   },
@@ -625,7 +640,8 @@
     "host_port": "Buraya yalnızca sunucunun adını veya adresini girin. Bağlantı noktasını SSH bağlantı noktası alanına yazın.",
     "host_not_allowed": "Bu adres yönetilen bir sunucu olamaz (yerel bağlantı, grup veya yayın adresi ya da hiç adres değil).",
     "host_ascii": "Sunucunun düz ana bilgisayar adını (uluslararası adlarda xn-- ile başlayan biçimi) veya IP adresini kullanın.",
-    "key_in_certificate": "Sertifika alanında bir özel anahtar var. Buraya yalnızca sertifikayı ve zincirini, özel anahtarı ise özel anahtar alanına girin."
+    "key_in_certificate": "Sertifika alanında bir özel anahtar var. Buraya yalnızca sertifikayı ve zincirini, özel anahtarı ise özel anahtar alanına girin.",
+    "duplicate": "Bu değer listede birden fazla kez var."
   },
   "email": {
     "footer": "Bu ileti Alice tarafından otomatik olarak gönderildi. Lütfen yanıtlamayın.",

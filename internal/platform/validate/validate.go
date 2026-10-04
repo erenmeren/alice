@@ -13,6 +13,7 @@ const (
 	OneOf      = "validation.one_of"       // params: values ("a, b")
 	OutOfRange = "validation.out_of_range" // params: min, max
 	Email      = "validation.email"
+	Duplicate  = "validation.duplicate" // a list names the same value more than once
 )
 
 // FieldError is one invalid field.

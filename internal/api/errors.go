@@ -137,6 +137,8 @@ var (
 	ErrCSRCertificateMismatch = ErrorCode{Code: "ALC-CRT-0013", Reason: "csr.certificate_mismatch", Status: http.StatusUnprocessableEntity}
 	ErrCertNotYetValid        = ErrorCode{Code: "ALC-CRT-0014", Reason: "certificate.not_yet_valid", Status: http.StatusConflict}
 	ErrCertPFXBusy            = ErrorCode{Code: "ALC-CRT-0015", Reason: "certificate.pfx_busy", Status: http.StatusServiceUnavailable, Retryable: true}
+	ErrCSRBusy                = ErrorCode{Code: "ALC-CRT-0016", Reason: "csr.busy", Status: http.StatusServiceUnavailable, Retryable: true}
+	ErrCSRTooManyPending      = ErrorCode{Code: "ALC-CRT-0017", Reason: "csr.too_many_pending", Status: http.StatusConflict}
 
 	ErrDeployInProgress           = ErrorCode{Code: "ALC-DEP-0001", Reason: "deployment.in_progress", Status: http.StatusConflict, Retryable: true}
 	ErrDeployRecoveryPending      = ErrorCode{Code: "ALC-DEP-0002", Reason: "deployment.recovery_pending", Status: http.StatusConflict, Retryable: true}
@@ -162,6 +164,9 @@ var (
 	ErrDeployRestoredUnverified  = ErrorCode{Code: "ALC-DEP-0019", Reason: "deployment.restored_unverified", Status: http.StatusBadGateway}
 	ErrDeployRollbackFileChanged = ErrorCode{Code: "ALC-DEP-0020", Reason: "deployment.rollback_file_changed", Status: http.StatusBadGateway}
 	ErrDeployRescanNeeded        = ErrorCode{Code: "ALC-DEP-0021", Reason: "deployment.rescan_needed", Status: http.StatusConflict}
+	// ErrDeployCancelled: an Administrator discarded the deployment's waiting job before anything
+	// was sent (a stored reason; no failure email).
+	ErrDeployCancelled = ErrorCode{Code: "ALC-DEP-0022", Reason: "deployment.cancelled", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -185,12 +190,12 @@ func AllErrorCodes() []ErrorCode {
 		ErrNginxFileChanged, ErrNginxLocationUnsupported, ErrNginxBusy, ErrNginxIOError,
 		ErrCertInvalid, ErrCertKeyMismatch, ErrCertExpired, ErrCertKeyEncrypted, ErrCertPFXPassword, ErrCertWeak,
 		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
-		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy,
+		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,
 		ErrDeployInProgress, ErrDeployRecoveryPending, ErrDeployVerifyFailed, ErrDeployVerifyOther, ErrDeployVerifyUnreachable,
 		ErrDeployReloadFailed, ErrDeployConfigTestFailed, ErrDeployRollbackFailed, ErrDeployRollbackReloadFailed,
 		ErrDeployInterrupted, ErrDeployTargetNotReady, ErrDeployVerifyChain, ErrDeployNothingToRestore, ErrDeploySuperseded,
 		ErrDeployUnknownOperation, ErrDeployTargetDeleted, ErrDeployRecoveryExhausted, ErrDeployOutcomeUnknown,
-		ErrDeployRestoredUnverified, ErrDeployRollbackFileChanged, ErrDeployRescanNeeded,
+		ErrDeployRestoredUnverified, ErrDeployRollbackFileChanged, ErrDeployRescanNeeded, ErrDeployCancelled,
 	}
 }
 
@@ -270,6 +275,8 @@ var errorMap = []struct {
 	{inventory.ErrCSRNotPending, ErrCSRNotPending, nil},
 	{inventory.ErrLocationUnsupported, ErrNginxLocationUnsupported, nil},
 	{inventory.ErrPFXBusy, ErrCertPFXBusy, nil},
+	{inventory.ErrCSRBusy, ErrCSRBusy, nil},
+	{inventory.ErrTooManyPendingCSRs, ErrCSRTooManyPending, nil},
 	{inventory.ErrCertificateInvalid, ErrCertInvalid, nil},
 	{inventory.ErrKeyMismatch, ErrCertKeyMismatch, nil},
 	{inventory.ErrCertificateExpired, ErrCertExpired, nil},
@@ -350,8 +357,8 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		s.writeError(w, r, ErrUnexpected)
 		return
 	}
-	if ec == ErrCertPFXBusy {
-		w.Header().Set("Retry-After", "1") // a PFX decode slot frees within the decode's time
+	if ec == ErrCertPFXBusy || ec == ErrCSRBusy {
+		w.Header().Set("Retry-After", "1") // a decode or key generation slot frees within seconds
 	}
 	var refused *inventory.LocationRefusalError
 	if errors.As(err, &refused) {
