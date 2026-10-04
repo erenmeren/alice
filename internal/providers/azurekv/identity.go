@@ -19,6 +19,7 @@ var (
 	errBadIdentity    = errors.New("azurekv: the sign-in identity cannot be used")
 	errTenantMismatch = errors.New("azurekv: the vault asks for a token of another tenant")
 	errChallengeScope = errors.New("azurekv: the vault asks for a token for another resource")
+	errEnvironment    = errors.New("azurekv: the process environment makes the SDK act outside the guard")
 )
 
 // tokenError marks an error of the credential's GetToken: a sign-in failure, not a vault answer.
@@ -43,6 +44,9 @@ type signInCredential struct {
 }
 
 func (c *signInCredential) GetToken(ctx context.Context, tro policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	if refusedEnvironment() { // MSAL reads its region variable here, not at Open
+		return azcore.AccessToken{}, &tokenError{c.auth, errEnvironment}
+	}
 	if c.auth != providers.AzureAuthManagedIdentity && tro.TenantID != "" && foldASCII(tro.TenantID) != foldASCII(c.tenant) {
 		return azcore.AccessToken{}, &tokenError{c.auth, errTenantMismatch}
 	}

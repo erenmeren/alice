@@ -3,7 +3,9 @@ package azurekv
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -168,7 +170,11 @@ func TestTLSMustChainToTheConfiguredRoots(t *testing.T) {
 
 func TestManagedIdentityTalksOnlyToIMDS(t *testing.T) {
 	s := fakekv.Start(t, fakekv.Options{})
-	g := newIMDSTransport(s.DialAddr)
+	var dialed []string
+	g := newIMDSTransport(s.DialAddr, func(_ context.Context, _, addr string) (net.Conn, error) {
+		dialed = append(dialed, addr)
+		return nil, errors.New("test dial")
+	})
 	for _, raw := range []string{
 		"https://169.254.169.254/metadata/identity/oauth2/token", "http://169.254.169.254:8080/x", "http://169.254.169.254:443/x",
 		"http://evil.test/x", "http://169.254.169.253/x", "http://" + testVaultHost + "/x", "https://" + testVaultHost + "/x",
@@ -184,6 +190,10 @@ func TestManagedIdentityTalksOnlyToIMDS(t *testing.T) {
 	assert.ErrorIs(t, err, errHostNotAllowed)
 	_, err = g.tr.DialContext(context.Background(), "tcp", "169.254.169.254:443")
 	assert.ErrorIs(t, err, errHostNotAllowed)
+	assert.Empty(t, dialed, "the test dial override is reached only after the address check")
+	_, err = g.tr.DialContext(context.Background(), "tcp", "169.254.169.254:80")
+	require.Error(t, err)
+	assert.Equal(t, []string{"169.254.169.254:80"}, dialed)
 	assert.Nil(t, g.tr.Proxy)
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/", nil)
 	assert.ErrorIs(t, g.client.CheckRedirect(req, nil), http.ErrUseLastResponse)

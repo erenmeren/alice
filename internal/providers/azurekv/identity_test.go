@@ -188,11 +188,11 @@ func TestManagedIdentityUnknownIdentity(t *testing.T) {
 
 // TestRegionEnvironmentNeverLeavesTheGuard: a region variable makes MSAL detect its region with a
 // bare http.Client (http.DefaultTransport) against the metadata address. Open refuses it first.
-func TestRegionEnvironmentNeverLeavesTheGuard(t *testing.T) {
+func TestRegionEnvironmentNeverLeavesTheGuard(t *testing.T) { // also the SDK logging variable (N1)
 	sp := rsaSP(t)
 	key, err := x509.MarshalPKCS8PrivateKey(sp.Key)
 	require.NoError(t, err)
-	for _, env := range []string{"AZURE_REGIONAL_AUTHORITY_NAME", "MSAL_FORCE_REGION"} {
+	for _, env := range []string{"AZURE_REGIONAL_AUTHORITY_NAME", "MSAL_FORCE_REGION", "AZURE_SDK_GO_LOGGING"} {
 		for _, auth := range []string{providers.AzureAuthClientSecret, providers.AzureAuthCertificate, providers.AzureAuthManagedIdentity} {
 			t.Run(env+"/"+auth, func(t *testing.T) {
 				t.Setenv(env, "TryAutoDetect")
@@ -245,6 +245,7 @@ func TestManagedIdentityOtherSourcesFailClosed(t *testing.T) {
 			require.ErrorAs(t, err, &pe)
 			assert.Equal(t, "azure.managed_identity_unavailable", pe.Code)
 			assert.False(t, pe.Retryable)
+			assertNoLeak(t, pe, s)
 			for _, r := range s.Requests() {
 				assert.NotEqual(t, "evil.test", r.Host)
 			}
@@ -282,6 +283,27 @@ func TestEveryTransportRequiresTLS12(t *testing.T) {
 		assert.False(t, g.tr.TLSClientConfig.InsecureSkipVerify)
 	}
 	// The metadata transport speaks plain http to one address and has no TLS configuration to weaken.
-	im := newIMDSTransport(nil)
+	im := newIMDSTransport(nil, nil)
 	assert.Nil(t, im.tr.TLSClientConfig)
+}
+
+// N2: MSAL reads MSAL_FORCE_REGION at the first token, after Open. The check is repeated before
+// every token request, for every refused variable and every sign-in method.
+func TestEnvironmentSetAfterOpenIsRefusedAtTheToken(t *testing.T) {
+	for _, env := range []string{"AZURE_REGIONAL_AUTHORITY_NAME", "MSAL_FORCE_REGION", "AZURE_SDK_GO_LOGGING"} {
+		t.Run(env, func(t *testing.T) {
+			w := newWorld(t, fakekv.Options{})
+			before := bypassed.Load()
+			t.Setenv(env, "TryAutoDetect")
+			_, err := w.sess.api.Token(context.Background())
+			pe := asProviderError(t, err)
+			assert.Equal(t, codeAddressNotAllowed, pe.Code)
+			assert.False(t, pe.Retryable)
+			assertNoLeak(t, pe, w.s)
+			assert.Equal(t, before, bypassed.Load(), "nothing reached http.DefaultTransport")
+			assert.Empty(t, w.s.Requests(), "no token request was sent")
+			_, err = w.sess.TestConnection(context.Background())
+			assert.Equal(t, codeAddressNotAllowed, asProviderError(t, err).Code)
+		})
+	}
 }

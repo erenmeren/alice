@@ -58,6 +58,9 @@ const (
 	azidentityPath = "github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	azcoreLogPath  = "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	msalPath       = "github.com/AzureAD/microsoft-authentication-library-for-go"
+	sdkPrefix      = "github.com/Azure/azure-sdk-for-go/sdk/"
+	azcorePath     = sdkPrefix + "azcore"
+	azcorePolicy   = azcorePath + "/policy"
 	azurekvDir     = "internal/providers/azurekv/"
 )
 
@@ -152,18 +155,45 @@ func scanSource(rel, src string) []string {
 			}
 		case *ast.CompositeLit:
 			s, ok := x.Type.(*ast.SelectorExpr)
-			if !ok || !inKV {
+			if !ok {
 				break
 			}
 			id, ok := s.X.(*ast.Ident)
 			if !ok {
 				break
 			}
-			if imports[id.Name] == "net/http" && s.Sel.Name == "Transport" && rel != azurekvDir+"transport.go" {
-				add("builds an http.Transport outside transport.go")
+			p := imports[id.Name]
+			if inKV && p == "net/http" && (s.Sel.Name == "Transport" || s.Sel.Name == "Client") && rel != azurekvDir+"transport.go" {
+				add("builds an http." + s.Sel.Name + " outside transport.go")
 			}
-			if strings.HasSuffix(imports[id.Name], "/azcore") && s.Sel.Name == "ClientOptions" && rel != azurekvDir+"identity.go" {
-				add("builds azcore.ClientOptions outside identity.go")
+			// Client options of the SDK carry the transport: only identity.go builds them, from the
+			// guarded transports. A literal elsewhere is a client on azcore's own transport.
+			if !isTest && (p == azcorePath || p == azcorePolicy) && s.Sel.Name == "ClientOptions" && rel != azurekvDir+"identity.go" {
+				add("builds " + id.Name + ".ClientOptions outside identity.go")
+			}
+		case *ast.CallExpr:
+			switch fn := x.Fun.(type) {
+			case *ast.SelectorExpr:
+				id, ok := fn.X.(*ast.Ident)
+				if !ok || isTest || fn.Sel.Name != "NewClient" || !strings.HasPrefix(imports[id.Name], sdkPrefix) {
+					break
+				}
+				if rel != azurekvDir+"kvapi.go" {
+					add("builds an SDK client outside kvapi.go: " + id.Name + ".NewClient")
+				} else if len(x.Args) >= 3 {
+					if o, ok := x.Args[len(x.Args)-1].(*ast.Ident); ok && o.Name == "nil" {
+						add("builds an SDK client without options (its own transport): " + id.Name + ".NewClient")
+					}
+				}
+			case *ast.Ident:
+				if fn.Name != "new" || len(x.Args) != 1 || !inKV || rel == azurekvDir+"transport.go" {
+					break
+				}
+				if t, ok := x.Args[0].(*ast.SelectorExpr); ok {
+					if id, ok := t.X.(*ast.Ident); ok && imports[id.Name] == "net/http" && (t.Sel.Name == "Transport" || t.Sel.Name == "Client") {
+						add("builds an http." + t.Sel.Name + " outside transport.go")
+					}
+				}
 			}
 		}
 		return true
@@ -224,6 +254,30 @@ var _ = &http.Transport{}`, "http.Transport outside transport.go"},
 		{"client options built outside identity.go", kv, `package p
 import "github.com/Azure/azure-sdk-for-go/sdk/azcore"
 var _ = azcore.ClientOptions{}`, "ClientOptions outside identity.go"},
+		{"policy client options anywhere", "x/y.go", `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+var _ = &policy.ClientOptions{}`, "ClientOptions outside identity.go"},
+		{"policy client options under an alias, in another file of the package", kv, `package p
+import p "github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+var _ = p.ClientOptions{}`, "ClientOptions outside identity.go"},
+		{"an SDK client outside kvapi.go", kv, `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates"
+var _, _ = azcertificates.NewClient("u", nil, nil)`, "outside kvapi.go"},
+		{"an SDK client in another package", "internal/x/y.go", `package p
+import k "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
+var _, _ = k.NewClient("u", nil, &k.ClientOptions{})`, "outside kvapi.go"},
+		{"an SDK client without options in kvapi.go", azurekvDir + "kvapi.go", `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
+var _, _ = azsecrets.NewClient("u", nil, nil)`, "without options"},
+		{"an http.Client literal in the package", kv, `package p
+import "net/http"
+var _ = &http.Client{}`, "http.Client outside transport.go"},
+		{"new(http.Transport) in the package", kv, `package p
+import h "net/http"
+var _ = new(h.Transport)`, "http.Transport outside transport.go"},
+		{"new(http.Client) in the package", kv, `package p
+import "net/http"
+var _ = new(http.Client)`, "http.Client outside transport.go"},
 		{"skip verify in this package", kv, `package p
 import "crypto/tls"
 var _ = tls.Config{InsecureSkipVerify: true}`, "InsecureSkipVerify"},
@@ -241,6 +295,16 @@ var _, _ = azidentity.NewClientSecretCredential("", "", "", nil)`))
 	assert.Empty(t, scanSource(azurekvDir+"errors.go", `package p
 import "github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 var _ *azidentity.AuthenticationFailedError`))
+	assert.Empty(t, scanSource(azurekvDir+"kvapi.go", `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates"
+var _, _ = azcertificates.NewClient("u", nil, &azcertificates.ClientOptions{})`), "kvapi.go builds the clients")
+	assert.Empty(t, scanSource(azurekvDir+"transport.go", `package p
+import "net/http"
+var _ = &http.Client{}
+var _ = new(http.Transport)`), "transport.go builds the HTTP clients")
+	assert.Empty(t, scanSource(azurekvDir+"identity.go", `package p
+import "github.com/Azure/azure-sdk-for-go/sdk/azcore"
+var _ = azcore.ClientOptions{}`), "identity.go builds the options")
 	assert.Empty(t, scanSource("x/y_test.go", `package p
 import "github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 var _, _ = azidentity.NewClientSecretCredential("", "", "", nil)`), "tests may build credentials")

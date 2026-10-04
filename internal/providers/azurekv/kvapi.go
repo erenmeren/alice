@@ -64,6 +64,7 @@ func newSDKAPI(v azureid.Vault, cred azcore.TokenCredential, opts azcore.ClientO
 var (
 	errPageCap  = errors.New("azurekv: a listing has more pages than any vault Alice supports")
 	errPageLoop = errors.New("azurekv: a listing repeats a next link")
+	errLinkLong = errors.New("azurekv: a listing's next link is longer than any vault sends")
 )
 
 // resumePager builds a pager positioned after the page whose nextLink is link: a new pager seeded,
@@ -124,6 +125,9 @@ func pages[R any](ctx context.Context, r *retryer, action string, newPager func(
 		}
 		last = nextLink(page)
 		if last != nil {
+			if len(*last) > MaxNextLink {
+				return unexpected(errLinkLong)
+			}
 			if seen[*last] {
 				return unexpected(errPageLoop)
 			}

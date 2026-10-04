@@ -129,7 +129,8 @@ type imdsTransport struct {
 	client *http.Client
 }
 
-func newIMDSTransport(dialAddr func(string) string) *imdsTransport {
+// dial, when set (the test seam), replaces the connection itself, after the address check.
+func newIMDSTransport(dialAddr func(string) string, dial dialFunc) *imdsTransport {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	t := &imdsTransport{}
 	t.tr = &http.Transport{
@@ -137,6 +138,9 @@ func newIMDSTransport(dialAddr func(string) string) *imdsTransport {
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if addr != azureid.IMDSAddr {
 				return nil, errHostNotAllowed
+			}
+			if dial != nil {
+				return dial(ctx, network, addr)
 			}
 			if dialAddr != nil {
 				addr = dialAddr(addr)

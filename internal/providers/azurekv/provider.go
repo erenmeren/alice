@@ -45,6 +45,9 @@ const (
 	// plus the managed ones of up to MaxKVCertificates certificates) at the page size of 25 is about
 	// 600 pages; 1000 leaves room and still ends a cycling vault within seconds.
 	MaxListPages = 1000
+	// MaxNextLink bounds one nextLink (a real one is about 200 bytes): the links of a listing are
+	// remembered to catch a cycle, so each must be small.
+	MaxNextLink = 4 << 10
 )
 
 // Options configures the provider.
@@ -178,15 +181,9 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 	if err != nil {
 		return nil, providers.NewError(codeAddressNotAllowed, false, nil, nil)
 	}
-	// A region variable makes MSAL detect its region with a bare http.Client: a request to the
-	// metadata address through http.DefaultTransport (and any HTTP_PROXY), outside every guard.
-	// Neither variable is ever honoured: the session is refused before anything is decrypted.
-	// azure.address_not_allowed is the closest closed code: the SDK would otherwise connect to an
-	// address this provider does not allow.
-	for _, name := range []string{"AZURE_REGIONAL_AUTHORITY_NAME", "MSAL_FORCE_REGION"} {
-		if os.Getenv(name) != "" {
-			return nil, providers.NewError(codeAddressNotAllowed, false, nil, nil)
-		}
+	// See refusedEnvironment: the session is refused before anything is decrypted.
+	if refusedEnvironment() {
+		return nil, providers.NewError(codeAddressNotAllowed, false, nil, nil)
 	}
 	src, ok := cred.(providers.AzureCredentialSource)
 	if !ok {
@@ -215,7 +212,7 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 	login := newGuardedTransport([]string{azureid.AuthorityHost}, roots, p.o.dialAddr)
 	vaultTr := newGuardedTransport([]string{vault.Host}, roots, p.o.dialAddr)
 	login.dialOverride, vaultTr.dialOverride = p.o.dial, p.o.dial
-	imds := newIMDSTransport(p.o.dialAddr)
+	imds := newIMDSTransport(p.o.dialAddr, p.o.dial)
 	closers := []func(){login.CloseIdleConnections, vaultTr.CloseIdleConnections, imds.CloseIdleConnections}
 
 	cr, err := newCredential(id, clientOptions(login), clientOptions(imds))
@@ -237,6 +234,27 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 		return nil, providers.NewError(codeUnexpected, false, nil, nil)
 	}
 	return &session{vault: vault, api: api, clock: clk, log: log, auth: id.Auth, closers: closers}, nil
+}
+
+// refusedEnv are environment variables that make the Azure SDK or MSAL act outside Alice's guard:
+//   - AZURE_REGIONAL_AUTHORITY_NAME and MSAL_FORCE_REGION make MSAL detect its region with a bare
+//     http.Client (http.DefaultTransport, and any HTTP_PROXY): a request to the metadata address
+//     outside every guard. MSAL reads them at the first token, after Open.
+//   - AZURE_SDK_GO_LOGGING makes the SDK print every failed call (URL, status, Azure's JSON body
+//     and message) to stderr; it is read when the SDK is initialised, so only refusing the session
+//     keeps Azure's text out of the process output (the Secret rule, ruling S4).
+//
+// azure.address_not_allowed is the closest closed code: the SDK would otherwise act on an address
+// or a log this provider does not allow.
+var refusedEnv = []string{"AZURE_REGIONAL_AUTHORITY_NAME", "MSAL_FORCE_REGION", "AZURE_SDK_GO_LOGGING"}
+
+func refusedEnvironment() bool {
+	for _, name := range refusedEnv {
+		if os.Getenv(name) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // session is one connection scope on one vault.

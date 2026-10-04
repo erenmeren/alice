@@ -360,6 +360,8 @@ func classifySignIn(te *tokenError, sn wireSnapshot) failure {
 		return ctxFailure(context.DeadlineExceeded)
 	case errors.As(te.err, &af) && af.RawResponse != nil:
 		return classifyEntra(af.RawResponse, mi)
+	case errors.Is(te.err, errEnvironment):
+		return failure{err: perr(codeAddressNotAllowed, false, errEnvironment, nil)}
 	case errors.Is(te.err, errTenantMismatch):
 		return failure{err: perr(codeAuthFailed, false, errTenantMismatch, map[string]string{paramReason: "tenant_mismatch"})}
 	case errors.Is(te.err, errChallengeScope):

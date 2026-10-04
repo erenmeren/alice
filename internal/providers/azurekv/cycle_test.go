@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates"
@@ -80,5 +81,36 @@ func TestNextLinkCycleEnds(t *testing.T) {
 	t.Run("the cap fits the largest vault", func(t *testing.T) {
 		// 10,000 secrets (and the certificates' own managed ones) at 25 per page.
 		assert.GreaterOrEqual(t, MaxListPages*25, MaxKVSecrets+MaxKVCertificates)
+	})
+}
+
+// N5: a nextLink longer than any real one is refused before it is remembered or followed.
+func TestNextLinkLengthIsBounded(t *testing.T) {
+	s := fakekv.Start(t, fakekv.Options{})
+	s.AddBulkCertificates("bulk", 60)
+	clk := nearNow()
+	sess := openSession(t, testProvider(s), &idSource{id: secretIdentity(s)}, clk)
+	for name, n := range map[string]int{"just over the bound": MaxNextLink + 1, "huge": 3 << 20} {
+		t.Run(name, func(t *testing.T) {
+			s.ClearRequests()
+			s.FailNext("/certificates", fakekv.Fault{NextLink: link("bulk-00") + "&pad=" + strings.Repeat("a", n)})
+			pages := 0
+			err := drive(clk, func() error {
+				return sess.api.ListCertificates(context.Background(), func([]*azcertificates.CertificateProperties) error { pages++; return nil })
+			})
+			pe := asProviderError(t, err)
+			assert.Equal(t, codeUnexpected, pe.Code)
+			require.ErrorIs(t, pe, providers.ErrUnexpectedAnswer)
+			assert.Equal(t, 1, listedRequests(s), "the link was never followed")
+		})
+	}
+	t.Run("a link at the bound is fine", func(t *testing.T) {
+		s.ClearRequests()
+		l := link("bulk-00")
+		s.FailNext("/certificates", fakekv.Fault{NextLink: l + "&pad=" + strings.Repeat("a", MaxNextLink-len(l)-5)})
+		err := drive(clk, func() error {
+			return sess.api.ListCertificates(context.Background(), func([]*azcertificates.CertificateProperties) error { return nil })
+		})
+		require.NoError(t, err)
 	})
 }

@@ -139,7 +139,7 @@ func TestMapErrorTable(t *testing.T) {
 		{name: "IMDS identity not found", op: "token", opts: fakekv.Options{ManagedIdentity: true, MIClientID: uuid.NewString()},
 			id: miID, code: codeManagedIdentityGone},
 		{name: "no IMDS", op: "token", opts: fakekv.Options{ManagedIdentity: true}, id: miID,
-			setup: dialFailing("169.254.169.254", refused), code: codeManagedIdentityGone},
+			setup: dialFailing("169.254.169.254", refused), code: codeManagedIdentityGone, cause: errDial},
 		{name: "IMDS 429", op: "token", opts: fakekv.Options{ManagedIdentity: true}, id: miID,
 			setup: vaultFault(fakekv.Fault{Status: 429}, "/metadata/"), code: codeThrottled, retryable: true},
 		{name: "vault 401 after a token", op: "get", setup: vaultFault(fakekv.Fault{Status: 401, Body: kvBody("Unauthorized", "", "AKV10000")}, "/certificates"),
@@ -364,8 +364,8 @@ func TestMapErrorTenantMismatchAndForeignResource(t *testing.T) {
 func assertCauseChainIsOurs(t *testing.T, err error) {
 	t.Helper()
 	known := []error{errNotSent, errDNS, errTLS, errDial, errMalformed, errUnclassified, errChallenge, errPanic,
-		errHostNotAllowed, errRedirect, errBodyTooLarge, errTenantMismatch, errChallengeScope, errBadIdentity,
-		errPageCap, errPageLoop, providers.ErrUnexpectedAnswer, netaddr.ErrNotAllowed, context.Canceled,
+		errHostNotAllowed, errRedirect, errBodyTooLarge, errTenantMismatch, errChallengeScope, errEnvironment, errBadIdentity,
+		errPageCap, errPageLoop, errLinkLong, providers.ErrUnexpectedAnswer, netaddr.ErrNotAllowed, context.Canceled,
 		context.DeadlineExceeded, io.ErrUnexpectedEOF}
 	var walk func(e error)
 	walk = func(e error) {
