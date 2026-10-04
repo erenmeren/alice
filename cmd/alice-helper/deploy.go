@@ -250,6 +250,11 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 		if err != nil {
 			return nil, failed(helperproto.CodeIOError, "the journal of this operation cannot be read")
 		}
+		if found && j.Phase == helperproto.PhaseFenced {
+			// AUD-05: recovery fenced this operation and recorded that it wrote nothing (a helper
+			// that started late, after a sudo or PAM stall): it never runs.
+			return nil, precondition(helperproto.CodeFenced, "this deployment was ended by Alice's recovery; it is not carried out")
+		}
 		if found {
 			if j.CertPath != d.certPath || j.KeyPath != d.keyPath || j.NewCertSHA != newCertSHA || j.NewKeySHA != newKeySHA {
 				return nil, refused(helperproto.CodeInvalidArgument, "the operation id belongs to another deployment")
@@ -1007,7 +1012,7 @@ func cmdNginxRestore(ctx context.Context, s *sys, args []string) (out any, err e
 		return nil, precondition(helperproto.CodeUnknownOp, "there is no deployment with this operation id")
 	}
 	switch j.Phase {
-	case helperproto.PhasePrepared, helperproto.PhaseUnchanged, helperproto.PhaseRestored:
+	case helperproto.PhasePrepared, helperproto.PhaseUnchanged, helperproto.PhaseRestored, helperproto.PhaseFenced:
 		s.cleanStaged(j)
 		return helperproto.NginxRestoreResponse{OK: true, Phase: j.Phase, FailedStep: j.FailedStep, CauseStep: j.CauseStep,
 			Error: j.Error, Steps: []helperproto.NginxStep{}}, nil
@@ -1066,11 +1071,19 @@ func cmdNginxStatus(_ context.Context, s *sys, args []string) (any, error) {
 	if !found {
 		return resp, nil
 	}
+	return s.statusOf(j, resp), nil
+}
+
+// statusOf fills an nginx-status answer from a journal (a tombstone names no file).
+func (s *sys) statusOf(j journal, resp helperproto.NginxStatusResponse) helperproto.NginxStatusResponse {
 	resp.Phase, resp.NewCertSHA256 = j.Phase, j.NewCertSHA
 	resp.FailedStep, resp.CauseStep, resp.Error = j.FailedStep, j.CauseStep, j.Error
+	if j.Phase == helperproto.PhaseFenced {
+		return resp
+	}
 	if t, err := s.readTarget(j.CertPath); err == nil {
 		resp.CurrentCertSHA256 = hexSHA(t.data)
 		t.close()
 	}
-	return resp, nil
+	return resp
 }

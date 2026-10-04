@@ -181,6 +181,12 @@ func CmdNginxStatus(op uuid.UUID) (HelperCommand, error) {
 	return opCommand(helperproto.SubNginxStatus, op, DefaultCommandTimeout)
 }
 
+// CmdNginxFence fences an operation (AUD-05): it waits for the helper's Nginx lock like
+// nginx-restore, so it gets the deploy's timeout.
+func CmdNginxFence(op uuid.UUID) (HelperCommand, error) {
+	return opCommand(helperproto.SubNginxFence, op, DeployCommandTimeout)
+}
+
 func opCommand(sub string, op uuid.UUID, timeout time.Duration) (HelperCommand, error) {
 	if op == uuid.Nil || !helperproto.ValidOpID(op.String()) {
 		return HelperCommand{}, ErrInvalidArgument

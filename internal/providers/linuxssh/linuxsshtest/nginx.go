@@ -109,6 +109,7 @@ type nginxHost struct {
 	probeFails    bool
 	reloads       int
 	deploys       int
+	fences        int // nginx-fence calls that reached the helper (FenceCount)
 	stdins        []*secretBuf
 
 	ops     map[string]*opDir
@@ -485,7 +486,7 @@ func (e *Emulator) FailRestoreFile(p string) {
 // FailJournalWrite makes the next write of a journal in the given phase (prepared, writing or
 // committed) fail: a refusal for the first two, the journal step's rollback for committed.
 func (e *Emulator) FailJournalWrite(phase string) {
-	if !slices.Contains([]string{helperproto.PhasePrepared, helperproto.PhaseWriting, helperproto.PhaseCommitted, helperproto.PhaseRestoring}, phase) {
+	if !slices.Contains([]string{helperproto.PhasePrepared, helperproto.PhaseWriting, helperproto.PhaseCommitted, helperproto.PhaseRestoring, helperproto.PhaseFenced}, phase) {
 		panic("linuxsshtest: FailJournalWrite: the helper answers a failed journal write only in the phases prepared, writing, committed and restoring, not " + phase)
 	}
 	e.mu.Lock()
@@ -555,7 +556,7 @@ func (e *Emulator) KillAt(point string) {
 // inline nginx-restore) arms a fault for the later one this way. "" goes back to the default: the
 // next transaction command takes the faults.
 func (e *Emulator) ArmFaultsFor(sub string) {
-	if !slices.Contains([]string{"", helperproto.SubNginxDeploy, helperproto.SubNginxRestore, helperproto.SubCleanup}, sub) {
+	if !slices.Contains([]string{"", helperproto.SubNginxDeploy, helperproto.SubNginxRestore, helperproto.SubCleanup, helperproto.SubNginxFence}, sub) {
 		panic("linuxsshtest: ArmFaultsFor: not a transaction subcommand: " + sub)
 	}
 	e.mu.Lock()
@@ -637,6 +638,13 @@ func (e *Emulator) Reloads() int {
 	return e.nginx().reloads
 }
 
+// FenceCount returns how many nginx-fence calls reached the helper (AUD-05).
+func (e *Emulator) FenceCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.nginx().fences
+}
+
 // DeployCount counts the nginx-deploy calls that reached the transaction (past the argument,
 // lock and content checks).
 func (e *Emulator) DeployCount() int {
@@ -698,7 +706,8 @@ func sortedKeys[V any](m map[string]V) []string {
 
 func isNginxSub(sub string) bool {
 	switch sub {
-	case helperproto.SubNginxDump, helperproto.SubNginxTest, helperproto.SubNginxDeploy, helperproto.SubNginxRestore, helperproto.SubNginxStatus:
+	case helperproto.SubNginxDump, helperproto.SubNginxTest, helperproto.SubNginxDeploy, helperproto.SubNginxRestore, helperproto.SubNginxStatus,
+		helperproto.SubNginxFence:
 		return true
 	}
 	return false
@@ -716,7 +725,7 @@ func sudoersAllows(sub string, args []string) bool {
 	switch sub {
 	case helperproto.SubNginxDump, helperproto.SubNginxTest:
 		return len(args) == 0
-	case helperproto.SubNginxRestore, helperproto.SubNginxStatus:
+	case helperproto.SubNginxRestore, helperproto.SubNginxStatus, helperproto.SubNginxFence:
 		return len(args) == 2 && args[0] == "--op" && len(args[1]) == 36
 	case helperproto.SubNginxDeploy:
 		return len(args) == 10 && args[0] == "--op" && len(args[1]) == 36 && args[2] == "--cert" && strings.HasPrefix(args[3], "/") &&
@@ -748,6 +757,8 @@ func (e *Emulator) handleNginx(sudo bool, sub string, args []string, stdin []byt
 		return e.nginxDeploy(args, stdin)
 	case helperproto.SubNginxRestore:
 		return e.nginxRestore(args)
+	case helperproto.SubNginxFence:
+		return e.nginxFence(args)
 	default:
 		return e.nginxStatus(args)
 	}

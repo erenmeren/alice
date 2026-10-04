@@ -52,7 +52,8 @@ var (
 		helperproto.CodeNotFound: helperproto.ExitPrecondition, helperproto.CodeHashMismatch: helperproto.ExitPrecondition,
 		helperproto.CodeNoSpace: helperproto.ExitPrecondition, helperproto.CodeSuperseded: helperproto.ExitPrecondition,
 		helperproto.CodeRecoveryPending: helperproto.ExitPrecondition, helperproto.CodeNginxNotRunning: helperproto.ExitPrecondition,
-		helperproto.CodeBusy: helperproto.ExitFailed, helperproto.CodeIOError: helperproto.ExitFailed,
+		helperproto.CodeFenced: helperproto.ExitPrecondition,
+		helperproto.CodeBusy:   helperproto.ExitFailed, helperproto.CodeIOError: helperproto.ExitFailed,
 	}
 	restoreRefusals = map[string]int{
 		helperproto.CodeUsage: helperproto.ExitRefused, helperproto.CodeUnknownSubcommand: helperproto.ExitRefused,
@@ -74,7 +75,7 @@ var (
 	nginxClasses  = []string{helperproto.ConfigErrKeyMismatch, helperproto.ConfigErrFileMissing, helperproto.ConfigErrCertLoad,
 		helperproto.ConfigErrKeyLoad, helperproto.ConfigErrSyntax}
 	helperPhases = []string{helperproto.PhaseNone, helperproto.PhasePrepared, helperproto.PhaseWriting, helperproto.PhaseCommitted,
-		helperproto.PhaseUnchanged, helperproto.PhaseRestoring, helperproto.PhaseRestored, helperproto.PhaseRestoreFailed}
+		helperproto.PhaseUnchanged, helperproto.PhaseRestoring, helperproto.PhaseRestored, helperproto.PhaseRestoreFailed, helperproto.PhaseFenced}
 )
 
 // maxAnswerSteps bounds the steps of one answer (the helper trims its journal's list to 64).
@@ -730,6 +731,13 @@ func (s *session) restore(ctx context.Context, op uuid.UUID, log providers.StepL
 		return restoreResult{}, protocolError(sub, "steps outside the helper's vocabulary")
 	}
 	switch a.Phase {
+	case helperproto.PhaseFenced:
+		// Fenced by a recovery (AUD-05): the operation never ran, nothing was restored (as for an
+		// unknown operation: a refusal, never "nothing to restore" of a journal that exists).
+		if len(steps) > 0 {
+			return restoreResult{}, protocolError(sub, "a fenced operation with steps")
+		}
+		return restoreResult{refusal: providers.NewError(reasonUnknownOperation, false, nil, nil), code: helperproto.CodeUnknownOp}, nil
 	case helperproto.PhasePrepared, helperproto.PhaseUnchanged:
 		if len(steps) > 0 {
 			return restoreResult{}, protocolError(sub, "nothing to restore, with steps")
@@ -819,6 +827,33 @@ func (s *session) DeploymentStatus(ctx context.Context, op uuid.UUID) (providers
 	if err != nil {
 		return providers.DeploymentState{}, providers.NewError(reasonUnexpected, false, err, nil)
 	}
+	return s.stateCall(ctx, sub, cmd, op)
+}
+
+// FenceDeployment fences an operation on the server (nginx-fence, AUD-05): under the helper's lock
+// an operation without a journal, or with a prepared one, gets a tombstone, after which
+// nginx-deploy of it refuses without writing. The answer is checked like nginx-status's. Only
+// PhaseFenced with a nil error proves that the operation wrote nothing and never will; any error
+// (transport, BUSY, sudo's refusal of a server whose sudoers lacks the line, a protocol error) proves
+// nothing. A helper older than protocol 5 never gets here: Open refuses it (ssh.helper_outdated).
+func (s *session) FenceDeployment(ctx context.Context, op uuid.UUID) (providers.DeploymentState, error) {
+	const sub = helperproto.SubNginxFence
+	if err := s.open(); err != nil {
+		return providers.DeploymentState{}, err
+	}
+	cmd, err := linuxssh.CmdNginxFence(op)
+	if err != nil {
+		return providers.DeploymentState{}, providers.NewError(reasonUnexpected, false, err, nil)
+	}
+	st, err := s.stateCall(ctx, sub, cmd, op)
+	if err == nil && st.Active && st.Phase == providers.PhaseFenced {
+		return providers.DeploymentState{}, protocolError(sub, "a fence answered while another helper held the lock")
+	}
+	return st, err
+}
+
+// stateCall runs nginx-status or nginx-fence and checks the answer (see DeploymentStatus).
+func (s *session) stateCall(ctx context.Context, sub string, cmd linuxssh.HelperCommand, op uuid.UUID) (providers.DeploymentState, error) {
 	res, err := s.conn.Run(ctx, cmd)
 	if err != nil {
 		return providers.DeploymentState{}, err
@@ -832,6 +867,11 @@ func (s *session) DeploymentStatus(ctx context.Context, op uuid.UUID) (providers
 		return providers.DeploymentState{}, protocolError(sub, "an unknown phase")
 	case r.Phase == helperproto.PhaseNone:
 		return providers.DeploymentState{Phase: providers.PhaseNone, Active: r.Active}, nil
+	case r.Phase == helperproto.PhaseFenced:
+		if r.FailedStep != "" || r.CauseStep != "" || r.Error != "" || r.NewCertSHA256 != "" || r.CurrentCertSHA256 != "" {
+			return providers.DeploymentState{}, protocolError(sub, "a fenced operation with a journal's fields")
+		}
+		return providers.DeploymentState{Phase: providers.PhaseFenced, Active: r.Active, BackupDir: backupDir(op)}, nil
 	case (r.FailedStep != "" && !slices.Contains(helperSteps, r.FailedStep)) || (r.CauseStep != "" && !slices.Contains(helperSteps, r.CauseStep)) ||
 		!knownClass(r.Error, true) || !isHexSHA256(r.NewCertSHA256) || (r.CurrentCertSHA256 != "" && !isHexSHA256(r.CurrentCertSHA256)):
 		return providers.DeploymentState{}, protocolError(sub, "a journal outside the helper's vocabulary")

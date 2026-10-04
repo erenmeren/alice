@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"reflect"
 	"slices"
 
 	"golang.org/x/sys/unix"
@@ -107,8 +108,14 @@ type journal struct {
 var journalPhases = []string{helperproto.PhasePrepared, helperproto.PhaseWriting, helperproto.PhaseCommitted,
 	helperproto.PhaseUnchanged, helperproto.PhaseRestoring, helperproto.PhaseRestored, helperproto.PhaseRestoreFailed}
 
-// valid reports a journal that describes operation op with paths the helper accepts.
+// valid reports a journal that describes operation op with paths the helper accepts. A fence's
+// tombstone (PhaseFenced) carries nothing but its operation and the pair record it may have handed
+// back (a prepared journal it replaced).
 func (j journal) valid(op string) bool {
+	if j.Phase == helperproto.PhaseFenced {
+		tomb := journal{Op: j.Op, Phase: j.Phase, PrevRecord: j.PrevRecord, Steps: j.Steps}
+		return j.Op == op && len(j.Steps) == 0 && reflect.DeepEqual(tomb, j) && (j.PrevRecord == "" || helperproto.ValidOpID(j.PrevRecord))
+	}
 	paths := []string{j.CertPath, j.KeyPath, j.CertResolved, j.KeyResolved}
 	for _, p := range paths {
 		if !helperproto.ValidPath(p) || p == "/" {
@@ -345,7 +352,8 @@ const maxRecordChain = 64
 
 // latestOp resolves j's pair record to the operation that last actually replaced files: an
 // operation whose journal says prepared or unchanged changed nothing, so the record falls through
-// to its prev_record. ok is false when that cannot be decided (a record naming an operation
+// to its prev_record; so does a fence's tombstone (it replaced nothing and never takes a record,
+// AUD-05). ok is false when that cannot be decided (a record naming an operation
 // without a directory or a journal — removed by cleanup or the sweep — an unreadable journal, a
 // loop, or a chain longer than maxRecordChain): the caller then treats every other operation as
 // superseded. op "" with ok means no operation ever replaced the pair's files.
@@ -369,7 +377,7 @@ func (s *sys) latestOp(j journal) (op string, ok bool, err error) {
 		if err != nil || !found {
 			return op, false, nil
 		}
-		if other.Phase != helperproto.PhasePrepared && other.Phase != helperproto.PhaseUnchanged {
+		if other.Phase != helperproto.PhasePrepared && other.Phase != helperproto.PhaseUnchanged && other.Phase != helperproto.PhaseFenced {
 			return op, true, nil
 		}
 		op = other.PrevRecord
@@ -393,8 +401,11 @@ func (s *sys) superseded(j journal) (bool, error) {
 // makes the operation before it unrestorable. false: the record could not be updated (the
 // operation is then kept).
 func (s *sys) releaseRecord(j journal) bool {
-	if j.Phase != helperproto.PhasePrepared && j.Phase != helperproto.PhaseUnchanged {
+	if j.Phase != helperproto.PhasePrepared && j.Phase != helperproto.PhaseUnchanged && j.Phase != helperproto.PhaseFenced {
 		return true
+	}
+	if j.CertResolved == "" {
+		return true // a tombstone that never replaced a prepared journal has no pair
 	}
 	rec, err := s.pairRecord(j)
 	if err != nil {

@@ -194,7 +194,7 @@ func (h *nginxHost) latestOp(j *emuJournal) (op string, ok bool) {
 		if o == nil || o.j == nil {
 			return op, false
 		}
-		if o.j.phase != helperproto.PhasePrepared && o.j.phase != helperproto.PhaseUnchanged {
+		if o.j.phase != helperproto.PhasePrepared && o.j.phase != helperproto.PhaseUnchanged && o.j.phase != helperproto.PhaseFenced {
 			return op, true
 		}
 		op = o.j.prevRecord
@@ -211,7 +211,7 @@ func (h *nginxHost) superseded(j *emuJournal) bool {
 
 // releaseRecord hands the record back before a no-op operation is removed (the helper's).
 func (h *nginxHost) releaseRecord(j *emuJournal) {
-	if j.phase != helperproto.PhasePrepared && j.phase != helperproto.PhaseUnchanged {
+	if (j.phase != helperproto.PhasePrepared && j.phase != helperproto.PhaseUnchanged && j.phase != helperproto.PhaseFenced) || j.certPath == "" {
 		return
 	}
 	if h.pairRecord(j) == j.op {
@@ -740,6 +740,9 @@ func (h *nginxHost) deploy(opID, certPath, keyPath, expect string, newCert, newK
 		dir   = h.ops[opID]
 		prior *emuJournal
 	)
+	if dir != nil && dir.j != nil && dir.j.phase == helperproto.PhaseFenced {
+		return refuse(helperproto.ExitPrecondition, helperproto.CodeFenced) // AUD-05
+	}
 	if dir != nil && dir.j != nil {
 		j := dir.j.clone()
 		if j.certPath != certPath || j.keyPath != keyPath || j.newCertSHA != newCertSHA || j.newKeySHA != newKeySHA {
@@ -923,7 +926,7 @@ func (e *Emulator) nginxRestore(args []string) (resp Response) {
 	}
 	j := dir.j.clone()
 	switch j.phase {
-	case helperproto.PhasePrepared, helperproto.PhaseUnchanged, helperproto.PhaseRestored:
+	case helperproto.PhasePrepared, helperproto.PhaseUnchanged, helperproto.PhaseRestored, helperproto.PhaseFenced:
 		return answer(helperproto.NginxRestoreResponse{OK: true, Phase: j.phase, FailedStep: j.failedStep, CauseStep: j.causeStep,
 			Error: j.errClass, Steps: []helperproto.NginxStep{}})
 	}
@@ -959,13 +962,66 @@ func (e *Emulator) nginxStatus(args []string) Response {
 	if dir == nil || dir.j == nil {
 		return answer(resp)
 	}
-	j := dir.j
+	return answer(h.statusOf(dir.j, resp))
+}
+
+// statusOf is the helper's statusOf: the answer for a journal (a tombstone names no file).
+func (h *nginxHost) statusOf(j *emuJournal, resp helperproto.NginxStatusResponse) helperproto.NginxStatusResponse {
 	resp.Phase, resp.NewCertSHA256 = j.phase, j.newCertSHA
 	resp.FailedStep, resp.CauseStep, resp.Error = j.failedStep, j.causeStep, j.errClass
+	if j.phase == helperproto.PhaseFenced {
+		return resp
+	}
 	if t, kind := h.readTarget(j.certPath); kind == "" {
 		resp.CurrentCertSHA256 = sum(t.data)
 	}
-	return answer(resp)
+	return resp
+}
+
+// nginxFence is the helper's cmdNginxFence (AUD-05): under the lock, an operation without a
+// journal, or with a prepared one, gets a tombstone; any other journal is answered as nginx-status
+// would.
+func (e *Emulator) nginxFence(args []string) (resp Response) {
+	if len(args) != 2 || args[0] != "--op" {
+		return refuse(helperproto.ExitRefused, helperproto.CodeUsage)
+	}
+	op := args[1]
+	if !helperproto.ValidOpID(op) {
+		return refuse(helperproto.ExitRefused, helperproto.CodeInvalidArgument)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	h := e.nginx()
+	defer h.holdFaults(helperproto.SubNginxFence)()
+	defer h.consumeFaults()
+	defer h.recoverKill(&resp)
+	if h.locked {
+		return refuse(helperproto.ExitFailed, helperproto.CodeBusy)
+	}
+	h.fences++
+	fenced := helperproto.NginxStatusResponse{OK: true, Phase: helperproto.PhaseFenced, BackupDir: helperproto.BackupRoot + "/" + op}
+	dir := h.ops[op]
+	if dir == nil {
+		dir = &opDir{}
+		h.ops[op] = dir
+	}
+	tomb := &emuJournal{op: op, phase: helperproto.PhaseFenced, steps: []helperproto.NginxStep{}}
+	if dir.j != nil {
+		switch dir.j.phase {
+		case helperproto.PhaseFenced:
+			return answer(fenced)
+		case helperproto.PhasePrepared:
+			h.releaseRecord(dir.j)
+			tomb.prevRecord = dir.j.prevRecord
+		default:
+			return answer(h.statusOf(dir.j, helperproto.NginxStatusResponse{OK: true, BackupDir: fenced.BackupDir}))
+		}
+	}
+	if err := h.writeJournal(dir, tomb); err != nil {
+		return refuse(helperproto.ExitFailed, helperproto.CodeIOError)
+	}
+	dir.certBak, dir.keyBak = nil, nil
+	return answer(fenced)
 }
 
 // cleanupOp is cleanup of an Nginx operation (the helper's cmdCleanup under the Nginx lock): BUSY
@@ -986,6 +1042,9 @@ func (h *nginxHost) cleanupOp(op string) (resp Response, known bool) {
 	}()
 	if h.locked {
 		return refuse(helperproto.ExitFailed, helperproto.CodeBusy), true
+	}
+	if dir.j != nil && dir.j.phase == helperproto.PhaseFenced {
+		return answer(helperproto.CleanupResponse{OK: true}), true // the tombstone stays (AUD-05)
 	}
 	if dir.j != nil {
 		if h.keepForRecovery(dir.j) {

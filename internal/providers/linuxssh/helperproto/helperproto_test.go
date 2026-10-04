@@ -156,14 +156,17 @@ func TestWireNames(t *testing.T) {
 	b, err = json.Marshal(HostKeysResponse{OK: true, Keys: []HostKeyInfo{{Type: "ssh-ed25519", Bits: 256, Fingerprint: "SHA256:x", Path: "/k.pub"}}})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"ok":true,"keys":[{"type":"ssh-ed25519","bits":256,"fingerprint":"SHA256:x","path":"/k.pub"}]}`, string(b))
-	assert.Equal(t, 4, Protocol)
+	assert.Equal(t, 5, Protocol)
 	assert.Equal(t, "/usr/local/libexec/alice-helper", HelperPath)
 	assert.Equal(t, 1<<20, MaxAuthorizedKeysSize)
 }
 
-func TestProtocol4(t *testing.T) {
-	assert.Equal(t, 4, Protocol)
-	assert.Equal(t, "1.3.0", Version)
+func TestProtocol5(t *testing.T) {
+	assert.Equal(t, 5, Protocol)
+	assert.Equal(t, "1.4.0", Version)
+	assert.Equal(t, "nginx-fence", SubNginxFence)
+	assert.Equal(t, "fenced", PhaseFenced)
+	assert.Equal(t, "FENCED", CodeFenced)
 	assert.Equal(t, 20<<20, MaxNginxConfig)
 	assert.Equal(t, 7*24*time.Hour, NginxBackupKeep)
 }

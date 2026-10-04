@@ -221,7 +221,8 @@ func (o RollbackOutcome) Validate() error {
 // Validate checks DeploymentState's invariants: Phase is one of the Phase* values (a blank or
 // unknown phase is invalid and is treated as uncertain by the caller); phase none means no
 // journal, so it carries no failed_step, cause_step, error, hashes or backup directory (Active may
-// still be true: another operation holds the lock); committed and unchanged carry no failed_step,
+// still be true: another operation holds the lock); phase fenced (a tombstone) carries no
+// failed_step, cause_step, error or hash; committed and unchanged carry no failed_step,
 // cause_step or error.
 func (s DeploymentState) Validate() error {
 	var err error
@@ -230,6 +231,13 @@ func (s DeploymentState) Validate() error {
 		for _, v := range []string{s.FailedStep, s.CauseStep, s.Error, s.NewCertSHA256, s.CurrentCertSHA256, s.BackupDir} {
 			if v != "" {
 				err = errors.New("none: no journal, so no step, error, hash or backup directory may be set")
+				break
+			}
+		}
+	case PhaseFenced:
+		for _, v := range []string{s.FailedStep, s.CauseStep, s.Error, s.NewCertSHA256, s.CurrentCertSHA256} {
+			if v != "" {
+				err = errors.New("fenced: a tombstone, so no step, error or hash may be set")
 				break
 			}
 		}

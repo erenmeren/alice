@@ -288,13 +288,15 @@ func TestOpenHelperMissing(t *testing.T) {
 
 func TestOpenHelperOutdated(t *testing.T) {
 	e := newProvEnv(t)
-	for _, old := range []int{0, 1, 2, 3} { // 1 answers without an owner; 2 has no --content-sha256; 3 refuses incomplete content only
+	// 1 answers without an owner; 2 has no --content-sha256; 3 refuses incomplete content only; 4 has
+	// no nginx-fence (an interrupted deployment could never be fenced, AUD-05).
+	for _, old := range []int{0, 1, 2, 3, 4} {
 		e.emu.SetProtocol(old)
 		_, err := e.prov.Open(context.Background(), e.ref, e.cred, providers.Env{})
 		pe := providerCode(t, err)
 		assert.Equal(t, "ssh.helper_outdated", pe.Code)
 		assert.Equal(t, strconv.Itoa(old), pe.Params["helper_protocol"])
-		assert.Equal(t, "4", pe.Params["required_protocol"])
+		assert.Equal(t, "5", pe.Params["required_protocol"])
 	}
 }
 
@@ -765,7 +767,7 @@ func TestConnOf(t *testing.T) {
 	require.True(t, ok)
 	res, err := c.Run(context.Background(), CmdVersion())
 	require.NoError(t, err)
-	assert.Contains(t, string(res.Stdout), `"protocol":4`)
+	assert.Contains(t, string(res.Stdout), `"protocol":5`)
 	require.NoError(t, s.Close())
 	_, ok = ConnOf(s)
 	assert.False(t, ok, "a closed session's connection may serve another session")

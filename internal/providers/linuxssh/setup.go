@@ -45,7 +45,8 @@ Cmnd_Alias ALICE_NGINX_ONLY = \
     /usr/local/libexec/alice-helper nginx-test, \
     /usr/local/libexec/alice-helper nginx-deploy --op ` + sudoersOpID + ` --cert /* --key /* --expect-cert-sha256 ` + sudoersSHA + ` --content-sha256 ` + sudoersSHA + `, \
     /usr/local/libexec/alice-helper nginx-restore --op ` + sudoersOpID + `, \
-    /usr/local/libexec/alice-helper nginx-status --op ` + sudoersOpID + `
+    /usr/local/libexec/alice-helper nginx-status --op ` + sudoersOpID + `, \
+    /usr/local/libexec/alice-helper nginx-fence --op ` + sudoersOpID + `
 `
 
 var errUnknownProfile = errors.New(`linuxssh: unknown sudoers profile (want "linux" or "nginx")`)

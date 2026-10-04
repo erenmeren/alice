@@ -494,6 +494,9 @@ const (
 	PhaseRestoring     = "restoring"
 	PhaseRestored      = "restored"
 	PhaseRestoreFailed = "restore_failed"
+	// PhaseFenced: Session.FenceDeployment made sure the operation never runs on the server
+	// (AUD-05); nothing was written by it. DeploymentStatus reports it too.
+	PhaseFenced = "fenced"
 )
 
 // DeploymentState is what the server knows about an operation (helper journal).

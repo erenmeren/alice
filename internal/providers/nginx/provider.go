@@ -211,6 +211,9 @@ func mapHelper(err error, sub string) error {
 		return providers.NewError("deployment.recovery_pending", false, err, nil)
 	case helperproto.CodeNginxNotRunning:
 		return providers.NewError("nginx.not_running", false, err, nil)
+	case helperproto.CodeFenced:
+		// This operation was fenced by Alice's own recovery (AUD-05): it was never carried out.
+		return providers.NewError("deployment.interrupted", false, err, nil)
 	case helperproto.CodeIOError:
 		if sub != helperproto.SubNginxDeploy {
 			return err // a killed or timed-out nginx: the retryable ssh.helper_refused stays
@@ -230,7 +233,8 @@ func mapHelper(err error, sub string) error {
 
 func isNginxSub(sub string) bool {
 	switch sub {
-	case helperproto.SubNginxDump, helperproto.SubNginxTest, helperproto.SubNginxDeploy, helperproto.SubNginxRestore, helperproto.SubNginxStatus:
+	case helperproto.SubNginxDump, helperproto.SubNginxTest, helperproto.SubNginxDeploy, helperproto.SubNginxRestore, helperproto.SubNginxStatus,
+		helperproto.SubNginxFence:
 		return true
 	}
 	return false

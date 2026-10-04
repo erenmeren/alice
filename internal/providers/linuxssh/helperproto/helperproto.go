@@ -19,8 +19,11 @@ const (
 	// Protocol 2: authkeys-read and authkeys-write answer with the resolved owner. Protocol 3:
 	// authkeys-write takes --content-sha256 and refuses incomplete content (CONTENT_MISMATCH).
 	// Protocol 4: the Nginx subcommands, tls-probe, and the accounts list of authkeys-list.
-	Protocol   = 4
-	Version    = "1.3.0"
+	// Protocol 5: nginx-fence (AUD-05), the fenced phase, RECOVERY_PENDING, NGINX_NOT_RUNNING,
+	// OUTCOME_UNKNOWN, the name_not_allowed file problem, and nginx-restore answering a partial
+	// restore as its outcome (exit 0) instead of HASH_MISMATCH.
+	Protocol   = 5
+	Version    = "1.4.0"
 	HelperPath = "/usr/local/libexec/alice-helper"
 	BackupRoot = "/var/lib/alice-helper/backups"
 )
@@ -110,6 +113,12 @@ const (
 	SubNginxRestore = "nginx-restore"
 	SubNginxStatus  = "nginx-status"
 	SubTLSProbe     = "tls-probe"
+	// SubNginxFence (protocol 5, AUD-05): under the Nginx lock, an operation without a journal (or
+	// with a prepared one, which replaced nothing) gets a tombstone journal (PhaseFenced), after
+	// which nginx-deploy of that operation refuses (FENCED) without writing anything. Idempotent;
+	// an operation with any other journal is answered as nginx-status would, unchanged. The answer
+	// is a NginxStatusResponse (Active false: the fence holds the lock).
+	SubNginxFence = "nginx-fence"
 )
 
 // Phase 4 error codes.
@@ -140,6 +149,9 @@ const (
 	// renamed a file: the answer is not a refusal (Alice treats it as uncertain and reads
 	// nginx-status). Exit 4. No refusal table holds it.
 	CodeOutcomeUnknown = "OUTCOME_UNKNOWN"
+	// CodeFenced: nginx-deploy of an operation that nginx-fence fenced (exit 3, nothing written):
+	// Alice's recovery already recorded that this operation wrote nothing.
+	CodeFenced = "FENCED"
 )
 
 // MaxAccountNames bounds AuthKeysListResponse.Accounts (R38 item 20).
@@ -219,6 +231,7 @@ const (
 	PhaseRestoring     = "restoring"      // a rollback is under way: interrupted when not active
 	PhaseRestored      = "restored"       // the backups are back and Nginx reloaded
 	PhaseRestoreFailed = "restore_failed" // the rollback could not finish
+	PhaseFenced        = "fenced"         // nginx-fence's tombstone: nothing was written and nothing will be
 )
 
 // Deploy step names (nginx-deploy and nginx-restore report them in order).

@@ -80,6 +80,8 @@ func CheckUnsupported(t testing.TB, s providers.Session, caps providers.Capabili
 		expect("RollbackDeployment", err)
 		_, err = s.DeploymentStatus(ctx, uuid.New())
 		expect("DeploymentStatus", err)
+		_, err = s.FenceDeployment(ctx, uuid.New())
+		expect("FenceDeployment", err)
 	}
 	if !caps.Has(providers.CapVerifyDeployment) {
 		_, err := s.VerifyDeployment(ctx, providers.VerifyRequest{})

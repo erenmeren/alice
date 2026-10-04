@@ -518,7 +518,7 @@ func TestMirroredSetsAreCompleteAgainstTheirSources(t *testing.T) {
 	}), valueSet(stringConsts(t, hp, "File")), "file problems")
 	assert.Equal(t, sortedCopy([]string{
 		providers.PhaseNone, providers.PhasePrepared, providers.PhaseWriting, providers.PhaseCommitted,
-		providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed,
+		providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed, providers.PhaseFenced,
 	}), valueSet(stringConsts(t, hp, "Phase")), "phases")
 	assert.Equal(t, sortedCopy([]string{
 		providers.StepNameBackup, providers.StepNameWriteKey, providers.StepNameWriteCert, providers.StepNameConfigTest,

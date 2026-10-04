@@ -1281,3 +1281,62 @@ func TestEmulatorFidelityNotRoot(t *testing.T) {
 		assert.Equal(t, h.m, m, sub)
 	}
 }
+
+// AUD-05: nginx-fence on both, in every state it can meet.
+func TestEmulatorFidelityFence(t *testing.T) {
+	fence := func(tw *twin, op string) answer { return tw.same(helperproto.SubNginxFence, "", "--op", op) }
+	t.Run("no journal: fenced, deploy refused, idempotent", func(t *testing.T) {
+		tw := newTwin(t, true)
+		assert.Equal(t, helperproto.PhaseFenced, fence(tw, opA).m["phase"])
+		assert.Equal(t, helperproto.CodeFenced, tw.deploy(opA).m["code"])
+		tw.sameFiles("old")
+		tw.status(opA)
+		assert.Equal(t, helperproto.PhaseFenced, fence(tw, opA).m["phase"])
+		tw.restore(opA)
+		assert.Equal(t, 0.0, tw.same(helperproto.SubCleanup, "", "--op", opA).m["removed"])
+		assert.Equal(t, helperproto.PhaseCommitted, tw.deploy(opB).m["phase"])
+	})
+	t.Run("committed: answered, nothing changed", func(t *testing.T) {
+		tw := newTwin(t, true)
+		tw.deploy(opA)
+		assert.Equal(t, helperproto.PhaseCommitted, fence(tw, opA).m["phase"])
+		assert.Equal(t, helperproto.PhaseRestored, tw.restore(opA).m["phase"])
+	})
+	t.Run("prepared: fenced, the record handed back", func(t *testing.T) {
+		tw := newTwin(t, true)
+		tw.deploy(opB)
+		tw.kill("pair record renamed")
+		in := input(tw.w.leaf.FullchainPEM, tw.w.leaf.KeyPEM)
+		args := tw.deployArgs(opA, in, hexOf(string(tw.w.newLeaf.FullchainPEM)))
+		_ = tw.runHelper(helperproto.SubNginxDeploy, in, args...)
+		_ = tw.runEmu(helperproto.SubNginxDeploy, in, args...)
+		tw.revive()
+		assert.Equal(t, helperproto.PhasePrepared, tw.status(opA).m["phase"])
+		assert.Equal(t, helperproto.PhaseFenced, fence(tw, opA).m["phase"])
+		assert.Equal(t, helperproto.CodeFenced, tw.same(helperproto.SubNginxDeploy, in, args...).m["code"])
+		assert.Equal(t, helperproto.PhaseRestored, tw.restore(opB).m["phase"], "the tombstone supersedes nothing")
+	})
+	t.Run("the lock is held: BUSY", func(t *testing.T) {
+		tw := newTwin(t, true)
+		old := lockWait
+		lockWait = 20 * time.Millisecond
+		defer func() { lockWait = old }()
+		lock, err := tw.w.f.s.nginxLock(context.Background())
+		require.NoError(t, err)
+		tw.e.HoldLock(true)
+		assert.Equal(t, helperproto.CodeBusy, fence(tw, opA).m["code"])
+		_ = lock.Close()
+		tw.e.HoldLock(false)
+	})
+	for _, p := range []string{"journal fenced staged", "journal fenced renamed"} {
+		t.Run("killed at "+p, func(t *testing.T) {
+			tw := newTwin(t, true)
+			tw.kill(p)
+			_ = tw.runHelper(helperproto.SubNginxFence, "", "--op", opA)
+			_ = tw.runEmu(helperproto.SubNginxFence, "", "--op", opA)
+			tw.revive()
+			tw.status(opA)
+			assert.Equal(t, helperproto.PhaseFenced, fence(tw, opA).m["phase"])
+		})
+	}
+}

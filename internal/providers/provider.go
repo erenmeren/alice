@@ -124,6 +124,13 @@ type Session interface {
 	// DeploymentStatus (CapDeployCertificate) reads what the server knows about an operation. A
 	// state that fails DeploymentState.Validate must not be acted on.
 	DeploymentStatus(ctx context.Context, op uuid.UUID) (DeploymentState, error)
+	// FenceDeployment (CapDeployCertificate; AUD-05) makes sure an operation that left no journal
+	// can never be carried out afterwards (a send that reaches the server late): it answers
+	// PhaseFenced when the operation now never runs and wrote nothing, or the state of the
+	// journal it found after all (any other phase; nothing changed then). Only PhaseFenced with a
+	// nil error proves "nothing was written"; an error, or an answer that fails
+	// DeploymentState.Validate, proves nothing (uncertain).
+	FenceDeployment(ctx context.Context, op uuid.UUID) (DeploymentState, error)
 	// VerifyDeployment (CapVerifyDeployment) checks which certificate the location serves.
 	VerifyDeployment(ctx context.Context, req VerifyRequest) (VerifyResult, error)
 }

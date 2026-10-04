@@ -544,6 +544,7 @@ func TestDeployRefusalCodes(t *testing.T) {
 		helperproto.CodeNoSpace: "nginx.no_space", helperproto.CodeSuperseded: "ssh.helper_refused",
 		helperproto.CodeBusy: "nginx.busy", helperproto.CodeIOError: "nginx.io_error",
 		helperproto.CodeRecoveryPending: "deployment.recovery_pending", helperproto.CodeNginxNotRunning: "nginx.not_running",
+		helperproto.CodeFenced: "deployment.interrupted",
 	}
 	require.Len(t, deployRefusals, len(want))
 	assert.NotContains(t, deployRefusals, helperproto.CodeOutcomeUnknown, "the helper's guard after a rename is never a refusal")
@@ -953,11 +954,11 @@ func TestRollbackDeployment(t *testing.T) {
 // the helper's names.
 func TestPhaseAndStepNamesMatchTheHelper(t *testing.T) {
 	assert.Equal(t, []string{helperproto.PhaseNone, helperproto.PhasePrepared, helperproto.PhaseWriting, helperproto.PhaseCommitted,
-		helperproto.PhaseUnchanged, helperproto.PhaseRestoring, helperproto.PhaseRestored, helperproto.PhaseRestoreFailed},
+		helperproto.PhaseUnchanged, helperproto.PhaseRestoring, helperproto.PhaseRestored, helperproto.PhaseRestoreFailed, helperproto.PhaseFenced},
 		[]string{providers.PhaseNone, providers.PhasePrepared, providers.PhaseWriting, providers.PhaseCommitted,
-			providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed})
+			providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed, providers.PhaseFenced})
 	assert.Equal(t, helperPhases, []string{providers.PhaseNone, providers.PhasePrepared, providers.PhaseWriting, providers.PhaseCommitted,
-		providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed})
+		providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed, providers.PhaseFenced})
 	assert.Equal(t, []string{helperproto.StepBackup, helperproto.StepWriteKey, helperproto.StepWriteCert, helperproto.StepConfigTest, helperproto.StepReload,
 		helperproto.StepJournal, helperproto.StepRestore, helperproto.StepRollbackConfigTest, helperproto.StepRollbackReload},
 		[]string{providers.StepNameBackup, providers.StepNameWriteKey, providers.StepNameWriteCert, providers.StepNameConfigTest, providers.StepNameReload,
@@ -1205,4 +1206,73 @@ func TestFailedVerificationStepCarriesItsReason(t *testing.T) {
 	assert.Equal(t, map[string]string{"port": "443", "reason": "deployment.verify_failed"}, log.params[i])
 	assert.Equal(t, "verify:failed", log.list()[i])
 	assert.Less(t, i, slices.Index(log.list(), "restore:ok"), "logged before the rollback")
+}
+
+// AUD-05: FenceDeployment proves "nothing was written" only with PhaseFenced and a nil error; a
+// journal found after all is answered unchanged; every failure is an error.
+func TestFenceDeployment(t *testing.T) {
+	fence := func(t *testing.T, e *env) (providers.DeploymentState, error) {
+		t.Helper()
+		s := e.open(t)
+		defer func() { _ = s.Close() }()
+		st, err := s.FenceDeployment(context.Background(), e.op)
+		providertest.CheckDeploymentState(t, st, err)
+		return st, err
+	}
+	t.Run("no journal: fenced, and the deployment of that operation is refused", func(t *testing.T) {
+		e := newEnv(t)
+		st, err := fence(t, e)
+		require.NoError(t, err)
+		assert.Equal(t, providers.DeploymentState{Phase: providers.PhaseFenced, BackupDir: backupDirOf(e.op)}, st)
+		st, err = fence(t, e)
+		require.NoError(t, err)
+		assert.Equal(t, providers.PhaseFenced, st.Phase, "idempotent")
+		nw := e.ca.Issue(pki.Opts{CommonName: "www.example.test"}, e.now)
+		out, err := e.open(t).DeployCertificate(context.Background(), e.req(t, nw), nil)
+		providertest.CheckDeployOutcome(t, out, err)
+		assert.Equal(t, providers.DeployNoChange, out.Result)
+		assert.Equal(t, "deployment.interrupted", out.Reason)
+		assert.Equal(t, 0, e.emu.Reloads())
+		s := e.open(t)
+		st, err = s.DeploymentStatus(context.Background(), e.op)
+		require.NoError(t, err)
+		assert.Equal(t, providers.PhaseFenced, st.Phase)
+		r, err := s.RollbackDeployment(context.Background(), providers.RollbackRequest{OperationID: e.op}, nil)
+		providertest.CheckRollbackOutcome(t, r, err)
+		assert.Equal(t, providers.DeployNoChange, r.Result, "nothing restored")
+		assert.Equal(t, "deployment.unknown_operation", r.Reason)
+	})
+	t.Run("a journal after all: answered, nothing changed", func(t *testing.T) {
+		e := newEnv(t)
+		nw := e.ca.Issue(pki.Opts{CommonName: "www.example.test"}, e.now)
+		e.emu.KillAt(helperproto.StepWriteCert)
+		_, _ = e.open(t).DeployCertificate(context.Background(), e.req(t, nw), nil)
+		st, err := fence(t, e)
+		require.NoError(t, err)
+		assert.Equal(t, providers.PhaseWriting, st.Phase)
+		assert.Equal(t, hexSHA(nw.FullchainPEM), st.NewCertSHA256)
+	})
+	t.Run("BUSY: an error, nothing fenced", func(t *testing.T) {
+		e := newEnv(t)
+		e.emu.HoldLock(true)
+		_, err := fence(t, e)
+		require.Error(t, err)
+		assert.Equal(t, "nginx.busy", providerErr(t, err).Code)
+		e.emu.HoldLock(false)
+		assert.Empty(t, e.emu.NginxPhase(e.op.String()), "no journal")
+	})
+	t.Run("sudoers without the line: an error", func(t *testing.T) {
+		e := newEnv(t)
+		e.emu.SetNginxProfile(false)
+		_, err := fence(t, e)
+		require.Error(t, err)
+		assert.Equal(t, 0, e.emu.FenceCount())
+	})
+	t.Run("a helper without nginx-fence is refused at Open", func(t *testing.T) {
+		e := newEnv(t)
+		e.emu.SetProtocol(4)
+		_, err := e.prov.Open(context.Background(), e.ref, e.cred, providers.Env{})
+		require.Error(t, err)
+		assert.Equal(t, "ssh.helper_outdated", providerErr(t, err).Code)
+	})
 }

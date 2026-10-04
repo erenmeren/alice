@@ -16,7 +16,7 @@ import (
 
 // Call is one recorded method call.
 type Call struct {
-	Method string // "Open", "TestConnection", "Discover", "ListAuthorizedKeys", "AddAuthorizedKey", "RemoveAuthorizedKey", "DeployCertificate", "RollbackDeployment", "DeploymentStatus", "VerifyDeployment", "Close"
+	Method string // "Open", "TestConnection", "Discover", "ListAuthorizedKeys", "AddAuthorizedKey", "RemoveAuthorizedKey", "DeployCertificate", "RollbackDeployment", "DeploymentStatus", "FenceDeployment", "VerifyDeployment", "Close"
 	Target uuid.UUID
 	Change providers.AuthKeyChange // Add/Remove only
 	// Deploy is the DeployCertificate request with PrivateKeyPEM replaced by an empty value: the
@@ -25,7 +25,7 @@ type Call struct {
 	// Rollback and Verify are the RollbackDeployment and VerifyDeployment requests.
 	Rollback providers.RollbackRequest
 	Verify   providers.VerifyRequest
-	// Op is the operation id of DeployCertificate, RollbackDeployment and DeploymentStatus.
+	// Op is the operation id of DeployCertificate, RollbackDeployment, DeploymentStatus and FenceDeployment.
 	Op uuid.UUID
 }
 
@@ -56,6 +56,8 @@ type Config struct {
 	Verify func(req providers.VerifyRequest) (providers.VerifyResult, error)
 	// Status decides DeploymentStatus; nil = phase none.
 	Status func(op uuid.UUID) (providers.DeploymentState, error)
+	// Fence decides FenceDeployment; nil = phase fenced.
+	Fence func(op uuid.UUID) (providers.DeploymentState, error)
 	// DeploySteps, when non-nil (an empty slice included), are exactly the steps DeployCertificate
 	// reports (status ok) to its logger, whatever Deploy returns. When nil: with Deploy set, the
 	// steps of the outcome Deploy returns (with their statuses); on the default committed path,
@@ -393,6 +395,22 @@ func (s *session) DeploymentStatus(_ context.Context, op uuid.UUID) (providers.D
 	}
 	if err == nil {
 		mustHonour("DeploymentStatus", st.Validate())
+	}
+	return st, err
+}
+
+func (s *session) FenceDeployment(_ context.Context, op uuid.UUID) (providers.DeploymentState, error) {
+	cfg := s.p.record(Call{Method: "FenceDeployment", Target: s.target, Op: op})
+	if !s.p.caps.Has(providers.CapDeployCertificate) {
+		return providers.DeploymentState{}, providers.ErrUnsupported
+	}
+	st := providers.DeploymentState{Phase: providers.PhaseFenced}
+	var err error
+	if cfg.Fence != nil {
+		st, err = cfg.Fence(op)
+	}
+	if err == nil {
+		mustHonour("FenceDeployment", st.Validate())
 	}
 	return st, err
 }

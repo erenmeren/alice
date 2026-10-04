@@ -72,6 +72,11 @@ func cmdCleanup(ctx context.Context, s *sys, args []string) (any, error) {
 		}
 	}
 	if j, ok := s.nginxJournal(root, op); ok {
+		if j.Phase == helperproto.PhaseFenced {
+			// AUD-05: a fence's tombstone holds no backup and must outlive a late helper; the sweep
+			// removes it after NginxBackupKeep.
+			return helperproto.CleanupResponse{OK: true}, nil
+		}
 		if s.keepForRecovery(j, true) {
 			return nil, failed(helperproto.CodeBusy, "the deployment is not finished; restore it before its backups are removed")
 		}

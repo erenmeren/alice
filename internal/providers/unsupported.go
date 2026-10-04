@@ -53,6 +53,11 @@ func (UnsupportedSession) VerifyDeployment(context.Context, VerifyRequest) (Veri
 	return VerifyResult{}, ErrUnsupported
 }
 
+// FenceDeployment is not supported.
+func (UnsupportedSession) FenceDeployment(context.Context, uuid.UUID) (DeploymentState, error) {
+	return DeploymentState{}, ErrUnsupported
+}
+
 // DeploymentStatus is not supported.
 func (UnsupportedSession) DeploymentStatus(context.Context, uuid.UUID) (DeploymentState, error) {
 	return DeploymentState{}, ErrUnsupported
