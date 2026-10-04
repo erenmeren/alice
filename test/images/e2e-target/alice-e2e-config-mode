@@ -1,0 +1,16 @@
+#!/bin/sh
+# Test only: break or repair the target's Nginx configuration as a person editing it would.
+#   broken  add a file with a syntax error (nginx -T and nginx -t fail; the running nginx keeps
+#           serving its last good configuration because nothing reloads it)
+#   ok      remove that file
+# alice-e2e-nginx-reset also removes it.
+set -eu
+f=/etc/nginx/conf.d/zz-alice-e2e-broken.conf
+case "${1:-}" in
+broken) printf 'server {\n    listen 443 ssl\n' >"$f" && chmod 0644 "$f" ;;
+ok) rm -f "$f" ;;
+*)
+	echo "usage: alice-e2e-config-mode broken|ok" >&2
+	exit 2
+	;;
+esac

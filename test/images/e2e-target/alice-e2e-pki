@@ -2,8 +2,14 @@
 # Test only: the throwaway test CA of the e2e SSH target and the certificates it signs. Nothing
 # here is committed or baked into an image layer: the CA is created when the container starts,
 # and its key never leaves the container.
-#   alice-e2e-pki init        create the CA (if missing) and the www.example.test pair (if missing)
-#   alice-e2e-pki leaf NAME DIR   write DIR/leaf.pem (leaf + CA) and DIR/leaf.key for NAME
+#   alice-e2e-pki init        create the CA (if missing) and the website pairs (if missing)
+#   alice-e2e-pki www         a fresh www.example.test pair
+#   alice-e2e-pki sites       a fresh pair for each of s1..s5.example.test
+#   alice-e2e-pki leaf NAMES DIR   write DIR/leaf.pem (leaf + CA) and DIR/leaf.key for NAMES (one
+#                                  name, or several separated by commas: the first is the CN)
+#   alice-e2e-pki sign NAMES  read a signing request on stdin and print a certificate for NAMES
+#                             signed by the test CA, then the CA certificate (the request's own
+#                             names are ignored, so a test can make them differ)
 set -eu
 ca=/opt/alice-test-ca
 umask 077
@@ -26,47 +32,86 @@ ensure_ca() {
 	chmod 0644 "$ca/ca.pem"
 }
 
-# leaf NAME DIR: a fresh P-256 key and a 90-day leaf for NAME signed by the test CA.
-leaf() {
-	valid_name "$1"
-	ensure_ca
-	cat >"$2/ext" <<EXT
+# ext NAMES FILE: the leaf extensions for NAMES (comma-separated) in FILE; prints the first name.
+ext() {
+	san=
+	first=
+	for n in $(printf '%s' "$1" | tr ',' ' '); do
+		valid_name "$n"
+		[ -n "$first" ] || first=$n
+		san="${san:+$san,}DNS:$n"
+	done
+	[ -n "$first" ] || { echo "alice-e2e-pki: no name" >&2; exit 2; }
+	cat >"$2" <<EXT
 basicConstraints=critical,CA:FALSE
 keyUsage=critical,digitalSignature
 extendedKeyUsage=serverAuth
-subjectAltName=DNS:$1
+subjectAltName=$san
 subjectKeyIdentifier=hash
 authorityKeyIdentifier=keyid
 EXT
-	openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=$1" \
+	echo "$first"
+}
+
+# leaf NAMES DIR: a fresh P-256 key and a 90-day leaf for NAMES signed by the test CA.
+leaf() {
+	ensure_ca
+	cn=$(ext "$1" "$2/ext")
+	openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=$cn" \
 		-keyout "$2/leaf.key" -out "$2/leaf.csr" 2>/dev/null
 	openssl x509 -req -in "$2/leaf.csr" -CA "$ca/ca.pem" -CAkey "$ca/ca.key" \
 		-set_serial "0x$(openssl rand -hex 16)" -days 90 -sha256 -extfile "$2/ext" -out "$2/leaf.crt" 2>/dev/null
 	cat "$2/leaf.crt" "$ca/ca.pem" >"$2/leaf.pem"
 }
 
-# www: install a fresh www.example.test pair as nginx's files (root-owned; key 0600).
-www() {
+# sign NAMES: sign the request on stdin for NAMES; print the certificate and the CA certificate.
+sign() {
+	ensure_ca
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"' EXIT
-	leaf www.example.test "$tmp"
+	ext "$1" "$tmp/ext" >/dev/null
+	head -c 65536 >"$tmp/req.csr"
+	openssl req -in "$tmp/req.csr" -noout -verify 2>/dev/null || { echo "alice-e2e-pki: not a valid signing request" >&2; exit 1; }
+	openssl x509 -req -in "$tmp/req.csr" -CA "$ca/ca.pem" -CAkey "$ca/ca.key" \
+		-set_serial "0x$(openssl rand -hex 16)" -days 90 -sha256 -extfile "$tmp/ext" -out "$tmp/leaf.crt" 2>/dev/null
+	cat "$tmp/leaf.crt" "$ca/ca.pem"
+}
+
+# pair NAME FILE: install a fresh pair for NAME as nginx's FILE.crt and FILE.key (root-owned; key 0600).
+pair() {
+	tmp=$(mktemp -d)
+	leaf "$1" "$tmp"
 	install -d -m 0755 -o root -g root /etc/nginx/ssl
-	install -m 0644 -o root -g root "$tmp/leaf.pem" /etc/nginx/ssl/www.crt
-	install -m 0600 -o root -g root "$tmp/leaf.key" /etc/nginx/ssl/www.key
+	install -m 0644 -o root -g root "$tmp/leaf.pem" "/etc/nginx/ssl/$2.crt"
+	install -m 0600 -o root -g root "$tmp/leaf.key" "/etc/nginx/ssl/$2.key"
+	rm -rf "$tmp"
+}
+
+www() { pair www.example.test www; }
+
+# sites: the five extra websites s1..s5.example.test (a batch deployment needs several).
+sites() {
+	for i in 1 2 3 4 5; do pair "s$i.example.test" "s$i"; done
 }
 
 case "${1:-}" in
 init)
 	ensure_ca
 	[ -f /etc/nginx/ssl/www.crt ] && [ -f /etc/nginx/ssl/www.key ] || www
+	[ -f /etc/nginx/ssl/s5.crt ] && [ -f /etc/nginx/ssl/s5.key ] || sites
 	;;
 www) www ;;
+sites) sites ;;
 leaf)
-	[ "$#" -eq 3 ] || { echo "usage: alice-e2e-pki leaf NAME DIR" >&2; exit 2; }
+	[ "$#" -eq 3 ] || { echo "usage: alice-e2e-pki leaf NAMES DIR" >&2; exit 2; }
 	leaf "$2" "$3"
 	;;
+sign)
+	[ "$#" -eq 2 ] || { echo "usage: alice-e2e-pki sign NAMES < request.csr" >&2; exit 2; }
+	sign "$2"
+	;;
 *)
-	echo "usage: alice-e2e-pki init | www | leaf NAME DIR" >&2
+	echo "usage: alice-e2e-pki init | www | sites | leaf NAMES DIR | sign NAMES" >&2
 	exit 2
 	;;
 esac

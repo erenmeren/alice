@@ -1,6 +1,7 @@
 #!/bin/sh
 # Test only: print a fresh certificate for NAME signed by the target's test CA, and its key, for a
-# test to upload to Alice. Output:
+# test to upload to Alice. NAME may list several names separated by commas (the first is the CN).
+# Output:
 #   -----ALICE CERT-----  the leaf, then the CA certificate (PEM)
 #   -----ALICE KEY-----   the leaf's private key (PEM; with --broken an unrelated key instead)
 #   -----ALICE END-----

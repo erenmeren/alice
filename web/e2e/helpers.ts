@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { createHmac } from 'node:crypto';
+import { createHmac, X509Certificate } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import AxeBuilder from '@axe-core/playwright';
 import { test as base, expect, type APIRequestContext, type APIResponse, type Locator, type Page } from '@playwright/test';
 
@@ -615,4 +616,105 @@ export async function expectWide(page: Page, screen: string): Promise<void> {
     if (original) await page.setViewportSize(original);
   }
   await expectAccessible(page, screen);
+}
+
+// --- Phase 4: certificates and Nginx on the e2e target, and the UI texts read from the locale files ---
+
+export interface PemPair {
+  cert: string;
+  key: string;
+}
+
+// newCert asks the e2e target for a fresh certificate (leaf + test CA) and key for name (several
+// names separated by commas give one certificate for all of them); broken returns a key of another
+// certificate (owner step 4). Nothing is written to disk on this side.
+export function newCert(name: string, broken = false): PemPair {
+  const out = targetExec(['/usr/local/sbin/alice-e2e-newcert', name, ...(broken ? ['--broken'] : [])]);
+  const m = out.match(/-----ALICE CERT-----\n([\s\S]+?)-----ALICE KEY-----\n([\s\S]+?)-----ALICE END-----/);
+  expect(m, 'alice-e2e-newcert output').not.toBeNull();
+  return { cert: m![1], key: m![2] };
+}
+
+// signRequest has the target's test CA sign a certificate signing request for names (comma
+// separated; the request's own names are ignored) and returns the certificate and the CA certificate.
+export function signRequest(csrPem: string, names: string): string {
+  return targetExec(['/usr/local/sbin/alice-e2e-pki', 'sign', names], csrPem);
+}
+
+// reloadMode arms the target's "systemctl reload nginx" shim; arm it right before the drain that
+// runs the deployment (any reload consumes a "-once" mode).
+export function reloadMode(mode: 'ok' | 'fail-once' | 'fail' | 'noop' | 'drop-once'): void {
+  targetExec(['/usr/local/sbin/alice-e2e-reload-mode', mode]);
+}
+
+// testMode arms the target's "nginx -t" wrapper; any nginx -t consumes fail-once.
+export function testMode(mode: 'ok' | 'fail-once' | 'fail'): void {
+  targetExec(['/usr/local/sbin/alice-e2e-test-mode', mode]);
+}
+
+// configMode breaks (or repairs) the target's Nginx configuration with a file holding a syntax error.
+export function configMode(mode: 'broken' | 'ok'): void {
+  targetExec(['/usr/local/sbin/alice-e2e-config-mode', mode]);
+}
+
+// nginxReset puts the target's Nginx back to its start state (fresh pairs, no faults, reloaded).
+// POST /test/reset resets only Alice, so every Phase 4 test calls this too.
+export function nginxReset(): void {
+  targetExec(['/usr/local/sbin/alice-e2e-nginx-reset']);
+}
+
+// served is the SHA-256 (lower-case hex) of the certificate the target's Nginx serves for name,
+// read on the target with openssl s_client: proof independent of Alice.
+export function served(name: string): string {
+  return targetExec(['/usr/local/sbin/alice-e2e-served', name]).trim();
+}
+
+// fingerprintHex is the SHA-256 of the first certificate's DER in pem (lower-case hex, no colons).
+export function fingerprintHex(pem: string): string {
+  return new X509Certificate(pem).fingerprint256.replace(/:/g, '').toLocaleLowerCase('en-US');
+}
+
+// runScheduled runs one periodic task of the server now (POST /test/scheduler/run), for example
+// the deployment recovery sweep, which never ticks by itself in the e2e build.
+export async function runScheduled(request: APIRequestContext, task: string): Promise<void> {
+  const res = await request.post('/test/scheduler/run', { data: { task } });
+  expect(res.ok(), `POST /test/scheduler/run ${task}: ${await res.text()}`).toBe(true);
+}
+
+type Tree = { [key: string]: string | Tree };
+
+function readTree(path: string): Tree {
+  return JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8')) as Tree;
+}
+
+const LOCALES: Record<Lang, Tree[]> = {
+  en: [readTree('../src/locales/en.json'), readTree('../../locales/common/en.json')],
+  tr: [readTree('../src/locales/tr.json'), readTree('../../locales/common/tr.json')],
+};
+
+function lookup(tree: Tree, key: string): string | undefined {
+  let node: string | Tree | undefined = tree;
+  for (const part of key.split('.')) {
+    if (typeof node !== 'object') return undefined;
+    node = node[part];
+  }
+  return typeof node === 'string' ? node : undefined;
+}
+
+// Translate is the web app's text for a key in one language, read from the same locale files the
+// app bundles (web/src/locales and locales/common), with {{name}} parameters and _one/_other plurals.
+// Tests read the copy at run time instead of repeating sentences that may be reworded.
+export type Translate = (key: string, params?: Record<string, string | number>) => string;
+
+export function translator(lang: Lang): Translate {
+  return (key, params = {}) => {
+    const plural = typeof params.count === 'number' ? `${key}_${params.count === 1 ? 'one' : 'other'}` : undefined;
+    let text: string | undefined;
+    for (const tree of LOCALES[lang]) text ??= (plural && lookup(tree, plural)) || lookup(tree, key);
+    if (text === undefined) throw new Error(`no ${lang} text for ${key}`);
+    return text.replace(/\{\{(\w+)\}\}/g, (_, name: string) => {
+      if (!(name in params)) throw new Error(`${lang} text ${key} needs {{${name}}}`);
+      return String(params[name]);
+    });
+  };
 }

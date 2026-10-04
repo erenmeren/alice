@@ -1,0 +1,9 @@
+#!/bin/sh
+# Test only: put back the host keys that alice-e2e-rotate-hostkey replaced (the server shows its
+# previous fingerprint again) and make the listening sshd load them.
+set -eu
+[ -d /root/hostkeys.prev ] || { echo "alice-e2e-restore-hostkey: no previous host keys" >&2; exit 1; }
+rm -f /etc/ssh/ssh_host_*
+cp -p /root/hostkeys.prev/ssh_host_* /etc/ssh/
+rm -rf /root/hostkeys.prev
+pkill -HUP -o -x sshd

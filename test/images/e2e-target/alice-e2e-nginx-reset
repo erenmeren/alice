@@ -1,11 +1,14 @@
 #!/bin/sh
 # Test only: put the target's Nginx back to its start state for the next test: a fresh
-# www.example.test pair from the test CA, no injected faults, configuration reloaded.
+# pair for every website from the test CA, no injected faults, no broken configuration file,
+# configuration reloaded.
 # (alice-helper's own state in /var/lib/alice-helper and the sudoers file are kept, as on a real
 # server.) POST /test/reset resets only Alice, never the target: call this between tests.
 set -eu
 echo ok >/etc/alice-e2e/reload-mode
 echo ok >/etc/alice-e2e/test-mode
+rm -f /etc/nginx/conf.d/zz-alice-e2e-broken.conf
 /usr/local/sbin/alice-e2e-pki www
+/usr/local/sbin/alice-e2e-pki sites
 /usr/sbin/nginx -t -q
 /usr/sbin/nginx -s reload

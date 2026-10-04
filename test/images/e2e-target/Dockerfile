@@ -55,7 +55,8 @@ COPY test/images/e2e-target/alice-e2e-prepare test/images/e2e-target/alice-e2e-r
      test/images/e2e-target/alice-e2e-start test/images/e2e-target/alice-e2e-pki \
      test/images/e2e-target/alice-e2e-newcert test/images/e2e-target/alice-e2e-served \
      test/images/e2e-target/alice-e2e-reload-mode test/images/e2e-target/alice-e2e-test-mode \
-     test/images/e2e-target/alice-e2e-nginx-reset /usr/local/sbin/
+     test/images/e2e-target/alice-e2e-nginx-reset test/images/e2e-target/alice-e2e-restore-hostkey \
+     test/images/e2e-target/alice-e2e-config-mode /usr/local/sbin/
 RUN chmod 0644 /etc/nginx/conf.d/www.conf \
  && chmod 0755 /usr/sbin/nginx /usr/bin/systemctl /opt/alice-bundle/alice-helper /usr/local/sbin/alice-e2e-*
 CMD ["/usr/local/sbin/alice-e2e-start"]

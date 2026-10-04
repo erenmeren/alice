@@ -10,7 +10,9 @@
 # serialised with other unit jobs. /etc/alice-e2e/reload-mode (alice-e2e-reload-mode) injects
 # faults for the deployment failure journeys: ok (default), fail-once (the next reload exits 1,
 # then ok), fail (every reload exits 1), noop (exit 0 without reloading: nginx keeps serving the
-# old certificate), and block-once (the container matrix only: the next reload writes "reload" to
+# old certificate), drop-once (the e2e target only: the next reload first ends Alice's SSH session,
+# as a dropped network would, then reloads; alice-helper finishes on the server but Alice never
+# reads its answer), and block-once (the container matrix only: the next reload writes "reload" to
 # /etc/alice-e2e/blocked and waits for one line on the FIFO /etc/alice-e2e/release; "go" reloads,
 # anything else exits 1 without reloading).
 mode=$(cat /etc/alice-e2e/reload-mode 2>/dev/null || echo ok)
@@ -27,6 +29,10 @@ case "$*" in
 		exit 1
 		;;
 	noop) exit 0 ;;
+	drop-once)
+		echo ok >/etc/alice-e2e/reload-mode
+		pkill -KILL -u alice-svc -x sshd || true
+		;;
 	block-once)
 		echo ok >/etc/alice-e2e/reload-mode
 		echo reload >/etc/alice-e2e/blocked

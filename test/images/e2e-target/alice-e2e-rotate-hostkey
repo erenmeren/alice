@@ -1,7 +1,11 @@
 #!/bin/sh
 # Test only: give the server new host keys and make the listening sshd load them (owner step 5).
-# SIGHUP makes sshd re-execute itself with the new keys; open sessions keep running.
+# SIGHUP makes sshd re-execute itself with the new keys; open sessions keep running. The previous
+# key files are kept in /root/hostkeys.prev for alice-e2e-restore-hostkey.
 set -eu
+rm -rf /root/hostkeys.prev
+install -d -m 0700 /root/hostkeys.prev
+cp -p /etc/ssh/ssh_host_* /root/hostkeys.prev/
 rm -f /etc/ssh/ssh_host_*
 ssh-keygen -A >/dev/null
 pkill -HUP -o -x sshd
