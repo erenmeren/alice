@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -391,6 +392,11 @@ func TestHostileSizesFinishQuickly(t *testing.T) {
 		"lua braces":      "content_by_lua_block " + strings.Repeat("{ ", MaxInput/2),
 		"include storm":   includeStorm(),
 		"glob everything": globStorm(),
+		// A2-I2: N http-level certificates inherited by N servers were N^2 pairs, each with a file
+		// set built from scratch (cubic time; N=1200: 6.7 s, about 1 GiB).
+		"inherited certificates":                inheritedPairs(1200, 1200, false),
+		"inherited certificates, one file each": inheritedPairs(1200, 1200, true),
+		"inherited certificates, own keys":      ownKeysPairs(256, 255),
 	} {
 		t.Run(name, func(t *testing.T) {
 			start := time.Now()
@@ -399,6 +405,82 @@ func TestHostileSizesFinishQuickly(t *testing.T) {
 			assert.Less(t, time.Since(start), 2*time.Second*raceSlowdown)
 		})
 	}
+}
+
+// inheritedPairs is an http block with n ssl_certificate/ssl_certificate_key pairs that s servers
+// inherit; with split each directive comes from its own included file.
+func inheritedPairs(n, servers int, split bool) string {
+	var b, files strings.Builder
+	b.WriteString("# configuration file /etc/nginx/nginx.conf:\nhttp {\n")
+	for i := range n {
+		if split {
+			b.WriteString("include /etc/nginx/p" + strconv.Itoa(i) + ".conf;\n")
+			files.WriteString("# configuration file /etc/nginx/p" + strconv.Itoa(i) + ".conf:\n")
+			files.WriteString("ssl_certificate /c/" + strconv.Itoa(i) + ".crt; ssl_certificate_key /c/" + strconv.Itoa(i) + ".key;\n")
+			continue
+		}
+		b.WriteString("ssl_certificate /c/" + strconv.Itoa(i) + ".crt; ssl_certificate_key /c/" + strconv.Itoa(i) + ".key;\n")
+	}
+	b.WriteString(strings.Repeat("server { listen 443 ssl; }\n", servers))
+	b.WriteString("}\n")
+	return b.String() + files.String()
+}
+
+// ownKeysPairs: n inherited certificates, each from its own file, and s servers with a key of
+// their own (no file set can be shared between servers).
+func ownKeysPairs(n, servers int) string {
+	var b, files strings.Builder
+	b.WriteString("# configuration file /etc/nginx/nginx.conf:\nhttp {\n")
+	for i := range n {
+		b.WriteString("include /etc/nginx/p" + strconv.Itoa(i) + ".conf;\n")
+		files.WriteString("# configuration file /etc/nginx/p" + strconv.Itoa(i) + ".conf:\nssl_certificate /c/" + strconv.Itoa(i) + ".crt;\n")
+	}
+	for i := range servers {
+		b.WriteString("server { listen 443 ssl; ssl_certificate_key /k/" + strconv.Itoa(i) + ".key; }\n")
+	}
+	b.WriteString("}\n")
+	return b.String() + files.String()
+}
+
+// A2-I2: a configuration below the budgets keeps every pair and its files.
+func TestInheritedPairsWithinTheBudget(t *testing.T) {
+	c, err := Parse([]byte(inheritedPairs(3, 50, true)), "/etc/nginx")
+	require.NoError(t, err)
+	require.Len(t, c.Servers, 50)
+	for _, s := range c.Servers {
+		require.Len(t, s.Pairs, 3)
+		assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/p0.conf"}, s.Pairs[0].Files)
+		assert.Equal(t, []string{"/etc/nginx/nginx.conf", "/etc/nginx/p0.conf", "/etc/nginx/p1.conf", "/etc/nginx/p2.conf"}, s.Pairs[2].Files)
+		assert.True(t, s.Pairs[2].Inherited)
+	}
+}
+
+// A2-I2: the incremental, shared file sets equal pairFiles of every pair.
+func TestFilesOfEqualsPairFiles(t *testing.T) {
+	for _, in := range []string{inheritedPairs(5, 4, true), ownKeysPairs(5, 3), inheritedPairs(4, 2, false)} {
+		c, err := Parse([]byte(in), "/etc/nginx")
+		require.NoError(t, err)
+		for _, s := range c.Servers {
+			for i, p := range s.Pairs {
+				assert.True(t, slices.IsSorted(p.Files), "%d", i)
+				assert.Contains(t, p.Files, "/etc/nginx/nginx.conf")
+			}
+		}
+	}
+	b := &pairBudget{pairs: maxPairs, files: maxPairFiles}
+	certs := []directive{{arg: "/a", file: "/f1"}, {arg: "/b", file: "/f2"}, {arg: "/c", file: "/f1"}}
+	keys := []directive{{arg: "/k", file: "/f3"}}
+	got, err := b.filesOf(certs, keys, false, nil)
+	require.NoError(t, err)
+	for i := range certs {
+		assert.Equal(t, pairFiles(certs, keys, i), got[i], "%d", i)
+	}
+	small := &pairBudget{pairs: 2, files: maxPairFiles}
+	_, err = small.filesOf(certs, keys, false, nil)
+	assert.ErrorIs(t, err, ErrTooComplex)
+	few := &pairBudget{pairs: maxPairs, files: 3}
+	_, err = few.filesOf(certs, keys, false, nil)
+	assert.ErrorIs(t, err, ErrTooComplex)
 }
 
 // includeChain is 2000 files that include the next one, the last with 200k wildcard includes

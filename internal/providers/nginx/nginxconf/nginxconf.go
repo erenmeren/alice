@@ -46,6 +46,11 @@ const (
 	maxSegment = 255      // longest path segment that is glob matched
 	maxPath    = 4096     // longest file name in a marker
 	maxPattern = 512      // longest include pattern that is matched
+	// maxPairs bounds the certificate pairs of one dump (A2-I2: http-level ssl_certificate
+	// directives inherited by every server multiply), maxPairFiles the file names of all the pairs'
+	// Files lists together.
+	maxPairs     = 1 << 16
+	maxPairFiles = 1 << 22
 )
 
 // Warning codes (the web catalog keys warnings.<code>); helperproto is their single source.
@@ -786,14 +791,18 @@ func Parse(dump []byte, confDir string) (Config, error) {
 	for i := range c.Sections {
 		c.Sections[i].Included = reached[i]
 	}
+	b := &pairBudget{pairs: maxPairs, files: maxPairFiles}
 	for _, n := range tree {
 		switch {
 		case n.block && n.name == "http":
-			c.http(n.children, confDir)
+			err = c.http(n.children, confDir, b)
 		case n.block && n.name == "stream":
-			c.stream(n.children)
+			err = c.stream(n.children, b)
 		case n.block && n.name == "mail":
 			c.mail(n.children)
+		}
+		if err != nil {
+			return Config{}, err
 		}
 	}
 	return c, nil
@@ -833,8 +842,9 @@ func collect(nodes []node) sslDirs {
 	return d
 }
 
-func (c *Config) http(children []node, confDir string) {
+func (c *Config) http(children []node, confDir string, b *pairBudget) error {
 	top := collect(children)
+	var inherited [][]string // the file sets of the http-level lists, shared by every server inheriting both
 	for _, n := range children {
 		if !n.block || n.name != "server" {
 			continue
@@ -860,21 +870,27 @@ func (c *Config) http(children []node, confDir string) {
 			continue
 		}
 		password := own.password || top.password
+		files, err := b.filesOf(certs, keys, inhC && inhK, &inherited)
+		if err != nil {
+			return err
+		}
 		for i, cr := range certs {
 			pr := Pair{CertRaw: cr.arg, CertFile: cr.file, Inherited: inhC || (inhK && len(top.keys) > 0)}
 			if i < len(keys) {
 				pr.KeyRaw, pr.KeyFile = keys[i].arg, keys[i].file
 			}
-			pr.Files = pairFiles(certs, keys, i)
+			pr.Files = files[i]
 			pr.Cert, pr.Key, pr.Unsupported = resolvePair(pr.CertRaw, pr.KeyRaw, confDir, password)
 			s.Pairs = append(s.Pairs, pr)
 		}
 		c.Servers = append(c.Servers, s)
 	}
+	return nil
 }
 
-func (c *Config) stream(children []node) {
+func (c *Config) stream(children []node, b *pairBudget) error {
 	top := collect(children)
+	var inherited [][]string
 	for _, n := range children {
 		if !n.block || n.name != "server" {
 			continue
@@ -900,17 +916,22 @@ func (c *Config) stream(children []node) {
 			continue // certificates inherited by a server that does not listen with ssl are unused
 		}
 		s.Stream = true
+		files, err := b.filesOf(certs, keys, inhC && inhK, &inherited)
+		if err != nil {
+			return err
+		}
 		for i, cr := range certs {
 			pr := Pair{CertRaw: cr.arg, CertFile: cr.file, Unsupported: ReasonStream, Inherited: inhC || (inhK && len(top.keys) > 0)}
 			if i < len(keys) {
 				pr.KeyRaw, pr.KeyFile = keys[i].arg, keys[i].file
 			}
-			pr.Files = pairFiles(certs, keys, i)
+			pr.Files = files[i]
 			s.Pairs = append(s.Pairs, pr)
 		}
 		c.Servers = append(c.Servers, s)
 		c.warn(WarnStreamTLS)
 	}
+	return nil
 }
 
 // mail records only a warning: Alice does not manage certificates of mail proxies.
@@ -966,21 +987,28 @@ func server(n node, sslOn bool) Server {
 // walked once.
 type fileSet struct {
 	files []string
+	names map[string]bool
 	seen  map[*includeLink]bool
 }
 
-func (f *fileSet) add(file string, via *includeLink) {
-	if !slices.Contains(f.files, file) {
+func (f *fileSet) name(file string) {
+	if f.names == nil {
+		f.names = map[string]bool{}
+	}
+	if !f.names[file] {
+		f.names[file] = true
 		f.files = append(f.files, file)
 	}
+}
+
+func (f *fileSet) add(file string, via *includeLink) {
+	f.name(file)
 	for l := via; l != nil && !f.seen[l]; l = l.next {
 		if f.seen == nil {
 			f.seen = map[*includeLink]bool{}
 		}
 		f.seen[l] = true
-		if !slices.Contains(f.files, l.file) {
-			f.files = append(f.files, l.file)
-		}
+		f.name(l.file)
 	}
 }
 
@@ -1005,10 +1033,43 @@ func blockFiles(n node) []string {
 	return fs.sorted()
 }
 
+// pairBudget is what is left of maxPairs and maxPairFiles while the pairs of a dump are built.
+type pairBudget struct{ pairs, files int }
+
+// filesOf returns the Files of each pair of a server (pairFiles for every i), charging the budget:
+// ErrTooComplex when the dump has more pairs or pair file names than it allows. When shared (the
+// server inherits both lists of its enclosing level) the sets are computed once per level, in
+// *memo, and the servers share them (read-only slices).
+func (b *pairBudget) filesOf(certs, keys []directive, shared bool, memo *[][]string) ([][]string, error) {
+	if b.pairs -= len(certs); b.pairs < 0 {
+		return nil, ErrTooComplex
+	}
+	if shared && *memo != nil {
+		return *memo, nil
+	}
+	out := make([][]string, len(certs))
+	var fs fileSet
+	for i := range certs {
+		fs.add(certs[i].file, certs[i].via)
+		if i < len(keys) {
+			fs.add(keys[i].file, keys[i].via)
+		}
+		if b.files -= len(fs.files); b.files < 0 {
+			return nil, ErrTooComplex
+		}
+		out[i] = slices.Sorted(slices.Values(fs.files))
+	}
+	if shared {
+		*memo = out
+	}
+	return out, nil
+}
+
 // pairFiles returns, for the i-th pair, the files of every certificate and key directive at an
 // index up to i and of their include chains, sorted. Pairs are drawn by position: a directive
 // added before the i-th one (by an include, at the http level) shifts which file is the i-th, so
-// every earlier element decides the pair too.
+// every earlier element decides the pair too. filesOf computes the same for every i at once
+// (incremental prefix sets, A2-I2); this is the reference the tests compare it with.
 func pairFiles(certs, keys []directive, i int) []string {
 	var fs fileSet
 	for _, d := range certs[:min(i+1, len(certs))] {
