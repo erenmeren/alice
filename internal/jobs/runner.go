@@ -363,10 +363,10 @@ WHERE id = $1`, cand.id, cand.token, now.Add(r.cfg.Lease), now); err != nil {
 }
 
 // capTable is maxRunning as the two arrays the claim query takes.
-func capTable() ([]string, []int32) {
-	types, limits := []string{}, []int32{}
+func capTable() ([]string, []int) {
+	types, limits := []string{}, []int{}
 	for t, n := range maxRunning {
-		types, limits = append(types, t), append(limits, int32(n))
+		types, limits = append(types, t), append(limits, n)
 	}
 	return types, limits
 }

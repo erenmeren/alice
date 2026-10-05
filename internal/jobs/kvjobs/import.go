@@ -252,6 +252,20 @@ func (h *handlers) refuse(ctx context.Context, id uuid.UUID, code string, params
 	}
 }
 
+// permanentMaterial lists what ImportMaterial refuses for good, with the closed reason each ends the import with.
+var permanentMaterial = []struct {
+	err  error
+	code string
+}{
+	{inventory.ErrNoPrivateKey, "certificate.no_private_key"},
+	{inventory.ErrCertificateExpired, inventory.ReasonCertificateExpired},
+	{inventory.ErrCertificateNotYetValid, inventory.ReasonNotYetValid},
+	{inventory.ErrUnsupportedKey, "certificate.unsupported_key"},
+	{inventory.ErrKeyMismatch, "certificate.key_mismatch"},
+	{inventory.ErrImportChanged, providers.CodeKVImportInvalid},
+	{inventory.ErrAdminRequired, "auth.forbidden"},
+}
+
 // materialFailure maps what ImportMaterial refuses (nothing was sent).
 func (h *handlers) materialFailure(ctx context.Context, vault, id uuid.UUID, err error, last bool) (map[string]any, error) {
 	switch {
@@ -263,14 +277,13 @@ func (h *handlers) materialFailure(ctx context.Context, vault, id uuid.UUID, err
 		return nil, h.failQueued(ctx, id, reasonNotFound, jobs.Fail(reasonNotFound, nil, err))
 	case errors.Is(err, inventory.ErrVaultUnavailable):
 		return nil, h.failQueued(ctx, id, reasonDisabled, jobs.Fail(reasonDisabled, nil, err))
-	case errors.Is(err, inventory.ErrNoPrivateKey):
-		return nil, h.refuse(ctx, id, "certificate.no_private_key", nil, err)
-	case errors.Is(err, inventory.ErrCertificateExpired):
-		return nil, h.refuse(ctx, id, inventory.ReasonCertificateExpired, nil, err)
-	case errors.Is(err, inventory.ErrUnsupportedKey):
-		return nil, h.refuse(ctx, id, "certificate.unsupported_key", nil, err)
-	case errors.Is(err, inventory.ErrImportChanged):
-		return nil, h.refuse(ctx, id, providers.CodeKVImportInvalid, nil, err)
+	}
+	// What the key, the certificate or the requester can no longer give is permanent and nothing was sent:
+	// the queued import ends through FailQueuedImport (it is the call that accepts a queued import).
+	for _, r := range permanentMaterial {
+		if errors.Is(err, r.err) {
+			return nil, h.failQueued(ctx, id, r.code, jobs.Fail(r.code, nil, err))
+		}
 	}
 	return nil, h.beforeSend(ctx, id, jobs.Retry(reasonUnexpected, nil, err), last)
 }

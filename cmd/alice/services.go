@@ -216,7 +216,7 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 			_, err := svc.inventory.SweepDeployments(ctx)
 			return err
 		}},
-		kvjobs.ScheduleTask(svc.inventory, kvScheduleEvery),
+		kvjobs.ScheduleTask(svc.inventory, kvScheduleEvery, log),
 		kvjobs.AutoDeployTask(svc.inventory, kvAutoDeployEvery, log),
 	)
 }

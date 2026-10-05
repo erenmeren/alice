@@ -15,6 +15,7 @@ import (
 // PollScheduler is the part of *inventory.Service the kv.schedule task uses.
 type PollScheduler interface {
 	ScheduleKVPolls(ctx context.Context) (int, error)
+	SweepImports(ctx context.Context) (int, error)
 }
 
 // AutoDeployPlanner is the part of *inventory.Service the kv.auto_deploy task uses.
@@ -28,13 +29,36 @@ var (
 )
 
 // ScheduleTask is the periodic kv.schedule: it queues a kv.poll for every vault that is due (R40 row
-// 13). It is read-only work: the scheduler's gate pauses it in lock, so no poll is queued then.
-func ScheduleTask(s PollScheduler, every time.Duration) jobs.Task {
+// 13) and sweeps the imports nothing else would end (a job that ended without the handler finishing its
+// import: discarded, reaped before the mark, panicked on the last attempt; and the unconditional end of an
+// uncertain import). Each does its work whatever the other returns; the errors are logged by type and
+// returned together. It is read-only work: the scheduler's gate pauses it in lock, so no poll is queued then.
+func ScheduleTask(s PollScheduler, every time.Duration, log *slog.Logger) jobs.Task {
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
 	return jobs.Task{Type: jobs.KVSchedule, Every: every, Run: func(ctx context.Context) error {
-		_, err := s.ScheduleKVPolls(ctx)
-		return err
+		_, pollErr := s.ScheduleKVPolls(ctx)
+		ended, sweepErr := s.SweepImports(ctx)
+		if ended > 0 {
+			log.Info("ended imports nobody else would end", "count", ended)
+		}
+		if pollErr != nil {
+			log.Error("scheduling the Key Vault polls failed", "error_type", typesOf(pollErr))
+		}
+		if sweepErr != nil {
+			log.Error("sweeping the imports failed", "error_type", typesOf(sweepErr))
+		}
+		if pollErr != nil || sweepErr != nil {
+			return errScheduleFailed
+		}
+		return nil
 	}}
 }
+
+// errScheduleFailed is the error of a tick in which the poll scheduler or the import sweep failed (their
+// own errors are logged by type: a database error's text can carry values).
+var errScheduleFailed = errors.New("kvjobs: scheduling the polls or sweeping the imports failed")
 
 // errPlanFailed is the error of a planner run in which a binding failed. The errors of single bindings
 // are logged by type only (a database error's text can carry values); the next tick plans again.

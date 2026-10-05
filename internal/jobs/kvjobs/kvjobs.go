@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/audit"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/platform/clock"
@@ -34,6 +35,7 @@ type Inventory interface {
 	TargetRef(ctx context.Context, id uuid.UUID) (providers.TargetRef, inventory.Target, error)
 	VaultCredentials(id uuid.UUID) inventory.VaultCredentialSource
 	RecordKVConnection(ctx context.Context, id uuid.UUID, rep providers.ConnectionReport) error
+	RecordAccessCheckRead(ctx context.Context, vaultID uuid.UUID, certificateName, version string, result audit.Result, reason string) error
 	RecordKVFailure(ctx context.Context, id uuid.UUID, cause error) error
 	AcquireKVPoll(ctx context.Context) (func(), error)
 	KVPollRequest(ctx context.Context, id uuid.UUID) (providers.DiscoverRequest, error)

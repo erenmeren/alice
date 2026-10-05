@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -378,6 +379,10 @@ func TestTestConnectionJobEndToEnd(t *testing.T) {
 	assert.Equal(t, jobs.StatusSucceeded, job.Status)
 	assert.Equal(t, "rbac", job.Result["permission_model"])
 	assert.Zero(t, w.az.Count("ReadCertificateSecret"))
+	accessReads := func() int {
+		return w.count("SELECT count(*) FROM audit_log WHERE action = 'kv.secret_read' AND details->>'purpose' = 'access_check'")
+	}
+	assert.Zero(t, accessReads(), "a plain check reads no secret and audits none")
 
 	// With a secret read: proves the Secrets User role; the value is never stored.
 	secret := []byte("pretend-pem-with-the-private-key")
@@ -393,6 +398,14 @@ func TestTestConnectionJobEndToEnd(t *testing.T) {
 	require.NoError(t, w.db.Owner.QueryRow(w.ctx, "SELECT facts::text FROM targets WHERE id = $1", vault).Scan(&facts))
 	assert.Contains(t, facts, `"name": "read_secret", "result": "ok"`)
 	assert.Equal(t, 1, w.az.Count("ReadCertificateSecret"))
+	assert.Equal(t, 1, accessReads(), "one kv.secret_read row per read")
+	var detail map[string]string
+	var result string
+	require.NoError(t, w.db.Owner.QueryRow(w.ctx, "SELECT details, result FROM audit_log WHERE action = 'kv.secret_read' AND details->>'purpose' = 'access_check'").Scan(&detail, &result))
+	assert.Equal(t, "web-cert", detail["certificate_name"])
+	assert.Equal(t, ver(1), detail["version"])
+	assert.Equal(t, "success", result)
+	assert.NotContains(t, fmt.Sprint(detail), string(secret), "the value is never audited")
 	reads := w.az.Calls()
 	for _, c := range reads {
 		if c.Method == "ReadCertificateSecret" {
@@ -412,6 +425,8 @@ func TestTestConnectionJobEndToEnd(t *testing.T) {
 	assert.Equal(t, jobs.StatusSucceeded, job.Status, "the check ran")
 	require.NoError(t, w.db.Owner.QueryRow(w.ctx, "SELECT facts::text FROM targets WHERE id = $1", vault).Scan(&facts))
 	assert.Contains(t, facts, `"role": "Key Vault Secrets User"`)
+	assert.Equal(t, 2, accessReads(), "a refused read is audited too")
+	assert.Equal(t, 1, w.count("SELECT count(*) FROM audit_log WHERE action = 'kv.secret_read' AND details->>'purpose' = 'access_check' AND result = 'failure' AND details->>'reason' = 'azure.forbidden'"))
 	st, code := w.status(vault)
 	assert.Equal(t, inventory.StatusDegraded, st)
 	assert.Equal(t, "azure.forbidden", code)
@@ -622,12 +637,14 @@ func TestImportJobOutcomes(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, w.inv.DeleteVault(w.ctx, w.admin, vault, false))
 		w.drain()
+		// Deleting the vault ended its queued import itself (kv.import_vault_deleted): the job reads the
+		// record back and sends nothing.
 		job := w.lastJob(jobs.KVImport.Name)
-		assert.Equal(t, jobs.StatusFailed, job.Status)
-		assert.Equal(t, "system.not_found", job.LastErrorCode)
+		assert.Equal(t, jobs.StatusSucceeded, job.Status)
+		assert.Equal(t, inventory.ImportFailed, job.Result["state"])
 		state, code := w.importState(im.ID)
 		assert.Equal(t, inventory.ImportFailed, state, "a queued import of a vanished vault must not block its name for ever")
-		assert.Equal(t, "system.not_found", code)
+		assert.Equal(t, inventory.ReasonImportVaultDeleted, code)
 		assert.Zero(t, w.az.Count("ImportCertificate"))
 	})
 }
@@ -694,7 +711,7 @@ func TestL87PollInFlightAtLock(t *testing.T) {
 	var planned atomic.Int32
 	plan := &countingPlanner{n: &planned, inv: w.inv}
 	sched := jobs.NewScheduler(w.clock, w.lic, logging.New(w.logs, slog.LevelDebug), AutoDeployTask(plan, time.Minute, nil),
-		ScheduleTask(w.inv, time.Minute))
+		ScheduleTask(w.inv, time.Minute, nil))
 	assert.ErrorIs(t, sched.RunNow(w.ctx, jobs.KVAutoDeploy.Name), license.ErrLocked)
 	assert.ErrorIs(t, sched.RunNow(w.ctx, jobs.KVSchedule.Name), license.ErrLocked)
 	assert.Zero(t, planned.Load(), "the planner never ran")
@@ -795,10 +812,13 @@ func TestAtMostTwoPollsRunAtOnce(t *testing.T) {
 		}()
 	}
 	require.Eventually(t, func() bool { return running.Load() == 2 }, 10*time.Second, 5*time.Millisecond, "two polls are in flight")
-	time.Sleep(300 * time.Millisecond) // the third waits for a slot
-	assert.Equal(t, int32(2), running.Load(), "the third poll is waiting for a slot")
+	time.Sleep(300 * time.Millisecond) // the third stays queued: the runner does not claim it
+	assert.Equal(t, int32(2), running.Load(), "the third poll waits in the queue")
 	close(release)
 	wg.Wait()
+	ran, err := runners[0].RunOnce(w.ctx) // a slot is free: the third poll runs
+	require.NoError(t, err)
+	assert.True(t, ran)
 	assert.Equal(t, int32(2), peak.Load(), "never more than two at once")
 	for _, v := range vaults {
 		assert.Equal(t, 1, w.count("SELECT count(*) FROM jobs WHERE type = 'kv.poll' AND target_id = $1 AND status = 'succeeded'", v))
@@ -824,4 +844,286 @@ func TestPollsStopInLockAndDropDisabledVaults(t *testing.T) {
 	assert.Equal(t, inventory.StatusDisabled, st)
 	assert.Empty(t, code)
 	assert.Zero(t, w.count("SELECT poll_failures FROM targets WHERE id = $1", vault), "no failure is recorded against a disabled vault")
+}
+
+// I3: a poll beyond the two that may run does not occupy a worker. With 11 due vaults and 8 workers, two
+// polls run and every other worker is free to claim other work (a deployment, an import, an access check);
+// the polls that wait stay queued with their attempt unspent, and a freed slot starts the next one.
+func TestPollsBeyondTwoDoNotOccupyWorkers(t *testing.T) {
+	w := newWorld(t)
+	p := licensetest.Payload(w.lic.Snapshot().InstallationID, w.clock.Now(), w.clock.Now().Add(365*24*time.Hour), 50)
+	_, err := w.lic.Install(w.ctx, licensetest.Sign(p), audit.SystemActor("test"), uuid.Nil)
+	require.NoError(t, err)
+	for i := range 10 {
+		w.addVault(fmt.Sprintf("vault-%d", i))
+	}
+	extra := w.addVault("other")
+	w.vaultSays()
+	var running, started atomic.Int32
+	one, all := make(chan struct{}), make(chan struct{})
+	hook := func(ctx context.Context, _ uuid.UUID) {
+		running.Add(1)
+		started.Add(1)
+		select {
+		case <-one:
+		case <-all:
+		case <-ctx.Done():
+		}
+		running.Add(-1)
+	}
+	w.az.hook.Store(&hook)
+	results := make(chan bool, 16)
+	work := func(r *jobs.Runner) {
+		ran, err := r.RunOnce(w.ctx)
+		assert.NoError(t, err)
+		results <- ran
+	}
+	for i := range 8 {
+		go work(w.newRunner(fmt.Sprintf("w%d", i)))
+	}
+	require.Eventually(t, func() bool { return running.Load() == 2 }, 10*time.Second, 5*time.Millisecond, "two polls are in flight")
+	for range 6 {
+		select {
+		case ran := <-results:
+			assert.False(t, ran, "a worker that finds only polls beyond the cap claims nothing")
+		case <-time.After(5 * time.Second):
+			t.Fatal("a worker is parked behind a poll that waits for a slot")
+		}
+	}
+	assert.Equal(t, 2, w.count("SELECT count(*) FROM jobs WHERE type = 'kv.poll' AND status = 'running'"))
+	assert.Equal(t, 9, w.count("SELECT count(*) FROM jobs WHERE type = 'kv.poll' AND status = 'queued' AND attempts = 0"),
+		"the polls that wait are not spent")
+
+	// Another type is claimed and finishes while both polls are held.
+	_, err = w.inv.RequestAccessCheck(w.ctx, w.admin, extra, uuid.Nil)
+	require.NoError(t, err)
+	ran, err := w.runner.RunOnce(w.ctx)
+	require.NoError(t, err)
+	assert.True(t, ran)
+	assert.Equal(t, jobs.StatusSucceeded, w.lastJob(jobs.KVTestConnection.Name).Status)
+	assert.Equal(t, int32(2), running.Load(), "the polls are still two")
+
+	// A slot frees: the next poll starts, and never more than two run.
+	one <- struct{}{}
+	require.Eventually(t, func() bool { return <-results }, 10*time.Second, 5*time.Millisecond, "one poll finished")
+	go work(w.newRunner("next"))
+	require.Eventually(t, func() bool { return started.Load() == 3 && running.Load() == 2 }, 10*time.Second, 5*time.Millisecond, "the next poll started")
+	assert.Equal(t, 2, w.count("SELECT count(*) FROM jobs WHERE type = 'kv.poll' AND status = 'running'"))
+	close(all)
+	for range 2 {
+		<-results
+	}
+	require.Eventually(t, func() bool { return len(results) == 0 && running.Load() == 0 }, 10*time.Second, 5*time.Millisecond)
+	w.noLeaks()
+}
+
+// finishFails is an inventory whose FinishImport always fails: the outcome of a send can never be recorded.
+type finishFails struct{ *inventory.Service }
+
+func (finishFails) FinishImport(context.Context, uuid.UUID, providers.ImportResult, error) (inventory.KVImport, error) {
+	return inventory.KVImport{}, errors.New(canary + " the database is gone")
+}
+
+// I1: an import whose job ends without the handler finishing it must not block its name for ever.
+// Inventory's SweepImports (called by kv.schedule every minute) ends it: queued -> failed, running ->
+// uncertain (never sent again), whatever the job's own end was.
+func TestImportsEndWhenTheirJobDoes(t *testing.T) {
+	setup := func(t *testing.T) (*world, uuid.UUID, inventory.Certificate, pki.Leaf, inventory.KVImport) {
+		w := newWorld(t)
+		vault := w.addVault("prod")
+		w.vaultSays()
+		w.drain()
+		cert, leaf := w.uploadWithKey("new.example.test")
+		im, err := w.inv.RequestImport(w.ctx, w.admin, inventory.ImportInput{VaultID: vault, CertificateID: cert.ID, Name: "new-cert"})
+		require.NoError(t, err)
+		return w, vault, cert, leaf, im
+	}
+	sweep := func(w *world, want int) {
+		t.Helper()
+		n, err := w.inv.SweepImports(w.ctx)
+		require.NoError(t, err)
+		assert.Equal(t, want, n)
+	}
+	// settledByAPoll lists the imported version after the request: the uncertain import is imported.
+	settledByAPoll := func(w *world, vault uuid.UUID, id uuid.UUID, leaf pki.Leaf) {
+		t.Helper()
+		w.clock.Advance(20 * time.Minute)
+		w.vaultSays(listed("new-cert", leaf, ver(1), w.clock.Now()))
+		w.poll(vault)
+		state, _ := w.importState(id)
+		assert.Equal(t, inventory.ImportSucceeded, state)
+	}
+
+	t.Run("the job is discarded while the import is queued", func(t *testing.T) {
+		w, vault, cert, _, im := setup(t)
+		_, err := w.db.Owner.Exec(w.ctx, "UPDATE jobs SET status = 'cancelled', finished_at = $2 WHERE id = $1", *im.JobID, w.clock.Now())
+		require.NoError(t, err)
+		require.NoError(t, ScheduleTask(w.inv, time.Minute, nil).Run(w.ctx), "the per-minute kv.schedule tick ends it")
+		state, code := w.importState(im.ID)
+		assert.Equal(t, inventory.ImportFailed, state)
+		assert.Equal(t, inventory.ReasonImportCancelled, code)
+		assert.Zero(t, w.az.Count("ImportCertificate"))
+		_, err = w.inv.RequestImport(w.ctx, w.admin, inventory.ImportInput{VaultID: vault, CertificateID: cert.ID, Name: "new-cert"})
+		assert.NoError(t, err, "the name is free again")
+	})
+	t.Run("the last attempt is reaped before the mark", func(t *testing.T) {
+		w, vault, cert, _, im := setup(t)
+		_, err := w.db.Owner.Exec(w.ctx, "UPDATE jobs SET status = 'dead', attempts = max_attempts, finished_at = $2 WHERE id = $1", *im.JobID, w.clock.Now())
+		require.NoError(t, err)
+		sweep(w, 1)
+		state, _ := w.importState(im.ID)
+		assert.Equal(t, inventory.ImportFailed, state)
+		assert.Zero(t, w.az.Count("ImportCertificate"))
+		_, err = w.inv.RequestImport(w.ctx, w.admin, inventory.ImportInput{VaultID: vault, CertificateID: cert.ID, Name: "new-cert"})
+		assert.NoError(t, err)
+	})
+	t.Run("a panic after the mark on the last attempt", func(t *testing.T) {
+		w, vault, _, leaf, im := setup(t)
+		var sends atomic.Int32
+		w.az.Configure(func(c *fake.Config) {
+			c.OpenErr = providers.NewError("azure.unreachable", true, nil, nil) // attempts 1 and 2 never get a session
+			c.Import = func(providers.ImportRequest) (providers.ImportResult, error) {
+				sends.Add(1)
+				panic(canary + " the process died in the send")
+			}
+		})
+		for range 2 {
+			w.drain()
+			w.clock.Advance(time.Hour)
+		}
+		w.az.Configure(func(c *fake.Config) { c.OpenErr = nil })
+		w.drain() // attempt 3: the mark commits, the send panics
+		job := w.lastJob(jobs.KVImport.Name)
+		assert.Equal(t, jobs.StatusDead, job.Status)
+		state, _ := w.importState(im.ID)
+		assert.Equal(t, inventory.ImportRunning, state, "nothing ends it by itself")
+		sweep(w, 1)
+		state, _ = w.importState(im.ID)
+		assert.Equal(t, inventory.ImportUncertain, state)
+		assert.Equal(t, int32(1), sends.Load())
+		settledByAPoll(w, vault, im.ID, leaf)
+		assert.Equal(t, int32(1), sends.Load())
+		assert.NotContains(t, w.logs.String(), canary)
+	})
+	t.Run("the outcome cannot be recorded on any attempt", func(t *testing.T) {
+		w, vault, _, leaf, im := setup(t)
+		var sends atomic.Int32
+		w.az.Configure(func(c *fake.Config) {
+			c.Import = func(providers.ImportRequest) (providers.ImportResult, error) {
+				sends.Add(1)
+				return providers.ImportResult{Outcome: providers.ImportUncertain}, providers.NewError("azure.unreachable", true, context.DeadlineExceeded, nil)
+			}
+		})
+		broken := jobs.NewRunner(jobs.RunnerConfig{Pool: w.db.App, Queue: w.queue, Gate: w.lic, Audit: audit.New(w.clock), Clock: w.clock,
+			Log: logging.New(w.logs, slog.LevelDebug), Workers: 1, WorkerID: "broken", Jitter: func() float64 { return 0 },
+			Notifier: notify.AdminNotifier{Clock: w.clock}})
+		Register(broken, Deps{Inventory: finishFails{w.inv}, Registry: w.reg, Clock: w.clock})
+		for range 3 {
+			w.evaluate()
+			_, err := broken.RunOnce(w.ctx)
+			require.NoError(t, err)
+			w.clock.Advance(time.Hour)
+		}
+		job := w.lastJob(jobs.KVImport.Name)
+		assert.Equal(t, jobs.StatusDead, job.Status)
+		state, _ := w.importState(im.ID)
+		assert.Equal(t, inventory.ImportRunning, state)
+		assert.Equal(t, int32(1), sends.Load(), "the retries never sent again")
+		sweep(w, 1)
+		state, _ = w.importState(im.ID)
+		assert.Equal(t, inventory.ImportUncertain, state)
+		settledByAPoll(w, vault, im.ID, leaf)
+		assert.Equal(t, int32(1), sends.Load())
+		assert.NotContains(t, w.logs.String(), canary)
+	})
+}
+
+// M3, L-26: an import queued before the license locks is held (blocked_license), sends nothing in lock,
+// and runs after an Administrator confirms it once the gate has reopened.
+func TestImportIsHeldInLockAndRunsAfterTheLicenseReturns(t *testing.T) {
+	w := newWorld(t)
+	vault := w.addVault("prod")
+	w.vaultSays()
+	w.drain()
+	cert, _ := w.uploadWithKey("new.example.test")
+	im, err := w.inv.RequestImport(w.ctx, w.admin, inventory.ImportInput{VaultID: vault, CertificateID: cert.ID, Name: "new-cert"})
+	require.NoError(t, err)
+
+	w.clock.Advance(31 * 24 * time.Hour)
+	require.NoError(t, w.lic.Tick(w.ctx))
+	require.ErrorIs(t, w.lic.Allow(license.ClassChange), license.ErrLocked)
+	opens := w.az.Count("Open")
+	ran, err := w.runner.RunOnce(w.ctx)
+	require.NoError(t, err)
+	assert.False(t, ran)
+	job := w.lastJob(jobs.KVImport.Name)
+	assert.Equal(t, jobs.StatusBlocked, job.Status, "held for an Administrator")
+	assert.Equal(t, opens, w.az.Count("Open"), "nothing reached the vault")
+	assert.Zero(t, w.az.Count("ImportCertificate"))
+	state, _ := w.importState(im.ID)
+	assert.Equal(t, inventory.ImportQueued, state)
+	assert.ErrorIs(t, w.queue.Confirm(w.ctx, w.admin.Audit, w.admin.UserID, job.ID), license.ErrLocked, "not while the gate refuses it")
+
+	w.clock.Advance(time.Minute)
+	p := licensetest.Payload(w.lic.Snapshot().InstallationID, w.clock.Now(), w.clock.Now().Add(365*24*time.Hour), 5)
+	_, err = w.lic.Install(w.ctx, licensetest.Sign(p), audit.SystemActor("test"), uuid.Nil)
+	require.NoError(t, err)
+	require.NoError(t, w.queue.Confirm(w.ctx, w.admin.Audit, w.admin.UserID, job.ID))
+	w.drain()
+	assert.Equal(t, jobs.StatusSucceeded, w.lastJob(jobs.KVImport.Name).Status)
+	state, _ = w.importState(im.ID)
+	assert.Equal(t, inventory.ImportSucceeded, state)
+	assert.Equal(t, 1, w.az.Count("ImportCertificate"))
+	w.noLeaks()
+}
+
+// M5: the e2e build's reset statement, as written in cmd/alice/testapi_e2e.go, over a database with a vault
+// and its credential, vault certificates, a binding, and two imports (one finished): every table but the
+// two it keeps is empty afterwards.
+func TestE2EResetStatementEmptiesTheVaultTables(t *testing.T) {
+	w := newWorld(t)
+	vault := w.addVault("prod")
+	l1 := w.ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, w.clock.Now())
+	w.vaultSays(listed("web-cert", l1, ver(1), w.clock.Now()))
+	w.drain()
+	srv := w.nginxServer("web-01", l1)
+	_, err := w.inv.CreateBinding(w.ctx, w.admin, inventory.BindingInput{KVCertificateID: w.certID(vault, "web-cert"), LocationIDs: []uuid.UUID{srv}})
+	require.NoError(t, err)
+	done, _ := w.uploadWithKey("new.example.test")
+	_, err = w.inv.RequestImport(w.ctx, w.admin, inventory.ImportInput{VaultID: vault, CertificateID: done.ID, Name: "new-cert"})
+	require.NoError(t, err)
+	w.drain() // finished: its history is frozen
+	open, _ := w.uploadWithKey("new2.example.test")
+	_, err = w.inv.RequestImport(w.ctx, w.admin, inventory.ImportInput{VaultID: vault, CertificateID: open.ID, Name: "queued-cert"})
+	require.NoError(t, err)
+	for _, table := range []string{"kv_imports", "bindings", "kv_certificate_versions", "kv_certificates", "targets"} {
+		require.NotZero(t, w.count("SELECT count(*) FROM "+table), table)
+	}
+	require.Equal(t, 1, w.count("SELECT count(*) FROM kv_imports WHERE finished_at IS NOT NULL"))
+	require.Equal(t, 1, w.count("SELECT count(*) FROM credentials WHERE purpose = 'azure_vault'"))
+
+	src, err := os.ReadFile("../../../cmd/alice/testapi_e2e.go")
+	require.NoError(t, err)
+	m := regexp.MustCompile("(?s)const resetSQL = `(.*?)`").FindSubmatch(src)
+	require.NotNil(t, m, "the reset statement")
+	for _, stmt := range []string{"ALTER TABLE audit_log DISABLE TRIGGER USER", string(m[1]), "ALTER TABLE audit_log ENABLE TRIGGER USER"} {
+		_, err := w.db.Owner.Exec(w.ctx, stmt)
+		require.NoError(t, err, stmt)
+	}
+	rows, err := w.db.Owner.Query(w.ctx, "SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+	require.NoError(t, err)
+	var tables []string
+	for rows.Next() {
+		var n string
+		require.NoError(t, rows.Scan(&n))
+		tables = append(tables, n)
+	}
+	rows.Close()
+	var left []string
+	for _, tb := range tables {
+		if w.count(fmt.Sprintf("SELECT count(*) FROM %q", tb)) > 0 {
+			left = append(left, tb)
+		}
+	}
+	assert.ElementsMatch(t, []string{"master_key_versions", "goose_db_version"}, left, "only the two kept tables hold rows")
 }

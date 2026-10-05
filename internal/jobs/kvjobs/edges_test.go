@@ -108,7 +108,7 @@ func TestImportBookkeepingFailures(t *testing.T) {
 		for err, class := range map[error]jobs.FailureClass{inventory.ErrClaimLost: jobs.Retryable, errors.New(canary): jobs.Retryable,
 			inventory.ErrImportState: jobs.Permanent} {
 			f, _ := importFixture(t)
-			f.inv.materialErr = inventory.ErrNoPrivateKey
+			f.prov.Configure(func(c *fake.Config) { c.OpenErr = providers.NewError("azure.auth_failed", false, nil, nil) })
 			f.inv.finishErr = err
 			_, e := f.h.importToKV(ctx, importJob(f), noSteps{})
 			fl := failure(t, e)

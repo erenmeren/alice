@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -251,4 +252,26 @@ func TestE2ESchedulerRunEndpoint(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, s.post("/test/scheduler/run", `{"task":"nope"}`).Code)
 	assert.Equal(t, http.StatusBadRequest, s.post("/test/scheduler/run", `{}`).Code)
 	assert.Equal(t, http.StatusBadRequest, s.post("/test/scheduler/run", `{"task":"deployment.recovery_sweep","x":1}`).Code)
+}
+
+// Every table of the schema is emptied by the reset except the two it keeps (the master key versions: the
+// key file on the volume stays, and the migration bookkeeping). A table added by a migration and missing
+// from resetSQL (the Key Vault tables once were) makes the reset fail on a foreign key, or leave rows of
+// the previous test behind.
+func TestE2EResetCoversEveryTable(t *testing.T) {
+	s := newE2EStack(t)
+	rows, err := s.d.Owner.Query(context.Background(), "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename")
+	require.NoError(t, err)
+	defer rows.Close()
+	var kept []string
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		if !regexp.MustCompile(`(?m)(^|[\s,])` + regexp.QuoteMeta(name) + `([\s,]|$)`).MatchString(resetSQL) {
+			kept = append(kept, name)
+		}
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, kept, 2, "only two tables are kept: %v", kept)
+	assert.Contains(t, kept, "master_key_versions")
 }

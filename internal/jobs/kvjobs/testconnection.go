@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/audit"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/providers"
@@ -73,14 +74,17 @@ func (h *handlers) testConnection(ctx context.Context, j jobs.Job, _ jobs.StepRe
 		// A provider that answers an access check without one is a bug, not the vault's state.
 		return nil, jobs.Fail(reasonUnexpected, nil, errors.New("kvjobs: the access check has no rows"))
 	}
-	var readErr error
+	var readErr, auditErr error
 	if cert.ID != uuid.Nil {
-		rep.Azure.Checks, readErr = h.readSecretRow(ctx, sess, cert, slices.Clone(rep.Azure.Checks))
+		rep.Azure.Checks, readErr, auditErr = h.readSecretRow(ctx, j.TargetID, sess, cert, slices.Clone(rep.Azure.Checks))
 	}
 	if err := h.d.Inventory.RecordKVConnection(ctx, j.TargetID, rep); errors.Is(err, inventory.ErrNotFound) {
 		return nil, jobs.Fail(reasonNotFound, nil, err) // deleted while it was checked
 	} else if err != nil {
 		return nil, jobs.Retry(reasonUnexpected, nil, err)
+	}
+	if auditErr != nil {
+		return nil, auditFailure(auditErr) // the read happened: its audit is not optional
 	}
 	if readErr != nil {
 		return nil, readErr
@@ -104,20 +108,26 @@ func (h *handlers) testConnection(ctx context.Context, j jobs.Job, _ jobs.StepRe
 // firewall) is the check's result. Any other failure leaves the row as it was (not checked: a throttled
 // or unreachable vault is not a missing role) and is returned for the job to end with. The value is
 // zeroed on every path, a panic included.
-func (h *handlers) readSecretRow(ctx context.Context, sess providers.Session, cert inventory.KVCertificate, checks []providers.AzureCheck) ([]providers.AzureCheck, error) {
+func (h *handlers) readSecretRow(ctx context.Context, vault uuid.UUID, sess providers.Session, cert inventory.KVCertificate,
+	checks []providers.AzureCheck) (rows []providers.AzureCheck, readErr, auditErr error) {
 	rctx, cancel := context.WithTimeout(ctx, secretTimeout)
 	defer cancel()
 	sec, err := sess.ReadCertificateSecret(rctx, providers.SecretRequest{Name: cert.Name, Version: cert.CurrentVersion})
 	defer sec.Value.Zero()
 	row := providers.AzureCheck{Name: providers.AzureCheckReadSecret, Result: providers.AzureResultOK}
+	result, reason := audit.Success, ""
 	if err != nil {
 		if ctx.Err() != nil {
-			return checks, jobs.Retry(reasonLeaseExpired, nil, ctx.Err())
+			return checks, jobs.Retry(reasonLeaseExpired, nil, ctx.Err()), nil
 		}
 		var pe *providers.Error
 		if !errors.As(err, &pe) {
 			pe = providers.NewError(reasonUnreachable, true, err, nil)
 		}
+		result, reason = audit.Failure, pe.Code
+		// The read was attempted, whatever came of it: every secret read is audited (R40 rows 28 and 34),
+		// a refused one with its closed reason.
+		auditErr = h.d.Inventory.RecordAccessCheckRead(ctx, vault, cert.Name, cert.CurrentVersion, result, reason)
 		switch pe.Code {
 		case reasonForbidden:
 			row = providers.AzureCheck{Name: providers.AzureCheckReadSecret, Result: providers.AzureResultForbidden, Reason: pe.Code,
@@ -125,14 +135,27 @@ func (h *handlers) readSecretRow(ctx context.Context, sess providers.Session, ce
 		case reasonFirewall:
 			row = providers.AzureCheck{Name: providers.AzureCheckReadSecret, Result: providers.AzureResultForbidden, Reason: pe.Code}
 		default:
-			return checks, jobs.FromProvider(pe)
+			return checks, jobs.FromProvider(pe), auditErr
 		}
+	} else {
+		auditErr = h.d.Inventory.RecordAccessCheckRead(ctx, vault, cert.Name, cert.CurrentVersion, result, reason)
 	}
 	for i := range checks {
 		if checks[i].Name == providers.AzureCheckReadSecret {
 			checks[i] = row
-			return checks, nil
+			return checks, nil, auditErr
 		}
 	}
-	return append(checks, row), nil
+	return append(checks, row), nil, auditErr
+}
+
+// auditFailure is the job's failure when the audit of a secret read cannot be written.
+func auditFailure(err error) error {
+	switch {
+	case errors.Is(err, inventory.ErrNotFound):
+		return jobs.Fail(reasonNotFound, nil, err)
+	case errors.Is(err, inventory.ErrClaimLost):
+		return jobs.Retry(reasonLeaseExpired, nil, err)
+	}
+	return jobs.Retry(reasonUnexpected, nil, err)
 }

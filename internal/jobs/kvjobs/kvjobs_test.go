@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
+	"alice/internal/audit"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/platform/azureid"
@@ -53,6 +54,8 @@ type fakeInv struct {
 	targetErr error
 
 	connErr     error
+	reads       []accessRead
+	readErr     error
 	connections []providers.ConnectionReport
 	failures    []error
 	failErr     error
@@ -77,11 +80,18 @@ type fakeInv struct {
 	markErr     error
 	finishErr   error
 	finished    []finishCall
-	finishState string // the state FinishImport answers with
+	finishState string   // the state FinishImport answers with
+	pfxAtFinish [][]byte // the PFX's bytes (a copy) at each FinishImport call
 	failedQueue []string
 	importErrs  []error // consumed one per Import call (then impErr)
 	failQErr    error
 	onMark      func()
+}
+
+type accessRead struct {
+	name, version, reason string
+	result                audit.Result
+	claim                 inventory.Claim
 }
 
 type finishCall struct {
@@ -136,6 +146,15 @@ func (f *fakeInv) RecordKVConnection(_ context.Context, _ uuid.UUID, r providers
 	defer f.mu.Unlock()
 	f.connections = append(f.connections, r)
 	return f.connErr
+}
+
+func (f *fakeInv) RecordAccessCheckRead(ctx context.Context, _ uuid.UUID, name, version string, result audit.Result, reason string) error {
+	f.rec("RecordAccessCheckRead")
+	claim, _ := inventory.ClaimFrom(ctx)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads = append(f.reads, accessRead{name: name, version: version, result: result, reason: reason, claim: claim})
+	return f.readErr
 }
 
 func (f *fakeInv) RecordKVFailure(_ context.Context, _ uuid.UUID, cause error) error {
@@ -207,6 +226,7 @@ func (f *fakeInv) FinishImport(ctx context.Context, _ uuid.UUID, res providers.I
 	defer f.mu.Unlock()
 	_, hasDeadline := ctx.Deadline()
 	claim, _ := inventory.ClaimFrom(ctx)
+	f.pfxAtFinish = append(f.pfxAtFinish, append([]byte(nil), f.material.Request.PFX.Bytes()...))
 	f.finished = append(f.finished, finishCall{res: res, cause: cause, ctx: ctx, ctxErr: ctx.Err(), hasDeadline: hasDeadline, claim: claim})
 	out := f.imp
 	out.State = f.finishState
@@ -559,6 +579,9 @@ func TestTestConnectionWithASecretRead(t *testing.T) {
 		}
 		require.NotNil(t, read)
 		assert.Equal(t, providers.SecretRequest{Name: "web-cert", Version: validVer}, read.Secret, "the exact current version, never latest")
+		require.Len(t, f.inv.reads, 1, "every read is audited, once")
+		assert.Equal(t, accessRead{name: "web-cert", version: validVer, result: audit.Success, claim: f.inv.reads[0].claim}, f.inv.reads[0])
+		assert.NotEqual(t, uuid.Nil, f.inv.reads[0].claim.JobID, "fenced by the job's claim")
 		require.Len(t, f.prov.secrets, 1)
 		assert.Equal(t, make([]byte, len(f.prov.secrets[0])), f.prov.secrets[0], "the secret value was zeroed")
 		var found bool
@@ -585,6 +608,9 @@ func TestTestConnectionWithASecretRead(t *testing.T) {
 		assert.Equal(t, providers.AzureResultForbidden, row.Result)
 		assert.Equal(t, providers.RoleKeyVaultSecretsUser, row.Role)
 		assert.Equal(t, "azure.forbidden", row.Reason)
+		require.Len(t, f.inv.reads, 1, "a refused read is audited too")
+		assert.Equal(t, audit.Failure, f.inv.reads[0].result)
+		assert.Equal(t, "azure.forbidden", f.inv.reads[0].reason)
 		assert.NotContains(t, f.logs.String(), canary)
 	})
 	t.Run("403 without a role param still names the secrets role", func(t *testing.T) {
@@ -611,6 +637,8 @@ func TestTestConnectionWithASecretRead(t *testing.T) {
 		require.Len(t, f.inv.connections, 1, "what the check learned is stored")
 		assert.Equal(t, providers.AzureResultNotChecked, rowOf(f.inv.connections[0], providers.AzureCheckReadSecret).Result)
 		assert.Zero(t, f.inv.count("RecordKVFailure"), "a read of one secret says nothing about the vault's sign-in")
+		require.Len(t, f.inv.reads, 1, "a read that failed was attempted: audited with its reason")
+		assert.Equal(t, accessRead{name: "web-cert", version: validVer, result: audit.Failure, reason: "azure.unreachable", claim: f.inv.reads[0].claim}, f.inv.reads[0])
 	})
 	t.Run("the secret of an unreadable certificate is the certificate's problem", func(t *testing.T) {
 		f, _, payload := readSecretFixture(t)
@@ -618,6 +646,24 @@ func TestTestConnectionWithASecretRead(t *testing.T) {
 		_, err := f.h.testConnection(ctx, f.job(jobs.KVTestConnection, payload), noSteps{})
 		requireFailure(t, err, jobs.Permanent, "kv.secret_unreadable")
 		assert.Equal(t, providers.AzureResultNotChecked, rowOf(f.inv.connections[0], providers.AzureCheckReadSecret).Result)
+	})
+	t.Run("an audit that cannot be written fails the step and is not swallowed", func(t *testing.T) {
+		for err, want := range map[error]struct {
+			class  jobs.FailureClass
+			reason string
+		}{
+			errors.New(canary):     {jobs.Retryable, "internal.unexpected"},
+			inventory.ErrNotFound:  {jobs.Permanent, "system.not_found"},
+			inventory.ErrClaimLost: {jobs.Retryable, "job.lease_expired"},
+		} {
+			f, _, payload := readSecretFixture(t)
+			f.inv.readErr = err
+			_, e := f.h.testConnection(ctx, f.job(jobs.KVTestConnection, payload), noSteps{})
+			requireFailure(t, e, want.class, want.reason)
+			assert.Equal(t, 1, f.inv.count("RecordKVConnection"), "what the check learned is still stored")
+			assert.NotContains(t, f.logs.String(), canary)
+			assert.Equal(t, make([]byte, len(f.prov.secrets[0])), f.prov.secrets[0], "the value is zeroed all the same")
+		}
 	})
 	t.Run("the certificate changed since the request", func(t *testing.T) {
 		f, _, payload := readSecretFixture(t)
@@ -951,29 +997,24 @@ func TestImportDecisionTable(t *testing.T) {
 		assert.Empty(t, f.inv.failedQueue, "attempts are left")
 		assert.NotContains(t, f.logs.String(), canary)
 	})
-	t.Run("no key", func(t *testing.T) {
-		f, _ := importFixture(t)
-		f.inv.materialErr = inventory.ErrNoPrivateKey
-		_, err := f.h.importToKV(ctx, importJob(f), noSteps{})
-		requireFailure(t, err, jobs.Permanent, "certificate.no_private_key")
-		require.Len(t, f.inv.finished, 1)
-		assert.Equal(t, providers.ImportRefused, f.inv.finished[0].res.Outcome)
-		var pe *providers.Error
-		require.ErrorAs(t, f.inv.finished[0].cause, &pe)
-		assert.Equal(t, "certificate.no_private_key", pe.Code)
-		assert.Zero(t, f.prov.Count("ImportCertificate"))
-		assert.Zero(t, f.inv.count("MarkImportSent"))
-	})
-	t.Run("what ImportMaterial refuses before anything is sent", func(t *testing.T) {
-		for err, want := range map[error]string{inventory.ErrCertificateExpired: "certificate.expired", inventory.ErrUnsupportedKey: "certificate.unsupported_key",
-			inventory.ErrImportChanged: "kv.import_invalid"} {
+	t.Run("what ImportMaterial refuses for good ends the queued import through FailQueuedImport", func(t *testing.T) {
+		for err, want := range map[error]string{
+			inventory.ErrNoPrivateKey:           "certificate.no_private_key",
+			inventory.ErrCertificateExpired:     "certificate.expired",
+			inventory.ErrCertificateNotYetValid: "certificate.not_yet_valid",
+			inventory.ErrUnsupportedKey:         "certificate.unsupported_key",
+			inventory.ErrKeyMismatch:            "certificate.key_mismatch",
+			inventory.ErrImportChanged:          "kv.import_invalid",
+			inventory.ErrAdminRequired:          "auth.forbidden",
+		} {
 			f, _ := importFixture(t)
-			f.inv.materialErr = err
+			f.inv.materialErr = fmt.Errorf("wrapped: %w", err)
 			_, e := f.h.importToKV(ctx, importJob(f), noSteps{})
 			requireFailure(t, e, jobs.Permanent, want)
-			require.Len(t, f.inv.finished, 1, want)
-			assert.Equal(t, providers.ImportRefused, f.inv.finished[0].res.Outcome)
+			assert.Equal(t, []string{want}, f.inv.failedQueue, want)
+			assert.Zero(t, f.inv.count("FinishImport"), "%s: a queued import is ended by FailQueuedImport", want)
 			assert.Zero(t, f.prov.Count("ImportCertificate"))
+			assert.Zero(t, f.inv.count("MarkImportSent"))
 		}
 	})
 	t.Run("the vault vanished or is disabled before the job ran", func(t *testing.T) {
@@ -1247,14 +1288,26 @@ func TestNoTextOfAnErrorIsKept(t *testing.T) {
 }
 
 func TestPeriodicTasks(t *testing.T) {
-	sched := &fakeScheduler{polled: 3}
-	task := ScheduleTask(sched, time.Minute)
+	var schedLogs bytes.Buffer
+	sched := &fakeScheduler{polled: 3, swept: 2}
+	task := ScheduleTask(sched, time.Minute, slog.New(slog.NewTextHandler(&schedLogs, nil)))
 	assert.Equal(t, jobs.KVSchedule, task.Type)
 	assert.Equal(t, time.Minute, task.Every)
 	require.NoError(t, task.Run(context.Background()))
 	assert.Equal(t, 1, sched.scheduleCalls)
+	assert.Equal(t, 1, sched.sweepCalls, "the imports nothing else ends are swept on the same tick")
+	// A failing poll scheduler does not stop the sweep, and a failing sweep does not stop the scheduler.
 	sched.err = errors.New(canary)
 	assert.Error(t, task.Run(context.Background()))
+	assert.Equal(t, 2, sched.sweepCalls)
+	sched.err, sched.sweepErr = nil, errors.New(canary+" sweep")
+	err := task.Run(context.Background())
+	assert.Error(t, err)
+	assert.NotContains(t, err.Error(), canary)
+	assert.Equal(t, 3, sched.scheduleCalls)
+	assert.NotContains(t, schedLogs.String(), canary)
+	assert.Contains(t, schedLogs.String(), "error_type")
+	assert.NotPanics(t, func() { _ = ScheduleTask(sched, time.Minute, nil).Run(context.Background()) }, "no logger is fine")
 
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, nil))
@@ -1266,7 +1319,7 @@ func TestPeriodicTasks(t *testing.T) {
 	assert.Equal(t, 1, plan.calls)
 	assert.NotContains(t, logs.String(), canary)
 	plan.err = errors.Join(errors.New(canary), errors.New("second "+canary))
-	err := pt.Run(context.Background())
+	err = pt.Run(context.Background())
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), canary, "the joined errors of single bindings carry their text: only the type is kept")
 	assert.NotContains(t, logs.String(), canary)
@@ -1276,9 +1329,14 @@ func TestPeriodicTasks(t *testing.T) {
 }
 
 type fakeScheduler struct {
-	scheduleCalls int
-	polled        int
-	err           error
+	scheduleCalls, sweepCalls int
+	polled, swept             int
+	err, sweepErr             error
+}
+
+func (f *fakeScheduler) SweepImports(context.Context) (int, error) {
+	f.sweepCalls++
+	return f.swept, f.sweepErr
 }
 
 func (f *fakeScheduler) ScheduleKVPolls(context.Context) (int, error) {
@@ -1295,4 +1353,43 @@ type fakePlanner struct {
 func (f *fakePlanner) PlanKVAutoDeploy(context.Context) (int, error) {
 	f.calls++
 	return f.created, f.err
+}
+
+// The deadlines are bounded from above: a constant raised to hours would hold a worker (and, for a poll,
+// a slot) for that long when a provider forgets its own budget.
+func TestDeadlinesAreBounded(t *testing.T) {
+	assert.Greater(t, pollTimeout, 11*time.Minute, "longer than the provider's discover budget: the provider ends the poll")
+	assert.LessOrEqual(t, pollTimeout, 15*time.Minute)
+	assert.Greater(t, importTimeout, 105*time.Second)
+	assert.LessOrEqual(t, importTimeout, 5*time.Minute)
+	for _, d := range []time.Duration{openTimeout, testTimeout, secretTimeout} {
+		assert.LessOrEqual(t, d, 2*time.Minute)
+	}
+	assert.LessOrEqual(t, recordTimeout, 30*time.Second)
+	f := newFixture(t, true)
+	_, err := f.h.poll(context.Background(), f.job(jobs.KVPoll, nil), noSteps{})
+	require.NoError(t, err)
+	d, ok := f.prov.deadline("Discover")
+	require.True(t, ok)
+	assert.InDelta(t, pollTimeout.Seconds(), d.Seconds(), 5, "the deadline the provider sees is the constant")
+}
+
+// The key does not outlive the send: the PFX is zero before the outcome is recorded, on every outcome.
+func TestPFXIsZeroBeforeTheOutcomeIsRecorded(t *testing.T) {
+	cases := map[string]func(*fixture){
+		"created": func(f *fixture) { scriptImport(f, createdResult(), nil) },
+		"refused": func(f *fixture) {
+			scriptImport(f, providers.ImportResult{Outcome: providers.ImportRefused}, providers.NewError("azure.forbidden", false, nil, nil))
+		},
+		"uncertain": func(f *fixture) {
+			scriptImport(f, providers.ImportResult{Outcome: providers.ImportUncertain}, providers.NewError("azure.unreachable", true, nil, nil))
+		},
+	}
+	for name, script := range cases {
+		f, pfx := importFixture(t)
+		script(f)
+		_, _ = f.h.importToKV(context.Background(), importJob(f), noSteps{})
+		require.Len(t, f.inv.pfxAtFinish, 1, name)
+		assert.Equal(t, make([]byte, len(pfx)), f.inv.pfxAtFinish[0], "%s: zero when FinishImport is called", name)
+	}
 }
