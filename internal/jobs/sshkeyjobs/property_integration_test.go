@@ -220,7 +220,13 @@ func (s *scenario) install() {
 	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		f := fake.FaultNone
 		for i, ev := range s.sched.events {
-			if ev.at != p.N || done[i] {
+			listing := ev.kind == "unread" || ev.kind == "partial"
+			switch {
+			case done[i]:
+				continue
+			case listing && (p.N < ev.at || p.Method != "ListKeys"):
+				continue // a listing fault fires at the first listing from its call on (N-m6)
+			case !listing && ev.at != p.N:
 				continue
 			}
 			done[i] = true
@@ -230,7 +236,7 @@ func (s *scenario) install() {
 			case "lease":
 				s.loseLease()
 			case "abort":
-				s.decide("abort")
+				s.decide("abort", true)
 			case "clock":
 				e.clock.Advance(s.sched.step)
 			case "clock_back":
@@ -250,8 +256,19 @@ func (s *scenario) install() {
 	})
 }
 
-// decide makes an Administrator's decision and notes where it was accepted.
-func (s *scenario) decide(kind string) {
+// scheduledAfter reports whether the schedule makes the decision at a later round.
+func (s *scenario) scheduledAfter(kind string, round int) bool {
+	for _, ev := range s.sched.rounds {
+		if ev.kind == kind && ev.at > round {
+			return true
+		}
+	}
+	return false
+}
+
+// decide makes an Administrator's decision and notes where it was accepted when the schedule asked for it
+// (the harness's own settling decisions do not count as coverage, N-m6).
+func (s *scenario) decide(kind string, scheduled bool) {
 	e := s.e
 	r, err := e.keys.Rotation(e.ctx, s.runID)
 	if err != nil {
@@ -273,7 +290,7 @@ func (s *scenario) decide(kind string) {
 		}
 		err = e.keys.KeepOld(e.ctx, e.admin, s.runID, ids)
 	}
-	if err == nil {
+	if err == nil && scheduled {
 		s.accepted = append(s.accepted, kind+"@"+r.Status)
 	}
 }
@@ -313,7 +330,7 @@ func (s *scenario) settle() {
 					e.gate.lock() // a lock between two calls (in the overlap, while a decision waits)
 					continue
 				}
-				s.decide(ev.kind)
+				s.decide(ev.kind, true)
 				e.drain()
 			}
 		}
@@ -331,10 +348,12 @@ func (s *scenario) settle() {
 			e.gate.unlock()
 		case r.PausedLicense:
 			e.sweep() // the renewal notice first (S6)
-			s.decide("continue")
+			if !s.scheduledAfter("continue", round) {
+				s.decide("continue", false)
+			}
 		case r.AwaitingDecision && r.DecisionDueAt != nil:
 			if s.sched.keepOld {
-				s.decide("keep_old")
+				s.decide("keep_old", false)
 			}
 			if r := e.run(s.runID); r.AwaitingDecision && r.DecisionDueAt != nil && e.clock.Now().Before(*r.DecisionDueAt) {
 				e.clock.Set(*r.DecisionDueAt)
@@ -460,6 +479,7 @@ func others(t *testing.T, lines []string, fps ...string) []string {
 // baseline is the fault-free run of a variant: its world calls, and the call index of its last add's login.
 type baseline struct {
 	calls, lastAddLogin int
+	removes             []int // call indexes of the removals of the old key
 }
 
 // schedules builds the schedules from the fault-free runs (see the comment at the top).
@@ -506,8 +526,9 @@ func schedules(seed uint64, random int, full bool, base map[variant]baseline) []
 	for _, v := range []variant{twoLocs, withFrom} {
 		for round := range 3 {
 			for _, kind := range roundKinds {
+				// The harness answers a waiting decision itself only when no Keep old is scheduled.
 				out = append(out, schedule{v: v, rounds: []event{{round, kind}}, renewAfter: time.Hour, step: 2 * time.Hour,
-					keepOld: true, ticking: len(out)%2 == 1})
+					keepOld: kind != "keep_old", ticking: len(out)%2 == 1})
 			}
 		}
 		// A lock between calls at each of the first rounds (the overlap, a waiting decision), then Continue.
@@ -517,8 +538,20 @@ func schedules(seed uint64, random int, full bool, base map[variant]baseline) []
 		}
 		// Continue right after a lock at each add, before and after the renewal notice.
 		for at := 1; at <= base[v].lastAddLogin; at++ {
-			out = append(out, schedule{v: v, events: []event{{at, "lock"}}, rounds: []event{{0, "continue"}, {1, "continue"}},
-				renewAfter: time.Hour, step: 2 * time.Hour, keepOld: true})
+			out = append(out, schedule{v: v, events: []event{{at, "lock"}}, rounds: []event{{0, "continue"}, {1, "continue"}, {2, "continue"},
+				{3, "continue"}}, renewAfter: time.Hour, step: 2 * time.Hour, keepOld: true})
+		}
+	}
+	for _, v := range []variant{oneLoc, twoLocs} {
+		// The re-list of a removal whose answer was lost (or that hung), under a listing that does not
+		// read the file (review C1, N-m6): nothing is recorded removed on its word.
+		for _, rm := range base[v].removes {
+			for _, lost := range []string{"hang", "after_write", "late_write"} {
+				for _, listing := range []string{"unread", "partial"} {
+					out = append(out, schedule{v: v, events: []event{{rm, lost}, {rm + 1, listing}}, renewAfter: time.Hour,
+						step: 2 * time.Hour, ticking: len(out)%2 == 1})
+				}
+			}
 		}
 	}
 	rng := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
@@ -565,6 +598,9 @@ func baselineOf(t *testing.T, v variant) baseline {
 	for _, ev := range s.e.world.Events() {
 		if ev.Method == "AddAuthorizedKey" && !ev.Landed {
 			b.lastAddLogin = ev.N + 1
+		}
+		if ev.Method == "RemoveAuthorizedKey" && !ev.Landed {
+			b.removes = append(b.removes, ev.N)
 		}
 	}
 	return b

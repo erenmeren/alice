@@ -3,6 +3,7 @@
 package sshkeyjobs_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -644,4 +645,76 @@ func TestDeployInterruptedAfterASendKeepsTheWait(t *testing.T) {
 	e.clock.Advance(e.keys.UndoWait())
 	e.drain()
 	assert.Equal(t, "verified", e.job(job).Result["result"])
+}
+
+// N-m6, the deploy path under every listing fault: a line that was there before the job is never removed,
+// no other line is touched, and a line left in the file has a record (a location) or a failure a person
+// sees (needs attention). Pre-existing line × first listing (complete, unread, partial) × add fault × login.
+func TestDeployOwnershipUnderListingFaults(t *testing.T) {
+	slots := make(chan struct{}, parallelScenarios)
+	for _, pre := range []bool{false, true} {
+		for _, listing := range []fake.Fault{fake.FaultNone, fake.FaultUnread, fake.FaultPartial} {
+			for _, add := range []fake.Fault{fake.FaultNone, fake.FaultUnreachable, fake.FaultAfterWrite, fake.FaultLateWrite} {
+				for _, refused := range []bool{false, true} {
+					name := fmt.Sprintf("pre=%t/list=%d/add=%d/refused=%t", pre, listing, add, refused)
+					t.Run(name, func(t *testing.T) {
+						t.Parallel()
+						slots <- struct{}{}
+						defer func() { <-slots }()
+						e := newEnv(t)
+						srv := e.server("web-01")
+						k := e.generate("ci")
+						other := e.otherKeyLine(t)
+						lines := []string{other}
+						if pre {
+							lines = append(lines, k.PublicKey+" "+k.Comment)
+						}
+						e.world.Put(srv, "deploy", deployFile, lines...)
+						lists, adds := 0, 0
+						e.setFault(func(p fake.FaultPoint) fake.Fault {
+							switch p.Method {
+							case "ListKeys":
+								if lists++; lists == 1 {
+									return listing
+								}
+							case "AddAuthorizedKey":
+								if adds++; adds == 1 {
+									return add
+								}
+							case "VerifyKeyLogin":
+								if refused {
+									return fake.FaultRefuse
+								}
+							}
+							return fake.FaultNone
+						})
+						job := e.deploy(k, srv, "")
+						for range 6 {
+							e.drain()
+							e.clock.Advance(e.keys.UndoWait() + time.Minute)
+						}
+						v := e.job(job)
+						require.NotEqual(t, jobs.StatusQueued, v.Status, "the deploy ends")
+						got := e.world.Lines(srv, deployFile)
+						assert.Contains(t, got, other, "another key's line is never touched")
+						for _, ev := range e.events("RemoveAuthorizedKey") {
+							assert.Equal(t, k.Fingerprint, ev.Fingerprint)
+						}
+						if pre {
+							assert.True(t, e.world.Has(srv, deployFile, k.Fingerprint), "a line that was there before the job is never removed")
+							assert.Zero(t, e.removalsOf(k.Fingerprint))
+						}
+						if e.world.Has(srv, deployFile, k.Fingerprint) {
+							recorded := e.count("SELECT count(*) FROM ssh_key_locations WHERE ssh_key_id = $1 AND removed_by_alice_at IS NULL", k.ID) > 0
+							assert.True(t, recorded || v.Result["needs_attention"] == true,
+								"a line left in the file has a record or a person looks (%s, %v)", v.Status, v.Result["result"])
+						}
+						if v.Result["result"] == "undone" {
+							assert.False(t, e.world.Has(srv, deployFile, k.Fingerprint))
+						}
+					})
+				}
+			}
+		}
+	}
 }
