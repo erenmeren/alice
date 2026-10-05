@@ -29,10 +29,16 @@ export function RotationPolicyPanel({ keyId, policyId, isAdmin }: { keyId: strin
   const policy = useQuery({ queryKey: policyKey(policyId ?? ''), queryFn: () => getPolicy(policyId as string), enabled: policyId !== null });
   const runs = useQuery({ queryKey: [...ROTATION_RUNS_KEY, 'key', keyId], queryFn: () => listRuns({ ssh_key_id: keyId, limit: 10 }) });
   const p = policy.data;
+  // A previewed (planned) run is started by Run now; only a run that is already going blocks it.
+  const open = p?.open_rotation_id ? runs.data?.items.find((r) => r.id === p.open_rotation_id) : undefined;
+  const started = open !== undefined && open.status !== 'dry_run_notified';
+  const [deleting, setDeleting] = useState(false);
 
   const refresh = () => {
     if (policyId) void client.invalidateQueries({ queryKey: policyKey(policyId) });
     void client.invalidateQueries({ queryKey: sshKey(keyId) });
+    // Switching off or editing cancels a planned run, so the runs are read again.
+    void client.invalidateQueries({ queryKey: ROTATION_RUNS_KEY });
   };
 
   const toggle = async (p: Policy, on: boolean) => {
@@ -49,6 +55,7 @@ export function RotationPolicyPanel({ keyId, policyId, isAdmin }: { keyId: strin
 
   const remove = async (p: Policy) => {
     setError(null);
+    setDeleting(true);
     try {
       await deletePolicy(p.id, p.version);
       setDialog(null);
@@ -59,6 +66,7 @@ export function RotationPolicyPanel({ keyId, policyId, isAdmin }: { keyId: strin
       setDialog(null);
       refresh();
     }
+    setDeleting(false);
   };
 
   return (
@@ -82,7 +90,7 @@ export function RotationPolicyPanel({ keyId, policyId, isAdmin }: { keyId: strin
           <Text size="sm" fw={600} translate="no">
             {p.name}
           </Text>
-          <Text size="sm">{t('rotation.every', { count: p.interval_days })}</Text>
+          <Text size="sm">{p.interval_days === 1 ? t('rotation.everyDay') : t('rotation.every', { count: p.interval_days })}</Text>
           <Text size="sm">{t('rotation.overlap', { duration: durationText(t, p.overlap_minutes) })}</Text>
           <Text size="sm">{t('rotation.notifyBefore', { hours: p.notify_before_hours })}</Text>
           <Switch
@@ -97,6 +105,9 @@ export function RotationPolicyPanel({ keyId, policyId, isAdmin }: { keyId: strin
           {p.enabled && p.next_run_at && <Text size="sm">{t('rotation.nextRun', { date: formatDateTime(p.next_run_at, i18n.language) })}</Text>}
           {p.last_run_status && (
             <Stack gap={4}>
+              <Text size="xs" c="gray.7">
+                {t('rotation.lastRunHelp')}
+              </Text>
               <Text size="sm">{t('rotation.lastRun', { status: labelOf(t, i18n, 'rotation.status', p.last_run_status) })}</Text>
               {p.last_run_result && <ReasonAlert error={p.last_run_result} color="yellow" />}
               {p.last_run_id && (
@@ -116,7 +127,7 @@ export function RotationPolicyPanel({ keyId, policyId, isAdmin }: { keyId: strin
               <Button size="xs" variant="default" onClick={() => setDialog('preview')}>
                 {t('rotation.preview')}
               </Button>
-              <Button size="xs" onClick={() => setDialog('preview')} disabled={p.open_rotation_id !== null}>
+              <Button size="xs" onClick={() => setDialog('preview')} disabled={started}>
                 {t('rotation.runNow')}
               </Button>
               <Button size="xs" variant="default" onClick={() => setDialog('edit')}>
@@ -187,7 +198,7 @@ export function RotationPolicyPanel({ keyId, policyId, isAdmin }: { keyId: strin
               <Button variant="default" onClick={() => setDialog(null)}>
                 {t('ui.cancel')}
               </Button>
-              <Button color="red.9" onClick={() => void remove(p)}>
+              <Button color="red.9" loading={deleting} onClick={() => void remove(p)}>
                 {t('rotation.delete')}
               </Button>
             </Group>

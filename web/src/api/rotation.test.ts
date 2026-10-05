@@ -103,6 +103,9 @@ describe('runPollInterval', () => {
     const busy = (secs: number) => new ApiError(503, null, secs);
     expect(runPollInterval(run('overlap'), busy(30))).toBe(30000);
     expect(runPollInterval(run('overlap'), busy(1))).toBe(3000);
-    expect(runPollInterval(run('overlap'), new ApiError(500, null))).toBe(3000);
+    expect(runPollInterval(run('overlap'), new ApiError(500, null))).toBe(10000);
+  });
+  it('does not poll a run that cannot be read at all', () => {
+    expect(runPollInterval(undefined, new ApiError(404, null))).toBe(false);
   });
 });

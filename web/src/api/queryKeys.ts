@@ -37,6 +37,7 @@ export const keyFiles = (targetId: string) => ['targets', targetId, 'key-files']
 
 // Phase 6 rotation. A policy and a run are read by id; ROTATION_RUNS_KEY is a prefix so one invalidation refreshes every
 // list and every run.
+export const ROTATION_POLICIES_KEY = ['rotation', 'policies'] as const;
 export const policyKey = (id: string) => ['rotation', 'policies', id] as const;
 export const ROTATION_RUNS_KEY = ['rotation', 'runs'] as const;
 export const runKey = (id: string) => ['rotation', 'runs', id] as const;

@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isApiError } from '../api/client';
-import { policyKey, sshKey } from '../api/queryKeys';
+import { policyKey, ROTATION_RUNS_KEY, sshKey } from '../api/queryKeys';
 import { createPolicy, updatePolicy, type NewKeyType, type Policy, type PolicyPatch } from '../api/rotation';
 import { KEY_TYPES } from '../api/sshkeys';
 import { AppModal } from './AppModal';
@@ -91,6 +91,7 @@ function PolicyForm({ keyId, policy, onClose }: Props) {
         if (Object.keys(patch).length > 0) await updatePolicy(policy.id, policy.version, patch);
         void client.invalidateQueries({ queryKey: policyKey(policy.id) });
         void client.invalidateQueries({ queryKey: sshKey(keyId) });
+        void client.invalidateQueries({ queryKey: ROTATION_RUNS_KEY });
       }
       onClose();
       return;

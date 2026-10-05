@@ -34,7 +34,7 @@ describe('RotationPolicyPanel', () => {
   it('shows a policy that is off with its help, the plural forms and the overlap in days or minutes', async () => {
     world(policyFixture({ overlap_days: 0, overlap_minutes: 1, interval_days: 1 }));
     await panel();
-    expect(await screen.findByText('Every 1 day')).toBeInTheDocument();
+    expect(await screen.findByText('Every day')).toBeInTheDocument();
     expect(screen.getByText('Overlap: 1 minute')).toBeInTheDocument();
     expect(screen.getByText('The policy is off. Alice plans no run until you switch it on.')).toBeInTheDocument();
     expect(screen.getByRole('switch', { name: 'Rotate automatically' })).not.toBeChecked();
@@ -109,10 +109,54 @@ describe('RotationPolicyPanel', () => {
   it('links to an open run and lists the earlier runs', async () => {
     world(policyFixture({ open_rotation_id: RUN_ID }));
     await panel();
-    expect(await screen.findByRole('link', { name: 'Open the running rotation' })).toHaveAttribute('href', `/rotation/runs/${RUN_ID}`);
+    expect(await screen.findByRole('link', { name: 'Open the current run' })).toHaveAttribute('href', `/rotation/runs/${RUN_ID}`);
     const table = await screen.findByRole('table', { name: 'Earlier runs' });
     expect(within(table).getByText('Completed')).toBeInTheDocument();
+  });
+
+  it('keeps Run now enabled for a previewed (planned) run, which Run now starts', async () => {
+    world(policyFixture({ enabled: true, open_rotation_id: RUN_ID }));
+    server.use(http.get('/api/v1/rotation/runs', () => HttpResponse.json({ items: [runFixture({ status: 'dry_run_notified' })], next_cursor: null })));
+    await panel();
+    await screen.findByRole('table', { name: 'Earlier runs' });
+    expect(screen.getByRole('button', { name: 'Run now' })).toBeEnabled();
+  });
+
+  it('disables Run now while a run is in progress', async () => {
+    world(policyFixture({ enabled: true, open_rotation_id: RUN_ID }));
+    server.use(http.get('/api/v1/rotation/runs', () => HttpResponse.json({ items: [runFixture({ status: 'overlap' })], next_cursor: null })));
+    await panel();
+    await screen.findByRole('table', { name: 'Earlier runs' });
     expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  });
+
+  it('explains under the last run that a planned run that did not happen shows its reason', async () => {
+    world(policyFixture({ last_run_id: RUN_ID, last_run_status: 'cancelled', last_run_result: { code: 'ALC-ROT-0017', reason: 'rotation.notice_undelivered' } }));
+    await panel();
+    expect(await screen.findByText('A planned run that did not happen shows its reason here.')).toBeInTheDocument();
+  });
+
+  it('reads the runs again after switching off, because a planned run is cancelled', async () => {
+    world(policyFixture({ enabled: true }));
+    let reads = 0;
+    server.use(
+      http.get('/api/v1/rotation/runs', () => (reads++, HttpResponse.json({ items: [], next_cursor: null }))),
+      http.post(`/api/v1/rotation/policies/${POLICY_ID}/actions/disable`, () => HttpResponse.json(policyFixture({ enabled: false, version: 2 }))),
+    );
+    await panel();
+    await userEvent.click(await screen.findByRole('switch', { name: 'Rotate automatically' }));
+    await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2));
+  });
+
+  it('shows a busy delete button while the policy is being deleted', async () => {
+    world(policyFixture());
+    server.use(http.delete(`/api/v1/rotation/policies/${POLICY_ID}`, async () => (await new Promise((r) => setTimeout(r, 200)), new HttpResponse(null, { status: 204 }))));
+    const user = userEvent.setup();
+    await panel();
+    await user.click(await screen.findByRole('button', { name: 'Delete policy' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete policy' });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete policy' }));
+    expect(within(dialog).getByRole('button', { name: 'Delete policy' })).toBeDisabled();
   });
 
   it('deletes a policy with If-Match after a confirmation', async () => {
@@ -128,7 +172,7 @@ describe('RotationPolicyPanel', () => {
     await panel();
     await user.click(await screen.findByRole('button', { name: 'Delete policy' }));
     const dialog = await screen.findByRole('dialog', { name: 'Delete policy' });
-    expect(within(dialog).getByText('Delete this rotation policy? The key stays as it is.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Delete this rotation policy? The key stays as it is. A planned run that has not started is cancelled.')).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Delete policy' }));
     await waitFor(() => expect(ifMatch).toBe('"3"'));
   });

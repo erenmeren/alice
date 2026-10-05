@@ -1,6 +1,6 @@
 import { Anchor, Button, Code, Stack, Table, Text, Title } from '@mantine/core';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import { ApiError } from '../api/client';
@@ -50,7 +50,7 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
   });
   // A vault whose read failed is retried alone; what it answers is kept here and merged in.
   const [recovered, setRecovered] = useState<Record<string, KVImport[]>>({});
-  const [retryErrors, setRetryErrors] = useState<Record<string, unknown>>({});
+  const [retryErrors, setRetryErrors] = useState<Record<string, { error: unknown; at: number }>>({});
   const [retrying, setRetrying] = useState<string | null>(null);
   const names = new Map((vaults.data?.items ?? []).map((v) => [v.id, v.name]));
   const seen = new Set<string>();
@@ -58,9 +58,26 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
     .filter((i) => !seen.has(i.id) && !!seen.add(i.id))
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
   const failures = new Map<string, unknown>();
-  for (const page of imports.data?.pages ?? []) for (const f of page.failed) failures.set(f.id, retryErrors[f.id] ?? f.error);
+  // A retry's error stands only until the main read has answered again after it.
+  for (const page of imports.data?.pages ?? []) for (const f of page.failed) failures.set(f.id, retryErrors[f.id] && retryErrors[f.id].at > imports.dataUpdatedAt ? retryErrors[f.id].error : f.error);
   for (const id of Object.keys(recovered)) failures.delete(id);
   const error = vaults.error ?? imports.error ?? null;
+  // A retried vault is followed like the others: while one of its imports is still moving, it is read again.
+  const moving = Object.entries(recovered)
+    .filter(([, rows]) => rows.some((i) => i.state === 'queued' || i.state === 'running'))
+    .map(([id]) => id)
+    .join(',');
+  useEffect(() => {
+    if (moving === '') return;
+    const timer = setTimeout(() => {
+      for (const id of moving.split(',')) {
+        listKVImports(id, certificateId, 50, null)
+          .then((page) => setRecovered((r) => ({ ...r, [id]: page.items })))
+          .catch(() => undefined);
+      }
+    }, 3_000);
+    return () => clearTimeout(timer);
+  }, [moving, recovered, certificateId]);
   const tryAgain = async (vaultId: string) => {
     setRetrying(vaultId);
     try {
@@ -70,7 +87,7 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
     } catch (e) {
       // A vault that is gone by now is dropped without a word, as in the first read.
       if (e instanceof ApiError && e.status === 404) setRecovered((r) => ({ ...r, [vaultId]: [] }));
-      else setRetryErrors((r) => ({ ...r, [vaultId]: e }));
+      else setRetryErrors((r) => ({ ...r, [vaultId]: { error: e, at: Date.now() } }));
     }
     setRetrying(null);
   };
@@ -84,7 +101,7 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
       {[...failures].map(([id, e]) => (
         <Stack gap={6} key={id} data-testid="import-history-failed">
           <Text size="sm" style={WRAP}>
-            {t('imports.history.loadFailed', { vault: names.get(id) ?? '' })}
+            {t('imports.history.loadFailed', { vault: names.get(id) || t('imports.history.unnamedVault') })}
           </Text>
           <ErrorAlert error={e} />
           <Button size="xs" variant="default" w="fit-content" loading={retrying === id} onClick={() => void tryAgain(id)}>

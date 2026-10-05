@@ -20,7 +20,7 @@ describe('RotationPreviewDialog', () => {
     await open();
     expect(await screen.findByText('Places that will change: 1')).toBeInTheDocument();
     expect(screen.getByText('Places that will be skipped: 1')).toBeInTheDocument();
-    expect(screen.getByText('This preview was sent to the administrators by email.')).toBeInTheDocument();
+    expect(screen.getByText('Alice is emailing this preview to the administrators.')).toBeInTheDocument();
     const table = screen.getByRole('table', { name: 'Preview of the next run' });
     const rows = within(table).getAllByRole('row').slice(1);
     expect(within(rows[0]).getByText('ssh-ed25519 AAAANEWNEWNEW deploy-key').tagName).toBe('CODE');
@@ -49,7 +49,7 @@ describe('RotationPreviewDialog', () => {
   it('says so when the preview was already emailed', async () => {
     server.use(http.post(PREVIEW, () => HttpResponse.json(previewFixture({ emailed: false }))));
     await open();
-    expect(await screen.findByText('This preview was already emailed in the last 10 minutes.')).toBeInTheDocument();
+    expect(await screen.findByText('A preview of this key was already emailed in the last 10 minutes, so this one was not emailed.')).toBeInTheDocument();
   });
 
   it('renders skip reasons it has no special knowledge of through the catalogue, and an unknown one generically', async () => {

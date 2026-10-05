@@ -70,14 +70,54 @@ describe('RotationRunPage', () => {
     for (const n of all) expect(screen.queryByRole('button', { name: n }) !== null).toBe((names as readonly string[]).includes(n));
   });
 
-  it('shows the paused banner and explains why Continue is not there yet', async () => {
-    serve(runFixture({ status: 'overlap', paused_license: true, actions_allowed: ['abort'] }));
+  it('shows the licence pause with its own text and the stop-and-undo line, and no email text the server did not send', async () => {
+    serve(runFixture({ status: 'overlap', paused_license: true, actions_allowed: ['abort'], decision_due_at: '2026-10-20T08:00:00Z', awaiting_decision: true }));
     await open();
     expect(await screen.findByText(/Paused: the license expired or could not be checked/)).toBeInTheDocument();
-    expect(screen.getByText('Alice is still preparing the email about the license renewal.')).toBeInTheDocument();
+    expect(screen.getByText(/Alice adds and removes no key for this rotation/)).toBeInTheDocument();
+    expect(screen.getByText(/You can still stop and undo the rotation: Alice then removes the new key where it added it/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open the license page' })).toHaveAttribute('href', '/license');
-    expect(screen.getByText(/You can still stop and undo the rotation/)).toBeInTheDocument();
+    expect(screen.queryByText('Alice is still preparing the email about the license renewal.')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Decide before/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument();
+  });
+
+  it('does not offer the stop-and-undo line when the API does not offer Stop and undo (a pause while removing)', async () => {
+    serve(runFixture({ status: 'removing_old', paused_license: true, actions_allowed: [] }));
+    await open();
+    expect(await screen.findByText(/Paused: the license expired or could not be checked/)).toBeInTheDocument();
+    expect(screen.queryByText(/You can still stop and undo/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Stop and undo' })).not.toBeInTheDocument();
+  });
+
+  it('explains the pending renewal email only when the server says so (notice_state)', async () => {
+    serve({ ...runFixture({ paused_license: true, actions_allowed: ['abort'] }), notice_state: { code: 'ALC-ROT-0021', reason: 'rotation.notice_pending' } });
+    await open();
+    expect(await screen.findByText('Alice is still preparing the email about the license renewal.')).toBeInTheDocument();
+  });
+
+  it('shows the queue failure of notice_error', async () => {
+    serve({ ...runFixture({ paused_license: true, actions_allowed: ['abort'] }), notice_error: { code: 'ALC-NTF-0001', reason: 'notify.queue_failed' } });
+    await open();
+    expect(await screen.findByText('Alice could not queue the email about the license renewal.')).toBeInTheDocument();
+  });
+
+  it('shows the place counts with a label for every bucket the server sends, unknown ones generically', async () => {
+    serve(runFixture({ location_counts: { total: 5, verified: 2, removed: 1, skipped: 1, kept: 0, failed: 0, undone: 1, brand_new: 3 } as never }));
+    await open();
+    const list = await screen.findByTestId('run-counts');
+    expect(within(list).getByText('Total: 5')).toBeInTheDocument();
+    expect(within(list).getByText('New key works: 2')).toBeInTheDocument();
+    expect(within(list).getByText('Undone: 1')).toBeInTheDocument();
+    expect(within(list).getByText('Other: 3')).toBeInTheDocument();
+    expectNoRawKeys(list);
+  });
+
+  it.each(['operator', 'auditor'] as const)('shows %s the run without any decision button', async (role) => {
+    serve(runFixture({ actions_allowed: ['continue', 'finish_now', 'keep_old', 'abort'] }), role);
+    await open();
+    await screen.findByRole('heading', { name: 'Key rotation', level: 1 });
+    for (const n of ['Continue', 'Finish now', 'Keep the old key on these servers', 'Stop and undo']) expect(screen.queryByRole('button', { name: n })).not.toBeInTheDocument();
   });
 
   it('shows Continue without the explanation once the API offers it, and sends it', async () => {
@@ -112,7 +152,7 @@ describe('RotationRunPage', () => {
     await open();
     await userEvent.click(await screen.findByRole('button', { name: 'Finish now' }));
     const dialog = await screen.findByRole('dialog', { name: 'Finish now' });
-    expect(within(dialog).getByText('Alice checks the new key once more on each server, then removes the old key.')).toBeInTheDocument();
+    expect(within(dialog).getByText("Alice ends the overlap now and emails the administrators. In each place it tests the new key once more and removes the old key only where the new key works; places where the old key is kept are not touched.")).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Finish now' }));
     await waitFor(() => expect(posted).toBe(1));
   });
@@ -128,6 +168,67 @@ describe('RotationRunPage', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Stop and undo' }));
     await waitFor(() => expect(posted).toBe(1));
     expect(screen.queryByLabelText('6-digit code')).not.toBeInTheDocument();
+  });
+
+  it('shows the step-up prompt for Stop and undo when the server asks for a code', async () => {
+    serve(runFixture({ actions_allowed: ['abort'] }));
+    let posted = 0;
+    server.use(
+      http.post(`${BASE}/actions/abort`, () => (++posted === 1 ? errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required') : new HttpResponse(null, { status: 204 }))),
+      http.post('/api/v1/auth/stepup', () => HttpResponse.json(sessionFor('admin'))),
+    );
+    const user = userEvent.setup();
+    await open();
+    await user.click(await screen.findByRole('button', { name: 'Stop and undo' }));
+    await user.click(within(await screen.findByRole('dialog', { name: 'Stop and undo' })).getByRole('button', { name: 'Stop and undo' }));
+    await user.type(await screen.findByLabelText('6-digit code'), '123456');
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(posted).toBe(2));
+  });
+
+  it('forgets the ticked places when the Keep old dialog is closed', async () => {
+    const a = runLocationFixture({ id: 'u1', state: 'unverifiable' });
+    serve(runFixture({ status: 'verifying_new', awaiting_decision: true, actions_allowed: ['keep_old'], locations: [a, runLocationFixture({ id: 'v1', n: 2 })] }));
+    const user = userEvent.setup();
+    await open();
+    await user.click(await screen.findByRole('button', { name: 'Keep the old key on these servers' }));
+    let dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('checkbox'));
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Keep the old key on these servers' }));
+    dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('checkbox')).not.toBeChecked();
+  });
+
+  it('says what Keep old really does', async () => {
+    serve(runFixture({ status: 'verifying_new', awaiting_decision: true, actions_allowed: ['keep_old'], locations: [runLocationFixture({ id: 'u1', state: 'unverifiable' })] }));
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Keep the old key on these servers' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/nor from other places in the same file/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/At least one place where the new key works must remain/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Alice undoes the whole rotation/)).toBeInTheDocument();
+  });
+
+  it('shows a decision that the server refuses (409) and reads the run again', async () => {
+    const counts = serve(runFixture({ actions_allowed: ['finish_now'] }));
+    server.use(http.post(`${BASE}/actions/finish-now`, () => errorResponse(409, 'ALC-ROT-0005', 'rotation.not_waiting')));
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Finish now' }));
+    await userEvent.click(within(await screen.findByRole('dialog', { name: 'Finish now' })).getByRole('button', { name: 'Finish now' }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    await waitFor(() => expect(counts.reads).toBeGreaterThanOrEqual(2));
+  });
+
+  it('goes back to the old key until the rotation is completed', async () => {
+    serve(runFixture({ status: 'overlap' }));
+    const v = await open();
+    expect(await screen.findByRole('link', { name: 'Back to the SSH key' })).toHaveAttribute('href', '/ssh-keys/0192b000-0000-7000-8000-0000000000k1');
+    v.unmount();
+    serve(runFixture({ status: 'completed' }));
+    await open();
+    expect(await screen.findByRole('link', { name: 'Back to the SSH key' })).toHaveAttribute('href', '/ssh-keys/0192b000-0000-7000-8000-0000000000k2');
   });
 
   it('keeps the old key on the checked untestable places only', async () => {
@@ -188,16 +289,20 @@ describe('RotationRunPage', () => {
           { n: 3, location_id: 'rl1', name: 'add_answered', status: 'ok', at: '2026-10-06T09:01:00Z', params: {} },
           { n: 4, location_id: 'rl1', name: 'verified', status: 'failed', at: '2026-10-06T09:02:00Z', params: {} },
           { n: 5, location_id: null, name: 'something_new', status: 'ok', at: '2026-10-06T09:03:00Z', params: {} },
+          { n: 6, location_id: 'rl1', name: 'undo_not_sent', status: 'failed', at: '2026-10-06T09:04:00Z', params: {} },
+          { n: 7, location_id: null, name: 'notice_failed', status: 'failed', at: '2026-10-06T09:05:00Z', params: {} },
         ],
       }),
     );
     await open();
     const steps = await screen.findByTestId('run-steps');
     expect(within(steps).getByText('A late answer arrived after Alice had given up')).toBeInTheDocument();
-    expect(within(steps).getByText('Check this')).toBeInTheDocument();
+    expect(within(steps).getAllByText('Check this')).toHaveLength(2);
+    expect(within(steps).getByText('The removal of the new key was not sent: too many attempts')).toBeInTheDocument();
+    expect(within(steps).getByText('The email about the license renewal could not be queued')).toBeInTheDocument();
     expect(within(steps).getByText('The server answered the addition')).toBeInTheDocument();
     expect(within(steps).getByText('New key works')).toBeInTheDocument();
-    expect(within(steps).getByText('Failed')).toBeInTheDocument();
+    expect(within(steps).getAllByText('Failed').length).toBeGreaterThan(0);
     expect(within(steps).getByText('Other step')).toBeInTheDocument();
     expectNoRawKeys(steps);
     const alert = screen.getByText("A server's answer arrived after Alice had given up on it.").closest('[role]');
@@ -217,21 +322,56 @@ describe('RotationRunPage', () => {
     expect(await screen.findByRole('alert')).toBeInTheDocument();
   });
 
-  it('polls a moving run again after three seconds', async () => {
-    const counts = serve(runFixture({ status: 'adding_new' }));
-    await open();
-    await screen.findByRole('heading', { name: 'Key rotation', level: 1 });
-    expect(counts.reads).toBe(1);
-    await waitFor(() => expect(counts.reads).toBeGreaterThanOrEqual(2), { timeout: 5000 });
-  }, 10000);
+  describe('polling', () => {
+    beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+    afterEach(() => vi.useRealTimers());
 
-  it('does not poll a final run', async () => {
-    const counts = serve(runFixture({ status: 'completed' }));
+    it('reads a moving run again after three seconds', async () => {
+      const counts = serve(runFixture({ status: 'adding_new' }));
+      await open();
+      await screen.findByRole('heading', { name: 'Key rotation', level: 1 });
+      expect(counts.reads).toBe(1);
+      await vi.advanceTimersByTimeAsync(3100);
+      await waitFor(() => expect(counts.reads).toBe(2));
+    });
+
+    it('does not read a final run again', async () => {
+      const counts = serve(runFixture({ status: 'completed' }));
+      await open();
+      await screen.findByRole('heading', { name: 'Key rotation', level: 1 });
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(counts.reads).toBe(1);
+    });
+
+    it('stops reading a run that cannot be read and shows why', async () => {
+      let reads = 0;
+      server.use(...sessionHandlers(sessionFor('admin')), http.get(BASE, () => (reads++, errorResponse(404, 'ALC-SYS-0001', 'system.not_found'))));
+      await open();
+      expect(await screen.findByRole('alert')).toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(20000);
+      expect(reads).toBe(1);
+    });
+
+    it('keeps the page and shows a failed refresh', async () => {
+      let reads = 0;
+      server.use(
+        ...sessionHandlers(sessionFor('admin')),
+        http.get(BASE, () => (++reads === 1 ? HttpResponse.json(runFixture({ status: 'adding_new' })) : errorResponse(502, 'ALC-AKV-0001', 'azure.auth_failed'))),
+      );
+      await open();
+      await screen.findByRole('heading', { name: 'Key rotation', level: 1 });
+      await vi.advanceTimersByTimeAsync(3100);
+      expect(await screen.findByRole('alert')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Key rotation', level: 1 })).toBeInTheDocument();
+    });
+  });
+
+  it('announces the status politely', async () => {
+    serve(runFixture({ status: 'adding_new' }));
     await open();
-    await screen.findByRole('heading', { name: 'Key rotation', level: 1 });
-    await new Promise((r) => setTimeout(r, 3500));
-    expect(counts.reads).toBe(1);
-  }, 10000);
+    const live = (await screen.findAllByText('Adding the new key')).map((e) => e.closest('[aria-live]')).find(Boolean);
+    expect(live).toHaveAttribute('aria-live', 'polite');
+  });
 
   it('renders every part in Turkish with no missing key', async () => {
     serve(

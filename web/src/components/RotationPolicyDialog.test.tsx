@@ -1,4 +1,5 @@
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { errorResponse, POLICY_ID, policyFixture, sessionFor, sessionHandlers } from '../test/fixtures';
@@ -62,6 +63,28 @@ describe('RotationPolicyDialog', () => {
     await renderApp(<RotationPolicyDialog keyId="k1" policy={policyFixture()} onClose={() => {}} />);
     await screen.findByLabelText(/^Name/);
     expect(screen.queryByText(/switches it off/)).not.toBeInTheDocument();
+  });
+
+  it('loads the current values after a 412 when the panel hands over the newer copy', async () => {
+    server.use(http.patch(`/api/v1/rotation/policies/${POLICY_ID}`, () => errorResponse(412, 'ALC-SYS-0008', 'system.precondition_failed')));
+    const newer = policyFixture({ version: 2, interval_days: 45, name: 'Renamed' });
+    function Host() {
+      const [p, setP] = useState(policyFixture({ version: 1, interval_days: 90 }));
+      return (
+        <>
+          <button onClick={() => setP(newer)}>swap</button>
+          <RotationPolicyDialog keyId="k1" policy={p} onClose={() => {}} />
+        </>
+      );
+    }
+    await renderApp(<Host />);
+    await userEvent.clear(await screen.findByLabelText(/^Rotate every/));
+    await userEvent.type(screen.getByLabelText(/^Rotate every/), '10');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByText(/Your change was not saved/);
+    fireEvent.click(screen.getByText('swap'));
+    await waitFor(() => expect(screen.getByLabelText(/^Rotate every/)).toHaveValue('45'));
+    expect(screen.getByLabelText(/^Name/)).toHaveValue('Renamed');
   });
 
   it('says the policy changed meanwhile after a 412 and keeps the dialog open', async () => {

@@ -471,7 +471,8 @@
       "rotation_finish_requested": "Rotation overlap ended early",
       "rotation_old_kept": "Old key kept on some servers",
       "rotation_stop_requested": "Rotation stopped",
-      "sshkey_live_after_destruction": "Destroyed key found on a server again"
+      "sshkey_live_after_destruction": "Destroyed key found on a server again",
+      "sshkey_add_sent": "SSH key about to be sent to a server"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -1800,7 +1801,8 @@
       },
       "tableLabel": "Imports into Key Vault",
       "loadFailed": "The import history of {{vault}} could not be loaded.",
-      "tryAgain": "Try again"
+      "tryAgain": "Try again",
+      "unnamedVault": "(unnamed)"
     }
   },
   "rotation": {
@@ -1836,8 +1838,8 @@
     "runNow": "Run now",
     "edit": "Edit",
     "delete": "Delete policy",
-    "deleteConfirm": "Delete this rotation policy? The key stays as it is.",
-    "editSwitchesOff": "Changing the interval, the overlap, the notice time or the new key type of a policy that is on switches it off. Afterwards, switch it on again; that needs your authenticator code.",
+    "deleteConfirm": "Delete this rotation policy? The key stays as it is. A planned run that has not started is cancelled.",
+    "editSwitchesOff": "Changing the interval, the overlap, the notice time or the new key type of a policy that is on switches it off, and a planned run that has not started is cancelled. Afterwards, switch it on again; that needs your authenticator code.",
     "notSaved": "Your change was not saved because the policy changed in the meantime. The current values are shown now. Check them and save again.",
     "invalid": {
       "name": "Enter a name of 1 to 100 characters.",
@@ -1847,13 +1849,13 @@
     },
     "lastRun": "Last run: {{status}}",
     "lastRunHelp": "A planned run that did not happen shows its reason here.",
-    "openRun": "Open the running rotation",
+    "openRun": "Open the current run",
     "openLastRun": "Open the last run",
     "previewTitle": "Preview of the next run",
     "previewing": "Alice is planning the next run.",
     "previewIntro": "Alice will add a new key next to the old one in these places, check that it works, keep both keys for the overlap, then remove the old key.",
-    "previewEmailed": "This preview was sent to the administrators by email.",
-    "previewNotEmailed": "This preview was already emailed in the last 10 minutes.",
+    "previewEmailed": "Alice is emailing this preview to the administrators.",
+    "previewNotEmailed": "A preview of this key was already emailed in the last 10 minutes, so this one was not emailed.",
     "previewRefreshed": "The plan changed since you looked at it, so nothing was started. The preview below is the new one. Check it, then choose Run now again.",
     "nothingToChange": "No place would change, so there is nothing to rotate.",
     "col": {
@@ -1867,14 +1869,13 @@
     },
     "willChange": "Will change",
     "skipped": "Skipped",
-    "adds": "Adds",
-    "removesAfter": "Removes after the overlap",
+    "adds": "Line to add",
+    "removesAfter": "Line removed after the overlap",
     "noLoginTest": "Alice cannot test a login here",
     "changes": "Places that will change: {{count}}",
     "skips": "Places that will be skipped: {{count}}",
     "runConfirmTitle": "Start this rotation now?",
     "runConfirm": "Start rotation",
-    "runStarted": "The rotation started.",
     "runTitle": "Key rotation",
     "backToKey": "Back to the SSH key",
     "oldKey": "Old key",
@@ -1887,18 +1888,17 @@
     "finishedAt": "Finished {{date}}",
     "overlapUntil": "Both keys work until {{date}}",
     "decisionDue": "Decide before {{date}}, or Alice undoes the rotation.",
-    "pausedBanner": "Paused: the license expired or could not be checked. Alice sends nothing to servers until it is valid again and you choose Continue.",
+    "pausedBanner": "Paused: the license expired or could not be checked. Alice adds and removes no key for this rotation until the license is valid again and you choose Continue.",
     "continue": "Continue",
     "continueHelp": "Alice goes on where it stopped. Before it removes any old key it tests the new key again.",
     "finishNow": "Finish now",
-    "finishNowHelp": "Alice checks the new key once more on each server, then removes the old key.",
+    "finishNowHelp": "Alice ends the overlap now and emails the administrators. In each place it tests the new key once more and removes the old key only where the new key works; places where the old key is kept are not touched.",
     "keepOld": "Keep the old key on these servers",
-    "keepOldHelp": "Alice could not test the new key in these places. Tick the places where the old key stays; Alice never removes it there. The rotation goes on when no untested place is left.",
+    "keepOldHelp": "Alice could not test the new key in these places. Tick the places where the old key stays; Alice never removes it there, nor from other places in the same file. At least one place where the new key works must remain. When no untested place is left, the overlap begins; if untested places are left at the deadline, Alice undoes the whole rotation.",
     "abort": "Stop and undo",
     "abortConfirm": "Stop the rotation and remove the new key where Alice added it? The old key stays.",
-    "decisionDone": "Done.",
     "keptCount": "Places where the old key stays: {{count}}",
-    "keptHelp": "Alice does not remove the old key in the places marked below. Remove it there yourself when you can.",
+    "keptHelp": "The old key stays in the places below shown as Skipped, Not started, Old key kept or Old key not removed. Alice did not add the new key in all of them: before you remove the old key from one of these places yourself, make sure the new key works there.",
     "places": "Places",
     "backupAt": "Backup of the file: {{path}}",
     "steps": "Steps",
@@ -1909,12 +1909,13 @@
       "old_kept": "Old key kept",
       "stop_requested": "Stop requested",
       "add_answered": "The server answered the addition",
-      "add_resent": "The addition was sent again",
       "remove_retry": "Removal tried again",
       "late_result": "A late answer arrived after Alice had given up",
       "read": "Read the key file",
       "write": "Wrote the key file",
-      "unknown": "Other step"
+      "unknown": "Other step",
+      "notice_failed": "The email about the license renewal could not be queued",
+      "undo_not_sent": "The removal of the new key was not sent: too many attempts"
     },
     "stepStatus": {
       "started": "Started",
@@ -1924,7 +1925,6 @@
     },
     "warning": "Check this",
     "history": "Earlier runs",
-    "noRuns": "No run yet.",
     "openRunLink": "Open",
     "status": {
       "dry_run_notified": "Planned",
@@ -1965,7 +1965,21 @@
       "login_refused": "A line for this key was already there but does not log in. Alice left it as it is.",
       "login_unavailable": "Alice could not connect to test a login."
     },
-    "licensePaused": "License: Alice changes nothing on servers while the license is expired. You can still stop and undo the rotation.",
-    "openLicense": "Open the license page"
+    "licensePaused": "You can still stop and undo the rotation: Alice then removes the new key where it added it, even while the license does not allow changes. The old key stays.",
+    "openLicense": "Open the license page",
+    "everyDay": "Every day",
+    "counts": {
+      "total": "Total",
+      "verified": "New key works",
+      "removed": "Old key removed",
+      "skipped": "Skipped",
+      "kept": "Old key kept",
+      "failed": "Failed",
+      "undone": "Undone",
+      "cancelled": "Not started",
+      "in_flight": "In progress",
+      "unknown": "Other"
+    },
+    "countLine": "{{label}}: {{count}}"
   }
 }

@@ -128,11 +128,14 @@ export interface Run {
   // actions_allowed is what the page may offer now; the page never works it out itself.
   actions_allowed: RunAction[];
   // Place counts are on every run; the places and the steps only on the detail (a list item has neither).
-  location_counts: { total: number; verified: number; removed: number; skipped: number; kept: number; failed: number };
+  // The buckets add up to total; the server may add more (undone, cancelled, in_flight...), so any key can arrive.
+  location_counts: Record<string, number>;
   locations?: RunLocation[];
   steps?: RunStep[];
   // Why Continue is not offered yet, when the server says (the renewal notice); absent on older servers.
-  notice_state?: string;
+  // notice_state (reason rotation.notice_pending) says the renewal email is still being prepared; notice_error (reason
+  // notify.queue_failed) that it could not be queued. Both are error references or null; the page never infers them.
+  notice_state?: ErrorRef | null;
   notice_error?: ErrorRef | null;
   version: number;
 }
@@ -177,9 +180,12 @@ export const abortRun = (id: string) => apiFetch<void>(`${v1}/runs/${enc(id)}/ac
 const TERMINAL_RUN: ReadonlySet<string> = new Set(['completed', 'aborted', 'needs_attention', 'cancelled']);
 export const RUN_POLL_MS = 3000;
 
-// runPollInterval is how long a page waits before reading a run again: never once the run is final, three seconds while it
-// moves, and as long as the server's Retry-After asks when it is busy.
+// runPollInterval is how long a page waits before reading a run again: never once the run is final or cannot be read at all,
+// three seconds while it moves, as long as the server's Retry-After asks when it is busy, and ten seconds after any other
+// failed refresh (the page keeps what it has).
 export function runPollInterval(run: Run | undefined, error: unknown): number | false {
   if (run && TERMINAL_RUN.has(run.status)) return false;
-  return error instanceof ApiError && error.retryAfter !== null ? Math.max(RUN_POLL_MS, error.retryAfter * 1000) : RUN_POLL_MS;
+  if (error && !run) return false;
+  if (error instanceof ApiError && error.retryAfter !== null) return Math.max(RUN_POLL_MS, error.retryAfter * 1000);
+  return error ? 10000 : RUN_POLL_MS;
 }
