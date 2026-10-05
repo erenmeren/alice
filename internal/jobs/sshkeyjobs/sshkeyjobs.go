@@ -35,7 +35,8 @@ import (
 type Keys interface {
 	DeployJob(ctx context.Context, jobID, targetID uuid.UUID, payload map[string]string) (sshkeys.DeployJob, error)
 	FinishDeploy(ctx context.Context, actor audit.Actor, d sshkeys.DeployJob, out sshkeys.DeployOutcome) error
-	BeginDeploySend(ctx context.Context, jobID uuid.UUID, d sshkeys.DeployJob) (sshkeys.DeploySend, error)
+	BeginDeploySendWith(ctx context.Context, jobID uuid.UUID, d sshkeys.DeployJob, before sshkeys.DeployEvidence) (sshkeys.DeploySend, error)
+	RecordDeployAnswer(ctx context.Context, d sshkeys.DeployJob, send sshkeys.DeploySend, added bool) (sshkeys.DeploySendRecord, error)
 	DeploySends(ctx context.Context, jobID uuid.UUID) (sshkeys.DeploySendRecord, error)
 	UndoWait() time.Duration
 	KeySigner(keyID uuid.UUID) providers.CredentialSource

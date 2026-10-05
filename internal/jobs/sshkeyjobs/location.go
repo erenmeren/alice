@@ -269,10 +269,7 @@ func (r *locJob) sendAdd(ctx context.Context, sess providers.Session, op uuid.UU
 	if ctx.Err() != nil {
 		return nil, false, interrupted(ctx) // in flight: the next job verifies first
 	}
-	if err != nil && definiteNoChange(rec.wrote, res, err) {
-		// Only a failure before the write says the server is not reachable; a timeout after the write
-		// started is the add's uncertainty, resolved by the login and one re-send (the planner would skip
-		// a server marked unreachable at the re-send).
+	if err != nil {
 		r.h.recordIfConnection(ctx, r.loc.TargetID, err)
 	}
 	switch {

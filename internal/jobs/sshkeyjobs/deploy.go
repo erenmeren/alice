@@ -53,7 +53,7 @@ const (
 // with sshkey.add_uncertain, and a scan is queued. Nothing is sent while an earlier send of this job may
 // still land, and an undo waits until the store says none can (S3, DeploySendRecord.UndoNotBefore).
 // Only ids and public facts reach the result.
-func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecorder) (res map[string]any, err error) {
+func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecorder) (map[string]any, error) {
 	actor := systemActor(j)
 	// The deploy's records are written only while this run still holds the job (review M8).
 	ctx = inventory.WithClaim(ctx, inventory.Claim{JobID: j.ID, Attempt: j.Attempt})
@@ -88,46 +88,38 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 	if ctx.Err() != nil {
 		return nil, jobs.Retry("ssh.timeout", nil, ctx.Err())
 	}
-	// absentBefore: proven not in the file right before this send (a failed listing proves nothing).
-	absentBefore := lerr0 == nil && before.Absent(d.OSUser, d.FilePath, d.Fingerprint)
 	var (
-		ares     providers.AuthKeyResult
-		st       addState
-		send     sshkeys.DeploySend
-		recorded bool
+		ares  providers.AuthKeyResult
+		st    addState
+		owned bool // the store's decision (DeploySendRecord.Owned): may this job remove the line again?
 	)
-	if line, here := listedLine(before, d); lerr0 == nil && here && prior.Count == 0 {
-		// The line is there before this job sent anything: nothing is sent, nothing is recorded as a send,
-		// and the line is never removed (ruling on deploy ownership).
-		st, ares.LineNo = addPresent, line
-	} else {
-		send, err = h.d.Keys.BeginDeploySend(ctx, j.ID, d)
-		if err != nil {
-			if errors.Is(err, inventory.ErrClaimLost) {
-				return nil, jobs.Retry("job.lease_expired", nil, err)
-			}
-			return nil, jobs.Retry("internal.unexpected", nil, err) // nothing was sent
+	if line, here := listedLine(before, d); lerr0 == nil && here {
+		// The line is in the file: nothing is sent. Whose it is, is the record's (Owned): this job's when
+		// a send of it wrote it or the listing before its first send proved the line absent; otherwise it
+		// was there before (or cannot be known to be ours) and is never removed.
+		ares.LineNo, owned = line, prior.Owned()
+		st = addPresent
+		if owned {
+			st = addOwned
 		}
-		defer func() {
-			// M7: the last attempt ends after a send without a final record: audited, and a scan is queued so
-			// that the record catches up with the file.
-			var f *jobs.Failure
-			if !recorded && errors.As(err, &f) && f.Class == jobs.Retryable && j.Attempt >= j.MaxAttempts {
-				h.finish(ctx, actor, d, sshkeys.DeployOutcome{Result: sshkeys.DeployFailed, Reason: f.Reason})
-				h.discover(ctx, d.TargetID)
-			}
-		}()
+	} else {
+		send, err := h.d.Keys.BeginDeploySendWith(ctx, j.ID, d, sshkeys.DeployEvidenceFrom(before, lerr0, d))
+		if err != nil {
+			return nil, h.storeFailure(err) // nothing was sent
+		}
 		rec := &writeTracker{next: steps}
 		ares, err = sess.AddAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: send.OperationID, OSUser: d.OSUser, FilePath: d.FilePath,
 			Line: d.Line, ProtectedFingerprints: d.Protected}, rec)
 		if ctx.Err() != nil {
 			return nil, jobs.Retry("ssh.timeout", nil, ctx.Err()) // F-39: the next attempt starts over
 		}
+		if err != nil {
+			h.recordIfConnection(ctx, d.TargetID, err)
+		}
 		switch {
 		case err != nil && definiteNoChange(rec.wrote, ares, err):
-			h.recordIfConnection(ctx, d.TargetID, err)
 			f := jobs.FromProvider(err)
-			if recorded = h.failed(ctx, j, actor, d, f); recorded && send.Resend {
+			if h.failed(ctx, j, actor, d, f) && send.Resend {
 				h.discover(ctx, d.TargetID) // an earlier send of this job may have landed (M7)
 			}
 			var rf *jobs.Failure
@@ -137,14 +129,23 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 			}
 			return nil, f
 		case err != nil:
-			st = addUncertain // the add's uncertainty, not the connection's state: not recorded on the target
-		case ares.Changed && !ares.Verified:
-			// §13.4 step 5: the re-read after the write shows other content.
-			return h.undoDeploy(ctx, j, actor, d, sess, steps, reasonVerifyFailed, true)
-		case ares.Changed || absentBefore:
-			st = addOwned // this send wrote it, or it was proven absent right before this send
+			st, owned = addUncertain, send.Record.Owned() // the answer was lost: the record decides
 		default:
-			st = addPresent
+			answered, aerr := h.d.Keys.RecordDeployAnswer(ctx, d, send, ares.Changed)
+			if aerr != nil {
+				// The line is in the file; the next attempt finds it and the record decides.
+				return nil, h.storeFailure(aerr)
+			}
+			owned = answered.Owned()
+			switch {
+			case ares.Changed && !ares.Verified:
+				// §13.4 step 5: the re-read after the write shows other content.
+				return h.undoDeploy(ctx, j, actor, d, sess, steps, reasonVerifyFailed, true)
+			case owned:
+				st = addOwned
+			default:
+				st = addPresent
+			}
 		}
 	}
 	outcome, lerr := h.login(ctx, sess, d.OSUser, d.KeyID)
@@ -157,11 +158,10 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 		out.Result, out.Note = sshkeys.DeployAlreadyPresent, presentNote(outcome, lerr, d.Options)
 	case lerr == nil && outcome == providers.KeyLoginAccepted:
 		out.Result = sshkeys.DeployVerified
-	case st == addUncertain && !absentBefore:
-		// The answer was lost and nothing proved the line was not there before: whose line it is cannot be
-		// known, so it is never removed; a person and a scan settle it.
+	case st == addUncertain && !owned:
+		// The answer was lost and the record does not make the line this job's: it is never removed; a
+		// person and a scan settle it.
 		out := sshkeys.DeployOutcome{Result: sshkeys.DeployFailed, Reason: reasonUncertain}
-		recorded = true
 		h.finish(ctx, actor, d, out)
 		h.discover(ctx, d.TargetID)
 		return deployResult(d, out), jobs.Attention(reasonUncertain, nil, nil)
@@ -176,7 +176,9 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 	case keymat.HasFromOption(d.Options):
 		out.Result, out.Note = sshkeys.DeployUnverified, plan.NoteFromOption // Alice cannot know whether from= excludes her
 	default:
-		return h.undoDeploy(ctx, j, actor, d, sess, steps, sshkeys.ReasonLoginFailed, true)
+		// A line the record makes this job's (found now, or answered "added"): removed again. latestAnswered
+		// false when nothing was sent in this attempt: the latest send on record had no answer.
+		return h.undoDeploy(ctx, j, actor, d, sess, steps, sshkeys.ReasonLoginFailed, ares.Changed)
 	}
 	if err := h.d.Keys.FinishDeploy(ctx, actor, d, out); err != nil {
 		// The line is in the file; the next attempt finds it (its send is on record) and records it.
@@ -186,6 +188,15 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 		h.discover(ctx, d.TargetID) // also when an earlier send of this job may have put it there
 	}
 	return deployResult(d, out), nil
+}
+
+// storeFailure answers a store call of the deploy that did not record: a run that does not hold the job
+// (lost lease, or no claim of this job: ErrNoJobClaim) stops without a record; anything else is retried.
+func (h *handlers) storeFailure(err error) error {
+	if errors.Is(err, inventory.ErrClaimLost) || errors.Is(err, sshkeys.ErrNoJobClaim) {
+		return jobs.Retry("job.lease_expired", nil, err)
+	}
+	return jobs.Retry("internal.unexpected", nil, err)
 }
 
 // listedLine reports whether a listing shows the deploy's key in its user's file, and the line number.

@@ -580,9 +580,9 @@ func (k killKeys) FinishDeploy(ctx context.Context, actor audit.Actor, d sshkeys
 	return err
 }
 
-func (k killKeys) BeginDeploySend(ctx context.Context, jobID uuid.UUID, d sshkeys.DeployJob) (sshkeys.DeploySend, error) {
+func (k killKeys) BeginDeploySendWith(ctx context.Context, jobID uuid.UUID, d sshkeys.DeployJob, before sshkeys.DeployEvidence) (sshkeys.DeploySend, error) {
 	k.e.at("before:BeginDeploySend")
-	s, err := k.Service.BeginDeploySend(ctx, jobID, d)
+	s, err := k.Service.BeginDeploySendWith(ctx, jobID, d, before)
 	k.e.at("after:BeginDeploySend")
 	return s, err
 }
