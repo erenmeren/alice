@@ -160,7 +160,7 @@ FROM kv_certificate_versions WHERE id = $1 FOR SHARE`, in.VersionID).Scan(&v.cer
 		}
 		// F-17 as far as Alice knows it: a read of this version's secret found the chain incomplete. Releasing a hold
 		// does not confirm it; every manual deployment needs an Administrator's confirmation.
-		if v.chainIncomplete && !(in.ConfirmIncompleteChain && a.Role == rbac.Admin) {
+		if confirmed := in.ConfirmIncompleteChain && a.Role == rbac.Admin; v.chainIncomplete && !confirmed {
 			return denyWith(&denial, "chain_unconfirmed", uuid.Nil, ErrChainUnconfirmed)
 		}
 		ids := in.LocationIDs

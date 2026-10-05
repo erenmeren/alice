@@ -10,6 +10,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/binary"
+	"unicode/utf16"
 )
 
 // CertificatesOnlyPFX builds a PFX that holds certs and no key, in the shape `openssl pkcs12 -export -nokeys`
@@ -128,11 +130,11 @@ func random(n int) []byte {
 	return b
 }
 
-// bmpPassword is the password as PKCS #12 hashes it: UTF-16 big-endian with a terminating zero (ASCII only here).
+// bmpPassword is the password as PKCS #12 hashes it: UTF-16 big-endian with a terminating zero.
 func bmpPassword(p string) []byte {
 	out := make([]byte, 0, 2*len(p)+2)
-	for _, r := range p {
-		out = append(out, byte(r>>8), byte(r))
+	for _, u := range utf16.Encode([]rune(p)) {
+		out = binary.BigEndian.AppendUint16(out, u)
 	}
 	return append(out, 0, 0)
 }
@@ -169,10 +171,10 @@ func p12KDF(id byte, salt, password []byte, iterations, size int) []byte {
 		// I_j = (I_j + B + 1) mod 2^(8v), B = A repeated to v bytes.
 		b := fill(a)
 		for j := 0; j < len(I); j += v {
-			carry := 1
+			carry := uint16(1)
 			for k := v - 1; k >= 0; k-- {
-				x := int(I[j+k]) + int(b[k]) + carry
-				I[j+k], carry = byte(x), x>>8
+				x := uint16(I[j+k]) + uint16(b[k]) + carry
+				I[j+k], carry = byte(x&0xff), x>>8
 			}
 		}
 	}
