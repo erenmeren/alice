@@ -999,6 +999,14 @@ server again.
 
 **What to do.** Nothing to do here. Use another user or another file for this key.
 
+## ALC-KEY-0018: This key is the new key of a rotation that has not finished
+
+**Meaning.** A deploy was refused because the key is the new key of a rotation that has not finished; this is checked when the deploy is asked for and again when its task runs. (HTTP 409, reason `sshkey.in_rotation`.)
+
+**Likely cause.** A running rotation adds this key to its servers itself. If the rotation is stopped or undone, Alice removes the key again wherever it was added, so a key deployed by hand now could disappear with it.
+
+**What to do.** Wait until the rotation has finished, or stop it on its page, then deploy the key.
+
 ## ALC-NTF-0001: Alice could not queue the email about the license renewal
 
 **Meaning.** A paused rotation shows this as its notice error (`notice_error` of the run) next to ALC-ROT-0021: the email that tells the administrators about the license renewal could not be queued, so Continue is still refused. (HTTP 503, reason `notify.queue_failed`; retryable.)
@@ -1198,6 +1206,14 @@ server again.
 **Likely cause.** When Alice was about to send the change, the server's last scan showed a reason the plan skips; the place's skip reason names it. Alice sent nothing more there; if the new key had already been sent, undoing the rotation removes it again.
 
 **What to do.** Fix the skip reason shown on the rotation's page, scan the server again, then start the rotation again.
+
+## ALC-ROT-0025: Alice could not read this account's key file completely
+
+**Meaning.** The error of a place that ended because Alice could not read that account's key file completely on its last attempts, so it could not tell whether a key is there. (HTTP 409, reason `rotation.listing_incomplete`.)
+
+**Likely cause.** The file could not be read in full on every attempt (for example it is not a regular file, it cannot be read, or it is too large), so Alice could not prove whether a key is in it and stopped working on this place.
+
+**What to do.** Make the file a readable regular file on the server, scan the server again, then start a new rotation.
 
 ## ALC-JOB-0001: Task is not waiting
 

@@ -428,6 +428,11 @@
         "title": "This place belongs to the account Alice connects with.",
         "cause": "The user is the account Alice signs in with, or the file is one of that account's key files. Alice never changes those: the setup commands own them.",
         "action": "Nothing to do here. Use another user or another file for this key."
+      },
+      "in_rotation": {
+        "title": "This key is the new key of a rotation that has not finished.",
+        "cause": "A running rotation adds this key to its servers itself. If the rotation is stopped or undone, Alice removes the key again wherever it was added, so a key deployed by hand now could disappear with it.",
+        "action": "Wait until the rotation has finished, or stop it on its page, then deploy the key."
       }
     },
     "rotation": {
@@ -550,6 +555,11 @@
         "title": "This place was skipped when Alice was about to change it.",
         "cause": "When Alice was about to send the change, the server's last scan showed a reason the plan skips; the place's skip reason names it. Alice sent nothing more there; if the new key had already been sent, undoing the rotation removes it again.",
         "action": "Fix the skip reason shown on the rotation's page, scan the server again, then start the rotation again."
+      },
+      "listing_incomplete": {
+        "title": "Alice could not read this account's key file completely.",
+        "cause": "The file could not be read in full on every attempt (for example it is not a regular file, it cannot be read, or it is too large), so Alice could not prove whether a key is in it and stopped working on this place.",
+        "action": "Make the file a readable regular file on the server, scan the server again, then start a new rotation."
       }
     },
     "notify": {
@@ -1298,7 +1308,7 @@
       },
       "paused_license": {
         "subject": "SSH key rotation paused: {{key_label}}",
-        "body": "The license has expired or could not be checked, so Alice paused the rotation of {{key_label}}. The old key stays in place and nothing is removed.\n\nWhen the license is valid again, an administrator must choose Continue on the rotation's page."
+        "body": "The license has expired or could not be checked, so Alice paused the rotation of {{key_label}}. The old key stays in place: Alice adds no new key and removes no old key. If the rotation was in its overlap, the overlap stops counting and its remaining time resumes after Continue.\n\nWhen the license is valid again, an administrator must choose Continue on the rotation's page."
       },
       "decision_needed": {
         "subject": "SSH key rotation waits for a decision: {{key_label}}",

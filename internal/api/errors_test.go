@@ -129,7 +129,7 @@ var notReasons = map[string]bool{
 	// stored error code)
 	"sshkey.generated": true, "sshkey.deploy_requested": true, "sshkey.added": true, "sshkey.add_failed": true,
 	"sshkey.private_key_downloaded": true,
-	"sshkey.reactivated":            true, "sshkey.live_after_destruction": true, "sshkey.add_sent": true,
+	"sshkey.reactivated":            true, "sshkey.live_after_destruction": true, "sshkey.add_sent": true, "sshkey.add_answered": true, "sshkey.add_outcome_unknown": true,
 	"rotation.policy_created": true, "rotation.policy_updated": true, "rotation.policy_enabled": true, "rotation.policy_disabled": true,
 	"rotation.policy_deleted": true, "rotation.previewed": true, "rotation.created": true, "rotation.status_changed": true,
 	"rotation.location_changed": true, "rotation.paused": true, "rotation.continued": true, "rotation.finish_requested": true,

@@ -3422,7 +3422,13 @@ components:
         notified_at: { type: string, format: date-time }
         started_at: { type: [string, "null"], format: date-time }
         verified_at: { type: [string, "null"], format: date-time }
-        overlap_until: { type: [string, "null"], format: date-time }
+        overlap_until:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            When the overlap ends and the old key is removed. While the run is paused for the license
+            (paused_license, notice_state rotation.paused_license) this time is frozen and is not a countdown target:
+            after Continue the end moves to the Continue time plus the time that remained when the pause began.
         finished_at: { type: [string, "null"], format: date-time }
         result: { $ref: "#/components/schemas/ErrorRef" }
         plan_digest: { type: string }

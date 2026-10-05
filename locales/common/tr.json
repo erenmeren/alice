@@ -428,6 +428,11 @@
         "title": "Bu yer Alice'in bağlandığı hesaba ait.",
         "cause": "Kullanıcı Alice'in oturum açtığı hesaptır ya da dosya bu hesabın anahtar dosyalarından biridir. Alice bunları hiçbir zaman değiştirmez: bunlar kurulum komutlarına aittir.",
         "action": "Burada yapmanız gereken bir şey yok. Bu anahtar için başka bir kullanıcı ya da başka bir dosya kullanın."
+      },
+      "in_rotation": {
+        "title": "Bu anahtar, tamamlanmamış bir yenilemenin yeni anahtarı.",
+        "cause": "Süren bir yenileme bu anahtarı sunucularına kendisi ekler. Yenileme durdurulur ya da geri alınırsa Alice anahtarı eklendiği her yerden yeniden kaldırır; bu nedenle şimdi elle dağıtılan bir anahtar da onunla birlikte kaybolabilir.",
+        "action": "Yenilemenin bitmesini bekleyin ya da sayfasında durdurun, ardından anahtarı dağıtın."
       }
     },
     "rotation": {
@@ -550,6 +555,11 @@
         "title": "Alice bu yeri değiştirmek üzereyken atladı.",
         "cause": "Alice değişikliği göndermek üzereyken sunucunun son taraması, planın atladığı bir neden gösterdi; nedeni yerin atlama nedeni belirtir. Alice oraya başka bir şey göndermedi; yeni anahtar daha önce gönderilmişse yenilemenin geri alınması onu yeniden kaldırır.",
         "action": "Yenilemenin sayfasında gösterilen atlama nedenini giderin, sunucuyu yeniden tarayın ve yenilemeyi yeniden başlatın."
+      },
+      "listing_incomplete": {
+        "title": "Alice bu hesabın anahtar dosyasını tam olarak okuyamadı.",
+        "cause": "Dosya her denemede tam olarak okunamadı (örneğin normal bir dosya değil, okunamıyor ya da çok büyük); bu nedenle Alice dosyada bir anahtar olup olmadığını kanıtlayamadı ve bu yerde çalışmayı durdurdu.",
+        "action": "Dosyayı sunucuda okunabilir normal bir dosya yapın, sunucuyu yeniden tarayın, ardından yeni bir yenileme başlatın."
       }
     },
     "notify": {
@@ -1298,7 +1308,7 @@
       },
       "paused_license": {
         "subject": "SSH anahtarı yenilemesi duraklatıldı: {{key_label}}",
-        "body": "Lisansın süresi dolduğu ya da lisans denetlenemediği için Alice {{key_label}} yenilemesini duraklattı. Eski anahtar yerinde kalır ve hiçbir şey kaldırılmaz.\n\nLisans yeniden geçerli olduğunda bir yöneticinin yenilemenin sayfasında Devam et'i seçmesi gerekir."
+        "body": "Lisansın süresi dolduğu ya da lisans denetlenemediği için Alice {{key_label}} yenilemesini duraklattı. Eski anahtar yerinde kalır: Alice yeni anahtar eklemez ve eski anahtarı kaldırmaz. Yenileme geçiş süresindeyse geçiş süresi işlemeyi durdurur ve kalan süre Devam et'ten sonra sürer.\n\nLisans yeniden geçerli olduğunda bir yöneticinin yenilemenin sayfasında Devam et'i seçmesi gerekir."
       },
       "decision_needed": {
         "subject": "SSH anahtarı yenilemesi bir karar bekliyor: {{key_label}}",

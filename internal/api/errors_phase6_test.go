@@ -47,6 +47,7 @@ var phase6Table = []struct {
 	{"ALC-KEY-0015", "sshkey.clock_behind", 503, true},
 	{"ALC-KEY-0016", "sshkey.add_uncertain", 502, true},
 	{"ALC-KEY-0017", "sshkey.connection_account_file", 409, false},
+	{"ALC-KEY-0018", "sshkey.in_rotation", 409, false},
 	{"ALC-NTF-0001", "notify.queue_failed", 503, true},
 	{"ALC-ROT-0001", "rotation.policy_exists", 409, false},
 	{"ALC-ROT-0002", "rotation.in_progress", 409, false},
@@ -72,6 +73,7 @@ var phase6Table = []struct {
 	{"ALC-ROT-0022", "rotation.late_result", 409, false},
 	{"ALC-ROT-0023", "rotation.guard_refused", 409, false},
 	{"ALC-ROT-0024", "rotation.skipped_at_send", 409, false},
+	{"ALC-ROT-0025", "rotation.listing_incomplete", 409, false},
 }
 
 // phase6Codes are the codes of the areas ROT and NTF, and KEY from 0006 on (AllErrorCodes order).
@@ -169,7 +171,8 @@ func TestEveryRotationReasonHasACode(t *testing.T) {
 
 // storeOnlySentinels reach only the location jobs (the store's "stop here" answers); a request that met one is
 // answered ALC-SYS-0003. The selector sentinels are the inventory's (TestEveryInventorySentinelHasACode).
-var storeOnlySentinels = []string{"ErrNotYourTurn", "ErrPaused"}
+// ErrNoJobClaim and ErrNoSendOnRecord are the deploy job's caller bugs (a missing claim, a send not on record).
+var storeOnlySentinels = []string{"ErrNotYourTurn", "ErrPaused", "ErrNoJobClaim", "ErrNoSendOnRecord"}
 
 // Every exported error of the rotation service and of the planner maps to a documented, translated code, except the
 // store-only ones.
@@ -184,7 +187,8 @@ func TestEverySSHKeysSentinelHasACode(t *testing.T) {
 		"ErrPlanChanged": sshkeys.ErrPlanChanged, "ErrNothingToRotate": sshkeys.ErrNothingToRotate, "ErrNotWaiting": sshkeys.ErrNotWaiting,
 		"ErrPlanTooLarge": sshkeys.ErrPlanTooLarge, "ErrVersionMismatch": sshkeys.ErrVersionMismatch, "ErrOwnKeyProtected": sshkeys.ErrOwnKeyProtected,
 		"ErrNotYourTurn": sshkeys.ErrNotYourTurn, "ErrPaused": sshkeys.ErrPaused, "ErrBadCursor": sshkeys.ErrBadCursor,
-		"ErrNoticePending": sshkeys.ErrNoticePending,
+		"ErrNoticePending": sshkeys.ErrNoticePending, "ErrInRotation": sshkeys.ErrInRotation,
+		"ErrNoJobClaim": sshkeys.ErrNoJobClaim, "ErrNoSendOnRecord": sshkeys.ErrNoSendOnRecord,
 	}
 	planSentinels := map[string]error{"ErrNotManaged": plan.ErrNotManaged, "ErrOwnKey": plan.ErrOwnKey, "ErrRetired": plan.ErrRetired,
 		"ErrNothingToRotate": plan.ErrNothingToRotate, "ErrNewKeyType": plan.ErrNewKeyType}
@@ -216,7 +220,7 @@ func TestEverySSHKeysSentinelHasACode(t *testing.T) {
 		sshkeys.ErrNothingToRotate: ErrRotNothingToRotate, sshkeys.ErrNotWaiting: ErrRotNotWaiting, sshkeys.ErrVersionMismatch: ErrPreconditionFailed,
 		sshkeys.ErrOwnKeyProtected: ErrOwnKeyProtected, sshkeys.ErrClockBehind: ErrKeyClockBehind, inventory.ErrTargetDisabled: ErrTargetDisabled,
 		sshkeys.ErrConnectionFilesUnknown: ErrKeyConnectionFilesUnknown, sshkeys.ErrPlanTooLarge: ErrRotPlanTooLarge,
-		sshkeys.ErrNoticePending: ErrRotNoticePending,
+		sshkeys.ErrNoticePending: ErrRotNoticePending, sshkeys.ErrInRotation: ErrKeyInRotation,
 	} {
 		ec, _, ok := classify(err)
 		require.True(t, ok)

@@ -132,6 +132,8 @@ var (
 	// ErrKeyConnectionAccountFile: a place of a rotation is the connection account's or one of its files (the planner's
 	// skip connection_account_file, refused again at send time).
 	ErrKeyConnectionAccountFile = ErrorCode{Code: "ALC-KEY-0017", Reason: "sshkey.connection_account_file", Status: http.StatusConflict}
+	// ErrKeyInRotation: a deploy of the new key of an unfinished rotation (its undo would remove the deployed line).
+	ErrKeyInRotation = ErrorCode{Code: "ALC-KEY-0018", Reason: "sshkey.in_rotation", Status: http.StatusConflict}
 	// ErrNotifyQueueFailed: Alice could not queue an email (the renewal notice a paused rotation waits for); retried at
 	// every background check.
 	ErrNotifyQueueFailed = ErrorCode{Code: "ALC-NTF-0001", Reason: "notify.queue_failed", Status: http.StatusServiceUnavailable, Retryable: true}
@@ -168,6 +170,8 @@ var (
 	ErrRotGuardRefused = ErrorCode{Code: "ALC-ROT-0023", Reason: "rotation.guard_refused", Status: http.StatusConflict}
 	// ErrRotSkippedAtSend: a planner skip reason found when the change was about to be sent (the place's skip_reason).
 	ErrRotSkippedAtSend = ErrorCode{Code: "ALC-ROT-0024", Reason: "rotation.skipped_at_send", Status: http.StatusConflict}
+	// ErrRotListingIncomplete: a place ended because Alice could never read its key file completely.
+	ErrRotListingIncomplete = ErrorCode{Code: "ALC-ROT-0025", Reason: "rotation.listing_incomplete", Status: http.StatusConflict}
 
 	ErrJobNotWaiting   = ErrorCode{Code: "ALC-JOB-0001", Reason: "job.not_waiting", Status: http.StatusConflict}
 	ErrJobLeaseExpired = ErrorCode{Code: "ALC-JOB-0002", Reason: "job.lease_expired", Status: http.StatusInternalServerError, Retryable: true}
@@ -320,12 +324,12 @@ func AllErrorCodes() []ErrorCode {
 		ErrOwnKeyProtected, ErrLastRootKey, ErrKeyNotRemovable, ErrSSHDUnreadable, ErrKeyVerifyFailed,
 		ErrKeyNotManaged, ErrKeyRetired, ErrKeyDestroyed, ErrKeyConnectionAccount, ErrKeyLoginFailed, ErrKeyGenerateBusy,
 		ErrKeyAddUndoFailed, ErrKeyNotAKeyFile, ErrKeyConnectionFilesUnknown, ErrKeyClockBehind, ErrKeyAddUncertain,
-		ErrKeyConnectionAccountFile, ErrNotifyQueueFailed,
+		ErrKeyConnectionAccountFile, ErrKeyInRotation, ErrNotifyQueueFailed,
 		ErrRotPolicyExists, ErrRotInProgress, ErrRotPlanChanged, ErrRotNothingToRotate, ErrRotNotWaiting, ErrRotAddFailed,
 		ErrRotVerifyFailed, ErrRotUndoFailed, ErrRotRemoveIncomplete, ErrRotDecisionTimeout, ErrRotPausedLicense,
 		ErrRotCancelledLicense, ErrRotStopped, ErrRotPolicyOff, ErrRotNewKeyFailed, ErrRotRetriesExhausted,
 		ErrRotNoticeUndelivered, ErrRotOldKeyGone, ErrRotPlanTooLarge, ErrRotStartFailed, ErrRotNoticePending, ErrRotLateResult,
-		ErrRotGuardRefused, ErrRotSkippedAtSend,
+		ErrRotGuardRefused, ErrRotSkippedAtSend, ErrRotListingIncomplete,
 		ErrJobNotWaiting, ErrJobLeaseExpired, ErrJobTampered, ErrJobUnknownType, ErrJobConflict,
 		ErrNginxNotFound, ErrNginxConfigInvalid, ErrNginxConfigChanged, ErrNginxProfileMissing, ErrNginxNoSpace,
 		ErrNginxFileChanged, ErrNginxLocationUnsupported, ErrNginxBusy, ErrNginxIOError, ErrNginxNotRunning,
@@ -497,6 +501,7 @@ var errorMap = []struct {
 	{sshkeys.ErrNothingToRotate, ErrRotNothingToRotate, nil},
 	{sshkeys.ErrNotWaiting, ErrRotNotWaiting, nil},
 	{sshkeys.ErrNoticePending, ErrRotNoticePending, nil},
+	{sshkeys.ErrInRotation, ErrKeyInRotation, nil},
 	{sshkeys.ErrPlanTooLarge, ErrRotPlanTooLarge, nil},
 	{sshkeys.ErrBadCursor, ErrBadRequest, nil}, // a cursor that does not decode
 	{plan.ErrOwnKey, ErrOwnKeyProtected, nil},

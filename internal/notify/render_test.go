@@ -265,6 +265,8 @@ func TestRotationTemplatesRender(t *testing.T) {
 	}
 	assert.Contains(t, en("rotation.late_result"), "removed: the old key is no longer there; undone: the new key is no longer there")
 	assert.Contains(t, en(sshkeys.TemplateNeedsAttention), "removing it again failed: web-01, web-02 (count: 2).")
+	assert.Contains(t, en(sshkeys.TemplatePausedLicense), "the overlap stops counting and its remaining time resumes after Continue",
+		"a pause in the overlap freezes its end (L-83)")
 	assert.Contains(t, en(sshkeys.TemplateNeedsAttention), "Servers where the old key stays because removing it failed: db-01 (count: 1).")
 
 	hostile := map[string]string{"key_label": "x\r\nBcc: evil@example.com"}
