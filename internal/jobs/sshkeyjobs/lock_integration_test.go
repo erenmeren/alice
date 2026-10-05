@@ -69,6 +69,14 @@ func (e *env) l83() (sshkeys.ManagedKey, uuid.UUID, sshkeys.Rotation) {
 
 func TestL83OverlapLockRemovesNothing(t *testing.T) {
 	e := newEnv(t)
+	_, _, r0 := e.overlapRun(7)
+	e.clock.Advance(3 * 24 * time.Hour)
+	e.gate.lock()
+	e.sweep() // the first sweep in lock pauses the overlap at once (L-83 ruling), with one email
+	r0 = e.run(r0.ID)
+	assert.True(t, r0.PausedLicense, "paused at the first sweep in lock")
+	assert.Len(t, e.mails("rotation.paused_license"), 1)
+	e = newEnv(t)
 	k, web, r := e.l83()
 	assert.Equal(t, sshkeys.StatusOverlap, r.Status)
 	assert.True(t, r.PausedLicense)
@@ -97,9 +105,20 @@ func TestL84RenewalAfterTwentyDays(t *testing.T) {
 	assert.Len(t, e.mails("rotation.preview_after_license"), 1, "the sweep tells the Administrators first")
 	assert.Zero(t, e.countEvents("RemoveAuthorizedKey"))
 	logins := e.countEvents("VerifyKeyLogin")
+	remaining := 4 * 24 * time.Hour // the overlap had 4 of its 7 days left when the lock paused it
 	require.NoError(t, e.keys.Continue(e.ctx, e.admin, r.ID))
 	assert.Len(t, e.mails("rotation.preview_after_license"), 1, "Continue sends no second notice")
+	r = e.run(r.ID)
+	require.Equal(t, sshkeys.StatusOverlap, r.Status, "the overlap resumes; its end was never reached in lock")
+	require.NotNil(t, r.OverlapUntil)
+	assert.WithinDuration(t, e.clock.Now().Add(remaining), *r.OverlapUntil, 6*time.Hour+time.Minute,
+		"the overlap resumes with the time that remained when the pause began")
+	e.clock.Advance(r.OverlapUntil.Sub(e.clock.Now()) - time.Minute)
+	e.sweep()
 	e.drain()
+	assert.Zero(t, e.countEvents("RemoveAuthorizedKey"), "nothing before the resumed overlap ends")
+	e.clock.Advance(time.Minute)
+	e.sweep()
 	r = e.settleRun(r.ID)
 	assert.Equal(t, sshkeys.StatusCompleted, r.Status)
 	assert.Equal(t, logins+1, e.countEvents("VerifyKeyLogin"), "a fresh login after Continue")

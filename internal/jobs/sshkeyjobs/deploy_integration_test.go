@@ -718,3 +718,93 @@ func TestDeployOwnershipUnderListingFaults(t *testing.T) {
 		}
 	}
 }
+
+// N-m2: a send whose helper call failed before anything was written owns nothing. The listing proved the
+// line absent and the first add was refused before its write step; the same key is then added by hand with
+// from=; the retry finds it, the login is refused: the line is the operator's and stays.
+func TestDeployUnwrittenSendOwnsNothing(t *testing.T) {
+	e := newEnv(t)
+	srv := e.server("web-01")
+	k := e.generate("ci")
+	byHand := `from="10.0.0.0/8" ` + k.PublicKey + " " + k.Comment
+	adds := 0
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
+		switch p.Method {
+		case "AddAuthorizedKey":
+			if adds++; adds == 1 {
+				return fake.FaultUnreachable
+			}
+		case "VerifyKeyLogin":
+			return fake.FaultRefuse
+		}
+		return fake.FaultNone
+	})
+	job := e.deploy(k, srv, "")
+	e.drain()
+	require.Equal(t, jobs.StatusQueued, e.job(job).Status)
+	assert.Equal(t, "not_written", e.lastAuditDetail("sshkey.add_answered", "answer"))
+	e.world.Put(srv, "deploy", deployFile, byHand)
+	e.clock.Advance(e.keys.UndoWait())
+	e.drain()
+	v := e.job(job)
+	assert.Equal(t, "already_present", v.Result["result"])
+	assert.Equal(t, []string{byHand}, e.world.Lines(srv, deployFile), "the operator's line stays")
+	assert.Zero(t, e.countEvents("RemoveAuthorizedKey"))
+}
+
+// A deploy job of a key that is the new key of an unfinished rotation fails for good with
+// sshkey.in_rotation (a rollback would remove the deployed line); nothing is sent.
+func TestDeployOfARunsNewKeyIsRefused(t *testing.T) {
+	e := newEnv(t)
+	web := e.server("web-01")
+	k := e.generate("ci")
+	e.place(k, web, "deploy")
+	r := e.runNow(e.policy(k.ID, 7))
+	e.drain()
+	require.Equal(t, sshkeys.StatusOverlap, e.run(r.ID).Status)
+	_, err := e.keys.RequestDeploy(e.ctx, e.operator, sshkeys.DeployInput{KeyID: *r.NewKeyID, TargetID: web, OSUser: "app", FilePath: keyFile("app")})
+	require.ErrorIs(t, err, sshkeys.ErrInRotation, "refused at request time")
+	job, _, err := e.queue.Enqueue(e.ctx, jobs.Spec{Type: jobs.SSHKeyAdd, Kind: jobs.KindUser, TargetID: web, CreatedBy: e.operator.UserID,
+		Payload: map[string]string{"ssh_key_id": r.NewKeyID.String(), "os_user": "app", "file_path": keyFile("app"), "options": ""}})
+	require.NoError(t, err)
+	calls := e.worldCalls()
+	e.drain()
+	v := e.job(job)
+	assert.Equal(t, jobs.StatusFailed, v.Status, "permanent: never retried")
+	assert.Equal(t, "sshkey.in_rotation", v.LastErrorCode)
+	assert.Equal(t, calls, e.worldCalls(), "nothing sent")
+}
+
+// The reconciliation also covers a last attempt that ended undo_failed while a send may still have
+// landed (N-m1): one scan after the wait, nothing removed.
+func TestDeployUndoFailedOnTheLastAttemptIsReconciled(t *testing.T) {
+	e := newEnv(t)
+	srv := e.server("web-01")
+	k := e.generate("ci")
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
+		switch p.Method {
+		case "AddAuthorizedKey":
+			return fake.FaultLateWrite // every send stalls; the line lands later
+		case "VerifyKeyLogin":
+			return fake.FaultRefuse
+		}
+		return fake.FaultNone
+	})
+	job := e.deploy(k, srv, "")
+	_, err := e.db.Owner.Exec(e.ctx, "UPDATE jobs SET attempts = max_attempts - 1 WHERE id = $1", job)
+	require.NoError(t, err)
+	e.drain()
+	v := e.job(job)
+	require.Equal(t, "undo_failed", v.Result["result"], "the last attempt cannot wait out its own send")
+	assert.Zero(t, e.discoveries(srv), "no scan before the stalled write can land")
+	_, err = e.keys.DestroyRetiredKeys(e.ctx) // the hourly task, inside the wait: nothing yet
+	require.NoError(t, err)
+	assert.Zero(t, e.discoveries(srv))
+	e.clock.Advance(time.Hour + time.Minute) // past the send's wait and the store's settle hour
+	for range 2 {
+		_, err = e.keys.DestroyRetiredKeys(e.ctx)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 1, e.discoveries(srv), "one scan after the wait")
+	assert.Zero(t, e.removalsOf(k.Fingerprint), "nothing removed")
+}

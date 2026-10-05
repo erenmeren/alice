@@ -90,6 +90,7 @@ func TestDeployRefusalReasons(t *testing.T) {
 		inventory.ErrTargetDisabled:       "target.disabled",
 		inventory.ErrKeysManagedElsewhere: "ssh.keys_managed_elsewhere",
 		inventory.ErrSSHDUnreadable:       "sshkey.sshd_unreadable",
+		sshkeys.ErrInRotation:             "sshkey.in_rotation",
 	} {
 		var f *jobs.Failure
 		require.ErrorAs(t, deployRefusal(err), &f)

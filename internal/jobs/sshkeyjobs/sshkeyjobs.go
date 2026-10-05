@@ -37,6 +37,7 @@ type Keys interface {
 	FinishDeploy(ctx context.Context, actor audit.Actor, d sshkeys.DeployJob, out sshkeys.DeployOutcome) error
 	BeginDeploySendWith(ctx context.Context, jobID uuid.UUID, d sshkeys.DeployJob, before sshkeys.DeployEvidence) (sshkeys.DeploySend, error)
 	RecordDeployAnswer(ctx context.Context, d sshkeys.DeployJob, send sshkeys.DeploySend, added bool) (sshkeys.DeploySendRecord, error)
+	RecordDeployNotWritten(ctx context.Context, d sshkeys.DeployJob, send sshkeys.DeploySend) (sshkeys.DeploySendRecord, error)
 	DeploySends(ctx context.Context, jobID uuid.UUID) (sshkeys.DeploySendRecord, error)
 	UndoWait() time.Duration
 	KeySigner(keyID uuid.UUID) providers.CredentialSource
@@ -50,6 +51,7 @@ type Keys interface {
 	BeginUndo(ctx context.Context, locationID uuid.UUID) (uuid.UUID, error)
 	FinishUndo(ctx context.Context, actor audit.Actor, locationID uuid.UUID, r sshkeys.UndoRecord) error
 	Advance(ctx context.Context, rotationID uuid.UUID) error
+	Step(ctx context.Context, rotationID uuid.UUID, locationID *uuid.UUID, name string, status providers.StepStatus, params map[string]string) error
 }
 
 // Targets is the part of *inventory.Service the handlers use to open sessions (as targetjobs) and to

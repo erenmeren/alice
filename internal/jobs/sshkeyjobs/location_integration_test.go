@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/providers"
 	"alice/internal/providers/fake"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/sshkeys"
@@ -660,4 +661,24 @@ func TestLoginThroughAnotherFileDoesNotProveTheAdd(t *testing.T) {
 	l := e.loc(r.ID, web, "deploy")
 	assert.Equal(t, sshkeys.LocVerified, l.State)
 	assert.True(t, e.world.Has(web, keyFile("deploy"), r.NewFingerprint), "the line is in this file now")
+}
+
+// N-m9: an undo whose listing never reads the file completely ends with the closed reason
+// rotation.listing_incomplete (the job records the step each time; the sweep's bound ends the place).
+func TestUndoWithANeverCompleteListingSaysWhy(t *testing.T) {
+	e := newEnv(t)
+	web := e.server("web-01")
+	k := e.generate("ci")
+	e.place(k, web, "deploy")
+	r := e.runNow(e.policy(k.ID, 7))
+	e.drain()
+	e.world.SetCoverage(web, keyFile("deploy"), providers.CoveragePartial)
+	require.NoError(t, e.keys.Abort(e.ctx, e.admin, r.ID))
+	r = e.settleRun(r.ID)
+	assert.Equal(t, sshkeys.StatusNeedsAttention, r.Status)
+	l := e.loc(r.ID, web, "deploy")
+	assert.Equal(t, sshkeys.LocUndoFailed, l.State)
+	assert.Equal(t, sshkeys.ReasonListingIncomplete, l.ErrorCode)
+	assert.True(t, e.world.Has(web, keyFile("deploy"), k.Fingerprint), "the old key stays")
+	assert.Zero(t, e.removalsOf(r.NewFingerprint), "nothing removed on a partial listing's word")
 }

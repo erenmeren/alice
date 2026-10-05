@@ -468,8 +468,13 @@ func (r *locJob) undo(ctx context.Context) (map[string]any, error) {
 		return fail(sshkeys.ReasonOldKeyGone)
 	case !v.here(r.w.OldFingerprint):
 		// The listing did not cover the file: neither S12 nor "nothing there" can be decided. The row stays
-		// undoing; the sweep re-queues it within its bound, after which it ends undo_failed (review C1).
-		return map[string]any{"state": sshkeys.LocUndoing, "reason": "listing_incomplete"}, nil
+		// undoing and the step says why; the sweep re-queues it within its bound, after which it ends
+		// undo_failed with rotation.listing_incomplete (review C1, N-m9).
+		id := r.loc.ID
+		if err := keys.Step(ctx, r.w.Rotation.ID, &id, sshkeys.StepListingIncomplete, providers.StepSkipped, nil); err != nil {
+			return r.storeStop(err)
+		}
+		return map[string]any{"state": sshkeys.LocUndoing, "reason": sshkeys.ReasonListingIncomplete}, nil
 	}
 	rec := &writeTracker{next: r.steps}
 	res, err := sess.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: op, OSUser: r.loc.OSUser, FilePath: r.loc.FilePath,

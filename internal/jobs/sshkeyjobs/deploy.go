@@ -122,6 +122,10 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 		}
 		switch {
 		case err != nil && definiteNoChange(rec.wrote, ares, err):
+			// Nothing was written: this send owns nothing (N-m2).
+			if _, nerr := h.d.Keys.RecordDeployNotWritten(ctx, d, send); nerr != nil {
+				return nil, h.storeFailure(nerr)
+			}
 			f := jobs.FromProvider(err)
 			if h.failed(ctx, j, actor, d, f) && send.Resend {
 				h.discover(ctx, d.TargetID) // an earlier send of this job may have landed (M7)
@@ -315,6 +319,7 @@ var deployRefusals = []struct {
 	{sshkeys.ErrConnectionAccount, "sshkey.connection_account"},
 	{sshkeys.ErrConnectionFilesUnknown, sshkeys.ReasonConnectionFilesUnknown},
 	{sshkeys.ErrNotAKeyFile, "sshkey.not_a_key_file"},
+	{sshkeys.ErrInRotation, "sshkey.in_rotation"}, // the new key of an unfinished run: a rollback would remove it
 	{inventory.ErrNotFound, "system.not_found"},
 	{inventory.ErrNotAServer, "system.not_found"},
 	{inventory.ErrHostKeyUnconfirmed, "target.host_key_unconfirmed"},
