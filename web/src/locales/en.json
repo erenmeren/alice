@@ -1549,7 +1549,9 @@
       "releasedManual": "Version released. Nothing is deployed; use Deploy now when you want it on a website.",
       "keyValueNoSize": "Key: {{type}}",
       "releaseHelpChain": "Automatic deployment never deploys an incomplete chain: if the chain is still incomplete, Alice holds this version again. To deploy it as it is, use Deploy now and confirm the chain.",
-      "releasedChain": "Version released. Automatic deployment will not deploy an incomplete chain; use Deploy now and confirm the chain."
+      "releasedChain": "Version released. Automatic deployment will not deploy an incomplete chain; use Deploy now and confirm the chain.",
+      "releaseHelpChainManual": "Nothing is deployed. Deploy now asks for the chain confirmation again when you deploy this version.",
+      "releasedChainManual": "Version released. Nothing is deployed; Deploy now asks for the chain confirmation again."
     },
     "keys": {
       "columns": {
@@ -1647,7 +1649,8 @@
       "expired": "This version has expired.",
       "notYetValid": "This version is not valid yet.",
       "notExportable": "The private key of this version is not exportable.",
-      "heldAdmin": "This version is held. Only an administrator can deploy it."
+      "heldAdmin": "This version is held. Only an administrator can deploy it.",
+      "chainAdmin": "The chain of this version is incomplete. Only an administrator can deploy it."
     },
     "heldDeployNote": "This version is held. Deploying it does not release it; use Release for that.",
     "confirmChainNeeded": "The certificate chain of this version is incomplete. An administrator can deploy it after confirming the chain.",

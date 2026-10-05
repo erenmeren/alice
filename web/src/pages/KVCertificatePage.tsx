@@ -39,12 +39,24 @@ const Chip = ({ children, color = 'gray' }: { children: ReactNode; color?: strin
 // What releasing a held version leads to, from what the page knows. Automatic deployment never
 // carries the chain confirmation, so a version held for its incomplete chain is refused and held again;
 // it only ever considers the certificate's CURRENT version; and even then nothing is guaranteed (the
-// vault may be unreachable, a wave may have stopped), so the text says "may". Everything else is manual.
-type ReleaseKind = 'chain' | 'may' | 'manual';
-const RELEASE_HELP: Record<ReleaseKind, string> = { chain: 'vaults.cert.releaseHelpChain', may: 'vaults.cert.releaseHelpAuto', manual: 'vaults.cert.releaseHelpManual' };
-const RELEASED: Record<ReleaseKind, string> = { chain: 'vaults.cert.releasedChain', may: 'vaults.cert.releasedAuto', manual: 'vaults.cert.releasedManual' };
+// vault may be unreachable, a wave may have stopped), so the text says "may". Everything else is manual; a
+// chain hold released without automatic deployment also says that Deploy now asks for the chain again (a
+// release never confirms it).
+type ReleaseKind = 'chain' | 'may' | 'manual' | 'chainManual';
+const RELEASE_HELP: Record<ReleaseKind, string> = {
+  chain: 'vaults.cert.releaseHelpChain',
+  may: 'vaults.cert.releaseHelpAuto',
+  manual: 'vaults.cert.releaseHelpManual',
+  chainManual: 'vaults.cert.releaseHelpChainManual',
+};
+const RELEASED: Record<ReleaseKind, string> = {
+  chain: 'vaults.cert.releasedChain',
+  may: 'vaults.cert.releasedAuto',
+  manual: 'vaults.cert.releasedManual',
+  chainManual: 'vaults.cert.releasedChainManual',
+};
 function releaseKind(v: KVVersion, c: KVCertificateDetail): ReleaseKind {
-  if (c.binding?.auto_deploy !== true) return 'manual';
+  if (c.binding?.auto_deploy !== true) return v.held_reason === 'incomplete_chain' ? 'chainManual' : 'manual';
   if (v.held_reason === 'incomplete_chain') return 'chain';
   return v.held_reason === 'license' && v.version === c.current_version ? 'may' : 'manual';
 }
@@ -169,7 +181,8 @@ export function KVCertificatePage() {
                 const current = v.version === c.current_version;
                 const heldText = v.held ? t(v.held_reason === 'incomplete_chain' ? 'vaults.heldChain' : 'vaults.heldVersion') : '';
                 const newer = i === 0 && isRecentNewVersion(v.kv_created_at, c.first_seen_at, now);
-                const reason = !c.binding ? null : v.held && !admin ? 'heldAdmin' : block;
+                // An Operator cannot confirm a chain Alice knows is incomplete: the row says so up front.
+                const reason = !c.binding ? null : v.held && !admin ? 'heldAdmin' : (block ?? (!admin && v.chain_incomplete ? 'chainAdmin' : null));
                 return (
                   <Table.Tr key={v.id} data-testid="kv-version-row" data-held={v.held ? 'true' : undefined}>
                     <Table.Td>

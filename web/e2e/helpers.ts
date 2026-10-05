@@ -228,6 +228,8 @@ export const COPY = {
       releaseChain:
         'Automatic deployment never deploys an incomplete chain: if the chain is still incomplete, Alice holds this version again. To deploy it as it is, use Deploy now and confirm the chain.',
       releasedChain: 'Version released. Automatic deployment will not deploy an incomplete chain; use Deploy now and confirm the chain.',
+      releaseChainManual: 'Nothing is deployed. Deploy now asks for the chain confirmation again when you deploy this version.',
+      releasedChainManual: 'Version released. Nothing is deployed; Deploy now asks for the chain confirmation again.',
       confirmChain: 'I confirm that this incomplete chain is intended',
       firewall: 'Vault firewall blocks Alice',
       firewallAddress: "Alice's address as the vault saw it",
@@ -355,6 +357,8 @@ export const COPY = {
       releaseChain:
         'Otomatik dağıtım eksik bir zinciri hiçbir zaman dağıtmaz: zincir hâlâ eksikse Alice bu sürümü yeniden bekletir. Olduğu gibi dağıtmak için Şimdi dağıt düğmesini kullanın ve zinciri onaylayın.',
       releasedChain: 'Sürüm serbest bırakıldı. Otomatik dağıtım eksik bir zinciri dağıtmaz; Şimdi dağıt düğmesini kullanın ve zinciri onaylayın.',
+      releaseChainManual: 'Hiçbir şey dağıtılmaz. Bu sürümü dağıttığınızda Şimdi dağıt zincir onayını yeniden ister.',
+      releasedChainManual: 'Sürüm serbest bırakıldı. Hiçbir şey dağıtılmaz; Şimdi dağıt zincir onayını yeniden ister.',
       confirmChain: 'Bu eksik zincirin bilerek kullanıldığını onaylıyorum',
       firewall: "Kasanın güvenlik duvarı Alice'i engelliyor",
       firewallAddress: 'Kasanın gördüğü Alice adresi',

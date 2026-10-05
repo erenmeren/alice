@@ -96,6 +96,24 @@ describe('KVCertificatePage', () => {
     expect(rows[3]).toHaveTextContent('This version has expired.');
   });
 
+  it('tells an Operator on the row that a version whose chain is known incomplete needs an administrator', async () => {
+    const chain = { ...V1, chain_incomplete: true };
+    setup('operator', kvCertificateDetailFixture({ versions: [chain, V0], binding: SUMMARY, bound: true, current_version: V1.version }));
+    await renderRoute(PATH);
+    const rows = await screen.findAllByTestId('kv-version-row');
+    expect(within(rows[0]).getByRole('button', { name: /Deploy now/ })).toBeDisabled();
+    expect(rows[0]).toHaveTextContent('The chain of this version is incomplete. Only an administrator can deploy it.');
+  });
+
+  it('lets an Administrator open Deploy now for a version whose chain is known incomplete', async () => {
+    const chain = { ...V1, chain_incomplete: true };
+    setup('admin', kvCertificateDetailFixture({ versions: [chain], binding: SUMMARY, bound: true, current_version: V1.version }));
+    await renderRoute(PATH);
+    const rows = await screen.findAllByTestId('kv-version-row');
+    expect(within(rows[0]).getByRole('button', { name: /Deploy now/ })).toBeEnabled();
+    expect(rows[0]).not.toHaveTextContent('Only an administrator can deploy it.');
+  });
+
   it('offers no version actions without a connection or to an Auditor', async () => {
     setup('operator');
     const v = await renderRoute(PATH);
@@ -168,11 +186,19 @@ describe('KVCertificatePage', () => {
     chain: ['Automatic deployment never deploys an incomplete chain: if the chain is still incomplete, Alice holds this version again. To deploy it as it is, use Deploy now and confirm the chain.', 'Version released. Automatic deployment will not deploy an incomplete chain; use Deploy now and confirm the chain.'],
     may: ['Automatic deployment is on, so Alice may deploy this version to the connected websites by itself, usually within a minute.', 'Version released. Alice may deploy it by itself, usually within a minute.'],
     manual: ['Nothing is deployed. Use Deploy now when you want this version on a website.', 'Version released. Nothing is deployed; use Deploy now when you want it on a website.'],
+    chainManual: [
+      'Nothing is deployed. Deploy now asks for the chain confirmation again when you deploy this version.',
+      'Version released. Nothing is deployed; Deploy now asks for the chain confirmation again.',
+    ],
   };
   const TEXT_TR = {
     chain: ['Otomatik dağıtım eksik bir zinciri hiçbir zaman dağıtmaz: zincir hâlâ eksikse Alice bu sürümü yeniden bekletir. Olduğu gibi dağıtmak için Şimdi dağıt düğmesini kullanın ve zinciri onaylayın.', 'Sürüm serbest bırakıldı. Otomatik dağıtım eksik bir zinciri dağıtmaz; Şimdi dağıt düğmesini kullanın ve zinciri onaylayın.'],
     may: ['Otomatik dağıtım açık; Alice bu sürümü bağlı web sitelerine kendiliğinden dağıtabilir, genellikle bir dakika içinde.', 'Sürüm serbest bırakıldı. Alice bu sürümü kendiliğinden dağıtabilir, genellikle bir dakika içinde.'],
     manual: ['Hiçbir şey dağıtılmaz. Bu sürümü bir web sitesinde istediğinizde Şimdi dağıt düğmesini kullanın.', 'Sürüm serbest bırakıldı. Hiçbir şey dağıtılmaz; istediğinizde Şimdi dağıt düğmesini kullanın.'],
+    chainManual: [
+      'Hiçbir şey dağıtılmaz. Bu sürümü dağıttığınızda Şimdi dağıt zincir onayını yeniden ister.',
+      'Sürüm serbest bırakıldı. Hiçbir şey dağıtılmaz; Şimdi dağıt zincir onayını yeniden ister.',
+    ],
   };
 
   // Each case: [the version's hold reason, is it the current version, automatic deployment on, which text].
@@ -182,7 +208,7 @@ describe('KVCertificatePage', () => {
     ['a license hold on the current version with automatic deployment on', 'license', true, true, 'may'],
     ['a license hold on a version that is not the current one', 'license', false, true, 'manual'],
     ['a license hold with automatic deployment off', 'license', true, false, 'manual'],
-    ['a chain hold with automatic deployment off', 'incomplete_chain', true, false, 'manual'],
+    ['a chain hold with automatic deployment off', 'incomplete_chain', true, false, 'chainManual'],
   ] as const;
 
   it.each(CASES)('releasing %s says the right thing before and after, in English', async (_n, reason, current, auto, kind) => {
@@ -194,7 +220,7 @@ describe('KVCertificatePage', () => {
     await user.click(await screen.findByRole('button', { name: 'Release version aaaaaaaa' }));
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveTextContent(TEXT[kind][0]);
-    for (const other of ['chain', 'may', 'manual'] as const) if (other !== kind) expect(dialog.textContent).not.toContain(TEXT[other][0]);
+    for (const other of ['chain', 'may', 'manual', 'chainManual'] as const) if (other !== kind) expect(dialog.textContent).not.toContain(TEXT[other][0]);
     if (kind !== 'may') expect(dialog.textContent).not.toMatch(/minute/);
     if (reason === 'incomplete_chain') await user.click(within(dialog).getByLabelText('I confirm that this incomplete chain is intended'));
     await user.click(within(dialog).getByRole('button', { name: 'Release' }));

@@ -1549,7 +1549,9 @@
       "releasedManual": "Sürüm serbest bırakıldı. Hiçbir şey dağıtılmaz; istediğinizde Şimdi dağıt düğmesini kullanın.",
       "keyValueNoSize": "Anahtar: {{type}}",
       "releaseHelpChain": "Otomatik dağıtım eksik bir zinciri hiçbir zaman dağıtmaz: zincir hâlâ eksikse Alice bu sürümü yeniden bekletir. Olduğu gibi dağıtmak için Şimdi dağıt düğmesini kullanın ve zinciri onaylayın.",
-      "releasedChain": "Sürüm serbest bırakıldı. Otomatik dağıtım eksik bir zinciri dağıtmaz; Şimdi dağıt düğmesini kullanın ve zinciri onaylayın."
+      "releasedChain": "Sürüm serbest bırakıldı. Otomatik dağıtım eksik bir zinciri dağıtmaz; Şimdi dağıt düğmesini kullanın ve zinciri onaylayın.",
+      "releaseHelpChainManual": "Hiçbir şey dağıtılmaz. Bu sürümü dağıttığınızda Şimdi dağıt zincir onayını yeniden ister.",
+      "releasedChainManual": "Sürüm serbest bırakıldı. Hiçbir şey dağıtılmaz; Şimdi dağıt zincir onayını yeniden ister."
     },
     "keys": {
       "columns": {
@@ -1647,7 +1649,8 @@
       "expired": "Bu sürümün süresi doldu.",
       "notYetValid": "Bu sürüm henüz geçerli değil.",
       "notExportable": "Bu sürümün özel anahtarı dışa aktarılamaz.",
-      "heldAdmin": "Bu sürüm bekletiliyor. Yalnızca bir yönetici dağıtabilir."
+      "heldAdmin": "Bu sürüm bekletiliyor. Yalnızca bir yönetici dağıtabilir.",
+      "chainAdmin": "Bu sürümün zinciri eksik. Yalnızca bir yönetici dağıtabilir."
     },
     "heldDeployNote": "Bu sürüm bekletiliyor. Dağıtmak onu serbest bırakmaz; bunun için Serbest bırak'ı kullanın.",
     "confirmChainNeeded": "Bu sürümün sertifika zinciri eksik. Bir yönetici zinciri onaylayarak dağıtabilir.",

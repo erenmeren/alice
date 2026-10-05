@@ -740,6 +740,8 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       expect(t('vaults.cert.releasedChain')).toBe(kv.releasedChain);
       expect(t('vaults.cert.releaseHelpManual')).toBe(kv.releaseManual);
       expect(t('vaults.cert.releasedManual')).toBe(kv.releasedManual);
+      expect(t('vaults.cert.releaseHelpChainManual')).toBe(kv.releaseChainManual);
+      expect(t('vaults.cert.releasedChainManual')).toBe(kv.releasedChainManual);
       expect(t('deploy.confirmChain')).toBe(kv.confirmChain);
 
       const c0 = await startChain(page, request, lang);
@@ -803,7 +805,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(websiteState(page)).toHaveText(deployedText(t, lang, first));
 
       // The next renewal is held for its chain again; with automatic deployment off, releasing it says
-      // nothing is deployed (and still asks for the chain).
+      // nothing is deployed and that Deploy now asks for the chain again (and still asks for the chain).
       const second = await holdForChain(page, request, t, lang, c0);
       const auto = bindingPanel(page).getByRole('switch', { name: kv.autoDeployment });
       await expect(auto).toBeChecked();
@@ -812,13 +814,13 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(auto).not.toBeChecked();
       await c0.held(second).getByRole('button', { name: t('vaults.cert.releaseNamed', { version: second.slice(0, 8) }) }).click();
       await expect(dialog.getByText(kv.heldChain, { exact: true })).toBeVisible();
-      await expect(dialog.getByText(kv.releaseManual, { exact: true })).toBeVisible();
+      await expect(dialog.getByText(kv.releaseChainManual, { exact: true })).toBeVisible();
       await expect(dialog.getByText(kv.releaseChain, { exact: true })).toHaveCount(0);
       await axe(page, 'release dialog, automatic deployment off', dialog);
       await dialog.getByRole('checkbox', { name: kv.confirmChain }).check();
       await expireStepUp(request);
       await dialog.getByRole('button', { name: kv.release, exact: true }).click();
-      await answerStepUp(page, request, lang, c0.s.totpSecret, page.getByText(kv.releasedManual, { exact: true }));
+      await answerStepUp(page, request, lang, c0.s.totpSecret, page.getByText(kv.releasedChainManual, { exact: true }));
       await expect(c0.held(second)).toHaveCount(0);
       await runScheduled(request, 'kv.auto_deploy');
       await drainJobs(request);
@@ -840,7 +842,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await dialog.getByRole('checkbox', { name: kv.confirmChain }).check();
       await expireStepUp(request);
       await dialog.getByRole('button', { name: kv.release, exact: true }).click();
-      await answerStepUp(page, request, lang, c0.s.totpSecret, page.getByText(kv.releasedManual, { exact: true }));
+      await answerStepUp(page, request, lang, c0.s.totpSecret, page.getByText(kv.releasedChainManual, { exact: true }));
 
       await bindingPanel(page).getByRole('button', { name: kv.deployNow, exact: true }).click();
       const deploy = page.getByRole('dialog', { name: t('bindings.deployTitle') });
