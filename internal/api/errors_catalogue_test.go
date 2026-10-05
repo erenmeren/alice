@@ -714,6 +714,15 @@ func TestPhase5TextsAreTruthfulAndWorded(t *testing.T) {
 	// Nothing was sent / changed where that is true.
 	assert.Contains(t, en("errors.kv.secret_unreadable.cause"), "Nothing was changed on your servers")
 	assert.Contains(t, en("errors.kv.import_invalid.cause"), "Nothing was sent")
+	// The first deployment that meets a non-exportable key answers ALC-AKV-0016: its text covers that case and says
+	// what Alice did (Monitor only) and what to do (a new version with an exportable key).
+	for lang, want := range map[string][]string{"en": {"not exportable", "Monitor only", "Exportable private key"},
+		"tr": {"dışa aktarılamaz", "Yalnızca izleme", "Dışa aktarılabilir özel anahtar"}} {
+		text := cat.T(lang, "errors.kv.secret_unreadable.cause", nil) + " " + cat.T(lang, "errors.kv.secret_unreadable.action", nil)
+		for _, w := range want {
+			assert.Contains(t, text, w, lang)
+		}
+	}
 	// A vault whose sealed credential cannot be opened: the way out is to replace the vault's credentials.
 	assert.Contains(t, en("errors.kv.credential_unreadable.action"), "Replace credentials")
 	assert.Contains(t, tr("errors.kv.credential_unreadable.action"), "Kimlik bilgilerini değiştir")

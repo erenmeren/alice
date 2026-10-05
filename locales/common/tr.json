@@ -740,8 +740,8 @@
       },
       "secret_unreadable": {
         "title": "Sertifika verileri okunamadı",
-        "cause": "Azure'dan gelen sertifika verileri okunamadı. Sunucularınızda hiçbir şey değiştirilmedi.",
-        "action": "Sertifikanın Key Vault'taki içerik türünü denetleyin (PFX veya PEM)."
+        "cause": "Azure'dan gelen sertifika verileri kullanılamadı: özel anahtar içermiyordu (sertifikanın anahtarı dışa aktarılamaz) ya da PFX veya PEM biçiminde anahtarıyla birlikte bir sertifika değildi. Sunucularınızda hiçbir şey değiştirilmedi.",
+        "action": "Anahtar dışa aktarılamıyorsa Alice sertifikayı artık Yalnızca izleme olarak gösterir: 'Dışa aktarılabilir özel anahtar' seçeneği açık yeni bir sürüm oluşturun. Aksi durumda sertifikanın Key Vault'taki içerik türünü denetleyin (PFX veya PEM)."
       },
       "secret_mismatch": {
         "title": "Kasa verileri sürümle eşleşmiyor",

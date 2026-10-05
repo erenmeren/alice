@@ -740,8 +740,8 @@
       },
       "secret_unreadable": {
         "title": "Certificate data could not be read",
-        "cause": "The certificate data from Azure could not be read. Nothing was changed on your servers.",
-        "action": "Check the certificate's content type in Key Vault (PFX or PEM)."
+        "cause": "The certificate data from Azure could not be used: it had no private key (the certificate's key is not exportable), or it was not a certificate with its key in PFX or PEM form. Nothing was changed on your servers.",
+        "action": "If the key is not exportable, Alice now shows the certificate as Monitor only: create a new version with 'Exportable private key' turned on. Otherwise check the certificate's content type in Key Vault (PFX or PEM)."
       },
       "secret_mismatch": {
         "title": "Vault data does not match the version",

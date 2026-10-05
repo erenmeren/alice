@@ -1476,7 +1476,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Likely cause.** The vault returned a certificate without a private key, a content type that is neither PFX nor PEM, an empty or too large value, or a key that does not fit its certificate.
 
-**What to do.** Check the certificate's content type and policy in Key Vault (PFX or PEM, exportable key), create a new version if needed, and deploy again.
+**What to do.** Check the certificate's content type and policy in Key Vault (PFX or PEM, exportable key), create a new version if needed, and deploy again. When the secret had no private key, the key is not exportable: Alice marks the certificate **Monitor only** at that moment, and the next request answers ALC-AKV-0013 until a version with an exportable key appears.
 
 ## ALC-AKV-0017: Vault data does not match the version
 
