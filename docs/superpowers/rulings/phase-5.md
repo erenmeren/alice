@@ -1,0 +1,147 @@
+# Phase 5 — controller rulings
+
+Decisions taken on the owner's behalf during autonomous execution of docs/superpowers/plans/2026-10-05-phase-5-azure-key-vault.md on branch `phase-5` (base `master` 8f15b80; owner instruction 2026-09-30: proceed without waiting). Each line: decision — why — cost if wrong — how to reverse it. Within a topic the order is the order in which they were made; where a later ruling replaced an earlier one, both are named. The decisions as they apply to the product are R40 in docs/superpowers/specs/alice-v1/00-decisions.md (item numbers in brackets); accepted limitations and the list of what is not verified against Azure are in docs/security/reviews/phase-5.md.
+
+No Azure subscription was available. Nothing here was checked against real Azure; the optional suite (`make test-azure`) is for the owner and has never been run.
+
+TO UPDATE AT PHASE CLOSE: add the rulings of the final whole-branch review, the final fix wave and the Playwright task (Task 23), the result of the final `make ci`, and move every item of "Open at the time of writing" to done or to "Carried to later phases".
+
+## Before the tasks
+
+- The plan-writer's 35 "spec conflicts resolved" are accepted as proposed R40, pending the pre-flight scan; notable: the official Azure SDK under Alice's own guarded transport; managed identity on Azure virtual machines only, through a fixed exception for 169.254.169.254:80; public-cloud vault addresses only; separate `kv_*` tables and connections; a Key Vault deployment is a Phase 4 deployment plus a secret-read step; an import is not a deployment and is never re-sent; proxy and CA bundle, deployment windows, expiry reminder emails and sovereign clouds deferred to Phase 7 — why: the owner said not to wait — cost: the owner revises R40 later — reverse: each is an item of R40 [1–35] with its own cost line.
+- Known gap accepted: no real Azure subscription, so Key Vault Reader sufficiency (R22, AC6, SEC-083), the disabled-secret error code, Reader calling `GetKey` and the 3DES PFX import are assumptions — why: agents cannot close it — cost: the first real evidence is the owner's walkthrough — reverse: run `make test-azure` and correct the fake and the mapping where Azure differs.
+- The plan was compiled by its author only in parts (Tasks 1, 2, 3, 6 and the SDK calls of 5 and 8) → a pre-flight scan in an isolated worktree before Task 1, as in Phases 2 to 4. It found 41 defects of the plan (1 compile, 24 behaviour or tests, 8 lint, 8 cross-task) and 15 design findings; only Tasks 1–8, Task 19's registration and a slice of Task 20 were applied and compiled; Tasks 9–18 and 21–24 were read against the code only. The code as built wins over the plan text.
+- Dependencies accepted as the scan reported them: five direct Azure SDK modules and seven indirect ones, all MIT, Apache-2.0 or BSD; MSAL resolves to v1.9.0 (the plan said v1.8.0): pin what resolves [1] — reverse: `go.mod`, with `docs/dev/dependency-updates.md`.
+
+## Pre-flight rulings on the design findings (S1–S15)
+
+- S1 — two guarded transports, never one shared allow-list: the identity transport reaches only the Entra login host (and the metadata address for a managed identity), the vault transport only that vault's host [8] — why: a vault `nextLink` or redirect must never carry the bearer token to the login host — cost: two clients per session — reverse: `internal/providers/azurekv/transport.go` and `identity.go`; do not.
+- S2 — the SDK's challenge-resource verification stays on in product code and in tests; `AdditionallyAllowedTenants` is never set; a tenant mismatch maps to a closed code; an SDK panic on a malformed challenge is recovered [8] — cost: the fake must satisfy the SDK's check — reverse: the rules of `TestAzureSDKSurface` would have to be loosened first; do not.
+- S3 — the secret read inside a deployment has its own budget: one minute in total, at most two attempts [3] — why: a throttled vault must not hold the Nginx server's lock for the whole throttling window — cost: a slow vault fails a deployment that a longer wait would have completed (it is retried) — reverse: `SecretReadBudget`, `SecretReadAttempts` in `azurekv/provider.go`; `kvReadBudget` in `internal/jobs/deployjobs`.
+- S4 — secret hygiene as far as the SDK allows, the rest documented: SDK logging off, SDK errors never stored or shown, no token cache outliving a job session where Alice can choose, buffers Alice owns are cleared — cost: the residuals (Go strings inside the SDK, MSAL's process-global managed-identity cache) are known limitations — reverse: nothing to reverse.
+- S5 — adding a vault is refused for every failure of the first vault call except "forbidden" and "firewall", which create the vault marked partly working [10] — why: a role is usually assigned after the vault is added; a wrong name or a refused sign-in must not use a license slot — cost: a vault behind a firewall is accepted without any proof that Alice can read it — reverse: `refusalFromRows` in `internal/inventory/vaults.go`.
+- S6 — **Deploy now** of a held version, enabling or changing automatic deployment (also adding a website to a connection that deploys automatically), replacing vault credentials and importing are Administrator actions with step-up and not available to API tokens; an Operator may deploy a version that is not held [11] — why: these make Alice deploy by itself or send a private key out — cost: Operators cannot import or manage automatic deployment — reverse: the permission of the routes in `internal/api` (route table, `strictSession`) and the Administrator checks inside `internal/inventory` (`ErrAdminRequired`, `StrictSession`); regenerate `docs/authz-matrix.md`.
+- S6 (schema part) — the application role's new `UPDATE (credential_id)` on targets is narrowed by a trigger to vault targets [9] — reverse: a migration dropping `targets_credential_check`; do not.
+- S7 — F-17 is not relaxed: an incomplete chain needs the Administrator's confirmation for a manual deployment and is never deployed automatically (the version is held, reason `incomplete_chain`); this drops the plan's row 19 [19] — why: R38 says so, and automatic deployment has nobody to confirm — cost: a vault that delivers no intermediates never deploys automatically — reverse: `KVDeployMaterial` in `internal/inventory/kv_material.go` (the `ErrChainUnconfirmed` branch and `holdIncompleteChain`).
+- S8 — a version first seen while the license gate is not open is held and never deployed automatically later by itself [21] — why: a renewal made during a lock must not roll out without a person after the license returns — cost: an Administrator releases versions after every lock — reverse: see "License holds" below, which replaced the mechanism.
+- S9 — importing into a certificate name that already exists needs an explicit confirmation in the request; without it the import is refused before any call that changes the vault; an uncertain import blocks that name [25], [40] — cost: one more click; a blocked name for up to 72 hours — reverse: `RequestImport` in `internal/inventory/kv_imports.go` and the provider's existence check in `azurekv/import.go`.
+- S10 — every guessed behaviour of the fake that product logic depends on is listed by name in docs/security/reviews/phase-5.md; in the e2e build Alice trusts only the fake's CA for Azure hosts [45] — reverse: `azureRoots` in `cmd/alice/testapi_e2e.go`; do not.
+- S11 — R40 amends R39 item 8 explicitly: the metadata address is reachable only from the managed-identity transport; the general address rule is unchanged [4].
+- S12 — at most two vault polls run at a time; a poll's results are stored in bounded batches, and "missing" is marked only after a complete, successful listing [15], [44] — cost: the cap is global, not per vault — reverse: `MaxConcurrentKVPolls` in `internal/inventory/kv_reconcile.go` (the runner's claim reads it through `maxRunning` in `internal/jobs/types.go`).
+- S13 — `object_id` and `tenant_id` from token claims are stored only if they are GUIDs [6].
+- S14 — an uncertain import is settled as imported only by a version created after the request that carries the thumbprint; a certificate with that thumbprint from before the request does not settle it [39] — cost: an import of a certificate that was already in the vault under that name reads "Outcome unknown" — reverse: `resolveImports` in `internal/inventory/kv_imports.go`.
+- S15 — one budget model: a poll has a total budget of 11 minutes; each call makes at most three attempts and honours `Retry-After` up to 60 seconds; a used-up budget ends the poll as throttled with nothing marked missing; the limiter and the try timeout apply per page [3] — why: the plan's 5 attempts with waits up to 5 minutes could not fit one budget — cost: Alice gives up on a throttled page sooner than F-44's 5 attempts — reverse: `MaxAttempts`, `MaxRetryAfter`, `TryTimeout`, `PollBudget` in `azurekv/provider.go`.
+
+## Provider, outbound guard and fakes
+
+- Fix the scripted provider fake now (it accepted unvalidated reads and imports, did not record the discovery request, and required `host` for a vault), before Tasks 10–16 lean on it — why: engine tests would pass while breaking "never read latest" — cost: one small round (cf69859).
+- Fake service, non-exportable certificate: follow the documentation (the secret read answers 200 without a private key), not the first draft's 403; the provider maps a secret without a key, or an undecodable value, to one closed reason [45] — why: a 403 would hide the real failure mode — cost: one behaviour change in the fake; the container form of the key-less value stays a guess — reverse: `fakekv` (9085573) and the `ErrNoKey` mapping.
+- Loopback and shared (CGNAT) addresses dialled for a vault name are left to `netaddr`'s existing rule — why: TLS verifies the vault's name, no token leaves, and private endpoints need private ranges — cost: a connection and a ClientHello to loopback are possible; listed as a known limitation — reverse: a vault-specific rule in the guarded dialer; it would also have to keep private endpoints working.
+- Region variables are refused with the existing code `azure.address_not_allowed` rather than a new one; the SDK-logging variable joined them after the re-review found that it prints Azure error bodies [37] — cost: the catalogue text has to explain three variables under an address code — reverse: `refusedEnv` in `azurekv/provider.go`; do not remove an entry without closing the path it guards.
+- The Task 6 re-review's findings (N1–N5) were sent as an addendum to the Tasks 7–8 implementer, who then owned the package — why: two agents must not edit one package at once — cost: Task 6 closed together with the Tasks 7–8 review (09a3d6a).
+- Import, re-send after a 401 challenge: documented and pinned by a test, not prevented [38] — why: preventing it turns an expired token into a 24-hour block of the name — cost: correctness rests on "a vault does not carry out a request it answers 401", which is unverified — reverse: a transport rule in `azurekv` that refuses a second body within one import call.
+- `ImportRequest.LeafThumbprint`: the inventory states the leaf's thumbprint and the provider stops decoding the PFX [38] — why: one fewer copy of the private key that cannot be zeroed — cost: a contract change; a wrong thumbprint from the caller leaves a real version in the vault and an import that never settles — reverse: `internal/providers/azure.go` and `azurekv/import.go` (fd47d6a).
+- Accepted choices of the Tasks 7–8 implementer: an import answered 429 is uncertain, not retried; a cancellation before anything was sent is "refused" without the context error; the provider applies its own budgets when the caller has no deadline; `kv.import_name_exists` and `kv.import_invalid` are contract codes.
+- A 404 on a vault's listing means the vault was not found [45] — why: the API suite showed an unknown vault reported as a missing certificate — reverse: `mapError` in `azurekv/errors.go` (5b4f1ff).
+
+## Schema
+
+- Name uniqueness on `lower(name COLLATE "C")`, fixed inside migration `00008` itself [45] — why: the product ships a Turkish locale; a database with a Turkish collation folds I to a dotless i and would break case-insensitive uniqueness against Go's ASCII fold — cost: every conflict target and name lookup must carry `COLLATE "C"` — reverse: a new migration recreating the four indexes; do not.
+- The pre-existing `targets_endpoint_live` index has the same exposure and was left untouched — why: it belongs to a merged migration and vault host names are ASCII lower-case by a CHECK — cost: a known limitation for server host names — reverse: a later migration.
+- Composite foreign key from connections to the certificate of the same vault; a trigger freezing finished imports and the send time (`Z1007`); an explicit refusal of the Down migration once vault data exists (`Z1008`) — why: review findings (76d57a0) — cost: a later "annotate a finished import" feature needs a migration.
+- Minor schema findings M4–M6 of that review were left to the lock-time checks of later tasks.
+
+## Inventory: vaults and polling
+
+- `last_success_at` means "the certificate listing answered"; it is not set for a vault that was added degraded [45] — why: the poller reads it — cost: the page says "No successful check yet" for such a vault — reverse: `listingAnswered` logic in `internal/inventory/vaults.go` and `kv_reconcile.go`.
+- Superseded credential rows are kept, sealed (append-only, R37 item 11); the audit keys `credential_id` and `previous_credential_id` stay (they are IDs) [9] — cost: old envelopes stay in the table — reverse: a migration granting DELETE on `credentials`; do not.
+- A refused credential replacement leaves the provider's per-target state alone (the call that forgot it was removed): the credential is unchanged (2f8bbf6).
+- The two Go test failures that Task 10 caused in other packages (`internal/api` sentinel test, `cmd/alice` wiring test) were accepted as known reds until Tasks 15 and 17 — why: mapping codes and runners early would duplicate those tasks — cost: implementers of Tasks 11–14 had to be told; the final `make ci` is the gate. Both were green again after a51a75d and the Task 17 commits, as reported by the implementers.
+- An empty certificate listing for a vault with stored certificates is believed only on the second successful poll in a row [45] — why: defence in depth after the "page without `value`" finding; the spec has no rule — cost: a really emptied vault shows its certificates for one more poll interval — reverse: `facts.kv_empty_polls` handling in `kv_reconcile.go` (88f21da).
+- A poll cut by its budget counts as a throttled cycle [13]. A poll refused for a missing role or by the firewall keeps the normal interval, because the plan's row 13 names no back-off for it [13] — cost: a vault with a missing role is asked every interval — reverse: `kvPollOutcome` in `kv_reconcile.go`.
+- No email for the firewall case in this phase; §11.9's "alert" is read as the status and the page [12] — reverse: a template and a call in `RecordKVFailure`.
+
+## License holds
+
+- First ruling (Task 11 review, I4): new versions are held also on the first successful poll after the gate reopened — why: polls stop in lock, so S8 as written never fires for a renewal made during a lock — cost: one held version to release after every lock. Built in 95ea6c5 with a flag for certificates still waiting for details.
+- Replaced (Task 11 re-review): the hold goes by creation time — held when the gate is closed, or Azure's `created` is not later than the last reopening, or the creation time is unknown and no complete certificate listing has run since the reopening; the flag is dropped [41] — why: independent of poll order and of details that never arrive — cost: relies on Azure's `created` (whole seconds, unverified against Azure) — reverse: `kvHold` in `internal/inventory/kv_reconcile.go` (b779c02, f6b769c).
+- `grace` stays a state a reopening can start from [41] — why: the end of grace refuses changes before `locked` is recorded — cost: false holds for renewals within about one poll interval before a license upload out of grace; accepted as fail-safe — reverse: the `from_state` list in `gateReopenedAt`.
+- The planner holds a current version detected before the last reopening instead of deploying it (Task 15 review, I4) [42] — why: closes the race of up to a minute in which a renewal detected just before a lock would be deployed after the license returns — cost: one more held version after a lock.
+- Narrowed after the re-review found two defects in that ruling: a released version is never held again (the release leaves a mark the planner reads), and the hold applies only when the connection has no deployment of the version at all and a deployable website exists [42] — reverse: `planAutoDeploy` in `kv_autodeploy_plan.go` (c2b44ed).
+- Theoretical cases recorded, not fixed: rule (c) with listings that never complete; clock difference between Azure and Alice.
+
+## Connections, planner and deployments
+
+- Switching automatic deployment off and removing a connection stay allowed in license lock; this amends the plan's row 22 [22] — why: both are safety actions that only reduce what Alice does — reverse: the license class of `PUT /bindings/{id}/auto-deploy` and `DELETE /bindings/{id}` in the route table, and `SetAutoDeploy`.
+- Planner eligibility: current version, `detected_at` later than `auto_since`, and `kv_created_at` unknown or later than `auto_since`, strict; a miss gets the "deploy manually" email [43] — why: neither clock alone is enough; a version that existed before the switch must not roll out by itself — cost: a version created in the same second as the switch is not deployed automatically — reverse: `laterThan` in `kv_autodeploy_plan.go`.
+- The "deploy manually" notice depends on Alice's own detection time, not on Azure's clock; eligibility unchanged [43] — why: the API suite showed a real renewal that was neither deployed nor announced when Azure's clock was behind — reverse: 4ccdae8.
+- Which failures count toward the three-failure stop: first ruling (Task 12 review) `certificate.chain_unconfirmed` and refusals before the read do not count; extended (Task 16 re-review) by `kv.binding_gone`, `kv.auto_deploy_off`, `kv.version_held`, `kv.vault_unavailable`; then (Tasks 13–14 review) transient reasons do count, as the spec says; `internal.unexpected` retries are capped and then stop the wave with the one email [43] — reverse: `NeutralDeploymentReasons` in `kv_autodeploy_plan.go`.
+- Automatic deployments of a superseded or stopped version, and of an automatic period that ended, are refused by the pre-check before any vault read [43] — reverse: `KVDeployPrecheck` in `kv_material.go`.
+- The inventory exposes `KVDeployPrecheck` and the engine calls it before any vault call (Task 16 security review) [44] — why: the engine reads the secret before it calls the inventory, so a "pre-read" check inside the material step came too late — reverse: do not.
+- Unknown inventory error in the vault step: first ruled final on the first attempt; **revised** after the re-review: an unknown error after the read is retried within the job's three attempts, sentinels stay final [44] — why: the first rule made a transient database error final — reverse: `internal/jobs/deployjobs/kv.go` (4864c17).
+- The check-then-act gap on deploying a held version is closed inside the inventory's transaction (`StrictSession`), not only in the handler [11] (84a683e).
+- Email bounds: 20 per kind, per vault and per run, then one summary; no bound across vaults [43] — why: a mass renewal must not send hundreds of emails for one vault — cost: many vaults renewing at once still send many — reverse: `planMailLimit` in `kv_autodeploy_plan.go`; a global bound would be new code.
+
+## Imports and jobs
+
+- Uncertain imports end 72 hours after the send unconditionally, and at once when the vault is deleted [39] — why: after the 24-hour rule an import of an unreachable or deleted vault stayed uncertain for good and blocked nothing visibly — reverse: `ImportOutcomeUnknownCap` in `kv_imports.go`.
+- `SweepImports`, called from `kv.schedule` every minute: queued → failed `kv.import_cancelled`, running → uncertain, plus the 72-hour end [40] — why: an import stayed queued or running for good when its job ended without the handler, blocking the name. The first draft's reason `kv.import_job_lost` is no longer produced; code `ALC-AKV-0039` is `kv.import_cancelled`.
+- A per-type concurrency cap in the runner's claim (`kv.poll` = 2) [44] — why: polls waiting for a slot parked all eight workers — reverse: `maxRunning` in `internal/jobs/types.go` (7304c3c).
+- The access check's secret read is audited through `RecordAccessCheckRead`, for success and failure [28].
+
+## API and web
+
+- Routes nested under `/targets/{id}/kv/...` and `credentials.manage` for automatic deployment, release and import were accepted as the Task 17 implementer built them [36], [11] — why: the inventory has no lookup by certificate or import ID alone, and the guard of `credentials.manage` enforces exactly Administrator, step-up and no token — cost: departs from the plan's contract — reverse: flat routes need new inventory lookups (carried below).
+- `kv.version_disabled` drops "(or expired)"; departs from the spec's copy table [46] — why: an expired version answers `certificate.expired` — reverse: `locales/common/{en,tr}.json`.
+- Turkish: "içe aktar…" everywhere except the fixed label "Key Vault'a aktar"; held is "Bekletiliyor"; the step label is "Sertifikayı Key Vault'tan okuma"; these override strings of the plan's UI-copy table [46] — reverse: `web/src/locales/tr.json`, guarded by `web/src/locales/terms.test.ts`. The owner's Turkish tone review is still open.
+- The held-version text is neutral about which rule held it; the release texts are three, by hold reason, current version and automatic deployment [46] — why: the first two wordings were false in some cases — reverse: `vaults.heldVersion`, `vaults.cert.release*` and `releaseKind` in `KVCertificatePage`.
+- **Remove website** stays one click; `autocomplete=off` stays although a browser may ignore it; the "New version found" chip stays a browser-side heuristic — cost: known limitations.
+- Left as it is: an API token is told to step up in the race window of the held-deploy check (Task 17 re-review N3).
+
+## Task 18 and the e2e stack
+
+- The dial seam is built under the `integration` tag only (the brief said `e2e || integration`) — why: the e2e stack resolves the Azure host names through Docker's DNS aliases and needs no seam [45].
+- Managed identity in the e2e stack is a documented caveat only (do not run it on an Azure virtual machine) — why: no cheap enforced rule was found; the sign-in method is chosen by the credential.
+- No separate re-review of the Task 18 fix round — why: every fix carries the reviewer's named mutant shown red, the controller ran the whole unit suite and the `internal/api` integration suite at HEAD (green, 94.9 %, 37 s), and the final whole-branch review reads it again — cost: the "not pinned" list stays as documented (a 401 on page 2 at provider level; the planner's own guard for F-48; the managed-identity mapping branch by branch).
+- Task 23 (Playwright) was dispatched alone, with no other Docker user — why: Chromium aborts requests whenever a host interface changes.
+
+## Process
+
+- Models, as the ledger states them: the plan was written by opus; the implementers of Tasks 1–3, 4–5, 6, 7–8, 9, 10, 12, 15, 16, 17 and 20–22 ran as sonnet; the security reviews of Task 6, Tasks 7–8, Task 16, Tasks 13–14 and Task 17 ran as fable. The ledger names no model for the implementers of Tasks 11, 13–14, 18 and 19 or for the other reviewers. The pre-flight scan used two agents; the first was cut off by account limits.
+- Every task or task group was reviewed by an agent that did not write it. A fix round went back to the implementer and was reviewed again in scope; small follow-ups after an approval were verified by the controller (diff read, package tests run), without a third review.
+- Tasks were grouped by package ownership (1–3, 4–5, 7–8, 13–14, 20–22), and fix rounds for a package were routed to the agent that owned it at that moment, so that two agents never edited one package.
+- Red-first was not followed everywhere; where it was not, the evidence is mutation (a test shown red under a changed line): Task 9 (no clean red run captured), Task 10 (tests written first, no red output kept; the zeroing asserts of its fix round were not seen red by the implementer and were mutated by the re-reviewer), Task 11 (first commit: mutation only; fix round 1: 41 mutants, not red-first; fix round 2 was red-first), Tasks 13–14 fix round 2 (three tests written after the code, each shown red with a mutant), Tasks 20–22 (code written before the tests; red lines from stubbing each source), Task 12's leftover pins.
+- Commits that are not green alone: 0e1ae84 does not compile its tests (repaired by bacdb5f; no squash, because `.gitleaksignore` is pinned to commit hashes); 7304c3c has one gosec finding fixed in 99beaa4; 1a7d5f0 adds a test that fails until 4ccdae8.
+- Accidents on the shared working tree and index, and what was restored: the Tasks 4–5 implementer ran `git rm --cached -r .` once and restored the index at once (`git reset -q HEAD`; the controller verified the tree clean); the Tasks 1–3 implementer ran `git stash` once and popped it at once (reported by the implementer; nothing lost); commit b779c02 dropped another agent's locale texts and d4ce0c3 restored them (the controller verified the locale files against 6b3c690); a shared locale file was overwritten once between two agents and the lost edit re-inserted (reported by the implementer).
+- Lint and the secrets scan were not re-run after every small follow-up round; later full runs cover them.
+
+## Open at the time of writing
+
+TO UPDATE AT PHASE CLOSE: these were not done when this document was written.
+
+- The final fix wave (product changes found late): a closed reason instead of `ALC-SYS-0003` when a vault's sealed credential cannot be opened; marking a certificate non-exportable when a read has no key; poll-time failure params in a vault's `last_error`; `deployment_id` and `import_id` on job items; optionally a test that nothing outside tests assigns the zeroing observer.
+- Task 23 (Playwright journeys with axe), the rest of Task 24 (guides, changelog, coverage floors), the whole-branch final review and the final `make ci`.
+
+## Carried to later phases
+
+Carries inherited from earlier phases that Phase 5 was to address:
+
+- L-87 (a Key Vault poll in flight at lock): closed by `TestL87PollInFlightAtLock` (`internal/jobs/kvjobs`) and over the wire in the API suite (d0e6d5c).
+- L-29 real-job parts and L-26 for vaults (in lock nothing reaches Azure for add, check, poll, connection, **Deploy now** and import): closed by `TestKeyVaultInLock` (`internal/api`, b7c09f9).
+- L-81 with a vault deployment and L-80/L-82: closed by `TestL81KVDeploymentHeldThenConfirmed` and `TestL80L82WithAKeyVaultDeployment` (`internal/jobs/deployjobs`), and `TestL81KeyVaultDeploymentHeld` (`internal/api`).
+- L-83..L-86 and L-88 (rotation runner): re-deferred to Phase 6; their jobs do not exist.
+- A cross-server locations list: built as `GET /api/v1/certificate-locations`.
+- A deployment ID on deploy jobs (and `import_id` on import jobs): the plan included it; it was parked during Task 17 and is in the final fix wave above. If the fix wave does not do it, it stays a carry.
+- `facts.nginx.scanned_at`: re-deferred (no Phase 5 screen needs it).
+
+Parked in Phase 5:
+
+- Flat lookup routes for a vault certificate or an import by its own ID (the inventory has no such lookup).
+- An import list across vaults for one certificate (the web asks each vault); the connected-website count and a "new version" signal on the vault's certificate list (the chip is a heuristic until then).
+- A per-version hold rule in the API (`KVVersion.HoldRule`): the version shows `held` and `held_reason`; the rule is only in the audit row.
+- A dedicated inventory method for a job reading its own import of a deleted vault (today an exception tied to the job's claim).
+- The fake serves one vault: per-vault isolation (F-44, F-50) is proven at unit level only. Not modelled either: the `object_id` and `msi_res_id` selectors of the metadata service, the deleted-certificates listing, DNS.
+- Unpinned by a mutant: a 401 on a later page at provider level; the planner's own guard against a second deployment of a busy website (F-48; the Phase 4 unique index also refuses it); single branches of the managed-identity mapping; the one-minute read budget as a permanent test.
+- A typed-nil panic in the provider fake found by the Tasks 1–3 review (pre-existing).
+- Phase 7: HTTPS proxy and CA bundle for Azure, deployment windows, wave limits as settings, expiry emails for client secrets and keys, sovereign clouds.
+- Owner: the real-Azure suite (`make test-azure`, never run) and `make record-azure`; the walkthrough table of docs/security/reviews/phase-5.md; the Turkish tone review of the new texts; the crypto sign-off; and the owner items carried from earlier phases (a git remote and the first workflow run, the production license key, the walkthroughs of Phases 1–4).
