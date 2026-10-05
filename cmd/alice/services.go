@@ -181,8 +181,9 @@ func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.L
 	return runner
 }
 
-// sshkeyDeps are the dependencies of the SSH key jobs. The S3 wait comes from the service
-// (Keys.UndoWait, built on Config.HelperBudget), so the handlers take no budget of their own.
+// sshkeyDeps are the dependencies of the SSH key jobs, with the licence service as their gate. The S3
+// wait comes from the service (Keys.UndoWait, built on Config.HelperBudget), so the handlers take no
+// budget of their own.
 func sshkeyDeps(svc *services, clk clock.Clock, log *slog.Logger) sshkeyjobs.Deps {
 	d := sshkeyjobs.Deps{Registry: svc.registry, Clock: clk, Log: log}
 	if svc.sshkeys != nil { // a nil *sshkeys.Service must stay a nil interface, so Register refuses it
@@ -190,6 +191,11 @@ func sshkeyDeps(svc *services, clk clock.Clock, log *slog.Logger) sshkeyjobs.Dep
 	}
 	if svc.inventory != nil {
 		d.Targets = svc.inventory
+	}
+	if svc.license != nil {
+		// The licence gate the runner and the SSH key service use: a rotation's add or removal job asks it
+		// before opening a session, so a lock that begins after the sweep still reaches no server (L-29).
+		d.Gate = svc.license
 	}
 	return d
 }

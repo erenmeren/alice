@@ -76,6 +76,8 @@ func TestJobDepsCarryEveryDependency(t *testing.T) {
 	assert.Same(t, svc.sshkeys, sshkeyDeps(svc, clock.Real{}, log).Keys)
 	assert.Same(t, svc.inventory, sshkeyDeps(svc, clock.Real{}, log).Targets)
 	assert.Same(t, svc.registry, sshkeyDeps(svc, clock.Real{}, log).Registry)
+	assert.Same(t, svc.license, sshkeyDeps(svc, clock.Real{}, log).Gate,
+		"a rotation's add and removal jobs ask the licence gate before any session (L-29)")
 	assert.Same(t, svc.registry, deployDeps(svc, clock.Real{}, log).Registry)
 	assert.Same(t, svc.inventory, deployDeps(svc, clock.Real{}, log).Inventory)
 	assert.Same(t, svc.registry, kvDeps(svc, clock.Real{}, log).Registry)
