@@ -235,6 +235,9 @@ var (
 	// A queued import that was never sent: its vault was removed, or its job ended before it sent anything (imports fix round).
 	ErrKVImportVaultDeleted = ErrorCode{Code: "ALC-AKV-0038", Reason: "kv.import_vault_deleted", Status: http.StatusConflict}
 	ErrKVImportCancelled    = ErrorCode{Code: "ALC-AKV-0039", Reason: "kv.import_cancelled", Status: http.StatusConflict}
+	// The import job found that the person who asked is no longer an Administrator (the job stores auth.forbidden;
+	// importJSON shows this code for it).
+	ErrKVImportAdminRequired = ErrorCode{Code: "ALC-AKV-0040", Reason: "kv.import_admin_required", Status: http.StatusForbidden}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -270,7 +273,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrKVLocationBound, ErrKVBindingExists, ErrKVVaultHasBindings, ErrKVVersionNotDeployable, ErrKVHeldNeedsAdmin, ErrKVImportConfirmNeeded,
 		ErrKVImportInProgress, ErrKVImportRejected, ErrKVImportOutcomeUnknown, ErrKVClientCertInvalid, ErrKVVaultDuplicate,
 		ErrKVImportNameExists, ErrKVImportInvalid, ErrKVBindingGone, ErrKVAutoDeployOff, ErrKVVaultUnavailable, ErrKVVersionHeld,
-		ErrKVVersionNotHeld, ErrKVVersionSuperseded, ErrKVWaveStopped, ErrKVImportVaultDeleted, ErrKVImportCancelled,
+		ErrKVVersionNotHeld, ErrKVVersionSuperseded, ErrKVWaveStopped, ErrKVImportVaultDeleted, ErrKVImportCancelled, ErrKVImportAdminRequired,
 	}
 }
 
@@ -375,7 +378,11 @@ var errorMap = []struct {
 	// sentinel still gets its code. ErrNotAVault and ErrNotAServer name a target of the wrong kind on
 	// a route of the other: the route does not exist for it (404). ErrAdminRequired is a matter of
 	// authority only (ruling S6). The engine-only ones (ErrBindingGone, ErrAutoDeployOff, ErrVersionHeld,
-	// ErrImportState, ErrImportChanged, ErrCredentialNotTheTargets) have no entry on purpose.
+	// ErrVersionSuperseded, ErrWaveStopped, ErrImportState, ErrImportChanged) have no entry on purpose.
+	// ErrCredentialNotTheTargets is different: ReplaceVaultCredentials can return it (the database trigger Z1006
+	// refuses a credential that is not the target's), but only when Alice's own code is wrong. It has no entry
+	// ON PURPOSE: it answers the internal error ALC-SYS-0003 and fail logs its type, because a person cannot
+	// act on it.
 	{inventory.ErrVaultHasBindings, ErrKVVaultHasBindings, nil},
 	{inventory.ErrNotAVault, ErrNotFound, nil},
 	{inventory.ErrNotAServer, ErrNotFound, nil},
@@ -394,6 +401,10 @@ var errorMap = []struct {
 	{inventory.ErrVaultUnavailable, ErrKVVaultUnavailable, nil},
 	{inventory.ErrImportConfirmNeeded, ErrKVImportConfirmNeeded, nil},
 	{inventory.ErrImportInProgress, ErrKVImportInProgress, nil},
+	// The inventory repeats the session check inside its transaction (a hold or a switch-on can appear after the
+	// API looked): what it refuses is a session without a fresh step-up.
+	{inventory.ErrHeldNeedsStepUp, ErrStepUpRequired, nil},
+	{inventory.ErrAutoDeployNeedsStepUp, ErrStepUpRequired, nil},
 }
 
 type errorPayload struct {
@@ -507,7 +518,7 @@ func classify(err error) (ErrorCode, map[string]string, bool) {
 		// Only the stable reason and its allowlisted primitive params reach the client; the
 		// provider's cause (remote output, driver text) is never shown nor logged as text.
 		if ec := codeForReason(perr.Code); ec != ErrUnexpected {
-			return ec, providerParams(perr.Params), true
+			return ec, completeParams(ec.Reason, providerParams(perr.Params)), true
 		}
 		if perr.Code == ErrUnexpected.Reason {
 			// A provider's own "internal.unexpected" (an answer it could not use): the generic code, no params;

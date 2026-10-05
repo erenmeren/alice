@@ -100,3 +100,25 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | POST | `/api/v1/certificates/{id}/actions/import-to-key-vault` | `credentials.manage` | no | yes | no | no | no | yes | no |
 | GET | `/api/v1/targets/{id}/kv/imports` | `read` | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/targets/{id}/kv/imports/{import_id}` | `read` | no | yes | yes | yes | read | no | yes |
+
+## Notes
+
+**Conditional rules.** These routes are listed above with the permission that every request needs. In the cases below the
+request also needs what `credentials.manage` needs: an Administrator's browser session with a fresh step-up, and never an
+API token (403 ALC-AUTH-0003 without the step-up, 403 ALC-AUTH-0002 for a token or another role).
+
+- `DELETE /api/v1/targets/{id}?remove_bindings=true`: removing a Key Vault together with its connected websites. Without
+  `remove_bindings` the route is `targets.manage` as listed. The step-up here is a convenience guard, not a boundary: an
+  Administrator without a step-up can remove each connection (`DELETE /api/v1/bindings/{id}`) and then the vault.
+- `PATCH /api/v1/bindings/{id}`: when it adds websites to a connection that deploys automatically. Releasing websites, or any
+  change to a connection that does not deploy automatically, is `certificates.operate` as listed.
+- `POST /api/v1/bindings/{id}/actions/deploy`: when the version is held (found while the license was not available, or with an
+  incomplete certificate chain). An Operator is refused with ALC-AKV-0022.
+
+**`credentials.manage`** is Administrator with step-up and no API token. Besides adding a Key Vault and replacing its credentials
+it gates switching automatic deployment on or off, releasing a held version and importing a certificate into a vault (a
+private key leaves Alice).
+
+**In lock.** `PUT /api/v1/bindings/{id}/auto-deploy` and `DELETE /api/v1/bindings/{id}` are open while the license is expired
+(switching automatic deployment off and removing a connection only reduce what Alice does); switching it on is refused then by
+the inventory with ALC-LIC-0001.

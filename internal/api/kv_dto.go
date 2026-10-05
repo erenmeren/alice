@@ -65,6 +65,16 @@ func guidOrBlank(s string) string {
 	return g
 }
 
+var vaultAuths = []string{providers.AzureAuthCertificate, providers.AzureAuthClientSecret, providers.AzureAuthManagedIdentity}
+
+// oneOfOr is v when it is one of allowed, else the safe meaning fallback.
+func oneOfOr(v string, allowed []string, fallback string) string {
+	if oneOfOrBlank(v, allowed) == "" {
+		return fallback
+	}
+	return v
+}
+
 func oneOfOrBlank(v string, allowed []string) string {
 	for _, a := range allowed {
 		if v == a {
@@ -118,7 +128,7 @@ func vaultJSON(t inventory.Target) *vaultDTO {
 		name = pv.Name
 	}
 	return &vaultDTO{
-		URL: v.URL, Name: name, Auth: v.Auth, TenantID: guidOrBlank(v.TenantID), ClientID: guidOrBlank(v.ClientID),
+		URL: v.URL, Name: name, Auth: oneOfOrBlank(v.Auth, vaultAuths), TenantID: guidOrBlank(v.TenantID), ClientID: guidOrBlank(v.ClientID),
 		PollIntervalMinutes: int(v.PollInterval / time.Minute), SecretExpiresOn: utcPtr(v.SecretExpiresOn),
 		CertThumbprint: thumbprintOrBlank(v.CertThumbprint), CertNotAfter: utcPtr(v.CertNotAfter), Access: accessJSON(v.Access),
 	}
@@ -249,7 +259,7 @@ type kvCertificateDetailDTO struct {
 func kvCertificateDetailJSON(d inventory.KVCertificateDetail) kvCertificateDetailDTO {
 	out := kvCertificateDetailDTO{
 		kvCertificateDTO: kvCertificateJSON(d.KVCertificate), Versions: make([]kvVersionDTO, 0, len(d.Versions)),
-		DeployAccess: oneOfOrBlank(d.DeployAccess, []string{inventory.DeployAccessOK, inventory.DeployAccessForbidden, inventory.DeployAccessNotChecked}),
+		DeployAccess: oneOfOr(d.DeployAccess, []string{inventory.DeployAccessOK, inventory.DeployAccessForbidden, inventory.DeployAccessNotChecked}, inventory.DeployAccessNotChecked),
 	}
 	for _, v := range d.Versions {
 		out.Versions = append(out.Versions, kvVersionJSON(v))
@@ -361,7 +371,7 @@ func bindingJSON(b inventory.Binding) bindingDTO {
 	for _, l := range b.Locations {
 		out.Locations = append(out.Locations, bindingLocationDTO{
 			LocationID: l.LocationID.String(), TargetID: l.TargetID.String(), TargetName: l.TargetName, CertPath: l.CertPath,
-			State: oneOfOrBlank(l.State, bindingStates), Version: versionOrBlank(l.Version), DeploymentID: idPtr(l.DeploymentID),
+			State: oneOfOr(l.State, bindingStates, inventory.BindingLocationNotDeployed), Version: versionOrBlank(l.Version), DeploymentID: idPtr(l.DeploymentID),
 		})
 	}
 	return out
@@ -416,10 +426,15 @@ func importJSON(im inventory.KVImport) importDTO {
 		}
 		params["certificate_name"] = im.Name
 	}
+	reason := im.ErrorCode
+	if reason == "auth.forbidden" {
+		// An import ends with this reason only when its job found that the requester is no longer an Administrator.
+		reason = ErrKVImportAdminRequired.Reason
+	}
 	return importDTO{
 		ID: im.ID.String(), CertificateID: im.CertificateID.String(), TargetID: im.VaultID.String(), Name: im.Name, NewVersion: im.NewVersion,
 		State: oneOfOrBlank(im.State, importStates), Version: versionOrBlank(im.Version), Thumbprint: thumbprintOrBlank(im.Thumbprint),
-		Error: errorRef(im.ErrorCode, params), CanRetry: im.CanRetry, JobID: idPtr(im.JobID), RequestedBy: idPtr(im.RequestedBy),
+		Error: errorRef(reason, params), CanRetry: im.CanRetry, JobID: idPtr(im.JobID), RequestedBy: idPtr(im.RequestedBy),
 		CreatedAt: im.CreatedAt.UTC(), SentAt: utcPtr(im.SentAt), FinishedAt: utcPtr(im.FinishedAt),
 	}
 }
@@ -442,8 +457,15 @@ func (s *secretText) UnmarshalJSON(b []byte) error {
 		return errSecretText
 	}
 	*s = unescapeJSONString(b[1 : len(b)-1])
+	if onSecretBytes != nil {
+		onSecretBytes(*s)
+	}
 	return nil
 }
+
+// onSecretBytes sees every slice a secret field or a decoded PFX was copied into, so a test can check that the
+// handler zeroed it on every path. nil in production.
+var onSecretBytes func([]byte)
 
 func (s secretText) zero() { clear(s) }
 
@@ -522,6 +544,9 @@ func decodeBase64Secret(in secretText) ([]byte, bool) {
 	if err != nil {
 		clear(out)
 		return nil, false
+	}
+	if onSecretBytes != nil {
+		onSecretBytes(out)
 	}
 	return out[:n], true
 }

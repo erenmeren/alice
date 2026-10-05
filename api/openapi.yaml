@@ -843,7 +843,7 @@ paths:
       summary: Test the SSH connection of a server, or run a Key Vault's access check (runs as a job)
       description: >-
         For a vault the body is optional: read_secret_of, a vault certificate id, makes the job also read that
-        certificate's current secret once, which proves the Key Vault Secrets User role (409 ALC-AKV-0013 when the
+        certificate's current secret once, which proves the Key Vault Secrets User role (422 ALC-AKV-0013 when the
         key is not exportable, ALC-AKV-0021 when Alice has not read a current version). Refused with 403
         ALC-LIC-0001 while the license is locked.
       x-permission: inventory.operate
@@ -1533,7 +1533,7 @@ paths:
       x-permission: read
       parameters:
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
-        - { name: expires_before, in: query, required: false, schema: { type: string, format: date-time }, description: RFC 3339 or a date (YYYY-MM-DD) }
+        - { name: expires_before, in: query, required: false, schema: { type: string, maxLength: 40 }, description: 'An RFC 3339 date-time (2027-01-01T00:00:00Z) or a date (2027-01-01, midnight UTC); anything else is 422 validation.pattern' }
         - { name: missing, in: query, required: false, schema: { type: string, enum: [include, only] }, description: Absent hides objects the vault no longer lists }
         - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
@@ -1601,7 +1601,7 @@ paths:
       x-permission: read
       parameters:
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
-        - { name: expires_before, in: query, required: false, schema: { type: string, format: date-time }, description: RFC 3339 or a date (YYYY-MM-DD) }
+        - { name: expires_before, in: query, required: false, schema: { type: string, maxLength: 40 }, description: 'An RFC 3339 date-time (2027-01-01T00:00:00Z) or a date (2027-01-01, midnight UTC); anything else is 422 validation.pattern' }
         - { name: missing, in: query, required: false, schema: { type: string, enum: [include, only] }, description: Absent hides objects the vault no longer lists }
         - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
@@ -1623,7 +1623,7 @@ paths:
       x-permission: read
       parameters:
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
-        - { name: expires_before, in: query, required: false, schema: { type: string, format: date-time }, description: RFC 3339 or a date (YYYY-MM-DD) }
+        - { name: expires_before, in: query, required: false, schema: { type: string, maxLength: 40 }, description: 'An RFC 3339 date-time (2027-01-01T00:00:00Z) or a date (2027-01-01, midnight UTC); anything else is 422 validation.pattern' }
         - { name: missing, in: query, required: false, schema: { type: string, enum: [include, only] }, description: Absent hides objects the vault no longer lists }
         - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
@@ -1643,11 +1643,14 @@ paths:
       operationId: listKVImports
       summary: The imports into a vault, newest first
       description: >-
-        certificate_id narrows the page to one certificate. The page holds at most limit imports and there is no cursor yet
-        (next_cursor is always null).
+        certificate_id (the certificate Alice holds) and certificate_name (the name in the vault, matched by its ASCII lower-case
+        form) narrow the list in the query, before limit. next_cursor pages it; a cursor belongs to the vault it came from
+        (another vault's cursor is 422 validation.pattern). 404 for an unknown or removed vault and for a target that is not a vault.
       x-permission: read
       parameters:
         - { name: certificate_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: certificate_name, in: query, required: false, schema: { type: string, maxLength: 127, pattern: "^[0-9A-Za-z-]+$" } }
+        - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
       responses:
         "200":
@@ -1750,6 +1753,8 @@ paths:
         The websites not named are released, new ones are checked as when connecting. Adding websites to a connection that
         deploys automatically puts them under automatic deployment, so it needs an Administrator's browser session with a
         fresh step-up (403 ALC-AUTH-0003; an API token: 403 ALC-AUTH-0002; an Operator: 403 ALC-AUTH-0002); releasing websites does not.
+        The inventory repeats the check inside its transaction and is told whether the session is strict. 412 ALC-SYS-0008 when the
+        connection changed since the caller read it (the ETag), checked before anything else.
         Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.operate
       parameters:
@@ -1827,8 +1832,8 @@ paths:
       summary: Deploy now - deploy one stored version of the certificate to the connection's websites (one deployment and one job per website)
       description: >-
         version_id is the id of a version in the certificate's version list (never "the latest"); location_ids absent means every
-        website of the connection. All or nothing. Refusals: 409 ALC-AKV-0021 (details not read yet or another certificate's
-        version), 409 ALC-AKV-0014 (disabled), 422 ALC-AKV-0013 (key not exportable), 409 ALC-AKV-0015 (certificate gone), 409
+        website of the connection. All or nothing. Refusals: 409 ALC-AKV-0021 (Alice has not read the version's details yet; a version
+        id the certificate does not have is 404, like an unknown one), 409 ALC-AKV-0014 (disabled), 422 ALC-AKV-0013 (key not exportable), 409 ALC-AKV-0015 (certificate gone), 409
         ALC-AKV-0033 (vault disabled), 422 ALC-CRT-0003 and 409 ALC-CRT-0014 (expired, not yet valid), 409 ALC-CRT-0011 (an
         incomplete chain; an Administrator's confirm_incomplete_chain), and the Phase 4 refusals of a deployment. A held version
         is deployed by an Administrator only, with a fresh step-up and no API token (an Operator: 403 ALC-AKV-0022; an
@@ -1955,7 +1960,7 @@ components:
         client_secret: { type: string, writeOnly: true, description: Request only; never returned or logged }
         secret_expires_on: { type: string, format: date-time, description: When the client secret expires (optional; shown on the vault page) }
         certificate_pem: { type: string, writeOnly: true, description: The certificate registered with the application (PEM) }
-        private_key_pem: { type: string, writeOnly: true, description: Its RSA private key (PEM, unencrypted); request only }
+        private_key_pem: { type: string, writeOnly: true, description: 'Its RSA private key (PEM, unencrypted); request only' }
         pfx_base64: { type: string, writeOnly: true, description: The certificate and key as a PFX in base64; request only }
         pfx_password: { type: string, writeOnly: true, description: The PFX password; request only }
         poll_interval_minutes: { type: integer, minimum: 5, maximum: 1440, description: 0 or absent means 15 }
@@ -1998,7 +2003,7 @@ components:
       properties:
         url: { type: string, examples: ["https://contoso.vault.azure.net"] }
         name: { type: string, description: "The vault's name in Azure" }
-        auth: { type: string, enum: [certificate, client_secret, managed_identity] }
+        auth: { type: string, enum: ["", certificate, client_secret, managed_identity], description: '"" does not occur for a stored vault: the API sends it only for a value it does not know' }
         tenant_id: { type: string }
         client_id: { type: string }
         poll_interval_minutes: { type: integer }
@@ -2245,15 +2250,18 @@ components:
         certificate_id: { type: string, format: uuid }
         target_id: { type: string, format: uuid }
         name: { type: string }
-        new_version: { type: boolean, description: The name existed and the person confirmed a new version }
+        new_version: { type: boolean, description: 'The person confirmed adding a version to an existing name' }
         state:
           type: string
-          enum: [queued, running, succeeded, failed, uncertain]
-          description: 'uncertain is shown as "Not confirmed yet": the request may have reached the vault, it is never sent again, and a poll settles it'
+          enum: ["", queued, running, succeeded, failed, uncertain]
+          description: >-
+            uncertain is shown as "Not confirmed yet": the request may have reached the vault, it is never sent again, and a poll
+            settles it; an uncertain import has no error (null). "" does not occur for a stored import: the API sends it only for a
+            value it does not know, instead of inventing a state.
         version: { type: string }
         thumbprint: { type: string }
-        error: { $ref: "#/components/schemas/ErrorRef", description: 'Why a failed import failed (ALC-AKV-0023, 0025, 0026, 0029, 0030 and the azure.* codes); params.certificate_name for the name conflicts' }
-        can_retry: { type: boolean, description: Failed before anything reached the vault, so a new request is safe }
+        error: { $ref: "#/components/schemas/ErrorRef", description: 'Why a failed import failed (ALC-AKV-0023, 0025, 0026, 0029, 0030, 0038..0040 and the azure.* codes; 0040: the requester is no longer an Administrator); params.certificate_name for the name conflicts; null for an uncertain import' }
+        can_retry: { type: boolean, description: 'Failed before anything reached the vault, so a new request is safe' }
         job_id: { type: [string, "null"], format: uuid }
         requested_by: { type: [string, "null"], format: uuid }
         created_at: { type: string, format: date-time }
@@ -2264,7 +2272,7 @@ components:
       required: [items, next_cursor]
       properties:
         items: { type: array, items: { $ref: "#/components/schemas/KVImport" } }
-        next_cursor: { type: "null" }
+        next_cursor: { type: [string, "null"] }
     ImportAccepted:
       type: object
       required: [import, job_id, status_url]

@@ -198,13 +198,13 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   (`ALC-AKV-0003`). Alice checks a vault every 15 minutes by default (**Check now** runs one at once); a vault that
   fails is checked less often, at most once an hour.
 - **A website did not get the renewed certificate.** Open the vault certificate: **Connected websites** shows each
-  website's state, and **Automatic deployment** must be on. A version found while the license was expired is held for
+  website's state, and **Automatic deployment** must be on. A version that appeared while the license was not available is held for
   an administrator (`ALC-AKV-0022`); a version that is disabled, expired, not yet valid or older than the website's
   certificate is skipped and Alice emails once. After three failed deployments of one version Alice stops that
   version's wave and emails once (`Stopped after 3 failures`).
 - **An import says "Not confirmed yet".** Alice sent the certificate and did not get the vault's answer. It never
   sends it again by itself: the next check settles it as **Imported** when it sees the certificate, and after
-  24 hours as outcome unknown (`ALC-AKV-0026`).
+  24 to 72 hours as outcome unknown (`ALC-AKV-0026`).
 
 ## License messages
 
@@ -1432,11 +1432,11 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 ## ALC-AKV-0011: Azure address not allowed
 
-**Meaning.** Alice refused to connect to an address that is not Azure's, or its own environment holds a setting that would send Azure traffic elsewhere. (HTTP 502, reason `azure.address_not_allowed`.)
+**Meaning.** Alice refused to connect to an address that is not Azure's, or its own environment holds a setting that is not allowed. (HTTP 502, reason `azure.address_not_allowed`.)
 
-**Likely cause.** Alice connects only to `login.microsoftonline.com` and to the vault's own address, and refuses private-network answers for names that are not the vault's. This message also appears when `AZURE_REGIONAL_AUTHORITY_NAME`, `MSAL_FORCE_REGION` or `AZURE_SDK_GO_LOGGING` is set in Alice's environment: Alice refuses to sign in to Azure then, because those settings send traffic to other hosts or print Azure's answers to the log.
+**Likely cause.** Alice connects only to `login.microsoftonline.com` and to the vault's own address, and refuses private-network answers for names that are not the vault's. This message also appears when `AZURE_REGIONAL_AUTHORITY_NAME`, `MSAL_FORCE_REGION` or `AZURE_SDK_GO_LOGGING` is set in Alice's environment: Alice refuses to sign in to Azure then. The region variables (`AZURE_REGIONAL_AUTHORITY_NAME`, `MSAL_FORCE_REGION`) send the sign-in to another host; `AZURE_SDK_GO_LOGGING` makes the Azure library print Azure's answers to the log, which Alice never allows.
 
-**What to do.** Check that the vault's name resolves to the vault (a private endpoint's address is allowed for the vault's own name). Ask whoever runs Alice to remove the three variables above from Alice's environment (compose file, service unit or orchestrator) and restart Alice.
+**What to do.** Check that the vault's name resolves to the vault (a private endpoint's address is allowed for the vault's own name). Ask whoever runs Alice to remove the three variables above from Alice's environment (compose file, service unit or orchestrator) and restart Alice: the check is made when Alice starts a session, so a running Alice keeps failing until it is restarted with the variables gone.
 
 ## ALC-AKV-0012: Azure's certificate is not trusted
 
@@ -1456,9 +1456,9 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 ## ALC-AKV-0014: Version disabled in Key Vault
 
-**Meaning.** The version is disabled (or expired) in Key Vault, so Alice did not deploy it. (HTTP 409, reason `kv.version_disabled`.)
+**Meaning.** The version is disabled in Key Vault, so Alice did not deploy it. (HTTP 409, reason `kv.version_disabled`.)
 
-**Likely cause.** Someone disabled the version in Key Vault, or it has expired.
+**Likely cause.** Someone disabled the version in Key Vault. (An expired version is refused with `ALC-CRT-0003` instead.)
 
 **What to do.** Enable the version in Key Vault and choose **Check now**, or deploy another version.
 
@@ -1520,9 +1520,9 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 ## ALC-AKV-0022: An administrator must deploy this version
 
-**Meaning.** The version is held: it was found while the license was expired, or its certificate chain is incomplete. Only an administrator may deploy or release a held version. (HTTP 403, reason `kv.held_needs_admin`.)
+**Meaning.** The version is held: the license was not available at some point since the version appeared, or its certificate chain is incomplete. Only an administrator may deploy or release a held version. (HTTP 403, reason `kv.held_needs_admin`.)
 
-**Likely cause.** Alice never deploys a version found during a license lock by itself, and an incomplete chain needs a person's confirmation.
+**Likely cause.** Alice never deploys by itself a version that appeared while the license was locked (or that Azure created, or Alice detected, before the license came back), and an incomplete chain needs a person's confirmation.
 
 **What to do.** Ask an administrator to open the certificate and choose **Deploy now** (with a fresh verification code), or to release the version.
 
@@ -1552,9 +1552,9 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 ## ALC-AKV-0026: Import outcome unknown
 
-**Meaning.** Alice sent the import but never learned whether the vault accepted it, and no check saw the certificate within 24 hours. Alice never sends it again by itself. (HTTP 502, reason `kv.import_outcome_unknown`.)
+**Meaning.** Alice sent the import but never learned whether the vault accepted it, and no later check of the vault showed the certificate (a check can settle it for 24 to 72 hours; removing the vault ends it at once). Alice never sends it again by itself. (HTTP 502, reason `kv.import_outcome_unknown`.)
 
-**Likely cause.** The connection broke after the request reached Azure, or Azure did not answer.
+**Likely cause.** The connection broke after the request reached Azure, or Azure did not answer; or the vault was removed from Alice meanwhile.
 
 **What to do.** Open the vault in Azure and look for the certificate by its name and thumbprint. If it is there, nothing more is needed; if not, import it again.
 
@@ -1568,11 +1568,11 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 ## ALC-AKV-0028: Vault already added
 
-**Meaning.** A vault with this name or address is already added (a vault counts once, whatever its sign-in). (HTTP 409, reason `kv.vault_duplicate`.)
+**Meaning.** Alice already has a vault with this address, or a vault or a server with this name. (HTTP 409, reason `kv.vault_duplicate`.)
 
 **Likely cause.** Names are unique across servers and vaults, and a vault address can be added only once.
 
-**What to do.** Choose another name, or open the vault that already exists.
+**What to do.** Choose another name, or open the vault or server that already has it.
 
 ## ALC-AKV-0029: A certificate with this name exists in the vault
 
@@ -1584,9 +1584,9 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 ## ALC-AKV-0030: Certificate cannot be imported
 
-**Meaning.** Alice could not prepare the import: the name, the key or the file is outside what Key Vault accepts. Nothing was sent. (HTTP 422, reason `kv.import_invalid`.)
+**Meaning.** Alice could not prepare the import: the name, the key or the file is outside what Key Vault accepts, or the certificate changed in Alice after the import was requested. Nothing was sent. (HTTP 422, reason `kv.import_invalid`.)
 
-**Likely cause.** A name with characters other than letters, digits and hyphens (1 to 127), a key that is not RSA or ECDSA, or a file that cannot be read.
+**Likely cause.** A name with characters other than letters, digits and hyphens (1 to 127), a key that is not RSA or ECDSA, a file that cannot be read, or a certificate that was replaced in Alice between the request and the send.
 
 **What to do.** Use a valid name and a certificate with an RSA or ECDSA private key, then try again.
 
@@ -1604,7 +1604,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Likely cause.** An administrator switched **Automatic deployment** off (this stays possible while the license is expired).
 
-**What to do.** Deploy by hand with **Deploy now**, or switch automatic deployment on again.
+**What to do.** Deploy this version by hand with **Deploy now**. Switching automatic deployment on again applies only to versions Alice finds afterwards.
 
 ## ALC-AKV-0033: Vault is disabled or removed
 
@@ -1618,7 +1618,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Meaning.** The version is held, so the deployment did not start. Nothing was sent. (HTTP 409, reason `kv.version_held`.)
 
-**Likely cause.** A version found during a license lock, or with an incomplete chain, is held until an administrator releases it.
+**Likely cause.** A version that appeared while the license was not available, or with an incomplete chain, is held until an administrator releases it.
 
 **What to do.** An administrator can open the certificate and deploy or release the version.
 
@@ -1661,3 +1661,11 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 **Likely cause.** An administrator discarded the waiting task, it failed before the send, or Alice was restored from a backup that no longer held it.
 
 **What to do.** Import the certificate again. A new request is safe: nothing reached the vault.
+
+## ALC-AKV-0040: The person who requested the import is no longer an administrator
+
+**Meaning.** The import was requested by an administrator who, when the task ran, no longer was one (their role changed or their account was disabled), so Alice sent nothing. Importing moves a private key out of Alice and is allowed to administrators only. (HTTP 403, reason `kv.import_admin_required`; the import's record stores it as `auth.forbidden`.)
+
+**Likely cause.** The requester's role was changed or the account was disabled between the request and the moment the task ran.
+
+**What to do.** An administrator can request the import again.

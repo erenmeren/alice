@@ -713,8 +713,8 @@
       },
       "address_not_allowed": {
         "title": "Azure address not allowed",
-        "cause": "Alice connects only to Azure's public sign-in address and to the vault's own address. Either the vault's name led to an address that is not the vault's, or Alice's own environment holds a region or SDK-logging setting, which would send Azure traffic somewhere else.",
-        "action": "Check that the vault address is a public Key Vault address whose name resolves to the vault itself. Ask whoever runs Alice to remove the variables AZURE_REGIONAL_AUTHORITY_NAME, MSAL_FORCE_REGION and AZURE_SDK_GO_LOGGING from Alice's environment."
+        "cause": "Alice connects only to Azure's public sign-in address and to the vault's own address. Either the vault's name led to an address that is not the vault's, or Alice's own environment holds a setting that is not allowed: the region variables send the sign-in to another host, and the SDK-logging variable makes the Azure library print Azure's answers to the log.",
+        "action": "Check that the vault address is a public Key Vault address whose name resolves to the vault itself. Ask whoever runs Alice to remove the variables AZURE_REGIONAL_AUTHORITY_NAME, MSAL_FORCE_REGION and AZURE_SDK_GO_LOGGING from Alice's environment and to restart Alice."
       },
       "tls_untrusted": {
         "title": "Azure's certificate is not trusted",
@@ -730,7 +730,7 @@
       },
       "version_disabled": {
         "title": "Version disabled in Key Vault",
-        "cause": "This version is disabled (or expired) in Key Vault, so it was not deployed.",
+        "cause": "This version is disabled in Key Vault, so it was not deployed.",
         "action": "Enable it in Key Vault or deploy another version."
       },
       "certificate_not_found": {
@@ -770,7 +770,7 @@
       },
       "held_needs_admin": {
         "title": "An administrator must deploy this version",
-        "cause": "This version was found while the license was expired, or its certificate chain is incomplete, so only an administrator may deploy it.",
+        "cause": "This version is waiting for an administrator: the license was not available at some point since the version appeared, or its certificate chain is incomplete. Only an administrator may deploy it.",
         "action": "Ask an administrator to deploy it from the certificate's page."
       },
       "import_confirm_needed": {
@@ -790,7 +790,7 @@
       },
       "import_outcome_unknown": {
         "title": "Import outcome unknown",
-        "cause": "Alice sent the certificate to the vault but never learned whether the vault accepted it, and the vault's list did not show it within 24 hours.",
+        "cause": "Alice sent the certificate to the vault but never learned whether the vault accepted it, and no later check of the vault showed it (or the vault was removed in the meantime).",
         "action": "Open the vault in Azure and look for the certificate. If it is not there, import it again."
       },
       "client_certificate_invalid": {
@@ -800,8 +800,8 @@
       },
       "vault_duplicate": {
         "title": "Vault already added",
-        "cause": "Alice already has a vault with this name or this address.",
-        "action": "Choose another name, or open the vault that already exists."
+        "cause": "Alice already has a vault with this address, or a vault or server with this name.",
+        "action": "Choose another name, or open the vault or server that already has it."
       },
       "import_name_exists": {
         "title": "A certificate with this name exists in the vault",
@@ -810,7 +810,7 @@
       },
       "import_invalid": {
         "title": "Certificate cannot be imported",
-        "cause": "Alice could not prepare this certificate for Key Vault: its name, its key or its file is outside what Key Vault accepts. Nothing was sent.",
+        "cause": "Alice could not prepare this certificate for Key Vault: its name, its key or its file is outside what Key Vault accepts, or the certificate changed in Alice after the import was requested. Nothing was sent.",
         "action": "Use a name of letters, digits and hyphens (up to 127 characters), and a certificate with an RSA or ECDSA private key, then try again."
       },
       "binding_gone": {
@@ -821,7 +821,7 @@
       "auto_deploy_off": {
         "title": "Automatic deployment was switched off",
         "cause": "Automatic deployment of this certificate was switched off before this deployment started, so nothing was deployed.",
-        "action": "Use Deploy now, or switch automatic deployment on again."
+        "action": "Use Deploy now for this version. Switching automatic deployment on again applies only to versions Alice finds afterwards."
       },
       "vault_unavailable": {
         "title": "Vault is disabled or removed",
@@ -857,6 +857,11 @@
         "title": "Import cancelled before it was sent",
         "cause": "The task that would have sent this import ended before it sent anything (it was cancelled, failed or is gone), so nothing was sent.",
         "action": "Import the certificate again."
+      },
+      "import_admin_required": {
+        "title": "The person who requested the import is no longer an administrator",
+        "cause": "Importing a certificate into a vault moves its private key out of Alice, so only an administrator may do it. The person who asked for this import is no longer an administrator, so nothing was sent.",
+        "action": "An administrator can request the import again."
       }
     }
   },

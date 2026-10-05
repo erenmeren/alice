@@ -187,8 +187,42 @@ func authzMatrixDoc() string {
 		fmt.Fprintf(&b, "| %s | `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s |\n",
 			rt.method, rt.pattern, rt.perm, anon, role(rbac.Admin), role(rbac.Operator), role(rbac.Auditor), token, yesNo(pol.StepUp), inLock)
 	}
+	b.WriteString(authzNotes)
 	return b.String()
 }
+
+// conditionalRules are the operations whose route permission is weaker than what the request needs in one case:
+// the handler then asks for credentials.manage's strength (an Administrator's browser session with a fresh
+// step-up, never an API token), and the inventory repeats the check inside its transaction.
+var conditionalRules = []struct{ method, path string }{
+	{http.MethodDelete, "/api/v1/targets/{id}"},
+	{http.MethodPatch, "/api/v1/bindings/{id}"},
+	{http.MethodPost, "/api/v1/bindings/{id}/actions/deploy"},
+}
+
+const authzNotes = `
+## Notes
+
+**Conditional rules.** These routes are listed above with the permission that every request needs. In the cases below the
+request also needs what ` + "`credentials.manage`" + ` needs: an Administrator's browser session with a fresh step-up, and never an
+API token (403 ALC-AUTH-0003 without the step-up, 403 ALC-AUTH-0002 for a token or another role).
+
+- ` + "`DELETE /api/v1/targets/{id}?remove_bindings=true`" + `: removing a Key Vault together with its connected websites. Without
+  ` + "`remove_bindings`" + ` the route is ` + "`targets.manage`" + ` as listed. The step-up here is a convenience guard, not a boundary: an
+  Administrator without a step-up can remove each connection (` + "`DELETE /api/v1/bindings/{id}`" + `) and then the vault.
+- ` + "`PATCH /api/v1/bindings/{id}`" + `: when it adds websites to a connection that deploys automatically. Releasing websites, or any
+  change to a connection that does not deploy automatically, is ` + "`certificates.operate`" + ` as listed.
+- ` + "`POST /api/v1/bindings/{id}/actions/deploy`" + `: when the version is held (found while the license was not available, or with an
+  incomplete certificate chain). An Operator is refused with ALC-AKV-0022.
+
+**` + "`credentials.manage`" + `** is Administrator with step-up and no API token. Besides adding a Key Vault and replacing its credentials
+it gates switching automatic deployment on or off, releasing a held version and importing a certificate into a vault (a
+private key leaves Alice).
+
+**In lock.** ` + "`PUT /api/v1/bindings/{id}/auto-deploy`" + ` and ` + "`DELETE /api/v1/bindings/{id}`" + ` are open while the license is expired
+(switching automatic deployment off and removing a connection only reduce what Alice does); switching it on is refused then by
+the inventory with ALC-LIC-0001.
+`
 
 func TestAuthzMatrixDocIsCurrent(t *testing.T) {
 	path := filepath.Join("..", "..", "docs", "authz-matrix.md")
@@ -637,5 +671,21 @@ func TestRouteTableInLock(t *testing.T) {
 		}
 		assert.Equal(t, http.StatusOK, rec.Code, name)
 		assert.True(t, called, name)
+	}
+}
+
+// The notes name routes that exist and say what the matrix rows cannot.
+func TestAuthzNotesNameRealRoutesAndTheirConditions(t *testing.T) {
+	var table []string
+	for _, rt := range newServer(Deps{}).apiRoutes() {
+		table = append(table, rt.method+" "+rt.pattern)
+	}
+	for _, c := range conditionalRules {
+		assert.Contains(t, table, c.method+" "+c.path)
+		assert.Contains(t, authzNotes, c.method+" "+c.path, "the notes must name "+c.path)
+	}
+	for _, phrase := range []string{"remove_bindings=true", "adds websites to a connection that deploys automatically", "the version is held",
+		"not a boundary", "gates switching automatic deployment", "releasing a held version", "importing a certificate"} {
+		assert.Contains(t, authzNotes, phrase)
 	}
 }

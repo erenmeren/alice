@@ -64,6 +64,7 @@ var inventorySentinels = map[string]error{
 	"ErrSecretMismatch": inventory.ErrSecretMismatch, "ErrBindingGone": inventory.ErrBindingGone, "ErrAutoDeployOff": inventory.ErrAutoDeployOff,
 	"ErrVersionHeld": inventory.ErrVersionHeld, "ErrVaultUnavailable": inventory.ErrVaultUnavailable,
 	"ErrVersionSuperseded": inventory.ErrVersionSuperseded, "ErrWaveStopped": inventory.ErrWaveStopped,
+	"ErrHeldNeedsStepUp": inventory.ErrHeldNeedsStepUp, "ErrAutoDeployNeedsStepUp": inventory.ErrAutoDeployNeedsStepUp,
 	"ErrImportConfirmNeeded": inventory.ErrImportConfirmNeeded, "ErrImportInProgress": inventory.ErrImportInProgress,
 	"ErrImportState": inventory.ErrImportState, "ErrImportChanged": inventory.ErrImportChanged,
 }
@@ -75,7 +76,8 @@ var inventorySentinels = map[string]error{
 // Phase 5: ErrBindingGone, ErrAutoDeployOff and ErrVersionHeld come from KVDeployPrecheck/KVDeployMaterial (the
 // engine ends the deployment with kv.binding_gone, kv.auto_deploy_off, kv.version_held); ErrImportState and
 // ErrImportChanged are what an import job meets; ErrCredentialNotTheTargets is the database refusing what correct
-// code never sends (Z1006). A request that somehow met one is a programming error: ALC-SYS-0003.
+// code never sends (Z1006); ReplaceVaultCredentials can return it, and it answers ALC-SYS-0003 on purpose (a
+// programming error nobody can act on). A request that somehow met any of these is answered ALC-SYS-0003.
 var engineOnlySentinels = []string{"ErrDeploymentState", "ErrClaimLost", "ErrBindingGone", "ErrAutoDeployOff", "ErrVersionHeld",
 	"ErrImportState", "ErrImportChanged", "ErrCredentialNotTheTargets", "ErrVersionSuperseded", "ErrWaveStopped"}
 
@@ -467,10 +469,10 @@ var phase5Table = []struct {
 	status                         int
 	retryable                      bool
 }{
-	{"ALC-AKV-0001", "azure.auth_failed", "Azure sign-in refused", "Azure oturum açma reddedildi", 502, false},
+	{"ALC-AKV-0001", "azure.auth_failed", "Azure sign-in refused", "Azure oturum açmayı reddetti", 502, false},
 	{"ALC-AKV-0002", "azure.credentials_expired", "Azure sign-in secret expired", "Azure oturum açma gizli anahtarının süresi doldu", 502, false},
 	{"ALC-AKV-0003", "azure.forbidden", "Missing permission in the vault", "Kasada eksik izin", 502, false},
-	{"ALC-AKV-0004", "azure.firewall", "Vault firewall blocks Alice", "Kasa güvenlik duvarı Alice'i engelliyor", 502, false},
+	{"ALC-AKV-0004", "azure.firewall", "Vault firewall blocks Alice", "Kasanın güvenlik duvarı Alice'i engelliyor", 502, false},
 	{"ALC-AKV-0005", "azure.vault_not_found", "Vault not found", "Kasa bulunamadı", 502, false},
 	{"ALC-AKV-0006", "azure.unreachable", "Cannot reach Azure", "Azure'a ulaşılamıyor", 502, true},
 	{"ALC-AKV-0007", "azure.throttled", "Azure asked Alice to slow down", "Azure, Alice'ten yavaşlamasını istedi", 503, true},
@@ -490,13 +492,13 @@ var phase5Table = []struct {
 	{"ALC-AKV-0021", "kv.version_not_deployable", "Version cannot be deployed", "Sürüm dağıtılamaz", 409, false},
 	{"ALC-AKV-0022", "kv.held_needs_admin", "An administrator must deploy this version", "Bu sürümü bir yönetici dağıtmalı", 403, false},
 	{"ALC-AKV-0023", "kv.import_confirm_needed", "Name already used in the vault", "Ad kasada zaten kullanılıyor", 409, false},
-	{"ALC-AKV-0024", "kv.import_in_progress", "Import already running", "Aktarma zaten sürüyor", 409, true},
-	{"ALC-AKV-0025", "kv.import_rejected", "Key Vault refused the import", "Key Vault aktarmayı reddetti", 502, false},
-	{"ALC-AKV-0026", "kv.import_outcome_unknown", "Import outcome unknown", "Aktarmanın sonucu bilinmiyor", 502, false},
+	{"ALC-AKV-0024", "kv.import_in_progress", "Import already running", "İçe aktarma zaten sürüyor", 409, true},
+	{"ALC-AKV-0025", "kv.import_rejected", "Key Vault refused the import", "Key Vault içe aktarmayı reddetti", 502, false},
+	{"ALC-AKV-0026", "kv.import_outcome_unknown", "Import outcome unknown", "İçe aktarmanın sonucu bilinmiyor", 502, false},
 	{"ALC-AKV-0027", "kv.client_certificate_invalid", "Sign-in certificate not usable", "Oturum açma sertifikası kullanılamıyor", 422, false},
 	{"ALC-AKV-0028", "kv.vault_duplicate", "Vault already added", "Kasa zaten eklenmiş", 409, false},
 	{"ALC-AKV-0029", "kv.import_name_exists", "A certificate with this name exists in the vault", "Bu ada sahip bir sertifika kasada var", 409, false},
-	{"ALC-AKV-0030", "kv.import_invalid", "Certificate cannot be imported", "Sertifika aktarılamıyor", 422, false},
+	{"ALC-AKV-0030", "kv.import_invalid", "Certificate cannot be imported", "Sertifika içe aktarılamıyor", 422, false},
 	{"ALC-AKV-0031", "kv.binding_gone", "Website is no longer connected", "Web sitesinin bağlantısı kaldırıldı", 409, false},
 	{"ALC-AKV-0032", "kv.auto_deploy_off", "Automatic deployment was switched off", "Otomatik dağıtım kapatıldı", 409, false},
 	{"ALC-AKV-0033", "kv.vault_unavailable", "Vault is disabled or removed", "Kasa devre dışı ya da kaldırılmış", 409, false},
@@ -504,8 +506,9 @@ var phase5Table = []struct {
 	{"ALC-AKV-0035", "kv.version_not_held", "Version is not held", "Sürüm bekletilmiyor", 409, false},
 	{"ALC-AKV-0036", "kv.version_superseded", "A newer version replaced this one", "Daha yeni bir sürüm bunun yerini aldı", 409, false},
 	{"ALC-AKV-0037", "kv.wave_stopped", "Automatic deployment of this version was stopped", "Bu sürümün otomatik dağıtımı durduruldu", 409, false},
-	{"ALC-AKV-0038", "kv.import_vault_deleted", "Vault was removed before the import was sent", "Kasa, aktarma gönderilmeden önce kaldırıldı", 409, false},
-	{"ALC-AKV-0039", "kv.import_cancelled", "Import cancelled before it was sent", "Aktarma gönderilmeden önce iptal edildi", 409, false},
+	{"ALC-AKV-0038", "kv.import_vault_deleted", "Vault was removed before the import was sent", "Kasa, içe aktarma gönderilmeden önce kaldırıldı", 409, false},
+	{"ALC-AKV-0039", "kv.import_cancelled", "Import cancelled before it was sent", "İçe aktarma gönderilmeden önce iptal edildi", 409, false},
+	{"ALC-AKV-0040", "kv.import_admin_required", "The person who requested the import is no longer an administrator", "İçe aktarmayı isteyen kişi artık yönetici değil", 403, false},
 }
 
 // The 27 codes of the contract keep their numbers, reasons, statuses, retry flags and exact titles; the
@@ -585,7 +588,22 @@ func TestPhase5TextsRenderWithTheirParams(t *testing.T) {
 		require.NotNil(t, ref)
 		renderAll(t, cat, codeForReason(ref.Reason), ref.Params, "a record without params")
 	}
-	_ = phase5Params["azure.forbidden"]
+	// No rendered message may contain a raw placeholder, whatever params the source had: none, or only some.
+	for _, ec := range phase5Codes() {
+		sets := []map[string]string{nil, {}, {"reason": "x"}}
+		for k := range phase5Params[ec.Reason] {
+			sets = append(sets, map[string]string{k: phase5Params[ec.Reason][k]})
+		}
+		for _, params := range sets {
+			got, p, ok := classify(providers.NewError(ec.Reason, ec.Retryable, errors.New("cause"), params))
+			require.True(t, ok, ec.Code)
+			renderAll(t, cat, got, p, "a provider error with partial params")
+		}
+	}
+	got, p, ok := classify(providers.NewError("azure.forbidden", false, errors.New("cause"), nil))
+	require.True(t, ok)
+	assert.Equal(t, ErrAzureForbidden, got)
+	assert.Equal(t, "Key Vault Reader", p["role"], "a request-path forbidden answer names a role")
 }
 
 // Every Phase 5 code is in the troubleshooting guide with its reason, cause and remedy.
@@ -625,13 +643,12 @@ func TestPhase5TextsAreTruthfulAndWorded(t *testing.T) {
 	}
 	assert.Contains(t, en("errors.azure.address_not_allowed.cause"), "region")
 	assert.Contains(t, en("errors.azure.address_not_allowed.cause"), "SDK-logging")
-	// The duplicate vault message says "vault", never "server".
-	for _, part := range []string{"title", "cause", "action"} {
-		assert.NotContains(t, en("errors.kv.vault_duplicate."+part), "server")
-		assert.NotContains(t, tr("errors.kv.vault_duplicate."+part), "sunucu")
-	}
+	// The duplicate message names the vault first and says it can be a vault or a server that has the name
+	// (names are unique across both): the EN and TR texts say so.
 	assert.Contains(t, en("errors.kv.vault_duplicate.title"), "Vault")
 	assert.Contains(t, tr("errors.kv.vault_duplicate.title"), "Kasa")
+	assert.Contains(t, en("errors.kv.vault_duplicate.cause"), "a vault with this address")
+	assert.Contains(t, en("errors.kv.vault_duplicate.action"), "vault or server")
 	// The role is named from the param, in Azure's spelling, in both languages (F-41: "Alice needs the role").
 	assert.Contains(t, cat.T("en", "errors.azure.forbidden.action", map[string]string{"role": "Key Vault Secrets User"}), "role Key Vault Secrets User")
 	assert.Contains(t, cat.T("tr", "errors.azure.forbidden.action", map[string]string{"role": "Key Vault Secrets User"}), "Key Vault Secrets User rolünü")
@@ -653,6 +670,45 @@ func TestPhase5TextsAreTruthfulAndWorded(t *testing.T) {
 	assert.Contains(t, tr("errors.kv.auto_deploy_off.action"), "Şimdi dağıt")
 	assert.Contains(t, en("errors.kv.secret_mismatch.action"), "Check now")
 	assert.Contains(t, tr("errors.kv.secret_mismatch.action"), "Şimdi denetle")
+	// Fix round 1 (I1): no advice that is false.
+	for lang, text := range map[string]string{"en": en("errors.kv.auto_deploy_off.action"), "tr": tr("errors.kv.auto_deploy_off.action")} {
+		assert.NotContains(t, text, "or switch automatic deployment on again", lang)
+		assert.NotContains(t, text, "yeniden açın", lang)
+		assert.Contains(t, text, map[string]string{"en": "only to versions Alice finds afterwards", "tr": "yalnızca Alice'in bundan sonra bulacağı"}[lang])
+	}
+	assert.NotContains(t, en("errors.kv.held_needs_admin.cause"), "expired")
+	assert.NotContains(t, tr("errors.kv.held_needs_admin.cause"), "süresi dol")
+	assert.Contains(t, en("errors.kv.vault_duplicate.cause"), "or server")
+	assert.Contains(t, tr("errors.kv.vault_duplicate.cause"), "kasa veya sunucu")
+	assert.NotContains(t, en("errors.kv.version_disabled.cause"), "expired")
+	assert.NotContains(t, tr("errors.kv.version_disabled.cause"), "süresi dol")
+	assert.NotContains(t, en("errors.kv.version_disabled.title"), "expired")
+	assert.Contains(t, en("errors.kv.import_outcome_unknown.cause"), "no later check of the vault showed it")
+	assert.Contains(t, en("errors.kv.import_invalid.cause"), "changed in Alice after the import was requested")
+	assert.Contains(t, tr("errors.kv.import_invalid.cause"), "içe aktarma istendikten sonra Alice'te değişti")
+	// Turkish names the action "içe aktarma", never a bare "aktarma" (the label "Key Vault'a aktar" is the button's).
+	for _, ec := range phase5Codes() {
+		if !strings.HasPrefix(ec.Reason, "kv.import_") {
+			continue
+		}
+		for _, part := range []string{"title", "cause", "action"} {
+			text := tr("errors." + ec.Reason + "." + part)
+			for _, m := range regexp.MustCompile(`\p{L}*aktar\p{L}*`).FindAllStringIndex(text, -1) {
+				before := text[:m[0]]
+				assert.True(t, strings.HasSuffix(before, "içe ") || strings.HasSuffix(before, "İçe ") || strings.HasSuffix(before, "dışa "),
+					"%s %s: a bare \"aktar\" in %q", ec.Code, part, text)
+			}
+		}
+	}
+	// The variables are described truthfully: logging prints Azure's answers, the region ones send sign-in elsewhere.
+	cause := en("errors.azure.address_not_allowed.cause")
+	assert.Contains(t, cause, "print Azure's answers")
+	assert.NotContains(t, cause, "would send Azure traffic somewhere else")
+	assert.Contains(t, en("errors.azure.address_not_allowed.action"), "restart Alice")
+	assert.Contains(t, tr("errors.azure.address_not_allowed.action"), "yeniden başlat")
+	assert.Equal(t, "Azure oturum açmayı reddetti", tr("errors.azure.auth_failed.title"))
+	assert.Equal(t, "Kasanın güvenlik duvarı Alice'i engelliyor", tr("errors.azure.firewall.title"))
+	assert.Equal(t, "Web sitesi sertifikayı izleyecekse onu yeniden bağlayın.", tr("errors.kv.binding_gone.action"))
 	// Nothing was sent / changed where that is true.
 	assert.Contains(t, en("errors.kv.secret_unreadable.cause"), "Nothing was changed on your servers")
 	assert.Contains(t, en("errors.kv.import_invalid.cause"), "Nothing was sent")
@@ -682,6 +738,8 @@ func TestPhase5SentinelMapping(t *testing.T) {
 		{inventory.ErrVaultUnavailable, ErrKVVaultUnavailable},
 		{inventory.ErrImportConfirmNeeded, ErrKVImportConfirmNeeded},
 		{inventory.ErrImportInProgress, ErrKVImportInProgress},
+		{inventory.ErrHeldNeedsStepUp, ErrStepUpRequired},
+		{inventory.ErrAutoDeployNeedsStepUp, ErrStepUpRequired},
 	} {
 		got, _, ok := classify(tc.err)
 		require.True(t, ok, tc.err.Error())
@@ -735,4 +793,21 @@ func TestPhase5ParamsAreStrict(t *testing.T) {
 		assert.Equal(t, map[string]string{"role": role}, providerParams(map[string]string{"role": role}))
 	}
 	assert.Empty(t, providerParams(map[string]string{"client_address": "1.2.3"}), "characters alone are not an address")
+}
+
+// ErrCredentialNotTheTargets can come out of ReplaceVaultCredentials (the database trigger refuses a credential that is
+// not the target's) but only when Alice's own code is wrong: it answers the internal error on purpose and is logged
+// with its type, never rendered.
+func TestCredentialNotTheTargetsAnswersTheInternalError(t *testing.T) {
+	var logs bytes.Buffer
+	d := testDeps(t, nil)
+	d.Log = logging.New(&logs, slog.LevelDebug)
+	s := newServer(d)
+	_, _, ok := classify(inventory.ErrCredentialNotTheTargets)
+	assert.False(t, ok)
+	rec := httptest.NewRecorder()
+	s.fail(rec, httptest.NewRequest(http.MethodPut, "/api/v1/targets/x/vault-credentials", nil), inventory.ErrCredentialNotTheTargets)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, ErrUnexpected.Code, decodeErr(t, rec).Error.Code)
+	assert.Contains(t, logs.String(), `"msg":"request failed"`)
 }

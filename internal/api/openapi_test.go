@@ -3,8 +3,10 @@ package api
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -267,5 +269,77 @@ func TestSpecParsesAndEveryRefResolves(t *testing.T) {
 		group, ok := components[parts[0]].(map[string]any)
 		require.True(t, ok, ref)
 		assert.Contains(t, group, parts[1], "unresolved %s", ref)
+	}
+}
+
+// schemaKeywords are the keywords a schema object of this spec may use. Anything else is a typo or, as a flow
+// mapping with an unquoted comma in a description turns out, a description cut in two.
+var schemaKeywords = map[string]bool{
+	"type": true, "properties": true, "required": true, "items": true, "enum": true, "const": true, "description": true,
+	"format": true, "pattern": true, "minimum": true, "maximum": true, "exclusiveMinimum": true, "exclusiveMaximum": true,
+	"minLength": true, "maxLength": true, "minItems": true, "maxItems": true, "uniqueItems": true, "default": true,
+	"examples": true, "example": true, "additionalProperties": true, "allOf": true, "oneOf": true, "anyOf": true,
+	"$ref": true, "minProperties": true, "contentEncoding": true, "contentMediaType": true, "writeOnly": true, "readOnly": true, "nullable": true, "title": true, "deprecated": true,
+}
+
+// walkSchema checks one schema object and every schema below it.
+func walkSchema(t *testing.T, where string, v any) {
+	t.Helper()
+	m, ok := v.(map[string]any)
+	if !ok {
+		return
+	}
+	for k, c := range m {
+		if !schemaKeywords[k] && !strings.HasPrefix(k, "x-") {
+			t.Errorf("%s: unknown keyword %q in a schema (a description with an unquoted comma?)", where, k)
+			continue
+		}
+		switch k {
+		case "properties":
+			if props, ok := c.(map[string]any); ok {
+				for name, p := range props {
+					walkSchema(t, where+"."+name, p)
+				}
+			}
+		case "items", "additionalProperties":
+			walkSchema(t, where+"."+k, c)
+		case "allOf", "oneOf", "anyOf":
+			if list, ok := c.([]any); ok {
+				for i, e := range list {
+					walkSchema(t, where+"."+k+"["+strconv.Itoa(i)+"]", e)
+				}
+			}
+		case "description":
+			if _, ok := c.(string); !ok {
+				t.Errorf("%s: description is not a string", where)
+			}
+		}
+	}
+}
+
+// Every schema of the spec, and every parameter's schema, uses known keywords only, and every description is a
+// whole string.
+func TestSpecSchemasUseKnownKeywordsOnly(t *testing.T) {
+	var doc map[string]any
+	require.NoError(t, yaml.Unmarshal(apispec.YAML, &doc))
+	components := doc["components"].(map[string]any)
+	for name, s := range components["schemas"].(map[string]any) {
+		walkSchema(t, "components.schemas."+name, s)
+	}
+	for path, item := range doc["paths"].(map[string]any) {
+		walkOperation := func(where string, op map[string]any) {
+			if params, ok := op["parameters"].([]any); ok {
+				for _, p := range params {
+					if pm, ok := p.(map[string]any); ok {
+						walkSchema(t, where+" parameter "+fmt.Sprint(pm["name"]), pm["schema"])
+					}
+				}
+			}
+		}
+		for method, op := range item.(map[string]any) {
+			if om, ok := op.(map[string]any); ok {
+				walkOperation(method+" "+path, om)
+			}
+		}
 	}
 }
