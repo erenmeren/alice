@@ -354,7 +354,7 @@ func (s *Service) DeployJob(ctx context.Context, _, targetID uuid.UUID, payload 
 func (s *Service) FinishDeploy(ctx context.Context, actor audit.Actor, d DeployJob, out DeployOutcome) error {
 	switch out.Result {
 	case DeployVerified, DeployUnverified, DeployAlreadyPresent:
-		return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		return s.storeTx(ctx, func(tx pgx.Tx) error { // claim-fenced (store request S-1, item 3)
 			_, err := s.inv.RecordKeyAddedTx(ctx, tx, inventory.KeyAdded{SSHKeyID: d.KeyID, TargetID: d.TargetID, OSUser: d.OSUser,
 				FilePath: d.FilePath, Options: d.Options, Comment: d.Comment, LineNo: out.LineNo, Actor: actor,
 				Verified: out.Result == DeployVerified})
@@ -365,7 +365,7 @@ func (s *Service) FinishDeploy(ctx context.Context, actor audit.Actor, d DeployJ
 		if !closedReasonRE.MatchString(reason) {
 			reason = "internal.unexpected"
 		}
-		return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		return s.storeTx(ctx, func(tx pgx.Tx) error {
 			_, err := s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "sshkey.add_failed", ObjectType: "ssh_key",
 				ObjectID: d.KeyID.String(), Result: audit.Failure, Details: map[string]string{"ssh_key_id": d.KeyID.String(),
 					"target_id": d.TargetID.String(), "os_user": d.OSUser, "file_path": d.FilePath, "job_id": actor.RequestID,
