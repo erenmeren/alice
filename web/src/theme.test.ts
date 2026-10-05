@@ -1,4 +1,6 @@
-import { DEFAULT_THEME, defaultVariantColorsResolver, mergeMantineTheme } from '@mantine/core';
+import { DEFAULT_THEME, MantineProvider, TextInput, defaultVariantColorsResolver, mergeMantineTheme } from '@mantine/core';
+import { render, screen } from '@testing-library/react';
+import { createElement } from 'react';
 import { DANGER_HOVER, theme } from './theme';
 
 // WCAG 2.x relative luminance of a #rrggbb color.
@@ -36,5 +38,13 @@ describe('theme', () => {
   it('leaves other filled buttons alone', () => {
     const colors = full.variantColorResolver({ color: 'indigo', theme: full, variant: 'filled' });
     expect(colors.hover).not.toBe(DANGER_HOVER);
+  });
+
+  it('draws a field error in red 9, which has the contrast red 6 lacks (axe, e2e)', () => {
+    expect(contrast('#ffffff', full.colors.red[6])).toBeLessThan(4.5);
+    expect(contrast('#ffffff', full.colors.red[9])).toBeGreaterThanOrEqual(4.5);
+    const message = 'This value contains characters that are not allowed.';
+    render(createElement(MantineProvider, { theme }, createElement(TextInput, { label: 'Vault address', error: message })));
+    expect(screen.getByText(message)).toHaveStyle({ color: 'var(--mantine-color-red-9)' });
   });
 });

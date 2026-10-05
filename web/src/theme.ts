@@ -28,6 +28,7 @@ export const theme = createTheme({
   variantColorResolver,
   components: {
     // Field help texts default to the "dimmed" gray (3.3:1); gray 7 is 8.2:1.
-    InputWrapper: InputWrapper.extend({ styles: { description: { color: 'var(--mantine-color-gray-7)' } } }),
+    // Field errors default to red 6 (3.1:1 on white); red 9 is 6.1:1.
+    InputWrapper: InputWrapper.extend({ styles: { description: { color: 'var(--mantine-color-gray-7)' }, error: { color: 'var(--mantine-color-red-9)' } } }),
   },
 });
