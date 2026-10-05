@@ -15,6 +15,7 @@ import (
 
 	"alice/internal/inventory"
 	"alice/internal/providers"
+	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/sshkeys"
 )
 
@@ -72,7 +73,7 @@ func TestDeployRefusesATargetThatIsNotAServer(t *testing.T) {
 	e := newEnv(t)
 	k := e.generate("ci")
 	srv := e.server("web-01")
-	svc := sshkeys.New(sshkeys.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clock, License: e.gate,
+	svc := sshkeys.New(sshkeys.Config{HelperBudget: helperproto.HelperBudget, Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clock, License: e.gate,
 		Inventory: notAServer{e.inv}, Jobs: e.queue})
 	_, err := svc.RequestDeploy(e.ctx, e.operator, sshkeys.DeployInput{KeyID: k.ID, TargetID: srv, OSUser: "deploy",
 		FilePath: "/home/deploy/.ssh/authorized_keys"})

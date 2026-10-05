@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,29 +19,45 @@ import (
 // transaction that starts from a policy (policy edits) reads the open run's id without a lock, locks
 // that run, then the policy, and starts over when another run became open meanwhile (lockPolicyRun).
 
-// runRow is what a transition needs of a locked run.
+// runRow is what a transition needs of a run.
 type runRow struct {
-	id, policyID, oldKeyID uuid.UUID
-	status, trigger        string
-	digest, newKeyType     string
-	plannedFor             time.Time
+	id, policyID, oldKeyID          uuid.UUID
+	newKeyID                        *uuid.UUID
+	status, trigger                 string
+	digest, newKeyType              string
+	plannedFor                      time.Time
+	pausedLicense, awaitingDecision bool
+	removalAllowed                  bool
+	pausedAt, decisionDueAt         *time.Time
+	verifiedAt, overlapUntil        *time.Time
+	reminderSentAt, renotifiedAt    *time.Time
+	overlapMinutes                  int
+	resultCode                      string
+	oldFingerprint, oldLabel        string
+	newFingerprint                  string
 }
 
-// lockRun locks a run row (FOR UPDATE); ErrNotFound.
+const runSelect = `SELECT r.id, r.policy_id, r.old_ssh_key_id, r.new_ssh_key_id, r.status, r.trigger, r.plan_digest, r.new_key_type,
+    r.planned_for, r.paused_license, r.awaiting_decision, r.removal_allowed, r.paused_at, r.decision_due_at, r.verified_at,
+    r.overlap_until, r.reminder_sent_at, r.renotified_at, r.overlap_minutes, r.result_code, ok.fingerprint_sha256, ok.label,
+    coalesce(nk.fingerprint_sha256, '')
+FROM rotations r JOIN ssh_keys ok ON ok.id = r.old_ssh_key_id LEFT JOIN ssh_keys nk ON nk.id = r.new_ssh_key_id WHERE r.id = $1`
+
+// lockRun locks a run row (FOR UPDATE OF the run only); ErrNotFound.
 func lockRun(ctx context.Context, tx pgx.Tx, id uuid.UUID) (runRow, error) {
-	return scanRun(tx.QueryRow(ctx, `SELECT id, policy_id, old_ssh_key_id, status, trigger, plan_digest, new_key_type, planned_for
-FROM rotations WHERE id = $1 FOR UPDATE`, id))
+	return scanRun(tx.QueryRow(ctx, runSelect+" FOR UPDATE OF r", id))
 }
 
 // readRunRow reads a run row without a lock; ErrNotFound.
 func readRunRow(ctx context.Context, q db.Querier, id uuid.UUID) (runRow, error) {
-	return scanRun(q.QueryRow(ctx, `SELECT id, policy_id, old_ssh_key_id, status, trigger, plan_digest, new_key_type, planned_for
-FROM rotations WHERE id = $1`, id))
+	return scanRun(q.QueryRow(ctx, runSelect, id))
 }
 
 func scanRun(row pgx.Row) (runRow, error) {
 	var r runRow
-	err := row.Scan(&r.id, &r.policyID, &r.oldKeyID, &r.status, &r.trigger, &r.digest, &r.newKeyType, &r.plannedFor)
+	err := row.Scan(&r.id, &r.policyID, &r.oldKeyID, &r.newKeyID, &r.status, &r.trigger, &r.digest, &r.newKeyType, &r.plannedFor,
+		&r.pausedLicense, &r.awaitingDecision, &r.removalAllowed, &r.pausedAt, &r.decisionDueAt, &r.verifiedAt, &r.overlapUntil,
+		&r.reminderSentAt, &r.renotifiedAt, &r.overlapMinutes, &r.resultCode, &r.oldFingerprint, &r.oldLabel, &r.newFingerprint)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return runRow{}, ErrNotFound
 	}
@@ -48,8 +65,13 @@ func scanRun(row pgx.Row) (runRow, error) {
 		return runRow{}, fmt.Errorf("sshkeys: read the rotation: %w", err)
 	}
 	r.plannedFor = r.plannedFor.UTC()
+	r.pausedAt, r.decisionDueAt, r.verifiedAt = utcPtr(r.pausedAt), utcPtr(r.decisionDueAt), utcPtr(r.verifiedAt)
+	r.overlapUntil, r.reminderSentAt, r.renotifiedAt = utcPtr(r.overlapUntil), utcPtr(r.reminderSentAt), utcPtr(r.renotifiedAt)
 	return r, nil
 }
+
+// finished reports whether the run's status is terminal.
+func (r runRow) finished() bool { return slices.Contains(finishedList, r.status) }
 
 // appendStep records one step of a run (rotation_steps, append-only). The caller holds the run's
 // row lock, which serializes the step numbers.

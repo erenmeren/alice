@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -61,28 +62,36 @@ type Config struct {
 	// composition root leaves it nil or passes crypto/rand.Reader). RSA and ECDSA keys always use
 	// the standard library's own randomness (keymat.Generate).
 	Rand io.Reader
+	// HelperBudget is how long one helper call may work on a server (helperproto.HelperBudget, which
+	// the composition root passes): an undo after an add without a definite answer waits this long
+	// plus 30 s after the add was sent (S3). Required.
+	HelperBudget time.Duration
 }
 
 // Service is the SSH key module.
 type Service struct {
-	pool     *pgxpool.Pool
-	keyring  *secrets.Keyring
-	audit    *audit.Log
-	clock    clock.Clock
-	license  LicenseGate
-	inv      Inventory
-	jobs     inventory.Enqueuer
-	notifier Notifier
-	log      *slog.Logger
-	randMu   sync.Mutex // Config.Rand need not be safe for concurrent use
-	rand     io.Reader
-	randSafe bool // rand is crypto/rand's Reader: no randMu needed
+	pool         *pgxpool.Pool
+	keyring      *secrets.Keyring
+	audit        *audit.Log
+	clock        clock.Clock
+	license      LicenseGate
+	inv          Inventory
+	jobs         inventory.Enqueuer
+	notifier     Notifier
+	log          *slog.Logger
+	randMu       sync.Mutex // Config.Rand need not be safe for concurrent use
+	rand         io.Reader
+	randSafe     bool // rand is crypto/rand's Reader: no randMu needed
+	helperBudget time.Duration
 }
 
 // New builds the module.
 func New(c Config) *Service {
 	s := &Service{pool: c.Pool, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, license: c.License, inv: c.Inventory,
-		jobs: c.Jobs, notifier: c.Notifier, log: c.Log, rand: c.Rand}
+		jobs: c.Jobs, notifier: c.Notifier, log: c.Log, rand: c.Rand, helperBudget: c.HelperBudget}
+	if c.HelperBudget <= 0 {
+		panic("sshkeys: Config.HelperBudget must be set (helperproto.HelperBudget)")
+	}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
 	}

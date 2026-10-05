@@ -103,6 +103,10 @@ func getPolicy(ctx context.Context, q db.Querier, id uuid.UUID, lock bool) (poli
 	return scanPolicy(q.QueryRow(ctx, sql, id))
 }
 
+// onPolicyRead runs between the unlocked read of the open run and the policy lock (tests only; nil
+// in production).
+var onPolicyRead func()
+
 // errConcurrentRun: another run of the policy became open between the unlocked read and the lock.
 var errConcurrentRun = errors.New("sshkeys: a run of the policy changed while it was locked")
 
@@ -122,19 +126,29 @@ func lockPolicyRun(ctx context.Context, tx pgx.Tx, id uuid.UUID) (policyRow, *ru
 		}
 		run = &r
 	}
+	if onPolicyRead != nil {
+		onPolicyRead()
+	}
 	p, err := getPolicy(ctx, tx, id, true)
 	if err != nil {
 		return policyRow{}, nil, err
 	}
-	switch {
-	case run != nil && slices.Contains(finishedList, run.status):
+	// The open run read again in its own statement, after the policy lock (a fresh snapshot): a run
+	// created by a transaction that held the policy lock while this one waited is seen here (Task 8
+	// review I1); the subquery of the locking statement could not see it.
+	var now *uuid.UUID
+	err = tx.QueryRow(ctx, "SELECT id FROM rotations WHERE policy_id = $1 AND status NOT IN "+finishedStatuses, id).Scan(&now)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return policyRow{}, nil, fmt.Errorf("sshkeys: read the policy's open run: %w", err)
+	}
+	if run != nil && slices.Contains(finishedList, run.status) {
 		run = nil // finished between the read and the lock
-		if p.OpenRotationID != nil {
-			return policyRow{}, nil, errConcurrentRun
-		}
-	case run == nil && p.OpenRotationID != nil, run != nil && (p.OpenRotationID == nil || *p.OpenRotationID != run.id):
+	}
+	switch {
+	case run == nil && now != nil, run != nil && (now == nil || *now != run.id):
 		return policyRow{}, nil, errConcurrentRun
 	}
+	p.OpenRotationID = now
 	return p, run, nil
 }
 

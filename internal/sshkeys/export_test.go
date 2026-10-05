@@ -33,3 +33,10 @@ func OnOpenedKey(t *testing.T, fn func(b []byte)) {
 		}
 	})
 }
+
+// OnPolicyRead makes fn run between the unlocked read of a policy's open run and the policy lock.
+func OnPolicyRead(t *testing.T, fn func()) {
+	t.Helper()
+	onPolicyRead = fn
+	t.Cleanup(func() { onPolicyRead = nil })
+}

@@ -20,8 +20,11 @@ var (
 	ErrRotationInProgress = errors.New("sshkeys: a rotation of this key is running")
 	ErrPlanChanged        = errors.New("sshkeys: the plan changed since the preview")
 	ErrNothingToRotate    = errors.New("sshkeys: no location can change")
-	ErrVersionMismatch    = inventory.ErrVersionMismatch
-	ErrOwnKeyProtected    = inventory.ErrOwnKeyProtected
+	ErrNotWaiting         = errors.New("sshkeys: the rotation is not waiting for this action")
+	// ErrPlanTooLarge: the plan has more locations than a run can hold (reason rotation.plan_too_large).
+	ErrPlanTooLarge    = errors.New("sshkeys: the plan has too many locations for one run")
+	ErrVersionMismatch = inventory.ErrVersionMismatch
+	ErrOwnKeyProtected = inventory.ErrOwnKeyProtected
 )
 
 // errUndecryptable: the envelope does not open with this master key (another key, a damaged row).

@@ -135,11 +135,14 @@ func (s *Service) RunNow(ctx context.Context, a inventory.Actor, policyID uuid.U
 	if err != nil {
 		return Rotation{}, err
 	}
-	if err := s.start(ctx, runID, a); err != nil {
+	if err := s.start(ctx, runID, a, false); err != nil {
 		return Rotation{}, err
 	}
 	return s.Rotation(ctx, runID)
 }
+
+// errNoticePending: a scheduled run's notice is not delivered yet; the run waits (S1).
+var errNoticePending = errors.New("sshkeys: the run's notice was not delivered yet")
 
 // start moves a previewed run to adding_new (C8 "dry_run_notified → adding_new"; Task 9's Advance
 // calls it for a scheduled run). The new key is generated outside the transaction in a generation
@@ -149,13 +152,19 @@ func (s *Service) RunNow(ctx context.Context, a inventory.Actor, policyID uuid.U
 // then the new key is stored (rotated_from = the old key, the old key's label, a comment of today),
 // set on the run with the status, the policy's next run counted from now, and one rotation.location
 // job (phase add) queued per planned location.
-func (s *Service) start(ctx context.Context, runID uuid.UUID, a inventory.Actor) error {
+func (s *Service) start(ctx context.Context, runID uuid.UUID, a inventory.Actor, automatic bool) error {
 	run, err := readRunRow(ctx, s.pool, runID)
 	if err != nil {
 		return err
 	}
 	if run.status != StatusDryRunNotified {
 		return nil
+	}
+	if automatic && run.trigger == TriggerScheduled {
+		// Checked before a key is generated, and again under the lock below (the single S1 gate).
+		if ok, err := s.noticeDelivered(ctx, s.pool, runID); err != nil || !ok {
+			return errors.Join(err, errIf(err == nil, errNoticePending))
+		}
 	}
 	m, err := s.generate(ctx, keymat.KeyType(run.newKeyType))
 	if err != nil {
@@ -173,6 +182,20 @@ func (s *Service) start(ctx context.Context, runID uuid.UUID, a inventory.Actor)
 			return err
 		}
 		now := s.clock.Now().UTC()
+		if run.trigger == TriggerScheduled && (pol.deleted || !pol.Enabled) {
+			// A scheduled run of a policy that was switched off or deleted never starts (Task 8 review I1).
+			changed = true
+			return s.cancelRun(ctx, tx, a.Audit, run, ReasonPolicyOff)
+		}
+		if automatic && run.trigger == TriggerScheduled {
+			delivered, err := s.noticeDelivered(ctx, tx, runID)
+			if err != nil {
+				return err
+			}
+			if !delivered {
+				return errNoticePending // S1: never started without the delivered notice
+			}
+		}
 		in, oldKey, err := s.loadPlanInput(ctx, tx, pol, now, true)
 		if err != nil {
 			return err

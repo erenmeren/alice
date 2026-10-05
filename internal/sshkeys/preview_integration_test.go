@@ -333,6 +333,7 @@ func TestRunNowRefusesAScheduledRunWhosePlanChanged(t *testing.T) {
 
 func TestTemplates(t *testing.T) {
 	assert.Equal(t, []string{"rotation.preview", "rotation.preview_after_license", "rotation.overlap_started", "rotation.overlap_ending",
-		"rotation.completed", "rotation.aborted", "rotation.needs_attention", "rotation.paused_license", "rotation.decision_needed"},
+		"rotation.completed", "rotation.aborted", "rotation.needs_attention", "rotation.paused_license", "rotation.decision_needed",
+		"rotation.completed_partial"},
 		sshkeys.Templates())
 }

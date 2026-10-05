@@ -34,6 +34,7 @@ import (
 	"alice/internal/platform/clock"
 	"alice/internal/providers"
 	"alice/internal/providers/fake"
+	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/rbac"
 	"alice/internal/secrets"
 	"alice/internal/sshkeys"
@@ -128,14 +129,20 @@ type env struct {
 	svc      *sshkeys.Service
 	admin    inventory.Actor
 	operator inventory.Actor
-	n        int // names of helper targets
+	n        int       // names of helper targets
+	claim    uuid.UUID // the running job of claimed()
 }
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	e := &env{t: t, ctx: context.Background(), db: pgtest.New(t), clock: clock.NewFake(start), logs: &syncBuffer{}}
 	e.notifier = &recordingNotifier{next: notify.AdminNotifier{Clock: e.clock}}
-	var err error
+	// A lock-order mistake fails fast with SQLSTATE 55P03 instead of hanging the suite.
+	var dbName string
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT current_database()").Scan(&dbName))
+	_, err := e.db.Owner.Exec(e.ctx, "ALTER DATABASE "+pgx.Identifier{dbName}.Sanitize()+" SET lock_timeout = '10s'")
+	require.NoError(t, err)
+	e.db.App.Reset()
 	e.keyring, err = secrets.LoadOrCreateMasterKey(e.ctx, e.db.App, t.TempDir(), e.clock.Now())
 	require.NoError(t, err)
 	e.audit = audit.New(e.clock)
@@ -162,7 +169,7 @@ func newEnv(t *testing.T) *env {
 // newService builds the module on the environment with a keyring (another master key: a
 // decryption failure).
 func (e *env) newService(k *secrets.Keyring) *sshkeys.Service {
-	return sshkeys.New(sshkeys.Config{Pool: e.db.App, Keyring: k, Audit: e.audit, Clock: e.clock, License: e.gate, Inventory: e.inv,
+	return sshkeys.New(sshkeys.Config{HelperBudget: helperproto.HelperBudget, Pool: e.db.App, Keyring: k, Audit: e.audit, Clock: e.clock, License: e.gate, Inventory: e.inv,
 		Jobs: e.queue, Notifier: e.notifier, Log: slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 }
 

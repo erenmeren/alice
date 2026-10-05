@@ -16,6 +16,7 @@ import (
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
+	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/secrets"
 	"alice/internal/sshkeys"
 	"alice/internal/sshkeys/keymat"
@@ -201,7 +202,7 @@ VALUES ($1, $2, $3, 'manual', 'dry_run_notified', '{}', repeat('a', 64), 'ed2551
 func TestGenerateWithAGivenReader(t *testing.T) {
 	e := newEnv(t)
 	seed := bytes.Repeat([]byte{7}, 64)
-	svc := sshkeys.New(sshkeys.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clock, License: e.gate, Inventory: e.inv,
+	svc := sshkeys.New(sshkeys.Config{HelperBudget: helperproto.HelperBudget, Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clock, License: e.gate, Inventory: e.inv,
 		Jobs: e.queue, Rand: bytes.NewReader(seed)})
 	k, err := svc.Generate(e.ctx, inventorySystem(), sshkeys.GenerateInput{Label: "seeded"})
 	require.NoError(t, err)

@@ -185,9 +185,15 @@ func (s *Service) insertRun(ctx context.Context, tx pgx.Tx, pol policyRow, key k
 	if p.Changes == 0 {
 		return uuid.Nil, ErrNothingToRotate
 	}
+	if len(p.Actions) > maxPlanActions {
+		return uuid.Nil, ErrPlanTooLarge
+	}
 	raw, err := json.Marshal(p)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("sshkeys: encode the plan: %w", err)
+	}
+	if len(raw) > maxPlanBytes {
+		return uuid.Nil, ErrPlanTooLarge // before the database's CHECK refuses it
 	}
 	id, now := uuid.Must(uuid.NewV7()), s.clock.Now().UTC()
 	if _, err := tx.Exec(ctx, `INSERT INTO rotations (id, policy_id, old_ssh_key_id, trigger, status, plan, plan_digest, new_key_type,

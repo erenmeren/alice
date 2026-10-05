@@ -29,10 +29,34 @@ const (
 	// NoticeGrace: a scheduled run whose rotation.preview was not delivered to any Administrator by
 	// this long after its planned start is cancelled (S1).
 	NoticeGrace = 24 * time.Hour
+	// DecisionWindow is how long a run waits for an Administrator's decision on locations Alice
+	// cannot test (plan.DecisionDue).
+	DecisionWindow = 14 * 24 * time.Hour
+	// ReverifyFreshness bounds the age of the re-check a removal relies on (plan.Fresh; the database
+	// CHECK too).
+	ReverifyFreshness = 15 * time.Minute
+	// MaxLocationJobs bounds the sweep's re-queues of a location's job per phase.
+	MaxLocationJobs = 5
+	// maxPlanActions and maxPlanBytes are what the database stores of a plan (rotation_locations.n,
+	// rotations.plan): insertRun refuses a larger plan with ErrPlanTooLarge first.
+	maxPlanActions = 10000
+	maxPlanBytes   = 2 << 20
 )
 
-// Result codes of runs (rotations.result_code; Task 13 maps them to ALC codes).
+// Result codes of runs and error codes of locations (closed; Task 13 maps them to ALC codes).
 const (
+	ReasonAddFailed         = "rotation.add_failed"
+	ReasonVerifyFailed      = "rotation.verify_failed"
+	ReasonUndoFailed        = "rotation.undo_failed"
+	ReasonRemoveIncomplete  = "rotation.remove_incomplete"
+	ReasonDecisionTimeout   = "rotation.decision_timeout"
+	ReasonStopped           = "rotation.stopped"
+	ReasonNewKeyFailed      = "rotation.new_key_failed"
+	ReasonRetriesExhausted  = "rotation.retries_exhausted"
+	ReasonOldKeyGone        = "rotation.old_key_gone"   // S12 (ALC-ROT-0018)
+	ReasonPlanTooLarge      = "rotation.plan_too_large" // a plan the database could not store
+	ReasonPausedLicense     = "rotation.paused_license"
+	ReasonLoginFailed       = "sshkey.login_failed"
 	ReasonPolicyOff         = "rotation.policy_off"
 	ReasonPlanChanged       = "rotation.plan_changed"
 	ReasonCancelledLicense  = "rotation.cancelled_license"

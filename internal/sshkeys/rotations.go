@@ -2,9 +2,12 @@ package sshkeys
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,6 +55,7 @@ type Rotation struct {
 	PlannedFor, NotifiedAt                          time.Time
 	StartedAt, VerifiedAt, OverlapUntil, FinishedAt *time.Time
 	ResultCode                                      string
+	KeptCount                                       int // where the old key stays (skipped, kept_old; S11)
 	Locations                                       []RotationLocation
 	Steps                                           []Step
 	Version                                         int
@@ -100,11 +104,11 @@ func readRotation(ctx context.Context, q db.Querier, id uuid.UUID, steps bool) (
 	)
 	err := q.QueryRow(ctx, `SELECT r.id, r.policy_id, r.old_ssh_key_id, r.new_ssh_key_id, ok.fingerprint_sha256, coalesce(nk.fingerprint_sha256, ''),
     r.trigger, r.status, r.paused_license, r.awaiting_decision, r.decision_due_at, r.plan, r.plan_digest, r.new_key_type, r.overlap_minutes,
-    r.planned_for, r.notified_at, r.started_at, r.verified_at, r.overlap_until, r.finished_at, r.result_code, r.version
+    r.planned_for, r.notified_at, r.started_at, r.verified_at, r.overlap_until, r.finished_at, r.result_code, r.version, r.kept_count
 FROM rotations r JOIN ssh_keys ok ON ok.id = r.old_ssh_key_id LEFT JOIN ssh_keys nk ON nk.id = r.new_ssh_key_id WHERE r.id = $1`, id).Scan(
 		&r.ID, &r.PolicyID, &r.OldKeyID, &r.NewKeyID, &r.OldFingerprint, &r.NewFingerprint, &r.Trigger, &r.Status, &r.PausedLicense,
 		&r.AwaitingDecision, &r.DecisionDueAt, &rawPlan, &r.Digest, &r.NewKeyType, &r.OverlapMinutes, &r.PlannedFor, &r.NotifiedAt,
-		&r.StartedAt, &r.VerifiedAt, &r.OverlapUntil, &r.FinishedAt, &r.ResultCode, &r.Version)
+		&r.StartedAt, &r.VerifiedAt, &r.OverlapUntil, &r.FinishedAt, &r.ResultCode, &r.Version, &r.KeptCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Rotation{}, ErrNotFound
 	}
@@ -179,4 +183,104 @@ func orNil(id *uuid.UUID) uuid.UUID {
 		return uuid.Nil
 	}
 	return *id
+}
+
+// RotationFilter selects runs for a list.
+type RotationFilter struct {
+	PolicyID, KeyID uuid.UUID // uuid.Nil = any; KeyID matches the old or the new key
+	Cursor          string
+	Limit           int // 1..200, default 50
+}
+
+// ErrBadCursor: the list cursor is not one this service returned.
+var ErrBadCursor = errors.New("sshkeys: the cursor is not valid")
+
+// Rotations lists runs newest first, without their steps; the returned cursor is "" on the last page.
+func (s *Service) Rotations(ctx context.Context, f RotationFilter) ([]Rotation, string, error) {
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	limit = min(limit, 200)
+	var afterAt *time.Time
+	var afterID *uuid.UUID
+	if f.Cursor != "" {
+		at, id, err := decodeRotationCursor(f.Cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		afterAt, afterID = &at, &id
+	}
+	var out []Rotation
+	next := ""
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id, created_at FROM rotations
+WHERE ($1::uuid IS NULL OR policy_id = $1) AND ($2::uuid IS NULL OR old_ssh_key_id = $2 OR new_ssh_key_id = $2)
+  AND ($3::timestamptz IS NULL OR (created_at, id) < ($3, $4::uuid))
+ORDER BY created_at DESC, id DESC LIMIT $5`, nilUUID(f.PolicyID), nilUUID(f.KeyID), afterAt, afterID, limit+1)
+		if err != nil {
+			return fmt.Errorf("sshkeys: list rotations: %w", err)
+		}
+		type ref struct {
+			id uuid.UUID
+			at time.Time
+		}
+		refs, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (ref, error) {
+			var x ref
+			err := r.Scan(&x.id, &x.at)
+			return x, err
+		})
+		if err != nil {
+			return fmt.Errorf("sshkeys: list rotations: %w", err)
+		}
+		if len(refs) > limit {
+			refs = refs[:limit]
+			last := refs[limit-1]
+			next = encodeRotationCursor(last.at, last.id)
+		}
+		out = make([]Rotation, 0, len(refs))
+		for _, x := range refs {
+			r, err := readRotation(ctx, tx, x.id, false)
+			if err != nil {
+				return err
+			}
+			out = append(out, r)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return out, next, nil
+}
+
+func nilUUID(id uuid.UUID) *uuid.UUID {
+	if id == uuid.Nil {
+		return nil
+	}
+	return &id
+}
+
+func encodeRotationCursor(at time.Time, id uuid.UUID) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(at.UnixMicro(), 10) + "|" + id.String()))
+}
+
+func decodeRotationCursor(c string) (time.Time, uuid.UUID, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(c)
+	if err != nil {
+		return time.Time{}, uuid.Nil, ErrBadCursor
+	}
+	at, id, ok := strings.Cut(string(raw), "|")
+	if !ok {
+		return time.Time{}, uuid.Nil, ErrBadCursor
+	}
+	micros, err := strconv.ParseInt(at, 10, 64)
+	if err != nil || micros < 0 || micros > 253402300799999999 {
+		return time.Time{}, uuid.Nil, ErrBadCursor
+	}
+	u, err := uuid.Parse(id)
+	if err != nil {
+		return time.Time{}, uuid.Nil, ErrBadCursor
+	}
+	return time.UnixMicro(micros).UTC(), u, nil
 }

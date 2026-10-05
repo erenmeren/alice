@@ -1,6 +1,8 @@
 package sshkeys
 
 import (
+	"context"
+	"encoding/base64"
 	"errors"
 	"regexp"
 	"strings"
@@ -139,4 +141,71 @@ func TestToPlanInput(t *testing.T) {
 	tg.Facts.Warnings = []providers.Warning{{Code: "sshd_unreadable", Params: map[string]string{}}}
 	in = toPlanInput(key, nil, map[uuid.UUID]inventory.Target{tid: tg}, nil, Policy{}, now)
 	assert.False(t, in.Targets[tid].SSHDRead, "a server-wide unreadable warning")
+}
+
+// An oversized plan is refused with a closed reason before anything is written (the transaction is
+// not even used).
+func TestInsertRunRefusesAnOversizedPlan(t *testing.T) {
+	s := &Service{}
+	many := plan.Plan{Changes: 1, Actions: make([]plan.Action, maxPlanActions+1)}
+	_, err := s.insertRun(context.Background(), nil, policyRow{}, keyRow{}, many, "", TriggerManual, time.Time{}, inventory.Actor{})
+	assert.ErrorIs(t, err, ErrPlanTooLarge)
+	big := plan.Plan{Changes: 1, Actions: []plan.Action{{AddLine: strings.Repeat("a", maxPlanBytes)}}}
+	_, err = s.insertRun(context.Background(), nil, policyRow{}, keyRow{}, big, "", TriggerManual, time.Time{}, inventory.Actor{})
+	assert.ErrorIs(t, err, ErrPlanTooLarge)
+	assert.Equal(t, "rotation.plan_too_large", ReasonPlanTooLarge)
+}
+
+func TestAllowedActions(t *testing.T) {
+	verified := []RotationLocation{{State: LocVerified}, {State: LocUnverifiable}}
+	for _, c := range []struct {
+		r    Rotation
+		gate bool
+		want []string
+	}{
+		{Rotation{Status: StatusDryRunNotified}, true, []string{"abort"}},
+		{Rotation{Status: StatusDryRunNotified}, false, []string{}},
+		{Rotation{Status: StatusAddingNew, PausedLicense: true}, true, []string{"continue", "abort"}},
+		{Rotation{Status: StatusAddingNew, PausedLicense: true}, false, []string{}},
+		{Rotation{Status: StatusOverlap}, true, []string{"finish_now", "abort"}},
+		{Rotation{Status: StatusOverlap, PausedLicense: true}, true, []string{"continue", "abort"}},
+		{Rotation{Status: StatusVerifyingNew, AwaitingDecision: true, Locations: verified}, true, []string{"keep_old", "abort"}},
+		{Rotation{Status: StatusVerifyingNew, AwaitingDecision: true, Locations: verified[1:]}, false, []string{}},
+		{Rotation{Status: StatusRemovingOld}, true, []string{}},
+		{Rotation{Status: StatusCompleted, PausedLicense: true}, true, []string{}},
+	} {
+		assert.Equal(t, c.want, AllowedActions(c.r, c.gate), "%+v %v", c.r.Status, c.gate)
+	}
+}
+
+func TestSmallStoreHelpers(t *testing.T) {
+	assert.Equal(t, "fallback", closedReason("", "fallback"))
+	assert.Equal(t, "internal.unexpected", closedReason("free text", "x"))
+	assert.Equal(t, "a.b", closedReason("a.b", "x"))
+	assert.Nil(t, lineNoOrNil(0))
+	assert.Equal(t, 3, *lineNoOrNil(3))
+	assert.Equal(t, "", backupText(strings.Repeat("b", 201)))
+	assert.Equal(t, "", backupText("a\x00"))
+	assert.Equal(t, "/x.bak", backupText("/x.bak"))
+	assert.Equal(t, "continued", stepOf("rotation.continued"))
+	assert.Equal(t, "plain", stepOf("plain"))
+	assert.Nil(t, errIf(false, ErrNotYourTurn))
+	_, _, err := decodeRotationCursor("!!")
+	assert.ErrorIs(t, err, ErrBadCursor)
+	_, _, err = decodeRotationCursor(base64.RawURLEncoding.EncodeToString([]byte("x")))
+	assert.ErrorIs(t, err, ErrBadCursor)
+	_, _, err = decodeRotationCursor(base64.RawURLEncoding.EncodeToString([]byte("x|y")))
+	assert.ErrorIs(t, err, ErrBadCursor)
+	_, _, err = decodeRotationCursor(base64.RawURLEncoding.EncodeToString([]byte("1|y")))
+	assert.ErrorIs(t, err, ErrBadCursor)
+	id := uuid.New()
+	at, got, err := decodeRotationCursor(encodeRotationCursor(time.UnixMicro(5).UTC(), id))
+	require.NoError(t, err)
+	assert.Equal(t, id, got)
+	assert.Equal(t, time.UnixMicro(5).UTC(), at)
+	assert.Nil(t, nilUUID(uuid.Nil))
+	assert.True(t, uncertainAdd(locRow{state: LocAddFailed, errorCode: ReasonRetriesExhausted, addSentAt: &at}))
+	assert.False(t, uncertainAdd(locRow{state: LocAddFailed, errorCode: "ssh.helper_refused", addSentAt: &at}))
+	assert.False(t, uncertainAdd(locRow{state: LocVerified, addSentAt: &at}))
+	assert.Panics(t, func() { New(Config{}) }, "HelperBudget is required")
 }
