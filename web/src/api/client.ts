@@ -87,6 +87,9 @@ export interface FetchOptions {
   publicRoute?: boolean;
   // keepalive lets the request finish after the page is closed (the activity flush on pagehide).
   keepalive?: boolean;
+  // responseType 'blob' returns a successful answer as a Blob (a file download); an error answer is still read as
+  // text and parsed as always. The default is 'json'.
+  responseType?: 'json' | 'blob';
 }
 
 function parseRetryAfter(value: string | null): number | null {
@@ -105,7 +108,8 @@ function parseErrorBody(text: string): ApiErrorBody['error'] | null {
 
 export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
   const method = opts.method ?? 'GET';
-  const headers: Record<string, string> = { ...opts.headers, Accept: 'application/json' };
+  const blob = opts.responseType === 'blob';
+  const headers: Record<string, string> = { ...opts.headers, Accept: blob ? 'application/octet-stream, application/json' : 'application/json' };
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (method !== 'GET' && csrfToken) headers['X-CSRF-Token'] = csrfToken;
   const url = new URL(path, window.location.origin);
@@ -137,6 +141,14 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
   // A rate-limited or failed answer may not have recorded the activity either.
   if (tookMark && (res.status === 429 || res.status >= 500)) returnActivity();
   if (res.status === 204) return undefined as T;
+  if (blob && res.ok) {
+    try {
+      return (await res.blob()) as T;
+    } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') throw e;
+      throw new NetworkError('network failure', { cause: e });
+    }
+  }
   let text: string;
   try {
     text = await res.text();

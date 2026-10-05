@@ -1,0 +1,201 @@
+import { Alert, Button, Checkbox, Group, Loader, NativeSelect, Stack, Text, TextInput } from '@mantine/core';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
+import { listAllTargets } from '../api/endpoints';
+import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
+import { keyFiles, sshKey, SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
+import { deployKey, getKeyFiles } from '../api/sshkeys';
+import type { JobError, Target } from '../api/types';
+import { useAbort } from '../api/useAbort';
+import { AppModal } from './AppModal';
+import { ErrorAlert } from './ErrorAlert';
+import { fieldErrorsOf } from './fieldErrors';
+import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert, StoppedJobAlert } from './JobErrorAlert';
+
+// isDeployable: a Linux or Nginx server whose host key is confirmed (Alice can sign in to it).
+const isDeployable = (tg: Target) => (tg.type === 'linux' || tg.type === 'nginx') && tg.status !== 'pending_host_key';
+
+interface UserFiles {
+  os_user: string;
+  files: string[];
+  default_file: string;
+}
+
+// offered drops what the server must never be asked to change (S7): the connection account's own entry, and any file
+// that account's entry lists, wherever else it appears. The server enforces the same; the screen does not offer it.
+function offered(items: UserFiles[], connectionUser: string): UserFiles[] {
+  const own = new Set(items.filter((i) => i.os_user === connectionUser).flatMap((i) => i.files));
+  return items
+    .filter((i) => i.os_user !== connectionUser)
+    .map((i) => {
+      const files = i.files.filter((f) => !own.has(f));
+      return { ...i, files, default_file: files.includes(i.default_file) ? i.default_file : (files[0] ?? '') };
+    })
+    .filter((i) => i.files.length > 0);
+}
+
+function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) {
+  const { t, i18n } = useTranslation();
+  const client = useQueryClient();
+  const abort = useAbort();
+  const [pickedServer, setPickedServer] = useState('');
+  const [pickedUser, setPickedUser] = useState('');
+  const [pickedFile, setPickedFile] = useState('');
+  const [from, setFrom] = useState('');
+  const [restrict, setRestrict] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [jobError, setJobError] = useState<JobError | null>(null);
+  const [blocked, setBlocked] = useState(false);
+  const [stopped, setStopped] = useState(false);
+  const [result, setResult] = useState('');
+
+  const targets = useQuery({
+    queryKey: [...TARGETS_KEY, 'deploy-servers'],
+    queryFn: async () => (await listAllTargets()).items.filter(isDeployable),
+  });
+  const servers = targets.data ?? [];
+  const server = servers.find((s) => s.id === pickedServer) ?? servers[0];
+  const files = useQuery({
+    queryKey: keyFiles(server?.id ?? ''),
+    queryFn: () => getKeyFiles(server?.id ?? ''),
+    enabled: !!server,
+  });
+  const users = server ? offered(files.data?.items ?? [], server.username) : [];
+  const user = users.find((u) => u.os_user === pickedUser) ?? users[0];
+  const file = user?.files.find((f) => f === pickedFile) ?? user?.default_file ?? '';
+  const fieldErrors = fieldErrorsOf(error, t, i18n);
+  const ready = !!server && !!user && file !== '';
+
+  const submit = async (ev: FormEvent) => {
+    ev.preventDefault();
+    if (!ready) return;
+    setBusy(true);
+    setError(null);
+    setJobError(null);
+    setBlocked(false);
+    setStopped(false);
+    try {
+      const fromText = from.trim();
+      const accepted = await deployKey(keyId, {
+        target_id: server.id,
+        os_user: user.os_user,
+        file_path: file,
+        ...(fromText !== '' && { from: fromText }),
+        ...(restrict && { restrict: true }),
+      });
+      const job = await waitForJob(accepted.job_id, { signal: abort.signal() });
+      const outcome = typeof job.result.result === 'string' ? job.result.result : '';
+      void client.invalidateQueries({ queryKey: sshKey(keyId) });
+      void client.invalidateQueries({ queryKey: SSH_KEYS_KEY });
+      void client.invalidateQueries({ queryKey: TARGETS_KEY });
+      if (job.status === 'succeeded') {
+        setResult(i18n.exists(`sshKeys.deployResult.${outcome}`) ? `sshKeys.deployResult.${outcome}` : 'ui.unexpectedError');
+      } else {
+        if (job.status === 'blocked_license') setBlocked(true);
+        else if (!job.error) setStopped(true);
+        setJobError(job.error);
+      }
+    } catch (e) {
+      if (!isAbort(e)) setError(e);
+    }
+    setBusy(false);
+  };
+
+  if (result)
+    return (
+      <Stack gap="sm">
+        <Alert color="green" role="status">
+          {t(result)}
+        </Alert>
+        <Group justify="flex-end">
+          <Button onClick={onClose}>{t('ui.close')}</Button>
+        </Group>
+      </Stack>
+    );
+
+  return (
+    <form onSubmit={(e) => void submit(e)} noValidate>
+      <Stack gap="sm">
+        {targets.isSuccess && servers.length === 0 && <Text size="sm">{t('sshKeys.deployNoServers')}</Text>}
+        <ErrorAlert error={targets.error ?? files.error} />
+        <NativeSelect
+          data-autofocus
+          label={t('sshKeys.deployServer')}
+          value={server?.id ?? ''}
+          onChange={(e) => {
+            setPickedServer(e.currentTarget.value);
+            setPickedUser('');
+            setPickedFile('');
+          }}
+          data={servers.map((s) => ({ value: s.id, label: s.name }))}
+          disabled={busy}
+        />
+        <NativeSelect
+          label={t('sshKeys.deployUser')}
+          value={user?.os_user ?? ''}
+          onChange={(e) => {
+            setPickedUser(e.currentTarget.value);
+            setPickedFile('');
+          }}
+          data={users.map((u) => ({ value: u.os_user, label: u.os_user }))}
+          error={fieldErrors.os_user}
+          disabled={busy}
+        />
+        <NativeSelect
+          label={t('sshKeys.deployFile')}
+          value={file}
+          onChange={(e) => setPickedFile(e.currentTarget.value)}
+          data={(user?.files ?? []).map((f) => ({ value: f, label: f }))}
+          error={fieldErrors.file_path}
+          disabled={busy}
+          styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }}
+        />
+        {server && files.isSuccess && !user && <Text size="sm">{t('sshKeys.deployNoFiles')}</Text>}
+        <TextInput
+          label={t('sshKeys.deployFrom')}
+          description={t('sshKeys.deployFromHelp')}
+          value={from}
+          onChange={(e) => setFrom(e.currentTarget.value)}
+          error={fieldErrors.from}
+          maxLength={500}
+          autoComplete="off"
+          spellCheck={false}
+          disabled={busy}
+        />
+        <Checkbox label={t('sshKeys.deployRestrict')} checked={restrict} onChange={(e) => setRestrict(e.currentTarget.checked)} disabled={busy} />
+        {busy && (
+          <Group gap="sm" role="status" aria-live="polite">
+            <Loader size="sm" aria-hidden />
+            <Text size="sm">{t('sshKeys.deployQueued')}</Text>
+          </Group>
+        )}
+        {error instanceof JobTimeoutError ? <StillWorkingAlert /> : <ErrorAlert error={error} />}
+        {blocked && <BlockedJobAlert />}
+        {stopped && <StoppedJobAlert />}
+        <JobErrorAlert error={jobError} />
+        <Group justify="flex-end">
+          <Button variant="default" onClick={onClose}>
+            {t('ui.cancel')}
+          </Button>
+          <Button type="submit" loading={busy} disabled={!ready}>
+            {t('sshKeys.deploySubmit')}
+          </Button>
+        </Group>
+      </Stack>
+    </form>
+  );
+}
+
+// DeployKeyDialog deploys a generated key to one file of one user on one server through the sshkey.add job, then reports
+// what the job found (verified, unverified, already present, undone, failed). The options are the two the server accepts:
+// from= and restrict. The form is rendered only while the dialog is open.
+export function DeployKeyDialog({ keyId, opened, onClose }: { keyId: string; opened: boolean; onClose: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <AppModal opened={opened} onClose={onClose} title={t('sshKeys.deployTitle')} size="lg">
+      {opened && <DeployForm keyId={keyId} onClose={onClose} />}
+    </AppModal>
+  );
+}

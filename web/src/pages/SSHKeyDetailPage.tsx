@@ -1,13 +1,15 @@
-import { Anchor, Button, Code, CopyButton, Stack, Table, Text, Title } from '@mantine/core';
+import { Anchor, Badge, Button, Code, CopyButton, Group, Stack, Table, Text, Title } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router';
 import { getSSHKey } from '../api/endpoints';
-import { SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
+import { sshKey, SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
 import type { KeyLocation } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { PageLoader } from '../auth/guards';
+import { DeployKeyDialog } from '../components/DeployKeyDialog';
+import { DownloadKeyDialog } from '../components/DownloadKeyDialog';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { KeyFlags } from '../components/KeyFlags';
 import { RemoveKeyDialog } from '../components/RemoveKeyDialog';
@@ -22,8 +24,11 @@ export function SSHKeyDetailPage() {
   const { session } = useAuth();
   const client = useQueryClient();
   const canOperate = session?.user.role === 'admin' || session?.user.role === 'operator';
-  const key = useQuery({ queryKey: [...SSH_KEYS_KEY, id], queryFn: () => getSSHKey(id) });
+  const isAdmin = session?.user.role === 'admin';
+  const key = useQuery({ queryKey: sshKey(id), queryFn: () => getSSHKey(id) });
   const [removing, setRemoving] = useState<KeyLocation | null>(null);
+  const [deploying, setDeploying] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   if (key.isPending) return <PageLoader />;
   if (key.isError || !key.data)
@@ -36,11 +41,56 @@ export function SSHKeyDetailPage() {
       </Stack>
     );
   const k = key.data;
+  const mk = k.managed_key ?? null;
+  const live = mk !== null && mk.destroyed_at === null;
   const state = (l: KeyLocation) => (l.removed_at ? t('sshKeys.removedByAlice') : l.missing_since ? t('sshKeys.missing') : t('sshKeys.present'));
 
   return (
     <Stack gap="md">
       <Title order={1}>{t('sshKeys.detailTitle')}</Title>
+      {mk && (
+        <Stack gap="xs" data-testid="managed-key">
+          <Group gap={6}>
+            <Badge variant="light" color="indigo" tt="none">
+              {t('sshKeys.managedBadge')}
+            </Badge>
+            {mk.retired_at && (
+              <Badge variant="light" color="gray" tt="none">
+                {t('sshKeys.retiredBadge')}
+              </Badge>
+            )}
+            {mk.destroyed_at && (
+              <Badge variant="light" color="gray" tt="none">
+                {t('sshKeys.destroyedBadge')}
+              </Badge>
+            )}
+          </Group>
+          <Text size="sm" fw={600}>
+            {mk.label}
+          </Text>
+          <Code style={WRAP}>{mk.comment}</Code>
+          <Text size="sm">{t('sshKeys.downloadCount', { count: mk.download_count })}</Text>
+          {mk.last_downloaded_at && <Text size="sm">{t('sshKeys.lastDownloaded', { date: formatDateTime(mk.last_downloaded_at, i18n.language) })}</Text>}
+          {mk.rotated_from && (
+            <Anchor component={Link} to={`/ssh-keys/${encodeURIComponent(mk.rotated_from)}`} w="fit-content" size="sm">
+              {t('sshKeys.rotatedFrom')}
+            </Anchor>
+          )}
+          <Group gap="sm">
+            {canOperate && mk.retired_at === null && (
+              <Button size="xs" onClick={() => setDeploying(true)}>
+                {t('sshKeys.deploy')}
+              </Button>
+            )}
+            {isAdmin && live && (
+              <Button size="xs" variant="default" onClick={() => setDownloading(true)}>
+                {t('sshKeys.download')}
+              </Button>
+            )}
+          </Group>
+        </Stack>
+      )}
+      {k.is_platform_key && <Text size="sm">{t('sshKeys.noDownloadPlatform')}</Text>}
       <Text size="sm">{t('sshKeys.keyType', { type: k.key_type, bits: k.bits })}</Text>
       <Text size="sm" fw={600}>
         {t('sshKeys.fingerprintLabel')}
@@ -111,6 +161,12 @@ export function SSHKeyDetailPage() {
           </Table.Tbody>
         </Table>
       </Table.ScrollContainer>
+      {mk && (
+        <>
+          <DeployKeyDialog keyId={id} opened={deploying} onClose={() => setDeploying(false)} />
+          <DownloadKeyDialog keyId={id} label={mk.label} opened={downloading} onClose={() => setDownloading(false)} />
+        </>
+      )}
       {removing && (
         <RemoveKeyDialog
           location={removing}

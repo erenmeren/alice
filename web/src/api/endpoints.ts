@@ -1,4 +1,5 @@
 import { apiFetch, setCsrfToken } from './client';
+import type { SSHKeyDetail } from './sshkeys';
 import type {
   AdminEnrollmentRequest,
   ApiToken,
@@ -28,7 +29,6 @@ import type {
   JobQuery,
   KeyLocation,
   PlatformKeyInfo,
-  SSHKey,
   SSHKeyPage,
   SSHKeyQuery,
   Target,
@@ -230,7 +230,7 @@ export function listSSHKeys(q: SSHKeyQuery = {}): Promise<SSHKeyPage> {
   return apiFetch<SSHKeyPage>(`${v1}/ssh-keys${qs ? `?${qs}` : ''}`);
 }
 
-export const getSSHKey = (id: string) => apiFetch<SSHKey>(`${v1}/ssh-keys/${enc(id)}`);
+export const getSSHKey = (id: string) => apiFetch<SSHKeyDetail>(`${v1}/ssh-keys/${enc(id)}`);
 
 export const getPlatformKey = () => apiFetch<PlatformKeyInfo>(`${v1}/ssh-keys/platform-key`);
 

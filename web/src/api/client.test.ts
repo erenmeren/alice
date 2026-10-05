@@ -214,4 +214,20 @@ describe('activity mark (AUD-01)', () => {
     expect(elsewhere).toEqual([null]);
     expect(seen).toEqual(['1']);
   });
+
+  it('returns a Blob for a successful answer with responseType blob', async () => {
+    server.use(http.post('/api/v1/echo', () => new HttpResponse('raw-bytes', { headers: { 'Content-Type': 'application/octet-stream' } })));
+    const blob = await apiFetch<Blob>('/api/v1/echo', { method: 'POST', body: {}, responseType: 'blob' });
+    expect(blob).toBeInstanceOf(Blob);
+    expect(await blob.text()).toBe('raw-bytes');
+  });
+
+  it('still throws ApiError with the parsed body for a failed blob request', async () => {
+    server.use(http.post('/api/v1/echo', () => errorResponse(409, 'ALC-KEY-0001', 'sshkey.own_key_protected')));
+    await expect(apiFetch<Blob>('/api/v1/echo', { method: 'POST', body: {}, responseType: 'blob' })).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 409,
+      reason: 'sshkey.own_key_protected',
+    });
+  });
 });

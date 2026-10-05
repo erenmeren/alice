@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw';
+import type { ManagedKeyInfo } from '../api/sshkeys';
 import type {
   AccessCheckRow,
   Binding,
@@ -281,6 +282,25 @@ export function sshKeyFixture(o: Partial<SSHKey> = {}): SSHKey {
     target_count: 2,
     missing: false,
     first_seen_at: '2026-10-01T08:01:00Z',
+    ...o,
+  };
+}
+
+// managedKeyFixture is what the detail route adds for a key Alice generated (Phase 6). There is no key material here.
+export function managedKeyFixture(o: Partial<ManagedKeyInfo> = {}): ManagedKeyInfo {
+  return {
+    label: 'Deploy Key',
+    comment: 'alice:deploy-key:2026-10-05',
+    key_type: 'ed25519',
+    created_by: 'admin',
+    created_at: '2026-10-05T08:00:00Z',
+    retired_at: null,
+    destroyed_at: null,
+    rotated_from: null,
+    download_count: 0,
+    last_downloaded_at: null,
+    policy_id: null,
+    open_rotation_id: null,
     ...o,
   };
 }

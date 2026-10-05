@@ -6,5 +6,8 @@
   "enum.keyAlgorithm.ecdsa",
   "enum.keyAlgorithm.ed25519",
   "enum.keyAlgorithm.rsa",
-  "license.change"
+  "license.change",
+  "sshKeys.types.ecdsa-p256",
+  "sshKeys.types.rsa-3072",
+  "sshKeys.types.rsa-4096"
 ]

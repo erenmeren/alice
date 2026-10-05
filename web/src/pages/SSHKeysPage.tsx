@@ -3,11 +3,13 @@ import { useDebouncedValue } from '@mantine/hooks';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { listAllServers, listSSHKeys } from '../api/endpoints';
 import { SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
 import type { KeyFlag, SSHKeyQuery } from '../api/types';
+import { useAuth } from '../auth/AuthProvider';
 import { ErrorAlert } from '../components/ErrorAlert';
+import { GenerateKeyDialog } from '../components/GenerateKeyDialog';
 import { WRAP } from '../components/wrap';
 
 const FLAGS: KeyFlag[] = ['weak', 'command', 'root_without_from', 'duplicate', 'cert_authority', 'security_key'];
@@ -18,6 +20,10 @@ const FLAGS: KeyFlag[] = ['weak', 'command', 'root_without_from', 'duplicate', '
 // response for an older filter never replaces the current one.
 export function SSHKeysPage() {
   const { t } = useTranslation();
+  const { session } = useAuth();
+  const navigate = useNavigate();
+  const canGenerate = session?.user.role === 'admin' || session?.user.role === 'operator';
+  const [generating, setGenerating] = useState(false);
   const [search, setSearch] = useState('');
   const [user, setUser] = useState('');
   const [targetId, setTargetId] = useState('');
@@ -38,7 +44,10 @@ export function SSHKeysPage() {
 
   return (
     <Stack gap="md">
-      <Title order={1}>{t('sshKeys.title')}</Title>
+      <Group justify="space-between" align="flex-start" wrap="wrap">
+        <Title order={1}>{t('sshKeys.title')}</Title>
+        {canGenerate && <Button onClick={() => setGenerating(true)}>{t('sshKeys.generate')}</Button>}
+      </Group>
       <Text size="sm">{t('sshKeys.intro')}</Text>
       <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
         <TextInput label={t('sshKeys.search')} description={t('sshKeys.searchHelp')} value={search} onChange={(e) => setSearch(e.currentTarget.value)} maxLength={200} />
@@ -80,6 +89,11 @@ export function SSHKeysPage() {
                       </Anchor>
                       <Text size="xs">{t('sshKeys.keyType', { type: k.key_type, bits: k.bits })}</Text>
                       <Group gap={4}>
+                        {k.managed && (
+                          <Badge variant="light" color="teal" tt="none">
+                            {t('sshKeys.managedBadge')}
+                          </Badge>
+                        )}
                         {k.is_platform_key && (
                           <Badge variant="light" color="indigo" tt="none">
                             {t('sshKeys.aliceKey')}
@@ -112,6 +126,14 @@ export function SSHKeysPage() {
           {t('sshKeys.loadMore')}
         </Button>
       )}
+      <GenerateKeyDialog
+        opened={generating}
+        onClose={() => setGenerating(false)}
+        onGenerated={(id) => {
+          setGenerating(false);
+          void navigate(`/ssh-keys/${encodeURIComponent(id)}`);
+        }}
+      />
     </Stack>
   );
 }

@@ -10,3 +10,11 @@ describe('query keys', () => {
     expect(VAULTS_KEY.length).toBeGreaterThan(2);
   });
 });
+
+describe('SSH key query keys', () => {
+  it('put the key detail under the list prefix and the key files under the target', async () => {
+    const { sshKey, keyFiles, SSH_KEYS_KEY } = await import('./queryKeys');
+    expect(sshKey('k1')).toEqual([...SSH_KEYS_KEY, 'k1']);
+    expect(keyFiles('t1').slice(0, 2)).toEqual(targetKey('t1'));
+  });
+});

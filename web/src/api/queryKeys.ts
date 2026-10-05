@@ -29,3 +29,8 @@ export const kvListKey = (vaultId: string, kind: 'certificates' | 'keys' | 'secr
 export const BINDINGS_KEY = ['bindings'] as const;
 export const bindingKey = (id: string) => ['bindings', id] as const;
 export const KV_IMPORTS_KEY = ['kv', 'imports'] as const;
+
+// Phase 6 (SSH key lifecycle). sshKey(id) is the key's detail query (under SSH_KEYS_KEY, so one invalidation of the list
+// refreshes it too); keyFiles(targetId) sits under the target's own key, so TARGETS_KEY refreshes it.
+export const sshKey = (id: string) => ['ssh-keys', id] as const;
+export const keyFiles = (targetId: string) => ['targets', targetId, 'key-files'] as const;

@@ -445,7 +445,32 @@
       "certificate_chain_completed": "Sertifika zinciri tamamlandı",
       "license_upload_error": "Lisans yüklemesi reddedildi",
       "audit_exported_busy": "Denetim kaydı dışa aktarımı reddedildi: başka bir doğrulama veya dışa aktarım sürüyordu",
-      "audit_verified_busy": "Denetim kaydı bütünlük doğrulaması reddedildi: başka bir doğrulama veya dışa aktarım sürüyordu"
+      "audit_verified_busy": "Denetim kaydı bütünlük doğrulaması reddedildi: başka bir doğrulama veya dışa aktarım sürüyordu",
+      "sshkey_generated": "SSH anahtarı oluşturuldu",
+      "sshkey_deploy_requested": "SSH anahtarı dağıtımı istendi",
+      "sshkey_deploy_denied": "SSH anahtarı dağıtımı reddedildi",
+      "sshkey_added": "SSH anahtarı eklendi",
+      "sshkey_add_failed": "SSH anahtarı eklenemedi",
+      "sshkey_private_key_downloaded": "Özel anahtar indirildi",
+      "sshkey_private_key_download_denied": "Özel anahtar indirme reddedildi",
+      "sshkey_retired": "SSH anahtarı kullanımdan kaldırıldı",
+      "sshkey_reactivated": "SSH anahtarı yeniden kullanımda",
+      "sshkey_private_key_destroyed": "Özel anahtar yok edildi",
+      "rotation_policy_created": "Yenileme kuralı oluşturuldu",
+      "rotation_policy_updated": "Yenileme kuralı değiştirildi",
+      "rotation_policy_enabled": "Yenileme kuralı açıldı",
+      "rotation_policy_disabled": "Yenileme kuralı kapatıldı",
+      "rotation_policy_deleted": "Yenileme kuralı silindi",
+      "rotation_policy_denied": "Yenileme kuralı reddedildi",
+      "rotation_previewed": "Yenileme önizlendi",
+      "rotation_created": "Yenileme planlandı",
+      "rotation_status_changed": "Yenileme durumu değişti",
+      "rotation_location_changed": "Bir sunucuda yenileme adımı",
+      "rotation_paused": "Yenileme duraklatıldı",
+      "rotation_continued": "Yenileme sürdürüldü",
+      "rotation_finish_requested": "Yenilemenin geçiş süresi erken bitirildi",
+      "rotation_old_kept": "Eski anahtar bazı sunucularda tutuldu",
+      "rotation_stop_requested": "Yenileme durduruldu"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -821,7 +846,63 @@
       "duplicate": "Dosyada birden fazla kez geçiyor.",
       "cert_authority": "Sertifika yetkilisi",
       "security_key": "Donanım güvenlik anahtarı"
-    }
+    },
+    "generate": "Anahtar oluştur",
+    "generateTitle": "SSH anahtarı oluştur",
+    "label": "Ad",
+    "labelHelp": "Anahtarı tanımanızı sağlayacak bir ad; örneğin anahtarı kullanan ekip ya da sistem.",
+    "keyTypeLabel": "Anahtar türü",
+    "types": {
+      "ed25519": "Ed25519 (önerilir)",
+      "rsa-3072": "RSA 3072",
+      "rsa-4096": "RSA 4096",
+      "ecdsa-p256": "ECDSA P-256"
+    },
+    "generateSubmit": "Oluştur",
+    "generated": "Anahtar oluşturuldu. Alice özel anahtarı şifreli olarak saklar.",
+    "managedBadge": "Alice tarafından oluşturuldu",
+    "retiredBadge": "Kullanımdan kaldırıldı",
+    "destroyedBadge": "Özel anahtar yok edildi",
+    "rotatedFrom": "Önceki bir anahtarın yerini alır",
+    "managedTitle": "Alice tarafından yönetilir",
+    "lastDownloaded": "Son indirme: {{date}}",
+    "deploy": "Sunucuya dağıt",
+    "deployTitle": "Bu anahtarı dağıt",
+    "deployServer": "Sunucu",
+    "deployUser": "Sunucudaki kullanıcı",
+    "deployFile": "Dosya",
+    "deployNoServers": "Alice henüz anahtar dağıtabileceği bir sunucuya sahip değil. Önce bir sunucu ekleyip ana makine anahtarını onaylayın.",
+    "deployNoFiles": "Alice bu kullanıcının anahtar dosyalarını henüz bulmadı. Sunucuyu tarayıp yeniden deneyin.",
+    "deployFrom": "İzin verilen kaynak adresler (isteğe bağlı)",
+    "deployFromHelp": "Virgülle ayrılmış IP adresleri ya da ağlar; örneğin 10.0.0.0/8. Her adrese izin vermek için boş bırakın.",
+    "deployRestrict": "Yalnızca oturum açmaya izin ver (yönlendirme yok)",
+    "deploySubmit": "Dağıt",
+    "deployQueued": "Alice anahtarı ekliyor ve anahtarla oturum açmayı deneyecek.",
+    "deployResult": {
+      "verified": "Alice anahtarı ekledi ve anahtarla oturum açılabildiğini doğruladı.",
+      "unverified": "Alice anahtarı ekledi ancak anahtarla oturum açmayı deneyemedi.",
+      "already_present": "Anahtar sunucuda zaten vardı.",
+      "undone": "Sunucu anahtarı kabul etmedi; bu nedenle Alice onu yeniden kaldırdı.",
+      "failed": "Alice anahtarı ekleyemedi.",
+      "undo_failed": "Anahtar çalışmadı ve Alice onu yeniden kaldıramadı."
+    },
+    "download": "Özel anahtarı indir",
+    "downloadTitle": "Özel anahtarı indir",
+    "downloadWarning": "Bu dosyaya sahip olan herkes bu anahtarın izinli olduğu her yerde oturum açabilir. İndirme, gerekçenizle birlikte denetim kaydına yazılır.",
+    "downloadReason": "Gerekçe",
+    "downloadReasonHelp": "En az 10 karakter. Buraya gizli bilgi yapıştırmayın.",
+    "downloadReasonShort": "En az 10 karakter girin.",
+    "downloadProtect": "Dosyayı bir parolayla koruyun (önerilir)",
+    "downloadPassphrase": "Parola",
+    "downloadPassphraseRepeat": "Parolayı tekrarlayın",
+    "downloadPassphraseHelp": "En az 12 karakter. Alice bu parolayı saklamaz; parola olmadan dosya açılamaz.",
+    "downloadPassphraseShort": "En az 12 karakter girin.",
+    "downloadMismatch": "Parolalar eşleşmiyor.",
+    "downloadSubmit": "İndir",
+    "downloadDone": "Dosya indirildi. Güvenli bir yerde saklayın ve artık gerekmediğinde silin.",
+    "downloadCount_one": "{{count}} kez indirildi",
+    "downloadCount_other": "{{count}} kez indirildi",
+    "noDownloadPlatform": "Bu, Alice'in kendi bağlantı anahtarıdır. İndirilemez."
   },
   "jobs": {
     "blockedTitle": "Yönetici onayı bekliyor",
@@ -838,7 +919,9 @@
         "discover": "Sunucu taraması"
       },
       "sshkey": {
-        "remove": "SSH anahtarının kaldırılması"
+        "remove": "SSH anahtarının kaldırılması",
+        "add": "SSH anahtarı dağıtımı",
+        "destroy_retired": "Kullanımdan kaldırılmış özel anahtarları yok etme"
       },
       "certificate": {
         "deploy": "Sertifika dağıtımı",
@@ -868,6 +951,11 @@
       },
       "deployment": {
         "recovery_sweep": "Yarım kalan dağıtımları denetleme"
+      },
+      "rotation": {
+        "location": "Bir sunucuda anahtar yenileme adımı",
+        "plan": "Anahtar yenilemelerini planlama",
+        "sweep": "Süren anahtar yenilemelerini denetleme"
       }
     },
     "blockedNotice": "Bu iş duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",
