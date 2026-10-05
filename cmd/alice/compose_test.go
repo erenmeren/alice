@@ -373,11 +373,12 @@ func TestFakeAzureDockerfileReusesTheReleaseBaseImages(t *testing.T) {
 	}
 }
 
-// The Phase 6 journey deploys a generated key to the e2e target's deploy account and logs in with it:
-// the account has no password but is not locked ("*" instead of useradd's "!"), so an sshd without
-// PAM accepts a key login too (R37 item 2's form). Its fixture keys are generated at build time and
-// their private halves deleted in the same layer: no key material is committed.
-func TestE2ETargetDeployAccountAcceptsAKeyLogin(t *testing.T) {
+// The e2e target's Dockerfile unlocks the deploy account right after creating it: no password, but "*"
+// instead of useradd's "!", so an sshd without PAM accepts a key login too (R37 item 2's form). Its
+// fixture keys are generated at build time and their private halves deleted in the same layer: no key
+// material is committed. This checks the Dockerfile text only; the login itself is proven by the Phase 6
+// journey (Task 18), which deploys a generated key to deploy and logs in with it.
+func TestE2ETargetDockerfileUnlocksTheDeployAccount(t *testing.T) {
 	raw, err := os.ReadFile("../../test/images/e2e-target/Dockerfile")
 	require.NoError(t, err)
 	src := string(raw)

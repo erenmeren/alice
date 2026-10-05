@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -16,11 +17,13 @@ import (
 	"alice/internal/jobs"
 	"alice/internal/jobs/kvjobs"
 	"alice/internal/license"
+	"alice/internal/notify"
 	"alice/internal/platform/clock"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/nginx"
+	"alice/internal/secrets"
 	"alice/internal/sshkeys"
 )
 
@@ -246,16 +249,24 @@ func TestRotationTasksKeepTheirLicenseClasses(t *testing.T) {
 func TestSSHKeysConfigIsTheProductionOne(t *testing.T) {
 	svc := wiringServices(t)
 	log := slog.New(slog.DiscardHandler)
-	cfg := sshkeysConfig(nil, nil, svc.auditLog, clock.Real{}, svc.license, svc.inventory, svc.queue, log)
+	// The pool connects lazily: nothing is dialled here.
+	pool, err := pgxpool.New(context.Background(), "postgres://alice@127.0.0.1:1/alice?connect_timeout=1")
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+	keyring := &secrets.Keyring{}
+	clk := clock.NewOffset(clock.Real{})
+	cfg := sshkeysConfig(pool, keyring, svc.auditLog, clk, svc.license, svc.inventory, svc.queue, log)
+	assert.Same(t, pool, cfg.Pool, "the service works on serve's application pool")
+	assert.Same(t, keyring, cfg.Keyring, "generated private keys are sealed with serve's keyring")
+	assert.Same(t, clk, cfg.Clock, "the service reads serve's clock")
+	assert.Same(t, log, cfg.Log)
+	assert.Equal(t, notify.AdminNotifier{Clock: clk}, cfg.Notifier, "rotation previews and results are mailed to the Administrators")
 	assert.Equal(t, helperproto.HelperBudget, cfg.HelperBudget)
 	assert.Nil(t, cfg.Rand, "production key generation takes no caller-supplied reader")
 	assert.Same(t, svc.license, cfg.License)
 	assert.Same(t, svc.inventory, cfg.Inventory)
 	assert.Same(t, svc.queue, cfg.Jobs)
 	assert.Same(t, svc.auditLog, cfg.Audit)
-	assert.NotNil(t, cfg.Notifier, "rotation previews and results are mailed to the Administrators")
-	assert.NotNil(t, cfg.Clock)
-	assert.NotNil(t, cfg.Log)
 	built := sshkeys.New(cfg)
 	assert.Equal(t, helperproto.HelperBudget+30*time.Second, built.UndoWait())
 	assert.Panics(t, func() { cfg.HelperBudget = 0; sshkeys.New(cfg) }, "the service refuses to start without the budget")

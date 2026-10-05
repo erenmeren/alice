@@ -278,75 +278,19 @@ func TestE2EResetCoversEveryTable(t *testing.T) {
 	assert.Contains(t, kept, "master_key_versions")
 }
 
-// overlapFx is a rotation of one location seeded through the legal path of the schema (as the migration
-// tests do): a target, a generated old key on it, its policy, and a run created with the policy's overlap.
+// overlapFx is the rotation fixture on the e2e stack's database.
 type overlapFx struct {
-	s                   *e2eStack
-	target, policy, run uuid.UUID
-	oldKey, newKey, loc uuid.UUID
-	oldLoc              uuid.UUID
-	t0                  time.Time
-}
-
-func (f *overlapFx) exec(sql string, args ...any) error {
-	_, err := f.s.d.App.Exec(context.Background(), sql, args...)
-	return err
-}
-
-func (f *overlapFx) must(sql string, args ...any) {
-	f.s.t.Helper()
-	require.NoError(f.s.t, f.exec(sql, args...))
-}
-
-// seedKey inserts a generated key (managed, with a private key row holding no real key material).
-func (f *overlapFx) seedKey(fp string, from *uuid.UUID) uuid.UUID {
-	f.s.t.Helper()
-	pk, key := uuid.New(), uuid.New()
-	f.must(`INSERT INTO managed_private_keys (id, owner_type, algorithm, bits, public_key_sha256, ciphertext, nonce, wrapped_dek, key_version, created_at)
-VALUES ($1, 'ssh_key', 'ed25519', 256, repeat('a', 64), '\x01', decode(repeat('00', 12), 'hex'), '\x02', 1, $2)`, pk, f.t0)
-	f.must(`INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, bits, public_key, managed, private_key_id, rotated_from, first_seen_at, created_at)
-VALUES ($1, $2, 'ssh-ed25519', 256, 'ssh-ed25519 AAAA', true, $3, $4, $5, $5)`, key, fp, pk, from, f.t0)
-	return key
-}
-
-func (f *overlapFx) keyLocation(key uuid.UUID) uuid.UUID {
-	f.s.t.Helper()
-	id := uuid.New()
-	f.must(`INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, first_seen_at, last_seen_at)
-VALUES ($1, $2, $3, 'deploy', '/home/deploy/.ssh/authorized_keys', 1, $4, $4)`, id, key, f.target, f.t0)
-	return id
+	*rotFixture
+	s *e2eStack
 }
 
 func newOverlapFx(t *testing.T) *overlapFx {
 	t.Helper()
 	s := newE2EStack(t)
-	f := &overlapFx{s: s, t0: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}
-	ctx := context.Background()
-	require.NoError(t, s.d.App.QueryRow(ctx, `INSERT INTO targets (id, name, type, config, credential_id, status, created_at, updated_at)
-SELECT gen_random_uuid(), 'web-01', 'linux', jsonb_build_object('host', 'web-01.example.test', 'port', 22, 'username', 'alice-svc'), id,
-       'pending_host_key', now(), now() FROM credentials WHERE purpose = 'platform_ssh' RETURNING id`).Scan(&f.target))
-	f.oldKey = f.seedKey("SHA256:"+strings.Repeat("O", 43), nil)
-	f.oldLoc = f.keyLocation(f.oldKey)
-	f.policy = uuid.New()
-	f.must(`INSERT INTO rotation_policies (id, ssh_key_id, name, interval_days, created_at, updated_at) VALUES ($1, $2, 'p', 90, $3, $3)`,
-		f.policy, f.oldKey, f.t0)
-	return f
+	return &overlapFx{rotFixture: newRotFixture(t, s.d, time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC), false), s: s}
 }
 
-// createRun inserts the run as the planner does: its overlap is the policy's at that moment.
-func (f *overlapFx) createRun() {
-	f.s.t.Helper()
-	f.run = uuid.New()
-	f.must(`INSERT INTO rotations (id, policy_id, old_ssh_key_id, trigger, status, plan, plan_digest, new_key_type, overlap_minutes, planned_for,
-    notified_at, created_at, updated_at)
-SELECT $1, p.id, p.ssh_key_id, 'manual', 'dry_run_notified', '{}', repeat('0', 64), 'ed25519', p.overlap_minutes, $3, $3, $3, $3
-FROM rotation_policies p WHERE p.id = $2`, f.run, f.policy, f.t0)
-	f.loc = uuid.New()
-	f.must(`INSERT INTO rotation_locations (id, rotation_id, n, old_location_id, target_id, os_user, file_path, state, updated_at)
-VALUES ($1, $2, 1, $3, $4, 'deploy', '/home/deploy/.ssh/authorized_keys', 'planned', $5)`, f.loc, f.run, f.oldLoc, f.target, f.t0)
-}
-
-func (f *overlapFx) locSet(set string, args ...any) error {
+func (f *rotFixture) locSet(set string, args ...any) error {
 	return f.exec("UPDATE rotation_locations SET "+set+" WHERE id = $1", append([]any{f.loc}, args...)...)
 }
 
@@ -398,8 +342,7 @@ func TestZeroOverlapStillNeedsTheRecheck(t *testing.T) {
 	f.createRun()
 	assert.Equal(t, 0, f.s.count("SELECT overlap_minutes FROM rotations WHERE id = '"+f.run.String()+"'"))
 
-	f.newKey = f.seedKey("SHA256:"+strings.Repeat("N", 43), &f.oldKey)
-	f.must("UPDATE rotations SET status = 'adding_new', new_ssh_key_id = $2, started_at = $3 WHERE id = $1", f.run, f.newKey, f.t0)
+	f.start()
 	require.NoError(t, f.locSet("state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2", f.t0))
 	newLoc := f.keyLocation(f.newKey)
 	require.NoError(t, f.locSet("state = 'added', added_line_no = 2, new_location_id = $2", newLoc))
@@ -412,7 +355,13 @@ func TestZeroOverlapStillNeedsTheRecheck(t *testing.T) {
 		"no re-check: the verification is not the login a removal relies on")
 	assert.Equal(t, "Z1011", pgState(f.locSet(`state = 'removing', remove_op_id = $2, remove_verified_at = reverified_at, remove_sent_at = $3`, op, sent)),
 		"no re-check at all")
+	assert.Equal(t, "rotation_locations_times", pgConstraint(f.locSet("reverified_at = $2", f.t0)),
+		"a re-check is strictly later than the verification: the first verification is not enough")
+	assert.Equal(t, "rotation_locations_times", pgConstraint(f.locSet(`state = 'removing', reverified_at = verified_at, remove_op_id = $2, remove_verified_at = verified_at, remove_sent_at = $3`,
+		op, sent)), "nor in the statement that sends the removal")
 	require.NoError(t, f.locSet("reverified_at = $2", f.t0.Add(time.Minute)))
+	assert.Equal(t, "Z1011", pgState(f.locSet(`state = 'removing', remove_op_id = $2, remove_verified_at = verified_at, remove_sent_at = $3`,
+		op, f.t0.Add(2*time.Minute))), "with a re-check on record, a removal sent on the first verification is refused")
 	assert.Equal(t, "rotation_locations_removal_fresh", pgConstraint(f.locSet(`state = 'removing', remove_op_id = $2, remove_verified_at = reverified_at, remove_sent_at = $3`,
 		op, f.t0.Add(17*time.Minute))), "a re-check older than 15 minutes is not fresh")
 	require.NoError(t, f.locSet(`state = 'removing', remove_op_id = $2, remove_verified_at = reverified_at, remove_sent_at = $3`, op, f.t0.Add(2*time.Minute)),
