@@ -107,7 +107,9 @@ vault then shows `ALC-AKV-0010`.
   --name <vm-name> --identities <identity resource ID>`), assign the roles with its client ID, and enter that
   client ID in Alice.
 
-A managed-identity vault takes no tenant ID in Alice.
+A managed-identity vault takes no tenant ID in Alice. Every Alice administrator (who may add vaults) can use the
+machine's identity against any vault name: give that identity only the roles Alice needs, on the vaults Alice should
+read, and nothing else.
 
 ## 2. Roles
 

@@ -1446,15 +1446,15 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Meaning.** Alice refused to connect to an address that is not Azure's, or its own environment holds a setting that is not allowed. (HTTP 502, reason `azure.address_not_allowed`.)
 
-**Likely cause.** Alice connects only to `login.microsoftonline.com` and to the vault's own address, and refuses private-network answers for names that are not the vault's. This message also appears when `AZURE_REGIONAL_AUTHORITY_NAME`, `MSAL_FORCE_REGION` or `AZURE_SDK_GO_LOGGING` is set in Alice's environment: Alice refuses to sign in to Azure then. The region variables (`AZURE_REGIONAL_AUTHORITY_NAME`, `MSAL_FORCE_REGION`) send the sign-in to another host; `AZURE_SDK_GO_LOGGING` makes the Azure library print Azure's answers to the log, which Alice never allows.
+**Likely cause.** Alice connects only to `login.microsoftonline.com` and to the vault's own address (for a managed identity also to the machine's metadata address), and follows no redirect or link to another host. When one of these names resolves to a link-local or metadata address (such as 169.254.169.254), or to a multicast, unspecified or reserved address, Alice refuses to connect; private addresses (a private endpoint) are allowed. This message also appears when `AZURE_REGIONAL_AUTHORITY_NAME`, `MSAL_FORCE_REGION` or `AZURE_SDK_GO_LOGGING` is set in Alice's environment: Alice refuses to sign in to Azure then. The region variables (`AZURE_REGIONAL_AUTHORITY_NAME`, `MSAL_FORCE_REGION`) send the sign-in to another host; `AZURE_SDK_GO_LOGGING` makes the Azure library print Azure's answers to the log, which Alice never allows.
 
-**What to do.** Check that the vault's name resolves to the vault (a private endpoint's address is allowed for the vault's own name). Ask whoever runs Alice to remove the three variables above from Alice's environment (compose file, service unit or orchestrator) and restart Alice: the check is made when Alice starts a session, so a running Alice keeps failing until it is restarted with the variables gone.
+**What to do.** Check what the vault's name and `login.microsoftonline.com` resolve to on the Alice server (a private endpoint's address is allowed). Ask whoever runs Alice to remove the three variables above from Alice's environment (compose file, service unit or orchestrator) and restart Alice: the check is made when Alice starts a session, so a running Alice keeps failing until it is restarted with the variables gone.
 
 ## ALC-AKV-0012: Azure's certificate is not trusted
 
 **Meaning.** The certificate Azure presented is not trusted by this Alice server. (HTTP 502, reason `azure.tls_untrusted`.)
 
-**Likely cause.** A proxy or firewall that inspects TLS and replaces Azure's certificate, a missing CA bundle in the container, or a wrong clock on the Alice server. Alice trusts the operating system's public roots only (a company root is not added by this version).
+**Likely cause.** A proxy or firewall that inspects TLS and replaces Azure's certificate, a missing CA bundle in the container, or a wrong clock on the Alice server. Alice trusts the certificate authorities of its container's operating system; this version has no setting to add a company root for Azure.
 
 **What to do.** Let Alice reach Azure directly, or exempt `login.microsoftonline.com` and the vault's name from inspection. Check the server's time.
 
