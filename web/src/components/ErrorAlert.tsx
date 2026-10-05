@@ -2,6 +2,7 @@ import { Alert, List, Text } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import { ApiError, NetworkError } from '../api/client';
 import { keyAlgorithmKey } from '../api/enums';
+import { withRoleCode } from './CodeText';
 
 // ErrorAlert shows an error in the user's language: what happened, what to do, and the request ID.
 export function ErrorAlert({ error }: { error: unknown }) {
@@ -47,10 +48,10 @@ export function ErrorAlert({ error }: { error: unknown }) {
   const action = known && i18n.exists(`${base}.action`) ? t(`${base}.action`, params) : '';
 
   return (
-    <Alert color="red" role="alert" title={title}>
+    <Alert color="red" role="alert" title={withRoleCode(title, params.role)}>
       {/* The cause names the two key types, which is what the person needs to choose again. */}
-      {known && keyTypeMismatch && i18n.exists(`${base}.cause`) && <Text size="sm">{t(`${base}.cause`, params)}</Text>}
-      {action && <Text size="sm">{action}</Text>}
+      {known && keyTypeMismatch && i18n.exists(`${base}.cause`) && <Text size="sm">{withRoleCode(t(`${base}.cause`, params), params.role)}</Text>}
+      {action && <Text size="sm">{withRoleCode(action, params.role)}</Text>}
       {error.details.length > 0 && (
         <List size="sm" mt="xs">
           {error.details.map((d) => (

@@ -53,7 +53,7 @@ describe('KeyVaultDetailPage header', () => {
     expect(within(signs).getByText(OBJECT_ID).tagName).toBe('CODE');
     expect(screen.getByText(TENANT_ID).tagName).toBe('CODE');
     expect(screen.getByText(CLIENT_ID).tagName).toBe('CODE');
-    expect(screen.getByText(/^Last checked:/)).toBeInTheDocument();
+    expect(screen.getByText(/^Last successful check:/)).toBeInTheDocument();
     expect(screen.getByText('Alice checks this vault every 15 minutes.')).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Access check' })).toBeInTheDocument();
     expect(screen.getByText('Roles Alice needs', { selector: 'h3' })).toBeInTheDocument();
@@ -81,7 +81,7 @@ describe('KeyVaultDetailPage header', () => {
 
   describe('states', () => {
     it.each([
-      ['degraded', 'azure.forbidden', 'Partly working', 'a permission is missing'],
+      ['degraded', 'azure.forbidden', 'Partly working', 'only in part'],
       ['auth_failed', 'azure.credentials_expired', 'Credentials expired', 'refused Alice'],
       ['unreachable', 'azure.unreachable', 'Cannot reach Azure', 'cannot reach Azure or this vault'],
     ] as const)('says what is wrong with a %s vault', async (status, reason, label, help) => {
@@ -251,7 +251,7 @@ describe('KeyVaultDetailPage header', () => {
       await user.click(await screen.findByRole('button', { name: 'Remove Key Vault' }));
       const dialog = await screen.findByRole('dialog');
       await user.click(within(dialog).getByRole('button', { name: 'Remove Key Vault' }));
-      expect(await within(dialog).findByText('Websites are still connected to certificates of this vault. Remove those connections too?')).toBeInTheDocument();
+      expect(await within(dialog).findByText(/^Websites are still connected to certificates of this vault\. Remove those connections too\?/)).toBeInTheDocument();
       await user.click(within(dialog).getByRole('button', { name: 'Remove the connections and the vault' }));
       await waitFor(() => expect(view.router.state.location.pathname).toBe('/key-vaults'));
       expect(urls).toEqual(['', '?remove_bindings=true']);
@@ -432,6 +432,118 @@ describe('KeyVaultDetailPage inventory', () => {
     expect(within(table).getByText("Key Vault'tan kaldırıldı")).toBeInTheDocument();
     expect(within(table).getAllByText('Yeni sürüm bulundu').length).toBeGreaterThan(0);
     expectNoRawKeys(table);
+  });
+});
+
+describe('KeyVaultDetailPage fix round', () => {
+  it('says "No successful check yet" for a vault degraded from birth and never "Last checked"', async () => {
+    asRole('operator', vaultWith({ status: 'degraded', last_success_at: null, last_error: { code: 'ALC-AKV-0003', reason: 'azure.forbidden', params: { role: 'Key Vault Reader' } } }));
+    await renderRoute(PATH);
+    await screen.findByRole('heading', { name: 'Prod vault', level: 1 });
+    expect(screen.getByText('No successful check yet')).toBeInTheDocument();
+    expect(screen.queryByText(/Last checked/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Not checked yet')).not.toBeInTheDocument();
+  });
+
+  it('says only that a degraded vault is reached in part when it is throttled, and points to the reason', async () => {
+    asRole('operator', vaultWith({ status: 'degraded', last_error: { code: 'ALC-AKV-0007', reason: 'azure.throttled' } }, { access: accessFixture({ checks: [accessRow('list_certificates', 'ok')] }) }));
+    await renderRoute(PATH);
+    const help = await screen.findByTestId('vault-status-help');
+    expect(help).toHaveTextContent('Alice reaches this vault only in part. The reason is shown below.');
+    expect(help.textContent).not.toMatch(/permission|firewall/);
+    expect(screen.getByText('Azure asked Alice to slow down')).toBeInTheDocument();
+  });
+
+  it('does not read the vault again on an interval while it is ok and no job runs', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let reads = 0;
+      asRole('operator');
+      server.use(http.get(`/api/v1/targets/${VAULT_ID}`, () => { reads++; return HttpResponse.json(vaultFixture); }));
+      await renderRoute(PATH);
+      await screen.findByRole('heading', { name: 'Prod vault', level: 1 });
+      const before = reads;
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(reads).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows the not-found state for /key-vaults/vaults, which is not the list cache, and never goes to /servers/undefined', async () => {
+    asRole('admin');
+    server.use(http.get('/api/v1/targets/vaults', () => errorResponse(404, 'ALC-SYS-0001', 'system.not_found')));
+    const view = await renderRoute('/key-vaults');
+    await screen.findByTestId('vaults-table');
+    await view.router.navigate('/key-vaults/vaults');
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(view.router.state.location.pathname).toBe('/key-vaults/vaults');
+    expect(screen.getByRole('link', { name: 'Back to Key Vaults' })).toBeInTheDocument();
+  });
+
+  it('says that deployments waiting in the queue stop and a running one finishes when removing connections', async () => {
+    asRole('admin');
+    server.use(http.delete(`/api/v1/targets/${VAULT_ID}`, () => errorResponse(409, 'ALC-AKV-0020', 'kv.vault_has_bindings')));
+    const user = userEvent.setup();
+    await renderRoute(PATH);
+    await user.click(await screen.findByRole('button', { name: 'Remove Key Vault' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Remove Key Vault' }));
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent('Automatic deployments still waiting in the queue stop; one that is already running finishes.');
+  });
+
+  it('shows the role of a catalogue alert in <code> as text', async () => {
+    asRole('operator', vaultWith({ status: 'degraded', last_error: { code: 'ALC-AKV-0003', reason: 'azure.forbidden', params: { role: 'Key Vault Reader' } } }));
+    await renderRoute(PATH);
+    const alert = (await screen.findAllByRole('alert'))[0];
+    const roles = within(alert).getAllByText('Key Vault Reader');
+    expect(roles.length).toBeGreaterThan(0);
+    for (const r of roles) expect(r.tagName).toBe('CODE');
+  });
+
+  it('translates the kind in the warnings of the last check', async () => {
+    asRole('operator', vaultWith({ facts: { ...vaultFixture.facts, warnings: [{ code: 'kv_item_unreadable', params: { object: 'certificates', count: '3' } }, { code: 'kv_version_conflict', params: { object: 'versions', count: '1' } }] } }), 'tr');
+    await renderRoute(PATH, { languages: ['tr-TR'] });
+    const warnings = await screen.findAllByTestId('vault-warning');
+    expect(warnings[0]).toHaveTextContent('sertifikalar');
+    expect(warnings[0].textContent).not.toMatch(/certificates/);
+    expect(warnings[1]).toHaveTextContent('sürümler');
+  });
+
+  it('points a Check now that outlives the wait to this Key Vault\'s page, not to a server', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      asRole('admin');
+      server.use(
+        http.post(`/api/v1/targets/${VAULT_ID}/actions/discover`, () => HttpResponse.json({ job_id: 'jr', status_url: '' }, { status: 202 })),
+        http.get('/api/v1/jobs/jr', () => HttpResponse.json(jobFixture({ id: 'jr', status: 'running' }))),
+      );
+      await renderRoute(PATH);
+      await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).click(await screen.findByRole('button', { name: 'Check now' }));
+      vi.setSystemTime(Date.now() + 200_000);
+      expect(await screen.findByText(/Open this Key Vault's page in a minute/, {}, { timeout: 8000 })).toBeInTheDocument();
+      expect(document.body.textContent).not.toMatch(/server's page/);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('does not show the certificates of one vault in another (the list keys carry the vault id)', async () => {
+    const B = '0192d000-0000-7000-8000-0000000000b2';
+    server.use(
+      ...sessionHandlers(sessionFor('operator')),
+      http.get('/api/v1/targets/:id', ({ params }) => HttpResponse.json(vaultWith({ id: String(params.id), name: params.id === B ? 'Vault B' : 'Prod vault' }))),
+      http.get('/api/v1/targets/:id/kv/certificates', ({ params }) =>
+        HttpResponse.json({ items: [kvCertificateFixture({ id: `c-${String(params.id)}`, name: params.id === B ? 'cert-of-b' : 'cert-of-a' })], next_cursor: null }),
+      ),
+    );
+    const view = await renderRoute(PATH);
+    await screen.findByText('cert-of-a');
+    await view.router.navigate(`/key-vaults/${B}`);
+    await screen.findByRole('heading', { name: 'Vault B', level: 1 });
+    expect(await screen.findByText('cert-of-b')).toBeInTheDocument();
+    expect(screen.queryByText('cert-of-a')).not.toBeInTheDocument();
   });
 });
 

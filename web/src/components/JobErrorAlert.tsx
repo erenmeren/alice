@@ -2,6 +2,7 @@ import { Alert, Text } from '@mantine/core';
 import type { i18n as I18n, TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import type { JobError } from '../api/types';
+import { withRoleCode } from './CodeText';
 
 // reasonTitle is the one-line text of a stable error reason (errors.<reason>.title); an unknown
 // reason gets the generic message, never the raw reason.
@@ -11,11 +12,12 @@ export function reasonTitle(t: TFunction, i18n: I18n, reason: string, params: Re
 }
 
 // StillWorkingAlert: the screen stopped waiting for a job that has not finished.
-export function StillWorkingAlert() {
+// textKey says where to look: the servers' text names the server's page; a vault screen passes its own.
+export function StillWorkingAlert({ textKey = 'targets.stillWorking' }: { textKey?: string }) {
   const { t } = useTranslation();
   return (
     <Alert color="yellow" role="status">
-      {t('targets.stillWorking')}
+      {t(textKey)}
     </Alert>
   );
 }
@@ -47,8 +49,8 @@ export function JobErrorAlert({ error }: { error: JobError | null }) {
   const params = error.params ?? {};
   const actionKey = `errors.${error.reason}.action`;
   return (
-    <Alert color="red" role="alert" title={reasonTitle(t, i18n, error.reason, params)}>
-      {i18n.exists(actionKey) && <Text size="sm">{t(actionKey, params)}</Text>}
+    <Alert color="red" role="alert" title={withRoleCode(reasonTitle(t, i18n, error.reason, params), params.role)}>
+      {i18n.exists(actionKey) && <Text size="sm">{withRoleCode(t(actionKey, params), params.role)}</Text>}
       {error.code && (
         <Text size="xs" c="gray.7" mt="xs">
           {t('jobs.errorCode', { code: error.code })}

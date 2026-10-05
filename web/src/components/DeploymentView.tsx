@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { deploymentStatusText, deploymentView, isCancelled, PENDING_CHANGE_RESTORED, SERVER_OPERATION_PENDING } from '../api/deployments';
 import type { Deployment, ErrorRef } from '../api/types';
 import { formatDateTime } from '../datetime';
+import { withRoleCode } from './CodeText';
 import { LabelledCode } from './LabelledCode';
 import { WRAP } from './wrap';
 
@@ -70,15 +71,15 @@ export function DeploymentErrorAlert({
   const action = text('action');
   const operation = params.operation_id ?? '';
   return (
-    <Alert color={neutral ? 'gray' : 'red'} role={neutral ? 'status' : 'alert'} title={title} data-reason={error.reason}>
+    <Alert color={neutral ? 'gray' : 'red'} role={neutral ? 'status' : 'alert'} title={withRoleCode(title, params.role)} data-reason={error.reason}>
       <Stack gap={4}>
         {heading && (
           <Text size="xs" c="gray.7">
             {heading}
           </Text>
         )}
-        {cause && <Text size="sm">{cause}</Text>}
-        {action && <Text size="sm">{action}</Text>}
+        {cause && <Text size="sm">{withRoleCode(cause, params.role)}</Text>}
+        {action && <Text size="sm">{withRoleCode(action, params.role)}</Text>}
         {operation && <LabelledCode text={t('deployments.operation', { id: '' })} value={operation} />}
         {error.code && (
           <Text size="xs" c="gray.7" style={WRAP}>

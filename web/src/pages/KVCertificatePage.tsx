@@ -49,7 +49,7 @@ export function KVCertificatePage() {
   const cert = useQuery({ queryKey: kvCertificateKey(vaultId, id), queryFn: () => getKVCertificate(vaultId, id) });
   const [deploy, setDeploy] = useState<string | null>(null);
   const [releasing, setReleasing] = useState<KVVersion | null>(null);
-  const [released, setReleased] = useState(false);
+  const [released, setReleased] = useState<'auto' | 'manual' | null>(null);
 
   const back = (
     <Anchor component={Link} to={`/key-vaults/${vaultId}`} w="fit-content" size="sm">
@@ -98,20 +98,20 @@ export function KVCertificatePage() {
       )}
       {released && (
         <Alert color="green" role="status">
-          {t('vaults.cert.released')}
+          {t(released === 'auto' ? 'vaults.cert.releasedAuto' : 'vaults.cert.releasedManual')}
         </Alert>
       )}
 
       <Title order={2} size="h3">
         {t('vaults.cert.policyTitle')}
       </Title>
-      <Stack gap={4} aria-label={t('vaults.cert.policyTitle')}>
+      <Stack gap={4} role="group" aria-label={t('vaults.cert.policyTitle')}>
         <Fact label={t('vaults.cert.exportable')}>
           <Text size="sm">{c.exportable === null ? t('vaults.cert.exportableUnknown') : t(c.exportable ? 'vaults.yes' : 'vaults.no')}</Text>
         </Fact>
         {c.key_type !== '' && (
           <Text size="sm" style={WRAP}>
-            <CodeText i18nKey="vaults.cert.keyValue" param="type" value={c.key_type} params={{ bits: c.key_size }} />
+            <CodeText i18nKey={c.key_size > 0 ? 'vaults.cert.keyValue' : 'vaults.cert.keyValueNoSize'} param="type" value={c.key_type} params={{ bits: c.key_size }} />
           </Text>
         )}
         {c.issuer_name !== '' && (
@@ -221,9 +221,10 @@ export function KVCertificatePage() {
           certificateId={id}
           version={releasing}
           onClose={() => setReleasing(null)}
+          autoDeploy={c.binding?.auto_deploy === true}
           onReleased={() => {
             setReleasing(null);
-            setReleased(true);
+            setReleased(c.binding?.auto_deploy === true ? 'auto' : 'manual');
           }}
         />
       )}
@@ -238,8 +239,20 @@ function KVDeploy({ certificateId, vaultId, versionId, onClose }: { certificateI
 }
 
 function DeployWithBinding({ certificate, versionId, onClose }: { certificate: KVCertificateDetail | undefined; versionId: string; onClose: () => void }) {
+  const { t } = useTranslation();
   const summaryId = certificate?.binding?.id ?? '';
   const binding = useQuery({ queryKey: bindingKey(summaryId), queryFn: () => getBinding(summaryId), enabled: summaryId !== '' });
+  if (binding.isError)
+    return (
+      <AppModal opened onClose={onClose} title={t('bindings.deployTitle')}>
+        <Stack gap="sm">
+          <ErrorAlert error={binding.error} />
+          <Group justify="flex-end">
+            <Button onClick={onClose}>{t('ui.close')}</Button>
+          </Group>
+        </Stack>
+      </AppModal>
+    );
   if (!certificate || !binding.data) return null;
   return <KVDeployDialog binding={binding.data} certificate={certificate} versionId={versionId} onClose={onClose} />;
 }
@@ -247,7 +260,7 @@ function DeployWithBinding({ certificate, versionId, onClose }: { certificate: K
 // ReleaseDialog releases a held version: automatic deployment may then consider it. Nothing is
 // deployed. A version held for its incomplete chain also needs the Administrator's confirmation.
 // Administrators only, with a fresh step-up (asked for when the server wants it).
-function ReleaseDialog({ vaultId, certificateId, version, onClose, onReleased }: { vaultId: string; certificateId: string; version: KVVersion; onClose: () => void; onReleased: () => void }) {
+function ReleaseDialog({ vaultId, certificateId, version, autoDeploy, onClose, onReleased }: { vaultId: string; certificateId: string; version: KVVersion; autoDeploy: boolean; onClose: () => void; onReleased: () => void }) {
   const { t } = useTranslation();
   const { run } = useStepUp();
   const client = useQueryClient();
@@ -271,7 +284,7 @@ function ReleaseDialog({ vaultId, certificateId, version, onClose, onReleased }:
     <AppModal opened onClose={onClose} title={t('vaults.cert.releaseTitle')}>
       <Stack gap="sm">
         <Text size="sm">{t(chain ? 'vaults.heldChain' : 'vaults.heldVersion')}</Text>
-        <Text size="sm">{t('vaults.cert.releaseHelp')}</Text>
+        <Text size="sm">{t(autoDeploy ? 'vaults.cert.releaseHelpAuto' : 'vaults.cert.releaseHelpManual')}</Text>
         {chain && <Box><Checkbox label={t('deploy.confirmChain')} checked={confirm} onChange={(e) => setConfirm(e.currentTarget.checked)} /></Box>}
         <ErrorAlert error={error} />
         <Group justify="flex-end">

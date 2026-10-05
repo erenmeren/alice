@@ -282,15 +282,45 @@ describe('AddKeyVaultDialog', () => {
       spies.forEach((s) => s.mockRestore());
     });
 
-    it('wipes the form when the dialog is closed by cancel', async () => {
+    it('wipes the secret fields when the dialog is closed by cancel, even if the parent keeps it mounted', async () => {
       asAdmin();
       const user = userEvent.setup();
       const onClose = vi.fn();
       await renderWithStepUp(<AddKeyVaultDialog onClose={onClose} onAdded={vi.fn()} />);
       await fillCommon(user);
       await fillClientSecret(user);
+      expect(screen.getByLabelText(/^Secret value/)).toHaveValue(SECRET);
       await user.click(screen.getByRole('button', { name: 'Cancel' }));
       expect(onClose).toHaveBeenCalled();
+      expect(screen.getByLabelText(/^Secret value/)).toHaveValue('');
+      expect(document.body.innerHTML).not.toContain(SECRET);
+    });
+
+    it('has a PFX password field of type password', async () => {
+      asAdmin();
+      const user = userEvent.setup();
+      await renderWithStepUp(<AddKeyVaultDialog onClose={vi.fn()} onAdded={vi.fn()} />);
+      await user.click(await screen.findByRole('radio', { name: 'PFX file' }));
+      const field = screen.getByLabelText('PFX password');
+      expect(field).toHaveAttribute('type', 'password');
+      expect(field).toHaveAttribute('autocomplete', 'off');
+    });
+
+    it('wipes the PFX and its password when the PFX is too large', async () => {
+      asAdmin();
+      const user = userEvent.setup();
+      await renderWithStepUp(<AddKeyVaultDialog onClose={vi.fn()} onAdded={vi.fn()} />);
+      await fillCommon(user);
+      await user.type(screen.getByLabelText(/^Directory \(tenant\) ID/), TENANT_ID);
+      await user.type(screen.getByLabelText(/^Application \(client\) ID/), CLIENT_ID);
+      await user.click(screen.getByRole('radio', { name: 'PFX file' }));
+      await user.upload(document.querySelector<HTMLInputElement>('input[type="file"]')!, new File([new Uint8Array(600_000)], 'big.pfx'));
+      await user.type(screen.getByLabelText('PFX password'), PFX_PASSWORD);
+      await user.click(screen.getByRole('button', { name: 'Add Key Vault' }));
+      await screen.findByText(/PFX file is too large/);
+      expect(screen.getByLabelText('PFX password')).toHaveValue('');
+      expect(document.body.innerHTML).not.toContain(PFX_PASSWORD);
+      expect(screen.getByRole('button', { name: 'Add Key Vault' })).toBeDisabled();
     });
 
     it('refuses a PFX that would not fit the request and sends nothing', async () => {

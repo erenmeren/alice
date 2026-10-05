@@ -1,4 +1,5 @@
 import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { errorResponse, kvImportFixture, sessionFor, sessionHandlers, VAULT_ID, vaultFixture, vaultWith } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
@@ -48,16 +49,38 @@ describe('ImportHistory', () => {
     expect(await screen.findByTestId('import-row')).toHaveTextContent('Outcome unknown');
   });
 
-  it('shows nothing for a certificate that was never imported, or when there is no vault', async () => {
+  it('shows the empty state for a certificate that was never imported, and nothing when there is no vault', async () => {
     setup([vaultFixture], {});
     const v = await renderWithAuth(<ImportHistory certificateId="cert-1" />);
-    await new Promise((r) => setTimeout(r, 100));
-    expect(screen.queryByTestId('import-history')).not.toBeInTheDocument();
+    expect(await screen.findByText("This certificate was not imported into a Key Vault yet.")).toBeInTheDocument();
+    expect(screen.queryByTestId('import-row')).not.toBeInTheDocument();
     v.unmount();
     setup([], {});
     await renderWithAuth(<ImportHistory certificateId="cert-1" />);
     await new Promise((r) => setTimeout(r, 100));
     expect(screen.queryByTestId('import-history')).not.toBeInTheDocument();
+  });
+
+  it('loads more with the cursor of each vault and merges the pages newest first', async () => {
+    const seen: string[] = [];
+    server.use(
+      ...sessionHandlers(sessionFor('operator')),
+      http.get('/api/v1/targets', () => HttpResponse.json({ items: [vaultFixture], next_cursor: null })),
+      http.get('/api/v1/targets/:id/kv/imports', ({ request }) => {
+        const c = new URL(request.url).searchParams.get('cursor');
+        seen.push(c ?? '');
+        return c
+          ? HttpResponse.json({ items: [kvImportFixture({ id: 'i2', name: 'older-name', created_at: '2026-10-01T09:00:00Z' })], next_cursor: null })
+          : HttpResponse.json({ items: [kvImportFixture({ id: 'i1', name: 'newer-name', created_at: '2026-10-05T09:00:00Z' })], next_cursor: 'cur-2' });
+      }),
+    );
+    await renderWithAuth(<ImportHistory certificateId="cert-1" />);
+    await screen.findByText('newer-name');
+    await userEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText('older-name')).toBeInTheDocument();
+    expect(screen.getByText('newer-name')).toBeInTheDocument();
+    expect(seen).toEqual(['', 'cur-2']);
+    expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
   });
 
   it('shows the error of a failed read', async () => {

@@ -52,7 +52,7 @@ export function AutoDeploySwitch({ binding, admin, exportable, onChanged }: { bi
           </Text>
         )}
       </Group>
-      <Text size="sm">{t('bindings.autoDeployHelp')}</Text>
+      <Text size="sm">{t(binding.auto_deploy ? 'bindings.autoDeployHelp' : 'bindings.autoDeployHelpOff')}</Text>
       {binding.auto_deploy && binding.auto_since && <Text size="xs">{t('bindings.autoDeploySince', { time: formatDateTime(binding.auto_since, i18n.language) })}</Text>}
       {!admin && <Text size="xs">{t('bindings.adminOnly')}</Text>}
       {!confirming && <ErrorAlert error={error} />}

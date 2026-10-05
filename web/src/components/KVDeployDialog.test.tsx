@@ -61,6 +61,12 @@ describe('KVDeployDialog', () => {
     expect(within(runs[0]).getByRole('link', { name: 'Open this deployment' })).toHaveAttribute('href', '/deployments/d1');
   });
 
+  it('defaults to the CURRENT version even when it is not the first in the list', async () => {
+    asRole('operator');
+    await renderWithStepUp(<KVDeployDialog binding={BINDING} certificate={cert([V_NEW, V_OLD], V_OLD.version)} onClose={vi.fn()} />);
+    expect((screen.getByLabelText('Version') as HTMLSelectElement).value).toBe('v-old');
+  });
+
   it('deploys an older version to some websites only', async () => {
     asRole('operator');
     let body: unknown = null;

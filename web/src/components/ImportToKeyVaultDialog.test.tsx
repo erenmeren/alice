@@ -96,8 +96,7 @@ describe('ImportToKeyVaultDialog', () => {
     const outcome = await screen.findByTestId('import-outcome');
     expect(outcome).toHaveAttribute('data-state', 'uncertain');
     expect(outcome).toHaveTextContent('Not confirmed yet');
-    expect(outcome).toHaveTextContent('The next check of the vault confirms whether it arrived.');
-    expect(outcome).toHaveTextContent('Alice does not send it again.');
+    expect(outcome).toHaveTextContent('Alice sent the certificate but could not confirm that Key Vault stored it. Alice keeps checking the vault and shows the result here. Do not import it again while this is shown.');
     expect(screen.queryByText('Failed')).not.toBeInTheDocument();
   });
 
@@ -244,7 +243,7 @@ describe('ImportToKeyVaultDialog', () => {
     server.use(http.post(IMPORT_URL, () => errorResponse(409, 'ALC-AKV-0023', 'kv.import_confirm_needed', { params: { certificate_name: 'www-example-test', bound: 'true', auto_deploy_follows: 'true' } })));
     await renderWithStepUp(<ImportToKeyVaultDialog certificate={CERT} onClose={vi.fn()} />, ['tr-TR']);
     await screen.findByRole('option', { name: 'Prod vault' });
-    expect(screen.getByText("Aktarılan sertifika Key Vault'ta kendini yenilemez.")).toBeInTheDocument();
+    expect(screen.getByText("İçe aktarılan sertifika Key Vault'ta kendini yenilemez.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: "Key Vault'a aktar" }));
     const warning = await screen.findByTestId('import-confirm');
     expect(warning).toHaveTextContent('Bu, mevcut www-example-test sertifikasına yeni bir sürüm ekler.');
@@ -256,7 +255,7 @@ describe('ImportToKeyVaultDialog outcome in Turkish', () => {
   it.each([
     ['uncertain', { state: 'uncertain', error: null }, 'Henüz doğrulanmadı'],
     ['unknown', { state: 'failed', error: { code: 'ALC-AKV-0026', reason: 'kv.import_outcome_unknown' } }, 'Sonuç bilinmiyor'],
-    ['succeeded', { state: 'succeeded' }, 'Aktarıldı'],
+    ['succeeded', { state: 'succeeded' }, 'İçe aktarıldı'],
   ] as const)('%s', async (_n, patch, label) => {
     asAdmin('tr');
     server.use(http.post(IMPORT_URL, () => accepted()));
@@ -269,3 +268,66 @@ describe('ImportToKeyVaultDialog outcome in Turkish', () => {
     expect(within(outcome).getAllByText(label).length).toBeGreaterThan(0);
   });
 });
+
+describe('ImportToKeyVaultDialog fix round', () => {
+  async function start() {
+    await screen.findByRole('option', { name: 'Prod vault' });
+    await userEvent.click(screen.getByRole('button', { name: 'Import into Key Vault' }));
+  }
+
+  it('shows the import text and no Import button when the wait ends while the job still runs (a second send is refused)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      asAdmin();
+      server.use(http.post(IMPORT_URL, () => accepted()), http.get('/api/v1/jobs/j-imp', () => HttpResponse.json(jobFixture({ id: 'j-imp', type: 'kv.import', status: 'running' }))));
+      await renderWithStepUp(<ImportToKeyVaultDialog certificate={CERT} onClose={vi.fn()} />);
+      await screen.findByRole('option', { name: 'Prod vault' });
+      await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).click(screen.getByRole('button', { name: 'Import into Key Vault' }));
+      vi.setSystemTime(Date.now() + 200_000);
+      expect(await screen.findByText('The import is still running. Its result appears in the import history of the certificate.', {}, { timeout: 8000 })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Import into Key Vault' })).not.toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Close' }).length).toBeGreaterThan(0);
+      expect(document.body.textContent).not.toMatch(/server's page/);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('shows the import text and no Import button for an import that is running when the job ended', async () => {
+    asAdmin();
+    server.use(http.post(IMPORT_URL, () => accepted()));
+    job();
+    imp({ state: 'running', version: '', finished_at: null });
+    await renderWithStepUp(<ImportToKeyVaultDialog certificate={CERT} onClose={vi.fn()} />);
+    await start();
+    expect(await screen.findByText('The import is still running. Its result appears in the import history of the certificate.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Import into Key Vault' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['an uncertain import, even when the record says it can be retried', { state: 'uncertain', can_retry: true, error: null, version: '' }],
+    ['a failed import that cannot be retried', { state: 'failed', can_retry: false, error: { code: 'ALC-AKV-0025', reason: 'kv.import_rejected' }, version: '' }],
+    ['a succeeded import', { state: 'succeeded', can_retry: true }],
+  ] as const)('offers no Try again for %s', async (_n, patch) => {
+    asAdmin();
+    server.use(http.post(IMPORT_URL, () => accepted()));
+    job();
+    imp(patch);
+    await renderWithStepUp(<ImportToKeyVaultDialog certificate={CERT} onClose={vi.fn()} />);
+    await start();
+    await screen.findByTestId('import-outcome');
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+  });
+
+  it('drops the confirmation when another vault is chosen', async () => {
+    asAdmin('en', [vaultFixture, vaultWith({ id: 'v2', name: 'Other vault' })]);
+    server.use(http.post(IMPORT_URL, () => errorResponse(409, 'ALC-AKV-0023', 'kv.import_confirm_needed', { params: { certificate_name: 'www-example-test', bound: 'false', auto_deploy_follows: 'false' } })));
+    await renderWithStepUp(<ImportToKeyVaultDialog certificate={CERT} onClose={vi.fn()} />);
+    await screen.findByRole('option', { name: 'Other vault' });
+    await userEvent.click(screen.getByRole('button', { name: 'Import into Key Vault' }));
+    await screen.findByTestId('import-confirm');
+    await userEvent.selectOptions(screen.getByLabelText('Vault'), 'v2');
+    expect(screen.queryByTestId('import-confirm')).not.toBeInTheDocument();
+  });
+});
+

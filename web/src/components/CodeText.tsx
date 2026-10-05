@@ -20,3 +20,24 @@ export function CodeText({ i18nKey, param, value, params = {} }: { i18nKey: stri
   });
   return <>{nodes}</>;
 }
+
+// ROLE is what an Azure role name looks like; only such a value is ever shown in <Code>.
+const ROLE = /^Key Vault [A-Za-z ]{3,40}$/;
+
+// withRoleCode shows a catalogue text whose {{role}} was already filled in, with the role name in
+// <Code> (never translated). A text without a role, or a param that is not a role name, is unchanged.
+export function withRoleCode(text: string, role: string | undefined): ReactNode {
+  if (!role || !ROLE.test(role) || !text.includes(role)) return text;
+  const parts = text.split(role);
+  const nodes: ReactNode[] = [];
+  parts.forEach((part, i) => {
+    if (i > 0)
+      nodes.push(
+        <Code key={`r${i}`} translate="no">
+          {role}
+        </Code>,
+      );
+    if (part) nodes.push(<Fragment key={`p${i}`}>{part}</Fragment>);
+  });
+  return <>{nodes}</>;
+}

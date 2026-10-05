@@ -72,7 +72,7 @@ describe('KVCertificatePage', () => {
     await renderRoute(PATH);
     const rows = await screen.findAllByTestId('kv-version-row');
     const license = within(rows[0]).getByTestId('held-text');
-    expect(license).toHaveTextContent('New version found around a license expiry. Alice does not deploy it by itself; an administrator can deploy or release it.');
+    expect(license).toHaveTextContent('This version is waiting for an administrator: the license was not available at some point since the version appeared. Alice does not deploy it by itself; an administrator can deploy or release it.');
     expect(license.textContent).not.toMatch(/while the license was expired/);
     expect(within(rows[1]).getByTestId('held-text')).toHaveTextContent('Held because its certificate chain is incomplete.');
     expect(within(rows[0]).getByText('Held')).toBeInTheDocument();
@@ -121,7 +121,7 @@ describe('KVCertificatePage', () => {
     expect(within(dialog).getByRole('checkbox', { name: /web-01/ })).toBeChecked();
   });
 
-  it('lets an Administrator release a held version after a step-up, and says nothing was deployed', async () => {
+  it('lets an Administrator release a held version after a step-up; without automatic deployment it says nothing is deployed', async () => {
     const held = { ...V1, held: true, held_reason: 'license' as const };
     setup('admin', kvCertificateDetailFixture({ versions: [held], binding: SUMMARY, bound: true }));
     let calls = 0;
@@ -137,11 +137,12 @@ describe('KVCertificatePage', () => {
     await renderRoute(PATH);
     await user.click(await screen.findByRole('button', { name: 'Release version aaaaaaaa' }));
     const dialog = await screen.findByRole('dialog');
-    expect(dialog).toHaveTextContent('Releasing deploys nothing.');
+    expect(dialog).toHaveTextContent('Nothing is deployed. Use Deploy now when you want this version on a website.');
+    expect(dialog).not.toHaveTextContent('Releasing deploys nothing');
     await user.click(within(dialog).getByRole('button', { name: 'Release' }));
     await user.type(await screen.findByLabelText('6-digit code'), '123456');
     await user.click(screen.getByRole('button', { name: 'Confirm' }));
-    expect(await screen.findByText('Version released.')).toBeInTheDocument();
+    expect(await screen.findByText('Version released. Nothing is deployed; use Deploy now when you want it on a website.')).toBeInTheDocument();
     expect(calls).toBe(2);
     expect(body).toEqual({});
   });
@@ -158,8 +159,53 @@ describe('KVCertificatePage', () => {
     expect(within(dialog).getByRole('button', { name: 'Release' })).toBeDisabled();
     await user.click(within(dialog).getByLabelText('I confirm that this incomplete chain is intended'));
     await user.click(within(dialog).getByRole('button', { name: 'Release' }));
-    await screen.findByText('Version released.');
+    await screen.findByText(/^Version released\./);
     expect(body).toEqual({ confirm_incomplete_chain: true });
+  });
+
+  it('says Alice deploys a released version within about a minute when automatic deployment is on', async () => {
+    const held = { ...V1, held: true, held_reason: 'license' as const };
+    setup('admin', kvCertificateDetailFixture({ versions: [held], binding: { ...SUMMARY, auto_deploy: true }, bound: true }));
+    server.use(http.post(`/api/v1/targets/${VAULT_ID}/kv/certificates/${KV_CERT_ID}/versions/v1/actions/release`, () => HttpResponse.json({ ...held, held: false, held_reason: '' })));
+    const user = userEvent.setup();
+    await renderRoute(PATH);
+    await user.click(await screen.findByRole('button', { name: 'Release version aaaaaaaa' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('Alice deploys this version to the connected websites within about a minute.');
+    expect(dialog.textContent).not.toMatch(/Releasing deploys nothing|Nothing is deployed/);
+    await user.click(within(dialog).getByRole('button', { name: 'Release' }));
+    expect(await screen.findByText('Version released. Alice deploys it to the connected websites within about a minute.')).toBeInTheDocument();
+  });
+
+  it('says the same in Turkish for both cases', async () => {
+    const held = { ...V1, held: true, held_reason: 'license' as const };
+    setup('admin', kvCertificateDetailFixture({ versions: [held], binding: { ...SUMMARY, auto_deploy: true }, bound: true }), 'tr');
+    const view = await renderRoute(PATH, { languages: ['tr-TR'] });
+    await userEvent.click(await screen.findByRole('button', { name: 'aaaaaaaa sürümünü serbest bırak' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Alice bu sürümü yaklaşık bir dakika içinde bağlı web sitelerine dağıtır.');
+    view.unmount();
+    setup('admin', kvCertificateDetailFixture({ versions: [held], binding: SUMMARY, bound: true }), 'tr');
+    await renderRoute(PATH, { languages: ['tr-TR'] });
+    await userEvent.click(await screen.findByRole('button', { name: 'aaaaaaaa sürümünü serbest bırak' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Hiçbir şey dağıtılmaz. Bu sürümü bir web sitesinde istediğinizde Şimdi dağıt düğmesini kullanın.');
+  });
+
+  it('shows no key size for a key whose size is unknown (an EC curve)', async () => {
+    setup('operator', kvCertificateDetailFixture({ key_type: 'EC', key_size: 0 }));
+    await renderRoute(PATH);
+    const policy = await screen.findByLabelText('Policy');
+    expect(policy).toHaveTextContent('Key: EC');
+    expect(policy).not.toHaveTextContent('0 bits');
+  });
+
+  it('shows the error when the connection cannot be read for Deploy now', async () => {
+    setup('operator', kvCertificateDetailFixture({ versions: [V1], binding: SUMMARY, bound: true, current_version: V1.version }));
+    server.use(http.get(`/api/v1/bindings/${BINDING_ID}`, () => errorResponse(500, 'ALC-SYS-0003', 'internal.unexpected')));
+    await renderRoute(PATH);
+    const rows = await screen.findAllByTestId('kv-version-row');
+    await userEvent.click(within(rows[0]).getByRole('button', { name: /Deploy now/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('alert')).toBeInTheDocument();
   });
 
   it('shows the binding panel with Connect websites for a certificate without a connection', async () => {
@@ -193,7 +239,7 @@ describe('KVCertificatePage', () => {
     setup('admin', kvCertificateDetailFixture({ versions: [{ ...V1, held: true, held_reason: 'license' }], binding: SUMMARY, bound: true, exportable: true }), 'tr');
     await renderRoute(PATH, { languages: ['tr-TR'] });
     expect(await screen.findByText('Sürümler')).toBeInTheDocument();
-    expect(screen.getByTestId('held-text')).toHaveTextContent('Lisans süresinin dolduğu dönemde yeni sürüm bulundu.');
+    expect(screen.getByTestId('held-text')).toHaveTextContent('Bu sürüm bir yöneticiyi bekliyor: sürüm ortaya çıktıktan sonra bir süre lisans kullanılamadı.');
     expect(screen.getByRole('button', { name: 'aaaaaaaa sürümünü serbest bırak' })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Şimdi dağıt' })).toBeInTheDocument());
     expectNoRawKeys(screen.getByRole('heading', { level: 1 }).parentElement as HTMLElement);

@@ -116,7 +116,7 @@ describe('DeploymentsPage from Key Vault', () => {
     await renderRoute('/deployments');
     const sources = await screen.findAllByTestId('deployment-source');
     expect(sources).toHaveLength(1);
-    expect(sources[0]).toHaveTextContent('From Key Vault Prod vault 01234567');
+    expect(sources[0]).toHaveTextContent('From Key Vault: Prod vault 01234567');
     expect(within(sources[0]).getByText('01234567').tagName).toBe('CODE');
   });
 });

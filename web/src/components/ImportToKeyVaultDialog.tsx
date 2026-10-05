@@ -14,6 +14,7 @@ import { CodeText } from './CodeText';
 import { DeploymentErrorAlert } from './DeploymentView';
 import { ErrorAlert } from './ErrorAlert';
 import { InternalLink } from './InternalLink';
+import { LoadingIndicator } from './LoadingIndicator';
 import { BlockedJobAlert, StillWorkingAlert } from './JobErrorAlert';
 import { useStepUp } from './StepUpProvider';
 
@@ -53,6 +54,10 @@ export function ImportToKeyVaultDialog({ certificate, onClose }: { certificate: 
   const [result, setResult] = useState<KVImport | null>(null);
   const [blocked, setBlocked] = useState(false);
   const [waiting, setWaiting] = useState(false);
+  // late: the import was accepted but waiting for it or reading it failed. The form never comes back
+  // then (a second send is refused while the first is open); the dialog only reports and closes.
+  const [late, setLate] = useState<unknown>(null);
+  const [lateTimeout, setLateTimeout] = useState(false);
   const chosen = vaultId || usable[0]?.id || '';
   const valid = NAME_OK.test(name);
 
@@ -61,8 +66,10 @@ export function ImportToKeyVaultDialog({ certificate, onClose }: { certificate: 
     setBusy(true);
     setError(null);
     setBlocked(false);
+    let sent = false;
     try {
       const accepted = await run(() => importToKeyVault(certificate.id, chosen, name, confirm !== null && agreed));
+      sent = true;
       setConfirm(null);
       setBusy(false);
       setWaiting(true);
@@ -77,7 +84,10 @@ export function ImportToKeyVaultDialog({ certificate, onClose }: { certificate: 
       void client.invalidateQueries({ queryKey: KV_IMPORTS_KEY });
     } catch (e) {
       if (isAbort(e)) return;
-      if (isApiError(e, 'kv.import_confirm_needed')) {
+      if (sent) {
+        if (e instanceof JobTimeoutError) setLateTimeout(true);
+        else setLate(e);
+      } else if (isApiError(e, 'kv.import_confirm_needed')) {
         setConfirm({ name: e.params.certificate_name || name, bound: e.params.bound === 'true', autoFollows: e.params.auto_deploy_follows === 'true' });
         setAgreed(false);
       } else setError(e);
@@ -93,7 +103,7 @@ export function ImportToKeyVaultDialog({ certificate, onClose }: { certificate: 
     setAgreed(false);
   };
 
-  const done = result !== null || blocked;
+  const done = result !== null || blocked || late !== null || lateTimeout;
   const locked = busy || waiting;
   return (
     <AppModal opened onClose={() => !locked && onClose()} title={t('imports.action')} size="lg" closeOnClickOutside={!locked} closeOnEscape={!locked} withCloseButton={!locked}>
@@ -105,6 +115,8 @@ export function ImportToKeyVaultDialog({ certificate, onClose }: { certificate: 
       ) : done ? (
         <Stack gap="sm">
           {blocked && <BlockedJobAlert />}
+          {lateTimeout && <StillWorkingAlert textKey="imports.stillWorking" />}
+          {late !== null && <ErrorAlert error={late} />}
           {result && <ImportOutcome result={result} />}
           <Group justify="flex-end">
             {result?.state === 'failed' && result.can_retry && <Button variant="default" onClick={reset}>{t('imports.retry')}</Button>}
@@ -120,7 +132,7 @@ export function ImportToKeyVaultDialog({ certificate, onClose }: { certificate: 
         >
           <Stack gap="sm">
             <Text size="sm">{t('imports.privateKeyNote')}</Text>
-            {vaults.isPending && <Loader size="sm" aria-label={t('ui.loading')} />}
+            {vaults.isPending && <LoadingIndicator />}
             <ErrorAlert error={vaults.error} />
             {vaults.isSuccess && usable.length === 0 && (
               <Stack gap={4}>
@@ -169,7 +181,7 @@ export function ImportToKeyVaultDialog({ certificate, onClose }: { certificate: 
                 </Stack>
               </Alert>
             )}
-            {error instanceof JobTimeoutError ? <StillWorkingAlert /> : <ErrorAlert error={error} />}
+            <ErrorAlert error={error} />
             <Group justify="flex-end">
               <Button variant="default" disabled={busy} onClick={onClose}>
                 {t('ui.cancel')}
@@ -190,7 +202,7 @@ export function ImportOutcome({ result }: { result: KVImport }) {
   const { t } = useTranslation();
   const unknown = result.state === 'failed' && result.error?.reason === 'kv.import_outcome_unknown';
   const label = unknown ? 'imports.state.unknown' : result.state === '' ? 'enum.unknown' : `imports.state.${result.state}`;
-  if (result.state === 'queued' || result.state === 'running') return <StillWorkingAlert key="s" />;
+  if (result.state === 'queued' || result.state === 'running') return <StillWorkingAlert textKey="imports.stillWorking" />;
   return (
     <Stack gap="xs" data-testid="import-outcome" data-state={unknown ? 'unknown' : result.state}>
       <Alert color={result.state === 'succeeded' ? 'green' : result.state === 'uncertain' ? 'yellow' : 'red'} role="status" title={t(label)}>

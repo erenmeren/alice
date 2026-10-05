@@ -6,6 +6,7 @@ import { deploymentView } from '../api/deployments';
 import { listDeployments } from '../api/endpoints';
 import { DEPLOYMENTS_KEY } from '../api/queryKeys';
 import type { Deployment } from '../api/types';
+import { CodeText } from '../components/CodeText';
 import { DeploymentStatusBadge } from '../components/DeploymentView';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { WRAP } from '../components/wrap';
@@ -85,7 +86,7 @@ function Row({ d, when }: { d: Deployment; when: string }) {
         </Anchor>
         {d.source === 'key_vault' && (
           <Text size="xs" data-testid="deployment-source" style={WRAP}>
-            {t('deployments.source.key_vault')} <span translate="no">{d.vault_name}</span>
+            <CodeText i18nKey="deployments.source.key_vault_named" param="name" value={d.vault_name} />
             {d.kv_version && (
               <>
                 {' '}

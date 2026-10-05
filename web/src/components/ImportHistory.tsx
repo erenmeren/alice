@@ -1,5 +1,5 @@
-import { Anchor, Code, Stack, Table, Text, Title } from '@mantine/core';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { Anchor, Button, Code, Stack, Table, Text, Title } from '@mantine/core';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import { listAllTargets } from '../api/endpoints';
@@ -17,28 +17,35 @@ function stateText(i: KVImport): string {
 }
 
 // ImportHistory lists the imports of one certificate into any vault, newest first. The API lists a
-// vault's imports (filtered by certificate), so one request goes to each vault.
+// vault's imports (filtered by certificate), so each vault is asked, and "Show more" follows the cursors.
 export function ImportHistory({ certificateId }: { certificateId: string }) {
   const { t, i18n } = useTranslation();
   const vaults = useQuery({ queryKey: [...VAULTS_KEY, 'import-history'], queryFn: () => listAllTargets('azure_key_vault') });
-  const lists = useQueries({
-    queries: (vaults.data?.items ?? []).map((v) => ({
-      queryKey: [...KV_IMPORTS_KEY, v.id, certificateId],
-      queryFn: () => listKVImports(v.id, certificateId),
-    })),
+  const ids = (vaults.data?.items ?? []).map((v) => v.id);
+  // One page of every vault that still has pages; the cursors travel as one map. A vault whose answer
+  // has no next_cursor is done and is left out of the next request.
+  const imports = useInfiniteQuery({
+    queryKey: [...KV_IMPORTS_KEY, 'certificate', certificateId, ids.join(',')],
+    enabled: vaults.isSuccess && ids.length > 0,
+    initialPageParam: Object.fromEntries(ids.map((id) => [id, null])) as Record<string, string | null>,
+    queryFn: async ({ pageParam }) => {
+      const open = Object.entries(pageParam);
+      const pages = await Promise.all(open.map(async ([id, cursor]) => ({ id, page: await listKVImports(id, certificateId, 50, cursor) })));
+      return { items: pages.flatMap((p) => p.page.items), next: Object.fromEntries(pages.filter((p) => p.page.next_cursor).map((p) => [p.id, p.page.next_cursor])) as Record<string, string | null> };
+    },
+    getNextPageParam: (last) => (Object.keys(last.next).length > 0 ? last.next : undefined),
   });
   const names = new Map((vaults.data?.items ?? []).map((v) => [v.id, v.name]));
-  const items = lists.flatMap((q) => q.data?.items ?? []).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-  const error = vaults.error ?? lists.find((q) => q.error)?.error ?? null;
-  const loaded = vaults.isSuccess && lists.every((q) => q.isSuccess);
-  if (vaults.isSuccess && (vaults.data?.items.length ?? 0) === 0) return null;
-  if (loaded && items.length === 0) return null;
+  const items = (imports.data?.pages.flatMap((p) => p.items) ?? []).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  const error = vaults.error ?? imports.error ?? null;
+  if (vaults.isSuccess && ids.length === 0) return null;
   return (
     <Stack gap="sm" data-testid="import-history">
       <Title order={2} size="h3">
         {t('imports.history.title')}
       </Title>
       <ErrorAlert error={error} />
+      {imports.isSuccess && items.length === 0 && <Text size="sm">{t('imports.history.empty')}</Text>}
       {items.length > 0 && (
         <Table.ScrollContainer minWidth={640}>
           <Table striped aria-label={t('imports.history.tableLabel')}>
@@ -79,6 +86,11 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
             </Table.Tbody>
           </Table>
         </Table.ScrollContainer>
+      )}
+      {imports.hasNextPage && (
+        <Button variant="default" w="fit-content" loading={imports.isFetchingNextPage} onClick={() => void imports.fetchNextPage()}>
+          {t('vaults.showMore')}
+        </Button>
       )}
     </Stack>
   );

@@ -1,4 +1,4 @@
-import { Alert, Box, Button, Checkbox, Code, Group, Loader, Stack, Text, TextInput } from '@mantine/core';
+import { Alert, Box, Button, Checkbox, Code, Group, Stack, Text, TextInput } from '@mantine/core';
 import { useDebouncedValue } from '@mantine/hooks';
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -8,6 +8,7 @@ import { createBinding, listDeployableLocations, updateBindingLocations, type Bi
 import { BINDINGS_KEY, KV_CERTIFICATES_KEY } from '../api/queryKeys';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
+import { LoadingIndicator } from './LoadingIndicator';
 import { useStepUp } from './StepUpProvider';
 import { keyTypeParam } from './vaultText';
 import { WRAP } from './wrap';
@@ -87,7 +88,7 @@ export function ConnectWebsitesDialog({ certificate, binding, onClose, onDone }:
           </Alert>
         )}
         <TextInput label={t('bindings.search')} value={search} onChange={(e) => setSearch(e.currentTarget.value)} maxLength={200} autoComplete="off" />
-        {list.isPending && <Loader size="sm" aria-label={t('ui.loading')} />}
+        {list.isPending && <LoadingIndicator />}
         <ErrorAlert error={list.error} />
         {list.isSuccess && items.length === 0 && <Text size="sm">{t('bindings.noLocations')}</Text>}
         <Stack gap="xs" role="group" aria-label={t('bindings.websites')}>

@@ -31,8 +31,8 @@ describe('KeyVaultsPage', () => {
     expect(within(row).getByText('https://contoso-prod.vault.azure.net').tagName).toBe('CODE');
     expect(within(row).getByText('Connected')).toBeInTheDocument();
     expect(within(row).getByText('Client secret')).toBeInTheDocument();
-    expect(within(row).queryByText('Not checked yet')).not.toBeInTheDocument();
-    for (const h of ['Name', 'Address', 'Status', 'Sign-in method', 'Last checked']) expect(within(table).getByRole('columnheader', { name: h })).toBeInTheDocument();
+    expect(within(row).queryByText('No successful check yet')).not.toBeInTheDocument();
+    for (const h of ['Name', 'Address', 'Status', 'Sign-in method', 'Last successful check']) expect(within(table).getByRole('columnheader', { name: h })).toBeInTheDocument();
   });
 
   it('puts the table in its own scroll container (375 px) and names it', async () => {
@@ -42,10 +42,13 @@ describe('KeyVaultsPage', () => {
     expect(table.closest('[class*="ScrollArea"], [class*="ScrollContainer"]')).not.toBeNull();
   });
 
-  it('says Not checked yet for a vault that never listed its certificates', async () => {
+  it('says "No successful check yet" for a vault degraded from birth, and names the column honestly', async () => {
     withVaults('operator', [vaultWith({ last_success_at: null, status: 'degraded' })]);
     await renderRoute('/key-vaults');
-    expect(await screen.findByText('Not checked yet')).toBeInTheDocument();
+    expect(await screen.findByText('No successful check yet')).toBeInTheDocument();
+    expect(screen.queryByText('Not checked yet')).not.toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Last successful check' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Last checked' })).not.toBeInTheDocument();
   });
 
   it('names a vault without permission to list certificates, one with expired credentials and one that is out of reach', async () => {

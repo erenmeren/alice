@@ -146,8 +146,29 @@ describe('AccessCheckPanel', () => {
     await renderWithAuth(<AccessCheckPanel vaultId={VAULT_ID} canOperate access={forbidden} />, ['tr-TR']);
     expect(await screen.findByText('Erişim denetimi')).toBeInTheDocument();
     expect(screen.getByRole('row', { name: /Sertifikaları, anahtarları/ })).toHaveTextContent('İzin yok: Key Vault Reader gerekiyor');
-    expect(screen.getByRole('row', { name: /Aktarma|Sertifikaları kasaya aktarma/ })).toHaveTextContent('Aktarma sırasında denetlenir');
+    expect(screen.getByRole('row', { name: /Sertifikaları kasaya içe aktarma/ })).toHaveTextContent('İçe aktarma sırasında denetlenir');
     expect(screen.getByRole('button', { name: 'Yeniden denetle' })).toBeInTheDocument();
     expectNoRawKeys();
   });
 });
+
+describe('AccessCheckPanel fix round', () => {
+  it('points a check that outlives the wait to this Key Vault\'s page, not to a server', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      asRole('admin');
+      server.use(
+        http.post(`/api/v1/targets/${VAULT_ID}/actions/test`, () => HttpResponse.json({ job_id: 'jr', status_url: '' }, { status: 202 })),
+        http.get('/api/v1/jobs/jr', () => HttpResponse.json(jobFixture({ id: 'jr', status: 'running' }))),
+      );
+      await renderWithAuth(<AccessCheckPanel vaultId={VAULT_ID} canOperate access={accessFixture()} />);
+      await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).click(screen.getByRole('button', { name: 'Check again' }));
+      vi.setSystemTime(Date.now() + 200_000);
+      expect(await screen.findByText(/Open this Key Vault's page in a minute/, {}, { timeout: 8000 })).toBeInTheDocument();
+      expect(document.body.textContent).not.toMatch(/server's page/);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+});
+

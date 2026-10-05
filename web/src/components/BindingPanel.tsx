@@ -1,4 +1,4 @@
-import { Alert, Anchor, Button, Code, Group, Loader, Stack, Table, Text, Title } from '@mantine/core';
+import { Alert, Anchor, Button, Code, Group, Stack, Table, Text, Title, VisuallyHidden } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +9,7 @@ import { BINDINGS_KEY, bindingKey, KV_CERTIFICATES_KEY, TARGETS_KEY } from '../a
 import { useAbort } from '../api/useAbort';
 import type { JobError } from '../api/types';
 import { AppModal } from './AppModal';
+import { LoadingIndicator } from './LoadingIndicator';
 import { AutoDeploySwitch } from './AutoDeploySwitch';
 import { CodeText } from './CodeText';
 import { ConnectWebsitesDialog } from './ConnectWebsitesDialog';
@@ -69,7 +70,7 @@ export function BindingPanel({ vaultId, certificate, canOperate, admin }: { vaul
     );
   }
 
-  if (binding.isPending) return <Loader size="sm" aria-label={t('ui.loading')} />;
+  if (binding.isPending) return <LoadingIndicator />;
   if (!binding.data)
     return (
       <Stack gap="sm">
@@ -88,7 +89,11 @@ export function BindingPanel({ vaultId, certificate, canOperate, admin }: { vaul
               <Table.Th>{t('bindings.columns.server')}</Table.Th>
               <Table.Th>{t('bindings.columns.path')}</Table.Th>
               <Table.Th>{t('bindings.columns.state')}</Table.Th>
-              {canOperate && <Table.Th />}
+              {canOperate && (
+                <Table.Th>
+                  <VisuallyHidden>{t('bindings.columns.actions')}</VisuallyHidden>
+                </Table.Th>
+              )}
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -144,6 +149,7 @@ export function BindingPanel({ vaultId, certificate, canOperate, admin }: { vaul
           </Button>
         </Group>
       )}
+      {b.auto_deploy && !admin && <Text size="sm">{t('bindings.addAdminOnly')}</Text>}
       {deploying && <KVDeployDialog binding={b} certificate={certificate} onClose={() => setDeploying(false)} />}
       {adding && (
         <ConnectWebsitesDialog
@@ -214,7 +220,7 @@ function DeployAccess({ vaultId, certificate, canOperate }: { vaultId: string; c
           {t('bindings.checkDeployAccess')}
         </Button>
       )}
-      {error instanceof JobTimeoutError ? <StillWorkingAlert /> : <ErrorAlert error={error} />}
+      {error instanceof JobTimeoutError ? <StillWorkingAlert textKey="vaults.stillWorking" /> : <ErrorAlert error={error} />}
       {blocked && <BlockedJobAlert />}
       {stopped && <StoppedJobAlert />}
       <JobErrorAlert error={jobError} />

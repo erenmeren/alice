@@ -105,7 +105,7 @@ export function KeyVaultDetailPage() {
       </Stack>
     );
   const tg: Target = target.data;
-  if (tg.type !== 'azure_key_vault' || !tg.vault) return <Navigate to={`/servers/${tg.id}`} replace />;
+  if (tg.type !== 'azure_key_vault' || !tg.vault) return <Navigate to={`/servers/${id}`} replace />;
   const v = tg.vault;
   const credentialsEnd = v.auth === 'client_secret' ? v.secret_expires_on : v.auth === 'certificate' ? v.cert_not_after : null;
   const endState = credentialsEnd ? expiryState(credentialsEnd, now) : 'ok';
@@ -138,7 +138,7 @@ export function KeyVaultDetailPage() {
           {t(endState === 'expired' ? 'vaults.credentialsExpiredNow' : 'vaults.credentialsExpireSoon')}
         </Alert>
       )}
-      <Stack gap={4} aria-label={t('vaults.title')}>
+      <Stack gap={4} role="group" aria-label={t('vaults.title')}>
         <Fact label={t('vaults.fields.auth')}>
           <Text size="sm">{t(authKey(v.auth))}</Text>
         </Fact>
@@ -214,14 +214,14 @@ export function KeyVaultDetailPage() {
           {t('vaults.replaced')}
         </Alert>
       )}
-      {error instanceof JobTimeoutError ? <StillWorkingAlert /> : <ErrorAlert error={error} />}
+      {error instanceof JobTimeoutError ? <StillWorkingAlert textKey="vaults.stillWorking" /> : <ErrorAlert error={error} />}
       {blocked && <BlockedJobAlert />}
       {stopped && <StoppedJobAlert />}
       <JobErrorAlert error={jobError} />
 
       {tg.facts.warnings.map((w) => (
         <Alert key={`${w.code}-${JSON.stringify(w.params)}`} color="yellow" style={WRAP} data-testid="vault-warning">
-          {t(warningKey(w), w.params)}
+          {t(warningKey(w), { ...w.params, ...(w.params.object ? { object: i18n.exists(`vaults.kind.${w.params.object}`) ? t(`vaults.kind.${w.params.object}`) : t('enum.unknown') } : {}) })}
           {warningKey(w) === 'warnings.unknown' || warningKey(w) === 'warnings.incomplete' ? <Code ml="xs">{w.code}</Code> : null}
         </Alert>
       ))}

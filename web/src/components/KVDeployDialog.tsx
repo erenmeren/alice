@@ -118,7 +118,7 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
   return (
     <AppModal opened onClose={close} title={t('bindings.deployTitle')} size="lg" closeOnClickOutside={!busy} closeOnEscape={!busy} withCloseButton={!busy}>
       {runs ? (
-        <Stack gap="md" ref={runsRef} tabIndex={-1} aria-label={t('bindings.deployTitle')} style={{ outline: 'none' }}>
+        <Stack gap="md" ref={runsRef} tabIndex={-1} role="group" aria-label={t('bindings.deployTitle')} style={{ outline: 'none' }}>
           {runs.some((r) => !r.failed && !r.timedOut && (r.deployment === null || !isSettled(r.deployment))) && (
             <Group gap="sm" role="status" aria-live="polite">
               <Loader size="sm" aria-hidden />

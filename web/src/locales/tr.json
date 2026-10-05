@@ -861,7 +861,7 @@
       "kv": {
         "test_connection": "Key Vault erişim denetimi",
         "poll": "Key Vault denetimi",
-        "import": "Key Vault'a aktarma",
+        "import": "Key Vault'a içe aktarma",
         "schedule": "Zamanlanmış Key Vault denetimleri",
         "auto_deploy": "Yeni Key Vault sürümlerinin otomatik dağıtımı"
       },
@@ -1317,7 +1317,7 @@
     "held": "Lisans nedeniyle bekletiliyor",
     "steps": {
       "verify_current": "Mevcut sertifikayı denetleme",
-      "kv_secret": "Sertifikayı Key Vault'tan oku",
+      "kv_secret": "Sertifikayı Key Vault'tan okuma",
       "backup": "Yedekleme",
       "write": "Yazma",
       "write_key": "Özel anahtarı yazma",
@@ -1359,7 +1359,8 @@
     "cancelled": "İptal edildi",
     "source": {
       "key_vault": "Key Vault'tan",
-      "upload": "Yüklendi"
+      "upload": "Yüklendi",
+      "key_vault_named": "Key Vault'tan: {{name}}"
     },
     "sourceLabel": "Kaynak",
     "vaultLabel": "Kasa",
@@ -1380,9 +1381,9 @@
       "address": "Adres",
       "status": "Durum",
       "auth": "Oturum açma yöntemi",
-      "checked": "Son denetim"
+      "checked": "Son başarılı denetim"
     },
-    "neverChecked": "Henüz denetlenmedi",
+    "neverChecked": "Henüz başarılı denetim yok",
     "fields": {
       "name": "Ad",
       "vault_url": "Kasa adresi",
@@ -1414,8 +1415,7 @@
         "certificate": "Alice, Azure'da uygulama için kaydettiğiniz bir sertifikayla oturum açar.",
         "client_secret": "Alice, Azure'da uygulama için oluşturulmuş bir gizli anahtarla oturum açar. Gizli anahtarların süresi dolar; bu yüzden aşağıya tarihi girin.",
         "managed_identity": "Yalnızca Azure sanal makineleri için. Alice, üzerinde çalıştığı makinenin kimliğini kullanır. Gizli bir şey saklanmaz."
-      },
-      "unknown": "Bilinmiyor"
+      }
     },
     "checking": "Alice'in oturum açıp kasaya ulaşabildiği denetleniyor…",
     "added": "Key Vault eklendi.",
@@ -1427,7 +1427,7 @@
       "intro": "Uygulamaya kasada şu rolleri verin. Her satır bir üstündekine eklenir. Alice yalnızca rollerin izin verdiğini okur ve rolleri kendisi hiçbir zaman değiştirmez.",
       "monitor": "Sertifikaları, anahtarları ve gizli anahtarları izleme",
       "deploy": "Sertifikaları Nginx'e dağıtma",
-      "import": "Sertifikaları kasaya aktarma",
+      "import": "Sertifikaları kasaya içe aktarma",
       "readerUnconfirmed": "Yeterli olması bekleniyor; henüz gerçek bir kasada doğrulanmadı.",
       "policies": "Kasa erişim ilkeleri kullanıyor",
       "policiesHelp": "Bu kasa Azure rolleri yerine erişim ilkeleri kullanıyorsa bunun yerine şu komutları çalıştırın.",
@@ -1444,7 +1444,7 @@
       "ok": "İzin var",
       "forbidden": "İzin yok: {{role}} gerekiyor",
       "notChecked": "Denetlenmedi",
-      "importNote": "Aktarma sırasında denetlenir",
+      "importNote": "İçe aktarma sırasında denetlenir",
       "failed": "Denetim başarısız",
       "what": "Alice'in yapabilmesi gereken",
       "result": "Sonuç",
@@ -1464,7 +1464,7 @@
       "credentialsExpired": "Kimlik bilgilerinin süresi doldu"
     },
     "statusHelp": {
-      "degraded": "Alice bu kasaya ulaşıyor, ancak bir izin eksik veya kasanın güvenlik duvarı Alice'i engelliyor. Alice okuyabildiklerini gösterir.",
+      "degraded": "Alice bu kasaya yalnızca kısmen ulaşabiliyor. Nedeni aşağıda gösterilir.",
       "auth_failed": "Azure, Alice'in oturum açmasını reddetti. Kimlik bilgilerini değiştirin, ardından yeniden denetleyin.",
       "unreachable": "Alice şu anda Azure'a veya bu kasaya ulaşamıyor. Alice bir sonraki denetimde yeniden dener.",
       "checking": "Alice bu kasayı denetliyor.",
@@ -1478,8 +1478,8 @@
     "monitorOnly": "Yalnızca izleme",
     "removed": "Key Vault'tan kaldırıldı",
     "newVersion": "Yeni sürüm bulundu",
-    "heldVersion": "Lisans süresinin dolduğu dönemde yeni sürüm bulundu. Alice bunu kendiliğinden dağıtmaz; bir yönetici dağıtabilir veya serbest bırakabilir.",
-    "heldChain": "Sertifika zinciri eksik olduğu için tutuluyor. Bir yönetici zinciri onaylayarak dağıtabilir ya da serbest bırakabilir.",
+    "heldVersion": "Bu sürüm bir yöneticiyi bekliyor: sürüm ortaya çıktıktan sonra bir süre lisans kullanılamadı. Alice bu sürümü kendiliğinden dağıtmaz; bir yönetici dağıtabilir veya serbest bırakabilir.",
+    "heldChain": "Sertifika zinciri eksik olduğu için bekletiliyor. Bir yönetici zinciri onaylayarak dağıtabilir ya da serbest bırakabilir.",
     "connected": "Bağlı web siteleri: {{count}}",
     "disabledChip": "Key Vault'ta devre dışı",
     "detailsPending": "Ayrıntılar henüz okunmadı",
@@ -1487,7 +1487,7 @@
     "replaceTitle": "Oturum açma kimlik bilgilerini değiştirin",
     "replaceHelp": "Alice yeni kimlik bilgilerini kasa eklerkenki gibi denetler. Denetim başarısız olursa hiçbir şey değişmez.",
     "replaced": "Kimlik bilgileri değiştirildi.",
-    "lastChecked": "Son denetim: {{time}}",
+    "lastChecked": "Son başarılı denetim: {{time}}",
     "pollInterval": "Alice bu kasayı {{minutes}} dakikada bir denetler.",
     "pollSave": "Aralığı kaydet",
     "pollSaved": "Aralık kaydedildi.",
@@ -1499,7 +1499,7 @@
     "delete": "Key Vault'u kaldır",
     "deleteTitle": "Bu Key Vault, Alice'ten kaldırılsın mı?",
     "deleteHelp": "Alice kasayı ve kasadaki sertifikalar, anahtarlar ve gizli anahtarlar hakkında bildiklerini unutur. Azure'da hiçbir şey değişmez.",
-    "hasBindings": "Bu kasanın sertifikalarına hâlâ web siteleri bağlı. Bu bağlantılar da kaldırılsın mı?",
+    "hasBindings": "Bu kasanın sertifikalarına hâlâ web siteleri bağlı. Bu bağlantılar da kaldırılsın mı? Kuyrukta bekleyen otomatik dağıtımlar durur; çalışmakta olan bir dağıtım ise tamamlanır.",
     "deleteWithBindings": "Bağlantıları ve kasayı kaldır",
     "cert": {
       "columns": {
@@ -1509,7 +1509,6 @@
         "state": "Durum"
       },
       "empty": "Bu kasada sertifika yok.",
-      "open": "Aç",
       "backToVault": "Kasaya dön",
       "policyTitle": "İlke",
       "exportable": "Özel anahtar dışa aktarılabilir",
@@ -1529,9 +1528,7 @@
       "release": "Serbest bırak",
       "releaseNamed": "{{version}} sürümünü serbest bırak",
       "releaseTitle": "Bu sürüm serbest bırakılsın mı?",
-      "releaseHelp": "Serbest bırakmak hiçbir şeyi dağıtmaz. Yalnızca otomatik dağıtımın bu sürümü dikkate almasına izin verir.",
       "releaseAdminOnly": "Yalnızca bir yönetici dağıtabilir veya serbest bırakabilir.",
-      "released": "Sürüm serbest bırakıldı.",
       "deployNamed": "Şimdi dağıt: {{version}} sürümü",
       "vcolumns": {
         "thumbprint": "Parmak izi",
@@ -1542,7 +1539,12 @@
         "actions": "İşlemler",
         "version": "Sürüm",
         "state": "Durum"
-      }
+      },
+      "releaseHelpAuto": "Alice bu sürümü yaklaşık bir dakika içinde bağlı web sitelerine dağıtır.",
+      "releaseHelpManual": "Hiçbir şey dağıtılmaz. Bu sürümü bir web sitesinde istediğinizde Şimdi dağıt düğmesini kullanın.",
+      "releasedAuto": "Sürüm serbest bırakıldı. Alice onu yaklaşık bir dakika içinde bağlı web sitelerine dağıtır.",
+      "releasedManual": "Sürüm serbest bırakıldı. Hiçbir şey dağıtılmaz; istediğinizde Şimdi dağıt düğmesini kullanın.",
+      "keyValueNoSize": "Anahtar: {{type}}"
     },
     "keys": {
       "columns": {
@@ -1573,12 +1575,17 @@
     "noExpiry": "Bitiş tarihi yok",
     "showMore": "Daha fazla göster",
     "backToList": "Key Vault kasalarına dön",
-    "managedTitle": "Key Vault tarafından bir sertifika için oluşturuldu",
     "tableLabel": "Key Vault kasaları",
     "retypeSecret": "Güvenliğiniz için Alice, gizli alanlara yazdıklarınızı saklamaz. Yeniden girin.",
-    "heldChip": "Tutuluyor",
+    "heldChip": "Bekletiliyor",
     "connectedChip": "Bağlı web siteleri",
-    "warningsTitle": "Son denetimden notlar"
+    "stillWorking": "Alice hâlâ bunun üzerinde çalışıyor. Sonucu görmek için bir dakika sonra bu Key Vault kasasının sayfasını açın.",
+    "kind": {
+      "certificates": "sertifikalar",
+      "keys": "anahtarlar",
+      "secrets": "gizli anahtarlar",
+      "versions": "sürümler"
+    }
   },
   "bindings": {
     "state": {
@@ -1597,7 +1604,6 @@
     "autoDeployConfirmTitle": "Otomatik dağıtım açılsın mı?",
     "autoDeployOnlyNew": "Yalnızca siz açtıktan sonra bulunan sürümler kendiliğinden dağıtılır.",
     "autoDeployConfirm": "Aç",
-    "autoDeployOff": "Kapat",
     "adminOnly": "Bunu yalnızca bir yönetici değiştirebilir.",
     "checkDeployAccess": "Dağıtım erişimini denetle",
     "deployAccessOk": "Dağıtım erişimi doğrulandı",
@@ -1606,7 +1612,7 @@
     "lastWebsite": "Bir bağlantı için en az bir web sitesi gerekir. Son siteyi serbest bırakmak için bağlantıyı silin.",
     "delete": "Bağlantıyı sil",
     "deleteTitle": "Bu bağlantı silinsin mi?",
-    "deleteHelp": "Web siteleri serbest bırakılır ve onlarda hiçbir şey değişmez. Otomatik dağıtım sona erer.",
+    "deleteHelp": "Web siteleri serbest bırakılır ve onlarda hiçbir şey değişmez. Otomatik dağıtım sona erer: kuyrukta bekleyen dağıtımlar durur, çalışmakta olan bir dağıtım ise tamamlanır.",
     "addWebsites": "Web sitesi ekle",
     "addTitle": "Bu bağlantıya web siteleri ekleyin",
     "addAutoWarning": "Bu bağlantı otomatik dağıtım yapıyor; bu yüzden eklenen web siteleri de otomatik dağıtıma alınır.",
@@ -1614,7 +1620,8 @@
     "columns": {
       "server": "Sunucu",
       "path": "Sertifika dosyası",
-      "state": "Durum"
+      "state": "Durum",
+      "actions": "İşlemler"
     },
     "connectNeedsExport": "Özel anahtarı dışa aktarılamadığı için Alice bu sertifikayı dağıtamaz.",
     "connectHelp": "Bu sertifikayı kullanacak web sitelerini seçin. Otomatik dağıtım kapalı başlar.",
@@ -1623,7 +1630,6 @@
     "selectedCount": "Seçilen: {{count}}",
     "limit": "En fazla {{max}} web sitesi seçin.",
     "refused": "Alice burada durdu. Hiçbir şey değişmedi; bu web sitesinin işaretini kaldırın veya düzeltip yeniden deneyin.",
-    "connectedOk": "Web siteleri bağlandı.",
     "moved": "Bu bağlantı bu sırada değişti. Yeniden okundu; denetleyip bir kez daha deneyin.",
     "deployTitle": "Şimdi dağıt",
     "version": "Sürüm",
@@ -1636,25 +1642,26 @@
       "expired": "Bu sürümün süresi doldu.",
       "notYetValid": "Bu sürüm henüz geçerli değil.",
       "notExportable": "Bu sürümün özel anahtarı dışa aktarılamaz.",
-      "heldAdmin": "Bu sürüm tutuluyor. Yalnızca bir yönetici dağıtabilir."
+      "heldAdmin": "Bu sürüm bekletiliyor. Yalnızca bir yönetici dağıtabilir."
     },
-    "heldDeployNote": "Bu sürüm tutuluyor. Dağıtmak onu serbest bırakmaz; bunun için Serbest bırak'ı kullanın.",
+    "heldDeployNote": "Bu sürüm bekletiliyor. Dağıtmak onu serbest bırakmaz; bunun için Serbest bırak'ı kullanın.",
     "confirmChainNeeded": "Bu sürümün sertifika zinciri eksik. Bir yönetici zinciri onaylayarak dağıtabilir.",
     "noVersions": "Alice'in dağıtabileceği bir sürüm henüz yok.",
-    "location": "Web sitesi",
     "title": "Bağlı web siteleri",
     "connect": "Web sitelerine bağla",
     "autoDeploy": "Otomatik dağıtım",
     "autoDeployHelp": "Key Vault bu sertifikayı yenilediğinde Alice yeni sürümü bu web sitelerine dağıtır.",
     "deployNow": "Şimdi dağıt",
-    "deployAccessUnchecked": "Dağıtım erişimi denetlenmedi"
+    "deployAccessUnchecked": "Dağıtım erişimi denetlenmedi",
+    "autoDeployHelpOff": "Bu kapalıyken bulunan sürümler sonradan da kendiliğinden dağıtılmaz. Yalnızca siz açtıktan sonra bulunan sürümler kendiliğinden dağıtılır.",
+    "addAdminOnly": "Otomatik dağıtım yapan bir bağlantıya web sitesi eklemek için yönetici gerekir."
   },
   "imports": {
     "action": "Key Vault'a aktar",
     "newVersionWarning": "Bu, mevcut {{name}} sertifikasına yeni bir sürüm ekler.",
-    "noAutoRenew": "Aktarılan sertifika Key Vault'ta kendini yenilemez.",
+    "noAutoRenew": "İçe aktarılan sertifika Key Vault'ta kendini yenilemez.",
     "state": {
-      "succeeded": "Aktarıldı",
+      "succeeded": "İçe aktarıldı",
       "uncertain": "Henüz doğrulanmadı",
       "failed": "Başarısız",
       "unknown": "Sonuç bilinmiyor",
@@ -1668,16 +1675,16 @@
     "noVaults": "Henüz Key Vault yok. Önce bir tane ekleyin.",
     "openVaults": "Key Vault kasalarını aç",
     "privateKeyNote": "Bu sertifikanın özel anahtarı Alice'ten çıkar ve kasada saklanır. Bunu yalnızca bir yönetici yapabilir.",
-    "adminOnly": "Bir sertifikayı Key Vault'a yalnızca bir yönetici aktarabilir.",
+    "adminOnly": "Bir sertifikayı Key Vault'a yalnızca bir yönetici içe aktarabilir.",
     "confirmNewVersion": "Anladım ve yeni bir sürüm eklenmesini istiyorum",
-    "policyWarning": "Aktarılan sürüm, sertifikanın kasadaki ayarlarının yerine geçer. Kasa bu sertifikayı kendiliğinden yenilemeyi bırakabilir.",
+    "policyWarning": "İçe aktarılan sürüm, sertifikanın kasadaki ayarlarının yerine geçer. Kasa bu sertifikayı kendiliğinden yenilemeyi bırakabilir.",
     "boundNote": "Bu kasa sertifikasına web siteleri bağlı.",
     "autoDeployFollows": "Bunun için otomatik dağıtım açık; bu yüzden yeni sürüm bu web sitelerine kendiliğinden dağıtılır.",
     "autoDeployNot": "Bunun için otomatik dağıtım kapalı; bu yüzden kendiliğinden hiçbir şey dağıtılmaz.",
     "working": "Alice sertifikayı içe aktarıyor…",
     "importedVersion": "Kasadaki sürüm: {{version}}",
     "explain": {
-      "uncertain": "Kasa içe aktarmayı doğrulamadı. Alice bunu yeniden göndermez. Kasanın bir sonraki denetimi, içe aktarmanın ulaşıp ulaşmadığını doğrular.",
+      "uncertain": "Alice sertifikayı gönderdi ancak Key Vault'un onu sakladığını doğrulayamadı. Alice kasayı denetlemeyi sürdürür ve sonucu burada gösterir. Bu durum gösterilirken sertifikayı yeniden içe aktarmayın.",
       "unknown": "Alice, kasanın içe aktarmayı kabul edip etmediğini hiç öğrenemedi ve bunu yeniden göndermez. Sertifikayı kasada arayın."
     },
     "canRetry": "Kasaya hiçbir şey ulaşmadı; bu yüzden yeniden deneyebilirsiniz.",
@@ -1685,7 +1692,7 @@
     "stillWorking": "İçe aktarma hâlâ sürüyor. Sonucu sertifikanın içe aktarma geçmişinde görünür.",
     "history": {
       "title": "Key Vault'a içe aktarmalar",
-      "empty": "Bu sertifika henüz bir Key Vault'a aktarılmadı.",
+      "empty": "Bu sertifika henüz bir Key Vault'a içe aktarılmadı.",
       "columns": {
         "when": "İstenme zamanı",
         "vault": "Kasa",

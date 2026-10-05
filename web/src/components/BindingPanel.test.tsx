@@ -187,3 +187,60 @@ describe('BindingPanel with a connection', () => {
     expectNoRawKeys(screen.getByTestId('binding-panel'));
   });
 });
+
+describe('BindingPanel fix round', () => {
+  it('re-reads the connection after a 412 on Remove website, and the next click sends the new ETag', async () => {
+    const two = (version: number) => bindingFixture({ version, locations: [bindingLocationFixture(), bindingLocationFixture({ location_id: 'l2', target_name: 'web-02' })] });
+    let current = two(2);
+    const matches: (string | null)[] = [];
+    server.use(
+      ...sessionHandlers(sessionFor('operator')),
+      http.get(`/api/v1/bindings/${BINDING_ID}`, () => HttpResponse.json(current)),
+      http.patch(`/api/v1/bindings/${BINDING_ID}`, ({ request }) => {
+        matches.push(request.headers.get('If-Match'));
+        if (matches.length === 1) {
+          current = two(3);
+          return errorResponse(412, 'ALC-SYS-0008', 'system.precondition_failed');
+        }
+        return HttpResponse.json(bindingFixture());
+      }),
+    );
+    const cert = kvCertificateDetailFixture({ binding: SUMMARY, bound: true });
+    await renderWithStepUp(<BindingPanel vaultId={VAULT_ID} certificate={cert} canOperate admin={false} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Remove website: web-02' }));
+    await waitFor(() => expect(matches).toEqual(['"2"']));
+    await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
+    await waitFor(async () => {
+      await user.click(screen.getByRole('button', { name: 'Remove website: web-02' }));
+      expect(matches.length).toBeGreaterThan(1);
+    });
+    expect(matches[1]).toBe('"3"');
+  });
+
+  it('says why an Operator cannot add websites to a connection that deploys automatically', async () => {
+    await show('operator', {}, bindingFixture({ auto_deploy: true }));
+    expect(await screen.findByRole('button', { name: 'Add websites' })).toBeDisabled();
+    expect(screen.getByText('Adding websites to a connection that deploys automatically needs an administrator.')).toBeInTheDocument();
+  });
+
+  it('says in the delete dialog that deployments in the queue stop and a running one finishes', async () => {
+    await show('operator');
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete connection' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('deployments still waiting in the queue stop, and one that is already running finishes');
+  });
+
+  it('has a visually hidden header for the actions column and a labelled loading state with a role', async () => {
+    await show('operator');
+    expect(await screen.findByRole('columnheader', { name: 'Actions' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: '' })).not.toBeInTheDocument();
+  });
+
+  it('gives the loading indicator a status role instead of a bare label', async () => {
+    server.use(...sessionHandlers(sessionFor('operator')), http.get(`/api/v1/bindings/${BINDING_ID}`, async () => { await new Promise((r) => setTimeout(r, 200)); return HttpResponse.json(bindingFixture()); }));
+    await renderWithStepUp(<BindingPanel vaultId={VAULT_ID} certificate={kvCertificateDetailFixture({ binding: SUMMARY, bound: true })} canOperate admin={false} />);
+    const busy = await screen.findByRole('status', { name: 'Loading…' });
+    expect(busy.querySelector('[aria-label]')).toBeNull();
+  });
+});
+

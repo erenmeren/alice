@@ -93,6 +93,19 @@ describe('AutoDeploySwitch', () => {
     }
   });
 
+  it('says under an OFF switch that only versions found after it is switched on are deployed, and the ON text under an ON switch', async () => {
+    asRole('admin');
+    const view = await renderWithStepUp(<AutoDeploySwitch binding={bindingFixture()} admin exportable onChanged={vi.fn()} />);
+    const off = screen.getByTestId('auto-deploy');
+    expect(off).toHaveTextContent('Versions found while this is off are not deployed automatically later. Only versions found after you switch it on are deployed by themselves.');
+    expect(off).not.toHaveTextContent('When Key Vault renews this certificate, Alice deploys the new version');
+    view.unmount();
+    await renderWithStepUp(<AutoDeploySwitch binding={bindingFixture({ auto_deploy: true })} admin exportable onChanged={vi.fn()} />);
+    const on = screen.getByTestId('auto-deploy');
+    expect(on).toHaveTextContent('When Key Vault renews this certificate, Alice deploys the new version to these websites.');
+    expect(on).not.toHaveTextContent('Versions found while this is off');
+  });
+
   it('is complete in Turkish', async () => {
     asRole('admin', 'tr');
     await renderWithStepUp(<AutoDeploySwitch binding={bindingFixture()} admin exportable onChanged={vi.fn()} />, ['tr-TR']);

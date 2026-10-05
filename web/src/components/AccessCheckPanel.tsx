@@ -10,6 +10,7 @@ import type { JobError } from '../api/types';
 import { formatDateTime } from '../datetime';
 import { CodeText } from './CodeText';
 import { ErrorAlert } from './ErrorAlert';
+import { LoadingIndicator } from './LoadingIndicator';
 import { BlockedJobAlert, JobErrorAlert, reasonTitle, StillWorkingAlert, StoppedJobAlert } from './JobErrorAlert';
 import { ROLE_CERTIFICATES_OFFICER, ROLE_READER, ROLE_SECRETS_USER } from './roleCommands';
 
@@ -150,7 +151,7 @@ export function AccessCheckPanel({ vaultId, access, canOperate, certificateId }:
           {certificateId === undefined && <Checkbox label={t('vaults.access.deployToo')} checked={deployToo} onChange={(e) => setDeployToo(e.currentTarget.checked)} disabled={busy} />}
           {deployToo && certificateId === undefined && (
             <>
-              {certs.isPending && <Loader size="sm" aria-label={t('ui.loading')} />}
+              {certs.isPending && <LoadingIndicator />}
               <ErrorAlert error={certs.error} />
               {certs.isSuccess && usable.length === 0 && <Text size="sm">{t('vaults.access.noExportable')}</Text>}
               {usable.length > 0 && (
@@ -182,7 +183,7 @@ export function AccessCheckPanel({ vaultId, access, canOperate, certificateId }:
           {t('targets.jobDone')}
         </Text>
       )}
-      {error instanceof JobTimeoutError ? <StillWorkingAlert /> : <ErrorAlert error={error} />}
+      {error instanceof JobTimeoutError ? <StillWorkingAlert textKey="vaults.stillWorking" /> : <ErrorAlert error={error} />}
       {blocked && <BlockedJobAlert />}
       {stopped && <StoppedJobAlert />}
       <JobErrorAlert error={jobError} />

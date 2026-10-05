@@ -113,6 +113,27 @@ describe('StepUpProvider', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
+  it('retries exactly once: a second refusal ends the call after two requests and opens no second dialog', async () => {
+    let calls = 0;
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.post('/api/v1/sensitive', () => {
+        calls += 1;
+        return errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required');
+      }),
+      http.post('/api/v1/auth/stepup', () => HttpResponse.json(sessionFor('admin'))),
+    );
+    await renderHarness();
+    await userEvent.click(await screen.findByRole('button', { name: 'Do it' }));
+    await userEvent.type(await screen.findByLabelText('6-digit code'), '123456');
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('failed: auth.stepup_required'));
+    expect(calls).toBe(2);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await new Promise((r) => setTimeout(r, 100));
+    expect(calls).toBe(2);
+  });
+
   it('gives up with the original error when the user cancels', async () => {
     server.use(
       ...sessionHandlers(sessionFor('admin')),

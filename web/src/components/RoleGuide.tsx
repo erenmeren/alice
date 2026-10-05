@@ -33,7 +33,7 @@ function CommandCell({ command, label }: { command: string; label: string }) {
   const { t } = useTranslation();
   return (
     <Stack gap={4}>
-      <Code block translate="no" tabIndex={0} aria-label={t('vaults.roles.commandLabel', { what: label })} style={WRAP}>
+      <Code block translate="no" tabIndex={0} role="group" aria-label={t('vaults.roles.commandLabel', { what: label })} style={WRAP}>
         {command}
       </Code>
       <CopyButton value={command}>

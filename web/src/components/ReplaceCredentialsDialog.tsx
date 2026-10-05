@@ -56,8 +56,12 @@ export function ReplaceCredentialsDialog({ vault, onClose, onReplaced }: { vault
     }
   };
 
+  const leave = () => {
+    setSignIn(wipeSecrets(signIn));
+    onClose();
+  };
   return (
-    <AppModal opened onClose={onClose} title={t('vaults.replaceTitle')} size="lg" closeOnClickOutside={!busy} closeOnEscape={!busy} withCloseButton={!busy}>
+    <AppModal opened onClose={leave} title={t('vaults.replaceTitle')} size="lg" closeOnClickOutside={!busy} closeOnEscape={!busy} withCloseButton={!busy}>
       {busy ? (
         <Group gap="sm" role="status" aria-live="polite">
           <Loader size="sm" aria-hidden />
@@ -71,7 +75,7 @@ export function ReplaceCredentialsDialog({ vault, onClose, onReplaced }: { vault
             {retype && <Alert color="gray">{t('vaults.retypeSecret')}</Alert>}
             <ErrorAlert error={error} />
             <Group justify="flex-end">
-              <Button variant="default" onClick={onClose}>
+              <Button variant="default" onClick={leave}>
                 {t('ui.cancel')}
               </Button>
               <Button type="submit" disabled={!signInReady(signIn)}>

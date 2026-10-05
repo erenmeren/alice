@@ -72,13 +72,18 @@ export function AddKeyVaultDialog({ onClose, onAdded }: { onClose: () => void; o
     }
   };
 
+  // Leaving the dialog wipes the secret fields first, so they are gone even if the parent keeps it mounted.
+  const leave = () => {
+    setSignIn(wipeSecrets(signIn));
+    onClose();
+  };
   const vault = created?.target.vault;
   const access = created?.access ?? vault?.access ?? null;
   const partly = created !== null && accessRows(access).some((r) => r.result === 'forbidden' || r.result === 'failed');
   const working = phase === 'working';
 
   return (
-    <AppModal opened onClose={onClose} title={t('vaults.add')} size="lg" closeOnClickOutside={!working} closeOnEscape={!working} withCloseButton={!working}>
+    <AppModal opened onClose={leave} title={t('vaults.add')} size="lg" closeOnClickOutside={!working} closeOnEscape={!working} withCloseButton={!working}>
       {phase === 'working' && (
         <Group gap="sm" role="status" aria-live="polite">
           <Loader size="sm" aria-hidden />
@@ -113,7 +118,7 @@ export function AddKeyVaultDialog({ onClose, onAdded }: { onClose: () => void; o
               </Box>
             </Box>
             <Group justify="flex-end">
-              <Button variant="default" onClick={onClose}>
+              <Button variant="default" onClick={leave}>
                 {t('ui.cancel')}
               </Button>
               <Button type="submit" disabled={!ready}>

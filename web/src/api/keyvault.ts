@@ -327,7 +327,7 @@ export const importToKeyVault = (certificateId: string, vaultId: string, name: s
     body: { target_id: vaultId, name, ...(confirmNewVersion ? { confirm_new_version: true } : {}) },
   });
 
-export const listKVImports = (vaultId: string, certificateId?: string, limit = 50) =>
-  apiFetch<Page<KVImport>>(`${v1}/targets/${enc(vaultId)}/kv/imports${qs({ certificate_id: certificateId, limit })}`);
+export const listKVImports = (vaultId: string, certificateId?: string, limit = 50, cursor?: string | null) =>
+  apiFetch<Page<KVImport>>(`${v1}/targets/${enc(vaultId)}/kv/imports${qs({ certificate_id: certificateId, limit, cursor })}`);
 
 export const getKVImport = (vaultId: string, id: string) => apiFetch<KVImport>(`${v1}/targets/${enc(vaultId)}/kv/imports/${enc(id)}`);
