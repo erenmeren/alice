@@ -105,11 +105,15 @@ describe('KeyVaultDetailPage header', () => {
       expect(fact.querySelector('img, a, script')).toBeNull();
     });
 
-    it('shows no firewall address for another failure, or without one', async () => {
-      asRole('operator', vaultWith({ status: 'degraded', last_error: { code: 'ALC-AKV-0004', reason: 'azure.firewall' } }));
+    it.each([
+      ['a firewall failure without an address', { code: 'ALC-AKV-0004', reason: 'azure.firewall' }],
+      ['another failure that carries an address', { code: 'ALC-AKV-0003', reason: 'azure.forbidden', params: { role: 'Key Vault Reader', client_address: '203.0.113.7' } }],
+    ])('shows no firewall address for %s', async (_, lastError) => {
+      asRole('operator', vaultWith({ status: 'degraded', last_error: lastError }));
       await renderRoute(PATH);
       await screen.findByRole('heading', { name: 'Prod vault', level: 1 });
       expect(screen.queryByTestId('vault-firewall-address')).toBeNull();
+      expect(screen.queryByText('203.0.113.7')).toBeNull();
     });
 
     it('shows the firewall address in Turkish', async () => {
