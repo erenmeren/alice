@@ -312,7 +312,7 @@ func TestVaultReadRoutes(t *testing.T) {
 		assert.Equal(t, vaultID, v)
 		assert.Equal(t, kvCertID, id)
 		return inventory.KVCertificateDetail{KVCertificate: sampleKVCertificate(), DeployAccess: inventory.DeployAccessOK,
-			Versions: []inventory.KVVersion{{ID: versionA, Version: strings.Repeat("a", 32), Thumbprint: strings.Repeat("b", 40), Enabled: true, Held: true, HeldReason: "license"}},
+			Versions: []inventory.KVVersion{{ID: versionA, Version: strings.Repeat("a", 32), Thumbprint: strings.Repeat("b", 40), Enabled: true, Held: true, HeldReason: "license", ChainIncomplete: true}},
 			Binding:  &inventory.BindingSummary{ID: bindingA, AutoDeploy: true, LocationCount: 2, Version: 4}}, nil
 	}
 	rec = call(h, http.MethodGet, "/api/v1/targets/"+vaultID.String()+"/kv/certificates/"+kvCertID.String(), "auditor", "")
@@ -320,6 +320,7 @@ func TestVaultReadRoutes(t *testing.T) {
 	detail := jsonObj(t, rec)
 	assert.Equal(t, "ok", detail["deploy_access"])
 	assert.Equal(t, "license", detail["versions"].([]any)[0].(map[string]any)["held_reason"])
+	assert.Equal(t, true, detail["versions"].([]any)[0].(map[string]any)["chain_incomplete"], "Deploy now learns the chain is incomplete")
 	assert.Equal(t, bindingA.String(), detail["binding"].(map[string]any)["id"])
 	// A server's id on a kv route: the inventory says ErrNotAVault, the API answers 404.
 	inv.ListKVCertificatesFn = func(context.Context, uuid.UUID, inventory.KVFilter) (inventory.KVCertificatePage, error) {

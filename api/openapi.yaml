@@ -2058,7 +2058,7 @@ components:
     KVVersion:
       type: object
       required: [id, version, thumbprint, certificate_id, enabled, not_before, expires, kv_created_at, exportable, key_type, content_type,
-        detected_at, held, held_reason]
+        detected_at, held, held_reason, chain_incomplete]
       properties:
         id: { type: string, format: uuid }
         version: { type: string, description: 32 hex digits }
@@ -2074,6 +2074,12 @@ components:
         detected_at: { type: string, format: date-time }
         held: { type: boolean, description: Not deployed by itself; an Administrator deploys or releases it }
         held_reason: { type: string, enum: ["", license, incomplete_chain] }
+        chain_incomplete:
+          type: boolean
+          description: >-
+            The last read of this version's secret found its chain incomplete (false until a deployment read it). Every
+            manual deployment of it then needs an Administrator's confirm_incomplete_chain, held or released alike (409
+            ALC-CRT-0011 without it); releasing a hold does not confirm the chain.
     BindingSummary:
       type: [object, "null"]
       required: [id, auto_deploy, auto_since, stopped_version, location_count, version, created_at]

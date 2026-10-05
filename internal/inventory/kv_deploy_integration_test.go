@@ -434,13 +434,26 @@ func TestKVDeployMaterialIncompleteChain(t *testing.T) {
 	assert.Equal(t, 1, h.secretReads("failure"), "the refused read is audited")
 	assert.Zero(t, h.secretReads("success"))
 	assert.Zero(t, h.count("SELECT count(*) FROM kv_certificate_versions WHERE held"))
-
+	// What the read found is kept on the version: every later manual request needs the confirmation up front.
+	assert.True(t, b.chainIncomplete(v1), "the read found the chain incomplete")
+	b.finishQueued(inventory.RequestedDeployment{ID: id})
+	request := func(a inventory.Actor, confirm bool, loc uuid.UUID) error {
+		_, err := h.svc.RequestKVDeployment(ctx, a, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1,
+			LocationIDs: []uuid.UUID{loc}, ConfirmIncompleteChain: confirm})
+		return err
+	}
+	assert.ErrorIs(t, request(b.admin, false, b.loc1), inventory.ErrChainUnconfirmed, "refused before anything is queued or read")
 	// An Operator's confirmation counts for nothing (the request records it only for an Administrator).
+	assert.ErrorIs(t, request(b.operator, true, b.loc2), inventory.ErrChainUnconfirmed)
+	assert.Zero(t, h.count("SELECT count(*) FROM deployments WHERE state = 'queued'"), "nothing was queued")
+	// A manual deployment that started before Alice knew (requested earlier) still meets the refusal at the read.
+	b.exec("UPDATE kv_certificate_versions SET chain_incomplete = false WHERE id = $1", v1)
 	id2 := begin(b.operator, true, b.loc2)
 	assert.False(t, b.get(id2).ConfirmIncompleteChain)
 	_, secret = pemSecret(leafOnly)
 	_, err = h.svc.KVDeployMaterial(ctx, id2, secret)
 	assert.ErrorIs(t, err, inventory.ErrChainUnconfirmed)
+	assert.True(t, b.chainIncomplete(v1))
 
 	// Confirmed by an Administrator: proceeds with a warning.
 	id3 := begin(b.admin, true, b.loc3)
@@ -453,12 +466,20 @@ func TestKVDeployMaterialIncompleteChain(t *testing.T) {
 	m.PrivateKeyPEM.Zero()
 	assert.False(t, b.certRowChainComplete(fp))
 	assert.Equal(t, 1, h.secretReads("success"))
+	assert.True(t, b.chainIncomplete(v1), "a confirmed deployment of an incomplete chain does not make it complete")
+	got, err := h.svc.KVCertificate(ctx, b.vault, b.web)
+	require.NoError(t, err)
+	for _, v := range got.Versions {
+		assert.Equal(t, v.ID == v1, v.ChainIncomplete, "the version detail says so")
+	}
 
 	// An automatic deployment (the planner's trigger) never proceeds: the version is held until an
 	// Administrator deploys or releases it; a hold of another reason is kept (the first reason wins).
 	b.finishQueued(inventory.RequestedDeployment{ID: id}, inventory.RequestedDeployment{ID: id2}, inventory.RequestedDeployment{ID: id3})
 	auto := func() uuid.UUID {
 		t.Helper()
+		// The planner queues its deployment without the manual request's check (it is judged at the read).
+		b.exec("UPDATE kv_certificate_versions SET chain_incomplete = false WHERE id = $1", v1)
 		reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1, LocationIDs: []uuid.UUID{b.loc1}})
 		require.NoError(t, err)
 		b.exec("UPDATE deployments SET trigger = 'kv_renewal' WHERE id = $1", reqs[0].ID)
@@ -509,6 +530,34 @@ func TestKVDeployMaterialIncompleteChain(t *testing.T) {
 	require.NoError(t, h.db.Owner.QueryRow(ctx, "SELECT held_reason FROM kv_certificate_versions WHERE id = $1", v1).Scan(&reason))
 	assert.Equal(t, "license", reason, "the first reason wins")
 	assert.Len(t, h.auditDetails("kv.version.held"), 1)
+}
+
+// chainIncomplete reads what the last read of the version's secret found about its chain.
+func (b *bindFixture) chainIncomplete(version uuid.UUID) bool {
+	b.h.t.Helper()
+	var v bool
+	require.NoError(b.h.t, b.h.db.Owner.QueryRow(b.h.ctx, "SELECT chain_incomplete FROM kv_certificate_versions WHERE id = $1", version).Scan(&v))
+	return v
+}
+
+// A read that finds the chain complete clears what an earlier read found (the vault's secret was fixed).
+func TestKVDeployMaterialCompleteChainClearsTheMark(t *testing.T) {
+	b := newBindFixture(t)
+	h, ctx := b.h, b.h.ctx
+	bind := b.create(b.admin, b.web, b.loc1)
+	v1 := b.versionID(b.web, ver(1))
+	b.exec("UPDATE kv_certificate_versions SET chain_incomplete = true WHERE id = $1", v1)
+	reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1,
+		LocationIDs: []uuid.UUID{b.loc1}, ConfirmIncompleteChain: true})
+	require.NoError(t, err)
+	_, err = h.svc.BeginDeployment(ctx, reqs[0].ID)
+	require.NoError(t, err)
+	_, secret := b.fullSecret()
+	m, err := h.svc.KVDeployMaterial(ctx, reqs[0].ID, secret)
+	require.NoError(t, err)
+	m.PrivateKeyPEM.Zero()
+	assert.Empty(t, m.Warnings)
+	assert.False(t, b.chainIncomplete(v1))
 }
 
 // exportable reads the stored exportable flag of the certificate and of one of its versions.

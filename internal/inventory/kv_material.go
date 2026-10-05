@@ -121,6 +121,8 @@ func (s *Service) KVDeployMaterial(ctx context.Context, id uuid.UUID, secret pro
 			if herr = s.holdIncompleteChain(ctx, m); herr != nil {
 				s.log.Error("could not hold a version for its incomplete chain", "error_type", fmt.Sprintf("%T", herr))
 			}
+		} else if herr = s.markChainIncomplete(ctx, m); herr != nil {
+			s.log.Error("could not mark a version's chain incomplete", "error_type", fmt.Sprintf("%T", herr))
 		}
 		m2, rerr := refuse("chain_unconfirmed", ErrChainUnconfirmed)
 		return m2, errors.Join(rerr, herr)
@@ -331,9 +333,24 @@ func (s *Service) recordSecretRead(ctx context.Context, m Material, v certs.Vali
 			m.Deployment.CertificateID, v.PEMChain, v.ChainComplete); err != nil {
 			return fmt.Errorf("inventory: store the delivered chain: %w", err)
 		}
+		if _, err := tx.Exec(ctx, "UPDATE kv_certificate_versions SET chain_incomplete = $2 WHERE id = $1", m.KV.VersionID, !v.ChainComplete); err != nil {
+			return fmt.Errorf("inventory: store what the read found about the chain: %w", err)
+		}
 		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "kv.secret_read", ObjectType: "deployment", ObjectID: m.Deployment.ID.String(),
 			Result: audit.Success, Details: map[string]string{"purpose": "deploy", "deployment_id": m.Deployment.ID.String(),
 				"kv_certificate_id": m.KV.KVCertificateID.String(), "certificate_name": m.KV.Name, "version": m.KV.Version}})
+		return err
+	})
+}
+
+// markChainIncomplete stores that a read of the deployment's version found its chain incomplete (a manual deployment
+// without the confirmation), fenced to the job's claim, so the next manual request asks for the confirmation.
+func (s *Service) markChainIncomplete(ctx context.Context, m Material) error {
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := checkClaim(ctx, tx); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, "UPDATE kv_certificate_versions SET chain_incomplete = true WHERE id = $1", m.KV.VersionID)
 		return err
 	})
 }
@@ -377,6 +394,9 @@ func (s *Service) holdIncompleteChain(ctx context.Context, m Material) error {
 				return nil
 			}
 			return err
+		}
+		if _, err := tx.Exec(ctx, "UPDATE kv_certificate_versions SET chain_incomplete = true WHERE id = $1", m.KV.VersionID); err != nil {
+			return fmt.Errorf("inventory: mark the version's chain incomplete: %w", err)
 		}
 		tag, err := tx.Exec(ctx, "UPDATE kv_certificate_versions SET held = true, held_reason = $2, notified_at = NULL WHERE id = $1 AND NOT held",
 			m.KV.VersionID, heldIncompleteChain)

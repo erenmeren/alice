@@ -139,6 +139,38 @@ describe('KVDeployDialog', () => {
     expect(body).toEqual({ version_id: 'v-new', location_ids: [bindingLocationFixture().location_id, 'loc-2'], confirm_incomplete_chain: true });
   });
 
+  it.each([
+    ['released (not held)', { held: false, held_reason: '' as const }],
+    ['held for the license', { held: true, held_reason: 'license' as const }],
+  ])('offers the chain confirmation up front for a version whose chain a read found incomplete, %s', async (_, hold) => {
+    const v = { ...V_NEW, ...hold, chain_incomplete: true };
+    asRole('admin');
+    let body: unknown = null;
+    server.use(
+      http.post(`/api/v1/bindings/${BINDING_ID}/actions/deploy`, async ({ request }) => { body = await request.json(); return HttpResponse.json(accepted(['d1', 'loc-2']), { status: 202 }); }),
+      http.get('/api/v1/deployments/d1', () => HttpResponse.json(deploymentDetailFixture({ id: 'd1' }))),
+    );
+    const user = userEvent.setup();
+    await renderWithStepUp(<KVDeployDialog binding={BINDING} certificate={cert([v])} onClose={vi.fn()} />);
+    const confirm = await screen.findByLabelText('I confirm that this incomplete chain is intended');
+    expect(screen.getByRole('button', { name: 'Deploy now' })).toBeDisabled();
+    await user.click(confirm);
+    await user.click(screen.getByRole('button', { name: 'Deploy now' }));
+    await screen.findByTestId('deployment-run');
+    expect(body).toEqual({ version_id: 'v-new', location_ids: [bindingLocationFixture().location_id, 'loc-2'], confirm_incomplete_chain: true });
+  });
+
+  it('tells an Operator up front that a version with an incomplete chain needs an administrator, and sends nothing', async () => {
+    asRole('operator');
+    let calls = 0;
+    server.use(http.post(`/api/v1/bindings/${BINDING_ID}/actions/deploy`, () => { calls++; return HttpResponse.json(accepted(), { status: 202 }); }));
+    await renderWithStepUp(<KVDeployDialog binding={BINDING} certificate={cert([{ ...V_NEW, chain_incomplete: true }])} onClose={vi.fn()} />);
+    expect(await screen.findByText(/An administrator can deploy it after confirming the chain/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('I confirm that this incomplete chain is intended')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deploy now' })).toBeDisabled();
+    expect(calls).toBe(0);
+  });
+
   it('offers no chain confirmation until the server asks for it, and only to an Administrator', async () => {
     server.use(http.post(`/api/v1/bindings/${BINDING_ID}/actions/deploy`, () => errorResponse(409, 'ALC-CRT-0011', 'certificate.chain_unconfirmed')));
     asRole('admin');

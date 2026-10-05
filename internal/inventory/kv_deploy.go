@@ -48,6 +48,7 @@ type deployVersion struct {
 	exportable      *bool
 	held            bool
 	heldReason      string
+	chainIncomplete bool // the last read of its secret found the chain incomplete
 }
 
 // versionRefusal decides whether a stored version can be deployed by this actor, in this order:
@@ -89,9 +90,10 @@ func versionRefusal(v deployVersion, c kvCertInfo, leaf deployCertificate, a Act
 // binding's (or not there, or whose server was deleted), then Phase 4's checkDeployLocation
 // (ErrLocationUnsupported, ErrTargetNotReady, ErrNginxConfigInvalid, ErrLocationNeedsDiscovery,
 // *KeyTypeMismatchError, ErrRecoveryPending, ErrDeploymentInProgress, F-15). Each refusal is audited
-// deployment.denied after the rollback. F-17 (an incomplete chain) is not decided here: the chain is
-// known only once the secret is read (KVDeployMaterial refuses an incomplete one without the
-// Administrator's confirmation, ruling S7). Deploying a held version does not release it.
+// deployment.denied after the rollback. F-17 (an incomplete chain) is decided here only when an earlier read of
+// the version's secret found the chain incomplete (ErrChainUnconfirmed without an Administrator's confirmation,
+// held or released alike); otherwise the chain is known only once the secret is read (KVDeployMaterial refuses
+// an incomplete one without the confirmation, ruling S7). Deploying a held version does not release it.
 func (s *Service) RequestKVDeployment(ctx context.Context, a Actor, in KVDeployInput) ([]RequestedDeployment, error) {
 	var errs validate.Errors
 	if in.BindingID == uuid.Nil {
@@ -134,9 +136,9 @@ func (s *Service) RequestKVDeployment(ctx context.Context, a Actor, in KVDeployI
 			return err
 		}
 		v := deployVersion{id: in.VersionID}
-		err = tx.QueryRow(ctx, `SELECT kv_certificate_id, certificate_id, version, enabled, exportable, held, held_reason
+		err = tx.QueryRow(ctx, `SELECT kv_certificate_id, certificate_id, version, enabled, exportable, held, held_reason, chain_incomplete
 FROM kv_certificate_versions WHERE id = $1 FOR SHARE`, in.VersionID).Scan(&v.certificate, &v.certificateRow, &v.version, &v.enabled, &v.exportable,
-			&v.held, &v.heldReason)
+			&v.held, &v.heldReason, &v.chainIncomplete)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return denyWith(&denial, "version_not_found", uuid.Nil, ErrNotFound)
 		}
@@ -155,6 +157,11 @@ FROM kv_certificate_versions WHERE id = $1 FOR SHARE`, in.VersionID).Scan(&v.cer
 		}
 		if v.held && !in.StrictSession {
 			return denyWith(&denial, "held_needs_step_up", uuid.Nil, ErrHeldNeedsStepUp)
+		}
+		// F-17 as far as Alice knows it: a read of this version's secret found the chain incomplete. Releasing a hold
+		// does not confirm it; every manual deployment needs an Administrator's confirmation.
+		if v.chainIncomplete && !(in.ConfirmIncompleteChain && a.Role == rbac.Admin) {
+			return denyWith(&denial, "chain_unconfirmed", uuid.Nil, ErrChainUnconfirmed)
 		}
 		ids := in.LocationIDs
 		if len(ids) == 0 {
@@ -335,9 +342,9 @@ const (
 func readKVVersion(ctx context.Context, q db.Querier, id uuid.UUID) (KVVersion, error) {
 	var v KVVersion
 	err := q.QueryRow(ctx, `SELECT id, version, thumbprint, certificate_id, enabled, not_before, expires, kv_created_at, exportable, key_type,
-content_type, detected_at, held, held_reason, notified_at, skipped_notified_at FROM kv_certificate_versions WHERE id = $1`, id).Scan(&v.ID,
+content_type, detected_at, held, held_reason, notified_at, skipped_notified_at, chain_incomplete FROM kv_certificate_versions WHERE id = $1`, id).Scan(&v.ID,
 		&v.Version, &v.Thumbprint, &v.CertificateID, &v.Enabled, &v.NotBefore, &v.Expires, &v.KVCreatedAt, &v.Exportable, &v.KeyType,
-		&v.ContentType, &v.DetectedAt, &v.Held, &v.HeldReason, &v.NotifiedAt, &v.SkippedNotifiedAt)
+		&v.ContentType, &v.DetectedAt, &v.Held, &v.HeldReason, &v.NotifiedAt, &v.SkippedNotifiedAt, &v.ChainIncomplete)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return KVVersion{}, ErrNotFound
 	}

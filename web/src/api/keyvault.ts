@@ -116,6 +116,9 @@ export interface KVVersion {
   detected_at: string;
   held: boolean;
   held_reason: '' | 'license' | 'incomplete_chain';
+  // The last read of the version's secret found its chain incomplete: every manual deployment needs an
+  // Administrator's confirmation, held or released alike.
+  chain_incomplete: boolean;
 }
 
 export interface BindingSummary {

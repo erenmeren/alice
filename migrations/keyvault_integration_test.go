@@ -702,7 +702,37 @@ VALUES (gen_random_uuid(), $1, $2, $3, 'manual', 'queued', 'pending', repeat('e'
 		assert.True(t, tableExists(t, d, tbl), tbl+" is still there after a refused Down")
 	}
 	assert.Equal(t, 1, scanInt(t, d, "SELECT count(*) FROM targets WHERE type = 'azure_key_vault'"))
+	// goose runs each Down in its own transaction: 00009's went through before 00008's refused, so only the chain
+	// column's grant is missing until the next Up.
+	assert.Equal(t, []string{"public.kv_certificate_versions"}, grantProblems(t, d))
+	_, err = p.Up(ctx)
+	require.NoError(t, err)
 	assert.Empty(t, grantProblems(t, d))
+}
+
+// Migration 00009 adds what a secret read found about a version's chain, with its column grant, and takes both
+// away again over vault data (nothing else depends on it).
+func TestMigration00009ChainIncomplete(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	p, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(d.Owner), migrations.FS)
+	require.NoError(t, err)
+	column := func() int {
+		return scanInt(t, d, `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'kv_certificate_versions'
+AND column_name = 'chain_incomplete'`)
+	}
+	require.Equal(t, 1, column())
+	assert.Empty(t, grantProblems(t, d))
+	addVault(t, d, "kv1")
+	_, err = p.DownTo(ctx, 8)
+	require.NoError(t, err, "00009 goes down over vault data")
+	assert.Equal(t, 0, column())
+	assert.Equal(t, []string{"public.kv_certificate_versions"}, grantProblems(t, d), "only the chain column's grant is gone")
+	_, err = p.Up(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, column())
+	assert.Empty(t, grantProblems(t, d))
+	assert.Equal(t, 0, scanInt(t, d, "SELECT count(*) FROM kv_certificate_versions WHERE chain_incomplete"), "unknown until a read")
 }
 
 var phase5Tables = []string{"kv_certificates", "kv_certificate_versions", "kv_keys", "kv_secrets", "bindings", "kv_imports"}

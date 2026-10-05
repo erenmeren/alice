@@ -561,6 +561,7 @@ export function kvVersionFixture(o: Partial<KVVersion> = {}): KVVersion {
     detected_at: '2026-09-02T00:00:00Z',
     held: false,
     held_reason: '',
+    chain_incomplete: false,
     ...o,
   };
 }

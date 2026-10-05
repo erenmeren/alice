@@ -265,6 +265,9 @@ type kvVersionDTO struct {
 	DetectedAt    time.Time  `json:"detected_at"`
 	Held          bool       `json:"held"`
 	HeldReason    string     `json:"held_reason"`
+	// ChainIncomplete: the last read of the version's secret found its chain incomplete; Deploy now asks an
+	// Administrator to confirm it, held or not.
+	ChainIncomplete bool `json:"chain_incomplete"`
 }
 
 func kvVersionJSON(v inventory.KVVersion) kvVersionDTO {
@@ -272,7 +275,7 @@ func kvVersionJSON(v inventory.KVVersion) kvVersionDTO {
 		ID: v.ID.String(), Version: versionOrBlank(v.Version), Thumbprint: thumbprintOrBlank(v.Thumbprint), CertificateID: idPtr(v.CertificateID),
 		Enabled: v.Enabled, NotBefore: utcPtr(v.NotBefore), Expires: utcPtr(v.Expires), KVCreatedAt: utcPtr(v.KVCreatedAt), Exportable: v.Exportable,
 		KeyType: codeOrBlank(v.KeyType), ContentType: v.ContentType, DetectedAt: v.DetectedAt.UTC(), Held: v.Held,
-		HeldReason: oneOfOrBlank(v.HeldReason, heldReasons),
+		HeldReason: oneOfOrBlank(v.HeldReason, heldReasons), ChainIncomplete: v.ChainIncomplete,
 	}
 }
 

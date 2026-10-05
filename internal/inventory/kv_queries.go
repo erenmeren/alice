@@ -79,6 +79,9 @@ type KVVersion struct {
 	Held                            bool
 	HeldReason                      string
 	NotifiedAt, SkippedNotifiedAt   *time.Time
+	// ChainIncomplete: the last read of the version's secret found its chain incomplete (false until a read), so a
+	// manual deployment needs an Administrator's confirmation whether or not the version is held.
+	ChainIncomplete bool
 }
 
 // BindingSummary is a certificate's live binding to websites (Task 12 adds the operations).
@@ -274,7 +277,7 @@ func (s *Service) KVCertificate(ctx context.Context, vault, id uuid.UUID) (KVCer
 	}
 	d := KVCertificateDetail{KVCertificate: c, Versions: []KVVersion{}}
 	rows, err := s.pool.Query(ctx, `SELECT id, version, thumbprint, certificate_id, enabled, not_before, expires, kv_created_at, exportable, key_type,
-content_type, detected_at, held, held_reason, notified_at, skipped_notified_at FROM kv_certificate_versions WHERE kv_certificate_id = $1
+content_type, detected_at, held, held_reason, notified_at, skipped_notified_at, chain_incomplete FROM kv_certificate_versions WHERE kv_certificate_id = $1
 ORDER BY coalesce(kv_created_at, detected_at) DESC, detected_at DESC, version DESC`, id)
 	if err != nil {
 		return KVCertificateDetail{}, fmt.Errorf("inventory: list the versions: %w", err)
@@ -283,7 +286,7 @@ ORDER BY coalesce(kv_created_at, detected_at) DESC, detected_at DESC, version DE
 	for rows.Next() {
 		var v KVVersion
 		if err := rows.Scan(&v.ID, &v.Version, &v.Thumbprint, &v.CertificateID, &v.Enabled, &v.NotBefore, &v.Expires, &v.KVCreatedAt, &v.Exportable,
-			&v.KeyType, &v.ContentType, &v.DetectedAt, &v.Held, &v.HeldReason, &v.NotifiedAt, &v.SkippedNotifiedAt); err != nil {
+			&v.KeyType, &v.ContentType, &v.DetectedAt, &v.Held, &v.HeldReason, &v.NotifiedAt, &v.SkippedNotifiedAt, &v.ChainIncomplete); err != nil {
 			return KVCertificateDetail{}, fmt.Errorf("inventory: read a version: %w", err)
 		}
 		v.NotBefore, v.Expires, v.KVCreatedAt, v.DetectedAt = utcPtr(v.NotBefore), utcPtr(v.Expires), utcPtr(v.KVCreatedAt), v.DetectedAt.UTC()

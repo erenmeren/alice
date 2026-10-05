@@ -34,7 +34,8 @@ interface Run {
 // "the latest") to some or all of the connection's websites. All or nothing; after 202 every
 // deployment is followed until it settles. A held version is deployed by an Administrator only (fresh
 // step-up, asked for when the server wants it); holding stays. An incomplete chain needs the
-// Administrator's confirmation, offered only for a version held for it or after the server asked for it.
+// Administrator's confirmation, offered whenever Alice knows the version's chain is incomplete (a read found it,
+// held or released alike) or after the server asked for it; a release does not confirm the chain.
 export function KVDeployDialog({ binding, certificate, versionId, onClose }: { binding: Binding; certificate: KVCertificateDetail; versionId?: string; onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const { session } = useAuth();
@@ -63,9 +64,13 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
   const version = versions.find((v) => v.id === chosenId);
   const block = version ? versionBlock(version, now) : 'noDetails';
   const heldBlocked = version?.held === true && !admin;
-  const chainHeld = version?.held === true && version.held_reason === 'incomplete_chain';
-  const chainOffer = admin && (chainHeld || chainAsked);
-  const ready = version !== undefined && block === null && !heldBlocked && picked.length > 0 && !busy && (!chainOffer || confirmChain);
+  // The chain is known incomplete when a read of this version's secret found it so (chain_incomplete, kept after a
+  // release), when the version is held for it, or when the server just refused for it.
+  const chainKnown = version?.chain_incomplete === true || (version?.held === true && version.held_reason === 'incomplete_chain');
+  const chainNeeded = chainKnown || chainAsked;
+  const chainOffer = admin && chainNeeded;
+  const ready =
+    version !== undefined && block === null && !heldBlocked && picked.length > 0 && !busy && (!chainOffer || confirmChain) && (admin || !chainKnown);
 
   const refresh = () => {
     void client.invalidateQueries({ queryKey: DEPLOYMENTS_KEY });
@@ -225,7 +230,7 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
                 })}
               </Stack>
             </Checkbox.Group>
-            {chainAsked && !admin && (
+            {chainNeeded && !admin && (
               <Alert color="yellow" role="status">
                 {t('bindings.confirmChainNeeded')}
               </Alert>

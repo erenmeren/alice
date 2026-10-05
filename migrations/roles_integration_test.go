@@ -160,7 +160,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.kv_certificates": {"UPDATE": {"auto_renew", "content_type", "current_thumbprint", "current_version", "details_pending",
 		"enabled", "expires", "exportable", "issuer_name", "key_size", "key_type", "kv_created_at", "kv_updated_at", "last_seen_at",
 		"listed_thumbprint", "listed_updated_at", "missing_since", "not_before", "removed_notified_at"}},
-	"public.kv_certificate_versions": {"UPDATE": {"certificate_id", "content_type", "enabled", "expires", "exportable", "held",
+	"public.kv_certificate_versions": {"UPDATE": {"certificate_id", "chain_incomplete", "content_type", "enabled", "expires", "exportable", "held",
 		"held_reason", "key_type", "not_before", "notified_at", "skipped_notified_at"}},
 	"public.kv_keys": {"UPDATE": {"curve", "details_problem", "details_updated_at", "enabled", "expires", "hsm", "key_size", "key_type",
 		"kv_created_at", "kv_updated_at", "last_seen_at", "managed", "missing_since", "not_before", "version"}},
