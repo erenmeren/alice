@@ -277,24 +277,6 @@ func (k *kvnj) autoDeploy(bindingID string, version int, on bool) *httptest.Resp
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
-// bindingVersion reads a binding's ETag version.
-func (s *stack) bindingVersion(c *client, id string) int {
-	s.t.Helper()
-	rec := c.do(http.MethodGet, "/api/v1/bindings/"+id, nil)
-	requireStatus(s.t, rec, http.StatusOK)
-	return int(decodeBody[map[string]any](s.t, rec)["version"].(float64))
-}
-
-// deploymentsOf lists the deployments of a location (newest first as the API lists them).
-func (s *stack) deploymentsOfLocation(c *client, locationID string) []depView {
-	s.t.Helper()
-	rec := c.do(http.MethodGet, "/api/v1/deployments?location_id="+locationID, nil)
-	requireStatus(s.t, rec, http.StatusOK)
-	return decodeBody[struct {
-		Items []depView `json:"items"`
-	}](s.t, rec).Items
-}
-
 // vaultRequests are the requests the fake logged for the vault host (the login host excluded).
 func vaultRequests(kv *fakekv.Server) []fakekv.Request {
 	var out []fakekv.Request
@@ -459,17 +441,6 @@ func tokenRequests(kv *fakekv.Server) int {
 		}
 	}
 	return n
-}
-
-// settleAll settles every deployment of a location that is not done.
-// jobError reads a job's error (code, reason, params) over the API.
-func (s *stack) jobError(c *client, id string) (code, reason string, params map[string]any) {
-	s.t.Helper()
-	e, _ := s.job(c, id)["error"].(map[string]any)
-	code, _ = e["code"].(string)
-	reason, _ = e["reason"].(string)
-	params, _ = e["params"].(map[string]any)
-	return code, reason, params
 }
 
 func (k *kvnj) settleAll(t *testing.T, locationID string) {

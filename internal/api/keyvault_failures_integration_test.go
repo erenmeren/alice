@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -601,7 +600,7 @@ func TestA14KeyVaultSSRF(t *testing.T) {
 	// goes to the login host. The Key Vault SDK remembers a vault host's challenge for the life of the process, so
 	// each of these vaults has a name of its own and the challenge is wrong from the first contact.
 	t.Run("a foreign challenge authority", func(t *testing.T) {
-		k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{evil}, VaultName: "ssrf-" + strings.ToLower(uuid.NewString()[:8])})
+		k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{evil}, VaultName: "ssrf-" + uuid.NewString()[:8]})
 		k.addWebCert("web-cert")
 		k.kv.SetChallenge(`Bearer authorization="https://` + evil + `/` + k.kv.TenantID() + `", resource="https://vault.azure.net"`)
 		requireStatus(t, k.addVaultRaw(k.vaultBody("prod-vault")), http.StatusCreated)
@@ -615,7 +614,7 @@ func TestA14KeyVaultSSRF(t *testing.T) {
 
 	// A challenge that names another RESOURCE: refused, no bearer token goes to the vault, nothing to the named host.
 	t.Run("a foreign challenge resource", func(t *testing.T) {
-		k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{evil}, VaultName: "ssrf-" + strings.ToLower(uuid.NewString()[:8])})
+		k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{evil}, VaultName: "ssrf-" + uuid.NewString()[:8]})
 		k.addWebCert("web-cert")
 		k.kv.SetChallenge(`Bearer authorization="https://login.microsoftonline.com/` + k.kv.TenantID() + `", resource="https://` + evil + `"`)
 		targets := k.count("targets")
