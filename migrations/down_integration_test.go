@@ -88,7 +88,8 @@ func TestMigration00006UpAndDownKeepPhase3Data(t *testing.T) {
 	// grant check describes the current schema, so that is the one difference it reports.
 	// The guard describes the current schema: below 00008 targets lacks the Phase 5 column grants
 	// (credential_id, poll_failures), so it reports targets as well.
-	assert.ElementsMatch(t, []string{"public.license", "public.targets"}, grantProblems(t, d), "no Phase 4 grant is left behind")
+	// Below 00010 ssh_keys lacks UPDATE (retired_at) too.
+	assert.ElementsMatch(t, []string{"public.license", "public.targets", "public.ssh_keys"}, grantProblems(t, d), "no Phase 4 grant is left behind")
 	target := seedTarget(t, d, "web-01", "web-01.example.com")
 	job, err := seedJob(t, d, nil, "succeeded")
 	require.NoError(t, err)

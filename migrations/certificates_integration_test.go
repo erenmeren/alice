@@ -160,8 +160,8 @@ func TestCertificateConstraints(t *testing.T) {
 	assert.Equal(t, privilegeDenied, sqlState(err), "certificates are never deleted")
 	_, err = d.App.Exec(ctx, `UPDATE certificates SET label = 'x' WHERE id = $1`, cert)
 	assert.NoError(t, err)
-	_, err = d.App.Exec(ctx, `UPDATE managed_private_keys SET ciphertext = '\x01'`)
-	assert.Equal(t, privilegeDenied, sqlState(err), "managed keys are append-only")
+	_, err = d.App.Exec(ctx, `UPDATE managed_private_keys SET bits = 4096`)
+	assert.Equal(t, privilegeDenied, sqlState(err), "managed keys keep their identity (envelope updates: TestManagedKeysAreEnvelopesOnly)")
 	_, err = d.App.Exec(ctx, `UPDATE deployment_steps SET status = 'ok'`)
 	assert.Equal(t, privilegeDenied, sqlState(err), "steps are append-only")
 	_, err = d.App.Exec(ctx, `INSERT INTO certificates (id, fingerprint_sha256, not_before, not_after, key_algorithm, public_key_sha256,
@@ -269,10 +269,16 @@ WHERE table_schema = 'public' AND table_name = 'managed_private_keys'`)
 	assert.NoError(t, insertRow(t, d.App, "managed_private_keys", with(base(), map[string]any{"bits": 4096})), "a renewal may reuse a key hash")
 	assert.NoError(t, insertRow(t, d.App, "managed_private_keys", with(base(), map[string]any{"bits": 16384})))
 
+	// Phase 6 (00010) grants UPDATE on the envelope columns so a retired SSH key's private key can be
+	// destroyed; managed_private_keys_guard refuses every change that is not that destruction.
 	for _, stmt := range []string{
-		"UPDATE managed_private_keys SET ciphertext = '\\x01'",
-		"UPDATE managed_private_keys SET wrapped_dek = '\\x01'",
+		"UPDATE managed_private_keys SET ciphertext = '\\x09'",
+		"UPDATE managed_private_keys SET wrapped_dek = '\\x09'",
 		"UPDATE managed_private_keys SET key_version = 2",
+	} {
+		assert.Equal(t, "Z1009", sqlState(exec(t, d.App, stmt)), stmt)
+	}
+	for _, stmt := range []string{
 		"UPDATE managed_private_keys SET owner_type = 'csr'",
 		"DELETE FROM managed_private_keys",
 		"TRUNCATE managed_private_keys",

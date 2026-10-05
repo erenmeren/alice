@@ -124,6 +124,12 @@ var explicitGrants = map[string][]string{
 	"public.kv_secrets":              {"INSERT", "SELECT"},
 	"public.bindings":                {"INSERT", "SELECT"},
 	"public.kv_imports":              {"INSERT", "SELECT"},
+	// Phase 6 (R41): policies, runs, their locations and steps are history and are never deleted; the steps
+	// are append-only (no UPDATE at all).
+	"public.rotation_policies":  {"INSERT", "SELECT"},
+	"public.rotations":          {"INSERT", "SELECT"},
+	"public.rotation_locations": {"INSERT", "SELECT"},
+	"public.rotation_steps":     {"INSERT", "SELECT"},
 }
 
 // Column-level grants of alice_app (a privilege it holds on some columns but not on the
@@ -139,7 +145,8 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.targets": {"UPDATE": {"credential_id", "deleted_at", "discovery_interval_seconds", "facts", "keys_managed_elsewhere",
 		"last_discovery_at", "last_error_code", "last_scheduled_at", "last_success_at", "name", "poll_failures", "status", "updated_at", "version"}},
 	"public.host_keys": {"UPDATE": {"confirmed_at", "confirmed_by", "observed_at", "status", "superseded_at"}},
-	"public.ssh_keys":  {"UPDATE": {"is_platform_key", "weak"}},
+	// Phase 6 adds retired_at (a rotation retires its old key; a key found live again is un-retired).
+	"public.ssh_keys": {"UPDATE": {"is_platform_key", "retired_at", "weak"}},
 	"public.ssh_key_locations": {"UPDATE": {"comment", "flags", "is_alice_connection_key", "last_seen_at", "line_no",
 		"missing_since", "options", "removed_by_alice_at"}},
 	// Phase 4: identity columns (fingerprints, public key hashes, paths of a location or a
@@ -168,6 +175,18 @@ var explicitColumnGrants = map[string]map[string][]string{
 		"missing_since", "not_before"}},
 	"public.bindings":   {"UPDATE": {"auto_deploy", "auto_since", "deleted_at", "stopped_version", "version"}},
 	"public.kv_imports": {"UPDATE": {"error_code", "error_params", "finished_at", "job_id", "sent_at", "state", "version"}},
+	// Phase 6: a download counts, a retired key's envelope is destroyed (the envelope columns may only go
+	// to NULL together with destroyed_at: managed_private_keys_guard). A rotation's plan, digest, key type,
+	// overlap, planning and notice times are fixed at INSERT, as are a location's identity columns.
+	"public.managed_private_keys": {"UPDATE": {"ciphertext", "destroyed_at", "download_count", "key_version", "last_downloaded_at", "nonce", "wrapped_dek"}},
+	"public.rotation_policies": {"UPDATE": {"deleted_at", "enabled", "interval_days", "name", "new_key_type", "next_run_at", "notify_before_hours",
+		"overlap_minutes", "preview_mailed_at", "ssh_key_id", "updated_at", "version"}},
+	"public.rotations": {"UPDATE": {"awaiting_decision", "continued_at", "continued_by", "decision_due_at", "finished_at", "kept_count",
+		"new_ssh_key_id", "overlap_until", "paused_at", "paused_license", "reminder_sent_at", "removal_allowed", "renotified_at", "result_code",
+		"started_at", "status", "updated_at", "verified_at", "version"}},
+	"public.rotation_locations": {"UPDATE": {"add_op_id", "add_sent_at", "added_line_no", "backup", "error_code", "job_count", "new_location_id",
+		"remove_op_id", "remove_sent_at", "remove_verified_at", "removed_at", "reverified_at", "skip_reason", "state", "undo_op_id",
+		"undo_sent_at", "updated_at", "verified_at", "verify_note"}},
 }
 
 var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}

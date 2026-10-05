@@ -641,7 +641,8 @@ func TestMigration00008UpAndDownKeepEarlierData(t *testing.T) {
 	}
 	// The guard describes the current schema, so below 00008 it reports the two tables whose
 	// column-level grants lost the Phase 5 columns (and nothing else: no kv_* or bindings grant remains).
-	assert.ElementsMatch(t, []string{"public.targets", "public.certificate_locations"}, grantProblems(t, d), "no Phase 5 grant is left behind")
+	assert.ElementsMatch(t, []string{"public.targets", "public.certificate_locations", "public.ssh_keys", "public.managed_private_keys"}, grantProblems(t, d),
+		"no Phase 5 grant is left behind (and, below 00010, the guard also lists the two tables whose Phase 6 column grants are gone)")
 	var fn bool
 	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'targets_check_credential')").Scan(&fn))
 	assert.False(t, fn, "the Down drops the trigger function")
@@ -704,7 +705,7 @@ VALUES (gen_random_uuid(), $1, $2, $3, 'manual', 'queued', 'pending', repeat('e'
 	assert.Equal(t, 1, scanInt(t, d, "SELECT count(*) FROM targets WHERE type = 'azure_key_vault'"))
 	// goose runs each Down in its own transaction: 00009's went through before 00008's refused, so only the chain
 	// column's grant is missing until the next Up.
-	assert.Equal(t, []string{"public.kv_certificate_versions"}, grantProblems(t, d))
+	assert.ElementsMatch(t, []string{"public.kv_certificate_versions", "public.ssh_keys", "public.managed_private_keys"}, grantProblems(t, d))
 	_, err = p.Up(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, grantProblems(t, d))
@@ -728,7 +729,7 @@ AND column_name = 'chain_incomplete'`)
 	_, err = p.DownTo(ctx, 8)
 	require.NoError(t, err, "00009 goes down over vault data")
 	assert.Equal(t, 0, column())
-	assert.Equal(t, []string{"public.kv_certificate_versions"}, grantProblems(t, d), "only the chain column's grant is gone")
+	assert.ElementsMatch(t, []string{"public.kv_certificate_versions", "public.ssh_keys", "public.managed_private_keys"}, grantProblems(t, d), "only the chain column's grant is gone (and the two Phase 6 column grants, below 00010)")
 	// Versions stored before the column existed: one held for its chain (a read found it incomplete), one held
 	// for the license, one not held.
 	chainHeld := insertKVVersion(t, d, cert, strings.Repeat("a", 32))
