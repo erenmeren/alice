@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { wasSent } from '../api/deployments';
 import { confirmJob, discardJob, getDeployment, listDeployments, listJobs } from '../api/endpoints';
-import { BLOCKED_JOBS_KEY, DEPLOYMENTS_KEY, SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
+import { BLOCKED_JOBS_KEY, deploymentKey, DEPLOYMENTS_KEY, SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
 import type { Deployment, Job } from '../api/types';
 import { formatDateTime } from '../datetime';
 import { ErrorAlert } from './ErrorAlert';
@@ -42,7 +42,7 @@ export function BlockedJobsPanel() {
   const deployTargets = [...new Set(items.filter((j) => j.type === DEPLOY_JOB && j.target_id && !j.deployment_id).map((j) => j.target_id as string))];
   const namedIds = [...new Set(items.filter((j) => j.type === DEPLOY_JOB && j.deployment_id).map((j) => j.deployment_id as string))];
   const named = useQueries({
-    queries: namedIds.map((id) => ({ queryKey: [...DEPLOYMENTS_KEY, id], queryFn: () => getDeployment(id), retry: false })),
+    queries: namedIds.map((id) => ({ queryKey: deploymentKey(id), queryFn: () => getDeployment(id), retry: false })),
   });
   const deployments = useQueries({
     queries: deployTargets.map((target) => ({
