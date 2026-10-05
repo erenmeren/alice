@@ -472,7 +472,9 @@
       "rotation_old_kept": "Old key kept on some servers",
       "rotation_stop_requested": "Rotation stopped",
       "sshkey_live_after_destruction": "Destroyed key found on a server again",
-      "sshkey_add_sent": "SSH key about to be sent to a server"
+      "sshkey_add_sent": "SSH key sent to a server",
+      "sshkey_add_answered": "The server answered the SSH key addition",
+      "sshkey_add_outcome_unknown": "SSH key addition ended without a known result; Alice scans the server"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {

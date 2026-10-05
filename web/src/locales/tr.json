@@ -472,7 +472,9 @@
       "rotation_old_kept": "Eski anahtar bazı sunucularda tutuldu",
       "rotation_stop_requested": "Yenileme durduruldu",
       "sshkey_live_after_destruction": "Yok edilen anahtar bir sunucuda yeniden bulundu",
-      "sshkey_add_sent": "SSH anahtarı bir sunucuya gönderilmek üzere"
+      "sshkey_add_sent": "SSH anahtarı bir sunucuya gönderildi",
+      "sshkey_add_answered": "Sunucu SSH anahtarı eklemesini yanıtladı",
+      "sshkey_add_outcome_unknown": "SSH anahtarı eklemesi sonucu bilinmeden bitti; Alice sunucuyu tarıyor"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
