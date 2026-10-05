@@ -89,9 +89,11 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 		return nil, jobs.Retry("ssh.timeout", nil, ctx.Err())
 	}
 	var (
-		ares  providers.AuthKeyResult
-		st    addState
-		owned bool // the store's decision (DeploySendRecord.Owned): may this job remove the line again?
+		ares     providers.AuthKeyResult
+		st       addState
+		owned    bool // the store's decision (DeploySendRecord.Owned): may this job remove the line again?
+		answered bool // this attempt's send had a definite answer (N-m5)
+		sent     bool // this attempt recorded a send
 	)
 	if line, here := listedLine(before, d); lerr0 == nil && here {
 		// The line is in the file: nothing is sent. Whose it is, is the record's (Owned): this job's when
@@ -107,11 +109,13 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 		if err != nil {
 			return nil, h.storeFailure(err) // nothing was sent
 		}
+		sent = true
 		rec := &writeTracker{next: steps}
 		ares, err = sess.AddAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: send.OperationID, OSUser: d.OSUser, FilePath: d.FilePath,
 			Line: d.Line, ProtectedFingerprints: d.Protected}, rec)
 		if ctx.Err() != nil {
-			return nil, jobs.Retry("ssh.timeout", nil, ctx.Err()) // F-39: the next attempt starts over
+			// F-39, N-m8: the next attempt starts over, after the send's wait (S3; a shutdown keeps it).
+			return nil, jobs.RetryAfter("ssh.timeout", nil, ctx.Err(), h.d.Keys.UndoWait())
 		}
 		if err != nil {
 			h.recordIfConnection(ctx, d.TargetID, err)
@@ -131,12 +135,12 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 		case err != nil:
 			st, owned = addUncertain, send.Record.Owned() // the answer was lost: the record decides
 		default:
-			answered, aerr := h.d.Keys.RecordDeployAnswer(ctx, d, send, ares.Changed)
+			rec, aerr := h.d.Keys.RecordDeployAnswer(ctx, d, send, ares.Changed)
 			if aerr != nil {
 				// The line is in the file; the next attempt finds it and the record decides.
 				return nil, h.storeFailure(aerr)
 			}
-			owned = answered.Owned()
+			owned, answered = rec.Owned(), true
 			switch {
 			case ares.Changed && !ares.Verified:
 				// §13.4 step 5: the re-read after the write shows other content.
@@ -150,6 +154,9 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 	}
 	outcome, lerr := h.login(ctx, sess, d.OSUser, d.KeyID)
 	if ctx.Err() != nil {
+		if sent && !answered {
+			return nil, jobs.RetryAfter("ssh.timeout", nil, ctx.Err(), h.d.Keys.UndoWait())
+		}
 		return nil, jobs.Retry("ssh.timeout", nil, ctx.Err())
 	}
 	out := sshkeys.DeployOutcome{LineNo: ares.LineNo, Backup: ares.Backup}
@@ -160,10 +167,9 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 		out.Result = sshkeys.DeployVerified
 	case st == addUncertain && !owned:
 		// The answer was lost and the record does not make the line this job's: it is never removed; a
-		// person and a scan settle it.
+		// person settles it, and the store's reconciliation queues the scan once no send can land (N-m1).
 		out := sshkeys.DeployOutcome{Result: sshkeys.DeployFailed, Reason: reasonUncertain}
 		h.finish(ctx, actor, d, out)
-		h.discover(ctx, d.TargetID)
 		return deployResult(d, out), jobs.Attention(reasonUncertain, nil, nil)
 	case st == addUncertain:
 		// Only an accepted login proves an uncertain line (a refusal with from= or an unprovable login
@@ -176,9 +182,10 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 	case keymat.HasFromOption(d.Options):
 		out.Result, out.Note = sshkeys.DeployUnverified, plan.NoteFromOption // Alice cannot know whether from= excludes her
 	default:
-		// A line the record makes this job's (found now, or answered "added"): removed again. latestAnswered
-		// false when nothing was sent in this attempt: the latest send on record had no answer.
-		return h.undoDeploy(ctx, j, actor, d, sess, steps, sshkeys.ReasonLoginFailed, ares.Changed)
+		// A line the record makes this job's (found now, or answered "added" or "already present" on an
+		// owned line): removed again. latestAnswered is whether this attempt's send was answered (N-m5); no
+		// send in this attempt: the latest send on record had no answer.
+		return h.undoDeploy(ctx, j, actor, d, sess, steps, sshkeys.ReasonLoginFailed, answered)
 	}
 	if err := h.d.Keys.FinishDeploy(ctx, actor, d, out); err != nil {
 		// The line is in the file; the next attempt finds it (its send is on record) and records it.

@@ -28,9 +28,9 @@ import (
 // F-36 at rotation level: Alice's own key is never rotated. Its key row gets no policy (refused and
 // audited own_key); a generated key in the connection account's file, or in any file that account reads,
 // is skipped by the plan with that reason and nothing is sent there; a job naming such a location sends
-// nothing; every add and removal of every test carries Alice's fingerprint as protected (harness); and a
-// key that becomes protected after its re-check is not removed. The database's own refusal is pinned by
-// migration 00010's tests.
+// nothing; and every add and removal of every test carries Alice's fingerprint as protected (harness). A
+// key cannot become protected after its re-check (ssh_keys_managed_is_not_platform); storeStop's own-key
+// answer has a unit test. The database's own refusal is pinned by migration 00010's tests.
 func TestF36OwnKeyNeverRotated(t *testing.T) {
 	e := newEnv(t)
 	web := e.server("web-01", providers.UserKeyFiles{OSUser: "ops", Files: []string{keyFile(fake.ConnectionAccount)}, Complete: true})
@@ -48,9 +48,18 @@ func TestF36OwnKeyNeverRotated(t *testing.T) {
 	assert.Zero(t, e.count("SELECT count(*) FROM rotation_policies"))
 
 	// A generated key in the connection account's own file, and in a file of another user that the
-	// connection account reads: both skipped with their reasons; the deploy user's location changes.
+	// connection account reads (app's file is among alice-svc's key files): both skipped with their
+	// reasons; the deploy user's location changes.
+	files := e.keyFilesOf(web)
+	for i := range files {
+		if files[i].OSUser == fake.ConnectionAccount {
+			files[i].Files = append(files[i].Files, keyFile("app"))
+		}
+	}
+	e.setKeyFiles(web, files)
 	k := e.generate("ci")
 	e.place(k, web, "deploy")
+	e.place(k, web, "app")
 	e.placeIn(k, web, fake.ConnectionAccount, keyFile(fake.ConnectionAccount), "")
 	p := e.policy(k.ID, 1)
 	pv, err := e.keys.Preview(e.ctx, e.admin, p.ID)
@@ -59,11 +68,12 @@ func TestF36OwnKeyNeverRotated(t *testing.T) {
 	for _, a := range pv.Plan.Actions {
 		skips[a.OSUser] = a.Skip
 	}
-	assert.Equal(t, map[string]string{"deploy": "", fake.ConnectionAccount: plan.SkipConnectionAccount}, skips)
+	assert.Equal(t, map[string]string{"deploy": "", "app": plan.SkipConnectionAccountFile, fake.ConnectionAccount: plan.SkipConnectionAccount}, skips)
 	r := e.runNow(p)
 	e.drain()
 	for _, ev := range e.world.Events() {
 		assert.NotEqual(t, keyFile(fake.ConnectionAccount), ev.FilePath, "nothing is sent to the connection account's file")
+		assert.NotEqual(t, keyFile("app"), ev.FilePath, "nothing is sent to a file the connection account reads")
 	}
 	// A rotation.location job naming the skipped location sends nothing and says why.
 	var skipped sshkeys.RotationLocation

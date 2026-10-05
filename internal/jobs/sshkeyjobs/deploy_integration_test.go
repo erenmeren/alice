@@ -520,7 +520,7 @@ func TestDeployUnknownOwnershipKeepsTheLine(t *testing.T) {
 	assert.Equal(t, true, v.Result["needs_attention"])
 	assert.True(t, e.world.Has(srv, deployFile, k.Fingerprint), "kept: Alice cannot prove the line is hers")
 	assert.Zero(t, e.countEvents("RemoveAuthorizedKey"))
-	assert.Equal(t, 1, e.discoveries(srv))
+	assert.Zero(t, e.discoveries(srv), "no scan before a stalled write can land: the store's reconciliation queues it (N-m1)")
 	assert.Equal(t, "sshkey.add_uncertain", e.lastAuditDetail("sshkey.add_failed", "reason"))
 }
 
@@ -584,4 +584,64 @@ func TestDeployKilledOnItsLastAttemptIsReconciled(t *testing.T) {
 	assert.Equal(t, 1, e.discoveries(srv))
 	assert.True(t, e.world.Has(srv, deployFile, k.Fingerprint), "nothing removed")
 	assert.Zero(t, e.countEvents("RemoveAuthorizedKey"))
+}
+
+// N-m5: a re-send answered "already present" on a line the record owns (an earlier send of this job wrote
+// it) is an answered send: the undo does not wait for it, also on the last attempt.
+func TestDeployAnsweredResendOnAnOwnedLineIsUndone(t *testing.T) {
+	e := newEnv(t)
+	srv := e.server("web-01")
+	k := e.generate("ci")
+	lists := 0
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
+		switch p.Method {
+		case "ListKeys":
+			if lists++; lists > 1 {
+				return fake.FaultUnread // later listings do not see the file: the job sends again
+			}
+		case "VerifyKeyLogin":
+			return fake.FaultRefuse
+		}
+		return fake.FaultNone
+	})
+	job := e.deploy(k, srv, "")
+	kill := newKiller("session:after:VerifyKeyLogin") // attempt 1: added (answered), then killed
+	e.setKiller(kill)
+	e.drainDying()
+	require.Equal(t, "session:after:VerifyKeyLogin", kill.firedAt())
+	e.setKiller(nil)
+	e.restart()
+	e.drain() // attempt 2: inside the send's wait
+	e.clock.Advance(e.keys.UndoWait())
+	e.drain() // attempt 3, the last: re-send answered "already present", login refused
+	v := e.job(job)
+	assert.Equal(t, 3, v.Attempts)
+	assert.Equal(t, "undone", v.Result["result"])
+	assert.False(t, e.world.Has(srv, deployFile, k.Fingerprint))
+	assert.Equal(t, 2, e.countEvents("AddAuthorizedKey"))
+}
+
+// N-m8: a deploy whose context ends after a send (a shutdown, a slow host) is retried only after the send's
+// wait (S3), as a lost lease would be.
+func TestDeployInterruptedAfterASendKeepsTheWait(t *testing.T) {
+	e := newEnv(t)
+	srv := e.server("web-01")
+	k := e.generate("ci")
+	hung := false
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
+		if p.Method == "AddAuthorizedKey" && !hung {
+			hung = true
+			return fake.FaultHang
+		}
+		return fake.FaultNone
+	})
+	job := e.deploy(k, srv, "")
+	e.drain()
+	v := e.job(job)
+	assert.Equal(t, jobs.StatusQueued, v.Status)
+	assert.Equal(t, "ssh.timeout", v.LastErrorCode)
+	assert.Equal(t, start.Add(e.keys.UndoWait()), v.RunAt.UTC(), "not before the send's wait")
+	e.clock.Advance(e.keys.UndoWait())
+	e.drain()
+	assert.Equal(t, "verified", e.job(job).Result["result"])
 }
