@@ -837,6 +837,26 @@
         "title": "Sürüm bekletilmiyor",
         "cause": "Bu sürüm bekletilmediği için serbest bırakılacak bir şey yok.",
         "action": "Sürümün güncel durumunu görmek için sayfayı yenileyin."
+      },
+      "version_superseded": {
+        "title": "Daha yeni bir sürüm bunun yerini aldı",
+        "cause": "Bu dağıtım başlamadan önce sertifikanın daha yeni bir sürümü bulundu; bu yüzden hiçbir şey dağıtılmadı.",
+        "action": "Otomatik dağıtım açıksa Alice yeni sürümü kendiliğinden dağıtır. Değilse Şimdi dağıt düğmesini kullanın."
+      },
+      "wave_stopped": {
+        "title": "Bu sürümün otomatik dağıtımı durduruldu",
+        "cause": "Bu sürümün üç dağıtımı başarısız oldu; bu yüzden Alice onu otomatik dağıtmayı durdurdu. Bu dağıtım hiçbir şey göndermedi.",
+        "action": "Başarısız dağıtımlarda görünen nedeni giderin, ardından Şimdi dağıt düğmesini kullanın."
+      },
+      "import_vault_deleted": {
+        "title": "Kasa, aktarma gönderilmeden önce kaldırıldı",
+        "cause": "Bu aktarma beklerken kasa Alice'ten kaldırıldı; bu yüzden hiçbir şey gönderilmedi.",
+        "action": "Sertifikayı yine de bu kasaya aktarmak istiyorsanız kasayı yeniden ekleyin."
+      },
+      "import_cancelled": {
+        "title": "Aktarma gönderilmeden önce iptal edildi",
+        "cause": "Bu aktarmayı gönderecek görev hiçbir şey göndermeden sona erdi (iptal edildi, başarısız oldu ya da kayboldu); bu yüzden hiçbir şey gönderilmedi.",
+        "action": "Sertifikayı yeniden aktarın."
       }
     }
   },

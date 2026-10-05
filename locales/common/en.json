@@ -837,6 +837,26 @@
         "title": "Version is not held",
         "cause": "This version is not held, so there is nothing to release.",
         "action": "Reload the page to see the version's current state."
+      },
+      "version_superseded": {
+        "title": "A newer version replaced this one",
+        "cause": "A newer version of the certificate was found before this deployment started, so nothing was deployed.",
+        "action": "If automatic deployment is on, Alice deploys the newer version by itself. Otherwise use Deploy now."
+      },
+      "wave_stopped": {
+        "title": "Automatic deployment of this version was stopped",
+        "cause": "Three deployments of this version failed, so Alice stopped deploying it automatically. This deployment sent nothing.",
+        "action": "Fix the cause shown on the failed deployments, then use Deploy now."
+      },
+      "import_vault_deleted": {
+        "title": "Vault was removed before the import was sent",
+        "cause": "The vault was removed from Alice while this import was waiting, so nothing was sent.",
+        "action": "Add the vault again if you still want to import the certificate into it."
+      },
+      "import_cancelled": {
+        "title": "Import cancelled before it was sent",
+        "cause": "The task that would have sent this import ended before it sent anything (it was cancelled, failed or is gone), so nothing was sent.",
+        "action": "Import the certificate again."
       }
     }
   },

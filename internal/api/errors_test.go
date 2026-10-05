@@ -123,6 +123,8 @@ var notReasons = map[string]bool{
 	"kv.new_version_held_chain": true, "kv.version_skipped_manual": true, "kv.version_skipped_disabled": true,
 	"kv.version_skipped_expired": true, "kv.version_skipped_not_yet_valid": true, "kv.version_skipped_older": true,
 	"kv.version_skipped_superseded": true, "kv.auto_deploy_stopped": true, "kv.import_failed": true,
+	"kv.new_versions_more": true, "kv.new_versions_more_one": true, "kv.versions_skipped_more": true, "kv.versions_skipped_more_one": true,
+	"kv.auto_deploys_stopped_more": true, "kv.auto_deploys_stopped_more_one": true,
 }
 
 // storedReasons collects the literal reasons (and package string constants) passed to reasonCalls

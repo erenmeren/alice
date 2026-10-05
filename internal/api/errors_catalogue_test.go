@@ -63,6 +63,7 @@ var inventorySentinels = map[string]error{
 	"ErrAdminRequired": inventory.ErrAdminRequired, "ErrVersionNotHeld": inventory.ErrVersionNotHeld, "ErrSecretUnreadable": inventory.ErrSecretUnreadable,
 	"ErrSecretMismatch": inventory.ErrSecretMismatch, "ErrBindingGone": inventory.ErrBindingGone, "ErrAutoDeployOff": inventory.ErrAutoDeployOff,
 	"ErrVersionHeld": inventory.ErrVersionHeld, "ErrVaultUnavailable": inventory.ErrVaultUnavailable,
+	"ErrVersionSuperseded": inventory.ErrVersionSuperseded, "ErrWaveStopped": inventory.ErrWaveStopped,
 	"ErrImportConfirmNeeded": inventory.ErrImportConfirmNeeded, "ErrImportInProgress": inventory.ErrImportInProgress,
 	"ErrImportState": inventory.ErrImportState, "ErrImportChanged": inventory.ErrImportChanged,
 }
@@ -76,7 +77,7 @@ var inventorySentinels = map[string]error{
 // ErrImportChanged are what an import job meets; ErrCredentialNotTheTargets is the database refusing what correct
 // code never sends (Z1006). A request that somehow met one is a programming error: ALC-SYS-0003.
 var engineOnlySentinels = []string{"ErrDeploymentState", "ErrClaimLost", "ErrBindingGone", "ErrAutoDeployOff", "ErrVersionHeld",
-	"ErrImportState", "ErrImportChanged", "ErrCredentialNotTheTargets"}
+	"ErrImportState", "ErrImportChanged", "ErrCredentialNotTheTargets", "ErrVersionSuperseded", "ErrWaveStopped"}
 
 // exportedErrorVars returns the names of the package-level exported variables of dir's non-test
 // sources whose value is errors.New(...) or a selector (a re-exported sentinel such as certs.ErrX).
@@ -501,6 +502,10 @@ var phase5Table = []struct {
 	{"ALC-AKV-0033", "kv.vault_unavailable", "Vault is disabled or removed", "Kasa devre dışı ya da kaldırılmış", 409, false},
 	{"ALC-AKV-0034", "kv.version_held", "Version is held", "Sürüm bekletiliyor", 409, false},
 	{"ALC-AKV-0035", "kv.version_not_held", "Version is not held", "Sürüm bekletilmiyor", 409, false},
+	{"ALC-AKV-0036", "kv.version_superseded", "A newer version replaced this one", "Daha yeni bir sürüm bunun yerini aldı", 409, false},
+	{"ALC-AKV-0037", "kv.wave_stopped", "Automatic deployment of this version was stopped", "Bu sürümün otomatik dağıtımı durduruldu", 409, false},
+	{"ALC-AKV-0038", "kv.import_vault_deleted", "Vault was removed before the import was sent", "Kasa, aktarma gönderilmeden önce kaldırıldı", 409, false},
+	{"ALC-AKV-0039", "kv.import_cancelled", "Import cancelled before it was sent", "Aktarma gönderilmeden önce iptal edildi", 409, false},
 }
 
 // The 27 codes of the contract keep their numbers, reasons, statuses, retry flags and exact titles; the
@@ -685,9 +690,12 @@ func TestPhase5SentinelMapping(t *testing.T) {
 	// The typed errors carry their param; the location comes from fail (D23: location_id is not a provider param).
 	_, p, ok := classify(&inventory.ImportConfirmError{CertificateName: "web-cert"})
 	require.True(t, ok)
-	assert.Equal(t, map[string]string{"certificate_name": "web-cert"}, p)
+	assert.Equal(t, map[string]string{"certificate_name": "web-cert", "auto_deploy_follows": "false", "bound": "false"}, p)
+	_, p, _ = classify(&inventory.ImportConfirmError{CertificateName: "web-cert", AutoDeploy: true, Bound: true})
+	assert.Equal(t, "true", p["auto_deploy_follows"], "the dialog learns that automatic deployment will follow")
+	assert.Equal(t, "true", p["bound"])
 	_, p, _ = classify(&inventory.ImportConfirmError{CertificateName: "not a name {{x}}"})
-	assert.Empty(t, p, "a name outside the grammar is never shown")
+	assert.NotContains(t, p, "certificate_name", "a name outside the grammar is never shown")
 	assert.NotContains(t, providerParamRules, "location_id")
 	assert.NotContains(t, providerParamKeys, "location_id")
 }

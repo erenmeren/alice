@@ -229,6 +229,12 @@ var (
 	ErrKVVaultUnavailable = ErrorCode{Code: "ALC-AKV-0033", Reason: "kv.vault_unavailable", Status: http.StatusConflict}
 	ErrKVVersionHeld      = ErrorCode{Code: "ALC-AKV-0034", Reason: "kv.version_held", Status: http.StatusConflict}
 	ErrKVVersionNotHeld   = ErrorCode{Code: "ALC-AKV-0035", Reason: "kv.version_not_held", Status: http.StatusConflict}
+	// The refusals of an automatic deployment that is no longer the right one (the planner's fix round 1).
+	ErrKVVersionSuperseded = ErrorCode{Code: "ALC-AKV-0036", Reason: "kv.version_superseded", Status: http.StatusConflict}
+	ErrKVWaveStopped       = ErrorCode{Code: "ALC-AKV-0037", Reason: "kv.wave_stopped", Status: http.StatusConflict}
+	// A queued import that was never sent: its vault was removed, or its job ended before it sent anything (imports fix round).
+	ErrKVImportVaultDeleted = ErrorCode{Code: "ALC-AKV-0038", Reason: "kv.import_vault_deleted", Status: http.StatusConflict}
+	ErrKVImportCancelled    = ErrorCode{Code: "ALC-AKV-0039", Reason: "kv.import_cancelled", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -264,7 +270,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrKVLocationBound, ErrKVBindingExists, ErrKVVaultHasBindings, ErrKVVersionNotDeployable, ErrKVHeldNeedsAdmin, ErrKVImportConfirmNeeded,
 		ErrKVImportInProgress, ErrKVImportRejected, ErrKVImportOutcomeUnknown, ErrKVClientCertInvalid, ErrKVVaultDuplicate,
 		ErrKVImportNameExists, ErrKVImportInvalid, ErrKVBindingGone, ErrKVAutoDeployOff, ErrKVVaultUnavailable, ErrKVVersionHeld,
-		ErrKVVersionNotHeld,
+		ErrKVVersionNotHeld, ErrKVVersionSuperseded, ErrKVWaveStopped, ErrKVImportVaultDeleted, ErrKVImportCancelled,
 	}
 }
 
@@ -488,10 +494,13 @@ func classify(err error) (ErrorCode, map[string]string, bool) {
 	var confirm *inventory.ImportConfirmError
 	if errors.As(err, &confirm) {
 		// The vault's own spelling of the name (a closed grammar, azureid.ValidObjectName), never text.
+		// auto_deploy_follows / bound tell the dialog that a connection names the certificate and that a new version is
+		// deployed to its websites by itself (booleans as "true"/"false": params are strings).
+		params := map[string]string{"auto_deploy_follows": strconv.FormatBool(confirm.AutoDeploy), "bound": strconv.FormatBool(confirm.Bound)}
 		if providerParamRules["certificate_name"].MatchString(confirm.CertificateName) {
-			return ErrKVImportConfirmNeeded, map[string]string{"certificate_name": confirm.CertificateName}, true
+			params["certificate_name"] = confirm.CertificateName
 		}
-		return ErrKVImportConfirmNeeded, nil, true
+		return ErrKVImportConfirmNeeded, params, true
 	}
 	var perr *providers.Error
 	if errors.As(err, &perr) {
@@ -530,6 +539,8 @@ var providerParamKeys = map[string]bool{
 	// shapes, never Azure's text), and the certificate name an import conflicts with.
 	"role": true, "model": true, "aadsts": true, "client_address": true, "azure_code": true, "azure_request_id": true,
 	"certificate_name": true,
+	// auto_deploy_follows and bound: "true" or "false" (the import confirmation: a connection names the certificate).
+	"auto_deploy_follows": true, "bound": true,
 }
 
 var (
@@ -558,6 +569,7 @@ var (
 	paramAzureCodeRE     = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,63}$`)
 	paramRequestIDRE     = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 	paramCertNameRE      = regexp.MustCompile(`^[0-9A-Za-z-]{1,127}$`)
+	paramBoolRE          = regexp.MustCompile(`^(true|false)$`)
 )
 
 // providerParamRules bound every allowlisted param's value, whichever producer wrote it: a number,
@@ -574,6 +586,7 @@ var providerParamRules = map[string]*regexp.Regexp{
 	"operation_id": paramOperationRE,
 	"role":         paramRoleRE, "model": paramModelRE, "client_address": paramClientAddressRE, "aadsts": paramAADSTSRE,
 	"azure_code": paramAzureCodeRE, "azure_request_id": paramRequestIDRE, "certificate_name": paramCertNameRE,
+	"auto_deploy_follows": paramBoolRE, "bound": paramBoolRE,
 }
 
 // validClientAddress is the second rule of client_address: the text must be an IP address.

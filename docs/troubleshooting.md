@@ -1629,3 +1629,35 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 **Likely cause.** It was released already (possibly by someone else a moment ago), or it was never held.
 
 **What to do.** Reload the certificate's page.
+
+## ALC-AKV-0036: A newer version replaced this one
+
+**Meaning.** An automatic deployment did not run because the version it was queued for is no longer the certificate's current version. Nothing was read from the vault and nothing was sent. (HTTP 409, reason `kv.version_superseded`.)
+
+**Likely cause.** The vault renewed the certificate again after the deployment was queued.
+
+**What to do.** Nothing, when automatic deployment is on: Alice deploys the newer version. Otherwise open the certificate and choose **Deploy now** for the version you want.
+
+## ALC-AKV-0037: Automatic deployment of this version was stopped
+
+**Meaning.** Three deployments of this version failed in this connection, so Alice stopped deploying it automatically; an automatic deployment that was still queued for it sent nothing. (HTTP 409, reason `kv.wave_stopped`.)
+
+**Likely cause.** The same problem made each attempt fail (a website's Nginx configuration, a missing role on the vault, a server that cannot be reached).
+
+**What to do.** Fix the cause shown on the failed deployments, then choose **Deploy now** for the version. A newer version starts a new automatic wave by itself.
+
+## ALC-AKV-0038: Vault was removed before the import was sent
+
+**Meaning.** The vault was removed from Alice while the import was waiting, so nothing was sent to Azure. (HTTP 409, reason `kv.import_vault_deleted`.)
+
+**Likely cause.** An administrator removed the vault between the request and the moment the task would have sent it.
+
+**What to do.** Add the vault again if the certificate should still go into it, then import again.
+
+## ALC-AKV-0039: Import cancelled before it was sent
+
+**Meaning.** The task that would have sent the import ended before it sent anything to Azure (it was cancelled, failed or is gone), so nothing was created in the vault. (HTTP 409, reason `kv.import_cancelled`.)
+
+**Likely cause.** An administrator discarded the waiting task, it failed before the send, or Alice was restored from a backup that no longer held it.
+
+**What to do.** Import the certificate again. A new request is safe: nothing reached the vault.
