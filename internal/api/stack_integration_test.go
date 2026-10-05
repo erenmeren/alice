@@ -255,7 +255,7 @@ func (s *stack) newRunner(worker string, heartbeat time.Duration) *jobs.Runner {
 		kvjobs.Register(r, kvjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})
 	}
 	// Phase 6: sshkey.add and rotation.location, as cmd/alice wires them (the services' clock).
-	sshkeyjobs.Register(r, sshkeyjobs.Deps{Keys: s.sshKeys, Targets: s.inv, Registry: s.registry, Clock: s.tick, Log: log})
+	sshkeyjobs.Register(r, sshkeyjobs.Deps{Keys: s.sshKeys, Targets: s.inv, Registry: s.registry, Clock: s.tick, Gate: s.license, Log: log})
 	return r
 }
 

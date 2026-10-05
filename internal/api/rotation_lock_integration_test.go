@@ -15,8 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
-
-	"alice/internal/providers/linuxssh/helperproto"
 )
 
 // Licence lock and rotation over the wire (L-29, L-83..L-88 at API level, S6): the lock comes from the real licence
@@ -321,8 +319,11 @@ func TestAbortInLockUndoesOverTheWire(t *testing.T) {
 	api := e.client("198.51.100.81")
 	api.bearer = token
 	require.Equal(t, []string{"abort"}, decodeBody[runDoc](t, api.do(http.MethodGet, "/api/v1/rotation/runs/"+runID, nil)).ActionsAllowed)
+	writes := len(e.f.helperWrites())
 	requireStatus(t, api.do(http.MethodPost, "/api/v1/rotation/runs/"+runID+"/actions/abort", nil), http.StatusNoContent)
 	e.drain()
+	require.True(t, e.license.Snapshot().Eval.Locked())
+	assert.Len(t, e.f.helperWrites(), writes+1, "the undo's removal of the new key reaches the server in lock (L-86)")
 	e.sweep(2)
 	r = e.run(e.admin, runID)
 	assert.Equal(t, "aborted", r.Status)
@@ -719,10 +720,8 @@ func TestLockDuringRemovingOldOverTheWire(t *testing.T) {
 	wl.mu.Lock()
 	cmds, auths := wl.commands[second], wl.auths[second]
 	wl.mu.Unlock()
-	// What the other server sees in lock, as built: the removal job queued before the lock opens Alice's session (the
-	// helper's read-only "version" on a pooled connection) and makes its read-only re-check login with the new key, then
-	// stops at the store's gate (the run is paused): no listing, no write. The spec's stricter "zero commands" (L-29) is
-	// TestLockDuringRemovingOldSendsNoCommand (skipped: T14-D2).
+	// Nothing at all reaches the other server in lock (L-29, T14-D2 fixed in b7eab4e): no session (no helper command),
+	// no sign-in with Alice's key, no re-check login with the new key, no listing, no write.
 	loginsMu.Lock()
 	lockedLogins := 0
 	for _, at := range logins[second] {
@@ -731,10 +730,9 @@ func TestLockDuringRemovingOldOverTheWire(t *testing.T) {
 		}
 	}
 	loginsMu.Unlock()
-	assert.Equal(t, []string{helperproto.HelperPath + " version"}, second.server.Commands()[cmds:], "only the session's version check")
-	assert.Equal(t, auths+lockedLogins, second.server.AuthAttempts(), "every sign-in in lock was a test login, none with Alice's key")
-	assert.Equal(t, 1, lockedLogins, "the one re-check login with the new key (as built; read-only)")
-	t.Logf("re-check logins with the new key on the other server in lock: %d", lockedLogins)
+	assert.Empty(t, second.server.Commands()[cmds:], "no command of any kind on the other server in lock")
+	assert.Equal(t, auths, second.server.AuthAttempts(), "no sign-in on the other server in lock")
+	assert.Zero(t, lockedLogins, "no re-check login with the new key in lock")
 	assert.Equal(t, 1, e.outboxTemplates()["rotation.paused_license"])
 
 	e.renew()
@@ -756,12 +754,9 @@ func TestLockDuringRemovingOldOverTheWire(t *testing.T) {
 	}
 }
 
-// TestLockDuringRemovingOldSendsNoCommand is L-29 strictly ("no remote command executed": zero commands on the fake
+// TestLockDuringRemovingOldSendsNoCommand is L-29 strictly (T14-D2, fixed in b7eab4e) ("no remote command executed": zero commands on the fake
 // server's log) for a removal job queued just before the lock and run after it began.
 func TestLockDuringRemovingOldSendsNoCommand(t *testing.T) {
-	t.Skip("DEFECT T14-D2: in lock, a rotation.location remove job queued before the lock opens a session on its server " +
-		"(the helper's `version`) and logs in with the new key before the store's gate refuses the removal " +
-		"(internal/jobs/sshkeyjobs/location.go remove: open and login precede BeginRemove); L-29 demands zero commands in lock")
 	e := newKeyEnv(t)
 	f2, t2 := e.addKeyServer("web-02")
 	k := e.generate(e.admin, "two removals", "ed25519")
@@ -782,7 +777,13 @@ func TestLockDuringRemovingOldSendsNoCommand(t *testing.T) {
 	}
 	e.hourly(6 * time.Hour)
 	wl.mu.Lock()
-	cmds := wl.commands[second]
+	cmds, auths := wl.commands[second], wl.auths[second]
 	wl.mu.Unlock()
-	assert.Len(t, second.server.Commands(), cmds, "zero commands on the other server in lock")
+	// Only the first server's send that was in flight when the lock began is allowed; the other server sees nothing:
+	// no helper command (version, list, add, remove) and no sign-in of any key (Alice's session or a test login).
+	assert.Empty(t, second.server.Commands()[cmds:], "zero commands on the other server in lock")
+	assert.Equal(t, auths, second.server.AuthAttempts(), "zero sign-ins on the other server in lock")
+	assert.True(t, e.license.Snapshot().Eval.Locked())
+	assert.NotContains(t, first.file(deployKeysPath), k.blob(), "the in-flight removal on the first server completed")
+	assert.Contains(t, second.file(deployKeysPath), k.blob())
 }
