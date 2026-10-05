@@ -7,11 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -130,14 +130,13 @@ JOIN ssh_keys k ON k.private_key_id = m.id WHERE k.id = $1`, keyID).Scan(&n))
 	return n
 }
 
-// browserRequest builds the request c.do would send (same-origin headers, CSRF token, cookies) for a real HTTP client.
-func browserRequest(t *testing.T, c *client, baseURL, method, path string, body any) *http.Request {
+// browserRequest builds the request c.do would send (same-origin headers, CSRF token, cookies).
+func browserRequest(t *testing.T, c *client, method, path string, body any) *http.Request {
 	t.Helper()
 	raw, err := json.Marshal(body)
 	require.NoError(t, err)
-	req, err := http.NewRequestWithContext(context.Background(), method, baseURL+path, bytes.NewReader(raw))
-	require.NoError(t, err)
-	req.Host = "alice.test"
+	req := httptest.NewRequest(method, "https://alice.test"+path, bytes.NewReader(raw))
+	req.RemoteAddr = c.ip + ":40000"
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "https://alice.test")
@@ -150,68 +149,95 @@ func browserRequest(t *testing.T, c *client, baseURL, method, path string, body 
 	return req
 }
 
-// auditProbe is a RoundTripper that, the moment the response's status line and headers have arrived and before one
-// byte of the body is read, asks the database whether the download's audit row is committed (S-09: written before
-// the response is sent).
-type auditProbe struct {
-	base     http.RoundTripper
-	check    func() (seq int64, ok bool)
-	seq      int64
+// probeWriter is the server side of one answer: at the FIRST WriteHeader or Write (the moment the first byte of the
+// answer is handed to the connection), it asks the database, on the owner pool (another connection than the
+// application's), whether the download's audit row is already committed, and records the answer (S-09: the audit
+// event is written before the response is sent). A client gone mid-body is simulated by failing every Write.
+type probeWriter struct {
+	header   http.Header
+	status   int
+	body     bytes.Buffer
+	probe    func() bool
+	probed   bool
 	rowFirst bool
-	called   bool
+	gone     bool // every Write fails, as for a client that went away
 }
 
-func (p *auditProbe) RoundTrip(r *http.Request) (*http.Response, error) {
-	res, err := p.base.RoundTrip(r)
-	if err != nil {
-		return nil, err
+func (w *probeWriter) first() {
+	if !w.probed {
+		w.probed = true
+		w.rowFirst = w.probe()
 	}
-	p.called = true
-	p.seq, p.rowFirst = p.check()
-	return res, nil
 }
 
-// failingWriter is a client that went away while the file was sent: every body write fails.
-type failingWriter struct {
-	header http.Header
-	status int
-	wrote  int
+func (w *probeWriter) Header() http.Header { return w.header }
+
+func (w *probeWriter) WriteHeader(code int) {
+	w.first()
+	if w.status == 0 {
+		w.status = code
+	}
 }
 
-func (w *failingWriter) Header() http.Header  { return w.header }
-func (w *failingWriter) WriteHeader(code int) { w.status = code }
-func (w *failingWriter) Write(b []byte) (int, error) {
-	w.wrote += len(b)
-	return 0, errors.New("write tcp: connection reset by peer")
+func (w *probeWriter) Write(b []byte) (int, error) {
+	w.first()
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	if w.gone {
+		return 0, errors.New("write tcp: connection reset by peer")
+	}
+	return w.body.Write(b)
+}
+
+// probedDownload sends one download as c through the stack's handler with a probeWriter that looks for the
+// download's audit row with number n at the first byte.
+func (e *keyEnv) probedDownload(c *client, keyID string, n int, gone bool) *probeWriter {
+	e.t.Helper()
+	w := &probeWriter{header: http.Header{}, gone: gone, probe: func() bool {
+		var seq int64
+		err := e.db.Owner.QueryRow(context.Background(), `SELECT seq FROM audit_log WHERE action = 'sshkey.private_key_downloaded'
+AND details->>'ssh_key_id' = $1 AND details->>'download_count' = $2`, keyID, strconv.Itoa(n)).Scan(&seq)
+		return err == nil
+	}}
+	e.handler.ServeHTTP(w, browserRequest(e.t, c, http.MethodPost, "/api/v1/ssh-keys/"+keyID+"/actions/download-private-key",
+		map[string]string{"reason": downloadReason}))
+	return w
+}
+
+// s09 is one S-09 case: its own installation, a generated key and the Administrator ready to download (a fresh
+// minute of the limiter and a fresh step-up), so every subtest runs alone.
+func s09(t *testing.T) (*keyEnv, keyLine) {
+	e := newKeyEnv(t)
+	k := e.generate(e.admin, "s09 key", "ed25519")
+	e.advance(time.Minute + time.Second)
+	e.stepUp(e.admin, e.adminAcct)
+	return e, k
 }
 
 // TestS09PrivateKeyDownload is S-09 over the wire (R41 rows 4, 5; SEC-045): only an Administrator's browser session
 // with a fresh step-up and a reason downloads; every other caller is refused and audited, and nothing is counted; the
-// audit row is committed before the first byte of the answer is on the wire, also when the client is gone; the answer
-// is not cached; every download is audited with its number; the file is the OpenSSH private key of the public key,
-// with and without a passphrase; 5 per minute per user (tokens and refused callers spend nothing); allowed in lock.
+// audit row is committed before the first byte of the answer is handed to the connection, also when the client is
+// gone, and a failed audit gives no file; the answer is not cached; every download is audited with its number; the
+// file is the OpenSSH private key of the public key, with and without a passphrase; 5 per minute per USER (tokens,
+// anonymous and pending callers spend nothing); allowed in lock. Each subtest has its own installation.
 func TestS09PrivateKeyDownload(t *testing.T) {
-	e := newKeyEnv(t)
-	k := e.generate(e.admin, "s09 key", "ed25519")
-	path := "/api/v1/ssh-keys/" + k.id + "/actions/download-private-key"
-
-	operator := e.createUser(e.admin, e.adminAcct, "otto", "operator", operatorPassword)
-	oc := e.freshClient()
-	e.firstSignIn(oc, operator)
-	auditor := e.createUser(e.admin, e.adminAcct, "audrey", "auditor", operatorPassword)
-	ac := e.freshClient()
-	e.firstSignIn(ac, auditor)
-	adminOperate, _ := createToken(t, e.stack, e.admin, e.adminAcct, "operate", 30)
-	adminRead, _ := createToken(t, e.stack, e.admin, e.adminAcct, "read", 30)
-	opToken, _ := createToken(t, e.stack, oc, operator, "operate", 30)
-
 	t.Run("refused callers", func(t *testing.T) {
+		e, k := s09(t)
+		operator := e.createUser(e.admin, e.adminAcct, "otto", "operator", operatorPassword)
+		oc := e.freshClient()
+		e.firstSignIn(oc, operator)
+		auditor := e.createUser(e.admin, e.adminAcct, "audrey", "auditor", operatorPassword)
+		ac := e.freshClient()
+		e.firstSignIn(ac, auditor)
+		adminOperate, _ := createToken(t, e.stack, e.admin, e.adminAcct, "operate", 30)
+		adminRead, _ := createToken(t, e.stack, e.admin, e.adminAcct, "read", 30)
+		opToken, _ := createToken(t, e.stack, oc, operator, "operate", 30)
 		e.stepUp(oc, operator)
 		e.stepUp(ac, auditor)
 		denied := e.auditCount("authz.denied")
-		for name, c := range map[string]*client{"operator session with step-up": oc, "auditor session with step-up": ac} {
+		for _, c := range []*client{oc, ac} {
 			requireError(t, download(c, k.id, downloadReason, nil), http.StatusForbidden, "ALC-AUTH-0002")
-			_ = name
 		}
 		for name, tok := range map[string]string{"admin operate token": adminOperate, "admin read token": adminRead, "operator operate token": opToken} {
 			api := e.client("198.51.100.70")
@@ -229,14 +255,12 @@ func TestS09PrivateKeyDownload(t *testing.T) {
 		requireStatus(t, rec, http.StatusOK)
 		require.Equal(t, "mfa_required", decodeBody[map[string]string](t, rec)["status"])
 		requireError(t, download(pending, k.id, downloadReason, nil), http.StatusUnauthorized, "ALC-AUTH-0001")
-		rec = download(e.client("198.51.100.71"), k.id, downloadReason, nil)
-		requireError(t, rec, http.StatusUnauthorized, "ALC-AUTH-0001")
+		requireError(t, download(e.client("198.51.100.71"), k.id, downloadReason, nil), http.StatusUnauthorized, "ALC-AUTH-0001")
 
 		assert.Empty(t, e.downloadedRows(k.id), "no refused caller produced a download")
 		assert.Zero(t, e.downloadCount(k.id))
 		// Each refused session and token is audited (R39 item 4; refusals of one user, permission, reason and route within
-		// ten minutes share one row, AUD-06): the Operator's and the Auditor's sessions, the tokens of the Administrator and
-		// of the Operator, the Administrator's session without step-up.
+		// ten minutes share one row, AUD-06).
 		got := map[string]bool{}
 		rows, err := e.db.Owner.Query(context.Background(), `SELECT actor_type, actor_name, details->>'reason', details->>'permission'
 FROM audit_log WHERE action = 'authz.denied' AND details->>'path' = '/api/v1/ssh-keys/{id}/actions/download-private-key'`)
@@ -254,10 +278,8 @@ FROM audit_log WHERE action = 'authz.denied' AND details->>'path' = '/api/v1/ssh
 	})
 
 	t.Run("refused requests", func(t *testing.T) {
-		e.advance(time.Minute + time.Second)
-		e.stepUp(e.admin, e.adminAcct)
-		over := strings.Repeat("p", 1025)
-		short := "eleven char"
+		e, k := s09(t)
+		path := "/api/v1/ssh-keys/" + k.id + "/actions/download-private-key"
 		cases := []struct {
 			name   string
 			body   any
@@ -266,63 +288,51 @@ FROM audit_log WHERE action = 'authz.denied' AND details->>'path' = '/api/v1/ssh
 		}{
 			{"empty reason", map[string]any{"reason": ""}, http.StatusUnprocessableEntity, "ALC-SYS-0006"},
 			{"reason with a private key marker", map[string]any{"reason": "see -----BEGIN " + "OPENSSH PRIVATE KEY----- here"}, http.StatusUnprocessableEntity, "ALC-SYS-0006"},
-			{"over-long passphrase", map[string]any{"reason": downloadReason, "passphrase": over}, http.StatusUnprocessableEntity, "ALC-SYS-0006"},
-			{"short passphrase", map[string]any{"reason": downloadReason, "passphrase": short}, http.StatusUnprocessableEntity, "ALC-SYS-0006"},
-			{"unknown field", map[string]any{"reason": downloadReason, "format": "pem"}, http.StatusBadRequest, ""},
+			{"over-long passphrase", map[string]any{"reason": downloadReason, "passphrase": strings.Repeat("p", 1025)}, http.StatusUnprocessableEntity, "ALC-SYS-0006"},
+			{"short passphrase", map[string]any{"reason": downloadReason, "passphrase": "eleven char"}, http.StatusUnprocessableEntity, "ALC-SYS-0006"},
+			{"empty passphrase is never 'unencrypted'", map[string]any{"reason": downloadReason, "passphrase": ""}, http.StatusUnprocessableEntity, "ALC-SYS-0006"},
+			{"unknown field", map[string]any{"reason": downloadReason, "format": "pem"}, http.StatusBadRequest, "ALC-SYS-0004"},
+			{"wrong type", `{"reason": 42}`, http.StatusBadRequest, "ALC-SYS-0004"},
 		}
-		for i, c := range cases {
-			if i == 4 {
-				e.advance(time.Minute + time.Second) // five refused requests used this minute's downloads
-				e.stepUp(e.admin, e.adminAcct)
-			}
+		for _, c := range cases {
+			// Every refused request of a session spends the limiter (the guard charges first): one per minute here.
+			e.advance(time.Minute + time.Second)
+			e.stepUp(e.admin, e.adminAcct)
 			rec := e.admin.do(http.MethodPost, path, c.body)
 			assert.Equal(t, c.status, rec.Code, "%s: %s", c.name, rec.Body.String())
-			if c.code != "" {
-				var body apiError
-				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-				assert.Equal(t, c.code, body.Error.Code, c.name)
-			}
+			assert.Equal(t, c.code, errCode(rec), "%s: %s", c.name, rec.Body.String())
 			assert.NotEqual(t, "application/octet-stream", rec.Header().Get("Content-Type"), c.name)
 		}
-		rec := e.admin.do(http.MethodPost, path, `{"reason": 42}`)
-		assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 		requireError(t, download(e.admin, uuid.NewString(), downloadReason, nil), http.StatusNotFound, "ALC-SYS-0001")
 		assert.Empty(t, e.downloadedRows(k.id))
 		assert.Zero(t, e.downloadCount(k.id))
-	})
-
-	t.Run("audited before the answer, not cached, counted", func(t *testing.T) {
+		// passphrase null is "no passphrase": the unencrypted file.
 		e.advance(time.Minute + time.Second)
 		e.stepUp(e.admin, e.adminAcct)
-		srv := httptest.NewServer(e.handler)
-		defer srv.Close()
-		probe := &auditProbe{base: srv.Client().Transport, check: func() (int64, bool) {
-			var seq int64
-			err := e.db.Owner.QueryRow(context.Background(), `SELECT seq FROM audit_log WHERE action = 'sshkey.private_key_downloaded'
-AND details->>'ssh_key_id' = $1 AND details->>'download_count' = '1'`, k.id).Scan(&seq)
-			return seq, err == nil
-		}}
-		hc := &http.Client{Transport: probe}
-		res, err := hc.Do(browserRequest(t, e.admin, srv.URL, http.MethodPost, path, map[string]string{"reason": downloadReason}))
-		require.NoError(t, err)
-		defer func() { _ = res.Body.Close() }()
-		require.Equal(t, http.StatusOK, res.StatusCode)
-		require.True(t, probe.called)
-		assert.True(t, probe.rowFirst, "the audit row was committed before the answer's first byte reached the client")
-		first, err := io.ReadAll(res.Body)
-		require.NoError(t, err)
+		rec := e.admin.do(http.MethodPost, path, `{"reason": "`+downloadReason+`", "passphrase": null}`)
+		requireStatus(t, rec, http.StatusOK)
+		_, err := ssh.ParsePrivateKey(rec.Body.Bytes())
+		require.NoError(t, err, "null passphrase: an unencrypted file")
+		assert.Equal(t, "false", e.downloadedRows(k.id)[0]["protected"])
+	})
 
-		assert.Equal(t, "no-store", res.Header.Get("Cache-Control"))
-		assert.Equal(t, "application/octet-stream", res.Header.Get("Content-Type"))
-		assert.Equal(t, "nosniff", res.Header.Get("X-Content-Type-Options"))
-		assert.Regexp(t, `^attachment; filename="alice-s09-key-[0-9a-f]{8}\.key"$`, res.Header.Get("Content-Disposition"))
-		assert.Equal(t, strconv.Itoa(len(first)), res.Header.Get("Content-Length"))
+	t.Run("audited before the first byte, not cached, counted", func(t *testing.T) {
+		e, k := s09(t)
+		w := e.probedDownload(e.admin, k.id, 1, false)
+		require.Equal(t, http.StatusOK, w.status, w.body.String())
+		require.True(t, w.probed)
+		assert.True(t, w.rowFirst, "the audit row was committed before the answer's first byte was written")
+		first := w.body.Bytes()
+		assert.Equal(t, "no-store", w.header.Get("Cache-Control"))
+		assert.Equal(t, "application/octet-stream", w.header.Get("Content-Type"))
+		assert.Equal(t, "nosniff", w.header.Get("X-Content-Type-Options"))
+		assert.Regexp(t, `^attachment; filename="alice-s09-key-[0-9a-f]{8}\.key"$`, w.header.Get("Content-Disposition"))
+		assert.Equal(t, strconv.Itoa(len(first)), w.header.Get("Content-Length"))
 		signer, err := ssh.ParsePrivateKey(first)
 		require.NoError(t, err, "the file is an OpenSSH private key")
 		assert.Equal(t, k.pub.Marshal(), signer.PublicKey().Marshal(), "of the key's public key")
-		clear(first)
 
-		// The second download is audited too, with its number; the row of each precedes nothing else of it.
+		// The second download, with a passphrase, is audited too, with its number.
 		e.stepUp(e.admin, e.adminAcct)
 		pass := "a passphrase of the on-call team"
 		rec := download(e.admin, k.id, downloadReason+" again", &pass)
@@ -353,57 +363,95 @@ AND details->>'ssh_key_id' = $1 AND details->>'download_count' = '1'`, k.id).Sca
 	})
 
 	t.Run("a client gone while the file is sent", func(t *testing.T) {
-		e.stepUp(e.admin, e.adminAcct)
-		req := browserRequest(t, e.admin, "https://alice.test", http.MethodPost, path, map[string]string{"reason": downloadReason})
-		req.RemoteAddr = e.admin.ip + ":40000"
-		w := &failingWriter{header: http.Header{}}
-		e.handler.ServeHTTP(w, req)
+		e, k := s09(t)
+		w := e.probedDownload(e.admin, k.id, 1, true)
 		assert.Equal(t, http.StatusOK, w.status)
-		assert.Positive(t, w.wrote, "the file was being written when the client went away")
+		assert.True(t, w.rowFirst, "committed before the first byte")
+		assert.Zero(t, w.body.Len(), "the client received nothing")
 		rows := e.downloadedRows(k.id)
-		require.Len(t, rows, 3, "the download is audited although the client never received it")
-		assert.Equal(t, "3", rows[2]["download_count"])
-		assert.Equal(t, 3, e.downloadCount(k.id))
+		require.Len(t, rows, 1, "the download is audited although the client never received it")
+		assert.Equal(t, 1, e.downloadCount(k.id))
+	})
+
+	t.Run("a failed audit gives no file", func(t *testing.T) {
+		e, k := s09(t)
+		// Test-side fault: the audit insert of a download fails in the test database (a trigger installed by the owner).
+		ctx := context.Background()
+		_, err := e.db.Owner.Exec(ctx, `CREATE FUNCTION t14_refuse_download_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.action = 'sshkey.private_key_downloaded' THEN RAISE EXCEPTION 't14: audit refused'; END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER t14_refuse_download_audit BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION t14_refuse_download_audit();`)
+		require.NoError(t, err)
+		w := e.probedDownload(e.admin, k.id, 1, false)
+		_, err = e.db.Owner.Exec(ctx, `DROP TRIGGER t14_refuse_download_audit ON audit_log; DROP FUNCTION t14_refuse_download_audit();`)
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, w.status, 500, w.body.String())
+		assert.Contains(t, w.header.Get("Content-Type"), "application/json")
+		var body apiError
+		require.NoError(t, json.Unmarshal(w.body.Bytes(), &body), w.body.String())
+		assert.NotEmpty(t, body.Error.Code)
+		assert.NotContains(t, w.body.String(), "PRIVATE KEY")
+		_, rows := e.storedKeys()
+		for _, sk := range rows {
+			for _, sec := range sshKeyCanaries(t, "key", sk.der) {
+				_, found := sec.leakedIn(w.body.String())
+				assert.False(t, found, "%s in the error answer", sec.name)
+			}
+		}
+		assert.Zero(t, e.downloadCount(k.id), "the counter was rolled back with the audit row")
+		assert.Empty(t, e.downloadedRows(k.id))
+		// With the audit working again the same Administrator downloads (number 1).
+		e.stepUp(e.admin, e.adminAcct)
+		w = e.probedDownload(e.admin, k.id, 1, false)
+		assert.Equal(t, http.StatusOK, w.status)
+		assert.True(t, w.rowFirst)
 	})
 
 	t.Run("five per minute per user", func(t *testing.T) {
-		e.advance(time.Minute + time.Second)
+		e, k := s09(t)
 		admin2 := e.createUser(e.admin, e.adminAcct, "bea", "admin", "a second administrator password")
-		bc := e.freshClient()
-		e.firstSignIn(bc, admin2)
+		bea := e.client(e.admin.ip) // the second Administrator on the first one's address
+		e.firstSignIn(bea, admin2)
+		ada2 := e.freshClient() // the same Administrator in a second browser on another address
+		e.signIn(ada2, e.adminAcct)
+		adminOperate, _ := createToken(t, e.stack, e.admin, e.adminAcct, "operate", 30)
 		e.advance(time.Minute + time.Second)
 		e.stepUp(e.admin, e.adminAcct)
-		e.stepUp(bc, admin2)
-		// Refused tokens spend nothing of the Administrator's allowance.
-		for _, tok := range []string{adminOperate, adminRead, adminOperate, adminRead, adminOperate, adminRead} {
-			api := e.client("198.51.100.72")
-			api.bearer = tok
+		e.stepUp(ada2, e.adminAcct)
+		e.stepUp(bea, admin2)
+		// Tokens of that Administrator and anonymous callers on her address spend nothing of her allowance.
+		for i := 0; i < 6; i++ {
+			api := e.client(e.admin.ip)
+			api.bearer = adminOperate
 			requireError(t, download(api, k.id, downloadReason, nil), http.StatusForbidden, "ALC-AUTH-0002")
+			requireError(t, download(e.client(e.admin.ip), k.id, downloadReason, nil), http.StatusUnauthorized, "ALC-AUTH-0001")
 		}
-		before := len(e.downloadedRows(k.id))
 		for i := 0; i < 5; i++ {
 			requireStatus(t, download(e.admin, k.id, downloadReason, nil), http.StatusOK)
 		}
-		rec := download(e.admin, k.id, downloadReason, nil)
+		before := len(e.downloadedRows(k.id))
+		rec := download(ada2, k.id, downloadReason, nil)
 		requireError(t, rec, http.StatusTooManyRequests, "ALC-SYS-0005")
 		assert.NotEmpty(t, rec.Header().Get("Retry-After"))
-		assert.Len(t, e.downloadedRows(k.id), before+5, "the refused sixth is not a download")
-		requireStatus(t, download(bc, k.id, downloadReason, nil), http.StatusOK) // another user is unaffected
+		requireError(t, download(e.admin, k.id, downloadReason, nil), http.StatusTooManyRequests, "ALC-SYS-0005")
+		assert.Len(t, e.downloadedRows(k.id), before, "the refused sixth is not a download")
+		requireStatus(t, download(bea, k.id, downloadReason, nil), http.StatusOK) // another Administrator on the same address
 		e.advance(time.Minute + time.Second)
-		e.stepUp(e.admin, e.adminAcct)
-		requireStatus(t, download(e.admin, k.id, downloadReason, nil), http.StatusOK)
+		e.stepUp(ada2, e.adminAcct)
+		requireStatus(t, download(ada2, k.id, downloadReason, nil), http.StatusOK)
 	})
 
 	t.Run("allowed in lock", func(t *testing.T) {
+		e, k := s09(t)
 		e.advance(31 * 24 * time.Hour)
-		require.NoError(t, e.license.Tick(context.Background()))
 		require.True(t, e.license.Snapshot().Eval.Locked())
 		e.stepUp(e.admin, e.adminAcct)
 		rec := download(e.admin, k.id, downloadReason, nil)
 		requireStatus(t, rec, http.StatusOK)
 		_, err := ssh.ParsePrivateKey(rec.Body.Bytes())
 		require.NoError(t, err)
-		// Generation and deploy change things: refused in lock.
 		requireError(t, e.admin.do(http.MethodPost, "/api/v1/ssh-keys/generate", map[string]string{"label": "x", "key_type": "ed25519"}),
 			http.StatusForbidden, "ALC-LIC-0001")
 	})
@@ -595,16 +643,15 @@ func TestF37DeployIntoFileWithoutNewline(t *testing.T) {
 func TestF38DeployWhenTheFileChangesBetweenReadAndWrite(t *testing.T) {
 	e := newKeyEnv(t)
 	meanwhile := newFixtureKey(t)
-	changed := false
+	var changed atomic.Bool // set on the emulator's goroutine
 	e.f.emu.BeforeWrite(func(p string) {
-		if p == deployKeysPath && !changed {
-			changed = true
+		if p == deployKeysPath && changed.CompareAndSwap(false, true) {
 			e.f.emu.SetFile(p, []byte(e.f.files[p]+meanwhile.line+" added-meanwhile\n"))
 		}
 	})
 	k := e.generate(e.admin, "f38", "ed25519")
 	e.deployed(k)
-	require.True(t, changed)
+	require.True(t, changed.Load())
 	after := e.f.file(deployKeysPath)
 	assert.True(t, strings.HasPrefix(after, e.f.files[deployKeysPath]+meanwhile.line+" added-meanwhile\n"), after)
 	assert.Contains(t, after, k.blob())

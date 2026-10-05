@@ -16,7 +16,9 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,8 +27,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
-
-	"alice/internal/notify"
 )
 
 // Secret-leak suite with generated SSH keys (spec §25.2, S-01..S-05 for Phase 6; Review Focus 2). Every private key
@@ -60,23 +60,45 @@ func sshKeyCanaries(t *testing.T, name string, der []byte) []secretValue {
 		binaryCanary(name+" (PKCS#8 DER pieces)", der, public...),
 		{name: name + " (PKCS#8 PEM)", forms: pemForms(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))},
 	}
+	out = append(out, secretValue{name: name + " (PKCS#8 DER printed with %v)", forms: sprintForms(der)})
 	switch k := key.(type) {
 	case ed25519.PrivateKey:
-		out = append(out, secretValue{name: name + " (Ed25519 seed)", forms: binaryForms(k.Seed())[1:]})
+		out = append(out, secretValue{name: name + " (Ed25519 seed)", forms: append(binaryForms(k.Seed())[1:], sprintForms(k.Seed())...)})
 	case *rsa.PrivateKey:
-		out = append(out, secretValue{name: name + " (RSA d)", forms: binaryForms(k.D.Bytes())[1:]},
-			secretValue{name: name + " (RSA p)", forms: binaryForms(k.Primes[0].Bytes())[1:]},
-			secretValue{name: name + " (RSA q)", forms: binaryForms(k.Primes[1].Bytes())[1:]},
+		out = append(out, secretValue{name: name + " (RSA d)", forms: append(binaryForms(k.D.Bytes())[1:], k.D.String())},
+			secretValue{name: name + " (RSA p)", forms: append(binaryForms(k.Primes[0].Bytes())[1:], k.Primes[0].String())},
+			secretValue{name: name + " (RSA q)", forms: append(binaryForms(k.Primes[1].Bytes())[1:], k.Primes[1].String())},
 			secretValue{name: name + " (PKCS#1 PEM)", forms: pemForms(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY",
 				Bytes: x509.MarshalPKCS1PrivateKey(k)}))})
 	case *ecdsa.PrivateKey:
 		d, err := k.Bytes()
 		require.NoError(t, err)
-		out = append(out, secretValue{name: name + " (ECDSA scalar)", forms: binaryForms(d)[1:]})
+		out = append(out, secretValue{name: name + " (ECDSA scalar)", forms: append(append(binaryForms(d)[1:], sprintForms(d)...), new(big.Int).SetBytes(d).String())})
 	default:
 		t.Fatalf("%s: unexpected key type %T", name, key)
 	}
 	return out
+}
+
+// sprintForms are the spellings of a byte slice printed by Go's fmt (%v, %+v, slog's text of a []byte inside a
+// struct): the whole "[12 34 …]" and its inner runs of 24 bytes every 12 bytes (a printed key or signer struct
+// contains the slice's numbers, not its brackets).
+func sprintForms(b []byte) []string {
+	inner := func(p []byte) string { return strings.TrimSuffix(strings.TrimPrefix(goPrint(p), "["), "]") }
+	out := []string{goPrint(b)}
+	for i := 0; i+24 <= len(b); i += 12 {
+		out = append(out, inner(b[i:i+24]))
+	}
+	return out
+}
+
+// goPrint is how fmt prints a []byte with %v: "[12 34 …]".
+func goPrint(b []byte) string {
+	parts := make([]string, len(b))
+	for i, x := range b {
+		parts[i] = strconv.Itoa(int(x))
+	}
+	return "[" + strings.Join(parts, " ") + "]"
 }
 
 // publicCorpus are the spellings of public keys (every alignment and encoding of the SSH wire form and of PKIX, and
@@ -92,6 +114,9 @@ func publicCorpus(t *testing.T, lines ...string) []string {
 			raws = append(raws, pkix)
 		}
 		out = append(append(out, publicSpellings(raws...)...), line)
+		for _, r := range raws {
+			out = append(out, goPrint(r))
+		}
 	}
 	return out
 }
@@ -329,9 +354,11 @@ func TestSecretLeakSuiteWithGeneratedKeys(t *testing.T) {
 }
 
 // TestSSHKeyLeakScannerFindsEveryCanary proves the scan of the suite above is not vacuous: a key's file, its body on
-// one line, its PKCS #8 in a JSON []byte, its seed or exponent in hex, a misaligned slice of its body in base64, the
-// passphrase inside JSON, and an envelope in a bytea column are each found where a leak would put them (a log line,
-// an answer, a table, an email); the public key and its fingerprint are not mistaken for a leak.
+// one line, its PKCS #8 in a JSON []byte, its seed or exponent in hex and in decimal, a misaligned slice of its body in
+// base64, the key, its seed and its signer printed by Go (%v, %+v, slog.Any) through the stack's own logger, and the
+// passphrase inside JSON are each caught; each is found where it was planted in a real sink (the stack's logger, the
+// outbox delivered by the real sender, a bytea column of a table the dump reads) and in the harness's record of
+// answers; the public key and its fingerprint are not mistaken for a leak.
 func TestSSHKeyLeakScannerFindsEveryCanary(t *testing.T) {
 	e := newKeyEnv(t)
 	_, edKey, err := ed25519.GenerateKey(rand.Reader)
@@ -339,6 +366,9 @@ func TestSSHKeyLeakScannerFindsEveryCanary(t *testing.T) {
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
 	passphrase := canary("download-passphrase")
+	stackLog := e.deps().Log // the logger the server is built with (logging.New over the stack's log, DEBUG)
+	_, err = e.db.Owner.Exec(context.Background(), "CREATE TABLE t14_planted (name text PRIMARY KEY, blob bytea NOT NULL)")
+	require.NoError(t, err)
 	for name, key := range map[string]any{"ed25519": edKey, "rsa": rsaKey} {
 		der, err := x509.MarshalPKCS8PrivateKey(key)
 		require.NoError(t, err)
@@ -351,21 +381,26 @@ func TestSSHKeyLeakScannerFindsEveryCanary(t *testing.T) {
 		file := pem.EncodeToMemory(block)
 		jsonDER, _ := json.Marshal(der)
 		jsonFile, _ := json.Marshal(string(file))
-		var secret string
+		var secret, decimal string
+		var seed []byte
 		switch k := key.(type) {
 		case ed25519.PrivateKey:
-			secret = hex.EncodeToString(k.Seed())
+			secret, seed = hex.EncodeToString(k.Seed()), k.Seed()
+			decimal = fmt.Sprintf("%v", k)
 		case *rsa.PrivateKey:
-			secret = hex.EncodeToString(k.D.Bytes())
+			secret, decimal = hex.EncodeToString(k.D.Bytes()), k.D.String()
+			seed = k.Primes[0].Bytes()
 		}
 		leaks := map[string]string{
-			"file":             string(file),
-			"file in JSON":     string(jsonFile),
-			"body on one line": strings.ReplaceAll(strings.TrimSpace(string(file)), "\n", ""),
-			"PKCS#8 as []byte": string(jsonDER),
-			"secret in hex":    secret,
-			"misaligned slice": base64.StdEncoding.EncodeToString(block.Bytes[61 : len(block.Bytes)-17]),
-			"passphrase":       `{"passphrase":"` + passphrase + `"}`,
+			"file":                    string(file),
+			"file in JSON":            string(jsonFile),
+			"body on one line":        strings.ReplaceAll(strings.TrimSpace(string(file)), "\n", ""),
+			"PKCS#8 as []byte":        string(jsonDER),
+			"secret in hex":           secret,
+			"secret in decimal or %v": decimal,
+			"key printed with %+v":    fmt.Sprintf("%+v", key),
+			"misaligned slice":        base64.StdEncoding.EncodeToString(block.Bytes[61 : len(block.Bytes)-17]),
+			"passphrase":              `{"passphrase":"` + passphrase + `"}`,
 		}
 		for what, text := range leaks {
 			found := false
@@ -381,37 +416,56 @@ func TestSSHKeyLeakScannerFindsEveryCanary(t *testing.T) {
 			assert.False(t, ok, "%s: %s matches the public key", name, sec.name)
 		}
 
-		// The places: a log line, an answer, a table row, an email.
-		mark := func(where string) {
-			n := len(e.sshLeaks(secs, false))
-			switch where {
-			case "log":
-				logLine := slog.New(slog.NewJSONHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-				logLine.Debug("leak", "blob", block.Bytes)
-			case "answer":
-				e.mu.Lock()
-				e.exchanges = append(e.exchanges, exchange{method: http.MethodGet, path: "/api/v1/planted", status: http.StatusOK,
-					header: http.Header{}, body: jsonFile})
-				e.mu.Unlock()
-			case "table":
-				_, err := e.db.Owner.Exec(context.Background(), `INSERT INTO settings (key, value) VALUES ($1, to_jsonb($2::text))`,
-					"planted."+name, string(jsonDER))
-				require.NoError(t, err)
-			case "email":
-				require.NoError(t, e.mailbox.Send(context.Background(), notify.Message{To: "ada@example.com", Subject: "planted", Body: secret}))
+		// Each sink, one plant at a time: what the plant added to that place (the log, the answers and the emails grow at
+		// their end; the table is new) must hold a canary.
+		plant := func(place, what string, do func()) {
+			before := len(e.leakPlaces(false)[place])
+			do()
+			text := e.leakPlaces(false)[place]
+			if place != "tables" {
+				text = text[before:]
 			}
-			assert.Greater(t, len(e.sshLeaks(secs, false)), n, "%s: a leak in the %s is found", name, where)
+			hit := false
+			for _, sec := range secs {
+				if _, ok := sec.leakedIn(text); ok {
+					hit = true
+				}
+			}
+			assert.True(t, hit, "%s: %s planted in the %s is found", name, what, place)
 		}
-		for _, where := range []string{"log", "answer", "table", "email"} {
-			mark(where)
+		plant("log", "slog.Any of the key", func() { stackLog.Debug("planted", slog.Any("material", key)) })
+		if name == "ed25519" { // an RSA or ECDSA signer prints pointers only; its key is printed below
+			leaks := []string{fmt.Sprintf("%v", signer), fmt.Sprintf("%+v", signer)}
+			plant("log", "the signer with %v", func() { stackLog.Debug("planted " + leaks[0]) })
+			plant("log", "the signer with %+v", func() { stackLog.Debug("planted " + leaks[1]) })
 		}
+		plant("log", "the key with %+v", func() { stackLog.Debug(fmt.Sprintf("planted %+v", key)) })
+		plant("log", "slog.Any of the seed bytes", func() { stackLog.Debug("planted", slog.Any("blob", seed)) })
+		plant("log", "the block as bytes", func() { stackLog.Debug("planted", "blob", block.Bytes) })
+		plant("responses", "an answer body", func() {
+			// The harness's record of answers (no handler echoes a key; this proves the record is scanned).
+			e.mu.Lock()
+			e.exchanges = append(e.exchanges, exchange{method: http.MethodGet, path: "/api/v1/planted", status: http.StatusOK,
+				header: http.Header{}, body: jsonFile})
+			e.mu.Unlock()
+		})
+		plant("tables", "a bytea column", func() {
+			_, err := e.db.Owner.Exec(context.Background(), "INSERT INTO t14_planted (name, blob) VALUES ($1, $2)", name, der)
+			require.NoError(t, err)
+		})
+		plant("emails", "an email the sender delivered", func() {
+			_, err := e.db.Owner.Exec(context.Background(), `INSERT INTO notifications_outbox (id, kind, to_address, template_key, params, locale,
+    status, attempts, next_attempt_at, created_at) VALUES (gen_random_uuid(), 'email', 'ada@example.com', 'rotation.paused_license',
+    jsonb_build_object('key_label', $1::text), 'en', 'pending', 0, now() - interval '1 year', now() - interval '1 year')`, secret)
+			require.NoError(t, err)
+			require.Positive(t, e.deliverMail())
+		})
 	}
-	// An envelope in a bytea column of another table is found by the envelope scan.
+	// An envelope slice in a bytea column (hex in to_jsonb, base64 in the bytea scan) is found by the envelope scan.
 	env := make([]byte, 96)
 	_, _ = rand.Read(env)
 	n := len(e.sshLeaks([]secretValue{binaryCanary("sealed envelope", env)}, true))
-	_, err = e.db.Owner.Exec(context.Background(), `INSERT INTO settings (key, value) VALUES ('planted.envelope', to_jsonb($1::text))`,
-		base64.StdEncoding.EncodeToString(env[6:]))
+	_, err = e.db.Owner.Exec(context.Background(), "INSERT INTO t14_planted (name, blob) VALUES ('envelope', $1)", env[6:])
 	require.NoError(t, err)
 	assert.Greater(t, len(e.sshLeaks([]secretValue{binaryCanary("sealed envelope", env)}, true)), n)
 }

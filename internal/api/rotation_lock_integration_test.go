@@ -7,9 +7,11 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -53,6 +55,34 @@ func (e *keyEnv) hourly(d time.Duration) {
 	}
 }
 
+// phase6IDs are the ids of every row of the Phase 6 tables (rotation_steps by run and number): a lock deletes none.
+func (e *keyEnv) phase6IDs() map[string]map[string]bool {
+	e.t.Helper()
+	out := map[string]map[string]bool{}
+	for table, col := range map[string]string{"ssh_keys": "id::text", "managed_private_keys": "id::text", "ssh_key_locations": "id::text",
+		"rotation_policies": "id::text", "rotations": "id::text", "rotation_locations": "id::text", "rotation_steps": "rotation_id::text || '/' || n"} {
+		res, err := e.db.Owner.Query(context.Background(), "SELECT "+col+" FROM "+table)
+		require.NoError(e.t, err)
+		ids, err := pgx.CollectRows(res, pgx.RowTo[string])
+		require.NoError(e.t, err)
+		out[table] = map[string]bool{}
+		for _, id := range ids {
+			out[table][id] = true
+		}
+	}
+	return out
+}
+
+// frozenInLock are the tables a lock leaves exactly as they were (row checksums): keys, private keys, key places,
+// policies and the run's places.
+func (e *keyEnv) frozenInLock() map[string]string {
+	out := map[string]string{}
+	for _, t := range []string{"ssh_keys", "managed_private_keys", "ssh_key_locations", "rotation_policies", "rotation_locations"} {
+		out[t] = e.rowsChecksum(t, "true")
+	}
+	return out
+}
+
 // phase6Rows counts the rows a lock must never delete.
 func (e *keyEnv) phase6Rows() map[string]int {
 	out := map[string]int{}
@@ -77,7 +107,15 @@ func (e *keyEnv) overlapRun(overlapDays int) (keyLine, string, string) {
 
 // lockedOverlap is L-83's start: a run in overlap whose end comes 3 days after the lock begins; the lock begins.
 func lockedOverlap(t *testing.T) (*keyEnv, keyLine, string, string) {
+	return lockedOverlapAfter(t, nil)
+}
+
+// lockedOverlapAfter is lockedOverlap with work done on the installation first (before the run starts).
+func lockedOverlapAfter(t *testing.T, before func(e *keyEnv)) (*keyEnv, keyLine, string, string) {
 	e := newKeyEnv(t)
+	if before != nil {
+		before(e)
+	}
 	until := e.license.Snapshot().Eval.EndsAt.Add(4 * 24 * time.Hour)
 	days := int(until.Sub(e.clock.Now()).Hours() / 24)
 	k, policyID, runID := e.overlapRun(days)
@@ -121,10 +159,23 @@ func (e *keyEnv) phase6Writes(keyID, policyID, runID, etag string) []struct {
 // overlap ends, send no command to the server and delete no row; the run stays in overlap, paused_license, with both
 // keys in the file, one email, and only Stop and undo offered.
 func TestRotationInLockRunsNoCommand(t *testing.T) {
-	e, k, policyID, runID := lockedOverlap(t)
+	// A key retired by an earlier rotation whose 30 days end in the middle of the lock (I4: destroy_retired has
+	// something due in lock).
+	var retired keyLine
+	e, k, policyID, runID := lockedOverlapAfter(t, func(e *keyEnv) {
+		retired = e.generate(e.admin, "retired", "ed25519")
+		e.deployed(retired)
+		e.rotateOnce(retired)
+	})
+	m := decodeBody[map[string]any](t, e.admin.do(http.MethodGet, "/api/v1/ssh-keys/"+retired.id, nil))["managed_key"].(map[string]any)
+	retiredAt, err := time.Parse(time.RFC3339Nano, m["retired_at"].(string))
+	require.NoError(t, err)
+	due := retiredAt.Add(30 * 24 * time.Hour)
+	require.True(t, due.After(e.clock.Now()), "not due when the lock begins")
 	etag := e.admin.do(http.MethodGet, "/api/v1/rotation/policies/"+policyID, nil).Header().Get("ETag")
 	commands := len(e.f.server.Commands())
-	rows := e.phase6Rows()
+	writes := e.f.emu.Writes()
+	ids := e.phase6IDs()
 	denied := e.deniedRefusals()
 
 	e.stepUp(e.admin, e.adminAcct)
@@ -134,16 +185,25 @@ func TestRotationInLockRunsNoCommand(t *testing.T) {
 	assert.Equal(t, len(e.phase6Writes(k.id, policyID, runID, etag)), e.deniedRefusals()-denied, "every refusal audited")
 	rec := download(e.admin, k.id, downloadReason, nil)
 	requireStatus(t, rec, http.StatusOK)
-	_, err := ssh.ParsePrivateKey(rec.Body.Bytes())
+	_, err = ssh.ParsePrivateKey(rec.Body.Bytes())
 	require.NoError(t, err, "the download is allowed in lock")
+	frozen := e.frozenInLock() // the download counted itself; from here nothing of these tables changes
 
 	e.hourly(3*24*time.Hour + time.Hour)
+	require.True(t, e.clock.Now().After(due), "the retired key fell due in lock")
 	assert.Len(t, e.f.server.Commands(), commands, "no remote command in lock (L-29)")
-	assert.Equal(t, []string{deployKeysPath, deployKeysPath}, e.f.emu.Writes(), "only the deploy and the run's add before the lock wrote")
-	after := e.phase6Rows()
-	for table, n := range rows {
-		assert.GreaterOrEqual(t, after[table], n, "no row of %s deleted", table)
+	assert.Equal(t, writes, e.f.emu.Writes(), "no write in lock")
+	after := e.phase6IDs()
+	for table, set := range ids {
+		for id := range set {
+			assert.True(t, after[table][id], "row %s of %s deleted", id, table)
+		}
 	}
+	assert.Equal(t, frozen, e.frozenInLock(), "keys, private keys, places, policies and the run's places unchanged")
+	m = decodeBody[map[string]any](t, e.admin.do(http.MethodGet, "/api/v1/ssh-keys/"+retired.id, nil))["managed_key"].(map[string]any)
+	assert.Nil(t, m["destroyed_at"], "nothing destroyed in lock")
+	e.stepUp(e.admin, e.adminAcct)
+	requireStatus(t, download(e.admin, retired.id, downloadReason, nil), http.StatusOK)
 	r := e.run(e.admin, runID)
 	assert.Equal(t, "overlap", r.Status)
 	assert.True(t, r.PausedLicense, "the lock paused the run (L-83)")
@@ -155,8 +215,14 @@ func TestRotationInLockRunsNoCommand(t *testing.T) {
 	assert.Contains(t, file, k.blob(), "the old key stays")
 	assert.Contains(t, file, newBlob(t, e, r), "the new key stays")
 	assert.Equal(t, 1, e.outboxTemplates()["rotation.paused_license"])
-	assert.Zero(t, e.auditCount("sshkey.removed"))
+	assert.Equal(t, 1, e.auditCount("sshkey.removed"), "only the earlier rotation's removal")
 	e.assertGETsChangeNothing(k.id, policyID, runID)
+
+	// After the renewal the destruction that fell due in lock happens.
+	e.renew()
+	require.NoError(t, e.task("sshkey.destroy_retired"))
+	m = decodeBody[map[string]any](t, e.admin.do(http.MethodGet, "/api/v1/ssh-keys/"+retired.id, nil))["managed_key"].(map[string]any)
+	assert.NotNil(t, m["destroyed_at"], "destroyed after the renewal")
 }
 
 // newBlob is the run's new key as "type base64".
@@ -268,19 +334,41 @@ func withoutLine(text, blob string) []string {
 	return out
 }
 
-// lockDuringAdd makes the first add written to path on f begin the lock (as the clock reaches the evaluation's end
-// while the helper writes); the write itself proceeds.
-func (e *keyEnv) lockDuringAdd(f *sshFixture, path string) {
-	var once bool
-	f.emu.BeforeWrite(func(p string) {
-		if p != path || once {
-			return
-		}
-		once = true
-		end := e.license.Snapshot().Eval.EndsAt
-		e.clock.Advance(end.Sub(e.clock.Now()) + time.Hour)
-		require.NoError(e.t, e.license.Tick(context.Background()))
-	})
+// writeLock begins the lock inside the first authkeys-write of path on any of the fixtures (as the clock reaches the
+// evaluation's end while the helper writes); the write itself proceeds. The hook runs on the emulator's goroutine,
+// so it only records what happened; check asserts it on the test goroutine.
+type writeLock struct {
+	mu    sync.Mutex
+	fired *sshFixture
+	err   error
+}
+
+func (e *keyEnv) lockAtWrite(path string, fs ...*sshFixture) *writeLock {
+	wl := &writeLock{}
+	for _, f := range fs {
+		f.emu.BeforeWrite(func(p string) {
+			wl.mu.Lock()
+			defer wl.mu.Unlock()
+			if p != path || wl.fired != nil {
+				return
+			}
+			wl.fired = f
+			end := e.license.Snapshot().Eval.EndsAt
+			e.clock.Advance(end.Sub(e.clock.Now()) + time.Hour)
+			wl.err = e.license.Tick(context.Background())
+		})
+	}
+	return wl
+}
+
+// check requires that the lock began inside a write, without error, and returns the server it was written on.
+func (wl *writeLock) check(t *testing.T) *sshFixture {
+	t.Helper()
+	wl.mu.Lock()
+	defer wl.mu.Unlock()
+	require.NotNil(t, wl.fired, "the lock began inside a write")
+	require.NoError(t, wl.err)
+	return wl.fired
 }
 
 // TestL85AndL86LockDuringTheAddOverTheWire: the lock begins while the run's first add is being written. L-85: that add
@@ -303,10 +391,11 @@ func TestL85AndL86LockDuringTheAddOverTheWire(t *testing.T) {
 		if p.Actions[0]["target_id"] == t2 {
 			first, second = f2, e.f
 		}
-		e.lockDuringAdd(first, deployKeysPath)
+		wl := e.lockAtWrite(deployKeysPath, first)
 		w2 := len(second.helperWrites())
 		runID := e.runNow(policyID, p.PlanDigest)
 		e.drain()
+		wl.check(t)
 		require.True(t, e.license.Snapshot().Eval.Locked())
 		e.hourly(6 * time.Hour)
 		r := e.run(e.admin, runID)
@@ -335,10 +424,11 @@ func TestL85AndL86LockDuringTheAddOverTheWire(t *testing.T) {
 		e.f.server.SetLoginCheck(func(user string, key ssh.PublicKey) bool {
 			return bytes.Equal(key.Marshal(), k.pub.Marshal()) && e.f.emu.AcceptsLogin(user, key)
 		})
-		e.lockDuringAdd(e.f, deployKeysPath)
+		wl := e.lockAtWrite(deployKeysPath, e.f)
 		policyID, _ := e.createPolicy(e.admin, k.id, 7)
 		runID := e.runNow(policyID, e.preview(e.admin, policyID).PlanDigest)
 		e.drain()
+		wl.check(t)
 		require.True(t, e.license.Snapshot().Eval.Locked())
 		e.hourly(3 * time.Hour)
 		r := e.run(e.admin, runID)
@@ -432,11 +522,18 @@ func TestL88LockWhenTheNoticeIsDueOverTheWire(t *testing.T) {
 	rec = e.admin.do(http.MethodPost, "/api/v1/rotation/policies/"+policyID+"/actions/enable", nil, withHeader("If-Match", rec.Header().Get("ETag")))
 	requireStatus(t, rec, http.StatusOK)
 	previews := e.outboxTemplates()["rotation.preview"]
+	next := decodeBody[map[string]any](t, rec)["next_run_at"]
 
 	e.lockNow()
+	commands, frozen, outbox := len(e.f.server.Commands()), e.frozenInLock(), e.count("notifications_outbox")
 	e.hourly(2 * 24 * time.Hour)
 	assert.Zero(t, e.count("rotations"), "no run in lock")
 	assert.Equal(t, previews, e.outboxTemplates()["rotation.preview"], "no notice in lock")
+	// Nothing else changes: no command, no key, place or policy change (next_run_at kept), no email at all.
+	assert.Len(t, e.f.server.Commands(), commands)
+	assert.Equal(t, frozen, e.frozenInLock())
+	assert.Equal(t, outbox, e.count("notifications_outbox"))
+	assert.Equal(t, next, decodeBody[map[string]any](t, e.admin.do(http.MethodGet, "/api/v1/rotation/policies/"+policyID, nil))["next_run_at"])
 
 	e.renew()
 	require.NoError(t, e.task("rotation.plan"))
@@ -445,7 +542,7 @@ func TestL88LockWhenTheNoticeIsDueOverTheWire(t *testing.T) {
 }
 
 // TestL83FlaggedWhenTheLockEnters is L-83 as the spec words it (ruling T14-D1, 31d0793): when the lock enters during
-// the overlap (4 days left), the first sweep after it flags the run paused_license, queues one rotation.paused_license
+// the overlap (about three days left), the first sweep after it flags the run paused_license, queues one rotation.paused_license
 // email and the notice state names the lock; the overlap timer stops: its end passes on the clock in lock and nothing
 // happens (still overlap, nothing removed, no second email, no reminder); after the renewal, the notice and Continue
 // the overlap resumes with the time that remained when the pause began, and only then is the old key removed.
@@ -496,4 +593,113 @@ func TestL83FlaggedWhenTheLockEnters(t *testing.T) {
 	r = e.run(e.admin, runID)
 	assert.Equal(t, "completed", r.Status, "%+v", r)
 	assert.NotContains(t, e.f.file(deployKeysPath), k.blob())
+}
+
+// TestScheduledStartInLockOverTheWire (I4 a): a scheduled run was previewed and its notice delivered; its planned start
+// falls inside the lock. In lock it does not start: it is cancelled rotation.cancelled_license (ALC-ROT-0012), no key
+// is generated and nothing is written. After the renewal the policy previews a new run with a new notice.
+func TestScheduledStartInLockOverTheWire(t *testing.T) {
+	e := newKeyEnv(t)
+	k := e.generate(e.admin, "scheduled in lock", "ed25519")
+	e.deployed(k)
+	end := e.license.Snapshot().Eval.EndsAt
+	days := int(end.Sub(e.clock.Now()).Hours()/24) + 1
+	if e.clock.Now().Add(time.Duration(days) * 24 * time.Hour).Before(end.Add(3 * time.Hour)) {
+		days++
+	}
+	rec := e.admin.do(http.MethodPost, "/api/v1/rotation/policies", map[string]any{"ssh_key_id": k.id, "name": "in lock", "interval_days": days,
+		"overlap_days": 1, "notify_before_hours": 72})
+	requireStatus(t, rec, http.StatusCreated)
+	policyID := decodeBody[map[string]any](t, rec)["id"].(string)
+	e.stepUp(e.admin, e.adminAcct)
+	rec = e.admin.do(http.MethodPost, "/api/v1/rotation/policies/"+policyID+"/actions/enable", nil, withHeader("If-Match", rec.Header().Get("ETag")))
+	requireStatus(t, rec, http.StatusOK)
+	next, err := time.Parse(time.RFC3339, decodeBody[map[string]any](t, rec)["next_run_at"].(string))
+	require.NoError(t, err)
+	require.True(t, next.After(end.Add(2*time.Hour)), "the planned start falls in the lock")
+
+	e.advance(next.Add(-72*time.Hour).Sub(e.clock.Now()) + time.Second)
+	require.NoError(t, e.task("rotation.plan"))
+	require.Equal(t, 1, e.count("rotations"))
+	var runID string
+	require.NoError(t, e.db.Owner.QueryRow(context.Background(), "SELECT id::text FROM rotations").Scan(&runID))
+	require.Positive(t, e.deliverMail())
+	status, _ := e.notice(runID)
+	require.Equal(t, "sent", status, "the notice was delivered before the lock")
+	writes, keys := len(e.f.helperWrites()), e.count("ssh_keys")
+
+	e.lockNow()
+	require.True(t, e.clock.Now().Before(next))
+	e.hourly(next.Sub(e.clock.Now()) + 24*time.Hour)
+	r := e.run(e.admin, runID)
+	assert.Equal(t, "cancelled", r.Status)
+	require.NotNil(t, r.Result)
+	assert.Equal(t, "rotation.cancelled_license", r.Result["reason"])
+	assert.Equal(t, "ALC-ROT-0012", r.Result["code"])
+	assert.Nil(t, r.NewSSHKeyID, "no key generated in lock")
+	assert.Equal(t, keys, e.count("ssh_keys"))
+	assert.Len(t, e.f.helperWrites(), writes, "nothing written in lock")
+
+	e.renew()
+	previews := e.outboxTemplates()["rotation.preview"]
+	require.NoError(t, e.task("rotation.plan"))
+	var fresh, freshStatus string
+	require.NoError(t, e.db.Owner.QueryRow(context.Background(), "SELECT id::text, status FROM rotations WHERE id <> $1", runID).Scan(&fresh, &freshStatus))
+	assert.Equal(t, "dry_run_notified", freshStatus, "after the renewal the policy previews a new run")
+	assert.Equal(t, previews+1, e.outboxTemplates()["rotation.preview"], "with a new notice")
+	assert.Equal(t, "cancelled", e.run(e.admin, runID).Status)
+}
+
+// TestLockDuringRemovingOldOverTheWire (I4 b): the lock begins while the first server's removal of the old key is being
+// written: that removal completes; the second server receives no removal; the run is paused in removing_old with one
+// email. After the renewal, the notice and Continue, the second server's removal follows a fresh login and the run
+// completes.
+func TestLockDuringRemovingOldOverTheWire(t *testing.T) {
+	e := newKeyEnv(t)
+	f2, t2 := e.addKeyServer("web-02")
+	k := e.generate(e.admin, "two removals", "ed25519")
+	e.deployed(k)
+	job := e.deploy(e.admin, k.id, t2, "deploy", deployKeysPath)
+	e.drain()
+	require.Equal(t, "succeeded", e.job(e.admin, job)["status"])
+	policyID, _ := e.createPolicy(e.admin, k.id, 1)
+	runID := e.runNow(policyID, e.preview(e.admin, policyID).PlanDigest)
+	e.drain()
+	require.Equal(t, "overlap", e.run(e.admin, runID).Status)
+	wl := e.lockAtWrite(deployKeysPath, e.f, f2)
+	before := map[*sshFixture]int{e.f: len(e.f.helperWrites()), f2: len(f2.helperWrites())}
+	e.advance(24*time.Hour + time.Minute)
+	e.sweep(1)
+	first := wl.check(t)
+	second := f2
+	if first == f2 {
+		second = e.f
+	}
+	require.True(t, e.license.Snapshot().Eval.Locked())
+	e.hourly(6 * time.Hour)
+	r := e.run(e.admin, runID)
+	assert.Equal(t, "removing_old", r.Status)
+	assert.True(t, r.PausedLicense)
+	assert.NotContains(t, first.file(deployKeysPath), k.blob(), "the removal in flight completed")
+	assert.Contains(t, second.file(deployKeysPath), k.blob(), "the other server keeps the old key")
+	assert.Len(t, second.helperWrites(), before[second], "no removal sent to the other server in lock")
+	assert.Equal(t, 1, e.outboxTemplates()["rotation.paused_license"])
+
+	e.renew()
+	require.NoError(t, e.task("rotation.sweep"))
+	e.stepUp(e.admin, e.adminAcct)
+	continued := e.clock.Now()
+	requireStatus(t, e.admin.do(http.MethodPost, "/api/v1/rotation/runs/"+runID+"/actions/continue", nil), http.StatusNoContent)
+	e.advance(time.Minute)
+	e.sweep(3)
+	r = e.run(e.admin, runID)
+	require.Equal(t, "completed", r.Status, "%+v", r)
+	assert.NotContains(t, second.file(deployKeysPath), k.blob())
+	for _, l := range r.Locations {
+		re, err := time.Parse(time.RFC3339Nano, l["reverified_at"].(string))
+		require.NoError(t, err)
+		if (l["target_id"] == t2) == (second == f2) {
+			assert.False(t, re.Before(continued), "the second removal followed a fresh login after Continue")
+		}
+	}
 }

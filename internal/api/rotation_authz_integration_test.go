@@ -4,6 +4,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -221,8 +222,36 @@ func decide(c *client, runID, action string, keepOld []string) *httptest.Respons
 
 // runState builds a run in one state for the actions test and returns the run and the places Keep old would name.
 type runState struct {
-	name  string
-	build func(t *testing.T) (*keyEnv, string, []string)
+	name   string
+	locked bool
+	build  func(t *testing.T) (*keyEnv, string, []string)
+}
+
+// refusalFor is the exact answer to a decision the run does not offer to who: the identity's refusal first (the
+// route's permission), then the lock (every decision but Stop and undo is ClassChange), then the run's state (409
+// ALC-ROT-0005 not_waiting).
+func refusalFor(who, action string, locked bool) string {
+	perm := rbac.RotationOperate
+	if action == "abort" {
+		perm = rbac.RotationManage
+	}
+	if ok, code := mayCall(perm, who); !ok {
+		return code
+	}
+	if locked && action != "abort" {
+		return "ALC-LIC-0001"
+	}
+	return "ALC-ROT-0005"
+}
+
+// runShape is what a refused decision must leave as it was: status, pause flag and every place's state.
+func (e *keyEnv) runShape(runID string) string {
+	r := e.run(e.admin, runID)
+	out := fmt.Sprintf("%s paused=%v", r.Status, r.PausedLicense)
+	for _, l := range r.Locations {
+		out += fmt.Sprintf(" %v=%v", l["id"], l["state"])
+	}
+	return out
 }
 
 func unverifiableRun(t *testing.T) (*keyEnv, string, []string) {
@@ -254,19 +283,19 @@ func unverifiableRun(t *testing.T) (*keyEnv, string, []string) {
 // on a fresh run in that state) and every decision it does not offer is refused (and changes nothing).
 func TestActionsAllowedAreWhatTheRoutesAccept(t *testing.T) {
 	states := []runState{
-		{"overlap", func(t *testing.T) (*keyEnv, string, []string) {
+		{"overlap", false, func(t *testing.T) (*keyEnv, string, []string) {
 			e := newKeyEnv(t)
 			_, _, runID := e.overlapRun(7)
 			return e, runID, nil
 		}},
-		{"waiting for a decision", unverifiableRun},
-		{"paused in lock", func(t *testing.T) (*keyEnv, string, []string) {
+		{"waiting for a decision", false, unverifiableRun},
+		{"paused in lock", true, func(t *testing.T) (*keyEnv, string, []string) {
 			e, _, _, runID := lockedOverlap(t)
 			e.hourly(4 * 24 * time.Hour)
 			require.True(t, e.run(e.admin, runID).PausedLicense)
 			return e, runID, nil
 		}},
-		{"renewed, notice queued", func(t *testing.T) (*keyEnv, string, []string) {
+		{"renewed, notice queued", false, func(t *testing.T) (*keyEnv, string, []string) {
 			e, _, _, runID := lockedOverlap(t)
 			e.hourly(4 * 24 * time.Hour)
 			e.renew()
@@ -278,12 +307,17 @@ func TestActionsAllowedAreWhatTheRoutesAccept(t *testing.T) {
 	for _, st := range states {
 		t.Run(st.name, func(t *testing.T) {
 			e, runID, keep := st.build(t)
+			if keep == nil { // Keep old always names real places of this run, so the service decides, never the body check
+				for _, l := range e.run(e.admin, runID).Locations {
+					keep = append(keep, l["id"].(string))
+				}
+			}
 			callers := e.callers(60)
 			offers := map[string][]string{}
 			for _, who := range callers {
 				r := decodeBody[runDoc](t, who.c.do(http.MethodGet, "/api/v1/rotation/runs/"+runID, nil))
 				offers[who.name] = r.ActionsAllowed
-				status := r.Status
+				shape := e.runShape(runID)
 				for _, a := range all {
 					if slices.Contains(r.ActionsAllowed, a) {
 						continue
@@ -292,8 +326,8 @@ func TestActionsAllowedAreWhatTheRoutesAccept(t *testing.T) {
 						who.stepUp()
 					}
 					rec := decide(who.c, runID, a, keep)
-					assert.NotEqual(t, http.StatusNoContent, rec.Code, "%s as %s was not offered but accepted", a, who.name)
-					assert.Equal(t, status, e.run(e.admin, runID).Status, "%s as %s changed the run", a, who.name)
+					assert.Equal(t, refusalFor(who.name, a, st.locked), errCode(rec), "%s as %s (not offered): %s", a, who.name, rec.Body.String())
+					assert.Equal(t, shape, e.runShape(runID), "%s as %s changed the run", a, who.name)
 				}
 			}
 			t.Logf("offers: %v", offers)

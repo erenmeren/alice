@@ -347,8 +347,21 @@ func TestDryRunEqualsActualPlan(t *testing.T) {
 		for _, l := range r.Locations {
 			got = append(got, placeOf(l))
 		}
-		// The run's places carry no "verify" field: compare without it.
-		for i := range want {
+		// The run's places carry no "verify" field; the run's stored plan does: compare it (by n) with the preview's.
+		stored := map[string]bool{}
+		res, err := e.db.Owner.Query(context.Background(), `SELECT (a->>'N'), (a->>'Verify')::boolean FROM rotations r,
+jsonb_array_elements(r.plan->'Actions') a WHERE r.id = $1`, runID)
+		require.NoError(t, err)
+		for res.Next() {
+			var n string
+			var v bool
+			require.NoError(t, res.Scan(&n, &v))
+			stored[n] = v
+		}
+		require.NoError(t, res.Err())
+		require.Len(t, stored, len(p.Actions))
+		for i, a := range p.Actions {
+			assert.Equal(t, a["verify"], stored[fmtAny(a["n"])], "verify of action %v", a["n"])
 			want[i] = strings.TrimSuffix(strings.TrimSuffix(want[i], "verify=true"), "verify=false")
 		}
 		slices.Sort(want)
@@ -606,4 +619,56 @@ func TestUndoOfAnUnreadFileEndsListingIncomplete(t *testing.T) {
 	assert.Equal(t, "rotation.listing_incomplete", errRef["reason"], "%v", r.Locations[0])
 	assert.Equal(t, before, e.f.file(deployKeysPath), "nothing was sent to the unread file")
 	assert.Contains(t, e.f.file(deployKeysPath), k.blob())
+}
+
+// TestRunNowReplayedWhileTheRunIsLive (I5): the same Run now (same digest, step-up) sent again after it was accepted
+// is 409 ALC-ROT-0002: no second run, no second generated key, nothing more written.
+func TestRunNowReplayedWhileTheRunIsLive(t *testing.T) {
+	e := newKeyEnv(t)
+	k := e.generate(e.admin, "replay", "ed25519")
+	e.deployed(k)
+	policyID, _ := e.createPolicy(e.admin, k.id, 7)
+	digest := e.preview(e.admin, policyID).PlanDigest
+	e.runNow(policyID, digest)
+	keys := e.count("ssh_keys")
+	e.stepUp(e.admin, e.adminAcct)
+	requireError(t, e.admin.do(http.MethodPost, "/api/v1/rotation/policies/"+policyID+"/actions/run", map[string]string{"plan_digest": digest}),
+		http.StatusConflict, "ALC-ROT-0002")
+	e.drain()
+	writes := len(e.f.helperWrites())
+	requireError(t, e.admin.do(http.MethodPost, "/api/v1/rotation/policies/"+policyID+"/actions/run", map[string]string{"plan_digest": digest}),
+		http.StatusConflict, "ALC-ROT-0002")
+	e.drain()
+	assert.Equal(t, 1, e.count("rotations"))
+	assert.Equal(t, keys, e.count("ssh_keys"), "no second new key")
+	assert.Len(t, e.f.helperWrites(), writes)
+}
+
+// TestFinishNowMailsTheNewRemovalTime (plan row 31): Finish now during the overlap ends it now and mails the
+// Administrators the new removal time; the next sweep removes the old key after a fresh login.
+func TestFinishNowMailsTheNewRemovalTime(t *testing.T) {
+	e := newKeyEnv(t)
+	k := e.generate(e.admin, "finish", "ed25519")
+	e.deployed(k)
+	policyID, _ := e.createPolicy(e.admin, k.id, 7)
+	runID := e.runNow(policyID, e.preview(e.admin, policyID).PlanDigest)
+	e.drain()
+	e.advance(time.Hour)
+	e.stepUp(e.admin, e.adminAcct)
+	at := e.clock.Now()
+	requireStatus(t, e.admin.do(http.MethodPost, "/api/v1/rotation/runs/"+runID+"/actions/finish-now", nil), http.StatusNoContent)
+	var until string
+	require.NoError(t, e.db.Owner.QueryRow(context.Background(), `SELECT params->>'overlap_until' FROM notifications_outbox
+WHERE template_key = 'rotation.overlap_ending' ORDER BY created_at DESC LIMIT 1`).Scan(&until))
+	assert.Equal(t, at.UTC().Format("2006-01-02 15:04 UTC"), until, "the mail names the new removal time")
+	e.deliverMail()
+	found := false
+	for _, m := range e.mailbox.messages() {
+		found = found || strings.Contains(m.Body, until)
+	}
+	assert.True(t, found, "the delivered email shows it")
+	e.advance(time.Minute)
+	e.sweep(3)
+	assert.Equal(t, "completed", e.run(e.admin, runID).Status)
+	assert.NotContains(t, e.f.file(deployKeysPath), k.blob())
 }
