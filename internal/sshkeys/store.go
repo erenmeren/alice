@@ -464,13 +464,14 @@ func (s *Service) RecordReverify(ctx context.Context, locationID uuid.UUID, r Ve
 	})
 }
 
-// fileReady reports whether every location of the run in the location's (target, file) is verified,
-// removing, removed or (retried) remove_failed: a shared file loses the old key only when every one of
-// its users verified (R41 row 29, G9).
+// fileReady reports whether every other location of the run in the location's (target, file) is
+// verified, removing or removed: a shared file loses the old key only when every one of its users
+// verified (R41 row 29; G18 as built: a skipped, kept, unverifiable or failed sibling blocks the whole
+// file, a sibling already removing or removed does not).
 func fileReady(ctx context.Context, tx pgx.Tx, loc locRow) (bool, error) {
 	var blocked bool
 	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM rotation_locations WHERE rotation_id = $1 AND target_id = $2 AND file_path = $3
-AND state NOT IN ('verified', 'removing', 'removed', 'remove_failed'))`, loc.runID, loc.targetID, loc.filePath).Scan(&blocked)
+AND id <> $4 AND state NOT IN ('verified', 'removing', 'removed'))`, loc.runID, loc.targetID, loc.filePath, loc.id).Scan(&blocked)
 	if err != nil {
 		return false, fmt.Errorf("sshkeys: read the file's locations: %w", err)
 	}
