@@ -7,6 +7,7 @@ import { StrictMode, type ReactElement } from 'react';
 import { createI18n } from '../i18n';
 import { AuthProvider } from '../auth/AuthProvider';
 import { routes } from '../router';
+import { StepUpProvider } from '../components/StepUpProvider';
 
 function newClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -45,4 +46,10 @@ export async function renderWithAuth(ui: ReactElement, languages: readonly strin
   const client = newClient();
   const router = createMemoryRouter([{ path: '*', element: <AuthProvider>{ui}</AuthProvider> }], { initialEntries: ['/'] });
   return { ...render(providers(<RouterProvider router={router} />, i18n, client)), i18n, router, client };
+}
+
+// renderWithStepUp is renderWithAuth with the step-up dialog available, for dialogs whose requests need a
+// fresh verification code from an Administrator (a vault's credentials, automatic deployment, an import).
+export function renderWithStepUp(ui: ReactElement, languages: readonly string[] = ['en-US']) {
+  return renderWithAuth(<StepUpProvider>{ui}</StepUpProvider>, languages);
 }

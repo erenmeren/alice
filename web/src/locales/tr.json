@@ -27,7 +27,8 @@
     "setupBannerFinish": "Kurulumu tamamlayın: son adımı onaylamak için kurulum sihirbazını açın.",
     "setupBannerLicense": "Kurulumu tamamlayın: bir lisans ekleyin veya denemeyi başlatın.",
     "certificates": "Sertifikalar",
-    "deployments": "Dağıtım geçmişi"
+    "deployments": "Dağıtım geçmişi",
+    "keyVaults": "Key Vault kasaları"
   },
   "ui": {
     "loading": "Yükleniyor…",
@@ -73,7 +74,14 @@
       "label": "Ad",
       "verify_port": "Denetlenecek bağlantı noktası",
       "verify_sni": "Denetlenecek ad",
-      "location_ids": "Web siteleri"
+      "location_ids": "Web siteleri",
+      "vault_url": "Kasa adresi",
+      "tenant_id": "Dizin (kiracı) kimliği",
+      "client_id": "Uygulama (istemci) kimliği",
+      "client_secret": "Gizli anahtar değeri",
+      "secret_expires_on": "Gizli anahtarın bitiş tarihi",
+      "poll_interval_minutes": "Denetim aralığı",
+      "auth": "Oturum açma yöntemi"
     },
     "continue": "Devam",
     "verify": "Doğrula",
@@ -368,11 +376,11 @@
       "clock_jump_cleared": "Saat atlaması sona erdi, saat düzeltildi",
       "setup_evaluation_chosen": "Kurulumda deneme seçildi",
       "request_denied_license": "Değişiklik reddedildi: lisansın süresi doldu",
-      "target_created": "Sunucu eklendi",
-      "target_updated": "Sunucu değiştirildi",
-      "target_deleted": "Sunucu kaldırıldı",
-      "target_add_denied_license": "Sunucu eklenmedi: lisans sınırına ulaşıldı veya lisans süresi doldu",
-      "target_status_changed": "Sunucu durumu değişti",
+      "target_created": "Sunucu veya Key Vault eklendi",
+      "target_updated": "Sunucu veya Key Vault değiştirildi",
+      "target_deleted": "Sunucu veya Key Vault kaldırıldı",
+      "target_add_denied_license": "Sunucu veya Key Vault eklenmedi: lisans sınırına ulaşıldı veya lisansın süresi doldu",
+      "target_status_changed": "Sunucu veya Key Vault durumu değişti",
       "target_discovered": "SSH anahtarları tarandı",
       "vault_add_refused": "Key Vault eklenmedi: ilk denetim başarısız oldu",
       "vault_credentials_replaced": "Key Vault oturum açma bilgileri değiştirildi",
@@ -390,12 +398,12 @@
       "kv_version_held": "Kasa sertifikası sürümü bekletiliyor: zincir eksik",
       "kv_secret_read": "Bir dağıtım için Key Vault'tan sertifika okundu",
       "kv_auto_deploy_stopped": "Başarısız dağıtımlardan sonra bir kasa sertifikasının otomatik dağıtımı durdu",
-      "kv_import_requested": "Bir Key Vault'a sertifika aktarımı istendi",
-      "kv_import_denied": "Bir Key Vault'a sertifika aktarımı reddedildi",
-      "kv_import_succeeded": "Sertifika bir Key Vault'a aktarıldı",
-      "kv_import_failed": "Bir Key Vault'a sertifika aktarımı başarısız oldu",
-      "kv_import_uncertain": "Bir Key Vault'a sertifika aktarımı henüz doğrulanmadı",
-      "kv_import_settled": "Bir Key Vault'a sertifika aktarımı sonraki bir denetimle doğrulandı",
+      "kv_import_requested": "Bir Key Vault'a sertifika içe aktarma istendi",
+      "kv_import_denied": "Bir Key Vault'a sertifika içe aktarma reddedildi",
+      "kv_import_succeeded": "Sertifika bir Key Vault'a içe aktarıldı",
+      "kv_import_failed": "Bir Key Vault'a sertifika içe aktarma başarısız oldu",
+      "kv_import_uncertain": "Bir Key Vault'a sertifika içe aktarma henüz doğrulanmadı",
+      "kv_import_settled": "Bir Key Vault'a sertifika içe aktarma sonraki bir denetimle doğrulandı",
       "hostkey_observed": "Sunucu engelliyken başka bir yeni parmak izi görüldü",
       "hostkey_pinned": "Sunucu parmak izi onaylandı",
       "hostkey_changed": "Sunucu kimliği değişti",
@@ -875,7 +883,8 @@
       "unreachable": "Erişilemiyor",
       "host_key_changed": "Sunucu kimliği değişti",
       "auth_failed": "Oturum açma reddedildi",
-      "disabled": "Devre dışı"
+      "disabled": "Devre dışı",
+      "degraded": "Kısmen çalışıyor"
     },
     "jobStatus": {
       "queued": "Başlamayı bekliyor",
@@ -1352,5 +1361,178 @@
     "title": "Bir sorun oluştu",
     "text": "Bu sayfa gösterilemedi. Sayfayı yeniden yükleyin; yine olursa saati not edip yöneticinize bildirin.",
     "reload": "Yeniden yükle"
+  },
+  "vaults": {
+    "title": "Key Vault kasaları",
+    "add": "Key Vault ekle",
+    "empty": "Henüz Key Vault yok. Sertifikalarını ve anahtarlarını görmek için bir tane ekleyin.",
+    "intro": "Alice, Azure Key Vault kasalarınızdaki sertifikaları, anahtarları ve gizli anahtarları izler; kasadaki sertifikaları Nginx web sitelerinize dağıtabilir.",
+    "columns": {
+      "name": "Ad",
+      "address": "Adres",
+      "status": "Durum",
+      "auth": "Oturum açma yöntemi",
+      "checked": "Son denetim"
+    },
+    "neverChecked": "Henüz denetlenmedi",
+    "fields": {
+      "name": "Ad",
+      "vault_url": "Kasa adresi",
+      "auth": "Oturum açma yöntemi",
+      "tenant_id": "Dizin (kiracı) kimliği",
+      "client_id": "Uygulama (istemci) kimliği",
+      "client_id_optional": "Uygulama (istemci) kimliği (isteğe bağlı)",
+      "secret_expires": "Gizli anahtarın bitiş tarihi (isteğe bağlı)",
+      "client_secret": "Gizli anahtar değeri",
+      "certificate_pem": "Sertifika (PEM)",
+      "private_key_pem": "Özel anahtar (PEM)",
+      "pfx": "PFX dosyası",
+      "pfx_password": "PFX parolası",
+      "cert_format": "Sertifika biçimi",
+      "poll_interval": "Denetim sıklığı (dakika)",
+      "vault_url_help": "Kasanın adı veya adresi, örneğin contoso-prod ya da https://contoso-prod.vault.azure.net",
+      "pfx_password_help": "PFX dosyasının parolası yoksa boş bırakın.",
+      "pfx_tooLarge": "PFX dosyası çok büyük. En fazla 500 KB boyutunda bir dosya kullanın."
+    },
+    "certFormat": {
+      "pem": "PEM metni",
+      "pfx": "PFX dosyası"
+    },
+    "auth": {
+      "certificate": "Sertifika (önerilir)",
+      "client_secret": "İstemci gizli anahtarı",
+      "managed_identity": "Yönetilen kimlik",
+      "help": {
+        "certificate": "Alice, Azure'da uygulama için kaydettiğiniz bir sertifikayla oturum açar.",
+        "client_secret": "Alice, Azure'da uygulama için oluşturulmuş bir gizli anahtarla oturum açar. Gizli anahtarların süresi dolar; bu yüzden aşağıya tarihi girin.",
+        "managed_identity": "Yalnızca Azure sanal makineleri için. Alice, üzerinde çalıştığı makinenin kimliğini kullanır. Gizli bir şey saklanmaz."
+      }
+    },
+    "checking": "Alice'in oturum açıp kasaya ulaşabildiği denetleniyor…",
+    "added": "Key Vault eklendi.",
+    "addedPartly": "Kasa eklendi, ancak Alice'in bir izni eksik. Aşağıdaki rolleri verin, ardından yeniden denetleyin.",
+    "openVault": "Kasayı aç",
+    "signsInAs": "Alice, Azure'da {{objectId}} olarak oturum açar",
+    "roles": {
+      "title": "Alice'in ihtiyaç duyduğu roller",
+      "intro": "Uygulamaya kasada şu rolleri verin. Her satır bir üstündekine eklenir. Alice yalnızca rollerin izin verdiğini okur ve rolleri kendisi hiçbir zaman değiştirmez.",
+      "monitor": "Sertifikaları, anahtarları ve gizli anahtarları izleme",
+      "deploy": "Sertifikaları Nginx'e dağıtma",
+      "import": "Sertifikaları kasaya aktarma",
+      "readerUnconfirmed": "Yeterli olması bekleniyor; henüz gerçek bir kasada doğrulanmadı.",
+      "policies": "Kasa erişim ilkeleri kullanıyor",
+      "policiesHelp": "Bu kasa Azure rolleri yerine erişim ilkeleri kullanıyorsa bunun yerine şu komutları çalıştırın.",
+      "copy": "Komutu kopyala",
+      "copyNamed": "Komutu kopyala: {{what}}",
+      "commandLabel": "Komut: {{what}}",
+      "policyNamed": "{{what}} (erişim ilkesi)",
+      "commandColumn": "Çalıştırılacak komut"
+    },
+    "access": {
+      "title": "Erişim denetimi",
+      "run": "Yeniden denetle",
+      "deployToo": "Dağıtım erişimini de sına",
+      "ok": "İzin var",
+      "forbidden": "İzin yok: {{role}} gerekiyor",
+      "notChecked": "Denetlenmedi",
+      "importNote": "Aktarma sırasında denetlenir",
+      "failed": "Denetim başarısız",
+      "what": "Alice'in yapabilmesi gereken",
+      "result": "Sonuç",
+      "none": "Alice bu kasanın erişimini henüz denetlemedi.",
+      "checkedAt": "Denetlendi: {{time}}",
+      "pickCertificate": "Gizli anahtarı bir kez okunacak sertifika",
+      "noExportable": "Bu kasada dışa aktarılabilir anahtarlı sertifika yok.",
+      "chooseCertificate": "Bir sertifika seçin",
+      "working": "Alice erişimi denetliyor…"
+    },
+    "checkNow": "Şimdi denetle",
+    "status": {
+      "degraded": "Kısmen çalışıyor",
+      "auth_failed": "Kimlik bilgileri reddedildi",
+      "unreachable": "Azure'a ulaşılamıyor",
+      "noCertPermission": "Sertifikaları okuma izni yok",
+      "credentialsExpired": "Kimlik bilgilerinin süresi doldu"
+    },
+    "statusHelp": {
+      "degraded": "Alice bu kasaya ulaşıyor, ancak bir izin eksik veya kasanın güvenlik duvarı Alice'i engelliyor. Alice okuyabildiklerini gösterir.",
+      "auth_failed": "Azure, Alice'in oturum açmasını reddetti. Kimlik bilgilerini değiştirin, ardından yeniden denetleyin.",
+      "unreachable": "Alice şu anda Azure'a veya bu kasaya ulaşamıyor. Alice bir sonraki denetimde yeniden dener.",
+      "checking": "Alice bu kasayı denetliyor.",
+      "disabled": "Bu kasa kapalı."
+    },
+    "tabs": {
+      "certificates": "Sertifikalar",
+      "keys": "Anahtarlar",
+      "secrets": "Gizli anahtarlar"
+    },
+    "monitorOnly": "Yalnızca izleme",
+    "removed": "Key Vault'tan kaldırıldı",
+    "newVersion": "Yeni sürüm bulundu",
+    "heldVersion": "Lisans süresinin dolduğu dönemde yeni sürüm bulundu. Alice bunu kendiliğinden dağıtmaz; bir yönetici dağıtabilir veya serbest bırakabilir.",
+    "heldChain": "Sertifika zinciri eksik olduğu için tutuluyor. Bir yönetici zinciri onaylayarak dağıtabilir ya da serbest bırakabilir.",
+    "connected": "Bağlı web siteleri: {{count}}",
+    "disabledChip": "Key Vault'ta devre dışı",
+    "detailsPending": "Ayrıntılar henüz okunmadı",
+    "replaceCredentials": "Kimlik bilgilerini değiştir",
+    "replaceTitle": "Oturum açma kimlik bilgilerini değiştirin",
+    "replaceHelp": "Alice yeni kimlik bilgilerini kasa eklerkenki gibi denetler. Denetim başarısız olursa hiçbir şey değişmez.",
+    "replaced": "Kimlik bilgileri değiştirildi.",
+    "lastChecked": "Son denetim: {{time}}",
+    "pollInterval": "Alice bu kasayı {{minutes}} dakikada bir denetler.",
+    "pollSave": "Aralığı kaydet",
+    "pollSaved": "Aralık kaydedildi.",
+    "certThumbprint": "Oturum açma sertifikasının parmak izi",
+    "certExpires": "Oturum açma sertifikasının bitiş tarihi",
+    "secretExpires": "Oturum açma gizli anahtarının bitiş tarihi",
+    "credentialsExpireSoon": "Oturum açma kimlik bilgilerinin süresi 30 gün içinde doluyor. Alice'in çalışmaya devam etmesi için bundan önce değiştirin.",
+    "credentialsExpiredNow": "Oturum açma kimlik bilgilerinin süresi doldu. Alice'in kasaya yeniden ulaşabilmesi için değiştirin.",
+    "delete": "Key Vault'u kaldır",
+    "deleteTitle": "Bu Key Vault, Alice'ten kaldırılsın mı?",
+    "deleteHelp": "Alice kasayı ve kasadaki sertifikalar, anahtarlar ve gizli anahtarlar hakkında bildiklerini unutur. Azure'da hiçbir şey değişmez.",
+    "hasBindings": "Bu kasanın sertifikalarına hâlâ web siteleri bağlı. Bu bağlantılar da kaldırılsın mı?",
+    "deleteWithBindings": "Bağlantıları ve kasayı kaldır",
+    "cert": {
+      "columns": {
+        "name": "Ad",
+        "version": "Geçerli sürüm",
+        "expires": "Bitiş",
+        "state": "Durum"
+      },
+      "empty": "Bu kasada sertifika yok.",
+      "open": "Aç"
+    },
+    "keys": {
+      "columns": {
+        "name": "Ad",
+        "type": "Tür",
+        "size": "Boyut veya eğri",
+        "expires": "Bitiş",
+        "enabled": "Etkin",
+        "managed": "Yönetilen"
+      },
+      "empty": "Bu kasada anahtar yok.",
+      "bits": "{{bits}} bit",
+      "hsm": "Donanım güvenlik modülü (HSM)",
+      "problem": "Ayrıntılar okunamıyor"
+    },
+    "secrets": {
+      "columns": {
+        "name": "Ad",
+        "contentType": "İçerik türü",
+        "expires": "Bitiş",
+        "enabled": "Etkin",
+        "managed": "Yönetilen"
+      },
+      "empty": "Bu kasada gizli anahtar yok."
+    },
+    "yes": "Evet",
+    "no": "Hayır",
+    "noExpiry": "Bitiş tarihi yok",
+    "showMore": "Daha fazla göster",
+    "backToList": "Key Vault kasalarına dön",
+    "managedTitle": "Key Vault tarafından bir sertifika için oluşturuldu",
+    "tableLabel": "Key Vault kasaları",
+    "retypeSecret": "Güvenliğiniz için Alice, gizli alanlara yazdıklarınızı saklamaz. Yeniden girin."
   }
 }

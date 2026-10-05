@@ -4,7 +4,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
-import { listAllTargets, listSSHKeys } from '../api/endpoints';
+import { listAllServers, listSSHKeys } from '../api/endpoints';
 import { SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
 import type { KeyFlag, SSHKeyQuery } from '../api/types';
 import { ErrorAlert } from '../components/ErrorAlert';
@@ -26,7 +26,7 @@ export function SSHKeysPage() {
   const [q] = useDebouncedValue(search.trim(), 300);
   const [osUser] = useDebouncedValue(user.trim(), 300);
 
-  const targets = useQuery({ queryKey: TARGETS_KEY, queryFn: listAllTargets });
+  const targets = useQuery({ queryKey: TARGETS_KEY, queryFn: listAllServers });
   const filter: SSHKeyQuery = { q, os_user: osUser, target_id: targetId, flag, missing };
   const keys = useInfiniteQuery({
     queryKey: [...SSH_KEYS_KEY, filter],

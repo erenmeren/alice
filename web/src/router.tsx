@@ -11,6 +11,8 @@ import { CertificatesPage } from './pages/CertificatesPage';
 import { DeploymentDetailPage } from './pages/DeploymentDetailPage';
 import { DeploymentsPage } from './pages/DeploymentsPage';
 import { HomePage } from './pages/HomePage';
+import { KeyVaultDetailPage } from './pages/KeyVaultDetailPage';
+import { KeyVaultsPage } from './pages/KeyVaultsPage';
 import { LicensePage } from './pages/LicensePage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
@@ -56,6 +58,8 @@ export function routes(): RouteObject[] {
             { path: 'account', element: <AccountPage /> },
             { path: 'servers', element: <TargetsPage /> },
             { path: 'servers/:id', element: <TargetDetailPage /> },
+            { path: 'key-vaults', element: <KeyVaultsPage /> },
+            { path: 'key-vaults/:id', element: <KeyVaultDetailPage /> },
             { path: 'certificates', element: <CertificatesPage /> },
             { path: 'certificates/:id', element: <CertificateDetailPage /> },
             { path: 'deployments', element: <DeploymentsPage /> },

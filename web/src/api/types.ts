@@ -1,5 +1,7 @@
 // Wire types for the Alice REST API (snake_case, see api/openapi.yaml).
 
+import type { Vault } from './keyvault';
+
 export type Role = 'admin' | 'operator' | 'auditor';
 export type TokenScope = 'read' | 'operate';
 
@@ -233,7 +235,7 @@ export interface LicenseUploadResult {
 
 // Phase 3: servers (targets), host keys, SSH key inventory, jobs (api/openapi.yaml).
 
-export type TargetStatus = 'pending_host_key' | 'checking' | 'ok' | 'unreachable' | 'host_key_changed' | 'auth_failed' | 'disabled';
+export type TargetStatus = 'pending_host_key' | 'checking' | 'ok' | 'degraded' | 'unreachable' | 'host_key_changed' | 'auth_failed' | 'disabled';
 export type TargetType = 'linux' | 'nginx' | 'azure_key_vault';
 
 // Warning is a stable code (translated as warnings.<code>) and its parameters.
@@ -306,13 +308,15 @@ export interface Target {
   port: number;
   username: string;
   status: TargetStatus;
-  last_error: { code: string; reason: string } | null;
+  last_error: { code: string; reason: string; params?: Record<string, string> } | null;
   last_success_at: string | null;
   last_discovery_at: string | null;
   discovery_interval_hours: number;
   keys_managed_elsewhere: boolean;
   capabilities: string[];
   facts: TargetFacts;
+  // vault is present on a Key Vault (type azure_key_vault) and never holds a secret.
+  vault?: Vault;
   version: number;
   created_at: string;
   updated_at: string;
@@ -435,6 +439,9 @@ export interface Job {
   max_attempts: number;
   error: JobError | null;
   result: Record<string, unknown>;
+  // deployment_id and import_id are not in the API yet (Needs API change); a screen uses them when present.
+  deployment_id?: string | null;
+  import_id?: string | null;
   created_at: string;
   run_at: string;
   started_at: string | null;
@@ -596,6 +603,11 @@ export interface Deployment {
   previous_fingerprint: string;
   confirm_incomplete_chain: boolean;
   verified: '' | 'remote' | 'local' | 'skipped';
+  // source key_vault: the certificate came from a vault version; binding_id, kv_version and vault_name are set.
+  source: 'upload' | 'key_vault';
+  binding_id: string | null;
+  kv_version: string;
+  vault_name: string;
   verify_failed: ErrorRef | null;
   error: ErrorRef | null;
   failed_step: string;

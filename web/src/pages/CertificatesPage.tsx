@@ -4,7 +4,7 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router';
-import { listAllTargets, listCertificates } from '../api/endpoints';
+import { listAllServers, listCertificates } from '../api/endpoints';
 import { CERTIFICATES_KEY, CSRS_KEY, TARGETS_KEY } from '../api/queryKeys';
 import type { CertificateQuery, CertificateSourceFilter, ExpiryFilter } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
@@ -46,7 +46,7 @@ export function CertificatesPage() {
   // The certificate stored by the last upload: closing the dialog then opens it.
   const [uploadedId, setUploadedId] = useState<string | null>(null);
 
-  const targets = useQuery({ queryKey: TARGETS_KEY, queryFn: listAllTargets });
+  const targets = useQuery({ queryKey: TARGETS_KEY, queryFn: listAllServers });
   const filter: CertificateQuery = { target_id: targetId, source, q, expiry };
   const certs = useInfiniteQuery({
     queryKey: [...CERTIFICATES_KEY, filter],

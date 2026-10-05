@@ -6,6 +6,7 @@ import type { TargetStatus } from '../api/types';
 const COLORS: Record<TargetStatus, string> = {
   ok: 'green',
   checking: 'blue',
+  degraded: 'orange',
   pending_host_key: 'yellow',
   unreachable: 'orange',
   host_key_changed: 'red',

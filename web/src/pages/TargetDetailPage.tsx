@@ -2,7 +2,7 @@ import { Alert, Button, Card, Code, Group, Loader, Stack, Table, Text, Textarea,
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useLocation, useNavigate, useParams } from 'react-router';
+import { Navigate, useLocation, useNavigate, useParams } from 'react-router';
 import { confirmHostKey, deleteTarget, discoverTarget, getTarget, listHostKeys, listTargetKeys, repinHostKey, testTarget } from '../api/endpoints';
 import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
 import { nginxState } from '../api/nginx';
@@ -112,6 +112,8 @@ export function TargetDetailPage() {
   if (target.isPending) return <PageLoader />;
   if (target.isError || !target.data) return <ErrorAlert error={target.error} />;
   const tg = target.data;
+  // A Key Vault has its own page (a link to /servers/<id> from a job or the audit log still lands there).
+  if (tg.type === 'azure_key_vault') return <Navigate to={`/key-vaults/${tg.id}`} replace />;
   const pinned = hostKeys.data?.items.find((k) => k.status === 'pinned') ?? null;
   const observed = hostKeys.data?.items.find((k) => k.status === 'observed') ?? null;
   const added = addedNow;

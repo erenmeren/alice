@@ -48,6 +48,7 @@ import type {
   UploadResult,
   TargetCreated,
   TargetCreateRequest,
+  TargetType,
 } from './types';
 
 const v1 = '/api/v1';
@@ -175,8 +176,13 @@ export const installLicense = (license: string) =>
 // Servers (targets) and host keys
 const enc = encodeURIComponent;
 
-export const listTargets = (cursor?: string | null) =>
-  apiFetch<{ items: Target[]; next_cursor: string | null }>(`${v1}/targets${cursor ? `?cursor=${enc(cursor)}` : ''}`);
+export function listTargets(cursor?: string | null, type?: TargetType) {
+  const params = new URLSearchParams();
+  if (type) params.set('type', type);
+  if (cursor) params.set('cursor', cursor);
+  const qs = params.toString();
+  return apiFetch<{ items: Target[]; next_cursor: string | null }>(`${v1}/targets${qs ? `?${qs}` : ''}`);
+}
 
 export const getTarget = (id: string) => apiFetch<Target>(`${v1}/targets/${enc(id)}`);
 
@@ -185,8 +191,10 @@ export const createTarget = (req: TargetCreateRequest) =>
 
 export const deleteTarget = (id: string) => apiFetch<void>(`${v1}/targets/${enc(id)}`, { method: 'DELETE' });
 
-export const testTarget = (id: string) =>
-  apiFetch<JobAccepted>(`${v1}/targets/${enc(id)}/actions/test`, { method: 'POST' });
+// testTarget tests a server's SSH connection; for a Key Vault the optional body asks the access check to
+// read one certificate's secret as well (read_secret_of).
+export const testTarget = (id: string, body?: { read_secret_of?: string }) =>
+  apiFetch<JobAccepted>(`${v1}/targets/${enc(id)}/actions/test`, body ? { method: 'POST', body } : { method: 'POST' });
 
 export const discoverTarget = (id: string) =>
   apiFetch<JobAccepted>(`${v1}/targets/${enc(id)}/actions/discover`, { method: 'POST' });
@@ -249,18 +257,25 @@ export const confirmJob = (id: string) => apiFetch<Job>(`${v1}/jobs/${enc(id)}/a
 export const discardJob = (id: string) => apiFetch<Job>(`${v1}/jobs/${enc(id)}/actions/discard`, { method: 'POST' });
 
 // listAllTargets follows next_cursor until the list is complete (a guard stops a repeating cursor).
-export async function listAllTargets(): Promise<{ items: Target[]; next_cursor: string | null }> {
+// type narrows it to one kind (the Key Vaults page asks for azure_key_vault).
+export async function listAllTargets(type?: TargetType): Promise<{ items: Target[]; next_cursor: string | null }> {
   const items: Target[] = [];
   const seen = new Set<string>();
   let cursor: string | null = null;
   for (let page = 0; page < 100; page++) {
-    const res = await listTargets(cursor);
+    const res = await listTargets(cursor, type);
     items.push(...res.items);
     cursor = res.next_cursor;
     if (!cursor || seen.has(cursor)) break;
     seen.add(cursor);
   }
   return { items, next_cursor: null };
+}
+
+// listAllServers is the servers only (Linux and Nginx): a Key Vault is a target too, but it has its own page.
+export async function listAllServers(): Promise<{ items: Target[]; next_cursor: string | null }> {
+  const all = await listAllTargets();
+  return { items: all.items.filter((t) => t.type !== 'azure_key_vault'), next_cursor: null };
 }
 
 // Certificates (Phase 4)

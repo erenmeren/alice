@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router';
-import { listAllTargets } from '../api/endpoints';
+import { listAllServers } from '../api/endpoints';
 import { TARGETS_KEY } from '../api/queryKeys';
 import { useAuth } from '../auth/AuthProvider';
 import { AddServerModal } from '../components/AddServerModal';
@@ -21,7 +21,7 @@ export function TargetsPage() {
   const { session } = useAuth();
   const navigate = useNavigate();
   const admin = session?.user.role === 'admin';
-  const targets = useQuery({ queryKey: TARGETS_KEY, queryFn: listAllTargets });
+  const targets = useQuery({ queryKey: TARGETS_KEY, queryFn: listAllServers });
   const [adding, setAdding] = useState(false);
 
   return (

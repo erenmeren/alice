@@ -441,3 +441,13 @@ describe('TargetsPage', () => {
     });
   });
 });
+
+describe('TargetsPage and Key Vaults', () => {
+  it('does not list a vault under Servers', async () => {
+    withTargets('admin', [targetFixture, targetWith({ id: 'v1', name: 'Prod vault', type: 'azure_key_vault', host: 'contoso-prod.vault.azure.net', port: 443 })]);
+    await renderRoute('/servers');
+    const table = await screen.findByTestId('targets-table');
+    expect(within(table).getByText('web-01')).toBeInTheDocument();
+    expect(within(table).queryByText('Prod vault')).not.toBeInTheDocument();
+  });
+});

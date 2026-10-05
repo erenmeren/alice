@@ -1,5 +1,5 @@
 import type { SessionInfo, SetupStatus } from '../api/types';
-import { freshStatus, installedStatus, nginxTargetFixture, sessionFor, targetFixture } from './fixtures';
+import { freshStatus, installedStatus, nginxTargetFixture, sessionFor, targetFixture, vaultFixture } from './fixtures';
 
 export interface Screen {
   path: string;
@@ -45,6 +45,8 @@ export const SCREENS: Screen[] = [
     ready: { en: 'Prepare a server for Alice', tr: 'Sunucuyu Alice için hazırlayın' },
   },
   { path: `/servers/${targetFixture.id}`, session: sessionFor('operator'), status: installedStatus, ready: { en: 'deploy@laptop', tr: 'deploy@laptop' } },
+  { path: '/key-vaults', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Add Key Vault', tr: 'Key Vault ekle' } },
+  { path: `/key-vaults/${vaultFixture.id}`, session: sessionFor('operator'), status: installedStatus, ready: { en: 'Roles Alice needs', tr: "Alice'in ihtiyaç duyduğu roller" } },
   { path: '/ssh-keys', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'deploy@laptop', tr: 'deploy@laptop' } },
   {
     path: '/ssh-keys/0192b000-0000-7000-8000-0000000000k1',

@@ -18,3 +18,13 @@ export const locationsKey = (targetId: string) => ['locations', targetId] as con
 // The license status: polled every minute while someone is signed in (auth/SessionActivity.tsx)
 // and shown by the license banners.
 export const LICENSE_STATUS_KEY = ['license', 'status'] as const;
+
+// Phase 5 (Key Vault). A vault is a target, so invalidating TARGETS_KEY refreshes these too; the
+// KV_* keys are prefixes (the vault id, then the object) so one invalidation refreshes a vault's inventory.
+export const VAULTS_KEY = ['targets', 'vaults'] as const;
+export const KV_CERTIFICATES_KEY = ['kv', 'certificates'] as const;
+export const kvCertificateKey = (vaultId: string, id: string) => ['kv', 'certificates', vaultId, id] as const;
+export const kvListKey = (vaultId: string, kind: 'certificates' | 'keys' | 'secrets') => ['kv', kind, vaultId, 'list'] as const;
+export const BINDINGS_KEY = ['bindings'] as const;
+export const bindingKey = (id: string) => ['bindings', id] as const;
+export const KV_IMPORTS_KEY = ['kv', 'imports'] as const;

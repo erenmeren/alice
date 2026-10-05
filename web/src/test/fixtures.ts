@@ -1,5 +1,19 @@
 import { http, HttpResponse } from 'msw';
 import type {
+  AccessCheckRow,
+  Binding,
+  BindingLocation,
+  DeployableLocation,
+  KVCertificate,
+  KVCertificateDetail,
+  KVImport,
+  KVKey,
+  KVSecret,
+  KVVersion,
+  Vault,
+  VaultAccess,
+} from '../api/keyvault';
+import type {
   Certificate,
   CertificateDetail,
   CertificateLocation,
@@ -381,6 +395,10 @@ export function deploymentFixture(o: Partial<Deployment> = {}): Deployment {
     new_fingerprint: 'ab12'.repeat(16),
     previous_fingerprint: 'cd34'.repeat(16),
     confirm_incomplete_chain: false,
+    source: 'upload',
+    binding_id: null,
+    kv_version: '',
+    vault_name: '',
     verified: 'remote',
     verify_failed: null,
     error: null,
@@ -425,4 +443,239 @@ export const nginxTargetFixture: Target = {
 
 export function nginxTargetWith(o: Partial<Target>, facts: Partial<Target['facts']> = {}): Target {
   return { ...nginxTargetFixture, ...o, facts: { ...nginxTargetFixture.facts, ...facts } };
+}
+
+// Phase 5: Key Vaults. The IDs and thumbprints are made up; there is no key material here.
+export const VAULT_ID = '0192d000-0000-7000-8000-0000000000a1';
+export const OBJECT_ID = '11111111-2222-4333-8444-555555555555';
+export const TENANT_ID = '6b8e2c1a-0f3d-4c2b-9a7e-1d2c3b4a5f60';
+export const CLIENT_ID = '0f1e2d3c-4b5a-4968-8776-655443322110';
+
+export function accessRow(name: AccessCheckRow['name'], result: AccessCheckRow['result'], role: AccessCheckRow['role'] = '', error: AccessCheckRow['error'] = null): AccessCheckRow {
+  return { name, result, role, error };
+}
+
+export function accessFixture(o: Partial<VaultAccess> = {}): VaultAccess {
+  return {
+    object_id: OBJECT_ID,
+    tenant_id: TENANT_ID,
+    permission_model: 'rbac',
+    checks: [
+      accessRow('sign_in', 'ok'),
+      accessRow('list_certificates', 'ok'),
+      accessRow('list_keys', 'ok'),
+      accessRow('list_secrets', 'ok'),
+      accessRow('read_secret', 'not_checked'),
+      accessRow('import', 'not_checked'),
+    ],
+    checked_at: '2026-10-05T08:00:00Z',
+    ...o,
+  };
+}
+
+export function vaultInfo(o: Partial<Vault> = {}): Vault {
+  return {
+    url: 'https://contoso-prod.vault.azure.net',
+    name: 'contoso-prod',
+    auth: 'client_secret',
+    tenant_id: TENANT_ID,
+    client_id: CLIENT_ID,
+    poll_interval_minutes: 15,
+    secret_expires_on: null,
+    cert_thumbprint: '',
+    cert_not_after: null,
+    access: accessFixture(),
+    ...o,
+  };
+}
+
+export const vaultFixture: Target = {
+  ...targetFixture,
+  id: VAULT_ID,
+  name: 'Prod vault',
+  type: 'azure_key_vault',
+  host: 'contoso-prod.vault.azure.net',
+  port: 443,
+  username: '',
+  status: 'ok',
+  last_error: null,
+  last_success_at: '2026-10-05T08:00:00Z',
+  last_discovery_at: '2026-10-05T08:00:00Z',
+  discovery_interval_hours: 0,
+  capabilities: ['test_connection', 'discover_certificates'],
+  vault: vaultInfo(),
+  version: 4,
+};
+
+export function vaultWith(o: Partial<Target>, v: Partial<Vault> = {}): Target {
+  return { ...vaultFixture, ...o, vault: vaultInfo({ ...vaultFixture.vault, ...v }) };
+}
+
+export const KV_CERT_ID = '0192d000-0000-7000-8000-0000000000c1';
+export const KV_VERSION_ID = '0192d000-0000-7000-8000-0000000000e1';
+export const BINDING_ID = '0192d000-0000-7000-8000-0000000000b1';
+export const LOCATION_ID = '0192d000-0000-7000-8000-0000000000f1';
+
+export function kvCertificateFixture(o: Partial<KVCertificate> = {}): KVCertificate {
+  return {
+    id: KV_CERT_ID,
+    target_id: VAULT_ID,
+    name: 'web-cert',
+    current_version: '0123456789abcdef0123456789abcdef',
+    current_thumbprint: 'aa'.repeat(20),
+    enabled: true,
+    not_before: '2026-09-01T00:00:00Z',
+    expires: '2027-09-01T00:00:00Z',
+    kv_created_at: '2026-09-01T00:00:00Z',
+    kv_updated_at: '2026-09-01T00:00:00Z',
+    exportable: true,
+    key_type: 'rsa',
+    key_size: 2048,
+    content_type: 'application/x-pkcs12',
+    issuer_name: 'Self',
+    auto_renew: true,
+    details_pending: false,
+    first_seen_at: '2026-09-02T00:00:00Z',
+    last_seen_at: '2026-10-05T08:00:00Z',
+    missing_since: null,
+    bound: false,
+    current_held: false,
+    current_held_reason: '',
+    ...o,
+  };
+}
+
+export function kvVersionFixture(o: Partial<KVVersion> = {}): KVVersion {
+  return {
+    id: KV_VERSION_ID,
+    version: '0123456789abcdef0123456789abcdef',
+    thumbprint: 'aa'.repeat(20),
+    certificate_id: certificateFixture().id,
+    enabled: true,
+    not_before: '2026-09-01T00:00:00Z',
+    expires: '2027-09-01T00:00:00Z',
+    kv_created_at: '2026-09-01T00:00:00Z',
+    exportable: true,
+    key_type: 'rsa',
+    content_type: 'application/x-pkcs12',
+    detected_at: '2026-09-02T00:00:00Z',
+    held: false,
+    held_reason: '',
+    ...o,
+  };
+}
+
+export function kvCertificateDetailFixture(o: Partial<KVCertificateDetail> = {}): KVCertificateDetail {
+  return { ...kvCertificateFixture(), versions: [kvVersionFixture()], binding: null, deploy_access: 'not_checked', ...o };
+}
+
+export function bindingLocationFixture(o: Partial<BindingLocation> = {}): BindingLocation {
+  return {
+    location_id: LOCATION_ID,
+    target_id: targetFixture.id,
+    target_name: 'web-01',
+    cert_path: '/etc/nginx/ssl/www.crt',
+    state: 'not_deployed',
+    version: '',
+    deployment_id: null,
+    ...o,
+  };
+}
+
+export function bindingFixture(o: Partial<Binding> = {}): Binding {
+  return {
+    id: BINDING_ID,
+    kv_certificate_id: KV_CERT_ID,
+    vault_id: VAULT_ID,
+    certificate_name: 'web-cert',
+    vault_name: 'Prod vault',
+    auto_deploy: false,
+    auto_since: null,
+    stopped_version: '',
+    location_count: 1,
+    version: 2,
+    created_at: '2026-10-03T08:00:00Z',
+    created_by: userFor('operator').id,
+    locations: [bindingLocationFixture()],
+    ...o,
+  };
+}
+
+export function deployableLocationFixture(o: Partial<DeployableLocation> = {}): DeployableLocation {
+  return {
+    id: LOCATION_ID,
+    target_id: targetFixture.id,
+    target_name: 'web-01',
+    cert_path: '/etc/nginx/ssl/www.crt',
+    key_path: '/etc/nginx/ssl/www.key',
+    key_type: 'rsa',
+    server_names: ['www.example.test'],
+    binding_id: null,
+    ...o,
+  };
+}
+
+export function kvKeyFixture(o: Partial<KVKey> = {}): KVKey {
+  return {
+    id: '0192d000-0000-7000-8000-0000000000d2',
+    target_id: VAULT_ID,
+    name: 'signing-key',
+    version: 'fedcba9876543210fedcba9876543210',
+    key_type: 'RSA',
+    curve: '',
+    key_size: 2048,
+    hsm: false,
+    managed: false,
+    enabled: true,
+    details_updated_at: '2026-10-05T08:00:00Z',
+    details_problem: '',
+    not_before: null,
+    expires: '2027-01-01T00:00:00Z',
+    kv_created_at: '2026-09-01T00:00:00Z',
+    kv_updated_at: '2026-09-01T00:00:00Z',
+    first_seen_at: '2026-09-02T00:00:00Z',
+    last_seen_at: '2026-10-05T08:00:00Z',
+    missing_since: null,
+    ...o,
+  };
+}
+
+export function kvSecretFixture(o: Partial<KVSecret> = {}): KVSecret {
+  return {
+    id: '0192d000-0000-7000-8000-0000000000d3',
+    target_id: VAULT_ID,
+    name: 'db-password',
+    content_type: 'text/plain',
+    managed: false,
+    enabled: true,
+    not_before: null,
+    expires: null,
+    kv_created_at: '2026-09-01T00:00:00Z',
+    kv_updated_at: '2026-09-01T00:00:00Z',
+    first_seen_at: '2026-09-02T00:00:00Z',
+    last_seen_at: '2026-10-05T08:00:00Z',
+    missing_since: null,
+    ...o,
+  };
+}
+
+export function kvImportFixture(o: Partial<KVImport> = {}): KVImport {
+  return {
+    id: '0192d000-0000-7000-8000-0000000000i1',
+    certificate_id: certificateFixture().id,
+    target_id: VAULT_ID,
+    name: 'www-example-test',
+    new_version: false,
+    state: 'succeeded',
+    version: '0123456789abcdef0123456789abcdef',
+    thumbprint: 'bb'.repeat(20),
+    error: null,
+    can_retry: false,
+    job_id: '0192d000-0000-7000-8000-0000000000j9',
+    requested_by: userFor('admin').id,
+    created_at: '2026-10-05T09:00:00Z',
+    sent_at: '2026-10-05T09:00:05Z',
+    finished_at: '2026-10-05T09:00:09Z',
+    ...o,
+  };
 }

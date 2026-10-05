@@ -18,6 +18,7 @@ import {
   stepFixture,
   targetFixture,
   userFor,
+  vaultFixture,
 } from './test/fixtures';
 import { expectNoRawKeys } from './test/i18nAssert';
 import { renderRoute } from './test/render';
@@ -55,8 +56,8 @@ const auditEntry: AuditEntry = {
 const dataHandlers = [
   http.get('/api/v1/users', () => HttpResponse.json({ items: [userFor('admin'), userFor('operator'), userFor('auditor')] })),
   http.get('/api/v1/tokens', () => HttpResponse.json({ items: [token] })),
-  http.get('/api/v1/targets', () => HttpResponse.json({ items: [targetFixture], next_cursor: null })),
-  http.get('/api/v1/targets/:id', ({ params }) => HttpResponse.json(params.id === nginxTargetFixture.id ? nginxTargetFixture : targetFixture)),
+  http.get('/api/v1/targets', ({ request }) => HttpResponse.json({ items: new URL(request.url).searchParams.get('type') === 'azure_key_vault' ? [vaultFixture] : [targetFixture], next_cursor: null })),
+  http.get('/api/v1/targets/:id', ({ params }) => HttpResponse.json(params.id === nginxTargetFixture.id ? nginxTargetFixture : params.id === vaultFixture.id ? vaultFixture : targetFixture)),
   http.get('/api/v1/targets/:id/certificate-locations', () =>
     HttpResponse.json({
       items: [

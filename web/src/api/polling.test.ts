@@ -34,10 +34,12 @@ describe('polling', () => {
       'api/deployments.ts',
       'api/jobs.ts',
       'auth/SessionActivity.tsx',
+      'components/AccessCheckPanel.tsx',
       'components/AddServerModal.tsx',
       'components/DeployDialog.tsx',
       'components/RemoveKeyDialog.tsx',
       'pages/DeploymentDetailPage.tsx',
+      'pages/KeyVaultDetailPage.tsx',
       'pages/TargetDetailPage.tsx',
     ]);
   });

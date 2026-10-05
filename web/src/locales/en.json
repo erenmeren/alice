@@ -27,7 +27,8 @@
     "setupBannerFinish": "Finish setting up: open the setup wizard to confirm the last step.",
     "setupBannerLicense": "Finish setting up: add a license or start the evaluation.",
     "certificates": "Certificates",
-    "deployments": "Deployment history"
+    "deployments": "Deployment history",
+    "keyVaults": "Key Vaults"
   },
   "ui": {
     "loading": "Loading…",
@@ -73,7 +74,14 @@
       "label": "Name",
       "verify_port": "Port to check",
       "verify_sni": "Name to check",
-      "location_ids": "Websites"
+      "location_ids": "Websites",
+      "vault_url": "Vault address",
+      "tenant_id": "Directory (tenant) ID",
+      "client_id": "Application (client) ID",
+      "client_secret": "Secret value",
+      "secret_expires_on": "Secret expiry date",
+      "poll_interval_minutes": "Check interval",
+      "auth": "Sign-in method"
     },
     "continue": "Continue",
     "verify": "Verify",
@@ -368,11 +376,11 @@
       "clock_jump_cleared": "Clock jump ended, the clock was corrected",
       "setup_evaluation_chosen": "Evaluation chosen during setup",
       "request_denied_license": "Change refused: license expired",
-      "target_created": "Server added",
-      "target_updated": "Server changed",
-      "target_deleted": "Server removed",
-      "target_add_denied_license": "Server not added: license limit reached or license expired",
-      "target_status_changed": "Server status changed",
+      "target_created": "Server or Key Vault added",
+      "target_updated": "Server or Key Vault changed",
+      "target_deleted": "Server or Key Vault removed",
+      "target_add_denied_license": "Server or Key Vault not added: license limit reached or license expired",
+      "target_status_changed": "Server or Key Vault status changed",
       "target_discovered": "SSH keys scanned",
       "vault_add_refused": "Key Vault not added: the first check failed",
       "vault_credentials_replaced": "Key Vault sign-in replaced",
@@ -875,7 +883,8 @@
       "unreachable": "Cannot be reached",
       "host_key_changed": "Server identity changed",
       "auth_failed": "Sign-in refused",
-      "disabled": "Disabled"
+      "disabled": "Disabled",
+      "degraded": "Partly working"
     },
     "jobStatus": {
       "queued": "Waiting to start",
@@ -1352,5 +1361,178 @@
     "title": "Something went wrong",
     "text": "This page could not be shown. Reload it; if it happens again, note the time and tell your administrator.",
     "reload": "Reload"
+  },
+  "vaults": {
+    "title": "Key Vaults",
+    "add": "Add Key Vault",
+    "empty": "No Key Vault yet. Add one to see its certificates and keys.",
+    "intro": "Alice watches the certificates, keys and secrets of your Azure Key Vaults and can deploy their certificates to your Nginx websites.",
+    "columns": {
+      "name": "Name",
+      "address": "Address",
+      "status": "Status",
+      "auth": "Sign-in method",
+      "checked": "Last checked"
+    },
+    "neverChecked": "Not checked yet",
+    "fields": {
+      "name": "Name",
+      "vault_url": "Vault address",
+      "auth": "Sign-in method",
+      "tenant_id": "Directory (tenant) ID",
+      "client_id": "Application (client) ID",
+      "client_id_optional": "Application (client) ID (optional)",
+      "secret_expires": "The secret expires on (optional)",
+      "client_secret": "Secret value",
+      "certificate_pem": "Certificate (PEM)",
+      "private_key_pem": "Private key (PEM)",
+      "pfx": "PFX file",
+      "pfx_password": "PFX password",
+      "cert_format": "Certificate format",
+      "poll_interval": "Check every (minutes)",
+      "vault_url_help": "The vault name or its address, for example contoso-prod or https://contoso-prod.vault.azure.net",
+      "pfx_password_help": "Leave empty if the PFX file has no password.",
+      "pfx_tooLarge": "The PFX file is too large. Use a file of at most 500 KB."
+    },
+    "certFormat": {
+      "pem": "PEM text",
+      "pfx": "PFX file"
+    },
+    "auth": {
+      "certificate": "Certificate (recommended)",
+      "client_secret": "Client secret",
+      "managed_identity": "Managed identity",
+      "help": {
+        "certificate": "Alice signs in with a certificate that you registered for the application in Azure.",
+        "client_secret": "Alice signs in with a secret created for the application in Azure. Secrets expire, so enter the date below.",
+        "managed_identity": "For Azure virtual machines only. Alice uses the identity of the machine it runs on. Nothing secret is stored."
+      }
+    },
+    "checking": "Checking that Alice can sign in and reach the vault…",
+    "added": "Key Vault added.",
+    "addedPartly": "The vault was added, but Alice is missing a permission. Grant the roles below, then check again.",
+    "openVault": "Open the vault",
+    "signsInAs": "Alice signs in to Azure as {{objectId}}",
+    "roles": {
+      "title": "Roles Alice needs",
+      "intro": "Give the application these roles on the vault. Each row adds to the one above. Alice only reads what the roles allow and never changes roles itself.",
+      "monitor": "Monitor certificates, keys and secrets",
+      "deploy": "Deploy certificates to Nginx",
+      "import": "Import certificates into the vault",
+      "readerUnconfirmed": "Expected to be enough; not yet confirmed on a real vault.",
+      "policies": "Vault uses access policies",
+      "policiesHelp": "If this vault uses access policies instead of Azure roles, run these commands instead.",
+      "copy": "Copy command",
+      "copyNamed": "Copy command: {{what}}",
+      "commandLabel": "Command: {{what}}",
+      "policyNamed": "{{what}} (access policy)",
+      "commandColumn": "Command to run"
+    },
+    "access": {
+      "title": "Access check",
+      "run": "Check again",
+      "deployToo": "Also test deployment access",
+      "ok": "Allowed",
+      "forbidden": "Not allowed: needs {{role}}",
+      "notChecked": "Not checked",
+      "importNote": "Checked when you import",
+      "failed": "Check failed",
+      "what": "What Alice needs to do",
+      "result": "Result",
+      "none": "Alice has not checked this vault's access yet.",
+      "checkedAt": "Checked: {{time}}",
+      "pickCertificate": "Certificate whose secret Alice reads once",
+      "noExportable": "No certificate in this vault has an exportable key.",
+      "chooseCertificate": "Choose a certificate",
+      "working": "Alice is checking the access…"
+    },
+    "checkNow": "Check now",
+    "status": {
+      "degraded": "Partly working",
+      "auth_failed": "Credentials refused",
+      "unreachable": "Cannot reach Azure",
+      "noCertPermission": "No permission to read certificates",
+      "credentialsExpired": "Credentials expired"
+    },
+    "statusHelp": {
+      "degraded": "Alice reaches this vault, but a permission is missing or the vault's firewall blocks Alice. Alice shows what it can read.",
+      "auth_failed": "Azure refused Alice's sign-in. Replace the credentials, then check again.",
+      "unreachable": "Alice cannot reach Azure or this vault right now. Alice tries again at the next check.",
+      "checking": "Alice is checking this vault.",
+      "disabled": "This vault is switched off."
+    },
+    "tabs": {
+      "certificates": "Certificates",
+      "keys": "Keys",
+      "secrets": "Secrets"
+    },
+    "monitorOnly": "Monitor only",
+    "removed": "Removed from Key Vault",
+    "newVersion": "New version found",
+    "heldVersion": "New version found around a license expiry. Alice does not deploy it by itself; an administrator can deploy or release it.",
+    "heldChain": "Held because its certificate chain is incomplete. An administrator can deploy it after confirming the chain, or release it.",
+    "connected": "Connected websites: {{count}}",
+    "disabledChip": "Disabled in Key Vault",
+    "detailsPending": "Details not read yet",
+    "replaceCredentials": "Replace credentials",
+    "replaceTitle": "Replace the sign-in credentials",
+    "replaceHelp": "Alice checks the new credentials as when adding a vault. Nothing changes if the check fails.",
+    "replaced": "Credentials replaced.",
+    "lastChecked": "Last checked: {{time}}",
+    "pollInterval": "Alice checks this vault every {{minutes}} minutes.",
+    "pollSave": "Save interval",
+    "pollSaved": "Interval saved.",
+    "certThumbprint": "Sign-in certificate thumbprint",
+    "certExpires": "Sign-in certificate expires",
+    "secretExpires": "Sign-in secret expires",
+    "credentialsExpireSoon": "The sign-in credentials expire within 30 days. Replace them before then so that Alice keeps working.",
+    "credentialsExpiredNow": "The sign-in credentials have expired. Replace them so that Alice can reach the vault again.",
+    "delete": "Remove Key Vault",
+    "deleteTitle": "Remove this Key Vault from Alice?",
+    "deleteHelp": "Alice forgets the vault and what it knows about its certificates, keys and secrets. Nothing changes in Azure.",
+    "hasBindings": "Websites are still connected to certificates of this vault. Remove those connections too?",
+    "deleteWithBindings": "Remove the connections and the vault",
+    "cert": {
+      "columns": {
+        "name": "Name",
+        "version": "Current version",
+        "expires": "Expires",
+        "state": "State"
+      },
+      "empty": "No certificates in this vault.",
+      "open": "Open"
+    },
+    "keys": {
+      "columns": {
+        "name": "Name",
+        "type": "Type",
+        "size": "Size or curve",
+        "expires": "Expires",
+        "enabled": "Enabled",
+        "managed": "Managed"
+      },
+      "empty": "No keys in this vault.",
+      "bits": "{{bits}} bits",
+      "hsm": "HSM",
+      "problem": "Details not readable"
+    },
+    "secrets": {
+      "columns": {
+        "name": "Name",
+        "contentType": "Content type",
+        "expires": "Expires",
+        "enabled": "Enabled",
+        "managed": "Managed"
+      },
+      "empty": "No secrets in this vault."
+    },
+    "yes": "Yes",
+    "no": "No",
+    "noExpiry": "No expiry",
+    "showMore": "Show more",
+    "backToList": "Back to Key Vaults",
+    "managedTitle": "Created by Key Vault for a certificate",
+    "tableLabel": "Key Vaults",
+    "retypeSecret": "For your safety Alice does not keep what you typed in the secret fields. Enter it again."
   }
 }

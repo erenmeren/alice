@@ -1,0 +1,131 @@
+import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
+import commonEn from '@locales/common/en.json';
+import { accessFixture, accessRow, errorResponse, jobFixture, sessionFor, sessionHandlers, vaultFixture, vaultWith } from '../test/fixtures';
+import { expectNoRawKeys } from '../test/i18nAssert';
+import { renderRoute } from '../test/render';
+import { server } from '../test/server';
+
+function withVaults(role: 'admin' | 'operator' | 'auditor', items = [vaultFixture], lang = 'en') {
+  let query = '';
+  server.use(
+    ...sessionHandlers(sessionFor(role, lang)),
+    http.get('/api/v1/targets', ({ request }) => {
+      query = new URL(request.url).search;
+      return HttpResponse.json({ items, next_cursor: null });
+    }),
+  );
+  return () => query;
+}
+
+describe('KeyVaultsPage', () => {
+  it('lists vaults only (type=azure_key_vault) with name, address, status, sign-in method and last checked', async () => {
+    const query = withVaults('admin');
+    await renderRoute('/key-vaults');
+    expect(await screen.findByRole('heading', { name: 'Key Vaults', level: 1 })).toBeInTheDocument();
+    const table = await screen.findByTestId('vaults-table');
+    expect(query()).toBe('?type=azure_key_vault');
+    const row = within(table).getByText('Prod vault').closest('tr')!;
+    expect(within(row).getByRole('link', { name: 'Prod vault' })).toHaveAttribute('href', `/key-vaults/${vaultFixture.id}`);
+    expect(within(row).getByText('https://contoso-prod.vault.azure.net').tagName).toBe('CODE');
+    expect(within(row).getByText('Connected')).toBeInTheDocument();
+    expect(within(row).getByText('Client secret')).toBeInTheDocument();
+    expect(within(row).queryByText('Not checked yet')).not.toBeInTheDocument();
+    for (const h of ['Name', 'Address', 'Status', 'Sign-in method', 'Last checked']) expect(within(table).getByRole('columnheader', { name: h })).toBeInTheDocument();
+  });
+
+  it('puts the table in its own scroll container (375 px) and names it', async () => {
+    withVaults('auditor');
+    await renderRoute('/key-vaults');
+    const table = await screen.findByRole('table', { name: 'Key Vaults' });
+    expect(table.closest('[class*="ScrollArea"], [class*="ScrollContainer"]')).not.toBeNull();
+  });
+
+  it('says Not checked yet for a vault that never listed its certificates', async () => {
+    withVaults('operator', [vaultWith({ last_success_at: null, status: 'degraded' })]);
+    await renderRoute('/key-vaults');
+    expect(await screen.findByText('Not checked yet')).toBeInTheDocument();
+  });
+
+  it('names a vault without permission to list certificates, one with expired credentials and one that is out of reach', async () => {
+    const noList = vaultWith(
+      { id: 'v-a', name: 'no-list', status: 'degraded', last_error: { code: 'ALC-AKV-0003', reason: 'azure.forbidden', params: { role: 'Key Vault Reader' } } },
+      { access: accessFixture({ checks: [accessRow('list_certificates', 'forbidden', 'Key Vault Reader')] }) },
+    );
+    const forbiddenElsewhere = vaultWith({ id: 'v-e', name: 'other-forbidden', status: 'degraded', last_error: { code: 'ALC-AKV-0003', reason: 'azure.forbidden' } }, { access: accessFixture({ checks: [accessRow('read_secret', 'forbidden', 'Key Vault Secrets User')] }) });
+    const expired = vaultWith({ id: 'v-b', name: 'expired', status: 'auth_failed', last_error: { code: 'ALC-AKV-0002', reason: 'azure.credentials_expired' } });
+    const refused = vaultWith({ id: 'v-r', name: 'refused', status: 'auth_failed', last_error: { code: 'ALC-AKV-0001', reason: 'azure.auth_failed' } });
+    const away = vaultWith({ id: 'v-c', name: 'away', status: 'unreachable', last_error: { code: 'ALC-AKV-0006', reason: 'azure.unreachable' } });
+    withVaults('auditor', [noList, forbiddenElsewhere, expired, refused, away]);
+    await renderRoute('/key-vaults');
+    const table = await screen.findByTestId('vaults-table');
+    const rowOf = (name: string) => within(table).getByText(name).closest('tr')!;
+    expect(rowOf('no-list')).toHaveTextContent('No permission to read certificates');
+    expect(rowOf('no-list')).toHaveTextContent(commonEn.errors.azure.forbidden.title);
+    expect(rowOf('other-forbidden')).toHaveTextContent('Partly working');
+    expect(rowOf('expired')).toHaveTextContent('Credentials expired');
+    expect(rowOf('refused')).toHaveTextContent('Credentials refused');
+    expect(rowOf('away')).toHaveTextContent('Cannot reach Azure');
+  });
+
+  it('shows the empty state', async () => {
+    withVaults('operator', []);
+    await renderRoute('/key-vaults');
+    expect(await screen.findByText('No Key Vault yet. Add one to see its certificates and keys.')).toBeInTheDocument();
+  });
+
+  it('shows the error of a failed list', async () => {
+    server.use(...sessionHandlers(sessionFor('admin')), http.get('/api/v1/targets', () => errorResponse(500, 'ALC-SYS-0003', 'internal.unexpected')));
+    await renderRoute('/key-vaults');
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+  });
+
+  it('shows Add Key Vault to an Administrator only', async () => {
+    withVaults('admin');
+    const view = await renderRoute('/key-vaults');
+    expect(await screen.findByRole('button', { name: 'Add Key Vault' })).toBeInTheDocument();
+    view.unmount();
+    for (const role of ['operator', 'auditor'] as const) {
+      withVaults(role);
+      const v = await renderRoute('/key-vaults');
+      await screen.findByTestId('vaults-table');
+      expect(screen.queryByRole('button', { name: 'Add Key Vault' })).not.toBeInTheDocument();
+      v.unmount();
+    }
+  });
+
+  it('opens the add dialog and the new vault page after adding', async () => {
+    withVaults('admin');
+    server.use(http.post('/api/v1/key-vaults', () => HttpResponse.json({ target: vaultFixture, access: accessFixture(), job_id: 'j1', status_url: '' }, { status: 201 })), http.get(`/api/v1/targets/${vaultFixture.id}`, () => HttpResponse.json(vaultFixture)));
+    const user = userEvent.setup();
+    const view = await renderRoute('/key-vaults');
+    await user.click(await screen.findByRole('button', { name: 'Add Key Vault' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText(/^Name/), 'Prod vault');
+    await user.type(within(dialog).getByLabelText(/^Vault address/), 'contoso-prod');
+    await user.click(within(dialog).getByRole('radio', { name: 'Managed identity' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Add Key Vault' }));
+    await user.click(await within(dialog).findByRole('button', { name: 'Open the vault' }));
+    expect(await screen.findByRole('heading', { name: 'Prod vault', level: 1 })).toBeInTheDocument();
+    expect(view.router.state.location.pathname).toBe(`/key-vaults/${vaultFixture.id}`);
+  });
+
+  it('is not in the Servers list, and the navigation links to it', async () => {
+    withVaults('operator', [vaultFixture]);
+    await renderRoute('/key-vaults');
+    const nav = await screen.findByRole('navigation', { name: 'Main navigation' });
+    expect(within(nav).getByRole('link', { name: 'Key Vaults' })).toHaveAttribute('href', '/key-vaults');
+  });
+
+  it('is complete in Turkish', async () => {
+    withVaults('admin', [vaultFixture, vaultWith({ id: 'v2', name: 'away', status: 'unreachable', last_error: { code: 'ALC-AKV-0006', reason: 'azure.unreachable' } })], 'tr');
+    server.use(http.get('/api/v1/jobs', () => HttpResponse.json({ items: [jobFixture()], next_cursor: null })));
+    await renderRoute('/key-vaults', { languages: ['tr-TR'] });
+    expect(await screen.findByRole('heading', { name: 'Key Vault kasaları', level: 1 })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Key Vault ekle' })).toBeInTheDocument();
+    expect((await screen.findAllByText("Azure'a ulaşılamıyor")).length).toBeGreaterThan(0);
+    expect(screen.getByRole('columnheader', { name: 'Oturum açma yöntemi' })).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+});
