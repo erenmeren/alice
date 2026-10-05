@@ -1,9 +1,11 @@
 package inventory
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"alice/internal/providers"
 )
@@ -81,4 +83,38 @@ func TestCleanKeyFiles(t *testing.T) {
 	got := cleanKeyFiles(many)
 	assert.Len(t, got, maxKeyFileUsers)
 	assert.Len(t, got[0].Files, maxKeyFiles)
+}
+
+func TestCleanKeyFilesKeepsCompleteness(t *testing.T) {
+	in := []providers.UserKeyFiles{
+		{OSUser: "alice-svc", Files: []string{"/a/ak"}, Complete: true},
+		{OSUser: "dropped", Files: []string{"/d/ak", "/bad\x00"}, Complete: true},
+		{OSUser: "relative", Files: []string{"/r/ak", "rel"}, Complete: true},
+		{OSUser: "unknown", Files: []string{"/u/ak"}},
+		{OSUser: "gone", Files: []string{"rel"}, Complete: true},
+	}
+	many := make([]string, maxKeyFiles+1)
+	for i := range many {
+		many[i] = "/f" + string(rune('a'+i))
+	}
+	in = append(in, providers.UserKeyFiles{OSUser: "cut", Files: many, Complete: true},
+		providers.UserKeyFiles{OSUser: "exact", Files: many[:maxKeyFiles], Complete: true})
+	got := map[string]bool{}
+	for _, u := range cleanKeyFiles(in) {
+		got[u.OSUser] = u.Complete
+	}
+	assert.Equal(t, map[string]bool{"alice-svc": true, "dropped": false, "relative": false, "unknown": false, "cut": false, "exact": true}, got,
+		"complete survives only when nothing was dropped or cut; an account with no file left is absent")
+}
+
+// Facts stored before the flag existed read as incomplete; the flag round-trips.
+func TestKeyFilesOldShapeReadsIncomplete(t *testing.T) {
+	var f Facts
+	require.NoError(t, json.Unmarshal([]byte(`{"key_files":[{"os_user":"alice-svc","files":["/a/ak"]}]}`), &f))
+	require.Len(t, f.KeyFiles, 1)
+	assert.False(t, f.KeyFiles[0].Complete)
+	raw, err := json.Marshal(Facts{KeyFiles: []providers.UserKeyFiles{{OSUser: "u", Files: []string{"/x"}, Complete: true}}})
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &f))
+	assert.True(t, f.KeyFiles[0].Complete)
 }

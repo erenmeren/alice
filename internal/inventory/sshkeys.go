@@ -579,7 +579,9 @@ const (
 
 // cleanKeyFiles makes the key files of a scan storable and safe to offer later: an entry whose text clean() would
 // change (invalid UTF-8, NUL), that holds a control character, a user that is empty or too long, a path that
-// is not absolute or too long is dropped (a NUL must not fail the scan's jsonb); the lists are capped.
+// is not absolute or too long is dropped (a NUL must not fail the scan's jsonb); the lists are capped. Complete is
+// carried through and cleared for an account whenever one of its files is dropped or cut; a dropped account is
+// absent, which readers treat as not known to be complete.
 func cleanKeyFiles(in []providers.UserKeyFiles) []providers.UserKeyFiles {
 	var out []providers.UserKeyFiles
 	for _, u := range in {
@@ -590,16 +592,20 @@ func cleanKeyFiles(in []providers.UserKeyFiles) []providers.UserKeyFiles {
 			continue
 		}
 		var files []string
+		complete := u.Complete // a dropped or cut file makes the list incomplete
 		for _, f := range u.Files {
+			if !plainText(f, maxKeyFileLen) || !strings.HasPrefix(f, "/") {
+				complete = false
+				continue
+			}
 			if len(files) == maxKeyFiles {
+				complete = false
 				break
 			}
-			if plainText(f, maxKeyFileLen) && strings.HasPrefix(f, "/") {
-				files = append(files, f)
-			}
+			files = append(files, f)
 		}
 		if len(files) > 0 {
-			out = append(out, providers.UserKeyFiles{OSUser: u.OSUser, Files: files})
+			out = append(out, providers.UserKeyFiles{OSUser: u.OSUser, Files: files, Complete: complete})
 		}
 	}
 	return out

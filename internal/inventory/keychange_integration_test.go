@@ -254,7 +254,7 @@ func TestReconcileStoresKeyFiles(t *testing.T) {
 	h := newHarness(t)
 	admin := h.user("ada", rbac.Admin, "")
 	web := nginxTarget(t, h, admin, "web-01")
-	files := []providers.UserKeyFiles{{OSUser: "alice-svc", Files: []string{aliceFile}}, {OSUser: "deploy", Files: []string{deployFile, "/home/deploy/.ssh/authorized_keys2"}}}
+	files := []providers.UserKeyFiles{{OSUser: "alice-svc", Files: []string{aliceFile}, Complete: true}, {OSUser: "deploy", Files: []string{deployFile, "/home/deploy/.ssh/authorized_keys2"}}}
 	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{SSHD: sshdRead, KeyFiles: files, ReadFiles: []string{deployFile}})
 	require.NoError(t, err)
 	got, err := h.svc.GetTarget(h.ctx, web.ID)
@@ -263,11 +263,11 @@ func TestReconcileStoresKeyFiles(t *testing.T) {
 
 	// A NUL in a path or a user (a hostile server) drops that entry; the scan is stored.
 	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{SSHD: sshdRead, ReadFiles: []string{deployFile}, KeyFiles: []providers.UserKeyFiles{
-		{OSUser: "deploy", Files: []string{deployFile, "/home/deploy/\x00.ssh"}}, {OSUser: "bad\x00user", Files: []string{"/x"}}}})
+		{OSUser: "deploy", Files: []string{deployFile, "/home/deploy/\x00.ssh"}, Complete: true}, {OSUser: "bad\x00user", Files: []string{"/x"}}}})
 	require.NoError(t, err)
 	got, err = h.svc.GetTarget(h.ctx, web.ID)
 	require.NoError(t, err)
-	assert.Equal(t, []providers.UserKeyFiles{{OSUser: "deploy", Files: []string{deployFile}}}, got.Facts.KeyFiles)
+	assert.Equal(t, []providers.UserKeyFiles{{OSUser: "deploy", Files: []string{deployFile}}}, got.Facts.KeyFiles, "the dropped file clears Complete")
 	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{SSHD: sshdRead, KeyFiles: files, ReadFiles: []string{deployFile}})
 	require.NoError(t, err)
 
