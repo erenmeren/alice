@@ -824,12 +824,10 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       expect(served(WWW), 'released with automatic deployment off: nothing is deployed').toBe(azureLeafFingerprint(CHAIN_CERT, first));
     });
 
-    // FIXME (product): after a version held for its incomplete chain is released, Deploy now cannot deploy it
-    // from the UI. The released version is no longer held, so KVDeployDialog does not offer the chain
-    // confirmation; the server accepts the request (it learns the chain only when it reads the secret) and the
-    // deployment fails at "Read the certificate from Key Vault" with certificate.chain_unconfirmed, every time.
-    // Yet the release texts say "use Deploy now and confirm the chain". This journey asserts what should happen.
-    test.fixme('after releasing a version held for its chain, Deploy now lets the Administrator confirm the chain', async ({ page, request }) => {
+    // After a version held for its incomplete chain is released, Alice still knows the chain is incomplete (the read
+    // found it): Deploy now asks the Administrator to confirm the chain up front, as the release texts say, and a
+    // release alone never confirms it.
+    test('after releasing a version held for its chain, Deploy now asks the Administrator to confirm the chain', async ({ page, request }) => {
       test.setTimeout(JOURNEY_TIMEOUT);
       const c0 = await startChain(page, request, lang);
       const version = await holdForChain(page, request, t, lang, c0);
@@ -846,11 +844,25 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await bindingPanel(page).getByRole('button', { name: kv.deployNow, exact: true }).click();
       const deploy = page.getByRole('dialog', { name: t('bindings.deployTitle') });
       const deployChain = deploy.getByRole('checkbox', { name: kv.confirmChain });
-      // Offered up front, or after the server asked for it: either way before anything runs.
-      if (!(await deployChain.isVisible())) {
-        await deploy.getByRole('button', { name: kv.deployNow, exact: true }).click();
-        await answerStepUp(page, request, lang, c0.s.totpSecret, deployChain);
-      }
+      // Offered up front for the released version, unchecked; Deploy now waits for it.
+      await expect(deployChain).toBeVisible();
+      await expect(deployChain).not.toBeChecked();
+      await expect(deploy.getByRole('button', { name: kv.deployNow, exact: true })).toBeDisabled();
+      await axe(page, 'Deploy now of a released version with an incomplete chain', deploy);
+      // The API says the chain is incomplete, and refuses a request without the confirmation before anything is
+      // queued (ALC-CRT-0011).
+      const api = await apiAs(page);
+      const certId = await kvCertificateId(api, c0.s.vaultId, CHAIN_CERT);
+      const detail = await json<{ binding: { id: string }; versions: { id: string; version: string; held: boolean; chain_incomplete: boolean }[] }>(
+        await api.get(`/api/v1/targets/${c0.s.vaultId}/kv/certificates/${certId}`),
+      );
+      const released = detail.versions.find((v) => v.version === version);
+      expect(released, 'the released version is listed').toBeDefined();
+      expect([released!.held, released!.chain_incomplete]).toEqual([false, true]);
+      const before = (await c0.deployments()).length;
+      const refused = await api.post(`/api/v1/bindings/${detail.binding.id}/actions/deploy`, { version_id: released!.id });
+      expect((await json<{ error: { code: string } }>(refused, 409)).error.code).toBe('ALC-CRT-0011');
+      expect(await c0.deployments(), 'nothing was queued').toHaveLength(before);
       await expect(deploy.getByTestId('deployment-run'), 'nothing ran without the confirmation').toHaveCount(0);
       await deployChain.check();
       await deploy.getByRole('button', { name: kv.deployNow, exact: true }).click();
