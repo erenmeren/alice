@@ -18,6 +18,7 @@ import (
 	"alice/internal/license"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
+	"alice/internal/rbac"
 	"alice/internal/setup"
 )
 
@@ -474,6 +475,11 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	if ec == ErrUnexpected {
 		s.deps.Log.Error("request failed", append([]any{"request_id", RequestID(r.Context()), "path", r.URL.Path}, errorAttrs(err)...)...)
+	}
+	if ec == ErrStepUpRequired && rbac.Decide(rbac.CredentialsManage, principalFrom(r.Context()).Subject(s.deps.Clock.Now())) == rbac.DenyForbidden {
+		// The inventory's strict refusal (a hold or a switch-on that appeared after the handler's check) reached a
+		// caller that cannot step up, an API token: it gets the documented ALC-AUTH-0002, as at the handler.
+		ec = ErrForbidden
 	}
 	if ec == ErrCertPFXBusy || ec == ErrCSRBusy {
 		w.Header().Set("Retry-After", "1") // a decode or key generation slot frees within seconds

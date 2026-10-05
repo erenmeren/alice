@@ -341,6 +341,10 @@ func TestStrictSessionReachesTheInventory(t *testing.T) {
 		}
 		rec := call(h, http.MethodPost, dpath, "admin", dbody)
 		assert.Equal(t, "auth.stepup_required", decodeErr(t, rec).Error.Reason)
+		// An API token can never step up: it gets the documented ALC-AUTH-0002, not an invitation to step up.
+		rec = call(h, http.MethodPost, dpath, "alice_operate_admin", dbody)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.Equal(t, "ALC-AUTH-0002", decodeErr(t, rec).Error.Code)
 	}
 	inv.UpdateBindingLocationsStrictFn = func(context.Context, inventory.Actor, uuid.UUID, int, []uuid.UUID, bool) (inventory.Binding, error) {
 		return inventory.Binding{}, inventory.ErrAutoDeployNeedsStepUp
@@ -348,6 +352,9 @@ func TestStrictSessionReachesTheInventory(t *testing.T) {
 	rec := callWith(h, http.MethodPatch, path, "admin", body, hdr)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Equal(t, "auth.stepup_required", decodeErr(t, rec).Error.Reason)
+	rec = callWith(h, http.MethodPatch, path, "alice_operate_admin", body, hdr)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, "ALC-AUTH-0002", decodeErr(t, rec).Error.Code, "a token: the documented code")
 }
 
 // PATCH answers 412 when the binding changed since the caller read it, before anything else is judged.
