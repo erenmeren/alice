@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQueries, useQueryClient } from '@tanstack/react-qu
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { wasSent } from '../api/deployments';
-import { confirmJob, discardJob, listDeployments, listJobs } from '../api/endpoints';
+import { confirmJob, discardJob, getDeployment, listDeployments, listJobs } from '../api/endpoints';
 import { BLOCKED_JOBS_KEY, DEPLOYMENTS_KEY, SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
 import type { Deployment, Job } from '../api/types';
 import { formatDateTime } from '../datetime';
@@ -12,6 +12,8 @@ import { InternalLink } from './InternalLink';
 
 // DEPLOY_JOB is the job type of a deployment (internal/inventory/jobs.go JobCertificateDeploy).
 const DEPLOY_JOB = 'certificate.deploy';
+// IMPORT_JOB is the job type of an import into a vault (JobKVImport); its target is the vault.
+const IMPORT_JOB = 'kv.import';
 // The deployments of a server read to find the one a held job belongs to (the newest first; a held
 // job's deployment is among the recent ones).
 const DEPLOYMENTS_PER_SERVER = 200;
@@ -36,8 +38,12 @@ export function BlockedJobsPanel() {
   // by a job of its own (the API reports the original job's status): discarding it then undoes
   // nothing, so the row says so. The job does not name its deployment; the deployments of its server
   // do (job_id).
-  // A job that names its deployment (deployment_id) needs no search.
+  // A job that names its deployment (deployment_id) needs no search: that deployment is read by its id.
   const deployTargets = [...new Set(items.filter((j) => j.type === DEPLOY_JOB && j.target_id && !j.deployment_id).map((j) => j.target_id as string))];
+  const namedIds = [...new Set(items.filter((j) => j.type === DEPLOY_JOB && j.deployment_id).map((j) => j.deployment_id as string))];
+  const named = useQueries({
+    queries: namedIds.map((id) => ({ queryKey: [...DEPLOYMENTS_KEY, id], queryFn: () => getDeployment(id), retry: false })),
+  });
   const deployments = useQueries({
     queries: deployTargets.map((target) => ({
       queryKey: [...DEPLOYMENTS_KEY, { target_id: target, limit: DEPLOYMENTS_PER_SERVER }],
@@ -45,6 +51,7 @@ export function BlockedJobsPanel() {
     })),
   });
   const deploymentOf = (job: Job): Deployment | undefined => {
+    if (job.deployment_id) return named[namedIds.indexOf(job.deployment_id)]?.data;
     for (const q of deployments) {
       const d = q.data?.items.find((x) => x.job_id === job.id);
       if (d) return d;
@@ -80,27 +87,28 @@ export function BlockedJobsPanel() {
           <Table>
             <Table.Tbody>
               {items.map((job) => {
-                const dep = job.type === DEPLOY_JOB && !job.deployment_id ? deploymentOf(job) : undefined;
-                const named = job.type === DEPLOY_JOB ? job.deployment_id : null;
+                const dep = job.type === DEPLOY_JOB ? deploymentOf(job) : undefined;
+                const depId = dep?.id ?? (job.type === DEPLOY_JOB ? job.deployment_id : null);
+                const vault = job.type === IMPORT_JOB && job.import_id ? job.target_id : null;
                 return (
                 <Table.Tr key={job.id} data-testid="blocked-job">
                   <Table.Td>
                     <Stack gap={2}>
                       <Text size="sm">{typeLabel(job)}</Text>
-                      {named && (
-                        <InternalLink to={`/deployments/${named}`} size="xs">
+                      {dep && (
+                        <Text size="xs" data-sent={wasSent(dep) ? 'true' : 'false'}>
+                          {t(wasSent(dep) ? 'jobs.deploymentSent' : 'jobs.deploymentNotSent')}
+                        </Text>
+                      )}
+                      {depId && (
+                        <InternalLink to={`/deployments/${depId}`} size="xs">
                           {t('deploy.openDeployment')}
                         </InternalLink>
                       )}
-                      {dep && (
-                        <>
-                          <Text size="xs" data-sent={wasSent(dep) ? 'true' : 'false'}>
-                            {t(wasSent(dep) ? 'jobs.deploymentSent' : 'jobs.deploymentNotSent')}
-                          </Text>
-                          <InternalLink to={`/deployments/${dep.id}`} size="xs">
-                            {t('deploy.openDeployment')}
-                          </InternalLink>
-                        </>
+                      {vault && (
+                        <InternalLink to={`/key-vaults/${vault}`} size="xs">
+                          {t('vaults.openVault')}
+                        </InternalLink>
                       )}
                     </Stack>
                   </Table.Td>
