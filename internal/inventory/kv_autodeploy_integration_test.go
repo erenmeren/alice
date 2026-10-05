@@ -363,6 +363,7 @@ func TestAutoDeployApplyTable(t *testing.T) {
 		assert.Equal(t, "3", ev[0]["failed_count"])
 		assert.Equal(t, map[string]int{inventory.TemplateKVAutoDeployStopped: 1}, f.mails())
 		f.h.clock.Advance(3 * time.Hour)
+		require.NoError(t, f.h.lic.Tick(f.h.ctx)) // keep the gate fresh: the assertion is about the stop, not a stale gate
 		assert.Zero(t, f.plan())
 		assert.Zero(t, f.plan())
 		assert.Equal(t, map[string]int{inventory.TemplateKVAutoDeployStopped: 1}, f.mails())
@@ -595,4 +596,138 @@ func TestAutoDeployIsFencedToItsJobAndStopsWhenCancelled(t *testing.T) {
 	assert.Error(t, err)
 	assert.Zero(t, f.h.count("SELECT count(*) FROM deployments"))
 	assert.Equal(t, 3, f.plan(), "and the next run is unharmed")
+}
+
+// I1: an eligible renewal behind bindings that are candidates for ever (nothing to do, nothing to say) is
+// still planned in one run: the planner reads every page of candidates.
+func TestAutoDeployPagesThroughEveryBinding(t *testing.T) {
+	defer inventory.SetAutoDeployPage(1)()
+	b := newBindFixture(t)
+	h := b.h
+	noop := b.create(b.admin, b.second, b.loc5)
+	_, err := h.svc.SetAutoDeploy(h.ctx, b.admin, noop.ID, noop.Version, true)
+	require.NoError(t, err)
+	eligible := b.create(b.admin, b.web, b.loc1)
+	_, err = h.svc.SetAutoDeploy(h.ctx, b.admin, eligible.ID, eligible.Version, true)
+	require.NoError(t, err)
+	h.clock.Advance(time.Minute)
+	h.reconcile(b.vault, kvResult(
+		h.kvc("second-cert", b.issue("second.example.test", pki.ECDSA256), ver(12), h.clock.Now(), true),
+		h.kvc("web-cert", b.issue("web.example.test", pki.ECDSA256), ver(2), h.clock.Now(), true)))
+	b.exec("UPDATE kv_certificate_versions SET enabled = false WHERE version = $1", ver(12)) // the first binding: skipped, mailed once, a candidate for ever
+	n, err := h.svc.PlanKVAutoDeploy(h.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "the second page is read")
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM deployments WHERE binding_id = $1", eligible.ID))
+}
+
+// m3: a website that has an unfinished deployment of its own does not hold up the others of the wave.
+func TestAutoDeployMiddleWebsiteBusy(t *testing.T) {
+	f := newAutoFixture(t, true)
+	f.renew(2, nil)
+	// loc2 is the middle one in id order: give it an unfinished manual deployment of another certificate.
+	f.request(f.admin, f.cert.ID, f.loc2)
+	require.Equal(t, 2, f.plan())
+	assert.ElementsMatch(t, []uuid.UUID{f.loc1, f.loc3}, f.locationsOf(ver(2)))
+}
+
+// I2: switching automatic deployment off and on again is not a way to retry a stopped version: the new
+// auto_since is later than the version, so it stays "deploy manually".
+func TestAutoDeployOffAndOnDoesNotRetryAStoppedVersion(t *testing.T) {
+	f := newAutoFixture(t, true)
+	f.renew(2, nil)
+	require.Equal(t, 3, f.plan())
+	f.finishAll(ver(2), inventory.DeployStatusFailed, "deployment.failed")
+	require.NoError(t, f.h.lic.Tick(f.h.ctx))
+	assert.Zero(t, f.plan())
+	stopped, _ := f.bindingState()
+	require.Equal(t, ver(2), stopped)
+	f.h.clock.Advance(time.Minute)
+	f.setAuto(false)
+	f.h.clock.Advance(time.Minute)
+	f.setAuto(true)
+	assert.Zero(t, f.plan(), "documented: the version is not eligible any more")
+	assert.Equal(t, 3, f.h.count("SELECT count(*) FROM deployments"))
+	// ... and switching off does not mail "not deployed" for a version the websites have been refused, once it is stopped:
+}
+
+// m1: switching automatic deployment off after a version was fully deployed sends no "not deployed" mail.
+func TestAutoDeployOffAfterACompleteWaveSaysNothing(t *testing.T) {
+	f := newAutoFixture(t, true)
+	f.renew(2, nil)
+	require.Equal(t, 3, f.plan())
+	f.finishAll(ver(2), inventory.DeployStatusSucceeded, "")
+	f.setAuto(false)
+	assert.Zero(t, f.plan())
+	assert.Empty(t, f.mails())
+}
+
+// m2: an automatic deployment of a superseded or stopped version is refused before the secret is read;
+// a manual one of an older version is not.
+func TestKVDeployPrecheckRefusesSupersededAndStoppedAutomaticDeployments(t *testing.T) {
+	f := newAutoFixture(t, true)
+	h, ctx := f.h, f.h.ctx
+	f.renew(2, nil)
+	require.Equal(t, 3, f.plan())
+	ds := f.deps(ver(2))
+	assert.NoError(t, h.svc.KVDeployPrecheck(ctx, ds[0].ID))
+	// A newer version becomes current: the queued automatic deployments of V2 must not run.
+	f.renew(3, nil)
+	assert.ErrorIs(t, h.svc.KVDeployPrecheck(ctx, ds[0].ID), inventory.ErrVersionSuperseded)
+	_, secret := pemSecret("x")
+	_, err := h.svc.KVDeployMaterial(ctx, ds[1].ID, secret)
+	assert.ErrorIs(t, err, inventory.ErrVersionSuperseded)
+	f.exec("UPDATE kv_certificates SET current_version = $2 WHERE id = $1", f.web, ver(2))
+	assert.NoError(t, h.svc.KVDeployPrecheck(ctx, ds[0].ID))
+	f.exec("UPDATE bindings SET stopped_version = $2 WHERE id = $1", f.bind.ID, ver(2))
+	assert.ErrorIs(t, h.svc.KVDeployPrecheck(ctx, ds[0].ID), inventory.ErrWaveStopped)
+	// A manual deployment is the person's choice, whatever is current.
+	f.exec("UPDATE bindings SET stopped_version = '' WHERE id = $1", f.bind.ID)
+	f.finishAll(ver(2), inventory.DeployStatusFailed, "deployment.failed")
+	f.exec("UPDATE kv_certificates SET current_version = $2 WHERE id = $1", f.web, ver(3))
+	manual, err := h.svc.RequestKVDeployment(ctx, f.admin, inventory.KVDeployInput{BindingID: f.bind.ID, VersionID: f.versionID(f.web, ver(2)), LocationIDs: []uuid.UUID{f.loc1}})
+	require.NoError(t, err)
+	assert.NoError(t, h.svc.KVDeployPrecheck(ctx, manual[0].ID))
+}
+
+// m10: a mass renewal sends at most planMailLimit mails of a kind per vault and run, then one summary with
+// the count; every version is marked, so nothing is sent later.
+func TestAutoDeployMailStormIsBounded(t *testing.T) {
+	defer inventory.SetPlanMailLimit(3)()
+	b := newBindFixture(t)
+	h := b.h
+	// Seven bound certificates in one vault, automatic deployment off: seven "new version" notices.
+	const n = 7
+	certs := make([]string, n)
+	for i := range n {
+		certs[i] = "storm-" + string(rune('a'+i))
+	}
+	kvAll := func(base int) providers.DiscoveryResult {
+		var list []providers.KVCertificate
+		for i, name := range certs {
+			list = append(list, h.kvc(name, b.issue(name+".example.test", pki.ECDSA256), ver(base+i), h.clock.Now(), true))
+		}
+		return kvResult(list...)
+	}
+	h.reconcile(b.vault, kvAll(100))
+	// Websites: only five exist for binding; give each certificate its own location by adding scans.
+	ids := (&autoFixture{bindFixture: b}).moreLocations(n)
+	for i, name := range certs {
+		c := h.certRow(b.vault, name)
+		_, err := h.svc.CreateBinding(h.ctx, b.admin, inventory.BindingInput{KVCertificateID: c.ID, LocationIDs: []uuid.UUID{ids[i]}})
+		require.NoError(t, err)
+	}
+	h.clock.Advance(time.Minute)
+	h.reconcile(b.vault, kvAll(200))
+	for range 2 {
+		_, err := h.svc.PlanKVAutoDeploy(h.ctx)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 3, h.emails(inventory.TemplateKVNewVersion), "three individual mails")
+	assert.Equal(t, 1, h.emails(inventory.TemplateKVNewVersionsMore), "and one summary")
+	var params map[string]string
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT params FROM notifications_outbox WHERE template_key = $1", inventory.TemplateKVNewVersionsMore).Scan(&params))
+	assert.Equal(t, "4", params["count"])
+	assert.Equal(t, 7, h.count("SELECT count(*) FROM kv_certificate_versions WHERE notified_at IS NOT NULL AND version = ANY($1)",
+		[]string{ver(200), ver(201), ver(202), ver(203), ver(204), ver(205), ver(206)}), "every version is marked")
 }

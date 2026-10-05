@@ -927,7 +927,7 @@
       },
       "new_version_held_license": {
         "subject": "A new version of {{certificate_name}} is waiting for an administrator: Key Vault {{target_name}}",
-        "body": "Alice found a new version of the certificate {{certificate_name}} in the Key Vault {{target_name}} while the license did not allow Alice to change anything.\n\nAlice will not deploy this version by itself. When the license is valid again, an administrator can open the certificate in Alice and choose Deploy now."
+        "body": "Alice found a new version of the certificate {{certificate_name}} in the Key Vault {{target_name}} while Alice could not be sure the license allowed changes (the license had been locked or had just returned).\n\nAlice will not deploy this version by itself. An administrator can open the certificate in Alice and choose Deploy now."
       },
       "new_version_held_chain": {
         "subject": "A new version of {{certificate_name}} is waiting for an administrator: Key Vault {{target_name}}",
@@ -959,7 +959,7 @@
       },
       "auto_deploy_stopped": {
         "subject": "Automatic deployment of {{certificate_name}} stopped: Key Vault {{target_name}}",
-        "body": "Alice stopped deploying the new version of the certificate {{certificate_name}} from the Key Vault {{target_name}} automatically, after {{count}} deployments failed.\n\nWebsites that already received the version keep it; the others keep their current certificate. The deployment history in Alice shows the reason for each failure. Automatic deployment continues with the next version. To try this version again, switch automatic deployment off and on for the certificate, or choose Deploy now."
+        "body": "Alice stopped deploying the new version of the certificate {{certificate_name}} from the Key Vault {{target_name}} automatically, after {{count}} deployments failed.\n\nWebsites that already received the version keep it; the others keep their current certificate. The deployment history in Alice shows the reason for each failure. Automatic deployment continues with the next version. To try this version again, open the certificate in Alice and choose Deploy now."
       },
       "import_failed": {
         "subject": "Importing {{certificate_name}} into the Key Vault {{target_name}} failed",
@@ -967,7 +967,31 @@
       },
       "import_outcome_unknown": {
         "subject": "Alice does not know whether {{certificate_name}} was imported into the Key Vault {{target_name}}",
-        "body": "Alice sent the certificate {{certificate_name}} to the Key Vault {{target_name}}, but the answer was lost, and in the 24 hours since, no check of the vault has shown the certificate. Alice never sends an import twice.\n\nOpen the vault in Azure and look for the certificate. If it is there, nothing more is needed: Alice shows it at the next check. If it is not, start the import again in Alice."
+        "body": "Alice sent the certificate {{certificate_name}} to the Key Vault {{target_name}}, but the answer was lost, and no check of the vault has shown the certificate since. Alice never sends an import twice.\n\nOpen the vault in Azure and look for the certificate. If it is there, nothing more is needed: Alice shows it at the next check. If it is not, start the import again in Alice."
+      },
+      "new_versions_more": {
+        "subject": "More new certificate versions were found in the Key Vault {{target_name}}",
+        "body": "Alice sent a message for each of the first new certificate versions it found in the Key Vault {{target_name}} in one pass. {{count}} more new versions were found in the same pass and are not listed here.\n\nOpen the vault in Alice to see the certificates and choose Deploy now where a version should go out."
+      },
+      "new_versions_more_one": {
+        "subject": "Another new certificate version was found in the Key Vault {{target_name}}",
+        "body": "Alice sent a message for each of the first new certificate versions it found in the Key Vault {{target_name}} in one pass. {{count}} more new version was found in the same pass and is not listed here.\n\nOpen the vault in Alice to see the certificate and choose Deploy now if the version should go out."
+      },
+      "versions_skipped_more": {
+        "subject": "More certificate versions were not deployed automatically: Key Vault {{target_name}}",
+        "body": "Alice sent a message for each of the first certificate versions it did not deploy automatically in the Key Vault {{target_name}} in one pass. {{count}} more versions were skipped in the same pass and are not listed here.\n\nOpen the vault in Alice to see them and choose Deploy now where a version should go out."
+      },
+      "versions_skipped_more_one": {
+        "subject": "Another certificate version was not deployed automatically: Key Vault {{target_name}}",
+        "body": "Alice sent a message for each of the first certificate versions it did not deploy automatically in the Key Vault {{target_name}} in one pass. {{count}} more version was skipped in the same pass and is not listed here.\n\nOpen the vault in Alice to see it and choose Deploy now if it should go out."
+      },
+      "auto_deploys_stopped_more": {
+        "subject": "More automatic deployments stopped: Key Vault {{target_name}}",
+        "body": "Alice sent a message for each of the first certificates whose automatic deployment stopped in the Key Vault {{target_name}} in one pass. {{count}} more stopped in the same pass and are not listed here.\n\nThe deployment history in Alice shows the reason for each failure. Choose Deploy now on a certificate's page to try its version again."
+      },
+      "auto_deploys_stopped_more_one": {
+        "subject": "Another automatic deployment stopped: Key Vault {{target_name}}",
+        "body": "Alice sent a message for each of the first certificates whose automatic deployment stopped in the Key Vault {{target_name}} in one pass. {{count}} more stopped in the same pass and is not listed here.\n\nThe deployment history in Alice shows the reason for the failures. Choose Deploy now on the certificate's page to try its version again."
       }
     },
     "license": {

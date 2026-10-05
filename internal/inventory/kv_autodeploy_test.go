@@ -110,6 +110,46 @@ func TestAutoDeployPlanTable(t *testing.T) {
 			f.failed(f.c, 3*time.Hour, "deployment.failed")
 			f.failed(f.c, 4*time.Hour, "deployment.failed")
 		}, deploy: func(f *planFixture) []uuid.UUID { return nil }, stopped: true},
+		{name: "two counted failures and an internal fault on one website: the cap is not silent, the wave stops with one notice", mutate: func(f *planFixture) {
+			f.failed(f.a, 3*time.Hour, "deployment.failed")
+			f.failed(f.a, 4*time.Hour, "deployment.failed")
+			f.failed(f.a, 5*time.Hour, "internal.unexpected")
+		}, deploy: func(f *planFixture) []uuid.UUID { return nil }, stopped: true},
+		{name: "transient reasons count like any failure", mutate: func(f *planFixture) {
+			f.failed(f.a, 3*time.Hour, "azure.unreachable")
+			f.failed(f.b, 3*time.Hour, "azure.throttled")
+			f.failed(f.c, 3*time.Hour, "ssh.connection_failed")
+		}, deploy: func(f *planFixture) []uuid.UUID { return nil }, stopped: true},
+		{name: "a failed manual deployment of the version also spaces the next attempt", mutate: func(f *planFixture) {
+			f.sn.deployments = append(f.sn.deployments, planDeployment{location: f.a, version: &f.v2, done: true, status: "failed", errorCode: "deployment.failed",
+				createdAt: planNow.Add(-31 * time.Minute), finishedAt: tp(planNow.Add(-30 * time.Minute))})
+		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.b, f.c} }, budget: AutoDeployWave},
+		{name: "a manual failure an hour old does not wait any longer", mutate: func(f *planFixture) {
+			f.sn.deployments = append(f.sn.deployments, planDeployment{location: f.a, version: &f.v2, done: true, status: "failed", errorCode: "deployment.failed",
+				createdAt: planNow.Add(-2 * time.Hour), finishedAt: tp(planNow.Add(-61 * time.Minute))})
+		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave},
+		{name: "a superseded version whose leaf every website serves is not mailed", mutate: func(f *planFixture) {
+			old := uuid.New()
+			f.sn.versions = append(f.sn.versions, planVersion{id: f.v1, version: "v1", leaf: &old, enabled: true, kvCreatedAt: tp(planNow.Add(-2 * time.Hour)),
+				detectedAt: planNow.Add(-2 * time.Hour)})
+			for i := range f.sn.locations {
+				f.sn.locations[i].served = &old
+			}
+		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave},
+		{name: "a history row that never was current is never announced", mutate: func(f *planFixture) {
+			f.sn.versions = append(f.sn.versions, planVersion{id: f.v1, version: "v1", enabled: true, kvCreatedAt: tp(planNow.Add(-2 * time.Hour)),
+				detectedAt: planNow.Add(-2 * time.Hour)})
+		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave},
+		{name: "automatic deployment off and every website already has the version: no mail", mutate: func(f *planFixture) {
+			f.sn.autoDeploy, f.sn.autoSince = false, nil
+			for i := range f.sn.locations {
+				f.sn.locations[i].served = &f.leaf
+			}
+		}, deploy: func(f *planFixture) []uuid.UUID { return nil }},
+		{name: "automatic deployment off and one website got the version by hand, the others did not: mail", mutate: func(f *planFixture) {
+			f.sn.autoDeploy, f.sn.autoSince = false, nil
+			f.sn.locations[0].served = &f.leaf
+		}, deploy: func(f *planFixture) []uuid.UUID { return nil }, notices: []string{TemplateKVNewVersion}},
 		{name: "three failures of the version stop the wave, with one notice of the stop", mutate: func(f *planFixture) {
 			f.failed(f.a, 3*time.Hour, "deployment.failed")
 			f.failed(f.b, 3*time.Hour, "deployment.failed")
@@ -196,17 +236,17 @@ func TestAutoDeployPlanTable(t *testing.T) {
 			f.cur().detectedAt, f.cur().kvCreatedAt, f.cur().notifiedAt = planNow.Add(-6*24*time.Hour), tp(planNow.Add(-6*24*time.Hour)), tp(planNow)
 		}, deploy: func(f *planFixture) []uuid.UUID { return nil }},
 		{name: "a version superseded before it deployed is mailed once", mutate: func(f *planFixture) {
-			f.sn.versions = append(f.sn.versions, planVersion{id: f.v1, version: "v1", enabled: true, kvCreatedAt: tp(planNow.Add(-2 * time.Hour)),
+			f.sn.versions = append(f.sn.versions, planVersion{id: f.v1, version: "v1", leaf: ptrTo(uuid.New()), enabled: true, kvCreatedAt: tp(planNow.Add(-2 * time.Hour)),
 				detectedAt: planNow.Add(-2 * time.Hour)})
 		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave, notices: []string{TemplateKVSkippedSuperseded}, skipMark: true},
 		{name: "a superseded version that was deployed somewhere is not mailed", mutate: func(f *planFixture) {
-			f.sn.versions = append(f.sn.versions, planVersion{id: f.v1, version: "v1", enabled: true, kvCreatedAt: tp(planNow.Add(-2 * time.Hour)),
+			f.sn.versions = append(f.sn.versions, planVersion{id: f.v1, version: "v1", leaf: ptrTo(uuid.New()), enabled: true, kvCreatedAt: tp(planNow.Add(-2 * time.Hour)),
 				detectedAt: planNow.Add(-2 * time.Hour)})
 			f.sn.deployments = append(f.sn.deployments, planDeployment{location: f.a, version: &f.v1, automatic: true, done: true, status: "succeeded",
 				createdAt: planNow.Add(-90 * time.Minute), finishedAt: tp(planNow.Add(-80 * time.Minute))})
 		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave},
 		{name: "a held version that was superseded is not mailed again", mutate: func(f *planFixture) {
-			f.sn.versions = append(f.sn.versions, planVersion{id: f.v1, version: "v1", enabled: true, held: true, heldReason: "license",
+			f.sn.versions = append(f.sn.versions, planVersion{id: f.v1, version: "v1", leaf: ptrTo(uuid.New()), enabled: true, held: true, heldReason: "license",
 				kvCreatedAt: tp(planNow.Add(-2 * time.Hour)), detectedAt: planNow.Add(-2 * time.Hour)})
 		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave},
 		{name: "no current version row: nothing", mutate: func(f *planFixture) { f.cur().current = false }, deploy: func(f *planFixture) []uuid.UUID { return nil }},
@@ -233,7 +273,7 @@ func TestAutoDeployPlanTable(t *testing.T) {
 				}
 			}
 			assert.Equal(t, tc.stopped, got.stop != nil)
-			if tc.stopped {
+			if tc.stopped && got.stop != nil {
 				assert.Equal(t, "v2", got.stop.name)
 				assert.Equal(t, 3, got.stop.failed)
 			}

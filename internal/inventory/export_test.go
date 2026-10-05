@@ -157,3 +157,17 @@ func SetImportMaterialHook(f func(stage string, b []byte)) (restore func()) {
 	importMaterialHook = f
 	return func() { importMaterialHook = old }
 }
+
+// SetAutoDeployPage sets how many candidate bindings the planner reads per page.
+func SetAutoDeployPage(n int) (restore func()) {
+	old := autoDeployBindings
+	autoDeployBindings = n
+	return func() { autoDeployBindings = old }
+}
+
+// SetPlanMailLimit sets how many individual mails the planner sends per vault and kind in one run.
+func SetPlanMailLimit(n int) (restore func()) {
+	old := planMailLimit
+	planMailLimit = n
+	return func() { planMailLimit = old }
+}

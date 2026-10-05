@@ -927,7 +927,7 @@
       },
       "new_version_held_license": {
         "subject": "{{certificate_name}} için yeni sürüm bir yöneticiyi bekliyor: {{target_name}} Key Vault kasası",
-        "body": "Alice, lisans herhangi bir değişikliğe izin vermezken {{target_name}} Key Vault kasasında {{certificate_name}} sertifikasının yeni sürümünü buldu.\n\nAlice bu sürümü kendiliğinden dağıtmayacak. Lisans yeniden geçerli olduğunda bir yönetici sertifikayı Alice'te açıp Şimdi dağıt düğmesine tıklayabilir."
+        "body": "Alice, lisansın değişikliğe izin verdiğinden emin olunamazken (lisans kilitlenmişti ya da yeni dönmüştü) {{target_name}} Key Vault kasasında {{certificate_name}} sertifikasının yeni sürümünü buldu.\n\nAlice bu sürümü kendiliğinden dağıtmayacak. Bir yönetici sertifikayı Alice'te açıp Şimdi dağıt düğmesine tıklayabilir."
       },
       "new_version_held_chain": {
         "subject": "{{certificate_name}} için yeni sürüm bir yöneticiyi bekliyor: {{target_name}} Key Vault kasası",
@@ -959,15 +959,39 @@
       },
       "auto_deploy_stopped": {
         "subject": "{{certificate_name}} için otomatik dağıtım durdu: {{target_name}} Key Vault kasası",
-        "body": "Alice, {{count}} dağıtım başarısız olduğu için {{target_name}} Key Vault kasasındaki {{certificate_name}} sertifikasının yeni sürümünü otomatik dağıtmayı durdurdu.\n\nSürümü zaten alan web siteleri onu korur; diğerleri şu anki sertifikalarını kullanmaya devam eder. Alice'teki dağıtım geçmişi her başarısızlığın nedenini gösterir. Otomatik dağıtım bir sonraki sürümle devam eder. Bu sürümü yeniden denemek için sertifikanın otomatik dağıtımını kapatıp açın ya da Şimdi dağıt düğmesine tıklayın."
+        "body": "Alice, {{count}} dağıtım başarısız olduğu için {{target_name}} Key Vault kasasındaki {{certificate_name}} sertifikasının yeni sürümünü otomatik dağıtmayı durdurdu.\n\nSürümü zaten alan web siteleri onu korur; diğerleri şu anki sertifikalarını kullanmaya devam eder. Alice'teki dağıtım geçmişi her başarısızlığın nedenini gösterir. Otomatik dağıtım bir sonraki sürümle devam eder. Bu sürümü yeniden denemek için sertifikayı Alice'te açın ve Şimdi dağıt düğmesine tıklayın."
       },
       "import_failed": {
-        "subject": "{{certificate_name}} sertifikasının {{target_name}} Key Vault kasasına aktarımı başarısız oldu",
-        "body": "Alice, {{certificate_name}} sertifikasını {{target_name}} Key Vault kasasına aktaramadı. Kasada hiçbir şey oluşturulmadı.\n\nKasayı Alice'te açın: aktarımın sayfası nedeni ve yapılacakları gösterir. Sorun giderildiğinde aktarımı yeniden başlatın."
+        "subject": "{{certificate_name}} sertifikasının {{target_name}} Key Vault kasasına içe aktarılması başarısız oldu",
+        "body": "Alice, {{certificate_name}} sertifikasını {{target_name}} Key Vault kasasına aktaramadı. Kasada hiçbir şey oluşturulmadı.\n\nKasayı Alice'te açın: içe aktarmanın sayfası nedeni ve yapılacakları gösterir. Sorun giderildiğinde içe aktarmayı yeniden başlatın."
       },
       "import_outcome_unknown": {
         "subject": "Alice, {{certificate_name}} sertifikasının {{target_name}} Key Vault kasasına aktarılıp aktarılmadığını bilmiyor",
-        "body": "Alice, {{certificate_name}} sertifikasını {{target_name}} Key Vault kasasına gönderdi ancak yanıt kayboldu ve sonraki 24 saat içinde kasanın hiçbir denetimi sertifikayı göstermedi. Alice bir aktarımı asla iki kez göndermez.\n\nKasayı Azure'da açın ve sertifikayı arayın. Sertifika oradaysa başka bir şey gerekmez: Alice onu bir sonraki denetimde gösterir. Değilse aktarımı Alice'te yeniden başlatın."
+        "body": "Alice, {{certificate_name}} sertifikasını {{target_name}} Key Vault kasasına gönderdi ancak yanıt kayboldu ve kasanın hiçbir denetimi o zamandan beri sertifikayı göstermedi. Alice bir içe aktarmayı asla iki kez göndermez.\n\nKasayı Azure'da açın ve sertifikayı arayın. Sertifika oradaysa başka bir şey gerekmez: Alice onu bir sonraki denetimde gösterir. Değilse içe aktarmayı Alice'te yeniden başlatın."
+      },
+      "new_versions_more": {
+        "subject": "{{target_name}} Key Vault kasasında daha fazla yeni sertifika sürümü bulundu",
+        "body": "Alice, {{target_name}} Key Vault kasasında tek bir taramada bulduğu ilk yeni sertifika sürümlerinin her biri için ayrı bir ileti gönderdi. Aynı taramada {{count}} yeni sürüm daha bulundu ve burada tek tek sayılmıyor.\n\nSertifikaları görmek için kasayı Alice'te açın; bir sürümün dağıtılması gerekiyorsa Şimdi dağıt düğmesine tıklayın."
+      },
+      "new_versions_more_one": {
+        "subject": "{{target_name}} Key Vault kasasında bir yeni sertifika sürümü daha bulundu",
+        "body": "Alice, {{target_name}} Key Vault kasasında tek bir taramada bulduğu ilk yeni sertifika sürümlerinin her biri için ayrı bir ileti gönderdi. Aynı taramada {{count}} yeni sürüm daha bulundu ve burada sayılmıyor.\n\nSertifikayı görmek için kasayı Alice'te açın; sürümün dağıtılması gerekiyorsa Şimdi dağıt düğmesine tıklayın."
+      },
+      "versions_skipped_more": {
+        "subject": "Daha fazla sertifika sürümü otomatik dağıtılmadı: {{target_name}} Key Vault kasası",
+        "body": "Alice, {{target_name}} Key Vault kasasında tek bir taramada otomatik dağıtmadığı ilk sertifika sürümlerinin her biri için ayrı bir ileti gönderdi. Aynı taramada {{count}} sürüm daha atlandı ve burada tek tek sayılmıyor.\n\nOnları görmek için kasayı Alice'te açın; bir sürümün dağıtılması gerekiyorsa Şimdi dağıt düğmesine tıklayın."
+      },
+      "versions_skipped_more_one": {
+        "subject": "Bir sertifika sürümü daha otomatik dağıtılmadı: {{target_name}} Key Vault kasası",
+        "body": "Alice, {{target_name}} Key Vault kasasında tek bir taramada otomatik dağıtmadığı ilk sertifika sürümlerinin her biri için ayrı bir ileti gönderdi. Aynı taramada {{count}} sürüm daha atlandı ve burada sayılmıyor.\n\nSürümü görmek için kasayı Alice'te açın; dağıtılması gerekiyorsa Şimdi dağıt düğmesine tıklayın."
+      },
+      "auto_deploys_stopped_more": {
+        "subject": "Daha fazla otomatik dağıtım durdu: {{target_name}} Key Vault kasası",
+        "body": "Alice, {{target_name}} Key Vault kasasında tek bir taramada otomatik dağıtımı duran ilk sertifikaların her biri için ayrı bir ileti gönderdi. Aynı taramada {{count}} sertifikanın dağıtımı daha durdu ve burada tek tek sayılmıyor.\n\nAlice'teki dağıtım geçmişi her başarısızlığın nedenini gösterir. Sürümü yeniden denemek için sertifikanın sayfasında Şimdi dağıt düğmesine tıklayın."
+      },
+      "auto_deploys_stopped_more_one": {
+        "subject": "Bir otomatik dağıtım daha durdu: {{target_name}} Key Vault kasası",
+        "body": "Alice, {{target_name}} Key Vault kasasında tek bir taramada otomatik dağıtımı duran ilk sertifikaların her biri için ayrı bir ileti gönderdi. Aynı taramada {{count}} sertifikanın dağıtımı daha durdu ve burada sayılmıyor.\n\nAlice'teki dağıtım geçmişi başarısızlıkların nedenini gösterir. Sürümü yeniden denemek için sertifikanın sayfasında Şimdi dağıt düğmesine tıklayın."
       }
     },
     "license": {

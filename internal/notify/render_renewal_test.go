@@ -71,3 +71,34 @@ func TestKeyVaultImportTemplatesRenderInBothLanguages(t *testing.T) {
 	tr := s.Render("ada@example.com", inventory.TemplateKVImportFailed, "tr", params)
 	assert.Contains(t, tr.Body, "Kasada hiçbir şey oluşturulmadı")
 }
+
+// The stop mail gives advice that works (Deploy now), not "switch off and on"; the summary mails of a mass
+// renewal render with their count in both languages.
+func TestKeyVaultRenewalAdviceAndSummaries(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	params := map[string]string{"target_name": "Üretim kasası", "certificate_name": "web-cert", "count": "4"}
+	for _, lang := range []string{"en", "tr"} {
+		m := s.Render("ada@example.com", inventory.TemplateKVAutoDeployStopped, lang, params)
+		assert.NotContains(t, m.Body, "switch automatic deployment off", lang)
+		assert.NotContains(t, m.Body, "otomatik dağıtımını kapatıp", lang)
+		assert.Contains(t, m.Body, map[string]string{"en": "Deploy now", "tr": "Şimdi dağıt"}[lang], lang)
+		for _, tpl := range []string{inventory.TemplateKVNewVersionsMore, inventory.TemplateKVNewVersionsMoreOne, inventory.TemplateKVSkippedMore,
+			inventory.TemplateKVSkippedMoreOne, inventory.TemplateKVStoppedMore, inventory.TemplateKVStoppedMoreOne} {
+			m := s.Render("ada@example.com", tpl, lang, params)
+			assert.NotContains(t, m.Subject+m.Body, "{{", "%s %s", tpl, lang)
+			assert.NotContains(t, m.Subject, "email.", "%s %s", tpl, lang)
+			assert.Contains(t, m.Subject, "Üretim kasası", "%s %s", tpl, lang)
+			assert.Contains(t, m.Body, "4", "%s %s", tpl, lang)
+		}
+	}
+	for _, lang := range []string{"en", "tr"} {
+		for _, tpl := range []string{inventory.TemplateKVImportFailed, inventory.TemplateKVImportOutcomeUnknown} {
+			m := s.Render("ada@example.com", tpl, lang, params)
+			if lang == "tr" {
+				assert.NotContains(t, m.Subject+m.Body, "aktarım", "the term is içe aktarma")
+			}
+		}
+	}
+}

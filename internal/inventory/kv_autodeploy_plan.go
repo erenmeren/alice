@@ -26,8 +26,11 @@ var (
 	// autoDeployBatch is how many deployments one run of the planner creates in all (a variable so
 	// that tests can lower it).
 	autoDeployBatch = 50
-	// autoDeployBindings is how many bindings one run looks at.
-	autoDeployBindings = 500
+	// autoDeployBindings is the size of a page of candidate bindings (the run reads every page).
+	autoDeployBindings = 200
+	// planMailLimit is how many individual notices one run sends per vault and kind of notice; the rest
+	// of that kind are counted in one summary mail (marks are written for all of them).
+	planMailLimit = 20
 )
 
 type planVersion struct {
@@ -120,12 +123,16 @@ const (
 	// ReasonInternal is a fault of Alice's own: it is retried under the hourly rule but each website gets
 	// AutoDeployMaxFailed of them, after which the wave of the version stops with one mail.
 	ReasonInternal = "internal.unexpected"
+	// ReasonVersionSuperseded and ReasonWaveStopped end an automatic deployment whose version is no longer
+	// current, or whose wave was stopped (neutral: not failures of the version on a website).
+	ReasonVersionSuperseded = "kv.version_superseded"
+	ReasonWaveStopped       = "kv.wave_stopped"
 )
 
 // NeutralDeploymentReasons lists the reasons that are not counted as failures of a wave.
 func NeutralDeploymentReasons() []string {
 	return []string{ReasonChainUnconfirmed, ReasonBindingGone, ReasonAutoDeployOff, ReasonVaultUnavailable, ReasonVersionHeld,
-		ReasonVersionDisabled, ReasonCertificateMissing, ReasonCertificateExpired, ReasonNotYetValid}
+		ReasonVersionDisabled, ReasonCertificateMissing, ReasonCertificateExpired, ReasonNotYetValid, ReasonVersionSuperseded, ReasonWaveStopped}
 }
 
 func neutralReason(code string) bool {
@@ -142,6 +149,26 @@ func neutralReason(code string) bool {
 // for skew; Azure's own time has whole seconds).
 func (v planVersion) laterThan(t time.Time) bool {
 	return v.detectedAt.After(t) && (v.kvCreatedAt == nil || v.kvCreatedAt.After(t))
+}
+
+// lacksVersion reports whether some website of the binding neither serves the version's leaf nor got the
+// version by a succeeded deployment: only then "a new version was found, not deployed" is true.
+func lacksVersion(sn planSnapshot, v *planVersion) bool {
+	for _, l := range sn.locations {
+		if v.leaf != nil && l.served != nil && *l.served == *v.leaf {
+			continue
+		}
+		done := false
+		for _, d := range sn.deployments {
+			if d.location == l.id && d.version != nil && *d.version == v.id && d.done && (d.status == "succeeded" || d.status == "unchanged") {
+				done = true
+			}
+		}
+		if !done {
+			return true
+		}
+	}
+	return false
 }
 
 func failedStatus(s string) bool {
@@ -161,9 +188,13 @@ func failedStatus(s string) bool {
 //     later than the binding; a version Alice knows too little of (no details, not exportable, a key
 //     type it cannot deploy) is left alone silently; a disabled, expired or not yet valid one is
 //     skipped with one mail;
-//   - three failed automatic deployments of the version since auto_since (neutral reasons excluded)
-//     stop the wave: no more deployments, one notice; so do three internal faults (internal.unexpected,
-//     retried hourly until then, not counted across websites) on one website;
+//   - three failed automatic deployments of the version since auto_since stop the wave. Transient-looking
+//     reasons (azure.unreachable, azure.throttled, ssh.*) count like any other failure, as Review Focus 3
+//     says ("three failures of a version stop the wave with one email"); only the neutral reasons
+//     (NeutralDeploymentReasons) are exempt
+//     stop the wave: no more deployments, one notice; so does a website whose attempts are used up by any
+//     mix of counted failures and internal faults (internal.unexpected): never a silent cap. The
+//     hourly spacing applies to a website's last failed attempt of the version whatever its trigger;
 //   - otherwise the websites: not those with an unfinished deployment of any kind, not those that serve
 //     the leaf already or got the version, not those with three attempts; a website whose certificate
 //     ends later than the version's is skipped (one mail); a failed website waits AutoDeployRetryAfter;
@@ -191,8 +222,17 @@ func planAutoDeploy(sn planSnapshot) autoPlan {
 	if sn.autoDeploy && sn.autoSince != nil {
 		for i := range sn.versions {
 			v := &sn.versions[i]
-			if v.current || v.held || v.skippedAt != nil || !v.laterThan(*sn.autoSince) {
-				continue
+			if v.current || v.held || v.skippedAt != nil || v.leaf == nil || !v.laterThan(*sn.autoSince) {
+				continue // a history row that was never current (no details) is never announced
+			}
+			served := len(sn.locations) > 0
+			for _, l := range sn.locations {
+				if l.served == nil || *l.served != *v.leaf {
+					served = false
+				}
+			}
+			if served {
+				continue // every website has that leaf already: nothing was skipped
 			}
 			deployed := false
 			for _, d := range sn.deployments {
@@ -217,7 +257,7 @@ func planAutoDeploy(sn planSnapshot) autoPlan {
 		return p
 	}
 	if !sn.autoDeploy || sn.autoSince == nil {
-		if later && cur.notifiedAt == nil {
+		if later && cur.notifiedAt == nil && lacksVersion(sn, cur) {
 			notify(cur, TemplateKVNewVersion, false)
 		}
 		return p
@@ -253,10 +293,10 @@ func planAutoDeploy(sn planSnapshot) autoPlan {
 	failed := 0
 	busy := map[uuid.UUID]bool{}
 	attempted := map[uuid.UUID]bool{}
-	capped := map[uuid.UUID]int{}   // real failures and internal faults of a website
-	internal := map[uuid.UUID]int{} // internal faults of a website
+	capped := map[uuid.UUID]int{} // real failures and internal faults of a website
 	deployed := map[uuid.UUID]bool{}
 	lastFailure := map[uuid.UUID]time.Time{}
+	lastAny := map[uuid.UUID]time.Time{} // the last failed attempt of the version on a website, whatever its trigger
 	inFlight := 0
 	for _, d := range sn.deployments {
 		if !d.done {
@@ -271,12 +311,14 @@ func planAutoDeploy(sn planSnapshot) autoPlan {
 		if d.done && (d.status == "succeeded" || d.status == "unchanged") {
 			deployed[d.location] = true
 		}
+		if d.done && failedStatus(d.status) && d.finishedAt != nil && d.finishedAt.After(lastAny[d.location]) {
+			lastAny[d.location] = *d.finishedAt
+		}
 		if d.automatic && d.done && failedStatus(d.status) && !d.createdAt.Before(*sn.autoSince) {
 			attempted[d.location] = true
 			switch {
 			case neutralReason(d.errorCode):
 			case d.errorCode == ReasonInternal:
-				internal[d.location]++
 				capped[d.location]++
 			default:
 				failed++
@@ -287,7 +329,9 @@ func planAutoDeploy(sn planSnapshot) autoPlan {
 			}
 		}
 	}
-	for _, n := range internal { // a permanent fault of Alice's: no silent retries for ever
+	// A website whose attempts are used up by any mix of failures and internal faults is not capped
+	// silently: it stops the wave, with the one notice.
+	for _, n := range capped {
 		failed = max(failed, n)
 	}
 	if failed >= AutoDeployMaxFailed {
@@ -299,6 +343,7 @@ func planAutoDeploy(sn planSnapshot) autoPlan {
 	for _, l := range sn.locations {
 		switch {
 		case busy[l.id], deployed[l.id]:
+		case !lastAny[l.id].IsZero() && lastAny[l.id].Add(AutoDeployRetryAfter).After(now):
 		case l.served != nil && *l.served == *cur.leaf:
 		case l.servedNotAfter != nil && cur.leafNotAfter != nil && l.servedNotAfter.After(*cur.leafNotAfter):
 			older = true

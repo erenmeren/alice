@@ -162,6 +162,10 @@ func precheckReason(err error) string {
 		return "not_yet_valid"
 	case errors.Is(err, ErrVersionHeld):
 		return "version_held"
+	case errors.Is(err, ErrVersionSuperseded):
+		return "version_superseded"
+	case errors.Is(err, ErrWaveStopped):
+		return "wave_stopped"
 	}
 	return "refused"
 }
@@ -184,12 +188,13 @@ func (s *Service) KVDeployPrecheck(ctx context.Context, id uuid.UUID) error {
 		bindingLive, auto, vaultDeleted   bool
 		certMissing, enabled, held, admin bool
 		vaultStatus                       string
+		current, stoppedVersion, version  string
 		vExpires, vNotBefore              *time.Time
 		cNotBefore, cNotAfter             time.Time
 	)
 	err := s.pool.QueryRow(ctx, `SELECT d.trigger, d.state, d.binding_id, l.binding_id, b.id IS NOT NULL AND b.deleted_at IS NULL, coalesce(b.auto_deploy, false),
     vt.status, vt.deleted_at IS NOT NULL, kc.missing_since IS NOT NULL, v.enabled, v.expires, v.not_before, v.held,
-    c.not_before, c.not_after, coalesce(u.role = 'admin' AND u.disabled_at IS NULL, false)
+    c.not_before, c.not_after, coalesce(u.role = 'admin' AND u.disabled_at IS NULL, false), kc.current_version, v.version, coalesce(b.stopped_version, '')
 FROM deployments d
 JOIN kv_certificate_versions v ON v.id = d.kv_version_id
 JOIN kv_certificates kc ON kc.id = v.kv_certificate_id
@@ -199,7 +204,7 @@ JOIN certificates c ON c.id = d.certificate_id
 LEFT JOIN bindings b ON b.id = d.binding_id
 LEFT JOIN users u ON u.id = d.requested_by
 WHERE d.id = $1`, id).Scan(&trigger, &state, &binding, &locBinding, &bindingLive, &auto, &vaultStatus, &vaultDeleted, &certMissing, &enabled,
-		&vExpires, &vNotBefore, &held, &cNotBefore, &cNotAfter, &admin)
+		&vExpires, &vNotBefore, &held, &cNotBefore, &cNotAfter, &admin, &current, &version, &stoppedVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var one int
 		if e := s.pool.QueryRow(ctx, "SELECT 1 FROM deployments WHERE id = $1", id).Scan(&one); e == nil {
@@ -214,10 +219,16 @@ WHERE d.id = $1`, id).Scan(&trigger, &state, &binding, &locBinding, &bindingLive
 	switch {
 	case state != DeployStateQueued && state != DeployStatePrecheck:
 		return ErrDeploymentState
+	// bindingLive alone is unreachable (a soft-deleted binding releases its websites, so the website check
+	// answers first); it is kept as the direct statement of the rule.
 	case binding == nil || !bindingLive || locBinding == nil || *locBinding != *binding:
 		return ErrBindingGone
 	case trigger == triggerKVRenewal && !auto:
 		return ErrAutoDeployOff
+	case trigger == triggerKVRenewal && version != current: // a newer version replaced it since the planner queued it
+		return ErrVersionSuperseded
+	case trigger == triggerKVRenewal && stoppedVersion == version:
+		return ErrWaveStopped
 	case vaultDeleted || vaultStatus == StatusDisabled:
 		return ErrVaultUnavailable
 	case certMissing:

@@ -201,3 +201,13 @@ func (e *ImportConfirmError) Error() string { return ErrImportConfirmNeeded.Erro
 
 // Is makes errors.Is(err, ErrImportConfirmNeeded) hold.
 func (e *ImportConfirmError) Is(target error) bool { return target == ErrImportConfirmNeeded }
+
+// Errors of the pre-read check for AUTOMATIC deployments (fix round 1, m2): the planner created the
+// deployment for a version that is no longer the right one. Manual deployments are never refused for
+// these reasons (the spec allows deploying an older version by hand).
+var (
+	// ErrVersionSuperseded: the version is no longer the certificate's current version.
+	ErrVersionSuperseded = errors.New("inventory: a newer version of the certificate replaced this one")
+	// ErrWaveStopped: the binding's automatic wave of this version was stopped (stopped_version).
+	ErrWaveStopped = errors.New("inventory: the automatic deployment of this version was stopped")
+)

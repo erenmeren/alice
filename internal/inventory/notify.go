@@ -77,6 +77,18 @@ const (
 	TemplateKVImportOutcomeUnknown = "kv.import_outcome_unknown"
 )
 
+// Summary mails of a planner run that had more notices of a kind than planMailLimit for one vault (params
+// target_name and count; the _one forms say "one more"): new versions (available and held), skipped
+// versions, and stopped waves.
+const (
+	TemplateKVNewVersionsMore    = "kv.new_versions_more"
+	TemplateKVNewVersionsMoreOne = "kv.new_versions_more_one"
+	TemplateKVSkippedMore        = "kv.versions_skipped_more"
+	TemplateKVSkippedMoreOne     = "kv.versions_skipped_more_one"
+	TemplateKVStoppedMore        = "kv.auto_deploys_stopped_more"
+	TemplateKVStoppedMoreOne     = "kv.auto_deploys_stopped_more_one"
+)
+
 // Templates lists the inventory's email templates (render tests).
 func Templates() []string {
 	return []string{TemplateHostKeyChanged, TemplateAuthFailed, TemplateDeploymentFailed, TemplateDeploymentRollbackFailed,
@@ -84,6 +96,7 @@ func Templates() []string {
 		TemplateDeploymentNeedsAttention, TemplateDeploymentNeedsAttentionUnconfirmed, TemplateKVAuthFailed, TemplateKVCertificateRemoved,
 		TemplateKVCertificateRemovedBound, TemplateKVCertificatesRemovedMore, TemplateKVCertificatesRemovedOne, TemplateKVNewVersion, TemplateKVNewVersionHeldLicense,
 		TemplateKVNewVersionHeldChain, TemplateKVSkippedManual, TemplateKVSkippedDisabled, TemplateKVSkippedExpired, TemplateKVSkippedNotYetValid,
-		TemplateKVSkippedOlder, TemplateKVSkippedSuperseded, TemplateKVAutoDeployStopped, TemplateKVImportFailed,
+		TemplateKVSkippedOlder, TemplateKVSkippedSuperseded, TemplateKVAutoDeployStopped, TemplateKVNewVersionsMore, TemplateKVNewVersionsMoreOne, TemplateKVSkippedMore,
+		TemplateKVSkippedMoreOne, TemplateKVStoppedMore, TemplateKVStoppedMoreOne, TemplateKVImportFailed,
 		TemplateKVImportOutcomeUnknown}
 }

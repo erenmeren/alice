@@ -754,6 +754,8 @@ var kvSentinels = []struct {
 	{inventory.ErrKVCertificateMissing, "kv.certificate_not_found"},
 	{inventory.ErrVersionDisabled, "kv.version_disabled"},
 	{inventory.ErrVersionHeld, "kv.version_held"},
+	{inventory.ErrVersionSuperseded, "kv.version_superseded"},
+	{inventory.ErrWaveStopped, "kv.wave_stopped"},
 	{inventory.ErrCertificateExpired, "certificate.expired"},
 	{inventory.ErrCertificateNotYetValid, "certificate.not_yet_valid"},
 	{inventory.ErrNotFound, "system.not_found"},
@@ -1035,6 +1037,7 @@ func TestEveryInventoryRefusalOfTheVaultStepHasAReason(t *testing.T) {
 	known := map[string]error{
 		"ErrBindingGone": inventory.ErrBindingGone, "ErrAutoDeployOff": inventory.ErrAutoDeployOff, "ErrVaultUnavailable": inventory.ErrVaultUnavailable,
 		"ErrKVCertificateMissing": inventory.ErrKVCertificateMissing, "ErrVersionDisabled": inventory.ErrVersionDisabled, "ErrVersionHeld": inventory.ErrVersionHeld,
+		"ErrVersionSuperseded": inventory.ErrVersionSuperseded, "ErrWaveStopped": inventory.ErrWaveStopped,
 		"ErrCertificateExpired": inventory.ErrCertificateExpired, "ErrCertificateNotYetValid": inventory.ErrCertificateNotYetValid,
 		"ErrSecretMismatch": inventory.ErrSecretMismatch, "ErrSecretUnreadable": inventory.ErrSecretUnreadable, "ErrChainUnconfirmed": inventory.ErrChainUnconfirmed,
 		"ErrNotFound": inventory.ErrNotFound,

@@ -107,6 +107,8 @@ var kvRefusals = []struct {
 	{inventory.ErrKVCertificateMissing, inventory.ReasonCertificateMissing},
 	{inventory.ErrVersionDisabled, inventory.ReasonVersionDisabled},
 	{inventory.ErrVersionHeld, inventory.ReasonVersionHeld},
+	{inventory.ErrVersionSuperseded, inventory.ReasonVersionSuperseded},
+	{inventory.ErrWaveStopped, inventory.ReasonWaveStopped},
 	{inventory.ErrCertificateExpired, reasonExpired},
 	{inventory.ErrCertificateNotYetValid, reasonNotYetValid},
 	{inventory.ErrSecretMismatch, reasonKVMismatch},

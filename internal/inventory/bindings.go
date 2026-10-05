@@ -536,7 +536,8 @@ func (s *Service) UpdateBindingLocations(ctx context.Context, a Actor, id uuid.U
 // audited binding.denied; ruling S6: there is no weaker path than the API's Administrator and
 // step-up). Switching on is a change the license lock refuses; switching off and removing a binding
 // are safety actions that work in lock. On records auto_since (the planner deploys only versions
-// detected after it) and forgets a stopped wave; a certificate whose key the vault cannot export
+// detected after it) and clears stopped_version; that does NOT make a stopped version deployable again
+// (the new auto_since is later than it, so it stays "deploy manually": Deploy now is the way); a certificate whose key the vault cannot export
 // (ErrNotExportable) cannot be switched on. Switching on never releases a held version. ifVersion is
 // the binding's version as the caller read it; a request that changes nothing is a success without an
 // audit row. Audited binding.auto_deploy_changed.

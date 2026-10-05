@@ -40,46 +40,129 @@ func (s *Service) PlanKVAutoDeploy(ctx context.Context) (int, error) {
 	if err := s.license.Allow(license.ClassChange); err != nil {
 		return 0, nil
 	}
-	rows, err := s.pool.Query(ctx, `SELECT b.id FROM bindings b
+	run := &planRun{limit: planMailLimit, sent: map[string]int{}, over: map[string]int{}, vaults: map[string]string{}}
+	var (
+		created int
+		errs    []error
+		after   = uuid.Nil
+	)
+	for created < autoDeployBatch {
+		// Every page of candidates is read, in id order (a keyset cursor), until none is left or the run's
+		// batch is used: a binding with nothing to do stays a candidate and must not hide the later ones.
+		rows, err := s.pool.Query(ctx, `SELECT b.id FROM bindings b
 JOIN targets t ON t.id = b.kv_target_id AND t.deleted_at IS NULL AND t.status IN ('ok', 'degraded')
 JOIN kv_certificates kc ON kc.id = b.kv_certificate_id AND kc.missing_since IS NULL
 JOIN kv_certificate_versions v ON v.kv_certificate_id = kc.id AND v.version = kc.current_version
-WHERE b.deleted_at IS NULL AND (
+WHERE b.deleted_at IS NULL AND b.id > $2 AND (
     ((v.held OR NOT b.auto_deploy) AND v.notified_at IS NULL AND coalesce(v.kv_created_at, v.detected_at) > b.created_at)
  OR (b.auto_deploy AND NOT v.held AND v.version <> b.stopped_version AND EXISTS (
         SELECT 1 FROM certificate_locations l WHERE l.binding_id = b.id AND l.certificate_id IS DISTINCT FROM v.certificate_id
           AND NOT EXISTS (SELECT 1 FROM deployments d WHERE d.kv_version_id = v.id AND d.location_id = l.id AND d.status IN ('succeeded', 'unchanged')))))
-ORDER BY b.id LIMIT $1`, autoDeployBindings)
-	if err != nil {
-		return 0, fmt.Errorf("inventory: find the bindings to plan: %w", err)
-	}
-	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
-	if err != nil {
-		return 0, fmt.Errorf("inventory: find the bindings to plan: %w", err)
-	}
-	var (
-		created int
-		errs    []error
-	)
-	for _, id := range ids {
-		if created >= autoDeployBatch {
+ORDER BY b.id LIMIT $1`, autoDeployBindings, after)
+		if err != nil {
+			return created, fmt.Errorf("inventory: find the bindings to plan: %w", err)
+		}
+		ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+		if err != nil {
+			return created, fmt.Errorf("inventory: find the bindings to plan: %w", err)
+		}
+		if len(ids) == 0 {
 			break
 		}
-		n, err := s.planBinding(ctx, id, autoDeployBatch-created)
-		created += n
-		if err != nil {
-			if errors.Is(err, ErrClaimLost) || ctx.Err() != nil {
-				return created, err
+		after = ids[len(ids)-1]
+		for _, id := range ids {
+			if created >= autoDeployBatch {
+				break
 			}
-			errs = append(errs, err)
+			n, err := s.planBinding(ctx, id, autoDeployBatch-created, run)
+			created += n
+			if err != nil {
+				if errors.Is(err, ErrClaimLost) || ctx.Err() != nil {
+					return created, err
+				}
+				errs = append(errs, err)
+			}
 		}
+	}
+	if err := s.sendPlanSummaries(ctx, run); err != nil {
+		errs = append(errs, err)
 	}
 	return created, errors.Join(errs...)
 }
 
+// planRun is what one run of the planner remembers for its mail bound: per vault and kind of notice, how
+// many individual mails were sent and how many were left for the summary.
+type planRun struct {
+	limit  int
+	sent   map[string]int
+	over   map[string]int
+	vaults map[string]string // key -> vault name
+}
+
+// noticeKind groups the notice templates into the kinds the summary mails speak of.
+func noticeKind(template string) string {
+	switch template {
+	case TemplateKVNewVersion, TemplateKVNewVersionHeldLicense, TemplateKVNewVersionHeldChain:
+		return "new"
+	case TemplateKVAutoDeployStopped:
+		return "stopped"
+	}
+	return "skipped"
+}
+
+// take reports whether an individual mail of the kind may still be sent for the vault in this run; if not,
+// the notice is counted for the summary.
+func (r *planRun) take(vault uuid.UUID, vaultName, template string) bool {
+	key := vault.String() + "/" + noticeKind(template)
+	r.vaults[key] = vaultName
+	if r.sent[key] < r.limit {
+		r.sent[key]++
+		return true
+	}
+	r.over[key]++
+	return false
+}
+
+// sendPlanSummaries sends one mail per vault and kind for the notices that exceeded the bound.
+func (s *Service) sendPlanSummaries(ctx context.Context, r *planRun) error {
+	if s.notifier == nil {
+		return nil
+	}
+	for key, n := range r.over {
+		kind := key[len(key)-len(noticeKind2(key)):]
+		more, one := TemplateKVSkippedMore, TemplateKVSkippedMoreOne
+		switch kind {
+		case "new":
+			more, one = TemplateKVNewVersionsMore, TemplateKVNewVersionsMoreOne
+		case "stopped":
+			more, one = TemplateKVStoppedMore, TemplateKVStoppedMoreOne
+		}
+		tpl := more
+		if n == 1 {
+			tpl = one
+		}
+		name := r.vaults[key]
+		if err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+			return s.notifier.NotifyAdmins(ctx, tx, tpl, map[string]string{"target_name": name, "count": strconv.Itoa(n)})
+		}); err != nil {
+			return fmt.Errorf("inventory: queue the summary notice: %w", err)
+		}
+	}
+	return nil
+}
+
+func noticeKind2(key string) string {
+	for _, k := range []string{"stopped", "skipped", "new"} {
+		if len(key) > len(k) && key[len(key)-len(k):] == k {
+			return k
+		}
+	}
+	return ""
+}
+
 // planBinding plans one binding in one transaction (see the file comment). It returns the number of
 // deployments created.
-func (s *Service) planBinding(ctx context.Context, id uuid.UUID, remaining int) (int, error) {
+func (s *Service) planBinding(ctx context.Context, id uuid.UUID, remaining int, run *planRun) (int, error) {
 	created := 0
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		created = 0
@@ -173,11 +256,20 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 				if _, err := s.checkDeployLocation(ctx, tx, leaf, l, targets[l.target]); err != nil {
 					continue // no person asked: no audit row, the website is simply not ready
 				}
-				if _, err := s.insertDeployment(ctx, tx, a, leaf, l, src, now); err != nil {
+				// A savepoint per website: a refusal of the insert aborts only that website's statements.
+				sp, err := tx.Begin(ctx)
+				if err != nil {
+					return fmt.Errorf("inventory: open a savepoint: %w", err)
+				}
+				if _, err := s.insertDeployment(ctx, sp, a, leaf, l, src, now); err != nil {
+					_ = sp.Rollback(ctx)
 					if errors.Is(err, ErrDeploymentInProgress) {
 						continue
 					}
 					return err
+				}
+				if err := sp.Commit(ctx); err != nil {
+					return fmt.Errorf("inventory: release a savepoint: %w", err)
 				}
 				created++
 			}
@@ -201,7 +293,7 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 			if err != nil {
 				return fmt.Errorf("inventory: mark the notice: %w", err)
 			}
-			if s.notifier != nil {
+			if s.notifier != nil && run.take(vaultID, vaultName, n.template) {
 				if err := s.notifier.NotifyAdmins(ctx, tx, n.template, map[string]string{"target_name": vaultName, "certificate_name": certName}); err != nil {
 					return fmt.Errorf("inventory: queue the notice: %w", err)
 				}
@@ -214,7 +306,7 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 				return fmt.Errorf("inventory: stop the wave: %w", err)
 			}
 			if tag.RowsAffected() == 1 {
-				if s.notifier != nil {
+				if s.notifier != nil && run.take(vaultID, vaultName, TemplateKVAutoDeployStopped) {
 					if err := s.notifier.NotifyAdmins(ctx, tx, TemplateKVAutoDeployStopped, map[string]string{"target_name": vaultName,
 						"certificate_name": certName, "count": strconv.Itoa(p.stop.failed)}); err != nil {
 						return fmt.Errorf("inventory: queue the stop notice: %w", err)
