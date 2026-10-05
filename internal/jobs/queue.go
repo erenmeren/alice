@@ -122,6 +122,10 @@ type View struct {
 	// certificate.deploy_recover jobs, kv.import jobs); uuid.Nil for any other job, or a value that is not a UUID.
 	DeploymentID uuid.UUID
 	ImportID     uuid.UUID
+	// SSHKeyID and RotationID name the SSH key or the rotation run the job works on (its payload's ssh_key_id or
+	// rotation_id: sshkey.add and rotation.location jobs); uuid.Nil for any other job, or a value that is not a UUID.
+	SSHKeyID   uuid.UUID
+	RotationID uuid.UUID
 }
 
 // ListFilter selects jobs, newest first.
@@ -290,7 +294,8 @@ func (q *Queue) EnqueueTx(ctx context.Context, tx pgx.Tx, r inventory.JobRequest
 }
 
 const viewColumns = `id, type, kind, status, target_id, attempts, max_attempts, last_error_code, result, created_by,
-    created_at, run_at, started_at, finished_at, coalesce(payload->>'deployment_id', ''), coalesce(payload->>'import_id', '')`
+    created_at, run_at, started_at, finished_at, coalesce(payload->>'deployment_id', ''), coalesce(payload->>'import_id', ''),
+    coalesce(payload->>'ssh_key_id', ''), coalesce(payload->>'rotation_id', '')`
 
 func scanView(row pgx.Row) (View, error) {
 	var (
@@ -299,12 +304,15 @@ func scanView(row pgx.Row) (View, error) {
 		target, by *uuid.UUID
 		result     []byte
 		dep, imp   string
+		key, run   string
 	)
 	if err := row.Scan(&v.ID, &v.Type, &v.Kind, &status, &target, &v.Attempts, &v.MaxAttempts, &v.LastErrorCode, &result,
-		&by, &v.CreatedAt, &v.RunAt, &v.StartedAt, &v.FinishedAt, &dep, &imp); err != nil {
+		&by, &v.CreatedAt, &v.RunAt, &v.StartedAt, &v.FinishedAt, &dep, &imp,
+		&key, &run); err != nil {
 		return View{}, err
 	}
 	v.DeploymentID, v.ImportID = payloadID(dep), payloadID(imp)
+	v.SSHKeyID, v.RotationID = payloadID(key), payloadID(run)
 	v.Status = Status(status)
 	if target != nil {
 		v.TargetID = *target
