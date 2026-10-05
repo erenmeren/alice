@@ -1,14 +1,20 @@
 package api
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,6 +25,7 @@ import (
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
+	"alice/internal/platform/logging"
 	"alice/internal/providers"
 	"alice/locales"
 )
@@ -47,12 +54,29 @@ var inventorySentinels = map[string]error{
 	"ErrTargetNotReady": inventory.ErrTargetNotReady, "ErrDeploymentState": inventory.ErrDeploymentState,
 	"ErrCertificateNotYetValid": inventory.ErrCertificateNotYetValid, "ErrLocationNeedsDiscovery": inventory.ErrLocationNeedsDiscovery,
 	"ErrClaimLost": inventory.ErrClaimLost, "ErrCSRBusy": inventory.ErrCSRBusy, "ErrTooManyPendingCSRs": inventory.ErrTooManyPendingCSRs,
+	// Phase 5 (Tasks 10-14)
+	"ErrVaultHasBindings": inventory.ErrVaultHasBindings, "ErrNotAVault": inventory.ErrNotAVault, "ErrNotAServer": inventory.ErrNotAServer,
+	"ErrClientCertificateInvalid": inventory.ErrClientCertificateInvalid, "ErrNotExportable": inventory.ErrNotExportable,
+	"ErrVersionNotDeployable": inventory.ErrVersionNotDeployable, "ErrCredentialNotTheTargets": inventory.ErrCredentialNotTheTargets,
+	"ErrLocationBound": inventory.ErrLocationBound, "ErrBindingExists": inventory.ErrBindingExists, "ErrVersionDisabled": inventory.ErrVersionDisabled,
+	"ErrKVCertificateMissing": inventory.ErrKVCertificateMissing, "ErrHeldNeedsAdmin": inventory.ErrHeldNeedsAdmin,
+	"ErrAdminRequired": inventory.ErrAdminRequired, "ErrVersionNotHeld": inventory.ErrVersionNotHeld, "ErrSecretUnreadable": inventory.ErrSecretUnreadable,
+	"ErrSecretMismatch": inventory.ErrSecretMismatch, "ErrBindingGone": inventory.ErrBindingGone, "ErrAutoDeployOff": inventory.ErrAutoDeployOff,
+	"ErrVersionHeld": inventory.ErrVersionHeld, "ErrVaultUnavailable": inventory.ErrVaultUnavailable,
+	"ErrImportConfirmNeeded": inventory.ErrImportConfirmNeeded, "ErrImportInProgress": inventory.ErrImportInProgress,
+	"ErrImportState": inventory.ErrImportState, "ErrImportChanged": inventory.ErrImportChanged,
 }
 
 // engineOnlySentinels are returned only by the methods the deployment engine calls (StartDeployment,
 // FinishDeployment, RecordDeploymentStep, RecordOutcome, CheckClaim, ...), never by a method of
 // InventoryService: the engine reads the record again and follows it. They have no code on purpose.
-var engineOnlySentinels = []string{"ErrDeploymentState", "ErrClaimLost"}
+//
+// Phase 5: ErrBindingGone, ErrAutoDeployOff and ErrVersionHeld come from KVDeployPrecheck/KVDeployMaterial (the
+// engine ends the deployment with kv.binding_gone, kv.auto_deploy_off, kv.version_held); ErrImportState and
+// ErrImportChanged are what an import job meets; ErrCredentialNotTheTargets is the database refusing what correct
+// code never sends (Z1006). A request that somehow met one is a programming error: ALC-SYS-0003.
+var engineOnlySentinels = []string{"ErrDeploymentState", "ErrClaimLost", "ErrBindingGone", "ErrAutoDeployOff", "ErrVersionHeld",
+	"ErrImportState", "ErrImportChanged", "ErrCredentialNotTheTargets"}
 
 // exportedErrorVars returns the names of the package-level exported variables of dir's non-test
 // sources whose value is errors.New(...) or a selector (a re-exported sentinel such as certs.ErrX).
@@ -422,4 +446,285 @@ func TestTroubleshootingQuotesTheRealTitles(t *testing.T) {
 		pattern := regexp.MustCompile(`\\\{\\\{[a-z_]+\\}\\}`).ReplaceAllString(regexp.QuoteMeta(strings.TrimSuffix(title, ".")), `\S+`)
 		assert.Regexp(t, "^"+pattern+`\.?$`, quote, "%s: the guide quotes %q, the title is %q", m[2], quote, title)
 	}
+}
+
+// phase5Codes are the codes added for Phase 5 (area AKV).
+func phase5Codes() []ErrorCode {
+	var out []ErrorCode
+	for _, ec := range AllErrorCodes() {
+		if strings.HasPrefix(ec.Code, "ALC-AKV-") {
+			out = append(out, ec)
+		}
+	}
+	return out
+}
+
+// phase5Table is the contract's table (ALC-AKV-0001..0027) with the English and Turkish titles it fixes,
+// then the codes added after it (R40 candidates; their titles are this task's).
+var phase5Table = []struct {
+	code, reason, titleEN, titleTR string
+	status                         int
+	retryable                      bool
+}{
+	{"ALC-AKV-0001", "azure.auth_failed", "Azure sign-in refused", "Azure oturum açma reddedildi", 502, false},
+	{"ALC-AKV-0002", "azure.credentials_expired", "Azure sign-in secret expired", "Azure oturum açma gizli anahtarının süresi doldu", 502, false},
+	{"ALC-AKV-0003", "azure.forbidden", "Missing permission in the vault", "Kasada eksik izin", 502, false},
+	{"ALC-AKV-0004", "azure.firewall", "Vault firewall blocks Alice", "Kasa güvenlik duvarı Alice'i engelliyor", 502, false},
+	{"ALC-AKV-0005", "azure.vault_not_found", "Vault not found", "Kasa bulunamadı", 502, false},
+	{"ALC-AKV-0006", "azure.unreachable", "Cannot reach Azure", "Azure'a ulaşılamıyor", 502, true},
+	{"ALC-AKV-0007", "azure.throttled", "Azure asked Alice to slow down", "Azure, Alice'ten yavaşlamasını istedi", 503, true},
+	{"ALC-AKV-0008", "azure.unexpected_response", "Unexpected answer from Azure", "Azure'dan beklenmeyen yanıt", 502, true},
+	{"ALC-AKV-0009", "azure.clock_skew", "Server clock rejected by Azure", "Sunucu saati Azure tarafından reddedildi", 502, false},
+	{"ALC-AKV-0010", "azure.managed_identity_unavailable", "Managed identity not available", "Yönetilen kimlik kullanılamıyor", 502, false},
+	{"ALC-AKV-0011", "azure.address_not_allowed", "Azure address not allowed", "Azure adresine izin verilmiyor", 502, false},
+	{"ALC-AKV-0012", "azure.tls_untrusted", "Azure's certificate is not trusted", "Azure sertifikasına güvenilmiyor", 502, false},
+	{"ALC-AKV-0013", "kv.not_exportable", "Private key not exportable", "Özel anahtar dışa aktarılamıyor", 422, false},
+	{"ALC-AKV-0014", "kv.version_disabled", "Version disabled in Key Vault", "Sürüm Key Vault'ta devre dışı", 409, false},
+	{"ALC-AKV-0015", "kv.certificate_not_found", "Certificate no longer in the vault", "Sertifika artık kasada yok", 409, false},
+	{"ALC-AKV-0016", "kv.secret_unreadable", "Certificate data could not be read", "Sertifika verileri okunamadı", 502, false},
+	{"ALC-AKV-0017", "kv.secret_mismatch", "Vault data does not match the version", "Kasa verileri sürümle eşleşmiyor", 502, false},
+	{"ALC-AKV-0018", "kv.location_bound", "Website already connected", "Web sitesi zaten bağlı", 409, false},
+	{"ALC-AKV-0019", "kv.binding_exists", "Certificate already connected", "Sertifika zaten bağlı", 409, false},
+	{"ALC-AKV-0020", "kv.vault_has_bindings", "Vault still has connected websites", "Kasada hâlâ bağlı web siteleri var", 409, false},
+	{"ALC-AKV-0021", "kv.version_not_deployable", "Version cannot be deployed", "Sürüm dağıtılamaz", 409, false},
+	{"ALC-AKV-0022", "kv.held_needs_admin", "An administrator must deploy this version", "Bu sürümü bir yönetici dağıtmalı", 403, false},
+	{"ALC-AKV-0023", "kv.import_confirm_needed", "Name already used in the vault", "Ad kasada zaten kullanılıyor", 409, false},
+	{"ALC-AKV-0024", "kv.import_in_progress", "Import already running", "Aktarma zaten sürüyor", 409, true},
+	{"ALC-AKV-0025", "kv.import_rejected", "Key Vault refused the import", "Key Vault aktarmayı reddetti", 502, false},
+	{"ALC-AKV-0026", "kv.import_outcome_unknown", "Import outcome unknown", "Aktarmanın sonucu bilinmiyor", 502, false},
+	{"ALC-AKV-0027", "kv.client_certificate_invalid", "Sign-in certificate not usable", "Oturum açma sertifikası kullanılamıyor", 422, false},
+	{"ALC-AKV-0028", "kv.vault_duplicate", "Vault already added", "Kasa zaten eklenmiş", 409, false},
+	{"ALC-AKV-0029", "kv.import_name_exists", "A certificate with this name exists in the vault", "Bu ada sahip bir sertifika kasada var", 409, false},
+	{"ALC-AKV-0030", "kv.import_invalid", "Certificate cannot be imported", "Sertifika aktarılamıyor", 422, false},
+	{"ALC-AKV-0031", "kv.binding_gone", "Website is no longer connected", "Web sitesinin bağlantısı kaldırıldı", 409, false},
+	{"ALC-AKV-0032", "kv.auto_deploy_off", "Automatic deployment was switched off", "Otomatik dağıtım kapatıldı", 409, false},
+	{"ALC-AKV-0033", "kv.vault_unavailable", "Vault is disabled or removed", "Kasa devre dışı ya da kaldırılmış", 409, false},
+	{"ALC-AKV-0034", "kv.version_held", "Version is held", "Sürüm bekletiliyor", 409, false},
+	{"ALC-AKV-0035", "kv.version_not_held", "Version is not held", "Sürüm bekletilmiyor", 409, false},
+}
+
+// The 27 codes of the contract keep their numbers, reasons, statuses, retry flags and exact titles; the
+// codes after them are numbered in order and none is renumbered.
+func TestPhase5CodeTable(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	got := phase5Codes()
+	require.Len(t, got, len(phase5Table))
+	for i, row := range phase5Table {
+		ec := got[i]
+		assert.Equal(t, row.code, ec.Code)
+		assert.Equal(t, row.reason, ec.Reason, row.code)
+		assert.Equal(t, row.status, ec.Status, row.code)
+		assert.Equal(t, row.retryable, ec.Retryable, row.code)
+		assert.Equal(t, row.titleEN, cat.T("en", "errors."+ec.Reason+".title", nil), row.code)
+		assert.Equal(t, row.titleTR, cat.T("tr", "errors."+ec.Reason+".title", nil), row.code)
+		assert.Equal(t, ec, codeForReason(row.reason), row.code)
+		assert.Equal(t, fmt.Sprintf("ALC-AKV-%04d", i+1), ec.Code, "numbers run without a gap")
+	}
+}
+
+// Every placeholder of a Phase 5 text is a param the API lets through, EN and TR use the same ones, and no
+// placeholder carries a suffix.
+func TestPhase5TextPlaceholdersAreAllowlisted(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	for _, ec := range phase5Codes() {
+		for _, part := range []string{"title", "cause", "action"} {
+			key := "errors." + ec.Reason + "." + part
+			en, tr := cat.T("en", key, nil), cat.T("tr", key, nil)
+			enP, trP := placeholderRE.FindAllStringSubmatch(en, -1), placeholderRE.FindAllStringSubmatch(tr, -1)
+			assert.Len(t, trP, len(enP), key)
+			for _, m := range append(enP, trP...) {
+				assert.True(t, providerParamKeys[m[1]], "%s uses {{%s}}, which the API never lets through", key, m[1])
+			}
+			assert.NotRegexp(t, `\}\}[\p{L}'’]`, tr, "%s: a suffix attached to a placeholder", key)
+			assert.NotContains(t, en, "  ", key)
+		}
+	}
+}
+
+// What each producer puts in the params of a Phase 5 code (the contract's table and the provider's closed table).
+var phase5Params = map[string]map[string]string{
+	"azure.auth_failed":         {"aadsts": "7000215", "reason": "tenant_mismatch", "azure_request_id": "0192b000-0000-7000-8000-0000000000a1", "azure_code": "InvalidAuthenticationToken"},
+	"azure.credentials_expired": {"aadsts": "7000222"},
+	"azure.clock_skew":          {"aadsts": "700024"},
+	"azure.forbidden":           {"role": "Key Vault Secrets User", "model": "rbac", "azure_code": "ForbiddenByRbac"},
+	"azure.firewall":            {"client_address": "203.0.113.7"},
+	"kv.import_rejected":        {"azure_code": "BadParameter", "azure_request_id": "0192b000-0000-7000-8000-0000000000a1"},
+	"kv.import_confirm_needed":  {"certificate_name": "web-cert"},
+	"kv.location_bound":         {"location_id": "0192b000-0000-7000-8000-0000000000a1"},
+}
+
+// Binding requirement: every Phase 5 text renders without a leftover placeholder with the params its source
+// provides, through the API's own paths: classify (request refusals and provider errors), deploymentError
+// (stored deployment errors), jobJSON (stored job errors) and the vault's last error.
+func TestPhase5TextsRenderWithTheirParams(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	for _, ec := range phase5Codes() {
+		params := phase5Params[ec.Reason]
+		got, p, ok := classify(providers.NewError(ec.Reason, ec.Retryable, errors.New("cause"), params))
+		require.True(t, ok, ec.Code)
+		assert.Equal(t, ec, got)
+		renderAll(t, cat, got, p, "a provider error")
+		for k := range p {
+			assert.Contains(t, params, k)
+		}
+		dto := deploymentError(inventory.Deployment{ErrorCode: ec.Reason, ErrorParams: params})
+		require.NotNil(t, dto)
+		renderAll(t, cat, codeForReason(dto.Reason), dto.Params, "a deployment")
+		j := jobJSON(jobs.View{LastErrorCode: ec.Reason, ErrorParams: params})
+		renderAll(t, cat, codeForReason(j.Error.Reason), j.Error.Params, "a job")
+		// A stored reason without params (a vault's last error, an old record) still renders completely.
+		ref := errorRef(ec.Reason, nil)
+		require.NotNil(t, ref)
+		renderAll(t, cat, codeForReason(ref.Reason), ref.Params, "a record without params")
+	}
+	_ = phase5Params["azure.forbidden"]
+}
+
+// Every Phase 5 code is in the troubleshooting guide with its reason, cause and remedy.
+func TestPhase5CodesHaveTroubleshootingSections(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/troubleshooting.md")
+	require.NoError(t, err)
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	for _, ec := range phase5Codes() {
+		title := cat.T("en", "errors."+ec.Reason+".title", nil)
+		assert.Contains(t, string(doc), "\n## "+ec.Code+": "+title+"\n", ec.Code)
+		assert.Regexp(t, regexp.MustCompile(`(?m)^## `+ec.Code+`: .+\n\n\*\*Meaning\.\*\* .*\(HTTP `+strconv.Itoa(ec.Status)+`, reason `+"`"+regexp.QuoteMeta(ec.Reason)+"`"), string(doc), ec.Code)
+		section := troubleshootingSection(string(doc), ec.Code)
+		assert.Regexp(t, `(?m)^\*\*Likely cause\.\*\* \S`, section, ec.Code)
+		assert.Regexp(t, `(?m)^\*\*What to do\.\*\* \S`, section, ec.Code)
+	}
+	// F-41 and the roles: the guide names the three roles untranslated, with the commands to assign them.
+	section := troubleshootingSection(string(doc), "ALC-AKV-0003")
+	for _, role := range []string{"Key Vault Reader", "Key Vault Secrets User", "Key Vault Certificates Officer"} {
+		assert.Contains(t, section, role)
+	}
+	assert.Contains(t, section, "az role assignment create")
+}
+
+// The texts say what the code does (binding wording requirements of the controller's rulings).
+func TestPhase5TextsAreTruthfulAndWorded(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	en := func(key string) string { return cat.T("en", key, nil) }
+	tr := func(key string) string { return cat.T("tr", key, nil) }
+	// azure.address_not_allowed is also what a region or SDK-logging variable produces: say so, by name, in both languages.
+	for _, text := range []string{en("errors.azure.address_not_allowed.cause") + en("errors.azure.address_not_allowed.action"),
+		tr("errors.azure.address_not_allowed.cause") + tr("errors.azure.address_not_allowed.action")} {
+		for _, name := range []string{"AZURE_REGIONAL_AUTHORITY_NAME", "MSAL_FORCE_REGION", "AZURE_SDK_GO_LOGGING"} {
+			assert.Contains(t, text, name)
+		}
+	}
+	assert.Contains(t, en("errors.azure.address_not_allowed.cause"), "region")
+	assert.Contains(t, en("errors.azure.address_not_allowed.cause"), "SDK-logging")
+	// The duplicate vault message says "vault", never "server".
+	for _, part := range []string{"title", "cause", "action"} {
+		assert.NotContains(t, en("errors.kv.vault_duplicate."+part), "server")
+		assert.NotContains(t, tr("errors.kv.vault_duplicate."+part), "sunucu")
+	}
+	assert.Contains(t, en("errors.kv.vault_duplicate.title"), "Vault")
+	assert.Contains(t, tr("errors.kv.vault_duplicate.title"), "Kasa")
+	// The role is named from the param, in Azure's spelling, in both languages (F-41: "Alice needs the role").
+	assert.Contains(t, cat.T("en", "errors.azure.forbidden.action", map[string]string{"role": "Key Vault Secrets User"}), "role Key Vault Secrets User")
+	assert.Contains(t, cat.T("tr", "errors.azure.forbidden.action", map[string]string{"role": "Key Vault Secrets User"}), "Key Vault Secrets User rolünü")
+	// "Key Vault" is the product's name in Turkish too; no translated role names; no jargon from the sign-in protocol.
+	for _, ec := range phase5Codes() {
+		for _, part := range []string{"title", "cause", "action"} {
+			for lang, text := range map[string]string{"en": en("errors." + ec.Reason + "." + part), "tr": tr("errors." + ec.Reason + "." + part)} {
+				for _, bad := range []string{"Anahtar Kasası", "Key Vault Okuyucu", "Key Vault Gizli", "Key Vault Sertifika Görevlisi", "AADSTS", "MSAL", "SDK"} {
+					if ec.Reason == "azure.address_not_allowed" && (bad == "MSAL" || bad == "SDK") {
+						continue
+					}
+					assert.NotContains(t, text, bad, "%s %s %s", ec.Code, lang, part)
+				}
+			}
+		}
+	}
+	// Terminology of the contract's UI copy: Deploy now, Check now, Connected websites, Automatic deployment.
+	assert.Contains(t, en("errors.kv.auto_deploy_off.action"), "Deploy now")
+	assert.Contains(t, tr("errors.kv.auto_deploy_off.action"), "Şimdi dağıt")
+	assert.Contains(t, en("errors.kv.secret_mismatch.action"), "Check now")
+	assert.Contains(t, tr("errors.kv.secret_mismatch.action"), "Şimdi denetle")
+	// Nothing was sent / changed where that is true.
+	assert.Contains(t, en("errors.kv.secret_unreadable.cause"), "Nothing was changed on your servers")
+	assert.Contains(t, en("errors.kv.import_invalid.cause"), "Nothing was sent")
+}
+
+// The complete map of what the API answers for each Phase 5 sentinel (the task's report lists it).
+func TestPhase5SentinelMapping(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want ErrorCode
+	}{
+		{inventory.ErrVaultHasBindings, ErrKVVaultHasBindings},
+		{inventory.ErrNotAVault, ErrNotFound},
+		{inventory.ErrNotAServer, ErrNotFound},
+		{inventory.ErrClientCertificateInvalid, ErrKVClientCertInvalid},
+		{inventory.ErrNotExportable, ErrKVNotExportable},
+		{inventory.ErrVersionNotDeployable, ErrKVVersionNotDeployable},
+		{inventory.ErrLocationBound, ErrKVLocationBound},
+		{inventory.ErrBindingExists, ErrKVBindingExists},
+		{inventory.ErrVersionDisabled, ErrKVVersionDisabled},
+		{inventory.ErrKVCertificateMissing, ErrKVCertificateNotFound},
+		{inventory.ErrHeldNeedsAdmin, ErrKVHeldNeedsAdmin},
+		{inventory.ErrAdminRequired, ErrForbidden},
+		{inventory.ErrVersionNotHeld, ErrKVVersionNotHeld},
+		{inventory.ErrSecretUnreadable, ErrKVSecretUnreadable},
+		{inventory.ErrSecretMismatch, ErrKVSecretMismatch},
+		{inventory.ErrVaultUnavailable, ErrKVVaultUnavailable},
+		{inventory.ErrImportConfirmNeeded, ErrKVImportConfirmNeeded},
+		{inventory.ErrImportInProgress, ErrKVImportInProgress},
+	} {
+		got, _, ok := classify(tc.err)
+		require.True(t, ok, tc.err.Error())
+		assert.Equal(t, tc.want, got, tc.err.Error())
+	}
+	// The typed errors carry their param; the location comes from fail (D23: location_id is not a provider param).
+	_, p, ok := classify(&inventory.ImportConfirmError{CertificateName: "web-cert"})
+	require.True(t, ok)
+	assert.Equal(t, map[string]string{"certificate_name": "web-cert"}, p)
+	_, p, _ = classify(&inventory.ImportConfirmError{CertificateName: "not a name {{x}}"})
+	assert.Empty(t, p, "a name outside the grammar is never shown")
+	assert.NotContains(t, providerParamRules, "location_id")
+	assert.NotContains(t, providerParamKeys, "location_id")
+}
+
+// internal.unexpected from a provider is answered with the generic code (and logged), never with its text.
+func TestInternalUnexpectedProviderErrorMapsToTheGenericCode(t *testing.T) {
+	var logs bytes.Buffer
+	d := testDeps(t, nil)
+	d.Log = logging.New(&logs, slog.LevelDebug)
+	s := newServer(d)
+	perr := providers.NewError("internal.unexpected", false, errors.New("secret-canary-text"), map[string]string{"reason": "x"})
+	ec, _, ok := classify(perr)
+	require.True(t, ok)
+	assert.Equal(t, ErrUnexpected, ec)
+	rec := httptest.NewRecorder()
+	s.fail(rec, httptest.NewRequest(http.MethodGet, "/api/v1/targets", nil), perr)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, logs.String(), `"msg":"request failed"`)
+	assert.NotContains(t, logs.String(), "secret-canary-text")
+	assert.NotContains(t, rec.Body.String(), "secret-canary-text")
+}
+
+// The Phase 5 params pass only in their strict shapes; Azure's own text never gets through (S4).
+func TestPhase5ParamsAreStrict(t *testing.T) {
+	ok := map[string]string{
+		"role": "Key Vault Reader", "model": "access_policy", "client_address": "2001:db8::1", "aadsts": "90002",
+		"azure_code": "ForbiddenByFirewall", "azure_request_id": "0192B000-0000-7000-8000-0000000000A1", "certificate_name": "web-cert-1",
+	}
+	assert.Equal(t, ok, providerParams(ok))
+	bad := map[string]string{
+		"role": "Key Vault Administrator", "model": "other", "client_address": "999.1.1.1", "aadsts": "AADSTS7000215",
+		"azure_code": "Forbidden by policy: Client address: 203.0.113.7", "azure_request_id": "not-a-guid", "certificate_name": "web cert",
+		"message": "AADSTS7000215: Invalid client secret provided",
+	}
+	assert.Empty(t, providerParams(bad))
+	for _, role := range []string{"Key Vault Secrets User", "Key Vault Certificates Officer"} {
+		assert.Equal(t, map[string]string{"role": role}, providerParams(map[string]string{"role": role}))
+	}
+	assert.Empty(t, providerParams(map[string]string{"client_address": "1.2.3"}), "characters alone are not an address")
 }

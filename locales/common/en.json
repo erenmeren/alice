@@ -659,6 +659,185 @@
         "cause": "An earlier change of these files on the server did not finish, and Alice no longer follows it, so the server refuses new changes. Alice did not put back the files that change replaced: either it does not restore that change (Alice knows it from another website, or as a change that ended normally), or its attempt did not finish, in which case it may have put back one of the two files. This deployment's certificate was not written.",
         "action": "The deployment's details name the unfinished change (operation id). On the server, as root, run /usr/local/libexec/alice-helper nginx-restore --op followed by that id, then run nginx -t, and deploy again."
       }
+    },
+    "azure": {
+      "auth_failed": {
+        "title": "Azure sign-in refused",
+        "cause": "Alice could not sign in to Azure with these details.",
+        "action": "Check the tenant ID, application ID and secret or certificate."
+      },
+      "credentials_expired": {
+        "title": "Azure sign-in secret expired",
+        "cause": "The secret or certificate Alice uses to sign in to Azure has expired.",
+        "action": "Create a new one in Azure and replace it on the vault's page in Alice."
+      },
+      "forbidden": {
+        "title": "Missing permission in the vault",
+        "cause": "Alice is signed in to Azure, but the vault does not allow what Alice tried.",
+        "action": "Ask your Azure administrator to give Alice's identity the role {{role}} on this vault (or the matching access policy)."
+      },
+      "firewall": {
+        "title": "Vault firewall blocks Alice",
+        "cause": "The vault's firewall does not allow connections from this Alice server.",
+        "action": "Add Alice's address to the vault's allowed networks, or use a private endpoint."
+      },
+      "vault_not_found": {
+        "title": "Vault not found",
+        "cause": "The vault address cannot be found.",
+        "action": "Check the name and network access (private endpoints need internal DNS)."
+      },
+      "unreachable": {
+        "title": "Cannot reach Azure",
+        "cause": "Alice could not connect to Azure or to the vault. Nothing was changed.",
+        "action": "Check that this Alice server can reach login.microsoftonline.com and the vault's address on port 443. Alice tries again by itself."
+      },
+      "throttled": {
+        "title": "Azure asked Alice to slow down",
+        "cause": "Azure is asking Alice to slow down.",
+        "action": "Alice retries automatically; nothing to do unless this continues for an hour."
+      },
+      "unexpected_response": {
+        "title": "Unexpected answer from Azure",
+        "cause": "Azure answered in a way Alice does not understand. Nothing was changed.",
+        "action": "Alice tries again by itself. If this continues, give your administrator the request ID shown here."
+      },
+      "clock_skew": {
+        "title": "Server clock rejected by Azure",
+        "cause": "The clock on the Alice server appears to be wrong, so Azure rejected the sign-in.",
+        "action": "Correct the server's time (NTP)."
+      },
+      "managed_identity_unavailable": {
+        "title": "Managed identity not available",
+        "cause": "Alice could not get a managed identity from this machine. A managed identity exists only on an Azure virtual machine (or a similar Azure service) that has one assigned.",
+        "action": "Assign a managed identity to this machine in Azure, or sign in with a certificate or a client secret instead."
+      },
+      "address_not_allowed": {
+        "title": "Azure address not allowed",
+        "cause": "Alice connects only to Azure's public sign-in address and to the vault's own address. Either the vault's name led to an address that is not the vault's, or Alice's own environment holds a region or SDK-logging setting, which would send Azure traffic somewhere else.",
+        "action": "Check that the vault address is a public Key Vault address whose name resolves to the vault itself. Ask whoever runs Alice to remove the variables AZURE_REGIONAL_AUTHORITY_NAME, MSAL_FORCE_REGION and AZURE_SDK_GO_LOGGING from Alice's environment."
+      },
+      "tls_untrusted": {
+        "title": "Azure's certificate is not trusted",
+        "cause": "The certificate that Azure presented is not trusted by this Alice server, for example because a company proxy replaces it.",
+        "action": "Make sure Alice connects to Azure directly, without a proxy that replaces certificates, and that the server's clock is correct."
+      }
+    },
+    "kv": {
+      "not_exportable": {
+        "title": "Private key not exportable",
+        "cause": "This certificate's private key is marked non-exportable in Azure Key Vault, so Alice cannot copy it to a server.",
+        "action": "Create a new version of the certificate with 'Exportable private key' turned on, or upload a different certificate."
+      },
+      "version_disabled": {
+        "title": "Version disabled in Key Vault",
+        "cause": "This version is disabled (or expired) in Key Vault, so it was not deployed.",
+        "action": "Enable it in Key Vault or deploy another version."
+      },
+      "certificate_not_found": {
+        "title": "Certificate no longer in the vault",
+        "cause": "This certificate no longer exists in the vault.",
+        "action": "Restore it in Key Vault, or remove its connection to websites."
+      },
+      "secret_unreadable": {
+        "title": "Certificate data could not be read",
+        "cause": "The certificate data from Azure could not be read. Nothing was changed on your servers.",
+        "action": "Check the certificate's content type in Key Vault (PFX or PEM)."
+      },
+      "secret_mismatch": {
+        "title": "Vault data does not match the version",
+        "cause": "The data the vault returned is not the certificate version Alice expected (another certificate or another key). Nothing was changed on your servers.",
+        "action": "Use Check now on the vault's page, then deploy again. If this happens again, look at the certificate in Key Vault."
+      },
+      "location_bound": {
+        "title": "Website already connected",
+        "cause": "This website is already connected to a certificate in a vault, and a website can follow only one.",
+        "action": "Disconnect it from the other certificate first, or leave it out of this selection."
+      },
+      "binding_exists": {
+        "title": "Certificate already connected",
+        "cause": "This vault certificate already has connected websites.",
+        "action": "Change the websites of the existing connection instead of creating a new one."
+      },
+      "vault_has_bindings": {
+        "title": "Vault still has connected websites",
+        "cause": "Websites are still connected to certificates of this vault. Removing the vault would stop their automatic updates.",
+        "action": "Disconnect the websites first, or remove the vault together with its connections (an administrator can do this). Nothing changes on the websites themselves."
+      },
+      "version_not_deployable": {
+        "title": "Version cannot be deployed",
+        "cause": "Alice has not read the details of this version yet, or the version belongs to another certificate.",
+        "action": "Use Check now on the vault's page, then try again."
+      },
+      "held_needs_admin": {
+        "title": "An administrator must deploy this version",
+        "cause": "This version was found while the license was expired, or its certificate chain is incomplete, so only an administrator may deploy it.",
+        "action": "Ask an administrator to deploy it from the certificate's page."
+      },
+      "import_confirm_needed": {
+        "title": "Name already used in the vault",
+        "cause": "The vault already has a certificate with this name. Importing adds a new version to it and can replace its settings, including its own renewal in Key Vault.",
+        "action": "Confirm that Alice should add a new version to the existing certificate, or choose another name."
+      },
+      "import_in_progress": {
+        "title": "Import already running",
+        "cause": "An import under this name into this vault has not finished yet, or its result is not confirmed yet.",
+        "action": "Wait until it has finished. Alice shows the result on the vault's page."
+      },
+      "import_rejected": {
+        "title": "Key Vault refused the import",
+        "cause": "The vault refused the certificate, so nothing was created in it.",
+        "action": "Check that the certificate is valid and comes with its private key, and ask your Azure administrator whether the vault accepts imports from Alice. If it keeps happening, give your administrator the request ID shown here."
+      },
+      "import_outcome_unknown": {
+        "title": "Import outcome unknown",
+        "cause": "Alice sent the certificate to the vault but never learned whether the vault accepted it, and the vault's list did not show it within 24 hours.",
+        "action": "Open the vault in Azure and look for the certificate. If it is not there, import it again."
+      },
+      "client_certificate_invalid": {
+        "title": "Sign-in certificate not usable",
+        "cause": "The certificate Alice signs in with must come with an RSA private key of at least 2048 bits.",
+        "action": "Use a certificate with an RSA key of 2048 bits or more that is registered with the application in Azure."
+      },
+      "vault_duplicate": {
+        "title": "Vault already added",
+        "cause": "Alice already has a vault with this name or this address.",
+        "action": "Choose another name, or open the vault that already exists."
+      },
+      "import_name_exists": {
+        "title": "A certificate with this name exists in the vault",
+        "cause": "When Alice sent the import, the vault already had a certificate with this name, so nothing was imported.",
+        "action": "Use Check now on the vault's page, then import again and confirm that a new version may be added, or choose another name."
+      },
+      "import_invalid": {
+        "title": "Certificate cannot be imported",
+        "cause": "Alice could not prepare this certificate for Key Vault: its name, its key or its file is outside what Key Vault accepts. Nothing was sent.",
+        "action": "Use a name of letters, digits and hyphens (up to 127 characters), and a certificate with an RSA or ECDSA private key, then try again."
+      },
+      "binding_gone": {
+        "title": "Website is no longer connected",
+        "cause": "The website was disconnected from this vault certificate before the deployment started, so nothing was deployed.",
+        "action": "Connect the website again if it should follow the certificate."
+      },
+      "auto_deploy_off": {
+        "title": "Automatic deployment was switched off",
+        "cause": "Automatic deployment of this certificate was switched off before this deployment started, so nothing was deployed.",
+        "action": "Use Deploy now, or switch automatic deployment on again."
+      },
+      "vault_unavailable": {
+        "title": "Vault is disabled or removed",
+        "cause": "The vault is disabled or was removed from Alice, so Alice cannot read its certificate.",
+        "action": "Check the vault's status in Alice, or add the vault again."
+      },
+      "version_held": {
+        "title": "Version is held",
+        "cause": "This version is held until an administrator releases it, so it is not deployed automatically.",
+        "action": "An administrator can deploy it from the certificate's page."
+      },
+      "version_not_held": {
+        "title": "Version is not held",
+        "cause": "This version is not held, so there is nothing to release.",
+        "action": "Reload the page to see the version's current state."
+      }
     }
   },
   "validation": {

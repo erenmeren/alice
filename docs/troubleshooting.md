@@ -191,6 +191,21 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   reads at most 1000 certificate files and 16 MiB of website summary per server; such servers are not fully managed
   in this release.
 
+## Key Vault
+
+- **A vault shows "Partly working", "Credentials refused" or "Cannot reach Azure".** Open the vault and read the
+  **Access check**: each row says what Alice may do and, for a missing permission, which Azure role to give
+  (`ALC-AKV-0003`). Alice checks a vault every 15 minutes by default (**Check now** runs one at once); a vault that
+  fails is checked less often, at most once an hour.
+- **A website did not get the renewed certificate.** Open the vault certificate: **Connected websites** shows each
+  website's state, and **Automatic deployment** must be on. A version found while the license was expired is held for
+  an administrator (`ALC-AKV-0022`); a version that is disabled, expired, not yet valid or older than the website's
+  certificate is skipped and Alice emails once. After three failed deployments of one version Alice stops that
+  version's wave and emails once (`Stopped after 3 failures`).
+- **An import says "Not confirmed yet".** Alice sent the certificate and did not get the vault's answer. It never
+  sends it again by itself: the next check settles it as **Imported** when it sees the certificate, and after
+  24 hours as outcome unknown (`ALC-AKV-0026`).
+
 ## License messages
 
 - **"The server clock changed unexpectedly …"** The server's clock is behind the latest time Alice has seen. Alice
@@ -1334,3 +1349,283 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 **Likely cause.** The earlier change was interrupted on the server (for example the helper was killed after replacing the files), and Alice had stopped following it: its outcome was recorded as unknown, the server was deleted and added again, or Alice's database was restored. The new deployment found the files blocked, restored them, and then could not write its own certificate, typically because the files no longer held what Alice had last read (it had read the earlier change's files).
 
 **What to do.** Choose **Discover** on the server's page so that Alice reads the files again, then deploy the certificate again.
+
+## ALC-AKV-0001: Azure sign-in refused
+
+**Meaning.** Azure refused Alice's sign-in with the details of this vault (the parameter `aadsts` carries Entra's AADSTS number when Azure sent one). (HTTP 502, reason `azure.auth_failed`.)
+
+**Likely cause.** A wrong tenant ID, application ID, secret or certificate; a secret that was deleted and re-created; an application that belongs to another directory (reason `tenant_mismatch`); a certificate that is not registered with the application. `AADSTS7000215` is a wrong secret, `AADSTS700016` an unknown application, `AADSTS90002` an unknown tenant, `AADSTS700027` a certificate Azure does not know.
+
+**What to do.** Open the vault in Alice and choose **Replace credentials**. Copy the directory (tenant) ID and the application (client) ID from the application's overview page in Azure. For a secret, copy its **value** (not its ID) right after creating it; for a certificate, upload the certificate that is registered under the application's **Certificates & secrets**. After three failed sign-ins in a row Alice emails the administrators once.
+
+## ALC-AKV-0002: Azure sign-in secret expired
+
+**Meaning.** The client secret or certificate Alice signs in with has expired (`AADSTS7000222`). (HTTP 502, reason `azure.credentials_expired`.)
+
+**Likely cause.** Azure secrets and certificates have an end date. The vault page shows the date you typed when you added the vault.
+
+**What to do.** Create a new secret or certificate for the application in Azure, then choose **Replace credentials** on the vault's page in Alice. Websites keep serving their current certificates in the meantime; only new versions are not noticed.
+
+## ALC-AKV-0003: Missing permission in the vault
+
+**Meaning.** Alice is signed in to Azure, but the vault refuses what Alice tried. The parameter `role` names the Azure role that would allow it and `model` says whether the vault uses Azure roles (`rbac`) or access policies (`access_policy`). (HTTP 502, reason `azure.forbidden`.)
+
+**Likely cause.** Alice's identity lacks a role on this vault. The vault page's **Access check** shows which row is not allowed. Alice needs `Key Vault Reader` to list and monitor certificates, keys and secrets; `Key Vault Secrets User` to read a certificate's private key when it deploys to a website (F-41: before anything is sent to a server); `Key Vault Certificates Officer` to import a certificate into the vault.
+
+**What to do.** Ask your Azure administrator to assign the role named in the message to Alice's identity (the object ID is shown on the vault's page) on this vault, for example `az role assignment create --assignee-object-id <object ID> --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" --scope <vault resource ID>`, and the same with `"Key Vault Reader"` or `"Key Vault Certificates Officer"`. A vault that uses access policies needs the matching permissions instead (list and get on certificates, keys and secrets; import on certificates). Role assignments can take a few minutes to apply; then choose **Check again** on the vault's page. Alice cannot confirm that `Key Vault Reader` alone is enough on every vault: it is expected to be, and the access check tells.
+
+## ALC-AKV-0004: Vault firewall blocks Alice
+
+**Meaning.** The vault's own firewall refused the connection from this Alice server (the parameter `client_address` names the address the vault saw, when Azure told). (HTTP 502, reason `azure.firewall`.)
+
+**Likely cause.** The vault allows only selected networks, and the address of this Alice server is not among them.
+
+**What to do.** Add the address to the vault's **Networking** allow list in Azure, or reach the vault through a private endpoint (the vault's name must then resolve to the endpoint's address on this Alice server). Then choose **Check now**.
+
+## ALC-AKV-0005: Vault not found
+
+**Meaning.** The vault's address could not be found. (HTTP 502, reason `azure.vault_not_found`.)
+
+**Likely cause.** A misspelled name, a vault that was deleted (or is soft-deleted and purged), or a private endpoint whose name does not resolve on the Alice server.
+
+**What to do.** Check the name against the vault's overview page in Azure (it must end in `.vault.azure.net`). With a private endpoint, make sure the Alice server's DNS resolves the vault's name to the endpoint.
+
+## ALC-AKV-0006: Cannot reach Azure
+
+**Meaning.** Alice could not connect to Azure or to the vault. Nothing was changed. (Retryable.) (HTTP 502, reason `azure.unreachable`.)
+
+**Likely cause.** A network problem between this Alice server and `login.microsoftonline.com` or the vault (port 443), a DNS failure, or an Azure outage.
+
+**What to do.** Check that the Alice server reaches both hosts on port 443 and that DNS works. Alice tries again at the vault's next check; the vault shows **Cannot reach Azure** until then.
+
+## ALC-AKV-0007: Azure asked Alice to slow down
+
+**Meaning.** Azure asked Alice to slow down (HTTP 429). Alice waits as Azure says and tries again. (Retryable.) (HTTP 503, reason `azure.throttled`.)
+
+**Likely cause.** Many requests to the same vault or tenant in a short time, possibly from other programs.
+
+**What to do.** Nothing, unless this continues for an hour: then reduce other programs' use of the vault, or raise the vault's check interval.
+
+## ALC-AKV-0008: Unexpected answer from Azure
+
+**Meaning.** Azure answered in a way Alice does not understand. Nothing was changed. (Retryable.) (HTTP 502, reason `azure.unexpected_response`.)
+
+**Likely cause.** A temporary Azure fault (a 5xx answer, a cut-off body), a proxy that changes answers, or a change in Azure that Alice does not know yet.
+
+**What to do.** Wait for the next check. If this continues, quote the request ID shown with the message (and the Azure request ID in the parameter `azure_request_id`, when present) to your administrator.
+
+## ALC-AKV-0009: Server clock rejected by Azure
+
+**Meaning.** Azure rejected the sign-in because the clock of the Alice server is too far from the true time (`AADSTS700024`). (HTTP 502, reason `azure.clock_skew`.)
+
+**Likely cause.** The Alice server's time is wrong, for example a virtual machine that was suspended.
+
+**What to do.** Correct the time of the Alice server (run an NTP client), then choose **Check now**.
+
+## ALC-AKV-0010: Managed identity not available
+
+**Meaning.** Alice could not get a managed identity from the machine it runs on. (HTTP 502, reason `azure.managed_identity_unavailable`.)
+
+**Likely cause.** Managed identity works only on an Azure virtual machine (or a similar Azure service) that has a managed identity assigned; Alice reads it from the machine's own metadata address (169.254.169.254) and nowhere else.
+
+**What to do.** Assign a system-assigned or user-assigned managed identity to the machine in Azure (for a user-assigned one, enter its application ID in Alice), give it the vault roles, or replace the credentials with a certificate or a client secret.
+
+## ALC-AKV-0011: Azure address not allowed
+
+**Meaning.** Alice refused to connect to an address that is not Azure's, or its own environment holds a setting that would send Azure traffic elsewhere. (HTTP 502, reason `azure.address_not_allowed`.)
+
+**Likely cause.** Alice connects only to `login.microsoftonline.com` and to the vault's own address, and refuses private-network answers for names that are not the vault's. This message also appears when `AZURE_REGIONAL_AUTHORITY_NAME`, `MSAL_FORCE_REGION` or `AZURE_SDK_GO_LOGGING` is set in Alice's environment: Alice refuses to sign in to Azure then, because those settings send traffic to other hosts or print Azure's answers to the log.
+
+**What to do.** Check that the vault's name resolves to the vault (a private endpoint's address is allowed for the vault's own name). Ask whoever runs Alice to remove the three variables above from Alice's environment (compose file, service unit or orchestrator) and restart Alice.
+
+## ALC-AKV-0012: Azure's certificate is not trusted
+
+**Meaning.** The certificate Azure presented is not trusted by this Alice server. (HTTP 502, reason `azure.tls_untrusted`.)
+
+**Likely cause.** A proxy or firewall that inspects TLS and replaces Azure's certificate, a missing CA bundle in the container, or a wrong clock on the Alice server. Alice trusts the operating system's public roots only (a company root is not added by this version).
+
+**What to do.** Let Alice reach Azure directly, or exempt `login.microsoftonline.com` and the vault's name from inspection. Check the server's time.
+
+## ALC-AKV-0013: Private key not exportable
+
+**Meaning.** The vault certificate's private key is marked non-exportable, so Alice cannot read it from the vault and cannot copy it to a server. A connection to websites, automatic deployment and **Deploy now** are refused for it. (HTTP 422, reason `kv.not_exportable`.)
+
+**Likely cause.** The certificate's policy in Key Vault has **Exportable private key** turned off (or the key is in a managed HSM).
+
+**What to do.** Create a new version with an exportable key (change the policy, then renew), or use a different certificate. A monitor-only certificate still shows its versions and expiry.
+
+## ALC-AKV-0014: Version disabled in Key Vault
+
+**Meaning.** The version is disabled (or expired) in Key Vault, so Alice did not deploy it. (HTTP 409, reason `kv.version_disabled`.)
+
+**Likely cause.** Someone disabled the version in Key Vault, or it has expired.
+
+**What to do.** Enable the version in Key Vault and choose **Check now**, or deploy another version.
+
+## ALC-AKV-0015: Certificate no longer in the vault
+
+**Meaning.** The certificate no longer exists in the vault (or the vault's list no longer shows it). (HTTP 409, reason `kv.certificate_not_found`.)
+
+**Likely cause.** It was deleted (or soft-deleted) in Key Vault.
+
+**What to do.** Restore (recover) it in Key Vault and choose **Check now**, or remove its connection to websites. Websites keep their current certificate.
+
+## ALC-AKV-0016: Certificate data could not be read
+
+**Meaning.** The certificate data Alice read from the vault could not be used. Nothing was changed on any server. (HTTP 502, reason `kv.secret_unreadable`.)
+
+**Likely cause.** The vault returned a certificate without a private key, a content type that is neither PFX nor PEM, an empty or too large value, or a key that does not fit its certificate.
+
+**What to do.** Check the certificate's content type and policy in Key Vault (PFX or PEM, exportable key), create a new version if needed, and deploy again.
+
+## ALC-AKV-0017: Vault data does not match the version
+
+**Meaning.** What the vault returned is not the version Alice recorded (another leaf certificate, thumbprint or key type). Nothing was changed on any server. (HTTP 502, reason `kv.secret_mismatch`.)
+
+**Likely cause.** The certificate was renewed or replaced between Alice's last check and the deployment, or the vault serves different data for the version.
+
+**What to do.** Choose **Check now** on the vault's page and deploy the new current version.
+
+## ALC-AKV-0018: Website already connected
+
+**Meaning.** The website (certificate location) is already connected to a vault certificate. The parameter `location_id` names it. Nothing was connected. (HTTP 409, reason `kv.location_bound`.)
+
+**Likely cause.** A website follows at most one vault certificate.
+
+**What to do.** Disconnect the website from its other certificate first, or leave it out of this selection.
+
+## ALC-AKV-0019: Certificate already connected
+
+**Meaning.** The vault certificate already has connected websites. (HTTP 409, reason `kv.binding_exists`.)
+
+**Likely cause.** A certificate has one connection with a set of websites.
+
+**What to do.** Change the websites of the existing connection (**Connected websites**) instead of creating another.
+
+## ALC-AKV-0020: Vault still has connected websites
+
+**Meaning.** The vault still has certificates with connected websites, so it was not removed. (HTTP 409, reason `kv.vault_has_bindings`.)
+
+**Likely cause.** Removing the vault would stop the automatic updates of those websites.
+
+**What to do.** Disconnect the websites first, or remove the vault together with its connections (an administrator with a fresh verification code can choose that). Nothing changes on the websites or in Azure.
+
+## ALC-AKV-0021: Version cannot be deployed
+
+**Meaning.** Alice cannot deploy this version: it has not read the version's details yet, or it belongs to another certificate than the connection's. (HTTP 409, reason `kv.version_not_deployable`.)
+
+**Likely cause.** A brand-new version that the next check has not described yet, or a request for a version of another certificate.
+
+**What to do.** Choose **Check now** on the vault's page, wait for it to finish, and try again.
+
+## ALC-AKV-0022: An administrator must deploy this version
+
+**Meaning.** The version is held: it was found while the license was expired, or its certificate chain is incomplete. Only an administrator may deploy or release a held version. (HTTP 403, reason `kv.held_needs_admin`.)
+
+**Likely cause.** Alice never deploys a version found during a license lock by itself, and an incomplete chain needs a person's confirmation.
+
+**What to do.** Ask an administrator to open the certificate and choose **Deploy now** (with a fresh verification code), or to release the version.
+
+## ALC-AKV-0023: Name already used in the vault
+
+**Meaning.** The vault already has a certificate with this name (the parameter `certificate_name`). Alice imports into an existing name only after an explicit confirmation, because it adds a new version and can replace the certificate's settings, including its own renewal in Key Vault. Nothing was sent. (HTTP 409, reason `kv.import_confirm_needed`.)
+
+**Likely cause.** A certificate of that name is in the vault's inventory.
+
+**What to do.** Confirm that a new version may be added (an administrator), or choose another name.
+
+## ALC-AKV-0024: Import already running
+
+**Meaning.** An import under this name into this vault is queued, running or not confirmed yet. (Retryable.) (HTTP 409, reason `kv.import_in_progress`.)
+
+**Likely cause.** A previous request for the same name has not finished; an import whose answer was lost stays open until a check sees it or 24 hours pass.
+
+**What to do.** Wait until it has finished (the vault's page shows its state), then try again.
+
+## ALC-AKV-0025: Key Vault refused the import
+
+**Meaning.** The vault refused the import with a well-formed refusal (the parameter `azure_code` carries Azure's error code when it matches a strict shape). Nothing was created. (HTTP 502, reason `kv.import_rejected`.)
+
+**Likely cause.** The certificate's key or policy is not accepted, the vault's policy forbids the import, or the vault is not in a state to accept it.
+
+**What to do.** Check the certificate (valid, with its private key, RSA or ECDSA) and the vault's policies; quote the request ID and the Azure code to your Azure administrator.
+
+## ALC-AKV-0026: Import outcome unknown
+
+**Meaning.** Alice sent the import but never learned whether the vault accepted it, and no check saw the certificate within 24 hours. Alice never sends it again by itself. (HTTP 502, reason `kv.import_outcome_unknown`.)
+
+**Likely cause.** The connection broke after the request reached Azure, or Azure did not answer.
+
+**What to do.** Open the vault in Azure and look for the certificate by its name and thumbprint. If it is there, nothing more is needed; if not, import it again.
+
+## ALC-AKV-0027: Sign-in certificate not usable
+
+**Meaning.** The certificate Alice would sign in with has no usable key. (HTTP 422, reason `kv.client_certificate_invalid`.)
+
+**Likely cause.** Azure application certificates for Alice must be RSA keys of 2048 bits or more, and the file must contain the private key (PEM or PFX).
+
+**What to do.** Create a certificate with an RSA key of at least 2048 bits, register its public part with the application in Azure, and give Alice the certificate and its key.
+
+## ALC-AKV-0028: Vault already added
+
+**Meaning.** A vault with this name or address is already added (a vault counts once, whatever its sign-in). (HTTP 409, reason `kv.vault_duplicate`.)
+
+**Likely cause.** Names are unique across servers and vaults, and a vault address can be added only once.
+
+**What to do.** Choose another name, or open the vault that already exists.
+
+## ALC-AKV-0029: A certificate with this name exists in the vault
+
+**Meaning.** When Alice sent the import, the vault already had a certificate with this name that Alice did not know about yet. Nothing was imported. (HTTP 409, reason `kv.import_name_exists`.)
+
+**Likely cause.** The certificate appeared in the vault after Alice's last check.
+
+**What to do.** Choose **Check now**, then import again and confirm that a new version may be added, or choose another name.
+
+## ALC-AKV-0030: Certificate cannot be imported
+
+**Meaning.** Alice could not prepare the import: the name, the key or the file is outside what Key Vault accepts. Nothing was sent. (HTTP 422, reason `kv.import_invalid`.)
+
+**Likely cause.** A name with characters other than letters, digits and hyphens (1 to 127), a key that is not RSA or ECDSA, or a file that cannot be read.
+
+**What to do.** Use a valid name and a certificate with an RSA or ECDSA private key, then try again.
+
+## ALC-AKV-0031: Website is no longer connected
+
+**Meaning.** The website was disconnected from the vault certificate before the deployment started, so nothing was read from the vault and nothing was sent. (HTTP 409, reason `kv.binding_gone`.)
+
+**Likely cause.** Someone removed the connection or released the website after the deployment was queued.
+
+**What to do.** Connect the website again if it should follow the certificate.
+
+## ALC-AKV-0032: Automatic deployment was switched off
+
+**Meaning.** An automatic deployment did not run because automatic deployment of the connection was switched off after it was queued. Nothing was sent. (HTTP 409, reason `kv.auto_deploy_off`.)
+
+**Likely cause.** An administrator switched **Automatic deployment** off (this stays possible while the license is expired).
+
+**What to do.** Deploy by hand with **Deploy now**, or switch automatic deployment on again.
+
+## ALC-AKV-0033: Vault is disabled or removed
+
+**Meaning.** The vault is disabled or was removed from Alice, so its certificate cannot be read. (HTTP 409, reason `kv.vault_unavailable`.)
+
+**Likely cause.** The vault was disabled or deleted while a deployment was waiting.
+
+**What to do.** Check the vault's status on the **Key Vaults** page, or add it again.
+
+## ALC-AKV-0034: Version is held
+
+**Meaning.** The version is held, so the deployment did not start. Nothing was sent. (HTTP 409, reason `kv.version_held`.)
+
+**Likely cause.** A version found during a license lock, or with an incomplete chain, is held until an administrator releases it.
+
+**What to do.** An administrator can open the certificate and deploy or release the version.
+
+## ALC-AKV-0035: Version is not held
+
+**Meaning.** The version is not held, so there is nothing to release. (HTTP 409, reason `kv.version_not_held`.)
+
+**Likely cause.** It was released already (possibly by someone else a moment ago), or it was never held.
+
+**What to do.** Reload the certificate's page.

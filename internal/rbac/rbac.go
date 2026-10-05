@@ -99,6 +99,12 @@ const (
 
 	// Phase 4 (R38 item 12, §15.4).
 	CertificatesOperate Permission = "certificates.operate" // upload, signing requests, deploy: Admin and Operator
+
+	// Phase 5 (R40 row 11, S6). What can hand Azure a way into Alice or move a private key out of it:
+	// adding a Key Vault and replacing its sign-in credentials, switching automatic deployment,
+	// releasing a held version and importing a certificate into a vault. Admin with step-up, never an
+	// API token. (Not only credentials: the one policy keeps every such action in one place.)
+	CredentialsManage Permission = "credentials.manage"
 )
 
 // Policy describes who may use a permission.
@@ -134,6 +140,8 @@ var policies = map[Permission]Policy{
 	JobsConfirm:      {Roles: []Role{Admin}},
 
 	CertificatesOperate: {Roles: []Role{Admin, Operator}, TokenScope: ScopeOperate},
+
+	CredentialsManage: {Roles: []Role{Admin}, StepUp: true},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.

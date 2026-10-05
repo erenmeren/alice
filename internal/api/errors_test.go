@@ -89,8 +89,8 @@ var reasonCalls = map[string]int{"Fail": 0, "Attention": 0, "Retry": 0, "NewErro
 // error that a person cannot act on (contract: target.invalid_config maps to ALC-SYS-0003).
 var unregisteredReasons = map[string]bool{"target.invalid_config": true, "license.unclassified": true}
 
-// reasonShapeRE matches the stored reasons of the Phase 3 and Phase 4 areas.
-var reasonShapeRE = regexp.MustCompile(`^(ssh|sshkey|target|job|hostkey|nginx|certificate|csr|deployment)\.[a-z_]+$`)
+// reasonShapeRE matches the stored reasons of the Phase 3, 4 and 5 areas (azure and kv: D40).
+var reasonShapeRE = regexp.MustCompile(`^(ssh|sshkey|target|job|hostkey|nginx|certificate|csr|deployment|azure|kv)\.[a-z_]+$`)
 
 // notReasons are reason-shaped literals that are audit actions, job types or email templates.
 var notReasons = map[string]bool{
@@ -113,6 +113,16 @@ var notReasons = map[string]bool{
 	// Phase 4 email templates (deployment.rollback_failed, outcome_unknown, restored_unverified and superseded are also
 	// reasons and stay checked)
 	"deployment.failed": true, "deployment.needs_attention": true, "deployment.needs_attention_unconfirmed": true,
+	// Phase 5 job types (D40)
+	"kv.test_connection": true, "kv.poll": true, "kv.import": true, "kv.schedule": true, "kv.auto_deploy": true,
+	// Phase 5 audit action
+	"kv.secret_read": true,
+	// Phase 5 email templates (kv.import_outcome_unknown is also a reason and stays checked)
+	"kv.auth_failed": true, "kv.certificate_removed": true, "kv.certificate_removed_bound": true, "kv.certificates_removed_more": true,
+	"kv.certificates_removed_more_one": true, "kv.new_version_available": true, "kv.new_version_held_license": true,
+	"kv.new_version_held_chain": true, "kv.version_skipped_manual": true, "kv.version_skipped_disabled": true,
+	"kv.version_skipped_expired": true, "kv.version_skipped_not_yet_valid": true, "kv.version_skipped_older": true,
+	"kv.version_skipped_superseded": true, "kv.auto_deploy_stopped": true, "kv.import_failed": true,
 }
 
 // storedReasons collects the literal reasons (and package string constants) passed to reasonCalls
@@ -196,7 +206,7 @@ func storedReasons(t *testing.T, dir string) map[string]string {
 func TestJobResultReasonsAreRegistered(t *testing.T) {
 	seen := 0
 	for _, dir := range []string{"../jobs", "../jobs/targetjobs", "../providers", "../providers/linuxssh", "../inventory",
-		"../providers/nginx", "../jobs/deployjobs", "../certs"} {
+		"../providers/nginx", "../jobs/deployjobs", "../certs", "../providers/azurekv", "../jobs/kvjobs"} {
 		for reason, pos := range storedReasons(t, dir) {
 			seen++
 			if reason == "" || unregisteredReasons[reason] { // "" settles a success

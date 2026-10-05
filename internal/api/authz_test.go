@@ -66,6 +66,9 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 	rbac.JobsConfirm:      row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 
 	rbac.CertificatesOperate: row(unau, unau, unau, unau, unau, allw, allw, forb, allw, allw, forb, forb, allw, forb, allw),
+
+	// Phase 5: Administrator with a fresh step-up only, never an API token (S6).
+	rbac.CredentialsManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {

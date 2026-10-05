@@ -659,6 +659,185 @@
         "cause": "Bu dosyalarda sunucuda yapılan önceki bir değişiklik tamamlanmadı ve Alice onu artık izlemiyor; bu yüzden sunucu yeni değişiklikleri reddediyor. Alice o değişikliğin yerini aldığı dosyaları geri koymadı: ya o değişikliği geri almaz (Alice onu başka bir web sitesinden ya da normal biten bir değişiklik olarak tanır) ya da denemesi tamamlanmadı; bu durumda iki dosyadan birini geri koymuş olabilir. Bu dağıtımın sertifikası yazılmadı.",
         "action": "Dağıtımın ayrıntıları tamamlanmamış değişikliği (işlem kimliği) gösterir. Sunucuda root olarak /usr/local/libexec/alice-helper nginx-restore --op komutunu bu kimlikle çalıştırın, ardından nginx -t komutunu çalıştırın ve yeniden dağıtın."
       }
+    },
+    "azure": {
+      "auth_failed": {
+        "title": "Azure oturum açma reddedildi",
+        "cause": "Alice, bu bilgilerle Azure'da oturum açamadı.",
+        "action": "Dizin (kiracı) kimliğini, uygulama kimliğini ve gizli anahtarı ya da sertifikayı denetleyin."
+      },
+      "credentials_expired": {
+        "title": "Azure oturum açma gizli anahtarının süresi doldu",
+        "cause": "Alice'in Azure'da oturum açmak için kullandığı gizli anahtarın ya da sertifikanın süresi doldu.",
+        "action": "Azure'da yenisini oluşturun ve Alice'te kasanın sayfasında değiştirin."
+      },
+      "forbidden": {
+        "title": "Kasada eksik izin",
+        "cause": "Alice Azure'da oturum açtı ancak kasa, Alice'in denediği işleme izin vermiyor.",
+        "action": "Azure yöneticinizden Alice'in kimliğine bu kasada {{role}} rolünü (ya da karşılığı olan erişim ilkesini) vermesini isteyin."
+      },
+      "firewall": {
+        "title": "Kasa güvenlik duvarı Alice'i engelliyor",
+        "cause": "Kasanın güvenlik duvarı bu Alice sunucusundan gelen bağlantılara izin vermiyor.",
+        "action": "Alice'in adresini kasanın izin verilen ağlarına ekleyin ya da özel uç nokta kullanın."
+      },
+      "vault_not_found": {
+        "title": "Kasa bulunamadı",
+        "cause": "Kasa adresi bulunamıyor.",
+        "action": "Adı ve ağ erişimini denetleyin (özel uç noktalar iç DNS gerektirir)."
+      },
+      "unreachable": {
+        "title": "Azure'a ulaşılamıyor",
+        "cause": "Alice, Azure'a ya da kasaya bağlanamadı. Hiçbir şey değiştirilmedi.",
+        "action": "Bu Alice sunucusunun login.microsoftonline.com adresine ve kasanın adresine 443 numaralı bağlantı noktasından ulaşabildiğini denetleyin. Alice kendiliğinden yeniden dener."
+      },
+      "throttled": {
+        "title": "Azure, Alice'ten yavaşlamasını istedi",
+        "cause": "Azure, Alice'ten yavaşlamasını istiyor.",
+        "action": "Alice otomatik olarak yeniden dener; bu bir saat boyunca sürmedikçe yapmanız gereken bir şey yok."
+      },
+      "unexpected_response": {
+        "title": "Azure'dan beklenmeyen yanıt",
+        "cause": "Azure, Alice'in anlamadığı bir yanıt verdi. Hiçbir şey değiştirilmedi.",
+        "action": "Alice kendiliğinden yeniden dener. Sürerse burada görünen istek kimliğini yöneticinize iletin."
+      },
+      "clock_skew": {
+        "title": "Sunucu saati Azure tarafından reddedildi",
+        "cause": "Alice sunucusunun saati yanlış görünüyor; bu yüzden Azure oturum açmayı reddetti.",
+        "action": "Sunucunun saatini düzeltin (NTP)."
+      },
+      "managed_identity_unavailable": {
+        "title": "Yönetilen kimlik kullanılamıyor",
+        "cause": "Alice bu makineden yönetilen kimlik alamadı. Yönetilen kimlik yalnızca, kimlik atanmış bir Azure sanal makinesinde (ya da benzer bir Azure hizmetinde) bulunur.",
+        "action": "Azure'da bu makineye bir yönetilen kimlik atayın ya da bunun yerine sertifika veya istemci gizli anahtarıyla oturum açın."
+      },
+      "address_not_allowed": {
+        "title": "Azure adresine izin verilmiyor",
+        "cause": "Alice yalnızca Azure'ın herkese açık oturum açma adresine ve kasanın kendi adresine bağlanır. Ya kasanın adı kasanın kendisine ait olmayan bir adrese çıktı ya da Alice'in kendi ortamında bölge veya SDK günlüğü ayarı var; bu ayarlar Azure trafiğini başka yere yönlendirirdi.",
+        "action": "Kasa adresinin, adı kasanın kendisine çıkan herkese açık bir Key Vault adresi olduğunu denetleyin. Alice'i çalıştıran kişiden AZURE_REGIONAL_AUTHORITY_NAME, MSAL_FORCE_REGION ve AZURE_SDK_GO_LOGGING değişkenlerini Alice'in ortamından kaldırmasını isteyin."
+      },
+      "tls_untrusted": {
+        "title": "Azure sertifikasına güvenilmiyor",
+        "cause": "Azure'ın sunduğu sertifikaya bu Alice sunucusu güvenmiyor; örneğin bir kurumsal vekil sunucu onu değiştiriyor olabilir.",
+        "action": "Alice'in Azure'a doğrudan, sertifikaları değiştiren bir vekil sunucu olmadan bağlandığından ve sunucunun saatinin doğru olduğundan emin olun."
+      }
+    },
+    "kv": {
+      "not_exportable": {
+        "title": "Özel anahtar dışa aktarılamıyor",
+        "cause": "Bu sertifikanın özel anahtarı Azure Key Vault'ta dışa aktarılamaz olarak işaretli; bu yüzden Alice onu bir sunucuya kopyalayamaz.",
+        "action": "'Dışa aktarılabilir özel anahtar' seçeneği açık olan yeni bir sertifika sürümü oluşturun ya da başka bir sertifika yükleyin."
+      },
+      "version_disabled": {
+        "title": "Sürüm Key Vault'ta devre dışı",
+        "cause": "Bu sürüm Key Vault'ta devre dışı (ya da süresi dolmuş); bu yüzden dağıtılmadı.",
+        "action": "Sürümü Key Vault'ta etkinleştirin ya da başka bir sürümü dağıtın."
+      },
+      "certificate_not_found": {
+        "title": "Sertifika artık kasada yok",
+        "cause": "Bu sertifika artık kasada bulunmuyor.",
+        "action": "Sertifikayı Key Vault'ta geri yükleyin ya da web sitelerine bağlantısını kaldırın."
+      },
+      "secret_unreadable": {
+        "title": "Sertifika verileri okunamadı",
+        "cause": "Azure'dan gelen sertifika verileri okunamadı. Sunucularınızda hiçbir şey değiştirilmedi.",
+        "action": "Sertifikanın Key Vault'taki içerik türünü denetleyin (PFX veya PEM)."
+      },
+      "secret_mismatch": {
+        "title": "Kasa verileri sürümle eşleşmiyor",
+        "cause": "Kasanın döndürdüğü veriler Alice'in beklediği sertifika sürümü değil (başka bir sertifika ya da başka bir anahtar). Sunucularınızda hiçbir şey değiştirilmedi.",
+        "action": "Kasanın sayfasındaki Şimdi denetle düğmesini kullanın, ardından yeniden dağıtın. Yine olursa sertifikaya Key Vault'ta bakın."
+      },
+      "location_bound": {
+        "title": "Web sitesi zaten bağlı",
+        "cause": "Bu web sitesi zaten bir kasadaki bir sertifikaya bağlı ve bir web sitesi yalnızca birini izleyebilir.",
+        "action": "Önce siteyi öteki sertifikadan ayırın ya da bu seçimin dışında bırakın."
+      },
+      "binding_exists": {
+        "title": "Sertifika zaten bağlı",
+        "cause": "Bu kasa sertifikasının zaten bağlı web siteleri var.",
+        "action": "Yeni bağlantı oluşturmak yerine var olan bağlantının web sitelerini değiştirin."
+      },
+      "vault_has_bindings": {
+        "title": "Kasada hâlâ bağlı web siteleri var",
+        "cause": "Bu kasadaki sertifikalara hâlâ web siteleri bağlı. Kasayı kaldırmak onların otomatik güncellenmesini durdurur.",
+        "action": "Önce web sitelerinin bağlantısını kaldırın ya da kasayı bağlantılarıyla birlikte kaldırın (bunu bir yönetici yapabilir). Web sitelerinin kendisinde hiçbir şey değişmez."
+      },
+      "version_not_deployable": {
+        "title": "Sürüm dağıtılamaz",
+        "cause": "Alice bu sürümün ayrıntılarını henüz okumadı ya da sürüm başka bir sertifikaya ait.",
+        "action": "Kasanın sayfasındaki Şimdi denetle düğmesini kullanın, ardından yeniden deneyin."
+      },
+      "held_needs_admin": {
+        "title": "Bu sürümü bir yönetici dağıtmalı",
+        "cause": "Bu sürüm lisansın süresi dolmuşken bulundu ya da sertifika zinciri eksik; bu yüzden yalnızca bir yönetici dağıtabilir.",
+        "action": "Bir yöneticiden sürümü sertifikanın sayfasından dağıtmasını isteyin."
+      },
+      "import_confirm_needed": {
+        "title": "Ad kasada zaten kullanılıyor",
+        "cause": "Kasada bu ada sahip bir sertifika zaten var. Aktarma ona yeni bir sürüm ekler ve ayarlarını, Key Vault'taki kendi yenilemesi dahil, değiştirebilir.",
+        "action": "Alice'in var olan sertifikaya yeni bir sürüm eklemesini onaylayın ya da başka bir ad seçin."
+      },
+      "import_in_progress": {
+        "title": "Aktarma zaten sürüyor",
+        "cause": "Bu kasaya bu adla yapılan bir aktarma henüz bitmedi ya da sonucu henüz doğrulanmadı.",
+        "action": "Bitmesini bekleyin. Alice sonucu kasanın sayfasında gösterir."
+      },
+      "import_rejected": {
+        "title": "Key Vault aktarmayı reddetti",
+        "cause": "Kasa sertifikayı reddetti; bu yüzden kasada hiçbir şey oluşturulmadı.",
+        "action": "Sertifikanın geçerli olduğunu ve özel anahtarıyla geldiğini denetleyin; kasanın Alice'ten aktarma kabul edip etmediğini Azure yöneticinize sorun. Sürerse burada görünen istek kimliğini yöneticinize iletin."
+      },
+      "import_outcome_unknown": {
+        "title": "Aktarmanın sonucu bilinmiyor",
+        "cause": "Alice sertifikayı kasaya gönderdi ancak kasanın kabul edip etmediğini hiç öğrenemedi; kasanın listesi de 24 saat içinde sertifikayı göstermedi.",
+        "action": "Kasayı Azure'da açıp sertifikayı arayın. Orada yoksa yeniden aktarın."
+      },
+      "client_certificate_invalid": {
+        "title": "Oturum açma sertifikası kullanılamıyor",
+        "cause": "Alice'in oturum açmak için kullandığı sertifika, en az 2048 bitlik bir RSA özel anahtarıyla gelmelidir.",
+        "action": "Azure'da uygulamaya kayıtlı, 2048 bit veya daha uzun RSA anahtarlı bir sertifika kullanın."
+      },
+      "vault_duplicate": {
+        "title": "Kasa zaten eklenmiş",
+        "cause": "Alice'in bu ada ya da bu adrese sahip bir kasası zaten var.",
+        "action": "Başka bir ad seçin ya da var olan kasayı açın."
+      },
+      "import_name_exists": {
+        "title": "Bu ada sahip bir sertifika kasada var",
+        "cause": "Alice aktarmayı gönderdiğinde kasada bu ada sahip bir sertifika zaten vardı; bu yüzden hiçbir şey aktarılmadı.",
+        "action": "Kasanın sayfasındaki Şimdi denetle düğmesini kullanın, ardından yeniden aktarın ve yeni bir sürüm eklenmesini onaylayın ya da başka bir ad seçin."
+      },
+      "import_invalid": {
+        "title": "Sertifika aktarılamıyor",
+        "cause": "Alice bu sertifikayı Key Vault için hazırlayamadı: adı, anahtarı ya da dosyası Key Vault'un kabul ettiklerinin dışında. Hiçbir şey gönderilmedi.",
+        "action": "Harflerden, rakamlardan ve tirelerden oluşan bir ad (en çok 127 karakter) ve RSA ya da ECDSA özel anahtarı olan bir sertifika kullanın, ardından yeniden deneyin."
+      },
+      "binding_gone": {
+        "title": "Web sitesinin bağlantısı kaldırıldı",
+        "cause": "Web sitesinin bu kasa sertifikasıyla bağlantısı dağıtım başlamadan önce kaldırıldı; bu yüzden hiçbir şey dağıtılmadı.",
+        "action": "Siteyi sertifikayı izlemesi gerekiyorsa yeniden bağlayın."
+      },
+      "auto_deploy_off": {
+        "title": "Otomatik dağıtım kapatıldı",
+        "cause": "Bu sertifikanın otomatik dağıtımı bu dağıtım başlamadan önce kapatıldı; bu yüzden hiçbir şey dağıtılmadı.",
+        "action": "Şimdi dağıt düğmesini kullanın ya da otomatik dağıtımı yeniden açın."
+      },
+      "vault_unavailable": {
+        "title": "Kasa devre dışı ya da kaldırılmış",
+        "cause": "Kasa devre dışı ya da Alice'ten kaldırılmış; bu yüzden Alice sertifikasını okuyamaz.",
+        "action": "Kasanın durumunu Alice'te denetleyin ya da kasayı yeniden ekleyin."
+      },
+      "version_held": {
+        "title": "Sürüm bekletiliyor",
+        "cause": "Bu sürüm bir yönetici onu serbest bırakana kadar bekletiliyor; bu yüzden otomatik dağıtılmaz.",
+        "action": "Bir yönetici sürümü sertifikanın sayfasından dağıtabilir."
+      },
+      "version_not_held": {
+        "title": "Sürüm bekletilmiyor",
+        "cause": "Bu sürüm bekletilmediği için serbest bırakılacak bir şey yok.",
+        "action": "Sürümün güncel durumunu görmek için sayfayı yenileyin."
+      }
     }
   },
   "validation": {

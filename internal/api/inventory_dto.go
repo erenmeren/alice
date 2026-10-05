@@ -1,6 +1,7 @@
 package api
 
 import (
+	"maps"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,7 +28,26 @@ func errorRef(reason string, params map[string]string) *errorRefDTO {
 		return nil
 	}
 	ec := codeForReason(reason)
-	return &errorRefDTO{Code: ec.Code, Reason: ec.Reason, Params: params}
+	return &errorRefDTO{Code: ec.Code, Reason: ec.Reason, Params: completeParams(ec.Reason, params)}
+}
+
+// roleReader is the role a vault needs for everything Alice does except reading a private key and importing.
+const roleReader = "Key Vault Reader"
+
+// completeParams adds what a text of the reason always needs and a stored record may lack: azure.forbidden
+// names the role it asks for, and an older record (or a vault's status, which stores no params) does not carry
+// one. The role of the first row the access check marked forbidden is used where the caller has it
+// (vaultLastError); this is the floor, so that no text is ever shown with a placeholder in it.
+func completeParams(reason string, params map[string]string) map[string]string {
+	if reason == ErrAzureForbidden.Reason && params["role"] == "" {
+		out := maps.Clone(params)
+		if out == nil {
+			out = map[string]string{}
+		}
+		out["role"] = roleReader
+		return out
+	}
+	return params
 }
 
 type acceptedDTO struct {

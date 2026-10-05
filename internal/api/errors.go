@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"time"
@@ -186,6 +187,48 @@ var (
 	// longer tracked (param operation_id); the website serves the certificate from before that
 	// change; this deployment's certificate was not written (status rolled_back).
 	ErrDeployPendingChangeRestored = ErrorCode{Code: "ALC-DEP-0024", Reason: "deployment.pending_change_restored", Status: http.StatusConflict}
+
+	// Phase 5: Azure Key Vault (R40). ALC-AKV-0001..0027 are the contract's table; 0028 and later
+	// cover what the code stores or answers that the table did not name (the reasons of a deployment
+	// that did not start, the vault-worded duplicate, the import refusals of the provider).
+	ErrAzureAuthFailed          = ErrorCode{Code: "ALC-AKV-0001", Reason: "azure.auth_failed", Status: http.StatusBadGateway}
+	ErrAzureCredentialsExpired  = ErrorCode{Code: "ALC-AKV-0002", Reason: "azure.credentials_expired", Status: http.StatusBadGateway}
+	ErrAzureForbidden           = ErrorCode{Code: "ALC-AKV-0003", Reason: "azure.forbidden", Status: http.StatusBadGateway}
+	ErrAzureFirewall            = ErrorCode{Code: "ALC-AKV-0004", Reason: "azure.firewall", Status: http.StatusBadGateway}
+	ErrAzureVaultNotFound       = ErrorCode{Code: "ALC-AKV-0005", Reason: "azure.vault_not_found", Status: http.StatusBadGateway}
+	ErrAzureUnreachable         = ErrorCode{Code: "ALC-AKV-0006", Reason: "azure.unreachable", Status: http.StatusBadGateway, Retryable: true}
+	ErrAzureThrottled           = ErrorCode{Code: "ALC-AKV-0007", Reason: "azure.throttled", Status: http.StatusServiceUnavailable, Retryable: true}
+	ErrAzureUnexpectedResponse  = ErrorCode{Code: "ALC-AKV-0008", Reason: "azure.unexpected_response", Status: http.StatusBadGateway, Retryable: true}
+	ErrAzureClockSkew           = ErrorCode{Code: "ALC-AKV-0009", Reason: "azure.clock_skew", Status: http.StatusBadGateway}
+	ErrAzureManagedIdentityGone = ErrorCode{Code: "ALC-AKV-0010", Reason: "azure.managed_identity_unavailable", Status: http.StatusBadGateway}
+	// ErrAzureAddressNotAllowed is also what a region or SDK-logging variable in Alice's own
+	// environment produces (the provider refuses to start a session then): its text says so.
+	ErrAzureAddressNotAllowed = ErrorCode{Code: "ALC-AKV-0011", Reason: "azure.address_not_allowed", Status: http.StatusBadGateway}
+	ErrAzureTLSUntrusted      = ErrorCode{Code: "ALC-AKV-0012", Reason: "azure.tls_untrusted", Status: http.StatusBadGateway}
+	ErrKVNotExportable        = ErrorCode{Code: "ALC-AKV-0013", Reason: "kv.not_exportable", Status: http.StatusUnprocessableEntity}
+	ErrKVVersionDisabled      = ErrorCode{Code: "ALC-AKV-0014", Reason: "kv.version_disabled", Status: http.StatusConflict}
+	ErrKVCertificateNotFound  = ErrorCode{Code: "ALC-AKV-0015", Reason: "kv.certificate_not_found", Status: http.StatusConflict}
+	ErrKVSecretUnreadable     = ErrorCode{Code: "ALC-AKV-0016", Reason: "kv.secret_unreadable", Status: http.StatusBadGateway}
+	ErrKVSecretMismatch       = ErrorCode{Code: "ALC-AKV-0017", Reason: "kv.secret_mismatch", Status: http.StatusBadGateway}
+	ErrKVLocationBound        = ErrorCode{Code: "ALC-AKV-0018", Reason: "kv.location_bound", Status: http.StatusConflict}
+	ErrKVBindingExists        = ErrorCode{Code: "ALC-AKV-0019", Reason: "kv.binding_exists", Status: http.StatusConflict}
+	ErrKVVaultHasBindings     = ErrorCode{Code: "ALC-AKV-0020", Reason: "kv.vault_has_bindings", Status: http.StatusConflict}
+	ErrKVVersionNotDeployable = ErrorCode{Code: "ALC-AKV-0021", Reason: "kv.version_not_deployable", Status: http.StatusConflict}
+	ErrKVHeldNeedsAdmin       = ErrorCode{Code: "ALC-AKV-0022", Reason: "kv.held_needs_admin", Status: http.StatusForbidden}
+	ErrKVImportConfirmNeeded  = ErrorCode{Code: "ALC-AKV-0023", Reason: "kv.import_confirm_needed", Status: http.StatusConflict}
+	ErrKVImportInProgress     = ErrorCode{Code: "ALC-AKV-0024", Reason: "kv.import_in_progress", Status: http.StatusConflict, Retryable: true}
+	ErrKVImportRejected       = ErrorCode{Code: "ALC-AKV-0025", Reason: "kv.import_rejected", Status: http.StatusBadGateway}
+	ErrKVImportOutcomeUnknown = ErrorCode{Code: "ALC-AKV-0026", Reason: "kv.import_outcome_unknown", Status: http.StatusBadGateway}
+	ErrKVClientCertInvalid    = ErrorCode{Code: "ALC-AKV-0027", Reason: "kv.client_certificate_invalid", Status: http.StatusUnprocessableEntity}
+	// Beyond the contract's 27 (never renumbered; R40 candidates).
+	ErrKVVaultDuplicate   = ErrorCode{Code: "ALC-AKV-0028", Reason: "kv.vault_duplicate", Status: http.StatusConflict}
+	ErrKVImportNameExists = ErrorCode{Code: "ALC-AKV-0029", Reason: "kv.import_name_exists", Status: http.StatusConflict}
+	ErrKVImportInvalid    = ErrorCode{Code: "ALC-AKV-0030", Reason: "kv.import_invalid", Status: http.StatusUnprocessableEntity}
+	ErrKVBindingGone      = ErrorCode{Code: "ALC-AKV-0031", Reason: "kv.binding_gone", Status: http.StatusConflict}
+	ErrKVAutoDeployOff    = ErrorCode{Code: "ALC-AKV-0032", Reason: "kv.auto_deploy_off", Status: http.StatusConflict}
+	ErrKVVaultUnavailable = ErrorCode{Code: "ALC-AKV-0033", Reason: "kv.vault_unavailable", Status: http.StatusConflict}
+	ErrKVVersionHeld      = ErrorCode{Code: "ALC-AKV-0034", Reason: "kv.version_held", Status: http.StatusConflict}
+	ErrKVVersionNotHeld   = ErrorCode{Code: "ALC-AKV-0035", Reason: "kv.version_not_held", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -215,6 +258,13 @@ func AllErrorCodes() []ErrorCode {
 		ErrDeployInterrupted, ErrDeployTargetNotReady, ErrDeployVerifyChain, ErrDeployNothingToRestore, ErrDeploySuperseded,
 		ErrDeployUnknownOperation, ErrDeployTargetDeleted, ErrDeployRecoveryExhausted, ErrDeployOutcomeUnknown,
 		ErrDeployRestoredUnverified, ErrDeployRollbackFileChanged, ErrDeployRescanNeeded, ErrDeployCancelled, ErrDeployServerOperationPending, ErrDeployPendingChangeRestored,
+		ErrAzureAuthFailed, ErrAzureCredentialsExpired, ErrAzureForbidden, ErrAzureFirewall, ErrAzureVaultNotFound, ErrAzureUnreachable,
+		ErrAzureThrottled, ErrAzureUnexpectedResponse, ErrAzureClockSkew, ErrAzureManagedIdentityGone, ErrAzureAddressNotAllowed,
+		ErrAzureTLSUntrusted, ErrKVNotExportable, ErrKVVersionDisabled, ErrKVCertificateNotFound, ErrKVSecretUnreadable, ErrKVSecretMismatch,
+		ErrKVLocationBound, ErrKVBindingExists, ErrKVVaultHasBindings, ErrKVVersionNotDeployable, ErrKVHeldNeedsAdmin, ErrKVImportConfirmNeeded,
+		ErrKVImportInProgress, ErrKVImportRejected, ErrKVImportOutcomeUnknown, ErrKVClientCertInvalid, ErrKVVaultDuplicate,
+		ErrKVImportNameExists, ErrKVImportInvalid, ErrKVBindingGone, ErrKVAutoDeployOff, ErrKVVaultUnavailable, ErrKVVersionHeld,
+		ErrKVVersionNotHeld,
 	}
 }
 
@@ -315,6 +365,29 @@ var errorMap = []struct {
 	{inventory.ErrTargetNotReady, ErrDeployTargetNotReady, nil},
 	{inventory.ErrCertificateNotYetValid, ErrCertNotYetValid, nil},
 	{inventory.ErrLocationNeedsDiscovery, ErrDeployRescanNeeded, nil},
+	// Phase 5. *inventory.ImportConfirmError is matched in classify with its certificate_name; the bare
+	// sentinel still gets its code. ErrNotAVault and ErrNotAServer name a target of the wrong kind on
+	// a route of the other: the route does not exist for it (404). ErrAdminRequired is a matter of
+	// authority only (ruling S6). The engine-only ones (ErrBindingGone, ErrAutoDeployOff, ErrVersionHeld,
+	// ErrImportState, ErrImportChanged, ErrCredentialNotTheTargets) have no entry on purpose.
+	{inventory.ErrVaultHasBindings, ErrKVVaultHasBindings, nil},
+	{inventory.ErrNotAVault, ErrNotFound, nil},
+	{inventory.ErrNotAServer, ErrNotFound, nil},
+	{inventory.ErrClientCertificateInvalid, ErrKVClientCertInvalid, nil},
+	{inventory.ErrNotExportable, ErrKVNotExportable, nil},
+	{inventory.ErrVersionNotDeployable, ErrKVVersionNotDeployable, nil},
+	{inventory.ErrLocationBound, ErrKVLocationBound, nil},
+	{inventory.ErrBindingExists, ErrKVBindingExists, nil},
+	{inventory.ErrVersionDisabled, ErrKVVersionDisabled, nil},
+	{inventory.ErrKVCertificateMissing, ErrKVCertificateNotFound, nil},
+	{inventory.ErrHeldNeedsAdmin, ErrKVHeldNeedsAdmin, nil},
+	{inventory.ErrAdminRequired, ErrForbidden, nil},
+	{inventory.ErrVersionNotHeld, ErrKVVersionNotHeld, nil},
+	{inventory.ErrSecretUnreadable, ErrKVSecretUnreadable, nil},
+	{inventory.ErrSecretMismatch, ErrKVSecretMismatch, nil},
+	{inventory.ErrVaultUnavailable, ErrKVVaultUnavailable, nil},
+	{inventory.ErrImportConfirmNeeded, ErrKVImportConfirmNeeded, nil},
+	{inventory.ErrImportInProgress, ErrKVImportInProgress, nil},
 }
 
 type errorPayload struct {
@@ -377,6 +450,9 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		s.writeError(w, r, ErrUnexpected)
 		return
 	}
+	if ec == ErrUnexpected {
+		s.deps.Log.Error("request failed", append([]any{"request_id", RequestID(r.Context()), "path", r.URL.Path}, errorAttrs(err)...)...)
+	}
 	if ec == ErrCertPFXBusy || ec == ErrCSRBusy {
 		w.Header().Set("Retry-After", "1") // a decode or key generation slot frees within seconds
 	}
@@ -409,12 +485,25 @@ func classify(err error) (ErrorCode, map[string]string, bool) {
 		// Key type codes ("rsa", "ecdsa") from Alice's own records, never text from a server.
 		return ErrCertKeyTypeMismatch, map[string]string{"expected": keyType.Expected, "actual": keyType.Actual}, true
 	}
+	var confirm *inventory.ImportConfirmError
+	if errors.As(err, &confirm) {
+		// The vault's own spelling of the name (a closed grammar, azureid.ValidObjectName), never text.
+		if providerParamRules["certificate_name"].MatchString(confirm.CertificateName) {
+			return ErrKVImportConfirmNeeded, map[string]string{"certificate_name": confirm.CertificateName}, true
+		}
+		return ErrKVImportConfirmNeeded, nil, true
+	}
 	var perr *providers.Error
 	if errors.As(err, &perr) {
 		// Only the stable reason and its allowlisted primitive params reach the client; the
 		// provider's cause (remote output, driver text) is never shown nor logged as text.
 		if ec := codeForReason(perr.Code); ec != ErrUnexpected {
 			return ec, providerParams(perr.Params), true
+		}
+		if perr.Code == ErrUnexpected.Reason {
+			// A provider's own "internal.unexpected" (an answer it could not use): the generic code, no params;
+			// fail logs it (ec is ErrUnexpected) with the Go type only.
+			return ErrUnexpected, nil, true
 		}
 	}
 	for _, m := range errorMap {
@@ -436,6 +525,11 @@ var providerParamKeys = map[string]bool{
 	"port": true, "failed_step": true, "profile": true, "phase": true, "directory": true, "backup_dir": true,
 	"expected": true, "actual": true, "mode": true,
 	"operation_id": true, // deployment.server_operation_pending
+	// Phase 5 (Azure): the role a 403 asks for and the permission model, Entra's AADSTS number, the
+	// caller's address a vault firewall refused, the vault's own error code and request id (strict
+	// shapes, never Azure's text), and the certificate name an import conflicts with.
+	"role": true, "model": true, "aadsts": true, "client_address": true, "azure_code": true, "azure_request_id": true,
+	"certificate_name": true,
 }
 
 var (
@@ -452,6 +546,18 @@ var (
 	paramFingerprintRE = regexp.MustCompile(`^(SHA256:[A-Za-z0-9+/=]{1,64}|[0-9a-f]{64})$`)
 	// paramOperationRE: an operation id (a lowercase UUID, helperproto.ValidOpID).
 	paramOperationRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	// Phase 5. paramRoleRE: the three Azure roles Alice names, in Azure's spelling. paramModelRE: the
+	// vault's permission model. paramClientAddressRE only bounds the characters; providerParams also
+	// requires that netip parses it. paramAADSTSRE: the number of an AADSTS code. paramAzureCodeRE:
+	// azureid.ValidAzureCode. paramRequestIDRE: a GUID in any letter case (azureid.ValidRequestID).
+	// paramCertNameRE: azureid.ValidObjectName.
+	paramRoleRE          = regexp.MustCompile(`^Key Vault (Reader|Secrets User|Certificates Officer)$`)
+	paramModelRE         = regexp.MustCompile(`^(rbac|access_policy|unknown)$`)
+	paramClientAddressRE = regexp.MustCompile(`^[0-9A-Fa-f.:]{2,45}$`)
+	paramAADSTSRE        = regexp.MustCompile(`^[0-9]{1,8}$`)
+	paramAzureCodeRE     = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,63}$`)
+	paramRequestIDRE     = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
+	paramCertNameRE      = regexp.MustCompile(`^[0-9A-Za-z-]{1,127}$`)
 )
 
 // providerParamRules bound every allowlisted param's value, whichever producer wrote it: a number,
@@ -466,6 +572,14 @@ var providerParamRules = map[string]*regexp.Regexp{
 	"port":              paramPortRE, "failed_step": paramCodeRE, "profile": paramCodeRE, "phase": paramCodeRE, "mode": paramCodeRE,
 	"expected": paramCodeRE, "actual": paramCodeRE, "directory": paramPathRE, "backup_dir": paramPathRE,
 	"operation_id": paramOperationRE,
+	"role":         paramRoleRE, "model": paramModelRE, "client_address": paramClientAddressRE, "aadsts": paramAADSTSRE,
+	"azure_code": paramAzureCodeRE, "azure_request_id": paramRequestIDRE, "certificate_name": paramCertNameRE,
+}
+
+// validClientAddress is the second rule of client_address: the text must be an IP address.
+func validClientAddress(v string) bool {
+	_, err := netip.ParseAddr(v)
+	return err == nil
 }
 
 // providerParams returns the allowlisted params of a provider error whose values fit their rule
@@ -474,6 +588,9 @@ func providerParams(in map[string]string) map[string]string {
 	var out map[string]string
 	for k, v := range in {
 		if rule, ok := providerParamRules[k]; !ok || !providerParamKeys[k] || !rule.MatchString(v) {
+			continue
+		}
+		if k == "client_address" && !validClientAddress(v) {
 			continue
 		}
 		if out == nil {
