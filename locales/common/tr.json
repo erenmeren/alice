@@ -725,7 +725,7 @@
     "kv": {
       "not_exportable": {
         "title": "Özel anahtar dışa aktarılamıyor",
-        "cause": "Bu sertifikanın özel anahtarı Azure Key Vault'ta dışa aktarılamaz olarak işaretli; bu yüzden Alice onu bir sunucuya kopyalayamaz.",
+        "cause": "Bu sertifikanın özel anahtarı Azure Key Vault'tan dışa aktarılamıyor (ilkesi böyle ya da kasa onu anahtarı olmadan döndürdü); bu yüzden Alice onu bir sunucuya kopyalayamaz.",
         "action": "'Dışa aktarılabilir özel anahtar' seçeneği açık olan yeni bir sertifika sürümü oluşturun ya da başka bir sertifika yükleyin."
       },
       "version_disabled": {
@@ -741,7 +741,7 @@
       "secret_unreadable": {
         "title": "Sertifika verileri okunamadı",
         "cause": "Azure'dan gelen sertifika verileri kullanılamadı: özel anahtar içermiyordu (sertifikanın anahtarı dışa aktarılamaz) ya da PFX veya PEM biçiminde anahtarıyla birlikte bir sertifika değildi. Sunucularınızda hiçbir şey değiştirilmedi.",
-        "action": "Anahtar dışa aktarılamıyorsa Alice sertifikayı artık Yalnızca izleme olarak gösterir: 'Dışa aktarılabilir özel anahtar' seçeneği açık yeni bir sürüm oluşturun. Aksi durumda sertifikanın Key Vault'taki içerik türünü denetleyin (PFX veya PEM)."
+        "action": "Sertifikanın sayfası artık Yalnızca izleme gösteriyorsa anahtarı dışa aktarılamıyor demektir: 'Dışa aktarılabilir özel anahtar' seçeneği açık yeni bir sürüm oluşturun. Aksi durumda sertifikanın Key Vault'taki içerik türünü (PFX veya PEM) ve anahtarının dışa aktarılabilir olup olmadığını denetleyin."
       },
       "secret_mismatch": {
         "title": "Kasa verileri sürümle eşleşmiyor",
@@ -945,11 +945,11 @@
       },
       "certificates_removed_more": {
         "subject": "{{target_name}} Key Vault kasasından daha fazla sertifika kayboldu",
-        "body": "Alice, {{target_name}} Key Vault kasasından tek bir denetimde kaybolan ilk sertifikaların her biri için ayrı bir ileti gönderdi. Aynı denetimde {{count}} sertifika daha kayboldu ve burada listelenmiyor. Alice bunların geçmişini saklar ve kaldırılmış olarak işaretler.\n\nHepsini görmek için kasayı Alice'te açın ve kaldırılan sertifikaları göstermeyi seçin. Bu bir hataysa sertifikaları Azure'da kurtarın; Alice bir sonraki denetimde onları yeniden gösterir."
+        "body": "Alice, {{target_name}} Key Vault kasasından tek bir denetimde kaybolan ilk sertifikaların her biri için ayrı bir ileti gönderdi. Aynı denetimde {{count}} sertifika daha kayboldu ve burada listelenmiyor. Alice bunların geçmişini saklar ve kaldırılmış olarak işaretler.\n\nHepsini görmek için kasayı Alice'te açın: kaldırılan sertifikalar Key Vault'tan kaldırıldı olarak işaretlidir. Bu bir hataysa sertifikaları Azure'da kurtarın; Alice bir sonraki denetimde onları yeniden gösterir."
       },
       "certificates_removed_more_one": {
         "subject": "{{target_name}} Key Vault kasasından bir sertifika daha kayboldu",
-        "body": "Alice, {{target_name}} Key Vault kasasından tek bir denetimde kaybolan ilk sertifikaların her biri için ayrı bir ileti gönderdi. Aynı denetimde {{count}} sertifika daha kayboldu ve burada listelenmiyor. Alice onun geçmişini saklar ve kaldırılmış olarak işaretler.\n\nOnu görmek için kasayı Alice'te açın ve kaldırılan sertifikaları göstermeyi seçin. Bu bir hataysa sertifikayı Azure'da kurtarın; Alice bir sonraki denetimde onu yeniden gösterir."
+        "body": "Alice, {{target_name}} Key Vault kasasından tek bir denetimde kaybolan ilk sertifikaların her biri için ayrı bir ileti gönderdi. Aynı denetimde {{count}} sertifika daha kayboldu ve burada listelenmiyor. Alice onun geçmişini saklar ve kaldırılmış olarak işaretler.\n\nGörmek için kasayı Alice'te açın: sertifika Key Vault'tan kaldırıldı olarak işaretlidir. Bu bir hataysa sertifikayı Azure'da kurtarın; Alice bir sonraki denetimde onu yeniden gösterir."
       },
       "new_version_available": {
         "subject": "{{target_name}} Key Vault kasasında {{certificate_name}} için yeni bir sürüm bulundu",
@@ -993,7 +993,7 @@
       },
       "import_failed": {
         "subject": "{{certificate_name}} sertifikasının {{target_name}} Key Vault kasasına içe aktarılması başarısız oldu",
-        "body": "Alice, {{certificate_name}} sertifikasını {{target_name}} Key Vault kasasına içe aktaramadı. Kasada hiçbir şey oluşturulmadı.\n\nKasayı Alice'te açın: içe aktarmanın sayfası nedeni ve yapılacakları gösterir. Sorun giderildiğinde içe aktarmayı yeniden başlatın."
+        "body": "Alice, {{certificate_name}} sertifikasını {{target_name}} Key Vault kasasına içe aktaramadı. Kasada hiçbir şey oluşturulmadı.\n\nSertifikayı Alice'te açın (Sertifikalar): içe aktarma geçmişi nedeni gösterir. Sorun giderildiğinde içe aktarmayı yeniden başlatın."
       },
       "import_outcome_unknown": {
         "subject": "Alice, {{certificate_name}} sertifikasının {{target_name}} Key Vault kasasına içe aktarılıp aktarılmadığını bilmiyor",

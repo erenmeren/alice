@@ -727,6 +727,21 @@ func TestPhase5TextsAreTruthfulAndWorded(t *testing.T) {
 	assert.Contains(t, en("errors.kv.credential_unreadable.action"), "Replace credentials")
 	assert.Contains(t, tr("errors.kv.credential_unreadable.action"), "Kimlik bilgilerini değiştir")
 	assert.Contains(t, en("errors.kv.credential_unreadable.cause"), "Nothing was changed on your servers")
+	// The mails point to screens and controls that exist (final review C-I3): the import history on the certificate's
+	// page, and the "Removed from Key Vault" mark the vault page always shows.
+	for _, lang := range []string{"en", "tr"} {
+		body := func(key string) string { return cat.T(lang, key, map[string]string{"count": "3"}) }
+		assert.Contains(t, body("email.kv.import_failed.body"), map[string]string{"en": "its import history", "tr": "içe aktarma geçmişi"}[lang])
+		for _, key := range []string{"email.kv.certificates_removed_more.body", "email.kv.certificates_removed_more_one.body"} {
+			// The chip's text in web/src/locales (kv.removed).
+			assert.Contains(t, body(key), map[string]string{"en": "Removed from Key Vault", "tr": "Key Vault'tan kaldırıldı"}[lang], "%s %s names the mark", lang, key)
+			assert.NotContains(t, body(key), map[string]string{"en": "choose to show", "tr": "göstermeyi seçin"}[lang])
+		}
+	}
+	// C-M1/C-M2: the Monitor only mark is named as something to look for, and not-exportable names Alice's own mark.
+	assert.Contains(t, en("errors.kv.secret_unreadable.action"), "If the certificate's page now shows Monitor only")
+	assert.Contains(t, en("errors.kv.not_exportable.cause"), "returned it without its key")
+	assert.Contains(t, tr("errors.kv.not_exportable.cause"), "anahtarı olmadan döndürdü")
 	// certificate.pfx_busy also ends a Key Vault deployment's vault step, where nothing was uploaded (final review B M-3).
 	for lang, words := range map[string][]string{"en": {"upload"}, "tr": {"yükle"}} {
 		for _, part := range []string{"cause", "action"} {

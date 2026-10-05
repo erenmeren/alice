@@ -725,7 +725,7 @@
     "kv": {
       "not_exportable": {
         "title": "Private key not exportable",
-        "cause": "This certificate's private key is marked non-exportable in Azure Key Vault, so Alice cannot copy it to a server.",
+        "cause": "This certificate's private key cannot be exported from Azure Key Vault (its policy says so, or the vault returned it without its key), so Alice cannot copy it to a server.",
         "action": "Create a new version of the certificate with 'Exportable private key' turned on, or upload a different certificate."
       },
       "version_disabled": {
@@ -741,7 +741,7 @@
       "secret_unreadable": {
         "title": "Certificate data could not be read",
         "cause": "The certificate data from Azure could not be used: it had no private key (the certificate's key is not exportable), or it was not a certificate with its key in PFX or PEM form. Nothing was changed on your servers.",
-        "action": "If the key is not exportable, Alice now shows the certificate as Monitor only: create a new version with 'Exportable private key' turned on. Otherwise check the certificate's content type in Key Vault (PFX or PEM)."
+        "action": "If the certificate's page now shows Monitor only, its key is not exportable: create a new version with 'Exportable private key' turned on. Otherwise check the certificate's content type in Key Vault (PFX or PEM) and whether its key is exportable."
       },
       "secret_mismatch": {
         "title": "Vault data does not match the version",
@@ -945,11 +945,11 @@
       },
       "certificates_removed_more": {
         "subject": "More certificates disappeared from the Key Vault {{target_name}}",
-        "body": "Alice sent a message for each of the first certificates that disappeared from the Key Vault {{target_name}} in one check. {{count}} more certificates disappeared in the same check and are not listed here. Alice keeps their history and marks them as removed.\n\nOpen the vault in Alice and choose to show removed certificates to see them all. If this was a mistake, recover the certificates in Azure and Alice will show them again at the next check."
+        "body": "Alice sent a message for each of the first certificates that disappeared from the Key Vault {{target_name}} in one check. {{count}} more certificates disappeared in the same check and are not listed here. Alice keeps their history and marks them as removed.\n\nOpen the vault in Alice to see them all: removed certificates are marked Removed from Key Vault. If this was a mistake, recover the certificates in Azure and Alice will show them again at the next check."
       },
       "certificates_removed_more_one": {
         "subject": "Another certificate disappeared from the Key Vault {{target_name}}",
-        "body": "Alice sent a message for each of the first certificates that disappeared from the Key Vault {{target_name}} in one check. {{count}} more certificate disappeared in the same check and is not listed here. Alice keeps its history and marks it as removed.\n\nOpen the vault in Alice and choose to show removed certificates to see it. If this was a mistake, recover the certificate in Azure and Alice will show it again at the next check."
+        "body": "Alice sent a message for each of the first certificates that disappeared from the Key Vault {{target_name}} in one check. {{count}} more certificate disappeared in the same check and is not listed here. Alice keeps its history and marks it as removed.\n\nOpen the vault in Alice to see it: it is marked Removed from Key Vault. If this was a mistake, recover the certificate in Azure and Alice will show it again at the next check."
       },
       "new_version_available": {
         "subject": "A new version of {{certificate_name}} was found in the Key Vault {{target_name}}",
@@ -993,7 +993,7 @@
       },
       "import_failed": {
         "subject": "Importing {{certificate_name}} into the Key Vault {{target_name}} failed",
-        "body": "Alice could not import the certificate {{certificate_name}} into the Key Vault {{target_name}}. Nothing was created in the vault.\n\nOpen the vault in Alice: the import's page shows the reason and what to do. When it is fixed, start the import again."
+        "body": "Alice could not import the certificate {{certificate_name}} into the Key Vault {{target_name}}. Nothing was created in the vault.\n\nOpen the certificate in Alice (Certificates): its import history shows the reason. When it is fixed, start the import again."
       },
       "import_outcome_unknown": {
         "subject": "Alice does not know whether {{certificate_name}} was imported into the Key Vault {{target_name}}",
