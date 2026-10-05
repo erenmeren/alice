@@ -903,8 +903,42 @@ func zeroed(b []byte) bool { return bytes.Equal(b, make([]byte, len(b))) }
 
 func TestImportDecisionTable(t *testing.T) {
 	ctx := context.Background()
+	t.Run("a failed import is read back and fails the job with its code, never sent", func(t *testing.T) {
+		for code, want := range map[string]string{"kv.import_vault_deleted": "kv.import_vault_deleted", "": "internal.unexpected"} {
+			f, _ := importFixture(t)
+			f.inv.imp.State, f.inv.imp.ErrorCode = inventory.ImportFailed, code
+			f.inv.imp.ErrorParams = map[string]string{"role": "Key Vault Certificates Officer"}
+			res, err := f.h.importToKV(ctx, importJob(f), noSteps{})
+			assert.Nil(t, res)
+			fl := failureWith(t, err, jobs.Permanent, want)
+			assert.Equal(t, f.inv.imp.ErrorParams, fl.Params)
+			assert.Empty(t, f.prov.Calls())
+			assert.Zero(t, f.inv.count("ImportMaterial"))
+		}
+	})
+	t.Run("an import ended while it was being sent: the record is the outcome, no retry", func(t *testing.T) {
+		f, _ := importFixture(t)
+		f.inv.finishErr = inventory.ErrImportState
+		f.inv.importErrs = []error{nil, nil}
+		f.inv.onMark = func() {
+			f.inv.mu.Lock()
+			f.inv.imp.State, f.inv.imp.ErrorCode = inventory.ImportFailed, "kv.import_outcome_unknown"
+			f.inv.mu.Unlock()
+		}
+		_, err := f.h.importToKV(ctx, importJob(f), noSteps{})
+		requireFailure(t, err, jobs.Permanent, "kv.import_outcome_unknown")
+		assert.Equal(t, 1, f.prov.Count("ImportCertificate"), "sent once")
+
+		f, _ = importFixture(t)
+		f.inv.finishErr = inventory.ErrImportState
+		f.inv.importErrs = []error{nil, errors.New(canary)}
+		res, err := f.h.importToKV(ctx, importJob(f), noSteps{})
+		require.NoError(t, err)
+		assert.Equal(t, inventory.ImportRunning, res["state"], "the record cannot be read again: the state is not guessed")
+		assert.NotContains(t, f.logs.String(), canary)
+	})
 	t.Run("a finished import is read back, never sent", func(t *testing.T) {
-		for _, state := range []string{inventory.ImportSucceeded, inventory.ImportFailed, inventory.ImportUncertain} {
+		for _, state := range []string{inventory.ImportSucceeded, inventory.ImportUncertain} {
 			f, pfx := importFixture(t)
 			f.inv.imp.State, f.inv.imp.Version = state, validVer
 			res, err := f.h.importToKV(ctx, importJob(f), noSteps{})

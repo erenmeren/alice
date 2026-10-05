@@ -639,10 +639,12 @@ func TestImportJobOutcomes(t *testing.T) {
 		opens := w.az.Count("Open")
 		w.drain()
 		// Deleting the vault ended its queued import itself (kv.import_vault_deleted): the job reads the
-		// record back and sends nothing.
+		// record back, sends nothing and fails with the record's code (never "succeeded" for a failed import),
+		// for good: no retry, no dead-job mail.
 		job := w.lastJob(jobs.KVImport.Name)
-		assert.Equal(t, jobs.StatusSucceeded, job.Status)
-		assert.Equal(t, inventory.ImportFailed, job.Result["state"])
+		assert.Equal(t, jobs.StatusFailed, job.Status)
+		assert.Equal(t, inventory.ReasonImportVaultDeleted, job.LastErrorCode)
+		assert.Zero(t, w.audits("job.dead"))
 		state, code := w.importState(im.ID)
 		assert.Equal(t, inventory.ImportFailed, state, "a queued import of a vanished vault must not block its name for ever")
 		assert.Equal(t, inventory.ReasonImportVaultDeleted, code)

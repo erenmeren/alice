@@ -16,12 +16,15 @@ import (
 // the only send is made after MarkImportSent has committed (queued becomes running), a run that finds
 // the import running (a retry, a redelivery after a lost lease, a crash after the mark) records it as
 // uncertain and does not open a session at all, and a poll settles an uncertain import by the
-// thumbprint (inventory.resolveImports) or the 24 hour rule ends it.
+// thumbprint (inventory.resolveImports), or the 24 hour rule (after a complete listing) or the 72 hour cap
+// (inventory.SweepImports, whatever the listings) ends it.
 //
 //	import_id (payload)             not a UUID                              Fail internal.unexpected
 //	Import (the record)             unknown / of another vault              Fail system.not_found
 //	                                other error                             Retry internal.unexpected
-//	state succeeded/failed/uncertain  nothing to do                         the result of the record
+//	state succeeded/uncertain       nothing to do                           the result of the record
+//	state failed                    nothing to do (ended elsewhere: the     Fail with the record's code and params
+//	                                vault was deleted, a sweep)             (the job never ends succeeded for it)
 //	state running                   a send may have happened                FinishImport(uncertain); Fail
 //	                                                                        azure.unexpected_response {state:
 //	                                                                        uncertain}; NO session, NO send
@@ -50,6 +53,9 @@ import (
 //	                                                                        {state: uncertain}
 //	FinishImport                    claim lost / other error                Retry (the next run finds the import
 //	                                                                        running and never sends)
+//	                                not running any more (ended meanwhile:  the record's result, as above (a
+//	                                the vault was deleted during the send)  failed record fails the job for good,
+//	                                                                        so no retry ends dead and mails)
 //
 // The PFX is zeroed by a deferred call as soon as ImportMaterial handed it out, on every path, a panic
 // included (the runner recovers it as a retryable failure, and the rerun is the "running" row above).
@@ -72,7 +78,7 @@ func (h *handlers) importToKV(ctx context.Context, j jobs.Job, steps jobs.StepRe
 		// A send may have happened (or the run died right after the mark): never send again.
 		return nil, h.settleUncertain(ctx, id)
 	default:
-		return importResult(im), nil
+		return recorded(im)
 	}
 	last := j.Attempt >= j.MaxAttempts
 
@@ -97,7 +103,7 @@ func (h *handlers) importToKV(ctx context.Context, j jobs.Job, steps jobs.StepRe
 		case errors.Is(err, inventory.ErrClaimLost):
 			return nil, jobs.Retry(reasonLeaseExpired, nil, err)
 		case errors.Is(err, inventory.ErrImportState):
-			return h.quietly(ctx, j.TargetID, id), nil // somebody else sent it
+			return h.quietly(ctx, j.TargetID, id) // somebody else sent it, or ended it
 		}
 		return nil, h.beforeSend(ctx, id, jobs.Retry(reasonUnexpected, nil, err), last)
 	}
@@ -115,6 +121,9 @@ func (h *handlers) importToKV(ctx context.Context, j jobs.Job, steps jobs.StepRe
 	switch {
 	case errors.Is(err, inventory.ErrClaimLost):
 		return nil, jobs.Retry(reasonLeaseExpired, nil, err)
+	case errors.Is(err, inventory.ErrImportState):
+		// Ended while it was being sent (the vault was deleted, which ended it and mailed): its record is the result.
+		return h.quietly(rctx, j.TargetID, id)
 	case err != nil:
 		return nil, jobs.Retry(reasonUnexpected, nil, err)
 	}
@@ -171,11 +180,25 @@ func (h *handlers) settleUncertain(ctx context.Context, id uuid.UUID) error {
 }
 
 // quietly ends a run whose import is no longer queued: its result is the record as it is now.
-func (h *handlers) quietly(ctx context.Context, vault, id uuid.UUID) map[string]any {
+func (h *handlers) quietly(ctx context.Context, vault, id uuid.UUID) (map[string]any, error) {
 	if im, err := h.d.Inventory.Import(ctx, vault, id); err == nil {
-		return importResult(im)
+		return recorded(im)
 	}
-	return map[string]any{"state": inventory.ImportRunning}
+	return map[string]any{"state": inventory.ImportRunning}, nil
+}
+
+// recorded is the job's outcome for an import another path already decided: a failed record fails the job
+// for good with the record's closed code and params (a job never ends succeeded for a failed import), any other
+// state is the job's result.
+func recorded(im inventory.KVImport) (map[string]any, error) {
+	if im.State != inventory.ImportFailed {
+		return importResult(im), nil
+	}
+	code := im.ErrorCode
+	if code == "" {
+		code = reasonUnexpected
+	}
+	return nil, jobs.Fail(code, im.ErrorParams, nil)
 }
 
 func importResult(im inventory.KVImport) map[string]any {
@@ -272,7 +295,7 @@ func (h *handlers) materialFailure(ctx context.Context, vault, id uuid.UUID, err
 	case errors.Is(err, inventory.ErrClaimLost):
 		return nil, jobs.Retry(reasonLeaseExpired, nil, err)
 	case errors.Is(err, inventory.ErrImportState):
-		return h.quietly(ctx, vault, id), nil
+		return h.quietly(ctx, vault, id)
 	case errors.Is(err, inventory.ErrNotFound):
 		return nil, h.failQueued(ctx, id, reasonNotFound, jobs.Fail(reasonNotFound, nil, err))
 	case errors.Is(err, inventory.ErrVaultUnavailable):
