@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"maps"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -204,7 +206,10 @@ func TestRootLoginDisabledIsNotVerifiable(t *testing.T) {
 	in.Targets[t1] = tg
 	p, err := Build(in)
 	require.NoError(t, err)
+	require.Len(t, p.Actions, 3)
+	seen := map[string]bool{}
 	for _, a := range p.Actions {
+		seen[a.OSUser] = true
 		switch a.OSUser {
 		case "root", "toor":
 			assert.False(t, a.Verify)
@@ -213,6 +218,52 @@ func TestRootLoginDisabledIsNotVerifiable(t *testing.T) {
 			assert.True(t, a.Verify)
 			assert.Equal(t, "from_option", a.VerifyNote)
 		}
+	}
+	assert.Equal(t, map[string]bool{"root": true, "toor": true, "deploy": true}, seen)
+}
+
+// A root location on a server with PermitRootLogin forced-commands-only is skipped unless its line
+// carries command=: the test login of a plain key can never pass there.
+func TestRootForcedCommandsOnlyIsSkipped(t *testing.T) {
+	r := loc(t1, "root", "/root/.ssh/authorized_keys", "")
+	z := loc(t1, "toor", "/root/.ssh/authorized_keys2", `restrict,Command="/usr/bin/backup, now"`)
+	d := loc(t1, "deploy", "/home/deploy/.ssh/authorized_keys", "")
+	in := input(r, z, d)
+	tg := in.Targets[t1]
+	tg.PermitRootLogin = "forced-commands-only"
+	tg.UID0Users = []string{"toor"}
+	in.Targets[t1] = tg
+	p, err := Build(in)
+	require.NoError(t, err)
+	got := map[string]string{}
+	for _, a := range p.Actions {
+		got[a.OSUser] = a.Skip
+	}
+	assert.Equal(t, map[string]string{"root": SkipRootForcedCommands, "toor": "", "deploy": ""}, got)
+	// Another PermitRootLogin value does not skip.
+	tg.PermitRootLogin = "prohibit-password"
+	in.Targets[t1] = tg
+	p, err = Build(in)
+	require.NoError(t, err)
+	assert.Equal(t, 0, p.Skips)
+}
+
+func TestNewKeyTypeIsValidated(t *testing.T) {
+	for _, bad := range []string{"dsa", "rsa-2048", "RSA-4096"} {
+		in := input(loc(t1, "deploy", "/home/deploy/.ssh/authorized_keys", ""))
+		in.NewKeyType = bad
+		_, err := Build(in)
+		assert.ErrorIs(t, err, ErrNewKeyType, bad)
+	}
+	in := input(loc(t1, "deploy", "/home/deploy/.ssh/authorized_keys", ""))
+	in.Key.KeyType = ""
+	_, err := Build(in) // "same" of a key with no known type
+	assert.ErrorIs(t, err, ErrNewKeyType)
+	for _, good := range []string{"same", "", "ed25519", "rsa-3072", "rsa-4096", "ecdsa-p256"} {
+		in := input(loc(t1, "deploy", "/home/deploy/.ssh/authorized_keys", ""))
+		in.NewKeyType = good
+		_, err := Build(in)
+		assert.NoError(t, err, good)
 	}
 }
 
@@ -292,4 +343,121 @@ func TestDigestChangesWithEveryDecision(t *testing.T) {
 		p, _ := Build(in) // "skip" leaves nothing to rotate: the plan is still returned
 		assert.NotEqual(t, ref.Digest(), p.Digest(), name)
 	}
+}
+
+// Every input of the digest is pinned by a change of exactly that field. The field lists are checked
+// against the structs by reflection, so a field added later fails here until it is classified.
+func TestDigestPinsEveryField(t *testing.T) {
+	base := func() Plan {
+		return Plan{KeyID: keyID, Fingerprint: "SHA256:a", NewKeyType: "ed25519", Overlap: 60, Actions: []Action{
+			{N: 1, LocationID: t1, TargetID: t2, TargetName: "web", OSUser: "u", FilePath: "/f", Options: "o", Skip: "s",
+				Verify: true, VerifyNote: "n", RemoveLine: "r", AddLine: "a"}}}
+	}
+	planDigested := map[string]func(*Plan){
+		"KeyID":       func(p *Plan) { p.KeyID = t1 },
+		"Fingerprint": func(p *Plan) { p.Fingerprint = "SHA256:b" },
+		"NewKeyType":  func(p *Plan) { p.NewKeyType = "rsa-4096" },
+		"Overlap":     func(p *Plan) { p.Overlap++ },
+		"Actions":     func(p *Plan) { p.Actions = append(p.Actions, p.Actions[0]) },
+	}
+	planIgnored := []string{"Changes", "Skips"} // derived from Actions
+	actionDigested := map[string]func(*Action){
+		"LocationID": func(a *Action) { a.LocationID = t2 },
+		"TargetID":   func(a *Action) { a.TargetID = t1 },
+		"OSUser":     func(a *Action) { a.OSUser = "v" },
+		"FilePath":   func(a *Action) { a.FilePath = "/g" },
+		"Options":    func(a *Action) { a.Options = "p" },
+		"Skip":       func(a *Action) { a.Skip = "" },
+		"Verify":     func(a *Action) { a.Verify = false },
+		"VerifyNote": func(a *Action) { a.VerifyNote = "" },
+	}
+	actionIgnored := []string{"N", "TargetName", "RemoveLine", "AddLine"} // order and display text
+	check := func(typ reflect.Type, digested []string, ignored []string) {
+		for i := 0; i < typ.NumField(); i++ {
+			name := typ.Field(i).Name
+			assert.True(t, slices.Contains(digested, name) != slices.Contains(ignored, name),
+				"%s.%s must be classified as digested or ignored, exactly one", typ, name)
+		}
+		for _, name := range slices.Concat(digested, ignored) {
+			_, ok := typ.FieldByName(name)
+			assert.True(t, ok, "%s has no field %s", typ, name)
+		}
+	}
+	check(reflect.TypeOf(Plan{}), slices.Collect(maps.Keys(planDigested)), planIgnored)
+	check(reflect.TypeOf(Action{}), slices.Collect(maps.Keys(actionDigested)), actionIgnored)
+
+	ref := base().Digest()
+	assert.Equal(t, ref, base().Digest())
+	for name, change := range planDigested {
+		p := base()
+		change(&p)
+		assert.NotEqual(t, ref, p.Digest(), "Plan.%s", name)
+	}
+	for name, change := range actionDigested {
+		p := base()
+		change(&p.Actions[0])
+		assert.NotEqual(t, ref, p.Digest(), "Action.%s", name)
+	}
+	for _, name := range actionIgnored {
+		p := base()
+		a := &p.Actions[0]
+		switch name {
+		case "N":
+			a.N = 9
+		case "TargetName":
+			a.TargetName = "other"
+		case "RemoveLine":
+			a.RemoveLine = "x"
+		case "AddLine":
+			a.AddLine = "x"
+		}
+		assert.Equal(t, ref, p.Digest(), "Action.%s is display only", name)
+	}
+	p := base()
+	p.Changes, p.Skips = 7, 7
+	assert.Equal(t, ref, p.Digest())
+}
+
+// The digest is injective: strings that differ only in invalid UTF-8, or whose boundaries move
+// between fields, give different digests.
+func TestDigestIsInjective(t *testing.T) {
+	mk := func(user, file string) Plan {
+		return Plan{Actions: []Action{{OSUser: user, FilePath: file}}}
+	}
+	assert.NotEqual(t, mk("\xff", "/f").Digest(), mk("\xfe", "/f").Digest())
+	assert.NotEqual(t, mk("\xff", "/f").Digest(), mk("\ufffd", "/f").Digest())
+	assert.NotEqual(t, mk("ab", "c").Digest(), mk("a", "bc").Digest())
+	assert.NotEqual(t, Plan{}.Digest(), Plan{Actions: []Action{{}}}.Digest())
+}
+
+// Review Focus 4: a server fact that changes only a verification rule, or only a skip reason, changes
+// the digest although every location and option stays the same.
+func TestDigestFollowsVerifyAndSkipDecisions(t *testing.T) {
+	root := loc(t1, "root", "/root/.ssh/authorized_keys", "")
+	gone := loc(t2, "deploy", "/home/deploy/.ssh/authorized_keys", "")
+	gone.Missing = true
+	other := loc(t1, "app", "/home/app/.ssh/authorized_keys", "")
+	base := func() Input { return input(root, gone, other) }
+	ref, err := Build(base())
+	require.NoError(t, err)
+
+	in := base()
+	tg := in.Targets[t1]
+	tg.PermitRootLogin = "no"
+	in.Targets[t1] = tg
+	p, err := Build(in)
+	require.NoError(t, err)
+	assert.Equal(t, ref.Changes, p.Changes)
+	assert.Equal(t, ref.Skips, p.Skips)
+	assert.NotEqual(t, ref.Digest(), p.Digest(), "only Verify and VerifyNote differ")
+
+	in = base()
+	tg = in.Targets[t2]
+	tg.Status = "unreachable"
+	in.Targets[t2] = tg
+	p, err = Build(in)
+	require.NoError(t, err)
+	assert.Equal(t, ref.Changes, p.Changes)
+	assert.Equal(t, ref.Skips, p.Skips)
+	assert.NotEqual(t, ref.Digest(), p.Digest(), "only Skip differs (missing -> target_not_connected)")
 }

@@ -36,8 +36,9 @@ const (
 	SkipCertAuthority        = "cert_authority"
 	SkipSharedFile           = "shared_file_skipped"
 	SkipPubkeyDisabled       = "pubkey_disabled"
-	SkipDuplicateLines       = "duplicate_lines"    // S8: the file holds the key twice; sshd applies the first line
-	SkipOptionsUnreadable    = "options_unreadable" // S8: the stored options were altered when read (U+FFFD)
+	SkipRootForcedCommands   = "root_forced_commands_only" // PermitRootLogin forced-commands-only and no command= on the line
+	SkipDuplicateLines       = "duplicate_lines"           // S8: the file holds the key twice; sshd applies the first line
+	SkipOptionsUnreadable    = "options_unreadable"        // S8: the stored options were altered when read (U+FFFD)
 )
 
 // Verify notes.
@@ -51,6 +52,7 @@ var (
 	ErrOwnKey          = errors.New("plan: the key is Alice's own key")
 	ErrRetired         = errors.New("plan: the key is retired")
 	ErrNothingToRotate = errors.New("plan: no location can change")
+	ErrNewKeyType      = errors.New("plan: the new key type is not a key type Alice generates")
 )
 
 // Key is the key a rotation replaces, as the planner needs it.
@@ -149,6 +151,9 @@ func Build(in Input) (Plan, error) {
 	if newType == "" || newType == "same" {
 		newType = in.Key.KeyType
 	}
+	if !keymat.KeyType(newType).Valid() {
+		return Plan{}, ErrNewKeyType
+	}
 	locs := slices.Clone(in.Locations)
 	slices.SortFunc(locs, func(a, b Location) int {
 		return cmp.Or(bytes.Compare(a.TargetID[:], b.TargetID[:]), strings.Compare(a.FilePath, b.FilePath),
@@ -218,6 +223,10 @@ func skipReason(t Target, known bool, l Location) string {
 		return SkipSSHDUnreadable
 	case t.PubkeyAuthentication == "no":
 		return SkipPubkeyDisabled
+	case isSuperuser(t, l.OSUser) && strings.EqualFold(t.PermitRootLogin, "forced-commands-only") && !keymat.HasOption(l.Options, "command"):
+		// sshd refuses a plain public-key login of root here, so the test login could never pass and
+		// every run would be undone.
+		return SkipRootForcedCommands
 	}
 	return ""
 }
@@ -225,13 +234,17 @@ func skipReason(t Target, known bool, l Location) string {
 // verifyRule: a superuser location on a server with PermitRootLogin no cannot be tested (R41 row 9);
 // a from= option may exclude Alice's address, so a refused login there is unverifiable, not failed.
 func verifyRule(t Target, user, options string) (bool, string) {
-	if (user == "root" || slices.Contains(t.UID0Users, user)) && t.PermitRootLogin == "no" {
+	if isSuperuser(t, user) && t.PermitRootLogin == "no" {
 		return false, NoteRootLoginDisabled
 	}
 	if keymat.HasFromOption(options) {
 		return true, NoteFromOption
 	}
 	return true, ""
+}
+
+func isSuperuser(t Target, user string) bool {
+	return user == "root" || slices.Contains(t.UID0Users, user)
 }
 
 func joinLine(options, key, comment string) string {
