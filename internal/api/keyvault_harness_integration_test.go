@@ -317,10 +317,12 @@ func (s *stack) settleKV(c *client, id string) depView {
 }
 
 // checkNow is the "Check now" button: a manual poll, drained.
-func (k *kvnj) checkNow(vault string) {
+func (k *kvnj) checkNow(vault string) string {
 	k.t.Helper()
-	requireStatus(k.t, k.op.do(http.MethodPost, "/api/v1/targets/"+vault+"/actions/discover", nil), http.StatusAccepted)
+	rec := k.op.do(http.MethodPost, "/api/v1/targets/"+vault+"/actions/discover", nil)
+	requireStatus(k.t, rec, http.StatusAccepted)
 	k.runKV()
+	return decodeBody[map[string]any](k.t, rec)["job_id"].(string)
 }
 
 // leafFingerprint is the fingerprint of the vault certificate version the way the fake served it.
@@ -397,9 +399,47 @@ func importPosts(kv *fakekv.Server) int {
 	return n
 }
 
-// touch keeps both browsers' sessions alive across a long advance of the clock (the idle timeout).
+// touch keeps both browsers' sessions alive across a long advance of the clock (the idle timeout), signing in again
+// where one ended.
 func (k *kvnj) touch() {
 	k.t.Helper()
-	requireStatus(k.t, k.admin.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK)
-	requireStatus(k.t, k.op.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK)
+	for _, who := range []struct {
+		c *client
+		a *account
+	}{{k.admin, k.adminAcct}, {k.op, k.opAcct}} {
+		if who.c.do(http.MethodGet, "/api/v1/auth/session", nil).Code == http.StatusUnauthorized {
+			k.signIn(who.c, who.a) // the session ended with the long advance of the clock
+		}
+	}
+}
+
+// tokenRequests counts the token requests the fake saw (one per sign-in: a poll of a vault whose sign-in fails sends one).
+func tokenRequests(kv *fakekv.Server) int {
+	n := 0
+	for _, r := range kv.Requests() {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.Path, "/oauth2/v2.0/token") {
+			n++
+		}
+	}
+	return n
+}
+
+// settleAll settles every deployment of a location that is not done.
+// jobError reads a job's error (code, reason, params) over the API.
+func (s *stack) jobError(c *client, id string) (code, reason string, params map[string]any) {
+	s.t.Helper()
+	e, _ := s.job(c, id)["error"].(map[string]any)
+	code, _ = e["code"].(string)
+	reason, _ = e["reason"].(string)
+	params, _ = e["params"].(map[string]any)
+	return code, reason, params
+}
+
+func (k *kvnj) settleAll(t *testing.T, locationID string) {
+	t.Helper()
+	for _, d := range k.kvDeployments(k.op, locationID) {
+		if d.State != "done" {
+			k.settleKV(k.op, d.ID)
+		}
+	}
 }
