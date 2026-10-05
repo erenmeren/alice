@@ -193,6 +193,9 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 
 ## Key Vault
 
+How to give Alice access to a vault (identity, roles, network) is in [azure-setup.md](azure-setup.md); using a vault
+in Alice is in [operator-guide.md](operator-guide.md#key-vaults).
+
 - **A vault shows "Partly working", "Credentials refused" or "Cannot reach Azure".** Open the vault and read the
   **Access check**: each row says what Alice may do and, for a missing permission, which Azure role to give
   (`ALC-AKV-0003`). Alice checks a vault every 15 minutes by default (**Check now** runs one at once); a vault that
@@ -205,6 +208,15 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 - **An import says "Not confirmed yet".** Alice sent the certificate and did not get the vault's answer. It never
   sends it again by itself: the next check settles it as **Imported** when it sees the certificate, and after
   24 to 72 hours as outcome unknown (`ALC-AKV-0026`).
+- **A vault certificate suddenly shows "Monitor only".** A deployment read its secret and found no private key in
+  it, so Alice treats the key as not exportable (`ALC-AKV-0016`, then `ALC-AKV-0013`). Turn **Exportable private
+  key** on in the certificate's policy in Key Vault and create a new version; a later check that finds the key
+  exportable again also removes the mark.
+- **Deploy now asks to confirm the chain of a version that is not held.** A read of that version's secret found its
+  certificate chain incomplete. Alice remembers this for the version, also after an administrator released it, so
+  every manual deployment of it needs an administrator to confirm the chain (`ALC-CRT-0011`); automatic deployment
+  never deploys it. Add the intermediate certificates to the certificate in Key Vault (a new version) to avoid
+  this.
 
 ## License messages
 
@@ -1084,7 +1096,7 @@ never leaves Alice), so its chain cannot be completed this way.
 
 **Likely cause.** The certificate chain does not reach a trusted root, so some browsers may not trust it.
 
-**What to do.** Ask an administrator to deploy it and confirm the chain.
+**What to do.** Ask an administrator to deploy it and confirm the chain. For a Key Vault version, Alice knows the chain is incomplete after it read the version once; from then on **Deploy now** asks for the confirmation, also after the version was released (releasing does not confirm the chain).
 
 ## ALC-CRT-0012: Signing request no longer open
 
@@ -1362,7 +1374,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Meaning.** The client secret or certificate Alice signs in with has expired (`AADSTS7000222`). (HTTP 502, reason `azure.credentials_expired`.)
 
-**Likely cause.** Azure secrets and certificates have an end date. The vault page shows the date you typed when you added the vault.
+**Likely cause.** Azure secrets and certificates have an end date. The vault page shows the secret's end date as it was typed when the vault was added (Alice cannot read it from Azure), or the sign-in certificate's expiry date, and warns from 30 days before.
 
 **What to do.** Create a new secret or certificate for the application in Azure, then choose **Replace credentials** on the vault's page in Alice. Websites keep serving their current certificates in the meantime; only new versions are not noticed.
 
@@ -1372,7 +1384,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Likely cause.** Alice's identity lacks a role on this vault. The vault page's **Access check** shows which row is not allowed. Alice needs `Key Vault Reader` to list and monitor certificates, keys and secrets; `Key Vault Secrets User` to read a certificate's private key when it deploys to a website (F-41: before anything is sent to a server); `Key Vault Certificates Officer` to import a certificate into the vault.
 
-**What to do.** Ask your Azure administrator to assign the role named in the message to Alice's identity (the object ID is shown on the vault's page) on this vault, for example `az role assignment create --assignee-object-id <object ID> --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" --scope <vault resource ID>`, and the same with `"Key Vault Reader"` or `"Key Vault Certificates Officer"`. A vault that uses access policies needs the matching permissions instead (list and get on certificates, keys and secrets; import on certificates). Role assignments can take a few minutes to apply; then choose **Check again** on the vault's page. Alice cannot confirm that `Key Vault Reader` alone is enough on every vault: it is expected to be, and the access check tells.
+**What to do.** Ask your Azure administrator to assign the role named in the message to Alice's identity on this vault (the vault's page shows the object ID Alice signs in as). The vault's page lists the commands under **Roles Alice needs**, with the client ID and the vault's name filled in, for example `az role assignment create --role "Key Vault Secrets User" --assignee <client-id> --scope "$(az keyvault show --name <vault-name> --query id --output tsv)/secrets/<certificate-name>"`; all of them, and the access-policy commands for a vault that does not use Azure roles, are in [azure-setup.md](azure-setup.md#2-roles). Role assignments can take a few minutes to apply; then choose **Check again** under **Access check** on the vault's page. Alice cannot confirm that `Key Vault Reader` alone is enough on every vault: it is expected to be, and the access check tells.
 
 ## ALC-AKV-0004: Vault firewall blocks Alice
 
@@ -1380,7 +1392,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Likely cause.** The vault allows only selected networks, and the address of this Alice server is not among them.
 
-**What to do.** Add the address to the vault's **Networking** allow list in Azure, or reach the vault through a private endpoint (the vault's name must then resolve to the endpoint's address on this Alice server). Then choose **Check now**.
+**What to do.** Add the address to the vault's **Networking** allow list in Azure, or reach the vault through a private endpoint (the vault's name must then resolve to the endpoint's address on this Alice server; see [azure-setup.md](azure-setup.md#3-network)). When a check of the vault was refused, the vault's page shows the address under **Alice's address as the vault saw it**. Then choose **Check now**. (The form of Azure's firewall answer is not yet confirmed on a real vault; if Azure answers differently, a firewall refusal may read as a missing permission, `ALC-AKV-0003`, with no address.)
 
 ## ALC-AKV-0005: Vault not found
 
@@ -1426,7 +1438,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Meaning.** Alice could not get a managed identity from the machine it runs on. (HTTP 502, reason `azure.managed_identity_unavailable`.)
 
-**Likely cause.** Managed identity works only on an Azure virtual machine (or a similar Azure service) that has a managed identity assigned; Alice reads it from the machine's own metadata address (169.254.169.254) and nowhere else.
+**Likely cause.** Managed identity works only on an Azure virtual machine that has a managed identity assigned; Alice reads it from the machine's own metadata address (169.254.169.254) and nowhere else. App Service, Azure Arc and other hosts that offer an identity through another endpoint are not supported.
 
 **What to do.** Assign a system-assigned or user-assigned managed identity to the machine in Azure (for a user-assigned one, enter its application ID in Alice), give it the vault roles, or replace the credentials with a certificate or a client secret.
 
@@ -1450,7 +1462,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Meaning.** The vault certificate's private key is marked non-exportable, so Alice cannot read it from the vault and cannot copy it to a server. A connection to websites, automatic deployment and **Deploy now** are refused for it. (HTTP 422, reason `kv.not_exportable`.)
 
-**Likely cause.** The certificate's policy in Key Vault has **Exportable private key** turned off (or the key is in a managed HSM).
+**Likely cause.** The certificate's policy in Key Vault has **Exportable private key** turned off (or the key is in a managed HSM), or a read of its secret came back without a key (Alice then marks it itself; a later check that finds the key exportable clears the mark).
 
 **What to do.** Create a new version with an exportable key (change the policy, then renew), or use a different certificate. A monitor-only certificate still shows its versions and expiry.
 
@@ -1476,7 +1488,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Likely cause.** The vault returned a certificate without a private key, a content type that is neither PFX nor PEM, an empty or too large value, or a key that does not fit its certificate.
 
-**What to do.** Check the certificate's content type and policy in Key Vault (PFX or PEM, exportable key), create a new version if needed, and deploy again. When the secret had no private key, the key is not exportable: Alice marks the certificate **Monitor only** at that moment, and the next request answers ALC-AKV-0013 until a version with an exportable key appears.
+**What to do.** Check the certificate's content type and policy in Key Vault (PFX or PEM, exportable key), create a new version if needed, and deploy again. When the secret had no private key, the key is not exportable: Alice marks the certificate **Monitor only** when it recognises a value without a key (the form Azure sends is not yet confirmed on a real vault), and the next request answers ALC-AKV-0013 until Alice sees an exportable key again (a new version, or the certificate's policy on a later check). If the certificate is not marked **Monitor only**, check the content type and whether the key is exportable.
 
 ## ALC-AKV-0017: Vault data does not match the version
 
@@ -1514,9 +1526,9 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Meaning.** Alice cannot deploy this version: it has not read the version's details yet, or it belongs to another certificate than the connection's. (HTTP 409, reason `kv.version_not_deployable`.)
 
-**Likely cause.** A brand-new version that the next check has not described yet, or a request for a version of another certificate.
+**Likely cause.** A brand-new version that the next check has not described yet, a version that was never the certificate's current version while Alice watched the vault (Alice reads the details of current versions only), or a request for a version of another certificate.
 
-**What to do.** Choose **Check now** on the vault's page, wait for it to finish, and try again.
+**What to do.** Choose **Check now** on the vault's page, wait for it to finish, and try again. An older version Alice never saw as current cannot be deployed: make it current in Key Vault (a new version with the same content, or an import).
 
 ## ALC-AKV-0022: An administrator must deploy this version
 
@@ -1538,9 +1550,9 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Meaning.** An import under this name into this vault is queued, running or not confirmed yet. (Retryable.) (HTTP 409, reason `kv.import_in_progress`.)
 
-**Likely cause.** A previous request for the same name has not finished; an import whose answer was lost stays open until a check sees it or 24 hours pass.
+**Likely cause.** A previous request for the same name has not finished; an import whose answer was lost stays open until a check sees it, or for 24 to 72 hours (see `ALC-AKV-0026`). A waiting import task held for the license also keeps the name until an administrator runs or discards it.
 
-**What to do.** Wait until it has finished (the vault's page shows its state), then try again.
+**What to do.** Wait until it has finished (the import history on the certificate's page in **Certificates** shows its state), then try again.
 
 ## ALC-AKV-0025: Key Vault refused the import
 
@@ -1552,7 +1564,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 ## ALC-AKV-0026: Import outcome unknown
 
-**Meaning.** Alice sent the import but never learned whether the vault accepted it, and no later check of the vault showed the certificate (a check can settle it for 24 to 72 hours; removing the vault ends it at once). Alice never sends it again by itself. (HTTP 502, reason `kv.import_outcome_unknown`.)
+**Meaning.** Alice sent the import but never learned whether the vault accepted it, and no later check of the vault showed the certificate: Alice ends it so at the first check with a complete certificate list 24 hours after the send, and 72 hours after the send in any case; removing the vault ends it at once. Alice never sends it again by itself. (HTTP 502, reason `kv.import_outcome_unknown`.)
 
 **Likely cause.** The connection broke after the request reached Azure, or Azure did not answer; or the vault was removed from Alice meanwhile.
 
@@ -1676,4 +1688,4 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Likely cause.** Alice runs with another master key than the one the credentials were sealed with (the key file was replaced, or the database was restored next to another key), or the stored row was damaged.
 
-**What to do.** On the vault's page choose **Replace credentials** and enter the vault's sign-in details again (Alice seals them with the current key), then deploy again. If many vaults or servers show this, check first that Alice runs with the right master key file.
+**What to do.** On the vault's page choose **Replace credentials** and enter the vault's sign-in details again (Alice seals them with the current key), then deploy again. If many vaults or servers show this, check first that Alice runs with the right master key file. Only a deployment names this cause: **Check now**, the access check and an import of this vault show `ALC-SYS-0003` in the same situation.
