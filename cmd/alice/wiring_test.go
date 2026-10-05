@@ -19,6 +19,7 @@ import (
 	"alice/internal/platform/clock"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
+	"alice/internal/providers/nginx"
 )
 
 // wiringServices is a services value whose fields are non-nil placeholders: the wiring functions
@@ -81,7 +82,7 @@ func TestServeWiringIsComplete(t *testing.T) {
 	sched := buildScheduler(svc, nil, clock.Real{}, log)
 	require.NoError(t, checkWiring(svc.registry, runner, sched))
 
-	for _, k := range []providers.Kind{providers.KindLinuxSSH, providers.KindNginx} {
+	for _, k := range []providers.Kind{providers.KindLinuxSSH, providers.KindNginx, providers.KindAzureKV} {
 		_, ok := svc.registry.Get(k)
 		assert.True(t, ok, "provider %s", k)
 	}
@@ -120,6 +121,7 @@ func TestCheckWiringRefusesAnIncompleteProduct(t *testing.T) {
 	err := checkWiring(onlySSH, buildRunner(nil, svc, clock.Real{}, log), buildScheduler(svc, nil, clock.Real{}, log))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "provider nginx is not registered")
+	assert.Contains(t, err.Error(), "provider azurekv is not registered")
 
 	bare := jobs.NewRunner(jobs.RunnerConfig{})
 	noSweep := jobs.NewScheduler(clock.Real{}, svc.license, log,
@@ -164,4 +166,23 @@ func TestKeyVaultDepsKeepANilInventoryANilInterface(t *testing.T) {
 	deps := kvDeps(svc, clock.Real{}, slog.New(slog.DiscardHandler))
 	assert.Nil(t, deps.Inventory)
 	assert.Panics(t, func() { kvjobs.Register(jobs.NewRunner(jobs.RunnerConfig{}), deps) })
+}
+
+// A build whose registry lacks the Key Vault provider does not start: a vault job would otherwise end
+// internal.unexpected at run time (and no vault could be added). Every shipped kind is named.
+func TestCheckWiringRefusesARegistryWithoutAzureKV(t *testing.T) {
+	log := slog.New(slog.DiscardHandler)
+	svc := wiringServices(t)
+	pool := newTestPool()
+	t.Cleanup(pool.Close)
+	ssh := linuxssh.New(linuxssh.Options{Pool: pool})
+	noKV := providers.NewRegistry()
+	noKV.Register(ssh)
+	noKV.Register(nginx.New(nginx.Options{SSH: ssh}))
+	noKV.Freeze()
+	err := checkWiring(noKV, buildRunner(nil, svc, clock.Real{}, log), buildScheduler(svc, nil, clock.Real{}, log))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "provider azurekv is not registered")
+	assert.NotContains(t, err.Error(), "provider nginx is not registered")
+	assert.Contains(t, shippedProviders, providers.KindAzureKV)
 }

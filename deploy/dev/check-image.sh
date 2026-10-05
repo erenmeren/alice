@@ -5,8 +5,8 @@
 # the binary is (a release build: no build tags, no test license key, no /test routes, both
 # alice-helper checksums, a plain version). Usage: check-image.sh <tag> checks alice:<tag>.
 #
-# TEST_LICENSE_LABEL and TEST_ROUTE_MARKER come from the Makefile, whose release-symcheck proves
-# that an e2e build contains both (so their absence here means something). HELPER_SHA256_AMD64 and
+# TEST_LICENSE_LABEL, TEST_ROUTE_MARKER and E2E_AZURE_MARKER come from the Makefile, whose
+# release-symcheck proves that an e2e build contains all three (so their absence here means something). HELPER_SHA256_AMD64 and
 # HELPER_SHA256_ARM64 are the checksums of make helper: the helper build is reproducible, so the
 # image's binary must hold exactly the checksums of the helper built from the same source with the
 # same Go version (the two checks are skipped, with a skip: line, when the host's Go differs).
@@ -23,6 +23,7 @@ case "$tag" in
 esac
 label="${TEST_LICENSE_LABEL:?set TEST_LICENSE_LABEL (make image-check does)}"
 marker="${TEST_ROUTE_MARKER:?set TEST_ROUTE_MARKER (make image-check does)}"
+azure_marker="${E2E_AZURE_MARKER:?set E2E_AZURE_MARKER (make image-check does)}"
 sum_amd64="${HELPER_SHA256_AMD64:?set HELPER_SHA256_AMD64 (make image-check does)}"
 sum_arm64="${HELPER_SHA256_ARM64:?set HELPER_SHA256_ARM64 (make image-check does)}"
 
@@ -104,6 +105,7 @@ else
 fi
 check "binary does not hold the test license key label" "$(count -acF "$label" "$bin")" "0"
 check "binary does not hold the e2e /test routes" "$(count -acF "$marker" "$bin")" "0"
+check "binary does not know where the fake Azure CA lives (no e2e trust hook)" "$(count -acF "$azure_marker" "$bin")" "0"
 
 # Run it as Compose does, minus the network: read-only root, no capabilities, no new privileges.
 in_image() { docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true "alice:$tag" "$@"; }

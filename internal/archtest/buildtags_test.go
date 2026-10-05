@@ -43,7 +43,12 @@ var testOnlyImports = []string{
 
 // testOnlyDirs are test helper packages: their own files are untagged on purpose and reach no
 // release binary (TestReleaseBinariesLinkNoTestPackages).
-var testOnlyDirs = []string{"internal/license/licensetest", "internal/testutil", "internal/providers/linuxssh/linuxsshtest", "internal/providers/providertest"}
+//
+// cmd/alice-fakeazure is a test tool, not a package of the product: it imports internal/testutil/fakekv, is
+// built into the e2e fake Azure image only and is no release binary (TestReleaseBinariesLinkNoTestPackages
+// lists the binaries that ship).
+var testOnlyDirs = []string{"internal/license/licensetest", "internal/testutil", "internal/providers/linuxssh/linuxsshtest",
+	"internal/providers/providertest", "cmd/alice-fakeazure"}
 
 // testTags maps the file-name marker of test-only code to the build tag it must require.
 var testTags = map[string]string{"_e2e": "e2e", "_testlicense": "testlicense"}
@@ -297,6 +302,23 @@ func TestTestRouteMarkerIsE2EOnly(t *testing.T) {
 	assert.Positive(t, n, "no file registers %s; TEST_ROUTE_MARKER is stale", marker)
 }
 
+// The directory the e2e build reads the fake Azure service's CA from (the Makefile's E2E_AZURE_MARKER, which
+// release-symcheck and make image-check look for in the binaries) is named only in files that require e2e
+// (test files and the test tool excepted), and the e2e source does name it.
+func TestAzureMarkerIsE2EOnly(t *testing.T) {
+	marker := makeVar(t, "E2E_AZURE_MARKER")
+	require.NotEmpty(t, marker)
+	n := 0
+	for _, f := range sourceFiles(t) {
+		if f.test || inTestOnlyDir(f.rel) || !strings.Contains(f.src, marker) {
+			continue
+		}
+		n++
+		assert.True(t, requires(f.expr, "e2e"), "%s holds %s without requiring the e2e tag", f.rel, marker)
+	}
+	assert.Positive(t, n, "no source file holds %s; E2E_AZURE_MARKER is stale", marker)
+}
+
 func TestReleaseFilesImportNoTestCode(t *testing.T) {
 	for _, f := range sourceFiles(t) {
 		if f.test || inTestOnlyDir(f.rel) || !inBuild(f.expr) {
@@ -335,6 +357,11 @@ func TestReleaseBinariesLinkNoTestPackages(t *testing.T) {
 	}
 	// Positive control: the e2e build does link a test-only package, so the check can see one.
 	assert.Contains(t, goListDeps(t, "e2e testlicense", "./cmd/alice"), "alice/internal/license/licensetest")
+	// The fake Azure service is never linked into Alice, in any build that ships or runs as the e2e image:
+	// the e2e build trusts its CA from a file and needs no code of it (the fake is its own binary).
+	for _, tags := range []string{"", "e2e testlicense"} {
+		assert.NotContains(t, goListDeps(t, tags, "./cmd/alice"), "alice/internal/testutil/fakekv", "tags %q", tags)
+	}
 }
 
 func TestRequires(t *testing.T) {

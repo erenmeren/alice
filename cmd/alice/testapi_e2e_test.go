@@ -5,22 +5,31 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 
 	"alice/internal/jobs"
 	"alice/internal/license"
 	"alice/internal/notify"
 	"alice/internal/platform/clock"
+	"alice/internal/platform/netaddr"
+	"alice/internal/providers"
+	"alice/internal/testutil/pki"
 )
 
 func clockNow(t *testing.T, h http.Handler) time.Time {
@@ -412,4 +421,110 @@ func TestE2EDrainCutOffIsExactAtTheDeadline(t *testing.T) {
 		}
 	}
 	t.Logf("at the deadline: %d cut off, %d counted", cut, ran)
+}
+
+// azureSource is a service principal credential source for the Key Vault provider.
+type azureSource struct{}
+
+func (azureSource) SSHSigner(context.Context) (ssh.Signer, func(), error) {
+	return nil, nil, errors.New("not an SSH credential")
+}
+
+func (azureSource) AzureIdentity(context.Context) (providers.AzureIdentity, func(), error) {
+	return providers.AzureIdentity{Auth: providers.AzureAuthClientSecret, TenantID: uuid.NewString(), ClientID: uuid.NewString(),
+		ClientSecret: providers.NewSecret([]byte("fake-" + strings.Repeat("0", 40)))}, func() {}, nil
+}
+
+// useAzureCAFile points the e2e trust hook at a file for one test.
+func useAzureCAFile(t *testing.T, path string) {
+	t.Helper()
+	old := azureCAFile
+	azureCAFile = path
+	t.Cleanup(func() { azureCAFile = old })
+}
+
+// The e2e build trusts ONLY the fake Azure service's CA for the Azure hosts (R40 row 35, ruling S10):
+// the pool holds that one root and no system root, and a certificate of any other CA does not verify.
+func TestAzureRootsTrustOnlyTheFakeCA(t *testing.T) {
+	now := time.Now()
+	fake := pki.NewCA("fake azure", pki.ECDSA256, now)
+	other := pki.NewCA("some other CA", pki.ECDSA256, now)
+	file := filepath.Join(t.TempDir(), "ca.pem")
+	require.NoError(t, os.WriteFile(file, fake.RootPEM, 0o600))
+	useAzureCAFile(t, file)
+
+	pool, err := azureRoots()
+	require.NoError(t, err)
+	require.NotNil(t, pool)
+	want := x509.NewCertPool()
+	require.True(t, want.AppendCertsFromPEM(fake.RootPEM))
+	assert.True(t, pool.Equal(want), "the pool holds the fake CA and nothing else (no system roots)")
+
+	verify := func(ca *pki.CA) error {
+		leaf := ca.Issue(pki.Opts{CommonName: "login.microsoftonline.com", SANs: []string{"login.microsoftonline.com"}}, now)
+		inter := x509.NewCertPool()
+		inter.AddCert(ca.Intermediate)
+		_, err := leaf.Cert.Verify(x509.VerifyOptions{DNSName: "login.microsoftonline.com", Roots: pool, Intermediates: inter, CurrentTime: now.Add(time.Minute)})
+		return err
+	}
+	assert.NoError(t, verify(fake))
+	assert.Error(t, verify(other))
+}
+
+// A trust file that is missing, empty or not a certificate fails closed: the provider's session
+// cannot open (azure.tls_untrusted) and nothing falls back to the system roots. The file is read at
+// each session, so a fake service that starts after Alice (or renews its CA) is trusted at once.
+func TestAzureRootsFailClosedWithoutTheFakeCA(t *testing.T) {
+	dir := t.TempDir()
+	useAzureCAFile(t, filepath.Join(dir, "missing.pem"))
+	_, err := azureRoots()
+	require.Error(t, err)
+
+	for name, content := range map[string]string{
+		"empty":      "",
+		"not pem":    "this is not a certificate",
+		"only a key": "-----BEGIN " + "PRIVATE KEY-----\nAAAA\n-----END " + "PRIVATE KEY-----\n",
+	} {
+		f := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".pem")
+		require.NoError(t, os.WriteFile(f, []byte(content), 0o600))
+		useAzureCAFile(t, f)
+		pool, err := azureRoots()
+		assert.Nil(t, pool, name)
+		assert.Error(t, err, name)
+	}
+
+	// Through the registered provider: no file, no session, no request.
+	useAzureCAFile(t, filepath.Join(dir, "missing.pem"))
+	reg := providers.NewRegistry()
+	pool := newTestPool()
+	t.Cleanup(pool.Close)
+	registerProviders(reg, pool, slog.New(slog.DiscardHandler))
+	kv, ok := reg.Get(providers.KindAzureKV)
+	require.True(t, ok)
+	target := providers.TargetRef{ID: uuid.New(), Kind: providers.KindAzureKV,
+		Config: providers.TargetConfig{"vault_url": "https://alice-e2e.vault.azure.net"}}
+	_, err = kv.Open(context.Background(), target, azureSource{}, providers.Env{Clock: clock.Real{}})
+	var pe *providers.Error
+	require.ErrorAs(t, err, &pe)
+	assert.Equal(t, "azure.tls_untrusted", pe.Code)
+
+	// The file appears later (the fake started after Alice): the next session is not refused for it.
+	fake := pki.NewCA("fake azure", pki.ECDSA256, time.Now())
+	late := filepath.Join(dir, "late.pem")
+	useAzureCAFile(t, late)
+	require.NoError(t, os.WriteFile(late, fake.RootPEM, 0o600))
+	p, err := azureRoots()
+	require.NoError(t, err)
+	assert.NotNil(t, p)
+}
+
+// The fake service sits on the compose network at a private address (a Docker bridge, 172.16.0.0/12 by
+// default): the connection rule of the vault transport allows private endpoints, so no dial mapping
+// is needed in the e2e build. IMDS (169.254.169.254) is link-local and not reachable in compose:
+// managed identity is simply not offered by the e2e stack.
+func TestComposeAddressesAreAllowedForTheFake(t *testing.T) {
+	for _, a := range []string{"172.18.0.3", "172.31.255.254", "10.0.0.5", "192.168.64.2", "fd00::2"} {
+		assert.True(t, netaddr.Allowed(netip.MustParseAddr(a)), a)
+	}
+	assert.False(t, netaddr.Allowed(netip.MustParseAddr("169.254.169.254")))
 }

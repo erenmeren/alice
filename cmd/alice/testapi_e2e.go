@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,6 +53,38 @@ const (
 	kvScheduleEvery   = 100 * 365 * 24 * time.Hour
 	kvAutoDeployEvery = 100 * 365 * 24 * time.Hour
 )
+
+// azureCAFile is where the fake Azure service (cmd/alice-fakeazure, compose service fakeazure) writes
+// its CA; compose shares the volume read-only with alice (R40 row 35). A variable only so the unit
+// tests can point it at a file of their own.
+var azureCAFile = "/run/alice-e2e-azure/ca.pem"
+
+// maxAzureCAFile bounds what azureRoots reads (a PEM root is about 1 KB).
+const maxAzureCAFile = 1 << 20
+
+// azureRoots is the trust of Azure's TLS certificates in the e2e build: ONLY the fake's CA, never
+// the system roots (ruling S10: a real Azure certificate is not trusted here, and no host name of
+// the e2e stack is trusted by a release build). The file is read at each session, so a fake that
+// starts after Alice, or regenerates its CA, is trusted at once. When the file is missing or holds no
+// certificate the provider's session fails closed (azure.tls_untrusted, visible in the journey):
+// Alice itself still starts, because the fake is a separate container whose CA may change while
+// Alice runs, and a start-up failure would crash-loop it for a reason that is not Alice's.
+func azureRoots() (*x509.CertPool, error) {
+	f, err := os.Open(azureCAFile) //nolint:gosec // G304: the e2e build's fixed trust file (a variable only for unit tests)
+	if err != nil {
+		return nil, fmt.Errorf("the fake Azure CA is not readable: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(f, maxAzureCAFile))
+	if err != nil {
+		return nil, fmt.Errorf("the fake Azure CA is not readable: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(raw) {
+		return nil, errors.New("the fake Azure CA file holds no certificate")
+	}
+	return pool, nil
+}
 
 // maxTestBody is the request body limit of the API (SEC-023), applied to /test too.
 const maxTestBody = 1 << 20

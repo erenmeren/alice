@@ -3,6 +3,7 @@
 package main
 
 import (
+	"crypto/x509"
 	"net/http"
 	"time"
 
@@ -31,6 +32,10 @@ const (
 	kvScheduleEvery   = time.Minute
 	kvAutoDeployEvery = time.Minute
 )
+
+// azureRoots is the trust of Azure's TLS certificates: nil means the system roots. Only the e2e build
+// trusts anything else (testapi_e2e.go), and a release build reads no file for it.
+func azureRoots() (*x509.CertPool, error) { return nil, nil }
 
 // testHandler returns nil: release builds have no /test endpoints.
 func testHandler(testDeps) http.Handler { return nil }

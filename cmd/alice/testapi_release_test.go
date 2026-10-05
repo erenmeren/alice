@@ -58,3 +58,11 @@ func TestReleaseServerAnswersTestPathsWithJSON404(t *testing.T) {
 func TestReleaseBuildStartsJobWorkers(t *testing.T) {
 	assert.True(t, startJobWorkers)
 }
+
+// A release build verifies Azure's certificates with the system roots: no root function result, no
+// file read, so no fake service can be trusted by it.
+func TestReleaseAzureRootsAreTheSystemRoots(t *testing.T) {
+	pool, err := azureRoots()
+	require.NoError(t, err)
+	assert.Nil(t, pool, "a nil pool means the system roots")
+}
