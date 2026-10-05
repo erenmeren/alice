@@ -189,6 +189,45 @@ export const COPY = {
     useRecovery: 'Use a recovery code',
     recoveryCode: 'Recovery code',
     notFoundTitle: 'Page not found',
+    // Phase 5 (Key Vault): the contract's UI copy, pinned in both languages; the other texts of the
+    // journeys are read from the locale files (translator).
+    kv: {
+      title: 'Key Vaults',
+      add: 'Add Key Vault',
+      added: 'Key Vault added.',
+      openVault: 'Open the vault',
+      checkNow: 'Check now',
+      finished: 'Finished.',
+      monitorOnly: 'Monitor only',
+      newVersion: 'New version found',
+      held: 'Held',
+      connect: 'Connect websites',
+      autoDeployment: 'Automatic deployment',
+      switchOn: 'Switch on',
+      deployNow: 'Deploy now',
+      release: 'Release',
+      importAction: 'Import into Key Vault',
+      imported: 'Imported',
+      removeVault: 'Remove Key Vault',
+      removeVaultAndConnections: 'Remove the connections and the vault',
+      deleteConnection: 'Delete connection',
+      sourceNamed: (name: string) => `From Key Vault: ${name}`,
+      readStep: 'Read the certificate from Key Vault',
+      deployedVersion: 'Deployed: version',
+      missingPermission: 'Missing permission in the vault',
+      secretsUser: 'Key Vault Secrets User',
+      degraded: 'Partly working',
+      degradedHelp: 'Alice reaches this vault only in part. The reason is shown below.',
+      releaseMay: 'Automatic deployment is on, so Alice may deploy this version to the connected websites by itself, usually within a minute.',
+      releasedMay: 'Version released. Alice may deploy it by itself, usually within a minute.',
+      releaseManual: 'Nothing is deployed. Use Deploy now when you want this version on a website.',
+      heldText:
+        'This version is waiting for an administrator: the license was not available at some point since the version appeared. Alice does not deploy it by itself; an administrator can deploy or release it.',
+      firewall: 'Vault firewall blocks Alice',
+      throttled: 'Azure asked Alice to slow down',
+      autoFollows: 'Automatic deployment is on for it, so the new version is deployed to those websites by itself.',
+      boundNote: 'Websites are connected to this vault certificate.',
+    },
   },
   tr: {
     wizardHeading: 'Alice kurulumu',
@@ -272,6 +311,43 @@ export const COPY = {
     useRecovery: 'Kurtarma kodu kullan',
     recoveryCode: 'Kurtarma kodu',
     notFoundTitle: 'Sayfa bulunamadı',
+    kv: {
+      title: 'Key Vault kasaları',
+      add: 'Key Vault ekle',
+      added: 'Key Vault eklendi.',
+      openVault: 'Kasayı aç',
+      checkNow: 'Şimdi denetle',
+      finished: 'Tamamlandı.',
+      monitorOnly: 'Yalnızca izleme',
+      newVersion: 'Yeni sürüm bulundu',
+      held: 'Bekletiliyor',
+      connect: 'Web sitelerine bağla',
+      autoDeployment: 'Otomatik dağıtım',
+      switchOn: 'Aç',
+      deployNow: 'Şimdi dağıt',
+      release: 'Serbest bırak',
+      importAction: "Key Vault'a aktar",
+      imported: 'İçe aktarıldı',
+      removeVault: "Key Vault'u kaldır",
+      removeVaultAndConnections: 'Bağlantıları ve kasayı kaldır',
+      deleteConnection: 'Bağlantıyı sil',
+      sourceNamed: (name: string) => `Key Vault'tan: ${name}`,
+      readStep: "Sertifikayı Key Vault'tan okuma",
+      deployedVersion: 'Dağıtıldı: sürüm',
+      missingPermission: 'Kasada eksik izin',
+      secretsUser: 'Key Vault Secrets User',
+      degraded: 'Kısmen çalışıyor',
+      degradedHelp: 'Alice bu kasaya yalnızca kısmen ulaşabiliyor. Nedeni aşağıda gösterilir.',
+      releaseMay: 'Otomatik dağıtım açık; Alice bu sürümü bağlı web sitelerine kendiliğinden dağıtabilir, genellikle bir dakika içinde.',
+      releasedMay: 'Sürüm serbest bırakıldı. Alice bu sürümü kendiliğinden dağıtabilir, genellikle bir dakika içinde.',
+      releaseManual: 'Hiçbir şey dağıtılmaz. Bu sürümü bir web sitesinde istediğinizde Şimdi dağıt düğmesini kullanın.',
+      heldText:
+        'Bu sürüm bir yöneticiyi bekliyor: sürüm ortaya çıktıktan sonra bir süre lisans kullanılamadı. Alice bu sürümü kendiliğinden dağıtmaz; bir yönetici dağıtabilir veya serbest bırakabilir.',
+      firewall: "Kasanın güvenlik duvarı Alice'i engelliyor",
+      throttled: "Azure, Alice'ten yavaşlamasını istedi",
+      autoFollows: 'Bunun için otomatik dağıtım açık; bu yüzden yeni sürüm bu web sitelerine kendiliğinden dağıtılır.',
+      boundNote: 'Bu kasa sertifikasına web siteleri bağlı.',
+    },
   },
 } as const;
 
@@ -588,17 +664,24 @@ const COMPOSE = [
   '../deploy/.env',
 ];
 
-// targetExec runs a command as root in the e2e SSH target service "sshtarget" and returns its
-// standard output. It never addresses any other service or compose project.
-export function targetExec(args: string[], input?: string): string {
+// composeExec runs a command in one service of the e2e stack and returns its standard output. It
+// never addresses another compose project: only projects named alice-e2e* are e2e stacks (never the
+// owner stack "alice").
+function composeExec(service: string, args: string[], input?: string): string {
   if (!E2E_PROJECT.startsWith('alice-e2e')) {
-    throw new Error(`targetExec refuses the compose project "${E2E_PROJECT}": only projects named alice-e2e* are e2e stacks (never the owner stack "alice")`);
+    throw new Error(`${service} exec refuses the compose project "${E2E_PROJECT}": only projects named alice-e2e* are e2e stacks (never the owner stack "alice")`);
   }
-  return execFileSync('docker', [...COMPOSE, 'exec', '-T', 'sshtarget', ...args], {
+  return execFileSync('docker', [...COMPOSE, 'exec', '-T', service, ...args], {
     input,
     encoding: 'utf8',
     timeout: 120_000,
   });
+}
+
+// targetExec runs a command as root in the e2e SSH target service "sshtarget" and returns its
+// standard output. It never addresses any other service or compose project.
+export function targetExec(args: string[], input?: string): string {
+  return composeExec('sshtarget', args, input);
 }
 
 export interface DrainResult {
@@ -677,6 +760,8 @@ export function fingerprintOf(sshKeygenOutput: string): string {
 export interface Api {
   get(path: string): Promise<APIResponse>;
   post(path: string, data?: unknown): Promise<APIResponse>;
+  put(path: string, data: unknown, headers?: Record<string, string>): Promise<APIResponse>;
+  del(path: string): Promise<APIResponse>;
   // stepUp confirms the session with a fresh code. The server rotates the session cookie and so the
   // CSRF token; reload the page afterwards before using the UI (the SPA keeps the old token in memory).
   stepUp(totpSecret: string): Promise<void>;
@@ -690,6 +775,8 @@ export async function apiAs(page: Page): Promise<Api> {
   const api: Api = {
     get: (path) => page.request.get(path, { headers: { 'X-CSRF-Token': csrf } }),
     post: (path, data) => page.request.post(path, { headers: { 'X-CSRF-Token': csrf }, data: data ?? {} }),
+    del: (path) => page.request.delete(path, { headers: { 'X-CSRF-Token': csrf } }),
+    put: (path, data, headers = {}) => page.request.put(path, { headers: { 'X-CSRF-Token': csrf, ...headers }, data }),
     stepUp: async (totpSecret) => {
       const res = await api.post('/api/v1/auth/stepup', { code: await freshCode(page.request, totpSecret) });
       expect(res.ok(), await res.text()).toBe(true);
@@ -816,4 +903,78 @@ export function translator(lang: Lang): Translate {
       return String(params[name]);
     });
   };
+}
+
+// --- Phase 5: the fake Azure service (compose service fakeazure, cmd/alice-fakeazure) ---
+
+// azureExec runs the fake Azure tool in the e2e stack's service "fakeazure" and returns its standard
+// output. The same alice-e2e* project guard as targetExec: never the owner stack.
+export function azureExec(args: string[]): string {
+  return composeExec('fakeazure', ['/alice-fakeazure', ...args]);
+}
+
+// azureCtl runs "alice-fakeazure ctl ..." and parses the one JSON object it prints.
+function azureCtl<T = Record<string, unknown>>(...args: string[]): T {
+  return JSON.parse(azureExec(['ctl', ...args])) as T;
+}
+
+export interface AzureCredentials {
+  tenant_id: string;
+  client_id: string;
+  client_secret: string;
+  vault_url: string;
+}
+
+// azureCredentials are the fake's tenant, application, client secret and vault address, generated
+// when the fake started (and again by azureReset); nothing of it is committed.
+export function azureCredentials(): AzureCredentials {
+  return azureCtl<AzureCredentials>('credentials');
+}
+
+// azureReset reseeds the fake (web-cert, monitor-only, signing-key, db-password; every fault, role
+// change and request log cleared) with a new client secret, and returns the new credentials.
+// POST /test/reset resets only Alice, so every Phase 5 test calls this too.
+export function azureReset(): AzureCredentials {
+  return azureCtl<AzureCredentials>('reset');
+}
+
+// azureRenew makes the fake issue a new version of the certificate and returns its version id.
+export function azureRenew(name: string): string {
+  return azureCtl<{ version: string }>('renew', name).version;
+}
+
+// azureLeafFingerprint is the SHA-256 (lower-case hex) of the leaf of the certificate's current version
+// (or of version): what Nginx must serve after the deployment of that version.
+export function azureLeafFingerprint(name: string, version?: string): string {
+  return azureCtl<{ fingerprint: string }>('leaf', name, ...(version ? ['--version', version] : [])).fingerprint;
+}
+
+// azureSyncClock puts the fake's clock on Alice's (the e2e clock the journeys move with the step-up
+// windows and the license lock), two seconds ahead. Alice's planner deploys a version by itself only
+// when Azure created it strictly after automatic deployment was switched on, it compares Azure's
+// creation time (whole seconds, cut down) with its own clock, and the e2e clock runs ahead of the
+// real one: without this a version renewed "now" would look older than that moment.
+export async function azureSyncClock(request: APIRequestContext): Promise<void> {
+  azureCtl('clock', new Date(Math.floor((await serverNow(request)) / 1000) * 1000 + 2_000).toISOString().replace(/\.\d{3}Z$/, 'Z'));
+}
+
+// azureRole takes a data action away from the application's roles (revoke) or gives it back.
+export function azureRole(change: 'revoke' | 'grant', action: string): void {
+  azureCtl(`${change}-role`, action);
+}
+
+// azureFault controls what the fake answers to every vault call: throttling (429 with a Retry-After
+// above Alice's longest wait, so a cycle ends at once), the vault's firewall (the address it names), or
+// nothing wrong (unfault; firewall off).
+export function azureFault(change: { throttle: number } | { firewall: string } | 'clear'): void {
+  if (change === 'clear') {
+    azureCtl('unfault');
+    azureCtl('firewall', 'off');
+  } else if ('throttle' in change) azureCtl('throttle', '--retry-after', String(change.throttle));
+  else azureCtl('firewall', change.firewall);
+}
+
+// azureRequests counts what the fake has been sent since its last reset (or clear-requests).
+export function azureRequests(): { count: number; login: number; vault: number } {
+  return azureCtl<{ count: number; login: number; vault: number }>('requests');
 }
