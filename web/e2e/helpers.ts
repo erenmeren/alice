@@ -223,7 +223,14 @@ export const COPY = {
       releaseManual: 'Nothing is deployed. Use Deploy now when you want this version on a website.',
       heldText:
         'This version is waiting for an administrator: the license was not available at some point since the version appeared. Alice does not deploy it by itself; an administrator can deploy or release it.',
+      releasedManual: 'Version released. Nothing is deployed; use Deploy now when you want it on a website.',
+      heldChain: 'Held because its certificate chain is incomplete. An administrator can deploy it after confirming the chain, or release it.',
+      releaseChain:
+        'Automatic deployment never deploys an incomplete chain: if the chain is still incomplete, Alice holds this version again. To deploy it as it is, use Deploy now and confirm the chain.',
+      releasedChain: 'Version released. Automatic deployment will not deploy an incomplete chain; use Deploy now and confirm the chain.',
+      confirmChain: 'I confirm that this incomplete chain is intended',
       firewall: 'Vault firewall blocks Alice',
+      firewallAddress: "Alice's address as the vault saw it",
       throttled: 'Azure asked Alice to slow down',
       autoFollows: 'Automatic deployment is on for it, so the new version is deployed to those websites by itself.',
       boundNote: 'Websites are connected to this vault certificate.',
@@ -343,7 +350,14 @@ export const COPY = {
       releaseManual: 'Hiçbir şey dağıtılmaz. Bu sürümü bir web sitesinde istediğinizde Şimdi dağıt düğmesini kullanın.',
       heldText:
         'Bu sürüm bir yöneticiyi bekliyor: sürüm ortaya çıktıktan sonra bir süre lisans kullanılamadı. Alice bu sürümü kendiliğinden dağıtmaz; bir yönetici dağıtabilir veya serbest bırakabilir.',
+      releasedManual: 'Sürüm serbest bırakıldı. Hiçbir şey dağıtılmaz; istediğinizde Şimdi dağıt düğmesini kullanın.',
+      heldChain: 'Sertifika zinciri eksik olduğu için bekletiliyor. Bir yönetici zinciri onaylayarak dağıtabilir ya da serbest bırakabilir.',
+      releaseChain:
+        'Otomatik dağıtım eksik bir zinciri hiçbir zaman dağıtmaz: zincir hâlâ eksikse Alice bu sürümü yeniden bekletir. Olduğu gibi dağıtmak için Şimdi dağıt düğmesini kullanın ve zinciri onaylayın.',
+      releasedChain: 'Sürüm serbest bırakıldı. Otomatik dağıtım eksik bir zinciri dağıtmaz; Şimdi dağıt düğmesini kullanın ve zinciri onaylayın.',
+      confirmChain: 'Bu eksik zincirin bilerek kullanıldığını onaylıyorum',
       firewall: "Kasanın güvenlik duvarı Alice'i engelliyor",
+      firewallAddress: 'Kasanın gördüğü Alice adresi',
       throttled: "Azure, Alice'ten yavaşlamasını istedi",
       autoFollows: 'Bunun için otomatik dağıtım açık; bu yüzden yeni sürüm bu web sitelerine kendiliğinden dağıtılır.',
       boundNote: 'Bu kasa sertifikasına web siteleri bağlı.',
@@ -611,16 +625,30 @@ export async function signOut(page: Page): Promise<void> {
 // plus 640 px (a narrow window or tablet), where the navigation collapses behind a menu button.
 export const AXE_WIDTHS = [640, 1280, 1920] as const;
 
+// AxeOptions: soft records a finding and lets the test go on (it still fails at its end), so one run
+// lists every violation of every screen instead of the first; dialog is a dialog the screen shows,
+// awaited before the scan (an opening dialog that is not on screen yet would not be checked at all).
+export interface AxeOptions {
+  soft?: boolean;
+  dialog?: Locator;
+}
+
 // expectAccessible checks the current screen at each width in AXE_WIDTHS and restores the viewport.
-export async function expectAccessible(page: Page, screen: string): Promise<void> {
+export async function expectAccessible(page: Page, screen: string, opts: AxeOptions = {}): Promise<void> {
+  await checkWidths(page, screen, AXE_WIDTHS, opts);
+}
+
+async function checkWidths(page: Page, screen: string, widths: readonly number[], opts: AxeOptions): Promise<void> {
+  const check = opts.soft ? expect.soft : expect;
+  if (opts.dialog) await expect(opts.dialog, `${screen}: the dialog is on screen`).toBeVisible();
   const original = page.viewportSize();
   try {
-    for (const width of AXE_WIDTHS) {
+    for (const width of widths) {
       await page.setViewportSize({ width, height: original?.height ?? 720 });
-      expect(await seriousViolations(page), `axe: ${screen} at ${width} px`).toEqual([]);
+      check(await seriousViolations(page), `axe: ${screen} at ${width} px`).toEqual([]);
       // The screen fits the width: no horizontal scrolling.
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-      expect(overflow, `horizontal overflow: ${screen} at ${width} px`).toBeLessThanOrEqual(0);
+      check(overflow, `horizontal overflow: ${screen} at ${width} px`).toBeLessThanOrEqual(0);
     }
   } finally {
     if (original) await page.setViewportSize(original);
@@ -791,17 +819,8 @@ export const PHONE_WIDTH = 375;
 
 // expectWide checks a screen with axe and for horizontal overflow on a 375 px phone and at every
 // width of expectAccessible (tables scroll inside their own container, never the page).
-export async function expectWide(page: Page, screen: string): Promise<void> {
-  const original = page.viewportSize();
-  try {
-    await page.setViewportSize({ width: PHONE_WIDTH, height: original?.height ?? 720 });
-    expect(await seriousViolations(page), `axe: ${screen} at ${PHONE_WIDTH} px`).toEqual([]);
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    expect(overflow, `horizontal overflow: ${screen} at ${PHONE_WIDTH} px`).toBeLessThanOrEqual(0);
-  } finally {
-    if (original) await page.setViewportSize(original);
-  }
-  await expectAccessible(page, screen);
+export async function expectWide(page: Page, screen: string, opts: AxeOptions = {}): Promise<void> {
+  await checkWidths(page, screen, [PHONE_WIDTH, ...AXE_WIDTHS], opts);
 }
 
 // --- Phase 4: certificates and Nginx on the e2e target, and the UI texts read from the locale files ---
@@ -974,7 +993,14 @@ export function azureFault(change: { throttle: number } | { firewall: string } |
   else azureCtl('firewall', change.firewall);
 }
 
-// azureRequests counts what the fake has been sent since its last reset (or clear-requests).
-export function azureRequests(): { count: number; login: number; vault: number } {
-  return azureCtl<{ count: number; login: number; vault: number }>('requests');
+// azureRequests counts what the fake has been sent since its last reset (or clear-requests): every
+// request, those to the sign-in host and to the vault, and the vault calls it answered 429 (throttled).
+export function azureRequests(): { count: number; login: number; vault: number; throttled: number } {
+  return azureCtl<{ count: number; login: number; vault: number; throttled: number }>('requests');
+}
+
+// azureAddCertificate makes the fake create a certificate; without root its chain stops at the
+// intermediate CA (an incomplete chain). Returns its first version id.
+export function azureAddCertificate(name: string, opts: { cn: string; root: boolean }): string {
+  return azureCtl<{ version: string }>('add-cert', name, '--cn', opts.cn, '--root', String(opts.root)).version;
 }

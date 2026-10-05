@@ -4,6 +4,7 @@ import {
   COPY,
   advanceClock,
   apiAs,
+  azureAddCertificate,
   azureCredentials,
   azureFault,
   azureLeafFingerprint,
@@ -16,9 +17,9 @@ import {
   drainJobs,
   drainUntil,
   expect,
-  AXE_WIDTHS,
+  expectAccessible,
+  expectWide,
   PHONE_WIDTH,
-  seriousViolations,
   field,
   fingerprintOf,
   freshCode,
@@ -30,6 +31,7 @@ import {
   served,
   settle,
   signIn,
+  tabTo,
   targetExec,
   test,
   translator,
@@ -44,15 +46,25 @@ import {
 // (cmd/alice-fakeazure, driven with "ctl" through helpers.ts), the SSH target's Nginx as the place
 // certificates are deployed to. The contract's key texts are pinned in COPY (kv); every other visible
 // text is read from the locale files at run time (translator), as the Phase 4 journeys do.
+//
+// The fake's client secret is typed into fields (journeys A and G) and sent in API bodies
+// (addVaultByApi), so it is in the Playwright trace of a failed test (trace: retain-on-failure; CI
+// uploads the report with its traces). That is acceptable only because the fake generates the secret
+// when it starts and on every reset (azureReset, before each journey) and it dies with the stack:
+// never reuse this pattern in a suite that signs in to a real Azure tenant.
 
 const HOST_KEY_PUB = '/etc/ssh/ssh_host_ed25519_key.pub';
 const WWW = 'www.example.test';
 const SERVER = 'e2e-nginx';
 const VAULT = 'prod-vault';
 const CERT = 'web-cert';
+// A certificate for the website whose chain stops at the intermediate CA: Key Vault holds no root for it.
+const CHAIN_CERT = 'chain-cert';
 // auth.StepUpWindow: a sign-in or step-up confirms the session for this long.
 const STEP_UP_SECONDS = 5 * 60;
 const DAY_SECONDS = 24 * 3600;
+// inventory.AutoDeployRetryAfter: a website waits this long after a failed automatic deployment.
+const RETRY_AFTER_SECONDS = 3600;
 // A journey prepares a server, adds a vault, polls, deploys: more than the default 3 minutes.
 const JOURNEY_TIMEOUT = 8 * 60_000;
 // A Retry-After above Alice's longest wait (azurekv.MaxRetryAfter, 60 s): a throttled cycle ends at
@@ -70,35 +82,15 @@ async function json<T>(res: APIResponse, status?: number): Promise<T> {
   return (text ? JSON.parse(text) : {}) as T;
 }
 
-// axe checks the screen on show at 640, 1280 and 1920 px (no serious or critical violation, no
-// horizontal page scroll) like expectAccessible, but softly: a finding fails the test at its end and
-// the journey goes on, so one run lists every violation of every screen instead of the first.
-async function axe(page: Page, screen: string): Promise<void> {
-  const original = page.viewportSize();
-  try {
-    for (const width of AXE_WIDTHS) {
-      await page.setViewportSize({ width, height: original?.height ?? 720 });
-      expect.soft(await seriousViolations(page), `axe: ${screen} at ${width} px`).toEqual([]);
-      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-      expect.soft(overflow, `horizontal overflow: ${screen} at ${width} px`).toBeLessThanOrEqual(0);
-    }
-  } finally {
-    if (original) await page.setViewportSize(original);
-  }
+// axe checks the screen on show like expectAccessible, softly (a finding fails the test at its end and
+// the journey goes on, so one run lists every violation); with dialog, it first waits for the dialog.
+async function axe(page: Page, screen: string, dialog?: Locator): Promise<void> {
+  await expectAccessible(page, screen, { soft: true, dialog });
 }
 
 // axeWide is axe plus the 375 px phone width of expectWide (tables scroll inside their container).
 async function axeWide(page: Page, screen: string): Promise<void> {
-  const original = page.viewportSize();
-  try {
-    await page.setViewportSize({ width: PHONE_WIDTH, height: original?.height ?? 720 });
-    expect.soft(await seriousViolations(page), `axe: ${screen} at ${PHONE_WIDTH} px`).toEqual([]);
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    expect.soft(overflow, `horizontal overflow: ${screen} at ${PHONE_WIDTH} px`).toBeLessThanOrEqual(0);
-  } finally {
-    if (original) await page.setViewportSize(original);
-  }
-  await axe(page, screen);
+  await expectWide(page, screen, { soft: true });
 }
 
 // --- setup through the API (what the journeys are not about) ---
@@ -130,7 +122,6 @@ async function prepareAndAddServer(api: Api, request: APIRequestContext): Promis
 
 // addVaultByApi adds the fake's vault with its client secret and runs the first poll.
 async function addVaultByApi(api: Api, request: APIRequestContext, creds: AzureCredentials, name = VAULT): Promise<string> {
-  state.vaultAdded = true;
   const created = await json<{ target: { id: string } }>(
     await api.post('/api/v1/key-vaults', {
       name,
@@ -162,6 +153,13 @@ async function kvCertificateId(api: Api, vaultId: string, name: string): Promise
   return row!.id;
 }
 
+interface VaultView {
+  status: string;
+  updated_at: string;
+  last_success_at: string | null;
+  last_error: { reason: string; params?: Record<string, string> } | null;
+}
+
 interface BindingView {
   id: string;
   version: number;
@@ -181,30 +179,6 @@ async function connectByApi(api: Api, kvCertificate: string, opts: { autoDeploy:
   return binding;
 }
 
-// The provider keeps one rate limiter per vault host on Alice's clock, and POST /test/reset moves that
-// clock back to the wall clock while the limiter lives on: after a journey that advanced the clock
-// (step-up windows, the license lock), the next journey's first request to the vault would wait for the
-// clock to catch up and fail as unreachable. Removing a vault releases its host's limiter, so every
-// journey that added a vault removes its vaults at the end (releaseVaults), passed or failed.
-const state = { totpSecret: '', vaultAdded: false };
-
-// releaseVaults signs in again (the journey's own session may be gone: the license lock ends sessions)
-// and removes every vault with its connections.
-async function releaseVaults(page: Page, request: APIRequestContext): Promise<void> {
-  if (!state.vaultAdded) return;
-  state.vaultAdded = false;
-  try {
-    await page.context().clearCookies();
-    await signIn(page, request, ADMIN, state.totpSecret);
-    const api = await apiAs(page);
-    await api.stepUp(state.totpSecret);
-    const vaults = await json<{ items: { id: string }[] }>(await api.get('/api/v1/targets?type=azure_key_vault'));
-    for (const v of vaults.items) await api.del(`/api/v1/targets/${v.id}?remove_bindings=true`);
-  } catch (e) {
-    console.log(`releaseVaults: ${String(e).slice(0, 300)}`);
-  }
-}
-
 interface Session {
   totpSecret: string;
   api: Api;
@@ -217,7 +191,6 @@ interface Session {
 // drained) through the API; the page is reloaded so it holds the session's current CSRF token.
 async function startVault(page: Page, request: APIRequestContext, lang: Lang, opts: { server?: boolean } = {}): Promise<Session> {
   const { totpSecret } = await runWizard(page, request, lang);
-  state.totpSecret = totpSecret;
   const api = await apiAs(page);
   await api.stepUp(totpSecret);
   const serverId = opts.server === false ? '' : await prepareAndAddServer(api, request);
@@ -257,11 +230,10 @@ function vaultRow(page: Page, name = VAULT): Locator {
   return page.getByTestId('vaults-table').getByRole('row').filter({ has: page.getByRole('link', { name, exact: true }) });
 }
 
-async function openVault(page: Page, t: Translate, vaultId: string): Promise<void> {
+async function openVault(page: Page, vaultId: string): Promise<void> {
   await page.goto(`/key-vaults/${vaultId}`);
   await expect(page.getByRole('heading', { level: 1, name: VAULT })).toBeVisible();
   await expect(page.getByTestId('vault-status')).toBeVisible();
-  void t;
 }
 
 async function openTab(page: Page, t: Translate, tab: 'certificates' | 'keys' | 'secrets'): Promise<Locator> {
@@ -297,11 +269,13 @@ function versionRows(page: Page): Locator {
   return page.getByTestId('kv-version-row');
 }
 
-// deployedText is "Deployed: version xxxxxxxx" for the 8-digit short form of a version id.
-function deployedText(t: Translate, version: string): string {
-  return t('bindings.state.deployed', { version: version.slice(0, 8) });
+// deployedText is "Deployed: version xxxxxxxx" for the 8-digit short form of a version id (the pinned
+// contract text, which the locale file must say too).
+function deployedText(t: Translate, lang: Lang, version: string): string {
+  const text = `${COPY[lang].kv.deployedVersion} ${version.slice(0, 8)}`;
+  expect(t('bindings.state.deployed', { version: version.slice(0, 8) })).toBe(text);
+  return text;
 }
-
 
 async function uploadByApi(api: Api, pair: PemPair, label: string): Promise<string> {
   const res = await json<{ certificate: { id: string } }>(
@@ -312,10 +286,11 @@ async function uploadByApi(api: Api, pair: PemPair, label: string): Promise<stri
 }
 
 // waitDeployed drains due jobs until the website of the open certificate page shows the version as deployed.
-async function waitDeployed(page: Page, request: APIRequestContext, t: Translate, version: string): Promise<void> {
+async function waitDeployed(page: Page, request: APIRequestContext, t: Translate, lang: Lang, version: string): Promise<void> {
+  const text = deployedText(t, lang, version);
   await drainUntil(request, async () => {
     await page.reload();
-    await expect(websiteState(page)).toHaveText(deployedText(t, version), { timeout: 3_000 });
+    await expect(websiteState(page)).toHaveText(text, { timeout: 3_000 });
   });
 }
 
@@ -323,8 +298,8 @@ function steps(scope: Locator, t: Translate): Locator {
   return scope.getByRole('list', { name: t('deployments.stepsTitle') });
 }
 
-// expectDeployment checks the deployment page that is open: its status, that it came from the vault
-// and the first step, "Read the certificate from Key Vault".
+// expectKeyVaultSteps checks the step "Read the certificate from Key Vault" (kv_secret) of the deployment
+// page that is open: its text and that it succeeded.
 async function expectKeyVaultSteps(page: Page, t: Translate, kvText: string): Promise<void> {
   const row = steps(page.getByRole('main'), t).locator('li[data-step="kv_secret"]');
   await expect(row).toContainText(kvText);
@@ -353,6 +328,53 @@ async function checkNowSettled(page: Page, request: APIRequestContext, label: st
   await drainUntil(request, () => expect(button).toBeEnabled({ timeout: 1_500 }));
 }
 
+interface ChainStart {
+  s: Session;
+  certificatePage: string;
+  // held is the row of a version that is held (a version an Administrator deployed while it was held stays held).
+  held: (version: string) => Locator;
+  deployments: () => Promise<{ status: string; trigger: string; error: { reason: string } | null }[]>;
+}
+
+// startChain adds the vault and a certificate for the website whose chain is incomplete (CHAIN_CERT),
+// connects the website with automatic deployment on and opens the certificate's page.
+async function startChain(page: Page, request: APIRequestContext, lang: Lang): Promise<ChainStart> {
+  const s = await startVault(page, request, lang);
+  azureAddCertificate(CHAIN_CERT, { cn: WWW, root: false });
+  await openVault(page, s.vaultId);
+  await checkNow(page, request, lang);
+  await s.api.stepUp(s.totpSecret);
+  await connectByApi(s.api, await kvCertificateId(s.api, s.vaultId, CHAIN_CERT), { autoDeploy: true });
+  await openVault(page, s.vaultId);
+  await openCertificate(page, translator(lang), CHAIN_CERT);
+  const deployments = async () =>
+    (await json<{ items: { status: string; trigger: string; error: { reason: string } | null }[] }>(await (await apiAs(page)).get('/api/v1/deployments?limit=50'))).items;
+  const held = (version: string) => versionRows(page).filter({ hasText: version.slice(0, 8) }).filter({ has: page.getByTestId('held-text') });
+  return { s, certificatePage: page.url(), held, deployments };
+}
+
+// heldUntilShown runs due jobs until the certificate page shows the held version's row.
+async function heldUntilShown(page: Page, request: APIRequestContext, held: Locator): Promise<void> {
+  await drainUntil(request, async () => {
+    await page.reload();
+    await expect(held).toHaveCount(1, { timeout: 3_000 });
+  });
+}
+
+// holdForChain renews CHAIN_CERT in the vault; Alice finds the version, automatic deployment reads it,
+// refuses its incomplete chain and holds it. Returns the version id; the certificate page is open.
+async function holdForChain(page: Page, request: APIRequestContext, t: Translate, lang: Lang, c0: ChainStart): Promise<string> {
+  await azureSyncClock(request);
+  const version = azureRenew(CHAIN_CERT);
+  await openVault(page, c0.s.vaultId);
+  await checkNow(page, request, lang);
+  await openCertificate(page, t, CHAIN_CERT);
+  await runScheduled(request, 'kv.auto_deploy');
+  await heldUntilShown(page, request, c0.held(version));
+  await expect(c0.held(version).getByTestId('held-text')).toHaveText(COPY[lang].kv.heldChain);
+  return version;
+}
+
 for (const lang of ['en', 'tr'] as Lang[]) {
   const t = translator(lang);
   const c = COPY[lang];
@@ -366,8 +388,9 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       azureReset();
       await resetInstall(request);
     });
-    test.afterEach(async ({ page, request }) => {
-      await releaseVaults(page, request);
+    // No vault is removed at the end: POST /test/reset (the next journey's beforeEach) moves Alice's
+    // clock back, and the vault rate limiter starts a fresh window when the clock steps backwards.
+    test.afterEach(() => {
       nginxReset();
       azureReset();
     });
@@ -375,7 +398,6 @@ for (const lang of ['en', 'tr'] as Lang[]) {
     test('add a vault with a client secret, see its certificates, keys and secrets', async ({ page, request }) => {
       test.setTimeout(JOURNEY_TIMEOUT);
       const { totpSecret } = await runWizard(page, request, lang);
-      state.totpSecret = totpSecret;
       const creds = azureCredentials();
 
       // The pinned contract strings are what the app shows (a locale drift fails here).
@@ -408,7 +430,6 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await field(stepUp, c.code).fill(await freshCode(request, totpSecret));
       await stepUp.getByRole('button', { name: c.stepUpConfirm }).click();
       await expect(dialog.getByText(kv.added, { exact: true })).toBeVisible();
-      state.vaultAdded = true;
       expect(await secretOnPage(page, creds.client_secret)).toBe(false);
 
       // The access check: monitoring is allowed; deploying is not checked yet; importing is checked when you import.
@@ -462,13 +483,13 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       const s = await startVault(page, request, lang);
       const original = served(WWW);
 
-      await openVault(page, t, s.vaultId);
+      await openVault(page, s.vaultId);
       await openCertificate(page, t, CERT);
       await expect(bindingPanel(page)).toContainText(t('bindings.none'));
       await bindingPanel(page).getByRole('button', { name: kv.connect, exact: true }).click();
       const connect = page.getByRole('dialog', { name: kv.connect });
       await connect.getByRole('checkbox', { name: new RegExp(escapeRegExp(WWW)) }).check();
-      await axe(page, 'Connect websites');
+      await axe(page, 'Connect websites', connect);
       await connect.getByRole('button', { name: kv.connect, exact: true }).click();
       await expect(connect).toHaveCount(0);
       const website = bindingPanel(page).getByTestId('binding-location');
@@ -482,7 +503,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       // Mantine draws the switch's track over its input: the click goes to the track, as a person's does.
       await auto.click({ force: true });
       const confirm = page.getByRole('dialog', { name: t('bindings.autoDeployConfirmTitle') });
-      await axe(page, 'switch on automatic deployment');
+      await axe(page, 'switch on automatic deployment', confirm);
       await expireStepUp(request);
       await confirm.getByRole('button', { name: kv.switchOn, exact: true }).click();
       await answerStepUp(page, request, lang, s.totpSecret, bindingPanel(page).getByText(t('bindings.autoDeployHelp'), { exact: true }));
@@ -495,7 +516,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       const version = azureRenew(CERT);
       const renewed = azureLeafFingerprint(CERT);
       expect(renewed).not.toBe(before);
-      await openVault(page, t, s.vaultId);
+      await openVault(page, s.vaultId);
       await checkNow(page, request, lang);
       const certs = await openTab(page, t, 'certificates');
       await expect(certs.getByTestId('kv-certificate-row').filter({ hasText: CERT })).toContainText(kv.newVersion);
@@ -506,7 +527,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
 
       // The planner (it never ticks by itself in the e2e build) deploys it by itself.
       await runScheduled(request, 'kv.auto_deploy');
-      await waitDeployed(page, request, t, version);
+      await waitDeployed(page, request, t, lang, version);
       expect(served(WWW), 'Nginx serves the new version of the vault certificate').toBe(renewed);
       expect(served(WWW)).not.toBe(original);
       await expect(versionRows(page).first()).toContainText(kv.newVersion);
@@ -521,11 +542,20 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(page.getByRole('heading', { level: 1, name: t('deployments.detailTitle') })).toBeVisible();
       await expectKeyVaultSteps(page, t, kv.readStep);
       await expect(page.getByTestId('deployment-status')).toHaveText(t('enum.deploymentStatus.succeeded'));
+
+      // The background job that ran it names the deployment (GET /api/v1/jobs: deployment_id).
+      const deploymentId = new URL(page.url()).pathname.split('/').pop() ?? '';
+      expect(deploymentId).toMatch(/^[0-9a-f-]{36}$/);
+      const api = await apiAs(page);
+      const jobs = await json<{ items: { type: string; status: string; deployment_id: string | null; import_id: string | null }[] }>(await api.get('/api/v1/jobs?limit=100'));
+      const deployJobs = jobs.items.filter((j) => j.type === 'certificate.deploy');
+      expect(deployJobs.map((j) => [j.deployment_id, j.status, j.import_id])).toEqual([[deploymentId, 'succeeded', null]]);
     });
 
     test('a missing Key Vault Secrets User role is named, the website is unchanged, then Deploy now works', async ({ page, request }) => {
       test.setTimeout(JOURNEY_TIMEOUT);
       const s = await startVault(page, request, lang);
+      await s.api.stepUp(s.totpSecret);
       await connectByApi(s.api, await kvCertificateId(s.api, s.vaultId, CERT), { autoDeploy: true });
       await page.reload();
       const original = served(WWW);
@@ -533,7 +563,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       azureRole('revoke', 'secrets/get');
       await azureSyncClock(request);
       azureRenew(CERT);
-      await openVault(page, t, s.vaultId);
+      await openVault(page, s.vaultId);
       await checkNow(page, request, lang);
       await openCertificate(page, t, CERT);
       const newest = (await versionRows(page).first().locator('code').first().textContent()) ?? '';
@@ -565,7 +595,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await bindingPanel(page).getByRole('button', { name: kv.deployNow, exact: true }).click();
       const dialog = page.getByRole('dialog', { name: t('bindings.deployTitle') });
       await expect(dialog.getByRole('checkbox', { name: new RegExp(escapeRegExp(SERVER)) })).toBeChecked();
-      await axe(page, 'Deploy now');
+      await axe(page, 'Deploy now', dialog);
       await dialog.getByRole('button', { name: kv.deployNow, exact: true }).click();
       await answerStepUp(page, request, lang, s.totpSecret, dialog.getByTestId('deployment-run'));
       await settle(request, dialog.getByText(t('deploy.succeeded'), { exact: true }));
@@ -573,11 +603,13 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       expect(served(WWW)).not.toBe(original);
       await dialog.getByRole('button', { name: t('deploy.close') }).last().click();
       await expect(dialog).toHaveCount(0);
+      await expect(websiteState(page), 'the website now has the version whose deployment had failed').toHaveText(deployedText(t, lang, newest));
     });
 
     test('import an uploaded certificate into the vault; importing into a connected name asks first', async ({ page, request }) => {
       test.setTimeout(JOURNEY_TIMEOUT);
       const s = await startVault(page, request, lang);
+      await s.api.stepUp(s.totpSecret);
       await connectByApi(s.api, await kvCertificateId(s.api, s.vaultId, CERT), { autoDeploy: true });
       const pair = newCert('import.example.test');
       const certificateId = await uploadByApi(s.api, pair, 'import-me');
@@ -598,6 +630,14 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await axe(page, 'Import into Key Vault, imported');
       await dialog.getByRole('button', { name: t('ui.close') }).last().click();
       await expect(dialog).toHaveCount(0);
+      const api = await apiAs(page);
+      const imports = async () =>
+        (await json<{ items: { id: string; name: string; state: string }[] }>(await api.get(`/api/v1/targets/${s.vaultId}/kv/imports?certificate_id=${certificateId}`))).items;
+      const [imported] = await imports();
+      expect(imported).toMatchObject({ name: 'import-example-test', state: 'succeeded' });
+      // The background job that sent it names the import (GET /api/v1/jobs: import_id).
+      const jobs = await json<{ items: { type: string; import_id: string | null; deployment_id: string | null }[] }>(await api.get('/api/v1/jobs?limit=100'));
+      expect(jobs.items.filter((j) => j.type === 'kv.import').map((j) => [j.import_id, j.deployment_id])).toEqual([[imported.id, null]]);
 
       // The history of the certificate lists it; after Check now the vault does too.
       const history = page.getByTestId('import-history');
@@ -608,7 +648,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(row).toContainText(kv.imported);
       await expect(row).toContainText(VAULT);
       await axe(page, 'certificate page with its import history');
-      await openVault(page, t, s.vaultId);
+      await openVault(page, s.vaultId);
       await checkNow(page, request, lang);
       const certs = await openTab(page, t, 'certificates');
       await expect(certs.getByTestId('kv-certificate-row').filter({ hasText: 'import-example-test' })).toHaveCount(1);
@@ -632,8 +672,13 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await axe(page, 'Import into Key Vault, confirmation');
       await again.getByRole('button', { name: t('ui.cancel') }).click();
       await expect(again).toHaveCount(0);
+      // Had an import been queued, this drain would run it: nothing reaches the vault, nothing is recorded.
+      await drainJobs(request);
       expect(azureRequests().count, 'nothing was sent to the vault').toBe(sent);
-      await openVault(page, t, s.vaultId);
+      expect(await imports(), 'the import history still has the one import').toEqual([imported]);
+      // A fresh check reads the vault again: web-cert still has its one version.
+      await openVault(page, s.vaultId);
+      await checkNow(page, request, lang);
       await openCertificate(page, t, CERT);
       await expect(versionRows(page)).toHaveCount(1);
     });
@@ -641,6 +686,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
     test('a version created while the license was locked is held; releasing it lets automatic deployment deploy it', async ({ page, request }) => {
       test.setTimeout(JOURNEY_TIMEOUT);
       const s = await startVault(page, request, lang);
+      await s.api.stepUp(s.totpSecret);
       await connectByApi(s.api, await kvCertificateId(s.api, s.vaultId, CERT), { autoDeploy: true });
       const original = served(WWW);
 
@@ -654,7 +700,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await page.reload();
 
       // The check that finds it holds it: neutral words, no deployment by itself.
-      await openVault(page, t, s.vaultId);
+      await openVault(page, s.vaultId);
       await checkNow(page, request, lang);
       const certs = await openTab(page, t, 'certificates');
       await expect(certs.getByTestId('kv-certificate-row').filter({ hasText: CERT })).toContainText(kv.held);
@@ -673,7 +719,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       const dialog = page.getByRole('dialog', { name: t('vaults.cert.releaseTitle') });
       await expect(dialog.getByText(kv.heldText)).toBeVisible();
       await expect(dialog.getByText(kv.releaseMay, { exact: true })).toBeVisible();
-      await axe(page, 'release dialog');
+      await axe(page, 'release dialog', dialog);
       await expireStepUp(request);
       await dialog.getByRole('button', { name: kv.release, exact: true }).click();
       await answerStepUp(page, request, lang, s.totpSecret, page.getByText(kv.releasedMay, { exact: true }));
@@ -681,32 +727,175 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(page.getByTestId('held-text')).toHaveCount(0);
       await runScheduled(request, 'kv.auto_deploy');
       await drainJobs(request);
-      await waitDeployed(page, request, t, version);
+      await waitDeployed(page, request, t, lang, version);
       expect(served(WWW), 'the released version is deployed').toBe(renewed);
     });
 
-    test('a throttled vault is degraded after three cycles with neutral words, a firewall is named', async ({ page, request }) => {
+    test('a version held for its incomplete chain: releasing it never deploys it, Deploy now with the chain confirmed does', async ({ page, request }) => {
+      test.setTimeout(JOURNEY_TIMEOUT);
+      // The pinned contract texts are what the app shows.
+      expect(t('vaults.heldChain')).toBe(kv.heldChain);
+      expect(t('vaults.cert.releaseHelpChain')).toBe(kv.releaseChain);
+      expect(t('vaults.cert.releasedChain')).toBe(kv.releasedChain);
+      expect(t('vaults.cert.releaseHelpManual')).toBe(kv.releaseManual);
+      expect(t('vaults.cert.releasedManual')).toBe(kv.releasedManual);
+      expect(t('deploy.confirmChain')).toBe(kv.confirmChain);
+
+      const c0 = await startChain(page, request, lang);
+      const { deployments } = c0;
+      const original = served(WWW);
+      const first = await holdForChain(page, request, t, lang, c0);
+      expect((await deployments()).map((d) => [d.trigger, d.status, d.error?.reason])).toEqual([['kv_renewal', 'failed', 'certificate.chain_unconfirmed']]);
+      expect(served(WWW), 'an incomplete chain is never deployed by itself').toBe(original);
+      await axe(page, 'vault certificate with a version held for its chain');
+
+      // Release, automatic deployment on: the text says automatic deployment never deploys the incomplete
+      // chain; the Administrator confirms the chain before Release can be pressed.
+      await c0.held(first).getByRole('button', { name: t('vaults.cert.releaseNamed', { version: first.slice(0, 8) }) }).click();
+      const dialog = page.getByRole('dialog', { name: t('vaults.cert.releaseTitle') });
+      await expect(dialog.getByText(kv.heldChain, { exact: true })).toBeVisible();
+      await expect(dialog.getByText(kv.releaseChain, { exact: true })).toBeVisible();
+      const confirmChain = dialog.getByRole('checkbox', { name: kv.confirmChain });
+      await expect(confirmChain).not.toBeChecked();
+      await expect(dialog.getByRole('button', { name: kv.release, exact: true })).toBeDisabled();
+      await axe(page, 'release dialog, incomplete chain', dialog);
+      await confirmChain.check();
+      await expireStepUp(request);
+      await dialog.getByRole('button', { name: kv.release, exact: true }).click();
+      await answerStepUp(page, request, lang, c0.s.totpSecret, page.getByText(kv.releasedChain, { exact: true }));
+      await expect(dialog).toHaveCount(0);
+      await expect(page.getByTestId('held-text')).toHaveCount(0);
+
+      // What follows, as the text says: nothing is deployed; at its next try (a website waits an hour after a
+      // failed automatic deployment) the chain is still incomplete, so Alice holds the version again.
+      await runScheduled(request, 'kv.auto_deploy');
+      await drainJobs(request);
+      expect(await deployments(), 'the release itself deploys nothing').toHaveLength(1);
+      await advanceClock(request, RETRY_AFTER_SECONDS + 1);
+      await signIn(page, request, ADMIN, c0.s.totpSecret); // the hour ended the idle session
+      await runScheduled(request, 'kv.auto_deploy');
+      await page.goto(c0.certificatePage);
+      await heldUntilShown(page, request, c0.held(first));
+      await expect(c0.held(first).getByTestId('held-text')).toHaveText(kv.heldChain);
+      expect((await deployments()).map((d) => [d.status, d.error?.reason])).toEqual([
+        ['failed', 'certificate.chain_unconfirmed'],
+        ['failed', 'certificate.chain_unconfirmed'],
+      ]);
+      expect(served(WWW), 'held again, still not deployed').toBe(original);
+
+      // Deploy now, as the text says: for a version held for its chain the dialog asks for the confirmation
+      // first; with it, the version is live.
+      await bindingPanel(page).getByRole('button', { name: kv.deployNow, exact: true }).click();
+      const deploy = page.getByRole('dialog', { name: t('bindings.deployTitle') });
+      await expect(deploy.getByRole('checkbox', { name: new RegExp(escapeRegExp(SERVER)) })).toBeChecked();
+      const deployChain = deploy.getByRole('checkbox', { name: kv.confirmChain });
+      await expect(deployChain).not.toBeChecked();
+      await expect(deploy.getByRole('button', { name: kv.deployNow, exact: true })).toBeDisabled();
+      await axe(page, 'Deploy now, chain confirmation', deploy);
+      await deployChain.check();
+      await deploy.getByRole('button', { name: kv.deployNow, exact: true }).click();
+      await answerStepUp(page, request, lang, c0.s.totpSecret, deploy.getByTestId('deployment-run'));
+      await settle(request, deploy.getByText(t('deploy.succeeded'), { exact: true }));
+      expect(served(WWW), 'Deploy now with the chain confirmed deploys it').toBe(azureLeafFingerprint(CHAIN_CERT, first));
+      await deploy.getByRole('button', { name: t('deploy.close') }).last().click();
+      await expect(deploy).toHaveCount(0);
+      await expect(websiteState(page)).toHaveText(deployedText(t, lang, first));
+
+      // The next renewal is held for its chain again; with automatic deployment off, releasing it says
+      // nothing is deployed (and still asks for the chain).
+      const second = await holdForChain(page, request, t, lang, c0);
+      const auto = bindingPanel(page).getByRole('switch', { name: kv.autoDeployment });
+      await expect(auto).toBeChecked();
+      await auto.click({ force: true });
+      await answerStepUp(page, request, lang, c0.s.totpSecret, bindingPanel(page).getByText(t('bindings.autoDeployHelpOff'), { exact: true }));
+      await expect(auto).not.toBeChecked();
+      await c0.held(second).getByRole('button', { name: t('vaults.cert.releaseNamed', { version: second.slice(0, 8) }) }).click();
+      await expect(dialog.getByText(kv.heldChain, { exact: true })).toBeVisible();
+      await expect(dialog.getByText(kv.releaseManual, { exact: true })).toBeVisible();
+      await expect(dialog.getByText(kv.releaseChain, { exact: true })).toHaveCount(0);
+      await axe(page, 'release dialog, automatic deployment off', dialog);
+      await dialog.getByRole('checkbox', { name: kv.confirmChain }).check();
+      await expireStepUp(request);
+      await dialog.getByRole('button', { name: kv.release, exact: true }).click();
+      await answerStepUp(page, request, lang, c0.s.totpSecret, page.getByText(kv.releasedManual, { exact: true }));
+      await expect(c0.held(second)).toHaveCount(0);
+      await runScheduled(request, 'kv.auto_deploy');
+      await drainJobs(request);
+      expect(served(WWW), 'released with automatic deployment off: nothing is deployed').toBe(azureLeafFingerprint(CHAIN_CERT, first));
+    });
+
+    // FIXME (product): after a version held for its incomplete chain is released, Deploy now cannot deploy it
+    // from the UI. The released version is no longer held, so KVDeployDialog does not offer the chain
+    // confirmation; the server accepts the request (it learns the chain only when it reads the secret) and the
+    // deployment fails at "Read the certificate from Key Vault" with certificate.chain_unconfirmed, every time.
+    // Yet the release texts say "use Deploy now and confirm the chain". This journey asserts what should happen.
+    test.fixme('after releasing a version held for its chain, Deploy now lets the Administrator confirm the chain', async ({ page, request }) => {
+      test.setTimeout(JOURNEY_TIMEOUT);
+      const c0 = await startChain(page, request, lang);
+      const version = await holdForChain(page, request, t, lang, c0);
+      const auto = bindingPanel(page).getByRole('switch', { name: kv.autoDeployment });
+      await auto.click({ force: true });
+      await answerStepUp(page, request, lang, c0.s.totpSecret, bindingPanel(page).getByText(t('bindings.autoDeployHelpOff'), { exact: true }));
+      await c0.held(version).getByRole('button', { name: t('vaults.cert.releaseNamed', { version: version.slice(0, 8) }) }).click();
+      const dialog = page.getByRole('dialog', { name: t('vaults.cert.releaseTitle') });
+      await dialog.getByRole('checkbox', { name: kv.confirmChain }).check();
+      await expireStepUp(request);
+      await dialog.getByRole('button', { name: kv.release, exact: true }).click();
+      await answerStepUp(page, request, lang, c0.s.totpSecret, page.getByText(kv.releasedManual, { exact: true }));
+
+      await bindingPanel(page).getByRole('button', { name: kv.deployNow, exact: true }).click();
+      const deploy = page.getByRole('dialog', { name: t('bindings.deployTitle') });
+      const deployChain = deploy.getByRole('checkbox', { name: kv.confirmChain });
+      // Offered up front, or after the server asked for it: either way before anything runs.
+      if (!(await deployChain.isVisible())) {
+        await deploy.getByRole('button', { name: kv.deployNow, exact: true }).click();
+        await answerStepUp(page, request, lang, c0.s.totpSecret, deployChain);
+      }
+      await expect(deploy.getByTestId('deployment-run'), 'nothing ran without the confirmation').toHaveCount(0);
+      await deployChain.check();
+      await deploy.getByRole('button', { name: kv.deployNow, exact: true }).click();
+      await answerStepUp(page, request, lang, c0.s.totpSecret, deploy.getByTestId('deployment-run'));
+      await settle(request, deploy.getByText(t('deploy.succeeded'), { exact: true }));
+      expect(served(WWW)).toBe(azureLeafFingerprint(CHAIN_CERT, version));
+    });
+
+    test('a throttled vault is degraded after three cycles with neutral words, a firewall is named with the address it saw', async ({ page, request }) => {
       test.setTimeout(JOURNEY_TIMEOUT);
       const s = await startVault(page, request, lang, { server: false });
-      await openVault(page, t, s.vaultId);
-      await expect(page.getByTestId('vault-status')).toHaveText(t('enum.targetStatus.ok'));
+      await openVault(page, s.vaultId);
       const status = page.getByTestId('vault-status');
+      await expect(status).toHaveText(t('enum.targetStatus.ok'));
+      const vault = async () => json<VaultView>(await s.api.get(`/api/v1/targets/${s.vaultId}`));
+      const lastSuccess = (await vault()).last_success_at;
+      expect(lastSuccess, 'the first poll succeeded').not.toBeNull();
 
       // Azure throttles every list: the first two cycles change nothing, the third degrades the vault.
       azureFault({ throttle: LONG_RETRY_AFTER });
       for (const cycle of [1, 2]) {
+        const before = await vault();
+        const throttled = azureRequests().throttled;
         await checkNowSettled(page, request, kv.checkNow);
+        // Proof that this cycle ran and was throttled: the fake answered 429 to it, the poll stored its
+        // outcome (updated_at moved) without a successful listing (last_success_at did not), and the vault
+        // is still Connected without an error, also on a page loaded afresh.
+        expect(azureRequests().throttled, `cycle ${cycle} ran into the throttle`).toBeGreaterThan(throttled);
+        const after = await vault();
+        expect(Date.parse(after.updated_at), `cycle ${cycle} stored its outcome`).toBeGreaterThan(Date.parse(before.updated_at));
+        expect(after, `after ${cycle} throttled cycle(s)`).toMatchObject({ status: 'ok', last_error: null, last_success_at: lastSuccess });
+        await page.reload();
         await expect(status, `after ${cycle} throttled cycle(s)`).toHaveText(t('enum.targetStatus.ok'));
+        await expect(page.getByRole('alert').filter({ hasText: kv.throttled })).toHaveCount(0);
       }
       await checkNowSettled(page, request, kv.checkNow);
       await expect(status).toHaveText(kv.degraded);
+      expect(await vault()).toMatchObject({ status: 'degraded', last_error: { reason: 'azure.throttled' }, last_success_at: lastSuccess });
       await expect(page.getByTestId('vault-status-help')).toHaveText(kv.degradedHelp);
       await expect(page.getByRole('alert').filter({ hasText: kv.throttled })).toBeVisible();
       await axeWide(page, 'vault page, throttled');
       await nav(page, t, 'nav.keyVaults');
       await expect(vaultRow(page)).toContainText(kv.degraded);
       await expect(vaultRow(page)).toContainText(kv.throttled);
-      await openVault(page, t, s.vaultId);
+      await openVault(page, s.vaultId);
 
       // Azure stops throttling: the next check restores it.
       azureFault('clear');
@@ -714,24 +903,24 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(status).toHaveText(t('enum.targetStatus.ok'));
       await expect(page.getByTestId('vault-status-help')).toHaveCount(0);
 
-      // The vault's firewall refuses Alice's address: degraded at once, the firewall is the reason.
+      // The vault's firewall refuses Alice's address: degraded at once, the firewall is the reason, and the
+      // page shows the address the vault saw (Azure's "Client address: ..."), as code.
+      expect(t('errors.azure.firewall.title')).toBe(kv.firewall);
+      expect(t('vaults.firewallAddress')).toBe(kv.firewallAddress);
       azureFault({ firewall: '203.0.113.7' });
       await checkNowSettled(page, request, kv.checkNow);
       await expect(status).toHaveText(kv.degraded);
-      await expect(page.getByRole('alert').filter({ hasText: t('errors.azure.firewall.title') })).toBeVisible();
+      await expect(page.getByRole('alert').filter({ hasText: kv.firewall })).toBeVisible();
       await expect(page.getByTestId('vault-status-help')).toHaveText(kv.degradedHelp);
-      const detail = await json<{ last_error: { reason: string; params?: { client_address?: string } } }>(await s.api.get(`/api/v1/targets/${s.vaultId}`));
-      expect(detail.last_error.reason).toBe('azure.firewall');
-      // The troubleshooting guide (ALC-AKV-0004) says the parameter client_address names the address the vault
-      // saw, but the vault's last error carries no params and no text names it: a documented gap, not a failure
-      // of this journey (see the report); the annotation shows up in the test report.
-      if (detail.last_error.params?.client_address !== '203.0.113.7') {
-        test.info().annotations.push({ type: 'gap', description: 'the address the vault names (client_address) is not exposed by the API nor shown by the UI' });
-      }
-      await axe(page, 'vault page, firewall');
+      const address = page.getByTestId('vault-firewall-address');
+      await expect(address).toContainText(kv.firewallAddress);
+      await expect(address.locator('code')).toHaveText('203.0.113.7');
+      expect((await vault()).last_error).toMatchObject({ reason: 'azure.firewall', params: { client_address: '203.0.113.7' } });
+      await axeWide(page, 'vault page, firewall');
       azureFault('clear');
       await checkNowSettled(page, request, kv.checkNow);
       await expect(status).toHaveText(t('enum.targetStatus.ok'));
+      await expect(address).toHaveCount(0);
     });
 
     test('a vault address that points elsewhere is refused on the field and nothing is created', async ({ page, request }) => {
@@ -746,7 +935,15 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await field(dialog, t('vaults.fields.tenant_id')).fill(creds.tenant_id);
       await field(dialog, t('vaults.fields.client_id')).fill(creds.client_id);
       const baseline = azureRequests().count;
-      for (const address of ['https://contoso.vault.azure.net.evil.test', 'http://contoso.vault.azure.net', 'https://contoso.vault.azure.net:8443', 'https://contoso.vault.azure.net/secrets']) {
+      // The five addresses of the Review Focus that are refused when typed: another host behind the vault
+      // suffix, plain HTTP, another port, a path, and a sovereign cloud's vault (Alice serves the public cloud).
+      for (const address of [
+        'https://contoso.vault.azure.net.evil.test',
+        'http://contoso.vault.azure.net',
+        'https://contoso.vault.azure.net:8443',
+        'https://contoso.vault.azure.net/secrets',
+        'contoso.vault.usgovcloudapi.net',
+      ]) {
         await field(dialog, t('vaults.fields.vault_url')).fill(address);
         await field(dialog, t('vaults.fields.client_secret')).fill(creds.client_secret);
         await dialog.getByRole('button', { name: kv.add, exact: true }).click();
@@ -779,7 +976,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       // Add Key Vault: every sign-in method and certificate format.
       await page.getByRole('button', { name: kv.add }).click();
       const add = page.getByRole('dialog', { name: kv.add });
-      await axe(page, 'Add Key Vault, certificate (PEM)');
+      await axe(page, 'Add Key Vault, certificate (PEM)', add);
       await add.getByRole('radio', { name: t('vaults.certFormat.pfx') }).check();
       await axe(page, 'Add Key Vault, certificate (PFX)');
       await add.getByRole('radio', { name: t('vaults.auth.client_secret') }).check();
@@ -790,11 +987,27 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(add).toHaveCount(0);
 
       // The vault page, each tab; the vault certificate page.
-      await openVault(page, t, s.vaultId);
+      await openVault(page, s.vaultId);
       for (const tab of ['certificates', 'keys', 'secrets'] as const) {
         await openTab(page, t, tab);
         await axeWide(page, `vault page, ${tab} tab`);
       }
+
+      // The scrolling part of a table is a named region the keyboard reaches, and its focus ring is drawn
+      // inside it (the scroll area around it clips anything outside): checked on a phone, where it scrolls.
+      const desktop = page.viewportSize()!;
+      await page.setViewportSize({ width: PHONE_WIDTH, height: desktop.height });
+      const keysTable = await openTab(page, t, 'keys');
+      const region = page.getByRole('region', { name: t('ui.scrollRegion'), exact: true }).filter({ has: keysTable });
+      await expect(region).toHaveCount(1);
+      await page.getByRole('tab', { name: t('vaults.tabs.keys'), exact: true }).focus();
+      await tabTo(page, region);
+      const ring = await region.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { focusVisible: el.matches(':focus-visible'), style: cs.outlineStyle, width: cs.outlineWidth, offset: cs.outlineOffset, scrolls: el.scrollWidth > el.clientWidth };
+      });
+      expect(ring).toEqual({ focusVisible: true, style: 'solid', width: '2px', offset: '-2px', scrolls: true });
+      await page.setViewportSize(desktop);
       await openCertificate(page, t, CERT);
       await axeWide(page, 'vault certificate page, not connected');
 
@@ -802,7 +1015,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await bindingPanel(page).getByRole('button', { name: kv.connect, exact: true }).click();
       const connect = page.getByRole('dialog', { name: kv.connect });
       await connect.getByRole('checkbox', { name: new RegExp(escapeRegExp(WWW)) }).check();
-      await axe(page, 'Connect websites');
+      await axe(page, 'Connect websites', connect);
       await connect.getByRole('button', { name: kv.connect, exact: true }).click();
       await expect(connect).toHaveCount(0);
       await expect(bindingPanel(page).getByTestId('binding-location')).toBeVisible();
@@ -810,18 +1023,20 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await bindingPanel(page).getByRole('button', { name: kv.deployNow, exact: true }).click();
       const deploy = page.getByRole('dialog', { name: t('bindings.deployTitle') });
       await expect(deploy.getByRole('checkbox', { name: new RegExp(escapeRegExp(SERVER)) })).toBeChecked();
-      await axe(page, 'Deploy now');
+      await axe(page, 'Deploy now', deploy);
       await deploy.getByRole('button', { name: t('deploy.cancel') }).click();
       await expect(deploy).toHaveCount(0);
       await bindingPanel(page).getByRole('button', { name: kv.deleteConnection, exact: true }).click();
-      await axe(page, 'Delete connection');
-      await page.getByRole('dialog', { name: t('bindings.deleteTitle') }).getByRole('button', { name: t('ui.cancel') }).click();
+      const deleteConnection = page.getByRole('dialog', { name: t('bindings.deleteTitle') });
+      await axe(page, 'Delete connection', deleteConnection);
+      await deleteConnection.getByRole('button', { name: t('ui.cancel') }).click();
+      await expect(deleteConnection).toHaveCount(0);
 
       // Remove Key Vault, with a connected website (the confirmation names the consequence).
-      await openVault(page, t, s.vaultId);
+      await openVault(page, s.vaultId);
       await page.getByRole('button', { name: kv.removeVault, exact: true }).click();
       const remove = page.getByRole('dialog', { name: t('vaults.deleteTitle') });
-      await axe(page, 'Remove Key Vault');
+      await axe(page, 'Remove Key Vault', remove);
       await remove.getByRole('button', { name: kv.removeVault, exact: true }).click();
       await expect(remove.getByText(t('vaults.hasBindings'))).toBeVisible();
       await axe(page, 'Remove Key Vault, connections');
@@ -831,7 +1046,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await page.goto(`/certificates/${certificateId}`);
       await page.getByRole('button', { name: kv.importAction, exact: true }).click();
       const imp = page.getByRole('dialog', { name: kv.importAction });
-      await axe(page, 'Import into Key Vault');
+      await axe(page, 'Import into Key Vault', imp);
       await imp.getByRole('button', { name: kv.importAction, exact: true }).click();
       await answerStepUp(page, request, lang, s.totpSecret, imp.getByText(t('imports.working')));
       await settle(request, imp.getByTestId('import-outcome'));
@@ -849,7 +1064,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await page.reload();
 
       // A vault with a connected website is refused first; the dialog then offers to remove both.
-      await openVault(page, t, s.vaultId);
+      await openVault(page, s.vaultId);
       await page.getByRole('button', { name: kv.removeVault, exact: true }).click();
       const remove = page.getByRole('dialog', { name: t('vaults.deleteTitle') });
       await remove.getByRole('button', { name: kv.removeVault, exact: true }).click();
@@ -860,19 +1075,22 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(vaultRow(page)).toBeVisible();
 
       // Delete the connection: the websites are released, the vault certificate stays.
-      await openVault(page, t, s.vaultId);
+      await openVault(page, s.vaultId);
       await openCertificate(page, t, CERT);
       await expect(bindingPanel(page).getByTestId('binding-location')).toBeVisible();
       await bindingPanel(page).getByRole('button', { name: kv.deleteConnection, exact: true }).click();
       const del = page.getByRole('dialog', { name: t('bindings.deleteTitle') });
       await expect(del.getByText(t('bindings.deleteHelp'))).toBeVisible();
+      // The sign-in's step-up window has passed: the delete asks for a code.
+      await expireStepUp(request);
       await del.getByRole('button', { name: kv.deleteConnection, exact: true }).click();
+      await answerStepUp(page, request, lang, s.totpSecret, bindingPanel(page).getByText(t('bindings.none')));
       await expect(del).toHaveCount(0);
       await expect(bindingPanel(page)).toContainText(t('bindings.none'));
       await expect(bindingPanel(page).getByTestId('binding-location')).toHaveCount(0);
 
       // Remove the Key Vault: confirmed, the list no longer shows it.
-      await openVault(page, t, s.vaultId);
+      await openVault(page, s.vaultId);
       await page.getByRole('button', { name: kv.removeVault, exact: true }).click();
       const confirm = page.getByRole('dialog', { name: t('vaults.deleteTitle') });
       await expect(confirm.getByText(t('vaults.deleteHelp'))).toBeVisible();
@@ -882,10 +1100,13 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(page.getByText(t('vaults.empty'))).toBeVisible();
       await expect(vaultRow(page)).toHaveCount(0);
 
-      // With its connections: add the vault again, connect, remove both in one confirmation.
-      const again = await addVaultByApi(s.api, request, s.creds);
-      await connectByApi(s.api, await kvCertificateId(s.api, again, CERT), { autoDeploy: false });
-      await openVault(page, t, again);
+      // With its connections: add the vault again, connect, remove both in one confirmation. The step-up
+      // dialogs above rotated the session's CSRF token: a fresh API client, confirmed again.
+      const api = await apiAs(page);
+      await api.stepUp(s.totpSecret);
+      const again = await addVaultByApi(api, request, s.creds);
+      await connectByApi(api, await kvCertificateId(api, again, CERT), { autoDeploy: false });
+      await openVault(page, again);
       await page.getByRole('button', { name: kv.removeVault, exact: true }).click();
       const both = page.getByRole('dialog', { name: t('vaults.deleteTitle') });
       await both.getByRole('button', { name: kv.removeVault, exact: true }).click();
@@ -893,8 +1114,8 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await both.getByRole('button', { name: kv.removeVaultAndConnections, exact: true }).click();
       await answerStepUp(page, request, lang, s.totpSecret, page.getByRole('heading', { level: 1, name: kv.title }));
       await expect(page.getByText(t('vaults.empty'))).toBeVisible();
-      const bindings = await s.api.get(`/api/v1/targets/${again}`);
-      expect(bindings.status(), 'the removed vault is gone').toBe(404);
+      const gone = await (await apiAs(page)).get(`/api/v1/targets/${again}`);
+      expect(gone.status(), 'the removed vault is gone').toBe(404);
     });
   });
 }
