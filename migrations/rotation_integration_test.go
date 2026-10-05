@@ -7,6 +7,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -538,9 +539,9 @@ func TestRotationRunCannotBeRewrittenOnceFinished(t *testing.T) {
 	f.verified(0)
 	f.overlap()
 	f.removingOld()
-	f.recheck(0, rotNow)
-	require.NoError(t, f.startRemoving(0, rotNow, rotNow))
-	f.mustLoc(0, "state = 'removed', removed_at = $2", rotNow)
+	f.recheck(0, rotNow.Add(time.Minute))
+	require.NoError(t, f.startRemoving(0, rotNow, rotNow.Add(2*time.Minute)))
+	f.mustLoc(0, "state = 'removed', removed_at = $2", rotNow.Add(3*time.Minute))
 	require.NoError(t, f.runSet("status = 'completed', finished_at = $2, result_code = 'rotation.done'", rotNow))
 
 	for _, c := range []struct{ set, why string }{
@@ -685,7 +686,8 @@ VALUES ($1, $2, $3, $4, 'manual', $5, '{}', repeat('0', 64), 'ed25519', 1, $6, $
 		}
 		// S1, S11: the states the rulings need.
 		assert.NoError(t, insert(", finished_at, result_code", ", $6, 'rotation.notice_undelivered'", "cancelled", nil), "S1: cancelled with a result code")
-		assert.NoError(t, insert(", finished_at, kept_count", ", $6, 3", "aborted", &newKey), "S11: kept_count on a finished run")
+		spare, _ := seedSSHKey(t, db, "SHA256:"+repeat43("Q"))
+		assert.NoError(t, insert(", finished_at, kept_count", ", $6, 3", "aborted", &spare), "S11: kept_count on a finished run")
 	})
 	// One live run per policy and per key.
 	assert.Contains(t, []string{"rotations_one_live_per_policy", "rotations_one_live_per_key"}, constraintOf(insertRun(db, f.policy, f.oldKey, "dry_run_notified", nil)))
@@ -737,12 +739,45 @@ func TestRotationLocationInsertRules(t *testing.T) {
 	assert.Equal(t, "Z1011", sqlState(f.insertLoc(f.run, 3, later, "later", "/home/later/.ssh/authorized_keys", "planned", nil)), "a finished run takes no location")
 }
 
-// The location table of C8 as built: every pair of states that is not an edge is refused (SQLSTATE Z1011).
+// edgeAllowed is the location table of C8 as built (after rulings G1-G3).
+var edgeAllowed = map[string][]string{
+	"planned":  {"adding", "cancelled", "add_failed"},
+	"adding":   {"added", "add_failed", "verified", "unverifiable", "verify_failed", "undoing", "undo_failed"},
+	"added":    {"add_failed", "verified", "unverifiable", "verify_failed", "undoing", "undo_failed"},
+	"verified": {"removing", "remove_failed", "kept_old", "undoing", "undo_failed"}, "unverifiable": {"kept_old", "undoing", "undo_failed"},
+	"verify_failed": {"undoing", "undo_failed"}, "add_failed": {"undoing", "undo_failed"}, "kept_old": {"undoing", "undo_failed"},
+	"removing": {"removed", "remove_failed"}, "remove_failed": {"removing"}, "undoing": {"undone", "undo_failed"},
+}
+
+var allLocationStates = []string{"planned", "skipped", "cancelled", "adding", "added", "add_failed", "verified", "unverifiable", "verify_failed",
+	"kept_old", "removing", "removed", "remove_failed", "undoing", "undone", "undo_failed"}
+
+// assertEdgeMatrix: every pair of states that is not an edge is refused (SQLSTATE Z1011); the states that ended
+// never change again (remove_failed changes only by a retry).
+func assertEdgeMatrix(t *testing.T, f *rotFx, idx map[string]int) {
+	t.Helper()
+	for from, i := range idx {
+		require.Equal(t, from, f.state(i), "fixture row "+from)
+		for _, to := range allLocationStates {
+			if to == from || slices.Contains(edgeAllowed[from], to) {
+				continue
+			}
+			assert.Equal(t, "Z1011", sqlState(f.locSet(i, "state = $2", to)), from+" -> "+to+" is not an edge")
+		}
+	}
+	for _, from := range []string{"skipped", "cancelled", "removed", "remove_failed", "undone", "undo_failed"} {
+		if i, ok := idx[from]; ok {
+			assert.Equal(t, "Z1011", sqlState(f.locSet(i, "job_count = job_count + 1")), from+" never changes again")
+		}
+	}
+}
+
 func TestRotationLocationEdgeTable(t *testing.T) {
 	db := pgtest.New(t)
-	f := newRotFx(t, db, 16)
+	// Run one: the add and removal side.
+	f := newRotFx(t, db, 13)
 	idx := map[string]int{"planned": 0, "skipped": 1, "cancelled": 2, "adding": 3, "added": 4, "add_failed": 5, "verified": 6, "unverifiable": 7,
-		"verify_failed": 8, "kept_old": 9, "removing": 10, "removed": 11, "remove_failed": 12, "undoing": 13, "undone": 14, "undo_failed": 15}
+		"verify_failed": 8, "kept_old": 9, "removing": 10, "removed": 11, "remove_failed": 12}
 	guardOff(t, db, "rotation_locations", "rotation_locations_guard", func() {
 		_, err := db.Owner.Exec(context.Background(), "UPDATE rotation_locations SET state = 'skipped', skip_reason = 'unreachable' WHERE id = $1", f.locs[idx["skipped"]])
 		require.NoError(t, err) // a skipped row is born skipped; the fixture inserts every row planned
@@ -763,14 +798,6 @@ func TestRotationLocationEdgeTable(t *testing.T) {
 	f.verified(idx["removing"])
 	f.verified(idx["removed"])
 	f.verified(idx["remove_failed"])
-	f.verified(idx["undoing"])
-	f.mustLoc(idx["undoing"], "state = 'undoing', undo_op_id = gen_random_uuid(), undo_sent_at = $2", rotNow)
-	f.verified(idx["undone"])
-	f.mustLoc(idx["undone"], "state = 'undoing', undo_op_id = gen_random_uuid(), undo_sent_at = $2", rotNow)
-	f.mustLoc(idx["undone"], "state = 'undone'")
-	f.verified(idx["undo_failed"])
-	f.mustLoc(idx["undo_failed"], "state = 'undoing', undo_op_id = gen_random_uuid(), undo_sent_at = $2", rotNow)
-	f.mustLoc(idx["undo_failed"], "state = 'undo_failed', error_code = 'rotation.old_key_gone'") // S12
 	f.overlap()
 	f.removingOld()
 	for _, n := range []string{"removing", "removed", "remove_failed"} {
@@ -780,31 +807,28 @@ func TestRotationLocationEdgeTable(t *testing.T) {
 	require.NoError(t, f.startRemoving(idx["removed"], rotNow, rotNow.Add(2*time.Minute)))
 	f.mustLoc(idx["removed"], "state = 'removed', removed_at = $2", rotNow.Add(3*time.Minute))
 	f.mustLoc(idx["remove_failed"], "state = 'remove_failed', error_code = 'rotation.new_key_failed'") // F3: verified -> remove_failed
-	for st, i := range idx {
-		require.Equal(t, st, f.state(i), "fixture row "+st)
-	}
-
-	allowed := map[string][]string{
-		"planned": {"adding", "cancelled", "add_failed"}, "adding": {"added", "add_failed", "verified", "unverifiable", "verify_failed", "undoing"},
-		"added": {"verified", "unverifiable", "verify_failed", "undoing"}, "verified": {"removing", "remove_failed", "kept_old", "undoing"},
-		"unverifiable": {"kept_old", "undoing"}, "verify_failed": {"undoing"}, "add_failed": {"undoing"}, "kept_old": {"undoing"},
-		"removing": {"removed", "remove_failed"}, "undoing": {"undone", "undo_failed"},
-	}
-	terminal := []string{"skipped", "cancelled", "removed", "remove_failed", "undone", "undo_failed"}
-	for from, i := range idx {
-		for to := range idx {
-			if to == from || slices.Contains(allowed[from], to) {
-				continue
-			}
-			assert.Equal(t, "Z1011", sqlState(f.locSet(i, "state = $2", to)), from+" -> "+to+" is not an edge")
-		}
-	}
-	for _, from := range terminal {
-		assert.Equal(t, "Z1011", sqlState(f.locSet(idx[from], "job_count = job_count + 1")), from+" never changes again")
-	}
+	assertEdgeMatrix(t, f, idx)
 	// A live row changes in place (a job counter, a note).
 	assert.NoError(t, f.locSet(idx["verified"], "job_count = job_count + 1"))
 	assert.NoError(t, f.locSet(idx["adding"], "job_count = job_count + 1"))
+
+	// Run two: the undo side.
+	g := newRotFx(t, pgtest.New(t), 6)
+	g.start()
+	idx2 := map[string]int{"undoing": 0, "undone": 1, "undo_failed": 2, "verified": 3, "adding": 4, "added": 5}
+	g.verified(0)
+	g.verified(1)
+	g.verified(2)
+	g.verified(3)
+	g.mustLoc(4, "state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2", rotNow)
+	g.added(5)
+	require.NoError(t, g.runSet("status = 'rolling_back'"))
+	g.mustLoc(0, "state = 'undoing', undo_op_id = gen_random_uuid(), undo_sent_at = $2", rotNow)
+	g.mustLoc(1, "state = 'undoing', undo_op_id = gen_random_uuid(), undo_sent_at = $2", rotNow)
+	g.mustLoc(1, "state = 'undone'")
+	g.mustLoc(2, "state = 'undoing', undo_op_id = gen_random_uuid(), undo_sent_at = $2", rotNow)
+	g.mustLoc(2, "state = 'undo_failed', error_code = 'rotation.old_key_gone'")
+	assertEdgeMatrix(t, g, idx2)
 }
 
 func TestRotationLocationTies(t *testing.T) {
@@ -887,14 +911,15 @@ func TestRotationRemovalNeedsTheRunToBeRemoving(t *testing.T) {
 	f := newRotFx(t, db, 1)
 	f.start()
 	f.verified(0)
-	f.recheck(0, rotNow)
+	f.recheck(0, rotNow.Add(time.Minute))
 	op := uuid.New()
+	sent := rotNow.Add(2 * time.Minute)
 	remove := `state = 'removing', remove_op_id = $2, remove_verified_at = reverified_at, remove_sent_at = $3`
-	assert.Equal(t, "Z1011", sqlState(f.locSet(0, remove, op, rotNow)), "adding_new")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, remove, op, sent)), "adding_new")
 	f.overlap()
-	assert.Equal(t, "Z1011", sqlState(f.locSet(0, remove, op, rotNow)), "overlap")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, remove, op, sent)), "overlap")
 	f.removingOld()
-	assert.NoError(t, f.locSet(0, remove, op, rotNow), "removing_old with removal_allowed")
+	assert.NoError(t, f.locSet(0, remove, op, sent), "removing_old with removal_allowed")
 }
 
 func TestRotationPlatformFingerprintNeverRemoving(t *testing.T) {
@@ -963,19 +988,19 @@ func TestRotationRulingStatesAreHeld(t *testing.T) {
 	f := newRotFx(t, db, 1)
 	f.start()
 	due := rotNow.Add(14 * 24 * time.Hour)
+	// S4: an add confirmed only by the login (adding -> verified), the new place recorded with it (F-67).
+	f.mustLoc(0, "state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2", rotNow)
+	nl := insertKeyLocation(t, db, f.newKey, f.target, "ua", f.files[0])
 	// S6: verifying_new paused in lock with its deadline kept; the notice after the renewal is renotified_at.
 	require.NoError(t, f.runSet(`status = 'verifying_new', paused_license = true, paused_at = $2, awaiting_decision = true, decision_due_at = $3,
     renotified_at = $2, continued_at = $2, kept_count = 2, version = version + 1`, rotNow, due))
 	require.NoError(t, f.runSet(`paused_license = false, paused_at = NULL, decision_due_at = $2`, due.Add(time.Hour)), "Continue moves the deadline by the time spent paused")
-	// S4: an add confirmed only by the login (adding -> verified), the new place recorded with it (F-67).
-	f.mustLoc(0, "state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2", rotNow)
-	nl := insertKeyLocation(t, db, f.newKey, f.target, "ua", f.files[0])
 	f.mustLoc(0, "state = 'verified', verified_at = $2, new_location_id = $3", rotNow, nl)
 	// S3, S12: an undo after an uncertain add, and an undo that finds the old key gone.
+	require.NoError(t, f.runSet("status = 'rolling_back'"))
 	f.mustLoc(0, "state = 'undoing', undo_op_id = gen_random_uuid(), undo_sent_at = $2", rotNow)
 	assert.Equal(t, "23514", sqlState(f.locSet(0, "error_code = 'Rotation Old'")), "an error code keeps the code form")
 	f.mustLoc(0, "state = 'undo_failed', error_code = 'rotation.old_key_gone'")
-	require.NoError(t, f.runSet("status = 'rolling_back'"))
 	require.NoError(t, f.runSet("status = 'needs_attention', finished_at = $2, result_code = 'rotation.undo_failed'", rotNow))
 }
 
@@ -1159,4 +1184,408 @@ VALUES (gen_random_uuid(), $1, $2, $3, 'manual', 'queued', 'pending', repeat('e'
 	require.NoError(t, exec(t, d.Owner, "UPDATE ssh_keys SET managed = false, private_key_id = NULL WHERE id = $1", k2)) // only the policy row is left to refuse
 	require.NoError(t, exec(t, d.Owner, "DELETE FROM managed_private_keys WHERE owner_type = 'ssh_key'"))
 	refused("a rotation policy")
+}
+
+// G1: a location that is `added` ends add_failed (retries exhausted without a verification).
+func TestRotationAddedMayEndAddFailed(t *testing.T) {
+	db := pgtest.New(t)
+	f := newRotFx(t, db, 2)
+	f.start()
+	f.added(0)
+	assert.NoError(t, f.locSet(0, "state = 'add_failed', error_code = 'rotation.retries_exhausted'"))
+	f.added(1)
+	require.NoError(t, f.runSet("status = 'rolling_back'"))
+	assert.Equal(t, "Z1011", sqlState(f.locSet(1, "state = 'add_failed', error_code = 'x.y'")), "an add ends only while the run is adding_new")
+}
+
+// G2: a pending undo goes straight to undo_failed when nothing is sent, with a reason and no undo time.
+func TestRotationPendingUndoMayEndWithoutASend(t *testing.T) {
+	db := pgtest.New(t)
+	f := newRotFx(t, db, 5)
+	f.start()
+	f.verified(0)
+	f.verified(1)
+	f.verified(2)
+	f.added(3)
+	f.mustLoc(4, "state = 'cancelled'")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "state = 'undo_failed', error_code = 'rotation.old_key_gone'")), "the run is not rolling back")
+	require.NoError(t, f.runSet("status = 'rolling_back'"))
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "state = 'undo_failed'")), "a reason is required")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "state = 'undo_failed', error_code = 'rotation.old_key_gone', undo_sent_at = $2", rotNow)), "no undo time is invented")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "state = 'undo_failed', error_code = 'rotation.old_key_gone', undo_op_id = gen_random_uuid()")), "nor an op id")
+	assert.NoError(t, f.locSet(0, "state = 'undo_failed', error_code = 'rotation.old_key_gone'"), "verified -> undo_failed")
+	assert.NoError(t, f.locSet(3, "state = 'undo_failed', error_code = 'rotation.retries_exhausted'"), "added -> undo_failed")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(4, "state = 'undo_failed', error_code = 'x.y'")), "a cancelled row has nothing to undo")
+	// Through undoing as before.
+	f.mustLoc(1, "state = 'undoing', undo_op_id = gen_random_uuid(), undo_sent_at = $2", rotNow)
+	assert.NoError(t, f.locSet(1, "state = 'undo_failed', error_code = 'ssh.timeout'"))
+}
+
+// G3: a failed removal is retried through the full gate; a finished run stays frozen.
+func TestRotationRemoveFailedRetriesThroughTheGate(t *testing.T) {
+	db := pgtest.New(t)
+	f := readyToRemove(t, db, 1)
+	require.NoError(t, f.startRemoving(0, rotNow, rotNow.Add(2*time.Minute)))
+	f.mustLoc(0, "state = 'remove_failed', error_code = 'ssh.timeout'")
+	retry := `state = 'removing', reverified_at = $2, remove_op_id = gen_random_uuid(), remove_verified_at = $2, remove_sent_at = $3`
+	later := rotNow.Add(time.Hour)
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "job_count = job_count + 1")), "a failed removal changes only by a retry")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "state = 'removed', removed_at = $2", later)), "never straight to removed")
+	assert.Equal(t, "rotation_locations_removal_fresh", constraintOf(f.locSet(0, retry, later, later.Add(16*time.Minute))), "a stale re-check is not fresh")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, retry, rotNow.Add(30*time.Second), rotNow.Add(time.Minute))), "the re-check does not go back in time")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, retry, later, rotNow)), "the send does not go back in time")
+	require.NoError(t, f.runSet("paused_license = true, paused_at = $2", later))
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, retry, later, later.Add(time.Minute))), "no retry while paused for the licence")
+	require.NoError(t, f.runSet("paused_license = false, paused_at = NULL"))
+	set := func(fp string) {
+		_, err := db.Owner.Exec(context.Background(), `UPDATE credentials SET public_info = jsonb_build_object('fingerprint', $1::text) WHERE purpose = 'platform_ssh'`, fp)
+		require.NoError(t, err)
+	}
+	set(f.oldFP)
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, retry, later, later.Add(time.Minute))), "the gate holds for a retry")
+	set("SHA256:" + repeat43("Z"))
+	require.NoError(t, f.locSet(0, retry, later, later.Add(time.Minute)), "the retry on a fresh re-check")
+	f.mustLoc(0, "state = 'removed', removed_at = $2", later.Add(2*time.Minute))
+
+	// After needs_attention the run is frozen: its remove_failed locations stay as they are.
+	g := readyToRemove(t, pgtest.New(t), 1)
+	require.NoError(t, g.startRemoving(0, rotNow, rotNow.Add(2*time.Minute)))
+	g.mustLoc(0, "state = 'remove_failed', error_code = 'ssh.timeout'")
+	assert.Equal(t, "Z1013", sqlState(g.runSet("status = 'completed', finished_at = $2", rotNow)), "G6: completed needs no failed removal")
+	require.NoError(t, g.runSet("status = 'needs_attention', finished_at = $2, kept_count = 1, result_code = 'rotation.remove_incomplete'", rotNow))
+	assert.Equal(t, "Z1011", sqlState(g.locSet(0, retry, later, later.Add(time.Minute))), "a finished run's location is not retried")
+}
+
+// G4: the re-check is a later login than the verification.
+func TestRotationRecheckIsStrictlyLater(t *testing.T) {
+	db := pgtest.New(t)
+	f := newRotFx(t, db, 1)
+	f.start()
+	f.verified(0) // verified_at = rotNow
+	assert.Equal(t, "rotation_locations_times", constraintOf(f.locSet(0, "reverified_at = $2", rotNow)), "the same instant is not a re-check")
+	assert.Equal(t, "rotation_locations_times", constraintOf(f.locSet(0, "reverified_at = $2", rotNow.Add(-time.Second))))
+	assert.NoError(t, f.locSet(0, "reverified_at = $2", rotNow.Add(time.Microsecond)))
+}
+
+// G5: no send while the run is paused for the licence.
+func TestRotationNoSendWhilePaused(t *testing.T) {
+	db := pgtest.New(t)
+	f := newRotFx(t, db, 2)
+	f.start()
+	require.NoError(t, f.runSet("paused_license = true, paused_at = $2", rotNow))
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2", rotNow)), "no add while paused")
+	require.NoError(t, f.runSet("paused_license = false, paused_at = NULL"))
+	f.verified(0)
+	f.mustLoc(1, "state = 'cancelled'")
+	f.overlap()
+	require.NoError(t, f.runSet("paused_license = true, paused_at = $2", rotNow))
+	assert.Equal(t, "Z1013", sqlState(f.runSet("status = 'removing_old', removal_allowed = true")), "overlap -> removing_old not while paused")
+	require.NoError(t, f.runSet("paused_license = false, paused_at = NULL"))
+	f.removingOld()
+	f.recheck(0, rotNow.Add(time.Minute))
+	require.NoError(t, f.runSet("paused_license = true, paused_at = $2", rotNow.Add(time.Minute)))
+	assert.Equal(t, "Z1011", sqlState(f.startRemoving(0, rotNow, rotNow.Add(2*time.Minute))), "no removal is sent while paused")
+	require.NoError(t, f.runSet("paused_license = false, paused_at = NULL"))
+	require.NoError(t, f.startRemoving(0, rotNow, rotNow.Add(2*time.Minute)))
+	require.NoError(t, f.runSet("paused_license = true, paused_at = $2", rotNow.Add(3*time.Minute)))
+	f.recheck(0, rotNow.Add(4*time.Minute))
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "remove_verified_at = reverified_at, remove_sent_at = $2", rotNow.Add(5*time.Minute))), "no re-send while paused")
+	assert.NoError(t, f.locSet(0, "state = 'removed', removed_at = $2", rotNow.Add(6*time.Minute)), "in-flight removals finish while paused")
+}
+
+// G6: a run ends completed only without a failed removal, aborted only with every location ended.
+func TestRotationRunEndConditions(t *testing.T) {
+	db := pgtest.New(t)
+	f := newRotFx(t, db, 4)
+	f.start()
+	f.added(0)
+	f.verified(1)
+	f.mustLoc(2, "state = 'cancelled'")
+	f.mustLoc(3, "state = 'add_failed', error_code = 'ssh.timeout'") // never sent: planned -> add_failed
+	require.NoError(t, f.runSet("status = 'rolling_back'"))
+	assert.Equal(t, "Z1013", sqlState(f.runSet("status = 'aborted', finished_at = $2", rotNow)), "an added location is not undone yet")
+	f.mustLoc(0, "state = 'undoing', undo_op_id = gen_random_uuid(), undo_sent_at = $2", rotNow)
+	f.mustLoc(0, "state = 'undone'")
+	assert.Equal(t, "Z1013", sqlState(f.runSet("status = 'aborted', finished_at = $2", rotNow)), "a verified location is not undone yet")
+	f.mustLoc(1, "state = 'undo_failed', error_code = 'rotation.old_key_gone'")
+	assert.NoError(t, f.runSet("status = 'aborted', finished_at = $2", rotNow), "undone, undo_failed, cancelled and never-sent add_failed are ended")
+
+	g := newRotFx(t, pgtest.New(t), 1)
+	g.start()
+	g.verified(0)
+	g.mustLoc(0, "state = 'kept_old'")
+	require.NoError(t, g.runSet("status = 'rolling_back'"))
+	assert.Equal(t, "Z1013", sqlState(g.runSet("status = 'aborted', finished_at = $2", rotNow)), "kept_old is not ended by an abort")
+}
+
+// G7: the run's verification is read from OLD on the removal edge.
+func TestRotationRemovalEdgeReadsTheVerificationFromOld(t *testing.T) {
+	db := pgtest.New(t)
+	f := newRotFx(t, db, 1)
+	f.start()
+	f.verified(0)
+	require.NoError(t, f.runSet("status = 'overlap'"), "overlap entered without verified_at (the store sets it with the status)")
+	assert.Equal(t, "Z1013", sqlState(f.runSet("status = 'removing_old', removal_allowed = true, verified_at = $2", rotNow)),
+		"the verification cannot be written in the statement that starts the removal")
+	require.NoError(t, f.runSet("verified_at = $2", rotNow))
+	assert.NoError(t, f.runSet("status = 'removing_old', removal_allowed = true"))
+}
+
+// G8: location edges respect the run's status.
+func TestRotationLocationEdgesRespectTheRunStatus(t *testing.T) {
+	db := pgtest.New(t)
+	f := newRotFx(t, db, 4)
+	f.start()
+	f.mustLoc(0, "state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2", rotNow)
+	f.verified(1)
+	f.added(2)
+	adding := "state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2"
+	verify := func(i int) error { return f.locSet(i, "state = 'verified', verified_at = $2", rotNow) }
+	// overlap
+	f.overlap()
+	assert.Equal(t, "Z1011", sqlState(f.locSet(3, adding, rotNow)), "no add in the overlap")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "state = 'added', added_line_no = 1")), "an add does not finish in the overlap")
+	assert.Equal(t, "Z1011", sqlState(verify(2)), "no verification in the overlap")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(1, "state = 'remove_failed', error_code = 'x.y'")), "no removal result outside removing_old")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(1, "state = 'undoing', undo_op_id = gen_random_uuid(), undo_sent_at = $2", rotNow)), "no undo outside rolling_back")
+	// rolling_back
+	require.NoError(t, f.runSet("status = 'rolling_back'"))
+	assert.Equal(t, "Z1011", sqlState(f.locSet(3, adding, rotNow)), "no add while rolling back")
+	assert.Equal(t, "Z1011", sqlState(verify(2)), "no verification while rolling back")
+	assert.NoError(t, f.locSet(1, "state = 'undoing', undo_op_id = gen_random_uuid(), undo_sent_at = $2", rotNow))
+	assert.NoError(t, f.locSet(1, "state = 'undone'"))
+	assert.Equal(t, "Z1011", sqlState(f.locSet(1, "state = 'undone', undo_sent_at = $2", rotNow)), "an ended row does not change")
+
+	// verifying_new takes verification results (S4/F-67) but no add.
+	g := newRotFx(t, pgtest.New(t), 2)
+	g.start()
+	g.mustLoc(0, "state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2", rotNow)
+	require.NoError(t, g.runSet("status = 'verifying_new', awaiting_decision = true, decision_due_at = $2", rotNow.Add(time.Hour)))
+	assert.Equal(t, "Z1011", sqlState(g.locSet(1, adding, rotNow)), "no add while verifying")
+	assert.NoError(t, g.locSet(0, "state = 'verified', verified_at = $2", rotNow), "a result of an add in flight is recorded")
+}
+
+// G9: removal needs every location of the file verified, the new key's place recorded and live.
+func TestRotationRemovalNeedsTheWholeFileAndTheNewPlace(t *testing.T) {
+	// build: location 0 and its sibling (another user of the same file), location 2 alone in its file and verified
+	// without a recorded new place; siblingVerified decides whether the sibling is verified before the overlap.
+	build := func(siblingVerified bool) *rotFx {
+		f := newRotFx(t, pgtest.New(t), 1)
+		shared := insertKeyLocation(t, f.db, f.oldKey, f.target, "ub", f.files[0])
+		sib := uuid.New()
+		f.must(`INSERT INTO rotation_locations (id, rotation_id, n, old_location_id, target_id, os_user, file_path, state, updated_at)
+VALUES ($1, $2, 2, $3, $4, 'ub', $5, 'planned', $6)`, sib, f.run, shared, f.target, f.files[0], rotNow)
+		f.locs = append(f.locs, sib)
+		solo := insertKeyLocation(t, f.db, f.oldKey, f.target, "uc", "/home/uc/.ssh/authorized_keys")
+		soloRow := uuid.New()
+		f.must(`INSERT INTO rotation_locations (id, rotation_id, n, old_location_id, target_id, os_user, file_path, state, updated_at)
+VALUES ($1, $2, 3, $3, $4, 'uc', '/home/uc/.ssh/authorized_keys', 'planned', $5)`, soloRow, f.run, solo, f.target, rotNow)
+		f.locs = append(f.locs, soloRow)
+		f.start()
+		f.verified(0)
+		if siblingVerified {
+			f.verified(1)
+		} else {
+			f.added(1)
+		}
+		f.mustLoc(2, "state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2", rotNow)
+		f.mustLoc(2, "state = 'verified', verified_at = $2", rotNow)
+		f.overlap()
+		f.removingOld()
+		for _, i := range []int{0, 1, 2} {
+			if f.state(i) == "verified" {
+				f.recheck(i, rotNow.Add(time.Minute))
+			}
+		}
+		return f
+	}
+	send := func(f *rotFx, i int) error { return f.startRemoving(i, rotNow, rotNow.Add(2*time.Minute)) }
+
+	f := build(false)
+	assert.Equal(t, "Z1011", sqlState(send(f, 0)), "the other user of the file is not verified")
+	assert.Equal(t, "Z1011", sqlState(send(f, 2)), "the new key's place is not recorded")
+
+	g := build(true)
+	ctx := context.Background()
+	_, err := g.db.App.Exec(ctx, "UPDATE ssh_key_locations SET removed_by_alice_at = $2 WHERE id = $1", g.newLocs[0], rotNow)
+	require.NoError(t, err) // the new key's place removed by hand on the Phase 3 removal page during the overlap
+	assert.Equal(t, "Z1011", sqlState(send(g, 0)), "the new key's place is no longer live")
+	_, err = g.db.App.Exec(ctx, "UPDATE ssh_key_locations SET removed_by_alice_at = NULL, missing_since = $2 WHERE id = $1", g.newLocs[0], rotNow)
+	require.NoError(t, err)
+	assert.Equal(t, "Z1011", sqlState(send(g, 0)), "nor missing")
+	_, err = g.db.App.Exec(ctx, "UPDATE ssh_key_locations SET missing_since = NULL WHERE id = $1", g.newLocs[0])
+	require.NoError(t, err)
+	assert.NoError(t, send(g, 0), "everything verified, the place live")
+	assert.NoError(t, send(g, 1), "the sibling follows (the file's rows are verified or removing)")
+}
+
+// G10: a new key belongs to exactly one run, ever.
+func TestRotationNewKeyIsUsedOnce(t *testing.T) {
+	db := pgtest.New(t)
+	f := newRotFx(t, db, 1)
+	f.start()
+	f.mustLoc(0, "state = 'cancelled'")
+	require.NoError(t, f.runSet("status = 'rolling_back'"))
+	require.NoError(t, f.runSet("status = 'aborted', finished_at = $2", rotNow))
+	require.NoError(t, insertRun(db, f.policy, f.oldKey, "dry_run_notified", nil))
+	var run2 uuid.UUID
+	require.NoError(t, db.App.QueryRow(context.Background(), "SELECT id FROM rotations WHERE status = 'dry_run_notified'").Scan(&run2))
+	err := f.x("UPDATE rotations SET status = 'adding_new', new_ssh_key_id = $2, started_at = $3 WHERE id = $1", run2, f.newKey, rotNow)
+	assert.Equal(t, "rotations_new_key_once", constraintOf(err), "the key of an aborted run (it may have been downloaded) is not reused")
+	fresh := seedReplacementKey(t, db, "SHA256:"+repeat43("R"), f.oldKey)
+	assert.NoError(t, f.x("UPDATE rotations SET status = 'adding_new', new_ssh_key_id = $2, started_at = $3 WHERE id = $1", run2, fresh, rotNow))
+}
+
+// G11: verified needs verified_at, which is set once.
+func TestRotationVerifiedNeedsItsTimeAndKeepsIt(t *testing.T) {
+	db := pgtest.New(t)
+	f := newRotFx(t, db, 1)
+	f.start()
+	f.mustLoc(0, "state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2", rotNow)
+	assert.Equal(t, "rotation_locations_verified_state", constraintOf(f.locSet(0, "state = 'verified'")), "verified without a time")
+	f.mustLoc(0, "state = 'verified', verified_at = $2", rotNow.Add(time.Minute))
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "verified_at = $2", rotNow.Add(2*time.Minute))), "verified_at moves never")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "verified_at = NULL")), "nor is cleared")
+}
+
+// G12: a run insert locks its policy, so a policy deleted at the same moment cannot get a run.
+func TestRotationInsertWaitsForAPolicyBeingDeleted(t *testing.T) {
+	db := pgtest.New(t)
+	ctx := context.Background()
+	key, _ := seedSSHKey(t, db, "SHA256:"+repeat43("A"))
+	require.NoError(t, insertPolicy(db, key))
+	var policy uuid.UUID
+	require.NoError(t, db.App.QueryRow(ctx, "SELECT id FROM rotation_policies WHERE ssh_key_id = $1", key).Scan(&policy))
+	tx, err := db.App.Begin(ctx)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, "UPDATE rotation_policies SET deleted_at = $2 WHERE id = $1", policy, rotNow)
+	require.NoError(t, err)
+	result := make(chan error, 1)
+	go func() { result <- insertRun(db, policy, key, "dry_run_notified", nil) }()
+	select {
+	case err := <-result:
+		t.Fatalf("the run insert did not wait for the policy (it would see it live): %v", err)
+	case <-time.After(700 * time.Millisecond):
+	}
+	require.NoError(t, tx.Commit(ctx))
+	select {
+	case err := <-result:
+		assert.Equal(t, "Z1013", sqlState(err))
+	case <-time.After(10 * time.Second):
+		t.Fatal("blocked after the commit")
+	}
+}
+
+// G13: destroying a private key and un-retiring its key lock each other's row.
+func TestPrivateKeyDestructionAndUnretireExcludeEachOther(t *testing.T) {
+	db := pgtest.New(t)
+	ctx := context.Background()
+	key, pk := seedSSHKey(t, db, "SHA256:"+repeat43("A"))
+	_, err := db.App.Exec(ctx, "UPDATE ssh_keys SET retired_at = $2 WHERE id = $1", key, rotNow)
+	require.NoError(t, err)
+	tx, err := db.App.Begin(ctx)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE managed_private_keys SET destroyed_at = $2, ciphertext = NULL, nonce = NULL, wrapped_dek = NULL, key_version = NULL WHERE id = $1`, pk, rotNow)
+	require.NoError(t, err)
+	result := make(chan error, 1)
+	go func() {
+		_, err := db.App.Exec(ctx, "UPDATE ssh_keys SET retired_at = NULL WHERE id = $1", key)
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		t.Fatalf("the un-retire did not wait for the destruction: %v", err)
+	case <-time.After(700 * time.Millisecond):
+	}
+	require.NoError(t, tx.Commit(ctx))
+	select {
+	case err := <-result:
+		assert.Equal(t, "Z1014", sqlState(err), "after the destruction committed the un-retire is refused")
+	case <-time.After(10 * time.Second):
+		t.Fatal("blocked after the commit")
+	}
+}
+
+// Why every writer of a location takes the run first: a location UPDATE locks its row before the trigger reads the
+// run, so the opposite order deadlocks (40P01); the documented order serializes.
+func TestRotationWritersTakeTheRunBeforeTheLocation(t *testing.T) {
+	db := pgtest.New(t)
+	ctx := context.Background()
+	f := newRotFx(t, db, 1)
+	f.start()
+	bump := "UPDATE rotation_locations SET job_count = job_count + 1 WHERE id = $1"
+	lockRun := "SELECT 1 FROM rotations WHERE id = $1 FOR UPDATE"
+
+	// The wrong order: tx1 holds the location and waits for the run's share lock, tx2 holds the run and wants the location.
+	tx1, err := db.App.Begin(ctx)
+	require.NoError(t, err)
+	tx2, err := db.App.Begin(ctx)
+	require.NoError(t, err)
+	_, err = tx2.Exec(ctx, lockRun, f.run)
+	require.NoError(t, err)
+	first := make(chan error, 1)
+	go func() { _, err := tx1.Exec(ctx, bump, f.locs[0]); first <- err }()
+	time.Sleep(300 * time.Millisecond) // tx1 now holds the location row and waits for the run
+	_, err2 := tx2.Exec(ctx, bump, f.locs[0])
+	err1 := <-first
+	var states []string
+	states = append(states, sqlState(err1), sqlState(err2))
+	assert.Contains(t, states, "40P01", "one of the two is aborted as a deadlock")
+	_ = tx1.Rollback(ctx)
+	_ = tx2.Rollback(ctx)
+
+	// The documented order: both take the run first; they serialize without error.
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tx, err := db.App.Begin(ctx)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			if _, err := tx.Exec(ctx, lockRun, f.run); err != nil {
+				errs <- err
+				return
+			}
+			if _, err := tx.Exec(ctx, bump, f.locs[0]); err != nil {
+				errs <- err
+				return
+			}
+			errs <- tx.Commit(ctx)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		assert.NoError(t, err)
+	}
+	var jobs int
+	require.NoError(t, db.Owner.QueryRow(ctx, "SELECT job_count FROM rotation_locations WHERE id = $1", f.locs[0]).Scan(&jobs))
+	assert.Equal(t, 2, jobs)
+}
+
+// R9: re-saving an enabled policy and un-deleting one re-check the key.
+func TestRotationPolicyResaveAndUndeleteRecheckTheKey(t *testing.T) {
+	db := pgtest.New(t)
+	ctx := context.Background()
+	key, _ := seedSSHKey(t, db, "SHA256:"+repeat43("A"))
+	require.NoError(t, insertPolicy(db, key))
+	_, err := db.App.Exec(ctx, "UPDATE rotation_policies SET enabled = true, next_run_at = $2 WHERE ssh_key_id = $1", key, rotNow.Add(time.Hour))
+	require.NoError(t, err)
+	_, err = db.App.Exec(ctx, "UPDATE ssh_keys SET retired_at = $2 WHERE id = $1", key, rotNow)
+	require.NoError(t, err)
+	_, err = db.App.Exec(ctx, "UPDATE rotation_policies SET enabled = true, name = 'renamed' WHERE ssh_key_id = $1", key)
+	assert.Equal(t, "Z1010", sqlState(err), "a re-save that lists enabled re-checks the key")
+	_, err = db.App.Exec(ctx, "UPDATE rotation_policies SET name = 'renamed' WHERE ssh_key_id = $1", key)
+	assert.NoError(t, err, "a re-save that does not list enabled, deleted_at or ssh_key_id does not")
+	_, err = db.App.Exec(ctx, "UPDATE rotation_policies SET deleted_at = $2 WHERE ssh_key_id = $1", key, rotNow)
+	require.NoError(t, err)
+	_, err = db.App.Exec(ctx, "UPDATE rotation_policies SET deleted_at = NULL WHERE ssh_key_id = $1", key)
+	assert.Equal(t, "Z1010", sqlState(err), "un-deleting a policy that is still enabled re-checks the key")
+	_, err = db.App.Exec(ctx, "UPDATE rotation_policies SET deleted_at = NULL, enabled = false, next_run_at = NULL WHERE ssh_key_id = $1", key)
+	assert.NoError(t, err, "a policy that comes back switched off is not checked until it is switched on")
 }

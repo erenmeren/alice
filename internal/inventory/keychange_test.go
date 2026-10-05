@@ -65,10 +65,13 @@ func TestCleanKeyFiles(t *testing.T) {
 		{OSUser: "", Files: []string{"/x"}},
 		{OSUser: "nofiles", Files: []string{"relative"}},
 		{OSUser: "root", Files: []string{"/root/.ssh/authorized_keys"}},
+		{OSUser: "spoof", Files: []string{"/home/spoof/ok", "/home/spoof\u202e/gpj.keys", "/zero\u200bwidth", "/line\u2028sep", "/para\u2029sep"}, Complete: true},
+		{OSUser: "ev\u202eil", Files: []string{"/home/evil/ak"}},
 	}
 	assert.Equal(t, []providers.UserKeyFiles{
 		{OSUser: "deploy", Files: []string{"/home/deploy/.ssh/authorized_keys"}},
 		{OSUser: "root", Files: []string{"/root/.ssh/authorized_keys"}},
+		{OSUser: "spoof", Files: []string{"/home/spoof/ok"}},
 	}, cleanKeyFiles(in), "entries clean() would change, relative paths, controls and over-long text are dropped; a user without files goes")
 	assert.Nil(t, cleanKeyFiles(nil))
 

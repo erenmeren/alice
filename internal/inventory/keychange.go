@@ -50,23 +50,53 @@ func ProtectedFingerprintsTx(ctx context.Context, tx pgx.Tx) ([]string, error) {
 // then the location rows (ordered by target id, which is the same order). A rotation's transaction takes its run
 // row before this call (the run, then the targets, then the locations: see migration 00010).
 func (s *Service) KeyLocationsTx(ctx context.Context, tx pgx.Tx, keyID uuid.UUID, lock bool) ([]KeyLocation, error) {
-	if lock {
-		if _, err := tx.Exec(ctx, `SELECT t.id FROM targets t WHERE t.deleted_at IS NULL AND t.id IN
+	if !lock {
+		rows, err := tx.Query(ctx, keyLocationsQuery, keyID, nil)
+		if err != nil {
+			return nil, fmt.Errorf("inventory: read key locations: %w", err)
+		}
+		return collectLocations(rows)
+	}
+	// A scan may add a location of the key on another target between the two statements: the location rows are
+	// locked only on the targets already locked, and the whole read is repeated when one appeared meanwhile, so a
+	// location is never locked without its target.
+	for attempt := 0; attempt < 3; attempt++ {
+		var targets []uuid.UUID
+		rows, err := tx.Query(ctx, `SELECT t.id FROM targets t WHERE t.deleted_at IS NULL AND t.id IN
     (SELECT l.target_id FROM ssh_key_locations l WHERE l.ssh_key_id = $1 AND l.removed_by_alice_at IS NULL)
-ORDER BY t.id FOR UPDATE OF t`, keyID); err != nil {
+ORDER BY t.id FOR UPDATE OF t`, keyID)
+		if err != nil {
 			return nil, fmt.Errorf("inventory: lock the key's targets: %w", err)
 		}
+		if targets, err = pgx.CollectRows(rows, pgx.RowTo[uuid.UUID]); err != nil {
+			return nil, fmt.Errorf("inventory: lock the key's targets: %w", err)
+		}
+		if targets == nil {
+			targets = []uuid.UUID{} // an empty set, not "all targets"
+		}
+		lrows, err := tx.Query(ctx, keyLocationsQuery+" FOR UPDATE OF l", keyID, targets)
+		if err != nil {
+			return nil, fmt.Errorf("inventory: read key locations: %w", err)
+		}
+		locs, err := collectLocations(lrows)
+		if err != nil {
+			return nil, err
+		}
+		var stray int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM ssh_key_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
+WHERE l.ssh_key_id = $1 AND l.removed_by_alice_at IS NULL AND NOT (l.target_id = ANY ($2))`, keyID, targets).Scan(&stray); err != nil {
+			return nil, fmt.Errorf("inventory: read key locations: %w", err)
+		}
+		if stray == 0 {
+			return locs, nil
+		}
 	}
-	q := locationSelect + ` WHERE l.ssh_key_id = $1 AND l.removed_by_alice_at IS NULL ORDER BY l.target_id, l.file_path, l.os_user`
-	if lock {
-		q += " FOR UPDATE OF l"
-	}
-	rows, err := tx.Query(ctx, q, keyID)
-	if err != nil {
-		return nil, fmt.Errorf("inventory: read key locations: %w", err)
-	}
-	return collectLocations(rows)
+	return nil, errors.New("inventory: the key's locations keep changing; try again")
 }
+
+// keyLocationsQuery reads a key's locations ordered by target, file and user; $2 limits the targets (NULL: all).
+const keyLocationsQuery = locationSelect + ` WHERE l.ssh_key_id = $1 AND l.removed_by_alice_at IS NULL
+  AND ($2::uuid[] IS NULL OR l.target_id = ANY ($2)) ORDER BY l.target_id, l.file_path, l.os_user`
 
 // KeyAdded records a key line Alice added (a deploy or a rotation).
 type KeyAdded struct {

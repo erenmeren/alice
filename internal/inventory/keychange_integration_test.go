@@ -114,6 +114,18 @@ func TestKeyLocationsTxListsLiveAndMissing(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// A key without a live location locks nothing and returns an empty list (an empty target set is not "all").
+func TestKeyLocationsTxWithoutLocations(t *testing.T) {
+	h := newHarness(t)
+	key := seedGeneratedKey(t, h, genFP, "")
+	require.NoError(t, db.InTx(h.ctx, h.db.App, func(tx pgx.Tx) error {
+		got, err := h.svc.KeyLocationsTx(h.ctx, tx, key, true)
+		require.NoError(t, err)
+		assert.Empty(t, got)
+		return nil
+	}))
+}
+
 func recordAdded(h *harness, in inventory.KeyAdded) (id uuid.UUID, err error) {
 	err = db.InTx(h.ctx, h.db.App, func(tx pgx.Tx) error {
 		id, err = h.svc.RecordKeyAddedTx(h.ctx, tx, in)
@@ -351,6 +363,22 @@ func TestListSSHKeysShowsGeneratedKeysWithoutLocations(t *testing.T) {
 	assert.Equal(t, 1, items[0].LocationCount)
 	assert.Len(t, list(inventory.KeyFilter{Query: "ci-deploy"}), 1, "found by the key's own comment even with a location")
 	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_key_locations SET missing_since = NULL WHERE ssh_key_id = $1", key)
+	require.NoError(t, err)
+
+	// A retired generated key whose every location Alice removed drops out of the default list (as removed
+	// locations do), and is listed with IncludeMissing, flagged missing.
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_key_locations SET removed_by_alice_at = now() WHERE ssh_key_id = $1", key)
+	require.NoError(t, err)
+	assert.Len(t, list(inventory.KeyFilter{}), 1, "not retired yet: still Alice's live key, flagged missing")
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_keys SET retired_at = now() WHERE id = $1", key)
+	require.NoError(t, err)
+	assert.Empty(t, list(inventory.KeyFilter{}), "retired and removed everywhere: gone from the default list")
+	withMissing := list(inventory.KeyFilter{IncludeMissing: true})
+	require.Len(t, withMissing, 1)
+	assert.True(t, withMissing[0].Missing)
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_keys SET retired_at = NULL WHERE id = $1", key)
+	require.NoError(t, err)
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_key_locations SET removed_by_alice_at = NULL WHERE ssh_key_id = $1", key)
 	require.NoError(t, err)
 
 	// A discovered key whose every location is missing stays hidden without IncludeMissing.

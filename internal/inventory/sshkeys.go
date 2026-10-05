@@ -493,7 +493,7 @@ func (s *Service) ListSSHKeys(ctx context.Context, f KeyFilter) (KeyPage, error)
     coalesce(bool_and(l.missing_since IS NOT NULL OR l.removed_by_alice_at IS NOT NULL) FILTER (WHERE l.id IS NOT NULL), false)
 FROM ssh_keys k
 LEFT JOIN (ssh_key_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL) ON l.ssh_key_id = k.id
-WHERE (l.id IS NOT NULL OR (k.managed AND $1::uuid IS NULL AND $2::text = '' AND $4::text = ''))
+WHERE (l.id IS NOT NULL OR (k.managed AND k.retired_at IS NULL AND $1::uuid IS NULL AND $2::text = '' AND $4::text = ''))
   AND ($1::uuid IS NULL OR l.target_id = $1)
   AND ($2::text = '' OR l.os_user = $2)
   AND ($3::text = ''
@@ -503,7 +503,7 @@ WHERE (l.id IS NOT NULL OR (k.managed AND $1::uuid IS NULL AND $2::text = '' AND
        OR translate(k.key_type, 'ABCDEFGHIJKLMNOPQRSTUVWXYZİı', 'abcdefghijklmnopqrstuvwxyzii') LIKE $3 ESCAPE '\')
   AND ($4::text = '' OR $4 = ANY (l.flags))
   AND ($5::boolean OR l.id IS NULL OR (l.missing_since IS NULL AND l.removed_by_alice_at IS NULL)
-       OR (k.managed AND NOT EXISTS (SELECT 1 FROM ssh_key_locations x JOIN targets xt ON xt.id = x.target_id AND xt.deleted_at IS NULL
+       OR (k.managed AND k.retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM ssh_key_locations x JOIN targets xt ON xt.id = x.target_id AND xt.deleted_at IS NULL
                                      WHERE x.ssh_key_id = k.id AND x.missing_since IS NULL AND x.removed_by_alice_at IS NULL)))
   AND ($6::timestamptz IS NULL OR (k.first_seen_at, k.id) > ($6::timestamptz, $7::uuid))
 GROUP BY k.id
@@ -611,7 +611,14 @@ func cleanKeyFiles(in []providers.UserKeyFiles) []providers.UserKeyFiles {
 	return out
 }
 
-// plainText: 1 to limit bytes of valid UTF-8 without control characters (clean leaves it as it is).
+// spoofing reports a character that must not appear in a name or path shown in the UI: a control character, an
+// invisible or bidirectional-control format character (U+200B..U+200F, U+202A..U+202E, U+2066..U+2069, ...) or a
+// line or paragraph separator.
+func spoofing(r rune) bool {
+	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+}
+
+// plainText: 1 to limit bytes of valid UTF-8 without control, invisible or bidirectional characters (clean leaves it as it is).
 func plainText(s string, limit int) bool {
-	return s != "" && len(s) <= limit && clean(s) == s && !strings.ContainsFunc(s, unicode.IsControl)
+	return s != "" && len(s) <= limit && clean(s) == s && !strings.ContainsFunc(s, spoofing)
 }
