@@ -4,8 +4,6 @@ Decisions taken on the owner's behalf during autonomous execution of docs/superp
 
 No Azure subscription was available. Nothing here was checked against real Azure; the optional suite (`make test-azure`) is for the owner and has never been run.
 
-TO UPDATE AT PHASE CLOSE: add the rulings of the final whole-branch review, the final fix wave and the Playwright task (Task 23), the result of the final `make ci`, and move every item of "Open at the time of writing" to done or to "Carried to later phases".
-
 ## Before the tasks
 
 - The plan-writer's 35 "spec conflicts resolved" are accepted as proposed R40, pending the pre-flight scan; notable: the official Azure SDK under Alice's own guarded transport; managed identity on Azure virtual machines only, through a fixed exception for 169.254.169.254:80; public-cloud vault addresses only; separate `kv_*` tables and connections; a Key Vault deployment is a Phase 4 deployment plus a secret-read step; an import is not a deployment and is never re-sent; proxy and CA bundle, deployment windows, expiry reminder emails and sovereign clouds deferred to Phase 7 — why: the owner said not to wait — cost: the owner revises R40 later — reverse: each is an item of R40 [1–35] with its own cost line.
@@ -104,6 +102,23 @@ TO UPDATE AT PHASE CLOSE: add the rulings of the final whole-branch review, the 
 - Managed identity in the e2e stack is a documented caveat only (do not run it on an Azure virtual machine) — why: no cheap enforced rule was found; the sign-in method is chosen by the credential.
 - No separate re-review of the Task 18 fix round — why: every fix carries the reviewer's named mutant shown red, the controller ran the whole unit suite and the `internal/api` integration suite at HEAD (green, 94.9 %, 37 s), and the final whole-branch review reads it again — cost: the "not pinned" list stays as documented (a 401 on page 2 at provider level; the planner's own guard for F-48; the managed-identity mapping branch by branch).
 - Task 23 (Playwright) was dispatched alone, with no other Docker user — why: Chromium aborts requests whenever a host interface changes.
+- Accepted choices of the Task 23 implementer: the three serious axe violations it found were fixed in the theme, for every table and every field with an error of the app, not per component (7da356e, c7d654a, 8add878) — cost: a change visible on Phase 1–4 screens (their journeys stayed green); the fake tool gained `ctl clock` and `ctl add-cert --root` (c83c181) — why: the planner's strict "created after `auto_since`" rule could not be met against the e2e clock, and the seeded chain was incomplete.
+
+## Pause, final fix wave and Task 23 review
+
+- The owner paused the run for a machine restart (06:07) with the fix wave and the Task 23 review just started; both were dispatched again after the restart from the same base, and the uncommitted red test the stopped implementer had left (`limiter_test.go`) was handed to the new implementer, who rewrote it (it hung on a fake clock nothing advanced).
+- Task 23's fix round was folded into one e2e follow-up dispatch, alone on Docker, after the fix wave landed — why: it needed the fix wave's firewall address and limiter change, and only one agent may use Docker while Playwright runs — cost: wall-clock time.
+- Accepted rulings of the fix-wave implementer [47]–[49]: the unreadable credential is mapped through an inventory sentinel that wraps `secrets.ErrDecrypt` (archtest forbids `internal/jobs/...` from importing `internal/secrets`); only the deployment path names `kv.credential_unreadable` — cost: a vault page with an undecryptable credential shows the generic `ALC-SYS-0003` until a deployment is tried; `ALC-AKV-0041` answers 409 and is never retried — cost: one constant; the deployment that discovers a missing key still ends `ALC-AKV-0016` and only the next request answers `ALC-AKV-0013` — cost: the first failure's text is less precise; the certificate row is marked not exportable as well as the version — why: the policy is per certificate, and connection checks and the Monitor-only chip read the certificate row — cost: none lasting, a later poll stores Azure's policy again; the key-less detection lives only in the vault-secret parser, so an uploaded certificates-only PFX still reads "wrong password or damaged"; a vault's `last_error` takes `model` and `role` from the poll that set it, ahead of an older access check — cost: a newer poll's model replaces an older access check's; `Model` is a new field of the stored poll facts — cost: existing rows have none until the next failing poll.
+- The fix round on the fix-wave review was held until the e2e agent finished — why: it changed the fake service and needed testcontainers, while the e2e image is built from the shared tree as Playwright runs — cost: wall-clock time only.
+- Deploy now offers the chain confirmation whenever the version's chain is known incomplete, held or not, and a release alone does not confirm the chain for a manual deployment (09:23, after the Playwright task found that a released chain hold could never be deployed from the screen) [19] — why: the smallest change that makes the shipped release texts true ("use Deploy now and confirm the chain") and keeps a person's explicit confirmation per deployment — cost if wrong: one more checkbox for a released version. The fix round built it with migration `00009` (`chain_incomplete`) and made the server refuse such a request up front without the confirmation (409 `ALC-CRT-0011`, nothing queued), held or released (18801d9) — cost: API clients must send `confirm_incomplete_chain`; reverse: `RequestKVDeployment` in `kv_deploy.go` and `KVDeployDialog`.
+- The axe rule `landmark-unique` (moderate; two tables on one page gave two scroll regions with the same name) was deferred to the final review — why: the suite's gate is serious and critical, and the name was the review's choice.
+- Choices of the fix round on the fix-wave review: a key-less PFX is recognised from go-pkcs12's error text "private key missing" (no sentinel exists; pinned by tests that turn red if an upgrade changes the text) [45] — cost: a different library text after an upgrade fails the tests, not the product silently; the `ALC-AKV-0016` text was extended with the missing-key case rather than answering `ALC-AKV-0013` on the first read [46] — why: text and a test only, true for every cause that reaches 0016 — cost: the first failure is less precise; the limiter moves its schedule back by a backward step instead of granting a fresh burst [50].
+
+## Final review and phase close
+
+- The final whole-branch review was split in three read-only areas (provider, identity, certificates, fakes and build; inventory, jobs, API and migrations; web, locales, e2e and the phase documents) and ran beside the scoped re-review of the last two fix rounds; their findings go to one combined fix dispatch — why: about 25,000 source lines do not fit one reader — cost: cross-area issues rely on the reviewers' hand-off notes.
+- The phase documents (Task 24, Steps 2–4: setup guide and its test, guides, changelog, R40, this document, the security review) were written by a separate agent in parallel with the final fix round, editing documentation only — why: disjoint files — cost: sentences that depend on the fix round's changes are re-checked by the controller after it; the final results go into the cells marked PENDING-FINAL-RUN of the security review's Evidence table, filled after the final `make coverage` and `make ci`.
+- The area-C review asked for the table scroll areas to be a named group instead of a landmark (`landmark-unique`), and for four false texts (the add dialog under a firewall, the import confirmation, three emails) to be corrected; the area-B review and the re-review asked for the chain confirmation to be kept when two versions share a leaf, and for migration `00009` to mark rows already held for their chain. All were sent to the final fix round. The result of the final `make ci` is row 15 of the Evidence table in docs/security/reviews/phase-5.md.
 
 ## Process
 
@@ -115,12 +130,11 @@ TO UPDATE AT PHASE CLOSE: add the rulings of the final whole-branch review, the 
 - Accidents on the shared working tree and index, and what was restored: the Tasks 4–5 implementer ran `git rm --cached -r .` once and restored the index at once (`git reset -q HEAD`; the controller verified the tree clean); the Tasks 1–3 implementer ran `git stash` once and popped it at once (reported by the implementer; nothing lost); commit b779c02 dropped another agent's locale texts and d4ce0c3 restored them (the controller verified the locale files against 6b3c690); a shared locale file was overwritten once between two agents and the lost edit re-inserted (reported by the implementer).
 - Lint and the secrets scan were not re-run after every small follow-up round; later full runs cover them.
 
-## Open at the time of writing
+## Status at phase close
 
-TO UPDATE AT PHASE CLOSE: these were not done when this document was written.
-
-- The final fix wave (product changes found late): a closed reason instead of `ALC-SYS-0003` when a vault's sealed credential cannot be opened; marking a certificate non-exportable when a read has no key; poll-time failure params in a vault's `last_error`; `deployment_id` and `import_id` on job items; optionally a test that nothing outside tests assigns the zeroing observer.
-- Task 23 (Playwright journeys with axe), the rest of Task 24 (guides, changelog, coverage floors), the whole-branch final review and the final `make ci`.
+- The final fix wave: done (51fd1fc, 663af93, 3c2f3d1, caab34c, c75dd75, 90c0790, fb02f24, 0ee77a5, 715f900, 8405627), with its fix round (20020c6, ec0c88a, 18801d9, eea6f58, 5fa5042, 3f7e8f1, 9051c02, 7231878, 24985d3, e83046f, 6e26e42).
+- Task 23: done (7da356e, c7d654a, 8add878, c83c181, 53eeb0c; fix round 98800fc, b4e1c36, 1dbb305; the chain journey 6e26e42).
+- Task 24: the setup guide and its test, the guides, the changelog, R40 and the two spec pointers, this document and the security review are written. Left to the controller: the coverage floors (Step 1) and the final `make ci` (Step 5), after the final fix round.
 
 ## Carried to later phases
 
@@ -131,7 +145,7 @@ Carries inherited from earlier phases that Phase 5 was to address:
 - L-81 with a vault deployment and L-80/L-82: closed by `TestL81KVDeploymentHeldThenConfirmed` and `TestL80L82WithAKeyVaultDeployment` (`internal/jobs/deployjobs`), and `TestL81KeyVaultDeploymentHeld` (`internal/api`).
 - L-83..L-86 and L-88 (rotation runner): re-deferred to Phase 6; their jobs do not exist.
 - A cross-server locations list: built as `GET /api/v1/certificate-locations`.
-- A deployment ID on deploy jobs (and `import_id` on import jobs): the plan included it; it was parked during Task 17 and is in the final fix wave above. If the fix wave does not do it, it stays a carry.
+- A deployment ID on deploy jobs (and `import_id` on import jobs): closed (0ee77a5, ec0c88a): every deployment job, Phase 4's included, names its deployment.
 - `facts.nginx.scanned_at`: re-deferred (no Phase 5 screen needs it).
 
 Parked in Phase 5:
@@ -144,4 +158,33 @@ Parked in Phase 5:
 - Unpinned by a mutant: a 401 on a later page at provider level; the planner's own guard against a second deployment of a busy website (F-48; the Phase 4 unique index also refuses it); single branches of the managed-identity mapping; the one-minute read budget as a permanent test.
 - A typed-nil panic in the provider fake found by the Tasks 1–3 review (pre-existing).
 - Phase 7: HTTPS proxy and CA bundle for Azure, deployment windows, wave limits as settings, expiry emails for client secrets and keys, sovereign clouds.
-- Owner: the real-Azure suite (`make test-azure`, never run) and `make record-azure`; the walkthrough table of docs/security/reviews/phase-5.md; the Turkish tone review of the new texts; the crypto sign-off; and the owner items carried from earlier phases (a git remote and the first workflow run, the production license key, the walkthroughs of Phases 1–4).
+- Owner: the real-Azure suite (`make test-azure`, never run, including `TestRealAzureReaderSufficiency`) and `make record-azure`; the walkthrough table of docs/security/reviews/phase-5.md; the Turkish tone review of the new texts; the crypto sign-off; and the owner items carried from earlier phases (a git remote and the first workflow run, the production license key, the walkthroughs of Phases 1–4).
+
+Carried from the phase-close reviews (each is a known limitation in docs/security/reviews/phase-5.md):
+
+- `kv.credential_unreadable` (`ALC-AKV-0041`) exists on the deployment path only; a poll, the access check and an import answer `ALC-SYS-0003` for a credential that cannot be unsealed.
+- Import settling, hold rule (b), planner eligibility and the pointer to the current version trust Azure's `created` and its relation to Alice's clock; optional hardening: exclude versions Alice stored before the import and versions already settled by another import.
+- An import whose retry job is held for the license blocks its name until an Administrator decides the held job; `SweepImports` could move such an import to uncertain.
+- An import job can end `succeeded` while its import failed (vault removed while queued), or `dead` with an email after the vault was removed during the send.
+- The access check's secret read is audited without the person who asked (`requested_by` in the audit details, or an audit row at request time).
+- A version first stored from a version list gets no `kv.certificate.new_version` audit row and the earlier detection time.
+- A released incomplete-chain version is held again, with a new email, at every automatic attempt.
+- A disabled vault would answer with the server wording `ALC-DEP-0011` (latent: nothing disables a vault yet); map `ErrTargetNotReady` on a vault to `ALC-AKV-0033` before anything can disable a target.
+- `certificate.pfx_busy` on a Key Vault deployment shows the upload's text ("upload the file again").
+- An API token in the race window of a hold or a switch-on is told to step up (`ALC-AUTH-0003`) where the documents promise `ALC-AUTH-0002`.
+- Every table's scroll area is a keyboard stop also when nothing scrolls; its name is the generic "Table, scrolls sideways" rather than the table's own.
+- One certificate whose detail read keeps failing discards the whole certificate listing of every poll, and the access check (lists only) does not probe certificate `get`: documented, not changed in this phase (controller ruling on final review A, m4) — why: fail-safe with an actionable role message — cost: an access-policy vault with `list` but not `get` passes the check and fails every poll — reverse: record such a certificate without details and count it in `DetailsPending`, as for an unusable bundle (`internal/providers/azurekv/discover.go`).
+- The per-vault limiter counts attempts, not HTTP requests; each job session signs in afresh (one Entra token request per job); a managed identity lends the machine's identity to every Administrator who may add a vault: documented as known limitations (final review A).
+- Clearing the decoded bytes of a refused second private-key block in a PEM secret is not pinned by a test (final review A, m5).
+
+Not covered, or not pinned by a test (ledger, Task 18 review and later):
+
+- per-vault isolation (F-44, F-50): the fake serves one vault;
+- link-local and private-endpoint resolution through the API suite's dial seam (unit level only);
+- the one-minute secret-read budget as a permanent test;
+- a 401 on a later listing page at provider level;
+- the email bounds of a mass renewal;
+- the planner's own guard F-48;
+- the managed-identity error mapping, branch by branch;
+- managed identity in the e2e stack is not switched off (do not run it on an Azure virtual machine);
+- whether Azure moves `updated` on a policy-only change (the clearing of the not-exportable mark depends on it).
