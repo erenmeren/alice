@@ -3459,7 +3459,7 @@ components:
       type: object
       description: >-
         The places of the run by state; the buckets add up to total. verified - the new key worked there and the old key
-        is not removed yet; removed - the old key was removed; kept - an administrator kept the old key there; failed -
+        is not removed yet; removed - the old key was removed; kept - the old key is kept there (kept_old): by an administrator's decision, or by Alice when a verified place shares its file with a place that was not verified or was skipped; failed -
         adding, verifying, removing or undoing failed; skipped - the plan left the place out; undone - the new key was
         removed again; cancelled - never sent (the run ended first) or refused when Alice was about to send it;
         in_flight - waiting, being added, added and not yet tested, untestable and waiting for a decision, being removed

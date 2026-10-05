@@ -967,11 +967,11 @@ server again.
 
 **What to do.** Scan the server again, then choose one of the files offered.
 
-## ALC-KEY-0014: Alice does not know all key files of its connection account on this server
+## ALC-KEY-0014: Alice does not know all key files of the account it connects with on this server
 
-**Meaning.** A deploy was refused because Alice cannot rule out that the chosen file is one its own connection account reads. The deploy dialog offers no file on such a server. The refusal is recorded in the audit log. (HTTP 409, reason `sshkey.connection_files_unknown`.)
+**Meaning.** A deploy was refused because Alice cannot rule out that the chosen file is one the account it connects with reads. The deploy dialog offers no file on such a server. The refusal is recorded in the audit log. (HTTP 409, reason `sshkey.connection_files_unknown`.)
 
-**Likely cause.** The last scan did not list every key file the SSH server reads for the account Alice signs in with, so Alice cannot rule out that the chosen file is one of them. Servers last scanned by an earlier version of Alice have no such list. After upgrading to the version with SSH key rotation, every server refuses deploys until it is scanned again. A server with more than 200 accounts, or whose connection account is not in `/etc/passwd`, keeps refusing, because Alice cannot list that account's files completely there.
+**Likely cause.** The last scan did not list every key file the SSH server reads for the account Alice signs in with, so Alice cannot rule out that the chosen file is one of them. Servers last scanned by an earlier version of Alice have no such list. After upgrading to the version with SSH key rotation, every server refuses deploys until it is scanned again. A server with more than 200 accounts, or whose account that Alice connects with is not in `/etc/passwd`, keeps refusing, because Alice cannot list that account's files completely there.
 
 **What to do.** Scan the server again, then try again. Choose **Scan for SSH keys** on the server's page; the deploy dialog offers the files once the scan has listed them.
 
@@ -1091,7 +1091,7 @@ server again.
 
 **Meaning.** A rotation is paused because the license does not allow changes; the paused rotation is shown with this reason. (HTTP 409, reason `rotation.paused_license`.)
 
-**Likely cause.** While the license does not allow changes, Alice adds and removes no key for this rotation, and the old key stays in place.
+**Likely cause.** While the license does not allow changes, Alice adds no new key and removes no old key for this rotation, and the old key stays in place.
 
 **What to do.** Upload a valid license, or wait until Alice can check it again, then choose Continue on the rotation's page. After the renewal Alice emails the administrators before anything continues; every removal is preceded by a fresh login with the new key.
 
@@ -1173,7 +1173,7 @@ server again.
 
 **Likely cause.** After a renewal, Alice emails the administrators before a paused rotation may continue. The next background check queues that email, within about a minute. Nothing was changed.
 
-**What to do.** Choose Continue again in a minute.
+**What to do.** Continue becomes available once the email about the renewal has been queued, usually within a minute.
 
 ## ALC-ROT-0022: A server's answer arrived after Alice had given up on it
 
@@ -1185,9 +1185,9 @@ server again.
 
 ## ALC-ROT-0023: Alice stopped working on this place because the database refused its records
 
-**Meaning.** The error of a place where Alice stopped because the database refused every record of its next step. The place ends failed; the rotation needs attention or is undone. (HTTP 409, reason `rotation.guard_refused`.)
+**Meaning.** The error of a place where Alice stopped because the database refused to record its next step. The place ends failed; the rotation needs attention or is undone. (HTTP 409, reason `rotation.guard_refused`.)
 
-**Likely cause.** Every attempt to record a step of this place was refused by the database's safety checks, for example because the old key's place became Alice's own connection key after the removal was sent. Alice did nothing more there.
+**Likely cause.** The database's safety checks refused to record a step of this place, for example because the old key's place became Alice's own connection key after the removal was sent. Alice did nothing more there.
 
 **What to do.** Check this place on the rotation's page and the server's keys, then report it together with Alice's logs.
 
@@ -1195,7 +1195,7 @@ server again.
 
 **Meaning.** The error of a place that was cancelled, or whose add failed, when Alice was about to change it: the plan's skip reasons were checked again then. The place's skip reason names the cause. (HTTP 409, reason `rotation.skipped_at_send`.)
 
-**Likely cause.** When Alice was about to send the change, the server's last scan showed a reason the plan skips; the place's skip reason names it. Nothing was sent there.
+**Likely cause.** When Alice was about to send the change, the server's last scan showed a reason the plan skips; the place's skip reason names it. Alice sent nothing more there; if the new key had already been sent, undoing the rotation removes it again.
 
 **What to do.** Fix the skip reason shown on the rotation's page, scan the server again, then start the rotation again.
 

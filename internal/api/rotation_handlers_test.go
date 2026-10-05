@@ -878,3 +878,26 @@ func TestSkippedAtSendNamesItsSkipReason(t *testing.T) {
 	assert.Equal(t, "sshd_unreadable", loc["skip_reason"])
 	assert.Equal(t, "cancelled", loc["state"])
 }
+
+// The detail counts every place state into the same bucket as the service's list read (RotationSummaries' SQL), so a
+// run shows the same counts in the list and on its page; a place refused at send time while adding keeps skip_reason.
+func TestDetailCountsMatchTheServiceBuckets(t *testing.T) {
+	for state, bucket := range map[string]string{
+		sshkeys.LocVerified: "verified", sshkeys.LocRemoved: "removed", sshkeys.LocKeptOld: "kept",
+		sshkeys.LocAddFailed: "failed", sshkeys.LocVerifyFailed: "failed", sshkeys.LocRemoveFailed: "failed", sshkeys.LocUndoFailed: "failed",
+		sshkeys.LocSkipped: "skipped", sshkeys.LocUndone: "undone", sshkeys.LocCancelled: "cancelled",
+		sshkeys.LocPlanned: "in_flight", sshkeys.LocAdding: "in_flight", sshkeys.LocAdded: "in_flight", sshkeys.LocUnverifiable: "in_flight",
+		sshkeys.LocRemoving: "in_flight", sshkeys.LocUndoing: "in_flight",
+	} {
+		raw, err := json.Marshal(locationCounts([]sshkeys.RotationLocation{{State: state}}))
+		require.NoError(t, err)
+		var m map[string]int
+		require.NoError(t, json.Unmarshal(raw, &m))
+		assert.Equal(t, 1, m[bucket], state)
+		assert.Equal(t, 1, m["total"], state)
+	}
+	run := sampleRotation(sshkeys.StatusRollingBack)
+	run.Locations[0].State, run.Locations[0].ErrorCode, run.Locations[0].SkipReason = sshkeys.LocAddFailed, sshkeys.ReasonSkippedAtSend, plan.SkipHostKeyChanged
+	d := rotationJSON(run, nil)
+	assert.Equal(t, plan.SkipHostKeyChanged, d.Locations[0].SkipReason)
+}

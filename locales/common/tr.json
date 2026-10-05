@@ -410,7 +410,7 @@
         "action": "Sunucuyu yeniden tarayıp sunulan dosyalardan birini seçin."
       },
       "connection_files_unknown": {
-        "title": "Alice bu sunucuda bağlantı hesabının tüm anahtar dosyalarını bilmiyor.",
+        "title": "Alice bu sunucuda bağlandığı hesabın tüm anahtar dosyalarını bilmiyor.",
         "cause": "Son tarama, SSH sunucusunun Alice'in oturum açtığı hesap için okuduğu anahtar dosyalarının tamamını listelemedi; bu nedenle Alice seçilen dosyanın bunlardan biri olmadığından emin olamıyor. Alice'in önceki bir sürümüyle taranmış sunucularda böyle bir liste yoktur.",
         "action": "Sunucuyu yeniden tarayıp yeniden deneyin."
       },
@@ -483,7 +483,7 @@
       },
       "paused_license": {
         "title": "Lisansın süresi dolduğu ya da lisans denetlenemediği için yenileme duraklatıldı.",
-        "cause": "Lisans değişikliklere izin vermezken Alice bu yenileme için hiçbir anahtar eklemez ya da kaldırmaz ve eski anahtar yerinde kalır.",
+        "cause": "Lisans değişikliklere izin vermezken Alice bu yenileme için yeni anahtar eklemez ve eski anahtarı kaldırmaz; eski anahtar yerinde kalır.",
         "action": "Geçerli bir lisans yükleyin ya da Alice lisansı yeniden denetleyebilene kadar bekleyin, ardından yenilemenin sayfasında Devam et'i seçin."
       },
       "cancelled_license": {
@@ -534,7 +534,7 @@
       "notice_pending": {
         "title": "Alice lisans yenilemesiyle ilgili e-postayı hâlâ hazırlıyor.",
         "cause": "Lisans yenilendikten sonra Alice, duraklatılan bir yenileme sürmeden önce yöneticilere e-posta gönderir. Bu e-postayı bir sonraki arka plan denetimi, yaklaşık bir dakika içinde sıraya koyar. Hiçbir şey değiştirilmedi.",
-        "action": "Bir dakika sonra yeniden Devam et'i seçin."
+        "action": "Lisans yenilemesiyle ilgili e-posta sıraya konduğunda, genellikle bir dakika içinde, Devam et kullanılabilir olur."
       },
       "late_result": {
         "title": "Bir sunucunun yanıtı, Alice ondan vazgeçtikten sonra geldi.",
@@ -543,12 +543,12 @@
       },
       "guard_refused": {
         "title": "Veritabanı kayıtlarını reddettiği için Alice bu yerde çalışmayı durdurdu.",
-        "cause": "Bu yerin bir adımını kaydetme denemelerinin hepsi veritabanının güvenlik denetimlerince reddedildi; örneğin kaldırma gönderildikten sonra eski anahtarın yeri Alice'in kendi bağlantı anahtarı oldu. Alice orada başka bir şey yapmadı.",
+        "cause": "Veritabanının güvenlik denetimleri bu yerin bir adımını kaydetmeyi reddetti; örneğin kaldırma gönderildikten sonra eski anahtarın yeri Alice'in kendi bağlantı anahtarı oldu. Alice orada başka bir şey yapmadı.",
         "action": "Bu yeri yenilemenin sayfasında ve sunucunun anahtarlarını denetleyin, ardından durumu Alice'in günlükleriyle birlikte bildirin."
       },
       "skipped_at_send": {
         "title": "Alice bu yeri değiştirmek üzereyken atladı.",
-        "cause": "Alice değişikliği göndermek üzereyken sunucunun son taraması, planın atladığı bir neden gösterdi; nedeni yerin atlama nedeni belirtir. Oraya hiçbir şey gönderilmedi.",
+        "cause": "Alice değişikliği göndermek üzereyken sunucunun son taraması, planın atladığı bir neden gösterdi; nedeni yerin atlama nedeni belirtir. Alice oraya başka bir şey göndermedi; yeni anahtar daha önce gönderilmişse yenilemenin geri alınması onu yeniden kaldırır.",
         "action": "Yenilemenin sayfasında gösterilen atlama nedenini giderin, sunucuyu yeniden tarayın ve yenilemeyi yeniden başlatın."
       }
     },

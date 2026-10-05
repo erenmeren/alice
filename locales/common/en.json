@@ -410,7 +410,7 @@
         "action": "Scan the server again, then choose one of the files offered."
       },
       "connection_files_unknown": {
-        "title": "Alice does not know all key files of its connection account on this server.",
+        "title": "Alice does not know all key files of the account it connects with on this server.",
         "cause": "The last scan did not list every key file the SSH server reads for the account Alice signs in with, so Alice cannot rule out that the chosen file is one of them. Servers last scanned by an earlier version of Alice have no such list.",
         "action": "Scan the server again, then try again."
       },
@@ -483,7 +483,7 @@
       },
       "paused_license": {
         "title": "The rotation is paused because the license has expired or could not be checked.",
-        "cause": "While the license does not allow changes, Alice adds and removes no key for this rotation, and the old key stays in place.",
+        "cause": "While the license does not allow changes, Alice adds no new key and removes no old key for this rotation, and the old key stays in place.",
         "action": "Upload a valid license, or wait until Alice can check it again, then choose Continue on the rotation's page."
       },
       "cancelled_license": {
@@ -534,7 +534,7 @@
       "notice_pending": {
         "title": "Alice is still preparing the email about the license renewal.",
         "cause": "After a renewal, Alice emails the administrators before a paused rotation may continue. The next background check queues that email, within about a minute. Nothing was changed.",
-        "action": "Choose Continue again in a minute."
+        "action": "Continue becomes available once the email about the renewal has been queued, usually within a minute."
       },
       "late_result": {
         "title": "A server's answer arrived after Alice had given up on it.",
@@ -543,12 +543,12 @@
       },
       "guard_refused": {
         "title": "Alice stopped working on this place because the database refused its records.",
-        "cause": "Every attempt to record a step of this place was refused by the database's safety checks, for example because the old key's place became Alice's own connection key after the removal was sent. Alice did nothing more there.",
+        "cause": "The database's safety checks refused to record a step of this place, for example because the old key's place became Alice's own connection key after the removal was sent. Alice did nothing more there.",
         "action": "Check this place on the rotation's page and the server's keys, then report it together with Alice's logs."
       },
       "skipped_at_send": {
         "title": "This place was skipped when Alice was about to change it.",
-        "cause": "When Alice was about to send the change, the server's last scan showed a reason the plan skips; the place's skip reason names it. Nothing was sent there.",
+        "cause": "When Alice was about to send the change, the server's last scan showed a reason the plan skips; the place's skip reason names it. Alice sent nothing more there; if the new key had already been sent, undoing the rotation removes it again.",
         "action": "Fix the skip reason shown on the rotation's page, scan the server again, then start the rotation again."
       }
     },
