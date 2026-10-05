@@ -1484,6 +1484,7 @@
     "disabledChip": "Disabled in Key Vault",
     "detailsPending": "Details not read yet",
     "replaceCredentials": "Replace credentials",
+    "firewallAddress": "Alice's address as the vault saw it",
     "replaceTitle": "Replace the sign-in credentials",
     "replaceHelp": "Alice checks the new credentials as when adding a vault. Nothing changes if the check fails.",
     "replaced": "Credentials replaced.",

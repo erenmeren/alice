@@ -133,6 +133,15 @@ export function KeyVaultDetailPage() {
         </Text>
       )}
       {tg.last_error && <JobErrorAlert error={tg.last_error} />}
+      {tg.last_error?.reason === 'azure.firewall' && tg.last_error.params?.client_address && (
+        <div data-testid="vault-firewall-address">
+          <Fact label={t('vaults.firewallAddress')}>
+            <Code translate="no" style={WRAP}>
+              {tg.last_error.params.client_address}
+            </Code>
+          </Fact>
+        </div>
+      )}
       {credentialsEnd && endState !== 'ok' && endState !== 'within60' && (
         <Alert color={endState === 'expired' ? 'red' : 'yellow'} role="status" data-testid="credentials-expiry">
           {t(endState === 'expired' ? 'vaults.credentialsExpiredNow' : 'vaults.credentialsExpireSoon')}

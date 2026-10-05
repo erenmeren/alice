@@ -93,6 +93,33 @@ describe('KeyVaultDetailPage header', () => {
       expect(screen.getAllByRole('alert').length).toBeGreaterThan(0);
     });
 
+    it.each(['203.0.113.7', '2001:db8::7', ...HOSTILE])('shows the address the vault firewall saw as text in <code>: %s', async (address) => {
+      asRole('operator', vaultWith({ status: 'degraded', last_error: { code: 'ALC-AKV-0004', reason: 'azure.firewall', params: { client_address: address } } }));
+      await renderRoute(PATH);
+      await screen.findByRole('heading', { name: 'Prod vault', level: 1 });
+      const fact = screen.getByTestId('vault-firewall-address');
+      expect(fact).toHaveTextContent("Alice's address as the vault saw it");
+      const code = within(fact).getByText(address);
+      expect(code.tagName).toBe('CODE');
+      expect(code.textContent).toBe(address);
+      expect(fact.querySelector('img, a, script')).toBeNull();
+    });
+
+    it('shows no firewall address for another failure, or without one', async () => {
+      asRole('operator', vaultWith({ status: 'degraded', last_error: { code: 'ALC-AKV-0004', reason: 'azure.firewall' } }));
+      await renderRoute(PATH);
+      await screen.findByRole('heading', { name: 'Prod vault', level: 1 });
+      expect(screen.queryByTestId('vault-firewall-address')).toBeNull();
+    });
+
+    it('shows the firewall address in Turkish', async () => {
+      asRole('operator', vaultWith({ status: 'degraded', last_error: { code: 'ALC-AKV-0004', reason: 'azure.firewall', params: { client_address: '203.0.113.7' } } }), 'tr');
+      await renderRoute(PATH, { languages: ['tr-TR'] });
+      await screen.findByRole('heading', { name: 'Prod vault', level: 1 });
+      expect(screen.getByTestId('vault-firewall-address')).toHaveTextContent('Kasanın gördüğü Alice adresi');
+      expectNoRawKeys(screen.getByTestId('vault-firewall-address'));
+    });
+
     it('names the missing role in <code> for a vault without the permission', async () => {
       asRole(
         'operator',

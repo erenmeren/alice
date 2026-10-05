@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"net/netip"
 	"time"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -142,16 +143,19 @@ func thumbprintOrBlank(s string) string {
 }
 
 // vaultLastError is a vault's last error. A vault's status stores the reason only, so the params a text needs
-// come from the access check: the role of the first row that was not allowed and the permission model.
+// come from the failure of the last poll that is that reason (facts.kv_poll: the firewall's client address, the
+// permission model and the role) and from the access check (the role of the first row that was not allowed and
+// the permission model). Each value passes its strict shape here again: an IP address literal without a zone,
+// one of the three models, one of the three roles; anything else stored is dropped.
 func vaultLastError(t inventory.Target) *errorRefDTO {
 	if t.LastErrorCode == "" {
 		return nil
 	}
-	var params map[string]string
+	params := map[string]string{}
 	if t.Vault != nil && t.Vault.Access != nil && t.LastErrorCode == ErrAzureForbidden.Reason {
 		for _, c := range t.Vault.Access.Checks {
 			if c.Result == providers.AzureResultForbidden && roleOrBlank(c.Role) != "" {
-				params = map[string]string{"role": c.Role}
+				params["role"] = c.Role
 				if m := oneOfOrBlank(t.Vault.Access.PermissionModel, permissionModels); m != "" {
 					params["model"] = m
 				}
@@ -159,7 +163,43 @@ func vaultLastError(t inventory.Target) *errorRefDTO {
 			}
 		}
 	}
+	if f := pollFailureOf(t); f != nil {
+		if a, err := netip.ParseAddr(f.ClientAddress); err == nil && a.Zone() == "" {
+			params["client_address"] = a.String()
+		}
+		if m := oneOfOrBlank(f.Model, permissionModels); m != "" {
+			params["model"] = m // the poll's refusal is the last error; the access check may be older
+		}
+		if _, ok := params["role"]; !ok && roleOrBlank(f.Role) != "" && t.LastErrorCode == ErrAzureForbidden.Reason {
+			params["role"] = f.Role
+		}
+	}
+	if len(params) == 0 {
+		params = nil
+	}
 	return errorRef(t.LastErrorCode, params)
+}
+
+// pollFailureOf is the failure of the vault's last poll that is its last error: the whole poll's, else the first
+// list's; nil when the last poll stored none.
+func pollFailureOf(t inventory.Target) *inventory.KVPollFailure {
+	if t.Facts.KVPoll == nil {
+		return nil
+	}
+	var first *inventory.KVPollFailure
+	for i := range t.Facts.KVPoll.Failures {
+		f := &t.Facts.KVPoll.Failures[i]
+		if f.Reason != t.LastErrorCode {
+			continue
+		}
+		if f.Object == "vault" {
+			return f
+		}
+		if first == nil {
+			first = f
+		}
+	}
+	return first
 }
 
 // kvCertificateDTO is one certificate of a vault.

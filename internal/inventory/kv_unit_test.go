@@ -43,6 +43,21 @@ func TestKVClassTable(t *testing.T) {
 	_ = providers.Warning{}
 }
 
+// A poll's failure keeps the permission model and the firewall's client address in their strict shapes only.
+func TestSanitizeKVFailureKeepsTheModelAndTheAddress(t *testing.T) {
+	got := sanitizeKVFailure("vault", providers.NewError("azure.forbidden", false, nil,
+		map[string]string{"model": "access_policy", "role": "Key Vault Reader", "client_address": "203.0.113.7"}))
+	assert.Equal(t, KVPollFailure{Object: "vault", Reason: "azure.forbidden", Role: "Key Vault Reader", Model: "access_policy",
+		ClientAddress: "203.0.113.7"}, got)
+	for _, m := range []string{"rbac", "access_policy", "unknown"} {
+		assert.Equal(t, m, sanitizeKVFailure("vault", providers.NewError("azure.forbidden", false, nil, map[string]string{"model": m})).Model)
+	}
+	got = sanitizeKVFailure("vault", providers.NewError("azure.firewall", false, nil,
+		map[string]string{"model": "<b>RBAC</b>", "client_address": "fe80::1%eth0"}))
+	assert.Empty(t, got.Model, "a model outside the closed set is dropped")
+	assert.Empty(t, got.ClientAddress, "an address with a zone is dropped")
+}
+
 func TestPrepareKVVersionsAreBoundedAndChecked(t *testing.T) {
 	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	leaf := pki.NewCA("Unit", pki.ECDSA256, now).Issue(pki.Opts{CommonName: "u.example.test"}, now)

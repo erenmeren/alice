@@ -198,6 +198,9 @@ func kvClosed(s string, allowed []string) string {
 	return "other"
 }
 
+// permissionModels are the permission models a refusal can name (the provider's closed set).
+var permissionModels = []string{"rbac", "access_policy", "unknown"}
+
 // sanitizeKVFailure keeps a provider error as a closed reason and the allowlisted params only
 // (ruling S4: no Azure text is stored).
 func sanitizeKVFailure(object string, e *providers.Error) KVPollFailure {
@@ -213,6 +216,9 @@ func sanitizeKVFailure(object string, e *providers.Error) KVPollFailure {
 	}
 	if r := e.Params["role"]; slices.Contains(vaultRoles, r) {
 		f.Role = r
+	}
+	if m := e.Params["model"]; slices.Contains(permissionModels, m) {
+		f.Model = m
 	}
 	if a, err := netip.ParseAddr(e.Params["client_address"]); err == nil && a.Zone() == "" {
 		f.ClientAddress = a.String()

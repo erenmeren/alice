@@ -99,6 +99,7 @@ func TestKeyVaultFailureCatalogue(t *testing.T) {
 
 			assert.Equal(t, "azure.forbidden", st.LastError.Reason)
 			assert.Equal(t, "Key Vault Reader", st.LastError.Params["role"])
+			assert.Equal(t, model, st.LastError.Params["model"], "the poll's refusal names the permission model")
 			// The permission model is told apart: a vault added with the role revoked shows it in the answer.
 			k2 := newKVNJ(t, fakekv.Options{Model: model})
 			k2.kv.RevokeRole("certificates/list")
@@ -493,9 +494,10 @@ func TestKeyVaultFailureCatalogue(t *testing.T) {
 		assert.Equal(t, "ALC-AKV-0004", st.code())
 		assert.Equal(t, "azure.firewall", st.LastError.Reason)
 		assert.NotContains(t, st.LastError.Params, "role")
+		assert.Equal(t, "203.0.113.7", st.LastError.Params["client_address"], "the poll's status names the address the firewall saw")
 
-		// A new vault behind the firewall: created and marked (ruling S5). Where the address is shown: the deployment's
-		// error carries client_address (TestKVDeploymentSecretReadOverTheWire); a poll's status does not (observation).
+		// A new vault behind the firewall: created and marked (ruling S5). The deployment's error carries client_address
+		// as well (TestKVDeploymentSecretReadOverTheWire).
 		k2 := newKVNJ(t, fakekv.Options{})
 		k2.kv.Firewall("203.0.113.7")
 		rec := k2.addVaultRaw(k2.vaultBody("walled"))

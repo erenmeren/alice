@@ -1484,6 +1484,7 @@
     "disabledChip": "Key Vault'ta devre dışı",
     "detailsPending": "Ayrıntılar henüz okunmadı",
     "replaceCredentials": "Kimlik bilgilerini değiştir",
+    "firewallAddress": "Kasanın gördüğü Alice adresi",
     "replaceTitle": "Oturum açma kimlik bilgilerini değiştirin",
     "replaceHelp": "Alice yeni kimlik bilgilerini kasa eklerkenki gibi denetler. Denetim başarısız olursa hiçbir şey değişmez.",
     "replaced": "Kimlik bilgileri değiştirildi.",

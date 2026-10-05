@@ -62,6 +62,7 @@ type KVPollFailure struct {
 	Object        string `json:"object"`
 	Reason        string `json:"reason"`
 	Role          string `json:"role,omitempty"`
+	Model         string `json:"model,omitempty"` // the permission model of a refusal: rbac, access_policy or unknown
 	ClientAddress string `json:"client_address,omitempty"`
 	RequestID     string `json:"request_id,omitempty"`
 	AzureCode     string `json:"azure_code,omitempty"`

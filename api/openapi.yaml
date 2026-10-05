@@ -2647,7 +2647,13 @@ components:
           description: >-
             degraded: a Key Vault that works partly (the vault answered, but a role is missing or its firewall refused
             Alice; last_error says which). pending_host_key and host_key_changed are for servers only.
-        last_error: { $ref: "#/components/schemas/ErrorRef" }
+        last_error:
+          $ref: "#/components/schemas/ErrorRef"
+          description: >-
+            For a Key Vault, params come from the failure of the last poll that is this error and from the last
+            access check, in strict shapes only: client_address (an IP address literal; the address the vault's
+            firewall saw, azure.firewall), model (rbac, access_policy or unknown) and role (Key Vault Reader, Key Vault
+            Secrets User or Key Vault Certificates Officer; azure.forbidden). Nothing else Azure sent is returned.
         last_success_at: { type: [string, "null"], format: date-time }
         last_discovery_at: { type: [string, "null"], format: date-time }
         discovery_interval_hours: { type: integer }

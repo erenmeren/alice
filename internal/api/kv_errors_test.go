@@ -198,6 +198,47 @@ func TestAccessCheckFiltersAreSecondLines(t *testing.T) {
 	assert.Equal(t, map[string]string{"role": "Key Vault Reader"}, vaultLastError(v).Params, "only a forbidden row names its role")
 }
 
+// A poll-time failure's params come from facts.kv_poll: the firewall's client address (an IP address literal) and
+// the permission model (one of three), from the failure that is the vault's last error; anything else stored there
+// never reaches a client.
+func TestVaultLastErrorCarriesThePollTimeParams(t *testing.T) {
+	at := sampleVault().Vault.Access.CheckedAt
+	fw := sampleVault()
+	fw.LastErrorCode = "azure.firewall"
+	fw.Facts.KVPoll = &inventory.KVPollFacts{At: at, Failures: []inventory.KVPollFailure{
+		{Object: "vault", Reason: "azure.firewall", ClientAddress: "203.0.113.7", AzureCode: "ForbiddenByFirewall"}}}
+	got := vaultLastError(fw)
+	require.NotNil(t, got)
+	assert.Equal(t, "ALC-AKV-0004", got.Code)
+	assert.Equal(t, map[string]string{"client_address": "203.0.113.7"}, got.Params)
+	fw.Facts.KVPoll.Failures[0].ClientAddress = "2001:db8::7"
+	assert.Equal(t, map[string]string{"client_address": "2001:db8::7"}, vaultLastError(fw).Params)
+
+	// A list's failure counts as well; one that is not the last error does not.
+	fw.Facts.KVPoll.Failures = []inventory.KVPollFailure{{Object: "keys", Reason: "azure.unreachable", ClientAddress: "198.51.100.1"},
+		{Object: "certificates", Reason: "azure.firewall", ClientAddress: "198.51.100.2"}}
+	assert.Equal(t, map[string]string{"client_address": "198.51.100.2"}, vaultLastError(fw).Params)
+
+	// Hostile stored values are dropped, never echoed.
+	for _, bad := range []string{"<script>alert(1)</script>", "203.0.113.7 or any", "fe80::1%eth0", "999.1.1.1", "", "::ffff:1.2.3.4.5"} {
+		fw.Facts.KVPoll.Failures = []inventory.KVPollFailure{{Object: "vault", Reason: "azure.firewall", ClientAddress: bad, Model: "<b>"}}
+		assert.Nil(t, vaultLastError(fw).Params, bad)
+	}
+
+	// azure.forbidden at poll time: the poll's model wins over the access check's, the access check's role stays.
+	fb := sampleVault()
+	fb.Vault.Access.PermissionModel = "rbac"
+	fb.Facts.KVPoll = &inventory.KVPollFacts{At: at, Failures: []inventory.KVPollFailure{
+		{Object: "vault", Reason: "azure.forbidden", Role: "Key Vault Reader", Model: "access_policy"}}}
+	assert.Equal(t, map[string]string{"role": "Key Vault Reader", "model": "access_policy"}, vaultLastError(fb).Params)
+	// Without an access check row, the poll's role names what is missing.
+	fb.Vault.Access = nil
+	fb.Facts.KVPoll.Failures[0].Role = "Key Vault Secrets User"
+	assert.Equal(t, map[string]string{"role": "Key Vault Secrets User", "model": "access_policy"}, vaultLastError(fb).Params)
+	fb.Facts.KVPoll.Failures[0].Role, fb.Facts.KVPoll.Failures[0].Model = "Owner", "other"
+	assert.Equal(t, map[string]string{"role": "Key Vault Reader"}, vaultLastError(fb).Params, "outside the closed sets: the floor role only")
+}
+
 // An Operator's confirm_incomplete_chain counts for nothing: the handler passes false whatever it sent.
 func TestOperatorChainConfirmationIsDropped(t *testing.T) {
 	h, inv, _ := vaultDeps(t)
