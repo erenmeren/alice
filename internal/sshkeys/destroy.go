@@ -63,6 +63,9 @@ WHERE k.retired_at IS NOT NULL AND p.destroyed_at IS NULL ORDER BY k.retired_at,
 	return n, errors.Join(errs...)
 }
 
+// onRetireCandidates runs between the read of the keys to retire and their retirement (tests only).
+var onRetireCandidates func()
+
 // retireUnusedOldKeys retires the old key of a completed rotation that was still in use at the
 // completion and no longer is (review M3): no live location, no queued deploy, no unfinished run and
 // no live policy references it.
@@ -86,6 +89,9 @@ ORDER BY k.id LIMIT $1`, maxDestroyBatch)
 	})
 	if err != nil {
 		return fmt.Errorf("sshkeys: list old keys to retire: %w", err)
+	}
+	if onRetireCandidates != nil {
+		onRetireCandidates()
 	}
 	var errs []error
 	for _, c := range cands {

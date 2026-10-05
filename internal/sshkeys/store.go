@@ -107,14 +107,17 @@ type locRow struct {
 	addSentAt, verifiedAt, reverified, removeAt *time.Time
 	jobCount                                    int
 	retries                                     int        // remove_retry steps: re-queues of a failed removal (G3)
-	lastResend                                  *time.Time // the latest add_resent step (G16: add_sent_at never moves)
+	lastResend                                  *time.Time // add_resent_at: the latest add re-send (G25)
+	resendCount                                 int        // add_resend_count
+	removeFailedAt                              *time.Time // remove_failed_at, stamped by the database (G20)
 	addAnswered                                 bool       // FinishAdd recorded a definite answer (add_answered step)
 }
 
 const locSelect = `SELECT id, rotation_id, old_location_id, target_id, n, os_user, file_path, options, state, verify_note, error_code,
     add_op_id, remove_op_id, undo_op_id, new_location_id, add_sent_at, verified_at, reverified_at, remove_sent_at, job_count,
-    (SELECT count(*) FROM rotation_steps s WHERE s.location_id = rotation_locations.id AND s.name = 'remove_retry'),
-    (SELECT max(s.at) FROM rotation_steps s WHERE s.location_id = rotation_locations.id AND s.name = 'add_resent'),
+    (SELECT count(*) FROM rotation_steps s WHERE s.location_id = rotation_locations.id AND s.name = 'remove_retry'
+        AND s.n > coalesce((SELECT max(p.n) FROM rotation_steps p WHERE p.rotation_id = rotation_locations.rotation_id AND p.name = 'paused'), 0)),
+    add_resent_at, add_resend_count, remove_failed_at,
     EXISTS (SELECT 1 FROM rotation_steps s WHERE s.location_id = rotation_locations.id AND s.name = 'add_answered')
 FROM rotation_locations`
 
@@ -122,13 +125,14 @@ func scanLoc(row pgx.Row) (locRow, error) {
 	var l locRow
 	err := row.Scan(&l.id, &l.runID, &l.oldLocationID, &l.targetID, &l.n, &l.osUser, &l.filePath, &l.options, &l.state, &l.verifyNote,
 		&l.errorCode, &l.addOpID, &l.removeOpID, &l.undoOpID, &l.newLocation, &l.addSentAt, &l.verifiedAt, &l.reverified, &l.removeAt,
-		&l.jobCount, &l.retries, &l.lastResend, &l.addAnswered)
+		&l.jobCount, &l.retries, &l.lastResend, &l.resendCount, &l.removeFailedAt, &l.addAnswered)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return locRow{}, ErrNotFound
 	}
 	if err != nil {
 		return locRow{}, fmt.Errorf("sshkeys: read the rotation location: %w", err)
 	}
+	l.lastResend, l.removeFailedAt = utcPtr(l.lastResend), utcPtr(l.removeFailedAt)
 	return l, nil
 }
 
@@ -280,11 +284,13 @@ func (s *Service) LocationWork(ctx context.Context, locationID uuid.UUID) (Locat
 // not paused, the license allows changes, the target passes KeyChangeRefusal and the connection-account
 // rule (the location's user is not the connection account, the file is not one of its files, its list
 // is known completely: review M4). A resumed job (state adding) gets the same operation id;
-// add_sent_at keeps the first send and the re-send is an add_resent step (G16). Else ErrPaused or
+// add_sent_at keeps the first send and the re-send is recorded in add_resend_count/add_resent_at (G16, G25). Else ErrPaused or
 // ErrNotYourTurn.
 func (s *Service) BeginAdd(ctx context.Context, locationID uuid.UUID) (uuid.UUID, error) {
 	var op uuid.UUID
+	refused := ""
 	err := s.jobTx(ctx, func(tx pgx.Tx) error {
+		refused = ""
 		run, loc, err := lockLocation(ctx, tx, locationID, true)
 		if err != nil {
 			return err
@@ -305,24 +311,43 @@ func (s *Service) BeginAdd(ctx context.Context, locationID uuid.UUID) (uuid.UUID
 		if inventory.KeyChangeRefusal(t, loc.osUser) != nil {
 			return ErrNotYourTurn
 		}
-		conn := connectionUser(t)
-		if loc.osUser == conn || slices.Contains(filesOf(t.Facts, conn), loc.filePath) || !connectionFilesKnown(t.Facts, conn) {
-			return ErrNotYourTurn
-		}
 		now := s.clock.Now().UTC()
-		if loc.addSentAt != nil && now.Before(*loc.addSentAt) {
+		conn := connectionUser(t)
+		var known string
+		switch {
+		case loc.osUser == conn || slices.Contains(filesOf(t.Facts, conn), loc.filePath):
+			known = ReasonConnectionAccountFile
+		case !connectionFilesKnown(t.Facts, conn):
+			known = ReasonConnectionFilesUnknown
+		}
+		if known != "" {
+			// A cause known before any send (the planner skips it; the scan changed since the start):
+			// the location ends at once, definitely, with its own reason; no retry is used and the
+			// others carry on (Task 9 re-review N1). A planned row was never sent: cancelled; a row
+			// already adding failed definitely (its earlier send is undone if the run rolls back).
+			refused = known
+			if loc.state == LocPlanned {
+				return s.setLocation(ctx, tx, jobActor(ctx), loc, LocCancelled, known, now, ", error_code = $5", known)
+			}
+			return s.setLocation(ctx, tx, jobActor(ctx), loc, LocAddFailed, known, now, ", error_code = $5", known)
+		}
+		if loc.addSentAt != nil && now.Before(lastAddSend(loc)) {
 			return ErrNotYourTurn // the clock went back: retried later (G14)
 		}
 		if loc.state == LocAdding && loc.addOpID != nil {
 			// A resumed add re-sends with the same operation id. add_sent_at keeps the first send
-			// (G16); the re-send is a step, which the undo's wait counts from (S3).
+			// (G16); the re-send is recorded on the row (add_resend_count, add_resent_at: G25), which
+			// the undo's wait counts from (S3).
 			op = *loc.addOpID
-			id := loc.id
-			return appendStep(ctx, tx, loc.runID, &id, "add_resent", "started", map[string]string{"add_op_id": op.String()}, now)
+			return s.setLocation(ctx, tx, jobActor(ctx), loc, LocAdding, "", now,
+				", add_resend_count = add_resend_count + 1, add_resent_at = $3")
 		}
 		op = uuid.Must(uuid.NewV7())
 		return s.setLocation(ctx, tx, jobActor(ctx), loc, LocAdding, "", now, ", add_op_id = $5, add_sent_at = $3", op)
 	})
+	if err == nil && refused != "" {
+		return uuid.Nil, fmt.Errorf("%w (%s)", ErrNotYourTurn, refused)
+	}
 	return op, err
 }
 
@@ -482,8 +507,9 @@ func (s *Service) RecordReverify(ctx context.Context, locationID uuid.UUID, r Ve
 		case loc.state == LocRemoveFailed && !accepted:
 			return nil // stays failed; the old key stays
 		case loc.state == LocRemoveFailed:
-			if (loc.reverified != nil && !now.After(*loc.reverified)) || (loc.removeAt != nil && !now.After(*loc.removeAt)) {
-				return ErrNotYourTurn // G3': a strictly newer re-check, later than the failed send
+			if (loc.reverified != nil && !now.After(*loc.reverified)) || (loc.removeAt != nil && !now.After(*loc.removeAt)) ||
+				(loc.removeFailedAt != nil && !now.After(*loc.removeFailedAt)) {
+				return ErrNotYourTurn // G3', G20: a strictly newer re-check, later than the failed send and the failure
 			}
 			if err := s.removeGate(ctx, tx, run, loc, now, now); err != nil {
 				return err
@@ -499,13 +525,15 @@ func (s *Service) RecordReverify(ctx context.Context, locationID uuid.UUID, r Ve
 }
 
 // fileReady reports whether every other location of the run in the location's (target, file) is
-// verified, removing or removed: a shared file loses the old key only when every one of its users
+// verified, removed, or removing on a re-check of its own at most ReverifyFreshness before now (G22): a shared file loses the old key only when every one of its users
 // verified (R41 row 29; G18 as built: a skipped, kept, unverifiable or failed sibling blocks the whole
 // file, a sibling already removing or removed does not).
-func fileReady(ctx context.Context, tx pgx.Tx, loc locRow) (bool, error) {
+func fileReady(ctx context.Context, tx pgx.Tx, loc locRow, now time.Time) (bool, error) {
 	var blocked bool
 	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM rotation_locations WHERE rotation_id = $1 AND target_id = $2 AND file_path = $3
-AND id <> $4 AND state NOT IN ('verified', 'removing', 'removed'))`, loc.runID, loc.targetID, loc.filePath, loc.id).Scan(&blocked)
+AND id <> $4 AND (state NOT IN ('verified', 'removing', 'removed')
+    OR (state = 'removing' AND (reverified_at IS NULL OR reverified_at < $5))))`, loc.runID, loc.targetID, loc.filePath, loc.id,
+		now.Add(-ReverifyFreshness)).Scan(&blocked)
 	if err != nil {
 		return false, fmt.Errorf("sshkeys: read the file's locations: %w", err)
 	}
@@ -569,7 +597,7 @@ func (s *Service) removeGate(ctx context.Context, tx pgx.Tx, run runRow, loc loc
 	case loc.newLocation == nil:
 		return ErrNotYourTurn
 	}
-	ready, err := fileReady(ctx, tx, loc)
+	ready, err := fileReady(ctx, tx, loc, now)
 	if err != nil {
 		return err
 	}
@@ -651,25 +679,43 @@ func (s *Service) FinishRemove(ctx context.Context, actor audit.Actor, locationI
 // attention mails it again (code rotation.late_result). The caller marks the inventory location.
 func (s *Service) lateResult(ctx context.Context, tx pgx.Tx, run runRow, loc locRow, result string, removed int, now time.Time) error {
 	id := loc.id
+	var seen bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM rotation_steps WHERE location_id = $1 AND name = 'late_result')", id).
+		Scan(&seen); err != nil {
+		return fmt.Errorf("sshkeys: read the location's late results: %w", err)
+	}
+	if seen {
+		return nil // recorded once per location (re-review N5)
+	}
 	if err := appendStep(ctx, tx, run.id, &id, "late_result", "ok", map[string]string{"result": result,
 		"removed_count": strconv.Itoa(removed)}, now); err != nil {
 		return err
 	}
-	if _, err := s.jobs.EnqueueTx(ctx, tx, inventory.JobRequest{Type: inventory.JobDiscover, TargetID: loc.targetID,
-		Payload: map[string]string{}, Kind: "system", DedupeKey: "target.discover:" + loc.targetID.String() + ":rotation"}); err != nil {
+	if err := s.queueDiscovery(ctx, tx, loc.targetID); err != nil {
 		return err
 	}
-	if run.finished() {
-		return s.mail(ctx, tx, TemplateNeedsAttention, s.attentionParams(ctx, tx, run, ReasonLateResult))
+	var server string
+	if err := tx.QueryRow(ctx, "SELECT name::text FROM targets WHERE id = $1", loc.targetID).Scan(&server); err != nil {
+		return fmt.Errorf("sshkeys: read the server: %w", err)
 	}
-	return nil
+	// Its own template (once per location): what the server did after the run gave up on it.
+	return s.mail(ctx, tx, TemplateLateResult, map[string]string{"key_label": run.oldLabel, "server": server, "os_user": loc.osUser,
+		"file_path": loc.filePath, "result": result, "rotation_id": run.id.String()})
+}
+
+// queueDiscovery queues a scan of the server (deduped) so the inventory catches up with a file the
+// rotation may have left changed.
+func (s *Service) queueDiscovery(ctx context.Context, tx pgx.Tx, targetID uuid.UUID) error {
+	_, err := s.jobs.EnqueueTx(ctx, tx, inventory.JobRequest{Type: inventory.JobDiscover, TargetID: targetID,
+		Payload: map[string]string{}, Kind: "system", DedupeKey: "target.discover:" + targetID.String() + ":rotation"})
+	return err
 }
 
 // undoWait is how long after the add was sent an undo of an add that never had a definite answer
 // waits (S3): a helper still working may write until its budget ends.
 func (s *Service) undoWait() time.Duration { return s.helperBudget + undoGrace }
 
-// lastAddSend is the latest send of the location's add: add_sent_at or a later re-send (G16).
+// lastAddSend is the latest send of the location's add: add_sent_at or the latest re-send (add_resent_at, G25).
 func lastAddSend(l locRow) time.Time {
 	t := *l.addSentAt
 	if l.lastResend != nil && l.lastResend.After(t) {
@@ -686,11 +732,12 @@ func (s *Service) undoMustWait(l locRow, now time.Time) bool {
 // undoGrace is the margin after the helper's budget (S3).
 const undoGrace = 30 * time.Second
 
-// uncertainAdd reports whether the location's add was sent and never proven: FinishAdd recorded no
-// definite answer and no accepted login was recorded (verified_at). A refused-with-from= or an
-// unprovable login proves nothing about the line: a stalled helper may still write it (S3; review I1).
+// uncertainAdd reports whether the location's add was sent and may still land: no accepted login was
+// recorded (verified_at), and either FinishAdd recorded no definite answer or the add was re-sent: an
+// answer to a re-send says nothing about an earlier send of the same operation, which may still be
+// running within its helper budget (S3; review I1, re-review N3).
 func uncertainAdd(loc locRow) bool {
-	return loc.addSentAt != nil && loc.verifiedAt == nil && !loc.addAnswered
+	return loc.addSentAt != nil && loc.verifiedAt == nil && (!loc.addAnswered || loc.resendCount > 0)
 }
 
 // undoable are the states from which the new key is removed again (C8).
@@ -760,7 +807,10 @@ func (s *Service) FinishUndo(ctx context.Context, actor audit.Actor, locationID 
 			// G2, G17: a pending undo may end without a send, except a row still adding (its add may
 			// still land; it gets a real undo attempt).
 			reason := closedReason(r.Reason, "")
-			return s.setLocation(ctx, tx, actor, loc, LocUndoFailed, reason, now, ", error_code = $5", reason)
+			if err := s.setLocation(ctx, tx, actor, loc, LocUndoFailed, reason, now, ", error_code = $5", reason); err != nil {
+				return err
+			}
+			return s.queueDiscovery(ctx, tx, loc.targetID) // the new key may be left there (re-review N4)
 		}
 		return ErrNotYourTurn
 	})

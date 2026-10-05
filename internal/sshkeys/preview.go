@@ -81,8 +81,9 @@ func toPlanInput(key keyRow, locs []inventory.KeyLocation, targets map[uuid.UUID
 		NewComment:     keymat.Comment(key.label, plannedFor),
 	}
 	for id, t := range targets {
-		pt := plan.Target{ID: id, Name: t.Name, Status: t.Status, ConnectionUser: connectionUser(t), KeysManagedElsewhere: t.KeysManagedElsewhere,
-			UID0Users: t.Facts.UID0Users}
+		conn := connectionUser(t)
+		pt := plan.Target{ID: id, Name: t.Name, Status: t.Status, ConnectionUser: conn, KeysManagedElsewhere: t.KeysManagedElsewhere,
+			UID0Users: t.Facts.UID0Users, ConnectionFilesKnown: connectionFilesKnown(t.Facts, conn), ConnectionFiles: filesOf(t.Facts, conn)}
 		if t.Facts.SSHD != nil {
 			pt.SSHDRead = t.Facts.SSHD.Read
 			pt.PermitRootLogin = t.Facts.SSHD.PermitRootLogin

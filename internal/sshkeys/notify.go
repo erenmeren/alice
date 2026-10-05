@@ -17,6 +17,7 @@ const (
 	TemplateOverlapEnding       = "rotation.overlap_ending"
 	TemplateCompleted           = "rotation.completed"
 	TemplateCompletedPartial    = "rotation.completed_partial" // S11: the old key stays somewhere
+	TemplateLateResult          = "rotation.late_result"       // a server's answer after the run gave up on it
 	TemplateAborted             = "rotation.aborted"
 	TemplateNeedsAttention      = "rotation.needs_attention"
 	TemplatePausedLicense       = "rotation.paused_license"
@@ -26,7 +27,7 @@ const (
 // Templates returns every email template of this module, in C10's order (render tests).
 func Templates() []string {
 	return []string{TemplatePreview, TemplatePreviewAfterLicense, TemplateOverlapStarted, TemplateOverlapEnding, TemplateCompleted,
-		TemplateAborted, TemplateNeedsAttention, TemplatePausedLicense, TemplateDecisionNeeded, TemplateCompletedPartial}
+		TemplateAborted, TemplateNeedsAttention, TemplatePausedLicense, TemplateDecisionNeeded, TemplateCompletedPartial, TemplateLateResult}
 }
 
 // mailTime is the time format of every email parameter (C10).

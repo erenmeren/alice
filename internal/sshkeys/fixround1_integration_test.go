@@ -263,7 +263,8 @@ func mustKey(e *env, id uuid.UUID) sshkeys.ManagedKey {
 	return k
 }
 
-// Review M4: BeginAdd repeats the connection-account rule at send time.
+// Review M4 with re-review N1: BeginAdd repeats the connection-account rule at send time and records
+// the refusal at once with its own reason.
 func TestBeginAddRepeatsTheConnectionAccountRule(t *testing.T) {
 	e := newEnv(t)
 	srv := e.server("web-01")
@@ -273,17 +274,10 @@ func TestBeginAddRepeatsTheConnectionAccountRule(t *testing.T) {
 	require.NoError(t, err)
 	_, err = e.svc.BeginAdd(e.claimed(), r.Locations[0].ID)
 	assert.ErrorIs(t, err, sshkeys.ErrNotYourTurn, "the location's user became the connection account")
-	_, err = e.db.Owner.Exec(e.ctx, `UPDATE targets SET config = jsonb_set(config, '{username}', '"alice-svc"'),
-    facts = jsonb_set(facts, '{key_files}', '[{"os_user":"deploy","files":["/home/deploy/.ssh/authorized_keys"],"complete":true}]') WHERE id = $1`, srv)
-	require.NoError(t, err)
-	_, err = e.svc.BeginAdd(e.claimed(), r.Locations[0].ID)
-	assert.ErrorIs(t, err, sshkeys.ErrNotYourTurn, "the connection account's files are not known")
-	raw, err := json.Marshal(keyFiles)
-	require.NoError(t, err)
-	_, err = e.db.Owner.Exec(e.ctx, "UPDATE targets SET facts = jsonb_set(facts, '{key_files}', $2) WHERE id = $1", srv, raw)
-	require.NoError(t, err)
-	_, err = e.svc.BeginAdd(e.claimed(), r.Locations[0].ID)
-	assert.NoError(t, err)
+	got := e.run(r.ID).Locations[0]
+	assert.Equal(t, "cancelled", got.State)
+	assert.Equal(t, "sshkey.connection_account_file", got.ErrorCode)
+	_ = json.Marshal
 }
 
 // Review M5: a decision that committed succeeds even when the following Advance fails.
@@ -332,9 +326,10 @@ func TestLateResultAfterExhaustionIsRecorded(t *testing.T) {
 	assert.Equal(t, "undone", last.Params["result"])
 	assert.Equal(t, 1, e.count("SELECT count(*) FROM ssh_key_locations WHERE id = $1 AND removed_by_alice_at IS NOT NULL", newLoc))
 	assert.Equal(t, 1, e.count("SELECT count(*) FROM jobs WHERE type = 'target.discover' AND target_id = $1", srv))
-	m := e.mails("rotation.needs_attention")
-	require.NotEmpty(t, m)
-	assert.Equal(t, "rotation.late_result", m[len(m)-1]["code"])
+	m := e.mails("rotation.late_result")
+	require.Len(t, m, 1, "its own template")
+	assert.Equal(t, "web-01", m[0]["server"])
+	assert.Equal(t, "undone", m[0]["result"])
 }
 
 // Review M11 (R1): a manual run left previewed by a crash between its insert and its start is never

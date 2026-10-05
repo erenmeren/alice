@@ -40,7 +40,7 @@ func (s *Service) Sweep(ctx context.Context) (SweepSummary, error) {
 			continue
 		}
 		if err := s.Advance(ctx, id); err != nil {
-			s.log.Error("could not advance a rotation", "rotation_id", id.String(), "error_type", fmt.Sprintf("%T", err))
+			s.logError("could not advance a rotation", id, err)
 			errs = append(errs, err)
 			sum.Failed++
 			continue
@@ -60,18 +60,31 @@ func (s *Service) Sweep(ctx context.Context) (SweepSummary, error) {
 		queued, ended, err := s.requeue(ctx, id)
 		sum.Requeued += queued
 		if err != nil {
+			s.logError("could not re-queue a rotation's location jobs", id, err)
 			errs = append(errs, err)
 			sum.Failed++
 			continue
 		}
 		if ended {
 			if err := s.Advance(ctx, id); err != nil {
+				s.logError("could not advance a rotation", id, err)
 				errs = append(errs, err)
 				sum.Failed++
 			}
 		}
 	}
 	return sum, errors.Join(errs...)
+}
+
+// logError logs a controller-path failure; a guard refusal with its SQLSTATE, constraint and fixed
+// message (re-review N6).
+func (s *Service) logError(msg string, runID uuid.UUID, err error) {
+	var g *GuardRefusal
+	if errors.As(err, &g) {
+		s.log.Error(msg, "rotation_id", runID.String(), "sqlstate", g.Code, "constraint", g.Constraint, "guard", g.Message)
+		return
+	}
+	s.log.Error(msg, "rotation_id", runID.String(), "error_type", fmt.Sprintf("%T", err))
 }
 
 // phaseOf is the location job phase a location waits for in the run's status, "" when none.
@@ -138,6 +151,13 @@ func (s *Service) requeue(ctx context.Context, id uuid.UUID) (queued int, ended 
 					", undo_op_id = $5, undo_sent_at = $3, job_count = 0", uuid.Must(uuid.NewV7())); err != nil {
 					return err
 				}
+				// The guard requires the undo columns on an undoing row; the truth is that no undo was
+				// sent (re-review N4): a step says so.
+				id := l.id
+				if err := appendStep(ctx, tx, l.runID, &id, "undo_not_sent", "skipped", map[string]string{"reason": ReasonRetriesExhausted},
+					now); err != nil {
+					return err
+				}
 				continue
 			}
 			if l.jobCount >= MaxLocationJobs {
@@ -173,5 +193,12 @@ func (s *Service) exhaust(ctx context.Context, tx pgx.Tx, actor audit.Actor, l l
 	default:
 		to = LocUndoFailed // G2: nothing more is sent
 	}
-	return s.setLocation(ctx, tx, actor, l, to, ReasonRetriesExhausted, now, ", error_code = $5", ReasonRetriesExhausted)
+	if err := s.setLocation(ctx, tx, actor, l, to, ReasonRetriesExhausted, now, ", error_code = $5", ReasonRetriesExhausted); err != nil {
+		return err
+	}
+	if to == LocUndoFailed {
+		// The new key may be left in that file: a scan of the server tells the inventory (re-review N4).
+		return s.queueDiscovery(ctx, tx, l.targetID)
+	}
+	return nil
 }

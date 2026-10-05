@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,7 +39,9 @@ func (s *Service) Advance(ctx context.Context, id uuid.UUID) error {
 	if run.finished() {
 		return nil
 	}
-	return s.storeTx(ctx, func(tx pgx.Tx) error {
+	var noticeFailed error
+	err = s.storeTx(ctx, func(tx pgx.Tx) error {
+		noticeFailed = nil
 		run, err := lockRun(ctx, tx, id)
 		if err != nil || run.finished() || run.status == StatusDryRunNotified {
 			return err
@@ -56,7 +59,11 @@ func (s *Service) Advance(ctx context.Context, id uuid.UUID) error {
 		if run.pausedLicense && c.gate && run.renotifiedAt == nil {
 			// S6, L-84: the first call after the renewal tells the Administrators before Continue is
 			// possible; nothing else moves in the same call.
-			return c.renotify(ctx)
+			if err := c.renotify(ctx); err != nil {
+				noticeFailed = err
+				return err
+			}
+			return nil
 		}
 		switch run.status {
 		case StatusAddingNew:
@@ -71,6 +78,27 @@ func (s *Service) Advance(ctx context.Context, id uuid.UUID) error {
 			return c.rollingBack(ctx)
 		}
 		return nil
+	})
+	if noticeFailed != nil {
+		// The renewal notice could not be queued: the run says so (rotation.notice_pending with a
+		// closed sub-reason) and each failure is logged (re-review N9); Abort and Keep old stay possible.
+		s.log.Error("could not queue the renewal notice", "rotation_id", id.String(), "error_type", fmt.Sprintf("%T", noticeFailed))
+		if serr := s.noticeFailedStep(ctx, id); serr != nil {
+			err = errors.Join(err, serr)
+		}
+	}
+	return err
+}
+
+// noticeFailedStep records a failed renewal notice on the live run (step notice_failed).
+func (s *Service) noticeFailedStep(ctx context.Context, id uuid.UUID) error {
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		run, err := lockRun(ctx, tx, id)
+		if err != nil || run.finished() {
+			return err
+		}
+		return appendStep(ctx, tx, id, nil, "notice_failed", "failed", map[string]string{"reason": ReasonNoticeQueueFailed},
+			s.clock.Now().UTC())
 	})
 }
 
@@ -218,6 +246,15 @@ func (c *advance) pause(ctx context.Context) error {
     version = version + 1 WHERE id = $1`, c.run.id, c.now); err != nil {
 		return fmt.Errorf("sshkeys: pause the rotation: %w", err)
 	}
+	// A job queued just before the lock answered ErrPaused: the pause gives the retries back
+	// (re-review N2). Failed removals count their retries after the last pause step (store.go).
+	for _, l := range c.locs {
+		if l.jobCount > 0 && slices.Contains([]string{LocPlanned, LocAdding, LocAdded, LocVerified, LocRemoving}, l.state) {
+			if err := c.s.setLocation(ctx, c.tx, c.actor, l, l.state, "", c.now, ", job_count = 0"); err != nil {
+				return err
+			}
+		}
+	}
 	if _, err := c.s.audit.Append(ctx, c.tx, audit.Event{Actor: c.actor, Action: "rotation.paused", ObjectType: "rotation",
 		ObjectID: c.run.id.String(), Result: audit.Success, Details: map[string]string{"rotation_id": c.run.id.String(),
 			"reason": ReasonPausedLicense}}); err != nil {
@@ -271,6 +308,18 @@ func (c *advance) adding(ctx context.Context) error {
 	}
 	if c.count(LocPlanned, LocAdding, LocAdded) > 0 {
 		return nil
+	}
+	if c.count(LocVerified, LocUnverifiable) == 0 {
+		// Every changing location was refused at send time for a cause known in advance (re-review
+		// N1): nothing was added, nothing to rotate; the run ends with that cause.
+		reason := ReasonAddFailed
+		for _, l := range c.locs {
+			if l.state == LocCancelled && l.errorCode != "" {
+				reason = l.errorCode
+				break
+			}
+		}
+		return c.s.rollBack(ctx, c.tx, c.actor, c.run, c.locs, reason, c.now)
 	}
 	if n := c.count(LocUnverifiable); n > 0 {
 		due := plan.DecisionDue(c.now)
@@ -387,7 +436,7 @@ func (c *advance) removing(ctx context.Context) error {
 		}
 		return nil
 	}
-	kept := c.count(LocSkipped, LocKeptOld, LocRemoveFailed)
+	kept := c.count(LocSkipped, LocKeptOld, LocRemoveFailed, LocCancelled) // cancelled: refused at send time (N1)
 	if c.count(LocRemoveFailed) > 0 {
 		if err := c.setStatus(ctx, StatusNeedsAttention, ReasonRemoveIncomplete, ", result_code = $5, kept_count = $6",
 			ReasonRemoveIncomplete, kept); err != nil {
@@ -438,14 +487,17 @@ func (s *Service) retireIfUnused(ctx context.Context, tx pgx.Tx, actor audit.Act
 		return false, nil
 	}
 	var live int
-	var deploying bool
+	var deploying, used bool
 	if err := tx.QueryRow(ctx, "SELECT ("+liveLocations+"), EXISTS (SELECT 1 FROM jobs j WHERE j.type = $2 AND "+
-		"j.status IN ('queued', 'running', 'blocked_license') AND j.payload->>'ssh_key_id' = k.id::text) FROM ssh_keys k WHERE k.id = $1",
-		keyID, JobDeploy).Scan(&live, &deploying); err != nil {
+		"j.status IN ('queued', 'running', 'blocked_license') AND j.payload->>'ssh_key_id' = k.id::text), "+
+		"EXISTS (SELECT 1 FROM rotation_policies p WHERE p.ssh_key_id = k.id AND p.deleted_at IS NULL) OR "+
+		"EXISTS (SELECT 1 FROM rotations r WHERE (r.old_ssh_key_id = k.id OR r.new_ssh_key_id = k.id) AND r.id <> $3 AND r.status NOT IN "+
+		finishedStatuses+") FROM ssh_keys k WHERE k.id = $1",
+		keyID, JobDeploy, runID).Scan(&live, &deploying, &used); err != nil {
 		return false, fmt.Errorf("sshkeys: count the old key's locations: %w", err)
 	}
-	if live > 0 || deploying {
-		return false, nil
+	if live > 0 || deploying || used {
+		return false, nil // re-checked after the key's lock (re-review N8)
 	}
 	if _, err := tx.Exec(ctx, "UPDATE ssh_keys SET retired_at = $2 WHERE id = $1 AND retired_at IS NULL", keyID, now); err != nil {
 		return false, fmt.Errorf("sshkeys: retire the old key: %w", err)
@@ -455,13 +507,21 @@ func (s *Service) retireIfUnused(ctx context.Context, tx pgx.Tx, actor audit.Act
 	return err == nil, err
 }
 
-// attentionParams are the needs_attention mail's parameters; late results recorded on the run are
-// counted (review M9).
+// attentionParams are the needs_attention mail's parameters: the servers where an undo failed are
+// named (re-review N4).
 func (s *Service) attentionParams(ctx context.Context, tx pgx.Tx, run runRow, code string) map[string]string {
 	p := map[string]string{"key_label": run.oldLabel, "code": code}
-	var late int
-	if err := tx.QueryRow(ctx, "SELECT count(*) FROM rotation_steps WHERE rotation_id = $1 AND name = 'late_result'", run.id).Scan(&late); err == nil && late > 0 {
-		p["late_results"] = strconv.Itoa(late)
+	// The servers where an undo failed: the new key may be left there (re-review N4).
+	var count int
+	var names []string
+	if err := tx.QueryRow(ctx, `SELECT count(*), coalesce(array_agg(DISTINCT t.name::text ORDER BY t.name::text), '{}')
+FROM rotation_locations l JOIN targets t ON t.id = l.target_id WHERE l.rotation_id = $1 AND l.state = 'undo_failed'`, run.id).
+		Scan(&count, &names); err == nil && count > 0 {
+		if len(names) > 10 {
+			names = append(names[:10], "…")
+		}
+		p["undo_failed_count"] = strconv.Itoa(count)
+		p["undo_failed_servers"] = strings.Join(names, ", ")
 	}
 	return p
 }

@@ -21,7 +21,7 @@ var (
 
 func okTarget(id uuid.UUID, name string) Target {
 	return Target{ID: id, Name: name, Status: "ok", ConnectionUser: "alice-svc", SSHDRead: true, PermitRootLogin: "prohibit-password",
-		PubkeyAuthentication: "yes"}
+		PubkeyAuthentication: "yes", ConnectionFilesKnown: true, ConnectionFiles: []string{"/home/alice-svc/.ssh/authorized_keys"}}
 }
 
 func loc(target uuid.UUID, user, file, options string) Location {
@@ -92,6 +92,10 @@ func TestSkipReasons(t *testing.T) {
 		{"duplicate lines", nil, func(l *Location) { l.Flags = []string{"duplicate"} }, SkipDuplicateLines},
 		{"altered options", nil, func(l *Location) { l.Options = "command=\"a\ufffdb\"" }, SkipOptionsUnreadable},
 		{"connection account", nil, func(l *Location) { l.OSUser = "alice-svc" }, SkipConnectionAccount},
+		// Task 9 re-review N1: what BeginAdd refuses at send time is skipped at plan time.
+		{"connection files unknown", func(t *Target) { t.ConnectionFilesKnown = false }, nil, SkipConnectionFilesUnknown},
+		{"connection account's file", func(t *Target) { t.ConnectionFiles = []string{"/etc/ssh/keys", "/home/deploy/.ssh/authorized_keys"} }, nil,
+			SkipConnectionAccountFile},
 		{"keys elsewhere", func(t *Target) { t.KeysManagedElsewhere = true }, nil, SkipKeysManagedElsewhere},
 		{"keys elsewhere for user", func(t *Target) { t.ManagedElsewhereUsers = []string{"deploy"} }, nil, SkipKeysManagedElsewhere},
 		{"sshd unread", func(t *Target) { t.SSHDRead = false }, nil, SkipSSHDUnreadable},
@@ -323,13 +327,19 @@ func TestDigestChangesWithEveryDecision(t *testing.T) {
 	ref, err := Build(base())
 	require.NoError(t, err)
 	changes := map[string]func(*Input){
-		"overlap":      func(in *Input) { in.OverlapMinutes = 1 },
-		"new key type": func(in *Input) { in.NewKeyType = "rsa-3072" },
-		"options":      func(in *Input) { in.Locations[0].Options = "restrict" },
-		"user":         func(in *Input) { in.Locations[0].OSUser = "app" },
-		"file":         func(in *Input) { in.Locations[0].FilePath = "/home/deploy/.ssh/authorized_keys2" },
-		"skip":         func(in *Input) { x := in.Targets[t1]; x.Status = "unreachable"; in.Targets[t1] = x },
-		"verify note":  func(in *Input) { in.Locations[0].Options = `from="10.0.0.0/8"` },
+		"overlap":                  func(in *Input) { in.OverlapMinutes = 1 },
+		"new key type":             func(in *Input) { in.NewKeyType = "rsa-3072" },
+		"options":                  func(in *Input) { in.Locations[0].Options = "restrict" },
+		"user":                     func(in *Input) { in.Locations[0].OSUser = "app" },
+		"file":                     func(in *Input) { in.Locations[0].FilePath = "/home/deploy/.ssh/authorized_keys2" },
+		"skip":                     func(in *Input) { x := in.Targets[t1]; x.Status = "unreachable"; in.Targets[t1] = x },
+		"connection files unknown": func(in *Input) { x := in.Targets[t1]; x.ConnectionFilesKnown = false; in.Targets[t1] = x },
+		"connection account's file": func(in *Input) {
+			x := in.Targets[t1]
+			x.ConnectionFiles = []string{"/home/deploy/.ssh/authorized_keys"}
+			in.Targets[t1] = x
+		},
+		"verify note": func(in *Input) { in.Locations[0].Options = `from="10.0.0.0/8"` },
 		"another location": func(in *Input) {
 			in.Locations = append(in.Locations, loc(t2, "deploy", "/home/deploy/.ssh/authorized_keys", ""))
 		},

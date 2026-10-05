@@ -136,7 +136,8 @@ func TestToPlanInput(t *testing.T) {
 	assert.Equal(t, "alice:ci:2026-10-05", in.NewComment)
 	pt := in.Targets[tid]
 	assert.Equal(t, plan.Target{ID: tid, Name: "web", Status: "ok", ConnectionUser: "ops", SSHDRead: true, PermitRootLogin: "no",
-		PubkeyAuthentication: "yes", UID0Users: []string{"root"}, ManagedElsewhereUsers: []string{"bob"}, SSHDUnreadUsers: []string{"eve"}}, pt)
+		PubkeyAuthentication: "yes", UID0Users: []string{"root"}, ManagedElsewhereUsers: []string{"bob"}, SSHDUnreadUsers: []string{"eve"}}, pt,
+		"no key files in the facts: not known")
 	assert.True(t, in.Locations[0].Missing)
 	tg.Facts.Warnings = []providers.Warning{{Code: "sshd_unreadable", Params: map[string]string{}}}
 	in = toPlanInput(key, nil, map[uuid.UUID]inventory.Target{tid: tg}, nil, Policy{}, now)
@@ -165,14 +166,17 @@ func TestAllowedActions(t *testing.T) {
 		want []string
 	}{
 		{Rotation{Status: StatusDryRunNotified}, true, []string{"abort"}},
-		{Rotation{Status: StatusDryRunNotified}, false, []string{}},
+		{Rotation{Status: StatusDryRunNotified}, false, []string{"abort"}},                // Abort stays possible in lock
 		{Rotation{Status: StatusAddingNew, PausedLicense: true}, true, []string{"abort"}}, // the renewal notice is not out yet (I2)
+		{Rotation{Status: StatusAddingNew, PausedLicense: true}, false, []string{"abort"}},
 		{Rotation{Status: StatusAddingNew, PausedLicense: true, RenotifiedAt: &now}, true, []string{"continue", "abort"}},
-		{Rotation{Status: StatusAddingNew, PausedLicense: true}, false, []string{}},
+
 		{Rotation{Status: StatusOverlap}, true, []string{"finish_now", "abort"}},
 		{Rotation{Status: StatusOverlap, PausedLicense: true, RenotifiedAt: &now}, true, []string{"continue", "abort"}},
+		{Rotation{Status: StatusOverlap, PausedLicense: true, RenotifiedAt: &now}, false, []string{"abort"}},
 		{Rotation{Status: StatusVerifyingNew, AwaitingDecision: true, Locations: verified}, true, []string{"keep_old", "abort"}},
-		{Rotation{Status: StatusVerifyingNew, AwaitingDecision: true, Locations: verified[1:]}, false, []string{}},
+		{Rotation{Status: StatusVerifyingNew, AwaitingDecision: true, Locations: verified[1:]}, false, []string{"abort"}},
+		{Rotation{Status: StatusVerifyingNew, AwaitingDecision: true, Locations: verified, PausedLicense: true}, true, []string{"abort"}},
 		{Rotation{Status: StatusRemovingOld}, true, []string{}},
 		{Rotation{Status: StatusCompleted, PausedLicense: true}, true, []string{}},
 	} {
@@ -219,7 +223,7 @@ func TestSmallStoreHelpers(t *testing.T) {
 func TestTemplates(t *testing.T) {
 	assert.Equal(t, []string{"rotation.preview", "rotation.preview_after_license", "rotation.overlap_started", "rotation.overlap_ending",
 		"rotation.completed", "rotation.aborted", "rotation.needs_attention", "rotation.paused_license", "rotation.decision_needed",
-		"rotation.completed_partial"}, Templates())
+		"rotation.completed_partial", "rotation.late_result"}, Templates())
 }
 
 // Review M2: a run that kept changing hands, or a live-run index refusal, never leaves as a raw

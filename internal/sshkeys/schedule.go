@@ -158,6 +158,15 @@ func (s *Service) RunNow(ctx context.Context, a inventory.Actor, policyID uuid.U
 // onBeforeStart runs between Run now's insert and its start (tests only: a crash there).
 var onBeforeStart func()
 
+// startedOrGone is start's answer for a run that is no longer previewed: started by another call
+// (nil), or, for Run now, finished meanwhile (the sweep cancelled it: ErrNotWaiting, re-review N7).
+func startedOrGone(run runRow, automatic bool) error {
+	if !automatic && run.finished() {
+		return ErrNotWaiting
+	}
+	return nil
+}
+
 // errNoticePending: a scheduled run's notice is not delivered yet; the run waits (S1).
 var errNoticePending = errors.New("sshkeys: the run's notice was not delivered yet")
 
@@ -175,7 +184,7 @@ func (s *Service) start(ctx context.Context, runID uuid.UUID, a inventory.Actor,
 		return err
 	}
 	if run.status != StatusDryRunNotified {
-		return nil
+		return startedOrGone(run, automatic)
 	}
 	if automatic && run.trigger == TriggerScheduled {
 		// Checked before a key is generated, and again under the lock below (the single S1 gate).
@@ -191,8 +200,11 @@ func (s *Service) start(ctx context.Context, runID uuid.UUID, a inventory.Actor,
 	changed := false
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		run, err := lockRun(ctx, tx, runID)
-		if err != nil || run.status != StatusDryRunNotified {
+		if err != nil {
 			return err
+		}
+		if run.status != StatusDryRunNotified {
+			return startedOrGone(run, automatic)
 		}
 		pol, err := scanPolicy(tx.QueryRow(ctx, policySelect+" WHERE p.id = $1 FOR UPDATE OF p", run.policyID))
 		if err != nil {

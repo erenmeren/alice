@@ -49,7 +49,7 @@ func TestResentAddKeepsItsFirstSendAndDelaysTheUndo(t *testing.T) {
 	assert.Equal(t, op, op2)
 	got := e.run(r.ID)
 	assert.Equal(t, first, *got.Locations[0].AddSentAt, "add_sent_at never changes")
-	assert.Equal(t, "add_resent", got.Steps[len(got.Steps)-1].Name)
+	assert.Equal(t, 1, e.count("SELECT add_resend_count FROM rotation_locations WHERE id = $1", loc), "the re-send is on the row (G25)")
 	require.NoError(t, e.svc.Abort(e.ctx, e.admin, r.ID))
 	e.clock.Set(first.Add(helperproto.HelperBudget + 30*time.Second))
 	_, err = e.svc.BeginUndo(e.claimed(), loc)

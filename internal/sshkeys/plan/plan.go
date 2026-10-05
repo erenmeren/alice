@@ -39,6 +39,10 @@ const (
 	SkipRootForcedCommands   = "root_forced_commands_only" // PermitRootLogin forced-commands-only and no command= on the line
 	SkipDuplicateLines       = "duplicate_lines"           // S8: the file holds the key twice; sshd applies the first line
 	SkipOptionsUnreadable    = "options_unreadable"        // S8: the stored options were altered when read (U+FFFD)
+	// The connection account's key files of the target are not known completely: scan the server again.
+	SkipConnectionFilesUnknown = "connection_files_unknown"
+	// The location's file is one of the connection account's key files (S7).
+	SkipConnectionAccountFile = "connection_account_file"
 )
 
 // Verify notes.
@@ -69,11 +73,16 @@ type Key struct {
 
 // Target is the part of a server's state that decides skips.
 type Target struct {
-	ID                    uuid.UUID
-	Name                  string
-	Deleted               bool
-	Status                string // "ok", "unreachable", "checking", "auth_failed", "pending_host_key", "host_key_changed", "disabled"
-	ConnectionUser        string // inventory.Target.Username
+	ID             uuid.UUID
+	Name           string
+	Deleted        bool
+	Status         string // "ok", "unreachable", "checking", "auth_failed", "pending_host_key", "host_key_changed", "disabled"
+	ConnectionUser string // inventory.Target.Username
+	// ConnectionFilesKnown: the last scan listed the connection account's key files completely and
+	// once (providers.UserKeyFiles.Complete); ConnectionFiles are those files. A deploy and an add
+	// refuse a target whose list is not known, and any file of that account (S7).
+	ConnectionFilesKnown  bool
+	ConnectionFiles       []string
 	KeysManagedElsewhere  bool
 	ManagedElsewhereUsers []string
 	SSHDRead              bool
@@ -217,6 +226,10 @@ func skipReason(t Target, known bool, l Location) string {
 		return SkipOptionsUnreadable
 	case l.OSUser == t.ConnectionUser:
 		return SkipConnectionAccount
+	case !t.ConnectionFilesKnown:
+		return SkipConnectionFilesUnknown
+	case slices.Contains(t.ConnectionFiles, l.FilePath):
+		return SkipConnectionAccountFile
 	case t.KeysManagedElsewhere || slices.Contains(t.ManagedElsewhereUsers, l.OSUser):
 		return SkipKeysManagedElsewhere
 	case !t.SSHDRead || slices.Contains(t.SSHDUnreadUsers, l.OSUser):

@@ -2,7 +2,6 @@ package sshkeys
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strconv"
 
@@ -34,7 +33,7 @@ func (s *Service) decide(ctx context.Context, id uuid.UUID, fn func(tx pgx.Tx, r
 	// The decision is committed: it succeeded. The sweep advances the run if this call cannot
 	// (review M5); a retry of the decision answers ErrNotWaiting or does the same again.
 	if err := s.Advance(ctx, id); err != nil {
-		s.log.Error("could not advance the rotation after a decision", "rotation_id", id.String(), "error_type", fmt.Sprintf("%T", err))
+		s.logError("could not advance the rotation after a decision", id, err)
 	}
 	return nil
 }
@@ -67,15 +66,9 @@ func stepOf(action string) string {
 // itself. A waiting decision's deadline moves by the time the run was paused. Then the run advances;
 // every removal still needs a fresh re-check of the new key (BeginRemove).
 func (s *Service) Continue(ctx context.Context, a inventory.Actor, id uuid.UUID) error {
-	if err := s.license.Allow(license.ClassChange); err != nil {
-		return err
-	}
 	return s.decide(ctx, id, func(tx pgx.Tx, run runRow) error {
-		if run.finished() || !run.pausedLicense {
-			return ErrNotWaiting
-		}
-		if run.renotifiedAt == nil {
-			return ErrNoticePending
+		if err := s.allowedNow(ctx, tx, ActionContinue, run); err != nil {
+			return err
 		}
 		now := s.clock.Now().UTC()
 		due := run.decisionDueAt
@@ -94,12 +87,9 @@ func (s *Service) Continue(ctx context.Context, a inventory.Actor, id uuid.UUID)
 // FinishNow ends the overlap at once (status overlap, not paused, the license allows changes) and
 // mails the new removal time (row 31); the next Advance enters removing_old.
 func (s *Service) FinishNow(ctx context.Context, a inventory.Actor, id uuid.UUID) error {
-	if err := s.license.Allow(license.ClassChange); err != nil {
-		return err
-	}
 	return s.decide(ctx, id, func(tx pgx.Tx, run runRow) error {
-		if run.status != StatusOverlap || run.pausedLicense {
-			return ErrNotWaiting
+		if err := s.allowedNow(ctx, tx, ActionFinishNow, run); err != nil {
+			return err
 		}
 		now := s.clock.Now().UTC()
 		if _, err := tx.Exec(ctx, "UPDATE rotations SET overlap_until = $2, updated_at = $2, version = version + 1 WHERE id = $1", id, now); err != nil {
@@ -119,7 +109,10 @@ func (s *Service) FinishNow(ctx context.Context, a inventory.Actor, id uuid.UUID
 // unverifiable location is left the overlap begins.
 func (s *Service) KeepOld(ctx context.Context, a inventory.Actor, id uuid.UUID, locationIDs []uuid.UUID) error {
 	return s.decide(ctx, id, func(tx pgx.Tx, run runRow) error {
-		if run.status != StatusVerifyingNew || !run.awaitingDecision || len(locationIDs) == 0 {
+		if err := s.allowedNow(ctx, tx, ActionKeepOld, run); err != nil {
+			return err
+		}
+		if len(locationIDs) == 0 {
 			return ErrNotWaiting
 		}
 		locs, err := runLocations(ctx, tx, id)
@@ -173,17 +166,13 @@ func (s *Service) KeepOld(ctx context.Context, a inventory.Actor, id uuid.UUID, 
 // Abort stops a run (C8): previewed → cancelled (rotation.stopped); adding_new, verifying_new or
 // overlap → rolling_back (rotation.stopped): planned locations are cancelled and the new key is
 // removed again wherever it was added (kept_old included); removing_old or later → ErrNotWaiting.
-// The old key is never touched. The license must allow changes (AllowedActions).
+// The old key is never touched. Abort is the one decision accepted in lock and while paused (Task 13
+// review): its undo sends never ask the licence (L-86).
 func (s *Service) Abort(ctx context.Context, a inventory.Actor, id uuid.UUID) error {
-	if err := s.license.Allow(license.ClassChange); err != nil {
-		return err
-	}
 	return s.decide(ctx, id, func(tx pgx.Tx, run runRow) error {
 		now := s.clock.Now().UTC()
-		switch run.status {
-		case StatusDryRunNotified, StatusAddingNew, StatusVerifyingNew, StatusOverlap:
-		default:
-			return ErrNotWaiting
+		if err := s.allowedNow(ctx, tx, ActionAbort, run); err != nil {
+			return err
 		}
 		// The decision's audit row and step first, while the run is live (review M6).
 		if err := s.auditDecision(ctx, tx, a, run, "rotation.stop_requested", nil); err != nil {
@@ -200,22 +189,89 @@ func (s *Service) Abort(ctx context.Context, a inventory.Actor, id uuid.UUID) er
 	})
 }
 
-// AllowedActions are the decisions the run offers now (the UI's buttons).
+// Decisions (AllowedActions' names).
+const (
+	ActionContinue  = "continue"
+	ActionFinishNow = "finish_now"
+	ActionKeepOld   = "keep_old"
+	ActionAbort     = "abort"
+)
+
+// decisionView is what decides whether a decision is allowed; AllowedActions and the decision
+// functions build it from the same columns and ask the same predicate, so the offer and the call
+// cannot drift apart (Task 13 review).
+type decisionView struct {
+	status                                    string
+	paused, renotified, awaiting, anyVerified bool
+}
+
+// decisionAllowed is the one predicate per decision: nil, or why not. While the run is paused for the
+// licence the only decision is Abort (its undo sends follow L-86); Continue needs the licence and the
+// renewal notice queued; Finish now and Keep old need the licence and an unpaused run.
+func decisionAllowed(action string, v decisionView, gateOK bool) error {
+	switch action {
+	case ActionAbort:
+		if !slices.Contains([]string{StatusDryRunNotified, StatusAddingNew, StatusVerifyingNew, StatusOverlap}, v.status) {
+			return ErrNotWaiting
+		}
+		return nil
+	case ActionContinue:
+		switch {
+		case slices.Contains(finishedList, v.status) || !v.paused:
+			return ErrNotWaiting
+		case !gateOK:
+			return license.ErrLocked
+		case !v.renotified:
+			return ErrNoticePending
+		}
+		return nil
+	case ActionFinishNow:
+		switch {
+		case v.status != StatusOverlap || v.paused:
+			return ErrNotWaiting
+		case !gateOK:
+			return license.ErrLocked
+		}
+		return nil
+	case ActionKeepOld:
+		switch {
+		case v.status != StatusVerifyingNew || !v.awaiting || !v.anyVerified || v.paused:
+			return ErrNotWaiting
+		case !gateOK:
+			return license.ErrLocked
+		}
+		return nil
+	}
+	return ErrNotWaiting
+}
+
+// AllowedActions are the decisions the run offers now (the UI's buttons): exactly those
+// decisionAllowed accepts.
 func AllowedActions(r Rotation, gateOK bool) []string {
+	v := decisionView{status: r.Status, paused: r.PausedLicense, renotified: r.RenotifiedAt != nil, awaiting: r.AwaitingDecision,
+		anyVerified: slices.ContainsFunc(r.Locations, func(l RotationLocation) bool { return l.State == LocVerified })}
 	out := []string{}
-	if r.PausedLicense && r.RenotifiedAt != nil && gateOK && !slices.Contains(finishedList, r.Status) {
-		out = append(out, "continue")
-	}
-	if r.Status == StatusOverlap && !r.PausedLicense && gateOK {
-		out = append(out, "finish_now")
-	}
-	if r.Status == StatusVerifyingNew && r.AwaitingDecision && slices.ContainsFunc(r.Locations, func(l RotationLocation) bool {
-		return l.State == LocVerified
-	}) {
-		out = append(out, "keep_old")
-	}
-	if gateOK && slices.Contains([]string{StatusDryRunNotified, StatusAddingNew, StatusVerifyingNew, StatusOverlap}, r.Status) {
-		out = append(out, "abort")
+	for _, a := range []string{ActionContinue, ActionFinishNow, ActionKeepOld, ActionAbort} {
+		if decisionAllowed(a, v, gateOK) == nil {
+			out = append(out, a)
+		}
 	}
 	return out
+}
+
+// viewOf builds the decision view of a locked run.
+func viewOf(ctx context.Context, tx pgx.Tx, run runRow) (decisionView, error) {
+	v := decisionView{status: run.status, paused: run.pausedLicense, renotified: run.renotifiedAt != nil, awaiting: run.awaitingDecision}
+	err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM rotation_locations WHERE rotation_id = $1 AND state = 'verified')", run.id).
+		Scan(&v.anyVerified)
+	return v, err
+}
+
+// allowedNow applies the decision's predicate to the locked run.
+func (s *Service) allowedNow(ctx context.Context, tx pgx.Tx, action string, run runRow) error {
+	v, err := viewOf(ctx, tx, run)
+	if err != nil {
+		return err
+	}
+	return decisionAllowed(action, v, s.gateOK())
 }

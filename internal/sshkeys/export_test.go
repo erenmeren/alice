@@ -54,3 +54,10 @@ func OnBeforeStart(t *testing.T, fn func()) {
 	onBeforeStart = fn
 	t.Cleanup(func() { onBeforeStart = nil })
 }
+
+// OnRetireCandidates makes fn run after the hourly task read the old keys to retire.
+func OnRetireCandidates(t *testing.T, fn func()) {
+	t.Helper()
+	onRetireCandidates = fn
+	t.Cleanup(func() { onRetireCandidates = nil })
+}

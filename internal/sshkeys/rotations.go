@@ -40,13 +40,17 @@ const (
 
 // Rotation is one run with its locations and steps (C7).
 type Rotation struct {
-	ID, PolicyID, OldKeyID                          uuid.UUID
-	NewKeyID                                        *uuid.UUID
-	OldFingerprint                                  string
-	NewFingerprint                                  string
-	Trigger, Status                                 string
-	PausedLicense                                   bool
-	RenotifiedAt                                    *time.Time // the renewal notice of the current pause (S6)
+	ID, PolicyID, OldKeyID uuid.UUID
+	NewKeyID               *uuid.UUID
+	OldFingerprint         string
+	NewFingerprint         string
+	Trigger, Status        string
+	PausedLicense          bool
+	RenotifiedAt           *time.Time // the renewal notice of the current pause (S6)
+	// NoticeState is rotation.notice_pending while the run is paused, the license allows changes and
+	// the renewal notice is not queued yet; NoticeError is the closed sub-reason of the last failed
+	// attempt since the pause began (notify.queue_failed), "" when none (re-review N9).
+	NoticeState, NoticeError                        string
 	AwaitingDecision                                bool
 	DecisionDueAt                                   *time.Time
 	Plan                                            plan.Plan
@@ -128,6 +132,24 @@ FROM rotations r JOIN ssh_keys ok ON ok.id = r.old_ssh_key_id LEFT JOIN ssh_keys
 	if steps {
 		if r.Steps, err = readSteps(ctx, q, id); err != nil {
 			return Rotation{}, err
+		}
+	}
+	// A late removal removed the old key where the run had counted it as kept (re-review N5).
+	var lateRemoved int
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM rotation_steps WHERE rotation_id = $1 AND name = 'late_result'
+AND params->>'result' = 'removed'`, id).Scan(&lateRemoved); err != nil {
+		return Rotation{}, fmt.Errorf("sshkeys: read the rotation's late results: %w", err)
+	}
+	r.KeptCount = max(r.KeptCount-lateRemoved, 0)
+	if r.PausedLicense && r.RenotifiedAt == nil {
+		r.NoticeState = ReasonNoticePending
+		var failed bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM rotation_steps WHERE rotation_id = $1 AND name = 'notice_failed'
+AND n > coalesce((SELECT max(n) FROM rotation_steps WHERE rotation_id = $1 AND name = 'paused'), 0))`, id).Scan(&failed); err != nil {
+			return Rotation{}, fmt.Errorf("sshkeys: read the rotation's notice: %w", err)
+		}
+		if failed {
+			r.NoticeError = ReasonNoticeQueueFailed
 		}
 	}
 	return r, nil
@@ -284,4 +306,101 @@ func decodeRotationCursor(c string) (time.Time, uuid.UUID, error) {
 		return time.Time{}, uuid.Nil, ErrBadCursor
 	}
 	return time.UnixMicro(micros).UTC(), u, nil
+}
+
+// LocationCounts are a run's locations by outcome (the list's cheap read).
+type LocationCounts struct {
+	Total    int
+	Verified int // verified, removing, removed
+	Removed  int
+	Kept     int // kept_old, and cancelled at send time (the old key stays)
+	Failed   int // add_failed, verify_failed, remove_failed, undo_failed
+	Skipped  int
+}
+
+// RotationSummary is a run without its plan, locations and steps (Task 13 review: a list never builds
+// every run's locations).
+type RotationSummary struct {
+	ID, PolicyID, OldKeyID                          uuid.UUID
+	NewKeyID                                        *uuid.UUID
+	OldFingerprint, NewFingerprint                  string
+	Trigger, Status                                 string
+	PausedLicense, AwaitingDecision                 bool
+	NewKeyType                                      string
+	PlannedFor, NotifiedAt                          time.Time
+	StartedAt, VerifiedAt, OverlapUntil, FinishedAt *time.Time
+	ResultCode                                      string
+	KeptCount                                       int
+	Version                                         int
+	Counts                                          LocationCounts
+}
+
+// RotationSummaries lists runs newest first, with per-state location counts only; the returned cursor
+// is "" on the last page. Rotation reads one run in full.
+func (s *Service) RotationSummaries(ctx context.Context, f RotationFilter) ([]RotationSummary, string, error) {
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	limit = min(limit, 200)
+	var afterAt *time.Time
+	var afterID *uuid.UUID
+	if f.Cursor != "" {
+		at, id, err := decodeRotationCursor(f.Cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		afterAt, afterID = &at, &id
+	}
+	rows, err := s.pool.Query(ctx, `SELECT r.id, r.policy_id, r.old_ssh_key_id, r.new_ssh_key_id, ok.fingerprint_sha256,
+    coalesce(nk.fingerprint_sha256, ''), r.trigger, r.status, r.paused_license, r.awaiting_decision, r.new_key_type, r.planned_for,
+    r.notified_at, r.started_at, r.verified_at, r.overlap_until, r.finished_at, r.result_code, r.kept_count, r.version, r.created_at,
+    c.total, c.verified, c.removed, c.kept, c.failed, c.skipped,
+    (SELECT count(*) FROM rotation_steps st WHERE st.rotation_id = r.id AND st.name = 'late_result' AND st.params->>'result' = 'removed')
+FROM rotations r JOIN ssh_keys ok ON ok.id = r.old_ssh_key_id LEFT JOIN ssh_keys nk ON nk.id = r.new_ssh_key_id
+CROSS JOIN LATERAL (SELECT count(*) AS total,
+    count(*) FILTER (WHERE l.state IN ('verified', 'removing', 'removed')) AS verified,
+    count(*) FILTER (WHERE l.state = 'removed') AS removed,
+    count(*) FILTER (WHERE l.state IN ('kept_old', 'cancelled') AND (l.state = 'kept_old' OR l.error_code <> '')) AS kept,
+    count(*) FILTER (WHERE l.state IN ('add_failed', 'verify_failed', 'remove_failed', 'undo_failed')) AS failed,
+    count(*) FILTER (WHERE l.state = 'skipped') AS skipped
+    FROM rotation_locations l WHERE l.rotation_id = r.id) c
+WHERE ($1::uuid IS NULL OR r.policy_id = $1) AND ($2::uuid IS NULL OR r.old_ssh_key_id = $2 OR r.new_ssh_key_id = $2)
+  AND ($3::timestamptz IS NULL OR (r.created_at, r.id) < ($3, $4::uuid))
+ORDER BY r.created_at DESC, r.id DESC LIMIT $5`, nilUUID(f.PolicyID), nilUUID(f.KeyID), afterAt, afterID, limit+1)
+	if err != nil {
+		return nil, "", fmt.Errorf("sshkeys: list rotations: %w", err)
+	}
+	defer rows.Close()
+	var out []RotationSummary
+	var createdAt []time.Time
+	for rows.Next() {
+		var r RotationSummary
+		var created time.Time
+		var lateRemoved int
+		if err := rows.Scan(&r.ID, &r.PolicyID, &r.OldKeyID, &r.NewKeyID, &r.OldFingerprint, &r.NewFingerprint, &r.Trigger, &r.Status,
+			&r.PausedLicense, &r.AwaitingDecision, &r.NewKeyType, &r.PlannedFor, &r.NotifiedAt, &r.StartedAt, &r.VerifiedAt,
+			&r.OverlapUntil, &r.FinishedAt, &r.ResultCode, &r.KeptCount, &r.Version, &created, &r.Counts.Total, &r.Counts.Verified,
+			&r.Counts.Removed, &r.Counts.Kept, &r.Counts.Failed, &r.Counts.Skipped, &lateRemoved); err != nil {
+			return nil, "", fmt.Errorf("sshkeys: list rotations: %w", err)
+		}
+		r.KeptCount = max(r.KeptCount-lateRemoved, 0)
+		r.PlannedFor, r.NotifiedAt = r.PlannedFor.UTC(), r.NotifiedAt.UTC()
+		r.StartedAt, r.VerifiedAt, r.OverlapUntil, r.FinishedAt = utcPtr(r.StartedAt), utcPtr(r.VerifiedAt), utcPtr(r.OverlapUntil),
+			utcPtr(r.FinishedAt)
+		out = append(out, r)
+		createdAt = append(createdAt, created)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("sshkeys: list rotations: %w", err)
+	}
+	next := ""
+	if len(out) > limit {
+		out = out[:limit]
+		next = encodeRotationCursor(createdAt[limit-1], out[limit-1].ID)
+	}
+	if out == nil {
+		out = []RotationSummary{}
+	}
+	return out, next, nil
 }

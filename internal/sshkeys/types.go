@@ -59,18 +59,24 @@ const (
 	ReasonLoginFailed      = "sshkey.login_failed"
 	// Reasons of Task 7's errors that the contract did not name (Task 13 adds codes and texts).
 	ReasonConnectionFilesUnknown = "sshkey.connection_files_unknown"
-	ReasonClockBehind            = "sshkey.clock_behind"
-	ReasonPolicyOff              = "rotation.policy_off"
-	ReasonPlanChanged            = "rotation.plan_changed"
-	ReasonCancelledLicense       = "rotation.cancelled_license"
-	ReasonNoticeUndelivered      = "rotation.notice_undelivered" // S1, new code ALC-ROT-0017
+	// ReasonConnectionAccountFile: the location's user is the connection account or its file is one of
+	// that account's files (the planner's skip connection_account_file, refused again at send time).
+	ReasonConnectionAccountFile = "sshkey.connection_account_file"
+	// ReasonNoticeQueueFailed: the renewal notice could not be queued (sub-reason of
+	// rotation.notice_pending on the run read).
+	ReasonNoticeQueueFailed = "notify.queue_failed"
+	ReasonClockBehind       = "sshkey.clock_behind"
+	ReasonPolicyOff         = "rotation.policy_off"
+	ReasonPlanChanged       = "rotation.plan_changed"
+	ReasonCancelledLicense  = "rotation.cancelled_license"
+	ReasonNoticeUndelivered = "rotation.notice_undelivered" // S1, new code ALC-ROT-0017
 	// ReasonStartFailed: Run now created a run it could not start (generator busy, a failed write);
 	// the run is cancelled in the same call (Task 8 review M3).
 	ReasonStartFailed = "rotation.start_failed"
 	// ReasonNoticePending: Continue was refused until the renewal notice is queued (ErrNoticePending).
 	ReasonNoticePending = "rotation.notice_pending"
 	// ReasonLateResult: a definite result arrived after the sweep had exhausted the location (step
-	// late_result; the code of the attention mail it causes).
+	// late_result; mail template rotation.late_result).
 	ReasonLateResult = "rotation.late_result"
 )
 
