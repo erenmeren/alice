@@ -42,22 +42,25 @@ const (
 
 // Result codes of runs and error codes of locations (closed; Task 13 maps them to ALC codes).
 const (
-	ReasonAddFailed         = "rotation.add_failed"
-	ReasonVerifyFailed      = "rotation.verify_failed"
-	ReasonUndoFailed        = "rotation.undo_failed"
-	ReasonRemoveIncomplete  = "rotation.remove_incomplete"
-	ReasonDecisionTimeout   = "rotation.decision_timeout"
-	ReasonStopped           = "rotation.stopped"
-	ReasonNewKeyFailed      = "rotation.new_key_failed"
-	ReasonRetriesExhausted  = "rotation.retries_exhausted"
-	ReasonOldKeyGone        = "rotation.old_key_gone"   // S12 (ALC-ROT-0018)
-	ReasonPlanTooLarge      = "rotation.plan_too_large" // a plan the database could not store
-	ReasonPausedLicense     = "rotation.paused_license"
-	ReasonLoginFailed       = "sshkey.login_failed"
-	ReasonPolicyOff         = "rotation.policy_off"
-	ReasonPlanChanged       = "rotation.plan_changed"
-	ReasonCancelledLicense  = "rotation.cancelled_license"
-	ReasonNoticeUndelivered = "rotation.notice_undelivered" // S1, new code ALC-ROT-0017
+	ReasonAddFailed        = "rotation.add_failed"
+	ReasonVerifyFailed     = "rotation.verify_failed"
+	ReasonUndoFailed       = "rotation.undo_failed"
+	ReasonRemoveIncomplete = "rotation.remove_incomplete"
+	ReasonDecisionTimeout  = "rotation.decision_timeout"
+	ReasonStopped          = "rotation.stopped"
+	ReasonNewKeyFailed     = "rotation.new_key_failed"
+	ReasonRetriesExhausted = "rotation.retries_exhausted"
+	ReasonOldKeyGone       = "rotation.old_key_gone"   // S12 (ALC-ROT-0018)
+	ReasonPlanTooLarge     = "rotation.plan_too_large" // a plan the database could not store
+	ReasonPausedLicense    = "rotation.paused_license"
+	ReasonLoginFailed      = "sshkey.login_failed"
+	// Reasons of Task 7's errors that the contract did not name (Task 13 adds codes and texts).
+	ReasonConnectionFilesUnknown = "sshkey.connection_files_unknown"
+	ReasonClockBehind            = "sshkey.clock_behind"
+	ReasonPolicyOff              = "rotation.policy_off"
+	ReasonPlanChanged            = "rotation.plan_changed"
+	ReasonCancelledLicense       = "rotation.cancelled_license"
+	ReasonNoticeUndelivered      = "rotation.notice_undelivered" // S1, new code ALC-ROT-0017
 	// ReasonStartFailed: Run now created a run it could not start (generator busy, a failed write);
 	// the run is cancelled in the same call (Task 8 review M3).
 	ReasonStartFailed = "rotation.start_failed"
@@ -73,9 +76,9 @@ const (
 // sshkey.private_key_download.denied).
 const (
 	DenyConnectionAccount = "connection_account"
-	// DenyConnectionFilesUnknown: the last scan has no complete key-file list for the connection
-	// account on that server (S7 fails closed); the error is ErrConnectionAccount.
-	DenyConnectionFilesUnknown = "connection_account_files_unknown"
+	// DenyConnectionFilesUnknown: the last scan has no complete, single key-file list for the
+	// connection account on that server (S7 fails closed); the error is ErrConnectionFilesUnknown.
+	DenyConnectionFilesUnknown = "connection_files_unknown"
 	DenyKeysManagedElsewhere   = "keys_managed_elsewhere"
 	DenySSHDUnreadable         = "sshd_unreadable"
 	DenyOwnKey                 = "own_key"

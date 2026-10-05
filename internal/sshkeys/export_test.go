@@ -40,3 +40,10 @@ func OnPolicyRead(t *testing.T, fn func()) {
 	onPolicyRead = fn
 	t.Cleanup(func() { onPolicyRead = nil })
 }
+
+// OnLiveFound makes fn run after the destroyed keys found live were read, before their audit rows.
+func OnLiveFound(t *testing.T, fn func()) {
+	t.Helper()
+	onLiveFound = fn
+	t.Cleanup(func() { onLiveFound = nil })
+}

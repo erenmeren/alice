@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"alice/internal/audit"
 	"alice/internal/inventory"
@@ -78,6 +79,10 @@ func (s *Service) DownloadPrivateKey(ctx context.Context, a inventory.Actor, in 
 WHERE id = $1 AND destroyed_at IS NULL RETURNING download_count`, row.privateKeyID, s.clock.Now().UTC()).Scan(&n)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrDestroyed // destroyed between the read and now
+		}
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.Code == "Z1009" {
+			return ErrClockBehind // last_downloaded_at never goes back (G14)
 		}
 		if err != nil {
 			return fmt.Errorf("sshkeys: count the download: %w", err)

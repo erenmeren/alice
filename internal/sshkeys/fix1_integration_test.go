@@ -35,8 +35,8 @@ func TestDeployRefusedWhenTheConnectionAccountsFilesAreUnknown(t *testing.T) {
 	} {
 		srv := e.serverWith("web-"+name[:2], files)
 		_, err := e.svc.RequestDeploy(e.ctx, e.operator, in(srv))
-		assert.ErrorIs(t, err, sshkeys.ErrConnectionAccount, name)
-		assert.Equal(t, "connection_account_files_unknown", e.lastAuditDetail("sshkey.deploy.denied", "reason"), name)
+		assert.ErrorIs(t, err, sshkeys.ErrConnectionFilesUnknown, name)
+		assert.Equal(t, "connection_files_unknown", e.lastAuditDetail("sshkey.deploy.denied", "reason"), name)
 	}
 	srv := e.server("web-ok")
 	id, err := e.svc.RequestDeploy(e.ctx, e.operator, in(srv))
@@ -50,10 +50,10 @@ func TestDeployRefusedWhenTheConnectionAccountsFilesAreUnknown(t *testing.T) {
 	}
 	setFiles([]providers.UserKeyFiles{deploy})
 	_, err = e.svc.DeployJob(e.ctx, id, srv, payload)
-	assert.ErrorIs(t, err, sshkeys.ErrConnectionAccount, "the job reads the scan again")
+	assert.ErrorIs(t, err, sshkeys.ErrConnectionFilesUnknown, "the job reads the scan again")
 	setFiles([]providers.UserKeyFiles{deploy, {OSUser: "alice-svc", Files: []string{"/home/alice-svc/.ssh/authorized_keys"}}})
 	_, err = e.svc.DeployJob(e.ctx, id, srv, payload)
-	assert.ErrorIs(t, err, sshkeys.ErrConnectionAccount)
+	assert.ErrorIs(t, err, sshkeys.ErrConnectionFilesUnknown)
 	setFiles(keyFiles)
 	_, err = e.svc.DeployJob(e.ctx, id, srv, payload)
 	assert.NoError(t, err)

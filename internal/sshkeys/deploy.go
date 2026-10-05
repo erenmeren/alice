@@ -148,14 +148,19 @@ func filesOf(f inventory.Facts, user string) []string {
 }
 
 // connectionFilesKnown reports whether the last scan listed the connection account's key files
-// completely (providers.UserKeyFiles.Complete); no entry is not known.
+// completely (providers.UserKeyFiles.Complete), exactly once. No entry, an incomplete one or a name
+// listed twice is not known (review N1, N4). Known limitation (N2): there is no age bound; a list from
+// an old scan stays complete, and a later change of sshd's settings is seen only after the next scan
+// (which the helper re-checks at write time).
 func connectionFilesKnown(f inventory.Facts, conn string) bool {
+	seen, complete := 0, false
 	for _, u := range f.KeyFiles {
 		if u.OSUser == conn {
-			return u.Complete
+			seen++
+			complete = u.Complete
 		}
 	}
-	return false
+	return seen == 1 && complete
 }
 
 // connectionUser is the account Alice signs in with on the target.
@@ -209,7 +214,7 @@ func (s *Service) checkDeploy(ctx context.Context, tx pgx.Tx, keyID, targetID uu
 	if !connectionFilesKnown(c.target.Facts, conn) {
 		// S7 fails closed: without the connection account's complete file list Alice cannot know
 		// whether the file is one its sshd reads.
-		return c, &denial{reason: DenyConnectionFilesUnknown, err: ErrConnectionAccount}
+		return c, &denial{reason: DenyConnectionFilesUnknown, err: ErrConnectionFilesUnknown}
 	}
 	if err := inventory.KeyChangeRefusal(c.target, user); err != nil {
 		switch {

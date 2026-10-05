@@ -9,13 +9,20 @@ import (
 // Errors of the module (C7). The API maps each to its code (C11). None carries a value from the
 // request or the database, and never key material.
 var (
-	ErrNotFound           = inventory.ErrNotFound
-	ErrNotManaged         = errors.New("sshkeys: Alice holds no private key for this key")
-	ErrRetired            = errors.New("sshkeys: the key is retired")
-	ErrDestroyed          = errors.New("sshkeys: the private key was destroyed")
-	ErrConnectionAccount  = errors.New("sshkeys: Alice does not change its connection account's keys")
-	ErrNotAKeyFile        = errors.New("sshkeys: the file is not one of the user's key files")
-	ErrGenerateBusy       = errors.New("sshkeys: too many keys are being generated")
+	ErrNotFound          = inventory.ErrNotFound
+	ErrNotManaged        = errors.New("sshkeys: Alice holds no private key for this key")
+	ErrRetired           = errors.New("sshkeys: the key is retired")
+	ErrDestroyed         = errors.New("sshkeys: the private key was destroyed")
+	ErrConnectionAccount = errors.New("sshkeys: Alice does not change its connection account's keys")
+	ErrNotAKeyFile       = errors.New("sshkeys: the file is not one of the user's key files")
+	ErrGenerateBusy      = errors.New("sshkeys: too many keys are being generated")
+	// ErrConnectionFilesUnknown: the last scan of the server has no complete, single list of the
+	// connection account's key files, so Alice cannot rule out that a file is one its connection
+	// account reads; scan the server again (reason sshkey.connection_files_unknown; review N1).
+	ErrConnectionFilesUnknown = errors.New("sshkeys: the connection account's key files on this server are not known completely")
+	// ErrClockBehind: the clock is behind a time Alice already recorded (a stepped-back clock, G14);
+	// nothing was done; retryable (reason sshkey.clock_behind).
+	ErrClockBehind        = errors.New("sshkeys: the clock is behind an earlier record; try again later")
 	ErrPolicyExists       = errors.New("sshkeys: the key already has a rotation policy")
 	ErrRotationInProgress = errors.New("sshkeys: a rotation of this key is running")
 	ErrPlanChanged        = errors.New("sshkeys: the plan changed since the preview")

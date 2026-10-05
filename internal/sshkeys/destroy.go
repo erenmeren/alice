@@ -64,6 +64,10 @@ WHERE k.retired_at IS NOT NULL AND p.destroyed_at IS NULL ORDER BY k.retired_at,
 const liveLocations = `SELECT count(*) FROM ssh_key_locations l JOIN targets t ON t.id = l.target_id
 WHERE l.ssh_key_id = k.id AND l.missing_since IS NULL AND l.removed_by_alice_at IS NULL AND t.deleted_at IS NULL`
 
+// onLiveFound runs between the read of the destroyed keys found live and their audit rows (tests
+// only; nil in production).
+var onLiveFound func()
+
 // auditLiveAfterDestruction records, once per key, a retired key whose private key was destroyed
 // and that has a live location again: nothing can bring the private key back, an Administrator
 // should remove those lines or replace the key.
@@ -89,17 +93,31 @@ ORDER BY k.id LIMIT $1`, maxDestroyBatch)
 	if err != nil {
 		return fmt.Errorf("sshkeys: list destroyed keys found live: %w", err)
 	}
+	if onLiveFound != nil {
+		onLiveFound()
+	}
+	var errs []error
 	for _, k := range keys {
+		// Once per key, atomically: the key's row is locked, then the audit log read again, so two
+		// instances of the task write one row (review N3). One failure does not stop the others.
 		if err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+			var done bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM audit_log a WHERE a.action = 'sshkey.live_after_destruction'
+AND a.object_id = $1::uuid::text) FROM ssh_keys WHERE id = $1::uuid FOR UPDATE`, k.id).Scan(&done); err != nil {
+				return fmt.Errorf("sshkeys: lock the destroyed key: %w", err)
+			}
+			if done {
+				return nil
+			}
 			_, err := s.audit.Append(ctx, tx, audit.Event{Actor: destroyActor, Action: "sshkey.live_after_destruction", ObjectType: "ssh_key",
 				ObjectID: k.id.String(), Result: audit.Success, Details: map[string]string{"ssh_key_id": k.id.String(), "fingerprint": k.fp,
 					"location_count": strconv.Itoa(k.count)}})
 			return err
 		}); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // destroyRetired decides one retired key under its row lock: reactivated when live, destroyed when
