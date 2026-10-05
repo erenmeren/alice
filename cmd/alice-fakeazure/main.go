@@ -37,9 +37,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"alice/internal/platform/clock"
 	"alice/internal/testutil/fakekv"
 )
 
@@ -77,13 +79,13 @@ Commands:
   ctl [--admin ADDR] <command> [args]
         Drive a running fake (JSON on stdout, errors on stderr, exit 1 on failure):
         ping | credentials | reset
-        renew NAME | leaf NAME [--version V] | add-cert NAME [--cn CN] [--exportable true|false]
+        renew NAME | leaf NAME [--version V] | add-cert NAME [--cn CN] [--exportable true|false] [--root true|false]
         set-exportable NAME true|false | disable-version NAME [--version V] | enable-version NAME [--version V]
         delete NAME | recover NAME
         revoke-role ACTION | grant-role ACTION | set-roles [ROLE...] | grant-all
         fault PATH STATUS [--retry-after SECONDS] [--times N] | throttle [--retry-after SECONDS] | unfault
         firewall ADDRESS|off | expire-secret on|off
-        requests [--authenticated] | clear-requests
+        requests [--authenticated] | clear-requests | clock RFC3339|real
 `
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -253,6 +255,12 @@ func boundLoopback(a net.Addr) error {
 type fake struct {
 	s *fakekv.Server
 
+	// skew is how far the fake's clock runs from the real one (nanoseconds). The e2e journeys move Alice's
+	// own clock (step-up windows, the license lock), and Alice's planner compares the creation time of a
+	// vault version with its own clock; "clock" puts the fake on Alice's time so a version renewed now is
+	// created now for both. The TLS certificates stay on the real clock (fakekv).
+	skew atomic.Int64
+
 	// gate makes a reset atomic for the Azure hosts: requests hold it shared, reset exclusively, so none
 	// sees the vault between the fake's clearing and the tool's reseeding.
 	gate sync.RWMutex
@@ -275,22 +283,37 @@ func newFake(name string) (*fake, error) {
 	if name == "" {
 		name = vaultName
 	}
-	s, err := fakekv.NewServer(fakekv.Options{VaultName: name, Model: "rbac"})
+	f := &fake{}
+	s, err := fakekv.NewServer(fakekv.Options{VaultName: name, Model: "rbac", Now: f.now})
 	if err != nil {
 		return nil, err
 	}
-	f := &fake{s: s}
+	f.s = s
 	f.seed()
 	return f, nil
 }
 
 func (f *fake) close() { f.s.Close() }
 
+// now is the fake's time: the real time plus the skew set by "clock".
+func (f *fake) now() time.Time { return clock.Real{}.Now().Add(time.Duration(f.skew.Load())) }
+
+// setClock makes the fake's time run from at, or from the real time for the zero value.
+func (f *fake) setClock(at time.Time) {
+	if at.IsZero() {
+		f.skew.Store(0)
+		return
+	}
+	f.skew.Store(int64(at.Sub(clock.Real{}.Now())))
+}
+
 // seed fills an empty vault with what the journeys expect: web-cert (ECDSA, www.example.test,
 // exportable), monitor-only (not exportable), the key signing-key (RSA 2048) and the secret
 // db-password. newFake and reset both call it, so a reset leaves the vault as a start does.
 func (f *fake) seed() {
-	f.s.AddCertificate("web-cert", fakekv.CertOptions{CommonName: "www.example.test", SANs: []string{"www.example.test"}, Exportable: true})
+	// web-cert's bundle carries the root: Alice deploys a complete chain by itself, and the journeys
+	// that deploy from the vault need that. add-cert without --root makes the incomplete chain.
+	f.s.AddCertificate("web-cert", fakekv.CertOptions{CommonName: "www.example.test", SANs: []string{"www.example.test"}, Exportable: true, IncludeRoot: true})
 	f.s.AddCertificate("monitor-only", fakekv.CertOptions{CommonName: "monitor.example.test", SANs: []string{"monitor.example.test"}, Exportable: false})
 	f.s.AddKey("signing-key", fakekv.KeyOptions{KeyType: "RSA", Size: 2048, Enabled: true})
 	f.s.AddSecret("db-password", "text/plain")
@@ -304,6 +327,7 @@ func (f *fake) reset() {
 	f.mu.Lock()
 	f.stops = nil
 	f.mu.Unlock()
+	f.setClock(time.Time{})
 	f.s.Reset()
 	f.seed()
 }
@@ -344,6 +368,19 @@ func adminHandler(f *fake) http.Handler {
 	route("GET /ping", func(*http.Request) (any, *adminError) { return ok, nil })
 	route("GET /credentials", func(*http.Request) (any, *adminError) { return f.credentials(), nil })
 	route("POST /reset", func(*http.Request) (any, *adminError) { f.reset(); return f.credentials(), nil })
+	route("POST /clock", func(r *http.Request) (any, *adminError) {
+		v := r.URL.Query().Get("time")
+		if v == "real" {
+			f.setClock(time.Time{})
+		} else {
+			at, err := time.Parse(time.RFC3339, v)
+			if err != nil || at.Year() < 2000 || at.Year() > 2100 {
+				return nil, bad("time must be \"real\" or an RFC 3339 time between the years 2000 and 2100")
+			}
+			f.setClock(at)
+		}
+		return map[string]string{"now": f.now().UTC().Format(time.RFC3339)}, nil
+	})
 
 	route("POST /certs/{name}/renew", func(r *http.Request) (any, *adminError) {
 		name, aerr := f.certName(r)
@@ -385,7 +422,11 @@ func adminHandler(f *fake) http.Handler {
 		if aerr != nil {
 			return nil, aerr
 		}
-		ver := f.s.AddCertificate(name, fakekv.CertOptions{CommonName: cn, SANs: []string{cn}, Exportable: exportable})
+		root, aerr := boolOf(q.Get("root"), false)
+		if aerr != nil {
+			return nil, aerr
+		}
+		ver := f.s.AddCertificate(name, fakekv.CertOptions{CommonName: cn, SANs: []string{cn}, Exportable: exportable, IncludeRoot: root})
 		return map[string]string{"version": ver}, nil
 	})
 	route("POST /certs/{name}/exportable", func(r *http.Request) (any, *adminError) {
@@ -679,9 +720,9 @@ var ctlCommands = map[string]ctlCommand{
 		request: func(pos []string, fl map[string]string) (string, string, url.Values) {
 			return http.MethodGet, "/certs/" + url.PathEscape(pos[0]) + "/leaf", url.Values{"version": {fl["version"]}}
 		}},
-	"add-cert": {usage: "add-cert NAME [--cn CN] [--exportable true|false]", min: 1, max: 1, flags: map[string]bool{"cn": true, "exportable": true},
+	"add-cert": {usage: "add-cert NAME [--cn CN] [--exportable true|false] [--root true|false]", min: 1, max: 1, flags: map[string]bool{"cn": true, "exportable": true, "root": true},
 		request: func(pos []string, fl map[string]string) (string, string, url.Values) {
-			return http.MethodPost, "/certs/" + url.PathEscape(pos[0]) + "/add", url.Values{"cn": {fl["cn"]}, "exportable": {fl["exportable"]}}
+			return http.MethodPost, "/certs/" + url.PathEscape(pos[0]) + "/add", url.Values{"cn": {fl["cn"]}, "exportable": {fl["exportable"]}, "root": {fl["root"]}}
 		}},
 	"set-exportable": {usage: "set-exportable NAME true|false", min: 2, max: 2,
 		request: func(pos []string, _ map[string]string) (string, string, url.Values) {
@@ -726,6 +767,10 @@ var ctlCommands = map[string]ctlCommand{
 			return http.MethodGet, "/requests", url.Values{"authenticated": {strconv.FormatBool(fl["authenticated"] != "")}}
 		}},
 	"clear-requests": {usage: "clear-requests", request: simple(http.MethodPost, "/requests/clear")},
+	"clock": {usage: "clock RFC3339|real", min: 1, max: 1,
+		request: func(pos []string, _ map[string]string) (string, string, url.Values) {
+			return http.MethodPost, "/clock", url.Values{"time": {pos[0]}}
+		}},
 }
 
 func simple(method, path string) func([]string, map[string]string) (string, string, url.Values) {

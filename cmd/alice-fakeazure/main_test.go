@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"io"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"software.sslmate.com/src/go-pkcs12"
 )
 
 // logBuffer is a log sink the serve goroutine and the test read safely.
@@ -282,6 +284,105 @@ func (st *stack) firstVersion(name string) string {
 		}
 	}
 	return oldest
+}
+
+// createdOf is the creation time (Unix seconds) the vault reports for one version of a certificate.
+func (st *stack) createdOf(name, version string) int64 {
+	st.t.Helper()
+	c := st.client()
+	tok := st.signedIn(c)
+	status, _, body := st.do(c, http.MethodGet, "https://alice-e2e.vault.azure.net/certificates/"+name+"/versions?api-version=2025-07-01", nil, tok)
+	require.Equal(st.t, http.StatusOK, status)
+	var list struct {
+		Value []struct {
+			ID         string         `json:"id"`
+			Attributes map[string]any `json:"attributes"`
+		} `json:"value"`
+	}
+	require.NoError(st.t, json.Unmarshal(body, &list))
+	for _, v := range list.Value {
+		if strings.HasSuffix(v.ID, "/"+version) {
+			c, _ := v.Attributes["created"].(float64)
+			return int64(c)
+		}
+	}
+	require.Fail(st.t, "version not listed", version)
+	return 0
+}
+
+// "clock" puts the fake's time on a given instant (Alice's journeys move Alice's own clock): a version
+// renewed afterwards is created at that time, "real" and a reset bring the real time back, and a bad
+// argument changes nothing.
+func TestCtlClockMovesTheTimeOfNewVersions(t *testing.T) {
+	st := startStack(t)
+	later := time.Now().UTC().Add(36 * time.Hour)
+	out := st.ctlJSON("clock", later.Format(time.RFC3339))
+	assert.WithinDuration(t, later, mustTime(t, out["now"]), 5*time.Second)
+	version := st.ctlJSON("renew", "web-cert")["version"].(string)
+	assert.InDelta(t, later.Unix(), st.createdOf("web-cert", version), 5, "the renewed version is created at the fake's time")
+
+	out = st.ctlJSON("clock", "real")
+	assert.WithinDuration(t, time.Now(), mustTime(t, out["now"]), 5*time.Second)
+	version = st.ctlJSON("renew", "web-cert")["version"].(string)
+	assert.InDelta(t, time.Now().Unix(), st.createdOf("web-cert", version), 5)
+
+	st.ctlJSON("clock", later.Format(time.RFC3339))
+	st.ctlJSON("reset")
+	version = st.ctlJSON("renew", "web-cert")["version"].(string)
+	assert.InDelta(t, time.Now().Unix(), st.createdOf("web-cert", version), 5, "a reset puts the clock back")
+
+	for _, bad := range []string{"tomorrow", "", "1999-12-31T00:00:00Z", "2101-01-01T00:00:00Z", "2026-10-05"} {
+		code, _, errOut := st.ctl("clock", bad)
+		assert.Equal(t, 1, code, "%q", bad)
+		assert.NotEmpty(t, errOut, "%q", bad)
+	}
+	code, _, _ := st.ctl("clock")
+	assert.Equal(t, 1, code, "no argument is refused")
+	assert.InDelta(t, time.Now().Unix(), mustTime(t, st.ctlJSON("clock", "real")["now"]).Unix(), 5, "refused arguments left the clock alone")
+}
+
+func mustTime(t *testing.T, v any) time.Time {
+	t.Helper()
+	s, ok := v.(string)
+	require.True(t, ok, "%v", v)
+	at, err := time.Parse(time.RFC3339, s)
+	require.NoError(t, err)
+	return at
+}
+
+// chainLength is how many certificates besides the leaf the PFX of a version carries.
+func (st *stack) chainLength(name, version string) int {
+	st.t.Helper()
+	c := st.client()
+	tok := st.signedIn(c)
+	status, _, body := st.do(c, http.MethodGet, "https://alice-e2e.vault.azure.net/secrets/"+name+"/"+version+"?api-version=2025-07-01", nil, tok)
+	require.Equal(st.t, http.StatusOK, status)
+	var sec struct {
+		Value string `json:"value"`
+	}
+	require.NoError(st.t, json.Unmarshal(body, &sec))
+	raw, err := base64.StdEncoding.DecodeString(sec.Value)
+	require.NoError(st.t, err)
+	_, _, chain, err := pkcs12.DecodeChain(raw, "")
+	require.NoError(st.t, err)
+	return len(chain)
+}
+
+// The seeded web-cert, and every version renewed from it, carries the root (a complete chain: the
+// journeys deploy it); a certificate added without --root has the intermediate only, with --root both.
+func TestCtlChainOfSeededAndAddedCertificates(t *testing.T) {
+	st := startStack(t)
+	assert.Equal(t, 2, st.chainLength("web-cert", st.firstVersion("web-cert")), "intermediate and root")
+	renewed := st.ctlJSON("renew", "web-cert")["version"].(string)
+	assert.Equal(t, 2, st.chainLength("web-cert", renewed), "a renewed version keeps the root")
+
+	incomplete := st.ctlJSON("add-cert", "no-root")["version"].(string)
+	assert.Equal(t, 1, st.chainLength("no-root", incomplete), "the intermediate only")
+	complete := st.ctlJSON("add-cert", "with-root", "--root", "true")["version"].(string)
+	assert.Equal(t, 2, st.chainLength("with-root", complete))
+	code, _, errOut := st.ctl("add-cert", "bad-root", "--root", "maybe")
+	assert.Equal(t, 1, code)
+	assert.NotEmpty(t, errOut)
 }
 
 func TestCtlRolesRevokeGrantAndSet(t *testing.T) {
