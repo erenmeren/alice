@@ -86,13 +86,13 @@ var kvReadBudget = time.Minute
 
 // Reasons the vault step produces itself (the rest are the provider's closed codes).
 const (
-	reasonKVMismatch       = "kv.secret_mismatch"
-	reasonKVUnreadable     = "kv.secret_unreadable"
-	reasonKVCredential     = "kv.credential_unreadable"
-	reasonVaultGone        = inventory.ReasonVaultUnavailable
-	reasonChainUnconfirmed = inventory.ReasonChainUnconfirmed
-	reasonPFXBusy          = "certificate.pfx_busy"
-	reasonUnreachable      = "azure.unreachable"
+	reasonKVMismatch         = "kv.secret_mismatch"
+	reasonKVUnreadable       = "kv.secret_unreadable"
+	reasonKVSignInUnreadable = "kv.credential_unreadable"
+	reasonVaultGone          = inventory.ReasonVaultUnavailable
+	reasonChainUnconfirmed   = inventory.ReasonChainUnconfirmed
+	reasonPFXBusy            = "certificate.pfx_busy"
+	reasonUnreachable        = "azure.unreachable"
 )
 
 // kvRefusals maps every refusal the inventory can give for a Key Vault deployment (the pre-check, the
@@ -215,7 +215,7 @@ func (h *handlers) readSecret(ctx context.Context, p providers.Provider, ref pro
 	if err != nil {
 		if ctx.Err() == nil && errors.Is(watch.failure(), inventory.ErrVaultCredentialUnreadable) {
 			// The provider reports this as its own internal error; only a new credential helps.
-			return providers.CertificateSecret{}, jobs.Fail(reasonKVCredential, nil, inventory.ErrVaultCredentialUnreadable)
+			return providers.CertificateSecret{}, jobs.Fail(reasonKVSignInUnreadable, nil, inventory.ErrVaultCredentialUnreadable)
 		}
 		return providers.CertificateSecret{}, readFailure(ctx, rctx, err)
 	}
