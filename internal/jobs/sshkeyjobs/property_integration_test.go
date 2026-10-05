@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,56 +24,91 @@ import (
 
 // The §26.8 exit criterion: for any failure injected at any step, the old key remains wherever the new key
 // was not freshly verified. A scenario is a rotation of a key placed at 1, 2 or 3 locations on two servers
-// (web-01: deploy, app; db-01: deploy), plus a file shared by two users of web-01 that the planner skips
-// (S10), overlap 60 minutes. A schedule injects events at world calls (Add, Remove and VerifyKeyLogin of
-// the fake key world, numbered from 1): a fault of every kind (FaultLateWrite included, S3), a license
-// lock (renewed later), a process kill, a lost lease (the job is reaped and run again while its first run
-// is still in its call), an Administrator's Continue, Finish now, Keep old or Stop and undo, and a
-// forward clock step (S13). After the schedule the system settles and invariants I1-I6 are checked
-// against the world's files and event log, never the store's belief.
+// (web-01: deploy, app; db-01: deploy), or a "from" variant (web-01: deploy, db-01: deploy, and db-01: app
+// whose line holds from= so its login is refused: the run waits for a decision), plus a file shared by
+// two users of web-01 that the planner skips (S10), overlap 60 minutes.
 //
-// The default run covers every event kind at every call index of the fault-free runs of 1, 2 and 3
-// locations, plus randomSchedules random multi-event schedules from the seed. ALICE_PROPERTY_SEED sets
-// the seed, ALICE_PROPERTY_RANDOM the number of random schedules (a longer mode: e.g. 2000).
+// A schedule injects events at world calls (Add, Remove, VerifyKeyLogin and ListKeys of the fake key
+// world, numbered from 1): every world fault (FaultLateWrite of S3 and the listing's FaultUnread and
+// FaultPartial included), a licence lock (renewed after 1 hour or 20 days), a process kill, a lost lease
+// (the job is reaped and run again while its first run is still in its call), an Administrator's Stop and
+// undo, and a clock step forward or back (S13, G14). Administrator decisions that need a settled state
+// (Continue, Finish now, Keep old, Stop and undo) are injected at settle rounds, where they can take
+// effect; the test counts where each one was accepted and fails unless each is accepted in the phases it
+// exists for (review I4). Half of the schedules run on a clock that moves on every read (M11).
+//
+// Schedules: every call kind at every call index of the fault-free runs (1 and 2 locations and the from
+// variant; 3 locations too in the full mode); a rollback trigger (the last verification refused) paired
+// with every call kind at each following call (the undo path, review I6); a late write on an add paired
+// with an unreachable call, a lock, Stop and undo or a kill at the next call; each decision at each of the
+// first settle rounds; random schedules from the seed. After the schedule the system settles and the
+// invariants are checked against the world's files and event log (and the harness's call log: time and
+// licence state of every call), never the store's belief.
+//
+// ALICE_PROPERTY_SEED sets the seed, ALICE_PROPERTY_RANDOM the number of random schedules,
+// ALICE_PROPERTY_FULL=1 adds the 3-location singles and the pairs of every variant.
 
 const sharedFile = "/etc/ssh/keys/shared"
 
 // defaultRandomSchedules is the number of random schedules of the default run.
-const defaultRandomSchedules = 60
+const defaultRandomSchedules = 20
+
+// parallelScenarios bounds the scenarios that run at once (each has its own database): the suite stays
+// stable on a loaded machine (review I8).
+const parallelScenarios = 4
 
 // faultKinds are the world faults by name.
 var faultKinds = map[string]fake.Fault{
 	"refuse": fake.FaultRefuse, "unreachable": fake.FaultUnreachable, "after_write": fake.FaultAfterWrite,
 	"file_changed": fake.FaultFileChanged, "unprovable": fake.FaultUnprovable, "hang": fake.FaultHang, "late_write": fake.FaultLateWrite,
+	"unread": fake.FaultUnread, "partial": fake.FaultPartial,
 }
 
-// eventKinds are every kind a schedule injects at a call.
-var eventKinds = []string{"refuse", "unreachable", "after_write", "file_changed", "unprovable", "hang", "late_write",
-	"lock", "kill", "lease", "continue", "finish_now", "keep_old", "abort", "clock"}
+// callKinds are the kinds a schedule injects at a world call.
+var callKinds = []string{"refuse", "unreachable", "after_write", "file_changed", "unprovable", "hang", "late_write", "unread", "partial",
+	"lock", "kill", "lease", "abort", "clock", "clock_back"}
+
+// roundKinds are the Administrator's decisions a schedule injects at a settle round.
+var roundKinds = []string{"continue", "finish_now", "keep_old", "abort"}
 
 // event happens when the world answers its at-th call (before the call's own effect, which then follows;
-// a kill happens right after the call returned).
+// a kill happens right after the call returned), or, for a decision, after the jobs of settle round at.
 type event struct {
 	at   int
 	kind string
 }
 
+// variant is the placement of the old key.
+type variant string
+
+const (
+	oneLoc    variant = "1"
+	twoLocs   variant = "2"
+	threeLocs variant = "3"
+	withFrom  variant = "from"
+)
+
 type schedule struct {
-	locs       int
-	events     []event
+	v          variant
+	events     []event                                         // at world calls
+	rounds     []event                                         // decisions at settle rounds
 	renewAfter time.Duration                                   // how long a lock lasts before the renewal
 	step       time.Duration                                   // a "clock" event moves the clock forward this far
 	keepOld    bool                                            // a waiting decision is answered with Keep old (else its deadline passes)
+	ticking    bool                                            // the services' clock moves on every read
 	killAt     string                                          // a kill at this point of the killer (crash tests)
 	fault      func(p fake.FaultPoint, s *scenario) fake.Fault // a fault of every matching call (crash tests)
 }
 
 func (s schedule) String() string {
-	parts := make([]string, 0, len(s.events))
+	parts := []string{}
 	for _, ev := range s.events {
 		parts = append(parts, ev.kind+"@"+strconv.Itoa(ev.at))
 	}
-	return fmt.Sprintf("locs=%d %s renew=%s step=%s keep_old=%t", s.locs, strings.Join(parts, ","), s.renewAfter, s.step, s.keepOld)
+	for _, ev := range s.rounds {
+		parts = append(parts, ev.kind+"@r"+strconv.Itoa(ev.at))
+	}
+	return fmt.Sprintf("v=%s %s renew=%s step=%s keep_old=%t tick=%t", s.v, strings.Join(parts, ","), s.renewAfter, s.step, s.keepOld, s.ticking)
 }
 
 // fileKey is one world file.
@@ -90,17 +126,27 @@ type scenario struct {
 	web, db   uuid.UUID
 	files     []fileKey
 	startFile map[fileKey][]string
+	accepted  []string // "<decision>@<run status>" of every decision that took effect
 }
 
-// placements are the scenario's rotated locations, in the order runs of 1, 2 and 3 locations use them.
-func (s *scenario) placements() []struct {
-	target uuid.UUID
-	user   string
-} {
-	return []struct {
-		target uuid.UUID
-		user   string
-	}{{s.web, "deploy"}, {s.db, "deploy"}, {s.web, "app"}}[:s.sched.locs]
+type placement struct {
+	target  uuid.UUID
+	user    string
+	options string
+}
+
+// placements are the scenario's rotated locations.
+func (s *scenario) placements() []placement {
+	all := []placement{{s.web, "deploy", ""}, {s.db, "deploy", ""}, {s.web, "app", ""}}
+	switch s.sched.v {
+	case oneLoc:
+		return all[:1]
+	case twoLocs:
+		return all[:2]
+	case withFrom:
+		return []placement{all[0], all[1], {s.db, "app", `from="10.0.0.0/8"`}}
+	}
+	return all
 }
 
 // runScenario builds the world, starts the rotation, applies the schedule and settles.
@@ -124,7 +170,7 @@ func runScenario(t *testing.T, sched schedule) *scenario {
 	s.files = append(s.files, fileKey{s.web, sharedFile})
 	s.old = e.generate("ci")
 	for _, pl := range s.placements() {
-		e.place(s.old, pl.target, pl.user)
+		e.placeWithOptions(s.old, pl.target, pl.user, pl.options)
 	}
 	e.placeIn(s.old, s.web, "deploy2", sharedFile, "")
 	e.placeIn(s.old, s.web, "backup", sharedFile, "")
@@ -135,8 +181,14 @@ func runScenario(t *testing.T, sched schedule) *scenario {
 		s.startFile[f] = e.world.Lines(f.target, f.path)
 	}
 	s.install()
+	e.tick.on.Store(sched.ticking)
 	r := e.runNow(e.reloadPolicy(p.ID))
 	s.runID = r.ID
+	for _, f := range s.files {
+		// The run's new key is in no file before its first add: an undo can only ever remove a line the
+		// run's own add put there (ruling on ownership, rotation side).
+		require.False(t, e.world.Has(f.target, f.path, r.NewFingerprint), "the new key is nowhere before the run's add")
+	}
 	for _, l := range r.Locations {
 		if l.FilePath == sharedFile {
 			require.Equal(t, sshkeys.LocSkipped, l.State, "S10: a shared file is skipped")
@@ -153,7 +205,7 @@ func (e *env) reloadPolicy(id uuid.UUID) sshkeys.Policy {
 	return p
 }
 
-// install puts the schedule's events into the world's fault hook (and arms the killer).
+// install puts the schedule's call events into the world's fault hook (and arms the killer).
 func (s *scenario) install() {
 	e := s.e
 	done := make([]bool, len(s.sched.events))
@@ -177,26 +229,53 @@ func (s *scenario) install() {
 				e.gate.lock()
 			case "lease":
 				s.loseLease()
-			case "continue":
-				_ = e.keys.Continue(e.ctx, e.admin, s.runID)
-			case "finish_now":
-				_ = e.keys.FinishNow(e.ctx, e.admin, s.runID)
 			case "abort":
-				_ = e.keys.Abort(e.ctx, e.admin, s.runID)
-			case "keep_old":
-				s.keepOld()
+				s.decide("abort")
 			case "clock":
 				e.clock.Advance(s.sched.step)
+			case "clock_back":
+				e.clock.Set(e.clock.Now().Add(-2 * time.Hour)) // G14
 			case "kill":
 			default:
 				f = faultKinds[ev.kind]
 			}
+		}
+		if f == fake.FaultNone && s.sched.v == withFrom && p.Method == "VerifyKeyLogin" && p.Target == s.db && p.OSUser == "app" {
+			f = fake.FaultRefuse // from= excludes Alice's address
 		}
 		if f == fake.FaultNone && s.sched.fault != nil {
 			f = s.sched.fault(p, s)
 		}
 		return f
 	})
+}
+
+// decide makes an Administrator's decision and notes where it was accepted.
+func (s *scenario) decide(kind string) {
+	e := s.e
+	r, err := e.keys.Rotation(e.ctx, s.runID)
+	if err != nil {
+		return
+	}
+	switch kind {
+	case "continue":
+		err = e.keys.Continue(e.ctx, e.admin, s.runID)
+	case "finish_now":
+		err = e.keys.FinishNow(e.ctx, e.admin, s.runID)
+	case "abort":
+		err = e.keys.Abort(e.ctx, e.admin, s.runID)
+	case "keep_old":
+		var ids []uuid.UUID
+		for _, l := range r.Locations {
+			if l.State == sshkeys.LocUnverifiable {
+				ids = append(ids, l.ID)
+			}
+		}
+		err = e.keys.KeepOld(e.ctx, e.admin, s.runID, ids)
+	}
+	if err == nil {
+		s.accepted = append(s.accepted, kind+"@"+r.Status)
+	}
 }
 
 // loseLease: the job's lease expires while its call is still running; the reaper takes the job back and a
@@ -211,31 +290,13 @@ func (s *scenario) loseLease() {
 	e.cancelJob.Store(outer) // a hang later in the first run ends the first run's context
 }
 
-// keepOld answers a waiting decision with Keep old for every location Alice could not test.
-func (s *scenario) keepOld() {
-	e := s.e
-	r, err := e.keys.Rotation(e.ctx, s.runID)
-	if err != nil {
-		return
-	}
-	var ids []uuid.UUID
-	for _, l := range r.Locations {
-		if l.State == sshkeys.LocUnverifiable {
-			ids = append(ids, l.ID)
-		}
-	}
-	if len(ids) > 0 {
-		_ = e.keys.KeepOld(e.ctx, e.admin, s.runID, ids)
-	}
-}
-
 // settle drives the system until the run ended (F9, A11): jobs run (in a dying process while a kill is
-// armed, then Alice restarts), a lock lasts renewAfter of clock and is then renewed, a paused run is
-// continued after the sweep announced the renewal, a waiting decision is answered or its deadline is
-// reached, and otherwise the clock moves an hour and the sweep runs.
+// armed, then Alice restarts); the decisions of this round are made; a lock lasts renewAfter of clock and
+// is then renewed; a paused run is continued after the sweep announced the renewal; a waiting decision is
+// answered or its deadline is reached; otherwise the clock moves an hour and the sweep runs.
 func (s *scenario) settle() {
 	e := s.e
-	for range 400 {
+	for round := 0; round < 400; round++ {
 		if k := e.killer.Load(); k != nil {
 			e.drainDying()
 			if k.firedAt() != "" {
@@ -246,6 +307,16 @@ func (s *scenario) settle() {
 		} else {
 			e.drain()
 		}
+		for _, ev := range s.sched.rounds {
+			if ev.at == round {
+				if ev.kind == "lock" {
+					e.gate.lock() // a lock between two calls (in the overlap, while a decision waits)
+					continue
+				}
+				s.decide(ev.kind)
+				e.drain()
+			}
+		}
 		r := e.run(s.runID)
 		if finished(r.Status) && e.liveLocationJobs() == 0 && e.killer.Load() == nil {
 			break
@@ -255,13 +326,15 @@ func (s *scenario) settle() {
 			e.sweep() // the run pauses (L-83, L-85) where it must
 			e.drain()
 			e.clock.Advance(s.sched.renewAfter)
+			e.sweep() // a deadline that passed in lock pauses too (an overlap's end, L-83)
+			e.drain()
 			e.gate.unlock()
 		case r.PausedLicense:
 			e.sweep() // the renewal notice first (S6)
-			_ = e.keys.Continue(e.ctx, e.admin, s.runID)
+			s.decide("continue")
 		case r.AwaitingDecision && r.DecisionDueAt != nil:
 			if s.sched.keepOld {
-				s.keepOld()
+				s.decide("keep_old")
 			}
 			if r := e.run(s.runID); r.AwaitingDecision && r.DecisionDueAt != nil && e.clock.Now().Before(*r.DecisionDueAt) {
 				e.clock.Set(*r.DecisionDueAt)
@@ -273,6 +346,7 @@ func (s *scenario) settle() {
 		}
 	}
 	// Late writes that are still due land now (a stalled helper writes until its budget ends).
+	e.tick.on.Store(false)
 	e.clock.Advance(time.Hour)
 	e.world.PendingLate()
 }
@@ -286,8 +360,19 @@ func (s *scenario) assertInvariants(t *testing.T) {
 	// I6: the run ended (every lock was renewed and every decision answered).
 	require.True(t, finished(r.Status), "I6: the run ends; it is %s", r.Status)
 	t.Logf("outcome %s %s", r.Status, r.ResultCode)
-	// I1: every removal of the old key followed an accepted login with the new key.
+	// I1: every removal of the old key followed the verification and a fresh, later re-check (two accepted
+	// logins with the new key, the second at most 15 minutes before the send).
 	e.assertEveryRemovalFollowedAFreshLogin(t, oldFP, newFP)
+	// L (review I5): no add and no removal of the old key begins while the licence is locked (an undo of
+	// the run's own addition may: L-86, Stop and undo in lock).
+	for _, ev := range e.world.Events() {
+		if ev.Landed || !e.call(ev.N).locked {
+			continue
+		}
+		assert.False(t, ev.Method == "AddAuthorizedKey", "L: an add was sent while the licence was locked (call %d)", ev.N)
+		assert.False(t, ev.Method == "RemoveAuthorizedKey" && ev.Fingerprint == oldFP,
+			"L: a removal of the old key was sent while the licence was locked (call %d)", ev.N)
+	}
 	// I2, I3: only the new key is added, only the old or the new key is removed, never Alice's own key,
 	// the new key only where this run added it; only the rotated locations' files change.
 	rotated := map[fileKey]bool{}
@@ -322,8 +407,20 @@ func (s *scenario) assertInvariants(t *testing.T) {
 			assert.Equal(t, s.startFile[f], e.world.Lines(f.target, f.path), "I2: %s is untouched", f.path)
 		}
 	}
-	// I4, I5: the record matches the files.
+	// I4, I5: the record matches the files; every location of a finished run is in a final state that
+	// agrees with the world (review I5).
 	for _, l := range r.Locations {
+		assert.NotContains(t, []string{sshkeys.LocPlanned, sshkeys.LocAdding, sshkeys.LocAdded, sshkeys.LocVerified,
+			sshkeys.LocUnverifiable, sshkeys.LocRemoving, sshkeys.LocUndoing}, l.State,
+			"a finished run left %s:%s in flight", l.TargetName, l.FilePath)
+		switch l.State {
+		case sshkeys.LocRemoved:
+			assert.True(t, e.world.Has(l.TargetID, l.FilePath, newFP), "removed: the new key is in %s", l.FilePath)
+		case sshkeys.LocUndone:
+			assert.True(t, e.world.Has(l.TargetID, l.FilePath, oldFP), "undone: the old key is in %s", l.FilePath)
+		case sshkeys.LocKeptOld:
+			assert.True(t, e.world.Has(l.TargetID, l.FilePath, newFP), "kept: both keys are in %s", l.FilePath)
+		}
 		oldHere, newHere := e.world.Has(l.TargetID, l.FilePath, oldFP), e.world.Has(l.TargetID, l.FilePath, newFP)
 		if l.State == sshkeys.LocRemoved {
 			assert.False(t, oldHere, "I5: %s removed, but the old key is in %s", l.OSUser, l.FilePath)
@@ -360,39 +457,88 @@ func others(t *testing.T, lines []string, fps ...string) []string {
 	return out
 }
 
-// baselineCalls are the world calls of the fault-free run of 1, 2 and 3 locations (4 per location: add,
-// login, re-check, removal).
-func baselineCalls(locs int) int { return 4 * locs }
+// baseline is the fault-free run of a variant: its world calls, and the call index of its last add's login.
+type baseline struct {
+	calls, lastAddLogin int
+}
 
-// schedules are every event kind at every call index for 1, 2 and 3 locations, then random schedules of up
-// to three events (call indexes up to two past the fault-free run's) from the seed.
-func schedules(seed uint64, random int) []schedule {
+// schedules builds the schedules from the fault-free runs (see the comment at the top).
+func schedules(seed uint64, random int, full bool, base map[variant]baseline) []schedule {
 	var out []schedule
-	for locs := 1; locs <= 3; locs++ {
-		for at := 1; at <= baselineCalls(locs); at++ {
-			for _, kind := range eventKinds {
-				renew := time.Hour
-				if at%2 == 0 {
-					renew = 20 * 24 * time.Hour // L-84: a renewal after 20 days
-				}
-				out = append(out, schedule{locs: locs, events: []event{{at, kind}}, renewAfter: renew, step: 2 * time.Hour, keepOld: at%2 == 1})
+	renew := func(at int) time.Duration {
+		if at%2 == 0 {
+			return 20 * 24 * time.Hour // L-84: a renewal after 20 days
+		}
+		return time.Hour
+	}
+	singles := []variant{oneLoc, twoLocs, withFrom}
+	pairs := []variant{twoLocs}
+	if full {
+		singles, pairs = append(singles, threeLocs), []variant{oneLoc, twoLocs, threeLocs, withFrom}
+	}
+	for _, v := range singles {
+		for at := 1; at <= base[v].calls; at++ {
+			for _, kind := range callKinds {
+				out = append(out, schedule{v: v, events: []event{{at, kind}}, renewAfter: renew(at), step: 2 * time.Hour,
+					keepOld: at%2 == 1, ticking: len(out)%2 == 1})
 			}
 		}
 	}
+	for _, v := range pairs {
+		// The last verification is refused: the run rolls back; every kind at each call of the undo path.
+		trigger := event{base[v].lastAddLogin, "refuse"}
+		for at := trigger.at + 1; at <= 2*trigger.at+2; at++ { // the undo lists and removes per added location
+			for _, kind := range callKinds {
+				out = append(out, schedule{v: v, events: []event{trigger, {at, kind}}, renewAfter: renew(at), step: 2 * time.Hour,
+					ticking: len(out)%2 == 1})
+			}
+		}
+	}
+	for _, v := range []variant{oneLoc, twoLocs} {
+		// A late write on each add (S3), and what may follow it at the next call.
+		for add := 1; add < base[v].lastAddLogin; add += 2 {
+			for _, kind := range []string{"unreachable", "lock", "abort", "kill"} {
+				out = append(out, schedule{v: v, events: []event{{add, "late_write"}, {add + 1, kind}}, renewAfter: time.Hour,
+					step: 2 * time.Hour, ticking: len(out)%2 == 1})
+			}
+		}
+	}
+	for _, v := range []variant{twoLocs, withFrom} {
+		for round := range 3 {
+			for _, kind := range roundKinds {
+				out = append(out, schedule{v: v, rounds: []event{{round, kind}}, renewAfter: time.Hour, step: 2 * time.Hour,
+					keepOld: true, ticking: len(out)%2 == 1})
+			}
+		}
+		// A lock between calls at each of the first rounds (the overlap, a waiting decision), then Continue.
+		for round := range 3 {
+			out = append(out, schedule{v: v, rounds: []event{{round, "lock"}}, renewAfter: []time.Duration{time.Hour, 20 * 24 * time.Hour}[round%2],
+				step: 2 * time.Hour, keepOld: true})
+		}
+		// Continue right after a lock at each add, before and after the renewal notice.
+		for at := 1; at <= base[v].lastAddLogin; at++ {
+			out = append(out, schedule{v: v, events: []event{{at, "lock"}}, rounds: []event{{0, "continue"}, {1, "continue"}},
+				renewAfter: time.Hour, step: 2 * time.Hour, keepOld: true})
+		}
+	}
 	rng := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
+	vs := []variant{oneLoc, twoLocs, threeLocs, withFrom}
 	for range random {
-		locs := 1 + rng.IntN(3)
-		s := schedule{locs: locs, renewAfter: []time.Duration{time.Hour, 20 * 24 * time.Hour}[rng.IntN(2)],
-			step: []time.Duration{2 * time.Hour, 30 * 24 * time.Hour}[rng.IntN(2)], keepOld: rng.IntN(2) == 0}
+		v := vs[rng.IntN(len(vs))]
+		s := schedule{v: v, renewAfter: []time.Duration{time.Hour, 20 * 24 * time.Hour}[rng.IntN(2)],
+			step: []time.Duration{2 * time.Hour, 30 * 24 * time.Hour}[rng.IntN(2)], keepOld: rng.IntN(2) == 0, ticking: rng.IntN(2) == 0}
 		for range 1 + rng.IntN(3) {
-			s.events = append(s.events, event{at: 1 + rng.IntN(baselineCalls(locs)+2), kind: eventKinds[rng.IntN(len(eventKinds))]})
+			s.events = append(s.events, event{at: 1 + rng.IntN(base[v].calls+4), kind: callKinds[rng.IntN(len(callKinds))]})
+		}
+		if rng.IntN(2) == 0 {
+			s.rounds = append(s.rounds, event{at: rng.IntN(3), kind: roundKinds[rng.IntN(len(roundKinds))]})
 		}
 		out = append(out, s)
 	}
 	return out
 }
 
-func propertySeed(t *testing.T) (uint64, int) {
+func propertySeed(t *testing.T) (uint64, int, bool) {
 	seed, random := uint64(20261005), defaultRandomSchedules
 	if v := os.Getenv("ALICE_PROPERTY_SEED"); v != "" {
 		n, err := strconv.ParseUint(v, 10, 64)
@@ -404,27 +550,64 @@ func propertySeed(t *testing.T) (uint64, int) {
 		require.NoError(t, err)
 		random = n
 	}
-	return seed, random
+	return seed, random, os.Getenv("ALICE_PROPERTY_FULL") == "1"
+}
+
+// baselineOf runs a variant without faults and reads its calls from the world.
+func baselineOf(t *testing.T, v variant) baseline {
+	t.Helper()
+	s := runScenario(t, schedule{v: v, renewAfter: time.Hour, step: time.Hour, keepOld: true})
+	r := s.e.run(s.runID)
+	want := sshkeys.StatusCompleted
+	require.Equal(t, want, r.Status, "the fault-free run of %s completes", v)
+	s.assertInvariants(t)
+	b := baseline{calls: s.e.worldCalls()}
+	for _, ev := range s.e.world.Events() {
+		if ev.Method == "AddAuthorizedKey" && !ev.Landed {
+			b.lastAddLogin = ev.N + 1
+		}
+	}
+	return b
 }
 
 func TestOldKeyRemainsUnderAnyInjectedFailure(t *testing.T) {
-	seed, random := propertySeed(t)
-	t.Logf("seed %d, %d random schedules (ALICE_PROPERTY_SEED, ALICE_PROPERTY_RANDOM)", seed, random)
-	for locs := 1; locs <= 3; locs++ {
-		base := runScenario(t, schedule{locs: locs, renewAfter: time.Hour, step: time.Hour})
-		require.Equal(t, sshkeys.StatusCompleted, base.e.run(base.runID).Status, "the fault-free run completes")
-		require.Equal(t, baselineCalls(locs), base.e.worldCalls(), "the fault-free run's calls")
-		base.assertInvariants(t)
+	seed, random, full := propertySeed(t)
+	base := map[variant]baseline{}
+	for _, v := range []variant{oneLoc, twoLocs, threeLocs, withFrom} {
+		base[v] = baselineOf(t, v)
 	}
-	for i, sched := range schedules(seed, random) {
-		t.Run(fmt.Sprintf("%03d/%s", i, strings.ReplaceAll(sched.String(), " ", "_")), func(t *testing.T) {
-			t.Parallel()
-			t.Cleanup(func() {
-				if t.Failed() {
-					t.Logf("reproduce: ALICE_PROPERTY_SEED=%d, schedule %d: %s", seed, i, sched)
+	all := schedules(seed, random, full, base)
+	t.Logf("seed %d, %d schedules (full=%t, %d random; ALICE_PROPERTY_SEED, ALICE_PROPERTY_RANDOM, ALICE_PROPERTY_FULL)", seed, len(all), full, random)
+	var (
+		mu       sync.Mutex
+		accepted = map[string]int{}
+	)
+	slots := make(chan struct{}, parallelScenarios)
+	t.Run("schedules", func(t *testing.T) {
+		for i, sched := range all {
+			t.Run(fmt.Sprintf("%03d/%s", i, strings.ReplaceAll(sched.String(), " ", "_")), func(t *testing.T) {
+				t.Parallel()
+				slots <- struct{}{}
+				defer func() { <-slots }()
+				t.Cleanup(func() {
+					if t.Failed() {
+						t.Logf("reproduce: ALICE_PROPERTY_SEED=%d, schedule %d: %s", seed, i, sched)
+					}
+				})
+				s := runScenario(t, sched)
+				s.assertInvariants(t)
+				mu.Lock()
+				for _, a := range s.accepted {
+					accepted[a]++
 				}
+				mu.Unlock()
 			})
-			runScenario(t, sched).assertInvariants(t)
-		})
+		}
+	})
+	t.Logf("decisions accepted (decision@status: schedules): %v", accepted)
+	// Review I4: each decision took effect in the phases it exists for.
+	for _, want := range []string{"finish_now@overlap", "keep_old@verifying_new", "abort@adding_new", "abort@verifying_new",
+		"abort@overlap", "continue@adding_new", "continue@overlap"} {
+		assert.Positive(t, accepted[want], "no schedule had %s take effect", want)
 	}
 }

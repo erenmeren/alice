@@ -243,6 +243,8 @@ func TestDeployAlreadyPresentIsNeverUndone(t *testing.T) {
 	assert.Equal(t, "login_refused", v.Result["note"])
 	assert.True(t, e.world.Has(srv, deployFile, k.Fingerprint), "Alice did not add it, so it never removes it")
 	assert.Zero(t, e.countEvents("RemoveAuthorizedKey"))
+	assert.Zero(t, e.countEvents("AddAuthorizedKey"), "a line listed before any send: nothing is sent")
+	assert.Zero(t, e.audits("sshkey.add_sent"), "and no send is recorded")
 	assert.Equal(t, 1, e.discoveries(srv), "a discovery is queued so the record catches up with the file")
 }
 
@@ -467,9 +469,13 @@ func TestDeployRetryNeverRemovesALineThatWasThere(t *testing.T) {
 	k := e.generate("ci")
 	byHand := `from="10.0.0.0/8" ` + k.PublicKey + " " + k.Comment
 	e.world.Put(srv, "deploy", deployFile, byHand) // Alice is outside from=: the login is refused
-	calls := 0
+	calls, lists := 0, 0
 	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		switch p.Method {
+		case "ListKeys":
+			if lists++; lists == 1 {
+				return fake.FaultUnread // the first listing does not see the line
+			}
 		case "AddAuthorizedKey":
 			calls++
 			if calls == 1 {
@@ -483,6 +489,7 @@ func TestDeployRetryNeverRemovesALineThatWasThere(t *testing.T) {
 	job := e.deploy(k, srv, "")
 	e.drain()
 	require.Equal(t, jobs.StatusQueued, e.job(job).Status)
+	require.Equal(t, 1, e.audits("sshkey.add_sent"), "a send is on record although nothing was written")
 	e.clock.Advance(e.keys.UndoWait())
 	e.drain()
 	v := e.job(job)

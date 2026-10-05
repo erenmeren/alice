@@ -116,6 +116,9 @@ type env struct {
 	adminAudit audit.Actor
 	killer     atomic.Pointer[killer] // the process dies at its points (setKiller)
 	cancelJob  atomic.Pointer[context.CancelFunc]
+	fault      atomic.Pointer[func(fake.FaultPoint) fake.Fault]
+	callsMu    sync.Mutex
+	calls      map[int]callInfo
 	// unprotected counts Add and Remove requests that did not carry Alice's own fingerprint among the
 	// protected ones (review I7): every test fails when one did.
 	unprotected atomic.Int32
@@ -128,22 +131,50 @@ func (e *env) jobContext() (context.Context, context.CancelFunc) {
 	return ctx, cancel
 }
 
-// setFault installs the world's fault decision; a FaultHang ends the running job's context at once, as
-// the job's deadline would end it on a slow host.
+// callInfo is what the harness notes about one world call: the test clock when the call proceeds and
+// whether the licence gate was locked when it began (a lock that fires in the call does not count for it).
+type callInfo struct {
+	begun  time.Time // when the call began (the time the sender's checks saw)
+	at     time.Time // when the call proceeded, after the events injected in it (a clock step is not time the call took)
+	locked bool
+}
+
+// setFault installs the test's fault decision (nil: none) behind the harness's own hook.
 func (e *env) setFault(f func(fake.FaultPoint) fake.Fault) {
 	if f == nil {
-		e.world.SetFault(nil)
+		e.fault.Store(nil)
 		return
 	}
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
-		x := f(p)
-		if x == fake.FaultHang {
-			if c := e.cancelJob.Load(); c != nil {
-				(*c)()
-			}
+	e.fault.Store(&f)
+}
+
+// hook is the world's fault decision for every test: it notes each call (callInfo), asks the test's
+// decision, and ends the running job's context at once for a FaultHang, as the job's deadline would end it
+// on a slow host (no wall clock involved).
+func (e *env) hook(p fake.FaultPoint) fake.Fault {
+	locked, begun := e.gate.locked.Load(), e.clock.Now()
+	x := fake.FaultNone
+	if f := e.fault.Load(); f != nil {
+		x = (*f)(p)
+	}
+	// The time is read after the call's own events: a clock step injected in the call is a step of the
+	// clock, not time the call took.
+	e.callsMu.Lock()
+	e.calls[p.N] = callInfo{begun: begun, at: e.clock.Now(), locked: locked}
+	e.callsMu.Unlock()
+	if x == fake.FaultHang {
+		if c := e.cancelJob.Load(); c != nil {
+			(*c)()
 		}
-		return x
-	})
+	}
+	return x
+}
+
+// call is what the harness noted about the world's n-th call.
+func (e *env) call(n int) callInfo {
+	e.callsMu.Lock()
+	defer e.callsMu.Unlock()
+	return e.calls[n]
 }
 
 func newEnv(t *testing.T) *env { t.Helper(); return newEnvWith(t, nil) }
@@ -162,6 +193,8 @@ func newEnvWith(t *testing.T, real func(e *env)) *env {
 	e.db.App.Reset()
 	e.dropAtEnd()
 	e.world.SetClock(e.clock.Now) // FaultLateWrite follows the test clock
+	e.calls = map[int]callInfo{}
+	e.world.SetFault(e.hook)
 	e.log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	e.keyring, err = secrets.LoadOrCreateMasterKey(e.ctx, e.db.App, t.TempDir(), e.clock.Now())
 	require.NoError(t, err)

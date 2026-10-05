@@ -90,52 +90,62 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 	}
 	// absentBefore: proven not in the file right before this send (a failed listing proves nothing).
 	absentBefore := lerr0 == nil && before.Absent(d.OSUser, d.FilePath, d.Fingerprint)
-	send, err := h.d.Keys.BeginDeploySend(ctx, j.ID, d)
-	if err != nil {
-		if errors.Is(err, inventory.ErrClaimLost) {
-			return nil, jobs.Retry("job.lease_expired", nil, err)
+	var (
+		ares     providers.AuthKeyResult
+		st       addState
+		send     sshkeys.DeploySend
+		recorded bool
+	)
+	if line, here := listedLine(before, d); lerr0 == nil && here && prior.Count == 0 {
+		// The line is there before this job sent anything: nothing is sent, nothing is recorded as a send,
+		// and the line is never removed (ruling on deploy ownership).
+		st, ares.LineNo = addPresent, line
+	} else {
+		send, err = h.d.Keys.BeginDeploySend(ctx, j.ID, d)
+		if err != nil {
+			if errors.Is(err, inventory.ErrClaimLost) {
+				return nil, jobs.Retry("job.lease_expired", nil, err)
+			}
+			return nil, jobs.Retry("internal.unexpected", nil, err) // nothing was sent
 		}
-		return nil, jobs.Retry("internal.unexpected", nil, err) // nothing was sent
-	}
-	recorded := false
-	defer func() {
-		// M7: the last attempt ends after a send without a final record: audited, and a scan is queued so
-		// that the record catches up with the file.
-		var f *jobs.Failure
-		if !recorded && errors.As(err, &f) && f.Class == jobs.Retryable && j.Attempt >= j.MaxAttempts {
-			h.finish(ctx, actor, d, sshkeys.DeployOutcome{Result: sshkeys.DeployFailed, Reason: f.Reason})
-			h.discover(ctx, d.TargetID)
+		defer func() {
+			// M7: the last attempt ends after a send without a final record: audited, and a scan is queued so
+			// that the record catches up with the file.
+			var f *jobs.Failure
+			if !recorded && errors.As(err, &f) && f.Class == jobs.Retryable && j.Attempt >= j.MaxAttempts {
+				h.finish(ctx, actor, d, sshkeys.DeployOutcome{Result: sshkeys.DeployFailed, Reason: f.Reason})
+				h.discover(ctx, d.TargetID)
+			}
+		}()
+		rec := &writeTracker{next: steps}
+		ares, err = sess.AddAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: send.OperationID, OSUser: d.OSUser, FilePath: d.FilePath,
+			Line: d.Line, ProtectedFingerprints: d.Protected}, rec)
+		if ctx.Err() != nil {
+			return nil, jobs.Retry("ssh.timeout", nil, ctx.Err()) // F-39: the next attempt starts over
 		}
-	}()
-	rec := &writeTracker{next: steps}
-	ares, err := sess.AddAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: send.OperationID, OSUser: d.OSUser, FilePath: d.FilePath,
-		Line: d.Line, ProtectedFingerprints: d.Protected}, rec)
-	if ctx.Err() != nil {
-		return nil, jobs.Retry("ssh.timeout", nil, ctx.Err()) // F-39: the next attempt starts over
-	}
-	var st addState
-	switch {
-	case err != nil && definiteNoChange(rec.wrote, ares, err):
-		h.recordIfConnection(ctx, d.TargetID, err)
-		f := jobs.FromProvider(err)
-		if recorded = h.failed(ctx, j, actor, d, f); recorded && send.Resend {
-			h.discover(ctx, d.TargetID) // an earlier send of this job may have landed (M7)
+		switch {
+		case err != nil && definiteNoChange(rec.wrote, ares, err):
+			h.recordIfConnection(ctx, d.TargetID, err)
+			f := jobs.FromProvider(err)
+			if recorded = h.failed(ctx, j, actor, d, f); recorded && send.Resend {
+				h.discover(ctx, d.TargetID) // an earlier send of this job may have landed (M7)
+			}
+			var rf *jobs.Failure
+			if errors.As(f, &rf) && rf.Class == jobs.Retryable {
+				// The next attempt sends again only after this send's wait (S3): retry then, not sooner.
+				return nil, jobs.RetryAfter(rf.Reason, rf.Params, err, h.d.Keys.UndoWait())
+			}
+			return nil, f
+		case err != nil:
+			st = addUncertain // the add's uncertainty, not the connection's state: not recorded on the target
+		case ares.Changed && !ares.Verified:
+			// §13.4 step 5: the re-read after the write shows other content.
+			return h.undoDeploy(ctx, j, actor, d, sess, steps, reasonVerifyFailed, true)
+		case ares.Changed || absentBefore:
+			st = addOwned // this send wrote it, or it was proven absent right before this send
+		default:
+			st = addPresent
 		}
-		var rf *jobs.Failure
-		if errors.As(f, &rf) && rf.Class == jobs.Retryable {
-			// The next attempt sends again only after this send's wait (S3): retry then, not sooner.
-			return nil, jobs.RetryAfter(rf.Reason, rf.Params, err, h.d.Keys.UndoWait())
-		}
-		return nil, f
-	case err != nil:
-		st = addUncertain // the add's uncertainty, not the connection's state: not recorded on the target
-	case ares.Changed && !ares.Verified:
-		// §13.4 step 5: the re-read after the write shows other content.
-		return h.undoDeploy(ctx, j, actor, d, sess, steps, reasonVerifyFailed, true)
-	case ares.Changed || absentBefore:
-		st = addOwned // this send wrote it, or it was proven absent right before this send
-	default:
-		st = addPresent
 	}
 	outcome, lerr := h.login(ctx, sess, d.OSUser, d.KeyID)
 	if ctx.Err() != nil {
@@ -176,6 +186,16 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 		h.discover(ctx, d.TargetID) // also when an earlier send of this job may have put it there
 	}
 	return deployResult(d, out), nil
+}
+
+// listedLine reports whether a listing shows the deploy's key in its user's file, and the line number.
+func listedLine(l providers.KeyListing, d sshkeys.DeployJob) (int, bool) {
+	for _, k := range l.Keys {
+		if k.OSUser == d.OSUser && k.FilePath == d.FilePath && k.Fingerprint == d.Fingerprint {
+			return k.LineNo, true
+		}
+	}
+	return 0, false
 }
 
 // presentNote is the note of a line that was already there.

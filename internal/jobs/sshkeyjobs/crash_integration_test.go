@@ -88,7 +88,7 @@ func TestKillAtEveryRecordedPoint(t *testing.T) {
 	for _, point := range killPoints {
 		t.Run(point, func(t *testing.T) {
 			t.Parallel()
-			s := runScenario(t, schedule{locs: 2, renewAfter: time.Hour, step: time.Hour, killAt: point, fault: undoNeededFor(point)})
+			s := runScenario(t, schedule{v: twoLocs, renewAfter: time.Hour, step: time.Hour, killAt: point, fault: undoNeededFor(point)})
 			s.assertInvariants(t)
 			assert.Equal(t, 1, s.e.audits("job.recovered"), "the kill at %s happened and the job was recovered", point)
 		})

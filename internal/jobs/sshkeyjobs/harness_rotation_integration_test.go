@@ -223,8 +223,11 @@ func (e *env) assertEveryRemovalFollowedAFreshLogin(t *testing.T, oldFP, newFP s
 		p := evs[prev]
 		assert.True(t, p.Method == "VerifyKeyLogin" && p.Fingerprint == newFP && p.Outcome == providers.KeyLoginAccepted &&
 			slices.Contains(users, p.OSUser), "the call before the removal (event %d) is an accepted login with the new key: %+v", ev.N, p)
+		sent := e.call(evs[at].N).begun
 		for _, u := range users {
-			ok := false
+			// Every accepted login of the user with the new key since the file last changed (the add of
+			// the new key is that change): the verification and the re-check (review I5).
+			var logins []time.Time
 			for j := at - 1; j >= 0; j-- {
 				x := evs[j]
 				if x.Target == ev.Target && x.FilePath == ev.FilePath && x.Changed && x.Method != "VerifyKeyLogin" {
@@ -232,11 +235,17 @@ func (e *env) assertEveryRemovalFollowedAFreshLogin(t *testing.T, oldFP, newFP s
 				}
 				if !x.Landed && x.Method == "VerifyKeyLogin" && x.Target == ev.Target && x.OSUser == u && x.Fingerprint == newFP &&
 					x.Outcome == providers.KeyLoginAccepted {
-					ok = true
-					break
+					logins = append(logins, e.call(x.N).at)
 				}
 			}
-			assert.True(t, ok, "user %s of %s has no accepted login with the new key since the file last changed (event %d)", u, ev.FilePath, ev.N)
+			if !assert.GreaterOrEqual(t, len(logins), 2,
+				"user %s of %s: a removal needs the verification and a later re-check, both accepted logins with the new key (event %d)",
+				u, ev.FilePath, ev.N) {
+				continue
+			}
+			latest, earliest := logins[0], logins[len(logins)-1]
+			assert.True(t, latest.After(earliest), "the re-check is strictly later than the verification (event %d)", ev.N)
+			assert.LessOrEqual(t, sent.Sub(latest), sshkeys.ReverifyFreshness, "the re-check is at most 15 minutes before the send (event %d)", ev.N)
 		}
 	}
 }
