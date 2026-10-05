@@ -60,7 +60,7 @@ func entraBody(code int, oauth string) string {
 	return string(out)
 }
 
-// drive runs fn while advancing the fake clock, so waits end without real time passing.
+// drive runs fn while advancing the fake clock to each wait fn registers, so waits end without real time passing.
 func drive(clk *clock.Fake, fn func() error) error {
 	done := make(chan error, 1)
 	go func() { done <- fn() }()
@@ -68,8 +68,12 @@ func drive(clk *clock.Fake, fn func() error) error {
 		select {
 		case err := <-done:
 			return err
-		case <-time.After(2 * time.Millisecond):
-			clk.Advance(6 * time.Second)
+		default:
+		}
+		// Fake time moves only while the code waits on it (a retry pause, a vault slot), and exactly by that wait:
+		// how long the machine takes for the rest never counts against a budget measured on the fake clock.
+		if !clk.AdvanceToNextTimer() {
+			time.Sleep(100 * time.Microsecond)
 		}
 	}
 }

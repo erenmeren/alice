@@ -77,6 +77,40 @@ func TestFakeAfterFiresOnAdvance(t *testing.T) {
 	assert.True(t, v.Equal(start.Add(time.Minute)))
 }
 
+func TestFakeAdvanceToNextTimer(t *testing.T) {
+	start := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	f := clock.NewFake(start)
+	assert.False(t, f.AdvanceToNextTimer(), "nothing pending: nothing moves")
+	assert.Equal(t, start, f.Now())
+
+	late, early := f.After(7*time.Second), f.After(2*time.Second)
+	tk := f.NewTicker(time.Second)
+	defer tk.Stop()
+	require.True(t, f.AdvanceToNextTimer())
+	assert.Equal(t, start.Add(2*time.Second), f.Now(), "to the earliest deadline, exactly")
+	got, ok := recv(t, early)
+	require.True(t, ok)
+	assert.Equal(t, start.Add(2*time.Second), got)
+	_, ok = recv(t, late)
+	assert.False(t, ok, "the later timer is still pending")
+	_, ok = recv(t, tk.C())
+	assert.True(t, ok, "a ticker due on the way ticks")
+	require.True(t, f.AdvanceToNextTimer())
+	assert.Equal(t, start.Add(7*time.Second), f.Now())
+	_, ok = recv(t, late)
+	assert.True(t, ok)
+	assert.False(t, f.AdvanceToNextTimer(), "a ticker alone is not a pending timer")
+	assert.Equal(t, 7*time.Second, f.Elapsed(), "the moves count as uptime")
+
+	// After a backward step a pending timer lies ahead again; it is reached in one move.
+	ch := f.After(time.Second)
+	f.Set(start)
+	require.True(t, f.AdvanceToNextTimer())
+	assert.Equal(t, start.Add(8*time.Second), f.Now())
+	_, ok = recv(t, ch)
+	assert.True(t, ok)
+}
+
 func TestFakeAfterFiresOnSet(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	f := clock.NewFake(start)

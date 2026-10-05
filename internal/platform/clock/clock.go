@@ -154,6 +154,29 @@ func (f *Fake) Advance(d time.Duration) {
 	f.moveTo(f.now.Add(d))
 }
 
+// AdvanceToNextTimer moves the fake forward to the earliest pending After deadline and fires it (with every other
+// timer and ticker due by then), and reports true; with no pending timer it changes nothing and reports false. A
+// test that drives code waiting on the fake moves time exactly by what the code waits for, whatever the machine's
+// load, instead of by a fixed step per wall-clock interval. Tickers alone do not count as pending.
+func (f *Fake) AdvanceToNextTimer() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.timers) == 0 {
+		return false
+	}
+	next := f.timers[0].at
+	for _, tm := range f.timers[1:] {
+		if tm.at.Before(next) {
+			next = tm.at
+		}
+	}
+	if !next.After(f.now) { // due already (a backward Set moved now before it): fire it where now is
+		next = f.now.Add(time.Nanosecond)
+	}
+	f.moveTo(next)
+	return true
+}
+
 // Elapsed returns the fake uptime: the sum of all forward moves made by Set and Advance.
 func (f *Fake) Elapsed() time.Duration {
 	f.mu.Lock()

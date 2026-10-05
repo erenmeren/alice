@@ -106,15 +106,16 @@ func TestSDKAPIAgainstTheFake(t *testing.T) {
 		})
 	}))
 	assert.Contains(t, secrets, "db-password")
-	kb, err := sess.api.GetKey(ctx, "signing")
-	require.NoError(t, err)
+	// Every call waits for the vault's slot on the fake clock, so each one is driven.
+	var kb azkeys.KeyBundle
+	require.NoError(t, drive(clk, func() (err error) { kb, err = sess.api.GetKey(ctx, "signing"); return err }))
 	assert.NotNil(t, kb.Key)
-	sec, err := sess.api.GetSecret(ctx, "web-cert", ver)
-	require.NoError(t, err)
+	var sec azsecrets.Secret
+	require.NoError(t, drive(clk, func() (err error) { sec, err = sess.api.GetSecret(ctx, "web-cert", ver); return err }))
 	assert.Equal(t, string(s.SecretValue("web-cert", ver)), *sec.Value)
 	// A callback error stops the listing and comes back as it is.
 	stop := assert.AnError
-	err = drive(clk, func() error {
+	err := drive(clk, func() error {
 		return sess.api.ListCertificates(ctx, func([]*azcertificates.CertificateProperties) error { return stop })
 	})
 	assert.ErrorIs(t, err, stop)
