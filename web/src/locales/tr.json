@@ -1974,15 +1974,15 @@
       "verified": "Yeni anahtar çalışıyor, eski anahtar yerinde",
       "removed": "Eski anahtar kaldırıldı",
       "skipped": "Atlandı",
-      "kept": "Eski anahtar bir yönetici tarafından tutuldu",
+      "kept": "Eski anahtar tutuldu",
       "failed": "Başarısız",
       "undone": "Yeni anahtar yeniden kaldırıldı",
-      "cancelled": "Hiç gönderilmedi ya da gönderilmeden önce reddedildi",
+      "cancelled": "Başlatılmadı (hiç gönderilmedi ya da gönderilmeden önce reddedildi)",
       "in_flight": "Sürüyor",
       "unknown": "Diğer"
     },
     "countLine": "{{label}}: {{count}}",
-    "addResent_one": "{{count}} kez gönderildi, son gönderim: {{date}}",
-    "addResent_other": "{{count}} kez gönderildi, son gönderim: {{date}}"
+    "addResent_one": "Yanıt kaybolduğu için {{count}} kez yeniden gönderildi, son gönderim: {{date}}",
+    "addResent_other": "Yanıt kaybolduğu için {{count}} kez yeniden gönderildi, son gönderim: {{date}}"
   }
 }

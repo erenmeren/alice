@@ -214,7 +214,7 @@ export function RotationRunPage() {
           </Anchor>
         </Alert>
       )}
-      {notice && <ReasonAlert error={notice} color="yellow" />}
+      {notice && notice.reason !== 'rotation.paused_license' && <ReasonAlert error={notice} color="yellow" />}
       {query.isError && query.data && <ErrorAlert error={query.error} />}
       {r.result && <ReasonAlert error={r.result} color={resultWarn ? 'yellow' : 'red'} />}
       {Object.keys(r.location_counts).length > 0 && (

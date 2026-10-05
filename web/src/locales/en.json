@@ -1974,15 +1974,15 @@
       "verified": "New key works, old key still there",
       "removed": "Old key removed",
       "skipped": "Skipped",
-      "kept": "Old key kept by an administrator",
+      "kept": "Old key kept",
       "failed": "Failed",
       "undone": "New key removed again",
-      "cancelled": "Never sent or refused when about to send",
+      "cancelled": "Not started (never sent, or refused when about to send)",
       "in_flight": "In progress",
       "unknown": "Other"
     },
     "countLine": "{{label}}: {{count}}",
-    "addResent_one": "Sent {{count}} time, last at {{date}}",
-    "addResent_other": "Sent {{count}} times, last at {{date}}"
+    "addResent_one": "Sent again {{count}} time after a lost answer, last at {{date}}",
+    "addResent_other": "Sent again {{count}} times after a lost answer, last at {{date}}"
   }
 }

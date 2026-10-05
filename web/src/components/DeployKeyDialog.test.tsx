@@ -203,7 +203,7 @@ describe('DeployKeyDialog', () => {
   it('shows the refusal of the server instead of an empty list when the connection account files are not known', async () => {
     world({ items: [], scanned_at: '2026-10-01T08:00:00Z', refusal: { code: 'ALC-KEY-0014', reason: 'sshkey.connection_files_unknown' } });
     await open();
-    expect(await screen.findByText(/Alice does not know all key files of its connection account/)).toBeInTheDocument();
+    expect(await screen.findByText(/Alice does not know all key files of the account it connects with/)).toBeInTheDocument();
     expect(screen.queryByText("Alice has not found this user's key files yet. Scan the server, then try again.")).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Deploy' })).toBeDisabled();
   });

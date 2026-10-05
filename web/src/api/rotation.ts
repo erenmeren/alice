@@ -182,7 +182,7 @@ export const keepOldKey = (id: string, locationIds: string[]) =>
   apiFetch<void>(`${v1}/runs/${enc(id)}/actions/keep-old`, { method: 'POST', body: { location_ids: locationIds } });
 export const abortRun = (id: string) => apiFetch<void>(`${v1}/runs/${enc(id)}/actions/abort`, { method: 'POST' });
 
-const TERMINAL_RUN: ReadonlySet<string> = new Set(['completed', 'aborted', 'needs_attention', 'cancelled']);
+export const TERMINAL_RUN: ReadonlySet<string> = new Set(['completed', 'aborted', 'needs_attention', 'cancelled']);
 export const RUN_POLL_MS = 3000;
 
 // runPollInterval is how long a page waits before reading a run again: never once the run is final or cannot be read at all,

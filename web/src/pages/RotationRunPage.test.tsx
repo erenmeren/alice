@@ -110,8 +110,8 @@ describe('RotationRunPage', () => {
       'Total: 9',
       'New key works, old key still there: 1',
       'Old key removed: 1',
-      'Old key kept by an administrator: 1',
-      'Never sent or refused when about to send: 1',
+      'Old key kept: 1',
+      'Not started (never sent, or refused when about to send): 1',
       'New key removed again: 1',
       'In progress: 1',
       'Other: 3',
@@ -131,7 +131,7 @@ describe('RotationRunPage', () => {
     );
     await open();
     const rows = await screen.findAllByTestId('run-location');
-    expect(within(rows[0]).getByText(/Sent 2 times, last at/)).toBeInTheDocument();
+    expect(within(rows[0]).getByText(/Sent again 2 times after a lost answer, last at/)).toBeInTheDocument();
     expect(within(rows[1]).getByText(/account Alice connects with/)).toBeInTheDocument();
     expect(within(rows[0]).queryByText(/Sent 0 times/)).not.toBeInTheDocument();
   });
@@ -139,7 +139,9 @@ describe('RotationRunPage', () => {
   it('shows the licence-locked notice state through its catalogue text', async () => {
     serve({ ...runFixture({ paused_license: true, actions_allowed: ['abort'] }), notice_state: { code: 'ALC-ROT-0011', reason: 'rotation.paused_license' } });
     await open();
-    expect(await screen.findByText('The rotation is paused because the license has expired or could not be checked.')).toBeInTheDocument();
+    expect(await screen.findByText(/Paused: the license expired or could not be checked/)).toBeInTheDocument();
+    // one message for one fact: the banner, not the catalogue text on top of it
+    expect(screen.queryByText('The rotation is paused because the license has expired or could not be checked.')).not.toBeInTheDocument();
   });
 
   it('offers the stop-and-undo line only when the page shows the button (role-gated)', async () => {

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router';
 import { policyKey, ROTATION_RUNS_KEY, sshKey } from '../api/queryKeys';
-import { deletePolicy, disablePolicy, enablePolicy, getPolicy, listRuns, type Policy } from '../api/rotation';
+import { deletePolicy, disablePolicy, enablePolicy, getPolicy, listRuns, TERMINAL_RUN, type Policy } from '../api/rotation';
 import { formatDateTime } from '../datetime';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
@@ -31,7 +31,7 @@ export function RotationPolicyPanel({ keyId, policyId, isAdmin }: { keyId: strin
   const p = policy.data;
   // A previewed (planned) run is started by Run now; only a run that is already going blocks it.
   const open = p?.open_rotation_id ? runs.data?.items.find((r) => r.id === p.open_rotation_id) : undefined;
-  const started = open !== undefined && !['dry_run_notified', 'completed', 'aborted', 'needs_attention', 'cancelled'].includes(open.status);
+  const started = open !== undefined && open.status !== 'dry_run_notified' && !TERMINAL_RUN.has(open.status);
   const [deleting, setDeleting] = useState(false);
 
   const refresh = () => {

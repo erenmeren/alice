@@ -75,8 +75,9 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
           .then((page) => setRecovered((r) => ({ ...r, [id]: page.items })))
           .catch((e: unknown) => {
             // The follow-up failed: the vault is reported again (and the stale rows leave), never left at "Running".
-            setRecovered((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== id)));
-            setRetryErrors((r) => ({ ...r, [id]: { error: e, at: Date.now() } }));
+            setRecovered((r) => (e instanceof ApiError && e.status === 404 ? { ...r, [id]: [] } : Object.fromEntries(Object.entries(r).filter(([k]) => k !== id))));
+            // A vault that is gone by now is dropped without a word, as in the first read.
+            if (!(e instanceof ApiError && e.status === 404)) setRetryErrors((r) => ({ ...r, [id]: { error: e, at: Date.now() } }));
           });
       }
     }, 3_000);

@@ -299,4 +299,29 @@ describe('ImportHistory', () => {
       vi.useRealTimers();
     }
   });
+
+  it('drops a retried vault silently when its follow-up read answers 404', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let calls = 0;
+      server.use(
+        ...sessionHandlers(sessionFor('operator')),
+        http.get('/api/v1/targets', () => HttpResponse.json({ items: [vaultFixture], next_cursor: null })),
+        http.get('/api/v1/targets/:id/kv/imports', () => {
+          calls++;
+          if (calls === 1) return errorResponse(502, 'ALC-AKV-0001', 'azure.auth_failed');
+          if (calls === 2) return HttpResponse.json({ items: [kvImportFixture({ id: 'i1', name: 'r-name', state: 'running' })], next_cursor: null });
+          return errorResponse(404, 'ALC-SYS-0001', 'system.not_found');
+        }),
+      );
+      await renderWithAuth(<ImportHistory certificateId="cert-1" />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+      await screen.findByText('Running');
+      await vi.advanceTimersByTimeAsync(3100);
+      await waitFor(() => expect(screen.queryByText('Running')).not.toBeInTheDocument());
+      expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
