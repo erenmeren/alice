@@ -232,7 +232,8 @@ type ReleaseInput struct {
 // (license.ErrLocked otherwise: a version held for the license is not released while the license still
 // refuses changes); ErrNotFound for an unknown version or one of a deleted vault; ErrVersionNotHeld; and
 // a version held for its incomplete chain needs ConfirmIncompleteChain (ErrChainUnconfirmed: F-17 is not
-// relaxed). Releasing deploys nothing and does not turn automatic deployment on: it only lets the
+// relaxed). A release is also the trace the planner reads: it sets notified_at (if unset), and the planner
+// never holds a version again that has it, so a released version is not held again by the reopening rule. Releasing deploys nothing and does not turn automatic deployment on: it only lets the
 // planner see the version again, which may hold it again if the chain is still incomplete when the
 // secret is read. Audited kv.version.released (who, which version, which reason was released); a
 // refusal that is a matter of authority, the lock or the confirmation is audited kv.version.release_denied.
@@ -302,7 +303,7 @@ JOIN kv_certificates kc ON kc.id = v.kv_certificate_id WHERE v.id = $1 FOR UPDAT
 		case reason == heldIncompleteChain && !in.ConfirmIncompleteChain:
 			return denyWith(&denial, "chain_unconfirmed", uuid.Nil, ErrChainUnconfirmed)
 		}
-		if _, err := tx.Exec(ctx, "UPDATE kv_certificate_versions SET held = false, held_reason = '' WHERE id = $1", in.VersionID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE kv_certificate_versions SET held = false, held_reason = '', notified_at = coalesce(notified_at, $2) WHERE id = $1`, in.VersionID, s.clock.Now().UTC()); err != nil {
 			return fmt.Errorf("inventory: release the version: %w", err)
 		}
 		details := map[string]string{"kv_certificate_id": cert.String(), "certificate_name": name, "version": version, "reason": reason, "held": "false"}

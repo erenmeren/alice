@@ -166,10 +166,40 @@ func TestAutoDeployPlanTable(t *testing.T) {
 				f.sn.locations[i].served = &f.leaf
 			}
 		}, deploy: func(f *planFixture) []uuid.UUID { return nil }},
-		{name: "detected before the reopening and already mailed: held without a second mail", mutate: func(f *planFixture) {
+		{name: "detected before the reopening but already released or mailed (notified_at set): planned, never held again", mutate: func(f *planFixture) {
 			f.sn.reopened = tp(planNow.Add(-30 * time.Minute))
 			f.cur().notifiedAt = tp(planNow)
-		}, deploy: func(f *planFixture) []uuid.UUID { return nil }, hold: true},
+		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave},
+		{name: "detected before the reopening and deployed to two of three websites: no hold, the wave continues", mutate: func(f *planFixture) {
+			f.sn.reopened = tp(planNow.Add(-30 * time.Minute))
+			for _, l := range []uuid.UUID{f.a, f.b} {
+				f.sn.deployments = append(f.sn.deployments, planDeployment{location: l, version: &f.v2, automatic: true, done: true, status: "succeeded",
+					createdAt: planNow.Add(-3 * time.Hour), finishedAt: tp(planNow.Add(-2 * time.Hour))})
+			}
+		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.c} }, budget: AutoDeployWave},
+		{name: "half-done wave before the lock (two deployed, one failed): no hold, the failed one follows the retry rule", mutate: func(f *planFixture) {
+			f.sn.reopened = tp(planNow.Add(-30 * time.Minute))
+			for _, l := range []uuid.UUID{f.a, f.b} {
+				f.sn.deployments = append(f.sn.deployments, planDeployment{location: l, version: &f.v2, automatic: true, done: true, status: "succeeded",
+					createdAt: planNow.Add(-3 * time.Hour), finishedAt: tp(planNow.Add(-2 * time.Hour))})
+			}
+			f.failed(f.c, 90*time.Minute, "deployment.failed")
+		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.c} }, budget: AutoDeployWave},
+		{name: "a deployment of the version of any trigger or status means a wave began: no hold", mutate: func(f *planFixture) {
+			f.sn.reopened = tp(planNow.Add(-30 * time.Minute))
+			f.sn.deployments = append(f.sn.deployments, planDeployment{location: f.a, version: &f.v2, done: true, status: "failed", errorCode: "deployment.failed",
+				createdAt: planNow.Add(-5 * time.Hour), finishedAt: tp(planNow.Add(-4 * time.Hour))})
+		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave},
+		{name: "superseded refusals are neutral: three websites, no stop", mutate: func(f *planFixture) {
+			f.failed(f.a, 3*time.Hour, "kv.version_superseded")
+			f.failed(f.b, 3*time.Hour, "kv.version_superseded")
+			f.failed(f.c, 3*time.Hour, "kv.version_superseded")
+		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave},
+		{name: "wave-stopped refusals are neutral: three websites, no stop", mutate: func(f *planFixture) {
+			f.failed(f.a, 3*time.Hour, "kv.wave_stopped")
+			f.failed(f.b, 3*time.Hour, "kv.wave_stopped")
+			f.failed(f.c, 3*time.Hour, "kv.wave_stopped")
+		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave},
 		{name: "three failures of the version stop the wave, with one notice of the stop", mutate: func(f *planFixture) {
 			f.failed(f.a, 3*time.Hour, "deployment.failed")
 			f.failed(f.b, 3*time.Hour, "deployment.failed")
@@ -307,4 +337,18 @@ func TestAutoDeployPlanIsDeterministic(t *testing.T) {
 	f := newPlanFixture()
 	f.failed(f.b, 2*time.Hour, "deployment.failed")
 	assert.Equal(t, planAutoDeploy(f.sn), planAutoDeploy(f.sn))
+}
+
+// n4: the mail cap counts per vault and per kind; a different kind or vault has its own allowance, and a
+// kind over its limit is counted for the summary.
+func TestPlanRunMailCapIsPerVaultAndKind(t *testing.T) {
+	r := &planRun{limit: 2, sent: map[string]int{}, over: map[string]int{}, vaults: map[string]string{}}
+	v1, v2 := uuid.New(), uuid.New()
+	assert.True(t, r.take(v1, "a", TemplateKVNewVersion))
+	assert.True(t, r.take(v1, "a", TemplateKVNewVersionHeldChain), "held and available are one kind")
+	assert.False(t, r.take(v1, "a", TemplateKVNewVersionHeldLicense))
+	assert.True(t, r.take(v1, "a", TemplateKVSkippedExpired), "another kind has its own allowance")
+	assert.True(t, r.take(v1, "a", TemplateKVAutoDeployStopped))
+	assert.True(t, r.take(v2, "b", TemplateKVNewVersion), "another vault too")
+	assert.Equal(t, map[string]int{v1.String() + "/new": 1}, r.over)
 }

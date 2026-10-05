@@ -193,12 +193,14 @@ func (s *Service) KVDeployPrecheck(ctx context.Context, id uuid.UUID) error {
 		certMissing, enabled, held, admin bool
 		vaultStatus                       string
 		current, stoppedVersion, version  string
+		createdAt                         time.Time
+		autoSince                         *time.Time
 		vExpires, vNotBefore              *time.Time
 		cNotBefore, cNotAfter             time.Time
 	)
 	err := s.pool.QueryRow(ctx, `SELECT d.trigger, d.state, d.binding_id, l.binding_id, b.id IS NOT NULL AND b.deleted_at IS NULL, coalesce(b.auto_deploy, false),
     vt.status, vt.deleted_at IS NOT NULL, kc.missing_since IS NOT NULL, v.enabled, v.expires, v.not_before, v.held,
-    c.not_before, c.not_after, coalesce(u.role = 'admin' AND u.disabled_at IS NULL, false), kc.current_version, v.version, coalesce(b.stopped_version, '')
+    c.not_before, c.not_after, coalesce(u.role = 'admin' AND u.disabled_at IS NULL, false), kc.current_version, v.version, coalesce(b.stopped_version, ''), d.created_at, b.auto_since
 FROM deployments d
 JOIN kv_certificate_versions v ON v.id = d.kv_version_id
 JOIN kv_certificates kc ON kc.id = v.kv_certificate_id
@@ -208,7 +210,7 @@ JOIN certificates c ON c.id = d.certificate_id
 LEFT JOIN bindings b ON b.id = d.binding_id
 LEFT JOIN users u ON u.id = d.requested_by
 WHERE d.id = $1`, id).Scan(&trigger, &state, &binding, &locBinding, &bindingLive, &auto, &vaultStatus, &vaultDeleted, &certMissing, &enabled,
-		&vExpires, &vNotBefore, &held, &cNotBefore, &cNotAfter, &admin, &current, &version, &stoppedVersion)
+		&vExpires, &vNotBefore, &held, &cNotBefore, &cNotAfter, &admin, &current, &version, &stoppedVersion, &createdAt, &autoSince)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var one int
 		if e := s.pool.QueryRow(ctx, "SELECT 1 FROM deployments WHERE id = $1", id).Scan(&one); e == nil {
@@ -228,6 +230,10 @@ WHERE d.id = $1`, id).Scan(&trigger, &state, &binding, &locBinding, &bindingLive
 	case binding == nil || !bindingLive || locBinding == nil || *locBinding != *binding:
 		return ErrBindingGone
 	case trigger == triggerKVRenewal && !auto:
+		return ErrAutoDeployOff
+	case trigger == triggerKVRenewal && autoSince != nil && createdAt.Before(*autoSince):
+		// Created in an automatic-deployment period that ended (off, then on again): the "deploy manually"
+		// mail said this version would not be deployed.
 		return ErrAutoDeployOff
 	case trigger == triggerKVRenewal && version != current: // a newer version replaced it since the planner queued it
 		return ErrVersionSuperseded

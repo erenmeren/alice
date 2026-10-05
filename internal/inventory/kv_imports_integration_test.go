@@ -59,7 +59,8 @@ func (f *importFixture) created(version int) providers.ImportResult {
 
 func (f *importFixture) get(id uuid.UUID) inventory.KVImport {
 	f.h.t.Helper()
-	im, err := f.h.svc.Import(f.h.ctx, f.vault, id)
+	// Read as a job run reads (a claim): the vault may be deleted by the test, and the API's check is pinned elsewhere.
+	im, err := f.h.svc.Import(inventory.WithClaim(f.h.ctx, inventory.Claim{JobID: uuid.New(), Attempt: 1}), f.vault, id)
 	require.NoError(f.h.t, err)
 	return im
 }
@@ -709,11 +710,6 @@ func TestImportFinishRacesAPoll(t *testing.T) {
 
 // What an import leaves behind: no key, no PFX, in any form, whatever the outcome.
 func TestImportLeavesNoKeyMaterialBehind(t *testing.T) {
-	forms := func(raw []byte) map[string]string {
-		out := map[string]string{"raw": string(raw), "hex": hex.EncodeToString(raw), "base64": base64.StdEncoding.EncodeToString(raw),
-			"base64url": base64.RawURLEncoding.EncodeToString(raw)}
-		return out
-	}
 	run := func(t *testing.T, name string, flow func(f *importFixture, im inventory.KVImport) []byte) {
 		t.Run(name, func(t *testing.T) {
 			f := newImportFixture(t)
@@ -722,15 +718,7 @@ func TestImportLeavesNoKeyMaterialBehind(t *testing.T) {
 			pfx := flow(f, im)
 			dump := dumpEverything(h)
 			block, _ := pem.Decode(f.nw.KeyPEM)
-			needles := forms(block.Bytes[20:60])
-			if len(pfx) > 80 {
-				for k, v := range forms(pfx[20:60]) {
-					needles["pfx "+k] = v
-				}
-			}
-			for k, n := range needles {
-				assert.NotContains(t, dump, n, "the %s form is nowhere (database rows, logs)", k)
-			}
+			assert.Empty(t, keyLeaks(dump, block.Bytes, pfx), "the key and the PFX are nowhere (database rows, logs), in no encoding")
 			assert.NotContains(t, dump, "PRIVATE KEY-----\n")
 		})
 	}
@@ -1239,4 +1227,90 @@ func TestImportsAndPlannerWorkWithoutAnEmailSender(t *testing.T) {
 	_, err = f.h.svc.SweepImports(claimed)
 	assert.ErrorIs(t, err, inventory.ErrClaimLost)
 	assert.Equal(t, inventory.ImportQueued, f.get(other.ID).State)
+}
+
+// keyLeaks lists the forms of the key and the PFX found in text: raw, hex, and slices of the base64 and
+// base64url ENCODING OF THE WHOLE buffer at several offsets (so a whole-buffer encoding in a log line is
+// found whatever its alignment).
+func keyLeaks(text string, key, pfx []byte) []string {
+	var found []string
+	check := func(label string, raw []byte) {
+		if len(raw) < 80 {
+			return
+		}
+		needles := map[string]string{"raw": string(raw[20:60]), "hex": hex.EncodeToString(raw[20:60])}
+		for _, enc := range []struct {
+			name string
+			text string
+		}{{"base64", base64.StdEncoding.EncodeToString(raw)}, {"base64url", base64.RawURLEncoding.EncodeToString(raw)}} {
+			for i, off := range []int{8, 21, 34, 47, 60, 77} {
+				if off+40 <= len(enc.text) {
+					needles[enc.name+" slice "+string(rune('a'+i))] = enc.text[off : off+40]
+				}
+			}
+		}
+		for k, n := range needles {
+			if strings.Contains(text, n) {
+				found = append(found, label+" "+k)
+			}
+		}
+	}
+	check("key", key)
+	check("pfx", pfx)
+	return found
+}
+
+// The scan is not blind: a PFX logged as base64 (at DEBUG, say) is found, in either alphabet, and so is a key.
+func TestKeyLeakScanFindsALoggedPFX(t *testing.T) {
+	f := newImportFixture(t)
+	im := f.mustRequest("scan-name", false)
+	m, err := f.h.svc.ImportMaterial(f.h.ctx, im.ID)
+	require.NoError(t, err)
+	pfx := append([]byte(nil), m.Request.PFX.Bytes()...)
+	m.Request.PFX.Zero()
+	block, _ := pem.Decode(f.nw.KeyPEM)
+	assert.Empty(t, keyLeaks(dumpEverything(f.h), block.Bytes, pfx))
+	f.h.logs.WriteString("level=DEBUG msg=sent body=" + base64.StdEncoding.EncodeToString(pfx) + "\n")
+	assert.NotEmpty(t, keyLeaks(dumpEverything(f.h), block.Bytes, pfx))
+	f.h.logs.Reset()
+	f.h.logs.WriteString("x " + base64.RawURLEncoding.EncodeToString(pfx) + "\n")
+	assert.NotEmpty(t, keyLeaks(dumpEverything(f.h), block.Bytes, pfx))
+	f.h.logs.Reset()
+	f.h.logs.WriteString("x " + base64.StdEncoding.EncodeToString(block.Bytes) + "\n")
+	assert.NotEmpty(t, keyLeaks(dumpEverything(f.h), block.Bytes, pfx))
+}
+
+// n5: a job that ended `succeeded` while its import is still queued or running is ended too; n4: the sweep
+// is bounded per call and the next call continues; the material path audits an unreadable deployment.
+func TestSweepEdges(t *testing.T) {
+	t.Run("succeeded job", func(t *testing.T) {
+		f := newImportFixture(t)
+		q := f.mustRequest("sw-q", false)
+		r := f.toState("sw-r", inventory.ImportRunning)
+		f.exec("UPDATE jobs SET status = 'succeeded' WHERE id IN ($1, $2)", *q.JobID, *r.JobID)
+		n, err := f.h.svc.SweepImports(f.h.ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 2, n)
+		assert.Equal(t, inventory.ImportFailed, f.get(q.ID).State)
+		assert.Equal(t, inventory.ReasonImportCancelled, f.get(q.ID).ErrorCode)
+		assert.Equal(t, inventory.ImportUncertain, f.get(r.ID).State)
+	})
+	t.Run("bounded per call", func(t *testing.T) {
+		defer inventory.SetSweepBatch(2)()
+		f := newImportFixture(t)
+		var ids []uuid.UUID
+		for _, name := range []string{"b-one", "b-two", "b-three", "b-four", "b-five"} {
+			im := f.mustRequest(name, false)
+			f.exec("UPDATE jobs SET status = 'cancelled' WHERE id = $1", *im.JobID)
+			ids = append(ids, im.ID)
+		}
+		for _, want := range []int{2, 2, 1, 0} {
+			n, err := f.h.svc.SweepImports(f.h.ctx)
+			require.NoError(t, err)
+			assert.Equal(t, want, n)
+		}
+		for _, id := range ids {
+			assert.Equal(t, inventory.ImportFailed, f.get(id).State)
+		}
+	})
 }

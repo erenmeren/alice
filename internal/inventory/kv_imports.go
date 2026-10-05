@@ -71,6 +71,9 @@ const ImportOutcomeUnknownAfter = 24 * time.Hour
 // it, SweepImports (or any poll of the vault) ends it as outcome unknown whatever the listings said.
 const ImportOutcomeUnknownCap = 72 * time.Hour
 
+// importSweepBatch bounds the imports one SweepImports call changes (the next call continues; a variable for tests).
+var importSweepBatch = 200
+
 // ImportInput asks for a certificate Alice holds to be imported into a vault under Name. ConfirmExisting is
 // the Administrator's confirmation that Name may already exist (a new version, ruling S9).
 type ImportInput struct {
@@ -83,15 +86,19 @@ type ImportInput struct {
 type KVImport struct {
 	ID, CertificateID, VaultID uuid.UUID
 	Name                       string
-	NewVersion                 bool // the name existed and the person confirmed a new version
-	State                      string
-	Thumbprint, Version        string
-	ErrorCode                  string
-	ErrorParams                map[string]string
-	CanRetry                   bool // failed before anything reached the vault: a new request is safe
-	JobID, RequestedBy         *uuid.UUID
-	CreatedAt                  time.Time
-	SentAt, FinishedAt         *time.Time
+	// NewVersion records the person's CONFIRMATION (ConfirmExisting, or the name was known to exist), not
+	// that the name existed: a confirmation for a name the inventory does not know is kept (the vault may
+	// have it). It is what ReplaceExisting is sent as. The audit detail "new_version" of kv.import.requested
+	// has the same meaning.
+	NewVersion          bool
+	State               string
+	Thumbprint, Version string
+	ErrorCode           string
+	ErrorParams         map[string]string
+	CanRetry            bool // failed before anything reached the vault: a new request is safe
+	JobID, RequestedBy  *uuid.UUID
+	CreatedAt           time.Time
+	SentAt, FinishedAt  *time.Time
 }
 
 // ImportMaterial is what the job sends: the request with the PFX in it. The caller zeroes Request.PFX as
@@ -917,8 +924,8 @@ WHERE target_id = $1 AND state IN ('queued', 'running', 'uncertain') AND finishe
 
 // SweepImports ends the imports nothing else will end, for the job layer to call periodically (about every
 // minute; it needs no poll): an uncertain import ImportOutcomeUnknownCap after its send fails as outcome
-// unknown (with its mail), whatever the vault's state; a queued import whose job is dead, cancelled or
-// pruned fails with kv.import_job_lost (nothing was sent); a running one whose job is dead becomes uncertain
+// unknown (with its mail), whatever the vault's state; a queued import whose job is succeeded, failed, dead, cancelled or
+// gone fails with kv.import_cancelled (nothing was sent); a running one whose job ended becomes uncertain
 // (a send may have happened: it is never sent again). It returns how many imports it changed; each ending
 // has its audit row; every import is handled in its own transaction under the vault's lock and fenced to the
 // job's claim when the context has one.
@@ -927,8 +934,8 @@ func (s *Service) SweepImports(ctx context.Context) (int, error) {
 	rows, err := s.pool.Query(ctx, `SELECT i.id, i.target_id FROM kv_imports i LEFT JOIN jobs j ON j.id = i.job_id
 WHERE i.finished_at IS NULL AND (
     (i.state = 'uncertain' AND i.sent_at <= $1)
- OR (i.state IN ('queued', 'running') AND (i.job_id IS NULL OR j.id IS NULL OR j.status IN ('failed', 'cancelled', 'dead'))))
-ORDER BY i.id LIMIT 200`, now.Add(-ImportOutcomeUnknownCap))
+ OR (i.state IN ('queued', 'running') AND (i.job_id IS NULL OR j.id IS NULL OR j.status IN ('succeeded', 'failed', 'cancelled', 'dead'))))
+ORDER BY i.id LIMIT $2`, now.Add(-ImportOutcomeUnknownCap), importSweepBatch)
 	if err != nil {
 		return 0, fmt.Errorf("inventory: find the imports to sweep: %w", err)
 	}

@@ -5,6 +5,7 @@ package inventory_test
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -784,4 +785,182 @@ func TestAutoDeployHoldsAVersionDetectedBeforeTheReopening(t *testing.T) {
 	// An Administrator releases the held one: it is then not the current version, so nothing is deployed for it.
 	_, err := h.svc.ReleaseVersion(h.ctx, f.admin, inventory.ReleaseInput{VaultID: f.vault, KVCertificateID: f.web, VersionID: f.versionID(f.web, ver(2))})
 	require.NoError(t, err)
+}
+
+// reopened detects version 2, locks the licence and lets it return: the planner's reopening hold is due.
+func (f *autoFixture) lockAndReopen(id string) {
+	f.h.t.Helper()
+	f.h.clock.Advance(40 * 24 * time.Hour)
+	require.NoError(f.h.t, f.h.lic.Tick(f.h.ctx))
+	f.h.installLicense(id, 5, 365)
+	require.NoError(f.h.t, f.h.lic.Allow(license.ClassChange))
+}
+
+// F1: a version the planner held, or the poll held during the lock, and that an Administrator released
+// after the reopening, is planned and never held again.
+func TestAutoDeployReleasedVersionIsNeverHeldAgain(t *testing.T) {
+	t.Run("held by the planner, then released", func(t *testing.T) {
+		f := newAutoFixture(t, true)
+		f.renew(2, nil)
+		f.lockAndReopen("LIC-F1A")
+		assert.Zero(t, f.plan())
+		require.Equal(t, 1, f.h.audits("kv.version.held"))
+		v2 := f.versionID(f.web, ver(2))
+		for range 3 {
+			_, err := f.h.svc.ReleaseVersion(f.h.ctx, f.admin, inventory.ReleaseInput{VaultID: f.vault, KVCertificateID: f.web, VersionID: v2})
+			if err == nil {
+				break
+			}
+		}
+		assert.Equal(t, 3, f.plan(), "released: the next run plans the deployments")
+		assert.Equal(t, 1, f.h.audits("kv.version.held"), "exactly one hold audit")
+		assert.Len(t, f.deps(ver(2)), 3)
+	})
+	t.Run("held by the poll during the lock, released after the reopening", func(t *testing.T) {
+		f := newAutoFixture(t, true)
+		f.renew(2, nil)
+		f.exec("UPDATE kv_certificate_versions SET held = true, held_reason = 'license' WHERE id = $1", f.versionID(f.web, ver(2)))
+		f.lockAndReopen("LIC-F1B")
+		_, err := f.h.svc.ReleaseVersion(f.h.ctx, f.admin, inventory.ReleaseInput{VaultID: f.vault, KVCertificateID: f.web, VersionID: f.versionID(f.web, ver(2))})
+		require.NoError(t, err)
+		assert.Equal(t, 3, f.plan())
+		assert.Zero(t, f.h.audits("kv.version.held"), "never re-held")
+	})
+}
+
+// F2: the reopening hold applies only to a version nothing was deployed of, with a website the planner could
+// deploy to now.
+func TestAutoDeployReopeningHoldOnlyForUndeployedVersions(t *testing.T) {
+	t.Run("deployed to two of three, the third unsupported: no hold, no mail", func(t *testing.T) {
+		f := newAutoFixture(t, true)
+		f.renew(2, nil)
+		v2 := f.versionID(f.web, ver(2))
+		for _, loc := range []uuid.UUID{f.loc1, f.loc2} {
+			reqs, err := f.h.svc.RequestKVDeployment(f.h.ctx, f.admin, inventory.KVDeployInput{StrictSession: true, BindingID: f.bind.ID, VersionID: v2, LocationIDs: []uuid.UUID{loc}})
+			require.NoError(t, err)
+			f.finish(reqs[0].ID, inventory.DeployStatusSucceeded, "")
+		}
+		f.exec("UPDATE certificate_locations SET supported = false WHERE id = $1", f.loc3)
+		f.lockAndReopen("LIC-F2A")
+		assert.Zero(t, f.plan())
+		assert.Zero(t, f.h.audits("kv.version.held"))
+		assert.Empty(t, f.mails())
+	})
+	t.Run("nothing deployed and no website it could deploy to: no hold, no mail", func(t *testing.T) {
+		f := newAutoFixture(t, true)
+		f.renew(2, nil)
+		f.exec("UPDATE certificate_locations SET supported = false WHERE binding_id = $1", f.bind.ID)
+		f.lockAndReopen("LIC-F2B")
+		assert.Zero(t, f.plan())
+		assert.Zero(t, f.h.audits("kv.version.held"))
+		assert.Empty(t, f.mails())
+	})
+	t.Run("a half-done wave continues under the normal rules", func(t *testing.T) {
+		f := newAutoFixture(t, true)
+		f.renew(2, nil)
+		require.Equal(t, 3, f.plan())
+		ds := f.deps(ver(2))
+		f.finish(ds[0].ID, inventory.DeployStatusSucceeded, "")
+		f.finish(ds[1].ID, inventory.DeployStatusSucceeded, "")
+		f.finish(ds[2].ID, inventory.DeployStatusFailed, "deployment.failed")
+		f.lockAndReopen("LIC-F2C")
+		f.h.clock.Advance(2 * time.Hour) // the retry rule
+		require.NoError(t, f.h.lic.Tick(f.h.ctx))
+		assert.Equal(t, 1, f.plan(), "the failed website is retried")
+		assert.Zero(t, f.h.audits("kv.version.held"))
+	})
+}
+
+// n1: a run that ends early still sends the summaries of the notices it marked over the limit.
+func TestAutoDeploySummariesGoOutWhenTheRunEndsEarly(t *testing.T) {
+	defer inventory.SetPlanMailLimit(1)()
+	defer inventory.SetAutoDeployPage(3)()
+	b := newBindFixture(t)
+	h := b.h
+	const n = 7
+	names := make([]string, n)
+	for i := range names {
+		names[i] = "early-" + string(rune('a'+i))
+	}
+	all := func(base int) providers.DiscoveryResult {
+		var list []providers.KVCertificate
+		for i, name := range names {
+			list = append(list, h.kvc(name, b.issue(name+".example.test", pki.ECDSA256), ver(base+i), h.clock.Now(), true))
+		}
+		return kvResult(list...)
+	}
+	h.reconcile(b.vault, all(100))
+	ids := (&autoFixture{bindFixture: b}).moreLocations(n)
+	for i, name := range names {
+		_, err := h.svc.CreateBinding(h.ctx, b.admin, inventory.BindingInput{KVCertificateID: h.certRow(b.vault, name).ID, LocationIDs: []uuid.UUID{ids[i]}})
+		require.NoError(t, err)
+	}
+	h.clock.Advance(time.Minute)
+	h.reconcile(b.vault, all(200))
+	ctx, cancel := context.WithCancel(h.ctx)
+	calls := 0
+	defer inventory.SetPlanPageHook(func() {
+		calls++
+		if calls == 2 {
+			cancel() // the second page is read, then the run is cancelled
+		}
+	})()
+	_, err := h.svc.PlanKVAutoDeploy(ctx)
+	assert.Error(t, err)
+	marked := h.count("SELECT count(*) FROM kv_certificate_versions WHERE notified_at IS NOT NULL AND version = ANY($1)",
+		[]string{ver(200), ver(201), ver(202), ver(203), ver(204), ver(205), ver(206)})
+	require.Equal(t, 3, marked, "the first page was committed")
+	individual := h.emails(inventory.TemplateKVNewVersion)
+	var summed int
+	rows, err := h.db.Owner.Query(h.ctx, "SELECT params->>'count' FROM notifications_outbox WHERE template_key IN ($1, $2)", inventory.TemplateKVNewVersionsMore, inventory.TemplateKVNewVersionsMoreOne)
+	require.NoError(t, err)
+	for rows.Next() {
+		var c string
+		require.NoError(t, rows.Scan(&c))
+		k, _ := strconv.Atoi(c)
+		summed += k
+	}
+	rows.Close()
+	assert.Equal(t, marked, individual+summed, "individual mails and summaries account for every marked notice")
+}
+
+// n10: queued automatic deployments from before the binding's current auto_since belong to an automatic
+// period that ended; they are refused without a vault read. A deployment created after it passes.
+func TestPrecheckRefusesAutomaticDeploymentsOfAnEndedPeriod(t *testing.T) {
+	f := newAutoFixture(t, true)
+	h, ctx := f.h, f.h.ctx
+	f.renew(2, nil)
+	require.Equal(t, 3, f.plan())
+	old := f.deps(ver(2))
+	f.h.clock.Advance(time.Minute)
+	f.setAuto(false)
+	f.h.clock.Advance(time.Minute)
+	f.setAuto(true)
+	assert.ErrorIs(t, h.svc.KVDeployPrecheck(ctx, old[0].ID), inventory.ErrAutoDeployOff)
+	// A deployment created in the new period passes (a manual request is not subject to it at all).
+	f.h.clock.Advance(time.Minute)
+	f.renew(3, nil)
+	f.finishAll(ver(2), inventory.DeployStatusFailed, inventory.ReasonAutoDeployOff)
+	require.Equal(t, 3, f.plan())
+	fresh := f.deps(ver(3))
+	assert.NoError(t, h.svc.KVDeployPrecheck(ctx, fresh[0].ID))
+}
+
+// m3: the savepoint path: a competing deployment of the middle website appears just before the planner's
+// insert; the other two websites still get theirs in the same run.
+func TestAutoDeploySavepointKeepsTheOtherWebsites(t *testing.T) {
+	f := newAutoFixture(t, true)
+	f.renew(2, nil)
+	ids := sortedIDs(f.loc1, f.loc2, f.loc3)
+	middle := ids[1]
+	defer inventory.SetPlanInsertHook(func(loc uuid.UUID) {
+		if loc != middle {
+			return
+		}
+		f.exec(`INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, state, status, new_fingerprint, cert_path, key_path, created_at)
+SELECT gen_random_uuid(), $2, l.id, l.target_id, 'manual', 'queued', 'pending', $3, l.cert_path, l.key_path, now() FROM certificate_locations l WHERE l.id = $1`,
+			middle, f.cert.ID, f.cert.Fingerprint)
+	})()
+	require.Equal(t, 2, f.plan())
+	assert.ElementsMatch(t, []uuid.UUID{ids[0], ids[2]}, f.locationsOf(ver(2)))
 }

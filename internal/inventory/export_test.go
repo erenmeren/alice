@@ -178,3 +178,17 @@ func SetPlanPageHook(f func()) (restore func()) {
 	planPageHook = f
 	return func() { planPageHook = old }
 }
+
+// SetSweepBatch bounds the imports one SweepImports call changes.
+func SetSweepBatch(n int) (restore func()) {
+	old := importSweepBatch
+	importSweepBatch = n
+	return func() { importSweepBatch = old }
+}
+
+// SetPlanInsertHook installs the hook that runs before the planner inserts a website's deployment.
+func SetPlanInsertHook(f func(location uuid.UUID)) (restore func()) {
+	old := planInsertHook
+	planInsertHook = f
+	return func() { planInsertHook = old }
+}

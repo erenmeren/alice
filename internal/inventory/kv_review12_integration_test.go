@@ -751,3 +751,20 @@ func TestSecretInHandWithALostClaim(t *testing.T) {
 	assert.ErrorIs(t, err, inventory.ErrClaimLost)
 	assert.Zero(t, h.secretReads("failure"))
 }
+
+// n4: a deployment the material step cannot read at all (here: its version table is unavailable) is a refusal
+// with a secret in hand: audited as material_unavailable, the error reaches the caller.
+func TestMaterialUnavailableIsAudited(t *testing.T) {
+	b := newBindFixture(t)
+	h, ctx := b.h, b.h.ctx
+	bind := b.create(b.admin, b.web, b.loc1)
+	id := b.beginKV(b.operator, bind.ID, b.versionID(b.web, ver(1)), false, b.loc1)[0]
+	b.exec("ALTER TABLE kv_certificate_versions RENAME TO kv_certificate_versions_away")
+	_, secret := b.fullSecret()
+	_, err := h.svc.KVDeployMaterial(ctx, id, secret)
+	b.exec("ALTER TABLE kv_certificate_versions_away RENAME TO kv_certificate_versions")
+	require.Error(t, err)
+	d := h.auditDetails("kv.secret_read")
+	require.Len(t, d, 1)
+	assert.Equal(t, "material_unavailable", d[0]["reason"])
+}

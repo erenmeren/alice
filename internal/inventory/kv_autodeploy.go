@@ -41,6 +41,25 @@ func (s *Service) PlanKVAutoDeploy(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	run := &planRun{limit: planMailLimit, sent: map[string]int{}, over: map[string]int{}, vaults: map[string]string{}}
+	reopened, err := s.gateReopenedAt(ctx) // once per run: not a second connection per binding
+	if err != nil {
+		return 0, err
+	}
+	run.reopened = reopened
+	created, err := s.planPages(ctx, run)
+	// The summaries go out on every way out of the run (a lost claim, a cancelled context): the marks of the
+	// notices over the limit are committed already, and a summary is what tells the Administrators of them.
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedTimeout)
+	defer cancel()
+	if serr := s.sendPlanSummaries(sctx, run); serr != nil {
+		s.log.Error("could not queue the planner's summary mails", "error_type", fmt.Sprintf("%T", serr))
+		err = errors.Join(err, serr)
+	}
+	return created, err
+}
+
+// planPages plans the candidate bindings page by page (see PlanKVAutoDeploy).
+func (s *Service) planPages(ctx context.Context, run *planRun) (int, error) {
 	var (
 		created int
 		errs    []error
@@ -87,11 +106,11 @@ ORDER BY b.id LIMIT $1`, autoDeployBindings, after)
 			}
 		}
 	}
-	if err := s.sendPlanSummaries(ctx, run); err != nil {
-		errs = append(errs, err)
-	}
 	return created, errors.Join(errs...)
 }
+
+// planInsertHook runs before a website's deployment is inserted (tests: a competing deployment appears).
+var planInsertHook func(location uuid.UUID)
 
 // planPageHook runs after a page of candidates was read (tests: the world changes between the read and the plan).
 var planPageHook func()
@@ -99,10 +118,32 @@ var planPageHook func()
 // planRun is what one run of the planner remembers for its mail bound: per vault and kind of notice, how
 // many individual mails were sent and how many were left for the summary.
 type planRun struct {
-	limit  int
-	sent   map[string]int
-	over   map[string]int
-	vaults map[string]string // key -> vault name
+	limit    int
+	sent     map[string]int
+	over     map[string]int
+	vaults   map[string]string // key -> vault name
+	reopened *time.Time        // when the licence gate last reopened, read once per run
+}
+
+// tentative is a copy of the run's counts for one binding's transaction: the counts of a transaction that
+// is retried or rolled back must not reach the run, so they are merged only after the commit.
+func (r *planRun) tentative() *planRun {
+	t := &planRun{limit: r.limit, sent: map[string]int{}, over: map[string]int{}, vaults: map[string]string{}}
+	for k, v := range r.sent {
+		t.sent[k] = v
+	}
+	return t
+}
+
+// merge adds a committed transaction's counts to the run.
+func (r *planRun) merge(t *planRun) {
+	r.sent = t.sent
+	for k, v := range t.over {
+		r.over[k] += v
+	}
+	for k, v := range t.vaults {
+		r.vaults[k] = v
+	}
 }
 
 // noticeKind groups the notice templates into the kinds the summary mails speak of.
@@ -170,8 +211,10 @@ func noticeKind2(key string) string {
 // deployments created.
 func (s *Service) planBinding(ctx context.Context, id uuid.UUID, remaining int, run *planRun) (int, error) {
 	created := 0
+	var mails *planRun
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		created = 0
+		mails = run.tentative()
 		if err := checkClaim(ctx, tx); err != nil {
 			return err
 		}
@@ -224,9 +267,7 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 		if err := s.readPlanSnapshot(ctx, tx, id, certID, current, &sn); err != nil {
 			return err
 		}
-		if sn.reopened, err = s.gateReopenedAt(ctx); err != nil { // the poll's own helper
-			return err
-		}
+		sn.reopened = run.reopened // the poll's own helper, read once per run
 		p := planAutoDeploy(sn)
 		var holdAudit *audit.Event
 		var cur *planVersion
@@ -237,12 +278,17 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 		}
 
 		// Websites first: a vanished server aborts before anything is written, and the next run sees it gone.
-		if len(p.deploy) > 0 && p.budget > 0 && cur != nil && cur.leaf != nil {
+		// For a hold the same checks decide whether there is a website to deploy to at all.
+		candidates, holdApplied := p.deploy, false
+		if p.hold != nil {
+			candidates = p.hold.candidates
+		}
+		if len(candidates) > 0 && (p.budget > 0 || p.hold != nil) && cur != nil && cur.leaf != nil {
 			leaf, err := readDeployCertificate(ctx, tx, *cur.leaf)
 			if err != nil {
 				return err
 			}
-			targets, locs, err := s.lockDeployTargets(ctx, tx, p.deploy)
+			targets, locs, err := s.lockDeployTargets(ctx, tx, candidates)
 			if errors.Is(err, ErrNotFound) {
 				s.log.Debug("automatic deployment skipped: a website or its server is gone", "binding_id", id)
 				return nil
@@ -256,15 +302,27 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 			if _, err := versionRefusal(dv, kvCertInfo{id: certID, missing: missing}, leaf, Actor{Role: rbac.Operator}, now); err != nil {
 				return nil
 			}
+			if p.hold != nil {
+				for _, locID := range candidates {
+					l := locs[locID]
+					if _, err := s.checkDeployLocation(ctx, tx, leaf, l, targets[l.target]); err == nil {
+						holdApplied = true
+						break
+					}
+				}
+			}
 			a := Actor{Audit: jobsActor}
 			src := deploySource{Trigger: triggerKVRenewal, BindingID: &id, KVVersionID: &cur.id, Version: cur.version}
 			for _, locID := range p.deploy {
-				if created >= p.budget {
+				if p.hold != nil || created >= p.budget {
 					break
 				}
 				l := locs[locID]
 				if _, err := s.checkDeployLocation(ctx, tx, leaf, l, targets[l.target]); err != nil {
 					continue // no person asked: no audit row, the website is simply not ready
+				}
+				if planInsertHook != nil {
+					planInsertHook(locID)
 				}
 				// A savepoint per website: a refusal of the insert aborts only that website's statements.
 				sp, err := tx.Begin(ctx)
@@ -286,6 +344,9 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 		}
 
 		for _, n := range p.notices {
+			if n.onHold && !holdApplied {
+				continue // nothing could be deployed: nothing is held and nothing is said
+			}
 			col := "notified_at"
 			if n.skipped {
 				col = "skipped_notified_at"
@@ -303,14 +364,14 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 			if err != nil {
 				return fmt.Errorf("inventory: mark the notice: %w", err)
 			}
-			if s.notifier != nil && run.take(vaultID, vaultName, n.template) {
+			if s.notifier != nil && mails.take(vaultID, vaultName, n.template) {
 				if err := s.notifier.NotifyAdmins(ctx, tx, n.template, map[string]string{"target_name": vaultName, "certificate_name": certName}); err != nil {
 					return fmt.Errorf("inventory: queue the notice: %w", err)
 				}
 			}
 		}
 
-		if p.hold != nil {
+		if p.hold != nil && holdApplied {
 			tag, err := tx.Exec(ctx, "UPDATE kv_certificate_versions SET held = true, held_reason = $2 WHERE id = $1 AND NOT held", p.hold.version, heldLicense)
 			if err != nil {
 				return fmt.Errorf("inventory: hold the version: %w", err)
@@ -328,7 +389,7 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 				return fmt.Errorf("inventory: stop the wave: %w", err)
 			}
 			if tag.RowsAffected() == 1 {
-				if s.notifier != nil && run.take(vaultID, vaultName, TemplateKVAutoDeployStopped) {
+				if s.notifier != nil && mails.take(vaultID, vaultName, TemplateKVAutoDeployStopped) {
 					if err := s.notifier.NotifyAdmins(ctx, tx, TemplateKVAutoDeployStopped, map[string]string{"target_name": vaultName,
 						"certificate_name": certName, "count": strconv.Itoa(p.stop.failed)}); err != nil {
 						return fmt.Errorf("inventory: queue the stop notice: %w", err)
@@ -348,6 +409,9 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 		}
 		return nil
 	})
+	if err == nil {
+		run.merge(mails)
+	}
 	return created, err
 }
 

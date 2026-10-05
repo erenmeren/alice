@@ -5,6 +5,7 @@ package inventory
 // applies the plan in the same transaction.
 
 import (
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -88,6 +89,7 @@ type planNotice struct {
 	version  uuid.UUID
 	template string
 	skipped  bool // marks skipped_notified_at instead of notified_at
+	onHold   bool // sent only if the hold is applied (the apply step finds a website it could deploy to)
 }
 
 // HoldRuleDetectedBeforeReopening is the audit detail hold_rule of a version the planner held because it
@@ -97,7 +99,12 @@ const HoldRuleDetectedBeforeReopening = "detected_before_reopening"
 
 // planHold asks to hold the version for the licence: it was detected before the gate last reopened, so no
 // person has seen it since the lock.
-type planHold struct{ version uuid.UUID }
+// candidates are the websites the plan would deploy to; the hold is applied only if the apply step finds one
+// of them it can actually deploy to now.
+type planHold struct {
+	version    uuid.UUID
+	candidates []uuid.UUID
+}
 
 type planStop struct {
 	version uuid.UUID
@@ -176,6 +183,16 @@ func lacksVersion(sn planSnapshot, v *planVersion) bool {
 			}
 		}
 		if !done {
+			return true
+		}
+	}
+	return false
+}
+
+// anyDeploymentOf reports whether the binding has any deployment of the version, whatever its trigger or status.
+func anyDeploymentOf(sn planSnapshot, v *planVersion) bool {
+	for _, d := range sn.deployments {
+		if d.version != nil && *d.version == v.id {
 			return true
 		}
 	}
@@ -368,14 +385,15 @@ func planAutoDeploy(sn planSnapshot) autoPlan {
 	if older && cur.skippedAt == nil {
 		notify(cur, TemplateKVSkippedOlder, true)
 	}
-	if sn.reopened != nil && !cur.detectedAt.After(*sn.reopened) && len(fresh)+len(retries) > 0 {
-		// Detected before the licence gate last reopened (a renewal that arrived just before a lock and was
-		// not planned yet): without a person it would roll out the moment the licence returns. Held for the
-		// licence instead; the existing "held" mail goes once; websites already deployed stay as they are.
-		p.hold = &planHold{version: cur.id}
-		if cur.notifiedAt == nil {
-			notify(cur, TemplateKVNewVersionHeldLicense, false)
-		}
+	if sn.reopened != nil && !cur.detectedAt.After(*sn.reopened) && cur.notifiedAt == nil && len(fresh)+len(retries) > 0 && !anyDeploymentOf(sn, cur) {
+		// Detected before the licence gate last reopened (a renewal that arrived just before a lock and was not
+		// planned yet), no wave of it ever began (no deployment of it at all, any trigger or status) and not
+		// released by an Administrator (ReleaseVersion sets notified_at): without a person it would roll out the
+		// moment the licence returns. Held for the licence instead, if the apply step finds a website it could
+		// really deploy to; the existing "held" mail goes once. A wave that began before the lock continues under
+		// the normal rules.
+		p.hold = &planHold{version: cur.id, candidates: append(slices.Clone(fresh), retries...)}
+		p.notices = append(p.notices, planNotice{version: cur.id, template: TemplateKVNewVersionHeldLicense, onHold: true})
 		return p
 	}
 	p.budget = max(0, min(AutoDeployWave-inFlight, sn.remaining))
