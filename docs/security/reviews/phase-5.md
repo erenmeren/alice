@@ -64,6 +64,15 @@ the sign-off; a cell that reads PENDING-FINAL-RUN was not filled yet.
 | 15 | The whole gate: lint, test, coverage, test-ssh, build, release-symcheck, i18n-check, web-lint, web-coverage, vuln, secrets-scan, fs-scan, the e2e stack with hardening and Playwright, image-check, image-scan | `make ci` | ok | not run as a whole at 6e26e42 | PENDING-FINAL-RUN |
 | 16 | The optional real-Azure suite | `make test-azure` | — | **never run** (no subscription) | **never run** (no subscription) |
 
+Mutation evidence of the final review of the provider area (a scratch copy outside the repository, at 6e26e42): of
+44 mutants of the provider and certificate code, 32 turned a named test red; 5 were reported red without a named
+failing test, most likely by the 90-second test timeout (a hang; not confirmed per mutant): the limiter's backward
+step, the `Retry-After` bound, the body cap, the SDK's retries switched back on and the limiter's wait removed; 6
+did not compile after the mutation and are inconclusive, not evidence (the scope pin, the `completeRefusal` code
+check, the secret's ID and version match, the secret read's total budget, the `errNoBody` branch, the challenge
+authority prefix; and on the certificate side `ExportPFX`'s key match makes 7); 1 survived (clearing the decoded
+bytes of a refused second private-key block in a PEM secret, not pinned by a test).
+
 `internal/jobs` and `internal/inventory` are close to their floors (89.1 against 89, and 89.1 against 88 at 6e26e42).
 
 ## Threat notes
@@ -307,13 +316,14 @@ Listings:
 Secrets:
 
 27. **A non-exportable certificate's secret**: that the key is absent is documented; the container form of the
-    key-less value (a PFX without a key, PEM with certificates only) is a guess. Alice recognises a PFX without a
-    key from go-pkcs12's answer ("private key missing") to a PFX that decrypts with the empty password and holds
-    certificates but no key (pinned by tests on the Java trust-store and the openssl/.NET shapes). If Azure's form
-    differs, the deployment still ends with the one closed reason `ALC-AKV-0016` and nothing is changed, but the
-    certificate is not marked **Monitor only**. Alice itself reads such a secret only when the policy changed
-    after its last poll, so check by hand: read the non-exportable certificate's secret with
-    `az keyvault secret show` and see whether it is a PFX (or PEM) with certificates only.
+    key-less value is a guess. Alice recognises two forms as "no key": a PEM value with certificates and no key
+    block, and a PFX that decrypts and authenticates with the empty password and holds certificates but no key bag
+    (go-pkcs12's answer "pkcs12: private key missing"; pinned by tests on the Java trust-store and the openssl/.NET
+    shapes). Those mark the certificate **Monitor only**. Any other form (for example a PFX without a MAC, which
+    go-pkcs12 refuses as "only password-protected PFX is implemented") ends the deployment as `ALC-AKV-0016` without
+    the mark. So a wrong guess changes the outcome, though never safety: nothing is sent to a server either way.
+    Alice itself reads such a secret only when the policy changed after its last poll, so check by hand: read the
+    non-exportable certificate's secret with `az keyvault secret show` and see which form it has.
 28. **Whether switching a policy to non-exportable affects existing versions** (the fake changes the policy, not
     old versions).
 29. **The content-type strings** are exactly `application/x-pkcs12` and `application/x-pem-file`. If Azure adds
@@ -358,6 +368,17 @@ Azure and scope:
   poll [15]. A version Alice never saw as current cannot be deployed [17].
 - **The access check never probes import** [28]. A deployment needs the vault reachable when it runs (no cached
   key). An `auth_failed` vault keeps being polled, at most hourly [12]. One token request per job session [33].
+- **The access check does not read a certificate's details** (it lists only). An identity with `list` but not
+  `get` on certificates (an access-policy vault) passes the check, and then every poll discards the whole
+  certificate listing: one certificate whose detail read keeps failing (other than not found or the poll's own
+  deadline) fails the list of certificates, with a role message. Fail-safe; documented, not changed in this phase.
+- **Each job session signs in afresh**: one token request to Entra per poll, access check, deployment read and
+  import, for every vault [33]; with many vaults this counts against Entra's limits.
+- **The per-vault rate limit counts attempts, not HTTP requests**: one attempt can be the SDK's challenge probe, a
+  token request and the call, so for a short time (the first call of each client) up to about three times the
+  limit of 5 per second reaches the wire.
+- **Managed identity lends the machine's identity to every Administrator** who may add a vault: any vault name can
+  be added with it, so the identity should hold only the roles Alice needs [4].
 - **Connections cannot be prepared while the license is locked**: only switching automatic deployment off and
   deleting a connection work then [22].
 - **The import PFX uses 3DES and SHA-1 with an empty password**; no confidentiality is claimed for it [25].
@@ -432,7 +453,8 @@ Chains and keys:
   (an hour later at the earliest), with a new email, because automatic deployment never carries a confirmation.
 - **An Administrator's operate-scope API token can confirm an incomplete chain** for a version that is not held, as
   on Phase 4's deploy route.
-- **A value without a private key is recognised from the PFX decoder's answer** [45]. If Azure's key-less form
+- **A value without a private key is recognised from the PFX decoder's error text** "pkcs12: private key missing"
+  (pinned by tests, so an upgrade of go-pkcs12 that changes it fails them) [45]. If Azure's key-less form
   differs, a deployment ends `ALC-AKV-0016` and the certificate is not marked **Monitor only** (item 27 above). The
   first deployment that meets a key-less secret reads it (audited) and fails `ALC-AKV-0016`; only later requests
   answer `ALC-AKV-0013` up front.
