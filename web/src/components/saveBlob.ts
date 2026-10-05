@@ -7,9 +7,12 @@ export function saveBlob(blob: Blob, fileName: string): void {
   a.download = fileName;
   a.rel = 'noopener';
   document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  try {
+    a.click();
+  } finally {
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
 }
 
 // keyFileName is the name the browser saves a private key under: alice-<label>.key with the label reduced to lower-case

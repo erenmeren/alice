@@ -871,7 +871,7 @@
     "deployServer": "Server",
     "deployUser": "User on the server",
     "deployFile": "File",
-    "deployNoServers": "Alice has no server it can deploy to yet. Add a server and confirm its host key first.",
+    "deployNoServers": "Alice has no server it can deploy to yet. Add a server and confirm its fingerprint first.",
     "deployNoFiles": "Alice has not found this user's key files yet. Scan the server, then try again.",
     "deployFrom": "Allowed source addresses (optional)",
     "deployFromHelp": "Comma-separated IP addresses or networks, for example 10.0.0.0/8. Leave empty to allow any address.",

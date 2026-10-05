@@ -50,8 +50,11 @@ export function SSHKeyDetailPage() {
       <Title order={1}>{t('sshKeys.detailTitle')}</Title>
       {mk && (
         <Stack gap="xs" data-testid="managed-key">
+          <Title order={2} size="h4">
+            {t('sshKeys.managedTitle')}
+          </Title>
           <Group gap={6}>
-            <Badge variant="light" color="indigo" tt="none">
+            <Badge variant="light" color="teal" tt="none">
               {t('sshKeys.managedBadge')}
             </Badge>
             {mk.retired_at && (
@@ -65,10 +68,10 @@ export function SSHKeyDetailPage() {
               </Badge>
             )}
           </Group>
-          <Text size="sm" fw={600}>
+          <Text size="sm" fw={600} translate="no">
             {mk.label}
           </Text>
-          <Code style={WRAP}>{mk.comment}</Code>
+          <Code translate="no" style={WRAP}>{mk.comment}</Code>
           <Text size="sm">{t('sshKeys.downloadCount', { count: mk.download_count })}</Text>
           {mk.last_downloaded_at && <Text size="sm">{t('sshKeys.lastDownloaded', { date: formatDateTime(mk.last_downloaded_at, i18n.language) })}</Text>}
           {mk.rotated_from && (

@@ -141,7 +141,9 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
   // A rate-limited or failed answer may not have recorded the activity either.
   if (tookMark && (res.status === 429 || res.status >= 500)) returnActivity();
   if (res.status === 204) return undefined as T;
-  if (blob && res.ok) {
+  // A successful answer is the file only when it says so: an HTML or JSON 200 (a proxy, an SPA fallback) is not a key.
+  const isFile = blob && res.ok && (res.headers.get('Content-Type') ?? '').startsWith('application/octet-stream');
+  if (isFile) {
     try {
       return (await res.blob()) as T;
     } catch (e) {
@@ -157,7 +159,7 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
     if (e instanceof Error && e.name === 'AbortError') throw e;
     throw new NetworkError('network failure', { cause: e });
   }
-  if (!res.ok) {
+  if (!res.ok || blob) {
     const err = new ApiError(res.status, parseErrorBody(text), parseRetryAfter(res.headers.get('Retry-After')));
     if (err.status === 401 && err.reason === 'auth.unauthenticated') {
       // A request sent with a session that has since been replaced carried the old cookie: its

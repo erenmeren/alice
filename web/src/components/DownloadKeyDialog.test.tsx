@@ -9,6 +9,7 @@ import { DownloadKeyDialog } from './DownloadKeyDialog';
 
 const PASS = 'Canary-passphrase-4711';
 const REASON = 'quarterly access review';
+const OCTET = { headers: { 'Content-Type': 'application/octet-stream' } };
 const PATH = '/api/v1/ssh-keys/k1/actions/download-private-key';
 
 let created: Blob[];
@@ -142,7 +143,7 @@ describe('DownloadKeyDialog', () => {
       http.post(PATH, async ({ request }) => {
         calls++;
         bodies.push(await request.json());
-        return calls === 1 ? errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required') : new HttpResponse('file-bytes');
+        return calls === 1 ? errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required') : new HttpResponse('file-bytes', OCTET);
       }),
       http.post('/api/v1/auth/stepup', () => HttpResponse.json(sessionFor('admin'))),
     );

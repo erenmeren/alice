@@ -230,4 +230,11 @@ describe('activity mark (AUD-01)', () => {
       reason: 'sshkey.own_key_protected',
     });
   });
+
+  it('refuses a successful blob answer that is not the file', async () => {
+    server.use(http.post('/api/v1/echo', () => HttpResponse.json({ spa: true })));
+    await expect(apiFetch<Blob>('/api/v1/echo', { method: 'POST', body: {}, responseType: 'blob' })).rejects.toBeInstanceOf(ApiError);
+    server.use(http.post('/api/v1/echo', () => new HttpResponse('<html>', { headers: { 'Content-Type': 'text/html' } })));
+    await expect(apiFetch<Blob>('/api/v1/echo', { method: 'POST', body: {}, responseType: 'blob' })).rejects.toMatchObject({ status: 200 });
+  });
 });

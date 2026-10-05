@@ -16,6 +16,7 @@ import {
   nginxTargetFixture,
   platformKeyFixture,
   installedStatus,
+  jobFixture,
   sessionFor,
   sessionHandlers,
   sshKeyFixture,
@@ -138,10 +139,12 @@ describe.each(['en', 'tr'] as const)('the SSH key dialogs in %s', (lang) => {
   it('render with no untranslated keys', async () => {
     const admin = sessionFor('admin');
     const session = { ...admin, user: { ...admin.user, locale: lang } };
-    const key = { ...sshKeyFixture(), managed: true, managed_key: managedKeyFixture({ download_count: 2, last_downloaded_at: '2026-10-06T08:00:00Z', rotated_from: 'old', retired_at: '2026-10-07T00:00:00Z' }), locations: [] };
+    const key = { ...sshKeyFixture(), managed: true, managed_key: managedKeyFixture({ download_count: 2, last_downloaded_at: '2026-10-06T08:00:00Z', rotated_from: 'old' }), locations: [] };
     server.use(
       ...sessionHandlers(session, installedStatus),
       http.get('/api/v1/ssh-keys/:id', () => HttpResponse.json(key)),
+      http.post('/api/v1/ssh-keys/:id/actions/deploy', () => HttpResponse.json({ job_id: 'job-d', status_url: '/api/v1/jobs/job-d' }, { status: 202 })),
+      http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-d', type: 'sshkey.add', result: { result: 'verified' } }))),
       http.get('/api/v1/targets/:id/key-files', () => HttpResponse.json({ items: [{ os_user: 'deploy', files: ['/home/deploy/.ssh/authorized_keys'], default_file: '/home/deploy/.ssh/authorized_keys' }], scanned_at: null })),
       ...dataHandlers,
     );
@@ -154,9 +157,16 @@ describe.each(['en', 'tr'] as const)('the SSH key dialogs in %s', (lang) => {
     expectNoRawKeys();
     await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: t('Cancel', 'İptal') }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: t('Deploy to a server', 'Sunucuya dağıt') }));
+    const deploy = await screen.findByRole('dialog', { name: t('Deploy this key', 'Bu anahtarı dağıt') });
+    await within(deploy).findByRole('option', { name: 'deploy' });
+    expectNoRawKeys();
+    await userEvent.click(within(deploy).getByRole('button', { name: t('Deploy', 'Dağıt') }));
+    await within(deploy).findByText(t('Alice added the key and verified a login with it.', 'Alice anahtarı ekledi ve anahtarla oturum açılabildiğini doğruladı.'));
+    expectNoRawKeys();
   });
 
-  it('render the generate and deploy dialogs', async () => {
+  it('render the generate dialog', async () => {
     const operator = sessionFor('operator');
     server.use(...sessionHandlers({ ...operator, user: { ...operator.user, locale: lang } }, installedStatus), ...dataHandlers);
     await renderRoute('/ssh-keys', { languages: [lang] });

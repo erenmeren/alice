@@ -13,8 +13,14 @@ import { ErrorAlert } from './ErrorAlert';
 import { fieldErrorsOf } from './fieldErrors';
 import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert, StoppedJobAlert } from './JobErrorAlert';
 
-// isDeployable: a Linux or Nginx server whose host key is confirmed (Alice can sign in to it).
-const isDeployable = (tg: Target) => (tg.type === 'linux' || tg.type === 'nginx') && tg.status !== 'pending_host_key';
+// isDeployable: a Linux or Nginx server Alice can sign in to and may change: the host key is confirmed and has not changed,
+// and the server is not disabled (the server refuses those, so the screen does not offer them).
+const UNUSABLE: ReadonlySet<Target['status']> = new Set<Target['status']>(['pending_host_key', 'host_key_changed', 'disabled']);
+const isDeployable = (tg: Target) => (tg.type === 'linux' || tg.type === 'nginx') && !UNUSABLE.has(tg.status);
+
+// TONE: how an outcome is shown. Only a verified login or an already present key is a plain success; an unverified add or
+// an undone one needs the operator's eye, and a key that did not work and could not be removed is an error.
+const TONE: Record<string, string> = { verified: 'green', already_present: 'green', unverified: 'yellow', undone: 'yellow', failed: 'red', undo_failed: 'red' };
 
 interface UserFiles {
   os_user: string;
@@ -49,7 +55,8 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
   const [jobError, setJobError] = useState<JobError | null>(null);
   const [blocked, setBlocked] = useState(false);
   const [stopped, setStopped] = useState(false);
-  const [result, setResult] = useState('');
+  const [result, setResult] = useState<{ key: string; tone: string } | null>(null);
+  const [outcomeKey, setOutcomeKey] = useState('');
 
   const targets = useQuery({
     queryKey: [...TARGETS_KEY, 'deploy-servers'],
@@ -76,6 +83,7 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
     setJobError(null);
     setBlocked(false);
     setStopped(false);
+    setOutcomeKey('');
     try {
       const fromText = from.trim();
       const accepted = await deployKey(keyId, {
@@ -90,9 +98,12 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
       void client.invalidateQueries({ queryKey: sshKey(keyId) });
       void client.invalidateQueries({ queryKey: SSH_KEYS_KEY });
       void client.invalidateQueries({ queryKey: TARGETS_KEY });
+      const known = i18n.exists(`sshKeys.deployResult.${outcome}`);
       if (job.status === 'succeeded') {
-        setResult(i18n.exists(`sshKeys.deployResult.${outcome}`) ? `sshKeys.deployResult.${outcome}` : 'ui.unexpectedError');
+        setResult(known ? { key: `sshKeys.deployResult.${outcome}`, tone: TONE[outcome] ?? 'yellow' } : { key: 'ui.unexpectedError', tone: 'yellow' });
       } else {
+        // A failed job still says what became of the key (undone, or still on the server).
+        setOutcomeKey(known ? outcome : '');
         if (job.status === 'blocked_license') setBlocked(true);
         else if (!job.error) setStopped(true);
         setJobError(job.error);
@@ -106,8 +117,8 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
   if (result)
     return (
       <Stack gap="sm">
-        <Alert color="green" role="status">
-          {t(result)}
+        <Alert color={result.tone} role="status">
+          {t(result.key)}
         </Alert>
         <Group justify="flex-end">
           <Button onClick={onClose}>{t('ui.close')}</Button>
@@ -120,6 +131,12 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
       <Stack gap="sm">
         {targets.isSuccess && servers.length === 0 && <Text size="sm">{t('sshKeys.deployNoServers')}</Text>}
         <ErrorAlert error={targets.error ?? files.error} />
+        {!!server && files.isPending && (
+          <Group gap="sm" role="status" aria-live="polite">
+            <Loader size="sm" aria-hidden />
+            <Text size="sm">{t('ui.loading')}</Text>
+          </Group>
+        )}
         <NativeSelect
           data-autofocus
           label={t('sshKeys.deployServer')}
@@ -141,6 +158,7 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
           }}
           data={users.map((u) => ({ value: u.os_user, label: u.os_user }))}
           error={fieldErrors.os_user}
+          translate="no"
           disabled={busy}
         />
         <NativeSelect
@@ -149,6 +167,7 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
           onChange={(e) => setPickedFile(e.currentTarget.value)}
           data={(user?.files ?? []).map((f) => ({ value: f, label: f }))}
           error={fieldErrors.file_path}
+          translate="no"
           disabled={busy}
           styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }}
         />
@@ -174,6 +193,11 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
         {error instanceof JobTimeoutError ? <StillWorkingAlert /> : <ErrorAlert error={error} />}
         {blocked && <BlockedJobAlert />}
         {stopped && <StoppedJobAlert />}
+        {outcomeKey !== '' && (
+          <Alert color={TONE[outcomeKey] ?? 'yellow'} role="status">
+            {t(`sshKeys.deployResult.${outcomeKey}`)}
+          </Alert>
+        )}
         <JobErrorAlert error={jobError} />
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>

@@ -34,4 +34,18 @@ describe('saveBlob', () => {
     expect(revoke).toHaveBeenCalledWith('blob:x');
     click.mockRestore();
   });
+
+  it('removes the link and revokes the object URL even when click() throws', () => {
+    vi.useFakeTimers();
+    const revoke = vi.fn();
+    Object.assign(URL, { createObjectURL: () => 'blob:y', revokeObjectURL: revoke });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    expect(() => saveBlob(new Blob(['x']), 'k.key')).toThrow('blocked');
+    expect(document.querySelector('a[download]')).toBeNull();
+    vi.runAllTimers();
+    expect(revoke).toHaveBeenCalledWith('blob:y');
+    click.mockRestore();
+  });
 });

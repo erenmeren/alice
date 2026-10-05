@@ -871,7 +871,7 @@
     "deployServer": "Sunucu",
     "deployUser": "Sunucudaki kullanıcı",
     "deployFile": "Dosya",
-    "deployNoServers": "Alice henüz anahtar dağıtabileceği bir sunucuya sahip değil. Önce bir sunucu ekleyip ana makine anahtarını onaylayın.",
+    "deployNoServers": "Alice'in anahtar dağıtabileceği bir sunucu henüz yok. Önce bir sunucu ekleyip sunucunun parmak izini onaylayın.",
     "deployNoFiles": "Alice bu kullanıcının anahtar dosyalarını henüz bulmadı. Sunucuyu tarayıp yeniden deneyin.",
     "deployFrom": "İzin verilen kaynak adresler (isteğe bağlı)",
     "deployFromHelp": "Virgülle ayrılmış IP adresleri ya da ağlar; örneğin 10.0.0.0/8. Her adrese izin vermek için boş bırakın.",

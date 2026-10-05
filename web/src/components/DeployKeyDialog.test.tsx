@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { KeyFiles } from '../api/sshkeys';
-import { errorResponse, jobFixture, nginxTargetFixture, operatorSession, sessionHandlers, targetFixture, vaultFixture } from '../test/fixtures';
+import { errorResponse, jobFixture, sessionFor, nginxTargetFixture, operatorSession, sessionHandlers, targetFixture, vaultFixture } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderApp } from '../test/render';
 import { server } from '../test/server';
@@ -126,5 +126,76 @@ describe('DeployKeyDialog', () => {
     const user = await screen.findByLabelText('User on the server');
     expect(await within(user).findByRole('option', { name: evil })).toBeInTheDocument();
     expect(document.querySelector('img[src="x"]')).toBeNull();
+  });
+
+  it('does not offer a disabled server or one whose host key changed', async () => {
+    server.use(
+      ...sessionHandlers(operatorSession),
+      http.get('/api/v1/targets', () =>
+        HttpResponse.json({
+          items: [
+            { ...targetFixture, id: 'x1', name: 'off-01', status: 'disabled' },
+            { ...targetFixture, id: 'x2', name: 'changed-01', status: 'host_key_changed' },
+            nginxTargetFixture,
+          ],
+          next_cursor: null,
+        }),
+      ),
+      http.get('/api/v1/targets/:id/key-files', () => HttpResponse.json(FILES)),
+    );
+    await open();
+    const sel = await screen.findByLabelText('Server');
+    await waitFor(() => expect(within(sel).getAllByRole('option').map((o) => o.textContent)).toEqual(['web-nginx']));
+  });
+
+  it('offers no server at all when only unusable ones exist', async () => {
+    server.use(...sessionHandlers(operatorSession), http.get('/api/v1/targets', () => HttpResponse.json({ items: [{ ...targetFixture, status: 'disabled' }], next_cursor: null })));
+    await open();
+    expect(await screen.findByText(/confirm its fingerprint first/)).toBeInTheDocument();
+  });
+
+  it('shows a loading state while the key files load', async () => {
+    world();
+    server.use(
+      http.get('/api/v1/targets/:id/key-files', async () => {
+        await new Promise((r) => setTimeout(r, 150));
+        return HttpResponse.json(FILES);
+      }),
+    );
+    await open();
+    expect(await screen.findByText('Loading…')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Loading…')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Deploy' })).toBeEnabled();
+  });
+
+  it('marks the user and file selects as not to be translated', async () => {
+    world();
+    await open();
+    expect(await screen.findByLabelText('User on the server')).toHaveAttribute('translate', 'no');
+    expect(screen.getByLabelText('File')).toHaveAttribute('translate', 'no');
+  });
+
+  describe.each([
+    ['en', 'verified', 'succeeded', 'Alice added the key and verified a login with it.', 'green'],
+    ['en', 'unverified', 'succeeded', 'Alice added the key but could not test a login with it.', 'yellow'],
+    ['en', 'already_present', 'succeeded', 'The key was already on the server.', 'green'],
+    ['en', 'bogus', 'succeeded', 'Something went wrong.', 'yellow'],
+    ['en', 'undone', 'failed', 'The server did not accept the key, so Alice removed it again.', 'yellow'],
+    ['en', 'undo_failed', 'failed', 'The key did not work and Alice could not remove it again.', 'red'],
+    ['tr', 'verified', 'succeeded', 'Alice anahtarı ekledi ve anahtarla oturum açılabildiğini doğruladı.', 'green'],
+    ['tr', 'unverified', 'succeeded', 'Alice anahtarı ekledi ancak anahtarla oturum açmayı deneyemedi.', 'yellow'],
+    ['tr', 'undone', 'failed', 'Sunucu anahtarı kabul etmedi; bu nedenle Alice onu yeniden kaldırdı.', 'yellow'],
+    ['tr', 'undo_failed', 'failed', 'Anahtar çalışmadı ve Alice onu yeniden kaldıramadı.', 'red'],
+  ] as const)('outcome in %s: %s (%s job)', (lang, outcome, status, text, color) => {
+    it(`shows "${text}" in the ${color} presentation`, async () => {
+      world();
+      if (lang === 'tr') server.use(...sessionHandlers(sessionFor('operator', 'tr')));
+      deployReturns({ status, result: { result: outcome }, error: status === 'failed' ? { code: 'ALC-KEY-0005', reason: 'sshkey.verify_failed' } : null });
+      await renderApp(<DeployKeyDialog keyId="k1" opened onClose={() => {}} />, [lang === 'en' ? 'en-US' : 'tr-TR']);
+      await userEvent.click(await screen.findByRole('button', { name: lang === 'en' ? 'Deploy' : 'Dağıt' }));
+      const alert = (await screen.findByText(text)).closest('.mantine-Alert-root') as HTMLElement;
+      expect(alert.getAttribute('style')).toContain(`--alert-bg: var(--mantine-color-${color}-light)`);
+      expectNoRawKeys();
+    });
   });
 });
