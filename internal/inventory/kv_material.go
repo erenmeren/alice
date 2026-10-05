@@ -40,8 +40,10 @@ const WarnChainIncomplete = "chain_incomplete"
 // every path. The deployment must be queued or in its pre-check (ErrDeploymentState otherwise: after
 // the first send nothing is read again) and from a vault (ErrDeploymentState). KVDeployPrecheck runs
 // first: its refusals read, write and audit nothing. After it, a refusal does not change the database
-// except for a failure row of kv.secret_read (closed reason secret_mismatch, secret_unreadable, expired,
-// chain_unconfirmed or pfx_busy; not written by a run that lost its claim): ErrPFXBusy (retryable: the PFX decode slots are taken); ErrSecretUnreadable (not a
+// except for a failure row of kv.secret_read (closed reason secret_mismatch, secret_unreadable, not_exportable,
+// expired, chain_unconfirmed or pfx_busy; not written by a run that lost its claim) and, for a secret with the
+// certificates but no key (not_exportable, answered as ErrSecretUnreadable), the certificate and the version
+// stored as not exportable: ErrPFXBusy (retryable: the PFX decode slots are taken); ErrSecretUnreadable (not a
 // certificate with a matching key in a known container, or too large); ErrCertificateExpired (the
 // secret's leaf expired); ErrSecretMismatch (another leaf, thumbprint or key type than the recorded
 // version); ErrChainUnconfirmed (the chain is incomplete and an Administrator did not confirm it when
@@ -92,6 +94,17 @@ func (s *Service) KVDeployMaterial(ctx context.Context, id uuid.UUID, secret pro
 	if err != nil {
 		if errors.Is(err, certs.ErrExpired) {
 			return refuse("expired", ErrCertificateExpired)
+		}
+		if errors.Is(err, certs.ErrNoKey) {
+			// The certificates without the key: the policy became non-exportable without a new version,
+			// which no poll notices. Store it, so the next request is refused as not exportable and the
+			// page shows Monitor only; this attempt ends as an unreadable secret.
+			merr := s.markNotExportable(ctx, m)
+			if merr != nil {
+				s.log.Error("could not mark a vault certificate not exportable", "error_type", fmt.Sprintf("%T", merr))
+			}
+			m2, rerr := refuse("not_exportable", ErrSecretUnreadable)
+			return m2, errors.Join(rerr, merr)
 		}
 		return refuse("secret_unreadable", ErrSecretUnreadable)
 	}
@@ -322,6 +335,30 @@ func (s *Service) recordSecretRead(ctx context.Context, m Material, v certs.Vali
 			Result: audit.Success, Details: map[string]string{"purpose": "deploy", "deployment_id": m.Deployment.ID.String(),
 				"kv_certificate_id": m.KV.KVCertificateID.String(), "certificate_name": m.KV.Name, "version": m.KV.Version}})
 		return err
+	})
+}
+
+// markNotExportable stores the deployment's certificate and version as not exportable (a secret read
+// returned the certificates without the key), under the vault's lock, fenced to the job's claim. A
+// later poll that reads the certificate's policy stores what the policy says.
+func (s *Service) markNotExportable(ctx context.Context, m Material) error {
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := checkClaim(ctx, tx); err != nil {
+			return err
+		}
+		if _, err := lockVault(ctx, tx, m.KV.VaultID); err != nil {
+			if errors.Is(err, ErrNotFound) { // the vault was deleted meanwhile: nothing to mark
+				return nil
+			}
+			return err
+		}
+		if _, err := tx.Exec(ctx, "UPDATE kv_certificate_versions SET exportable = false WHERE id = $1", m.KV.VersionID); err != nil {
+			return fmt.Errorf("inventory: mark the version not exportable: %w", err)
+		}
+		if _, err := tx.Exec(ctx, "UPDATE kv_certificates SET exportable = false WHERE id = $1", m.KV.KVCertificateID); err != nil {
+			return fmt.Errorf("inventory: mark the certificate not exportable: %w", err)
+		}
+		return nil
 	})
 }
 

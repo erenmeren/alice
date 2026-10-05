@@ -85,12 +85,17 @@ func TestParseKVSecretRefusals(t *testing.T) {
 	require.NoError(t, err)
 	many := bytes.Repeat(leaf.CertPEM, maxCertificates+1)
 
+	trustStore, err := pkcs12.Modern.EncodeTrustStore([]*x509.Certificate{leaf.Cert, ca.Intermediate}, "")
+	require.NoError(t, err)
+
 	cases := []struct {
 		name  string
 		ct    string
 		value []byte
 		want  error
 	}{
+		// A non-exportable certificate's secret: a PFX with the certificates and no key (as the PEM form without a key).
+		{"pfx without a key", ContentTypePKCS12, []byte(base64.StdEncoding.EncodeToString(trustStore)), ErrNoKey},
 		{"unknown content type", "text/plain", []byte(kvPFX(leaf, ca)), ErrKVContentType},
 		{"blank content type", "", []byte(kvPFX(leaf, ca)), ErrKVContentType},
 		{"content type with a parameter", ContentTypePKCS12 + "; charset=utf-8", []byte(kvPFX(leaf, ca)), ErrKVContentType},

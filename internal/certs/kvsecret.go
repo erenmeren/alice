@@ -5,8 +5,11 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"strings"
 	"time"
+
+	"software.sslmate.com/src/go-pkcs12"
 )
 
 // kvScratch owns the buffers ParseKVSecret fills with key material (the decoded PFX, the PEM key
@@ -71,10 +74,22 @@ func parseKVSecret(contentType string, value []byte, now time.Time, roots *x509.
 	}
 	v, err := ValidateUpload(u, now, roots)
 	if err != nil {
+		if errors.Is(err, ErrPFXPassword) && u.PFX != nil && pfxHoldsCertificatesOnly(u.PFX) {
+			// A non-exportable certificate's secret: the certificates without the key. Said as such,
+			// like the PEM form without a key, so the inventory can mark the certificate Monitor only.
+			return Validated{}, ErrNoKey
+		}
 		return Validated{}, err
 	}
 	v.Parsed = WithoutRoot(v.Parsed)
 	return v, nil
+}
+
+// pfxHoldsCertificatesOnly reports whether data (already through the iteration guard of decodePFX) is a
+// PFX with an empty password that holds certificates and no key.
+func pfxHoldsCertificatesOnly(data []byte) bool {
+	got, err := pkcs12.DecodeTrustStore(data, "")
+	return err == nil && len(got) > 0
 }
 
 // splitPEM sorts the PEM blocks of value into certificates (re-encoded: they are public) and key

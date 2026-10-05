@@ -3,6 +3,7 @@
 package inventory_test
 
 import (
+	"crypto/x509"
 	"encoding/base64"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"software.sslmate.com/src/go-pkcs12"
 
 	"alice/internal/certs"
 	"alice/internal/inventory"
@@ -329,7 +331,7 @@ func TestKVDeployMaterial(t *testing.T) {
 	check("a key that does not match", inventory.ErrSecretUnreadable, "secret_unreadable", dep[b.loc3], certs.ContentTypePEM,
 		string(otherLeaf.KeyPEM)+string(b.webLeaf.FullchainPEM))
 	check("plain text", inventory.ErrSecretUnreadable, "secret_unreadable", dep[b.loc3], "text/plain", "hello")
-	check("a certificate without its key", inventory.ErrSecretUnreadable, "secret_unreadable", dep[b.loc3], certs.ContentTypePEM, string(b.webLeaf.FullchainPEM))
+	check("a certificate without its key", inventory.ErrSecretUnreadable, "not_exportable", dep[b.loc3], certs.ContentTypePEM, string(b.webLeaf.FullchainPEM))
 	check("garbage PFX", inventory.ErrSecretUnreadable, "secret_unreadable", dep[b.loc3], certs.ContentTypePKCS12, "!!!")
 	rsaLeaf := b.issue("web.example.test", pki.RSA2048)
 	check("another key type, another leaf", inventory.ErrSecretMismatch, "secret_mismatch", dep[b.loc3], certs.ContentTypePEM, string(rsaLeaf.KeyPEM)+string(rsaLeaf.FullchainPEM))
@@ -507,4 +509,66 @@ func TestKVDeployMaterialIncompleteChain(t *testing.T) {
 	require.NoError(t, h.db.Owner.QueryRow(ctx, "SELECT held_reason FROM kv_certificate_versions WHERE id = $1", v1).Scan(&reason))
 	assert.Equal(t, "license", reason, "the first reason wins")
 	assert.Len(t, h.auditDetails("kv.version.held"), 1)
+}
+
+// exportable reads the stored exportable flag of the certificate and of one of its versions.
+func (b *bindFixture) exportable(cert, version uuid.UUID) (onCert, onVersion *bool) {
+	b.h.t.Helper()
+	require.NoError(b.h.t, b.h.db.Owner.QueryRow(b.h.ctx, "SELECT exportable FROM kv_certificates WHERE id = $1", cert).Scan(&onCert))
+	require.NoError(b.h.t, b.h.db.Owner.QueryRow(b.h.ctx, "SELECT exportable FROM kv_certificate_versions WHERE id = $1", version).Scan(&onVersion))
+	return onCert, onVersion
+}
+
+// A certificate whose policy became non-exportable without a new version: the poll does not notice, the
+// deployment's secret read gets the certificates without the key. That read is refused as before
+// (kv.secret_unreadable), and the certificate and the version are stored as not exportable, so the next
+// request answers kv.not_exportable and the page shows Monitor only. A secret that is wrong otherwise marks
+// nothing.
+func TestKVDeployMaterialWithoutAKeyMarksTheCertificateNotExportable(t *testing.T) {
+	for name, secret := range map[string]func(b *bindFixture) ([]byte, providers.CertificateSecret){
+		"pem": func(b *bindFixture) ([]byte, providers.CertificateSecret) {
+			return pemSecret(string(b.webLeaf.FullchainPEM))
+		},
+		"pfx": func(b *bindFixture) ([]byte, providers.CertificateSecret) {
+			store, err := pkcs12.Modern.EncodeTrustStore([]*x509.Certificate{b.webLeaf.Cert, b.ca.Intermediate}, "")
+			require.NoError(b.h.t, err)
+			raw := []byte(base64.StdEncoding.EncodeToString(store))
+			return raw, providers.CertificateSecret{ContentType: certs.ContentTypePKCS12, Value: providers.NewSecret(raw)}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newBindFixture(t)
+			h, ctx := b.h, b.h.ctx
+			bind := b.create(b.admin, b.web, b.loc1, b.loc2, b.loc3)
+			v1 := b.versionID(b.web, ver(1))
+			ids := b.beginKV(b.admin, bind.ID, v1, false, b.loc1, b.loc2)
+
+			// A key that does not fit marks nothing.
+			other := b.issue("web.example.test", pki.ECDSA256)
+			_, wrong := pemSecret(string(other.KeyPEM) + string(b.webLeaf.FullchainPEM))
+			_, err := h.svc.KVDeployMaterial(ctx, ids[1], wrong)
+			require.ErrorIs(t, err, inventory.ErrSecretUnreadable)
+			onCert, onVersion := b.exportable(b.web, v1)
+			require.NotNil(t, onCert)
+			assert.True(t, *onCert)
+			assert.True(t, onVersion == nil || *onVersion)
+
+			raw, sec := secret(b)
+			_, err = h.svc.KVDeployMaterial(ctx, ids[0], sec)
+			require.ErrorIs(t, err, inventory.ErrSecretUnreadable, "this attempt ends as before")
+			assert.True(t, allZero(raw))
+			onCert, onVersion = b.exportable(b.web, v1)
+			require.NotNil(t, onCert)
+			require.NotNil(t, onVersion)
+			assert.False(t, *onCert, "the certificate is Monitor only now")
+			assert.False(t, *onVersion)
+			last := h.auditDetails("kv.secret_read")
+			assert.Equal(t, "not_exportable", last[len(last)-1]["reason"])
+
+			// The next attempt is refused before anything is read.
+			_, err = h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1,
+				LocationIDs: []uuid.UUID{b.loc3}})
+			require.ErrorIs(t, err, inventory.ErrNotExportable)
+		})
+	}
 }
