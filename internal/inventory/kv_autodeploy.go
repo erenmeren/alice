@@ -70,6 +70,9 @@ ORDER BY b.id LIMIT $1`, autoDeployBindings, after)
 			break
 		}
 		after = ids[len(ids)-1]
+		if planPageHook != nil {
+			planPageHook()
+		}
 		for _, id := range ids {
 			if created >= autoDeployBatch {
 				break
@@ -89,6 +92,9 @@ ORDER BY b.id LIMIT $1`, autoDeployBindings, after)
 	}
 	return created, errors.Join(errs...)
 }
+
+// planPageHook runs after a page of candidates was read (tests: the world changes between the read and the plan).
+var planPageHook func()
 
 // planRun is what one run of the planner remembers for its mail bound: per vault and kind of notice, how
 // many individual mails were sent and how many were left for the summary.

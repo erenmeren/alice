@@ -850,6 +850,9 @@ func (s *Service) DeleteVault(ctx context.Context, a Actor, id uuid.UUID, remove
 				return err
 			}
 		}
+		if err := s.endVaultImports(ctx, tx, id, cur.Name, cur.Vault.URL, now); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, "UPDATE targets SET deleted_at = $2, version = version + 1, updated_at = $2 WHERE id = $1", id, now); err != nil {
 			return fmt.Errorf("inventory: delete vault: %w", err)
 		}

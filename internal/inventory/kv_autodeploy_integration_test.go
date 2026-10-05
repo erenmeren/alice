@@ -731,3 +731,24 @@ func TestAutoDeployMailStormIsBounded(t *testing.T) {
 	assert.Equal(t, 7, h.count("SELECT count(*) FROM kv_certificate_versions WHERE notified_at IS NOT NULL AND version = ANY($1)",
 		[]string{ver(200), ver(201), ver(202), ver(203), ver(204), ver(205), ver(206)}), "every version is marked")
 }
+
+// m7: the licence gate is read again inside each binding's transaction (it can lock after the candidates
+// were chosen), and a held version is judged as an Operator would be: never planned.
+func TestAutoDeployRereadsTheGateInsideTheBindingTransaction(t *testing.T) {
+	f := newAutoFixture(t, true)
+	f.renew(2, nil)
+	defer inventory.SetPlanPageHook(func() {
+		f.h.clock.Advance(40 * 24 * time.Hour)
+		require.NoError(t, f.h.lic.Tick(f.h.ctx))
+	})()
+	assert.Zero(t, f.plan())
+	assert.Zero(t, f.h.count("SELECT count(*) FROM deployments"))
+}
+
+func TestAutoDeployNeverPlansAHeldVersionForTheSystemActor(t *testing.T) {
+	f := newAutoFixture(t, true)
+	f.renew(2, nil)
+	f.exec("UPDATE kv_certificate_versions SET held = true, held_reason = 'license' WHERE id = $1", f.versionID(f.web, ver(2)))
+	assert.Zero(t, f.plan())
+	assert.Zero(t, f.h.count("SELECT count(*) FROM deployments"))
+}

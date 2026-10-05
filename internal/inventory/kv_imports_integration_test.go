@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"strings"
@@ -701,24 +703,92 @@ func TestImportFinishRacesAPoll(t *testing.T) {
 	assert.Equal(t, inventory.ImportSucceeded, f.get(im.ID).State)
 }
 
-// What an import leaves behind: no key, no PFX, nothing of the certificate's secret anywhere.
+// What an import leaves behind: no key, no PFX, in any form, whatever the outcome.
 func TestImportLeavesNoKeyMaterialBehind(t *testing.T) {
-	f := newImportFixture(t)
-	h := f.h
-	im := f.mustRequest("quiet-name", false)
-	m, err := h.svc.ImportMaterial(h.ctx, im.ID)
-	require.NoError(t, err)
-	pfx := append([]byte(nil), m.Request.PFX.Bytes()...)
-	require.NoError(t, h.svc.MarkImportSent(h.ctx, im.ID))
-	m.Request.PFX.Zero()
-	_, err = h.svc.FinishImport(h.ctx, im.ID, providers.ImportResult{Outcome: providers.ImportUncertain}, errors.New("boom"))
-	require.NoError(t, err)
-	dump := dumpEverything(h)
-	keyBlock := string(f.nw.KeyPEM)
-	body := strings.Join(strings.Split(strings.TrimSpace(keyBlock), "\n")[1:3], "")
-	assert.NotContains(t, dump, body, "the key's base64")
-	assert.NotContains(t, dump, string(pfx[20:60]), "the PFX bytes")
-	assert.NotContains(t, h.logs.String(), body)
+	forms := func(raw []byte) map[string]string {
+		out := map[string]string{"raw": string(raw), "hex": hex.EncodeToString(raw), "base64": base64.StdEncoding.EncodeToString(raw),
+			"base64url": base64.RawURLEncoding.EncodeToString(raw)}
+		return out
+	}
+	run := func(t *testing.T, name string, flow func(f *importFixture, im inventory.KVImport) []byte) {
+		t.Run(name, func(t *testing.T) {
+			f := newImportFixture(t)
+			h := f.h
+			im := f.mustRequest("quiet-name", false)
+			pfx := flow(f, im)
+			dump := dumpEverything(h)
+			block, _ := pem.Decode(f.nw.KeyPEM)
+			needles := forms(block.Bytes[20:60])
+			if len(pfx) > 80 {
+				for k, v := range forms(pfx[20:60]) {
+					needles["pfx "+k] = v
+				}
+			}
+			for k, n := range needles {
+				assert.NotContains(t, dump, n, "the %s form is nowhere (database rows, logs)", k)
+			}
+			assert.NotContains(t, dump, "PRIVATE KEY-----\n")
+		})
+	}
+	build := func(f *importFixture, im inventory.KVImport) []byte {
+		m, err := f.h.svc.ImportMaterial(f.h.ctx, im.ID)
+		require.NoError(f.h.t, err)
+		pfx := append([]byte(nil), m.Request.PFX.Bytes()...)
+		m.Request.PFX.Zero()
+		return pfx
+	}
+	run(t, "created", func(f *importFixture, im inventory.KVImport) []byte {
+		pfx := build(f, im)
+		require.NoError(t, f.h.svc.MarkImportSent(f.h.ctx, im.ID))
+		_, err := f.h.svc.FinishImport(f.h.ctx, im.ID, f.created(2), nil)
+		require.NoError(t, err)
+		return pfx
+	})
+	run(t, "refused", func(f *importFixture, im inventory.KVImport) []byte {
+		pfx := build(f, im)
+		require.NoError(t, f.h.svc.MarkImportSent(f.h.ctx, im.ID))
+		_, err := f.h.svc.FinishImport(f.h.ctx, im.ID, providers.ImportResult{Outcome: providers.ImportRefused},
+			providers.NewError("azure.forbidden", false, errors.New(base64.StdEncoding.EncodeToString(pfx[20:60])), map[string]string{"role": "Key Vault Certificates Officer"}))
+		require.NoError(t, err)
+		return pfx
+	})
+	run(t, "uncertain", func(f *importFixture, im inventory.KVImport) []byte {
+		pfx := build(f, im)
+		require.NoError(t, f.h.svc.MarkImportSent(f.h.ctx, im.ID))
+		_, err := f.h.svc.FinishImport(f.h.ctx, im.ID, providers.ImportResult{Outcome: providers.ImportUncertain}, errors.New(hex.EncodeToString(pfx[20:60])))
+		require.NoError(t, err)
+		return pfx
+	})
+	run(t, "a panic while the PFX is built", func(f *importFixture, im inventory.KVImport) []byte {
+		defer inventory.SetImportMaterialHook(func(stage string, _ []byte) {
+			if stage == "pfx" {
+				panic("injected")
+			}
+		})()
+		func() {
+			defer func() { _ = recover() }()
+			_, _ = f.h.svc.ImportMaterial(f.h.ctx, im.ID)
+		}()
+		return nil
+	})
+	run(t, "expired", func(f *importFixture, im inventory.KVImport) []byte {
+		f.exec("UPDATE certificates SET not_after = $2 WHERE id = $1", f.cert.ID, f.h.clock.Now().Add(-time.Second))
+		_, err := f.h.svc.ImportMaterial(f.h.ctx, im.ID)
+		assert.ErrorIs(t, err, inventory.ErrCertificateExpired)
+		return nil
+	})
+	run(t, "not yet valid", func(f *importFixture, im inventory.KVImport) []byte {
+		f.exec("UPDATE certificates SET not_before = $2 WHERE id = $1", f.cert.ID, f.h.clock.Now().Add(time.Hour))
+		_, err := f.h.svc.ImportMaterial(f.h.ctx, im.ID)
+		assert.ErrorIs(t, err, inventory.ErrCertificateNotYetValid)
+		return nil
+	})
+	run(t, "admin required", func(f *importFixture, im inventory.KVImport) []byte {
+		f.exec("UPDATE users SET role = 'operator' WHERE id = $1", f.admin.UserID)
+		_, err := f.h.svc.ImportMaterial(f.h.ctx, im.ID)
+		assert.ErrorIs(t, err, inventory.ErrAdminRequired)
+		return nil
+	})
 }
 
 // dumpEverything is every row of every table of the public schema as text, with the logs.
@@ -842,4 +912,184 @@ func TestAutoDeployBatchIsSharedByBindings(t *testing.T) {
 	assert.Equal(t, 2, f.plan(), "the run stops at its batch, whichever binding came first")
 	assert.Equal(t, 2, f.plan(), "the next run does the next two")
 	assert.Equal(t, 4, f.h.count("SELECT count(*) FROM deployments"))
+}
+
+// I3: a certificate row of that name needs the confirmation even when it is marked missing, and the error
+// says whether a live binding with automatic deployment would deploy the imported version by itself.
+func TestImportIntoABoundMissingNameNeedsConfirmation(t *testing.T) {
+	f := newImportFixture(t)
+	h := f.h
+	bind := f.create(f.admin, f.web, f.loc1)
+	on, err := h.svc.SetAutoDeploy(h.ctx, f.admin, bind.ID, bind.Version, true)
+	require.NoError(t, err)
+	_ = on
+	f.exec("UPDATE kv_certificates SET missing_since = $2 WHERE id = $1", f.web, h.clock.Now())
+	_, err = f.request("web-cert", false)
+	var ce *inventory.ImportConfirmError
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, "web-cert", ce.CertificateName)
+	assert.True(t, ce.Bound)
+	assert.True(t, ce.AutoDeploy, "the websites would get it by themselves")
+	assert.Zero(t, f.imports())
+	// A missing certificate nobody bound asks too, and says nothing of deployment.
+	f.exec("UPDATE kv_certificates SET missing_since = $2 WHERE id = $1", f.second, h.clock.Now())
+	_, err = f.request("second-cert", false)
+	require.ErrorAs(t, err, &ce)
+	assert.False(t, ce.Bound)
+	assert.False(t, ce.AutoDeploy)
+}
+
+// I4: the user's confirmation travels to the provider even when the inventory does not know the name (a
+// refusal "the name exists" must not loop).
+func TestImportConfirmationIsKeptForANameTheInventoryDoesNotKnow(t *testing.T) {
+	f := newImportFixture(t)
+	h := f.h
+	im := f.mustRequest("unknown-to-alice", true)
+	assert.True(t, im.NewVersion, "the confirmation is recorded")
+	m, err := h.svc.ImportMaterial(h.ctx, im.ID)
+	require.NoError(t, err)
+	defer m.Request.PFX.Zero()
+	assert.True(t, m.Request.ReplaceExisting)
+	plain := f.mustRequest("really-new", false)
+	m2, err := h.svc.ImportMaterial(h.ctx, plain.ID)
+	require.NoError(t, err)
+	defer m2.Request.PFX.Zero()
+	assert.False(t, m2.Request.ReplaceExisting, "never true without the user's confirmation")
+}
+
+// I5: the requester must still be an enabled Administrator when the job runs.
+func TestImportMaterialRechecksTheRequester(t *testing.T) {
+	for name, sql := range map[string]string{
+		"disabled": "UPDATE users SET disabled_at = now() WHERE id = $1",
+		"demoted":  "UPDATE users SET role = 'operator' WHERE id = $1",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newImportFixture(t)
+			im := f.mustRequest("recheck-name", false)
+			f.exec(sql, f.admin.UserID)
+			read := false
+			defer inventory.SetImportMaterialHook(func(string, []byte) { read = true })()
+			_, err := f.h.svc.ImportMaterial(f.h.ctx, im.ID)
+			assert.ErrorIs(t, err, inventory.ErrAdminRequired)
+			assert.False(t, read, "the key is not read")
+			got, err := f.h.svc.FailQueuedImport(f.h.ctx, im.ID, "kv.admin_required")
+			require.NoError(t, err)
+			assert.Equal(t, inventory.ImportFailed, got.State)
+		})
+	}
+}
+
+// I6: a leaf that is not valid yet is refused at the request and again when the job runs.
+func TestImportRefusesALeafThatIsNotValidYet(t *testing.T) {
+	f := newImportFixture(t)
+	h := f.h
+	im := f.mustRequest("early-name", false)
+	f.exec("UPDATE certificates SET not_before = $2 WHERE id = $1", f.cert.ID, h.clock.Now().Add(time.Hour))
+	read := false
+	defer inventory.SetImportMaterialHook(func(string, []byte) { read = true })()
+	_, err := h.svc.ImportMaterial(h.ctx, im.ID)
+	assert.ErrorIs(t, err, inventory.ErrCertificateNotYetValid)
+	assert.False(t, read, "before the key is read")
+	n := f.imports()
+	_, err = f.request("early-two", false)
+	assert.ErrorIs(t, err, inventory.ErrCertificateNotYetValid)
+	d := h.auditDetails("kv.import.denied")
+	assert.Equal(t, "not_yet_valid", d[len(d)-1]["reason"])
+	assert.Equal(t, n, f.imports())
+}
+
+// m4: an uncertain import cannot stay uncertain for ever.
+func TestUncertainImportsEnd(t *testing.T) {
+	t.Run("72 hours after the send, whatever the listings looked like", func(t *testing.T) {
+		f := newImportFixture(t)
+		im := f.toState("old-lost", inventory.ImportUncertain)
+		f.h.clock.Advance(71 * time.Hour)
+		n, err := f.h.svc.SweepImports(f.h.ctx)
+		require.NoError(t, err)
+		assert.Zero(t, n)
+		assert.Equal(t, inventory.ImportUncertain, f.get(im.ID).State)
+		f.h.clock.Advance(2 * time.Hour)
+		n, err = f.h.svc.SweepImports(f.h.ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1, n)
+		got := f.get(im.ID)
+		assert.Equal(t, inventory.ImportFailed, got.State)
+		assert.Equal(t, inventory.ReasonImportOutcomeUnknown, got.ErrorCode)
+		assert.Equal(t, 1, f.h.emails("kv.import_outcome_unknown"))
+		assert.Equal(t, 1, f.h.audits("kv.import.failed"))
+		n, _ = f.h.svc.SweepImports(f.h.ctx)
+		assert.Zero(t, n, "once")
+	})
+	t.Run("a poll with a cut listing and details pending ends it at 72 hours too", func(t *testing.T) {
+		f := newImportFixture(t)
+		im := f.toState("old-lost-two", inventory.ImportUncertain)
+		f.h.clock.Advance(73 * time.Hour)
+		cut := kvResult()
+		cut.KV.Failures = []providers.KVListFailure{{Object: "certificates", Err: providers.NewError("azure.forbidden", false, nil, nil)}}
+		f.h.reconcile(f.vault, cut)
+		assert.Equal(t, inventory.ImportFailed, f.get(im.ID).State)
+	})
+	t.Run("a disabled vault follows the 72 hours", func(t *testing.T) {
+		f := newImportFixture(t)
+		im := f.toState("disabled-lost", inventory.ImportUncertain)
+		f.exec("UPDATE targets SET status = 'disabled' WHERE id = $1", f.vault)
+		f.h.clock.Advance(73 * time.Hour)
+		_, err := f.h.svc.SweepImports(f.h.ctx)
+		require.NoError(t, err)
+		assert.Equal(t, inventory.ImportFailed, f.get(im.ID).State)
+	})
+	t.Run("deleting the vault ends its active imports", func(t *testing.T) {
+		f := newImportFixture(t)
+		queued := f.mustRequest("q-name", false)
+		unc := f.toState("u-name", inventory.ImportUncertain)
+		run := f.toState("r-name", inventory.ImportRunning)
+		require.NoError(t, f.h.svc.DeleteVault(f.h.ctx, f.admin, f.vault, true))
+		q, u, r := f.get(queued.ID), f.get(unc.ID), f.get(run.ID)
+		assert.Equal(t, inventory.ImportFailed, q.State)
+		assert.Equal(t, inventory.ReasonImportVaultDeleted, q.ErrorCode)
+		assert.Equal(t, inventory.ImportFailed, u.State)
+		assert.Equal(t, inventory.ReasonImportOutcomeUnknown, u.ErrorCode)
+		assert.Equal(t, inventory.ImportFailed, r.State)
+		assert.Equal(t, inventory.ReasonImportOutcomeUnknown, r.ErrorCode)
+		assert.Zero(t, f.h.count("SELECT count(*) FROM kv_imports WHERE state IN ('queued', 'running', 'uncertain')"))
+	})
+	t.Run("an import whose job is dead or pruned: queued fails, running becomes uncertain", func(t *testing.T) {
+		f := newImportFixture(t)
+		queued := f.mustRequest("dq-name", false)
+		run := f.toState("dr-name", inventory.ImportRunning)
+		healthy := f.mustRequest("dh-name", false)
+		f.exec("UPDATE jobs SET status = 'dead' WHERE id IN ($1, $2)", *queued.JobID, *run.JobID)
+		n, err := f.h.svc.SweepImports(f.h.ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 2, n)
+		assert.Equal(t, inventory.ImportFailed, f.get(queued.ID).State)
+		assert.Equal(t, inventory.ReasonImportJobLost, f.get(queued.ID).ErrorCode)
+		assert.Equal(t, inventory.ImportUncertain, f.get(run.ID).State)
+		assert.Equal(t, inventory.ImportQueued, f.get(healthy.ID).State, "a live job is left alone")
+	})
+}
+
+// m7: the 24 hour end waits for certificates whose details are pending; a version stored while the gate is
+// closed is held.
+func TestImportSurvivors(t *testing.T) {
+	t.Run("details pending: the 24 hour end waits", func(t *testing.T) {
+		f := newImportFixture(t)
+		im := f.toState("pending-name", inventory.ImportUncertain)
+		f.h.clock.Advance(25 * time.Hour)
+		c := f.h.kvc("pending-name", f.issue("p.example.test", pki.ECDSA256), ver(3), f.h.clock.Now().Add(-48*time.Hour), false)
+		f.h.reconcile(f.vault, kvResult(c))
+		require.True(t, f.h.certRow(f.vault, "pending-name").Pending)
+		assert.Equal(t, inventory.ImportUncertain, f.get(im.ID).State, "its details may be the import's version")
+	})
+	t.Run("held when the gate is closed at FinishImport", func(t *testing.T) {
+		f := newImportFixture(t)
+		im := f.toState("held-name", inventory.ImportRunning)
+		f.h.clock.Advance(40 * 24 * time.Hour)
+		require.NoError(t, f.h.lic.Tick(f.h.ctx))
+		_, err := f.h.svc.FinishImport(f.h.ctx, im.ID, f.created(6), nil)
+		require.NoError(t, err)
+		v := f.h.versionRows(f.h.certRow(f.vault, "held-name").ID)[ver(6)]
+		assert.True(t, v.Held)
+		assert.Equal(t, "license", v.HeldReason)
+	})
 }

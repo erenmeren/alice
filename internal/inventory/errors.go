@@ -195,7 +195,14 @@ var (
 )
 
 // ImportConfirmError is ErrImportConfirmNeeded with the certificate name the vault already has.
-type ImportConfirmError struct{ CertificateName string }
+type ImportConfirmError struct {
+	CertificateName string
+	// AutoDeploy: a live binding with automatic deployment names the certificate, so the imported version
+	// is deployed to its websites by itself (the dialog says so).
+	AutoDeploy bool
+	// Bound: a live binding names the certificate.
+	Bound bool
+}
 
 func (e *ImportConfirmError) Error() string { return ErrImportConfirmNeeded.Error() }
 

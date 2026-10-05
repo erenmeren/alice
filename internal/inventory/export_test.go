@@ -171,3 +171,10 @@ func SetPlanMailLimit(n int) (restore func()) {
 	planMailLimit = n
 	return func() { planMailLimit = old }
 }
+
+// SetPlanPageHook installs the hook that runs after the planner read a page of candidates.
+func SetPlanPageHook(f func()) (restore func()) {
+	old := planPageHook
+	planPageHook = f
+	return func() { planPageHook = old }
+}

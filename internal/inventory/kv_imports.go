@@ -57,10 +57,16 @@ const (
 const (
 	ReasonImportOutcomeUnknown = "kv.import_outcome_unknown"
 	ReasonImportConfirmNeeded  = "kv.import_confirm_needed"
+	ReasonImportVaultDeleted   = "kv.import_vault_deleted"
+	ReasonImportJobLost        = "kv.import_job_lost"
 )
 
 // ImportOutcomeUnknownAfter is how long after the send an uncertain import waits for a poll to settle it.
 const ImportOutcomeUnknownAfter = 24 * time.Hour
+
+// ImportOutcomeUnknownCap is how long after the send an uncertain import may stay uncertain at most: after
+// it, SweepImports (or any poll of the vault) ends it as outcome unknown whatever the listings said.
+const ImportOutcomeUnknownCap = 72 * time.Hour
 
 // ImportInput asks for a certificate Alice holds to be imported into a vault under Name. ConfirmExisting is
 // the Administrator's confirmation that Name may already exist (a new version, ruling S9).
@@ -246,6 +252,8 @@ func (s *Service) RequestImport(ctx context.Context, a Actor, in ImportInput) (K
 			return denyWith(&denial, "unsupported_key", uuid.Nil, ErrUnsupportedKey)
 		case !now.Before(c.notAfter):
 			return denyWith(&denial, "expired", uuid.Nil, ErrCertificateExpired)
+		case now.Before(c.notBefore):
+			return denyWith(&denial, "not_yet_valid", uuid.Nil, ErrCertificateNotYetValid)
 		}
 		parsed, err := parseImportLeaf(c)
 		if err != nil {
@@ -259,19 +267,28 @@ AND state IN ('queued', 'running', 'uncertain'))`, in.VaultID, in.Name).Scan(&ac
 		if active {
 			return denyWith(&denial, "in_progress", uuid.Nil, ErrImportInProgress)
 		}
-		existing := ""
-		err = tx.QueryRow(ctx, `SELECT name FROM kv_certificates WHERE target_id = $1 AND lower(name COLLATE "C") = lower($2::text COLLATE "C")
-AND missing_since IS NULL`, in.VaultID, in.Name).Scan(&existing)
+		// A stored certificate of that name needs the confirmation whether or not the vault lists it now (a
+		// missing certificate can come back, and a live binding would deploy what is imported).
+		var (
+			existing         string
+			bound, autoDeply bool
+		)
+		err = tx.QueryRow(ctx, `SELECT kc.name, b.id IS NOT NULL, coalesce(b.auto_deploy, false) FROM kv_certificates kc
+LEFT JOIN bindings b ON b.kv_certificate_id = kc.id AND b.deleted_at IS NULL
+WHERE kc.target_id = $1 AND lower(kc.name COLLATE "C") = lower($2::text COLLATE "C")`, in.VaultID, in.Name).Scan(&existing, &bound, &autoDeply)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("inventory: look for the certificate name: %w", err)
 		}
 		if existing != "" && !in.ConfirmExisting {
-			return denyWith(&denial, "confirm_needed", uuid.Nil, &ImportConfirmError{CertificateName: existing})
+			return denyWith(&denial, "confirm_needed", uuid.Nil, &ImportConfirmError{CertificateName: existing, Bound: bound, AutoDeploy: autoDeply})
 		}
+		// The confirmation is recorded as the user gave it, also for a name the inventory does not know: the
+		// vault may have it (an import refused with "the name exists" is then asked again, not looped).
+		confirmed := existing != "" || in.ConfirmExisting
 		thumb := azureid.ThumbprintOf(parsed.Leaf.Raw)
 		id := uuid.Must(uuid.NewV7())
 		if _, err := tx.Exec(ctx, `INSERT INTO kv_imports (id, certificate_id, target_id, name, new_version, state, thumbprint, requested_by, created_at)
-VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8)`, id, in.CertificateID, in.VaultID, in.Name, existing != "", thumb, nullableUser(a.UserID), now); err != nil {
+VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8)`, id, in.CertificateID, in.VaultID, in.Name, confirmed, thumb, nullableUser(a.UserID), now); err != nil {
 			if mapped := mapImportError(err); errors.Is(mapped, ErrImportInProgress) {
 				return denyWith(&denial, "in_progress", uuid.Nil, mapped)
 			}
@@ -287,7 +304,7 @@ VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8)`, id, in.CertificateID, in.Vau
 		}
 		if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "kv.import.requested", ObjectType: "kv_import", ObjectID: id.String(),
 			Result: audit.Success, Details: map[string]string{"import_id": id.String(), "certificate_id": in.CertificateID.String(), "certificate_name": in.Name,
-				"thumbprint": thumb, "new_version": strconv.FormatBool(existing != ""), "vault_url": t.url, "job_id": jobID.String()}}); err != nil {
+				"thumbprint": thumb, "new_version": strconv.FormatBool(confirmed), "vault_url": t.url, "job_id": jobID.String()}}); err != nil {
 			return err
 		}
 		out, err = readImport(ctx, tx, id, false)
@@ -303,6 +320,7 @@ VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8)`, id, in.CertificateID, in.Vau
 type importCertificate struct {
 	id          uuid.UUID
 	keyID       *uuid.UUID
+	notBefore   time.Time
 	notAfter    time.Time
 	pemChain    string
 	fingerprint string
@@ -312,15 +330,15 @@ type importCertificate struct {
 
 func readImportCertificate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (importCertificate, error) {
 	c := importCertificate{id: id}
-	err := tx.QueryRow(ctx, `SELECT private_key_id, not_after, pem_chain, fingerprint_sha256, key_algorithm, key_bits FROM certificates WHERE id = $1 FOR SHARE`, id).
-		Scan(&c.keyID, &c.notAfter, &c.pemChain, &c.fingerprint, &c.algorithm, &c.bits)
+	err := tx.QueryRow(ctx, `SELECT private_key_id, not_before, not_after, pem_chain, fingerprint_sha256, key_algorithm, key_bits FROM certificates WHERE id = $1 FOR SHARE`, id).
+		Scan(&c.keyID, &c.notBefore, &c.notAfter, &c.pemChain, &c.fingerprint, &c.algorithm, &c.bits)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return importCertificate{}, ErrNotFound
 	}
 	if err != nil {
 		return importCertificate{}, fmt.Errorf("inventory: read the certificate: %w", err)
 	}
-	c.notAfter = c.notAfter.UTC()
+	c.notBefore, c.notAfter = c.notBefore.UTC(), c.notAfter.UTC()
 	return c, nil
 }
 
@@ -340,7 +358,8 @@ func parseImportLeaf(c importCertificate) (certs.Parsed, error) {
 // (certs.ExportPFX, empty password) with KeyType, KeySize and LeafThumbprint taken from the same leaf and
 // key that go into it. Fenced by the job's claim (ErrClaimLost); only a queued import (ErrImportState: an
 // import that was sent is never built again); ErrNotFound for an unknown import or a deleted vault,
-// ErrVaultUnavailable for a disabled one; ErrCertificateExpired (the leaf is judged again now, before the
+// ErrVaultUnavailable for a disabled one; ErrAdminRequired (the requester is no longer an enabled
+// Administrator); ErrCertificateExpired and ErrCertificateNotYetValid (the leaf is judged again now, before the
 // key is read); ErrImportChanged (the stored leaf is no longer the request's thumbprint). The decrypted key
 // and every intermediate buffer are wiped on every path, a panic included; the PFX is the caller's to zero
 // (Request.PFX) and is never stored, logged or audited.
@@ -370,6 +389,16 @@ func (s *Service) ImportMaterial(ctx context.Context, id uuid.UUID) (ImportMater
 		if vault.status == StatusDisabled {
 			return ErrVaultUnavailable
 		}
+		// The requester must still be an enabled Administrator: a queued import survives a licence lock, so
+		// days can pass between the request and the job.
+		var admin bool
+		if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT role = 'admin' AND disabled_at IS NULL FROM users WHERE id = $1), false)`,
+			im.RequestedBy).Scan(&admin); err != nil {
+			return fmt.Errorf("inventory: read the requester: %w", err)
+		}
+		if !admin {
+			return ErrAdminRequired
+		}
 		c, err = readImportCertificate(ctx, tx, im.CertificateID)
 		return err
 	})
@@ -379,8 +408,12 @@ func (s *Service) ImportMaterial(ctx context.Context, id uuid.UUID) (ImportMater
 	if c.keyID == nil {
 		return ImportMaterial{}, ErrNoPrivateKey
 	}
-	if !s.clock.Now().UTC().Before(c.notAfter) {
+	now := s.clock.Now().UTC()
+	if !now.Before(c.notAfter) {
 		return ImportMaterial{}, ErrCertificateExpired
+	}
+	if now.Before(c.notBefore) {
+		return ImportMaterial{}, ErrCertificateNotYetValid
 	}
 	parsed, err := parseImportLeaf(c)
 	if err != nil {
@@ -706,6 +739,11 @@ WHERE id = $1 AND state = 'uncertain' AND finished_at IS NULL`, o.id, version, n
 			}
 		case !errors.Is(err, pgx.ErrNoRows):
 			return fmt.Errorf("inventory: look for the imported version: %w", err)
+		case o.sent != nil && !now.Before(o.sent.Add(ImportOutcomeUnknownCap)):
+			// Whatever the listings looked like: an import cannot stay uncertain for ever.
+			if err := s.endImport(ctx, tx, o.id, o.certificate, o.name, o.thumb, ReasonImportOutcomeUnknown, now, vaultName, vaultURL, TemplateKVImportOutcomeUnknown); err != nil {
+				return err
+			}
 		case complete && o.sent != nil && !now.Before(o.sent.Add(ImportOutcomeUnknownAfter)):
 			var waiting bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM kv_certificates WHERE target_id = $1 AND lower(name COLLATE "C") = lower($2::text COLLATE "C")
@@ -715,22 +753,143 @@ AND missing_since IS NULL AND details_pending)`, vault, o.name).Scan(&waiting); 
 			if waiting {
 				continue
 			}
-			tag, err := tx.Exec(ctx, `UPDATE kv_imports SET state = 'failed', error_code = $2, finished_at = $3
-WHERE id = $1 AND state = 'uncertain' AND finished_at IS NULL`, o.id, ReasonImportOutcomeUnknown, now)
-			if err != nil {
-				return mapImportError(fmt.Errorf("inventory: end the import: %w", err))
-			}
-			if tag.RowsAffected() == 1 {
-				if err := s.mailImport(ctx, tx, TemplateKVImportOutcomeUnknown, vaultName, o.name); err != nil {
-					return err
-				}
-				details["reason"] = ReasonImportOutcomeUnknown
-				if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "kv.import.failed", ObjectType: "kv_import", ObjectID: o.id.String(),
-					Result: audit.Failure, Details: details}); err != nil {
-					return err
-				}
+			if err := s.endImport(ctx, tx, o.id, o.certificate, o.name, o.thumb, ReasonImportOutcomeUnknown, now, vaultName, vaultURL, TemplateKVImportOutcomeUnknown); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
+}
+
+// endImport ends an active import (queued, running or uncertain) as failed with the closed code, in the
+// caller's transaction: one audit row kv.import.failed and, when template is not empty, one mail. Nothing
+// happens when the import was finished meanwhile (WHERE finished_at IS NULL).
+func (s *Service) endImport(ctx context.Context, tx pgx.Tx, id, certificate uuid.UUID, name, thumb, code string, now time.Time, vaultName, vaultURL, template string) error {
+	tag, err := tx.Exec(ctx, `UPDATE kv_imports SET state = 'failed', error_code = $2, finished_at = $3
+WHERE id = $1 AND state IN ('queued', 'running', 'uncertain') AND finished_at IS NULL`, id, code, now)
+	if err != nil {
+		return mapImportError(fmt.Errorf("inventory: end the import: %w", err))
+	}
+	if tag.RowsAffected() != 1 {
+		return nil
+	}
+	if template != "" {
+		if err := s.mailImport(ctx, tx, template, vaultName, name); err != nil {
+			return err
+		}
+	}
+	_, err = s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "kv.import.failed", ObjectType: "kv_import", ObjectID: id.String(),
+		Result: audit.Failure, Details: map[string]string{"import_id": id.String(), "certificate_id": certificate.String(), "certificate_name": name,
+			"thumbprint": thumb, "vault_url": vaultURL, "reason": code}})
+	return err
+}
+
+// endVaultImports ends every active import of a vault that is being deleted, in the deleting transaction:
+// a queued one failed with kv.import_vault_deleted (nothing was sent), a running or uncertain one as outcome
+// unknown (with its mail). No active import outlives its vault.
+func (s *Service) endVaultImports(ctx context.Context, tx pgx.Tx, vault uuid.UUID, vaultName, vaultURL string, now time.Time) error {
+	rows, err := tx.Query(ctx, `SELECT id, certificate_id, name, thumbprint, state FROM kv_imports
+WHERE target_id = $1 AND state IN ('queued', 'running', 'uncertain') AND finished_at IS NULL ORDER BY id FOR UPDATE`, vault)
+	if err != nil {
+		return fmt.Errorf("inventory: read the vault's active imports: %w", err)
+	}
+	type active struct {
+		id, certificate    uuid.UUID
+		name, thumb, state string
+	}
+	list, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (active, error) {
+		var a active
+		return a, r.Scan(&a.id, &a.certificate, &a.name, &a.thumb, &a.state)
+	})
+	if err != nil {
+		return fmt.Errorf("inventory: read the vault's active imports: %w", err)
+	}
+	for _, a := range list {
+		code, tpl := ReasonImportOutcomeUnknown, TemplateKVImportOutcomeUnknown
+		if a.state == ImportQueued {
+			code, tpl = ReasonImportVaultDeleted, ""
+		}
+		if err := s.endImport(ctx, tx, a.id, a.certificate, a.name, a.thumb, code, now, vaultName, vaultURL, tpl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SweepImports ends the imports nothing else will end, for the job layer to call periodically (about every
+// minute; it needs no poll): an uncertain import ImportOutcomeUnknownCap after its send fails as outcome
+// unknown (with its mail), whatever the vault's state; a queued import whose job is dead, cancelled or
+// pruned fails with kv.import_job_lost (nothing was sent); a running one whose job is dead becomes uncertain
+// (a send may have happened: it is never sent again). It returns how many imports it changed; each ending
+// has its audit row; every import is handled in its own transaction under the vault's lock and fenced to the
+// job's claim when the context has one.
+func (s *Service) SweepImports(ctx context.Context) (int, error) {
+	now := s.clock.Now().UTC()
+	rows, err := s.pool.Query(ctx, `SELECT i.id, i.target_id FROM kv_imports i LEFT JOIN jobs j ON j.id = i.job_id
+WHERE i.finished_at IS NULL AND (
+    (i.state = 'uncertain' AND i.sent_at <= $1)
+ OR (i.state IN ('queued', 'running') AND (i.job_id IS NULL OR j.status IN ('succeeded', 'failed', 'cancelled', 'dead'))))
+ORDER BY i.id LIMIT 200`, now.Add(-ImportOutcomeUnknownCap))
+	if err != nil {
+		return 0, fmt.Errorf("inventory: find the imports to sweep: %w", err)
+	}
+	type found struct{ id, vault uuid.UUID }
+	list, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (found, error) {
+		var f found
+		return f, r.Scan(&f.id, &f.vault)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("inventory: find the imports to sweep: %w", err)
+	}
+	changed := 0
+	var errs []error
+	for _, f := range list {
+		did := false
+		err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+			did = false
+			if err := checkClaim(ctx, tx); err != nil {
+				return err
+			}
+			t, err := readKVTarget(ctx, tx, f.vault, "FOR NO KEY UPDATE")
+			if err != nil {
+				return err
+			}
+			var im KVImport
+			if im, err = readImport(ctx, tx, f.id, true); err != nil {
+				return err
+			}
+			if im.FinishedAt != nil {
+				return nil
+			}
+			switch {
+			case im.State == ImportUncertain && im.SentAt != nil && !now.Before(im.SentAt.Add(ImportOutcomeUnknownCap)):
+				did = true
+				return s.endImport(ctx, tx, im.ID, im.CertificateID, im.Name, im.Thumbprint, ReasonImportOutcomeUnknown, now, t.name, t.url, TemplateKVImportOutcomeUnknown)
+			case im.State == ImportQueued:
+				did = true
+				return s.endImport(ctx, tx, im.ID, im.CertificateID, im.Name, im.Thumbprint, ReasonImportJobLost, now, t.name, t.url, TemplateKVImportFailed)
+			case im.State == ImportRunning:
+				did = true
+				if _, err := tx.Exec(ctx, "UPDATE kv_imports SET state = 'uncertain' WHERE id = $1 AND state = 'running' AND finished_at IS NULL", im.ID); err != nil {
+					return mapImportError(fmt.Errorf("inventory: end the import: %w", err))
+				}
+				_, err := s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "kv.import.uncertain", ObjectType: "kv_import", ObjectID: im.ID.String(),
+					Result: audit.Success, Details: map[string]string{"import_id": im.ID.String(), "certificate_id": im.CertificateID.String(), "certificate_name": im.Name,
+						"thumbprint": im.Thumbprint, "vault_url": t.url, "reason": ReasonImportJobLost}})
+				return err
+			}
+			return nil
+		})
+		if errors.Is(err, ErrClaimLost) {
+			return changed, err
+		}
+		if err != nil && !errors.Is(err, ErrNotFound) { // a vault deleted meanwhile ended its imports already
+			errs = append(errs, err)
+			continue
+		}
+		if did && err == nil {
+			changed++
+		}
+	}
+	return changed, errors.Join(errs...)
 }
