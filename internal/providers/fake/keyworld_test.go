@@ -638,7 +638,7 @@ func TestKeyWorldKeyLifecycleConforms(t *testing.T) {
 	providertest.CheckKeyLifecycle(t, providertest.KeyLifecycleHarness{New: func(tb testing.TB) providertest.KeyLifecycleEnv {
 		w := NewKeyWorld()
 		target := uuid.New()
-		p := New(providers.KindLinuxSSH, providers.CapTestConnection, providers.CapAuthorizedKeys, providers.CapKeyLogin)
+		p := New(providers.KindLinuxSSH, providers.CapTestConnection, providers.CapAuthorizedKeys, providers.CapKeyLogin, providers.CapDiscoverSSHKeys)
 		p.Configure(func(c *Config) { c.World = w; c.SkipHostKeyCheck = true })
 		return providertest.KeyLifecycleEnv{
 			Open: func(ctx context.Context) (providers.Session, error) {
@@ -654,4 +654,36 @@ func TestKeyWorldKeyLifecycleConforms(t *testing.T) {
 			Lines: func(f string) []string { return w.Lines(target, f) },
 		}
 	}})
+}
+
+// Follow-up: key-files completeness in the fake key world.
+func TestKeyWorldReportsKeyFilesAndTheirCompleteness(t *testing.T) {
+	ctx := context.Background()
+	target := uuid.New()
+	w := NewKeyWorld()
+	w.Put(target, "deploy", "/h/deploy/ak")
+	w.Put(target, "backup", "/h/backup/ak")
+	w.Put(target, "ghost", "/h/ghost/ak")
+	w.Put(uuid.New(), "other", "/h/other/ak")
+	w.MarkKeyFilesIncomplete(target, "backup")
+	w.HideKeyFiles(target, "ghost")
+	p := New(providers.KindLinuxSSH, providers.CapDiscoverSSHKeys)
+	p.Configure(func(c *Config) { c.World, c.SkipHostKeyCheck = w, true })
+	s, err := p.Open(ctx, providers.TargetRef{ID: target}, nil, providers.Env{})
+	require.NoError(t, err)
+	d, err := s.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.Equal(t, []providers.UserKeyFiles{
+		{OSUser: "backup", Files: []string{"/h/backup/ak"}, Complete: false},
+		{OSUser: "deploy", Files: []string{"/h/deploy/ak"}, Complete: true},
+	}, d.KeyFiles, "complete by default, incomplete when marked, absent when hidden")
+	d, err = s.Discover(ctx, providers.DiscoverRequest{})
+	require.NoError(t, err)
+	assert.Nil(t, d.KeyFiles)
+
+	// a scripted result wins over the world's
+	p.Configure(func(c *Config) { c.Discovery.KeyFiles = []providers.UserKeyFiles{{OSUser: "x"}} })
+	d, err = s.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.Equal(t, []providers.UserKeyFiles{{OSUser: "x"}}, d.KeyFiles)
 }

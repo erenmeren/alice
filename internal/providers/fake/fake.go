@@ -410,6 +410,8 @@ func (s *session) Discover(_ context.Context, req providers.DiscoverRequest) (pr
 		res.SSHKeys, res.HostKeys, res.SSHD, res.UnreadableLines = nil, nil, providers.SSHDSummary{}, nil
 		res.UID0Users, res.Accounts, res.AccountsComplete, res.ReadFiles = nil, nil, false, nil
 		res.KeyFiles = nil
+	} else if cfg.World != nil && res.KeyFiles == nil {
+		res.KeyFiles = cfg.World.userKeyFiles(s.target) // a world answers for the key files unless a test scripted them
 	}
 	if !req.Certificates {
 		res.Certificates, res.Nginx = nil, nil

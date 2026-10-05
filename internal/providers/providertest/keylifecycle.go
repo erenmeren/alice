@@ -98,6 +98,24 @@ func CheckKeyLifecycle(t testing.TB, h KeyLifecycleHarness) {
 			t.Errorf("%s: login as %s = %q, want %q", why, user, got, want)
 		}
 	}
+	// keyFiles: a discovery names the user's file and says the list is complete.
+	keyFiles := func(s providers.Session, user, file, why string) {
+		t.Helper()
+		d, err := s.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+		if err != nil {
+			t.Errorf("%s: discover: %v", why, err)
+			return
+		}
+		for _, k := range d.KeyFiles {
+			if k.OSUser == user {
+				if !slices.Contains(k.Files, file) || !k.Complete {
+					t.Errorf("%s: key files of %s = %+v, want %s and Complete", why, user, k, file)
+				}
+				return
+			}
+		}
+		t.Errorf("%s: no key files for %s in %+v", why, user, d.KeyFiles)
+	}
 	wantCode := func(err error, code, field, why string) {
 		t.Helper()
 		var pe *providers.Error
@@ -126,6 +144,7 @@ func CheckKeyLifecycle(t testing.TB, h KeyLifecycleHarness) {
 		s := ok(env)
 		defer func() { _ = s.Close() }()
 		wantLogin(s, "deploy", k, providers.KeyLoginRefused, "a key not in the file")
+		keyFiles(s, "deploy", file, "a plain account")
 		res, err := s.AddAuthorizedKey(ctx, change("deploy", file, k.line, ""), nil)
 		if err != nil || !res.Changed || res.LineNo != 4 {
 			t.Errorf("add: %+v %v, want Changed on line 4", res, err)
@@ -210,6 +229,7 @@ func CheckKeyLifecycle(t testing.TB, h KeyLifecycleHarness) {
 		}
 		wantLogin(s, "root", k, providers.KeyLoginAccepted, "the owner reads the shared file")
 		wantLogin(s, "backup", k, providers.KeyLoginAccepted, "every user reads the shared file")
+		keyFiles(s, "backup", shared, "a shared file is a candidate of every user")
 	}
 
 	// 4. lines that are refused, and lines that never log in.

@@ -377,9 +377,9 @@ func TestDiscoverReportsKeyFiles(t *testing.T) {
 	res, err := e.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
 	require.NoError(t, err)
 	want := []providers.UserKeyFiles{
-		{OSUser: "root", Files: []string{"/root/.ssh/authorized_keys", "/root/.ssh/authorized_keys2"}},
-		{OSUser: "alice-svc", Files: []string{"/var/lib/alice-svc/.ssh/authorized_keys", "/var/lib/alice-svc/.ssh/authorized_keys2"}},
-		{OSUser: "deploy", Files: []string{"/home/deploy/.ssh/authorized_keys", "/home/deploy/.ssh/authorized_keys2"}},
+		{OSUser: "root", Files: []string{"/root/.ssh/authorized_keys", "/root/.ssh/authorized_keys2"}, Complete: true},
+		{OSUser: "alice-svc", Files: []string{"/var/lib/alice-svc/.ssh/authorized_keys", "/var/lib/alice-svc/.ssh/authorized_keys2"}, Complete: true},
+		{OSUser: "deploy", Files: []string{"/home/deploy/.ssh/authorized_keys", "/home/deploy/.ssh/authorized_keys2"}, Complete: true},
 	}
 	assert.Equal(t, want, res.KeyFiles, "the connection account is included, in the helper's order")
 
@@ -1194,10 +1194,10 @@ func TestKeyFilesDropWhatDiscoveryRefuses(t *testing.T) {
 		{Path: ""},
 		{Path: "/home/deploy/.ssh/authorized_keys2"},
 	}}, {User: "onlybad", Files: []helperproto.FileInfo{{Path: "../x"}}}}
-	got := keyFiles(users)
+	got := keyFiles(users, false)
 	assert.Equal(t, []providers.UserKeyFiles{
-		{OSUser: "deploy", Files: []string{good, "/home/deploy/.ssh/authorized_keys2"}},
-		{OSUser: "onlybad", Files: []string{}},
+		{OSUser: "deploy", Files: []string{good, "/home/deploy/.ssh/authorized_keys2"}, Complete: false},
+		{OSUser: "onlybad", Files: []string{}, Complete: false},
 	}, got, "the user stays, with fewer files")
 
 	// the eight-file cap counts only files that are kept
@@ -1208,10 +1208,16 @@ func TestKeyFilesDropWhatDiscoveryRefuses(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		many = append(many, helperproto.FileInfo{Path: "/k/" + strconv.Itoa(i)})
 	}
-	got = keyFiles([]helperproto.UserFiles{{User: "u", Files: many}})
+	got = keyFiles([]helperproto.UserFiles{{User: "u", Files: many}}, false)
 	require.Len(t, got, 1)
 	assert.Len(t, got[0].Files, 8)
 	assert.Equal(t, "/k/7", got[0].Files[7])
+	assert.False(t, got[0].Complete, "dropped entries: incomplete")
+
+	// exactly eight valid files, nothing dropped: complete
+	got = keyFiles([]helperproto.UserFiles{{User: "u", Files: many[5:13]}}, false)
+	require.Len(t, got, 1)
+	assert.True(t, got[0].Complete)
 
 	// through the provider: a file the helper reports as unsupported is not a candidate
 	e := newProvEnv(t)
@@ -1222,4 +1228,76 @@ func TestKeyFilesDropWhatDiscoveryRefuses(t *testing.T) {
 		assert.NotContains(t, u.Files, "/home/deploy/.ssh/authorized_keys2")
 	}
 	assert.True(t, hasWarning(res.Warnings, helperproto.WarnUnsupportedPath, "/home/deploy/.ssh/authorized_keys2"))
+}
+
+// Follow-up: key-files completeness. A user's list is complete only when nothing sshd would read
+// for that user was dropped; absent users are unknown (the consumer fails closed).
+func TestKeyFilesStateCompleteness(t *testing.T) {
+	ctx := context.Background()
+	byUser := func(res providers.DiscoveryResult, u string) (providers.UserKeyFiles, bool) {
+		for _, k := range res.KeyFiles {
+			if k.OSUser == u {
+				return k, true
+			}
+		}
+		return providers.UserKeyFiles{}, false
+	}
+
+	// the plain case: every account complete
+	e := newProvEnv(t)
+	res, err := e.open(t).Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	for _, u := range []string{"root", "alice-svc", "deploy"} {
+		k, ok := byUser(res, u)
+		require.True(t, ok, u)
+		assert.True(t, k.Complete, u)
+	}
+
+	// 1. the account's sshd settings could not be evaluated: absent (unknown)
+	e = newProvEnv(t)
+	e.emu.SetUserSSHD("alice-svc", "")
+	res, err = e.open(t).Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	_, ok := byUser(res, "alice-svc")
+	assert.False(t, ok, "an account whose settings were unreadable is unknown, not empty")
+	k, _ := byUser(res, "deploy")
+	assert.True(t, k.Complete, "other accounts are unaffected")
+
+	// 2. a file the helper marked unsupported for the account: present, incomplete
+	e = newProvEnv(t)
+	e.emu.SetUnsupported("/var/lib/alice-svc/.ssh/authorized_keys2")
+	res, err = e.open(t).Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	k, ok = byUser(res, "alice-svc")
+	require.True(t, ok)
+	assert.False(t, k.Complete)
+
+	// 3. a pattern the helper could not expand (global unsupported_path warning): nobody is complete
+	e = newProvEnv(t)
+	e.emu.SetSSHD(strings.Replace(linuxsshtest.DefaultSSHD, "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2",
+		"authorizedkeysfile .ssh/authorized_keys /etc/ssh/bad;path", 1))
+	res, err = e.open(t).Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	require.True(t, hasWarning(res.Warnings, helperproto.WarnUnsupportedPath, ""), "the helper reported the dropped pattern")
+	for _, u := range res.KeyFiles {
+		assert.False(t, u.Complete, u.OSUser)
+	}
+
+	// 4. the list was cut (too many users): the accounts that are listed say so only through
+	// absence, and the cut is reported as incomplete for every listed account
+	e = newProvEnv(t)
+	e.emu.SetMaxUsers(2)
+	res, err = e.open(t).Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	_, ok = byUser(res, "deploy")
+	assert.False(t, ok, "an account beyond the cut is unknown")
+	for _, u := range res.KeyFiles {
+		assert.False(t, u.Complete, u.OSUser+": the user list was cut")
+	}
+
+	// the 200-user cut inside Alice
+	users := make([]helperproto.UserFiles, 0, 3)
+	users = append(users, helperproto.UserFiles{User: "a", Files: []helperproto.FileInfo{{Path: "/a/k"}}})
+	got := keyFiles(users, true)
+	assert.False(t, got[0].Complete, "a cut list marks every user incomplete")
 }

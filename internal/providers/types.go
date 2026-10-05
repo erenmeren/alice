@@ -55,10 +55,16 @@ type DiscoveryResult struct {
 }
 
 // UserKeyFiles lists one account's candidate authorized_keys files as the helper resolved them
-// (sshd's AuthorizedKeysFile order). At most 8 files per user, 200 users per result.
+// (sshd's AuthorizedKeysFile order). At most 8 files per user, 200 users per result. Complete says
+// that Files holds every AuthorizedKeysFile entry sshd would read for the account, all supported;
+// false means some entry was dropped (unsupported, invalid, over the bound, a pattern the helper could
+// not expand, a cut user list) and the list may be missing files. An account absent from
+// DiscoveryResult.KeyFiles is unknown. A consumer that must refuse every file an account reads treats
+// both as "do not know" and fails closed.
 type UserKeyFiles struct {
-	OSUser string   `json:"os_user"`
-	Files  []string `json:"files"`
+	OSUser   string   `json:"os_user"`
+	Files    []string `json:"files"`
+	Complete bool     `json:"complete"`
 }
 
 // KeyLoginOutcome is the answer of one test login.

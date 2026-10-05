@@ -57,7 +57,17 @@ type KeyWorld struct {
 	late      time.Duration
 	queued    []lateWrite
 	landed    int
+	keyFiles  map[worldUser]keyFilesState
 }
+
+// keyFilesState is what a world's discovery says about one user's candidate key files.
+type keyFilesState int
+
+const (
+	keyFilesComplete keyFilesState = iota
+	keyFilesIncomplete
+	keyFilesUnknown
+)
 
 // lateWrite is a change a stalled call lands after it already answered (FaultLateWrite).
 type lateWrite struct {
@@ -208,7 +218,7 @@ func (w *KeyWorld) queueLate(p FaultPoint, apply func() bool) {
 
 // NewKeyWorld returns an empty world without faults.
 func NewKeyWorld() *KeyWorld {
-	return &KeyWorld{files: map[worldFile][]string{}, users: map[worldUser][]string{}, owners: map[worldFile]string{}}
+	return &KeyWorld{files: map[worldFile][]string{}, users: map[worldUser][]string{}, owners: map[worldFile]string{}, keyFiles: map[worldUser]keyFilesState{}}
 }
 
 // Put sets a file's lines (verbatim) and records that osUser reads it. The first user put for a file
@@ -252,6 +262,40 @@ func (w *KeyWorld) Events() []Event {
 	defer w.mu.Unlock()
 	w.landLate()
 	return slices.Clone(w.events)
+}
+
+// MarkKeyFilesIncomplete makes discovery report the user's candidate key files as incomplete
+// (UserKeyFiles.Complete false): some file sshd reads for the user may be missing from the list.
+func (w *KeyWorld) MarkKeyFilesIncomplete(target uuid.UUID, osUser string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.keyFiles[worldUser{target, osUser}] = keyFilesIncomplete
+}
+
+// HideKeyFiles makes discovery leave the user out of the candidate key files (unknown).
+func (w *KeyWorld) HideKeyFiles(target uuid.UUID, osUser string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.keyFiles[worldUser{target, osUser}] = keyFilesUnknown
+}
+
+// userKeyFiles is what a discovery of the target reports: every user that has a file, in name order,
+// complete unless MarkKeyFilesIncomplete or HideKeyFiles said otherwise.
+func (w *KeyWorld) userKeyFiles(target uuid.UUID) []providers.UserKeyFiles {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var users []worldUser
+	for u := range w.users {
+		if u.target == target && w.keyFiles[u] != keyFilesUnknown {
+			users = append(users, u)
+		}
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].user < users[j].user })
+	out := make([]providers.UserKeyFiles, 0, len(users))
+	for _, u := range users {
+		out = append(out, providers.UserKeyFiles{OSUser: u.user, Files: slices.Clone(w.users[u]), Complete: w.keyFiles[u] == keyFilesComplete})
+	}
+	return out
 }
 
 // SetFault installs the fault decision (nil: none).

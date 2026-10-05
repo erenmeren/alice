@@ -277,7 +277,7 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 		res.Warnings = appendUnlisted(res.Warnings, helperproto.WarnAccountNameUnsupported, u.UID)
 		return true
 	})
-	res.KeyFiles = keyFiles(users)
+	res.KeyFiles = keyFiles(users, cut || slices.Contains(list.Warnings, helperproto.WarnUnsupportedPath) || slices.Contains(list.Warnings, helperproto.WarnTooManyUsers))
 	for _, u := range users {
 		if u.UID == 0 {
 			res.UID0Users = append(res.UID0Users, u.User)
@@ -449,12 +449,17 @@ const (
 )
 
 // keyFiles lists each account's candidate authorized_keys files in the helper's order (sshd's
-// AuthorizedKeysFile order). An account whose sshd settings could not be evaluated is left out: its
-// files may not be the ones sshd reads. A file the helper marked unsupported, or whose path fails
-// ValidPath, is dropped exactly as discoverFile drops it from the key locations (the account stays,
-// with fewer files): these paths are stored, served and offered as deploy targets, so remote text
-// that discovery itself refuses never reaches them. The bound of eight counts kept files only.
-func keyFiles(users []helperproto.UserFiles) []providers.UserKeyFiles {
+// AuthorizedKeysFile order) and says per account whether the list is complete: every entry sshd would
+// read for the account is present and supported. An account whose sshd settings could not be
+// evaluated is left out (unknown): its files may not be the ones sshd reads. A file the helper marked
+// unsupported, or whose path fails ValidPath, is dropped exactly as discoverFile drops it from the key
+// locations; the account stays, with fewer files and Complete false, as it is when it has more than
+// maxKeyFilesPerUser candidates. listCut says the helper's list is not the whole account list or lost
+// a pattern it could not expand (a global unsupported_path or too_many_users warning, or a cut at a
+// bound): which accounts lost files is unknown, so no listed account is complete. These paths are
+// stored, served and offered as deploy targets; a consumer that must refuse every file an account
+// reads treats an absent or incomplete account as unknown and fails closed.
+func keyFiles(users []helperproto.UserFiles, listCut bool) []providers.UserKeyFiles {
 	var out []providers.UserKeyFiles
 	for _, u := range users {
 		if u.SSHDUnreadable {
@@ -465,13 +470,15 @@ func keyFiles(users []helperproto.UserFiles) []providers.UserKeyFiles {
 		if len(out) == maxKeyFileUsers {
 			break
 		}
-		uf := providers.UserKeyFiles{OSUser: u.User, Files: []string{}}
+		uf := providers.UserKeyFiles{OSUser: u.User, Files: []string{}, Complete: !listCut}
 		for _, f := range u.Files {
-			if len(uf.Files) == maxKeyFilesPerUser {
-				break
-			}
 			if f.Unsupported || !helperproto.ValidPath(f.Path) {
+				uf.Complete = false
 				continue
+			}
+			if len(uf.Files) == maxKeyFilesPerUser {
+				uf.Complete = false
+				break
 			}
 			uf.Files = append(uf.Files, f.Path)
 		}
