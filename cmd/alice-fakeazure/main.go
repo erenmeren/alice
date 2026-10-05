@@ -577,7 +577,7 @@ func adminHandler(f *fake) http.Handler {
 	route("GET /requests", func(r *http.Request) (any, *adminError) {
 		onlyAuth := r.URL.Query().Get("authenticated") == "true"
 		vault := strings.TrimPrefix(f.s.VaultURL(), "https://")
-		var count, login, vaultN int
+		var count, login, vaultN, throttledN int
 		for _, req := range f.s.Requests() {
 			if onlyAuth && !req.HadAuth {
 				continue
@@ -588,9 +588,12 @@ func adminHandler(f *fake) http.Handler {
 				login++
 			case vault:
 				vaultN++
+				if req.Status == http.StatusTooManyRequests {
+					throttledN++ // the proof that a poll cycle ran into the throttle
+				}
 			}
 		}
-		return map[string]int{"count": count, "login": login, "vault": vaultN}, nil
+		return map[string]int{"count": count, "login": login, "vault": vaultN, "throttled": throttledN}, nil
 	})
 	route("POST /requests/clear", func(*http.Request) (any, *adminError) { f.s.ClearRequests(); return ok, nil })
 

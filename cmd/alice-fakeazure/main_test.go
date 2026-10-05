@@ -652,6 +652,31 @@ func TestCtlRequestsCountsAndClears(t *testing.T) {
 	assert.EqualValues(t, 0, st.ctlJSON("requests")["count"])
 }
 
+// requests also counts the vault calls the fake answered 429, so a journey can prove that a poll cycle
+// really ran into the throttle (the vault's status does not change before the third cycle).
+func TestCtlRequestsCountsThrottledVaultCalls(t *testing.T) {
+	st := startStack(t)
+	c := st.client()
+	tok := st.signedIn(c)
+	_ = st.names(c, tok, "certificates")
+	assert.EqualValues(t, 0, st.ctlJSON("requests")["throttled"], "nothing throttled yet")
+
+	st.ctlJSON("throttle", "--retry-after", "61")
+	for range 2 {
+		status, _, _ := st.do(c, http.MethodGet, "https://alice-e2e.vault.azure.net/keys?api-version=2025-07-01", nil, tok)
+		require.Equal(t, http.StatusTooManyRequests, status)
+	}
+	got := st.ctlJSON("requests")
+	assert.EqualValues(t, 2, got["throttled"])
+	assert.Greater(t, got["vault"], got["throttled"], "the answered calls are vault calls too")
+
+	st.ctlJSON("unfault")
+	_ = st.names(c, tok, "certificates")
+	assert.EqualValues(t, 2, st.ctlJSON("requests")["throttled"], "an answered call is not counted as throttled")
+	st.ctlJSON("clear-requests")
+	assert.EqualValues(t, 0, st.ctlJSON("requests")["throttled"])
+}
+
 func TestCtlUsage(t *testing.T) {
 	var out, errOut bytes.Buffer
 	assert.Equal(t, 2, run(context.Background(), nil, &out, &errOut))
