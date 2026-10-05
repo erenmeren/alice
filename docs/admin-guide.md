@@ -9,8 +9,8 @@ Alice has three roles:
 
 | Role | Can do | Cannot do |
 |---|---|---|
-| Administrator | Everything: users, settings, audit log, API tokens of other people, a website's verification settings, deploying a certificate with an incomplete chain | — |
-| Operator | View inventory; test servers, run discovery and remove SSH keys; upload certificates, create signing requests and deploy certificates; own API tokens | Manage users, see the audit log, change settings or verification settings, deploy an incomplete chain |
+| Administrator | Everything: users, settings, audit log, API tokens of other people, a website's verification settings, deploying a certificate with an incomplete chain; Key Vaults: adding a vault, its credentials and check interval, automatic deployment, held versions, imports into a vault | — |
+| Operator | View inventory; test servers, run discovery and remove SSH keys; upload certificates, create signing requests and deploy certificates; check a Key Vault, connect its certificates to websites and deploy a version that is not held; own API tokens | Manage users, see the audit log, change settings or verification settings, deploy an incomplete chain, manage Key Vaults beyond that |
 | Auditor | View inventory read-only, view and export the audit log, verify its integrity; own read-only API tokens | Change anything, manage users |
 
 The full list of which role may call which API operation is in [authz-matrix.md](authz-matrix.md).
@@ -293,6 +293,53 @@ A successful deployment, and one an administrator cancelled by discarding its wa
 email. Every deployment, refusal and outcome is in the audit log
 (`deployment.*`, `certificate.*`, `csr.*`, `location.*`).
 
+## Key Vaults
+
+Day-to-day use of a vault (statuses, inventory, connections, automatic deployment, held versions, imports) is in
+[operator-guide.md](operator-guide.md#key-vaults); giving Alice access in Azure is in
+[azure-setup.md](azure-setup.md). What is for administrators:
+
+| Action | Who |
+|---|---|
+| **Add Key Vault**, **Replace credentials** | Administrator with a fresh authenticator code; never an API token |
+| Switching **Automatic deployment** on or off, **Release** of a held version, **Import into Key Vault** | Administrator with a fresh authenticator code; never an API token |
+| **Deploy now** of a held version, adding websites to a connection that deploys automatically, removing a vault together with its connections | Administrator with a fresh authenticator code; never an API token |
+| The check interval, **Remove Key Vault** (without connections) | Administrator |
+| **Check now**, the access check, connecting websites, **Deploy now** of a version that is not held | Administrator or operator |
+| Reading vaults, their inventory, connections and imports | Everyone |
+
+The full list per API route is in [authz-matrix.md](authz-matrix.md).
+
+**Sign-in credentials.** A vault signs in with a certificate (recommended), a client secret or the managed identity
+of the Azure virtual machine Alice runs on. Alice stores a certificate's private key or a client secret only
+encrypted with its master key, never shows it again and never returns it through the API; the secret fields of the
+forms are emptied when the request is sent (they ask the browser not to remember them, which a browser may ignore).
+**Replace credentials** checks the new ones as when adding a vault and keeps the old ones if the check fails; the
+replaced credentials stay in the database, encrypted, because Alice never deletes stored credentials. Replace a
+client secret or certificate before it expires: the vault's page warns from 30 days before the date (for a secret,
+the date typed when it was added). This release sends no reminder email; after the date the vault shows
+**Credentials expired** (`ALC-AKV-0002`). When Alice cannot decrypt a vault's stored credentials (it runs with
+another master key than the one they were sealed with), a deployment from that vault fails with `ALC-AKV-0041`:
+choose **Replace credentials** (a check of the vault or an import shows the generic `ALC-SYS-0003` in that case).
+
+**What Alice stores of a vault.** The address, the sign-in method, the tenant and client IDs, the sealed credential,
+the object ID Alice signs in as, and the metadata of certificates, versions, keys and secrets (names, versions,
+thumbprints, dates, key types, content types, policies). Alice never stores the value of a secret or a certificate's
+private key read from a vault: a deployment reads it right before it changes the server, keeps it in memory and
+clears it afterwards. Every read of a certificate's secret is in the audit log (`kv.secret_read`, with its purpose).
+
+**Check interval.** Each vault is checked every 15 minutes unless an administrator changes **Check every
+(minutes)** on its page (5 to 1440). **Check now** checks at once.
+
+**Emails.** Administrators with an email address get, per vault: a sign-in that failed three times in a row; a
+certificate that disappeared from the vault; a new version of a connected certificate that automatic deployment
+will not deploy (switched off, held for the license or its chain, disabled, expired, not yet valid, older than the
+website's certificate, created before automatic deployment was switched on, replaced by a newer version before it
+was deployed); automatic deployment of a version stopped after three failures; an import that failed or whose
+outcome stays unknown. One check or planner run sends at most 20 emails of one kind per vault, then one summary;
+there is no limit across vaults. No email is sent when the vault firewall refuses Alice. Everything a
+vault does is in the audit log (`vault.*`, `kv.*`, `binding.*`).
+
 ## License
 
 **License** (administrators and auditors) shows the Installation ID with **Copy**, the state ("Evaluation",
@@ -310,7 +357,7 @@ the server operator has set up email ([operator-guide.md](operator-guide.md#emai
 
 ## For auditors
 
-Auditors sign in like everyone else (password and authenticator app). They see **Home**, **Servers**, **SSH keys**, **Certificates**, **Deployment history**, **Audit log**,
+Auditors sign in like everyone else (password and authenticator app). They see **Home**, **Servers**, **SSH keys**, **Certificates**, **Deployment history**, **Key Vaults**, **Audit log**,
 **License** (read only), **API tokens** and **My account**, and no button that changes anything except their own password, recovery codes,
 language and read-only API tokens. On **Audit log** they can filter, **Verify integrity** and export. A read-only
 API token lets a script fetch `GET /api/v1/audit` or `GET /api/v1/audit/export?format=json` for regular
