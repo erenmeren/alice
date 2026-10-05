@@ -94,7 +94,7 @@ As an Admin, I bind a Key Vault certificate to Nginx servers so that when Key Va
 - AC3: A failure on one server rolls back that server only and raises an alert; other servers are not affected.
 - AC4: The vault is added with a Service Principal (client secret or certificate) or Managed Identity; the UI shows which Azure roles are needed for monitor-only, deploy, and import.
 - AC5: Nothing is deployed while the license is in lock mode; after renewal, deploys that were pending during lock wait for Admin confirmation.
-- AC6: A new version is detected by its version id and X.509 thumbprint (the vault's Updated timestamp is only a pre-filter). Whether the Key Vault Reader role alone is enough for data-plane listing of certificates and keys is (verify), to be confirmed by the real-Azure test suite in Phase 5. Key Vault Secrets User is required for deploy, and the docs recommend scoping it to the individual cert-backing secrets.
+- AC6: A new version is detected by its version id and X.509 thumbprint (the vault's Updated timestamp is only a pre-filter). Whether the Key Vault Reader role alone is enough for data-plane listing of certificates and keys is (verify), to be confirmed by the real-Azure test suite in Phase 5 (R40 item 30: unconfirmed until the owner's real-Azure run). Key Vault Secrets User is required for deploy, and the docs recommend scoping it to the individual cert-backing secrets.
 
 **S6. SSH key rotation with overlap (Admin configures policy)**
 As an Admin, I enable a rotation policy for platform-managed SSH keys so that old keys are retired safely.
