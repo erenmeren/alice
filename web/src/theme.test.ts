@@ -58,4 +58,17 @@ describe('theme', () => {
     );
     expect(container.querySelector('.mantine-ScrollArea-viewport')).toHaveAttribute('tabindex', '0');
   });
+
+  it('draws what is typed into a field with an error in red 9 too, and nothing else', () => {
+    render(
+      createElement(
+        MantineProvider,
+        { theme },
+        createElement(TextInput, { label: 'With error', error: 'bad' }),
+        createElement(TextInput, { label: 'Without error' }),
+      ),
+    );
+    expect(screen.getByLabelText('With error')).toHaveStyle({ '--input-color': 'var(--mantine-color-red-9)' });
+    expect((screen.getByLabelText('Without error') as HTMLElement).style.getPropertyValue('--input-color')).toBe('');
+  });
 });

@@ -1,4 +1,4 @@
-import { InputWrapper, TableScrollContainer, createTheme, defaultVariantColorsResolver, type VariantColorsResolver } from '@mantine/core';
+import { Input, InputWrapper, TableScrollContainer, createTheme, defaultVariantColorsResolver, type VariantColorsResolver } from '@mantine/core';
 
 // Mantine hovers a filled button of shade 9 with the lighter shade 8; for red that is #e03131,
 // and white text on it has no safety margin (exact math 4.513:1, but axe measures 4.48:1 on the
@@ -30,6 +30,8 @@ export const theme = createTheme({
     // Field help texts default to the "dimmed" gray (3.3:1); gray 7 is 8.2:1.
     // Field errors default to red 6 (3.1:1 on white); red 9 is 6.1:1.
     InputWrapper: InputWrapper.extend({ styles: { description: { color: 'var(--mantine-color-gray-7)' }, error: { color: 'var(--mantine-color-red-9)' } } }),
+    // The text typed into a field with an error is drawn in Mantine's error color, red 6 (3.1:1 on white).
+    Input: Input.extend({ styles: (_theme, props) => ({ input: props.error ? { '--input-color': 'var(--mantine-color-red-9)' } : {} }) }),
     // A table that scrolls sideways on a narrow screen must be reachable with the keyboard (axe
     // scrollable-region-focusable); a table without a link or button in it has nothing else to focus.
     TableScrollContainer: TableScrollContainer.extend({ defaultProps: { scrollAreaProps: { viewportProps: { tabIndex: 0 } } } }),
