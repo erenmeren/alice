@@ -1,6 +1,7 @@
 package pki
 
 import (
+	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -19,11 +20,28 @@ import (
 // attribute go-pkcs12's EncodeTrustStore adds), inside one PBES2 encrypted safe (PBKDF2-HMAC-SHA256, AES-256-CBC),
 // and a SHA-256 MAC over the authenticated safe. password may be empty.
 func CertificatesOnlyPFX(password string, certs ...*x509.Certificate) []byte {
+	return encryptedSafePFX(password, certBags(certs))
+}
+
+// NestedKeyPFX builds the same shape as CertificatesOnlyPFX plus a SafeContentsBag (RFC 7292 4.2.6) that holds the
+// private key as a keyBag: a key go-pkcs12 v0.7.3 does not look for, since it reads only top-level key bags.
+func NestedKeyPFX(password string, key crypto.Signer, certs ...*x509.Certificate) []byte {
+	keyBag := p12SafeBag{ID: oidKeyBagType, Value: explicit0(must(x509.MarshalPKCS8PrivateKey(key)))}
+	nested := p12SafeBag{ID: oidSafeContentsBagType, Value: explicit0(must(asn1.Marshal([]p12SafeBag{keyBag})))}
+	return encryptedSafePFX(password, append(certBags(certs), nested))
+}
+
+func certBags(certs []*x509.Certificate) []p12SafeBag {
 	var bags []p12SafeBag
 	for _, c := range certs {
 		value := must(asn1.Marshal(p12CertBag{ID: oidX509CertBag, Value: c.Raw}))
-		bags = append(bags, p12SafeBag{ID: oidCertBagType, Value: asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: value}})
+		bags = append(bags, p12SafeBag{ID: oidCertBagType, Value: explicit0(value)})
 	}
+	return bags
+}
+
+// encryptedSafePFX puts bags into one PBES2 encrypted safe with a SHA-256 MAC (see CertificatesOnlyPFX).
+func encryptedSafePFX(password string, bags []p12SafeBag) []byte {
 	plain := must(asn1.Marshal(bags))
 
 	// PBES2: PBKDF2-HMAC-SHA256 over the UTF-8 password, AES-256-CBC with PKCS#7 padding.
@@ -109,15 +127,17 @@ type (
 )
 
 var (
-	oidDataType          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}
-	oidEncryptedDataType = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 6}
-	oidCertBagType       = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 12, 10, 1, 3}
-	oidX509CertBag       = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 22, 1}
-	oidPBES2             = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 13}
-	oidPBKDF2            = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 12}
-	oidHMACSHA256        = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 9}
-	oidAES256CBC         = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}
-	oidSHA256            = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
+	oidDataType            = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}
+	oidEncryptedDataType   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 6}
+	oidCertBagType         = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 12, 10, 1, 3}
+	oidKeyBagType          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 12, 10, 1, 1}
+	oidSafeContentsBagType = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 12, 10, 1, 6}
+	oidX509CertBag         = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 22, 1}
+	oidPBES2               = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 13}
+	oidPBKDF2              = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 12}
+	oidHMACSHA256          = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 9}
+	oidAES256CBC           = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}
+	oidSHA256              = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
 )
 
 func explicit0(der []byte) asn1.RawValue {

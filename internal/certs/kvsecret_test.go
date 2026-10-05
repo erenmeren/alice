@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"strings"
 	"testing"
@@ -98,6 +99,10 @@ func TestParseKVSecretRefusals(t *testing.T) {
 		{"pfx without a key (a Java trust store)", ContentTypePKCS12, []byte(base64.StdEncoding.EncodeToString(trustStore)), ErrNoKey},
 		{"pfx without a key (openssl -nokeys, .NET: no trust attribute, encrypted safe, MAC)", ContentTypePKCS12,
 			[]byte(base64.StdEncoding.EncodeToString(pki.CertificatesOnlyPFX("", leaf.Cert, ca.Intermediate))), ErrNoKey},
+		// Pinned limit (final review re-review m-2): go-pkcs12 v0.7.3 reads only top-level key bags, so a PFX whose key
+		// sits in a nested SafeContentsBag is read as one without a key (Monitor only), not as unreadable.
+		{"pfx whose key is in a nested safe contents bag (read as without a key)", ContentTypePKCS12,
+			[]byte(base64.StdEncoding.EncodeToString(pki.NestedKeyPFX("", leaf.Key, leaf.Cert, ca.Intermediate))), ErrNoKey},
 		{"pfx without a key whose password is not empty", ContentTypePKCS12,
 			[]byte(base64.StdEncoding.EncodeToString(pki.CertificatesOnlyPFX("pw", leaf.Cert))), ErrPFXPassword},
 		{"unknown content type", "text/plain", []byte(kvPFX(leaf, ca)), ErrKVContentType},
@@ -201,8 +206,17 @@ func TestParseKVSecretClearsEveryBufferItOwns(t *testing.T) {
 	} {
 		var scratch kvScratch
 		var sawKey bool
+		var decoded [][]byte
 		scratch.onWipe = func(b []byte) { sawKey = sawKey || !allZero(b) }
+		scratch.onDecode = func(b *pem.Block) {
+			if b.Type != "CERTIFICATE" { // certificates are public
+				decoded = append(decoded, b.Bytes)
+			}
+		}
 		v, err := parseKVSecret(tc.ct, tc.value, now, nil, &scratch)
+		for i, b := range decoded {
+			assert.True(t, allZero(b), "%s: the bytes pem.Decode allocated for non-certificate block %d are cleared, a refused second key's too", name, i)
+		}
 		if tc.ok {
 			require.NoError(t, err, name)
 			v.PrivateKeyDER.Zero()

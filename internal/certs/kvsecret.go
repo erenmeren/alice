@@ -13,10 +13,13 @@ import (
 )
 
 // kvScratch owns the buffers ParseKVSecret fills with key material (the decoded PFX, the PEM key
-// blocks) and clears all of them when it returns, whichever way it returns. onWipe is a test hook.
+// blocks) and clears all of them when it returns, whichever way it returns. onWipe and onDecode are
+// test hooks: onDecode sees each block pem.Decode returns; splitPEM clears the bytes of every block that is not a
+// certificate itself.
 type kvScratch struct {
-	bufs   [][]byte
-	onWipe func([]byte)
+	bufs     [][]byte
+	onWipe   func([]byte)
+	onDecode func(*pem.Block)
 }
 
 // take returns a zeroed buffer of n bytes that wipe clears.
@@ -88,7 +91,9 @@ func parseKVSecret(contentType string, value []byte, now time.Time, roots *x509.
 // errPFXKeyMissing is go-pkcs12's (v0.7.3) answer for a PFX that decrypted and authenticated with the password and
 // held at least one certificate but no key bag. The library has no sentinel for it; the KV secret tests pin the
 // text with a Java trust store and with an openssl -nokeys shaped file (pki.CertificatesOnlyPFX), so an upgrade that
-// changes it fails there.
+// changes it fails there. Limit: the library reads only top-level keyBag and pkcs8ShroudedKeyBag bags, so a PFX whose
+// key sits in another bag (a nested SafeContentsBag, say) gets the same answer and is read as one without a key
+// (pinned by pki.NestedKeyPFX). Telling the two apart would need a PKCS #12 decoder of Alice's own.
 const errPFXKeyMissing = "pkcs12: private key missing"
 
 // pfxHoldsCertificatesOnly reports whether data (already through the iteration guard of decodePFX) is a PFX with
@@ -113,6 +118,9 @@ func splitPEM(value []byte, scratch *kvScratch) (certPEM, keyPEM []byte, err err
 		b, rest = pem.Decode(rest)
 		if b == nil {
 			break
+		}
+		if scratch.onDecode != nil {
+			scratch.onDecode(b)
 		}
 		switch b.Type {
 		case "CERTIFICATE":
