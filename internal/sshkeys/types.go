@@ -34,6 +34,9 @@ const (
 	ReverifyFreshness = 15 * time.Minute
 	// MaxLocationJobs bounds the sweep's re-queues of a location's job per phase.
 	MaxLocationJobs = 5
+	// ManualStartGrace: a manual run still previewed this long after its creation was left by a crash
+	// between its insert and its start; the sweep cancels it (rotation.start_failed), never starts it.
+	ManualStartGrace = 5 * time.Minute
 	// maxPlanActions and maxPlanBytes are what the database stores of a plan (rotation_locations.n,
 	// rotations.plan): insertRun refuses a larger plan with ErrPlanTooLarge first.
 	maxPlanActions = 10000
@@ -64,6 +67,11 @@ const (
 	// ReasonStartFailed: Run now created a run it could not start (generator busy, a failed write);
 	// the run is cancelled in the same call (Task 8 review M3).
 	ReasonStartFailed = "rotation.start_failed"
+	// ReasonNoticePending: Continue was refused until the renewal notice is queued (ErrNoticePending).
+	ReasonNoticePending = "rotation.notice_pending"
+	// ReasonLateResult: a definite result arrived after the sweep had exhausted the location (step
+	// late_result; the code of the attention mail it causes).
+	ReasonLateResult = "rotation.late_result"
 )
 
 // Triggers of a run (rotations.trigger).

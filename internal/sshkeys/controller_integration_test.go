@@ -96,7 +96,7 @@ func TestPolicySwitchedOffWhilePlanningCancelsTheRun(t *testing.T) {
 		defer close(done)
 		_, off = e.svc.SetPolicyEnabled(e.ctx, e.admin, p.ID, p.Version, false)
 	}()
-	time.Sleep(200 * time.Millisecond) // the switch-off waits for the lock
+	e.waitForLockWait() // the switch-off waits for the lock
 	runID := uuid.Must(uuid.NewV7())
 	_, err = tx.Exec(e.ctx, `INSERT INTO rotations (id, policy_id, old_ssh_key_id, trigger, status, plan, plan_digest, new_key_type,
     overlap_minutes, planned_for, notified_at, created_at, updated_at)
@@ -330,7 +330,7 @@ func TestStepsRecorded(t *testing.T) {
 	for _, s := range got.Steps {
 		names = append(names, s.Name)
 	}
-	assert.Equal(t, []string{"dry_run_notified", "adding_new", "adding", "added", "verified", "overlap"}, names)
+	assert.Equal(t, []string{"dry_run_notified", "adding_new", "adding", "add_answered", "added", "verified", "overlap"}, names)
 	assert.Equal(t, 2, e.audits("rotation.status_changed"))
 	assert.Equal(t, 3, e.audits("rotation.location_changed"))
 	var details map[string]string

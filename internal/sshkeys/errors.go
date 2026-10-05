@@ -28,6 +28,9 @@ var (
 	ErrPlanChanged        = errors.New("sshkeys: the plan changed since the preview")
 	ErrNothingToRotate    = errors.New("sshkeys: no location can change")
 	ErrNotWaiting         = errors.New("sshkeys: the rotation is not waiting for this action")
+	// ErrNoticePending: Continue before the renewal notice of this pause was queued (the next sweep
+	// queues it; reason rotation.notice_pending; Task 9 review I2).
+	ErrNoticePending = errors.New("sshkeys: the renewal notice has not been sent yet; try again in a minute")
 	// ErrPlanTooLarge: the plan has more locations than a run can hold (reason rotation.plan_too_large).
 	ErrPlanTooLarge    = errors.New("sshkeys: the plan has too many locations for one run")
 	ErrVersionMismatch = inventory.ErrVersionMismatch

@@ -15,32 +15,6 @@ import (
 	"alice/internal/sshkeys"
 )
 
-// L-84 at the store: a run paused in lock past the end of its overlap. Continue needs the license;
-// the renewal notice is sent before any removal; every removal still needs a fresh re-check.
-func TestContinueAfterRenewalRenotifies(t *testing.T) {
-	e := newEnv(t)
-	k := e.deployed("ci", e.server("web-01"), "deploy")
-	r, ids := e.runToDecisionWith(k, map[string]providers.KeyLoginOutcome{"deploy": providers.KeyLoginAccepted})
-	e.clock.Advance(7 * 24 * time.Hour)
-	e.gate.lock()
-	require.NoError(t, e.svc.Advance(e.ctx, r.ID))
-	require.True(t, e.run(r.ID).PausedLicense)
-	assert.ErrorIs(t, e.svc.Continue(e.ctx, e.admin, r.ID), license.ErrLocked)
-	e.gate.unlock()
-	require.NoError(t, e.svc.Continue(e.ctx, e.admin, r.ID))
-	got := e.run(r.ID)
-	assert.False(t, got.PausedLicense)
-	assert.Equal(t, "removing_old", got.Status, "Continue advances")
-	assert.Len(t, e.mails("rotation.preview_after_license"), 1)
-	assert.Equal(t, 1, e.audits("rotation.continued"))
-	var by *uuid.UUID
-	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT continued_by FROM rotations WHERE id = $1", r.ID).Scan(&by))
-	assert.Equal(t, e.admin.UserID, *by)
-	_, err := e.svc.BeginRemove(e.claimed(), ids["deploy"])
-	assert.ErrorIs(t, err, sshkeys.ErrNotYourTurn, "a fresh re-check first")
-	assert.ErrorIs(t, e.svc.Continue(e.ctx, e.admin, r.ID), sshkeys.ErrNotWaiting, "not paused")
-}
-
 func TestFinishNow(t *testing.T) {
 	e := newEnv(t)
 	k := e.deployed("ci", e.server("web-01"), "deploy")

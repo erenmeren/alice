@@ -118,6 +118,7 @@ type env struct {
 	ctx      context.Context
 	db       *pgtest.DB
 	clock    *clock.Fake
+	tick     *tickClock // the services' clock: e.clock, advancing on every read while ticking
 	keyring  *secrets.Keyring
 	audit    *audit.Log
 	lic      *license.Service
@@ -136,7 +137,8 @@ type env struct {
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	e := &env{t: t, ctx: context.Background(), db: pgtest.New(t), clock: clock.NewFake(start), logs: &syncBuffer{}}
-	e.notifier = &recordingNotifier{next: notify.AdminNotifier{Clock: e.clock}}
+	e.tick = &tickClock{Fake: e.clock}
+	e.notifier = &recordingNotifier{next: notify.AdminNotifier{Clock: e.tick}}
 	// A lock-order mistake fails fast with SQLSTATE 55P03 instead of hanging the suite.
 	var dbName string
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT current_database()").Scan(&dbName))
@@ -152,12 +154,12 @@ func newEnv(t *testing.T) *env {
 		Log: quiet})
 	require.NoError(t, e.lic.Start(e.ctx))
 	e.gate = &lockGate{Service: e.lic}
-	e.queue = jobs.NewQueue(jobs.QueueConfig{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clock, Gate: e.gate})
+	e.queue = jobs.NewQueue(jobs.QueueConfig{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.tick, Gate: e.gate})
 	reg := providers.NewRegistry()
 	reg.Register(fake.New(providers.KindLinuxSSH))
 	reg.Freeze()
-	e.inv = inventory.New(inventory.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clock, License: e.gate,
-		Registry: reg, Jobs: e.queue, Notifier: notify.AdminNotifier{Clock: e.clock}, Log: quiet})
+	e.inv = inventory.New(inventory.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.tick, License: e.gate,
+		Registry: reg, Jobs: e.queue, Notifier: notify.AdminNotifier{Clock: e.tick}, Log: quiet})
 	_, err = e.inv.EnsurePlatformKey(e.ctx)
 	require.NoError(t, err)
 	e.svc = e.newService(e.keyring)
@@ -169,7 +171,7 @@ func newEnv(t *testing.T) *env {
 // newService builds the module on the environment with a keyring (another master key: a
 // decryption failure).
 func (e *env) newService(k *secrets.Keyring) *sshkeys.Service {
-	return sshkeys.New(sshkeys.Config{HelperBudget: helperproto.HelperBudget, Pool: e.db.App, Keyring: k, Audit: e.audit, Clock: e.clock, License: e.gate, Inventory: e.inv,
+	return sshkeys.New(sshkeys.Config{HelperBudget: helperproto.HelperBudget, Pool: e.db.App, Keyring: k, Audit: e.audit, Clock: e.tick, License: e.gate, Inventory: e.inv,
 		Jobs: e.queue, Notifier: e.notifier, Log: slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 }
 
@@ -377,4 +379,19 @@ func keyBodyLines(pem string) []string {
 		}
 	}
 	return out
+}
+
+// tickClock is the services' clock: the test's fake clock, which moves one millisecond on every read
+// while ticking is on, as a real clock does between two reads (the frozen clock hid a join on two
+// separate clock reads: Task 9 re-review C1).
+type tickClock struct {
+	*clock.Fake
+	on atomic.Bool
+}
+
+func (c *tickClock) Now() time.Time {
+	if c.on.Load() {
+		c.Advance(time.Millisecond)
+	}
+	return c.Fake.Now()
 }

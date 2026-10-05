@@ -46,6 +46,7 @@ type Rotation struct {
 	NewFingerprint                                  string
 	Trigger, Status                                 string
 	PausedLicense                                   bool
+	RenotifiedAt                                    *time.Time // the renewal notice of the current pause (S6)
 	AwaitingDecision                                bool
 	DecisionDueAt                                   *time.Time
 	Plan                                            plan.Plan
@@ -104,11 +105,11 @@ func readRotation(ctx context.Context, q db.Querier, id uuid.UUID, steps bool) (
 	)
 	err := q.QueryRow(ctx, `SELECT r.id, r.policy_id, r.old_ssh_key_id, r.new_ssh_key_id, ok.fingerprint_sha256, coalesce(nk.fingerprint_sha256, ''),
     r.trigger, r.status, r.paused_license, r.awaiting_decision, r.decision_due_at, r.plan, r.plan_digest, r.new_key_type, r.overlap_minutes,
-    r.planned_for, r.notified_at, r.started_at, r.verified_at, r.overlap_until, r.finished_at, r.result_code, r.version, r.kept_count
+    r.planned_for, r.notified_at, r.started_at, r.verified_at, r.overlap_until, r.finished_at, r.result_code, r.version, r.kept_count, r.renotified_at
 FROM rotations r JOIN ssh_keys ok ON ok.id = r.old_ssh_key_id LEFT JOIN ssh_keys nk ON nk.id = r.new_ssh_key_id WHERE r.id = $1`, id).Scan(
 		&r.ID, &r.PolicyID, &r.OldKeyID, &r.NewKeyID, &r.OldFingerprint, &r.NewFingerprint, &r.Trigger, &r.Status, &r.PausedLicense,
 		&r.AwaitingDecision, &r.DecisionDueAt, &rawPlan, &r.Digest, &r.NewKeyType, &r.OverlapMinutes, &r.PlannedFor, &r.NotifiedAt,
-		&r.StartedAt, &r.VerifiedAt, &r.OverlapUntil, &r.FinishedAt, &r.ResultCode, &r.Version, &r.KeptCount)
+		&r.StartedAt, &r.VerifiedAt, &r.OverlapUntil, &r.FinishedAt, &r.ResultCode, &r.Version, &r.KeptCount, &r.RenotifiedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Rotation{}, ErrNotFound
 	}
@@ -120,7 +121,7 @@ FROM rotations r JOIN ssh_keys ok ON ok.id = r.old_ssh_key_id LEFT JOIN ssh_keys
 	}
 	r.PlannedFor, r.NotifiedAt = r.PlannedFor.UTC(), r.NotifiedAt.UTC()
 	r.DecisionDueAt, r.StartedAt, r.VerifiedAt = utcPtr(r.DecisionDueAt), utcPtr(r.StartedAt), utcPtr(r.VerifiedAt)
-	r.OverlapUntil, r.FinishedAt = utcPtr(r.OverlapUntil), utcPtr(r.FinishedAt)
+	r.OverlapUntil, r.FinishedAt, r.RenotifiedAt = utcPtr(r.OverlapUntil), utcPtr(r.FinishedAt), utcPtr(r.RenotifiedAt)
 	if r.Locations, err = readRotationLocations(ctx, q, id); err != nil {
 		return Rotation{}, err
 	}

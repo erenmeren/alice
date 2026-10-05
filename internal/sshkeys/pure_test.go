@@ -157,6 +157,7 @@ func TestInsertRunRefusesAnOversizedPlan(t *testing.T) {
 }
 
 func TestAllowedActions(t *testing.T) {
+	now := time.Now()
 	verified := []RotationLocation{{State: LocVerified}, {State: LocUnverifiable}}
 	for _, c := range []struct {
 		r    Rotation
@@ -165,10 +166,11 @@ func TestAllowedActions(t *testing.T) {
 	}{
 		{Rotation{Status: StatusDryRunNotified}, true, []string{"abort"}},
 		{Rotation{Status: StatusDryRunNotified}, false, []string{}},
-		{Rotation{Status: StatusAddingNew, PausedLicense: true}, true, []string{"continue", "abort"}},
+		{Rotation{Status: StatusAddingNew, PausedLicense: true}, true, []string{"abort"}}, // the renewal notice is not out yet (I2)
+		{Rotation{Status: StatusAddingNew, PausedLicense: true, RenotifiedAt: &now}, true, []string{"continue", "abort"}},
 		{Rotation{Status: StatusAddingNew, PausedLicense: true}, false, []string{}},
 		{Rotation{Status: StatusOverlap}, true, []string{"finish_now", "abort"}},
-		{Rotation{Status: StatusOverlap, PausedLicense: true}, true, []string{"continue", "abort"}},
+		{Rotation{Status: StatusOverlap, PausedLicense: true, RenotifiedAt: &now}, true, []string{"continue", "abort"}},
 		{Rotation{Status: StatusVerifyingNew, AwaitingDecision: true, Locations: verified}, true, []string{"keep_old", "abort"}},
 		{Rotation{Status: StatusVerifyingNew, AwaitingDecision: true, Locations: verified[1:]}, false, []string{}},
 		{Rotation{Status: StatusRemovingOld}, true, []string{}},
@@ -205,8 +207,12 @@ func TestSmallStoreHelpers(t *testing.T) {
 	assert.Equal(t, time.UnixMicro(5).UTC(), at)
 	assert.Nil(t, nilUUID(uuid.Nil))
 	assert.True(t, uncertainAdd(locRow{state: LocAddFailed, errorCode: ReasonRetriesExhausted, addSentAt: &at}))
-	assert.False(t, uncertainAdd(locRow{state: LocAddFailed, errorCode: "ssh.helper_refused", addSentAt: &at}))
-	assert.False(t, uncertainAdd(locRow{state: LocVerified, addSentAt: &at}))
+	assert.True(t, uncertainAdd(locRow{state: LocUnverifiable, addSentAt: &at}), "an unproven login proves nothing (I1)")
+	assert.False(t, uncertainAdd(locRow{state: LocAddFailed, addSentAt: &at, addAnswered: true}), "FinishAdd answered")
+	assert.False(t, uncertainAdd(locRow{state: LocVerified, addSentAt: &at, verifiedAt: &at}), "an accepted login")
+	assert.False(t, uncertainAdd(locRow{state: LocPlanned}))
+	g := &GuardRefusal{Code: "Z1011", Constraint: "c", Message: "m"}
+	assert.Contains(t, g.Error(), "Z1011 c: m")
 	assert.Panics(t, func() { New(Config{}) }, "HelperBudget is required")
 }
 

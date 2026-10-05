@@ -48,6 +48,11 @@ func (s *Service) Advance(ctx context.Context, id uuid.UUID) error {
 			return err
 		}
 		c := &advance{s: s, tx: tx, run: run, locs: locs, now: s.clock.Now().UTC(), actor: jobActor(ctx), gate: s.gateOK()}
+		if run.pausedLicense && !c.gate && run.renotifiedAt != nil {
+			// A second lock before Continue: the next renewal is announced again (review M7).
+			_, err := tx.Exec(ctx, "UPDATE rotations SET renotified_at = NULL, updated_at = $2 WHERE id = $1", id, c.now)
+			return err
+		}
 		if run.pausedLicense && c.gate && run.renotifiedAt == nil {
 			// S6, L-84: the first call after the renewal tells the Administrators before Continue is
 			// possible; nothing else moves in the same call.
@@ -74,6 +79,15 @@ func (s *Service) advancePreviewed(ctx context.Context, run runRow) error {
 		return s.cancelPreviewed(ctx, run.id, ReasonCancelledLicense)
 	}
 	now := s.clock.Now().UTC()
+	if run.trigger == TriggerManual {
+		// Run now starts its own run in the same call; one still previewed was left by a crash between
+		// the insert and the start: it is cancelled, never started behind the Administrator's back
+		// (review M11).
+		if !now.Before(run.plannedFor.Add(ManualStartGrace)) {
+			return s.cancelIfPreviewed(ctx, run.id, systemActor.Audit, ReasonStartFailed)
+		}
+		return nil
+	}
 	if now.Before(run.plannedFor) {
 		return nil
 	}
@@ -252,8 +266,8 @@ func (c *advance) adding(ctx context.Context) error {
 	if c.run.pausedLicense {
 		return nil
 	}
-	if !c.gate && c.count(LocPlanned) > 0 {
-		return c.pause(ctx) // L-85: no new add; the ones in flight finish
+	if !c.gate && c.count(LocPlanned, LocAdding) > 0 {
+		return c.pause(ctx) // L-85: no add is sent in lock, a first one or a re-send (review I4)
 	}
 	if c.count(LocPlanned, LocAdding, LocAdded) > 0 {
 		return nil
@@ -368,8 +382,8 @@ func (c *advance) removing(ctx context.Context) error {
 		return nil
 	}
 	if pending+retry > 0 {
-		if !c.gate && c.count(LocVerified, LocRemoveFailed) > 0 {
-			return c.pause(ctx) // removals in flight finish; no new one
+		if !c.gate {
+			return c.pause(ctx) // no removal is sent in lock, a first one, a re-send or a retry (review I4)
 		}
 		return nil
 	}
@@ -379,7 +393,7 @@ func (c *advance) removing(ctx context.Context) error {
 			ReasonRemoveIncomplete, kept); err != nil {
 			return err
 		}
-		return c.s.mail(ctx, c.tx, TemplateNeedsAttention, map[string]string{"key_label": c.run.oldLabel, "code": ReasonRemoveIncomplete})
+		return c.s.mail(ctx, c.tx, TemplateNeedsAttention, c.s.attentionParams(ctx, c.tx, c.run, ReasonRemoveIncomplete))
 	}
 	if err := c.setStatus(ctx, StatusCompleted, "", ", kept_count = $5", kept); err != nil {
 		return err
@@ -394,8 +408,9 @@ func (c *advance) removing(ctx context.Context) error {
 	return c.s.mail(ctx, c.tx, TemplateCompleted, map[string]string{"key_label": c.run.oldLabel, "new_fingerprint": c.run.newFingerprint})
 }
 
-// completed moves the policy to the new key and retires the old key when no location of it is live
-// any more (the rule DestroyRetiredKeys reactivates by, S5). The run is already completed.
+// completed moves the policy to the new key and retires the old key when nothing uses it any more
+// (retireIfUnused). The run is already completed. An old key that is still used is retired later by
+// the hourly task (DestroyRetiredKeys) once it is not (review M3).
 func (s *Service) completed(ctx context.Context, tx pgx.Tx, actor audit.Actor, run runRow, now time.Time) error {
 	if run.newKeyID == nil {
 		return nil
@@ -404,20 +419,51 @@ func (s *Service) completed(ctx context.Context, tx pgx.Tx, actor audit.Actor, r
 		*run.newKeyID); err != nil {
 		return policyWriteError(err)
 	}
-	var live int
-	if err := tx.QueryRow(ctx, "SELECT ("+liveLocations+") FROM ssh_keys k WHERE k.id = $1 FOR UPDATE OF k", run.oldKeyID).Scan(&live); err != nil {
-		return fmt.Errorf("sshkeys: count the old key's locations: %w", err)
-	}
-	if live > 0 {
-		return nil
-	}
-	if _, err := tx.Exec(ctx, "UPDATE ssh_keys SET retired_at = $2 WHERE id = $1 AND retired_at IS NULL", run.oldKeyID, now); err != nil {
-		return fmt.Errorf("sshkeys: retire the old key: %w", err)
-	}
-	_, err := s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "sshkey.retired", ObjectType: "ssh_key", ObjectID: run.oldKeyID.String(),
-		Result: audit.Success, Details: map[string]string{"ssh_key_id": run.oldKeyID.String(), "fingerprint": run.oldFingerprint,
-			"rotation_id": run.id.String()}})
+	_, err := s.retireIfUnused(ctx, tx, actor, run.oldKeyID, run.id, now)
 	return err
+}
+
+// retireIfUnused retires a rotated key when no location of it is live (S5's rule, the one
+// DestroyRetiredKeys reactivates by) and no deploy of it is queued or running. The key row is locked
+// first, then the locations and jobs are read in their own statements (a fresh snapshot after the
+// lock wait; review M2).
+func (s *Service) retireIfUnused(ctx context.Context, tx pgx.Tx, actor audit.Actor, keyID, runID uuid.UUID, now time.Time) (bool, error) {
+	var fingerprint string
+	var retired bool
+	if err := tx.QueryRow(ctx, "SELECT fingerprint_sha256, retired_at IS NOT NULL FROM ssh_keys WHERE id = $1 FOR UPDATE", keyID).
+		Scan(&fingerprint, &retired); err != nil {
+		return false, fmt.Errorf("sshkeys: lock the old key: %w", err)
+	}
+	if retired {
+		return false, nil
+	}
+	var live int
+	var deploying bool
+	if err := tx.QueryRow(ctx, "SELECT ("+liveLocations+"), EXISTS (SELECT 1 FROM jobs j WHERE j.type = $2 AND "+
+		"j.status IN ('queued', 'running', 'blocked_license') AND j.payload->>'ssh_key_id' = k.id::text) FROM ssh_keys k WHERE k.id = $1",
+		keyID, JobDeploy).Scan(&live, &deploying); err != nil {
+		return false, fmt.Errorf("sshkeys: count the old key's locations: %w", err)
+	}
+	if live > 0 || deploying {
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx, "UPDATE ssh_keys SET retired_at = $2 WHERE id = $1 AND retired_at IS NULL", keyID, now); err != nil {
+		return false, fmt.Errorf("sshkeys: retire the old key: %w", err)
+	}
+	_, err := s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "sshkey.retired", ObjectType: "ssh_key", ObjectID: keyID.String(),
+		Result: audit.Success, Details: map[string]string{"ssh_key_id": keyID.String(), "fingerprint": fingerprint, "rotation_id": runID.String()}})
+	return err == nil, err
+}
+
+// attentionParams are the needs_attention mail's parameters; late results recorded on the run are
+// counted (review M9).
+func (s *Service) attentionParams(ctx context.Context, tx pgx.Tx, run runRow, code string) map[string]string {
+	p := map[string]string{"key_label": run.oldLabel, "code": code}
+	var late int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM rotation_steps WHERE rotation_id = $1 AND name = 'late_result'", run.id).Scan(&late); err == nil && late > 0 {
+		p["late_results"] = strconv.Itoa(late)
+	}
+	return p
 }
 
 // undoPending: the location's add was sent and its undo has not ended.
@@ -459,7 +505,7 @@ func (c *advance) rollingBack(ctx context.Context) error {
 		if err := c.setStatus(ctx, StatusNeedsAttention, ReasonUndoFailed, ", result_code = $5", ReasonUndoFailed); err != nil {
 			return err
 		}
-		return c.s.mail(ctx, c.tx, TemplateNeedsAttention, map[string]string{"key_label": c.run.oldLabel, "code": ReasonUndoFailed})
+		return c.s.mail(ctx, c.tx, TemplateNeedsAttention, c.s.attentionParams(ctx, c.tx, c.run, ReasonUndoFailed))
 	}
 	if err := c.setStatus(ctx, StatusAborted, c.run.resultCode, ""); err != nil {
 		return err

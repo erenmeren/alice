@@ -162,6 +162,7 @@ func TestScheduledRunNotifiesBeforeStart(t *testing.T) {
 func TestScheduledStartWaitsForADeliveredNotice(t *testing.T) {
 	scheduled := func(t *testing.T) (*env, sshkeys.Policy, sshkeys.Rotation) {
 		e := newEnv(t)
+		e.tick.on.Store(true)   // a clock that moves between reads (re-review C1)
 		e.user("ada2", "admin") // a second Administrator: one delivered copy is enough
 		k := e.deployed("ci", e.server("web-01"), "deploy")
 		p := e.enabledPolicy(k.ID, 90, 7, 24)

@@ -90,7 +90,7 @@ func (i faultInventory) MarkKeyRemoved(ctx context.Context, id uuid.UUID, a audi
 func (e *env) withFaults() *faults {
 	f := &faults{}
 	e.svc = sshkeys.New(sshkeys.Config{HelperBudget: helperproto.HelperBudget, Pool: e.db.App, Keyring: e.keyring, Audit: e.audit,
-		Clock: e.clock, License: e.gate, Inventory: faultInventory{Inventory: e.inv, f: f}, Jobs: faultJobs{f: f, next: e.queue},
+		Clock: e.tick, License: e.gate, Inventory: faultInventory{Inventory: e.inv, f: f}, Jobs: faultJobs{f: f, next: e.queue},
 		Notifier: faultNotifier{f: f, next: e.notifier}, Log: slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	return f
 }
@@ -195,7 +195,7 @@ func TestDecisionsWithAFailingEmail(t *testing.T) {
 	require.NoError(t, e.svc.Advance(e.ctx, r.ID))
 	e.gate.unlock()
 	f.mail.Store(true)
-	assert.ErrorIs(t, e.svc.Continue(e.ctx, e.admin, r.ID), errInjected)
+	assert.ErrorIs(t, e.svc.Continue(e.ctx, e.admin, r.ID), sshkeys.ErrNoticePending, "Continue sends no notice (I2)")
 	assert.ErrorIs(t, e.svc.Advance(e.ctx, r.ID), errInjected, "the renewal notice")
 	f.mail.Store(false)
 	assert.True(t, e.run(r.ID).PausedLicense)

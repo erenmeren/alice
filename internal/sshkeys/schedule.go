@@ -67,7 +67,9 @@ func (s *Service) planOne(ctx context.Context, id uuid.UUID) (bool, error) {
 			return nil
 		}
 		plannedFor := plan.PlannedFor(now, *pol.NextRunAt, pol.NotifyBeforeHours)
-		in, key, err := s.loadPlanInput(ctx, tx, pol, plannedFor, true)
+		// G19's insert order (policy FOR UPDATE → run insert → locations): the plan is read without
+		// target locks; start plans again under the locks and cancels the run when it differs.
+		in, key, err := s.loadPlanInput(ctx, tx, pol, plannedFor, false)
 		if err != nil {
 			return err
 		}
@@ -116,7 +118,7 @@ func (s *Service) RunNow(ctx context.Context, a inventory.Actor, policyID uuid.U
 				return ErrPlanChanged
 			}
 		}
-		in, key, err := s.loadPlanInput(ctx, tx, pol, now, true)
+		in, key, err := s.loadPlanInput(ctx, tx, pol, now, false) // G19, as in planOne
 		if err != nil {
 			return err
 		}
@@ -138,6 +140,9 @@ func (s *Service) RunNow(ctx context.Context, a inventory.Actor, policyID uuid.U
 	if err != nil {
 		return Rotation{}, err
 	}
+	if onBeforeStart != nil {
+		onBeforeStart()
+	}
 	if err := s.start(ctx, runID, a, false); err != nil {
 		if created {
 			// The Administrator sees the error: nothing starts later behind their back (review M3).
@@ -149,6 +154,9 @@ func (s *Service) RunNow(ctx context.Context, a inventory.Actor, policyID uuid.U
 	}
 	return s.Rotation(ctx, runID)
 }
+
+// onBeforeStart runs between Run now's insert and its start (tests only: a crash there).
+var onBeforeStart func()
 
 // errNoticePending: a scheduled run's notice is not delivered yet; the run waits (S1).
 var errNoticePending = errors.New("sshkeys: the run's notice was not delivered yet")
@@ -266,15 +274,16 @@ func (s *Service) queueLocationJobs(ctx context.Context, tx pgx.Tx, a inventory.
 }
 
 // noticeDelivered reports whether the run's rotation.preview reached at least one Administrator in
-// time: an outbox row of the run's notice in status sent, sent no later than planned_for (S1; Task 8
-// review M1: a notice delivered late gives no lead time and does not count). skipped_no_smtp, pending
-// and failed are not delivered. The rows are found by the run's own notice (same template, created
-// in the run's insert transaction: created_at = notified_at; review M7), not by a scan of the outbox.
+// time: an outbox row of that template carrying the run's id, in status sent, sent no later than
+// planned_for (S1; review M1). skipped_no_smtp, pending and failed are not delivered. The rows are
+// found by the run id in their params and the template key only, never by a timestamp (re-review C1:
+// two clock reads never match); the query fits the expression index on (params->>'rotation_id') WHERE
+// template_key = 'rotation.preview'.
 func (s *Service) noticeDelivered(ctx context.Context, q db.Querier, runID uuid.UUID) (bool, error) {
 	var ok bool
-	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM rotations r JOIN notifications_outbox o
-    ON o.template_key = $1 AND o.created_at = r.notified_at AND o.params->>'rotation_id' = r.id::text
-WHERE r.id = $2 AND o.status = 'sent' AND o.sent_at <= r.planned_for)`, TemplatePreview, runID).Scan(&ok)
+	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM notifications_outbox o
+WHERE o.template_key = 'rotation.preview' AND o.params->>'rotation_id' = $1 AND o.status = 'sent'
+  AND o.sent_at <= (SELECT planned_for FROM rotations WHERE id = $2))`, runID.String(), runID).Scan(&ok)
 	if err != nil {
 		return false, fmt.Errorf("sshkeys: read the run's notice: %w", err)
 	}

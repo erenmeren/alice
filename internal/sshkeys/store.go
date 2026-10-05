@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -107,19 +108,21 @@ type locRow struct {
 	jobCount                                    int
 	retries                                     int        // remove_retry steps: re-queues of a failed removal (G3)
 	lastResend                                  *time.Time // the latest add_resent step (G16: add_sent_at never moves)
+	addAnswered                                 bool       // FinishAdd recorded a definite answer (add_answered step)
 }
 
 const locSelect = `SELECT id, rotation_id, old_location_id, target_id, n, os_user, file_path, options, state, verify_note, error_code,
     add_op_id, remove_op_id, undo_op_id, new_location_id, add_sent_at, verified_at, reverified_at, remove_sent_at, job_count,
     (SELECT count(*) FROM rotation_steps s WHERE s.location_id = rotation_locations.id AND s.name = 'remove_retry'),
-    (SELECT max(s.at) FROM rotation_steps s WHERE s.location_id = rotation_locations.id AND s.name = 'add_resent')
+    (SELECT max(s.at) FROM rotation_steps s WHERE s.location_id = rotation_locations.id AND s.name = 'add_resent'),
+    EXISTS (SELECT 1 FROM rotation_steps s WHERE s.location_id = rotation_locations.id AND s.name = 'add_answered')
 FROM rotation_locations`
 
 func scanLoc(row pgx.Row) (locRow, error) {
 	var l locRow
 	err := row.Scan(&l.id, &l.runID, &l.oldLocationID, &l.targetID, &l.n, &l.osUser, &l.filePath, &l.options, &l.state, &l.verifyNote,
 		&l.errorCode, &l.addOpID, &l.removeOpID, &l.undoOpID, &l.newLocation, &l.addSentAt, &l.verifiedAt, &l.reverified, &l.removeAt,
-		&l.jobCount, &l.retries, &l.lastResend)
+		&l.jobCount, &l.retries, &l.lastResend, &l.addAnswered)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return locRow{}, ErrNotFound
 	}
@@ -155,6 +158,28 @@ func lockLocation(ctx context.Context, tx pgx.Tx, id uuid.UUID, lockTarget bool)
 	}
 	loc, err := scanLoc(tx.QueryRow(ctx, locSelect+" WHERE id = $1 FOR UPDATE", id))
 	return run, loc, err
+}
+
+// GuardRefusal is a location step the database refused (SQLSTATE Z1011, its constraint and fixed
+// message; never data). For a location job it means "not your turn" (a late result: the run left the
+// status that allowed it, or a clock step); for the controller, a decision or the sweep it is a store
+// bug and returned as an error (review M1).
+type GuardRefusal struct{ Code, Constraint, Message string }
+
+func (g *GuardRefusal) Error() string {
+	return "sshkeys: the database refused a rotation step (" + g.Code + " " + g.Constraint + ": " + g.Message + ")"
+}
+
+// jobTx is storeTx for the location jobs' store calls: a guard refusal is logged at warn and answered
+// ErrNotYourTurn (nothing was written).
+func (s *Service) jobTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
+	err := s.storeTx(ctx, fn)
+	var g *GuardRefusal
+	if errors.As(err, &g) {
+		s.log.Warn("the database refused a rotation step", "sqlstate", g.Code, "constraint", g.Constraint, "guard", g.Message)
+		return fmt.Errorf("%w (%s)", ErrNotYourTurn, g.Code)
+	}
+	return err
 }
 
 // storeTx runs fn after the claim check, in one transaction.
@@ -197,10 +222,7 @@ func (s *Service) setLocation(ctx context.Context, tx pgx.Tx, actor audit.Actor,
 	tag, err := tx.Exec(ctx, sql, append([]any{loc.id, to, now, loc.state}, args...)...)
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) && pg.Code == "Z1011" {
-		// The database refused the location step (the run left the status that allowed it, or a
-		// timestamp would go back after a clock step): not this job's turn; the transaction is rolled
-		// back and nothing is written.
-		return fmt.Errorf("%w (%s)", ErrNotYourTurn, pg.Code)
+		return &GuardRefusal{Code: pg.Code, Constraint: pg.ConstraintName, Message: pg.Message}
 	}
 	if err != nil {
 		return fmt.Errorf("sshkeys: update the rotation location: %w", err)
@@ -255,12 +277,14 @@ func (s *Service) LocationWork(ctx context.Context, locationID uuid.UUID) (Locat
 }
 
 // BeginAdd moves a planned location to adding just before its add is sent (C8): the run is adding_new,
-// not paused, the license allows changes, the target passes KeyChangeRefusal. A resumed job (state
-// adding) gets the same operation id; add_sent_at moves to now (the latest send). Else ErrPaused or
+// not paused, the license allows changes, the target passes KeyChangeRefusal and the connection-account
+// rule (the location's user is not the connection account, the file is not one of its files, its list
+// is known completely: review M4). A resumed job (state adding) gets the same operation id;
+// add_sent_at keeps the first send and the re-send is an add_resent step (G16). Else ErrPaused or
 // ErrNotYourTurn.
 func (s *Service) BeginAdd(ctx context.Context, locationID uuid.UUID) (uuid.UUID, error) {
 	var op uuid.UUID
-	err := s.storeTx(ctx, func(tx pgx.Tx) error {
+	err := s.jobTx(ctx, func(tx pgx.Tx) error {
 		run, loc, err := lockLocation(ctx, tx, locationID, true)
 		if err != nil {
 			return err
@@ -279,6 +303,10 @@ func (s *Service) BeginAdd(ctx context.Context, locationID uuid.UUID) (uuid.UUID
 			return err
 		}
 		if inventory.KeyChangeRefusal(t, loc.osUser) != nil {
+			return ErrNotYourTurn
+		}
+		conn := connectionUser(t)
+		if loc.osUser == conn || slices.Contains(filesOf(t.Facts, conn), loc.filePath) || !connectionFilesKnown(t.Facts, conn) {
 			return ErrNotYourTurn
 		}
 		now := s.clock.Now().UTC()
@@ -321,7 +349,7 @@ func (s *Service) FinishAdd(ctx context.Context, locationID uuid.UUID, r AddReco
 	if !r.Definite {
 		return nil
 	}
-	return s.storeTx(ctx, func(tx pgx.Tx) error {
+	return s.jobTx(ctx, func(tx pgx.Tx) error {
 		run, loc, err := lockLocation(ctx, tx, locationID, true)
 		if err != nil {
 			return err
@@ -333,6 +361,11 @@ func (s *Service) FinishAdd(ctx context.Context, locationID uuid.UUID, r AddReco
 		actor := r.Actor
 		if actor.Type == "" {
 			actor = jobActor(ctx)
+		}
+		id := loc.id
+		if err := appendStep(ctx, tx, loc.runID, &id, "add_answered", "ok", map[string]string{"added": strconv.FormatBool(r.Added)},
+			now); err != nil {
+			return err
 		}
 		if !r.Added {
 			return s.setLocation(ctx, tx, actor, loc, LocAddFailed, closedReason(r.Reason, "rotation.add_failed"), now,
@@ -373,7 +406,7 @@ func backupText(b string) string {
 // (the add's answer was lost: F-67) an accepted or unprovable login proves the line is there: the
 // inventory records it (S4).
 func (s *Service) RecordVerify(ctx context.Context, locationID uuid.UUID, r VerifyRecord) error {
-	return s.storeTx(ctx, func(tx pgx.Tx) error {
+	return s.jobTx(ctx, func(tx pgx.Tx) error {
 		run, loc, err := lockLocation(ctx, tx, locationID, true)
 		if err != nil {
 			return err
@@ -408,7 +441,8 @@ func (s *Service) RecordVerify(ctx context.Context, locationID uuid.UUID, r Veri
 			return fmt.Errorf("sshkeys: a verification without outcome or reason")
 		}
 		newLoc := loc.newLocation
-		if loc.state == LocAdding && newLoc == nil {
+		if loc.state == LocAdding && newLoc == nil && r.Outcome != providers.KeyLoginRefused {
+			// S4: an accepted or unprovable login after an add without an answer records the line.
 			id, err := s.recordNewLocation(ctx, tx, run, loc, 0, to == LocVerified, actor)
 			if err != nil {
 				return err
@@ -430,7 +464,7 @@ func (s *Service) RecordVerify(ctx context.Context, locationID uuid.UUID, r Veri
 // (removing, a new operation id) after every condition of BeginRemove's gate held; a failed re-check
 // of it leaves it failed.
 func (s *Service) RecordReverify(ctx context.Context, locationID uuid.UUID, r VerifyRecord) error {
-	return s.storeTx(ctx, func(tx pgx.Tx) error {
+	return s.jobTx(ctx, func(tx pgx.Tx) error {
 		run, loc, err := lockLocation(ctx, tx, locationID, false)
 		if err != nil {
 			return err
@@ -487,7 +521,7 @@ AND id <> $4 AND state NOT IN ('verified', 'removing', 'removed'))`, loc.runID, 
 // gate. The database checks all of it again.
 func (s *Service) BeginRemove(ctx context.Context, locationID uuid.UUID) (uuid.UUID, error) {
 	var op uuid.UUID
-	err := s.storeTx(ctx, func(tx pgx.Tx) error {
+	err := s.jobTx(ctx, func(tx pgx.Tx) error {
 		run, loc, err := lockLocation(ctx, tx, locationID, false)
 		if err != nil {
 			return err
@@ -575,15 +609,20 @@ func (s *Service) FinishRemove(ctx context.Context, actor audit.Actor, locationI
 		return nil
 	}
 	var oldLocation uuid.UUID
-	err := s.storeTx(ctx, func(tx pgx.Tx) error {
+	err := s.jobTx(ctx, func(tx pgx.Tx) error {
 		run, loc, err := lockLocation(ctx, tx, locationID, false)
 		if err != nil {
 			return err
 		}
+		now := s.clock.Now().UTC()
+		if loc.state == LocRemoveFailed && loc.errorCode == ReasonRetriesExhausted && r.Reason == "" {
+			// A definite answer after the sweep gave up on the row (review M9): the server changed.
+			oldLocation = loc.oldLocationID
+			return s.lateResult(ctx, tx, run, loc, LocRemoved, r.Removed, now)
+		}
 		if run.status != StatusRemovingOld || loc.state != LocRemoving {
 			return ErrNotYourTurn
 		}
-		now := s.clock.Now().UTC()
 		if loc.removeAt != nil && now.Before(*loc.removeAt) {
 			return ErrNotYourTurn // the clock went back (G14)
 		}
@@ -602,6 +641,26 @@ func (s *Service) FinishRemove(ctx context.Context, actor audit.Actor, locationI
 	// the location missing (the run is not affected).
 	if err := s.inv.MarkKeyRemoved(ctx, oldLocation, actor, r.Res); err != nil {
 		s.log.Warn("could not record a removal in the inventory", "location_id", oldLocation.String(), "error_type", fmt.Sprintf("%T", err))
+	}
+	return nil
+}
+
+// lateResult records a definite remove or undo answer that arrived after the sweep exhausted the
+// location (review M9): the row stays as the guards require; a late_result step says what the server
+// did, a scan of the server is queued so the inventory catches up, and a run that already needs
+// attention mails it again (code rotation.late_result). The caller marks the inventory location.
+func (s *Service) lateResult(ctx context.Context, tx pgx.Tx, run runRow, loc locRow, result string, removed int, now time.Time) error {
+	id := loc.id
+	if err := appendStep(ctx, tx, run.id, &id, "late_result", "ok", map[string]string{"result": result,
+		"removed_count": strconv.Itoa(removed)}, now); err != nil {
+		return err
+	}
+	if _, err := s.jobs.EnqueueTx(ctx, tx, inventory.JobRequest{Type: inventory.JobDiscover, TargetID: loc.targetID,
+		Payload: map[string]string{}, Kind: "system", DedupeKey: "target.discover:" + loc.targetID.String() + ":rotation"}); err != nil {
+		return err
+	}
+	if run.finished() {
+		return s.mail(ctx, tx, TemplateNeedsAttention, s.attentionParams(ctx, tx, run, ReasonLateResult))
 	}
 	return nil
 }
@@ -627,19 +686,11 @@ func (s *Service) undoMustWait(l locRow, now time.Time) bool {
 // undoGrace is the margin after the helper's budget (S3).
 const undoGrace = 30 * time.Second
 
-// uncertainAdd reports whether the location's add never had a definite answer: no recorded line and
-// the add was sent (adding, a refused or failed login after it, or retries exhausted while adding).
+// uncertainAdd reports whether the location's add was sent and never proven: FinishAdd recorded no
+// definite answer and no accepted login was recorded (verified_at). A refused-with-from= or an
+// unprovable login proves nothing about the line: a stalled helper may still write it (S3; review I1).
 func uncertainAdd(loc locRow) bool {
-	if loc.newLocation != nil || loc.addSentAt == nil {
-		return false
-	}
-	switch loc.state {
-	case LocAdding, LocVerifyFailed:
-		return true
-	case LocAddFailed:
-		return loc.errorCode == ReasonRetriesExhausted
-	}
-	return false
+	return loc.addSentAt != nil && loc.verifiedAt == nil && !loc.addAnswered
 }
 
 // undoable are the states from which the new key is removed again (C8).
@@ -652,7 +703,7 @@ var undoable = []string{LocAdding, LocAdded, LocVerified, LocUnverifiable, LocVe
 // operation id.
 func (s *Service) BeginUndo(ctx context.Context, locationID uuid.UUID) (uuid.UUID, error) {
 	var op uuid.UUID
-	err := s.storeTx(ctx, func(tx pgx.Tx) error {
+	err := s.jobTx(ctx, func(tx pgx.Tx) error {
 		run, loc, err := lockLocation(ctx, tx, locationID, false)
 		if err != nil {
 			return err
@@ -687,15 +738,20 @@ func (s *Service) FinishUndo(ctx context.Context, actor audit.Actor, locationID 
 		return nil
 	}
 	var newLocation *uuid.UUID
-	err := s.storeTx(ctx, func(tx pgx.Tx) error {
+	err := s.jobTx(ctx, func(tx pgx.Tx) error {
 		run, loc, err := lockLocation(ctx, tx, locationID, false)
 		if err != nil {
 			return err
 		}
+		now := s.clock.Now().UTC()
+		if loc.state == LocUndoFailed && loc.errorCode == ReasonRetriesExhausted && r.Reason == "" {
+			// A definite answer after the sweep gave up on the row (review M9): the server changed.
+			newLocation = loc.newLocation
+			return s.lateResult(ctx, tx, run, loc, LocUndone, r.Res.Removed, now)
+		}
 		if run.status != StatusRollingBack {
 			return ErrNotYourTurn
 		}
-		now := s.clock.Now().UTC()
 		switch {
 		case loc.state == LocUndoing && r.Reason == "":
 			newLocation = loc.newLocation

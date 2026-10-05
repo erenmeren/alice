@@ -57,7 +57,46 @@ WHERE k.retired_at IS NOT NULL AND p.destroyed_at IS NULL ORDER BY k.retired_at,
 	if err := s.auditLiveAfterDestruction(ctx); err != nil {
 		errs = append(errs, err)
 	}
+	if err := s.retireUnusedOldKeys(ctx); err != nil {
+		errs = append(errs, err)
+	}
 	return n, errors.Join(errs...)
+}
+
+// retireUnusedOldKeys retires the old key of a completed rotation that was still in use at the
+// completion and no longer is (review M3): no live location, no queued deploy, no unfinished run and
+// no live policy references it.
+func (s *Service) retireUnusedOldKeys(ctx context.Context) error {
+	rows, err := s.pool.Query(ctx, `SELECT k.id, (SELECT r.id FROM rotations r WHERE r.old_ssh_key_id = k.id AND r.status = 'completed'
+    ORDER BY r.finished_at DESC LIMIT 1)
+FROM ssh_keys k
+WHERE k.retired_at IS NULL AND k.managed
+  AND EXISTS (SELECT 1 FROM rotations r WHERE r.old_ssh_key_id = k.id AND r.status = 'completed')
+  AND NOT EXISTS (SELECT 1 FROM rotations r WHERE (r.old_ssh_key_id = k.id OR r.new_ssh_key_id = k.id) AND r.status NOT IN `+finishedStatuses+`)
+  AND NOT EXISTS (SELECT 1 FROM rotation_policies p WHERE p.ssh_key_id = k.id AND p.deleted_at IS NULL)
+ORDER BY k.id LIMIT $1`, maxDestroyBatch)
+	if err != nil {
+		return fmt.Errorf("sshkeys: list old keys to retire: %w", err)
+	}
+	type cand struct{ key, run uuid.UUID }
+	cands, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (cand, error) {
+		var c cand
+		err := r.Scan(&c.key, &c.run)
+		return c, err
+	})
+	if err != nil {
+		return fmt.Errorf("sshkeys: list old keys to retire: %w", err)
+	}
+	var errs []error
+	for _, c := range cands {
+		if err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+			_, err := s.retireIfUnused(ctx, tx, destroyActor, c.key, c.run, s.clock.Now().UTC())
+			return err
+		}); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // liveLocations counts a key's live locations (S5's rule).
@@ -101,10 +140,15 @@ ORDER BY k.id LIMIT $1`, maxDestroyBatch)
 		// Once per key, atomically: the key's row is locked, then the audit log read again, so two
 		// instances of the task write one row (review N3). One failure does not stop the others.
 		if err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+			// The key's lock first; the audit log is read in its own statement afterwards, so an instance
+			// that waited on the lock sees the row the holder wrote (re-review N3).
+			if _, err := tx.Exec(ctx, "SELECT id FROM ssh_keys WHERE id = $1 FOR UPDATE", k.id); err != nil {
+				return fmt.Errorf("sshkeys: lock the destroyed key: %w", err)
+			}
 			var done bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM audit_log a WHERE a.action = 'sshkey.live_after_destruction'
-AND a.object_id = $1::uuid::text) FROM ssh_keys WHERE id = $1::uuid FOR UPDATE`, k.id).Scan(&done); err != nil {
-				return fmt.Errorf("sshkeys: lock the destroyed key: %w", err)
+AND a.object_id = $1::uuid::text)`, k.id).Scan(&done); err != nil {
+				return fmt.Errorf("sshkeys: read the destroyed key's audit rows: %w", err)
 			}
 			if done {
 				return nil

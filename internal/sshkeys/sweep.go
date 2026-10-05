@@ -77,9 +77,10 @@ func (s *Service) Sweep(ctx context.Context) (SweepSummary, error) {
 // phaseOf is the location job phase a location waits for in the run's status, "" when none.
 func (s *Service) phaseOf(run runRow, l locRow) string {
 	switch {
-	case run.status == StatusAddingNew && !run.pausedLicense && slices.Contains([]string{LocPlanned, LocAdding, LocAdded}, l.state):
-		return "add"
-	case run.status == StatusRemovingOld && !run.pausedLicense && (l.state == LocVerified || l.state == LocRemoving || retryableRemoval(l)):
+	case run.status == StatusAddingNew && !run.pausedLicense && s.gateOK() && slices.Contains([]string{LocPlanned, LocAdding, LocAdded}, l.state):
+		return "add" // in lock no add job is queued: ErrPaused never consumes a retry (review I4)
+	case run.status == StatusRemovingOld && !run.pausedLicense && s.gateOK() &&
+		(l.state == LocVerified || l.state == LocRemoving || retryableRemoval(l)):
 		return "remove"
 	case run.status == StatusRollingBack && undoPending(l):
 		return "undo"
@@ -129,7 +130,17 @@ func (s *Service) requeue(ctx context.Context, id uuid.UUID) (queued int, ended 
 				queued++
 				continue
 			}
-			if l.jobCount >= MaxLocationJobs && (phase != "undo" || l.state != LocAdding) { // G17: an adding row gets a real undo
+			if l.jobCount >= MaxLocationJobs && phase == "undo" && l.state == LocAdding {
+				// G17, review I3: an adding row is never ended without an undo; its undo jobs did not get
+				// through, so the sweep records the undo's start itself (no network) and the undoing row is
+				// then bounded like any other.
+				if err := s.setLocation(ctx, tx, actor, l, LocUndoing, ReasonRetriesExhausted, now,
+					", undo_op_id = $5, undo_sent_at = $3, job_count = 0", uuid.Must(uuid.NewV7())); err != nil {
+					return err
+				}
+				continue
+			}
+			if l.jobCount >= MaxLocationJobs {
 				if err := s.exhaust(ctx, tx, actor, l, phase, now); err != nil {
 					return err
 				}

@@ -2,6 +2,7 @@ package sshkeys
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strconv"
 
@@ -30,7 +31,12 @@ func (s *Service) decide(ctx context.Context, id uuid.UUID, fn func(tx pgx.Tx, r
 	if err != nil {
 		return err
 	}
-	return s.Advance(ctx, id)
+	// The decision is committed: it succeeded. The sweep advances the run if this call cannot
+	// (review M5); a retry of the decision answers ErrNotWaiting or does the same again.
+	if err := s.Advance(ctx, id); err != nil {
+		s.log.Error("could not advance the rotation after a decision", "rotation_id", id.String(), "error_type", fmt.Sprintf("%T", err))
+	}
+	return nil
 }
 
 func (s *Service) auditDecision(ctx context.Context, tx pgx.Tx, a inventory.Actor, run runRow, action string, details map[string]string) error {
@@ -55,10 +61,11 @@ func stepOf(action string) string {
 	return action
 }
 
-// Continue lifts the license pause of a run after a renewal (L-84): the license must allow changes;
-// the renewal notice (rotation.preview_after_license) is sent now unless the sweep already sent it; a
-// waiting decision's deadline moves by the time the run was paused (S6). Then the run advances; every
-// removal still needs a fresh re-check of the new key (BeginRemove).
+// Continue lifts the license pause of a run after a renewal (L-84, S6): the license must allow
+// changes, and the renewal notice of this pause must already be queued (the first sweep after the
+// renewal queues it; before that ErrNoticePending, review I2). Continue never queues the notice
+// itself. A waiting decision's deadline moves by the time the run was paused. Then the run advances;
+// every removal still needs a fresh re-check of the new key (BeginRemove).
 func (s *Service) Continue(ctx context.Context, a inventory.Actor, id uuid.UUID) error {
 	if err := s.license.Allow(license.ClassChange); err != nil {
 		return err
@@ -66,6 +73,9 @@ func (s *Service) Continue(ctx context.Context, a inventory.Actor, id uuid.UUID)
 	return s.decide(ctx, id, func(tx pgx.Tx, run runRow) error {
 		if run.finished() || !run.pausedLicense {
 			return ErrNotWaiting
+		}
+		if run.renotifiedAt == nil {
+			return ErrNoticePending
 		}
 		now := s.clock.Now().UTC()
 		due := run.decisionDueAt
@@ -76,11 +86,6 @@ func (s *Service) Continue(ctx context.Context, a inventory.Actor, id uuid.UUID)
 		if _, err := tx.Exec(ctx, `UPDATE rotations SET paused_license = false, paused_at = NULL, continued_by = $2, continued_at = $3,
     decision_due_at = $4, updated_at = $3, version = version + 1 WHERE id = $1`, id, nullableUser(a.UserID), now, due); err != nil {
 			return err
-		}
-		if run.renotifiedAt == nil {
-			if err := s.renotify(ctx, tx, run, now); err != nil {
-				return err
-			}
 		}
 		return s.auditDecision(ctx, tx, a, run, "rotation.continued", nil)
 	})
@@ -176,31 +181,29 @@ func (s *Service) Abort(ctx context.Context, a inventory.Actor, id uuid.UUID) er
 	return s.decide(ctx, id, func(tx pgx.Tx, run runRow) error {
 		now := s.clock.Now().UTC()
 		switch run.status {
-		case StatusDryRunNotified:
-			if err := s.cancelRun(ctx, tx, a.Audit, run, ReasonStopped); err != nil {
-				return err
-			}
-		case StatusAddingNew, StatusVerifyingNew, StatusOverlap:
-			locs, err := runLocations(ctx, tx, id)
-			if err != nil {
-				return err
-			}
-			if err := s.rollBack(ctx, tx, a.Audit, run, locs, ReasonStopped, now); err != nil {
-				return err
-			}
+		case StatusDryRunNotified, StatusAddingNew, StatusVerifyingNew, StatusOverlap:
 		default:
 			return ErrNotWaiting
 		}
-		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "rotation.stop_requested", ObjectType: "rotation",
-			ObjectID: id.String(), Result: audit.Success, Details: map[string]string{"rotation_id": id.String()}})
-		return err
+		// The decision's audit row and step first, while the run is live (review M6).
+		if err := s.auditDecision(ctx, tx, a, run, "rotation.stop_requested", nil); err != nil {
+			return err
+		}
+		if run.status == StatusDryRunNotified {
+			return s.cancelRun(ctx, tx, a.Audit, run, ReasonStopped)
+		}
+		locs, err := runLocations(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		return s.rollBack(ctx, tx, a.Audit, run, locs, ReasonStopped, now)
 	})
 }
 
 // AllowedActions are the decisions the run offers now (the UI's buttons).
 func AllowedActions(r Rotation, gateOK bool) []string {
 	out := []string{}
-	if r.PausedLicense && gateOK && !slices.Contains(finishedList, r.Status) {
+	if r.PausedLicense && r.RenotifiedAt != nil && gateOK && !slices.Contains(finishedList, r.Status) {
 		out = append(out, "continue")
 	}
 	if r.Status == StatusOverlap && !r.PausedLicense && gateOK {

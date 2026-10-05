@@ -47,3 +47,10 @@ func OnLiveFound(t *testing.T, fn func()) {
 	onLiveFound = fn
 	t.Cleanup(func() { onLiveFound = nil })
 }
+
+// OnBeforeStart makes fn run between Run now's insert of a run and its start (nil: none).
+func OnBeforeStart(t *testing.T, fn func()) {
+	t.Helper()
+	onBeforeStart = fn
+	t.Cleanup(func() { onBeforeStart = nil })
+}
