@@ -1126,9 +1126,9 @@ never leaves Alice), so its chain cannot be completed this way.
 
 **Meaning.** Alice is busy reading other PFX files. (HTTP 503, reason `certificate.pfx_busy`.)
 
-**Likely cause.** Alice reads at most two PFX files at a time, and that limit was reached. Nothing was stored.
+**Likely cause.** Alice reads at most two PFX files at a time, and that limit was reached: an upload, or a Key Vault deployment reading a PFX secret at its step "Read the certificate from Key Vault" (that step tries again before it fails). Nothing was stored or sent to a server.
 
-**What to do.** Wait a moment and upload the file again.
+**What to do.** Wait a moment and try again: upload the file again, or deploy the vault certificate again.
 
 ## ALC-CRT-0016: Busy creating other signing requests
 
