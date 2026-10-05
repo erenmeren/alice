@@ -81,7 +81,7 @@ type Deps struct {
 // undoGrace is the margin after the helper's budget (S3), as the store's.
 const undoGrace = 30 * time.Second
 
-// Register installs the handlers of sshkey.add on the runner. It panics on a missing dependency.
+// Register installs the handlers of sshkey.add and rotation.location on the runner. It panics on a missing dependency.
 func Register(r *jobs.Runner, d Deps) {
 	switch {
 	case d.Keys == nil, d.Targets == nil, d.Registry == nil, d.Clock == nil:
@@ -94,6 +94,7 @@ func Register(r *jobs.Runner, d Deps) {
 	}
 	h := &handlers{d: d}
 	r.Handle(jobs.SSHKeyAdd, h.deploy)
+	r.Handle(jobs.RotationLocation, h.location)
 }
 
 type handlers struct{ d Deps }
