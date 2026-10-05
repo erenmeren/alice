@@ -72,6 +72,20 @@ describe('KeyVaultsPage', () => {
     expect(rowOf('away')).toHaveTextContent('Cannot reach Azure');
   });
 
+  it('shows a loading state while the list is read', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('operator')),
+      http.get('/api/v1/targets', async () => {
+        await new Promise((r) => setTimeout(r, 300));
+        return HttpResponse.json({ items: [vaultFixture], next_cursor: null });
+      }),
+    );
+    await renderRoute('/key-vaults');
+    expect(await screen.findByRole('status', { name: 'Loading…' })).toBeInTheDocument();
+    expect(await screen.findByTestId('vaults-table')).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Loading…' })).not.toBeInTheDocument();
+  });
+
   it('shows the empty state', async () => {
     withVaults('operator', []);
     await renderRoute('/key-vaults');

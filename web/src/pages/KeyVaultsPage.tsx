@@ -10,6 +10,7 @@ import { AddKeyVaultDialog } from '../components/AddKeyVaultDialog';
 import { BlockedJobsPanel } from '../components/BlockedJobsPanel';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { reasonTitle } from '../components/JobErrorAlert';
+import { LoadingIndicator } from '../components/LoadingIndicator';
 import { authKey } from '../components/vaultText';
 import { VaultStatusBadge } from '../components/VaultStatusBadge';
 import { WRAP } from '../components/wrap';
@@ -34,6 +35,7 @@ export function KeyVaultsPage() {
       </Group>
       <Text size="sm">{t('vaults.intro')}</Text>
       <ErrorAlert error={vaults.error} />
+      {vaults.isPending && <LoadingIndicator />}
       {vaults.isSuccess && items.length === 0 && <Text c="gray.7">{t('vaults.empty')}</Text>}
       {items.length > 0 && (
         <Table.ScrollContainer minWidth={720}>
