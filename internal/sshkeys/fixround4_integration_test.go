@@ -217,7 +217,7 @@ func TestUnfinishedDeploySendsAreReconciledOnce(t *testing.T) {
 	assert.Zero(t, e.audits("sshkey.add_outcome_unknown"))
 	assert.Zero(t, scans(kd.TargetID))
 
-	e.clock.Advance(helperproto.HelperBudget + 31*time.Second)
+	e.clock.Advance(2 * time.Hour) // past the wait and the settle time
 	for range 2 {
 		_, err = e.svc.DestroyRetiredKeys(e.ctx)
 		require.NoError(t, err)
@@ -250,7 +250,7 @@ func TestUnfinishedDeploySendsAreReconciledOnce(t *testing.T) {
 	_, err = e.svc.BeginDeploySendWith(back, killed, kd, foundPresent)
 	require.NoError(t, err)
 	end(killed, "dead")
-	e.clock.Advance(helperproto.HelperBudget + 31*time.Second)
+	e.clock.Advance(2 * time.Hour) // past the wait and the settle time
 	_, err = e.svc.DestroyRetiredKeys(e.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 2, e.audits("sshkey.add_outcome_unknown"), "exactly once per request")
@@ -519,27 +519,32 @@ func TestNoticeUndeliveredAfterDowntimeMovesPastNow(t *testing.T) {
 // error.
 func TestReconcileDeployRechecksUnderTheJobsLock(t *testing.T) {
 	e := newEnv(t)
+	reconcile := func(id uuid.UUID) bool {
+		t.Helper()
+		waiting, err := sshkeys.ReconcileDeploy(e.ctx, e.svc, id)
+		require.NoError(t, err)
+		return waiting
+	}
 	ctx, jobID, d := e.runningDeploy("web-01")
 	_, err := e.svc.BeginDeploySendWith(ctx, jobID, d, provenAbsent)
 	require.NoError(t, err)
-	e.clock.Advance(helperproto.HelperBudget + 31*time.Second)
-	require.NoError(t, sshkeys.ReconcileDeploy(e.ctx, e.svc, jobID), "running: left alone")
+	assert.False(t, reconcile(jobID), "running: left alone")
 	_, err = e.db.Owner.Exec(e.ctx, "UPDATE jobs SET status = 'dead', finished_at = $2 WHERE id = $1", jobID, e.clock.Now())
 	require.NoError(t, err)
-	e.clock.Set(e.clock.Now().Add(-time.Minute))
-	require.NoError(t, sshkeys.ReconcileDeploy(e.ctx, e.svc, jobID), "within the wait: left alone")
+	assert.True(t, reconcile(jobID), "within the wait: left alone, waiting")
 	assert.Zero(t, e.audits("sshkey.add_outcome_unknown"))
-	e.clock.Advance(time.Minute)
-	require.NoError(t, sshkeys.ReconcileDeploy(e.ctx, e.svc, jobID))
-	require.NoError(t, sshkeys.ReconcileDeploy(e.ctx, e.svc, jobID), "reconciled: once")
+	e.clock.Advance(helperproto.HelperBudget + 31*time.Second)
+	assert.False(t, reconcile(jobID))
+	assert.False(t, reconcile(jobID), "reconciled: once")
 	assert.Equal(t, 1, e.audits("sshkey.add_outcome_unknown"))
 	_, _, d2 := e.runningDeploy("web-02")
 	j2 := e.jobOf(d2)
 	_, err = e.db.Owner.Exec(e.ctx, "UPDATE jobs SET status = 'dead', finished_at = $2 WHERE id = $1", j2, e.clock.Now())
 	require.NoError(t, err)
-	require.NoError(t, sshkeys.ReconcileDeploy(e.ctx, e.svc, j2), "nothing sent")
+	assert.False(t, reconcile(j2), "nothing sent")
 	assert.Equal(t, 1, e.audits("sshkey.add_outcome_unknown"))
-	assert.Error(t, sshkeys.ReconcileDeploy(e.ctx, e.svc, uuid.New()))
+	_, err = sshkeys.ReconcileDeploy(e.ctx, e.svc, uuid.New())
+	assert.Error(t, err)
 }
 
 // The deploy record's reads and writes fail cleanly on a database failure: an error, nothing written.
@@ -595,13 +600,14 @@ func TestDeployRecordFailsCleanlyOnADatabaseFault(t *testing.T) {
 	// The reconciliation's reads refused: an error, nothing written.
 	_, err = e.db.Owner.Exec(e.ctx, "UPDATE jobs SET status = 'dead', finished_at = $2 WHERE id = $1", jobID, e.clock.Now())
 	require.NoError(t, err)
-	e.clock.Advance(helperproto.HelperBudget + 31*time.Second)
+	e.clock.Advance(2 * time.Hour) // past the wait and the settle time
 	for _, sql := range []string{"REVOKE SELECT ON jobs FROM alice_app", "REVOKE SELECT ON audit_log FROM alice_app",
 		"REVOKE SELECT ON audit_log FROM alice_app; GRANT SELECT (seq, at) ON audit_log TO alice_app"} {
 		restore = revoke(sql)
 		_, err = e.svc.DestroyRetiredKeys(e.ctx)
 		assert.Error(t, err, sql)
-		assert.Error(t, sshkeys.ReconcileDeploy(e.ctx, e.svc, jobID), sql)
+		_, err = sshkeys.ReconcileDeploy(e.ctx, e.svc, jobID)
+		assert.Error(t, err, sql)
 		restore()
 	}
 	assert.Zero(t, e.audits("sshkey.add_outcome_unknown"))
@@ -628,9 +634,14 @@ func TestDeployRecordFailsCleanlyOnADatabaseFault(t *testing.T) {
 	}))
 	_, err = e.svc.DeploySends(e.ctx, job2)
 	assert.Error(t, err)
+	_, err = e.svc.BeginDeploySendWith(ctx2, job2, d2, provenAbsent)
+	assert.Error(t, err, "a send on an unreadable record")
+	_, err = e.svc.RecordDeployAnswer(ctx2, d2, sshkeys.DeploySend{Count: 1}, true)
+	assert.Error(t, err, "an answer on an unreadable record")
 	_, err = e.db.Owner.Exec(e.ctx, "UPDATE jobs SET status = 'dead', finished_at = $2 WHERE id = $1", job2, e.clock.Now())
 	require.NoError(t, err)
-	assert.Error(t, sshkeys.ReconcileDeploy(e.ctx, e.svc, job2))
+	_, err = sshkeys.ReconcileDeploy(e.ctx, e.svc, job2)
+	assert.Error(t, err)
 }
 
 // A previewed run cancelled for an undelivered notice whose policy was switched off meanwhile gets no

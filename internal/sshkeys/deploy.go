@@ -179,7 +179,7 @@ type deployCheck struct {
 }
 
 // checkDeploy applies every deploy rule (spec §13.4; S7) in tx: the key is one Alice generated,
-// not retired, never Alice's own key; the server is ready for a key change for that user; neither
+// not retired, never Alice's own key, not the new key of an unfinished rotation run; the server is ready for a key change for that user; neither
 // the user nor the file belongs to Alice's connection account; the file is one of the user's key
 // files as the last scan found them. Refusals that protect access are *denial.
 func (s *Service) checkDeploy(ctx context.Context, tx pgx.Tx, keyID, targetID uuid.UUID, user, file string, lock bool) (deployCheck, error) {
@@ -200,6 +200,14 @@ func (s *Service) checkDeploy(ctx context.Context, tx pgx.Tx, keyID, targetID uu
 		return c, ErrDestroyed
 	case c.key.retired:
 		return c, ErrRetired
+	}
+	var inRun bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM rotations WHERE new_ssh_key_id = $1 AND status NOT IN "+finishedStatuses+")",
+		keyID).Scan(&inRun); err != nil {
+		return c, fmt.Errorf("sshkeys: read the key's rotations: %w", err)
+	}
+	if inRun {
+		return c, ErrInRotation // a rollback of the run would remove the deployed line (N-m11)
 	}
 	if c.target, err = s.inv.TargetTx(ctx, tx, targetID, lock); err != nil {
 		return c, err

@@ -275,3 +275,14 @@ func TestPlanInputConnectionUserDefault(t *testing.T) {
 	in := toPlanInput(keyRow{}, nil, map[uuid.UUID]inventory.Target{tid: {}}, nil, Policy{}, time.Time{})
 	assert.Equal(t, inventory.ServiceUser, in.Targets[tid].ConnectionUser)
 }
+
+// Re-review N-m2/N-m12: the three ways ownership arises or falls.
+func TestOwnedWithSendsKnownNotWritten(t *testing.T) {
+	absent := DeploySendRecord{Count: 1, AbsentBefore: true, FirstCoverage: providers.CoverageComplete}
+	assert.True(t, absent.Owned())
+	absent.NotWritten = 1
+	assert.False(t, absent.Owned(), "every send is known to have written nothing")
+	absent.Count = 2
+	assert.True(t, absent.Owned(), "one send may have written")
+	assert.True(t, DeploySendRecord{Count: 1, AnsweredAdded: true}.Owned(), "the helper's own answer (N-m12)")
+}

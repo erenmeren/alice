@@ -68,6 +68,14 @@ const (
 	// ReasonGuardRefused: the database refused every write of a location (for example its old location
 	// became Alice's connection key after a removal was sent); the location ends failed with it (N18).
 	ReasonGuardRefused = "rotation.guard_refused"
+	// ReasonListingIncomplete: a place ended because the listing of its file never read the file
+	// completely, so neither "removed" nor "still there" could be proven (the job records the step
+	// StepListingIncomplete each time; the sweep's bound then ends the place with this reason, or the job
+	// passes it to FinishUndo/FinishRemove itself).
+	ReasonListingIncomplete = "rotation.listing_incomplete"
+	// ReasonInRotation: a deploy of a key that is the new key of an unfinished rotation run (a rollback of
+	// the run would remove the deployed line; re-review N-m11). ErrInRotation.
+	ReasonInRotation = "sshkey.in_rotation"
 	// ReasonSkippedAtSend: a planner skip reason found at send time (the scan changed since the start);
 	// the reason itself is in skip_reason (re-review M7).
 	ReasonSkippedAtSend     = "rotation.skipped_at_send"
@@ -182,3 +190,7 @@ type Download struct {
 	FileName string            // "alice-<slug>-<first 8 hex of SHA-256(fingerprint)>.key", [a-z0-9._-] only
 	Body     secrets.Plaintext // the OpenSSH file; the caller zeroes it after writing
 }
+
+// StepListingIncomplete is the location step a job records (Step) when its listing of the file was not
+// complete; the sweep's bound ends the place with ReasonListingIncomplete after it.
+const StepListingIncomplete = "listing_incomplete"

@@ -63,7 +63,9 @@ func stepOf(action string) string {
 // Continue lifts the license pause of a run after a renewal (L-84, S6): the license must allow
 // changes, and the renewal notice of this pause must already be queued (the first sweep after the
 // renewal queues it; before that ErrNoticePending, review I2). Continue never queues the notice
-// itself. A waiting decision's deadline moves by the time the run was paused. Then the run advances;
+// itself. A waiting decision's deadline moves by the time the run was paused; a paused overlap resumes
+// with the duration that remained when the pause began (L-83), its reminder sent again for the new end.
+// Then the run advances;
 // every removal still needs a fresh re-check of the new key (BeginRemove).
 func (s *Service) Continue(ctx context.Context, a inventory.Actor, id uuid.UUID) error {
 	return s.decide(ctx, id, func(tx pgx.Tx, run runRow) error {
@@ -76,8 +78,17 @@ func (s *Service) Continue(ctx context.Context, a inventory.Actor, id uuid.UUID)
 			d := due.Add(now.Sub(*run.pausedAt))
 			due = &d
 		}
+		// L-83: an overlap paused in lock resumes with the duration that remained when the pause began
+		// (never less than none): its end moves to now + remaining. The end reminder is cleared so that it
+		// goes out again for the new end.
+		until, reminder := run.overlapUntil, run.reminderSentAt
+		if run.status == StatusOverlap && until != nil && run.pausedAt != nil {
+			u := now.Add(max(until.Sub(*run.pausedAt), 0))
+			until, reminder = &u, nil
+		}
 		if _, err := tx.Exec(ctx, `UPDATE rotations SET paused_license = false, paused_at = NULL, continued_by = $2, continued_at = $3,
-    decision_due_at = $4, updated_at = $3, version = version + 1 WHERE id = $1`, id, nullableUser(a.UserID), now, due); err != nil {
+    decision_due_at = $4, overlap_until = $5, reminder_sent_at = $6, updated_at = $3, version = version + 1 WHERE id = $1`,
+			id, nullableUser(a.UserID), now, due, until, reminder); err != nil {
 			return err
 		}
 		return s.auditDecision(ctx, tx, a, run, "rotation.continued", nil)

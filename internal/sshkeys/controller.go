@@ -150,8 +150,8 @@ func (s *Service) cancelPreviewed(ctx context.Context, id uuid.UUID, reason stri
 
 // cancelIfPreviewed cancels a run that is still previewed, under its row lock. A run cancelled for an
 // undelivered notice counts as its interval's run: an enabled policy's next run moves to the first
-// interval still ahead (review M4: at most one cancelled run per interval, no create-and-cancel loop;
-// A-m5: after downtime, past every missed interval at once).
+// boundary after now (review M4: at most one cancelled run per interval, no create-and-cancel loop;
+// A-m5: after downtime, past every missed interval at once; N-m10: never the next interval's run).
 func (s *Service) cancelIfPreviewed(ctx context.Context, id uuid.UUID, actor audit.Actor, reason string) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		run, err := lockRun(ctx, tx, id)
@@ -164,12 +164,13 @@ func (s *Service) cancelIfPreviewed(ctx context.Context, id uuid.UUID, actor aud
 		if reason != ReasonNoticeUndelivered {
 			return nil
 		}
-		// The next run is the first one still ahead (A-m5: after downtime, past every missed interval
-		// in one step). Lock order: run, then policy.
+		// The next run is the next boundary after now: the cancelled run counts for its own interval only
+		// (N-m10), and after downtime the missed ones are skipped in one step (A-m5). Lock order: run, then
+		// policy.
 		var next time.Time
-		var interval, notify int
-		err = tx.QueryRow(ctx, `SELECT next_run_at, interval_days, notify_before_hours FROM rotation_policies
-WHERE id = $1 AND enabled AND deleted_at IS NULL AND next_run_at IS NOT NULL FOR UPDATE`, run.policyID).Scan(&next, &interval, &notify)
+		var interval int
+		err = tx.QueryRow(ctx, `SELECT next_run_at, interval_days FROM rotation_policies
+WHERE id = $1 AND enabled AND deleted_at IS NULL AND next_run_at IS NOT NULL FOR UPDATE`, run.policyID).Scan(&next, &interval)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 			return nil // switched off or deleted meanwhile: no next run
@@ -177,7 +178,7 @@ WHERE id = $1 AND enabled AND deleted_at IS NULL AND next_run_at IS NOT NULL FOR
 			return fmt.Errorf("sshkeys: read the policy: %w", err)
 		}
 		_, err = tx.Exec(ctx, "UPDATE rotation_policies SET next_run_at = $2 WHERE id = $1", run.policyID,
-			plan.NextRunAfter(next, interval, notify, s.clock.Now().UTC()))
+			plan.NextBoundaryAfter(next, interval, s.clock.Now().UTC()))
 		if err != nil {
 			return policyWriteError(err)
 		}
@@ -378,9 +379,16 @@ func (c *advance) verifying(ctx context.Context) error {
 	return nil
 }
 
+// overlap runs the overlap's timer. L-83 (controller ruling T14-D1): a lock pauses the run at once, on
+// the first pass after it began, not only at the overlap's end; the timer and its reminder do not run
+// while paused (as S6 for verifying_new). Continue resumes the overlap with the duration that remained
+// when the pause began (decisions.go).
 func (c *advance) overlap(ctx context.Context) error {
 	if c.run.pausedLicense || c.run.overlapUntil == nil {
 		return nil
+	}
+	if !c.gate {
+		return c.pause(ctx) // L-83: flagged and mailed at once; nothing is removed in lock
 	}
 	until := *c.run.overlapUntil
 	if !plan.Due(c.now, until) {
@@ -391,9 +399,6 @@ func (c *advance) overlap(ctx context.Context) error {
 			return c.s.mail(ctx, c.tx, TemplateOverlapEnding, map[string]string{"key_label": c.run.oldLabel, "overlap_until": mailTime(until)})
 		}
 		return nil
-	}
-	if !c.gate {
-		return c.pause(ctx) // L-83: nothing is removed in lock
 	}
 	// G18: a verified location in a (target, file) where another location of the run is not verified
 	// (skipped or kept) keeps the old key: it ends kept_old and counts where the old key stays.

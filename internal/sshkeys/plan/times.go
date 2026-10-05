@@ -67,3 +67,16 @@ func NextRunAfter(prev time.Time, intervalDays, notifyBeforeHours int, now time.
 	}
 	return next
 }
+
+// NextBoundaryAfter is the first boundary prev + k intervals (k >= 1) that is after now: the run after
+// one that was cancelled for an undelivered notice (re-review N-m10). The cancelled run counts for its
+// own interval only, so the next interval's run is kept even when its notice is already due (a 1-day
+// interval); after downtime the missed boundaries are skipped in one step.
+func NextBoundaryAfter(prev time.Time, intervalDays int, now time.Time) time.Time {
+	step := time.Duration(max(intervalDays, 1)) * day
+	next := NextRun(prev, max(intervalDays, 1))
+	if late := now.Sub(next); late >= 0 {
+		next = next.Add((late/step + 1) * step)
+	}
+	return next
+}

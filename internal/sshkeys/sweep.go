@@ -258,7 +258,8 @@ func (s *Service) failRefused(ctx context.Context, locID uuid.UUID) (ended bool,
 	return ended && err == nil, err
 }
 
-// exhaust ends a location whose jobs reached MaxLocationJobs without progress (rotation.retries_exhausted).
+// exhaust ends a location whose jobs reached MaxLocationJobs without progress: rotation.retries_exhausted,
+// or rotation.listing_incomplete when the job's latest step on it says its listing was not complete.
 func (s *Service) exhaust(ctx context.Context, tx pgx.Tx, actor audit.Actor, l locRow, phase string, now time.Time) error {
 	var to string
 	switch {
@@ -271,7 +272,16 @@ func (s *Service) exhaust(ctx context.Context, tx pgx.Tx, actor audit.Actor, l l
 	default:
 		to = LocUndoFailed // G2: nothing more is sent
 	}
-	if err := s.setLocation(ctx, tx, actor, l, to, ReasonRetriesExhausted, now, ", error_code = $5", ReasonRetriesExhausted); err != nil {
+	reason := ReasonRetriesExhausted
+	var last string
+	err := tx.QueryRow(ctx, "SELECT name FROM rotation_steps WHERE location_id = $1 ORDER BY n DESC LIMIT 1", l.id).Scan(&last)
+	switch {
+	case err != nil && !errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf("sshkeys: read the location's last step: %w", err)
+	case last == StepListingIncomplete:
+		reason = ReasonListingIncomplete // the job's last attempt could not read the file completely
+	}
+	if err := s.setLocation(ctx, tx, actor, l, to, reason, now, ", error_code = $5", reason); err != nil {
 		return err
 	}
 	if to == LocUndoFailed {

@@ -74,6 +74,14 @@ func FailRefused(ctx context.Context, s *Service, locID uuid.UUID) (bool, error)
 }
 
 // ReconcileDeploy reconciles one ended deploy job (see reconcileDeploy): the re-checks under the job's lock.
-func ReconcileDeploy(ctx context.Context, s *Service, jobID uuid.UUID) error {
+func ReconcileDeploy(ctx context.Context, s *Service, jobID uuid.UUID) (waiting bool, err error) {
 	return s.reconcileDeploy(ctx, jobID)
+}
+
+// SetReconcileBatch sets how many unreconciled deploys one run of the hourly task takes (reset after the test).
+func SetReconcileBatch(t *testing.T, n int) {
+	t.Helper()
+	old := reconcileBatch
+	reconcileBatch = n
+	t.Cleanup(func() { reconcileBatch = old })
 }

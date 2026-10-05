@@ -70,3 +70,17 @@ func TestNextRunAfterCatchesUpInOneStep(t *testing.T) {
 	assert.False(t, NoticeDue(next.Add(-day), 72).After(t0.Add(30*day)))
 	assert.Equal(t, t0.Add(day), NextRunAfter(prev, 1, 0, t0.Add(-day)), "a clock behind: one interval, never earlier")
 }
+
+// Re-review N-m10: a run cancelled for an undelivered notice counts for its own interval only: the
+// next boundary after now is the next run, even when its notice is already due (1-day intervals);
+// after downtime the missed boundaries are skipped.
+func TestNextBoundaryAfterKeepsTheNextInterval(t *testing.T) {
+	for _, days := range []int{1, 2, 7} {
+		prev := t0
+		cancelledAt := prev.Add(time.Minute) // cancelled at about its planned time
+		assert.Equal(t, prev.Add(time.Duration(days)*day), NextBoundaryAfter(prev, days, cancelledAt), "%d days", days)
+		late := prev.Add(time.Duration(5*days)*day + time.Hour) // downtime
+		assert.Equal(t, prev.Add(time.Duration(6*days)*day), NextBoundaryAfter(prev, days, late), "%d days after downtime", days)
+		assert.Equal(t, prev.Add(time.Duration(days)*day), NextBoundaryAfter(prev, days, prev.Add(-day)), "%d days, clock behind", days)
+	}
+}

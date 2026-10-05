@@ -16,6 +16,9 @@ var (
 	ErrConnectionAccount = errors.New("sshkeys: Alice does not change its connection account's keys")
 	ErrNotAKeyFile       = errors.New("sshkeys: the file is not one of the user's key files")
 	ErrGenerateBusy      = errors.New("sshkeys: too many keys are being generated")
+	// ErrInRotation: the key is the new key of an unfinished rotation run; it is deployed only after the
+	// run finished (reason sshkey.in_rotation; re-review N-m11).
+	ErrInRotation = errors.New("sshkeys: the key is the new key of a rotation that has not finished")
 	// ErrConnectionFilesUnknown: the last scan of the server has no complete, single list of the
 	// connection account's key files, so Alice cannot rule out that a file is one its connection
 	// account reads; scan the server again (reason sshkey.connection_files_unknown; review N1).
