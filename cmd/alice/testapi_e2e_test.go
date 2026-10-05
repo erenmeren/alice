@@ -8,12 +8,14 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +32,7 @@ import (
 	"alice/internal/platform/netaddr"
 	"alice/internal/providers"
 	"alice/internal/testutil/pki"
+	"alice/migrations"
 )
 
 func clockNow(t *testing.T, h http.Handler) time.Time {
@@ -553,4 +556,36 @@ func TestComposeAddressesAreAllowedForTheFake(t *testing.T) {
 		assert.True(t, netaddr.Allowed(netip.MustParseAddr(a)), a)
 	}
 	assert.False(t, netaddr.Allowed(netip.MustParseAddr("169.254.169.254")))
+}
+
+// Every table a migration creates is emptied by the reset, except master_key_versions (the key file
+// on the volume stays). The SSH key rotation tables of migration 00010 reference ssh_keys, targets
+// and users, so a reset without them fails on a foreign key (0A000) and every journey after it starts
+// on the previous one's data. TestE2EResetCoversEveryTable checks the same against a migrated database.
+func TestResetSQLCoversPhase6Tables(t *testing.T) {
+	entries, err := fs.ReadDir(migrations.FS, ".")
+	require.NoError(t, err)
+	create := regexp.MustCompile(`(?m)^CREATE TABLE (\w+)`)
+	var tables []string
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		raw, err := fs.ReadFile(migrations.FS, e.Name())
+		require.NoError(t, err)
+		for _, m := range create.FindAllStringSubmatch(string(raw), -1) {
+			tables = append(tables, m[1])
+		}
+	}
+	for _, phase6 := range []string{"rotation_policies", "rotations", "rotation_locations", "rotation_op_ids", "rotation_steps"} {
+		require.Contains(t, tables, phase6, "migration 00010 creates %s", phase6)
+	}
+	for _, name := range tables {
+		inReset := regexp.MustCompile(`(^|[\s,])` + regexp.QuoteMeta(name) + `([\s,]|$)`).MatchString(strings.TrimPrefix(resetSQL, "TRUNCATE "))
+		if name == "master_key_versions" {
+			assert.False(t, inReset, "the reset keeps the master key versions")
+			continue
+		}
+		assert.True(t, inReset, "resetSQL empties %s", name)
+	}
 }

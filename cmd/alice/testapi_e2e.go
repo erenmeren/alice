@@ -155,10 +155,13 @@ var testMailer notify.Mailer = e2eMailbox
 
 // resetSQL empties every application table. master_key_versions is kept because the master
 // key file on the volume stays the same. Every table that references users (targets, host_keys,
-// jobs, the certificate tables) must be in the same TRUNCATE.
+// jobs, the certificate tables) must be in the same TRUNCATE, and so must every table of the SSH key
+// rotation (migration 00010), which references ssh_keys, targets and users.
 const resetSQL = `TRUNCATE users, user_mfa, recovery_codes, sessions, api_tokens, setup_sessions, settings, audit_log,
 license, license_files, license_history, notifications_outbox,
-target_locks, job_attempts, jobs, ssh_key_locations, ssh_keys, host_keys,
+target_locks, job_attempts, jobs,
+rotation_op_ids, rotation_steps, rotation_locations, rotations, rotation_policies,
+ssh_key_locations, ssh_keys, host_keys,
 deployment_steps, deployments, certificate_locations, csr_requests, certificates, managed_private_keys,
 kv_imports, bindings, kv_certificate_versions, kv_certificates, kv_keys, kv_secrets,
 targets, credentials`
