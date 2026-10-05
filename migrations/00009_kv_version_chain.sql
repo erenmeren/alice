@@ -6,6 +6,8 @@
 -- the chain. A later read that finds the chain complete clears it.
 ALTER TABLE kv_certificate_versions ADD COLUMN chain_incomplete boolean NOT NULL DEFAULT false;
 GRANT UPDATE (chain_incomplete) ON kv_certificate_versions TO alice_app;
+-- A version held for its chain is held only because a read found the chain incomplete: that is known already.
+UPDATE kv_certificate_versions SET chain_incomplete = true WHERE held_reason = 'incomplete_chain';
 
 -- +goose Down
 REVOKE UPDATE (chain_incomplete) ON kv_certificate_versions FROM alice_app;

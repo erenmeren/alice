@@ -723,16 +723,33 @@ AND column_name = 'chain_incomplete'`)
 	}
 	require.Equal(t, 1, column())
 	assert.Empty(t, grantProblems(t, d))
-	addVault(t, d, "kv1")
+	v := addVault(t, d, "kv1")
+	cert := insertKVCertificate(t, d, v.target, "web-cert")
 	_, err = p.DownTo(ctx, 8)
 	require.NoError(t, err, "00009 goes down over vault data")
 	assert.Equal(t, 0, column())
 	assert.Equal(t, []string{"public.kv_certificate_versions"}, grantProblems(t, d), "only the chain column's grant is gone")
+	// Versions stored before the column existed: one held for its chain (a read found it incomplete), one held
+	// for the license, one not held.
+	chainHeld := insertKVVersion(t, d, cert, strings.Repeat("a", 32))
+	licenseHeld := insertKVVersion(t, d, cert, strings.Repeat("b", 32))
+	insertKVVersion(t, d, cert, strings.Repeat("c", 32))
+	require.NoError(t, exec(t, d.App, "UPDATE kv_certificate_versions SET held = true, held_reason = 'incomplete_chain' WHERE id = $1", chainHeld))
+	require.NoError(t, exec(t, d.App, "UPDATE kv_certificate_versions SET held = true, held_reason = 'license' WHERE id = $1", licenseHeld))
 	_, err = p.Up(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, column())
 	assert.Empty(t, grantProblems(t, d))
-	assert.Equal(t, 0, scanInt(t, d, "SELECT count(*) FROM kv_certificate_versions WHERE chain_incomplete"), "unknown until a read")
+	var marked []string
+	rows, err := d.Owner.Query(ctx, "SELECT id::text FROM kv_certificate_versions WHERE chain_incomplete")
+	require.NoError(t, err)
+	for rows.Next() {
+		var id string
+		require.NoError(t, rows.Scan(&id))
+		marked = append(marked, id)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{chainHeld}, marked, "a version held for its chain is known incomplete; the others are unknown until a read")
 }
 
 var phase5Tables = []string{"kv_certificates", "kv_certificate_versions", "kv_keys", "kv_secrets", "bindings", "kv_imports"}
