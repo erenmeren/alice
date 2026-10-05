@@ -1421,6 +1421,7 @@
     "checking": "Checking that Alice can sign in and reach the vault…",
     "added": "Key Vault added.",
     "addedPartly": "The vault was added, but Alice is missing a permission. Grant the roles below, then check again.",
+    "addedFailedCheck": "The vault was added, but Alice cannot read all of it yet. The access check below shows why. Fix it, then use Check now on the vault's page.",
     "openVault": "Open the vault",
     "signsInAs": "Alice signs in to Azure as {{objectId}}",
     "roles": {

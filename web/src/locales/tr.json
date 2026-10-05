@@ -1421,6 +1421,7 @@
     "checking": "Alice'in oturum açıp kasaya ulaşabildiği denetleniyor…",
     "added": "Key Vault eklendi.",
     "addedPartly": "Kasa eklendi, ancak Alice'in bir izni eksik. Aşağıdaki rolleri verin, ardından yeniden denetleyin.",
+    "addedFailedCheck": "Kasa eklendi, ancak Alice kasanın tamamını henüz okuyamıyor. Nedenini aşağıdaki erişim denetimi gösteriyor. Sorunu giderin, ardından kasanın sayfasında Şimdi denetle düğmesini kullanın.",
     "openVault": "Kasayı aç",
     "signsInAs": "Alice, Azure'da {{objectId}} olarak oturum açar",
     "roles": {

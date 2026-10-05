@@ -79,7 +79,11 @@ export function AddKeyVaultDialog({ onClose, onAdded }: { onClose: () => void; o
   };
   const vault = created?.target.vault;
   const access = created?.access ?? vault?.access ?? null;
-  const partly = created !== null && accessRows(access).some((r) => r.result === 'forbidden' || r.result === 'failed');
+  // A missing role (a forbidden row) is fixed with the roles below; any other failed row (the vault's firewall,
+  // say) is not, so it gets its own text and no role guide.
+  const rows = created !== null ? accessRows(access) : [];
+  const partly = rows.some((r) => r.result === 'forbidden');
+  const failedCheck = !partly && rows.some((r) => r.result === 'failed');
   const working = phase === 'working';
 
   return (
@@ -145,6 +149,11 @@ export function AddKeyVaultDialog({ onClose, onAdded }: { onClose: () => void; o
           {partly && (
             <Alert color="yellow" role="status">
               {t('vaults.addedPartly')}
+            </Alert>
+          )}
+          {failedCheck && (
+            <Alert color="yellow" role="status">
+              {t('vaults.addedFailedCheck')}
             </Alert>
           )}
           {partly && <RoleGuide clientId={vault?.client_id || undefined} vaultName={vault?.name} openPolicies={access?.permission_model === 'access_policy'} />}
