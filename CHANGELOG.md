@@ -1,5 +1,62 @@
 # Changelog
 
+## Unreleased — Phase 5: Azure Key Vault
+
+**Upgrade notes**
+- Migrations `00008` (Key Vault tables, connections, imports) and `00009` (a version's chain flag) run at start.
+  Once a vault exists, `00008` refuses to go down.
+- Alice now connects to Azure (`login.microsoftonline.com` and each vault's `<name>.vault.azure.net`, TCP 443)
+  when a vault is added; allow both outbound. Do not set `AZURE_REGIONAL_AUTHORITY_NAME`, `MSAL_FORCE_REGION` or
+  `AZURE_SDK_GO_LOGGING` for the Alice container: with any of them Alice refuses to sign in to Azure
+  (`ALC-AKV-0011`). Proxy variables are ignored for Azure.
+- API clients that deploy a vault version Alice knows to have an incomplete chain must send
+  `confirm_incomplete_chain` (Administrator); otherwise the request is refused with 409 `ALC-CRT-0011`.
+
+### Added
+- **Key Vaults**: add an Azure Key Vault (administrators, with a fresh authenticator code) by name or address, signing
+  in with a certificate (recommended), a client secret or the managed identity of the Azure virtual machine Alice
+  runs on. Alice checks the sign-in and the certificate list before it stores anything; the **Access check** shows,
+  per feature (monitor, deploy, import), what the identity may do and the Azure role that is missing, with the
+  `az` commands to grant it. Each vault counts as one license target.
+- The vault's certificates (versions, expiry, thumbprints, exportable key or **Monitor only**), keys (type, size)
+  and secrets (metadata only; values are never read), checked every 15 minutes by default (5 to 1440 minutes) and
+  with **Check now**; statuses **Connected**, **Partly working**, **Credentials refused**, **Cannot reach Azure**.
+- **Connect websites**: a vault certificate follows up to 200 Nginx websites. **Automatic deployment** (off by
+  default; administrators) deploys a new current version found after it was switched on, through the Phase 4
+  deployment engine with a first step **Read the certificate from Key Vault** (the exact version, before anything
+  is sent to the server): five at a time per connection, one hour between attempts on a website, stopped after
+  three failures with one email. **Deploy now** deploys any version Alice has read.
+- Versions that appear while the license is locked, or with an incomplete chain, are **Held** for an administrator,
+  who deploys or releases them.
+- **Import into Key Vault** (administrators): copies a certificate Alice holds with its key into a vault, sent once
+  and never again by itself; an import whose answer was lost reads **Not confirmed yet** until a check settles it.
+- Emails to administrators for repeated sign-in failures, removed certificates, versions not deployed
+  automatically, stopped automatic deployments and failed or unknown imports (at most 20 of a kind per vault and
+  run, then a summary).
+- Error codes `ALC-AKV-0001..0041`; audit actions `vault.*`, `kv.*` and `binding.*`; every read of a certificate's
+  secret is audited (`kv.secret_read`). Jobs name their deployment or import (`deployment_id`, `import_id`).
+- `GET /api/v1/certificate-locations` lists websites across servers.
+- Guides: `docs/azure-setup.md` for Azure administrators (identity, roles, access policies, network), the Key
+  Vaults chapter of `docs/operator-guide.md`, Key Vaults in `docs/admin-guide.md`, `docs/licensing.md` and
+  `docs/troubleshooting.md`.
+- Developer targets: `make test-azure` and `make record-azure` (optional, against a real vault, never in `make ci`);
+  the e2e stack runs a fake Azure service (`fakeazure`).
+
+### Changed
+- A new permission, `credentials.manage` (Administrator with a fresh authenticator code, never an API token), gates
+  adding a vault, replacing its credentials, automatic deployment, releasing a held version and importing.
+- Lock mode also stops vault checks, adding vaults, connecting websites, **Deploy now** of vault versions and
+  imports; switching automatic deployment off and deleting a connection stay possible.
+- The scrolling part of every table is a keyboard stop with a visible focus ring, and field errors are drawn with a
+  higher contrast.
+
+### Known issues
+- Nothing was tested against real Azure: the fake service follows the public REST reference. Whether `Key Vault
+  Reader` alone is enough to monitor a vault is expected but not confirmed.
+- Public Azure cloud only; no HTTPS proxy or custom CA for Azure; managed identity only on Azure virtual machines;
+  no deployment windows; no reminder email before a client secret or sign-in certificate expires.
+- The full list is in `docs/security/reviews/phase-5.md` ("Known limitations" and "Not verified against Azure").
+
 ## Unreleased — Audit remediation
 
 Fixes for the independent audit of 2026-10-04; the full record is `docs/security/reviews/audit-remediation.md`.
