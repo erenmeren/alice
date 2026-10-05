@@ -197,14 +197,15 @@ FROM kv_certificate_versions WHERE id = $1 FOR SHARE`, in.VersionID).Scan(&v.cer
 		}
 		// The confirmation is kept unless the chain is known to be complete in a row a vault read keeps current:
 		// only a source azure_kv row is rewritten by the next read; a complete uploaded or discovered row with
-		// the same leaf says nothing about what the vault will deliver.
+		// the same leaf says nothing about what the vault will deliver. The version's own mark wins over that
+		// row: the row is shared by every vault object with this leaf and may describe another object's read.
 		var source string
 		if v.certificateRow != nil {
 			if err := tx.QueryRow(ctx, "SELECT source FROM certificates WHERE id = $1", *v.certificateRow).Scan(&source); err != nil {
 				return fmt.Errorf("inventory: read the leaf's source: %w", err)
 			}
 		}
-		knownComplete := leaf.chainComplete && source == "azure_kv"
+		knownComplete := leaf.chainComplete && source == "azure_kv" && !v.chainIncomplete
 		src := deploySource{Trigger: "manual", BindingID: &in.BindingID, KVVersionID: &in.VersionID, Version: v.version,
 			Confirmed: in.ConfirmIncompleteChain && a.Role == rbac.Admin && !knownComplete}
 		for _, id := range ids {

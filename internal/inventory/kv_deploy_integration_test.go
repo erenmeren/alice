@@ -540,6 +540,56 @@ func (b *bindFixture) chainIncomplete(version uuid.UUID) bool {
 	return v
 }
 
+// Two vault objects deliver one leaf: one with its chain, one without. The shared certificates row says
+// "complete" after the first read; the version's own mark wins, so an Administrator's confirmation of the
+// incomplete one is kept and that version can be deployed (final review B I-1).
+func TestKVDeployConfirmationSurvivesACompleteSharedLeafRow(t *testing.T) {
+	b := newBindFixture(t)
+	h, ctx := b.h, b.h.ctx
+	fp := pki.Fingerprint(b.webLeaf.Cert)
+
+	// Version X (vault prod, web-cert) delivers its whole chain: the shared row is complete, source azure_kv.
+	bindX := b.create(b.admin, b.web, b.loc1)
+	x := b.versionID(b.web, ver(1))
+	ids := b.beginKV(b.admin, bindX.ID, x, false, b.loc1)
+	_, secret := b.fullSecret()
+	m, err := h.svc.KVDeployMaterial(ctx, ids[0], secret)
+	require.NoError(t, err)
+	m.PrivateKeyPEM.Zero()
+	b.finishQueued(inventory.RequestedDeployment{ID: ids[0]})
+	require.True(t, b.certRowChainComplete(fp))
+	_, source := b.certPEM(fp)
+	require.Equal(t, "azure_kv", source)
+
+	// Version Y (another vault) has the same leaf, delivered without its intermediate.
+	other := h.vault("other")
+	h.reconcile(other, kvResult(h.kvc("web-copy", b.webLeaf, ver(50), h.clock.Now(), true)))
+	copyCert := h.certRow(other, "web-copy").ID
+	bindY := b.create(b.admin, copyCert, b.loc2)
+	y := b.versionID(copyCert, ver(50))
+	leafOnly := string(b.webLeaf.KeyPEM) + string(b.webLeaf.CertPEM)
+	ids = b.beginKV(b.admin, bindY.ID, y, false, b.loc2)
+	_, secret = pemSecret(leafOnly)
+	_, err = h.svc.KVDeployMaterial(ctx, ids[0], secret)
+	require.ErrorIs(t, err, inventory.ErrChainUnconfirmed)
+	b.finishQueued(inventory.RequestedDeployment{ID: ids[0]})
+	require.True(t, b.chainIncomplete(y))
+	require.True(t, b.certRowChainComplete(fp), "the shared row still says complete")
+
+	// The Administrator confirms: the confirmation is stored and the read proceeds with the warning.
+	reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bindY.ID, VersionID: y,
+		LocationIDs: []uuid.UUID{b.loc2}, ConfirmIncompleteChain: true})
+	require.NoError(t, err)
+	assert.True(t, b.get(reqs[0].ID).ConfirmIncompleteChain, "the version's own mark wins over the shared row")
+	_, err = h.svc.BeginDeployment(ctx, reqs[0].ID)
+	require.NoError(t, err)
+	_, secret = pemSecret(leafOnly)
+	m, err = h.svc.KVDeployMaterial(ctx, reqs[0].ID, secret)
+	require.NoError(t, err)
+	m.PrivateKeyPEM.Zero()
+	assert.Equal(t, []string{"chain_incomplete"}, m.Warnings)
+}
+
 // A read that finds the chain complete clears what an earlier read found (the vault's secret was fixed).
 func TestKVDeployMaterialCompleteChainClearsTheMark(t *testing.T) {
 	b := newBindFixture(t)
