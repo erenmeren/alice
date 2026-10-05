@@ -132,7 +132,8 @@ func (c *readCounter) Read(p []byte) (int, error) {
 // values. The scan parses the package's non-test sources.
 func TestOnlyTheDecodeHelpersReadRequests(t *testing.T) {
 	allowed := map[string]map[string]bool{
-		"Body":      {"readJSON": true, "decodeExact": true, "decodeExactBody": true},
+		// downloadedFile reads the Body of an sshkeys.Download (the file the service built), not a request.
+		"Body":      {"readJSON": true, "decodeExact": true, "decodeExactBody": true, "downloadedFile": true},
 		"PathValue": {"pathUUID": true},
 	}
 	forbidden := map[string]bool{"Form": true, "PostForm": true, "FormValue": true, "PostFormValue": true, "ParseForm": true,

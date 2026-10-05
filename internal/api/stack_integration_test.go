@@ -41,9 +41,11 @@ import (
 	"alice/internal/platform/logging"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
+	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/nginx"
 	"alice/internal/secrets"
 	"alice/internal/setup"
+	"alice/internal/sshkeys"
 	"alice/internal/testutil/fakekv"
 	"alice/internal/testutil/pgtest"
 	"alice/internal/testutil/pki"
@@ -107,6 +109,7 @@ type stack struct {
 	auditSvc    *audit.Service
 	license     *license.Service
 	inv         *inventory.Service
+	sshKeys     *sshkeys.Service // Phase 6: generated keys and rotation (no job handlers here; Task 14's journeys add them)
 	auditLog    *audit.Log
 	queue       *jobs.Queue
 	runner      *jobs.Runner
@@ -224,6 +227,10 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	s.registry.Freeze()
 	_, err := s.inv.EnsurePlatformKey(context.Background())
 	require.NoError(t, err)
+	s.sshKeys = sshkeys.New(sshkeys.Config{
+		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, License: s.license, Inventory: s.inv, Jobs: s.queue,
+		Notifier: notify.AdminNotifier{Clock: s.clock}, Log: log, HelperBudget: helperproto.HelperBudget,
+	})
 	s.auditLog = auditLog
 	s.runner = s.newRunner("", 0)
 }
@@ -268,6 +275,7 @@ func (s *stack) deps() Deps {
 		Inventory:      s.inv,
 		Jobs:           s.queue,
 		Providers:      s.registry,
+		SSHKeys:        s.sshKeys,
 		TrustedProxies: s.trusted,
 	}
 }

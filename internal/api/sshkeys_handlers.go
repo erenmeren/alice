@@ -1,8 +1,10 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +17,9 @@ import (
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/rbac"
+	"alice/internal/secrets"
+	"alice/internal/sshkeys"
+	"alice/internal/sshkeys/keymat"
 )
 
 // sshKeyRoutes are the SSH key inventory (§9.6 "ssh-keys"). Removing a key changes a managed
@@ -26,6 +31,13 @@ func (s *server) sshKeyRoutes() []route {
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/platform-key", perm: rbac.TargetsManage, handler: s.platformKey},
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/{id}", perm: rbac.Read, handler: s.getSSHKey},
 		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/locations/{id}/actions/remove", perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.removeKeyLocation},
+		// Phase 6 (C13): generation and deploy are Operators' too (R41 row 7); the private key leaves Alice only through
+		// the download, an Administrator's browser session with step-up, 5 per minute, allowed in lock (row 5).
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/generate", perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.generateSSHKey},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/deploy", perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.deploySSHKey},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/download-private-key", perm: rbac.SSHKeysDownload, lic: license.ClassAlways,
+			limit: limitDownload, handler: s.downloadPrivateKey},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/key-files", perm: rbac.Read, handler: s.keyFiles},
 	}
 }
 
@@ -121,7 +133,20 @@ func (s *server) getSSHKey(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, sshKeyJSON(k, true))
+	d := sshKeyDetailDTO{sshKeyDTO: sshKeyJSON(k, true)}
+	if k.Managed && s.deps.SSHKeys != nil {
+		m, err := s.deps.SSHKeys.ManagedKey(r.Context(), id)
+		switch {
+		case errors.Is(err, sshkeys.ErrNotManaged):
+			// A key the inventory calls managed whose private key Alice does not hold: listed only.
+		case err != nil:
+			s.fail(w, r, err)
+			return
+		default:
+			d.ManagedKey = managedKeyJSON(m)
+		}
+	}
+	writeJSON(w, http.StatusOK, d)
 }
 
 // platformKey returns Alice's public key and the setup snippets (§12.2, §18.5 step 7). ?from= adds
@@ -164,3 +189,174 @@ func (s *server) removeKeyLocation(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusAccepted, accepted(jobID))
 }
+
+// Body limits of the Phase 6 key routes: a generation and a deploy carry a few short strings; the download a reason
+// (at most 500 runes) and a passphrase (at most 1024 bytes, JSON-escaped up to six bytes each).
+const (
+	maxKeyActionBody = 16 << 10
+	maxDownloadBody  = 8 << 10
+)
+
+// keyTypeValues is the OneOf text of key_type.
+func keyTypeValues() string {
+	var out []string
+	for _, kt := range keymat.KeyTypes() {
+		out = append(out, string(kt))
+	}
+	return strings.Join(out, ", ")
+}
+
+// generateSSHKey creates a key whose private key Alice keeps sealed (spec §13.5, R41 rows 3, 7). The answer is the key
+// as GET /ssh-keys/{id} shows it, with managed_key; it never carries the private key (S-08).
+func (s *server) generateSSHKey(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Label   string `json:"label"`
+		KeyType string `json:"key_type"`
+	}
+	if !s.decodeExact(w, r, &req, maxKeyActionBody, "label", "key_type") {
+		return
+	}
+	if req.KeyType != "" && !slices.Contains(keymat.KeyTypes(), keymat.KeyType(req.KeyType)) {
+		var v validate.Errors
+		v.Add("key_type", validate.OneOf, map[string]string{"values": keyTypeValues()})
+		s.fail(w, r, v)
+		return
+	}
+	m, err := s.deps.SSHKeys.Generate(r.Context(), s.actor(r), sshkeys.GenerateInput{Label: req.Label, KeyType: req.KeyType})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, generatedKeyJSON(m))
+}
+
+// deploySSHKey queues the deploy of a generated key to one user's key file on a server (spec §13.4). The service
+// decides everything again in its transaction and once more when the job runs (S7: never the connection account or
+// one of its files; options only from= and restrict).
+func (s *server) deploySSHKey(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(r, "id")
+	if !ok {
+		s.writeError(w, r, ErrNotFound)
+		return
+	}
+	var req struct {
+		TargetID string `json:"target_id"`
+		OSUser   string `json:"os_user"`
+		FilePath string `json:"file_path"`
+		From     string `json:"from"`
+		Restrict bool   `json:"restrict"`
+	}
+	if !s.decodeExact(w, r, &req, maxKeyActionBody, "target_id", "os_user", "file_path", "from", "restrict") {
+		return
+	}
+	var v validate.Errors
+	target := requiredUUID(req.TargetID, "target_id", &v)
+	if req.OSUser == "" {
+		v.Add("os_user", validate.Required, nil)
+	}
+	if req.FilePath == "" {
+		v.Add("file_path", validate.Required, nil)
+	}
+	if err := v.Err(); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	jobID, err := s.deps.SSHKeys.RequestDeploy(r.Context(), s.actor(r), sshkeys.DeployInput{KeyID: id, TargetID: target,
+		OSUser: req.OSUser, FilePath: req.FilePath, From: req.From, Restrict: req.Restrict})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, accepted(jobID))
+}
+
+// requiredUUID reads a required UUID body field.
+func requiredUUID(raw, field string, v *validate.Errors) uuid.UUID {
+	if raw == "" {
+		v.Add(field, validate.Required, nil)
+		return uuid.Nil
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		v.Add(field, validate.Pattern, nil)
+		return uuid.Nil
+	}
+	return id
+}
+
+// downloadFileNameRE is the closed form of the file name the service builds ("alice-<slug>-<8 hex>.key"); the header
+// is written only with a name of this form, so nothing from a request or a server can reach it.
+var downloadFileNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,199}$`)
+
+// fallbackKeyFileName stands in for a name that is not of the closed form (never expected).
+const fallbackKeyFileName = "alice-key.key"
+
+// downloadPrivateKey answers the OpenSSH file of a generated key (S-09; R41 rows 4, 5). The service commits the audit
+// row and the counter before it returns the file; only then is the first byte written. The body's passphrase is a
+// secretText this handler zeroes on every path; the file is zeroed after the write. Every refusal is the usual JSON
+// error, never a file. A passphrase given as "" is an empty, non-nil secretText, which the service refuses as too
+// short, so an empty field never silently means "unencrypted"; null or an absent key means unencrypted.
+func (s *server) downloadPrivateKey(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Reason     string     `json:"reason"`
+		Passphrase secretText `json:"passphrase"`
+	}
+	defer func() { req.Passphrase.zero() }()
+	id, ok := pathUUID(r, "id")
+	if !ok {
+		s.writeError(w, r, ErrNotFound)
+		return
+	}
+	if !s.decodeExact(w, r, &req, maxDownloadBody, "reason", "passphrase") {
+		return
+	}
+	var pass []byte
+	if req.Passphrase != nil {
+		pass = req.Passphrase
+	}
+	dl, err := s.deps.SSHKeys.DownloadPrivateKey(r.Context(), s.actor(r), sshkeys.DownloadInput{KeyID: id, Reason: req.Reason, Passphrase: pass})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	file := downloadedFile(dl)
+	defer file.Zero()
+	name := dl.FileName
+	if !downloadFileNameRE.MatchString(name) {
+		name = fallbackKeyFileName
+	}
+	body := file.Bytes()
+	h := w.Header()
+	h.Set("Content-Type", "application/octet-stream")
+	h.Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body) // a failed write after the audit row is still recorded as downloaded (S-09: audit first)
+}
+
+// keyFiles lists, per user, the authorized_keys files the SSH server reads as the last scan found them: the files a
+// key can be deployed to (C13). The connection account is never offered, and neither is any file it reads (S7). When
+// the scan did not list the connection account's files completely and once, nothing is offered and refusal says why
+// (the deploy would be refused with the same code).
+func (s *server) keyFiles(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(r, "id")
+	if !ok {
+		s.writeError(w, r, ErrNotFound)
+		return
+	}
+	t, err := s.deps.Inventory.GetTarget(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if t.Type != inventory.TypeLinux && t.Type != inventory.TypeNginx {
+		s.writeError(w, r, ErrNotFound) // a Key Vault has no key files
+		return
+	}
+	writeJSON(w, http.StatusOK, keyFilesJSON(t))
+}
+
+// downloadedFile is the file of a download (the service's secrets.Plaintext, which the handler zeroes).
+func downloadedFile(dl sshkeys.Download) secrets.Plaintext { return dl.Body }

@@ -89,8 +89,8 @@ var reasonCalls = map[string]int{"Fail": 0, "Attention": 0, "Retry": 0, "NewErro
 // error that a person cannot act on (contract: target.invalid_config maps to ALC-SYS-0003).
 var unregisteredReasons = map[string]bool{"target.invalid_config": true, "license.unclassified": true}
 
-// reasonShapeRE matches the stored reasons of the Phase 3, 4 and 5 areas (azure and kv: D40).
-var reasonShapeRE = regexp.MustCompile(`^(ssh|sshkey|target|job|hostkey|nginx|certificate|csr|deployment|azure|kv)\.[a-z_]+$`)
+// reasonShapeRE matches the stored reasons of the Phase 3, 4, 5 and 6 areas (azure and kv: D40; rotation: F13).
+var reasonShapeRE = regexp.MustCompile(`^(ssh|sshkey|target|job|hostkey|nginx|certificate|csr|deployment|azure|kv|rotation)\.[a-z_]+$`)
 
 // notReasons are reason-shaped literals that are audit actions, job types or email templates.
 var notReasons = map[string]bool{
@@ -125,6 +125,21 @@ var notReasons = map[string]bool{
 	"kv.version_skipped_superseded": true, "kv.auto_deploy_stopped": true, "kv.import_failed": true,
 	"kv.new_versions_more": true, "kv.new_versions_more_one": true, "kv.versions_skipped_more": true, "kv.versions_skipped_more_one": true,
 	"kv.auto_deploys_stopped_more": true, "kv.auto_deploys_stopped_more_one": true,
+	// Phase 6 audit actions (F13; rotation.old_kept is also the reason of a kept location's audit row and step, never a
+	// stored error code)
+	"sshkey.generated": true, "sshkey.deploy_requested": true, "sshkey.added": true, "sshkey.add_failed": true,
+	"sshkey.private_key_downloaded": true, "sshkey.private_key_destroyed": true, "sshkey.retired": true,
+	"sshkey.reactivated": true, "sshkey.live_after_destruction": true,
+	"rotation.policy_created": true, "rotation.policy_updated": true, "rotation.policy_enabled": true, "rotation.policy_disabled": true,
+	"rotation.policy_deleted": true, "rotation.previewed": true, "rotation.created": true, "rotation.status_changed": true,
+	"rotation.location_changed": true, "rotation.paused": true, "rotation.continued": true, "rotation.finish_requested": true,
+	"rotation.old_kept": true, "rotation.stop_requested": true,
+	// Phase 6 job types and periodic tasks
+	"sshkey.add": true, "sshkey.destroy_retired": true, "rotation.location": true, "rotation.plan": true, "rotation.sweep": true,
+	// Phase 6 email templates (rotation.paused_license is also a reason and stays checked)
+	"rotation.preview": true, "rotation.preview_after_license": true, "rotation.overlap_started": true, "rotation.overlap_ending": true,
+	"rotation.completed": true, "rotation.completed_partial": true, "rotation.aborted": true, "rotation.needs_attention": true,
+	"rotation.decision_needed": true,
 }
 
 // storedReasons collects the literal reasons (and package string constants) passed to reasonCalls
@@ -208,7 +223,8 @@ func storedReasons(t *testing.T, dir string) map[string]string {
 func TestJobResultReasonsAreRegistered(t *testing.T) {
 	seen := 0
 	for _, dir := range []string{"../jobs", "../jobs/targetjobs", "../providers", "../providers/linuxssh", "../inventory",
-		"../providers/nginx", "../jobs/deployjobs", "../certs", "../providers/azurekv", "../jobs/kvjobs"} {
+		"../providers/nginx", "../jobs/deployjobs", "../certs", "../providers/azurekv", "../jobs/kvjobs",
+		"../sshkeys", "../jobs/sshkeyjobs"} {
 		for reason, pos := range storedReasons(t, dir) {
 			seen++
 			if reason == "" || unregisteredReasons[reason] { // "" settles a success

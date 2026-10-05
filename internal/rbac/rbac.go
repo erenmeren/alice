@@ -105,6 +105,15 @@ const (
 	// releasing a held version and importing a certificate into a vault. Admin with step-up, never an
 	// API token. (Not only credentials: the one policy keeps every such action in one place.)
 	CredentialsManage Permission = "credentials.manage"
+
+	// Phase 6 (R41 rows 5, 24, 25; §15.4, SEC-009, SEC-045, R23, S2). The private key download: Administrator in a
+	// browser session with step-up, never an API token. Rotation policies: Administrators prepare, change,
+	// preview, switch off and stop them (operate tokens allowed); starting changes on servers — switching a policy
+	// on, Run now, Continue after a renewal, Finish now, Keep the old key — needs a step-up session. Any change to
+	// an enabled policy's schedule switches it off (S2), so a token can never re-shape a policy that is on.
+	SSHKeysDownload Permission = "sshkeys.download"
+	RotationManage  Permission = "rotation.manage"
+	RotationOperate Permission = "rotation.operate"
 )
 
 // Policy describes who may use a permission.
@@ -142,6 +151,10 @@ var policies = map[Permission]Policy{
 	CertificatesOperate: {Roles: []Role{Admin, Operator}, TokenScope: ScopeOperate},
 
 	CredentialsManage: {Roles: []Role{Admin}, StepUp: true},
+
+	SSHKeysDownload: {Roles: []Role{Admin}, StepUp: true},
+	RotationManage:  {Roles: []Role{Admin}, TokenScope: ScopeOperate},
+	RotationOperate: {Roles: []Role{Admin}, StepUp: true},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.

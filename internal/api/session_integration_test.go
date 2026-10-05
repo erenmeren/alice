@@ -431,6 +431,9 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 	ids["/api/v1/users/"] = admin.id
 	p5 := phase5Records(t, s, ids["/api/v1/certificates/"])
 	ids["/api/v1/bindings/"] = p5["binding"]
+	for k, v := range phase6Records(t, s, c) {
+		ids[k] = v
+	}
 	// Store an audit checkpoint first, so a GET that moved it would be caught.
 	requireStatus(t, c.do(http.MethodPost, "/api/v1/audit/verify", nil), http.StatusOK)
 	require.Equal(t, 1, s.countWhere("settings", "key = 'audit.checkpoint'"))

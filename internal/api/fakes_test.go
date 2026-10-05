@@ -16,6 +16,7 @@ import (
 	"alice/internal/providers"
 	"alice/internal/rbac"
 	"alice/internal/setup"
+	"alice/internal/sshkeys"
 )
 
 // errNotConfigured is returned by fake methods whose function field is nil.
@@ -893,3 +894,192 @@ func (f *fakeJobs) Discard(ctx context.Context, actor audit.Actor, by, id uuid.U
 type fakeProviders struct{ items []providers.Descriptor }
 
 func (f fakeProviders) List() []providers.Descriptor { return f.items }
+
+// fakeSSHKeys implements SSHKeysService. Each method records its name in calls and calls its function field when
+// set; otherwise it answers zero values and errNotConfigured.
+type fakeSSHKeys struct {
+	mu    sync.Mutex
+	calls []string
+
+	GenerateFn           func(ctx context.Context, a inventory.Actor, in sshkeys.GenerateInput) (sshkeys.ManagedKey, error)
+	ManagedKeyFn         func(ctx context.Context, id uuid.UUID) (sshkeys.ManagedKey, error)
+	RequestDeployFn      func(ctx context.Context, a inventory.Actor, in sshkeys.DeployInput) (uuid.UUID, error)
+	DownloadPrivateKeyFn func(ctx context.Context, a inventory.Actor, in sshkeys.DownloadInput) (sshkeys.Download, error)
+	CreatePolicyFn       func(ctx context.Context, a inventory.Actor, in sshkeys.PolicyInput) (sshkeys.Policy, error)
+	UpdatePolicyFn       func(ctx context.Context, a inventory.Actor, id uuid.UUID, version int, p sshkeys.PolicyPatch) (sshkeys.Policy, error)
+	SetPolicyEnabledFn   func(ctx context.Context, a inventory.Actor, id uuid.UUID, version int, enabled bool) (sshkeys.Policy, error)
+	DeletePolicyFn       func(ctx context.Context, a inventory.Actor, id uuid.UUID, version int) error
+	PolicyFn             func(ctx context.Context, id uuid.UUID) (sshkeys.Policy, error)
+	PoliciesFn           func(ctx context.Context) ([]sshkeys.Policy, error)
+	PreviewFn            func(ctx context.Context, a inventory.Actor, id uuid.UUID) (sshkeys.Preview, error)
+	RunNowFn             func(ctx context.Context, a inventory.Actor, id uuid.UUID, digest string) (sshkeys.Rotation, error)
+	RotationFn           func(ctx context.Context, id uuid.UUID) (sshkeys.Rotation, error)
+	RotationsFn          func(ctx context.Context, f sshkeys.RotationFilter) ([]sshkeys.Rotation, string, error)
+	ContinueFn           func(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+	FinishNowFn          func(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+	KeepOldFn            func(ctx context.Context, a inventory.Actor, id uuid.UUID, locations []uuid.UUID) error
+	AbortFn              func(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+}
+
+func (f *fakeSSHKeys) record(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, name)
+}
+
+// Calls returns the names of the methods called so far.
+func (f *fakeSSHKeys) Calls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
+func (f *fakeSSHKeys) reset() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = nil
+}
+
+func (f *fakeSSHKeys) Generate(ctx context.Context, a inventory.Actor, in sshkeys.GenerateInput) (sshkeys.ManagedKey, error) {
+	f.record("Generate")
+	if f.GenerateFn != nil {
+		return f.GenerateFn(ctx, a, in)
+	}
+	return sshkeys.ManagedKey{}, errNotConfigured
+}
+
+func (f *fakeSSHKeys) ManagedKey(ctx context.Context, id uuid.UUID) (sshkeys.ManagedKey, error) {
+	f.record("ManagedKey")
+	if f.ManagedKeyFn != nil {
+		return f.ManagedKeyFn(ctx, id)
+	}
+	return sshkeys.ManagedKey{}, errNotConfigured
+}
+
+func (f *fakeSSHKeys) RequestDeploy(ctx context.Context, a inventory.Actor, in sshkeys.DeployInput) (uuid.UUID, error) {
+	f.record("RequestDeploy")
+	if f.RequestDeployFn != nil {
+		return f.RequestDeployFn(ctx, a, in)
+	}
+	return uuid.Nil, errNotConfigured
+}
+
+func (f *fakeSSHKeys) DownloadPrivateKey(ctx context.Context, a inventory.Actor, in sshkeys.DownloadInput) (sshkeys.Download, error) {
+	f.record("DownloadPrivateKey")
+	if f.DownloadPrivateKeyFn != nil {
+		return f.DownloadPrivateKeyFn(ctx, a, in)
+	}
+	return sshkeys.Download{}, errNotConfigured
+}
+
+func (f *fakeSSHKeys) CreatePolicy(ctx context.Context, a inventory.Actor, in sshkeys.PolicyInput) (sshkeys.Policy, error) {
+	f.record("CreatePolicy")
+	if f.CreatePolicyFn != nil {
+		return f.CreatePolicyFn(ctx, a, in)
+	}
+	return sshkeys.Policy{}, errNotConfigured
+}
+
+func (f *fakeSSHKeys) UpdatePolicy(ctx context.Context, a inventory.Actor, id uuid.UUID, version int, p sshkeys.PolicyPatch) (sshkeys.Policy, error) {
+	f.record("UpdatePolicy")
+	if f.UpdatePolicyFn != nil {
+		return f.UpdatePolicyFn(ctx, a, id, version, p)
+	}
+	return sshkeys.Policy{}, errNotConfigured
+}
+
+func (f *fakeSSHKeys) SetPolicyEnabled(ctx context.Context, a inventory.Actor, id uuid.UUID, version int, enabled bool) (sshkeys.Policy, error) {
+	f.record("SetPolicyEnabled")
+	if f.SetPolicyEnabledFn != nil {
+		return f.SetPolicyEnabledFn(ctx, a, id, version, enabled)
+	}
+	return sshkeys.Policy{}, errNotConfigured
+}
+
+func (f *fakeSSHKeys) DeletePolicy(ctx context.Context, a inventory.Actor, id uuid.UUID, version int) error {
+	f.record("DeletePolicy")
+	if f.DeletePolicyFn != nil {
+		return f.DeletePolicyFn(ctx, a, id, version)
+	}
+	return errNotConfigured
+}
+
+func (f *fakeSSHKeys) Policy(ctx context.Context, id uuid.UUID) (sshkeys.Policy, error) {
+	f.record("Policy")
+	if f.PolicyFn != nil {
+		return f.PolicyFn(ctx, id)
+	}
+	return sshkeys.Policy{}, errNotConfigured
+}
+
+func (f *fakeSSHKeys) Policies(ctx context.Context) ([]sshkeys.Policy, error) {
+	f.record("Policies")
+	if f.PoliciesFn != nil {
+		return f.PoliciesFn(ctx)
+	}
+	return nil, errNotConfigured
+}
+
+func (f *fakeSSHKeys) Preview(ctx context.Context, a inventory.Actor, id uuid.UUID) (sshkeys.Preview, error) {
+	f.record("Preview")
+	if f.PreviewFn != nil {
+		return f.PreviewFn(ctx, a, id)
+	}
+	return sshkeys.Preview{}, errNotConfigured
+}
+
+func (f *fakeSSHKeys) RunNow(ctx context.Context, a inventory.Actor, id uuid.UUID, digest string) (sshkeys.Rotation, error) {
+	f.record("RunNow")
+	if f.RunNowFn != nil {
+		return f.RunNowFn(ctx, a, id, digest)
+	}
+	return sshkeys.Rotation{}, errNotConfigured
+}
+
+func (f *fakeSSHKeys) Rotation(ctx context.Context, id uuid.UUID) (sshkeys.Rotation, error) {
+	f.record("Rotation")
+	if f.RotationFn != nil {
+		return f.RotationFn(ctx, id)
+	}
+	return sshkeys.Rotation{}, errNotConfigured
+}
+
+func (f *fakeSSHKeys) Rotations(ctx context.Context, fl sshkeys.RotationFilter) ([]sshkeys.Rotation, string, error) {
+	f.record("Rotations")
+	if f.RotationsFn != nil {
+		return f.RotationsFn(ctx, fl)
+	}
+	return nil, "", errNotConfigured
+}
+
+func (f *fakeSSHKeys) Continue(ctx context.Context, a inventory.Actor, id uuid.UUID) error {
+	f.record("Continue")
+	if f.ContinueFn != nil {
+		return f.ContinueFn(ctx, a, id)
+	}
+	return errNotConfigured
+}
+
+func (f *fakeSSHKeys) FinishNow(ctx context.Context, a inventory.Actor, id uuid.UUID) error {
+	f.record("FinishNow")
+	if f.FinishNowFn != nil {
+		return f.FinishNowFn(ctx, a, id)
+	}
+	return errNotConfigured
+}
+
+func (f *fakeSSHKeys) KeepOld(ctx context.Context, a inventory.Actor, id uuid.UUID, locations []uuid.UUID) error {
+	f.record("KeepOld")
+	if f.KeepOldFn != nil {
+		return f.KeepOldFn(ctx, a, id, locations)
+	}
+	return errNotConfigured
+}
+
+func (f *fakeSSHKeys) Abort(ctx context.Context, a inventory.Actor, id uuid.UUID) error {
+	f.record("Abort")
+	if f.AbortFn != nil {
+		return f.AbortFn(ctx, a, id)
+	}
+	return errNotConfigured
+}

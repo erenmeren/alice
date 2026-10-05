@@ -68,6 +68,8 @@ var inventorySentinels = map[string]error{
 	"ErrImportConfirmNeeded": inventory.ErrImportConfirmNeeded, "ErrImportInProgress": inventory.ErrImportInProgress,
 	"ErrImportState": inventory.ErrImportState, "ErrImportChanged": inventory.ErrImportChanged,
 	"ErrVaultCredentialUnreadable": inventory.ErrVaultCredentialUnreadable,
+	// Phase 6 (Task 6)
+	"ErrTargetDisabled": inventory.ErrTargetDisabled,
 }
 
 // engineOnlySentinels are returned only by the methods the deployment engine calls (StartDeployment,

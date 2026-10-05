@@ -20,6 +20,8 @@ import (
 	"alice/internal/providers"
 	"alice/internal/rbac"
 	"alice/internal/setup"
+	"alice/internal/sshkeys"
+	"alice/internal/sshkeys/plan"
 )
 
 // ErrorCode is a stable, documented API error. Codes are never reused.
@@ -110,6 +112,51 @@ var (
 	ErrKeyNotRemovable = ErrorCode{Code: "ALC-KEY-0003", Reason: "sshkey.not_removable", Status: http.StatusConflict}
 	ErrSSHDUnreadable  = ErrorCode{Code: "ALC-KEY-0004", Reason: "sshkey.sshd_unreadable", Status: http.StatusConflict}
 	ErrKeyVerifyFailed = ErrorCode{Code: "ALC-KEY-0005", Reason: "sshkey.verify_failed", Status: http.StatusBadGateway}
+	// Phase 6: generated keys, deploys and the private key download (R41, C11). 0014 and 0015 continue the contract's
+	// table for what the service built after it (review N1, ruling G14).
+	ErrKeyNotManaged             = ErrorCode{Code: "ALC-KEY-0006", Reason: "sshkey.not_managed", Status: http.StatusConflict}
+	ErrKeyRetired                = ErrorCode{Code: "ALC-KEY-0007", Reason: "sshkey.retired", Status: http.StatusConflict}
+	ErrKeyDestroyed              = ErrorCode{Code: "ALC-KEY-0008", Reason: "sshkey.private_key_destroyed", Status: http.StatusGone}
+	ErrKeyConnectionAccount      = ErrorCode{Code: "ALC-KEY-0009", Reason: "sshkey.connection_account", Status: http.StatusConflict}
+	ErrKeyLoginFailed            = ErrorCode{Code: "ALC-KEY-0010", Reason: "sshkey.login_failed", Status: http.StatusBadGateway}
+	ErrKeyGenerateBusy           = ErrorCode{Code: "ALC-KEY-0011", Reason: "sshkey.generate_busy", Status: http.StatusServiceUnavailable, Retryable: true}
+	ErrKeyAddUndoFailed          = ErrorCode{Code: "ALC-KEY-0012", Reason: "sshkey.add_undo_failed", Status: http.StatusBadGateway}
+	ErrKeyNotAKeyFile            = ErrorCode{Code: "ALC-KEY-0013", Reason: "sshkey.not_a_key_file", Status: http.StatusConflict}
+	ErrKeyConnectionFilesUnknown = ErrorCode{Code: "ALC-KEY-0014", Reason: "sshkey.connection_files_unknown", Status: http.StatusConflict}
+	// ErrKeyClockBehind: the clock is behind a time Alice already recorded (a download on a clock stepped back);
+	// nothing was handed out, counted or audited; retryable once the clock has caught up.
+	ErrKeyClockBehind = ErrorCode{Code: "ALC-KEY-0015", Reason: "sshkey.clock_behind", Status: http.StatusServiceUnavailable, Retryable: true}
+	// ErrKeyAddUncertain: a deploy's add was sent and its answer lost, and the line is not in the file (yet); the job
+	// waits until the add can no longer arrive, then starts over (S3). A job reason, retried by the job itself.
+	ErrKeyAddUncertain = ErrorCode{Code: "ALC-KEY-0016", Reason: "sshkey.add_uncertain", Status: http.StatusBadGateway, Retryable: true}
+
+	// Phase 6: rotation policies and runs (R41, C11). The run results (rotations.result_code) and the location
+	// errors (rotation_locations.error_code) are stored reasons; the API also answers the request refusals with them.
+	// 0017 and later continue the contract's table (S1, S12, the service's own refusals).
+	ErrRotPolicyExists      = ErrorCode{Code: "ALC-ROT-0001", Reason: "rotation.policy_exists", Status: http.StatusConflict}
+	ErrRotInProgress        = ErrorCode{Code: "ALC-ROT-0002", Reason: "rotation.in_progress", Status: http.StatusConflict}
+	ErrRotPlanChanged       = ErrorCode{Code: "ALC-ROT-0003", Reason: "rotation.plan_changed", Status: http.StatusConflict}
+	ErrRotNothingToRotate   = ErrorCode{Code: "ALC-ROT-0004", Reason: "rotation.nothing_to_rotate", Status: http.StatusConflict}
+	ErrRotNotWaiting        = ErrorCode{Code: "ALC-ROT-0005", Reason: "rotation.not_waiting", Status: http.StatusConflict}
+	ErrRotAddFailed         = ErrorCode{Code: "ALC-ROT-0006", Reason: "rotation.add_failed", Status: http.StatusBadGateway}
+	ErrRotVerifyFailed      = ErrorCode{Code: "ALC-ROT-0007", Reason: "rotation.verify_failed", Status: http.StatusBadGateway}
+	ErrRotUndoFailed        = ErrorCode{Code: "ALC-ROT-0008", Reason: "rotation.undo_failed", Status: http.StatusBadGateway}
+	ErrRotRemoveIncomplete  = ErrorCode{Code: "ALC-ROT-0009", Reason: "rotation.remove_incomplete", Status: http.StatusBadGateway}
+	ErrRotDecisionTimeout   = ErrorCode{Code: "ALC-ROT-0010", Reason: "rotation.decision_timeout", Status: http.StatusConflict}
+	ErrRotPausedLicense     = ErrorCode{Code: "ALC-ROT-0011", Reason: "rotation.paused_license", Status: http.StatusConflict}
+	ErrRotCancelledLicense  = ErrorCode{Code: "ALC-ROT-0012", Reason: "rotation.cancelled_license", Status: http.StatusConflict}
+	ErrRotStopped           = ErrorCode{Code: "ALC-ROT-0013", Reason: "rotation.stopped", Status: http.StatusConflict}
+	ErrRotPolicyOff         = ErrorCode{Code: "ALC-ROT-0014", Reason: "rotation.policy_off", Status: http.StatusConflict}
+	ErrRotNewKeyFailed      = ErrorCode{Code: "ALC-ROT-0015", Reason: "rotation.new_key_failed", Status: http.StatusBadGateway}
+	ErrRotRetriesExhausted  = ErrorCode{Code: "ALC-ROT-0016", Reason: "rotation.retries_exhausted", Status: http.StatusBadGateway}
+	ErrRotNoticeUndelivered = ErrorCode{Code: "ALC-ROT-0017", Reason: "rotation.notice_undelivered", Status: http.StatusConflict}
+	ErrRotOldKeyGone        = ErrorCode{Code: "ALC-ROT-0018", Reason: "rotation.old_key_gone", Status: http.StatusConflict}
+	ErrRotPlanTooLarge      = ErrorCode{Code: "ALC-ROT-0019", Reason: "rotation.plan_too_large", Status: http.StatusConflict}
+	ErrRotStartFailed       = ErrorCode{Code: "ALC-ROT-0020", Reason: "rotation.start_failed", Status: http.StatusConflict}
+	// ErrRotNoticePending: Continue before the renewal email of the pause was queued (S6; the next sweep queues it).
+	ErrRotNoticePending = ErrorCode{Code: "ALC-ROT-0021", Reason: "rotation.notice_pending", Status: http.StatusConflict, Retryable: true}
+	// ErrRotLateResult: a place's definite answer arrived after the sweep had given up on it (the attention mail's code).
+	ErrRotLateResult = ErrorCode{Code: "ALC-ROT-0022", Reason: "rotation.late_result", Status: http.StatusConflict}
 
 	ErrJobNotWaiting   = ErrorCode{Code: "ALC-JOB-0001", Reason: "job.not_waiting", Status: http.StatusConflict}
 	ErrJobLeaseExpired = ErrorCode{Code: "ALC-JOB-0002", Reason: "job.lease_expired", Status: http.StatusInternalServerError, Retryable: true}
@@ -260,6 +307,12 @@ func AllErrorCodes() []ErrorCode {
 		ErrSSHUnreachable, ErrSSHAuthFailed, ErrSSHTimeout, ErrHelperMissing, ErrHelperOutdated, ErrHelperRefused,
 		ErrFileChanged, ErrKeysManagedElsewhere, ErrOutputTooLarge, ErrSSHProtocol, ErrHelperChecksums, ErrSSHAddressNotAllowed,
 		ErrOwnKeyProtected, ErrLastRootKey, ErrKeyNotRemovable, ErrSSHDUnreadable, ErrKeyVerifyFailed,
+		ErrKeyNotManaged, ErrKeyRetired, ErrKeyDestroyed, ErrKeyConnectionAccount, ErrKeyLoginFailed, ErrKeyGenerateBusy,
+		ErrKeyAddUndoFailed, ErrKeyNotAKeyFile, ErrKeyConnectionFilesUnknown, ErrKeyClockBehind, ErrKeyAddUncertain,
+		ErrRotPolicyExists, ErrRotInProgress, ErrRotPlanChanged, ErrRotNothingToRotate, ErrRotNotWaiting, ErrRotAddFailed,
+		ErrRotVerifyFailed, ErrRotUndoFailed, ErrRotRemoveIncomplete, ErrRotDecisionTimeout, ErrRotPausedLicense,
+		ErrRotCancelledLicense, ErrRotStopped, ErrRotPolicyOff, ErrRotNewKeyFailed, ErrRotRetriesExhausted,
+		ErrRotNoticeUndelivered, ErrRotOldKeyGone, ErrRotPlanTooLarge, ErrRotStartFailed, ErrRotNoticePending, ErrRotLateResult,
 		ErrJobNotWaiting, ErrJobLeaseExpired, ErrJobTampered, ErrJobUnknownType, ErrJobConflict,
 		ErrNginxNotFound, ErrNginxConfigInvalid, ErrNginxConfigChanged, ErrNginxProfileMissing, ErrNginxNoSpace,
 		ErrNginxFileChanged, ErrNginxLocationUnsupported, ErrNginxBusy, ErrNginxIOError, ErrNginxNotRunning,
@@ -349,6 +402,7 @@ var errorMap = []struct {
 	{inventory.ErrKeysManagedElsewhere, ErrKeysManagedElsewhere, nil},
 	{inventory.ErrSSHDUnreadable, ErrSSHDUnreadable, nil},
 	{inventory.ErrJobConflict, ErrJobConflict, nil},
+	{inventory.ErrTargetDisabled, ErrTargetDisabled, nil}, // a key change on a disabled server (Phase 6, Task 6)
 	{jobs.ErrNotFound, ErrNotFound, nil},
 	{jobs.ErrNotWaiting, ErrJobNotWaiting, nil},
 	{jobs.ErrBadCursor, ErrBadRequest, nil}, // a cursor that does not decode
@@ -411,6 +465,32 @@ var errorMap = []struct {
 	// API looked): what it refuses is a session without a fresh step-up.
 	{inventory.ErrHeldNeedsStepUp, ErrStepUpRequired, nil},
 	{inventory.ErrAutoDeployNeedsStepUp, ErrStepUpRequired, nil},
+	// Phase 6 (C11). sshkeys.ErrNotFound, ErrVersionMismatch and ErrOwnKeyProtected are the inventory's sentinels
+	// (matched above). The store's ErrNotYourTurn and ErrPaused reach only the job handlers; a request that met one
+	// is answered ALC-SYS-0003. *sshkeys.GuardRefusal (the database refused a rotation step: a store bug) has no
+	// entry on purpose: it is answered ALC-SYS-0003 and fail logs its SQLSTATE and constraint name only. The planner's errors are mapped by the service; they are listed for a path that
+	// returns one unmapped.
+	{sshkeys.ErrNotManaged, ErrKeyNotManaged, nil},
+	{sshkeys.ErrRetired, ErrKeyRetired, nil},
+	{sshkeys.ErrDestroyed, ErrKeyDestroyed, nil},
+	{sshkeys.ErrConnectionAccount, ErrKeyConnectionAccount, nil},
+	{sshkeys.ErrConnectionFilesUnknown, ErrKeyConnectionFilesUnknown, nil},
+	{sshkeys.ErrNotAKeyFile, ErrKeyNotAKeyFile, nil},
+	{sshkeys.ErrGenerateBusy, ErrKeyGenerateBusy, nil},
+	{sshkeys.ErrClockBehind, ErrKeyClockBehind, nil},
+	{sshkeys.ErrPolicyExists, ErrRotPolicyExists, nil},
+	{sshkeys.ErrRotationInProgress, ErrRotInProgress, nil},
+	{sshkeys.ErrPlanChanged, ErrRotPlanChanged, nil},
+	{sshkeys.ErrNothingToRotate, ErrRotNothingToRotate, nil},
+	{sshkeys.ErrNotWaiting, ErrRotNotWaiting, nil},
+	{sshkeys.ErrNoticePending, ErrRotNoticePending, nil},
+	{sshkeys.ErrPlanTooLarge, ErrRotPlanTooLarge, nil},
+	{sshkeys.ErrBadCursor, ErrBadRequest, nil}, // a cursor that does not decode
+	{plan.ErrOwnKey, ErrOwnKeyProtected, nil},
+	{plan.ErrNotManaged, ErrKeyNotManaged, nil},
+	{plan.ErrRetired, ErrKeyRetired, nil},
+	{plan.ErrNothingToRotate, ErrRotNothingToRotate, nil},
+	{plan.ErrNewKeyType, ErrValidation, nil},
 }
 
 type errorPayload struct {
@@ -469,7 +549,14 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	ec, params, ok := classify(err)
 	if !ok {
-		s.deps.Log.Error("request failed", append([]any{"request_id", RequestID(r.Context()), "path", r.URL.Path}, errorAttrs(err)...)...)
+		attrs := append([]any{"request_id", RequestID(r.Context()), "path", r.URL.Path}, errorAttrs(err)...)
+		var guard *sshkeys.GuardRefusal
+		if errors.As(err, &guard) {
+			// A rotation step the database refused: the code and the constraint's name are fixed labels; the
+			// guard's message can name row values and is never logged here nor answered.
+			attrs = append(attrs, "guard_sqlstate", guard.Code, "guard_constraint", guard.Constraint)
+		}
+		s.deps.Log.Error("request failed", attrs...)
 		s.writeError(w, r, ErrUnexpected)
 		return
 	}
@@ -481,8 +568,13 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		// caller that cannot step up, an API token: it gets the documented ALC-AUTH-0002, as at the handler.
 		ec = ErrForbidden
 	}
-	if ec == ErrCertPFXBusy || ec == ErrCSRBusy {
+	switch ec {
+	case ErrCertPFXBusy, ErrCSRBusy, ErrKeyGenerateBusy:
 		w.Header().Set("Retry-After", "1") // a decode or key generation slot frees within seconds
+	case ErrKeyClockBehind:
+		w.Header().Set("Retry-After", "60") // the clock must pass the time Alice recorded last
+	case ErrRotNoticePending:
+		w.Header().Set("Retry-After", "60") // the sweep runs every minute
 	}
 	var refused *inventory.LocationRefusalError
 	if errors.As(err, &refused) {

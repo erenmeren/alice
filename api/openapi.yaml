@@ -964,6 +964,25 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/KeyLocationList" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/targets/{id}/key-files:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: listKeyFiles
+      summary: The users of a server and the key files a key can be deployed to, as the last scan found them
+      description: >-
+        The account Alice connects with is never listed, nor any file it reads. When the last scan did not list that
+        account's key files completely and once, items is empty and refusal is ALC-KEY-0014 (scan the server again).
+        The default file of a user is the first one the SSH server reads. 404 for a Key Vault.
+      x-permission: read
+      responses:
+        "200":
+          description: Users and their key files
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KeyFiles" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/targets/{id}/certificate-locations:
     parameters:
       - { $ref: "#/components/parameters/ID" }
@@ -1056,6 +1075,414 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Accepted" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ssh-keys/generate:
+    post:
+      operationId: generateSSHKey
+      summary: Generate an SSH key whose private key Alice keeps sealed (Ed25519 by default)
+      description: >-
+        The answer is the key as GET /ssh-keys/{id} shows it, with managed_key; it never carries the private key. At
+        most two keys are generated at once (503 ALC-KEY-0011 with Retry-After). Refused with 403 ALC-LIC-0001 while
+        the license is locked.
+      x-permission: inventory.operate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GenerateKey" }
+      responses:
+        "201":
+          description: The generated key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SSHKey" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ssh-keys/{id}/actions/deploy:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: deploySSHKey
+      summary: Add a generated key to one user's key file on a server and test a login with it (runs as a job)
+      description: >-
+        Only keys Alice generated (409 ALC-KEY-0006), not retired (409 ALC-KEY-0007) or destroyed (410 ALC-KEY-0008).
+        Never the account Alice connects with or one of its key files (409 ALC-KEY-0009), only on a server whose last
+        scan listed that account's key files completely (409 ALC-KEY-0014), only into a file the SSH server reads for
+        that user (409 ALC-KEY-0013). The options are from= and restrict only. The same deploy while queued is the same
+        job; with other options 409 ALC-JOB-0005. Refusals that protect access are recorded in the audit log. Refused
+        with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: inventory.operate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeployKey" }
+      responses:
+        "202":
+          description: Queued; the job's result says whether the login with the key worked
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ssh-keys/{id}/actions/download-private-key:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: downloadPrivateKey
+      summary: Download the private key of a generated key as an OpenSSH file (audited; Administrator with step-up)
+      description: >-
+        An Administrator's browser session with a fresh step-up (403 ALC-AUTH-0003 without it), never an API token
+        (403 ALC-AUTH-0002); at most 5 per minute per user (429 with Retry-After). The reason is recorded in the audit
+        log, which is written, together with the download counter, before the first byte of the file is sent. With a
+        passphrase the file is encrypted with it (bcrypt KDF, aes256-ctr); Alice does not keep the passphrase. An
+        empty passphrase is refused (422); leave the field out or send null for an unencrypted file. Every refusal is
+        the usual JSON error, never a file: Alice's own key or a key Alice holds no private key for 409 ALC-KEY-0006,
+        a destroyed private key 410 ALC-KEY-0008, a clock set back behind the last download 503 ALC-KEY-0015
+        (retryable). Allowed while the license is locked.
+      x-permission: sshkeys.download
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DownloadPrivateKey" }
+      responses:
+        "200":
+          description: The OpenSSH private key file
+          headers:
+            Content-Disposition:
+              description: 'attachment; filename="alice-<name>-<8 hex>.key" (the name is built by Alice from [a-z0-9._-] only)'
+              schema: { type: string }
+            Cache-Control: { schema: { type: string, const: no-store } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/rotation/policies:
+    get:
+      operationId: listRotationPolicies
+      summary: Rotation policies by name
+      x-permission: read
+      responses:
+        "200":
+          description: Every live policy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RotationPolicyList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createRotationPolicy
+      summary: Create a rotation policy for a key Alice generated (switched off)
+      description: >-
+        Alice's own key and a key Alice holds no private key for are refused (409 ALC-KEY-0001, 409 ALC-KEY-0006), a
+        retired key too (409 ALC-KEY-0007); each key has one policy (409 ALC-ROT-0001); the new key of a running
+        rotation cannot get one (409 ALC-ROT-0002). Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: rotation.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RotationPolicyCreate" }
+      responses:
+        "201":
+          description: The policy, switched off
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RotationPolicy" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/rotation/policies/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getRotationPolicy
+      summary: One rotation policy
+      x-permission: read
+      responses:
+        "200":
+          description: The policy
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RotationPolicy" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateRotationPolicy
+      summary: Change a rotation policy (If-Match with the ETag is required)
+      description: >-
+        A change to interval_days, overlap_days, notify_before_hours or new_key_type of a policy that is on switches
+        it off in the same step (a previewed run is cancelled with rotation.policy_off); switching it on again is
+        POST .../actions/enable, which needs an Administrator's step-up. A name-only change leaves it on. 412
+        ALC-SYS-0008 when the If-Match header is missing (answered first, before the body is read) or names another
+        version. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: rotation.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RotationPolicyPatch" }
+      responses:
+        "200":
+          description: The changed policy
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RotationPolicy" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteRotationPolicy
+      summary: Delete a rotation policy (If-Match with the ETag is required; the key stays as it is)
+      description: >-
+        A previewed run is cancelled; a started run refuses the deletion (409 ALC-ROT-0002). 412 ALC-SYS-0008 when the
+        If-Match header is missing or names another version. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: rotation.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      responses:
+        "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/rotation/policies/{id}/actions/enable:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: enableRotationPolicy
+      summary: Switch a rotation policy on (Administrator with step-up; If-Match with the ETag is required)
+      description: >-
+        The first run is planned one interval from now; each run is previewed and emailed to the administrators before
+        it starts, and a scheduled run starts only after that email was delivered. 412 ALC-SYS-0008 when the If-Match
+        header is missing or names another version. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: rotation.operate
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      responses:
+        "200":
+          description: The policy, switched on
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RotationPolicy" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/rotation/policies/{id}/actions/disable:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: disableRotationPolicy
+      summary: Switch a rotation policy off (If-Match with the ETag is required)
+      description: >-
+        No run is planned; a previewed run is cancelled, a started run continues. 412 ALC-SYS-0008 when the If-Match
+        header is missing or names another version. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: rotation.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      responses:
+        "200":
+          description: The policy, switched off
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RotationPolicy" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/rotation/policies/{id}/actions/preview:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: previewRotation
+      summary: Plan the policy's next run as it would be now (a dry run; nothing changes on servers)
+      description: >-
+        The preview is emailed to the administrators, at most once per key in 10 minutes (emailed says whether this one
+        was). A plan in which nothing can change is answered with its skipped places. Run now must send plan_digest
+        back. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: rotation.manage
+      responses:
+        "200":
+          description: The plan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RotationPreview" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/rotation/policies/{id}/actions/run:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: runRotation
+      summary: Start a rotation now with the previewed plan (Administrator with step-up)
+      description: >-
+        plan_digest is the digest of the preview the Administrator saw. When the plan built now differs, nothing is
+        created or started (409 ALC-ROT-0003); a running rotation of the key is 409 ALC-ROT-0002; a plan in which nothing
+        can change 409 ALC-ROT-0004. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: rotation.operate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RotationRunRequest" }
+      responses:
+        "202":
+          description: Started; follow it at status_url
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RotationStarted" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/rotation/runs:
+    get:
+      operationId: listRotations
+      summary: Rotation runs, newest first (without their steps)
+      x-permission: read
+      parameters:
+        - { name: policy_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: ssh_key_id, in: query, required: false, schema: { type: string, format: uuid, description: The old or the new key of the run } }
+        - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page of runs
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RotationRunPage" }
+        "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/rotation/runs/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getRotation
+      summary: One rotation run with its places and steps
+      x-permission: read
+      responses:
+        "200":
+          description: The run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RotationRun" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/rotation/runs/{id}/actions/continue:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: continueRotation
+      summary: Continue a rotation paused by the license (Administrator with step-up)
+      description: >-
+        Only after a renewal (403 ALC-LIC-0001 while the license is locked) and once the email about the renewal was
+        queued (409 ALC-ROT-0021, retryable); every removal of the old key is still preceded by a fresh login with the
+        new key. 409 ALC-ROT-0005 when the run is not paused.
+      x-permission: rotation.operate
+      responses:
+        "204": { description: Continued }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/rotation/runs/{id}/actions/finish-now:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: finishRotationNow
+      summary: End the overlap now (Administrator with step-up); the old key is removed after a fresh login with the new key
+      description: >-
+        The administrators are emailed the new removal time. 409 ALC-ROT-0005 when the run is not in its overlap or is
+        paused. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: rotation.operate
+      responses:
+        "204": { description: The overlap ends now }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/rotation/runs/{id}/actions/keep-old:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: keepOldKey
+      summary: Keep the old key where Alice could not test the new one (Administrator with step-up)
+      description: >-
+        Every id must be a place of this run that Alice could not test; the other places of the run in the same file are
+        kept too. At least one place where the new key works must remain. Otherwise 409 ALC-ROT-0005 and nothing
+        changes. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: rotation.operate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KeepOldRequest" }
+      responses:
+        "204": { description: Kept }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/rotation/runs/{id}/actions/abort:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: abortRotation
+      summary: Stop and undo a rotation (Administrator with step-up); the new key is removed where Alice added it
+      description: >-
+        The old key is never touched. A previewed run is cancelled. Once the old key's removal began, 409 ALC-ROT-0005.
+        Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: rotation.operate
+      responses:
+        "204": { description: Stopped }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
@@ -1756,8 +2183,9 @@ paths:
         deploys automatically puts them under automatic deployment, so it needs an Administrator's browser session with a
         fresh step-up (403 ALC-AUTH-0003; an API token: 403 ALC-AUTH-0002; an Operator: 403 ALC-AUTH-0002); releasing websites does not.
         The inventory repeats the check inside its transaction and is told whether the session is strict. 412 ALC-SYS-0008 when the
-        If-Match header is missing or the connection changed since the caller read it (the ETag); the ETag is compared after the
-        request is read (400, 413, 422) and the connection is found (404), and before anything about the change is judged.
+        If-Match header is missing (answered first, before the body is read) or names another version than the connection's
+        current one (compared after the request is read (400, 413, 422) and the connection is found (404), and before anything
+        about the change is judged).
         Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.operate
       parameters:
@@ -2765,6 +3193,252 @@ components:
         missing: { type: boolean, description: Every location of the key is missing or removed }
         first_seen_at: { type: string, format: date-time }
         locations: { type: array, items: { $ref: "#/components/schemas/KeyLocation" }, description: "Only on GET /ssh-keys/{id}" }
+        managed_key:
+          description: "Only on GET /ssh-keys/{id} and on a generation: what Alice knows about a key it generated (null otherwise)"
+          $ref: "#/components/schemas/ManagedKeyInfo"
+    ManagedKeyInfo:
+      type: [object, "null"]
+      description: >-
+        What Alice knows about a key it generated (null for a key found on a server and for Alice's own key). Never a
+        private key, a passphrase or anything derived from them.
+      required: [label, comment, key_type, created_by, created_at, retired_at, destroyed_at, rotated_from, download_count,
+        last_downloaded_at, policy_id, open_rotation_id]
+      properties:
+        label: { type: string }
+        comment: { type: string }
+        key_type: { type: string, enum: [ed25519, rsa-3072, rsa-4096, ecdsa-p256] }
+        created_by: { type: [string, "null"], format: uuid, description: The user who generated it; null when a rotation did }
+        created_at: { type: string, format: date-time }
+        retired_at: { type: [string, "null"], format: date-time }
+        destroyed_at: { type: [string, "null"], format: date-time, description: When its private key was destroyed }
+        rotated_from: { type: [string, "null"], format: uuid, description: The key this one replaced in a rotation }
+        download_count: { type: integer }
+        last_downloaded_at: { type: [string, "null"], format: date-time }
+        policy_id: { type: [string, "null"], format: uuid }
+        open_rotation_id: { type: [string, "null"], format: uuid, description: The unfinished rotation that replaces this key }
+    GenerateKey:
+      type: object
+      required: [label, key_type]
+      additionalProperties: false
+      properties:
+        label: { type: string, minLength: 1, maxLength: 100, description: '1-100 characters without control, format or bidi characters' }
+        key_type: { type: string, enum: [ed25519, rsa-3072, rsa-4096, ecdsa-p256] }
+    DeployKey:
+      type: object
+      required: [target_id, os_user, file_path]
+      additionalProperties: false
+      properties:
+        target_id: { type: string, format: uuid }
+        os_user: { type: string, minLength: 1, maxLength: 256 }
+        file_path: { type: string, minLength: 1, maxLength: 4096, description: 'One of the key files of the user (GET /targets/{id}/key-files)' }
+        from: { type: string, description: 'Comma-separated addresses or networks for the from= option; empty: any address' }
+        restrict: { type: boolean, default: false, description: Add the restrict option (sign-in only) }
+    DownloadPrivateKey:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        reason: { type: string, minLength: 10, maxLength: 500, description: Recorded in the audit log; never a secret }
+        passphrase: { type: [string, "null"], writeOnly: true, minLength: 12, maxLength: 1024, description: Encrypts the file; Alice does not keep it }
+    KeyFiles:
+      type: object
+      required: [items, scanned_at, refusal]
+      properties:
+        items:
+          type: array
+          description: >-
+            The users a key can be deployed to and their key files as the last scan found them; never the account Alice
+            connects with nor a file it reads
+          items:
+            type: object
+            required: [os_user, files, default_file]
+            properties:
+              os_user: { type: string }
+              files: { type: array, items: { type: string } }
+              default_file: { type: string }
+        scanned_at: { type: [string, "null"], format: date-time }
+        refusal:
+          description: Why nothing can be offered on this server (ALC-KEY-0014 when its last scan did not list Alice's own account's key files completely); null otherwise
+          $ref: "#/components/schemas/ErrorRef"
+    RotationPolicyCreate:
+      type: object
+      required: [ssh_key_id, name, interval_days]
+      additionalProperties: false
+      properties:
+        ssh_key_id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        interval_days: { type: integer, minimum: 1, maximum: 3650 }
+        overlap_days: { type: integer, minimum: 0, maximum: 90, default: 7 }
+        notify_before_hours: { type: integer, minimum: 1, maximum: 168, default: 24 }
+        new_key_type: { type: string, enum: [same, ed25519, rsa-3072, rsa-4096, ecdsa-p256], default: same }
+    RotationPolicyPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        interval_days: { type: integer, minimum: 1, maximum: 3650 }
+        overlap_days: { type: integer, minimum: 0, maximum: 90 }
+        notify_before_hours: { type: integer, minimum: 1, maximum: 168 }
+        new_key_type: { type: string, enum: [same, ed25519, rsa-3072, rsa-4096, ecdsa-p256] }
+    RotationPolicy:
+      type: object
+      required: [id, ssh_key_id, name, enabled, interval_days, overlap_days, overlap_minutes, notify_before_hours, new_key_type,
+        next_run_at, open_rotation_id, last_run_id, last_run_status, last_run_result, version, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        ssh_key_id: { type: string, format: uuid }
+        name: { type: string }
+        enabled: { type: boolean }
+        interval_days: { type: integer }
+        overlap_days: { type: integer, description: overlap_minutes / 1440 rounded down }
+        overlap_minutes: { type: integer }
+        notify_before_hours: { type: integer }
+        new_key_type: { type: string, enum: [same, ed25519, rsa-3072, rsa-4096, ecdsa-p256] }
+        next_run_at: { type: [string, "null"], format: date-time }
+        open_rotation_id: { type: [string, "null"], format: uuid }
+        last_run_id: { type: [string, "null"], format: uuid, description: The policy's latest finished run }
+        last_run_status: { type: [string, "null"], enum: [completed, aborted, needs_attention, cancelled, null] }
+        last_run_result: { $ref: "#/components/schemas/ErrorRef" }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    RotationPolicyList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/RotationPolicy" } }
+    RotationAction:
+      type: object
+      required: [n, location_id, target_id, target_name, os_user, file_path, options, skip_reason, verify, verify_note, remove_line, add_line]
+      properties:
+        n: { type: integer }
+        location_id: { type: string, format: uuid }
+        target_id: { type: string, format: uuid }
+        target_name: { type: string }
+        os_user: { type: string }
+        file_path: { type: string }
+        options: { type: string }
+        skip_reason:
+          type: string
+          description: Empty when this place changes; otherwise why it is skipped (texts rotation.skip.<reason>)
+          enum: ["", target_deleted, host_key_unconfirmed, host_key_changed, target_not_connected, keys_managed_elsewhere,
+            sshd_unreadable, connection_account, missing, cert_authority, shared_file_skipped, pubkey_disabled,
+            root_forced_commands_only, duplicate_lines, options_unreadable]
+        verify: { type: boolean, description: A test login with the new key will be tried here }
+        verify_note: { type: string, enum: ["", root_login_disabled, from_option] }
+        remove_line: { type: string, description: The old key's line (public) }
+        add_line: { type: string, description: The new line (public); the new key is shown by its type }
+    RotationPreview:
+      type: object
+      required: [policy_id, ssh_key_id, fingerprint, plan_digest, planned_for, new_key_type, overlap_minutes, change_count, skip_count,
+        emailed, actions]
+      properties:
+        policy_id: { type: string, format: uuid }
+        ssh_key_id: { type: string, format: uuid }
+        fingerprint: { type: string }
+        plan_digest: { type: string, pattern: "^[0-9a-f]{64}$" }
+        planned_for: { type: string, format: date-time }
+        new_key_type: { type: string, enum: [ed25519, rsa-3072, rsa-4096, ecdsa-p256] }
+        overlap_minutes: { type: integer }
+        change_count: { type: integer }
+        skip_count: { type: integer }
+        emailed: { type: boolean }
+        actions: { type: array, items: { $ref: "#/components/schemas/RotationAction" } }
+    RotationRunRequest:
+      type: object
+      required: [plan_digest]
+      additionalProperties: false
+      properties:
+        plan_digest: { type: string, pattern: "^[0-9a-f]{64}$" }
+    RotationStarted:
+      type: object
+      required: [rotation_id, status_url]
+      properties:
+        rotation_id: { type: string, format: uuid }
+        status_url: { type: string, examples: [/api/v1/rotation/runs/0192b000-0000-7000-8000-0000000000b1] }
+    KeepOldRequest:
+      type: object
+      required: [location_ids]
+      additionalProperties: false
+      properties:
+        location_ids: { type: array, minItems: 1, maxItems: 10000, uniqueItems: true, items: { type: string, format: uuid } }
+    RotationLocation:
+      type: object
+      required: [id, n, target_id, target_name, os_user, file_path, options, state, skip_reason, verify_note, error, backup,
+        verified_at, reverified_at, removed_at, new_location_id]
+      properties:
+        id: { type: string, format: uuid }
+        n: { type: integer }
+        target_id: { type: string, format: uuid }
+        target_name: { type: string }
+        os_user: { type: string }
+        file_path: { type: string }
+        options: { type: string }
+        state:
+          type: string
+          enum: [planned, skipped, cancelled, adding, added, add_failed, verified, unverifiable, verify_failed, kept_old, removing,
+            removed, remove_failed, undoing, undone, undo_failed]
+        skip_reason: { type: string }
+        verify_note: { type: string }
+        error: { $ref: "#/components/schemas/ErrorRef" }
+        backup: { type: string }
+        verified_at: { type: [string, "null"], format: date-time }
+        reverified_at: { type: [string, "null"], format: date-time }
+        removed_at: { type: [string, "null"], format: date-time }
+        new_location_id: { type: [string, "null"], format: uuid }
+    RotationStep:
+      type: object
+      required: [n, location_id, name, status, at, params]
+      properties:
+        n: { type: integer }
+        location_id: { type: [string, "null"], format: uuid }
+        name: { type: string }
+        status: { type: string }
+        at: { type: string, format: date-time }
+        params: { type: object, additionalProperties: { type: string } }
+    RotationRun:
+      type: object
+      required: [id, policy_id, old_ssh_key_id, new_ssh_key_id, old_fingerprint, new_fingerprint, trigger, status, paused_license,
+        awaiting_decision, decision_due_at, planned_for, notified_at, started_at, verified_at, overlap_until, finished_at, result,
+        plan_digest, new_key_type, overlap_minutes, change_count, skip_count, kept_count, actions_allowed, locations, version]
+      properties:
+        id: { type: string, format: uuid }
+        policy_id: { type: string, format: uuid }
+        old_ssh_key_id: { type: string, format: uuid }
+        new_ssh_key_id: { type: [string, "null"], format: uuid }
+        old_fingerprint: { type: string }
+        new_fingerprint: { type: string }
+        trigger: { type: string, enum: [scheduled, manual] }
+        status:
+          type: string
+          enum: [dry_run_notified, adding_new, verifying_new, overlap, removing_old, completed, rolling_back, aborted, needs_attention,
+            cancelled]
+        paused_license: { type: boolean }
+        awaiting_decision: { type: boolean }
+        decision_due_at: { type: [string, "null"], format: date-time }
+        planned_for: { type: string, format: date-time }
+        notified_at: { type: string, format: date-time }
+        started_at: { type: [string, "null"], format: date-time }
+        verified_at: { type: [string, "null"], format: date-time }
+        overlap_until: { type: [string, "null"], format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+        result: { $ref: "#/components/schemas/ErrorRef" }
+        plan_digest: { type: string }
+        new_key_type: { type: string }
+        overlap_minutes: { type: integer }
+        change_count: { type: integer }
+        skip_count: { type: integer }
+        kept_count: { type: integer, description: 'Places where the old key stays (skipped, kept and failed removals)' }
+        actions_allowed: { type: array, items: { type: string, enum: [continue, finish_now, keep_old, abort] } }
+        locations: { type: array, items: { $ref: "#/components/schemas/RotationLocation" } }
+        steps: { type: array, items: { $ref: "#/components/schemas/RotationStep" }, description: 'Only on GET /rotation/runs/{id}' }
+        version: { type: integer }
+    RotationRunPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/RotationRun" } }
+        next_cursor: { type: [string, "null"] }
     SSHKeyPage:
       type: object
       required: [items, next_cursor]
@@ -2799,8 +3473,8 @@ components:
             nginx: { $ref: "#/components/schemas/SetupSnippet" }
     Job:
       type: object
-      required: [id, type, kind, status, target_id, deployment_id, import_id, attempts, max_attempts, error, result, created_at, run_at,
-        started_at, finished_at]
+      required: [id, type, kind, status, target_id, deployment_id, import_id, ssh_key_id, rotation_id, attempts, max_attempts, error, result,
+        created_at, run_at, started_at, finished_at]
       properties:
         id: { type: string, format: uuid }
         type: { type: string, examples: [target.test_connection] }
@@ -2812,6 +3486,8 @@ components:
           format: uuid
           description: 'The deployment a certificate.deploy or certificate.deploy_recover job works on (uploads and Key Vault alike); null for other jobs'
         import_id: { type: [string, "null"], format: uuid, description: 'The import a kv.import job sends; null for other jobs' }
+        ssh_key_id: { type: [string, "null"], format: uuid, description: 'The key a sshkey.add job deploys; null for other jobs' }
+        rotation_id: { type: [string, "null"], format: uuid, description: 'The run a rotation.location job works for; null for other jobs' }
         attempts: { type: integer }
         max_attempts: { type: integer }
         error: { $ref: "#/components/schemas/ErrorRef" }

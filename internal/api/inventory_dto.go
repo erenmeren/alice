@@ -307,6 +307,9 @@ type jobDTO struct {
 	// DeploymentID names the deployment of a certificate.deploy or certificate.deploy_recover job, ImportID the import of a kv.import job.
 	DeploymentID *string `json:"deployment_id"`
 	ImportID     *string `json:"import_id"`
+	// SSHKeyID names the key of a sshkey.add job, RotationID the run of a rotation.location job (C13, F5).
+	SSHKeyID   *string `json:"ssh_key_id"`
+	RotationID *string `json:"rotation_id"`
 }
 
 // jobJSON maps a job. Its stored error params pass the provider param allowlist (they are shown
@@ -324,6 +327,7 @@ func jobJSON(v jobs.View) jobDTO {
 		}
 	}
 	d.TargetID, d.DeploymentID, d.ImportID = idOrNull(v.TargetID), idOrNull(v.DeploymentID), idOrNull(v.ImportID)
+	d.SSHKeyID, d.RotationID = idOrNull(v.SSHKeyID), idOrNull(v.RotationID)
 	return d
 }
 

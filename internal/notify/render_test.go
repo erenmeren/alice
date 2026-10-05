@@ -10,6 +10,7 @@ import (
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/notify"
+	"alice/internal/sshkeys"
 	"alice/locales"
 )
 
@@ -187,4 +188,72 @@ func TestKeyVaultTemplatesRenderInBothLanguages(t *testing.T) {
 	oneEN := s.Render("ada@example.com", inventory.TemplateKVCertificatesRemovedOne, "en", one)
 	assert.Contains(t, oneEN.Body, "1 more certificate disappeared")
 	assert.NotContains(t, oneEN.Body, "certificates disappeared in the same check")
+}
+
+// rotationParams are what the sshkeys module sends with each rotation template (C10 as built: the code
+// param is the run's result reason, never an ALC code).
+var rotationParams = map[string]map[string]string{
+	sshkeys.TemplatePreview: {"key_label": "ci-deploy (İzmir)", "fingerprint": "SHA256:oldOLDold", "planned_for": "2026-10-06 09:00 UTC",
+		"change_count": "12", "skip_count": "3", "rotation_id": "0190f5a0-0000-7000-8000-00000000abcd"},
+	sshkeys.TemplatePreviewAfterLicense: {"key_label": "ci-deploy (İzmir)", "fingerprint": "SHA256:oldOLDold", "change_count": "12"},
+	sshkeys.TemplateOverlapStarted:      {"key_label": "ci-deploy (İzmir)", "new_fingerprint": "SHA256:newNEWnew", "overlap_until": "2026-10-13 09:00 UTC"},
+	sshkeys.TemplateOverlapEnding:       {"key_label": "ci-deploy (İzmir)", "overlap_until": "2026-10-13 09:00 UTC"},
+	sshkeys.TemplateCompleted:           {"key_label": "ci-deploy (İzmir)", "new_fingerprint": "SHA256:newNEWnew"},
+	sshkeys.TemplateCompletedPartial:    {"key_label": "ci-deploy (İzmir)", "new_fingerprint": "SHA256:newNEWnew", "kept_count": "4"},
+	sshkeys.TemplateAborted:             {"key_label": "ci-deploy (İzmir)", "code": sshkeys.ReasonVerifyFailed},
+	sshkeys.TemplateNeedsAttention:      {"key_label": "ci-deploy (İzmir)", "code": sshkeys.ReasonUndoFailed},
+	sshkeys.TemplatePausedLicense:       {"key_label": "ci-deploy (İzmir)"},
+	sshkeys.TemplateDecisionNeeded:      {"key_label": "ci-deploy (İzmir)", "count": "2", "decision_due": "2026-10-20 09:00 UTC"},
+}
+
+// Every rotation email renders in English and Turkish with the params the module sends (C10, S11, row 31): no
+// placeholder is left, the subject is one line that names the key, each value the module sends appears, and no
+// private key or passphrase field exists.
+func TestRotationTemplatesRender(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	require.Len(t, rotationParams, len(sshkeys.Templates()))
+	for _, tpl := range sshkeys.Templates() {
+		params, ok := rotationParams[tpl]
+		require.True(t, ok, "%s has no params in this test", tpl)
+		for _, lang := range []string{"en", "tr"} {
+			m := s.Render("ada@example.com", tpl, lang, params)
+			assert.NotContains(t, m.Subject+m.Body, "{{", "%s %s", tpl, lang)
+			assert.NotContains(t, m.Subject, "email.", "%s %s: the key itself means a missing text", tpl, lang)
+			assert.NotContains(t, m.Subject, "\n", "%s %s", tpl, lang)
+			assert.Contains(t, m.Subject, "ci-deploy (İzmir)", "%s %s", tpl, lang)
+			for k, v := range params {
+				if k == "rotation_id" {
+					continue // the delivery check's link to the run (S1), not a text
+				}
+				assert.Contains(t, m.Body, v, "%s %s: param %s", tpl, lang, k)
+			}
+			assert.NotContains(t, m.Body, "PRIVATE KEY", "%s %s", tpl, lang)
+		}
+	}
+	// The texts say what the module does (a disabled policy runs only on Run now; the renewal notice is sent before
+	// Continue; a partial completion names where the old key stays; a needs-attention mail never claims a removal).
+	en := func(tpl string) string { return s.Render("ada@example.com", tpl, "en", rotationParams[tpl]).Body }
+	assert.Contains(t, en(sshkeys.TemplatePreview), "starts a run only when an administrator chooses Run now")
+	assert.Contains(t, en(sshkeys.TemplatePreviewAfterLicense), "continues only after an administrator chooses Continue")
+	assert.Contains(t, en(sshkeys.TemplateCompletedPartial), "Places where the old key stays: 4.")
+	assert.Contains(t, en(sshkeys.TemplateAborted), "Reason code: rotation.verify_failed.")
+	assert.Contains(t, en(sshkeys.TemplateNeedsAttention), "Alice removes the old key only where a login with the new key worked just before")
+	tr := s.Render("ada@example.com", sshkeys.TemplateCompletedPartial, "tr", rotationParams[sshkeys.TemplateCompletedPartial])
+	assert.Contains(t, tr.Body, "Eski anahtarın kaldığı yer sayısı: 4.")
+	assert.Contains(t, tr.Body, "Lütfen yanıtlamayın.", "the footer is in the person's language")
+
+	// The attention mail sent again for a late result carries a count the text does not need (one template).
+	late := map[string]string{"key_label": "ci-deploy (İzmir)", "code": sshkeys.ReasonLateResult, "late_results": "2"}
+	for _, lang := range []string{"en", "tr"} {
+		m := s.Render("ada@example.com", sshkeys.TemplateNeedsAttention, lang, late)
+		assert.NotContains(t, m.Subject+m.Body, "{{", lang)
+		assert.Contains(t, m.Body, "rotation.late_result", lang)
+	}
+
+	hostile := map[string]string{"key_label": "x\r\nBcc: evil@example.com"}
+	m := s.Render("ada@example.com", sshkeys.TemplatePausedLicense, "en", hostile)
+	assert.NotContains(t, m.Subject, "\n")
+	assert.NotContains(t, m.Body, "\nBcc:")
 }

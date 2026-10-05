@@ -67,6 +67,25 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | GET | `/api/v1/ssh-keys/platform-key` | `targets.manage` | no | yes | no | no | operate | no | yes |
 | GET | `/api/v1/ssh-keys/{id}` | `read` | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/ssh-keys/locations/{id}/actions/remove` | `inventory.operate` | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/ssh-keys/generate` | `inventory.operate` | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/ssh-keys/{id}/actions/deploy` | `inventory.operate` | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/ssh-keys/{id}/actions/download-private-key` | `sshkeys.download` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/targets/{id}/key-files` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/rotation/policies` | `read` | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/rotation/policies` | `rotation.manage` | no | yes | no | no | operate | no | no |
+| GET | `/api/v1/rotation/policies/{id}` | `read` | no | yes | yes | yes | read | no | yes |
+| PATCH | `/api/v1/rotation/policies/{id}` | `rotation.manage` | no | yes | no | no | operate | no | no |
+| DELETE | `/api/v1/rotation/policies/{id}` | `rotation.manage` | no | yes | no | no | operate | no | no |
+| POST | `/api/v1/rotation/policies/{id}/actions/enable` | `rotation.operate` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/rotation/policies/{id}/actions/disable` | `rotation.manage` | no | yes | no | no | operate | no | no |
+| POST | `/api/v1/rotation/policies/{id}/actions/preview` | `rotation.manage` | no | yes | no | no | operate | no | no |
+| POST | `/api/v1/rotation/policies/{id}/actions/run` | `rotation.operate` | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/rotation/runs` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/rotation/runs/{id}` | `read` | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/rotation/runs/{id}/actions/continue` | `rotation.operate` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/rotation/runs/{id}/actions/finish-now` | `rotation.operate` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/rotation/runs/{id}/actions/keep-old` | `rotation.operate` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/rotation/runs/{id}/actions/abort` | `rotation.operate` | no | yes | no | no | no | yes | no |
 | GET | `/api/v1/jobs` | `read` | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/jobs/{id}` | `read` | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/jobs/{id}/actions/confirm` | `jobs.confirm` | no | yes | no | no | no | no | no |
@@ -121,4 +140,13 @@ private key leaves Alice).
 
 **In lock.** `PUT /api/v1/bindings/{id}/auto-deploy` and `DELETE /api/v1/bindings/{id}` are open while the license is expired
 (switching automatic deployment off and removing a connection only reduce what Alice does); switching it on is refused then by
-the inventory with ALC-LIC-0001.
+the inventory with ALC-LIC-0001. `POST /api/v1/ssh-keys/{id}/actions/download-private-key` is open too: it changes nothing outside
+Alice, and a lock must not hold the keys of the customer's own servers hostage.
+
+**SSH keys and rotation (Phase 6).** The private key download is an Administrator's browser session with a fresh step-up,
+never an API token, at most 5 per minute per user; its audit row is written before the file is sent. A rotation policy
+is created switched off. `PATCH /api/v1/rotation/policies/{id}` is `rotation.manage` (operate tokens allowed), but a
+change to how often, how long or with which key type a policy that is on rotates switches it off in the same step;
+switching it on again (`POST /api/v1/rotation/policies/{id}/actions/enable`) needs `rotation.operate`, an
+Administrator's browser session with step-up. A scheduled run starts only after its notice email was delivered; Run now
+(`rotation.operate`) needs the digest of the preview the Administrator saw.

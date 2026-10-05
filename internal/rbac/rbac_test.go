@@ -98,6 +98,17 @@ var expected = map[rbac.Permission]map[string]rbac.Decision{
 	rbac.JobsConfirm: {"anon": U, "setup": U, "pending": U, "admin": A, "admin+stepup": A, "operator": F, "operator+stepup": F,
 		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
 		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
+	// Phase 6 (R41 rows 5, 7, 24, 25; S2): the private key download and the rotation actions that start changes on servers
+	// are an Administrator's with step-up, never a token; preparing and stopping policies allows operate tokens.
+	rbac.SSHKeysDownload: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
+		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
+		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
+	rbac.RotationManage: {"anon": U, "setup": U, "pending": U, "admin": A, "admin+stepup": A, "operator": F, "operator+stepup": F,
+		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": A, "token-read-operator": F,
+		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
+	rbac.RotationOperate: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
+		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
+		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
 }
 
 func TestDecideMatchesDocumentedMatrix(t *testing.T) {
@@ -123,7 +134,7 @@ func TestUnknownPermissionIsDenied(t *testing.T) {
 
 func TestPermissionsAreSortedAndHavePolicies(t *testing.T) {
 	ps := rbac.Permissions()
-	assert.Len(t, ps, 19)
+	assert.Len(t, ps, 22)
 	assert.True(t, sort.SliceIsSorted(ps, func(i, j int) bool { return ps[i] < ps[j] }))
 	for _, p := range ps {
 		_, ok := rbac.PolicyFor(p)
@@ -172,4 +183,37 @@ func TestAllowsScope(t *testing.T) {
 	assert.False(t, rbac.Auditor.AllowsScope(rbac.ScopeOperate), "auditors are read-only")
 	assert.False(t, rbac.Admin.AllowsScope("write"))
 	assert.False(t, rbac.Role("root").AllowsScope(rbac.ScopeRead))
+}
+
+func TestPhase6Policies(t *testing.T) {
+	admin := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Admin}
+	adminUp := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Admin, StepUp: true}
+	op := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Operator, StepUp: true}
+	aud := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Auditor, StepUp: true}
+	adminTok := rbac.Subject{Kind: rbac.APIToken, Role: rbac.Admin, Scope: rbac.ScopeOperate}
+	adminRead := rbac.Subject{Kind: rbac.APIToken, Role: rbac.Admin, Scope: rbac.ScopeRead}
+	cases := []struct {
+		p    rbac.Permission
+		s    rbac.Subject
+		want rbac.Decision
+	}{
+		{rbac.SSHKeysDownload, adminUp, rbac.Allow},
+		{rbac.SSHKeysDownload, admin, rbac.DenyStepUp},
+		{rbac.SSHKeysDownload, op, rbac.DenyForbidden},
+		{rbac.SSHKeysDownload, adminTok, rbac.DenyForbidden}, // R23, A-09: no token retrieves a private key
+		{rbac.RotationManage, admin, rbac.Allow},
+		{rbac.RotationManage, adminTok, rbac.Allow},
+		{rbac.RotationManage, adminRead, rbac.DenyForbidden},
+		{rbac.RotationManage, op, rbac.DenyForbidden},
+		{rbac.RotationManage, aud, rbac.DenyForbidden},
+		{rbac.RotationOperate, adminUp, rbac.Allow},
+		{rbac.RotationOperate, admin, rbac.DenyStepUp},
+		{rbac.RotationOperate, adminTok, rbac.DenyForbidden},
+		{rbac.RotationOperate, op, rbac.DenyForbidden},
+		{rbac.InventoryOperate, op, rbac.Allow}, // generate and deploy
+		{rbac.InventoryOperate, aud, rbac.DenyForbidden},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, rbac.Decide(c.p, c.s), "%s %+v", c.p, c.s)
+	}
 }

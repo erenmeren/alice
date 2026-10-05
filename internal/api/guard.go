@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"alice/internal/audit"
 	"alice/internal/auth"
 	"alice/internal/auth/ratelimit"
@@ -282,6 +284,13 @@ func (s *server) allowRate(w http.ResponseWriter, r *http.Request, class limitCl
 		checks = append(checks, func() (bool, time.Duration) { return s.login.Allow(ipKey) })
 	case limitMFA:
 		checks = append(checks, func() (bool, time.Duration) { return s.mfa.Allow(ipKey) })
+	case limitDownload:
+		// Per signed-in user, whichever session or token (R41 row 5). A caller without a user is refused by the
+		// permission check anyway and is not charged to a shared bucket.
+		if p.UserID != uuid.Nil {
+			key := "u:" + p.UserID.String()
+			checks = append(checks, func() (bool, time.Duration) { return s.download.Allow(key) })
+		}
 	}
 	switch p.Kind {
 	case rbac.UserSession, rbac.PendingSession:

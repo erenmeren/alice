@@ -83,6 +83,32 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 - **"Alice needs this key to connect to this server and will not remove it." (`ALC-KEY-0001`).** This is Alice's
   own key; it is protected on purpose.
 
+## SSH key rotation
+
+- **Deploy offers no file, or a deploy is refused with `ALC-KEY-0014`.** Alice offers only files it knows the account it
+  connects with does not read. Choose **Scan for SSH keys** on the server's page, then open the deploy dialog again.
+- **A scheduled rotation was cancelled with `ALC-ROT-0017`.** A scheduled run starts only after its preview email was
+  delivered to an administrator before the planned start. Check the email settings; **Run now** does not wait for an email.
+- **A rotation stays paused (`ALC-ROT-0011`).** Nothing is added or removed while the license does not allow changes. After
+  a renewal, choose **Continue** on the rotation's page.
+- **The old key is still on some servers after a finished rotation.** A rotation never removes the old key where the new key
+  was not checked just before the removal. The run's page shows these places; the "kept" count says how many there are.
+- **Why a place is skipped in a preview.** Each skipped place names its reason:
+  - **The server was removed from Alice** (`target_deleted`). Nothing: the server is no longer managed by Alice.
+  - **The server's fingerprint is not confirmed yet** (`host_key_unconfirmed`). Confirm the server's fingerprint on its page.
+  - **The server's identity changed** (`host_key_changed`). Review the new fingerprint on the server's page (`ALC-TGT-0004`).
+  - **Alice cannot connect to the server right now** (`target_not_connected`). Fix the connection, choose **Test connection**, then preview again.
+  - **The server gets this user's keys from a program** (`keys_managed_elsewhere`). Change the key in the program that serves the keys (`AuthorizedKeysCommand`).
+  - **Alice could not read the SSH server settings** (`sshd_unreadable`). Run `sshd -T` as root, fix what it reports, then scan the server again (`ALC-KEY-0004`).
+  - **This is the account Alice connects with** (`connection_account`). Nothing: the setup commands own that account's key file.
+  - **The key was no longer found here** (`missing`). Scan the server again; Alice rotates only keys it found.
+  - **This line is a certificate authority** (`cert_authority`). Replace a `cert-authority` line by hand; Alice only lists such lines.
+  - **Several users of this server read this file, so Alice does not change the key in it** (`shared_file_skipped`). Give each user a key file of their own (`AuthorizedKeysFile` with `%h` or `%u`), scan again, then preview again.
+  - **The SSH server does not accept keys** (`pubkey_disabled`). Nothing, unless the server should accept keys (`PubkeyAuthentication`).
+  - **root may sign in here only with a fixed command, and this line has none** (`root_forced_commands_only`). Add the forced `command=` to the line, or change `PermitRootLogin`, then scan again.
+  - **The key is listed more than once in this file** (`duplicate_lines`). Remove the extra lines of the key from the file by hand (the SSH server uses the first), then scan again.
+  - **Alice could not read this line's options exactly** (`options_unreadable`). Check the line's options on the server (they are not valid UTF-8), fix them, then scan again.
+
 ## Certificates
 
 - **An upload is refused.** The message says why and nothing is stored; the codes are listed below
@@ -874,6 +900,270 @@ the previous file.
 
 **What to do.** Compare the file on the server with the backup named on the task, restore it if needed, then scan the
 server again.
+
+## ALC-KEY-0006: Alice holds no private key for this key
+
+**Meaning.** A deploy, a private key download or a rotation policy was refused for a key whose private key Alice does not hold. A refused deploy or download is recorded in the audit log. (HTTP 409, reason `sshkey.not_managed`.)
+
+**Likely cause.** Only keys generated in Alice can be deployed, downloaded or rotated. Keys found on servers and Alice's own connection key are only listed.
+
+**What to do.** Generate a new key in Alice and use that one instead.
+
+## ALC-KEY-0007: This key was replaced by a rotation and is no longer used
+
+**Meaning.** A deploy or a new rotation policy was refused for a key that a finished rotation retired. (HTTP 409, reason `sshkey.retired`.)
+
+**Likely cause.** A finished rotation retired it. Alice keeps its private key for 30 days for emergencies, then destroys it.
+
+**What to do.** Use the newer key that replaced it. The finished rotation of this key names it. An administrator can still download the retired key's private key until it is destroyed.
+
+## ALC-KEY-0008: The private key of this key was destroyed
+
+**Meaning.** The private key of this key no longer exists in Alice, so it cannot be downloaded or deployed. The refusal is recorded in the audit log. (HTTP 410, reason `sshkey.private_key_destroyed`.)
+
+**Likely cause.** Alice destroys the private key of a retired key 30 days after it was retired. A key found in use on a server again after its private key was destroyed stays retired; the audit log records it once as "Destroyed key found in use".
+
+**What to do.** Use the newer key. Backups made before the destruction still contain it in encrypted form.
+
+## ALC-KEY-0009: Alice does not change the keys of the account it connects with
+
+**Meaning.** A deploy was refused because it would change the key file of the account Alice signs in with. The refusal is recorded in the audit log. (HTTP 409, reason `sshkey.connection_account`.)
+
+**Likely cause.** The chosen user is the account Alice signs in with, or the chosen file is one of that account's key files. The setup commands own that account's key file and write it again whenever they run.
+
+**What to do.** Choose another user or another file on the server.
+
+## ALC-KEY-0010: The server did not accept a login with the new key
+
+**Meaning.** After adding a key, Alice tried to sign in with it as that user and the server refused. It shows on a deploy task and on a place of a rotation ("New key did not work"). (HTTP 502, reason `sshkey.login_failed`.)
+
+**Likely cause.** The key is in the file, but the SSH server refused it: the account may be locked, the server may read another file for this user, or a setting such as AllowUsers leaves the account out.
+
+**What to do.** Check the account and the SSH server settings for this user, then try again. Alice removes the key it added again; the page shows whether that worked. A rotation with such a place is undone; the old key is not touched.
+
+## ALC-KEY-0011: Alice is busy generating other keys
+
+**Meaning.** Generating a key was refused because two keys are being generated already. Nothing was created. The answer carries `Retry-After`. (HTTP 503, reason `sshkey.generate_busy`.)
+
+**Likely cause.** Generating an RSA key takes a few seconds, so Alice generates at most two keys at a time.
+
+**What to do.** Try again in a moment.
+
+## ALC-KEY-0012: Alice could not remove the key again after a failed check
+
+**Meaning.** A deploy added the key, the login with it failed, and removing it again failed too. The key line is still in the file. (HTTP 502, reason `sshkey.add_undo_failed`.)
+
+**Likely cause.** Alice added the key, the check after it failed, and removing the key failed as well (for example, the server could not be reached).
+
+**What to do.** When the server can be reached, remove the key from this server on the key's page.
+
+## ALC-KEY-0013: This file is not one of the user's key files
+
+**Meaning.** A deploy named a file that is not one of the files the SSH server reads for that user, as the last scan found them. (HTTP 409, reason `sshkey.not_a_key_file`.)
+
+**Likely cause.** Alice adds keys only to the files the SSH server reads for that user, as the last scan found them.
+
+**What to do.** Scan the server again, then choose one of the files offered.
+
+## ALC-KEY-0014: Alice does not know all key files of its connection account on this server
+
+**Meaning.** A deploy was refused because Alice cannot rule out that the chosen file is one its own connection account reads. The deploy dialog offers no file on such a server. The refusal is recorded in the audit log. (HTTP 409, reason `sshkey.connection_files_unknown`.)
+
+**Likely cause.** The last scan did not list every key file the SSH server reads for the account Alice signs in with, so Alice cannot rule out that the chosen file is one of them. Servers last scanned by an earlier version of Alice have no such list. After upgrading to the version with SSH key rotation, every server refuses deploys until it is scanned again. A server with more than 200 accounts, or whose connection account is not in `/etc/passwd`, keeps refusing, because Alice cannot list that account's files completely there.
+
+**What to do.** Scan the server again, then try again. Choose **Scan for SSH keys** on the server's page; the deploy dialog offers the files once the scan has listed them.
+
+## ALC-KEY-0015: Alice's clock is behind a time it already recorded
+
+**Meaning.** A private key download was refused because the clock of Alice's host is earlier than the time Alice recorded for the last download of this key. No file was handed out, nothing was counted and no audit row was written. The answer is retryable and carries `Retry-After`. (HTTP 503, reason `sshkey.clock_behind`.)
+
+**Likely cause.** The clock of the computer that runs Alice was set back after the last download of this private key. Alice handed out nothing and recorded nothing.
+
+**What to do.** Check the time of the computer that runs Alice (NTP), then try again in a moment.
+
+## ALC-KEY-0016: Alice does not know yet whether the key was added
+
+**Meaning.** A deploy task sent the key to the server but got no answer, and the key line is not in the file. The task waits until the request can no longer arrive (the helper's time limit plus 30 seconds), then starts over; Alice never removes a line it is not sure it added. (HTTP 502, reason `sshkey.add_uncertain`.)
+
+**Likely cause.** The server did not answer Alice's request to add the key, and the key is not in the file yet. The request may still arrive at the server.
+
+**What to do.** Nothing to do now: Alice waits until the request can no longer arrive, then tries again. If this repeats, check the connection to the server.
+
+## ALC-ROT-0001: This key already has a rotation policy
+
+**Meaning.** Creating a rotation policy was refused because the key has one already. (HTTP 409, reason `rotation.policy_exists`.)
+
+**Likely cause.** Each key has at most one rotation policy.
+
+**What to do.** Change the existing policy on the key's page.
+
+## ALC-ROT-0002: A rotation of this key is already running
+
+**Meaning.** Run now, deleting a policy or creating a policy was refused because a rotation of the key is running. (HTTP 409, reason `rotation.in_progress`.)
+
+**Likely cause.** Only one rotation runs for a key at a time. A policy with a running rotation cannot be deleted, and the new key of a running rotation cannot get a policy of its own.
+
+**What to do.** Wait for the rotation to finish, or stop it on its page.
+
+## ALC-ROT-0003: The servers or keys changed since the preview
+
+**Meaning.** Run now was refused, or a planned run was cancelled, because the plan built now differs from the plan that was previewed. Nothing was created or changed. (HTTP 409, reason `rotation.plan_changed`.)
+
+**Likely cause.** A rotation runs only exactly as it was previewed, and something changed since then. Nothing was changed on any server. Typical changes: a server became unreachable or was scanned again, a key line was added or removed by hand, the policy's new key type changed.
+
+**What to do.** Open the preview again, check it, and start the rotation from there. A scheduled run is previewed again with a new email.
+
+## ALC-ROT-0004: No server can take part in this rotation
+
+**Meaning.** Run now was refused because no place of the key can change. A planned run is not created either; the policy tries again later without an email. (HTTP 409, reason `rotation.nothing_to_rotate`.)
+
+**Likely cause.** Every place where the key is used is skipped. The preview shows the reason for each.
+
+**What to do.** Fix the reasons shown in the preview, scan the servers again, then try again.
+
+## ALC-ROT-0005: This rotation is not waiting for that action
+
+**Meaning.** A decision on a run (Continue, Finish now, Keep the old key, Stop and undo) was refused because the run is not in a state that takes it. Keep the old key is refused as a whole when one of the places named is not one Alice could not test, or when no place where the new key works would remain. (HTTP 409, reason `rotation.not_waiting`.)
+
+**Likely cause.** The rotation has moved on, or the action does not apply in its current state.
+
+**What to do.** Reload the page to see the current state.
+
+## ALC-ROT-0006: Alice could not add the new key on a server, so it undid the rotation
+
+**Meaning.** The result of a rotation that was undone because the new key could not be added on a server (also shown on that place). (HTTP 502, reason `rotation.add_failed`.)
+
+**Likely cause.** A server refused the change or could not be reached. The old key was not touched anywhere.
+
+**What to do.** See the failed server on the rotation's page, fix the problem, then start the rotation again.
+
+## ALC-ROT-0007: The new key did not work on a server, so Alice undid the rotation
+
+**Meaning.** The result of a rotation that was undone because a login with the new key failed on a server. (HTTP 502, reason `rotation.verify_failed`.)
+
+**Likely cause.** Alice could not sign in with the new key there. The old key was not touched anywhere.
+
+**What to do.** See the server on the rotation's page, check its SSH settings for that user, then start the rotation again.
+
+## ALC-ROT-0008: Alice could not remove the new key from every server
+
+**Meaning.** The result of a rotation that needs attention because undoing it did not remove the new key everywhere. (HTTP 502, reason `rotation.undo_failed`.)
+
+**Likely cause.** Undoing the rotation failed on the servers listed on its page: they could not be reached, or the old key was already gone there and Alice kept the new key so that the account keeps a working key. The old key was not touched.
+
+**What to do.** When those servers can be reached, remove the new key from them on the new key's page, once another key works for those accounts.
+
+## ALC-ROT-0009: The old key was kept on some servers
+
+**Meaning.** The result of a rotation that needs attention because the old key could not be removed on some servers after Alice tried several times. (HTTP 502, reason `rotation.remove_incomplete`.)
+
+**Likely cause.** Before removing the old key, Alice checks the new key again. On the servers listed, that check or the removal failed, so the old key stays there.
+
+**What to do.** Check those servers, then remove the old key from them on the old key's page. Both keys stay valid on those servers until a person removes one.
+
+## ALC-ROT-0010: No decision was made within 14 days, so Alice undid the rotation
+
+**Meaning.** The result of a rotation that was undone because no administrator decided about the places Alice could not test within 14 days (the time the rotation was paused for the license does not count). (HTTP 409, reason `rotation.decision_timeout`.)
+
+**Likely cause.** Alice could not test the new key in some places and waited 14 days for an administrator.
+
+**What to do.** Start the rotation again and decide about the places Alice cannot test.
+
+## ALC-ROT-0011: The rotation is paused because the license has expired or could not be checked
+
+**Meaning.** A rotation is paused because the license does not allow changes; the paused rotation is shown with this reason. (HTTP 409, reason `rotation.paused_license`.)
+
+**Likely cause.** While the license does not allow changes, Alice adds and removes no key for this rotation, and the old key stays in place.
+
+**What to do.** Upload a valid license, or wait until Alice can check it again, then choose Continue on the rotation's page. After the renewal Alice emails the administrators before anything continues; every removal is preceded by a fresh login with the new key.
+
+## ALC-ROT-0012: The planned rotation was cancelled because the license did not allow changes when it was due
+
+**Meaning.** The result of a planned run that was cancelled before it started because the license did not allow changes. (HTTP 409, reason `rotation.cancelled_license`.)
+
+**Likely cause.** Alice starts no rotation while the license is expired or cannot be checked.
+
+**What to do.** After a renewal, Alice plans the next run of a policy that is on with a new preview and email.
+
+## ALC-ROT-0013: An administrator stopped the rotation
+
+**Meaning.** The result of a rotation an administrator stopped with Stop and undo (or of a planned run stopped before it started). (HTTP 409, reason `rotation.stopped`.)
+
+**Likely cause.** Alice removed the new key again where it had added it; the old key was not touched.
+
+**What to do.** Start the rotation again when you are ready.
+
+## ALC-ROT-0014: The planned run was cancelled because the policy was switched off, changed or deleted
+
+**Meaning.** The result of a planned run that was cancelled because its policy was switched off, changed or deleted before it started. (HTTP 409, reason `rotation.policy_off`.)
+
+**Likely cause.** A policy that is off starts no run. Changing how often, how long or with which key type a policy that is on rotates switches it off.
+
+**What to do.** Switch the policy on again to plan the next run.
+
+## ALC-ROT-0015: The new key no longer worked when Alice checked it again, so the old key stays
+
+**Meaning.** The error of a place where the login with the new key failed in the check just before the old key would have been removed. The old key stays there. (HTTP 502, reason `rotation.new_key_failed`.)
+
+**Likely cause.** Just before removing the old key, Alice could not sign in with the new key on this server.
+
+**What to do.** Check the new key on this server, then remove the old key on the old key's page when the new key works.
+
+## ALC-ROT-0016: Alice gave up on this server after several attempts
+
+**Meaning.** The error of a place where Alice gave up after five attempts of the same step. (HTTP 502, reason `rotation.retries_exhausted`.)
+
+**Likely cause.** The work on this server was interrupted again and again (for example, by restarts).
+
+**What to do.** Check the server and Alice's logs, then start the rotation again.
+
+## ALC-ROT-0017: The planned rotation was cancelled because its notice email was not delivered in time
+
+**Meaning.** The result of a scheduled run that was cancelled at its planned start because no preview email had been delivered to an administrator by then. Run now does not wait for an email. (HTTP 409, reason `rotation.notice_undelivered`.)
+
+**Likely cause.** A scheduled rotation starts only after its preview email was delivered to at least one administrator before the planned start. Email is not set up, no administrator has an email address, or the mail server did not accept the message in time.
+
+**What to do.** Check the email settings and the administrators' email addresses. The policy plans its next run one interval later; to rotate now, open the preview and choose Run now.
+
+## ALC-ROT-0018: Alice kept the new key here because the old key is gone
+
+**Meaning.** The error of a place where Alice did not remove the new key while undoing a rotation, because the old key was no longer in the file. The rotation needs attention. (HTTP 409, reason `rotation.old_key_gone`.)
+
+**Likely cause.** While undoing the rotation, Alice found that the old key is no longer in this file, for example because someone removed it after switching to the new key. Removing the new key too could leave the account without a working key.
+
+**What to do.** Find out who uses this account. Remove the new key on the new key's page only after another key works for it.
+
+## ALC-ROT-0019: This rotation has too many places for one run
+
+**Meaning.** Run now or a planned run was refused because the plan is too large for one run. (HTTP 409, reason `rotation.plan_too_large`.)
+
+**Likely cause.** A run holds at most 10 000 places, and its stored plan must fit in 2 MiB. Nothing was created or changed.
+
+**What to do.** Use separate keys for groups of servers and give each key its own policy.
+
+## ALC-ROT-0020: Alice could not start the rotation, so it cancelled the run
+
+**Meaning.** The result of a run that Run now created and could not start; Alice cancelled it in the same step. (HTTP 409, reason `rotation.start_failed`.)
+
+**Likely cause.** Run now created the run, but starting it failed, for example because Alice was busy generating other keys. Nothing was changed on any server.
+
+**What to do.** Choose Run now again in a moment.
+
+## ALC-ROT-0021: Alice is still preparing the email about the license renewal
+
+**Meaning.** Continue was refused because the email that tells the administrators about the license renewal has not been queued yet. The answer is retryable and carries `Retry-After`. (HTTP 409, reason `rotation.notice_pending`.)
+
+**Likely cause.** After a renewal, Alice emails the administrators before a paused rotation may continue. The next background check queues that email, within about a minute. Nothing was changed.
+
+**What to do.** Choose Continue again in a minute.
+
+## ALC-ROT-0022: A server's answer arrived after Alice had given up on it
+
+**Meaning.** The result shown on a rotation that needs attention because a place's answer arrived after Alice had stopped waiting for it. (HTTP 409, reason `rotation.late_result`.)
+
+**Likely cause.** Alice had stopped waiting for this place after several attempts. Its answer came later, so the rotation's record and the key file on the server may differ there.
+
+**What to do.** Open the rotation's page and check the key file on this server, then scan the server again so that Alice lists its keys as they are.
 
 ## ALC-JOB-0001: Task is not waiting
 

@@ -25,6 +25,7 @@ import (
 	"alice/internal/providers"
 	"alice/internal/rbac"
 	"alice/internal/setup"
+	"alice/internal/sshkeys"
 	"alice/internal/version"
 )
 
@@ -159,6 +160,29 @@ type JobsService interface {
 	Discard(ctx context.Context, actor audit.Actor, by uuid.UUID, id uuid.UUID) error
 }
 
+// SSHKeysService is the part of *sshkeys.Service the HTTP layer uses (C7, Phase 6): generated keys, their deploy
+// and download, rotation policies, previews, runs and the Administrator's decisions on them.
+type SSHKeysService interface {
+	Generate(ctx context.Context, a inventory.Actor, in sshkeys.GenerateInput) (sshkeys.ManagedKey, error)
+	ManagedKey(ctx context.Context, id uuid.UUID) (sshkeys.ManagedKey, error)
+	RequestDeploy(ctx context.Context, a inventory.Actor, in sshkeys.DeployInput) (uuid.UUID, error)
+	DownloadPrivateKey(ctx context.Context, a inventory.Actor, in sshkeys.DownloadInput) (sshkeys.Download, error)
+	CreatePolicy(ctx context.Context, a inventory.Actor, in sshkeys.PolicyInput) (sshkeys.Policy, error)
+	UpdatePolicy(ctx context.Context, a inventory.Actor, id uuid.UUID, version int, p sshkeys.PolicyPatch) (sshkeys.Policy, error)
+	SetPolicyEnabled(ctx context.Context, a inventory.Actor, id uuid.UUID, version int, enabled bool) (sshkeys.Policy, error)
+	DeletePolicy(ctx context.Context, a inventory.Actor, id uuid.UUID, version int) error
+	Policy(ctx context.Context, id uuid.UUID) (sshkeys.Policy, error)
+	Policies(ctx context.Context) ([]sshkeys.Policy, error)
+	Preview(ctx context.Context, a inventory.Actor, id uuid.UUID) (sshkeys.Preview, error)
+	RunNow(ctx context.Context, a inventory.Actor, id uuid.UUID, digest string) (sshkeys.Rotation, error)
+	Rotation(ctx context.Context, id uuid.UUID) (sshkeys.Rotation, error)
+	Rotations(ctx context.Context, f sshkeys.RotationFilter) ([]sshkeys.Rotation, string, error)
+	Continue(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+	FinishNow(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+	KeepOld(ctx context.Context, a inventory.Actor, id uuid.UUID, locations []uuid.UUID) error
+	Abort(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+}
+
 // ProviderCatalog lists the compiled-in providers (providers.Registry).
 type ProviderCatalog interface {
 	List() []providers.Descriptor
@@ -179,6 +203,7 @@ type Deps struct {
 	Inventory      InventoryService
 	Jobs           JobsService
 	Providers      ProviderCatalog
+	SSHKeys        SSHKeysService
 	TrustedProxies []netip.Prefix
 	TestHandler    http.Handler // nil in release builds; mounted at "/test/" by the e2e build
 }
@@ -187,11 +212,12 @@ type Deps struct {
 type limitClass int
 
 const (
-	limitDefault limitClass = iota // general limit only
-	limitNone                      // no limit (health probes)
-	limitLogin                     // 10 per minute per IP (password and setup-code guessing)
-	limitMFA                       // 5 per minute per IP (verification codes)
-	limitHealth                    // 60 per minute per IP in a bucket of its own (public /healthz, AUD-16)
+	limitDefault  limitClass = iota // general limit only
+	limitNone                       // no limit (health probes)
+	limitLogin                      // 10 per minute per IP (password and setup-code guessing)
+	limitMFA                        // 5 per minute per IP (verification codes)
+	limitHealth                     // 60 per minute per IP in a bucket of its own (public /healthz, AUD-16)
+	limitDownload                   // 5 per minute per user: private key downloads (SEC-022, R41 row 5)
 )
 
 // route is one documented operation. The route table is the single source of
@@ -223,6 +249,8 @@ type server struct {
 	// them never deletes the cookie (it would delete the new one in a response race).
 	rotated *ratelimit.Recent
 	healthz *ratelimit.Limiter // public /healthz, per IP: 60/min
+	// download: private key downloads per user: 5/min, besides the general limit (R41 row 5).
+	download *ratelimit.Limiter
 	// denials coalesces the guard's denial audit rows (AUD-06).
 	denials *denialCoalescer
 	// chainScan is the one slot for reading the whole audit chain (verification, export) in this
@@ -258,6 +286,7 @@ func newServer(d Deps) *server {
 		recent:   ratelimit.NewRecent(d.Clock, recentLifetime, recentMax),
 		rotated:  ratelimit.NewRecent(d.Clock, rotatedLifetime, rotatedMax),
 		healthz:  ratelimit.New(d.Clock, 60, time.Minute),
+		download: ratelimit.New(d.Clock, 5, time.Minute),
 
 		denials:   newDenialCoalescer(d.Clock),
 		chainScan: make(chan struct{}, 1),
@@ -294,6 +323,7 @@ func (s *Server) ResetLimits() {
 	s.s.recent.Reset()
 	s.s.rotated.Reset()
 	s.s.healthz.Reset()
+	s.s.download.Reset()
 	s.s.denials.reset()
 }
 
@@ -386,6 +416,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.providerRoutes()...)
 	routes = append(routes, s.targetRoutes()...)
 	routes = append(routes, s.sshKeyRoutes()...)
+	routes = append(routes, s.rotationRoutes()...)
 	routes = append(routes, s.jobRoutes()...)
 	routes = append(routes, s.certificateRoutes()...)
 	routes = append(routes, s.locationRoutes()...)

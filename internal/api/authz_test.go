@@ -69,6 +69,13 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 
 	// Phase 5: Administrator with a fresh step-up only, never an API token (S6).
 	rbac.CredentialsManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+
+	// Phase 6 (R41 rows 5, 24, 25; S2): the private key download and every rotation action that starts or decides
+	// changes on servers are an Administrator's browser session with step-up, never a token; preparing, previewing,
+	// switching off and deleting policies is an Administrator's, operate tokens included.
+	rbac.SSHKeysDownload: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+	rbac.RotationManage:  row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb, allw),
+	rbac.RotationOperate: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {
@@ -221,7 +228,16 @@ private key leaves Alice).
 
 **In lock.** ` + "`PUT /api/v1/bindings/{id}/auto-deploy`" + ` and ` + "`DELETE /api/v1/bindings/{id}`" + ` are open while the license is expired
 (switching automatic deployment off and removing a connection only reduce what Alice does); switching it on is refused then by
-the inventory with ALC-LIC-0001.
+the inventory with ALC-LIC-0001. ` + "`POST /api/v1/ssh-keys/{id}/actions/download-private-key`" + ` is open too: it changes nothing outside
+Alice, and a lock must not hold the keys of the customer's own servers hostage.
+
+**SSH keys and rotation (Phase 6).** The private key download is an Administrator's browser session with a fresh step-up,
+never an API token, at most 5 per minute per user; its audit row is written before the file is sent. A rotation policy
+is created switched off. ` + "`PATCH /api/v1/rotation/policies/{id}`" + ` is ` + "`rotation.manage`" + ` (operate tokens allowed), but a
+change to how often, how long or with which key type a policy that is on rotates switches it off in the same step;
+switching it on again (` + "`POST /api/v1/rotation/policies/{id}/actions/enable`" + `) needs ` + "`rotation.operate`" + `, an
+Administrator's browser session with step-up. A scheduled run starts only after its notice email was delivered; Run now
+(` + "`rotation.operate`" + `) needs the digest of the preview the Administrator saw.
 `
 
 func TestAuthzMatrixDocIsCurrent(t *testing.T) {
@@ -324,6 +340,16 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.TargetsManage
 		case p == "/api/v1/ssh-keys/platform-key":
 			want = rbac.TargetsManage
+		// Phase 6 (R41 rows 5, 24, 25; S2): a private key leaves Alice only through the download; switching a policy on
+		// and every decision on a run need an Administrator's step-up; the rest of the policy work is rotation.manage.
+		case strings.HasSuffix(p, "/actions/download-private-key"):
+			want = rbac.SSHKeysDownload
+		case under(p, "/api/v1/rotation") && !safeMethod(rt.method) && rotationOperateAction(p):
+			want = rbac.RotationOperate
+		case under(p, "/api/v1/rotation") && !safeMethod(rt.method):
+			want = rbac.RotationManage
+		case under(p, "/api/v1/rotation"):
+			want = rbac.Read
 		case under(p, "/api/v1/ssh-keys") && !safeMethod(rt.method):
 			want = rbac.InventoryOperate
 		case under(p, "/api/v1/jobs") && !safeMethod(rt.method):
@@ -360,6 +386,16 @@ func routeRuleViolations(routes []route) []string {
 		}
 	}
 	return out
+}
+
+// rotationOperateAction: the rotation actions that start or decide changes on servers (rotation.operate).
+func rotationOperateAction(p string) bool {
+	for _, a := range []string{"/actions/enable", "/actions/run", "/actions/continue", "/actions/finish-now", "/actions/keep-old", "/actions/abort"} {
+		if strings.HasSuffix(p, a) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
@@ -442,6 +478,25 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 		"DELETE /api/v1/bindings/{id}",
 		"POST /api/v1/bindings/{id}/actions/deploy",
 		"POST /api/v1/certificates/{id}/actions/import-to-key-vault",
+		"POST /api/v1/ssh-keys/generate",
+		"POST /api/v1/ssh-keys/{id}/actions/deploy",
+		"POST /api/v1/ssh-keys/{id}/actions/download-private-key",
+		"GET /api/v1/targets/{id}/key-files",
+		"GET /api/v1/rotation/policies",
+		"POST /api/v1/rotation/policies",
+		"GET /api/v1/rotation/policies/{id}",
+		"PATCH /api/v1/rotation/policies/{id}",
+		"DELETE /api/v1/rotation/policies/{id}",
+		"POST /api/v1/rotation/policies/{id}/actions/enable",
+		"POST /api/v1/rotation/policies/{id}/actions/disable",
+		"POST /api/v1/rotation/policies/{id}/actions/preview",
+		"POST /api/v1/rotation/policies/{id}/actions/run",
+		"GET /api/v1/rotation/runs",
+		"GET /api/v1/rotation/runs/{id}",
+		"POST /api/v1/rotation/runs/{id}/actions/continue",
+		"POST /api/v1/rotation/runs/{id}/actions/finish-now",
+		"POST /api/v1/rotation/runs/{id}/actions/keep-old",
+		"POST /api/v1/rotation/runs/{id}/actions/abort",
 	} {
 		assert.Contains(t, table, k)
 	}
@@ -488,6 +543,15 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/kv/certificates/{certificate_id}/versions/{version_id}/actions/release", perm: rbac.CertificatesOperate},
 		{method: http.MethodPost, pattern: "/api/v1/bindings", perm: rbac.CredentialsManage},
 		{method: http.MethodGet, pattern: "/api/v1/bindings/{id}", perm: rbac.CertificatesOperate},
+		// Phase 6: a private key or a change on servers behind a weaker permission.
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/download-private-key", perm: rbac.InventoryOperate},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/enable", perm: rbac.RotationManage},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/run", perm: rbac.RotationManage},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/runs/{id}/actions/keep-old", perm: rbac.RotationManage},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/runs/{id}/actions/abort", perm: rbac.RotationManage},
+		{method: http.MethodPatch, pattern: "/api/v1/rotation/policies/{id}", perm: rbac.InventoryOperate},
+		{method: http.MethodGet, pattern: "/api/v1/rotation/runs", perm: rbac.RotationManage},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/generate", perm: rbac.Read},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))
 	good := []route{
@@ -520,6 +584,11 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodPut, pattern: "/api/v1/bindings/{id}/auto-deploy", perm: rbac.CredentialsManage},
 		{method: http.MethodPost, pattern: "/api/v1/bindings", perm: rbac.CertificatesOperate},
 		{method: http.MethodGet, pattern: "/api/v1/certificate-locations", perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/download-private-key", perm: rbac.SSHKeysDownload},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/enable", perm: rbac.RotationOperate},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/disable", perm: rbac.RotationManage},
+		{method: http.MethodPatch, pattern: "/api/v1/rotation/policies/{id}", perm: rbac.RotationManage},
+		{method: http.MethodGet, pattern: "/api/v1/rotation/runs/{id}", perm: rbac.Read},
 	}
 	assert.Empty(t, routeRuleViolations(good))
 }
@@ -535,8 +604,12 @@ var (
 	//
 	// Phase 5: switching automatic deployment (the inventory refuses switching it ON in lock, switching it off is a
 	// safety action) and removing a binding amend R40 row 22.
+	//
+	// Phase 6: the private key download changes nothing outside Alice; a lock must not hold the customer's own access
+	// keys hostage (R41 row 5).
 	lockAvailableRoutes = map[string]bool{"POST /api/v1/jobs/{id}/actions/discard": true,
-		"PUT /api/v1/bindings/{id}/auto-deploy": true, "DELETE /api/v1/bindings/{id}": true}
+		"PUT /api/v1/bindings/{id}/auto-deploy": true, "DELETE /api/v1/bindings/{id}": true,
+		"POST /api/v1/ssh-keys/{id}/actions/download-private-key": true}
 )
 
 func underAny(pattern string, prefixes []string) bool {

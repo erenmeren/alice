@@ -368,6 +368,173 @@
         "title": "Alice changed the key file but could not confirm the result.",
         "cause": "After the change, the file on the server did not read back as expected. Alice kept a backup of the previous file and did not record the change.",
         "action": "Check the authorized_keys file on the server and compare it with the backup that the task names, then scan the server again."
+      },
+      "not_managed": {
+        "title": "Alice holds no private key for this key.",
+        "cause": "Only keys generated in Alice can be deployed, downloaded or rotated. Keys found on servers and Alice's own connection key are only listed.",
+        "action": "Generate a new key in Alice and use that one instead."
+      },
+      "retired": {
+        "title": "This key was replaced by a rotation and is no longer used.",
+        "cause": "A finished rotation retired it. Alice keeps its private key for 30 days for emergencies, then destroys it.",
+        "action": "Use the newer key that replaced it. The finished rotation of this key names it."
+      },
+      "private_key_destroyed": {
+        "title": "The private key of this key was destroyed.",
+        "cause": "Alice destroys the private key of a retired key 30 days after it was retired.",
+        "action": "Use the newer key. Backups made before the destruction still contain it in encrypted form."
+      },
+      "connection_account": {
+        "title": "Alice does not change the keys of the account it connects with.",
+        "cause": "The chosen user is the account Alice signs in with, or the chosen file is one of that account's key files. The setup commands own that account's key file and write it again whenever they run.",
+        "action": "Choose another user or another file on the server."
+      },
+      "login_failed": {
+        "title": "The server did not accept a login with the new key.",
+        "cause": "The key is in the file, but the SSH server refused it: the account may be locked, the server may read another file for this user, or a setting such as AllowUsers leaves the account out.",
+        "action": "Check the account and the SSH server settings for this user, then try again. Alice removes the key it added again; the page shows whether that worked."
+      },
+      "generate_busy": {
+        "title": "Alice is busy generating other keys.",
+        "cause": "Generating an RSA key takes a few seconds, so Alice generates at most two keys at a time.",
+        "action": "Try again in a moment."
+      },
+      "add_undo_failed": {
+        "title": "Alice could not remove the key again after a failed check.",
+        "cause": "Alice added the key, the check after it failed, and removing the key failed as well (for example, the server could not be reached).",
+        "action": "When the server can be reached, remove the key from this server on the key's page."
+      },
+      "not_a_key_file": {
+        "title": "This file is not one of the user's key files.",
+        "cause": "Alice adds keys only to the files the SSH server reads for that user, as the last scan found them.",
+        "action": "Scan the server again, then choose one of the files offered."
+      },
+      "connection_files_unknown": {
+        "title": "Alice does not know all key files of its connection account on this server.",
+        "cause": "The last scan did not list every key file the SSH server reads for the account Alice signs in with, so Alice cannot rule out that the chosen file is one of them. Servers last scanned by an earlier version of Alice have no such list.",
+        "action": "Scan the server again, then try again."
+      },
+      "clock_behind": {
+        "title": "Alice's clock is behind a time it already recorded.",
+        "cause": "The clock of the computer that runs Alice was set back after the last download of this private key. Alice handed out nothing and recorded nothing.",
+        "action": "Check the time of the computer that runs Alice (NTP), then try again in a moment."
+      },
+      "add_uncertain": {
+        "title": "Alice does not know yet whether the key was added.",
+        "cause": "The server did not answer Alice's request to add the key, and the key is not in the file yet. The request may still arrive at the server.",
+        "action": "Nothing to do now: Alice waits until the request can no longer arrive, then tries again. If this repeats, check the connection to the server."
+      }
+    },
+    "rotation": {
+      "policy_exists": {
+        "title": "This key already has a rotation policy.",
+        "cause": "Each key has at most one rotation policy.",
+        "action": "Change the existing policy on the key's page."
+      },
+      "in_progress": {
+        "title": "A rotation of this key is already running.",
+        "cause": "Only one rotation runs for a key at a time. A policy with a running rotation cannot be deleted, and the new key of a running rotation cannot get a policy of its own.",
+        "action": "Wait for the rotation to finish, or stop it on its page."
+      },
+      "plan_changed": {
+        "title": "The servers or keys changed since the preview.",
+        "cause": "A rotation runs only exactly as it was previewed, and something changed since then. Nothing was changed on any server.",
+        "action": "Open the preview again, check it, and start the rotation from there. A scheduled run is previewed again with a new email."
+      },
+      "nothing_to_rotate": {
+        "title": "No server can take part in this rotation.",
+        "cause": "Every place where the key is used is skipped. The preview shows the reason for each.",
+        "action": "Fix the reasons shown in the preview, scan the servers again, then try again."
+      },
+      "not_waiting": {
+        "title": "This rotation is not waiting for that action.",
+        "cause": "The rotation has moved on, or the action does not apply in its current state.",
+        "action": "Reload the page to see the current state."
+      },
+      "add_failed": {
+        "title": "Alice could not add the new key on a server, so it undid the rotation.",
+        "cause": "A server refused the change or could not be reached. The old key was not touched anywhere.",
+        "action": "See the failed server on the rotation's page, fix the problem, then start the rotation again."
+      },
+      "verify_failed": {
+        "title": "The new key did not work on a server, so Alice undid the rotation.",
+        "cause": "Alice could not sign in with the new key there. The old key was not touched anywhere.",
+        "action": "See the server on the rotation's page, check its SSH settings for that user, then start the rotation again."
+      },
+      "undo_failed": {
+        "title": "Alice could not remove the new key from every server.",
+        "cause": "Undoing the rotation failed on the servers listed on its page: they could not be reached, or the old key was already gone there and Alice kept the new key so that the account keeps a working key. The old key was not touched.",
+        "action": "When those servers can be reached, remove the new key from them on the new key's page, once another key works for those accounts."
+      },
+      "remove_incomplete": {
+        "title": "The old key was kept on some servers.",
+        "cause": "Before removing the old key, Alice checks the new key again. On the servers listed, that check or the removal failed, so the old key stays there.",
+        "action": "Check those servers, then remove the old key from them on the old key's page."
+      },
+      "decision_timeout": {
+        "title": "No decision was made within 14 days, so Alice undid the rotation.",
+        "cause": "Alice could not test the new key in some places and waited 14 days for an administrator.",
+        "action": "Start the rotation again and decide about the places Alice cannot test."
+      },
+      "paused_license": {
+        "title": "The rotation is paused because the license has expired or could not be checked.",
+        "cause": "While the license does not allow changes, Alice adds and removes no key for this rotation, and the old key stays in place.",
+        "action": "Upload a valid license, or wait until Alice can check it again, then choose Continue on the rotation's page."
+      },
+      "cancelled_license": {
+        "title": "The planned rotation was cancelled because the license did not allow changes when it was due.",
+        "cause": "Alice starts no rotation while the license is expired or cannot be checked.",
+        "action": "After a renewal, Alice plans the next run of a policy that is on with a new preview and email."
+      },
+      "stopped": {
+        "title": "An administrator stopped the rotation.",
+        "cause": "Alice removed the new key again where it had added it; the old key was not touched.",
+        "action": "Start the rotation again when you are ready."
+      },
+      "policy_off": {
+        "title": "The planned run was cancelled because the policy was switched off, changed or deleted.",
+        "cause": "A policy that is off starts no run. Changing how often, how long or with which key type a policy that is on rotates switches it off.",
+        "action": "Switch the policy on again to plan the next run."
+      },
+      "new_key_failed": {
+        "title": "The new key no longer worked when Alice checked it again, so the old key stays.",
+        "cause": "Just before removing the old key, Alice could not sign in with the new key on this server.",
+        "action": "Check the new key on this server, then remove the old key on the old key's page when the new key works."
+      },
+      "retries_exhausted": {
+        "title": "Alice gave up on this server after several attempts.",
+        "cause": "The work on this server was interrupted again and again (for example, by restarts).",
+        "action": "Check the server and Alice's logs, then start the rotation again."
+      },
+      "notice_undelivered": {
+        "title": "The planned rotation was cancelled because its notice email was not delivered in time.",
+        "cause": "A scheduled rotation starts only after its preview email was delivered to at least one administrator before the planned start. Email is not set up, no administrator has an email address, or the mail server did not accept the message in time.",
+        "action": "Check the email settings and the administrators' email addresses. The policy plans its next run one interval later; to rotate now, open the preview and choose Run now."
+      },
+      "old_key_gone": {
+        "title": "Alice kept the new key here because the old key is gone.",
+        "cause": "While undoing the rotation, Alice found that the old key is no longer in this file, for example because someone removed it after switching to the new key. Removing the new key too could leave the account without a working key.",
+        "action": "Find out who uses this account. Remove the new key on the new key's page only after another key works for it."
+      },
+      "plan_too_large": {
+        "title": "This rotation has too many places for one run.",
+        "cause": "A run holds at most 10 000 places, and its stored plan must fit in 2 MiB. Nothing was created or changed.",
+        "action": "Use separate keys for groups of servers and give each key its own policy."
+      },
+      "start_failed": {
+        "title": "Alice could not start the rotation, so it cancelled the run.",
+        "cause": "Run now created the run, but starting it failed, for example because Alice was busy generating other keys. Nothing was changed on any server.",
+        "action": "Choose Run now again in a moment."
+      },
+      "notice_pending": {
+        "title": "Alice is still preparing the email about the license renewal.",
+        "cause": "After a renewal, Alice emails the administrators before a paused rotation may continue. The next background check queues that email, within about a minute. Nothing was changed.",
+        "action": "Choose Continue again in a minute."
+      },
+      "late_result": {
+        "title": "A server's answer arrived after Alice had given up on it.",
+        "cause": "Alice had stopped waiting for this place after several attempts. Its answer came later, so the rotation's record and the key file on the server may differ there.",
+        "action": "Open the rotation's page and check the key file on this server, then scan the server again so that Alice lists its keys as they are."
       }
     },
     "job": {
@@ -1065,6 +1232,66 @@
         "subject": "Alice: the audit log failed its integrity check",
         "body": "The daily check of the Alice audit log found a problem at entry {{first_bad_seq}} ({{problem}}). Entries of the audit log may have been changed or deleted outside Alice.\n\nKeep the database as it is, find out who had direct access to it, and compare the audit log with your latest backup and audit export. Alice keeps recording new entries and checks the log again every hour until it is intact."
       }
+    },
+    "rotation": {
+      "preview": {
+        "subject": "Planned SSH key rotation: {{key_label}}",
+        "body": "Alice plans to rotate the SSH key {{key_label}} ({{fingerprint}}). Planned start: {{planned_for}}. A policy that is switched off starts a run only when an administrator chooses Run now.\n\nAlice will add a new key next to the old one, check that the new key works, keep both keys for the overlap, then remove the old key. Nothing is removed where the new key did not work.\n\nPlaces that will change: {{change_count}}. Places that will be skipped: {{skip_count}}.\n\nOpen the key's page in Alice to see the exact servers, users and files. To stop a planned run, switch the policy off before it starts."
+      },
+      "preview_after_license": {
+        "subject": "SSH key rotation can continue after the license renewal: {{key_label}}",
+        "body": "The license allows changes again. The rotation of the SSH key {{key_label}} ({{fingerprint}}), which was paused while the license did not allow changes, continues only after an administrator chooses Continue on the rotation's page.\n\nBefore Alice removes the old key anywhere, it signs in with the new key again on that server. Where this fails, the old key stays.\n\nPlaces this rotation changes: {{change_count}}. Open the rotation's page in Alice to see them."
+      },
+      "overlap_started": {
+        "subject": "New SSH key ready: {{key_label}}",
+        "body": "The new key for {{key_label}} works on every server where Alice could check it (new fingerprint: {{new_fingerprint}}). The old and the new key are both valid until {{overlap_until}}. Then Alice removes the old key where the new key works, after checking the new key once more.\n\nIf people or systems use this key outside Alice, an administrator can download the new private key now from the new key's page in Alice."
+      },
+      "overlap_ending": {
+        "subject": "The old SSH key will be removed soon: {{key_label}}",
+        "body": "At {{overlap_until}} Alice removes the old key {{key_label}} from the servers where the new key works, after checking the new key once more. If something still uses the old key, an administrator should download the new private key now."
+      },
+      "completed": {
+        "subject": "SSH key rotation finished: {{key_label}}",
+        "body": "Alice removed the old key {{key_label}} from every server where the new key works. The new key (fingerprint {{new_fingerprint}}) is now the key the policy rotates. Alice keeps the old private key, encrypted, for 30 days after the old key is no longer used anywhere, then destroys it."
+      },
+      "completed_partial": {
+        "subject": "SSH key rotation finished, but the old key still works in some places: {{key_label}}",
+        "body": "Alice removed the old key {{key_label}} wherever the new key works and was checked once more. The new key (fingerprint {{new_fingerprint}}) is now the key the policy rotates.\n\nThe old key is still valid in places the rotation skipped and in places where an administrator chose to keep it. Places where the old key stays: {{kept_count}}. Later rotations do not return to them.\n\nOpen the old key's page in Alice to see these places, and remove the old key there when nothing uses it any more."
+      },
+      "aborted": {
+        "subject": "SSH key rotation undone: {{key_label}}",
+        "body": "The rotation of {{key_label}} did not finish, so Alice removed the new key again where it had added it. The old key was not touched anywhere and keeps working.\n\nReason code: {{code}}. The troubleshooting guide explains it, and the rotation's page in Alice shows each server's state."
+      },
+      "needs_attention": {
+        "subject": "SSH key rotation needs attention: {{key_label}}",
+        "body": "The rotation of {{key_label}} has a problem a person must look at. Alice removes the old key only where a login with the new key worked just before; everywhere else the old key stays. Where Alice could not remove the new key again, both keys are there.\n\nReason code: {{code}}. The troubleshooting guide explains it. Open the rotation's page in Alice to see each server's state."
+      },
+      "paused_license": {
+        "subject": "SSH key rotation paused: {{key_label}}",
+        "body": "The license has expired or could not be checked, so Alice paused the rotation of {{key_label}}. The old key stays in place and nothing is removed.\n\nWhen the license is valid again, an administrator must choose Continue on the rotation's page."
+      },
+      "decision_needed": {
+        "subject": "SSH key rotation waits for a decision: {{key_label}}",
+        "body": "Alice added the new key for {{key_label}} but could not test a login with it in some places (count: {{count}}). On the rotation's page, decide whether to keep the old key there or to stop and undo the rotation. Without a decision Alice undoes the rotation at {{decision_due}}."
+      }
+    }
+  },
+  "rotation": {
+    "skip": {
+      "target_deleted": "The server was removed from Alice.",
+      "host_key_unconfirmed": "The server's fingerprint is not confirmed yet.",
+      "host_key_changed": "The server's identity changed.",
+      "target_not_connected": "Alice cannot connect to the server right now.",
+      "keys_managed_elsewhere": "The server gets this user's keys from a program.",
+      "sshd_unreadable": "Alice could not read the SSH server settings.",
+      "connection_account": "This is the account Alice connects with.",
+      "missing": "The key was no longer found here.",
+      "cert_authority": "This line is a certificate authority.",
+      "shared_file_skipped": "Several users of this server read this file, so Alice does not change the key in it.",
+      "pubkey_disabled": "The SSH server does not accept keys.",
+      "root_forced_commands_only": "root may sign in here only with a fixed command, and this line has none.",
+      "duplicate_lines": "The key is listed more than once in this file.",
+      "options_unreadable": "Alice could not read this line's options exactly."
     }
   }
 }

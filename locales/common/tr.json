@@ -368,6 +368,173 @@
         "title": "Alice anahtar dosyasını değiştirdi ama sonucu doğrulayamadı.",
         "cause": "Değişiklikten sonra sunucudaki dosya beklendiği gibi okunmadı. Alice önceki dosyanın bir yedeğini tuttu ve değişikliği kaydetmedi.",
         "action": "Sunucudaki authorized_keys dosyasını kontrol edin ve görevin belirttiği yedekle karşılaştırın, sonra sunucuyu yeniden tarayın."
+      },
+      "not_managed": {
+        "title": "Alice bu anahtarın özel anahtarını tutmuyor.",
+        "cause": "Yalnızca Alice'te oluşturulan anahtarlar dağıtılabilir, indirilebilir ya da yenilenebilir. Sunucularda bulunan anahtarlar ve Alice'in kendi bağlantı anahtarı yalnızca listelenir.",
+        "action": "Alice'te yeni bir anahtar oluşturup onun yerine onu kullanın."
+      },
+      "retired": {
+        "title": "Bu anahtar bir yenilemeyle değiştirildi ve artık kullanılmıyor.",
+        "cause": "Tamamlanan bir yenileme onu kullanımdan kaldırdı. Alice özel anahtarını acil durumlar için 30 gün saklar, sonra yok eder.",
+        "action": "Onun yerini alan yeni anahtarı kullanın. Bu anahtarın tamamlanan yenilemesi yeni anahtarı gösterir."
+      },
+      "private_key_destroyed": {
+        "title": "Bu anahtarın özel anahtarı yok edildi.",
+        "cause": "Alice, kullanımdan kaldırılan bir anahtarın özel anahtarını kaldırıldıktan 30 gün sonra yok eder.",
+        "action": "Yeni anahtarı kullanın. Yok etmeden önce alınan yedeklerde şifreli olarak hâlâ bulunur."
+      },
+      "connection_account": {
+        "title": "Alice bağlandığı hesabın anahtarlarını değiştirmez.",
+        "cause": "Seçilen kullanıcı Alice'in oturum açtığı hesaptır ya da seçilen dosya bu hesabın anahtar dosyalarından biridir. Bu hesabın anahtar dosyası kurulum komutlarına aittir ve komutlar her çalıştığında yeniden yazılır.",
+        "action": "Sunucuda başka bir kullanıcı ya da başka bir dosya seçin."
+      },
+      "login_failed": {
+        "title": "Sunucu yeni anahtarla oturum açılmasını kabul etmedi.",
+        "cause": "Anahtar dosyada, ancak SSH sunucusu onu reddetti: hesap kilitli olabilir, sunucu bu kullanıcı için başka bir dosya okuyor olabilir ya da AllowUsers gibi bir ayar hesabı dışarıda bırakıyor olabilir.",
+        "action": "Bu kullanıcının hesabını ve SSH sunucu ayarlarını denetleyip yeniden deneyin. Alice eklediği anahtarı yeniden kaldırır; bunun başarılı olup olmadığını sayfa gösterir."
+      },
+      "generate_busy": {
+        "title": "Alice şu anda başka anahtarlar oluşturuyor.",
+        "cause": "Bir RSA anahtarı oluşturmak birkaç saniye sürer; bu nedenle Alice aynı anda en çok iki anahtar oluşturur.",
+        "action": "Birazdan yeniden deneyin."
+      },
+      "add_undo_failed": {
+        "title": "Başarısız bir denetimden sonra Alice anahtarı yeniden kaldıramadı.",
+        "cause": "Alice anahtarı ekledi, ardından yapılan denetim başarısız oldu ve anahtarı kaldırma da başarısız oldu (örneğin sunucuya ulaşılamadı).",
+        "action": "Sunucuya ulaşılabildiğinde anahtarı, anahtarın sayfasından bu sunucudan kaldırın."
+      },
+      "not_a_key_file": {
+        "title": "Bu dosya kullanıcının anahtar dosyalarından biri değil.",
+        "cause": "Alice anahtarları yalnızca SSH sunucusunun o kullanıcı için okuduğu dosyalara, son taramada bulunduğu biçimiyle ekler.",
+        "action": "Sunucuyu yeniden tarayıp sunulan dosyalardan birini seçin."
+      },
+      "connection_files_unknown": {
+        "title": "Alice bu sunucuda bağlantı hesabının tüm anahtar dosyalarını bilmiyor.",
+        "cause": "Son tarama, SSH sunucusunun Alice'in oturum açtığı hesap için okuduğu anahtar dosyalarının tamamını listelemedi; bu nedenle Alice seçilen dosyanın bunlardan biri olmadığından emin olamıyor. Alice'in önceki bir sürümüyle taranmış sunucularda böyle bir liste yoktur.",
+        "action": "Sunucuyu yeniden tarayıp yeniden deneyin."
+      },
+      "clock_behind": {
+        "title": "Alice'in saati daha önce kaydettiği bir zamanın gerisinde.",
+        "cause": "Alice'i çalıştıran bilgisayarın saati, bu özel anahtarın son indirilmesinden sonra geri alındı. Alice hiçbir şey vermedi ve hiçbir şey kaydetmedi.",
+        "action": "Alice'i çalıştıran bilgisayarın saatini (NTP) denetleyin, ardından birazdan yeniden deneyin."
+      },
+      "add_uncertain": {
+        "title": "Alice anahtarın eklenip eklenmediğini henüz bilmiyor.",
+        "cause": "Sunucu, Alice'in anahtarı ekleme isteğine yanıt vermedi ve anahtar henüz dosyada yok. İstek sunucuya hâlâ ulaşabilir.",
+        "action": "Şimdilik bir şey yapmanız gerekmiyor: Alice isteğin artık ulaşamayacağı zamana kadar bekler, ardından yeniden dener. Bu tekrarlanırsa sunucuyla bağlantıyı denetleyin."
+      }
+    },
+    "rotation": {
+      "policy_exists": {
+        "title": "Bu anahtarın zaten bir yenileme kuralı var.",
+        "cause": "Her anahtarın en çok bir yenileme kuralı olabilir.",
+        "action": "Anahtarın sayfasında mevcut kuralı değiştirin."
+      },
+      "in_progress": {
+        "title": "Bu anahtarın bir yenilemesi zaten çalışıyor.",
+        "cause": "Bir anahtar için aynı anda yalnızca bir yenileme çalışır. Yenilemesi süren bir kural silinemez ve süren bir yenilemenin yeni anahtarına ayrı bir kural verilemez.",
+        "action": "Yenilemenin bitmesini bekleyin ya da sayfasında durdurun."
+      },
+      "plan_changed": {
+        "title": "Önizlemeden bu yana sunucular ya da anahtarlar değişti.",
+        "cause": "Bir yenileme yalnızca önizlendiği gibi çalışır ve o zamandan bu yana bir şey değişti. Hiçbir sunucuda bir şey değiştirilmedi.",
+        "action": "Önizlemeyi yeniden açıp denetleyin ve yenilemeyi oradan başlatın. Zamanlanmış bir çalıştırma yeni bir e-postayla yeniden önizlenir."
+      },
+      "nothing_to_rotate": {
+        "title": "Bu yenilemeye hiçbir sunucu katılamıyor.",
+        "cause": "Anahtarın kullanıldığı her yer atlanıyor. Önizleme her birinin nedenini gösterir.",
+        "action": "Önizlemede gösterilen nedenleri giderin, sunucuları yeniden tarayın ve yeniden deneyin."
+      },
+      "not_waiting": {
+        "title": "Bu yenileme bu işlemi beklemiyor.",
+        "cause": "Yenileme ilerledi ya da işlem şu anki durumunda geçerli değil.",
+        "action": "Şu anki durumu görmek için sayfayı yeniden yükleyin."
+      },
+      "add_failed": {
+        "title": "Alice yeni anahtarı bir sunucuya ekleyemedi; bu nedenle yenilemeyi geri aldı.",
+        "cause": "Bir sunucu değişikliği reddetti ya da sunucuya ulaşılamadı. Eski anahtara hiçbir yerde dokunulmadı.",
+        "action": "Başarısız sunucuyu yenilemenin sayfasında görün, sorunu giderin ve yenilemeyi yeniden başlatın."
+      },
+      "verify_failed": {
+        "title": "Yeni anahtar bir sunucuda çalışmadı; bu nedenle Alice yenilemeyi geri aldı.",
+        "cause": "Alice orada yeni anahtarla oturum açamadı. Eski anahtara hiçbir yerde dokunulmadı.",
+        "action": "Sunucuyu yenilemenin sayfasında görün, o kullanıcı için SSH ayarlarını denetleyin ve yenilemeyi yeniden başlatın."
+      },
+      "undo_failed": {
+        "title": "Alice yeni anahtarı her sunucudan kaldıramadı.",
+        "cause": "Yenilemeyi geri alma, sayfasında listelenen sunucularda başarısız oldu: onlara ulaşılamadı ya da eski anahtar orada zaten yoktu ve hesabın çalışan bir anahtarı kalsın diye Alice yeni anahtarı tuttu. Eski anahtara dokunulmadı.",
+        "action": "Bu sunuculara ulaşılabildiğinde ve bu hesaplar için başka bir anahtar çalıştığında, yeni anahtarı yeni anahtarın sayfasından bu sunuculardan kaldırın."
+      },
+      "remove_incomplete": {
+        "title": "Eski anahtar bazı sunucularda tutuldu.",
+        "cause": "Alice eski anahtarı kaldırmadan önce yeni anahtarı yeniden denetler. Listelenen sunucularda bu denetim ya da kaldırma başarısız oldu; bu nedenle eski anahtar orada kalır.",
+        "action": "Bu sunucuları denetleyin, ardından eski anahtarı eski anahtarın sayfasından bu sunuculardan kaldırın."
+      },
+      "decision_timeout": {
+        "title": "14 gün içinde karar verilmedi; bu nedenle Alice yenilemeyi geri aldı.",
+        "cause": "Alice yeni anahtarı bazı yerlerde deneyemedi ve 14 gün boyunca bir yöneticiyi bekledi.",
+        "action": "Yenilemeyi yeniden başlatın ve Alice'in deneyemediği yerler için karar verin."
+      },
+      "paused_license": {
+        "title": "Lisansın süresi dolduğu ya da lisans denetlenemediği için yenileme duraklatıldı.",
+        "cause": "Lisans değişikliklere izin vermezken Alice bu yenileme için hiçbir anahtar eklemez ya da kaldırmaz ve eski anahtar yerinde kalır.",
+        "action": "Geçerli bir lisans yükleyin ya da Alice lisansı yeniden denetleyebilene kadar bekleyin, ardından yenilemenin sayfasında Devam et'i seçin."
+      },
+      "cancelled_license": {
+        "title": "Planlanan yenileme, zamanı geldiğinde lisans değişikliklere izin vermediği için iptal edildi.",
+        "cause": "Lisansın süresi dolmuşken ya da lisans denetlenemezken Alice hiçbir yenilemeyi başlatmaz.",
+        "action": "Lisans yenilendikten sonra Alice, açık bir kuralın sonraki çalıştırmasını yeni bir önizleme ve e-postayla planlar."
+      },
+      "stopped": {
+        "title": "Bir yönetici yenilemeyi durdurdu.",
+        "cause": "Alice yeni anahtarı eklediği yerlerden yeniden kaldırdı; eski anahtara dokunulmadı.",
+        "action": "Hazır olduğunuzda yenilemeyi yeniden başlatın."
+      },
+      "policy_off": {
+        "title": "Kural kapatıldığı, değiştirildiği ya da silindiği için planlanan çalıştırma iptal edildi.",
+        "cause": "Kapalı bir kural hiçbir çalıştırma başlatmaz. Açık bir kuralın ne sıklıkla, ne kadar süreyle ya da hangi anahtar türüyle yenileme yaptığını değiştirmek kuralı kapatır.",
+        "action": "Sonraki çalıştırmayı planlamak için kuralı yeniden açın."
+      },
+      "new_key_failed": {
+        "title": "Alice yeniden denetlediğinde yeni anahtar artık çalışmıyordu; bu nedenle eski anahtar yerinde kalıyor.",
+        "cause": "Alice, eski anahtarı kaldırmadan hemen önce bu sunucuda yeni anahtarla oturum açamadı.",
+        "action": "Bu sunucuda yeni anahtarı denetleyin ve yeni anahtar çalıştığında eski anahtarı eski anahtarın sayfasından kaldırın."
+      },
+      "retries_exhausted": {
+        "title": "Alice birkaç denemeden sonra bu sunucuda vazgeçti.",
+        "cause": "Bu sunucudaki iş tekrar tekrar kesildi (örneğin yeniden başlatmalar nedeniyle).",
+        "action": "Sunucuyu ve Alice'in günlüklerini denetleyip yenilemeyi yeniden başlatın."
+      },
+      "notice_undelivered": {
+        "title": "Bildirim e-postası zamanında teslim edilmediği için planlanan yenileme iptal edildi.",
+        "cause": "Zamanlanmış bir yenileme, önizleme e-postası planlanan başlangıçtan önce en az bir yöneticiye teslim edildikten sonra başlar. E-posta ayarlanmamış, hiçbir yöneticinin e-posta adresi yok ya da e-posta sunucusu iletiyi zamanında kabul etmedi.",
+        "action": "E-posta ayarlarını ve yöneticilerin e-posta adreslerini denetleyin. Kural sonraki çalıştırmasını bir aralık sonraya planlar; şimdi yenilemek için önizlemeyi açıp Şimdi çalıştır'ı seçin."
+      },
+      "old_key_gone": {
+        "title": "Eski anahtar artık bulunmadığı için Alice yeni anahtarı burada tuttu.",
+        "cause": "Alice yenilemeyi geri alırken eski anahtarın artık bu dosyada olmadığını gördü; örneğin biri yeni anahtara geçtikten sonra onu kaldırmış olabilir. Yeni anahtarı da kaldırmak hesabı çalışan bir anahtar olmadan bırakabilirdi.",
+        "action": "Bu hesabı kimin kullandığını öğrenin. Yeni anahtarı, hesap için başka bir anahtar çalıştıktan sonra yeni anahtarın sayfasından kaldırın."
+      },
+      "plan_too_large": {
+        "title": "Bu yenilemede tek bir çalıştırma için çok fazla yer var.",
+        "cause": "Bir çalıştırma en çok 10 000 yer içerebilir ve kaydedilen planı 2 MiB'a sığmalıdır. Hiçbir şey oluşturulmadı ya da değiştirilmedi.",
+        "action": "Sunucu grupları için ayrı anahtarlar kullanın ve her anahtara kendi kuralını verin."
+      },
+      "start_failed": {
+        "title": "Alice yenilemeyi başlatamadı; bu nedenle çalıştırmayı iptal etti.",
+        "cause": "Şimdi çalıştır çalıştırmayı oluşturdu ancak başlatma başarısız oldu; örneğin Alice başka anahtarlar oluşturmakla meşguldü. Hiçbir sunucuda bir şey değiştirilmedi.",
+        "action": "Birazdan yeniden Şimdi çalıştır'ı seçin."
+      },
+      "notice_pending": {
+        "title": "Alice lisans yenilemesiyle ilgili e-postayı hâlâ hazırlıyor.",
+        "cause": "Lisans yenilendikten sonra Alice, duraklatılan bir yenileme sürmeden önce yöneticilere e-posta gönderir. Bu e-postayı bir sonraki arka plan denetimi, yaklaşık bir dakika içinde sıraya koyar. Hiçbir şey değiştirilmedi.",
+        "action": "Bir dakika sonra yeniden Devam et'i seçin."
+      },
+      "late_result": {
+        "title": "Bir sunucunun yanıtı, Alice ondan vazgeçtikten sonra geldi.",
+        "cause": "Alice birkaç denemeden sonra bu yer için beklemeyi bırakmıştı. Yanıt daha sonra geldi; bu nedenle yenilemenin kaydı ile sunucudaki anahtar dosyası orada farklı olabilir.",
+        "action": "Yenilemenin sayfasını açıp bu sunucudaki anahtar dosyasını denetleyin, ardından Alice anahtarları olduğu gibi listelesin diye sunucuyu yeniden tarayın."
       }
     },
     "job": {
@@ -1065,6 +1232,66 @@
         "subject": "Alice: denetim kaydı bütünlük denetiminden geçemedi",
         "body": "Alice denetim kaydının günlük denetimi {{first_bad_seq}} numaralı kayıtta bir sorun buldu ({{problem}}). Denetim kaydındaki kayıtlar Alice dışında değiştirilmiş ya da silinmiş olabilir.\n\nVeritabanını olduğu gibi bırakın, kimlerin doğrudan erişimi olduğunu araştırın ve denetim kaydını en son yedeğiniz ve denetim dışa aktarımınızla karşılaştırın. Alice yeni kayıtları tutmaya devam eder ve kayıt yeniden bütün olana kadar her saat yeniden denetler."
       }
+    },
+    "rotation": {
+      "preview": {
+        "subject": "Planlanan SSH anahtarı yenilemesi: {{key_label}}",
+        "body": "Alice, {{key_label}} ({{fingerprint}}) SSH anahtarını yenilemeyi planlıyor. Planlanan başlangıç: {{planned_for}}. Kapalı bir kural, yalnızca bir yönetici Şimdi çalıştır'ı seçtiğinde bir çalıştırma başlatır.\n\nAlice eski anahtarın yanına yeni bir anahtar ekleyecek, yeni anahtarın çalıştığını denetleyecek, geçiş süresince iki anahtarı da tutacak ve ardından eski anahtarı kaldıracak. Yeni anahtarın çalışmadığı yerlerde hiçbir şey kaldırılmaz.\n\nDeğişecek yer sayısı: {{change_count}}. Atlanacak yer sayısı: {{skip_count}}.\n\nSunucuları, kullanıcıları ve dosyaları tam olarak görmek için Alice'te anahtarın sayfasını açın. Planlanan bir çalıştırmayı durdurmak için başlamadan önce kuralı kapatın."
+      },
+      "preview_after_license": {
+        "subject": "SSH anahtarı yenilemesi lisans yenilemesinden sonra sürdürülebilir: {{key_label}}",
+        "body": "Lisans yeniden değişikliklere izin veriyor. Lisans değişikliklere izin vermediği için duraklatılan {{key_label}} ({{fingerprint}}) SSH anahtarı yenilemesi, ancak bir yönetici yenilemenin sayfasında Devam et'i seçtikten sonra sürer.\n\nAlice eski anahtarı bir yerden kaldırmadan önce o sunucuda yeni anahtarla yeniden oturum açar. Bu başarısız olursa eski anahtar yerinde kalır.\n\nBu yenilemenin değiştirdiği yer sayısı: {{change_count}}. Bu yerleri görmek için Alice'te yenilemenin sayfasını açın."
+      },
+      "overlap_started": {
+        "subject": "Yeni SSH anahtarı hazır: {{key_label}}",
+        "body": "{{key_label}} için yeni anahtar, Alice'in denetleyebildiği her sunucuda çalışıyor (yeni parmak izi: {{new_fingerprint}}). Eski ve yeni anahtar şu zamana kadar geçerli: {{overlap_until}}. Ardından Alice, yeni anahtarı bir kez daha denetledikten sonra eski anahtarı yeni anahtarın çalıştığı yerlerden kaldırır.\n\nBu anahtarı Alice dışında kullanan kişiler ya da sistemler varsa, bir yönetici yeni özel anahtarı şimdi Alice'te yeni anahtarın sayfasından indirebilir."
+      },
+      "overlap_ending": {
+        "subject": "Eski SSH anahtarı yakında kaldırılacak: {{key_label}}",
+        "body": "Alice, {{overlap_until}} zamanında yeni anahtarı bir kez daha denetledikten sonra {{key_label}} eski anahtarını yeni anahtarın çalıştığı sunuculardan kaldıracak. Eski anahtarı hâlâ kullanan bir şey varsa, bir yönetici yeni özel anahtarı şimdi indirmelidir."
+      },
+      "completed": {
+        "subject": "SSH anahtarı yenilemesi tamamlandı: {{key_label}}",
+        "body": "Alice, {{key_label}} eski anahtarını yeni anahtarın çalıştığı her sunucudan kaldırdı. Yeni anahtar (parmak izi {{new_fingerprint}}) artık kuralın yenilediği anahtardır. Alice eski özel anahtarı, eski anahtar hiçbir yerde kullanılmadığı andan sonra 30 gün şifreli olarak saklar ve ardından yok eder."
+      },
+      "completed_partial": {
+        "subject": "SSH anahtarı yenilemesi tamamlandı ancak eski anahtar bazı yerlerde hâlâ çalışıyor: {{key_label}}",
+        "body": "Alice, {{key_label}} eski anahtarını yeni anahtarın çalıştığı ve bir kez daha denetlendiği her yerden kaldırdı. Yeni anahtar (parmak izi {{new_fingerprint}}) artık kuralın yenilediği anahtardır.\n\nEski anahtar, yenilemenin atladığı yerlerde ve bir yöneticinin eski anahtarı tutmayı seçtiği yerlerde hâlâ geçerli. Eski anahtarın kaldığı yer sayısı: {{kept_count}}. Sonraki yenilemeler bu yerlere dönmez.\n\nBu yerleri görmek için Alice'te eski anahtarın sayfasını açın ve onu artık hiçbir şey kullanmadığında oradan kaldırın."
+      },
+      "aborted": {
+        "subject": "SSH anahtarı yenilemesi geri alındı: {{key_label}}",
+        "body": "{{key_label}} yenilemesi tamamlanmadı; bu nedenle Alice eklediği yerlerden yeni anahtarı yeniden kaldırdı. Eski anahtara hiçbir yerde dokunulmadı ve çalışmaya devam ediyor.\n\nNeden kodu: {{code}}. Sorun giderme kılavuzu bu kodu açıklar; Alice'te yenilemenin sayfası her sunucunun durumunu gösterir."
+      },
+      "needs_attention": {
+        "subject": "SSH anahtarı yenilemesi ilgi bekliyor: {{key_label}}",
+        "body": "{{key_label}} yenilemesinde bir kişinin bakması gereken bir sorun var. Alice eski anahtarı yalnızca yeni anahtarla oturum açmanın az önce başarılı olduğu yerlerden kaldırır; diğer her yerde eski anahtar kalır. Alice'in yeni anahtarı yeniden kaldıramadığı yerlerde iki anahtar da bulunur.\n\nNeden kodu: {{code}}. Sorun giderme kılavuzu bu kodu açıklar. Her sunucunun durumunu görmek için Alice'te yenilemenin sayfasını açın."
+      },
+      "paused_license": {
+        "subject": "SSH anahtarı yenilemesi duraklatıldı: {{key_label}}",
+        "body": "Lisansın süresi dolduğu ya da lisans denetlenemediği için Alice {{key_label}} yenilemesini duraklattı. Eski anahtar yerinde kalır ve hiçbir şey kaldırılmaz.\n\nLisans yeniden geçerli olduğunda bir yöneticinin yenilemenin sayfasında Devam et'i seçmesi gerekir."
+      },
+      "decision_needed": {
+        "subject": "SSH anahtarı yenilemesi bir karar bekliyor: {{key_label}}",
+        "body": "Alice {{key_label}} için yeni anahtarı ekledi ancak bazı yerlerde anahtarla oturum açmayı deneyemedi (sayı: {{count}}). Yenilemenin sayfasında, eski anahtarın oralarda kalmasına mı yoksa yenilemenin durdurulup geri alınmasına mı karar verin. Karar verilmezse Alice yenilemeyi şu zamanda geri alır: {{decision_due}}."
+      }
+    }
+  },
+  "rotation": {
+    "skip": {
+      "target_deleted": "Sunucu Alice'ten kaldırıldı.",
+      "host_key_unconfirmed": "Sunucunun parmak izi henüz onaylanmadı.",
+      "host_key_changed": "Sunucunun kimliği değişti.",
+      "target_not_connected": "Alice şu anda sunucuya bağlanamıyor.",
+      "keys_managed_elsewhere": "Sunucu bu kullanıcının anahtarlarını bir programdan alıyor.",
+      "sshd_unreadable": "Alice SSH sunucu ayarlarını okuyamadı.",
+      "connection_account": "Bu, Alice'in bağlandığı hesaptır.",
+      "missing": "Anahtar artık burada bulunamadı.",
+      "cert_authority": "Bu satır bir sertifika yetkilisi.",
+      "shared_file_skipped": "Bu sunucuda bu dosyayı birden fazla kullanıcı okuyor; bu nedenle Alice içindeki anahtarı değiştirmez.",
+      "pubkey_disabled": "SSH sunucusu anahtar kabul etmiyor.",
+      "root_forced_commands_only": "root burada yalnızca sabit bir komutla oturum açabilir ve bu satırda böyle bir komut yok.",
+      "duplicate_lines": "Anahtar bu dosyada birden fazla kez listeleniyor.",
+      "options_unreadable": "Alice bu satırın seçeneklerini tam olarak okuyamadı."
     }
   }
 }
