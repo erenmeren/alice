@@ -102,3 +102,24 @@ func TestKeyVaultRenewalAdviceAndSummaries(t *testing.T) {
 		}
 	}
 }
+
+// n6: the texts are true in every case they are sent in.
+func TestKeyVaultMailTextsAreTrueInEveryCase(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	params := map[string]string{"target_name": "Üretim kasası", "certificate_name": "web-cert", "count": "4"}
+	held := s.Render("ada@example.com", inventory.TemplateKVNewVersionHeldLicense, "en", params)
+	assert.NotContains(t, held.Body, "while the license", "no claim about when the version was found")
+	assert.Contains(t, held.Body, "at some point since the version appeared")
+	unknown := s.Render("ada@example.com", inventory.TemplateKVImportOutcomeUnknown, "en", params)
+	assert.NotContains(t, unknown.Body, "at the next check", "a deleted vault is never checked again")
+	assert.Contains(t, unknown.Body, "If the vault was deleted")
+	for _, tpl := range []string{inventory.TemplateKVNewVersionsMore, inventory.TemplateKVSkippedMore, inventory.TemplateKVStoppedMore} {
+		tr := s.Render("ada@example.com", tpl, "tr", params)
+		assert.NotContains(t, tr.Body, "sayılmıyor", tpl)
+		assert.Contains(t, tr.Body, "listelenmiyor", tpl)
+	}
+	tr := s.Render("ada@example.com", inventory.TemplateKVImportFailed, "tr", params)
+	assert.Contains(t, tr.Body, "içe aktaramadı")
+}
