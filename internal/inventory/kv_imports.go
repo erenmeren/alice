@@ -16,6 +16,10 @@ package inventory
 //	             later--> succeeded
 //	uncertain  --24 hours after the send, a complete listing and still no such version--> failed with
 //	             kv.import_outcome_unknown
+//	uncertain  --72 hours after the send, whatever the listings (SweepImports, also for an unreachable
+//	             vault)--> failed with kv.import_outcome_unknown
+//	any active --the vault is deleted--> failed: kv.import_vault_deleted when queued, else
+//	             kv.import_outcome_unknown (endVaultImports)
 //
 // Every other step is ErrImportState and changes nothing. One import per vault and ASCII-folded name is
 // active (queued, running or uncertain) at a time.
@@ -804,7 +808,8 @@ func ptrBool(b bool) *bool { return &b }
 // (complete) and that found no such version ends the import failed with kv.import_outcome_unknown, one
 // mail (not while a certificate of that name still waits for its details). Audited kv.import.settled /
 // kv.import.failed. Finished imports are never touched (WHERE finished_at IS NULL). An import whose vault
-// is deleted, or unreachable for the whole time, stays uncertain: nothing ends it.
+// is unreachable for the whole time is ended by SweepImports ImportOutcomeUnknownCap after its send; one whose
+// vault is deleted is ended by the deletion (endVaultImports).
 func (s *Service) resolveImports(ctx context.Context, tx pgx.Tx, vault uuid.UUID, now time.Time, complete bool) error {
 	rows, err := tx.Query(ctx, `SELECT id, certificate_id, name, thumbprint, created_at, sent_at FROM kv_imports
 WHERE target_id = $1 AND state = 'uncertain' AND finished_at IS NULL ORDER BY id FOR UPDATE`, vault)

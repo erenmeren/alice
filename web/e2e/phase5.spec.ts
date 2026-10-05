@@ -389,7 +389,8 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await resetInstall(request);
     });
     // No vault is removed at the end: POST /test/reset (the next journey's beforeEach) moves Alice's
-    // clock back, and the vault rate limiter starts a fresh window when the clock steps backwards.
+    // clock back, and the vault rate limiter moves its schedule back with the clock, so nobody waits for
+    // the difference.
     test.afterEach(() => {
       nginxReset();
       azureReset();
@@ -1093,11 +1094,12 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await bindingPanel(page).getByRole('button', { name: kv.deleteConnection, exact: true }).click();
       const del = page.getByRole('dialog', { name: t('bindings.deleteTitle') });
       await expect(del.getByText(t('bindings.deleteHelp'))).toBeVisible();
-      // The sign-in's step-up window has passed: the delete asks for a code.
+      // Deleting a connection needs no step-up (docs/authz-matrix.md): even after the sign-in's step-up window
+      // has passed, it goes through without asking for a code.
       await expireStepUp(request);
       await del.getByRole('button', { name: kv.deleteConnection, exact: true }).click();
-      await answerStepUp(page, request, lang, s.totpSecret, bindingPanel(page).getByText(t('bindings.none')));
       await expect(del).toHaveCount(0);
+      await expect(page.getByRole('dialog', { name: COPY[lang].stepUpHeading })).toHaveCount(0);
       await expect(bindingPanel(page)).toContainText(t('bindings.none'));
       await expect(bindingPanel(page).getByTestId('binding-location')).toHaveCount(0);
 

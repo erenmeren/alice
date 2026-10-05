@@ -69,9 +69,10 @@ const (
 	TemplateKVAutoDeployStopped     = "kv.auto_deploy_stopped"
 )
 
-// Imports into a vault (Task 14): an import ended without a version in the vault, with a reason on the
-// import's page (TemplateKVImportFailed), or Alice never learned how it ended (TemplateKVImportOutcomeUnknown,
-// 24 hours after the send). Both take target_name and certificate_name.
+// Imports into a vault (Task 14): an import ended without a version in the vault, with a reason in the
+// certificate's import history (TemplateKVImportFailed), or Alice never learned how it ended
+// (TemplateKVImportOutcomeUnknown: 24 hours after the send with a complete listing, 72 hours whatever the
+// listings, or the vault was deleted). Both take target_name and certificate_name.
 const (
 	TemplateKVImportFailed         = "kv.import_failed"
 	TemplateKVImportOutcomeUnknown = "kv.import_outcome_unknown"
