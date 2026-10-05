@@ -116,6 +116,10 @@ type env struct {
 	adminAudit audit.Actor
 	killer     atomic.Pointer[killer] // the process dies at its points (setKiller)
 	cancelJob  atomic.Pointer[context.CancelFunc]
+	jobSeq     atomic.Int64 // the current run of a job (RunOnce), for the call log
+	jobsMu     sync.Mutex
+	undoJobs   map[int64]bool // runs that began an undo (BeginUndo answered)
+	lockJobs   map[int64]bool // runs in whose calls the licence lock began (their sends were in flight)
 	fault      atomic.Pointer[func(fake.FaultPoint) fake.Fault]
 	callsMu    sync.Mutex
 	calls      map[int]callInfo
@@ -126,6 +130,7 @@ type env struct {
 
 // jobContext is the context of one RunOnce; a FaultHang ends it (the job's own deadline, F-39).
 func (e *env) jobContext() (context.Context, context.CancelFunc) {
+	e.jobSeq.Add(1)
 	ctx, cancel := context.WithTimeout(e.ctx, runTimeout)
 	e.cancelJob.Store(&cancel)
 	return ctx, cancel
@@ -137,6 +142,7 @@ type callInfo struct {
 	begun  time.Time // when the call began (the time the sender's checks saw)
 	at     time.Time // when the call proceeded, after the events injected in it (a clock step is not time the call took)
 	locked bool
+	job    int64 // the run of a job (RunOnce) that made the call
 }
 
 // setFault installs the test's fault decision (nil: none) behind the harness's own hook.
@@ -160,7 +166,7 @@ func (e *env) hook(p fake.FaultPoint) fake.Fault {
 	// The time is read after the call's own events: a clock step injected in the call is a step of the
 	// clock, not time the call took.
 	e.callsMu.Lock()
-	e.calls[p.N] = callInfo{begun: begun, at: e.clock.Now(), locked: locked}
+	e.calls[p.N] = callInfo{begun: begun, at: e.clock.Now(), locked: locked, job: e.jobSeq.Load()}
 	e.callsMu.Unlock()
 	if x == fake.FaultHang {
 		if c := e.cancelJob.Load(); c != nil {
@@ -194,6 +200,7 @@ func newEnvWith(t *testing.T, real func(e *env)) *env {
 	e.dropAtEnd()
 	e.world.SetClock(e.clock.Now) // FaultLateWrite follows the test clock
 	e.calls = map[int]callInfo{}
+	e.undoJobs, e.lockJobs = map[int64]bool{}, map[int64]bool{}
 	e.world.SetFault(e.hook)
 	e.log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	e.keyring, err = secrets.LoadOrCreateMasterKey(e.ctx, e.db.App, t.TempDir(), e.clock.Now())
@@ -231,7 +238,7 @@ func newEnvWith(t *testing.T, real func(e *env)) *env {
 		Workers: 1, WorkerID: "alice", Heartbeat: 24 * time.Hour, Jitter: func() float64 { return 0 },
 		Notifier: notify.AdminNotifier{Clock: e.tick}})
 	sshkeyjobs.Register(e.runner, sshkeyjobs.Deps{Keys: killKeys{Service: e.keys, e: e}, Targets: e.inv, Registry: e.reg, Clock: e.tick,
-		Log: e.log})
+		Log: e.log, Gate: e.gate})
 	e.admin = e.user("ada", rbac.Admin)
 	e.adminID, e.adminAudit = e.admin.UserID, e.admin.Audit
 	e.operator = e.user("oscar", rbac.Operator)
@@ -639,6 +646,11 @@ func (k killKeys) FinishRemove(ctx context.Context, actor audit.Actor, id uuid.U
 func (k killKeys) BeginUndo(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
 	k.e.at("before:BeginUndo")
 	op, err := k.Service.BeginUndo(ctx, id)
+	if err == nil {
+		k.e.jobsMu.Lock()
+		k.e.undoJobs[k.e.jobSeq.Load()] = true
+		k.e.jobsMu.Unlock()
+	}
 	k.e.at("after:BeginUndo")
 	return op, err
 }
@@ -679,4 +691,22 @@ func (e *env) setKeyFiles(target uuid.UUID, files []providers.UserKeyFiles) {
 	require.NoError(e.t, err)
 	_, err = e.db.Owner.Exec(e.ctx, "UPDATE targets SET facts = jsonb_set(facts, '{key_files}', $2::jsonb) WHERE id = $1", target, string(raw))
 	require.NoError(e.t, err)
+}
+
+// lockNow locks the licence gate and notes the job run in flight, if any (its sends may finish: L-85).
+func (e *env) lockNow(inCall bool) {
+	if inCall {
+		e.jobsMu.Lock()
+		e.lockJobs[e.jobSeq.Load()] = true
+		e.jobsMu.Unlock()
+	}
+	e.gate.lock()
+}
+
+// allowedInLock reports whether a call made while locked belongs to a job run that was in flight when the
+// lock began, or to an undo (L-86).
+func (e *env) allowedInLock(c callInfo) bool {
+	e.jobsMu.Lock()
+	defer e.jobsMu.Unlock()
+	return e.lockJobs[c.job] || e.undoJobs[c.job]
 }

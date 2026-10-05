@@ -808,3 +808,21 @@ func TestDeployUndoFailedOnTheLastAttemptIsReconciled(t *testing.T) {
 	assert.Equal(t, 1, e.discoveries(srv), "one scan after the wait")
 	assert.Zero(t, e.removalsOf(k.Fingerprint), "nothing removed")
 }
+
+// L-29: a lock that begins after the runner's gate check (here: while the deploy is read again) lets no
+// command reach the server; the job is held for a confirmation after the renewal.
+func TestDeployLockedAfterTheClaimSendsNothing(t *testing.T) {
+	e := newEnv(t)
+	srv := e.server("web-01")
+	k := e.generate("ci")
+	job := e.deploy(k, srv, "")
+	kill := newKiller()
+	kill.on = map[string]func(){"after:DeployJob": e.gate.lock}
+	e.setKiller(kill)
+	e.drain()
+	e.setKiller(nil)
+	assert.Empty(t, e.world.Events(), "no command in lock")
+	assert.Zero(t, e.provider.Count("Open"))
+	e.drain()
+	assert.Equal(t, jobs.StatusBlocked, e.job(job).Status, "held for an Administrator after the renewal")
+}

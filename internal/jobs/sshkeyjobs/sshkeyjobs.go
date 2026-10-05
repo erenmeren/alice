@@ -26,6 +26,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
+	"alice/internal/license"
 	"alice/internal/platform/clock"
 	"alice/internal/providers"
 	"alice/internal/sshkeys"
@@ -76,6 +77,11 @@ type Deps struct {
 	Registry *providers.Registry
 	Clock    clock.Clock
 	Log      *slog.Logger // nil = discard
+	// Gate is the licence gate (license.Service.Allow). A rotation's add or removal job asks it before it
+	// opens a session, so that no command reaches a server while the licence is locked (L-29, T14-D2);
+	// the undo never asks it (L-86). nil: only the run's pause flag is read (the composition root should
+	// pass the licence service).
+	Gate jobs.Gate
 }
 
 // Register installs the handlers of sshkey.add and rotation.location on the runner. It panics on a missing dependency.
@@ -220,6 +226,11 @@ func reasonOf(err error) string {
 func (h *handlers) login(ctx context.Context, sess providers.Session, user string, keyID uuid.UUID) (providers.KeyLoginOutcome, error) {
 	r, err := sess.VerifyKeyLogin(ctx, providers.KeyLoginRequest{OSUser: user, Key: h.d.Keys.KeySigner(keyID)})
 	return r.Outcome, err
+}
+
+// changesRefused reports whether the licence refuses changes now (Deps.Gate; false without a gate).
+func (h *handlers) changesRefused() bool {
+	return h.d.Gate != nil && h.d.Gate.Allow(license.ClassChange) != nil
 }
 
 // errType names an error's type for the logs (its text may carry remote output).

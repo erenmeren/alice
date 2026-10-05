@@ -270,9 +270,8 @@ func TestLockWithACrashedAddPauses(t *testing.T) {
 	}
 	r = e.run(r.ID)
 	assert.NotContains(t, []string{sshkeys.StatusRollingBack, sshkeys.StatusAborted}, r.Status, "never rolled back for the lock")
-	assert.Equal(t, sshkeys.LocVerified, r.Locations[0].State, "the add in flight was verified, not sent again")
-	assert.Equal(t, 1, e.countEvents("AddAuthorizedKey"))
-	assert.Zero(t, e.countEvents("RemoveAuthorizedKey"))
+	assert.Equal(t, sshkeys.LocAdding, r.Locations[0].State, "the recovered job sends nothing in lock, not even a login (L-29, T14-D2)")
+	assert.Equal(t, 1, e.worldCalls(), "the add before the kill, nothing after it")
 	e.clock.Advance(24 * time.Hour)
 	e.sweep()
 	e.drain()
@@ -283,10 +282,52 @@ func TestLockWithACrashedAddPauses(t *testing.T) {
 	e.gate.unlock()
 	e.sweep()
 	require.NoError(t, e.keys.Continue(e.ctx, e.admin, r.ID))
+	e.clock.Advance(time.Minute)
+	e.sweep() // re-queues the add in flight
 	e.drain()
-	require.Equal(t, sshkeys.StatusOverlap, e.run(r.ID).Status)
+	require.Equal(t, sshkeys.StatusOverlap, e.run(r.ID).Status, "after Continue the add in flight is verified")
 	e.clock.Advance(24 * time.Hour)
 	e.sweep()
+	r = e.settleRun(r.ID)
+	assert.Equal(t, sshkeys.StatusCompleted, r.Status)
+	assert.Equal(t, 1, e.countEvents("AddAuthorizedKey"), "verified, not sent again")
+	e.assertEveryRemovalFollowedAFreshLogin(t, k.Fingerprint, r.NewFingerprint)
+}
+
+// T14-D2, L-29: a run removes the old key on two servers; the lock begins while the first removal is
+// written. That removal finishes (in flight), but the second server's queued remove job sends nothing at
+// all: no session command, no listing, no login.
+func TestLockDuringRemovingOldSendsNoCommand(t *testing.T) {
+	e := newEnv(t)
+	web, db := e.server("web-01"), e.server("db-01")
+	k := e.generate("ci")
+	e.place(k, web, "deploy")
+	e.place(k, db, "deploy")
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
+		if p.Method == "RemoveAuthorizedKey" && p.Target == web {
+			e.gate.lock()
+		}
+		return fake.FaultNone
+	})
+	r := e.runNow(e.policy(k.ID, 1))
+	e.drain()
+	e.clock.Advance(24 * time.Hour)
+	e.sweep()
+	opens := e.provider.Count("Open")
+	before := map[uuid.UUID]int{}
+	for _, ev := range e.world.Events() {
+		before[ev.Target]++
+	}
+	e.drain()
+	require.True(t, e.gate.locked.Load())
+	after := map[uuid.UUID]int{}
+	for _, ev := range e.world.Events() {
+		after[ev.Target]++
+	}
+	second := db // the queue took web-01 first: its removal was in flight when the lock began
+	assert.LessOrEqual(t, after[second]-before[second], 0, "no command reaches the second server in lock")
+	assert.Equal(t, opens+1, e.provider.Count("Open"), "only the job that was already sending opened a session")
+	e.gate.unlock()
 	r = e.settleRun(r.ID)
 	assert.Equal(t, sshkeys.StatusCompleted, r.Status)
 	e.assertEveryRemovalFollowedAFreshLogin(t, k.Fingerprint, r.NewFingerprint)
@@ -361,4 +402,25 @@ func TestLockDuringARemovalRetryReturnsTheRetry(t *testing.T) {
 	r = e.settleRun(r.ID)
 	assert.Equal(t, sshkeys.StatusCompleted, r.Status)
 	assert.Equal(t, 2, removes)
+}
+
+// L-29: the lock begins after the remove jobs were queued and before any of them ran (the run is not
+// paused yet): the jobs read the licence gate before any session and send nothing.
+func TestLockBeforeQueuedRemovalsSendsNothing(t *testing.T) {
+	e := newEnv(t)
+	web := e.server("web-01")
+	k := e.generate("ci")
+	e.place(k, web, "deploy")
+	r := e.runNow(e.policy(k.ID, 1))
+	e.drain()
+	e.clock.Advance(24 * time.Hour)
+	e.sweep()
+	require.Equal(t, sshkeys.StatusRemovingOld, e.run(r.ID).Status)
+	require.False(t, e.run(r.ID).PausedLicense)
+	calls, opens := e.worldCalls(), e.provider.Count("Open")
+	e.gate.lock()
+	e.drain()
+	assert.Equal(t, calls, e.worldCalls(), "no command in lock")
+	assert.Equal(t, opens, e.provider.Count("Open"), "no session in lock")
+	assert.Equal(t, sshkeys.LocVerified, e.loc(r.ID, web, "deploy").State)
 }

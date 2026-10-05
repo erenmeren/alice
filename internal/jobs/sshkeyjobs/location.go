@@ -180,6 +180,11 @@ func (r *locJob) add(ctx context.Context) (map[string]any, error) {
 		}
 		state, began = sshkeys.LocAdding, true
 	case sshkeys.LocAdding, sshkeys.LocAdded:
+		// A send or a login for an add that is not in flight in this job: nothing reaches the server while
+		// the run is paused or the licence locked (L-29, T14-D2); the job ends neutrally.
+		if r.w.Rotation.PausedLicense || r.h.changesRefused() {
+			return stopped("paused"), nil
+		}
 	default:
 		return stateResult(state), nil
 	}
@@ -333,6 +338,11 @@ func (r *locJob) remove(ctx context.Context) (map[string]any, error) {
 	state := r.loc.State
 	if state != sshkeys.LocVerified && state != sshkeys.LocRemoving && state != sshkeys.LocRemoveFailed {
 		return stateResult(state), nil
+	}
+	// No session, listing or login while the run is paused or the licence locked (L-29, T14-D2): the
+	// removal waits for the renewal and Continue; nothing is recorded.
+	if r.w.Rotation.PausedLicense || r.h.changesRefused() {
+		return stopped("paused"), nil
 	}
 	sess, err := r.h.open(ctx, r.loc.TargetID)
 	switch {

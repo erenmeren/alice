@@ -78,6 +78,11 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 			return map[string]any{"result": "uncertain", "ssh_key_id": d.KeyID.String()}, jobs.RetryAfter(reasonUncertain, nil, nil, wait)
 		}
 	}
+	if h.changesRefused() {
+		// The lock began after the runner's own gate check: no command reaches the server (L-29). The
+		// retry finds the job held for an Administrator's confirmation (the queue holds change work in lock).
+		return nil, jobs.Retry("license.locked", nil, nil)
+	}
 	sess, err := h.open(ctx, d.TargetID)
 	if err != nil {
 		h.failed(ctx, j, actor, d, err)

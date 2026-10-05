@@ -232,7 +232,7 @@ func (s *scenario) install() {
 			done[i] = true
 			switch ev.kind {
 			case "lock":
-				e.gate.lock()
+				e.lockNow(true)
 			case "lease":
 				s.loseLease()
 			case "abort":
@@ -327,7 +327,7 @@ func (s *scenario) settle() {
 		for _, ev := range s.sched.rounds {
 			if ev.at == round {
 				if ev.kind == "lock" {
-					e.gate.lock() // a lock between two calls (in the overlap, while a decision waits)
+					e.lockNow(false) // a lock between two calls (in the overlap, while a decision waits)
 					continue
 				}
 				s.decide(ev.kind, true)
@@ -382,14 +382,16 @@ func (s *scenario) assertInvariants(t *testing.T) {
 	// I1: every removal of the old key followed the verification and a fresh, later re-check (two accepted
 	// logins with the new key, the second at most 15 minutes before the send).
 	e.assertEveryRemovalFollowedAFreshLogin(t, oldFP, newFP)
-	// L (review I5): no add and no removal of the old key begins while the licence is locked (an undo of
-	// the run's own addition may: L-86, Stop and undo in lock).
+	// L (review I5, T14-D2, L-29): while the licence is locked no command at all (listing, login, add,
+	// removal) reaches a server, except from a job whose sends were in flight when the lock began (L-85)
+	// and the undo of the run's own additions (L-86).
 	for _, ev := range e.world.Events() {
-		if ev.Landed || !e.call(ev.N).locked {
+		c := e.call(ev.N)
+		if ev.Landed || !c.locked {
 			continue
 		}
-		assert.False(t, ev.Method == "AddAuthorizedKey", "L: an add was sent while the licence was locked (call %d)", ev.N)
-		assert.False(t, ev.Method == "RemoveAuthorizedKey" && ev.Fingerprint == oldFP,
+		assert.True(t, e.allowedInLock(c), "L: %s reached a server while the licence was locked (call %d)", ev.Method, ev.N)
+		assert.False(t, ev.Method == "RemoveAuthorizedKey" && ev.Fingerprint == oldFP && !e.lockJobs[c.job],
 			"L: a removal of the old key was sent while the licence was locked (call %d)", ev.N)
 	}
 	// I2, I3: only the new key is added, only the old or the new key is removed, never Alice's own key,
