@@ -17,6 +17,7 @@ import {
   vaultWith,
 } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
+import { kvCertificateFixture, kvKeyFixture, kvSecretFixture } from '../test/fixtures';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
 
@@ -27,10 +28,18 @@ function asRole(role: Role, vault = vaultFixture, lang = 'en') {
     ...sessionHandlers(sessionFor(role, lang)),
     http.get(`/api/v1/targets/${VAULT_ID}`, () => HttpResponse.json(vault)),
     http.get('/api/v1/targets', () => HttpResponse.json({ items: [vault], next_cursor: null })),
+    http.get(`/api/v1/targets/${VAULT_ID}/kv/certificates`, () => HttpResponse.json({ items: [], next_cursor: null })),
   );
 }
 
 const PATH = `/key-vaults/${VAULT_ID}`;
+
+const HOSTILE = [
+  '<img src=x onerror=alert(1)>',
+  'javascript:alert(1)',
+  `${'long-'.repeat(60)}end`,
+  '\u202Eevil-rtl\u202C',
+];
 
 describe('KeyVaultDetailPage header', () => {
   it('shows the status, how Alice signs in, the object ID in <code>, when it was last checked and the interval', async () => {
@@ -286,3 +295,143 @@ describe('KeyVaultDetailPage header', () => {
     expectNoRawKeys(screen.getByRole('heading', { name: 'Prod vault', level: 1 }).parentElement as HTMLElement);
   });
 });
+
+describe('KeyVaultDetailPage inventory', () => {
+  const certs = [
+    kvCertificateFixture({ id: 'c1', name: 'web-cert', bound: true, current_version: '0123456789abcdef0123456789abcdef' }),
+    kvCertificateFixture({ id: 'c2', name: 'monitor-only', exportable: false, current_version: 'aaaaaaaabbbbbbbbccccccccdddddddd', expires: '2020-01-01T00:00:00Z' }),
+    kvCertificateFixture({ id: 'c3', name: 'old-cert', missing_since: '2026-10-01T00:00:00Z' }),
+    kvCertificateFixture({ id: 'c4', name: 'fresh-cert', first_seen_at: '2026-09-01T00:00:00Z', kv_created_at: new Date(Date.now() - 86_400_000).toISOString() }),
+    kvCertificateFixture({ id: 'c5', name: 'held-cert', current_held: true, current_held_reason: 'license' }),
+  ];
+
+  it('lists certificates with the first 8 hex digits in <code>, expiry and the chips', async () => {
+    asRole('operator');
+    let query = '';
+    server.use(
+      http.get(`/api/v1/targets/${VAULT_ID}/kv/certificates`, ({ request }) => {
+        query = new URL(request.url).search;
+        return HttpResponse.json({ items: certs, next_cursor: null });
+      }),
+    );
+    await renderRoute(PATH);
+    const table = await screen.findByRole('table', { name: 'Certificates' });
+    const row = (n: string) => within(table).getByText(n).closest('tr')!;
+    expect(query).toContain('missing=include');
+    expect(within(row('web-cert')).getByText('01234567').tagName).toBe('CODE');
+    expect(within(row('web-cert')).getByRole('link', { name: 'web-cert' })).toHaveAttribute('href', `/key-vaults/${VAULT_ID}/certificates/c1`);
+    expect(row('web-cert')).toHaveTextContent('Connected websites');
+    expect(row('monitor-only')).toHaveTextContent('Monitor only');
+    expect(row('monitor-only')).toHaveTextContent('Expired');
+    expect(row('old-cert')).toHaveTextContent('Removed from Key Vault');
+    expect(row('fresh-cert')).toHaveTextContent('New version found');
+    expect(row('web-cert')).not.toHaveTextContent('New version found');
+    expect(row('held-cert')).toHaveTextContent('Held');
+  });
+
+  it('shows the Keys tab: name, type, size or curve, expiry, enabled, managed', async () => {
+    asRole('auditor');
+    server.use(
+      http.get(`/api/v1/targets/${VAULT_ID}/kv/keys`, () =>
+        HttpResponse.json({ items: [kvKeyFixture(), kvKeyFixture({ id: 'k2', name: 'ec-key', key_type: 'EC', key_size: 0, curve: 'P-256', managed: true, enabled: false, hsm: true, expires: null })], next_cursor: null }),
+      ),
+    );
+    await renderRoute(PATH);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Keys' }));
+    const table = await screen.findByRole('table', { name: 'Keys' });
+    const rsa = within(table).getByText('signing-key').closest('tr')!;
+    expect(rsa).toHaveTextContent('RSA');
+    expect(rsa).toHaveTextContent('2048 bits');
+    const ec = within(table).getByText('ec-key').closest('tr')!;
+    expect(ec).toHaveTextContent('P-256');
+    expect(ec).toHaveTextContent('No expiry');
+    expect(ec).toHaveTextContent('HSM');
+    expect(within(table).getByRole('columnheader', { name: 'Size or curve' })).toBeInTheDocument();
+  });
+
+  it('shows the Secrets tab: name, content type, expiry, enabled, managed (never a value)', async () => {
+    asRole('auditor');
+    server.use(http.get(`/api/v1/targets/${VAULT_ID}/kv/secrets`, () => HttpResponse.json({ items: [kvSecretFixture()], next_cursor: null })));
+    await renderRoute(PATH);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Secrets' }));
+    const table = await screen.findByRole('table', { name: 'Secrets' });
+    const row = within(table).getByText('db-password').closest('tr')!;
+    expect(row).toHaveTextContent('text/plain');
+    expect(within(table).queryByText(/value/i)).not.toBeInTheDocument();
+  });
+
+  it('pages with Show more using the cursor', async () => {
+    asRole('operator');
+    const cursors: (string | null)[] = [];
+    server.use(
+      http.get(`/api/v1/targets/${VAULT_ID}/kv/certificates`, ({ request }) => {
+        const c = new URL(request.url).searchParams.get('cursor');
+        cursors.push(c);
+        return c ? HttpResponse.json({ items: [kvCertificateFixture({ id: 'c9', name: 'second-page' })], next_cursor: null }) : HttpResponse.json({ items: [kvCertificateFixture({ id: 'c8', name: 'first-page' })], next_cursor: 'cur-2' });
+      }),
+    );
+    await renderRoute(PATH);
+    await screen.findByText('first-page');
+    await userEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText('second-page')).toBeInTheDocument();
+    expect(screen.getByText('first-page')).toBeInTheDocument();
+    expect(cursors).toEqual([null, 'cur-2']);
+    expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+  });
+
+  it('shows the empty state of a tab', async () => {
+    asRole('operator');
+    await renderRoute(PATH);
+    expect(await screen.findByText('No certificates in this vault.')).toBeInTheDocument();
+  });
+
+  it('shows what Azure or the vault owner wrote as text only: no element, no link, wrapped inside its table', async () => {
+    asRole('operator');
+    const names = HOSTILE.map((h, i) => kvCertificateFixture({ id: `h${i}`, name: h }));
+    server.use(
+      http.get(`/api/v1/targets/${VAULT_ID}/kv/certificates`, () => HttpResponse.json({ items: names, next_cursor: null })),
+      http.get(`/api/v1/targets/${VAULT_ID}/kv/secrets`, () => HttpResponse.json({ items: HOSTILE.map((h, i) => kvSecretFixture({ id: `s${i}`, name: h, content_type: h })), next_cursor: null })),
+      http.get(`/api/v1/targets/${VAULT_ID}/kv/keys`, () => HttpResponse.json({ items: HOSTILE.map((h, i) => kvKeyFixture({ id: `k${i}`, name: h, key_type: h, curve: h, key_size: 0 })), next_cursor: null })),
+    );
+    await renderRoute(PATH);
+    for (const tab of ['Certificates', 'Keys', 'Secrets']) {
+      await userEvent.click(await screen.findByRole('tab', { name: tab }));
+      const table = await screen.findByRole('table', { name: tab });
+      expect(table.querySelector('img')).toBeNull();
+      expect(table.querySelector('a[href^="javascript"]')).toBeNull();
+      expect(table.textContent).toContain('<img src=x onerror=alert(1)>');
+      expect(table.textContent).toContain('javascript:alert(1)');
+      expect(table.textContent).toContain('\u202Eevil-rtl\u202C');
+      expect(table.closest('[class*="ScrollArea"], [class*="ScrollContainer"]')).not.toBeNull();
+      for (const cell of Array.from(table.querySelectorAll<HTMLElement>('td span[translate="no"], td a'))) {
+        if (cell.textContent?.includes('long-long')) expect(cell.style.overflowWrap).toBe('anywhere');
+      }
+    }
+    expect(document.querySelector('img[src="x"]')).toBeNull();
+  });
+
+  it('shows the truncated-listing warnings of the last check', async () => {
+    asRole('operator', vaultWith({ facts: { ...vaultFixture.facts, warnings: [{ code: 'kv_item_unreadable', params: { object: 'certificates', count: '3' } }, { code: 'kv_listing_empty', params: {} }, { code: 'kv_version_conflict', params: { object: 'certificates', count: '1' } }] } }));
+    await renderRoute(PATH);
+    const warnings = await screen.findAllByTestId('vault-warning');
+    expect(warnings).toHaveLength(3);
+    expect(warnings[0]).toHaveTextContent('could not be read and were left out');
+    expect(warnings[1]).toHaveTextContent('found no certificates in this vault, although Alice knows some');
+    expect(warnings[2]).toHaveTextContent('different thumbprint');
+  });
+
+  it('is complete in Turkish', async () => {
+    asRole('operator', vaultFixture, 'tr');
+    server.use(http.get(`/api/v1/targets/${VAULT_ID}/kv/certificates`, () => HttpResponse.json({ items: certs, next_cursor: null })));
+    await renderRoute(PATH, { languages: ['tr-TR'] });
+    expect(await screen.findByRole('tab', { name: 'Sertifikalar' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Anahtarlar' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Gizli anahtarlar' })).toBeInTheDocument();
+    const table = await screen.findByRole('table', { name: 'Sertifikalar' });
+    expect(within(table).getAllByText('Yalnızca izleme').length).toBeGreaterThan(0);
+    expect(within(table).getByText("Key Vault'tan kaldırıldı")).toBeInTheDocument();
+    expect(within(table).getAllByText('Yeni sürüm bulundu').length).toBeGreaterThan(0);
+    expectNoRawKeys(table);
+  });
+});
+

@@ -1316,7 +1316,7 @@
     "held": "On hold for the license",
     "steps": {
       "verify_current": "Check the current certificate",
-      "kv_secret": "Read the certificate from the vault",
+      "kv_secret": "Read the certificate from Key Vault",
       "backup": "Backup",
       "write": "Write",
       "write_key": "Write the private key",
@@ -1355,7 +1355,14 @@
     },
     "currentStep": "Current step: {{step}}",
     "operation": "Unfinished earlier change on the server (operation ID): {{id}}",
-    "cancelled": "Cancelled"
+    "cancelled": "Cancelled",
+    "source": {
+      "key_vault": "From Key Vault",
+      "upload": "Uploaded"
+    },
+    "sourceLabel": "Source",
+    "vaultLabel": "Vault",
+    "versionLabel": "Vault version"
   },
   "routeError": {
     "title": "Something went wrong",
@@ -1406,7 +1413,8 @@
         "certificate": "Alice signs in with a certificate that you registered for the application in Azure.",
         "client_secret": "Alice signs in with a secret created for the application in Azure. Secrets expire, so enter the date below.",
         "managed_identity": "For Azure virtual machines only. Alice uses the identity of the machine it runs on. Nothing secret is stored."
-      }
+      },
+      "unknown": "Unknown"
     },
     "checking": "Checking that Alice can sign in and reach the vault…",
     "added": "Key Vault added.",
@@ -1500,7 +1508,40 @@
         "state": "State"
       },
       "empty": "No certificates in this vault.",
-      "open": "Open"
+      "open": "Open",
+      "backToVault": "Back to the vault",
+      "policyTitle": "Policy",
+      "exportable": "Private key exportable",
+      "exportableUnknown": "Not read yet",
+      "keyValue": "Key: {{type}}, {{bits}} bits",
+      "issuer": "Issuer",
+      "renews": "Key Vault renews this certificate itself.",
+      "noRenew": "Key Vault does not renew this certificate itself.",
+      "contentType": "Content type",
+      "expires": "Expires",
+      "versionsTitle": "Versions",
+      "noVersions": "Alice has not seen any version yet.",
+      "notExportable": "Monitor only: this certificate's private key cannot be exported, so Alice cannot deploy it.",
+      "detailsPending": "Alice has not read the details of this certificate yet.",
+      "secretsRole": "Alice can monitor this certificate but not read its private key. It needs {{role}}.",
+      "current": "Current",
+      "release": "Release",
+      "releaseNamed": "Release version {{version}}",
+      "releaseTitle": "Release this version?",
+      "releaseHelp": "Releasing deploys nothing. It only lets automatic deployment consider this version.",
+      "releaseAdminOnly": "Only an administrator can deploy or release it.",
+      "released": "Version released.",
+      "deployNamed": "Deploy now: version {{version}}",
+      "vcolumns": {
+        "thumbprint": "Thumbprint",
+        "validFrom": "Valid from",
+        "validTo": "Valid until",
+        "enabled": "Enabled",
+        "found": "Found on",
+        "actions": "Actions",
+        "version": "Version",
+        "state": "State"
+      }
     },
     "keys": {
       "columns": {
@@ -1533,6 +1574,78 @@
     "backToList": "Back to Key Vaults",
     "managedTitle": "Created by Key Vault for a certificate",
     "tableLabel": "Key Vaults",
-    "retypeSecret": "For your safety Alice does not keep what you typed in the secret fields. Enter it again."
+    "retypeSecret": "For your safety Alice does not keep what you typed in the secret fields. Enter it again.",
+    "heldChip": "Held",
+    "connectedChip": "Connected websites",
+    "warningsTitle": "Notes from the last check"
+  },
+  "bindings": {
+    "state": {
+      "not_deployed": "Not deployed yet",
+      "deployed": "Deployed: version {{version}}",
+      "pending": "Waiting to deploy",
+      "failed": "Failed",
+      "stopped": "Stopped after 3 failures"
+    },
+    "stoppedHelp": "Automatic deployment of version {{version}} stopped after 3 failures. Fix the cause, then use Deploy now.",
+    "autoDeployState": {
+      "on": "On",
+      "off": "Off"
+    },
+    "autoDeploySince": "On since {{time}}",
+    "autoDeployConfirmTitle": "Switch on automatic deployment?",
+    "autoDeployOnlyNew": "Only versions found after you switch it on are deployed by themselves.",
+    "autoDeployConfirm": "Switch on",
+    "autoDeployOff": "Switch off",
+    "adminOnly": "Only an administrator can change this.",
+    "checkDeployAccess": "Check deploy access",
+    "deployAccessOk": "Deploy access confirmed",
+    "removeWebsite": "Remove website",
+    "removeNamed": "Remove website: {{site}}",
+    "lastWebsite": "A connection needs at least one website. Delete the connection to release the last one.",
+    "delete": "Delete connection",
+    "deleteTitle": "Delete this connection?",
+    "deleteHelp": "The websites are released and nothing changes on them. Automatic deployment ends.",
+    "addWebsites": "Add websites",
+    "addTitle": "Add websites to this connection",
+    "addAutoWarning": "This connection deploys automatically, so the added websites are put under automatic deployment too.",
+    "none": "No website is connected to this certificate yet.",
+    "columns": {
+      "server": "Server",
+      "path": "Certificate file",
+      "state": "State"
+    },
+    "connectNeedsExport": "Alice cannot deploy this certificate because its private key is not exportable.",
+    "connectHelp": "Choose the websites that should use this certificate. Automatic deployment starts off.",
+    "search": "Search servers and websites",
+    "noLocations": "No website is available for this certificate's key type.",
+    "selectedCount": "Selected: {{count}}",
+    "limit": "Choose at most {{max}} websites.",
+    "refused": "Alice stopped here. Nothing was changed; untick this website or fix it and try again.",
+    "connectedOk": "Websites connected.",
+    "moved": "This connection changed meanwhile. It was read again; check it and try once more.",
+    "deployTitle": "Deploy now",
+    "version": "Version",
+    "versionOption": "{{version}} (found {{date}})",
+    "websites": "Websites",
+    "deploySubmit": "Deploy now",
+    "cannot": {
+      "noDetails": "Alice has not read the details of this version yet.",
+      "disabled": "This version is disabled in Key Vault.",
+      "expired": "This version has expired.",
+      "notYetValid": "This version is not valid yet.",
+      "notExportable": "The private key of this version is not exportable.",
+      "heldAdmin": "This version is held. Only an administrator can deploy it."
+    },
+    "heldDeployNote": "This version is held. Deploying it does not release it; use Release for that.",
+    "confirmChainNeeded": "The certificate chain of this version is incomplete. An administrator can deploy it after confirming the chain.",
+    "noVersions": "There is no version Alice can deploy yet.",
+    "location": "Website",
+    "title": "Connected websites",
+    "connect": "Connect websites",
+    "autoDeploy": "Automatic deployment",
+    "autoDeployHelp": "When Key Vault renews this certificate, Alice deploys the new version to these websites.",
+    "deployNow": "Deploy now",
+    "deployAccessUnchecked": "Deploy access not checked"
   }
 }

@@ -83,6 +83,17 @@ function Row({ d, when }: { d: Deployment; when: string }) {
         <Anchor component={Link} to={`/certificates/${d.certificate_id}`} translate="no">
           {d.certificate_name}
         </Anchor>
+        {d.source === 'key_vault' && (
+          <Text size="xs" data-testid="deployment-source" style={WRAP}>
+            {t('deployments.source.key_vault')} <span translate="no">{d.vault_name}</span>
+            {d.kv_version && (
+              <>
+                {' '}
+                <Code translate="no">{d.kv_version.slice(0, 8)}</Code>
+              </>
+            )}
+          </Text>
+        )}
       </Table.Td>
       <Table.Td>
         <Stack gap={2}>

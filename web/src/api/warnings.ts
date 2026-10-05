@@ -34,6 +34,10 @@ export const WARNING_PARAMS: Readonly<Record<string, readonly string[]>> = {
   list_truncated_uid: ['uid'],
   // Key Vault: items of a listing Alice could not use.
   kv_item_unreadable: ['object', 'count'],
+  // A version Azure reported that Alice knows with another thumbprint; Alice kept what it had.
+  kv_version_conflict: ['object', 'count'],
+  // The certificate listing came back empty although Alice knows certificates (kept until the next check).
+  kv_listing_empty: [],
   // Nginx servers
   nginx_not_found: [],
   nginx_profile_missing: [],

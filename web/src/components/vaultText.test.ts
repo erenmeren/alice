@@ -1,5 +1,5 @@
 import { accessFixture, accessRow, vaultWith } from '../test/fixtures';
-import { isRecentNewVersion, shortVersion, vaultNameOf, vaultStatusKey } from './vaultText';
+import { authKey, isRecentNewVersion, keyTypeParam, shortVersion, vaultNameOf, vaultStatusKey, versionBlock } from './vaultText';
 
 describe('vaultNameOf', () => {
   it('reads the name out of what a person types', () => {
@@ -39,5 +39,26 @@ describe('helpers', () => {
     expect(isRecentNewVersion('2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', now)).toBe(false);
     expect(isRecentNewVersion('2026-09-20T00:00:00Z', '2026-09-01T00:00:00Z', now)).toBe(false);
     expect(isRecentNewVersion(null, '2026-09-01T00:00:00Z', now)).toBe(false);
+  });
+});
+
+describe('keyTypeParam, versionBlock and authKey', () => {
+  it('maps the key types Azure writes to the websites filter', () => {
+    expect([keyTypeParam('RSA'), keyTypeParam('rsa'), keyTypeParam('RSA-HSM'), keyTypeParam('EC'), keyTypeParam('ecdsa'), keyTypeParam('oct'), keyTypeParam('')]).toEqual(['rsa', 'rsa', 'rsa', 'ecdsa', 'ecdsa', '', '']);
+  });
+  it('says why a version cannot be deployed, in the order the API checks', () => {
+    const now = Date.parse('2026-10-05T00:00:00Z');
+    const ok = { certificate_id: 'c', enabled: true, expires: '2030-01-01T00:00:00Z', not_before: '2026-01-01T00:00:00Z', exportable: true as boolean | null };
+    expect(versionBlock(ok, now)).toBeNull();
+    expect(versionBlock({ ...ok, exportable: null }, now)).toBeNull();
+    expect(versionBlock({ ...ok, certificate_id: null, enabled: false }, now)).toBe('noDetails');
+    expect(versionBlock({ ...ok, enabled: false }, now)).toBe('disabled');
+    expect(versionBlock({ ...ok, expires: '2026-10-05T00:00:00Z' }, now)).toBe('expired');
+    expect(versionBlock({ ...ok, not_before: '2026-10-06T00:00:00Z' }, now)).toBe('notYetValid');
+    expect(versionBlock({ ...ok, exportable: false }, now)).toBe('notExportable');
+  });
+  it('shows an unknown sign-in method as Unknown, not as a certificate', () => {
+    expect(authKey('client_secret')).toBe('vaults.auth.client_secret');
+    expect(authKey('')).toBe('enum.unknown');
   });
 });

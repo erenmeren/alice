@@ -369,3 +369,58 @@ describe('DeploymentDetailPage', () => {
     await waitFor(() => expectNoRawKeys());
   });
 });
+
+describe('DeploymentDetailPage from Key Vault', () => {
+  it('shows the kv_secret step first, the vault and the version; an upload shows neither', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('auditor')),
+      http.get('/api/v1/deployments/dv', () =>
+        HttpResponse.json(
+          deploymentDetailFixture({
+            id: 'dv',
+            source: 'key_vault',
+            vault_name: 'Prod vault',
+            kv_version: '0123456789abcdef0123456789abcdef',
+            steps: [stepFixture(1, 'verify_current'), stepFixture(2, 'kv_secret'), stepFixture(3, 'backup')],
+          }),
+        ),
+      ),
+      http.get('/api/v1/deployments/du', () => HttpResponse.json(deploymentDetailFixture({ id: 'du', steps: [stepFixture(1, 'backup')] }))),
+    );
+    const view = await renderRoute('/deployments/dv');
+    const list = await screen.findByRole('list', { name: 'Steps' });
+    const names = within(list).getAllByRole('listitem').map((li) => li.getAttribute('data-step'));
+    expect(names.slice(0, 2)).toEqual(['verify_current', 'kv_secret']);
+    expect(within(list).getByText('Read the certificate from Key Vault')).toBeInTheDocument();
+    expect(screen.getByText('Prod vault')).toBeInTheDocument();
+    expect(screen.getByText('0123456789abcdef0123456789abcdef').tagName).toBe('CODE');
+    expect(screen.getByText('From Key Vault')).toBeInTheDocument();
+    view.unmount();
+    await renderRoute('/deployments/du');
+    const plain = await screen.findByRole('list', { name: 'Steps' });
+    expect(within(plain).queryByText('Read the certificate from Key Vault')).not.toBeInTheDocument();
+  });
+
+  it('names the failed kv_secret step with the missing role in the error', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('auditor')),
+      http.get('/api/v1/deployments/dk', () =>
+        HttpResponse.json(
+          deploymentDetailFixture({
+            id: 'dk',
+            source: 'key_vault',
+            vault_name: 'Prod vault',
+            status: 'failed',
+            result: '',
+            failed_step: 'kv_secret',
+            error: { code: 'ALC-AKV-0003', reason: 'azure.forbidden', params: { role: 'Key Vault Secrets User' } },
+            steps: [stepFixture(1, 'kv_secret', 'failed')],
+          }),
+        ),
+      ),
+    );
+    await renderRoute('/deployments/dk');
+    expect(await screen.findByText('Missing permission in the vault')).toBeInTheDocument();
+    expect(screen.getByText('Read the certificate from Key Vault', { selector: 'span, p' })).toBeInTheDocument();
+  });
+});

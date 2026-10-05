@@ -210,7 +210,7 @@ describe('Nginx deployment, website and fact labels cover the specification and 
     for (const w of nginxOnly) expect(server.has(w), `server warning ${w} has no source`).toBe(true);
     // every Nginx entry of the table is one of those (the rest are the SSH warnings of Phase 3)
     const ssh = new Set(['keys_managed_elsewhere', 'keys_managed_elsewhere_user', 'certificates_in_use', 'pubkey_disabled', 'sshd_unreadable', 'sshd_unreadable_user', 'strict_modes', 'unsupported_path', 'unsupported_path_unnamed', 'file_unreadable', 'file_unparseable', 'file_too_large', 'directory_users_not_listed', 'too_many_users', 'account_name_unsupported', 'account_home_unsupported', 'account_id_unsupported', 'accounts_nul_byte', 'list_truncated_uid']);
-    const keyVault = ['kv_item_unreadable']; // Phase 5: items of a vault listing Alice could not use
+    const keyVault = ['kv_item_unreadable', 'kv_version_conflict', 'kv_listing_empty']; // Phase 5: what a vault poll could not use or doubted (internal/providers/types.go, internal/inventory/kv_prepare.go)
     for (const w of Object.keys(WARNING_PARAMS)) expect(ssh.has(w) || nginxOnly.includes(w) || keyVault.includes(w), `warning ${w} is in no group`).toBe(true);
   });
 

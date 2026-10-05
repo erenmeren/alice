@@ -21,6 +21,8 @@ import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert, StoppedJobAlert } fr
 import { ReplaceCredentialsDialog } from '../components/ReplaceCredentialsDialog';
 import { RoleGuide } from '../components/RoleGuide';
 import { useStepUp } from '../components/StepUpProvider';
+import { VaultInventory } from '../components/VaultInventory';
+import { warningKey } from '../api/warnings';
 import { authKey } from '../components/vaultText';
 import { VaultStatusBadge } from '../components/VaultStatusBadge';
 import { WRAP } from '../components/wrap';
@@ -216,6 +218,14 @@ export function KeyVaultDetailPage() {
       {blocked && <BlockedJobAlert />}
       {stopped && <StoppedJobAlert />}
       <JobErrorAlert error={jobError} />
+
+      {tg.facts.warnings.map((w) => (
+        <Alert key={`${w.code}-${JSON.stringify(w.params)}`} color="yellow" style={WRAP} data-testid="vault-warning">
+          {t(warningKey(w), w.params)}
+          {warningKey(w) === 'warnings.unknown' || warningKey(w) === 'warnings.incomplete' ? <Code ml="xs">{w.code}</Code> : null}
+        </Alert>
+      ))}
+      <VaultInventory vaultId={tg.id} />
 
       <AccessCheckPanel vaultId={tg.id} access={v.access} canOperate={canOperate} />
       <RoleGuide clientId={v.client_id || undefined} vaultName={v.name} openPolicies={v.access?.permission_model === 'access_policy'} />

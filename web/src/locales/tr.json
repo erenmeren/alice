@@ -1316,7 +1316,7 @@
     "held": "Lisans nedeniyle bekletiliyor",
     "steps": {
       "verify_current": "Mevcut sertifikayı denetleme",
-      "kv_secret": "Sertifikayı kasadan okuma",
+      "kv_secret": "Sertifikayı Key Vault'tan oku",
       "backup": "Yedekleme",
       "write": "Yazma",
       "write_key": "Özel anahtarı yazma",
@@ -1355,7 +1355,14 @@
     },
     "currentStep": "Geçerli adım: {{step}}",
     "operation": "Sunucudaki tamamlanmamış önceki değişiklik (işlem kimliği): {{id}}",
-    "cancelled": "İptal edildi"
+    "cancelled": "İptal edildi",
+    "source": {
+      "key_vault": "Key Vault'tan",
+      "upload": "Yüklendi"
+    },
+    "sourceLabel": "Kaynak",
+    "vaultLabel": "Kasa",
+    "versionLabel": "Kasa sürümü"
   },
   "routeError": {
     "title": "Bir sorun oluştu",
@@ -1406,7 +1413,8 @@
         "certificate": "Alice, Azure'da uygulama için kaydettiğiniz bir sertifikayla oturum açar.",
         "client_secret": "Alice, Azure'da uygulama için oluşturulmuş bir gizli anahtarla oturum açar. Gizli anahtarların süresi dolar; bu yüzden aşağıya tarihi girin.",
         "managed_identity": "Yalnızca Azure sanal makineleri için. Alice, üzerinde çalıştığı makinenin kimliğini kullanır. Gizli bir şey saklanmaz."
-      }
+      },
+      "unknown": "Bilinmiyor"
     },
     "checking": "Alice'in oturum açıp kasaya ulaşabildiği denetleniyor…",
     "added": "Key Vault eklendi.",
@@ -1500,7 +1508,40 @@
         "state": "Durum"
       },
       "empty": "Bu kasada sertifika yok.",
-      "open": "Aç"
+      "open": "Aç",
+      "backToVault": "Kasaya dön",
+      "policyTitle": "İlke",
+      "exportable": "Özel anahtar dışa aktarılabilir",
+      "exportableUnknown": "Henüz okunmadı",
+      "keyValue": "Anahtar: {{type}}, {{bits}} bit",
+      "issuer": "Veren",
+      "renews": "Key Vault bu sertifikayı kendisi yeniler.",
+      "noRenew": "Key Vault bu sertifikayı kendisi yenilemez.",
+      "contentType": "İçerik türü",
+      "expires": "Bitiş",
+      "versionsTitle": "Sürümler",
+      "noVersions": "Alice henüz hiçbir sürüm görmedi.",
+      "notExportable": "Yalnızca izleme: bu sertifikanın özel anahtarı dışa aktarılamaz, bu yüzden Alice onu dağıtamaz.",
+      "detailsPending": "Alice bu sertifikanın ayrıntılarını henüz okumadı.",
+      "secretsRole": "Alice bu sertifikayı izleyebilir ancak özel anahtarını okuyamaz. {{role}} rolüne ihtiyacı var.",
+      "current": "Geçerli",
+      "release": "Serbest bırak",
+      "releaseNamed": "{{version}} sürümünü serbest bırak",
+      "releaseTitle": "Bu sürüm serbest bırakılsın mı?",
+      "releaseHelp": "Serbest bırakmak hiçbir şeyi dağıtmaz. Yalnızca otomatik dağıtımın bu sürümü dikkate almasına izin verir.",
+      "releaseAdminOnly": "Yalnızca bir yönetici dağıtabilir veya serbest bırakabilir.",
+      "released": "Sürüm serbest bırakıldı.",
+      "deployNamed": "Şimdi dağıt: {{version}} sürümü",
+      "vcolumns": {
+        "thumbprint": "Parmak izi",
+        "validFrom": "Geçerlilik başlangıcı",
+        "validTo": "Geçerlilik bitişi",
+        "enabled": "Etkin",
+        "found": "Bulunma tarihi",
+        "actions": "İşlemler",
+        "version": "Sürüm",
+        "state": "Durum"
+      }
     },
     "keys": {
       "columns": {
@@ -1533,6 +1574,78 @@
     "backToList": "Key Vault kasalarına dön",
     "managedTitle": "Key Vault tarafından bir sertifika için oluşturuldu",
     "tableLabel": "Key Vault kasaları",
-    "retypeSecret": "Güvenliğiniz için Alice, gizli alanlara yazdıklarınızı saklamaz. Yeniden girin."
+    "retypeSecret": "Güvenliğiniz için Alice, gizli alanlara yazdıklarınızı saklamaz. Yeniden girin.",
+    "heldChip": "Tutuluyor",
+    "connectedChip": "Bağlı web siteleri",
+    "warningsTitle": "Son denetimden notlar"
+  },
+  "bindings": {
+    "state": {
+      "not_deployed": "Henüz dağıtılmadı",
+      "deployed": "Dağıtıldı: sürüm {{version}}",
+      "pending": "Dağıtım bekliyor",
+      "failed": "Başarısız",
+      "stopped": "3 başarısızlıktan sonra durduruldu"
+    },
+    "stoppedHelp": "{{version}} sürümünün otomatik dağıtımı 3 başarısızlıktan sonra durdu. Nedenini giderin, ardından Şimdi dağıt'ı kullanın.",
+    "autoDeployState": {
+      "on": "Açık",
+      "off": "Kapalı"
+    },
+    "autoDeploySince": "{{time}} tarihinden beri açık",
+    "autoDeployConfirmTitle": "Otomatik dağıtım açılsın mı?",
+    "autoDeployOnlyNew": "Yalnızca siz açtıktan sonra bulunan sürümler kendiliğinden dağıtılır.",
+    "autoDeployConfirm": "Aç",
+    "autoDeployOff": "Kapat",
+    "adminOnly": "Bunu yalnızca bir yönetici değiştirebilir.",
+    "checkDeployAccess": "Dağıtım erişimini denetle",
+    "deployAccessOk": "Dağıtım erişimi doğrulandı",
+    "removeWebsite": "Web sitesini kaldır",
+    "removeNamed": "Web sitesini kaldır: {{site}}",
+    "lastWebsite": "Bir bağlantı için en az bir web sitesi gerekir. Son siteyi serbest bırakmak için bağlantıyı silin.",
+    "delete": "Bağlantıyı sil",
+    "deleteTitle": "Bu bağlantı silinsin mi?",
+    "deleteHelp": "Web siteleri serbest bırakılır ve onlarda hiçbir şey değişmez. Otomatik dağıtım sona erer.",
+    "addWebsites": "Web sitesi ekle",
+    "addTitle": "Bu bağlantıya web siteleri ekleyin",
+    "addAutoWarning": "Bu bağlantı otomatik dağıtım yapıyor; bu yüzden eklenen web siteleri de otomatik dağıtıma alınır.",
+    "none": "Bu sertifikaya henüz bağlı web sitesi yok.",
+    "columns": {
+      "server": "Sunucu",
+      "path": "Sertifika dosyası",
+      "state": "Durum"
+    },
+    "connectNeedsExport": "Özel anahtarı dışa aktarılamadığı için Alice bu sertifikayı dağıtamaz.",
+    "connectHelp": "Bu sertifikayı kullanacak web sitelerini seçin. Otomatik dağıtım kapalı başlar.",
+    "search": "Sunucularda ve web sitelerinde ara",
+    "noLocations": "Bu sertifikanın anahtar türü için uygun web sitesi yok.",
+    "selectedCount": "Seçilen: {{count}}",
+    "limit": "En fazla {{max}} web sitesi seçin.",
+    "refused": "Alice burada durdu. Hiçbir şey değişmedi; bu web sitesinin işaretini kaldırın veya düzeltip yeniden deneyin.",
+    "connectedOk": "Web siteleri bağlandı.",
+    "moved": "Bu bağlantı bu sırada değişti. Yeniden okundu; denetleyip bir kez daha deneyin.",
+    "deployTitle": "Şimdi dağıt",
+    "version": "Sürüm",
+    "versionOption": "{{version}} ({{date}} tarihinde bulundu)",
+    "websites": "Web siteleri",
+    "deploySubmit": "Şimdi dağıt",
+    "cannot": {
+      "noDetails": "Alice bu sürümün ayrıntılarını henüz okumadı.",
+      "disabled": "Bu sürüm Key Vault'ta devre dışı.",
+      "expired": "Bu sürümün süresi doldu.",
+      "notYetValid": "Bu sürüm henüz geçerli değil.",
+      "notExportable": "Bu sürümün özel anahtarı dışa aktarılamaz.",
+      "heldAdmin": "Bu sürüm tutuluyor. Yalnızca bir yönetici dağıtabilir."
+    },
+    "heldDeployNote": "Bu sürüm tutuluyor. Dağıtmak onu serbest bırakmaz; bunun için Serbest bırak'ı kullanın.",
+    "confirmChainNeeded": "Bu sürümün sertifika zinciri eksik. Bir yönetici zinciri onaylayarak dağıtabilir.",
+    "noVersions": "Alice'in dağıtabileceği bir sürüm henüz yok.",
+    "location": "Web sitesi",
+    "title": "Bağlı web siteleri",
+    "connect": "Web sitelerine bağla",
+    "autoDeploy": "Otomatik dağıtım",
+    "autoDeployHelp": "Key Vault bu sertifikayı yenilediğinde Alice yeni sürümü bu web sitelerine dağıtır.",
+    "deployNow": "Şimdi dağıt",
+    "deployAccessUnchecked": "Dağıtım erişimi denetlenmedi"
   }
 }

@@ -143,7 +143,7 @@ export function DeploymentDetailPage() {
       <Title order={2} size="h3">
         {t('deployments.stepsTitle')}
       </Title>
-      <DeploymentSteps steps={d.steps} status={d.status} detailed />
+      <DeploymentSteps steps={d.steps} status={d.status} detailed vault={d.source === 'key_vault'} />
 
       {d.previous_fingerprint !== '' && <LabelledCode text={t('deployments.previous', { fingerprint: '' })} value={d.previous_fingerprint} />}
       {d.new_fingerprint !== '' && <LabelledCode text={t('deployments.new', { fingerprint: '' })} value={d.new_fingerprint} />}
@@ -154,6 +154,25 @@ export function DeploymentDetailPage() {
             {d.certificate_name}
           </Anchor>
         </Fact>
+        {d.source === 'key_vault' && (
+          <>
+            <Fact label={t('deployments.sourceLabel')}>
+              <Text size="sm">{t('deployments.source.key_vault')}</Text>
+            </Fact>
+            <Fact label={t('deployments.vaultLabel')}>
+              <span translate="no" style={WRAP}>
+                {d.vault_name}
+              </span>
+            </Fact>
+            {d.kv_version && (
+              <Fact label={t('deployments.versionLabel')}>
+                <Code translate="no" style={WRAP}>
+                  {d.kv_version}
+                </Code>
+              </Fact>
+            )}
+          </>
+        )}
         <Fact label={t('deployments.serverLabel')}>
           <Anchor component={Link} to={`/servers/${d.target_id}`} translate="no" style={WRAP}>
             {d.target_name}

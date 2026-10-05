@@ -47,6 +47,12 @@ export const SCREENS: Screen[] = [
   { path: `/servers/${targetFixture.id}`, session: sessionFor('operator'), status: installedStatus, ready: { en: 'deploy@laptop', tr: 'deploy@laptop' } },
   { path: '/key-vaults', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Add Key Vault', tr: 'Key Vault ekle' } },
   { path: `/key-vaults/${vaultFixture.id}`, session: sessionFor('operator'), status: installedStatus, ready: { en: 'Roles Alice needs', tr: "Alice'in ihtiyaç duyduğu roller" } },
+  {
+    path: `/key-vaults/${vaultFixture.id}/certificates/0192d000-0000-7000-8000-0000000000c1`,
+    session: sessionFor('operator'),
+    status: installedStatus,
+    ready: { en: 'Versions', tr: 'Sürümler' },
+  },
   { path: '/ssh-keys', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'deploy@laptop', tr: 'deploy@laptop' } },
   {
     path: '/ssh-keys/0192b000-0000-7000-8000-0000000000k1',

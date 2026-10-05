@@ -19,6 +19,13 @@ import {
   targetFixture,
   userFor,
   vaultFixture,
+  VAULT_ID,
+  KV_CERT_ID,
+  BINDING_ID,
+  bindingFixture,
+  kvCertificateDetailFixture,
+  kvCertificateFixture,
+  kvVersionFixture,
 } from './test/fixtures';
 import { expectNoRawKeys } from './test/i18nAssert';
 import { renderRoute } from './test/render';
@@ -99,6 +106,17 @@ const dataHandlers = [
       }),
     ),
   ),
+  http.get(`/api/v1/targets/${VAULT_ID}/kv/certificates/${KV_CERT_ID}`, () =>
+    HttpResponse.json(
+      kvCertificateDetailFixture({
+        bound: true,
+        binding: { id: BINDING_ID, auto_deploy: true, auto_since: '2026-10-04T08:00:00Z', stopped_version: '', location_count: 1, version: 2, created_at: '' },
+        versions: [kvVersionFixture({ held: true, held_reason: 'license' }), kvVersionFixture({ id: 'v0', version: 'bbbbbbbb22222222bbbbbbbb22222222', held: true, held_reason: 'incomplete_chain' })],
+      }),
+    ),
+  ),
+  http.get(`/api/v1/targets/${VAULT_ID}/kv/certificates`, () => HttpResponse.json({ items: [kvCertificateFixture({ bound: true, exportable: false, missing_since: '2026-10-01T00:00:00Z' })], next_cursor: null })),
+  http.get(`/api/v1/bindings/${BINDING_ID}`, () => HttpResponse.json(bindingFixture({ auto_deploy: true }))),
   http.get('/api/v1/audit', () => HttpResponse.json({ items: [auditEntry], next_cursor: null })),
 ];
 

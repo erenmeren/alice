@@ -98,3 +98,25 @@ describe('DeploymentsPage', () => {
     expectNoRawKeys();
   });
 });
+
+describe('DeploymentsPage from Key Vault', () => {
+  it('shows "From Key Vault", the vault name and the version for a vault deployment, and nothing for an upload', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('auditor')),
+      http.get('/api/v1/deployments', () =>
+        HttpResponse.json({
+          items: [
+            deploymentFixture({ id: 'dv', source: 'key_vault', binding_id: 'b1', vault_name: 'Prod vault', kv_version: '0123456789abcdef0123456789abcdef' }),
+            deploymentFixture({ id: 'du', certificate_name: 'upload.example.test' }),
+          ],
+          next_cursor: null,
+        }),
+      ),
+    );
+    await renderRoute('/deployments');
+    const sources = await screen.findAllByTestId('deployment-source');
+    expect(sources).toHaveLength(1);
+    expect(sources[0]).toHaveTextContent('From Key Vault Prod vault 01234567');
+    expect(within(sources[0]).getByText('01234567').tagName).toBe('CODE');
+  });
+});

@@ -16,7 +16,9 @@ const GROUPS: { id: string; members: string[] }[] = [
   { id: 'reload', members: ['reload'] },
   { id: 'verify', members: ['verify'] },
 ];
-const GROUPED = new Set(['verify_current', ...GROUPS.flatMap((g) => g.members)]);
+// kv_secret is the first step of a Key Vault deployment (the certificate is read from the vault before
+// anything reaches the server); it has a row only when the deployment came from a vault.
+const GROUPED = new Set(['verify_current', 'kv_secret', ...GROUPS.flatMap((g) => g.members)]);
 
 type Shown = 'started' | 'ok' | 'failed' | 'skipped' | 'waiting' | 'notRun' | 'unknown';
 
@@ -116,11 +118,12 @@ interface Row {
 // DeploymentSteps lists the steps of one deployment with a status each; icons never carry the
 // meaning alone, every row says it in words. The list is not a live region itself: the screen that
 // owns it announces the overall state.
-export function DeploymentSteps({ steps, status, detailed = false }: { steps: DeploymentStep[]; status: DeploymentStatus | ''; detailed?: boolean }) {
+export function DeploymentSteps({ steps, status, detailed = false, vault = false }: { steps: DeploymentStep[]; status: DeploymentStatus | ''; detailed?: boolean; vault?: boolean }) {
   const { t } = useTranslation();
   const ended = FINAL_STATUSES.has(status);
   const rows: Row[] = [];
   if (detailed) rows.push({ id: 'verify_current', label: t('deployments.steps.verify_current'), status: singleStatus(steps, 'verify_current', ended), detail: lastOf(steps, 'verify_current') });
+  if (vault || steps.some((s) => s.name === 'kv_secret')) rows.push({ id: 'kv_secret', label: t('deployments.steps.kv_secret'), status: singleStatus(steps, 'kv_secret', ended), detail: lastOf(steps, 'kv_secret') });
   for (const g of GROUPS) {
     rows.push({
       id: g.id,
