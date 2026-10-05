@@ -165,3 +165,17 @@ func MaxAttemptsFor(t Type) int {
 func AlertsWhenExhausted(t Type) bool {
 	return t.Name != inventory.JobDeployRecover && t.Name != inventory.JobKVPoll
 }
+
+// maxRunning is the concurrency cap of a job type: the runner claims no job of the type while that many
+// of them are running (in any process: the count is the jobs table's). A type that is not listed has no
+// cap. A poll of a vault is capped at inventory.MaxConcurrentKVPolls (ruling S12): a poll beyond the cap
+// stays queued, with its attempt unspent, instead of occupying a worker that waits for the poll slot while
+// deployments, imports and access checks wait behind it. The poll's own slot (inventory.AcquireKVPoll)
+// stays as the backstop.
+var maxRunning = map[string]int{inventory.JobKVPoll: inventory.MaxConcurrentKVPolls}
+
+// MaxRunningFor returns the concurrency cap of the job type (false: none).
+func MaxRunningFor(t Type) (int, bool) {
+	n, ok := maxRunning[t.Name]
+	return n, ok
+}

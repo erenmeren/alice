@@ -277,6 +277,7 @@ func (r *Runner) claim(ctx context.Context) (*claimed, error) {
 		}
 		classes = []string{license.ClassAlways.String()}
 	}
+	capTypes, capMax := capTable()
 	var c *claimed
 	err := db.InTx(ctx, r.cfg.Pool, func(tx pgx.Tx) error {
 		skip := []uuid.UUID{} // never nil: ANY(NULL) would exclude every row
@@ -290,18 +291,33 @@ func (r *Runner) claim(ctx context.Context) (*claimed, error) {
 FROM jobs j
 WHERE status = 'queued' AND run_at <= $1 AND class = ANY($2) AND type = ANY($3) AND NOT (id = ANY($4::uuid[]))
   AND attempts < max_attempts
+  AND NOT EXISTS (SELECT 1 FROM unnest($5::text[], $6::int[]) AS cap(type, max_running)
+                  WHERE cap.type = j.type AND (SELECT count(*) FROM jobs o WHERE o.type = cap.type AND o.status = 'running') >= cap.max_running)
   AND (target_id IS NULL OR (
         NOT EXISTS (SELECT 1 FROM target_locks l WHERE l.target_id = j.target_id AND l.lease_until > $1)
     AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.target_id = j.target_id AND o.status = 'running')))
 ORDER BY priority, run_at, id
 FOR UPDATE SKIP LOCKED
-LIMIT 1`, now, classes, types, skip).Scan(&cand.id, &cand.typ, &cand.kind, &cand.payload, &cand.mac, &target,
+LIMIT 1`, now, classes, types, skip, capTypes, capMax).Scan(&cand.id, &cand.typ, &cand.kind, &cand.payload, &cand.mac, &target,
 				&attempts, &maxAtt, &by, &cand.role)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
 			if err != nil {
 				return fmt.Errorf("jobs: select a job: %w", err)
+			}
+			if limit, capped := maxRunning[cand.typ]; capped {
+				// Two claims can both have seen a free place: the count is taken again under a lock per
+				// type, so the cap holds across workers and processes (the winner's running row is
+				// committed before the next claim of the type gets the lock).
+				full, err := capFull(ctx, tx, cand.typ, limit)
+				if err != nil {
+					return err
+				}
+				if full {
+					skip = append(skip, cand.id)
+					continue
+				}
 			}
 			cand.token = r.cfg.WorkerID + "/" + uuid.Must(uuid.NewV7()).String()
 			if target != nil {
@@ -344,6 +360,28 @@ WHERE id = $1`, cand.id, cand.token, now.Add(r.cfg.Lease), now); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// capTable is maxRunning as the two arrays the claim query takes.
+func capTable() ([]string, []int32) {
+	types, limits := []string{}, []int32{}
+	for t, n := range maxRunning {
+		types, limits = append(types, t), append(limits, int32(n))
+	}
+	return types, limits
+}
+
+// capFull takes the type's claim lock for the rest of the transaction and reports whether limit jobs of the
+// type are running.
+func capFull(ctx context.Context, tx pgx.Tx, typ string, limit int) (bool, error) {
+	var running int
+	if err := tx.QueryRow(ctx, `SELECT pg_advisory_xact_lock(hashtext('jobs.claim.cap.' || $1::text))`, typ).Scan(new(any)); err != nil {
+		return false, fmt.Errorf("jobs: lock the claims of %s: %w", typ, err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM jobs WHERE type = $1 AND status = 'running'", typ).Scan(&running); err != nil {
+		return false, fmt.Errorf("jobs: count the running %s jobs: %w", typ, err)
+	}
+	return running >= limit, nil
 }
 
 // sweepIfDue runs the lock-mode sweep at most once per Poll interval for the whole runner (not
