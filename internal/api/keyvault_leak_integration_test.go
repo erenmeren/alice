@@ -56,7 +56,9 @@ func cuts(text string, w, step int) []string {
 }
 
 // needlesOf are the spellings and the cut pieces of buf: for the byte alignments 0, 1 and 2 (the buffer without its
-// first a bytes: what a leak that encodes a slice prints), in every encoding, whole and in pieces of 48 characters.
+// first a bytes: what a leak that encodes a slice prints), in every encoding, whole and in pieces of 48 characters
+// taken every max(48, len/40) characters (a leak is caught when it contains one whole piece: any window of at least
+// step+48 characters does; the step grows with the text only to bound the number of needles).
 // A needle that is also found in the public material (certificates the scenario holds in the clear: a private key's
 // DER repeats the public key) is dropped, so it cannot make a legitimate row look like a leak.
 func needlesOf(buf []byte, public []string) []string {
@@ -287,18 +289,24 @@ type leakCase struct {
 	vault  string
 	secs   []secretValue
 	tokens map[string]bool
+	// sentPFX is the PFX the import sent (for the scanner's non-vacuity check).
+	sentPFX []byte
 }
 
 func (c *leakCase) add(secs ...secretValue) { c.secs = append(c.secs, secs...) }
 
-// token adds the access tokens the fake issued so far as canaries (read from the fake: the only party that knows them).
+// token adds every access token the harness has seen the fake issue (it samples the fake's newest token after every
+// session open and every job: the fake keeps no list) as a canary, with the signature segment as a needle of its own.
 func (c *leakCase) token() {
-	if tok := c.k.kv.LastAccessToken(); tok != "" && !c.tokens[tok] {
+	for _, tok := range c.k.issuedTokens() {
+		if c.tokens[tok] {
+			continue
+		}
 		c.tokens[tok] = true
 		c.add(textCanary("access token", tok))
-		parts := strings.Split(tok, ".")
-		if len(parts) == 3 {
+		if parts := strings.Split(tok, "."); len(parts) == 3 {
 			c.add(secretValue{name: "access token signature", forms: []string{parts[2]}})
+			c.add(secretValue{name: "access token claims", forms: []string{parts[1]}})
 		}
 	}
 }
@@ -362,6 +370,8 @@ func TestSecretLeakSuiteWithAzureCanaries(t *testing.T) {
 	}
 	assert.Equal(t, pki.Fingerprint(k.kv.Leaf("web-cert", webV)), k.f.served(wwwName))
 	assert.Equal(t, pki.Fingerprint(k.kv.Leaf("pem-cert", pemV)), b.served(apiName))
+	assert.Equal(t, 2, strings.Count(string(k.f.emu.NginxFile(wwwCert)), "BEGIN CERTIFICATE"), "PFX deployment: leaf and intermediate installed")
+	assert.Equal(t, 2, strings.Count(string(b.emu.NginxFile(apiCert)), "BEGIN CERTIFICATE"), "PEM deployment: leaf and intermediate installed")
 	assert.Equal(t, managedKeys, k.count("managed_private_keys"), "a Key Vault deployment seals no private key of its own")
 	assert.Equal(t, 2, secretReads(k.kv))
 	c.after("J2 deployments of a PFX and a PEM secret")
@@ -440,8 +450,6 @@ WHERE target_id = $1 AND kind = 'azure_sp_secret'`, vault)
 	k.kv.RevokeRole("certificates/list") // F-40
 	k.checkNow(vault)
 	k.kv.GrantRole("certificates/list")
-	k.kv.ExpireSecret() // F-49 (the certificate sign-in is unaffected: the secret is not used)
-	k.kv.RestoreSecret()
 	k.kv.Firewall("203.0.113.7") // F-51
 	k.checkNow(vault)
 	k.kv.Firewall("")
@@ -466,7 +474,6 @@ WHERE target_id = $1 AND kind = 'azure_sp_secret'`, vault)
 	certID := k.uploadCertificate(k.op, certBody(up, "To import"))
 	im := k.requestImport(certID, vault, "imported-cert", false)
 	require.Equal(t, "succeeded", im.State, "%+v", im)
-	c.add(pfxCanaries(t, "imported PFX", k.kv.SecretValue("imported-cert", im.Version), up.Cert)...)
 	echo2 := textCanary("canary in an import's 403 body", canaryText("import-403"))
 	c.add(echo2)
 	k.kv.FailNext("/certificates/leaky-cert/import", fakekv.Fault{Status: http.StatusForbidden,
@@ -474,6 +481,19 @@ WHERE target_id = $1 AND kind = 'azure_sp_secret'`, vault)
 	imF := k.requestImport(certID, vault, "leaky-cert", false)
 	assert.Equal(t, "failed", imF.State)
 	assert.Equal(t, "ALC-AKV-0003", imF.errCode())
+
+	// The PFXs Alice SENT (captured from the session before the provider call; the fake re-encodes its own copy with
+	// fresh salts, which would be a different byte string): as buffers in every encoding, cut at several offsets, and as
+	// the base64 text a careless log line would print.
+	sent := k.sentPFXs()
+	require.Len(t, sent, 2, "two imports were sent")
+	for i, buf := range sent {
+		require.NotEmpty(t, buf)
+		c.add(binaryCanary(fmt.Sprintf("sent PFX %d (buffer)", i), buf))
+		c.add(textCanary(fmt.Sprintf("sent PFX %d (base64 text)", i), base64.StdEncoding.EncodeToString(buf)))
+		c.add(textCanary(fmt.Sprintf("sent PFX %d (base64url text)", i), base64.URLEncoding.EncodeToString(buf)))
+	}
+	c.sentPFX = sent[0]
 	c.after("J5 import")
 
 	// Credentials rows hold ciphertext only: no PEM marker, no canary (the scan above), and no PEM marker anywhere in

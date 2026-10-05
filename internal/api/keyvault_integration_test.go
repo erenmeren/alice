@@ -4,6 +4,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,7 +121,7 @@ func TestKeyVaultJourney(t *testing.T) {
 		certPEM, keyPEM := w.f.emu.NginxFile(w.cert), w.f.emu.NginxFile(w.key)
 		require.NotEmpty(t, keyPEM)
 		assert.Equal(t, pki.Fingerprint(want), w.f.served(w.sn), "the website serves the renewed leaf")
-		assert.Contains(t, string(certPEM), "BEGIN CERTIFICATE")
+		assert.Equal(t, 2, strings.Count(string(certPEM), "BEGIN CERTIFICATE"), "the installed file holds the leaf and the vault's intermediate")
 		assert.Equal(t, 1, w.f.emu.DeployCount())
 	}
 

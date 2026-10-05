@@ -269,6 +269,7 @@ func TestL87KeyVaultPollInFlightAtLock(t *testing.T) {
 	// while a request is in flight would end the poll as over budget, which is the provider's rule and not L-87).
 	k.pass(k.license.Snapshot().Eval.LocksAt.Sub(k.clock.Now()) - 3*time.Minute)
 
+	k.kv.ClearRequests()
 	release := k.kv.Hold("/certificates")
 	rec := k.op.do(http.MethodPost, "/api/v1/targets/"+vault+"/actions/discover", nil)
 	requireStatus(t, rec, http.StatusAccepted)
@@ -284,10 +285,15 @@ func TestL87KeyVaultPollInFlightAtLock(t *testing.T) {
 	require.True(t, k.license.Snapshot().Eval.Locked())
 	k.signIn(k.admin, k.adminAcct)
 	k.signIn(k.op, k.opAcct)
-	reqs := len(k.kv.Requests())
 	release()
 	require.NoError(t, <-done)
-	require.GreaterOrEqual(t, len(k.kv.Requests()), reqs)
+	// After the held request finished, the poll ran to its end (keys, secrets); from then on, in lock, nothing else
+	// reaches the vault: the scheduled work is refused and no job is due.
+	afterPoll := len(k.kv.Requests())
+	assert.Equal(t, 1, countAuthed(k.kv, "/certificates"), "the poll made its one certificates listing, the one that was held")
+	assert.Error(t, k.kvScheduler().RunNow(context.Background(), "kv.schedule"))
+	k.runKV()
+	assert.Equal(t, afterPoll, len(k.kv.Requests()), "no new request to the vault after the lock")
 
 	assert.Equal(t, "succeeded", k.job(k.admin, pollJob)["status"], "a read-only job in flight finishes in lock")
 	// The result was stored: the new version is known; nothing was deployed from it, in lock or after.

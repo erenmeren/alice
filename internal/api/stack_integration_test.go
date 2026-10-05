@@ -116,6 +116,9 @@ type stack struct {
 	handler     http.Handler
 	api         *Server // the server behind handler as start built it (denial summaries, AUD-06)
 	setupCode   string
+	tokMu       sync.Mutex // guards toks and sentPFX (keyvault_harness_integration_test.go)
+	toks        map[string]bool
+	sentPFX     [][]byte
 	closePanics atomic.Bool    // the Key Vault provider's sessions panic when closed (keyvault_harness_integration_test.go)
 	kv          *fakekv.Server // the fake Azure service behind the real azurekv provider (nil: no Key Vault in this stack)
 

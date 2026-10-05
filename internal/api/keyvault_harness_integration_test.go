@@ -43,6 +43,11 @@ import (
 // kvVaultHost is the host name of the fake's vault.
 func kvVaultHost(kv *fakekv.Server) string { return strings.TrimPrefix(kv.VaultURL(), "https://") }
 
+// hostIs reports whether a logged request host is name, with or without the default port.
+func hostIs(logged, name string) bool {
+	return strings.EqualFold(strings.TrimSuffix(logged, ":443"), strings.TrimSuffix(name, ":443"))
+}
+
 // azureProvider is the real provider wired to the stack's fake Azure service.
 func (s *stack) azureProvider() providers.Provider {
 	kv := s.kv
@@ -66,10 +71,63 @@ type azureWrapped struct {
 
 func (p *azureWrapped) Open(ctx context.Context, t providers.TargetRef, c providers.CredentialSource, e providers.Env) (providers.Session, error) {
 	sess, err := p.Provider.Open(ctx, t, c, e)
-	if err != nil || !p.s.closePanics.Load() {
+	if err != nil {
 		return sess, err
 	}
-	return panicOnClose{Session: sess}, nil
+	p.s.sampleTokens()
+	sess = capturingSession{Session: sess, s: p.s}
+	if p.s.closePanics.Load() {
+		return panicOnClose{Session: sess}, nil
+	}
+	return sess, nil
+}
+
+// capturingSession records the PFX bytes an import SENDS (copied before the provider call: the caller zeroes the
+// request afterwards), the one place the bytes Alice builds can be seen.
+type capturingSession struct {
+	providers.Session
+	s *stack
+}
+
+func (c capturingSession) ImportCertificate(ctx context.Context, req providers.ImportRequest, log providers.StepLogger) (providers.ImportResult, error) {
+	c.s.tokMu.Lock()
+	c.s.sentPFX = append(c.s.sentPFX, append([]byte(nil), req.PFX.Bytes()...))
+	c.s.tokMu.Unlock()
+	return c.Session.ImportCertificate(ctx, req, log)
+}
+
+// sampleTokens remembers the newest access token the fake issued: the fake exposes only the last one, so the harness
+// samples after every session open and every job, which sees each token of a one-session job.
+func (s *stack) sampleTokens() {
+	if s.kv == nil {
+		return
+	}
+	if tok := s.kv.LastAccessToken(); tok != "" {
+		s.tokMu.Lock()
+		if s.toks == nil {
+			s.toks = map[string]bool{}
+		}
+		s.toks[tok] = true
+		s.tokMu.Unlock()
+	}
+}
+
+// issuedTokens are the tokens sampled so far; sentPFXs the PFX buffers sent so far.
+func (s *stack) issuedTokens() []string {
+	s.sampleTokens()
+	s.tokMu.Lock()
+	defer s.tokMu.Unlock()
+	var out []string
+	for t := range s.toks {
+		out = append(out, t)
+	}
+	return out
+}
+
+func (s *stack) sentPFXs() [][]byte {
+	s.tokMu.Lock()
+	defer s.tokMu.Unlock()
+	return append([][]byte(nil), s.sentPFX...)
 }
 
 type panicOnClose struct{ providers.Session }
@@ -151,10 +209,11 @@ func (k *kvnj) addVault(name string) string {
 // runKV drives the due jobs (the harness's own runJobs).
 func (s *stack) runKV() int { return s.runKVDriven() }
 
-// runKVDriven drives the due jobs. The provider waits on the stack's clock (its per-vault limiter between
-// requests, a throttled answer's Retry-After), so while a job runs a goroutine moves the clock one second whenever
-// the fake Azure service saw no new request for a few milliseconds (the provider is waiting, not working).
-// Deployments never go through it (settle), so their timing stays under the test's control.
+// runKVDriven drives the due jobs. The provider waits on the stack's clock (its per-vault limiter between requests, a
+// throttled answer's Retry-After): while a job runs, a waiter goroutine blocks until the clock has a pending timer
+// (clock.Fake.BlockUntil: the provider is waiting, nothing else) and the clock then moves exactly one second. The
+// number of advances is therefore the number of waits the provider made (times the wait's length in seconds), not a
+// property of wall time. Deployments never go through it (settle), so their timing stays under the test's control.
 func (s *stack) runKVDriven() int {
 	s.t.Helper()
 	total := 0
@@ -166,30 +225,18 @@ func (s *stack) runKVDriven() int {
 			defer close(done)
 			ran, err = s.runner.RunOnce(context.Background())
 		}()
-		tick := time.NewTicker(2 * time.Millisecond)
-		last, still := -1, 0
 	wait:
 		for {
+			ready := make(chan struct{}, 1)
+			go func() { s.clock.BlockUntil(1, 0); ready <- struct{}{} }()
 			select {
 			case <-done:
 				break wait
-			case <-tick.C:
-				n := 0
-				if s.kv != nil {
-					n = len(s.kv.Requests())
-				}
-				if n == last {
-					still++
-				} else {
-					last, still = n, 0
-				}
-				if still >= 3 {
-					s.clock.Advance(time.Second)
-					still = 0
-				}
+			case <-ready:
+				s.clock.Advance(time.Second)
 			}
 		}
-		tick.Stop()
+		s.sampleTokens()
 		require.NoError(s.t, err)
 		if !ran {
 			return total
@@ -281,7 +328,7 @@ func itoa(n int) string { return strconv.Itoa(n) }
 func vaultRequests(kv *fakekv.Server) []fakekv.Request {
 	var out []fakekv.Request
 	for _, r := range kv.Requests() {
-		if r.Host == kvVaultHost(kv) {
+		if hostIs(r.Host, kvVaultHost(kv)) {
 			out = append(out, r)
 		}
 	}
@@ -292,7 +339,7 @@ func vaultRequests(kv *fakekv.Server) []fakekv.Request {
 func secretReads(kv *fakekv.Server) int {
 	n := 0
 	for _, r := range kv.Requests() {
-		if r.Host == kvVaultHost(kv) && r.HadAuth && r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/secrets/") {
+		if hostIs(r.Host, kvVaultHost(kv)) && r.HadAuth && r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/secrets/") {
 			n++
 		}
 	}
@@ -515,4 +562,15 @@ func kvMarshal(t *testing.T, v any) []byte {
 	b, err := json.Marshal(v)
 	require.NoError(t, err)
 	return b
+}
+
+// countAuthed counts the authenticated vault requests of a path (not counting the SDK's unauthenticated probe).
+func countAuthed(kv *fakekv.Server, path string) int {
+	n := 0
+	for _, r := range vaultRequests(kv) {
+		if r.HadAuth && r.Path == path {
+			n++
+		}
+	}
+	return n
 }

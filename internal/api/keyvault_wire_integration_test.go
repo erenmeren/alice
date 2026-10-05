@@ -55,7 +55,8 @@ func TestKVDeploymentSecretReadOverTheWire(t *testing.T) {
 	}{
 		{name: "403 on the secret: Key Vault Secrets User missing", inject: func(k *kvnj, _ string) { k.kv.RevokeRole("secrets/get") },
 			code: "ALC-AKV-0003", reason: "azure.forbidden", params: map[string]string{"role": "Key Vault Secrets User"}},
-		{name: "vault firewall", inject: func(k *kvnj, _ string) { k.kv.Firewall("203.0.113.7") }, code: "ALC-AKV-0004", reason: "azure.firewall"},
+		{name: "vault firewall", inject: func(k *kvnj, _ string) { k.kv.Firewall("203.0.113.7") }, code: "ALC-AKV-0004", reason: "azure.firewall",
+			params: map[string]string{"client_address": "203.0.113.7"}},
 		{name: "version disabled before the read", inject: func(k *kvnj, v string) { k.kv.DisableVersion("web-cert", v) }, code: "ALC-AKV-0014", reason: "kv.version_disabled"},
 		{name: "certificate deleted before the read", inject: func(k *kvnj, _ string) { k.kv.DeleteCertificate("web-cert") }, code: "ALC-AKV-0015", reason: "kv.certificate_not_found"},
 		{name: "200 without a private key (policy flipped)", inject: func(k *kvnj, _ string) { k.kv.SetExportable("web-cert", false) },
@@ -113,8 +114,7 @@ WHERE target_id = $1 AND purpose = 'azure_vault'`, vault)
 		require.NoError(t, err)
 		d := k.settleKV(k.op, dep.ID)
 		assert.Equal(t, "failed", d.Status, "%+v", d)
-		assert.NotEmpty(t, d.errorCode())
-		t.Logf("a damaged vault credential ends the deployment with %s %v", d.errorCode(), d.Error)
+		assert.Equal(t, "ALC-SYS-0003", d.errorCode(), "the generic code: a sealed credential that cannot be opened has none of its own (observation)")
 		assert.Equal(t, cmds, len(k.f.server.Commands()), "no SSH command")
 		assert.Equal(t, reads, secretReads(k.kv), "nothing was read from the vault")
 		assert.Equal(t, pki.Fingerprint(k.f.old.Cert), k.f.served(wwwName))
@@ -125,7 +125,9 @@ WHERE target_id = $1 AND purpose = 'azure_vault'`, vault)
 // address, a foreign name) is not followed: nothing is sent there, the read is retried and finally refused, the
 // deployment fails before any SSH command and the website is unchanged.
 func TestKVDeploymentAddressGuard(t *testing.T) {
-	const evil = "evil.example.test"
+	// A foreign *.vault.azure.net name: the dial seam maps every such name to the fake (whose certificate names it), so a
+	// request that left for it WOULD be logged.
+	const evil = "other.vault.azure.net"
 	for name, location := range map[string]string{"foreign host": "https://" + evil + "/secrets/web-cert", "metadata address": "http://169.254.169.254/metadata/identity"} {
 		t.Run(name, func(t *testing.T) {
 			k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{evil}, ManagedIdentity: true, MIClientID: fakekv.UniqueClientID()}, wwwSite())
@@ -137,6 +139,7 @@ func TestKVDeploymentAddressGuard(t *testing.T) {
 			defer stop()
 			d := k.settleKV(k.op, dep.ID)
 			assert.Equal(t, "failed", d.Status, "%+v", d)
+			assert.Equal(t, "ALC-AKV-0008", d.errorCode(), "an answer that is a redirect is an unexpected answer")
 			requireNothingSentTo(t, k.kv, evil, "169.254.169.254")
 			assert.Equal(t, cmds, len(k.f.server.Commands()))
 			assert.Equal(t, pki.Fingerprint(k.f.old.Cert), k.f.served(wwwName))
@@ -148,13 +151,13 @@ func TestKVDeploymentAddressGuard(t *testing.T) {
 // the deployment unended or leaks the key: the runner contains the panic and the deployment reaches a final state.
 func TestKVSessionThatPanicsOnClose(t *testing.T) {
 	k := newKVNJ(t, fakekv.Options{}, wwwSite())
-	_, _, _, version := k.renewedBinding()
+	vault, bid, certID, version := k.renewedBinding()
 	dep := k.planOne()
 	cmds := len(k.f.server.Commands())
 	k.closePanics.Store(true)
 	d := k.settleKV(k.op, dep.ID)
 	k.closePanics.Store(false)
-	t.Logf("a session that panics when closed: state %s status %s error %v", d.State, d.Status, d.Error)
+	assert.Equal(t, "ALC-SYS-0003", d.errorCode())
 	assert.Equal(t, "done", d.State, "the deployment is ended, not stuck")
 	assert.Contains(t, k.logs.String(), "panic", "the panic is contained and logged by the runner")
 	assert.NotContains(t, k.logs.String(), "goroutine ", "no stack dump with a value in the log")
@@ -162,8 +165,22 @@ func TestKVSessionThatPanicsOnClose(t *testing.T) {
 	assert.Equal(t, "failed", d.Status)
 	assert.Equal(t, cmds, len(k.f.server.Commands()))
 	assert.Equal(t, pki.Fingerprint(k.f.old.Cert), k.f.served(wwwName))
-	// A deployment can still be made once the session behaves.
-	_ = version
+	// A deployment can still be made once the session behaves: Deploy now of the same version succeeds.
+	k.stepUp(k.admin, k.adminAcct)
+	var verID string
+	for _, v := range versionsOf(k.kvDetail(k.admin, vault, certID)) {
+		if v["version"] == version {
+			verID = v["id"].(string)
+		}
+	}
+	rec := k.op.do(http.MethodPost, "/api/v1/bindings/"+bid+"/actions/deploy", map[string]any{"version_id": verID})
+	requireStatus(t, rec, http.StatusAccepted)
+	again := decodeBody[struct {
+		Deployments []deployRef `json:"deployments"`
+	}](t, rec).Deployments[0].ID
+	got := k.settleKV(k.op, again)
+	assert.Equal(t, "succeeded", got.Status, "%+v", got)
+	assert.Equal(t, pki.Fingerprint(k.kv.Leaf("web-cert", version)), k.f.served(wwwName))
 }
 
 // TestKVPolledListingEdges: listing answers the provider must not take for the vault's truth: a page without "value"
@@ -288,4 +305,68 @@ func TestKeyVaultAPIFacts(t *testing.T) {
 	assert.Equal(t, "failed", im.State)
 	assert.Equal(t, "ALC-AKV-0040", im.errCode())
 	assert.Empty(t, k.kv.Versions("late-cert"), "nothing was sent for a requester who is no longer an Administrator")
+}
+
+// TestKVListing401OnASecondPage: the token the poll signed in with stops being valid between page 1 and page 2 of the
+// certificate listing (the fake's token lifetime is a minute on the stack's clock; the first page is held inside the
+// vault while the clock moves two minutes). Page 2 answers 401; the provider signs in again and resumes from the last
+// good page, so the poll ends with the complete inventory, each certificate once (never a partial listing).
+func TestKVListing401OnASecondPage(t *testing.T) {
+	k := newKVNJ(t, fakekv.Options{})
+	k.addWebCert("web-cert")
+	vault := k.addVault("prod-vault")
+	k.kv.AddBulkCertificates("bulk", 5)
+	k.kv.SetPageFill(2)
+	k.kv.SetTokenLifetime(time.Minute)
+	k.kv.ClearRequests()
+	k.clock.Advance(time.Minute)
+	// Holds are taken by the first requests: the SDK's unauthenticated probe, then page 1.
+	probe, page1 := k.kv.Hold("/certificates"), k.kv.Hold("/certificates")
+	requireStatus(t, k.op.do(http.MethodPost, "/api/v1/targets/"+vault+"/actions/discover", nil), http.StatusAccepted)
+	done := make(chan struct{})
+	go func() { defer close(done); k.runKV() }()
+	waitHeld := func() {
+		require.Eventually(t, func() bool { return k.kv.Held() == 1 }, 20*time.Second, time.Millisecond)
+	}
+	waitHeld()
+	probe()
+	require.Eventually(t, func() bool { // page 1: authenticated, in flight, held
+		for _, r := range k.kv.Requests() {
+			if r.HadAuth && r.Path == "/certificates" && r.Status == 0 {
+				return k.kv.Held() == 1
+			}
+		}
+		return false
+	}, 20*time.Second, time.Millisecond)
+	k.clock.Advance(2 * time.Minute) // the token of page 1 is expired when page 2 arrives
+	page1()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the poll did not end")
+	}
+	var unauthorized, signIns int
+	for _, r := range k.kv.Requests() {
+		if hostIs(r.Host, kvVaultHost(k.kv)) && r.Status == http.StatusUnauthorized && r.HadAuth && containsString(r.Query, "$skiptoken") {
+			unauthorized++
+		}
+		if r.Method == http.MethodPost {
+			signIns++
+		}
+	}
+	assert.Equal(t, 1, unauthorized, "page 2 was refused once with the expired token")
+	assert.GreaterOrEqual(t, signIns, 2, "the provider signed in again")
+	assert.Equal(t, "ok", k.vaultState(k.admin, vault).Status)
+	names := itemNames(k.kvItems(k.admin, vault, "certificates"))
+	assert.Len(t, names, 6, "the complete inventory: web-cert and the five bulk certificates")
+	assert.ElementsMatch(t, []string{"web-cert", "bulk-00000", "bulk-00001", "bulk-00002", "bulk-00003", "bulk-00004"}, names)
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

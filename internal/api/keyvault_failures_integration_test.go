@@ -99,6 +99,27 @@ func TestKeyVaultFailureCatalogue(t *testing.T) {
 
 			assert.Equal(t, "azure.forbidden", st.LastError.Reason)
 			assert.Equal(t, "Key Vault Reader", st.LastError.Params["role"])
+			// The permission model is told apart: a vault added with the role revoked shows it in the answer.
+			k2 := newKVNJ(t, fakekv.Options{Model: model})
+			k2.kv.RevokeRole("certificates/list")
+			rec := k2.addVaultRaw(k2.vaultBody("reader-less"))
+			requireStatus(t, rec, http.StatusCreated)
+			created := decodeBody[map[string]any](t, rec)
+			access := created["access"].(map[string]any)
+			assert.Equal(t, model, access["permission_model"], "the answer names the permission model")
+			var forbidden map[string]any
+			for _, c := range access["checks"].([]any) {
+				if c.(map[string]any)["name"] == "list_certificates" {
+					forbidden = c.(map[string]any)
+				}
+			}
+			require.NotNil(t, forbidden)
+			assert.Equal(t, "forbidden", forbidden["result"])
+			assert.Equal(t, "ALC-AKV-0003", forbidden["error"].(map[string]any)["code"])
+			lastErr := created["target"].(map[string]any)["last_error"].(map[string]any)
+			assert.Equal(t, "ALC-AKV-0003", lastErr["code"])
+			assert.Equal(t, model, lastErr["params"].(map[string]any)["model"], "the vault's last error names the permission model")
+			assert.Equal(t, "Key Vault Reader", lastErr["params"].(map[string]any)["role"])
 			assert.Contains(t, itemNames(k.kvItems(k.admin, vault, "keys")), "signing-key", "the keys stay listed")
 			assert.Equal(t, []string{"web-cert"}, itemNames(k.kvItems(k.admin, vault, "certificates")), "the stored certificates stay")
 
@@ -191,21 +212,15 @@ func TestKeyVaultFailureCatalogue(t *testing.T) {
 	})
 
 	// F-43: a vault name Azure does not know: the add is refused (502 ALC-AKV-0005), no target is created and no licence
-	// slot is used. The fake answers the unknown name with the vault-not-found answer (a real DNS name error cannot be
-	// produced in process; the provider's own tests map it).
+	// slot is used.
 	t.Run("F-43 unknown vault", func(t *testing.T) {
 		k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{"nope-vault.vault.azure.net"}})
 		targets, slots := k.count("targets"), k.license.Snapshot().Targets
 		body := k.vaultBody("nope")
 		body["vault_url"] = "https://nope-vault.vault.azure.net"
-		rec := k.addVaultRaw(body)
-		assert.GreaterOrEqual(t, rec.Code, 400, rec.Body.String())
-		// Not producible in process: a name Azure does not know fails in DNS (azure.vault_not_found, ALC-AKV-0005, covered
-		// by the provider's mapping tests). The fake answers a name it does not own with a bodiless 404 on the listing, and
-		// the provider reports that as a missing certificate (ALC-AKV-0015): the add is refused all the same.
-		var e apiError
-		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &e))
-		t.Logf("in-process outcome of an unknown vault: %d %s", rec.Code, e.Error.Code)
+		// A 404 on the vault's listing (the in-process stand-in for "the name is unknown": a real DNS name error is not
+		// producible through the seam) means the vault was not found.
+		requireError(t, k.addVaultRaw(body), http.StatusBadGateway, "ALC-AKV-0005")
 		assert.Equal(t, targets, k.count("targets"))
 		assert.Equal(t, slots, k.license.Snapshot().Targets)
 	})
@@ -479,11 +494,14 @@ func TestKeyVaultFailureCatalogue(t *testing.T) {
 		assert.Equal(t, "azure.firewall", st.LastError.Reason)
 		assert.NotContains(t, st.LastError.Params, "role")
 
-		// A new vault behind the firewall: created and marked.
+		// A new vault behind the firewall: created and marked (ruling S5). Where the address is shown: the deployment's
+		// error carries client_address (TestKVDeploymentSecretReadOverTheWire); a poll's status does not (observation).
 		k2 := newKVNJ(t, fakekv.Options{})
 		k2.kv.Firewall("203.0.113.7")
 		rec := k2.addVaultRaw(k2.vaultBody("walled"))
 		requireStatus(t, rec, http.StatusCreated)
+		last := decodeBody[map[string]any](t, rec)["target"].(map[string]any)["last_error"].(map[string]any)
+		assert.Equal(t, "ALC-AKV-0004", last["code"])
 	})
 
 	// F-52: a malformed or truncated listing is a transient error: nothing is stored from that list, no panic, the
@@ -498,14 +516,16 @@ func TestKeyVaultFailureCatalogue(t *testing.T) {
 		k.checkNow(vault)
 		assert.Equal(t, []string{"web-cert"}, itemNames(k.kvItems(k.admin, vault, "certificates")), "nothing stored from a truncated list")
 		st := k.vaultState(k.admin, vault)
-		t.Logf("after a truncated listing: %s %s", st.Status, st.code())
+		assert.Equal(t, "ok", st.Status, "a single truncated answer does not change the status")
+		assert.Equal(t, "ALC-AKV-0008", st.code(), "the failure is shown as an unexpected answer")
 		stop()
 		stop = k.kv.FailAll("/certificates", fakekv.Fault{Body: "{not json"})
 		k.clock.Advance(time.Minute)
 		k.checkNow(vault)
 		assert.Equal(t, []string{"web-cert"}, itemNames(k.kvItems(k.admin, vault, "certificates")), "nothing stored from a malformed list")
 		st = k.vaultState(k.admin, vault)
-		t.Logf("after a malformed listing: %s %s", st.Status, st.code())
+		assert.Equal(t, "ok", st.Status)
+		assert.Equal(t, "ALC-AKV-0008", st.code())
 		stop()
 		k.clock.Advance(time.Minute)
 		k.checkNow(vault)
@@ -568,29 +588,29 @@ func TestA14KeyVaultSSRF(t *testing.T) {
 	// A listing whose nextLink names another host: the poll fails as an unexpected answer; no request, and no bearer
 	// token, went to the other host.
 	t.Run("a foreign nextLink", func(t *testing.T) {
-		k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{other, evil}})
+		k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{other}})
 		k.addWebCert("web-cert")
 		vault := k.addVault("prod-vault")
 		k.kv.ClearRequests()
-		k.kv.FailNext("/certificates", fakekv.Fault{NextLink: "https://" + evil + "/certificates?api-version=" + fakekv.APIVersion + "&$skiptoken=x"})
+		k.kv.FailNext("/certificates", fakekv.Fault{NextLink: "https://" + other + "/certificates?api-version=" + fakekv.APIVersion + "&$skiptoken=x"})
 		k.clock.Advance(time.Minute)
 		k.checkNow(vault)
 		assert.Equal(t, "ALC-AKV-0008", k.vaultState(k.admin, vault).code())
-		requireNothingSentTo(t, k.kv, evil, other)
+		requireNothingSentTo(t, k.kv, other)
 		assert.Equal(t, []string{"web-cert"}, itemNames(k.kvItems(k.admin, vault, "certificates")), "nothing stored from the answer")
 	})
 
 	// A redirect (302) to the metadata address and to another host is never followed.
 	t.Run("redirects", func(t *testing.T) {
-		k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{evil}, ManagedIdentity: true, MIClientID: fakekv.UniqueClientID()})
+		k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{other}, ManagedIdentity: true, MIClientID: fakekv.UniqueClientID()})
 		k.addWebCert("web-cert")
 		vault := k.addVault("prod-vault")
-		for _, loc := range []string{"http://169.254.169.254/metadata/identity/oauth2/token?resource=x", "https://" + evil + "/certificates"} {
+		for _, loc := range []string{"http://169.254.169.254/metadata/identity/oauth2/token?resource=x", "https://" + other + "/certificates"} {
 			k.kv.ClearRequests()
 			k.kv.FailNext("/certificates", fakekv.Fault{Status: http.StatusFound, Location: loc})
 			k.clock.Advance(time.Minute)
 			k.checkNow(vault)
-			requireNothingSentTo(t, k.kv, evil, "169.254.169.254")
+			requireNothingSentTo(t, k.kv, other, "169.254.169.254")
 			assert.Equal(t, "ALC-AKV-0008", k.vaultState(k.admin, vault).code(), loc)
 		}
 	})
@@ -600,54 +620,41 @@ func TestA14KeyVaultSSRF(t *testing.T) {
 	// goes to the login host. The Key Vault SDK remembers a vault host's challenge for the life of the process, so
 	// each of these vaults has a name of its own and the challenge is wrong from the first contact.
 	t.Run("a foreign challenge authority", func(t *testing.T) {
-		k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{evil}, VaultName: "ssrf-" + uuid.NewString()[:8]})
+		k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{other}, VaultName: "ssrf-" + uuid.NewString()[:8]})
 		k.addWebCert("web-cert")
-		k.kv.SetChallenge(`Bearer authorization="https://` + evil + `/` + k.kv.TenantID() + `", resource="https://vault.azure.net"`)
+		k.kv.SetChallenge(`Bearer authorization="https://` + other + `/` + k.kv.TenantID() + `", resource="https://vault.azure.net"`)
 		requireStatus(t, k.addVaultRaw(k.vaultBody("prod-vault")), http.StatusCreated)
-		requireNothingSentTo(t, k.kv, evil)
+		requireNothingSentTo(t, k.kv, other)
 		for _, r := range k.kv.Requests() {
 			if r.Method == http.MethodPost {
-				assert.Equal(t, "login.microsoftonline.com", r.Host, "tokens are requested at the configured authority only")
+				assert.True(t, hostIs(r.Host, "login.microsoftonline.com"), "tokens are requested at the configured authority only")
 			}
 		}
 	})
 
 	// A challenge that names another RESOURCE: refused, no bearer token goes to the vault, nothing to the named host.
 	t.Run("a foreign challenge resource", func(t *testing.T) {
-		k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{evil}, VaultName: "ssrf-" + uuid.NewString()[:8]})
+		k := newKVNJ(t, fakekv.Options{ExtraHosts: []string{other}, VaultName: "ssrf-" + uuid.NewString()[:8]})
 		k.addWebCert("web-cert")
-		k.kv.SetChallenge(`Bearer authorization="https://login.microsoftonline.com/` + k.kv.TenantID() + `", resource="https://` + evil + `"`)
+		k.kv.SetChallenge(`Bearer authorization="https://login.microsoftonline.com/` + k.kv.TenantID() + `", resource="https://` + other + `"`)
 		targets := k.count("targets")
 		rec := k.addVaultRaw(k.vaultBody("prod-vault"))
 		assert.GreaterOrEqual(t, rec.Code, 400, "%s", rec.Body.String())
 		assert.Equal(t, targets, k.count("targets"))
-		requireNothingSentTo(t, k.kv, evil)
+		requireNothingSentTo(t, k.kv, other)
 		for _, r := range vaultRequests(k.kv) {
 			assert.False(t, r.HadAuth, "no bearer token was sent to the vault: %v", r)
 		}
 	})
 
-	// The environment cannot move the provider: an environment proxy and an identity endpoint are ignored (the
-	// poll works and nothing connects to them); the region and SDK-logging variables are refused before any request.
-	t.Run("environment", func(t *testing.T) {
+	// The environment cannot move the provider. NOT PROVED HERE: the environment proxy (net/http reads the proxy
+	// variables once per process, so setting them in a test binary that has already made requests proves nothing; the
+	// provider's subprocess test TestProxyEnvironmentIsIgnored is the proof). PROVED HERE: the region and SDK-logging
+	// variables are refused before anything is sent, and a managed identity talks only to the metadata address.
+	t.Run("region and logging variables", func(t *testing.T) {
 		k := newKVNJ(t, fakekv.Options{})
 		k.addWebCert("web-cert")
 		vault := k.addVault("prod-vault")
-		proxy, identity := newConnectionCounter(t), newConnectionCounter(t)
-		for _, v := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY"} {
-			t.Setenv(v, "http://"+proxy.addr())
-		}
-		t.Setenv("NO_PROXY", "")
-		t.Setenv("IDENTITY_ENDPOINT", "http://"+identity.addr()+"/msi/token")
-		t.Setenv("IDENTITY_HEADER", "x")
-		t.Setenv("MSI_ENDPOINT", "http://"+identity.addr()+"/msi/token")
-		t.Setenv("IMDS_ENDPOINT", "http://"+identity.addr())
-		k.clock.Advance(time.Minute)
-		k.checkNow(vault)
-		assert.Equal(t, "ok", k.vaultState(k.admin, vault).Status)
-		assert.Zero(t, proxy.count(), "the environment proxy is ignored")
-		assert.Zero(t, identity.count(), "the identity endpoint of the environment is ignored")
-
 		for _, env := range [][2]string{{"AZURE_REGIONAL_AUTHORITY_NAME", "westeurope"}, {"MSAL_FORCE_REGION", "TryAutoDetect"}, {"AZURE_SDK_GO_LOGGING", "all"}} {
 			t.Run(env[0], func(t *testing.T) {
 				t.Setenv(env[0], env[1])
@@ -660,8 +667,49 @@ func TestA14KeyVaultSSRF(t *testing.T) {
 				assert.Empty(t, trap.seen())
 			})
 		}
-		assert.Zero(t, proxy.count())
-		assert.Zero(t, identity.count())
+	})
+
+	// Managed identity through the API: with the identity endpoint of the environment unset the vault signs in at
+	// 169.254.169.254:80 and nowhere else (the fake's IMDS log); with IDENTITY_ENDPOINT set the SDK would pick another
+	// source: the add fails closed with ALC-AKV-0010 and nothing connects to that endpoint. A user-assigned client id of
+	// its own per test (MSAL caches managed-identity tokens per process).
+	t.Run("managed identity", func(t *testing.T) {
+		miBody := func(k *kvnj, id string) map[string]any {
+			return map[string]any{"name": "mi-vault", "vault_url": k.kv.VaultURL(), "auth": "managed_identity", "client_id": id}
+		}
+		t.Run("fixed metadata address", func(t *testing.T) {
+			id := fakekv.UniqueClientID()
+			k := newKVNJ(t, fakekv.Options{ManagedIdentity: true, MIClientID: id})
+			k.addWebCert("web-cert")
+			trap := trapDefaultTransport(t)
+			requireStatus(t, k.addVaultRaw(miBody(k, id)), http.StatusCreated)
+			var imds []fakekv.Request
+			for _, r := range k.kv.Requests() {
+				if hostIs(r.Host, "169.254.169.254") {
+					imds = append(imds, r)
+				}
+				assert.False(t, hostIs(r.Host, "login.microsoftonline.com"), "a managed identity never asks the login host: %v", r)
+			}
+			require.NotEmpty(t, imds)
+			for _, r := range imds {
+				assert.Equal(t, "/metadata/identity/oauth2/token", r.Path)
+				assert.Equal(t, http.MethodGet, r.Method)
+			}
+			assert.Empty(t, trap.seen())
+		})
+		t.Run("identity endpoint set", func(t *testing.T) {
+			id := fakekv.UniqueClientID()
+			k := newKVNJ(t, fakekv.Options{ManagedIdentity: true, MIClientID: id})
+			k.addWebCert("web-cert")
+			identity := newConnectionCounter(t)
+			t.Setenv("IDENTITY_ENDPOINT", "http://"+identity.addr()+"/msi/token")
+			t.Setenv("IDENTITY_HEADER", "x")
+			targets := k.count("targets")
+			requireError(t, k.addVaultRaw(miBody(k, id)), http.StatusBadGateway, "ALC-AKV-0010")
+			assert.Zero(t, identity.count(), "nothing connected to the environment's identity endpoint")
+			assert.Empty(t, k.kv.Requests(), "nothing reached the fake")
+			assert.Equal(t, targets, k.count("targets"))
+		})
 	})
 }
 
@@ -671,9 +719,9 @@ func requireNothingSentTo(t *testing.T, kv *fakekv.Server, hosts ...string) {
 	t.Helper()
 	for _, r := range kv.Requests() {
 		for _, h := range hosts {
-			require.NotEqual(t, h, r.Host, "a request went to %s: %v", h, r)
+			require.False(t, hostIs(r.Host, h), "a request went to %s: %v", h, r)
 		}
-		if r.Host != kvVaultHost(kv) {
+		if !hostIs(r.Host, kvVaultHost(kv)) {
 			require.False(t, r.HadAuth, "a bearer token went to %s", r.Host)
 		}
 	}
