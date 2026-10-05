@@ -561,7 +561,7 @@ func TestPartialListingsAndThrottling(t *testing.T) {
 	require.NotNil(t, v.LastSuccess)
 	assert.True(t, now.Equal(*v.LastSuccess), "last_success_at only moves with an answered listing")
 	require.NotNil(t, v.Facts.KVPoll)
-	assert.Equal(t, []inventory.KVPollFailure{{Object: "certificates", Reason: "azure.forbidden", Role: providers.RoleKeyVaultReader,
+	assert.Equal(t, []inventory.KVPollFailure{{Object: "certificates", Reason: "azure.forbidden", Role: providers.RoleKeyVaultReader, Model: "rbac",
 		RequestID: "0190f5a0-0000-7000-8000-00000000abcd", AzureCode: "ForbiddenByRbac"}}, v.Facts.KVPoll.Failures)
 	assert.Equal(t, 2, h.count("SELECT count(*) FROM kv_keys"))
 	assert.Equal(t, before, h.certRow(vault, "alpha"), "certificates untouched")
