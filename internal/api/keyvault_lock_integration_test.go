@@ -253,3 +253,53 @@ func TestKeyVaultReleasedVersionIsDeployedAndNeverHeldAgain(t *testing.T) {
 	}
 	assert.Len(t, k.kvDeployments(k.op, k.locs[wwwCert]), 1, "and nothing more is deployed")
 }
+
+// TestL87KeyVaultPollInFlightAtLock is L-87 over the wire: the licence locks while a poll is held inside the fake
+// Azure service. The request finishes, its result is stored (metadata only), and no automatic deployment is created
+// from it, neither in lock nor after the licence returns (the version was found in lock: held).
+func TestL87KeyVaultPollInFlightAtLock(t *testing.T) {
+	k := newKVNJ(t, fakekv.Options{}, wwwSite())
+	k.addWebCert("web-cert")
+	vault := k.addVault("prod-vault")
+	bid, certID := k.bindWeb(vault, k.locs[wwwCert])
+	requireStatus(t, k.autoDeploy(bid, 1, true), http.StatusOK)
+	k.clock.Advance(2 * time.Minute)
+	version := k.kv.Renew("web-cert")
+	// Three minutes before the evaluation ends (the provider's poll budget runs on the stack's clock: a jump of weeks
+	// while a request is in flight would end the poll as over budget, which is the provider's rule and not L-87).
+	k.pass(k.license.Snapshot().Eval.LocksAt.Sub(k.clock.Now()) - 3*time.Minute)
+
+	release := k.kv.Hold("/certificates")
+	rec := k.op.do(http.MethodPost, "/api/v1/targets/"+vault+"/actions/discover", nil)
+	requireStatus(t, rec, http.StatusAccepted)
+	pollJob := decodeBody[map[string]any](t, rec)["job_id"].(string)
+	done := make(chan error, 1)
+	go func() {
+		_, err := k.runner.RunOnce(context.Background())
+		done <- err
+	}()
+	require.Eventually(t, func() bool { return k.kv.Held() == 1 }, 20*time.Second, 5*time.Millisecond, "the poll is inside the fake")
+	k.clock.Advance(4 * time.Minute) // the licence locks while the request is in flight
+	require.NoError(t, k.license.Tick(context.Background()))
+	require.True(t, k.license.Snapshot().Eval.Locked())
+	k.signIn(k.admin, k.adminAcct)
+	k.signIn(k.op, k.opAcct)
+	reqs := len(k.kv.Requests())
+	release()
+	require.NoError(t, <-done)
+	require.GreaterOrEqual(t, len(k.kv.Requests()), reqs)
+
+	assert.Equal(t, "succeeded", k.job(k.admin, pollJob)["status"], "a read-only job in flight finishes in lock")
+	// The result was stored: the new version is known; nothing was deployed from it, in lock or after.
+	detail := k.kvDetail(k.admin, vault, certID)
+	assert.Equal(t, version, detail["current_version"], "the result of the poll in flight is stored")
+	assert.Equal(t, "ok", k.vaultState(k.admin, vault).Status)
+	assert.Empty(t, k.kvDeployments(k.op, k.locs[wwwCert]))
+	err := k.kvScheduler().RunNow(context.Background(), "kv.auto_deploy")
+	assert.True(t, errors.Is(err, license.ErrLocked))
+	k.unlock()
+	k.pass(time.Minute)
+	require.NoError(t, k.plan())
+	assert.Empty(t, k.kvDeployments(k.op, k.locs[wwwCert]), "the version found in lock waits for an Administrator")
+	assert.Zero(t, k.f.emu.DeployCount())
+}

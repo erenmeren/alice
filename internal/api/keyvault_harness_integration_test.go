@@ -69,8 +69,17 @@ type kvnj struct {
 // Nginx server with the given sites, as newNJ does.
 func newKVNJ(t *testing.T, o fakekv.Options, sites ...linuxsshtest.NginxSite) *kvnj {
 	t.Helper()
+	return newKVNJSkew(t, o, nil, sites...)
+}
+
+// newKVNJSkew is newKVNJ where Azure's clock runs skew (read at every request; nil: none) ahead of Alice's.
+func newKVNJSkew(t *testing.T, o fakekv.Options, skew *atomic.Int64, sites ...linuxsshtest.NginxSite) *kvnj {
+	t.Helper()
 	s := newStackWith(t, kvStackNow(), func(now func() time.Time) *fakekv.Server {
 		o.Now = now
+		if skew != nil {
+			o.Now = func() time.Time { return now().Add(time.Duration(skew.Load())) }
+		}
 		return fakekv.Start(t, o)
 	})
 	adminAcct := &account{username: "ada", password: adminPassword}
