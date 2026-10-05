@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,7 +22,8 @@ const (
 )
 
 // writesObserver returns where a file writes the observer: an assignment to it (by name or as a selector), its
-// address taken (&onSecretBytes lets a write happen elsewhere), or a declaration that gives it a value.
+// address taken (&onSecretBytes lets a write happen elsewhere), a for-range that assigns it, or a declaration that
+// gives it a value. A //go:linkname alias is found in the source text (linknamesObserver).
 func writesObserver(f *ast.File, name string) []string {
 	var out []string
 	named := func(e ast.Expr) bool {
@@ -41,6 +43,10 @@ func writesObserver(f *ast.File, name string) []string {
 					out = append(out, "assignment")
 				}
 			}
+		case *ast.RangeStmt:
+			if x.Tok == token.ASSIGN && ((x.Key != nil && named(x.Key)) || (x.Value != nil && named(x.Value))) {
+				out = append(out, "range assignment")
+			}
 		case *ast.UnaryExpr:
 			if x.Op == token.AND && named(x.X) {
 				out = append(out, "address")
@@ -57,10 +63,23 @@ func writesObserver(f *ast.File, name string) []string {
 	return out
 }
 
+// linknamesObserver returns "linkname" when src has a //go:linkname directive whose target is the observer: a pull
+// linkname to a non-standard package still links, and gives another package a variable that aliases it.
+func linknamesObserver(src, name string) []string {
+	var out []string
+	for _, line := range strings.Split(src, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) >= 3 && fields[0] == "//go:linkname" && (fields[2] == name || strings.HasSuffix(fields[2], "."+name)) {
+			out = append(out, "linkname")
+		}
+	}
+	return out
+}
+
 func TestZeroingObserverIsSetOnlyByTests(t *testing.T) {
 	declared, testWrites := false, 0
 	for _, f := range sourceFiles(t) {
-		w := writesObserver(f.file, observerName)
+		w := append(writesObserver(f.file, observerName), linknamesObserver(f.src, observerName)...)
 		if f.test {
 			testWrites += len(w)
 			continue
@@ -95,5 +114,12 @@ func TestZeroingObserverRuleCatchesEvasions(t *testing.T) {
 	assert.Equal(t, []string{"address"}, writesObserver(parse("func f() { p := &onSecretBytes; *p = nil }"), observerName))
 	assert.Equal(t, []string{"initial value"}, writesObserver(parse("var onSecretBytes = func([]byte) {}"), observerName))
 	assert.Equal(t, []string{"initial value"}, writesObserver(parse("func init() {}\nvar a, onSecretBytes = 1, func([]byte) {}"), observerName))
+	assert.Equal(t, []string{"range assignment"}, writesObserver(parse("func f(fs []func([]byte)) { for _, onSecretBytes = range fs {} }"), observerName))
+	assert.Equal(t, []string{"range assignment"}, writesObserver(parse("func f(m map[func([]byte)]int) { for onSecretBytes = range m {} }"), observerName))
+	assert.Empty(t, writesObserver(parse("func f(fs []func([]byte)) { for _, onSecretBytes := range fs { _ = onSecretBytes } }"), observerName),
+		"a new variable of the same name declared by the loop writes nothing")
+	assert.Equal(t, []string{"linkname"}, linknamesObserver("package p\n\nimport _ \"unsafe\"\n\n//go:linkname hook alice/internal/api.onSecretBytes\nvar hook func([]byte)\n", observerName))
+	assert.Equal(t, []string{"linkname"}, linknamesObserver("//go:linkname   hook\talice/internal/api.onSecretBytes", observerName))
+	assert.Empty(t, linknamesObserver("// onSecretBytes is mentioned in a comment; go:linkname is elsewhere\n", observerName))
 	assert.Empty(t, writesObserver(parse("var onSecretBytes func([]byte)\nfunc f(b []byte) { if onSecretBytes != nil { onSecretBytes(b) } }"), observerName))
 }
