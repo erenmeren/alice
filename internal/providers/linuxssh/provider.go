@@ -196,7 +196,8 @@ func (s *session) ListAuthorizedKeys(ctx context.Context) ([]providers.Discovere
 
 // ListKeys is ListAuthorizedKeys with the coverage of every candidate file, taken from what the
 // helper's answer says and nothing more: a file in the discovery's ReadFiles was read completely
-// (a listed file that does not exist counts: it holds nothing); a file that is not, in an answer the
+// (a listed file that does not exist counts: it holds nothing) unless the discovery reported a line
+// of it that is neither a key, a comment nor blank (UnreadableLines), which makes it partial; a file that is not, in an answer the
 // discovery marked Partial (a read failed, a bound cut it), is partial; one that is not in an answer
 // that was not cut (too large, unparsable) is unread. A file the helper did not list for the account,
 // or listed as unsupported, and an account the discovery skipped have no entry: unknown.
@@ -216,6 +217,8 @@ func (s *session) ListKeys(ctx context.Context) (providers.KeyListing, error) {
 		for _, f := range u.Files {
 			st := providers.CoverageUnread
 			switch {
+			case slices.Contains(res.ReadFiles, f) && slices.ContainsFunc(res.UnreadableLines, func(u providers.UnreadableLine) bool { return u.FilePath == f }):
+				st = providers.CoveragePartial // read, but a line was not understood: a key may be on it
 			case slices.Contains(res.ReadFiles, f):
 				st = providers.CoverageComplete
 			case res.Partial:

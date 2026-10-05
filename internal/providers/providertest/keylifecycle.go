@@ -235,6 +235,38 @@ func CheckKeyLifecycle(t testing.TB, h KeyLifecycleHarness) {
 		_ = s.Close()
 	}
 
+	// 1c. only a file whose every line was read and understood proves a key absent: a line that is
+	// not a key (and not a comment or blank) makes the file partial; comments, blank lines and an
+	// empty file are read completely.
+	{
+		env := h.New(t)
+		file := env.OwnFile("deploy")
+		a, c := newLifecycleKey(t, ""), newLifecycleKey(t, "")
+		env.Seed("deploy", file, "# a comment", "", a.line)
+		s := ok(env)
+		l, err := s.ListKeys(ctx)
+		if err != nil || l.Coverage("deploy", file) != providers.CoverageComplete || !l.Absent("deploy", file, c.fp) {
+			t.Errorf("comments and blank lines: %q %v, want complete", l.Coverage("deploy", file), err)
+		}
+		env.Seed("deploy", file)
+		l, err = s.ListKeys(ctx)
+		if err != nil || l.Coverage("deploy", file) != providers.CoverageComplete || !l.Absent("deploy", file, c.fp) {
+			t.Errorf("an empty file: %q %v, want complete", l.Coverage("deploy", file), err)
+		}
+		env.Seed("deploy", file, a.line, "this line is not a key", "ssh-ed25519 not-base64 broken")
+		l, err = s.ListKeys(ctx)
+		if err != nil {
+			t.Errorf("list: %v", err)
+		}
+		if got := l.Coverage("deploy", file); got != providers.CoveragePartial {
+			t.Errorf("a file with unreadable lines: coverage %q, want partial", got)
+		}
+		if l.Absent("deploy", file, c.fp) {
+			t.Errorf("a key was proven absent from a file with lines that could not be read")
+		}
+		_ = s.Close()
+	}
+
 	// 2. a file the user does not read: refused, and the key does not log in.
 	{
 		env := h.New(t)

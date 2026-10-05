@@ -1344,6 +1344,25 @@ func TestListKeysStatesCoverage(t *testing.T) {
 	assert.False(t, l.Absent("deploy", deploy, other))
 	assert.Equal(t, providers.CoverageComplete, l.Coverage("root", "/root/.ssh/authorized_keys"), "other files keep their own state")
 
+	// a line that is not a key: the file was read but not understood: partial, never "absent"
+	e = newProvEnv(t)
+	e.emu.SetFile(deploy, []byte(k+"\nthis is not a key\n"))
+	sess := e.open(t)
+	l, err = sess.ListKeys(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, providers.CoveragePartial, l.Coverage("deploy", deploy))
+	assert.False(t, l.Absent("deploy", deploy, other))
+	assert.False(t, l.Absent("deploy", deploy, fp))
+	e.emu.SetFile(deploy, []byte("# only a comment\n\n"))
+	l, err = sess.ListKeys(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, providers.CoverageComplete, l.Coverage("deploy", deploy), "comments and blank lines are understood")
+	e.emu.SetFile(deploy, []byte{})
+	l, err = sess.ListKeys(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, providers.CoverageComplete, l.Coverage("deploy", deploy), "an empty file")
+	assert.True(t, l.Absent("deploy", deploy, other))
+
 	// an account whose settings could not be read, a file the helper called unsupported: unknown
 	e = newProvEnv(t)
 	e.emu.SetUnsupported(deploy)

@@ -333,8 +333,12 @@ func (w *KeyWorld) listKeys(ctx context.Context, target uuid.UUID) (providers.Ke
 			}
 			if st == "" {
 				st = providers.CoverageComplete
-				keys, _ := parse(w.files[worldFile{target, file}]).Keys(u.user, file)
+				ak := parse(w.files[worldFile{target, file}])
+				keys, bad := ak.Keys(u.user, file)
 				l.Keys = append(l.Keys, keys...)
+				if len(bad) > 0 {
+					st = providers.CoveragePartial // a line that is not a key, comment or blank: as the real discovery
+				}
 			}
 			l.Files = append(l.Files, providers.FileCoverage{OSUser: u.user, FilePath: file, State: st})
 		}

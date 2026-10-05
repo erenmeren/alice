@@ -691,6 +691,30 @@ func TestKeyWorldReportsKeyFilesAndTheirCompleteness(t *testing.T) {
 }
 
 // Follow-up 2: the world's listing states coverage; knobs make a file unread or the answer partial.
+func TestKeyWorldFileWithAnUnreadableLineIsPartial(t *testing.T) {
+	ctx := context.Background()
+	target := uuid.New()
+	file := "/home/deploy/.ssh/authorized_keys"
+	line, _, _ := newKey(t)
+	_, otherFP, _ := newKey(t)
+	w := NewKeyWorld()
+	w.Put(target, "deploy", file, line, "garbage that is not a key")
+	p := New(providers.KindLinuxSSH, providers.CapAuthorizedKeys)
+	p.Configure(func(c *Config) { c.World, c.SkipHostKeyCheck = w, true })
+	s, err := p.Open(ctx, providers.TargetRef{ID: target}, nil, providers.Env{})
+	require.NoError(t, err)
+	l, err := s.ListKeys(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, providers.CoveragePartial, l.Coverage("deploy", file))
+	assert.False(t, l.Absent("deploy", file, otherFP))
+	assert.Len(t, l.Keys, 1, "the readable line is still listed")
+	w.Put(target, "deploy", file, line, "# comment", "")
+	l, err = s.ListKeys(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, providers.CoverageComplete, l.Coverage("deploy", file))
+	assert.True(t, l.Absent("deploy", file, otherFP))
+}
+
 func TestKeyWorldListKeysCoverage(t *testing.T) {
 	ctx := context.Background()
 	target := uuid.New()
