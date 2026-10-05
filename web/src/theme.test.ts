@@ -1,4 +1,4 @@
-import { DEFAULT_THEME, MantineProvider, TextInput, defaultVariantColorsResolver, mergeMantineTheme } from '@mantine/core';
+import { DEFAULT_THEME, MantineProvider, Table, TextInput, defaultVariantColorsResolver, mergeMantineTheme } from '@mantine/core';
 import { render, screen } from '@testing-library/react';
 import { createElement } from 'react';
 import { DANGER_HOVER, theme } from './theme';
@@ -46,5 +46,16 @@ describe('theme', () => {
     const message = 'This value contains characters that are not allowed.';
     render(createElement(MantineProvider, { theme }, createElement(TextInput, { label: 'Vault address', error: message })));
     expect(screen.getByText(message)).toHaveStyle({ color: 'var(--mantine-color-red-9)' });
+  });
+
+  it('makes the scrolling part of every table scroll container a tab stop', () => {
+    const { container } = render(
+      createElement(
+        MantineProvider,
+        { theme },
+        createElement(Table.ScrollContainer, { minWidth: 720 }, createElement(Table, null, createElement(Table.Tbody, null, createElement(Table.Tr, null, createElement(Table.Td, null, 'cell'))))),
+      ),
+    );
+    expect(container.querySelector('.mantine-ScrollArea-viewport')).toHaveAttribute('tabindex', '0');
   });
 });
