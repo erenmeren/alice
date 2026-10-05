@@ -6,6 +6,7 @@ import { server } from '../test/server';
 import { watchDeployments } from './deployments';
 import { getDeployment, getLicenseStatus, getTarget, listAudit, listJobs } from './endpoints';
 import { waitForJob } from './jobs';
+import { getKVImport } from './keyvault';
 
 // AUD-01 follow-up: a request the SPA sends by itself (a poll) must never be state-changing: the
 // server slides a session's idle timeout on any non-GET request, so an automatic POST would keep
@@ -38,6 +39,7 @@ describe('polling', () => {
       'components/AddServerModal.tsx',
       'components/BindingPanel.tsx',
       'components/DeployDialog.tsx',
+      'components/ImportToKeyVaultDialog.tsx',
       'components/KVDeployDialog.tsx',
       'components/RemoveKeyDialog.tsx',
       'pages/DeploymentDetailPage.tsx',
@@ -59,12 +61,14 @@ describe('polling', () => {
       http.get('/api/v1/targets/:id', () => HttpResponse.json(targetFixture)),
       http.get('/api/v1/deployments/:id', ({ params }) => HttpResponse.json(deploymentDetailFixture({ id: String(params.id) }))),
       http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ status: 'succeeded' }))),
+      http.get('/api/v1/targets/:id/kv/imports/:import', () => HttpResponse.json({})),
     );
     await getLicenseStatus();
     await getLicenseStatus({ keepalive: true });
     await getTarget(targetFixture.id);
     await getDeployment('d1');
     await waitForJob('j1', { intervalMs: 1 });
+    await getKVImport('v1', 'i1');
     await watchDeployments(['d1', 'd2'], { intervalMs: 1 });
     expect(methods.length).toBeGreaterThanOrEqual(6);
     expect(methods.filter((m) => !m.startsWith('GET '))).toEqual([]);

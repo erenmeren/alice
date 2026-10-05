@@ -1002,7 +1002,8 @@
       "deployHint": "Bu sertifikayı dağıtmak için web sitesinin sunucusunu açın, orada Sertifika dağıt düğmesine basın ve bu sertifikayı seçin.",
       "openServers": "Sunucuları aç",
       "deployHelp": "Dağıt düğmesi bu sertifikayı aşağıda listelenen web sitelerine gönderir.",
-      "chainCompleteByUpload": "Zinciri tamamlamak için bu sertifikayı tam zinciriyle ve özel anahtarıyla yeniden yükleyin."
+      "chainCompleteByUpload": "Zinciri tamamlamak için bu sertifikayı tam zinciriyle ve özel anahtarıyla yeniden yükleyin.",
+      "importHelp": "Bu sertifikayı ve özel anahtarını bir Key Vault'a gönderir."
     },
     "upload": {
       "title": "Sertifika yükleyin",
@@ -1647,5 +1648,52 @@
     "autoDeployHelp": "Key Vault bu sertifikayı yenilediğinde Alice yeni sürümü bu web sitelerine dağıtır.",
     "deployNow": "Şimdi dağıt",
     "deployAccessUnchecked": "Dağıtım erişimi denetlenmedi"
+  },
+  "imports": {
+    "action": "Key Vault'a aktar",
+    "newVersionWarning": "Bu, mevcut {{name}} sertifikasına yeni bir sürüm ekler.",
+    "noAutoRenew": "Aktarılan sertifika Key Vault'ta kendini yenilemez.",
+    "state": {
+      "succeeded": "Aktarıldı",
+      "uncertain": "Henüz doğrulanmadı",
+      "failed": "Başarısız",
+      "unknown": "Sonuç bilinmiyor",
+      "queued": "Başlamayı bekliyor",
+      "running": "Çalışıyor"
+    },
+    "vault": "Kasa",
+    "name": "Kasadaki sertifika adı",
+    "nameHelp": "Harfler, rakamlar ve tire; en fazla 127 karakter.",
+    "nameInvalid": "Yalnızca harf, rakam ve tire kullanın; 1 ile 127 karakter arası.",
+    "noVaults": "Henüz Key Vault yok. Önce bir tane ekleyin.",
+    "openVaults": "Key Vault kasalarını aç",
+    "privateKeyNote": "Bu sertifikanın özel anahtarı Alice'ten çıkar ve kasada saklanır. Bunu yalnızca bir yönetici yapabilir.",
+    "adminOnly": "Bir sertifikayı Key Vault'a yalnızca bir yönetici aktarabilir.",
+    "confirmNewVersion": "Anladım ve yeni bir sürüm eklenmesini istiyorum",
+    "policyWarning": "Aktarılan sürüm, sertifikanın kasadaki ayarlarının yerine geçer. Kasa bu sertifikayı kendiliğinden yenilemeyi bırakabilir.",
+    "boundNote": "Bu kasa sertifikasına web siteleri bağlı.",
+    "autoDeployFollows": "Bunun için otomatik dağıtım açık; bu yüzden yeni sürüm bu web sitelerine kendiliğinden dağıtılır.",
+    "autoDeployNot": "Bunun için otomatik dağıtım kapalı; bu yüzden kendiliğinden hiçbir şey dağıtılmaz.",
+    "working": "Alice sertifikayı içe aktarıyor…",
+    "importedVersion": "Kasadaki sürüm: {{version}}",
+    "explain": {
+      "uncertain": "Kasa içe aktarmayı doğrulamadı. Alice bunu yeniden göndermez. Kasanın bir sonraki denetimi, içe aktarmanın ulaşıp ulaşmadığını doğrular.",
+      "unknown": "Alice, kasanın içe aktarmayı kabul edip etmediğini hiç öğrenemedi ve bunu yeniden göndermez. Sertifikayı kasada arayın."
+    },
+    "canRetry": "Kasaya hiçbir şey ulaşmadı; bu yüzden yeniden deneyebilirsiniz.",
+    "retry": "Yeniden dene",
+    "stillWorking": "İçe aktarma hâlâ sürüyor. Sonucu sertifikanın içe aktarma geçmişinde görünür.",
+    "history": {
+      "title": "Key Vault'a içe aktarmalar",
+      "empty": "Bu sertifika henüz bir Key Vault'a aktarılmadı.",
+      "columns": {
+        "when": "İstenme zamanı",
+        "vault": "Kasa",
+        "name": "Kasadaki ad",
+        "state": "Durum",
+        "version": "Sürüm"
+      },
+      "tableLabel": "Key Vault'a içe aktarmalar"
+    }
   }
 }

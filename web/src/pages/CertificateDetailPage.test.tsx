@@ -2,6 +2,7 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import {
+  adminSession,
   auditorSession,
   certificateDetailFixture,
   deploymentFixture,
@@ -20,6 +21,8 @@ function certServer(detail = certificateDetailFixture({ id: ID }), deployments =
   let deploymentQuery = '';
   server.use(
     ...sessionHandlers(role),
+    // The import history asks which vaults exist.
+    http.get('/api/v1/targets', () => HttpResponse.json({ items: [], next_cursor: null })),
     http.get(`/api/v1/certificates/${ID}`, () => HttpResponse.json(detail)),
     http.get('/api/v1/deployments', ({ request }) => {
       deploymentQuery = new URL(request.url).search;
@@ -222,3 +225,34 @@ describe('CertificateDetailPage', () => {
     expect(document.body.textContent).not.toMatch(/PRIVATE KEY/);
   });
 });
+
+describe('CertificateDetailPage import into Key Vault', () => {
+  it('offers Import into Key Vault to an Administrator for a certificate whose key Alice holds, and opens the dialog', async () => {
+    certServer(certificateDetailFixture({ id: ID, has_private_key: true, not_after: '2030-01-01T00:00:00Z' }), [], adminSession);
+    await renderRoute(`/certificates/${ID}`);
+    const button = await screen.findByRole('button', { name: 'Import into Key Vault' });
+    expect(button).toBeEnabled();
+    await userEvent.click(button);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('shows an Operator the action disabled with the reason, and nothing for a certificate without a key', async () => {
+    certServer(certificateDetailFixture({ id: ID, has_private_key: true, not_after: '2030-01-01T00:00:00Z' }), [], operatorSession);
+    const view = await renderRoute(`/certificates/${ID}`);
+    expect(await screen.findByRole('button', { name: 'Import into Key Vault' })).toBeDisabled();
+    expect(screen.getByText('Only an administrator can import a certificate into a Key Vault.')).toBeInTheDocument();
+    view.unmount();
+    certServer(certificateDetailFixture({ id: ID, has_private_key: false }), [], adminSession);
+    await renderRoute(`/certificates/${ID}`);
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.queryByRole('button', { name: 'Import into Key Vault' })).not.toBeInTheDocument();
+  });
+
+  it('offers it to nobody who only reads', async () => {
+    certServer(certificateDetailFixture({ id: ID, has_private_key: true, not_after: '2030-01-01T00:00:00Z' }), [], auditorSession);
+    await renderRoute(`/certificates/${ID}`);
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.queryByRole('button', { name: 'Import into Key Vault' })).not.toBeInTheDocument();
+  });
+});
+

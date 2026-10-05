@@ -13,6 +13,8 @@ import { PageLoader } from '../auth/guards';
 import { DeployDialog } from '../components/DeployDialog';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { Expiry, useNow } from '../components/Expiry';
+import { ImportHistory } from '../components/ImportHistory';
+import { ImportToKeyVaultDialog } from '../components/ImportToKeyVaultDialog';
 import { WRAP } from '../components/wrap';
 import { formatDateTime } from '../datetime';
 
@@ -36,7 +38,9 @@ export function CertificateDetailPage() {
   const { session } = useAuth();
   const canOperate = session?.user.role === 'admin' || session?.user.role === 'operator';
   const now = useNow();
+  const admin = session?.user.role === 'admin';
   const [deploying, setDeploying] = useState(false);
+  const [importing, setImporting] = useState(false);
   const cert = useQuery({ queryKey: certificateKey(id), queryFn: () => getCertificate(id) });
   const deployments = useQuery({
     queryKey: [...DEPLOYMENTS_KEY, { certificate_id: id, limit: 5 }],
@@ -149,6 +153,14 @@ export function CertificateDetailPage() {
           <Text size="sm">{t('certificates.detail.deployHelp')}</Text>
         </Stack>
       )}
+      {canOperate && c.has_private_key && !expired && (
+        <Stack gap={4}>
+          <Button w="fit-content" variant="default" disabled={!admin} onClick={() => setImporting(true)}>
+            {t('imports.action')}
+          </Button>
+          <Text size="sm">{t(admin ? 'certificates.detail.importHelp' : 'imports.adminOnly')}</Text>
+        </Stack>
+      )}
       {canOperate && c.has_private_key && !expired && first === undefined && (
         <Alert color="blue" role="note" data-testid="deploy-hint">
           <Stack gap={4} align="flex-start">
@@ -235,6 +247,8 @@ export function CertificateDetailPage() {
           </Table>
         </Table.ScrollContainer>
       )}
+      {c.has_private_key && <ImportHistory certificateId={c.id} />}
+      {importing && admin && <ImportToKeyVaultDialog certificate={c} onClose={() => setImporting(false)} />}
       {canDeploy && <DeployDialog opened={deploying} onClose={() => setDeploying(false)} certificate={c} />}
     </Stack>
   );

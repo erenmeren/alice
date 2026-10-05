@@ -1002,7 +1002,8 @@
       "deployHint": "To deploy this certificate, open the server of the website, choose Deploy certificate there and pick this certificate.",
       "openServers": "Open the servers",
       "deployHelp": "Deploy sends this certificate to the websites listed below.",
-      "chainCompleteByUpload": "To complete the chain, upload this certificate again with its full chain and its private key."
+      "chainCompleteByUpload": "To complete the chain, upload this certificate again with its full chain and its private key.",
+      "importHelp": "Sends this certificate and its private key to a Key Vault."
     },
     "upload": {
       "title": "Upload a certificate",
@@ -1647,5 +1648,52 @@
     "autoDeployHelp": "When Key Vault renews this certificate, Alice deploys the new version to these websites.",
     "deployNow": "Deploy now",
     "deployAccessUnchecked": "Deploy access not checked"
+  },
+  "imports": {
+    "action": "Import into Key Vault",
+    "newVersionWarning": "This will add a new version to the existing certificate {{name}}.",
+    "noAutoRenew": "An imported certificate does not renew itself in Key Vault.",
+    "state": {
+      "succeeded": "Imported",
+      "uncertain": "Not confirmed yet",
+      "failed": "Failed",
+      "unknown": "Outcome unknown",
+      "queued": "Waiting to start",
+      "running": "Running"
+    },
+    "vault": "Vault",
+    "name": "Certificate name in the vault",
+    "nameHelp": "Letters, digits and hyphens, up to 127 characters.",
+    "nameInvalid": "Use letters, digits and hyphens only, 1 to 127 characters.",
+    "noVaults": "There is no Key Vault yet. Add one first.",
+    "openVaults": "Open Key Vaults",
+    "privateKeyNote": "The private key of this certificate leaves Alice and is stored in the vault. Only an administrator can do this.",
+    "adminOnly": "Only an administrator can import a certificate into a Key Vault.",
+    "confirmNewVersion": "I understand and want to add a new version",
+    "policyWarning": "The imported version replaces the certificate's settings in the vault. The vault may stop renewing this certificate by itself.",
+    "boundNote": "Websites are connected to this vault certificate.",
+    "autoDeployFollows": "Automatic deployment is on for it, so the new version is deployed to those websites by itself.",
+    "autoDeployNot": "Automatic deployment is off for it, so nothing is deployed by itself.",
+    "working": "Alice is importing the certificate…",
+    "importedVersion": "Version in the vault: {{version}}",
+    "explain": {
+      "uncertain": "The vault did not confirm the import. Alice does not send it again. The next check of the vault confirms whether it arrived.",
+      "unknown": "Alice never learned whether the vault accepted the import and does not send it again. Look for the certificate in the vault."
+    },
+    "canRetry": "Nothing reached the vault, so you can try again.",
+    "retry": "Try again",
+    "stillWorking": "The import is still running. Its result appears in the import history of the certificate.",
+    "history": {
+      "title": "Imports into Key Vault",
+      "empty": "This certificate was not imported into a Key Vault yet.",
+      "columns": {
+        "when": "Requested",
+        "vault": "Vault",
+        "name": "Name in the vault",
+        "state": "State",
+        "version": "Version"
+      },
+      "tableLabel": "Imports into Key Vault"
+    }
   }
 }

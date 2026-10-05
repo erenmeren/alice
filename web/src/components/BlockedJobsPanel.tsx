@@ -36,7 +36,8 @@ export function BlockedJobsPanel() {
   // by a job of its own (the API reports the original job's status): discarding it then undoes
   // nothing, so the row says so. The job does not name its deployment; the deployments of its server
   // do (job_id).
-  const deployTargets = [...new Set(items.filter((j) => j.type === DEPLOY_JOB && j.target_id).map((j) => j.target_id as string))];
+  // A job that names its deployment (deployment_id; the API does not send it yet) needs no search.
+  const deployTargets = [...new Set(items.filter((j) => j.type === DEPLOY_JOB && j.target_id && !j.deployment_id).map((j) => j.target_id as string))];
   const deployments = useQueries({
     queries: deployTargets.map((target) => ({
       queryKey: [...DEPLOYMENTS_KEY, { target_id: target, limit: DEPLOYMENTS_PER_SERVER }],
@@ -79,12 +80,18 @@ export function BlockedJobsPanel() {
           <Table>
             <Table.Tbody>
               {items.map((job) => {
-                const dep = job.type === DEPLOY_JOB ? deploymentOf(job) : undefined;
+                const dep = job.type === DEPLOY_JOB && !job.deployment_id ? deploymentOf(job) : undefined;
+                const named = job.type === DEPLOY_JOB ? job.deployment_id : null;
                 return (
                 <Table.Tr key={job.id} data-testid="blocked-job">
                   <Table.Td>
                     <Stack gap={2}>
                       <Text size="sm">{typeLabel(job)}</Text>
+                      {named && (
+                        <InternalLink to={`/deployments/${named}`} size="xs">
+                          {t('deploy.openDeployment')}
+                        </InternalLink>
+                      )}
                       {dep && (
                         <>
                           <Text size="xs" data-sent={wasSent(dep) ? 'true' : 'false'}>

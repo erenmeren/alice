@@ -222,7 +222,8 @@ export interface BindingDeployResult {
   deployments: { id: string; job_id: string; location_id: string; status_url: string; deployment_url: string; warnings: string[] }[];
 }
 
-export type ImportState = 'queued' | 'running' | 'succeeded' | 'failed' | 'uncertain';
+// '' is a state this version does not know (the API sends it instead of inventing one).
+export type ImportState = '' | 'queued' | 'running' | 'succeeded' | 'failed' | 'uncertain';
 
 export interface KVImport {
   id: string;
