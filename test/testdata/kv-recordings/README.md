@@ -34,9 +34,19 @@ The examples of the REST reference sometimes omit fields the service sends (for 
 `managed`, `recoveryLevel`); the files here show the fields the fake sends. Where the reference is
 silent the file says what the fake does and is a guess (see the fake's package comment).
 
-## Recording against real Azure (not built yet)
+## Recording against real Azure
 
-The plan reserves `ALICE_AZURE_RECORD=1` for the owner's optional real-Azure suite (`-tags azure`,
-a later task): run against a real vault it would rewrite these files with the real answers after
-replacing every value with a placeholder. Until that suite exists nothing rewrites these files; they
-are maintained by hand from the pages above.
+`make record-azure` runs `TestRecordShapes` (`internal/providers/azurekv/record_test.go`, build tag `azure`)
+with `ALICE_AZURE_RECORD=1`. It needs the variables of the real-Azure suite (`ALICE_AZURE_TEST_VAULT_URL`,
+`ALICE_AZURE_TEST_TENANT_ID`, `ALICE_AZURE_TEST_CLIENT_ID`, `ALICE_AZURE_TEST_CLIENT_SECRET`,
+`ALICE_AZURE_TEST_CERT_NAME`, ...) and is never part of `make test`, `make coverage` or `make ci`. Through
+the provider's own guarded vault transport it reads one vault and rewrites these files, each from one
+request: `list_certificates.json`, `list_certificate_versions.json`, `get_certificate.json`,
+`get_secret_pkcs12.json`, `list_keys.json` and `list_secrets.json`. Only the shape is written: every value
+is replaced with the placeholders above (ids keep their form with `<vault>`, `<name>`, `<version>`; key
+material becomes `<cer>`, `<x5t>`, `<value>`, `<n>`; tags are emptied; free text becomes `"<string>"`;
+numbers and booleans stay). The other files (errors, tokens, IMDS, the challenge, PEM secrets, single keys,
+imports) are still maintained by hand from the pages above.
+
+**Review the diff before committing it**: run `make test` (the shape and placeholder tests above) and check
+that no real value, host name or tenant detail reached a file.
