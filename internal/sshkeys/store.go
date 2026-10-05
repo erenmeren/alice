@@ -282,9 +282,9 @@ func (s *Service) LocationWork(ctx context.Context, locationID uuid.UUID) (Locat
 }
 
 // BeginAdd moves a planned location to adding just before its add is sent (C8): the run is adding_new,
-// not paused, the license allows changes, the target passes KeyChangeRefusal and the connection-account
-// rule (the location's user is not the connection account, the file is not one of its files, its list
-// is known completely: review M4). A resumed job (state adding) gets the same operation id;
+// not paused, the license allows changes, and the planner's send-time rule finds no reason to skip it
+// (skipAtSend: the durable skip reasons, KeyChangeRefusal's and the connection-account rule's among
+// them; review M4, re-review A-m2). A resumed job (state adding) gets the same operation id;
 // add_sent_at keeps the first send and the re-send is recorded in add_resend_count/add_resent_at (G16, G25). Else ErrPaused or
 // ErrNotYourTurn.
 func (s *Service) BeginAdd(ctx context.Context, locationID uuid.UUID) (uuid.UUID, error) {
@@ -324,7 +324,7 @@ func (s *Service) BeginAdd(ctx context.Context, locationID uuid.UUID) (uuid.UUID
 			if loc.state == LocPlanned {
 				return s.setLocation(ctx, tx, jobActor(ctx), loc, LocCancelled, code, now, ", error_code = $5, skip_reason = $6", code, skip)
 			}
-			return s.setLocation(ctx, tx, jobActor(ctx), loc, LocAddFailed, code, now, ", error_code = $5", code)
+			return s.setLocation(ctx, tx, jobActor(ctx), loc, LocAddFailed, code, now, ", error_code = $5, skip_reason = $6", code, skip)
 		}
 		if loc.addSentAt != nil && now.Before(lastAddSend(loc)) {
 			return ErrNotYourTurn // the clock went back: retried later (G14)
@@ -349,8 +349,10 @@ func (s *Service) BeginAdd(ctx context.Context, locationID uuid.UUID) (uuid.UUID
 	return op, err
 }
 
-// skipAtSend is the planner's skip reason for the location now (plan.SkipFor on the current facts of
-// its target and its old location), "" when it may be sent.
+// skipAtSend is the planner's skip reason for the location now, "" when it may be sent: plan.SkipAtSend
+// on the facts the planner reads (toPlanInput of its target and the key's locations), so a preview
+// made now would show the same reason (preview = run). The durable reasons are re-evaluated
+// (plan.SkipsAtSend, the shared-file rule included); a connection state is not (re-review A-m2).
 func (s *Service) skipAtSend(ctx context.Context, tx pgx.Tx, run runRow, loc locRow) (string, error) {
 	t, err := s.inv.TargetTx(ctx, tx, loc.targetID, true)
 	known := err == nil
@@ -365,8 +367,14 @@ func (s *Service) skipAtSend(ctx context.Context, tx pgx.Tx, run runRow, loc loc
 	if i < 0 {
 		return plan.SkipMissing, nil // removed by Alice, or its server is deleted
 	}
+	inFile := 0
+	for _, l := range locs {
+		if l.TargetID == loc.targetID && l.FilePath == locs[i].FilePath {
+			inFile++
+		}
+	}
 	in := toPlanInput(keyRow{}, locs[i:i+1], map[uuid.UUID]inventory.Target{loc.targetID: t}, nil, Policy{}, time.Time{})
-	return plan.SkipFor(in.Targets[loc.targetID], known, in.Locations[0]), nil
+	return plan.SkipAtSend(in.Targets[loc.targetID], known, in.Locations[0], inFile), nil
 }
 
 // giveRetryBack returns the retry a job answered ErrPaused with (M11): its job_count goes down by one.

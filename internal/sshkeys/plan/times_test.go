@@ -50,3 +50,23 @@ func TestFresh(t *testing.T) {
 	assert.False(t, Fresh(t0, t0.Add(-15*time.Minute-time.Nanosecond)))
 	assert.False(t, Fresh(t0, t0.Add(time.Second)), "a verification in the future is not fresh")
 }
+
+// Re-review A-m5: after downtime the next run moves past every missed interval in one step, to the
+// first boundary whose notice is still ahead (one nothing-to-rotate mail, not one per tick).
+func TestNextRunAfterCatchesUpInOneStep(t *testing.T) {
+	prev := t0
+	assert.Equal(t, t0.Add(7*day), NextRunAfter(prev, 7, 24, t0), "on time: one interval")
+	now := t0.Add(10*7*day + time.Hour) // ten intervals missed
+	next := NextRunAfter(prev, 7, 24, now)
+	assert.Equal(t, t0.Add(11*7*day), next)
+	assert.True(t, NoticeDue(next, 24).After(now), "the next notice is ahead")
+	assert.False(t, NoticeDue(next.Add(-7*day), 24).After(now), "and it is the first such boundary")
+	// The notice of the boundary right after now has passed already: one more interval.
+	now = t0.Add(3*7*day - time.Hour)
+	assert.Equal(t, t0.Add(4*7*day), NextRunAfter(prev, 7, 24, now))
+	// A notice longer than the interval still lands ahead of now.
+	next = NextRunAfter(prev, 1, 72, t0.Add(30*day))
+	assert.True(t, NoticeDue(next, 72).After(t0.Add(30*day)))
+	assert.False(t, NoticeDue(next.Add(-day), 72).After(t0.Add(30*day)))
+	assert.Equal(t, t0.Add(day), NextRunAfter(prev, 1, 0, t0.Add(-day)), "a clock behind: one interval, never earlier")
+}

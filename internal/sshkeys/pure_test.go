@@ -142,6 +142,41 @@ func TestToPlanInput(t *testing.T) {
 	tg.Facts.Warnings = []providers.Warning{{Code: "sshd_unreadable", Params: map[string]string{}}}
 	in = toPlanInput(key, nil, map[uuid.UUID]inventory.Target{tid: tg}, nil, Policy{}, now)
 	assert.False(t, in.Targets[tid].SSHDRead, "a server-wide unreadable warning")
+	// Re-review M10: the connection account's files, listed completely once, are known and passed on
+	// (the send-time rule depends on them as much as the planner).
+	tg.Facts.KeyFiles = []providers.UserKeyFiles{{OSUser: "deploy", Files: []string{"/home/deploy/.ssh/authorized_keys"}, Complete: true},
+		{OSUser: "ops", Files: []string{"/home/ops/.ssh/authorized_keys", "/etc/ssh/keys/ops"}, Complete: true}}
+	in = toPlanInput(key, nil, map[uuid.UUID]inventory.Target{tid: tg}, nil, Policy{}, now)
+	assert.True(t, in.Targets[tid].ConnectionFilesKnown)
+	assert.Equal(t, []string{"/home/ops/.ssh/authorized_keys", "/etc/ssh/keys/ops"}, in.Targets[tid].ConnectionFiles)
+	tg.Facts.KeyFiles[1].Complete = false
+	in = toPlanInput(key, nil, map[uuid.UUID]inventory.Target{tid: tg}, nil, Policy{}, now)
+	assert.False(t, in.Targets[tid].ConnectionFilesKnown, "an incomplete list is not known")
+}
+
+// Re-review A-I1: the evidence of a listing before a deploy's send, and whose line it is.
+func TestDeployEvidenceAndOwnership(t *testing.T) {
+	d := DeployJob{OSUser: "deploy", FilePath: "/f", Fingerprint: "SHA256:k"}
+	read := providers.KeyListing{Files: []providers.FileCoverage{{OSUser: "deploy", FilePath: "/f", State: providers.CoverageComplete}}}
+	assert.Equal(t, DeployEvidence{Coverage: providers.CoverageComplete, Absent: true}, DeployEvidenceFrom(read, nil, d))
+	read.Keys = []providers.DiscoveredSSHKey{{FilePath: "/f", Fingerprint: "SHA256:k"}}
+	assert.Equal(t, DeployEvidence{Coverage: providers.CoverageComplete}, DeployEvidenceFrom(read, nil, d))
+	assert.Equal(t, DeployEvidence{Coverage: providers.CoverageUnknown}, DeployEvidenceFrom(providers.KeyListing{}, nil, d))
+	assert.Equal(t, DeployEvidence{}, DeployEvidenceFrom(read, errors.New("x"), d), "a failed listing proves nothing")
+
+	assert.False(t, DeploySendRecord{}.Owned(), "nothing sent")
+	assert.False(t, DeploySendRecord{AbsentBefore: true, FirstCoverage: providers.CoverageComplete}.Owned(), "nothing sent")
+	owned := DeploySendRecord{Count: 1, AbsentBefore: true, FirstCoverage: providers.CoverageComplete}
+	assert.True(t, owned.Owned())
+	owned.AnsweredPresent = true
+	assert.False(t, owned.Owned())
+	owned.AnsweredAdded = true
+	assert.True(t, owned.Owned(), "a send that wrote the line")
+	assert.False(t, DeploySendRecord{Count: 2, AbsentBefore: true, FirstCoverage: providers.CoveragePartial}.Owned())
+	assert.False(t, DeploySendRecord{Count: 2, FirstCoverage: providers.CoverageComplete}.Owned())
+	assert.True(t, DeploySendRecord{Count: 1, AnsweredAdded: true}.Owned())
+	assert.False(t, DeploySendRecord{AnsweredAdded: true}.Owned(), "no send on record")
+	assert.True(t, DeploySendRecord{Count: 1, LastAt: time.Now()}.UndoNotBefore(time.Minute, true).IsZero(), "the only send answered")
 }
 
 // An oversized plan is refused with a closed reason before anything is written (the transaction is
@@ -170,7 +205,6 @@ func TestAllowedActions(t *testing.T) {
 		{Rotation{Status: StatusAddingNew, PausedLicense: true}, true, []string{"abort"}}, // the renewal notice is not out yet (I2)
 		{Rotation{Status: StatusAddingNew, PausedLicense: true}, false, []string{"abort"}},
 		{Rotation{Status: StatusAddingNew, PausedLicense: true, RenotifiedAt: &now}, true, []string{"continue", "abort"}},
-
 		{Rotation{Status: StatusOverlap}, true, []string{"finish_now", "abort"}},
 		{Rotation{Status: StatusOverlap, PausedLicense: true, RenotifiedAt: &now}, true, []string{"continue", "abort"}},
 		{Rotation{Status: StatusOverlap, PausedLicense: true, RenotifiedAt: &now}, false, []string{"abort"}},

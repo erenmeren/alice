@@ -77,8 +77,9 @@ func (s *Service) planOne(ctx context.Context, id uuid.UUID) (bool, error) {
 		switch {
 		case errors.Is(err, plan.ErrNothingToRotate):
 			// Every place is skipped: the Administrators are told once for this interval, which counts
-			// as done (re-review M6; no silent re-plan every tick).
-			next := plan.NextRun(*pol.NextRunAt, pol.IntervalDays)
+			// as done (re-review M6; no silent re-plan every tick). After downtime the next run moves past
+			// every missed interval at once: one mail, not one per tick until it catches up (A-m5).
+			next := plan.NextRunAfter(*pol.NextRunAt, pol.IntervalDays, pol.NotifyBeforeHours, now)
 			if _, err := tx.Exec(ctx, "UPDATE rotation_policies SET next_run_at = $2 WHERE id = $1", id, next); err != nil {
 				return policyWriteError(err)
 			}

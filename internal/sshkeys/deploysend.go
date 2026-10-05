@@ -2,7 +2,9 @@ package sshkeys
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -10,27 +12,99 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/audit"
+	"alice/internal/inventory"
+	"alice/internal/providers"
 )
 
-// The durable send record of a deploy job (store request S-1). A deploy has no row of its own (its
-// request is the queued job, whose payload the queue MACs), so every send is an append-only audit row
-// sshkey.add_sent written in a claim-fenced transaction BEFORE the helper call: ssh_key_id, target_id,
-// os_user, file_path, job_id, send_count, sent_at (the injected clock, RFC 3339 with nanoseconds). The
-// job learns from it whether a send by THIS job is on record (a line found on a retry is its own only
-// then) and when an undo may start (S3).
+// The durable send record of a deploy job (store request S-1; fix round 4: A-I1, A-m6, A-m7). A deploy
+// has no row of its own (its request is the queued job, whose payload the queue MACs) and the migration
+// is closed, so the record is append-only audit rows, written in claim-fenced transactions:
+//   - sshkey.add_sent, before every helper add: ssh_key_id, target_id, os_user, file_path, job_id,
+//     attempt, send_count, sent_at (the injected clock, RFC 3339 with nanoseconds), and the FIRST send's
+//     pre-send evidence: coverage_before (the listing's coverage of the deploy's file; "none" when no
+//     listing) and absent_before (that listing read the file completely and the line was not in it).
+//     A re-send repeats the first send's evidence; its own listing does not change it.
+//   - sshkey.add_answered, when the helper answered an add: send_count and answer ("added" or
+//     "already_present").
+//
+// The job learns from it whether a line found in the file is its own (DeploySendRecord.Owned) and when
+// an undo may start (S3). Every row's request_id is the job id (the claim's).
+
+// ErrNoJobClaim: a deploy's send or answer is recorded only by the job run that holds the deploy's job
+// (the context's claim names that job, and the job is the sshkey.add of this deploy). Nothing was
+// written. A caller bug, never a lost lease (that is inventory.ErrClaimLost).
+var ErrNoJobClaim = errors.New("sshkeys: a deploy's send is recorded only by the run that holds its job")
+
+// ErrNoSendOnRecord: an answer names a send this job never recorded. Nothing was written.
+var ErrNoSendOnRecord = errors.New("sshkeys: no such send of the deploy is on record")
+
+// sendLookupMargin is how far before its job's creation the send lookup reads (a clock stepped back
+// after the job was created). The lookup reads the audit rows from there on, by the primary key.
+const sendLookupMargin = 24 * time.Hour
+
+// Answers of the helper to an add (sshkey.add_answered).
+const (
+	answerAdded   = "added"
+	answerPresent = "already_present"
+)
+
+// DeployEvidence is what a listing taken right before a deploy's send proved about the deploy's line
+// (A-I1). The zero value is "no listing": nothing is known.
+type DeployEvidence struct {
+	Coverage providers.CoverageState // the listing's coverage of the deploy's (user, file); "" without a listing
+	Absent   bool                    // the line is proven absent: Coverage is complete and no line holds the key
+}
+
+// DeployEvidenceFrom is the evidence of a listing (err: the listing failed) for d's line.
+func DeployEvidenceFrom(l providers.KeyListing, err error, d DeployJob) DeployEvidence {
+	if err != nil {
+		return DeployEvidence{}
+	}
+	return DeployEvidence{Coverage: l.Coverage(d.OSUser, d.FilePath), Absent: l.Absent(d.OSUser, d.FilePath, d.Fingerprint)}
+}
+
+// clean keeps only a proof of absence that a complete coverage supports, and a known coverage state.
+func (e DeployEvidence) clean() DeployEvidence {
+	if !slices.Contains([]providers.CoverageState{providers.CoverageComplete, providers.CoverageUnread, providers.CoveragePartial,
+		providers.CoverageUnknown}, e.Coverage) {
+		e.Coverage = ""
+	}
+	e.Absent = e.Absent && e.Coverage == providers.CoverageComplete
+	return e
+}
 
 // DeploySend is the answer of BeginDeploySend.
 type DeploySend struct {
 	OperationID uuid.UUID // the operation id to send with (the job id: a re-send keeps it)
 	SentAt      time.Time
-	Resend      bool // an earlier send by this job is on record
-	Count       int  // sends on record, this one included
+	Resend      bool             // an earlier send by this job is on record
+	Count       int              // sends on record, this one included
+	Record      DeploySendRecord // the record with this send
 }
 
 // DeploySendRecord is what is on record of a job's sends.
 type DeploySendRecord struct {
 	Count                   int
 	FirstAt, PrevAt, LastAt time.Time // zero when none (PrevAt: the send before the last)
+	// The first send's pre-send evidence (kept by every re-send): its listing's coverage of the file
+	// ("" without a listing) and whether that listing proved the line absent.
+	FirstCoverage providers.CoverageState
+	AbsentBefore  bool
+	// The helper's recorded answers to this job's adds (RecordDeployAnswer).
+	AnsweredAdded, AnsweredPresent bool
+}
+
+// Owned reports whether a line of the key in the deploy's file is this job's own, so that the job may
+// remove it again (A-I1, controller ruling): a send is on record, and either the helper answered that a
+// send of this job wrote it, or the listing before the FIRST send read the file completely and proved
+// the line absent and no answer of the helper said it was already there. Every other case (a line
+// present before the first send, a listing that did not read the file completely, no listing) is
+// "not known to be ours": never removed.
+func (r DeploySendRecord) Owned() bool {
+	if r.Count == 0 {
+		return false
+	}
+	return r.AnsweredAdded || (r.AbsentBefore && r.FirstCoverage == providers.CoverageComplete && !r.AnsweredPresent)
 }
 
 // UndoNotBefore is when an undo of the job's line may start (S3): the latest send that has no
@@ -52,22 +126,50 @@ func (r DeploySendRecord) UndoNotBefore(wait time.Duration, latestAnswered bool)
 // (S3). Deploy and rotation handlers use it instead of copying the grace.
 func (s *Service) UndoWait() time.Duration { return s.undoWait() }
 
-// BeginDeploySend records a send of the deploy job before the helper call (claim-fenced: a job that
-// lost its lease records nothing and must not send). The job's row lock (the claim check takes it)
-// serializes the count.
+// BeginDeploySend records a send without pre-send evidence (as BeginDeploySendWith with the zero
+// DeployEvidence: a line found later is never this job's unless the helper answers that it wrote it).
 func (s *Service) BeginDeploySend(ctx context.Context, jobID uuid.UUID, d DeployJob) (DeploySend, error) {
+	return s.BeginDeploySendWith(ctx, jobID, d, DeployEvidence{})
+}
+
+// BeginDeploySendWith records a send of the deploy job before the helper call, with the evidence of the
+// listing taken right before it (DeployEvidenceFrom). Only the first send's evidence counts; a re-send
+// keeps it. It is claim-fenced: the context's claim must name jobID, the sshkey.add job of d
+// (ErrNoJobClaim otherwise), and a run that lost its lease records nothing (inventory.ErrClaimLost)
+// and must not send. The claim check reads the job row FOR SHARE, which keeps the reaper from taking
+// the job back until the row is committed; it does not serialize two holders, and needs not: one claim
+// has one holder.
+func (s *Service) BeginDeploySendWith(ctx context.Context, jobID uuid.UUID, d DeployJob, before DeployEvidence) (DeploySend, error) {
+	c, err := deployClaim(ctx, jobID)
+	if err != nil {
+		return DeploySend{}, err
+	}
 	var out DeploySend
-	err := s.storeTx(ctx, func(tx pgx.Tx) error {
+	err = s.storeTx(ctx, func(tx pgx.Tx) error {
+		if err := checkDeployJob(ctx, tx, jobID, d); err != nil {
+			return err
+		}
 		rec, err := deploySends(ctx, tx, jobID)
 		if err != nil {
 			return err
 		}
 		now := s.clock.Now().UTC()
-		out = DeploySend{OperationID: jobID, SentAt: now, Resend: rec.Count > 0, Count: rec.Count + 1}
+		if rec.Count == 0 {
+			ev := before.clean()
+			rec.FirstAt, rec.FirstCoverage, rec.AbsentBefore = now, ev.Coverage, ev.Absent
+		}
+		rec.PrevAt, rec.LastAt = rec.LastAt, now
+		rec.Count++
+		out = DeploySend{OperationID: jobID, SentAt: now, Resend: rec.Count > 1, Count: rec.Count, Record: rec}
+		coverage := string(rec.FirstCoverage)
+		if coverage == "" {
+			coverage = "none"
+		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: jobActor(ctx), Action: "sshkey.add_sent", ObjectType: "ssh_key",
 			ObjectID: d.KeyID.String(), Result: audit.Success, Details: map[string]string{"ssh_key_id": d.KeyID.String(),
 				"target_id": d.TargetID.String(), "os_user": d.OSUser, "file_path": d.FilePath, "job_id": jobID.String(),
-				"send_count": strconv.Itoa(out.Count), "sent_at": now.Format(time.RFC3339Nano)}})
+				"attempt": strconv.Itoa(c.Attempt), "send_count": strconv.Itoa(out.Count), "sent_at": now.Format(time.RFC3339Nano),
+				"coverage_before": coverage, "absent_before": strconv.FormatBool(rec.AbsentBefore)}})
 		return err
 	})
 	if err != nil {
@@ -76,7 +178,47 @@ func (s *Service) BeginDeploySend(ctx context.Context, jobID uuid.UUID, d Deploy
 	return out, nil
 }
 
-// DeploySends reads what is on record of the job's sends.
+// RecordDeployAnswer records the helper's definite answer to the add of send (added: the helper wrote
+// the line; false: it was already there) and returns the record with it. "Already there" makes the
+// line not the job's (Owned) unless a send of the job wrote it. Claim-fenced as BeginDeploySendWith;
+// ErrNoSendOnRecord when the send is not on record.
+func (s *Service) RecordDeployAnswer(ctx context.Context, d DeployJob, send DeploySend, added bool) (DeploySendRecord, error) {
+	c, ok := inventory.ClaimFrom(ctx)
+	if !ok {
+		return DeploySendRecord{}, ErrNoJobClaim
+	}
+	var rec DeploySendRecord
+	err := s.storeTx(ctx, func(tx pgx.Tx) error {
+		if err := checkDeployJob(ctx, tx, c.JobID, d); err != nil {
+			return err
+		}
+		var err error
+		if rec, err = deploySends(ctx, tx, c.JobID); err != nil {
+			return err
+		}
+		if send.Count < 1 || send.Count > rec.Count {
+			return ErrNoSendOnRecord
+		}
+		answer := answerPresent
+		if added {
+			answer, rec.AnsweredAdded = answerAdded, true
+		} else {
+			rec.AnsweredPresent = true
+		}
+		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: jobActor(ctx), Action: "sshkey.add_answered", ObjectType: "ssh_key",
+			ObjectID: d.KeyID.String(), Result: audit.Success, Details: map[string]string{"ssh_key_id": d.KeyID.String(),
+				"target_id": d.TargetID.String(), "os_user": d.OSUser, "file_path": d.FilePath, "job_id": c.JobID.String(),
+				"attempt": strconv.Itoa(c.Attempt), "send_count": strconv.Itoa(send.Count), "answer": answer,
+				"answered_at": s.clock.Now().UTC().Format(time.RFC3339Nano)}})
+		return err
+	})
+	if err != nil {
+		return DeploySendRecord{}, err
+	}
+	return rec, nil
+}
+
+// DeploySends reads what is on record of the job's sends and answers.
 func (s *Service) DeploySends(ctx context.Context, jobID uuid.UUID) (DeploySendRecord, error) {
 	var out DeploySendRecord
 	err := s.storeTx(ctx, func(tx pgx.Tx) error {
@@ -87,28 +229,109 @@ func (s *Service) DeploySends(ctx context.Context, jobID uuid.UUID) (DeploySendR
 	return out, err
 }
 
-func deploySends(ctx context.Context, tx pgx.Tx, jobID uuid.UUID) (DeploySendRecord, error) {
-	rows, err := tx.Query(ctx, `SELECT details->>'sent_at' FROM audit_log WHERE action = 'sshkey.add_sent' AND details->>'job_id' = $1
-ORDER BY seq`, jobID.String())
-	if err != nil {
-		return DeploySendRecord{}, fmt.Errorf("sshkeys: read the deploy's sends: %w", err)
+// deployClaim is the context's claim when it names jobID (A-m7).
+func deployClaim(ctx context.Context, jobID uuid.UUID) (inventory.Claim, error) {
+	c, ok := inventory.ClaimFrom(ctx)
+	if !ok || c.JobID != jobID {
+		return inventory.Claim{}, ErrNoJobClaim
 	}
-	defer rows.Close()
+	return c, nil
+}
+
+// checkDeployJob refuses a deploy that is not the one of the job (its sshkey.add job names the same key,
+// server, user and file).
+func checkDeployJob(ctx context.Context, tx pgx.Tx, jobID uuid.UUID, d DeployJob) error {
+	var one int
+	err := tx.QueryRow(ctx, `SELECT 1 FROM jobs WHERE id = $1 AND type = $2 AND target_id = $3 AND payload->>'ssh_key_id' = $4
+  AND payload->>'os_user' = $5 AND payload->>'file_path' = $6`, jobID, JobDeploy, d.TargetID, d.KeyID.String(), d.OSUser, d.FilePath).Scan(&one)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrNoJobClaim
+	case err != nil:
+		return fmt.Errorf("sshkeys: read the deploy's job: %w", err)
+	}
+	return nil
+}
+
+// auditFloor is the seq of the latest audit row older than at (0: none), the lower bound of a lookup
+// of rows written since (A-m6). No index of audit_log serves a lookup by job (request_id or
+// details->>'job_id'; the migration is closed): the bound is the primary key, walked backwards from the
+// newest row over the rows written since at, as audit.Append reads the chain's head.
+func auditFloor(ctx context.Context, tx pgx.Tx, at time.Time) (int64, error) {
+	var seq int64
+	if err := tx.QueryRow(ctx, "SELECT coalesce((SELECT seq FROM audit_log WHERE at < $1 ORDER BY seq DESC LIMIT 1), 0)", at).Scan(&seq); err != nil {
+		return 0, fmt.Errorf("sshkeys: read the deploy's sends: %w", err)
+	}
+	return seq, nil
+}
+
+// deployRow is one row of a deploy's record.
+type deployRow struct {
+	action, sentAt, coverage, absent, answer string
+	keyID, osUser, filePath                  string
+}
+
+// deployRows reads the deploy record's rows of the job (actions), in order, from the audit rows written
+// since the job's creation less sendLookupMargin: a range scan of the primary key (A-m6). An unknown job
+// has none.
+func deployRows(ctx context.Context, tx pgx.Tx, jobID uuid.UUID, actions ...string) ([]deployRow, error) {
+	var created time.Time
+	err := tx.QueryRow(ctx, "SELECT created_at FROM jobs WHERE id = $1", jobID).Scan(&created)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("sshkeys: read the deploy's job: %w", err)
+	}
+	floor, err := auditFloor(ctx, tx, created.Add(-sendLookupMargin))
+	if err != nil {
+		return nil, err
+	}
+	rows, _ := tx.Query(ctx, `SELECT action, coalesce(details->>'sent_at', ''), coalesce(details->>'coverage_before', ''),
+    coalesce(details->>'absent_before', ''), coalesce(details->>'answer', ''), coalesce(details->>'ssh_key_id', ''),
+    coalesce(details->>'os_user', ''), coalesce(details->>'file_path', '')
+FROM audit_log WHERE seq > $1 AND request_id = $2 AND action = ANY ($3) AND details->>'job_id' = $2 ORDER BY seq`,
+		floor, jobID.String(), actions)
+	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (deployRow, error) {
+		var d deployRow
+		err := r.Scan(&d.action, &d.sentAt, &d.coverage, &d.absent, &d.answer, &d.keyID, &d.osUser, &d.filePath)
+		return d, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sshkeys: read the deploy's sends: %w", err)
+	}
+	return out, nil
+}
+
+func deploySends(ctx context.Context, tx pgx.Tx, jobID uuid.UUID) (DeploySendRecord, error) {
+	rows, err := deployRows(ctx, tx, jobID, "sshkey.add_sent", "sshkey.add_answered")
+	if err != nil {
+		return DeploySendRecord{}, err
+	}
+	return sendRecord(rows)
+}
+
+// sendRecord folds a deploy's sshkey.add_sent and sshkey.add_answered rows into its record (rows of
+// other actions are not passed).
+func sendRecord(rows []deployRow) (DeploySendRecord, error) {
 	var r DeploySendRecord
-	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
-			return DeploySendRecord{}, fmt.Errorf("sshkeys: read the deploy's sends: %w", err)
+	for _, d := range rows {
+		if d.action != "sshkey.add_sent" { // sshkey.add_answered
+			r.AnsweredAdded = r.AnsweredAdded || d.answer == answerAdded
+			r.AnsweredPresent = r.AnsweredPresent || d.answer == answerPresent
+			continue
 		}
-		at, err := time.Parse(time.RFC3339Nano, raw)
+		at, err := time.Parse(time.RFC3339Nano, d.sentAt)
 		if err != nil {
 			return DeploySendRecord{}, fmt.Errorf("sshkeys: read the deploy's sends: %w", err)
 		}
 		if r.Count == 0 {
 			r.FirstAt = at.UTC()
+			r.FirstCoverage = DeployEvidence{Coverage: providers.CoverageState(d.coverage)}.clean().Coverage
+			r.AbsentBefore = d.absent == "true" && r.FirstCoverage == providers.CoverageComplete
 		}
 		r.PrevAt, r.LastAt = r.LastAt, at.UTC()
 		r.Count++
 	}
-	return r, rows.Err()
+	return r, nil
 }

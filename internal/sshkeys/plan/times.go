@@ -55,3 +55,15 @@ func DecisionDue(waitingSince time.Time) time.Time { return waitingSince.UTC().A
 func Fresh(now, reverifiedAt time.Time) bool {
 	return !reverifiedAt.After(now) && now.Sub(reverifiedAt) <= freshness
 }
+
+// NextRunAfter is the run after prev that is still ahead at now: the first boundary prev + k
+// intervals (k >= 1) whose notice (NoticeDue) is after now. After downtime the schedule moves past
+// every missed interval in one step (re-review A-m5); on time it is NextRun.
+func NextRunAfter(prev time.Time, intervalDays, notifyBeforeHours int, now time.Time) time.Time {
+	step := time.Duration(max(intervalDays, 1)) * day
+	next := NextRun(prev, max(intervalDays, 1))
+	if late := now.Sub(NoticeDue(next, notifyBeforeHours)); late >= 0 {
+		next = next.Add((late/step + 1) * step)
+	}
+	return next
+}

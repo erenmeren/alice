@@ -44,8 +44,7 @@ FROM rotation_locations WHERE id = $1)`, locs[web1])
 	require.NoError(t, err)
 	e.failLocationJobs()
 	sum, err := e.svc.Sweep(e.ctx)
-	var g *sshkeys.GuardRefusal
-	assert.ErrorAs(t, err, &g)
+	assert.NoError(t, err, "a handled refusal is not an error of the tick (round 4, A-m3)")
 	assert.Equal(t, 1, sum.Requeued, "web-02 got its job")
 	got := e.run(r.ID)
 	var w1 sshkeys.RotationLocation

@@ -275,3 +275,32 @@ func joinLine(options, key, comment string) string {
 	}
 	return strings.Join(parts, " ")
 }
+
+// ConnectionStates are the target statuses that say only how the last connection went (it may have
+// recovered since; the job finds out when it connects). The planner skips them; the send-time rule
+// does not (re-review A-m2): a stale status neither cancels a place untried nor rolls a run back.
+var ConnectionStates = []string{"unreachable", "checking", "auth_failed"}
+
+// SkipsAtSend are the skip reasons the send-time rule re-evaluates: durable facts of the server, its
+// accounts and the line (target_not_connected only for a disabled server). Every planner reason is one,
+// except a target_not_connected that comes from a ConnectionStates status.
+var SkipsAtSend = []string{SkipTargetDeleted, SkipHostKeyUnconfirmed, SkipHostKeyChanged, SkipTargetNotConnected, SkipMissing,
+	SkipCertAuthority, SkipDuplicateLines, SkipOptionsUnreadable, SkipConnectionAccount, SkipConnectionFilesUnknown,
+	SkipConnectionAccountFile, SkipKeysManagedElsewhere, SkipSSHDUnreadable, SkipPubkeyDisabled, SkipRootForcedCommands, SkipSharedFile}
+
+// SkipAtSend is the planner's rule for one location right before its add is sent, on the same facts
+// the planner reads (preview = run): Build's per-location rule and its shared-file rule (fileLocations
+// is the number of the key's locations in the location's (target, file), itself included), without
+// the connection states.
+func SkipAtSend(t Target, known bool, l Location, fileLocations int) string {
+	if slices.Contains(ConnectionStates, t.Status) {
+		t.Status = "ok"
+	}
+	if r := skipReason(t, known, l); r != "" {
+		return r
+	}
+	if fileLocations > 1 {
+		return SkipSharedFile
+	}
+	return ""
+}

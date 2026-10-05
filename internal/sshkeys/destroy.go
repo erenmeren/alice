@@ -29,8 +29,9 @@ var destroyActor = audit.SystemActor("jobs")
 // is neither missing nor removed by Alice, on a server that is not deleted. A key an unfinished
 // rotation references (old or new key) is left alone. A key whose private key is already destroyed
 // and that is live again stays retired (the database refuses to un-retire it, Z1014); it is audited
-// sshkey.live_after_destruction once. One key's failure does not stop the others: the errors are
-// joined. It returns the number of keys destroyed.
+// sshkey.live_after_destruction once. It also retires unused old keys of completed rotations and
+// reconciles deploy sends whose job ended without an outcome (reconcileDeploySends). One key's failure
+// does not stop the others: the errors are joined. It returns the number of keys destroyed.
 func (s *Service) DestroyRetiredKeys(ctx context.Context) (int, error) {
 	rows, err := s.pool.Query(ctx, `SELECT k.id FROM ssh_keys k JOIN managed_private_keys p ON p.id = k.private_key_id
 WHERE k.retired_at IS NOT NULL AND p.destroyed_at IS NULL ORDER BY k.retired_at, k.id LIMIT $1`, maxDestroyBatch)
@@ -58,6 +59,9 @@ WHERE k.retired_at IS NOT NULL AND p.destroyed_at IS NULL ORDER BY k.retired_at,
 		errs = append(errs, err)
 	}
 	if err := s.retireUnusedOldKeys(ctx); err != nil {
+		errs = append(errs, err)
+	}
+	if err := s.reconcileDeploySends(ctx); err != nil {
 		errs = append(errs, err)
 	}
 	return n, errors.Join(errs...)

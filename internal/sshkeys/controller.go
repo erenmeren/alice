@@ -149,8 +149,9 @@ func (s *Service) cancelPreviewed(ctx context.Context, id uuid.UUID, reason stri
 }
 
 // cancelIfPreviewed cancels a run that is still previewed, under its row lock. A run cancelled for an
-// undelivered notice counts as its interval's run: an enabled policy's next run moves one interval on
-// (review M4: at most one cancelled run per interval, no create-and-cancel loop).
+// undelivered notice counts as its interval's run: an enabled policy's next run moves to the first
+// interval still ahead (review M4: at most one cancelled run per interval, no create-and-cancel loop;
+// A-m5: after downtime, past every missed interval at once).
 func (s *Service) cancelIfPreviewed(ctx context.Context, id uuid.UUID, actor audit.Actor, reason string) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		run, err := lockRun(ctx, tx, id)
@@ -163,8 +164,20 @@ func (s *Service) cancelIfPreviewed(ctx context.Context, id uuid.UUID, actor aud
 		if reason != ReasonNoticeUndelivered {
 			return nil
 		}
-		_, err = tx.Exec(ctx, `UPDATE rotation_policies SET next_run_at = next_run_at + make_interval(days => interval_days)
-WHERE id = $1 AND enabled AND deleted_at IS NULL AND next_run_at IS NOT NULL`, run.policyID)
+		// The next run is the first one still ahead (A-m5: after downtime, past every missed interval
+		// in one step). Lock order: run, then policy.
+		var next time.Time
+		var interval, notify int
+		err = tx.QueryRow(ctx, `SELECT next_run_at, interval_days, notify_before_hours FROM rotation_policies
+WHERE id = $1 AND enabled AND deleted_at IS NULL AND next_run_at IS NOT NULL FOR UPDATE`, run.policyID).Scan(&next, &interval, &notify)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return nil // switched off or deleted meanwhile: no next run
+		case err != nil:
+			return fmt.Errorf("sshkeys: read the policy: %w", err)
+		}
+		_, err = tx.Exec(ctx, "UPDATE rotation_policies SET next_run_at = $2 WHERE id = $1", run.policyID,
+			plan.NextRunAfter(next, interval, notify, s.clock.Now().UTC()))
 		if err != nil {
 			return policyWriteError(err)
 		}

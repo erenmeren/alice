@@ -136,10 +136,13 @@ func (s *Service) requeue(ctx context.Context, id uuid.UUID) (queued int, ended 
 			// so the run can reach needs_attention, which names it.
 			s.log.Error("the database refused a location's re-queue", "rotation_id", id.String(), "location_id", lid.String(),
 				"sqlstate", g.Code, "constraint", g.Constraint, "guard", g.Message)
-			if ferr := s.failRefused(ctx, lid); ferr != nil {
+			switch done, ferr := s.failRefused(ctx, lid); {
+			case ferr != nil:
 				err = errors.Join(err, ferr)
-			} else {
-				e = true
+			case done:
+				// Handled: the row ended with the reason; not an error of this tick, and the run advances
+				// at once (re-review A-m3).
+				err, e = nil, true
 			}
 		}
 		if err != nil {
@@ -185,6 +188,9 @@ func (s *Service) requeueOne(ctx context.Context, runID, locID uuid.UUID) (queue
 			return appendStep(ctx, tx, runID, &l.id, "remove_retry", "started", nil, now)
 		}
 		if l.jobCount >= MaxLocationJobs && phase == "undo" && l.state == LocAdding {
+			if now.Before(lastAddSend(l)) {
+				return nil // the clock went back behind the latest send: BeginUndo's check (G14; re-review A-m9)
+			}
 			// G17, review I3: an adding row is never ended without an undo; its undo jobs did not get
 			// through, so the sweep records the undo's start itself (no network) and the undoing row is
 			// then bounded like any other.
@@ -214,27 +220,42 @@ func (s *Service) requeueOne(ctx context.Context, runID, locID uuid.UUID) (queue
 }
 
 // failRefused ends a location the database refuses to re-queue in its failed state with
-// rotation.guard_refused (a removing row → remove_failed: the old key stays; an undo-pending row →
-// undo_failed; an add-side row → add_failed).
-func (s *Service) failRefused(ctx context.Context, locID uuid.UUID) error {
-	return s.storeTx(ctx, func(tx pgx.Tx) error {
+// rotation.guard_refused, by an edge the database allows in the run's status (re-review A-m4):
+//   - removing_old: verified or removing → remove_failed (the old key stays);
+//   - adding_new: planned, adding or added → add_failed;
+//   - rolling_back: a row pending its undo, except adding (G17: a sent add may still land; only a
+//     real undo ends it) → undo_failed, and a scan of the server (the new key may be left there).
+//
+// ended is false when the row has no such edge (it is left as it is; the refusal stays an error).
+func (s *Service) failRefused(ctx context.Context, locID uuid.UUID) (ended bool, err error) {
+	err = s.storeTx(ctx, func(tx pgx.Tx) error {
+		ended = false
 		run, l, err := lockLocation(ctx, tx, locID, false)
 		if err != nil || run.finished() {
 			return err
 		}
 		var to string
 		switch {
-		case l.state == LocRemoving || l.state == LocVerified:
+		case run.status == StatusRemovingOld && (l.state == LocRemoving || l.state == LocVerified):
 			to = LocRemoveFailed
-		case run.status == StatusRollingBack && l.state != LocAdding:
-			to = LocUndoFailed
-		case slices.Contains([]string{LocPlanned, LocAdding, LocAdded}, l.state):
+		case run.status == StatusAddingNew && slices.Contains([]string{LocPlanned, LocAdding, LocAdded}, l.state):
 			to = LocAddFailed
+		case run.status == StatusRollingBack && undoPending(l) && l.state != LocAdding:
+			to = LocUndoFailed
 		default:
 			return nil
 		}
-		return s.setLocation(ctx, tx, jobActor(ctx), l, to, ReasonGuardRefused, s.clock.Now().UTC(), ", error_code = $5", ReasonGuardRefused)
+		if err := s.setLocation(ctx, tx, jobActor(ctx), l, to, ReasonGuardRefused, s.clock.Now().UTC(), ", error_code = $5",
+			ReasonGuardRefused); err != nil {
+			return err
+		}
+		ended = true
+		if to == LocUndoFailed {
+			return s.queueDiscovery(ctx, tx, l.targetID)
+		}
+		return nil
 	})
+	return ended && err == nil, err
 }
 
 // exhaust ends a location whose jobs reached MaxLocationJobs without progress (rotation.retries_exhausted).

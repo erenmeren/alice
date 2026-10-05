@@ -1,6 +1,11 @@
 package sshkeys
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/google/uuid"
+)
 
 // HoldGenerationSlots takes every generation slot until the returned release is called.
 func HoldGenerationSlots(t *testing.T) func() {
@@ -60,4 +65,15 @@ func OnRetireCandidates(t *testing.T, fn func()) {
 	t.Helper()
 	onRetireCandidates = fn
 	t.Cleanup(func() { onRetireCandidates = nil })
+}
+
+// FailRefused ends a location the database refused to re-queue (see failRefused); ended reports
+// whether an edge of the run's status existed.
+func FailRefused(ctx context.Context, s *Service, locID uuid.UUID) (bool, error) {
+	return s.failRefused(ctx, locID)
+}
+
+// ReconcileDeploy reconciles one ended deploy job (see reconcileDeploy): the re-checks under the job's lock.
+func ReconcileDeploy(ctx context.Context, s *Service, jobID uuid.UUID) error {
+	return s.reconcileDeploy(ctx, jobID)
 }

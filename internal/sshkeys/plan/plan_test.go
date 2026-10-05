@@ -480,3 +480,64 @@ func TestSkipForIsTheBuildRule(t *testing.T) {
 	assert.Equal(t, SkipKeysManagedElsewhere, SkipFor(tg, true, l))
 	assert.Equal(t, SkipTargetDeleted, SkipFor(tg, false, l))
 }
+
+// Re-review A-m2: the send-time rule is the planner's rule on the same facts, without the connection
+// states (a stale unreachable, checking or auth_failed status is not a reason not to try), and with
+// the shared-file rule over the key's locations in the file.
+func TestSkipAtSendReevaluatesTheDurableReasonsOnly(t *testing.T) {
+	durable := []struct {
+		name   string
+		target func(*Target)
+		loc    func(*Location)
+		want   string
+	}{
+		{"deleted", func(t *Target) { t.Deleted = true }, nil, SkipTargetDeleted},
+		{"pending host key", func(t *Target) { t.Status = "pending_host_key" }, nil, SkipHostKeyUnconfirmed},
+		{"changed host key", func(t *Target) { t.Status = "host_key_changed" }, nil, SkipHostKeyChanged},
+		{"disabled", func(t *Target) { t.Status = "disabled" }, nil, SkipTargetNotConnected},
+		{"missing", nil, func(l *Location) { l.Missing = true }, SkipMissing},
+		{"cert authority", nil, func(l *Location) { l.Flags = []string{"cert_authority"} }, SkipCertAuthority},
+		{"duplicate lines", nil, func(l *Location) { l.Flags = []string{"duplicate"} }, SkipDuplicateLines},
+		{"options unreadable", nil, func(l *Location) { l.Options = "command=\"a�b\"" }, SkipOptionsUnreadable},
+		{"connection account", nil, func(l *Location) { l.OSUser = "alice-svc" }, SkipConnectionAccount},
+		{"connection files unknown", func(t *Target) { t.ConnectionFilesKnown = false }, nil, SkipConnectionFilesUnknown},
+		{"connection account's file", func(t *Target) { t.ConnectionFiles = []string{"/home/deploy/.ssh/authorized_keys"} }, nil,
+			SkipConnectionAccountFile},
+		{"keys managed elsewhere", func(t *Target) { t.KeysManagedElsewhere = true }, nil, SkipKeysManagedElsewhere},
+		{"keys managed elsewhere for the user", func(t *Target) { t.ManagedElsewhereUsers = []string{"deploy"} }, nil, SkipKeysManagedElsewhere},
+		{"sshd unreadable", func(t *Target) { t.SSHDRead = false }, nil, SkipSSHDUnreadable},
+		{"sshd unreadable for the user", func(t *Target) { t.SSHDUnreadUsers = []string{"deploy"} }, nil, SkipSSHDUnreadable},
+		{"pubkey off", func(t *Target) { t.PubkeyAuthentication = "no" }, nil, SkipPubkeyDisabled},
+		{"root forced commands only", func(t *Target) { t.PermitRootLogin = "forced-commands-only" }, func(l *Location) {
+			l.OSUser, l.FilePath = "root", "/root/.ssh/authorized_keys"
+		}, SkipRootForcedCommands},
+	}
+	for _, c := range durable {
+		t.Run(c.name, func(t *testing.T) {
+			tg, l := okTarget(t1, "web-01"), loc(t1, "deploy", "/home/deploy/.ssh/authorized_keys", "")
+			if c.target != nil {
+				c.target(&tg)
+			}
+			if c.loc != nil {
+				c.loc(&l)
+			}
+			assert.Contains(t, SkipsAtSend, c.want)
+			assert.Equal(t, c.want, SkipAtSend(tg, true, l, 1))
+			assert.Equal(t, SkipFor(tg, true, l), SkipAtSend(tg, true, l, 1), "the planner's rule")
+		})
+	}
+	tg, l := okTarget(t1, "web-01"), loc(t1, "deploy", "/home/deploy/.ssh/authorized_keys", "")
+	assert.Equal(t, SkipSharedFile, SkipAtSend(tg, true, l, 2), "another location of the key in the file")
+	assert.Contains(t, SkipsAtSend, SkipSharedFile)
+	assert.Equal(t, SkipTargetDeleted, SkipAtSend(tg, false, l, 1), "a target gone")
+	assert.Equal(t, "", SkipAtSend(tg, true, l, 1))
+	for _, status := range ConnectionStates {
+		tg.Status = status
+		assert.Equal(t, SkipTargetNotConnected, SkipFor(tg, true, l), "the planner skips %s", status)
+		assert.Equal(t, "", SkipAtSend(tg, true, l, 1), "a %s status is not re-evaluated at send time", status)
+		tg.KeysManagedElsewhere = true
+		assert.Equal(t, SkipKeysManagedElsewhere, SkipAtSend(tg, true, l, 1), "the durable reasons still apply while %s", status)
+		tg.KeysManagedElsewhere = false
+	}
+	assert.ElementsMatch(t, []string{"unreachable", "checking", "auth_failed"}, ConnectionStates)
+}
