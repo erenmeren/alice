@@ -40,28 +40,28 @@ against the code: 41 defects of the plan and 15 design findings (S1 to S15), rul
 ## Evidence
 
 All commands run from the repository root; `-tags integration` needs Docker (testcontainers). The column "Recorded
-at 6e26e42" holds the results recorded by the agents who built and fixed the phase (the last full runs before the
-phase-close documentation, taken from their reports), not runs made for this review, which was written without
-Docker. The column "Final run" holds the results of the final `make coverage` and `make ci` at the commit named in
-the sign-off; a cell that reads PENDING-FINAL-RUN was not filled yet.
+before the final run" holds the latest results recorded by the agents who built and fixed the phase, taken from their
+reports (the final fix round's runs at c3f2b4e where it ran the check, otherwise as marked), not runs made for this
+review, which was written without Docker. The column "Final run" holds the results of the final `make ci` (which runs
+`make coverage`) at the commit named in the sign-off; a cell that reads PENDING-FINAL-RUN was not filled yet.
 
-| # | Check | Command | Expected | Recorded at 6e26e42 | Final run |
+| # | Check | Command | Expected | Recorded before the final run | Final run |
 |---|---|---|---|---|---|
-| 1 | Vault address, ID, name, version and thumbprint grammars; fuzz of the address parser | `go test ./internal/platform/azureid -count=1` | ok | ok, coverage 100 % | PENDING-FINAL-RUN |
-| 2 | Guarded transports, sign-in wrapper, error mapping (no Azure text in any rendering), retry and budgets, the per-vault limiter (also with a clock that steps backwards), listing bounds and cycles, managed identity only to the metadata address, refused environment variables, SDK surface rules, import outcomes, secret read | `go test -race -count=3 ./internal/providers/azurekv/` | ok | ok, coverage 98.5 % | PENDING-FINAL-RUN |
-| 3 | Provider contract: import result rules, conformance of every session implementation, the scripted provider fake | `go test ./internal/providers/... -count=1` | ok | ok, `internal/providers` 100 % | PENDING-FINAL-RUN |
-| 4 | Key Vault secret decoding (also a PFX with certificates and no key, in the Java trust-store and the openssl/.NET shapes), sign-in certificates, PFX export, buffers cleared; fuzz | `go test ./internal/certs -count=1`, `make fuzz-certs` | ok, no crasher | ok, coverage 98.1 %; `FuzzParseKVSecret` 30 s, no crash (Tasks 1–3) | PENDING-FINAL-RUN |
-| 5 | The fake Azure service against the reference shapes and the real SDK clients (three sign-in methods, paging, import, challenge verification left on) | `go test -race -count=8 ./internal/testutil/fakekv` | ok | ok | PENDING-FINAL-RUN |
-| 6 | Migrations `00008` and `00009`: grants listed exactly, triggers `Z1005`–`Z1008`, no column that can hold a secret, names under a Turkish collation, down refusal, `chain_incomplete` up, down and up again | `go test -tags integration ./migrations -count=1` | ok | ok | PENDING-FINAL-RUN |
-| 7 | Inventory: vaults and sealed credentials, polling and failure transitions, hold rules, connections, planner, imports, pre-check and material step, the not-exportable mark and its clearing, `chain_incomplete`, zeroing, leak dumps | `go test -tags integration -count=1 -cover ./internal/inventory/...` | ok | ok, coverage 89.1 % (floor 88) | PENDING-FINAL-RUN |
-| 8 | Jobs: access check, poll, import, periodic tasks, poll cap in the claim, deadlines, L-87 (`TestL87PollInFlightAtLock`), `deployment_id` and `import_id` on job items; the vault step of the deployment engine (also an unreadable sealed credential), L-80 to L-82 with a vault deployment (`TestL80L82WithAKeyVaultDeployment`, `TestL81KVDeploymentHeldThenConfirmed`) | `go test -tags integration -count=1 -cover ./internal/jobs/...` | ok | ok: `kvjobs` 100 %, `deployjobs` 99.3 %, `jobs` 89.1 % (floor 89) | PENDING-FINAL-RUN |
-| 9 | API over the wire with the real provider and the fake service: journeys, F-40 to F-52, A-14, S-01 to S-05 with Azure canaries, license lock, held versions, imports sent once, clock skew, `ALC-AKV-0041`, a secret without a key, a vault's `last_error` params | `go test -tags integration -count=1 -cover ./internal/api/...` | ok | ok, coverage 95.0 % (floor 93) | PENDING-FINAL-RUN |
-| 10 | Authorization matrix incl. `credentials.manage` and the conditional rules; error catalogue `ALC-AKV-0001`..`0041` with EN and TR texts that render with partial params, and a troubleshooting section for each | `go test ./internal/api ./internal/rbac -count=1` and `make authz-doc && git diff --exit-code docs/authz-matrix.md` | ok, no diff | ok, no diff | PENDING-FINAL-RUN |
-| 11 | Release binary holds no e2e trust path, no fake and no dial seam; the fake's image reuses the pinned base images; only test files set the request-secret zeroing observer | `make release-symcheck`, `make image-check`, `go test ./internal/archtest/... ./cmd/...` | ok | ok | PENDING-FINAL-RUN |
-| 12 | Web: Vitest; Playwright journeys EN/TR with axe on the e2e stack with the `fakeazure` service | `make web-coverage`; `make e2e-up && make e2e-hardening-check && make e2e`, then `make e2e-down` | all passed | Vitest: 68 files, 898 tests. Playwright: full run 84 passed, 0 failed, 0 retried (22.0 min); the Phase 5 spec has 11 journeys in EN and TR | PENDING-FINAL-RUN |
-| 13 | The setup guide quotes the role guide's `az` commands exactly | `go test ./internal/api -run TestAzureSetupGuideQuotesTheRoleGuideCommands -count=1` | ok | ok at b7ec401 (shown red with one changed character first) | PENDING-FINAL-RUN |
-| 14 | Coverage floors: every package at or above its floor; new floors `internal/platform/azureid` 100, `internal/providers/azurekv` and `internal/jobs/kvjobs` at their measured values rounded down | `make coverage` | ok | not run as a whole; package values as in rows 1–9 | PENDING-FINAL-RUN |
-| 15 | The whole gate: lint, test, coverage, test-ssh, build, release-symcheck, i18n-check, web-lint, web-coverage, vuln, secrets-scan, fs-scan, the e2e stack with hardening and Playwright, image-check, image-scan | `make ci` | ok | not run as a whole at 6e26e42 | PENDING-FINAL-RUN |
+| 1 | Vault address, ID, name, version and thumbprint grammars; fuzz of the address parser | `go test ./internal/platform/azureid -count=1` | ok | ok, coverage 100.00 % (floor 100) | PENDING-FINAL-RUN |
+| 2 | Guarded transports, sign-in wrapper, error mapping (no Azure text in any rendering), retry and budgets, the per-vault limiter (also with a clock that steps backwards), listing bounds and cycles, managed identity only to the metadata address, refused environment variables, SDK surface rules, import outcomes, secret read | `go test -race -count=3 ./internal/providers/azurekv/` | ok | ok, coverage 98.49 % (floor 98) | PENDING-FINAL-RUN |
+| 3 | Provider contract: import result rules, conformance of every session implementation, the scripted provider fake | `go test ./internal/providers/... -count=1` | ok | ok, `internal/providers` 100 % (floor 100) | PENDING-FINAL-RUN |
+| 4 | Key Vault secret decoding (also a PFX with certificates and no key, in the Java trust-store and the openssl/.NET shapes, and one whose key sits in a nested bag), sign-in certificates, PFX export, buffers cleared; fuzz | `go test ./internal/certs -count=1`, `make fuzz-certs` | ok, no crasher | ok, coverage 98.13 % (floor 98); `FuzzParseKVSecret` 30 s, no crash (Tasks 1–3) | PENDING-FINAL-RUN |
+| 5 | The fake Azure service against the reference shapes and the real SDK clients (three sign-in methods, paging, import, challenge verification left on) | `go test -race -count=8 ./internal/testutil/fakekv` | ok | ok (`make test`) | PENDING-FINAL-RUN |
+| 6 | Migrations `00008` and `00009`: grants listed exactly, triggers `Z1005`–`Z1008`, no column that can hold a secret, names under a Turkish collation, down refusal, `chain_incomplete` up, down and up again | `go test -tags integration ./migrations -count=1` | ok | ok (integration, final fix round) | PENDING-FINAL-RUN |
+| 7 | Inventory: vaults and sealed credentials, polling and failure transitions, hold rules, connections, planner, imports, pre-check and material step, the not-exportable mark and its clearing, `chain_incomplete`, zeroing, leak dumps | `go test -tags integration -count=1 -cover ./internal/inventory/...` | ok | ok, coverage 89.12 % (floor 89) | PENDING-FINAL-RUN |
+| 8 | Jobs: access check, poll, import, periodic tasks, poll cap in the claim, deadlines, L-87 (`TestL87PollInFlightAtLock`), `deployment_id` and `import_id` on job items; the vault step of the deployment engine (also an unreadable sealed credential), L-80 to L-82 with a vault deployment (`TestL80L82WithAKeyVaultDeployment`, `TestL81KVDeploymentHeldThenConfirmed`) | `go test -tags integration -count=1 -cover ./internal/jobs/...` | ok | ok: `kvjobs` 100.00 % (floor 100), `deployjobs` 99.30 % (floor 99), `jobs` 89.21 % (floor 89) | PENDING-FINAL-RUN |
+| 9 | API over the wire with the real provider and the fake service: journeys, F-40 to F-52, A-14, S-01 to S-05 with Azure canaries, license lock, held versions, imports sent once, clock skew, `ALC-AKV-0041`, a secret without a key, a vault's `last_error` params | `go test -tags integration -count=1 -cover ./internal/api/...` | ok | ok, coverage 94.96 % (floor 94) | PENDING-FINAL-RUN |
+| 10 | Authorization matrix incl. `credentials.manage` and the conditional rules; error catalogue `ALC-AKV-0001`..`0041` with EN and TR texts that render with partial params, and a troubleshooting section for each | `go test ./internal/api ./internal/rbac -count=1` and `make authz-doc && git diff --exit-code docs/authz-matrix.md` | ok, no diff | ok (`make test`); the authz matrix had no diff at 6e26e42 | PENDING-FINAL-RUN |
+| 11 | Release binary holds no e2e trust path, no fake and no dial seam; the fake's image reuses the pinned base images; only test files set the request-secret zeroing observer | `make release-symcheck`, `make image-check`, `go test ./internal/archtest/... ./cmd/...` | ok | ok at 6e26e42 (Task 19 and the fix wave); not re-run by the final fix round | PENDING-FINAL-RUN |
+| 12 | Web: Vitest; Playwright journeys EN/TR with axe on the e2e stack with the `fakeazure` service | `make web-coverage`; `make e2e-up && make e2e-hardening-check && make e2e`, then `make e2e-down` | all passed | Vitest: 68 files, 903 tests. Playwright: Phase 5 spec 22 passed (11 journeys in EN and TR); full run 84 passed, 0 failed, 0 retried (26.2 min) | PENDING-FINAL-RUN |
+| 13 | The setup guide quotes the role guide's `az` commands exactly | `go test ./internal/api -run TestAzureSetupGuideQuotesTheRoleGuideCommands -count=1` | ok | ok at b7ec401 (shown red with one changed character first) and in `make test` of the final fix round | PENDING-FINAL-RUN |
+| 14 | Coverage floors: every package at or above its floor; floors of `coverage-floors.json` at c3f2b4e, among them the new `internal/platform/azureid` 100, `internal/providers/azurekv` 98 and `internal/jobs/kvjobs` 100, and the raised `internal/api` 94, `internal/certs` 98, `internal/inventory` 89 | `make coverage` | ok | `make coverage` rc 0 (second run of the final fix round, after f5ef240); floors set from it in c3f2b4e | PENDING-FINAL-RUN |
+| 15 | The whole gate: lint, test, coverage, test-ssh, build, release-symcheck, i18n-check, web-lint, web-coverage, vuln, secrets-scan, fs-scan, the e2e stack with hardening and Playwright, image-check, image-scan | `make ci` | ok | not run as a whole; the final fix round ran lint (0 issues), `make test`, `make coverage`, Vitest, i18n-check and the full e2e run separately | PENDING-FINAL-RUN |
 | 16 | The optional real-Azure suite | `make test-azure` | — | **never run** (no subscription) | **never run** (no subscription) |
 
 Mutation evidence of the final review of the provider area (a scratch copy outside the repository, at 6e26e42): of
@@ -73,7 +73,10 @@ check, the secret's ID and version match, the secret read's total budget, the `e
 authority prefix; and on the certificate side `ExportPFX`'s key match makes 7); 1 survived (clearing the decoded
 bytes of a refused second private-key block in a PEM secret, not pinned by a test).
 
-`internal/jobs` and `internal/inventory` are close to their floors (89.1 against 89, and 89.1 against 88 at 6e26e42).
+Coverage floors at phase close (c3f2b4e): new floors `internal/platform/azureid` 100, `internal/providers/azurekv` 98
+and `internal/jobs/kvjobs` 100; raised `internal/api` 94, `internal/certs` 98 and `internal/inventory` 89. The final fix
+round's own full `make coverage` (rc 0, after f5ef240) measured `internal/inventory` 89.12, `internal/certs` 98.13 and
+`internal/jobs` 89.21: about 0.1 to 0.2 points above their floors, so any change there needs its tests.
 
 ## Threat notes
 
@@ -211,9 +214,15 @@ commits. None was rated Critical by its reviewer.
 | P5-31 | Web | Three serious axe violations, theme-wide: table scroll areas a keyboard could not reach, and two red-on-white contrasts of fields with an error; the first fix's focus ring was clipped and the scroll area had no name. | Fixed: 7da356e, c7d654a, 8add878, then b4e1c36. |
 | P5-32 | Test evidence | Playwright: axe scans ran before a dialog was visible, the throttling cycles could pass on a stale screen, some counts were vacuous, the firewall address was not asserted, and the incomplete-chain release was not driven. | Fixed (tests only): 98800fc, 1dbb305. |
 | P5-33 | Test evidence | A provider test drove the fake clock in real time and failed under CPU load. | Fixed (tests only): 24985d3 (`Fake.AdvanceToNextTimer`). |
-| P5-34 | Inventory | Final review: an Administrator's chain confirmation was dropped when another vault object had delivered the same leaf with a complete chain, so such a version could never be deployed. | Sent to the final fix round. |
-| P5-35 | Migration | Scoped re-review: rows held for their chain before migration `00009` get `chain_incomplete = false`, so after a release the first **Deploy now** fails closed at the read before the mark is set. | Sent to the final fix round. |
-| P5-36 | Web and emails | Final review: the add dialog called a firewall refusal a missing permission; the import confirmation promised an automatic deployment that may not happen; three emails pointed to a page or a control that does not exist; every table's scroll area was a landmark with one shared name (axe `landmark-unique`, moderate). | Sent to the final fix round. |
+| P5-34 | Inventory | Final review: an Administrator's chain confirmation was dropped when another vault object had delivered the same leaf with a complete chain, so such a version could never be deployed. | Fixed: 4c7235a (the version's own `chain_incomplete` wins over the shared certificate row). |
+| P5-35 | Migration | Scoped re-review: rows held for their chain before migration `00009` got `chain_incomplete = false`, so after a release the first **Deploy now** failed closed at the read before the mark was set. | Fixed: 509e5b7 (`00009` amended in place to mark them; see the known limitation on databases that ran the first form). |
+| P5-36 | Web and emails | Final review: the add dialog called a firewall refusal a missing permission; the import confirmation promised an automatic deployment that may not happen; three emails pointed to a page or a control that does not exist; every table's scroll area was a landmark with one shared name (axe `landmark-unique`, moderate). | Fixed: d4d25a0, 20ce34a, 447b6c6, 118af0f (the scroll area is a named group). |
+| P5-37 | Inventory and audit | Final review B: a version first stored from a version list was not judged by the hold rule and got no new-version audit row when it became current; releasing a chain hold audited `confirm_incomplete_chain`, as if it approved automatic deployment; the access check's secret read was audited without the person who asked. | Fixed: 23d3e95, 1d55040 (`chain_incomplete_acknowledged`), 1dcc3a5 (`requested_by`, `requested_by_role`). |
+| P5-38 | Imports and jobs | Final review B: an uncertain import could be settled by an earlier version with the same thumbprint (Azure's clock ahead of Alice's); a `kv.import` job ended `succeeded` for an import another path had failed, or `dead` with an email when the vault was removed during the send. | Fixed: 9a956f6 (only a version Alice stored after the send, not settled by another import), 1de998e (the job fails with the import's code, no retry, no email). |
+| P5-39 | API and texts | Final review B: an API token in the race window of a hold or a switch-on was told to step up (`ALC-AUTH-0003`) where the documents promise `ALC-AUTH-0002`; `certificate.pfx_busy` told a Key Vault deployment to upload a file again; OpenAPI omitted routine refusals. | Fixed: abc60ef, 96f10b2, f4f7162. |
+| P5-40 | Web | Final review C minors: the Deploy now dialog kept a chain request across versions and let an Operator resubmit into the same refusal; an Operator's row offered Deploy now for a known-incomplete chain; the release of a chain hold with automatic deployment off did not say that Deploy now asks again; one failing vault blanked the import history; the vault list had no loading state. | Fixed: 880e503, ba1fe88, dbcdcb0, 76222d4, 16ea1e9. |
+| P5-41 | Certificates | Re-review and final review A: a PFX whose key sits in a bag go-pkcs12 does not read was not pinned; clearing a refused second PEM key block was not pinned (surviving mutant). | Pinned by tests, behaviour unchanged: 550fddb (the nested-bag case is a known limitation). |
+| P5-42 | Build | `cmd/alice` `TestServeStartsOnAPhase3Database` expected schema version 8 since migration `00009` (red on the branch; the partial coverage runs did not include `cmd/alice`). | Fixed: f5ef240. |
 
 ## Not verified against Azure
 
@@ -395,8 +404,7 @@ Memory and logs:
   `ALC-SYS-0003` when the vault's credential cannot be opened, so the vault page does not name the fix.
 - **The access check's secret read** can be asked for by an Operator or an operate-scope token
   (`inventory.operate`); the key is read into memory, never returned, and zeroed. The audit row `kv.secret_read`
-  (purpose `access_check`) is written by the jobs actor; who asked is only in the job row, which the clean-up
-  removes after 90 days.
+  (purpose `access_check`) names who asked (`requested_by`, `requested_by_role`).
 
 Network:
 
@@ -434,16 +442,17 @@ License holds:
 - **Rule (c) can hold for good.** In a vault whose certificate listing never completes after a reopening, every
   new version without a creation time stays held [41]. Theoretical; an Administrator releases them.
 - **Hold rule (b), planner eligibility and the settling of an uncertain import trust Azure's `created`** and its
-  relation to Alice's clock (item 25 above). With Alice's clock ahead of Azure's, a real import may end "Outcome
-  unknown"; with Azure's ahead, an uncertain import may be settled by an earlier version with the same thumbprint.
+  relation to Alice's clock (item 25 above). When Azure's clock is behind Alice's by a second or more, the version
+  a lost import created never matches and the import ends "Outcome unknown" (`ALC-AKV-0026`). (An earlier version
+  with the same thumbprint can no longer settle it: only a version Alice stored after the send counts.)
   The pointer to the current version moves to an already known version only when its `created` is strictly later,
   which relies on Azure sending `created` on every version.
 - **A wave that began before a lock continues after it.** The planner's reopening hold applies only when the
   connection has no deployment of the version at all [42]; deployment jobs that were waiting at the lock wait for
   an Administrator as in Phase 4.
 - **A version first stored from a version list** (seen in the list before it became current, a window of seconds
-  between two reads of one poll) gets no `kv.certificate.new_version` audit row and keeps the earlier detection
-  time when it becomes current; the planner's own reopening rule still holds it after a lock.
+  between two reads of one poll) keeps that earlier detection time when it becomes current (the application role
+  cannot change `detected_at`); the hold rule and the new-version audit row apply then.
 
 Chains and keys:
 
@@ -458,6 +467,10 @@ Chains and keys:
   differs, a deployment ends `ALC-AKV-0016` and the certificate is not marked **Monitor only** (item 27 above). The
   first deployment that meets a key-less secret reads it (audited) and fails `ALC-AKV-0016`; only later requests
   answer `ALC-AKV-0013` up front.
+- **A PFX whose private key sits in a bag go-pkcs12 does not read** (it reads only top-level `keyBag` and
+  `pkcs8ShroudedKeyBag`; a key inside a nested SafeContentsBag, for example) is read as a value without a key: the
+  certificate is marked **Monitor only** instead of the deployment failing as `ALC-AKV-0016` alone. Pinned by a
+  test; go-pkcs12 gives no access to the bags, so a strict check would need Alice's own PKCS #12 decoder.
 
 Imports:
 
@@ -467,9 +480,6 @@ Imports:
   is held for the license blocks its name too**, also after the lock, until an Administrator runs or discards the
   held job (the held-jobs panel links the import's vault). The import sweep and the 72-hour end are read-only
   periodic work and do not run during a lock; they catch up afterwards.
-- **An import job's own status can differ from the import's**: a queued import that the removal of its vault ended
-  leaves a job that ends `succeeded`, and a removal during the send can end the job `dead` with a stopped-task
-  email about an import already ended and mailed.
 
 Email and interface:
 
@@ -479,10 +489,21 @@ Email and interface:
 - **The "New version found" chip is a heuristic** computed in the browser: created in Azure after Alice first saw
   the certificate and within 7 days [46].
 - **The held-jobs panel reads each held deployment by its ID**, one request per held deployment job [49].
-- **Every table's scrolling part is a keyboard stop**, also when nothing scrolls [51].
+- **Every table's scrolling part is a keyboard stop**, also when nothing scrolls, named as a group (not a landmark)
+  with the generic name "Table, scrolls sideways" rather than the table's own [51].
 - **The fake's client secret appears in Playwright traces of failed e2e runs**, which CI uploads as an artifact.
   The fake generates it per start and reset and it dies with the stack; never reuse this pattern against a real
   tenant.
+
+Migration:
+
+- **Migration `00009` was amended before release** (509e5b7): its Up also marks versions held for their chain.
+  Goose records only version numbers, so a database that already ran the first form of `00009` (possible only for
+  someone who ran the `phase-5` branch between 18801d9 and 509e5b7) lacks that mark. Run once by hand on such a
+  database:
+  `UPDATE kv_certificate_versions SET chain_incomplete = true WHERE held_reason = 'incomplete_chain';`
+  Without it, the first **Deploy now** after releasing such a version fails at the read with nothing changed, and
+  the next one asks for the confirmation.
 
 Earlier phases:
 
