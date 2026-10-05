@@ -47,7 +47,8 @@ func TestDeploymentDTOHasTheDocumentedFields(t *testing.T) {
 	listFields := []string{"id", "certificate_id", "certificate_name", "location_id", "target_id", "target_name", "cert_path", "key_path",
 		"job_id", "job_status", "trigger", "state", "status", "result", "phase", "new_fingerprint", "previous_fingerprint",
 		"confirm_incomplete_chain", "verified", "verify_failed", "error", "failed_step", "cause_step", "helper_error", "backup_dir",
-		"requested_by", "requested_by_name", "recovery_attempts", "recover_after", "created_at", "started_at", "finished_at"}
+		"requested_by", "requested_by_name", "recovery_attempts", "recover_after", "created_at", "started_at", "finished_at",
+		"source", "binding_id", "kv_version", "vault_name"}
 	assert.Equal(t, sorted(listFields...), jsonKeys(t, deploymentJSON(sampleDeployment())))
 	assert.Equal(t, sorted(append(listFields, "steps")...), jsonKeys(t, deploymentDetailJSON(sampleDeployment())))
 }
@@ -197,4 +198,22 @@ func TestTargetDTOCarriesNginxFacts(t *testing.T) {
 	rec := call(NewHandler(d), http.MethodPost, "/api/v1/targets", "admin", `{"name":"web","type":"nginx","host":"web.example.com","port":22,"username":"alice-svc"}`)
 	require.Equal(t, http.StatusCreated, rec.Code)
 	assert.Equal(t, "nginx", gotType)
+}
+
+// A deployment of a vault version says so: source key_vault with its binding, the 32-hex version and the vault's name;
+// any other deployment is an upload and carries none of them.
+func TestDeploymentSourceFields(t *testing.T) {
+	d := sampleDeployment()
+	assert.Equal(t, "upload", deploymentJSON(d).Source)
+	assert.Nil(t, deploymentJSON(d).BindingID)
+	binding := uuid.MustParse("0192d000-0000-7000-8000-0000000000a4")
+	d.BindingID, d.KVVersion, d.VaultName, d.Source = &binding, strings.Repeat("a", 32), "prod-vault", "key_vault"
+	got := deploymentJSON(d)
+	assert.Equal(t, "key_vault", got.Source)
+	require.NotNil(t, got.BindingID)
+	assert.Equal(t, binding.String(), *got.BindingID)
+	assert.Equal(t, strings.Repeat("a", 32), got.KVVersion)
+	assert.Equal(t, "prod-vault", got.VaultName)
+	d.KVVersion = "not a version"
+	assert.Empty(t, deploymentJSON(d).KVVersion)
 }

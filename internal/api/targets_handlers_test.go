@@ -395,7 +395,8 @@ func TestInfrastructureRoutesAreGated(t *testing.T) {
 		assert.Equal(t, want, rt.lic, "%s %s", rt.method, rt.pattern)
 		assert.True(t, gated(rt.lic), "%s %s", rt.method, rt.pattern)
 	}
-	assert.Equal(t, 10, n)
+	// 10 of Phase 3 and 4, plus Phase 5's PUT vault-credentials and the release of a held version.
+	assert.Equal(t, 12, n)
 }
 
 func TestTargetActionsAreRefusedInLock(t *testing.T) {

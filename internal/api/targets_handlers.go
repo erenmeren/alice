@@ -1,9 +1,12 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -73,6 +76,13 @@ func parseBool(raw, field string, v *validate.Errors) bool {
 }
 
 func (s *server) listTargets(w http.ResponseWriter, r *http.Request) {
+	typ := r.URL.Query().Get("type")
+	if typ != "" && !slices.Contains(vaultTypes, typ) {
+		var v validate.Errors
+		v.Add("type", validate.OneOf, map[string]string{"values": strings.Join(vaultTypes, ", ")})
+		s.fail(w, r, v)
+		return
+	}
 	ts, err := s.deps.Inventory.ListTargets(r.Context())
 	if err != nil {
 		s.fail(w, r, err)
@@ -80,7 +90,9 @@ func (s *server) listTargets(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]targetDTO, 0, len(ts))
 	for _, t := range ts {
-		items = append(items, targetJSON(t))
+		if typ == "" || t.Type == typ {
+			items = append(items, targetJSON(t))
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nil})
 }
@@ -140,14 +152,15 @@ func (s *server) updateTarget(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name                   *string `json:"name"`
 		DiscoveryIntervalHours *int    `json:"discovery_interval_hours"`
+		PollIntervalMinutes    *int    `json:"poll_interval_minutes"` // vaults only (5..1440)
 	}
 	if !s.decode(w, r, &req) {
 		return
 	}
 	t, err := s.deps.Inventory.UpdateTarget(r.Context(), s.actor(r), id, version,
-		inventory.TargetPatch{Name: req.Name, DiscoveryIntervalHours: req.DiscoveryIntervalHours})
+		inventory.TargetPatch{Name: req.Name, DiscoveryIntervalHours: req.DiscoveryIntervalHours, PollIntervalMinutes: req.PollIntervalMinutes})
 	if err != nil {
-		s.fail(w, r, err)
+		s.failTarget(w, r, id, err)
 		return
 	}
 	w.Header().Set("ETag", etag(t.Version))
@@ -160,11 +173,49 @@ func (s *server) deleteTarget(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, ErrNotFound)
 		return
 	}
-	if err := s.deps.Inventory.DeleteTarget(r.Context(), s.actor(r), id); err != nil {
+	var v validate.Errors
+	remove := parseBool(r.URL.Query().Get("remove_bindings"), "remove_bindings", &v)
+	if err := v.Err(); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	// A vault is deleted with DeleteVault (the Phase 3 DeleteTarget answers ErrNotAServer for it). Removing its
+	// connected websites with it is an Administrator's act with a fresh step-up and no token (ruling S6).
+	if remove {
+		if !s.strictAction(w, r) {
+			return
+		}
+		err := s.deps.Inventory.DeleteVault(r.Context(), s.actor(r), id, true)
+		if !errors.Is(err, inventory.ErrNotAVault) {
+			s.finishDelete(w, r, err)
+			return
+		}
+	}
+	err := s.deps.Inventory.DeleteTarget(r.Context(), s.actor(r), id)
+	if errors.Is(err, inventory.ErrNotAServer) {
+		err = s.deps.Inventory.DeleteVault(r.Context(), s.actor(r), id, false)
+	}
+	s.finishDelete(w, r, err)
+}
+
+func (s *server) finishDelete(w http.ResponseWriter, r *http.Request, err error) {
+	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	noContent(w)
+}
+
+// failTarget is fail with the vault's own wording of a duplicate name: the target is read to see whether it
+// is a vault (a failed read leaves the answer for servers).
+func (s *server) failTarget(w http.ResponseWriter, r *http.Request, id uuid.UUID, err error) {
+	if errors.Is(err, inventory.ErrDuplicateTarget) {
+		if t, gerr := s.deps.Inventory.GetTarget(r.Context(), id); gerr == nil && t.Type == inventory.TypeAzureKeyVault {
+			s.writeError(w, r, ErrKVVaultDuplicate)
+			return
+		}
+	}
+	s.fail(w, r, err)
 }
 
 func (s *server) testTarget(w http.ResponseWriter, r *http.Request) {
@@ -173,7 +224,25 @@ func (s *server) testTarget(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, ErrNotFound)
 		return
 	}
-	jobID, err := s.deps.Inventory.RequestTest(r.Context(), s.actor(r), id)
+	// A vault's access check may also read one certificate's secret, to prove the role that deploys it.
+	var req accessCheckRequest
+	if !s.decodeOptionalLimit(w, r, &req, maxActionBody) {
+		return
+	}
+	var jobID uuid.UUID
+	var err error
+	if req.ReadSecretOf != "" {
+		certID, perr := uuid.Parse(req.ReadSecretOf)
+		if perr != nil || certID == uuid.Nil {
+			var v validate.Errors
+			v.Add("read_secret_of", validate.Pattern, nil)
+			s.fail(w, r, v)
+			return
+		}
+		jobID, err = s.deps.Inventory.RequestAccessCheck(r.Context(), s.actor(r), id, certID)
+	} else {
+		jobID, err = s.deps.Inventory.RequestTest(r.Context(), s.actor(r), id)
+	}
 	if err != nil {
 		s.fail(w, r, err)
 		return

@@ -272,6 +272,14 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.LicenseManage
 		case under(p, "/api/v1/license"):
 			want = rbac.LicenseRead
+		// Phase 5 (R40 row 11, S6): everything that adds a vault, replaces its credentials, switches automatic
+		// deployment, releases a held version or moves a private key into a vault is credentials.manage.
+		case p == "/api/v1/key-vaults" && !safeMethod(rt.method), strings.HasSuffix(p, "/vault-credentials"),
+			strings.HasSuffix(p, "/auto-deploy"), strings.HasSuffix(p, "/actions/import-to-key-vault"),
+			strings.HasSuffix(p, "/versions/{version_id}/actions/release"):
+			want = rbac.CredentialsManage
+		case under(p, "/api/v1/bindings") && !safeMethod(rt.method):
+			want = rbac.CertificatesOperate
 		case strings.HasSuffix(p, "/host-keys/{key_id}/actions/confirm"):
 			want = rbac.HostKeysConfirm
 		case strings.HasSuffix(p, "/host-keys/{key_id}/actions/repin"):
@@ -293,7 +301,8 @@ func routeRuleViolations(routes []route) []string {
 		case under(p, "/api/v1/deployments") && !safeMethod(rt.method):
 			want = rbac.CertificatesOperate
 		case under(p, "/api/v1/targets"), under(p, "/api/v1/ssh-keys"), under(p, "/api/v1/jobs"), under(p, "/api/v1/providers"),
-			under(p, "/api/v1/certificates"), under(p, "/api/v1/locations"), under(p, "/api/v1/deployments"):
+			under(p, "/api/v1/certificates"), under(p, "/api/v1/locations"), under(p, "/api/v1/deployments"),
+			under(p, "/api/v1/bindings"), under(p, "/api/v1/certificate-locations"), under(p, "/api/v1/key-vaults"):
 			want = rbac.Read
 		case under(p, "/api/v1/users") && !safeMethod(rt.method):
 			want = rbac.UsersManage
@@ -382,6 +391,23 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 		"PATCH /api/v1/locations/{id}",
 		"GET /api/v1/deployments",
 		"GET /api/v1/deployments/{id}",
+		"POST /api/v1/key-vaults",
+		"PUT /api/v1/targets/{id}/vault-credentials",
+		"GET /api/v1/targets/{id}/kv/certificates",
+		"GET /api/v1/targets/{id}/kv/certificates/{certificate_id}",
+		"POST /api/v1/targets/{id}/kv/certificates/{certificate_id}/versions/{version_id}/actions/release",
+		"GET /api/v1/targets/{id}/kv/keys",
+		"GET /api/v1/targets/{id}/kv/secrets",
+		"GET /api/v1/targets/{id}/kv/imports",
+		"GET /api/v1/targets/{id}/kv/imports/{import_id}",
+		"GET /api/v1/certificate-locations",
+		"POST /api/v1/bindings",
+		"GET /api/v1/bindings/{id}",
+		"PATCH /api/v1/bindings/{id}",
+		"PUT /api/v1/bindings/{id}/auto-deploy",
+		"DELETE /api/v1/bindings/{id}",
+		"POST /api/v1/bindings/{id}/actions/deploy",
+		"POST /api/v1/certificates/{id}/actions/import-to-key-vault",
 	} {
 		assert.Contains(t, table, k)
 	}
@@ -420,6 +446,14 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodGet, pattern: "/api/v1/deployments", perm: rbac.CertificatesOperate},
 		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", perm: rbac.CertificatesOperate},
 		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", perm: rbac.TargetsManage},
+		// Phase 5: a weaker permission on what moves a key or switches automatic deployment.
+		{method: http.MethodPost, pattern: "/api/v1/key-vaults", perm: rbac.TargetsManage},
+		{method: http.MethodPut, pattern: "/api/v1/targets/{id}/vault-credentials", perm: rbac.TargetsManage},
+		{method: http.MethodPut, pattern: "/api/v1/bindings/{id}/auto-deploy", perm: rbac.CertificatesOperate},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/actions/import-to-key-vault", perm: rbac.CertificatesOperate},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/kv/certificates/{certificate_id}/versions/{version_id}/actions/release", perm: rbac.CertificatesOperate},
+		{method: http.MethodPost, pattern: "/api/v1/bindings", perm: rbac.CredentialsManage},
+		{method: http.MethodGet, pattern: "/api/v1/bindings/{id}", perm: rbac.CertificatesOperate},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))
 	good := []route{
@@ -448,6 +482,10 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodGet, pattern: "/api/v1/deployments", perm: rbac.Read},
 		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", perm: rbac.Read},
 		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/key-vaults", perm: rbac.CredentialsManage},
+		{method: http.MethodPut, pattern: "/api/v1/bindings/{id}/auto-deploy", perm: rbac.CredentialsManage},
+		{method: http.MethodPost, pattern: "/api/v1/bindings", perm: rbac.CertificatesOperate},
+		{method: http.MethodGet, pattern: "/api/v1/certificate-locations", perm: rbac.Read},
 	}
 	assert.Empty(t, routeRuleViolations(good))
 }
@@ -457,10 +495,14 @@ var (
 	lockAvailable = []string{"/api/v1/auth", "/api/v1/setup", "/api/v1/license", "/api/v1/users", "/api/v1/tokens",
 		"/api/v1/audit", "/api/v1/backup", "/api/v1/backups", "/api/v1/settings"}
 	lockRefused = []string{"/api/v1/targets", "/api/v1/certificates", "/api/v1/locations", "/api/v1/deployments",
-		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs"}
+		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs", "/api/v1/key-vaults", "/api/v1/bindings"}
 	// lockAvailableRoutes are routes of a refused group that work in every license state because
 	// they only reduce what Alice will do (ClassAlways).
-	lockAvailableRoutes = map[string]bool{"POST /api/v1/jobs/{id}/actions/discard": true}
+	//
+	// Phase 5: switching automatic deployment (the inventory refuses switching it ON in lock, switching it off is a
+	// safety action) and removing a binding amend R40 row 22.
+	lockAvailableRoutes = map[string]bool{"POST /api/v1/jobs/{id}/actions/discard": true,
+		"PUT /api/v1/bindings/{id}/auto-deploy": true, "DELETE /api/v1/bindings/{id}": true}
 )
 
 func underAny(pattern string, prefixes []string) bool {

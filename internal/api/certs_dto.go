@@ -241,6 +241,12 @@ type deploymentDTO struct {
 	CreatedAt              time.Time    `json:"created_at"`
 	StartedAt              *time.Time   `json:"started_at"`
 	FinishedAt             *time.Time   `json:"finished_at"`
+	// Key Vault deployments (Phase 5): where the certificate came from and, for a vault's, the connection and
+	// the vault version.
+	Source    string  `json:"source"`
+	BindingID *string `json:"binding_id"`
+	KVVersion string  `json:"kv_version"`
+	VaultName string  `json:"vault_name"`
 }
 
 // deploymentDetailDTO is GET /deployments/{id}: the record and its steps in order.
@@ -363,7 +369,16 @@ func deploymentJSON(d inventory.Deployment) deploymentDTO {
 		CauseStep: codeOrBlank(d.CauseStep), HelperError: codeOrBlank(d.HelperError), BackupDir: backupDir(d.Backup),
 		RequestedBy: idPtr(d.RequestedBy), RequestedByName: d.RequestedByName, RecoveryAttempts: d.RecoveryAttempts,
 		RecoverAfter: utcPtr(d.RecoverAfter), CreatedAt: d.CreatedAt.UTC(), StartedAt: utcPtr(d.StartedAt), FinishedAt: utcPtr(d.FinishedAt),
+		Source: deploymentSource(d), BindingID: idPtr(d.BindingID), KVVersion: versionOrBlank(d.KVVersion), VaultName: d.VaultName,
 	}
+}
+
+// deploymentSource is "key_vault" for a deployment of a vault version and "upload" for any other.
+func deploymentSource(d inventory.Deployment) string {
+	if d.Source == "key_vault" {
+		return "key_vault"
+	}
+	return "upload"
 }
 
 func deploymentDetailJSON(d inventory.Deployment) deploymentDetailDTO {

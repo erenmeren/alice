@@ -429,6 +429,8 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 		ids[k] = v
 	}
 	ids["/api/v1/users/"] = admin.id
+	p5 := phase5Records(t, s, ids["/api/v1/certificates/"])
+	ids["/api/v1/bindings/"] = p5["binding"]
 	// Store an audit checkpoint first, so a GET that moved it would be caught.
 	requireStatus(t, c.do(http.MethodPost, "/api/v1/audit/verify", nil), http.StatusOK)
 	require.Equal(t, 1, s.countWhere("settings", "key = 'audit.checkpoint'"))
@@ -455,7 +457,10 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 		}
 		gets++
 		path := op.path
-		if strings.Contains(path, "{id}") {
+		if strings.HasPrefix(path, "/api/v1/targets/{id}/kv/") {
+			// The inventory of a vault is addressed through the vault.
+			path = strings.NewReplacer("{id}", p5["vault"], "{certificate_id}", p5["kv_certificate"], "{import_id}", p5["import"]).Replace(path)
+		} else if strings.Contains(path, "{id}") {
 			id, longest := "", 0
 			for prefix, v := range ids {
 				if strings.HasPrefix(path, prefix) && len(prefix) > longest {
@@ -564,6 +569,39 @@ new_fingerprint, cert_path, key_path, created_at) VALUES ($1, $2, $3, $4, 'manua
 		"/api/v1/certificates/csr/": csr.ID,
 		"/api/v1/deployments/":      dep.String(),
 	}
+}
+
+// phase5Records stores one Key Vault with a certificate (one version), a connection and a failed import of the
+// uploaded certificate, as the owner role (the vault's credential row holds placeholder bytes: nothing opens it).
+func phase5Records(t *testing.T, s *stack, certificateID string) map[string]string {
+	t.Helper()
+	ctx := context.Background()
+	now := s.clock.Now()
+	vault, cred, kvc, ver, binding, imp := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()),
+		uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	tx, err := s.db.Owner.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = tx.Exec(ctx, `INSERT INTO credentials (id, purpose, kind, public_info, ciphertext, nonce, wrapped_dek, key_version, created_at, target_id)
+VALUES ($1, 'azure_vault', 'azure_sp_secret', '{"auth":"client_secret"}', '\x01', decode(repeat('00', 12), 'hex'), '\x02', 1, $2, $3)`, cred, now, vault)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `INSERT INTO targets (id, name, type, config, credential_id, status, discovery_interval_seconds, created_at, updated_at)
+VALUES ($1, 'prod-vault', 'azure_key_vault', jsonb_build_object('vault_url', 'https://contoso.vault.azure.net', 'host', 'contoso.vault.azure.net', 'port', 443), $2, 'ok', 900, $3, $3)`,
+		vault, cred, now)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `INSERT INTO kv_certificates (id, target_id, name, current_version, current_thumbprint, listed_thumbprint, enabled, key_type, content_type, first_seen_at, last_seen_at)
+VALUES ($1, $2, 'web-cert', repeat('a', 32), repeat('b', 40), repeat('b', 40), true, 'rsa', 'pkcs12', $3, $3)`, kvc, vault, now)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `INSERT INTO kv_certificate_versions (id, kv_certificate_id, version, thumbprint, enabled, key_type, content_type, detected_at)
+VALUES ($1, $2, repeat('a', 32), repeat('b', 40), true, 'rsa', 'pkcs12', $3)`, ver, kvc, now)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `INSERT INTO bindings (id, kv_certificate_id, kv_target_id, created_at) VALUES ($1, $2, $3, $4)`, binding, kvc, vault, now)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `INSERT INTO kv_imports (id, certificate_id, target_id, name, new_version, state, thumbprint, error_code, created_at, finished_at)
+VALUES ($1, $2, $3, 'web-cert', false, 'failed', repeat('b', 40), 'kv.import_rejected', $4, $4)`, imp, certificateID, vault, now)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+	return map[string]string{"vault": vault.String(), "kv_certificate": kvc.String(), "binding": binding.String(), "import": imp.String()}
 }
 
 func TestA07NoCrossOriginResourceSharing(t *testing.T) {

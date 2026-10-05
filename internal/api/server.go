@@ -128,6 +128,27 @@ type InventoryService interface {
 	RequestDeployment(ctx context.Context, a inventory.Actor, in inventory.DeployRequestInput) ([]inventory.RequestedDeployment, error)
 	ListDeployments(ctx context.Context, f inventory.DeploymentFilter) (inventory.DeploymentPage, error)
 	Deployment(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
+
+	// Phase 5: Key Vault vaults, their inventory, bindings, deployments of vault versions and imports.
+	CreateVault(ctx context.Context, a inventory.Actor, in inventory.NewVault) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
+	ReplaceVaultCredentials(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, in inventory.VaultCredentialInput) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
+	DeleteVault(ctx context.Context, a inventory.Actor, id uuid.UUID, removeBindings bool) error
+	RequestAccessCheck(ctx context.Context, a inventory.Actor, vaultID, readSecretOf uuid.UUID) (uuid.UUID, error)
+	ListKVCertificates(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) (inventory.KVCertificatePage, error)
+	KVCertificate(ctx context.Context, vault, id uuid.UUID) (inventory.KVCertificateDetail, error)
+	ListKVKeys(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) ([]inventory.KVKey, string, error)
+	ListKVSecrets(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) ([]inventory.KVSecret, string, error)
+	ListDeployableLocations(ctx context.Context, f inventory.LocationFilter) (inventory.DeployableLocationPage, error)
+	CreateBinding(ctx context.Context, a inventory.Actor, in inventory.BindingInput) (inventory.Binding, error)
+	UpdateBindingLocations(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, locations []uuid.UUID) (inventory.Binding, error)
+	SetAutoDeploy(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, enabled bool) (inventory.Binding, error)
+	DeleteBinding(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+	Binding(ctx context.Context, id uuid.UUID) (inventory.Binding, error)
+	RequestKVDeployment(ctx context.Context, a inventory.Actor, in inventory.KVDeployInput) ([]inventory.RequestedDeployment, error)
+	ReleaseVersion(ctx context.Context, a inventory.Actor, in inventory.ReleaseInput) (inventory.KVVersion, error)
+	RequestImport(ctx context.Context, a inventory.Actor, in inventory.ImportInput) (inventory.KVImport, error)
+	Import(ctx context.Context, vault, id uuid.UUID) (inventory.KVImport, error)
+	ListImports(ctx context.Context, vault uuid.UUID, limit int) ([]inventory.KVImport, error)
 }
 
 // JobsService is the part of jobs.Queue the HTTP layer uses.
@@ -369,6 +390,9 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.certificateRoutes()...)
 	routes = append(routes, s.locationRoutes()...)
 	routes = append(routes, s.deploymentRoutes()...)
+	routes = append(routes, s.vaultRoutes()...)
+	routes = append(routes, s.bindingRoutes()...)
+	routes = append(routes, s.importRoutes()...)
 	return routes
 }
 

@@ -120,6 +120,7 @@ type targetDTO struct {
 	KeysManagedElsewhere   bool         `json:"keys_managed_elsewhere"`
 	Capabilities           []string     `json:"capabilities"`
 	Facts                  factsDTO     `json:"facts"`
+	Vault                  *vaultDTO    `json:"vault,omitempty"` // Key Vaults only
 	Version                int          `json:"version"`
 	CreatedAt              time.Time    `json:"created_at"`
 	UpdatedAt              time.Time    `json:"updated_at"`
@@ -173,10 +174,10 @@ func factsJSON(f inventory.Facts) factsDTO {
 func targetJSON(t inventory.Target) targetDTO {
 	return targetDTO{
 		ID: t.ID.String(), Name: t.Name, Type: t.Type, Host: t.Host, Port: t.Port, Username: t.Username,
-		Status: t.Status, LastError: errorRef(t.LastErrorCode, nil),
+		Status: t.Status, LastError: vaultLastError(t),
 		LastSuccessAt: utcPtr(t.LastSuccessAt), LastDiscoveryAt: utcPtr(t.LastDiscoveryAt),
 		DiscoveryIntervalHours: int(t.DiscoveryInterval / time.Hour), KeysManagedElsewhere: t.KeysManagedElsewhere,
-		Capabilities: nonNil(t.Capabilities), Facts: factsJSON(t.Facts), Version: t.Version,
+		Capabilities: nonNil(t.Capabilities), Facts: factsJSON(t.Facts), Vault: vaultJSON(t), Version: t.Version,
 		CreatedAt: t.CreatedAt.UTC(), UpdatedAt: t.UpdatedAt.UTC(),
 	}
 }

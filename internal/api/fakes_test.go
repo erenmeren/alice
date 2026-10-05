@@ -502,6 +502,26 @@ type fakeInventory struct {
 	RequestDeploymentFn func(ctx context.Context, a inventory.Actor, in inventory.DeployRequestInput) ([]inventory.RequestedDeployment, error)
 	ListDeploymentsFn   func(ctx context.Context, f inventory.DeploymentFilter) (inventory.DeploymentPage, error)
 	DeploymentFn        func(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
+
+	CreateVaultFn             func(ctx context.Context, a inventory.Actor, in inventory.NewVault) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
+	ReplaceVaultCredentialsFn func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, in inventory.VaultCredentialInput) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
+	DeleteVaultFn             func(ctx context.Context, a inventory.Actor, id uuid.UUID, removeBindings bool) error
+	RequestAccessCheckFn      func(ctx context.Context, a inventory.Actor, vaultID, readSecretOf uuid.UUID) (uuid.UUID, error)
+	ListKVCertificatesFn      func(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) (inventory.KVCertificatePage, error)
+	KVCertificateFn           func(ctx context.Context, vault, id uuid.UUID) (inventory.KVCertificateDetail, error)
+	ListKVKeysFn              func(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) ([]inventory.KVKey, string, error)
+	ListKVSecretsFn           func(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) ([]inventory.KVSecret, string, error)
+	ListDeployableLocationsFn func(ctx context.Context, f inventory.LocationFilter) (inventory.DeployableLocationPage, error)
+	CreateBindingFn           func(ctx context.Context, a inventory.Actor, in inventory.BindingInput) (inventory.Binding, error)
+	UpdateBindingLocationsFn  func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, locations []uuid.UUID) (inventory.Binding, error)
+	SetAutoDeployFn           func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, enabled bool) (inventory.Binding, error)
+	DeleteBindingFn           func(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+	BindingFn                 func(ctx context.Context, id uuid.UUID) (inventory.Binding, error)
+	RequestKVDeploymentFn     func(ctx context.Context, a inventory.Actor, in inventory.KVDeployInput) ([]inventory.RequestedDeployment, error)
+	ReleaseVersionFn          func(ctx context.Context, a inventory.Actor, in inventory.ReleaseInput) (inventory.KVVersion, error)
+	RequestImportFn           func(ctx context.Context, a inventory.Actor, in inventory.ImportInput) (inventory.KVImport, error)
+	ImportFn                  func(ctx context.Context, vault, id uuid.UUID) (inventory.KVImport, error)
+	ListImportsFn             func(ctx context.Context, vault uuid.UUID, limit int) ([]inventory.KVImport, error)
 }
 
 func (f *fakeInventory) ListCertificates(ctx context.Context, fl inventory.CertificateFilter) (inventory.CertificatePage, error) {
@@ -698,6 +718,139 @@ func (f *fakeInventory) RequestKeyRemoval(ctx context.Context, a inventory.Actor
 		return f.RequestKeyRemovalFn(ctx, a, id, confirm)
 	}
 	return uuid.Nil, errNotConfigured
+}
+
+func (f *fakeInventory) CreateVault(ctx context.Context, a inventory.Actor, in inventory.NewVault) (inventory.Target, providers.ConnectionReport, uuid.UUID, error) {
+	if f.CreateVaultFn != nil {
+		return f.CreateVaultFn(ctx, a, in)
+	}
+	return inventory.Target{}, providers.ConnectionReport{}, uuid.Nil, errNotConfigured
+}
+
+func (f *fakeInventory) ReplaceVaultCredentials(ctx context.Context, a inventory.Actor, id uuid.UUID, v int, in inventory.VaultCredentialInput) (inventory.Target, providers.ConnectionReport, uuid.UUID, error) {
+	if f.ReplaceVaultCredentialsFn != nil {
+		return f.ReplaceVaultCredentialsFn(ctx, a, id, v, in)
+	}
+	return inventory.Target{}, providers.ConnectionReport{}, uuid.Nil, errNotConfigured
+}
+
+func (f *fakeInventory) DeleteVault(ctx context.Context, a inventory.Actor, id uuid.UUID, remove bool) error {
+	if f.DeleteVaultFn != nil {
+		return f.DeleteVaultFn(ctx, a, id, remove)
+	}
+	return errNotConfigured
+}
+
+func (f *fakeInventory) RequestAccessCheck(ctx context.Context, a inventory.Actor, vaultID, readSecretOf uuid.UUID) (uuid.UUID, error) {
+	if f.RequestAccessCheckFn != nil {
+		return f.RequestAccessCheckFn(ctx, a, vaultID, readSecretOf)
+	}
+	return uuid.Nil, errNotConfigured
+}
+
+func (f *fakeInventory) ListKVCertificates(ctx context.Context, vault uuid.UUID, fl inventory.KVFilter) (inventory.KVCertificatePage, error) {
+	if f.ListKVCertificatesFn != nil {
+		return f.ListKVCertificatesFn(ctx, vault, fl)
+	}
+	return inventory.KVCertificatePage{}, errNotConfigured
+}
+
+func (f *fakeInventory) KVCertificate(ctx context.Context, vault, id uuid.UUID) (inventory.KVCertificateDetail, error) {
+	if f.KVCertificateFn != nil {
+		return f.KVCertificateFn(ctx, vault, id)
+	}
+	return inventory.KVCertificateDetail{}, errNotConfigured
+}
+
+func (f *fakeInventory) ListKVKeys(ctx context.Context, vault uuid.UUID, fl inventory.KVFilter) ([]inventory.KVKey, string, error) {
+	if f.ListKVKeysFn != nil {
+		return f.ListKVKeysFn(ctx, vault, fl)
+	}
+	return nil, "", errNotConfigured
+}
+
+func (f *fakeInventory) ListKVSecrets(ctx context.Context, vault uuid.UUID, fl inventory.KVFilter) ([]inventory.KVSecret, string, error) {
+	if f.ListKVSecretsFn != nil {
+		return f.ListKVSecretsFn(ctx, vault, fl)
+	}
+	return nil, "", errNotConfigured
+}
+
+func (f *fakeInventory) ListDeployableLocations(ctx context.Context, fl inventory.LocationFilter) (inventory.DeployableLocationPage, error) {
+	if f.ListDeployableLocationsFn != nil {
+		return f.ListDeployableLocationsFn(ctx, fl)
+	}
+	return inventory.DeployableLocationPage{}, errNotConfigured
+}
+
+func (f *fakeInventory) CreateBinding(ctx context.Context, a inventory.Actor, in inventory.BindingInput) (inventory.Binding, error) {
+	if f.CreateBindingFn != nil {
+		return f.CreateBindingFn(ctx, a, in)
+	}
+	return inventory.Binding{}, errNotConfigured
+}
+
+func (f *fakeInventory) UpdateBindingLocations(ctx context.Context, a inventory.Actor, id uuid.UUID, v int, l []uuid.UUID) (inventory.Binding, error) {
+	if f.UpdateBindingLocationsFn != nil {
+		return f.UpdateBindingLocationsFn(ctx, a, id, v, l)
+	}
+	return inventory.Binding{}, errNotConfigured
+}
+
+func (f *fakeInventory) SetAutoDeploy(ctx context.Context, a inventory.Actor, id uuid.UUID, v int, enabled bool) (inventory.Binding, error) {
+	if f.SetAutoDeployFn != nil {
+		return f.SetAutoDeployFn(ctx, a, id, v, enabled)
+	}
+	return inventory.Binding{}, errNotConfigured
+}
+
+func (f *fakeInventory) DeleteBinding(ctx context.Context, a inventory.Actor, id uuid.UUID) error {
+	if f.DeleteBindingFn != nil {
+		return f.DeleteBindingFn(ctx, a, id)
+	}
+	return errNotConfigured
+}
+
+func (f *fakeInventory) Binding(ctx context.Context, id uuid.UUID) (inventory.Binding, error) {
+	if f.BindingFn != nil {
+		return f.BindingFn(ctx, id)
+	}
+	return inventory.Binding{}, errNotConfigured
+}
+
+func (f *fakeInventory) RequestKVDeployment(ctx context.Context, a inventory.Actor, in inventory.KVDeployInput) ([]inventory.RequestedDeployment, error) {
+	if f.RequestKVDeploymentFn != nil {
+		return f.RequestKVDeploymentFn(ctx, a, in)
+	}
+	return nil, errNotConfigured
+}
+
+func (f *fakeInventory) ReleaseVersion(ctx context.Context, a inventory.Actor, in inventory.ReleaseInput) (inventory.KVVersion, error) {
+	if f.ReleaseVersionFn != nil {
+		return f.ReleaseVersionFn(ctx, a, in)
+	}
+	return inventory.KVVersion{}, errNotConfigured
+}
+
+func (f *fakeInventory) RequestImport(ctx context.Context, a inventory.Actor, in inventory.ImportInput) (inventory.KVImport, error) {
+	if f.RequestImportFn != nil {
+		return f.RequestImportFn(ctx, a, in)
+	}
+	return inventory.KVImport{}, errNotConfigured
+}
+
+func (f *fakeInventory) Import(ctx context.Context, vault, id uuid.UUID) (inventory.KVImport, error) {
+	if f.ImportFn != nil {
+		return f.ImportFn(ctx, vault, id)
+	}
+	return inventory.KVImport{}, errNotConfigured
+}
+
+func (f *fakeInventory) ListImports(ctx context.Context, vault uuid.UUID, limit int) ([]inventory.KVImport, error) {
+	if f.ListImportsFn != nil {
+		return f.ListImportsFn(ctx, vault, limit)
+	}
+	return nil, errNotConfigured
 }
 
 // fakeJobs implements JobsService with the same conventions.
