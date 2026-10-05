@@ -1,5 +1,81 @@
 # Changelog
 
+## Unreleased — Phase 6: SSH key lifecycle and rotation
+
+**Upgrade notes**
+- Migration `00010` (generated keys, download counter and destruction of private keys, rotation policies, runs,
+  places and steps, and the database guards of the rotation) runs at start. Once a generated key, a policy or a run
+  exists, it refuses to go down.
+- **After the upgrade every server refuses key deploys (`ALC-KEY-0014`) and is skipped by rotations
+  (`connection_files_unknown`) until it has been scanned again**: Alice needs the list of key files of the account it
+  connects with, which scans of earlier versions did not record. Connected servers are scanned once a day; choose
+  **Scan for SSH keys** to do it at once. A server with more than 200 accounts, or whose `alice-svc` is not in
+  `/etc/passwd`, keeps refusing.
+- **Scheduled rotations need working email delivery**: a scheduled run starts only after its preview email was accepted
+  by the mail server for at least one administrator before the planned start (otherwise `ALC-ROT-0017`). **Run now**
+  does not need email.
+- No helper change: `alice-helper` stays at protocol 6 (1.5.0).
+
+### Added
+- **Generate key** (administrators and operators): Ed25519 (recommended), RSA 3072, RSA 4096 or ECDSA P-256. The
+  private key is stored only encrypted with the master key.
+- **Deploy to a server**: adds a generated key to a user's key file (optionally with allowed source addresses and
+  `restrict`, comment `alice:<name>:<date>`), then proves it with a test sign-in as that user with only the new key;
+  a key the server refuses is removed again. Alice never touches the account it connects with or any of its files,
+  never removes a line that was there before, and refuses files the last scan did not list.
+- **Download private key** (administrators, browser session, fresh authenticator code, a reason): an OpenSSH file,
+  optionally protected with a passphrase; recorded in the audit log and counted before the file is sent; 5 per minute
+  per person; possible during a license lock.
+- **Rotation policies** (administrators; off when created; every N days, overlap 7 days by default, notice 24 hours by
+  default), **Preview next run** (emailed), scheduled runs that start only as previewed, **Run now** with the previewed
+  plan, and a run page with **Continue**, **Finish now**, **Keep the old key on these servers** and **Stop and undo**.
+  A run adds the new key next to the old one, signs in with it, keeps both through the overlap, signs in again and only
+  then removes the old key; any failure before that undoes the run's own additions and never touches the old key.
+- License lock: scheduled runs are not planned or started; a started run pauses (its overlap and decision time stop),
+  and after the renewal continues only when an administrator chooses **Continue**. **Stop and undo** works in lock.
+- Retired keys: the old key of a completed rotation is retired once unused; its private key is destroyed after 30
+  days (hourly task `sshkey.destroy_retired`).
+- Emails for previews, overlaps, decisions, completed, undone, paused and needs-attention runs, and late answers.
+- Periodic tasks `rotation.plan`, `rotation.sweep` (every minute) and `sshkey.destroy_retired` (hourly); job types
+  `sshkey.add` and `rotation.location`.
+- Error codes `ALC-KEY-0006..0018`, `ALC-ROT-0001..0025`, `ALC-NTF-0001`; permissions `sshkeys.download`,
+  `rotation.manage`, `rotation.operate`; audit actions `sshkey.*` and `rotation.*` for every step.
+- API: `POST /api/v1/ssh-keys/generate`, `…/{id}/actions/deploy`, `…/{id}/actions/download-private-key`,
+  `GET /api/v1/targets/{id}/key-files`, `/api/v1/rotation/policies` (with `actions/enable`, `disable`, `preview`,
+  `run`) and `/api/v1/rotation/runs` (with `actions/continue`, `finish-now`, `keep-old`, `abort`).
+- e2e build only: `POST /test/rotation/overlap` sets a policy's overlap in minutes.
+- Guides: "SSH keys and rotation" in `docs/operator-guide.md`, "Generated keys and rotation" in
+  `docs/admin-guide.md`, the rotation entries of `docs/troubleshooting.md`.
+
+### Changed
+- Scans record each user's candidate key files and whether the list is complete (`facts.key_files`).
+- The SSH key list shows keys generated in Alice also when they are not used anywhere yet.
+- Jobs name the SSH key and the rotation run they work on (`ssh_key_id`, `rotation_id`).
+- The import history of a vault shows an error line with **Try again** for a vault whose imports could not be read,
+  instead of dropping its rows; the add-vault dialog shows both the missing-role text and the failed-check text when
+  both apply.
+- OpenAPI: the 412 of `PATCH /bindings/{id}` says that a missing `If-Match` is answered first.
+
+### Security
+- The old-key rule: Alice removes an old key from a file only after the run reached the removal, every place of the
+  run in that file was verified, a sign-in with the new key as that user succeeded at most 15 minutes before, the
+  license allows changes and the run is not paused, and the key is not Alice's own. The service checks it and the
+  database refuses any removal that does not meet it; the database also refuses run and place changes that are not
+  steps of the state machine, a finished run's changes, and Alice's own key in a policy or a run.
+- S-09: the private key leaves Alice only in the download response, after its audit row is committed; it is in no log,
+  error, job, audit entry, rotation record or email (secret-leak suite with generated keys).
+- A deploy owns a line only when it proved the line absent before its first send or the helper said it wrote it.
+
+### Known issues
+- Real OpenSSH was exercised only in three test containers (Ubuntu 22.04, Debian 12, Rocky 9); nothing was run
+  against customer servers.
+- Files shared by several users are skipped by rotations; servers where Alice cannot test a sign-in keep both keys
+  unless the run is stopped; there are no weekday schedules and no partial rotations; the 30-day retention and the
+  email recipients (every administrator) become settings in a later release; a certificate's private key cannot be
+  downloaded yet.
+- Backups taken before a private key was destroyed still contain it, encrypted.
+- The full list is in `docs/security/reviews/phase-6.md` ("Known limitations").
+
 ## Unreleased — Phase 5: Azure Key Vault
 
 **Upgrade notes**
