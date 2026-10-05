@@ -193,9 +193,9 @@ func (e *env) generateUnlocked(label string) uuid.UUID {
 // keyFiles are the candidate key files every helper server reports: the connection account
 // alice-svc is one of the users, as the real helper lists it.
 var keyFiles = []providers.UserKeyFiles{
-	{OSUser: "deploy", Files: []string{"/home/deploy/.ssh/authorized_keys"}},
-	{OSUser: "root", Files: []string{"/root/.ssh/authorized_keys"}},
-	{OSUser: "alice-svc", Files: []string{"/home/alice-svc/.ssh/authorized_keys"}},
+	{OSUser: "deploy", Files: []string{"/home/deploy/.ssh/authorized_keys"}, Complete: true},
+	{OSUser: "root", Files: []string{"/root/.ssh/authorized_keys"}, Complete: true},
+	{OSUser: "alice-svc", Files: []string{"/home/alice-svc/.ssh/authorized_keys"}, Complete: true},
 }
 
 // server adds a confirmed ok Linux target whose last scan read sshd and found keyFiles.

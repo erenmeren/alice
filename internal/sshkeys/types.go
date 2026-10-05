@@ -48,13 +48,16 @@ const (
 // Reasons of the audited refusals (details key reason of sshkey.deploy.denied and
 // sshkey.private_key_download.denied).
 const (
-	DenyConnectionAccount    = "connection_account"
-	DenyKeysManagedElsewhere = "keys_managed_elsewhere"
-	DenySSHDUnreadable       = "sshd_unreadable"
-	DenyOwnKey               = "own_key"
-	DenyNotManaged           = "not_managed"
-	DenyDestroyed            = "destroyed"
-	DenyRetired              = "retired" // rotation.policy.denied
+	DenyConnectionAccount = "connection_account"
+	// DenyConnectionFilesUnknown: the last scan has no complete key-file list for the connection
+	// account on that server (S7 fails closed); the error is ErrConnectionAccount.
+	DenyConnectionFilesUnknown = "connection_account_files_unknown"
+	DenyKeysManagedElsewhere   = "keys_managed_elsewhere"
+	DenySSHDUnreadable         = "sshd_unreadable"
+	DenyOwnKey                 = "own_key"
+	DenyNotManaged             = "not_managed"
+	DenyDestroyed              = "destroyed"
+	DenyRetired                = "retired" // rotation.policy.denied
 )
 
 // GenerateInput asks for a new key.

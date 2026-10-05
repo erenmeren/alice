@@ -147,8 +147,8 @@ func TestDeployIntoAFileTheConnectionAccountReads(t *testing.T) {
 	e := newEnv(t)
 	shared := "/etc/ssh/authorized_keys/shared"
 	srv := e.serverWith("web-01", []providers.UserKeyFiles{
-		{OSUser: "bob", Files: []string{shared, "/home/bob/.ssh/authorized_keys"}},
-		{OSUser: "alice-svc", Files: []string{"/home/alice-svc/.ssh/authorized_keys", shared}},
+		{OSUser: "bob", Files: []string{shared, "/home/bob/.ssh/authorized_keys"}, Complete: true},
+		{OSUser: "alice-svc", Files: []string{"/home/alice-svc/.ssh/authorized_keys", shared}, Complete: true},
 	})
 	k := e.generate("ci")
 	_, err := e.svc.RequestDeploy(e.ctx, e.operator, sshkeys.DeployInput{KeyID: k.ID, TargetID: srv, OSUser: "bob", FilePath: shared})
@@ -164,7 +164,7 @@ func TestDeployIntoAFileTheConnectionAccountReads(t *testing.T) {
 	assert.ErrorIs(t, err, sshkeys.ErrConnectionAccount)
 	// The connection account's files change after the request: the job refuses.
 	_, err = e.db.Owner.Exec(e.ctx, `UPDATE targets SET facts = jsonb_set(facts, '{key_files}',
-    '[{"os_user":"bob","files":["/home/bob/.ssh/authorized_keys"]},{"os_user":"alice-svc","files":["/home/bob/.ssh/authorized_keys"]}]')
+    '[{"os_user":"bob","files":["/home/bob/.ssh/authorized_keys"],"complete":true},{"os_user":"alice-svc","files":["/home/bob/.ssh/authorized_keys"],"complete":true}]')
 WHERE id = $1`, srv)
 	require.NoError(t, err)
 	_, err = e.svc.DeployJob(e.ctx, id, srv, payload)

@@ -5,6 +5,7 @@ package sshkeys_test
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
@@ -175,49 +176,62 @@ func TestDownloadWithAnotherMasterKey(t *testing.T) {
 	assert.Zero(t, e.audits("sshkey.private_key_downloaded"))
 }
 
-// Canaries: the private key (its file lines and its PKCS #8 as the database would print it), the
-// passphrase and the reason's neighbours never reach a table or a log line.
+// Canaries: the private key (its file lines, and slices of its PKCS #8 as hex, standard and raw
+// base64), the passphrase and the seed never reach a table or a log line; for an Ed25519 and an
+// RSA key.
 func TestStoredKeyIsAnEnvelope(t *testing.T) {
 	e := newEnv(t)
-	var pkcs8Hex []string
+	var secretParts []string
 	sshkeys.OnHold(t, func(kind string, b []byte) {
 		if kind == "generated" || kind == "opened" {
-			pkcs8Hex = append(pkcs8Hex, hexOf(b[len(b)-32:])) // the last 32 bytes: the Ed25519 seed or key bytes
+			for _, part := range [][]byte{b[len(b)-32:], b[len(b)/2 : len(b)/2+24]} { // the Ed25519 seed; a slice from the middle
+				secretParts = append(secretParts, hexOf(part), base64.StdEncoding.EncodeToString(part), base64.RawStdEncoding.EncodeToString(part),
+					base64.RawURLEncoding.EncodeToString(part))
+			}
 		}
 	})
-	k := e.generate("ci")
 	srv := e.server("web-01")
-	_, err := e.svc.RequestDeploy(e.ctx, e.operator, sshkeys.DeployInput{KeyID: k.ID, TargetID: srv, OSUser: "deploy",
-		FilePath: "/home/deploy/.ssh/authorized_keys"})
-	require.NoError(t, err)
-	_, release, err := e.svc.KeySigner(k.ID).SSHSigner(e.ctx)
-	require.NoError(t, err)
-	release()
-	dl, err := e.svc.DownloadPrivateKey(e.ctx, e.admin, sshkeys.DownloadInput{KeyID: k.ID, Reason: "canary extraction"})
-	require.NoError(t, err)
-	body := string(dl.Body.Bytes())
-	dl.Body.Zero()
 	pass := "canary-passphrase-" + uuid.NewString()
-	dl2, err := e.svc.DownloadPrivateKey(e.ctx, e.admin, sshkeys.DownloadInput{KeyID: k.ID, Reason: "canary extraction",
-		Passphrase: []byte(pass)})
-	require.NoError(t, err)
-	body2 := string(dl2.Body.Bytes())
-	dl2.Body.Zero()
+	var canaries []string
+	for _, kt := range []string{"ed25519", "rsa-3072"} {
+		k, err := e.svc.Generate(e.ctx, e.admin, sshkeys.GenerateInput{Label: "ci " + kt, KeyType: kt})
+		require.NoError(t, err)
+		_, err = e.svc.RequestDeploy(e.ctx, e.operator, sshkeys.DeployInput{KeyID: k.ID, TargetID: srv, OSUser: "deploy",
+			FilePath: "/home/deploy/.ssh/authorized_keys"})
+		require.NoError(t, err)
+		_, release, err := e.svc.KeySigner(k.ID).SSHSigner(e.ctx)
+		require.NoError(t, err)
+		release()
+		dl, err := e.svc.DownloadPrivateKey(e.ctx, e.admin, sshkeys.DownloadInput{KeyID: k.ID, Reason: "canary extraction"})
+		require.NoError(t, err)
+		body := string(dl.Body.Bytes())
+		dl.Body.Zero()
+		dl2, err := e.svc.DownloadPrivateKey(e.ctx, e.admin, sshkeys.DownloadInput{KeyID: k.ID, Reason: "canary extraction",
+			Passphrase: []byte(pass)})
+		require.NoError(t, err)
+		body2 := string(dl2.Body.Bytes())
+		dl2.Body.Zero()
+		// The base64 lines between the PEM markers; the unencrypted file embeds the public key, so a
+		// line that is part of the public key's own text is not a canary.
+		pubBlob := strings.Fields(k.PublicKey)[1]
+		for _, l := range append(keyBodyLines(body), keyBodyLines(body2)...) {
+			if !strings.Contains(pubBlob, l) {
+				canaries = append(canaries, l)
+			}
+		}
+		canaries = append(canaries, base64.StdEncoding.EncodeToString([]byte(body))[8:48]) // the file itself in base64
+	}
 	// A refused download with a passphrase.
-	_, err = e.svc.DownloadPrivateKey(e.ctx, e.admin, sshkeys.DownloadInput{KeyID: e.discoveredKey(), Reason: "canary extraction",
+	_, err := e.svc.DownloadPrivateKey(e.ctx, e.admin, sshkeys.DownloadInput{KeyID: e.discoveredKey(), Reason: "canary extraction",
 		Passphrase: []byte(pass)})
 	require.ErrorIs(t, err, sshkeys.ErrNotManaged)
-	canaries := append(keyBodyLines(body), keyBodyLines(body2)...) // the base64 lines between the PEM markers
-	require.NotEmpty(t, canaries)
-	canaries = append(canaries, pass)
-	require.NotEmpty(t, pkcs8Hex)
+	canaries = append(canaries, pass, base64.StdEncoding.EncodeToString([]byte(pass)))
+	require.NotEmpty(t, secretParts)
+	canaries = append(canaries, secretParts...)
 	for _, table := range leakTables {
 		dump := e.dumpTable(table) // every column of every row as text (owner pool)
 		for _, c := range canaries {
 			assert.NotContains(t, dump, c, table)
-		}
-		for _, h := range pkcs8Hex {
-			assert.NotContains(t, dump, h, table)
 		}
 		assert.NotContains(t, dump, "PRIVATE KEY", table)
 	}

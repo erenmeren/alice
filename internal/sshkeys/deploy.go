@@ -147,6 +147,17 @@ func filesOf(f inventory.Facts, user string) []string {
 	return nil
 }
 
+// connectionFilesKnown reports whether the last scan listed the connection account's key files
+// completely (providers.UserKeyFiles.Complete); no entry is not known.
+func connectionFilesKnown(f inventory.Facts, conn string) bool {
+	for _, u := range f.KeyFiles {
+		if u.OSUser == conn {
+			return u.Complete
+		}
+	}
+	return false
+}
+
 // connectionUser is the account Alice signs in with on the target.
 func connectionUser(t inventory.Target) string {
 	if t.Username == "" {
@@ -188,12 +199,17 @@ func (s *Service) checkDeploy(ctx context.Context, tx pgx.Tx, keyID, targetID uu
 	if c.target, err = s.inv.TargetTx(ctx, tx, targetID, lock); err != nil {
 		return c, err
 	}
-	if c.target.Type == inventory.TypeAzureKeyVault {
+	if c.target.Type != inventory.TypeLinux && c.target.Type != inventory.TypeNginx {
 		return c, inventory.ErrNotAServer
 	}
 	conn := connectionUser(c.target)
 	if user == conn || slices.Contains(filesOf(c.target.Facts, conn), file) {
 		return c, &denial{reason: DenyConnectionAccount, err: ErrConnectionAccount}
+	}
+	if !connectionFilesKnown(c.target.Facts, conn) {
+		// S7 fails closed: without the connection account's complete file list Alice cannot know
+		// whether the file is one its sshd reads.
+		return c, &denial{reason: DenyConnectionFilesUnknown, err: ErrConnectionAccount}
 	}
 	if err := inventory.KeyChangeRefusal(c.target, user); err != nil {
 		switch {
