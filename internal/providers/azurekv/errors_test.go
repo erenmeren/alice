@@ -161,6 +161,11 @@ func TestMapErrorTable(t *testing.T) {
 		{name: "403 secret disabled", op: "secret", setup: vaultFault(forbidden("SecretDisabled"), "/secrets/"), code: codeVersionDisabled},
 		{name: "404 certificate", op: "get", setup: vaultFault(fakekv.Fault{Status: 404, Body: kvBody("CertificateNotFound", "", "not found")}, "/certificates"),
 			code: codeCertificateNotFound},
+		{name: "404 on the certificate list, no body", op: "list", setup: vaultFault(fakekv.Fault{Status: 404}, "/certificates"), code: codeVaultNotFound},
+		{name: "404 on the certificate list, VaultNotFound", op: "list", setup: vaultFault(fakekv.Fault{Status: 404, Body: kvBody("VaultNotFound", "", "no vault")}, "/certificates"),
+			code: codeVaultNotFound},
+		{name: "404 on the certificate list, CertificateNotFound code", op: "list", setup: vaultFault(fakekv.Fault{Status: 404, Body: kvBody("CertificateNotFound", "", "x")}, "/certificates"),
+			code: codeVaultNotFound},
 		{name: "404 secret", op: "secret", setup: vaultFault(fakekv.Fault{Status: 404, Body: kvBody("SecretNotFound", "", "not found")}, "/secrets/"),
 			code: codeCertificateNotFound},
 		{name: "NXDOMAIN for the vault", op: "list", setup: dialFailing(testVaultHost, nxdomain), code: codeVaultNotFound, cause: errDNS},
@@ -432,4 +437,33 @@ func TestCompleteRefusal(t *testing.T) {
 	} {
 		assert.Equal(t, tc.want, completeRefusal(tc.err), "%v", tc.err)
 	}
+}
+
+// A 404 on a vault-level listing is the vault, never a certificate; a named object stays as it was.
+func TestMapErrorNotFoundByAction(t *testing.T) {
+	re := &azcore.ResponseError{StatusCode: 404, RawResponse: response(404, http.Header{}, "")} //nolint:bodyclose // in-memory body
+	for action, want := range map[string]string{
+		actionListCertificates: codeVaultNotFound, actionListKeys: codeVaultNotFound, actionListSecrets: codeVaultNotFound,
+		actionGetCertificate: codeCertificateNotFound, actionListVersions: codeCertificateNotFound, actionReadSecret: codeCertificateNotFound,
+		actionGetKey: codeCertificateNotFound, actionImport: codeCertificateNotFound,
+	} {
+		pe := mapError(re, action)
+		assert.Equal(t, want, pe.Code, action)
+		assert.False(t, pe.Retryable, action)
+	}
+}
+
+// Through the fake: the access check and the poll say "vault not found" for a 404 on a listing.
+func TestListNotFoundIsReportedAsAMissingVault(t *testing.T) {
+	w := newWorld(t, fakekv.Options{})
+	w.s.FailNext("/certificates", fakekv.Fault{Status: 404})
+	_, err := w.check()
+	assert.Equal(t, codeVaultNotFound, asProviderError(t, err).Code)
+
+	w = newWorld(t, fakekv.Options{})
+	w.s.FailAll("/keys", fakekv.Fault{Status: 404})
+	w.s.FailAll("/secrets", fakekv.Fault{Status: 404})
+	res, derr := w.discover(providers.DiscoverRequest{KVKeys: true, KVSecrets: true})
+	assert.Equal(t, codeVaultNotFound, asProviderError(t, derr).Code, "a vault that is gone ends the poll with that reason")
+	assert.Nil(t, res.KV)
 }

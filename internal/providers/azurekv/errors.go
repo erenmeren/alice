@@ -317,6 +317,9 @@ func classifyVault(re *azcore.ResponseError, action string) failure {
 			params[paramModel] = "unknown"
 		}
 		return failure{err: perr(codeForbidden, false, cause, params)}
+	case re.StatusCode == http.StatusNotFound && (action == actionListCertificates || action == actionListKeys || action == actionListSecrets):
+		// A listing of the vault's root has no object to miss: the vault (or a proxy in front of it) is the 404.
+		return failure{err: perr(codeVaultNotFound, false, cause, params)}
 	case re.StatusCode == http.StatusNotFound:
 		return failure{err: perr(codeCertificateNotFound, false, cause, params)}
 	case re.StatusCode == http.StatusTooManyRequests:
