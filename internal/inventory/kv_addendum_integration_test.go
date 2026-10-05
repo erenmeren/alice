@@ -32,6 +32,9 @@ func TestImportReadsCheckTheVault(t *testing.T) {
 	assert.ErrorIs(t, err, inventory.ErrNotFound, "a deleted vault's history")
 	_, err = h.svc.Import(ctx, f.vault, im.ID)
 	assert.ErrorIs(t, err, inventory.ErrNotFound)
+	// The job that owns the import still reads it, to end it (a context with a claim is a job run).
+	_, err = h.svc.Import(inventory.WithClaim(ctx, inventory.Claim{JobID: uuid.New(), Attempt: 1}), f.vault, im.ID)
+	assert.NoError(t, err)
 }
 
 // B2: a held version is deployed only by an Administrator with a strict session, checked inside the

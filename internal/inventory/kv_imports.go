@@ -138,9 +138,14 @@ func readImport(ctx context.Context, q db.Querier, id uuid.UUID, lock bool) (KVI
 
 // Import reads one import of a live vault (ErrNotFound for an unknown or deleted vault, ErrNotAVault for a
 // server, ErrNotFound for another vault's or an unknown id).
+//
+// A job run (a context with a claim) reads its import of a vault that was deleted or disabled meanwhile too:
+// the handler must see it to end it; the check is for the API's reads.
 func (s *Service) Import(ctx context.Context, vault, id uuid.UUID) (KVImport, error) {
-	if err := s.liveVault(ctx, vault); err != nil {
-		return KVImport{}, err
+	if _, job := ClaimFrom(ctx); !job {
+		if err := s.liveVault(ctx, vault); err != nil {
+			return KVImport{}, err
+		}
 	}
 	im, err := readImport(ctx, s.pool, id, false)
 	if err != nil {
