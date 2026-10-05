@@ -1,4 +1,5 @@
 import '@mantine/core/styles.css';
+import './theme.css';
 import { readCspNonce, shareCspNonce } from './csp';
 import { startApp } from './start';
 

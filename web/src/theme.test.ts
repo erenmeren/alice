@@ -1,7 +1,25 @@
+import { readFileSync } from 'node:fs';
 import { DEFAULT_THEME, MantineProvider, Table, TextInput, defaultVariantColorsResolver, mergeMantineTheme } from '@mantine/core';
 import { render, screen } from '@testing-library/react';
 import { createElement } from 'react';
-import { DANGER_HOVER, theme } from './theme';
+import { I18nextProvider } from 'react-i18next';
+import { createI18n } from './i18n';
+import { ThemeProvider } from './ThemeProvider';
+import { DANGER_HOVER, SCROLL_REGION_CLASS, appTheme, cssVariablesResolver } from './theme';
+
+const theme = appTheme('Table, scrolls sideways');
+
+function scrollingTable() {
+  return createElement(Table.ScrollContainer, { minWidth: 720 }, createElement(Table, null, createElement(Table.Tbody, null, createElement(Table.Tr, null, createElement(Table.Td, null, 'cell')))));
+}
+
+// The CSS Mantine's provider writes for its variables (a style tag with the light scheme's values).
+function mantineVariables(): string {
+  return [...document.querySelectorAll('style')].map((s) => s.textContent ?? '').join('\n');
+}
+
+// Mantine's own stylesheet (main.tsx loads it): the rules that draw an error read the one variable.
+const mantineCss = readFileSync('node_modules/@mantine/core/styles.css', 'utf8');
 
 // WCAG 2.x relative luminance of a #rrggbb color.
 function luminance(hex: string): number {
@@ -40,35 +58,55 @@ describe('theme', () => {
     expect(colors.hover).not.toBe(DANGER_HOVER);
   });
 
-  it('draws a field error in red 9, which has the contrast red 6 lacks (axe, e2e)', () => {
+  it('draws everything that marks an error in red 9, which has the contrast red 6 lacks (axe, e2e)', () => {
     expect(contrast('#ffffff', full.colors.red[6])).toBeLessThan(4.5);
     expect(contrast('#ffffff', full.colors.red[9])).toBeGreaterThanOrEqual(4.5);
-    const message = 'This value contains characters that are not allowed.';
-    render(createElement(MantineProvider, { theme }, createElement(TextInput, { label: 'Vault address', error: message })));
-    expect(screen.getByText(message)).toHaveStyle({ color: 'var(--mantine-color-red-9)' });
+    // The light scheme's error color is red 9; the app has no dark scheme (defaultColorScheme="light").
+    expect(cssVariablesResolver(full)).toEqual({ variables: {}, light: { '--mantine-color-error': 'var(--mantine-color-red-9)' }, dark: {} });
+    render(createElement(MantineProvider, { theme, cssVariablesResolver }, createElement(TextInput, { label: 'Vault address', error: 'bad' })));
+    expect(mantineVariables()).toMatch(/--mantine-color-error:\s*var\(--mantine-color-red-9\)/);
   });
 
-  it('makes the scrolling part of every table scroll container a tab stop', () => {
-    const { container } = render(
-      createElement(
-        MantineProvider,
-        { theme },
-        createElement(Table.ScrollContainer, { minWidth: 720 }, createElement(Table, null, createElement(Table.Tbody, null, createElement(Table.Tr, null, createElement(Table.Td, null, 'cell'))))),
-      ),
-    );
-    expect(container.querySelector('.mantine-ScrollArea-viewport')).toHaveAttribute('tabindex', '0');
+  it('relies on Mantine drawing the field message, the typed text and the choice labels of an error from that variable', () => {
+    for (const rule of [
+      /--input-color:\s*var\(--mantine-color-error\)/, // the text typed into a field with an error
+      /--input-placeholder-color:\s*var\(--mantine-color-error\)/,
+      /\.m_8f816625\s*\{[^}]*color:\s*var\(--mantine-color-error\)/, // InputWrapper's error message
+    ]) {
+      expect(mantineCss).toMatch(rule);
+    }
+    // Checkbox, Radio and Switch draw their error label as an InputWrapper error too (the same class).
+    expect(mantineCss.match(/var\(--mantine-color-error\)/g)?.length).toBeGreaterThanOrEqual(8);
   });
 
-  it('draws what is typed into a field with an error in red 9 too, and nothing else', () => {
-    render(
-      createElement(
-        MantineProvider,
-        { theme },
-        createElement(TextInput, { label: 'With error', error: 'bad' }),
-        createElement(TextInput, { label: 'Without error' }),
-      ),
-    );
-    expect(screen.getByLabelText('With error')).toHaveStyle({ '--input-color': 'var(--mantine-color-red-9)' });
-    expect((screen.getByLabelText('Without error') as HTMLElement).style.getPropertyValue('--input-color')).toBe('');
+  it('makes the scrolling part of every table scroll container a named region and a tab stop with its focus ring', () => {
+    const { container } = render(createElement(MantineProvider, { theme }, scrollingTable()));
+    const viewport = container.querySelector('.mantine-ScrollArea-viewport');
+    expect(viewport).toHaveAttribute('tabindex', '0');
+    expect(viewport).toHaveAttribute('role', 'region');
+    expect(viewport).toHaveAttribute('aria-label', 'Table, scrolls sideways');
+    expect(viewport).toHaveClass(SCROLL_REGION_CLASS);
+  });
+
+  it('draws the focus ring inside the region: the ScrollArea root clips anything outside it', () => {
+    const css = readFileSync('src/theme.css', 'utf8');
+    const rule = new RegExp(`\\.${SCROLL_REGION_CLASS}:focus-visible\\s*\\{([^}]*)\\}`).exec(css);
+    expect(rule, 'a :focus-visible rule for the region').not.toBeNull();
+    expect(rule![1]).toMatch(/outline:\s*2px solid var\(--mantine-primary-color-filled\)/);
+    expect(rule![1]).toMatch(/outline-offset:\s*-2px/);
+    expect(readFileSync('src/main.tsx', 'utf8')).toContain("import './theme.css';");
+  });
+
+  it('names the region in the language of the app', async () => {
+    for (const [lang, label] of [
+      ['en-US', 'Table, scrolls sideways'],
+      ['tr-TR', 'Tablo, yana kaydırılır'],
+    ] as const) {
+      const i18n = await createI18n([lang]);
+      const { unmount } = render(createElement(I18nextProvider, { i18n }, createElement(ThemeProvider, null, scrollingTable())));
+      expect(screen.getByRole('region', { name: label })).toHaveAttribute('tabindex', '0');
+      expect(mantineVariables()).toMatch(/--mantine-color-error:\s*var\(--mantine-color-red-9\)/);
+      unmount();
+    }
   });
 });

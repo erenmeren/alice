@@ -43,6 +43,7 @@
     "backHome": "Ana sayfaya dön",
     "cancel": "İptal",
     "close": "Kapat",
+    "scrollRegion": "Tablo, yana kaydırılır",
     "codeLabel": "6 haneli kod",
     "usernameHelp": "2 ile 64 karakter arası: İngilizce harfler (A–Z), rakamlar, nokta, alt çizgi veya tire. Bir harf ya da rakamla başlayın.",
     "stepUp": {

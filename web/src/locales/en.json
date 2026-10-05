@@ -43,6 +43,7 @@
     "backHome": "Go to the home page",
     "cancel": "Cancel",
     "close": "Close",
+    "scrollRegion": "Table, scrolls sideways",
     "codeLabel": "6-digit code",
     "usernameHelp": "2 to 64 characters: English letters (A–Z), digits, dot, underscore or hyphen. Start with a letter or digit.",
     "stepUp": {

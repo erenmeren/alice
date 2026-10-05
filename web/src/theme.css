@@ -1,0 +1,7 @@
+/* The keyboard focus ring of a table's scrolling part (SCROLL_REGION_CLASS in theme.ts). It is drawn
+   inside the element: the ScrollArea root around it is overflow: hidden and would clip a ring drawn
+   outside, as it clips the browser's default one. */
+.alice-scroll-region:focus-visible {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: -2px;
+}
