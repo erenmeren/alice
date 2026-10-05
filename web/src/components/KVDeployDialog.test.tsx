@@ -179,6 +179,10 @@ describe('KVDeployDialog', () => {
     expect(screen.queryByLabelText('I confirm that this incomplete chain is intended')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Deploy now' }));
     expect(await screen.findByLabelText('I confirm that this incomplete chain is intended')).toBeInTheDocument();
+    // The server asked about THAT version: another version picked does not inherit the request.
+    await user.selectOptions(screen.getByLabelText('Version'), 'v-old');
+    expect(screen.queryByLabelText('I confirm that this incomplete chain is intended')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deploy now' })).toBeEnabled();
     view.unmount();
 
     asRole('operator');
@@ -186,6 +190,7 @@ describe('KVDeployDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Deploy now' }));
     expect(await screen.findByText(/An administrator can deploy it after confirming the chain/)).toBeInTheDocument();
     expect(screen.queryByLabelText('I confirm that this incomplete chain is intended')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deploy now' }), 'the same request would be refused again').toBeDisabled();
   });
 
   it('highlights the website a refusal names', async () => {

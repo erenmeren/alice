@@ -69,8 +69,9 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
   const chainKnown = version?.chain_incomplete === true || (version?.held === true && version.held_reason === 'incomplete_chain');
   const chainNeeded = chainKnown || chainAsked;
   const chainOffer = admin && chainNeeded;
+  // An Operator cannot confirm a chain: once it is known or asked for, the same request would be refused again.
   const ready =
-    version !== undefined && block === null && !heldBlocked && picked.length > 0 && !busy && (!chainOffer || confirmChain) && (admin || !chainKnown);
+    version !== undefined && block === null && !heldBlocked && picked.length > 0 && !busy && (!chainOffer || confirmChain) && (admin || !chainNeeded);
 
   const refresh = () => {
     void client.invalidateQueries({ queryKey: DEPLOYMENTS_KEY });
@@ -191,6 +192,7 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
               onChange={(e) => {
                 setChosenId(e.currentTarget.value);
                 setConfirmChain(false);
+                setChainAsked(false); // the server asked about the version picked before
               }}
               data={versions.map((v) => ({ value: v.id, label: t('bindings.versionOption', { version: shortVersion(v.version), date: formatDate(v.detected_at, i18n.language) }) }))}
             />
