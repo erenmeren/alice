@@ -198,7 +198,7 @@ e2e-down: ## Stop the e2e stack and DELETE its volumes (never touches the make u
 	$(COMPOSE_E2E) down -v --remove-orphans
 
 .PHONY: e2e-hardening-check
-e2e-hardening-check: ## Verify container hardening of the running e2e stack, including the SSH test target
+e2e-hardening-check: ## Verify container hardening of the running e2e stack, including the SSH test target and the fake Azure service
 	ALICE_PROJECT=$(E2E_PROJECT) ALICE_COMPOSE_FILES="$(E2E_FILES)" ./deploy/dev/check-hardening.sh
 
 .PHONY: setup-token

@@ -73,6 +73,34 @@ if "${compose[@]}" config --services | grep -qx sshtarget; then
         -c 'ls /opt/alice-test-ca /etc/nginx/ssl 2>/dev/null | wc -l')" "0"
   fi
 fi
+# The e2e overlay adds the fake Azure service (Entra ID and Key Vault for the Phase 5 journeys): it must
+# publish nothing, sit only on the internal network, be read-only, drop every capability, run as a
+# non-root user and be healthy; alice reads its CA through a read-only mount and carries none of the
+# SDK logging or region variables the Key Vault provider refuses.
+if "${compose[@]}" config --services | grep -qx fakeazure; then
+  fake="$("${compose[@]}" ps -q fakeazure)"
+  if [[ -z "$fake" ]]; then
+    echo "FAIL: the e2e fake Azure service is not running"; fail=1
+  else
+    check "fakeazure publishes no ports" "$(docker port "$fake" | wc -l | tr -d ' ')" "0"
+    check "fakeazure is only on the internal backend network" \
+      "$(docker inspect -f '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}' "$fake")" "${project}_backend "
+    check "fakeazure root filesystem is read-only" "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$fake")" "true"
+    check "fakeazure drops all capabilities and adds none" \
+      "$(docker inspect -f '{{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}}' "$fake")" '["ALL"] null'
+    check "fakeazure has no-new-privileges" "$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$fake")" '["no-new-privileges:true"]'
+    check "fakeazure runs as a non-root user" \
+      "$(docker inspect -f '{{.Config.User}}' "$fake" | grep -Ec '^[1-9][0-9]*:[1-9][0-9]*$' || true)" "1"
+    check "fakeazure has a pids limit" "$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$fake")" "128"
+    check "fakeazure is healthy" "$(docker inspect -f '{{.State.Health.Status}}' "$fake")" "healthy"
+    check "alice mounts the fake's CA read-only" \
+      "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/run/alice-e2e-azure"}}{{.Type}} {{.RW}}{{end}}{{end}}' "$alice")" "volume false"
+    check "alice can read the fake's CA" \
+      "$(docker cp "$alice:/run/alice-e2e-azure/ca.pem" - 2>/dev/null | tar -xOf - 2>/dev/null | grep -c 'BEGIN CERTIFICATE' || true)" "1"
+    check "alice has no Azure SDK logging or region variable (the provider would refuse every session)" \
+      "$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$alice" | grep -Ec '^(AZURE_SDK_GO_LOGGING|MSAL_FORCE_REGION|AZURE_REGIONAL_AUTHORITY_NAME)=' || true)" "0"
+  fi
+fi
 # The test shims and the test PKI exist only in the SSH target, never in the Alice image.
 check "alice image has no systemctl shim" \
   "$(docker cp "$alice:/usr/bin/systemctl" - >/dev/null 2>&1 && echo present || echo absent)" "absent"

@@ -14,6 +14,14 @@ services:
     build:
       args:
         GO_TAGS: e2e testlicense
+    # The e2e build trusts ONLY the CA of the fake Azure service for Azure's host names, read from this
+    # volume (the fake writes it; read-only here), and starts after the fake is healthy so the CA exists.
+    # Neither AZURE_SDK_GO_LOGGING, MSAL_FORCE_REGION nor AZURE_REGIONAL_AUTHORITY_NAME is ever set:
+    # the Key Vault provider refuses to open a session with any of them (compose_test.go).
+    volumes:
+      - fakeazure-ca:/run/alice-e2e-azure:ro
+    depends_on:
+      fakeazure: { condition: service_healthy }
   # Test-only SSH target for the Phase 3 and Phase 4 journeys (web/e2e/phase3.spec.ts and later):
   # Ubuntu 22.04 with OpenSSH, sudo, fixture users and keys generated at image build time, alice-helper
   # built from this repository in /opt/alice-bundle, and the distribution's Nginx with two TLS
@@ -35,3 +43,41 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+  # Test-only fake of Microsoft Entra ID and Azure Key Vault for the Phase 5 journeys
+  # (web/e2e/phase5.spec.ts): the in-process fake of internal/testutil/fakekv as a container. Docker's
+  # DNS answers login.microsoftonline.com and alice-e2e.vault.azure.net with it on the internal
+  # network, so the real provider needs no dial mapping; only the e2e build of Alice trusts its CA (the
+  # fakeazure-ca volume; R40 row 35). Managed identity is not offered here: its metadata address
+  # (169.254.169.254) is not reachable in the compose network. Everything it needs (CA, certificates,
+  # the application's client secret) is generated when it starts. Playwright drives it with
+  # "docker compose exec fakeazure /alice-fakeazure ctl ...", which talks to its loopback-only admin
+  # API. It publishes nothing and runs as a non-root user: port 443 is bindable because the container's
+  # unprivileged port start is 0 (a namespaced sysctl), not because of a capability.
+  fakeazure:
+    image: alice-e2e-fakeazure
+    build:
+      context: ..
+      dockerfile: test/images/fakeazure/Dockerfile
+    command: ["serve", "--listen", ":443", "--admin", "127.0.0.1:9090", "--ca-out", "/run/alice-e2e-azure/ca.pem"]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    mem_limit: 256m
+    pids_limit: 128
+    ulimits: { core: 0 }
+    volumes:
+      - fakeazure-ca:/run/alice-e2e-azure
+    networks:
+      backend:
+        aliases: [login.microsoftonline.com, alice-e2e.vault.azure.net]
+    healthcheck:
+      test: ["CMD", "/alice-fakeazure", "ctl", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  fakeazure-ca: {}

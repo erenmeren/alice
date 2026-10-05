@@ -362,6 +362,7 @@ func TestReleaseBinariesLinkNoTestPackages(t *testing.T) {
 	for _, tags := range []string{"", "e2e testlicense"} {
 		assert.NotContains(t, goListDeps(t, tags, "./cmd/alice"), "alice/internal/testutil/fakekv", "tags %q", tags)
 	}
+	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakeazure"), "alice/internal/testutil/fakekv", "the fake tool is where the fake is linked")
 }
 
 func TestRequires(t *testing.T) {
