@@ -735,3 +735,19 @@ func TestSecretInHandIsAuditedWhateverTheRefusal(t *testing.T) {
 	assert.ErrorIs(t, err, inventory.ErrNotFound)
 	assert.Equal(t, 2, h.secretReads("failure"), "no such deployment: nothing to audit")
 }
+
+// A refusal that comes with a lost claim reports both: the state and the failed audit.
+func TestSecretInHandWithALostClaim(t *testing.T) {
+	b := newBindFixture(t)
+	h, ctx := b.h, b.h.ctx
+	bind := b.create(b.admin, b.web, b.loc1)
+	id := b.beginKV(b.operator, bind.ID, b.versionID(b.web, ver(1)), false, b.loc1)[0]
+	m, err := h.svc.DeploymentMaterial(ctx, id, false)
+	require.NoError(t, err)
+	require.NoError(t, h.svc.StartDeployment(ctx, id, m.SendValues("", 0)))
+	_, secret := b.fullSecret()
+	_, err = h.svc.KVDeployMaterial(inventory.WithClaim(ctx, inventory.Claim{JobID: uuid.New(), Attempt: 1}), id, secret)
+	assert.ErrorIs(t, err, inventory.ErrDeploymentState)
+	assert.ErrorIs(t, err, inventory.ErrClaimLost)
+	assert.Zero(t, h.secretReads("failure"))
+}

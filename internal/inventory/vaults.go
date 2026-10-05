@@ -882,3 +882,47 @@ func listingAnswered(f *providers.AzureFacts) bool {
 	}
 	return false
 }
+
+// RecordAccessCheckRead audits the access check's optional read of a certificate's secret (R40 rows 28 and
+// 34: every secret read is audited): one kv.secret_read row with purpose access_check, the vault's address,
+// the certificate name and version, the result (audit.Success or audit.Failure) and, for a failure, the
+// closed reason. Nothing else is stored. ErrNotFound for an unknown or deleted vault, ErrNotAVault for a
+// server, validate.Errors for a name or version of the wrong shape, ErrClaimLost when the job run lost its
+// job. The caller is the access check job (Task 15), once per read, after the provider returned.
+func (s *Service) RecordAccessCheckRead(ctx context.Context, vaultID uuid.UUID, certificateName, version string, result audit.Result, reason string) error {
+	var errs validate.Errors
+	if !azureid.ValidObjectName(certificateName) {
+		errs.Add("certificate_name", validate.Pattern, nil)
+	}
+	if !azureid.ValidVersion(version) {
+		errs.Add("version", validate.Pattern, nil)
+	}
+	if result != audit.Success && result != audit.Failure {
+		errs.Add("result", validate.OneOf, map[string]string{"values": "success, failure"})
+	}
+	if result == audit.Failure && !errorCodeRE.MatchString(reason) {
+		errs.Add("reason", validate.Pattern, nil)
+	}
+	if len(errs) > 0 {
+		return errs
+	}
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := checkClaim(ctx, tx); err != nil {
+			return err
+		}
+		t, err := readKVTarget(ctx, tx, vaultID, "")
+		if err != nil {
+			return err
+		}
+		if t.deleted {
+			return ErrNotFound
+		}
+		details := map[string]string{"purpose": "access_check", "vault_url": t.url, "certificate_name": certificateName, "version": version}
+		if result == audit.Failure {
+			details["reason"] = reason
+		}
+		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "kv.secret_read", ObjectType: "target", ObjectID: vaultID.String(),
+			Result: result, Details: details})
+		return err
+	})
+}

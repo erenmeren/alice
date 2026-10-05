@@ -10,8 +10,11 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"software.sslmate.com/src/go-pkcs12"
 
+	"alice/internal/audit"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/azureid"
@@ -1053,19 +1057,114 @@ func TestUncertainImportsEnd(t *testing.T) {
 		assert.Equal(t, inventory.ReasonImportOutcomeUnknown, r.ErrorCode)
 		assert.Zero(t, f.h.count("SELECT count(*) FROM kv_imports WHERE state IN ('queued', 'running', 'uncertain')"))
 	})
-	t.Run("an import whose job is dead or pruned: queued fails, running becomes uncertain", func(t *testing.T) {
+	// A1: an import whose job ends without the handler finishing it does not block its name for ever.
+	queuedEnds := func(name string, end func(f *importFixture, im inventory.KVImport)) {
+		t.Run("queued import, job "+name+": failed, cancelled, and the name is free", func(t *testing.T) {
+			f := newImportFixture(t)
+			im := f.mustRequest("a1-name", false)
+			healthy := f.mustRequest("a1-live", false)
+			end(f, im)
+			n, err := f.h.svc.SweepImports(f.h.ctx)
+			require.NoError(t, err)
+			assert.Equal(t, 1, n)
+			got := f.get(im.ID)
+			assert.Equal(t, inventory.ImportFailed, got.State)
+			assert.Equal(t, inventory.ReasonImportCancelled, got.ErrorCode)
+			assert.True(t, got.CanRetry, "nothing was sent")
+			assert.Equal(t, 1, f.h.audits("kv.import.failed"))
+			assert.Equal(t, inventory.ImportQueued, f.get(healthy.ID).State, "a live job is left alone")
+			// A late handler of the swept import sends nothing.
+			assert.ErrorIs(t, f.h.svc.MarkImportSent(f.h.ctx, im.ID), inventory.ErrImportState)
+			_, err = f.h.svc.ImportMaterial(f.h.ctx, im.ID)
+			assert.ErrorIs(t, err, inventory.ErrImportState)
+			n, err = f.h.svc.SweepImports(f.h.ctx)
+			require.NoError(t, err)
+			assert.Zero(t, n, "idempotent")
+			_, err = f.request("a1-name", false)
+			assert.NoError(t, err, "the name is accepted again")
+		})
+	}
+	queuedEnds("cancelled", func(f *importFixture, im inventory.KVImport) {
+		f.exec("UPDATE jobs SET status = 'cancelled' WHERE id = $1", *im.JobID)
+	})
+	queuedEnds("dead", func(f *importFixture, im inventory.KVImport) {
+		f.exec("UPDATE jobs SET status = 'dead' WHERE id = $1", *im.JobID)
+	})
+	queuedEnds("failed", func(f *importFixture, im inventory.KVImport) {
+		f.exec("UPDATE jobs SET status = 'failed' WHERE id = $1", *im.JobID)
+	})
+	queuedEnds("gone", func(f *importFixture, im inventory.KVImport) {
+		f.exec("DELETE FROM jobs WHERE id = $1", *im.JobID)
+	})
+	for _, how := range []string{"dead after the mark", "failed after a created answer that could not be recorded", "cancelled", "gone"} {
+		t.Run("running import, job "+how+": uncertain, then a poll settles it", func(t *testing.T) {
+			f := newImportFixture(t)
+			f.h.clock.Advance(time.Minute)
+			im := f.toState("a1-run", inventory.ImportRunning)
+			live := f.toState("a1-live-run", inventory.ImportRunning)
+			switch how {
+			case "gone":
+				f.exec("DELETE FROM jobs WHERE id = $1", *im.JobID)
+			case "cancelled":
+				f.exec("UPDATE jobs SET status = 'cancelled' WHERE id = $1", *im.JobID)
+			case "dead after the mark":
+				f.exec("UPDATE jobs SET status = 'dead' WHERE id = $1", *im.JobID)
+			default:
+				f.exec("UPDATE jobs SET status = 'failed' WHERE id = $1", *im.JobID)
+			}
+			n, err := f.h.svc.SweepImports(f.h.ctx)
+			require.NoError(t, err)
+			assert.Equal(t, 1, n)
+			assert.Equal(t, inventory.ImportUncertain, f.get(im.ID).State)
+			assert.Equal(t, inventory.ImportRunning, f.get(live.ID).State, "a live job is left alone")
+			assert.Equal(t, 1, f.h.audits("kv.import.uncertain"), "its own audit row")
+			// A late handler cannot record a send or an answer over it.
+			_, err = f.h.svc.FinishImport(f.h.ctx, im.ID, providers.ImportResult{Outcome: providers.ImportUncertain}, errors.New("x"))
+			assert.ErrorIs(t, err, inventory.ErrImportState)
+			f.h.clock.Advance(time.Minute)
+			f.poll("a1-run", f.nw, 4, f.h.clock.Now())
+			assert.Equal(t, inventory.ImportSucceeded, f.get(im.ID).State, "the poll settles it")
+		})
+	}
+	t.Run("a job that is blocked by the licence or still running is not an ended job", func(t *testing.T) {
 		f := newImportFixture(t)
-		queued := f.mustRequest("dq-name", false)
-		run := f.toState("dr-name", inventory.ImportRunning)
-		healthy := f.mustRequest("dh-name", false)
-		f.exec("UPDATE jobs SET status = 'dead' WHERE id IN ($1, $2)", *queued.JobID, *run.JobID)
+		a := f.mustRequest("blk-name", false)
+		b := f.mustRequest("run-name", false)
+		f.exec("UPDATE jobs SET status = 'blocked_license' WHERE id = $1", *a.JobID)
+		f.exec("UPDATE jobs SET status = 'running' WHERE id = $1", *b.JobID)
 		n, err := f.h.svc.SweepImports(f.h.ctx)
 		require.NoError(t, err)
-		assert.Equal(t, 2, n)
-		assert.Equal(t, inventory.ImportFailed, f.get(queued.ID).State)
-		assert.Equal(t, inventory.ReasonImportJobLost, f.get(queued.ID).ErrorCode)
-		assert.Equal(t, inventory.ImportUncertain, f.get(run.ID).State)
-		assert.Equal(t, inventory.ImportQueued, f.get(healthy.ID).State, "a live job is left alone")
+		assert.Zero(t, n)
+	})
+	t.Run("a sweep and a handler racing: nothing is sent twice", func(t *testing.T) {
+		f := newImportFixture(t)
+		im := f.mustRequest("race-sweep", false)
+		f.exec("UPDATE jobs SET status = 'dead' WHERE id = $1", *im.JobID)
+		var wg sync.WaitGroup
+		var sent, swept atomic.Int32
+		for range 4 {
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				if f.h.svc.MarkImportSent(f.h.ctx, im.ID) == nil {
+					sent.Add(1)
+				}
+			}()
+			go func() {
+				defer wg.Done()
+				n, _ := f.h.svc.SweepImports(f.h.ctx)
+				swept.Add(int32(n))
+			}()
+		}
+		wg.Wait()
+		got := f.get(im.ID)
+		if sent.Load() > 0 { // the handler won: marked once, then the sweep made it uncertain
+			assert.Equal(t, int32(1), sent.Load(), "marked at most once")
+			assert.Equal(t, inventory.ImportUncertain, got.State)
+		} else {
+			assert.Equal(t, inventory.ImportFailed, got.State)
+		}
+		assert.Equal(t, int32(1), swept.Load(), "ended once")
 	})
 }
 
@@ -1092,4 +1191,52 @@ func TestImportSurvivors(t *testing.T) {
 		assert.True(t, v.Held)
 		assert.Equal(t, "license", v.HeldReason)
 	})
+}
+
+// A2: the access check's optional secret read is audited like every secret read.
+func TestRecordAccessCheckRead(t *testing.T) {
+	f := newImportFixture(t)
+	h, ctx := f.h, f.h.ctx
+	require.NoError(t, h.svc.RecordAccessCheckRead(ctx, f.vault, "web-cert", ver(1), audit.Success, ""))
+	require.NoError(t, h.svc.RecordAccessCheckRead(ctx, f.vault, "web-cert", ver(1), audit.Failure, "azure.forbidden"))
+	d := h.auditDetails("kv.secret_read")
+	require.Len(t, d, 2)
+	assert.Equal(t, map[string]string{"vault_url": "https://prod.vault.azure.net", "certificate_name": "web-cert", "version": ver(1), "purpose": "access_check"}, d[0])
+	assert.Equal(t, "azure.forbidden", d[1]["reason"])
+	assert.Equal(t, 1, h.secretReads("success"))
+	assert.Equal(t, 1, h.secretReads("failure"))
+	require.ErrorIs(t, h.svc.RecordAccessCheckRead(ctx, uuid.New(), "web-cert", ver(1), audit.Success, ""), inventory.ErrNotFound)
+	require.ErrorIs(t, h.svc.RecordAccessCheckRead(ctx, f.target1, "web-cert", ver(1), audit.Success, ""), inventory.ErrNotAVault)
+	var errs validate.Errors
+	require.ErrorAs(t, h.svc.RecordAccessCheckRead(ctx, f.vault, "not a name!", ver(1), audit.Success, ""), &errs)
+	require.NoError(t, h.svc.DeleteVault(ctx, f.admin, f.vault, true))
+	assert.ErrorIs(t, h.svc.RecordAccessCheckRead(ctx, f.vault, "web-cert", ver(1), audit.Success, ""), inventory.ErrNotFound, "a deleted vault")
+	assert.Equal(t, 2, h.audits("kv.secret_read"))
+	claimed := inventory.WithClaim(ctx, inventory.Claim{JobID: uuid.New(), Attempt: 1})
+	other := h.vault("again")
+	assert.ErrorIs(t, h.svc.RecordAccessCheckRead(claimed, other, "web-cert", ver(1), audit.Success, ""), inventory.ErrClaimLost)
+}
+
+// Without a notifier nothing is mailed and nothing breaks: the marks, audit rows and states are the same.
+func TestImportsAndPlannerWorkWithoutAnEmailSender(t *testing.T) {
+	f := newImportFixture(t)
+	roots := x509.NewCertPool()
+	roots.AddCert(f.ca.Root)
+	f.h.svc = inventory.New(inventory.Config{Pool: f.h.db.App, Keyring: f.h.keyring, Audit: f.h.audit, Clock: f.h.clock, License: f.h.lic,
+		Registry: f.h.reg, Jobs: f.h.jobs, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Roots: roots})
+	im := f.toState("quiet-mail", inventory.ImportRunning)
+	got, err := f.h.svc.FinishImport(f.h.ctx, im.ID, providers.ImportResult{Outcome: providers.ImportRefused}, providers.NewError("azure.forbidden", false, nil, nil))
+	require.NoError(t, err)
+	assert.Equal(t, inventory.ImportFailed, got.State)
+	assert.Zero(t, f.h.emails("kv.import_failed"))
+	n, err := f.h.svc.PlanKVAutoDeploy(f.h.ctx)
+	require.NoError(t, err)
+	assert.Zero(t, n)
+	// Sweeping with a lost claim writes nothing and says so.
+	claimed := inventory.WithClaim(f.h.ctx, inventory.Claim{JobID: uuid.New(), Attempt: 1})
+	other := f.mustRequest("quiet-two", false)
+	f.exec("UPDATE jobs SET status = 'dead' WHERE id = $1", *other.JobID)
+	_, err = f.h.svc.SweepImports(claimed)
+	assert.ErrorIs(t, err, inventory.ErrClaimLost)
+	assert.Equal(t, inventory.ImportQueued, f.get(other.ID).State)
 }

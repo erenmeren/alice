@@ -79,7 +79,8 @@ type planSnapshot struct {
 	versions                              []planVersion
 	locations                             []planLocation // in id order
 	deployments                           []planDeployment
-	remaining                             int // deployments the run may still create (all bindings)
+	remaining                             int        // deployments the run may still create (all bindings)
+	reopened                              *time.Time // when the licence gate last reopened (nil: never)
 }
 
 // planNotice is an email the plan asks for, with the mark that makes it once.
@@ -88,6 +89,15 @@ type planNotice struct {
 	template string
 	skipped  bool // marks skipped_notified_at instead of notified_at
 }
+
+// HoldRuleDetectedBeforeReopening is the audit detail hold_rule of a version the planner held because it
+// was detected before the licence gate last reopened (the poll's rules are gate_closed,
+// created_before_reopening and unconfirmed_since_reopening).
+const HoldRuleDetectedBeforeReopening = "detected_before_reopening"
+
+// planHold asks to hold the version for the licence: it was detected before the gate last reopened, so no
+// person has seen it since the lock.
+type planHold struct{ version uuid.UUID }
 
 type planStop struct {
 	version uuid.UUID
@@ -102,6 +112,7 @@ type autoPlan struct {
 	budget  int
 	notices []planNotice
 	stop    *planStop
+	hold    *planHold
 }
 
 // Closed reasons of a deployment (deployments.error_code) that say the state a deployment was
@@ -356,6 +367,16 @@ func planAutoDeploy(sn planSnapshot) autoPlan {
 	}
 	if older && cur.skippedAt == nil {
 		notify(cur, TemplateKVSkippedOlder, true)
+	}
+	if sn.reopened != nil && !cur.detectedAt.After(*sn.reopened) && len(fresh)+len(retries) > 0 {
+		// Detected before the licence gate last reopened (a renewal that arrived just before a lock and was
+		// not planned yet): without a person it would roll out the moment the licence returns. Held for the
+		// licence instead; the existing "held" mail goes once; websites already deployed stay as they are.
+		p.hold = &planHold{version: cur.id}
+		if cur.notifiedAt == nil {
+			notify(cur, TemplateKVNewVersionHeldLicense, false)
+		}
+		return p
 	}
 	p.budget = max(0, min(AutoDeployWave-inFlight, sn.remaining))
 	if p.budget > 0 {

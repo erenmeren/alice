@@ -58,7 +58,8 @@ const (
 	ReasonImportOutcomeUnknown = "kv.import_outcome_unknown"
 	ReasonImportConfirmNeeded  = "kv.import_confirm_needed"
 	ReasonImportVaultDeleted   = "kv.import_vault_deleted"
-	ReasonImportJobLost        = "kv.import_job_lost"
+	// ReasonImportCancelled: the import's job ended (cancelled, dead, failed or gone) before anything was sent.
+	ReasonImportCancelled = "kv.import_cancelled"
 )
 
 // ImportOutcomeUnknownAfter is how long after the send an uncertain import waits for a poll to settle it.
@@ -121,7 +122,7 @@ func scanImport(row pgx.Row) (KVImport, error) {
 		return KVImport{}, fmt.Errorf("inventory: read the import's params: %w", err)
 	}
 	im.CreatedAt, im.SentAt, im.FinishedAt = im.CreatedAt.UTC(), utcPtr(im.SentAt), utcPtr(im.FinishedAt)
-	im.CanRetry = im.State == ImportFailed && im.ErrorCode == "azure.unreachable"
+	im.CanRetry = im.State == ImportFailed && (im.ErrorCode == "azure.unreachable" || im.ErrorCode == ReasonImportCancelled)
 	return im, nil
 }
 
@@ -828,7 +829,7 @@ func (s *Service) SweepImports(ctx context.Context) (int, error) {
 	rows, err := s.pool.Query(ctx, `SELECT i.id, i.target_id FROM kv_imports i LEFT JOIN jobs j ON j.id = i.job_id
 WHERE i.finished_at IS NULL AND (
     (i.state = 'uncertain' AND i.sent_at <= $1)
- OR (i.state IN ('queued', 'running') AND (i.job_id IS NULL OR j.status IN ('succeeded', 'failed', 'cancelled', 'dead'))))
+ OR (i.state IN ('queued', 'running') AND (i.job_id IS NULL OR j.id IS NULL OR j.status IN ('failed', 'cancelled', 'dead'))))
 ORDER BY i.id LIMIT 200`, now.Add(-ImportOutcomeUnknownCap))
 	if err != nil {
 		return 0, fmt.Errorf("inventory: find the imports to sweep: %w", err)
@@ -867,7 +868,7 @@ ORDER BY i.id LIMIT 200`, now.Add(-ImportOutcomeUnknownCap))
 				return s.endImport(ctx, tx, im.ID, im.CertificateID, im.Name, im.Thumbprint, ReasonImportOutcomeUnknown, now, t.name, t.url, TemplateKVImportOutcomeUnknown)
 			case im.State == ImportQueued:
 				did = true
-				return s.endImport(ctx, tx, im.ID, im.CertificateID, im.Name, im.Thumbprint, ReasonImportJobLost, now, t.name, t.url, TemplateKVImportFailed)
+				return s.endImport(ctx, tx, im.ID, im.CertificateID, im.Name, im.Thumbprint, ReasonImportCancelled, now, t.name, t.url, TemplateKVImportFailed)
 			case im.State == ImportRunning:
 				did = true
 				if _, err := tx.Exec(ctx, "UPDATE kv_imports SET state = 'uncertain' WHERE id = $1 AND state = 'running' AND finished_at IS NULL", im.ID); err != nil {
@@ -875,7 +876,7 @@ ORDER BY i.id LIMIT 200`, now.Add(-ImportOutcomeUnknownCap))
 				}
 				_, err := s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "kv.import.uncertain", ObjectType: "kv_import", ObjectID: im.ID.String(),
 					Result: audit.Success, Details: map[string]string{"import_id": im.ID.String(), "certificate_id": im.CertificateID.String(), "certificate_name": im.Name,
-						"thumbprint": im.Thumbprint, "vault_url": t.url, "reason": ReasonImportJobLost}})
+						"thumbprint": im.Thumbprint, "vault_url": t.url, "reason": ReasonImportCancelled}})
 				return err
 			}
 			return nil

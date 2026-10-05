@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/inventory"
+	"alice/internal/license"
 	"alice/internal/providers"
 	"alice/internal/testutil/pki"
 )
@@ -751,4 +752,36 @@ func TestAutoDeployNeverPlansAHeldVersionForTheSystemActor(t *testing.T) {
 	f.exec("UPDATE kv_certificate_versions SET held = true, held_reason = 'license' WHERE id = $1", f.versionID(f.web, ver(2)))
 	assert.Zero(t, f.plan())
 	assert.Zero(t, f.h.count("SELECT count(*) FROM deployments"))
+}
+
+// A3: a renewal detected just before a licence lock and not planned yet is not deployed by itself when the
+// licence returns: it is held for the licence, mailed once, and an Administrator releases it. A renewal
+// detected after the reopening is planned as usual.
+func TestAutoDeployHoldsAVersionDetectedBeforeTheReopening(t *testing.T) {
+	f := newAutoFixture(t, true)
+	h := f.h
+	f.renew(2, nil)
+	h.clock.Advance(40 * 24 * time.Hour)
+	require.NoError(t, h.lic.Tick(h.ctx))
+	assert.Zero(t, f.plan(), "locked: nothing")
+	h.installLicense("LIC-A3", 5, 365)
+	require.NoError(t, h.lic.Allow(license.ClassChange))
+	assert.Zero(t, f.plan(), "no deployment without a person")
+	assert.Zero(t, h.count("SELECT count(*) FROM deployments"))
+	v := h.versionRows(f.web)[ver(2)]
+	assert.True(t, v.Held)
+	assert.Equal(t, "license", v.HeldReason)
+	ev := h.auditDetails("kv.version.held")
+	require.Len(t, ev, 1)
+	assert.Equal(t, inventory.HoldRuleDetectedBeforeReopening, ev[0]["hold_rule"])
+	assert.Equal(t, map[string]int{inventory.TemplateKVNewVersionHeldLicense: 1}, f.mails())
+	assert.Zero(t, f.plan())
+	assert.Equal(t, map[string]int{inventory.TemplateKVNewVersionHeldLicense: 1}, f.mails(), "once")
+	// Control: a version detected after the reopening is planned.
+	f.renew(3, nil)
+	assert.Equal(t, 3, f.plan())
+	assert.Len(t, f.deps(ver(3)), 3)
+	// An Administrator releases the held one: it is then not the current version, so nothing is deployed for it.
+	_, err := h.svc.ReleaseVersion(h.ctx, f.admin, inventory.ReleaseInput{VaultID: f.vault, KVCertificateID: f.web, VersionID: f.versionID(f.web, ver(2))})
+	require.NoError(t, err)
 }

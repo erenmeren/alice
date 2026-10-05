@@ -61,6 +61,7 @@ func TestAutoDeployPlanTable(t *testing.T) {
 		notices  []string
 		stopped  bool
 		skipMark bool // the notice marks skipped_notified_at
+		hold     bool // the planner holds the version for the licence
 	}{
 		{name: "a new version with three websites: one deployment each", deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave},
 		{name: "the run's own budget caps the wave", mutate: func(f *planFixture) { f.sn.remaining = 2 },
@@ -150,6 +151,25 @@ func TestAutoDeployPlanTable(t *testing.T) {
 			f.sn.autoDeploy, f.sn.autoSince = false, nil
 			f.sn.locations[0].served = &f.leaf
 		}, deploy: func(f *planFixture) []uuid.UUID { return nil }, notices: []string{TemplateKVNewVersion}},
+		{name: "detected before the licence gate last reopened: held for the licence, mailed once, no deployment", mutate: func(f *planFixture) {
+			f.sn.reopened = tp(planNow.Add(-30 * time.Minute))
+			f.cur().detectedAt, f.cur().kvCreatedAt = planNow.Add(-time.Hour), tp(planNow.Add(-time.Hour))
+		}, deploy: func(f *planFixture) []uuid.UUID { return nil }, notices: []string{TemplateKVNewVersionHeldLicense}, hold: true},
+		{name: "detected exactly when the gate reopened is not later: held", mutate: func(f *planFixture) {
+			f.sn.reopened = tp(f.cur().detectedAt)
+		}, deploy: func(f *planFixture) []uuid.UUID { return nil }, notices: []string{TemplateKVNewVersionHeldLicense}, hold: true},
+		{name: "detected after the gate reopened: planned", mutate: func(f *planFixture) { f.sn.reopened = tp(planNow.Add(-2 * time.Hour)) },
+			deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave},
+		{name: "detected before the reopening but every website has it: nothing to hold", mutate: func(f *planFixture) {
+			f.sn.reopened = tp(planNow.Add(-30 * time.Minute))
+			for i := range f.sn.locations {
+				f.sn.locations[i].served = &f.leaf
+			}
+		}, deploy: func(f *planFixture) []uuid.UUID { return nil }},
+		{name: "detected before the reopening and already mailed: held without a second mail", mutate: func(f *planFixture) {
+			f.sn.reopened = tp(planNow.Add(-30 * time.Minute))
+			f.cur().notifiedAt = tp(planNow)
+		}, deploy: func(f *planFixture) []uuid.UUID { return nil }, hold: true},
 		{name: "three failures of the version stop the wave, with one notice of the stop", mutate: func(f *planFixture) {
 			f.failed(f.a, 3*time.Hour, "deployment.failed")
 			f.failed(f.b, 3*time.Hour, "deployment.failed")
@@ -272,6 +292,7 @@ func TestAutoDeployPlanTable(t *testing.T) {
 					assert.Equal(t, tc.skipMark, n.skipped, n.template)
 				}
 			}
+			assert.Equal(t, tc.hold, got.hold != nil)
 			assert.Equal(t, tc.stopped, got.stop != nil)
 			if tc.stopped && got.stop != nil {
 				assert.Equal(t, "v2", got.stop.name)

@@ -224,7 +224,11 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 		if err := s.readPlanSnapshot(ctx, tx, id, certID, current, &sn); err != nil {
 			return err
 		}
+		if sn.reopened, err = s.gateReopenedAt(ctx); err != nil { // the poll's own helper
+			return err
+		}
 		p := planAutoDeploy(sn)
+		var holdAudit *audit.Event
 		var cur *planVersion
 		for i := range sn.versions {
 			if sn.versions[i].current {
@@ -306,6 +310,18 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 			}
 		}
 
+		if p.hold != nil {
+			tag, err := tx.Exec(ctx, "UPDATE kv_certificate_versions SET held = true, held_reason = $2 WHERE id = $1 AND NOT held", p.hold.version, heldLicense)
+			if err != nil {
+				return fmt.Errorf("inventory: hold the version: %w", err)
+			}
+			if tag.RowsAffected() == 1 {
+				holdAudit = &audit.Event{Actor: jobsActor, Action: "kv.version.held", ObjectType: "kv_certificate", ObjectID: certID.String(),
+					Result: audit.Success, Details: map[string]string{"kv_certificate_id": certID.String(), "certificate_name": certName, "version": cur.version,
+						"reason": heldLicense, "held": "true", "hold_rule": HoldRuleDetectedBeforeReopening}}
+			}
+		}
+
 		if p.stop != nil {
 			tag, err := tx.Exec(ctx, "UPDATE bindings SET stopped_version = $2, version = version + 1 WHERE id = $1 AND stopped_version <> $2", id, p.stop.name)
 			if err != nil {
@@ -323,6 +339,11 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 						"certificate_name": certName, "version": p.stop.name, "failed_count": strconv.Itoa(p.stop.failed), "vault_url": vaultURL}}); err != nil {
 					return err
 				}
+			}
+		}
+		if holdAudit != nil {
+			if _, err := s.audit.Append(ctx, tx, *holdAudit); err != nil {
+				return err
 			}
 		}
 		return nil
