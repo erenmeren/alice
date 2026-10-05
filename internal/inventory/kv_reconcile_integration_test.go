@@ -392,6 +392,55 @@ func TestNewVersionInLockIsHeld(t *testing.T) {
 	assert.False(t, h.versionRows(c.ID)[ver(6)].Held)
 }
 
+// A version Azure created between the provider's read of the certificate's details and its read of the
+// version list is first stored as history (no leaf). When it is the current version at the next poll it is a
+// new version like any other: the hold rule applies and it gets its kv.certificate.new_version row (final
+// review B M-1).
+func TestAVersionFirstListedAsHistoryIsNewWhenItBecomesCurrent(t *testing.T) {
+	h := newHarness(t, withAzure())
+	h.user("ada", rbac.Admin, "")
+	vault := h.vault("prod")
+	l1 := h.kvLeaf("www.example.test")
+	h.reconcile(vault, kvResult(h.kvc("web-cert", l1, ver(1), h.clock.Now(), true)))
+	c := h.certRow(vault, "web-cert")
+
+	h.clock.Advance(31 * 24 * time.Hour)
+	require.NoError(t, h.lic.Tick(h.ctx))
+	require.ErrorIs(t, h.lic.Allow(license.ClassChange), license.ErrLocked, "the gate is closed")
+	l2 := h.kvLeaf("www.example.test")
+	t1 := h.clock.Now()
+	racing := h.kvc("web-cert", l1, ver(1), t1, true)
+	nb, exp := l2.Cert.NotBefore.UTC(), l2.Cert.NotAfter.UTC()
+	racing.Versions = append(racing.Versions, providers.KVCertificateVersion{Version: ver(2), Thumbprint: thumbOf(l2), Enabled: true,
+		NotBefore: &nb, Expires: &exp, Created: &t1})
+	sum := h.reconcile(vault, kvResult(racing))
+	assert.Zero(t, sum.NewVersions)
+	vs := h.versionRows(c.ID)
+	require.Contains(t, vs, ver(2))
+	assert.Nil(t, vs[ver(2)].CertID, "stored as history")
+	assert.False(t, vs[ver(2)].Held)
+	assert.Equal(t, 0, h.audits("kv.certificate.new_version"))
+
+	h.clock.Advance(15 * time.Minute)
+	sum = h.reconcile(vault, kvResult(h.kvc("web-cert", l2, ver(2), t1, true)))
+	assert.Equal(t, 1, sum.NewVersions)
+	assert.Equal(t, 1, sum.HeldVersions)
+	vs = h.versionRows(c.ID)
+	require.NotNil(t, vs[ver(2)].CertID, "the leaf is stored now")
+	assert.True(t, vs[ver(2)].Held, "the hold rule of a new version applies")
+	assert.Equal(t, "license", vs[ver(2)].HeldReason)
+	ev := h.auditDetails("kv.certificate.new_version")
+	require.Len(t, ev, 1)
+	assert.Equal(t, ver(2), ev[0]["version"])
+	assert.Equal(t, "gate_closed", ev[0]["hold_rule"])
+
+	// A repeated poll writes nothing twice.
+	h.clock.Advance(15 * time.Minute)
+	sum = h.reconcile(vault, kvResult(h.kvc("web-cert", l2, ver(2), t1, true)))
+	assert.Zero(t, sum.NewVersions)
+	assert.Equal(t, 1, h.audits("kv.certificate.new_version"))
+}
+
 func TestMissingMarkingNeedsACompleteListing(t *testing.T) {
 	h := newHarness(t, withAzure(), withNginxProvider())
 	admin := h.user("ada", rbac.Admin, "ada@example.com")

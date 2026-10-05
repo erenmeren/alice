@@ -399,6 +399,15 @@ WHERE id = $1 AND last_seen_at <= $17`,
 			heldReason = "license"
 		}
 		certRef := certIDs[d.leaf.Fingerprint]
+		// A version first stored from a version list (history: no leaf) that is now the current one is new
+		// to Alice as a current version: it gets the hold rule and the audit row like an inserted one.
+		var wasHistory bool
+		if _, has := stored[[2]string{certID.String(), d.version}]; has && known {
+			if err := tx.QueryRow(ctx, "SELECT certificate_id IS NULL FROM kv_certificate_versions WHERE kv_certificate_id = $1 AND version = $2",
+				certID, d.version).Scan(&wasHistory); err != nil {
+				return nil, fmt.Errorf("inventory: read a stored version: %w", err)
+			}
+		}
 		var versionID uuid.UUID
 		var inserted bool
 		err := tx.QueryRow(ctx, `INSERT INTO kv_certificate_versions AS v (id, kv_certificate_id, version, thumbprint, certificate_id, enabled,
@@ -408,7 +417,9 @@ ON CONFLICT (kv_certificate_id, version) DO UPDATE SET certificate_id = coalesce
     enabled = EXCLUDED.enabled, not_before = EXCLUDED.not_before, expires = EXCLUDED.expires,
     exportable = coalesce(EXCLUDED.exportable, v.exportable),
     key_type = CASE WHEN EXCLUDED.key_type <> '' THEN EXCLUDED.key_type ELSE v.key_type END,
-    content_type = CASE WHEN EXCLUDED.content_type <> '' THEN EXCLUDED.content_type ELSE v.content_type END
+    content_type = CASE WHEN EXCLUDED.content_type <> '' THEN EXCLUDED.content_type ELSE v.content_type END,
+    held = CASE WHEN v.certificate_id IS NULL THEN EXCLUDED.held ELSE v.held END,
+    held_reason = CASE WHEN v.certificate_id IS NULL THEN EXCLUDED.held_reason ELSE v.held_reason END
 WHERE v.thumbprint = EXCLUDED.thumbprint
 RETURNING id, (xmax = 0)`, uuid.Must(uuid.NewV7()), certID, d.version, d.thumb, certRef, d.attrs.enabled, d.attrs.notBefore, d.attrs.expires,
 			d.attrs.created, d.exportable, d.keyType, d.contentType, now, held, heldReason).Scan(&versionID, &inserted)
@@ -419,6 +430,7 @@ RETURNING id, (xmax = 0)`, uuid.Must(uuid.NewV7()), certID, d.version, d.thumb, 
 		if err != nil {
 			return nil, fmt.Errorf("inventory: store a certificate version: %w", err)
 		}
+		inserted = inserted || wasHistory
 		if inserted && held {
 			st.heldVersions++
 		}
