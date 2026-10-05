@@ -455,6 +455,13 @@ func (f *rotFx) overlap() {
 	f.must("UPDATE rotations SET status = 'overlap', verified_at = $2, overlap_until = $3 WHERE id = $1", f.run, rotNow, rotNow.Add(time.Hour))
 }
 
+// overlapUnguarded enters the overlap with the run guard off for that one statement: the fixture keeps rows (planned,
+// adding, added) under the overlap that G24 refuses, to test that the location guard holds on its own too.
+func (f *rotFx) overlapUnguarded() {
+	f.t.Helper()
+	guardOff(f.t, f.db, "rotations", "rotations_guard", f.overlap)
+}
+
 func (f *rotFx) removingOld() {
 	f.t.Helper()
 	f.must("UPDATE rotations SET status = 'removing_old', removal_allowed = true WHERE id = $1", f.run)
@@ -471,12 +478,16 @@ func (f *rotFx) startRemoving(i int, checked, sent time.Time) error {
 	return f.locSet(i, "state = 'removing', remove_op_id = gen_random_uuid(), remove_verified_at = reverified_at, remove_sent_at = $2", sent)
 }
 
-// readyToRemove: location 0 verified, run in removing_old, location 0 re-checked at rotNow+1m.
+// readyToRemove: location 0 verified, the others cancelled (G24: no overlap over planned rows), run in removing_old,
+// location 0 re-checked at rotNow+1m.
 func readyToRemove(t *testing.T, db *pgtest.DB, n int) *rotFx {
 	t.Helper()
 	f := newRotFx(t, db, n)
 	f.start()
 	f.verified(0)
+	for i := 1; i < n; i++ {
+		f.mustLoc(i, "state = 'cancelled'")
+	}
 	f.overlap()
 	f.removingOld()
 	f.recheck(0, rotNow.Add(time.Minute))
@@ -611,6 +622,9 @@ func TestRotationRunEdges(t *testing.T) {
 	require.NoError(t, f.runSet("paused_license = true, paused_at = $2", rotNow))
 	require.NoError(t, f.runSet("paused_license = false, paused_at = NULL, status = 'verifying_new', awaiting_decision = true, decision_due_at = $2", rotNow.Add(time.Hour)))
 	require.NoError(t, f.runSet("paused_license = true, paused_at = $2", rotNow))
+	assert.Equal(t, "Z1013", sqlState(f.runSet("paused_license = false, paused_at = NULL, status = 'overlap', verified_at = $2, awaiting_decision = false, decision_due_at = NULL, overlap_until = $2", rotNow)),
+		"G24: location 0 is planned")
+	f.mustLoc(0, "state = 'cancelled'")
 	require.NoError(t, f.runSet("paused_license = false, paused_at = NULL, status = 'overlap', verified_at = $2, awaiting_decision = false, decision_due_at = NULL, overlap_until = $2", rotNow))
 	assert.Equal(t, "Z1013", sqlState(f.runSet("verified_at = $2", rotNow.Add(time.Minute))), "the verification time is set once")
 	assert.Equal(t, "Z1013", sqlState(f.runSet("status = 'completed', finished_at = $2", rotNow)), "overlap -> completed")
@@ -621,9 +635,6 @@ func TestRotationRunEdges(t *testing.T) {
 	assert.Equal(t, "Z1013", sqlState(f.runSet("status = 'aborted', finished_at = $2", rotNow)), "removing_old -> aborted")
 	assert.Equal(t, "Z1013", sqlState(f.runSet("status = 'overlap'")), "removing_old -> overlap")
 
-	// A run ends only when no location has a send in flight, and completes only without a location still to remove.
-	assert.Equal(t, "Z1013", sqlState(f.runSet("status = 'completed', finished_at = $2", rotNow)), "location 0 is planned: completed with a location still to change")
-	f.mustLoc(0, "state = 'cancelled'")
 	require.NoError(t, f.runSet("status = 'completed', finished_at = $2", rotNow))
 }
 
@@ -730,10 +741,10 @@ func TestRotationLocationInsertRules(t *testing.T) {
 	later := insertKeyLocation(t, db, f.oldKey, f.target, "later", "/home/later/.ssh/authorized_keys")
 	f.start()
 	assert.Equal(t, "Z1011", sqlState(f.insertLoc(f.run, 3, later, "later", "/home/later/.ssh/authorized_keys", "planned", nil)), "a started run takes no new location")
+	f.mustLoc(0, "state = 'cancelled'")
 	f.overlap()
 	f.removingOld()
 	assert.Equal(t, "Z1011", sqlState(f.insertLoc(f.run, 3, later, "later", "/home/later/.ssh/authorized_keys", "removing", nil)), "born removing in a removing run")
-	f.mustLoc(0, "state = 'cancelled'")
 	require.NoError(t, f.runSet("status = 'completed', finished_at = $2", rotNow))
 	assert.Equal(t, "Z1011", sqlState(f.insertLoc(f.run, 3, later, "later", "/home/later/.ssh/authorized_keys", "removed", nil)), "born removed in a finished run")
 	assert.Equal(t, "Z1011", sqlState(f.insertLoc(f.run, 3, later, "later", "/home/later/.ssh/authorized_keys", "planned", nil)), "a finished run takes no location")
@@ -797,7 +808,7 @@ func TestRotationLocationEdgeTable(t *testing.T) {
 	f.verified(idx["removing"])
 	f.verified(idx["removed"])
 	f.verified(idx["remove_failed"])
-	f.overlap()
+	f.overlapUnguarded() // the planned and added rows of the matrix stay
 	f.removingOld()
 	for _, n := range []string{"removing", "removed", "remove_failed"} {
 		f.recheck(idx[n], rotNow.Add(time.Minute))
@@ -871,7 +882,7 @@ func TestRotationRemovalGate(t *testing.T) {
 		rotNow.Add(-time.Hour), op, sent)), "nor the add time")
 	// A row that was never verified cannot jump to removing, whatever the statement says.
 	assert.Equal(t, "Z1011", sqlState(f.locSet(1, `state = 'removing', verified_at = $2, reverified_at = $2, add_sent_at = $2, remove_op_id = $3, remove_verified_at = $2, remove_sent_at = $2`,
-		rotNow, op)), "planned -> removing with self-attested columns")
+		rotNow, op)), "cancelled -> removing with self-attested columns")
 	// 8. The re-check is the login the removal relied on.
 	assert.Equal(t, "Z1011", sqlState(f.locSet(0, `state = 'removing', remove_op_id = $2, remove_verified_at = $3, remove_sent_at = $4`, op, rotNow, sent)),
 		"remove_verified_at is the re-check (reverified_at), not the old verification")
@@ -883,7 +894,7 @@ func TestRotationRemovalGate(t *testing.T) {
 		op, rotNow.Add(time.Minute+16*time.Minute))), "a re-check older than 15 minutes is not fresh")
 	assert.Equal(t, "rotation_locations_removal_fresh", constraintOf(f.locSet(0, `state = 'removing', remove_op_id = $2, remove_verified_at = reverified_at, remove_sent_at = $3`,
 		op, rotNow)), "a re-check after the send is not a re-check before it")
-	assert.Equal(t, "rotation_locations_times", constraintOf(f.locSet(0, "reverified_at = $2", rotNow.Add(-time.Minute))), "a re-check is not older than the verification")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "reverified_at = $2", rotNow.Add(-time.Minute))), "a re-check is not older than the verification (G20: nor goes back)")
 	require.NoError(t, f.locSet(0, `state = 'removing', remove_op_id = $2, remove_verified_at = reverified_at, remove_sent_at = $3`, op, rotNow.Add(time.Minute+15*time.Minute)),
 		"exactly 15 minutes is still fresh")
 
@@ -1094,9 +1105,12 @@ func TestMigration00010UpAndDownKeepEarlierData(t *testing.T) {
 	version, err := p.GetDBVersion(ctx)
 	require.NoError(t, err)
 	require.Equal(t, int64(9), version)
-	for _, tbl := range []string{"rotation_policies", "rotations", "rotation_locations", "rotation_steps"} {
+	for _, tbl := range []string{"rotation_policies", "rotations", "rotation_locations", "rotation_steps", "rotation_op_ids"} {
 		assert.False(t, tableExists(t, d, tbl), tbl)
 	}
+	var idx int
+	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT count(*) FROM pg_indexes WHERE indexname = 'notifications_outbox_rotation_preview'").Scan(&idx))
+	assert.Equal(t, 0, idx, "the Down drops the outbox index")
 	var cols int
 	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND
 ((table_name = 'managed_private_keys' AND column_name IN ('download_count', 'last_downloaded_at', 'destroyed_at'))
@@ -1339,8 +1353,8 @@ func TestRotationLocationEdgesRespectTheRunStatus(t *testing.T) {
 	f.added(2)
 	adding := "state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2"
 	verify := func(i int) error { return f.locSet(i, "state = 'verified', verified_at = $2", rotNow) }
-	// overlap
-	f.overlap()
+	// overlap (G24 refuses it over these rows; the location guard holds on its own)
+	f.overlapUnguarded()
 	assert.Equal(t, "Z1011", sqlState(f.locSet(3, adding, rotNow)), "no add in the overlap")
 	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "state = 'added', added_line_no = 1")), "an add does not finish in the overlap")
 	assert.Equal(t, "Z1011", sqlState(verify(2)), "no verification in the overlap")
@@ -1389,7 +1403,11 @@ VALUES ($1, $2, 3, $3, $4, 'uc', '/home/uc/.ssh/authorized_keys', 'planned', $5)
 		}
 		f.mustLoc(2, "state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2", rotNow)
 		f.mustLoc(2, "state = 'verified', verified_at = $2", rotNow)
-		f.overlap()
+		if siblingVerified {
+			f.overlap()
+		} else {
+			f.overlapUnguarded() // G24 refuses the overlap over the added sibling; the gate holds on its own
+		}
 		f.removingOld()
 		for _, i := range []int{0, 1, 2} {
 			if f.state(i) == "verified" {
@@ -1633,7 +1651,9 @@ func TestRotationColumnsAreWrittenInTheirOwnStep(t *testing.T) {
 	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "add_sent_at = NULL")), "never cleared (a sent add must not look unsent)")
 	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "add_sent_at = $2", rotNow.Add(time.Minute))), "never moved")
 	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "add_op_id = NULL")), "the op id is never cleared")
-	assert.NoError(t, f.locSet(0, "add_op_id = gen_random_uuid()"), "a re-send of the add may replace the op id while adding")
+	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "add_op_id = gen_random_uuid()")), "G25: a new op id only with a re-send")
+	assert.NoError(t, f.locSet(0, "add_op_id = gen_random_uuid(), add_resend_count = add_resend_count + 1, add_resent_at = $2", rotNow),
+		"a re-send of the add may replace the op id while adding")
 	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "verified_at = $2", rotNow)), "no verification time before the edge into verified")
 	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "undo_sent_at = $2", rotNow)), "no undo time on an adding row")
 	f.added(1)
@@ -1654,8 +1674,9 @@ func TestRotationRunDoesNotMoveOnWhileAnAddIsInFlight(t *testing.T) {
 	f.mustLoc(0, "state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2", rotNow)
 	f.verified(1)
 	assert.Equal(t, "Z1013", sqlState(f.runSet("status = 'verifying_new', awaiting_decision = true, decision_due_at = $2", rotNow.Add(time.Hour))))
-	require.NoError(t, f.runSet("status = 'overlap', verified_at = $2", rotNow), "overlap is not gated here: the way out is rolling_back")
-	assert.Equal(t, "Z1013", sqlState(f.runSet("status = 'removing_old', removal_allowed = true")), "removing_old with an add in flight")
+	assert.Equal(t, "Z1013", sqlState(f.runSet("status = 'overlap', verified_at = $2", rotNow)), "G24: no overlap with an add in flight")
+	f.overlapUnguarded()
+	assert.Equal(t, "Z1013", sqlState(f.runSet("status = 'removing_old', removal_allowed = true")), "removing_old with an add in flight (G17 holds on its own)")
 	require.NoError(t, f.runSet("status = 'rolling_back'"))
 	assert.Equal(t, "Z1011", sqlState(f.locSet(0, "state = 'undo_failed', error_code = 'rotation.retries_exhausted'")),
 		"a sent add may still land: no direct undo_failed for an adding row")

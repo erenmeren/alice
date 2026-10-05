@@ -239,7 +239,9 @@ CREATE TABLE rotation_locations (
     skip_reason       text NOT NULL DEFAULT '' CHECK (skip_reason = '' OR skip_reason ~ '^[a-z][a-z0-9_]{0,63}$'),
     error_code        text NOT NULL DEFAULT '' CHECK (error_code = '' OR error_code ~ '^[a-z][a-z0-9_]{0,40}\.[a-z][a-z0-9_]{0,60}$'),
     add_op_id         uuid,
-    add_sent_at       timestamptz,
+    add_sent_at       timestamptz,                 -- the first add send; never moves (G16)
+    add_resend_count  integer NOT NULL DEFAULT 0 CHECK (add_resend_count BETWEEN 0 AND 1000),   -- add re-sends (G25)
+    add_resent_at     timestamptz,                 -- the latest add re-send (G25)
     added_line_no     integer CHECK (added_line_no IS NULL OR added_line_no >= 1),
     new_location_id   uuid REFERENCES ssh_key_locations (id),
     verified_at       timestamptz,
@@ -248,6 +250,7 @@ CREATE TABLE rotation_locations (
     remove_verified_at timestamptz,                -- the fresh login the latest removal send relied on (= reverified_at then)
     remove_sent_at    timestamptz,
     removed_at        timestamptz,
+    remove_failed_at  timestamptz,                 -- stamped by the guard on the edge into remove_failed (G20)
     undo_op_id        uuid,
     undo_sent_at      timestamptz,
     backup            text NOT NULL DEFAULT '' CHECK (char_length(backup) <= 200),
@@ -266,11 +269,17 @@ CREATE TABLE rotation_locations (
         AND remove_verified_at >= verified_at AND remove_verified_at <= reverified_at AND remove_verified_at <= remove_sent_at
         AND remove_verified_at >= remove_sent_at - interval '15 minutes')),
     CONSTRAINT rotation_locations_removed_pair CHECK ((state = 'removed') = (removed_at IS NOT NULL)),
-    -- added <= verified < re-checked (a later login), removal sent <= removed, undo after the add
+    -- added <= verified < re-checked (a later login), removal sent <= removed, add re-sent after the first send, undo
+    -- after the latest add send
     CONSTRAINT rotation_locations_times CHECK ((add_sent_at IS NULL OR verified_at IS NULL OR verified_at >= add_sent_at)
         AND (verified_at IS NULL OR reverified_at IS NULL OR reverified_at > verified_at)
         AND (remove_sent_at IS NULL OR removed_at IS NULL OR removed_at >= remove_sent_at)
-        AND (add_sent_at IS NULL OR undo_sent_at IS NULL OR undo_sent_at >= add_sent_at)),
+        AND (add_sent_at IS NULL OR undo_sent_at IS NULL OR undo_sent_at >= add_sent_at)
+        AND (add_resent_at IS NULL OR (add_sent_at IS NOT NULL AND add_resent_at >= add_sent_at))
+        AND (add_resent_at IS NULL OR undo_sent_at IS NULL OR undo_sent_at >= add_resent_at)),
+    CONSTRAINT rotation_locations_add_resent CHECK ((add_resend_count = 0) = (add_resent_at IS NULL)),
+    CONSTRAINT rotation_locations_undo_sent CHECK (state NOT IN ('undoing', 'undone') OR (undo_op_id IS NOT NULL AND undo_sent_at IS NOT NULL)),
+    CONSTRAINT rotation_locations_remove_failed_at CHECK (state <> 'remove_failed' OR remove_failed_at IS NOT NULL),
     CONSTRAINT rotation_locations_verified_state CHECK (state <> 'verified' OR verified_at IS NOT NULL),
     CONSTRAINT rotation_locations_recheck_needs_verified CHECK (reverified_at IS NULL OR verified_at IS NOT NULL),
     CONSTRAINT rotation_locations_add_sent CHECK (state NOT IN ('adding', 'added') OR (add_op_id IS NOT NULL AND add_sent_at IS NOT NULL)),
@@ -278,6 +287,15 @@ CREATE TABLE rotation_locations (
     CONSTRAINT rotation_locations_verified_needs_add CHECK (verified_at IS NULL OR add_sent_at IS NOT NULL)
 );
 CREATE INDEX rotation_locations_target ON rotation_locations (target_id);
+
+-- Every operation id a location ever sent with (add, removal, undo), written by rotation_locations_guard when an op id
+-- column takes a new value: an op id is used once, across locations, kinds and attempts (G23), so a job or agent layer
+-- that deduplicates by op id never hands back an earlier attempt's result. Append-only (no UPDATE, no DELETE).
+CREATE TABLE rotation_op_ids (
+    op_id       uuid PRIMARY KEY,
+    location_id uuid NOT NULL REFERENCES rotation_locations (id),
+    kind        text NOT NULL CHECK (kind IN ('add', 'remove', 'undo'))
+);
 
 -- The run guard.
 -- LOCK ORDER of every transaction that writes these tables (the stores of Tasks 8, 9, 11).
@@ -294,11 +312,17 @@ CREATE INDEX rotation_locations_target ON rotation_locations (target_id);
 -- location locks the location row before this trigger reads the run FOR SHARE, so a writer holding a location
 -- and waiting for the run deadlocks (SQLSTATE 40P01) with one holding the run and updating the location.
 -- Inserting a rotation_steps row takes FOR KEY SHARE on the run: insert steps after the run lock.
--- UNLOCKED READS: the guards read the sibling locations of a file, the platform credential and the run's keys
--- without a lock (the connection-key flag of the old and new places and the new place's liveness are read FOR
--- SHARE: they conflict with a concurrent scan's update of those rows). Everything else is safe only because
--- every writer holds the run FOR UPDATE, which serializes all writers of one run; a writer that skips the run
--- lock can race these reads.
+-- UNLOCKED READS: the guards read the sibling locations of a file, the platform credential, the run's keys, the
+-- run's locations (rotations_guard: adding/planned/added rows and the end conditions), the old place at a location
+-- insert and the new place when new_location_id is set, without a lock (the connection-key flag of the old and new
+-- places and the new place's liveness at a send are read FOR SHARE: they conflict with a concurrent scan's update of
+-- those rows). rotations_guard's reads of the run's locations are safe on their own (every location writer holds the
+-- run FOR SHARE, which conflicts with the run UPDATE); everything else is safe only because every writer holds the run
+-- FOR UPDATE, which serializes all writers of one run, AND runs at READ COMMITTED (db/tx.go): a writer that waited for
+-- the run lock then reads the rows the previous holder committed. Under REPEATABLE READ or SERIALIZABLE it would read
+-- its old snapshot; a writer that skips the run lock can race these reads.
+-- The location guard also INSERTs into rotation_op_ids (its foreign key takes FOR KEY SHARE on the location row the
+-- statement already holds): no new lock order.
 -- NEVER wait on another connection (a second transaction of the service, a hook, a channel) while holding a lock
 -- of this table family, including the ones the triggers take implicitly (run FOR SHARE on every location write,
 -- policy FOR SHARE on a run insert, key and private-key FOR SHARE on destroy/un-retire, FOR KEY SHARE through
@@ -310,8 +334,10 @@ CREATE INDEX rotation_locations_target ON rotation_locations (target_id);
 -- the edge overlap -> removing_old, which also needs the run's verification (verified_at, the new key) already
 -- recorded before the statement, and no licence pause; verified_at is set once; a status change is an edge of
 -- C8; a run ends only when no location has a send in flight, a completed run has no location still to remove or
--- failed to remove, and an aborted run has every location ended; verifying_new, removing_old and completed are not entered while a location is adding. The connection key is NOT checked here (only
--- by the location gate, at removal).
+-- failed to remove and none whose new key may be left behind unverified (verify_failed, add_failed after a send), and
+-- an aborted run has every location ended; verifying_new, removing_old and completed are not entered while a location
+-- is adding; overlap is not entered while a location is planned, adding or added (G24). The connection key is NOT
+-- checked here (only by the location gate, at removal).
 -- +goose StatementBegin
 CREATE FUNCTION rotations_guard() RETURNS trigger LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp AS $$
@@ -368,6 +394,11 @@ BEGIN
             AND EXISTS (SELECT 1 FROM public.rotation_locations l WHERE l.rotation_id = NEW.id AND l.state = 'adding') THEN
         RAISE EXCEPTION 'a rotation does not move on while an add is still in flight' USING ERRCODE = 'Z1013';
     END IF;
+    IF NEW.status = 'overlap' AND OLD.status <> 'overlap'
+            AND EXISTS (SELECT 1 FROM public.rotation_locations l WHERE l.rotation_id = NEW.id AND l.state IN ('planned', 'adding', 'added')) THEN
+        -- G24: in the overlap these rows have no edge but an undo, so the run could only roll back.
+        RAISE EXCEPTION 'the overlap starts when no location is still to add or to verify' USING ERRCODE = 'Z1013';
+    END IF;
     IF NEW.status = 'removing_old' AND OLD.status = 'overlap' AND (OLD.verified_at IS NULL OR OLD.new_ssh_key_id IS NULL
             OR NEW.paused_license) THEN
         RAISE EXCEPTION 'removal starts on a verification the run already had, and not while paused for the licence' USING ERRCODE = 'Z1013';
@@ -385,11 +416,12 @@ BEGIN
     IF NEW.status = ANY (finished) AND NEW.status <> OLD.status THEN
         IF EXISTS (SELECT 1 FROM public.rotation_locations l WHERE l.rotation_id = NEW.id AND l.state IN ('adding', 'removing', 'undoing'))
                 OR (NEW.status = 'completed' AND EXISTS (SELECT 1 FROM public.rotation_locations l
-                    WHERE l.rotation_id = NEW.id AND l.state IN ('planned', 'added', 'verified', 'remove_failed')))
+                    WHERE l.rotation_id = NEW.id AND (l.state IN ('planned', 'added', 'verified', 'remove_failed', 'verify_failed')
+                      OR (l.state = 'add_failed' AND l.add_sent_at IS NOT NULL))))
                 OR (NEW.status = 'aborted' AND EXISTS (SELECT 1 FROM public.rotation_locations l
                     WHERE l.rotation_id = NEW.id AND l.state NOT IN ('skipped', 'cancelled', 'undone', 'undo_failed')
                       AND NOT (l.state = 'add_failed' AND l.add_sent_at IS NULL))) THEN
-            RAISE EXCEPTION 'a rotation ends when none of its locations is still to change (completed: none failed to remove; aborted: every one ended)' USING ERRCODE = 'Z1013';
+            RAISE EXCEPTION 'a rotation ends when none of its locations is still to change (completed: none failed to remove or left an unverified new key; aborted: every one ended)' USING ERRCODE = 'Z1013';
         END IF;
     END IF;
     RETURN NEW;
@@ -404,24 +436,29 @@ CREATE TRIGGER rotations_guard BEFORE INSERT OR UPDATE ON rotations
 -- run that has just left the state the change needed.
 -- Rules: a row is inserted only into a previewed run, as planned, skipped or cancelled, with no add, verify,
 -- removal or undo column set, for a location of the run's old key (same target, user and path). A status change
--- is an edge of the location table (below) AND respects the run's status: an add is started (and re-sent) only
--- while the run is adding_new and not paused for the licence; an add finishes (added, add_failed) only in
--- adding_new; a verification result (verified, unverifiable, verify_failed from adding/added) only in adding_new
--- or verifying_new; removing, removed and remove_failed only in removing_old; undoing, undone and undo_failed
--- (and a re-sent undo) only in rolling_back. skipped, cancelled, removed, undone and undo_failed never change
--- again; remove_failed changes only by a retry through the full gate, which needs a re-check strictly later than the
--- earlier one and than the failed send, a later send time and a new op id. verified_at is set once, on the edge into
--- verified; add_sent_at on entering adding only; the undo columns only while undoing.
+-- is an edge of the location table (below) AND respects the run's status: an add is started (and re-sent: the
+-- re-send counter rises by one with add_resent_at, G25) only while the run is adding_new and not paused for the
+-- licence; an add finishes (added, add_failed) only in adding_new; a verification result (verified, unverifiable,
+-- verify_failed from adding/added) only in adding_new or verifying_new; removing, removed and remove_failed only in
+-- removing_old; undoing, undone and undo_failed (and a re-sent undo) only in rolling_back. skipped, cancelled,
+-- removed, undone and undo_failed never change again; remove_failed changes only by a retry through the full gate,
+-- which needs a re-check strictly later than the earlier one, than the failed send and than the failure time this
+-- trigger stamps (remove_failed_at, G20), a later send time and a new op id. verified_at is set once, on the edge into
+-- verified; add_sent_at on entering adding only; the undo columns only while undoing, required there and on undone,
+-- never cleared; an undo_failed row carries a reason (G21). reverified_at never goes back and is never cleared, and
+-- changes only on a verified row or in a statement whose new state is removing (G20). Every op id is new for good
+-- (rotation_op_ids, G23).
 -- The removal columns change only while the row is removing and every row that is or becomes removing (or
 -- removed) passes the old-key gate: the run is removing_old with removal_allowed; neither key is Alice's own
 -- (platform fingerprint, is_platform_key, the connection key's locations); the verification (verified_at,
 -- add_sent_at) is the one the row already had; the re-check (reverified_at, strictly later than the
--- verification, never going back) is the login the send relied on (remove_verified_at = reverified_at, at most
--- 15 minutes before remove_sent_at); a re-send keeps remove_op_id and does not go back in time. A SEND (the first,
--- a retry from remove_failed, a re-send) also needs: the run not paused for the licence, every other location of
--- the run in the same target and file verified, removing or removed (skipped and kept ones block), and the new key's place recorded
--- (new_location_id) and still live (neither removed by Alice nor missing). Finishing (removing -> removed) and
--- counter updates of a removing row re-check the run, the keys and the connection-key flags but are not sends.
+-- verification) is the login the send relied on (remove_verified_at = reverified_at, at most 15 minutes before
+-- remove_sent_at); a re-send keeps remove_op_id and does not go back in time. A SEND (the first, a retry from
+-- remove_failed, a re-send) also needs: the run not paused for the licence, every other location of the run in the
+-- same target and file verified, removed, or removing with its own re-check at most 15 minutes before this send
+-- (G22; skipped, kept and failed ones block), and the new key's place recorded (new_location_id) and still live
+-- (neither removed by Alice nor missing). Finishing (removing -> removed) and counter updates of a removing row
+-- re-check the run, the keys and the connection-key flags but are not sends.
 -- +goose StatementBegin
 CREATE FUNCTION rotation_locations_guard() RETURNS trigger LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp AS $$
@@ -449,7 +486,8 @@ BEGIN
                 OR NEW.add_op_id IS NOT NULL OR NEW.add_sent_at IS NOT NULL OR NEW.added_line_no IS NOT NULL
                 OR NEW.new_location_id IS NOT NULL OR NEW.verified_at IS NOT NULL OR NEW.reverified_at IS NOT NULL
                 OR NEW.remove_op_id IS NOT NULL OR NEW.remove_verified_at IS NOT NULL OR NEW.remove_sent_at IS NOT NULL
-                OR NEW.removed_at IS NOT NULL OR NEW.undo_op_id IS NOT NULL OR NEW.undo_sent_at IS NOT NULL THEN
+                OR NEW.removed_at IS NOT NULL OR NEW.undo_op_id IS NOT NULL OR NEW.undo_sent_at IS NOT NULL
+                OR NEW.add_resend_count <> 0 OR NEW.add_resent_at IS NOT NULL OR NEW.remove_failed_at IS NOT NULL THEN
             RAISE EXCEPTION 'a location starts planned, skipped or cancelled in a previewed rotation' USING ERRCODE = 'Z1011';
         END IF;
         SELECT l.ssh_key_id, l.target_id, l.os_user, l.file_path INTO loc FROM public.ssh_key_locations l WHERE l.id = NEW.old_location_id;
@@ -472,21 +510,51 @@ BEGIN
         RAISE EXCEPTION 'the verification time of a location is set once' USING ERRCODE = 'Z1011';
     END IF;
     -- Each column is written only in the statement that takes its own step (ruling G16): the add time and the
-    -- add op id on entering adding (the op id may be replaced while adding, neither is ever cleared; the time
+    -- add op id on entering adding (the op id may be replaced only by a re-send, neither is ever cleared; the time
     -- never changes again), the verification time on the edge into verified, the undo columns when the row is
     -- undoing.
     IF NEW.add_sent_at IS DISTINCT FROM OLD.add_sent_at AND NOT (OLD.add_sent_at IS NULL AND OLD.state = 'planned' AND NEW.state = 'adding') THEN
         RAISE EXCEPTION 'the add time is set when the add starts and never changes' USING ERRCODE = 'Z1011';
     END IF;
+    -- G25: an add RE-SEND is one statement on an adding row that raises add_resend_count by exactly one and sets
+    -- add_resent_at, never earlier than the latest send (a backward clock step fails closed, G14); a same-instant
+    -- re-send (a frozen clock) still counts. Neither is ever cleared. It is gated as a send below.
+    IF NEW.add_resend_count IS DISTINCT FROM OLD.add_resend_count OR NEW.add_resent_at IS DISTINCT FROM OLD.add_resent_at THEN
+        IF NOT (OLD.state = 'adding' AND NEW.state = 'adding' AND NEW.add_resend_count = OLD.add_resend_count + 1
+                AND NEW.add_resent_at IS NOT NULL AND (OLD.add_resent_at IS NULL OR NEW.add_resent_at >= OLD.add_resent_at)) THEN
+            RAISE EXCEPTION 'an add is re-sent from an adding row, one re-send at a time, never back in time' USING ERRCODE = 'Z1011';
+        END IF;
+    END IF;
     IF NEW.add_op_id IS DISTINCT FROM OLD.add_op_id AND NOT (NEW.add_op_id IS NOT NULL AND NEW.state = 'adding'
-            AND OLD.state IN ('planned', 'adding')) THEN
-        RAISE EXCEPTION 'the add operation id is set while the add starts and is never cleared' USING ERRCODE = 'Z1011';
+            AND (OLD.state = 'planned' OR (OLD.state = 'adding' AND NEW.add_resend_count = OLD.add_resend_count + 1))) THEN
+        RAISE EXCEPTION 'the add operation id is set when the add starts or is re-sent and is never cleared' USING ERRCODE = 'Z1011';
     END IF;
     IF NEW.verified_at IS DISTINCT FROM OLD.verified_at AND NOT (NEW.state = 'verified' AND OLD.state IN ('adding', 'added')) THEN
         RAISE EXCEPTION 'the verification time is set with the edge into verified' USING ERRCODE = 'Z1011';
     END IF;
     IF (NEW.undo_op_id IS DISTINCT FROM OLD.undo_op_id OR NEW.undo_sent_at IS DISTINCT FROM OLD.undo_sent_at) AND NEW.state <> 'undoing' THEN
         RAISE EXCEPTION 'the undo columns are written only while the location is undoing' USING ERRCODE = 'Z1011';
+    END IF;
+    -- G21: once set, the undo columns are never cleared (CHECK rotation_locations_undo_sent requires them on undoing
+    -- and undone).
+    IF (OLD.undo_op_id IS NOT NULL AND NEW.undo_op_id IS NULL) OR (OLD.undo_sent_at IS NOT NULL AND NEW.undo_sent_at IS NULL) THEN
+        RAISE EXCEPTION 'the undo columns are never cleared' USING ERRCODE = 'Z1011';
+    END IF;
+    -- G20: the re-check never goes back and is never cleared; it changes only on a verified row (a recorded re-check)
+    -- or in a statement whose new state is removing (a send, a retry, a re-check of a removing row). Every other edge
+    -- (into remove_failed, kept_old, the undo states, removed) keeps it, so a failure statement cannot erase the
+    -- evidence a retry is compared with.
+    IF NEW.reverified_at IS DISTINCT FROM OLD.reverified_at THEN
+        IF NEW.reverified_at IS NULL OR (OLD.reverified_at IS NOT NULL AND NEW.reverified_at < OLD.reverified_at) THEN
+            RAISE EXCEPTION 'a re-check never goes back and is never cleared' USING ERRCODE = 'Z1011';
+        END IF;
+        IF NOT (NEW.state = 'removing' OR (OLD.state = 'verified' AND NEW.state = 'verified')) THEN
+            RAISE EXCEPTION 'a re-check is recorded on a verified row or with a removal' USING ERRCODE = 'Z1011';
+        END IF;
+    END IF;
+    -- G20: the failure time of a removal is stamped by this trigger only (below).
+    IF NEW.remove_failed_at IS DISTINCT FROM OLD.remove_failed_at THEN
+        RAISE EXCEPTION 'the failure time of a removal is recorded by the database' USING ERRCODE = 'Z1011';
     END IF;
     IF NEW.state <> OLD.state AND NOT (CASE OLD.state
             WHEN 'planned' THEN NEW.state IN ('adding', 'cancelled', 'add_failed')
@@ -509,9 +577,14 @@ BEGIN
             OR NEW.undo_op_id IS DISTINCT FROM OLD.undo_op_id OR NEW.undo_sent_at IS DISTINCT FROM OLD.undo_sent_at) THEN
         RAISE EXCEPTION 'an undo that sent nothing ends with a reason and no undo time' USING ERRCODE = 'Z1011';
     END IF;
+    -- G21: a sent undo that failed says why too.
+    IF NEW.state = 'undo_failed' AND OLD.state = 'undoing' AND NEW.error_code = '' THEN
+        RAISE EXCEPTION 'a failed undo ends with a reason' USING ERRCODE = 'Z1011';
+    END IF;
 
-    -- The run's status gates the edges.
-    sending_add := NEW.state = 'adding' AND (OLD.state <> 'adding' OR NEW.add_op_id IS DISTINCT FROM OLD.add_op_id);
+    -- The run's status gates the edges. An ADD send is the move planned -> adding or a re-send (G25).
+    sending_add := NEW.state = 'adding' AND (OLD.state <> 'adding' OR NEW.add_resend_count <> OLD.add_resend_count
+                                               OR NEW.add_op_id IS DISTINCT FROM OLD.add_op_id);
     sending_undo := NEW.state = 'undoing' AND (OLD.state <> 'undoing' OR NEW.undo_sent_at IS DISTINCT FROM OLD.undo_sent_at
                                                  OR NEW.undo_op_id IS DISTINCT FROM OLD.undo_op_id);
     IF (sending_add OR (NEW.state <> OLD.state AND NEW.state IN ('added', 'add_failed'))) AND run.status <> 'adding_new' THEN
@@ -596,17 +669,23 @@ BEGIN
                 END IF;
                 IF OLD.state = 'remove_failed' AND (NEW.remove_op_id IS NOT DISTINCT FROM OLD.remove_op_id
                         OR (OLD.reverified_at IS NOT NULL AND NEW.reverified_at <= OLD.reverified_at)
+                        OR OLD.remove_failed_at IS NULL OR NEW.reverified_at <= OLD.remove_failed_at
                         OR (OLD.remove_sent_at IS NOT NULL AND (NEW.remove_sent_at <= OLD.remove_sent_at OR NEW.reverified_at <= OLD.remove_sent_at))) THEN
-                    -- G3': a retry relies on a login strictly newer than the one used before and than the failed send,
-                    -- a newer send time and a new operation id; the stored values never satisfy the gate again.
+                    -- G3', G20: a retry relies on a login strictly newer than the one used before, than the failed send
+                    -- and than the failure (remove_failed_at, stamped below), a newer send time and a new operation id;
+                    -- the stored values never satisfy the gate again.
                     RAISE EXCEPTION 'a retried removal needs a new re-check, a new send time and a new operation id' USING ERRCODE = 'Z1011';
                 END IF;
                 IF run.paused_license THEN
                     RAISE EXCEPTION 'no removal is sent while the rotation is paused for the licence' USING ERRCODE = 'Z1011';
                 END IF;
+                -- G18, G22: every other location of the run in the file is verified, removed, or removing on a re-check
+                -- of its own at most 15 minutes before THIS send (this send removes that user's old line too).
                 IF EXISTS (SELECT 1 FROM public.rotation_locations o WHERE o.rotation_id = NEW.rotation_id AND o.target_id = NEW.target_id
-                           AND o.file_path = NEW.file_path AND o.id <> NEW.id AND o.state NOT IN ('verified', 'removing', 'removed')) THEN
-                    RAISE EXCEPTION 'a file is changed only when every other location of the rotation in it is verified (skipped and kept ones block it)' USING ERRCODE = 'Z1011';
+                           AND o.file_path = NEW.file_path AND o.id <> NEW.id AND (o.state NOT IN ('verified', 'removing', 'removed')
+                               OR (o.state = 'removing' AND (o.reverified_at IS NULL
+                                   OR o.reverified_at < NEW.remove_sent_at - interval '15 minutes')))) THEN
+                    RAISE EXCEPTION 'a file is changed only when every other location of the rotation in it is verified, removed or freshly re-checked (skipped and kept ones block it)' USING ERRCODE = 'Z1011';
                 END IF;
                 IF NEW.new_location_id IS NULL OR NOT EXISTS (SELECT 1 FROM public.ssh_key_locations l WHERE l.id = NEW.new_location_id
                            AND l.removed_by_alice_at IS NULL AND l.missing_since IS NULL FOR SHARE OF l) THEN
@@ -616,6 +695,25 @@ BEGIN
                 RAISE EXCEPTION 'a removal''s send columns change together' USING ERRCODE = 'Z1011';
             END IF;
         END IF;
+    END IF;
+
+    -- G20: the failure time of a removal. updated_at is the application's (it writes it on every statement and may
+    -- write any value), so the stamp is the latest of the row's own supplied times: this statement's updated_at and
+    -- every time the row already recorded. The database never reads now() (the application clock is injected).
+    IF NEW.state = 'remove_failed' AND OLD.state <> 'remove_failed' THEN
+        NEW.remove_failed_at := GREATEST(NEW.updated_at, OLD.updated_at, OLD.remove_failed_at, OLD.add_sent_at, OLD.add_resent_at,
+                                         OLD.verified_at, OLD.reverified_at, OLD.remove_verified_at, OLD.remove_sent_at);
+    END IF;
+    -- G23: an operation id is used once, for good (rotation_op_ids' primary key, 23505). Last, so a refusal above
+    -- answers Z1011 first.
+    IF NEW.add_op_id IS NOT NULL AND NEW.add_op_id IS DISTINCT FROM OLD.add_op_id THEN
+        INSERT INTO public.rotation_op_ids (op_id, location_id, kind) VALUES (NEW.add_op_id, NEW.id, 'add');
+    END IF;
+    IF NEW.remove_op_id IS NOT NULL AND NEW.remove_op_id IS DISTINCT FROM OLD.remove_op_id THEN
+        INSERT INTO public.rotation_op_ids (op_id, location_id, kind) VALUES (NEW.remove_op_id, NEW.id, 'remove');
+    END IF;
+    IF NEW.undo_op_id IS NOT NULL AND NEW.undo_op_id IS DISTINCT FROM OLD.undo_op_id THEN
+        INSERT INTO public.rotation_op_ids (op_id, location_id, kind) VALUES (NEW.undo_op_id, NEW.id, 'undo');
     END IF;
     RETURN NEW;
 END $$;
@@ -639,15 +737,19 @@ CREATE TABLE rotation_steps (
 GRANT UPDATE (download_count, last_downloaded_at, destroyed_at, ciphertext, nonce, wrapped_dek, key_version)
     ON managed_private_keys TO alice_app;
 GRANT UPDATE (retired_at) ON ssh_keys TO alice_app;
-GRANT SELECT, INSERT ON rotation_policies, rotations, rotation_locations, rotation_steps TO alice_app;
+GRANT SELECT, INSERT ON rotation_policies, rotations, rotation_locations, rotation_steps, rotation_op_ids TO alice_app;
 GRANT UPDATE (ssh_key_id, name, enabled, interval_days, overlap_minutes, notify_before_hours, new_key_type, next_run_at,
     preview_mailed_at, version, updated_at, deleted_at) ON rotation_policies TO alice_app;
 GRANT UPDATE (new_ssh_key_id, status, paused_license, paused_at, awaiting_decision, decision_due_at, started_at, verified_at,
     overlap_until, reminder_sent_at, removal_allowed, kept_count, continued_by, continued_at, renotified_at, finished_at, result_code,
     updated_at, version) ON rotations TO alice_app;
-GRANT UPDATE (state, skip_reason, error_code, add_op_id, add_sent_at, added_line_no, new_location_id, verified_at,
-    reverified_at, remove_op_id, remove_verified_at, remove_sent_at, removed_at, undo_op_id, undo_sent_at, backup, job_count,
-    updated_at, verify_note) ON rotation_locations TO alice_app;
+GRANT UPDATE (state, skip_reason, error_code, add_op_id, add_sent_at, add_resend_count, add_resent_at, added_line_no, new_location_id,
+    verified_at, reverified_at, remove_op_id, remove_verified_at, remove_sent_at, removed_at, undo_op_id, undo_sent_at, backup, job_count,
+    updated_at, verify_note) ON rotation_locations TO alice_app;   -- not remove_failed_at: the guard stamps it
+
+-- The delivered-notice lookup of a run (sshkeys noticeDelivered: the run's rotation.preview mails that were sent).
+CREATE INDEX notifications_outbox_rotation_preview ON notifications_outbox ((params->>'rotation_id'))
+    WHERE template_key = 'rotation.preview';
 
 -- +goose Down
 -- Correct only on a database without Phase 6 data, as 00006's and 00008's. The Down refuses, with a clear
@@ -667,7 +769,9 @@ END $$;
 REVOKE UPDATE (retired_at) ON ssh_keys FROM alice_app;
 REVOKE UPDATE (download_count, last_downloaded_at, destroyed_at, ciphertext, nonce, wrapped_dek, key_version)
     ON managed_private_keys FROM alice_app;
+DROP INDEX notifications_outbox_rotation_preview;
 DROP TABLE rotation_steps;
+DROP TABLE rotation_op_ids;
 DROP TRIGGER rotation_locations_guard ON rotation_locations;
 DROP FUNCTION rotation_locations_guard();
 DROP TABLE rotation_locations;

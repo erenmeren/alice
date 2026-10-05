@@ -130,6 +130,8 @@ var explicitGrants = map[string][]string{
 	"public.rotations":          {"INSERT", "SELECT"},
 	"public.rotation_locations": {"INSERT", "SELECT"},
 	"public.rotation_steps":     {"INSERT", "SELECT"},
+	// Every operation id a rotation location used (G23): append-only, written by the location guard.
+	"public.rotation_op_ids": {"INSERT", "SELECT"},
 }
 
 // Column-level grants of alice_app (a privilege it holds on some columns but not on the
@@ -184,7 +186,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.rotations": {"UPDATE": {"awaiting_decision", "continued_at", "continued_by", "decision_due_at", "finished_at", "kept_count",
 		"new_ssh_key_id", "overlap_until", "paused_at", "paused_license", "reminder_sent_at", "removal_allowed", "renotified_at", "result_code",
 		"started_at", "status", "updated_at", "verified_at", "version"}},
-	"public.rotation_locations": {"UPDATE": {"add_op_id", "add_sent_at", "added_line_no", "backup", "error_code", "job_count", "new_location_id",
+	"public.rotation_locations": {"UPDATE": {"add_op_id", "add_resend_count", "add_resent_at", "add_sent_at", "added_line_no", "backup", "error_code", "job_count", "new_location_id",
 		"remove_op_id", "remove_sent_at", "remove_verified_at", "removed_at", "reverified_at", "skip_reason", "state", "undo_op_id",
 		"undo_sent_at", "updated_at", "verified_at", "verify_note"}},
 }
