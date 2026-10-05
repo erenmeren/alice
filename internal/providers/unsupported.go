@@ -38,6 +38,11 @@ func (UnsupportedSession) RemoveAuthorizedKey(context.Context, AuthKeyChange, St
 	return AuthKeyResult{}, ErrUnsupported
 }
 
+// VerifyKeyLogin is not supported.
+func (UnsupportedSession) VerifyKeyLogin(context.Context, KeyLoginRequest) (KeyLoginResult, error) {
+	return KeyLoginResult{}, ErrUnsupported
+}
+
 // DeployCertificate is not supported.
 func (UnsupportedSession) DeployCertificate(context.Context, DeployRequest, StepLogger) (DeployOutcome, error) {
 	return DeployOutcome{}, ErrUnsupported

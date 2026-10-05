@@ -184,6 +184,7 @@ type liar struct {
 	list     func() error
 	add      func() error
 	remove   func() error
+	login    func() error
 }
 
 func (l liar) TestConnection(ctx context.Context) (providers.ConnectionReport, error) {
@@ -221,6 +222,13 @@ func (l liar) RemoveAuthorizedKey(ctx context.Context, c providers.AuthKeyChange
 	return l.UnsupportedSession.RemoveAuthorizedKey(ctx, c, s)
 }
 
+func (l liar) VerifyKeyLogin(ctx context.Context, r providers.KeyLoginRequest) (providers.KeyLoginResult, error) {
+	if l.login != nil {
+		return providers.KeyLoginResult{}, l.login()
+	}
+	return l.UnsupportedSession.VerifyKeyLogin(ctx, r)
+}
+
 // noValidation has a required field but never reports it.
 type noValidation struct{ *fake.Provider }
 
@@ -239,6 +247,7 @@ func TestConformanceChecksFailOnBrokenSessions(t *testing.T) {
 		{"ListAuthorizedKeys", liar{list: ok}, "ListAuthorizedKeys without its capability"},
 		{"AddAuthorizedKey", liar{add: ok}, "AddAuthorizedKey without its capability"},
 		{"RemoveAuthorizedKey", liar{remove: ok}, "RemoveAuthorizedKey without its capability"},
+		{"VerifyKeyLogin", liar{login: ok}, "VerifyKeyLogin without its capability"},
 		{"wrong error", liar{test: other}, "TestConnection without its capability: got boom"},
 	}
 	for _, tc := range cases {
@@ -252,8 +261,8 @@ func TestConformanceChecksFailOnBrokenSessions(t *testing.T) {
 
 	t.Run("capabilities present are not checked", func(t *testing.T) {
 		r := &recorder{TB: t}
-		all := providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys)
-		providertest.CheckUnsupported(r, liar{test: ok, discover: ok, list: ok, add: ok, remove: ok}, all)
+		all := providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys, providers.CapKeyLogin)
+		providertest.CheckUnsupported(r, liar{test: ok, discover: ok, list: ok, add: ok, remove: ok, login: ok}, all)
 		assert.Empty(t, r.failures)
 	})
 }

@@ -49,7 +49,37 @@ type DiscoveryResult struct {
 	Certificates     []DiscoveredCertificate
 	Nginx            *NginxFacts  // nil when certificates were not read
 	KV               *KVInventory // the Key Vault half; nil for other providers
+	// KeyFiles lists every account's candidate authorized_keys files as the helper resolved them
+	// (the SSH half only; nil when SSH keys were not read).
+	KeyFiles []UserKeyFiles
 }
+
+// UserKeyFiles lists one account's candidate authorized_keys files as the helper resolved them
+// (sshd's AuthorizedKeysFile order). At most 8 files per user, 200 users per result.
+type UserKeyFiles struct {
+	OSUser string   `json:"os_user"`
+	Files  []string `json:"files"`
+}
+
+// KeyLoginOutcome is the answer of one test login.
+type KeyLoginOutcome string
+
+// Outcomes of VerifyKeyLogin.
+const (
+	KeyLoginAccepted   KeyLoginOutcome = "accepted"   // the server authenticated Alice with exactly this key
+	KeyLoginRefused    KeyLoginOutcome = "refused"    // the server answered that no authentication method is left
+	KeyLoginUnprovable KeyLoginOutcome = "unprovable" // let in without the key, or no public-key method offered
+)
+
+// KeyLoginRequest asks for one test login (spec §13.4): a fresh connection to the target as OSUser,
+// offering only Key, the target's pinned host key required; nothing is executed.
+type KeyLoginRequest struct {
+	OSUser string
+	Key    CredentialSource
+}
+
+// KeyLoginResult is the outcome of a test login.
+type KeyLoginResult struct{ Outcome KeyLoginOutcome }
 
 // DiscoveredSSHKey is one authorized_keys entry.
 type DiscoveredSSHKey struct {
@@ -126,6 +156,9 @@ type AuthKeyResult struct {
 	NewSHA256 string
 	Verified  bool
 	Backup    string // the helper's backup of the previous file (for restoring), when a write happened
+	// LineNo is the 1-based line number of the key's line in the new (or unchanged) file after
+	// AddAuthorizedKey; 0 otherwise.
+	LineNo int
 }
 
 // StepStatus is the state of one externally visible step.

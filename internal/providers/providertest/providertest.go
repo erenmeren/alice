@@ -103,6 +103,10 @@ func CheckUnsupported(t testing.TB, s providers.Session, caps providers.Capabili
 		_, err = s.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{}, nil)
 		expect("RemoveAuthorizedKey", err)
 	}
+	if !caps.Has(providers.CapKeyLogin) {
+		_, err := s.VerifyKeyLogin(ctx, providers.KeyLoginRequest{})
+		expect("VerifyKeyLogin", err)
+	}
 }
 
 // SessionHarness opens sessions of one provider against a working counterpart (a fake server,
@@ -184,6 +188,11 @@ var sessionOps = []sessionOp{
 	}},
 	{"RemoveAuthorizedKey", providers.CapAuthorizedKeys, func(ctx context.Context, s providers.Session) (any, error) {
 		return s.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{}, nil)
+	}},
+	// An empty request names no user: a provider refuses it before anything is sent (and, with a
+	// cancelled context, with an error wrapping context.Canceled).
+	{"VerifyKeyLogin", providers.CapKeyLogin, func(ctx context.Context, s providers.Session) (any, error) {
+		return s.VerifyKeyLogin(ctx, providers.KeyLoginRequest{})
 	}},
 	// DeployCertificate and RollbackDeployment change servers and cannot be called against a
 	// real counterpart here: only the read-only DeploymentStatus is. See CheckSession.

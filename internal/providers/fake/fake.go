@@ -20,7 +20,7 @@ import (
 
 // Call is one recorded method call.
 type Call struct {
-	Method string // "Open", "TestConnection", "Discover", "ListAuthorizedKeys", "AddAuthorizedKey", "RemoveAuthorizedKey", "DeployCertificate", "RollbackDeployment", "DeploymentStatus", "FenceDeployment", "VerifyDeployment", "ReadCertificateSecret", "ImportCertificate", "Close"
+	Method string // "Open", "TestConnection", "Discover", "ListAuthorizedKeys", "AddAuthorizedKey", "RemoveAuthorizedKey", "VerifyKeyLogin", "DeployCertificate", "RollbackDeployment", "DeploymentStatus", "FenceDeployment", "VerifyDeployment", "ReadCertificateSecret", "ImportCertificate", "Close"
 	Target uuid.UUID
 	Change providers.AuthKeyChange // Add/Remove only
 	// Deploy is the DeployCertificate request with PrivateKeyPEM replaced by an empty value: the
@@ -37,6 +37,8 @@ type Call struct {
 	Discover providers.DiscoverRequest
 	// Op is the operation id of DeployCertificate, RollbackDeployment, DeploymentStatus and FenceDeployment.
 	Op uuid.UUID
+	// Login is the VerifyKeyLogin request with Key nil: the fake keeps no signer.
+	Login providers.KeyLoginRequest
 }
 
 // Config is the scripted behaviour.
@@ -54,6 +56,12 @@ type Config struct {
 	AddErr           error
 	RemoveResult     providers.AuthKeyResult
 	RemoveErr        error
+	// KeyLogin decides VerifyKeyLogin when World is nil; nil = accepted.
+	KeyLogin func(req providers.KeyLoginRequest) (providers.KeyLoginResult, error)
+	// World, when set, makes ListAuthorizedKeys, AddAuthorizedKey, RemoveAuthorizedKey and
+	// VerifyKeyLogin act on the modelled files (Keys, AddResult, RemoveResult, their errors and
+	// KeyLogin are then ignored; ListErr still applies). It is shared, not copied, on purpose.
+	World *KeyWorld
 
 	// Deploy decides the outcome of DeployCertificate; nil = committed, verified "remote". To
 	// simulate each outcome return DeployNoChange (a refusal), DeployUnchanged, DeployRolledBack,
@@ -205,6 +213,14 @@ func (c Config) clone() Config {
 	}
 	c.Discovery.UID0Users = slices.Clone(c.Discovery.UID0Users)
 	c.Discovery.Accounts = slices.Clone(c.Discovery.Accounts)
+	if c.Discovery.KeyFiles != nil {
+		kf := make([]providers.UserKeyFiles, len(c.Discovery.KeyFiles))
+		for i, u := range c.Discovery.KeyFiles {
+			u.Files = slices.Clone(u.Files)
+			kf[i] = u
+		}
+		c.Discovery.KeyFiles = kf
+	}
 	c.DeploySteps = slices.Clone(c.DeploySteps)
 	c.ExistingNames = slices.Clone(c.ExistingNames)
 	c.Secret.Value = providers.NewSecret(slices.Clone(c.Secret.Value.Bytes()))
@@ -393,6 +409,7 @@ func (s *session) Discover(_ context.Context, req providers.DiscoverRequest) (pr
 	if !req.SSHKeys {
 		res.SSHKeys, res.HostKeys, res.SSHD, res.UnreadableLines = nil, nil, providers.SSHDSummary{}, nil
 		res.UID0Users, res.Accounts, res.AccountsComplete, res.ReadFiles = nil, nil, false, nil
+		res.KeyFiles = nil
 	}
 	if !req.Certificates {
 		res.Certificates, res.Nginx = nil, nil
@@ -405,23 +422,51 @@ func (s *session) ListAuthorizedKeys(context.Context) ([]providers.DiscoveredSSH
 	if !s.p.caps.Has(providers.CapAuthorizedKeys) {
 		return nil, providers.ErrUnsupported
 	}
+	if cfg.World != nil && cfg.ListErr == nil {
+		return cfg.World.list(s.target), nil
+	}
 	return cfg.Keys, cfg.ListErr
 }
 
-func (s *session) AddAuthorizedKey(_ context.Context, req providers.AuthKeyChange, _ providers.StepLogger) (providers.AuthKeyResult, error) {
+func (s *session) AddAuthorizedKey(ctx context.Context, req providers.AuthKeyChange, log providers.StepLogger) (providers.AuthKeyResult, error) {
 	cfg := s.p.record(Call{Method: "AddAuthorizedKey", Target: s.target, Change: req})
 	if !s.p.caps.Has(providers.CapAuthorizedKeys) {
 		return providers.AuthKeyResult{}, providers.ErrUnsupported
 	}
+	if cfg.World != nil {
+		return cfg.World.add(ctx, s.target, req, log)
+	}
 	return cfg.AddResult, cfg.AddErr
 }
 
-func (s *session) RemoveAuthorizedKey(_ context.Context, req providers.AuthKeyChange, _ providers.StepLogger) (providers.AuthKeyResult, error) {
+func (s *session) RemoveAuthorizedKey(ctx context.Context, req providers.AuthKeyChange, log providers.StepLogger) (providers.AuthKeyResult, error) {
 	cfg := s.p.record(Call{Method: "RemoveAuthorizedKey", Target: s.target, Change: req})
 	if !s.p.caps.Has(providers.CapAuthorizedKeys) {
 		return providers.AuthKeyResult{}, providers.ErrUnsupported
 	}
+	if cfg.World != nil {
+		return cfg.World.remove(ctx, s.target, req, log)
+	}
 	return cfg.RemoveResult, cfg.RemoveErr
+}
+
+func (s *session) VerifyKeyLogin(ctx context.Context, req providers.KeyLoginRequest) (providers.KeyLoginResult, error) {
+	kept := req
+	kept.Key = nil
+	cfg := s.p.record(Call{Method: "VerifyKeyLogin", Target: s.target, Login: kept})
+	if !s.p.caps.Has(providers.CapKeyLogin) {
+		return providers.KeyLoginResult{}, providers.ErrUnsupported
+	}
+	if err := ctx.Err(); err != nil {
+		return providers.KeyLoginResult{}, providers.NewError("ssh.timeout", true, err, nil)
+	}
+	if cfg.World != nil {
+		return cfg.World.login(ctx, s.target, req)
+	}
+	if cfg.KeyLogin != nil {
+		return cfg.KeyLogin(req)
+	}
+	return providers.KeyLoginResult{Outcome: providers.KeyLoginAccepted}, nil
 }
 
 // mustHonour panics when a scripted result breaks the provider contract: that is a mistake of the

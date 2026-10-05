@@ -109,6 +109,12 @@ type Session interface {
 	ListAuthorizedKeys(ctx context.Context) ([]DiscoveredSSHKey, error)
 	AddAuthorizedKey(ctx context.Context, req AuthKeyChange, log StepLogger) (AuthKeyResult, error)
 	RemoveAuthorizedKey(ctx context.Context, req AuthKeyChange, log StepLogger) (AuthKeyResult, error)
+	// VerifyKeyLogin (CapKeyLogin) tries one login (KeyLoginRequest). A refused or unprovable login
+	// is an outcome with a nil error; a connection that fails (unreachable, timeout, host key changed
+	// or unconfirmed, address refused) is an error. It changes no target state itself, except that
+	// the dial records an observed changed host key, as every dial does. An empty request is refused
+	// with a *Error (ssh.helper_refused, param field os_user) before anything is sent.
+	VerifyKeyLogin(ctx context.Context, req KeyLoginRequest) (KeyLoginResult, error)
 	// DeployCertificate (CapDeployCertificate) never returns a non-nil error together with a
 	// change it knows about: a known change is an outcome with a nil error. A well-formed helper
 	// refusal is DeployNoChange with a non-nil *Error; a transport failure after the request was

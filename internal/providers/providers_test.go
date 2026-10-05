@@ -563,3 +563,12 @@ func sortedCopy(in []string) []string {
 	sort.Strings(out)
 	return out
 }
+
+func TestKeyLoginIsAKnownCapabilityAndUnsupportedByDefault(t *testing.T) {
+	assert.True(t, providers.NewCapabilitySet(providers.CapKeyLogin).Has(providers.CapKeyLogin))
+	_, err := providers.UnsupportedSession{}.VerifyKeyLogin(context.Background(), providers.KeyLoginRequest{})
+	assert.ErrorIs(t, err, providers.ErrUnsupported)
+	for _, o := range []providers.KeyLoginOutcome{providers.KeyLoginAccepted, providers.KeyLoginRefused, providers.KeyLoginUnprovable} {
+		assert.NotEmpty(t, string(o))
+	}
+}
