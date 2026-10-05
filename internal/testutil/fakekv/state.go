@@ -397,11 +397,9 @@ func (s *Server) servedLocked(e *certEntry, v *version) string {
 		// DOC: "If the policy indicates that the key is non-exportable, then the private key isn't a
 		// part of the value when it's retrieved as a secret" (re-read by the reviewer on 2026-10-04):
 		// a PFX with the certificates and no key.
-		pfx, err := pkcs12.Modern.EncodeTrustStore(append([]*x509.Certificate{v.cert}, v.chain...), "")
-		if err != nil {
-			panic("fakekv: encoding the PFX: " + err.Error())
-		}
-		val = base64.StdEncoding.EncodeToString(pfx)
+		// GUESS: the shape openssl -nokeys and .NET write (no Java trust attribute, an encrypted safe, a MAC), not
+		// go-pkcs12's Java trust store, so that Alice's detection cannot fit one encoder only.
+		val = base64.StdEncoding.EncodeToString(pki.CertificatesOnlyPFX("", append([]*x509.Certificate{v.cert}, v.chain...)...))
 	}
 	v.served[key] = val
 	return val

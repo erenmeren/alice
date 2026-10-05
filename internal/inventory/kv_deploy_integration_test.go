@@ -529,7 +529,11 @@ func TestKVDeployMaterialWithoutAKeyMarksTheCertificateNotExportable(t *testing.
 		"pem": func(b *bindFixture) ([]byte, providers.CertificateSecret) {
 			return pemSecret(string(b.webLeaf.FullchainPEM))
 		},
-		"pfx": func(b *bindFixture) ([]byte, providers.CertificateSecret) {
+		"pfx (openssl -nokeys shape)": func(b *bindFixture) ([]byte, providers.CertificateSecret) {
+			raw := []byte(base64.StdEncoding.EncodeToString(pki.CertificatesOnlyPFX("", b.webLeaf.Cert, b.ca.Intermediate)))
+			return raw, providers.CertificateSecret{ContentType: certs.ContentTypePKCS12, Value: providers.NewSecret(raw)}
+		},
+		"pfx (Java trust store)": func(b *bindFixture) ([]byte, providers.CertificateSecret) {
 			store, err := pkcs12.Modern.EncodeTrustStore([]*x509.Certificate{b.webLeaf.Cert, b.ca.Intermediate}, "")
 			require.NoError(b.h.t, err)
 			raw := []byte(base64.StdEncoding.EncodeToString(store))

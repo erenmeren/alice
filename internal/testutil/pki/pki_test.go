@@ -60,6 +60,22 @@ func TestPFXRoundTrip(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// The certificates-only PFX is a real PKCS #12 file without a key: its MAC and encryption check out with the
+// password, it holds the certificates in order, and it is not a Java trust store.
+func TestCertificatesOnlyPFX(t *testing.T) {
+	ca := NewCA("Alice Test", ECDSA256, now)
+	l := ca.Issue(Opts{CommonName: "www.example.test"}, now)
+	for _, pw := range []string{"", "pw"} {
+		pfx := CertificatesOnlyPFX(pw, l.Cert, ca.Intermediate)
+		_, _, _, err := pkcs12.DecodeChain(pfx, pw)
+		require.EqualError(t, err, "pkcs12: private key missing", "decrypted and authenticated, only the key is missing")
+		_, err = pkcs12.DecodeTrustStore(pfx, pw)
+		require.Error(t, err, "no Java trust attribute")
+		_, _, _, err = pkcs12.DecodeChain(pfx, pw+"x")
+		require.ErrorIs(t, err, pkcs12.ErrIncorrectPassword)
+	}
+}
+
 func TestEncryptedKeyPEMIsMarked(t *testing.T) {
 	ca := NewCA("Alice Test", RSA2048, now)
 	b, _ := pem.Decode(EncryptedKeyPEM(ca.Issue(Opts{CommonName: "x", KeyType: RSA2048}, now)))

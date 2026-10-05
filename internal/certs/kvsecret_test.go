@@ -95,7 +95,11 @@ func TestParseKVSecretRefusals(t *testing.T) {
 		want  error
 	}{
 		// A non-exportable certificate's secret: a PFX with the certificates and no key (as the PEM form without a key).
-		{"pfx without a key", ContentTypePKCS12, []byte(base64.StdEncoding.EncodeToString(trustStore)), ErrNoKey},
+		{"pfx without a key (a Java trust store)", ContentTypePKCS12, []byte(base64.StdEncoding.EncodeToString(trustStore)), ErrNoKey},
+		{"pfx without a key (openssl -nokeys, .NET: no trust attribute, encrypted safe, MAC)", ContentTypePKCS12,
+			[]byte(base64.StdEncoding.EncodeToString(pki.CertificatesOnlyPFX("", leaf.Cert, ca.Intermediate))), ErrNoKey},
+		{"pfx without a key whose password is not empty", ContentTypePKCS12,
+			[]byte(base64.StdEncoding.EncodeToString(pki.CertificatesOnlyPFX("pw", leaf.Cert))), ErrPFXPassword},
 		{"unknown content type", "text/plain", []byte(kvPFX(leaf, ca)), ErrKVContentType},
 		{"blank content type", "", []byte(kvPFX(leaf, ca)), ErrKVContentType},
 		{"content type with a parameter", ContentTypePKCS12 + "; charset=utf-8", []byte(kvPFX(leaf, ca)), ErrKVContentType},

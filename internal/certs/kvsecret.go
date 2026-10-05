@@ -85,11 +85,18 @@ func parseKVSecret(contentType string, value []byte, now time.Time, roots *x509.
 	return v, nil
 }
 
-// pfxHoldsCertificatesOnly reports whether data (already through the iteration guard of decodePFX) is a
-// PFX with an empty password that holds certificates and no key.
+// errPFXKeyMissing is go-pkcs12's (v0.7.3) answer for a PFX that decrypted and authenticated with the password and
+// held at least one certificate but no key bag. The library has no sentinel for it; the KV secret tests pin the
+// text with a Java trust store and with an openssl -nokeys shaped file (pki.CertificatesOnlyPFX), so an upgrade that
+// changes it fails there.
+const errPFXKeyMissing = "pkcs12: private key missing"
+
+// pfxHoldsCertificatesOnly reports whether data (already through the iteration guard of decodePFX) is a PFX with
+// an empty password that holds certificates and no key, whatever wrote it: a Java trust store, openssl -nokeys,
+// .NET, one safe or two, encrypted or not.
 func pfxHoldsCertificatesOnly(data []byte) bool {
-	got, err := pkcs12.DecodeTrustStore(data, "")
-	return err == nil && len(got) > 0
+	_, _, _, err := pkcs12.DecodeChain(data, "")
+	return err != nil && err.Error() == errPFXKeyMissing
 }
 
 // splitPEM sorts the PEM blocks of value into certificates (re-encoded: they are public) and key
