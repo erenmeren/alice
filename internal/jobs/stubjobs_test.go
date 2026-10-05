@@ -20,8 +20,11 @@ import (
 // Stub job types for L-29 and L-81..L-88 (spec §26.4): the real jobs arrive in Phases 3, 4
 // and 6, where the cases are re-run.
 var (
-	testVerify   = Register("test.verify", license.ClassAlways)
-	testPoll     = Register("test.kvpoll", license.ClassReadOnly)
+	testVerify = Register("test.verify", license.ClassAlways)
+	testPoll   = Register("test.kvpoll", license.ClassReadOnly)
+	// testRotation stands for the Phase 6 rotation here; the real cases (L-81, L-83..L-88 with the
+	// rotation.location, rotation.plan and rotation.sweep jobs) are in internal/jobs/sshkeyjobs
+	// (lock_integration_test.go, deploy_integration_test.go).
 	testRotation = Register("test.rotation", license.ClassReadOnly)
 )
 

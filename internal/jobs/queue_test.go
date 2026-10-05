@@ -18,6 +18,7 @@ import (
 	"alice/internal/notify"
 	"alice/internal/providers"
 	"alice/internal/secrets"
+	"alice/internal/sshkeys"
 	"alice/locales"
 )
 
@@ -131,6 +132,46 @@ func TestPhase4JobTypesDeclareTheirLicenseClass(t *testing.T) {
 	assert.NotPanics(t, func() {
 		NewScheduler(nil, &fakeGate{}, quiet, Task{Type: DeploymentRecoverySweep, Every: time.Minute, Run: func(context.Context) error { return nil }})
 	}, "the sweep is periodic work")
+}
+
+// Phase 6 (spec §8.2, §8.6, §13.4-§13.6): deploying a generated key changes a server; a rotation's
+// per-location work finishes what is in flight and undoes the run's own additions in every state; its
+// forward steps ask the gate themselves.
+func TestPhase6JobClasses(t *testing.T) {
+	assert.Equal(t, license.ClassChange, SSHKeyAdd.Class)
+	assert.Equal(t, license.ClassAlways, RotationLocation.Class, "finishing in-flight work and undoing are never blocked (L-85, L-86)")
+	assert.Equal(t, license.ClassReadOnly, RotationPlan.Class, "no preview is sent in lock (L-88)")
+	assert.Equal(t, license.ClassAlways, RotationSweep.Class, "the sweep flags pauses in lock (L-83)")
+	assert.Equal(t, license.ClassReadOnly, SSHKeyDestroyRetired.Class, "no deletion in lock (L-29)")
+	assert.Equal(t, 3, MaxAttemptsFor(SSHKeyAdd))
+	assert.Equal(t, 3, MaxAttemptsFor(RotationLocation))
+	assert.False(t, AlertsWhenExhausted(RotationLocation), "the rotation's own emails carry its failures")
+	assert.True(t, AlertsWhenExhausted(SSHKeyAdd))
+	for _, typ := range []Type{RotationPlan, RotationSweep, SSHKeyDestroyRetired} {
+		assert.NotPanics(t, func() {
+			NewScheduler(nil, &fakeGate{}, quiet, Task{Type: typ, Every: time.Minute, Run: func(context.Context) error { return nil }})
+		}, "%s is periodic work", typ.Name)
+	}
+}
+
+// F7: the job types are registered with literal names (the web label guard reads literal Register calls);
+// they must be the names the sshkeys module queues and schedules.
+func TestPhase6JobTypesAreTheModulesNames(t *testing.T) {
+	assert.Equal(t, sshkeys.JobDeploy, SSHKeyAdd.Name)
+	assert.Equal(t, sshkeys.JobRotationLocation, RotationLocation.Name)
+	assert.Equal(t, sshkeys.TaskPlan, RotationPlan.Name)
+	assert.Equal(t, sshkeys.TaskSweep, RotationSweep.Name)
+	assert.Equal(t, sshkeys.TaskDestroyRetired, SSHKeyDestroyRetired.Name)
+}
+
+func TestRetryAfterKeepsItsWait(t *testing.T) {
+	var f *Failure
+	require.ErrorAs(t, RetryAfter("sshkey.add_uncertain", nil, nil, 80*time.Second), &f)
+	assert.Equal(t, Retryable, f.Class)
+	assert.Equal(t, "sshkey.add_uncertain", f.Reason)
+	assert.Equal(t, 80*time.Second, f.After)
+	require.ErrorAs(t, Retry("ssh.timeout", nil, nil), &f)
+	assert.Zero(t, f.After, "a plain retry waits the backoff only")
 }
 
 func TestPhase3JobTypesDeclareTheirLicenseClass(t *testing.T) {

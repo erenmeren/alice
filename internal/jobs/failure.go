@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"errors"
+	"time"
 
 	"alice/internal/providers"
 )
@@ -27,6 +28,9 @@ type Failure struct {
 	Reason string
 	Params map[string]string
 	Cause  error
+	// After is the least wait before the next attempt of a retryable failure (RetryAfter); the
+	// backoff applies when it is longer.
+	After time.Duration
 }
 
 // Error names the reason only: the cause's text may carry remote output or values.
@@ -38,6 +42,13 @@ func (f *Failure) Unwrap() error { return f.Cause }
 // Retry is a failure that may succeed later.
 func Retry(reason string, params map[string]string, cause error) error {
 	return &Failure{Class: Retryable, Reason: reason, Params: params, Cause: cause}
+}
+
+// RetryAfter is a Retry whose next attempt starts no sooner than d after this one ends (the backoff
+// applies when it is longer): a write whose outcome is uncertain may still land on the server until the
+// helper's budget ends, so the next attempt waits that out (S3).
+func RetryAfter(reason string, params map[string]string, cause error, d time.Duration) error {
+	return &Failure{Class: Retryable, Reason: reason, Params: params, Cause: cause, After: d}
 }
 
 // Fail is a failure that never succeeds by trying again.

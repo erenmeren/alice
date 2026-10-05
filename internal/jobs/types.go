@@ -109,6 +109,21 @@ var (
 	KVAutoDeploy = Register("kv.auto_deploy", license.ClassReadOnly)
 )
 
+// Phase 6 job types (spec §8.2, §8.6, §13.4-§13.6; R41 rows 18-20). Deploying a generated key changes a
+// server (refused and held in lock). A rotation's per-location work finishes in-flight operations and
+// undoes the run's own additions in every state; its forward steps ask the gate themselves at every
+// boundary (internal/jobs/sshkeyjobs, sshkeys.BeginAdd and BeginRemove). Planning previews is read-only
+// work (no tick in lock: L-88); the sweep runs in every state to flag pauses (L-83); destroying retired
+// private keys is a deletion, so it pauses in lock. The names are literals (the web's label guard reads
+// literal Register calls) and equal the sshkeys module's constants (TestPhase6JobTypesAreTheModulesNames).
+var (
+	SSHKeyAdd            = Register("sshkey.add", license.ClassChange)
+	RotationLocation     = Register("rotation.location", license.ClassAlways)
+	RotationPlan         = Register("rotation.plan", license.ClassReadOnly)
+	RotationSweep        = Register("rotation.sweep", license.ClassAlways)
+	SSHKeyDestroyRetired = Register("sshkey.destroy_retired", license.ClassReadOnly)
+)
+
 // Kind says who asks for a job (jobs.kind).
 type Kind string
 
@@ -138,7 +153,9 @@ const (
 
 // MaxAttemptsFor is the default number of attempts of a job type (spec §8.4): a connection
 // test (an access check of a vault, a poll of it) is shown to the user at once and not retried (the
-// vault's own back-off paces polls); discovery tolerates a flaky network. An import into a vault runs
+// vault's own back-off paces polls); discovery tolerates a flaky network. A key deploy and a rotation
+// location job keep the default 3 (their handlers retry only before anything was sent, or after the
+// wait an uncertain write needs). An import into a vault runs
 // at most 3 times and is retried only before its request was sent. A
 // deployment's job runs at most 3 times (a run after the first send never sends again: it reads
 // the deployment's state and recovers). A recovery job runs once: the deployment sweep paces
@@ -161,9 +178,10 @@ func MaxAttemptsFor(t Type) int {
 // one, and the deployment's own needs-attention email, sent once, is the alert. Otherwise an
 // unreachable server would send one job.dead email per recovery cycle (plan decision 15). A poll of a
 // vault is not either: its failure is on the vault (status, last error, its own email) and polls repeat
-// on the vault's interval, so a dead-job email per cycle would only repeat it.
+// on the vault's interval, so a dead-job email per cycle would only repeat it. A rotation's location job
+// is not either: the rotation sweep re-queues it and the rotation's own emails carry its failures.
 func AlertsWhenExhausted(t Type) bool {
-	return t.Name != inventory.JobDeployRecover && t.Name != inventory.JobKVPoll
+	return t.Name != inventory.JobDeployRecover && t.Name != inventory.JobKVPoll && t.Name != RotationLocation.Name
 }
 
 // maxRunning is the concurrency cap of a job type: the runner claims no job of the type while that many

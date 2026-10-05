@@ -61,6 +61,31 @@ func TestRetryBacksOffThenSucceeds(t *testing.T) {
 	assert.Equal(t, 2, e.count(t, `SELECT count(*) FROM job_attempts WHERE job_id = $1 AND error_code = 'ssh.unreachable'`, id))
 }
 
+// S3: a retry after an uncertain write waits at least the time the write may still land; a shorter
+// wait than the backoff changes nothing.
+func TestRetryAfterWaitsAtLeastItsDelay(t *testing.T) {
+	e := newQEnv(t)
+	id := e.enqueue(t, Spec{Type: testQueueJob, MaxAttempts: 3})
+	r := e.runner(t, "w1")
+	var runs atomic.Int32
+	r.Handle(testQueueJob, func(context.Context, Job, StepRecorder) (map[string]any, error) {
+		if runs.Add(1) == 1 {
+			return nil, RetryAfter("sshkey.add_uncertain", nil, nil, 80*time.Second)
+		}
+		return nil, RetryAfter("ssh.timeout", nil, nil, time.Second)
+	})
+	_, err := r.RunOnce(e.ctx)
+	require.NoError(t, err)
+	got := e.row(t, id)
+	assert.Equal(t, "queued", got.status)
+	assert.Equal(t, "sshkey.add_uncertain", got.lastError)
+	assert.Equal(t, queueStart.Add(80*time.Second), got.runAt, "longer than the first backoff of 30 s")
+	e.fake.Advance(80 * time.Second)
+	_, err = r.RunOnce(e.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, queueStart.Add(80*time.Second+time.Minute), e.row(t, id).runAt, "the backoff (60 s) is longer than 1 s")
+}
+
 func TestPermanentFailureIsNotRetried(t *testing.T) {
 	e := newQEnv(t)
 	id := e.enqueue(t, Spec{Type: testQueueJob, MaxAttempts: 3})

@@ -768,7 +768,7 @@ func (r *Runner) finish(ctx, jobCtx context.Context, c *claimed, res map[string]
 	t, _ := lookup(c.typ)
 	switch {
 	case f.Class == Retryable && c.attempts < c.maxAttempts:
-		next := Backoff(c.attempts, r.cfg.Jitter())
+		next := max(Backoff(c.attempts, r.cfg.Jitter()), f.After)
 		r.settle(ctx, c, f.Reason, func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
 			return tx.Exec(ctx, `UPDATE jobs SET status = 'queued', run_at = $4, last_error_code = $5, result = $6::jsonb,
     locked_by = NULL, locked_until = NULL `+mine, c.fence(now.Add(next), f.Reason, result)...)
