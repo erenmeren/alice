@@ -4,6 +4,11 @@ Alice is licensed per installation for a number of **managed targets** (Nginx se
 Vaults). Certificates and SSH keys are not counted. Licenses usually run for a year and are renewed by uploading a
 new file; no internet connection is needed.
 
+Each Azure Key Vault added under **Key Vaults** is one target, however many certificates, keys and secrets it holds
+and however many websites its certificates are connected to (the websites' servers count as targets of their own).
+A vault whose adding was refused (for example a wrong name or refused credentials) uses no slot; removing a vault
+frees its slot. When the license is full, **Add Key Vault** is refused like adding a server.
+
 ## Your Installation ID
 
 Every installation has an ID such as `ALICE-7F3K-9Q2M-XD41-B8TC`. It is created the first time Alice starts and is
@@ -68,7 +73,14 @@ refused, and the daily scans are not started. Key removals and deployments that 
 are paused; after the renewal they appear under **Waiting for an administrator** on **Servers**, and an
 administrator chooses **Run now** or **Discard** for each (nothing starts on its own; a discarded deployment ends
 cancelled, `ALC-DEP-0022`, without a failure email). A deployment that had already
-reached a server when the lock began is still finished or undone, so no server is left half-changed. Certificate
+reached a server when the lock began is still finished or undone, so no server is left half-changed.
+
+For Key Vaults, lock mode stops the vault checks, **Check now**, the access check, **Add Key Vault**, connecting
+websites, **Deploy now** and imports, and automatic deployment deploys nothing. Switching automatic deployment off
+and deleting a connection stay possible. A new version that a vault check finds after the renewal, but that was
+created in Azure while the license was locked (or around the time it was renewed), is held for an administrator
+instead of being deployed automatically: see "Held versions after a lock" in
+[operator-guide.md](operator-guide.md#held-versions-after-a-lock). Certificate
 expiry alerts by email with a note that the license expired arrive with the release that adds alerts.
 
 Alice checks the license when it starts, every hour, and after every upload. Between two checks it also counts the
