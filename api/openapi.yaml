@@ -1383,13 +1383,13 @@ paths:
   /api/v1/rotation/runs:
     get:
       operationId: listRotations
-      summary: Rotation runs, newest first (counts of their places; places and steps only on GET /rotation/runs/{id})
+      summary: Rotation runs, newest first (counts of their places; places, steps and decisions only on GET /rotation/runs/{id})
       x-permission: read
       parameters:
         - { name: policy_id, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: ssh_key_id, in: query, required: false, schema: { type: string, format: uuid, description: The old or the new key of the run } }
         - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
-        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 20, default: 20 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
       responses:
         "200":
           description: One page of runs
@@ -1479,7 +1479,7 @@ paths:
       summary: Stop and undo a rotation; the new key is removed where Alice added it
       description: >-
         Administrator; operate tokens allowed (no step-up: stopping only takes back what the run added). The old key is never touched. A previewed run is cancelled. Once the old key's removal began, 409 ALC-ROT-0005.
-        Refused with 403 ALC-LIC-0001 while the license is locked.
+        Allowed while the license is locked: undoing the run's own additions is always allowed.
       x-permission: rotation.manage
       responses:
         "204": { description: Stopped }
@@ -3400,7 +3400,7 @@ components:
       type: object
       required: [id, policy_id, old_ssh_key_id, new_ssh_key_id, old_fingerprint, new_fingerprint, trigger, status, paused_license,
         awaiting_decision, decision_due_at, planned_for, notified_at, started_at, verified_at, overlap_until, finished_at, result,
-        plan_digest, new_key_type, overlap_minutes, change_count, skip_count, kept_count, actions_allowed, location_counts, version]
+        plan_digest, new_key_type, overlap_minutes, change_count, skip_count, kept_count, actions_allowed, notice_state, notice_error, location_counts, locations, steps, version]
       properties:
         id: { type: string, format: uuid }
         policy_id: { type: string, format: uuid }
@@ -3429,26 +3429,75 @@ components:
         change_count: { type: integer }
         skip_count: { type: integer }
         kept_count: { type: integer, description: 'Places where the old key stays (skipped, kept and failed removals)' }
-        actions_allowed: { type: array, items: { type: string, enum: [continue, finish_now, keep_old, abort] } }
+        actions_allowed:
+          type: array
+          description: >-
+            The decisions this caller may take now - specific to the caller: the run's state allows them and the caller
+            may use their routes (an Administrator session gets every one, asking for the code where a route needs a
+            step-up; an operate token of an Administrator only abort; every other caller none)
+          items: { type: string, enum: [continue, finish_now, keep_old, abort] }
         location_counts:
-          type: object
-          required: [total, verified, removed, skipped, kept, failed]
-          properties:
-            total: { type: integer }
-            verified: { type: integer }
-            removed: { type: integer }
-            skipped: { type: integer }
-            kept: { type: integer, description: Places where an administrator kept the old key }
-            failed: { type: integer, description: 'Places where adding, verifying, removing or undoing failed' }
-        locations: { type: array, items: { $ref: "#/components/schemas/RotationLocation" }, description: 'Only on GET /rotation/runs/{id}' }
-        steps: { type: array, items: { $ref: "#/components/schemas/RotationStep" }, description: 'Only on GET /rotation/runs/{id}' }
+          $ref: "#/components/schemas/LocationCounts"
+        notice_state:
+          description: rotation.notice_pending while the run is paused, the license allows changes and the renewal email is not queued yet (Continue waits); null otherwise
+          $ref: "#/components/schemas/ErrorRef"
+        notice_error:
+          description: notify.queue_failed when queuing the renewal email failed since the pause began; null otherwise
+          $ref: "#/components/schemas/ErrorRef"
+        locations: { type: array, items: { $ref: "#/components/schemas/RotationLocation" } }
+        steps: { type: array, items: { $ref: "#/components/schemas/RotationStep" } }
         version: { type: integer }
     RotationRunPage:
       type: object
       required: [items, next_cursor]
       properties:
-        items: { type: array, items: { $ref: "#/components/schemas/RotationRun" } }
+        items: { type: array, items: { $ref: "#/components/schemas/RotationRunSummary" } }
         next_cursor: { type: [string, "null"] }
+    LocationCounts:
+      type: object
+      description: >-
+        The places of the run by outcome (the service's buckets; they need not add up to total, since places still
+        planned, adding, added, untestable or being undone are in none of them). verified - the new key worked there
+        (including places whose old key is being or was removed); removed - the old key was removed; kept - an
+        administrator kept the old key, or the change was refused when Alice was about to send it; failed - adding,
+        verifying, removing or undoing failed; skipped - the plan left the place out. kept_count of the run is a
+        different number: every place where the old key stays (skipped, kept and failed removals).
+      required: [total, verified, removed, skipped, kept, failed]
+      properties:
+        total: { type: integer }
+        verified: { type: integer }
+        removed: { type: integer }
+        skipped: { type: integer }
+        kept: { type: integer }
+        failed: { type: integer }
+    RotationRunSummary:
+      type: object
+      description: A run in the list - its scalar fields and the counts of its places; no plan, places, steps or decisions
+      required: [id, policy_id, old_ssh_key_id, new_ssh_key_id, old_fingerprint, new_fingerprint, trigger, status, paused_license,
+        awaiting_decision, new_key_type, planned_for, notified_at, started_at, verified_at, overlap_until, finished_at, result, kept_count,
+        location_counts, version]
+      properties:
+        id: { type: string, format: uuid }
+        policy_id: { type: string, format: uuid }
+        old_ssh_key_id: { type: string, format: uuid }
+        new_ssh_key_id: { type: [string, "null"], format: uuid }
+        old_fingerprint: { type: string }
+        new_fingerprint: { type: string }
+        trigger: { type: string, enum: [scheduled, manual] }
+        status: { type: string }
+        paused_license: { type: boolean }
+        awaiting_decision: { type: boolean }
+        new_key_type: { type: string }
+        planned_for: { type: string, format: date-time }
+        notified_at: { type: string, format: date-time }
+        started_at: { type: [string, "null"], format: date-time }
+        verified_at: { type: [string, "null"], format: date-time }
+        overlap_until: { type: [string, "null"], format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+        result: { $ref: "#/components/schemas/ErrorRef" }
+        kept_count: { type: integer }
+        location_counts: { $ref: "#/components/schemas/LocationCounts" }
+        version: { type: integer }
     SSHKeyPage:
       type: object
       required: [items, next_cursor]

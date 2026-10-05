@@ -163,6 +163,11 @@ var (
 	ErrRotNoticePending = ErrorCode{Code: "ALC-ROT-0021", Reason: "rotation.notice_pending", Status: http.StatusConflict, Retryable: true}
 	// ErrRotLateResult: a place's definite answer arrived after the sweep had given up on it (the attention mail's code).
 	ErrRotLateResult = ErrorCode{Code: "ALC-ROT-0022", Reason: "rotation.late_result", Status: http.StatusConflict}
+	// ErrRotGuardRefused: the database refused every write of a place (a store bug or a state no rule expected); the
+	// place ends failed with it.
+	ErrRotGuardRefused = ErrorCode{Code: "ALC-ROT-0023", Reason: "rotation.guard_refused", Status: http.StatusConflict}
+	// ErrRotSkippedAtSend: a planner skip reason found when the change was about to be sent (the place's skip_reason).
+	ErrRotSkippedAtSend = ErrorCode{Code: "ALC-ROT-0024", Reason: "rotation.skipped_at_send", Status: http.StatusConflict}
 
 	ErrJobNotWaiting   = ErrorCode{Code: "ALC-JOB-0001", Reason: "job.not_waiting", Status: http.StatusConflict}
 	ErrJobLeaseExpired = ErrorCode{Code: "ALC-JOB-0002", Reason: "job.lease_expired", Status: http.StatusInternalServerError, Retryable: true}
@@ -320,6 +325,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrRotVerifyFailed, ErrRotUndoFailed, ErrRotRemoveIncomplete, ErrRotDecisionTimeout, ErrRotPausedLicense,
 		ErrRotCancelledLicense, ErrRotStopped, ErrRotPolicyOff, ErrRotNewKeyFailed, ErrRotRetriesExhausted,
 		ErrRotNoticeUndelivered, ErrRotOldKeyGone, ErrRotPlanTooLarge, ErrRotStartFailed, ErrRotNoticePending, ErrRotLateResult,
+		ErrRotGuardRefused, ErrRotSkippedAtSend,
 		ErrJobNotWaiting, ErrJobLeaseExpired, ErrJobTampered, ErrJobUnknownType, ErrJobConflict,
 		ErrNginxNotFound, ErrNginxConfigInvalid, ErrNginxConfigChanged, ErrNginxProfileMissing, ErrNginxNoSpace,
 		ErrNginxFileChanged, ErrNginxLocationUnsupported, ErrNginxBusy, ErrNginxIOError, ErrNginxNotRunning,

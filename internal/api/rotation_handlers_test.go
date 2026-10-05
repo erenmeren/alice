@@ -116,8 +116,8 @@ func succeeding(fk *fakeSSHKeys, inv *fakeInventory) {
 	fk.RotationFn = func(context.Context, uuid.UUID) (sshkeys.Rotation, error) {
 		return sampleRotation(sshkeys.StatusOverlap), nil
 	}
-	fk.RotationsFn = func(context.Context, sshkeys.RotationFilter) ([]sshkeys.Rotation, string, error) {
-		return []sshkeys.Rotation{sampleRotation(sshkeys.StatusOverlap)}, "", nil
+	fk.RotationSummariesFn = func(context.Context, sshkeys.RotationFilter) ([]sshkeys.RotationSummary, string, error) {
+		return []sshkeys.RotationSummary{sampleSummary()}, "", nil
 	}
 	fk.ContinueFn, fk.FinishNowFn, fk.AbortFn = ok, ok, ok
 	fk.KeepOldFn = func(context.Context, inventory.Actor, uuid.UUID, []uuid.UUID) error { return nil }
@@ -486,7 +486,7 @@ func TestRunDTOActionsAllowed(t *testing.T) {
 	}
 	path := "/api/v1/rotation/runs/" + runID.String()
 	get := func() map[string]any {
-		rec := call(NewHandler(d), http.MethodGet, path, "auditor", "")
+		rec := call(NewHandler(d), http.MethodGet, path, "admin", "") // an Administrator session may take every decision
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		return decodeMap(t, rec.Body.Bytes())
 	}
@@ -538,9 +538,9 @@ func TestRunDTOActionsAllowed(t *testing.T) {
 
 	// The list has no steps, filters by policy and key, pages by cursor.
 	var gotF sshkeys.RotationFilter
-	fk.RotationsFn = func(_ context.Context, f sshkeys.RotationFilter) ([]sshkeys.Rotation, string, error) {
+	fk.RotationSummariesFn = func(_ context.Context, f sshkeys.RotationFilter) ([]sshkeys.RotationSummary, string, error) {
 		gotF = f
-		return []sshkeys.Rotation{sampleRotation(sshkeys.StatusCompleted)}, "next-page", nil
+		return []sshkeys.RotationSummary{sampleSummary()}, "next-page", nil
 	}
 	rec := call(NewHandler(d), http.MethodGet, "/api/v1/rotation/runs?policy_id="+policyID.String()+"&ssh_key_id="+managedID.String()+"&cursor=c1&limit=10", "alice_read_auditor", "")
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -554,11 +554,13 @@ func TestRunDTOActionsAllowed(t *testing.T) {
 	assert.NotContains(t, page.Items[0], "steps")
 	require.NotNil(t, page.NextCursor)
 	assert.Equal(t, "next-page", *page.NextCursor)
-	fk.RotationsFn = func(context.Context, sshkeys.RotationFilter) ([]sshkeys.Rotation, string, error) {
+	fk.RotationSummariesFn = func(context.Context, sshkeys.RotationFilter) ([]sshkeys.RotationSummary, string, error) {
 		return nil, "", sshkeys.ErrBadCursor
 	}
 	assert.Equal(t, "ALC-SYS-0004", decodeErr(t, call(NewHandler(d), http.MethodGet, "/api/v1/rotation/runs?cursor=bad", "auditor", "")).Error.Code)
-	fk.RotationsFn = func(context.Context, sshkeys.RotationFilter) ([]sshkeys.Rotation, string, error) { return nil, "", nil }
+	fk.RotationSummariesFn = func(context.Context, sshkeys.RotationFilter) ([]sshkeys.RotationSummary, string, error) {
+		return nil, "", nil
+	}
 	assert.JSONEq(t, `{"items":[],"next_cursor":null}`, call(NewHandler(d), http.MethodGet, "/api/v1/rotation/runs", "auditor", "").Body.String())
 	for _, q := range []string{"policy_id=x", "ssh_key_id=x", "limit=0", "limit=201", "cursor=" + strings.Repeat("a", 513)} {
 		assert.Equal(t, http.StatusUnprocessableEntity, call(NewHandler(d), http.MethodGet, "/api/v1/rotation/runs?"+q, "auditor", "").Code, q)
@@ -714,40 +716,144 @@ func TestPolicyFieldsAreNeverSilentlyDefaulted(t *testing.T) {
 		errorDetails(t, rec))
 }
 
-// The run list carries no places (counts only) and loads at most 20 runs; places and steps are on the detail only
-// (review I2).
+// The run list is the service's summary read (counts only, no plan, places or steps); places and steps are on the
+// detail only (review I2, re-review N3); the page size is the usual 1-200 (default 50). Each count bucket is the
+// service's own (OpenAPI documents them).
 func TestRunListHasCountsNotLocations(t *testing.T) {
 	d, fk, _ := sshDeps(t)
+	var gotLimit int
+	fk.RotationSummariesFn = func(_ context.Context, f sshkeys.RotationFilter) ([]sshkeys.RotationSummary, string, error) {
+		gotLimit = f.Limit
+		return []sshkeys.RotationSummary{sampleSummary()}, "", nil
+	}
 	run := sampleRotation(sshkeys.StatusRemovingOld)
 	run.Locations = append(run.Locations,
 		sshkeys.RotationLocation{ID: uuid.New(), N: 3, State: sshkeys.LocRemoved},
 		sshkeys.RotationLocation{ID: uuid.New(), N: 4, State: sshkeys.LocRemoveFailed, ErrorCode: sshkeys.ReasonNewKeyFailed},
-		sshkeys.RotationLocation{ID: uuid.New(), N: 5, State: sshkeys.LocKeptOld})
-	var gotLimit int
-	fk.RotationsFn = func(_ context.Context, f sshkeys.RotationFilter) ([]sshkeys.Rotation, string, error) {
-		gotLimit = f.Limit
-		return []sshkeys.Rotation{run}, "", nil
-	}
+		sshkeys.RotationLocation{ID: uuid.New(), N: 5, State: sshkeys.LocKeptOld},
+		sshkeys.RotationLocation{ID: uuid.New(), N: 6, State: sshkeys.LocCancelled, ErrorCode: sshkeys.ReasonConnectionAccountFile},
+		sshkeys.RotationLocation{ID: uuid.New(), N: 7, State: sshkeys.LocRemoving})
 	fk.RotationFn = func(context.Context, uuid.UUID) (sshkeys.Rotation, error) { return run, nil }
 	h := NewHandler(d)
 	rec := call(h, http.MethodGet, "/api/v1/rotation/runs", "auditor", "")
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, 20, gotLimit, "the default page is 20 runs")
+	assert.Equal(t, 50, gotLimit, "the usual default page")
+	assert.Equal(t, []string{"RotationSummaries"}, fk.Calls(), "the list never reads runs in full")
 	var page struct {
 		Items []map[string]any `json:"items"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
 	require.Len(t, page.Items, 1)
-	assert.NotContains(t, page.Items[0], "locations")
-	assert.NotContains(t, page.Items[0], "steps")
-	assert.Equal(t, map[string]any{"total": 5.0, "verified": 1.0, "removed": 1.0, "skipped": 1.0, "kept": 1.0, "failed": 1.0},
-		page.Items[0]["location_counts"])
-	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodGet, "/api/v1/rotation/runs?limit=21", "auditor", "").Code)
-	call(h, http.MethodGet, "/api/v1/rotation/runs?limit=7", "auditor", "")
-	assert.Equal(t, 7, gotLimit)
+	item := page.Items[0]
+	for _, k := range []string{"locations", "steps", "actions_allowed", "plan_digest"} {
+		assert.NotContains(t, item, k)
+	}
+	assert.Equal(t, map[string]any{"total": 9.0, "verified": 3.0, "removed": 2.0, "kept": 1.0, "failed": 1.0, "skipped": 2.0}, item["location_counts"])
+	assert.Equal(t, map[string]any{"code": "ALC-KEY-0017", "reason": "sshkey.connection_account_file"}, item["result"])
+	assert.EqualValues(t, 3, item["kept_count"])
+	assert.Equal(t, runID.String(), item["id"])
+	call(h, http.MethodGet, "/api/v1/rotation/runs?limit=200", "auditor", "")
+	assert.Equal(t, 200, gotLimit)
+	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodGet, "/api/v1/rotation/runs?limit=201", "auditor", "").Code)
 
+	// The detail counts its places with the service's buckets (verified includes removing and removed; kept includes a
+	// place cancelled at send time).
 	m := decodeMap(t, call(h, http.MethodGet, "/api/v1/rotation/runs/"+runID.String(), "auditor", "").Body.Bytes())
-	assert.Len(t, m["locations"], 5)
+	assert.Len(t, m["locations"], 7)
 	assert.Contains(t, m, "steps")
-	assert.Contains(t, m, "location_counts")
+	assert.Equal(t, map[string]any{"total": 7.0, "verified": 3.0, "removed": 1.0, "kept": 2.0, "failed": 1.0, "skipped": 1.0}, m["location_counts"])
+}
+
+func sampleSummary() sshkeys.RotationSummary {
+	at := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	return sshkeys.RotationSummary{ID: runID, PolicyID: policyID, OldKeyID: managedID, OldFingerprint: "SHA256:old", Trigger: sshkeys.TriggerScheduled,
+		Status: sshkeys.StatusAborted, NewKeyType: "ed25519", PlannedFor: at, NotifiedAt: at, FinishedAt: &at,
+		ResultCode: sshkeys.ReasonConnectionAccountFile, KeptCount: 3, Version: 2,
+		Counts: sshkeys.LocationCounts{Total: 9, Verified: 3, Removed: 2, Kept: 1, Failed: 1, Skipped: 2}}
+}
+
+// The run shows why Continue waits (notice_state, only while the license allows changes) and why the renewal notice
+// could not be queued (notice_error), as closed errorRefs (re-review N7).
+func TestRunDTOShowsTheNoticeState(t *testing.T) {
+	d, fk, _ := sshDeps(t)
+	run := sampleRotation(sshkeys.StatusOverlap)
+	run.PausedLicense = true
+	run.NoticeState, run.NoticeError = sshkeys.ReasonNoticePending, sshkeys.ReasonNoticeQueueFailed
+	fk.RotationFn = func(context.Context, uuid.UUID) (sshkeys.Rotation, error) { return run, nil }
+	m := decodeMap(t, call(NewHandler(d), http.MethodGet, "/api/v1/rotation/runs/"+runID.String(), "auditor", "").Body.Bytes())
+	assert.Equal(t, map[string]any{"code": "ALC-ROT-0021", "reason": "rotation.notice_pending"}, m["notice_state"])
+	assert.Equal(t, map[string]any{"code": "ALC-NTF-0001", "reason": "notify.queue_failed"}, m["notice_error"])
+	d.License.(*fakeLicense).set(license.ErrLocked)
+	m = decodeMap(t, call(NewHandler(d), http.MethodGet, "/api/v1/rotation/runs/"+runID.String(), "auditor", "").Body.Bytes())
+	assert.Nil(t, m["notice_state"], "in lock Continue waits for the license, not for the notice")
+	run.NoticeState, run.NoticeError = "", ""
+	d.License.(*fakeLicense).set(nil)
+	m = decodeMap(t, call(NewHandler(d), http.MethodGet, "/api/v1/rotation/runs/"+runID.String(), "auditor", "").Body.Bytes())
+	assert.Contains(t, m, "notice_state")
+	assert.Nil(t, m["notice_state"])
+	assert.Nil(t, m["notice_error"])
+}
+
+// Stop and undo is accepted while the license is locked (its undo follows L-86); the other decisions are refused then.
+// The decisions' refusals keep their codes: Keep old and Finish now in lock (403 ALC-LIC-0001) and on a paused run
+// (409 ALC-ROT-0005); Run now on a run cancelled meanwhile (409 ALC-ROT-0005).
+func TestAbortIsAllowedInLock(t *testing.T) {
+	d, fk, _ := sshDeps(t)
+	succeeding(fk, &fakeInventory{})
+	d.License.(*fakeLicense).set(license.ErrLocked)
+	h := NewHandler(d)
+	rp := "/api/v1/rotation/runs/" + runID.String() + "/actions/"
+	assert.Equal(t, http.StatusNoContent, call(h, http.MethodPost, rp+"abort", "alice_operate_admin", "").Code)
+	assert.Equal(t, http.StatusNoContent, call(h, http.MethodPost, rp+"abort", "admin", "").Code)
+	for _, a := range []string{"continue", "finish-now"} {
+		assert.Equal(t, "ALC-LIC-0001", decodeErr(t, call(h, http.MethodPost, rp+a, "admin-stepup", "")).Error.Code, a)
+	}
+	for _, rt := range newServer(Deps{}).apiRoutes() {
+		if rt.pattern == "/api/v1/rotation/runs/{id}/actions/abort" {
+			assert.Equal(t, license.ClassAlways, rt.lic)
+		}
+	}
+
+	d.License.(*fakeLicense).set(nil)
+	for err, want := range map[error]string{license.ErrLocked: "ALC-LIC-0001", sshkeys.ErrNotWaiting: "ALC-ROT-0005"} {
+		fk.KeepOldFn = func(context.Context, inventory.Actor, uuid.UUID, []uuid.UUID) error { return err }
+		fk.FinishNowFn = func(context.Context, inventory.Actor, uuid.UUID) error { return err }
+		h = NewHandler(d)
+		assert.Equal(t, want, decodeErr(t, call(h, http.MethodPost, rp+"keep-old", "admin-stepup", `{"location_ids":["`+locID.String()+`"]}`)).Error.Code)
+		assert.Equal(t, want, decodeErr(t, call(h, http.MethodPost, rp+"finish-now", "admin-stepup", "")).Error.Code)
+	}
+	fk.RunNowFn = func(context.Context, inventory.Actor, uuid.UUID, string) (sshkeys.Rotation, error) {
+		return sshkeys.Rotation{}, sshkeys.ErrNotWaiting
+	}
+	rec := call(h, http.MethodPost, "/api/v1/rotation/policies/"+policyID.String()+"/actions/run", "admin-stepup", `{"plan_digest":"`+digest64+`"}`)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Equal(t, "ALC-ROT-0005", decodeErr(t, rec).Error.Code)
+
+	// A place refused at send time carries its closed reason.
+	run := sampleRotation(sshkeys.StatusAborted)
+	run.ResultCode = sshkeys.ReasonConnectionFilesUnknown
+	run.Locations[0].State, run.Locations[0].ErrorCode = sshkeys.LocCancelled, sshkeys.ReasonConnectionAccountFile
+	fk.RotationFn = func(context.Context, uuid.UUID) (sshkeys.Rotation, error) { return run, nil }
+	m := decodeMap(t, call(h, http.MethodGet, "/api/v1/rotation/runs/"+runID.String(), "auditor", "").Body.Bytes())
+	assert.Equal(t, map[string]any{"code": "ALC-KEY-0014", "reason": "sshkey.connection_files_unknown"}, m["result"])
+	assert.Equal(t, map[string]any{"code": "ALC-KEY-0017", "reason": "sshkey.connection_account_file"}, m["locations"].([]any)[0].(map[string]any)["error"])
+}
+
+// actions_allowed is the service's list cut to what the caller may do on the matching routes, from the same rbac
+// table: an Administrator session gets every decision (it can step up), an operate token of an Administrator only
+// abort (rotation.manage), every other caller none.
+func TestRunActionsFollowTheCaller(t *testing.T) {
+	d, fk, _ := sshDeps(t)
+	run := sampleRotation(sshkeys.StatusOverlap) // the service offers finish_now and abort
+	require.Equal(t, []string{"finish_now", "abort"}, sshkeys.AllowedActions(run, true))
+	fk.RotationFn = func(context.Context, uuid.UUID) (sshkeys.Rotation, error) { return run, nil }
+	h := NewHandler(d)
+	for id, want := range map[string][]any{
+		"admin": {"finish_now", "abort"}, "admin-stepup": {"finish_now", "abort"},
+		"alice_operate_admin": {"abort"}, "alice_read_admin": {},
+		"operator": {}, "operator-stepup": {}, "auditor-stepup": {}, "alice_operate_operator": {}, "alice_read_auditor": {},
+	} {
+		m := decodeMap(t, call(h, http.MethodGet, "/api/v1/rotation/runs/"+runID.String(), id, "").Body.Bytes())
+		assert.Equal(t, want, m["actions_allowed"], id)
+	}
 }

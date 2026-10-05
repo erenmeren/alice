@@ -382,6 +382,7 @@ func identityAuth(now time.Time) *fakeAuth {
 		"operator-stepup": session(operatorID, "operator", rbac.Operator, true),
 		"auditor-stepup":  session(auditorID, "auditor", rbac.Auditor, true),
 		"pending":         {Kind: rbac.PendingSession, UserID: operatorID, Username: "operator", Role: rbac.Operator, SessionHash: []byte("pending")},
+		"admin-pending":   {Kind: rbac.PendingSession, UserID: adminID, Username: "admin", Role: rbac.Admin, SessionHash: []byte("admin-pending")},
 	}
 	token := func(id uuid.UUID, name string, role rbac.Role, scope rbac.Scope) auth.Principal {
 		return auth.Principal{Kind: rbac.APIToken, UserID: id, Username: name, Role: role, TokenID: uuid.NewSHA1(uuid.NameSpaceOID, []byte(name+string(scope))), Scope: scope}
@@ -916,7 +917,7 @@ type fakeSSHKeys struct {
 	PreviewFn            func(ctx context.Context, a inventory.Actor, id uuid.UUID) (sshkeys.Preview, error)
 	RunNowFn             func(ctx context.Context, a inventory.Actor, id uuid.UUID, digest string) (sshkeys.Rotation, error)
 	RotationFn           func(ctx context.Context, id uuid.UUID) (sshkeys.Rotation, error)
-	RotationsFn          func(ctx context.Context, f sshkeys.RotationFilter) ([]sshkeys.Rotation, string, error)
+	RotationSummariesFn  func(ctx context.Context, f sshkeys.RotationFilter) ([]sshkeys.RotationSummary, string, error)
 	ContinueFn           func(ctx context.Context, a inventory.Actor, id uuid.UUID) error
 	FinishNowFn          func(ctx context.Context, a inventory.Actor, id uuid.UUID) error
 	KeepOldFn            func(ctx context.Context, a inventory.Actor, id uuid.UUID, locations []uuid.UUID) error
@@ -1046,10 +1047,10 @@ func (f *fakeSSHKeys) Rotation(ctx context.Context, id uuid.UUID) (sshkeys.Rotat
 	return sshkeys.Rotation{}, errNotConfigured
 }
 
-func (f *fakeSSHKeys) Rotations(ctx context.Context, fl sshkeys.RotationFilter) ([]sshkeys.Rotation, string, error) {
-	f.record("Rotations")
-	if f.RotationsFn != nil {
-		return f.RotationsFn(ctx, fl)
+func (f *fakeSSHKeys) RotationSummaries(ctx context.Context, fl sshkeys.RotationFilter) ([]sshkeys.RotationSummary, string, error) {
+	f.record("RotationSummaries")
+	if f.RotationSummariesFn != nil {
+		return f.RotationSummariesFn(ctx, fl)
 	}
 	return nil, "", errNotConfigured
 }

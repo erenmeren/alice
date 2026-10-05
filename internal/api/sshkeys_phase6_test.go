@@ -522,13 +522,23 @@ func TestDownloadLimitIsPerUserSession(t *testing.T) {
 
 	h = NewHandler(d)
 	for i := 0; i < 10; i++ {
-		for _, id := range []string{"", "pending", "alice_operate_admin", "alice_read_admin"} {
+		// "admin-pending" is the Administrator between password and verification code: someone who knows only the
+		// password must not spend the Administrator's downloads (re-review N1).
+		for _, id := range []string{"", "pending", "admin-pending", "alice_operate_admin", "alice_read_admin"} {
 			assert.NotEqual(t, http.StatusOK, call(h, http.MethodPost, path, id, body).Code, id)
 		}
 	}
 	for i := 0; i < 5; i++ {
 		assert.Equal(t, http.StatusOK, call(h, http.MethodPost, path, "admin-stepup", body).Code, "refused calls spend nothing (%d)", i)
 	}
+
+	// The chosen behaviour (re-review N2): the Administrator's own browser session WITHOUT step-up is charged, because
+	// the limit runs before the permission check; only the user's own cookie can spend it, so it drains nobody else.
+	h = NewHandler(d)
+	for i := 0; i < 5; i++ {
+		assert.Equal(t, "ALC-AUTH-0003", decodeErr(t, call(h, http.MethodPost, path, "admin", body)).Error.Code)
+	}
+	assert.Equal(t, http.StatusTooManyRequests, call(h, http.MethodPost, path, "admin-stepup", body).Code)
 }
 
 // A valid request whose reason and passphrase are written with JSON escapes fits the body limit (review M3).

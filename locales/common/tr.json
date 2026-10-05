@@ -540,6 +540,16 @@
         "title": "Bir sunucunun yanıtı, Alice ondan vazgeçtikten sonra geldi.",
         "cause": "Alice birkaç denemeden sonra bu yer için beklemeyi bırakmıştı. Yanıt daha sonra geldi; bu nedenle yenilemenin kaydı ile sunucudaki anahtar dosyası orada farklı olabilir.",
         "action": "Yenilemenin sayfasını açıp bu sunucudaki anahtar dosyasını denetleyin, ardından Alice anahtarları olduğu gibi listelesin diye sunucuyu yeniden tarayın."
+      },
+      "guard_refused": {
+        "title": "Veritabanı kayıtlarını reddettiği için Alice bu yerde çalışmayı durdurdu.",
+        "cause": "Bu yerin bir adımını kaydetme denemelerinin hepsi veritabanının güvenlik denetimlerince reddedildi; örneğin kaldırma gönderildikten sonra eski anahtarın yeri Alice'in kendi bağlantı anahtarı oldu. Alice orada başka bir şey yapmadı.",
+        "action": "Bu yeri yenilemenin sayfasında ve sunucunun anahtarlarını denetleyin, ardından durumu Alice'in günlükleriyle birlikte bildirin."
+      },
+      "skipped_at_send": {
+        "title": "Alice bu yeri değiştirmek üzereyken atladı.",
+        "cause": "Alice değişikliği göndermek üzereyken sunucunun son taraması, planın atladığı bir neden gösterdi; nedeni yerin atlama nedeni belirtir. Oraya hiçbir şey gönderilmedi.",
+        "action": "Yenilemenin sayfasında gösterilen atlama nedenini giderin, sunucuyu yeniden tarayın ve yenilemeyi yeniden başlatın."
       }
     },
     "notify": {
@@ -1246,9 +1256,13 @@
       }
     },
     "rotation": {
+      "nothing_to_rotate": {
+        "subject": "Planlanan SSH anahtarı yenilemesi değiştirebileceği bir şey bulamadı: {{key_label}}",
+        "body": "{{key_label}} ({{fingerprint}}) SSH anahtarının zamanlanmış yenilemesi başlamadı; çünkü anahtarın kullanıldığı her yer atlanıyor. Atlanan yer sayısı: {{skip_count}}. Sunucular ve atlama nedenleri: {{skips}}.\n\nSorun giderme kılavuzu her atlama nedenini \"SSH key rotation\" bölümünde açıklar; çoğu zaman sunucuyu yeniden taramak yeterlidir. Bu aralığın çalıştırması atlandı; sonraki çalıştırma şu zamana planlandı: {{next_run_at}}."
+      },
       "late_result": {
         "subject": "SSH anahtarı yenilemesinde geç bir yanıt: {{key_label}}",
-        "body": "{{key_label}} yenilemesi bir yer için vazgeçtikten sonra sunucu yanıt verdi. Sunucu: {{server}}. Kullanıcı: {{os_user}}. Dosya: {{file_path}}.\n\nSonuç: {{result}} (removed: eski anahtar orada yine de kaldırıldı; undone: yeni anahtar orada yine de kaldırıldı).\n\nAlice, anahtar listesi dosyayı şimdiki hâliyle göstersin diye sunucunun taranmasını sıraya koydu. Bu yeri denetlemek için Alice'te yenilemenin sayfasını açın."
+        "body": "{{key_label}} yenilemesi bir yerden vazgeçtikten sonra sunucu yanıt verdi. Sunucu: {{server}}. Kullanıcı: {{os_user}}. Dosya: {{file_path}}.\n\nSonuç: {{result}} (removed: eski anahtar artık orada değil; undone: yeni anahtar artık orada değil).\n\nAlice, anahtar listesi dosyayı şimdiki hâliyle göstersin diye sunucunun taranmasını sıraya koydu. Bu yeri denetlemek için Alice'te yenilemenin sayfasını açın."
       },
       "preview": {
         "subject": "Planlanan SSH anahtarı yenilemesi: {{key_label}}",
@@ -1280,7 +1294,7 @@
       },
       "needs_attention": {
         "subject": "SSH anahtarı yenilemesi ilgi bekliyor: {{key_label}}",
-        "body": "{{key_label}} yenilemesinde bir kişinin bakması gereken bir sorun var. Alice eski anahtarı yalnızca yeni anahtarla oturum açmanın az önce başarılı olduğu yerlerden kaldırır; diğer her yerde eski anahtar kalır. Alice'in yeni anahtarı yeniden kaldıramadığı yerlerde iki anahtar da bulunur.\n\nNeden kodu: {{code}}. Sorun giderme kılavuzu bu kodu açıklar. Her sunucunun durumunu görmek için Alice'te yenilemenin sayfasını açın."
+        "body": "{{key_label}} yenilemesinde bir kişinin bakması gereken bir sorun var. Alice eski anahtarı yalnızca yeni anahtarla oturum açmanın az önce başarılı olduğu yerlerden kaldırır; diğer her yerde eski anahtar kalır. Alice'in yeni anahtarı yeniden kaldıramadığı yerlerde iki anahtar da bulunur.\n\nNeden kodu: {{code}}. Sorun giderme kılavuzu bu kodu açıklar. Yeni anahtarı yeniden kaldırma başarısız olduğu için yeni anahtarın hâlâ bulunabileceği sunucular: {{undo_failed_servers}} (sayı: {{undo_failed_count}}).\n\nHer sunucunun durumunu görmek için Alice'te yenilemenin sayfasını açın."
       },
       "paused_license": {
         "subject": "SSH anahtarı yenilemesi duraklatıldı: {{key_label}}",
@@ -1294,8 +1308,8 @@
   },
   "rotation": {
     "skip": {
-      "connection_files_unknown": "Alice bu sunucuda bağlantı hesabının tüm anahtar dosyalarını bilmiyor; sunucuyu yeniden tarayın.",
-      "connection_account_file": "Bu yer Alice'in bağlantı hesabına ya da onun dosyalarından birine ait; Alice bunları hiçbir zaman değiştirmez.",
+      "connection_files_unknown": "Alice bu sunucuda bağlandığı hesabın tüm anahtar dosyalarını bilmiyor; sunucuyu yeniden tarayın.",
+      "connection_account_file": "Bu yer Alice'in bağlandığı hesaba ya da bu hesabın dosyalarından birine ait; Alice bunları hiçbir zaman değiştirmez.",
       "target_deleted": "Sunucu Alice'ten kaldırıldı.",
       "host_key_unconfirmed": "Sunucunun parmak izi henüz onaylanmadı.",
       "host_key_changed": "Sunucunun kimliği değişti.",

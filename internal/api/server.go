@@ -176,7 +176,7 @@ type SSHKeysService interface {
 	Preview(ctx context.Context, a inventory.Actor, id uuid.UUID) (sshkeys.Preview, error)
 	RunNow(ctx context.Context, a inventory.Actor, id uuid.UUID, digest string) (sshkeys.Rotation, error)
 	Rotation(ctx context.Context, id uuid.UUID) (sshkeys.Rotation, error)
-	Rotations(ctx context.Context, f sshkeys.RotationFilter) ([]sshkeys.Rotation, string, error)
+	RotationSummaries(ctx context.Context, f sshkeys.RotationFilter) ([]sshkeys.RotationSummary, string, error)
 	Continue(ctx context.Context, a inventory.Actor, id uuid.UUID) error
 	FinishNow(ctx context.Context, a inventory.Actor, id uuid.UUID) error
 	KeepOld(ctx context.Context, a inventory.Actor, id uuid.UUID, locations []uuid.UUID) error

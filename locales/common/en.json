@@ -540,6 +540,16 @@
         "title": "A server's answer arrived after Alice had given up on it.",
         "cause": "Alice had stopped waiting for this place after several attempts. Its answer came later, so the rotation's record and the key file on the server may differ there.",
         "action": "Open the rotation's page and check the key file on this server, then scan the server again so that Alice lists its keys as they are."
+      },
+      "guard_refused": {
+        "title": "Alice stopped working on this place because the database refused its records.",
+        "cause": "Every attempt to record a step of this place was refused by the database's safety checks, for example because the old key's place became Alice's own connection key after the removal was sent. Alice did nothing more there.",
+        "action": "Check this place on the rotation's page and the server's keys, then report it together with Alice's logs."
+      },
+      "skipped_at_send": {
+        "title": "This place was skipped when Alice was about to change it.",
+        "cause": "When Alice was about to send the change, the server's last scan showed a reason the plan skips; the place's skip reason names it. Nothing was sent there.",
+        "action": "Fix the skip reason shown on the rotation's page, scan the server again, then start the rotation again."
       }
     },
     "notify": {
@@ -1246,9 +1256,13 @@
       }
     },
     "rotation": {
+      "nothing_to_rotate": {
+        "subject": "Planned SSH key rotation found nothing it could change: {{key_label}}",
+        "body": "The scheduled rotation of the SSH key {{key_label}} ({{fingerprint}}) did not start, because every place where the key is used is skipped. Places skipped: {{skip_count}}. Servers and skip reasons: {{skips}}.\n\nThe troubleshooting guide explains each skip reason in its section \"SSH key rotation\"; often scanning the server again is enough. This interval's run is skipped; the next run is planned for {{next_run_at}}."
+      },
       "late_result": {
         "subject": "Late answer in the SSH key rotation: {{key_label}}",
-        "body": "After the rotation of {{key_label}} had given up on one place, the server answered. Server: {{server}}. User: {{os_user}}. File: {{file_path}}.\n\nResult: {{result}} (removed: the old key was removed there after all; undone: the new key was removed there after all).\n\nAlice queued a scan of the server so that its key list shows the file as it is now. Open the rotation's page in Alice to check this place."
+        "body": "After the rotation of {{key_label}} had given up on one place, the server answered. Server: {{server}}. User: {{os_user}}. File: {{file_path}}.\n\nResult: {{result}} (removed: the old key is no longer there; undone: the new key is no longer there).\n\nAlice queued a scan of the server so that its key list shows the file as it is now. Open the rotation's page in Alice to check this place."
       },
       "preview": {
         "subject": "Planned SSH key rotation: {{key_label}}",
@@ -1280,7 +1294,7 @@
       },
       "needs_attention": {
         "subject": "SSH key rotation needs attention: {{key_label}}",
-        "body": "The rotation of {{key_label}} has a problem a person must look at. Alice removes the old key only where a login with the new key worked just before; everywhere else the old key stays. Where Alice could not remove the new key again, both keys are there.\n\nReason code: {{code}}. The troubleshooting guide explains it. Open the rotation's page in Alice to see each server's state."
+        "body": "The rotation of {{key_label}} has a problem a person must look at. Alice removes the old key only where a login with the new key worked just before; everywhere else the old key stays. Where Alice could not remove the new key again, both keys are there.\n\nReason code: {{code}}. The troubleshooting guide explains it. Servers where the new key may still be present because removing it again failed: {{undo_failed_servers}} (count: {{undo_failed_count}}).\n\nOpen the rotation's page in Alice to see each server's state."
       },
       "paused_license": {
         "subject": "SSH key rotation paused: {{key_label}}",
@@ -1294,8 +1308,8 @@
   },
   "rotation": {
     "skip": {
-      "connection_files_unknown": "Alice does not know all key files of its connection account on this server; scan the server again.",
-      "connection_account_file": "This place belongs to Alice's connection account or one of its files; Alice never changes those.",
+      "connection_files_unknown": "Alice does not know all key files of the account it connects with on this server; scan the server again.",
+      "connection_account_file": "This place belongs to the account Alice connects with or to one of its files; Alice never changes those.",
       "target_deleted": "The server was removed from Alice.",
       "host_key_unconfirmed": "The server's fingerprint is not confirmed yet.",
       "host_key_changed": "The server's identity changed.",

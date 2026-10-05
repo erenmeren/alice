@@ -85,7 +85,7 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | POST | `/api/v1/rotation/runs/{id}/actions/continue` | `rotation.operate` | no | yes | no | no | no | yes | no |
 | POST | `/api/v1/rotation/runs/{id}/actions/finish-now` | `rotation.operate` | no | yes | no | no | no | yes | no |
 | POST | `/api/v1/rotation/runs/{id}/actions/keep-old` | `rotation.operate` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/rotation/runs/{id}/actions/abort` | `rotation.manage` | no | yes | no | no | operate | no | no |
+| POST | `/api/v1/rotation/runs/{id}/actions/abort` | `rotation.manage` | no | yes | no | no | operate | no | yes |
 | GET | `/api/v1/jobs` | `read` | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/jobs/{id}` | `read` | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/jobs/{id}/actions/confirm` | `jobs.confirm` | no | yes | no | no | no | no | no |

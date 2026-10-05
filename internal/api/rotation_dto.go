@@ -140,18 +140,25 @@ type locationCountsDTO struct {
 	Failed   int `json:"failed"` // add, verify, removal or undo failed
 }
 
+// locationCounts counts a run's places in the service's buckets (sshkeys.LocationCounts): verified includes the places
+// whose old key is being or was removed; kept is kept_old plus a place cancelled at send time with a reason.
 func locationCounts(locs []sshkeys.RotationLocation) locationCountsDTO {
 	c := locationCountsDTO{Total: len(locs)}
 	for _, l := range locs {
 		switch l.State {
-		case sshkeys.LocVerified:
+		case sshkeys.LocVerified, sshkeys.LocRemoving:
 			c.Verified++
 		case sshkeys.LocRemoved:
+			c.Verified++
 			c.Removed++
 		case sshkeys.LocSkipped:
 			c.Skipped++
 		case sshkeys.LocKeptOld:
 			c.Kept++
+		case sshkeys.LocCancelled:
+			if l.ErrorCode != "" {
+				c.Kept++
+			}
 		case sshkeys.LocAddFailed, sshkeys.LocVerifyFailed, sshkeys.LocRemoveFailed, sshkeys.LocUndoFailed:
 			c.Failed++
 		}
@@ -159,44 +166,87 @@ func locationCounts(locs []sshkeys.RotationLocation) locationCountsDTO {
 	return c
 }
 
-// rotationDTO is one run (C13 with F4 and S11): result is the run's result reason as an errorRef (null while it has
-// none); kept_count is where the old key stays (skipped and kept places); actions_allowed are the decisions the page
-// may offer now. locations and steps are on the detail only; a list item has location_counts (review I2).
-type rotationDTO struct {
-	ID               string                 `json:"id"`
-	PolicyID         string                 `json:"policy_id"`
-	OldSSHKeyID      string                 `json:"old_ssh_key_id"`
-	NewSSHKeyID      *string                `json:"new_ssh_key_id"`
-	OldFingerprint   string                 `json:"old_fingerprint"`
-	NewFingerprint   string                 `json:"new_fingerprint"`
-	Trigger          string                 `json:"trigger"`
-	Status           string                 `json:"status"`
-	PausedLicense    bool                   `json:"paused_license"`
-	AwaitingDecision bool                   `json:"awaiting_decision"`
-	DecisionDueAt    *time.Time             `json:"decision_due_at"`
-	PlannedFor       time.Time              `json:"planned_for"`
-	NotifiedAt       time.Time              `json:"notified_at"`
-	StartedAt        *time.Time             `json:"started_at"`
-	VerifiedAt       *time.Time             `json:"verified_at"`
-	OverlapUntil     *time.Time             `json:"overlap_until"`
-	FinishedAt       *time.Time             `json:"finished_at"`
-	Result           *errorRefDTO           `json:"result"`
-	PlanDigest       string                 `json:"plan_digest"`
-	NewKeyType       string                 `json:"new_key_type"`
-	OverlapMinutes   int                    `json:"overlap_minutes"`
-	ChangeCount      int                    `json:"change_count"`
-	SkipCount        int                    `json:"skip_count"`
-	KeptCount        int                    `json:"kept_count"`
-	ActionsAllowed   []string               `json:"actions_allowed"`
-	LocationCounts   locationCountsDTO      `json:"location_counts"`
-	Locations        *[]rotationLocationDTO `json:"locations,omitempty"`
-	Steps            *[]rotationStepDTO     `json:"steps,omitempty"`
-	Version          int                    `json:"version"`
+func summaryCounts(c sshkeys.LocationCounts) locationCountsDTO {
+	return locationCountsDTO{Total: c.Total, Verified: c.Verified, Removed: c.Removed, Skipped: c.Skipped, Kept: c.Kept, Failed: c.Failed}
 }
 
-// rotationJSON renders a run; gateOK is the license gate's answer for changes (AllowedActions), detail adds the places
-// and the steps (always arrays then).
-func rotationJSON(r sshkeys.Rotation, gateOK, detail bool) rotationDTO {
+// rotationSummaryDTO is a run in the list: its scalar fields and the counts of its places (sshkeys.RotationSummary);
+// no plan, places, steps or decisions (those are on GET /rotation/runs/{id}).
+type rotationSummaryDTO struct {
+	ID               string            `json:"id"`
+	PolicyID         string            `json:"policy_id"`
+	OldSSHKeyID      string            `json:"old_ssh_key_id"`
+	NewSSHKeyID      *string           `json:"new_ssh_key_id"`
+	OldFingerprint   string            `json:"old_fingerprint"`
+	NewFingerprint   string            `json:"new_fingerprint"`
+	Trigger          string            `json:"trigger"`
+	Status           string            `json:"status"`
+	PausedLicense    bool              `json:"paused_license"`
+	AwaitingDecision bool              `json:"awaiting_decision"`
+	NewKeyType       string            `json:"new_key_type"`
+	PlannedFor       time.Time         `json:"planned_for"`
+	NotifiedAt       time.Time         `json:"notified_at"`
+	StartedAt        *time.Time        `json:"started_at"`
+	VerifiedAt       *time.Time        `json:"verified_at"`
+	OverlapUntil     *time.Time        `json:"overlap_until"`
+	FinishedAt       *time.Time        `json:"finished_at"`
+	Result           *errorRefDTO      `json:"result"`
+	KeptCount        int               `json:"kept_count"`
+	LocationCounts   locationCountsDTO `json:"location_counts"`
+	Version          int               `json:"version"`
+}
+
+func rotationSummaryJSON(r sshkeys.RotationSummary) rotationSummaryDTO {
+	return rotationSummaryDTO{
+		ID: r.ID.String(), PolicyID: r.PolicyID.String(), OldSSHKeyID: r.OldKeyID.String(), NewSSHKeyID: idPtr(r.NewKeyID),
+		OldFingerprint: r.OldFingerprint, NewFingerprint: r.NewFingerprint, Trigger: r.Trigger, Status: r.Status,
+		PausedLicense: r.PausedLicense, AwaitingDecision: r.AwaitingDecision, NewKeyType: r.NewKeyType, PlannedFor: r.PlannedFor.UTC(),
+		NotifiedAt: r.NotifiedAt.UTC(), StartedAt: utcPtr(r.StartedAt), VerifiedAt: utcPtr(r.VerifiedAt), OverlapUntil: utcPtr(r.OverlapUntil),
+		FinishedAt: utcPtr(r.FinishedAt), Result: errorRef(r.ResultCode, nil), KeptCount: r.KeptCount,
+		LocationCounts: summaryCounts(r.Counts), Version: r.Version,
+	}
+}
+
+// rotationDTO is one run as GET /rotation/runs/{id} answers it (C13 with F4 and S11): result is the run's result reason
+// as an errorRef (null while it has none); kept_count is where the old key stays; actions_allowed are the decisions
+// this caller may take now; notice_state / notice_error say why Continue waits (S6). The list has rotationSummaryDTO.
+type rotationDTO struct {
+	ID               string                `json:"id"`
+	PolicyID         string                `json:"policy_id"`
+	OldSSHKeyID      string                `json:"old_ssh_key_id"`
+	NewSSHKeyID      *string               `json:"new_ssh_key_id"`
+	OldFingerprint   string                `json:"old_fingerprint"`
+	NewFingerprint   string                `json:"new_fingerprint"`
+	Trigger          string                `json:"trigger"`
+	Status           string                `json:"status"`
+	PausedLicense    bool                  `json:"paused_license"`
+	AwaitingDecision bool                  `json:"awaiting_decision"`
+	DecisionDueAt    *time.Time            `json:"decision_due_at"`
+	PlannedFor       time.Time             `json:"planned_for"`
+	NotifiedAt       time.Time             `json:"notified_at"`
+	StartedAt        *time.Time            `json:"started_at"`
+	VerifiedAt       *time.Time            `json:"verified_at"`
+	OverlapUntil     *time.Time            `json:"overlap_until"`
+	FinishedAt       *time.Time            `json:"finished_at"`
+	Result           *errorRefDTO          `json:"result"`
+	PlanDigest       string                `json:"plan_digest"`
+	NewKeyType       string                `json:"new_key_type"`
+	OverlapMinutes   int                   `json:"overlap_minutes"`
+	ChangeCount      int                   `json:"change_count"`
+	SkipCount        int                   `json:"skip_count"`
+	KeptCount        int                   `json:"kept_count"`
+	ActionsAllowed   []string              `json:"actions_allowed"`
+	NoticeState      *errorRefDTO          `json:"notice_state"`
+	NoticeError      *errorRefDTO          `json:"notice_error"`
+	LocationCounts   locationCountsDTO     `json:"location_counts"`
+	Locations        []rotationLocationDTO `json:"locations"`
+	Steps            []rotationStepDTO     `json:"steps"`
+	Version          int                   `json:"version"`
+}
+
+// rotationJSON renders one run with its places and steps; actions are the decisions this caller may take now
+// (callerActions); notice_state shows only while the license allows changes (otherwise Continue waits for the license).
+func rotationJSON(r sshkeys.Rotation, gateOK bool, actions []string) rotationDTO {
 	d := rotationDTO{
 		ID: r.ID.String(), PolicyID: r.PolicyID.String(), OldSSHKeyID: r.OldKeyID.String(), NewSSHKeyID: idPtr(r.NewKeyID),
 		OldFingerprint: r.OldFingerprint, NewFingerprint: r.NewFingerprint, Trigger: r.Trigger, Status: r.Status,
@@ -204,11 +254,11 @@ func rotationJSON(r sshkeys.Rotation, gateOK, detail bool) rotationDTO {
 		PlannedFor: r.PlannedFor.UTC(), NotifiedAt: r.NotifiedAt.UTC(), StartedAt: utcPtr(r.StartedAt), VerifiedAt: utcPtr(r.VerifiedAt),
 		OverlapUntil: utcPtr(r.OverlapUntil), FinishedAt: utcPtr(r.FinishedAt), Result: errorRef(r.ResultCode, nil),
 		PlanDigest: r.Digest, NewKeyType: r.NewKeyType, OverlapMinutes: r.OverlapMinutes, ChangeCount: r.Plan.Changes,
-		SkipCount: r.Plan.Skips, KeptCount: r.KeptCount, ActionsAllowed: nonNil(sshkeys.AllowedActions(r, gateOK)),
+		SkipCount: r.Plan.Skips, KeptCount: r.KeptCount, ActionsAllowed: nonNil(actions), NoticeError: errorRef(r.NoticeError, nil),
 		LocationCounts: locationCounts(r.Locations), Version: r.Version,
 	}
-	if !detail {
-		return d
+	if gateOK {
+		d.NoticeState = errorRef(r.NoticeState, nil)
 	}
 	locs := make([]rotationLocationDTO, 0, len(r.Locations))
 	for _, l := range r.Locations {
@@ -219,7 +269,7 @@ func rotationJSON(r sshkeys.Rotation, gateOK, detail bool) rotationDTO {
 			NewLocationID: idPtr(l.NewLocationID),
 		})
 	}
-	d.Locations = &locs
+	d.Locations = locs
 	{ // the steps
 		steps := make([]rotationStepDTO, 0, len(r.Steps))
 		for _, st := range r.Steps {
@@ -230,7 +280,7 @@ func rotationJSON(r sshkeys.Rotation, gateOK, detail bool) rotationDTO {
 			steps = append(steps, rotationStepDTO{N: st.N, LocationID: idPtr(st.LocationID), Name: st.Name, Status: st.Status,
 				At: st.At.UTC(), Params: params})
 		}
-		d.Steps = &steps
+		d.Steps = steps
 	}
 	return d
 }

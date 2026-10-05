@@ -70,6 +70,8 @@ var phase6Table = []struct {
 	{"ALC-ROT-0020", "rotation.start_failed", 409, false},
 	{"ALC-ROT-0021", "rotation.notice_pending", 409, true},
 	{"ALC-ROT-0022", "rotation.late_result", 409, false},
+	{"ALC-ROT-0023", "rotation.guard_refused", 409, false},
+	{"ALC-ROT-0024", "rotation.skipped_at_send", 409, false},
 }
 
 // phase6Codes are the codes of the areas ROT and NTF, and KEY from 0006 on (AllErrorCodes order).

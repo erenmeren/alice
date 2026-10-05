@@ -107,8 +107,8 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   - **The SSH server does not accept keys** (`pubkey_disabled`). Nothing, unless the server should accept keys (`PubkeyAuthentication`).
   - **root may sign in here only with a fixed command, and this line has none** (`root_forced_commands_only`). Add the forced `command=` to the line, or change `PermitRootLogin`, then scan again.
   - **The key is listed more than once in this file** (`duplicate_lines`). Remove the extra lines of the key from the file by hand (the SSH server uses the first), then scan again.
-  - **Alice does not know all key files of its connection account on this server; scan the server again** (`connection_files_unknown`). Choose **Scan for SSH keys** on the server's page, then preview again (`ALC-KEY-0014`).
-  - **This place belongs to Alice's connection account or one of its files; Alice never changes those** (`connection_account_file`). Nothing: the setup commands own those files (`ALC-KEY-0017`).
+  - **Alice does not know all key files of the account it connects with on this server; scan the server again** (`connection_files_unknown`). Choose **Scan for SSH keys** on the server's page, then preview again (`ALC-KEY-0014`).
+  - **This place belongs to the account Alice connects with or to one of its files; Alice never changes those** (`connection_account_file`). Nothing: the setup commands own those files (`ALC-KEY-0017`).
   - **Alice could not read this line's options exactly** (`options_unreadable`). Check the line's options on the server (they are not valid UTF-8), fix them, then scan again.
 
 ## Certificates
@@ -1001,7 +1001,7 @@ server again.
 
 ## ALC-NTF-0001: Alice could not queue the email about the license renewal
 
-**Meaning.** A paused rotation shows this next to ALC-ROT-0021: the email that tells the administrators about the license renewal could not be queued, so Continue is still refused. (HTTP 503, reason `notify.queue_failed`; retryable.)
+**Meaning.** A paused rotation shows this as its notice error (`notice_error` of the run) next to ALC-ROT-0021: the email that tells the administrators about the license renewal could not be queued, so Continue is still refused. (HTTP 503, reason `notify.queue_failed`; retryable.)
 
 **Likely cause.** Writing the email to Alice's outbox failed. A paused rotation continues only after that email is queued, and Alice tries again at every background check.
 
@@ -1033,7 +1033,7 @@ server again.
 
 ## ALC-ROT-0004: No server can take part in this rotation
 
-**Meaning.** Run now was refused because no place of the key can change. A planned run is not created either; the policy tries again later without an email. (HTTP 409, reason `rotation.nothing_to_rotate`.)
+**Meaning.** Run now was refused because no place of the key can change. A scheduled run is not created either: the administrators get one email naming the skipped servers and reasons, and the policy moves on to its next interval. (HTTP 409, reason `rotation.nothing_to_rotate`.)
 
 **Likely cause.** Every place where the key is used is skipped. The preview shows the reason for each.
 
@@ -1182,6 +1182,22 @@ server again.
 **Likely cause.** Alice had stopped waiting for this place after several attempts. Its answer came later, so the rotation's record and the key file on the server may differ there.
 
 **What to do.** Open the rotation's page and check the key file on this server, then scan the server again so that Alice lists its keys as they are.
+
+## ALC-ROT-0023: Alice stopped working on this place because the database refused its records
+
+**Meaning.** The error of a place where Alice stopped because the database refused every record of its next step. The place ends failed; the rotation needs attention or is undone. (HTTP 409, reason `rotation.guard_refused`.)
+
+**Likely cause.** Every attempt to record a step of this place was refused by the database's safety checks, for example because the old key's place became Alice's own connection key after the removal was sent. Alice did nothing more there.
+
+**What to do.** Check this place on the rotation's page and the server's keys, then report it together with Alice's logs.
+
+## ALC-ROT-0024: This place was skipped when Alice was about to change it
+
+**Meaning.** The error of a place that was cancelled, or whose add failed, when Alice was about to change it: the plan's skip reasons were checked again then. The place's skip reason names the cause. (HTTP 409, reason `rotation.skipped_at_send`.)
+
+**Likely cause.** When Alice was about to send the change, the server's last scan showed a reason the plan skips; the place's skip reason names it. Nothing was sent there.
+
+**What to do.** Fix the skip reason shown on the rotation's page, scan the server again, then start the rotation again.
 
 ## ALC-JOB-0001: Task is not waiting
 

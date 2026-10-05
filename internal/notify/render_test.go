@@ -202,10 +202,14 @@ var rotationParams = map[string]map[string]string{
 	sshkeys.TemplateCompleted:           {"key_label": "ci-deploy (İzmir)", "new_fingerprint": "SHA256:newNEWnew"},
 	sshkeys.TemplateCompletedPartial:    {"key_label": "ci-deploy (İzmir)", "new_fingerprint": "SHA256:newNEWnew", "kept_count": "4"},
 	sshkeys.TemplateAborted:             {"key_label": "ci-deploy (İzmir)", "code": sshkeys.ReasonVerifyFailed},
-	sshkeys.TemplateNeedsAttention:      {"key_label": "ci-deploy (İzmir)", "code": sshkeys.ReasonUndoFailed},
-	sshkeys.TemplatePausedLicense:       {"key_label": "ci-deploy (İzmir)"},
-	sshkeys.TemplateDecisionNeeded:      {"key_label": "ci-deploy (İzmir)", "count": "2", "decision_due": "2026-10-20 09:00 UTC"},
+	sshkeys.TemplateNeedsAttention: {"key_label": "ci-deploy (İzmir)", "code": sshkeys.ReasonUndoFailed, "undo_failed_count": "2",
+		"undo_failed_servers": "web-01, web-02"},
+	sshkeys.TemplatePausedLicense:  {"key_label": "ci-deploy (İzmir)"},
+	sshkeys.TemplateDecisionNeeded: {"key_label": "ci-deploy (İzmir)", "count": "2", "decision_due": "2026-10-20 09:00 UTC"},
 	// rotation.late_result (sshkeys.TemplateLateResult): what the server did after the run gave up on the place.
+	// rotation.nothing_to_rotate (sshkeys.TemplateNothingToRotate): a scheduled plan in which every place is skipped.
+	"rotation.nothing_to_rotate": {"key_label": "ci-deploy (İzmir)", "fingerprint": "SHA256:oldOLDold", "skip_count": "2",
+		"skips": "web-01: sshd_unreadable; web-02: connection_files_unknown", "next_run_at": "2027-01-04 09:00 UTC"},
 	"rotation.late_result": {"key_label": "ci-deploy (İzmir)", "server": "web-01 (İzmir)", "os_user": "deploy",
 		"file_path": "/home/deploy/.ssh/authorized_keys", "result": "removed", "rotation_id": "0190f5a0-0000-7000-8000-00000000abcd"},
 }
@@ -253,13 +257,14 @@ func TestRotationTemplatesRender(t *testing.T) {
 	assert.Contains(t, tr.Body, "Eski anahtarın kaldığı yer sayısı: 4.")
 	assert.Contains(t, tr.Body, "Lütfen yanıtlamayın.", "the footer is in the person's language")
 
-	// The attention mail sent again for a late result carries a count the text does not need (one template).
-	late := map[string]string{"key_label": "ci-deploy (İzmir)", "code": sshkeys.ReasonLateResult, "late_results": "2"}
+	// The late-result mail is true whatever the server did, also when nothing was left to remove (re-review N4).
 	for _, lang := range []string{"en", "tr"} {
-		m := s.Render("ada@example.com", sshkeys.TemplateNeedsAttention, lang, late)
-		assert.NotContains(t, m.Subject+m.Body, "{{", lang)
-		assert.Contains(t, m.Body, "rotation.late_result", lang)
+		m := s.Render("ada@example.com", "rotation.late_result", lang, rotationParams["rotation.late_result"])
+		assert.NotContains(t, m.Body, "after all", lang)
+		assert.NotContains(t, m.Body, "yine de", lang)
 	}
+	assert.Contains(t, en("rotation.late_result"), "removed: the old key is no longer there; undone: the new key is no longer there")
+	assert.Contains(t, en(sshkeys.TemplateNeedsAttention), "removing it again failed: web-01, web-02 (count: 2).")
 
 	hostile := map[string]string{"key_label": "x\r\nBcc: evil@example.com"}
 	m := s.Render("ada@example.com", sshkeys.TemplatePausedLicense, "en", hostile)

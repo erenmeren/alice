@@ -341,8 +341,9 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.TargetsManage
 		case p == "/api/v1/ssh-keys/platform-key":
 			want = rbac.TargetsManage
-		// Phase 6 (R41 rows 5, 24, 25; S2): a private key leaves Alice only through the download; switching a policy on
-		// and every decision on a run need an Administrator's step-up; the rest of the policy work is rotation.manage.
+		// Phase 6 (R41 rows 5, 24, 25; S2): a private key leaves Alice only through the download; switching a policy on,
+		// Run now, Continue, Finish now and Keep old need an Administrator's step-up; the rest of the policy work and Stop
+		// and undo are rotation.manage.
 		case strings.HasSuffix(p, "/actions/download-private-key"):
 			want = rbac.SSHKeysDownload
 		case under(p, "/api/v1/rotation") && !safeMethod(rt.method) && rotationOperateAction(p):
@@ -611,7 +612,9 @@ var (
 	// keys hostage (R41 row 5).
 	lockAvailableRoutes = map[string]bool{"POST /api/v1/jobs/{id}/actions/discard": true,
 		"PUT /api/v1/bindings/{id}/auto-deploy": true, "DELETE /api/v1/bindings/{id}": true,
-		"POST /api/v1/ssh-keys/{id}/actions/download-private-key": true}
+		"POST /api/v1/ssh-keys/{id}/actions/download-private-key": true,
+		// Stop and undo takes back what a run added; its undo runs in lock (L-86).
+		"POST /api/v1/rotation/runs/{id}/actions/abort": true}
 )
 
 func underAny(pattern string, prefixes []string) bool {

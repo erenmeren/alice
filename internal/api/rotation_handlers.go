@@ -38,7 +38,9 @@ func (s *server) rotationRoutes() []route {
 		{method: http.MethodPost, pattern: r + "/{id}/actions/continue", perm: rbac.RotationOperate, lic: change, handler: s.decideRotation(s.continueRotation)},
 		{method: http.MethodPost, pattern: r + "/{id}/actions/finish-now", perm: rbac.RotationOperate, lic: change, handler: s.decideRotation(s.finishRotation)},
 		{method: http.MethodPost, pattern: r + "/{id}/actions/keep-old", perm: rbac.RotationOperate, lic: change, handler: s.keepOld},
-		{method: http.MethodPost, pattern: r + "/{id}/actions/abort", perm: rbac.RotationManage, lic: change, handler: s.decideRotation(s.abortRotation)},
+		// Stop and undo is accepted in lock: it only takes back what the run added, and its undo follows L-86.
+		{method: http.MethodPost, pattern: r + "/{id}/actions/abort", perm: rbac.RotationManage, lic: license.ClassAlways,
+			handler: s.decideRotation(s.abortRotation)},
 	}
 }
 
@@ -277,25 +279,35 @@ func (s *server) runPolicy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"rotation_id": run.ID.String(), "status_url": "/api/v1/rotation/runs/" + run.ID.String()})
 }
 
-// maxRunPage bounds a page of runs: the service reads every run with its places (up to 10 000 each), so the list
-// loads few runs at a time and answers counts only (review I2).
-const maxRunPage = 20
-
-// runPageLimit reads ?limit= of the run list (1..20, default 20).
-func runPageLimit(raw string, v *validate.Errors) int {
-	if raw == "" {
-		return maxRunPage
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 1 || n > maxRunPage {
-		v.Add("limit", validate.OutOfRange, map[string]string{"min": "1", "max": strconv.Itoa(maxRunPage)})
-		return 0
-	}
-	return n
-}
-
 // gateOK is the license gate's answer for changes: the run DTO offers only decisions the service would accept.
 func (s *server) gateOK() bool { return s.licenseGate(license.ClassChange) == nil }
+
+// actionRoutes are the decision route of each action AllowedActions names.
+var actionRoutes = map[string]string{
+	sshkeys.ActionContinue: "/api/v1/rotation/runs/{id}/actions/continue", sshkeys.ActionFinishNow: "/api/v1/rotation/runs/{id}/actions/finish-now",
+	sshkeys.ActionKeepOld: "/api/v1/rotation/runs/{id}/actions/keep-old", sshkeys.ActionAbort: "/api/v1/rotation/runs/{id}/actions/abort",
+}
+
+// callerActions cuts the service's allowed decisions to those the caller may take on their routes, decided by the
+// routes' own permissions (the route table) and rbac.Decide: a browser session counts as able to step up (the page
+// asks for the code), a token never is. Operators, Auditors and read tokens get none.
+func (s *server) callerActions(r *http.Request, allowed []string) []string {
+	perms := map[string]rbac.Permission{}
+	for _, rt := range s.rotationRoutes() {
+		perms[rt.pattern] = rt.perm
+	}
+	sub := principalFrom(r.Context()).Subject(s.deps.Clock.Now())
+	if sub.Kind == rbac.UserSession {
+		sub.StepUp = true
+	}
+	out := []string{}
+	for _, a := range allowed {
+		if perm, ok := perms[actionRoutes[a]]; ok && rbac.Decide(perm, sub) == rbac.Allow {
+			out = append(out, a)
+		}
+	}
+	return out
+}
 
 func (s *server) listRotations(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -304,7 +316,7 @@ func (s *server) listRotations(w http.ResponseWriter, r *http.Request) {
 		PolicyID: optionalUUID(q.Get("policy_id"), "policy_id", &v),
 		KeyID:    optionalUUID(q.Get("ssh_key_id"), "ssh_key_id", &v),
 		Cursor:   q.Get("cursor"),
-		Limit:    runPageLimit(q.Get("limit"), &v),
+		Limit:    pageLimit(q.Get("limit"), &v),
 	}
 	if len(f.Cursor) > maxCursorBytes {
 		v.Add("cursor", validate.TooLong, map[string]string{"max": strconv.Itoa(maxCursorBytes)})
@@ -313,15 +325,14 @@ func (s *server) listRotations(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	runs, next, err := s.deps.SSHKeys.Rotations(r.Context(), f)
+	runs, next, err := s.deps.SSHKeys.RotationSummaries(r.Context(), f)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	gate := s.gateOK()
-	items := make([]rotationDTO, 0, len(runs))
+	items := make([]rotationSummaryDTO, 0, len(runs))
 	for _, run := range runs {
-		items = append(items, rotationJSON(run, gate, false))
+		items = append(items, rotationSummaryJSON(run))
 	}
 	var cursor any
 	if next != "" {
@@ -341,7 +352,8 @@ func (s *server) getRotation(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rotationJSON(run, s.gateOK(), true))
+	gate := s.gateOK()
+	writeJSON(w, http.StatusOK, rotationJSON(run, gate, s.callerActions(r, sshkeys.AllowedActions(run, gate))))
 }
 
 // decision is one of the Administrator's decisions on a run without a body.
