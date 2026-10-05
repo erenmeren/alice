@@ -48,7 +48,9 @@ services:
   # DNS answers login.microsoftonline.com and alice-e2e.vault.azure.net with it on the internal
   # network, so the real provider needs no dial mapping; only the e2e build of Alice trusts its CA (the
   # fakeazure-ca volume; R40 row 35). Managed identity is not offered here: its metadata address
-  # (169.254.169.254) is not reachable in the compose network. Everything it needs (CA, certificates,
+  # (169.254.169.254) is not reachable in the compose network. That is a property of
+  # the host, not an enforced rule: do NOT run this stack on an Azure virtual machine, where the real
+  # metadata service could answer and a real identity token would go to the fake, which this build trusts. Everything it needs (CA, certificates,
   # the application's client secret) is generated when it starts. Playwright drives it with
   # "docker compose exec fakeazure /alice-fakeazure ctl ...", which talks to its loopback-only admin
   # API. It publishes nothing and runs as a non-root user: port 443 is bindable because the container's

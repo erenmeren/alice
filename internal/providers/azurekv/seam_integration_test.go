@@ -114,6 +114,9 @@ func TestFixedAddressesMapOnlyTheAllowedEndpoints(t *testing.T) {
 		"the metadata ip":  {Login: "169.254.169.254:80", Vault: "127.0.0.1:1"},
 		"a bad imds":       {Login: "127.0.0.1:1", Vault: "127.0.0.1:1", IMDS: "nope"},
 		"unspecified addr": {Login: "0.0.0.0:1", Vault: "127.0.0.1:1"},
+		"a public ip":      {Login: "8.8.8.8:443", Vault: "127.0.0.1:1"},
+		"a private ip":     {Login: "127.0.0.1:1", Vault: "10.0.0.5:443"},
+		"a public imds":    {Login: "127.0.0.1:1", Vault: "127.0.0.1:1", IMDS: "1.1.1.1:80"},
 	} {
 		_, err := WithFixedAddresses(Options{RootCAs: roots}, a)
 		assert.ErrorIs(t, err, ErrFixedAddresses, name)

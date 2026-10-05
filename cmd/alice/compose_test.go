@@ -294,8 +294,8 @@ func TestComposeAndImagesNeverSetTheSDKLoggingOrRegionVariables(t *testing.T) {
 	for _, path := range []string{"../../deploy/Dockerfile", "../../test/images/fakeazure/Dockerfile", "../../test/images/e2e-target/Dockerfile"} {
 		raw, err := os.ReadFile(path)
 		require.NoError(t, err)
-		for _, line := range strings.Split(string(raw), "\n") {
-			if l := strings.TrimSpace(line); strings.HasPrefix(l, "ENV ") || strings.HasPrefix(l, "ARG ") {
+		for _, l := range dockerfileInstructions(string(raw)) {
+			if strings.HasPrefix(l, "ENV ") || strings.HasPrefix(l, "ARG ") {
 				for _, v := range forbidden {
 					assert.NotContains(t, l, v, "%s", path)
 				}
@@ -317,4 +317,58 @@ func makeVarOf(t *testing.T, name string) string {
 	m := regexp.MustCompile(`(?m)^` + name + `\s*:=\s*(\S+)`).FindStringSubmatch(string(raw))
 	require.NotNil(t, m, "Makefile defines no %s", name)
 	return m[1]
+}
+
+// dockerfileInstructions returns a Dockerfile's instructions with their continuation lines joined
+// (a trailing backslash) and comment lines dropped.
+func dockerfileInstructions(src string) []string {
+	var out []string
+	cur := ""
+	for _, line := range strings.Split(src, "\n") {
+		l := strings.TrimSpace(line)
+		if cur == "" && (l == "" || strings.HasPrefix(l, "#")) {
+			continue
+		}
+		if cur != "" && strings.HasPrefix(l, "#") { // a comment inside a continued instruction
+			continue
+		}
+		if strings.HasSuffix(l, "\\") {
+			cur += strings.TrimSuffix(l, "\\") + " "
+			continue
+		}
+		out = append(out, strings.TrimSpace(cur+l))
+		cur = ""
+	}
+	if cur != "" {
+		out = append(out, strings.TrimSpace(cur))
+	}
+	return out
+}
+
+func TestDockerfileInstructionsJoinContinuationLines(t *testing.T) {
+	got := dockerfileInstructions("# c\nFROM a AS b\nRUN x \\\n  && y\nENV A=1 \\\n  AZURE_SDK_GO_LOGGING=all\n\nCMD [\"z\"]\n")
+	assert.Equal(t, []string{"FROM a AS b", "RUN x  && y", "ENV A=1  AZURE_SDK_GO_LOGGING=all", `CMD ["z"]`}, got)
+}
+
+// The fake Azure image builds on the two base images deploy/Dockerfile already pins, by the same
+// digests: no new base image enters the supply chain.
+func TestFakeAzureDockerfileReusesTheReleaseBaseImages(t *testing.T) {
+	froms := func(path string) map[string]bool {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		out := map[string]bool{}
+		for _, l := range dockerfileInstructions(string(raw)) {
+			if ref, ok := strings.CutPrefix(l, "FROM "); ok {
+				out[strings.Fields(ref)[0]] = true
+			}
+		}
+		return out
+	}
+	release := froms("../../deploy/Dockerfile")
+	fake := froms("../../test/images/fakeazure/Dockerfile")
+	require.Len(t, fake, 2, "a builder and a runtime image")
+	for ref := range fake {
+		assert.Contains(t, ref, "@sha256:")
+		assert.True(t, release[ref], "%s is not a base image of deploy/Dockerfile", ref)
+	}
 }

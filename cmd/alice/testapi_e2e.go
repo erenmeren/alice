@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -59,30 +61,51 @@ const (
 // tests can point it at a file of their own.
 var azureCAFile = "/run/alice-e2e-azure/ca.pem"
 
-// maxAzureCAFile bounds what azureRoots reads (a PEM root is about 1 KB).
-const maxAzureCAFile = 1 << 20
+// maxAzureCAFile bounds what azureRoots accepts (a PEM root is about 1 KB); a longer file is refused,
+// never truncated.
+const maxAzureCAFile = 64 << 10
 
 // azureRoots is the trust of Azure's TLS certificates in the e2e build: ONLY the fake's CA, never
 // the system roots (ruling S10: a real Azure certificate is not trusted here, and no host name of
-// the e2e stack is trusted by a release build). The file is read at each session, so a fake that
-// starts after Alice, or regenerates its CA, is trusted at once. When the file is missing or holds no
-// certificate the provider's session fails closed (azure.tls_untrusted, visible in the journey):
-// Alice itself still starts, because the fake is a separate container whose CA may change while
-// Alice runs, and a start-up failure would crash-loop it for a reason that is not Alice's.
+// the e2e stack is trusted by a release build). The file must be one regular file (a symlink, even
+// to the system bundle, is refused), at most maxAzureCAFile bytes, holding exactly one CERTIFICATE
+// block and nothing else, and that certificate must be a CA. The file is read at each session, so a
+// fake that starts after Alice, or regenerates its CA, is trusted at once. Anything else fails the
+// provider's session closed (azure.tls_untrusted, visible in the journey): Alice itself still
+// starts, because the fake is a separate container whose CA may change while Alice runs, and a
+// start-up failure would crash-loop it for a reason that is not Alice's.
 func azureRoots() (*x509.CertPool, error) {
-	f, err := os.Open(azureCAFile) //nolint:gosec // G304: the e2e build's fixed trust file (a variable only for unit tests)
+	f, err := os.OpenFile(azureCAFile, os.O_RDONLY|syscall.O_NOFOLLOW, 0) //nolint:gosec // G304: the e2e build's fixed trust file (a variable only for unit tests)
 	if err != nil {
 		return nil, fmt.Errorf("the fake Azure CA is not readable: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(f, maxAzureCAFile))
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, errors.New("the fake Azure CA is not a regular file")
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxAzureCAFile+1))
 	if err != nil {
 		return nil, fmt.Errorf("the fake Azure CA is not readable: %w", err)
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(raw) {
-		return nil, errors.New("the fake Azure CA file holds no certificate")
+	if len(raw) > maxAzureCAFile {
+		return nil, errors.New("the fake Azure CA file is too large")
 	}
+	trimmed := bytes.TrimSpace(raw)
+	block, rest := pem.Decode(trimmed)
+	if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 || !bytes.HasPrefix(trimmed, []byte("-----BEGIN ")) ||
+		len(bytes.TrimSpace(rest)) != 0 {
+		return nil, errors.New("the fake Azure CA file must hold exactly one certificate and nothing else")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, errors.New("the fake Azure CA file holds no valid certificate")
+	}
+	if !cert.BasicConstraintsValid || !cert.IsCA {
+		return nil, errors.New("the fake Azure CA file holds a certificate that is not a CA")
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
 	return pool, nil
 }
 

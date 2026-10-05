@@ -23,7 +23,10 @@ import (
 // login.microsoftonline.com and <name>.vault.azure.net, the host allow-list, the TLS server name
 // and every other guard stay as they are, so the TLS handshake verifies those names against the
 // roots the harness gives (the fake's CA). A mapping is refused unless the roots are given: a
-// mapped dial must never combine with the system roots.
+// mapped dial must never combine with the system roots. The fixed addresses must be loopback (the
+// fake runs in the test process); the CALLER must pass the fake's own pool from RootCAs: a function that
+// returns the system pool cannot be told apart from the fake's, so only a nil function and a nil pool
+// are refused here.
 
 // ErrFixedAddresses is the cause of a refused FixedAddresses.
 var ErrFixedAddresses = errors.New("azurekv: invalid fixed listener address")
@@ -34,7 +37,7 @@ var ErrFixedAddressesNeedRoots = errors.New("azurekv: fixed listener addresses n
 // FixedAddresses are the listeners the Azure endpoints are mapped to, as "ip:port" strings (an IP
 // literal, never a name). Login is the Entra login host on :443 and Vault every vault host on :443
 // (the session's own host only is allowed by its transport); IMDS is the managed identity's metadata
-// endpoint (optional). Each must be an address the connection rule allows (netaddr.Allowed).
+// endpoint (optional). Each must be a loopback address (and so one the connection rule allows).
 type FixedAddresses struct {
 	Login, Vault, IMDS string
 }
@@ -96,8 +99,8 @@ func fixedAddr(what, s string, required bool) (string, error) {
 		return "", nil
 	}
 	ap, err := netip.ParseAddrPort(s)
-	if err != nil || ap.Port() == 0 || !netaddr.Allowed(ap.Addr()) {
-		return "", fmt.Errorf("%w: %s must be an allowed IP address and a port", ErrFixedAddresses, what)
+	if err != nil || ap.Port() == 0 || !ap.Addr().IsLoopback() || !netaddr.Allowed(ap.Addr()) {
+		return "", fmt.Errorf("%w: %s must be a loopback IP address and a port", ErrFixedAddresses, what)
 	}
 	return ap.String(), nil
 }

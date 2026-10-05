@@ -160,6 +160,11 @@ func serve(ctx context.Context, cfg serveConfig, log *slog.Logger) error {
 		_ = tlsLn.Close()
 		return fmt.Errorf("listen on %s: %w", cfg.Admin, err)
 	}
+	if err := boundLoopback(adminLn.Addr()); err != nil {
+		_ = tlsLn.Close()
+		_ = adminLn.Close()
+		return err
+	}
 	if cfg.CAOut != "" {
 		if err := writeCA(cfg.CAOut, f.s.CAPEM()); err != nil {
 			_ = tlsLn.Close()
@@ -167,7 +172,7 @@ func serve(ctx context.Context, cfg serveConfig, log *slog.Logger) error {
 			return err
 		}
 	}
-	azure := &http.Server{Handler: f.s.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	azure := &http.Server{Handler: f.azureHandler(), ReadHeaderTimeout: 10 * time.Second}
 	admin := &http.Server{Handler: adminHandler(f), ReadHeaderTimeout: 10 * time.Second}
 	errs := make(chan error, 2)
 	go func() { errs <- azure.Serve(tls.NewListener(tlsLn, f.s.TLSConfig())) }()
@@ -215,22 +220,29 @@ func writeCA(path string, pem []byte) error {
 	return nil
 }
 
-// checkLoopback accepts only "localhost:port" or a loopback IP literal with a port.
+// checkLoopback accepts only a literal loopback IP (127.0.0.0/8 or ::1, no zone, no IPv4-mapped form)
+// with a port: no host name, not even localhost, whose answer could change.
 func checkLoopback(addr string) error {
 	host, port, err := net.SplitHostPort(addr)
-	bad := fmt.Errorf("%q must be a loopback address with a port (127.0.0.1:9090)", addr)
+	bad := fmt.Errorf("%q must be a loopback IP address with a port (127.0.0.1:9090)", addr)
 	if err != nil || host == "" {
 		return bad
 	}
 	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
 		return bad
 	}
-	if host == "localhost" {
-		return nil
-	}
 	ip, err := netip.ParseAddr(host)
-	if err != nil || !ip.IsLoopback() {
+	if err != nil || ip.Zone() != "" || ip.Is4In6() || !ip.IsLoopback() {
 		return bad
+	}
+	return nil
+}
+
+// boundLoopback checks the address a listener really bound.
+func boundLoopback(a net.Addr) error {
+	ap, err := netip.ParseAddrPort(a.String())
+	if err != nil || ap.Addr().Zone() != "" || ap.Addr().Is4In6() || !ap.Addr().IsLoopback() {
+		return fmt.Errorf("the admin listener is bound to %s, not a loopback address", a)
 	}
 	return nil
 }
@@ -241,8 +253,22 @@ func checkLoopback(addr string) error {
 type fake struct {
 	s *fakekv.Server
 
+	// gate makes a reset atomic for the Azure hosts: requests hold it shared, reset exclusively, so none
+	// sees the vault between the fake's clearing and the tool's reseeding.
+	gate sync.RWMutex
+
 	mu    sync.Mutex
 	stops []func() // FailAll faults set by throttle and fault (unfault removes them)
+}
+
+// azureHandler is the fake's Azure handler behind the reset gate.
+func (f *fake) azureHandler() http.Handler {
+	h := f.s.Handler()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.gate.RLock()
+		defer f.gate.RUnlock()
+		h.ServeHTTP(w, r)
+	})
 }
 
 func newFake(name string) (*fake, error) {
@@ -273,6 +299,8 @@ func (f *fake) seed() {
 // reset returns the fake to its seeded state with a new client secret, keeping the CA, the listeners
 // and the tenant and client IDs (fakekv.Server.Reset): the CA file Alice trusts stays right.
 func (f *fake) reset() {
+	f.gate.Lock()
+	defer f.gate.Unlock()
 	f.mu.Lock()
 	f.stops = nil
 	f.mu.Unlock()

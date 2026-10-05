@@ -476,25 +476,41 @@ func TestAzureRootsTrustOnlyTheFakeCA(t *testing.T) {
 // each session, so a fake service that starts after Alice (or renews its CA) is trusted at once.
 func TestAzureRootsFailClosedWithoutTheFakeCA(t *testing.T) {
 	dir := t.TempDir()
-	useAzureCAFile(t, filepath.Join(dir, "missing.pem"))
-	_, err := azureRoots()
-	require.Error(t, err)
-
-	for name, content := range map[string]string{
-		"empty":      "",
-		"not pem":    "this is not a certificate",
-		"only a key": "-----BEGIN " + "PRIVATE KEY-----\nAAAA\n-----END " + "PRIVATE KEY-----\n",
-	} {
-		f := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".pem")
-		require.NoError(t, os.WriteFile(f, []byte(content), 0o600))
-		useAzureCAFile(t, f)
-		pool, err := azureRoots()
-		assert.Nil(t, pool, name)
-		assert.Error(t, err, name)
+	now := time.Now()
+	fake := pki.NewCA("fake azure", pki.ECDSA256, now)
+	leaf := fake.Issue(pki.Opts{CommonName: "login.microsoftonline.com", SANs: []string{"login.microsoftonline.com"}}, now)
+	good := filepath.Join(dir, "good.pem")
+	require.NoError(t, os.WriteFile(good, fake.RootPEM, 0o600))
+	link := filepath.Join(dir, "link.pem")
+	require.NoError(t, os.Symlink(good, link))
+	sysLink := filepath.Join(dir, "system.pem")
+	system := "/etc/ssl/certs/ca-certificates.crt"
+	if _, err := os.Stat(system); err != nil {
+		system = good // no system bundle on this host: any symlink must still be refused
 	}
-
-	// Through the registered provider: no file, no session, no request.
-	useAzureCAFile(t, filepath.Join(dir, "missing.pem"))
+	require.NoError(t, os.Symlink(system, sysLink))
+	write := func(name string, content []byte) string {
+		f := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(f, content, 0o600))
+		return f
+	}
+	key := "-----BEGIN " + "PRIVATE KEY-----\nAAAA\n-----END " + "PRIVATE KEY-----\n"
+	rows := map[string]string{
+		"missing":                     filepath.Join(dir, "missing.pem"),
+		"a directory":                 dir,
+		"empty":                       write("empty.pem", nil),
+		"not pem":                     write("notpem.pem", []byte("this is not a certificate")),
+		"only a key":                  write("key.pem", []byte(key)),
+		"two certificates":            write("two.pem", append(append([]byte{}, fake.RootPEM...), fake.IntermediatePEM...)),
+		"the same twice":              write("twice.pem", append(append([]byte{}, fake.RootPEM...), fake.RootPEM...)),
+		"a leaf":                      write("leaf.pem", leaf.CertPEM),
+		"a certificate and a key":     write("withkey.pem", append(append([]byte{}, fake.RootPEM...), key...)),
+		"text before":                 write("before.pem", append([]byte("# the fake CA\n"), fake.RootPEM...)),
+		"text after":                  write("after.pem", append(append([]byte{}, fake.RootPEM...), "trailing words\n"...)),
+		"megabytes of junk":           write("junk.pem", append(append([]byte{}, fake.RootPEM...), bytes.Repeat([]byte("x"), 2<<20)...)),
+		"a symlink":                   link,
+		"a link to the system bundle": sysLink,
+	}
 	reg := providers.NewRegistry()
 	pool := newTestPool()
 	t.Cleanup(pool.Close)
@@ -503,16 +519,26 @@ func TestAzureRootsFailClosedWithoutTheFakeCA(t *testing.T) {
 	require.True(t, ok)
 	target := providers.TargetRef{ID: uuid.New(), Kind: providers.KindAzureKV,
 		Config: providers.TargetConfig{"vault_url": "https://alice-e2e.vault.azure.net"}}
-	_, err = kv.Open(context.Background(), target, azureSource{}, providers.Env{Clock: clock.Real{}})
-	var pe *providers.Error
-	require.ErrorAs(t, err, &pe)
-	assert.Equal(t, "azure.tls_untrusted", pe.Code)
+	for name, file := range rows {
+		useAzureCAFile(t, file)
+		roots, err := azureRoots()
+		assert.Nil(t, roots, name)
+		assert.Error(t, err, name)
+		// Through the registered provider: no usable file, no session, no request, no fallback.
+		_, err = kv.Open(context.Background(), target, azureSource{}, providers.Env{Clock: clock.Real{}})
+		var pe *providers.Error
+		if assert.ErrorAs(t, err, &pe, name) {
+			assert.Equal(t, "azure.tls_untrusted", pe.Code, name)
+		}
+	}
 
-	// The file appears later (the fake started after Alice): the next session is not refused for it.
-	fake := pki.NewCA("fake azure", pki.ECDSA256, time.Now())
+	// A single regular CA certificate is accepted, also with blank lines around it; the file is read at
+	// each session, so a fake that starts after Alice is trusted at once.
 	late := filepath.Join(dir, "late.pem")
 	useAzureCAFile(t, late)
-	require.NoError(t, os.WriteFile(late, fake.RootPEM, 0o600))
+	_, err := azureRoots()
+	require.Error(t, err)
+	require.NoError(t, os.WriteFile(late, append(append([]byte("\n"), fake.RootPEM...), "\n\n"...), 0o600))
 	p, err := azureRoots()
 	require.NoError(t, err)
 	assert.NotNil(t, p)

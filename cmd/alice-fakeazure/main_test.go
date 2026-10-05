@@ -333,20 +333,39 @@ func TestCtlPing(t *testing.T) {
 // ctl refuses to talk to anything else, and the handler refuses a caller that is not loopback.
 func TestAdminIsLoopbackOnly(t *testing.T) {
 	var out, errOut bytes.Buffer
-	for _, addr := range []string{"0.0.0.0:9090", ":9090", "10.1.2.3:9090", "example.com:9090", "[::]:9090", "172.18.0.2:9090", "9090"} {
+	for _, addr := range []string{"0.0.0.0:9090", ":9090", "10.1.2.3:9090", "example.com:9090", "[::]:9090", "172.18.0.2:9090", "9090",
+		"localhost:9090", "[::1%lo]:9090", "[::ffff:127.0.0.1]:9090", "127.0.0.1", "127.0.0.1:99999", "127.0.0.1:x"} {
 		out.Reset()
 		errOut.Reset()
-		assert.Equal(t, 2, run(context.Background(), []string{"ctl", "--admin", addr, "ping"}, &out, &errOut), addr)
+		// A short context: were the check missing, ctl would try to connect and fail after a while
+		// instead of refusing at once, and the test must fail rather than wait for the network.
+		ctlCtx, cancelCtl := context.WithTimeout(context.Background(), 2*time.Second)
+		assert.Equal(t, 2, run(ctlCtx, []string{"ctl", "--admin", addr, "ping"}, &out, &errOut), addr)
+		cancelCtl()
 		assert.Contains(t, errOut.String(), "loopback", addr)
 		assert.Empty(t, out.String())
 
-		cfg := serveConfig{Listen: "127.0.0.1:0", Admin: addr, VaultName: "alice-e2e"}
-		err := serve(context.Background(), cfg, slog.New(slog.DiscardHandler))
+		// Port 0 and a short context: were the check missing, serve would bind a wildcard port
+		// for 2 s and return nil, so the test fails instead of hanging or holding a real port.
+		zero := strings.TrimSuffix(addr, ":9090")
+		if zero != addr {
+			zero += ":0"
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		cfg := serveConfig{Listen: "127.0.0.1:0", Admin: zero, VaultName: "alice-e2e"}
+		err := serve(ctx, cfg, slog.New(slog.DiscardHandler))
+		cancel()
 		require.Error(t, err, addr)
 		assert.Contains(t, err.Error(), "loopback", addr)
 	}
-	for _, addr := range []string{"127.0.0.1:9090", "localhost:9090", "[::1]:9090"} {
+	for _, addr := range []string{"127.0.0.1:9090", "127.0.0.2:0", "[::1]:9090"} {
 		assert.NoError(t, checkLoopback(addr), addr)
+	}
+	// The address a listener really bound is checked again.
+	assert.NoError(t, boundLoopback(&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1}))
+	assert.NoError(t, boundLoopback(&net.TCPAddr{IP: net.IPv6loopback, Port: 1}))
+	for _, ip := range []string{"0.0.0.0", "10.1.2.3", "::", "172.18.0.2"} {
+		assert.Error(t, boundLoopback(&net.TCPAddr{IP: net.ParseIP(ip), Port: 1}), ip)
 	}
 
 	// Defence in depth: whatever the listener, a caller that is not loopback gets nothing.
@@ -548,4 +567,43 @@ func TestCtlUsage(t *testing.T) {
 	assert.Equal(t, 2, code)
 	assert.Contains(t, e, "unknown")
 	assert.Empty(t, out.String())
+}
+
+// A reset is atomic for the Azure hosts: a request that arrives while it runs never sees the emptied
+// vault (the fake clears its state and the tool reseeds it as one step).
+func TestResetNeverShowsAnEmptyVault(t *testing.T) {
+	st := startStack(t)
+	c := st.client()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				var out, errOut bytes.Buffer
+				run(context.Background(), []string{"ctl", "--admin", st.admin, "reset"}, &out, &errOut)
+			}
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	deadline := time.Now().Add(20 * time.Second) //nolint:forbidigo // wall-clock test deadline, not product time
+	seen := 0
+	for tok := ""; seen < 25 && time.Now().Before(deadline); { //nolint:forbidigo // same
+		if tok == "" {
+			_, tok = st.token(c, st.ctlJSON("credentials"))
+		}
+		status, _, body := st.do(c, http.MethodGet, "https://alice-e2e.vault.azure.net/certificates?api-version=2025-07-01", nil, tok)
+		switch status {
+		case http.StatusOK:
+			seen++
+			assert.Contains(t, string(body), "web-cert", "a reset showed a vault without its seed")
+			assert.Contains(t, string(body), "monitor-only")
+		default:
+			tok = "" // the reset replaced the secret and cleared the tokens
+		}
+	}
+	assert.Equal(t, 25, seen, "the poller saw answers while resets ran")
 }
