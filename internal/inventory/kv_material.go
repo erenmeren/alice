@@ -55,15 +55,19 @@ const WarnChainIncomplete = "chain_incomplete"
 // row holds is ErrSecretUnreadable.
 func (s *Service) KVDeployMaterial(ctx context.Context, id uuid.UUID, secret providers.CertificateSecret) (Material, error) {
 	defer secret.Value.Zero()
+	// A secret is in hand from here on: every refusal is audited as a failed read with a closed reason
+	// (R40 row 34), also those that come before the shared check; a deployment that does not exist is the
+	// one thing there is nothing to audit about.
 	m, err := s.DeploymentMaterial(ctx, id, false)
 	if err != nil {
-		return Material{}, err
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrClaimLost) {
+			return Material{}, err
+		}
+		return Material{}, s.refuseUnattributed(ctx, id, nil, "material_unavailable", err)
 	}
 	if m.KV == nil || m.Recorded {
-		return Material{}, ErrDeploymentState
+		return Material{}, s.refuseUnattributed(ctx, id, m.KV, "deployment_state", ErrDeploymentState)
 	}
-	// Whatever the request relied on is judged again before the secret is looked at (C1, I1): a
-	// refusal here reads nothing, writes nothing and audits nothing.
 	// From here on the vault's secret is in Alice's memory (the engine read it, ideally after its own
 	// KVDeployPrecheck): every refusal, the shared check's included, is audited (R40 row 34) and the
 	// secret is zeroed.
@@ -243,6 +247,28 @@ WHERE d.id = $1`, id).Scan(&trigger, &state, &binding, &locBinding, &bindingLive
 		return ErrVersionHeld
 	}
 	return nil
+}
+
+// refuseUnattributed audits a refusal that came before the version was known (kv may be nil), and returns
+// err, joined with the failure of the audit write if there was one.
+func (s *Service) refuseUnattributed(ctx context.Context, id uuid.UUID, kv *KVSource, reason string, err error) error {
+	details := map[string]string{"purpose": "deploy", "deployment_id": id.String(), "reason": reason}
+	if kv != nil {
+		details["kv_certificate_id"], details["certificate_name"], details["version"] = kv.KVCertificateID.String(), kv.Name, kv.Version
+	}
+	aerr := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := checkClaim(ctx, tx); err != nil {
+			return err
+		}
+		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "kv.secret_read", ObjectType: "deployment", ObjectID: id.String(),
+			Result: audit.Failure, Details: details})
+		return err
+	})
+	if aerr != nil {
+		s.log.Error("could not audit a refused secret read", "reason", reason, "error_type", fmt.Sprintf("%T", aerr))
+		return errors.Join(err, aerr)
+	}
+	return err
 }
 
 // auditSecretReadFailure audits a read of the vault's secret that ended in a refusal: result failure

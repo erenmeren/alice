@@ -547,14 +547,14 @@ func TestKVDeployPrecheck(t *testing.T) {
 				bind = on
 			}
 			tc.mutate(b, bind, id, v1)
-			audits := h.count("SELECT count(*) FROM audit_log")
+			before := dumpEverything(h)
 			err := h.svc.KVDeployPrecheck(ctx, id)
 			if tc.want == nil {
 				assert.NoError(t, err)
 			} else {
 				assert.ErrorIs(t, err, tc.want)
 			}
-			assert.Equal(t, audits, h.count("SELECT count(*) FROM audit_log"), "the check writes nothing")
+			assert.True(t, before == dumpEverything(h), "the check writes nothing: every table and the logs are as they were")
 		})
 	}
 	b := newBindFixture(t)
@@ -617,4 +617,121 @@ func TestOperationDeploymentFindsItsOwner(t *testing.T) {
 	assert.Equal(t, id, got.ID)
 	assert.Equal(t, b.loc5, got.LocationID)
 	assert.Equal(t, inventory.DeployStateQueued, got.State)
+}
+
+// N1: an Administrator's confirmation of an incomplete chain is kept when the complete chain on file belongs
+// to an uploaded or discovered row with the same leaf (a vault read never updates such a row, so dropping it
+// would make the version undeployable for ever); it is dropped only for a complete vault row.
+func TestConfirmationIsKeptWhenTheCompleteChainIsAnUploadedRow(t *testing.T) {
+	b := newBindFixture(t)
+	h, ctx := b.h, b.h.ctx
+	leaf := b.issue("up.example.test", pki.ECDSA256)
+	_, _, err := h.svc.UploadCertificate(ctx, b.admin, inventory.UploadInput{CertificatePEM: string(leaf.FullchainPEM), PrivateKeyPEM: string(leaf.KeyPEM)})
+	require.NoError(t, err)
+	h.reconcile(b.vault, kvResult(h.kvc("up-too", leaf, ver(40), h.clock.Now(), true)))
+	cert := h.certRow(b.vault, "up-too").ID
+	bind := b.create(b.admin, cert, b.loc1)
+	v1 := b.versionID(cert, ver(40))
+	require.True(t, b.certRowChainComplete(pki.Fingerprint(leaf.Cert)), "the uploaded row's chain is complete")
+	reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: v1, ConfirmIncompleteChain: true})
+	require.NoError(t, err)
+	assert.True(t, b.get(reqs[0].ID).ConfirmIncompleteChain, "kept: the vault may still deliver the leaf only")
+	// The vault delivers the leaf only: with the kept confirmation the deployment proceeds.
+	_, err = h.svc.BeginDeployment(ctx, reqs[0].ID)
+	require.NoError(t, err)
+	_, secret := pemSecret(string(leaf.KeyPEM) + string(leaf.CertPEM))
+	m, err := h.svc.KVDeployMaterial(ctx, reqs[0].ID, secret)
+	require.NoError(t, err)
+	m.PrivateKeyPEM.Zero()
+}
+
+func TestConfirmationIsDroppedForACompleteVaultRow(t *testing.T) {
+	b := newBindFixture(t)
+	bind := b.create(b.admin, b.web, b.loc1)
+	b.exec("UPDATE certificates SET chain_complete = true WHERE fingerprint_sha256 = $1", pki.Fingerprint(b.webLeaf.Cert))
+	reqs, err := b.h.svc.RequestKVDeployment(b.h.ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: b.versionID(b.web, ver(1)), ConfirmIncompleteChain: true})
+	require.NoError(t, err)
+	assert.False(t, b.get(reqs[0].ID).ConfirmIncompleteChain, "a complete vault row is what the next read will find again")
+}
+
+// N2: the leaf row decides when the version row carries no validity of its own.
+func TestPrecheckJudgesTheLeafRowWhenTheVersionRowHasNoDates(t *testing.T) {
+	for name, tc := range map[string]struct {
+		sql  string
+		want error
+	}{
+		"leaf expired":       {"UPDATE certificates SET not_after = $2::timestamptz - interval '1 second' WHERE fingerprint_sha256 = $1", inventory.ErrCertificateExpired},
+		"leaf not yet valid": {"UPDATE certificates SET not_before = $2::timestamptz + interval '1 hour' WHERE fingerprint_sha256 = $1", inventory.ErrCertificateNotYetValid},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newBindFixture(t)
+			bind := b.create(b.admin, b.web, b.loc1)
+			v1 := b.versionID(b.web, ver(1))
+			id := b.beginKV(b.operator, bind.ID, v1, false, b.loc1)[0]
+			b.exec("UPDATE kv_certificate_versions SET expires = NULL, not_before = NULL WHERE id = $1", v1)
+			b.exec(tc.sql, pki.Fingerprint(b.webLeaf.Cert), b.h.clock.Now())
+			assert.ErrorIs(t, b.h.svc.KVDeployPrecheck(b.h.ctx, id), tc.want)
+		})
+	}
+}
+
+// N2: releasing websites takes their row locks in id order (the order of every other writer): while the
+// highest one is held by someone else, the call has already locked the lower one.
+func TestUpdateBindingLocationsLocksRemovedWebsitesInIDOrder(t *testing.T) {
+	b := newBindFixture(t)
+	h, ctx := b.h, b.h.ctx
+	bind := b.create(b.admin, b.web, b.loc1, b.loc2, b.loc3)
+	ids := sortedIDs(b.loc1, b.loc2, b.loc3)
+	hold, err := h.db.Owner.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = hold.Rollback(ctx) }()
+	_, err = hold.Exec(ctx, "SELECT 1 FROM certificate_locations WHERE id = $1 FOR NO KEY UPDATE", ids[2])
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.svc.UpdateBindingLocations(ctx, b.admin, bind.ID, bind.Version, []uuid.UUID{ids[1]})
+		done <- err
+	}()
+	var probe error
+	for range 50 {
+		time.Sleep(100 * time.Millisecond)
+		tx, err := h.db.Owner.Begin(ctx)
+		require.NoError(t, err)
+		_, probe = tx.Exec(ctx, "SELECT 1 FROM certificate_locations WHERE id = $1 FOR NO KEY UPDATE NOWAIT", ids[0])
+		_ = tx.Rollback(ctx)
+		if probe != nil {
+			break
+		}
+	}
+	assert.Error(t, probe, "the lowest website is locked while the call waits for the highest")
+	require.NoError(t, hold.Rollback(ctx))
+	require.NoError(t, <-done)
+}
+
+// N3: a secret handed in is audited when the deployment moved on, or is not a vault deployment, as well.
+func TestSecretInHandIsAuditedWhateverTheRefusal(t *testing.T) {
+	b := newBindFixture(t)
+	h, ctx := b.h, b.h.ctx
+	bind := b.create(b.admin, b.web, b.loc1)
+	id := b.beginKV(b.operator, bind.ID, b.versionID(b.web, ver(1)), false, b.loc1)[0]
+	m, err := h.svc.DeploymentMaterial(ctx, id, false)
+	require.NoError(t, err)
+	require.NoError(t, h.svc.StartDeployment(ctx, id, m.SendValues("", 0)))
+	raw, secret := b.fullSecret()
+	_, err = h.svc.KVDeployMaterial(ctx, id, secret)
+	assert.ErrorIs(t, err, inventory.ErrDeploymentState)
+	assert.True(t, allZero(raw))
+	d := h.auditDetails("kv.secret_read")
+	require.Len(t, d, 1)
+	assert.Equal(t, "deployment_state", d[0]["reason"])
+	assert.Equal(t, 1, h.secretReads("failure"))
+	ordinary := b.request(b.admin, b.cert.ID, b.loc5)
+	_, secret = b.fullSecret()
+	_, err = h.svc.KVDeployMaterial(ctx, ordinary, secret)
+	assert.ErrorIs(t, err, inventory.ErrDeploymentState)
+	assert.Equal(t, 2, h.secretReads("failure"))
+	_, secret = b.fullSecret()
+	_, err = h.svc.KVDeployMaterial(ctx, uuid.New(), secret)
+	assert.ErrorIs(t, err, inventory.ErrNotFound)
+	assert.Equal(t, 2, h.secretReads("failure"), "no such deployment: nothing to audit")
 }

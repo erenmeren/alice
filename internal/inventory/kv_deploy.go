@@ -180,10 +180,18 @@ FROM kv_certificate_versions WHERE id = $1 FOR SHARE`, in.VersionID).Scan(&v.cer
 				return denyWith(&denial, reason, id, err)
 			}
 		}
+		// The confirmation is kept unless the chain is known to be complete in a row a vault read keeps current:
+		// only a source azure_kv row is rewritten by the next read; a complete uploaded or discovered row with
+		// the same leaf says nothing about what the vault will deliver.
+		var source string
+		if v.certificateRow != nil {
+			if err := tx.QueryRow(ctx, "SELECT source FROM certificates WHERE id = $1", *v.certificateRow).Scan(&source); err != nil {
+				return fmt.Errorf("inventory: read the leaf's source: %w", err)
+			}
+		}
+		knownComplete := leaf.chainComplete && source == "azure_kv"
 		src := deploySource{Trigger: "manual", BindingID: &in.BindingID, KVVersionID: &in.VersionID, Version: v.version,
-			// The confirmation is kept only while the chain is not known to be complete (as Phase 4 does): the
-			// leaf's row holds the chain of the last secret read, or the leaf alone before the first one.
-			Confirmed: in.ConfirmIncompleteChain && a.Role == rbac.Admin && !leaf.chainComplete}
+			Confirmed: in.ConfirmIncompleteChain && a.Role == rbac.Admin && !knownComplete}
 		for _, id := range ids {
 			r, err := s.insertDeployment(ctx, tx, a, leaf, locs[id], src, now)
 			if errors.Is(err, ErrDeploymentInProgress) {
