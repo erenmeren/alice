@@ -372,3 +372,19 @@ func TestFakeAzureDockerfileReusesTheReleaseBaseImages(t *testing.T) {
 		assert.True(t, release[ref], "%s is not a base image of deploy/Dockerfile", ref)
 	}
 }
+
+// The Phase 6 journey deploys a generated key to the e2e target's deploy account and logs in with it:
+// the account has no password but is not locked ("*" instead of useradd's "!"), so an sshd without
+// PAM accepts a key login too (R37 item 2's form). Its fixture keys are generated at build time and
+// their private halves deleted in the same layer: no key material is committed.
+func TestE2ETargetDeployAccountAcceptsAKeyLogin(t *testing.T) {
+	raw, err := os.ReadFile("../../test/images/e2e-target/Dockerfile")
+	require.NoError(t, err)
+	src := string(raw)
+	add := strings.Index(src, "useradd --uid 1001 --create-home --shell /bin/bash deploy;")
+	unlock := strings.Index(src, "usermod -p '*' deploy;")
+	require.Positive(t, add, "the deploy account is created")
+	assert.Greater(t, unlock, add, "the deploy account is unlocked right after it is created")
+	assert.NotContains(t, src, "PRIVATE "+"KEY", "no key material in the Dockerfile")
+	assert.Contains(t, src, `rm -rf "$tmp"`, "the fixture keys' private halves are deleted in the layer that made them")
+}

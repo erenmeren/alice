@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -274,4 +276,145 @@ func TestE2EResetCoversEveryTable(t *testing.T) {
 	require.NoError(t, rows.Err())
 	require.Len(t, kept, 2, "only two tables are kept: %v", kept)
 	assert.Contains(t, kept, "master_key_versions")
+}
+
+// overlapFx is a rotation of one location seeded through the legal path of the schema (as the migration
+// tests do): a target, a generated old key on it, its policy, and a run created with the policy's overlap.
+type overlapFx struct {
+	s                   *e2eStack
+	target, policy, run uuid.UUID
+	oldKey, newKey, loc uuid.UUID
+	oldLoc              uuid.UUID
+	t0                  time.Time
+}
+
+func (f *overlapFx) exec(sql string, args ...any) error {
+	_, err := f.s.d.App.Exec(context.Background(), sql, args...)
+	return err
+}
+
+func (f *overlapFx) must(sql string, args ...any) {
+	f.s.t.Helper()
+	require.NoError(f.s.t, f.exec(sql, args...))
+}
+
+// seedKey inserts a generated key (managed, with a private key row holding no real key material).
+func (f *overlapFx) seedKey(fp string, from *uuid.UUID) uuid.UUID {
+	f.s.t.Helper()
+	pk, key := uuid.New(), uuid.New()
+	f.must(`INSERT INTO managed_private_keys (id, owner_type, algorithm, bits, public_key_sha256, ciphertext, nonce, wrapped_dek, key_version, created_at)
+VALUES ($1, 'ssh_key', 'ed25519', 256, repeat('a', 64), '\x01', decode(repeat('00', 12), 'hex'), '\x02', 1, $2)`, pk, f.t0)
+	f.must(`INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, bits, public_key, managed, private_key_id, rotated_from, first_seen_at, created_at)
+VALUES ($1, $2, 'ssh-ed25519', 256, 'ssh-ed25519 AAAA', true, $3, $4, $5, $5)`, key, fp, pk, from, f.t0)
+	return key
+}
+
+func (f *overlapFx) keyLocation(key uuid.UUID) uuid.UUID {
+	f.s.t.Helper()
+	id := uuid.New()
+	f.must(`INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, first_seen_at, last_seen_at)
+VALUES ($1, $2, $3, 'deploy', '/home/deploy/.ssh/authorized_keys', 1, $4, $4)`, id, key, f.target, f.t0)
+	return id
+}
+
+func newOverlapFx(t *testing.T) *overlapFx {
+	t.Helper()
+	s := newE2EStack(t)
+	f := &overlapFx{s: s, t0: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}
+	ctx := context.Background()
+	require.NoError(t, s.d.App.QueryRow(ctx, `INSERT INTO targets (id, name, type, config, credential_id, status, created_at, updated_at)
+SELECT gen_random_uuid(), 'web-01', 'linux', jsonb_build_object('host', 'web-01.example.test', 'port', 22, 'username', 'alice-svc'), id,
+       'pending_host_key', now(), now() FROM credentials WHERE purpose = 'platform_ssh' RETURNING id`).Scan(&f.target))
+	f.oldKey = f.seedKey("SHA256:"+strings.Repeat("O", 43), nil)
+	f.oldLoc = f.keyLocation(f.oldKey)
+	f.policy = uuid.New()
+	f.must(`INSERT INTO rotation_policies (id, ssh_key_id, name, interval_days, created_at, updated_at) VALUES ($1, $2, 'p', 90, $3, $3)`,
+		f.policy, f.oldKey, f.t0)
+	return f
+}
+
+// createRun inserts the run as the planner does: its overlap is the policy's at that moment.
+func (f *overlapFx) createRun() {
+	f.s.t.Helper()
+	f.run = uuid.New()
+	f.must(`INSERT INTO rotations (id, policy_id, old_ssh_key_id, trigger, status, plan, plan_digest, new_key_type, overlap_minutes, planned_for,
+    notified_at, created_at, updated_at)
+SELECT $1, p.id, p.ssh_key_id, 'manual', 'dry_run_notified', '{}', repeat('0', 64), 'ed25519', p.overlap_minutes, $3, $3, $3, $3
+FROM rotation_policies p WHERE p.id = $2`, f.run, f.policy, f.t0)
+	f.loc = uuid.New()
+	f.must(`INSERT INTO rotation_locations (id, rotation_id, n, old_location_id, target_id, os_user, file_path, state, updated_at)
+VALUES ($1, $2, 1, $3, $4, 'deploy', '/home/deploy/.ssh/authorized_keys', 'planned', $5)`, f.loc, f.run, f.oldLoc, f.target, f.t0)
+}
+
+func (f *overlapFx) locSet(set string, args ...any) error {
+	return f.exec("UPDATE rotation_locations SET "+set+" WHERE id = $1", append([]any{f.loc}, args...)...)
+}
+
+func pgState(err error) string {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) {
+		return pg.Code
+	}
+	return ""
+}
+
+func pgConstraint(err error) string {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) {
+		return pg.ConstraintName
+	}
+	return ""
+}
+
+// POST /test/rotation/overlap writes the policy's overlap (and its version) on the real schema; a deleted
+// or unknown policy is 404 and keeps its value.
+func TestRotationOverlapEndpointSetsThePolicy(t *testing.T) {
+	f := newOverlapFx(t)
+	rec := f.s.post("/test/rotation/overlap", `{"policy_id":"`+f.policy.String()+`","minutes":1}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"overlap_minutes":1}`, rec.Body.String())
+	assert.Equal(t, 1, f.s.count("SELECT overlap_minutes FROM rotation_policies WHERE id = '"+f.policy.String()+"'"))
+	assert.Equal(t, 2, f.s.count("SELECT version FROM rotation_policies WHERE id = '"+f.policy.String()+"'"), "an edit with the old ETag is refused")
+
+	// The overlap of a run is the policy's when the run was created; the endpoint never touches a run.
+	f.createRun()
+	require.Equal(t, http.StatusOK, f.s.post("/test/rotation/overlap", `{"policy_id":"`+f.policy.String()+`","minutes":30}`).Code)
+	assert.Equal(t, 1, f.s.count("SELECT overlap_minutes FROM rotations WHERE id = '"+f.run.String()+"'"))
+
+	assert.Equal(t, http.StatusNotFound, f.s.post("/test/rotation/overlap", `{"policy_id":"`+uuid.NewString()+`","minutes":1}`).Code)
+	f.must("UPDATE rotations SET status = 'cancelled', finished_at = $2 WHERE id = $1", f.run, f.t0)
+	f.must("UPDATE rotation_policies SET deleted_at = $2 WHERE id = $1", f.policy, f.t0)
+	assert.Equal(t, http.StatusNotFound, f.s.post("/test/rotation/overlap", `{"policy_id":"`+f.policy.String()+`","minutes":5}`).Code)
+	assert.Equal(t, 30, f.s.count("SELECT overlap_minutes FROM rotation_policies WHERE id = '"+f.policy.String()+"'"))
+}
+
+// A zero overlap shortens the wait and nothing else: with the policy's overlap set to 0 through the test
+// endpoint, the run goes from the verification straight to removing_old, and the database still refuses
+// to send the old key's removal without a login with the new key strictly after the verification and at
+// most 15 minutes before the send (the old-key rule holds whatever the endpoint wrote).
+func TestZeroOverlapStillNeedsTheRecheck(t *testing.T) {
+	f := newOverlapFx(t)
+	require.Equal(t, http.StatusOK, f.s.post("/test/rotation/overlap", `{"policy_id":"`+f.policy.String()+`","minutes":0}`).Code)
+	f.createRun()
+	assert.Equal(t, 0, f.s.count("SELECT overlap_minutes FROM rotations WHERE id = '"+f.run.String()+"'"))
+
+	f.newKey = f.seedKey("SHA256:"+strings.Repeat("N", 43), &f.oldKey)
+	f.must("UPDATE rotations SET status = 'adding_new', new_ssh_key_id = $2, started_at = $3 WHERE id = $1", f.run, f.newKey, f.t0)
+	require.NoError(t, f.locSet("state = 'adding', add_op_id = gen_random_uuid(), add_sent_at = $2", f.t0))
+	newLoc := f.keyLocation(f.newKey)
+	require.NoError(t, f.locSet("state = 'added', added_line_no = 2, new_location_id = $2", newLoc))
+	require.NoError(t, f.locSet("state = 'verified', verified_at = $2", f.t0))
+	f.must("UPDATE rotations SET status = 'overlap', verified_at = $2, overlap_until = $2 WHERE id = $1", f.run, f.t0)
+	f.must("UPDATE rotations SET status = 'removing_old', removal_allowed = true WHERE id = $1", f.run)
+
+	op, sent := uuid.New(), f.t0.Add(time.Minute)
+	assert.Equal(t, "Z1011", pgState(f.locSet(`state = 'removing', remove_op_id = $2, remove_verified_at = verified_at, remove_sent_at = $3`, op, sent)),
+		"no re-check: the verification is not the login a removal relies on")
+	assert.Equal(t, "Z1011", pgState(f.locSet(`state = 'removing', remove_op_id = $2, remove_verified_at = reverified_at, remove_sent_at = $3`, op, sent)),
+		"no re-check at all")
+	require.NoError(t, f.locSet("reverified_at = $2", f.t0.Add(time.Minute)))
+	assert.Equal(t, "rotation_locations_removal_fresh", pgConstraint(f.locSet(`state = 'removing', remove_op_id = $2, remove_verified_at = reverified_at, remove_sent_at = $3`,
+		op, f.t0.Add(17*time.Minute))), "a re-check older than 15 minutes is not fresh")
+	require.NoError(t, f.locSet(`state = 'removing', remove_op_id = $2, remove_verified_at = reverified_at, remove_sent_at = $3`, op, f.t0.Add(2*time.Minute)),
+		"a fresh re-check allows the removal")
 }

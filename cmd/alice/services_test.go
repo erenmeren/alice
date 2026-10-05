@@ -215,3 +215,13 @@ func TestReleaseSchedulesKeyVaultWorkEveryMinute(t *testing.T) {
 	assert.Equal(t, time.Minute, kvScheduleEvery)
 	assert.Equal(t, time.Minute, kvAutoDeployEvery)
 }
+
+// The release build plans due rotations and sweeps the live runs every minute (contract C1: the sweep
+// advances runs and checks the 15-minute re-check bound, so a coarser tick would delay a removal past
+// its re-check), and destroys retired private keys hourly (that task also reconciles ended deploys:
+// the S3 wait is minutes, so an hourly pass is timely).
+func TestReleaseSchedulesRotationWork(t *testing.T) {
+	assert.Equal(t, time.Minute, rotationPlanEvery)
+	assert.Equal(t, time.Minute, rotationSweepEvery)
+	assert.Equal(t, time.Hour, destroyRetiredEvery)
+}

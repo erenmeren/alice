@@ -92,7 +92,7 @@ build: web helper ## Build the alice binary with the embedded UI (and the helper
 
 # Release symbol guard: the release build (no tags) links no e2e-only code. The e2e build is the
 # positive control: if it lacks the symbols, the names here are stale and the guard proves nothing.
-E2E_SYMBOLS := main\.(damageLicenseFile|tamperNewestLicenseFile|resetInstall|e2eClock|e2eMailbox|drainJobs|runWithinBudget|drainMu|errDrainBudget|runScheduledTask|scheduled)$$
+E2E_SYMBOLS := main\.(damageLicenseFile|tamperNewestLicenseFile|resetInstall|e2eClock|e2eMailbox|drainJobs|runWithinBudget|drainMu|errDrainBudget|runScheduledTask|scheduled|serveRotationOverlap|setPolicyOverlap)$$
 
 # Test-only data a release binary must not hold (AUD-23): the label the test license signing key is
 # derived from (testKeyLabel in internal/license/keys_testlicense.go) and a route only the e2e build

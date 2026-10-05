@@ -6,6 +6,8 @@
 # test CA and certificates are created when the container starts (alice-e2e-start), so no private
 # key is in any image layer. The container has no systemd: /usr/bin/systemctl is a test shim and
 # /usr/sbin/nginx a pass-through wrapper with fault injection for "nginx -t" (see both files).
+# The deploy account has no password but is not locked ("*", not useradd's "!"), so the Phase 6
+# journey's key login (a key Alice generated and deployed there) works with or without PAM.
 
 FROM golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS helper
 WORKDIR /src
@@ -27,6 +29,7 @@ RUN apt-get update \
  && sed -i 's/^session\s\+required\s\+pam_loginuid.so/session optional pam_loginuid.so/' /etc/pam.d/sshd
 RUN set -eu; \
     useradd --uid 1001 --create-home --shell /bin/bash deploy; \
+    usermod -p '*' deploy; \
     install -d -m 0700 -o deploy -g deploy /home/deploy/.ssh; \
     install -d -m 0700 /root/.ssh; \
     tmp="$(mktemp -d)"; \

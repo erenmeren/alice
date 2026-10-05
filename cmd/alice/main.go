@@ -436,9 +436,19 @@ func newAPIDeps(cfg config.Config, svc *services, health api.HealthChecker, cata
 		Inventory:      svc.inventory,
 		Jobs:           svc.queue,
 		Providers:      svc.registry,
+		SSHKeys:        sshKeysAPI(svc),
 		TrustedProxies: cfg.TrustedProxies,
 		TestHandler:    testHandler,
 	}
+}
+
+// sshKeysAPI keeps a nil *sshkeys.Service a nil interface: the key detail then answers without the
+// generated-key fields instead of calling a nil service.
+func sshKeysAPI(svc *services) api.SSHKeysService {
+	if svc.sshkeys == nil {
+		return nil
+	}
+	return svc.sshkeys
 }
 
 // waitForScheduler waits for running scheduled tasks to return, at most until ctx ends. It

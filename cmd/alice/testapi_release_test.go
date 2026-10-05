@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -41,6 +42,7 @@ func TestReleaseServerAnswersTestPathsWithJSON404(t *testing.T) {
 		httptest.NewRequest(http.MethodGet, "/test/clock", nil),
 		httptest.NewRequest(http.MethodPost, "/test/reset", nil),
 		httptest.NewRequest(http.MethodPost, "/test/setup-token", nil),
+		httptest.NewRequest(http.MethodPost, "/test/rotation/overlap", strings.NewReader(`{"policy_id":"00000000-0000-0000-0000-000000000001","minutes":1}`)),
 	} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -65,4 +67,12 @@ func TestReleaseAzureRootsAreTheSystemRoots(t *testing.T) {
 	pool, err := azureRoots()
 	require.NoError(t, err)
 	assert.Nil(t, pool, "a nil pool means the system roots")
+}
+
+// The release build has no rotation test endpoint: the e2e-only POST /test/rotation/overlap lives in a
+// file that requires the e2e tag (its handler symbol is in E2E_SYMBOLS, so make release-symcheck fails
+// if a release binary ever links it), and the release test handler is nil, so the API answers the
+// path with its JSON 404 (TestReleaseServerAnswersTestPathsWithJSON404).
+func TestReleaseHasNoRotationTestEndpoint(t *testing.T) {
+	assert.Nil(t, testHandler(testDeps{}))
 }

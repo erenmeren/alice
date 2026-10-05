@@ -19,7 +19,9 @@ import (
 	"alice/internal/platform/clock"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
+	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/nginx"
+	"alice/internal/sshkeys"
 )
 
 // wiringServices is a services value whose fields are non-nil placeholders: the wiring functions
@@ -31,7 +33,8 @@ func wiringServices(t *testing.T) *services {
 	reg := providers.NewRegistry()
 	registerProviders(reg, pool, slog.New(slog.DiscardHandler))
 	return &services{license: &license.Service{}, inventory: &inventory.Service{}, queue: &jobs.Queue{},
-		registry: reg, sshPool: pool, auditLog: audit.New(clock.Real{}), audit: &audit.Service{}}
+		registry: reg, sshPool: pool, auditLog: audit.New(clock.Real{}), audit: &audit.Service{},
+		sshkeys: sshkeys.New(sshkeys.Config{HelperBudget: helperproto.HelperBudget})}
 }
 
 // requireEveryFieldSet fails for a zero field of a dependency struct (a nil service, logger or
@@ -66,6 +69,10 @@ func TestJobDepsCarryEveryDependency(t *testing.T) {
 	requireEveryFieldSet(t, deployDeps(svc, clock.Real{}, log), "FirstRecovery")
 	requireEveryFieldSet(t, targetDeps(svc, clock.Real{}, log))
 	requireEveryFieldSet(t, kvDeps(svc, clock.Real{}, log))
+	requireEveryFieldSet(t, sshkeyDeps(svc, clock.Real{}, log))
+	assert.Same(t, svc.sshkeys, sshkeyDeps(svc, clock.Real{}, log).Keys)
+	assert.Same(t, svc.inventory, sshkeyDeps(svc, clock.Real{}, log).Targets)
+	assert.Same(t, svc.registry, sshkeyDeps(svc, clock.Real{}, log).Registry)
 	assert.Same(t, svc.registry, deployDeps(svc, clock.Real{}, log).Registry)
 	assert.Same(t, svc.inventory, deployDeps(svc, clock.Real{}, log).Inventory)
 	assert.Same(t, svc.registry, kvDeps(svc, clock.Real{}, log).Registry)
@@ -87,13 +94,18 @@ func TestServeWiringIsComplete(t *testing.T) {
 		assert.True(t, ok, "provider %s", k)
 	}
 	for _, typ := range []jobs.Type{jobs.TargetTestConnection, jobs.TargetDiscover, jobs.SSHKeyRemove,
-		jobs.CertificateDeploy, jobs.CertificateDeployRecover, jobs.KVTestConnection, jobs.KVPoll, jobs.KVImport} {
+		jobs.CertificateDeploy, jobs.CertificateDeployRecover, jobs.KVTestConnection, jobs.KVPoll, jobs.KVImport,
+		jobs.SSHKeyAdd, jobs.RotationLocation} {
 		assert.True(t, runner.Handles(typ), "the runner handles %s", typ.Name)
 	}
 	for _, typ := range []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.AuditVerify, jobs.MaintenanceCleanup,
-		jobs.DiscoverySchedule, jobs.DeploymentRecoverySweep, jobs.KVSchedule, jobs.KVAutoDeploy} {
+		jobs.DiscoverySchedule, jobs.DeploymentRecoverySweep, jobs.KVSchedule, jobs.KVAutoDeploy,
+		jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired} {
 		assert.True(t, sched.Schedules(typ), "%s is scheduled", typ.Name)
 	}
+	assert.Positive(t, rotationPlanEvery, "the rotation planner has an interval in every build")
+	assert.Positive(t, rotationSweepEvery, "the rotation sweep has an interval in every build")
+	assert.Positive(t, destroyRetiredEvery, "the retired-key task has an interval in every build")
 	assert.Positive(t, sweepEvery, "the sweep has an interval in every build (release: services_test.go; e2e: testapi_e2e_test.go)")
 	assert.Positive(t, kvScheduleEvery, "the poll scheduler has an interval in every build")
 	assert.Positive(t, kvAutoDeployEvery, "the automatic deployment planner has an interval in every build")
@@ -185,4 +197,82 @@ func TestCheckWiringRefusesARegistryWithoutAzureKV(t *testing.T) {
 	assert.Contains(t, err.Error(), "provider azurekv is not registered")
 	assert.NotContains(t, err.Error(), "provider nginx is not registered")
 	assert.Contains(t, shippedProviders, providers.KindAzureKV)
+}
+
+// A runner without the SSH key handlers and a scheduler without the rotation tasks are refused, and
+// every Phase 6 gap is named: a queued sshkey.add or rotation.location job would wait forever, and a
+// run would never be planned, advanced, paused in lock or finished.
+func TestCheckWiringNamesRotationGaps(t *testing.T) {
+	log := slog.New(slog.DiscardHandler)
+	svc := wiringServices(t)
+	runner := jobs.NewRunner(jobs.RunnerConfig{})
+	sched := jobs.NewScheduler(clock.Real{}, svc.license, log,
+		jobs.Task{Type: jobs.NotifySend, Every: time.Minute, Run: func(context.Context) error { return nil }})
+	err := checkWiring(svc.registry, runner, sched)
+	require.Error(t, err)
+	for _, typ := range []string{"sshkey.add", "rotation.location"} {
+		assert.Contains(t, err.Error(), "queue job type "+typ+" has no handler")
+	}
+	for _, typ := range []string{"rotation.plan", "rotation.sweep", "sshkey.destroy_retired"} {
+		assert.Contains(t, err.Error(), "periodic job type "+typ+" is not scheduled")
+	}
+	assert.Contains(t, periodicTypes, jobs.RotationPlan)
+	assert.Contains(t, periodicTypes, jobs.RotationSweep)
+	assert.Contains(t, periodicTypes, jobs.SSHKeyDestroyRetired)
+
+	wired := buildRunner(nil, svc, clock.Real{}, log)
+	assert.True(t, wired.Handles(jobs.SSHKeyAdd))
+	assert.True(t, wired.Handles(jobs.RotationLocation))
+	require.NoError(t, checkWiring(svc.registry, wired, buildScheduler(svc, nil, clock.Real{}, log)))
+}
+
+// The scheduler gates the rotation tasks by their own license class, and the wiring adds no gate of
+// its own: the sweep is ClassAlways, so in lock it still runs and pauses the live runs (L-83..L-88)
+// and still queues their undo jobs; the planner and the retired-key task are read-only work the gate
+// pauses in lock like the discovery scheduler (PlanDue refuses to plan in lock by itself too).
+func TestRotationTasksKeepTheirLicenseClasses(t *testing.T) {
+	assert.Equal(t, license.ClassAlways, jobs.RotationSweep.Class)
+	assert.Equal(t, license.ClassReadOnly, jobs.RotationPlan.Class)
+	assert.Equal(t, license.ClassReadOnly, jobs.SSHKeyDestroyRetired.Class)
+	assert.Equal(t, sshkeys.TaskPlan, jobs.RotationPlan.Name)
+	assert.Equal(t, sshkeys.TaskSweep, jobs.RotationSweep.Name)
+	assert.Equal(t, sshkeys.TaskDestroyRetired, jobs.SSHKeyDestroyRetired.Name)
+}
+
+// The SSH key service is built with the helper's budget (the S3 wait before an undo after an add without
+// a definite answer is that budget plus 30 s; sshkeys.New panics without it) and with no randomness of
+// the caller's: a nil Rand is crypto/rand, so a generated key never depends on a reader a test or a
+// caller could supply.
+func TestSSHKeysConfigIsTheProductionOne(t *testing.T) {
+	svc := wiringServices(t)
+	log := slog.New(slog.DiscardHandler)
+	cfg := sshkeysConfig(nil, nil, svc.auditLog, clock.Real{}, svc.license, svc.inventory, svc.queue, log)
+	assert.Equal(t, helperproto.HelperBudget, cfg.HelperBudget)
+	assert.Nil(t, cfg.Rand, "production key generation takes no caller-supplied reader")
+	assert.Same(t, svc.license, cfg.License)
+	assert.Same(t, svc.inventory, cfg.Inventory)
+	assert.Same(t, svc.queue, cfg.Jobs)
+	assert.Same(t, svc.auditLog, cfg.Audit)
+	assert.NotNil(t, cfg.Notifier, "rotation previews and results are mailed to the Administrators")
+	assert.NotNil(t, cfg.Clock)
+	assert.NotNil(t, cfg.Log)
+	built := sshkeys.New(cfg)
+	assert.Equal(t, helperproto.HelperBudget+30*time.Second, built.UndoWait())
+	assert.Panics(t, func() { cfg.HelperBudget = 0; sshkeys.New(cfg) }, "the service refuses to start without the budget")
+}
+
+// A nil *sshkeys.Service or *inventory.Service must stay a nil interface, so sshkeyjobs.Register
+// refuses it and serve never starts without the SSH key handlers' dependencies.
+func TestSSHKeyDepsKeepNilServicesNilInterfaces(t *testing.T) {
+	svc := wiringServices(t)
+	svc.sshkeys = nil
+	svc.inventory = nil
+	deps := sshkeyDeps(svc, clock.Real{}, slog.New(slog.DiscardHandler))
+	assert.Nil(t, deps.Keys)
+	assert.Nil(t, deps.Targets)
+
+	noKeys := wiringServices(t)
+	noKeys.sshkeys = nil
+	assert.Panics(t, func() { buildRunner(nil, noKeys, clock.Real{}, slog.New(slog.DiscardHandler)) },
+		"sshkeyjobs.Register refuses a runner without the SSH key service")
 }

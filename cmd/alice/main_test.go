@@ -28,6 +28,7 @@ import (
 	"alice/internal/platform/db"
 	"alice/internal/providers"
 	"alice/internal/setup"
+	"alice/internal/sshkeys"
 )
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
@@ -89,7 +90,7 @@ func TestDBStartupErrorMentionsWaitOnlyForUnreachable(t *testing.T) {
 // Providers would answer every Phase 3 route with a 500.
 func TestAPIDepsCarryEveryService(t *testing.T) {
 	svc := &services{auth: &auth.Service{}, setup: &setup.Service{}, audit: &audit.Service{}, license: &license.Service{},
-		inventory: &inventory.Service{}, queue: &jobs.Queue{}, registry: providers.NewRegistry()}
+		inventory: &inventory.Service{}, queue: &jobs.Queue{}, registry: providers.NewRegistry(), sshkeys: &sshkeys.Service{}}
 	d := newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil)
 	assert.Same(t, svc.license, d.License)
 	assert.Same(t, svc.setup, d.Setup)
@@ -98,6 +99,10 @@ func TestAPIDepsCarryEveryService(t *testing.T) {
 	assert.Same(t, svc.inventory, d.Inventory)
 	assert.Same(t, svc.queue, d.Jobs)
 	assert.Same(t, svc.registry, d.Providers)
+	assert.Same(t, svc.sshkeys, d.SSHKeys)
+	svc.sshkeys = nil
+	assert.Nil(t, newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil).SSHKeys,
+		"a nil service stays a nil interface (the key detail then omits the generated-key fields)")
 	assert.NotNil(t, d.Clock)
 	assert.NotNil(t, d.Log)
 }

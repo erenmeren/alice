@@ -19,6 +19,7 @@ import (
 	"alice/internal/jobs"
 	"alice/internal/jobs/deployjobs"
 	"alice/internal/jobs/kvjobs"
+	"alice/internal/jobs/sshkeyjobs"
 	"alice/internal/jobs/targetjobs"
 	"alice/internal/license"
 	"alice/internal/notify"
@@ -26,8 +27,10 @@ import (
 	"alice/internal/platform/config"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
+	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/secrets"
 	"alice/internal/setup"
+	"alice/internal/sshkeys"
 	"alice/internal/version"
 )
 
@@ -58,6 +61,7 @@ type services struct {
 	inventory *inventory.Service
 	registry  *providers.Registry
 	sshPool   *linuxssh.Pool
+	sshkeys   *sshkeys.Service // generated keys, their deploy, download and rotation (Phase 6)
 }
 
 // buildServices loads (or, on a brand-new database, creates) the master key and wires the
@@ -131,7 +135,30 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		inventory: inv,
 		registry:  registry,
 		sshPool:   sshPool,
+		sshkeys:   sshkeys.New(sshkeysConfig(pool, keyring, auditLog, clk, lic, inv, queue, log)),
 	}, nil
+}
+
+// sshkeysConfig is the SSH key module's configuration (TestSSHKeysConfigIsTheProductionOne).
+// HelperBudget is the helper's own budget (helperproto.HelperBudget): an undo after an add without a
+// definite answer waits that long plus 30 s after the send (S3); sshkeys may not import the helper
+// protocol, so the composition root hands it over, and sshkeys.New panics without it. Rand stays nil:
+// the module then draws Ed25519 seeds from crypto/rand (RSA and ECDSA always use the standard
+// library's randomness), so no reader of a caller's ever reaches key generation.
+func sshkeysConfig(pool *pgxpool.Pool, keyring *secrets.Keyring, auditLog *audit.Log, clk clock.Clock, lic *license.Service,
+	inv *inventory.Service, queue *jobs.Queue, log *slog.Logger) sshkeys.Config {
+	return sshkeys.Config{
+		Pool:         pool,
+		Keyring:      keyring,
+		Audit:        auditLog,
+		Clock:        clk,
+		License:      lic,
+		Inventory:    inv,
+		Jobs:         queue,
+		Notifier:     notify.AdminNotifier{Clock: clk},
+		Log:          log,
+		HelperBudget: helperproto.HelperBudget,
+	}
 }
 
 // jobRetention is how long finished jobs are kept before maintenance.cleanup prunes them (§8.2).
@@ -139,16 +166,32 @@ const jobRetention = 90 * 24 * time.Hour
 
 // buildRunner builds the job workers with every queue handler: the Phase 3 target jobs (spec
 // §8.1–§8.8), the Phase 4 certificate deployment and its recovery (§12.6, §8.8) and the Phase 5 Key
-// Vault jobs (access check, poll, import; §11). Every claim passes the license gate; a job that runs
-// out of attempts or fails its integrity check emails the Administrators. deployjobs.Register and
-// kvjobs.Register panic on a missing dependency, so a build that lacks one never starts.
+// Vault jobs (access check, poll, import; §11) and the Phase 6 SSH key jobs (sshkey.add: deploy with a
+// test login; rotation.location: one location of a rotation run). Every claim passes the license gate;
+// a job that runs out of attempts or fails its integrity check emails the Administrators.
+// deployjobs.Register, kvjobs.Register and sshkeyjobs.Register panic on a missing dependency, so a
+// build that lacks one never starts.
 func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.Logger) *jobs.Runner {
 	runner := jobs.NewRunner(jobs.RunnerConfig{Pool: pool, Queue: svc.queue, Gate: svc.license, Audit: svc.auditLog,
 		Clock: clk, Log: log, Notifier: notify.AdminNotifier{Clock: clk}, ShutdownGrace: jobsShutdownGrace})
 	targetjobs.Register(runner, targetDeps(svc, clk, log))
 	deployjobs.Register(runner, deployDeps(svc, clk, log))
 	kvjobs.Register(runner, kvDeps(svc, clk, log))
+	sshkeyjobs.Register(runner, sshkeyDeps(svc, clk, log))
 	return runner
+}
+
+// sshkeyDeps are the dependencies of the SSH key jobs. The S3 wait comes from the service
+// (Keys.UndoWait, built on Config.HelperBudget), so the handlers take no budget of their own.
+func sshkeyDeps(svc *services, clk clock.Clock, log *slog.Logger) sshkeyjobs.Deps {
+	d := sshkeyjobs.Deps{Registry: svc.registry, Clock: clk, Log: log}
+	if svc.sshkeys != nil { // a nil *sshkeys.Service must stay a nil interface, so Register refuses it
+		d.Keys = svc.sshkeys
+	}
+	if svc.inventory != nil {
+		d.Targets = svc.inventory
+	}
+	return d
 }
 
 // targetDeps are the dependencies of the Phase 3 target jobs (TestJobDepsCarryEveryDependency).
@@ -191,8 +234,14 @@ func kvDeps(svc *services, clk clock.Clock, log *slog.Logger) kvjobs.Deps {
 // minute; the e2e build never ticks it: tests run it with POST /test/scheduler/run). The Key Vault
 // tasks queue the polls that are due (kv.schedule) and plan the deployments of renewed vault versions
 // (kv.auto_deploy) every kvScheduleEvery and kvAutoDeployEvery (a minute; the e2e build never ticks
-// them); both are ReadOnly work, so the gate pauses them in lock like the discovery scheduler. The e2e
-// tests use the same tasks.
+// them); both are ReadOnly work, so the gate pauses them in lock like the discovery scheduler. The SSH
+// key rotation has three tasks (contract C1): rotation.plan (ReadOnly, every rotationPlanEvery) creates
+// the previewed runs whose notice is due; rotation.sweep (ClassAlways, every rotationSweepEvery) advances
+// every live run, pauses it in lock (L-83..L-88), sends the renewal notice and re-queues location jobs,
+// so it must run in lock and gets no gate here beyond the scheduler's own; sshkey.destroy_retired
+// (ReadOnly, every destroyRetiredEvery) destroys retired private keys after 30 days, retires unused old
+// keys and reconciles deploys whose job ended without an outcome. The e2e build never ticks the three:
+// tests run them with POST /test/scheduler/run. The e2e tests use the same tasks.
 func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *slog.Logger) *jobs.Scheduler {
 	return jobs.NewScheduler(clk, svc.license, log,
 		// A failed evaluation is retried after 1, 2, 4, 8, then every 10 minutes (AUD-02): the gate refuses changes
@@ -218,6 +267,18 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 		}},
 		kvjobs.ScheduleTask(svc.inventory, kvScheduleEvery, log),
 		kvjobs.AutoDeployTask(svc.inventory, kvAutoDeployEvery, log),
+		jobs.Task{Type: jobs.RotationPlan, Every: rotationPlanEvery, Run: func(ctx context.Context) error {
+			_, err := svc.sshkeys.PlanDue(ctx)
+			return err
+		}},
+		jobs.Task{Type: jobs.RotationSweep, Every: rotationSweepEvery, Run: func(ctx context.Context) error {
+			_, err := svc.sshkeys.Sweep(ctx)
+			return err
+		}},
+		jobs.Task{Type: jobs.SSHKeyDestroyRetired, Every: destroyRetiredEvery, Run: func(ctx context.Context) error {
+			_, err := svc.sshkeys.DestroyRetiredKeys(ctx)
+			return err
+		}},
 	)
 }
 

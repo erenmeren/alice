@@ -120,7 +120,8 @@ func TestE2ETestEndpointsRejectCrossSiteRequests(t *testing.T) {
 		"cross-site fetch":       {"Sec-Fetch-Site", "cross-site"},
 		"same-site other origin": {"Sec-Fetch-Site", "same-site"},
 	} {
-		for _, path := range []string{"/test/clock", "/test/reset", "/test/setup-token", "/test/license/tamper", "/test/jobs/drain"} {
+		for _, path := range []string{"/test/clock", "/test/reset", "/test/setup-token", "/test/license/tamper", "/test/jobs/drain",
+			"/test/rotation/overlap"} {
 			req := httptest.NewRequest(http.MethodPost, "https://alice.test"+path, strings.NewReader(`{"advance_seconds":3600}`))
 			req.Header.Set(hdr[0], hdr[1])
 			rec := httptest.NewRecorder()
@@ -588,4 +589,89 @@ func TestResetSQLCoversPhase6Tables(t *testing.T) {
 		}
 		assert.True(t, inReset, "resetSQL empties %s", name)
 	}
+}
+
+// The rotation tasks never tick on the wall clock in the e2e build either: the journeys run them with
+// POST /test/scheduler/run.
+func TestE2EBuildNeverTicksTheRotationTasks(t *testing.T) {
+	assert.GreaterOrEqual(t, rotationPlanEvery, 50*365*24*time.Hour)
+	assert.GreaterOrEqual(t, rotationSweepEvery, 50*365*24*time.Hour)
+	assert.GreaterOrEqual(t, destroyRetiredEvery, 50*365*24*time.Hour)
+}
+
+// fakeOverlap records the writes of POST /test/rotation/overlap.
+type fakeOverlap struct {
+	known   uuid.UUID
+	err     error
+	calls   int
+	policy  uuid.UUID
+	minutes int
+}
+
+func (f *fakeOverlap) set(_ context.Context, policy uuid.UUID, minutes int) (bool, error) {
+	f.calls++
+	f.policy, f.minutes = policy, minutes
+	if f.err != nil {
+		return false, f.err
+	}
+	return policy == f.known, nil
+}
+
+// POST /test/rotation/overlap sets a policy's overlap in minutes (the journey's one-minute overlap):
+// a strict body, minutes in the schema's range, 404 for an unknown policy, 400 for anything else, and
+// nothing is written for a refused request.
+func TestRotationOverlapEndpoint(t *testing.T) {
+	known := uuid.New()
+	f := &fakeOverlap{known: known}
+	h := rotationOverlapHandler(f.set, slog.New(slog.DiscardHandler))
+
+	rec := postTest(t, h, "/test/rotation/overlap", `{"policy_id":"`+known.String()+`","minutes":1}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"overlap_minutes":1}`, rec.Body.String())
+	assert.Equal(t, known, f.policy)
+	assert.Equal(t, 1, f.minutes)
+
+	for _, m := range []string{"0", "129600"} {
+		rec := postTest(t, h, "/test/rotation/overlap", `{"policy_id":"`+known.String()+`","minutes":`+m+`}`)
+		assert.Equal(t, http.StatusOK, rec.Code, m)
+		assert.JSONEq(t, `{"overlap_minutes":`+m+`}`, rec.Body.String())
+	}
+
+	rec = postTest(t, h, "/test/rotation/overlap", `{"policy_id":"`+uuid.NewString()+`","minutes":1}`)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"error"`)
+
+	calls := f.calls
+	for _, body := range []string{
+		``,
+		`{}`,
+		`not json`,
+		`{"policy_id":"` + known.String() + `"}`,
+		`{"minutes":1}`,
+		`{"policy_id":"not-a-uuid","minutes":1}`,
+		`{"policy_id":"00000000-0000-0000-0000-000000000000","minutes":1}`,
+		`{"policy_id":"` + known.String() + `","minutes":-1}`,
+		`{"policy_id":"` + known.String() + `","minutes":129601}`,
+		`{"policy_id":"` + known.String() + `","minutes":1.5}`,
+		`{"policy_id":"` + known.String() + `","minutes":"1"}`,
+		`{"policy_id":"` + known.String() + `","minutes":1,"rotation_id":"x"}`,
+	} {
+		rec := postTest(t, h, "/test/rotation/overlap", body)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, body)
+		assert.Contains(t, rec.Body.String(), `"error"`, body)
+	}
+	assert.Equal(t, calls, f.calls, "a refused request writes nothing")
+
+	f.err = errors.New("database down")
+	rec = postTest(t, h, "/test/rotation/overlap", `{"policy_id":"`+known.String()+`","minutes":1}`)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "database down")
+}
+
+// The route is served by the e2e test handler (its same-origin guard: TestE2ETestEndpointsRejectCrossSiteRequests)
+// and needs the database.
+func TestRotationOverlapRouteNeedsTheDatabase(t *testing.T) {
+	h := testHandler(testDeps{Log: slog.New(slog.DiscardHandler)})
+	rec := postTest(t, h, "/test/rotation/overlap", `{"policy_id":"`+uuid.NewString()+`","minutes":1}`)
+	assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 }

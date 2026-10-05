@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,7 +23,8 @@ import (
 // Every periodic task of serve runs through RunNow on a real database: the daily audit
 // verification writes its audit row as the system, the hourly cleanup removes expired sessions
 // and finished jobs older than 90 days (and keeps newer ones), and discovery scheduling works
-// with no targets (R37 item 15).
+// with no targets (R37 item 15); the SSH key rotation tasks run on the wired service (nothing to plan
+// or sweep; a key retired 31 days ago loses its private key).
 func TestServeSchedulerTasksRun(t *testing.T) {
 	d := pgtest.New(t)
 	ctx := context.Background()
@@ -52,8 +54,18 @@ func TestServeSchedulerTasksRun(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// A generated key retired 31 days ago: sshkey.destroy_retired destroys its private key (30 days, R41 row 23).
+	_, err = d.Owner.Exec(ctx, `INSERT INTO managed_private_keys (id, owner_type, algorithm, bits, public_key_sha256, ciphertext, nonce, wrapped_dek,
+    key_version, created_at) VALUES ('00000000-0000-0000-0000-0000000000a1', 'ssh_key', 'ed25519', 256, repeat('a', 64), '\x01',
+    decode(repeat('00', 12), 'hex'), '\x02', 1, now() - interval '40 days')`)
+	require.NoError(t, err)
+	_, err = d.Owner.Exec(ctx, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, bits, public_key, managed, private_key_id, first_seen_at,
+    created_at, retired_at) VALUES (gen_random_uuid(), 'SHA256:`+strings.Repeat("R", 43)+`', 'ssh-ed25519', 256, 'ssh-ed25519 AAAA', true,
+    '00000000-0000-0000-0000-0000000000a1', now() - interval '40 days', now() - interval '40 days', now() - interval '31 days')`)
+	require.NoError(t, err)
+
 	for _, task := range []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.AuditVerify, jobs.MaintenanceCleanup, jobs.DiscoverySchedule,
-		jobs.KVSchedule, jobs.KVAutoDeploy} {
+		jobs.DeploymentRecoverySweep, jobs.KVSchedule, jobs.KVAutoDeploy, jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired} {
 		require.NoError(t, sched.RunNow(ctx, task.Name), task.Name)
 	}
 
@@ -61,5 +73,8 @@ func TestServeSchedulerTasksRun(t *testing.T) {
 	assert.Zero(t, countRows(t, d, "SELECT count(*) FROM sessions"), "the expired session was pruned")
 	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM jobs"), "only the job finished more than 90 days ago was pruned")
 	assert.Zero(t, countRows(t, d, "SELECT count(*) FROM jobs WHERE finished_at < '2001-01-01'"))
+	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM managed_private_keys WHERE destroyed_at IS NOT NULL AND ciphertext IS NULL"),
+		"the retired key's private key was destroyed by the wired sshkey.destroy_retired task")
+	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM audit_log WHERE action = 'sshkey.private_key_destroyed'"))
 	assert.Error(t, sched.RunNow(ctx, "unknown.task"), "only the listed tasks exist")
 }

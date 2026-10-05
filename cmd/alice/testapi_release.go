@@ -33,6 +33,17 @@ const (
 	kvAutoDeployEvery = time.Minute
 )
 
+// rotationPlanEvery, rotationSweepEvery and destroyRetiredEvery are the intervals of the SSH key
+// rotation tasks (contract C1: rotation.plan and rotation.sweep every minute, sshkey.destroy_retired
+// every hour). The sweep's minute keeps a removal well inside the 15-minute bound of its re-check
+// (sshkeys.ReverifyFreshness) and the S3 wait (helper budget + 30 s) short; the hourly task reconciles
+// ended deploys whose wait is minutes.
+const (
+	rotationPlanEvery   = time.Minute
+	rotationSweepEvery  = time.Minute
+	destroyRetiredEvery = time.Hour
+)
+
 // azureRoots is the trust of Azure's TLS certificates: nil means the system roots. Only the e2e build
 // trusts anything else (testapi_e2e.go), and a release build reads no file for it.
 func azureRoots() (*x509.CertPool, error) { return nil, nil }

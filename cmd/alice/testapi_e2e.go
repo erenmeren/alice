@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -54,6 +56,16 @@ const sweepEvery = 100 * 365 * 24 * time.Hour
 const (
 	kvScheduleEvery   = 100 * 365 * 24 * time.Hour
 	kvAutoDeployEvery = 100 * 365 * 24 * time.Hour
+)
+
+// rotationPlanEvery, rotationSweepEvery and destroyRetiredEvery are the intervals of the SSH key
+// rotation tasks in the e2e build: in effect never, like the sweep (the demo clock would otherwise
+// plan, advance or finish a run between two Playwright steps). The tasks stay scheduled (checkWiring,
+// RunNow): the journeys run them with POST /test/scheduler/run.
+const (
+	rotationPlanEvery   = 100 * 365 * 24 * time.Hour
+	rotationSweepEvery  = 100 * 365 * 24 * time.Hour
+	destroyRetiredEvery = 100 * 365 * 24 * time.Hour
 )
 
 // azureCAFile is where the fake Azure service (cmd/alice-fakeazure, compose service fakeazure) writes
@@ -399,6 +411,12 @@ func testHandler(d testDeps) http.Handler {
 		}
 		writeTestJSON(w, http.StatusOK, map[string]string{"task": body.Task})
 	})
+	mux.Handle("POST /test/rotation/overlap", rotationOverlapHandler(func(ctx context.Context, policy uuid.UUID, minutes int) (bool, error) {
+		if d.OwnerURL == "" {
+			return false, errNoTestDatabase
+		}
+		return setPolicyOverlap(ctx, d.OwnerURL, policy, minutes)
+	}, d.Log))
 	mux.HandleFunc("/test/", func(w http.ResponseWriter, _ *http.Request) {
 		writeTestJSON(w, http.StatusNotFound, map[string]string{"error": "unknown test endpoint"})
 	})
@@ -576,6 +594,81 @@ func scheduled(s *jobs.Scheduler, name string) bool {
 		}
 	}
 	return false
+}
+
+// maxOverlapMinutes is the largest overlap the schema accepts (rotation_policies.overlap_minutes,
+// 90 days).
+const maxOverlapMinutes = 129600
+
+// errNoTestDatabase: the test handler was built without the owner role's URL.
+var errNoTestDatabase = errors.New("no database")
+
+// overlapWriter sets a policy's overlap; it reports false for a policy that does not exist (or was
+// deleted).
+type overlapWriter func(ctx context.Context, policy uuid.UUID, minutes int) (bool, error)
+
+// rotationOverlapHandler serves POST /test/rotation/overlap {"policy_id": "<uuid>", "minutes": 0..129600}:
+// it sets the policy's overlap in minutes, so a journey can run a rotation whose overlap ends after one
+// minute of demo clock instead of a day (the API takes whole days). It answers {"overlap_minutes": n};
+// 404 for an unknown policy, 400 for any other body. Test-only, so not audited.
+//
+// It changes the policy only: a run's overlap is fixed when the run is created (rotations.overlap_minutes
+// has no update grant and the run guard keeps it), so a run already under way keeps its own, and only a
+// run planned after the call (Preview, Run now) takes the new value. A short or zero overlap shortens the
+// wait and nothing else: whatever the overlap, the old key is removed from a file only after the run
+// reached removing_old with removal_allowed and a login with the new key as that location's user
+// succeeded no more than 15 minutes before the removal is sent. The store checks it (BeginRemove) and the
+// database refuses any other removal regardless (rotation_locations_guard and the
+// rotation_locations_removal_fresh CHECK; TestZeroOverlapStillNeedsTheRecheck).
+func rotationOverlapHandler(set overlapWriter, log *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serveRotationOverlap(w, r, set, log) })
+}
+
+// serveRotationOverlap is the body of rotationOverlapHandler: a function of its own (too large to be
+// inlined), so make release-symcheck finds its symbol (E2E_SYMBOLS) in the e2e build and refuses it in a
+// release build.
+func serveRotationOverlap(w http.ResponseWriter, r *http.Request, set overlapWriter, log *slog.Logger) {
+	var body struct {
+		PolicyID string `json:"policy_id"`
+		Minutes  *int   `json:"minutes"`
+	}
+	if !decodeTest(w, r, &body) {
+		return
+	}
+	policy, err := uuid.Parse(body.PolicyID)
+	if err != nil || policy == uuid.Nil || body.Minutes == nil || *body.Minutes < 0 || *body.Minutes > maxOverlapMinutes {
+		writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "policy_id must be a policy id and minutes a whole number from 0 to 129600"})
+		return
+	}
+	found, err := set(r.Context(), policy, *body.Minutes)
+	switch {
+	case errors.Is(err, errNoTestDatabase):
+		writeTestJSON(w, http.StatusConflict, map[string]string{"error": "no database"})
+	case err != nil:
+		log.Error("test rotation overlap failed", "error_type", fmt.Sprintf("%T", err))
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "the overlap could not be set"})
+	case !found:
+		writeTestJSON(w, http.StatusNotFound, map[string]string{"error": "no such rotation policy"})
+	default:
+		writeTestJSON(w, http.StatusOK, map[string]int{"overlap_minutes": *body.Minutes})
+	}
+}
+
+// setPolicyOverlap writes the overlap of a policy that is not deleted, as the owner role (the test
+// endpoint bypasses the service on purpose), and bumps the policy's version so an edit made with the
+// previous ETag is refused (412) instead of silently undoing it.
+func setPolicyOverlap(ctx context.Context, ownerURL string, policy uuid.UUID, minutes int) (bool, error) {
+	pool, err := pgxpool.New(ctx, ownerURL)
+	if err != nil {
+		return false, err
+	}
+	defer pool.Close()
+	tag, err := pool.Exec(ctx, `UPDATE rotation_policies SET overlap_minutes = $2, version = version + 1, updated_at = $3
+WHERE id = $1 AND deleted_at IS NULL`, policy, minutes, e2eClock.Now().UTC())
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 var (
