@@ -153,17 +153,19 @@ func (s *server) updateBinding(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	if principalFrom(r.Context()).Role == rbac.Admin {
-		cur, err := s.deps.Inventory.Binding(r.Context(), id)
-		if err != nil {
-			s.fail(w, r, err)
-			return
-		}
-		if cur.AutoDeploy && addsLocations(cur, ids) && !s.strictAction(w, r) {
-			return
-		}
+	cur, err := s.deps.Inventory.Binding(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
 	}
-	b, err := s.deps.Inventory.UpdateBindingLocations(r.Context(), s.actor(r), id, version, ids)
+	if cur.Version != version {
+		s.writeError(w, r, ErrPreconditionFailed) // changed since the caller read it: nothing else is judged
+		return
+	}
+	if principalFrom(r.Context()).Role == rbac.Admin && cur.AutoDeploy && addsLocations(cur, ids) && !s.strictAction(w, r) {
+		return
+	}
+	b, err := s.deps.Inventory.UpdateBindingLocationsStrict(r.Context(), s.actor(r), id, version, ids, s.strictSession(r))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -257,18 +259,19 @@ func (s *server) deployBinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	admin := principalFrom(r.Context()).Role == rbac.Admin
-	if admin {
-		held, err := s.versionIsHeld(r, id, version)
-		if err != nil {
-			s.fail(w, r, err)
-			return
-		}
-		if held && !s.strictAction(w, r) {
-			return
-		}
+	// The version must be one of this connection's certificate's versions, for every role: another certificate's
+	// version id is as unknown as a random one (404), and a held one needs the strict session.
+	held, err := s.versionHeld(r, id, version)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if admin && held && !s.strictAction(w, r) {
+		return
 	}
 	got, err := s.deps.Inventory.RequestKVDeployment(r.Context(), s.actor(r), inventory.KVDeployInput{
 		BindingID: id, VersionID: version, LocationIDs: ids, ConfirmIncompleteChain: req.ConfirmIncompleteChain && admin,
+		StrictSession: s.strictSession(r),
 	})
 	if err != nil {
 		s.fail(w, r, err)
@@ -281,9 +284,9 @@ func (s *server) deployBinding(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string][]requestedDeploymentDTO{"deployments": items})
 }
 
-// versionIsHeld reads the binding's certificate and says whether the named version is held. A version that
-// is not there is not held: the inventory refuses the request itself.
-func (s *server) versionIsHeld(r *http.Request, bindingID, version uuid.UUID) (bool, error) {
+// versionHeld reads the binding's certificate and says whether the named version is held; ErrNotFound when
+// the certificate has no such version.
+func (s *server) versionHeld(r *http.Request, bindingID, version uuid.UUID) (bool, error) {
 	b, err := s.deps.Inventory.Binding(r.Context(), bindingID)
 	if err != nil {
 		return false, err
@@ -297,5 +300,5 @@ func (s *server) versionIsHeld(r *http.Request, bindingID, version uuid.UUID) (b
 			return v.Held, nil
 		}
 	}
-	return false, nil
+	return false, inventory.ErrNotFound
 }

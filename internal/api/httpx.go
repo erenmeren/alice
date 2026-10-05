@@ -212,6 +212,16 @@ func isTrusted(a netip.Addr, trusted []netip.Prefix) bool {
 // encoding/json makes to unescape each string value with an escape in it (a PEM's \n line breaks
 // included), the bytes net/http and TLS buffered on the way in, and the copies the service makes.
 func (s *server) decodeExact(w http.ResponseWriter, r *http.Request, dst any, limit int64, keys ...string) bool {
+	return s.decodeExactBody(w, r, dst, limit, false, keys...)
+}
+
+// decodeExactOptional is decodeExact for a body that may be absent: an empty body leaves dst unchanged; any
+// other body must meet decodeExact's rules (keys exactly as documented, each once).
+func (s *server) decodeExactOptional(w http.ResponseWriter, r *http.Request, dst any, limit int64, keys ...string) bool {
+	return s.decodeExactBody(w, r, dst, limit, true, keys...)
+}
+
+func (s *server) decodeExactBody(w http.ResponseWriter, r *http.Request, dst any, limit int64, optional bool, keys ...string) bool {
 	if r.ContentLength > limit {
 		s.writeError(w, r, ErrBodyTooLarge)
 		return false
@@ -225,6 +235,9 @@ func (s *server) decodeExact(w http.ResponseWriter, r *http.Request, dst any, li
 	case err != nil:
 		s.writeError(w, r, ErrBadRequest)
 		return false
+	}
+	if optional && len(bytes.TrimSpace(buf)) == 0 {
+		return true
 	}
 	if hasNULEscape(buf) {
 		s.refuseBody(w, r, errUnstorableText) // AUD-13: after the size cap, before the keys and the DTO

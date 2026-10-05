@@ -80,16 +80,18 @@ func TestBindingReadPatchDelete(t *testing.T) {
 
 	var ver int
 	var locs []uuid.UUID
-	inv.UpdateBindingLocationsFn = func(_ context.Context, _ inventory.Actor, _ uuid.UUID, v int, l []uuid.UUID) (inventory.Binding, error) {
-		ver, locs = v, l
+	var gotStrict bool
+	inv.UpdateBindingLocationsStrictFn = func(_ context.Context, _ inventory.Actor, _ uuid.UUID, v int, l []uuid.UUID, strict bool) (inventory.Binding, error) {
+		ver, locs, gotStrict = v, l, strict
 		return sampleBinding(false), nil
 	}
 	body := `{"location_ids":["` + locationA.String() + `"]}`
 	require.Equal(t, http.StatusOK, callWith(h, http.MethodPatch, path, "operator", body, map[string]string{"If-Match": `"4"`}).Code)
 	assert.Equal(t, 4, ver)
 	assert.Equal(t, []uuid.UUID{locationA}, locs)
+	assert.False(t, gotStrict, "an Operator's session is not strict")
 	assert.Equal(t, http.StatusPreconditionFailed, call(h, http.MethodPatch, path, "operator", body).Code)
-	inv.UpdateBindingLocationsFn = func(context.Context, inventory.Actor, uuid.UUID, int, []uuid.UUID) (inventory.Binding, error) {
+	inv.UpdateBindingLocationsStrictFn = func(context.Context, inventory.Actor, uuid.UUID, int, []uuid.UUID, bool) (inventory.Binding, error) {
 		return inventory.Binding{}, inventory.ErrVersionMismatch
 	}
 	assert.Equal(t, http.StatusPreconditionFailed, callWith(h, http.MethodPatch, path, "operator", body, map[string]string{"If-Match": `"3"`}).Code)
@@ -106,7 +108,7 @@ func TestPatchBindingAddingToAnAutoDeployingBindingIsStrict(t *testing.T) {
 	h, inv, _ := vaultDeps(t)
 	path := "/api/v1/bindings/" + bindingA.String()
 	calls := 0
-	inv.UpdateBindingLocationsFn = func(context.Context, inventory.Actor, uuid.UUID, int, []uuid.UUID) (inventory.Binding, error) {
+	inv.UpdateBindingLocationsStrictFn = func(context.Context, inventory.Actor, uuid.UUID, int, []uuid.UUID, bool) (inventory.Binding, error) {
 		calls++
 		return sampleBinding(true), nil
 	}
@@ -134,13 +136,13 @@ func TestPatchBindingAddingToAnAutoDeployingBindingIsStrict(t *testing.T) {
 		}
 	}
 	// An Operator adding: inventory refuses (and audits) with ErrAdminRequired.
-	inv.UpdateBindingLocationsFn = func(context.Context, inventory.Actor, uuid.UUID, int, []uuid.UUID) (inventory.Binding, error) {
+	inv.UpdateBindingLocationsStrictFn = func(context.Context, inventory.Actor, uuid.UUID, int, []uuid.UUID, bool) (inventory.Binding, error) {
 		return inventory.Binding{}, inventory.ErrAdminRequired
 	}
 	assert.Equal(t, http.StatusForbidden, callWith(h, http.MethodPatch, path, "operator", add, hdr).Code)
 	// A binding that does not deploy automatically: an Operator adds freely.
 	inv.BindingFn = func(context.Context, uuid.UUID) (inventory.Binding, error) { return sampleBinding(false), nil }
-	inv.UpdateBindingLocationsFn = func(context.Context, inventory.Actor, uuid.UUID, int, []uuid.UUID) (inventory.Binding, error) {
+	inv.UpdateBindingLocationsStrictFn = func(context.Context, inventory.Actor, uuid.UUID, int, []uuid.UUID, bool) (inventory.Binding, error) {
 		return sampleBinding(false), nil
 	}
 	assert.Equal(t, http.StatusOK, callWith(h, http.MethodPatch, path, "operator", add, hdr).Code)
@@ -297,4 +299,70 @@ func TestListDeployableLocationsHandler(t *testing.T) {
 	assert.Equal(t, "n", jsonObj(t, rec)["next_cursor"])
 	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodGet, "/api/v1/certificate-locations?unbound=maybe", "auditor", "").Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodGet, "/api/v1/certificate-locations?limit=0", "auditor", "").Code)
+}
+
+// The session strength reaches the inventory on every call (it re-checks inside its transaction: a hold or an
+// automatic switch-on can appear after the API looked), and a step-up sentinel from it is the step-up answer.
+func TestStrictSessionReachesTheInventory(t *testing.T) {
+	h, inv, _ := vaultDeps(t)
+	inv.BindingFn = func(context.Context, uuid.UUID) (inventory.Binding, error) { return sampleBinding(false), nil }
+	var patch []bool
+	inv.UpdateBindingLocationsStrictFn = func(_ context.Context, _ inventory.Actor, _ uuid.UUID, _ int, _ []uuid.UUID, strict bool) (inventory.Binding, error) {
+		patch = append(patch, strict)
+		return sampleBinding(false), nil
+	}
+	body := `{"location_ids":["` + locationA.String() + `"]}`
+	path := "/api/v1/bindings/" + bindingA.String()
+	hdr := map[string]string{"If-Match": `"4"`}
+	for _, id := range []string{"admin", "admin-stepup", "operator", "alice_operate_admin", "alice_operate_operator"} {
+		require.Equal(t, http.StatusOK, callWith(h, http.MethodPatch, path, id, body, hdr).Code, id)
+	}
+	assert.Equal(t, []bool{false, true, false, false, false}, patch, "strict only for an Administrator session with a fresh step-up")
+
+	inv.KVCertificateFn = func(context.Context, uuid.UUID, uuid.UUID) (inventory.KVCertificateDetail, error) {
+		return inventory.KVCertificateDetail{KVCertificate: sampleKVCertificate(), Versions: []inventory.KVVersion{{ID: versionA}}}, nil
+	}
+	var deploy []bool
+	inv.RequestKVDeploymentFn = func(_ context.Context, _ inventory.Actor, in inventory.KVDeployInput) ([]inventory.RequestedDeployment, error) {
+		deploy = append(deploy, in.StrictSession)
+		return []inventory.RequestedDeployment{{ID: importA, JobID: jobID, LocationID: locationA}}, nil
+	}
+	dpath := "/api/v1/bindings/" + bindingA.String() + "/actions/deploy"
+	dbody := `{"version_id":"` + versionA.String() + `"}`
+	for _, id := range []string{"admin", "admin-stepup", "operator", "alice_operate_admin"} {
+		require.Equal(t, http.StatusAccepted, call(h, http.MethodPost, dpath, id, dbody).Code, id)
+	}
+	assert.Equal(t, []bool{false, true, false, false}, deploy)
+
+	// A hold that appeared after the API read: inventory refuses, the answer asks for the step-up.
+	for _, sentinel := range []error{inventory.ErrHeldNeedsStepUp} {
+		inv.RequestKVDeploymentFn = func(context.Context, inventory.Actor, inventory.KVDeployInput) ([]inventory.RequestedDeployment, error) {
+			return nil, sentinel
+		}
+		rec := call(h, http.MethodPost, dpath, "admin", dbody)
+		assert.Equal(t, "auth.stepup_required", decodeErr(t, rec).Error.Reason)
+	}
+	inv.UpdateBindingLocationsStrictFn = func(context.Context, inventory.Actor, uuid.UUID, int, []uuid.UUID, bool) (inventory.Binding, error) {
+		return inventory.Binding{}, inventory.ErrAutoDeployNeedsStepUp
+	}
+	rec := callWith(h, http.MethodPatch, path, "admin", body, hdr)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, "auth.stepup_required", decodeErr(t, rec).Error.Reason)
+}
+
+// PATCH answers 412 when the binding changed since the caller read it, before anything else is judged.
+func TestPatchBindingStaleVersionIs412(t *testing.T) {
+	h, inv, _ := vaultDeps(t)
+	inv.BindingFn = func(context.Context, uuid.UUID) (inventory.Binding, error) { return sampleBinding(true), nil } // version 4
+	called := 0
+	inv.UpdateBindingLocationsStrictFn = func(context.Context, inventory.Actor, uuid.UUID, int, []uuid.UUID, bool) (inventory.Binding, error) {
+		called++
+		return sampleBinding(true), nil
+	}
+	body := `{"location_ids":["` + locationA.String() + `","` + locationB.String() + `"]}`
+	for _, id := range []string{"admin", "admin-stepup", "operator"} {
+		rec := callWith(h, http.MethodPatch, "/api/v1/bindings/"+bindingA.String(), id, body, map[string]string{"If-Match": `"3"`})
+		assert.Equal(t, http.StatusPreconditionFailed, rec.Code, id)
+	}
+	assert.Zero(t, called)
 }

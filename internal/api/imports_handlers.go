@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -67,8 +68,8 @@ func (s *server) importToVault(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"import": importJSON(im), "job_id": a.JobID, "status_url": a.StatusURL})
 }
 
-// listImports lists a vault's imports, newest first. The inventory takes a limit and no cursor yet, so
-// next_cursor is always null (reported as a gap); certificate_id narrows the page.
+// listImports lists a vault's imports, newest first. certificate_id and certificate_name narrow the list in the
+// inventory's query (before the limit) and next_cursor pages it (a cursor belongs to the vault it came from).
 func (s *server) listImports(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathUUID(r, "id")
 	if !ok {
@@ -77,24 +78,25 @@ func (s *server) listImports(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	var v validate.Errors
-	cert := optionalUUID(q.Get("certificate_id"), "certificate_id", &v)
-	limit := pageLimit(q.Get("limit"), &v)
+	f := inventory.ImportFilter{CertificateID: optionalUUID(q.Get("certificate_id"), "certificate_id", &v), CertificateName: q.Get("certificate_name"),
+		Cursor: q.Get("cursor"), Limit: pageLimit(q.Get("limit"), &v)}
+	if len(f.Cursor) > maxCursorBytes {
+		v.Add("cursor", validate.TooLong, map[string]string{"max": strconv.Itoa(maxCursorBytes)})
+	}
 	if err := v.Err(); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	list, err := s.deps.Inventory.ListImports(r.Context(), id, limit)
+	page, err := s.deps.Inventory.ListImportsPage(r.Context(), id, f)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	items := make([]importDTO, 0, len(list))
-	for _, im := range list {
-		if cert == uuid.Nil || im.CertificateID == cert {
-			items = append(items, importJSON(im))
-		}
+	items := make([]importDTO, 0, len(page.Items))
+	for _, im := range page.Items {
+		items = append(items, importJSON(im))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nil})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor(page.NextCursor)})
 }
 
 func (s *server) getImport(w http.ResponseWriter, r *http.Request) {

@@ -503,25 +503,25 @@ type fakeInventory struct {
 	ListDeploymentsFn   func(ctx context.Context, f inventory.DeploymentFilter) (inventory.DeploymentPage, error)
 	DeploymentFn        func(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
 
-	CreateVaultFn             func(ctx context.Context, a inventory.Actor, in inventory.NewVault) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
-	ReplaceVaultCredentialsFn func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, in inventory.VaultCredentialInput) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
-	DeleteVaultFn             func(ctx context.Context, a inventory.Actor, id uuid.UUID, removeBindings bool) error
-	RequestAccessCheckFn      func(ctx context.Context, a inventory.Actor, vaultID, readSecretOf uuid.UUID) (uuid.UUID, error)
-	ListKVCertificatesFn      func(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) (inventory.KVCertificatePage, error)
-	KVCertificateFn           func(ctx context.Context, vault, id uuid.UUID) (inventory.KVCertificateDetail, error)
-	ListKVKeysFn              func(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) ([]inventory.KVKey, string, error)
-	ListKVSecretsFn           func(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) ([]inventory.KVSecret, string, error)
-	ListDeployableLocationsFn func(ctx context.Context, f inventory.LocationFilter) (inventory.DeployableLocationPage, error)
-	CreateBindingFn           func(ctx context.Context, a inventory.Actor, in inventory.BindingInput) (inventory.Binding, error)
-	UpdateBindingLocationsFn  func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, locations []uuid.UUID) (inventory.Binding, error)
-	SetAutoDeployFn           func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, enabled bool) (inventory.Binding, error)
-	DeleteBindingFn           func(ctx context.Context, a inventory.Actor, id uuid.UUID) error
-	BindingFn                 func(ctx context.Context, id uuid.UUID) (inventory.Binding, error)
-	RequestKVDeploymentFn     func(ctx context.Context, a inventory.Actor, in inventory.KVDeployInput) ([]inventory.RequestedDeployment, error)
-	ReleaseVersionFn          func(ctx context.Context, a inventory.Actor, in inventory.ReleaseInput) (inventory.KVVersion, error)
-	RequestImportFn           func(ctx context.Context, a inventory.Actor, in inventory.ImportInput) (inventory.KVImport, error)
-	ImportFn                  func(ctx context.Context, vault, id uuid.UUID) (inventory.KVImport, error)
-	ListImportsFn             func(ctx context.Context, vault uuid.UUID, limit int) ([]inventory.KVImport, error)
+	CreateVaultFn                  func(ctx context.Context, a inventory.Actor, in inventory.NewVault) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
+	ReplaceVaultCredentialsFn      func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, in inventory.VaultCredentialInput) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
+	DeleteVaultFn                  func(ctx context.Context, a inventory.Actor, id uuid.UUID, removeBindings bool) error
+	RequestAccessCheckFn           func(ctx context.Context, a inventory.Actor, vaultID, readSecretOf uuid.UUID) (uuid.UUID, error)
+	ListKVCertificatesFn           func(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) (inventory.KVCertificatePage, error)
+	KVCertificateFn                func(ctx context.Context, vault, id uuid.UUID) (inventory.KVCertificateDetail, error)
+	ListKVKeysFn                   func(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) ([]inventory.KVKey, string, error)
+	ListKVSecretsFn                func(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) ([]inventory.KVSecret, string, error)
+	ListDeployableLocationsFn      func(ctx context.Context, f inventory.LocationFilter) (inventory.DeployableLocationPage, error)
+	CreateBindingFn                func(ctx context.Context, a inventory.Actor, in inventory.BindingInput) (inventory.Binding, error)
+	UpdateBindingLocationsStrictFn func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, locations []uuid.UUID, strict bool) (inventory.Binding, error)
+	SetAutoDeployFn                func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, enabled bool) (inventory.Binding, error)
+	DeleteBindingFn                func(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+	BindingFn                      func(ctx context.Context, id uuid.UUID) (inventory.Binding, error)
+	RequestKVDeploymentFn          func(ctx context.Context, a inventory.Actor, in inventory.KVDeployInput) ([]inventory.RequestedDeployment, error)
+	ReleaseVersionFn               func(ctx context.Context, a inventory.Actor, in inventory.ReleaseInput) (inventory.KVVersion, error)
+	RequestImportFn                func(ctx context.Context, a inventory.Actor, in inventory.ImportInput) (inventory.KVImport, error)
+	ImportFn                       func(ctx context.Context, vault, id uuid.UUID) (inventory.KVImport, error)
+	ListImportsPageFn              func(ctx context.Context, vault uuid.UUID, f inventory.ImportFilter) (inventory.ImportPage, error)
 }
 
 func (f *fakeInventory) ListCertificates(ctx context.Context, fl inventory.CertificateFilter) (inventory.CertificatePage, error) {
@@ -790,9 +790,9 @@ func (f *fakeInventory) CreateBinding(ctx context.Context, a inventory.Actor, in
 	return inventory.Binding{}, errNotConfigured
 }
 
-func (f *fakeInventory) UpdateBindingLocations(ctx context.Context, a inventory.Actor, id uuid.UUID, v int, l []uuid.UUID) (inventory.Binding, error) {
-	if f.UpdateBindingLocationsFn != nil {
-		return f.UpdateBindingLocationsFn(ctx, a, id, v, l)
+func (f *fakeInventory) UpdateBindingLocationsStrict(ctx context.Context, a inventory.Actor, id uuid.UUID, v int, l []uuid.UUID, strict bool) (inventory.Binding, error) {
+	if f.UpdateBindingLocationsStrictFn != nil {
+		return f.UpdateBindingLocationsStrictFn(ctx, a, id, v, l, strict)
 	}
 	return inventory.Binding{}, errNotConfigured
 }
@@ -846,11 +846,11 @@ func (f *fakeInventory) Import(ctx context.Context, vault, id uuid.UUID) (invent
 	return inventory.KVImport{}, errNotConfigured
 }
 
-func (f *fakeInventory) ListImports(ctx context.Context, vault uuid.UUID, limit int) ([]inventory.KVImport, error) {
-	if f.ListImportsFn != nil {
-		return f.ListImportsFn(ctx, vault, limit)
+func (f *fakeInventory) ListImportsPage(ctx context.Context, vault uuid.UUID, fl inventory.ImportFilter) (inventory.ImportPage, error) {
+	if f.ListImportsPageFn != nil {
+		return f.ListImportsPageFn(ctx, vault, fl)
 	}
-	return nil, errNotConfigured
+	return inventory.ImportPage{}, errNotConfigured
 }
 
 // fakeJobs implements JobsService with the same conventions.

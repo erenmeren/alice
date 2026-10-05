@@ -214,6 +214,13 @@ func (s *server) strictAction(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+// strictSession says whether the caller meets credentials.manage right now (an Administrator's browser session
+// with a fresh step-up, not an API token). It is handed to the inventory on every call that has a strict case,
+// which refuses that case itself without it.
+func (s *server) strictSession(r *http.Request) bool {
+	return rbac.Decide(rbac.CredentialsManage, principalFrom(r.Context()).Subject(s.deps.Clock.Now())) == rbac.Allow
+}
+
 // kvFilter reads the query of a vault inventory list: q, expires_before (RFC 3339 or a date), missing, cursor, limit.
 func kvFilter(r *http.Request, v *validate.Errors) inventory.KVFilter {
 	q := r.URL.Query()
@@ -338,7 +345,7 @@ func (s *server) releaseVersion(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ConfirmIncompleteChain bool `json:"confirm_incomplete_chain"`
 	}
-	if !s.decodeOptionalLimit(w, r, &req, maxActionBody) {
+	if !s.decodeExactOptional(w, r, &req, maxActionBody, "confirm_incomplete_chain") {
 		return
 	}
 	got, err := s.deps.Inventory.ReleaseVersion(r.Context(), s.actor(r), inventory.ReleaseInput{

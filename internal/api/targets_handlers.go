@@ -226,7 +226,7 @@ func (s *server) testTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	// A vault's access check may also read one certificate's secret, to prove the role that deploys it.
 	var req accessCheckRequest
-	if !s.decodeOptionalLimit(w, r, &req, maxActionBody) {
+	if !s.decodeExactOptional(w, r, &req, maxActionBody, "read_secret_of") {
 		return
 	}
 	var jobID uuid.UUID
