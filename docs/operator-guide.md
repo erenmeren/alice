@@ -415,8 +415,8 @@ With automatic deployment off, a connected certificate's new version is only ann
 
 **Deploy now** (on the connection, or in a version's row) deploys one version Alice has read, chosen in the dialog,
 to some or all of the connection's websites, also an older version. All websites or none are queued, as for any
-deployment. An operator cannot deploy a held version or a version whose chain Alice knows is incomplete; the dialog
-says so.
+deployment. An operator cannot deploy a held version or a version whose chain Alice knows is incomplete; the version's
+row and the dialog say so.
 
 ### Incomplete chains
 
@@ -576,7 +576,8 @@ interrupted deployments (every minute), and for Key Vaults the queueing of due v
 imports whose task ended (`kv.schedule`, every minute) and the planning of automatic deployments (`kv.auto_deploy`,
 every minute). A vault check (`kv.poll`) runs once, without a retry and without a dead-job email (its failure is
 shown on the vault, and the next check follows the vault's interval); an access check (`kv.test_connection`) runs
-once; an import (`kv.import`) gets up to 3 attempts and is retried only before it was sent. Administrators
+once; an import (`kv.import`) gets up to 3 attempts and is retried only before it was sent, and when another path
+ended its import (the vault was removed) the job ends failed with the import's code, without an email. Administrators
 with an email address get an email when a job stops after its last attempt, when a job was changed in the
 database, and when the daily audit check finds a problem.
 

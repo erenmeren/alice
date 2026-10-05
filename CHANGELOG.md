@@ -40,15 +40,19 @@
   Vaults chapter of `docs/operator-guide.md`, Key Vaults in `docs/admin-guide.md`, `docs/licensing.md` and
   `docs/troubleshooting.md`.
 - Developer targets: `make test-azure` and `make record-azure` (optional, against a real vault, never in `make ci`);
-  the e2e stack runs a fake Azure service (`fakeazure`).
+  the e2e stack runs a fake Azure service (`fakeazure`). `make coverage` enforces floors for
+  `internal/platform/azureid` (100), `internal/providers/azurekv` (98) and `internal/jobs/kvjobs` (100), and raised
+  ones for `internal/api` (94), `internal/certs` (98) and `internal/inventory` (89).
 
 ### Changed
 - A new permission, `credentials.manage` (Administrator with a fresh authenticator code, never an API token), gates
   adding a vault, replacing its credentials, automatic deployment, releasing a held version and importing.
 - Lock mode also stops vault checks, adding vaults, connecting websites, **Deploy now** of vault versions and
   imports; switching automatic deployment off and deleting a connection stay possible.
-- The scrolling part of every table is a keyboard stop with a visible focus ring, and field errors are drawn with a
-  higher contrast.
+- The scrolling part of every table is a keyboard stop (a named group) with a visible focus ring, and field errors
+  are drawn with a higher contrast.
+- "Busy reading other PFX files" (`ALC-CRT-0015`) now says to try again, since a Key Vault deployment can meet it
+  too.
 
 ### Known issues
 - Nothing was tested against real Azure: the fake service follows the public REST reference. Whether `Key Vault

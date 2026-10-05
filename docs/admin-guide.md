@@ -326,7 +326,8 @@ choose **Replace credentials** (a check of the vault or an import shows the gene
 the object ID Alice signs in as, and the metadata of certificates, versions, keys and secrets (names, versions,
 thumbprints, dates, key types, content types, policies). Alice never stores the value of a secret or a certificate's
 private key read from a vault: a deployment reads it right before it changes the server, keeps it in memory and
-clears it afterwards. Every read of a certificate's secret is in the audit log (`kv.secret_read`, with its purpose).
+clears it afterwards. Every read of a certificate's secret is in the audit log (`kv.secret_read`, with its purpose, and for an access
+check the person who asked).
 
 **Check interval.** Each vault is checked every 15 minutes unless an administrator changes **Check every
 (minutes)** on its page (5 to 1440). **Check now** checks at once.
