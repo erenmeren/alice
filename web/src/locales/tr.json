@@ -1849,13 +1849,13 @@
     },
     "lastRun": "Son çalıştırma: {{status}}",
     "lastRunHelp": "Gerçekleşmeyen planlı bir çalıştırmanın nedeni burada görünür.",
-    "openRun": "Güncel çalıştırmayı aç",
+    "openRun": "Şu anki çalıştırmayı aç",
     "openLastRun": "Son çalıştırmayı aç",
     "previewTitle": "Sonraki çalıştırmanın önizlemesi",
     "previewing": "Alice sonraki çalıştırmayı planlıyor.",
     "previewIntro": "Alice bu yerlerde eski anahtarın yanına yeni bir anahtar ekleyecek, çalıştığını denetleyecek, geçiş süresince iki anahtarı da tutacak ve ardından eski anahtarı kaldıracak.",
     "previewEmailed": "Alice bu önizlemeyi yöneticilere e-postayla gönderiyor.",
-    "previewNotEmailed": "Bu anahtarın bir önizlemesi son 10 dakika içinde zaten e-postayla gönderildi; bu önizleme gönderilmedi.",
+    "previewNotEmailed": "Bu önizleme e-postayla gönderilmedi: bu anahtar için son 10 dakika içinde bir e-posta gönderildi ya da e-posta kurulu değil.",
     "previewRefreshed": "Plan siz baktıktan sonra değişti, bu yüzden hiçbir şey başlatılmadı. Aşağıdaki önizleme yenisidir. Denetleyip Şimdi çalıştır'ı yeniden seçin.",
     "nothingToChange": "Hiçbir yer değişmeyeceği için yenilenecek bir şey yok.",
     "col": {
@@ -1888,7 +1888,7 @@
     "finishedAt": "Bitiş: {{date}}",
     "overlapUntil": "İki anahtar da şu zamana kadar çalışır: {{date}}",
     "decisionDue": "{{date}} zamanından önce karar verin; aksi hâlde Alice yenilemeyi geri alır.",
-    "pausedBanner": "Duraklatıldı: lisansın süresi doldu ya da lisans denetlenemedi. Lisans yeniden geçerli olana ve siz Devam et'i seçene kadar Alice bu yenileme için hiçbir anahtar eklemez ya da kaldırmaz.",
+    "pausedBanner": "Duraklatıldı: lisansın süresi doldu ya da lisans denetlenemedi. Lisans yeniden geçerli olana ve siz Devam et'i seçene kadar Alice bu yenileme için yeni anahtar eklemez ve eski anahtarı kaldırmaz.",
     "continue": "Devam et",
     "continueHelp": "Alice kaldığı yerden devam eder. Herhangi bir eski anahtarı kaldırmadan önce yeni anahtarı yeniden dener.",
     "finishNow": "Şimdi bitir",
@@ -1898,7 +1898,7 @@
     "abort": "Durdur ve geri al",
     "abortConfirm": "Yenileme durdurulsun ve Alice'in eklediği yerlerden yeni anahtar kaldırılsın mı? Eski anahtar yerinde kalır.",
     "keptCount": "Eski anahtarın kaldığı yer sayısı: {{count}}",
-    "keptHelp": "Eski anahtar, aşağıda Atlandı, Başlatılmadı, Eski anahtar tutuldu ya da Eski anahtar kaldırılamadı olarak görünen yerlerde kalır. Alice bu yerlerin hepsine yeni anahtarı eklemedi: eski anahtarı bu yerlerden birinden kendiniz kaldırmadan önce yeni anahtarın orada çalıştığından emin olun.",
+    "keptHelp": "Eski anahtar, aşağıda Atlandı, Başlatılmadı, Eski anahtar tutuldu ya da Eski anahtar kaldırılamadı olarak görünen yerlerde kalır. Alice bu yerlerin bazılarına yeni anahtarı hiç eklemedi: eski anahtarı bu yerlerden birinden kendiniz kaldırmadan önce yeni anahtarın orada çalıştığından emin olun.",
     "places": "Yerler",
     "backupAt": "Dosyanın yedeği: {{path}}",
     "steps": "Adımlar",
@@ -1915,7 +1915,8 @@
       "write": "Anahtar dosyası yazıldı",
       "unknown": "Diğer adım",
       "notice_failed": "Lisans yenilemesiyle ilgili e-posta sıraya konamadı",
-      "undo_not_sent": "Yeni anahtarın kaldırılması gönderilmedi: çok fazla deneme yapıldı"
+      "undo_not_sent": "Yeni anahtarın kaldırılması gönderilmedi: çok fazla deneme yapıldı",
+      "retry_returned": "Kaldırma yeniden denemesi geri verildi"
     },
     "stepStatus": {
       "started": "Başladı",
@@ -1970,16 +1971,18 @@
     "everyDay": "Her gün",
     "counts": {
       "total": "Toplam",
-      "verified": "Yeni anahtar çalışıyor",
+      "verified": "Yeni anahtar çalışıyor, eski anahtar yerinde",
       "removed": "Eski anahtar kaldırıldı",
       "skipped": "Atlandı",
-      "kept": "Eski anahtar tutuldu",
+      "kept": "Eski anahtar bir yönetici tarafından tutuldu",
       "failed": "Başarısız",
-      "undone": "Geri alındı",
-      "cancelled": "Başlatılmadı",
+      "undone": "Yeni anahtar yeniden kaldırıldı",
+      "cancelled": "Hiç gönderilmedi ya da gönderilmeden önce reddedildi",
       "in_flight": "Sürüyor",
       "unknown": "Diğer"
     },
-    "countLine": "{{label}}: {{count}}"
+    "countLine": "{{label}}: {{count}}",
+    "addResent_one": "{{count}} kez gönderildi, son gönderim: {{date}}",
+    "addResent_other": "{{count}} kez gönderildi, son gönderim: {{date}}"
   }
 }

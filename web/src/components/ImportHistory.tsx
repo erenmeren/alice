@@ -73,7 +73,11 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
       for (const id of moving.split(',')) {
         listKVImports(id, certificateId, 50, null)
           .then((page) => setRecovered((r) => ({ ...r, [id]: page.items })))
-          .catch(() => undefined);
+          .catch((e: unknown) => {
+            // The follow-up failed: the vault is reported again (and the stale rows leave), never left at "Running".
+            setRecovered((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== id)));
+            setRetryErrors((r) => ({ ...r, [id]: { error: e, at: Date.now() } }));
+          });
       }
     }, 3_000);
     return () => clearTimeout(timer);

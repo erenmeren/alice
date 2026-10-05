@@ -1855,7 +1855,7 @@
     "previewing": "Alice is planning the next run.",
     "previewIntro": "Alice will add a new key next to the old one in these places, check that it works, keep both keys for the overlap, then remove the old key.",
     "previewEmailed": "Alice is emailing this preview to the administrators.",
-    "previewNotEmailed": "A preview of this key was already emailed in the last 10 minutes, so this one was not emailed.",
+    "previewNotEmailed": "This preview was not emailed: an email about this key was sent in the last 10 minutes, or email is not set up.",
     "previewRefreshed": "The plan changed since you looked at it, so nothing was started. The preview below is the new one. Check it, then choose Run now again.",
     "nothingToChange": "No place would change, so there is nothing to rotate.",
     "col": {
@@ -1888,7 +1888,7 @@
     "finishedAt": "Finished {{date}}",
     "overlapUntil": "Both keys work until {{date}}",
     "decisionDue": "Decide before {{date}}, or Alice undoes the rotation.",
-    "pausedBanner": "Paused: the license expired or could not be checked. Alice adds and removes no key for this rotation until the license is valid again and you choose Continue.",
+    "pausedBanner": "Paused: the license expired or could not be checked. Alice adds no new key and removes no old key for this rotation until the license is valid again and you choose Continue.",
     "continue": "Continue",
     "continueHelp": "Alice goes on where it stopped. Before it removes any old key it tests the new key again.",
     "finishNow": "Finish now",
@@ -1898,7 +1898,7 @@
     "abort": "Stop and undo",
     "abortConfirm": "Stop the rotation and remove the new key where Alice added it? The old key stays.",
     "keptCount": "Places where the old key stays: {{count}}",
-    "keptHelp": "The old key stays in the places below shown as Skipped, Not started, Old key kept or Old key not removed. Alice did not add the new key in all of them: before you remove the old key from one of these places yourself, make sure the new key works there.",
+    "keptHelp": "The old key stays in the places below shown as Skipped, Not started, Old key kept or Old key not removed. In some of them Alice never added the new key: before you remove the old key from one of these places yourself, make sure the new key works there.",
     "places": "Places",
     "backupAt": "Backup of the file: {{path}}",
     "steps": "Steps",
@@ -1915,7 +1915,8 @@
       "write": "Wrote the key file",
       "unknown": "Other step",
       "notice_failed": "The email about the license renewal could not be queued",
-      "undo_not_sent": "The removal of the new key was not sent: too many attempts"
+      "undo_not_sent": "The removal of the new key was not sent: too many attempts",
+      "retry_returned": "A removal retry was given back"
     },
     "stepStatus": {
       "started": "Started",
@@ -1970,16 +1971,18 @@
     "everyDay": "Every day",
     "counts": {
       "total": "Total",
-      "verified": "New key works",
+      "verified": "New key works, old key still there",
       "removed": "Old key removed",
       "skipped": "Skipped",
-      "kept": "Old key kept",
+      "kept": "Old key kept by an administrator",
       "failed": "Failed",
-      "undone": "Undone",
-      "cancelled": "Not started",
+      "undone": "New key removed again",
+      "cancelled": "Never sent or refused when about to send",
       "in_flight": "In progress",
       "unknown": "Other"
     },
-    "countLine": "{{label}}: {{count}}"
+    "countLine": "{{label}}: {{count}}",
+    "addResent_one": "Sent {{count}} time, last at {{date}}",
+    "addResent_other": "Sent {{count}} times, last at {{date}}"
   }
 }

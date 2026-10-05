@@ -250,6 +250,7 @@ describe('ImportHistory', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(document.body.textContent).not.toBe(first));
     expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(screen.getByRole('alert')).toHaveTextContent(/firewall/i);
   });
 
   it('reads the imports of a retried vault again while one of them is still running', async () => {
@@ -270,6 +271,30 @@ describe('ImportHistory', () => {
       expect(await screen.findByText('Running')).toBeInTheDocument();
       await vi.advanceTimersByTimeAsync(3100);
       expect(await screen.findByText('Imported')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows the failure again when the follow-up read of a retried vault fails', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let calls = 0;
+      server.use(
+        ...sessionHandlers(sessionFor('operator')),
+        http.get('/api/v1/targets', () => HttpResponse.json({ items: [vaultFixture], next_cursor: null })),
+        http.get('/api/v1/targets/:id/kv/imports', () => {
+          calls++;
+          if (calls === 1) return errorResponse(502, 'ALC-AKV-0001', 'azure.auth_failed');
+          if (calls === 2) return HttpResponse.json({ items: [kvImportFixture({ id: 'i1', name: 'r-name', state: 'running' })], next_cursor: null });
+          return errorResponse(503, 'ALC-AKV-0004', 'azure.firewall');
+        }),
+      );
+      await renderWithAuth(<ImportHistory certificateId="cert-1" />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+      await screen.findByText('Running');
+      await vi.advanceTimersByTimeAsync(3100);
+      expect(await screen.findByText('The import history of Prod vault could not be loaded.')).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

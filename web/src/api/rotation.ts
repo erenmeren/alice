@@ -89,6 +89,9 @@ export interface RunLocation {
   reverified_at: string | null;
   removed_at: string | null;
   new_location_id: string | null;
+  // How often the add was sent again after its answer was lost.
+  add_resend_count: number;
+  add_resent_at: string | null;
 }
 
 export interface RunStep {
@@ -128,7 +131,9 @@ export interface Run {
   // actions_allowed is what the page may offer now; the page never works it out itself.
   actions_allowed: RunAction[];
   // Place counts are on every run; the places and the steps only on the detail (a list item has neither).
-  // The buckets add up to total; the server may add more (undone, cancelled, in_flight...), so any key can arrive.
+  // The buckets add up to total (verified: the new key works and the old key is not removed yet; removed; kept by an
+  // administrator; failed; skipped; undone; cancelled: never sent or refused at send time; in_flight). The server may add
+  // more, so any key can arrive.
   location_counts: Record<string, number>;
   locations?: RunLocation[];
   steps?: RunStep[];
@@ -185,7 +190,7 @@ export const RUN_POLL_MS = 3000;
 // failed refresh (the page keeps what it has).
 export function runPollInterval(run: Run | undefined, error: unknown): number | false {
   if (run && TERMINAL_RUN.has(run.status)) return false;
-  if (error && !run) return false;
   if (error instanceof ApiError && error.retryAfter !== null) return Math.max(RUN_POLL_MS, error.retryAfter * 1000);
+  if (error && !run) return false;
   return error ? 10000 : RUN_POLL_MS;
 }

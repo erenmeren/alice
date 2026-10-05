@@ -74,7 +74,7 @@ describe('RotationRunPage', () => {
     serve(runFixture({ status: 'overlap', paused_license: true, actions_allowed: ['abort'], decision_due_at: '2026-10-20T08:00:00Z', awaiting_decision: true }));
     await open();
     expect(await screen.findByText(/Paused: the license expired or could not be checked/)).toBeInTheDocument();
-    expect(screen.getByText(/Alice adds and removes no key for this rotation/)).toBeInTheDocument();
+    expect(screen.getByText(/Alice adds no new key and removes no old key for this rotation/)).toBeInTheDocument();
     expect(screen.getByText(/You can still stop and undo the rotation: Alice then removes the new key where it added it/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open the license page' })).toHaveAttribute('href', '/license');
     expect(screen.queryByText('Alice is still preparing the email about the license renewal.')).not.toBeInTheDocument();
@@ -102,15 +102,77 @@ describe('RotationRunPage', () => {
     expect(await screen.findByText('Alice could not queue the email about the license renewal.')).toBeInTheDocument();
   });
 
-  it('shows the place counts with a label for every bucket the server sends, unknown ones generically', async () => {
-    serve(runFixture({ location_counts: { total: 5, verified: 2, removed: 1, skipped: 1, kept: 0, failed: 0, undone: 1, brand_new: 3 } as never }));
+  it('labels every place count the way the server defines it, unknown buckets generically', async () => {
+    serve(runFixture({ location_counts: { total: 9, verified: 1, removed: 1, skipped: 1, kept: 1, failed: 1, undone: 1, cancelled: 1, in_flight: 1, brand_new: 3 } }));
     await open();
     const list = await screen.findByTestId('run-counts');
-    expect(within(list).getByText('Total: 5')).toBeInTheDocument();
-    expect(within(list).getByText('New key works: 2')).toBeInTheDocument();
-    expect(within(list).getByText('Undone: 1')).toBeInTheDocument();
-    expect(within(list).getByText('Other: 3')).toBeInTheDocument();
+    for (const text of [
+      'Total: 9',
+      'New key works, old key still there: 1',
+      'Old key removed: 1',
+      'Old key kept by an administrator: 1',
+      'Never sent or refused when about to send: 1',
+      'New key removed again: 1',
+      'In progress: 1',
+      'Other: 3',
+    ])
+      expect(within(list).getByText(text)).toBeInTheDocument();
     expectNoRawKeys(list);
+  });
+
+  it('shows how often an add was sent again and the planner reason of a place refused at send time', async () => {
+    serve(
+      runFixture({
+        locations: [
+          runLocationFixture({ id: 'a', add_resend_count: 2, add_resent_at: '2026-10-06T09:00:00Z' }),
+          runLocationFixture({ id: 'b', n: 2, state: 'cancelled', error: { code: 'ALC-ROT-0024', reason: 'rotation.skipped_at_send' }, skip_reason: 'connection_account_file' }),
+        ],
+      }),
+    );
+    await open();
+    const rows = await screen.findAllByTestId('run-location');
+    expect(within(rows[0]).getByText(/Sent 2 times, last at/)).toBeInTheDocument();
+    expect(within(rows[1]).getByText(/account Alice connects with/)).toBeInTheDocument();
+    expect(within(rows[0]).queryByText(/Sent 0 times/)).not.toBeInTheDocument();
+  });
+
+  it('shows the licence-locked notice state through its catalogue text', async () => {
+    serve({ ...runFixture({ paused_license: true, actions_allowed: ['abort'] }), notice_state: { code: 'ALC-ROT-0011', reason: 'rotation.paused_license' } });
+    await open();
+    expect(await screen.findByText('The rotation is paused because the license has expired or could not be checked.')).toBeInTheDocument();
+  });
+
+  it('offers the stop-and-undo line only when the page shows the button (role-gated)', async () => {
+    serve(runFixture({ paused_license: true, actions_allowed: ['abort'] }), 'operator');
+    await open();
+    await screen.findByText(/Paused: the license expired/);
+    expect(screen.queryByText(/You can still stop and undo/)).not.toBeInTheDocument();
+  });
+
+  it('labels the retry_returned step', async () => {
+    serve(runFixture({ steps: [{ n: 1, location_id: 'rl1', name: 'retry_returned', status: 'skipped', at: '2026-10-06T09:00:00Z', params: {} }] }));
+    await open();
+    const steps = await screen.findByTestId('run-steps');
+    expect(within(steps).queryByText('Other step')).not.toBeInTheDocument();
+    expectNoRawKeys(steps);
+  });
+
+  it('keeps polling a first read that answered 503 with Retry-After, and shows a busy Try again', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let reads = 0;
+      server.use(
+        ...sessionHandlers(sessionFor('admin')),
+        http.get(BASE, () => (++reads === 1 ? HttpResponse.json({ error: { code: 'ALC-NTF-0001', reason: 'notify.queue_failed', message_key: 'errors.notify.queue_failed', message: 'x', request_id: 'r', retryable: true, params: {}, details: [] } }, { status: 503, headers: { 'Retry-After': '5' } }) : HttpResponse.json(runFixture()))),
+      );
+      await open();
+      await screen.findByRole('alert');
+      await vi.advanceTimersByTimeAsync(5100);
+      expect(await screen.findByRole('heading', { name: 'Key rotation', level: 1 })).toBeInTheDocument();
+      expect(reads).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(['operator', 'auditor'] as const)('shows %s the run without any decision button', async (role) => {
@@ -289,7 +351,7 @@ describe('RotationRunPage', () => {
           { n: 3, location_id: 'rl1', name: 'add_answered', status: 'ok', at: '2026-10-06T09:01:00Z', params: {} },
           { n: 4, location_id: 'rl1', name: 'verified', status: 'failed', at: '2026-10-06T09:02:00Z', params: {} },
           { n: 5, location_id: null, name: 'something_new', status: 'ok', at: '2026-10-06T09:03:00Z', params: {} },
-          { n: 6, location_id: 'rl1', name: 'undo_not_sent', status: 'failed', at: '2026-10-06T09:04:00Z', params: {} },
+          { n: 6, location_id: 'rl1', name: 'undo_not_sent', status: 'skipped', at: '2026-10-06T09:04:00Z', params: {} },
           { n: 7, location_id: null, name: 'notice_failed', status: 'failed', at: '2026-10-06T09:05:00Z', params: {} },
         ],
       }),

@@ -389,6 +389,8 @@ export function runLocationFixture(o: Partial<RunLocation> = {}): RunLocation {
     reverified_at: null,
     removed_at: null,
     new_location_id: 'nl1',
+    add_resend_count: 0,
+    add_resent_at: null,
     ...o,
   };
 }
@@ -420,7 +422,7 @@ export function runFixture(o: Partial<Run> = {}): Run {
     skip_count: 0,
     kept_count: 0,
     actions_allowed: [],
-    location_counts: { total: 1, verified: 1, removed: 0, skipped: 0, kept: 0, failed: 0 },
+    location_counts: { total: 1, verified: 1, removed: 0, skipped: 0, kept: 0, failed: 0, undone: 0, cancelled: 0, in_flight: 0 },
     locations: [runLocationFixture()],
     steps: [],
     version: 1,

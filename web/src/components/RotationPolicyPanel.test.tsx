@@ -159,6 +159,14 @@ describe('RotationPolicyPanel', () => {
     expect(within(dialog).getByRole('button', { name: 'Delete policy' })).toBeDisabled();
   });
 
+  it.each(['cancelled', 'completed', 'aborted', 'needs_attention'])('keeps Run now enabled when the open run is already %s', async (status) => {
+    world(policyFixture({ enabled: true, open_rotation_id: RUN_ID }));
+    server.use(http.get('/api/v1/rotation/runs', () => HttpResponse.json({ items: [runFixture({ status })], next_cursor: null })));
+    await panel();
+    await screen.findByRole('table', { name: 'Earlier runs' });
+    expect(screen.getByRole('button', { name: 'Run now' })).toBeEnabled();
+  });
+
   it('deletes a policy with If-Match after a confirmation', async () => {
     world(policyFixture({ version: 3 }));
     let ifMatch: string | null = null;

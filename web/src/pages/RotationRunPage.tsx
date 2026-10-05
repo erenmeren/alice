@@ -59,6 +59,7 @@ function LocationRow({ l }: { l: RunLocation }) {
       <Table.Td>
         <Stack gap={4}>
           {l.skip_reason !== '' && <Text size="xs">{skipText(t, i18n, l.skip_reason)}</Text>}
+          {l.add_resend_count > 0 && l.add_resent_at && <Text size="xs">{t('rotation.addResent', { count: l.add_resend_count, date: formatDateTime(l.add_resent_at, i18n.language) })}</Text>}
           {note !== '' && <Text size="xs">{note}</Text>}
           {l.error && (
             <Text size="xs" style={WRAP}>
@@ -134,7 +135,7 @@ export function RotationRunPage() {
     return (
       <Stack gap="md">
         <ErrorAlert error={query.error} />
-        <Button w="fit-content" variant="default" onClick={() => void query.refetch()}>
+        <Button w="fit-content" variant="default" loading={query.isFetching} onClick={() => void query.refetch()}>
           {t('imports.history.tryAgain')}
         </Button>
       </Stack>
@@ -142,7 +143,6 @@ export function RotationRunPage() {
   const r: Run = query.data as Run;
   const decisions = isAdmin ? r.actions_allowed : [];
   const allowed = new Set(decisions);
-  const offered = new Set(r.actions_allowed);
   const unverifiable = (r.locations ?? []).filter((l) => l.state === 'unverifiable');
   const notice = noticeOf(r);
 
@@ -208,7 +208,7 @@ export function RotationRunPage() {
       {r.paused_license && (
         <Alert color="red" role="alert">
           <Text size="sm">{t('rotation.pausedBanner')}</Text>
-          {offered.has('abort') && <Text size="sm">{t('rotation.licensePaused')}</Text>}
+          {allowed.has('abort') && <Text size="sm">{t('rotation.licensePaused')}</Text>}
           <Anchor component={Link} to="/license" size="sm">
             {t('rotation.openLicense')}
           </Anchor>

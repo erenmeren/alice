@@ -105,7 +105,8 @@ describe('runPollInterval', () => {
     expect(runPollInterval(run('overlap'), busy(1))).toBe(3000);
     expect(runPollInterval(run('overlap'), new ApiError(500, null))).toBe(10000);
   });
-  it('does not poll a run that cannot be read at all', () => {
+  it('does not poll a run that cannot be read at all, but follows a Retry-After on a busy first read', () => {
     expect(runPollInterval(undefined, new ApiError(404, null))).toBe(false);
+    expect(runPollInterval(undefined, new ApiError(503, null, 5))).toBe(5000);
   });
 });

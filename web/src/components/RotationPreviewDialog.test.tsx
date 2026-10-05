@@ -49,7 +49,7 @@ describe('RotationPreviewDialog', () => {
   it('says so when the preview was already emailed', async () => {
     server.use(http.post(PREVIEW, () => HttpResponse.json(previewFixture({ emailed: false }))));
     await open();
-    expect(await screen.findByText('A preview of this key was already emailed in the last 10 minutes, so this one was not emailed.')).toBeInTheDocument();
+    expect(await screen.findByText('This preview was not emailed: an email about this key was sent in the last 10 minutes, or email is not set up.')).toBeInTheDocument();
   });
 
   it('renders skip reasons it has no special knowledge of through the catalogue, and an unknown one generically', async () => {
