@@ -142,6 +142,19 @@ describe('ImportHistory', () => {
     expect(await screen.findByRole('alert')).toBeInTheDocument();
   });
 
+  it('keeps the imports of the vaults that answered when one vault fails (deleted in between, say)', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('operator')),
+      http.get('/api/v1/targets', () => HttpResponse.json({ items: [vaultFixture, vaultWith({ id: 'gone', name: 'Gone vault' })], next_cursor: null })),
+      http.get('/api/v1/targets/:id/kv/imports', ({ params }) =>
+        String(params.id) === 'gone' ? errorResponse(404, 'ALC-SYS-0001', 'system.not_found') : HttpResponse.json({ items: [kvImportFixture({ id: 'i1', name: 'kept-name' })], next_cursor: null }),
+      ),
+    );
+    await renderWithAuth(<ImportHistory certificateId="cert-1" />);
+    expect(await screen.findByTestId('import-row')).toHaveTextContent('kept-name');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('shows hostile names as text', async () => {
     const evil = '<img src=x onerror=alert(1)>';
     setup([vaultWith({ name: evil })], { [VAULT_ID]: [kvImportFixture({ name: 'javascript:alert(1)' })] });

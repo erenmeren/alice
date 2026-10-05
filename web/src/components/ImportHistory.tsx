@@ -28,9 +28,14 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
     queryKey: [...KV_IMPORTS_KEY, 'certificate', certificateId, ids.join(',')],
     enabled: vaults.isSuccess && ids.length > 0,
     initialPageParam: Object.fromEntries(ids.map((id) => [id, null])) as Record<string, string | null>,
+    // One vault that fails (deleted between the two requests, say) does not hide the others: what answered is
+    // shown, and only when every vault failed is the read an error.
     queryFn: async ({ pageParam }) => {
       const open = Object.entries(pageParam);
-      const pages = await Promise.all(open.map(async ([id, cursor]) => ({ id, page: await listKVImports(id, certificateId, 50, cursor) })));
+      const settled = await Promise.allSettled(open.map(async ([id, cursor]) => ({ id, page: await listKVImports(id, certificateId, 50, cursor) })));
+      const pages = settled.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
+      const failed = settled.find((r) => r.status === 'rejected');
+      if (pages.length === 0 && failed) throw failed.reason;
       return { items: pages.flatMap((p) => p.page.items), next: Object.fromEntries(pages.filter((p) => p.page.next_cursor).map((p) => [p.id, p.page.next_cursor])) as Record<string, string | null> };
     },
     getNextPageParam: (last) => (Object.keys(last.next).length > 0 ? last.next : undefined),
