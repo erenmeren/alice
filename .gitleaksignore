@@ -16,3 +16,15 @@ ac265acc933833b663d937a31ac9abdcadb0b346:.gitleaksignore:generic-api-key:6
 2683d33b2d8f49bea09528d74859293674b292f2:web/src/locales/.i18n-identical.json:generic-api-key:2
 # PEM header lines only (no key body): the scanner self-test checks that the leak suite flags them.
 f641cfd81bc7320a78e1dcb08b32bcb837ce1e68:internal/api/tlskey_leak_integration_test.go:private-key:492
+# Go import paths ("alice/internal/sshkeys/…", "…/keymat") in the import-rule test tables and in the Phase 6 plan quoting them: package names, not keys.
+12a084234964da2a955fe8f5ff18e117c5df57a6:internal/archtest/arch_test.go:generic-api-key:236
+12a084234964da2a955fe8f5ff18e117c5df57a6:internal/archtest/arch_test.go:generic-api-key:240
+d968e45642f890e5b7dbb9b0dca5249beadbb17b:internal/archtest/arch_test.go:generic-api-key:203
+d968e45642f890e5b7dbb9b0dca5249beadbb17b:internal/archtest/arch_test.go:generic-api-key:204
+d968e45642f890e5b7dbb9b0dca5249beadbb17b:internal/archtest/arch_test.go:generic-api-key:205
+d968e45642f890e5b7dbb9b0dca5249beadbb17b:internal/archtest/arch_test.go:generic-api-key:206
+d968e45642f890e5b7dbb9b0dca5249beadbb17b:internal/archtest/arch_test.go:generic-api-key:209
+d968e45642f890e5b7dbb9b0dca5249beadbb17b:internal/archtest/arch_test.go:generic-api-key:213
+2e3451787475fed3d08f0666ec7e215d3d2995d2:docs/superpowers/plans/2026-10-05-phase-6-ssh-key-rotation.md:generic-api-key:1904
+2e3451787475fed3d08f0666ec7e215d3d2995d2:docs/superpowers/plans/2026-10-05-phase-6-ssh-key-rotation.md:generic-api-key:1910
+2e3451787475fed3d08f0666ec7e215d3d2995d2:docs/superpowers/plans/2026-10-05-phase-6-ssh-key-rotation.md:generic-api-key:1911
