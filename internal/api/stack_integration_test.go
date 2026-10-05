@@ -31,6 +31,7 @@ import (
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/jobs/deployjobs"
+	"alice/internal/jobs/kvjobs"
 	"alice/internal/jobs/targetjobs"
 	"alice/internal/license"
 	"alice/internal/license/licensetest"
@@ -43,6 +44,7 @@ import (
 	"alice/internal/providers/nginx"
 	"alice/internal/secrets"
 	"alice/internal/setup"
+	"alice/internal/testutil/fakekv"
 	"alice/internal/testutil/pgtest"
 	"alice/internal/testutil/pki"
 	"alice/internal/version"
@@ -114,6 +116,7 @@ type stack struct {
 	handler   http.Handler
 	api       *Server // the server behind handler as start built it (denial summaries, AUD-06)
 	setupCode string
+	kv        *fakekv.Server // the fake Azure service behind the real azurekv provider (nil: no Key Vault in this stack)
 
 	mu        sync.Mutex
 	nginxSrvs []*nginxFixture // the emulated Nginx hosts Alice's own TLS probe can reach
@@ -126,16 +129,28 @@ type stack struct {
 
 func newStack(t *testing.T, trusted ...netip.Prefix) *stack {
 	t.Helper()
+	return newStackWith(t, stackStart, nil, trusted...)
+}
+
+// newStackWith is newStack with a start time and, optionally, a fake Azure service: the stack then
+// registers the REAL azurekv provider (its connections mapped to the fake by the integration-only
+// seam, trusting only the fake's CA), the Key Vault job handlers, and trusts the fake's CA as a
+// certificate root of the inventory.
+func newStackWith(t *testing.T, start time.Time, kv func(now func() time.Time) *fakekv.Server, trusted ...netip.Prefix) *stack {
+	t.Helper()
 	s := &stack{
 		t:        t,
 		db:       pgtest.New(t),
-		clock:    clock.NewFake(stackStart),
+		clock:    clock.NewFake(start),
 		keysDir:  t.TempDir(),
 		stateDir: t.TempDir(),
 		logs:     &syncBuffer{},
 		trusted:  trusted,
 	}
 	s.ca = pki.NewCA("API Test CA", pki.ECDSA256, s.clock.Now())
+	if kv != nil {
+		s.kv = kv(s.clock.Now)
+	}
 	s.start()
 	return s
 }
@@ -184,6 +199,9 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	s.registry = providers.NewRegistry()
 	roots := x509.NewCertPool()
 	roots.AddCert(s.ca.Root)
+	if s.kv != nil {
+		require.True(t, roots.AppendCertsFromPEM(s.kv.CAPEM()))
+	}
 	s.inv = inventory.New(inventory.Config{
 		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, License: s.license, Registry: s.registry,
 		Jobs: s.queue, Notifier: notify.AdminNotifier{Clock: s.clock}, Log: log, Roots: roots,
@@ -195,6 +213,9 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	s.registry.Register(ssh)
 	// One verification attempt per endpoint: the provider's waits run on the session clock, which is
 	// the fake clock here.
+	if s.kv != nil {
+		s.registry.Register(s.azureProvider())
+	}
 	s.registry.Register(stackNginx{Provider: nginx.New(nginx.Options{SSH: ssh, Prober: stackProber{s}, Attempts: 1}), s: s})
 	s.registry.Freeze()
 	_, err := s.inv.EnsurePlatformKey(context.Background())
@@ -214,6 +235,9 @@ func (s *stack) newRunner(worker string, heartbeat time.Duration) *jobs.Runner {
 	})
 	targetjobs.Register(r, targetjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})
 	deployjobs.Register(r, deployjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})
+	if s.kv != nil {
+		kvjobs.Register(r, kvjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})
+	}
 	return r
 }
 
