@@ -684,6 +684,34 @@ func TestPartialListingsAndThrottling(t *testing.T) {
 	assert.Equal(t, 2, h.vaultRow(vault).Facts.KVThrottledCycles)
 }
 
+// A single NXDOMAIN for the vault's name (azure.vault_not_found, not retried in the cycle) is treated like any
+// unreachable poll: the vault is unreachable until the next poll that answers, no mail is queued, and the next
+// poll waits a little longer (final review A cross-note).
+func TestKVVaultNotFoundOnceIsTransient(t *testing.T) {
+	h := newHarness(t, withAzure())
+	h.user("ada", rbac.Admin, "ada@example.com")
+	vault := h.vault("prod")
+	h.reconcile(vault, kvResult(h.kvc("alpha", h.kvLeaf("a.example.test"), ver(1), h.clock.Now(), true)))
+	require.Equal(t, inventory.StatusOK, h.vaultRow(vault).Status)
+	outbox := h.count("SELECT count(*) FROM notifications_outbox")
+
+	h.clock.Advance(time.Minute)
+	require.NoError(t, h.svc.RecordKVFailure(h.ctx, vault, providers.NewError("azure.vault_not_found", false, nil, nil)))
+	v := h.vaultRow(vault)
+	assert.Equal(t, inventory.StatusUnreachable, v.Status)
+	assert.Equal(t, "azure.vault_not_found", v.Code)
+	assert.Equal(t, 1, v.PollFailures)
+	assert.Equal(t, outbox, h.count("SELECT count(*) FROM notifications_outbox"), "no mail for one failed poll")
+
+	h.clock.Advance(time.Minute)
+	h.reconcile(vault, kvResult(h.kvc("alpha", h.kvLeaf("a.example.test"), ver(1), h.clock.Now(), true)))
+	v = h.vaultRow(vault)
+	assert.Equal(t, inventory.StatusOK, v.Status, "the next poll that answers ends it")
+	assert.Empty(t, v.Code)
+	assert.Zero(t, v.PollFailures)
+	assert.Equal(t, outbox, h.count("SELECT count(*) FROM notifications_outbox"))
+}
+
 func TestKVFailureTransitions(t *testing.T) {
 	h := newHarness(t, withAzure())
 	h.user("ada", rbac.Admin, "ada@example.com")
