@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -61,7 +61,8 @@ describe('RouteErrorPage', () => {
     server.use(...sessionHandlers(sessionFor('admin')));
     await renderWithBrokenRoute('/boom');
     const heading = await screen.findByRole('heading', { level: 1, name: 'Something went wrong' });
-    expect(heading).toHaveFocus();
+    // The focus moves in an effect, which may run after the heading is already in the document.
+    await waitFor(() => expect(heading).toHaveFocus());
     expect(screen.getByText(/This page could not be shown/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reload' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Go to the home page' })).toHaveAttribute('href', '/');
