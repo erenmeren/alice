@@ -14,10 +14,10 @@ import (
 )
 
 // rotationRoutes are the rotation policies and runs (C13; R41 rows 24, 25 as amended by S2). Administrators prepare,
-// change, preview, switch off and delete policies (rotation.manage: operate tokens allowed). Everything that starts
-// or decides changes on servers needs an Administrator's browser session with step-up and never a token
-// (rotation.operate): switching a policy on (S2: an edit of a policy that is on switches it off), Run now, Continue,
-// Finish now, Keep the old key and Stop and undo. Every change is refused in lock (ClassChange); reads stay. The
+// change, preview, switch off and delete policies, and stop a run (Stop and undo): rotation.manage, operate tokens
+// allowed. Everything that starts or decides changes on servers needs an Administrator's browser session with step-up
+// and never a token (rotation.operate): switching a policy on (S2: an edit of a policy that is on switches it off),
+// Run now, Continue, Finish now and Keep the old key. Every change is refused in lock (ClassChange); reads stay. The
 // service checks every id against the run or policy it belongs to.
 func (s *server) rotationRoutes() []route {
 	const p = "/api/v1/rotation/policies"
@@ -38,7 +38,7 @@ func (s *server) rotationRoutes() []route {
 		{method: http.MethodPost, pattern: r + "/{id}/actions/continue", perm: rbac.RotationOperate, lic: change, handler: s.decideRotation(s.continueRotation)},
 		{method: http.MethodPost, pattern: r + "/{id}/actions/finish-now", perm: rbac.RotationOperate, lic: change, handler: s.decideRotation(s.finishRotation)},
 		{method: http.MethodPost, pattern: r + "/{id}/actions/keep-old", perm: rbac.RotationOperate, lic: change, handler: s.keepOld},
-		{method: http.MethodPost, pattern: r + "/{id}/actions/abort", perm: rbac.RotationOperate, lic: change, handler: s.decideRotation(s.abortRotation)},
+		{method: http.MethodPost, pattern: r + "/{id}/actions/abort", perm: rbac.RotationManage, lic: change, handler: s.decideRotation(s.abortRotation)},
 	}
 }
 
@@ -52,6 +52,20 @@ const (
 )
 
 var planDigestRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// newKeyTypeValues is the OneOf text of new_key_type.
+func newKeyTypeValues() string { return "same, " + keyTypeValues() }
+
+// checkExplicitPolicyFields refuses a notice time of 0 and an empty new key type that a request names: the service
+// reads 0 and "" as "the default", so only an absent field may mean that (review M4).
+func checkExplicitPolicyFields(notify *int, newType *string, v *validate.Errors) {
+	if notify != nil && *notify == 0 {
+		v.Add("notify_before_hours", validate.OutOfRange, map[string]string{"min": "1", "max": "168"})
+	}
+	if newType != nil && *newType == "" {
+		v.Add("new_key_type", validate.OneOf, map[string]string{"values": newKeyTypeValues()})
+	}
+}
 
 // writePolicy answers a policy with its strong validator.
 func writePolicy(w http.ResponseWriter, status int, p sshkeys.Policy) {
@@ -90,18 +104,19 @@ func (s *server) getPolicy(w http.ResponseWriter, r *http.Request) {
 // key, a key Alice holds no private key for, a retired key and the new key of a running rotation.
 func (s *server) createPolicy(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		SSHKeyID          string `json:"ssh_key_id"`
-		Name              string `json:"name"`
-		IntervalDays      int    `json:"interval_days"`
-		OverlapDays       *int   `json:"overlap_days"`
-		NotifyBeforeHours int    `json:"notify_before_hours"`
-		NewKeyType        string `json:"new_key_type"`
+		SSHKeyID          string  `json:"ssh_key_id"`
+		Name              string  `json:"name"`
+		IntervalDays      int     `json:"interval_days"`
+		OverlapDays       *int    `json:"overlap_days"`
+		NotifyBeforeHours *int    `json:"notify_before_hours"`
+		NewKeyType        *string `json:"new_key_type"`
 	}
 	if !s.decodeExact(w, r, &req, maxPolicyBody, "ssh_key_id", "name", "interval_days", "overlap_days", "notify_before_hours", "new_key_type") {
 		return
 	}
 	var v validate.Errors
 	keyID := requiredUUID(req.SSHKeyID, "ssh_key_id", &v)
+	checkExplicitPolicyFields(req.NotifyBeforeHours, req.NewKeyType, &v)
 	if err := v.Err(); err != nil {
 		s.fail(w, r, err)
 		return
@@ -110,8 +125,14 @@ func (s *server) createPolicy(w http.ResponseWriter, r *http.Request) {
 	if req.OverlapDays != nil {
 		overlap = *req.OverlapDays
 	}
-	p, err := s.deps.SSHKeys.CreatePolicy(r.Context(), s.actor(r), sshkeys.PolicyInput{SSHKeyID: keyID, Name: req.Name,
-		IntervalDays: req.IntervalDays, OverlapDays: overlap, NotifyBeforeHours: req.NotifyBeforeHours, NewKeyType: req.NewKeyType})
+	in := sshkeys.PolicyInput{SSHKeyID: keyID, Name: req.Name, IntervalDays: req.IntervalDays, OverlapDays: overlap}
+	if req.NotifyBeforeHours != nil {
+		in.NotifyBeforeHours = *req.NotifyBeforeHours
+	}
+	if req.NewKeyType != nil {
+		in.NewKeyType = *req.NewKeyType
+	}
+	p, err := s.deps.SSHKeys.CreatePolicy(r.Context(), s.actor(r), in)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -142,6 +163,12 @@ func (s *server) updatePolicy(w http.ResponseWriter, r *http.Request) {
 		NewKeyType        *string `json:"new_key_type"`
 	}
 	if !s.decodeExact(w, r, &req, maxPolicyBody, "name", "interval_days", "overlap_days", "notify_before_hours", "new_key_type") {
+		return
+	}
+	var v validate.Errors
+	checkExplicitPolicyFields(req.NotifyBeforeHours, req.NewKeyType, &v)
+	if err := v.Err(); err != nil {
+		s.fail(w, r, err)
 		return
 	}
 	p, err := s.deps.SSHKeys.UpdatePolicy(r.Context(), s.actor(r), id, version, sshkeys.PolicyPatch{Name: req.Name,
@@ -250,6 +277,23 @@ func (s *server) runPolicy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"rotation_id": run.ID.String(), "status_url": "/api/v1/rotation/runs/" + run.ID.String()})
 }
 
+// maxRunPage bounds a page of runs: the service reads every run with its places (up to 10 000 each), so the list
+// loads few runs at a time and answers counts only (review I2).
+const maxRunPage = 20
+
+// runPageLimit reads ?limit= of the run list (1..20, default 20).
+func runPageLimit(raw string, v *validate.Errors) int {
+	if raw == "" {
+		return maxRunPage
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 || n > maxRunPage {
+		v.Add("limit", validate.OutOfRange, map[string]string{"min": "1", "max": strconv.Itoa(maxRunPage)})
+		return 0
+	}
+	return n
+}
+
 // gateOK is the license gate's answer for changes: the run DTO offers only decisions the service would accept.
 func (s *server) gateOK() bool { return s.licenseGate(license.ClassChange) == nil }
 
@@ -260,7 +304,7 @@ func (s *server) listRotations(w http.ResponseWriter, r *http.Request) {
 		PolicyID: optionalUUID(q.Get("policy_id"), "policy_id", &v),
 		KeyID:    optionalUUID(q.Get("ssh_key_id"), "ssh_key_id", &v),
 		Cursor:   q.Get("cursor"),
-		Limit:    pageLimit(q.Get("limit"), &v),
+		Limit:    runPageLimit(q.Get("limit"), &v),
 	}
 	if len(f.Cursor) > maxCursorBytes {
 		v.Add("cursor", validate.TooLong, map[string]string{"max": strconv.Itoa(maxCursorBytes)})

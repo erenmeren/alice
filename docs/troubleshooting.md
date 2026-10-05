@@ -107,6 +107,8 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   - **The SSH server does not accept keys** (`pubkey_disabled`). Nothing, unless the server should accept keys (`PubkeyAuthentication`).
   - **root may sign in here only with a fixed command, and this line has none** (`root_forced_commands_only`). Add the forced `command=` to the line, or change `PermitRootLogin`, then scan again.
   - **The key is listed more than once in this file** (`duplicate_lines`). Remove the extra lines of the key from the file by hand (the SSH server uses the first), then scan again.
+  - **Alice does not know all key files of its connection account on this server; scan the server again** (`connection_files_unknown`). Choose **Scan for SSH keys** on the server's page, then preview again (`ALC-KEY-0014`).
+  - **This place belongs to Alice's connection account or one of its files; Alice never changes those** (`connection_account_file`). Nothing: the setup commands own those files (`ALC-KEY-0017`).
   - **Alice could not read this line's options exactly** (`options_unreadable`). Check the line's options on the server (they are not valid UTF-8), fix them, then scan again.
 
 ## Certificates
@@ -989,6 +991,22 @@ server again.
 
 **What to do.** Nothing to do now: Alice waits until the request can no longer arrive, then tries again. If this repeats, check the connection to the server.
 
+## ALC-KEY-0017: This place belongs to the account Alice connects with
+
+**Meaning.** A place of a rotation was skipped, or its change refused when Alice was about to send it, because it is the account Alice signs in with or one of that account's key files. (HTTP 409, reason `sshkey.connection_account_file`.)
+
+**Likely cause.** The user is the account Alice signs in with, or the file is one of that account's key files. Alice never changes those: the setup commands own them.
+
+**What to do.** Nothing to do here. Use another user or another file for this key.
+
+## ALC-NTF-0001: Alice could not queue the email about the license renewal
+
+**Meaning.** A paused rotation shows this next to ALC-ROT-0021: the email that tells the administrators about the license renewal could not be queued, so Continue is still refused. (HTTP 503, reason `notify.queue_failed`; retryable.)
+
+**Likely cause.** Writing the email to Alice's outbox failed. A paused rotation continues only after that email is queued, and Alice tries again at every background check.
+
+**What to do.** Check Alice's logs and its database, then choose Continue again once the email is queued.
+
 ## ALC-ROT-0001: This key already has a rotation policy
 
 **Meaning.** Creating a rotation policy was refused because the key has one already. (HTTP 409, reason `rotation.policy_exists`.)
@@ -1007,7 +1025,7 @@ server again.
 
 ## ALC-ROT-0003: The servers or keys changed since the preview
 
-**Meaning.** Run now was refused, or a planned run was cancelled, because the plan built now differs from the plan that was previewed. Nothing was created or changed. (HTTP 409, reason `rotation.plan_changed`.)
+**Meaning.** Run now was refused, or a planned run was cancelled, because the plan built now differs from the plan that was previewed. Nothing was changed on any server. (HTTP 409, reason `rotation.plan_changed`.)
 
 **Likely cause.** A rotation runs only exactly as it was previewed, and something changed since then. Nothing was changed on any server. Typical changes: a server became unreachable or was scanned again, a key line was added or removed by hand, the policy's new key type changed.
 
@@ -1089,7 +1107,7 @@ server again.
 
 **Meaning.** The result of a rotation an administrator stopped with Stop and undo (or of a planned run stopped before it started). (HTTP 409, reason `rotation.stopped`.)
 
-**Likely cause.** Alice removed the new key again where it had added it; the old key was not touched.
+**Likely cause.** Alice removes the new key again where it had added it; the old key is not touched. The rotation's page shows where this is done.
 
 **What to do.** Start the rotation again when you are ready.
 
@@ -1097,7 +1115,7 @@ server again.
 
 **Meaning.** The result of a planned run that was cancelled because its policy was switched off, changed or deleted before it started. (HTTP 409, reason `rotation.policy_off`.)
 
-**Likely cause.** A policy that is off starts no run. Changing how often, how long or with which key type a policy that is on rotates switches it off.
+**Likely cause.** A policy that is off starts no run. Changing the interval, the overlap, the notice time or the new key type of a policy that is on switches it off.
 
 **What to do.** Switch the policy on again to plan the next run.
 

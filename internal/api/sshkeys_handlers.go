@@ -194,7 +194,7 @@ func (s *server) removeKeyLocation(w http.ResponseWriter, r *http.Request) {
 // (at most 500 runes) and a passphrase (at most 1024 bytes, JSON-escaped up to six bytes each).
 const (
 	maxKeyActionBody = 16 << 10
-	maxDownloadBody  = 8 << 10
+	maxDownloadBody  = 16 << 10
 )
 
 // keyTypeValues is the OneOf text of key_type.
@@ -216,10 +216,16 @@ func (s *server) generateSSHKey(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeExact(w, r, &req, maxKeyActionBody, "label", "key_type") {
 		return
 	}
-	if req.KeyType != "" && !slices.Contains(keymat.KeyTypes(), keymat.KeyType(req.KeyType)) {
-		var v validate.Errors
+	// key_type is required (C13 "exact keys"; the web always sends it): an absent one is not a silent Ed25519.
+	var v validate.Errors
+	switch {
+	case req.KeyType == "":
+		v.Add("key_type", validate.Required, nil)
+	case !slices.Contains(keymat.KeyTypes(), keymat.KeyType(req.KeyType)):
 		v.Add("key_type", validate.OneOf, map[string]string{"values": keyTypeValues()})
-		s.fail(w, r, v)
+	}
+	if err := v.Err(); err != nil {
+		s.fail(w, r, err)
 		return
 	}
 	m, err := s.deps.SSHKeys.Generate(r.Context(), s.actor(r), sshkeys.GenerateInput{Label: req.Label, KeyType: req.KeyType})

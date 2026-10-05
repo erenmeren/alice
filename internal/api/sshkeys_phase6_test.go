@@ -398,7 +398,7 @@ func TestDownloadErrorsAreJSON(t *testing.T) {
 	h := NewHandler(d)
 	rec := call(h, http.MethodPost, "/api/v1/ssh-keys/nope/actions/download-private-key", "admin-stepup", `{"reason":"0123456789ab"}`)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
-	rec = call(h, http.MethodPost, path, "admin-stepup", `{"reason":"`+strings.Repeat("a", 9000)+`"}`)
+	rec = call(h, http.MethodPost, path, "admin-stepup", `{"reason":"`+strings.Repeat("a", 17000)+`"}`)
 	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 }
 
@@ -502,4 +502,55 @@ func TestOnlyTheDownloadAnswersKeyMaterial(t *testing.T) {
 		assert.NotContains(t, rec.String(), "PRIVATE KEY")
 		assert.False(t, bytes.Contains(rec.Bytes(), canary[11:30]))
 	}
+}
+
+// The download limit is charged per user, and only for a signed-in browser session: refused tokens, a pending
+// sign-in and anonymous calls never spend an Administrator's downloads (review M1, M2).
+func TestDownloadLimitIsPerUserSession(t *testing.T) {
+	d, fk, _ := sshDeps(t)
+	fk.DownloadPrivateKeyFn = func(context.Context, inventory.Actor, sshkeys.DownloadInput) (sshkeys.Download, error) {
+		return sshkeys.Download{FileName: "alice-x-00000000.key", Body: secrets.NewPlaintext([]byte("x"))}, nil
+	}
+	path := "/api/v1/ssh-keys/" + managedID.String() + "/actions/download-private-key"
+	body := `{"reason":"0123456789ab"}`
+	h := NewHandler(d)
+	for i := 0; i < 5; i++ {
+		require.Equal(t, http.StatusOK, call(h, http.MethodPost, path, "admin-stepup", body).Code, i)
+	}
+	assert.Equal(t, http.StatusTooManyRequests, call(h, http.MethodPost, path, "admin-stepup", body).Code)
+	assert.Equal(t, http.StatusOK, call(h, http.MethodPost, path, "admin2-stepup", body).Code, "another user has a bucket of their own")
+
+	h = NewHandler(d)
+	for i := 0; i < 10; i++ {
+		for _, id := range []string{"", "pending", "alice_operate_admin", "alice_read_admin"} {
+			assert.NotEqual(t, http.StatusOK, call(h, http.MethodPost, path, id, body).Code, id)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		assert.Equal(t, http.StatusOK, call(h, http.MethodPost, path, "admin-stepup", body).Code, "refused calls spend nothing (%d)", i)
+	}
+}
+
+// A valid request whose reason and passphrase are written with JSON escapes fits the body limit (review M3).
+func TestDownloadBodyFitsEscapedText(t *testing.T) {
+	d, fk, _ := sshDeps(t)
+	fk.DownloadPrivateKeyFn = func(context.Context, inventory.Actor, sshkeys.DownloadInput) (sshkeys.Download, error) {
+		return sshkeys.Download{FileName: "alice-x-00000000.key", Body: secrets.NewPlaintext([]byte("x"))}, nil
+	}
+	reason := strings.Repeat(`\ud83d\udd11`, 500) // 500 astral runes, 12 bytes each
+	pass := strings.Repeat(`\u00e7`, 512)         // 1024 bytes of UTF-8, 6 bytes each
+	rec := call(NewHandler(d), http.MethodPost, "/api/v1/ssh-keys/"+managedID.String()+"/actions/download-private-key", "admin-stepup",
+		`{"reason":"`+reason+`","passphrase":"`+pass+`"}`)
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+}
+
+// key_type is required, as the web always sends it and OpenAPI says (review M5).
+func TestGenerateNeedsAKeyType(t *testing.T) {
+	d, fk, _ := sshDeps(t)
+	for _, body := range []string{`{"label":"x"}`, `{"label":"x","key_type":""}`} {
+		rec := call(NewHandler(d), http.MethodPost, "/api/v1/ssh-keys/generate", "operator", body)
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, body)
+		assert.Equal(t, []validate.FieldError{{Field: "key_type", Code: validate.Required}}, errorDetails(t, rec), body)
+	}
+	assert.Empty(t, fk.Calls())
 }

@@ -1383,13 +1383,13 @@ paths:
   /api/v1/rotation/runs:
     get:
       operationId: listRotations
-      summary: Rotation runs, newest first (without their steps)
+      summary: Rotation runs, newest first (counts of their places; places and steps only on GET /rotation/runs/{id})
       x-permission: read
       parameters:
         - { name: policy_id, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: ssh_key_id, in: query, required: false, schema: { type: string, format: uuid, description: The old or the new key of the run } }
         - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
-        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 20, default: 20 } }
       responses:
         "200":
           description: One page of runs
@@ -1476,11 +1476,11 @@ paths:
       - { $ref: "#/components/parameters/ID" }
     post:
       operationId: abortRotation
-      summary: Stop and undo a rotation (Administrator with step-up); the new key is removed where Alice added it
+      summary: Stop and undo a rotation; the new key is removed where Alice added it
       description: >-
-        The old key is never touched. A previewed run is cancelled. Once the old key's removal began, 409 ALC-ROT-0005.
+        Administrator; operate tokens allowed (no step-up: stopping only takes back what the run added). The old key is never touched. A previewed run is cancelled. Once the old key's removal began, 409 ALC-ROT-0005.
         Refused with 403 ALC-LIC-0001 while the license is locked.
-      x-permission: rotation.operate
+      x-permission: rotation.manage
       responses:
         "204": { description: Stopped }
         "403": { $ref: "#/components/responses/Error" }
@@ -3269,8 +3269,8 @@ components:
         name: { type: string, minLength: 1, maxLength: 100 }
         interval_days: { type: integer, minimum: 1, maximum: 3650 }
         overlap_days: { type: integer, minimum: 0, maximum: 90, default: 7 }
-        notify_before_hours: { type: integer, minimum: 1, maximum: 168, default: 24 }
-        new_key_type: { type: string, enum: [same, ed25519, rsa-3072, rsa-4096, ecdsa-p256], default: same }
+        notify_before_hours: { type: integer, minimum: 1, maximum: 168, default: 24, description: 'Leave out for 24; 0 is refused (422)' }
+        new_key_type: { type: string, enum: [same, ed25519, rsa-3072, rsa-4096, ecdsa-p256], default: same, description: 'Leave out for same; an empty string is refused (422)' }
     RotationPolicyPatch:
       type: object
       additionalProperties: false
@@ -3400,7 +3400,7 @@ components:
       type: object
       required: [id, policy_id, old_ssh_key_id, new_ssh_key_id, old_fingerprint, new_fingerprint, trigger, status, paused_license,
         awaiting_decision, decision_due_at, planned_for, notified_at, started_at, verified_at, overlap_until, finished_at, result,
-        plan_digest, new_key_type, overlap_minutes, change_count, skip_count, kept_count, actions_allowed, locations, version]
+        plan_digest, new_key_type, overlap_minutes, change_count, skip_count, kept_count, actions_allowed, location_counts, version]
       properties:
         id: { type: string, format: uuid }
         policy_id: { type: string, format: uuid }
@@ -3430,7 +3430,17 @@ components:
         skip_count: { type: integer }
         kept_count: { type: integer, description: 'Places where the old key stays (skipped, kept and failed removals)' }
         actions_allowed: { type: array, items: { type: string, enum: [continue, finish_now, keep_old, abort] } }
-        locations: { type: array, items: { $ref: "#/components/schemas/RotationLocation" } }
+        location_counts:
+          type: object
+          required: [total, verified, removed, skipped, kept, failed]
+          properties:
+            total: { type: integer }
+            verified: { type: integer }
+            removed: { type: integer }
+            skipped: { type: integer }
+            kept: { type: integer, description: Places where an administrator kept the old key }
+            failed: { type: integer, description: 'Places where adding, verifying, removing or undoing failed' }
+        locations: { type: array, items: { $ref: "#/components/schemas/RotationLocation" }, description: 'Only on GET /rotation/runs/{id}' }
         steps: { type: array, items: { $ref: "#/components/schemas/RotationStep" }, description: 'Only on GET /rotation/runs/{id}' }
         version: { type: integer }
     RotationRunPage:

@@ -46,6 +46,8 @@ var phase6Table = []struct {
 	{"ALC-KEY-0014", "sshkey.connection_files_unknown", 409, false},
 	{"ALC-KEY-0015", "sshkey.clock_behind", 503, true},
 	{"ALC-KEY-0016", "sshkey.add_uncertain", 502, true},
+	{"ALC-KEY-0017", "sshkey.connection_account_file", 409, false},
+	{"ALC-NTF-0001", "notify.queue_failed", 503, true},
 	{"ALC-ROT-0001", "rotation.policy_exists", 409, false},
 	{"ALC-ROT-0002", "rotation.in_progress", 409, false},
 	{"ALC-ROT-0003", "rotation.plan_changed", 409, false},
@@ -70,11 +72,12 @@ var phase6Table = []struct {
 	{"ALC-ROT-0022", "rotation.late_result", 409, false},
 }
 
-// phase6Codes are the codes of the areas ROT and KEY from 0006 on.
+// phase6Codes are the codes of the areas ROT and NTF, and KEY from 0006 on (AllErrorCodes order).
 func phase6Codes() []ErrorCode {
 	var out []ErrorCode
 	for _, ec := range AllErrorCodes() {
-		if strings.HasPrefix(ec.Code, "ALC-ROT-") || (strings.HasPrefix(ec.Code, "ALC-KEY-") && ec.Code >= "ALC-KEY-0006") {
+		if strings.HasPrefix(ec.Code, "ALC-ROT-") || strings.HasPrefix(ec.Code, "ALC-NTF-") ||
+			(strings.HasPrefix(ec.Code, "ALC-KEY-") && ec.Code >= "ALC-KEY-0006") {
 			out = append(out, ec)
 		}
 	}

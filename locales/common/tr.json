@@ -423,6 +423,11 @@
         "title": "Alice anahtarın eklenip eklenmediğini henüz bilmiyor.",
         "cause": "Sunucu, Alice'in anahtarı ekleme isteğine yanıt vermedi ve anahtar henüz dosyada yok. İstek sunucuya hâlâ ulaşabilir.",
         "action": "Şimdilik bir şey yapmanız gerekmiyor: Alice isteğin artık ulaşamayacağı zamana kadar bekler, ardından yeniden dener. Bu tekrarlanırsa sunucuyla bağlantıyı denetleyin."
+      },
+      "connection_account_file": {
+        "title": "Bu yer Alice'in bağlandığı hesaba ait.",
+        "cause": "Kullanıcı Alice'in oturum açtığı hesaptır ya da dosya bu hesabın anahtar dosyalarından biridir. Alice bunları hiçbir zaman değiştirmez: bunlar kurulum komutlarına aittir.",
+        "action": "Burada yapmanız gereken bir şey yok. Bu anahtar için başka bir kullanıcı ya da başka bir dosya kullanın."
       }
     },
     "rotation": {
@@ -488,12 +493,12 @@
       },
       "stopped": {
         "title": "Bir yönetici yenilemeyi durdurdu.",
-        "cause": "Alice yeni anahtarı eklediği yerlerden yeniden kaldırdı; eski anahtara dokunulmadı.",
+        "cause": "Alice yeni anahtarı eklediği yerlerden yeniden kaldırır; eski anahtara dokunulmaz. Bunun nerede tamamlandığını yenilemenin sayfası gösterir.",
         "action": "Hazır olduğunuzda yenilemeyi yeniden başlatın."
       },
       "policy_off": {
         "title": "Kural kapatıldığı, değiştirildiği ya da silindiği için planlanan çalıştırma iptal edildi.",
-        "cause": "Kapalı bir kural hiçbir çalıştırma başlatmaz. Açık bir kuralın ne sıklıkla, ne kadar süreyle ya da hangi anahtar türüyle yenileme yaptığını değiştirmek kuralı kapatır.",
+        "cause": "Kapalı bir kural hiçbir çalıştırma başlatmaz. Açık bir kuralın aralığını, geçiş süresini, bildirim zamanını ya da yeni anahtar türünü değiştirmek kuralı kapatır.",
         "action": "Sonraki çalıştırmayı planlamak için kuralı yeniden açın."
       },
       "new_key_failed": {
@@ -535,6 +540,13 @@
         "title": "Bir sunucunun yanıtı, Alice ondan vazgeçtikten sonra geldi.",
         "cause": "Alice birkaç denemeden sonra bu yer için beklemeyi bırakmıştı. Yanıt daha sonra geldi; bu nedenle yenilemenin kaydı ile sunucudaki anahtar dosyası orada farklı olabilir.",
         "action": "Yenilemenin sayfasını açıp bu sunucudaki anahtar dosyasını denetleyin, ardından Alice anahtarları olduğu gibi listelesin diye sunucuyu yeniden tarayın."
+      }
+    },
+    "notify": {
+      "queue_failed": {
+        "title": "Alice lisans yenilemesiyle ilgili e-postayı sıraya koyamadı.",
+        "cause": "E-postayı Alice'in giden kutusuna yazmak başarısız oldu. Duraklatılan bir yenileme ancak bu e-posta sıraya konduktan sonra sürer ve Alice her arka plan denetiminde yeniden dener.",
+        "action": "Alice'in günlüklerini ve veritabanını denetleyin, ardından e-posta sıraya konduğunda Devam et'i yeniden seçin."
       }
     },
     "job": {
@@ -1234,6 +1246,10 @@
       }
     },
     "rotation": {
+      "late_result": {
+        "subject": "SSH anahtarı yenilemesinde geç bir yanıt: {{key_label}}",
+        "body": "{{key_label}} yenilemesi bir yer için vazgeçtikten sonra sunucu yanıt verdi. Sunucu: {{server}}. Kullanıcı: {{os_user}}. Dosya: {{file_path}}.\n\nSonuç: {{result}} (removed: eski anahtar orada yine de kaldırıldı; undone: yeni anahtar orada yine de kaldırıldı).\n\nAlice, anahtar listesi dosyayı şimdiki hâliyle göstersin diye sunucunun taranmasını sıraya koydu. Bu yeri denetlemek için Alice'te yenilemenin sayfasını açın."
+      },
       "preview": {
         "subject": "Planlanan SSH anahtarı yenilemesi: {{key_label}}",
         "body": "Alice, {{key_label}} ({{fingerprint}}) SSH anahtarını yenilemeyi planlıyor. Planlanan başlangıç: {{planned_for}}. Kapalı bir kural, yalnızca bir yönetici Şimdi çalıştır'ı seçtiğinde bir çalıştırma başlatır.\n\nAlice eski anahtarın yanına yeni bir anahtar ekleyecek, yeni anahtarın çalıştığını denetleyecek, geçiş süresince iki anahtarı da tutacak ve ardından eski anahtarı kaldıracak. Yeni anahtarın çalışmadığı yerlerde hiçbir şey kaldırılmaz.\n\nDeğişecek yer sayısı: {{change_count}}. Atlanacak yer sayısı: {{skip_count}}.\n\nSunucuları, kullanıcıları ve dosyaları tam olarak görmek için Alice'te anahtarın sayfasını açın. Planlanan bir çalıştırmayı durdurmak için başlamadan önce kuralı kapatın."
@@ -1272,12 +1288,14 @@
       },
       "decision_needed": {
         "subject": "SSH anahtarı yenilemesi bir karar bekliyor: {{key_label}}",
-        "body": "Alice {{key_label}} için yeni anahtarı ekledi ancak bazı yerlerde anahtarla oturum açmayı deneyemedi (sayı: {{count}}). Yenilemenin sayfasında, eski anahtarın oralarda kalmasına mı yoksa yenilemenin durdurulup geri alınmasına mı karar verin. Karar verilmezse Alice yenilemeyi şu zamanda geri alır: {{decision_due}}."
+        "body": "Alice {{key_label}} için yeni anahtarı ekledi ancak bazı yerlerde anahtarla oturum açmayı deneyemedi (sayı: {{count}}). Yenilemenin sayfasında, eski anahtarın oralarda kalmasına mı yoksa yenilemenin durdurulup geri alınmasına mı karar verin. Karar verilmezse Alice yenilemeyi şu zamanda geri alır: {{decision_due}} (yenileme lisans nedeniyle duraklatılırsa daha sonra)."
       }
     }
   },
   "rotation": {
     "skip": {
+      "connection_files_unknown": "Alice bu sunucuda bağlantı hesabının tüm anahtar dosyalarını bilmiyor; sunucuyu yeniden tarayın.",
+      "connection_account_file": "Bu yer Alice'in bağlantı hesabına ya da onun dosyalarından birine ait; Alice bunları hiçbir zaman değiştirmez.",
       "target_deleted": "Sunucu Alice'ten kaldırıldı.",
       "host_key_unconfirmed": "Sunucunun parmak izi henüz onaylanmadı.",
       "host_key_changed": "Sunucunun kimliği değişti.",

@@ -128,8 +128,8 @@ var notReasons = map[string]bool{
 	// Phase 6 audit actions (F13; rotation.old_kept is also the reason of a kept location's audit row and step, never a
 	// stored error code)
 	"sshkey.generated": true, "sshkey.deploy_requested": true, "sshkey.added": true, "sshkey.add_failed": true,
-	"sshkey.private_key_downloaded": true, "sshkey.private_key_destroyed": true, "sshkey.retired": true,
-	"sshkey.reactivated": true, "sshkey.live_after_destruction": true,
+	"sshkey.private_key_downloaded": true,
+	"sshkey.reactivated":            true, "sshkey.live_after_destruction": true,
 	"rotation.policy_created": true, "rotation.policy_updated": true, "rotation.policy_enabled": true, "rotation.policy_disabled": true,
 	"rotation.policy_deleted": true, "rotation.previewed": true, "rotation.created": true, "rotation.status_changed": true,
 	"rotation.location_changed": true, "rotation.paused": true, "rotation.continued": true, "rotation.finish_requested": true,

@@ -129,6 +129,12 @@ var (
 	// ErrKeyAddUncertain: a deploy's add was sent and its answer lost, and the line is not in the file (yet); the job
 	// waits until the add can no longer arrive, then starts over (S3). A job reason, retried by the job itself.
 	ErrKeyAddUncertain = ErrorCode{Code: "ALC-KEY-0016", Reason: "sshkey.add_uncertain", Status: http.StatusBadGateway, Retryable: true}
+	// ErrKeyConnectionAccountFile: a place of a rotation is the connection account's or one of its files (the planner's
+	// skip connection_account_file, refused again at send time).
+	ErrKeyConnectionAccountFile = ErrorCode{Code: "ALC-KEY-0017", Reason: "sshkey.connection_account_file", Status: http.StatusConflict}
+	// ErrNotifyQueueFailed: Alice could not queue an email (the renewal notice a paused rotation waits for); retried at
+	// every background check.
+	ErrNotifyQueueFailed = ErrorCode{Code: "ALC-NTF-0001", Reason: "notify.queue_failed", Status: http.StatusServiceUnavailable, Retryable: true}
 
 	// Phase 6: rotation policies and runs (R41, C11). The run results (rotations.result_code) and the location
 	// errors (rotation_locations.error_code) are stored reasons; the API also answers the request refusals with them.
@@ -309,6 +315,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrOwnKeyProtected, ErrLastRootKey, ErrKeyNotRemovable, ErrSSHDUnreadable, ErrKeyVerifyFailed,
 		ErrKeyNotManaged, ErrKeyRetired, ErrKeyDestroyed, ErrKeyConnectionAccount, ErrKeyLoginFailed, ErrKeyGenerateBusy,
 		ErrKeyAddUndoFailed, ErrKeyNotAKeyFile, ErrKeyConnectionFilesUnknown, ErrKeyClockBehind, ErrKeyAddUncertain,
+		ErrKeyConnectionAccountFile, ErrNotifyQueueFailed,
 		ErrRotPolicyExists, ErrRotInProgress, ErrRotPlanChanged, ErrRotNothingToRotate, ErrRotNotWaiting, ErrRotAddFailed,
 		ErrRotVerifyFailed, ErrRotUndoFailed, ErrRotRemoveIncomplete, ErrRotDecisionTimeout, ErrRotPausedLicense,
 		ErrRotCancelledLicense, ErrRotStopped, ErrRotPolicyOff, ErrRotNewKeyFailed, ErrRotRetriesExhausted,
@@ -545,6 +552,12 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		// The account lock was busy; nothing was verified or counted (auth.ErrTryAgain).
 		w.Header().Set("Retry-After", "1")
 		s.writeError(w, r, ErrTryAgain)
+		return
+	}
+	if errors.Is(err, plan.ErrNewKeyType) {
+		// The planner's refusal of the policy's new key type: the form marks the field (review M13).
+		s.writeErrorWith(w, r, ErrValidation, nil, []validate.FieldError{{Field: "new_key_type", Code: validate.OneOf,
+			Params: map[string]string{"values": newKeyTypeValues()}}})
 		return
 	}
 	ec, params, ok := classify(err)

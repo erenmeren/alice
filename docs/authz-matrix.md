@@ -85,7 +85,7 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | POST | `/api/v1/rotation/runs/{id}/actions/continue` | `rotation.operate` | no | yes | no | no | no | yes | no |
 | POST | `/api/v1/rotation/runs/{id}/actions/finish-now` | `rotation.operate` | no | yes | no | no | no | yes | no |
 | POST | `/api/v1/rotation/runs/{id}/actions/keep-old` | `rotation.operate` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/rotation/runs/{id}/actions/abort` | `rotation.operate` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/rotation/runs/{id}/actions/abort` | `rotation.manage` | no | yes | no | no | operate | no | no |
 | GET | `/api/v1/jobs` | `read` | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/jobs/{id}` | `read` | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/jobs/{id}/actions/confirm` | `jobs.confirm` | no | yes | no | no | no | no | no |
@@ -146,7 +146,8 @@ Alice, and a lock must not hold the keys of the customer's own servers hostage.
 **SSH keys and rotation (Phase 6).** The private key download is an Administrator's browser session with a fresh step-up,
 never an API token, at most 5 per minute per user; its audit row is written before the file is sent. A rotation policy
 is created switched off. `PATCH /api/v1/rotation/policies/{id}` is `rotation.manage` (operate tokens allowed), but a
-change to how often, how long or with which key type a policy that is on rotates switches it off in the same step;
+change to the interval, the overlap, the notice time or the new key type of a policy that is on switches it off in the same step;
 switching it on again (`POST /api/v1/rotation/policies/{id}/actions/enable`) needs `rotation.operate`, an
 Administrator's browser session with step-up. A scheduled run starts only after its notice email was delivered; Run now
-(`rotation.operate`) needs the digest of the preview the Administrator saw.
+(`rotation.operate`) needs the digest of the preview the Administrator saw. Stop and undo
+(`POST /api/v1/rotation/runs/{id}/actions/abort`) is `rotation.manage`: automation may stop a run.

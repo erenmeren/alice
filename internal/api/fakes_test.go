@@ -360,6 +360,7 @@ var (
 	adminID    = uuid.MustParse("0190f5a0-0000-7000-8000-000000000001")
 	operatorID = uuid.MustParse("0190f5a0-0000-7000-8000-000000000002")
 	auditorID  = uuid.MustParse("0190f5a0-0000-7000-8000-000000000003")
+	admin2ID   = uuid.MustParse("0190f5a0-0000-7000-8000-000000000004")
 )
 
 // identityAuth returns a fakeAuth that recognises the matrix identities.
@@ -377,6 +378,7 @@ func identityAuth(now time.Time) *fakeAuth {
 		"operator":        session(operatorID, "operator", rbac.Operator, false),
 		"auditor":         session(auditorID, "auditor", rbac.Auditor, false),
 		"admin-stepup":    session(adminID, "admin", rbac.Admin, true),
+		"admin2-stepup":   session(admin2ID, "admin2", rbac.Admin, true), // a second Administrator (per-user limits)
 		"operator-stepup": session(operatorID, "operator", rbac.Operator, true),
 		"auditor-stepup":  session(auditorID, "auditor", rbac.Auditor, true),
 		"pending":         {Kind: rbac.PendingSession, UserID: operatorID, Username: "operator", Role: rbac.Operator, SessionHash: []byte("pending")},

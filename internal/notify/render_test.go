@@ -1,6 +1,7 @@
 package notify_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -204,6 +205,9 @@ var rotationParams = map[string]map[string]string{
 	sshkeys.TemplateNeedsAttention:      {"key_label": "ci-deploy (İzmir)", "code": sshkeys.ReasonUndoFailed},
 	sshkeys.TemplatePausedLicense:       {"key_label": "ci-deploy (İzmir)"},
 	sshkeys.TemplateDecisionNeeded:      {"key_label": "ci-deploy (İzmir)", "count": "2", "decision_due": "2026-10-20 09:00 UTC"},
+	// rotation.late_result (sshkeys.TemplateLateResult): what the server did after the run gave up on the place.
+	"rotation.late_result": {"key_label": "ci-deploy (İzmir)", "server": "web-01 (İzmir)", "os_user": "deploy",
+		"file_path": "/home/deploy/.ssh/authorized_keys", "result": "removed", "rotation_id": "0190f5a0-0000-7000-8000-00000000abcd"},
 }
 
 // Every rotation email renders in English and Turkish with the params the module sends (C10, S11, row 31): no
@@ -213,8 +217,13 @@ func TestRotationTemplatesRender(t *testing.T) {
 	cat, err := i18n.Load(locales.FS)
 	require.NoError(t, err)
 	s := &notify.Sender{Catalog: cat}
-	require.Len(t, rotationParams, len(sshkeys.Templates()))
-	for _, tpl := range sshkeys.Templates() {
+	tpls := sshkeys.Templates()
+	for tpl := range rotationParams {
+		if !slices.Contains(tpls, tpl) {
+			tpls = append(tpls, tpl) // a template whose texts exist before the service sends it
+		}
+	}
+	for _, tpl := range tpls {
 		params, ok := rotationParams[tpl]
 		require.True(t, ok, "%s has no params in this test", tpl)
 		for _, lang := range []string{"en", "tr"} {

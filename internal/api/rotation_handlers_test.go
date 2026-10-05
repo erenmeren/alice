@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -190,7 +191,7 @@ func TestRotationRoutesAuthz(t *testing.T) {
 	for key, perm := range map[string]string{
 		"POST /api/v1/rotation/policies/{id}/actions/enable": "rotation.operate", "POST /api/v1/rotation/policies/{id}/actions/run": "rotation.operate",
 		"POST /api/v1/rotation/runs/{id}/actions/continue": "rotation.operate", "POST /api/v1/rotation/runs/{id}/actions/finish-now": "rotation.operate",
-		"POST /api/v1/rotation/runs/{id}/actions/keep-old": "rotation.operate", "POST /api/v1/rotation/runs/{id}/actions/abort": "rotation.operate",
+		"POST /api/v1/rotation/runs/{id}/actions/keep-old": "rotation.operate", "POST /api/v1/rotation/runs/{id}/actions/abort": "rotation.manage",
 		"POST /api/v1/rotation/policies": "rotation.manage", "PATCH /api/v1/rotation/policies/{id}": "rotation.manage",
 		"DELETE /api/v1/rotation/policies/{id}": "rotation.manage", "POST /api/v1/rotation/policies/{id}/actions/disable": "rotation.manage",
 		"POST /api/v1/rotation/policies/{id}/actions/preview": "rotation.manage", "POST /api/v1/ssh-keys/generate": "inventory.operate",
@@ -503,7 +504,12 @@ func TestRunDTOActionsAllowed(t *testing.T) {
 	assert.Equal(t, map[string]any{}, m["steps"].([]any)[0].(map[string]any)["params"])
 
 	d.License.(*fakeLicense).set(license.ErrLocked)
-	assert.Equal(t, []any{}, get()["actions_allowed"], "in lock nothing that needs the gate is offered")
+	locked := []any{}
+	for _, a := range sshkeys.AllowedActions(run, false) {
+		locked = append(locked, a)
+	}
+	assert.Equal(t, locked, get()["actions_allowed"], "in lock the service's answer with the gate closed")
+	assert.NotContains(t, get()["actions_allowed"], "finish_now")
 
 	d.License.(*fakeLicense).set(nil)
 	run = sampleRotation(sshkeys.StatusVerifyingNew)
@@ -665,4 +671,83 @@ func TestRotationRoutesRefuseBadIDsAndPassFailures(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, callWith(h, http.MethodPost, pp+"/actions/disable", "admin", `{"x":1}`, ifm).Code)
 	assert.Equal(t, http.StatusBadRequest, callWith(h, http.MethodPost, "/api/v1/rotation/runs/"+runID.String()+"/actions/keep-old", "admin-stepup", `{"x":1}`, nil).Code)
 	assert.Equal(t, http.StatusNotFound, call(h, http.MethodGet, "/api/v1/ssh-keys/x", "auditor", "").Code)
+}
+
+// An explicit notify_before_hours 0 or new_key_type "" is a validation error, never a silent default; absent fields
+// keep the defaults (review M4). The planner's unknown new key type marks the field (review M13).
+func TestPolicyFieldsAreNeverSilentlyDefaulted(t *testing.T) {
+	d, fk, _ := sshDeps(t)
+	fk.CreatePolicyFn = func(context.Context, inventory.Actor, sshkeys.PolicyInput) (sshkeys.Policy, error) {
+		return samplePolicy(false, 1), nil
+	}
+	fk.UpdatePolicyFn = func(context.Context, inventory.Actor, uuid.UUID, int, sshkeys.PolicyPatch) (sshkeys.Policy, error) {
+		return samplePolicy(false, 4), nil
+	}
+	h := NewHandler(d)
+	pp := "/api/v1/rotation/policies/" + policyID.String()
+	ifm := map[string]string{"If-Match": `"3"`}
+	base := `"ssh_key_id":"` + managedID.String() + `","name":"ci","interval_days":90`
+	for body, want := range map[string]validate.FieldError{
+		`{` + base + `,"notify_before_hours":0}`: {Field: "notify_before_hours", Code: validate.OutOfRange, Params: map[string]string{"min": "1", "max": "168"}},
+		`{` + base + `,"new_key_type":""}`:       {Field: "new_key_type", Code: validate.OneOf, Params: map[string]string{"values": "same, ed25519, rsa-3072, rsa-4096, ecdsa-p256"}},
+	} {
+		fk.reset()
+		rec := call(h, http.MethodPost, "/api/v1/rotation/policies", "admin", body)
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, body)
+		assert.Equal(t, []validate.FieldError{want}, errorDetails(t, rec), body)
+		assert.Empty(t, fk.Calls(), body)
+	}
+	for body, field := range map[string]string{`{"notify_before_hours":0}`: "notify_before_hours", `{"new_key_type":""}`: "new_key_type"} {
+		fk.reset()
+		rec := callWith(h, http.MethodPatch, pp, "admin", body, ifm)
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, body)
+		assert.Equal(t, field, errorDetails(t, rec)[0].Field, body)
+		assert.Empty(t, fk.Calls(), body)
+	}
+	assert.Equal(t, http.StatusCreated, call(h, http.MethodPost, "/api/v1/rotation/policies", "admin", `{`+base+`}`).Code, "absent fields keep the defaults")
+	fk.UpdatePolicyFn = func(context.Context, inventory.Actor, uuid.UUID, int, sshkeys.PolicyPatch) (sshkeys.Policy, error) {
+		return sshkeys.Policy{}, fmt.Errorf("plan: %w", plan.ErrNewKeyType)
+	}
+	rec := callWith(h, http.MethodPatch, pp, "admin", `{"new_key_type":"same"}`, ifm)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, []validate.FieldError{{Field: "new_key_type", Code: validate.OneOf, Params: map[string]string{"values": "same, ed25519, rsa-3072, rsa-4096, ecdsa-p256"}}},
+		errorDetails(t, rec))
+}
+
+// The run list carries no places (counts only) and loads at most 20 runs; places and steps are on the detail only
+// (review I2).
+func TestRunListHasCountsNotLocations(t *testing.T) {
+	d, fk, _ := sshDeps(t)
+	run := sampleRotation(sshkeys.StatusRemovingOld)
+	run.Locations = append(run.Locations,
+		sshkeys.RotationLocation{ID: uuid.New(), N: 3, State: sshkeys.LocRemoved},
+		sshkeys.RotationLocation{ID: uuid.New(), N: 4, State: sshkeys.LocRemoveFailed, ErrorCode: sshkeys.ReasonNewKeyFailed},
+		sshkeys.RotationLocation{ID: uuid.New(), N: 5, State: sshkeys.LocKeptOld})
+	var gotLimit int
+	fk.RotationsFn = func(_ context.Context, f sshkeys.RotationFilter) ([]sshkeys.Rotation, string, error) {
+		gotLimit = f.Limit
+		return []sshkeys.Rotation{run}, "", nil
+	}
+	fk.RotationFn = func(context.Context, uuid.UUID) (sshkeys.Rotation, error) { return run, nil }
+	h := NewHandler(d)
+	rec := call(h, http.MethodGet, "/api/v1/rotation/runs", "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 20, gotLimit, "the default page is 20 runs")
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
+	require.Len(t, page.Items, 1)
+	assert.NotContains(t, page.Items[0], "locations")
+	assert.NotContains(t, page.Items[0], "steps")
+	assert.Equal(t, map[string]any{"total": 5.0, "verified": 1.0, "removed": 1.0, "skipped": 1.0, "kept": 1.0, "failed": 1.0},
+		page.Items[0]["location_counts"])
+	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodGet, "/api/v1/rotation/runs?limit=21", "auditor", "").Code)
+	call(h, http.MethodGet, "/api/v1/rotation/runs?limit=7", "auditor", "")
+	assert.Equal(t, 7, gotLimit)
+
+	m := decodeMap(t, call(h, http.MethodGet, "/api/v1/rotation/runs/"+runID.String(), "auditor", "").Body.Bytes())
+	assert.Len(t, m["locations"], 5)
+	assert.Contains(t, m, "steps")
+	assert.Contains(t, m, "location_counts")
 }

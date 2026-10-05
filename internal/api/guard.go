@@ -285,9 +285,10 @@ func (s *server) allowRate(w http.ResponseWriter, r *http.Request, class limitCl
 	case limitMFA:
 		checks = append(checks, func() (bool, time.Duration) { return s.mfa.Allow(ipKey) })
 	case limitDownload:
-		// Per signed-in user, whichever session or token (R41 row 5). A caller without a user is refused by the
-		// permission check anyway and is not charged to a shared bucket.
-		if p.UserID != uuid.Nil {
+		// Per user, and only for a signed-in browser session: the one kind the permission can allow (R41 row 5). A
+		// token, a pending sign-in or an anonymous call is refused by the permission check and spends nothing, so
+		// none of them can keep an Administrator from downloading (review M1).
+		if p.Kind == rbac.UserSession && p.UserID != uuid.Nil {
 			key := "u:" + p.UserID.String()
 			checks = append(checks, func() (bool, time.Duration) { return s.download.Allow(key) })
 		}

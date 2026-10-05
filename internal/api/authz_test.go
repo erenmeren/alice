@@ -72,7 +72,7 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 
 	// Phase 6 (R41 rows 5, 24, 25; S2): the private key download and every rotation action that starts or decides
 	// changes on servers are an Administrator's browser session with step-up, never a token; preparing, previewing,
-	// switching off and deleting policies is an Administrator's, operate tokens included.
+	// switching off, deleting policies and stopping a run (Stop and undo) is an Administrator's, operate tokens included.
 	rbac.SSHKeysDownload: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 	rbac.RotationManage:  row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb, allw),
 	rbac.RotationOperate: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
@@ -234,10 +234,11 @@ Alice, and a lock must not hold the keys of the customer's own servers hostage.
 **SSH keys and rotation (Phase 6).** The private key download is an Administrator's browser session with a fresh step-up,
 never an API token, at most 5 per minute per user; its audit row is written before the file is sent. A rotation policy
 is created switched off. ` + "`PATCH /api/v1/rotation/policies/{id}`" + ` is ` + "`rotation.manage`" + ` (operate tokens allowed), but a
-change to how often, how long or with which key type a policy that is on rotates switches it off in the same step;
+change to the interval, the overlap, the notice time or the new key type of a policy that is on switches it off in the same step;
 switching it on again (` + "`POST /api/v1/rotation/policies/{id}/actions/enable`" + `) needs ` + "`rotation.operate`" + `, an
 Administrator's browser session with step-up. A scheduled run starts only after its notice email was delivered; Run now
-(` + "`rotation.operate`" + `) needs the digest of the preview the Administrator saw.
+(` + "`rotation.operate`" + `) needs the digest of the preview the Administrator saw. Stop and undo
+(` + "`POST /api/v1/rotation/runs/{id}/actions/abort`" + `) is ` + "`rotation.manage`" + `: automation may stop a run.
 `
 
 func TestAuthzMatrixDocIsCurrent(t *testing.T) {
@@ -390,7 +391,7 @@ func routeRuleViolations(routes []route) []string {
 
 // rotationOperateAction: the rotation actions that start or decide changes on servers (rotation.operate).
 func rotationOperateAction(p string) bool {
-	for _, a := range []string{"/actions/enable", "/actions/run", "/actions/continue", "/actions/finish-now", "/actions/keep-old", "/actions/abort"} {
+	for _, a := range []string{"/actions/enable", "/actions/run", "/actions/continue", "/actions/finish-now", "/actions/keep-old"} {
 		if strings.HasSuffix(p, a) {
 			return true
 		}
@@ -548,7 +549,7 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/enable", perm: rbac.RotationManage},
 		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/run", perm: rbac.RotationManage},
 		{method: http.MethodPost, pattern: "/api/v1/rotation/runs/{id}/actions/keep-old", perm: rbac.RotationManage},
-		{method: http.MethodPost, pattern: "/api/v1/rotation/runs/{id}/actions/abort", perm: rbac.RotationManage},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/runs/{id}/actions/abort", perm: rbac.RotationOperate},
 		{method: http.MethodPatch, pattern: "/api/v1/rotation/policies/{id}", perm: rbac.InventoryOperate},
 		{method: http.MethodGet, pattern: "/api/v1/rotation/runs", perm: rbac.RotationManage},
 		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/generate", perm: rbac.Read},
@@ -589,6 +590,7 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/disable", perm: rbac.RotationManage},
 		{method: http.MethodPatch, pattern: "/api/v1/rotation/policies/{id}", perm: rbac.RotationManage},
 		{method: http.MethodGet, pattern: "/api/v1/rotation/runs/{id}", perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/runs/{id}/actions/abort", perm: rbac.RotationManage},
 	}
 	assert.Empty(t, routeRuleViolations(good))
 }

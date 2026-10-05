@@ -423,6 +423,11 @@
         "title": "Alice does not know yet whether the key was added.",
         "cause": "The server did not answer Alice's request to add the key, and the key is not in the file yet. The request may still arrive at the server.",
         "action": "Nothing to do now: Alice waits until the request can no longer arrive, then tries again. If this repeats, check the connection to the server."
+      },
+      "connection_account_file": {
+        "title": "This place belongs to the account Alice connects with.",
+        "cause": "The user is the account Alice signs in with, or the file is one of that account's key files. Alice never changes those: the setup commands own them.",
+        "action": "Nothing to do here. Use another user or another file for this key."
       }
     },
     "rotation": {
@@ -488,12 +493,12 @@
       },
       "stopped": {
         "title": "An administrator stopped the rotation.",
-        "cause": "Alice removed the new key again where it had added it; the old key was not touched.",
+        "cause": "Alice removes the new key again where it had added it; the old key is not touched. The rotation's page shows where this is done.",
         "action": "Start the rotation again when you are ready."
       },
       "policy_off": {
         "title": "The planned run was cancelled because the policy was switched off, changed or deleted.",
-        "cause": "A policy that is off starts no run. Changing how often, how long or with which key type a policy that is on rotates switches it off.",
+        "cause": "A policy that is off starts no run. Changing the interval, the overlap, the notice time or the new key type of a policy that is on switches it off.",
         "action": "Switch the policy on again to plan the next run."
       },
       "new_key_failed": {
@@ -535,6 +540,13 @@
         "title": "A server's answer arrived after Alice had given up on it.",
         "cause": "Alice had stopped waiting for this place after several attempts. Its answer came later, so the rotation's record and the key file on the server may differ there.",
         "action": "Open the rotation's page and check the key file on this server, then scan the server again so that Alice lists its keys as they are."
+      }
+    },
+    "notify": {
+      "queue_failed": {
+        "title": "Alice could not queue the email about the license renewal.",
+        "cause": "Writing the email to Alice's outbox failed. A paused rotation continues only after that email is queued, and Alice tries again at every background check.",
+        "action": "Check Alice's logs and its database, then choose Continue again once the email is queued."
       }
     },
     "job": {
@@ -1234,6 +1246,10 @@
       }
     },
     "rotation": {
+      "late_result": {
+        "subject": "Late answer in the SSH key rotation: {{key_label}}",
+        "body": "After the rotation of {{key_label}} had given up on one place, the server answered. Server: {{server}}. User: {{os_user}}. File: {{file_path}}.\n\nResult: {{result}} (removed: the old key was removed there after all; undone: the new key was removed there after all).\n\nAlice queued a scan of the server so that its key list shows the file as it is now. Open the rotation's page in Alice to check this place."
+      },
       "preview": {
         "subject": "Planned SSH key rotation: {{key_label}}",
         "body": "Alice plans to rotate the SSH key {{key_label}} ({{fingerprint}}). Planned start: {{planned_for}}. A policy that is switched off starts a run only when an administrator chooses Run now.\n\nAlice will add a new key next to the old one, check that the new key works, keep both keys for the overlap, then remove the old key. Nothing is removed where the new key did not work.\n\nPlaces that will change: {{change_count}}. Places that will be skipped: {{skip_count}}.\n\nOpen the key's page in Alice to see the exact servers, users and files. To stop a planned run, switch the policy off before it starts."
@@ -1272,12 +1288,14 @@
       },
       "decision_needed": {
         "subject": "SSH key rotation waits for a decision: {{key_label}}",
-        "body": "Alice added the new key for {{key_label}} but could not test a login with it in some places (count: {{count}}). On the rotation's page, decide whether to keep the old key there or to stop and undo the rotation. Without a decision Alice undoes the rotation at {{decision_due}}."
+        "body": "Alice added the new key for {{key_label}} but could not test a login with it in some places (count: {{count}}). On the rotation's page, decide whether to keep the old key there or to stop and undo the rotation. Without a decision Alice undoes the rotation at {{decision_due}} (later if the rotation is paused because of the license)."
       }
     }
   },
   "rotation": {
     "skip": {
+      "connection_files_unknown": "Alice does not know all key files of its connection account on this server; scan the server again.",
+      "connection_account_file": "This place belongs to Alice's connection account or one of its files; Alice never changes those.",
       "target_deleted": "The server was removed from Alice.",
       "host_key_unconfirmed": "The server's fingerprint is not confirmed yet.",
       "host_key_changed": "The server's identity changed.",
