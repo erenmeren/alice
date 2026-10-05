@@ -493,7 +493,7 @@ func (s *Service) ListSSHKeys(ctx context.Context, f KeyFilter) (KeyPage, error)
     coalesce(bool_and(l.missing_since IS NOT NULL OR l.removed_by_alice_at IS NOT NULL) FILTER (WHERE l.id IS NOT NULL), false)
 FROM ssh_keys k
 LEFT JOIN (ssh_key_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL) ON l.ssh_key_id = k.id
-WHERE (l.id IS NOT NULL OR (k.managed AND k.retired_at IS NULL AND $1::uuid IS NULL AND $2::text = '' AND $4::text = ''))
+WHERE (l.id IS NOT NULL OR (k.managed AND ($5::boolean OR k.retired_at IS NULL) AND $1::uuid IS NULL AND $2::text = '' AND $4::text = ''))
   AND ($1::uuid IS NULL OR l.target_id = $1)
   AND ($2::text = '' OR l.os_user = $2)
   AND ($3::text = ''
@@ -611,14 +611,30 @@ func cleanKeyFiles(in []providers.UserKeyFiles) []providers.UserKeyFiles {
 	return out
 }
 
-// spoofing reports a character that must not appear in a name or path shown in the UI: a control character, an
-// invisible or bidirectional-control format character (U+200B..U+200F, U+202A..U+202E, U+2066..U+2069, ...) or a
-// line or paragraph separator.
-func spoofing(r rune) bool {
-	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+// blankLooking lists the characters no Unicode category catches: the Hangul fillers (U+115F, U+1160, U+3164,
+// U+FFA0) and the braille blank (U+2800) render as nothing but are letters or symbols.
+const blankLooking = "\u115f\u1160\u3164\uffa0\u2800"
+
+// spoofingText reports text that must not be shown in the UI as a name or path because it can be made to look
+// like something else: any control character (Cc), format character (Cf: zero-width, bidirectional controls such
+// as U+202E and U+2066..U+2069), line or paragraph separator (Zl, Zp), space other than U+0020 (Zs: no-break,
+// ideographic and the en/em spaces), one of the blank-looking characters above, or a combining mark (Mn, Me:
+// variation selectors, U+034F) at the start of the text or of a path segment (right after a '/'): a mark in the
+// middle of a segment belongs to its base letter and is allowed.
+func spoofingText(s string) bool {
+	start := true
+	for _, r := range s {
+		switch {
+		case unicode.IsControl(r), unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp), unicode.Is(unicode.Zs, r) && r != ' ',
+			strings.ContainsRune(blankLooking, r), start && unicode.In(r, unicode.Mn, unicode.Me):
+			return true
+		}
+		start = r == '/'
+	}
+	return false
 }
 
 // plainText: 1 to limit bytes of valid UTF-8 without control, invisible or bidirectional characters (clean leaves it as it is).
 func plainText(s string, limit int) bool {
-	return s != "" && len(s) <= limit && clean(s) == s && !strings.ContainsFunc(s, spoofing)
+	return s != "" && len(s) <= limit && clean(s) == s && !spoofingText(s)
 }

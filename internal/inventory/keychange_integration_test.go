@@ -397,3 +397,32 @@ VALUES ($1, $2, 'ssh-ed25519', 'k', $3, $3)`, disc, genFP2, now.Add(time.Second)
 	require.Len(t, items, 1, "the generated key stays; the discovered one lost its only (deleted) target")
 	assert.Equal(t, key, items[0].ID)
 }
+
+func TestListSSHKeysRetiredKeyOnDeletedServersNeedsIncludeMissing(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	list := func(f inventory.KeyFilter) []inventory.SSHKey {
+		t.Helper()
+		p, err := h.svc.ListSSHKeys(h.ctx, f)
+		require.NoError(t, err)
+		return p.Items
+	}
+	// A retired generated key whose locations are only on deleted servers is visible with IncludeMissing (and not
+	// without), like any retired key with nothing live.
+	gone := seedGeneratedKey(t, h, "SHA256:Old0000000000000000000000000000000000000000", "old@alice")
+	oldTarget := okTarget(t, h, admin, "web-gone")
+	insertLoc(t, h, gone, oldTarget.ID, "deploy", deployFile, 1, nil, nil)
+	_, err := h.db.Owner.Exec(h.ctx, "UPDATE ssh_keys SET retired_at = now() WHERE id = $1", gone)
+	require.NoError(t, err)
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE targets SET deleted_at = now() WHERE id = $1", oldTarget.ID)
+	require.NoError(t, err)
+	ids := func(f inventory.KeyFilter) []uuid.UUID {
+		var out []uuid.UUID
+		for _, k := range list(f) {
+			out = append(out, k.ID)
+		}
+		return out
+	}
+	assert.NotContains(t, ids(inventory.KeyFilter{}), gone)
+	assert.Contains(t, ids(inventory.KeyFilter{IncludeMissing: true}), gone)
+}

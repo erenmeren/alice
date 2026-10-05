@@ -61,37 +61,61 @@ func (s *Service) KeyLocationsTx(ctx context.Context, tx pgx.Tx, keyID uuid.UUID
 	// locked only on the targets already locked, and the whole read is repeated when one appeared meanwhile, so a
 	// location is never locked without its target.
 	for attempt := 0; attempt < 3; attempt++ {
-		var targets []uuid.UUID
-		rows, err := tx.Query(ctx, `SELECT t.id FROM targets t WHERE t.deleted_at IS NULL AND t.id IN
-    (SELECT l.target_id FROM ssh_key_locations l WHERE l.ssh_key_id = $1 AND l.removed_by_alice_at IS NULL)
-ORDER BY t.id FOR UPDATE OF t`, keyID)
-		if err != nil {
-			return nil, fmt.Errorf("inventory: lock the key's targets: %w", err)
-		}
-		if targets, err = pgx.CollectRows(rows, pgx.RowTo[uuid.UUID]); err != nil {
-			return nil, fmt.Errorf("inventory: lock the key's targets: %w", err)
-		}
-		if targets == nil {
-			targets = []uuid.UUID{} // an empty set, not "all targets"
-		}
-		lrows, err := tx.Query(ctx, keyLocationsQuery+" FOR UPDATE OF l", keyID, targets)
-		if err != nil {
-			return nil, fmt.Errorf("inventory: read key locations: %w", err)
-		}
-		locs, err := collectLocations(lrows)
-		if err != nil {
-			return nil, err
-		}
-		var stray int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM ssh_key_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
-WHERE l.ssh_key_id = $1 AND l.removed_by_alice_at IS NULL AND NOT (l.target_id = ANY ($2))`, keyID, targets).Scan(&stray); err != nil {
-			return nil, fmt.Errorf("inventory: read key locations: %w", err)
-		}
-		if stray == 0 {
-			return locs, nil
+		locs, ok, err := s.lockKeyLocations(ctx, tx, keyID)
+		if err != nil || ok {
+			return locs, err
 		}
 	}
 	return nil, errors.New("inventory: the key's locations keep changing; try again")
+}
+
+// lockKeyLocations is one attempt of KeyLocationsTx(lock) inside a savepoint: all targets of the key's live
+// locations are locked in ascending id (the query's ORDER BY), then the location rows on them. When a scan added a
+// location on another target meanwhile (ok false) the savepoint is rolled back, which releases every lock of the
+// attempt, so a retry locks the larger set again in ascending order from scratch.
+func (s *Service) lockKeyLocations(ctx context.Context, tx pgx.Tx, keyID uuid.UUID) (_ []KeyLocation, ok bool, err error) {
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("inventory: lock the key's locations: %w", err)
+	}
+	defer func() {
+		if !ok {
+			_ = sp.Rollback(ctx)
+		}
+	}()
+	rows, err := sp.Query(ctx, `SELECT t.id FROM targets t WHERE t.deleted_at IS NULL AND t.id IN
+    (SELECT l.target_id FROM ssh_key_locations l WHERE l.ssh_key_id = $1 AND l.removed_by_alice_at IS NULL)
+ORDER BY t.id FOR UPDATE OF t`, keyID)
+	if err != nil {
+		return nil, false, fmt.Errorf("inventory: lock the key's targets: %w", err)
+	}
+	targets, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return nil, false, fmt.Errorf("inventory: lock the key's targets: %w", err)
+	}
+	if targets == nil {
+		targets = []uuid.UUID{} // an empty set, not "all targets"
+	}
+	lrows, err := sp.Query(ctx, keyLocationsQuery+" FOR UPDATE OF l", keyID, targets)
+	if err != nil {
+		return nil, false, fmt.Errorf("inventory: read key locations: %w", err)
+	}
+	locs, err := collectLocations(lrows)
+	if err != nil {
+		return nil, false, err
+	}
+	var stray int
+	if err := sp.QueryRow(ctx, `SELECT count(*) FROM ssh_key_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
+WHERE l.ssh_key_id = $1 AND l.removed_by_alice_at IS NULL AND NOT (l.target_id = ANY ($2))`, keyID, targets).Scan(&stray); err != nil {
+		return nil, false, fmt.Errorf("inventory: read key locations: %w", err)
+	}
+	if stray > 0 {
+		return nil, false, nil
+	}
+	if err := sp.Commit(ctx); err != nil {
+		return nil, false, fmt.Errorf("inventory: lock the key's locations: %w", err)
+	}
+	return locs, true, nil
 }
 
 // keyLocationsQuery reads a key's locations ordered by target, file and user; $2 limits the targets (NULL: all).

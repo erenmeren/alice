@@ -121,3 +121,30 @@ func TestKeyFilesOldShapeReadsIncomplete(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &f))
 	assert.True(t, f.KeyFiles[0].Complete)
 }
+
+func TestSpoofingText(t *testing.T) {
+	for _, bad := range []string{
+		"/a b",                            // no-break space (Zs)
+		"/a　b",                            // ideographic space (Zs)
+		"/a b",                            // thin space (Zs)
+		"/a b",                            // narrow no-break space (Zs)
+		"/a" + string(rune(0x200b)) + "b", // zero width space (Cf)
+		"/a" + string(rune(0x202e)) + "b", // right-to-left override (Cf)
+		"/a" + string(rune(0x2066)) + "b", // isolate (Cf)
+		"/a b",                            // line separator (Zl)
+		"/a b",                            // paragraph separator (Zp)
+		"/a\tb",                           // control (Cc)
+		"/aᅟb",                            // Hangul fillers
+		"/aᅠb", "/aㅤb", "/aﾠb",
+		"/a⠀b",       // braille blank
+		"́/a",        // a combining mark (Mn) at the start
+		"/️a",        // a variation selector (Mn) at the start of a segment
+		"/dir/͏name", // a combining grapheme joiner at the start of a segment
+		"/dir/⃝name", // an enclosing mark (Me) at the start of a segment
+	} {
+		assert.True(t, spoofingText(bad), "%q", bad)
+	}
+	for _, good := range []string{"/home/deploy/.ssh/authorized_keys", "/home/my dir/ak", "/home/josé/ak", "/home/é/ak", "/a/b️", "/üser/ak"} {
+		assert.False(t, spoofingText(good), "%q", good)
+	}
+}
