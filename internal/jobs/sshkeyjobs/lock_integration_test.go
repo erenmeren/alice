@@ -304,3 +304,42 @@ func TestScheduledRunStartsOnAnAdvancingClock(t *testing.T) {
 	assert.Equal(t, sshkeys.StatusCompleted, r.Status)
 	e.assertEveryRemovalFollowedAFreshLogin(t, k.Fingerprint, r.NewFingerprint)
 }
+
+// A short lock while a failed removal's retry job runs: the re-check is refused by the gate, nothing is
+// sent, and the store gives the retry back (step retry_returned); after the renewal the removal completes.
+func TestLockDuringARemovalRetryReturnsTheRetry(t *testing.T) {
+	e := newEnv(t)
+	web := e.server("web-01")
+	k := e.generate("ci")
+	e.place(k, web, "deploy")
+	removes, locked := 0, false
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
+		if p.Method == "RemoveAuthorizedKey" {
+			if removes++; removes == 1 {
+				return fake.FaultUnreachable
+			}
+		}
+		if p.Method == "VerifyKeyLogin" && removes == 1 && !locked {
+			locked = true
+			e.gate.lock() // the lock begins while the retry's re-check runs
+		}
+		return fake.FaultNone
+	})
+	r := e.runNow(e.policy(k.ID, 1))
+	e.drain()
+	e.clock.Advance(24 * time.Hour)
+	e.sweep()
+	e.drain()
+	require.Equal(t, sshkeys.LocRemoveFailed, e.loc(r.ID, web, "deploy").State)
+	e.clock.Advance(time.Minute)
+	e.sweep()
+	e.drain()
+	assert.True(t, e.gate.locked.Load())
+	assert.Equal(t, 1, removes, "nothing sent in lock")
+	assert.Equal(t, 1, e.count("SELECT count(*) FROM rotation_steps WHERE rotation_id = $1 AND name = 'retry_returned'", r.ID))
+	assert.Equal(t, sshkeys.LocRemoveFailed, e.loc(r.ID, web, "deploy").State)
+	e.gate.unlock()
+	r = e.settleRun(r.ID)
+	assert.Equal(t, sshkeys.StatusCompleted, r.Status)
+	assert.Equal(t, 2, removes)
+}

@@ -483,6 +483,7 @@ func TestLockDuringALostAddChangesNothing(t *testing.T) {
 	assert.Equal(t, sshkeys.LocAdding, l.State, "nothing recorded in lock")
 	assert.Empty(t, l.ErrorCode)
 	assert.Zero(t, e.countEvents("AddAuthorizedKey"), "no send in lock")
+	assert.Equal(t, 0, e.count("SELECT job_count FROM rotation_locations WHERE id = $1", l.ID), "the lock used up no retry")
 	e.sweep()
 	r = e.run(r.ID)
 	assert.Equal(t, sshkeys.StatusAddingNew, r.Status, "no rollback in lock")

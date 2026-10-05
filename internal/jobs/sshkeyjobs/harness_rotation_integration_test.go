@@ -112,11 +112,15 @@ func (e *env) settleRun(id uuid.UUID) sshkeys.Rotation {
 	e.t.Helper()
 	for range 60 {
 		e.drain()
-		if r := e.run(id); finished(r.Status) && e.liveLocationJobs() == 0 {
+		r := e.run(id)
+		if finished(r.Status) && e.liveLocationJobs() == 0 {
 			return r
 		}
 		e.clock.Advance(time.Minute)
 		e.sweep()
+		if r.PausedLicense && !e.gate.locked.Load() {
+			_ = e.keys.Continue(e.ctx, e.admin, id) // refused until the sweep queued the renewal notice
+		}
 	}
 	return e.run(id)
 }

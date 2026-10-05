@@ -171,8 +171,10 @@ func TestDeployUncertainWriteResolvedByLogin(t *testing.T) {
 			e.clock.Advance(e.keys.UndoWait())
 			e.drain()
 			v = e.job(job)
-			assert.Equal(t, "undone", v.Result["result"])
-			assert.False(t, e.world.Has(srv, deployFile, k.Fingerprint), "the uncertain line is removed by its fingerprint")
+			// The line is found before the next send: kept and recorded (S-1b), never removed unproven.
+			assert.Equal(t, "already_present", v.Result["result"])
+			assert.True(t, e.world.Has(srv, deployFile, k.Fingerprint))
+			assert.Zero(t, e.countEvents("RemoveAuthorizedKey"))
 			assert.Equal(t, 2, e.countEvents("AddAuthorizedKey"), "sent once more after the wait, for a definite answer")
 		}
 	}
@@ -180,7 +182,7 @@ func TestDeployUncertainWriteResolvedByLogin(t *testing.T) {
 
 // S3: an uncertain write whose line is not there (yet) is not concluded "undone": the job waits until the
 // helper's budget after the send has passed, then starts over; the late line is then found and removed.
-func TestDeployLateWriteIsStillUndone(t *testing.T) {
+func TestDeployLateWriteIsNeverConcludedUndone(t *testing.T) {
 	e := newEnv(t)
 	srv := e.server("web-01")
 	k := e.generate("ci")
@@ -210,10 +212,15 @@ func TestDeployLateWriteIsStillUndone(t *testing.T) {
 	require.Equal(t, 1, e.world.LateLanded(), "the stalled write landed after the call gave up")
 	e.drain()
 	v = e.job(job)
-	assert.Equal(t, jobs.StatusFailed, v.Status)
-	assert.Equal(t, "undone", v.Result["result"])
-	assert.Equal(t, "sshkey.login_failed", v.LastErrorCode)
-	assert.False(t, e.world.Has(srv, deployFile, k.Fingerprint), "the late line was removed")
+	// The next attempt finds the line before its own send: whose it is cannot be proven (the first
+	// attempt's "absent before" is not on record: store request S-1b), so it is kept and recorded as
+	// present, never "undone" while it is there, and a scan is queued.
+	assert.Equal(t, jobs.StatusSucceeded, v.Status)
+	assert.Equal(t, "already_present", v.Result["result"])
+	assert.Equal(t, "login_refused", v.Result["note"])
+	assert.True(t, e.world.Has(srv, deployFile, k.Fingerprint), "the record says what the file holds")
+	assert.Equal(t, 1, e.count("SELECT count(*) FROM ssh_key_locations WHERE ssh_key_id = $1", k.ID))
+	assert.Equal(t, 1, e.discoveries(srv))
 	assert.Equal(t, 2, e.countEvents("AddAuthorizedKey"), "re-sent once, after the wait")
 }
 
@@ -409,7 +416,7 @@ func TestDeployKilledAfterTheAddConverges(t *testing.T) {
 			e.drain()
 			v := e.job(job)
 			assert.Equal(t, jobs.StatusSucceeded, v.Status)
-			assert.Equal(t, "verified", v.Result["result"], "the line found again is this job's own")
+			assert.Equal(t, "already_present", v.Result["result"], "found before the next send: recorded, its origin unproven (S-1b)")
 			assert.Equal(t, 1, e.audits("job.recovered"))
 			assert.Equal(t, 1, e.count("SELECT count(*) FROM ssh_key_locations WHERE ssh_key_id = $1", k.ID))
 			assert.Len(t, e.world.Lines(srv, deployFile), 1, "one line, never two")
@@ -419,7 +426,7 @@ func TestDeployKilledAfterTheAddConverges(t *testing.T) {
 }
 
 // A kill after the add with a refused login: the restarted job owns the line it finds and removes it.
-func TestDeployKilledWithARefusedLoginIsUndone(t *testing.T) {
+func TestDeployKilledWithARefusedLoginKeepsTheLine(t *testing.T) {
 	e := newEnv(t)
 	srv := e.server("web-01")
 	k := e.generate("ci")
@@ -430,7 +437,7 @@ func TestDeployKilledWithARefusedLoginIsUndone(t *testing.T) {
 		return fake.FaultNone
 	})
 	job := e.deploy(k, srv, "")
-	kill := &killer{points: map[string]bool{}, afterCall: 1}
+	kill := newKiller("session:after:AddAuthorizedKey")
 	e.setKiller(kill)
 	e.drainDying()
 	require.Equal(t, "session:after:AddAuthorizedKey", kill.firedAt())
@@ -442,21 +449,19 @@ func TestDeployKilledWithARefusedLoginIsUndone(t *testing.T) {
 	e.clock.Advance(e.keys.UndoWait())
 	e.drain()
 	v := e.job(job)
-	assert.Equal(t, "undone", v.Result["result"], "a line found after a send of this job on record is its own")
-	assert.False(t, e.world.Has(srv, deployFile, k.Fingerprint))
+	assert.Equal(t, "already_present", v.Result["result"], "a send on record alone does not make the line this job's")
+	assert.True(t, e.world.Has(srv, deployFile, k.Fingerprint), "kept, recorded, and a scan queued")
+	assert.Equal(t, 1, e.discoveries(srv))
 	assert.Equal(t, 2, e.countEvents("AddAuthorizedKey"), "one add per attempt (the second found the line)")
 	assert.Equal(t, 1, e.countEvents("VerifyKeyLogin"))
-	assert.Equal(t, 1, e.countEvents("RemoveAuthorizedKey"))
-	assert.Equal(t, 4, e.worldCalls())
+	assert.Zero(t, e.countEvents("RemoveAuthorizedKey"))
+	assert.Equal(t, 2, e.countEvents("ListKeys"), "the file is listed before each send")
 }
 
-// Review I1: a line that was there before the job is never removed, also on a retry. Ownership comes
-// from the durable send record (sshkey.add_sent), never from the attempt number.
+// Review I1: a line that was there before the job is never removed, also on a retry after a send was
+// recorded: ownership comes from a complete listing right before the send (or the helper's "written"),
+// never from the attempt number or the send record alone.
 func TestDeployRetryNeverRemovesALineThatWasThere(t *testing.T) {
-	// Waiting on the store (request S-1b in task-10-report.md, fix round 1): the send record counts the
-	// first attempt's send although it answered definitely that nothing was written, so the retry takes
-	// the line for its own.
-	t.Skip("waiting on store request S-1b: a send with a definite no-change answer must not make a found line this job's")
 	e := newEnv(t)
 	srv := e.server("web-01")
 	k := e.generate("ci")
@@ -508,4 +513,34 @@ func TestDeployLastAttemptAfterASendLeavesARecord(t *testing.T) {
 	assert.Equal(t, 1, e.audits("sshkey.add_failed"))
 	assert.Equal(t, 3, e.audits("sshkey.add_sent"), "every send is on record before it is made")
 	assert.Equal(t, 1, e.discoveries(srv), "an earlier send may have landed: the record catches up")
+}
+
+// Review I1 (coordinator's case): the answer of the add is lost and the listing before the send did not
+// read the file, so whose line it is cannot be known: the line is never removed; the deploy fails with
+// sshkey.add_uncertain for a person, and a scan is queued.
+func TestDeployUnknownOwnershipKeepsTheLine(t *testing.T) {
+	e := newEnv(t)
+	srv := e.server("web-01")
+	k := e.generate("ci")
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
+		switch p.Method {
+		case "ListKeys":
+			return fake.FaultUnread
+		case "AddAuthorizedKey":
+			return fake.FaultAfterWrite
+		case "VerifyKeyLogin":
+			return fake.FaultRefuse
+		}
+		return fake.FaultNone
+	})
+	job := e.deploy(k, srv, "")
+	e.drain()
+	v := e.job(job)
+	assert.Equal(t, jobs.StatusFailed, v.Status)
+	assert.Equal(t, "sshkey.add_uncertain", v.LastErrorCode)
+	assert.Equal(t, true, v.Result["needs_attention"])
+	assert.True(t, e.world.Has(srv, deployFile, k.Fingerprint), "kept: Alice cannot prove the line is hers")
+	assert.Zero(t, e.countEvents("RemoveAuthorizedKey"))
+	assert.Equal(t, 1, e.discoveries(srv))
+	assert.Equal(t, "sshkey.add_uncertain", e.lastAuditDetail("sshkey.add_failed", "reason"))
 }

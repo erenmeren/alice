@@ -43,10 +43,15 @@ const (
 // deploy is the sshkey.add handler (C9's decision table). The deploy is read again from the database
 // (DeployJob: every rule of the request applies to the current state); every send is recorded before it
 // is made (BeginDeploySend, claim-fenced) and carries the job id as operation id; a test login with the
-// new key as the user decides; a line this job sent and whose login failed is removed again by its
-// fingerprint (the undo never names another key). A line found in the file is this job's only when a
-// send of this job is on record (review I1): one that was there before is never removed. An undo waits
-// until the store says no unanswered send of this job can still land (S3, DeploySendRecord.UndoNotBefore).
+// new key as the user decides; a line this job added and whose login failed is removed again by its
+// fingerprint (the undo never names another key).
+//
+// Whose line it is (review I1): right before each send the file is listed. A line is this job's only when
+// that listing read the file completely and the line was not in it (KeyListing.Absent), or the helper
+// answered that it wrote it. A line that was there before, or whose earlier presence is not known (a
+// listing that did not read the file), is never removed: such a deploy ends already_present, or failed
+// with sshkey.add_uncertain, and a scan is queued. Nothing is sent while an earlier send of this job may
+// still land, and an undo waits until the store says none can (S3, DeploySendRecord.UndoNotBefore).
 // Only ids and public facts reach the result.
 func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecorder) (res map[string]any, err error) {
 	actor := systemActor(j)
@@ -79,6 +84,12 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 		return nil, err
 	}
 	defer h.close(sess)
+	before, lerr0 := sess.ListKeys(ctx)
+	if ctx.Err() != nil {
+		return nil, jobs.Retry("ssh.timeout", nil, ctx.Err())
+	}
+	// absentBefore: proven not in the file right before this send (a failed listing proves nothing).
+	absentBefore := lerr0 == nil && before.Absent(d.OSUser, d.FilePath, d.Fingerprint)
 	send, err := h.d.Keys.BeginDeploySend(ctx, j.ID, d)
 	if err != nil {
 		if errors.Is(err, inventory.ErrClaimLost) {
@@ -121,8 +132,8 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 	case ares.Changed && !ares.Verified:
 		// §13.4 step 5: the re-read after the write shows other content.
 		return h.undoDeploy(ctx, j, actor, d, sess, steps, reasonVerifyFailed, true)
-	case ares.Changed || send.Resend:
-		st = addOwned
+	case ares.Changed || absentBefore:
+		st = addOwned // this send wrote it, or it was proven absent right before this send
 	default:
 		st = addPresent
 	}
@@ -136,6 +147,14 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 		out.Result, out.Note = sshkeys.DeployAlreadyPresent, presentNote(outcome, lerr, d.Options)
 	case lerr == nil && outcome == providers.KeyLoginAccepted:
 		out.Result = sshkeys.DeployVerified
+	case st == addUncertain && !absentBefore:
+		// The answer was lost and nothing proved the line was not there before: whose line it is cannot be
+		// known, so it is never removed; a person and a scan settle it.
+		out := sshkeys.DeployOutcome{Result: sshkeys.DeployFailed, Reason: reasonUncertain}
+		recorded = true
+		h.finish(ctx, actor, d, out)
+		h.discover(ctx, d.TargetID)
+		return deployResult(d, out), jobs.Attention(reasonUncertain, nil, nil)
 	case st == addUncertain:
 		// Only an accepted login proves an uncertain line (a refusal with from= or an unprovable login
 		// proves nothing): it is removed again, once no send of this job can still land.
@@ -154,7 +173,7 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 		return nil, jobs.Retry("internal.unexpected", nil, err)
 	}
 	if out.Result == sshkeys.DeployAlreadyPresent {
-		h.discover(ctx, d.TargetID)
+		h.discover(ctx, d.TargetID) // also when an earlier send of this job may have put it there
 	}
 	return deployResult(d, out), nil
 }
