@@ -384,8 +384,10 @@ BEGIN
 END $$;
 CREATE TRIGGER t14_refuse_download_audit BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION t14_refuse_download_audit();`)
 		require.NoError(t, err)
+		drop := `DROP TRIGGER IF EXISTS t14_refuse_download_audit ON audit_log; DROP FUNCTION IF EXISTS t14_refuse_download_audit();`
+		t.Cleanup(func() { _, _ = e.db.Owner.Exec(context.Background(), drop) })
 		w := e.probedDownload(e.admin, k.id, 1, false)
-		_, err = e.db.Owner.Exec(ctx, `DROP TRIGGER t14_refuse_download_audit ON audit_log; DROP FUNCTION t14_refuse_download_audit();`)
+		_, err = e.db.Owner.Exec(ctx, drop) // the audit works again for the rest of this subtest
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, w.status, 500, w.body.String())
 		assert.Contains(t, w.header.Get("Content-Type"), "application/json")

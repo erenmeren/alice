@@ -655,12 +655,14 @@ func TestFinishNowMailsTheNewRemovalTime(t *testing.T) {
 	e.drain()
 	e.advance(time.Hour)
 	e.stepUp(e.admin, e.adminAcct)
-	at := e.clock.Now()
 	requireStatus(t, e.admin.do(http.MethodPost, "/api/v1/rotation/runs/"+runID+"/actions/finish-now", nil), http.StatusNoContent)
 	var until string
 	require.NoError(t, e.db.Owner.QueryRow(context.Background(), `SELECT params->>'overlap_until' FROM notifications_outbox
 WHERE template_key = 'rotation.overlap_ending' ORDER BY created_at DESC LIMIT 1`).Scan(&until))
-	assert.Equal(t, at.UTC().Format("2006-01-02 15:04 UTC"), until, "the mail names the new removal time")
+	// The removal time the service computed and stored (the run's new overlap end), as the mail writes times.
+	end := e.run(e.admin, runID).OverlapUntil
+	require.NotNil(t, end)
+	assert.Equal(t, end.UTC().Format("2006-01-02 15:04 UTC"), until, "the mail names the new removal time")
 	e.deliverMail()
 	found := false
 	for _, m := range e.mailbox.messages() {

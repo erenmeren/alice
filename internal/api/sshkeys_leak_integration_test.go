@@ -60,10 +60,11 @@ func sshKeyCanaries(t *testing.T, name string, der []byte) []secretValue {
 		binaryCanary(name+" (PKCS#8 DER pieces)", der, public...),
 		{name: name + " (PKCS#8 PEM)", forms: pemForms(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))},
 	}
-	out = append(out, secretValue{name: name + " (PKCS#8 DER printed with %v)", forms: sprintForms(der)})
+	out = append(out, secretValue{name: name + " (PKCS#8 DER printed with %v)", forms: sprintForms(der), bounded: true})
 	switch k := key.(type) {
 	case ed25519.PrivateKey:
-		out = append(out, secretValue{name: name + " (Ed25519 seed)", forms: append(binaryForms(k.Seed())[1:], sprintForms(k.Seed())...)})
+		out = append(out, secretValue{name: name + " (Ed25519 seed)", forms: binaryForms(k.Seed())[1:]},
+			secretValue{name: name + " (Ed25519 seed printed with %v)", forms: sprintForms(k.Seed()), bounded: true})
 	case *rsa.PrivateKey:
 		out = append(out, secretValue{name: name + " (RSA d)", forms: append(binaryForms(k.D.Bytes())[1:], k.D.String())},
 			secretValue{name: name + " (RSA p)", forms: append(binaryForms(k.Primes[0].Bytes())[1:], k.Primes[0].String())},
@@ -73,7 +74,8 @@ func sshKeyCanaries(t *testing.T, name string, der []byte) []secretValue {
 	case *ecdsa.PrivateKey:
 		d, err := k.Bytes()
 		require.NoError(t, err)
-		out = append(out, secretValue{name: name + " (ECDSA scalar)", forms: append(append(binaryForms(d)[1:], sprintForms(d)...), new(big.Int).SetBytes(d).String())})
+		out = append(out, secretValue{name: name + " (ECDSA scalar)", forms: binaryForms(d)[1:]},
+			secretValue{name: name + " (ECDSA scalar printed)", forms: append(sprintForms(d), new(big.Int).SetBytes(d).String()), bounded: true})
 	default:
 		t.Fatalf("%s: unexpected key type %T", name, key)
 	}
@@ -82,7 +84,9 @@ func sshKeyCanaries(t *testing.T, name string, der []byte) []secretValue {
 
 // sprintForms are the spellings of a byte slice printed by Go's fmt (%v, %+v, slog's text of a []byte inside a
 // struct): the whole "[12 34 …]" and its inner runs of 24 bytes every 12 bytes (a printed key or signer struct
-// contains the slice's numbers, not its brackets).
+// contains the slice's numbers, not its brackets). The canaries built from them are bounded: a match must start and end
+// at a delimiter, never inside a longer number. A printed fragment of fewer than 24 bytes (or one that never covers a
+// whole window) is NOT caught; the other spellings of the same key still are.
 func sprintForms(b []byte) []string {
 	inner := func(p []byte) string { return strings.TrimSuffix(strings.TrimPrefix(goPrint(p), "["), "]") }
 	out := []string{goPrint(b)}
@@ -142,7 +146,7 @@ func dropPublic(secs []secretValue, corpus []string) []secretValue {
 				keep = append(keep, f)
 			}
 		}
-		out = append(out, secretValue{name: sec.name, forms: keep})
+		out = append(out, secretValue{name: sec.name, forms: keep, bounded: sec.bounded})
 	}
 	return out
 }
@@ -456,7 +460,7 @@ func TestSSHKeyLeakScannerFindsEveryCanary(t *testing.T) {
 		plant("emails", "an email the sender delivered", func() {
 			_, err := e.db.Owner.Exec(context.Background(), `INSERT INTO notifications_outbox (id, kind, to_address, template_key, params, locale,
     status, attempts, next_attempt_at, created_at) VALUES (gen_random_uuid(), 'email', 'ada@example.com', 'rotation.paused_license',
-    jsonb_build_object('key_label', $1::text), 'en', 'pending', 0, now() - interval '1 year', now() - interval '1 year')`, secret)
+    jsonb_build_object('key_label', $1::text), 'en', 'pending', 0, $2, $2)`, secret, e.clock.Now().Add(-time.Minute))
 			require.NoError(t, err)
 			require.Positive(t, e.deliverMail())
 		})

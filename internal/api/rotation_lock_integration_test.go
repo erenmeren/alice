@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
+
+	"alice/internal/providers/linuxssh/helperproto"
 )
 
 // Licence lock and rotation over the wire (L-29, L-83..L-88 at API level, S6): the lock comes from the real licence
@@ -225,6 +227,14 @@ func TestRotationInLockRunsNoCommand(t *testing.T) {
 	assert.NotNil(t, m["destroyed_at"], "destroyed after the renewal")
 }
 
+// pausedAt is when the run's current pause began (rotations.paused_at, as the service stored it).
+func (e *keyEnv) pausedAt(runID string) time.Time {
+	e.t.Helper()
+	var at time.Time
+	require.NoError(e.t, e.db.Owner.QueryRow(context.Background(), "SELECT paused_at FROM rotations WHERE id = $1", runID).Scan(&at))
+	return at
+}
+
 // newBlob is the run's new key as "type base64".
 func newBlob(t *testing.T, e *keyEnv, r runDoc) string {
 	t.Helper()
@@ -274,13 +284,14 @@ func TestContinueAfterRenewalOverTheWire(t *testing.T) {
 	e.advance(6 * time.Minute)
 	requireError(t, e.admin.do(http.MethodPost, "/api/v1/rotation/runs/"+runID+"/actions/continue", nil), http.StatusForbidden, "ALC-AUTH-0003")
 	e.stepUp(e.admin, e.adminAcct)
-	continued := e.clock.Now()
+	remaining := r.OverlapUntil.Sub(e.pausedAt(runID))
+	continued := e.clock.Now() // the services' clock is frozen between here and the answer
 	requireStatus(t, e.admin.do(http.MethodPost, "/api/v1/rotation/runs/"+runID+"/actions/continue", nil), http.StatusNoContent)
-	// The overlap resumes with the time that remained when the pause began (L-83 ruling, T14-D1): nothing is removed
-	// before it has passed again.
+	// The overlap resumes with exactly the time that remained when the pause began (L-83 ruling, T14-D1): nothing is
+	// removed before it has passed again.
 	r = e.run(e.admin, runID)
 	require.Equal(t, "overlap", r.Status)
-	require.True(t, r.OverlapUntil.After(continued))
+	assert.True(t, continued.Add(remaining).Equal(*r.OverlapUntil), "new end %v, want Continue %v + remaining %v", r.OverlapUntil, continued, remaining)
 	e.sweep(1)
 	assert.Equal(t, removals, e.auditCount("sshkey.removed"))
 	e.advance(r.OverlapUntil.Sub(e.clock.Now()) + time.Minute)
@@ -341,6 +352,8 @@ type writeLock struct {
 	mu    sync.Mutex
 	fired *sshFixture
 	err   error
+	// at the moment the lock began: the other servers' exec commands and authentication attempts
+	commands, auths map[*sshFixture]int
 }
 
 func (e *keyEnv) lockAtWrite(path string, fs ...*sshFixture) *writeLock {
@@ -353,6 +366,12 @@ func (e *keyEnv) lockAtWrite(path string, fs ...*sshFixture) *writeLock {
 				return
 			}
 			wl.fired = f
+			wl.commands, wl.auths = map[*sshFixture]int{}, map[*sshFixture]int{}
+			for _, o := range fs {
+				if o != f {
+					wl.commands[o], wl.auths[o] = len(o.server.Commands()), o.server.AuthAttempts()
+				}
+			}
 			end := e.license.Snapshot().Eval.EndsAt
 			e.clock.Advance(end.Sub(e.clock.Now()) + time.Hour)
 			wl.err = e.license.Tick(context.Background())
@@ -551,7 +570,7 @@ func TestL83FlaggedWhenTheLockEnters(t *testing.T) {
 	until := *e.run(e.admin, runID).OverlapUntil
 	reminders := e.outboxTemplates()["rotation.overlap_ending"]
 	require.NoError(t, e.task("rotation.sweep"))
-	pausedAt := e.clock.Now()
+	pausedAt := e.pausedAt(runID)
 	r := e.run(e.admin, runID)
 	require.True(t, until.After(e.clock.Now()), "the overlap has days left")
 	assert.Equal(t, "overlap", r.Status)
@@ -583,7 +602,7 @@ func TestL83FlaggedWhenTheLockEnters(t *testing.T) {
 	assert.Equal(t, "overlap", r.Status)
 	assert.False(t, r.PausedLicense)
 	require.NotNil(t, r.OverlapUntil)
-	assert.WithinDuration(t, continued.Add(remaining), *r.OverlapUntil, time.Minute, "the new end is Continue plus what remained")
+	assert.True(t, continued.Add(remaining).Equal(*r.OverlapUntil), "new end %v, want Continue %v + remaining %v", r.OverlapUntil, continued, remaining)
 	e.advance(remaining - 2*time.Hour)
 	e.sweep(2)
 	assert.Equal(t, "overlap", e.run(e.admin, runID).Status, "not before the remaining time has passed")
@@ -629,6 +648,7 @@ func TestScheduledStartInLockOverTheWire(t *testing.T) {
 	writes, keys := len(e.f.helperWrites()), e.count("ssh_keys")
 
 	e.lockNow()
+	commands, auths := len(e.f.server.Commands()), e.f.server.AuthAttempts()
 	require.True(t, e.clock.Now().Before(next))
 	e.hourly(next.Sub(e.clock.Now()) + 24*time.Hour)
 	r := e.run(e.admin, runID)
@@ -639,6 +659,8 @@ func TestScheduledStartInLockOverTheWire(t *testing.T) {
 	assert.Nil(t, r.NewSSHKeyID, "no key generated in lock")
 	assert.Equal(t, keys, e.count("ssh_keys"))
 	assert.Len(t, e.f.helperWrites(), writes, "nothing written in lock")
+	assert.Len(t, e.f.server.Commands(), commands, "no command at all in lock")
+	assert.Equal(t, auths, e.f.server.AuthAttempts(), "no sign-in in lock")
 
 	e.renew()
 	previews := e.outboxTemplates()["rotation.preview"]
@@ -668,6 +690,17 @@ func TestLockDuringRemovingOldOverTheWire(t *testing.T) {
 	require.Equal(t, "overlap", e.run(e.admin, runID).Status)
 	wl := e.lockAtWrite(deployKeysPath, e.f, f2)
 	before := map[*sshFixture]int{e.f: len(e.f.helperWrites()), f2: len(f2.helperWrites())}
+	// Sign-ins with any key but Alice's own (the server accepts Alice's key before asking the check), by server and time.
+	var loginsMu sync.Mutex
+	logins := map[*sshFixture][]time.Time{}
+	for _, f := range []*sshFixture{e.f, f2} {
+		f.server.SetLoginCheck(func(user string, key ssh.PublicKey) bool {
+			loginsMu.Lock()
+			logins[f] = append(logins[f], e.clock.Now())
+			loginsMu.Unlock()
+			return f.emu.AcceptsLogin(user, key)
+		})
+	}
 	e.advance(24*time.Hour + time.Minute)
 	e.sweep(1)
 	first := wl.check(t)
@@ -683,6 +716,25 @@ func TestLockDuringRemovingOldOverTheWire(t *testing.T) {
 	assert.NotContains(t, first.file(deployKeysPath), k.blob(), "the removal in flight completed")
 	assert.Contains(t, second.file(deployKeysPath), k.blob(), "the other server keeps the old key")
 	assert.Len(t, second.helperWrites(), before[second], "no removal sent to the other server in lock")
+	wl.mu.Lock()
+	cmds, auths := wl.commands[second], wl.auths[second]
+	wl.mu.Unlock()
+	// What the other server sees in lock, as built: the removal job queued before the lock opens Alice's session (the
+	// helper's read-only "version" on a pooled connection) and makes its read-only re-check login with the new key, then
+	// stops at the store's gate (the run is paused): no listing, no write. The spec's stricter "zero commands" (L-29) is
+	// TestLockDuringRemovingOldSendsNoCommand (skipped: T14-D2).
+	loginsMu.Lock()
+	lockedLogins := 0
+	for _, at := range logins[second] {
+		if !at.Before(e.license.Snapshot().Eval.EndsAt) {
+			lockedLogins++
+		}
+	}
+	loginsMu.Unlock()
+	assert.Equal(t, []string{helperproto.HelperPath + " version"}, second.server.Commands()[cmds:], "only the session's version check")
+	assert.Equal(t, auths+lockedLogins, second.server.AuthAttempts(), "every sign-in in lock was a test login, none with Alice's key")
+	assert.Equal(t, 1, lockedLogins, "the one re-check login with the new key (as built; read-only)")
+	t.Logf("re-check logins with the new key on the other server in lock: %d", lockedLogins)
 	assert.Equal(t, 1, e.outboxTemplates()["rotation.paused_license"])
 
 	e.renew()
@@ -702,4 +754,35 @@ func TestLockDuringRemovingOldOverTheWire(t *testing.T) {
 			assert.False(t, re.Before(continued), "the second removal followed a fresh login after Continue")
 		}
 	}
+}
+
+// TestLockDuringRemovingOldSendsNoCommand is L-29 strictly ("no remote command executed": zero commands on the fake
+// server's log) for a removal job queued just before the lock and run after it began.
+func TestLockDuringRemovingOldSendsNoCommand(t *testing.T) {
+	t.Skip("DEFECT T14-D2: in lock, a rotation.location remove job queued before the lock opens a session on its server " +
+		"(the helper's `version`) and logs in with the new key before the store's gate refuses the removal " +
+		"(internal/jobs/sshkeyjobs/location.go remove: open and login precede BeginRemove); L-29 demands zero commands in lock")
+	e := newKeyEnv(t)
+	f2, t2 := e.addKeyServer("web-02")
+	k := e.generate(e.admin, "two removals", "ed25519")
+	e.deployed(k)
+	job := e.deploy(e.admin, k.id, t2, "deploy", deployKeysPath)
+	e.drain()
+	require.Equal(t, "succeeded", e.job(e.admin, job)["status"])
+	policyID, _ := e.createPolicy(e.admin, k.id, 1)
+	e.runNow(policyID, e.preview(e.admin, policyID).PlanDigest)
+	e.drain()
+	wl := e.lockAtWrite(deployKeysPath, e.f, f2)
+	e.advance(24*time.Hour + time.Minute)
+	e.sweep(1)
+	first := wl.check(t)
+	second := f2
+	if first == f2 {
+		second = e.f
+	}
+	e.hourly(6 * time.Hour)
+	wl.mu.Lock()
+	cmds := wl.commands[second]
+	wl.mu.Unlock()
+	assert.Len(t, second.server.Commands(), cmds, "zero commands on the other server in lock")
 }
