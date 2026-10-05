@@ -36,9 +36,13 @@ func (l *vaultLimiter) acquire(ctx context.Context) (release func(), err error) 
 	}
 	l.mu.Lock()
 	now := l.clk.Now()
-	if l.tat.Before(now) || now.Before(l.last) {
-		// A clock that stepped backwards (an NTP step, the e2e reset) would leave the schedule
-		// in the future and make the next caller wait for the difference: start a fresh window.
+	if now.Before(l.last) {
+		// A clock that stepped backwards (an NTP step, the e2e reset) would leave the schedule in the
+		// future and make the next caller wait for the difference: move the schedule back by the step.
+		// What was reserved stays reserved, so a step grants no extra request.
+		l.tat = l.tat.Add(now.Sub(l.last))
+	}
+	if l.tat.Before(now) {
 		l.tat = now
 	}
 	l.last = now

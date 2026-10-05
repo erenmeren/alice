@@ -165,9 +165,10 @@ func acquiresWithoutWaiting(t *testing.T, l *vaultLimiter) bool {
 	}
 }
 
-// A clock that steps backwards (an NTP step, the e2e POST /test/reset) starts a fresh window: the
-// next call does not wait for the difference between the old schedule and the new "now".
-func TestLimiterSurvivesAClockThatStepsBackwards(t *testing.T) {
+// A clock that steps backwards (an NTP step, the e2e POST /test/reset) moves the schedule back with it: the
+// next call does not wait for the difference between the old schedule and the new "now", and the step grants no
+// extra request either (the burst that was used stays used).
+func TestLimiterShiftsItsScheduleWhenTheClockStepsBackwards(t *testing.T) {
 	for name, back := range map[string]time.Duration{"small": 300 * time.Millisecond, "large": 72 * time.Hour} {
 		t.Run(name, func(t *testing.T) {
 			clk := clock.NewFake(time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
@@ -178,17 +179,30 @@ func TestLimiterSurvivesAClockThatStepsBackwards(t *testing.T) {
 				rel()
 			}
 			clk.Set(clk.Now().Add(-back))
-			assert.True(t, acquiresWithoutWaiting(t, l), "no wait for the difference")
-			l.mu.Lock()
-			assert.LessOrEqual(t, l.tat.Sub(clk.Now()), l.interval, "the schedule restarted at the new now")
-			l.mu.Unlock()
-			// The fresh window has the configured burst and no more.
-			for range VaultRate - 1 {
-				require.True(t, acquiresWithoutWaiting(t, l))
-			}
 			took, _ := runCalls(t, clk, l, VaultRate, func() {})
-			assert.GreaterOrEqual(t, took, 900*time.Millisecond, "beyond the burst the calls are spaced again")
+			assert.GreaterOrEqual(t, took, 900*time.Millisecond, "no fresh burst: the step grants nothing extra")
+			assert.LessOrEqual(t, took, 1300*time.Millisecond, "no wait for the difference: the calls wait only for their own slots")
 		})
+	}
+}
+
+// The e2e reset: the vault was idle, then the clock goes back days. The schedule is in the past either way, so
+// the whole burst is there at once and nobody waits.
+func TestLimiterAfterAnIdleVaultAndABackwardStep(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
+	l := newVaultLimiter(clk, VaultRate, VaultConcurrency)
+	for range VaultRate {
+		rel, err := l.acquire(context.Background())
+		require.NoError(t, err)
+		rel()
+	}
+	clk.Advance(time.Hour)
+	rel, err := l.acquire(context.Background())
+	require.NoError(t, err)
+	rel()
+	clk.Set(clk.Now().Add(-72 * time.Hour))
+	for range VaultRate - 1 {
+		require.True(t, acquiresWithoutWaiting(t, l), "nobody waits for the 72 hours")
 	}
 }
 
@@ -220,6 +234,8 @@ func TestLimiterBackwardStepWithConcurrentCallers(t *testing.T) {
 	}
 	clk.Set(clk.Now().Add(-48 * time.Hour))
 	took, peak := runCalls(t, clk, l, 20, func() { time.Sleep(time.Millisecond) })
-	assert.LessOrEqual(t, took, 4*time.Second)
+	// The burst used before the step stays used: 20 slots at 5 per second, not 48 hours.
+	assert.GreaterOrEqual(t, took, 3900*time.Millisecond)
+	assert.LessOrEqual(t, took, 4300*time.Millisecond)
 	assert.LessOrEqual(t, peak, int32(VaultConcurrency))
 }
