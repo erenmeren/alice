@@ -307,7 +307,7 @@ func TestAutoDeployApplyTable(t *testing.T) {
 		f := newAutoFixture(t, true)
 		l := f.renew(2, nil)
 		f.exec("UPDATE certificate_locations SET certificate_id = (SELECT id FROM certificates WHERE fingerprint_sha256 = $2) WHERE id = $1", f.loc1, pki.Fingerprint(l.Cert))
-		manual, err := f.h.svc.RequestKVDeployment(f.h.ctx, f.admin, inventory.KVDeployInput{BindingID: f.bind.ID, VersionID: f.versionID(f.web, ver(2)), LocationIDs: []uuid.UUID{f.loc2}})
+		manual, err := f.h.svc.RequestKVDeployment(f.h.ctx, f.admin, inventory.KVDeployInput{StrictSession: true, BindingID: f.bind.ID, VersionID: f.versionID(f.web, ver(2)), LocationIDs: []uuid.UUID{f.loc2}})
 		require.NoError(t, err)
 		f.finish(manual[0].ID, inventory.DeployStatusSucceeded, "")
 		require.Equal(t, 1, f.plan())
@@ -686,7 +686,7 @@ func TestKVDeployPrecheckRefusesSupersededAndStoppedAutomaticDeployments(t *test
 	f.exec("UPDATE bindings SET stopped_version = '' WHERE id = $1", f.bind.ID)
 	f.finishAll(ver(2), inventory.DeployStatusFailed, "deployment.failed")
 	f.exec("UPDATE kv_certificates SET current_version = $2 WHERE id = $1", f.web, ver(3))
-	manual, err := h.svc.RequestKVDeployment(ctx, f.admin, inventory.KVDeployInput{BindingID: f.bind.ID, VersionID: f.versionID(f.web, ver(2)), LocationIDs: []uuid.UUID{f.loc1}})
+	manual, err := h.svc.RequestKVDeployment(ctx, f.admin, inventory.KVDeployInput{StrictSession: true, BindingID: f.bind.ID, VersionID: f.versionID(f.web, ver(2)), LocationIDs: []uuid.UUID{f.loc1}})
 	require.NoError(t, err)
 	assert.NoError(t, h.svc.KVDeployPrecheck(ctx, manual[0].ID))
 }

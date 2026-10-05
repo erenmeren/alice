@@ -22,11 +22,13 @@ package inventory
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -134,8 +136,12 @@ func readImport(ctx context.Context, q db.Querier, id uuid.UUID, lock bool) (KVI
 	return scanImport(q.QueryRow(ctx, "SELECT "+importColumns+" FROM kv_imports i WHERE i.id = $1", id))
 }
 
-// Import reads one import of the vault (ErrNotFound for another vault's or an unknown id).
+// Import reads one import of a live vault (ErrNotFound for an unknown or deleted vault, ErrNotAVault for a
+// server, ErrNotFound for another vault's or an unknown id).
 func (s *Service) Import(ctx context.Context, vault, id uuid.UUID) (KVImport, error) {
+	if err := s.liveVault(ctx, vault); err != nil {
+		return KVImport{}, err
+	}
 	im, err := readImport(ctx, s.pool, id, false)
 	if err != nil {
 		return KVImport{}, err
@@ -146,18 +152,105 @@ func (s *Service) Import(ctx context.Context, vault, id uuid.UUID) (KVImport, er
 	return im, nil
 }
 
-// ListImports lists the vault's imports, newest first (limit 1..200).
+// ImportFilter selects imports of one vault, newest first. CertificateID is the certificate Alice holds
+// (kv_imports.certificate_id); CertificateName is the name in the vault, folded with lower(name COLLATE "C");
+// both are applied in SQL before the limit. Cursor is the NextCursor of the previous page, bound to the vault
+// it came from (another vault's cursor is a validation error); Limit is 1..200 (0 = 50).
+type ImportFilter struct {
+	CertificateID   uuid.UUID
+	CertificateName string
+	Cursor          string
+	Limit           int
+}
+
+// ImportPage is one page of imports.
+type ImportPage struct {
+	Items      []KVImport
+	NextCursor string
+}
+
+func encodeImportCursor(vault uuid.UUID, at time.Time, id uuid.UUID) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(vault.String() + "|" + at.UTC().Format(time.RFC3339Nano) + "|" + id.String()))
+}
+
+func decodeImportCursor(c string, vault uuid.UUID) (time.Time, uuid.UUID, bool) {
+	raw, err := base64.RawURLEncoding.DecodeString(c)
+	if err != nil {
+		return time.Time{}, uuid.Nil, false
+	}
+	parts := strings.Split(string(raw), "|")
+	if len(parts) != 3 || parts[0] != vault.String() {
+		return time.Time{}, uuid.Nil, false
+	}
+	at, err1 := time.Parse(time.RFC3339Nano, parts[1])
+	id, err2 := uuid.Parse(parts[2])
+	if err1 != nil || err2 != nil {
+		return time.Time{}, uuid.Nil, false
+	}
+	return at, id, true
+}
+
+// ListImportsPage lists the imports of a live vault (liveVault: ErrNotFound / ErrNotAVault), filtered in SQL
+// and paged by keyset on (created_at, id), newest first.
+func (s *Service) ListImportsPage(ctx context.Context, vault uuid.UUID, f ImportFilter) (ImportPage, error) {
+	var errs validate.Errors
+	limit := f.Limit
+	switch {
+	case limit == 0:
+		limit = 50
+	case limit < 1 || limit > 200:
+		errs.Add("limit", validate.OutOfRange, map[string]string{"min": "1", "max": "200"})
+	}
+	if f.CertificateName != "" && !azureid.ValidObjectName(f.CertificateName) {
+		errs.Add("certificate_name", validate.Pattern, nil)
+	}
+	var cAt *time.Time
+	cID := uuid.Nil
+	if f.Cursor != "" {
+		at, id, ok := decodeImportCursor(f.Cursor, vault)
+		if !ok {
+			errs.Add("cursor", validate.Pattern, nil)
+		} else {
+			cAt, cID = &at, id
+		}
+	}
+	if len(errs) > 0 {
+		return ImportPage{}, errs
+	}
+	if err := s.liveVault(ctx, vault); err != nil {
+		return ImportPage{}, err
+	}
+	rows, err := s.pool.Query(ctx, "SELECT "+importColumns+` FROM kv_imports i WHERE i.target_id = $1
+  AND ($2::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR i.certificate_id = $2)
+  AND ($3 = '' OR lower(i.name COLLATE "C") = lower($3::text COLLATE "C"))
+  AND ($4::timestamptz IS NULL OR (i.created_at, i.id) < ($4, $5::uuid))
+ORDER BY i.created_at DESC, i.id DESC LIMIT $6`, vault, f.CertificateID, f.CertificateName, cAt, cID, limit+1)
+	if err != nil {
+		return ImportPage{}, fmt.Errorf("inventory: list the imports: %w", err)
+	}
+	items, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (KVImport, error) { return scanImport(r) })
+	if err != nil {
+		return ImportPage{}, err
+	}
+	page := ImportPage{Items: items}
+	if len(items) > limit {
+		page.Items = items[:limit]
+		last := page.Items[limit-1]
+		page.NextCursor = encodeImportCursor(vault, last.CreatedAt, last.ID)
+	}
+	return page, nil
+}
+
+// ListImports lists the vault's imports, newest first (limit 1..200): ListImportsPage without a filter or a
+// cursor. It checks the vault like every vault-scoped read.
 func (s *Service) ListImports(ctx context.Context, vault uuid.UUID, limit int) ([]KVImport, error) {
 	if limit < 1 || limit > 200 {
 		var errs validate.Errors
 		errs.Add("limit", validate.OutOfRange, map[string]string{"min": "1", "max": "200"})
 		return nil, errs
 	}
-	rows, err := s.pool.Query(ctx, "SELECT "+importColumns+" FROM kv_imports i WHERE i.target_id = $1 ORDER BY i.created_at DESC, i.id DESC LIMIT $2", vault, limit)
-	if err != nil {
-		return nil, fmt.Errorf("inventory: list the imports: %w", err)
-	}
-	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (KVImport, error) { return scanImport(r) })
+	p, err := s.ListImportsPage(ctx, vault, ImportFilter{Limit: limit})
+	return p.Items, err
 }
 
 // mapImportError turns the database's refusals into closed errors: the history trigger (Z1007) and the

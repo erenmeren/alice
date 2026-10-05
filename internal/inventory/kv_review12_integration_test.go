@@ -27,7 +27,7 @@ func (h *harness) secretReads(result string) int {
 // beginKV requests a deployment of a version and begins it; auto turns it into an automatic one.
 func (b *bindFixture) beginKV(a inventory.Actor, bind, version uuid.UUID, auto bool, locs ...uuid.UUID) []uuid.UUID {
 	b.h.t.Helper()
-	reqs, err := b.h.svc.RequestKVDeployment(b.h.ctx, a, inventory.KVDeployInput{BindingID: bind, VersionID: version, LocationIDs: locs})
+	reqs, err := b.h.svc.RequestKVDeployment(b.h.ctx, a, inventory.KVDeployInput{StrictSession: true, BindingID: bind, VersionID: version, LocationIDs: locs})
 	require.NoError(b.h.t, err)
 	var out []uuid.UUID
 	for _, r := range reqs {
@@ -356,7 +356,7 @@ func TestConfirmIncompleteChainIsRecordedOnlyWhenNeeded(t *testing.T) {
 	bind := b.create(b.admin, b.web, b.loc1)
 	v1 := b.versionID(b.web, ver(1))
 	request := func() inventory.RequestedDeployment {
-		reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: v1, ConfirmIncompleteChain: true})
+		reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1, ConfirmIncompleteChain: true})
 		require.NoError(t, err)
 		return reqs[0]
 	}
@@ -379,7 +379,7 @@ func TestRequestKVDeploymentRefusesADisabledVault(t *testing.T) {
 	bind := b.create(b.admin, b.web, b.loc1)
 	v1 := b.versionID(b.web, ver(1))
 	b.exec("UPDATE targets SET status = 'disabled' WHERE id = $1", b.vault)
-	_, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: v1})
+	_, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1})
 	assert.ErrorIs(t, err, inventory.ErrVaultUnavailable)
 	d := h.auditDetails("deployment.denied")
 	require.Len(t, d, 1)
@@ -387,7 +387,7 @@ func TestRequestKVDeploymentRefusesADisabledVault(t *testing.T) {
 	assert.Zero(t, h.count("SELECT count(*) FROM deployments"))
 	for _, st := range []string{"degraded", "auth_failed", "unreachable"} {
 		b.exec("UPDATE targets SET status = $2 WHERE id = $1", b.vault, st)
-		reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: v1})
+		reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1})
 		require.NoError(t, err, st)
 		b.finishQueued(reqs...)
 	}
@@ -633,7 +633,7 @@ func TestConfirmationIsKeptWhenTheCompleteChainIsAnUploadedRow(t *testing.T) {
 	bind := b.create(b.admin, cert, b.loc1)
 	v1 := b.versionID(cert, ver(40))
 	require.True(t, b.certRowChainComplete(pki.Fingerprint(leaf.Cert)), "the uploaded row's chain is complete")
-	reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: v1, ConfirmIncompleteChain: true})
+	reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1, ConfirmIncompleteChain: true})
 	require.NoError(t, err)
 	assert.True(t, b.get(reqs[0].ID).ConfirmIncompleteChain, "kept: the vault may still deliver the leaf only")
 	// The vault delivers the leaf only: with the kept confirmation the deployment proceeds.
@@ -649,7 +649,7 @@ func TestConfirmationIsDroppedForACompleteVaultRow(t *testing.T) {
 	b := newBindFixture(t)
 	bind := b.create(b.admin, b.web, b.loc1)
 	b.exec("UPDATE certificates SET chain_complete = true WHERE fingerprint_sha256 = $1", pki.Fingerprint(b.webLeaf.Cert))
-	reqs, err := b.h.svc.RequestKVDeployment(b.h.ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: b.versionID(b.web, ver(1)), ConfirmIncompleteChain: true})
+	reqs, err := b.h.svc.RequestKVDeployment(b.h.ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: b.versionID(b.web, ver(1)), ConfirmIncompleteChain: true})
 	require.NoError(t, err)
 	assert.False(t, b.get(reqs[0].ID).ConfirmIncompleteChain, "a complete vault row is what the next read will find again")
 }

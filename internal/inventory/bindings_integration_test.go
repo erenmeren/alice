@@ -242,14 +242,14 @@ func TestBindingNeedsDetailsAndJudgesTheVersionRow(t *testing.T) {
 	h.reconcile(b.vault, kvResult(h.kvc("web-cert", b.issue("web.example.test", pki.ECDSA256), ver(11), h.clock.Now(), true, ver(1))))
 	b.exec("UPDATE kv_certificate_versions SET held = true, held_reason = 'license' WHERE kv_certificate_id = $1 AND version = $2", b.web, ver(11))
 	// The pointer is at the held ver(11); ver(1) is a history row that is fine.
-	reqs, err := h.svc.RequestKVDeployment(ctx, b.operator, inventory.KVDeployInput{BindingID: bind.ID, VersionID: v1})
+	reqs, err := h.svc.RequestKVDeployment(ctx, b.operator, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1})
 	require.NoError(t, err)
 	b.finishQueued(reqs...)
-	_, err = h.svc.RequestKVDeployment(ctx, b.operator, inventory.KVDeployInput{BindingID: bind.ID, VersionID: b.versionID(b.web, ver(11))})
+	_, err = h.svc.RequestKVDeployment(ctx, b.operator, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: b.versionID(b.web, ver(11))})
 	assert.ErrorIs(t, err, inventory.ErrHeldNeedsAdmin)
 	// Move the pointer to a history row: the held row is still held.
 	b.exec("UPDATE kv_certificates SET current_version = $2 WHERE id = $1", b.web, ver(1))
-	_, err = h.svc.RequestKVDeployment(ctx, b.operator, inventory.KVDeployInput{BindingID: bind.ID, VersionID: b.versionID(b.web, ver(11))})
+	_, err = h.svc.RequestKVDeployment(ctx, b.operator, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: b.versionID(b.web, ver(11))})
 	assert.ErrorIs(t, err, inventory.ErrHeldNeedsAdmin)
 }
 
@@ -385,7 +385,7 @@ func TestDeleteBindingKeepsWhatIsInFlight(t *testing.T) {
 	b := newBindFixture(t)
 	h, ctx := b.h, b.h.ctx
 	bind := b.create(b.admin, b.web, b.loc1, b.loc2)
-	reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: b.versionID(b.web, ver(1))})
+	reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: b.versionID(b.web, ver(1))})
 	require.NoError(t, err)
 	require.Len(t, reqs, 2)
 
@@ -422,7 +422,7 @@ func TestDeleteBindingKeepsWhatIsInFlight(t *testing.T) {
 	// blocks a new one there (F-15).
 	again := b.create(b.admin, b.web, b.loc1, b.loc2)
 	assert.NotEqual(t, bind.ID, again.ID)
-	_, err = h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: again.ID, VersionID: b.versionID(b.web, ver(1))})
+	_, err = h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: again.ID, VersionID: b.versionID(b.web, ver(1))})
 	assert.ErrorIs(t, err, inventory.ErrDeploymentInProgress)
 }
 
@@ -446,7 +446,7 @@ func TestBindingStatePerLocation(t *testing.T) {
 	v1 := b.versionID(b.web, ver(1))
 
 	// pending: an unfinished Key Vault deployment.
-	reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: v1,
+	reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1,
 		LocationIDs: []uuid.UUID{b.loc1, b.loc2, b.loc3, b.loc5}})
 	require.NoError(t, err)
 	dep := map[uuid.UUID]uuid.UUID{}
@@ -756,7 +756,7 @@ func TestBindingRacesAreSerialised(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, reqErr = h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: b.versionID(b.web, ver(1))})
+		_, reqErr = h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: b.versionID(b.web, ver(1))})
 	}()
 	go func() {
 		defer wg.Done()
@@ -899,7 +899,7 @@ func TestBindingEdgeCases(t *testing.T) {
 
 	// A binding without a website (not reachable through the API) cannot be deployed to.
 	b.exec("UPDATE certificate_locations SET binding_id = NULL WHERE binding_id = $1", bind.ID)
-	_, err = h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: b.versionID(b.web, ver(1))})
+	_, err = h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: b.versionID(b.web, ver(1))})
 	assert.ErrorIs(t, err, inventory.ErrNotFound)
 	d = h.auditDetails("deployment.denied")
 	assert.Equal(t, "no_websites", d[len(d)-1]["reason"])
@@ -915,7 +915,7 @@ func TestHeldVersionIsFencedAndTolerantOfADeletedVault(t *testing.T) {
 	leafOnly := string(b.webLeaf.KeyPEM) + string(b.webLeaf.CertPEM)
 	auto := func() uuid.UUID {
 		t.Helper()
-		reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: v1})
+		reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1})
 		require.NoError(t, err)
 		b.exec("UPDATE deployments SET trigger = 'kv_renewal' WHERE id = $1", reqs[0].ID)
 		_, err = h.svc.BeginDeployment(ctx, reqs[0].ID)

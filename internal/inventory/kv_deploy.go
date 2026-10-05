@@ -32,6 +32,11 @@ type KVDeployInput struct {
 	BindingID, VersionID   uuid.UUID
 	LocationIDs            []uuid.UUID
 	ConfirmIncompleteChain bool
+	// StrictSession says the caller authenticated the Administrator strongly (a fresh step-up, no API token).
+	// A HELD version is refused inside the transaction unless the actor is an Administrator AND this is true
+	// (ErrHeldNeedsStepUp): a hold can appear between the caller's read and this call. Not-held versions
+	// ignore it.
+	StrictSession bool
 }
 
 // deployVersion is a stored version as a deployment needs it.
@@ -147,6 +152,9 @@ FROM kv_certificate_versions WHERE id = $1 FOR SHARE`, in.VersionID).Scan(&v.cer
 		}
 		if reason, err := versionRefusal(v, c, leaf, a, now); err != nil {
 			return denyWith(&denial, reason, uuid.Nil, err)
+		}
+		if v.held && !in.StrictSession {
+			return denyWith(&denial, "held_needs_step_up", uuid.Nil, ErrHeldNeedsStepUp)
 		}
 		ids := in.LocationIDs
 		if len(ids) == 0 {

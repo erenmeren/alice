@@ -50,7 +50,7 @@ func TestRequestKVDeployment(t *testing.T) {
 		return n
 	}
 	request := func(a inventory.Actor, version uuid.UUID, locs ...uuid.UUID) ([]inventory.RequestedDeployment, error) {
-		return h.svc.RequestKVDeployment(ctx, a, inventory.KVDeployInput{BindingID: bind.ID, VersionID: version, LocationIDs: locs})
+		return h.svc.RequestKVDeployment(ctx, a, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: version, LocationIDs: locs})
 	}
 	lastDenial := func() map[string]string { d := h.auditDetails("deployment.denied"); return d[len(d)-1] }
 	var created int
@@ -193,9 +193,9 @@ func TestRequestKVDeployment(t *testing.T) {
 	var ve validate.Errors
 	_, err = request(b.admin, v1, b.loc1, b.loc1)
 	assert.ErrorAs(t, err, &ve, "a duplicate id")
-	_, err = h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: uuid.New(), VersionID: v1})
+	_, err = h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: uuid.New(), VersionID: v1})
 	assert.ErrorIs(t, err, inventory.ErrNotFound)
-	_, err = h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID})
+	_, err = h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID})
 	assert.ErrorAs(t, err, &validate.Errors{}, "a version is named: never 'latest'")
 
 	// Lock: refused with the license error and audited.
@@ -246,7 +246,7 @@ func TestKVDeployMaterial(t *testing.T) {
 	bind := b.create(b.admin, b.web, b.loc1, b.loc2, b.loc3)
 	v1 := b.versionID(b.web, ver(1))
 	fp := pki.Fingerprint(b.webLeaf.Cert)
-	reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: v1,
+	reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1,
 		LocationIDs: []uuid.UUID{b.loc1, b.loc2, b.loc3}})
 	require.NoError(t, err)
 	dep := map[uuid.UUID]uuid.UUID{}
@@ -384,7 +384,7 @@ func TestKVDeployMaterialNeverChangesAnUploadedRow(t *testing.T) {
 	h.reconcile(b.vault, kvResult(h.kvc("uploaded-too", leaf, ver(40), h.clock.Now(), true)))
 	cert := h.certRow(b.vault, "uploaded-too").ID
 	bind := b.create(b.admin, cert, b.loc1)
-	reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: b.versionID(cert, ver(40))})
+	reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: b.versionID(cert, ver(40))})
 	require.NoError(t, err)
 	_, err = h.svc.BeginDeployment(ctx, reqs[0].ID)
 	require.NoError(t, err)
@@ -412,7 +412,7 @@ func TestKVDeployMaterialIncompleteChain(t *testing.T) {
 	leafOnly := string(b.webLeaf.KeyPEM) + string(b.webLeaf.CertPEM) // the intermediate is missing: incomplete
 	begin := func(a inventory.Actor, confirm bool, loc uuid.UUID) uuid.UUID {
 		t.Helper()
-		reqs, err := h.svc.RequestKVDeployment(ctx, a, inventory.KVDeployInput{BindingID: bind.ID, VersionID: v1, LocationIDs: []uuid.UUID{loc},
+		reqs, err := h.svc.RequestKVDeployment(ctx, a, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1, LocationIDs: []uuid.UUID{loc},
 			ConfirmIncompleteChain: confirm})
 		require.NoError(t, err)
 		_, err = h.svc.BeginDeployment(ctx, reqs[0].ID)
@@ -457,7 +457,7 @@ func TestKVDeployMaterialIncompleteChain(t *testing.T) {
 	b.finishQueued(inventory.RequestedDeployment{ID: id}, inventory.RequestedDeployment{ID: id2}, inventory.RequestedDeployment{ID: id3})
 	auto := func() uuid.UUID {
 		t.Helper()
-		reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{BindingID: bind.ID, VersionID: v1, LocationIDs: []uuid.UUID{b.loc1}})
+		reqs, err := h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1, LocationIDs: []uuid.UUID{b.loc1}})
 		require.NoError(t, err)
 		b.exec("UPDATE deployments SET trigger = 'kv_renewal' WHERE id = $1", reqs[0].ID)
 		_, err = h.svc.BeginDeployment(ctx, reqs[0].ID)

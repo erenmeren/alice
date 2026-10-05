@@ -436,6 +436,15 @@ func (s *Service) CreateBinding(ctx context.Context, a Actor, in BindingInput) (
 // ruling S6); releasing websites does not. Naming the same set changes nothing. Audited
 // binding.locations_changed.
 func (s *Service) UpdateBindingLocations(ctx context.Context, a Actor, id uuid.UUID, ifVersion int, locations []uuid.UUID) (Binding, error) {
+	return s.UpdateBindingLocationsStrict(ctx, a, id, ifVersion, locations, true)
+}
+
+// UpdateBindingLocationsStrict is UpdateBindingLocations with the strength of the caller's session stated:
+// adding websites to a binding that deploys automatically is refused inside the transaction unless the
+// actor is an Administrator AND strictSession is true (ErrAutoDeployNeedsStepUp; the binding's automatic
+// state is read under its lock, so a switch-on between the caller's check and this call is caught).
+// UpdateBindingLocations is this with strictSession true: its caller vouches for the step-up.
+func (s *Service) UpdateBindingLocationsStrict(ctx context.Context, a Actor, id uuid.UUID, ifVersion int, locations []uuid.UUID, strictSession bool) (Binding, error) {
 	if errs := validateLocationIDs(locations, MaxBindingLocations); len(errs) > 0 {
 		return Binding{}, errs
 	}
@@ -486,6 +495,9 @@ func (s *Service) UpdateBindingLocations(ctx context.Context, a Actor, id uuid.U
 		if len(added) > 0 {
 			if b.autoDeploy && a.Role != rbac.Admin {
 				return denyWith(&denial, "admin_required", uuid.Nil, ErrAdminRequired)
+			}
+			if b.autoDeploy && !strictSession {
+				return denyWith(&denial, "step_up_required", uuid.Nil, ErrAutoDeployNeedsStepUp)
 			}
 			if reason, err := certificateRefusal(c); err != nil && reason != "certificate_missing" {
 				return denyWith(&denial, reason, uuid.Nil, err)

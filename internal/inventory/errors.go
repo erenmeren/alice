@@ -218,3 +218,15 @@ var (
 	// ErrWaveStopped: the binding's automatic wave of this version was stopped (stopped_version).
 	ErrWaveStopped = errors.New("inventory: the automatic deployment of this version was stopped")
 )
+
+// Errors of the session strength a held version or an automatic binding needs (fix round 2, B2): the API
+// checks the step-up and the "no API token" rule, and inventory repeats the check inside its transaction
+// because a hold can appear between the API's read and the call.
+var (
+	// ErrHeldNeedsStepUp: a held version is deployed only by an Administrator whose session is strict (a fresh
+	// step-up, no API token): KVDeployInput.StrictSession.
+	ErrHeldNeedsStepUp = errors.New("inventory: deploying a held version needs an Administrator with a fresh step-up")
+	// ErrAutoDeployNeedsStepUp: adding websites to a binding that deploys automatically needs an Administrator
+	// whose session is strict (UpdateBindingLocationsStrict).
+	ErrAutoDeployNeedsStepUp = errors.New("inventory: adding websites to an automatic binding needs an Administrator with a fresh step-up")
+)
