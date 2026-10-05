@@ -165,7 +165,7 @@ func (s *scenario) install() {
 			e.setKiller(&killer{points: map[string]bool{}, afterCall: ev.at})
 		}
 	}
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		f := fake.FaultNone
 		for i, ev := range s.sched.events {
 			if ev.at != p.N || done[i] {
@@ -206,7 +206,9 @@ func (s *scenario) loseLease() {
 	e.clock.Advance(46 * time.Second)
 	_, err := e.runner.Reap(e.ctx)
 	require.NoError(e.t, err)
+	outer := e.cancelJob.Load()
 	e.drain()
+	e.cancelJob.Store(outer) // a hang later in the first run ends the first run's context
 }
 
 // keepOld answers a waiting decision with Keep old for every location Alice could not test.

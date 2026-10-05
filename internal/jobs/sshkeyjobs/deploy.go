@@ -35,22 +35,23 @@ const (
 type addState int
 
 const (
-	addPresent   addState = iota // the line was there before this job: Alice did not add it, never removes it
-	addOwned                     // this job's write put the line there (or may have, in an earlier attempt)
+	addPresent   addState = iota // the line was there and no send of this job is on record: Alice never removes it
+	addOwned                     // this job's send put the line there (this attempt's, or one on record)
 	addUncertain                 // the write was sent and its answer lost: only an accepted login proves the line
 )
 
 // deploy is the sshkey.add handler (C9's decision table). The deploy is read again from the database
-// (DeployJob: every rule of the request applies to the current state); the line is added with the job id
-// as operation id; a test login with the new key as the user decides; a line this job may have added and
-// whose login failed is removed again by its fingerprint (the undo never names another key). A line that
-// was there before the job is never removed. Only ids and public facts reach the result.
-//
-// An attempt after the first treats a line it finds as possibly its own: an earlier attempt may have
-// written it before it died or before its answer was lost (and a retry after an uncertain write starts
-// only once the helper's budget after that send has passed, so nothing of it lands later).
-func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecorder) (map[string]any, error) {
+// (DeployJob: every rule of the request applies to the current state); every send is recorded before it
+// is made (BeginDeploySend, claim-fenced) and carries the job id as operation id; a test login with the
+// new key as the user decides; a line this job sent and whose login failed is removed again by its
+// fingerprint (the undo never names another key). A line found in the file is this job's only when a
+// send of this job is on record (review I1): one that was there before is never removed. An undo waits
+// until the store says no unanswered send of this job can still land (S3, DeploySendRecord.UndoNotBefore).
+// Only ids and public facts reach the result.
+func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecorder) (res map[string]any, err error) {
 	actor := systemActor(j)
+	// The deploy's records are written only while this run still holds the job (review M8).
+	ctx = inventory.WithClaim(ctx, inventory.Claim{JobID: j.ID, Attempt: j.Attempt})
 	d, err := h.d.Keys.DeployJob(ctx, j.ID, j.TargetID, j.Payload)
 	if err != nil {
 		f := deployRefusal(err)
@@ -59,41 +60,77 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 		}
 		return nil, f
 	}
+	// S3 (review I2): an earlier send of this job may still land until the store's wait after it has
+	// passed (anchored on the durable send record, so a restart, a lost lease or a shutdown cannot shorten
+	// it). Nothing is sent again before that: an undo after this attempt's send then never races a stalled
+	// earlier one.
+	prior, err := h.d.Keys.DeploySends(ctx, j.ID)
+	if err != nil {
+		return nil, jobs.Retry("internal.unexpected", nil, err)
+	}
+	if prior.Count > 0 {
+		if wait := prior.LastAt.Add(h.d.Keys.UndoWait()).Sub(h.d.Clock.Now()); wait > 0 {
+			return map[string]any{"result": "uncertain", "ssh_key_id": d.KeyID.String()}, jobs.RetryAfter(reasonUncertain, nil, nil, wait)
+		}
+	}
 	sess, err := h.open(ctx, d.TargetID)
 	if err != nil {
 		h.failed(ctx, j, actor, d, err)
 		return nil, err
 	}
 	defer h.close(sess)
+	send, err := h.d.Keys.BeginDeploySend(ctx, j.ID, d)
+	if err != nil {
+		if errors.Is(err, inventory.ErrClaimLost) {
+			return nil, jobs.Retry("job.lease_expired", nil, err)
+		}
+		return nil, jobs.Retry("internal.unexpected", nil, err) // nothing was sent
+	}
+	recorded := false
+	defer func() {
+		// M7: the last attempt ends after a send without a final record: audited, and a scan is queued so
+		// that the record catches up with the file.
+		var f *jobs.Failure
+		if !recorded && errors.As(err, &f) && f.Class == jobs.Retryable && j.Attempt >= j.MaxAttempts {
+			h.finish(ctx, actor, d, sshkeys.DeployOutcome{Result: sshkeys.DeployFailed, Reason: f.Reason})
+			h.discover(ctx, d.TargetID)
+		}
+	}()
 	rec := &writeTracker{next: steps}
-	res, err := sess.AddAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: j.ID, OSUser: d.OSUser, FilePath: d.FilePath, Line: d.Line,
-		ProtectedFingerprints: d.Protected}, rec)
+	ares, err := sess.AddAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: send.OperationID, OSUser: d.OSUser, FilePath: d.FilePath,
+		Line: d.Line, ProtectedFingerprints: d.Protected}, rec)
+	if ctx.Err() != nil {
+		return nil, jobs.Retry("ssh.timeout", nil, ctx.Err()) // F-39: the next attempt starts over
+	}
 	var st addState
 	switch {
-	case err != nil && definiteNoChange(rec.wrote, res, err) && ctx.Err() == nil:
+	case err != nil && definiteNoChange(rec.wrote, ares, err):
 		h.recordIfConnection(ctx, d.TargetID, err)
 		f := jobs.FromProvider(err)
-		h.failed(ctx, j, actor, d, f)
+		if recorded = h.failed(ctx, j, actor, d, f); recorded && send.Resend {
+			h.discover(ctx, d.TargetID) // an earlier send of this job may have landed (M7)
+		}
+		var rf *jobs.Failure
+		if errors.As(f, &rf) && rf.Class == jobs.Retryable {
+			// The next attempt sends again only after this send's wait (S3): retry then, not sooner.
+			return nil, jobs.RetryAfter(rf.Reason, rf.Params, err, h.d.Keys.UndoWait())
+		}
 		return nil, f
 	case err != nil:
-		h.recordIfConnection(ctx, d.TargetID, err)
-		st = addUncertain
-	case res.Changed && !res.Verified:
+		st = addUncertain // the add's uncertainty, not the connection's state: not recorded on the target
+	case ares.Changed && !ares.Verified:
 		// §13.4 step 5: the re-read after the write shows other content.
-		return h.undoDeploy(ctx, j, actor, d, sess, steps, reasonVerifyFailed, false)
-	case res.Changed || j.Attempt > 1:
+		return h.undoDeploy(ctx, j, actor, d, sess, steps, reasonVerifyFailed, true)
+	case ares.Changed || send.Resend:
 		st = addOwned
 	default:
 		st = addPresent
 	}
-	if ctx.Err() != nil {
-		return nil, h.interrupted(st, ctx.Err())
-	}
 	outcome, lerr := h.login(ctx, sess, d.OSUser, d.KeyID)
 	if ctx.Err() != nil {
-		return nil, h.interrupted(st, ctx.Err())
+		return nil, jobs.Retry("ssh.timeout", nil, ctx.Err())
 	}
-	out := sshkeys.DeployOutcome{LineNo: res.LineNo, Backup: res.Backup}
+	out := sshkeys.DeployOutcome{LineNo: ares.LineNo, Backup: ares.Backup}
 	switch {
 	case st == addPresent:
 		out.Result, out.Note = sshkeys.DeployAlreadyPresent, presentNote(outcome, lerr, d.Options)
@@ -101,8 +138,8 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 		out.Result = sshkeys.DeployVerified
 	case st == addUncertain:
 		// Only an accepted login proves an uncertain line (a refusal with from= or an unprovable login
-		// proves nothing): it is removed again, after S3's wait when it is not there.
-		return h.undoDeploy(ctx, j, actor, d, sess, steps, sshkeys.ReasonLoginFailed, true)
+		// proves nothing): it is removed again, once no send of this job can still land.
+		return h.undoDeploy(ctx, j, actor, d, sess, steps, sshkeys.ReasonLoginFailed, false)
 	case lerr != nil:
 		out.Result, out.Note = sshkeys.DeployUnverified, noteLoginUnavailable
 	case outcome == providers.KeyLoginUnprovable:
@@ -110,25 +147,16 @@ func (h *handlers) deploy(ctx context.Context, j jobs.Job, steps jobs.StepRecord
 	case keymat.HasFromOption(d.Options):
 		out.Result, out.Note = sshkeys.DeployUnverified, plan.NoteFromOption // Alice cannot know whether from= excludes her
 	default:
-		return h.undoDeploy(ctx, j, actor, d, sess, steps, sshkeys.ReasonLoginFailed, false)
+		return h.undoDeploy(ctx, j, actor, d, sess, steps, sshkeys.ReasonLoginFailed, true)
 	}
 	if err := h.d.Keys.FinishDeploy(ctx, actor, d, out); err != nil {
-		// The line is in the file; the next attempt finds it and records it.
+		// The line is in the file; the next attempt finds it (its send is on record) and records it.
 		return nil, jobs.Retry("internal.unexpected", nil, err)
 	}
 	if out.Result == sshkeys.DeployAlreadyPresent {
 		h.discover(ctx, d.TargetID)
 	}
 	return deployResult(d, out), nil
-}
-
-// interrupted is the answer of a job whose context ended after the add (a shutdown or a lost lease): an
-// uncertain write is retried only after S3's wait, anything else at the next attempt (which starts over).
-func (h *handlers) interrupted(st addState, cause error) error {
-	if st == addUncertain {
-		return jobs.RetryAfter(reasonUncertain, nil, cause, h.d.HelperBudget+undoGrace)
-	}
-	return jobs.Retry("ssh.timeout", nil, cause)
 }
 
 // presentNote is the note of a line that was already there.
@@ -147,24 +175,36 @@ func presentNote(o providers.KeyLoginOutcome, lerr error, options string) string
 }
 
 // undoDeploy removes the new key's line again (its fingerprint only) after its login failed or its
-// read-back differed. A line that is not there after an uncertain write is not concluded "undone" while
-// the write may still land (S3): the job is retried after the helper's budget, and starts over; on the
-// last attempt a person looks (undo_failed) and a discovery is queued.
+// read-back differed. latestAnswered says whether this attempt's send had a definite answer. While a send
+// of this job without a definite answer may still land (S3: the store's UndoNotBefore from the durable
+// send record, so a restart, a lost lease or a shutdown cannot shorten it), nothing is removed: the job
+// is retried at that time and starts over; on the last attempt a person looks (undo_failed, no scan yet:
+// a stalled write may still land, review M13).
 func (h *handlers) undoDeploy(ctx context.Context, j jobs.Job, actor audit.Actor, d sshkeys.DeployJob, sess providers.Session,
-	steps jobs.StepRecorder, reason string, uncertain bool) (map[string]any, error) {
+	steps jobs.StepRecorder, reason string, latestAnswered bool) (map[string]any, error) {
+	sends, err := h.d.Keys.DeploySends(ctx, j.ID)
+	if err != nil {
+		return nil, jobs.Retry("internal.unexpected", nil, err) // nothing removed; the next attempt starts over
+	}
+	if notBefore := sends.UndoNotBefore(h.d.Keys.UndoWait(), latestAnswered); h.d.Clock.Now().Before(notBefore) {
+		if j.Attempt < j.MaxAttempts {
+			return map[string]any{"result": "uncertain", "ssh_key_id": d.KeyID.String()},
+				jobs.RetryAfter(reasonUncertain, nil, nil, notBefore.Sub(h.d.Clock.Now()))
+		}
+		out := sshkeys.DeployOutcome{Result: sshkeys.DeployUndoFailed, Reason: reasonUndoFailed}
+		h.finish(ctx, actor, d, out)
+		return deployResult(d, out), jobs.Attention(reasonUndoFailed, nil, nil)
+	}
 	rec := &writeTracker{next: steps}
 	res, err := sess.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: j.ID, OSUser: d.OSUser, FilePath: d.FilePath,
 		Fingerprint: d.Fingerprint, ProtectedFingerprints: d.Protected}, rec)
-	switch {
-	case err == nil && res.Changed && !res.Verified:
-	case err == nil && res.Removed == 0 && uncertain && j.Attempt < j.MaxAttempts:
-		return map[string]any{"result": "uncertain", "ssh_key_id": d.KeyID.String()},
-			jobs.RetryAfter(reasonUncertain, nil, nil, h.d.HelperBudget+undoGrace)
-	case err == nil && (res.Removed > 0 || !uncertain):
+	if err == nil && (!res.Changed || res.Verified) {
+		// Removed, or not there: no send of this job can land any more, so "not there" is the truth.
 		out := sshkeys.DeployOutcome{Result: sshkeys.DeployUndone, Reason: reason, Backup: res.Backup}
 		h.finish(ctx, actor, d, out)
 		return deployResult(d, out), jobs.Fail(reason, nil, nil)
-	default:
+	}
+	if err != nil {
 		h.recordIfConnection(ctx, d.TargetID, err)
 	}
 	out := sshkeys.DeployOutcome{Result: sshkeys.DeployUndoFailed, Reason: reasonUndoFailed, Backup: res.Backup}
@@ -175,12 +215,14 @@ func (h *handlers) undoDeploy(ctx context.Context, j jobs.Job, actor audit.Actor
 
 // failed records a deploy that ends without a change, once: only when the failure is final (permanent,
 // or the last attempt); a retryable one is audited by the attempt that ends the job (scan row 10).
-func (h *handlers) failed(ctx context.Context, j jobs.Job, actor audit.Actor, d sshkeys.DeployJob, err error) {
+// It reports whether it recorded.
+func (h *handlers) failed(ctx context.Context, j jobs.Job, actor audit.Actor, d sshkeys.DeployJob, err error) bool {
 	var f *jobs.Failure
 	if !errors.As(jobs.FromProvider(err), &f) || (f.Class == jobs.Retryable && j.Attempt < j.MaxAttempts) {
-		return
+		return false
 	}
 	h.finish(ctx, actor, d, sshkeys.DeployOutcome{Result: sshkeys.DeployFailed, Reason: f.Reason})
+	return true
 }
 
 // finish records an outcome whose job ends anyway; a failure to record is logged (the audit row is

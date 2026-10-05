@@ -22,50 +22,102 @@ import (
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/linuxsshtest"
 	"alice/internal/sshkeys"
+	"alice/internal/sshkeys/plan"
 )
 
-// F-36 at rotation level: Alice's own key is never rotated. Its key row gets no policy; a forged
-// rotation.location job is refused before anything is sent; the world refuses its removal; the
-// database's own refusal of a run on the platform key is tested with migration 00010.
+// F-36 at rotation level: Alice's own key is never rotated. Its key row gets no policy (refused and
+// audited own_key); a generated key in the connection account's file, or in any file that account reads,
+// is skipped by the plan with that reason and nothing is sent there; a job naming such a location sends
+// nothing; every add and removal of every test carries Alice's fingerprint as protected (harness); and a
+// key that becomes protected after its re-check is not removed. The database's own refusal is pinned by
+// migration 00010's tests.
 func TestF36OwnKeyNeverRotated(t *testing.T) {
 	e := newEnv(t)
-	web := e.server("web-01")
+	web := e.server("web-01", providers.UserKeyFiles{OSUser: "ops", Files: []string{keyFile(fake.ConnectionAccount)}, Complete: true})
 	_, err := e.inv.Reconcile(e.ctx, web, providers.DiscoveryResult{
 		SSHKeys: []providers.DiscoveredSSHKey{{OSUser: fake.ConnectionAccount, FilePath: keyFile(fake.ConnectionAccount), LineNo: 1,
 			PublicKey: e.platform.PublicKey, Fingerprint: e.platform.Fingerprint, KeyType: "ssh-ed25519", Bits: 256}},
-		SSHD: providers.SSHDSummary{Read: true, PubkeyAuthentication: "yes"}, ReadFiles: []string{keyFile(fake.ConnectionAccount)}})
+		SSHD: providers.SSHDSummary{Read: true, PubkeyAuthentication: "yes"}, ReadFiles: []string{keyFile(fake.ConnectionAccount)},
+		KeyFiles: e.keyFilesOf(web)})
 	require.NoError(t, err)
 	var platformRow uuid.UUID
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT id FROM ssh_keys WHERE fingerprint_sha256 = $1", e.platform.Fingerprint).Scan(&platformRow))
 	_, err = e.keys.CreatePolicy(e.ctx, e.admin, sshkeys.PolicyInput{SSHKeyID: platformRow, Name: "own", IntervalDays: 30, OverlapDays: 1})
-	require.Error(t, err, "no policy for Alice's own key")
+	require.ErrorIs(t, err, sshkeys.ErrOwnKeyProtected, "no policy for Alice's own key")
+	assert.Equal(t, "own_key", e.lastAuditDetail("rotation.policy.denied", "reason"))
 	assert.Zero(t, e.count("SELECT count(*) FROM rotation_policies"))
 
-	// A rotation.location job whose payload names a location of another run (or none) does nothing.
+	// A generated key in the connection account's own file, and in a file of another user that the
+	// connection account reads: both skipped with their reasons; the deploy user's location changes.
 	k := e.generate("ci")
 	e.place(k, web, "deploy")
-	r := e.runNow(e.policy(k.ID, 1))
-	e.drain()
-	calls := e.worldCalls()
-	forged, _, err := e.queue.Enqueue(e.ctx, jobs.Spec{Type: jobs.RotationLocation, Kind: jobs.KindSystem, TargetID: web,
-		Payload: map[string]string{"rotation_id": uuid.NewString(), "location_id": r.Locations[0].ID.String(), "phase": "remove"}})
+	e.placeIn(k, web, fake.ConnectionAccount, keyFile(fake.ConnectionAccount), "")
+	p := e.policy(k.ID, 1)
+	pv, err := e.keys.Preview(e.ctx, e.admin, p.ID)
 	require.NoError(t, err)
-	e.drain()
-	v := e.job(forged)
-	assert.Equal(t, jobs.StatusFailed, v.Status)
-	assert.Equal(t, "rotation.not_waiting", v.LastErrorCode)
-	assert.Equal(t, calls, e.worldCalls(), "nothing was sent")
-
-	// The world (as the helper) refuses a removal of a protected fingerprint before anything happens.
-	sess, err := e.provider.Open(e.ctx, providers.TargetRef{ID: web, Kind: providers.KindLinuxSSH}, nil, providers.Env{})
-	require.NoError(t, err)
-	_, err = sess.RemoveAuthorizedKey(e.ctx, providers.AuthKeyChange{OperationID: uuid.New(), OSUser: fake.ConnectionAccount,
-		FilePath: keyFile(fake.ConnectionAccount), Fingerprint: e.platform.Fingerprint, ProtectedFingerprints: []string{e.platform.Fingerprint}}, nil)
-	require.Error(t, err)
-	assert.True(t, e.world.Has(web, keyFile(fake.ConnectionAccount), e.platform.Fingerprint))
-	for _, ev := range e.world.Events() {
-		assert.NotEqual(t, e.platform.Fingerprint, ev.Fingerprint, "the platform key is never named in a change")
+	skips := map[string]string{}
+	for _, a := range pv.Plan.Actions {
+		skips[a.OSUser] = a.Skip
 	}
+	assert.Equal(t, map[string]string{"deploy": "", fake.ConnectionAccount: plan.SkipConnectionAccount}, skips)
+	r := e.runNow(p)
+	e.drain()
+	for _, ev := range e.world.Events() {
+		assert.NotEqual(t, keyFile(fake.ConnectionAccount), ev.FilePath, "nothing is sent to the connection account's file")
+	}
+	// A rotation.location job naming the skipped location sends nothing and says why.
+	var skipped sshkeys.RotationLocation
+	for _, l := range e.run(r.ID).Locations {
+		if l.OSUser == fake.ConnectionAccount {
+			skipped = l
+		}
+	}
+	require.Equal(t, sshkeys.LocSkipped, skipped.State)
+	calls := e.worldCalls()
+	for _, phase := range []string{"add", "remove", "undo"} {
+		forged, _, err := e.queue.Enqueue(e.ctx, jobs.Spec{Type: jobs.RotationLocation, Kind: jobs.KindSystem, TargetID: web, DedupeKey: "forged:" + phase,
+			Payload: map[string]string{"rotation_id": r.ID.String(), "location_id": skipped.ID.String(), "phase": phase}})
+		require.NoError(t, err)
+		e.drain()
+		v := e.job(forged)
+		assert.Equal(t, jobs.StatusSucceeded, v.Status, phase)
+		assert.True(t, v.Result["state"] == sshkeys.LocSkipped || v.Result["stopped"] == "not_your_turn", "%s: %v", phase, v.Result)
+	}
+	assert.Equal(t, calls, e.worldCalls(), "nothing was sent for a skipped location")
+	assert.True(t, e.world.Has(web, keyFile(fake.ConnectionAccount), k.Fingerprint))
+	assert.True(t, e.world.Has(web, keyFile(fake.ConnectionAccount), e.platform.Fingerprint))
+}
+
+// keyFilesOf are the key files the server's facts list (a scan in a test keeps them).
+func (e *env) keyFilesOf(target uuid.UUID) []providers.UserKeyFiles {
+	e.t.Helper()
+	tg, err := e.inv.GetTarget(e.ctx, target)
+	require.NoError(e.t, err)
+	return tg.Facts.KeyFiles
+}
+
+// Addendum 3: a server whose last scan did not list the connection account's key files completely is
+// skipped as a whole: the preview changes nothing there and names connection_files_unknown.
+func TestIncompleteConnectionFilesSkipEverything(t *testing.T) {
+	e := newEnv(t)
+	web := e.server("web-01")
+	files := e.keyFilesOf(web)
+	for i := range files {
+		if files[i].OSUser == fake.ConnectionAccount {
+			files[i].Complete = false
+		}
+	}
+	e.setKeyFiles(web, files)
+	k := e.generate("ci")
+	e.place(k, web, "deploy")
+	e.place(k, web, "app")
+	pv, err := e.keys.Preview(e.ctx, e.admin, e.policy(k.ID, 1).ID)
+	require.NoError(t, err)
+	require.Len(t, pv.Plan.Actions, 2)
+	for _, a := range pv.Plan.Actions {
+		assert.Equal(t, plan.SkipConnectionFilesUnknown, a.Skip, a.OSUser)
+	}
+	assert.Zero(t, pv.Plan.Changes)
 }
 
 // newRealEnv is the harness with the real linuxssh provider over an emulated helper (linuxsshtest)
@@ -180,10 +232,10 @@ func TestF38RotationFileChangedBetweenReadAndWrite(t *testing.T) {
 	}
 }
 
-// F-39: a slow host. The second location's add hangs until the job's deadline (2 s per run, F10): the
-// job ends with the location still adding (uncertain) and its session closed; the sweep's next job
-// verifies first, then sends once more; nothing is removed meanwhile. As built the job ends without an
-// error (result stopped=interrupted) rather than failing with a timeout: the location's state carries it.
+// F-39: a slow host (ruling M4, as the spec says: "the job fails cleanly with a timeout message"). The
+// second location's add hangs until the job's deadline: the attempt fails retryably with ssh.timeout, the
+// location stays adding (uncertain) and its session is closed; the next attempt logs in first and sends
+// the add again only after the login was refused; nothing is removed meanwhile.
 func TestF39SlowHostDuringRotation(t *testing.T) {
 	e := newEnv(t)
 	web, db := e.server("web-01"), e.server("db-01")
@@ -191,7 +243,7 @@ func TestF39SlowHostDuringRotation(t *testing.T) {
 	e.place(k, web, "deploy")
 	e.place(k, db, "deploy")
 	hung := false
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "AddAuthorizedKey" && p.Target == db && !hung {
 			hung = true
 			return fake.FaultHang
@@ -199,13 +251,10 @@ func TestF39SlowHostDuringRotation(t *testing.T) {
 		return fake.FaultNone
 	})
 	r := e.runNow(e.policy(k.ID, 7))
-	started := time.Now()
 	e.drain()
-	assert.Less(t, time.Since(started), time.Minute)
-	closes := e.provider.Count("Close")
 	l := e.loc(r.ID, db, "deploy")
 	assert.Equal(t, sshkeys.LocAdding, l.State, "uncertain")
-	assert.Equal(t, 2, closes, "both sessions were closed, the hung one too")
+	assert.Equal(t, 2, e.provider.Count("Close"), "both sessions were closed, the hung one too")
 	var hungJob jobs.View
 	list, _, err := e.queue.List(e.ctx, jobs.ListFilter{TargetID: db})
 	require.NoError(t, err)
@@ -214,20 +263,18 @@ func TestF39SlowHostDuringRotation(t *testing.T) {
 			hungJob = v
 		}
 	}
-	assert.Equal(t, jobs.StatusSucceeded, hungJob.Status)
-	assert.Equal(t, "interrupted", hungJob.Result["stopped"])
+	assert.Equal(t, jobs.StatusQueued, hungJob.Status, "a retryable failure")
+	assert.Equal(t, "ssh.timeout", hungJob.LastErrorCode, "the timeout message")
 	e.clock.Advance(time.Minute)
-	e.sweep()
 	e.drain()
-	evs := e.world.Events()
 	var dbCalls []string
-	for _, ev := range evs {
+	for _, ev := range e.world.Events() {
 		if ev.Target == db {
 			dbCalls = append(dbCalls, ev.Method)
 		}
 	}
 	assert.Equal(t, []string{"AddAuthorizedKey", "VerifyKeyLogin", "AddAuthorizedKey", "VerifyKeyLogin"}, dbCalls,
-		"the next job logged in first; it sent the add again only after the login was refused")
+		"the next attempt logged in first; it sent the add again only after the login was refused")
 	assert.Equal(t, sshkeys.StatusOverlap, e.run(r.ID).Status)
 	assert.Zero(t, e.countEvents("RemoveAuthorizedKey"))
 }
@@ -247,7 +294,7 @@ func TestBackwardClockStepIsRefusedAndRetried(t *testing.T) {
 	e.sweep()
 	require.Equal(t, sshkeys.StatusRemovingOld, e.run(r.ID).Status)
 	stepped := false
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "VerifyKeyLogin" && !stepped {
 			stepped = true
 			e.clock.Set(verified.Add(-2 * time.Hour)) // the clock goes back while the re-check runs

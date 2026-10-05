@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,8 +46,10 @@ func TestMain(m *testing.M) { os.Exit(pgtest.Main(m)) }
 
 var start = time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 
-// runTimeout bounds one RunOnce (F10): a FaultHang call ends when the job's context does.
-const runTimeout = 2 * time.Second
+// runTimeout only guards against a test that hangs for good (a bug): a FaultHang call is ended by the
+// harness itself, which ends the job's context when the fault fires (F10, review I8), so no run of the
+// suite depends on how fast the machine is.
+const runTimeout = 2 * time.Minute
 
 // lockGate is the license service with a switch that puts it in lock. It does not ask the real
 // service: the tests move the clock by days, after which the service would say the license was not
@@ -112,6 +115,35 @@ type env struct {
 	adminID    uuid.UUID
 	adminAudit audit.Actor
 	killer     atomic.Pointer[killer] // the process dies at its points (setKiller)
+	cancelJob  atomic.Pointer[context.CancelFunc]
+	// unprotected counts Add and Remove requests that did not carry Alice's own fingerprint among the
+	// protected ones (review I7): every test fails when one did.
+	unprotected atomic.Int32
+}
+
+// jobContext is the context of one RunOnce; a FaultHang ends it (the job's own deadline, F-39).
+func (e *env) jobContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(e.ctx, runTimeout)
+	e.cancelJob.Store(&cancel)
+	return ctx, cancel
+}
+
+// setFault installs the world's fault decision; a FaultHang ends the running job's context at once, as
+// the job's deadline would end it on a slow host.
+func (e *env) setFault(f func(fake.FaultPoint) fake.Fault) {
+	if f == nil {
+		e.world.SetFault(nil)
+		return
+	}
+	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+		x := f(p)
+		if x == fake.FaultHang {
+			if c := e.cancelJob.Load(); c != nil {
+				(*c)()
+			}
+		}
+		return x
+	})
 }
 
 func newEnv(t *testing.T) *env { t.Helper(); return newEnvWith(t, nil) }
@@ -125,7 +157,7 @@ func newEnvWith(t *testing.T, real func(e *env)) *env {
 	// A lock-order mistake fails fast with SQLSTATE 55P03 instead of hanging the suite.
 	var dbName string
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT current_database()").Scan(&dbName))
-	_, err := e.db.Owner.Exec(e.ctx, "ALTER DATABASE "+pgx.Identifier{dbName}.Sanitize()+" SET lock_timeout = '5s'")
+	_, err := e.db.Owner.Exec(e.ctx, "ALTER DATABASE "+pgx.Identifier{dbName}.Sanitize()+" SET lock_timeout = '60s'")
 	require.NoError(t, err)
 	e.db.App.Reset()
 	e.dropAtEnd()
@@ -154,6 +186,11 @@ func newEnvWith(t *testing.T, real func(e *env)) *env {
 	e.reg.Freeze()
 	e.platform, err = e.inv.EnsurePlatformKey(e.ctx)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if n := e.unprotected.Load(); n > 0 {
+			t.Errorf("%d add or remove requests did not protect Alice's own key", n)
+		}
+	})
 	e.keys = sshkeys.New(sshkeys.Config{HelperBudget: helperproto.HelperBudget, Pool: e.db.App, Keyring: e.keyring, Audit: e.audit,
 		Clock: e.tick, License: e.gate, Inventory: e.inv, Jobs: e.queue, Notifier: e.notifier, Log: e.log})
 	// The heartbeat never beats on the fake clock: a lease ends only when a test moves the clock past it.
@@ -161,7 +198,7 @@ func newEnvWith(t *testing.T, real func(e *env)) *env {
 		Workers: 1, WorkerID: "alice", Heartbeat: 24 * time.Hour, Jitter: func() float64 { return 0 },
 		Notifier: notify.AdminNotifier{Clock: e.tick}})
 	sshkeyjobs.Register(e.runner, sshkeyjobs.Deps{Keys: killKeys{Service: e.keys, e: e}, Targets: e.inv, Registry: e.reg, Clock: e.tick,
-		Log: e.log, HelperBudget: helperproto.HelperBudget})
+		Log: e.log})
 	e.admin = e.user("ada", rbac.Admin)
 	e.adminID, e.adminAudit = e.admin.UserID, e.admin.Audit
 	e.operator = e.user("oscar", rbac.Operator)
@@ -327,7 +364,7 @@ func (e *env) lastAuditDetail(action, key string) string {
 // runOnce runs one due job under the per-call timeout (F10).
 func (e *env) runOnce() bool {
 	e.t.Helper()
-	ctx, cancel := context.WithTimeout(e.ctx, runTimeout)
+	ctx, cancel := e.jobContext()
 	defer cancel()
 	ran, err := e.runner.RunOnce(ctx)
 	require.NoError(e.t, err)
@@ -365,7 +402,8 @@ type killer struct {
 	points    map[string]bool
 	afterCall int
 	calls     func() int
-	fired     atomic.Value // the point that fired
+	fired     atomic.Value      // the point that fired
+	on        map[string]func() // called at a point (any point name), before the kill check
 }
 
 func newKiller(points ...string) *killer {
@@ -377,6 +415,9 @@ func newKiller(points ...string) *killer {
 }
 
 func (k *killer) at(point string) {
+	if fn := k.on[point]; fn != nil {
+		fn()
+	}
 	if k.fired.Load() != nil {
 		return
 	}
@@ -418,7 +459,7 @@ func (e *env) drainDying() {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			ctx, cancel := context.WithTimeout(e.ctx, runTimeout)
+			ctx, cancel := e.jobContext()
 			defer cancel()
 			ran, _ = e.runner.RunOnce(ctx)
 		}()
@@ -454,13 +495,21 @@ type killSession struct {
 	e *env
 }
 
+func (s killSession) protects(req providers.AuthKeyChange) {
+	if !slices.Contains(req.ProtectedFingerprints, s.e.platform.Fingerprint) {
+		s.e.unprotected.Add(1)
+	}
+}
+
 func (s killSession) AddAuthorizedKey(ctx context.Context, req providers.AuthKeyChange, log providers.StepLogger) (providers.AuthKeyResult, error) {
+	s.protects(req)
 	res, err := s.Session.AddAuthorizedKey(ctx, req, log)
 	s.e.at("session:after:AddAuthorizedKey")
 	return res, err
 }
 
 func (s killSession) RemoveAuthorizedKey(ctx context.Context, req providers.AuthKeyChange, log providers.StepLogger) (providers.AuthKeyResult, error) {
+	s.protects(req)
 	res, err := s.Session.RemoveAuthorizedKey(ctx, req, log)
 	s.e.at("session:after:RemoveAuthorizedKey")
 	return res, err
@@ -472,9 +521,9 @@ func (s killSession) VerifyKeyLogin(ctx context.Context, req providers.KeyLoginR
 	return res, err
 }
 
-func (s killSession) ListAuthorizedKeys(ctx context.Context) ([]providers.DiscoveredSSHKey, error) {
-	res, err := s.Session.ListAuthorizedKeys(ctx)
-	s.e.at("session:after:ListAuthorizedKeys")
+func (s killSession) ListKeys(ctx context.Context) (providers.KeyListing, error) {
+	res, err := s.Session.ListKeys(ctx)
+	s.e.at("session:after:ListKeys")
 	return res, err
 }
 
@@ -496,6 +545,13 @@ func (k killKeys) FinishDeploy(ctx context.Context, actor audit.Actor, d sshkeys
 	err := k.Service.FinishDeploy(ctx, actor, d, out)
 	k.e.at("after:FinishDeploy")
 	return err
+}
+
+func (k killKeys) BeginDeploySend(ctx context.Context, jobID uuid.UUID, d sshkeys.DeployJob) (sshkeys.DeploySend, error) {
+	k.e.at("before:BeginDeploySend")
+	s, err := k.Service.BeginDeploySend(ctx, jobID, d)
+	k.e.at("after:BeginDeploySend")
+	return s, err
 }
 
 func (k killKeys) LocationWork(ctx context.Context, id uuid.UUID) (sshkeys.LocationWork, error) {
@@ -581,4 +637,13 @@ func (c *tickClock) Now() time.Time {
 		c.Advance(time.Millisecond)
 	}
 	return c.Fake.Now()
+}
+
+// setKeyFiles replaces the key files the server's last scan listed.
+func (e *env) setKeyFiles(target uuid.UUID, files []providers.UserKeyFiles) {
+	e.t.Helper()
+	raw, err := json.Marshal(files)
+	require.NoError(e.t, err)
+	_, err = e.db.Owner.Exec(e.ctx, "UPDATE targets SET facts = jsonb_set(facts, '{key_files}', $2::jsonb) WHERE id = $1", target, string(raw))
+	require.NoError(e.t, err)
 }

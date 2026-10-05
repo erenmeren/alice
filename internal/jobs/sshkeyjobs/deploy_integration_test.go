@@ -58,7 +58,7 @@ func TestDeployUnverifiedWithFrom(t *testing.T) {
 	e := newEnv(t)
 	srv := e.server("web-01")
 	k := e.generate("ci")
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "VerifyKeyLogin" {
 			return fake.FaultRefuse // Alice's address is not in from=
 		}
@@ -78,7 +78,7 @@ func TestDeployUnprovableLoginIsUnverified(t *testing.T) {
 	e := newEnv(t)
 	srv := e.server("web-01")
 	k := e.generate("ci")
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "VerifyKeyLogin" {
 			return fake.FaultUnprovable // the server let Alice in without asking for the key
 		}
@@ -99,7 +99,7 @@ func TestDeployLoginUnavailableKeepsADefiniteAdd(t *testing.T) {
 	e := newEnv(t)
 	srv := e.server("web-01")
 	k := e.generate("ci")
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "VerifyKeyLogin" {
 			return fake.FaultUnreachable
 		}
@@ -120,7 +120,7 @@ func TestDeployRefusedLoginIsUndone(t *testing.T) {
 	other := e.otherKeyLine(t)
 	e.world.Put(srv, "deploy", deployFile, other)
 	k := e.generate("ci")
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "VerifyKeyLogin" {
 			return fake.FaultRefuse
 		}
@@ -147,7 +147,7 @@ func TestDeployUncertainWriteResolvedByLogin(t *testing.T) {
 		e := newEnv(t)
 		srv := e.server("web-01")
 		k := e.generate("ci")
-		e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+		e.setFault(func(p fake.FaultPoint) fake.Fault {
 			switch {
 			case p.Method == "AddAuthorizedKey":
 				return fake.FaultAfterWrite // written, then the connection dropped
@@ -163,11 +163,18 @@ func TestDeployUncertainWriteResolvedByLogin(t *testing.T) {
 			assert.Equal(t, "verified", v.Result["result"])
 			assert.True(t, e.world.Has(srv, deployFile, k.Fingerprint))
 			assert.Equal(t, 1, e.count("SELECT count(*) FROM ssh_key_locations WHERE ssh_key_id = $1", k.ID), "recorded")
+			assert.Equal(t, 1, e.countEvents("AddAuthorizedKey"))
 		} else {
+			assert.Equal(t, "uncertain", v.Result["result"], "S3: not undone while the unanswered send may still land")
+			assert.Equal(t, 1, e.countEvents("AddAuthorizedKey"), "an uncertain write is never re-sent blindly by the queue")
+			assert.Zero(t, e.countEvents("RemoveAuthorizedKey"))
+			e.clock.Advance(e.keys.UndoWait())
+			e.drain()
+			v = e.job(job)
 			assert.Equal(t, "undone", v.Result["result"])
 			assert.False(t, e.world.Has(srv, deployFile, k.Fingerprint), "the uncertain line is removed by its fingerprint")
+			assert.Equal(t, 2, e.countEvents("AddAuthorizedKey"), "sent once more after the wait, for a definite answer")
 		}
-		assert.Equal(t, 1, e.countEvents("AddAuthorizedKey"), "an uncertain write is never re-sent blindly by the queue")
 	}
 }
 
@@ -178,7 +185,7 @@ func TestDeployLateWriteIsStillUndone(t *testing.T) {
 	srv := e.server("web-01")
 	k := e.generate("ci")
 	adds := 0
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		switch p.Method {
 		case "AddAuthorizedKey":
 			adds++
@@ -215,7 +222,7 @@ func TestDeployAlreadyPresentIsNeverUndone(t *testing.T) {
 	srv := e.server("web-01")
 	k := e.generate("ci")
 	e.world.Put(srv, "deploy", deployFile, k.PublicKey+" "+k.Comment) // already there (added by hand)
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "VerifyKeyLogin" {
 			return fake.FaultRefuse
 		}
@@ -236,7 +243,7 @@ func TestDeployUndoFailedNeedsAttention(t *testing.T) {
 	e := newEnv(t)
 	srv := e.server("web-01")
 	k := e.generate("ci")
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		switch p.Method {
 		case "VerifyKeyLogin":
 			return fake.FaultRefuse
@@ -265,7 +272,7 @@ func TestDeployAddRefusals(t *testing.T) {
 		e := newEnv(t)
 		srv := e.server("web-01")
 		k := e.generate("ci")
-		e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+		e.setFault(func(p fake.FaultPoint) fake.Fault {
 			if p.Method == "AddAuthorizedKey" {
 				return fake.FaultRefuse
 			}
@@ -284,7 +291,7 @@ func TestDeployAddRefusals(t *testing.T) {
 		srv := e.server("web-01")
 		k := e.generate("ci")
 		calls := 0
-		e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+		e.setFault(func(p fake.FaultPoint) fake.Fault {
 			if p.Method == "AddAuthorizedKey" {
 				calls++
 				if calls == 1 {
@@ -298,7 +305,8 @@ func TestDeployAddRefusals(t *testing.T) {
 		assert.Equal(t, jobs.StatusQueued, e.job(job).Status)
 		assert.Zero(t, e.audits("sshkey.add_failed"), "a retryable failure is not final")
 		assert.Equal(t, "unreachable", e.targetStatus(srv))
-		e.clock.Advance(30 * time.Second)
+		assert.Equal(t, start.Add(e.keys.UndoWait()), e.job(job).RunAt.UTC(), "the next send waits out this one (S3)")
+		e.clock.Advance(e.keys.UndoWait())
 		e.drain()
 		v := e.job(job)
 		assert.Equal(t, jobs.StatusSucceeded, v.Status)
@@ -309,7 +317,7 @@ func TestDeployAddRefusals(t *testing.T) {
 		e := newEnv(t)
 		srv := e.server("web-01")
 		k := e.generate("ci")
-		e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+		e.setFault(func(p fake.FaultPoint) fake.Fault {
 			if p.Method == "AddAuthorizedKey" {
 				return fake.FaultFileChanged
 			}
@@ -396,6 +404,9 @@ func TestDeployKilledAfterTheAddConverges(t *testing.T) {
 			e.setKiller(nil)
 			e.restart()
 			e.drain()
+			assert.Equal(t, "uncertain", e.job(job).Result["result"], "the killed send may still land: nothing is sent before the wait")
+			e.clock.Advance(e.keys.UndoWait())
+			e.drain()
 			v := e.job(job)
 			assert.Equal(t, jobs.StatusSucceeded, v.Status)
 			assert.Equal(t, "verified", v.Result["result"], "the line found again is this job's own")
@@ -412,7 +423,7 @@ func TestDeployKilledWithARefusedLoginIsUndone(t *testing.T) {
 	e := newEnv(t)
 	srv := e.server("web-01")
 	k := e.generate("ci")
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "VerifyKeyLogin" {
 			return fake.FaultRefuse
 		}
@@ -426,11 +437,75 @@ func TestDeployKilledWithARefusedLoginIsUndone(t *testing.T) {
 	e.setKiller(nil)
 	e.restart()
 	e.drain()
+	assert.Equal(t, "uncertain", e.job(job).Result["result"], "the killed send may still land: nothing is sent before the wait")
+	assert.Equal(t, 1, e.countEvents("AddAuthorizedKey"))
+	e.clock.Advance(e.keys.UndoWait())
+	e.drain()
 	v := e.job(job)
-	assert.Equal(t, "undone", v.Result["result"])
+	assert.Equal(t, "undone", v.Result["result"], "a line found after a send of this job on record is its own")
 	assert.False(t, e.world.Has(srv, deployFile, k.Fingerprint))
 	assert.Equal(t, 2, e.countEvents("AddAuthorizedKey"), "one add per attempt (the second found the line)")
 	assert.Equal(t, 1, e.countEvents("VerifyKeyLogin"))
 	assert.Equal(t, 1, e.countEvents("RemoveAuthorizedKey"))
 	assert.Equal(t, 4, e.worldCalls())
+}
+
+// Review I1: a line that was there before the job is never removed, also on a retry. Ownership comes
+// from the durable send record (sshkey.add_sent), never from the attempt number.
+func TestDeployRetryNeverRemovesALineThatWasThere(t *testing.T) {
+	// Waiting on the store (request S-1b in task-10-report.md, fix round 1): the send record counts the
+	// first attempt's send although it answered definitely that nothing was written, so the retry takes
+	// the line for its own.
+	t.Skip("waiting on store request S-1b: a send with a definite no-change answer must not make a found line this job's")
+	e := newEnv(t)
+	srv := e.server("web-01")
+	k := e.generate("ci")
+	byHand := `from="10.0.0.0/8" ` + k.PublicKey + " " + k.Comment
+	e.world.Put(srv, "deploy", deployFile, byHand) // Alice is outside from=: the login is refused
+	calls := 0
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
+		switch p.Method {
+		case "AddAuthorizedKey":
+			calls++
+			if calls == 1 {
+				return fake.FaultUnreachable // a transient first attempt, nothing written
+			}
+		case "VerifyKeyLogin":
+			return fake.FaultRefuse
+		}
+		return fake.FaultNone
+	})
+	job := e.deploy(k, srv, "")
+	e.drain()
+	require.Equal(t, jobs.StatusQueued, e.job(job).Status)
+	e.clock.Advance(e.keys.UndoWait())
+	e.drain()
+	v := e.job(job)
+	assert.Equal(t, jobs.StatusSucceeded, v.Status)
+	assert.Equal(t, "already_present", v.Result["result"])
+	assert.Equal(t, []string{byHand}, e.world.Lines(srv, deployFile), "the line that was there is kept")
+	assert.Zero(t, e.countEvents("RemoveAuthorizedKey"))
+}
+
+// M7: the last attempt ends retryably after a send: audited once and a scan is queued.
+func TestDeployLastAttemptAfterASendLeavesARecord(t *testing.T) {
+	e := newEnv(t)
+	srv := e.server("web-01")
+	k := e.generate("ci")
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
+		if p.Method == "AddAuthorizedKey" {
+			return fake.FaultUnreachable
+		}
+		return fake.FaultNone
+	})
+	job := e.deploy(k, srv, "")
+	for range 3 {
+		e.drain()
+		e.clock.Advance(time.Hour)
+	}
+	v := e.job(job)
+	assert.Equal(t, jobs.StatusDead, v.Status)
+	assert.Equal(t, 1, e.audits("sshkey.add_failed"))
+	assert.Equal(t, 3, e.audits("sshkey.add_sent"), "every send is on record before it is made")
+	assert.Equal(t, 1, e.discoveries(srv), "an earlier send may have landed: the record catches up")
 }

@@ -35,8 +35,10 @@ import (
 type Keys interface {
 	DeployJob(ctx context.Context, jobID, targetID uuid.UUID, payload map[string]string) (sshkeys.DeployJob, error)
 	FinishDeploy(ctx context.Context, actor audit.Actor, d sshkeys.DeployJob, out sshkeys.DeployOutcome) error
+	BeginDeploySend(ctx context.Context, jobID uuid.UUID, d sshkeys.DeployJob) (sshkeys.DeploySend, error)
+	DeploySends(ctx context.Context, jobID uuid.UUID) (sshkeys.DeploySendRecord, error)
+	UndoWait() time.Duration
 	KeySigner(keyID uuid.UUID) providers.CredentialSource
-	ProtectedFingerprints(ctx context.Context) ([]string, error)
 	LocationWork(ctx context.Context, locationID uuid.UUID) (sshkeys.LocationWork, error)
 	BeginAdd(ctx context.Context, locationID uuid.UUID) (uuid.UUID, error)
 	FinishAdd(ctx context.Context, locationID uuid.UUID, r sshkeys.AddRecord) error
@@ -46,7 +48,6 @@ type Keys interface {
 	FinishRemove(ctx context.Context, actor audit.Actor, locationID uuid.UUID, r sshkeys.RemoveRecord) error
 	BeginUndo(ctx context.Context, locationID uuid.UUID) (uuid.UUID, error)
 	FinishUndo(ctx context.Context, actor audit.Actor, locationID uuid.UUID, r sshkeys.UndoRecord) error
-	Step(ctx context.Context, rotationID uuid.UUID, locationID *uuid.UUID, name string, status providers.StepStatus, params map[string]string) error
 	Advance(ctx context.Context, rotationID uuid.UUID) error
 }
 
@@ -72,22 +73,12 @@ type Deps struct {
 	Registry *providers.Registry
 	Clock    clock.Clock
 	Log      *slog.Logger // nil = discard
-	// HelperBudget is how long one helper call may work on a server (helperproto.HelperBudget, which the
-	// composition root passes): a deploy whose write is uncertain and whose line is not found waits this
-	// long plus 30 s after the send before it concludes anything (S3). Required.
-	HelperBudget time.Duration
 }
-
-// undoGrace is the margin after the helper's budget (S3), as the store's.
-const undoGrace = 30 * time.Second
 
 // Register installs the handlers of sshkey.add and rotation.location on the runner. It panics on a missing dependency.
 func Register(r *jobs.Runner, d Deps) {
-	switch {
-	case d.Keys == nil, d.Targets == nil, d.Registry == nil, d.Clock == nil:
+	if d.Keys == nil || d.Targets == nil || d.Registry == nil || d.Clock == nil {
 		panic("sshkeyjobs: Deps needs Keys, Targets, Registry and Clock")
-	case d.HelperBudget <= 0:
-		panic("sshkeyjobs: Deps.HelperBudget must be set (helperproto.HelperBudget)")
 	}
 	if d.Log == nil {
 		d.Log = slog.New(slog.DiscardHandler)

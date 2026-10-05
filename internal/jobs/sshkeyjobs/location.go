@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"alice/internal/audit"
 	"alice/internal/inventory"
@@ -20,7 +21,8 @@ import (
 //
 //	add     planned → BeginAdd → send (op) → FinishAdd → login with the new key → RecordVerify
 //	        adding (a send whose answer was not recorded) → login first; anything but an accepted login →
-//	        BeginAdd again (same op, add_resent) → send → FinishAdd → login → RecordVerify
+//	        BeginAdd again (same op; the store records the re-send on the row) → send → FinishAdd → login →
+//	        RecordVerify
 //	        added → login → RecordVerify; a location the plan does not verify (root_login_disabled) is
 //	        never logged in to
 //	remove  verified / remove_failed → login → RecordReverify → BeginRemove → send (op) → FinishRemove
@@ -32,9 +34,12 @@ import (
 //
 // The store answers ErrNotYourTurn or ErrPaused when a step is not this job's to take (the run moved on,
 // the license gate, the S3 wait, a clock stepped back): the job records nothing more and ends; the sweep
-// re-queues what still waits. A job whose context ends after a remote call records nothing either (the
-// state stays "in flight" and the next job resolves it as above). Any other store failure is surfaced as a
-// retryable failure (the next attempt reads the state again). Advance runs after every recorded outcome.
+// re-queues what still waits. ErrPaused never changes a location's state (a lock is not a failure of the
+// server). A job whose context ends after a remote call records nothing either: it fails retryably with
+// ssh.timeout (F-39), the state stays "in flight" and the next job resolves it as above. A connection
+// failure leaves a row that is in flight (removing, undoing) as it is, for the sweep's bounded re-queue.
+// A database failure is never recorded as a server's failure: it is surfaced as a retryable failure (the
+// next attempt reads the state again). Advance runs after every recorded outcome.
 
 // reasonNotWaiting: a payload that names no location of the run, or another server.
 const reasonNotWaiting = "rotation.not_waiting"
@@ -110,6 +115,12 @@ func (r *locJob) storeStop(err error) (map[string]any, error) {
 	case errors.Is(err, inventory.ErrClaimLost):
 		return nil, jobs.Retry("job.lease_expired", nil, err)
 	}
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.Code == "23505" {
+		// An operation id used twice (rotation_op_ids) is a store bug: never retried.
+		r.h.d.Log.Error("a rotation step was refused as a duplicate", "location_id", r.loc.ID.String(), "constraint", pg.ConstraintName)
+		return nil, jobs.Fail("internal.unexpected", nil, err)
+	}
 	r.h.d.Log.Error("a rotation step could not be recorded", "location_id", r.loc.ID.String(), "error_type", errType(err))
 	return nil, jobs.Retry("internal.unexpected", nil, err)
 }
@@ -124,6 +135,39 @@ func (r *locJob) record(err error, onOK map[string]any) (map[string]any, error) 
 
 func (r *locJob) noVerify() bool { return r.loc.VerifyNote == plan.NoteRootLoginDisabled }
 
+// interrupted is the answer of a job whose context ended during a remote call (a slow host past the job's
+// deadline, a lost lease, a shutdown): a retryable ssh.timeout; the state stays as recorded (F-39).
+func interrupted(ctx context.Context) error {
+	return jobs.Retry("ssh.timeout", nil, ctx.Err())
+}
+
+// internalFailure reports whether a failure of open is Alice's own (the database), not the server's: it
+// is retried and never recorded on the location (review M9).
+func internalFailure(err error) bool {
+	var pe *providers.Error
+	var f *jobs.Failure
+	return !errors.As(err, &pe) && errors.As(err, &f) && f.Class == jobs.Retryable
+}
+
+// transient reports whether a failure may pass by itself (a retryable connection failure).
+func transient(err error) bool {
+	var f *jobs.Failure
+	return errors.As(jobs.FromProvider(err), &f) && f.Class == jobs.Retryable
+}
+
+// notYourTurn answers a BeginAdd the store refused: when the store recorded why (a location it ended at
+// send time, e.g. cancelled for the connection account's files), that reason is the job's result.
+func (r *locJob) notYourTurn(ctx context.Context, err error) (map[string]any, error) {
+	if !errors.Is(err, sshkeys.ErrNotYourTurn) {
+		return r.storeStop(err)
+	}
+	res := stopped("not_your_turn")
+	if w, werr := r.h.d.Keys.LocationWork(ctx, r.loc.ID); werr == nil && w.Location.ErrorCode != "" {
+		res["state"], res["reason"] = w.Location.State, w.Location.ErrorCode
+	}
+	return res, nil
+}
+
 // add is the add phase.
 func (r *locJob) add(ctx context.Context) (map[string]any, error) {
 	keys := r.h.d.Keys
@@ -132,7 +176,7 @@ func (r *locJob) add(ctx context.Context) (map[string]any, error) {
 	case sshkeys.LocPlanned:
 		var err error
 		if op, err = keys.BeginAdd(ctx, r.loc.ID); err != nil {
-			return r.storeStop(err) // paused or not this job's turn: nothing was sent
+			return r.notYourTurn(ctx, err) // paused or not this job's turn: nothing was sent
 		}
 		state, began = sshkeys.LocAdding, true
 	case sshkeys.LocAdding, sshkeys.LocAdded:
@@ -141,6 +185,9 @@ func (r *locJob) add(ctx context.Context) (map[string]any, error) {
 	}
 	sess, err := r.h.open(ctx, r.loc.TargetID)
 	if err != nil {
+		if internalFailure(err) {
+			return nil, err
+		}
 		reason := reasonOf(err)
 		if began { // nothing was sent: the add failed definitely
 			err = keys.FinishAdd(ctx, r.loc.ID, sshkeys.AddRecord{Definite: true, Reason: reason, Actor: r.actor})
@@ -168,9 +215,16 @@ func (r *locJob) add(ctx context.Context) (map[string]any, error) {
 		} else {
 			outcome, lerr := r.h.login(ctx, sess, r.loc.OSUser, r.w.NewKeyID)
 			if ctx.Err() != nil {
-				return stopped("interrupted"), nil
+				return nil, interrupted(ctx)
 			}
 			accepted := lerr == nil && outcome == providers.KeyLoginAccepted
+			if accepted && state == sshkeys.LocAdding && !r.addProven(ctx, sess) {
+				// The login went through, but no listing shows the line in this file (M3): not proven.
+				if ctx.Err() != nil {
+					return nil, interrupted(ctx)
+				}
+				accepted, outcome = false, providers.KeyLoginRefused
+			}
 			// A login that could not connect is recorded as it is (A3: verify_failed with its reason;
 			// sending again over the same connection would not answer either).
 			if accepted || lerr != nil || state != sshkeys.LocAdding || resent {
@@ -181,12 +235,9 @@ func (r *locJob) add(ctx context.Context) (map[string]any, error) {
 		// id; the add is idempotent by fingerprint) when the gate allows, then decide.
 		var err error
 		if op, err = keys.BeginAdd(ctx, r.loc.ID); err != nil {
-			if errors.Is(err, sshkeys.ErrPaused) && !r.noVerify() {
-				// Cannot send again in lock: the login did not prove the line, so the location fails and
-				// the undo (after S3's wait) removes whatever may have landed.
-				return r.recordVerify(ctx, state, providers.KeyLoginRefused, errNotProven)
-			}
-			return r.storeStop(err)
+			// In lock (ErrPaused) nothing is recorded: the row stays adding, the run pauses, and after
+			// Continue the next job sends again (review I3; a lock is not a failure of the server).
+			return r.notYourTurn(ctx, err)
 		}
 		resent = true
 		if res, ok, err := r.sendAdd(ctx, sess, op, &state); !ok {
@@ -194,10 +245,6 @@ func (r *locJob) add(ctx context.Context) (map[string]any, error) {
 		}
 	}
 }
-
-// errNotProven: a login after an add whose answer was lost proved nothing (refused, unprovable or a
-// refusal with from=; review I1): the location is recorded as failed, never as unverifiable.
-var errNotProven = jobs.Fail(sshkeys.ReasonLoginFailed, nil, nil)
 
 // recordVerify records a login after the add. From adding (the add's answer was lost) only an accepted
 // login proves the line: anything else is recorded as a failure with its reason.
@@ -220,9 +267,12 @@ func (r *locJob) sendAdd(ctx context.Context, sess providers.Session, op uuid.UU
 	res, err := sess.AddAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: op, OSUser: r.loc.OSUser, FilePath: r.loc.FilePath,
 		Line: r.w.NewLine, ProtectedFingerprints: r.w.Protected}, rec)
 	if ctx.Err() != nil {
-		return stopped("interrupted"), false, nil // in flight: the next job verifies first
+		return nil, false, interrupted(ctx) // in flight: the next job verifies first
 	}
-	if err != nil {
+	if err != nil && definiteNoChange(rec.wrote, res, err) {
+		// Only a failure before the write says the server is not reachable; a timeout after the write
+		// started is the add's uncertainty, resolved by the login and one re-send (the planner would skip
+		// a server marked unreachable at the re-send).
 		r.h.recordIfConnection(ctx, r.loc.TargetID, err)
 	}
 	switch {
@@ -247,24 +297,37 @@ func (r *locJob) sendAdd(ctx context.Context, sess providers.Session, op uuid.UU
 	return nil, true, nil // uncertain (or written but read back differently): the login decides
 }
 
-// holds lists the location's file and reports which of the fingerprints it holds.
-func (r *locJob) holds(ctx context.Context, sess providers.Session, fps ...string) (map[string]bool, error) {
-	keys, err := sess.ListAuthorizedKeys(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]bool{}
-	for _, k := range keys {
-		if k.FilePath != r.loc.FilePath {
-			continue
-		}
-		for _, fp := range fps {
-			if k.Fingerprint == fp {
-				out[fp] = true
-			}
+// fileView is what one listing proves about the location's file (review C1): a key is "here" when the
+// listing shows a line of it in the file, "gone" only when the listing read that user's file completely
+// and no line holds it (providers.KeyListing.Absent); anything else is unknown.
+type fileView struct {
+	listing providers.KeyListing
+	user    string
+	file    string
+}
+
+func (v fileView) here(fp string) bool {
+	for _, k := range v.listing.Keys {
+		if k.FilePath == v.file && k.Fingerprint == fp {
+			return true
 		}
 	}
-	return out, nil
+	return false
+}
+
+func (v fileView) gone(fp string) bool { return v.listing.Absent(v.user, v.file, fp) }
+
+// view lists the server's keys with their coverage.
+func (r *locJob) view(ctx context.Context, sess providers.Session) (fileView, error) {
+	l, err := sess.ListKeys(ctx)
+	return fileView{listing: l, user: r.loc.OSUser, file: r.loc.FilePath}, err
+}
+
+// addProven reports whether a listing shows the new key's line in the location's file: from adding, an
+// accepted login proves the user, not the file (a user may read several files, review M3).
+func (r *locJob) addProven(ctx context.Context, sess providers.Session) bool {
+	v, err := r.view(ctx, sess)
+	return err == nil && v.here(r.w.NewFingerprint)
 }
 
 // remove is the remove phase.
@@ -275,7 +338,14 @@ func (r *locJob) remove(ctx context.Context) (map[string]any, error) {
 		return stateResult(state), nil
 	}
 	sess, err := r.h.open(ctx, r.loc.TargetID)
-	if err != nil {
+	switch {
+	case err != nil && internalFailure(err):
+		return nil, err
+	case err != nil && state == sshkeys.LocRemoving:
+		// The removal may have landed: nothing is recorded without reading the file (review M1); the sweep
+		// re-queues the row within its bound.
+		return map[string]any{"state": state, "reason": reasonOf(err)}, nil
+	case err != nil:
 		reason := reasonOf(err)
 		res, ferr := r.record(keys.RecordReverify(ctx, r.loc.ID, sshkeys.VerifyRecord{Reason: reason}), map[string]any{"reason": reason})
 		return res, ferr
@@ -289,7 +359,10 @@ func (r *locJob) remove(ctx context.Context) (map[string]any, error) {
 	}
 	outcome, lerr := r.h.login(ctx, sess, r.loc.OSUser, r.w.NewKeyID)
 	if ctx.Err() != nil {
-		return stopped("interrupted"), nil
+		return nil, interrupted(ctx)
+	}
+	if lerr != nil && state == sshkeys.LocRemoving {
+		return map[string]any{"state": state, "reason": reasonOf(lerr)}, nil // as an open failure (M1)
 	}
 	rec := sshkeys.VerifyRecord{Outcome: outcome}
 	if lerr != nil {
@@ -315,7 +388,7 @@ func (r *locJob) remove(ctx context.Context) (map[string]any, error) {
 	res, err := sess.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: op, OSUser: r.loc.OSUser, FilePath: r.loc.FilePath,
 		Fingerprint: r.w.OldFingerprint, ProtectedFingerprints: r.w.Protected, AllowLastRootKey: false}, rec2)
 	if ctx.Err() != nil {
-		return stopped("interrupted"), nil // removing: the next job lists the file first
+		return nil, interrupted(ctx) // removing: the next job lists the file first
 	}
 	if err != nil {
 		r.h.recordIfConnection(ctx, r.loc.TargetID, err)
@@ -333,11 +406,13 @@ func (r *locJob) remove(ctx context.Context) (map[string]any, error) {
 	return out, ferr
 }
 
-// removedAlready lists the file of a location whose removal was sent; when the old key is gone it records
-// the removal (done). A failed listing or a key still there continues the normal path (done false).
+// removedAlready lists the file of a location whose removal was sent; only when a complete listing of
+// the file proves the old key gone does it record the removal (done). A failed or incomplete listing, or
+// a key still there, continues the normal path (done false): a fresh re-check and a re-send give a
+// definite answer (review C1).
 func (r *locJob) removedAlready(ctx context.Context, sess providers.Session) (map[string]any, bool, error) {
-	held, err := r.holds(ctx, sess, r.w.OldFingerprint)
-	if err != nil || held[r.w.OldFingerprint] || ctx.Err() != nil {
+	v, err := r.view(ctx, sess)
+	if err != nil || ctx.Err() != nil || !v.gone(r.w.OldFingerprint) {
 		return nil, false, nil
 	}
 	// The earlier send removed it (Alice's change: the inventory marks the old location removed).
@@ -360,34 +435,50 @@ func (r *locJob) undo(ctx context.Context) (map[string]any, error) {
 			map[string]any{"state": sshkeys.LocUndoFailed, "reason": reason})
 		return res, ferr
 	}
-	sess, err := r.h.open(ctx, r.loc.TargetID)
-	if err != nil {
+	// A failure that may pass (the server unreachable for a while) leaves the row undoing for the sweep's
+	// bounded re-queue (review M2); one that will not (identity changed, server deleted) ends it.
+	notNow := func(err error) (map[string]any, error) {
+		if transient(err) {
+			return map[string]any{"state": sshkeys.LocUndoing, "reason": reasonOf(err)}, nil
+		}
 		return fail(reasonOf(err))
 	}
+	sess, err := r.h.open(ctx, r.loc.TargetID)
+	if err != nil {
+		if internalFailure(err) {
+			return nil, err
+		}
+		return notNow(err)
+	}
 	defer r.h.close(sess)
-	held, err := r.holds(ctx, sess, r.w.OldFingerprint, r.w.NewFingerprint)
+	v, err := r.view(ctx, sess)
 	if ctx.Err() != nil {
-		return stopped("interrupted"), nil
+		return nil, interrupted(ctx)
 	}
 	if err != nil {
 		r.h.recordIfConnection(ctx, r.loc.TargetID, err)
-		return fail(reasonOf(err))
+		return notNow(err)
 	}
 	switch {
-	case !held[r.w.NewFingerprint]:
-		// Nothing to remove (S3's wait is over: an uncertain add cannot land any more).
+	case v.gone(r.w.NewFingerprint):
+		// Nothing to remove: the file was read completely (S3's wait is over: an uncertain add cannot land
+		// any more).
 		res, ferr := r.record(keys.FinishUndo(ctx, r.actor, r.loc.ID, sshkeys.UndoRecord{Definite: true}),
 			map[string]any{"state": sshkeys.LocUndone, "found": "new_key_absent"})
 		return res, ferr
-	case !held[r.w.OldFingerprint]:
+	case v.gone(r.w.OldFingerprint):
 		// S12: the old key is already gone; removing the new one could leave the account without a key.
 		return fail(sshkeys.ReasonOldKeyGone)
+	case !v.here(r.w.OldFingerprint):
+		// The listing did not cover the file: neither S12 nor "nothing there" can be decided. The row stays
+		// undoing; the sweep re-queues it within its bound, after which it ends undo_failed (review C1).
+		return map[string]any{"state": sshkeys.LocUndoing, "reason": "listing_incomplete"}, nil
 	}
 	rec := &writeTracker{next: r.steps}
 	res, err := sess.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: op, OSUser: r.loc.OSUser, FilePath: r.loc.FilePath,
 		Fingerprint: r.w.NewFingerprint, ProtectedFingerprints: r.w.Protected, AllowLastRootKey: false}, rec)
 	if ctx.Err() != nil {
-		return stopped("interrupted"), nil // undoing: the next job lists the file first
+		return nil, interrupted(ctx) // undoing: the next job lists the file first
 	}
 	if err != nil {
 		r.h.recordIfConnection(ctx, r.loc.TargetID, err)
@@ -398,7 +489,7 @@ func (r *locJob) undo(ctx context.Context) (map[string]any, error) {
 			map[string]any{"state": sshkeys.LocUndone, "removed": res.Removed})
 		return out, ferr
 	case err != nil && definiteNoChange(rec.wrote, res, err):
-		return fail(reasonOf(err))
+		return notNow(err)
 	}
 	return stateResult(sshkeys.LocUndoing), nil // uncertain: the next job lists the file first
 }

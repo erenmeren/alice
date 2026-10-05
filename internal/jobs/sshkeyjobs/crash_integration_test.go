@@ -66,12 +66,12 @@ var killPoints = []string{
 	"session:after:VerifyKeyLogin", "before:RecordVerify", "after:RecordVerify", "before:Advance", "after:Advance",
 	"before:RecordReverify", "after:RecordReverify", "before:BeginRemove", "after:BeginRemove",
 	"session:after:RemoveAuthorizedKey", "before:FinishRemove", "after:FinishRemove",
-	"before:BeginUndo", "after:BeginUndo", "session:after:ListAuthorizedKeys", "before:FinishUndo", "after:FinishUndo",
+	"before:BeginUndo", "after:BeginUndo", "session:after:ListKeys", "before:FinishUndo", "after:FinishUndo",
 }
 
 // undoNeededFor makes db-01's login refused for the undo points, so those points are reached.
 func undoNeededFor(point string) func(fake.FaultPoint, *scenario) fake.Fault {
-	if !strings.Contains(point, "Undo") && point != "session:after:ListAuthorizedKeys" {
+	if !strings.Contains(point, "Undo") && point != "session:after:ListKeys" {
 		return nil
 	}
 	return func(p fake.FaultPoint, s *scenario) fake.Fault {

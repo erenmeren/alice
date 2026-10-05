@@ -61,7 +61,7 @@ func TestAddRefusedRollsBack(t *testing.T) {
 	k := e.generate("ci")
 	e.place(k, web, "deploy")
 	e.place(k, db, "deploy")
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "AddAuthorizedKey" && p.Target == db {
 			return fake.FaultRefuse
 		}
@@ -88,7 +88,7 @@ func TestUnverifiableWaitsForDecision(t *testing.T) {
 	k := e.generate("ci")
 	e.placeWithOptions(k, web, "deploy", `from="10.0.0.0/8"`)
 	e.place(k, web, "app")
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "VerifyKeyLogin" && p.OSUser == "deploy" {
 			return fake.FaultRefuse
 		}
@@ -114,7 +114,7 @@ func TestReverifyFailureKeepsOld(t *testing.T) {
 	r := e.runNow(e.policy(k.ID, 0))
 	e.drain()
 	require.Equal(t, "overlap", e.run(r.ID).Status)
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "VerifyKeyLogin" {
 			return fake.FaultRefuse // someone broke the new key during the overlap
 		}
@@ -140,7 +140,7 @@ func TestOwnerStep6NetworkLoss(t *testing.T) {
 	e.place(k, web, "deploy")
 	e.place(k, db, "deploy")
 	added := 0
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Target == db && p.Method == "AddAuthorizedKey" {
 			added++
 			return fake.FaultAfterWrite // the line arrived, then the network went
@@ -298,7 +298,7 @@ func TestLateWriteAfterUndoIsStillUndone(t *testing.T) {
 	k := e.generate("ci")
 	e.place(k, web, "deploy")
 	e.place(k, db, "deploy")
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		switch {
 		case p.Target == db && p.Method == "AddAuthorizedKey":
 			return fake.FaultLateWrite // every send to db-01 stalls and lands later
@@ -336,7 +336,7 @@ func TestLostRemovalAnswerIsReadFromTheFile(t *testing.T) {
 	k := e.generate("ci")
 	e.place(k, web, "deploy")
 	removes := 0
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "RemoveAuthorizedKey" {
 			removes++
 			if removes == 1 {
@@ -366,7 +366,7 @@ func TestFailedRemovalIsRetriedWithANewerRecheck(t *testing.T) {
 	k := e.generate("ci")
 	e.place(k, web, "deploy")
 	removes := 0
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "RemoveAuthorizedKey" {
 			removes++
 			if removes == 1 {
@@ -397,7 +397,7 @@ func TestResumedAddIsVerifiedAndRecorded(t *testing.T) {
 	web := e.server("web-01")
 	k := e.generate("ci")
 	e.place(k, web, "deploy")
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.Method == "AddAuthorizedKey" {
 			return fake.FaultAfterWrite // written, answer lost
 		}
@@ -426,7 +426,7 @@ func TestUnprovenLoginAfterALostAddStillWaits(t *testing.T) {
 			k := e.generate("ci")
 			e.place(k, web, "deploy")
 			e.placeWithOptions(k, db, "deploy", `from="10.0.0.0/8"`)
-			e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+			e.setFault(func(p fake.FaultPoint) fake.Fault {
 				switch {
 				case p.Target == db && p.Method == "AddAuthorizedKey":
 					return fake.FaultLateWrite
@@ -452,4 +452,211 @@ func TestUnprovenLoginAfterALostAddStillWaits(t *testing.T) {
 			assert.False(t, e.world.Has(db, keyFile("deploy"), r.NewFingerprint), "the late line was found and removed")
 		})
 	}
+}
+
+// newLine is the authorized_keys line of the run's new key as the add sends it (no options).
+func (e *env) newLine(r sshkeys.Rotation) string {
+	e.t.Helper()
+	var pub, comment string
+	require.NoError(e.t, e.db.Owner.QueryRow(e.ctx, "SELECT public_key, key_comment FROM ssh_keys WHERE id = $1", *r.NewKeyID).Scan(&pub, &comment))
+	return pub + " " + comment
+}
+
+// Review I3 (controller ruling): a lock never changes a location's state. An add whose job died before
+// the send is recovered in lock: its login is refused (nothing there), the one re-send is refused by the
+// gate, and the row stays adding; the run pauses; after the renewal and Continue it is sent and verified.
+func TestLockDuringALostAddChangesNothing(t *testing.T) {
+	e := newEnv(t)
+	web := e.server("web-01")
+	k := e.generate("ci")
+	e.place(k, web, "deploy")
+	kill := newKiller("after:BeginAdd")
+	e.setKiller(kill)
+	r := e.runNow(e.policy(k.ID, 1))
+	e.drainDying()
+	require.Equal(t, "after:BeginAdd", kill.firedAt())
+	e.setKiller(nil)
+	e.gate.lock()
+	e.restart()
+	e.drain()
+	l := e.loc(r.ID, web, "deploy")
+	assert.Equal(t, sshkeys.LocAdding, l.State, "nothing recorded in lock")
+	assert.Empty(t, l.ErrorCode)
+	assert.Zero(t, e.countEvents("AddAuthorizedKey"), "no send in lock")
+	e.sweep()
+	r = e.run(r.ID)
+	assert.Equal(t, sshkeys.StatusAddingNew, r.Status, "no rollback in lock")
+	assert.True(t, r.PausedLicense)
+	e.gate.unlock()
+	e.sweep()
+	require.NoError(t, e.keys.Continue(e.ctx, e.admin, r.ID))
+	e.clock.Advance(time.Minute)
+	e.sweep()
+	e.drain()
+	assert.Equal(t, sshkeys.StatusOverlap, e.run(r.ID).Status)
+	assert.Equal(t, 1, e.countEvents("AddAuthorizedKey"))
+}
+
+// Review C1: a removal whose answer was lost while the old key is still there, and a listing that did
+// not read the file: nothing is recorded "removed"; a fresh re-check and a re-send give the truth.
+func TestUnreadListingNeverRecordsARemoval(t *testing.T) {
+	e := newEnv(t)
+	web := e.server("web-01")
+	k := e.generate("ci")
+	e.place(k, web, "deploy")
+	removes, lists := 0, 0
+	e.world.SetLateDelay(24 * time.Hour) // the stalled removal does not land during the test
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
+		switch p.Method {
+		case "RemoveAuthorizedKey":
+			if removes++; removes == 1 {
+				return fake.FaultLateWrite // timed out, nothing changed yet: the old key is still there
+			}
+		case "ListKeys":
+			if lists++; lists == 1 {
+				return fake.FaultUnread
+			}
+		}
+		return fake.FaultNone
+	})
+	r := e.runNow(e.policy(k.ID, 1))
+	e.drain()
+	e.clock.Advance(24 * time.Hour)
+	e.sweep()
+	e.drain()
+	require.Equal(t, sshkeys.LocRemoving, e.loc(r.ID, web, "deploy").State)
+	require.True(t, e.world.Has(web, keyFile("deploy"), k.Fingerprint))
+	e.clock.Advance(time.Minute)
+	e.sweep()
+	e.drain()
+	assert.Equal(t, 1, lists, "the next job listed the file first")
+	assert.Equal(t, 2, removes, "an unread file proves nothing: re-checked and sent again")
+	assert.Equal(t, sshkeys.LocRemoved, e.loc(r.ID, web, "deploy").State)
+	assert.False(t, e.world.Has(web, keyFile("deploy"), k.Fingerprint), "removed for real, not on a listing's word")
+	e.assertEveryRemovalFollowedAFreshLogin(t, k.Fingerprint, e.run(r.ID).NewFingerprint)
+}
+
+// Review C1: an undo whose listing is partial concludes nothing (neither "nothing there" nor S12): the
+// row stays undoing, and the next job's complete listing lets it remove the new key.
+func TestPartialListingNeverRecordsAnUndo(t *testing.T) {
+	e := newEnv(t)
+	web := e.server("web-01")
+	k := e.generate("ci")
+	e.place(k, web, "deploy")
+	lists := 0
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
+		if p.Method == "ListKeys" {
+			if lists++; lists == 1 {
+				return fake.FaultPartial
+			}
+		}
+		return fake.FaultNone
+	})
+	r := e.runNow(e.policy(k.ID, 7))
+	e.drain()
+	require.NoError(t, e.keys.Abort(e.ctx, e.admin, r.ID))
+	e.drain()
+	l := e.loc(r.ID, web, "deploy")
+	assert.Equal(t, sshkeys.LocUndoing, l.State, "a partial listing proves nothing")
+	assert.True(t, e.world.Has(web, keyFile("deploy"), e.run(r.ID).NewFingerprint))
+	r = e.settleRun(r.ID)
+	assert.Equal(t, sshkeys.StatusAborted, r.Status)
+	assert.Equal(t, sshkeys.LocUndone, e.loc(r.ID, web, "deploy").State)
+	assert.False(t, e.world.Has(web, keyFile("deploy"), r.NewFingerprint), "removed for real")
+	assert.Equal(t, 1, e.removalsOf(r.NewFingerprint))
+}
+
+// Review M1: a removal in flight whose next re-check cannot connect stays removing (the removal may have
+// landed), never remove_failed on the word of a connection failure.
+func TestRemovingRowKeepsItsStateOnAConnectionFailure(t *testing.T) {
+	e := newEnv(t)
+	web := e.server("web-01")
+	k := e.generate("ci")
+	e.place(k, web, "deploy")
+	removes, logins := 0, 0
+	e.world.SetLateDelay(24 * time.Hour)
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
+		switch p.Method {
+		case "RemoveAuthorizedKey":
+			if removes++; removes == 1 {
+				return fake.FaultLateWrite
+			}
+		case "VerifyKeyLogin":
+			if logins++; logins == 3 { // the login after the lost removal
+				return fake.FaultUnreachable
+			}
+		}
+		return fake.FaultNone
+	})
+	r := e.runNow(e.policy(k.ID, 1))
+	e.drain()
+	e.clock.Advance(24 * time.Hour)
+	e.sweep()
+	e.drain()
+	require.Equal(t, sshkeys.LocRemoving, e.loc(r.ID, web, "deploy").State)
+	e.clock.Advance(time.Minute)
+	e.sweep()
+	e.drain()
+	l := e.loc(r.ID, web, "deploy")
+	assert.Equal(t, sshkeys.LocRemoving, l.State, "not remove_failed on a connection failure")
+	r = e.settleRun(r.ID)
+	assert.Equal(t, sshkeys.StatusCompleted, r.Status)
+	assert.False(t, e.world.Has(web, keyFile("deploy"), k.Fingerprint))
+}
+
+// Review M2: an undo that cannot reach the server once is retried by the sweep, not ended at once.
+func TestUndoRetriesATransientFailure(t *testing.T) {
+	e := newEnv(t)
+	web := e.server("web-01")
+	k := e.generate("ci")
+	e.place(k, web, "deploy")
+	removes := 0
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
+		if p.Method == "RemoveAuthorizedKey" {
+			if removes++; removes == 1 {
+				return fake.FaultUnreachable
+			}
+		}
+		return fake.FaultNone
+	})
+	r := e.runNow(e.policy(k.ID, 7))
+	e.drain()
+	require.NoError(t, e.keys.Abort(e.ctx, e.admin, r.ID))
+	e.drain()
+	assert.Equal(t, sshkeys.LocUndoing, e.loc(r.ID, web, "deploy").State)
+	r = e.settleRun(r.ID)
+	assert.Equal(t, sshkeys.StatusAborted, r.Status, "undone on the retry")
+	assert.Equal(t, 2, removes)
+	assert.False(t, e.world.Has(web, keyFile("deploy"), r.NewFingerprint))
+}
+
+// Review M3: a lost add whose login is accepted through ANOTHER key file of the same user is not
+// recorded for this file: the add is sent once more for a definite answer, then verified.
+func TestLoginThroughAnotherFileDoesNotProveTheAdd(t *testing.T) {
+	e := newEnv(t)
+	web := e.server("web-01")
+	k := e.generate("ci")
+	e.place(k, web, "deploy")
+	p := e.policy(k.ID, 1)
+	pv, err := e.keys.Preview(e.ctx, e.admin, p.ID)
+	require.NoError(t, err)
+	r, err := e.keys.RunNow(e.ctx, e.admin, p.ID, pv.Digest)
+	require.NoError(t, err)
+	other := "/home/deploy/.ssh/authorized_keys2"
+	adds := 0
+	e.world.SetLateDelay(24 * time.Hour)
+	e.setFault(func(fp fake.FaultPoint) fake.Fault {
+		if fp.Method == "AddAuthorizedKey" {
+			if adds++; adds == 1 {
+				e.world.Put(web, "deploy", other, e.newLine(r)) // the user reads the new key from another file
+				return fake.FaultLateWrite
+			}
+		}
+		return fake.FaultNone
+	})
+	e.drain()
+	assert.Equal(t, 2, adds, "not proven by the login: sent once more")
+	l := e.loc(r.ID, web, "deploy")
+	assert.Equal(t, sshkeys.LocVerified, l.State)
+	assert.True(t, e.world.Has(web, keyFile("deploy"), r.NewFingerprint), "the line is in this file now")
 }

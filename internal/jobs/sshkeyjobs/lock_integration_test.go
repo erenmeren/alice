@@ -115,7 +115,7 @@ func TestL85AddInFlightAtLock(t *testing.T) {
 	k := e.generate("ci")
 	e.place(k, web, "deploy")
 	e.place(k, db, "deploy")
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		if p.N == 1 {
 			e.gate.lock() // the call itself proceeds
 		}
@@ -144,7 +144,7 @@ func TestL86VerifyFailsDuringLock(t *testing.T) {
 	k := e.generate("ci")
 	e.place(k, web, "deploy")
 	e.place(k, db, "deploy")
-	e.world.SetFault(func(p fake.FaultPoint) fake.Fault {
+	e.setFault(func(p fake.FaultPoint) fake.Fault {
 		switch {
 		case p.N == 1:
 			e.gate.lock()

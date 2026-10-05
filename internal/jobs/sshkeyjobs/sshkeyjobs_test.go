@@ -3,10 +3,12 @@ package sshkeyjobs
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -23,16 +25,15 @@ type stubKeys struct{ Keys }
 type stubTargets struct{ Targets }
 
 func fullDeps() Deps {
-	return Deps{Keys: stubKeys{}, Targets: stubTargets{}, Registry: providers.NewRegistry(), Clock: clock.Real{}, HelperBudget: time.Minute}
+	return Deps{Keys: stubKeys{}, Targets: stubTargets{}, Registry: providers.NewRegistry(), Clock: clock.Real{}}
 }
 
 func TestRegisterPanicsWithoutDependencies(t *testing.T) {
 	for name, drop := range map[string]func(*Deps){
-		"Keys":         func(d *Deps) { d.Keys = nil },
-		"Targets":      func(d *Deps) { d.Targets = nil },
-		"Registry":     func(d *Deps) { d.Registry = nil },
-		"Clock":        func(d *Deps) { d.Clock = nil },
-		"HelperBudget": func(d *Deps) { d.HelperBudget = 0 },
+		"Keys":     func(d *Deps) { d.Keys = nil },
+		"Targets":  func(d *Deps) { d.Targets = nil },
+		"Registry": func(d *Deps) { d.Registry = nil },
+		"Clock":    func(d *Deps) { d.Clock = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := fullDeps()
@@ -123,14 +124,38 @@ func TestPresentNote(t *testing.T) {
 	assert.Equal(t, "login_unavailable", presentNote("", errors.New("down"), ""))
 }
 
-func TestInterruptedUncertainWriteWaitsTheBudget(t *testing.T) {
-	h := &handlers{d: Deps{HelperBudget: 50 * time.Second}}
-	var f *jobs.Failure
-	require.ErrorAs(t, h.interrupted(addUncertain, context.DeadlineExceeded), &f)
-	assert.Equal(t, "sshkey.add_uncertain", f.Reason)
-	assert.Equal(t, 80*time.Second, f.After)
-	require.ErrorAs(t, h.interrupted(addOwned, context.DeadlineExceeded), &f)
-	assert.Equal(t, "ssh.timeout", f.Reason)
-	assert.Zero(t, f.After)
+func TestErrType(t *testing.T) {
 	assert.Equal(t, "*errors.errorString", errType(errors.New("x")))
+}
+
+func TestFailureClassesOfOpen(t *testing.T) {
+	assert.True(t, internalFailure(jobs.Retry("internal.unexpected", nil, errors.New("db"))), "the database: retried, never recorded")
+	assert.False(t, internalFailure(jobs.FromProvider(providers.NewError("ssh.unreachable", true, nil, nil))), "the server's failure")
+	assert.False(t, internalFailure(jobs.Fail("target.host_key_changed", nil, nil)))
+	assert.True(t, transient(providers.NewError("ssh.unreachable", true, nil, nil)))
+	assert.False(t, transient(jobs.Fail("target.host_key_changed", nil, nil)))
+}
+
+// The store's refusals end a location job without a record, saying why; a lost claim and a duplicate
+// operation id are failures (the latter permanent: a store bug, never retried).
+func TestStoreStopAnswers(t *testing.T) {
+	r := &locJob{h: &handlers{d: Deps{Log: slog.New(slog.DiscardHandler)}}}
+	for err, want := range map[error]string{
+		sshkeys.ErrNotYourTurn: "not_your_turn", sshkeys.ErrPaused: "paused", sshkeys.ErrOwnKeyProtected: "own_key_protected",
+		fmt.Errorf("wrapped: %w", sshkeys.ErrNotYourTurn): "not_your_turn",
+	} {
+		res, ferr := r.storeStop(err)
+		require.NoError(t, ferr)
+		assert.Equal(t, want, res["stopped"])
+	}
+	var f *jobs.Failure
+	_, err := r.storeStop(inventory.ErrClaimLost)
+	require.ErrorAs(t, err, &f)
+	assert.Equal(t, jobs.Retryable, f.Class)
+	_, err = r.storeStop(fmt.Errorf("x: %w", &pgconn.PgError{Code: "23505", ConstraintName: "rotation_op_ids_pkey"}))
+	require.ErrorAs(t, err, &f)
+	assert.Equal(t, jobs.Permanent, f.Class, "a duplicate operation id is never retried")
+	_, err = r.storeStop(errors.New("database down"))
+	require.ErrorAs(t, err, &f)
+	assert.Equal(t, jobs.Retryable, f.Class)
 }
