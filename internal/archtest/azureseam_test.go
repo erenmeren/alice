@@ -62,6 +62,32 @@ func exportedDialNames(f *ast.File) []string {
 	return out
 }
 
+// dialFields are the unexported Options fields that redirect a connection.
+var dialFields = map[string]bool{"dialAddr": true, "dial": true}
+
+// writesDialFields returns where a file assigns a dial field (x.dialAddr = f, a.dial, b = ...) or
+// names one as a composite-literal key (Options{dialAddr: f}): the ways code could redirect a
+// connection without exporting a name that looks like a dial.
+func writesDialFields(f *ast.File) []string {
+	var out []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range x.Lhs {
+				if sel, ok := l.(*ast.SelectorExpr); ok && dialFields[sel.Sel.Name] {
+					out = append(out, sel.Sel.Name)
+				}
+			}
+		case *ast.KeyValueExpr:
+			if id, ok := x.Key.(*ast.Ident); ok && dialFields[id.Name] {
+				out = append(out, id.Name)
+			}
+		}
+		return true
+	})
+	return out
+}
+
 // callsSymbol reports whether a file mentions the seam function by selector or by name.
 func callsSymbol(f *ast.File, name string) bool {
 	found := false
@@ -95,6 +121,8 @@ func TestAzureDialSeamIsIntegrationOnly(t *testing.T) {
 			assert.Empty(t, exportedDialNames(f.file), "%s is in the release build and exports a dial or address symbol", f.rel)
 		}
 		assert.False(t, callsSymbol(f.file, seamSymbol), "%s calls %s", f.rel, seamSymbol)
+		// Whatever the file's name or tags: only the seam file may write a dial field.
+		assert.Empty(t, writesDialFields(f.file), "%s writes a dial field of Options; only %s may", f.rel, seamFile)
 	}
 	require.NotNil(t, seam, "%s is missing", seamFile)
 	assert.True(t, requires(seam.expr, "integration"), "%s must carry a //go:build line that requires the integration tag", seamFile)
@@ -129,6 +157,9 @@ func TestAzureDialSeamRulesCatchEvasions(t *testing.T) {
 	assert.Equal(t, []string{"WithFixedAddresses"}, exportedDialNames(parse("func WithFixedAddresses() {}")))
 	assert.Equal(t, []string{"SetDialer"}, exportedDialNames(parse("type P struct{}\nfunc (P) SetDialer() {}")))
 	assert.Empty(t, exportedDialNames(parse("type Options struct{ RootCAs func() }\nfunc dialAddr() {}")))
+	assert.Equal(t, []string{"dialAddr"}, writesDialFields(parse("func WithEndpoint(o Options, f func(string) string) Options { o.dialAddr = f; return o }")))
+	assert.Equal(t, []string{"dial"}, writesDialFields(parse("func g(d dialFunc) Options { return Options{dial: d} }")))
+	assert.Empty(t, writesDialFields(parse("func h(o Options) { x := o.dialAddr; _ = x; use(o.dial) }")))
 	assert.True(t, callsSymbol(parse("func f() { azurekv.WithFixedAddresses() }"), seamSymbol))
 	assert.False(t, callsSymbol(parse("func f() { azurekv.New() }"), seamSymbol))
 }
