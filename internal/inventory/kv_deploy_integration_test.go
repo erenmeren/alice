@@ -622,6 +622,19 @@ func TestKVDeployMaterialWithoutAKeyMarksTheCertificateNotExportable(t *testing.
 			_, err = h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1,
 				LocationIDs: []uuid.UUID{b.loc3}})
 			require.ErrorIs(t, err, inventory.ErrNotExportable)
+
+			// A later poll that reads the certificate's policy again (Azure moved its updated time) and finds the key
+			// exportable clears the mark on both rows, and Deploy now is accepted again.
+			h.clock.Advance(time.Minute)
+			h.reconcile(b.vault, kvResult(h.kvc("web-cert", b.webLeaf, ver(1), h.clock.Now(), true)))
+			onCert, onVersion = b.exportable(b.web, v1)
+			require.NotNil(t, onCert)
+			require.NotNil(t, onVersion)
+			assert.True(t, *onCert, "the poll's policy wins")
+			assert.True(t, *onVersion)
+			_, err = h.svc.RequestKVDeployment(ctx, b.admin, inventory.KVDeployInput{StrictSession: true, BindingID: bind.ID, VersionID: v1,
+				LocationIDs: []uuid.UUID{b.loc3}})
+			require.NoError(t, err)
 		})
 	}
 }
