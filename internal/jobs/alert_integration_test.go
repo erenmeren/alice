@@ -153,7 +153,7 @@ func TestDeadJobsOfQuietTypesAreAuditedNotMailed(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, c)
 			require.Equal(t, released, c.id)
-			r.release(e.ctx, c, false)
+			r.release(e.ctx, c, false, 0)
 			require.Equal(t, "dead", e.row(t, released).status)
 
 			assert.Equal(t, 2, e.audits(t, "job.dead"), "both deaths are audited")

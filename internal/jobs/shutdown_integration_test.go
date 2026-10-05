@@ -175,3 +175,37 @@ func TestShutdownKillsALastAttemptWithoutAnEmail(t *testing.T) {
 		assert.Zero(t, e.count(t, `SELECT count(*) FROM target_locks`))
 	}
 }
+
+// S3 (Tasks 10-12 review I2/S-5): a job interrupted by the shutdown that answers RetryAfter is re-queued
+// no sooner than its wait (capped at the longest backoff); a plain interruption resumes at once.
+func TestShutdownKeepsTheHandlersRetryWait(t *testing.T) {
+	for name, c := range map[string]struct {
+		after, want time.Duration
+	}{"wait": {80 * time.Second, 80 * time.Second}, "capped": {5 * time.Hour, 30 * time.Minute}, "none": {0, 0}} {
+		t.Run(name, func(t *testing.T) {
+			e := newQEnvWith(t, clock.Real{})
+			id := e.enqueue(t, Spec{Type: testQueueJob})
+			started := make(chan struct{})
+			r := e.runner(t, "w1", func(rc *RunnerConfig) {
+				rc.Workers, rc.Poll, rc.ShutdownGrace = 1, 5*time.Millisecond, 100*time.Millisecond
+			})
+			r.Handle(testQueueJob, func(ctx context.Context, _ Job, _ StepRecorder) (map[string]any, error) {
+				close(started)
+				<-ctx.Done()
+				if c.after == 0 {
+					return nil, ctx.Err()
+				}
+				return nil, RetryAfter("sshkey.add_uncertain", nil, ctx.Err(), c.after)
+			})
+			ctx, cancel := context.WithCancel(e.ctx)
+			done := runInBackground(ctx, r)
+			<-started
+			before := time.Now()
+			cancel()
+			waitClosed(t, done, 5*time.Second, "Run returning")
+			got := e.row(t, id)
+			assert.Equal(t, "queued", got.status)
+			assert.WithinDuration(t, before.Add(c.want), got.runAt, 2*time.Second)
+		})
+	}
+}

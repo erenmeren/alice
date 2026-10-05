@@ -290,3 +290,11 @@ func TestPhase5JobTypes(t *testing.T) {
 			Task{Type: KVAutoDeploy, Every: time.Minute, Run: func(context.Context) error { return nil }})
 	})
 }
+
+func TestRetryWaitIsCappedAndOnlyForRetries(t *testing.T) {
+	assert.Equal(t, 80*time.Second, retryWait(RetryAfter("x.y", nil, nil, 80*time.Second)))
+	assert.Equal(t, maxBackoff, retryWait(RetryAfter("x.y", nil, nil, 5*time.Hour)), "M5: capped at the longest backoff")
+	assert.Zero(t, retryWait(RetryAfter("x.y", nil, nil, -time.Second)))
+	assert.Zero(t, retryWait(Fail("x.y", nil, nil)))
+	assert.Zero(t, retryWait(errors.New("plain")))
+}

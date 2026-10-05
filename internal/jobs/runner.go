@@ -713,7 +713,7 @@ func (r *Runner) execute(jobCtx context.Context, c *claimed) {
 	stop()
 	cancel()
 	if lost.Load() {
-		r.release(ctx, c, false) // writes nothing when the job row is no longer this claim's
+		r.release(ctx, c, false, retryWait(err)) // writes nothing when the job row is no longer this claim's
 		return
 	}
 	r.finish(ctx, jobCtx, c, res, steps.list(), err)
@@ -754,7 +754,7 @@ func (r *Runner) finish(ctx, jobCtx context.Context, c *claimed, res map[string]
 		}
 	}
 	if r.stopping.Load() && jobCtx.Err() != nil {
-		r.release(ctx, c, true) // interrupted by the shutdown: it runs again after the restart (§8.8)
+		r.release(ctx, c, true, retryWait(err)) // interrupted by the shutdown: it runs again after the restart (§8.8)
 		return
 	}
 	f := classify(err)
@@ -768,7 +768,7 @@ func (r *Runner) finish(ctx, jobCtx context.Context, c *claimed, res map[string]
 	t, _ := lookup(c.typ)
 	switch {
 	case f.Class == Retryable && c.attempts < c.maxAttempts:
-		next := max(Backoff(c.attempts, r.cfg.Jitter()), f.After)
+		next := max(Backoff(c.attempts, r.cfg.Jitter()), retryWait(f))
 		r.settle(ctx, c, f.Reason, func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
 			return tx.Exec(ctx, `UPDATE jobs SET status = 'queued', run_at = $4, last_error_code = $5, result = $6::jsonb,
     locked_by = NULL, locked_until = NULL `+mine, c.fence(now.Add(next), f.Reason, result)...)
@@ -790,8 +790,9 @@ func (r *Runner) finish(ctx, jobCtx context.Context, c *claimed, res map[string]
 // counts, as with an expired lease (R37 item 20): a job without attempts left is dead. A job
 // killed by this process's own shutdown is audited (detail shutdown=true) but not mailed: the
 // Administrators restarted Alice themselves, and a connection test (one attempt) interrupted by
-// every restart must not raise an alert.
-func (r *Runner) release(ctx context.Context, c *claimed, shutdown bool) {
+// every restart must not raise an alert. after is the handler's own least wait (RetryAfter, S3): the
+// job runs again no sooner (a reaper that takes a job back cannot know it).
+func (r *Runner) release(ctx context.Context, c *claimed, shutdown bool, after time.Duration) {
 	if c.attempts >= c.maxAttempts {
 		details := map[string]string{"type": c.typ, "reason": "job.lease_expired", "attempt": strconv.Itoa(c.attempts)}
 		if shutdown {
@@ -805,8 +806,17 @@ func (r *Runner) release(ctx context.Context, c *claimed, shutdown bool) {
 	}
 	r.settle(ctx, c, "job.lease_expired", func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
 		return tx.Exec(ctx, `UPDATE jobs SET status = 'queued', run_at = $4, last_error_code = 'job.lease_expired',
-    locked_by = NULL, locked_until = NULL `+mine, c.fence(now)...)
+    locked_by = NULL, locked_until = NULL `+mine, c.fence(now.Add(after))...)
 	})
+}
+
+// retryWait is the least wait a handler's error asks for (RetryAfter), at most the longest backoff.
+func retryWait(err error) time.Duration {
+	var f *Failure
+	if !errors.As(err, &f) || f.Class != Retryable {
+		return 0
+	}
+	return min(max(f.After, 0), maxBackoff)
 }
 
 // RunOnce claims and runs one due job. It reports false when none was due.

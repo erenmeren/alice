@@ -45,7 +45,7 @@ func Retry(reason string, params map[string]string, cause error) error {
 }
 
 // RetryAfter is a Retry whose next attempt starts no sooner than d after this one ends (the backoff
-// applies when it is longer): a write whose outcome is uncertain may still land on the server until the
+// applies when it is longer; d is capped at the longest backoff, 30 minutes): a write whose outcome is uncertain may still land on the server until the
 // helper's budget ends, so the next attempt waits that out (S3).
 func RetryAfter(reason string, params map[string]string, cause error, d time.Duration) error {
 	return &Failure{Class: Retryable, Reason: reason, Params: params, Cause: cause, After: d}
