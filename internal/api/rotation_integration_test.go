@@ -551,3 +551,59 @@ func (e *keyEnv) assertGETsChangeNothing(keyID, policyID, runID string) {
 		}
 	}
 }
+
+// TestDeployOfARunsNewKeyIsRefused (re-review N-m11): while a rotation is unfinished its new key cannot be deployed
+// elsewhere (a rollback of the run would remove that line too): 409 sshkey.in_rotation, nothing queued or written;
+// once the run has completed the same deploy is accepted.
+func TestDeployOfARunsNewKeyIsRefused(t *testing.T) {
+	e := newKeyEnv(t)
+	k := e.generate(e.admin, "in rotation", "ed25519")
+	e.deployed(k)
+	policyID, _ := e.createPolicy(e.admin, k.id, 1)
+	runID := e.runNow(policyID, e.preview(e.admin, policyID).PlanDigest)
+	e.drain()
+	r := e.run(e.admin, runID)
+	require.Equal(t, "overlap", r.Status)
+	writes := len(e.f.helperWrites())
+	rec := e.admin.do(http.MethodPost, "/api/v1/ssh-keys/"+*r.NewSSHKeyID+"/actions/deploy", map[string]any{"target_id": e.targetID,
+		"os_user": "root", "file_path": rootKeysPath})
+	requireStatus(t, rec, http.StatusConflict)
+	assert.Equal(t, "sshkey.in_rotation", decodeBody[apiError](t, rec).Error.Reason, rec.Body.String())
+	assert.True(t, strings.HasPrefix(errCode(rec), "ALC-KEY-"), rec.Body.String())
+	assert.Zero(t, e.countWhere("jobs", "type = 'sshkey.add' AND payload->>'ssh_key_id' = '"+*r.NewSSHKeyID+"'"))
+	e.drain()
+	assert.Len(t, e.f.helperWrites(), writes)
+
+	e.advance(24*time.Hour + time.Minute)
+	e.sweep(3)
+	require.Equal(t, "completed", e.run(e.admin, runID).Status)
+	job := e.deploy(e.admin, *r.NewSSHKeyID, e.targetID, "root", rootKeysPath)
+	e.drain()
+	assert.Equal(t, "verified", e.job(e.admin, job)["result"].(map[string]any)["result"])
+}
+
+// TestUndoOfAnUnreadFileEndsListingIncomplete: Stop and undo while the key file cannot be read (the helper lists it
+// without its content and refuses to read it): neither "new key absent" nor "old key gone" can be proven, so nothing
+// is sent; after the bounded retries the place ends undo_failed with the reason rotation.listing_incomplete, the run
+// needs attention, and the file is unchanged (both keys still there).
+func TestUndoOfAnUnreadFileEndsListingIncomplete(t *testing.T) {
+	e := newKeyEnv(t)
+	k, _, runID := e.overlapRun(7)
+	before := e.f.file(deployKeysPath)
+	e.f.emu.FailRead(deployKeysPath)
+	e.stepUp(e.admin, e.adminAcct)
+	requireStatus(t, e.admin.do(http.MethodPost, "/api/v1/rotation/runs/"+runID+"/actions/abort", nil), http.StatusNoContent)
+	for i := 0; i < 12 && !slices.Contains([]string{"needs_attention", "aborted"}, e.run(e.admin, runID).Status); i++ {
+		e.drain()
+		e.advance(10 * time.Minute)
+		e.sweep(1)
+	}
+	r := e.run(e.admin, runID)
+	assert.Equal(t, "needs_attention", r.Status, "%+v", r)
+	require.Len(t, r.Locations, 1)
+	assert.Equal(t, "undo_failed", r.Locations[0]["state"])
+	errRef, _ := r.Locations[0]["error"].(map[string]any)
+	assert.Equal(t, "rotation.listing_incomplete", errRef["reason"], "%v", r.Locations[0])
+	assert.Equal(t, before, e.f.file(deployKeysPath), "nothing was sent to the unread file")
+	assert.Contains(t, e.f.file(deployKeysPath), k.blob())
+}

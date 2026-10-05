@@ -146,8 +146,8 @@ func TestRotationInLockRunsNoCommand(t *testing.T) {
 	}
 	r := e.run(e.admin, runID)
 	assert.Equal(t, "overlap", r.Status)
-	assert.True(t, r.PausedLicense, "the overlap's end in lock pauses the run (L-83)")
-	assert.True(t, r.OverlapUntil.Before(e.clock.Now()), "the overlap timer has ended")
+	assert.True(t, r.PausedLicense, "the lock paused the run (L-83)")
+	assert.True(t, r.OverlapUntil.Before(e.clock.Now()), "the overlap's end passed on the clock in lock and removed nothing")
 	assert.Equal(t, []string{"abort"}, r.ActionsAllowed)
 	require.NotNil(t, r.NoticeState)
 	assert.Equal(t, "rotation.paused_license", r.NoticeState["reason"])
@@ -210,7 +210,14 @@ func TestContinueAfterRenewalOverTheWire(t *testing.T) {
 	e.stepUp(e.admin, e.adminAcct)
 	continued := e.clock.Now()
 	requireStatus(t, e.admin.do(http.MethodPost, "/api/v1/rotation/runs/"+runID+"/actions/continue", nil), http.StatusNoContent)
-	e.advance(time.Minute)
+	// The overlap resumes with the time that remained when the pause began (L-83 ruling, T14-D1): nothing is removed
+	// before it has passed again.
+	r = e.run(e.admin, runID)
+	require.Equal(t, "overlap", r.Status)
+	require.True(t, r.OverlapUntil.After(continued))
+	e.sweep(1)
+	assert.Equal(t, removals, e.auditCount("sshkey.removed"))
+	e.advance(r.OverlapUntil.Sub(e.clock.Now()) + time.Minute)
 	e.sweep(3)
 	r = e.run(e.admin, runID)
 	require.Equal(t, "completed", r.Status, "%+v", r)
@@ -437,21 +444,56 @@ func TestL88LockWhenTheNoticeIsDueOverTheWire(t *testing.T) {
 	assert.Equal(t, previews+1, e.outboxTemplates()["rotation.preview"])
 }
 
-// TestL83FlaggedWhenTheLockEnters is L-83's first sentence as the spec words it: when the lock enters during the
-// overlap (4 days left), the rotation "stays in OVERLAP, flagged paused_license" (06-quality.md §23.8, R24): the run
-// read after the next sweep says paused_license, its notice state names the lock and the pause email is queued.
+// TestL83FlaggedWhenTheLockEnters is L-83 as the spec words it (ruling T14-D1, 31d0793): when the lock enters during
+// the overlap (4 days left), the first sweep after it flags the run paused_license, queues one rotation.paused_license
+// email and the notice state names the lock; the overlap timer stops: its end passes on the clock in lock and nothing
+// happens (still overlap, nothing removed, no second email, no reminder); after the renewal, the notice and Continue
+// the overlap resumes with the time that remained when the pause began, and only then is the old key removed.
 func TestL83FlaggedWhenTheLockEnters(t *testing.T) {
-	t.Skip("DEFECT T14-D1: L-83 says a run in overlap is flagged paused_license when the lock enters; the controller " +
-		"(internal/sshkeys/controller.go, the overlap row of contract C8) flags it only once overlap_until has passed in lock, " +
-		"so for the rest of the overlap the run reads paused_license=false and no rotation.paused_license email is queued")
 	e, k, _, runID := lockedOverlap(t)
-	e.hourly(2 * time.Hour)
+	until := *e.run(e.admin, runID).OverlapUntil
+	reminders := e.outboxTemplates()["rotation.overlap_ending"]
+	require.NoError(t, e.task("rotation.sweep"))
+	pausedAt := e.clock.Now()
 	r := e.run(e.admin, runID)
-	require.True(t, r.OverlapUntil.After(e.clock.Now()), "the overlap has days left")
+	require.True(t, until.After(e.clock.Now()), "the overlap has days left")
 	assert.Equal(t, "overlap", r.Status)
-	assert.Contains(t, e.f.file(deployKeysPath), k.blob())
-	assert.True(t, r.PausedLicense, "flagged when the lock enters")
+	assert.True(t, r.PausedLicense, "flagged at the first sweep after the lock began")
 	require.NotNil(t, r.NoticeState)
 	assert.Equal(t, "rotation.paused_license", r.NoticeState["reason"])
 	assert.Equal(t, 1, e.outboxTemplates()["rotation.paused_license"])
+	assert.Equal(t, []string{"abort"}, r.ActionsAllowed)
+	remaining := until.Sub(pausedAt)
+
+	// The timer does not run in lock: its end passes on the clock, nothing happens.
+	e.hourly(remaining + 2*24*time.Hour)
+	r = e.run(e.admin, runID)
+	assert.Equal(t, "overlap", r.Status)
+	assert.True(t, r.PausedLicense)
+	assert.Equal(t, until, *r.OverlapUntil, "the stored end is not moved while paused")
+	assert.Contains(t, e.f.file(deployKeysPath), k.blob())
+	assert.Zero(t, e.auditCount("sshkey.removed"))
+	assert.Equal(t, 1, e.outboxTemplates()["rotation.paused_license"], "one email per pause")
+	assert.Equal(t, reminders, e.outboxTemplates()["rotation.overlap_ending"], "no reminder in lock")
+
+	// Renewal, notice, Continue: the remaining time is honoured.
+	e.renew()
+	require.NoError(t, e.task("rotation.sweep"))
+	e.stepUp(e.admin, e.adminAcct)
+	continued := e.clock.Now()
+	requireStatus(t, e.admin.do(http.MethodPost, "/api/v1/rotation/runs/"+runID+"/actions/continue", nil), http.StatusNoContent)
+	r = e.run(e.admin, runID)
+	assert.Equal(t, "overlap", r.Status)
+	assert.False(t, r.PausedLicense)
+	require.NotNil(t, r.OverlapUntil)
+	assert.WithinDuration(t, continued.Add(remaining), *r.OverlapUntil, time.Minute, "the new end is Continue plus what remained")
+	e.advance(remaining - 2*time.Hour)
+	e.sweep(2)
+	assert.Equal(t, "overlap", e.run(e.admin, runID).Status, "not before the remaining time has passed")
+	assert.Contains(t, e.f.file(deployKeysPath), k.blob())
+	e.advance(3 * time.Hour)
+	e.sweep(3)
+	r = e.run(e.admin, runID)
+	assert.Equal(t, "completed", r.Status, "%+v", r)
+	assert.NotContains(t, e.f.file(deployKeysPath), k.blob())
 }
