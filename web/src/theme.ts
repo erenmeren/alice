@@ -50,12 +50,13 @@ export function appTheme(scrollRegionLabel: string): MantineThemeOverride {
       InputWrapper: InputWrapper.extend({ styles: { description: { color: 'var(--mantine-color-gray-7)' } } }),
       // A table that scrolls sideways on a narrow screen must be reachable with the keyboard (axe
       // scrollable-region-focusable); a table without a link or button in it has nothing else to focus.
-      // The stop is a named region (a screen reader says what it is) with a focus ring drawn inside it.
+      // The stop is a named group (a screen reader says what it is; a group is no landmark, so pages with
+      // several tables do not fill the landmark list with one repeated name) with a focus ring drawn inside it.
       TableScrollContainer: TableScrollContainer.extend({
         defaultProps: {
           scrollAreaProps: {
             classNames: { viewport: SCROLL_REGION_CLASS },
-            viewportProps: { tabIndex: 0, role: 'region', 'aria-label': scrollRegionLabel },
+            viewportProps: { tabIndex: 0, role: 'group', 'aria-label': scrollRegionLabel },
           },
         },
       }),

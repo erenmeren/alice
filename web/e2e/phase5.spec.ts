@@ -1006,12 +1006,12 @@ for (const lang of ['en', 'tr'] as Lang[]) {
         await axeWide(page, `vault page, ${tab} tab`);
       }
 
-      // The scrolling part of a table is a named region the keyboard reaches, and its focus ring is drawn
+      // The scrolling part of a table is a named group the keyboard reaches, and its focus ring is drawn
       // inside it (the scroll area around it clips anything outside): checked on a phone, where it scrolls.
       const desktop = page.viewportSize()!;
       await page.setViewportSize({ width: PHONE_WIDTH, height: desktop.height });
       const keysTable = await openTab(page, t, 'keys');
-      const region = page.getByRole('region', { name: t('ui.scrollRegion'), exact: true }).filter({ has: keysTable });
+      const region = page.getByRole('group', { name: t('ui.scrollRegion'), exact: true }).filter({ has: keysTable });
       await expect(region).toHaveCount(1);
       await page.getByRole('tab', { name: t('vaults.tabs.keys'), exact: true }).focus();
       await tabTo(page, region);

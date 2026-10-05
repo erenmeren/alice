@@ -79,11 +79,11 @@ describe('theme', () => {
     expect(mantineCss.match(/var\(--mantine-color-error\)/g)?.length).toBeGreaterThanOrEqual(8);
   });
 
-  it('makes the scrolling part of every table scroll container a named region and a tab stop with its focus ring', () => {
+  it('makes the scrolling part of every table scroll container a named group (not a landmark) and a tab stop with its focus ring', () => {
     const { container } = render(createElement(MantineProvider, { theme }, scrollingTable()));
     const viewport = container.querySelector('.mantine-ScrollArea-viewport');
     expect(viewport).toHaveAttribute('tabindex', '0');
-    expect(viewport).toHaveAttribute('role', 'region');
+    expect(viewport).toHaveAttribute('role', 'group');
     expect(viewport).toHaveAttribute('aria-label', 'Table, scrolls sideways');
     expect(viewport).toHaveClass(SCROLL_REGION_CLASS);
   });
@@ -104,7 +104,8 @@ describe('theme', () => {
     ] as const) {
       const i18n = await createI18n([lang]);
       const { unmount } = render(createElement(I18nextProvider, { i18n }, createElement(ThemeProvider, null, scrollingTable())));
-      expect(screen.getByRole('region', { name: label })).toHaveAttribute('tabindex', '0');
+      expect(screen.getByRole('group', { name: label })).toHaveAttribute('tabindex', '0');
+      expect(screen.queryByRole('region', { name: label })).not.toBeInTheDocument();
       expect(mantineVariables()).toMatch(/--mantine-color-error:\s*var\(--mantine-color-red-9\)/);
       unmount();
     }
