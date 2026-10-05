@@ -367,9 +367,9 @@ func TestKeyVaultFailureCatalogue(t *testing.T) {
 		assert.Equal(t, pki.Fingerprint(k.kv.Leaf("web-cert", v2)), b.served(apiName))
 	})
 
-	// F-48: a second renewal arrives while the first version's deployment is queued: no parallel deployment of the
-	// location; the first (now superseded) deployment ends without touching the server; only the newest version is
-	// deployed.
+	// F-48: a second renewal arrives while the first version's deployment RUNS (held inside the vault's secret read): no
+	// second deployment of the location is planned until the first ends; the first (now superseded) deployment ends
+	// without a change or finishes; then only the newest version is deployed and the website serves it.
 	t.Run("F-48 renewal while a deployment runs", func(t *testing.T) {
 		k := newKVNJ(t, fakekv.Options{}, wwwSite())
 		k.addWebCert("web-cert")
@@ -384,26 +384,33 @@ func TestKeyVaultFailureCatalogue(t *testing.T) {
 		first := k.kvDeployments(k.op, k.locs[wwwCert])
 		require.Len(t, first, 1)
 		assert.Equal(t, v2, first[0].KVVersion)
-		// The first deployment is queued (not yet run) when the second renewal is found.
+
+		// The first deployment is in flight: its read of the secret is held inside the vault.
+		release := k.kv.Hold("/secrets/web-cert")
+		done := make(chan error, 1)
+		go func() { _, err := k.runner.RunOnce(context.Background()); done <- err }()
+		require.Eventually(t, func() bool { return k.kv.Held() == 1 }, 20*time.Second, 5*time.Millisecond)
 		k.clock.Advance(time.Minute)
 		v3 := k.kv.Renew("web-cert")
 		k.clock.Advance(time.Minute)
-		k.checkNow(vault) // runs the queued deployment too (the queue is drained): see below
+		k.checkNow(vault)
 		require.NoError(t, k.plan())
+		assert.Len(t, k.kvDeployments(k.op, k.locs[wwwCert]), 1, "no second deployment of the location while the first runs")
+		release()
+		require.NoError(t, <-done)
 		k.settleAll(t, k.locs[wwwCert])
+
+		// Then only the newest version is deployed.
+		k.pass(2 * time.Minute)
 		require.NoError(t, k.plan())
 		k.settleAll(t, k.locs[wwwCert])
 		deps := k.kvDeployments(k.op, k.locs[wwwCert])
-		assert.Equal(t, pki.Fingerprint(k.kv.Leaf("web-cert", v3)), k.f.served(wwwName), "the newest version is what the website serves")
-		inflight := 0
 		for _, d := range deps {
-			if d.State != "done" {
-				inflight++
-			}
+			assert.Equal(t, "done", d.State)
 		}
-		assert.Zero(t, inflight)
-		assert.LessOrEqual(t, len(deps), 2)
-		t.Logf("deployments of the location: %d", len(deps))
+		assert.Equal(t, v3, deps[0].KVVersion, "the newest deployment is for the newest version")
+		assert.Equal(t, pki.Fingerprint(k.kv.Leaf("web-cert", v3)), k.f.served(wwwName), "the newest version is what the website serves")
+		t.Logf("deployments of the location, newest first: %d", len(deps))
 	})
 
 	// F-49: the client secret expired: "Credentials expired" (ALC-AKV-0002); the email after the third failed poll only;
