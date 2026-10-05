@@ -797,7 +797,10 @@ func ptrBool(b bool) *bool { return &b }
 // version, when a stored version of a certificate of that name (ASCII-folded) has the import's thumbprint
 // and an Azure creation time, in whole seconds, not earlier than the request's second; a version without
 // a creation time cannot settle it, and a certificate with that thumbprint that existed before the request
-// does not. ImportOutcomeUnknownAfter after the send, a poll whose certificate listing was complete
+// does not: neither does a version Alice stored before the import was sent (detected_at, Alice's own clock, so
+// an Azure clock ahead of Alice's cannot make an older version match) nor one another import of the name
+// already settled on. Azure's clock behind Alice's by a second or more still keeps the real version from
+// matching (documented). ImportOutcomeUnknownAfter after the send, a poll whose certificate listing was complete
 // (complete) and that found no such version ends the import failed with kv.import_outcome_unknown, one
 // mail (not while a certificate of that name still waits for its details). Audited kv.import.settled /
 // kv.import.failed. Finished imports are never touched (WHERE finished_at IS NULL). An import whose vault
@@ -833,7 +836,10 @@ WHERE target_id = $1 AND state = 'uncertain' AND finished_at IS NULL ORDER BY id
 		err := tx.QueryRow(ctx, `SELECT v.version FROM kv_certificate_versions v JOIN kv_certificates kc ON kc.id = v.kv_certificate_id
 WHERE kc.target_id = $1 AND lower(kc.name COLLATE "C") = lower($2::text COLLATE "C") AND v.thumbprint = $3
   AND v.kv_created_at IS NOT NULL AND v.kv_created_at >= date_trunc('second', $4::timestamptz)
-ORDER BY v.kv_created_at, v.id LIMIT 1`, vault, o.name, o.thumb, o.created).Scan(&version)
+  AND v.detected_at >= coalesce($6::timestamptz, $4::timestamptz)
+  AND NOT EXISTS (SELECT 1 FROM kv_imports o2 WHERE o2.target_id = $1 AND o2.id <> $5 AND o2.state = 'succeeded' AND o2.version = v.version
+    AND lower(o2.name COLLATE "C") = lower($2::text COLLATE "C"))
+ORDER BY v.kv_created_at, v.id LIMIT 1`, vault, o.name, o.thumb, o.created, o.id, o.sent).Scan(&version)
 		details := map[string]string{"import_id": o.id.String(), "certificate_id": o.certificate.String(), "certificate_name": o.name,
 			"thumbprint": o.thumb, "vault_url": vaultURL}
 		switch {
