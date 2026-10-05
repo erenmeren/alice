@@ -91,7 +91,8 @@ build: web helper ## Build the alice binary with the embedded UI (and the helper
 	@! go version -m bin/alice | grep -q stretchr/testify || { echo "testify is linked into bin/alice"; exit 1; }
 
 # Release symbol guard: the release build (no tags) links no e2e-only code. The e2e build is the
-# positive control: if it lacks the symbols, the names here are stale and the guard proves nothing.
+# positive control: release-symcheck checks EACH name (present in the e2e build, absent from the
+# release build), so a renamed or inlined symbol fails instead of hiding behind another one.
 E2E_SYMBOLS := main\.(damageLicenseFile|tamperNewestLicenseFile|resetInstall|e2eClock|e2eMailbox|drainJobs|runWithinBudget|drainMu|errDrainBudget|runScheduledTask|scheduled|serveRotationOverlap|setPolicyOverlap)$$
 
 # Test-only data a release binary must not hold (AUD-23): the label the test license signing key is
@@ -112,8 +113,12 @@ E2E_AZURE_MARKER := /run/alice-e2e-azure
 release-symcheck: ## Fail if the release build of alice links e2e-only test code, has build tags or trusts the test license key
 	CGO_ENABLED=0 go build -trimpath -o bin/.symcheck-release ./cmd/alice
 	CGO_ENABLED=0 go build -trimpath -tags "e2e testlicense" -o bin/.symcheck-e2e ./cmd/alice
-	@go tool nm bin/.symcheck-e2e | grep -E ' $(E2E_SYMBOLS)' >/dev/null || { echo "release-symcheck: the e2e build lacks the guarded symbols; update E2E_SYMBOLS"; exit 1; }
-	@! go tool nm bin/.symcheck-release | grep -E ' $(E2E_SYMBOLS)' || { echo "release-symcheck: the release build links e2e-only code"; exit 1; }
+	@go tool nm bin/.symcheck-e2e > bin/.symcheck-e2e.nm && go tool nm bin/.symcheck-release > bin/.symcheck-release.nm
+	@for s in $$(echo '$(E2E_SYMBOLS)' | sed -E 's/^[^(]*\((.*)\).*/\1/' | tr '|' ' '); do \
+	  grep -Eq " main\.$$s$$" bin/.symcheck-e2e.nm || { echo "release-symcheck: the e2e build lacks main.$$s (renamed or inlined?); update E2E_SYMBOLS"; exit 1; }; \
+	  ! grep -Eq " main\.$$s$$" bin/.symcheck-release.nm || { echo "release-symcheck: the release build links e2e-only main.$$s"; exit 1; }; \
+	done
+	@! grep -E ' $(E2E_SYMBOLS)' bin/.symcheck-release.nm || { echo "release-symcheck: the release build links e2e-only code"; exit 1; }
 	@go version -m bin/.symcheck-e2e | grep -Eq '^\s+build\s+-tags=.*testlicense' || { echo "release-symcheck: cannot see build tags in the build info"; exit 1; }
 	@! go version -m bin/.symcheck-release | grep -Eq '^\s+build\s+-tags=' || { echo "release-symcheck: the release build has build tags"; exit 1; }
 	@grep -aqF '$(TEST_LICENSE_LABEL)' bin/.symcheck-e2e || { echo "release-symcheck: cannot see the test key label in the e2e build; update TEST_LICENSE_LABEL"; exit 1; }
@@ -122,7 +127,7 @@ release-symcheck: ## Fail if the release build of alice links e2e-only test code
 	@! grep -aqF '$(TEST_ROUTE_MARKER)' bin/.symcheck-release || { echo "release-symcheck: the release build serves the e2e /test routes"; exit 1; }
 	@grep -aqF '$(E2E_AZURE_MARKER)' bin/.symcheck-e2e || { echo "release-symcheck: cannot see $(E2E_AZURE_MARKER) in the e2e build; update E2E_AZURE_MARKER"; exit 1; }
 	@! grep -aqF '$(E2E_AZURE_MARKER)' bin/.symcheck-release || { echo "release-symcheck: the release build knows where the fake Azure CA lives"; exit 1; }
-	@rm -f bin/.symcheck-release bin/.symcheck-e2e
+	@rm -f bin/.symcheck-release bin/.symcheck-e2e bin/.symcheck-release.nm bin/.symcheck-e2e.nm
 	@echo "release-symcheck: ok"
 
 .PHONY: licensectl
@@ -231,6 +236,7 @@ lint: ## Run golangci-lint (gosec, forbidigo, ...) on the release and the e2e bu
 	golangci-lint run ./...
 	golangci-lint run --build-tags e2e,testlicense ./cmd/...
 	golangci-lint run --build-tags integration,testlicense ./cmd/...
+	golangci-lint run --build-tags integration,e2e,testlicense ./cmd/...
 	golangci-lint run --build-tags integration,testlicense ./internal/license/...
 	golangci-lint run --build-tags integration ./internal/providers/azurekv/...
 

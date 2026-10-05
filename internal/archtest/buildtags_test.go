@@ -302,6 +302,59 @@ func TestTestRouteMarkerIsE2EOnly(t *testing.T) {
 	assert.Positive(t, n, "no file registers %s; TEST_ROUTE_MARKER is stale", marker)
 }
 
+// testRoutePattern is a net/http route pattern of a test-only endpoint: a method, then a /test path.
+var testRoutePattern = regexp.MustCompile(`^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|CONNECT|TRACE) +([^/\s]*)/test(/|$)`)
+
+// testRoutesOutsideE2E lists every route pattern of a test endpoint ("POST /test/…") written as a string
+// literal in a non-test file that does not require the e2e tag ("file: pattern").
+func testRoutesOutsideE2E(files []goFile) []string {
+	var out []string
+	for _, f := range files {
+		if f.test || requires(f.expr, "e2e") {
+			continue
+		}
+		ast.Inspect(f.file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			if v, err := strconv.Unquote(lit.Value); err == nil && testRoutePattern.MatchString(v) {
+				out = append(out, f.rel+": "+v)
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// Every /test route, not only TEST_ROUTE_MARKER, is registered in a file that requires the e2e tag: a
+// new test endpoint in a release file fails here before any binary is built.
+func TestEveryTestRouteIsE2EOnly(t *testing.T) {
+	files := sourceFiles(t)
+	assert.Empty(t, testRoutesOutsideE2E(files), "test routes outside the e2e build")
+	n := 0
+	for _, f := range files {
+		if !f.test && strings.Contains(f.src, `"POST /test/rotation/overlap"`) {
+			n++
+		}
+	}
+	assert.Equal(t, 1, n, "the rule sees the e2e routes (positive control)")
+
+	// Red case: the same registration in a file without the tag, or with a tag that does not require e2e.
+	parse := func(src string) goFile {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, "x.go", src, parser.ParseComments)
+		require.NoError(t, err)
+		return goFile{rel: "cmd/alice/x.go", expr: buildExpr(t, "x.go", []byte(src)), file: file, src: src}
+	}
+	body := "package main\n\nfunc f(m interface{ HandleFunc(string, any) }) { m.HandleFunc(\"POST /test/rotation/overlap\", nil) }\n"
+	assert.Equal(t, []string{"cmd/alice/x.go: POST /test/rotation/overlap"}, testRoutesOutsideE2E([]goFile{parse(body)}))
+	assert.Len(t, testRoutesOutsideE2E([]goFile{parse("//go:build e2e || testlicense\n\n" + body)}), 1)
+	assert.Empty(t, testRoutesOutsideE2E([]goFile{parse("//go:build e2e\n\n" + body)}))
+	assert.Empty(t, testRoutesOutsideE2E([]goFile{parse(strings.Replace(body, "POST /test/", "POST /api/v1/test/", 1))}),
+		"an API path that merely contains /test is not a test route")
+}
+
 // The directory the e2e build reads the fake Azure service's CA from (the Makefile's E2E_AZURE_MARKER, which
 // release-symcheck and make image-check look for in the binaries) is named only in files that require e2e
 // (test files and the test tool excepted), and the e2e source does name it.
