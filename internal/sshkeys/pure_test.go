@@ -1,16 +1,21 @@
 package sshkeys
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/inventory"
 	"alice/internal/platform/validate"
+	"alice/internal/providers"
+	"alice/internal/sshkeys/plan"
 )
 
 // What deployOptions writes, parseDeployOptions reads back unchanged; nothing else passes (S7).
@@ -90,4 +95,48 @@ func TestSmallHelpers(t *testing.T) {
 	assert.Nil(t, nullableUser(uuid.Nil))
 	assert.Equal(t, inventory.ServiceUser, connectionUser(inventory.Target{}))
 	assert.Equal(t, "ops", connectionUser(inventory.Target{Username: "ops"}))
+}
+
+func TestPlanMappings(t *testing.T) {
+	assert.ErrorIs(t, planError(plan.ErrOwnKey), ErrOwnKeyProtected)
+	assert.ErrorIs(t, planError(plan.ErrNotManaged), ErrNotManaged)
+	assert.ErrorIs(t, planError(plan.ErrRetired), ErrRetired)
+	assert.ErrorIs(t, planError(plan.ErrNothingToRotate), ErrNothingToRotate)
+	assert.ErrorIs(t, planError(plan.ErrNewKeyType), plan.ErrNewKeyType)
+	assert.Equal(t, "own_key", plannerDisableReason(plan.ErrOwnKey))
+	assert.Equal(t, "not_managed", plannerDisableReason(plan.ErrNotManaged))
+	assert.Equal(t, "retired", plannerDisableReason(plan.ErrRetired))
+	assert.Equal(t, "new_key_type", plannerDisableReason(plan.ErrNewKeyType))
+	assert.Equal(t, "other", plannerDisableReason(errors.New("plan: other")))
+	assert.ErrorIs(t, policyWriteError(&pgconn.PgError{Code: "23505"}), ErrPolicyExists)
+	assert.ErrorIs(t, policyWriteError(&pgconn.PgError{Code: "Z1010"}), ErrRetired)
+	assert.Error(t, policyWriteError(errors.New("x")))
+	assert.Equal(t, uuid.Nil, orNil(nil))
+}
+
+// toPlanInput reads per-user and server-wide warnings and the sshd summary the way the planner
+// expects them.
+func TestToPlanInput(t *testing.T) {
+	tid, lid := uuid.New(), uuid.New()
+	now := time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
+	key := keyRow{id: uuid.New(), privateKeyID: uuid.New(), fingerprint: "SHA256:x", publicKey: "ssh-ed25519 AAAA", label: "CI",
+		algorithm: "rsa", bits: 3072}
+	tg := inventory.Target{Name: "web", Status: "ok", Username: "ops", Facts: inventory.Facts{
+		SSHD: &providers.SSHDSummary{Read: true, PermitRootLogin: "no", PubkeyAuthentication: "yes"}, UID0Users: []string{"root"},
+		Warnings: []providers.Warning{{Code: "keys_managed_elsewhere", Params: map[string]string{"user": "bob"}},
+			{Code: "sshd_unreadable", Params: map[string]string{"user": "eve"}}, {Code: "keys_managed_elsewhere", Params: map[string]string{}},
+			{Code: "other"}}}}
+	missing := now
+	in := toPlanInput(key, []inventory.KeyLocation{{ID: lid, TargetID: tid, OSUser: "deploy", FilePath: "/f", MissingSince: &missing}},
+		map[uuid.UUID]inventory.Target{tid: tg}, []string{"SHA256:p"}, Policy{NewKeyType: "same", OverlapMinutes: 5}, now)
+	assert.Equal(t, "rsa-3072", in.Key.KeyType)
+	assert.True(t, in.Key.Managed)
+	assert.Equal(t, "alice:ci:2026-10-05", in.NewComment)
+	pt := in.Targets[tid]
+	assert.Equal(t, plan.Target{ID: tid, Name: "web", Status: "ok", ConnectionUser: "ops", SSHDRead: true, PermitRootLogin: "no",
+		PubkeyAuthentication: "yes", UID0Users: []string{"root"}, ManagedElsewhereUsers: []string{"bob"}, SSHDUnreadUsers: []string{"eve"}}, pt)
+	assert.True(t, in.Locations[0].Missing)
+	tg.Facts.Warnings = []providers.Warning{{Code: "sshd_unreadable", Params: map[string]string{}}}
+	in = toPlanInput(key, nil, map[uuid.UUID]inventory.Target{tid: tg}, nil, Policy{}, now)
+	assert.False(t, in.Targets[tid].SSHDRead, "a server-wide unreadable warning")
 }

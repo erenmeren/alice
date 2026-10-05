@@ -32,23 +32,26 @@ func keyLocation(id uuid.UUID) secrets.Location {
 	return secrets.Location{Table: "managed_private_keys", RowID: id.String(), Column: "ciphertext"}
 }
 
-// validLabel checks a key's label as inventory checks a display name: 1-100 runes in NFC after
-// trimming, no control or format characters (bidirectional overrides, zero-width characters: they
-// could disguise a label in the UI and the audit log).
-func validLabel(raw string) (string, *validate.FieldError) {
+// validLabel checks a key's label (validName on field label).
+func validLabel(raw string) (string, *validate.FieldError) { return validName("label", raw) }
+
+// validName checks a display name as inventory does: 1-100 runes in NFC after trimming, no control
+// or format characters (bidirectional overrides, zero-width characters: they could disguise a name
+// in the UI and the audit log).
+func validName(field, raw string) (string, *validate.FieldError) {
 	if !utf8.ValidString(raw) {
-		return "", &validate.FieldError{Field: "label", Code: validate.Pattern}
+		return "", &validate.FieldError{Field: field, Code: validate.Pattern}
 	}
 	s := norm.NFC.String(strings.TrimSpace(raw))
 	switch {
 	case s == "":
-		return "", &validate.FieldError{Field: "label", Code: validate.Required}
+		return "", &validate.FieldError{Field: field, Code: validate.Required}
 	case utf8.RuneCountInString(s) > maxLabelRunes:
-		return "", &validate.FieldError{Field: "label", Code: validate.TooLong, Params: map[string]string{"max": strconv.Itoa(maxLabelRunes)}}
+		return "", &validate.FieldError{Field: field, Code: validate.TooLong, Params: map[string]string{"max": strconv.Itoa(maxLabelRunes)}}
 	}
 	for _, r := range s {
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Bidi_Control, r) {
-			return "", &validate.FieldError{Field: "label", Code: validate.Pattern}
+			return "", &validate.FieldError{Field: field, Code: validate.Pattern}
 		}
 	}
 	return s, nil

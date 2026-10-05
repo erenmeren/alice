@@ -24,6 +24,25 @@ const (
 	RetiredKeyRetention = 30 * 24 * time.Hour
 	// MaxGenerations bounds the keys generated at once in the process (ErrGenerateBusy beyond).
 	MaxGenerations = 2
+	// PreviewMailEvery bounds on-demand preview emails: at most one per policy in this time (row 16).
+	PreviewMailEvery = 10 * time.Minute
+	// NoticeGrace: a scheduled run whose rotation.preview was not delivered to any Administrator by
+	// this long after its planned start is cancelled (S1).
+	NoticeGrace = 24 * time.Hour
+)
+
+// Result codes of runs (rotations.result_code; Task 13 maps them to ALC codes).
+const (
+	ReasonPolicyOff         = "rotation.policy_off"
+	ReasonPlanChanged       = "rotation.plan_changed"
+	ReasonCancelledLicense  = "rotation.cancelled_license"
+	ReasonNoticeUndelivered = "rotation.notice_undelivered" // S1, new code ALC-ROT-0017
+)
+
+// Triggers of a run (rotations.trigger).
+const (
+	TriggerScheduled = "scheduled"
+	TriggerManual    = "manual"
 )
 
 // Reasons of the audited refusals (details key reason of sshkey.deploy.denied and
@@ -35,6 +54,7 @@ const (
 	DenyOwnKey               = "own_key"
 	DenyNotManaged           = "not_managed"
 	DenyDestroyed            = "destroyed"
+	DenyRetired              = "retired" // rotation.policy.denied
 )
 
 // GenerateInput asks for a new key.

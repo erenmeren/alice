@@ -9,15 +9,19 @@ import (
 // Errors of the module (C7). The API maps each to its code (C11). None carries a value from the
 // request or the database, and never key material.
 var (
-	ErrNotFound          = inventory.ErrNotFound
-	ErrNotManaged        = errors.New("sshkeys: Alice holds no private key for this key")
-	ErrRetired           = errors.New("sshkeys: the key is retired")
-	ErrDestroyed         = errors.New("sshkeys: the private key was destroyed")
-	ErrConnectionAccount = errors.New("sshkeys: Alice does not change its connection account's keys")
-	ErrNotAKeyFile       = errors.New("sshkeys: the file is not one of the user's key files")
-	ErrGenerateBusy      = errors.New("sshkeys: too many keys are being generated")
-	ErrVersionMismatch   = inventory.ErrVersionMismatch
-	ErrOwnKeyProtected   = inventory.ErrOwnKeyProtected
+	ErrNotFound           = inventory.ErrNotFound
+	ErrNotManaged         = errors.New("sshkeys: Alice holds no private key for this key")
+	ErrRetired            = errors.New("sshkeys: the key is retired")
+	ErrDestroyed          = errors.New("sshkeys: the private key was destroyed")
+	ErrConnectionAccount  = errors.New("sshkeys: Alice does not change its connection account's keys")
+	ErrNotAKeyFile        = errors.New("sshkeys: the file is not one of the user's key files")
+	ErrGenerateBusy       = errors.New("sshkeys: too many keys are being generated")
+	ErrPolicyExists       = errors.New("sshkeys: the key already has a rotation policy")
+	ErrRotationInProgress = errors.New("sshkeys: a rotation of this key is running")
+	ErrPlanChanged        = errors.New("sshkeys: the plan changed since the preview")
+	ErrNothingToRotate    = errors.New("sshkeys: no location can change")
+	ErrVersionMismatch    = inventory.ErrVersionMismatch
+	ErrOwnKeyProtected    = inventory.ErrOwnKeyProtected
 )
 
 // errUndecryptable: the envelope does not open with this master key (another key, a damaged row).

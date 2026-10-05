@@ -41,17 +41,21 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// The job type sshkey.add is registered by the job handlers (Task 10); until they exist the
-	// tests register it here with the class C1 gives it, so the real queue accepts the job.
-	if !slices.ContainsFunc(jobs.Types(), func(t jobs.Type) bool { return t.Name == sshkeys.JobDeploy }) {
-		jobs.Register(sshkeys.JobDeploy, license.ClassChange)
+	// The job types sshkey.add and rotation.location are registered by the job handlers (Task 10);
+	// until they exist the tests register them here with the classes C1 gives them.
+	for _, jt := range []jobs.Type{{Name: sshkeys.JobDeploy, Class: license.ClassChange}, {Name: sshkeys.JobRotationLocation, Class: license.ClassAlways}} {
+		if !slices.ContainsFunc(jobs.Types(), func(t jobs.Type) bool { return t.Name == jt.Name }) {
+			jobs.Register(jt.Name, jt.Class)
+		}
 	}
 	os.Exit(pgtest.Main(m))
 }
 
 var start = time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 
-// lockGate is the license service with a switch that puts it in lock (as deployjobs' harness).
+// lockGate is the license service with a switch that puts it in lock. Unlike deployjobs' harness it
+// does not ask the real service: these tests move the clock by months, after which the service would
+// say the license was not checked recently.
 type lockGate struct {
 	*license.Service
 	locked atomic.Bool
@@ -61,16 +65,18 @@ func (g *lockGate) Allow(c license.Class) error {
 	if g.locked.Load() && c != license.ClassAlways {
 		return license.ErrLocked
 	}
-	return g.Service.Allow(c)
+	return nil
 }
 
 func (g *lockGate) lock()   { g.locked.Store(true) }
 func (g *lockGate) unlock() { g.locked.Store(false) }
 
-// recordingNotifier records every NotifyAdmins call (template and params).
+// recordingNotifier records every NotifyAdmins call (template and params) and queues the email in
+// the outbox as production does (next), so a test can see the outbox rows and their delivery.
 type recordingNotifier struct {
 	mu    sync.Mutex
 	calls []notice
+	next  notify.AdminNotifier
 }
 
 type notice struct {
@@ -78,7 +84,10 @@ type notice struct {
 	params   map[string]string
 }
 
-func (r *recordingNotifier) NotifyAdmins(_ context.Context, _ pgx.Tx, template string, params map[string]string) error {
+func (r *recordingNotifier) NotifyAdmins(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error {
+	if err := r.next.NotifyAdmins(ctx, tx, template, params); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, notice{template: template, params: params})
@@ -124,8 +133,8 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	e := &env{t: t, ctx: context.Background(), db: pgtest.New(t), clock: clock.NewFake(start), notifier: &recordingNotifier{},
-		logs: &syncBuffer{}}
+	e := &env{t: t, ctx: context.Background(), db: pgtest.New(t), clock: clock.NewFake(start), logs: &syncBuffer{}}
+	e.notifier = &recordingNotifier{next: notify.AdminNotifier{Clock: e.clock}}
 	var err error
 	e.keyring, err = secrets.LoadOrCreateMasterKey(e.ctx, e.db.App, t.TempDir(), e.clock.Now())
 	require.NoError(t, err)
