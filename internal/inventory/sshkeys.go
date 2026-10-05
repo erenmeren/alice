@@ -36,7 +36,8 @@ type SSHKey struct {
 	Comment       string
 	LocationCount int
 	TargetCount   int
-	Missing       bool // every location of the key is missing or removed
+	Missing       bool // every location of the key is missing or removed (in the list: not a retired key Alice removed everywhere)
+	Retired       bool // a rotation retired the key (set by ListSSHKeys)
 	FirstSeenAt   time.Time
 	Locations     []KeyLocation
 }
@@ -491,6 +492,8 @@ func (s *Service) ListSSHKeys(ctx context.Context, f KeyFilter) (KeyPage, error)
     count(l.id), count(DISTINCT l.target_id),
     coalesce((array_agg(l.comment ORDER BY l.last_seen_at DESC, l.id DESC) FILTER (WHERE l.id IS NOT NULL))[1], k.key_comment),
     coalesce(bool_and(l.missing_since IS NOT NULL OR l.removed_by_alice_at IS NOT NULL) FILTER (WHERE l.id IS NOT NULL), false)
+      AND NOT (k.retired_at IS NOT NULL AND coalesce(bool_and(l.removed_by_alice_at IS NOT NULL) FILTER (WHERE l.id IS NOT NULL), false)),
+    k.retired_at IS NOT NULL
 FROM ssh_keys k
 LEFT JOIN (ssh_key_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL) ON l.ssh_key_id = k.id
 WHERE (l.id IS NOT NULL OR (k.managed AND ($5::boolean OR k.retired_at IS NULL) AND $1::uuid IS NULL AND $2::text = '' AND $4::text = ''))
@@ -517,7 +520,7 @@ LIMIT $8`, target, f.OSUser, pattern, f.Flag, f.IncludeMissing, afterAt, afterID
 	for rows.Next() {
 		var k SSHKey
 		if err := rows.Scan(&k.ID, &k.Fingerprint, &k.KeyType, &k.Bits, &k.PublicKey, &k.Managed, &k.IsPlatformKey, &k.Weak,
-			&k.FirstSeenAt, &k.LocationCount, &k.TargetCount, &k.Comment, &k.Missing); err != nil {
+			&k.FirstSeenAt, &k.LocationCount, &k.TargetCount, &k.Comment, &k.Missing, &k.Retired); err != nil {
 			return KeyPage{}, fmt.Errorf("inventory: read ssh key: %w", err)
 		}
 		k.FirstSeenAt = k.FirstSeenAt.UTC()

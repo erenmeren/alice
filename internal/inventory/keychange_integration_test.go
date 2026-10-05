@@ -366,7 +366,7 @@ func TestListSSHKeysShowsGeneratedKeysWithoutLocations(t *testing.T) {
 	require.NoError(t, err)
 
 	// A retired generated key whose every location Alice removed drops out of the default list (as removed
-	// locations do), and is listed with IncludeMissing, flagged missing.
+	// locations do), and is listed with IncludeMissing as retired, not missing (I-2: Alice removed it).
 	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_key_locations SET removed_by_alice_at = now() WHERE ssh_key_id = $1", key)
 	require.NoError(t, err)
 	assert.Len(t, list(inventory.KeyFilter{}), 1, "not retired yet: still Alice's live key, flagged missing")
@@ -375,7 +375,8 @@ func TestListSSHKeysShowsGeneratedKeysWithoutLocations(t *testing.T) {
 	assert.Empty(t, list(inventory.KeyFilter{}), "retired and removed everywhere: gone from the default list")
 	withMissing := list(inventory.KeyFilter{IncludeMissing: true})
 	require.Len(t, withMissing, 1)
-	assert.True(t, withMissing[0].Missing)
+	assert.False(t, withMissing[0].Missing)
+	assert.True(t, withMissing[0].Retired)
 	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_keys SET retired_at = NULL WHERE id = $1", key)
 	require.NoError(t, err)
 	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_key_locations SET removed_by_alice_at = NULL WHERE ssh_key_id = $1", key)
@@ -425,4 +426,36 @@ func TestListSSHKeysRetiredKeyOnDeletedServersNeedsIncludeMissing(t *testing.T) 
 	}
 	assert.NotContains(t, ids(inventory.KeyFilter{}), gone)
 	assert.Contains(t, ids(inventory.KeyFilter{IncludeMissing: true}), gone)
+}
+
+// I-2: with IncludeMissing, a retired key that Alice removed everywhere is shown retired, not missing; a retired
+// key whose line vanished without Alice is still missing, and a live key keeps its label.
+func TestListSSHKeysRetiredKeyRemovedByAliceIsNotMissing(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "")
+	tg := okTarget(t, h, admin, "web-01")
+	at := h.clock.Now()
+	removed := seedGeneratedKey(t, h, "SHA256:Rem0000000000000000000000000000000000000000", "removed@alice")
+	insertLoc(t, h, removed, tg.ID, "deploy", deployFile, 1, nil, &at)
+	insertLoc(t, h, removed, tg.ID, "ops", "/home/ops/.ssh/authorized_keys", 1, nil, &at)
+	vanished := seedGeneratedKey(t, h, "SHA256:Van0000000000000000000000000000000000000000", "vanished@alice")
+	insertLoc(t, h, vanished, tg.ID, "deploy", deployFile, 2, nil, &at)
+	insertLoc(t, h, vanished, tg.ID, "ops", "/home/ops/.ssh/authorized_keys", 2, &at, nil)
+	live := seedGeneratedKey(t, h, "SHA256:Liv0000000000000000000000000000000000000000", "live@alice")
+	insertLoc(t, h, live, tg.ID, "deploy", deployFile, 3, nil, nil)
+	_, err := h.db.Owner.Exec(h.ctx, "UPDATE ssh_keys SET retired_at = now() WHERE id IN ($1, $2)", removed, vanished)
+	require.NoError(t, err)
+	p, err := h.svc.ListSSHKeys(h.ctx, inventory.KeyFilter{IncludeMissing: true})
+	require.NoError(t, err)
+	got := map[uuid.UUID]inventory.SSHKey{}
+	for _, k := range p.Items {
+		got[k.ID] = k
+	}
+	require.Len(t, got, 3)
+	assert.False(t, got[removed].Missing, "Alice removed it everywhere: retired, not missing")
+	assert.True(t, got[removed].Retired)
+	assert.True(t, got[vanished].Missing, "one line vanished without Alice")
+	assert.True(t, got[vanished].Retired)
+	assert.False(t, got[live].Missing)
+	assert.False(t, got[live].Retired)
 }
