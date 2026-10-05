@@ -313,10 +313,32 @@ func (c *advance) overlap(ctx context.Context) error {
 	if !c.gate {
 		return c.pause(ctx) // L-83: nothing is removed in lock
 	}
+	// G18: a verified location in a (target, file) where another location of the run is not verified
+	// (skipped or kept) keeps the old key: it ends kept_old and counts where the old key stays.
+	var remove []locRow
+	for _, l := range c.filter(LocVerified) {
+		if c.fileBlocked(l) {
+			if err := c.s.setLocation(ctx, c.tx, c.actor, l, LocKeptOld, "rotation.old_kept", c.now, ""); err != nil {
+				return err
+			}
+			continue
+		}
+		remove = append(remove, l)
+	}
 	if err := c.setStatus(ctx, StatusRemovingOld, "", ", removal_allowed = true"); err != nil {
 		return err
 	}
-	return c.s.queueJobs(ctx, c.tx, systemActor, c.run.id, c.filter(LocVerified), "remove")
+	return c.s.queueJobs(ctx, c.tx, systemActor, c.run.id, remove, "remove")
+}
+
+// fileBlocked: another location of the run in l's (target, file) is not verified (G18).
+func (c *advance) fileBlocked(l locRow) bool {
+	for _, o := range c.locs {
+		if o.id != l.id && o.targetID == l.targetID && o.filePath == l.filePath && o.state != LocVerified {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *advance) filter(states ...string) []locRow {

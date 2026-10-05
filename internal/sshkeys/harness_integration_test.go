@@ -140,7 +140,7 @@ func newEnv(t *testing.T) *env {
 	// A lock-order mistake fails fast with SQLSTATE 55P03 instead of hanging the suite.
 	var dbName string
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT current_database()").Scan(&dbName))
-	_, err := e.db.Owner.Exec(e.ctx, "ALTER DATABASE "+pgx.Identifier{dbName}.Sanitize()+" SET lock_timeout = '10s'")
+	_, err := e.db.Owner.Exec(e.ctx, "ALTER DATABASE "+pgx.Identifier{dbName}.Sanitize()+" SET lock_timeout = '5s'")
 	require.NoError(t, err)
 	e.db.App.Reset()
 	e.keyring, err = secrets.LoadOrCreateMasterKey(e.ctx, e.db.App, t.TempDir(), e.clock.Now())

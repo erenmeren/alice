@@ -105,19 +105,21 @@ type locRow struct {
 	addOpID, removeOpID, undoOpID, newLocation  *uuid.UUID
 	addSentAt, verifiedAt, reverified, removeAt *time.Time
 	jobCount                                    int
-	retries                                     int // remove_retry steps: re-queues of a failed removal (G3)
+	retries                                     int        // remove_retry steps: re-queues of a failed removal (G3)
+	lastResend                                  *time.Time // the latest add_resent step (G16: add_sent_at never moves)
 }
 
 const locSelect = `SELECT id, rotation_id, old_location_id, target_id, n, os_user, file_path, options, state, verify_note, error_code,
     add_op_id, remove_op_id, undo_op_id, new_location_id, add_sent_at, verified_at, reverified_at, remove_sent_at, job_count,
-    (SELECT count(*) FROM rotation_steps s WHERE s.location_id = rotation_locations.id AND s.name = 'remove_retry')
+    (SELECT count(*) FROM rotation_steps s WHERE s.location_id = rotation_locations.id AND s.name = 'remove_retry'),
+    (SELECT max(s.at) FROM rotation_steps s WHERE s.location_id = rotation_locations.id AND s.name = 'add_resent')
 FROM rotation_locations`
 
 func scanLoc(row pgx.Row) (locRow, error) {
 	var l locRow
 	err := row.Scan(&l.id, &l.runID, &l.oldLocationID, &l.targetID, &l.n, &l.osUser, &l.filePath, &l.options, &l.state, &l.verifyNote,
 		&l.errorCode, &l.addOpID, &l.removeOpID, &l.undoOpID, &l.newLocation, &l.addSentAt, &l.verifiedAt, &l.reverified, &l.removeAt,
-		&l.jobCount, &l.retries)
+		&l.jobCount, &l.retries, &l.lastResend)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return locRow{}, ErrNotFound
 	}
@@ -283,10 +285,14 @@ func (s *Service) BeginAdd(ctx context.Context, locationID uuid.UUID) (uuid.UUID
 		if loc.addSentAt != nil && now.Before(*loc.addSentAt) {
 			return ErrNotYourTurn // the clock went back: retried later (G14)
 		}
-		op = uuid.Must(uuid.NewV7())
-		if loc.addOpID != nil {
+		if loc.state == LocAdding && loc.addOpID != nil {
+			// A resumed add re-sends with the same operation id. add_sent_at keeps the first send
+			// (G16); the re-send is a step, which the undo's wait counts from (S3).
 			op = *loc.addOpID
+			id := loc.id
+			return appendStep(ctx, tx, loc.runID, &id, "add_resent", "started", map[string]string{"add_op_id": op.String()}, now)
 		}
+		op = uuid.Must(uuid.NewV7())
 		return s.setLocation(ctx, tx, jobActor(ctx), loc, LocAdding, "", now, ", add_op_id = $5, add_sent_at = $3", op)
 	})
 	return op, err
@@ -442,6 +448,9 @@ func (s *Service) RecordReverify(ctx context.Context, locationID uuid.UUID, r Ve
 		case loc.state == LocRemoveFailed && !accepted:
 			return nil // stays failed; the old key stays
 		case loc.state == LocRemoveFailed:
+			if (loc.reverified != nil && !now.After(*loc.reverified)) || (loc.removeAt != nil && !now.After(*loc.removeAt)) {
+				return ErrNotYourTurn // G3': a strictly newer re-check, later than the failed send
+			}
 			if err := s.removeGate(ctx, tx, run, loc, now, now); err != nil {
 				return err
 			}
@@ -600,6 +609,20 @@ func (s *Service) FinishRemove(ctx context.Context, actor audit.Actor, locationI
 // waits (S3): a helper still working may write until its budget ends.
 func (s *Service) undoWait() time.Duration { return s.helperBudget + undoGrace }
 
+// lastAddSend is the latest send of the location's add: add_sent_at or a later re-send (G16).
+func lastAddSend(l locRow) time.Time {
+	t := *l.addSentAt
+	if l.lastResend != nil && l.lastResend.After(t) {
+		t = *l.lastResend
+	}
+	return t
+}
+
+// undoMustWait reports whether the undo of an add without a definite answer must still wait (S3).
+func (s *Service) undoMustWait(l locRow, now time.Time) bool {
+	return uncertainAdd(l) && now.Before(lastAddSend(l).Add(s.undoWait()))
+}
+
 // undoGrace is the margin after the helper's budget (S3).
 const undoGrace = 30 * time.Second
 
@@ -637,7 +660,7 @@ func (s *Service) BeginUndo(ctx context.Context, locationID uuid.UUID) (uuid.UUI
 			return ErrNotYourTurn
 		}
 		now := s.clock.Now().UTC()
-		if uncertainAdd(loc) && now.Before(loc.addSentAt.Add(s.undoWait())) {
+		if s.undoMustWait(loc, now) {
 			return ErrNotYourTurn
 		}
 		if now.Before(*loc.addSentAt) {
@@ -676,7 +699,9 @@ func (s *Service) FinishUndo(ctx context.Context, actor audit.Actor, locationID 
 		case loc.state == LocUndoing && r.Reason == "":
 			newLocation = loc.newLocation
 			return s.setLocation(ctx, tx, actor, loc, LocUndone, "", now, "")
-		case r.Reason != "" && (loc.state == LocUndoing || (loc.addSentAt != nil && slices.Contains(undoable, loc.state))):
+		case r.Reason != "" && (loc.state == LocUndoing || (loc.addSentAt != nil && loc.state != LocAdding && slices.Contains(undoable, loc.state))):
+			// G2, G17: a pending undo may end without a send, except a row still adding (its add may
+			// still land; it gets a real undo attempt).
 			reason := closedReason(r.Reason, "")
 			return s.setLocation(ctx, tx, actor, loc, LocUndoFailed, reason, now, ", error_code = $5", reason)
 		}

@@ -106,7 +106,7 @@ func (s *Service) requeue(ctx context.Context, id uuid.UUID) (queued int, ended 
 			if phase == "" {
 				continue
 			}
-			if phase == "undo" && uncertainAdd(l) && now.Before(l.addSentAt.Add(s.undoWait())) {
+			if phase == "undo" && s.undoMustWait(l, now) {
 				continue // S3: the undo waits; the wait does not count toward the bound
 			}
 			var live bool
@@ -129,7 +129,7 @@ func (s *Service) requeue(ctx context.Context, id uuid.UUID) (queued int, ended 
 				queued++
 				continue
 			}
-			if l.jobCount >= MaxLocationJobs {
+			if l.jobCount >= MaxLocationJobs && (phase != "undo" || l.state != LocAdding) { // G17: an adding row gets a real undo
 				if err := s.exhaust(ctx, tx, actor, l, phase, now); err != nil {
 					return err
 				}
