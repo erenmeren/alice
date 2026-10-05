@@ -123,3 +123,15 @@ func TestKeyVaultMailTextsAreTrueInEveryCase(t *testing.T) {
 	tr := s.Render("ada@example.com", inventory.TemplateKVImportFailed, "tr", params)
 	assert.Contains(t, tr.Body, "içe aktaramadı")
 }
+
+// Wording pins: the sentence break of the held-for-the-licence mail, and the Turkish term for imports.
+func TestKeyVaultMailWordingPins(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	params := map[string]string{"target_name": "Üretim kasası", "certificate_name": "web-cert"}
+	held := s.Render("ada@example.com", inventory.TemplateKVNewVersionHeldLicense, "en", params)
+	assert.Contains(t, held.Body, "in the Key Vault Üretim kasası. Because Alice's license")
+	unknown := s.Render("ada@example.com", inventory.TemplateKVImportOutcomeUnknown, "tr", params)
+	assert.Contains(t, unknown.Subject, "içe aktarılıp aktarılmadığını")
+}

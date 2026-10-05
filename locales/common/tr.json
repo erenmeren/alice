@@ -991,7 +991,7 @@
         "body": "Alice, {{certificate_name}} sertifikasını {{target_name}} Key Vault kasasına içe aktaramadı. Kasada hiçbir şey oluşturulmadı.\n\nKasayı Alice'te açın: içe aktarmanın sayfası nedeni ve yapılacakları gösterir. Sorun giderildiğinde içe aktarmayı yeniden başlatın."
       },
       "import_outcome_unknown": {
-        "subject": "Alice, {{certificate_name}} sertifikasının {{target_name}} Key Vault kasasına aktarılıp aktarılmadığını bilmiyor",
+        "subject": "Alice, {{certificate_name}} sertifikasının {{target_name}} Key Vault kasasına içe aktarılıp aktarılmadığını bilmiyor",
         "body": "Alice, {{certificate_name}} sertifikasını {{target_name}} Key Vault kasasına gönderdi ancak yanıt kayboldu ve kasanın hiçbir denetimi o zamandan beri sertifikayı göstermedi. Alice bir içe aktarmayı asla iki kez göndermez.\n\nKasa hâlâ varsa Azure'da açın ve sertifikayı arayın. Sertifika oradaysa başka bir şey gerekmez; değilse içe aktarmayı Alice'te yeniden başlatın. Kasa silindiyse yapılacak bir şey yok."
       },
       "new_versions_more": {

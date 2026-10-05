@@ -33,7 +33,7 @@ func TestImportReadsCheckTheVault(t *testing.T) {
 	_, err = h.svc.Import(ctx, f.vault, im.ID)
 	assert.ErrorIs(t, err, inventory.ErrNotFound)
 	// The job that owns the import still reads it, to end it (a context with a claim is a job run).
-	_, err = h.svc.Import(inventory.WithClaim(ctx, inventory.Claim{JobID: uuid.New(), Attempt: 1}), f.vault, im.ID)
+	_, err = h.svc.Import(inventory.WithClaim(ctx, inventory.Claim{JobID: *im.JobID, Attempt: 1}), f.vault, im.ID)
 	assert.NoError(t, err)
 }
 
@@ -141,4 +141,68 @@ func TestListImportsPageFiltersAndPages(t *testing.T) {
 	assert.ErrorAs(t, err, &errs)
 	_, err = h.svc.ListImportsPage(ctx, f.vault, inventory.ImportFilter{Limit: 500})
 	assert.ErrorAs(t, err, &errs)
+}
+
+// Follow-up 1: only the claim of the import's own job reads it once its vault is gone.
+func TestOnlyTheImportsOwnClaimReadsAfterTheVaultIsGone(t *testing.T) {
+	f := newImportFixture(t)
+	h, ctx := f.h, f.h.ctx
+	im := f.mustRequest("claim-read", false)
+	require.NoError(t, h.svc.DeleteVault(ctx, f.admin, f.vault, true))
+	_, err := h.svc.Import(inventory.WithClaim(ctx, inventory.Claim{JobID: uuid.New(), Attempt: 1}), f.vault, im.ID)
+	assert.ErrorIs(t, err, inventory.ErrNotFound, "an invented claim")
+	got, err := h.svc.Import(inventory.WithClaim(ctx, inventory.Claim{JobID: *im.JobID, Attempt: 1}), f.vault, im.ID)
+	require.NoError(t, err, "its own job's claim")
+	assert.Equal(t, im.ID, got.ID)
+}
+
+// Follow-up 5: a manual deployment is never refused by the ended-period rule (pin: its mutant survived).
+func TestManualDeploymentIsNotRefusedByTheEndedPeriodRule(t *testing.T) {
+	f := newAutoFixture(t, true)
+	h, ctx := f.h, f.h.ctx
+	manual, err := h.svc.RequestKVDeployment(ctx, f.admin, inventory.KVDeployInput{StrictSession: true, BindingID: f.bind.ID, VersionID: f.versionID(f.web, ver(1)), LocationIDs: []uuid.UUID{f.loc1}})
+	require.NoError(t, err)
+	_, err = h.svc.BeginDeployment(ctx, manual[0].ID)
+	require.NoError(t, err)
+	h.clock.Advance(time.Minute)
+	f.setAuto(false)
+	h.clock.Advance(time.Minute)
+	f.setAuto(true)
+	assert.NoError(t, h.svc.KVDeployPrecheck(ctx, manual[0].ID), "created before the new auto_since, but manual")
+}
+
+// Follow-up 2: a new hold is mailed once more, and a released version is still never re-held by the reopening rule.
+func TestANewHoldReasonIsMailedOnceMore(t *testing.T) {
+	f := newAutoFixture(t, true)
+	h, ctx := f.h, f.h.ctx
+	f.renew(2, nil)
+	f.lockAndReopen("LIC-FU2")
+	require.Zero(t, f.plan())
+	require.Equal(t, map[string]int{inventory.TemplateKVNewVersionHeldLicense: 1}, f.mails())
+	v2 := f.versionID(f.web, ver(2))
+	_, err := h.svc.ReleaseVersion(ctx, f.admin, inventory.ReleaseInput{VaultID: f.vault, KVCertificateID: f.web, VersionID: v2})
+	require.NoError(t, err)
+	require.Equal(t, 3, f.plan(), "released: planned, not re-held")
+	// The vault delivers the leaf only: the chain is incomplete, the automatic deployment holds the version.
+	ds := f.deps(ver(2))
+	for _, d := range ds {
+		_, err := h.svc.BeginDeployment(ctx, d.ID)
+		require.NoError(t, err)
+	}
+	_, secret := pemSecret(string(f.lastLeaf.KeyPEM) + string(f.lastLeaf.CertPEM))
+	_, err = h.svc.KVDeployMaterial(ctx, ds[0].ID, secret)
+	require.ErrorIs(t, err, inventory.ErrChainUnconfirmed)
+	f.finishAll(ver(2), inventory.DeployStatusFailed, inventory.ReasonChainUnconfirmed)
+	assert.Zero(t, f.plan())
+	assert.Zero(t, f.plan())
+	assert.Equal(t, map[string]int{inventory.TemplateKVNewVersionHeldLicense: 1, inventory.TemplateKVNewVersionHeldChain: 1}, f.mails(), "one mail for each reason, once")
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM audit_log WHERE action = 'kv.version.held' AND details->>'reason' = 'license'"), "no second licence hold")
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM audit_log WHERE action = 'kv.version.held' AND details->>'reason' = 'incomplete_chain'"))
+	// Released again after the chain hold: planned, and never re-held by the reopening rule.
+	_, err = h.svc.ReleaseVersion(ctx, f.admin, inventory.ReleaseInput{VaultID: f.vault, KVCertificateID: f.web, VersionID: v2, ConfirmIncompleteChain: true})
+	require.NoError(t, err)
+	h.clock.Advance(2 * time.Hour)
+	require.NoError(t, h.lic.Tick(ctx))
+	assert.Equal(t, 3, f.plan())
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM audit_log WHERE action = 'kv.version.held' AND details->>'reason' = 'license'"))
 }

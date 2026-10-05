@@ -952,7 +952,7 @@
       },
       "new_version_held_license": {
         "subject": "A new version of {{certificate_name}} is waiting for an administrator: Key Vault {{target_name}}",
-        "body": "Alice found a new version of the certificate {{certificate_name}} in the Key Vault {{target_name}} Because Alice's license was not available at some point since the version appeared, Alice will not deploy it by itself.\n\nAn administrator can open the certificate in Alice and choose Deploy now."
+        "body": "Alice found a new version of the certificate {{certificate_name}} in the Key Vault {{target_name}}. Because Alice's license was not available at some point since the version appeared, Alice will not deploy it by itself.\n\nAn administrator can open the certificate in Alice and choose Deploy now."
       },
       "new_version_held_chain": {
         "subject": "A new version of {{certificate_name}} is waiting for an administrator: Key Vault {{target_name}}",

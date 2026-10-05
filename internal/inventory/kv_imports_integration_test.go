@@ -60,7 +60,9 @@ func (f *importFixture) created(version int) providers.ImportResult {
 func (f *importFixture) get(id uuid.UUID) inventory.KVImport {
 	f.h.t.Helper()
 	// Read as a job run reads (a claim): the vault may be deleted by the test, and the API's check is pinned elsewhere.
-	im, err := f.h.svc.Import(inventory.WithClaim(f.h.ctx, inventory.Claim{JobID: uuid.New(), Attempt: 1}), f.vault, id)
+	var job uuid.UUID
+	require.NoError(f.h.t, f.h.db.Owner.QueryRow(f.h.ctx, "SELECT coalesce(job_id, gen_random_uuid()) FROM kv_imports WHERE id = $1", id).Scan(&job))
+	im, err := f.h.svc.Import(inventory.WithClaim(f.h.ctx, inventory.Claim{JobID: job, Attempt: 1}), f.vault, id)
 	require.NoError(f.h.t, err)
 	return im
 }

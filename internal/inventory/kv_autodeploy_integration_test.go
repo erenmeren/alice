@@ -24,7 +24,8 @@ import (
 // switched on at the start; renew adds versions through the poll as a renewal in Azure would.
 type autoFixture struct {
 	*bindFixture
-	bind inventory.Binding
+	bind     inventory.Binding
+	lastLeaf pki.Leaf // the leaf of the last renew
 }
 
 func newAutoFixture(t *testing.T, auto bool) *autoFixture {
@@ -57,6 +58,7 @@ func (f *autoFixture) renew(n int, leaf *pki.Leaf, older ...string) pki.Leaf {
 		l = *leaf
 	}
 	f.h.reconcile(f.vault, kvResult(f.h.kvc("web-cert", l, ver(n), f.h.clock.Now(), true, older...)))
+	f.lastLeaf = l
 	return l
 }
 

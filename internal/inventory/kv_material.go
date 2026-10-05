@@ -325,6 +325,9 @@ func (s *Service) recordSecretRead(ctx context.Context, m Material, v certs.Vali
 	})
 }
 
+// A new hold is a new episode: notified_at is cleared in the same statement so that its mail goes out once.
+// The planner's reopening rule cannot re-hold such a version: this hold exists because a deployment of it
+// does, and that rule applies only to a version without any deployment.
 // holdIncompleteChain holds the deployment's version for its incomplete chain (first reason wins),
 // under the vault's lock, fenced to the job's claim.
 func (s *Service) holdIncompleteChain(ctx context.Context, m Material) error {
@@ -338,7 +341,7 @@ func (s *Service) holdIncompleteChain(ctx context.Context, m Material) error {
 			}
 			return err
 		}
-		tag, err := tx.Exec(ctx, "UPDATE kv_certificate_versions SET held = true, held_reason = $2 WHERE id = $1 AND NOT held",
+		tag, err := tx.Exec(ctx, "UPDATE kv_certificate_versions SET held = true, held_reason = $2, notified_at = NULL WHERE id = $1 AND NOT held",
 			m.KV.VersionID, heldIncompleteChain)
 		if err != nil {
 			return fmt.Errorf("inventory: hold the version: %w", err)
