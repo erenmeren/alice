@@ -303,10 +303,18 @@ func (s *session) addOnce(ctx context.Context, req providers.AuthKeyChange, log 
 	if err != nil {
 		return transformFailed(log, attempt, refusedRequest("line"))
 	}
-	if !added {
-		return providers.AuthKeyResult{OldSHA256: h0, NewSHA256: h0}, false, nil
+	var fp string
+	if line, _, perr := (AuthorizedKeys{}).AddLine(req.Line); perr == nil && len(line.Lines) == 1 {
+		fp = line.Lines[0].Fingerprint
 	}
-	return s.writeAndVerify(ctx, req, log, attempt, h0, next.Bytes(), 0)
+	if !added {
+		return providers.AuthKeyResult{OldSHA256: h0, NewSHA256: h0, LineNo: lineOf(ak, fp)}, false, nil
+	}
+	res, retry, err := s.writeAndVerify(ctx, req, log, attempt, h0, next.Bytes(), 0)
+	if res.Changed {
+		res.LineNo = lineOf(next, fp)
+	}
+	return res, retry, err
 }
 
 // writeAndVerify writes newContent if the file still has hash h0, then reads it back. retry is

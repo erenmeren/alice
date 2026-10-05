@@ -120,7 +120,7 @@ func TestProviderDescribesItself(t *testing.T) {
 	p := e.prov
 	assert.Equal(t, providers.KindLinuxSSH, p.Kind())
 	assert.Equal(t, "provider.linuxssh.name", p.DisplayNameKey())
-	assert.Equal(t, []providers.Capability{providers.CapAuthorizedKeys, providers.CapDiscoverSSHKeys, providers.CapTestConnection}, p.Capabilities().Sorted())
+	assert.Equal(t, []providers.Capability{providers.CapAuthorizedKeys, providers.CapDiscoverSSHKeys, providers.CapKeyLogin, providers.CapTestConnection}, p.Capabilities().Sorted())
 	assert.Empty(t, p.CredentialSchema().Fields, "targets use the platform key; no per-target secret")
 	path, protocol := p.HelperInfo()
 	assert.Equal(t, helperproto.HelperPath, path)
@@ -370,6 +370,56 @@ func TestDiscoverListsKeysWithUsersAndFlags(t *testing.T) {
 			assert.Equal(t, "1", w.Params["count"])
 		}
 	}
+}
+
+func TestDiscoverReportsKeyFiles(t *testing.T) {
+	e := newProvEnv(t)
+	res, err := e.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	want := []providers.UserKeyFiles{
+		{OSUser: "root", Files: []string{"/root/.ssh/authorized_keys", "/root/.ssh/authorized_keys2"}},
+		{OSUser: "alice-svc", Files: []string{"/var/lib/alice-svc/.ssh/authorized_keys", "/var/lib/alice-svc/.ssh/authorized_keys2"}},
+		{OSUser: "deploy", Files: []string{"/home/deploy/.ssh/authorized_keys", "/home/deploy/.ssh/authorized_keys2"}},
+	}
+	assert.Equal(t, want, res.KeyFiles, "the connection account is included, in the helper's order")
+
+	res, err = e.open(t).Discover(context.Background(), providers.DiscoverRequest{})
+	require.NoError(t, err)
+	assert.Nil(t, res.KeyFiles, "the SSH half was not asked for")
+
+	// nine candidate files: the first eight are kept
+	f := newProvEnv(t)
+	var pats []string
+	for i := 1; i <= 9; i++ {
+		pats = append(pats, "/etc/ssh/k"+strconv.Itoa(i)+"/%u")
+	}
+	f.emu.SetSSHD(strings.Replace(linuxsshtest.DefaultSSHD, "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2",
+		"authorizedkeysfile "+strings.Join(pats, " "), 1))
+	res, err = f.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	require.NotEmpty(t, res.KeyFiles)
+	assert.Len(t, res.KeyFiles[0].Files, 8)
+	assert.Equal(t, "/etc/ssh/k8/root", res.KeyFiles[0].Files[7])
+
+	// an account whose sshd settings could not be read is left out: its files may be wrong
+	g := newProvEnv(t)
+	g.emu.SetUserSSHD("deploy", "")
+	res, err = g.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	for _, u := range res.KeyFiles {
+		assert.NotEqual(t, "deploy", u.OSUser)
+	}
+	assert.Len(t, res.KeyFiles, 2)
+
+	// at most 200 users
+	h := newProvEnv(t)
+	for i := 0; i < 210; i++ {
+		h.emu.AddUser("u"+strconv.Itoa(i), 2000+i, "/home/u"+strconv.Itoa(i))
+	}
+	h.emu.SetMaxUsers(250)
+	res, err = h.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(res.KeyFiles), 200)
 }
 
 func TestDiscoverWithoutKeysReadsOnlyHostAndSSHD(t *testing.T) {

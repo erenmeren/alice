@@ -250,6 +250,54 @@ func TestAddAppendsOnItsOwnLine(t *testing.T) {
 	assert.True(t, res.Changed)
 	assert.True(t, res.Verified)
 	assert.Equal(t, "# keys\n"+old+"\n"+add+"\n", fileOf(t, e, deployFile))
+	assert.Equal(t, 3, res.LineNo, "the key starts line 3: the comment, the old key, then the new one")
+}
+
+// The added line's number: after a two-line file it is 3; a key already on line 2 reports 2 and
+// changes nothing; a created file starts at 1.
+func TestAddReportsTheLineNumber(t *testing.T) {
+	e := newProvEnv(t)
+	a, _ := keyLine(t, "ed25519", "", "a@x")
+	b, _ := keyLine(t, "ed25519", "", "b@x")
+	c, _ := keyLine(t, "ed25519", "", "c@x")
+	e.emu.SetFile(deployFile, []byte(a+"\n"+b+"\n"))
+	s := e.open(t)
+	res, err := s.AddAuthorizedKey(context.Background(), providers.AuthKeyChange{OperationID: keyOp, OSUser: "deploy", FilePath: deployFile, Line: c}, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Changed)
+	assert.Equal(t, 3, res.LineNo)
+	res, err = s.AddAuthorizedKey(context.Background(), providers.AuthKeyChange{OperationID: keyOp, OSUser: "deploy", FilePath: deployFile, Line: b + " other-comment"}, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Changed)
+	assert.Equal(t, 2, res.LineNo)
+
+	f := newProvEnv(t)
+	res, err = f.open(t).AddAuthorizedKey(context.Background(), providers.AuthKeyChange{OperationID: keyOp, OSUser: "deploy", FilePath: deployFile, Line: a}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.LineNo)
+}
+
+// S10: a file shared by several accounts belongs to the one the helper resolves it to (the first
+// listed); a change that names another account is refused before anything is written.
+func TestSharedFileIsChangedOnlyAsItsOwner(t *testing.T) {
+	e := newProvEnv(t)
+	const shared = "/etc/ssh/shared_keys"
+	e.emu.SetSSHD(strings.Replace(linuxsshtest.DefaultSSHD, "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2",
+		"authorizedkeysfile "+shared, 1))
+	k, fp := keyLine(t, "ed25519", "", "old@x")
+	e.emu.SetFile(shared, []byte(k+"\n"))
+	add, _ := keyLine(t, "ed25519", "", "new@x")
+	s := e.open(t)
+	_, err := s.AddAuthorizedKey(context.Background(), providers.AuthKeyChange{OperationID: keyOp, OSUser: "deploy", FilePath: shared, Line: add}, nil)
+	pe := providerCode(t, err)
+	assert.Equal(t, "ssh.helper_refused", pe.Code)
+	assert.Equal(t, "os_user", pe.Params["field"])
+	_, err = s.RemoveAuthorizedKey(context.Background(), removeReq("deploy", shared, fp), nil)
+	pe = providerCode(t, err)
+	assert.Equal(t, "ssh.helper_refused", pe.Code)
+	assert.Equal(t, "os_user", pe.Params["field"])
+	assert.Empty(t, e.emu.Writes())
+	assert.Equal(t, k+"\n", fileOf(t, e, shared))
 }
 
 func TestAddCreatesAMissingFile(t *testing.T) {

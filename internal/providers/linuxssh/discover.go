@@ -277,6 +277,7 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 		res.Warnings = appendUnlisted(res.Warnings, helperproto.WarnAccountNameUnsupported, u.UID)
 		return true
 	})
+	res.KeyFiles = keyFiles(users)
 	for _, u := range users {
 		if u.UID == 0 {
 			res.UID0Users = append(res.UID0Users, u.User)
@@ -439,4 +440,34 @@ func (s *session) discoverFile(ctx context.Context, u helperproto.UserFiles, f h
 	}
 	res.ReadFiles = append(res.ReadFiles, f.Path)
 	return nil
+}
+
+// Bounds of the candidate key files a discovery reports (spec §13.3).
+const (
+	maxKeyFileUsers    = 200
+	maxKeyFilesPerUser = 8
+)
+
+// keyFiles lists each account's candidate authorized_keys files in the helper's order (sshd's
+// AuthorizedKeysFile order). An account whose sshd settings could not be evaluated is left out: its
+// files may not be the ones sshd reads.
+func keyFiles(users []helperproto.UserFiles) []providers.UserKeyFiles {
+	var out []providers.UserKeyFiles
+	for _, u := range users {
+		if u.SSHDUnreadable {
+			continue
+		}
+		if len(out) == maxKeyFileUsers {
+			break
+		}
+		uf := providers.UserKeyFiles{OSUser: u.User, Files: []string{}}
+		for _, f := range u.Files {
+			if len(uf.Files) == maxKeyFilesPerUser {
+				break
+			}
+			uf.Files = append(uf.Files, f.Path)
+		}
+		out = append(out, uf)
+	}
+	return out
 }

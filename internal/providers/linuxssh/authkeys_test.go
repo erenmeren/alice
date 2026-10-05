@@ -408,3 +408,14 @@ func TestOpenSSHRejectedOptionForms(t *testing.T) {
 		assert.Equal(t, LineInvalid, a.Lines[0].Kind, "%q", in)
 	}
 }
+
+func TestLineOfFindsTheFirstLineOfAKey(t *testing.T) {
+	a, afp := edKey(t)
+	b, bfp := edKey(t)
+	ak, err := ParseAuthorizedKeys([]byte("# c\n" + a + "\nnot a key\n" + b + "\n" + a + "\n"))
+	require.NoError(t, err)
+	assert.Equal(t, 2, lineOf(ak, afp), "the first of two lines")
+	assert.Equal(t, 4, lineOf(ak, bfp))
+	assert.Equal(t, 0, lineOf(ak, "SHA256:none"))
+	assert.Equal(t, 0, lineOf(ak, ""))
+}

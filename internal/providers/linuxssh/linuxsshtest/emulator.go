@@ -1,6 +1,7 @@
 package linuxsshtest
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -10,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"golang.org/x/crypto/ssh"
 
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/linuxssh/sshdconf"
@@ -570,6 +573,32 @@ func (e *Emulator) listLocked() helperproto.AuthKeysListResponse {
 		resp.Users = append(resp.Users, uf)
 	}
 	return helperproto.FitList(resp) // like the helper: the answer stays within MaxListOutput (S8)
+}
+
+// AcceptsLogin reports whether one of user's candidate files (as authkeys-list resolves them) holds
+// key, as sshd would decide for a plain key line: a cert-authority line never matches, and a user
+// the helper does not list has no files.
+func (e *Emulator) AcceptsLogin(user string, key ssh.PublicKey) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	want := key.Marshal()
+	for _, us := range e.scanLocked().users {
+		if us.user.name != user {
+			continue
+		}
+		for _, p := range us.paths {
+			for _, line := range bytes.Split(e.files[p], []byte("\n")) {
+				pk, _, opts, _, err := ssh.ParseAuthorizedKey(line)
+				if err != nil || slices.Contains(opts, "cert-authority") {
+					continue
+				}
+				if bytes.Equal(pk.Marshal(), want) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // findLocked returns the user scan that lists path.

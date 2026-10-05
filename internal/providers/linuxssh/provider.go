@@ -38,7 +38,7 @@ var (
 
 // New returns the provider.
 func New(o Options) *Provider {
-	return &Provider{pool: o.Pool, caps: providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys),
+	return &Provider{pool: o.Pool, caps: providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys, providers.CapKeyLogin),
 		allowUnverified: o.AllowUnverifiedHelper}
 }
 
@@ -117,7 +117,7 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 			"helper_protocol": strconv.Itoa(v.Protocol), "required_protocol": strconv.Itoa(helperproto.Protocol)})
 	}
 	v.Helper = cleanValue(v.Helper, 40)
-	return &session{conn: conn, cfg: cfg, caps: p.caps, version: v, release: release}, nil
+	return &session{conn: conn, cfg: cfg, caps: p.caps, version: v, release: release, target: t.ID, dialer: p.pool.dialer}, nil
 }
 
 // session is one pooled connection to a linuxssh target.
@@ -125,6 +125,8 @@ type session struct {
 	providers.UnsupportedSession
 	conn    *Conn
 	cfg     Config
+	target  uuid.UUID // the target this session serves (a test login dials it afresh)
+	dialer  *Dialer   // the pool's dialer: the same host-key store and address rule
 	caps    providers.CapabilitySet
 	version helperproto.VersionResponse
 	release func(bool)

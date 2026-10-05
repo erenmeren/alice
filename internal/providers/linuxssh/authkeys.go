@@ -348,6 +348,20 @@ func (a AuthorizedKeys) AddLine(line string) (AuthorizedKeys, bool, error) {
 	return AuthorizedKeys{Lines: lines, TrailingNewline: true}, true, nil
 }
 
+// lineOf returns the 1-based number of the first key line of that fingerprint (0 when none): the
+// number ParseAuthorizedKeys gives the line, the one the inventory stores.
+func lineOf(a AuthorizedKeys, fp string) int {
+	if fp == "" {
+		return 0
+	}
+	for i, l := range a.Lines {
+		if l.Kind == LineKey && l.Fingerprint == fp {
+			return i + 1
+		}
+	}
+	return 0
+}
+
 // RemoveFingerprint returns a copy without every key line of that fingerprint and how many were
 // removed. Comment, blank and invalid lines are never touched, and the line before a removed
 // last line keeps its terminator.

@@ -605,6 +605,39 @@ func TestRealOpenSSH(t *testing.T) {
 			assert.NotContains(t, after, "ci@build")
 			assert.Equal(t, "deploy:deploy 600", strings.TrimSpace(h.mustExec("stat", "-c", "%U:%G %a", deployFile)))
 
+			// Phase 6 test login: a key Alice added is accepted by the real sshd for that user, a key
+			// that was never added is refused, and after Alice removes the first it is refused too. The
+			// connection is separate from the pool's and runs nothing.
+			_, kpriv, err := ed25519.GenerateKey(rand.Reader)
+			require.NoError(t, err)
+			loginKey, err := ssh.NewSignerFromKey(kpriv)
+			require.NoError(t, err)
+			_, kpriv2, err := ed25519.GenerateKey(rand.Reader)
+			require.NoError(t, err)
+			neverAdded, err := ssh.NewSignerFromKey(kpriv2)
+			require.NoError(t, err)
+			loginLine := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(loginKey.PublicKey()))) + " alice:test-login"
+			resAdd, err := sess.AddAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: uuid.New(), OSUser: "deploy",
+				FilePath: deployFile, Line: loginLine}, ctrNoSteps{})
+			require.NoError(t, err)
+			assert.True(t, resAdd.Changed)
+			assert.Positive(t, resAdd.LineNo)
+			assert.Equal(t, strings.Count(h.mustExec("cat", deployFile), "\n"), resAdd.LineNo, "the key is on the last line")
+			before = h.accepted()
+			lr, err := sess.VerifyKeyLogin(ctx, providers.KeyLoginRequest{OSUser: "deploy", Key: ctrSigner{loginKey}})
+			require.NoError(t, err)
+			assert.Equal(t, providers.KeyLoginAccepted, lr.Outcome)
+			assert.Eventually(t, func() bool { return h.accepted() > before }, 10*time.Second, 200*time.Millisecond, "the test login is a connection of its own")
+			lr, err = sess.VerifyKeyLogin(ctx, providers.KeyLoginRequest{OSUser: "deploy", Key: ctrSigner{neverAdded}})
+			require.NoError(t, err)
+			assert.Equal(t, providers.KeyLoginRefused, lr.Outcome)
+			_, err = sess.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: uuid.New(), OSUser: "deploy",
+				FilePath: deployFile, Fingerprint: ssh.FingerprintSHA256(loginKey.PublicKey()), ProtectedFingerprints: []string{h.platform}}, ctrNoSteps{})
+			require.NoError(t, err)
+			lr, err = sess.VerifyKeyLogin(ctx, providers.KeyLoginRequest{OSUser: "deploy", Key: ctrSigner{loginKey}})
+			require.NoError(t, err)
+			assert.Equal(t, providers.KeyLoginRefused, lr.Outcome)
+
 			// F-35: with AuthorizedKeysCommand the keys are still listed but not managed.
 			h.mustExec("sh", "-c", "printf 'AuthorizedKeysCommand /bin/true\\nAuthorizedKeysCommandUser nobody\\n' >> /etc/ssh/sshd_config && sshd -t && pkill -HUP -o -x sshd")
 			var res4 providers.DiscoveryResult

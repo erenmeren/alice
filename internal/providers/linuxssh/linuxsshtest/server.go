@@ -66,6 +66,7 @@ type Server struct {
 	hangGlobal bool
 	holdOpens  bool
 	maxAuth    int // SetMaxAuthTries
+	loginCheck func(user string, key ssh.PublicKey) bool
 }
 
 // Connections is the number of TCP connections the server accepted (every dial, whether or not
@@ -265,11 +266,25 @@ func (s *Server) serve() {
 	}
 }
 
-func (s *Server) checkKey(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+// SetLoginCheck makes the server also accept a public key that check accepts for the user (the
+// one key of Authorize keeps working as before).
+func (s *Server) SetLoginCheck(check func(user string, key ssh.PublicKey) bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.loginCheck = check
+}
+
+func (s *Server) checkKey(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+	s.mu.Lock()
 	s.attempts++
-	if s.authorized != nil && bytes.Equal(key.Marshal(), s.authorized) {
+	ok := s.authorized != nil && bytes.Equal(key.Marshal(), s.authorized)
+	check := s.loginCheck
+	s.mu.Unlock()
+	if ok {
+		return &ssh.Permissions{}, nil
+	}
+	// The check runs outside s.mu: an emulator takes its own lock.
+	if check != nil && check(meta.User(), key) {
 		return &ssh.Permissions{}, nil
 	}
 	return nil, errors.New("linuxsshtest: key not authorized")
