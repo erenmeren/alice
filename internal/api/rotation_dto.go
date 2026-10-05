@@ -119,6 +119,9 @@ type rotationLocationDTO struct {
 	ReverifiedAt  *time.Time   `json:"reverified_at"`
 	RemovedAt     *time.Time   `json:"removed_at"`
 	NewLocationID *string      `json:"new_location_id"`
+	// AddResendCount / AddResentAt: re-sends of the add after an answer was lost (G25).
+	AddResendCount int        `json:"add_resend_count"`
+	AddResentAt    *time.Time `json:"add_resent_at"`
 }
 
 type rotationStepDTO struct {
@@ -132,42 +135,46 @@ type rotationStepDTO struct {
 
 // locationCountsDTO counts a run's places by what happened to them (the list shows counts, not places).
 type locationCountsDTO struct {
-	Total    int `json:"total"`
-	Verified int `json:"verified"`
-	Removed  int `json:"removed"`
-	Skipped  int `json:"skipped"`
-	Kept     int `json:"kept"`
-	Failed   int `json:"failed"` // add, verify, removal or undo failed
+	Total     int `json:"total"`
+	Verified  int `json:"verified"`
+	Removed   int `json:"removed"`
+	Skipped   int `json:"skipped"`
+	Kept      int `json:"kept"`
+	Failed    int `json:"failed"` // add, verify, removal or undo failed
+	Undone    int `json:"undone"`
+	Cancelled int `json:"cancelled"` // never sent, or refused at send time
+	InFlight  int `json:"in_flight"` // planned, adding, added, unverifiable, removing, undoing
 }
 
-// locationCounts counts a run's places in the service's buckets (sshkeys.LocationCounts): verified includes the places
-// whose old key is being or was removed; kept is kept_old plus a place cancelled at send time with a reason.
+// locationCounts counts a run's places in the service's buckets (sshkeys.LocationCounts), which add up to the total.
 func locationCounts(locs []sshkeys.RotationLocation) locationCountsDTO {
 	c := locationCountsDTO{Total: len(locs)}
 	for _, l := range locs {
 		switch l.State {
-		case sshkeys.LocVerified, sshkeys.LocRemoving:
+		case sshkeys.LocVerified:
 			c.Verified++
 		case sshkeys.LocRemoved:
-			c.Verified++
 			c.Removed++
-		case sshkeys.LocSkipped:
-			c.Skipped++
 		case sshkeys.LocKeptOld:
 			c.Kept++
-		case sshkeys.LocCancelled:
-			if l.ErrorCode != "" {
-				c.Kept++
-			}
 		case sshkeys.LocAddFailed, sshkeys.LocVerifyFailed, sshkeys.LocRemoveFailed, sshkeys.LocUndoFailed:
 			c.Failed++
+		case sshkeys.LocSkipped:
+			c.Skipped++
+		case sshkeys.LocUndone:
+			c.Undone++
+		case sshkeys.LocCancelled:
+			c.Cancelled++
+		default: // planned, adding, added, unverifiable, removing, undoing
+			c.InFlight++
 		}
 	}
 	return c
 }
 
 func summaryCounts(c sshkeys.LocationCounts) locationCountsDTO {
-	return locationCountsDTO{Total: c.Total, Verified: c.Verified, Removed: c.Removed, Skipped: c.Skipped, Kept: c.Kept, Failed: c.Failed}
+	return locationCountsDTO{Total: c.Total, Verified: c.Verified, Removed: c.Removed, Skipped: c.Skipped, Kept: c.Kept, Failed: c.Failed,
+		Undone: c.Undone, Cancelled: c.Cancelled, InFlight: c.InFlight}
 }
 
 // rotationSummaryDTO is a run in the list: its scalar fields and the counts of its places (sshkeys.RotationSummary);
@@ -245,8 +252,8 @@ type rotationDTO struct {
 }
 
 // rotationJSON renders one run with its places and steps; actions are the decisions this caller may take now
-// (callerActions); notice_state shows only while the license allows changes (otherwise Continue waits for the license).
-func rotationJSON(r sshkeys.Rotation, gateOK bool, actions []string) rotationDTO {
+// (callerActions); notice_state is the service's: why Continue waits (the license, or the renewal email).
+func rotationJSON(r sshkeys.Rotation, actions []string) rotationDTO {
 	d := rotationDTO{
 		ID: r.ID.String(), PolicyID: r.PolicyID.String(), OldSSHKeyID: r.OldKeyID.String(), NewSSHKeyID: idPtr(r.NewKeyID),
 		OldFingerprint: r.OldFingerprint, NewFingerprint: r.NewFingerprint, Trigger: r.Trigger, Status: r.Status,
@@ -257,16 +264,16 @@ func rotationJSON(r sshkeys.Rotation, gateOK bool, actions []string) rotationDTO
 		SkipCount: r.Plan.Skips, KeptCount: r.KeptCount, ActionsAllowed: nonNil(actions), NoticeError: errorRef(r.NoticeError, nil),
 		LocationCounts: locationCounts(r.Locations), Version: r.Version,
 	}
-	if gateOK {
-		d.NoticeState = errorRef(r.NoticeState, nil)
-	}
+	// The service decides the notice state with the gate: rotation.paused_license in lock, rotation.notice_pending
+	// while the renewal email is not queued yet.
+	d.NoticeState = errorRef(r.NoticeState, nil)
 	locs := make([]rotationLocationDTO, 0, len(r.Locations))
 	for _, l := range r.Locations {
 		locs = append(locs, rotationLocationDTO{
 			ID: l.ID.String(), N: l.N, TargetID: l.TargetID.String(), TargetName: l.TargetName, OSUser: l.OSUser, FilePath: l.FilePath,
 			Options: l.Options, State: l.State, SkipReason: l.SkipReason, VerifyNote: l.VerifyNote, Error: errorRef(l.ErrorCode, nil),
 			Backup: l.Backup, VerifiedAt: utcPtr(l.VerifiedAt), ReverifiedAt: utcPtr(l.ReverifiedAt), RemovedAt: utcPtr(l.RemovedAt),
-			NewLocationID: idPtr(l.NewLocationID),
+			NewLocationID: idPtr(l.NewLocationID), AddResendCount: l.AddResendCount, AddResentAt: utcPtr(l.AddResentAt),
 		})
 	}
 	d.Locations = locs

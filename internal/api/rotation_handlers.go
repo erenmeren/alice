@@ -353,7 +353,7 @@ func (s *server) getRotation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	gate := s.gateOK()
-	writeJSON(w, http.StatusOK, rotationJSON(run, gate, s.callerActions(r, sshkeys.AllowedActions(run, gate))))
+	writeJSON(w, http.StatusOK, rotationJSON(run, s.callerActions(r, sshkeys.AllowedActions(run, gate))))
 }
 
 // decision is one of the Administrator's decisions on a run without a body.

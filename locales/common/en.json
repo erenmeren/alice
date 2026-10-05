@@ -1294,7 +1294,7 @@
       },
       "needs_attention": {
         "subject": "SSH key rotation needs attention: {{key_label}}",
-        "body": "The rotation of {{key_label}} has a problem a person must look at. Alice removes the old key only where a login with the new key worked just before; everywhere else the old key stays. Where Alice could not remove the new key again, both keys are there.\n\nReason code: {{code}}. The troubleshooting guide explains it. Servers where the new key may still be present because removing it again failed: {{undo_failed_servers}} (count: {{undo_failed_count}}).\n\nOpen the rotation's page in Alice to see each server's state."
+        "body": "The rotation of {{key_label}} has a problem a person must look at. Alice removes the old key only where a login with the new key worked just before; everywhere else the old key stays. Where Alice could not remove the new key again, both keys are there.\n\nReason code: {{code}}. The troubleshooting guide explains it. Servers where the new key may still be present because removing it again failed: {{undo_failed_servers}} (count: {{undo_failed_count}}).\n\nServers where the old key stays because removing it failed: {{remove_failed_servers}} (count: {{remove_failed_count}}).\n\nOpen the rotation's page in Alice to see each server's state."
       },
       "paused_license": {
         "subject": "SSH key rotation paused: {{key_label}}",

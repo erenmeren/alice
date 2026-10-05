@@ -45,7 +45,7 @@ func sampleRotation(status string) sshkeys.Rotation {
 		Plan: plan.Plan{Changes: 1, Skips: 1},
 		Locations: []sshkeys.RotationLocation{
 			{ID: locID, N: 1, TargetID: targetID, TargetName: "web-01", OSUser: "deploy", FilePath: "/home/deploy/.ssh/authorized_keys",
-				State: sshkeys.LocVerified, VerifiedAt: &at, NewLocationID: &newLoc},
+				State: sshkeys.LocVerified, VerifiedAt: &at, NewLocationID: &newLoc, AddResendCount: 2, AddResentAt: &at},
 			{ID: uuid.New(), N: 2, TargetID: targetID, TargetName: "web-01", OSUser: "root", FilePath: "/root/.ssh/authorized_keys",
 				State: sshkeys.LocSkipped, SkipReason: plan.SkipSSHDUnreadable},
 		},
@@ -748,7 +748,8 @@ func TestRunListHasCountsNotLocations(t *testing.T) {
 	for _, k := range []string{"locations", "steps", "actions_allowed", "plan_digest"} {
 		assert.NotContains(t, item, k)
 	}
-	assert.Equal(t, map[string]any{"total": 9.0, "verified": 3.0, "removed": 2.0, "kept": 1.0, "failed": 1.0, "skipped": 2.0}, item["location_counts"])
+	assert.Equal(t, map[string]any{"total": 15.0, "verified": 3.0, "removed": 2.0, "kept": 1.0, "failed": 1.0, "skipped": 2.0,
+		"undone": 1.0, "cancelled": 2.0, "in_flight": 3.0}, item["location_counts"])
 	assert.Equal(t, map[string]any{"code": "ALC-KEY-0017", "reason": "sshkey.connection_account_file"}, item["result"])
 	assert.EqualValues(t, 3, item["kept_count"])
 	assert.Equal(t, runID.String(), item["id"])
@@ -756,12 +757,15 @@ func TestRunListHasCountsNotLocations(t *testing.T) {
 	assert.Equal(t, 200, gotLimit)
 	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodGet, "/api/v1/rotation/runs?limit=201", "auditor", "").Code)
 
-	// The detail counts its places with the service's buckets (verified includes removing and removed; kept includes a
-	// place cancelled at send time).
+	// The detail counts its places with the service's buckets, which add up to the total.
 	m := decodeMap(t, call(h, http.MethodGet, "/api/v1/rotation/runs/"+runID.String(), "auditor", "").Body.Bytes())
 	assert.Len(t, m["locations"], 7)
 	assert.Contains(t, m, "steps")
-	assert.Equal(t, map[string]any{"total": 7.0, "verified": 3.0, "removed": 1.0, "kept": 2.0, "failed": 1.0, "skipped": 1.0}, m["location_counts"])
+	assert.Equal(t, map[string]any{"total": 7.0, "verified": 1.0, "removed": 1.0, "kept": 1.0, "failed": 1.0, "skipped": 1.0,
+		"undone": 0.0, "cancelled": 1.0, "in_flight": 1.0}, m["location_counts"])
+	loc := m["locations"].([]any)[0].(map[string]any)
+	assert.EqualValues(t, 2, loc["add_resend_count"])
+	assert.Equal(t, "2026-10-01T09:00:00Z", loc["add_resent_at"])
 }
 
 func sampleSummary() sshkeys.RotationSummary {
@@ -769,7 +773,7 @@ func sampleSummary() sshkeys.RotationSummary {
 	return sshkeys.RotationSummary{ID: runID, PolicyID: policyID, OldKeyID: managedID, OldFingerprint: "SHA256:old", Trigger: sshkeys.TriggerScheduled,
 		Status: sshkeys.StatusAborted, NewKeyType: "ed25519", PlannedFor: at, NotifiedAt: at, FinishedAt: &at,
 		ResultCode: sshkeys.ReasonConnectionAccountFile, KeptCount: 3, Version: 2,
-		Counts: sshkeys.LocationCounts{Total: 9, Verified: 3, Removed: 2, Kept: 1, Failed: 1, Skipped: 2}}
+		Counts: sshkeys.LocationCounts{Total: 15, Verified: 3, Removed: 2, Kept: 1, Failed: 1, Skipped: 2, Undone: 1, Cancelled: 2, InFlight: 3}}
 }
 
 // The run shows why Continue waits (notice_state, only while the license allows changes) and why the renewal notice
@@ -783,9 +787,12 @@ func TestRunDTOShowsTheNoticeState(t *testing.T) {
 	m := decodeMap(t, call(NewHandler(d), http.MethodGet, "/api/v1/rotation/runs/"+runID.String(), "auditor", "").Body.Bytes())
 	assert.Equal(t, map[string]any{"code": "ALC-ROT-0021", "reason": "rotation.notice_pending"}, m["notice_state"])
 	assert.Equal(t, map[string]any{"code": "ALC-NTF-0001", "reason": "notify.queue_failed"}, m["notice_error"])
+	// In lock the service answers rotation.paused_license (Continue waits for the license); the API passes it on.
+	run.NoticeState, run.NoticeError = sshkeys.ReasonPausedLicense, ""
 	d.License.(*fakeLicense).set(license.ErrLocked)
 	m = decodeMap(t, call(NewHandler(d), http.MethodGet, "/api/v1/rotation/runs/"+runID.String(), "auditor", "").Body.Bytes())
-	assert.Nil(t, m["notice_state"], "in lock Continue waits for the license, not for the notice")
+	assert.Equal(t, map[string]any{"code": "ALC-ROT-0011", "reason": "rotation.paused_license"}, m["notice_state"])
+	assert.Nil(t, m["notice_error"])
 	run.NoticeState, run.NoticeError = "", ""
 	d.License.(*fakeLicense).set(nil)
 	m = decodeMap(t, call(NewHandler(d), http.MethodGet, "/api/v1/rotation/runs/"+runID.String(), "auditor", "").Body.Bytes())
@@ -856,4 +863,18 @@ func TestRunActionsFollowTheCaller(t *testing.T) {
 		m := decodeMap(t, call(h, http.MethodGet, "/api/v1/rotation/runs/"+runID.String(), id, "").Body.Bytes())
 		assert.Equal(t, want, m["actions_allowed"], id)
 	}
+}
+
+// A place refused at send time for a planner reason carries rotation.skipped_at_send as its error and the planner's
+// reason in skip_reason (the web shows rotation.skip.<skip_reason>).
+func TestSkippedAtSendNamesItsSkipReason(t *testing.T) {
+	d, fk, _ := sshDeps(t)
+	run := sampleRotation(sshkeys.StatusAddingNew)
+	run.Locations[0].State, run.Locations[0].ErrorCode, run.Locations[0].SkipReason = sshkeys.LocCancelled, sshkeys.ReasonSkippedAtSend, plan.SkipSSHDUnreadable
+	fk.RotationFn = func(context.Context, uuid.UUID) (sshkeys.Rotation, error) { return run, nil }
+	m := decodeMap(t, call(NewHandler(d), http.MethodGet, "/api/v1/rotation/runs/"+runID.String(), "auditor", "").Body.Bytes())
+	loc := m["locations"].([]any)[0].(map[string]any)
+	assert.Equal(t, map[string]any{"code": "ALC-ROT-0024", "reason": "rotation.skipped_at_send"}, loc["error"])
+	assert.Equal(t, "sshd_unreadable", loc["skip_reason"])
+	assert.Equal(t, "cancelled", loc["state"])
 }

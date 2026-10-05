@@ -203,7 +203,7 @@ var rotationParams = map[string]map[string]string{
 	sshkeys.TemplateCompletedPartial:    {"key_label": "ci-deploy (İzmir)", "new_fingerprint": "SHA256:newNEWnew", "kept_count": "4"},
 	sshkeys.TemplateAborted:             {"key_label": "ci-deploy (İzmir)", "code": sshkeys.ReasonVerifyFailed},
 	sshkeys.TemplateNeedsAttention: {"key_label": "ci-deploy (İzmir)", "code": sshkeys.ReasonUndoFailed, "undo_failed_count": "2",
-		"undo_failed_servers": "web-01, web-02"},
+		"undo_failed_servers": "web-01, web-02", "remove_failed_count": "1", "remove_failed_servers": "db-01"},
 	sshkeys.TemplatePausedLicense:  {"key_label": "ci-deploy (İzmir)"},
 	sshkeys.TemplateDecisionNeeded: {"key_label": "ci-deploy (İzmir)", "count": "2", "decision_due": "2026-10-20 09:00 UTC"},
 	// rotation.late_result (sshkeys.TemplateLateResult): what the server did after the run gave up on the place.
@@ -265,6 +265,7 @@ func TestRotationTemplatesRender(t *testing.T) {
 	}
 	assert.Contains(t, en("rotation.late_result"), "removed: the old key is no longer there; undone: the new key is no longer there")
 	assert.Contains(t, en(sshkeys.TemplateNeedsAttention), "removing it again failed: web-01, web-02 (count: 2).")
+	assert.Contains(t, en(sshkeys.TemplateNeedsAttention), "Servers where the old key stays because removing it failed: db-01 (count: 1).")
 
 	hostile := map[string]string{"key_label": "x\r\nBcc: evil@example.com"}
 	m := s.Render("ada@example.com", sshkeys.TemplatePausedLicense, "en", hostile)

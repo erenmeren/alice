@@ -3365,7 +3365,7 @@ components:
     RotationLocation:
       type: object
       required: [id, n, target_id, target_name, os_user, file_path, options, state, skip_reason, verify_note, error, backup,
-        verified_at, reverified_at, removed_at, new_location_id]
+        verified_at, reverified_at, removed_at, new_location_id, add_resend_count, add_resent_at]
       properties:
         id: { type: string, format: uuid }
         n: { type: integer }
@@ -3378,7 +3378,7 @@ components:
           type: string
           enum: [planned, skipped, cancelled, adding, added, add_failed, verified, unverifiable, verify_failed, kept_old, removing,
             removed, remove_failed, undoing, undone, undo_failed]
-        skip_reason: { type: string }
+        skip_reason: { type: string, description: "Why the plan skipped the place, or what Alice found when it was about to send (error rotation.skipped_at_send); texts rotation.skip.<reason>" }
         verify_note: { type: string }
         error: { $ref: "#/components/schemas/ErrorRef" }
         backup: { type: string }
@@ -3386,6 +3386,8 @@ components:
         reverified_at: { type: [string, "null"], format: date-time }
         removed_at: { type: [string, "null"], format: date-time }
         new_location_id: { type: [string, "null"], format: uuid }
+        add_resend_count: { type: integer, description: How often the add was sent again after its answer was lost }
+        add_resent_at: { type: [string, "null"], format: date-time }
     RotationStep:
       type: object
       required: [n, location_id, name, status, at, params]
@@ -3439,7 +3441,7 @@ components:
         location_counts:
           $ref: "#/components/schemas/LocationCounts"
         notice_state:
-          description: rotation.notice_pending while the run is paused, the license allows changes and the renewal email is not queued yet (Continue waits); null otherwise
+          description: 'Why Continue waits on a paused run: rotation.paused_license while the license does not allow changes, rotation.notice_pending while the renewal email is not queued yet; null otherwise'
           $ref: "#/components/schemas/ErrorRef"
         notice_error:
           description: notify.queue_failed when queuing the renewal email failed since the pause began; null otherwise
@@ -3456,13 +3458,14 @@ components:
     LocationCounts:
       type: object
       description: >-
-        The places of the run by outcome (the service's buckets; they need not add up to total, since places still
-        planned, adding, added, untestable or being undone are in none of them). verified - the new key worked there
-        (including places whose old key is being or was removed); removed - the old key was removed; kept - an
-        administrator kept the old key, or the change was refused when Alice was about to send it; failed - adding,
-        verifying, removing or undoing failed; skipped - the plan left the place out. kept_count of the run is a
-        different number: every place where the old key stays (skipped, kept and failed removals).
-      required: [total, verified, removed, skipped, kept, failed]
+        The places of the run by state; the buckets add up to total. verified - the new key worked there and the old key
+        is not removed yet; removed - the old key was removed; kept - an administrator kept the old key there; failed -
+        adding, verifying, removing or undoing failed; skipped - the plan left the place out; undone - the new key was
+        removed again; cancelled - never sent (the run ended first) or refused when Alice was about to send it;
+        in_flight - waiting, being added, added and not yet tested, untestable and waiting for a decision, being removed
+        or being undone. kept_count of the run is a different number: every place where the old key stays (skipped,
+        kept, cancelled and failed removals).
+      required: [total, verified, removed, skipped, kept, failed, undone, cancelled, in_flight]
       properties:
         total: { type: integer }
         verified: { type: integer }
@@ -3470,6 +3473,9 @@ components:
         skipped: { type: integer }
         kept: { type: integer }
         failed: { type: integer }
+        undone: { type: integer }
+        cancelled: { type: integer }
+        in_flight: { type: integer }
     RotationRunSummary:
       type: object
       description: A run in the list - its scalar fields and the counts of its places; no plan, places, steps or decisions

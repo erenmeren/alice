@@ -1294,7 +1294,7 @@
       },
       "needs_attention": {
         "subject": "SSH anahtarı yenilemesi ilgi bekliyor: {{key_label}}",
-        "body": "{{key_label}} yenilemesinde bir kişinin bakması gereken bir sorun var. Alice eski anahtarı yalnızca yeni anahtarla oturum açmanın az önce başarılı olduğu yerlerden kaldırır; diğer her yerde eski anahtar kalır. Alice'in yeni anahtarı yeniden kaldıramadığı yerlerde iki anahtar da bulunur.\n\nNeden kodu: {{code}}. Sorun giderme kılavuzu bu kodu açıklar. Yeni anahtarı yeniden kaldırma başarısız olduğu için yeni anahtarın hâlâ bulunabileceği sunucular: {{undo_failed_servers}} (sayı: {{undo_failed_count}}).\n\nHer sunucunun durumunu görmek için Alice'te yenilemenin sayfasını açın."
+        "body": "{{key_label}} yenilemesinde bir kişinin bakması gereken bir sorun var. Alice eski anahtarı yalnızca yeni anahtarla oturum açmanın az önce başarılı olduğu yerlerden kaldırır; diğer her yerde eski anahtar kalır. Alice'in yeni anahtarı yeniden kaldıramadığı yerlerde iki anahtar da bulunur.\n\nNeden kodu: {{code}}. Sorun giderme kılavuzu bu kodu açıklar. Yeni anahtarı yeniden kaldırma başarısız olduğu için yeni anahtarın hâlâ bulunabileceği sunucular: {{undo_failed_servers}} (sayı: {{undo_failed_count}}).\n\nEski anahtarı kaldırma başarısız olduğu için eski anahtarın kaldığı sunucular: {{remove_failed_servers}} (sayı: {{remove_failed_count}}).\n\nHer sunucunun durumunu görmek için Alice'te yenilemenin sayfasını açın."
       },
       "paused_license": {
         "subject": "SSH anahtarı yenilemesi duraklatıldı: {{key_label}}",
