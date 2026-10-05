@@ -966,3 +966,28 @@ SELECT gen_random_uuid(), $2, l.id, l.target_id, 'manual', 'queued', 'pending', 
 	require.Equal(t, 2, f.plan())
 	assert.ElementsMatch(t, []uuid.UUID{ids[0], ids[2]}, f.locationsOf(ver(2)))
 }
+
+// A renewal Alice detects after automatic deployment was switched on is announced when Azure's clock is
+// behind (its stamp is earlier than auto_since): nothing is deployed, one "deploy manually" mail, one mark.
+// A baseline version (detected before the binding) says nothing.
+func TestAutoDeploySkewedRenewalIsAnnounced(t *testing.T) {
+	f := newAutoFixture(t, true)
+	h := f.h
+	h.clock.Advance(2 * time.Minute)
+	l := f.issue("web.example.test", pki.ECDSA256)
+	skewed := h.clock.Now().Add(-10 * time.Minute) // Azure's clock is ten minutes behind
+	c := h.kvc("web-cert", l, ver(2), skewed, true)
+	h.reconcile(f.vault, kvResult(c))
+	h.clock.Advance(time.Minute)
+	assert.Zero(t, f.plan(), "not eligible: the stamp is not later than auto_since")
+	assert.Equal(t, map[string]int{inventory.TemplateKVSkippedManual: 1}, f.mails())
+	assert.Zero(t, f.plan())
+	assert.Equal(t, map[string]int{inventory.TemplateKVSkippedManual: 1}, f.mails(), "once")
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM kv_certificate_versions WHERE skipped_notified_at IS NOT NULL AND version = $1", ver(2)))
+}
+
+func TestAutoDeployBaselineVersionIsNotAnnounced(t *testing.T) {
+	f := newAutoFixture(t, true)
+	assert.Zero(t, f.plan())
+	assert.Empty(t, f.mails(), "the version that was there before the binding says nothing")
+}

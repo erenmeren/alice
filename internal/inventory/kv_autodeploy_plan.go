@@ -294,7 +294,12 @@ func planAutoDeploy(sn planSnapshot) autoPlan {
 		return p
 	}
 	if !cur.laterThan(*sn.autoSince) {
-		if later && cur.notifiedAt == nil && cur.skippedAt == nil {
+		// Not eligible, and the person is told once to deploy it by hand. Whether it is NEW does not depend
+		// on Azure's clock alone: Alice's own detection time counts too (Azure's clock may run behind), so a
+		// version Alice detected after the binding existed and after automatic deployment was switched on is
+		// announced whatever its stamp says. Baselines (detected before the binding) stay silent.
+		detectedByAlice := cur.detectedAt.After(sn.bindingCreated) && cur.detectedAt.After(*sn.autoSince)
+		if (later || detectedByAlice) && cur.notifiedAt == nil && cur.skippedAt == nil {
 			notify(cur, TemplateKVSkippedManual, true)
 		}
 		return p

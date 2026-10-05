@@ -200,6 +200,13 @@ func TestAutoDeployPlanTable(t *testing.T) {
 			f.failed(f.b, 3*time.Hour, "kv.wave_stopped")
 			f.failed(f.c, 3*time.Hour, "kv.wave_stopped")
 		}, deploy: func(f *planFixture) []uuid.UUID { return []uuid.UUID{f.a, f.b, f.c} }, budget: AutoDeployWave},
+		{name: "Azure's clock behind Alice's: created before the binding by its stamp, detected after automatic deployment was switched on: announced", mutate: func(f *planFixture) {
+			f.cur().kvCreatedAt = tp(planNow.Add(-11 * 24 * time.Hour))
+		}, deploy: func(f *planFixture) []uuid.UUID { return nil }, notices: []string{TemplateKVSkippedManual}, skipMark: true},
+		{name: "skewed stamp, but detected before the binding existed: a baseline, nothing", mutate: func(f *planFixture) {
+			f.cur().kvCreatedAt = tp(planNow.Add(-11 * 24 * time.Hour))
+			f.cur().detectedAt = planNow.Add(-11 * 24 * time.Hour)
+		}, deploy: func(f *planFixture) []uuid.UUID { return nil }},
 		{name: "three failures of the version stop the wave, with one notice of the stop", mutate: func(f *planFixture) {
 			f.failed(f.a, 3*time.Hour, "deployment.failed")
 			f.failed(f.b, 3*time.Hour, "deployment.failed")
