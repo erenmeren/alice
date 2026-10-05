@@ -80,7 +80,7 @@ func FromOption(list string) (string, error) {
 // plain key line: a line break or NUL anywhere, a key that does not parse, a comment that is not
 // validComment, options ssh.ParseAuthorizedKey does not accept, or a certificate authority.
 func Line(options, publicKey, comment string) (string, error) {
-	if strings.ContainsAny(options+publicKey+comment, "\r\n\x00") || !validComment(comment) {
+	if strings.ContainsAny(options+publicKey+comment, "\r\n\x00") || !validComment(comment) || !validOptions(options) {
 		return "", ErrLine
 	}
 	pk, _, _, rest, err := ssh.ParseAuthorizedKey([]byte(publicKey))
@@ -103,15 +103,59 @@ func Line(options, publicKey, comment string) (string, error) {
 	return line, nil
 }
 
-// HasFromOption reports whether an option list (as stored for a location) holds from=.
-func HasFromOption(options string) bool {
+// validOptions accepts an option list sshd reads the way x/crypto does: items separated by single
+// commas (no empty item), outside quotes only printable ASCII without a space, inside quotes no
+// control byte, every quote closed, and no certificate-authority option (with or without a value).
+func validOptions(options string) bool {
+	if options == "" {
+		return true
+	}
+	quoted := false
+	for i := 0; i < len(options); i++ {
+		c := options[i]
+		switch {
+		case quoted && c == '\\':
+			i++
+			if i >= len(options) || options[i] < ' ' || options[i] == 0x7f {
+				return false
+			}
+		case quoted:
+			if c < ' ' || c == 0x7f {
+				return false
+			}
+			quoted = c != '"'
+		case c == '"':
+			quoted = true
+		case c < '!' || c > '~':
+			return false
+		}
+	}
+	if quoted {
+		return false
+	}
 	for _, o := range splitOptions(options) {
-		if len(o) >= 5 && strings.EqualFold(o[:5], "from=") {
+		name, _, _ := strings.Cut(o, "=")
+		if o == "" || strings.EqualFold(name, "cert-authority") {
+			return false
+		}
+	}
+	return true
+}
+
+// HasOption reports whether an option list holds the option name (case-insensitive, with or without
+// a value), ignoring commas inside quoted values.
+func HasOption(options, name string) bool {
+	for _, o := range splitOptions(options) {
+		n, _, _ := strings.Cut(o, "=")
+		if strings.EqualFold(n, name) {
 			return true
 		}
 	}
 	return false
 }
+
+// HasFromOption reports whether an option list (as stored for a location) holds from=.
+func HasFromOption(options string) bool { return HasOption(options, "from") }
 
 // splitOptions splits an option list on commas outside double quotes (a backslash escapes the
 // next character inside quotes, as sshd reads it).

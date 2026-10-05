@@ -13,7 +13,10 @@ var onBlock func([]byte)
 
 // OpenSSHFile returns the OpenSSH private-key file of a stored key (spec §13.5; R41 row 4):
 // unencrypted with a nil passphrase, otherwise aes256-ctr with bcrypt-pbkdf. The caller zeroes the
-// result; the DER of the PEM block is cleared here. pem.EncodeToMemory's growth copies cannot be.
+// result. Alice clears the parsed Ed25519 key and the DER bytes of the PEM block it is handed. It
+// cannot clear what golang.org/x/crypto/ssh keeps while it builds the block (copies of the private key
+// in its marshalling buffers, and for a passphrase the bcrypt-derived AES key and IV), nor the growth
+// copies of pem.EncodeToMemory, nor big.Int limbs of RSA and ECDSA keys (known limitation P4-04).
 func OpenSSHFile(pkcs8 secrets.Plaintext, comment string, passphrase []byte) (secrets.Plaintext, error) {
 	if passphrase != nil && (len(passphrase) < MinPassphrase || len(passphrase) > MaxPassphrase) {
 		return secrets.Plaintext{}, ErrPassphrase

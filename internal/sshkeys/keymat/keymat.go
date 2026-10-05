@@ -89,6 +89,16 @@ type Material struct {
 	PublicKeySHA256 string
 }
 
+// onHold sees each clear-key buffer this package owns, when it is created (tests only; nil in
+// production). A test keeps the slice and asserts it is zero once the owner returned or released.
+var onHold func([]byte)
+
+func hold(b []byte) {
+	if onHold != nil {
+		onHold(b)
+	}
+}
+
 func (m Material) String() string               { return "keymat.Material{" + m.Fingerprint + "}" }
 func (m Material) GoString() string             { return m.String() }
 func (m Material) Format(f fmt.State, _ rune)   { _, _ = io.WriteString(f, m.String()) }
@@ -110,8 +120,10 @@ func Generate(rnd io.Reader, t KeyType) (Material, error) {
 		if _, err := io.ReadFull(rnd, seed); err != nil {
 			return Material{}, fmt.Errorf("keymat: read randomness: %w", err)
 		}
+		hold(seed)
 		k := ed25519.NewKeyFromSeed(seed)
 		defer clear(k)
+		hold(k)
 		priv = k
 	case RSA3072, RSA4096:
 		bits := 3072
@@ -189,6 +201,7 @@ func parse(pkcs8 secrets.Plaintext) (crypto.Signer, error) {
 	}
 	switch s := k.(type) {
 	case ed25519.PrivateKey:
+		hold(s)
 		return s, nil
 	case *rsa.PrivateKey:
 		return s, nil

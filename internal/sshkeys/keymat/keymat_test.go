@@ -154,8 +154,9 @@ func TestOpenSSHFileRefusals(t *testing.T) {
 	assert.ErrorIs(t, err, ErrKeyData)
 }
 
-// S-11: the PEM block's DER, which OpenSSHFile owns, is cleared before it returns.
-func TestOpenSSHZeroesItsCopies(t *testing.T) {
+// S-11: the DER bytes of the PEM block that OpenSSHFile hands to pem.EncodeToMemory are cleared before
+// it returns. This is the only copy pinned here: x/crypto/ssh keeps others (see OpenSSHFile).
+func TestOpenSSHClearsTheBlockDER(t *testing.T) {
 	m, err := Generate(rand.Reader, Ed25519)
 	require.NoError(t, err)
 	defer m.PKCS8.Zero()
@@ -181,6 +182,10 @@ func TestSignerSignsAndReleases(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.PublicKey().Verify([]byte("data"), sig))
 	release()
+	// The signer's key bytes are cleared: what it signs after release does not verify.
+	sig, err = s.Sign(rand.Reader, []byte("data"))
+	require.NoError(t, err)
+	assert.Error(t, s.PublicKey().Verify([]byte("data"), sig), "a released signer no longer holds the key")
 	_, _, err = Signer(secrets.NewPlaintext([]byte("x")))
 	assert.ErrorIs(t, err, ErrKeyData)
 }
@@ -217,4 +222,72 @@ func TestStoredKeyOfAnotherAlgorithmIsRefused(t *testing.T) {
 func TestMaterialGoString(t *testing.T) {
 	m := Material{Fingerprint: "SHA256:x"}
 	assert.Equal(t, "keymat.Material{SHA256:x}", m.GoString())
+}
+
+// holds records every clear-key buffer the package creates during fn and reports, once fn returned,
+// how many there were and whether any is still non-zero. Every buffer must have been non-zero when
+// it was created, so the check cannot pass on an empty buffer.
+func holds(t *testing.T, fn func()) (count int, dirty int) {
+	t.Helper()
+	var bufs [][]byte
+	onHold = func(b []byte) {
+		require.NotEqual(t, make([]byte, len(b)), b, "a held buffer starts non-zero")
+		bufs = append(bufs, b)
+	}
+	defer func() { onHold = nil }()
+	fn()
+	for _, b := range bufs {
+		if !bytes.Equal(b, make([]byte, len(b))) {
+			dirty++
+		}
+	}
+	return len(bufs), dirty
+}
+
+// Pins every zeroing call site: the Ed25519 seed and key of Generate, and the parsed key of
+// PublicOf, OpenSSHFile and (after release) Signer.
+func TestClearKeyBuffersAreZeroedByTheirOwners(t *testing.T) {
+	m, err := Generate(rand.Reader, Ed25519)
+	require.NoError(t, err)
+	defer m.PKCS8.Zero()
+
+	n, dirty := holds(t, func() {
+		g, err := Generate(rand.Reader, Ed25519)
+		require.NoError(t, err)
+		g.PKCS8.Zero()
+	})
+	assert.Equal(t, 2, n, "seed and key")
+	assert.Zero(t, dirty, "Generate clears its seed and its key")
+
+	n, dirty = holds(t, func() {
+		_, _, err := PublicOf(m.PKCS8)
+		require.NoError(t, err)
+	})
+	assert.Equal(t, 1, n)
+	assert.Zero(t, dirty, "PublicOf clears the parsed key")
+
+	n, dirty = holds(t, func() {
+		out, err := OpenSSHFile(m.PKCS8, "c", nil)
+		require.NoError(t, err)
+		out.Zero()
+	})
+	assert.Equal(t, 1, n)
+	assert.Zero(t, dirty, "OpenSSHFile clears the parsed key")
+
+	var release func()
+	n, dirty = holds(t, func() {
+		_, r, err := Signer(m.PKCS8)
+		require.NoError(t, err)
+		release = r
+	})
+	assert.Equal(t, 1, n)
+	assert.Equal(t, 1, dirty, "a signer holds the key until released")
+	release()
+	n, dirty = holds(t, func() {
+		_, r, err := Signer(m.PKCS8)
+		require.NoError(t, err)
+		r()
+	})
+	assert.Equal(t, 1, n)
+	assert.Zero(t, dirty, "release clears the key")
 }

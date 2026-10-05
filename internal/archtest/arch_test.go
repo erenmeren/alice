@@ -64,10 +64,26 @@ var denied = map[string][]string{
 	"alice/internal/sshkeys/plan":                    {"alice/internal/platform/db/..."},
 }
 
+// deniedStd lists standard-library imports the pure packages must not use: no file, process, socket,
+// database or syscall access. keymat uses net/netip (address parsing), which does no I/O and is not
+// listed; every other net package is.
+var deniedStd = map[string][]string{
+	"alice/internal/sshkeys/keymat": pureDenied,
+	"alice/internal/sshkeys/plan":   pureDenied,
+}
+
+var pureDenied = []string{"os/...", "net", "net/http/...", "net/rpc/...", "net/smtp", "net/textproto", "net/url", "net/mail",
+	"database/...", "syscall/...", "io/ioutil", "io/fs", "plugin", "unsafe", "runtime/...", "internal/..."}
+
 // allowed decides whether package pkg may import imp. It is a pure function so
 // the rules can be tested with positive and negative cases.
 func allowed(pkg, imp string) error {
 	if !strings.HasPrefix(imp, "alice/") {
+		for _, d := range deniedStd[pkg] {
+			if covers(d, imp) {
+				return fmt.Errorf("%s must not import %s (pure package)", pkg, imp)
+			}
+		}
 		return nil // standard library and third-party packages are not governed here
 	}
 	if strings.HasPrefix(pkg, "alice/cmd/") {
@@ -211,6 +227,18 @@ func TestAllowed(t *testing.T) {
 		{"inventory to sshkeys denied", "alice/internal/inventory", "alice/internal/sshkeys", false},
 		{"keymat to inventory denied", "alice/internal/sshkeys/keymat", "alice/internal/inventory", false},
 		{"plan to secrets denied", "alice/internal/sshkeys/plan", "alice/internal/secrets", false},
+		{"plan to os denied", "alice/internal/sshkeys/plan", "os", false},
+		{"plan to os/exec denied", "alice/internal/sshkeys/plan", "os/exec", false},
+		{"plan to syscall denied", "alice/internal/sshkeys/plan", "syscall", false},
+		{"plan to net denied", "alice/internal/sshkeys/plan", "net", false},
+		{"plan to net/http denied", "alice/internal/sshkeys/plan", "net/http", false},
+		{"plan to database/sql denied", "alice/internal/sshkeys/plan", "database/sql", false},
+		{"keymat to os denied", "alice/internal/sshkeys/keymat", "os", false},
+		{"keymat to net/netip allowed", "alice/internal/sshkeys/keymat", "net/netip", true},
+		{"keymat to net/http denied", "alice/internal/sshkeys/keymat", "net/http", false},
+		{"keymat to database/sql/driver denied", "alice/internal/sshkeys/keymat", "database/sql/driver", false},
+		{"keymat to io allowed", "alice/internal/sshkeys/keymat", "io", true},
+		{"plan to time allowed", "alice/internal/sshkeys/plan", "time", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

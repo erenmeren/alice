@@ -53,24 +53,49 @@ func TestLine(t *testing.T) {
 	assert.Equal(t, "alice:web:2026-10-05", comment)
 	assert.Equal(t, []string{`from="10.0.0.0/8"`, "restrict"}, opts)
 
+	// Quoted values may hold spaces, commas, escaped quotes and non-ASCII text.
+	ok, err := Line(`command="echo a, b \"c\" é",no-pty`, m.PublicKey, "c")
+	require.NoError(t, err)
+	assert.Equal(t, `command="echo a, b \"c\" é",no-pty `+m.PublicKey+" c", ok)
+
 	plain, err := Line("", m.PublicKey, "c")
 	require.NoError(t, err)
 	assert.Equal(t, m.PublicKey+" c", plain)
 
 	for name, args := range map[string][3]string{
-		"cert-authority":       {"cert-authority", m.PublicKey, "c"},
-		"Cert-Authority":       {`Cert-Authority`, m.PublicKey, "c"},
-		"newline in options":   {"restrict\nssh-ed25519 AAAA", m.PublicKey, "c"},
-		"space in comment":     {"", m.PublicKey, "two words"},
-		"empty comment":        {"", m.PublicKey, ""},
-		"bad key":              {"", "ssh-ed25519 AAAA", "c"},
-		"two keys":             {"", m.PublicKey + " c\n" + m.PublicKey, "c"},
-		"options with a space": {"two words", m.PublicKey, "c"},
-		"NUL":                  {"", m.PublicKey, "c\x00"},
+		"cert-authority":        {"cert-authority", m.PublicKey, "c"},
+		"Cert-Authority":        {`Cert-Authority`, m.PublicKey, "c"},
+		"newline in options":    {"restrict\nssh-ed25519 AAAA", m.PublicKey, "c"},
+		"space in comment":      {"", m.PublicKey, "two words"},
+		"empty comment":         {"", m.PublicKey, ""},
+		"bad key":               {"", "ssh-ed25519 AAAA", "c"},
+		"two keys":              {"", m.PublicKey + " c\n" + m.PublicKey, "c"},
+		"options with a space":  {"two words", m.PublicKey, "c"},
+		"leading vertical tab":  {"\vrestrict", m.PublicKey, "c"},
+		"trailing vertical tab": {"restrict\v", m.PublicKey, "c"},
+		"NEL":                   {"\u0085restrict", m.PublicKey, "c"},
+		"empty item":            {",,restrict", m.PublicKey, "c"},
+		"leading comma":         {",restrict", m.PublicKey, "c"},
+		"trailing comma":        {"restrict,", m.PublicKey, "c"},
+		"trailing space":        {"restrict ", m.PublicKey, "c"},
+		"control in quotes":     {"command=\"\x1b[2J\"", m.PublicKey, "c"},
+		"escaped control":       {"command=\"a\\\x1b\"", m.PublicKey, "c"},
+		"DEL":                   {"restrict\x7f", m.PublicKey, "c"},
+		"open quote":            {`command="abc`, m.PublicKey, "c"},
+		"dangling escape":       {`command="abc\`, m.PublicKey, "c"},
+		"cert-authority value":  {`cert-authority="x"`, m.PublicKey, "c"},
+		"NUL":                   {"", m.PublicKey, "c\x00"},
 	} {
 		_, err := Line(args[0], args[1], args[2])
 		assert.ErrorIs(t, err, ErrLine, name)
 	}
+}
+
+func TestHasOption(t *testing.T) {
+	assert.True(t, HasOption(`restrict,Command="x,y"`, "command"))
+	assert.True(t, HasOption(`no-pty`, "NO-PTY"))
+	assert.False(t, HasOption(`environment="command=x"`, "command"))
+	assert.False(t, HasOption("", "command"))
 }
 
 func TestHasFromOption(t *testing.T) {
