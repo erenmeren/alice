@@ -304,6 +304,9 @@ type jobDTO struct {
 	RunAt       time.Time      `json:"run_at"`
 	StartedAt   *time.Time     `json:"started_at"`
 	FinishedAt  *time.Time     `json:"finished_at"`
+	// DeploymentID names the deployment of a certificate.deploy or certificate.deploy_recover job, ImportID the import of a kv.import job.
+	DeploymentID *string `json:"deployment_id"`
+	ImportID     *string `json:"import_id"`
 }
 
 // jobJSON maps a job. Its stored error params pass the provider param allowlist (they are shown
@@ -320,11 +323,17 @@ func jobJSON(v jobs.View) jobDTO {
 			d.Result[k] = val
 		}
 	}
-	if v.TargetID != uuid.Nil {
-		id := v.TargetID.String()
-		d.TargetID = &id
-	}
+	d.TargetID, d.DeploymentID, d.ImportID = idOrNull(v.TargetID), idOrNull(v.DeploymentID), idOrNull(v.ImportID)
 	return d
+}
+
+// idOrNull is id as text, nil for uuid.Nil.
+func idOrNull(id uuid.UUID) *string {
+	if id == uuid.Nil {
+		return nil
+	}
+	s := id.String()
+	return &s
 }
 
 type fieldDTO struct {

@@ -2788,13 +2788,19 @@ components:
             nginx: { $ref: "#/components/schemas/SetupSnippet" }
     Job:
       type: object
-      required: [id, type, kind, status, target_id, attempts, max_attempts, error, result, created_at, run_at, started_at, finished_at]
+      required: [id, type, kind, status, target_id, deployment_id, import_id, attempts, max_attempts, error, result, created_at, run_at,
+        started_at, finished_at]
       properties:
         id: { type: string, format: uuid }
         type: { type: string, examples: [target.test_connection] }
         kind: { type: string, enum: [scheduled, user, system] }
         status: { type: string, enum: [queued, running, succeeded, failed, cancelled, dead, blocked_license] }
         target_id: { type: [string, "null"], format: uuid }
+        deployment_id:
+          type: [string, "null"]
+          format: uuid
+          description: 'The deployment a certificate.deploy or certificate.deploy_recover job works on (uploads and Key Vault alike); null for other jobs'
+        import_id: { type: [string, "null"], format: uuid, description: 'The import a kv.import job sends; null for other jobs' }
         attempts: { type: integer }
         max_attempts: { type: integer }
         error: { $ref: "#/components/schemas/ErrorRef" }

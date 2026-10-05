@@ -439,7 +439,8 @@ export interface Job {
   max_attempts: number;
   error: JobError | null;
   result: Record<string, unknown>;
-  // deployment_id and import_id are not in the API yet (Needs API change); a screen uses them when present.
+  // The deployment of a certificate.deploy or certificate.deploy_recover job and the import of a kv.import job; null otherwise
+  // (optional only so that older fixtures stay valid).
   deployment_id?: string | null;
   import_id?: string | null;
   created_at: string;

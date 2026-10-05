@@ -36,7 +36,7 @@ export function BlockedJobsPanel() {
   // by a job of its own (the API reports the original job's status): discarding it then undoes
   // nothing, so the row says so. The job does not name its deployment; the deployments of its server
   // do (job_id).
-  // A job that names its deployment (deployment_id; the API does not send it yet) needs no search.
+  // A job that names its deployment (deployment_id) needs no search.
   const deployTargets = [...new Set(items.filter((j) => j.type === DEPLOY_JOB && j.target_id && !j.deployment_id).map((j) => j.target_id as string))];
   const deployments = useQueries({
     queries: deployTargets.map((target) => ({

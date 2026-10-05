@@ -150,6 +150,35 @@ func TestJobJSONKeepsTheResult(t *testing.T) {
 	assert.Contains(t, string(raw), `"result":{}`)
 }
 
+// A job names its deployment (certificate.deploy and certificate.deploy_recover jobs, from uploads and from Key Vault alike) or its import
+// (kv.import); every other job has both as null.
+func TestJobJSONNamesTheDeploymentAndTheImport(t *testing.T) {
+	dep, imp := uuid.MustParse("0192d000-0000-7000-8000-0000000000d1"), uuid.MustParse("0192d000-0000-7000-8000-0000000000d2")
+	decode := func(v jobs.View) map[string]any {
+		raw, err := json.Marshal(jobJSON(v))
+		require.NoError(t, err)
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(raw, &m))
+		return m
+	}
+	v := sampleView(jobs.StatusQueued, "")
+	m := decode(v)
+	assert.Contains(t, m, "deployment_id")
+	assert.Contains(t, m, "import_id")
+	assert.Nil(t, m["deployment_id"])
+	assert.Nil(t, m["import_id"])
+
+	v.Type, v.DeploymentID = "certificate.deploy", dep
+	m = decode(v)
+	assert.Equal(t, dep.String(), m["deployment_id"])
+	assert.Nil(t, m["import_id"])
+
+	v.Type, v.DeploymentID, v.ImportID = "kv.import", uuid.Nil, imp
+	m = decode(v)
+	assert.Equal(t, imp.String(), m["import_id"])
+	assert.Nil(t, m["deployment_id"])
+}
+
 func TestProvidersList(t *testing.T) {
 	d := testDeps(t, nil)
 	d.Providers = fakeProviders{items: []providers.Descriptor{{

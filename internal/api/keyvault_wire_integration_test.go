@@ -98,6 +98,8 @@ func TestKVDeploymentSecretReadOverTheWire(t *testing.T) {
 			}
 			j := k.job(k.op, d.JobID)
 			assert.Less(t, len(asJSON(t, j["error"])), 1024, "the job's error is bounded")
+			assert.Equal(t, d.ID, j["deployment_id"], "a Key Vault deployment's job names its deployment")
+			assert.Nil(t, j["import_id"])
 		})
 	}
 }
@@ -299,9 +301,15 @@ func TestKeyVaultAPIFacts(t *testing.T) {
 	k.stepUp(c2, root2)
 	rec = c2.do(http.MethodPost, "/api/v1/certificates/"+up+"/actions/import-to-key-vault", map[string]any{"target_id": vault, "name": "late-cert"})
 	requireStatus(t, rec, http.StatusAccepted)
-	id := decodeBody[struct {
+	accepted := decodeBody[struct {
 		Import importView `json:"import"`
-	}](t, rec).Import.ID
+		JobID  string     `json:"job_id"`
+	}](t, rec)
+	id := accepted.Import.ID
+	// The import's job names it (a held or queued kv.import row is not anonymous), and no deployment.
+	importJob := k.job(k.admin, accepted.JobID)
+	assert.Equal(t, id, importJob["import_id"])
+	assert.Nil(t, importJob["deployment_id"])
 	k.stepUp(k.admin, k.adminAcct)
 	requireStatus(t, k.admin.do(http.MethodPatch, "/api/v1/users/"+root2.id, map[string]string{"role": "operator"}), http.StatusOK)
 	k.runKV()

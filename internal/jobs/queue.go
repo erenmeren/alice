@@ -118,6 +118,10 @@ type View struct {
 	RunAt         time.Time
 	StartedAt     *time.Time
 	FinishedAt    *time.Time
+	// DeploymentID and ImportID name what the job works on (its payload's deployment_id or import_id: certificate.deploy and
+	// certificate.deploy_recover jobs, kv.import jobs); uuid.Nil for any other job, or a value that is not a UUID.
+	DeploymentID uuid.UUID
+	ImportID     uuid.UUID
 }
 
 // ListFilter selects jobs, newest first.
@@ -286,7 +290,7 @@ func (q *Queue) EnqueueTx(ctx context.Context, tx pgx.Tx, r inventory.JobRequest
 }
 
 const viewColumns = `id, type, kind, status, target_id, attempts, max_attempts, last_error_code, result, created_by,
-    created_at, run_at, started_at, finished_at`
+    created_at, run_at, started_at, finished_at, coalesce(payload->>'deployment_id', ''), coalesce(payload->>'import_id', '')`
 
 func scanView(row pgx.Row) (View, error) {
 	var (
@@ -294,11 +298,13 @@ func scanView(row pgx.Row) (View, error) {
 		status     string
 		target, by *uuid.UUID
 		result     []byte
+		dep, imp   string
 	)
 	if err := row.Scan(&v.ID, &v.Type, &v.Kind, &status, &target, &v.Attempts, &v.MaxAttempts, &v.LastErrorCode, &result,
-		&by, &v.CreatedAt, &v.RunAt, &v.StartedAt, &v.FinishedAt); err != nil {
+		&by, &v.CreatedAt, &v.RunAt, &v.StartedAt, &v.FinishedAt, &dep, &imp); err != nil {
 		return View{}, err
 	}
+	v.DeploymentID, v.ImportID = payloadID(dep), payloadID(imp)
 	v.Status = Status(status)
 	if target != nil {
 		v.TargetID = *target
@@ -325,6 +331,15 @@ func scanView(row pgx.Row) (View, error) {
 		}
 	}
 	return v, nil
+}
+
+// payloadID is a payload's ID value, uuid.Nil when it is absent or not a UUID.
+func payloadID(s string) uuid.UUID {
+	id, err := uuid.Parse(s)
+	if err != nil || len(s) != 36 {
+		return uuid.Nil
+	}
+	return id
 }
 
 // Get returns one job.

@@ -314,6 +314,7 @@ func (s *stack) deploy(c *client, certID string, locationIDs ...string) []deploy
 		require.Equal(s.t, locationIDs[i], d.LocationID)
 		require.Equal(s.t, "/api/v1/deployments/"+d.ID, d.DeploymentURL)
 		require.Equal(s.t, "/api/v1/jobs/"+d.JobID, d.StatusURL)
+		require.Equal(s.t, d.ID, s.job(c, d.JobID)["deployment_id"], "the deploy job names its deployment")
 	}
 	return got
 }

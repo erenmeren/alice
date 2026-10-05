@@ -393,3 +393,39 @@ func TestPruneDeletesInBatchesUntilDone(t *testing.T) {
 	assert.Equal(t, 5, n)
 	assert.Zero(t, e.count(t, `SELECT count(*) FROM jobs`))
 }
+
+// A job names the deployment or the import it works on (payload deployment_id, import_id): Get and List carry them as
+// IDs; a job without one, or with a value that is not a UUID, names none.
+func TestViewNamesItsDeploymentAndImport(t *testing.T) {
+	e := newQEnv(t)
+	target := insertTarget(t, e.d)
+	dep, imp := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	withDep := e.enqueue(t, Spec{Type: testQueueJob, TargetID: target, Payload: map[string]string{"deployment_id": dep.String()}})
+	withImp := e.enqueue(t, Spec{Type: testQueueJob, Payload: map[string]string{"import_id": imp.String()}, DedupeKey: "imp"})
+	bad := e.enqueue(t, Spec{Type: testQueueJob, Payload: map[string]string{"deployment_id": "not-a-uuid", "import_id": "<b>"}, DedupeKey: "bad"})
+	plain := e.enqueue(t, Spec{Type: testQueueJob, Payload: map[string]string{"location_id": dep.String()}, DedupeKey: "plain"})
+
+	v, err := e.q.Get(e.ctx, withDep)
+	require.NoError(t, err)
+	assert.Equal(t, dep, v.DeploymentID)
+	assert.Equal(t, uuid.Nil, v.ImportID)
+	v, err = e.q.Get(e.ctx, withImp)
+	require.NoError(t, err)
+	assert.Equal(t, imp, v.ImportID)
+	assert.Equal(t, uuid.Nil, v.DeploymentID)
+	for _, id := range []uuid.UUID{bad, plain} {
+		v, err = e.q.Get(e.ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, uuid.Nil, v.DeploymentID)
+		assert.Equal(t, uuid.Nil, v.ImportID)
+	}
+	list, _, err := e.q.List(e.ctx, ListFilter{})
+	require.NoError(t, err)
+	got := map[uuid.UUID]View{}
+	for _, v := range list {
+		got[v.ID] = v
+	}
+	assert.Equal(t, dep, got[withDep].DeploymentID)
+	assert.Equal(t, imp, got[withImp].ImportID)
+	assert.Equal(t, uuid.Nil, got[bad].DeploymentID)
+}
