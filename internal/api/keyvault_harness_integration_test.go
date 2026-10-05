@@ -5,11 +5,15 @@ package api
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -443,3 +447,61 @@ func (k *kvnj) settleAll(t *testing.T, locationID string) {
 		}
 	}
 }
+
+// transportTrap replaces http.DefaultTransport by one that records every request and refuses it, for the length of the
+// test: the provider must never use the process-wide default transport, and the API stack must not either.
+type transportTrap struct {
+	mu   sync.Mutex
+	urls []string
+}
+
+func (tt *transportTrap) RoundTrip(r *http.Request) (*http.Response, error) {
+	tt.mu.Lock()
+	tt.urls = append(tt.urls, r.URL.Scheme+"://"+r.URL.Host)
+	tt.mu.Unlock()
+	return nil, errors.New("trap: the default transport must not be used")
+}
+
+func (tt *transportTrap) seen() []string {
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+	return append([]string(nil), tt.urls...)
+}
+
+func trapDefaultTransport(t *testing.T) *transportTrap {
+	t.Helper()
+	tt := &transportTrap{}
+	old := http.DefaultTransport
+	http.DefaultTransport = tt
+	t.Cleanup(func() { http.DefaultTransport = old })
+	return tt
+}
+
+// connectionCounter is a loopback listener that counts the connections made to it (an environment proxy or an
+// identity endpoint the provider must ignore).
+type connectionCounter struct {
+	ln net.Listener
+	n  atomic.Int64
+}
+
+func newConnectionCounter(t *testing.T) *connectionCounter {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	c := &connectionCounter{ln: ln}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.n.Add(1)
+			_ = conn.Close()
+		}
+	}()
+	t.Cleanup(func() { _ = ln.Close() })
+	return c
+}
+
+func (c *connectionCounter) addr() string { return c.ln.Addr().String() }
+func (c *connectionCounter) count() int   { return int(c.n.Load()) }
