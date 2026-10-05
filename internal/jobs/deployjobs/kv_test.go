@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 
 	"alice/internal/inventory"
 	"alice/internal/jobs"
@@ -137,10 +138,25 @@ type kvFake struct {
 	noZero     bool                        // a KVDeployMaterial that does not zero the secret (the engine must)
 	mutate     func(m *inventory.Material) // changes the material KVDeployMaterial returns (a misbehaving inventory)
 	stepParams map[string]map[string]string
-	kvCalls    int // calls of KVDeployMaterial
+	kvCalls    int                             // calls of KVDeployMaterial
+	cred       inventory.VaultCredentialSource // the vault's credential source (nil: the fake provider does not look)
 }
 
-func (f *fakeInv) VaultCredentials(uuid.UUID) inventory.VaultCredentialSource { return nil }
+func (f *fakeInv) VaultCredentials(uuid.UUID) inventory.VaultCredentialSource { return f.kv.cred }
+
+// vaultSource is a vault credential source whose AzureIdentity answers err (nil: a managed identity).
+type vaultSource struct{ err error }
+
+func (vaultSource) SSHSigner(context.Context) (ssh.Signer, func(), error) {
+	return nil, nil, errors.New("a vault has no SSH key")
+}
+
+func (s vaultSource) AzureIdentity(context.Context) (providers.AzureIdentity, func(), error) {
+	if s.err != nil {
+		return providers.AzureIdentity{}, nil, s.err
+	}
+	return providers.AzureIdentity{Auth: providers.AzureAuthManagedIdentity}, func() {}, nil
+}
 
 func (f *fakeInv) KVDeployPrecheck(ctx context.Context, _ uuid.UUID) error {
 	return f.call(ctx, "KVDeployPrecheck")
@@ -319,6 +335,16 @@ func TestKVMaterialFailures(t *testing.T) {
 				c.OpenErr = providers.NewError("azure.auth_failed", false, nil, map[string]string{"aadsts": "7000215"})
 			})
 		}, 0, "azure.auth_failed", jobs.Permanent, true, map[string]string{"aadsts": "7000215"}, stepKVSecret, true},
+		{"the vault's stored credential cannot be decrypted", func(k *kvFixture) {
+			k.inv.kv.cred = vaultSource{err: fmt.Errorf("inventory: open: %w", inventory.ErrVaultCredentialUnreadable)}
+		}, 0, "kv.credential_unreadable", jobs.Permanent, true, nil, stepKVSecret, true},
+		{"the vault's credential fails otherwise: the provider's answer stands", func(k *kvFixture) {
+			k.inv.kv.cred = vaultSource{err: errors.New("database down")}
+		}, 0, "azure.auth_failed", jobs.Permanent, true, nil, stepKVSecret, true},
+		{"a readable credential is handed through unchanged", func(k *kvFixture) {
+			k.inv.kv.cred = vaultSource{}
+			k.az.Configure(func(c *fake.Config) { c.SecretErr = providers.NewError("kv.version_disabled", false, nil, nil) })
+		}, 0, "kv.version_disabled", jobs.Permanent, true, nil, stepKVSecret, false},
 		{"the secret is another version", func(k *kvFixture) { k.inv.errs["KVDeployMaterial"] = inventory.ErrSecretMismatch }, 0,
 			"kv.secret_mismatch", jobs.Permanent, true, nil, stepKVSecret, false},
 		{"the secret is unreadable", func(k *kvFixture) { k.inv.errs["KVDeployMaterial"] = inventory.ErrSecretUnreadable }, 0,

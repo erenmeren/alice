@@ -1669,3 +1669,11 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 **Likely cause.** The requester's role was changed or the account was disabled between the request and the moment the task ran.
 
 **What to do.** An administrator can request the import again.
+
+## ALC-AKV-0041: Alice cannot read this vault's stored credentials
+
+**Meaning.** The sign-in credentials Alice stored for the vault (a client secret or a sign-in certificate's private key, sealed with Alice's master key) cannot be decrypted, so Alice did not sign in to Azure: nothing was read from the vault and nothing was changed on any server. A deployment of a certificate from this vault ends failed with this code at its step "Read the certificate from Key Vault". (HTTP 409, reason `kv.credential_unreadable`; not retried, because retrying cannot help.)
+
+**Likely cause.** Alice runs with another master key than the one the credentials were sealed with (the key file was replaced, or the database was restored next to another key), or the stored row was damaged.
+
+**What to do.** On the vault's page choose **Replace credentials** and enter the vault's sign-in details again (Alice seals them with the current key), then deploy again. If many vaults or servers show this, check first that Alice runs with the right master key file.

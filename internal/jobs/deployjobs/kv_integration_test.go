@@ -189,6 +189,31 @@ func TestF41MissingSecretsRoleChangesNothing(t *testing.T) {
 	assert.Equal(t, 2, w.audits("deployment.failed"))
 }
 
+// A vault whose sealed sign-in credential this master key cannot open (another key, a damaged row): the
+// deployment ends failed with kv.credential_unreadable (replace the vault's credentials) before anything was
+// read or sent, not with the generic internal error, and it is not retried.
+func TestKVVaultCredentialThatDoesNotOpen(t *testing.T) {
+	w := newKVWorld(t)
+	s1 := w.addServer("web-01", wwwSite())
+	b := w.bind(s1.locs[wwwCert])
+	c1 := len(s1.srv.Commands())
+	_, err := w.db.Owner.Exec(w.ctx, "UPDATE credentials SET ciphertext = ciphertext || '\\x00'::bytea WHERE id = (SELECT credential_id FROM targets WHERE id = $1)", w.vault)
+	require.NoError(t, err)
+	for _, id := range w.deploy(b, false) {
+		d := w.settle(id)
+		assert.Equal(t, inventory.DeployStatusFailed, d.Status)
+		assert.Equal(t, "kv.credential_unreadable", d.ErrorCode)
+		assert.Equal(t, stepKVSecret, d.FailedStep)
+		assert.Equal(t, "kv.credential_unreadable", w.stepsOf(id)[stepKVSecret+":failed"])
+		v := w.jobOf(id)
+		assert.Equal(t, string(jobs.StatusFailed), string(v.Status))
+		assert.Equal(t, "kv.credential_unreadable", v.LastErrorCode)
+		assert.Equal(t, 1, v.Attempts, "not retried: only a new credential helps")
+	}
+	w.untouched(s1, c1)
+	assert.Zero(t, w.reads(), "nothing was read from the vault")
+}
+
 // F-45 at run time: the certificate was made non-exportable after the request. Either the vault
 // refuses the secret (403) or it answers 200 with a secret that holds no private key; both end the
 // deployment before anything is sent.

@@ -3143,7 +3143,9 @@ components:
             deployment.restored_unverified (ALC-DEP-0019) when the files are back but the website was not confirmed,
             and as deployment.rollback_file_changed (ALC-DEP-0020) when another program changed the files (Alice put
             back at most what it had written: the pair may not match). A deployment whose waiting job an
-            Administrator discarded ends failed with deployment.cancelled (ALC-DEP-0022; nothing was sent).
+            Administrator discarded ends failed with deployment.cancelled (ALC-DEP-0022; nothing was sent). A Key Vault
+            deployment whose vault's stored sign-in credentials Alice cannot decrypt ends failed at kv_secret with
+            kv.credential_unreadable (ALC-AKV-0041; nothing was read or sent; replace the vault's credentials).
         failed_step: { type: string, description: "The step that failed (verify_current when the pre-check refused; verify when the new certificate was not confirmed; kv_secret when a Key Vault deployment could not read or accept its certificate secret); \"\" when none" }
         cause_step: { type: string }
         helper_error: { type: string, description: "A configuration error class or file_changed; \"\" when none" }

@@ -3,6 +3,7 @@ package deployjobs
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"alice/internal/inventory"
@@ -39,6 +40,9 @@ import (
 //	vault target (TargetRef)         deleted or disabled                      finish failed                 Fail kv.vault_unavailable
 //	                                 other error                              -                             pre-send failure
 //	azurekv provider                 none registered                          finish failed                 Fail internal.unexpected
+//	vault credential (AzureIdentity  ErrVaultCredentialUnreadable (the sealed step failed; finish failed    Fail kv.credential_
+//	 inside Open)                     credential does not open: secrets.                                    unreadable (replace the
+//	                                  ErrDecrypt)                                                           vault's credentials)
 //	Open + ReadCertificateSecret     provider error (closed code, allowlisted step failed; finish failed    Fail that reason (the
 //	 (one minute for both, S3;       params, F-41: azure.forbidden {role})    with it unless retryable      provider's class; a
 //	 name and exact version of the                                            with attempts left            retryable one is retried)
@@ -84,6 +88,7 @@ var kvReadBudget = time.Minute
 const (
 	reasonKVMismatch       = "kv.secret_mismatch"
 	reasonKVUnreadable     = "kv.secret_unreadable"
+	reasonKVCredential     = "kv.credential_unreadable"
 	reasonVaultGone        = inventory.ReasonVaultUnavailable
 	reasonChainUnconfirmed = inventory.ReasonChainUnconfirmed
 	reasonPFXBusy          = "certificate.pfx_busy"
@@ -200,8 +205,18 @@ func (h *handlers) kvMaterial(ctx context.Context, m inventory.Material) (invent
 func (h *handlers) readSecret(ctx context.Context, p providers.Provider, ref providers.TargetRef, src *inventory.KVSource) (providers.CertificateSecret, error) {
 	rctx, cancel := context.WithTimeout(ctx, kvReadBudget)
 	defer cancel()
-	sess, err := p.Open(rctx, ref, h.d.Inventory.VaultCredentials(src.VaultID), providers.Env{Clock: h.d.Clock, Log: h.d.Log})
+	var cred providers.CredentialSource
+	watch := &credentialWatch{}
+	if vs := h.d.Inventory.VaultCredentials(src.VaultID); vs != nil {
+		watch.VaultCredentialSource = vs
+		cred = watch
+	}
+	sess, err := p.Open(rctx, ref, cred, providers.Env{Clock: h.d.Clock, Log: h.d.Log})
 	if err != nil {
+		if ctx.Err() == nil && errors.Is(watch.failure(), inventory.ErrVaultCredentialUnreadable) {
+			// The provider reports this as its own internal error; only a new credential helps.
+			return providers.CertificateSecret{}, jobs.Fail(reasonKVCredential, nil, inventory.ErrVaultCredentialUnreadable)
+		}
 		return providers.CertificateSecret{}, readFailure(ctx, rctx, err)
 	}
 	sec, err := sess.ReadCertificateSecret(rctx, providers.SecretRequest{Name: src.Name, Version: src.Version})
@@ -219,6 +234,31 @@ func (h *handlers) readSecret(ctx context.Context, p providers.Provider, ref pro
 	}
 	handedOver = true
 	return sec, nil
+}
+
+// credentialWatch hands the vault's credential source to the provider unchanged and remembers the
+// error its AzureIdentity returned, so the vault step can tell a sealed credential this master key cannot
+// open (kv.credential_unreadable) from the provider's other failures, which it reports as they are.
+type credentialWatch struct {
+	inventory.VaultCredentialSource
+	mu  sync.Mutex
+	err error
+}
+
+func (w *credentialWatch) AzureIdentity(ctx context.Context) (providers.AzureIdentity, func(), error) {
+	id, release, err := w.VaultCredentialSource.AzureIdentity(ctx)
+	if err != nil {
+		w.mu.Lock()
+		w.err = err
+		w.mu.Unlock()
+	}
+	return id, release, err
+}
+
+func (w *credentialWatch) failure() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.err
 }
 
 // readFailure classifies a failed Open or read: the job's own context ending is an interruption

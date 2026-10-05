@@ -160,8 +160,8 @@ WHERE t.id = $1 AND t.deleted_at IS NULL AND c.purpose = $2`, v.id, purposeAzure
 		return providers.AzureIdentity{}, nil, errors.New("inventory: the stored vault credential is damaged")
 	}
 	pt, err := v.s.keyring.Open(credentialLocation(credID), env)
-	if err != nil {
-		return providers.AzureIdentity{}, nil, errors.New("inventory: the vault credential cannot be decrypted with this master key")
+	if err != nil { // secrets.ErrDecrypt, which says nothing about why
+		return providers.AzureIdentity{}, nil, fmt.Errorf("%w (%w)", ErrVaultCredentialUnreadable, err)
 	}
 	id := providers.AzureIdentity{Auth: info.Auth, TenantID: info.TenantID, ClientID: info.ClientID}
 	switch info.Auth {

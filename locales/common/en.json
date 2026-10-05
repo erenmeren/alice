@@ -862,6 +862,11 @@
         "title": "The person who requested the import is no longer an administrator",
         "cause": "Importing a certificate into a vault moves its private key out of Alice, so only an administrator may do it. The person who asked for this import is no longer an administrator, so nothing was sent.",
         "action": "An administrator can request the import again."
+      },
+      "credential_unreadable": {
+        "title": "Alice cannot read this vault's stored credentials",
+        "cause": "The sign-in credentials Alice stored for this vault cannot be decrypted with Alice's current master key (the key was replaced, or the stored data was damaged). Nothing was read from the vault. Nothing was changed on your servers.",
+        "action": "Open the vault's page, choose Replace credentials and enter the vault's sign-in details again, then deploy again."
       }
     }
   },

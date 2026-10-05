@@ -67,6 +67,7 @@ var inventorySentinels = map[string]error{
 	"ErrHeldNeedsStepUp": inventory.ErrHeldNeedsStepUp, "ErrAutoDeployNeedsStepUp": inventory.ErrAutoDeployNeedsStepUp,
 	"ErrImportConfirmNeeded": inventory.ErrImportConfirmNeeded, "ErrImportInProgress": inventory.ErrImportInProgress,
 	"ErrImportState": inventory.ErrImportState, "ErrImportChanged": inventory.ErrImportChanged,
+	"ErrVaultCredentialUnreadable": inventory.ErrVaultCredentialUnreadable,
 }
 
 // engineOnlySentinels are returned only by the methods the deployment engine calls (StartDeployment,
@@ -509,6 +510,7 @@ var phase5Table = []struct {
 	{"ALC-AKV-0038", "kv.import_vault_deleted", "Vault was removed before the import was sent", "Kasa, içe aktarma gönderilmeden önce kaldırıldı", 409, false},
 	{"ALC-AKV-0039", "kv.import_cancelled", "Import cancelled before it was sent", "İçe aktarma gönderilmeden önce iptal edildi", 409, false},
 	{"ALC-AKV-0040", "kv.import_admin_required", "The person who requested the import is no longer an administrator", "İçe aktarmayı isteyen kişi artık yönetici değil", 403, false},
+	{"ALC-AKV-0041", "kv.credential_unreadable", "Alice cannot read this vault's stored credentials", "Alice bu kasanın kayıtlı kimlik bilgilerini okuyamıyor", 409, false},
 }
 
 // The 27 codes of the contract keep their numbers, reasons, statuses, retry flags and exact titles; the
@@ -712,6 +714,10 @@ func TestPhase5TextsAreTruthfulAndWorded(t *testing.T) {
 	// Nothing was sent / changed where that is true.
 	assert.Contains(t, en("errors.kv.secret_unreadable.cause"), "Nothing was changed on your servers")
 	assert.Contains(t, en("errors.kv.import_invalid.cause"), "Nothing was sent")
+	// A vault whose sealed credential cannot be opened: the way out is to replace the vault's credentials.
+	assert.Contains(t, en("errors.kv.credential_unreadable.action"), "Replace credentials")
+	assert.Contains(t, tr("errors.kv.credential_unreadable.action"), "Kimlik bilgilerini değiştir")
+	assert.Contains(t, en("errors.kv.credential_unreadable.cause"), "Nothing was changed on your servers")
 }
 
 // The complete map of what the API answers for each Phase 5 sentinel (the task's report lists it).
@@ -735,6 +741,7 @@ func TestPhase5SentinelMapping(t *testing.T) {
 		{inventory.ErrVersionNotHeld, ErrKVVersionNotHeld},
 		{inventory.ErrSecretUnreadable, ErrKVSecretUnreadable},
 		{inventory.ErrSecretMismatch, ErrKVSecretMismatch},
+		{inventory.ErrVaultCredentialUnreadable, ErrKVCredentialUnreadable},
 		{inventory.ErrVaultUnavailable, ErrKVVaultUnavailable},
 		{inventory.ErrImportConfirmNeeded, ErrKVImportConfirmNeeded},
 		{inventory.ErrImportInProgress, ErrKVImportInProgress},

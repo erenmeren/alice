@@ -862,6 +862,11 @@
         "title": "İçe aktarmayı isteyen kişi artık yönetici değil",
         "cause": "Bir sertifikayı kasaya içe aktarmak özel anahtarını Alice'in dışına çıkarır; bu yüzden yalnızca bir yönetici yapabilir. Bu içe aktarmayı isteyen kişi artık yönetici olmadığı için hiçbir şey gönderilmedi.",
         "action": "Bir yönetici içe aktarmayı yeniden isteyebilir."
+      },
+      "credential_unreadable": {
+        "title": "Alice bu kasanın kayıtlı kimlik bilgilerini okuyamıyor",
+        "cause": "Alice'in bu kasa için kaydettiği oturum açma kimlik bilgilerinin şifresi Alice'in geçerli ana anahtarıyla çözülemiyor (anahtar değiştirildi ya da kayıtlı veri bozuldu). Kasadan hiçbir şey okunmadı. Sunucularınızda hiçbir şey değiştirilmedi.",
+        "action": "Kasanın sayfasını açın, Kimlik bilgilerini değiştir'i seçin ve kasanın oturum açma bilgilerini yeniden girin; ardından yeniden dağıtın."
       }
     }
   },

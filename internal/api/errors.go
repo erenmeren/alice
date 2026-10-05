@@ -238,6 +238,9 @@ var (
 	// The import job found that the person who asked is no longer an Administrator (the job stores auth.forbidden;
 	// importJSON shows this code for it).
 	ErrKVImportAdminRequired = ErrorCode{Code: "ALC-AKV-0040", Reason: "kv.import_admin_required", Status: http.StatusForbidden}
+	// The vault's sealed sign-in credential cannot be opened with this master key (secrets.ErrDecrypt); a deployment
+	// ends with it before anything is read from the vault (final fix wave).
+	ErrKVCredentialUnreadable = ErrorCode{Code: "ALC-AKV-0041", Reason: "kv.credential_unreadable", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -274,6 +277,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrKVImportInProgress, ErrKVImportRejected, ErrKVImportOutcomeUnknown, ErrKVClientCertInvalid, ErrKVVaultDuplicate,
 		ErrKVImportNameExists, ErrKVImportInvalid, ErrKVBindingGone, ErrKVAutoDeployOff, ErrKVVaultUnavailable, ErrKVVersionHeld,
 		ErrKVVersionNotHeld, ErrKVVersionSuperseded, ErrKVWaveStopped, ErrKVImportVaultDeleted, ErrKVImportCancelled, ErrKVImportAdminRequired,
+		ErrKVCredentialUnreadable,
 	}
 }
 
@@ -398,6 +402,7 @@ var errorMap = []struct {
 	{inventory.ErrVersionNotHeld, ErrKVVersionNotHeld, nil},
 	{inventory.ErrSecretUnreadable, ErrKVSecretUnreadable, nil},
 	{inventory.ErrSecretMismatch, ErrKVSecretMismatch, nil},
+	{inventory.ErrVaultCredentialUnreadable, ErrKVCredentialUnreadable, nil},
 	{inventory.ErrVaultUnavailable, ErrKVVaultUnavailable, nil},
 	{inventory.ErrImportConfirmNeeded, ErrKVImportConfirmNeeded, nil},
 	{inventory.ErrImportInProgress, ErrKVImportInProgress, nil},

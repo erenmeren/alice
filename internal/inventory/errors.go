@@ -163,6 +163,10 @@ var (
 	// ErrSecretMismatch: the vault secret is not the certificate version Alice recorded (another
 	// leaf, thumbprint or key type).
 	ErrSecretMismatch = errors.New("inventory: the vault secret is not the recorded version")
+	// ErrVaultCredentialUnreadable: the vault's sealed sign-in credential cannot be opened with this
+	// master key (another key, a damaged row). Only replacing the vault's credentials helps. It wraps
+	// nothing secret; the error AzureIdentity returns also wraps secrets.ErrDecrypt.
+	ErrVaultCredentialUnreadable = errors.New("inventory: the vault credential cannot be decrypted with this master key")
 )
 
 // Errors of the material step of a Key Vault deployment (Task 12 review fixes): the state the

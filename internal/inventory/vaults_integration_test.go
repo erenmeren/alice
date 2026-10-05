@@ -632,6 +632,15 @@ func TestVaultCredentialSource(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = h.svc.VaultCredentials(b.ID).AzureIdentity(h.ctx)
 	require.Error(t, err)
+
+	// A sealed secret this master key cannot open (another key, a damaged row) is a closed refusal the
+	// deployment engine can name: replace the vault's credentials.
+	c := h.newVault(admin, "Third", "https://third.vault.azure.net")
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE credentials SET ciphertext = ciphertext || '\\x00'::bytea WHERE id = (SELECT credential_id FROM targets WHERE id = $1)", c.ID)
+	require.NoError(t, err)
+	_, _, err = h.svc.VaultCredentials(c.ID).AzureIdentity(h.ctx)
+	require.ErrorIs(t, err, inventory.ErrVaultCredentialUnreadable)
+	require.ErrorIs(t, err, secrets.ErrDecrypt)
 }
 
 func TestVaultInputIsConsumedByTheCall(t *testing.T) {
