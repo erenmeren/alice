@@ -100,6 +100,13 @@ func TestKeyLocationsTxListsLiveAndMissing(t *testing.T) {
 	require.ErrorAs(t, err, &pgErr)
 	assert.Equal(t, "55P03", pgErr.Code, "the row is locked")
 	require.NoError(t, tx2.Rollback(h.ctx))
+	// The lock order is a scan's: the targets are locked before the location rows (a scan locks its target first).
+	tx3, err := h.db.App.Begin(h.ctx)
+	require.NoError(t, err)
+	err = tx3.QueryRow(h.ctx, "SELECT 1 FROM targets WHERE id = $1 FOR UPDATE NOWAIT", tg.ID).Scan(&one)
+	require.ErrorAs(t, err, &pgErr)
+	assert.Equal(t, "55P03", pgErr.Code, "the target is locked too")
+	require.NoError(t, tx3.Rollback(h.ctx))
 	require.NoError(t, tx.Rollback(h.ctx))
 
 	// Without lock a query error is reported (the transaction is finished).
@@ -162,6 +169,19 @@ func TestRecordKeyAddedTx(t *testing.T) {
 	assert.Empty(t, options)
 	assert.Equal(t, 1, h.count("SELECT count(*) FROM ssh_key_locations WHERE ssh_key_id = $1", key))
 	assert.Equal(t, "false", h.auditDetails("sshkey.added")[1]["verified"])
+
+	// The audit row says what the location row stores: a NUL in the path is replaced in both.
+	dirty := in
+	dirty.FilePath, dirty.OSUser = "/home/de\x00ploy/.ssh/authorized_keys", "dep\x00loy"
+	dirtyID, err := recordAdded(h, dirty)
+	require.NoError(t, err)
+	var storedUser, storedFile string
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT os_user, file_path FROM ssh_key_locations WHERE id = $1", dirtyID).Scan(&storedUser, &storedFile))
+	d = h.auditDetails("sshkey.added")
+	last := d[len(d)-1]
+	assert.Equal(t, storedUser, last["os_user"])
+	assert.Equal(t, storedFile, last["file_path"])
+	assert.Contains(t, storedFile, "\ufffd")
 
 	// Alice's own key is refused and nothing is written.
 	pk, err := h.svc.EnsurePlatformKey(h.ctx)
@@ -241,6 +261,16 @@ func TestReconcileStoresKeyFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, files, got.Facts.KeyFiles)
 
+	// A NUL in a path or a user (a hostile server) drops that entry; the scan is stored.
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{SSHD: sshdRead, ReadFiles: []string{deployFile}, KeyFiles: []providers.UserKeyFiles{
+		{OSUser: "deploy", Files: []string{deployFile, "/home/deploy/\x00.ssh"}}, {OSUser: "bad\x00user", Files: []string{"/x"}}}})
+	require.NoError(t, err)
+	got, err = h.svc.GetTarget(h.ctx, web.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []providers.UserKeyFiles{{OSUser: "deploy", Files: []string{deployFile}}}, got.Facts.KeyFiles)
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{SSHD: sshdRead, KeyFiles: files, ReadFiles: []string{deployFile}})
+	require.NoError(t, err)
+
 	// A certificates-only result knows nothing about SSH: the earlier files stay.
 	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK})
 	require.NoError(t, err)
@@ -310,6 +340,18 @@ func TestListSSHKeysShowsGeneratedKeysWithoutLocations(t *testing.T) {
 	assert.Equal(t, 1, items[0].LocationCount)
 	assert.Equal(t, 1, items[0].TargetCount)
 	assert.Len(t, list(inventory.KeyFilter{TargetID: tg.ID}), 1)
+
+	// A generated key whose every location is missing stays in the default list (it is still Alice's key), flagged
+	// missing; its own comment stays searchable while it has locations.
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_key_locations SET missing_since = now() WHERE ssh_key_id = $1", key)
+	require.NoError(t, err)
+	items = list(inventory.KeyFilter{})
+	require.Len(t, items, 1)
+	assert.True(t, items[0].Missing)
+	assert.Equal(t, 1, items[0].LocationCount)
+	assert.Len(t, list(inventory.KeyFilter{Query: "ci-deploy"}), 1, "found by the key's own comment even with a location")
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE ssh_key_locations SET missing_since = NULL WHERE ssh_key_id = $1", key)
+	require.NoError(t, err)
 
 	// A discovered key whose every location is missing stays hidden without IncludeMissing.
 	now := h.clock.Now()

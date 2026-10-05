@@ -42,18 +42,37 @@ BEGIN
         RAISE EXCEPTION 'a private key''s identity cannot change' USING ERRCODE = 'Z1009';
     END IF;
     IF NEW.destroyed_at IS NOT NULL THEN
-        -- Destruction: the envelope goes (the CHECK requires NULLs), the counters stay.
+        -- Destruction: the envelope goes (the CHECK requires NULLs), the counters stay, and only the private
+        -- key of a retired key goes (R41 row 23, ruling S5): a live key's envelope is never destroyed.
         IF NEW.download_count <> OLD.download_count OR NEW.last_downloaded_at IS DISTINCT FROM OLD.last_downloaded_at THEN
             RAISE EXCEPTION 'a destruction changes nothing but the envelope' USING ERRCODE = 'Z1009';
         END IF;
+        IF NOT EXISTS (SELECT 1 FROM public.ssh_keys k WHERE k.private_key_id = NEW.id AND k.retired_at IS NOT NULL) THEN
+            RAISE EXCEPTION 'only the private key of a retired key is destroyed' USING ERRCODE = 'Z1009';
+        END IF;
         RETURN NEW;
     END IF;
-    IF NEW.ciphertext IS DISTINCT FROM OLD.ciphertext OR NEW.nonce IS DISTINCT FROM OLD.nonce
-            OR NEW.wrapped_dek IS DISTINCT FROM OLD.wrapped_dek OR NEW.key_version IS DISTINCT FROM OLD.key_version THEN
-        RAISE EXCEPTION 'a private key''s envelope cannot be replaced' USING ERRCODE = 'Z1009';
+    IF NEW.ciphertext IS DISTINCT FROM OLD.ciphertext OR NEW.nonce IS DISTINCT FROM OLD.nonce THEN
+        RAISE EXCEPTION 'a private key''s payload cannot be replaced' USING ERRCODE = 'Z1009';
+    END IF;
+    -- The master-key re-wrap (SEC-041/042) changes the wrapped DEK and the key version together, upwards, and
+    -- never the payload (ciphertext, nonce).
+    IF NEW.wrapped_dek IS DISTINCT FROM OLD.wrapped_dek OR NEW.key_version IS DISTINCT FROM OLD.key_version THEN
+        IF NEW.wrapped_dek IS NOT DISTINCT FROM OLD.wrapped_dek OR NEW.key_version IS NOT DISTINCT FROM OLD.key_version
+                OR NEW.key_version < OLD.key_version THEN
+            RAISE EXCEPTION 'a re-wrap changes the wrapped key and the key version together, upwards' USING ERRCODE = 'Z1009';
+        END IF;
     END IF;
     IF NEW.download_count < OLD.download_count OR NEW.download_count > OLD.download_count + 1 THEN
         RAISE EXCEPTION 'a download counts one' USING ERRCODE = 'Z1009';
+    END IF;
+    -- The download time moves only with the count, forwards.
+    IF NEW.last_downloaded_at IS DISTINCT FROM OLD.last_downloaded_at
+            OR NEW.download_count = OLD.download_count + 1 THEN
+        IF NEW.download_count <> OLD.download_count + 1 OR NEW.last_downloaded_at IS NULL
+                OR (OLD.last_downloaded_at IS NOT NULL AND NEW.last_downloaded_at < OLD.last_downloaded_at) THEN
+            RAISE EXCEPTION 'the download time changes only with the count, forwards' USING ERRCODE = 'Z1009';
+        END IF;
     END IF;
     RETURN NEW;
 END $$;
@@ -72,6 +91,27 @@ ALTER TABLE ssh_keys ADD CONSTRAINT ssh_keys_managed_has_private_key CHECK (mana
 ALTER TABLE ssh_keys ADD CONSTRAINT ssh_keys_managed_is_not_platform CHECK (NOT (managed AND is_platform_key));
 ALTER TABLE ssh_keys ADD CONSTRAINT ssh_keys_label_length CHECK (char_length(label) <= 100);
 CREATE INDEX ssh_keys_rotated_from ON ssh_keys (rotated_from) WHERE rotated_from IS NOT NULL;
+
+-- A generated key's private key is an SSH-owned one that still exists; a retired key whose private key was
+-- destroyed is not un-retired (ruling S5: the key is then gone for good).
+-- +goose StatementBegin
+CREATE FUNCTION ssh_keys_guard() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.private_key_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.managed_private_keys p
+                WHERE p.id = NEW.private_key_id AND p.owner_type = 'ssh_key' AND p.destroyed_at IS NULL) THEN
+            RAISE EXCEPTION 'a generated key''s private key is a live SSH private key' USING ERRCODE = 'Z1014';
+        END IF;
+    ELSIF OLD.retired_at IS NOT NULL AND NEW.retired_at IS NULL AND NEW.private_key_id IS NOT NULL
+            AND EXISTS (SELECT 1 FROM public.managed_private_keys p WHERE p.id = NEW.private_key_id AND p.destroyed_at IS NOT NULL) THEN
+        RAISE EXCEPTION 'a key whose private key was destroyed is not un-retired' USING ERRCODE = 'Z1014';
+    END IF;
+    RETURN NEW;
+END $$;
+-- +goose StatementEnd
+CREATE TRIGGER ssh_keys_guard BEFORE INSERT OR UPDATE OF retired_at ON ssh_keys
+    FOR EACH ROW EXECUTE FUNCTION ssh_keys_guard();
 
 -- One policy per live key (§13.6 item 10). It follows the key: a completed rotation moves ssh_key_id
 -- to the new key. enabled implies a next run (R41 row 12). preview_mailed_at bounds on-demand preview
@@ -105,7 +145,9 @@ SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
     platform_fp text;
 BEGIN
-    IF NEW.deleted_at IS NOT NULL THEN
+    -- A deleted policy, and a policy switched off on its own key, are not checked (an off policy of a retired key
+    -- must stay switchable); an insert, a move to another key and switching on are.
+    IF NEW.deleted_at IS NOT NULL OR (TG_OP = 'UPDATE' AND NOT NEW.enabled AND NEW.ssh_key_id = OLD.ssh_key_id) THEN
         RETURN NEW;
     END IF;
     SELECT public_info->>'fingerprint' INTO platform_fp FROM public.credentials WHERE purpose = 'platform_ssh';
@@ -116,12 +158,14 @@ BEGIN
     RETURN NEW;
 END $$;
 -- +goose StatementEnd
-CREATE TRIGGER rotation_policies_key_check BEFORE INSERT OR UPDATE OF ssh_key_id, deleted_at ON rotation_policies
+CREATE TRIGGER rotation_policies_key_check BEFORE INSERT OR UPDATE OF ssh_key_id, deleted_at, enabled ON rotation_policies
     FOR EACH ROW EXECUTE FUNCTION rotation_policies_check_key();
 
 -- One rotation run (§7.4; R41 rows 17-22). plan is the public preview (no secret: lines carry public keys
 -- and options only); plan_digest is what a start must match. paused_license is the lock flag (L-83..L-86);
 -- removal_allowed is set only on entering removing_old, which needs verified_at (old-key rule).
+-- The database enforces the state machine (rotations_guard below): an insert is a preview, a finished run
+-- never changes, the keys of a run are fixed, a status change follows the edges of C8.
 CREATE TABLE rotations (
     id                   uuid PRIMARY KEY,
     policy_id            uuid NOT NULL REFERENCES rotation_policies (id),
@@ -155,13 +199,13 @@ CREATE TABLE rotations (
     created_at           timestamptz NOT NULL,
     updated_at           timestamptz NOT NULL,
     version              integer NOT NULL DEFAULT 1 CHECK (version >= 1),
-    CHECK (status <> 'removing_old' OR removal_allowed),
-    CHECK (NOT removal_allowed OR (verified_at IS NOT NULL AND new_ssh_key_id IS NOT NULL)),
-    CHECK (new_ssh_key_id IS DISTINCT FROM old_ssh_key_id),
-    CHECK (status IN ('dry_run_notified', 'cancelled') OR new_ssh_key_id IS NOT NULL),
-    CHECK (paused_license = (paused_at IS NOT NULL)),
-    CHECK (awaiting_decision = (decision_due_at IS NOT NULL)),
-    CHECK ((status IN ('completed', 'aborted', 'needs_attention', 'cancelled')) = (finished_at IS NOT NULL))
+    CONSTRAINT rotations_removing_needs_allowed CHECK (status <> 'removing_old' OR removal_allowed),
+    CONSTRAINT rotations_allowed_needs_verified CHECK (NOT removal_allowed OR (verified_at IS NOT NULL AND new_ssh_key_id IS NOT NULL)),
+    CONSTRAINT rotations_new_differs CHECK (new_ssh_key_id IS DISTINCT FROM old_ssh_key_id),
+    CONSTRAINT rotations_new_key_set CHECK (status IN ('dry_run_notified', 'cancelled') OR new_ssh_key_id IS NOT NULL),
+    CONSTRAINT rotations_paused_pair CHECK (paused_license = (paused_at IS NOT NULL)),
+    CONSTRAINT rotations_decision_pair CHECK (awaiting_decision = (decision_due_at IS NOT NULL)),
+    CONSTRAINT rotations_finished_pair CHECK ((status IN ('completed', 'aborted', 'needs_attention', 'cancelled')) = (finished_at IS NOT NULL))
 );
 CREATE UNIQUE INDEX rotations_one_live_per_key ON rotations (old_ssh_key_id)
     WHERE status NOT IN ('completed', 'aborted', 'needs_attention', 'cancelled');
@@ -169,9 +213,13 @@ CREATE UNIQUE INDEX rotations_one_live_per_policy ON rotations (policy_id)
     WHERE status NOT IN ('completed', 'aborted', 'needs_attention', 'cancelled');
 CREATE INDEX rotations_live ON rotations (status) WHERE status NOT IN ('completed', 'aborted', 'needs_attention', 'cancelled');
 
--- One location of the old key in a run (§13.6 items 3-6; R41 rows 19, 27, 29). The CHECKs carry the
--- old-key rule: nothing is "removing" or "removed" without a verified and freshly re-verified new key,
--- and the re-verification is at most 15 minutes before the removal was sent.
+-- One location of the old key in a run (§13.6 items 3-6; R41 rows 19, 27, 29). The CHECKs and the trigger
+-- below carry the old-key rule: nothing is "removing" or "removed" without a verified and freshly
+-- re-verified new key, and the re-verification is at most 15 minutes before the removal was sent.
+-- Freshness is relative to the application's own times by design: the application clock is injected (tests
+-- and the harness jump it), so the database never reads now(); it refuses unrelated or stale-looking values
+-- (the re-check is the column the removal relied on, it is not older than the verification, the removal
+-- follows it by at most 15 minutes).
 CREATE TABLE rotation_locations (
     id                uuid PRIMARY KEY,
     rotation_id       uuid NOT NULL REFERENCES rotations (id),
@@ -194,7 +242,7 @@ CREATE TABLE rotation_locations (
     verified_at       timestamptz,
     reverified_at     timestamptz,                 -- the latest fresh login before a removal
     remove_op_id      uuid,
-    remove_verified_at timestamptz,                -- the fresh login the latest removal send relied on
+    remove_verified_at timestamptz,                -- the fresh login the latest removal send relied on (= reverified_at then)
     remove_sent_at    timestamptz,
     removed_at        timestamptz,
     undo_op_id        uuid,
@@ -204,38 +252,237 @@ CREATE TABLE rotation_locations (
     updated_at        timestamptz NOT NULL,
     UNIQUE (rotation_id, n),
     UNIQUE (rotation_id, old_location_id),
-    CHECK (state <> 'skipped' OR skip_reason <> ''),
-    CHECK (state NOT IN ('removing', 'removed') OR (verified_at IS NOT NULL AND remove_verified_at IS NOT NULL
-                                                    AND remove_sent_at IS NOT NULL AND remove_op_id IS NOT NULL)),
-    CHECK (remove_sent_at IS NULL OR (remove_verified_at IS NOT NULL AND remove_verified_at <= remove_sent_at
-                                      AND remove_verified_at >= remove_sent_at - interval '15 minutes')),
-    CHECK (remove_verified_at IS NULL OR verified_at IS NOT NULL),
-    CHECK (removed_at IS NULL OR state = 'removed'),
-    CHECK (state NOT IN ('undoing', 'undone', 'undo_failed') OR add_sent_at IS NOT NULL),
-    CHECK (verified_at IS NULL OR add_sent_at IS NOT NULL)
+    CONSTRAINT rotation_locations_skipped_reason CHECK (state <> 'skipped' OR skip_reason <> ''),
+    CONSTRAINT rotation_locations_removing_columns CHECK (state NOT IN ('removing', 'removed') OR (verified_at IS NOT NULL
+        AND reverified_at IS NOT NULL AND remove_verified_at IS NOT NULL AND remove_sent_at IS NOT NULL AND remove_op_id IS NOT NULL)),
+    -- The removal columns come together; the login it relied on is the re-check, not older than the original
+    -- verification, not after the send, and at most 15 minutes before it.
+    CONSTRAINT rotation_locations_remove_together CHECK ((remove_op_id IS NULL) = (remove_sent_at IS NULL)
+        AND (remove_sent_at IS NULL) = (remove_verified_at IS NULL)),
+    CONSTRAINT rotation_locations_removal_fresh CHECK (remove_sent_at IS NULL OR (verified_at IS NOT NULL AND reverified_at IS NOT NULL
+        AND remove_verified_at >= verified_at AND remove_verified_at <= reverified_at AND remove_verified_at <= remove_sent_at
+        AND remove_verified_at >= remove_sent_at - interval '15 minutes')),
+    CONSTRAINT rotation_locations_removed_pair CHECK ((state = 'removed') = (removed_at IS NOT NULL)),
+    -- added <= verified <= re-checked, removal sent <= removed, undo after the add
+    CONSTRAINT rotation_locations_times CHECK ((add_sent_at IS NULL OR verified_at IS NULL OR verified_at >= add_sent_at)
+        AND (verified_at IS NULL OR reverified_at IS NULL OR reverified_at >= verified_at)
+        AND (remove_sent_at IS NULL OR removed_at IS NULL OR removed_at >= remove_sent_at)
+        AND (add_sent_at IS NULL OR undo_sent_at IS NULL OR undo_sent_at >= add_sent_at)),
+    CONSTRAINT rotation_locations_recheck_needs_verified CHECK (reverified_at IS NULL OR verified_at IS NOT NULL),
+    CONSTRAINT rotation_locations_undo_needs_add CHECK (state NOT IN ('undoing', 'undone', 'undo_failed') OR add_sent_at IS NOT NULL),
+    CONSTRAINT rotation_locations_verified_needs_add CHECK (verified_at IS NULL OR add_sent_at IS NOT NULL)
 );
 CREATE INDEX rotation_locations_target ON rotation_locations (target_id);
 
--- A location may become "removing" only while its run is removing_old (and so removal_allowed), and
--- never for the platform key's fingerprint. Rows of a finished run do not change.
+-- The run guard. Lock order for every transaction that touches a run (the stores of Tasks 8, 9, 11):
+-- the run row FOR UPDATE first, then the targets (ascending id), then the location rows; the location trigger
+-- below takes the run FOR SHARE, which a transaction that already holds the run FOR UPDATE passes at once.
+-- Rules: an insert is a preview (dry_run_notified, no key chosen yet) of a policy's own live generated key;
+-- a finished run never changes; the policy and the old key never change; the new key is set once, from NULL,
+-- to a generated key that rotated_from the old one and is not Alice's own; removal_allowed rises only on the
+-- edge overlap -> removing_old; verified_at is set once; a status change is an edge of C8; a run ends only
+-- when none of its locations has a send in flight (and a completed run has no location still to remove).
+-- +goose StatementBegin
+CREATE FUNCTION rotations_guard() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+    finished constant text[] := ARRAY['completed', 'aborted', 'needs_attention', 'cancelled'];
+    platform_fp text;
+    pol record;
+    k record;
+BEGIN
+    SELECT c.public_info->>'fingerprint' INTO platform_fp FROM public.credentials c WHERE c.purpose = 'platform_ssh';
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.status <> 'dry_run_notified' OR NEW.new_ssh_key_id IS NOT NULL OR NEW.removal_allowed OR NEW.paused_license
+                OR NEW.awaiting_decision OR NEW.started_at IS NOT NULL OR NEW.verified_at IS NOT NULL OR NEW.overlap_until IS NOT NULL
+                OR NEW.finished_at IS NOT NULL OR NEW.kept_count <> 0 OR NEW.result_code <> '' THEN
+            RAISE EXCEPTION 'a rotation starts as a preview' USING ERRCODE = 'Z1013';
+        END IF;
+        SELECT p.ssh_key_id, p.deleted_at INTO pol FROM public.rotation_policies p WHERE p.id = NEW.policy_id;
+        IF NOT FOUND OR pol.deleted_at IS NOT NULL OR pol.ssh_key_id <> NEW.old_ssh_key_id THEN
+            RAISE EXCEPTION 'a rotation replaces the key of its live policy' USING ERRCODE = 'Z1013';
+        END IF;
+        SELECT s.managed, s.is_platform_key, s.retired_at, s.fingerprint_sha256 INTO k FROM public.ssh_keys s WHERE s.id = NEW.old_ssh_key_id;
+        IF NOT FOUND OR NOT k.managed OR k.is_platform_key OR k.retired_at IS NOT NULL
+                OR k.fingerprint_sha256 IS NOT DISTINCT FROM platform_fp THEN
+            RAISE EXCEPTION 'only a live key Alice generated is rotated, never Alice''s own key' USING ERRCODE = 'Z1013';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF OLD.status = ANY (finished) THEN
+        RAISE EXCEPTION 'a finished rotation cannot change' USING ERRCODE = 'Z1013';
+    END IF;
+    IF NEW.id <> OLD.id OR NEW.policy_id <> OLD.policy_id OR NEW.old_ssh_key_id <> OLD.old_ssh_key_id THEN
+        RAISE EXCEPTION 'a rotation''s policy and old key are fixed' USING ERRCODE = 'Z1013';
+    END IF;
+    IF OLD.new_ssh_key_id IS NOT NULL AND NEW.new_ssh_key_id IS DISTINCT FROM OLD.new_ssh_key_id THEN
+        RAISE EXCEPTION 'the new key of a rotation is chosen once' USING ERRCODE = 'Z1013';
+    END IF;
+    IF OLD.new_ssh_key_id IS NULL AND NEW.new_ssh_key_id IS NOT NULL THEN
+        SELECT s.managed, s.is_platform_key, s.retired_at, s.fingerprint_sha256, s.rotated_from INTO k
+          FROM public.ssh_keys s WHERE s.id = NEW.new_ssh_key_id;
+        IF NOT FOUND OR NOT k.managed OR k.is_platform_key OR k.retired_at IS NOT NULL OR k.rotated_from IS DISTINCT FROM NEW.old_ssh_key_id
+                OR k.fingerprint_sha256 IS NOT DISTINCT FROM platform_fp THEN
+            RAISE EXCEPTION 'the new key is a generated key that replaces the old one, never Alice''s own key' USING ERRCODE = 'Z1013';
+        END IF;
+    END IF;
+    IF OLD.verified_at IS NOT NULL AND NEW.verified_at IS DISTINCT FROM OLD.verified_at THEN
+        RAISE EXCEPTION 'the verification time of a rotation is set once' USING ERRCODE = 'Z1013';
+    END IF;
+    IF NEW.removal_allowed IS DISTINCT FROM OLD.removal_allowed
+            AND NOT (NEW.removal_allowed AND OLD.status = 'overlap' AND NEW.status = 'removing_old') THEN
+        RAISE EXCEPTION 'removal is allowed only on entering removing_old from the overlap' USING ERRCODE = 'Z1013';
+    END IF;
+    IF NEW.status <> OLD.status AND NOT (CASE OLD.status
+            WHEN 'dry_run_notified' THEN NEW.status IN ('adding_new', 'cancelled')
+            WHEN 'adding_new' THEN NEW.status IN ('overlap', 'verifying_new', 'rolling_back')
+            WHEN 'verifying_new' THEN NEW.status IN ('overlap', 'rolling_back')
+            WHEN 'overlap' THEN NEW.status IN ('removing_old', 'rolling_back')
+            WHEN 'removing_old' THEN NEW.status IN ('completed', 'needs_attention')
+            WHEN 'rolling_back' THEN NEW.status IN ('aborted', 'needs_attention')
+            ELSE false END) THEN
+        RAISE EXCEPTION 'this status change is not an edge of the rotation' USING ERRCODE = 'Z1013';
+    END IF;
+    IF NEW.status = ANY (finished) AND NEW.status <> OLD.status THEN
+        IF EXISTS (SELECT 1 FROM public.rotation_locations l WHERE l.rotation_id = NEW.id AND l.state IN ('adding', 'removing', 'undoing'))
+                OR (NEW.status = 'completed' AND EXISTS (SELECT 1 FROM public.rotation_locations l
+                    WHERE l.rotation_id = NEW.id AND l.state IN ('planned', 'added', 'verified'))) THEN
+            RAISE EXCEPTION 'a rotation ends when none of its locations is still to change' USING ERRCODE = 'Z1013';
+        END IF;
+    END IF;
+    RETURN NEW;
+END $$;
+-- +goose StatementEnd
+CREATE TRIGGER rotations_guard BEFORE INSERT OR UPDATE ON rotations
+    FOR EACH ROW EXECUTE FUNCTION rotations_guard();
+
+-- The location guard (the old-key rule and the C8 location table; SQLSTATE Z1011). The run is read FOR SHARE:
+-- a concurrent change of the run (finishing it, leaving removing_old) waits for this row's transaction and the
+-- other way round, so no location changes under a run that has just left the state the change needed.
+-- Rules: a row is inserted only into a previewed run, as planned, skipped or cancelled, with no add, verify,
+-- removal or undo column set, for a location of the run's old key (same target, user and path); a status
+-- change is an edge of the location table (below); skipped, cancelled, removed, remove_failed, undone and
+-- undo_failed never change again; the removal columns change only while the row is removing, together, and
+-- every row that is or becomes removing (or removed) passes the old-key gate: the run is removing_old with
+-- removal_allowed; neither key is Alice's own (platform fingerprint, is_platform_key, the connection key's
+-- locations); the verification (verified_at, add_sent_at) is the one the row already had; the re-check is not
+-- older than the verification or an earlier re-check and is the login the removal relied on
+-- (remove_verified_at = reverified_at); a re-send keeps remove_op_id and does not go back in time.
 -- +goose StatementBegin
 CREATE FUNCTION rotation_locations_guard() RETURNS trigger LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
-    run_status text;
-    allowed boolean;
+    finished constant text[] := ARRAY['completed', 'aborted', 'needs_attention', 'cancelled'];
+    run record;
+    loc record;
+    old_key record;
+    new_key record;
     platform_fp text;
-    old_fp text;
 BEGIN
-    SELECT r.status, r.removal_allowed, k.fingerprint_sha256 INTO run_status, allowed, old_fp
-      FROM public.rotations r JOIN public.ssh_keys k ON k.id = r.old_ssh_key_id WHERE r.id = NEW.rotation_id;
-    IF TG_OP = 'UPDATE' AND run_status IN ('completed', 'aborted', 'needs_attention', 'cancelled') THEN
+    SELECT r.status, r.removal_allowed, r.old_ssh_key_id, r.new_ssh_key_id INTO run
+      FROM public.rotations r WHERE r.id = NEW.rotation_id FOR SHARE OF r;
+    IF NOT FOUND OR run.status = ANY (finished) THEN
         RAISE EXCEPTION 'a finished rotation''s locations cannot change' USING ERRCODE = 'Z1011';
     END IF;
-    IF NEW.state = 'removing' AND (TG_OP = 'INSERT' OR OLD.state <> 'removing') THEN
-        SELECT public_info->>'fingerprint' INTO platform_fp FROM public.credentials WHERE purpose = 'platform_ssh';
-        IF run_status <> 'removing_old' OR NOT allowed OR old_fp = platform_fp THEN
+
+    IF TG_OP = 'INSERT' THEN
+        IF run.status <> 'dry_run_notified' OR NEW.state NOT IN ('planned', 'skipped', 'cancelled')
+                OR NEW.add_op_id IS NOT NULL OR NEW.add_sent_at IS NOT NULL OR NEW.added_line_no IS NOT NULL
+                OR NEW.new_location_id IS NOT NULL OR NEW.verified_at IS NOT NULL OR NEW.reverified_at IS NOT NULL
+                OR NEW.remove_op_id IS NOT NULL OR NEW.remove_verified_at IS NOT NULL OR NEW.remove_sent_at IS NOT NULL
+                OR NEW.removed_at IS NOT NULL OR NEW.undo_op_id IS NOT NULL OR NEW.undo_sent_at IS NOT NULL THEN
+            RAISE EXCEPTION 'a location starts planned, skipped or cancelled in a previewed rotation' USING ERRCODE = 'Z1011';
+        END IF;
+        SELECT l.ssh_key_id, l.target_id, l.os_user, l.file_path INTO loc FROM public.ssh_key_locations l WHERE l.id = NEW.old_location_id;
+        IF NOT FOUND OR loc.ssh_key_id <> run.old_ssh_key_id OR loc.target_id <> NEW.target_id OR loc.os_user <> NEW.os_user
+                OR loc.file_path <> NEW.file_path THEN
+            RAISE EXCEPTION 'a location is a place of the old key' USING ERRCODE = 'Z1011';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF NEW.id <> OLD.id OR NEW.rotation_id <> OLD.rotation_id OR NEW.n <> OLD.n OR NEW.old_location_id <> OLD.old_location_id
+            OR NEW.target_id <> OLD.target_id OR NEW.os_user <> OLD.os_user OR NEW.file_path <> OLD.file_path THEN
+        RAISE EXCEPTION 'the identity of a rotation location cannot change' USING ERRCODE = 'Z1011';
+    END IF;
+    IF OLD.state IN ('skipped', 'cancelled', 'removed', 'remove_failed', 'undone', 'undo_failed') THEN
+        RAISE EXCEPTION 'a location that ended does not change' USING ERRCODE = 'Z1011';
+    END IF;
+    IF NEW.state <> OLD.state AND NOT (CASE OLD.state
+            WHEN 'planned' THEN NEW.state IN ('adding', 'cancelled', 'add_failed')
+            WHEN 'adding' THEN NEW.state IN ('added', 'add_failed', 'verified', 'unverifiable', 'verify_failed', 'undoing')
+            WHEN 'added' THEN NEW.state IN ('verified', 'unverifiable', 'verify_failed', 'undoing')
+            WHEN 'verified' THEN NEW.state IN ('removing', 'remove_failed', 'kept_old', 'undoing')
+            WHEN 'unverifiable' THEN NEW.state IN ('kept_old', 'undoing')
+            WHEN 'verify_failed' THEN NEW.state = 'undoing'
+            WHEN 'add_failed' THEN NEW.state = 'undoing'
+            WHEN 'kept_old' THEN NEW.state = 'undoing'
+            WHEN 'removing' THEN NEW.state IN ('removed', 'remove_failed')
+            WHEN 'undoing' THEN NEW.state IN ('undone', 'undo_failed')
+            ELSE false END) THEN
+        RAISE EXCEPTION 'this state change is not an edge of the location table' USING ERRCODE = 'Z1011';
+    END IF;
+
+    -- A new location belongs to the run's new key and is the same place.
+    IF NEW.new_location_id IS DISTINCT FROM OLD.new_location_id THEN
+        IF OLD.new_location_id IS NOT NULL OR run.new_ssh_key_id IS NULL THEN
+            RAISE EXCEPTION 'the new location is recorded once, for the new key' USING ERRCODE = 'Z1011';
+        END IF;
+        SELECT l.ssh_key_id, l.target_id, l.os_user, l.file_path INTO loc FROM public.ssh_key_locations l WHERE l.id = NEW.new_location_id;
+        IF NOT FOUND OR loc.ssh_key_id <> run.new_ssh_key_id OR loc.target_id <> NEW.target_id OR loc.os_user <> NEW.os_user
+                OR loc.file_path <> NEW.file_path THEN
+            RAISE EXCEPTION 'the new location is a place of the new key' USING ERRCODE = 'Z1011';
+        END IF;
+    END IF;
+
+    -- The removal columns move only with a removal that is sent.
+    IF NEW.remove_op_id IS DISTINCT FROM OLD.remove_op_id OR NEW.remove_verified_at IS DISTINCT FROM OLD.remove_verified_at
+            OR NEW.remove_sent_at IS DISTINCT FROM OLD.remove_sent_at THEN
+        IF NEW.state <> 'removing' THEN
+            RAISE EXCEPTION 'the removal columns change only while the location is removing' USING ERRCODE = 'Z1011';
+        END IF;
+    END IF;
+
+    IF NEW.state IN ('removing', 'removed') THEN
+        -- The old-key gate.
+        IF run.status <> 'removing_old' OR NOT run.removal_allowed THEN
             RAISE EXCEPTION 'the old key may be removed only while its rotation is removing it' USING ERRCODE = 'Z1011';
+        END IF;
+        SELECT c.public_info->>'fingerprint' INTO platform_fp FROM public.credentials c WHERE c.purpose = 'platform_ssh';
+        SELECT s.fingerprint_sha256 AS fp, s.is_platform_key AS plat INTO old_key FROM public.ssh_keys s WHERE s.id = run.old_ssh_key_id;
+        SELECT s.fingerprint_sha256 AS fp, s.is_platform_key AS plat INTO new_key FROM public.ssh_keys s WHERE s.id = run.new_ssh_key_id;
+        IF old_key.fp IS NULL OR new_key.fp IS NULL OR old_key.plat OR new_key.plat
+                OR old_key.fp IS NOT DISTINCT FROM platform_fp OR new_key.fp IS NOT DISTINCT FROM platform_fp
+                OR EXISTS (SELECT 1 FROM public.ssh_key_locations l WHERE l.id IN (NEW.old_location_id, NEW.new_location_id)
+                           AND l.is_alice_connection_key) THEN
+            RAISE EXCEPTION 'Alice''s own key is never removed, nor replaced by a key of Alice''s own' USING ERRCODE = 'Z1011';
+        END IF;
+        -- The verification is the one the row already had; the login is read from NEW only for the re-check.
+        IF OLD.verified_at IS NULL OR NEW.verified_at IS DISTINCT FROM OLD.verified_at OR NEW.add_sent_at IS DISTINCT FROM OLD.add_sent_at THEN
+            RAISE EXCEPTION 'a removal relies on a verification the location already had' USING ERRCODE = 'Z1011';
+        END IF;
+        IF NEW.state = 'removed' THEN
+            -- Finishing: the send columns stay as they were.
+            IF NEW.remove_op_id IS DISTINCT FROM OLD.remove_op_id OR NEW.remove_verified_at IS DISTINCT FROM OLD.remove_verified_at
+                    OR NEW.remove_sent_at IS DISTINCT FROM OLD.remove_sent_at OR NEW.removed_at IS NULL THEN
+                RAISE EXCEPTION 'a finished removal keeps the send it relied on' USING ERRCODE = 'Z1011';
+            END IF;
+        ELSE
+            IF NEW.reverified_at IS NULL OR (OLD.reverified_at IS NOT NULL AND NEW.reverified_at < OLD.reverified_at) THEN
+                RAISE EXCEPTION 'a removal needs a re-check that does not go back in time' USING ERRCODE = 'Z1011';
+            END IF;
+            IF OLD.state <> 'removing' OR NEW.remove_sent_at IS DISTINCT FROM OLD.remove_sent_at THEN
+                -- A send (the first, or a re-send): the login it relied on is the re-check, a new op id only for the first.
+                IF NEW.remove_sent_at IS NULL OR NEW.remove_op_id IS NULL OR NEW.remove_verified_at IS DISTINCT FROM NEW.reverified_at
+                        OR (OLD.state = 'removing' AND (NEW.remove_op_id IS DISTINCT FROM OLD.remove_op_id
+                                                        OR NEW.remove_sent_at < OLD.remove_sent_at))
+                        OR (OLD.state <> 'removing' AND OLD.remove_sent_at IS NOT NULL) THEN
+                    RAISE EXCEPTION 'a removal is sent on the re-check it relied on' USING ERRCODE = 'Z1011';
+                END IF;
+            ELSIF NEW.remove_op_id IS DISTINCT FROM OLD.remove_op_id OR NEW.remove_verified_at IS DISTINCT FROM OLD.remove_verified_at THEN
+                RAISE EXCEPTION 'a removal''s send columns change together' USING ERRCODE = 'Z1011';
+            END IF;
         END IF;
     END IF;
     RETURN NEW;
@@ -292,10 +539,14 @@ DROP TABLE rotation_steps;
 DROP TRIGGER rotation_locations_guard ON rotation_locations;
 DROP FUNCTION rotation_locations_guard();
 DROP TABLE rotation_locations;
+DROP TRIGGER rotations_guard ON rotations;
+DROP FUNCTION rotations_guard();
 DROP TABLE rotations;
 DROP TRIGGER rotation_policies_key_check ON rotation_policies;
 DROP FUNCTION rotation_policies_check_key();
 DROP TABLE rotation_policies;
+DROP TRIGGER ssh_keys_guard ON ssh_keys;
+DROP FUNCTION ssh_keys_guard();
 DROP INDEX ssh_keys_rotated_from;
 ALTER TABLE ssh_keys DROP CONSTRAINT ssh_keys_label_length, DROP CONSTRAINT ssh_keys_managed_is_not_platform,
     DROP CONSTRAINT ssh_keys_managed_has_private_key;

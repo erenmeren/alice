@@ -210,16 +210,22 @@ func TestCompleteSigningRequestForADiscoveredCertificate(t *testing.T) {
 	// Another request whose certificate Alice already holds with a key: refused, the request stays open.
 	again, err := h.svc.CreateCSR(h.ctx, admin, inventory.CSRInput{CommonName: "www.example.test", KeyType: "ecdsa-p256"})
 	require.NoError(t, err)
-	// The fixture rewrites an identity column, which managed_private_keys_guard (00010) refuses to anybody:
-	// the owner switches the guard off for this one statement.
-	for _, stmt := range []string{
-		"ALTER TABLE managed_private_keys DISABLE TRIGGER managed_private_keys_guard",
-		"UPDATE managed_private_keys SET public_key_sha256 = (SELECT public_key_sha256 FROM certificates) WHERE id = (SELECT private_key_id FROM csr_requests WHERE id = '" + again.ID.String() + "')",
-		"ALTER TABLE managed_private_keys ENABLE TRIGGER managed_private_keys_guard",
+	// The fixture rewrites an identity column, which managed_private_keys_guard (00010) refuses to anybody: the
+	// owner switches the guard off for this one statement, in one transaction.
+	tx, err := h.db.Owner.Begin(h.ctx)
+	require.NoError(t, err)
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		{"ALTER TABLE managed_private_keys DISABLE TRIGGER managed_private_keys_guard", nil},
+		{"UPDATE managed_private_keys SET public_key_sha256 = (SELECT public_key_sha256 FROM certificates) WHERE id = (SELECT private_key_id FROM csr_requests WHERE id = $1)", []any{again.ID}},
+		{"ALTER TABLE managed_private_keys ENABLE TRIGGER managed_private_keys_guard", nil},
 	} {
-		_, err = h.db.Owner.Exec(h.ctx, stmt)
+		_, err = tx.Exec(h.ctx, stmt.sql, stmt.args...)
 		require.NoError(t, err)
 	}
+	require.NoError(t, tx.Commit(h.ctx))
 	_, _, err = h.svc.CompleteCSR(h.ctx, admin, again.ID, string(signed.FullchainPEM), "")
 	require.ErrorIs(t, err, inventory.ErrCertificateDuplicate)
 	got, err := h.svc.GetCSR(h.ctx, again.ID)

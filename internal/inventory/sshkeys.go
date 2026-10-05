@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -212,7 +213,7 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL A
 			sshd := res.SSHD
 			f.SSHD, f.HostKeys, f.Warnings, f.Unreadable = &sshd, res.HostKeys, res.Warnings, res.UnreadableLines
 			f.UID0Users = append([]string(nil), res.UID0Users...)
-			f.KeyFiles = slices.Clone(res.KeyFiles)
+			f.KeyFiles = cleanKeyFiles(res.KeyFiles)
 		}
 		// The certificate half (D19: after the SSH facts, before they are stored). Only a usable
 		// configuration's certificates are stored; any other Nginx result (invalid, untrusted or
@@ -497,10 +498,13 @@ WHERE (l.id IS NOT NULL OR (k.managed AND $1::uuid IS NULL AND $2::text = '' AND
   AND ($2::text = '' OR l.os_user = $2)
   AND ($3::text = ''
        OR translate(k.fingerprint_sha256, 'ABCDEFGHIJKLMNOPQRSTUVWXYZİı', 'abcdefghijklmnopqrstuvwxyzii') LIKE $3 ESCAPE '\'
-       OR translate(coalesce(l.comment, k.key_comment), 'ABCDEFGHIJKLMNOPQRSTUVWXYZİı', 'abcdefghijklmnopqrstuvwxyzii') LIKE $3 ESCAPE '\'
+       OR translate(l.comment, 'ABCDEFGHIJKLMNOPQRSTUVWXYZİı', 'abcdefghijklmnopqrstuvwxyzii') LIKE $3 ESCAPE '\'
+       OR translate(k.key_comment, 'ABCDEFGHIJKLMNOPQRSTUVWXYZİı', 'abcdefghijklmnopqrstuvwxyzii') LIKE $3 ESCAPE '\'
        OR translate(k.key_type, 'ABCDEFGHIJKLMNOPQRSTUVWXYZİı', 'abcdefghijklmnopqrstuvwxyzii') LIKE $3 ESCAPE '\')
   AND ($4::text = '' OR $4 = ANY (l.flags))
-  AND ($5::boolean OR l.id IS NULL OR (l.missing_since IS NULL AND l.removed_by_alice_at IS NULL))
+  AND ($5::boolean OR l.id IS NULL OR (l.missing_since IS NULL AND l.removed_by_alice_at IS NULL)
+       OR (k.managed AND NOT EXISTS (SELECT 1 FROM ssh_key_locations x JOIN targets xt ON xt.id = x.target_id AND xt.deleted_at IS NULL
+                                     WHERE x.ssh_key_id = k.id AND x.missing_since IS NULL AND x.removed_by_alice_at IS NULL)))
   AND ($6::timestamptz IS NULL OR (k.first_seen_at, k.id) > ($6::timestamptz, $7::uuid))
 GROUP BY k.id
 ORDER BY k.first_seen_at, k.id
@@ -563,4 +567,45 @@ FROM ssh_keys WHERE id = $1`, id).Scan(&k.ID, &k.Fingerprint, &k.KeyType, &k.Bit
 	}
 	k.LocationCount, k.TargetCount = len(k.Locations), len(targets)
 	return k, nil
+}
+
+// Bounds of the key files a scan reports (the provider's own: 200 users, 8 files per user).
+const (
+	maxKeyFileUsers = 200
+	maxKeyFiles     = 8
+	maxKeyFileLen   = 4096
+	maxKeyFileUser  = 64
+)
+
+// cleanKeyFiles makes the key files of a scan storable and safe to offer later: an entry whose text clean() would
+// change (invalid UTF-8, NUL), that holds a control character, a user that is empty or too long, a path that
+// is not absolute or too long is dropped (a NUL must not fail the scan's jsonb); the lists are capped.
+func cleanKeyFiles(in []providers.UserKeyFiles) []providers.UserKeyFiles {
+	var out []providers.UserKeyFiles
+	for _, u := range in {
+		if len(out) == maxKeyFileUsers {
+			break
+		}
+		if !plainText(u.OSUser, maxKeyFileUser) {
+			continue
+		}
+		var files []string
+		for _, f := range u.Files {
+			if len(files) == maxKeyFiles {
+				break
+			}
+			if plainText(f, maxKeyFileLen) && strings.HasPrefix(f, "/") {
+				files = append(files, f)
+			}
+		}
+		if len(files) > 0 {
+			out = append(out, providers.UserKeyFiles{OSUser: u.OSUser, Files: files})
+		}
+	}
+	return out
+}
+
+// plainText: 1 to limit bytes of valid UTF-8 without control characters (clean leaves it as it is).
+func plainText(s string, limit int) bool {
+	return s != "" && len(s) <= limit && clean(s) == s && !strings.ContainsFunc(s, unicode.IsControl)
 }
