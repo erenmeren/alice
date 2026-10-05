@@ -320,6 +320,158 @@ waiting to start when the license locked is held as "On hold for the license" un
 discards it after the next license is installed. A discarded deployment ends **cancelled** (`ALC-DEP-0022`): nothing
 was sent, the website keeps its certificate, and no failure email is sent.
 
+## Key Vaults
+
+**Key Vaults** lists the Azure Key Vaults Alice watches, with their address, status, sign-in method and last
+successful check. How an Azure administrator gives Alice access (identity, roles, network) and how a vault is added
+is in [azure-setup.md](azure-setup.md). Adding a vault, replacing its credentials, switching automatic deployment on
+or off, releasing a held version and importing a certificate are for administrators with a fresh authenticator
+code, never for API tokens. Connecting websites, **Deploy now** of a version that is not held, **Check now** and the
+access check are for administrators and operators. Everyone can read. Each vault counts as one target of the
+license.
+
+### Status of a vault
+
+| Status | Meaning |
+|---|---|
+| **Connected** | The last check signed in and read the certificate list. |
+| **Partly working** (or **No permission to read certificates**) | Alice reaches the vault only in part: a role is missing, the vault firewall refuses Alice, or Azure asked Alice to slow down in three checks in a row. The page shows the reason; with a firewall refusal also **Alice's address as the vault saw it**. |
+| **Credentials refused** (or **Credentials expired**) | Azure refused the sign-in. Choose **Replace credentials**. Alice keeps checking, at most once an hour, and emails the administrators once, at the third failed sign-in in a row. |
+| **Cannot reach Azure** | No connection to Azure or the vault (network, DNS, an unknown vault, an untrusted certificate). Alice tries again at the next check. |
+
+Alice checks each vault every 15 minutes by default (**Check every (minutes)** on the vault's page, 5 to 1440,
+administrators). A check that fails makes the next one wait longer (twice, then four times the interval, at most an
+hour or the interval if that is longer). **Check now** queues a check at once; at most two vault checks run at the
+same time for the whole installation. **Access check** (**Check again**) signs in and reads the first page of each
+list; with **Also test deployment access** it also reads one exportable certificate's secret once, discards it and
+records the read in the audit log. Import access is never tested in advance.
+
+### What Alice shows of a vault
+
+- **Certificates**: name, current version, expiry and state: **Monitor only** (the private key cannot be exported,
+  so Alice can never deploy it), **New version found**, **Held**, **Connected websites**, **Disabled in Key
+  Vault**, **Details not read yet**, and **Removed from Key Vault** for a certificate that is no longer listed (it
+  stays in the list; recovering it in Azure brings it back at the next check). **New version found** is a hint the
+  browser computes: the current version was created in Azure after Alice first saw the certificate, within the last
+  seven days.
+- **Keys**: type, size or curve, expiry, whether enabled, and whether the key belongs to a certificate (**Managed**).
+- **Secrets**: content type, expiry, enabled and managed. Alice never reads or shows a secret's value.
+
+A certificate's page shows its policy (whether the key is exportable, issuer, whether Key Vault renews it), every
+version Alice has seen, newest first (thumbprint, validity, enabled, when Alice found it, held), and **Connected
+websites**. Alice reads the details of a certificate's current version only; an older version that was never
+current while Alice watched is listed without details and cannot be deployed. A check reads at most 5000
+certificates, 5000 keys and 10,000 secrets, and the details of 100 changed certificates (the rest at the next
+check); a larger vault is shown incomplete.
+
+When a deployment reads a certificate's secret and finds no private key in it, Alice marks the certificate
+**Monitor only** and the deployment fails with `ALC-AKV-0016`; later requests are refused with `ALC-AKV-0013`. A
+later check that finds the key exportable again (usually a new version with **Exportable private key** on) removes
+the mark.
+
+### Connecting websites
+
+On a certificate's page choose **Connect websites** and tick the Nginx websites that should use it (only websites
+whose key type matches are offered; 1 to 200). A certificate has one connection, and a website follows at most one
+vault certificate. Alice refuses a connection for a certificate whose key is not exportable, whose current version
+it has not read yet, or that is disabled or removed. Connecting changes nothing on the websites; it does not check
+that Alice may read the private key (**Check deploy access** on the connection reads the certificate's secret once
+to check it).
+
+**Remove website** takes one website out of the connection; **Delete connection** releases all of them. Neither
+changes anything on the servers; deployments to a released website that are still waiting stop, and one that is
+already running finishes. Adding websites to a connection that deploys automatically needs an administrator.
+
+### Automatic deployment
+
+**Automatic deployment** starts off for every connection. When an administrator switches it on, Alice deploys new
+versions by itself under these rules:
+
+- Only the certificate's **current** (newest) version, and only one that Alice found after automatic deployment was
+  switched on and that Azure created after that moment (when Azure gives a creation time). A version that misses this rule is never deployed by
+  itself; Alice emails once ("… is not deployed automatically").
+- Never a version that is held, disabled, expired, not yet valid, with a key that cannot be exported, or that ends
+  earlier than the certificate the website already serves (Alice emails once for each such version), and never a
+  version whose certificate chain is incomplete (it is held, see below).
+- At most **five** unfinished automatic deployments per connection at a time; nothing for a website while another
+  deployment of it is unfinished or when it already serves the version.
+- After a failed deployment, the next attempt for that website comes **one hour** later at the earliest.
+- After **three** failed deployments of the version, Alice stops its automatic deployment for the connection
+  ("Stopped after 3 failures") and emails once. Fix the cause, then use **Deploy now**. A newer version starts a new
+  round by itself.
+
+Alice plans once a minute, so a new version found by a check is deployed about a minute later. Automatic
+deployments are ordinary deployments (see [Deploying a certificate](#deploying-a-certificate)) with one more first
+step, **Read the certificate from Key Vault**: Alice reads the secret of that exact version (never "the latest")
+and checks it before anything is sent to the server. A failure in that step changes nothing on the server (for
+example `ALC-AKV-0003` when Alice lacks **Key Vault Secrets User**). **Deployment history** shows such deployments
+as "From Key Vault: <vault>". Switching automatic deployment off takes effect at once: queued automatic deployments
+of the connection do not start (`ALC-AKV-0032`).
+
+With automatic deployment off, a connected certificate's new version is only announced by email ("A new version of
+… was found").
+
+### Deploy now
+
+**Deploy now** (on the connection, or in a version's row) deploys one version Alice has read, chosen in the dialog,
+to some or all of the connection's websites, also an older version. All websites or none are queued, as for any
+deployment. An operator cannot deploy a held version or a version whose chain Alice knows is incomplete; the dialog
+says so.
+
+### Incomplete chains
+
+Alice learns a version's chain only when it reads its secret. A version whose chain is incomplete is never deployed
+automatically: the automatic attempt fails with nothing changed and the version is held ("Held because its
+certificate chain is incomplete."). From the first read that finds the chain incomplete, every **Deploy now** of
+that version, held or not, asks an administrator to tick the chain confirmation (`ALC-CRT-0011` otherwise); releasing
+the version does not confirm the chain. The very first manual deployment of a version that was never read is
+accepted and then fails at **Read the certificate from Key Vault** if the chain turns out incomplete. Prefer
+adding the intermediate certificates to the certificate in Key Vault.
+
+### Held versions after a lock
+
+A version that appears while the license is locked, or around the moment a lock ends, is **Held** with the text
+"This version is waiting for an administrator: …"; when websites are connected to the certificate, the
+administrators get one email. Alice never deploys a held
+version by itself, and a check never releases it. An administrator can:
+
+- **Deploy now** (with a fresh code): deploys it to the websites chosen; the version stays held.
+- **Release** (with a fresh code): lifts the hold. The dialog says what follows: for a version held for the
+  license that is the current version of a connection with automatic deployment on, Alice may deploy it by itself,
+  usually within a minute; for other versions held for the license nothing is deployed and you use **Deploy now**. Releasing a version held for its chain asks for the chain confirmation,
+  but automatic deployment still never deploys an incomplete chain: the next automatic attempt (an hour later at the
+  earliest) holds it again, and **Deploy now** asks for the confirmation again.
+
+While the license is locked Alice does not check vaults, **Check now**, **Add Key Vault**, connecting websites,
+**Deploy now** and imports are refused, and automatic deployment plans nothing. Switching automatic deployment off
+and deleting a connection stay possible.
+
+### Importing a certificate into a vault
+
+On a certificate's page in **Certificates** (a certificate whose key is in Alice), an administrator can choose
+**Import into Key Vault**, pick the vault and the certificate's name in the vault (letters, digits and hyphens, up to
+127). The private key leaves Alice and is stored in the vault; the vault needs **Key Vault Certificates Officer**
+(see [azure-setup.md](azure-setup.md#2-roles)). An imported certificate does not renew itself in Key Vault.
+
+If the vault already has a certificate of that name, Alice asks you to confirm that a new version is added: that
+version replaces the certificate's settings in the vault (the vault may stop renewing it), and when websites are
+connected to it, automatic deployment may deploy the imported version.
+
+The import runs in the background and is sent once. Its state is in **Imports into Key Vault** on the certificate's
+page: **Waiting to start**, **Running**, **Imported** (with the version in the vault), **Failed** (with the reason;
+when nothing reached the vault you can try again), **Not confirmed yet** or **Outcome unknown**. **Not confirmed
+yet** means Alice sent the certificate but did not get the vault's answer: Alice never sends it again by itself, the
+next checks of the vault settle it as **Imported** when they see the certificate, and it ends **Outcome unknown**
+after 24 to 72 hours (`ALC-AKV-0026`). Do not import it again while it is shown; look for the certificate in the
+vault instead. Only one import per vault and name runs at a time (`ALC-AKV-0024`).
+
+### Removing a vault
+
+**Remove Key Vault** (administrators) makes Alice forget the vault and what it knows of its certificates, keys and
+secrets, frees its license slot and changes nothing in Azure. A vault with connected websites is refused
+(`ALC-AKV-0020`) unless the administrator chooses **Remove the connections and the vault** (with a fresh code); the
+websites keep the certificate they serve. Imports of the vault that are still open end at once.
+
 ## Master-key rotation and the installation record
 
 Master-key rotation (§7.2 of the design, `alice keys rotate-master`) is not available yet. When it is added it must,
@@ -420,7 +572,11 @@ Periodic work: license evaluation (hourly in every process, retried within minut
 (every minute), audit chain verification (checked every
 hour, run once a day, recorded as `audit.verified` by `scheduler`), clean-up (hourly: expired sessions and setup
 sessions, finished jobs older than 90 days), scheduling of the daily server scans (every minute) and the check for
-interrupted deployments (every minute). Administrators
+interrupted deployments (every minute), and for Key Vaults the queueing of due vault checks with the clean-up of
+imports whose task ended (`kv.schedule`, every minute) and the planning of automatic deployments (`kv.auto_deploy`,
+every minute). A vault check (`kv.poll`) runs once, without a retry and without a dead-job email (its failure is
+shown on the vault, and the next check follows the vault's interval); an access check (`kv.test_connection`) runs
+once; an import (`kv.import`) gets up to 3 attempts and is retried only before it was sent. Administrators
 with an email address get an email when a job stops after its last attempt, when a job was changed in the
 database, and when the daily audit check finds a problem.
 
