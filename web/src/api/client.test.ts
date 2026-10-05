@@ -231,6 +231,11 @@ describe('activity mark (AUD-01)', () => {
     });
   });
 
+  it('accepts the file content type in any letter case', async () => {
+    server.use(http.post('/api/v1/echo', () => new HttpResponse('x', { headers: { 'Content-Type': 'Application/Octet-Stream; charset=binary' } })));
+    await expect(apiFetch<Blob>('/api/v1/echo', { method: 'POST', body: {}, responseType: 'blob' })).resolves.toBeInstanceOf(Blob);
+  });
+
   it('refuses a successful blob answer that is not the file', async () => {
     server.use(http.post('/api/v1/echo', () => HttpResponse.json({ spa: true })));
     await expect(apiFetch<Blob>('/api/v1/echo', { method: 'POST', body: {}, responseType: 'blob' })).rejects.toBeInstanceOf(ApiError);

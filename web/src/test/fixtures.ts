@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw';
+import type { Policy, Preview, PreviewAction, Run, RunLocation } from '../api/rotation';
 import type { ManagedKeyInfo } from '../api/sshkeys';
 import type {
   AccessCheckRow,
@@ -301,6 +302,128 @@ export function managedKeyFixture(o: Partial<ManagedKeyInfo> = {}): ManagedKeyIn
     last_downloaded_at: null,
     policy_id: null,
     open_rotation_id: null,
+    ...o,
+  };
+}
+
+// Phase 6 rotation fixtures. The lines are public key material shaped text, never a private key.
+export const POLICY_ID = '0192e000-0000-7000-8000-0000000000p1';
+export const RUN_ID = '0192e000-0000-7000-8000-0000000000r1';
+
+export function policyFixture(o: Partial<Policy> = {}): Policy {
+  return {
+    id: POLICY_ID,
+    ssh_key_id: '0192b000-0000-7000-8000-0000000000k1',
+    name: 'Quarterly',
+    enabled: false,
+    interval_days: 90,
+    overlap_days: 7,
+    overlap_minutes: 10080,
+    notify_before_hours: 24,
+    new_key_type: 'same',
+    next_run_at: null,
+    open_rotation_id: null,
+    last_run_id: null,
+    last_run_status: null,
+    last_run_result: null,
+    version: 1,
+    created_at: '2026-10-05T08:00:00Z',
+    updated_at: '2026-10-05T08:00:00Z',
+    ...o,
+  };
+}
+
+export function previewActionFixture(o: Partial<PreviewAction> = {}): PreviewAction {
+  return {
+    n: 1,
+    location_id: '0192b000-0000-7000-8000-0000000000l1',
+    target_id: targetFixture.id,
+    target_name: 'web-01',
+    os_user: 'deploy',
+    file_path: '/home/deploy/.ssh/authorized_keys',
+    options: '',
+    skip_reason: '',
+    verify: true,
+    verify_note: '',
+    remove_line: 'ssh-ed25519 AAAAOLDOLDOLD deploy-key',
+    add_line: 'ssh-ed25519 AAAANEWNEWNEW deploy-key',
+    ...o,
+  };
+}
+
+export function previewFixture(o: Partial<Preview> = {}): Preview {
+  return {
+    policy_id: POLICY_ID,
+    ssh_key_id: '0192b000-0000-7000-8000-0000000000k1',
+    fingerprint: 'SHA256:deployDeployDeployDeployDeployDeployDeploy0',
+    plan_digest: 'ab'.repeat(32),
+    planned_for: '2026-10-06T08:00:00Z',
+    new_key_type: 'ed25519',
+    overlap_minutes: 10080,
+    change_count: 1,
+    skip_count: 1,
+    emailed: true,
+    actions: [
+      previewActionFixture(),
+      previewActionFixture({ n: 2, location_id: 'l2', target_name: 'db-01', os_user: 'ops', file_path: '/home/ops/.ssh/authorized_keys', skip_reason: 'target_not_connected', verify: false, add_line: '', remove_line: '' }),
+    ],
+    ...o,
+  };
+}
+
+export function runLocationFixture(o: Partial<RunLocation> = {}): RunLocation {
+  return {
+    id: 'rl1',
+    n: 1,
+    target_id: targetFixture.id,
+    target_name: 'web-01',
+    os_user: 'deploy',
+    file_path: '/home/deploy/.ssh/authorized_keys',
+    options: '',
+    state: 'verified',
+    skip_reason: '',
+    verify_note: '',
+    error: null,
+    backup: '',
+    verified_at: '2026-10-06T08:05:00Z',
+    reverified_at: null,
+    removed_at: null,
+    new_location_id: 'nl1',
+    ...o,
+  };
+}
+
+export function runFixture(o: Partial<Run> = {}): Run {
+  return {
+    id: RUN_ID,
+    policy_id: POLICY_ID,
+    old_ssh_key_id: '0192b000-0000-7000-8000-0000000000k1',
+    new_ssh_key_id: '0192b000-0000-7000-8000-0000000000k2',
+    old_fingerprint: 'SHA256:oldOldOldOldOldOldOldOldOldOldOldOldOld0',
+    new_fingerprint: 'SHA256:newNewNewNewNewNewNewNewNewNewNewNewNew0',
+    trigger: 'manual',
+    status: 'overlap',
+    paused_license: false,
+    awaiting_decision: false,
+    decision_due_at: null,
+    planned_for: '2026-10-06T08:00:00Z',
+    notified_at: '2026-10-06T07:50:00Z',
+    started_at: '2026-10-06T08:00:00Z',
+    verified_at: '2026-10-06T08:05:00Z',
+    overlap_until: '2026-10-13T08:05:00Z',
+    finished_at: null,
+    result: null,
+    plan_digest: 'ab'.repeat(32),
+    new_key_type: 'ed25519',
+    overlap_minutes: 10080,
+    change_count: 1,
+    skip_count: 0,
+    kept_count: 0,
+    actions_allowed: [],
+    location_counts: { total: 1, verified: 1, removed: 0, skipped: 0, kept: 0, failed: 0 },
+    locations: [runLocationFixture()],
+    steps: [],
+    version: 1,
     ...o,
   };
 }

@@ -86,4 +86,12 @@ describe('BlockedJobsPanel', () => {
     await screen.findByTestId('blocked-jobs').catch(() => undefined);
     expect(screen.queryByTestId('blocked-jobs')).not.toBeInTheDocument();
   });
+
+  it('links a held key deployment to its key and a held rotation step to its run', async () => {
+    withJobs([held({ id: 'ja', type: 'sshkey.add', ssh_key_id: 'key-1' }), held({ id: 'jb', type: 'rotation.location', rotation_id: 'run-1' })], []);
+    await renderWithAuth(<BlockedJobsPanel />);
+    const rows = await screen.findAllByTestId('blocked-job');
+    expect(within(rows[0]).getByRole('link', { name: 'Open the SSH key' })).toHaveAttribute('href', '/ssh-keys/key-1');
+    expect(within(rows[1]).getByRole('link', { name: 'Open' })).toHaveAttribute('href', '/rotation/runs/run-1');
+  });
 });

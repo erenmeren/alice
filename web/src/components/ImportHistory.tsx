@@ -1,7 +1,9 @@
 import { Anchor, Button, Code, Stack, Table, Text, Title } from '@mantine/core';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
+import { ApiError } from '../api/client';
 import { listAllTargets } from '../api/endpoints';
 import { listKVImports, type KVImport } from '../api/keyvault';
 import { KV_IMPORTS_KEY, VAULTS_KEY } from '../api/queryKeys';
@@ -28,15 +30,14 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
     queryKey: [...KV_IMPORTS_KEY, 'certificate', certificateId, ids.join(',')],
     enabled: vaults.isSuccess && ids.length > 0,
     initialPageParam: Object.fromEntries(ids.map((id) => [id, null])) as Record<string, string | null>,
-    // One vault that fails (deleted between the two requests, say) does not hide the others: what answered is
-    // shown, and only when every vault failed is the read an error.
+    // One vault that fails does not hide the others: what answered is shown. A vault that is gone (404: deleted between
+    // the two requests) is left out silently; any other failure is reported for that vault, with a way to try again.
     queryFn: async ({ pageParam }) => {
       const open = Object.entries(pageParam);
       const settled = await Promise.allSettled(open.map(async ([id, cursor]) => ({ id, page: await listKVImports(id, certificateId, 50, cursor) })));
       const pages = settled.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
-      const failed = settled.find((r) => r.status === 'rejected');
-      if (pages.length === 0 && failed) throw failed.reason;
-      return { items: pages.flatMap((p) => p.page.items), next: Object.fromEntries(pages.filter((p) => p.page.next_cursor).map((p) => [p.id, p.page.next_cursor])) as Record<string, string | null> };
+      const failed = settled.flatMap((r, i) => (r.status === 'rejected' && !(r.reason instanceof ApiError && r.reason.status === 404) ? [{ id: open[i][0], error: r.reason as unknown }] : []));
+      return { failed, items: pages.flatMap((p) => p.page.items), next: Object.fromEntries(pages.filter((p) => p.page.next_cursor).map((p) => [p.id, p.page.next_cursor])) as Record<string, string | null> };
     },
     getNextPageParam: (last) => (Object.keys(last.next).length > 0 ? last.next : undefined),
     // Follow what is not finished (the existing polling pattern): a running import often, an uncertain one
@@ -47,9 +48,32 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
       return states.includes('uncertain') ? 30_000 : false;
     },
   });
+  // A vault whose read failed is retried alone; what it answers is kept here and merged in.
+  const [recovered, setRecovered] = useState<Record<string, KVImport[]>>({});
+  const [retryErrors, setRetryErrors] = useState<Record<string, unknown>>({});
+  const [retrying, setRetrying] = useState<string | null>(null);
   const names = new Map((vaults.data?.items ?? []).map((v) => [v.id, v.name]));
-  const items = (imports.data?.pages.flatMap((p) => p.items) ?? []).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  const seen = new Set<string>();
+  const items = [...(imports.data?.pages.flatMap((p) => p.items) ?? []), ...Object.values(recovered).flat()]
+    .filter((i) => !seen.has(i.id) && !!seen.add(i.id))
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  const failures = new Map<string, unknown>();
+  for (const page of imports.data?.pages ?? []) for (const f of page.failed) failures.set(f.id, retryErrors[f.id] ?? f.error);
+  for (const id of Object.keys(recovered)) failures.delete(id);
   const error = vaults.error ?? imports.error ?? null;
+  const tryAgain = async (vaultId: string) => {
+    setRetrying(vaultId);
+    try {
+      const page = await listKVImports(vaultId, certificateId, 50, null);
+      setRecovered((r) => ({ ...r, [vaultId]: page.items }));
+      setRetryErrors((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== vaultId)));
+    } catch (e) {
+      // A vault that is gone by now is dropped without a word, as in the first read.
+      if (e instanceof ApiError && e.status === 404) setRecovered((r) => ({ ...r, [vaultId]: [] }));
+      else setRetryErrors((r) => ({ ...r, [vaultId]: e }));
+    }
+    setRetrying(null);
+  };
   if (vaults.isSuccess && ids.length === 0) return null;
   return (
     <Stack gap="sm" data-testid="import-history">
@@ -57,7 +81,18 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
         {t('imports.history.title')}
       </Title>
       <ErrorAlert error={error} />
-      {imports.isSuccess && items.length === 0 && <Text size="sm">{t('imports.history.empty')}</Text>}
+      {[...failures].map(([id, e]) => (
+        <Stack gap={6} key={id} data-testid="import-history-failed">
+          <Text size="sm" style={WRAP}>
+            {t('imports.history.loadFailed', { vault: names.get(id) ?? '' })}
+          </Text>
+          <ErrorAlert error={e} />
+          <Button size="xs" variant="default" w="fit-content" loading={retrying === id} onClick={() => void tryAgain(id)}>
+            {t('imports.history.tryAgain')}
+          </Button>
+        </Stack>
+      ))}
+      {imports.isSuccess && items.length === 0 && failures.size === 0 && <Text size="sm">{t('imports.history.empty')}</Text>}
       {items.length > 0 && (
         <Table.ScrollContainer minWidth={640}>
           <Table striped aria-label={t('imports.history.tableLabel')}>

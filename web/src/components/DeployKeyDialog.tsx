@@ -10,6 +10,7 @@ import type { JobError, Target } from '../api/types';
 import { useAbort } from '../api/useAbort';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
+import { ReasonAlert, noteText } from './rotationText';
 import { fieldErrorsOf } from './fieldErrors';
 import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert, StoppedJobAlert } from './JobErrorAlert';
 
@@ -55,8 +56,9 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
   const [jobError, setJobError] = useState<JobError | null>(null);
   const [blocked, setBlocked] = useState(false);
   const [stopped, setStopped] = useState(false);
-  const [result, setResult] = useState<{ key: string; tone: string } | null>(null);
+  const [result, setResult] = useState<{ key: string; tone: string; note: string } | null>(null);
   const [outcomeKey, setOutcomeKey] = useState('');
+  const [outcomeNote, setOutcomeNote] = useState('');
 
   const targets = useQuery({
     queryKey: [...TARGETS_KEY, 'deploy-servers'],
@@ -100,10 +102,12 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
       void client.invalidateQueries({ queryKey: TARGETS_KEY });
       const known = i18n.exists(`sshKeys.deployResult.${outcome}`);
       if (job.status === 'succeeded') {
-        setResult(known ? { key: `sshKeys.deployResult.${outcome}`, tone: TONE[outcome] ?? 'yellow' } : { key: 'ui.unexpectedError', tone: 'yellow' });
+        const note = typeof job.result.note === 'string' ? noteText(t, i18n, job.result.note) : '';
+        setResult(known ? { key: `sshKeys.deployResult.${outcome}`, tone: TONE[outcome] ?? 'yellow', note } : { key: 'ui.unexpectedError', tone: 'yellow', note });
       } else {
         // A failed job still says what became of the key (undone, or still on the server).
         setOutcomeKey(known ? outcome : '');
+        setOutcomeNote(typeof job.result.note === 'string' ? noteText(t, i18n, job.result.note) : '');
         if (job.status === 'blocked_license') setBlocked(true);
         else if (!job.error) setStopped(true);
         setJobError(job.error);
@@ -119,6 +123,7 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
       <Stack gap="sm">
         <Alert color={result.tone} role="status">
           {t(result.key)}
+          {result.note !== '' && <Text size="sm">{result.note}</Text>}
         </Alert>
         <Group justify="flex-end">
           <Button onClick={onClose}>{t('ui.close')}</Button>
@@ -171,7 +176,8 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
           disabled={busy}
           styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }}
         />
-        {server && files.isSuccess && !user && <Text size="sm">{t('sshKeys.deployNoFiles')}</Text>}
+        {server && files.isSuccess && files.data.refusal && <ReasonAlert error={files.data.refusal} color="yellow" />}
+        {server && files.isSuccess && !files.data.refusal && !user && <Text size="sm">{t('sshKeys.deployNoFiles')}</Text>}
         <TextInput
           label={t('sshKeys.deployFrom')}
           description={t('sshKeys.deployFromHelp')}
@@ -194,8 +200,10 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
         {blocked && <BlockedJobAlert />}
         {stopped && <StoppedJobAlert />}
         {outcomeKey !== '' && (
-          <Alert color={TONE[outcomeKey] ?? 'yellow'} role="status">
+          // A job that failed is never shown as a success, whatever its result says.
+          <Alert color={TONE[outcomeKey] === 'red' ? 'red' : 'yellow'} role="status">
             {t(`sshKeys.deployResult.${outcomeKey}`)}
+            {outcomeNote !== '' && <Text size="sm">{outcomeNote}</Text>}
           </Alert>
         )}
         <JobErrorAlert error={jobError} />

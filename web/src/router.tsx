@@ -17,6 +17,7 @@ import { KVCertificatePage } from './pages/KVCertificatePage';
 import { LicensePage } from './pages/LicensePage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { RotationRunPage } from './pages/RotationRunPage';
 import { RouteErrorPage } from './pages/RouteErrorPage';
 import { TargetDetailPage } from './pages/TargetDetailPage';
 import { TargetsPage } from './pages/TargetsPage';
@@ -68,6 +69,7 @@ export function routes(): RouteObject[] {
             { path: 'deployments/:id', element: <DeploymentDetailPage /> },
             { path: 'ssh-keys', element: <SSHKeysPage /> },
             { path: 'ssh-keys/:id', element: <SSHKeyDetailPage /> },
+            { path: 'rotation/runs/:id', element: <RotationRunPage /> },
             {
               path: 'users',
               element: (

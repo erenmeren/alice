@@ -17,6 +17,11 @@ import {
   platformKeyFixture,
   installedStatus,
   jobFixture,
+  policyFixture,
+  POLICY_ID,
+  previewFixture,
+  runFixture,
+  runLocationFixture,
   sessionFor,
   sessionHandlers,
   sshKeyFixture,
@@ -82,6 +87,28 @@ const dataHandlers = [
   ),
   http.get('/api/v1/targets/:id/host-keys', () => HttpResponse.json({ items: [hostKeyFixture()] })),
   http.get('/api/v1/targets/:id/ssh-keys', () => HttpResponse.json({ items: [keyLocationFixture(), aliceKeyLocation] })),
+  http.get('/api/v1/rotation/runs/:id', () =>
+    HttpResponse.json(
+      runFixture({
+        status: 'verifying_new',
+        paused_license: true,
+        awaiting_decision: true,
+        decision_due_at: '2026-10-20T08:00:00Z',
+        kept_count: 1,
+        actions_allowed: ['continue', 'finish_now', 'keep_old', 'abort'],
+        result: { code: 'ALC-ROT-0010', reason: 'rotation.decision_timeout' },
+        locations: [
+          runLocationFixture({ state: 'unverifiable', verify_note: 'from_option', backup: '/b' }),
+          runLocationFixture({ id: 's', n: 2, state: 'skipped', skip_reason: 'duplicate_lines' }),
+          runLocationFixture({ id: 'u', n: 3, state: 'undo_failed', error: { code: 'ALC-ROT-0018', reason: 'rotation.old_key_gone' } }),
+        ],
+        steps: [
+          { n: 1, location_id: null, name: 'paused', status: 'ok', at: '2026-10-06T08:00:00Z', params: {} },
+          { n: 2, location_id: 'rl1', name: 'late_result', status: 'ok', at: '2026-10-06T08:00:00Z', params: {} },
+        ],
+      }),
+    ),
+  ),
   http.get('/api/v1/ssh-keys', () =>
     HttpResponse.json({
       items: [sshKeyFixture(), sshKeyFixture({ id: 'k9', fingerprint: 'SHA256:aliceAliceAlice', is_platform_key: true, comment: 'alice-platform' })],
@@ -145,7 +172,7 @@ describe.each(['en', 'tr'] as const)('the SSH key dialogs in %s', (lang) => {
       http.get('/api/v1/ssh-keys/:id', () => HttpResponse.json(key)),
       http.post('/api/v1/ssh-keys/:id/actions/deploy', () => HttpResponse.json({ job_id: 'job-d', status_url: '/api/v1/jobs/job-d' }, { status: 202 })),
       http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-d', type: 'sshkey.add', result: { result: 'verified' } }))),
-      http.get('/api/v1/targets/:id/key-files', () => HttpResponse.json({ items: [{ os_user: 'deploy', files: ['/home/deploy/.ssh/authorized_keys'], default_file: '/home/deploy/.ssh/authorized_keys' }], scanned_at: null })),
+      http.get('/api/v1/targets/:id/key-files', () => HttpResponse.json({ items: [{ os_user: 'deploy', files: ['/home/deploy/.ssh/authorized_keys'], default_file: '/home/deploy/.ssh/authorized_keys' }], scanned_at: null, refusal: null })),
       ...dataHandlers,
     );
     await renderRoute(`/ssh-keys/${key.id}`, { languages: [lang] });
@@ -172,6 +199,60 @@ describe.each(['en', 'tr'] as const)('the SSH key dialogs in %s', (lang) => {
     await renderRoute('/ssh-keys', { languages: [lang] });
     await userEvent.click(await screen.findByRole('button', { name: lang === 'en' ? 'Generate key' : 'Anahtar oluştur' }));
     await screen.findByRole('radio', { name: lang === 'en' ? 'Ed25519 (recommended)' : 'Ed25519 (önerilir)' });
+    expectNoRawKeys();
+  });
+});
+
+describe.each(['en', 'tr'] as const)('the rotation panel and its dialogs in %s', (lang) => {
+  it('open the create, edit, preview and delete dialogs with no untranslated keys', async () => {
+    const admin = sessionFor('admin');
+    const key = { ...sshKeyFixture(), managed: true, managed_key: managedKeyFixture({ policy_id: POLICY_ID }), locations: [] };
+    server.use(
+      ...sessionHandlers({ ...admin, user: { ...admin.user, locale: lang } }, installedStatus),
+      http.get('/api/v1/ssh-keys/:id', () => HttpResponse.json(key)),
+      http.get(`/api/v1/rotation/policies/${POLICY_ID}`, () => HttpResponse.json(policyFixture({ enabled: true, next_run_at: '2026-12-01T08:00:00Z', last_run_id: 'r9', last_run_status: 'cancelled', last_run_result: { code: 'ALC-ROT-0017', reason: 'rotation.notice_undelivered' } }))),
+      http.get('/api/v1/rotation/runs', () => HttpResponse.json({ items: [runFixture({ status: 'completed' })], next_cursor: null })),
+      http.post(`/api/v1/rotation/policies/${POLICY_ID}/actions/preview`, () => HttpResponse.json(previewFixture())),
+      ...dataHandlers,
+    );
+    const t = (en: string, tr: string) => (lang === 'en' ? en : tr);
+    await renderRoute(`/ssh-keys/${key.id}`, { languages: [lang] });
+    await screen.findByText(t('Automatic rotation', 'Otomatik yenileme'));
+    expectNoRawKeys();
+    const cancel = t('Cancel', 'İptal');
+    const closeTop = async () => {
+      await userEvent.click(within(screen.getAllByRole('dialog').at(-1) as HTMLElement).getByRole('button', { name: cancel }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    };
+    await userEvent.click(await screen.findByRole('button', { name: t('Edit', 'Düzenle') }));
+    await screen.findByRole('dialog', { name: t('Edit the rotation policy', 'Yenileme kuralını düzenle') });
+    expectNoRawKeys();
+    await closeTop();
+    await userEvent.click(screen.getByRole('button', { name: t('Delete policy', 'Kuralı sil') }));
+    await screen.findByRole('dialog');
+    expectNoRawKeys();
+    await closeTop();
+    await userEvent.click(screen.getByRole('button', { name: t('Preview next run', 'Sonraki çalıştırmayı önizle') }));
+    const preview = await screen.findByRole('dialog', { name: t('Preview of the next run', 'Sonraki çalıştırmanın önizlemesi') });
+    await within(preview).findByText(t('Places that will change: 1', 'Değişecek yer sayısı: 1'));
+    expectNoRawKeys();
+    await userEvent.click(within(preview).getByRole('button', { name: t('Run now', 'Şimdi çalıştır') }));
+    await screen.findByRole('dialog', { name: t('Start this rotation now?', 'Bu yenilemeyi şimdi başlatmak istiyor musunuz?') });
+    expectNoRawKeys();
+  });
+
+  it('opens the create dialog on a key without a policy', async () => {
+    const admin = sessionFor('admin');
+    const key = { ...sshKeyFixture(), managed: true, managed_key: managedKeyFixture(), locations: [] };
+    server.use(
+      ...sessionHandlers({ ...admin, user: { ...admin.user, locale: lang } }, installedStatus),
+      http.get('/api/v1/ssh-keys/:id', () => HttpResponse.json(key)),
+      http.get('/api/v1/rotation/runs', () => HttpResponse.json({ items: [], next_cursor: null })),
+      ...dataHandlers,
+    );
+    await renderRoute(`/ssh-keys/${key.id}`, { languages: [lang] });
+    await userEvent.click(await screen.findByRole('button', { name: lang === 'en' ? 'Create rotation policy' : 'Yenileme kuralı oluştur' }));
+    await screen.findByRole('dialog', { name: lang === 'en' ? 'Create a rotation policy' : 'Yenileme kuralı oluştur' });
     expectNoRawKeys();
   });
 });

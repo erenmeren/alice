@@ -105,6 +105,16 @@ export function BlockedJobsPanel() {
                           {t('deploy.openDeployment')}
                         </InternalLink>
                       )}
+                      {job.ssh_key_id && (
+                        <InternalLink to={`/ssh-keys/${encodeURIComponent(job.ssh_key_id)}`} size="xs">
+                          {t('sshKeys.openKey')}
+                        </InternalLink>
+                      )}
+                      {job.rotation_id && (
+                        <InternalLink to={`/rotation/runs/${encodeURIComponent(job.rotation_id)}`} size="xs">
+                          {t('rotation.openRunLink')}
+                        </InternalLink>
+                      )}
                       {vault && (
                         <InternalLink to={`/key-vaults/${vault}`} size="xs">
                           {t('vaults.openVault')}

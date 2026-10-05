@@ -46,6 +46,7 @@ describe('polling', () => {
       'components/RemoveKeyDialog.tsx',
       'pages/DeploymentDetailPage.tsx',
       'pages/KeyVaultDetailPage.tsx',
+      'pages/RotationRunPage.tsx',
       'pages/TargetDetailPage.tsx',
     ]);
   });

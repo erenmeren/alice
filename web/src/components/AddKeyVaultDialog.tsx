@@ -83,7 +83,7 @@ export function AddKeyVaultDialog({ onClose, onAdded }: { onClose: () => void; o
   // say) is not, so it gets its own text and no role guide.
   const rows = created !== null ? accessRows(access) : [];
   const partly = rows.some((r) => r.result === 'forbidden');
-  const failedCheck = !partly && rows.some((r) => r.result === 'failed');
+  const failedCheck = rows.some((r) => r.result === 'failed');
   const working = phase === 'working';
 
   return (

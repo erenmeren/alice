@@ -12,6 +12,7 @@ import { DeployKeyDialog } from '../components/DeployKeyDialog';
 import { DownloadKeyDialog } from '../components/DownloadKeyDialog';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { KeyFlags } from '../components/KeyFlags';
+import { RotationPolicyPanel } from '../components/RotationPolicyPanel';
 import { RemoveKeyDialog } from '../components/RemoveKeyDialog';
 import { WRAP } from '../components/wrap';
 import { formatDateTime } from '../datetime';
@@ -93,6 +94,7 @@ export function SSHKeyDetailPage() {
           </Group>
         </Stack>
       )}
+      {mk && mk.retired_at === null && <RotationPolicyPanel keyId={id} policyId={mk.policy_id} isAdmin={isAdmin} />}
       {k.is_platform_key && <Text size="sm">{t('sshKeys.noDownloadPlatform')}</Text>}
       <Text size="sm">{t('sshKeys.keyType', { type: k.key_type, bits: k.bits })}</Text>
       <Text size="sm" fw={600}>

@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { SSHKey } from './types';
+import type { ErrorRef, SSHKey } from './types';
 
 export type KeyType = 'ed25519' | 'rsa-3072' | 'rsa-4096' | 'ecdsa-p256';
 export const KEY_TYPES: KeyType[] = ['ed25519', 'rsa-3072', 'rsa-4096', 'ecdsa-p256'];
@@ -9,7 +9,8 @@ export interface ManagedKeyInfo {
   label: string;
   comment: string;
   key_type: KeyType;
-  created_by: string;
+  // created_by is null for a key a rotation generated (Alice itself).
+  created_by: string | null;
   created_at: string;
   retired_at: string | null;
   destroyed_at: string | null;
@@ -27,6 +28,8 @@ export type SSHKeyDetail = SSHKey & { managed_key: ManagedKeyInfo | null };
 export interface KeyFiles {
   items: { os_user: string; files: string[]; default_file: string }[];
   scanned_at: string | null;
+  // refusal says why nothing can be offered on this server (sshkey.connection_files_unknown: scan it again); null when usable.
+  refusal: ErrorRef | null;
 }
 
 export function generateKey(body: { label: string; key_type: KeyType }) {

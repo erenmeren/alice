@@ -61,6 +61,12 @@ export const SCREENS: Screen[] = [
     ready: { en: 'Where this key is used', tr: 'Bu anahtarın kullanıldığı yerler' },
   },
   {
+    path: '/rotation/runs/0192e000-0000-7000-8000-0000000000r1',
+    session: sessionFor('admin'),
+    status: installedStatus,
+    ready: { en: 'Key rotation', tr: 'Anahtar yenileme' },
+  },
+  {
     path: '/certificates',
     session: sessionFor('operator'),
     status: installedStatus,

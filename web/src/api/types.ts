@@ -443,6 +443,9 @@ export interface Job {
   // (optional only so that older fixtures stay valid).
   deployment_id?: string | null;
   import_id?: string | null;
+  // The SSH key of an sshkey.add job and the rotation run of a rotation.location job; null otherwise.
+  ssh_key_id?: string | null;
+  rotation_id?: string | null;
   created_at: string;
   run_at: string;
   started_at: string | null;

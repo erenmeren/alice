@@ -162,7 +162,7 @@ describe('DownloadKeyDialog', () => {
   });
 
   it('shows the error and clears the passphrases but keeps the reason after a refusal', async () => {
-    server.use(http.post(PATH, () => errorResponse(409, 'ALC-KEY-0001', 'sshkey.own_key_protected')));
+    server.use(http.post(PATH, () => errorResponse(409, 'ALC-KEY-0006', 'sshkey.not_managed')));
     const user = userEvent.setup();
     await open();
     await fill(user);

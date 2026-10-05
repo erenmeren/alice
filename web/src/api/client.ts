@@ -142,7 +142,7 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
   if (tookMark && (res.status === 429 || res.status >= 500)) returnActivity();
   if (res.status === 204) return undefined as T;
   // A successful answer is the file only when it says so: an HTML or JSON 200 (a proxy, an SPA fallback) is not a key.
-  const isFile = blob && res.ok && (res.headers.get('Content-Type') ?? '').startsWith('application/octet-stream');
+  const isFile = blob && res.ok && /^application\/octet-stream/i.test(res.headers.get('Content-Type') ?? '');
   if (isFile) {
     try {
       return (await res.blob()) as T;

@@ -223,6 +223,23 @@ describe('AddKeyVaultDialog', () => {
     expect(document.body.textContent).toContain('az role assignment create --role "Key Vault Reader" --assignee ' + CLIENT_ID);
   });
 
+  it('shows both texts, the role text first, when a role is missing and another check failed', async () => {
+    asAdmin();
+    const user = userEvent.setup();
+    const firewall = { code: 'ALC-AKV-0004', reason: 'azure.firewall', params: {} };
+    const mixed = accessFixture({
+      checks: [accessRow('sign_in', 'ok'), accessRow('list_certificates', 'forbidden', 'Key Vault Reader'), accessRow('list_keys', 'ok'), accessRow('list_secrets', 'ok'), accessRow('read_secret', 'failed', '', firewall)],
+    });
+    server.use(http.post('/api/v1/key-vaults', () => HttpResponse.json(created({ access: mixed, target: { ...vaultFixture, status: 'degraded', last_error: firewall } }), { status: 201 })));
+    await renderWithStepUp(<AddKeyVaultDialog onClose={vi.fn()} onAdded={vi.fn()} />);
+    await fillCommon(user);
+    await user.click(screen.getByRole('radio', { name: 'Managed identity' }));
+    await user.click(screen.getByRole('button', { name: 'Add Key Vault' }));
+    const role = await screen.findByText('The vault was added, but Alice is missing a permission. Grant the roles below, then check again.');
+    const check = screen.getByText("The vault was added, but Alice cannot read all of it yet. The access check below shows why. Fix it, then use Check now on the vault's page.");
+    expect(role.compareDocumentPosition(check) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('says a vault behind its firewall was added but cannot be read yet, and offers no roles', async () => {
     asAdmin();
     const user = userEvent.setup();

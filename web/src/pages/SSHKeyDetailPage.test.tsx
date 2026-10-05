@@ -167,6 +167,20 @@ describe('SSHKeyDetailPage', () => {
       expect(await screen.findByRole('link', { name: 'Replaces an earlier key' })).toHaveAttribute('href', '/ssh-keys/old-key-1');
     });
 
+    it('shows the rotation panel on a live key and not on a retired one', async () => {
+      server.use(http.get('/api/v1/rotation/runs', () => HttpResponse.json({ items: [], next_cursor: null })));
+      onKey('operator', managed());
+      const view = await renderRoute(`/ssh-keys/${key.id}`);
+      expect(await screen.findByText('Automatic rotation')).toBeInTheDocument();
+      expect(screen.getByText('No rotation policy. Alice changes this key only when you ask.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Create rotation policy' })).not.toBeInTheDocument();
+      view.unmount();
+      onKey('admin', managed({ retired_at: '2026-10-07T08:00:00Z' }));
+      await renderRoute(`/ssh-keys/${key.id}`);
+      await screen.findByText('Retired');
+      expect(screen.queryByText('Automatic rotation')).not.toBeInTheDocument();
+    });
+
     it('opens the deploy and download dialogs', async () => {
       onKey('admin', managed());
       server.use(

@@ -10,6 +10,7 @@ import { DeployKeyDialog } from './DeployKeyDialog';
 
 const pending = { ...targetFixture, id: 'p-1', name: 'pending-01', status: 'pending_host_key' as const };
 const FILES: KeyFiles = {
+  refusal: null,
   items: [
     { os_user: 'deploy', files: ['/home/deploy/.ssh/authorized_keys', '/home/deploy/.ssh/authorized_keys2'], default_file: '/home/deploy/.ssh/authorized_keys' },
     { os_user: 'alice-svc', files: ['/var/lib/alice-svc/.ssh/authorized_keys'], default_file: '/var/lib/alice-svc/.ssh/authorized_keys' },
@@ -66,7 +67,7 @@ describe('DeployKeyDialog', () => {
   });
 
   it('says so and disables Deploy when there is no key file to offer', async () => {
-    world({ items: [], scanned_at: null });
+    world({ items: [], scanned_at: null, refusal: null });
     await open();
     expect(await screen.findByText("Alice has not found this user's key files yet. Scan the server, then try again.")).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Deploy' })).toBeDisabled();
@@ -121,7 +122,7 @@ describe('DeployKeyDialog', () => {
 
   it('renders hostile user and file names as text', async () => {
     const evil = '<img src=x onerror=alert(1)>';
-    world({ items: [{ os_user: evil, files: ['/tmp/<b>x</b>'], default_file: '/tmp/<b>x</b>' }], scanned_at: null });
+    world({ items: [{ os_user: evil, files: ['/tmp/<b>x</b>'], default_file: '/tmp/<b>x</b>' }], scanned_at: null, refusal: null });
     await open();
     const user = await screen.findByLabelText('User on the server');
     expect(await within(user).findByRole('option', { name: evil })).toBeInTheDocument();
@@ -197,5 +198,31 @@ describe('DeployKeyDialog', () => {
       expect(alert.getAttribute('style')).toContain(`--alert-bg: var(--mantine-color-${color}-light)`);
       expectNoRawKeys();
     });
+  });
+
+  it('shows the refusal of the server instead of an empty list when the connection account files are not known', async () => {
+    world({ items: [], scanned_at: '2026-10-01T08:00:00Z', refusal: { code: 'ALC-KEY-0014', reason: 'sshkey.connection_files_unknown' } });
+    await open();
+    expect(await screen.findByText(/Alice does not know all key files of its connection account/)).toBeInTheDocument();
+    expect(screen.queryByText("Alice has not found this user's key files yet. Scan the server, then try again.")).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deploy' })).toBeDisabled();
+  });
+
+  it('never shows a failed job as a success, even when its result says verified', async () => {
+    world();
+    deployReturns({ status: 'failed', result: { result: 'verified' }, error: { code: 'ALC-KEY-0005', reason: 'sshkey.verify_failed' } });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Deploy' }));
+    const alert = (await screen.findByText('Alice added the key and verified a login with it.')).closest('.mantine-Alert-root') as HTMLElement;
+    expect(alert.getAttribute('style')).toContain('yellow');
+    expect(alert.getAttribute('style')).not.toContain('green');
+  });
+
+  it('shows the note of the job result next to the outcome', async () => {
+    world();
+    deployReturns({ result: { result: 'unverified', note: 'login_unavailable' } });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Deploy' }));
+    expect(await screen.findByText('Alice could not connect to test a login.')).toBeInTheDocument();
   });
 });

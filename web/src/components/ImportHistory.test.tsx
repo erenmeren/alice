@@ -174,4 +174,56 @@ describe('ImportHistory', () => {
     expect(screen.getByText("Key Vault'a içe aktarmalar", { selector: 'h2' })).toBeInTheDocument();
     expectNoRawKeys(screen.getByTestId('import-history'));
   });
+
+  it('keeps the rows of the vaults that answered, names the one that failed with its error and retries only that one', async () => {
+    const queries: string[] = [];
+    let bFails = true;
+    server.use(
+      ...sessionHandlers(sessionFor('operator')),
+      http.get('/api/v1/targets', () => HttpResponse.json({ items: [vaultFixture, vaultWith({ id: 'v2', name: 'Other vault' })], next_cursor: null })),
+      http.get('/api/v1/targets/:id/kv/imports', ({ params }) => {
+        queries.push(String(params.id));
+        if (params.id === 'v2' && bFails) return errorResponse(502, 'ALC-AKV-0001', 'azure.auth_failed');
+        return params.id === 'v2'
+          ? HttpResponse.json({ items: [kvImportFixture({ id: 'i2', target_id: 'v2', name: 'b-name', created_at: '2026-10-04T09:00:00Z' })], next_cursor: null })
+          : HttpResponse.json({ items: [kvImportFixture({ id: 'i1', name: 'a-name' })], next_cursor: null });
+      }),
+    );
+    await renderWithAuth(<ImportHistory certificateId="cert-1" />);
+    expect(await screen.findByText('The import history of Other vault could not be loaded.')).toBeInTheDocument();
+    expect(screen.getByText('a-name')).toBeInTheDocument();
+    expect(screen.getAllByRole('alert')).not.toHaveLength(0);
+    queries.length = 0;
+    bFails = false;
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('b-name')).toBeInTheDocument();
+    expect(queries).toEqual(['v2']);
+    expect(screen.queryByText('The import history of Other vault could not be loaded.')).not.toBeInTheDocument();
+    expect(screen.getByText('a-name')).toBeInTheDocument();
+  });
+
+  it('skips a vault that answers 404 without a word and shows no empty-state when another failed', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('operator')),
+      http.get('/api/v1/targets', () => HttpResponse.json({ items: [vaultFixture, vaultWith({ id: 'v2', name: 'Gone vault' })], next_cursor: null })),
+      http.get('/api/v1/targets/:id/kv/imports', ({ params }) =>
+        params.id === 'v2' ? errorResponse(404, 'ALC-SYS-0001', 'system.not_found') : HttpResponse.json({ items: [kvImportFixture({ id: 'i1', name: 'a-name' })], next_cursor: null }),
+      ),
+    );
+    await renderWithAuth(<ImportHistory certificateId="cert-1" />);
+    expect(await screen.findByText('a-name')).toBeInTheDocument();
+    expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows the failure of a lone vault instead of "never imported"', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('operator')),
+      http.get('/api/v1/targets', () => HttpResponse.json({ items: [vaultFixture], next_cursor: null })),
+      http.get('/api/v1/targets/:id/kv/imports', () => errorResponse(502, 'ALC-AKV-0001', 'azure.auth_failed')),
+    );
+    await renderWithAuth(<ImportHistory certificateId="cert-1" />);
+    expect(await screen.findByText('The import history of Prod vault could not be loaded.')).toBeInTheDocument();
+    expect(screen.queryByText('This certificate was not imported into a Key Vault yet.')).not.toBeInTheDocument();
+  });
 });
