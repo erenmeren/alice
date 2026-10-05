@@ -144,3 +144,82 @@ func TestForgetTargetKeepsALimiterAnotherTargetShares(t *testing.T) {
 	p.ForgetTarget(t2)
 	assert.NotContains(t, p.users["a.vault.azure.net"], t1)
 }
+
+// acquiresWithoutWaiting reports whether one acquire on l returns while the fake clock stands still.
+func acquiresWithoutWaiting(t *testing.T, l *vaultLimiter) bool {
+	t.Helper()
+	errc := make(chan error, 1)
+	go func() {
+		rel, err := l.acquire(context.Background())
+		if err == nil {
+			rel()
+		}
+		errc <- err
+	}()
+	select {
+	case err := <-errc:
+		require.NoError(t, err)
+		return true
+	case <-time.After(time.Second):
+		return false // still waiting for the fake clock; the goroutine ends with the test binary
+	}
+}
+
+// A clock that steps backwards (an NTP step, the e2e POST /test/reset) starts a fresh window: the
+// next call does not wait for the difference between the old schedule and the new "now".
+func TestLimiterSurvivesAClockThatStepsBackwards(t *testing.T) {
+	for name, back := range map[string]time.Duration{"small": 300 * time.Millisecond, "large": 72 * time.Hour} {
+		t.Run(name, func(t *testing.T) {
+			clk := clock.NewFake(time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
+			l := newVaultLimiter(clk, VaultRate, VaultConcurrency)
+			for range VaultRate { // use the burst: the schedule now runs one second ahead of the clock
+				rel, err := l.acquire(context.Background())
+				require.NoError(t, err)
+				rel()
+			}
+			clk.Set(clk.Now().Add(-back))
+			assert.True(t, acquiresWithoutWaiting(t, l), "no wait for the difference")
+			l.mu.Lock()
+			assert.LessOrEqual(t, l.tat.Sub(clk.Now()), l.interval, "the schedule restarted at the new now")
+			l.mu.Unlock()
+			// The fresh window has the configured burst and no more.
+			for range VaultRate - 1 {
+				require.True(t, acquiresWithoutWaiting(t, l))
+			}
+			took, _ := runCalls(t, clk, l, VaultRate, func() {})
+			assert.GreaterOrEqual(t, took, 900*time.Millisecond, "beyond the burst the calls are spaced again")
+		})
+	}
+}
+
+// A forward jump grants no more than the configured burst.
+func TestLimiterForwardJumpGrantsNoExtraBurst(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
+	l := newVaultLimiter(clk, VaultRate, VaultConcurrency)
+	for range VaultRate {
+		rel, err := l.acquire(context.Background())
+		require.NoError(t, err)
+		rel()
+	}
+	clk.Set(clk.Now().Add(24 * time.Hour))
+	for range VaultRate { // the configured burst goes at once
+		require.True(t, acquiresWithoutWaiting(t, l))
+	}
+	took, _ := runCalls(t, clk, l, 2*VaultRate, func() {})
+	assert.GreaterOrEqual(t, took, 1900*time.Millisecond, "beyond the burst the calls are spaced again")
+}
+
+// Callers racing a backwards step never see an unbounded wait, and the concurrency cap holds.
+func TestLimiterBackwardStepWithConcurrentCallers(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
+	l := newVaultLimiter(clk, VaultRate, VaultConcurrency)
+	for range VaultRate {
+		rel, err := l.acquire(context.Background())
+		require.NoError(t, err)
+		rel()
+	}
+	clk.Set(clk.Now().Add(-48 * time.Hour))
+	took, peak := runCalls(t, clk, l, 20, func() { time.Sleep(time.Millisecond) })
+	assert.LessOrEqual(t, took, 4*time.Second)
+	assert.LessOrEqual(t, peak, int32(VaultConcurrency))
+}

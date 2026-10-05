@@ -18,8 +18,9 @@ type vaultLimiter struct {
 	burst    time.Duration // how far ahead of "now" the schedule may run before callers wait
 	slots    chan struct{}
 
-	mu  sync.Mutex
-	tat time.Time // theoretical arrival time of the next request
+	mu   sync.Mutex
+	tat  time.Time // theoretical arrival time of the next request
+	last time.Time // the latest "now" a caller saw, to notice a clock that stepped backwards
 }
 
 func newVaultLimiter(clk clock.Clock, rate, concurrency int) *vaultLimiter {
@@ -35,9 +36,12 @@ func (l *vaultLimiter) acquire(ctx context.Context) (release func(), err error) 
 	}
 	l.mu.Lock()
 	now := l.clk.Now()
-	if l.tat.Before(now) {
+	if l.tat.Before(now) || now.Before(l.last) {
+		// A clock that stepped backwards (an NTP step, the e2e reset) would leave the schedule
+		// in the future and make the next caller wait for the difference: start a fresh window.
 		l.tat = now
 	}
+	l.last = now
 	l.tat = l.tat.Add(l.interval)
 	wait := l.tat.Add(-l.burst).Sub(now)
 	l.mu.Unlock()
