@@ -268,6 +268,7 @@ fuzz-license: ## Fuzz the license parser for 60 s (spec §25.6)
 fuzz-ssh: ## Fuzz the authorized_keys and sshd configuration parsers for 60 s each (spec §25.6)
 	go test -count=1 -run '^$$' -fuzz FuzzParseAuthorizedKeys -fuzztime 60s ./internal/providers/linuxssh/
 	go test -count=1 -run '^$$' -fuzz FuzzParseSSHDConfig -fuzztime 60s ./internal/providers/linuxssh/sshdconf/
+	go test -count=1 -run '^$$' -fuzz FuzzAuthorizedLine -fuzztime 60s ./internal/sshkeys/keymat/
 
 .PHONY: fuzz-nginx
 fuzz-nginx: ## Fuzz the nginx -T parser for 60 s (spec §25.6)

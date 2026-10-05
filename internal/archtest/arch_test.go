@@ -37,11 +37,16 @@ var rules = map[string][]string{
 	// emulated nginx-dump parses configuration text the way the helper does.
 	"alice/internal/providers/linuxssh/linuxsshtest": {platform, "alice/internal/providers/linuxssh/...", "alice/internal/providers/nginx/nginxconf"},
 	"alice/internal/inventory/...":                   {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/..."},
-	"alice/internal/jobs/...":                        {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/..."},
+	"alice/internal/jobs/...":                        {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/..."},
 	"alice/internal/setup/...":                       {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/..."},
 	"alice/internal/api/...": {platform, "alice/internal/i18n/...", "alice/internal/version/...", "alice/internal/rbac/...",
 		"alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/notify/...",
-		"alice/internal/auth/...", "alice/internal/setup/...", "alice/internal/inventory/...", "alice/internal/jobs/...", "alice/internal/providers"},
+		"alice/internal/auth/...", "alice/internal/setup/...", "alice/internal/inventory/...", "alice/internal/jobs/...", "alice/internal/providers", "alice/internal/sshkeys/..."},
+	// SSH key lifecycle (Phase 6). keymat and plan are pure: exact keys win over the subtree rule.
+	"alice/internal/sshkeys/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...",
+		"alice/internal/rbac/...", "alice/internal/providers", "alice/internal/inventory/..."},
+	"alice/internal/sshkeys/keymat": {platform, "alice/internal/secrets/..."},
+	"alice/internal/sshkeys/plan":   {platform, "alice/internal/sshkeys/keymat"},
 	// Test helpers (build tag integration) start PostgreSQL and apply the embedded migrations.
 	"alice/internal/testutil/...": {platform, "alice/migrations"},
 }
@@ -55,6 +60,8 @@ var denied = map[string][]string{
 	"alice/internal/providers":                       {"alice/internal/platform/db/..."},
 	"alice/internal/providers/...":                   {"alice/internal/platform/db/..."},
 	"alice/internal/providers/linuxssh/linuxsshtest": {"alice/internal/platform/db/..."},
+	"alice/internal/sshkeys/keymat":                  {"alice/internal/platform/db/..."},
+	"alice/internal/sshkeys/plan":                    {"alice/internal/platform/db/..."},
 }
 
 // allowed decides whether package pkg may import imp. It is a pure function so
@@ -192,6 +199,18 @@ func TestAllowed(t *testing.T) {
 		{"certs to secrets allowed", "alice/internal/certs", "alice/internal/secrets", true},
 		{"certs to platform/db denied", "alice/internal/certs", "alice/internal/platform/db", false},
 		{"testutil to auth denied", "alice/internal/testutil/pgtest", "alice/internal/auth", false},
+		{"sshkeys to inventory allowed", "alice/internal/sshkeys", "alice/internal/inventory", true},
+		{"sshkeys to jobs denied", "alice/internal/sshkeys", "alice/internal/jobs", false},
+		{"sshkeys to notify denied", "alice/internal/sshkeys", "alice/internal/notify", false},
+		{"sshkeys to api denied", "alice/internal/sshkeys", "alice/internal/api", false},
+		{"plan to keymat allowed", "alice/internal/sshkeys/plan", "alice/internal/sshkeys/keymat", true},
+		{"keymat to platform/db denied", "alice/internal/sshkeys/keymat", "alice/internal/platform/db", false},
+		{"plan to platform/db denied", "alice/internal/sshkeys/plan", "alice/internal/platform/db", false},
+		{"sshkeyjobs to sshkeys allowed", "alice/internal/jobs/sshkeyjobs", "alice/internal/sshkeys", true},
+		{"api to sshkeys allowed", "alice/internal/api", "alice/internal/sshkeys", true},
+		{"inventory to sshkeys denied", "alice/internal/inventory", "alice/internal/sshkeys", false},
+		{"keymat to inventory denied", "alice/internal/sshkeys/keymat", "alice/internal/inventory", false},
+		{"plan to secrets denied", "alice/internal/sshkeys/plan", "alice/internal/secrets", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
