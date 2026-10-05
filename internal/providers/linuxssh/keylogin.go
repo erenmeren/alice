@@ -12,6 +12,9 @@ import (
 // KeyLoginBudget bounds one test login, dial to authentication (spec §13.4: 10 s).
 const KeyLoginBudget = 10 * time.Second
 
+// keyLoginTimeout is the budget in force; tests shorten it.
+var keyLoginTimeout = KeyLoginBudget
+
 // VerifyKeyLogin is the test login of spec §13.4 (R41 row 9): a fresh connection outside the pool,
 // the target's pinned host key required, authenticating as OSUser with only req.Key. No channel is
 // opened and nothing runs; the connection is closed at once. The dial releases the key as soon as
@@ -25,7 +28,7 @@ func (s *session) VerifyKeyLogin(ctx context.Context, req providers.KeyLoginRequ
 	if req.Key == nil || !helperproto.ValidAccount(req.OSUser) {
 		return providers.KeyLoginResult{}, refusedRequest("os_user")
 	}
-	ctx, cancel := context.WithTimeout(ctx, KeyLoginBudget)
+	ctx, cancel := context.WithTimeout(ctx, keyLoginTimeout)
 	defer cancel()
 	cfg := s.cfg
 	cfg.Username = req.OSUser

@@ -306,7 +306,7 @@ func (l *lazyAuth) done() (attempted bool, err error) {
 // the chain to render it ever reaches the original message.
 type credentialError struct{ err error }
 
-func (credentialError) Error() string { return "linuxssh: the platform key could not be used" }
+func (credentialError) Error() string { return "linuxssh: the client key could not be used" }
 
 // Is reports whether the hidden error is target.
 func (c credentialError) Is(target error) bool { return errors.Is(c.err, target) }

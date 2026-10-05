@@ -14,27 +14,56 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"alice/internal/providers"
+	"alice/internal/providers/linuxssh"
+	"alice/internal/providers/linuxssh/helperproto"
 )
 
+// ConnectionAccount is the account Alice signs in with on every modelled target: the world refuses
+// to remove its last key, as the real provider does.
+const ConnectionAccount = linuxssh.ServiceUser
+
+// DefaultLateDelay is how long after its call a FaultLateWrite change lands unless SetLateDelay says
+// otherwise: inside the helper's own budget, because the helper never writes after its deadline.
+const DefaultLateDelay = helperproto.HelperBudget - 5*time.Second
+
 // KeyWorld models authorized_keys files of several targets (C5). A file is identified by its target
-// and path; Put also records which users read it, so a shared file serves all of them (spec §13.3).
+// and path. Put declares which users' logins read a file, so a shared file serves all of them
+// (spec §13.3); nothing else does: an add never extends what a user's login reads, as sshd reads
+// only the user's candidate files.
+//
+// It follows the real provider's rules (see providertest.CheckKeyLifecycle, which runs one script
+// against both): an add or a removal changes a file only as the account the helper resolved it to
+// (the owner), an add to a file the user does not read is refused, cert-authority and unparseable
+// lines are refused on add, a cert-authority line is never removed and never logs anyone in, the
+// last key of the connection account (ConnectionAccount) and of root is not removed (root unless
+// AllowLastRootKey). Not modelled: from= and other options (use FaultRefuse on a login), uid-0
+// accounts other than "root", file size limits and StrictModes.
+//
+// The owner of a shared file is the first user Put for it; the real helper resolves a file to the
+// first account in its scan order (uid ascending, then name), so Put the users of a shared file in
+// that order.
+//
+// The fault decision runs outside the world's lock: it may read the world (Lines, Has, Events).
 type KeyWorld struct {
-	mu     sync.Mutex
-	files  map[worldFile][]string
-	users  map[worldUser][]string // (target, user) -> file paths the user's logins read
-	owners map[worldFile]string   // file -> the user first Put for it: the account the helper resolves it to
-	events []Event
-	fault  func(FaultPoint) Fault
-	n      int
-	now    func() time.Time
-	late   time.Duration
-	queued []lateWrite
+	mu        sync.Mutex
+	files     map[worldFile][]string
+	users     map[worldUser][]string // (target, user) -> file paths the user's logins read
+	owners    map[worldFile]string   // file -> the user first Put for it: the account the helper resolves it to
+	events    []Event
+	fault     func(FaultPoint) Fault
+	n         int
+	now       func() time.Time
+	flushOnly bool // SetClock(nil): late writes land only through FlushLate
+	late      time.Duration
+	queued    []lateWrite
+	landed    int
 }
 
 // lateWrite is a change a stalled call lands after it already answered (FaultLateWrite).
 type lateWrite struct {
 	due   time.Time
-	apply func()
+	p     FaultPoint
+	apply func() bool // reports whether the file changed
 }
 
 type worldFile struct {
@@ -71,28 +100,33 @@ const (
 	FaultHang              // block until ctx ends, then the change does NOT happen and ctx.Err is returned wrapped in ssh.timeout
 	// FaultLateWrite: add/remove: the call fails with ssh.timeout now, nothing has changed yet, and the
 	// change lands once the world's clock (SetClock) has passed the call's time plus the late delay
-	// (SetLateDelay, default one minute): a stalled write that finishes after the caller gave up (S3).
-	// Login: ssh.timeout.
+	// (SetLateDelay, DefaultLateDelay): a stalled write that finishes after the caller gave up (S3).
+	// A world with no clock and no explicit SetClock(nil) panics on the call, so a harness cannot
+	// forget the clock and pass without the write ever landing; PendingLate and LateLanded let a test
+	// assert it did. Login: ssh.timeout.
 	FaultLateWrite
 )
 
-// Event is one recorded call of the world.
+// Event is one recorded call of the world, or (Landed) a late write landing.
 type Event struct {
 	FaultPoint
 	Fault   Fault
 	Changed bool
 	Outcome providers.KeyLoginOutcome // logins
+	// Landed marks the landing of a FaultLateWrite change: N and the rest are those of the call that
+	// stalled, Changed is true.
+	Landed bool
 }
 
-// SetClock sets the world's clock, which dates FaultLateWrite changes. Without one, a late write
-// lands only through FlushLate.
+// SetClock sets the world's clock, which dates FaultLateWrite changes. SetClock(nil) states that
+// late writes land only through FlushLate.
 func (w *KeyWorld) SetClock(now func() time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.now = now
+	w.now, w.flushOnly = now, now == nil
 }
 
-// SetLateDelay sets how long after its call a FaultLateWrite change lands (default one minute).
+// SetLateDelay sets how long after its call a FaultLateWrite change lands (default DefaultLateDelay).
 func (w *KeyWorld) SetLateDelay(d time.Duration) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -103,10 +137,36 @@ func (w *KeyWorld) SetLateDelay(d time.Duration) {
 func (w *KeyWorld) FlushLate() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for _, q := range w.queued {
-		q.apply()
-	}
+	queued := w.queued
 	w.queued = nil
+	for _, q := range queued {
+		w.land(q)
+	}
+}
+
+// PendingLate is the number of late writes that have not landed yet.
+func (w *KeyWorld) PendingLate() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.landLate()
+	return len(w.queued)
+}
+
+// LateLanded is the number of late writes that landed and changed a file.
+func (w *KeyWorld) LateLanded() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.landLate()
+	return w.landed
+}
+
+// land applies one late write and records its landing; the caller holds the lock.
+func (w *KeyWorld) land(q lateWrite) {
+	if !q.apply() {
+		return
+	}
+	w.landed++
+	w.events = append(w.events, Event{FaultPoint: q.p, Fault: FaultLateWrite, Changed: true, Landed: true})
 }
 
 // landLate lands the late writes that are due; the caller holds the lock.
@@ -115,28 +175,35 @@ func (w *KeyWorld) landLate() {
 		return
 	}
 	now := w.now()
-	rest := w.queued[:0]
-	for _, q := range w.queued {
+	var rest []lateWrite
+	due := w.queued
+	for _, q := range due {
 		if now.Before(q.due) {
 			rest = append(rest, q)
-			continue
 		}
-		q.apply()
 	}
 	w.queued = rest
+	for _, q := range due {
+		if !now.Before(q.due) {
+			w.land(q)
+		}
+	}
 }
 
 // queueLate schedules apply for the late delay after now; the caller holds the lock.
-func (w *KeyWorld) queueLate(apply func()) {
+func (w *KeyWorld) queueLate(p FaultPoint, apply func() bool) {
+	if w.now == nil && !w.flushOnly {
+		panic("fake.KeyWorld: FaultLateWrite needs SetClock(clock), or SetClock(nil) to land late writes with FlushLate only")
+	}
 	d := w.late
 	if d == 0 {
-		d = time.Minute
+		d = DefaultLateDelay
 	}
 	var due time.Time
 	if w.now != nil {
 		due = w.now().Add(d)
 	}
-	w.queued = append(w.queued, lateWrite{due: due, apply: apply})
+	w.queued = append(w.queued, lateWrite{due: due, p: p, apply: apply})
 }
 
 // NewKeyWorld returns an empty world without faults.
@@ -146,7 +213,8 @@ func NewKeyWorld() *KeyWorld {
 
 // Put sets a file's lines (verbatim) and records that osUser reads it. The first user put for a file
 // is its owner, the account the real helper resolves it to: changes by any other user are refused
-// (the real provider's owner rule, S10), while every recorded user's login reads it.
+// (the real provider's owner rule, S10), while every recorded user's login reads it. A file that
+// was Put exists, even with no lines.
 func (w *KeyWorld) Put(target uuid.UUID, osUser, file string, lines ...string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -193,16 +261,52 @@ func (w *KeyWorld) SetFault(f func(FaultPoint) Fault) {
 	w.fault = f
 }
 
+// parse reads world lines as the real provider reads a file.
+func parse(lines []string) linuxssh.AuthorizedKeys {
+	ak, _ := linuxssh.ParseAuthorizedKeys([]byte(strings.Join(lines, "\n")))
+	return ak
+}
+
 func lineFingerprint(line string) string {
-	pk, _, _, _, err := ssh.ParseAuthorizedKey([]byte(line))
-	if err != nil {
+	ak := parse([]string{line})
+	if len(ak.Lines) != 1 || ak.Lines[0].Kind != linuxssh.LineKey {
 		return ""
 	}
-	return ssh.FingerprintSHA256(pk)
+	return ak.Lines[0].Fingerprint
+}
+
+func hasOption(l linuxssh.Line, name string) bool {
+	for _, o := range l.Options {
+		k, _, _ := strings.Cut(o, "=")
+		if strings.EqualFold(strings.TrimSpace(k), name) {
+			return true
+		}
+	}
+	return false
 }
 
 func indexOf(lines []string, fp string) int {
-	return slices.IndexFunc(lines, func(l string) bool { return fp != "" && lineFingerprint(l) == fp })
+	if fp == "" {
+		return -1
+	}
+	for i, l := range parse(lines).Lines {
+		if l.Kind == linuxssh.LineKey && l.Fingerprint == fp {
+			return i
+		}
+	}
+	return -1
+}
+
+// without returns lines minus every key line of the fingerprint.
+func without(lines []string, fp string) []string {
+	var out []string
+	for i, l := range parse(lines).Lines {
+		if l.Kind == linuxssh.LineKey && l.Fingerprint == fp {
+			continue
+		}
+		out = append(out, lines[i])
+	}
+	return out
 }
 
 func digest(lines []string) string {
@@ -210,15 +314,19 @@ func digest(lines []string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// begin numbers the call and asks the fault decision, under the lock.
+// begin numbers the call and asks the fault decision. The caller holds the lock; the decision runs
+// with it released, so it may read the world, and the lock is held again on return.
 func (w *KeyWorld) begin(p FaultPoint) (FaultPoint, Fault) {
 	w.landLate()
 	w.n++
 	p.N = w.n
-	f := FaultNone
-	if w.fault != nil {
-		f = w.fault(p)
+	fault := w.fault
+	if fault == nil {
+		return p, FaultNone
 	}
+	w.mu.Unlock()
+	f := fault(p)
+	w.mu.Lock()
 	return p, f
 }
 
@@ -238,16 +346,36 @@ func hang(ctx context.Context) error {
 	return providers.NewError("ssh.timeout", true, ctx.Err(), nil)
 }
 
-// checkOwner mirrors linuxssh's checkOwner: a file the helper resolved to one account refuses a
-// change that names another (a file shared by several users is changed only as its owner).
+func refusedRequest(field string) error {
+	return providers.NewError("ssh.helper_refused", false, nil,
+		map[string]string{"helper_code": helperproto.CodeInvalidArgument, "field": field})
+}
+
+// checkOwner mirrors linuxssh: a file the helper resolved to one account refuses a change that
+// names another, and a file the user does not read (never Put) is refused as a missing file the
+// helper does not list for the user.
 func (w *KeyWorld) checkOwner(file worldFile, osUser string) error {
-	if owner, ok := w.owners[file]; ok && owner != osUser {
-		return providers.NewError("ssh.helper_refused", false, nil, map[string]string{"field": "os_user"})
+	owner, ok := w.owners[file]
+	if !ok || owner != osUser {
+		return refusedRequest("os_user")
 	}
 	return nil
 }
 
-// list returns every parseable line of the target's files as the accounts that read them see it.
+// checkAddLine refuses, before anything is sent, a line that is not exactly one plain key line.
+func checkAddLine(line string) error {
+	if strings.ContainsAny(line, "\r\n") {
+		return refusedRequest("line")
+	}
+	ak := parse([]string{line})
+	if len(ak.Lines) != 1 || ak.Lines[0].Kind != linuxssh.LineKey || hasOption(ak.Lines[0], "cert-authority") {
+		return refusedRequest("line")
+	}
+	return nil
+}
+
+// list returns every parseable line of the target's files as the accounts that read them see it,
+// with the flags and sizes the real discovery sets.
 func (w *KeyWorld) list(target uuid.UUID) []providers.DiscoveredSSHKey {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -262,22 +390,20 @@ func (w *KeyWorld) list(target uuid.UUID) []providers.DiscoveredSSHKey {
 	var out []providers.DiscoveredSSHKey
 	for _, u := range users {
 		for _, file := range w.users[u] {
-			for i, l := range w.files[worldFile{target, file}] {
-				pk, comment, opts, _, err := ssh.ParseAuthorizedKey([]byte(l))
-				if err != nil {
-					continue
-				}
-				out = append(out, providers.DiscoveredSSHKey{OSUser: u.user, FilePath: file, LineNo: i + 1,
-					PublicKey:   strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pk))),
-					Fingerprint: ssh.FingerprintSHA256(pk), KeyType: pk.Type(), Comment: comment,
-					Options: strings.Join(opts, ",")})
-			}
+			keys, _ := parse(w.files[worldFile{target, file}]).Keys(u.user, file)
+			out = append(out, keys...)
 		}
 	}
 	return out
 }
 
 func (w *KeyWorld) add(ctx context.Context, target uuid.UUID, req providers.AuthKeyChange, log providers.StepLogger) (providers.AuthKeyResult, error) {
+	if !helperproto.ValidAccount(req.OSUser) {
+		return providers.AuthKeyResult{}, refusedRequest("os_user")
+	}
+	if err := checkAddLine(req.Line); err != nil {
+		return providers.AuthKeyResult{}, err
+	}
 	fp := lineFingerprint(req.Line)
 	w.mu.Lock()
 	p, f := w.begin(FaultPoint{Method: "AddAuthorizedKey", Target: target, OSUser: req.OSUser, FilePath: req.FilePath, Fingerprint: fp})
@@ -302,15 +428,6 @@ func (w *KeyWorld) add(ctx context.Context, target uuid.UUID, req providers.Auth
 		step(log, "write", providers.StepFailed)
 		w.record(p, f, false, "")
 		return providers.AuthKeyResult{}, providers.NewError("ssh.file_changed", true, nil, map[string]string{"attempts": "3"})
-	case FaultLateWrite:
-		step(log, "write", providers.StepStarted)
-		w.queueLate(func() {
-			if cur := w.files[file]; indexOf(cur, fp) < 0 {
-				w.files[file] = append(slices.Clone(cur), req.Line)
-			}
-		})
-		w.record(p, f, false, "")
-		return providers.AuthKeyResult{}, providers.NewError("ssh.timeout", true, nil, nil)
 	}
 	if err := w.checkOwner(file, req.OSUser); err != nil {
 		w.record(p, f, false, "")
@@ -321,12 +438,20 @@ func (w *KeyWorld) add(ctx context.Context, target uuid.UUID, req providers.Auth
 		return providers.AuthKeyResult{OldSHA256: digest(old), NewSHA256: digest(old), LineNo: i + 1}, nil
 	}
 	step(log, "write", providers.StepStarted)
+	if f == FaultLateWrite {
+		w.queueLate(p, func() bool {
+			cur := w.files[file]
+			if indexOf(cur, fp) >= 0 {
+				return false
+			}
+			w.files[file] = append(slices.Clone(cur), req.Line)
+			return true
+		})
+		w.record(p, f, false, "")
+		return providers.AuthKeyResult{}, providers.NewError("ssh.timeout", true, nil, nil)
+	}
 	next := append(slices.Clone(old), req.Line)
 	w.files[file] = next
-	u := worldUser{target, req.OSUser}
-	if !slices.Contains(w.users[u], req.FilePath) {
-		w.users[u] = append(w.users[u], req.FilePath)
-	}
 	res := providers.AuthKeyResult{Changed: true, OldSHA256: digest(old), NewSHA256: digest(next), LineNo: len(next), Verified: true,
 		Backup: "/var/lib/alice-helper/backups/" + req.OperationID.String()}
 	w.record(p, f, true, "")
@@ -342,6 +467,12 @@ func (w *KeyWorld) remove(ctx context.Context, target uuid.UUID, req providers.A
 		return providers.AuthKeyResult{}, providers.NewError("sshkey.own_key_protected", false, nil,
 			map[string]string{"reason": "protected_fingerprint"})
 	}
+	if !helperproto.ValidAccount(req.OSUser) {
+		return providers.AuthKeyResult{}, refusedRequest("os_user")
+	}
+	if req.Fingerprint == "" {
+		return providers.AuthKeyResult{}, refusedRequest("fingerprint")
+	}
 	w.mu.Lock()
 	p, f := w.begin(FaultPoint{Method: "RemoveAuthorizedKey", Target: target, OSUser: req.OSUser, FilePath: req.FilePath, Fingerprint: req.Fingerprint})
 	if f == FaultHang {
@@ -351,7 +482,7 @@ func (w *KeyWorld) remove(ctx context.Context, target uuid.UUID, req providers.A
 	}
 	defer w.mu.Unlock()
 	file := worldFile{target, req.FilePath}
-	old := w.files[file]
+	old, exists := w.files[file]
 	step(log, "precheck", providers.StepOK)
 	switch f {
 	case FaultRefuse:
@@ -365,25 +496,52 @@ func (w *KeyWorld) remove(ctx context.Context, target uuid.UUID, req providers.A
 		step(log, "write", providers.StepFailed)
 		w.record(p, f, false, "")
 		return providers.AuthKeyResult{}, providers.NewError("ssh.file_changed", true, nil, map[string]string{"attempts": "3"})
-	case FaultLateWrite:
-		step(log, "write", providers.StepStarted)
-		w.queueLate(func() {
-			w.files[file] = slices.DeleteFunc(slices.Clone(w.files[file]), func(l string) bool { return lineFingerprint(l) == req.Fingerprint })
-		})
+	}
+	if !exists {
 		w.record(p, f, false, "")
-		return providers.AuthKeyResult{}, providers.NewError("ssh.timeout", true, nil, nil)
+		return providers.AuthKeyResult{OldSHA256: helperproto.AbsentSHA256, NewSHA256: helperproto.AbsentSHA256}, nil
 	}
 	if err := w.checkOwner(file, req.OSUser); err != nil {
 		w.record(p, f, false, "")
 		return providers.AuthKeyResult{}, err
 	}
-	next := slices.DeleteFunc(slices.Clone(old), func(l string) bool { return lineFingerprint(l) == req.Fingerprint })
+	for _, l := range parse(old).Lines {
+		if l.Kind == linuxssh.LineKey && l.Fingerprint == req.Fingerprint && hasOption(l, "cert-authority") {
+			w.record(p, f, false, "")
+			return providers.AuthKeyResult{}, providers.NewError("sshkey.not_removable", false, nil, map[string]string{"reason": "cert_authority"})
+		}
+	}
+	next := without(old, req.Fingerprint)
 	removed := len(old) - len(next)
 	if removed == 0 {
 		w.record(p, f, false, "")
 		return providers.AuthKeyResult{OldSHA256: digest(old), NewSHA256: digest(old)}, nil
 	}
+	if parse(next).CountKeys() == 0 {
+		if req.OSUser == ConnectionAccount {
+			w.record(p, f, false, "")
+			return providers.AuthKeyResult{}, providers.NewError("sshkey.own_key_protected", false, nil,
+				map[string]string{"reason": "last_key_of_connection_account"})
+		}
+		if !req.AllowLastRootKey && w.owners[file] == "root" {
+			w.record(p, f, false, "")
+			return providers.AuthKeyResult{}, providers.NewError("sshkey.last_root_key", false, nil, nil)
+		}
+	}
 	step(log, "write", providers.StepStarted)
+	if f == FaultLateWrite {
+		w.queueLate(p, func() bool {
+			cur := w.files[file]
+			after := without(cur, req.Fingerprint)
+			if len(after) == len(cur) {
+				return false
+			}
+			w.files[file] = after
+			return true
+		})
+		w.record(p, f, false, "")
+		return providers.AuthKeyResult{}, providers.NewError("ssh.timeout", true, nil, nil)
+	}
 	w.files[file] = next
 	res := providers.AuthKeyResult{Changed: true, Removed: removed, OldSHA256: digest(old), NewSHA256: digest(next), Verified: true,
 		Backup: "/var/lib/alice-helper/backups/" + req.OperationID.String()}
@@ -395,9 +553,12 @@ func (w *KeyWorld) remove(ctx context.Context, target uuid.UUID, req providers.A
 	return res, nil
 }
 
+// login decides a test login: accepted when a plain (not cert-authority) line of one of the files
+// req.OSUser's login reads holds the offered key. The real sshd also applies from= and the other
+// options to Alice's address; the world does not (inject FaultRefuse for that).
 func (w *KeyWorld) login(ctx context.Context, target uuid.UUID, req providers.KeyLoginRequest) (providers.KeyLoginResult, error) {
-	if req.OSUser == "" || req.Key == nil {
-		return providers.KeyLoginResult{}, providers.NewError("ssh.helper_refused", false, nil, map[string]string{"field": "os_user"})
+	if req.OSUser == "" || req.Key == nil || !helperproto.ValidAccount(req.OSUser) {
+		return providers.KeyLoginResult{}, refusedRequest("os_user")
 	}
 	s, release, err := req.Key.SSHSigner(ctx)
 	if err != nil {
@@ -428,10 +589,13 @@ func (w *KeyWorld) login(ctx context.Context, target uuid.UUID, req providers.Ke
 		return providers.KeyLoginResult{}, providers.NewError("ssh.timeout", true, nil, nil)
 	}
 	out := providers.KeyLoginRefused
+files:
 	for _, file := range w.users[worldUser{target, req.OSUser}] {
-		if indexOf(w.files[worldFile{target, file}], fp) >= 0 {
-			out = providers.KeyLoginAccepted
-			break
+		for _, l := range parse(w.files[worldFile{target, file}]).Lines {
+			if l.Kind == linuxssh.LineKey && l.Fingerprint == fp && !hasOption(l, "cert-authority") {
+				out = providers.KeyLoginAccepted
+				break files
+			}
 		}
 	}
 	w.record(p, f, false, out)

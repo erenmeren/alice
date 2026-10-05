@@ -460,6 +460,10 @@ func (s *session) VerifyKeyLogin(ctx context.Context, req providers.KeyLoginRequ
 	if err := ctx.Err(); err != nil {
 		return providers.KeyLoginResult{}, providers.NewError("ssh.timeout", true, err, nil)
 	}
+	if req.OSUser == "" {
+		// every provider refuses an empty request before anything is sent
+		return providers.KeyLoginResult{}, providers.NewError("ssh.helper_refused", false, nil, map[string]string{"field": "os_user"})
+	}
 	if cfg.World != nil {
 		return cfg.World.login(ctx, s.target, req)
 	}

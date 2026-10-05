@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"alice/internal/providers"
+	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/providertest"
 )
 
@@ -332,8 +333,9 @@ func TestKeyWorldLateWriteLandsAfterTheClockPasses(t *testing.T) {
 	require.ErrorAs(t, err, &pe)
 	assert.Equal(t, "ssh.timeout", pe.Code)
 
-	// without a clock a late write waits for FlushLate; the default delay is a minute
+	// without a clock a late write waits for FlushLate; the default delay stays inside the helper budget
 	w2 := NewKeyWorld()
+	w2.SetClock(nil) // flush-only: stated, never implied
 	w2.Put(target, "deploy", file)
 	w2.SetFault(func(FaultPoint) Fault { return FaultLateWrite })
 	_, err = worldSession(t, w2, target).AddAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: uuid.New(), OSUser: "deploy", FilePath: file, Line: newL}, nil)
@@ -348,7 +350,7 @@ func TestKeyWorldLateWriteLandsAfterTheClockPasses(t *testing.T) {
 	w3.SetFault(func(FaultPoint) Fault { return FaultLateWrite })
 	_, err = worldSession(t, w3, target).AddAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: uuid.New(), OSUser: "deploy", FilePath: file, Line: newL}, nil)
 	require.Error(t, err)
-	now = now.Add(59 * time.Second)
+	now = now.Add(DefaultLateDelay - time.Second)
 	assert.Empty(t, w3.Lines(target, file))
 	now = now.Add(2 * time.Second)
 	assert.Equal(t, []string{newL}, w3.Lines(target, file))
@@ -466,4 +468,190 @@ type failingSource struct{}
 
 func (failingSource) SSHSigner(context.Context) (ssh.Signer, func(), error) {
 	return nil, func() {}, assert.AnError
+}
+
+// T3-I1: a login reads only the files Put for that user; an add never extends them.
+func TestKeyWorldLoginReadsOnlyTheUsersFiles(t *testing.T) {
+	ctx := context.Background()
+	w := NewKeyWorld()
+	target := uuid.New()
+	lineA, _, keyA := newKey(t)
+	lineB, _, keyB := newKey(t)
+	w.Put(target, "deploy", "/home/deploy/.ssh/authorized_keys", lineA)
+	w.Put(target, "backup", "/home/backup/.ssh/authorized_keys", lineB)
+	s := worldSession(t, w, target)
+	for _, c := range []struct {
+		user string
+		key  providers.CredentialSource
+		want providers.KeyLoginOutcome
+	}{
+		{"deploy", keyA, providers.KeyLoginAccepted},
+		{"backup", keyB, providers.KeyLoginAccepted},
+		{"deploy", keyB, providers.KeyLoginRefused},
+		{"backup", keyA, providers.KeyLoginRefused},
+	} {
+		r, err := s.VerifyKeyLogin(ctx, providers.KeyLoginRequest{OSUser: c.user, Key: c.key})
+		require.NoError(t, err)
+		assert.Equal(t, c.want, r.Outcome, c.user)
+	}
+
+	// an add to a file that was never declared for the user is refused and logs nobody in
+	newL, _, newK := newKey(t)
+	var pe *providers.Error
+	_, err := s.AddAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: uuid.New(), OSUser: "deploy", FilePath: "/home/deploy/.ssh/other", Line: newL}, nil)
+	require.ErrorAs(t, err, &pe)
+	assert.Equal(t, "ssh.helper_refused", pe.Code)
+	assert.Equal(t, "os_user", pe.Params["field"])
+	assert.Empty(t, w.Lines(target, "/home/deploy/.ssh/other"))
+	r, err := s.VerifyKeyLogin(ctx, providers.KeyLoginRequest{OSUser: "deploy", Key: newK})
+	require.NoError(t, err)
+	assert.Equal(t, providers.KeyLoginRefused, r.Outcome)
+}
+
+// T3-I2: a late write cannot be queued without a stated clock; a landing is recorded and counted.
+func TestKeyWorldLateWriteCannotPassVacuously(t *testing.T) {
+	ctx := context.Background()
+	target := uuid.New()
+	file := "/home/deploy/.ssh/authorized_keys"
+	line, fp, _ := newKey(t)
+	w := NewKeyWorld()
+	w.Put(target, "deploy", file)
+	w.SetFault(func(FaultPoint) Fault { return FaultLateWrite })
+	s := worldSession(t, w, target)
+	req := providers.AuthKeyChange{OperationID: uuid.New(), OSUser: "deploy", FilePath: file, Line: line}
+	assert.Panics(t, func() { _, _ = s.AddAuthorizedKey(ctx, req, nil) }, "no clock and no explicit flush-only mode")
+
+	now := time.Unix(5_000, 0)
+	w = NewKeyWorld()
+	w.SetClock(func() time.Time { return now })
+	w.Put(target, "deploy", file)
+	w.SetFault(func(p FaultPoint) Fault {
+		if p.N == 1 {
+			return FaultLateWrite
+		}
+		return FaultNone
+	})
+	s = worldSession(t, w, target)
+	_, err := s.AddAuthorizedKey(ctx, req, nil)
+	require.Error(t, err)
+	assert.Equal(t, 1, w.PendingLate())
+	assert.Equal(t, 0, w.LateLanded())
+	now = now.Add(DefaultLateDelay + time.Second)
+	assert.True(t, w.Has(target, file, fp))
+	assert.Equal(t, 0, w.PendingLate())
+	assert.Equal(t, 1, w.LateLanded())
+	evs := w.Events()
+	require.Len(t, evs, 2)
+	assert.True(t, evs[1].Landed)
+	assert.True(t, evs[1].Changed)
+	assert.Equal(t, 1, evs[1].N, "numbered as the call that stalled")
+	assert.Equal(t, "AddAuthorizedKey", evs[1].Method)
+	assert.False(t, evs[0].Landed)
+
+	assert.Less(t, DefaultLateDelay, helperproto.HelperBudget, "the helper never writes after its own deadline")
+}
+
+// The late write obeys the owner rule at the moment it lands.
+func TestKeyWorldLateWriteObeysTheOwnerRule(t *testing.T) {
+	ctx := context.Background()
+	target := uuid.New()
+	file := "/etc/ssh/keys/shared"
+	line, fp, _ := newKey(t)
+	w := NewKeyWorld()
+	w.SetClock(nil)
+	w.Put(target, "deploy", file)
+	w.Put(target, "backup", file)
+	w.SetFault(func(FaultPoint) Fault { return FaultLateWrite })
+	// the call itself is refused before it can stall, as the real provider would
+	_, err := worldSession(t, w, target).AddAuthorizedKey(ctx, providers.AuthKeyChange{OperationID: uuid.New(), OSUser: "backup", FilePath: file, Line: line}, nil)
+	require.Error(t, err)
+	w.FlushLate()
+	assert.False(t, w.Has(target, file, fp), "a non-owner's stalled add never lands")
+	assert.Equal(t, 0, w.LateLanded())
+}
+
+// T3-m6: a fault decision may read the world (it runs outside the lock).
+func TestKeyWorldFaultMayReadTheWorld(t *testing.T) {
+	target := uuid.New()
+	file := "/home/deploy/.ssh/authorized_keys"
+	w := NewKeyWorld()
+	w.Put(target, "deploy", file)
+	w.SetFault(func(FaultPoint) Fault {
+		_ = w.Lines(target, file)
+		_ = w.Events()
+		return FaultNone
+	})
+	line, _, _ := newKey(t)
+	done := make(chan error, 1)
+	go func() {
+		_, err := worldSession(t, w, target).AddAuthorizedKey(context.Background(), providers.AuthKeyChange{OperationID: uuid.New(), OSUser: "deploy", FilePath: file, Line: line}, nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fault decision deadlocked on the world's lock")
+	}
+}
+
+// T3-m3: the listed keys carry the flags and sizes the real provider's discovery sets.
+func TestKeyWorldListCarriesFlagsAndBits(t *testing.T) {
+	w := NewKeyWorld()
+	target := uuid.New()
+	a, _, _ := newKey(t)
+	b, _, _ := newKey(t)
+	ca, _, _ := newKey(t)
+	w.Put(target, "root", "/root/.ssh/authorized_keys", a, `command="x" `+b, `cert-authority `+ca)
+	keys, err := worldSession(t, w, target).ListAuthorizedKeys(context.Background())
+	require.NoError(t, err)
+	require.Len(t, keys, 3)
+	assert.ElementsMatch(t, []string{providers.FlagRootWithoutFrom}, keys[0].Flags)
+	assert.Positive(t, keys[0].Bits)
+	assert.Contains(t, keys[1].Flags, providers.FlagCommand)
+	assert.Contains(t, keys[2].Flags, providers.FlagCertAuthority)
+
+	w2 := NewKeyWorld()
+	w2.Put(target, "deploy", "/h/ak", a, a)
+	keys, err = worldSession(t, w2, target).ListAuthorizedKeys(context.Background())
+	require.NoError(t, err)
+	require.Len(t, keys, 2)
+	assert.Contains(t, keys[0].Flags, providers.FlagDuplicate)
+	assert.Contains(t, keys[1].Flags, providers.FlagDuplicate)
+}
+
+// T3-m4: every provider refuses an empty request, the default fake included.
+func TestDefaultFakeRefusesAnEmptyKeyLogin(t *testing.T) {
+	p := New(providers.KindLinuxSSH, providers.CapKeyLogin)
+	p.Configure(func(c *Config) { c.SkipHostKeyCheck = true })
+	s, err := p.Open(context.Background(), providers.TargetRef{ID: uuid.New()}, nil, providers.Env{})
+	require.NoError(t, err)
+	_, err = s.VerifyKeyLogin(context.Background(), providers.KeyLoginRequest{})
+	var pe *providers.Error
+	require.ErrorAs(t, err, &pe)
+	assert.Equal(t, "ssh.helper_refused", pe.Code)
+	assert.Equal(t, "os_user", pe.Params["field"])
+}
+
+// T3-m5: the fake key world and the real provider run one script of key semantics.
+func TestKeyWorldKeyLifecycleConforms(t *testing.T) {
+	providertest.CheckKeyLifecycle(t, providertest.KeyLifecycleHarness{New: func(tb testing.TB) providertest.KeyLifecycleEnv {
+		w := NewKeyWorld()
+		target := uuid.New()
+		p := New(providers.KindLinuxSSH, providers.CapTestConnection, providers.CapAuthorizedKeys, providers.CapKeyLogin)
+		p.Configure(func(c *Config) { c.World = w; c.SkipHostKeyCheck = true })
+		return providertest.KeyLifecycleEnv{
+			Open: func(ctx context.Context) (providers.Session, error) {
+				return p.Open(ctx, providers.TargetRef{ID: target, Kind: providers.KindLinuxSSH}, nil, providers.Env{})
+			},
+			OwnFile: func(u string) string { return "/home/" + u + "/.ssh/authorized_keys" },
+			Seed:    func(u, f string, lines ...string) { w.Put(target, u, f, lines...) },
+			SeedShared: func(f string, lines ...string) {
+				for _, u := range []string{"root", "alice-svc", "deploy", "backup"} {
+					w.Put(target, u, f, lines...)
+				}
+			},
+			Lines: func(f string) []string { return w.Lines(target, f) },
+		}
+	}})
 }

@@ -67,6 +67,23 @@ type Server struct {
 	holdOpens  bool
 	maxAuth    int // SetMaxAuthTries
 	loginCheck func(user string, key ssh.PublicKey) bool
+	stall      bool
+}
+
+// StallHandshake makes the server accept TCP connections from now on and say nothing: the client
+// waits for the SSH version banner until it gives up or closes the connection.
+func (s *Server) StallHandshake() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stall = true
+}
+
+// OpenConnections is the number of TCP connections currently open on the server side (a closed
+// client connection leaves this count once the server noticed).
+func (s *Server) OpenConnections() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.conns)
 }
 
 // Connections is the number of TCP connections the server accepted (every dial, whether or not
@@ -311,7 +328,12 @@ func (s *Server) handleConn(c net.Conn) {
 	cfg.NoClientAuth = s.noAuth
 	cfg.MaxAuthTries = s.maxAuth
 	hang := s.hangGlobal
+	stall := s.stall
 	s.mu.Unlock()
+	if stall {
+		_, _ = io.Copy(io.Discard, c) // returns when the client closes
+		return
+	}
 	sc, chans, reqs, err := ssh.NewServerConn(c, cfg)
 	if err != nil {
 		return

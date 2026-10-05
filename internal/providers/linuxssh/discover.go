@@ -450,13 +450,18 @@ const (
 
 // keyFiles lists each account's candidate authorized_keys files in the helper's order (sshd's
 // AuthorizedKeysFile order). An account whose sshd settings could not be evaluated is left out: its
-// files may not be the ones sshd reads.
+// files may not be the ones sshd reads. A file the helper marked unsupported, or whose path fails
+// ValidPath, is dropped exactly as discoverFile drops it from the key locations (the account stays,
+// with fewer files): these paths are stored, served and offered as deploy targets, so remote text
+// that discovery itself refuses never reaches them. The bound of eight counts kept files only.
 func keyFiles(users []helperproto.UserFiles) []providers.UserKeyFiles {
 	var out []providers.UserKeyFiles
 	for _, u := range users {
 		if u.SSHDUnreadable {
 			continue
 		}
+		// Defence in depth: Discover cuts the user list at maxDiscoverUsers before it gets here, so
+		// this bound is unreachable today; it keeps the result bounded if that ever changes.
 		if len(out) == maxKeyFileUsers {
 			break
 		}
@@ -464,6 +469,9 @@ func keyFiles(users []helperproto.UserFiles) []providers.UserKeyFiles {
 		for _, f := range u.Files {
 			if len(uf.Files) == maxKeyFilesPerUser {
 				break
+			}
+			if f.Unsupported || !helperproto.ValidPath(f.Path) {
+				continue
 			}
 			uf.Files = append(uf.Files, f.Path)
 		}

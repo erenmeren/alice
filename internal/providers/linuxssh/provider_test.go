@@ -1138,3 +1138,88 @@ func warnCodes(ws []providers.Warning) []string {
 	}
 	return out
 }
+
+// T3-m5: the real provider (behind the emulator) runs the same key script as the fake key world.
+func TestKeyLifecycleConforms(t *testing.T) {
+	providertest.CheckKeyLifecycle(t, providertest.KeyLifecycleHarness{New: func(tb testing.TB) providertest.KeyLifecycleEnv {
+		e := newProvEnv(tb.(*testing.T))
+		e.emu.AddUser("backup", 1002, "/home/backup")
+		e.srv.SetLoginCheck(e.emu.AcceptsLogin)
+		join := func(lines []string) []byte {
+			if len(lines) == 0 {
+				return nil
+			}
+			return []byte(strings.Join(lines, "\n") + "\n")
+		}
+		return providertest.KeyLifecycleEnv{
+			Open: func(ctx context.Context) (providers.Session, error) {
+				return e.prov.Open(ctx, e.ref, e.cred, providers.Env{})
+			},
+			OwnFile: func(u string) string {
+				switch u {
+				case "root":
+					return "/root/.ssh/authorized_keys"
+				case "alice-svc":
+					return "/var/lib/alice-svc/.ssh/authorized_keys"
+				}
+				return "/home/" + u + "/.ssh/authorized_keys"
+			},
+			Seed: func(_, f string, lines ...string) { e.emu.SetFile(f, join(lines)) },
+			SeedShared: func(f string, lines ...string) {
+				e.emu.SetSSHD(strings.Replace(linuxsshtest.DefaultSSHD, "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2",
+					"authorizedkeysfile "+f, 1))
+				e.emu.SetFile(f, join(lines))
+			},
+			Lines: func(f string) []string {
+				b, _ := e.emu.File(f)
+				return strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+			},
+		}
+	}})
+}
+
+// T4-I2: the candidate key files are filtered as discovery filters key locations: a path the
+// helper marked unsupported or that fails ValidPath is never offered.
+func TestKeyFilesDropWhatDiscoveryRefuses(t *testing.T) {
+	good := "/home/deploy/.ssh/authorized_keys"
+	users := []helperproto.UserFiles{{User: "deploy", Files: []helperproto.FileInfo{
+		{Path: good},
+		{Path: "/home/other/.ssh/authorized_keys", Unsupported: true},
+		{Path: "relative/authorized_keys"},
+		{Path: "/home/deploy/../root/.ssh/authorized_keys"},
+		{Path: "/home/deploy/.ssh/a b"},
+		{Path: "/home/deploy/.ssh/\x1b[31m"},
+		{Path: "/home/deploy/.ssh/\xff\xfe"},
+		{Path: "/" + strings.Repeat("a", 5000)},
+		{Path: ""},
+		{Path: "/home/deploy/.ssh/authorized_keys2"},
+	}}, {User: "onlybad", Files: []helperproto.FileInfo{{Path: "../x"}}}}
+	got := keyFiles(users)
+	assert.Equal(t, []providers.UserKeyFiles{
+		{OSUser: "deploy", Files: []string{good, "/home/deploy/.ssh/authorized_keys2"}},
+		{OSUser: "onlybad", Files: []string{}},
+	}, got, "the user stays, with fewer files")
+
+	// the eight-file cap counts only files that are kept
+	var many []helperproto.FileInfo
+	for i := 0; i < 5; i++ {
+		many = append(many, helperproto.FileInfo{Path: "bad"})
+	}
+	for i := 0; i < 10; i++ {
+		many = append(many, helperproto.FileInfo{Path: "/k/" + strconv.Itoa(i)})
+	}
+	got = keyFiles([]helperproto.UserFiles{{User: "u", Files: many}})
+	require.Len(t, got, 1)
+	assert.Len(t, got[0].Files, 8)
+	assert.Equal(t, "/k/7", got[0].Files[7])
+
+	// through the provider: a file the helper reports as unsupported is not a candidate
+	e := newProvEnv(t)
+	e.emu.SetUnsupported("/home/deploy/.ssh/authorized_keys2")
+	res, err := e.open(t).Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	for _, u := range res.KeyFiles {
+		assert.NotContains(t, u.Files, "/home/deploy/.ssh/authorized_keys2")
+	}
+	assert.True(t, hasWarning(res.Warnings, helperproto.WarnUnsupportedPath, "/home/deploy/.ssh/authorized_keys2"))
+}

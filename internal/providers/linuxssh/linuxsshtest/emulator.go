@@ -589,13 +589,24 @@ func (e *Emulator) AcceptsLogin(user string, key ssh.PublicKey) bool {
 		for _, p := range us.paths {
 			for _, line := range bytes.Split(e.files[p], []byte("\n")) {
 				pk, _, opts, _, err := ssh.ParseAuthorizedKey(line)
-				if err != nil || slices.Contains(opts, "cert-authority") {
+				if err != nil || hasCertAuthority(opts) {
 					continue
 				}
 				if bytes.Equal(pk.Marshal(), want) {
 					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+// hasCertAuthority reports a cert-authority option; sshd compares option names without regard to case.
+func hasCertAuthority(opts []string) bool {
+	for _, o := range opts {
+		name, _, _ := strings.Cut(o, "=")
+		if strings.EqualFold(strings.TrimSpace(name), "cert-authority") {
+			return true
 		}
 	}
 	return false
