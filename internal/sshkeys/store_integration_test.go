@@ -342,10 +342,6 @@ func TestStoreRefusesOutOfTurn(t *testing.T) {
 	_, err = e.svc.BeginAdd(e.claimed(), loc)
 	assert.ErrorIs(t, err, sshkeys.ErrPaused)
 	e.gate.unlock()
-	e.setTargetStatus(r.Locations[0].TargetID, "host_key_changed")
-	_, err = e.svc.BeginAdd(e.claimed(), loc)
-	assert.ErrorIs(t, err, sshkeys.ErrNotYourTurn, "the target refuses key changes")
-	e.setTargetStatus(r.Locations[0].TargetID, "ok")
 	_, err = e.svc.BeginAdd(e.claimed(), uuid.New())
 	assert.ErrorIs(t, err, sshkeys.ErrNotFound)
 	_, err = e.svc.LocationWork(e.ctx, uuid.New())
@@ -360,4 +356,18 @@ func TestStoreRefusesOutOfTurn(t *testing.T) {
 	require.NoError(t, e.svc.Step(e.claimed(), r.ID, &loc, "add_sent", providers.StepStarted, map[string]string{"op": "x"}))
 	assert.Equal(t, "add_sent", e.run(r.ID).Steps[len(e.run(r.ID).Steps)-1].Name)
 	assert.ErrorIs(t, e.svc.Step(e.claimed(), uuid.New(), nil, "x", providers.StepOK, nil), sshkeys.ErrNotFound)
+}
+
+// A target whose host key changed after the start: the add is not sent and the location ends at once
+// with the planner's skip reason (re-review M7).
+func TestBeginAddOnAChangedHostKey(t *testing.T) {
+	e := newEnv(t)
+	k := e.deployed("ci", e.server("web-01"), "deploy")
+	r := e.runNow(e.policy(k.ID, 90, 7, 24))
+	e.setTargetStatus(r.Locations[0].TargetID, "host_key_changed")
+	_, err := e.svc.BeginAdd(e.claimed(), r.Locations[0].ID)
+	assert.ErrorIs(t, err, sshkeys.ErrNotYourTurn, "the target refuses key changes")
+	got := e.run(r.ID).Locations[0]
+	assert.Equal(t, "cancelled", got.State)
+	assert.Equal(t, "host_key_changed", got.SkipReason)
 }

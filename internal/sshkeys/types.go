@@ -65,6 +65,12 @@ const (
 	// ReasonNoticeQueueFailed: the renewal notice could not be queued (sub-reason of
 	// rotation.notice_pending on the run read).
 	ReasonNoticeQueueFailed = "notify.queue_failed"
+	// ReasonGuardRefused: the database refused every write of a location (for example its old location
+	// became Alice's connection key after a removal was sent); the location ends failed with it (N18).
+	ReasonGuardRefused = "rotation.guard_refused"
+	// ReasonSkippedAtSend: a planner skip reason found at send time (the scan changed since the start);
+	// the reason itself is in skip_reason (re-review M7).
+	ReasonSkippedAtSend     = "rotation.skipped_at_send"
 	ReasonClockBehind       = "sshkey.clock_behind"
 	ReasonPolicyOff         = "rotation.policy_off"
 	ReasonPlanChanged       = "rotation.plan_changed"

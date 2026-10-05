@@ -76,8 +76,14 @@ func (s *Service) planOne(ctx context.Context, id uuid.UUID) (bool, error) {
 		p, err := plan.Build(in)
 		switch {
 		case errors.Is(err, plan.ErrNothingToRotate):
+			// Every place is skipped: the Administrators are told once for this interval, which counts
+			// as done (re-review M6; no silent re-plan every tick).
+			next := plan.NextRun(*pol.NextRunAt, pol.IntervalDays)
+			if _, err := tx.Exec(ctx, "UPDATE rotation_policies SET next_run_at = $2 WHERE id = $1", id, next); err != nil {
+				return policyWriteError(err)
+			}
 			s.log.Info("rotation not planned: no location can change", "policy_id", id.String())
-			return nil
+			return s.mail(ctx, tx, TemplateNothingToRotate, nothingToRotateParams(key, p, next))
 		case err != nil:
 			// The key can no longer be rotated (Alice's own key, retired, …): the policy cannot run.
 			if _, err := tx.Exec(ctx, `UPDATE rotation_policies SET enabled = false, next_run_at = NULL, version = version + 1, updated_at = $2

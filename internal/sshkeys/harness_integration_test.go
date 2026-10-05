@@ -22,10 +22,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
 	"alice/internal/audit"
+	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/license"
@@ -39,6 +41,7 @@ import (
 	"alice/internal/secrets"
 	"alice/internal/sshkeys"
 	"alice/internal/testutil/pgtest"
+	"alice/locales"
 )
 
 func TestMain(m *testing.M) {
@@ -75,10 +78,20 @@ func (g *lockGate) unlock() { g.locked.Store(false) }
 // recordingNotifier records every NotifyAdmins call (template and params) and queues the email in
 // the outbox as production does (next), so a test can see the outbox rows and their delivery.
 type recordingNotifier struct {
-	mu    sync.Mutex
-	calls []notice
-	next  notify.AdminNotifier
+	mu         sync.Mutex
+	calls      []notice
+	next       notify.AdminNotifier
+	unrendered []string
 }
+
+// mailRenderer renders the module's mails with the shipped catalogue.
+var mailRenderer = func() *notify.Sender {
+	cat, err := i18n.Load(locales.FS)
+	if err != nil {
+		panic(err)
+	}
+	return &notify.Sender{Catalog: cat}
+}()
 
 type notice struct {
 	template string
@@ -88,6 +101,16 @@ type notice struct {
 func (r *recordingNotifier) NotifyAdmins(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error {
 	if err := r.next.NotifyAdmins(ctx, tx, template, params); err != nil {
 		return err
+	}
+	// Every mail a test causes is rendered with the real catalogue: a template must never receive a
+	// missing param (a leftover "{{") nor be missing itself.
+	for _, lang := range []string{"en", "tr"} {
+		m := mailRenderer.Render("ada@example.com", template, lang, params)
+		if strings.Contains(m.Subject+m.Body, "{{") || strings.Contains(m.Subject, "email.") {
+			r.mu.Lock()
+			r.unrendered = append(r.unrendered, template+" ("+lang+"): "+m.Subject+" / "+m.Body)
+			r.mu.Unlock()
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -139,6 +162,11 @@ func newEnv(t *testing.T) *env {
 	e := &env{t: t, ctx: context.Background(), db: pgtest.New(t), clock: clock.NewFake(start), logs: &syncBuffer{}}
 	e.tick = &tickClock{Fake: e.clock}
 	e.notifier = &recordingNotifier{next: notify.AdminNotifier{Clock: e.tick}}
+	t.Cleanup(func() {
+		e.notifier.mu.Lock()
+		defer e.notifier.mu.Unlock()
+		assert.Empty(t, e.notifier.unrendered, "every rotation mail renders with the params its code path sends")
+	})
 	// A lock-order mistake fails fast with SQLSTATE 55P03 instead of hanging the suite.
 	var dbName string
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT current_database()").Scan(&dbName))

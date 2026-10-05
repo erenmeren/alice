@@ -262,6 +262,11 @@ func (s *Service) CreatePolicy(ctx context.Context, a inventory.Actor, in Policy
 	}
 	var out Policy
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// The key row is locked first, so a retirement (which locks it FOR UPDATE and then looks for a
+		// live policy) and a new policy cannot interleave (re-review M8).
+		if _, err := tx.Exec(ctx, "SELECT id FROM ssh_keys WHERE id = $1 FOR SHARE", in.SSHKeyID); err != nil {
+			return fmt.Errorf("sshkeys: lock the key: %w", err)
+		}
 		key, err := readKeyRow(ctx, tx, in.SSHKeyID)
 		if err != nil {
 			return err
@@ -440,6 +445,12 @@ func (s *Service) SetPolicyEnabled(ctx context.Context, a inventory.Actor, id uu
 		if enabled {
 			n := plan.FirstRun(now, p.IntervalDays)
 			next = &n
+		}
+		if enabled {
+			// Policy, then the key (lock order): a retirement cannot interleave with switching on (M8).
+			if _, err := tx.Exec(ctx, "SELECT id FROM ssh_keys WHERE id = $1 FOR SHARE", p.SSHKeyID); err != nil {
+				return fmt.Errorf("sshkeys: lock the key: %w", err)
+			}
 		}
 		// Switching on runs the database's key check again: a key retired meanwhile is refused (Z1010).
 		if _, err := tx.Exec(ctx, `UPDATE rotation_policies SET enabled = $2, next_run_at = $3, version = version + 1, updated_at = $4

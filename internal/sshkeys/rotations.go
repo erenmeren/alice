@@ -74,7 +74,9 @@ type RotationLocation struct {
 	State, SkipReason, VerifyNote, ErrorCode, Backup             string
 	AddSentAt, VerifiedAt, ReverifiedAt, RemoveSentAt, RemovedAt *time.Time
 	NewLocationID                                                *uuid.UUID
-	AddOpID, RemoveOpID, UndoOpID                                uuid.UUID // uuid.Nil until the step began
+	AddOpID, RemoveOpID, UndoOpID                                uuid.UUID  // uuid.Nil until the step began
+	AddResendCount                                               int        // re-sends of the add (G25)
+	AddResentAt                                                  *time.Time // the latest re-send
 }
 
 // Step is one recorded step of a run (§26.8).
@@ -98,6 +100,10 @@ func (s *Service) Rotation(ctx context.Context, id uuid.UUID) (Rotation, error) 
 		r, err = readRotation(ctx, tx, id, true)
 		return err
 	})
+	if err == nil && r.PausedLicense && !s.gateOK() {
+		// In lock the run waits for the licence, not for the notice (re-review M3).
+		r.NoticeState, r.NoticeError = ReasonPausedLicense, ""
+	}
 	return r, err
 }
 
@@ -136,8 +142,8 @@ FROM rotations r JOIN ssh_keys ok ON ok.id = r.old_ssh_key_id LEFT JOIN ssh_keys
 	}
 	// A late removal removed the old key where the run had counted it as kept (re-review N5).
 	var lateRemoved int
-	if err := q.QueryRow(ctx, `SELECT count(*) FROM rotation_steps WHERE rotation_id = $1 AND name = 'late_result'
-AND params->>'result' = 'removed'`, id).Scan(&lateRemoved); err != nil {
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM rotation_steps s JOIN rotation_locations l ON l.id = s.location_id
+WHERE s.rotation_id = $1 AND s.name = 'late_result' AND s.params->>'result' = 'removed' AND l.state = 'remove_failed'`, id).Scan(&lateRemoved); err != nil {
 		return Rotation{}, fmt.Errorf("sshkeys: read the rotation's late results: %w", err)
 	}
 	r.KeptCount = max(r.KeptCount-lateRemoved, 0)
@@ -158,7 +164,7 @@ AND n > coalesce((SELECT max(n) FROM rotation_steps WHERE rotation_id = $1 AND n
 func readRotationLocations(ctx context.Context, q db.Querier, runID uuid.UUID) ([]RotationLocation, error) {
 	rows, err := q.Query(ctx, `SELECT l.id, l.old_location_id, l.target_id, l.n, t.name::text, l.os_user, l.file_path, l.options, l.state,
     l.skip_reason, l.verify_note, l.error_code, l.backup, l.add_sent_at, l.verified_at, l.reverified_at, l.remove_sent_at, l.removed_at,
-    l.new_location_id, l.add_op_id, l.remove_op_id, l.undo_op_id
+    l.new_location_id, l.add_op_id, l.remove_op_id, l.undo_op_id, l.add_resend_count, l.add_resent_at
 FROM rotation_locations l JOIN targets t ON t.id = l.target_id WHERE l.rotation_id = $1 ORDER BY l.n`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("sshkeys: read the rotation's locations: %w", err)
@@ -172,12 +178,12 @@ FROM rotation_locations l JOIN targets t ON t.id = l.target_id WHERE l.rotation_
 		)
 		if err := rows.Scan(&l.ID, &l.OldLocationID, &l.TargetID, &l.N, &l.TargetName, &l.OSUser, &l.FilePath, &l.Options, &l.State,
 			&l.SkipReason, &l.VerifyNote, &l.ErrorCode, &l.Backup, &l.AddSentAt, &l.VerifiedAt, &l.ReverifiedAt, &l.RemoveSentAt,
-			&l.RemovedAt, &l.NewLocationID, &addOp, &remOp, &undOp); err != nil {
+			&l.RemovedAt, &l.NewLocationID, &addOp, &remOp, &undOp, &l.AddResendCount, &l.AddResentAt); err != nil {
 			return nil, fmt.Errorf("sshkeys: read a rotation location: %w", err)
 		}
 		l.AddOpID, l.RemoveOpID, l.UndoOpID = orNil(addOp), orNil(remOp), orNil(undOp)
 		l.AddSentAt, l.VerifiedAt, l.ReverifiedAt = utcPtr(l.AddSentAt), utcPtr(l.VerifiedAt), utcPtr(l.ReverifiedAt)
-		l.RemoveSentAt, l.RemovedAt = utcPtr(l.RemoveSentAt), utcPtr(l.RemovedAt)
+		l.RemoveSentAt, l.RemovedAt, l.AddResentAt = utcPtr(l.RemoveSentAt), utcPtr(l.RemovedAt), utcPtr(l.AddResentAt)
 		out = append(out, l)
 	}
 	return out, rows.Err()
@@ -308,14 +314,20 @@ func decodeRotationCursor(c string) (time.Time, uuid.UUID, error) {
 	return time.UnixMicro(micros).UTC(), u, nil
 }
 
-// LocationCounts are a run's locations by outcome (the list's cheap read).
+// LocationCounts are a run's locations by outcome (the list's cheap read). The buckets add up to Total:
+// Verified (verified), Removed (removed), Kept (kept_old), Failed (add_failed, verify_failed,
+// remove_failed, undo_failed), Skipped (skipped), Undone (undone), Cancelled (cancelled: never sent, or
+// refused at send time), InFlight (planned, adding, added, unverifiable, removing, undoing).
 type LocationCounts struct {
-	Total    int
-	Verified int // verified, removing, removed
-	Removed  int
-	Kept     int // kept_old, and cancelled at send time (the old key stays)
-	Failed   int // add_failed, verify_failed, remove_failed, undo_failed
-	Skipped  int
+	Total     int
+	Verified  int
+	Removed   int
+	Kept      int
+	Failed    int
+	Skipped   int
+	Undone    int
+	Cancelled int
+	InFlight  int
 }
 
 // RotationSummary is a run without its plan, locations and steps (Task 13 review: a list never builds
@@ -355,15 +367,19 @@ func (s *Service) RotationSummaries(ctx context.Context, f RotationFilter) ([]Ro
 	rows, err := s.pool.Query(ctx, `SELECT r.id, r.policy_id, r.old_ssh_key_id, r.new_ssh_key_id, ok.fingerprint_sha256,
     coalesce(nk.fingerprint_sha256, ''), r.trigger, r.status, r.paused_license, r.awaiting_decision, r.new_key_type, r.planned_for,
     r.notified_at, r.started_at, r.verified_at, r.overlap_until, r.finished_at, r.result_code, r.kept_count, r.version, r.created_at,
-    c.total, c.verified, c.removed, c.kept, c.failed, c.skipped,
-    (SELECT count(*) FROM rotation_steps st WHERE st.rotation_id = r.id AND st.name = 'late_result' AND st.params->>'result' = 'removed')
+    c.total, c.verified, c.removed, c.kept, c.failed, c.skipped, c.undone, c.cancelled, c.in_flight,
+    (SELECT count(*) FROM rotation_steps st JOIN rotation_locations sl ON sl.id = st.location_id
+     WHERE st.rotation_id = r.id AND st.name = 'late_result' AND st.params->>'result' = 'removed' AND sl.state = 'remove_failed')
 FROM rotations r JOIN ssh_keys ok ON ok.id = r.old_ssh_key_id LEFT JOIN ssh_keys nk ON nk.id = r.new_ssh_key_id
 CROSS JOIN LATERAL (SELECT count(*) AS total,
-    count(*) FILTER (WHERE l.state IN ('verified', 'removing', 'removed')) AS verified,
+    count(*) FILTER (WHERE l.state = 'verified') AS verified,
     count(*) FILTER (WHERE l.state = 'removed') AS removed,
-    count(*) FILTER (WHERE l.state IN ('kept_old', 'cancelled') AND (l.state = 'kept_old' OR l.error_code <> '')) AS kept,
+    count(*) FILTER (WHERE l.state = 'kept_old') AS kept,
     count(*) FILTER (WHERE l.state IN ('add_failed', 'verify_failed', 'remove_failed', 'undo_failed')) AS failed,
-    count(*) FILTER (WHERE l.state = 'skipped') AS skipped
+    count(*) FILTER (WHERE l.state = 'skipped') AS skipped,
+    count(*) FILTER (WHERE l.state = 'undone') AS undone,
+    count(*) FILTER (WHERE l.state = 'cancelled') AS cancelled,
+    count(*) FILTER (WHERE l.state IN ('planned', 'adding', 'added', 'unverifiable', 'removing', 'undoing')) AS in_flight
     FROM rotation_locations l WHERE l.rotation_id = r.id) c
 WHERE ($1::uuid IS NULL OR r.policy_id = $1) AND ($2::uuid IS NULL OR r.old_ssh_key_id = $2 OR r.new_ssh_key_id = $2)
   AND ($3::timestamptz IS NULL OR (r.created_at, r.id) < ($3, $4::uuid))
@@ -381,7 +397,8 @@ ORDER BY r.created_at DESC, r.id DESC LIMIT $5`, nilUUID(f.PolicyID), nilUUID(f.
 		if err := rows.Scan(&r.ID, &r.PolicyID, &r.OldKeyID, &r.NewKeyID, &r.OldFingerprint, &r.NewFingerprint, &r.Trigger, &r.Status,
 			&r.PausedLicense, &r.AwaitingDecision, &r.NewKeyType, &r.PlannedFor, &r.NotifiedAt, &r.StartedAt, &r.VerifiedAt,
 			&r.OverlapUntil, &r.FinishedAt, &r.ResultCode, &r.KeptCount, &r.Version, &created, &r.Counts.Total, &r.Counts.Verified,
-			&r.Counts.Removed, &r.Counts.Kept, &r.Counts.Failed, &r.Counts.Skipped, &lateRemoved); err != nil {
+			&r.Counts.Removed, &r.Counts.Kept, &r.Counts.Failed, &r.Counts.Skipped, &r.Counts.Undone, &r.Counts.Cancelled,
+			&r.Counts.InFlight, &lateRemoved); err != nil {
 			return nil, "", fmt.Errorf("sshkeys: list rotations: %w", err)
 		}
 		r.KeptCount = max(r.KeptCount-lateRemoved, 0)

@@ -81,7 +81,7 @@ func (s *Service) Advance(ctx context.Context, id uuid.UUID) error {
 	})
 	if noticeFailed != nil {
 		// The renewal notice could not be queued: the run says so (rotation.notice_pending with a
-		// closed sub-reason) and each failure is logged (re-review N9); Abort and Keep old stay possible.
+		// closed sub-reason) and each failure is logged (re-review N9); Abort stays possible (the only decision while paused).
 		s.log.Error("could not queue the renewal notice", "rotation_id", id.String(), "error_type", fmt.Sprintf("%T", noticeFailed))
 		if serr := s.noticeFailedStep(ctx, id); serr != nil {
 			err = errors.Join(err, serr)
@@ -95,6 +95,12 @@ func (s *Service) noticeFailedStep(ctx context.Context, id uuid.UUID) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		run, err := lockRun(ctx, tx, id)
 		if err != nil || run.finished() {
+			return err
+		}
+		// One step per pause (re-review M4; steps are append-only, so later failures are only logged).
+		var seen bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM rotation_steps WHERE rotation_id = $1 AND name = 'notice_failed'
+AND n > coalesce((SELECT max(n) FROM rotation_steps WHERE rotation_id = $1 AND name = 'paused'), 0))`, id).Scan(&seen); err != nil || seen {
 			return err
 		}
 		return appendStep(ctx, tx, id, nil, "notice_failed", "failed", map[string]string{"reason": ReasonNoticeQueueFailed},
@@ -416,7 +422,7 @@ func (c *advance) filter(states ...string) []locRow {
 
 // retryableRemoval: a failed removal the sweep still retries (G3) before the run needs attention.
 func retryableRemoval(l locRow) bool {
-	return l.state == LocRemoveFailed && l.retries < MaxLocationJobs
+	return l.state == LocRemoveFailed && l.retries < MaxLocationJobs && l.errorCode != ReasonGuardRefused
 }
 
 func (c *advance) removing(ctx context.Context) error {
@@ -510,20 +516,31 @@ func (s *Service) retireIfUnused(ctx context.Context, tx pgx.Tx, actor audit.Act
 // attentionParams are the needs_attention mail's parameters: the servers where an undo failed are
 // named (re-review N4).
 func (s *Service) attentionParams(ctx context.Context, tx pgx.Tx, run runRow, code string) map[string]string {
+	// Every param the template names is always sent ("0" and "—" when there is none): a template never
+	// receives a missing param.
 	p := map[string]string{"key_label": run.oldLabel, "code": code}
-	// The servers where an undo failed: the new key may be left there (re-review N4).
-	var count int
-	var names []string
-	if err := tx.QueryRow(ctx, `SELECT count(*), coalesce(array_agg(DISTINCT t.name::text ORDER BY t.name::text), '{}')
-FROM rotation_locations l JOIN targets t ON t.id = l.target_id WHERE l.rotation_id = $1 AND l.state = 'undo_failed'`, run.id).
-		Scan(&count, &names); err == nil && count > 0 {
+	for _, st := range []struct{ state, prefix string }{{LocUndoFailed, "undo_failed"}, {LocRemoveFailed, "remove_failed"}} {
+		count, names := 0, []string{}
+		if err := tx.QueryRow(ctx, `SELECT count(*), coalesce(array_agg(DISTINCT t.name::text ORDER BY t.name::text), '{}')
+FROM rotation_locations l JOIN targets t ON t.id = l.target_id WHERE l.rotation_id = $1 AND l.state = $2`, run.id, st.state).
+			Scan(&count, &names); err != nil {
+			count, names = 0, nil
+		}
 		if len(names) > 10 {
 			names = append(names[:10], "…")
 		}
-		p["undo_failed_count"] = strconv.Itoa(count)
-		p["undo_failed_servers"] = strings.Join(names, ", ")
+		p[st.prefix+"_count"] = strconv.Itoa(count)
+		p[st.prefix+"_servers"] = listOrDash(names)
 	}
 	return p
+}
+
+// listOrDash joins names with ", ", or "—" when there is none.
+func listOrDash(names []string) string {
+	if len(names) == 0 {
+		return "—"
+	}
+	return strings.Join(names, ", ")
 }
 
 // undoPending: the location's add was sent and its undo has not ended.

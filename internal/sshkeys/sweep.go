@@ -104,6 +104,10 @@ func (s *Service) phaseOf(run runRow, l locRow) string {
 // requeue queues the jobs of one run's waiting locations, under the run's lock; ended reports
 // whether a location was ended by the bound.
 func (s *Service) requeue(ctx context.Context, id uuid.UUID) (queued int, ended bool, err error) {
+	// The waiting locations are read under the run lock; each is then re-queued in its own transaction
+	// (run lock again, the row re-read): one row the database refuses does not roll back the others
+	// (re-review N18).
+	var ids []uuid.UUID
 	err = s.storeTx(ctx, func(tx pgx.Tx) error {
 		run, err := lockRun(ctx, tx, id)
 		if err != nil || run.finished() || run.status == StatusDryRunNotified {
@@ -113,71 +117,124 @@ func (s *Service) requeue(ctx context.Context, id uuid.UUID) (queued int, ended 
 		if err != nil {
 			return err
 		}
-		now := s.clock.Now().UTC()
-		actor := jobActor(ctx)
 		for _, l := range locs {
-			phase := s.phaseOf(run, l)
-			if phase == "" {
-				continue
+			if s.phaseOf(run, l) != "" {
+				ids = append(ids, l.id)
 			}
-			if phase == "undo" && s.undoMustWait(l, now) {
-				continue // S3: the undo waits; the wait does not count toward the bound
-			}
-			var live bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM jobs WHERE dedupe_key = $1 AND status IN ('queued', 'running',
-    'blocked_license'))`, locationDedupe(l.id, phase)).Scan(&live); err != nil {
-				return fmt.Errorf("sshkeys: read the location's job: %w", err)
-			}
-			if live {
-				continue
-			}
-			if l.state == LocRemoveFailed {
-				// A failed removal never changes in place (it moves only into removing): its retries are
-				// counted as steps (G3); retryableRemoval bounds them.
-				if err := s.queueJob(ctx, tx, systemActor, id, l.id, l.targetID, phase); err != nil {
-					return err
-				}
-				if err := appendStep(ctx, tx, id, &l.id, "remove_retry", "started", nil, now); err != nil {
-					return err
-				}
-				queued++
-				continue
-			}
-			if l.jobCount >= MaxLocationJobs && phase == "undo" && l.state == LocAdding {
-				// G17, review I3: an adding row is never ended without an undo; its undo jobs did not get
-				// through, so the sweep records the undo's start itself (no network) and the undoing row is
-				// then bounded like any other.
-				if err := s.setLocation(ctx, tx, actor, l, LocUndoing, ReasonRetriesExhausted, now,
-					", undo_op_id = $5, undo_sent_at = $3, job_count = 0", uuid.Must(uuid.NewV7())); err != nil {
-					return err
-				}
-				// The guard requires the undo columns on an undoing row; the truth is that no undo was
-				// sent (re-review N4): a step says so.
-				id := l.id
-				if err := appendStep(ctx, tx, l.runID, &id, "undo_not_sent", "skipped", map[string]string{"reason": ReasonRetriesExhausted},
-					now); err != nil {
-					return err
-				}
-				continue
-			}
-			if l.jobCount >= MaxLocationJobs {
-				if err := s.exhaust(ctx, tx, actor, l, phase, now); err != nil {
-					return err
-				}
-				ended = true
-				continue
-			}
-			if err := s.queueJob(ctx, tx, systemActor, id, l.id, l.targetID, phase); err != nil {
-				return err
-			}
-			if err := s.setLocation(ctx, tx, actor, l, l.state, "", now, ", job_count = job_count + 1"); err != nil {
-				return err
-			}
-			queued++
 		}
 		return nil
 	})
-	return queued, ended, err
+	if err != nil {
+		return 0, false, err
+	}
+	var errs []error
+	for _, lid := range ids {
+		q, e, err := s.requeueOne(ctx, id, lid)
+		var g *GuardRefusal
+		if errors.As(err, &g) {
+			// The database refuses every write of this row: it ends in its failed state with the reason,
+			// so the run can reach needs_attention, which names it.
+			s.log.Error("the database refused a location's re-queue", "rotation_id", id.String(), "location_id", lid.String(),
+				"sqlstate", g.Code, "constraint", g.Constraint, "guard", g.Message)
+			if ferr := s.failRefused(ctx, lid); ferr != nil {
+				err = errors.Join(err, ferr)
+			} else {
+				e = true
+			}
+		}
+		if err != nil {
+			errs = append(errs, err)
+		}
+		queued += q
+		ended = ended || e
+	}
+	return queued, ended, errors.Join(errs...)
+}
+
+// requeueOne re-queues one location's job (or ends it at the bound) in its own transaction.
+func (s *Service) requeueOne(ctx context.Context, runID, locID uuid.UUID) (queued int, ended bool, err error) {
+	err = s.storeTx(ctx, func(tx pgx.Tx) error {
+		run, l, err := lockLocation(ctx, tx, locID, false)
+		if err != nil || run.finished() {
+			return err
+		}
+		phase := s.phaseOf(run, l)
+		if phase == "" {
+			return nil
+		}
+		now := s.clock.Now().UTC()
+		actor := jobActor(ctx)
+		if phase == "undo" && s.undoMustWait(l, now) {
+			return nil // S3: the undo waits; the wait does not count toward the bound
+		}
+		var live bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM jobs WHERE dedupe_key = $1 AND status IN ('queued', 'running',
+    'blocked_license'))`, locationDedupe(l.id, phase)).Scan(&live); err != nil {
+			return fmt.Errorf("sshkeys: read the location's job: %w", err)
+		}
+		if live {
+			return nil
+		}
+		if l.state == LocRemoveFailed {
+			// A failed removal never changes in place (it moves only into removing): its retries are
+			// counted as steps (G3); retryableRemoval bounds them.
+			if err := s.queueJob(ctx, tx, systemActor, runID, l.id, l.targetID, phase); err != nil {
+				return err
+			}
+			queued = 1
+			return appendStep(ctx, tx, runID, &l.id, "remove_retry", "started", nil, now)
+		}
+		if l.jobCount >= MaxLocationJobs && phase == "undo" && l.state == LocAdding {
+			// G17, review I3: an adding row is never ended without an undo; its undo jobs did not get
+			// through, so the sweep records the undo's start itself (no network) and the undoing row is
+			// then bounded like any other.
+			if err := s.setLocation(ctx, tx, actor, l, LocUndoing, ReasonRetriesExhausted, now,
+				", undo_op_id = $5, undo_sent_at = $3, job_count = 0", uuid.Must(uuid.NewV7())); err != nil {
+				return err
+			}
+			// The guard requires the undo columns on an undoing row; the truth is that no undo was
+			// sent (re-review N4): a step says so.
+			id := l.id
+			return appendStep(ctx, tx, l.runID, &id, "undo_not_sent", "skipped", map[string]string{"reason": ReasonRetriesExhausted}, now)
+		}
+		if l.jobCount >= MaxLocationJobs {
+			ended = true
+			return s.exhaust(ctx, tx, actor, l, phase, now)
+		}
+		if err := s.queueJob(ctx, tx, systemActor, runID, l.id, l.targetID, phase); err != nil {
+			return err
+		}
+		queued = 1
+		return s.setLocation(ctx, tx, actor, l, l.state, "", now, ", job_count = job_count + 1")
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	return queued, ended, nil
+}
+
+// failRefused ends a location the database refuses to re-queue in its failed state with
+// rotation.guard_refused (a removing row → remove_failed: the old key stays; an undo-pending row →
+// undo_failed; an add-side row → add_failed).
+func (s *Service) failRefused(ctx context.Context, locID uuid.UUID) error {
+	return s.storeTx(ctx, func(tx pgx.Tx) error {
+		run, l, err := lockLocation(ctx, tx, locID, false)
+		if err != nil || run.finished() {
+			return err
+		}
+		var to string
+		switch {
+		case l.state == LocRemoving || l.state == LocVerified:
+			to = LocRemoveFailed
+		case run.status == StatusRollingBack && l.state != LocAdding:
+			to = LocUndoFailed
+		case slices.Contains([]string{LocPlanned, LocAdding, LocAdded}, l.state):
+			to = LocAddFailed
+		default:
+			return nil
+		}
+		return s.setLocation(ctx, tx, jobActor(ctx), l, to, ReasonGuardRefused, s.clock.Now().UTC(), ", error_code = $5", ReasonGuardRefused)
+	})
 }
 
 // exhaust ends a location whose jobs reached MaxLocationJobs without progress (rotation.retries_exhausted).

@@ -86,7 +86,8 @@ func TestPreviewShowsSkipsWhenNothingCanChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, n)
 	assert.Len(t, e.mails("rotation.preview"), 1)
-	assert.True(t, e.reloadPolicy(p.ID).Enabled, "it tries again at the next tick")
+	assert.Len(t, e.mails("rotation.nothing_to_rotate"), 1, "told once for the interval (re-review M6)")
+	assert.True(t, e.reloadPolicy(p.ID).Enabled, "the policy stays on; the next interval plans again")
 }
 
 // The planner's skip reasons pass through as the planner names them (no closed list here):

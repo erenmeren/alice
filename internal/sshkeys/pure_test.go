@@ -223,7 +223,7 @@ func TestSmallStoreHelpers(t *testing.T) {
 func TestTemplates(t *testing.T) {
 	assert.Equal(t, []string{"rotation.preview", "rotation.preview_after_license", "rotation.overlap_started", "rotation.overlap_ending",
 		"rotation.completed", "rotation.aborted", "rotation.needs_attention", "rotation.paused_license", "rotation.decision_needed",
-		"rotation.completed_partial", "rotation.late_result"}, Templates())
+		"rotation.completed_partial", "rotation.late_result", "rotation.nothing_to_rotate"}, Templates())
 }
 
 // Review M2: a run that kept changing hands, or a live-run index refusal, never leaves as a raw

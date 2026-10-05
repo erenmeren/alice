@@ -206,6 +206,12 @@ func Build(in Input) (Plan, error) {
 	return p, nil
 }
 
+// SkipFor is the planner's skip reason for one location ("" = it changes), the rule Build applies per
+// location (the shared-file rule, which looks at every location of the file, is Build's alone). The
+// store asks it again at send time, so a location the scan changed since the start ends with the
+// reason the preview would now show (Task 9 re-review M7).
+func SkipFor(t Target, known bool, l Location) string { return skipReason(t, known, l) }
+
 func skipReason(t Target, known bool, l Location) string {
 	switch {
 	case !known || t.Deleted:

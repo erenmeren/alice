@@ -3,7 +3,6 @@
 package sshkeys_test
 
 import (
-	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -277,7 +276,6 @@ func TestBeginAddRepeatsTheConnectionAccountRule(t *testing.T) {
 	got := e.run(r.ID).Locations[0]
 	assert.Equal(t, "cancelled", got.State)
 	assert.Equal(t, "sshkey.connection_account_file", got.ErrorCode)
-	_ = json.Marshal
 }
 
 // Review M5: a decision that committed succeeds even when the following Advance fails.

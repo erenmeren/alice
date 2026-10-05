@@ -115,7 +115,8 @@ type locRow struct {
 
 const locSelect = `SELECT id, rotation_id, old_location_id, target_id, n, os_user, file_path, options, state, verify_note, error_code,
     add_op_id, remove_op_id, undo_op_id, new_location_id, add_sent_at, verified_at, reverified_at, remove_sent_at, job_count,
-    (SELECT count(*) FROM rotation_steps s WHERE s.location_id = rotation_locations.id AND s.name = 'remove_retry'
+    (SELECT count(*) FILTER (WHERE s.name = 'remove_retry') - count(*) FILTER (WHERE s.name = 'retry_returned') FROM rotation_steps s
+        WHERE s.location_id = rotation_locations.id AND s.name IN ('remove_retry', 'retry_returned')
         AND s.n > coalesce((SELECT max(p.n) FROM rotation_steps p WHERE p.rotation_id = rotation_locations.rotation_id AND p.name = 'paused'), 0)),
     add_resent_at, add_resend_count, remove_failed_at,
     EXISTS (SELECT 1 FROM rotation_steps s WHERE s.location_id = rotation_locations.id AND s.name = 'add_answered')
@@ -288,9 +289,9 @@ func (s *Service) LocationWork(ctx context.Context, locationID uuid.UUID) (Locat
 // ErrNotYourTurn.
 func (s *Service) BeginAdd(ctx context.Context, locationID uuid.UUID) (uuid.UUID, error) {
 	var op uuid.UUID
-	refused := ""
+	refused, paused := "", false
 	err := s.jobTx(ctx, func(tx pgx.Tx) error {
-		refused = ""
+		refused, paused = "", false
 		run, loc, err := lockLocation(ctx, tx, locationID, true)
 		if err != nil {
 			return err
@@ -298,38 +299,32 @@ func (s *Service) BeginAdd(ctx context.Context, locationID uuid.UUID) (uuid.UUID
 		if run.status != StatusAddingNew || (loc.state != LocPlanned && loc.state != LocAdding) {
 			return ErrNotYourTurn
 		}
+		now := s.clock.Now().UTC()
 		if !s.gateOK() || run.pausedLicense {
-			return ErrPaused
+			paused = true
+			return s.giveRetryBack(ctx, tx, loc, now) // a lock shorter than a sweep uses up no retry (M11)
 		}
-		t, err := s.inv.TargetTx(ctx, tx, loc.targetID, true)
+		skip, err := s.skipAtSend(ctx, tx, run, loc)
 		if err != nil {
-			if errors.Is(err, inventory.ErrNotFound) {
-				return ErrNotYourTurn
-			}
 			return err
 		}
-		if inventory.KeyChangeRefusal(t, loc.osUser) != nil {
-			return ErrNotYourTurn
-		}
-		now := s.clock.Now().UTC()
-		conn := connectionUser(t)
-		var known string
-		switch {
-		case loc.osUser == conn || slices.Contains(filesOf(t.Facts, conn), loc.filePath):
-			known = ReasonConnectionAccountFile
-		case !connectionFilesKnown(t.Facts, conn):
-			known = ReasonConnectionFilesUnknown
-		}
-		if known != "" {
-			// A cause known before any send (the planner skips it; the scan changed since the start):
-			// the location ends at once, definitely, with its own reason; no retry is used and the
-			// others carry on (Task 9 re-review N1). A planned row was never sent: cancelled; a row
-			// already adding failed definitely (its earlier send is undone if the run rolls back).
-			refused = known
-			if loc.state == LocPlanned {
-				return s.setLocation(ctx, tx, jobActor(ctx), loc, LocCancelled, known, now, ", error_code = $5", known)
+		if skip != "" {
+			// A cause the planner skips, found at send time (the scan changed since the start): the
+			// location ends at once, definitely, with its reason; no retry is used and the others carry
+			// on (re-review N1, M7). A planned row was never sent: cancelled; a row already adding failed
+			// definitely (its earlier send is undone if the run rolls back, ruling 2).
+			code := ReasonSkippedAtSend
+			switch skip {
+			case plan.SkipConnectionFilesUnknown:
+				code = ReasonConnectionFilesUnknown
+			case plan.SkipConnectionAccount, plan.SkipConnectionAccountFile:
+				code = ReasonConnectionAccountFile
 			}
-			return s.setLocation(ctx, tx, jobActor(ctx), loc, LocAddFailed, known, now, ", error_code = $5", known)
+			refused = code
+			if loc.state == LocPlanned {
+				return s.setLocation(ctx, tx, jobActor(ctx), loc, LocCancelled, code, now, ", error_code = $5, skip_reason = $6", code, skip)
+			}
+			return s.setLocation(ctx, tx, jobActor(ctx), loc, LocAddFailed, code, now, ", error_code = $5", code)
 		}
 		if loc.addSentAt != nil && now.Before(lastAddSend(loc)) {
 			return ErrNotYourTurn // the clock went back: retried later (G14)
@@ -345,10 +340,41 @@ func (s *Service) BeginAdd(ctx context.Context, locationID uuid.UUID) (uuid.UUID
 		op = uuid.Must(uuid.NewV7())
 		return s.setLocation(ctx, tx, jobActor(ctx), loc, LocAdding, "", now, ", add_op_id = $5, add_sent_at = $3", op)
 	})
-	if err == nil && refused != "" {
+	switch {
+	case err == nil && paused:
+		return uuid.Nil, ErrPaused
+	case err == nil && refused != "":
 		return uuid.Nil, fmt.Errorf("%w (%s)", ErrNotYourTurn, refused)
 	}
 	return op, err
+}
+
+// skipAtSend is the planner's skip reason for the location now (plan.SkipFor on the current facts of
+// its target and its old location), "" when it may be sent.
+func (s *Service) skipAtSend(ctx context.Context, tx pgx.Tx, run runRow, loc locRow) (string, error) {
+	t, err := s.inv.TargetTx(ctx, tx, loc.targetID, true)
+	known := err == nil
+	if err != nil && !errors.Is(err, inventory.ErrNotFound) {
+		return "", err
+	}
+	locs, err := s.inv.KeyLocationsTx(ctx, tx, run.oldKeyID, false)
+	if err != nil {
+		return "", err
+	}
+	i := slices.IndexFunc(locs, func(l inventory.KeyLocation) bool { return l.ID == loc.oldLocationID })
+	if i < 0 {
+		return plan.SkipMissing, nil // removed by Alice, or its server is deleted
+	}
+	in := toPlanInput(keyRow{}, locs[i:i+1], map[uuid.UUID]inventory.Target{loc.targetID: t}, nil, Policy{}, time.Time{})
+	return plan.SkipFor(in.Targets[loc.targetID], known, in.Locations[0]), nil
+}
+
+// giveRetryBack returns the retry a job answered ErrPaused with (M11): its job_count goes down by one.
+func (s *Service) giveRetryBack(ctx context.Context, tx pgx.Tx, loc locRow, now time.Time) error {
+	if loc.jobCount == 0 || !slices.Contains([]string{LocPlanned, LocAdding, LocAdded, LocVerified, LocRemoving}, loc.state) {
+		return nil
+	}
+	return s.setLocation(ctx, tx, jobActor(ctx), loc, loc.state, "", now, ", job_count = job_count - 1")
 }
 
 // recordNewLocation records the new key's line at the location in the inventory (RecordKeyAddedTx)
@@ -489,7 +515,9 @@ func (s *Service) RecordVerify(ctx context.Context, locationID uuid.UUID, r Veri
 // (removing, a new operation id) after every condition of BeginRemove's gate held; a failed re-check
 // of it leaves it failed.
 func (s *Service) RecordReverify(ctx context.Context, locationID uuid.UUID, r VerifyRecord) error {
-	return s.jobTx(ctx, func(tx pgx.Tx) error {
+	pausedRetry := false
+	err := s.jobTx(ctx, func(tx pgx.Tx) error {
+		pausedRetry = false
 		run, loc, err := lockLocation(ctx, tx, locationID, false)
 		if err != nil {
 			return err
@@ -512,6 +540,15 @@ func (s *Service) RecordReverify(ctx context.Context, locationID uuid.UUID, r Ve
 				return ErrNotYourTurn // G3', G20: a strictly newer re-check, later than the failed send and the failure
 			}
 			if err := s.removeGate(ctx, tx, run, loc, now, now); err != nil {
+				if errors.Is(err, ErrPaused) && loc.retries > 0 {
+					// A short lock uses up no retry (M11): the retry is given back as a step.
+					id := loc.id
+					if serr := appendStep(ctx, tx, loc.runID, &id, "retry_returned", "skipped", nil, now); serr != nil {
+						return serr
+					}
+					pausedRetry = true
+					return nil
+				}
 				return err
 			}
 			return s.setLocation(ctx, tx, actor, loc, LocRemoving, "", now,
@@ -522,6 +559,10 @@ func (s *Service) RecordReverify(ctx context.Context, locationID uuid.UUID, r Ve
 		reason := closedReason(r.Reason, ReasonNewKeyFailed)
 		return s.setLocation(ctx, tx, actor, loc, LocRemoveFailed, reason, now, ", error_code = $5", reason)
 	})
+	if err == nil && pausedRetry {
+		return ErrPaused
+	}
+	return err
 }
 
 // fileReady reports whether every other location of the run in the location's (target, file) is
@@ -549,7 +590,9 @@ AND id <> $4 AND (state NOT IN ('verified', 'removing', 'removed')
 // gate. The database checks all of it again.
 func (s *Service) BeginRemove(ctx context.Context, locationID uuid.UUID) (uuid.UUID, error) {
 	var op uuid.UUID
+	paused := false
 	err := s.jobTx(ctx, func(tx pgx.Tx) error {
+		paused = false
 		run, loc, err := lockLocation(ctx, tx, locationID, false)
 		if err != nil {
 			return err
@@ -562,6 +605,10 @@ func (s *Service) BeginRemove(ctx context.Context, locationID uuid.UUID) (uuid.U
 			return ErrNotYourTurn
 		}
 		if err := s.removeGate(ctx, tx, run, loc, *loc.reverified, now); err != nil {
+			if errors.Is(err, ErrPaused) {
+				paused = true
+				return s.giveRetryBack(ctx, tx, loc, now)
+			}
 			return err
 		}
 		op = uuid.Must(uuid.NewV7())
@@ -572,6 +619,9 @@ func (s *Service) BeginRemove(ctx context.Context, locationID uuid.UUID) (uuid.U
 		return s.setLocation(ctx, tx, jobActor(ctx), loc, LocRemoving, "", now,
 			", remove_op_id = $5, remove_verified_at = reverified_at, remove_sent_at = $3"+reset, op)
 	})
+	if err == nil && paused {
+		return uuid.Nil, ErrPaused
+	}
 	return op, err
 }
 
@@ -762,8 +812,8 @@ func (s *Service) BeginUndo(ctx context.Context, locationID uuid.UUID) (uuid.UUI
 		if s.undoMustWait(loc, now) {
 			return ErrNotYourTurn
 		}
-		if now.Before(*loc.addSentAt) {
-			return ErrNotYourTurn // the clock went back (G14)
+		if now.Before(lastAddSend(loc)) {
+			return ErrNotYourTurn // the clock went back behind the latest send (G14; re-review M1)
 		}
 		op = uuid.Must(uuid.NewV7())
 		reset := ", job_count = 0"

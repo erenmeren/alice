@@ -471,3 +471,12 @@ func TestDigestFollowsVerifyAndSkipDecisions(t *testing.T) {
 	assert.Equal(t, ref.Skips, p.Skips)
 	assert.NotEqual(t, ref.Digest(), p.Digest(), "only Skip differs (missing -> target_not_connected)")
 }
+
+func TestSkipForIsTheBuildRule(t *testing.T) {
+	tg := okTarget(t1, "web-01")
+	l := loc(t1, "deploy", "/home/deploy/.ssh/authorized_keys", "")
+	assert.Equal(t, "", SkipFor(tg, true, l))
+	tg.KeysManagedElsewhere = true
+	assert.Equal(t, SkipKeysManagedElsewhere, SkipFor(tg, true, l))
+	assert.Equal(t, SkipTargetDeleted, SkipFor(tg, false, l))
+}
