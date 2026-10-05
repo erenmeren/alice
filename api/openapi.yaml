@@ -1707,7 +1707,8 @@ paths:
       description: >-
         All or nothing; a refusal decided for one website carries params.location_id: 409 ALC-AKV-0018 (already connected),
         ALC-CRT-0010 (key type of the place), ALC-NGX-0007 (location unsupported); 409 ALC-AKV-0019 (the certificate already
-        has a connection), 422 ALC-AKV-0013 (key not exportable), 409 ALC-AKV-0015 (certificate no longer in the vault). Refused with 403 ALC-LIC-0001 while the license is locked.
+        has a connection), 422 ALC-AKV-0013 (key not exportable), 409 ALC-AKV-0015 (certificate no longer in the vault), 409
+        ALC-AKV-0021 (Alice has not read the certificate's details yet: no current version; Check now, then try again). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.operate
       requestBody:
         required: true
@@ -1755,7 +1756,8 @@ paths:
         deploys automatically puts them under automatic deployment, so it needs an Administrator's browser session with a
         fresh step-up (403 ALC-AUTH-0003; an API token: 403 ALC-AUTH-0002; an Operator: 403 ALC-AUTH-0002); releasing websites does not.
         The inventory repeats the check inside its transaction and is told whether the session is strict. 412 ALC-SYS-0008 when the
-        connection changed since the caller read it (the ETag), checked before anything else.
+        If-Match header is missing or the connection changed since the caller read it (the ETag); the ETag is compared after the
+        request is read (400, 413, 422) and the connection is found (404), and before anything about the change is judged.
         Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.operate
       parameters:
@@ -1867,9 +1869,11 @@ paths:
       description: >-
         target_id is the vault, name the certificate name in it (letters, digits and hyphens, 1 to 127). A name the vault already
         has is refused with 409 ALC-AKV-0023 (params certificate_name, bound and auto_deploy_follows: "true" when a connection
-        with automatic deployment names the certificate, so the new version is deployed by itself) until the request
+        with automatic deployment on names the certificate, so automatic deployment may deploy the new version: it still holds
+        an incomplete chain or a version found while the license is not available) until the request
         carries confirm_new_version: true. 409 ALC-AKV-0024 (an import of this name is open), ALC-CRT-0009 (no private key), 422 ALC-CRT-0003
-        (expired), ALC-CRT-0007 (key type), 409 ALC-AKV-0033 (vault disabled). The PFX is built inside Alice and never
+        (expired), 409 ALC-CRT-0014 (not yet valid), 422 ALC-CRT-0007 (key type), 422 ALC-CRT-0001 (the stored certificate cannot
+        be read back), 409 ALC-AKV-0033 (vault disabled). The PFX is built inside Alice and never
         returned. If the answer of the vault is lost the import stays uncertain: it is never sent again, a poll that sees its
         thumbprint settles it, and otherwise it ends as ALC-AKV-0026. Needs an Administrator's browser session with a fresh step-up verification code (403 ALC-AUTH-0003 without it) and is never available to API tokens (403 ALC-AUTH-0002). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: credentials.manage

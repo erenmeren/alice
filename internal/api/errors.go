@@ -516,8 +516,9 @@ func classify(err error) (ErrorCode, map[string]string, bool) {
 	var confirm *inventory.ImportConfirmError
 	if errors.As(err, &confirm) {
 		// The vault's own spelling of the name (a closed grammar, azureid.ValidObjectName), never text.
-		// auto_deploy_follows / bound tell the dialog that a connection names the certificate and that a new version is
-		// deployed to its websites by itself (booleans as "true"/"false": params are strings).
+		// bound / auto_deploy_follows tell the dialog that a connection names the certificate and that the connection has
+		// automatic deployment on, so a new version may be deployed by itself (not that it will be: the planner's rules
+		// still apply). Booleans as "true"/"false": params are strings.
 		params := map[string]string{"auto_deploy_follows": strconv.FormatBool(confirm.AutoDeploy), "bound": strconv.FormatBool(confirm.Bound)}
 		if providerParamRules["certificate_name"].MatchString(confirm.CertificateName) {
 			params["certificate_name"] = confirm.CertificateName
