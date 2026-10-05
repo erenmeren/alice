@@ -857,7 +857,8 @@ func TestReleaseHeldVersion(t *testing.T) {
 	ev = h.auditDetails("kv.version.released")
 	require.Len(t, ev, 2)
 	assert.Equal(t, "incomplete_chain", ev[1]["reason"])
-	assert.Equal(t, "true", ev[1]["confirm_incomplete_chain"])
+	assert.Equal(t, "true", ev[1]["chain_incomplete_acknowledged"], "an acknowledgement, not an approval of a deployment")
+	assert.NotContains(t, ev[1], "confirm_incomplete_chain")
 
 	// A deleted vault's version.
 	hold("license")

@@ -1574,7 +1574,8 @@ paths:
         A version is held when it was found while the license gate was closed (hold_reason license; hold_rule on the audit row
         says which rule held it, see HoldRule) or when its
         certificate chain is incomplete (hold_reason incomplete_chain; releasing it needs confirm_incomplete_chain: true,
-        409 ALC-CRT-0011 otherwise). 409 ALC-AKV-0035 when the version is not held. The body is optional. Needs an Administrator's browser session with a fresh step-up verification code (403 ALC-AUTH-0003 without it) and is never available to API tokens (403 ALC-AUTH-0002). Refused with 403 ALC-LIC-0001 while the license is locked.
+        409 ALC-CRT-0011 otherwise; that is an acknowledgement for the release only: automatic deployment never deploys an
+        incomplete chain and holds the version again, and every manual deployment of it needs the confirmation again). 409 ALC-AKV-0035 when the version is not held. The body is optional. Needs an Administrator's browser session with a fresh step-up verification code (403 ALC-AUTH-0003 without it) and is never available to API tokens (403 ALC-AUTH-0002). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: credentials.manage
       requestBody:
         required: false
@@ -2164,7 +2165,7 @@ components:
       type: object
       additionalProperties: false
       properties:
-        confirm_incomplete_chain: { type: boolean, description: 'The Administrator''s confirmation (F-17) for a version held for its incomplete chain' }
+        confirm_incomplete_chain: { type: boolean, description: 'The Administrator''s acknowledgement of the incomplete chain of a version held for it; it approves no deployment' }
     BindingCreate:
       type: object
       required: [kv_certificate_id, location_ids]

@@ -226,8 +226,10 @@ FROM kv_certificate_versions WHERE id = $1 FOR SHARE`, in.VersionID).Scan(&v.cer
 	return out, nil
 }
 
-// ReleaseInput names a held version. ConfirmIncompleteChain is the Administrator's confirmation (F-17)
-// that a version held for its incomplete chain may be deployed automatically.
+// ReleaseInput names a held version. ConfirmIncompleteChain is the Administrator's acknowledgement that a
+// version held for its incomplete chain is released with that chain. It approves nothing else: automatic
+// deployment never deploys an incomplete chain (the next automatic attempt holds the version again), and every
+// manual deployment of the version still needs its own confirmation (RequestKVDeployment).
 type ReleaseInput struct {
 	VaultID, KVCertificateID uuid.UUID // the version must belong to this certificate of this vault
 	VersionID                uuid.UUID
@@ -239,8 +241,8 @@ type ReleaseInput struct {
 // ruling S8, or because its chain was incomplete, ruling S7); the license gate must be open
 // (license.ErrLocked otherwise: a version held for the license is not released while the license still
 // refuses changes); ErrNotFound for an unknown version or one of a deleted vault; ErrVersionNotHeld; and
-// a version held for its incomplete chain needs ConfirmIncompleteChain (ErrChainUnconfirmed: F-17 is not
-// relaxed). A release is also the trace the planner reads: it sets notified_at (if unset), and the planner
+// a version held for its incomplete chain needs ConfirmIncompleteChain (ErrChainUnconfirmed), an
+// acknowledgement only: it does not let automatic deployment deploy the chain. A release is also the trace the planner reads: it sets notified_at (if unset), and the planner
 // never holds a version again that has it, so a released version is not held again by the reopening rule. Releasing deploys nothing and does not turn automatic deployment on: it only lets the
 // planner see the version again, which may hold it again if the chain is still incomplete when the
 // secret is read. Audited kv.version.released (who, which version, which reason was released); a
@@ -315,8 +317,8 @@ JOIN kv_certificates kc ON kc.id = v.kv_certificate_id WHERE v.id = $1 FOR UPDAT
 			return fmt.Errorf("inventory: release the version: %w", err)
 		}
 		details := map[string]string{"kv_certificate_id": cert.String(), "certificate_name": name, "version": version, "reason": reason, "held": "false"}
-		if reason == heldIncompleteChain {
-			details["confirm_incomplete_chain"] = "true"
+		if reason == heldIncompleteChain { // acknowledged for the release; no deployment is approved by it
+			details["chain_incomplete_acknowledged"] = "true"
 		}
 		if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "kv.version.released", ObjectType: "kv_certificate_version",
 			ObjectID: in.VersionID.String(), Result: audit.Success, Details: details}); err != nil {

@@ -332,8 +332,9 @@ func (s *server) getKVCertificate(w http.ResponseWriter, r *http.Request) {
 }
 
 // releaseVersion lifts the hold of a version (spec §11.6 item 8). The route is scoped to the vault and the
-// certificate; confirm_incomplete_chain is the Administrator's F-17 confirmation for a version held for its
-// incomplete chain (the route is an Administrator's already).
+// certificate; confirm_incomplete_chain is the Administrator's acknowledgement that a version held for its
+// incomplete chain is released with that chain (the route is an Administrator's already). It approves no
+// deployment: automatic deployment holds the version again, and Deploy now asks for the confirmation again.
 func (s *server) releaseVersion(w http.ResponseWriter, r *http.Request) {
 	vault, ok1 := pathUUID(r, "id")
 	cert, ok2 := pathUUID(r, "certificate_id")
