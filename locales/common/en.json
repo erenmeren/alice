@@ -512,8 +512,8 @@
       },
       "pfx_busy": {
         "title": "Alice is busy reading other PFX files.",
-        "cause": "Alice reads at most two PFX files at a time, and that limit was reached. Nothing was stored.",
-        "action": "Wait a moment and upload the file again."
+        "cause": "Alice reads at most two PFX files at a time, and that limit was reached. Nothing was stored or sent to a server.",
+        "action": "Wait a moment and try again."
       }
     },
     "csr": {

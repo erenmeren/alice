@@ -512,8 +512,8 @@
       },
       "pfx_busy": {
         "title": "Alice başka PFX dosyalarını okumakla meşgul.",
-        "cause": "Alice aynı anda en fazla iki PFX dosyası okur ve bu sınıra ulaşıldı. Hiçbir şey kaydedilmedi.",
-        "action": "Biraz bekleyip dosyayı yeniden yükleyin."
+        "cause": "Alice aynı anda en fazla iki PFX dosyası okur ve bu sınıra ulaşıldı. Hiçbir şey kaydedilmedi ya da bir sunucuya gönderilmedi.",
+        "action": "Biraz bekleyip yeniden deneyin."
       }
     },
     "csr": {

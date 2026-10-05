@@ -727,6 +727,14 @@ func TestPhase5TextsAreTruthfulAndWorded(t *testing.T) {
 	assert.Contains(t, en("errors.kv.credential_unreadable.action"), "Replace credentials")
 	assert.Contains(t, tr("errors.kv.credential_unreadable.action"), "Kimlik bilgilerini değiştir")
 	assert.Contains(t, en("errors.kv.credential_unreadable.cause"), "Nothing was changed on your servers")
+	// certificate.pfx_busy also ends a Key Vault deployment's vault step, where nothing was uploaded (final review B M-3).
+	for lang, words := range map[string][]string{"en": {"upload"}, "tr": {"yükle"}} {
+		for _, part := range []string{"cause", "action"} {
+			for _, w := range words {
+				assert.NotContains(t, cat.T(lang, "errors.certificate.pfx_busy."+part, nil), w, lang)
+			}
+		}
+	}
 }
 
 // The complete map of what the API answers for each Phase 5 sentinel (the task's report lists it).

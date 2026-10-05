@@ -201,7 +201,7 @@ describe('UploadCertificateDialog', () => {
       await userEvent.type(screen.getByLabelText('PFX password'), 'alice-test');
       await userEvent.click(screen.getByRole('button', { name: 'Upload' }));
       expect(await screen.findByText('Alice is busy reading other PFX files.')).toBeInTheDocument();
-      expect(screen.getByText('Wait a moment and upload the file again.')).toBeInTheDocument();
+      expect(screen.getByText('Wait a moment and try again.')).toBeInTheDocument();
       expect(screen.getByLabelText('PFX password')).toHaveValue('alice-test');
       expect(screen.getByText('site.pfx')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled();
