@@ -60,7 +60,7 @@ func TestKVDeploymentSecretReadOverTheWire(t *testing.T) {
 		{name: "version disabled before the read", inject: func(k *kvnj, v string) { k.kv.DisableVersion("web-cert", v) }, code: "ALC-AKV-0014", reason: "kv.version_disabled"},
 		{name: "certificate deleted before the read", inject: func(k *kvnj, _ string) { k.kv.DeleteCertificate("web-cert") }, code: "ALC-AKV-0015", reason: "kv.certificate_not_found"},
 		{name: "200 without a private key (policy flipped)", inject: func(k *kvnj, _ string) { k.kv.SetExportable("web-cert", false) },
-			code: "ALC-AKV-0016", reason: "kv.secret_unreadable", audit: "secret_unreadable"},
+			code: "ALC-AKV-0016", reason: "kv.secret_unreadable", audit: "not_exportable"},
 		{name: "secret unauthorised (token refused)", inject: func(k *kvnj, _ string) {
 			k.kv.FailNext("/secrets/web-cert", fakekv.Fault{Status: http.StatusUnauthorized})
 			k.kv.FailNext("/secrets/web-cert", fakekv.Fault{Status: http.StatusUnauthorized})
@@ -86,6 +86,10 @@ func TestKVDeploymentSecretReadOverTheWire(t *testing.T) {
 			assert.Equal(t, pki.Fingerprint(k.f.old.Cert), k.f.served(wwwName), "the website is unchanged")
 			if tc.audit != "" {
 				assert.Equal(t, 1, k.countWhere("audit_log", "action = 'kv.secret_read' AND result = 'failure' AND details->>'reason' = '"+tc.audit+"' AND details->>'purpose' = 'deploy'"))
+			}
+			if tc.audit == "not_exportable" { // the flip is stored: the next request is refused (ALC-AKV-0013), the page says Monitor only
+				assert.Equal(t, 1, k.countWhere("kv_certificates", "name = 'web-cert' AND exportable = false"))
+				assert.Equal(t, 1, k.countWhere("kv_certificate_versions", "exportable = false"))
 			}
 			// The error carried only closed reasons: nothing but allowlisted params, short.
 			for key, v := range d.Error.Params {
