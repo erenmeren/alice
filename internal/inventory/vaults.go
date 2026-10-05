@@ -921,6 +921,17 @@ func (s *Service) RecordAccessCheckRead(ctx context.Context, vaultID uuid.UUID, 
 		if result == audit.Failure {
 			details["reason"] = reason
 		}
+		// Who asked for the check: the job's requester (the row's actor is the jobs actor that read the secret).
+		if c, ok := claimOf(ctx); ok {
+			var by *uuid.UUID
+			var role string
+			if err := tx.QueryRow(ctx, "SELECT created_by, created_by_role FROM jobs WHERE id = $1", c.JobID).Scan(&by, &role); err != nil {
+				return fmt.Errorf("inventory: read the access check's requester: %w", err)
+			}
+			if by != nil {
+				details["requested_by"], details["requested_by_role"] = by.String(), role
+			}
+		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "kv.secret_read", ObjectType: "target", ObjectID: vaultID.String(),
 			Result: result, Details: details})
 		return err

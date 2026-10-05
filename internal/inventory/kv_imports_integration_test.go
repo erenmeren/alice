@@ -1205,6 +1205,18 @@ func TestRecordAccessCheckRead(t *testing.T) {
 	claimed := inventory.WithClaim(ctx, inventory.Claim{JobID: uuid.New(), Attempt: 1})
 	other := h.vault("again")
 	assert.ErrorIs(t, h.svc.RecordAccessCheckRead(claimed, other, "web-cert", ver(1), audit.Success, ""), inventory.ErrClaimLost)
+
+	// Run by the access check job: the row names who asked for the check (final review B M-7).
+	job, err := h.svc.RequestAccessCheck(ctx, f.operator, other, uuid.Nil)
+	require.NoError(t, err)
+	_, err = h.db.Owner.Exec(ctx, "UPDATE jobs SET status = 'running', attempts = 1 WHERE id = $1", job)
+	require.NoError(t, err)
+	require.NoError(t, h.svc.RecordAccessCheckRead(inventory.WithClaim(ctx, inventory.Claim{JobID: job, Attempt: 1}), other, "web-cert", ver(1),
+		audit.Success, ""))
+	d = h.auditDetails("kv.secret_read")
+	require.Len(t, d, 3)
+	assert.Equal(t, f.operator.UserID.String(), d[2]["requested_by"])
+	assert.Equal(t, "operator", d[2]["requested_by_role"])
 }
 
 // Without a notifier nothing is mailed and nothing breaks: the marks, audit rows and states are the same.
