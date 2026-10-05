@@ -284,7 +284,7 @@ func (s *Service) ConfirmHostKey(ctx context.Context, a Actor, targetID, keyID u
 // resumes work through a new connection test.
 func (s *Service) RepinHostKey(ctx context.Context, a Actor, targetID, keyID uuid.UUID, fingerprint, reason string) (uuid.UUID, error) {
 	reason = strings.TrimSpace(reason)
-	if errs := validateReason(reason); len(errs) > 0 {
+	if errs := ValidateReason(reason); len(errs) > 0 {
 		return uuid.Nil, errs
 	}
 	var jobID uuid.UUID
@@ -373,9 +373,9 @@ func rejectCandidates(ctx context.Context, tx pgx.Tx, targetID uuid.UUID) error 
 	return nil
 }
 
-// validateReason: 10 to 500 characters on one line, no control, invisible format or bidi
+// ValidateReason: 10 to 500 characters on one line, no control, invisible format or bidi
 // characters (as validName), never a PEM block (S-05: people paste secrets into reason fields).
-func validateReason(reason string) validate.Errors {
+func ValidateReason(reason string) validate.Errors {
 	var errs validate.Errors
 	n := utf8.RuneCountInString(reason)
 	switch {

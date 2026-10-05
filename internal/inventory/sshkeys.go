@@ -212,6 +212,7 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL A
 			sshd := res.SSHD
 			f.SSHD, f.HostKeys, f.Warnings, f.Unreadable = &sshd, res.HostKeys, res.Warnings, res.UnreadableLines
 			f.UID0Users = append([]string(nil), res.UID0Users...)
+			f.KeyFiles = slices.Clone(res.KeyFiles)
 		}
 		// The certificate half (D19: after the SSH facts, before they are stored). Only a usable
 		// configuration's certificates are stored; any other Nginx result (invalid, untrusted or
@@ -485,20 +486,21 @@ func (s *Service) ListSSHKeys(ctx context.Context, f KeyFilter) (KeyPage, error)
 	if q := strings.TrimSpace(f.Query); q != "" {
 		pattern = likePattern(foldSearch(q))
 	}
-	rows, err := s.pool.Query(ctx, `SELECT k.id, k.fingerprint_sha256, k.key_type, k.bits, k.public_key, k.managed, k.is_platform_key, k.weak,
-    k.first_seen_at, count(*), count(DISTINCT l.target_id), (array_agg(l.comment ORDER BY l.last_seen_at DESC, l.id DESC))[1],
-    bool_and(l.missing_since IS NOT NULL OR l.removed_by_alice_at IS NOT NULL)
+	rows, err := s.pool.Query(ctx, `SELECT k.id, k.fingerprint_sha256, k.key_type, k.bits, k.public_key, k.managed, k.is_platform_key, k.weak, k.first_seen_at,
+    count(l.id), count(DISTINCT l.target_id),
+    coalesce((array_agg(l.comment ORDER BY l.last_seen_at DESC, l.id DESC) FILTER (WHERE l.id IS NOT NULL))[1], k.key_comment),
+    coalesce(bool_and(l.missing_since IS NOT NULL OR l.removed_by_alice_at IS NOT NULL) FILTER (WHERE l.id IS NOT NULL), false)
 FROM ssh_keys k
-JOIN ssh_key_locations l ON l.ssh_key_id = k.id
-JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
-WHERE ($1::uuid IS NULL OR l.target_id = $1)
+LEFT JOIN (ssh_key_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL) ON l.ssh_key_id = k.id
+WHERE (l.id IS NOT NULL OR (k.managed AND $1::uuid IS NULL AND $2::text = '' AND $4::text = ''))
+  AND ($1::uuid IS NULL OR l.target_id = $1)
   AND ($2::text = '' OR l.os_user = $2)
   AND ($3::text = ''
        OR translate(k.fingerprint_sha256, 'ABCDEFGHIJKLMNOPQRSTUVWXYZİı', 'abcdefghijklmnopqrstuvwxyzii') LIKE $3 ESCAPE '\'
-       OR translate(l.comment, 'ABCDEFGHIJKLMNOPQRSTUVWXYZİı', 'abcdefghijklmnopqrstuvwxyzii') LIKE $3 ESCAPE '\'
+       OR translate(coalesce(l.comment, k.key_comment), 'ABCDEFGHIJKLMNOPQRSTUVWXYZİı', 'abcdefghijklmnopqrstuvwxyzii') LIKE $3 ESCAPE '\'
        OR translate(k.key_type, 'ABCDEFGHIJKLMNOPQRSTUVWXYZİı', 'abcdefghijklmnopqrstuvwxyzii') LIKE $3 ESCAPE '\')
   AND ($4::text = '' OR $4 = ANY (l.flags))
-  AND ($5::boolean OR (l.missing_since IS NULL AND l.removed_by_alice_at IS NULL))
+  AND ($5::boolean OR l.id IS NULL OR (l.missing_since IS NULL AND l.removed_by_alice_at IS NULL))
   AND ($6::timestamptz IS NULL OR (k.first_seen_at, k.id) > ($6::timestamptz, $7::uuid))
 GROUP BY k.id
 ORDER BY k.first_seen_at, k.id
@@ -531,8 +533,8 @@ LIMIT $8`, target, f.OSUser, pattern, f.Flag, f.IncludeMissing, afterAt, afterID
 // GetSSHKey returns a key with every location on a live target (including missing and removed ones).
 func (s *Service) GetSSHKey(ctx context.Context, id uuid.UUID) (SSHKey, error) {
 	var k SSHKey
-	err := s.pool.QueryRow(ctx, `SELECT id, fingerprint_sha256, key_type, bits, public_key, managed, is_platform_key, weak, first_seen_at
-FROM ssh_keys WHERE id = $1`, id).Scan(&k.ID, &k.Fingerprint, &k.KeyType, &k.Bits, &k.PublicKey, &k.Managed, &k.IsPlatformKey, &k.Weak, &k.FirstSeenAt)
+	err := s.pool.QueryRow(ctx, `SELECT id, fingerprint_sha256, key_type, bits, public_key, managed, is_platform_key, weak, first_seen_at, key_comment
+FROM ssh_keys WHERE id = $1`, id).Scan(&k.ID, &k.Fingerprint, &k.KeyType, &k.Bits, &k.PublicKey, &k.Managed, &k.IsPlatformKey, &k.Weak, &k.FirstSeenAt, &k.Comment)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SSHKey{}, ErrNotFound
 	}

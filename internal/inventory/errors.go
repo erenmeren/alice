@@ -22,6 +22,8 @@ var (
 	ErrLastRootKey          = errors.New("inventory: this is the last key of root")
 	ErrKeysManagedElsewhere = errors.New("inventory: keys on this server are managed by AuthorizedKeysCommand")
 	ErrNotRemovable         = errors.New("inventory: this key location cannot be removed")
+	// ErrTargetDisabled: the server is disabled; no key change is made on it (KeyChangeRefusal).
+	ErrTargetDisabled = errors.New("inventory: the server is disabled")
 	// ErrSSHDUnreadable: the last scan could not read sshd's settings (for the server or the
 	// key's user), so the files Alice sees may not be the ones sshd uses.
 	ErrSSHDUnreadable = errors.New("inventory: the server's sshd settings could not be read")

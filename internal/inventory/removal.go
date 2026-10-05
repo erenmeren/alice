@@ -96,14 +96,16 @@ WHERE l.id = $1 AND l.target_id = $2 FOR UPDATE OF l`, locationID, targetID), &i
 			return ErrNotRemovable
 		case loc.IsAliceConnectionKey || isPlatform || slices.Contains(protected, loc.Fingerprint):
 			return &denial{reason: "own_key", err: ErrOwnKeyProtected, loc: loc}
-		case t.Status == StatusPendingHostKey:
-			return ErrHostKeyUnconfirmed
-		case t.Status == StatusHostKeyChanged:
-			return ErrHostKeyChanged
-		case t.KeysManagedElsewhere || managedElsewhereFor(t.Facts, loc.OSUser):
-			return &denial{reason: "keys_managed_elsewhere", err: ErrKeysManagedElsewhere, loc: loc}
-		case sshdUnreadFor(t.Facts, loc.OSUser):
-			return &denial{reason: "sshd_unreadable", err: ErrSSHDUnreadable, loc: loc}
+		}
+		if err := KeyChangeRefusal(t, loc.OSUser); err != nil {
+			switch {
+			case errors.Is(err, ErrKeysManagedElsewhere):
+				return &denial{reason: "keys_managed_elsewhere", err: err, loc: loc}
+			case errors.Is(err, ErrSSHDUnreadable):
+				return &denial{reason: "sshd_unreadable", err: err, loc: loc}
+			default:
+				return err
+			}
 		}
 		if (loc.OSUser == "root" || slices.Contains(t.Facts.UID0Users, loc.OSUser)) && !allowLastRoot {
 			var others int

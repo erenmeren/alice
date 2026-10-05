@@ -103,6 +103,9 @@ type Facts struct {
 	Unreadable     []providers.UnreadableLine    `json:"unreadable,omitempty"`
 	UID0Users      []string                      `json:"uid0_users,omitempty"` // listed accounts with uid 0 (last-root-key guard)
 	Nginx          *providers.NginxFacts         `json:"nginx,omitempty"`      // what the last test or certificate scan learned of Nginx
+	// KeyFiles: every account's candidate authorized_keys files of the last SSH scan (the files a
+	// deploy or a rotation may add a key to).
+	KeyFiles []providers.UserKeyFiles `json:"key_files,omitempty"`
 	// The vault half (a Key Vault target only): the last access check, when the last poll read
 	// the vault's metadata, and the counters of the failure transitions (Task 11).
 	Azure             *providers.AzureFacts `json:"azure,omitempty"`
