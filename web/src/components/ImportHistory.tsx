@@ -34,6 +34,13 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
       return { items: pages.flatMap((p) => p.page.items), next: Object.fromEntries(pages.filter((p) => p.page.next_cursor).map((p) => [p.id, p.page.next_cursor])) as Record<string, string | null> };
     },
     getNextPageParam: (last) => (Object.keys(last.next).length > 0 ? last.next : undefined),
+    // Follow what is not finished (the existing polling pattern): a running import often, an uncertain one
+    // (a later check of the vault settles it) slowly; nothing once every import shown is final.
+    refetchInterval: (q) => {
+      const states = (q.state.data?.pages ?? []).flatMap((p) => p.items.map((i) => i.state));
+      if (states.some((s) => s === 'queued' || s === 'running')) return 3_000;
+      return states.includes('uncertain') ? 30_000 : false;
+    },
   });
   const names = new Map((vaults.data?.items ?? []).map((v) => [v.id, v.name]));
   const items = (imports.data?.pages.flatMap((p) => p.items) ?? []).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));

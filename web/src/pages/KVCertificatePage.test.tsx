@@ -163,31 +163,60 @@ describe('KVCertificatePage', () => {
     expect(body).toEqual({ confirm_incomplete_chain: true });
   });
 
-  it('says Alice deploys a released version within about a minute when automatic deployment is on', async () => {
-    const held = { ...V1, held: true, held_reason: 'license' as const };
-    setup('admin', kvCertificateDetailFixture({ versions: [held], binding: { ...SUMMARY, auto_deploy: true }, bound: true }));
-    server.use(http.post(`/api/v1/targets/${VAULT_ID}/kv/certificates/${KV_CERT_ID}/versions/v1/actions/release`, () => HttpResponse.json({ ...held, held: false, held_reason: '' })));
+  const RELEASE = `/api/v1/targets/${VAULT_ID}/kv/certificates/${KV_CERT_ID}/versions/v1/actions/release`;
+  const TEXT = {
+    chain: ['Automatic deployment never deploys an incomplete chain: if the chain is still incomplete, Alice holds this version again. To deploy it as it is, use Deploy now and confirm the chain.', 'Version released. Automatic deployment will not deploy an incomplete chain; use Deploy now and confirm the chain.'],
+    may: ['Automatic deployment is on, so Alice may deploy this version to the connected websites by itself, usually within a minute.', 'Version released. Alice may deploy it by itself, usually within a minute.'],
+    manual: ['Nothing is deployed. Use Deploy now when you want this version on a website.', 'Version released. Nothing is deployed; use Deploy now when you want it on a website.'],
+  };
+  const TEXT_TR = {
+    chain: ['Otomatik dağıtım eksik bir zinciri hiçbir zaman dağıtmaz: zincir hâlâ eksikse Alice bu sürümü yeniden bekletir. Olduğu gibi dağıtmak için Şimdi dağıt düğmesini kullanın ve zinciri onaylayın.', 'Sürüm serbest bırakıldı. Otomatik dağıtım eksik bir zinciri dağıtmaz; Şimdi dağıt düğmesini kullanın ve zinciri onaylayın.'],
+    may: ['Otomatik dağıtım açık; Alice bu sürümü bağlı web sitelerine kendiliğinden dağıtabilir, genellikle bir dakika içinde.', 'Sürüm serbest bırakıldı. Alice bu sürümü kendiliğinden dağıtabilir, genellikle bir dakika içinde.'],
+    manual: ['Hiçbir şey dağıtılmaz. Bu sürümü bir web sitesinde istediğinizde Şimdi dağıt düğmesini kullanın.', 'Sürüm serbest bırakıldı. Hiçbir şey dağıtılmaz; istediğinizde Şimdi dağıt düğmesini kullanın.'],
+  };
+
+  // Each case: [the version's hold reason, is it the current version, automatic deployment on, which text].
+  const CASES = [
+    ['a chain hold with automatic deployment on', 'incomplete_chain', true, true, 'chain'],
+    ['a chain hold that is not the current version', 'incomplete_chain', false, true, 'chain'],
+    ['a license hold on the current version with automatic deployment on', 'license', true, true, 'may'],
+    ['a license hold on a version that is not the current one', 'license', false, true, 'manual'],
+    ['a license hold with automatic deployment off', 'license', true, false, 'manual'],
+    ['a chain hold with automatic deployment off', 'incomplete_chain', true, false, 'manual'],
+  ] as const;
+
+  it.each(CASES)('releasing %s says the right thing before and after, in English', async (_n, reason, current, auto, kind) => {
+    const held = { ...V1, held: true, held_reason: reason };
+    setup('admin', kvCertificateDetailFixture({ versions: [held], current_version: current ? V1.version : 'cccccccc33333333cccccccc33333333', binding: { ...SUMMARY, auto_deploy: auto }, bound: true }));
+    server.use(http.post(RELEASE, () => HttpResponse.json({ ...held, held: false, held_reason: '' })));
     const user = userEvent.setup();
     await renderRoute(PATH);
     await user.click(await screen.findByRole('button', { name: 'Release version aaaaaaaa' }));
     const dialog = await screen.findByRole('dialog');
-    expect(dialog).toHaveTextContent('Alice deploys this version to the connected websites within about a minute.');
-    expect(dialog.textContent).not.toMatch(/Releasing deploys nothing|Nothing is deployed/);
+    expect(dialog).toHaveTextContent(TEXT[kind][0]);
+    for (const other of ['chain', 'may', 'manual'] as const) if (other !== kind) expect(dialog.textContent).not.toContain(TEXT[other][0]);
+    if (kind !== 'may') expect(dialog.textContent).not.toMatch(/minute/);
+    if (reason === 'incomplete_chain') await user.click(within(dialog).getByLabelText('I confirm that this incomplete chain is intended'));
     await user.click(within(dialog).getByRole('button', { name: 'Release' }));
-    expect(await screen.findByText('Version released. Alice deploys it to the connected websites within about a minute.')).toBeInTheDocument();
+    const done = await screen.findByText(/^Version released\./);
+    expect(done.textContent).toBe(TEXT[kind][1]);
+    if (kind !== 'may') expect(done.textContent).not.toMatch(/minute/);
   });
 
-  it('says the same in Turkish for both cases', async () => {
-    const held = { ...V1, held: true, held_reason: 'license' as const };
-    setup('admin', kvCertificateDetailFixture({ versions: [held], binding: { ...SUMMARY, auto_deploy: true }, bound: true }), 'tr');
-    const view = await renderRoute(PATH, { languages: ['tr-TR'] });
-    await userEvent.click(await screen.findByRole('button', { name: 'aaaaaaaa sürümünü serbest bırak' }));
-    expect(await screen.findByRole('dialog')).toHaveTextContent('Alice bu sürümü yaklaşık bir dakika içinde bağlı web sitelerine dağıtır.');
-    view.unmount();
-    setup('admin', kvCertificateDetailFixture({ versions: [held], binding: SUMMARY, bound: true }), 'tr');
+  it.each(CASES)('releasing %s says the right thing before and after, in Turkish', async (_n, reason, current, auto, kind) => {
+    const held = { ...V1, held: true, held_reason: reason };
+    setup('admin', kvCertificateDetailFixture({ versions: [held], current_version: current ? V1.version : 'cccccccc33333333cccccccc33333333', binding: { ...SUMMARY, auto_deploy: auto }, bound: true }), 'tr');
+    server.use(http.post(RELEASE, () => HttpResponse.json({ ...held, held: false, held_reason: '' })));
+    const user = userEvent.setup();
     await renderRoute(PATH, { languages: ['tr-TR'] });
-    await userEvent.click(await screen.findByRole('button', { name: 'aaaaaaaa sürümünü serbest bırak' }));
-    expect(await screen.findByRole('dialog')).toHaveTextContent('Hiçbir şey dağıtılmaz. Bu sürümü bir web sitesinde istediğinizde Şimdi dağıt düğmesini kullanın.');
+    await user.click(await screen.findByRole('button', { name: 'aaaaaaaa sürümünü serbest bırak' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent(TEXT_TR[kind][0]);
+    if (kind !== 'may') expect(dialog.textContent).not.toMatch(/dakika/);
+    if (reason === 'incomplete_chain') await user.click(within(dialog).getByRole('checkbox'));
+    await user.click(within(dialog).getByRole('button', { name: 'Serbest bırak' }));
+    const done = await screen.findByText(/^Sürüm serbest bırakıldı\./);
+    expect(done.textContent).toBe(TEXT_TR[kind][1]);
   });
 
   it('shows no key size for a key whose size is unknown (an EC curve)', async () => {

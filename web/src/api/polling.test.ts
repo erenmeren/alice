@@ -39,6 +39,7 @@ describe('polling', () => {
       'components/AddServerModal.tsx',
       'components/BindingPanel.tsx',
       'components/DeployDialog.tsx',
+      'components/ImportHistory.tsx',
       'components/ImportToKeyVaultDialog.tsx',
       'components/KVDeployDialog.tsx',
       'components/RemoveKeyDialog.tsx',

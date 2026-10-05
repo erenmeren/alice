@@ -72,6 +72,19 @@ describe('ReplaceCredentialsDialog', () => {
     expect(document.body.innerHTML).not.toContain(SECRET);
   });
 
+  it('wipes the secret field when the dialog is cancelled, even if the parent keeps it mounted', async () => {
+    asAdmin();
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    await renderWithStepUp(<ReplaceCredentialsDialog vault={vaultWith({}, { auth: 'client_secret' })} onClose={onClose} onReplaced={vi.fn()} />);
+    await user.type(screen.getByLabelText(/^Secret value/), SECRET);
+    expect(screen.getByLabelText(/^Secret value/)).toHaveValue(SECRET);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).toHaveBeenCalled();
+    expect(screen.getByLabelText(/^Secret value/)).toHaveValue('');
+    expect(document.body.innerHTML).not.toContain(SECRET);
+  });
+
   it('is complete in Turkish', async () => {
     asAdmin('tr');
     await renderWithStepUp(<ReplaceCredentialsDialog vault={vaultFixture} onClose={vi.fn()} onReplaced={vi.fn()} />, ['tr-TR']);

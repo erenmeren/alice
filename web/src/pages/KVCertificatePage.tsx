@@ -36,6 +36,19 @@ const Chip = ({ children, color = 'gray' }: { children: ReactNode; color?: strin
   </Badge>
 );
 
+// What releasing a held version leads to, from what the page knows. Automatic deployment never
+// carries the chain confirmation, so a version held for its incomplete chain is refused and held again;
+// it only ever considers the certificate's CURRENT version; and even then nothing is guaranteed (the
+// vault may be unreachable, a wave may have stopped), so the text says "may". Everything else is manual.
+type ReleaseKind = 'chain' | 'may' | 'manual';
+const RELEASE_HELP: Record<ReleaseKind, string> = { chain: 'vaults.cert.releaseHelpChain', may: 'vaults.cert.releaseHelpAuto', manual: 'vaults.cert.releaseHelpManual' };
+const RELEASED: Record<ReleaseKind, string> = { chain: 'vaults.cert.releasedChain', may: 'vaults.cert.releasedAuto', manual: 'vaults.cert.releasedManual' };
+function releaseKind(v: KVVersion, c: KVCertificateDetail): ReleaseKind {
+  if (c.binding?.auto_deploy !== true) return 'manual';
+  if (v.held_reason === 'incomplete_chain') return 'chain';
+  return v.held_reason === 'license' && v.version === c.current_version ? 'may' : 'manual';
+}
+
 // KVCertificatePage is one certificate of a vault: its policy, every version Alice has seen (newest
 // first, with held versions and Deploy now) and the websites connected to it.
 export function KVCertificatePage() {
@@ -49,7 +62,7 @@ export function KVCertificatePage() {
   const cert = useQuery({ queryKey: kvCertificateKey(vaultId, id), queryFn: () => getKVCertificate(vaultId, id) });
   const [deploy, setDeploy] = useState<string | null>(null);
   const [releasing, setReleasing] = useState<KVVersion | null>(null);
-  const [released, setReleased] = useState<'auto' | 'manual' | null>(null);
+  const [released, setReleased] = useState<ReleaseKind | null>(null);
 
   const back = (
     <Anchor component={Link} to={`/key-vaults/${vaultId}`} w="fit-content" size="sm">
@@ -98,7 +111,7 @@ export function KVCertificatePage() {
       )}
       {released && (
         <Alert color="green" role="status">
-          {t(released === 'auto' ? 'vaults.cert.releasedAuto' : 'vaults.cert.releasedManual')}
+          {t(RELEASED[released])}
         </Alert>
       )}
 
@@ -221,10 +234,10 @@ export function KVCertificatePage() {
           certificateId={id}
           version={releasing}
           onClose={() => setReleasing(null)}
-          autoDeploy={c.binding?.auto_deploy === true}
+          kind={releaseKind(releasing, c)}
           onReleased={() => {
+            setReleased(releaseKind(releasing, c));
             setReleasing(null);
-            setReleased(c.binding?.auto_deploy === true ? 'auto' : 'manual');
           }}
         />
       )}
@@ -260,7 +273,7 @@ function DeployWithBinding({ certificate, versionId, onClose }: { certificate: K
 // ReleaseDialog releases a held version: automatic deployment may then consider it. Nothing is
 // deployed. A version held for its incomplete chain also needs the Administrator's confirmation.
 // Administrators only, with a fresh step-up (asked for when the server wants it).
-function ReleaseDialog({ vaultId, certificateId, version, autoDeploy, onClose, onReleased }: { vaultId: string; certificateId: string; version: KVVersion; autoDeploy: boolean; onClose: () => void; onReleased: () => void }) {
+function ReleaseDialog({ vaultId, certificateId, version, kind, onClose, onReleased }: { vaultId: string; certificateId: string; version: KVVersion; kind: ReleaseKind; onClose: () => void; onReleased: () => void }) {
   const { t } = useTranslation();
   const { run } = useStepUp();
   const client = useQueryClient();
@@ -284,7 +297,7 @@ function ReleaseDialog({ vaultId, certificateId, version, autoDeploy, onClose, o
     <AppModal opened onClose={onClose} title={t('vaults.cert.releaseTitle')}>
       <Stack gap="sm">
         <Text size="sm">{t(chain ? 'vaults.heldChain' : 'vaults.heldVersion')}</Text>
-        <Text size="sm">{t(autoDeploy ? 'vaults.cert.releaseHelpAuto' : 'vaults.cert.releaseHelpManual')}</Text>
+        <Text size="sm">{t(RELEASE_HELP[kind])}</Text>
         {chain && <Box><Checkbox label={t('deploy.confirmChain')} checked={confirm} onChange={(e) => setConfirm(e.currentTarget.checked)} /></Box>}
         <ErrorAlert error={error} />
         <Group justify="flex-end">

@@ -1540,11 +1540,13 @@
         "version": "Version",
         "state": "State"
       },
-      "releaseHelpAuto": "Alice deploys this version to the connected websites within about a minute.",
+      "releaseHelpAuto": "Automatic deployment is on, so Alice may deploy this version to the connected websites by itself, usually within a minute.",
       "releaseHelpManual": "Nothing is deployed. Use Deploy now when you want this version on a website.",
-      "releasedAuto": "Version released. Alice deploys it to the connected websites within about a minute.",
+      "releasedAuto": "Version released. Alice may deploy it by itself, usually within a minute.",
       "releasedManual": "Version released. Nothing is deployed; use Deploy now when you want it on a website.",
-      "keyValueNoSize": "Key: {{type}}"
+      "keyValueNoSize": "Key: {{type}}",
+      "releaseHelpChain": "Automatic deployment never deploys an incomplete chain: if the chain is still incomplete, Alice holds this version again. To deploy it as it is, use Deploy now and confirm the chain.",
+      "releasedChain": "Version released. Automatic deployment will not deploy an incomplete chain; use Deploy now and confirm the chain."
     },
     "keys": {
       "columns": {
@@ -1653,7 +1655,7 @@
     "autoDeployHelp": "When Key Vault renews this certificate, Alice deploys the new version to these websites.",
     "deployNow": "Deploy now",
     "deployAccessUnchecked": "Deploy access not checked",
-    "autoDeployHelpOff": "Versions found while this is off are not deployed automatically later. Only versions found after you switch it on are deployed by themselves.",
+    "autoDeployHelpOff": "Versions found while this is off are not deployed automatically later. Only versions found after it is switched on are deployed by themselves.",
     "addAdminOnly": "Adding websites to a connection that deploys automatically needs an administrator."
   },
   "imports": {

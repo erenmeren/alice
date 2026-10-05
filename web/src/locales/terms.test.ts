@@ -34,3 +34,15 @@ describe('Turkish terminology', () => {
     expect(T['deployments.steps.kv_secret']).toBe("Sertifikayı Key Vault'tan okuma");
   });
 });
+
+describe('vault texts do not send people to a server', () => {
+  it('has no "server\'s page" in the vault, import and binding texts, in either language', () => {
+    const vaultOnly = /^(vaults|imports|bindings)\./;
+    const bad = [
+      ...Object.entries(E).filter(([k, v]) => vaultOnly.test(k) && /server's page/i.test(v)),
+      ...Object.entries(T).filter(([k, v]) => vaultOnly.test(k) && /sunucunun sayfası/i.test(v)),
+    ].map(([k, v]) => `${k}: ${v}`);
+    expect(bad).toEqual([]);
+  });
+});
+

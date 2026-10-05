@@ -83,6 +83,59 @@ describe('ImportHistory', () => {
     expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
   });
 
+  describe('follows imports that are not finished', () => {
+    function follow(states: ('running' | 'uncertain' | 'succeeded')[]) {
+      const calls = { n: 0 };
+      server.use(
+        ...sessionHandlers(sessionFor('operator')),
+        http.get('/api/v1/targets', () => HttpResponse.json({ items: [vaultFixture], next_cursor: null })),
+        http.get('/api/v1/targets/:id/kv/imports', () => {
+          const state = states[Math.min(calls.n, states.length - 1)];
+          calls.n++;
+          return HttpResponse.json({ items: [kvImportFixture({ state, error: null })], next_cursor: null });
+        }),
+      );
+      return calls;
+    }
+
+    it('reads again while an import runs, shows its result and then stops', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const calls = follow(['running', 'running', 'succeeded']);
+        await renderWithAuth(<ImportHistory certificateId="cert-1" />);
+        expect(await screen.findByText('Running')).toBeInTheDocument();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(await screen.findByText('Imported')).toBeInTheDocument();
+        const settled = calls.n;
+        expect(settled).toBeGreaterThanOrEqual(3);
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(calls.n).toBe(settled);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reads an uncertain import slowly and stops when the component goes away', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const calls = follow(['uncertain']);
+        const view = await renderWithAuth(<ImportHistory certificateId="cert-1" />);
+        await screen.findByText('Not confirmed yet');
+        const first = calls.n;
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(calls.n).toBe(first);
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(calls.n).toBeGreaterThan(first);
+        view.unmount();
+        const gone = calls.n;
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(calls.n).toBe(gone);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('shows the error of a failed read', async () => {
     server.use(...sessionHandlers(sessionFor('operator')), http.get('/api/v1/targets', () => HttpResponse.json({ items: [vaultFixture], next_cursor: null })), http.get('/api/v1/targets/:id/kv/imports', () => errorResponse(500, 'ALC-SYS-0003', 'internal.unexpected')));
     await renderWithAuth(<ImportHistory certificateId="cert-1" />);

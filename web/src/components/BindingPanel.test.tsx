@@ -242,5 +242,22 @@ describe('BindingPanel fix round', () => {
     const busy = await screen.findByRole('status', { name: 'Loading…' });
     expect(busy.querySelector('[aria-label]')).toBeNull();
   });
+
+  it('points a deploy access check that outlives the wait to this Key Vault\'s page', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      server.use(
+        http.post(`/api/v1/targets/${VAULT_ID}/actions/test`, () => HttpResponse.json({ job_id: 'jr', status_url: '' }, { status: 202 })),
+        http.get('/api/v1/jobs/jr', () => HttpResponse.json(jobFixture({ id: 'jr', status: 'running' }))),
+      );
+      await show('operator');
+      await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).click(await screen.findByRole('button', { name: 'Check deploy access' }));
+      vi.setSystemTime(Date.now() + 200_000);
+      expect(await screen.findByText(/Open this Key Vault's page in a minute/, {}, { timeout: 8000 })).toBeInTheDocument();
+      expect(document.body.textContent).not.toMatch(/server's page/);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
 });
 

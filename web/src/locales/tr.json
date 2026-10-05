@@ -1540,11 +1540,13 @@
         "version": "Sürüm",
         "state": "Durum"
       },
-      "releaseHelpAuto": "Alice bu sürümü yaklaşık bir dakika içinde bağlı web sitelerine dağıtır.",
+      "releaseHelpAuto": "Otomatik dağıtım açık; Alice bu sürümü bağlı web sitelerine kendiliğinden dağıtabilir, genellikle bir dakika içinde.",
       "releaseHelpManual": "Hiçbir şey dağıtılmaz. Bu sürümü bir web sitesinde istediğinizde Şimdi dağıt düğmesini kullanın.",
-      "releasedAuto": "Sürüm serbest bırakıldı. Alice onu yaklaşık bir dakika içinde bağlı web sitelerine dağıtır.",
+      "releasedAuto": "Sürüm serbest bırakıldı. Alice bu sürümü kendiliğinden dağıtabilir, genellikle bir dakika içinde.",
       "releasedManual": "Sürüm serbest bırakıldı. Hiçbir şey dağıtılmaz; istediğinizde Şimdi dağıt düğmesini kullanın.",
-      "keyValueNoSize": "Anahtar: {{type}}"
+      "keyValueNoSize": "Anahtar: {{type}}",
+      "releaseHelpChain": "Otomatik dağıtım eksik bir zinciri hiçbir zaman dağıtmaz: zincir hâlâ eksikse Alice bu sürümü yeniden bekletir. Olduğu gibi dağıtmak için Şimdi dağıt düğmesini kullanın ve zinciri onaylayın.",
+      "releasedChain": "Sürüm serbest bırakıldı. Otomatik dağıtım eksik bir zinciri dağıtmaz; Şimdi dağıt düğmesini kullanın ve zinciri onaylayın."
     },
     "keys": {
       "columns": {
@@ -1653,7 +1655,7 @@
     "autoDeployHelp": "Key Vault bu sertifikayı yenilediğinde Alice yeni sürümü bu web sitelerine dağıtır.",
     "deployNow": "Şimdi dağıt",
     "deployAccessUnchecked": "Dağıtım erişimi denetlenmedi",
-    "autoDeployHelpOff": "Bu kapalıyken bulunan sürümler sonradan da kendiliğinden dağıtılmaz. Yalnızca siz açtıktan sonra bulunan sürümler kendiliğinden dağıtılır.",
+    "autoDeployHelpOff": "Bu kapalıyken bulunan sürümler sonradan da kendiliğinden dağıtılmaz. Yalnızca açıldıktan sonra bulunan sürümler kendiliğinden dağıtılır.",
     "addAdminOnly": "Otomatik dağıtım yapan bir bağlantıya web sitesi eklemek için yönetici gerekir."
   },
   "imports": {
