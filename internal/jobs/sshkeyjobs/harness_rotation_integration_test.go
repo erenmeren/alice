@@ -3,6 +3,7 @@
 package sshkeyjobs_test
 
 import (
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -62,11 +63,17 @@ func (e *env) policy(keyID uuid.UUID, overlapDays int) sshkeys.Policy {
 // runNow previews the policy and starts a run with the previewed digest (the Administrator's Run now).
 func (e *env) runNow(p sshkeys.Policy) sshkeys.Rotation {
 	e.t.Helper()
-	pv, err := e.keys.Preview(e.ctx, e.admin, p.ID)
-	require.NoError(e.t, err)
-	r, err := e.keys.RunNow(e.ctx, e.admin, p.ID, pv.Digest)
-	require.NoError(e.t, err)
-	return r
+	for {
+		pv, err := e.keys.Preview(e.ctx, e.admin, p.ID)
+		require.NoError(e.t, err)
+		r, err := e.keys.RunNow(e.ctx, e.admin, p.ID, pv.Digest)
+		if errors.Is(err, sshkeys.ErrGenerateBusy) { // parallel scenarios share the generation slots
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
+		require.NoError(e.t, err)
+		return r
+	}
 }
 
 func (e *env) run(id uuid.UUID) sshkeys.Rotation {

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -92,6 +93,7 @@ type env struct {
 	ctx        context.Context
 	db         *pgtest.DB
 	clock      *clock.Fake
+	tick       *tickClock // the services' clock: e.clock, moving 1 ms on every read while ticking
 	keyring    *secrets.Keyring
 	audit      *audit.Log
 	gate       *lockGate
@@ -112,43 +114,53 @@ type env struct {
 	killer     atomic.Pointer[killer] // the process dies at its points (setKiller)
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T) *env { t.Helper(); return newEnvWith(t, nil) }
+
+// newEnvWith builds the environment; real, when set, registers the providers instead of the fake key
+// world (it runs after the inventory exists: a real provider needs its host-key store).
+func newEnvWith(t *testing.T, real func(e *env)) *env {
 	t.Helper()
 	e := &env{t: t, ctx: context.Background(), db: pgtest.New(t), clock: clock.NewFake(start), world: fake.NewKeyWorld()}
+	e.tick = &tickClock{Fake: e.clock}
 	// A lock-order mistake fails fast with SQLSTATE 55P03 instead of hanging the suite.
 	var dbName string
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT current_database()").Scan(&dbName))
 	_, err := e.db.Owner.Exec(e.ctx, "ALTER DATABASE "+pgx.Identifier{dbName}.Sanitize()+" SET lock_timeout = '5s'")
 	require.NoError(t, err)
 	e.db.App.Reset()
+	e.dropAtEnd()
 	e.world.SetClock(e.clock.Now) // FaultLateWrite follows the test clock
 	e.log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	e.keyring, err = secrets.LoadOrCreateMasterKey(e.ctx, e.db.App, t.TempDir(), e.clock.Now())
 	require.NoError(t, err)
-	e.audit = audit.New(e.clock)
-	lic := license.New(license.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clock, Uptime: e.clock,
-		Keys: licensetest.KeySet(), StateDir: t.TempDir(), Targets: inventory.Counter{}, Notifier: notify.AdminNotifier{Clock: e.clock}, Log: e.log})
+	e.audit = audit.New(e.tick)
+	lic := license.New(license.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.tick, Uptime: e.tick,
+		Keys: licensetest.KeySet(), StateDir: t.TempDir(), Targets: inventory.Counter{}, Notifier: notify.AdminNotifier{Clock: e.tick}, Log: e.log})
 	require.NoError(t, lic.Start(e.ctx))
 	e.gate = &lockGate{Service: lic}
-	e.notifier = &recordingNotifier{next: notify.AdminNotifier{Clock: e.clock}}
-	e.queue = jobs.NewQueue(jobs.QueueConfig{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clock, Gate: e.gate})
+	e.notifier = &recordingNotifier{next: notify.AdminNotifier{Clock: e.tick}}
+	e.queue = jobs.NewQueue(jobs.QueueConfig{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.tick, Gate: e.gate})
 	e.provider = fake.New(providers.KindLinuxSSH, providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
 		providers.CapKeyLogin)
 	e.provider.Configure(func(c *fake.Config) { c.World = e.world })
 	e.reg = providers.NewRegistry()
-	e.reg.Register(hookProvider{Provider: e.provider, e: e})
+	e.inv = inventory.New(inventory.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.tick, License: e.gate,
+		Registry: e.reg, Jobs: e.queue, Notifier: notify.AdminNotifier{Clock: e.tick}, Log: e.log})
+	if real != nil {
+		real(e)
+	} else {
+		e.reg.Register(hookProvider{Provider: e.provider, e: e})
+	}
 	e.reg.Freeze()
-	e.inv = inventory.New(inventory.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clock, License: e.gate,
-		Registry: e.reg, Jobs: e.queue, Notifier: notify.AdminNotifier{Clock: e.clock}, Log: e.log})
 	e.platform, err = e.inv.EnsurePlatformKey(e.ctx)
 	require.NoError(t, err)
 	e.keys = sshkeys.New(sshkeys.Config{HelperBudget: helperproto.HelperBudget, Pool: e.db.App, Keyring: e.keyring, Audit: e.audit,
-		Clock: e.clock, License: e.gate, Inventory: e.inv, Jobs: e.queue, Notifier: e.notifier, Log: e.log})
+		Clock: e.tick, License: e.gate, Inventory: e.inv, Jobs: e.queue, Notifier: e.notifier, Log: e.log})
 	// The heartbeat never beats on the fake clock: a lease ends only when a test moves the clock past it.
-	e.runner = jobs.NewRunner(jobs.RunnerConfig{Pool: e.db.App, Queue: e.queue, Gate: e.gate, Audit: e.audit, Clock: e.clock, Log: e.log,
+	e.runner = jobs.NewRunner(jobs.RunnerConfig{Pool: e.db.App, Queue: e.queue, Gate: e.gate, Audit: e.audit, Clock: e.tick, Log: e.log,
 		Workers: 1, WorkerID: "alice", Heartbeat: 24 * time.Hour, Jitter: func() float64 { return 0 },
-		Notifier: notify.AdminNotifier{Clock: e.clock}})
-	sshkeyjobs.Register(e.runner, sshkeyjobs.Deps{Keys: killKeys{Service: e.keys, e: e}, Targets: e.inv, Registry: e.reg, Clock: e.clock,
+		Notifier: notify.AdminNotifier{Clock: e.tick}})
+	sshkeyjobs.Register(e.runner, sshkeyjobs.Deps{Keys: killKeys{Service: e.keys, e: e}, Targets: e.inv, Registry: e.reg, Clock: e.tick,
 		Log: e.log, HelperBudget: helperproto.HelperBudget})
 	e.admin = e.user("ada", rbac.Admin)
 	e.adminID, e.adminAudit = e.admin.UserID, e.admin.Audit
@@ -208,9 +220,37 @@ VALUES ($1, $2, 'linux', jsonb_build_object('host', $3::text, 'port', 22, 'usern
 
 func (e *env) generate(label string) sshkeys.ManagedKey {
 	e.t.Helper()
-	k, err := e.keys.Generate(e.ctx, e.admin, sshkeys.GenerateInput{Label: label})
-	require.NoError(e.t, err)
-	return k
+	for {
+		k, err := e.keys.Generate(e.ctx, e.admin, sshkeys.GenerateInput{Label: label})
+		if errors.Is(err, sshkeys.ErrGenerateBusy) { // parallel scenarios share the process's generation slots
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
+		require.NoError(e.t, err)
+		return k
+	}
+}
+
+// dropAtEnd drops the test's database when the test ends (the property test makes hundreds).
+func (e *env) dropAtEnd() {
+	e.t.Cleanup(func() {
+		e.db.App.Close()
+		e.db.Owner.Close()
+		u, err := url.Parse(e.db.OwnerURL)
+		if err != nil {
+			return
+		}
+		name := strings.TrimPrefix(u.Path, "/")
+		u.Path = "/postgres"
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, u.String())
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		_, _ = conn.Exec(ctx, "DROP DATABASE IF EXISTS "+pgx.Identifier{name}.Sanitize()+" WITH (FORCE)")
+	})
 }
 
 // otherKeyLine is the authorized_keys line of a fresh key nobody manages.
@@ -526,4 +566,19 @@ func (k killKeys) Advance(ctx context.Context, id uuid.UUID) error {
 	err := k.Service.Advance(ctx, id)
 	k.e.at("after:Advance")
 	return err
+}
+
+// tickClock is the services' clock: the test's fake clock, which moves one millisecond on every read
+// while ticking is on, as a real clock does between two reads (a frozen clock hides a join on two
+// separate clock reads: Task 9 re-review C1).
+type tickClock struct {
+	*clock.Fake
+	on atomic.Bool
+}
+
+func (c *tickClock) Now() time.Time {
+	if c.on.Load() {
+		c.Advance(time.Millisecond)
+	}
+	return c.Fake.Now()
 }
