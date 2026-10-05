@@ -32,6 +32,7 @@ import (
 	"alice/internal/jobs"
 	"alice/internal/jobs/deployjobs"
 	"alice/internal/jobs/kvjobs"
+	"alice/internal/jobs/sshkeyjobs"
 	"alice/internal/jobs/targetjobs"
 	"alice/internal/license"
 	"alice/internal/license/licensetest"
@@ -109,7 +110,9 @@ type stack struct {
 	auditSvc    *audit.Service
 	license     *license.Service
 	inv         *inventory.Service
-	sshKeys     *sshkeys.Service // Phase 6: generated keys and rotation (no job handlers here; Task 14's journeys add them)
+	sshKeys     *sshkeys.Service // Phase 6: generated keys and rotation; its job handlers are on every runner (sshkeyjobs)
+	tick        *tickClock       // the Phase 6 services' clock: s.clock, moving 1 ms on every read while switched on
+	mailbox     *mailbox         // what deliverMail handed to the "SMTP server"
 	auditLog    *audit.Log
 	queue       *jobs.Queue
 	runner      *jobs.Runner
@@ -153,7 +156,9 @@ func newStackWith(t *testing.T, start time.Time, kv func(now func() time.Time) *
 		stateDir: t.TempDir(),
 		logs:     &syncBuffer{},
 		trusted:  trusted,
+		mailbox:  &mailbox{},
 	}
+	s.tick = &tickClock{Fake: s.clock}
 	s.ca = pki.NewCA("API Test CA", pki.ECDSA256, s.clock.Now())
 	if kv != nil {
 		s.kv = kv(s.clock.Now)
@@ -228,8 +233,8 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	_, err := s.inv.EnsurePlatformKey(context.Background())
 	require.NoError(t, err)
 	s.sshKeys = sshkeys.New(sshkeys.Config{
-		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, License: s.license, Inventory: s.inv, Jobs: s.queue,
-		Notifier: notify.AdminNotifier{Clock: s.clock}, Log: log, HelperBudget: helperproto.HelperBudget,
+		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.tick, License: s.license, Inventory: s.inv, Jobs: s.queue,
+		Notifier: notify.AdminNotifier{Clock: s.tick}, Log: log, HelperBudget: helperproto.HelperBudget,
 	})
 	s.auditLog = auditLog
 	s.runner = s.newRunner("", 0)
@@ -249,6 +254,8 @@ func (s *stack) newRunner(worker string, heartbeat time.Duration) *jobs.Runner {
 	if s.kv != nil {
 		kvjobs.Register(r, kvjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})
 	}
+	// Phase 6: sshkey.add and rotation.location, as cmd/alice wires them (the services' clock).
+	sshkeyjobs.Register(r, sshkeyjobs.Deps{Keys: s.sshKeys, Targets: s.inv, Registry: s.registry, Clock: s.tick, Log: log})
 	return r
 }
 
