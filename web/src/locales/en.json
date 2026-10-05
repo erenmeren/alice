@@ -1684,7 +1684,7 @@
     "confirmNewVersion": "I understand and want to add a new version",
     "policyWarning": "The imported version replaces the certificate's settings in the vault. The vault may stop renewing this certificate by itself.",
     "boundNote": "Websites are connected to this vault certificate.",
-    "autoDeployFollows": "Automatic deployment is on for it, so the new version is deployed to those websites by itself.",
+    "autoDeployFollows": "Automatic deployment is on for it, so Alice may deploy the new version to those websites by itself.",
     "autoDeployNot": "Automatic deployment is off for it, so nothing is deployed by itself.",
     "working": "Alice is importing the certificate…",
     "importedVersion": "Version in the vault: {{version}}",

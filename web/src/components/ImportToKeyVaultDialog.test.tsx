@@ -184,7 +184,7 @@ describe('ImportToKeyVaultDialog', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Import into Key Vault' }));
       const warning = await screen.findByTestId('import-confirm');
       expect(warning).toHaveTextContent('Websites are connected to this vault certificate.');
-      expect(warning).toHaveTextContent('Automatic deployment is on for it, so the new version is deployed to those websites by itself.');
+      expect(warning).toHaveTextContent('Automatic deployment is on for it, so Alice may deploy the new version to those websites by itself.');
     });
 
     it('says nothing is deployed by itself when a connection exists with automatic deployment off', async () => {

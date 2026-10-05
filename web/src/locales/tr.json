@@ -1684,7 +1684,7 @@
     "confirmNewVersion": "Anladım ve yeni bir sürüm eklenmesini istiyorum",
     "policyWarning": "İçe aktarılan sürüm, sertifikanın kasadaki ayarlarının yerine geçer. Kasa bu sertifikayı kendiliğinden yenilemeyi bırakabilir.",
     "boundNote": "Bu kasa sertifikasına web siteleri bağlı.",
-    "autoDeployFollows": "Bunun için otomatik dağıtım açık; bu yüzden yeni sürüm bu web sitelerine kendiliğinden dağıtılır.",
+    "autoDeployFollows": "Bunun için otomatik dağıtım açık; bu yüzden Alice yeni sürümü bu web sitelerine kendiliğinden dağıtabilir.",
     "autoDeployNot": "Bunun için otomatik dağıtım kapalı; bu yüzden kendiliğinden hiçbir şey dağıtılmaz.",
     "working": "Alice sertifikayı içe aktarıyor…",
     "importedVersion": "Kasadaki sürüm: {{version}}",
