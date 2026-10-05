@@ -58,6 +58,7 @@ type KeyWorld struct {
 	queued    []lateWrite
 	landed    int
 	keyFiles  map[worldUser]keyFilesState
+	coverage  map[worldFile]providers.CoverageState // SetCoverage: persistent per-file listing coverage
 }
 
 // keyFilesState is what a world's discovery says about one user's candidate key files.
@@ -88,8 +89,8 @@ type worldUser struct {
 
 // FaultPoint describes one call of the world, for the fault decision.
 type FaultPoint struct {
-	N           int    // 1-based index over every Add, Remove and VerifyKeyLogin call of the world
-	Method      string // "AddAuthorizedKey" | "RemoveAuthorizedKey" | "VerifyKeyLogin"
+	N           int    // 1-based index over every Add, Remove, VerifyKeyLogin and ListKeys call of the world
+	Method      string // "AddAuthorizedKey" | "RemoveAuthorizedKey" | "VerifyKeyLogin" | "ListKeys"
 	Target      uuid.UUID
 	OSUser      string
 	FilePath    string
@@ -115,6 +116,11 @@ const (
 	// forget the clock and pass without the write ever landing; PendingLate and LateLanded let a test
 	// assert it did. Login: ssh.timeout.
 	FaultLateWrite
+	// FaultUnread: ListKeys only: the listing omits every file of the target and says so (every
+	// file CoverageUnread, no keys), as a real listing does when it cannot read them.
+	FaultUnread
+	// FaultPartial: ListKeys only: the answer comes back cut (every file CoveragePartial, no keys).
+	FaultPartial
 )
 
 // Event is one recorded call of the world, or (Landed) a late write landing.
@@ -218,7 +224,7 @@ func (w *KeyWorld) queueLate(p FaultPoint, apply func() bool) {
 
 // NewKeyWorld returns an empty world without faults.
 func NewKeyWorld() *KeyWorld {
-	return &KeyWorld{files: map[worldFile][]string{}, users: map[worldUser][]string{}, owners: map[worldFile]string{}, keyFiles: map[worldUser]keyFilesState{}}
+	return &KeyWorld{files: map[worldFile][]string{}, users: map[worldUser][]string{}, owners: map[worldFile]string{}, keyFiles: map[worldUser]keyFilesState{}, coverage: map[worldFile]providers.CoverageState{}}
 }
 
 // Put sets a file's lines (verbatim) and records that osUser reads it. The first user put for a file
@@ -277,6 +283,63 @@ func (w *KeyWorld) HideKeyFiles(target uuid.UUID, osUser string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.keyFiles[worldUser{target, osUser}] = keyFilesUnknown
+}
+
+// SetCoverage makes every listing (ListKeys) of the target report the file with this coverage:
+// CoverageUnread or CoveragePartial hide its keys and withhold any proof of absence;
+// CoverageComplete (the default) restores it.
+func (w *KeyWorld) SetCoverage(target uuid.UUID, file string, state providers.CoverageState) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if state == providers.CoverageComplete {
+		delete(w.coverage, worldFile{target, file})
+		return
+	}
+	w.coverage[worldFile{target, file}] = state
+}
+
+// listKeys is a listing with coverage: every file a user reads is named, complete unless SetCoverage
+// or a FaultUnread/FaultPartial at this call index says otherwise (those files list no keys).
+// FaultUnreachable and FaultHang fail the call.
+func (w *KeyWorld) listKeys(ctx context.Context, target uuid.UUID) (providers.KeyListing, error) {
+	w.mu.Lock()
+	p, f := w.begin(FaultPoint{Method: "ListKeys", Target: target})
+	if f == FaultHang {
+		w.record(p, f, false, "")
+		w.mu.Unlock()
+		return providers.KeyListing{}, hang(ctx)
+	}
+	defer w.mu.Unlock()
+	w.record(p, f, false, "")
+	if f == FaultUnreachable {
+		return providers.KeyListing{}, providers.NewError("ssh.unreachable", true, nil, nil)
+	}
+	var users []worldUser
+	for u := range w.users {
+		if u.target == target {
+			users = append(users, u)
+		}
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].user < users[j].user })
+	var l providers.KeyListing
+	for _, u := range users {
+		for _, file := range w.users[u] {
+			st := w.coverage[worldFile{target, file}]
+			switch f {
+			case FaultUnread:
+				st = providers.CoverageUnread
+			case FaultPartial:
+				st = providers.CoveragePartial
+			}
+			if st == "" {
+				st = providers.CoverageComplete
+				keys, _ := parse(w.files[worldFile{target, file}]).Keys(u.user, file)
+				l.Keys = append(l.Keys, keys...)
+			}
+			l.Files = append(l.Files, providers.FileCoverage{OSUser: u.user, FilePath: file, State: st})
+		}
+	}
+	return l, nil
 }
 
 // userKeyFiles is what a discovery of the target reports: every user that has a file, in name order,

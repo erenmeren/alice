@@ -30,6 +30,9 @@ type KeyLifecycleEnv struct {
 	SeedShared func(file string, lines ...string)
 	// Lines returns the file's current lines.
 	Lines func(file string) []string
+	// Unread makes the next listings unable to read file (too large to read, skipped) without failing
+	// the call; Partial makes them come back with a failed read or a cut answer for it.
+	Unread, Partial func(file string)
 }
 
 // KeyLifecycleHarness builds a fresh world per scenario.
@@ -193,6 +196,43 @@ func CheckKeyLifecycle(t testing.TB, h KeyLifecycleHarness) {
 		if err != nil || rm.Removed != 0 || rm.Changed {
 			t.Errorf("remove an absent key: %+v %v", rm, err)
 		}
+	}
+
+	// 1b. a listing states what it read: only a completely read file proves a key absent.
+	for _, mode := range []string{"unread", "partial"} {
+		env := h.New(t)
+		file := env.OwnFile("deploy")
+		a, c := newLifecycleKey(t, ""), newLifecycleKey(t, "")
+		env.Seed("deploy", file, a.line)
+		s := ok(env)
+		l, err := s.ListKeys(ctx)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if got := l.Coverage("deploy", file); got != providers.CoverageComplete || !l.Absent("deploy", file, c.fp) || l.Absent("deploy", file, a.fp) {
+			t.Errorf("%s: a file read completely: coverage %q, absent(other) %v, absent(held) %v", mode, got, l.Absent("deploy", file, c.fp), l.Absent("deploy", file, a.fp))
+		}
+		want := providers.CoverageUnread
+		if mode == "unread" {
+			env.Unread(file)
+		} else {
+			env.Partial(file)
+			want = providers.CoveragePartial
+		}
+		l, err = s.ListKeys(ctx)
+		if err != nil {
+			t.Fatalf("list after %s: %v", mode, err)
+		}
+		if got := l.Coverage("deploy", file); got != want {
+			t.Errorf("%s: coverage %q, want %q", mode, got, want)
+		}
+		if l.Absent("deploy", file, c.fp) || l.Absent("deploy", file, a.fp) {
+			t.Errorf("%s: a file that was not read completely must not prove any key absent", mode)
+		}
+		if got := l.Coverage("deploy", "/home/deploy/.ssh/not-a-candidate"); got != providers.CoverageUnknown {
+			t.Errorf("%s: a file the listing does not name has coverage %q, want unknown", mode, got)
+		}
+		_ = s.Close()
 	}
 
 	// 2. a file the user does not read: refused, and the key does not log in.

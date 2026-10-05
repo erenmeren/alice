@@ -106,7 +106,12 @@ type Session interface {
 	Close() error
 	TestConnection(ctx context.Context) (ConnectionReport, error)
 	Discover(ctx context.Context, req DiscoverRequest) (DiscoveryResult, error)
+	// ListAuthorizedKeys returns the keys a full discovery finds and nothing about what it read: a key
+	// missing from it proves nothing. Code that must conclude "not in the file" uses ListKeys.
 	ListAuthorizedKeys(ctx context.Context) ([]DiscoveredSSHKey, error)
+	// ListKeys (CapAuthorizedKeys) is ListAuthorizedKeys with the coverage of every candidate file it
+	// names (KeyListing): a key is absent only where KeyListing.Absent says so.
+	ListKeys(ctx context.Context) (KeyListing, error)
 	AddAuthorizedKey(ctx context.Context, req AuthKeyChange, log StepLogger) (AuthKeyResult, error)
 	RemoveAuthorizedKey(ctx context.Context, req AuthKeyChange, log StepLogger) (AuthKeyResult, error)
 	// VerifyKeyLogin (CapKeyLogin) tries one login (KeyLoginRequest). A refused or unprovable login

@@ -1170,6 +1170,11 @@ func TestKeyLifecycleConforms(t *testing.T) {
 					"authorizedkeysfile "+f, 1))
 				e.emu.SetFile(f, join(lines))
 			},
+			Unread: func(f string) {
+				b, _ := e.emu.File(f)
+				e.emu.SetFile(f, append(b, []byte(strings.Repeat("#", helperproto.MaxAuthorizedKeysSize))...))
+			},
+			Partial: func(f string) { e.emu.FailRead(f) },
 			Lines: func(f string) []string {
 				b, _ := e.emu.File(f)
 				return strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
@@ -1300,4 +1305,55 @@ func TestKeyFilesStateCompleteness(t *testing.T) {
 	users = append(users, helperproto.UserFiles{User: "a", Files: []helperproto.FileInfo{{Path: "/a/k"}}})
 	got := keyFiles(users, true)
 	assert.False(t, got[0].Complete, "a cut list marks every user incomplete")
+}
+
+// Follow-up 2: ListKeys says which files it read; the helper's own answer (ReadFiles, Partial,
+// the per-file flags) is all it has to go on.
+func TestListKeysStatesCoverage(t *testing.T) {
+	ctx := context.Background()
+	const deploy = "/home/deploy/.ssh/authorized_keys"
+	k, fp := keyLine(t, "ed25519", "", "d@x")
+	_, other := keyLine(t, "ed25519", "", "o@x")
+
+	e := newProvEnv(t)
+	e.emu.SetFile(deploy, []byte(k+"\n"))
+	l, err := e.open(t).ListKeys(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, providers.CoverageComplete, l.Coverage("deploy", deploy))
+	assert.False(t, l.Absent("deploy", deploy, fp))
+	assert.True(t, l.Absent("deploy", deploy, other))
+	assert.Equal(t, providers.CoverageComplete, l.Coverage("deploy", "/home/deploy/.ssh/authorized_keys2"), "a missing file was read: it holds nothing")
+	assert.Equal(t, providers.CoverageUnknown, l.Coverage("deploy", "/etc/not/a/candidate"))
+
+	// too large for the helper to read: unread, never "absent"
+	e = newProvEnv(t)
+	e.emu.SetFile(deploy, []byte(k+"\n"+strings.Repeat("#", helperproto.MaxAuthorizedKeysSize)))
+	l, err = e.open(t).ListKeys(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, providers.CoverageUnread, l.Coverage("deploy", deploy))
+	assert.False(t, l.Absent("deploy", deploy, fp))
+	assert.False(t, l.Absent("deploy", deploy, other))
+
+	// a read that fails makes the answer partial: the file is not "absent" either
+	e = newProvEnv(t)
+	e.emu.SetFile(deploy, []byte(k+"\n"))
+	e.emu.FailRead(deploy)
+	l, err = e.open(t).ListKeys(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, providers.CoveragePartial, l.Coverage("deploy", deploy))
+	assert.False(t, l.Absent("deploy", deploy, other))
+	assert.Equal(t, providers.CoverageComplete, l.Coverage("root", "/root/.ssh/authorized_keys"), "other files keep their own state")
+
+	// an account whose settings could not be read, a file the helper called unsupported: unknown
+	e = newProvEnv(t)
+	e.emu.SetUnsupported(deploy)
+	l, err = e.open(t).ListKeys(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, providers.CoverageUnknown, l.Coverage("deploy", deploy))
+	assert.False(t, l.Absent("deploy", deploy, other))
+
+	// the old method still answers keys only
+	keys, err := newProvEnv(t).open(t).ListAuthorizedKeys(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, keys)
 }

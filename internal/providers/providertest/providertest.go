@@ -98,6 +98,8 @@ func CheckUnsupported(t testing.TB, s providers.Session, caps providers.Capabili
 	if !caps.Has(providers.CapAuthorizedKeys) {
 		_, err := s.ListAuthorizedKeys(ctx)
 		expect("ListAuthorizedKeys", err)
+		_, err = s.ListKeys(ctx)
+		expect("ListKeys", err)
 		_, err = s.AddAuthorizedKey(ctx, providers.AuthKeyChange{}, nil)
 		expect("AddAuthorizedKey", err)
 		_, err = s.RemoveAuthorizedKey(ctx, providers.AuthKeyChange{}, nil)
@@ -182,6 +184,9 @@ var sessionOps = []sessionOp{
 	}},
 	{"ListAuthorizedKeys", providers.CapAuthorizedKeys, func(ctx context.Context, s providers.Session) (any, error) {
 		return s.ListAuthorizedKeys(ctx)
+	}},
+	{"ListKeys", providers.CapAuthorizedKeys, func(ctx context.Context, s providers.Session) (any, error) {
+		return s.ListKeys(ctx)
 	}},
 	{"AddAuthorizedKey", providers.CapAuthorizedKeys, func(ctx context.Context, s providers.Session) (any, error) {
 		return s.AddAuthorizedKey(ctx, providers.AuthKeyChange{}, nil)

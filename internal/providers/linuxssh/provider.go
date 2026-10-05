@@ -3,6 +3,7 @@ package linuxssh
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -191,6 +192,39 @@ func (s *session) ListAuthorizedKeys(ctx context.Context) ([]providers.Discovere
 		return nil, err
 	}
 	return res.SSHKeys, nil
+}
+
+// ListKeys is ListAuthorizedKeys with the coverage of every candidate file, taken from what the
+// helper's answer says and nothing more: a file in the discovery's ReadFiles was read completely
+// (a listed file that does not exist counts: it holds nothing); a file that is not, in an answer the
+// discovery marked Partial (a read failed, a bound cut it), is partial; one that is not in an answer
+// that was not cut (too large, unparsable) is unread. A file the helper did not list for the account,
+// or listed as unsupported, and an account the discovery skipped have no entry: unknown.
+func (s *session) ListKeys(ctx context.Context) (providers.KeyListing, error) {
+	if !s.caps.Has(providers.CapAuthorizedKeys) {
+		return providers.KeyListing{}, providers.ErrUnsupported
+	}
+	if err := s.open(); err != nil {
+		return providers.KeyListing{}, err
+	}
+	res, err := s.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
+	if err != nil {
+		return providers.KeyListing{}, err
+	}
+	l := providers.KeyListing{Keys: res.SSHKeys}
+	for _, u := range res.KeyFiles {
+		for _, f := range u.Files {
+			st := providers.CoverageUnread
+			switch {
+			case slices.Contains(res.ReadFiles, f):
+				st = providers.CoverageComplete
+			case res.Partial:
+				st = providers.CoveragePartial
+			}
+			l.Files = append(l.Files, providers.FileCoverage{OSUser: u.OSUser, FilePath: f, State: st})
+		}
+	}
+	return l, nil
 }
 
 // ConnOf returns the connection of an open linuxssh session; the nginx provider runs its helper

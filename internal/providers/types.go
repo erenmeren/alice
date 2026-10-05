@@ -67,6 +67,57 @@ type UserKeyFiles struct {
 	Complete bool     `json:"complete"`
 }
 
+// CoverageState says how far a listing read one authorized_keys file.
+type CoverageState string
+
+// Coverage states of one file in a listing. Only CoverageComplete lets a caller read "this key is
+// not in the file" from the listing; every other state, and a file the listing does not name at
+// all, means the caller does not know and must fail closed.
+const (
+	CoverageComplete CoverageState = "complete" // the file was read completely (a missing file counts: it holds nothing)
+	CoverageUnread   CoverageState = "unread"   // not read: unreadable, too large, unparsable or skipped
+	CoveragePartial  CoverageState = "partial"  // the answer was cut or a read failed: the file may hold keys the listing lacks
+	CoverageUnknown  CoverageState = "unknown"  // the listing says nothing about this user and file
+)
+
+// FileCoverage is the coverage of one candidate file of one account.
+type FileCoverage struct {
+	OSUser   string
+	FilePath string
+	State    CoverageState
+}
+
+// KeyListing is the keys a listing found and what it covered. The provider fills Files from what the
+// target's answer says (for linuxssh: the helper's read files and per-file flags, never more).
+type KeyListing struct {
+	Keys  []DiscoveredSSHKey
+	Files []FileCoverage
+}
+
+// Coverage returns the state of one account's file, CoverageUnknown when the listing names none.
+func (l KeyListing) Coverage(osUser, filePath string) CoverageState {
+	for _, f := range l.Files {
+		if f.OSUser == osUser && f.FilePath == filePath {
+			return f.State
+		}
+	}
+	return CoverageUnknown
+}
+
+// Absent reports that the key is proven not to be in the account's file: the file was read
+// completely and none of its lines holds the fingerprint. False means present or not known.
+func (l KeyListing) Absent(osUser, filePath, fingerprint string) bool {
+	if l.Coverage(osUser, filePath) != CoverageComplete {
+		return false
+	}
+	for _, k := range l.Keys {
+		if k.FilePath == filePath && k.Fingerprint == fingerprint {
+			return false
+		}
+	}
+	return true
+}
+
 // KeyLoginOutcome is the answer of one test login.
 type KeyLoginOutcome string
 

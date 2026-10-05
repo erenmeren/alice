@@ -572,3 +572,35 @@ func TestKeyLoginIsAKnownCapabilityAndUnsupportedByDefault(t *testing.T) {
 		assert.NotEmpty(t, string(o))
 	}
 }
+
+// Follow-up 2: a listing states its own coverage; absence proves nothing without it.
+func TestKeyListingAbsenceNeedsCompleteCoverage(t *testing.T) {
+	const f = "/home/deploy/.ssh/authorized_keys"
+	l := providers.KeyListing{
+		Keys: []providers.DiscoveredSSHKey{{OSUser: "deploy", FilePath: f, Fingerprint: "SHA256:held"}},
+		Files: []providers.FileCoverage{
+			{OSUser: "deploy", FilePath: f, State: providers.CoverageComplete},
+			{OSUser: "deploy", FilePath: "/u", State: providers.CoverageUnread},
+			{OSUser: "deploy", FilePath: "/p", State: providers.CoveragePartial},
+		},
+	}
+	assert.Equal(t, providers.CoverageComplete, l.Coverage("deploy", f))
+	assert.Equal(t, providers.CoverageUnread, l.Coverage("deploy", "/u"))
+	assert.Equal(t, providers.CoveragePartial, l.Coverage("deploy", "/p"))
+	assert.Equal(t, providers.CoverageUnknown, l.Coverage("deploy", "/never"))
+	assert.Equal(t, providers.CoverageUnknown, l.Coverage("other", f), "coverage is per user and file")
+
+	assert.True(t, l.Absent("deploy", f, "SHA256:other"), "read completely, not there")
+	assert.False(t, l.Absent("deploy", f, "SHA256:held"), "there")
+	for _, file := range []string{"/u", "/p", "/never"} {
+		assert.False(t, l.Absent("deploy", file, "SHA256:other"), "no proof of absence from %s", file)
+	}
+	assert.False(t, l.Absent("other", f, "SHA256:other"))
+	assert.False(t, providers.KeyListing{}.Absent("deploy", f, "SHA256:x"), "an empty listing proves nothing")
+
+	_, err := providers.UnsupportedSession{}.ListKeys(context.Background())
+	assert.ErrorIs(t, err, providers.ErrUnsupported)
+	for _, s := range []providers.CoverageState{providers.CoverageComplete, providers.CoverageUnread, providers.CoveragePartial, providers.CoverageUnknown} {
+		assert.NotEmpty(t, string(s))
+	}
+}

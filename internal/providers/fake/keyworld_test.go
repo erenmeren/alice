@@ -651,7 +651,9 @@ func TestKeyWorldKeyLifecycleConforms(t *testing.T) {
 					w.Put(target, u, f, lines...)
 				}
 			},
-			Lines: func(f string) []string { return w.Lines(target, f) },
+			Lines:   func(f string) []string { return w.Lines(target, f) },
+			Unread:  func(f string) { w.SetCoverage(target, f, providers.CoverageUnread) },
+			Partial: func(f string) { w.SetCoverage(target, f, providers.CoveragePartial) },
 		}
 	}})
 }
@@ -686,4 +688,94 @@ func TestKeyWorldReportsKeyFilesAndTheirCompleteness(t *testing.T) {
 	d, err = s.Discover(ctx, providers.DiscoverRequest{SSHKeys: true})
 	require.NoError(t, err)
 	assert.Equal(t, []providers.UserKeyFiles{{OSUser: "x"}}, d.KeyFiles)
+}
+
+// Follow-up 2: the world's listing states coverage; knobs make a file unread or the answer partial.
+func TestKeyWorldListKeysCoverage(t *testing.T) {
+	ctx := context.Background()
+	target := uuid.New()
+	file := "/home/deploy/.ssh/authorized_keys"
+	line, fp, _ := newKey(t)
+	_, otherFP, _ := newKey(t)
+	w := NewKeyWorld()
+	w.Put(target, "deploy", file, line)
+	p := New(providers.KindLinuxSSH, providers.CapAuthorizedKeys)
+	p.Configure(func(c *Config) { c.World, c.SkipHostKeyCheck = w, true })
+	s, err := p.Open(ctx, providers.TargetRef{ID: target}, nil, providers.Env{})
+	require.NoError(t, err)
+
+	l, err := s.ListKeys(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, providers.CoverageComplete, l.Coverage("deploy", file), "complete by default")
+	assert.False(t, l.Absent("deploy", file, fp))
+	assert.True(t, l.Absent("deploy", file, otherFP))
+
+	// persistent knobs
+	w.SetCoverage(target, file, providers.CoverageUnread)
+	l, err = s.ListKeys(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, providers.CoverageUnread, l.Coverage("deploy", file))
+	assert.Empty(t, l.Keys, "an unread file lists no keys")
+	assert.False(t, l.Absent("deploy", file, otherFP))
+	w.SetCoverage(target, file, providers.CoveragePartial)
+	l, err = s.ListKeys(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, providers.CoveragePartial, l.Coverage("deploy", file))
+	assert.False(t, l.Absent("deploy", file, otherFP))
+	w.SetCoverage(target, file, providers.CoverageComplete)
+
+	// fault points at a chosen call index: every call of the world is numbered, listings included
+	base := len(w.Events())
+	w.SetFault(func(p FaultPoint) Fault {
+		switch {
+		case p.Method == "ListKeys" && p.N == base+3:
+			return FaultUnread
+		case p.Method == "ListKeys" && p.N == base+4:
+			return FaultPartial
+		case p.Method == "ListKeys" && p.N == base+5:
+			return FaultUnreachable
+		}
+		return FaultNone
+	})
+	want := []providers.CoverageState{providers.CoverageComplete, providers.CoverageComplete, providers.CoverageUnread, providers.CoveragePartial}
+	for i, st := range want {
+		l, err = s.ListKeys(ctx)
+		require.NoError(t, err, i)
+		assert.Equal(t, st, l.Coverage("deploy", file), "call %d", i+1)
+	}
+	_, err = s.ListKeys(ctx)
+	var pe *providers.Error
+	require.ErrorAs(t, err, &pe)
+	assert.Equal(t, "ssh.unreachable", pe.Code)
+	assert.Equal(t, "ListKeys", w.Events()[base+4].Method)
+
+	w.SetFault(func(FaultPoint) Fault { return FaultHang })
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	_, err = s.ListKeys(cctx)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	w.SetFault(nil)
+	cc, cancel2 := context.WithCancel(ctx)
+	cancel2()
+	_, err = s.ListKeys(cc)
+	assert.ErrorIs(t, err, context.Canceled)
+
+	// without a world and without the capability
+	q := New(providers.KindLinuxSSH, providers.CapAuthorizedKeys)
+	q.Configure(func(c *Config) {
+		c.SkipHostKeyCheck = true
+		c.Keys = []providers.DiscoveredSSHKey{{OSUser: "u", FilePath: "/f", Fingerprint: "SHA256:a"}}
+	})
+	s2, err := q.Open(ctx, providers.TargetRef{ID: target}, nil, providers.Env{})
+	require.NoError(t, err)
+	l, err = s2.ListKeys(ctx)
+	require.NoError(t, err)
+	assert.Len(t, l.Keys, 1)
+	assert.Equal(t, providers.CoverageComplete, l.Coverage("u", "/f"), "scripted keys: their files count as read")
+	r := New(providers.KindLinuxSSH, providers.CapTestConnection)
+	r.Configure(func(c *Config) { c.SkipHostKeyCheck = true })
+	s3, err := r.Open(ctx, providers.TargetRef{ID: target}, nil, providers.Env{})
+	require.NoError(t, err)
+	_, err = s3.ListKeys(ctx)
+	assert.ErrorIs(t, err, providers.ErrUnsupported)
 }

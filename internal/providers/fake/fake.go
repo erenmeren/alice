@@ -20,7 +20,7 @@ import (
 
 // Call is one recorded method call.
 type Call struct {
-	Method string // "Open", "TestConnection", "Discover", "ListAuthorizedKeys", "AddAuthorizedKey", "RemoveAuthorizedKey", "VerifyKeyLogin", "DeployCertificate", "RollbackDeployment", "DeploymentStatus", "FenceDeployment", "VerifyDeployment", "ReadCertificateSecret", "ImportCertificate", "Close"
+	Method string // "Open", "TestConnection", "Discover", "ListAuthorizedKeys", "ListKeys", "AddAuthorizedKey", "RemoveAuthorizedKey", "VerifyKeyLogin", "DeployCertificate", "RollbackDeployment", "DeploymentStatus", "FenceDeployment", "VerifyDeployment", "ReadCertificateSecret", "ImportCertificate", "Close"
 	Target uuid.UUID
 	Change providers.AuthKeyChange // Add/Remove only
 	// Deploy is the DeployCertificate request with PrivateKeyPEM replaced by an empty value: the
@@ -428,6 +428,33 @@ func (s *session) ListAuthorizedKeys(context.Context) ([]providers.DiscoveredSSH
 		return cfg.World.list(s.target), nil
 	}
 	return cfg.Keys, cfg.ListErr
+}
+
+// ListKeys is ListAuthorizedKeys with coverage. With a world it is a numbered call of the world
+// (fault points, SetCoverage); otherwise the scripted Keys, every file they name counting as read.
+func (s *session) ListKeys(ctx context.Context) (providers.KeyListing, error) {
+	cfg := s.p.record(Call{Method: "ListKeys", Target: s.target})
+	if !s.p.caps.Has(providers.CapAuthorizedKeys) {
+		return providers.KeyListing{}, providers.ErrUnsupported
+	}
+	if err := ctx.Err(); err != nil {
+		return providers.KeyListing{}, providers.NewError("ssh.timeout", true, err, nil)
+	}
+	if cfg.World != nil && cfg.ListErr == nil {
+		return cfg.World.listKeys(ctx, s.target)
+	}
+	if cfg.ListErr != nil {
+		return providers.KeyListing{}, cfg.ListErr
+	}
+	l := providers.KeyListing{Keys: cfg.Keys}
+	seen := map[[2]string]bool{}
+	for _, k := range cfg.Keys {
+		if id := [2]string{k.OSUser, k.FilePath}; !seen[id] {
+			seen[id] = true
+			l.Files = append(l.Files, providers.FileCoverage{OSUser: k.OSUser, FilePath: k.FilePath, State: providers.CoverageComplete})
+		}
+	}
+	return l, nil
 }
 
 func (s *session) AddAuthorizedKey(ctx context.Context, req providers.AuthKeyChange, log providers.StepLogger) (providers.AuthKeyResult, error) {

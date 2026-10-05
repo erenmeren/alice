@@ -28,6 +28,11 @@ func (UnsupportedSession) ListAuthorizedKeys(context.Context) ([]DiscoveredSSHKe
 	return nil, ErrUnsupported
 }
 
+// ListKeys is not supported.
+func (UnsupportedSession) ListKeys(context.Context) (KeyListing, error) {
+	return KeyListing{}, ErrUnsupported
+}
+
 // AddAuthorizedKey is not supported.
 func (UnsupportedSession) AddAuthorizedKey(context.Context, AuthKeyChange, StepLogger) (AuthKeyResult, error) {
 	return AuthKeyResult{}, ErrUnsupported
