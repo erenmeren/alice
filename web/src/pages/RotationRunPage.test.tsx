@@ -151,6 +151,33 @@ describe('RotationRunPage', () => {
     expect(screen.queryByText(/You can still stop and undo/)).not.toBeInTheDocument();
   });
 
+  it('shows no end time or countdown for an overlap that is paused for the license', async () => {
+    serve(runFixture({ status: 'overlap', paused_license: true, overlap_until: '2026-10-13T08:05:00Z', actions_allowed: ['abort'] }));
+    await open();
+    expect(await screen.findByText('The overlap is on hold: it resumes after you choose Continue, with the time that was left.')).toBeInTheDocument();
+    expect(screen.queryByText(/^Both keys work until/)).not.toBeInTheDocument();
+  });
+
+  it('shows the end of the overlap again once it is not paused', async () => {
+    serve(runFixture({ status: 'overlap', paused_license: false, overlap_until: '2026-10-13T08:05:00Z' }));
+    await open();
+    expect(await screen.findByText(/^Both keys work until/)).toBeInTheDocument();
+    expect(screen.queryByText(/The overlap is on hold/)).not.toBeInTheDocument();
+  });
+
+  it('shows the paused overlap in Turkish with no missing key', async () => {
+    serve(runFixture({ status: 'overlap', paused_license: true, overlap_until: '2026-10-13T08:05:00Z', actions_allowed: ['abort'] }), 'admin', 'tr');
+    await open('tr-TR');
+    expect(await screen.findByText('Geçiş süresi beklemede: Devam et\'i seçtiğinizde, kalan süreyle birlikte yeniden başlar.')).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
+  it('labels the listing_incomplete step', async () => {
+    serve(runFixture({ steps: [{ n: 1, location_id: 'rl1', name: 'listing_incomplete', status: 'failed', at: '2026-10-06T09:00:00Z', params: {} }] }));
+    await open();
+    expect(await within(await screen.findByTestId('run-steps')).findByText('Alice could not read the key file completely')).toBeInTheDocument();
+  });
+
   it('labels the retry_returned step', async () => {
     serve(runFixture({ steps: [{ n: 1, location_id: 'rl1', name: 'retry_returned', status: 'skipped', at: '2026-10-06T09:00:00Z', params: {} }] }));
     await open();

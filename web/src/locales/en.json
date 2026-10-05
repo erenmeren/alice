@@ -1918,7 +1918,8 @@
       "unknown": "Other step",
       "notice_failed": "The email about the license renewal could not be queued",
       "undo_not_sent": "The removal of the new key was not sent: too many attempts",
-      "retry_returned": "A removal retry was given back"
+      "retry_returned": "A removal retry was given back",
+      "listing_incomplete": "Alice could not read the key file completely"
     },
     "stepStatus": {
       "started": "Started",
@@ -1985,6 +1986,7 @@
     },
     "countLine": "{{label}}: {{count}}",
     "addResent_one": "Sent again {{count}} time after a lost answer, last at {{date}}",
-    "addResent_other": "Sent again {{count}} times after a lost answer, last at {{date}}"
+    "addResent_other": "Sent again {{count}} times after a lost answer, last at {{date}}",
+    "overlapOnHold": "The overlap is on hold: it resumes after you choose Continue, with the time that was left."
   }
 }

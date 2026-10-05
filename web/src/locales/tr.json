@@ -1918,7 +1918,8 @@
       "unknown": "Diğer adım",
       "notice_failed": "Lisans yenilemesiyle ilgili e-posta sıraya konamadı",
       "undo_not_sent": "Yeni anahtarın kaldırılması gönderilmedi: çok fazla deneme yapıldı",
-      "retry_returned": "Kaldırma yeniden denemesi geri verildi"
+      "retry_returned": "Kaldırma yeniden denemesi geri verildi",
+      "listing_incomplete": "Alice anahtar dosyasını tam olarak okuyamadı"
     },
     "stepStatus": {
       "started": "Başladı",
@@ -1985,6 +1986,7 @@
     },
     "countLine": "{{label}}: {{count}}",
     "addResent_one": "Yanıt kaybolduğu için {{count}} kez yeniden gönderildi, son gönderim: {{date}}",
-    "addResent_other": "Yanıt kaybolduğu için {{count}} kez yeniden gönderildi, son gönderim: {{date}}"
+    "addResent_other": "Yanıt kaybolduğu için {{count}} kez yeniden gönderildi, son gönderim: {{date}}",
+    "overlapOnHold": "Geçiş süresi beklemede: Devam et'i seçtiğinizde, kalan süreyle birlikte yeniden başlar."
   }
 }

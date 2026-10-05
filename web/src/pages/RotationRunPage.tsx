@@ -202,7 +202,8 @@ export function RotationRunPage() {
           </Code>
         </>
       )}
-      {r.status === 'overlap' && r.overlap_until && <Text size="sm">{t('rotation.overlapUntil', { date: formatDateTime(r.overlap_until, i18n.language) })}</Text>}
+      {r.status === 'overlap' && r.paused_license && <Text size="sm">{t('rotation.overlapOnHold')}</Text>}
+      {r.status === 'overlap' && !r.paused_license && r.overlap_until && <Text size="sm">{t('rotation.overlapUntil', { date: formatDateTime(r.overlap_until, i18n.language) })}</Text>}
       {r.awaiting_decision && !r.paused_license && r.decision_due_at && <Text size="sm">{t('rotation.decisionDue', { date: formatDateTime(r.decision_due_at, i18n.language) })}</Text>}
       {r.finished_at && <Text size="sm">{t('rotation.finishedAt', { date: formatDateTime(r.finished_at, i18n.language) })}</Text>}
       {r.paused_license && (
