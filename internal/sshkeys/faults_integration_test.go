@@ -125,8 +125,9 @@ func TestFailuresWriteNothing(t *testing.T) {
 	_, err = e.svc.RunNow(e.ctx, e.admin, p.ID, pv.Digest)
 	assert.ErrorIs(t, err, errInjected, "the location jobs cannot be queued: the start is rolled back")
 	f.enqueue.Store(false)
-	id := e.openRun(p.ID)
-	assert.Equal(t, "dry_run_notified", e.run(id).Status)
+	failed := e.onlyRun(p.ID)
+	assert.Equal(t, "cancelled", failed.Status, "the run Run now created is cancelled (review M3)")
+	assert.Equal(t, "rotation.start_failed", failed.ResultCode)
 	r, err := e.svc.RunNow(e.ctx, e.admin, p.ID, pv.Digest)
 	require.NoError(t, err)
 	loc := r.Locations[0].ID

@@ -143,7 +143,7 @@ func (s *Service) Preview(ctx context.Context, a inventory.Actor, policyID uuid.
 		now := s.clock.Now().UTC()
 		plannedFor := now
 		if pol.Enabled && pol.NextRunAt != nil {
-			plannedFor = *pol.NextRunAt
+			plannedFor = plan.PlannedFor(now, *pol.NextRunAt, pol.NotifyBeforeHours) // never a past start (review M5)
 		}
 		in, key, err := s.loadPlanInput(ctx, tx, pol, plannedFor, false)
 		if err != nil {
@@ -154,7 +154,11 @@ func (s *Service) Preview(ctx context.Context, a inventory.Actor, policyID uuid.
 			return planError(err)
 		}
 		out = Preview{PolicyID: policyID, Plan: p, Digest: p.Digest(), PlannedFor: plannedFor}
-		if s.notifier != nil && (pol.previewMailedAt == nil || !now.Before(pol.previewMailedAt.Add(PreviewMailEvery))) {
+		last, err := lastPreviewMail(ctx, tx, key.fingerprint)
+		if err != nil {
+			return err
+		}
+		if s.notifier != nil && (last == nil || !now.Before(last.Add(PreviewMailEvery))) {
 			if err := s.notifier.NotifyAdmins(ctx, tx, TemplatePreview, previewParams(key, p, plannedFor, uuid.Nil)); err != nil {
 				return err
 			}
@@ -200,7 +204,7 @@ func (s *Service) insertRun(ctx context.Context, tx pgx.Tx, pol policyRow, key k
     overlap_minutes, planned_for, notified_at, created_by, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $11, $11)`, id, pol.ID, p.KeyID, trigger, StatusDryRunNotified, raw, digest,
 		p.NewKeyType, p.Overlap, plannedFor.UTC(), now, nullableUser(a.UserID)); err != nil {
-		return uuid.Nil, fmt.Errorf("sshkeys: store the rotation: %w", err)
+		return uuid.Nil, runInsertError(err)
 	}
 	for _, act := range p.Actions {
 		state := LocPlanned
@@ -225,4 +229,16 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $11, $11)`, id, pol.I
 		return uuid.Nil, err
 	}
 	return id, appendStep(ctx, tx, id, nil, StatusDryRunNotified, "ok", map[string]string{"trigger": trigger, "plan_digest": digest}, now)
+}
+
+// lastPreviewMail is when an on-demand preview of the key was last mailed, keyed by the key's
+// fingerprint (review M6: deleting and re-creating a policy does not bypass the limit).
+func lastPreviewMail(ctx context.Context, tx pgx.Tx, fingerprint string) (*time.Time, error) {
+	var at *time.Time
+	err := tx.QueryRow(ctx, `SELECT max(created_at) FROM notifications_outbox WHERE template_key = $1 AND params->>'fingerprint' = $2
+AND NOT params ? 'rotation_id'`, TemplatePreview, fingerprint).Scan(&at)
+	if err != nil {
+		return nil, fmt.Errorf("sshkeys: read the key's last preview email: %w", err)
+	}
+	return utcPtr(at), nil
 }

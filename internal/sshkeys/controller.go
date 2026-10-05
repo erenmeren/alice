@@ -25,7 +25,7 @@ import (
 //
 // A previewed run (dry_run_notified): in lock it is cancelled (rotation.cancelled_license, L-88);
 // before planned_for nothing happens; a scheduled run starts only once its rotation.preview was
-// delivered to an Administrator, and is cancelled NoticeGrace after planned_for otherwise (S1); a
+// delivered to an Administrator by planned_for, and is cancelled at planned_for otherwise (S1); a
 // plan that changed cancels it (rotation.plan_changed); a busy generator leaves it for the next sweep.
 func (s *Service) Advance(ctx context.Context, id uuid.UUID) error {
 	run, err := readRunRow(ctx, s.pool, id)
@@ -83,10 +83,9 @@ func (s *Service) advancePreviewed(ctx context.Context, run runRow) error {
 			return err
 		}
 		if !delivered {
-			if !now.Before(run.plannedFor.Add(NoticeGrace)) {
-				return s.cancelPreviewed(ctx, run.id, ReasonNoticeUndelivered)
-			}
-			return nil
+			// No notice reached anyone by the planned start: it can never give the full notice
+			// period now (review M1). The run counts as this interval's run (review M4).
+			return s.cancelPreviewed(ctx, run.id, ReasonNoticeUndelivered)
 		}
 	}
 	err := s.start(ctx, run.id, systemActor, true)
@@ -96,14 +95,32 @@ func (s *Service) advancePreviewed(ctx context.Context, run runRow) error {
 	return err
 }
 
-// cancelPreviewed cancels a run that is still previewed, under its row lock.
+// cancelPreviewed cancels a run that is still previewed, under its row lock (system actor).
 func (s *Service) cancelPreviewed(ctx context.Context, id uuid.UUID, reason string) error {
+	return s.cancelIfPreviewed(ctx, id, systemActor.Audit, reason)
+}
+
+// cancelIfPreviewed cancels a run that is still previewed, under its row lock. A run cancelled for an
+// undelivered notice counts as its interval's run: an enabled policy's next run moves one interval on
+// (review M4: at most one cancelled run per interval, no create-and-cancel loop).
+func (s *Service) cancelIfPreviewed(ctx context.Context, id uuid.UUID, actor audit.Actor, reason string) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		run, err := lockRun(ctx, tx, id)
 		if err != nil || run.status != StatusDryRunNotified {
 			return err
 		}
-		return s.cancelRun(ctx, tx, systemActor.Audit, run, reason)
+		if err := s.cancelRun(ctx, tx, actor, run, reason); err != nil {
+			return err
+		}
+		if reason != ReasonNoticeUndelivered {
+			return nil
+		}
+		_, err = tx.Exec(ctx, `UPDATE rotation_policies SET next_run_at = next_run_at + make_interval(days => interval_days)
+WHERE id = $1 AND enabled AND deleted_at IS NULL AND next_run_at IS NOT NULL`, run.policyID)
+		if err != nil {
+			return policyWriteError(err)
+		}
+		return nil
 	})
 }
 

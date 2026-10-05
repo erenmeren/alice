@@ -154,42 +154,97 @@ func TestScheduledRunNotifiesBeforeStart(t *testing.T) {
 	assert.Equal(t, "dry_run_notified", e.run(r.ID).Status)
 }
 
-// S1: a scheduled run starts only after its rotation.preview was delivered to at least one
-// Administrator; skipped_no_smtp, pending and failed are not delivered. Undelivered 24 h after
-// planned_for, the run is cancelled (rotation.notice_undelivered). Run now is exempt.
+// S1 with review M1 and M4: a scheduled run starts only after its rotation.preview was delivered to
+// at least one Administrator no later than planned_for (sent at planned_for counts; a second later
+// does not); skipped_no_smtp, pending and failed are not delivered. Without such a delivery the run is
+// cancelled at planned_for (rotation.notice_undelivered) and counts as that interval's run: the next
+// run is planned one interval later. Run now is exempt.
 func TestScheduledStartWaitsForADeliveredNotice(t *testing.T) {
-	e := newEnv(t)
-	e.user("ada2", "admin") // a second Administrator: one delivered copy is enough
-	setStatus := func(runID string, status string, limit int) {
-		_, err := e.db.Owner.Exec(e.ctx, `UPDATE notifications_outbox SET status = $2 WHERE id IN (SELECT id FROM notifications_outbox
-WHERE template_key = 'rotation.preview' AND params->>'rotation_id' = $1 ORDER BY id LIMIT $3)`, runID, status, limit)
+	scheduled := func(t *testing.T) (*env, sshkeys.Policy, sshkeys.Rotation) {
+		e := newEnv(t)
+		e.user("ada2", "admin") // a second Administrator: one delivered copy is enough
+		k := e.deployed("ci", e.server("web-01"), "deploy")
+		p := e.enabledPolicy(k.ID, 90, 7, 24)
+		e.clock.Advance(89 * 24 * time.Hour)
+		_, err := e.svc.PlanDue(e.ctx)
 		require.NoError(t, err)
+		r := e.onlyRun(p.ID)
+		require.Equal(t, 2, e.count("SELECT count(*) FROM notifications_outbox WHERE params->>'rotation_id' = $1", r.ID.String()))
+		// An on-demand preview's delivered email is not this run's notice.
+		_, err = e.svc.Preview(e.ctx, e.admin, p.ID)
+		require.NoError(t, err)
+		_, err = e.db.Owner.Exec(e.ctx, `UPDATE notifications_outbox SET status = 'sent', sent_at = $1 WHERE NOT params ? 'rotation_id'`,
+			e.clock.Now())
+		require.NoError(t, err)
+		return e, p, r
 	}
-	k := e.deployed("ci", e.server("web-01"), "deploy")
-	p := e.enabledPolicy(k.ID, 90, 7, 24)
-	e.clock.Advance(89 * 24 * time.Hour)
-	_, err := e.svc.PlanDue(e.ctx)
-	require.NoError(t, err)
-	r := e.onlyRun(p.ID)
-	assert.Equal(t, 2, e.count("SELECT count(*) FROM notifications_outbox WHERE params->>'rotation_id' = $1", r.ID.String()))
-	// An on-demand preview's delivered email is not this run's notice.
-	_, err = e.svc.Preview(e.ctx, e.admin, p.ID)
-	require.NoError(t, err)
-	_, err = e.db.Owner.Exec(e.ctx, `UPDATE notifications_outbox SET status = 'sent' WHERE NOT params ? 'rotation_id'`)
-	require.NoError(t, err)
-	e.clock.Advance(24 * time.Hour) // planned_for
-	for _, status := range []string{"pending", "skipped_no_smtp", "failed"} {
-		setStatus(r.ID.String(), status, 2)
-		require.NoError(t, e.svc.Advance(e.ctx, r.ID))
-		assert.Equal(t, "dry_run_notified", e.run(r.ID).Status, status)
+	setOne := func(e *env, r sshkeys.Rotation, status string, sentAt *time.Time) {
+		_, err := e.db.Owner.Exec(e.ctx, `UPDATE notifications_outbox SET status = $2, sent_at = $3 WHERE id = (SELECT id
+FROM notifications_outbox WHERE params->>'rotation_id' = $1 ORDER BY id LIMIT 1)`, r.ID.String(), status, sentAt)
+		require.NoError(e.t, err)
 	}
-	setStatus(r.ID.String(), "sent", 1)
-	require.NoError(t, e.svc.Advance(e.ctx, r.ID))
-	got := e.run(r.ID)
-	assert.Equal(t, "adding_new", got.Status, "one delivered copy")
-	assert.Equal(t, 1, e.count("SELECT count(*) FROM jobs WHERE type = 'rotation.location'"))
 
-	// Never delivered: cancelled 24 h after planned_for, and PlanDue previews again.
+	t.Run("delivered at planned_for", func(t *testing.T) {
+		e, _, r := scheduled(t)
+		at := r.PlannedFor
+		setOne(e, r, "sent", &at)
+		e.clock.Set(r.PlannedFor)
+		require.NoError(t, e.svc.Advance(e.ctx, r.ID))
+		assert.Equal(t, "adding_new", e.run(r.ID).Status, "one copy delivered in time")
+		assert.Equal(t, 1, e.jobsOf("add"))
+	})
+	for _, c := range []struct {
+		status string
+		late   time.Duration // sent_at - planned_for
+	}{{"pending", 0}, {"skipped_no_smtp", 0}, {"failed", 0}, {"sent", time.Second}} {
+		t.Run(c.status, func(t *testing.T) {
+			e, p, r := scheduled(t)
+			next := *p.NextRunAt
+			if c.status == "sent" {
+				at := r.PlannedFor.Add(c.late)
+				setOne(e, r, "sent", &at)
+				e.clock.Set(at)
+			} else {
+				setOne(e, r, c.status, nil)
+				e.clock.Set(r.PlannedFor)
+			}
+			require.NoError(t, e.svc.Advance(e.ctx, r.ID))
+			got := e.run(r.ID)
+			assert.Equal(t, "cancelled", got.Status)
+			assert.Equal(t, sshkeys.ReasonNoticeUndelivered, got.ResultCode)
+			pol := e.reloadPolicy(p.ID)
+			assert.Equal(t, next.Add(90*24*time.Hour), *pol.NextRunAt, "the next run is the next interval's (M4)")
+			assert.Equal(t, "cancelled", pol.LastRunStatus)
+			assert.Equal(t, "rotation.notice_undelivered", pol.LastRunResult)
+			n, err := e.svc.PlanDue(e.ctx)
+			require.NoError(t, err)
+			assert.Zero(t, n, "no new run in the same interval")
+		})
+	}
+	t.Run("run now is exempt", func(t *testing.T) {
+		e, p, r := scheduled(t)
+		started, err := e.svc.RunNow(e.ctx, e.admin, p.ID, r.Digest)
+		require.NoError(t, err)
+		assert.Equal(t, "adding_new", started.Status)
+	})
+}
+
+// Review M3: when Run now cannot start the run it created (here: every generation slot is taken), that
+// run is cancelled in the same call; a previewed scheduled run it tried to start early stays as it was.
+func TestRunNowThatCannotStartLeavesNothingBehind(t *testing.T) {
+	e := newEnv(t)
+	k := e.deployed("ci", e.server("web-01"), "deploy")
+	p := e.policy(k.ID, 90, 7, 24)
+	pv, err := e.svc.Preview(e.ctx, e.admin, p.ID)
+	require.NoError(t, err)
+	release := sshkeys.HoldGenerationSlots(t)
+	_, err = e.svc.RunNow(e.ctx, e.admin, p.ID, pv.Digest)
+	assert.ErrorIs(t, err, sshkeys.ErrGenerateBusy)
+	got := e.onlyRun(p.ID)
+	assert.Equal(t, "cancelled", got.Status)
+	assert.Equal(t, "rotation.start_failed", got.ResultCode)
+	release()
+
 	e2 := newEnv(t)
 	k2 := e2.deployed("ci", e2.server("web-01"), "deploy")
 	p2 := e2.enabledPolicy(k2.ID, 90, 7, 24)
@@ -197,26 +252,29 @@ WHERE template_key = 'rotation.preview' AND params->>'rotation_id' = $1 ORDER BY
 	_, err = e2.svc.PlanDue(e2.ctx)
 	require.NoError(t, err)
 	r2 := e2.onlyRun(p2.ID)
-	_, err = e2.db.Owner.Exec(e2.ctx, "UPDATE notifications_outbox SET status = 'skipped_no_smtp'")
-	require.NoError(t, err)
-	e2.clock.Advance(48*time.Hour - time.Second)
-	require.NoError(t, e2.svc.Advance(e2.ctx, r2.ID))
-	assert.Equal(t, "dry_run_notified", e2.run(r2.ID).Status)
-	e2.clock.Advance(time.Second)
-	require.NoError(t, e2.svc.Advance(e2.ctx, r2.ID))
-	r2 = e2.run(r2.ID)
-	assert.Equal(t, "cancelled", r2.Status)
-	assert.Equal(t, sshkeys.ReasonNoticeUndelivered, r2.ResultCode)
-	assert.Equal(t, "rotation.notice_undelivered", sshkeys.ReasonNoticeUndelivered)
-	n, err := e2.svc.PlanDue(e2.ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 1, n, "previewed again")
+	release = sshkeys.HoldGenerationSlots(t)
+	_, err = e2.svc.RunNow(e2.ctx, e2.admin, p2.ID, r2.Digest)
+	assert.ErrorIs(t, err, sshkeys.ErrGenerateBusy)
+	release()
+	assert.Equal(t, "dry_run_notified", e2.run(r2.ID).Status, "the scheduled run stays scheduled")
+}
 
-	// Run now does not wait for the delivery: an Administrator with step-up is present.
-	r3 := e2.run(e2.openRun(p2.ID))
-	started, err := e2.svc.RunNow(e2.ctx, e2.admin, p2.ID, r3.Digest)
+// Review M5 and M6: a preview never announces a start in the past; the 10-minute mail limit belongs to
+// the key, so deleting and re-creating the policy does not bypass it.
+func TestPreviewTimeAndMailLimitPerKey(t *testing.T) {
+	e := newEnv(t)
+	k := e.deployed("ci", e.server("web-01"), "deploy")
+	p := e.enabledPolicy(k.ID, 1, 7, 24) // next run in one day; notice 24 h
+	e.clock.Advance(23 * time.Hour)
+	pv, err := e.svc.Preview(e.ctx, e.admin, p.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "adding_new", started.Status)
+	assert.Equal(t, e.clock.Now().Add(24*time.Hour), pv.PlannedFor, "the full notice period from now")
+	require.True(t, pv.Emailed)
+	require.NoError(t, e.svc.DeletePolicy(e.ctx, e.admin, p.ID, e.reloadPolicy(p.ID).Version))
+	q := e.policy(k.ID, 90, 7, 24)
+	pv, err = e.svc.Preview(e.ctx, e.admin, q.ID)
+	require.NoError(t, err)
+	assert.False(t, pv.Emailed, "the same key within 10 minutes")
 }
 
 // In lock a previewed run is cancelled at its start (L-88); its plan changing cancels it too.
@@ -239,7 +297,7 @@ func TestScheduledStartCancelledInLockOrWhenThePlanChanged(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	id := e.openRun(p.ID)
-	_, err = e.db.Owner.Exec(e.ctx, "UPDATE notifications_outbox SET status = 'sent'")
+	_, err = e.db.Owner.Exec(e.ctx, "UPDATE notifications_outbox SET status = 'sent', sent_at = $1", e.clock.Now())
 	require.NoError(t, err)
 	e.addLocation(k.ID, e.server("web-02"), "deploy")
 	e.clock.Advance(24 * time.Hour)
@@ -329,11 +387,4 @@ func TestRunNowRefusesAScheduledRunWhosePlanChanged(t *testing.T) {
 	_, err = e.svc.RunNow(e.ctx, e.admin, p.ID, r.Digest)
 	assert.ErrorIs(t, err, sshkeys.ErrPlanChanged)
 	assert.Equal(t, "dry_run_notified", e.run(r.ID).Status, "nothing changed")
-}
-
-func TestTemplates(t *testing.T) {
-	assert.Equal(t, []string{"rotation.preview", "rotation.preview_after_license", "rotation.overlap_started", "rotation.overlap_ending",
-		"rotation.completed", "rotation.aborted", "rotation.needs_attention", "rotation.paused_license", "rotation.decision_needed",
-		"rotation.completed_partial"},
-		sshkeys.Templates())
 }

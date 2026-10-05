@@ -209,3 +209,25 @@ func TestSmallStoreHelpers(t *testing.T) {
 	assert.False(t, uncertainAdd(locRow{state: LocVerified, addSentAt: &at}))
 	assert.Panics(t, func() { New(Config{}) }, "HelperBudget is required")
 }
+
+func TestTemplates(t *testing.T) {
+	assert.Equal(t, []string{"rotation.preview", "rotation.preview_after_license", "rotation.overlap_started", "rotation.overlap_ending",
+		"rotation.completed", "rotation.aborted", "rotation.needs_attention", "rotation.paused_license", "rotation.decision_needed",
+		"rotation.completed_partial"}, Templates())
+}
+
+// Review M2: a run that kept changing hands, or a live-run index refusal, never leaves as a raw
+// database error.
+func TestConcurrentRunMapping(t *testing.T) {
+	assert.ErrorIs(t, concurrentRunError(errConcurrentRun), ErrRotationInProgress)
+	assert.ErrorIs(t, concurrentRunError(ErrNotFound), ErrNotFound)
+	assert.ErrorIs(t, runInsertError(&pgconn.PgError{Code: "23505"}), errConcurrentRun)
+	assert.NotErrorIs(t, runInsertError(&pgconn.PgError{Code: "Z1013"}), errConcurrentRun)
+}
+
+// Review M9: a target without a user name connects as alice-svc, and the planner hears so.
+func TestPlanInputConnectionUserDefault(t *testing.T) {
+	tid := uuid.New()
+	in := toPlanInput(keyRow{}, nil, map[uuid.UUID]inventory.Target{tid: {}}, nil, Policy{}, time.Time{})
+	assert.Equal(t, inventory.ServiceUser, in.Targets[tid].ConnectionUser)
+}

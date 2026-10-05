@@ -54,15 +54,19 @@ type PolicyPatch struct {
 
 // Policy is a live rotation policy.
 type Policy struct {
-	ID, SSHKeyID         uuid.UUID
-	Name                 string
-	Enabled              bool
-	IntervalDays         int
-	OverlapMinutes       int
-	NotifyBeforeHours    int
-	NewKeyType           string
-	NextRunAt            *time.Time
-	OpenRotationID       *uuid.UUID
+	ID, SSHKeyID      uuid.UUID
+	Name              string
+	Enabled           bool
+	IntervalDays      int
+	OverlapMinutes    int
+	NotifyBeforeHours int
+	NewKeyType        string
+	NextRunAt         *time.Time
+	OpenRotationID    *uuid.UUID
+	// The policy's last finished run (review M4: the UI shows why a run did not happen).
+	LastRunID            *uuid.UUID
+	LastRunStatus        string
+	LastRunResult        string
 	Version              int
 	CreatedAt, UpdatedAt time.Time
 }
@@ -76,13 +80,17 @@ type policyRow struct {
 
 const policySelect = `SELECT p.id, p.ssh_key_id, p.name, p.enabled, p.interval_days, p.overlap_minutes, p.notify_before_hours,
     p.new_key_type, p.next_run_at, (SELECT r.id FROM rotations r WHERE r.policy_id = p.id AND r.status NOT IN ` + finishedStatuses + `),
-    p.version, p.created_at, p.updated_at, p.preview_mailed_at, p.deleted_at IS NOT NULL
-FROM rotation_policies p`
+    p.version, p.created_at, p.updated_at, p.preview_mailed_at, p.deleted_at IS NOT NULL, lr.id, coalesce(lr.status, ''),
+    coalesce(lr.result_code, '')
+FROM rotation_policies p
+LEFT JOIN LATERAL (SELECT r.id, r.status, r.result_code FROM rotations r WHERE r.policy_id = p.id AND r.status IN ` + finishedStatuses + `
+    ORDER BY r.finished_at DESC, r.id DESC LIMIT 1) lr ON true`
 
 func scanPolicy(row pgx.Row) (policyRow, error) {
 	var p policyRow
 	err := row.Scan(&p.ID, &p.SSHKeyID, &p.Name, &p.Enabled, &p.IntervalDays, &p.OverlapMinutes, &p.NotifyBeforeHours, &p.NewKeyType,
-		&p.NextRunAt, &p.OpenRotationID, &p.Version, &p.CreatedAt, &p.UpdatedAt, &p.previewMailedAt, &p.deleted)
+		&p.NextRunAt, &p.OpenRotationID, &p.Version, &p.CreatedAt, &p.UpdatedAt, &p.previewMailedAt, &p.deleted, &p.LastRunID,
+		&p.LastRunStatus, &p.LastRunResult)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return policyRow{}, ErrNotFound
 	}
@@ -168,7 +176,26 @@ func (s *Service) inPolicyTx(ctx context.Context, id uuid.UUID, fn func(tx pgx.T
 			return err
 		}
 	}
+	return concurrentRunError(err)
+}
+
+// concurrentRunError maps a run that kept changing hands (three tries) to ErrRotationInProgress, never
+// a raw database error (review M2).
+func concurrentRunError(err error) error {
+	if errors.Is(err, errConcurrentRun) {
+		return ErrRotationInProgress
+	}
 	return err
+}
+
+// runInsertError maps the live-run unique indexes (a run created by another transaction: 23505) to
+// errConcurrentRun, which inPolicyTx retries (review M2).
+func runInsertError(err error) error {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.Code == "23505" {
+		return errConcurrentRun
+	}
+	return fmt.Errorf("sshkeys: store the rotation: %w", err)
 }
 
 // policyFields are a policy's settings after validation.

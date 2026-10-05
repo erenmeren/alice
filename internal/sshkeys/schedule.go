@@ -104,7 +104,9 @@ func (s *Service) RunNow(ctx context.Context, a inventory.Actor, policyID uuid.U
 		return Rotation{}, err
 	}
 	var runID uuid.UUID
+	created := false
 	err := s.inPolicyTx(ctx, policyID, func(tx pgx.Tx, pol policyRow, run *runRow) error {
+		created = false
 		now := s.clock.Now().UTC()
 		if run != nil {
 			if run.status != StatusDryRunNotified {
@@ -130,12 +132,19 @@ func (s *Service) RunNow(ctx context.Context, a inventory.Actor, policyID uuid.U
 			return nil
 		}
 		runID, err = s.insertRun(ctx, tx, pol, key, p, digest, TriggerManual, now, a)
+		created = err == nil
 		return err
 	})
 	if err != nil {
 		return Rotation{}, err
 	}
 	if err := s.start(ctx, runID, a, false); err != nil {
+		if created {
+			// The Administrator sees the error: nothing starts later behind their back (review M3).
+			if cerr := s.cancelIfPreviewed(ctx, runID, a.Audit, ReasonStartFailed); cerr != nil {
+				err = errors.Join(err, cerr)
+			}
+		}
 		return Rotation{}, err
 	}
 	return s.Rotation(ctx, runID)
@@ -256,12 +265,16 @@ func (s *Service) queueLocationJobs(ctx context.Context, tx pgx.Tx, a inventory.
 	return nil
 }
 
-// noticeDelivered reports whether the run's rotation.preview reached at least one Administrator
-// (outbox status sent; skipped_no_smtp, pending and failed are not delivered: S1).
+// noticeDelivered reports whether the run's rotation.preview reached at least one Administrator in
+// time: an outbox row of the run's notice in status sent, sent no later than planned_for (S1; Task 8
+// review M1: a notice delivered late gives no lead time and does not count). skipped_no_smtp, pending
+// and failed are not delivered. The rows are found by the run's own notice (same template, created
+// in the run's insert transaction: created_at = notified_at; review M7), not by a scan of the outbox.
 func (s *Service) noticeDelivered(ctx context.Context, q db.Querier, runID uuid.UUID) (bool, error) {
 	var ok bool
-	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM notifications_outbox WHERE template_key = $1 AND params->>'rotation_id' = $2
-AND status = 'sent')`, TemplatePreview, runID.String()).Scan(&ok)
+	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM rotations r JOIN notifications_outbox o
+    ON o.template_key = $1 AND o.created_at = r.notified_at AND o.params->>'rotation_id' = r.id::text
+WHERE r.id = $2 AND o.status = 'sent' AND o.sent_at <= r.planned_for)`, TemplatePreview, runID).Scan(&ok)
 	if err != nil {
 		return false, fmt.Errorf("sshkeys: read the run's notice: %w", err)
 	}

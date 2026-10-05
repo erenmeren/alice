@@ -26,9 +26,6 @@ const (
 	MaxGenerations = 2
 	// PreviewMailEvery bounds on-demand preview emails: at most one per policy in this time (row 16).
 	PreviewMailEvery = 10 * time.Minute
-	// NoticeGrace: a scheduled run whose rotation.preview was not delivered to any Administrator by
-	// this long after its planned start is cancelled (S1).
-	NoticeGrace = 24 * time.Hour
 	// DecisionWindow is how long a run waits for an Administrator's decision on locations Alice
 	// cannot test (plan.DecisionDue).
 	DecisionWindow = 14 * 24 * time.Hour
@@ -61,6 +58,9 @@ const (
 	ReasonPlanChanged       = "rotation.plan_changed"
 	ReasonCancelledLicense  = "rotation.cancelled_license"
 	ReasonNoticeUndelivered = "rotation.notice_undelivered" // S1, new code ALC-ROT-0017
+	// ReasonStartFailed: Run now created a run it could not start (generator busy, a failed write);
+	// the run is cancelled in the same call (Task 8 review M3).
+	ReasonStartFailed = "rotation.start_failed"
 )
 
 // Triggers of a run (rotations.trigger).
