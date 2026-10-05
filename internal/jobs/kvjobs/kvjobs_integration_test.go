@@ -636,6 +636,7 @@ func TestImportJobOutcomes(t *testing.T) {
 		im, err := w.inv.RequestImport(w.ctx, w.admin, inventory.ImportInput{VaultID: vault, CertificateID: cert.ID, Name: "new-cert"})
 		require.NoError(t, err)
 		require.NoError(t, w.inv.DeleteVault(w.ctx, w.admin, vault, false))
+		opens := w.az.Count("Open")
 		w.drain()
 		// Deleting the vault ended its queued import itself (kv.import_vault_deleted): the job reads the
 		// record back and sends nothing.
@@ -646,6 +647,7 @@ func TestImportJobOutcomes(t *testing.T) {
 		assert.Equal(t, inventory.ImportFailed, state, "a queued import of a vanished vault must not block its name for ever")
 		assert.Equal(t, inventory.ReasonImportVaultDeleted, code)
 		assert.Zero(t, w.az.Count("ImportCertificate"))
+		assert.Equal(t, opens, w.az.Count("Open"), "no session was opened for it")
 	})
 }
 
@@ -854,7 +856,9 @@ func TestPollsBeyondTwoDoNotOccupyWorkers(t *testing.T) {
 	p := licensetest.Payload(w.lic.Snapshot().InstallationID, w.clock.Now(), w.clock.Now().Add(365*24*time.Hour), 50)
 	_, err := w.lic.Install(w.ctx, licensetest.Sign(p), audit.SystemActor("test"), uuid.Nil)
 	require.NoError(t, err)
-	for i := range 10 {
+	// More than maxCandidates (10) polls are queued AHEAD of the job of another type: the claim query itself
+	// must skip the capped polls, or one claim would give up after ten of them and return nothing.
+	for i := range 13 {
 		w.addVault(fmt.Sprintf("vault-%d", i))
 	}
 	extra := w.addVault("other")
@@ -891,7 +895,7 @@ func TestPollsBeyondTwoDoNotOccupyWorkers(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 2, w.count("SELECT count(*) FROM jobs WHERE type = 'kv.poll' AND status = 'running'"))
-	assert.Equal(t, 9, w.count("SELECT count(*) FROM jobs WHERE type = 'kv.poll' AND status = 'queued' AND attempts = 0"),
+	assert.Equal(t, 12, w.count("SELECT count(*) FROM jobs WHERE type = 'kv.poll' AND status = 'queued' AND attempts = 0"),
 		"the polls that wait are not spent")
 
 	// Another type is claimed and finishes while both polls are held.
