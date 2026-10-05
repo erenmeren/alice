@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -52,7 +53,30 @@ func (s *stack) azureProvider() providers.Provider {
 			IMDS:  kv.DialAddr("169.254.169.254:80"),
 		})
 	require.NoError(s.t, err)
-	return azurekv.New(o)
+	return &azureWrapped{Provider: azurekv.New(o), s: s}
+}
+
+// azureWrapped is the real provider; a test can make the sessions it opens panic when closed (a misbehaving
+// session must never leave a deployment or a job in a state nobody ends). The embedded provider's methods (the
+// connection cache included) are promoted.
+type azureWrapped struct {
+	*azurekv.Provider
+	s *stack
+}
+
+func (p *azureWrapped) Open(ctx context.Context, t providers.TargetRef, c providers.CredentialSource, e providers.Env) (providers.Session, error) {
+	sess, err := p.Provider.Open(ctx, t, c, e)
+	if err != nil || !p.s.closePanics.Load() {
+		return sess, err
+	}
+	return panicOnClose{Session: sess}, nil
+}
+
+type panicOnClose struct{ providers.Session }
+
+func (p panicOnClose) Close() error {
+	_ = p.Session.Close()
+	panic("test: a session that panics when closed")
 }
 
 // kvStackNow is the real time, to the second: the fake CA's certificates are valid from the real time, so the stack's
@@ -514,3 +538,10 @@ func newConnectionCounter(t *testing.T) *connectionCounter {
 
 func (c *connectionCounter) addr() string { return c.ln.Addr().String() }
 func (c *connectionCounter) count() int   { return int(c.n.Load()) }
+
+func kvMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	return b
+}

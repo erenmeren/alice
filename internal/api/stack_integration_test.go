@@ -95,28 +95,29 @@ type exchange struct {
 func (e exchange) key() string { return e.method + " " + e.path }
 
 type stack struct {
-	t         *testing.T
-	db        *pgtest.DB
-	clock     *clock.Fake
-	keysDir   string
-	logs      *syncBuffer
-	trusted   []netip.Prefix
-	keyring   *secrets.Keyring
-	auth      *auth.Service
-	setup     *setup.Service
-	auditSvc  *audit.Service
-	license   *license.Service
-	inv       *inventory.Service
-	auditLog  *audit.Log
-	queue     *jobs.Queue
-	runner    *jobs.Runner
-	registry  *providers.Registry
-	ca        *pki.CA // issues every certificate of the Nginx journeys; its root is the inventory's trust anchor
-	stateDir  string
-	handler   http.Handler
-	api       *Server // the server behind handler as start built it (denial summaries, AUD-06)
-	setupCode string
-	kv        *fakekv.Server // the fake Azure service behind the real azurekv provider (nil: no Key Vault in this stack)
+	t           *testing.T
+	db          *pgtest.DB
+	clock       *clock.Fake
+	keysDir     string
+	logs        *syncBuffer
+	trusted     []netip.Prefix
+	keyring     *secrets.Keyring
+	auth        *auth.Service
+	setup       *setup.Service
+	auditSvc    *audit.Service
+	license     *license.Service
+	inv         *inventory.Service
+	auditLog    *audit.Log
+	queue       *jobs.Queue
+	runner      *jobs.Runner
+	registry    *providers.Registry
+	ca          *pki.CA // issues every certificate of the Nginx journeys; its root is the inventory's trust anchor
+	stateDir    string
+	handler     http.Handler
+	api         *Server // the server behind handler as start built it (denial summaries, AUD-06)
+	setupCode   string
+	closePanics atomic.Bool    // the Key Vault provider's sessions panic when closed (keyvault_harness_integration_test.go)
+	kv          *fakekv.Server // the fake Azure service behind the real azurekv provider (nil: no Key Vault in this stack)
 
 	mu        sync.Mutex
 	nginxSrvs []*nginxFixture // the emulated Nginx hosts Alice's own TLS probe can reach
