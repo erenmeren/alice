@@ -17,6 +17,7 @@ import (
 	"alice/internal/notify"
 	"alice/internal/platform/db"
 	"alice/internal/platform/settings"
+	"alice/internal/testutil/pgtest"
 )
 
 // tamperAudit changes an audit row as the table owner with the append-only triggers disabled.
@@ -172,7 +173,21 @@ func TestAuditVerifyTaskAnnouncesATruncatedTailOnce(t *testing.T) {
 func TestAuditVerifyTaskTreatsAFutureLastVerificationAsDue(t *testing.T) {
 	e := newQEnv(t)
 	require.NoError(t, settings.Set(e.ctx, e.d.App, auditVerifyStateKey,
-		auditVerifyState{LastIntactAt: e.clk.Now().Add(48 * time.Hour)}, e.clk.Now()))
+		AuditVerifyState{LastIntactAt: e.clk.Now().Add(48 * time.Hour)}, e.clk.Now()))
 	require.NoError(t, e.auditVerifyTask().Run(e.ctx))
 	assert.Equal(t, 1, e.audits(t, "audit.verified"))
+}
+
+func TestReadAuditVerifyState(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	st, err := ReadAuditVerifyState(ctx, d.App)
+	require.NoError(t, err)
+	assert.Equal(t, AuditVerifyState{}, st, "never verified")
+	at := time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
+	want := AuditVerifyState{LastIntactAt: at, LastBrokenAt: at.Add(time.Hour), AlertedBadSeq: 7, AlertedProblem: "hash_mismatch"}
+	require.NoError(t, settings.Set(ctx, d.App, "jobs.audit_verify", want, at))
+	st, err = ReadAuditVerifyState(ctx, d.App)
+	require.NoError(t, err)
+	assert.Equal(t, want, st)
 }

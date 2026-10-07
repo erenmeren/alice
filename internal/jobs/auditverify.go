@@ -45,19 +45,29 @@ const (
 	// auditVerifyDue is the age of the last intact verification after which the next tick
 	// verifies again: daily, with an hour of slack for the tick.
 	auditVerifyDue = 23 * time.Hour
-	// auditVerifyStateKey is the settings key of auditVerifyState.
+	// auditVerifyStateKey is the settings key of AuditVerifyState.
 	auditVerifyStateKey = "jobs.audit_verify"
 	// auditVerifyLock serializes the state update of two processes (a RunNow next to a tick),
 	// next to the audit (…300), passphrase (…301), target-limit (…302) and leader (…303) keys.
 	auditVerifyLock int64 = 7160927315633811304
 )
 
-// auditVerifyState is what the task remembers between runs and restarts.
-type auditVerifyState struct {
+// AuditVerifyState is what the task remembers between runs and restarts.
+type AuditVerifyState struct {
 	LastIntactAt   time.Time `json:"last_intact_at"`  // the last verification that found the chain intact
 	LastBrokenAt   time.Time `json:"last_broken_at"`  // the last verification that found it broken
 	AlertedBadSeq  int64     `json:"alerted_bad_seq"` // first_bad_seq of the last announced break; 0 = none
 	AlertedProblem string    `json:"alerted_problem"` // its problem
+}
+
+// ReadAuditVerifyState reads what the daily verification remembers (the dashboard's integrity status, R42 row 27).
+// The zero value means it never ran.
+func ReadAuditVerifyState(ctx context.Context, q db.Querier) (AuditVerifyState, error) {
+	var st AuditVerifyState
+	if _, err := settings.Get(ctx, q, auditVerifyStateKey, &st); err != nil {
+		return AuditVerifyState{}, fmt.Errorf("jobs: read the audit verify state: %w", err)
+	}
+	return st, nil
 }
 
 func auditBrokenParams(rep audit.Report) map[string]string {
@@ -70,7 +80,7 @@ func auditBrokenParams(rep audit.Report) map[string]string {
 // fail with ErrAuditChainBroken and queues one audit.broken email per break: when no break is
 // announced yet, when the new one lies further back, or when its problem changes.
 //
-// The email is queued in the transaction that records the alert state (auditVerifyState), not
+// The email is queued in the transaction that records the alert state (AuditVerifyState), not
 // in the one that writes the audit.verified row (audit.Service.Verify commits that first). A
 // crash between the two only delays the email to the next tick, which verifies again because
 // the state still shows no intact verification.
@@ -81,7 +91,7 @@ func AuditVerifyTask(c AuditVerifyConfig) Task {
 }
 
 func runAuditVerify(ctx context.Context, c AuditVerifyConfig) error {
-	var st auditVerifyState
+	var st AuditVerifyState
 	if _, err := settings.Get(ctx, c.Pool, auditVerifyStateKey, &st); err != nil {
 		return fmt.Errorf("jobs: read the audit verification state: %w", err)
 	}
@@ -99,7 +109,7 @@ func runAuditVerify(ctx context.Context, c AuditVerifyConfig) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, auditVerifyLock); err != nil {
 			return fmt.Errorf("jobs: lock the audit verification state: %w", err)
 		}
-		var st auditVerifyState
+		var st AuditVerifyState
 		if _, err := settings.Get(ctx, tx, auditVerifyStateKey, &st); err != nil {
 			return fmt.Errorf("jobs: read the audit verification state: %w", err)
 		}
