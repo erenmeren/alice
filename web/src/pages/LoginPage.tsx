@@ -1,9 +1,14 @@
-import { Alert, Button, Container, Group, PasswordInput, Stack, TextInput, Title } from '@mantine/core';
+import { Alert, Button, Container, Divider, Group, PasswordInput, Stack, TextInput, Title } from '@mantine/core';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Navigate, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { isApiError } from '../api/client';
 import { enrollMfa, login, verifyMfa } from '../api/endpoints';
+import { listPublicProviders, ssoErrorReason, startSSO } from '../api/sso';
+import { PUBLIC_PROVIDERS_KEY } from '../api/queryKeys';
+import { goTo } from '../navigation';
+import { SSOErrorAlert } from '../components/SSOErrorAlert';
 import type { MfaEnrollment, SessionInfo, SessionWithCodes } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { PageLoader } from '../auth/guards';
@@ -57,6 +62,31 @@ function PasswordForm({ onDone, onError }: { onDone: (p: Phase, e?: MfaEnrollmen
         </Button>
       </Stack>
     </form>
+  );
+}
+
+// SSOButtons lists the identity providers anybody may sign in with. A click asks the server for the provider's address and
+// leaves the page for it (the callback brings the person back, signed in or with ?sso_error=). The list failing only hides it.
+function SSOButtons({ returnTo, onError }: { returnTo: string; onError: (e: unknown) => void }) {
+  const { t } = useTranslation();
+  const providers = useQuery({ queryKey: PUBLIC_PROVIDERS_KEY, queryFn: listPublicProviders });
+  const start = useMutation({
+    mutationFn: (id: string) => startSSO(id, returnTo),
+    onMutate: () => onError(null),
+    onSuccess: (r) => goTo(r.authorize_url),
+    onError,
+  });
+  const items = providers.data?.items ?? [];
+  if (items.length === 0) return null;
+  return (
+    <Stack gap="xs">
+      <Divider label={t('login.or')} labelPosition="center" />
+      {items.map((p) => (
+        <Button key={p.id} variant="default" loading={start.isPending && start.variables === p.id} onClick={() => start.mutate(p.id)}>
+          {t('login.ssoWith', { name: p.name })}
+        </Button>
+      ))}
+    </Stack>
   );
 }
 
@@ -135,6 +165,7 @@ export function LoginPage() {
   const [error, setError] = useState<unknown>(null);
 
   // RequireAuth saved where the user wanted to go; safeReturnPath keeps that same-origin and never /login.
+  const ssoReason = ssoErrorReason(params.get('sso_error'));
   const returnTo = safeReturnPath((location.state as { from?: unknown } | null)?.from);
 
   if (loading) return <PageLoader />;
@@ -183,6 +214,7 @@ export function LoginPage() {
         {phase === 'password' && params.get('ended') === '1' && !error && (
           <Alert color="yellow">{t('login.sessionEnded')}</Alert>
         )}
+        {phase === 'password' && ssoReason && <SSOErrorAlert reason={ssoReason} />}
         {phase !== 'enroll' && <ErrorAlert error={error} />}
         {phase === 'password' && (
           <PasswordForm
@@ -193,6 +225,7 @@ export function LoginPage() {
             }}
           />
         )}
+        {phase === 'password' && <SSOButtons returnTo={returnTo} onError={setError} />}
         {phase === 'mfa' && <MfaForm onSession={finish} onError={onMfaError} />}
         {phase === 'enroll' && enrollment && <TotpEnrollment enrollment={enrollment} onVerify={verifyEnrollment} />}
         {phase === 'codes' && withCodes && <RecoveryCodes codes={withCodes.recovery_codes ?? []} onContinue={() => finish(withCodes)} />}

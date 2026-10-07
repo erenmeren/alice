@@ -1,11 +1,12 @@
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
 import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router';
 import { apiFetch, ApiError, getCsrfToken, isApiError } from '../api/client';
 import { AuthProvider } from '../auth/AuthProvider';
-import { errorResponse, sessionFor, sessionHandlers } from '../test/fixtures';
+import * as navigation from '../navigation';
+import { errorResponse, sessionFor, sessionHandlers, ssoSessionFor } from '../test/fixtures';
 import { renderApp } from '../test/render';
 import { server } from '../test/server';
 import { StepUpProvider, useStepUp } from './StepUpProvider';
@@ -249,5 +250,47 @@ describe('StepUpProvider', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     await waitFor(() => expect(screen.getByTestId('done')).toHaveTextContent('one,two'));
     expect(stepUps).toBe(1);
+  });
+
+  it('sends an SSO user to the identity provider instead of asking for a code', async () => {
+    const go = vi.spyOn(navigation, 'goTo').mockImplementation(() => {});
+    let attempts = 0;
+    let next: unknown;
+    server.use(
+      ...sessionHandlers(ssoSessionFor('admin')),
+      http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json({ items: [{ id: 'p1', name: 'Corp IdP' }] })),
+      http.post('/api/v1/sensitive', () => (++attempts === 1 ? errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required') : HttpResponse.json({}))),
+      http.post('/api/v1/auth/oidc/stepup', async ({ request }) => {
+        next = ((await request.json()) as { next: string }).next;
+        return HttpResponse.json({ authorize_url: 'https://idp.example.com/authorize?state=su' });
+      }),
+    );
+    await renderHarness();
+    await userEvent.click(await screen.findByRole('button', { name: 'Do it' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Confirm at your identity provider' });
+    expect(within(dialog).queryByLabelText('6-digit code')).not.toBeInTheDocument();
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'Continue to Corp IdP' }));
+    await waitFor(() => expect(go).toHaveBeenCalledWith('https://idp.example.com/authorize?state=su'));
+    expect(next).toBe(window.location.pathname + window.location.search);
+    go.mockRestore();
+  });
+
+  it('shows the refusal when the step-up cannot be started, and lets the person cancel', async () => {
+    const go = vi.spyOn(navigation, 'goTo').mockImplementation(() => {});
+    server.use(
+      ...sessionHandlers(ssoSessionFor('admin')),
+      http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json({ items: [] })),
+      http.post('/api/v1/sensitive', () => errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required')),
+      http.post('/api/v1/auth/oidc/stepup', () => errorResponse(403, 'ALC-SSO-0013', 'sso.provider_disabled')),
+    );
+    await renderHarness();
+    await userEvent.click(await screen.findByRole('button', { name: 'Do it' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Confirm at your identity provider' });
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'Continue to your identity provider' }));
+    expect(await within(dialog).findByRole('alert')).toBeInTheDocument();
+    expect(go).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('failed: auth.stepup_required'));
+    go.mockRestore();
   });
 });

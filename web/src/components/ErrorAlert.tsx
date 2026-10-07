@@ -49,8 +49,9 @@ export function ErrorAlert({ error }: { error: unknown }) {
 
   return (
     <Alert color="red" role="alert" title={withRoleCode(title, params.role)}>
-      {/* The cause names the two key types, which is what the person needs to choose again. */}
-      {known && keyTypeMismatch && i18n.exists(`${base}.cause`) && <Text size="sm">{withRoleCode(t(`${base}.cause`, params), params.role)}</Text>}
+      {/* The cause names the two key types, which is what the person needs to choose again; for an identity provider that
+          could not be read it names the closed reason (params.cause). */}
+      {known && (keyTypeMismatch || error.reason === 'sso.discovery_failed') && i18n.exists(`${base}.cause`) && <Text size="sm">{withRoleCode(t(`${base}.cause`, params), params.role)}</Text>}
       {action && <Text size="sm">{withRoleCode(action, params.role)}</Text>}
       {error.details.length > 0 && (
         <List size="sm" mt="xs">

@@ -21,6 +21,7 @@ import { RotationRunPage } from './pages/RotationRunPage';
 import { RouteErrorPage } from './pages/RouteErrorPage';
 import { TargetDetailPage } from './pages/TargetDetailPage';
 import { TargetsPage } from './pages/TargetsPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { SetupPage } from './pages/SetupPage';
 import { SSHKeyDetailPage } from './pages/SSHKeyDetailPage';
 import { SSHKeysPage } from './pages/SSHKeysPage';
@@ -75,6 +76,14 @@ export function routes(): RouteObject[] {
               element: (
                 <RequireRole roles={['admin']}>
                   <UsersPage />
+                </RequireRole>
+              ),
+            },
+            {
+              path: 'settings',
+              element: (
+                <RequireRole roles={['admin']}>
+                  <SettingsPage />
                 </RequireRole>
               ),
             },

@@ -1,8 +1,12 @@
 import { Button, Group, Stack, Text, TextInput } from '@mantine/core';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isApiError, onUnauthorized } from '../api/client';
 import { stepUp } from '../api/endpoints';
+import { PUBLIC_PROVIDERS_KEY } from '../api/queryKeys';
+import { listPublicProviders, startSSOStepUp } from '../api/sso';
+import { goTo } from '../navigation';
 import { useAuth } from '../auth/AuthProvider';
 import { ErrorAlert } from './ErrorAlert';
 import { AppModal } from './AppModal';
@@ -34,13 +38,19 @@ interface Pending {
 // the dialog closes, and with the provider when it unmounts.
 export function StepUpProvider({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
-  const { setSession } = useAuth();
+  const { session, setSession } = useAuth();
+  const sso = session?.user.auth_source === 'oidc';
   const [opened, setOpened] = useState(false);
   const [code, setCode] = useState('');
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const pending = useRef<Pending | null>(null);
+  const ssoStart = useMutation({
+    mutationFn: () => startSSOStepUp(window.location.pathname + window.location.search),
+    onSuccess: (r) => goTo(r.authorize_url),
+  });
 
+  const resetSsoStart = ssoStart.reset;
   const askForCode = useCallback(
     (original: unknown) => {
       // Concurrent calls share one dialog and one promise, so none is orphaned.
@@ -54,10 +64,11 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
       pending.current = { promise, resolve, reject, original };
       setCode('');
       setError(null);
+      resetSsoStart();
       setOpened(true);
       return promise;
     },
-    [],
+    [resetSsoStart],
   );
 
   const run = useCallback(
@@ -110,12 +121,30 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // An SSO user has no authenticator code: the identity provider confirms. The browser leaves for it and the callback
+  // brings the person back to this page (the action is repeated by the person, as after any step-up).
+  const providers = useQuery({ queryKey: PUBLIC_PROVIDERS_KEY, queryFn: listPublicProviders, enabled: opened && sso });
+  const providerName = providers.data?.items.find((p) => p.id === session?.user.sso_provider_id)?.name ?? t('stepUp.ssoFallbackName');
+
   const api = useMemo(() => ({ run }), [run]);
   return (
     <StepUpContext.Provider value={api}>
       {children}
       {/* zIndex above page modals (default 200): step-up often opens on top of an open form dialog. */}
-      <AppModal opened={opened} onClose={cancel} title={t('ui.stepUp.title')} centered zIndex={1000} transitionProps={{ duration: 0 }}>
+      <AppModal opened={opened} onClose={cancel} title={sso ? t('stepUp.ssoTitle') : t('ui.stepUp.title')} centered zIndex={1000} transitionProps={{ duration: 0 }}>
+        {sso ? (
+          <Stack>
+            <ErrorAlert error={ssoStart.error} />
+            <Group justify="flex-end">
+              <Button variant="default" onClick={cancel}>
+                {t('ui.cancel')}
+              </Button>
+              <Button loading={ssoStart.isPending} onClick={() => ssoStart.mutate()} data-autofocus>
+                {t('stepUp.ssoAction', { name: providerName })}
+              </Button>
+            </Group>
+          </Stack>
+        ) : (
         <form onSubmit={submit}>
           <Stack>
             <Text size="sm">{t('ui.stepUp.help')}</Text>
@@ -139,6 +168,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
             </Group>
           </Stack>
         </form>
+        )}
       </AppModal>
     </StepUpContext.Provider>
   );

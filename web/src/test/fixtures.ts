@@ -1,5 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import type { DashboardSummary } from '../api/phase7';
+import type { Provider } from '../api/sso';
 import type { Policy, Preview, PreviewAction, Run, RunLocation } from '../api/rotation';
 import type { ManagedKeyInfo } from '../api/sshkeys';
 import type {
@@ -52,6 +53,8 @@ export function userFor(role: Role, locale = 'en'): User {
     mfa_enrolled: true,
     last_login_at: null,
     created_at: '2026-09-30T08:00:00Z',
+    auth_source: 'local',
+    sso_provider_id: null,
   };
 }
 
@@ -63,6 +66,12 @@ export function sessionFor(role: Role, locale = 'en'): SessionInfo {
     idle_expires_at: '2026-09-30T08:30:00Z',
     stepup_until: null,
   };
+}
+
+// ssoSessionFor is a session of a single sign-on user of the provider ssoProviderFixture.
+export function ssoSessionFor(role: Role, locale = 'en'): SessionInfo {
+  const s = sessionFor(role, locale);
+  return { ...s, user: { ...s.user, username: 'ayse@corp.example', auth_source: 'oidc', sso_provider_id: 'p1' } };
 }
 
 export const adminSession = sessionFor('admin');
@@ -839,3 +848,24 @@ export const emptyDashboardSummary: DashboardSummary = {
   audit: null,
   attention: 0,
 };
+
+// providerFixture is a configured identity provider (id p1, named Corp IdP).
+export function providerFixture(o: Partial<Provider> = {}): Provider {
+  return {
+    id: 'p1',
+    name: 'Corp IdP',
+    issuer_url: 'https://idp.example.com',
+    client_id: 'alice-client',
+    has_client_secret: true,
+    scopes: ['openid', 'profile', 'email', 'groups'],
+    groups_claim: 'groups',
+    ca_pem: '',
+    endpoints: { authorization: 'https://idp.example.com/authorize', token: 'https://idp.example.com/token', jwks: 'https://idp.example.com/jwks' },
+    enabled: true,
+    redirect_uri: 'https://alice.example.com/api/v1/auth/oidc/p1/callback',
+    version: 1,
+    created_at: '2026-10-07T09:00:00Z',
+    updated_at: '2026-10-07T09:00:00Z',
+    ...o,
+  };
+}

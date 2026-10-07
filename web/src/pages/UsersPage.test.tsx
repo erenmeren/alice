@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { SessionInfo, User } from '../api/types';
-import { adminSession, sessionFor } from '../test/fixtures';
+import { adminSession, errorResponse, providerFixture, sessionFor } from '../test/fixtures';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
 
@@ -17,6 +17,8 @@ const operator: User = {
   mfa_enrolled: false,
   last_login_at: null,
   created_at: '2026-09-30T08:00:00Z',
+  auth_source: 'local',
+  sso_provider_id: null,
 };
 
 function signedInAs(session: SessionInfo) {
@@ -233,5 +235,49 @@ describe('UsersPage access and step-up', () => {
     await userEvent.keyboard('{Enter}');
     await waitFor(() => expect(attempts).toBe(2));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('marks SSO users and offers no password, MFA or role change for them', async () => {
+    signedInAs(adminSession);
+    const sso: User = { ...operator, id: 'u-sso', username: 'ayse@corp.example', display_name: 'Ayşe SSO', auth_source: 'oidc', sso_provider_id: 'p1', mfa_enrolled: false };
+    withUsers([operator, sso]);
+    server.use(http.get('/api/v1/sso/providers', () => HttpResponse.json({ items: [providerFixture()] })));
+    await renderRoute('/users');
+    const row = (await screen.findByText('ayse@corp.example')).closest('tr')!;
+    expect(within(row).getByText('Single sign-on')).toBeInTheDocument();
+    expect(await within(row).findByText('Corp IdP')).toBeInTheDocument();
+    expect(within(row).queryByText('Not set up yet')).not.toBeInTheDocument();
+    const local = screen.getByText('operator1').closest('tr')!;
+    expect(within(local).queryByText('Single sign-on')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Manage ayse@corp.example' }));
+    const manage = await screen.findByRole('dialog');
+    expect(within(manage).queryByRole('button', { name: 'Set a new password' })).not.toBeInTheDocument();
+    expect(within(manage).queryByRole('button', { name: 'Reset two-factor sign-in' })).not.toBeInTheDocument();
+    expect(within(manage).getByRole('button', { name: 'Sign out everywhere' })).toBeInTheDocument();
+    expect(within(manage).getByRole('button', { name: 'Disable' })).toBeInTheDocument();
+    await userEvent.click(within(manage).getByRole('button', { name: 'Edit' }));
+    const edit = await screen.findByRole('dialog');
+    expect(within(edit).queryByLabelText('Role')).not.toBeInTheDocument();
+  });
+
+  it('sends no role when an SSO user is edited, and shows ALC-USR-0003 when the server refuses', async () => {
+    signedInAs(adminSession);
+    const sso: User = { ...operator, id: 'u-sso', username: 'ayse@corp.example', auth_source: 'oidc', sso_provider_id: 'p1' };
+    withUsers([sso]);
+    let body: Record<string, unknown> | undefined;
+    server.use(
+      http.get('/api/v1/sso/providers', () => HttpResponse.json({ items: [] })),
+      http.patch('/api/v1/users/u-sso', async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return errorResponse(409, 'ALC-USR-0003', 'user.sso_user');
+      }),
+    );
+    await renderRoute('/users');
+    await userEvent.click(await screen.findByRole('button', { name: 'Manage ayse@corp.example' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Edit' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByText('This change is not possible for a single sign-on user.')).toBeInTheDocument();
+    expect(body).not.toHaveProperty('role');
   });
 });

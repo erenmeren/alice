@@ -2,7 +2,9 @@ import { useEffect } from 'react';
 import { Alert, Anchor, AppShell, Burger, Button, Group, NavLink, Text } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useTranslation } from 'react-i18next';
-import { Link, Outlet, useLocation } from 'react-router';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router';
+import { ssoErrorReason } from '../api/sso';
+import { SSOErrorAlert } from '../components/SSOErrorAlert';
 import type { Role } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { LicenseBanners } from '../components/LicenseBanners';
@@ -26,6 +28,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/deployments', labelKey: 'nav.deployments', roles: ALL },
   { to: '/ssh-keys', labelKey: 'nav.sshKeys', roles: ALL },
   { to: '/users', labelKey: 'nav.users', roles: ['admin'] },
+  { to: '/settings', labelKey: 'nav.settings', roles: ['admin'] },
   { to: '/audit', labelKey: 'nav.audit', roles: ['admin', 'auditor'] },
   { to: '/license', labelKey: 'nav.license', roles: ['admin', 'auditor'] },
   { to: '/tokens', labelKey: 'nav.tokens', roles: ALL },
@@ -54,6 +57,19 @@ export function AppLayout() {
   const { t } = useTranslation();
   const { session, signOut, signOutFailed } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
+  // The callback sends a refused step-up back to the page with ?sso_error=<reason>: the reason moves into the navigation state
+  // (so a reload does not show it again) and the parameter leaves the address, the rest of it kept.
+  const rawSsoError = new URLSearchParams(location.search).get('sso_error');
+  const stateReason = ssoErrorReason((location.state as { ssoError?: string } | null)?.ssoError);
+  useEffect(() => {
+    if (rawSsoError === null) return;
+    const p = new URLSearchParams(location.search);
+    p.delete('sso_error');
+    const qs = p.toString();
+    const reason = ssoErrorReason(rawSsoError);
+    navigate({ pathname: location.pathname, search: qs ? `?${qs}` : '', hash: location.hash }, { replace: true, state: reason ? { ssoError: reason } : location.state });
+  }, [rawSsoError, location.pathname, location.search, location.hash, location.state, navigate]);
   // Below the "sm" breakpoint the navigation covers the page, so it starts closed and the
   // menu button opens it; choosing a page closes it again.
   const [navOpened, nav] = useDisclosure(false);
@@ -118,6 +134,11 @@ export function AppLayout() {
         <LicenseBanners />
         <NotificationsBanner />
         <SetupBanner />
+        {stateReason && (
+          <div style={{ marginBottom: 'var(--mantine-spacing-md)' }}>
+            <SSOErrorAlert reason={stateReason} onClose={() => navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, { replace: true })} />
+          </div>
+        )}
         <Outlet />
       </AppShell.Main>
     </AppShell>

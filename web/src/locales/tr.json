@@ -29,7 +29,8 @@
     "certificates": "Sertifikalar",
     "deployments": "Dağıtım geçmişi",
     "keyVaults": "Key Vault kasaları",
-    "dashboard": "Pano"
+    "dashboard": "Pano",
+    "settings": "Ayarlar"
   },
   "ui": {
     "loading": "Yükleniyor…",
@@ -83,7 +84,18 @@
       "client_secret": "Gizli anahtar değeri",
       "secret_expires_on": "Gizli anahtarın bitiş tarihi",
       "poll_interval_minutes": "Denetim aralığı",
-      "auth": "Oturum açma yöntemi"
+      "auth": "Oturum açma yöntemi",
+      "thresholds_days": "Uyarı eşikleri",
+      "addresses": "Adresler",
+      "public_url": "Alice'in adresi",
+      "retired_key_retention_days": "Kullanımdan kaldırılan anahtarın saklanacağı gün",
+      "tls_mode": "Şifreleme",
+      "from": "Gönderen adresi",
+      "ca_pem": "Sertifika yetkilisi",
+      "issuer_url": "Yayıncı adresi",
+      "groups_claim": "Grup talebi",
+      "group": "Grup",
+      "to": "Testin gönderileceği adres"
     },
     "continue": "Devam",
     "verify": "Doğrula",
@@ -113,7 +125,9 @@
     "mfaTitle": "Doğrulama kodunuzu girin",
     "useRecovery": "Kurtarma kodu kullan",
     "useApp": "Uygulamadaki kodu kullan",
-    "recoveryCode": "Kurtarma kodu"
+    "recoveryCode": "Kurtarma kodu",
+    "ssoWith": "{{name}} ile oturum açın",
+    "or": "ya da"
   },
   "account": {
     "title": "Hesabım",
@@ -235,7 +249,8 @@
     },
     "mfa": {
       "enrolled": "Kuruldu",
-      "notEnrolled": "Henüz kurulmadı"
+      "notEnrolled": "Henüz kurulmadı",
+      "atProvider": "Kimlik sağlayıcıda"
     },
     "actions": {
       "edit": "Düzenle",
@@ -256,7 +271,8 @@
       "enableTitle": "Etkinleştirilecek kullanıcı: {{name}}",
       "enableText": "Kişi parolası ve doğrulama uygulamasıyla yeniden giriş yapabilir.",
       "enableButton": "Kullanıcıyı etkinleştir"
-    }
+    },
+    "sso": "Çoklu oturum açma"
   },
   "tokens": {
     "title": "API anahtarları",
@@ -2078,5 +2094,110 @@
     "clear": "Filtreleri temizle",
     "noViews": "Henüz kayıtlı görünüm yok.",
     "viewNameTooLong": "Ad en çok 60 karakter olabilir."
+  },
+  "settings": {
+    "title": "Ayarlar",
+    "tabs": {
+      "mail": "E-posta",
+      "recipients": "Alıcılar",
+      "alerts": "Uyarılar",
+      "general": "Genel",
+      "sso": "Çoklu oturum açma"
+    },
+    "tabsLabel": "Ayar bölümleri",
+    "mail": {
+      "host": "Posta sunucusu",
+      "port": "Bağlantı noktası",
+      "tlsMode": "Şifreleme",
+      "tlsStarttls": "STARTTLS (açık bağlantıyı şifreli yapar)",
+      "tlsImplicit": "TLS (baştan şifreli)",
+      "from": "Gönderen adresi",
+      "username": "Kullanıcı adı (isteğe bağlı)",
+      "password": "Parola",
+      "passwordKept": "Bir parola kayıtlı. Korumak için alanı boş bırakın.",
+      "caPem": "Sertifika yetkilisi (isteğe bağlı, PEM)",
+      "save": "Posta ayarlarını kaydet",
+      "testTo": "Testin gönderileceği adres",
+      "sendTest": "Test e-postası gönder",
+      "testSent": "Test e-postası {{to}} adresine gönderildi.",
+      "untrustedTitle": "Posta sunucusunun sertifikasına güvenilmiyor",
+      "fingerprint": "Parmak izi (SHA-256)",
+      "subject": "Sertifika sahibi",
+      "expires": "Geçerlilik sonu",
+      "trust": "Bu sertifikaya güven",
+      "trusted": "Güvenilen sertifika: {{fingerprint}}",
+      "untrust": "Bu sertifikaya güvenmeyi bırak"
+    },
+    "recipients": {
+      "administrators": "Uyarıları e-posta adresi olan her yöneticiye gönder",
+      "addresses": "Diğer adresler",
+      "email": "{{n}}. e-posta adresi",
+      "language": "{{n}}. adresin dili",
+      "remove": "{{n}}. adresi kaldır",
+      "add": "Adres ekle",
+      "save": "Alıcıları kaydet"
+    },
+    "alerts": {
+      "thresholds": "Süre dolumundan bu kadar gün önce e-posta gönder",
+      "threshold": "{{n}}. eşik (gün)",
+      "add": "Eşik ekle",
+      "remove": "{{n}}. eşiği kaldır",
+      "save": "Uyarı eşiklerini kaydet"
+    },
+    "general": {
+      "publicUrl": "Alice'in adresi",
+      "publicUrlHelp": "Kişilerin Alice'i açmak için kullandığı adres, örneğin https://alice.example.com. Çoklu oturum açma ve e-postalar bu adresi kullanır.",
+      "retention": "Kullanımdan kaldırılan bir SSH anahtarının özel anahtarını bu kadar gün sakla",
+      "save": "Genel ayarları kaydet"
+    },
+    "saved": "Kaydedildi."
+  },
+  "sso": {
+    "providers": "Kimlik sağlayıcılar",
+    "addProvider": "Kimlik sağlayıcı ekle",
+    "editTitle": "Kimlik sağlayıcıyı düzenle",
+    "name": "Oturum açma sayfasında gösterilen ad",
+    "issuer": "Yayıncı adresi",
+    "clientId": "İstemci kimliği",
+    "clientSecret": "İstemci parolası",
+    "clientSecretKept": "Bir istemci parolası kayıtlı. Korumak için alanı boş bırakın.",
+    "groupsClaim": "Grup talebi",
+    "caPem": "Sertifika yetkilisi (isteğe bağlı, PEM)",
+    "enabled": "Bu sağlayıcıyla oturum açmaya izin ver",
+    "redirectUri": "Sağlayıcıda kaydedilecek yönlendirme adresi: {{uri}}",
+    "save": "Kimlik sağlayıcıyı kaydet",
+    "refresh": "Sağlayıcının ayarlarını yeniden oku",
+    "edit": "{{name}} sağlayıcısını düzenle",
+    "delete": "{{name}} sağlayıcısını sil",
+    "deleteTitle": "{{name}} silinsin mi?",
+    "deleteText": "Sağlayıcı ve grup eşlemeleri kaldırılır. Kişiler artık bununla oturum açamaz.",
+    "deleteConfirm": "Kimlik sağlayıcıyı sil",
+    "copy": "Kopyala",
+    "copied": "Kopyalandı",
+    "noProviders": "Henüz bir kimlik sağlayıcı kurulmadı.",
+    "status": {
+      "enabled": "Açık",
+      "disabled": "Kapalı"
+    },
+    "columns": {
+      "group": "Grup",
+      "role": "Alice'teki rol",
+      "actions": "İşlemler"
+    },
+    "mappings": "Grup eşlemeleri",
+    "noMappings": "Henüz eşlenmiş bir grup yok. Eşleme olmadan hiç kimse bu sağlayıcıyla oturum açamaz.",
+    "group": "Grup",
+    "role": "Alice'teki rol",
+    "addMapping": "Grubu eşle",
+    "removeMapping": "{{group}} eşlemesini kaldır",
+    "allowAdmin": "SSO kullanıcıları Yönetici olabilir",
+    "allowAdminHelp": "Varsayılan olarak kapalı: çoklu oturum açma kullanıcıları bu durumda en çok Operatör olabilir. Yerel yönetici her zaman doğrulama koduyla oturum açar.",
+    "mfaNote": "Çoklu oturum açmayla oturum açan kullanıcılar kimliklerini kimlik sağlayıcıda doğrular. Kimlik sağlayıcının çok adımlı doğrulama istediğinden emin olun.",
+    "deleteShort": "Sil"
+  },
+  "stepUp": {
+    "ssoTitle": "Kimlik sağlayıcınızda onaylayın",
+    "ssoAction": "{{name}} sayfasına devam et",
+    "ssoFallbackName": "kimlik sağlayıcınız"
   }
 }

@@ -48,3 +48,12 @@ export const EXPIRING_KEY = ['dashboard', 'expiring'] as const;
 export const ALERTS_KEY = ['alerts'] as const;
 export const NOTIFICATIONS_KEY = ['notifications', 'status'] as const;
 export const viewsKey = (page: string) => ['views', page] as const;
+
+// Phase 7 settings and single sign-on (admin pages). SETTINGS_KEY is a prefix: one invalidation reads every form again.
+export const SETTINGS_KEY = ['settings'] as const;
+export const settingsKey = (name: 'smtp' | 'recipients' | 'alerts' | 'general') => ['settings', name] as const;
+export const SSO_KEY = ['sso'] as const;
+export const SSO_PROVIDERS_KEY = ['sso', 'providers'] as const;
+export const SSO_SETTINGS_KEY = ['sso', 'settings'] as const;
+export const ssoMappingsKey = (providerId: string) => ['sso', 'mappings', providerId] as const;
+export const PUBLIC_PROVIDERS_KEY = ['auth', 'oidc', 'providers'] as const;

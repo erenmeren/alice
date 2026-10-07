@@ -31,7 +31,7 @@ describe('application shell', () => {
     await renderRoute('/');
     expect(await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('server-status')).toHaveTextContent('Server version: 1.2.3'));
-    expect(navLabels()).toEqual(['Dashboard', 'Servers', 'Key Vaults', 'Certificates', 'Deployment history', 'SSH keys', 'Users', 'Audit log', 'License', 'API tokens', 'My account']);
+    expect(navLabels()).toEqual(['Dashboard', 'Servers', 'Key Vaults', 'Certificates', 'Deployment history', 'SSH keys', 'Users', 'Settings', 'Audit log', 'License', 'API tokens', 'My account']);
   });
 
   it('hides Users and Audit log from operators', async () => {
@@ -178,7 +178,8 @@ describe('application shell', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/login'));
     expect(client.getQueryData(['version'])).toBeUndefined();
-    expect(client.getQueryCache().getAll()).toHaveLength(0);
+    // Only the public provider list of the sign-in page the person landed on is cached now.
+    expect(client.getQueryCache().getAll().map((q) => q.queryKey)).toEqual([['auth', 'oidc', 'providers']]);
   });
 
   it('drops cached data when the session ends', async () => {

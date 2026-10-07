@@ -14,6 +14,8 @@ import {
 } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { listProviders } from '../api/sso';
+import { SSO_PROVIDERS_KEY } from '../api/queryKeys';
 import {
   createUser,
   listUsers,
@@ -43,6 +45,11 @@ export function UsersPage() {
   const { t, i18n } = useTranslation();
   const users = useQuery({ queryKey: ['users'], queryFn: listUsers });
   const [dialog, setDialog] = useState<Dialog | null>(null);
+  // The identity providers name the SSO users' provider. Read without a prompt: when it needs a fresh verification the
+  // name is simply left out.
+  const hasSSO = users.data?.items.some((u) => u.auth_source === 'oidc') ?? false;
+  const providers = useQuery({ queryKey: SSO_PROVIDERS_KEY, queryFn: listProviders, enabled: hasSSO, retry: false });
+  const providerName = (id: string | null) => providers.data?.items.find((p) => p.id === id)?.name;
   const close = () => setDialog(null);
 
   return (
@@ -74,6 +81,18 @@ export function UsersPage() {
                   <Text ff="monospace" size="sm">
                     {u.username}
                   </Text>
+                  {u.auth_source === 'oidc' && (
+                    <Group gap={4} mt={2}>
+                      <Badge variant="outline" color="indigo.9" tt="none">
+                        {t('users.sso')}
+                      </Badge>
+                      {providerName(u.sso_provider_id) && (
+                        <Text size="xs" translate="no">
+                          {providerName(u.sso_provider_id)}
+                        </Text>
+                      )}
+                    </Group>
+                  )}
                 </Table.Td>
                 <Table.Td>{u.display_name}</Table.Td>
                 <Table.Td>{t(`enum.role.${u.role}`)}</Table.Td>
@@ -82,7 +101,7 @@ export function UsersPage() {
                     {u.disabled ? t('users.status.disabled') : t('users.status.active')}
                   </Badge>
                 </Table.Td>
-                <Table.Td>{u.mfa_enrolled ? t('users.mfa.enrolled') : t('users.mfa.notEnrolled')}</Table.Td>
+                <Table.Td>{u.auth_source === 'oidc' ? t('users.mfa.atProvider') : u.mfa_enrolled ? t('users.mfa.enrolled') : t('users.mfa.notEnrolled')}</Table.Td>
                 <Table.Td>{u.last_login_at ? formatDateTime(u.last_login_at, i18n.language) : t('users.never')}</Table.Td>
                 <Table.Td>
                   <Button size="xs" variant="light" onClick={() => setDialog({ kind: 'manage', user: u })} aria-label={t('users.manageNamed', { name: u.username })}>
@@ -113,12 +132,17 @@ function ManageModal({ user, onChoose, onClose }: { user: User; onChoose: (d: Di
         <Button variant="default" onClick={() => onChoose({ kind: 'edit', user })}>
           {t('users.actions.edit')}
         </Button>
-        <Button variant="default" onClick={() => onChoose({ kind: 'resetMfa', user })}>
-          {t('users.actions.resetMfa')}
-        </Button>
-        <Button variant="default" onClick={() => onChoose({ kind: 'resetPassword', user })}>
-          {t('users.actions.resetPassword')}
-        </Button>
+        {/* An SSO user has no Alice password or authenticator (the server refuses with ALC-USR-0003 anyway). */}
+        {user.auth_source !== 'oidc' && (
+          <>
+            <Button variant="default" onClick={() => onChoose({ kind: 'resetMfa', user })}>
+              {t('users.actions.resetMfa')}
+            </Button>
+            <Button variant="default" onClick={() => onChoose({ kind: 'resetPassword', user })}>
+              {t('users.actions.resetPassword')}
+            </Button>
+          </>
+        )}
         <Button variant="default" onClick={() => onChoose({ kind: 'revoke', user })}>
           {t('users.actions.revokeSessions')}
         </Button>
@@ -214,10 +238,12 @@ function EditUserModal({ user, onClose }: { user: User; onClose: () => void }) {
   const [displayName, setDisplayName] = useState(user.display_name);
   const [email, setEmail] = useState(user.email);
   const [role, setRole] = useState<Role>(user.role);
+  const sso = user.auth_source === 'oidc';
   const { perform, error, busy } = useUserAction(onClose);
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    void perform(() => updateUser(user.id, { display_name: displayName, email, role }));
+    // The role of an SSO user comes from their groups: it is neither offered nor sent.
+    void perform(() => updateUser(user.id, sso ? { display_name: displayName, email } : { display_name: displayName, email, role }));
   };
   return (
     <AppModal opened onClose={onClose} title={t('users.editTitle', { name: user.username })}>
@@ -225,7 +251,7 @@ function EditUserModal({ user, onClose }: { user: User; onClose: () => void }) {
         <Stack gap="sm">
           <TextInput label={t('users.fields.name')} value={displayName} onChange={(e) => setDisplayName(e.currentTarget.value)} required />
           <TextInput label={t('users.fields.email')} type="email" value={email} onChange={(e) => setEmail(e.currentTarget.value)} />
-          <RoleSelect value={role} onChange={setRole} />
+          {!sso && <RoleSelect value={role} onChange={setRole} />}
           <ErrorAlert error={error} />
           <Button type="submit" loading={busy}>
             {t('users.save')}

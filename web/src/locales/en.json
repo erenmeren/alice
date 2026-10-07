@@ -29,7 +29,8 @@
     "certificates": "Certificates",
     "deployments": "Deployment history",
     "keyVaults": "Key Vaults",
-    "dashboard": "Dashboard"
+    "dashboard": "Dashboard",
+    "settings": "Settings"
   },
   "ui": {
     "loading": "Loading…",
@@ -83,7 +84,18 @@
       "client_secret": "Secret value",
       "secret_expires_on": "Secret expiry date",
       "poll_interval_minutes": "Check interval",
-      "auth": "Sign-in method"
+      "auth": "Sign-in method",
+      "thresholds_days": "Alert thresholds",
+      "addresses": "Addresses",
+      "public_url": "Alice's address",
+      "retired_key_retention_days": "Days to keep a retired key",
+      "tls_mode": "Encryption",
+      "from": "Sender address",
+      "ca_pem": "Certificate authority",
+      "issuer_url": "Issuer address",
+      "groups_claim": "Groups claim",
+      "group": "Group",
+      "to": "Send the test to"
     },
     "continue": "Continue",
     "verify": "Verify",
@@ -113,7 +125,9 @@
     "mfaTitle": "Enter your verification code",
     "useRecovery": "Use a recovery code",
     "useApp": "Use the code from your app",
-    "recoveryCode": "Recovery code"
+    "recoveryCode": "Recovery code",
+    "ssoWith": "Sign in with {{name}}",
+    "or": "or"
   },
   "account": {
     "title": "My account",
@@ -235,7 +249,8 @@
     },
     "mfa": {
       "enrolled": "Set up",
-      "notEnrolled": "Not set up yet"
+      "notEnrolled": "Not set up yet",
+      "atProvider": "At the identity provider"
     },
     "actions": {
       "edit": "Edit",
@@ -256,7 +271,8 @@
       "enableTitle": "Enable {{name}}?",
       "enableText": "The person can sign in again with their password and authenticator app.",
       "enableButton": "Enable user"
-    }
+    },
+    "sso": "Single sign-on"
   },
   "tokens": {
     "title": "API tokens",
@@ -2078,5 +2094,110 @@
     "clear": "Clear filters",
     "noViews": "No saved views yet.",
     "viewNameTooLong": "A name can have at most 60 characters."
+  },
+  "settings": {
+    "title": "Settings",
+    "tabs": {
+      "mail": "Email",
+      "recipients": "Recipients",
+      "alerts": "Alerts",
+      "general": "General",
+      "sso": "Single sign-on"
+    },
+    "tabsLabel": "Settings sections",
+    "mail": {
+      "host": "Mail server",
+      "port": "Port",
+      "tlsMode": "Encryption",
+      "tlsStarttls": "STARTTLS (upgrades an open connection)",
+      "tlsImplicit": "TLS (encrypted from the start)",
+      "from": "Sender address",
+      "username": "User name (optional)",
+      "password": "Password",
+      "passwordKept": "A password is stored. Leave the field empty to keep it.",
+      "caPem": "Certificate authority (optional, PEM)",
+      "save": "Save mail settings",
+      "testTo": "Send the test to",
+      "sendTest": "Send test e-mail",
+      "testSent": "The test e-mail was sent to {{to}}.",
+      "untrustedTitle": "The mail server's certificate is not trusted",
+      "fingerprint": "Fingerprint (SHA-256)",
+      "subject": "Certificate subject",
+      "expires": "Valid until",
+      "trust": "Trust this certificate",
+      "trusted": "Trusted certificate: {{fingerprint}}",
+      "untrust": "Stop trusting this certificate"
+    },
+    "recipients": {
+      "administrators": "Send alerts to every administrator with an e-mail address",
+      "addresses": "More addresses",
+      "email": "E-mail address {{n}}",
+      "language": "Language of address {{n}}",
+      "remove": "Remove address {{n}}",
+      "add": "Add address",
+      "save": "Save recipients"
+    },
+    "alerts": {
+      "thresholds": "Send an e-mail this many days before an expiry",
+      "threshold": "Threshold {{n}} (days)",
+      "add": "Add threshold",
+      "remove": "Remove threshold {{n}}",
+      "save": "Save alert thresholds"
+    },
+    "general": {
+      "publicUrl": "Alice's address",
+      "publicUrlHelp": "The address people use to open Alice, for example https://alice.example.com. Single sign-on and e-mails use it.",
+      "retention": "Keep the private key of a retired SSH key for this many days",
+      "save": "Save general settings"
+    },
+    "saved": "Saved."
+  },
+  "sso": {
+    "providers": "Identity providers",
+    "addProvider": "Add identity provider",
+    "editTitle": "Edit identity provider",
+    "name": "Name shown on the sign-in page",
+    "issuer": "Issuer address",
+    "clientId": "Client ID",
+    "clientSecret": "Client secret",
+    "clientSecretKept": "A client secret is stored. Leave the field empty to keep it.",
+    "groupsClaim": "Groups claim",
+    "caPem": "Certificate authority (optional, PEM)",
+    "enabled": "Allow sign-in with this provider",
+    "redirectUri": "Redirect address to register at the provider: {{uri}}",
+    "save": "Save identity provider",
+    "refresh": "Read the provider's settings again",
+    "edit": "Edit {{name}}",
+    "delete": "Delete {{name}}",
+    "deleteTitle": "Delete {{name}}?",
+    "deleteText": "The provider and its group mappings are removed. People can no longer sign in with it.",
+    "deleteConfirm": "Delete identity provider",
+    "copy": "Copy",
+    "copied": "Copied",
+    "noProviders": "No identity provider is set up yet.",
+    "status": {
+      "enabled": "On",
+      "disabled": "Off"
+    },
+    "columns": {
+      "group": "Group",
+      "role": "Role in Alice",
+      "actions": "Actions"
+    },
+    "mappings": "Group mappings",
+    "noMappings": "No group is mapped yet. Without a mapping nobody can sign in through this provider.",
+    "group": "Group",
+    "role": "Role in Alice",
+    "addMapping": "Map group",
+    "removeMapping": "Remove mapping for {{group}}",
+    "allowAdmin": "SSO users may be Admin",
+    "allowAdminHelp": "Off by default: single sign-on users can then be at most Operators. The local administrator always signs in with the authenticator code.",
+    "mfaNote": "Users who sign in with single sign-on confirm their identity at the identity provider. Make sure it requires multi-factor authentication.",
+    "deleteShort": "Delete"
+  },
+  "stepUp": {
+    "ssoTitle": "Confirm at your identity provider",
+    "ssoAction": "Continue to {{name}}",
+    "ssoFallbackName": "your identity provider"
   }
 }

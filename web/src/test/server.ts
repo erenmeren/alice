@@ -18,6 +18,8 @@ export const handlers = [
   http.get('/api/v1/dashboard/expiring', () => HttpResponse.json({ items: [] })),
   http.get('/api/v1/alerts', () => HttpResponse.json({ items: [] })),
   http.get('/api/v1/views', () => HttpResponse.json({ items: [] })),
+  // Phase 7 single sign-on: the sign-in page lists the public providers (none by default).
+  http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json({ items: [] })),
   http.post('/api/v1/auth/logout', () => new HttpResponse(null, { status: 204 })),
 ];
 

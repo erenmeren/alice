@@ -22,6 +22,9 @@ export interface User {
   mfa_enrolled: boolean;
   last_login_at: string | null;
   created_at: string;
+  // How the person signs in: a local account, or single sign-on (no Alice password or authenticator; the role comes from groups).
+  auth_source: 'local' | 'oidc';
+  sso_provider_id: string | null;
 }
 
 export interface SessionInfo {

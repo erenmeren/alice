@@ -2,6 +2,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { SessionInfo } from '../api/types';
+import * as navigation from '../navigation';
 import { errorResponse, freshStatus, installedStatus, sessionFor, sessionHandlers } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
@@ -218,5 +219,85 @@ describe('sign-in page safety', () => {
   it('has a language switcher', async () => {
     await renderRoute('/login');
     expect(await screen.findByRole('radio', { name: 'Türkçe' })).toBeInTheDocument();
+  });
+
+  describe('single sign-on', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('offers single sign-on and goes to the identity provider', async () => {
+      const go = vi.spyOn(navigation, 'goTo').mockImplementation(() => {});
+      server.use(
+        ...sessionHandlers(null),
+        http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json({ items: [{ id: 'p1', name: 'Corp IdP' }] })),
+        http.post('/api/v1/auth/oidc/p1/start', async ({ request }) => {
+          expect(await request.json()).toEqual({ next: '/' });
+          return HttpResponse.json({ authorize_url: 'https://idp.example.com/authorize?state=s' });
+        }),
+      );
+      await renderRoute('/login');
+      await userEvent.click(await screen.findByRole('button', { name: 'Sign in with Corp IdP' }));
+      await waitFor(() => expect(go).toHaveBeenCalledWith('https://idp.example.com/authorize?state=s'));
+      expect(screen.getByText('or')).toBeInTheDocument();
+      // The local sign-in stays available (break-glass, X-05).
+      expect(screen.getByLabelText('Username')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+    });
+
+    it('starts the sign-in with the page the person wanted', async () => {
+      const go = vi.spyOn(navigation, 'goTo').mockImplementation(() => {});
+      let next: unknown;
+      server.use(
+        ...sessionHandlers(null),
+        http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json({ items: [{ id: 'p1', name: 'Corp IdP' }] })),
+        http.post('/api/v1/auth/oidc/p1/start', async ({ request }) => {
+          next = ((await request.json()) as { next: string }).next;
+          return HttpResponse.json({ authorize_url: 'https://idp.example.com/a' });
+        }),
+      );
+      await renderRoute({ pathname: '/login', state: { from: '/certificates?expiry=7' } });
+      await userEvent.click(await screen.findByRole('button', { name: 'Sign in with Corp IdP' }));
+      await waitFor(() => expect(go).toHaveBeenCalled());
+      expect(next).toBe('/certificates?expiry=7');
+    });
+
+    it('shows the error when the sign-in cannot be started', async () => {
+      const go = vi.spyOn(navigation, 'goTo').mockImplementation(() => {});
+      server.use(
+        ...sessionHandlers(null),
+        http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json({ items: [{ id: 'p1', name: 'Corp IdP' }] })),
+        http.post('/api/v1/auth/oidc/p1/start', () => errorResponse(403, 'ALC-SSO-0013', 'sso.provider_disabled')),
+      );
+      await renderRoute('/login');
+      await userEvent.click(await screen.findByRole('button', { name: 'Sign in with Corp IdP' }));
+      expect(await screen.findByRole('alert')).toBeInTheDocument();
+      expect(go).not.toHaveBeenCalled();
+    });
+
+    it('explains a refused single sign-on (O-06)', async () => {
+      server.use(...sessionHandlers(null));
+      await renderRoute('/login?sso_error=sso.no_access');
+      expect(await screen.findByText('Your account has no access to Alice, contact your administrator.')).toBeInTheDocument();
+      expect(screen.getByText(/Ask your administrator to add your group/)).toBeInTheDocument();
+    });
+
+    it('explains it in Turkish', async () => {
+      server.use(...sessionHandlers(null));
+      await renderRoute('/login?sso_error=sso.idp_unreachable', { languages: ['tr-TR'] });
+      expect(await screen.findByRole('alert')).toHaveTextContent('Alice kimlik sağlayıcıya ulaşamadı.');
+    });
+
+    it('ignores an unknown sso_error value', async () => {
+      server.use(...sessionHandlers(null));
+      await renderRoute('/login?sso_error=<script>');
+      await screen.findByRole('heading', { level: 1 });
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('shows no single sign-on part when the provider list cannot be read', async () => {
+      server.use(...sessionHandlers(null), http.get('/api/v1/auth/oidc/providers', () => errorResponse(500, 'ALC-SYS-0003', 'internal.unexpected')));
+      await renderRoute('/login');
+      await screen.findByRole('button', { name: 'Sign in' });
+      expect(screen.queryByText('or')).not.toBeInTheDocument();
+    });
   });
 });
