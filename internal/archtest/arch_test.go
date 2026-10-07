@@ -28,7 +28,7 @@ var rules = map[string][]string{
 	"alice/internal/secrets/...":   {platform},
 	"alice/internal/audit/...":     {platform},
 	"alice/internal/license/...":   {platform, "alice/internal/secrets/...", "alice/internal/audit/..."},
-	"alice/internal/notify/...":    {platform, "alice/internal/i18n/...", "alice/internal/secrets/..."},
+	"alice/internal/notify/...":    {platform, "alice/internal/i18n/...", "alice/internal/secrets/...", "alice/internal/audit/..."},
 	"alice/internal/auth/...":      {platform, "alice/internal/rbac/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/notify/..."},
 	"alice/internal/certs/...":     {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers":     {platform, "alice/internal/secrets/..."},
@@ -41,12 +41,19 @@ var rules = map[string][]string{
 	"alice/internal/setup/...":                       {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/..."},
 	"alice/internal/api/...": {platform, "alice/internal/i18n/...", "alice/internal/version/...", "alice/internal/rbac/...",
 		"alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/notify/...",
-		"alice/internal/auth/...", "alice/internal/setup/...", "alice/internal/inventory/...", "alice/internal/jobs/...", "alice/internal/providers", "alice/internal/sshkeys/..."},
+		"alice/internal/auth/...", "alice/internal/setup/...", "alice/internal/inventory/...", "alice/internal/jobs/...", "alice/internal/providers", "alice/internal/sshkeys/...",
+		"alice/internal/alerts/...", "alice/internal/reports/..."},
 	// SSH key lifecycle (Phase 6). keymat and plan are pure: exact keys win over the subtree rule.
 	"alice/internal/sshkeys/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...",
 		"alice/internal/rbac/...", "alice/internal/providers", "alice/internal/inventory/..."},
 	"alice/internal/sshkeys/keymat": {platform, "alice/internal/secrets/..."},
 	"alice/internal/sshkeys/plan":   {platform, "alice/internal/sshkeys/keymat"},
+	// Phase 7 (R42 row 1): the alert module, the read-only reports module and the pure packages.
+	"alice/internal/alerts/...":    {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/notify/..."},
+	"alice/internal/alerts/expiry": {platform},
+	"alice/internal/reports/...": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...",
+		"alice/internal/notify/...", "alice/internal/alerts/...", "alice/internal/jobs/...", "alice/internal/rbac/..."},
+	"alice/internal/auth/oidc/claims": {platform, "alice/internal/rbac/..."},
 	// Test helpers (build tag integration) start PostgreSQL and apply the embedded migrations.
 	"alice/internal/testutil/...": {platform, "alice/migrations"},
 }
@@ -62,6 +69,9 @@ var denied = map[string][]string{
 	"alice/internal/providers/linuxssh/linuxsshtest": {"alice/internal/platform/db/..."},
 	"alice/internal/sshkeys/keymat":                  {"alice/internal/platform/db/..."},
 	"alice/internal/sshkeys/plan":                    {"alice/internal/platform/db/..."},
+	"alice/internal/alerts/expiry":                   {"alice/internal/platform/db/..."},
+	"alice/internal/auth/oidc/claims":                {"alice/internal/platform/db/..."},
+	"alice/internal/platform/csvx":                   {"alice/internal/platform/db/..."},
 }
 
 // deniedStd lists standard-library imports the pure packages must not use: no file, process, socket,
@@ -70,9 +80,17 @@ var denied = map[string][]string{
 var deniedStd = map[string][]string{
 	"alice/internal/sshkeys/keymat": pureDenied,
 	"alice/internal/sshkeys/plan":   pureDenied,
+	// Phase 7: claims parses URLs, which does no I/O, so net/url is not denied for it.
+	"alice/internal/alerts/expiry":    pureDenied,
+	"alice/internal/platform/csvx":    pureDenied,
+	"alice/internal/auth/oidc/claims": pureDeniedURL,
 }
 
 var pureDenied = []string{"os/...", "net", "net/http/...", "net/rpc/...", "net/smtp", "net/textproto", "net/url", "net/mail",
+	"database/...", "syscall/...", "io/ioutil", "io/fs", "plugin", "unsafe", "runtime/...", "internal/..."}
+
+// pureDeniedURL is pureDenied without net/url.
+var pureDeniedURL = []string{"os/...", "net", "net/http/...", "net/rpc/...", "net/smtp", "net/textproto", "net/mail",
 	"database/...", "syscall/...", "io/ioutil", "io/fs", "plugin", "unsafe", "runtime/...", "internal/..."}
 
 // allowed decides whether package pkg may import imp. It is a pure function so
@@ -239,6 +257,26 @@ func TestAllowed(t *testing.T) {
 		{"keymat to database/sql/driver denied", "alice/internal/sshkeys/keymat", "database/sql/driver", false},
 		{"keymat to io allowed", "alice/internal/sshkeys/keymat", "io", true},
 		{"plan to time allowed", "alice/internal/sshkeys/plan", "time", true},
+		{"alerts to notify allowed", "alice/internal/alerts", "alice/internal/notify", true},
+		{"alerts to inventory denied", "alice/internal/alerts", "alice/internal/inventory", false},
+		{"alerts to reports denied", "alice/internal/alerts", "alice/internal/reports", false},
+		{"expiry to platform/db denied", "alice/internal/alerts/expiry", "alice/internal/platform/db", false},
+		{"expiry to alerts denied", "alice/internal/alerts/expiry", "alice/internal/alerts", false},
+		{"expiry to os denied", "alice/internal/alerts/expiry", "os", false},
+		{"reports to alerts allowed", "alice/internal/reports", "alice/internal/alerts", true},
+		{"reports to jobs allowed", "alice/internal/reports", "alice/internal/jobs", true},
+		{"reports to auth denied", "alice/internal/reports", "alice/internal/auth", false},
+		{"reports to api denied", "alice/internal/reports", "alice/internal/api", false},
+		{"claims to rbac allowed", "alice/internal/auth/oidc/claims", "alice/internal/rbac", true},
+		{"claims to net/url allowed", "alice/internal/auth/oidc/claims", "net/url", true},
+		{"claims to net/http denied", "alice/internal/auth/oidc/claims", "net/http", false},
+		{"claims to secrets denied", "alice/internal/auth/oidc/claims", "alice/internal/secrets", false},
+		{"oidc to auth allowed", "alice/internal/auth/oidc", "alice/internal/auth", true},
+		{"oidc to inventory denied", "alice/internal/auth/oidc", "alice/internal/inventory", false},
+		{"csvx to os denied", "alice/internal/platform/csvx", "os", false},
+		{"notify to audit allowed", "alice/internal/notify", "alice/internal/audit", true},
+		{"notify to inventory denied", "alice/internal/notify", "alice/internal/inventory", false},
+		{"api to reports allowed", "alice/internal/api", "alice/internal/reports", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
