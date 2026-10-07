@@ -11,7 +11,7 @@ export interface Screen {
 
 // SCREENS lists every routed screen. Later tasks append their pages here.
 export const SCREENS: Screen[] = [
-  { path: '/', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Home', tr: 'Ana sayfa' } },
+  { path: '/', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Expiring soon', tr: 'Süresi yakında dolacaklar' } },
   { path: '/login', session: null, status: installedStatus, ready: { en: 'Sign in to Alice', tr: "Alice'e giriş yapın" } },
   { path: '/setup', session: null, status: freshStatus, ready: { en: 'Set up Alice', tr: 'Alice kurulumu' } },
   {

@@ -28,7 +28,8 @@
     "setupBannerLicense": "Kurulumu tamamlayın: bir lisans ekleyin veya denemeyi başlatın.",
     "certificates": "Sertifikalar",
     "deployments": "Dağıtım geçmişi",
-    "keyVaults": "Key Vault kasaları"
+    "keyVaults": "Key Vault kasaları",
+    "dashboard": "Pano"
   },
   "ui": {
     "loading": "Yükleniyor…",
@@ -474,7 +475,33 @@
       "sshkey_live_after_destruction": "Yok edilen anahtar bir sunucuda yeniden bulundu",
       "sshkey_add_sent": "SSH anahtarı bir sunucuya gönderilmek üzere",
       "sshkey_add_answered": "Sunucu SSH anahtarı eklemesini yanıtladı",
-      "sshkey_add_outcome_unknown": "SSH anahtarı eklemesi sonucu bilinmeden bitti; Alice sunucuyu tarıyor"
+      "sshkey_add_outcome_unknown": "SSH anahtarı eklemesi sonucu bilinmeden bitti; Alice sunucuyu tarıyor",
+      "settings_smtp_changed": "Posta ayarları değiştirildi",
+      "settings_smtp_removed": "Posta ayarları kaldırıldı",
+      "settings_smtp_imported": "Posta ayarları ortam değişkenlerinden alındı",
+      "settings_smtp_tested": "Test e-postası gönderildi",
+      "settings_smtp_trusted": "Posta sunucusu sertifikasına güvenildi",
+      "settings_smtp_untrusted": "Posta sunucusu sertifikasına artık güvenilmiyor",
+      "settings_recipients_changed": "Uyarı alıcıları değiştirildi",
+      "settings_thresholds_changed": "Uyarı eşikleri değiştirildi",
+      "settings_general_changed": "Genel ayarlar değiştirildi",
+      "alert_sent": "Süre dolumu bildirimi kaydedildi",
+      "alert_summarized": "Süre dolumu bildirimleri özetlendi",
+      "inventory_exported": "Envanter dışa aktarıldı",
+      "sso_provider_created": "Kimlik sağlayıcı eklendi",
+      "sso_provider_changed": "Kimlik sağlayıcı değiştirildi",
+      "sso_provider_deleted": "Kimlik sağlayıcı silindi",
+      "sso_provider_refreshed": "Kimlik sağlayıcı ayarları yeniden okundu",
+      "sso_mapping_created": "Grup eşlemesi eklendi",
+      "sso_mapping_deleted": "Grup eşlemesi kaldırıldı",
+      "sso_mapping_denied": "Grup eşlemesi reddedildi",
+      "sso_admin_role_allowed": "SSO kullanıcıları Yönetici olabilir açıldı",
+      "sso_admin_role_disallowed": "SSO kullanıcıları Yönetici olabilir kapatıldı",
+      "auth_oidc_denied": "Çoklu oturum açma reddedildi",
+      "user_provisioned": "Kullanıcı çoklu oturum açmayla oluşturuldu",
+      "user_role_synced": "Rol kimlik sağlayıcıdan güncellendi",
+      "user_sessions_ended": "Oturumlar sonlandırıldı",
+      "user_demoted": "SSO yöneticisinin rolü düşürüldü"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -961,6 +988,9 @@
         "location": "Bir sunucuda anahtar yenileme adımı",
         "plan": "Anahtar yenilemelerini planlama",
         "sweep": "Süren anahtar yenilemelerini denetleme"
+      },
+      "alerts": {
+        "scan": "Süre dolumu denetimi"
       }
     },
     "blockedNotice": "Bu iş duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",
@@ -1160,7 +1190,11 @@
       "download": "İsteği indir",
       "createdColumn": "Oluşturulma zamanı"
     },
-    "cancel": "Vazgeç"
+    "cancel": "Vazgeç",
+    "expiry7": "7 gün içinde",
+    "expiry14": "14 gün içinde",
+    "expiry90": "90 gün içinde",
+    "sourceAzureKv": "Key Vault"
   },
   "locations": {
     "title": "Bu sunucudaki web siteleri",
@@ -1988,5 +2022,61 @@
     "addResent_one": "Yanıt kaybolduğu için {{count}} kez yeniden gönderildi, son gönderim: {{date}}",
     "addResent_other": "Yanıt kaybolduğu için {{count}} kez yeniden gönderildi, son gönderim: {{date}}",
     "overlapOnHold": "Geçiş süresi beklemede: Devam et'i seçtiğinizde, kalan süreyle birlikte yeniden başlar."
+  },
+  "dashboard": {
+    "title": "Pano",
+    "welcome": "Hoş geldiniz, {{name}}",
+    "expiringSoon": "Süresi yakında dolacaklar",
+    "expired": "Süresi doldu",
+    "within7": "7 gün içinde",
+    "within30": "8 ile 30 gün arasında",
+    "within60": "31 ile 60 gün arasında",
+    "monitored": "Kullanımdaki sertifikalar: {{count}}",
+    "daysLeft_one": "{{count}} gün kaldı",
+    "daysLeft_other": "{{count}} gün kaldı",
+    "expiredOn": "Süresi doldu",
+    "noneExpiring": "30 gün içinde süresi dolan bir şey yok.",
+    "failedDeployments": "Başarısız dağıtımlar (son 7 gün)",
+    "targetsByStatus": "Durumlarına göre sunucular ve kasalar",
+    "license": "Lisans",
+    "rotationUpcoming": "Yaklaşan yenilemeler",
+    "needsAttention": "İlgi bekleyenler",
+    "auditHead": "Denetim kaydının son durumu",
+    "auditHeadHelp": "Bu değeri düzenli olarak Alice dışında bir yere not edin: daha sonra hiçbir kaydın silinmediğini kanıtlamanızı sağlar.",
+    "kvExpiring": "30 gün içinde süresi dolacak Key Vault öğeleri: {{count}}",
+    "auditBroken": "Son denetim, denetim kaydında bir bütünlük sorunu buldu. Denetim kaydını açın ve doğrulayın.",
+    "noFailed": "Son 7 günde başarısız olan bir dağıtım yok.",
+    "failedCount": "Başarısız dağıtımlar: {{count}}",
+    "noTargets": "Henüz bağlı bir sunucu veya kasa yok.",
+    "statusCount": "{{status}}: {{count}}",
+    "licenseEnds": "Geçerlilik sonu: {{date}}",
+    "noUpcoming": "Planlanmış bir yenileme yok.",
+    "rotationRunning": "Çalışan yenilemeler: {{count}}",
+    "rotationAttention": "İlgi bekleyen yenilemeler: {{count}}",
+    "auditSeq": "Kayıt numarası: {{seq}}",
+    "auditChecked": "Son denetim: {{time}}",
+    "hash": "Özet değeri: {{hash}}",
+    "noAttention": "İlgilenmenizi gerektiren bir şey yok.",
+    "since": "{{time}} tarihinden beri",
+    "columns": {
+      "name": "Ad",
+      "where": "Nerede",
+      "expires": "Süresi dolar"
+    },
+    "loadFailed": "Pano yüklenemedi."
+  },
+  "notifications": {
+    "failingTitle": "E-postalar gönderilemedi",
+    "failingBody": "Son {{count}} e-posta gönderme denemesi başarısız oldu. Son hata: {{code}}. Uyarılar Pano'da gösterilmeye devam ediyor.",
+    "openSettings": "Posta ayarlarını aç"
+  },
+  "filters": {
+    "export": "Dışa aktar",
+    "views": "Kayıtlı görünümler",
+    "saveView": "Görünümü kaydet",
+    "viewName": "Görünümün adı",
+    "deleteView": "{{name}} görünümünü sil",
+    "clear": "Filtreleri temizle",
+    "noViews": "Henüz kayıtlı görünüm yok."
   }
 }

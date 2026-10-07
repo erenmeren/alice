@@ -467,15 +467,14 @@ export interface JobQuery {
 // Shapes follow api/openapi.yaml (the source of truth); fields the API documents with "known
 // values" are typed as unions plus string where "a newer server may add others".
 
-// 'azure_kv' is reserved by the inventory (a later phase); the API lists the other three today.
+// 'azure_kv' is a Key Vault certificate; the list and the export accept it as a filter since Phase 7.
 export type CertificateSource = 'discovered' | 'uploaded' | 'csr' | 'azure_kv';
-// CertificateSourceFilter is what GET /certificates accepts for source (azure_kv would be a 422);
-// azure_kv is only ever displayed.
-export type CertificateSourceFilter = Exclude<CertificateSource, 'azure_kv'>;
+// CertificateSourceFilter is what GET /certificates accepts for source: every source (Phase 7 added azure_kv).
+export type CertificateSourceFilter = CertificateSource;
 export type KeyAlgorithm = 'rsa' | 'ecdsa' | 'ed25519' | 'other';
 export type CSRStatus = 'pending' | 'completed' | 'cancelled';
 export type CSRKeyType = 'ecdsa-p256' | 'rsa-3072' | 'rsa-4096';
-export type ExpiryFilter = '' | 'expired' | '30' | '60';
+export type ExpiryFilter = '' | 'expired' | '7' | '14' | '30' | '60' | '90';
 
 export interface Certificate {
   id: string;

@@ -1,5 +1,4 @@
 import { Anchor, Badge, Button, Code, Group, NativeSelect, SimpleGrid, Stack, Table, Text, TextInput, Title } from '@mantine/core';
-import { useDebouncedValue } from '@mantine/hooks';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -11,21 +10,30 @@ import { useAuth } from '../auth/AuthProvider';
 import { CreateCSRDialog } from '../components/CreateCSRDialog';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { Expiry } from '../components/Expiry';
+import { ExportButton } from '../components/ExportButton';
 import { PendingCSRs } from '../components/PendingCSRs';
+import { SavedViews } from '../components/SavedViews';
 import { UploadCertificateDialog } from '../components/UploadCertificateDialog';
 import { WRAP } from '../components/wrap';
+import { useDebouncedParam, useUrlFilters } from '../hooks/useUrlFilters';
 
 // The sources the list can be filtered by (openapi: listCertificates source).
 const SOURCES: { value: CertificateSourceFilter; key: string }[] = [
   { value: 'discovered', key: 'sourceDiscovered' },
   { value: 'uploaded', key: 'sourceUploaded' },
   { value: 'csr', key: 'sourceCsr' },
+  { value: 'azure_kv', key: 'sourceAzureKv' },
 ];
 const EXPIRIES: { value: Exclude<ExpiryFilter, ''>; key: string }[] = [
   { value: 'expired', key: 'expiryExpired' },
+  { value: '7', key: 'expiry7' },
+  { value: '14', key: 'expiry14' },
   { value: '30', key: 'expiry30' },
   { value: '60', key: 'expiry60' },
+  { value: '90', key: 'expiry90' },
 ];
+// The filters live in the address (useSearchParams), so a link, a saved view and the export reproduce the list.
+const CERT_FILTER_KEYS = ['target_id', 'source', 'q', 'expiry'] as const;
 
 // CertificatesPage is the certificate inventory: one row per certificate however many servers use
 // it, soonest expiry first, filtered on the server. The filter is part of the query key, so a
@@ -36,18 +44,20 @@ export function CertificatesPage() {
   const client = useQueryClient();
   const navigate = useNavigate();
   const canOperate = session?.user.role === 'admin' || session?.user.role === 'operator';
-  const [search, setSearch] = useState('');
-  const [targetId, setTargetId] = useState('');
-  const [source, setSource] = useState<CertificateSourceFilter | ''>('');
-  const [expiry, setExpiry] = useState<ExpiryFilter>('');
-  const [q] = useDebouncedValue(search.trim(), 300);
+  const [filters, setFilters, clearFilters] = useUrlFilters(CERT_FILTER_KEYS);
+  const [search, onSearch, resetSearch] = useDebouncedParam(filters.q, (q) => setFilters({ q }));
   const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);
   // The certificate stored by the last upload: closing the dialog then opens it.
   const [uploadedId, setUploadedId] = useState<string | null>(null);
 
   const targets = useQuery({ queryKey: TARGETS_KEY, queryFn: listAllServers });
-  const filter: CertificateQuery = { target_id: targetId, source, q, expiry };
+  const filter: CertificateQuery = {
+    target_id: filters.target_id,
+    source: filters.source as CertificateSourceFilter | '',
+    q: filters.q,
+    expiry: filters.expiry as ExpiryFilter,
+  };
   const certs = useInfiniteQuery({
     queryKey: [...CERTIFICATES_KEY, filter],
     queryFn: ({ pageParam }) => listCertificates({ ...filter, cursor: pageParam }),
@@ -81,26 +91,47 @@ export function CertificatesPage() {
       )}
       <PendingCSRs canOperate={canOperate} onCompleted={(id) => navigate(`/certificates/${id}`)} />
       <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
-        <TextInput label={t('certificates.search')} description={t('certificates.searchHelp')} value={search} onChange={(e) => setSearch(e.currentTarget.value)} maxLength={200} />
+        <TextInput label={t('certificates.search')} description={t('certificates.searchHelp')} value={search} onChange={(e) => onSearch(e.currentTarget.value)} maxLength={200} />
         <NativeSelect
           label={t('certificates.server')}
-          value={targetId}
-          onChange={(e) => setTargetId(e.currentTarget.value)}
+          value={filters.target_id}
+          onChange={(e) => setFilters({ target_id: e.currentTarget.value })}
           data={[{ value: '', label: t('certificates.allServers') }, ...(targets.data?.items ?? []).map((tg) => ({ value: tg.id, label: tg.name }))]}
         />
         <NativeSelect
           label={t('certificates.source')}
-          value={source}
-          onChange={(e) => setSource(e.currentTarget.value as CertificateSourceFilter | '')}
+          value={filters.source}
+          onChange={(e) => setFilters({ source: e.currentTarget.value })}
           data={[{ value: '', label: t('certificates.sourceAll') }, ...SOURCES.map((s) => ({ value: s.value, label: t(`certificates.${s.key}`) }))]}
         />
         <NativeSelect
           label={t('certificates.expiry')}
-          value={expiry}
-          onChange={(e) => setExpiry(e.currentTarget.value as ExpiryFilter)}
+          value={filters.expiry}
+          onChange={(e) => setFilters({ expiry: e.currentTarget.value })}
           data={[{ value: '', label: t('certificates.expiryAll') }, ...EXPIRIES.map((x) => ({ value: x.value, label: t(`certificates.${x.key}`) }))]}
         />
       </SimpleGrid>
+      <Group align="flex-start" gap="sm">
+        <SavedViews
+          page="certificates"
+          keys={CERT_FILTER_KEYS}
+          values={filters}
+          set={(next) => {
+            resetSearch(next.q ?? '');
+            setFilters(next);
+          }}
+        />
+        <ExportButton kind="certificates" filters={filters} />
+        <Button
+          variant="subtle"
+          onClick={() => {
+            resetSearch('');
+            clearFilters();
+          }}
+        >
+          {t('filters.clear')}
+        </Button>
+      </Group>
       <ErrorAlert error={certs.error} />
       {certs.isSuccess && items.length === 0 && <Text c="gray.7">{t('certificates.empty')}</Text>}
       {items.length > 0 && (

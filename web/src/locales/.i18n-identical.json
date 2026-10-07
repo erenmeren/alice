@@ -2,6 +2,8 @@
   "certificates.csr.keyRsa3072",
   "certificates.csr.keyRsa4096",
   "certificates.detail.keyValue",
+  "certificates.sourceAzureKv",
+  "dashboard.statusCount",
   "enum.certificateSource.azure_kv",
   "enum.keyAlgorithm.ecdsa",
   "enum.keyAlgorithm.ed25519",

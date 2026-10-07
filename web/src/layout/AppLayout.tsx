@@ -6,6 +6,7 @@ import { Link, Outlet, useLocation } from 'react-router';
 import type { Role } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { LicenseBanners } from '../components/LicenseBanners';
+import { NotificationsBanner } from '../components/NotificationsBanner';
 import { LanguageSwitcher } from '../LanguageSwitcher';
 
 interface NavItem {
@@ -18,7 +19,7 @@ const ALL: Role[] = ['admin', 'operator', 'auditor'];
 
 // NAV_ITEMS lists the side navigation. Roles mirror the server permissions (docs/authz-matrix.md).
 export const NAV_ITEMS: NavItem[] = [
-  { to: '/', labelKey: 'nav.home', roles: ALL },
+  { to: '/', labelKey: 'nav.dashboard', roles: ALL },
   { to: '/servers', labelKey: 'nav.servers', roles: ALL },
   { to: '/key-vaults', labelKey: 'nav.keyVaults', roles: ALL },
   { to: '/certificates', labelKey: 'nav.certificates', roles: ALL },
@@ -115,6 +116,7 @@ export function AppLayout() {
           </Alert>
         )}
         <LicenseBanners />
+        <NotificationsBanner />
         <SetupBanner />
         <Outlet />
       </AppShell.Main>

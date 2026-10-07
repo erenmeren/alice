@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw';
+import type { DashboardSummary } from '../api/phase7';
 import type { Policy, Preview, PreviewAction, Run, RunLocation } from '../api/rotation';
 import type { ManagedKeyInfo } from '../api/sshkeys';
 import type {
@@ -825,3 +826,16 @@ export function kvImportFixture(o: Partial<KVImport> = {}): KVImport {
     ...o,
   };
 }
+
+// emptyDashboardSummary is the all-zero DashboardSummary the default handler answers.
+export const emptyDashboardSummary: DashboardSummary = {
+  generated_at: '2026-10-07T09:00:00Z',
+  certificates: { monitored: 0, expired: 0, within_7: 0, within_30: 0, within_60: 0, kv_expired: 0, kv_within_30: 0 },
+  deployments: { failed_7d: 0, recent: [] },
+  targets: { total: 0, by_status: {} },
+  license: { expired: false, phase: 'active', ends_at: null, days_left: null },
+  rotation: { upcoming: [], running: 0, needs_attention: 0 },
+  notifications: null,
+  audit: null,
+  attention: 0,
+};

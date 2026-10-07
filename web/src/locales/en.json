@@ -28,7 +28,8 @@
     "setupBannerLicense": "Finish setting up: add a license or start the evaluation.",
     "certificates": "Certificates",
     "deployments": "Deployment history",
-    "keyVaults": "Key Vaults"
+    "keyVaults": "Key Vaults",
+    "dashboard": "Dashboard"
   },
   "ui": {
     "loading": "Loading…",
@@ -474,7 +475,33 @@
       "sshkey_live_after_destruction": "Destroyed key found on a server again",
       "sshkey_add_sent": "SSH key about to be sent to a server",
       "sshkey_add_answered": "The server answered the SSH key addition",
-      "sshkey_add_outcome_unknown": "SSH key addition ended without a known result; Alice scans the server"
+      "sshkey_add_outcome_unknown": "SSH key addition ended without a known result; Alice scans the server",
+      "settings_smtp_changed": "Mail settings changed",
+      "settings_smtp_removed": "Mail settings removed",
+      "settings_smtp_imported": "Mail settings imported from the environment",
+      "settings_smtp_tested": "Test e-mail sent",
+      "settings_smtp_trusted": "Mail server certificate trusted",
+      "settings_smtp_untrusted": "Mail server certificate no longer trusted",
+      "settings_recipients_changed": "Alert recipients changed",
+      "settings_thresholds_changed": "Alert thresholds changed",
+      "settings_general_changed": "General settings changed",
+      "alert_sent": "Expiry notice recorded",
+      "alert_summarized": "Expiry notices summarized",
+      "inventory_exported": "Inventory exported",
+      "sso_provider_created": "Identity provider added",
+      "sso_provider_changed": "Identity provider changed",
+      "sso_provider_deleted": "Identity provider deleted",
+      "sso_provider_refreshed": "Identity provider settings read again",
+      "sso_mapping_created": "Group mapping added",
+      "sso_mapping_deleted": "Group mapping removed",
+      "sso_mapping_denied": "Group mapping refused",
+      "sso_admin_role_allowed": "SSO users may be Admin switched on",
+      "sso_admin_role_disallowed": "SSO users may be Admin switched off",
+      "auth_oidc_denied": "Single sign-on refused",
+      "user_provisioned": "User created by single sign-on",
+      "user_role_synced": "Role updated from the identity provider",
+      "user_sessions_ended": "Sessions ended",
+      "user_demoted": "SSO administrator demoted"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -961,6 +988,9 @@
         "location": "Key rotation step on a server",
         "plan": "Plan key rotations",
         "sweep": "Check running key rotations"
+      },
+      "alerts": {
+        "scan": "Expiry check"
       }
     },
     "blockedNotice": "This task is paused and waits for an administrator to run it.",
@@ -1160,7 +1190,11 @@
       "download": "Download request",
       "createdColumn": "Created"
     },
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "expiry7": "Within 7 days",
+    "expiry14": "Within 14 days",
+    "expiry90": "Within 90 days",
+    "sourceAzureKv": "Key Vault"
   },
   "locations": {
     "title": "Websites on this server",
@@ -1988,5 +2022,61 @@
     "addResent_one": "Sent again {{count}} time after a lost answer, last at {{date}}",
     "addResent_other": "Sent again {{count}} times after a lost answer, last at {{date}}",
     "overlapOnHold": "The overlap is on hold: it resumes after you choose Continue, with the time that was left."
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "welcome": "Welcome, {{name}}",
+    "expiringSoon": "Expiring soon",
+    "expired": "Expired",
+    "within7": "Within 7 days",
+    "within30": "In 8 to 30 days",
+    "within60": "In 31 to 60 days",
+    "monitored": "Certificates in use: {{count}}",
+    "daysLeft_one": "{{count}} day left",
+    "daysLeft_other": "{{count}} days left",
+    "expiredOn": "Expired",
+    "noneExpiring": "Nothing expires within 30 days.",
+    "failedDeployments": "Failed deployments (last 7 days)",
+    "targetsByStatus": "Servers and vaults by status",
+    "license": "License",
+    "rotationUpcoming": "Upcoming rotations",
+    "needsAttention": "Needs attention",
+    "auditHead": "Audit log head",
+    "auditHeadHelp": "Write down this value regularly outside Alice: it lets you prove later that no entry was removed.",
+    "kvExpiring": "Key Vault items expiring within 30 days: {{count}}",
+    "auditBroken": "The last check found an integrity problem in the audit log. Open the Audit log and verify it.",
+    "noFailed": "No deployment failed in the last 7 days.",
+    "failedCount": "Failed deployments: {{count}}",
+    "noTargets": "No servers or vaults are connected yet.",
+    "statusCount": "{{status}}: {{count}}",
+    "licenseEnds": "Valid until: {{date}}",
+    "noUpcoming": "No rotation is scheduled.",
+    "rotationRunning": "Rotations running: {{count}}",
+    "rotationAttention": "Rotations that need attention: {{count}}",
+    "auditSeq": "Entry number: {{seq}}",
+    "auditChecked": "Last checked: {{time}}",
+    "hash": "Hash: {{hash}}",
+    "noAttention": "Nothing needs your attention.",
+    "since": "Since {{time}}",
+    "columns": {
+      "name": "Name",
+      "where": "Where",
+      "expires": "Expires"
+    },
+    "loadFailed": "The dashboard could not be loaded."
+  },
+  "notifications": {
+    "failingTitle": "E-mails could not be sent",
+    "failingBody": "The last {{count}} attempts to send an e-mail failed. Last error: {{code}}. Alerts are still shown on the Dashboard.",
+    "openSettings": "Open the mail settings"
+  },
+  "filters": {
+    "export": "Export",
+    "views": "Saved views",
+    "saveView": "Save view",
+    "viewName": "Name of the view",
+    "deleteView": "Delete view {{name}}",
+    "clear": "Clear filters",
+    "noViews": "No saved views yet."
   }
 }

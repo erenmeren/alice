@@ -1,5 +1,4 @@
 import { Anchor, Badge, Button, Code, Group, NativeSelect, SimpleGrid, Stack, Switch, Table, Text, TextInput, Title } from '@mantine/core';
-import { useDebouncedValue } from '@mantine/hooks';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -9,9 +8,14 @@ import { SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
 import type { KeyFlag, SSHKeyQuery } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { ErrorAlert } from '../components/ErrorAlert';
+import { ExportButton } from '../components/ExportButton';
 import { GenerateKeyDialog } from '../components/GenerateKeyDialog';
+import { SavedViews } from '../components/SavedViews';
 import { WRAP } from '../components/wrap';
+import { useDebouncedParam, useUrlFilters } from '../hooks/useUrlFilters';
 
+// The filters live in the address (useSearchParams), so a link, a saved view and the export reproduce the list.
+const SSH_FILTER_KEYS = ['target_id', 'os_user', 'q', 'flag', 'missing'] as const;
 const FLAGS: KeyFlag[] = ['weak', 'command', 'root_without_from', 'duplicate', 'cert_authority', 'security_key'];
 
 // SSHKeysPage is the SSH key inventory (spec §13.3, §26.5): one row per key, filtered on the
@@ -24,16 +28,12 @@ export function SSHKeysPage() {
   const navigate = useNavigate();
   const canGenerate = session?.user.role === 'admin' || session?.user.role === 'operator';
   const [generating, setGenerating] = useState(false);
-  const [search, setSearch] = useState('');
-  const [user, setUser] = useState('');
-  const [targetId, setTargetId] = useState('');
-  const [flag, setFlag] = useState<KeyFlag | ''>('');
-  const [missing, setMissing] = useState(false);
-  const [q] = useDebouncedValue(search.trim(), 300);
-  const [osUser] = useDebouncedValue(user.trim(), 300);
+  const [filters, setFilters, clearFilters] = useUrlFilters(SSH_FILTER_KEYS);
+  const [search, onSearch, resetSearch] = useDebouncedParam(filters.q, (q) => setFilters({ q }));
+  const [user, onUser, resetUser] = useDebouncedParam(filters.os_user, (os_user) => setFilters({ os_user }));
 
   const targets = useQuery({ queryKey: TARGETS_KEY, queryFn: listAllServers });
-  const filter: SSHKeyQuery = { q, os_user: osUser, target_id: targetId, flag, missing };
+  const filter: SSHKeyQuery = { q: filters.q, os_user: filters.os_user, target_id: filters.target_id, flag: filters.flag as KeyFlag | '', missing: filters.missing === 'true' };
   const keys = useInfiniteQuery({
     queryKey: [...SSH_KEYS_KEY, filter],
     queryFn: ({ pageParam }) => listSSHKeys({ ...filter, cursor: pageParam }),
@@ -50,22 +50,45 @@ export function SSHKeysPage() {
       </Group>
       <Text size="sm">{t('sshKeys.intro')}</Text>
       <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
-        <TextInput label={t('sshKeys.search')} description={t('sshKeys.searchHelp')} value={search} onChange={(e) => setSearch(e.currentTarget.value)} maxLength={200} />
+        <TextInput label={t('sshKeys.search')} description={t('sshKeys.searchHelp')} value={search} onChange={(e) => onSearch(e.currentTarget.value)} maxLength={200} />
         <NativeSelect
           label={t('sshKeys.server')}
-          value={targetId}
-          onChange={(e) => setTargetId(e.currentTarget.value)}
+          value={filters.target_id}
+          onChange={(e) => setFilters({ target_id: e.currentTarget.value })}
           data={[{ value: '', label: t('sshKeys.allServers') }, ...(targets.data?.items ?? []).map((tg) => ({ value: tg.id, label: tg.name }))]}
         />
-        <TextInput label={t('sshKeys.user')} value={user} onChange={(e) => setUser(e.currentTarget.value)} maxLength={32} />
+        <TextInput label={t('sshKeys.user')} value={user} onChange={(e) => onUser(e.currentTarget.value)} maxLength={32} />
         <NativeSelect
           label={t('sshKeys.flag')}
-          value={flag}
-          onChange={(e) => setFlag(e.currentTarget.value as KeyFlag | '')}
+          value={filters.flag}
+          onChange={(e) => setFilters({ flag: e.currentTarget.value })}
           data={[{ value: '', label: t('sshKeys.allFlags') }, ...FLAGS.map((f) => ({ value: f, label: t(`sshKeys.flags.${f}`) }))]}
         />
       </SimpleGrid>
-      <Switch label={t('sshKeys.showMissing')} checked={missing} onChange={(e) => setMissing(e.currentTarget.checked)} />
+      <Switch label={t('sshKeys.showMissing')} checked={filters.missing === 'true'} onChange={(e) => setFilters({ missing: e.currentTarget.checked ? 'true' : '' })} />
+      <Group align="flex-start" gap="sm">
+        <SavedViews
+          page="ssh_keys"
+          keys={SSH_FILTER_KEYS}
+          values={filters}
+          set={(next) => {
+            resetSearch(next.q ?? '');
+            resetUser(next.os_user ?? '');
+            setFilters(next);
+          }}
+        />
+        <ExportButton kind="ssh-keys" filters={filters} />
+        <Button
+          variant="subtle"
+          onClick={() => {
+            resetSearch('');
+            resetUser('');
+            clearFilters();
+          }}
+        >
+          {t('filters.clear')}
+        </Button>
+      </Group>
       <ErrorAlert error={keys.error} />
       {keys.isSuccess && items.length === 0 && <Text c="gray.7">{t('sshKeys.empty')}</Text>}
       {items.length > 0 && (

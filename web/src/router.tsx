@@ -8,9 +8,9 @@ import { AccountPage } from './pages/AccountPage';
 import { AuditPage } from './pages/AuditPage';
 import { CertificateDetailPage } from './pages/CertificateDetailPage';
 import { CertificatesPage } from './pages/CertificatesPage';
+import { DashboardPage } from './pages/DashboardPage';
 import { DeploymentDetailPage } from './pages/DeploymentDetailPage';
 import { DeploymentsPage } from './pages/DeploymentsPage';
-import { HomePage } from './pages/HomePage';
 import { KeyVaultDetailPage } from './pages/KeyVaultDetailPage';
 import { KeyVaultsPage } from './pages/KeyVaultsPage';
 import { KVCertificatePage } from './pages/KVCertificatePage';
@@ -56,7 +56,7 @@ export function routes(): RouteObject[] {
             </RequireAuth>
           ),
           children: [
-            { index: true, element: <HomePage /> },
+            { index: true, element: <DashboardPage /> },
             { path: 'account', element: <AccountPage /> },
             { path: 'servers', element: <TargetsPage /> },
             { path: 'servers/:id', element: <TargetDetailPage /> },

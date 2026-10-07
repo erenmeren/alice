@@ -218,4 +218,45 @@ describe('CertificatesPage', () => {
     await userEvent.click(within(dialog).getAllByRole('button', { name: 'Close' })[0]);
     await waitFor(() => expect(router.state.location.pathname).toBe('/certificates/c7'));
   });
+  it('reads its filters from the address and writes them back (owner step 3)', async () => {
+    const seen: string[] = [];
+    server.use(
+      ...sessionHandlers(operatorSession),
+      targets,
+      noCsrs,
+      http.get('/api/v1/views', () => HttpResponse.json({ items: [] })),
+      http.get('/api/v1/certificates', ({ request }) => {
+        seen.push(new URL(request.url).search);
+        return HttpResponse.json({ items: [], next_cursor: null });
+      }),
+    );
+    const { router } = await renderRoute('/certificates?expiry=30&target_id=' + targetFixture.id);
+    await waitFor(() => expect(seen).toContain(`?target_id=${targetFixture.id}&expiry=30`));
+    expect(screen.getByLabelText('Expiry')).toHaveValue('30');
+    expect(screen.getByRole('link', { name: 'Export' })).toHaveAttribute('href', `/api/v1/certificates/export?target_id=${targetFixture.id}&expiry=30`);
+    await userEvent.selectOptions(screen.getByLabelText('Expiry'), '7');
+    await waitFor(() => expect(router.state.location.search).toContain('expiry=7'));
+    await waitFor(() => expect(seen.at(-1)).toContain('expiry=7'));
+    await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+  });
+
+  it('offers the new expiry and source options and writes a typed search after the debounce', async () => {
+    const seen: string[] = [];
+    server.use(
+      ...sessionHandlers(operatorSession),
+      targets,
+      noCsrs,
+      http.get('/api/v1/certificates', ({ request }) => {
+        seen.push(new URL(request.url).search);
+        return HttpResponse.json({ items: [], next_cursor: null });
+      }),
+    );
+    const { router } = await renderRoute('/certificates?source=azure_kv');
+    await waitFor(() => expect(seen).toContain('?source=azure_kv'));
+    expect(within(screen.getByLabelText('Expiry')).getAllByRole('option').map((o) => o.getAttribute('value'))).toEqual(['', 'expired', '7', '14', '30', '60', '90']);
+    expect(within(screen.getByLabelText('Source')).getByRole('option', { name: 'Key Vault' })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText('Search'), 'abc');
+    await waitFor(() => expect(router.state.location.search).toContain('q=abc'));
+  });
 });

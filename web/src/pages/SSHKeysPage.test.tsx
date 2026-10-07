@@ -171,4 +171,16 @@ describe('SSHKeysPage', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Generate' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/ssh-keys/new-key'));
   });
+  it('reads its filters from the address and writes them back', async () => {
+    const queries = keysServer();
+    server.use(http.get('/api/v1/views', () => HttpResponse.json({ items: [] })));
+    const { router } = await renderRoute('/ssh-keys?os_user=root&flag=weak');
+    await waitFor(() => expect(queries.map((p) => `?${p.toString()}`)).toContain('?os_user=root&flag=weak'));
+    expect(screen.getByRole('link', { name: 'Export' })).toHaveAttribute('href', '/api/v1/ssh-keys/export?os_user=root&flag=weak');
+    await userEvent.selectOptions(screen.getByLabelText('Finding'), 'duplicate');
+    await waitFor(() => expect(router.state.location.search).toContain('flag=duplicate'));
+    await waitFor(() => expect(queries.at(-1)?.get('flag')).toBe('duplicate'));
+    await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+  });
 });

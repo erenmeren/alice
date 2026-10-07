@@ -41,3 +41,10 @@ export const ROTATION_POLICIES_KEY = ['rotation', 'policies'] as const;
 export const policyKey = (id: string) => ['rotation', 'policies', id] as const;
 export const ROTATION_RUNS_KEY = ['rotation', 'runs'] as const;
 export const runKey = (id: string) => ['rotation', 'runs', id] as const;
+
+// Phase 7 (alerts, dashboard, saved views). EXPIRING_KEY sits under DASHBOARD_KEY, so one invalidation refreshes both.
+export const DASHBOARD_KEY = ['dashboard'] as const;
+export const EXPIRING_KEY = ['dashboard', 'expiring'] as const;
+export const ALERTS_KEY = ['alerts'] as const;
+export const NOTIFICATIONS_KEY = ['notifications', 'status'] as const;
+export const viewsKey = (page: string) => ['views', page] as const;

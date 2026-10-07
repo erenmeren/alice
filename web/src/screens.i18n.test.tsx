@@ -36,6 +36,7 @@ import {
   kvCertificateDetailFixture,
   kvCertificateFixture,
   kvVersionFixture,
+  emptyDashboardSummary,
 } from './test/fixtures';
 import { expectNoRawKeys } from './test/i18nAssert';
 import { renderRoute } from './test/render';
@@ -150,6 +151,32 @@ const dataHandlers = [
   http.get(`/api/v1/targets/${VAULT_ID}/kv/certificates`, () => HttpResponse.json({ items: [kvCertificateFixture({ bound: true, exportable: false, missing_since: '2026-10-01T00:00:00Z' })], next_cursor: null })),
   http.get(`/api/v1/bindings/${BINDING_ID}`, () => HttpResponse.json(bindingFixture({ auto_deploy: true }))),
   http.get('/api/v1/audit', () => HttpResponse.json({ items: [auditEntry], next_cursor: null })),
+  // The dashboard with every widget filled, so the sweep covers their texts too.
+  http.get('/api/v1/dashboard/summary', () =>
+    HttpResponse.json({
+      ...emptyDashboardSummary,
+      certificates: { monitored: 8, expired: 1, within_7: 2, within_30: 3, within_60: 1, kv_expired: 1, kv_within_30: 2 },
+      deployments: { failed_7d: 1, recent: [{ id: 'd1', certificate_name: 'api.seed.test', target_id: 't1', target_name: 'seed-web-1', status: 'failed', error_code: '', at: '2026-10-06T09:00:00Z' }] },
+      targets: { total: 3, by_status: { ok: 2, host_key_changed: 1 } },
+      license: { expired: false, phase: 'grace', ends_at: '2026-11-16T09:00:00Z', days_left: 40 },
+      rotation: { upcoming: [{ policy_id: 'p1', ssh_key_id: 'k1', key_label: 'ci-deploy', next_run_at: '2026-10-10T09:00:00Z' }], running: 1, needs_attention: 1 },
+      audit: { head_seq: 42, head_hash: 'ab'.repeat(32), checked_at: '2026-10-07T03:00:00Z', intact: false },
+      attention: 5,
+    }),
+  ),
+  http.get('/api/v1/dashboard/expiring', () =>
+    HttpResponse.json({
+      items: [
+        { kind: 'certificate_expiry', object_id: 'c1', name: 'www.seed.test', expires_at: '2026-10-14T08:00:00Z', days_left: 7, expired: false, fingerprint: 'f', websites: [], servers: ['seed-web-1'], target_ids: ['t1'], vault: '', vault_id: null },
+        { kind: 'kv_key_expiry', object_id: 'k1', name: 'signing-key', expires_at: '2020-10-14T08:00:00Z', days_left: 0, expired: true, fingerprint: '', websites: [], servers: [], target_ids: [], vault: 'prod-vault', vault_id: 'v1' },
+      ],
+    }),
+  ),
+  http.get('/api/v1/alerts', () =>
+    HttpResponse.json({
+      items: ['host_key_changed', 'auth_failed', 'deployment_failed', 'audit_broken', 'notifications_failing'].map((kind) => ({ kind, object_id: 'x1', name: 'seed-web-3', since: '2026-10-06T09:00:00Z', error_code: '' })),
+    }),
+  ),
 ];
 
 describe.each(['en', 'tr'] as const)('every screen in %s', (lang) => {
