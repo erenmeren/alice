@@ -5,7 +5,7 @@ import { errorResponse, sessionFor, sessionHandlers } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderWithStepUp } from '../test/render';
 import { server } from '../test/server';
-import { DownloadKeyDialog } from './DownloadKeyDialog';
+import { DownloadKeyDialog, reasonProblem } from './DownloadKeyDialog';
 
 const PASS = 'Canary-passphrase-4711';
 const REASON = 'quarterly access review';
@@ -76,6 +76,34 @@ describe('DownloadKeyDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Download' }));
     expect(await screen.findByText('Enter at least 10 characters.')).toBeInTheDocument();
     expect(calls).toBe(0);
+  });
+
+  // FB-6: the reason is checked as inventory.ValidateReason checks it, before the passphrases are wiped.
+  it.each([
+    ['a multi-line reason', 'Restoring host{Enter}ticket 4711', 'This value contains characters that are not allowed.'],
+    ['an emoji reason of 5 code points', '🔑🔑🔑🔑🔑', 'Enter at least 10 characters.'],
+  ])('refuses %s before any request and keeps the passphrases', async (_, reason, message) => {
+    let calls = 0;
+    server.use(http.post(PATH, () => (calls++, new HttpResponse('x'))));
+    const user = userEvent.setup();
+    await open();
+    await fill(user, reason);
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(calls).toBe(0);
+    expect(screen.getByLabelText(/^Passphrase/)).toHaveValue(PASS);
+    expect(screen.getByLabelText(/^Repeat the passphrase/)).toHaveValue(PASS);
+  });
+
+  it('checks the reason as the server does', () => {
+    expect(reasonProblem('quarterly access review')).toBeNull();
+    expect(reasonProblem('🔑🔑🔑🔑🔑🔑🔑🔑🔑🔑')).toBeNull(); // 10 code points
+    expect(reasonProblem('🔑🔑🔑🔑🔑')).toBe('short');
+    expect(reasonProblem('Erişim incelemesi')).toBeNull();
+    for (const bad of ['line one\nline two', 'tab\there is bad', 'zero\u200bwidth space', 'bidi \u202e override', 'soft\u00adhyphen x',
+      'see -----BEGIN ' + 'OPENSSH PRIVATE KEY-----']) {
+      expect(reasonProblem(bad)).toBe('pattern');
+    }
   });
 
   it('refuses a passphrase that is too short or does not match, and sends nothing', async () => {

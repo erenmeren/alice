@@ -15,6 +15,18 @@ const MIN_PASSPHRASE = 12;
 
 type Local = { reason?: string; passphrase?: string; repeat?: string };
 
+// Mirrors inventory.ValidateReason: the length counts code points (an emoji is one, as on the server), and a
+// control, invisible format or bidi character (a line break included) or a PEM marker is refused. Checked
+// before the passphrases are wiped, so a reason the server would refuse never costs them.
+const FORBIDDEN_IN_REASON = /[\p{Cc}\p{Cf}\p{Bidi_Control}]/u;
+const PEM_MARKER = '-----BEGIN';
+
+export function reasonProblem(reason: string): 'short' | 'pattern' | null {
+  if ([...reason].length < MIN_REASON) return 'short';
+  if (reason.includes(PEM_MARKER) || FORBIDDEN_IN_REASON.test(reason)) return 'pattern';
+  return null;
+}
+
 // DownloadForm downloads the private key of a key Alice generated. The reason and the passphrase live in this component's
 // state only. The passphrase fields are wiped the moment the request is built (the request body is held by the call
 // alone), so they are empty after success, after any refusal and while the step-up code is asked for; leaving the dialog
@@ -48,7 +60,9 @@ function DownloadForm({ keyId, label, onClose }: { keyId: string; label: string;
   const submit = async (ev: FormEvent) => {
     ev.preventDefault();
     const found: Local = {};
-    if (reason.trim().length < MIN_REASON) found.reason = t('sshKeys.downloadReasonShort');
+    const problem = reasonProblem(reason.trim());
+    if (problem === 'short') found.reason = t('sshKeys.downloadReasonShort');
+    else if (problem === 'pattern') found.reason = t('validation.pattern');
     if (protect) {
       if (passphrase.length < MIN_PASSPHRASE) found.passphrase = t('sshKeys.downloadPassphraseShort');
       else if (passphrase !== repeat) found.repeat = t('sshKeys.downloadMismatch');
