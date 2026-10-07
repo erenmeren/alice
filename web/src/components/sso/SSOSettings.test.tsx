@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
+import { createI18n } from '../../i18n';
 import { adminSession, errorResponse, providerFixture, sessionHandlers } from '../../test/fixtures';
 import { renderRoute } from '../../test/render';
 import { server } from '../../test/server';
@@ -234,5 +235,15 @@ describe('SSOSettings', () => {
     expect(within(dialog).getByRole('link', { name: 'Open the general settings' })).toHaveAttribute('href', '/settings?tab=general');
     expect(within(dialog).queryByRole('button', { name: 'Copy' })).not.toBeInTheDocument();
     expect(dialog.querySelector('code')).toBeNull();
+  });
+
+  // A confirm dialog has the modal's own close button too: a button with the same name but the opposite effect would be
+  // ambiguous for a screen reader user (found by the Phase 7 e2e journey in Turkish: "Kapat" twice).
+  it.each(['en-US', 'tr-TR'])('names the switch-off and mapping confirmations apart from the close button (%s)', async (lang) => {
+    const i18n = await createI18n([lang]);
+    for (const key of ['sso.switchOffConfirm', 'sso.removeMappingConfirm', 'sso.deleteConfirm']) {
+      expect(i18n.t(key), key).not.toBe(i18n.t('ui.close'));
+      expect(i18n.t(key), key).not.toBe(i18n.t('ui.cancel'));
+    }
   });
 });
