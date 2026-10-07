@@ -4,8 +4,10 @@ package reports
 
 import (
 	"context"
+	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"alice/internal/alerts"
@@ -51,10 +53,13 @@ type Service struct {
 		Delivery(ctx context.Context) (notify.Delivery, error)
 	}
 	inventory Inventory
+
+	exportMu  sync.Mutex
+	exporting map[uuid.UUID]bool // users with an export running (S-10)
 }
 
 // New builds the service.
 func New(c Config) *Service {
 	return &Service{pool: c.Pool, clock: c.Clock, audit: c.Audit, license: c.License, alerts: c.Alerts, delivery: c.Delivery,
-		inventory: c.Inventory}
+		inventory: c.Inventory, exporting: map[uuid.UUID]bool{}}
 }

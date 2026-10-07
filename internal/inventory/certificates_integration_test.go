@@ -804,7 +804,7 @@ VALUES ($1, $2, 'uploaded.example.test', $3, $4, 'ecdsa', $5, $6, 'uploaded', 'S
 		field string
 		code  string
 	}{
-		{inventory.CertificateFilter{Expiry: "90"}, "expiry", validate.OneOf},
+		{inventory.CertificateFilter{Expiry: "45"}, "expiry", validate.OneOf},
 		{inventory.CertificateFilter{Cursor: "!!"}, "cursor", validate.Pattern},
 		{inventory.CertificateFilter{Limit: 201}, "limit", validate.OutOfRange},
 		{inventory.CertificateFilter{Limit: -1}, "limit", validate.OutOfRange},
@@ -1099,4 +1099,46 @@ FROM generate_series(1, $4::int) i`, web.ID, live.Certificate.ID, h.clock.Now(),
 	assert.True(t, c.LocationsTruncated)
 	assert.Equal(t, live.ID, c.Locations[0].ID)
 	assert.Equal(t, 1, c.LocationCount)
+}
+
+// R42 row 17: the windows 7, 14, 30, 60 and 90 days (each includes the expired ones) and the Key Vault source.
+func TestCertificateFilterWindowsAndKeyVaultSource(t *testing.T) {
+	h := newHarness(t)
+	now := h.clock.Now()
+	add := func(cn, source string, d time.Duration) {
+		t.Helper()
+		id := uuid.Must(uuid.NewV7())
+		_, err := h.db.Owner.Exec(h.ctx, `INSERT INTO certificates (id, fingerprint_sha256, subject_cn, not_before, not_after, key_algorithm,
+public_key_sha256, pem_chain, source, first_seen_at, last_seen_at, created_at)
+VALUES ($1, $2, $3, $4, $5, 'ecdsa', $2, '', $6, $4, $4, $4)`, id, sha([]byte(cn)), cn, now.AddDate(-1, 0, 0), now.Add(d), source)
+		require.NoError(t, err)
+	}
+	day := 24 * time.Hour
+	add("expired", "uploaded", -day)
+	add("d5", "uploaded", 5*day)
+	add("d10", "uploaded", 10*day)
+	add("d20", "uploaded", 20*day)
+	add("d50", "azure_kv", 50*day)
+	add("d80", "uploaded", 80*day)
+	add("d100", "uploaded", 100*day)
+	cns := func(f inventory.CertificateFilter) []string {
+		t.Helper()
+		page, err := h.svc.ListCertificates(h.ctx, f)
+		require.NoError(t, err)
+		out := []string{}
+		for _, c := range page.Items {
+			out = append(out, c.SubjectCN)
+		}
+		return out
+	}
+	assert.Equal(t, []string{"expired", "d5"}, cns(inventory.CertificateFilter{Expiry: "7"}))
+	assert.Equal(t, []string{"expired", "d5", "d10"}, cns(inventory.CertificateFilter{Expiry: "14"}))
+	assert.Equal(t, []string{"expired", "d5", "d10", "d20"}, cns(inventory.CertificateFilter{Expiry: "30"}))
+	assert.Equal(t, []string{"expired", "d5", "d10", "d20", "d50"}, cns(inventory.CertificateFilter{Expiry: "60"}))
+	assert.Equal(t, []string{"expired", "d5", "d10", "d20", "d50", "d80"}, cns(inventory.CertificateFilter{Expiry: "90"}))
+	assert.Equal(t, []string{"d50"}, cns(inventory.CertificateFilter{Source: "azure_kv"}))
+	_, err := h.svc.ListCertificates(h.ctx, inventory.CertificateFilter{Expiry: "45"})
+	var verrs validate.Errors
+	require.ErrorAs(t, err, &verrs)
+	assert.Equal(t, "expiry", verrs[0].Field)
 }

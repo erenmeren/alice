@@ -96,9 +96,9 @@ type CertificateLocation struct {
 // CertificateFilter selects certificates for the certificate screen.
 type CertificateFilter struct {
 	TargetID uuid.UUID // certificates with a location on this target that is not missing
-	Source   string    // "" | "discovered" | "uploaded" | "csr"
+	Source   string    // "" | "discovered" | "uploaded" | "csr" | "azure_kv"
 	Query    string    // subject CN, SAN, label or fingerprint (case- and dotted-I-insensitive)
-	Expiry   string    // "" | "expired" | "30" | "60" (days; the window includes expired ones)
+	Expiry   string    // "" | "expired" | "7" | "14" | "30" | "60" | "90" (days; the window includes expired ones)
 	Cursor   string
 	Limit    int // 1..200, default 50
 }
@@ -123,8 +123,8 @@ const (
 )
 
 var (
-	certificateSources = []string{"discovered", "uploaded", "csr"}
-	expiryWindows      = []string{"expired", "30", "60"}
+	certificateSources = []string{"discovered", "uploaded", "csr", "azure_kv"}
+	expiryWindows      = []string{"expired", "7", "14", "30", "60", "90"}
 )
 
 // discoveredCertificate is one certificate read from a target, ready to be stored.
@@ -292,7 +292,8 @@ func (s *Service) ListCertificates(ctx context.Context, f CertificateFilter) (Ce
 	switch f.Expiry {
 	case "expired":
 		expiredBy = &now
-	case "30", "60":
+	case "":
+	default: // 7, 14, 30, 60 or 90 (validated above)
 		days, _ := strconv.Atoi(f.Expiry)
 		b := now.AddDate(0, 0, days)
 		before = &b
