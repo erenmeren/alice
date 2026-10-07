@@ -359,8 +359,9 @@ FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&u.username, &curRole, &sourc
 
 // RefuseOIDC records a refused SSO sign-in or step-up (auth.oidc.denied, result failure, with
 // the closed reason). For a known user and a reason that says the user no longer has access
-// (no_access, groups_overage, provider_disabled) it also ends all of that user's sessions in
-// the same transaction (O-08, R42 row 21). id may carry only the provider when the refusal
+// (no_access, groups_overage, provider_disabled) it also ends all of that user's sessions and
+// revokes all of the user's API tokens in the same transaction (O-08, R42 row 21, controller
+// ruling). id may carry only the provider when the refusal
 // came before any identity was known.
 func (s *Service) RefuseOIDC(ctx context.Context, id OIDCIdentity, reason string, m Meta) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -385,12 +386,19 @@ func (s *Service) RefuseOIDC(ctx context.Context, id OIDCIdentity, reason string
 		events := []audit.Event{{Actor: actor, Action: "auth.oidc.denied", ObjectType: "user", ObjectID: objectID,
 			Result: audit.Failure, Details: map[string]string{"provider_id": id.ProviderID.String(), "reason": reason}}}
 		if found && slices.Contains(sessionEndingReasons, reason) {
-			tag, err := tx.Exec(ctx, "UPDATE sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL", u.id, s.clock.Now().UTC())
+			now := s.clock.Now().UTC()
+			tag, err := tx.Exec(ctx, "UPDATE sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL", u.id, now)
 			if err != nil {
 				return fmt.Errorf("end sessions: %w", err)
 			}
+			details := map[string]string{"reason": reason, "ended_count": strconv.FormatInt(tag.RowsAffected(), 10)}
+			// Access ended at the identity provider ends every credential Alice issued on it: the
+			// API tokens too, each audited as token.revoked with the refusal's reason.
+			if err := s.revokeUserTokens(ctx, tx, actor, u.id, now, reason, details); err != nil {
+				return err
+			}
 			events = append(events, audit.Event{Actor: actor, Action: "user.sessions_ended", ObjectType: "user", ObjectID: objectID,
-				Result: audit.Success, Details: map[string]string{"reason": reason, "ended_count": strconv.FormatInt(tag.RowsAffected(), 10)}})
+				Result: audit.Success, Details: details})
 		}
 		return s.appendAll(ctx, tx, events)
 	})
@@ -398,7 +406,9 @@ func (s *Service) RefuseOIDC(ctx context.Context, id OIDCIdentity, reason string
 
 // DemoteSSOAdmins makes every SSO Administrator an Auditor and ends their sessions, inside the
 // caller's transaction (switching "SSO users may be Admin" off, O-13, R42 row 24). Each
-// demotion is audited as user.demoted by a.
+// demotion is audited as user.demoted by a. API tokens stay: AuthenticateToken reads the
+// owner's current role on every request and refuses a scope that role no longer allows, so a
+// demoted user's tokens act as an Auditor's at once.
 func (s *Service) DemoteSSOAdmins(ctx context.Context, tx pgx.Tx, a audit.Actor) (demoted, ended int, err error) {
 	now := s.clock.Now().UTC()
 	// The rows are locked in ID order, so two demotions cannot deadlock each other.

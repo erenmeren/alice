@@ -389,3 +389,55 @@ func TestLockoutEmailIsInTheLockoutTransaction(t *testing.T) {
 	assert.Equal(t, auth.LockThreshold-1, e.failedLogins(t, "admin"), "nothing committed")
 	assert.Zero(t, e.countAction(t, "auth.lockout", "failure"))
 }
+
+// Controller ruling on O-08/SEC-014: access ended at the identity provider ends every credential Alice
+// issued on it — the sessions and every API token, each revocation audited.
+func TestRefuseOIDCRevokesTokens(t *testing.T) {
+	e := newEnv(t)
+	p := e.provider(t)
+	id := identity(p, "sub-1", "ada", "")
+	res, err := e.svc.SignInOIDC(e.ctx, id, rbac.Operator, meta)
+	require.NoError(t, err)
+	pr := e.principal(t, res.Token)
+	secrets, _ := e.newTokens(t, pr, 2)
+
+	require.NoError(t, e.svc.RefuseOIDC(e.ctx, id, "login_invalid", meta))
+	assert.True(t, e.tokenWorks(t, secrets[0]), "a token problem says nothing about the user's access")
+
+	require.NoError(t, e.svc.RefuseOIDC(e.ctx, id, "no_access", meta))
+	for _, s := range secrets {
+		assert.False(t, e.tokenWorks(t, s))
+	}
+	revs := e.tokenRevocations(t, pr.UserID)
+	require.Len(t, revs, 2)
+	for _, r := range revs {
+		assert.Equal(t, [2]string{"no_access", "ada"}, [2]string{r.reason, r.actor})
+	}
+	assert.Equal(t, "2", *e.lastDetail(t, "user.sessions_ended", "revoked_tokens_count"))
+}
+
+// Demotion leaves tokens in place because a token is capped by its owner's current role on every
+// request (AuthenticateToken reads users.role; rbac.Decide requires that role): an operate token
+// stops working, a read token acts as an Auditor.
+func TestDemoteSSOAdminsCapsTokensByTheNewRole(t *testing.T) {
+	e := newEnv(t)
+	p := e.provider(t)
+	res, err := e.svc.SignInOIDC(e.ctx, identity(p, "sub-1", "boss", ""), rbac.Admin, meta)
+	require.NoError(t, err)
+	pr := e.principal(t, res.Token)
+	reads, _ := e.newTokens(t, pr, 1)
+	operate, _, err := e.svc.CreateToken(e.ctx, pr, meta, auth.NewToken{Name: "deploy", Scope: rbac.ScopeOperate, ExpiresInDays: 30})
+	require.NoError(t, err)
+
+	tx, err := e.db.App.Begin(e.ctx)
+	require.NoError(t, err)
+	_, _, err = e.svc.DemoteSSOAdmins(e.ctx, tx, audit.SystemActor("test"))
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(e.ctx))
+
+	assert.False(t, e.tokenWorks(t, operate), "an Auditor may not hold an operate token")
+	tp, err := e.svc.AuthenticateToken(e.ctx, reads[0])
+	require.NoError(t, err)
+	assert.Equal(t, rbac.Auditor, tp.Role)
+	assert.Equal(t, rbac.DenyForbidden, rbac.Decide(rbac.UsersManage, tp.Subject(e.clk.Now())), "no Administrator permission is left")
+}
