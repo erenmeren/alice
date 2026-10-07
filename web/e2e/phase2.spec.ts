@@ -151,7 +151,8 @@ async function answerStepUp(page: Page, request: APIRequestContext, c: Copy, sec
 }
 
 async function openLicensePage(page: Page, lang: Lang): Promise<void> {
-  await page.getByRole('link', { name: L[lang].navLicense, exact: true }).click();
+  // The navigation's link: since Phase 7 the dashboard's License card links to the License page too.
+  await page.getByRole('navigation').getByRole('link', { name: L[lang].navLicense, exact: true }).click();
   await expect(page.getByRole('heading', { name: L[lang].navLicense, level: 1 })).toBeVisible();
 }
 

@@ -1,9 +1,10 @@
-import type { APIRequestContext, APIResponse, Download, Locator, Page } from '@playwright/test';
+import type { APIRequestContext, APIResponse, Locator, Page } from '@playwright/test';
 import { randomBytes } from 'node:crypto';
 import {
   ADMIN,
   COPY,
   advanceClock,
+  answerStepUp,
   apiAs,
   browserLocale,
   drainJobs,
@@ -14,9 +15,11 @@ import {
   fingerprintOf,
   firstSignIn,
   freshCode,
+  readDownload,
   resetInstall,
   runScheduled,
   runWizard,
+  selectByKeyboard,
   serverNow,
   setOverlapMinutes,
   settle,
@@ -346,19 +349,6 @@ async function chooseLanguage(page: Page, lang: Lang): Promise<void> {
   expect((await saved).ok(), 'the language is saved on the account').toBe(true);
 }
 
-// answerStepUp confirms the step-up dialog with a fresh code if the server asks for one before done appears.
-async function answerStepUp(page: Page, request: APIRequestContext, lang: Lang, secret: string, done: Locator): Promise<void> {
-  const c = COPY[lang];
-  const stepUp = page.getByRole('dialog', { name: c.stepUpHeading });
-  await expect(stepUp.or(done).first()).toBeVisible();
-  if (await stepUp.isVisible()) {
-    await field(stepUp, c.code).fill(await freshCode(request, secret));
-    await stepUp.getByRole('button', { name: c.stepUpConfirm }).click();
-    await expect(stepUp).toHaveCount(0);
-  }
-  await expect(done).toBeVisible();
-}
-
 // expectStepUp waits for the step-up dialog (the server asked for a code) and confirms it.
 async function expectStepUp(page: Page, request: APIRequestContext, lang: Lang, secret: string): Promise<void> {
   const c = COPY[lang];
@@ -428,28 +418,6 @@ async function expectFocusTrapped(page: Page, dialog: Locator): Promise<void> {
       expect(await dialog.evaluate((el) => el.contains(document.activeElement)), `${key} ${i + 1}: the focus stays in the dialog`).toBe(true);
     }
   }
-}
-
-// selectByKeyboard picks an option of the focused native select with the arrow keys only.
-async function selectByKeyboard(page: Page, select: Locator, value: string): Promise<void> {
-  await expect(select).toBeFocused();
-  const options = await select.locator('option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
-  const target = options.indexOf(value);
-  expect(target, `${value} is offered`).toBeGreaterThanOrEqual(0);
-  for (let i = 0; i < options.length && (await select.inputValue()) !== value; i++) {
-    const current = options.indexOf(await select.inputValue());
-    await page.keyboard.press(current < target ? 'ArrowDown' : 'ArrowUp');
-  }
-  await expect(select).toHaveValue(value);
-}
-
-function readDownload(download: Download): Promise<string> {
-  return (async () => {
-    const stream = await download.createReadStream();
-    const chunks: Buffer[] = [];
-    for await (const chunk of stream) chunks.push(chunk as Buffer);
-    return Buffer.concat(chunks).toString('utf8');
-  })();
 }
 
 // newPassphrase is a fresh random passphrase for one download (never committed, never printed).

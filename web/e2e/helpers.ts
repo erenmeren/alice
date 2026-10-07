@@ -3,7 +3,7 @@ import { createHmac, X509Certificate } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import AxeBuilder from '@axe-core/playwright';
-import { test as base, expect, type APIRequestContext, type APIResponse, type Locator, type Page } from '@playwright/test';
+import { test as base, expect, type APIRequestContext, type APIResponse, type Download, type Locator, type Page } from '@playwright/test';
 
 declare global {
   interface Window {
@@ -617,7 +617,7 @@ export async function submitLogin(page: Page, c: Copy, username: string, passwor
   await field(page, c.password).fill(password);
   const [res] = await Promise.all([
     page.waitForResponse((r) => r.url().endsWith('/api/v1/auth/login') && r.request().method() === 'POST'),
-    page.getByRole('button', { name: c.signIn }).click(),
+    page.getByRole('button', { name: c.signIn, exact: true }).click(), // not "Sign in with <identity provider>"
   ]);
   return res.status();
 }
@@ -1075,4 +1075,91 @@ export function azureRequests(): { count: number; login: number; vault: number; 
 // intermediate CA (an incomplete chain). Returns its first version id.
 export function azureAddCertificate(name: string, opts: { cn: string; root: boolean }): string {
   return azureCtl<{ version: string }>('add-cert', name, '--cn', opts.cn, '--root', String(opts.root)).version;
+}
+
+// --- Shared screen helpers (moved here from phase6.spec.ts; Phase 7 uses them too) ---
+
+// answerStepUp confirms the step-up dialog with a fresh code if the server asks for one before done appears.
+export async function answerStepUp(page: Page, request: APIRequestContext, lang: Lang, secret: string, done: Locator): Promise<void> {
+  const c = COPY[lang];
+  const stepUp = page.getByRole('dialog', { name: c.stepUpHeading });
+  await expect(stepUp.or(done).first()).toBeVisible();
+  if (await stepUp.isVisible()) {
+    await field(stepUp, c.code).fill(await freshCode(request, secret));
+    await stepUp.getByRole('button', { name: c.stepUpConfirm }).click();
+    await expect(stepUp).toHaveCount(0);
+  }
+  await expect(done).toBeVisible();
+}
+
+// selectByKeyboard picks an option of the focused native select with the arrow keys only.
+export async function selectByKeyboard(page: Page, select: Locator, value: string): Promise<void> {
+  await expect(select).toBeFocused();
+  const options = await select.locator('option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
+  const target = options.indexOf(value);
+  expect(target, `${value} is offered`).toBeGreaterThanOrEqual(0);
+  for (let i = 0; i < options.length && (await select.inputValue()) !== value; i++) {
+    const before = await select.inputValue();
+    await page.keyboard.press(options.indexOf(before) < target ? 'ArrowDown' : 'ArrowUp');
+    // A page that keeps the choice in its address draws again after each step: wait for it before the next key.
+    await expect(select, 'the select keeps the focus while it is operated').toBeFocused();
+    await expect(select).not.toHaveValue(before);
+  }
+  await expect(select).toHaveValue(value);
+}
+
+// readDownload reads a download into memory from its stream (the caller deletes the file in a finally block).
+export function readDownload(download: Download): Promise<string> {
+  return (async () => {
+    const stream = await download.createReadStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(chunk as Buffer);
+    return Buffer.concat(chunks).toString('utf8');
+  })();
+}
+
+// --- Phase 7: the fake SMTP server (compose service fakesmtp) and the fake identity provider (fakeidp) ---
+
+// smtpCtl runs "alice-fakesmtp ctl ..." in the e2e stack (the same alice-e2e* project guard as targetExec) and parses
+// the one JSON object it prints. The admin address is the in-container default (127.0.0.1:8025).
+export function smtpCtl<T = Record<string, unknown>>(...args: string[]): T {
+  return JSON.parse(composeExec('fakesmtp', ['/alice-fakesmtp', 'ctl', ...args])) as T;
+}
+
+// MailHogMessage is the part of a MailHog v2 message the journeys read: the decoded subject and body, the recipients.
+export interface MailHogMessage {
+  Content: { Headers: { Subject: string[] }; Body: string };
+  Raw: { To: string[] };
+}
+
+// smtpMessages are the messages the fake SMTP server accepted since it started or was last cleared.
+export function smtpMessages(): MailHogMessage[] {
+  return smtpCtl<{ items: MailHogMessage[] }>('messages').items;
+}
+
+// idpCtl runs "alice-fakeidp ctl ..." in the e2e stack and parses the one JSON object it prints.
+export function idpCtl<T = Record<string, unknown>>(...args: string[]): T {
+  return JSON.parse(composeExec('fakeidp', ['/alice-fakeidp', 'ctl', ...args])) as T;
+}
+
+// idpCA is the fake identity provider's CA certificate (PEM), generated when it started; pasted into the provider form.
+export function idpCA(): string {
+  return composeExec('fakeidp', ['/alice-fakeidp', 'ctl', 'ca']);
+}
+
+// SeedAnswer is what the seeded data set must show (C17; internal/testutil/seed.DashboardAnswer). The certificate counts
+// are cumulative windows: each equals the rows its link opens.
+export interface SeedAnswer {
+  certificates: Record<'monitored' | 'expired' | 'within_7' | 'within_30' | 'within_60', number>;
+  targets: Record<string, number>;
+  deployments: { failed_7d: number };
+  expiring_30: string[];
+  server_filter: { target: string; expiry_30: string[] };
+}
+
+// seedDashboard inserts C17's data set (POST /test/seed/dashboard, e2e build only) and returns what it must show.
+export async function seedDashboard(request: APIRequestContext): Promise<SeedAnswer> {
+  const res = await request.post('/test/seed/dashboard', { data: {} });
+  expect(res.ok(), `POST /test/seed/dashboard: ${await res.text()}`).toBe(true);
+  return (await res.json()) as SeedAnswer;
 }
