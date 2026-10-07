@@ -68,7 +68,7 @@ function MailPanel({ settings }: { settings: SMTPSettings }) {
           </Button>
         </Group>
         {test.isSuccess && (
-          <Text role="status" size="sm" c="green.9">
+          <Text role="status" size="sm" c="teal.9">
             {t('settings.mail.testSent', { to: to.trim() })}
           </Text>
         )}

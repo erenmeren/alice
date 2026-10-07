@@ -80,7 +80,7 @@ function SSOButtons({ returnTo, onError }: { returnTo: string; onError: (e: unkn
   if (items.length === 0) return null;
   return (
     <Stack gap="xs">
-      <Divider label={t('login.or')} labelPosition="center" />
+      <Divider label={t('login.or')} labelPosition="center" styles={{ label: { color: 'var(--mantine-color-gray-7)' } }} />
       {items.map((p) => (
         <Button key={p.id} variant="default" loading={start.isPending && start.variables === p.id} onClick={() => start.mutate(p.id)}>
           {t('login.ssoWith', { name: p.name })}

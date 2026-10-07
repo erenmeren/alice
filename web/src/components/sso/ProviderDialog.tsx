@@ -49,7 +49,7 @@ export function ProviderDialog({ provider, onClose }: { provider: Provider | nul
     return (
       <AppModal opened onClose={onClose} title={title}>
         <Stack gap="sm">
-          <Text role="status" size="sm" c="green.9">
+          <Text role="status" size="sm" c="teal.9">
             {t('settings.saved')}
           </Text>
           {save.data.redirect_uri ? (
