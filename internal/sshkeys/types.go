@@ -19,8 +19,8 @@ const (
 
 // Constants of C1.
 const (
-	// RetiredKeyRetention: a retired key's private key is destroyed this long after its retirement,
-	// unless the key is live somewhere again (S5).
+	// RetiredKeyRetention is the default of the setting general.retired_key_retention_days: a retired key's private
+	// key is destroyed that long after its retirement, unless the key is live somewhere again (S5).
 	RetiredKeyRetention = 30 * 24 * time.Hour
 	// MaxGenerations bounds the keys generated at once in the process (ErrGenerateBusy beyond).
 	MaxGenerations = 2

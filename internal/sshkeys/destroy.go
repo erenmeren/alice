@@ -12,6 +12,7 @@ import (
 
 	"alice/internal/audit"
 	"alice/internal/platform/db"
+	"alice/internal/platform/settings"
 )
 
 // maxDestroyBatch bounds the keys one DestroyRetiredKeys call looks at (it runs every hour; the
@@ -22,7 +23,7 @@ const maxDestroyBatch = 500
 var destroyActor = audit.SystemActor("jobs")
 
 // DestroyRetiredKeys destroys the private key of every generated key that was retired at least
-// RetiredKeyRetention ago (R41 row 23): in one transaction per key, its envelope columns become
+// the retention (general.retired_key_retention_days, default RetiredKeyRetention) ago (R41 row 23): in one transaction per key, its envelope columns become
 // NULL with destroyed_at, audited sshkey.private_key_destroyed. A retired key that is live again on
 // a server (a server restored from a backup, a home that was not mounted during a scan) is never
 // destroyed: it is un-retired instead, audited sshkey.reactivated (S5). Live means a location that
@@ -215,7 +216,12 @@ FROM ssh_keys k JOIN managed_private_keys p ON p.id = k.private_key_id WHERE k.i
 					"fingerprint": fingerprint, "location_count": strconv.Itoa(live)}})
 			return err
 		}
-		if inRun || retiredAt.After(now.Add(-RetiredKeyRetention)) {
+		g, err := settings.GetGeneral(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("sshkeys: read the retention setting: %w", err)
+		}
+		retention := time.Duration(g.RetiredKeyRetentionDays) * 24 * time.Hour
+		if inRun || retiredAt.After(now.Add(-retention)) {
 			return nil // an unfinished rotation still needs the key (defence in depth: Task 9 never retires one)
 		}
 		tag, err := tx.Exec(ctx, `UPDATE managed_private_keys SET destroyed_at = $2, ciphertext = NULL, nonce = NULL, wrapped_dek = NULL,

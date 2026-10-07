@@ -295,7 +295,8 @@ WHERE target_id = $1 AND lower(name COLLATE "C") = ANY($2) ORDER BY lower(name C
 	}
 	stored := map[[2]string]string{}       // (certificate id, version) -> thumbprint
 	storedAt := map[[2]string]*time.Time{} // (certificate id, version) -> kv_created_at
-	rows, err = tx.Query(ctx, `SELECT v.kv_certificate_id::text, v.version, v.thumbprint, v.kv_created_at FROM kv_certificate_versions v
+	storedHistory := map[[2]string]bool{}  // (certificate id, version) -> stored without a leaf (history)
+	rows, err = tx.Query(ctx, `SELECT v.kv_certificate_id::text, v.version, v.thumbprint, v.kv_created_at, v.certificate_id IS NULL FROM kv_certificate_versions v
 JOIN unnest($1::text[], $2::text[]) AS u(id, version) ON v.kv_certificate_id = u.id::uuid AND v.version = u.version`, ids, versions)
 	if err != nil {
 		return nil, fmt.Errorf("inventory: read the stored versions: %w", err)
@@ -303,11 +304,12 @@ JOIN unnest($1::text[], $2::text[]) AS u(id, version) ON v.kv_certificate_id = u
 	for rows.Next() {
 		var id, v, th string
 		var created *time.Time
-		if err := rows.Scan(&id, &v, &th, &created); err != nil {
+		var history bool
+		if err := rows.Scan(&id, &v, &th, &created, &history); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("inventory: read a stored version: %w", err)
 		}
-		stored[[2]string{id, v}], storedAt[[2]string{id, v}] = th, created
+		stored[[2]string{id, v}], storedAt[[2]string{id, v}], storedHistory[[2]string{id, v}] = th, created, history
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -401,13 +403,7 @@ WHERE id = $1 AND last_seen_at <= $17`,
 		certRef := certIDs[d.leaf.Fingerprint]
 		// A version first stored from a version list (history: no leaf) that is now the current one is new
 		// to Alice as a current version: it gets the hold rule and the audit row like an inserted one.
-		var wasHistory bool
-		if _, has := stored[[2]string{certID.String(), d.version}]; has && known {
-			if err := tx.QueryRow(ctx, "SELECT certificate_id IS NULL FROM kv_certificate_versions WHERE kv_certificate_id = $1 AND version = $2",
-				certID, d.version).Scan(&wasHistory); err != nil {
-				return nil, fmt.Errorf("inventory: read a stored version: %w", err)
-			}
-		}
+		wasHistory := known && storedHistory[[2]string{certID.String(), d.version}]
 		var versionID uuid.UUID
 		var inserted bool
 		err := tx.QueryRow(ctx, `INSERT INTO kv_certificate_versions AS v (id, kv_certificate_id, version, thumbprint, certificate_id, enabled,

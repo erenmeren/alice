@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -397,7 +399,49 @@ func TestNewVersionInLockIsHeld(t *testing.T) {
 // new version like any other: the hold rule applies and it gets its kv.certificate.new_version row (final
 // review B M-1).
 func TestAVersionFirstListedAsHistoryIsNewWhenItBecomesCurrent(t *testing.T) {
-	h := newHarness(t, withAzure())
+	runHistoryBecomesCurrentScenario(t, withAzure())
+}
+
+type queryLog struct {
+	mu  sync.Mutex
+	sql []string
+}
+
+func (q *queryLog) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.sql = append(q.sql, d.SQL)
+	return ctx
+}
+
+func (q *queryLog) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// withTracer makes the service run on a pool that records every statement.
+func withTracer(t *testing.T, q *queryLog) harnessOption {
+	return func(c *inventory.Config) {
+		pc := c.Pool.Config()
+		pc.ConnConfig.Tracer = q
+		p, err := pgxpool.NewWithConfig(context.Background(), pc)
+		require.NoError(t, err)
+		t.Cleanup(p.Close)
+		c.Pool = p
+	}
+}
+
+// Carry 4 (Phase 5 parked): storing a poll reads the stored versions in one batch; there is no query per certificate.
+func TestPollReadsStoredVersionsInOneBatch(t *testing.T) {
+	q := &queryLog{}
+	runHistoryBecomesCurrentScenario(t, withAzure(), withTracer(t, q))
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	require.NotEmpty(t, q.sql)
+	for _, s := range q.sql {
+		assert.NotContains(t, s, "SELECT certificate_id IS NULL FROM kv_certificate_versions", "the per-certificate query is gone")
+	}
+}
+
+func runHistoryBecomesCurrentScenario(t *testing.T, opts ...harnessOption) {
+	h := newHarness(t, opts...)
 	h.user("ada", rbac.Admin, "")
 	vault := h.vault("prod")
 	l1 := h.kvLeaf("www.example.test")

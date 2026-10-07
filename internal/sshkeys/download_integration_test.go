@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
+	"alice/internal/platform/settings"
 	"alice/internal/platform/validate"
 	"alice/internal/secrets"
 	"alice/internal/sshkeys"
@@ -325,4 +326,21 @@ func TestDestroySkipsAndReactivatesAKeyThatIsLiveAgain(t *testing.T) {
 	n, err = e.svc.DestroyRetiredKeys(e.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
+}
+
+// Carry 3: the retention of a retired key's private key is the general setting (default 30 days).
+func TestDestroyFollowsTheRetentionSetting(t *testing.T) {
+	e := newEnv(t)
+	k := e.generate("ci")
+	e.retireAt(k.ID, e.clock.Now())
+	require.NoError(t, settings.Set(e.ctx, e.db.App, settings.GeneralKey,
+		settings.General{RetiredKeyRetentionDays: 7, Version: 1}, e.clock.Now()))
+	e.clock.Advance(7*24*time.Hour - time.Second)
+	n, err := e.svc.DestroyRetiredKeys(e.ctx)
+	require.NoError(t, err)
+	assert.Zero(t, n)
+	e.clock.Advance(time.Second)
+	n, err = e.svc.DestroyRetiredKeys(e.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "destroyed after 7 days, not 30")
 }
