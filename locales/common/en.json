@@ -1085,6 +1085,8 @@
   },
   "email": {
     "footer": "This message was sent automatically by Alice. Do not reply to it.",
+    "license_note": "Note: Alice's license has expired. Renew it to resume automatic deployment. License page: {{license_url}}",
+    "license_note_kv": "Note: Alice's license has expired. Renew it to resume automatic deployment. License page: {{license_url}}\nKey Vault data may be outdated while the license is expired.",
     "notify": {
       "test": {
         "subject": "Alice test e-mail",

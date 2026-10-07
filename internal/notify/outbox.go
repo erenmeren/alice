@@ -21,8 +21,8 @@ var templatePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`
 // AdminNotifier queues emails to Administrators. It implements license.Notifier.
 type AdminNotifier struct{ Clock clock.Clock }
 
-// NotifyAdmins queues template for every enabled Administrator with an email address,
-// in the person's language, inside tx.
+// NotifyAdmins queues template for every enabled Administrator with an email address, and the extra addresses of the
+// recipients setting (R42 row 6), each in its own language, inside tx. The signature is unchanged.
 func (a AdminNotifier) NotifyAdmins(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error {
 	if !templatePattern.MatchString(template) {
 		return fmt.Errorf("notify: %q is not a template name", template)
@@ -34,24 +34,9 @@ func (a AdminNotifier) NotifyAdmins(ctx context.Context, tx pgx.Tx, template str
 	if err != nil {
 		return err
 	}
-	rows, err := tx.Query(ctx, `SELECT email::text, locale FROM users
-WHERE role = 'admin' AND disabled_at IS NULL AND email <> '' ORDER BY username`)
+	rcpts, err := recipientsFor(ctx, tx)
 	if err != nil {
-		return fmt.Errorf("notify: read administrators: %w", err)
-	}
-	type recipient struct{ email, locale string }
-	var rcpts []recipient
-	for rows.Next() {
-		var r recipient
-		if err := rows.Scan(&r.email, &r.locale); err != nil {
-			rows.Close()
-			return fmt.Errorf("notify: read administrators: %w", err)
-		}
-		rcpts = append(rcpts, r)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("notify: read administrators: %w", err)
+		return err
 	}
 	now := a.Clock.Now().UTC()
 	for _, r := range rcpts {

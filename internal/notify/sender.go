@@ -31,13 +31,14 @@ type Mailer interface {
 	Send(ctx context.Context, m Message) error
 }
 
-// Retry policy: 30 s, then doubling up to 30 min, at most MaxAttempts sends (about 2 hours
-// from the first to the last attempt).
+// Retry policy (F-60, R42 row 7): 30 s, doubling up to 1 hour, until 24 hours after the message was queued; then the
+// message is failed. Each attempt is one send to one recipient (F-61).
 const (
-	MaxAttempts = 10
-	baseBackoff = 30 * time.Second
-	maxBackoff  = 30 * time.Minute
-	sendTimeout = 60 * time.Second
+	GiveUpAfter  = 24 * time.Hour
+	FailingAfter = 3
+	baseBackoff  = 30 * time.Second
+	maxBackoff   = time.Hour
+	sendTimeout  = 60 * time.Second
 )
 
 // Sender drains the outbox.
@@ -86,10 +87,11 @@ func (s *Sender) one(ctx context.Context, mailer Mailer) (bool, error) {
 			to, tpl, locale string
 			raw             []byte
 			attempts        int
+			createdAt       time.Time
 		)
-		err := tx.QueryRow(ctx, `SELECT id, to_address, template_key, params, locale, attempts FROM notifications_outbox
+		err := tx.QueryRow(ctx, `SELECT id, to_address, template_key, params, locale, attempts, created_at FROM notifications_outbox
 WHERE status = 'pending' AND next_attempt_at <= $1 ORDER BY next_attempt_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`, now).
-			Scan(&id, &to, &tpl, &raw, &locale, &attempts)
+			Scan(&id, &to, &tpl, &raw, &locale, &attempts, &createdAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -112,22 +114,26 @@ WHERE id = $1`, id)
 		cancel()
 		attempts++
 		if sendErr == nil {
-			_, err := tx.Exec(ctx, `UPDATE notifications_outbox SET status = 'sent', sent_at = $2, attempts = $3, last_error_code = ''
-WHERE id = $1`, id, now, attempts)
-			return err
+			if _, err := tx.Exec(ctx, `UPDATE notifications_outbox SET status = 'sent', sent_at = $2, attempts = $3, last_error_code = ''
+WHERE id = $1`, id, now, attempts); err != nil {
+				return err
+			}
+			return recordDelivery(ctx, tx, true, "", now)
 		}
 		code := ErrorCode(sendErr)
 		status := "pending"
-		if attempts >= MaxAttempts {
+		if now.Sub(createdAt) >= GiveUpAfter {
 			status = "failed"
-			s.log().Error("email not sent after "+strconv.Itoa(MaxAttempts)+" attempts; giving up",
+			s.log().Error("email not sent after "+strconv.Itoa(attempts)+" attempts; giving up",
 				"outbox_id", id.String(), "attempt", attempts, "reason", code)
 		} else {
 			s.log().Warn("email not sent; it will be retried", "outbox_id", id.String(), "attempt", attempts, "reason", code)
 		}
-		_, err = tx.Exec(ctx, `UPDATE notifications_outbox SET status = $2, attempts = $3, next_attempt_at = $4, last_error_code = $5
-WHERE id = $1`, id, status, attempts, now.Add(backoff(attempts)), code)
-		return err
+		if _, err = tx.Exec(ctx, `UPDATE notifications_outbox SET status = $2, attempts = $3, next_attempt_at = $4, last_error_code = $5
+WHERE id = $1`, id, status, attempts, now.Add(backoff(attempts)), code); err != nil {
+			return err
+		}
+		return recordDelivery(ctx, tx, false, code, now)
 	})
 	return handled, err
 }
@@ -155,6 +161,14 @@ func (s *Sender) Render(to, template, locale string, params map[string]string) M
 		clean[k] = oneLine(v)
 	}
 	subject := oneLine(s.Catalog.T(locale, "email."+template+".subject", clean))
-	body := strings.TrimSpace(s.Catalog.T(locale, "email."+template+".body", clean)) + "\n\n" + s.Catalog.T(locale, "email.footer", nil)
+	body := strings.TrimSpace(s.Catalog.T(locale, "email."+template+".body", clean))
+	// The license note sits before the footer (L-28); the param that asks for it is not rendered.
+	switch params["license_note"] {
+	case "true":
+		body += "\n\n" + s.Catalog.T(locale, "email.license_note", map[string]string{"license_url": clean["license_url"]})
+	case "kv":
+		body += "\n\n" + s.Catalog.T(locale, "email.license_note_kv", map[string]string{"license_url": clean["license_url"]})
+	}
+	body += "\n\n" + s.Catalog.T(locale, "email.footer", nil)
 	return Message{To: to, Subject: subject, Body: body}
 }

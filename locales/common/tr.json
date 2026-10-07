@@ -1085,6 +1085,8 @@
   },
   "email": {
     "footer": "Bu ileti Alice tarafından otomatik olarak gönderildi. Lütfen yanıtlamayın.",
+    "license_note": "Not: Alice'in lisansının süresi doldu. Otomatik dağıtımı sürdürmek için lisansı yenileyin. Lisans sayfası: {{license_url}}",
+    "license_note_kv": "Not: Alice'in lisansının süresi doldu. Otomatik dağıtımı sürdürmek için lisansı yenileyin. Lisans sayfası: {{license_url}}\nLisansın süresi dolmuşken Key Vault verileri güncel olmayabilir.",
     "notify": {
       "test": {
         "subject": "Alice test e-postası",
