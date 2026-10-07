@@ -315,7 +315,7 @@ CREATE TABLE rotation_op_ids (
 -- UNLOCKED READS: the guards read the sibling locations of a file, the platform credential, the run's keys, the
 -- run's locations (rotations_guard: adding/planned/added rows and the end conditions), the old place at a location
 -- insert and the new place when new_location_id is set, without a lock (the connection-key flag of the old and new
--- places and the new place's liveness at a send are read FOR SHARE: they conflict with a concurrent scan's update of
+-- places, the new place's liveness and the old key's other places in the file at a send are read FOR SHARE: they conflict with a concurrent scan's update of
 -- those rows). rotations_guard's reads of the run's locations are safe on their own (every location writer holds the
 -- run FOR SHARE, which conflicts with the run UPDATE); everything else is safe only because every writer holds the run
 -- FOR UPDATE, which serializes all writers of one run, AND runs at READ COMMITTED (db/tx.go): a writer that waited for
@@ -456,8 +456,9 @@ CREATE TRIGGER rotations_guard BEFORE INSERT OR UPDATE ON rotations
 -- remove_sent_at); a re-send keeps remove_op_id and does not go back in time. A SEND (the first, a retry from
 -- remove_failed, a re-send) also needs: the run not paused for the licence, every other location of the run in the
 -- same target and file verified, removed, or removing with its own re-check at most 15 minutes before this send
--- (G22; skipped, kept and failed ones block), and the new key's place recorded (new_location_id) and still live
--- (neither removed by Alice nor missing). Finishing (removing -> removed) and counter updates of a removing row
+-- (G22; skipped, kept and failed ones block), no live place of the old key in that file that is not a location
+-- of the run (old-key rule 2), and the new key's place recorded (new_location_id) and still live (neither removed
+-- by Alice nor missing). Finishing (removing -> removed) and counter updates of a removing row
 -- re-check the run, the keys and the connection-key flags but are not sends.
 -- +goose StatementBegin
 CREATE FUNCTION rotation_locations_guard() RETURNS trigger LANGUAGE plpgsql
@@ -474,6 +475,7 @@ DECLARE
     sending_removal boolean;
     conn_key boolean;
     conn_flag boolean;
+    place_live boolean;
 BEGIN
     SELECT r.status, r.removal_allowed, r.old_ssh_key_id, r.new_ssh_key_id, r.paused_license INTO run
       FROM public.rotations r WHERE r.id = NEW.rotation_id FOR SHARE OF r;
@@ -687,6 +689,19 @@ BEGIN
                                    OR o.reverified_at < NEW.remove_sent_at - interval '15 minutes')))) THEN
                     RAISE EXCEPTION 'a file is changed only when every other location of the rotation in it is verified, removed or freshly re-checked (skipped and kept ones block it)' USING ERRCODE = 'Z1011';
                 END IF;
+                -- Old-key rule 2 (FB-1): no live place of the old key in the file outside the rotation (a user the
+                -- rotation never verified, recorded by a scan during the overlap). The places are locked FOR SHARE by
+                -- their identity, WITHOUT the liveness in the WHERE clause, as the connection-key flag above: a place a
+                -- concurrent scan is bringing back is waited for, not missed.
+                FOR place_live IN SELECT l.missing_since IS NULL AND l.removed_by_alice_at IS NULL FROM public.ssh_key_locations l
+                                  WHERE l.ssh_key_id = run.old_ssh_key_id AND l.target_id = NEW.target_id AND l.file_path = NEW.file_path
+                                    AND NOT EXISTS (SELECT 1 FROM public.rotation_locations o
+                                                    WHERE o.rotation_id = NEW.rotation_id AND o.old_location_id = l.id)
+                                  FOR SHARE OF l LOOP
+                    IF place_live THEN
+                        RAISE EXCEPTION 'the old key leaves a file only when every live place of it there is a location of the rotation' USING ERRCODE = 'Z1011';
+                    END IF;
+                END LOOP;
                 IF NEW.new_location_id IS NULL OR NOT EXISTS (SELECT 1 FROM public.ssh_key_locations l WHERE l.id = NEW.new_location_id
                            AND l.removed_by_alice_at IS NULL AND l.missing_since IS NULL FOR SHARE OF l) THEN
                     RAISE EXCEPTION 'the new key must be recorded and live in the file before the old key leaves it' USING ERRCODE = 'Z1011';

@@ -401,10 +401,22 @@ func (c *advance) overlap(ctx context.Context) error {
 		return nil
 	}
 	// G18: a verified location in a (target, file) where another location of the run is not verified
-	// (skipped or kept) keeps the old key: it ends kept_old and counts where the old key stays.
+	// (skipped or kept) keeps the old key: it ends kept_old and counts where the old key stays. So does
+	// one whose file holds a live place of the old key outside the run (old-key rule 2, FB-1: a user the
+	// run never verified, recorded by a scan during the overlap).
 	var remove []locRow
+	strangers := map[fileRef]bool{}
 	for _, l := range c.filter(LocVerified) {
-		if c.fileBlocked(l) {
+		f := fileRef{l.targetID, l.filePath}
+		stranger, seen := strangers[f]
+		if !seen {
+			var err error
+			if stranger, err = strangerInFile(ctx, c.tx, c.run.id, c.run.oldKeyID, l.targetID, l.filePath); err != nil {
+				return err
+			}
+			strangers[f] = stranger
+		}
+		if stranger || c.fileBlocked(l) {
 			if err := c.s.setLocation(ctx, c.tx, c.actor, l, LocKeptOld, "rotation.old_kept", c.now, ""); err != nil {
 				return err
 			}
@@ -416,6 +428,12 @@ func (c *advance) overlap(ctx context.Context) error {
 		return err
 	}
 	return c.s.queueJobs(ctx, c.tx, systemActor, c.run.id, remove, "remove")
+}
+
+// fileRef is a key file on a target.
+type fileRef struct {
+	targetID uuid.UUID
+	path     string
 }
 
 // fileBlocked: another location of the run in l's (target, file) is not verified (G18).

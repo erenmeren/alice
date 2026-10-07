@@ -297,3 +297,24 @@ func TestRotationPreviewNoticeIndex(t *testing.T) {
 	assert.Contains(t, def, "((params ->> 'rotation_id'::text))")
 	assert.Contains(t, def, "WHERE (template_key = 'rotation.preview'::text)")
 }
+
+// FB-1 (old-key rule 2): a removal is not sent while the old key has a live place in the file that is not a
+// location of the run (a user the run never verified); a place of another key, a place in another file and a
+// place that is missing or that Alice removed do not block.
+func TestRotationRemovalRefusesAPlaceOutsideTheRun(t *testing.T) {
+	f := readyToRemove(t, pgtest.New(t), 1)
+	other, _ := seedSSHKey(t, f.db, "SHA256:"+repeat43("X"))
+	insertKeyLocation(t, f.db, other, f.target, "ub", f.files[0])
+	insertKeyLocation(t, f.db, f.oldKey, f.target, "uc", "/etc/ssh/keys/elsewhere")
+	sib := insertKeyLocation(t, f.db, f.oldKey, f.target, "ub", f.files[0])
+	assert.Equal(t, "Z1011", sqlState(f.startRemoving(0, at(1), at(2))), "a live place of the old key outside the run")
+	_, err := f.db.Owner.Exec(context.Background(), "UPDATE ssh_key_locations SET missing_since = $2 WHERE id = $1", sib, rotNow)
+	require.NoError(t, err)
+	require.NoError(t, f.startRemoving(0, at(1), at(2)), "a missing place does not block")
+
+	g := readyToRemove(t, pgtest.New(t), 1)
+	gone := insertKeyLocation(t, g.db, g.oldKey, g.target, "ub", g.files[0])
+	_, err = g.db.Owner.Exec(context.Background(), "UPDATE ssh_key_locations SET removed_by_alice_at = $2 WHERE id = $1", gone, rotNow)
+	require.NoError(t, err)
+	require.NoError(t, g.startRemoving(0, at(1), at(2)), "a place Alice removed does not block")
+}

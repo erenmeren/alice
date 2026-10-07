@@ -589,12 +589,33 @@ AND id <> $4 AND (state NOT IN ('verified', 'removing', 'removed')
 	return !blocked, nil
 }
 
+// strangerInFile reports whether the old key has a live place (neither missing nor removed by Alice) in
+// the (target, file) that is not a location of the run (old-key rule 2, FB-1): a user the run never
+// verified, for example an account whose sshd reads the same absolute AuthorizedKeysFile and that a scan
+// recorded during the overlap. The inventory rows are locked FOR SHARE by their identity and their
+// liveness is read after the lock, so a concurrent scan's update of one is waited for (the database
+// guard reads them the same way).
+func strangerInFile(ctx context.Context, tx pgx.Tx, runID, oldKeyID, targetID uuid.UUID, filePath string) (bool, error) {
+	rows, err := tx.Query(ctx, `SELECT l.missing_since IS NULL AND l.removed_by_alice_at IS NULL FROM ssh_key_locations l
+WHERE l.ssh_key_id = $1 AND l.target_id = $2 AND l.file_path = $3
+AND NOT EXISTS (SELECT 1 FROM rotation_locations o WHERE o.rotation_id = $4 AND o.old_location_id = l.id)
+FOR SHARE OF l`, oldKeyID, targetID, filePath, runID)
+	if err != nil {
+		return false, fmt.Errorf("sshkeys: read the old key's places in the file: %w", err)
+	}
+	live, err := pgx.CollectRows(rows, pgx.RowTo[bool])
+	if err != nil {
+		return false, fmt.Errorf("sshkeys: read the old key's places in the file: %w", err)
+	}
+	return slices.Contains(live, true), nil
+}
+
 // BeginRemove moves a verified location to removing just before the old key's removal is sent (C8):
 // the one way to obtain the operation id RemoveAuthorizedKey of the old key is called with. It needs
 // the run removing_old with removal_allowed, not paused, the license gate, a re-check of the new key
 // at most ReverifyFreshness old and later than the verification, every location of the run in that
-// file verified, the new key's line recorded and live, and an old key that is not Alice's own. A
-// resumed removal (removing) keeps its operation id; a retried one (remove_failed, G3) passes the same
+// file verified, no live place of the old key in that file outside the run (FB-1), the new key's line
+// recorded and live, and an old key that is not Alice's own. A resumed removal (removing) keeps its operation id; a retried one (remove_failed, G3) passes the same
 // gate. The database checks all of it again.
 func (s *Service) BeginRemove(ctx context.Context, locationID uuid.UUID) (uuid.UUID, error) {
 	var op uuid.UUID
@@ -636,8 +657,9 @@ func (s *Service) BeginRemove(ctx context.Context, locationID uuid.UUID) (uuid.U
 // removeGate is every condition of the old-key gate the store checks before a removal is sent
 // (C8, G3-G9): the run removing_old with removal_allowed, not paused, the license gate; a re-check at
 // reverified that is later than the verification and fresh at now; the clock not gone back; every
-// location of the run in that file verified; the new key's line recorded and live; an old key that is
-// not Alice's own. The database checks all of it again.
+// location of the run in that file verified; no live place of the old key in that file outside the run
+// (old-key rule 2, FB-1); the new key's line recorded and live; an old key that is not Alice's own. The
+// database checks all of it again.
 func (s *Service) removeGate(ctx context.Context, tx pgx.Tx, run runRow, loc locRow, reverified, now time.Time) error {
 	if run.status != StatusRemovingOld || !run.removalAllowed {
 		return ErrNotYourTurn
@@ -661,6 +683,13 @@ func (s *Service) removeGate(ctx context.Context, tx pgx.Tx, run runRow, loc loc
 	}
 	if !ready {
 		return ErrNotYourTurn
+	}
+	stranger, err := strangerInFile(ctx, tx, run.id, run.oldKeyID, loc.targetID, loc.filePath)
+	if err != nil {
+		return err
+	}
+	if stranger {
+		return ErrNotYourTurn // old-key rule 2 (FB-1): a user of the file the run never verified
 	}
 	var live bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM ssh_key_locations WHERE id = $1 AND missing_since IS NULL

@@ -682,3 +682,34 @@ func TestUndoWithANeverCompleteListingSaysWhy(t *testing.T) {
 	assert.True(t, e.world.Has(web, keyFile("deploy"), k.Fingerprint), "the old key stays")
 	assert.Zero(t, e.removalsOf(r.NewFingerprint), "nothing removed on a partial listing's word")
 }
+
+// FB-1 (old-key rule 2): during the overlap a scan finds the old key for a second user in the shared file of
+// the run's verified location (an account whose sshd reads the same absolute AuthorizedKeysFile, created
+// meanwhile). The run never verified that user, so the old key stays in the file: the place ends kept_old,
+// no removal reaches the server, and the run completes with the place counted and listed as kept.
+func TestSiblingOfOldKeyDuringOverlapKeepsOld(t *testing.T) {
+	e := newEnv(t)
+	const shared = "/etc/ssh/keys/shared"
+	web := e.server("web-01", providers.UserKeyFiles{OSUser: "deploy2", Files: []string{shared}, Complete: true},
+		providers.UserKeyFiles{OSUser: "bob", Files: []string{shared}, Complete: true})
+	k := e.generate("ci")
+	e.placeIn(k, web, "deploy2", shared, "")
+	r := e.runNow(e.policy(k.ID, 1))
+	require.Len(t, r.Locations, 1, "one user of the file at the start: the file is not skipped")
+	e.drain()
+	r = e.run(r.ID)
+	require.Equal(t, "overlap", r.Status)
+	require.Equal(t, sshkeys.LocVerified, e.loc(r.ID, web, "deploy2").State)
+	e.placeIn(k, web, "bob", shared, "") // the next scan records bob's place of the old key (same line, same file)
+	e.clock.Advance(24 * time.Hour)
+	e.sweep()
+	r = e.settleRun(r.ID)
+	assert.Equal(t, sshkeys.StatusCompleted, r.Status)
+	assert.Equal(t, 1, r.KeptCount)
+	l := e.loc(r.ID, web, "deploy2")
+	assert.Equal(t, sshkeys.LocKeptOld, l.State, "the kept place is listed on the run")
+	assert.True(t, e.world.Has(web, shared, k.Fingerprint), "the old key stays in the file")
+	assert.True(t, e.world.Has(web, shared, r.NewFingerprint))
+	assert.Zero(t, e.countEvents("RemoveAuthorizedKey"))
+	assert.Len(t, e.mails(sshkeys.TemplateCompletedPartial), 1)
+}
