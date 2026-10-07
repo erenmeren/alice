@@ -8,8 +8,9 @@
   exists, it refuses to go down.
 - **After the upgrade every server refuses key deploys (`ALC-KEY-0014`) and is skipped by rotations
   (`connection_files_unknown`) until it has been scanned again**: Alice needs the list of key files of the account it
-  connects with, which scans of earlier versions did not record. Connected servers are scanned once a day; choose
-  **Scan for SSH keys** to do it at once. A server with more than 200 accounts, or whose `alice-svc` is not in
+  connects with, which scans of earlier versions did not record. Connected servers are scanned once per discovery
+  interval (one day unless it was changed); choose **Scan for SSH keys** (on an Nginx server, **Discover**) to do it
+  at once. A server with more than 200 accounts, or whose `alice-svc` is not in
   `/etc/passwd`, keeps refusing.
 - **Scheduled rotations need working email delivery**: a scheduled run starts only after its preview email was accepted
   by the mail server for at least one administrator before the planned start (otherwise `ALC-ROT-0017`). **Run now**

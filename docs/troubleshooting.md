@@ -86,12 +86,13 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 ## SSH key rotation
 
 - **Deploy offers no file, or a deploy is refused with `ALC-KEY-0014`.** Alice offers only files it knows the account it
-  connects with does not read. Choose **Scan for SSH keys** on the server's page, then open the deploy dialog again.
+  connects with does not read. Choose **Scan for SSH keys** on the server's page (on an Nginx server, **Discover**), then open the deploy dialog again.
 - **A scheduled rotation was cancelled with `ALC-ROT-0017`.** A scheduled run starts only after its preview email was
   delivered to an administrator before the planned start. Check the email settings; **Run now** does not wait for an email.
 - **Every server refuses deploys after the upgrade, and every place is skipped with `connection_files_unknown`.** Servers
   last scanned before this version have no list of the key files of the account Alice connects with. Choose **Scan for
-  SSH keys** on each server's page, or wait for the daily scan.
+  SSH keys** on each server's page (on an Nginx server, **Discover**), or wait for its next scan: Alice scans each
+  connected server once per discovery interval (one day unless it was changed).
 - **A rotation stays paused (`ALC-ROT-0011`).** Nothing is added or removed while the license does not allow changes; the
   overlap's time stops. After a renewal, Alice emails the administrators within about a minute; then choose **Continue** on
   the rotation's page (until then Continue answers `ALC-ROT-0021`). **Stop and undo** works while paused, also in lock: it
@@ -123,7 +124,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   - **The SSH server does not accept keys** (`pubkey_disabled`). Nothing, unless the server should accept keys (`PubkeyAuthentication`).
   - **root may sign in here only with a fixed command, and this line has none** (`root_forced_commands_only`). Add the forced `command=` to the line, or change `PermitRootLogin`, then scan again.
   - **The key is listed more than once in this file** (`duplicate_lines`). Remove the extra lines of the key from the file by hand (the SSH server uses the first), then scan again.
-  - **Alice does not know all key files of the account it connects with on this server; scan the server again** (`connection_files_unknown`). Choose **Scan for SSH keys** on the server's page, then preview again (`ALC-KEY-0014`).
+  - **Alice does not know all key files of the account it connects with on this server; scan the server again** (`connection_files_unknown`). Choose **Scan for SSH keys** on the server's page (on an Nginx server, **Discover**), then preview again (`ALC-KEY-0014`).
   - **This place belongs to the account Alice connects with or to one of its files; Alice never changes those** (`connection_account_file`). Nothing: the setup commands own those files (`ALC-KEY-0017`).
   - **Alice could not read this line's options exactly** (`options_unreadable`). Check the line's options on the server (they are not valid UTF-8), fix them, then scan again.
 
@@ -871,12 +872,12 @@ possible attack on Alice's network position.
 
 ## ALC-KEY-0001: Alice's own key is protected
 
-**Meaning.** Alice refuses to remove its own connection key (HTTP 409), in any file and whatever its comment says. The
-refusal is recorded in the audit log.
+**Meaning.** Alice refuses to remove its own connection key (HTTP 409), in any file and whatever its comment says, and
+refuses a rotation policy or a rotation of it. A refused removal or rotation policy is recorded in the audit log.
 
-**Likely cause.** The key that Alice uses to sign in was chosen for removal.
+**Likely cause.** The key that Alice uses to sign in was chosen for removal, or for a rotation policy.
 
-**What to do.** Keep the key. To stop managing a server, remove the server from Alice instead.
+**What to do.** Keep the key; Alice never rotates it. To stop managing a server, remove the server from Alice instead.
 
 ## ALC-KEY-0002: Last key of root
 
@@ -921,7 +922,7 @@ server again.
 
 ## ALC-KEY-0006: Alice holds no private key for this key
 
-**Meaning.** A deploy, a private key download or a rotation policy was refused for a key whose private key Alice does not hold, or for Alice's own connection key. A refused download or policy is recorded in the audit log, and so is a refused deploy of Alice's own key; a refused deploy of a key found on a server is not. (HTTP 409, reason `sshkey.not_managed`.)
+**Meaning.** A deploy, a private key download or a rotation policy was refused for a key whose private key Alice does not hold, or a deploy or a private key download for Alice's own connection key (a rotation policy for it is refused with `ALC-KEY-0001`). A refused download or policy is recorded in the audit log, and so is a refused deploy of Alice's own key; a refused deploy of a key found on a server is not. (HTTP 409, reason `sshkey.not_managed`.)
 
 **Likely cause.** Only keys generated in Alice can be deployed, downloaded or rotated. Keys found on servers and Alice's own connection key are only listed.
 
@@ -973,7 +974,7 @@ server again.
 
 **Likely cause.** Alice added the key, the check after it failed, and removing the key failed as well (for example, the server could not be reached).
 
-**What to do.** When the server can be reached, choose **Scan for SSH keys** on the server's page (Alice also queues a scan by itself, at the latest about two hours after the task ended), then remove the key from this server on the key's page.
+**What to do.** When the server can be reached, choose **Scan for SSH keys** on the server's page (on an Nginx server, **Discover**; Alice also queues a scan by itself, at the latest about two hours after the task ended), then remove the key from this server on the key's page.
 
 ## ALC-KEY-0013: This file is not one of the user's key files
 
@@ -989,7 +990,7 @@ server again.
 
 **Likely cause.** The last scan did not list every key file the SSH server reads for the account Alice signs in with, so Alice cannot rule out that the chosen file is one of them. Servers last scanned by an earlier version of Alice have no such list. After upgrading to the version with SSH key rotation, every server refuses deploys until it is scanned again. A server with more than 200 accounts, or whose account that Alice connects with is not in `/etc/passwd`, keeps refusing, because Alice cannot list that account's files completely there.
 
-**What to do.** Scan the server again, then try again. Choose **Scan for SSH keys** on the server's page; the deploy dialog offers the files once the scan has listed them.
+**What to do.** Scan the server again, then try again. Choose **Scan for SSH keys** on the server's page (on an Nginx server, **Discover**); the deploy dialog offers the files once the scan has listed them.
 
 ## ALC-KEY-0015: Alice's clock is behind a time it already recorded
 

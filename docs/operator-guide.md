@@ -509,7 +509,7 @@ sign-in is tested. The result:
 |---|---|
 | "Alice added the key and verified a login with it." | Done. |
 | "Alice added the key but could not test a login with it." | The line stays. Alice could not prove a login: the line has allowed source addresses that may exclude Alice, the server let Alice in without asking for the key, or Alice could not connect for the test. Check the login yourself. |
-| "The key was already on the server." | Alice sent nothing. It never removes a line that was there before it started. Alice scans the server so that its list shows the line. |
+| "The key was already on the server." | Alice changed nothing. It never removes a line that was there before it started. Alice scans the server so that its list shows the line. |
 | "The server did not accept the key, so Alice removed it again." | The sign-in with the new key was refused (`ALC-KEY-0010`); Alice removed only the line it had added. Check the account and the SSH settings for that user. |
 | "Alice could not add the key." | The server refused the change or could not be reached; nothing was changed. |
 | "The key did not work and Alice could not remove it again." | The line is still in the file (`ALC-KEY-0012`). Remove it on the key's page when the server can be reached. |
@@ -535,8 +535,8 @@ the task stops for a person (`ALC-KEY-0016`) and Alice scans the server about an
   has not finished (`ALC-KEY-0018`: if that rotation were undone, the line would disappear with it).
 
 **Scan the server again** means: open the server's page and choose **Scan for SSH keys** (on an Nginx server,
-**Discover**), wait until it has finished, then open the dialog again. Alice also scans every connected server once a
-day on its own.
+**Discover**), wait until it has finished, then open the dialog again. Alice also scans every connected server on its
+own once per discovery interval (one day unless it was changed).
 
 A deploy is a background task of the server (up to three attempts). While the license does not allow changes it is
 held under **Waiting for an administrator** on **Servers** (see [Background jobs](#background-jobs)).

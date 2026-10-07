@@ -283,7 +283,8 @@ example `rotation.notice_undelivered`), which [troubleshooting.md](troubleshooti
 
 **After the upgrade** to this version every server refuses key deploys and is skipped by rotations until it has been
 scanned again (Alice needs the list of key files of the account it connects with). Each connected server is scanned
-once a day; choose **Scan for SSH keys** on a server to do it at once.
+once per discovery interval (one day unless it was changed); choose **Scan for SSH keys** on a server (on an Nginx
+server, **Discover**) to do it at once.
 
 ## Certificates
 
