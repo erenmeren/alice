@@ -124,17 +124,21 @@ function fileText(path: string): string {
 }
 
 // sshLogin signs in to the SSH target as user with the private key (given on standard input, written to a mktemp file
-// that only root reads, removed after) and returns what "id -un" printed, or null when the login was refused.
+// that only root reads, removed after) and returns what "id -un" printed, or null when the login was refused. The
+// target's own host key is pinned through a known_hosts file written from its public half (SEC-080: nothing in the
+// repository accepts every host key).
 function sshLogin(user: string, privateKey: string): string | null {
   try {
     return targetExec(
       [
         'sh',
         '-c',
-        'umask 077; f=$(mktemp); cat > "$f"; ssh -F /dev/null -i "$f" -o IdentitiesOnly=yes -o BatchMode=yes -o PasswordAuthentication=no ' +
-          '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$1"@127.0.0.1 id -un; s=$?; rm -f "$f"; exit $s',
+        'umask 077; f=$(mktemp); k=$(mktemp); cat > "$f"; printf "127.0.0.1 %s\\n" "$(cut -d" " -f1,2 "$2")" > "$k"; ' +
+          'ssh -F /dev/null -i "$f" -o IdentitiesOnly=yes -o BatchMode=yes -o PasswordAuthentication=no ' +
+          '-o StrictHostKeyChecking=yes -o UserKnownHostsFile="$k" -o LogLevel=ERROR -o ConnectTimeout=10 "$1"@127.0.0.1 id -un; s=$?; rm -f "$f" "$k"; exit $s',
         'sh',
         user,
+        HOST_KEY_PUB,
       ],
       privateKey,
     ).trim();
