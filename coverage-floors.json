@@ -27,5 +27,9 @@
   "alice/internal/platform/netaddr": 97,
   "alice/internal/platform/validate": 100,
   "alice/internal/platform/azureid": 100,
-  "alice/cmd/alice": 90
+  "alice/cmd/alice": 90,
+  "alice/internal/sshkeys": 89,
+  "alice/internal/sshkeys/keymat": 95,
+  "alice/internal/sshkeys/plan": 100,
+  "alice/internal/jobs/sshkeyjobs": 86
 }
