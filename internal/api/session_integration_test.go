@@ -26,6 +26,7 @@ import (
 	"alice/internal/inventory"
 	"alice/internal/providers"
 	"alice/internal/testutil/pki"
+	"alice/internal/testutil/seed"
 )
 
 // Session, CSRF and rate-limit suite (spec §25.3 R-01..R-10, §25.4 A-01..A-09).
@@ -434,7 +435,7 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 	for k, v := range phase6Records(t, s, c) {
 		ids[k] = v
 	}
-	ids["/api/v1/sso/providers/"] = ssoProviderRecord(t, s)
+	ids["/api/v1/sso/providers/"] = phase7Records(t, s, c, admin)
 	ids["/api/v1/auth/oidc/"] = ids["/api/v1/sso/providers/"]
 	// Store an audit checkpoint first, so a GET that moved it would be caught.
 	requireStatus(t, c.do(http.MethodPost, "/api/v1/audit/verify", nil), http.StatusOK)
@@ -995,15 +996,26 @@ func TestR10RecoveryCodeSignInIsLimitedToo(t *testing.T) {
 	})
 }
 
-// ssoProviderRecord stores one identity provider row directly (creating one through the API reads a discovery
-// document) and returns its ID.
-func ssoProviderRecord(t *testing.T, s *stack) string {
+// phase7Records stores what the Phase 7 GETs read, through the API and the stack's fakes (Task 16): working mail
+// settings with a trusted certificate, recipients and thresholds, C17's seeded certificates, servers and deployments
+// (seed.Dashboard) with the alert scan's notices queued, one saved view of the Administrator, and one identity provider
+// with a group mapping. It returns the provider's ID for the paths that name it.
+func phase7Records(t *testing.T, s *stack, c *client, admin *account) string {
 	t.Helper()
-	id := uuid.New()
-	_, err := s.db.Owner.Exec(context.Background(), `INSERT INTO oidc_providers (id, name, issuer_url, client_id, scopes, groups_claim,
-authorization_endpoint, token_endpoint, jwks_uri, enabled, created_at, updated_at)
-VALUES ($1, 'Corp', 'https://idp.example.com', 'alice', '{openid}', 'groups', 'https://idp.example.com/a', 'https://idp.example.com/t',
-'https://idp.example.com/k', true, $2, $2)`, id, s.clock.Now())
+	ctx := context.Background()
+	s.startFakes()
+	s.stepUp(c, admin)
+	requireStatus(t, c.do(http.MethodPatch, "/api/v1/users/"+admin.id, map[string]string{"email": "ada@example.com"}), http.StatusOK)
+	s.configureMail(c)
+	requireStatus(t, c.do(http.MethodPut, "/api/v1/settings/notifications", map[string]any{"administrators": true,
+		"addresses": []map[string]string{{"email": "ops@example.com", "locale": "tr"}}}, ifMatchOf("0")), http.StatusOK)
+	requireStatus(t, c.do(http.MethodPut, "/api/v1/settings/alerts", map[string]any{"thresholds_days": []int{30, 7}}, ifMatchOf("0")), http.StatusOK)
+	_, err := seed.Dashboard(ctx, s.db.Owner, s.clock.Now())
 	require.NoError(t, err)
-	return id.String()
+	_, err = s.alerts.Scan(ctx)
+	require.NoError(t, err)
+	require.Positive(t, s.count("notifications_outbox"))
+	requireStatus(t, c.do(http.MethodPost, "/api/v1/views", map[string]any{"page": "certificates", "name": "Expiring soon",
+		"query": map[string]string{"expiry": "30"}}), http.StatusCreated)
+	return s.ssoReady(t, c, admin)
 }

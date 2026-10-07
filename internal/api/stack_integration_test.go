@@ -50,7 +50,9 @@ import (
 	"alice/internal/secrets"
 	"alice/internal/setup"
 	"alice/internal/sshkeys"
+	"alice/internal/testutil/fakeidp"
 	"alice/internal/testutil/fakekv"
+	"alice/internal/testutil/fakesmtp"
 	"alice/internal/testutil/pgtest"
 	"alice/internal/testutil/pki"
 	"alice/internal/version"
@@ -119,9 +121,11 @@ type stack struct {
 	mail        *notify.Settings
 	alerts      *alerts.Service
 	reports     *reports.Service
-	sso         *oidc.Service // Phase 7: identity providers and the OIDC sign-in
-	tick        *tickClock    // the Phase 6 services' clock: s.clock, moving 1 ms on every read while switched on
-	mailbox     *mailbox      // what deliverMail handed to the "SMTP server"
+	sso         *oidc.Service    // Phase 7: identity providers and the OIDC sign-in
+	smtp        *fakesmtp.Server // Phase 7: the fake mail server (user "mailer", stackSMTPPassword); nil until startFakes
+	idp         *fakeidp.Server  // Phase 7: the fake identity provider (token clock: s.clock); nil until startFakes
+	tick        *tickClock       // the Phase 6 services' clock: s.clock, moving 1 ms on every read while switched on
+	mailbox     *mailbox         // what deliverMail handed to the "SMTP server"
 	auditLog    *audit.Log
 	queue       *jobs.Queue
 	runner      *jobs.Runner
@@ -416,11 +420,12 @@ func requireStatus(t *testing.T, rec *httptest.ResponseRecorder, want int) {
 
 type apiError struct {
 	Error struct {
-		Code       string `json:"code"`
-		Reason     string `json:"reason"`
-		MessageKey string `json:"message_key"`
-		Message    string `json:"message"`
-		RequestID  string `json:"request_id"`
+		Code       string            `json:"code"`
+		Reason     string            `json:"reason"`
+		MessageKey string            `json:"message_key"`
+		Message    string            `json:"message"`
+		RequestID  string            `json:"request_id"`
+		Params     map[string]string `json:"params"`
 	} `json:"error"`
 }
 
@@ -579,4 +584,90 @@ func (s *stack) count(table string) int {
 	var n int
 	require.NoError(s.t, s.db.Owner.QueryRow(context.Background(), "SELECT count(*) FROM "+table).Scan(&n))
 	return n
+}
+
+// stackSMTPPassword is the password the stack's fake mail server requires of user "mailer" (a canary: the leak suite
+// looks for it everywhere).
+const stackSMTPPassword = "CANARY-stack-smtp-password-5c2e"
+
+// startFakes starts the stack's fake mail server and fake identity provider (Phase 7), once per stack: a restart
+// (start) keeps them, as a restart of Alice keeps the outside world. They are closed by t.Cleanup. Only the Phase 7
+// suites start them, so the other suites do not pay for their keys.
+func (s *stack) startFakes() {
+	s.t.Helper()
+	if s.smtp == nil {
+		s.smtp = fakesmtp.Start(s.t, fakesmtp.Options{Username: "mailer", Password: stackSMTPPassword})
+	}
+	if s.idp == nil {
+		s.idp = fakeidp.Start(s.t, fakeidp.Options{Now: s.clock.Now})
+	}
+}
+
+// installedWithFakes is installed with the Phase 7 fakes started.
+func installedWithFakes(t *testing.T) (*stack, *client, *account) {
+	t.Helper()
+	s, c, a := installed(t)
+	s.startFakes()
+	return s, c, a
+}
+
+// etagVersion is the version of a strong ETag ("3" -> 3 as text).
+func etagVersion(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	tag := rec.Header().Get("ETag")
+	require.Regexp(t, `^"[0-9]+"$`, tag)
+	return strings.Trim(tag, `"`)
+}
+
+// mailBody is a mail settings change for the stack's fake mail server.
+func (s *stack) mailBody(password any) map[string]any {
+	host, port := s.smtp.Addr()
+	b := map[string]any{"host": host, "port": port, "tls_mode": "starttls", "from": "alice@example.com", "username": "mailer", "ca_pem": ""}
+	if password != nil {
+		b["password"] = password
+	}
+	return b
+}
+
+// configureMail stores working mail settings through the API and trusts the fake server's certificate the way an
+// Administrator does (F-62): a test e-mail shows the certificate, Trust pins it, the next test e-mail is sent. The
+// admin must be stepped up. The fake's mailbox is emptied afterwards.
+func (s *stack) configureMail(admin *client) {
+	t := s.t
+	t.Helper()
+	cur := admin.do(http.MethodGet, "/api/v1/settings/smtp", nil)
+	requireStatus(t, cur, http.StatusOK)
+	rec := admin.do(http.MethodPut, "/api/v1/settings/smtp", s.mailBody(stackSMTPPassword), ifMatchOf(etagVersion(t, cur)))
+	requireStatus(t, rec, http.StatusOK)
+	version := etagVersion(t, rec)
+	rec = admin.do(http.MethodPost, "/api/v1/settings/smtp/actions/test", map[string]string{"to": "ops@example.com"})
+	requireError(t, rec, http.StatusBadGateway, "ALC-NTF-0005")
+	fp := decodeBody[apiError](t, rec).Error.Params["fingerprint"]
+	require.Equal(t, s.smtp.Fingerprint(), fp)
+	requireStatus(t, admin.do(http.MethodPost, "/api/v1/settings/smtp/actions/trust", map[string]string{"fingerprint": fp},
+		ifMatchOf(version)), http.StatusOK)
+	requireStatus(t, admin.do(http.MethodPost, "/api/v1/settings/smtp/actions/test", map[string]string{"to": "ops@example.com"}),
+		http.StatusOK)
+	require.Len(t, s.smtp.Messages(), 1)
+	s.smtp.Clear()
+}
+
+// drainMail drains the outbox the way the notify.send job does in production: notify.Sender with the mail settings
+// as its mailer source (the stack's fake mail server once configureMail ran). It returns how many e-mails it handled.
+func (s *stack) drainMail() int {
+	s.t.Helper()
+	catalog, err := i18n.Load(locales.FS)
+	require.NoError(s.t, err)
+	sender := notify.Sender{Pool: s.db.App, Source: s.mail, Catalog: catalog, Clock: s.clock, Log: logging.New(s.logs, slog.LevelDebug)}
+	n, err := sender.Drain(context.Background())
+	require.NoError(s.t, err)
+	return n
+}
+
+// userID reads a user's ID by user name (owner pool).
+func (s *stack) userID(username string) string {
+	s.t.Helper()
+	var id string
+	require.NoError(s.t, s.db.Owner.QueryRow(context.Background(), `SELECT id::text FROM users WHERE username = $1`, username).Scan(&id))
+	return id
 }
