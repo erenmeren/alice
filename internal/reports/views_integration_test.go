@@ -56,3 +56,29 @@ func TestViewsArePrivateAndBounded(t *testing.T) {
 	assert.Equal(t, []string{"target_id", "source", "q", "expiry"}, reports.ViewQueryKeys(reports.PageCertificates))
 	assert.Equal(t, []string{"target_id", "os_user", "q", "flag", "missing"}, reports.ViewQueryKeys(reports.PageSSHKeys))
 }
+
+func TestViewsListIsOrderedAndRoundTrips(t *testing.T) {
+	w := newWorld(t, false)
+	ctx := context.Background()
+	ada, bob := addUser(t, w, "ada"), addUser(t, w, "bob")
+	q := map[string]string{"expiry": "30", "q": "=x"}
+	_, err := w.svc.CreateView(ctx, ada, reports.PageCertificates, "beta", q)
+	require.NoError(t, err)
+	_, err = w.svc.CreateView(ctx, ada, reports.PageCertificates, "Alpha", map[string]string{})
+	require.NoError(t, err)
+	_, err = w.svc.CreateView(ctx, ada, reports.PageSSHKeys, "keys", map[string]string{"os_user": "root"})
+	require.NoError(t, err)
+	_, err = w.svc.CreateView(ctx, bob, reports.PageCertificates, "bobs", nil)
+	require.NoError(t, err)
+	list, err := w.svc.Views(ctx, ada, reports.PageCertificates)
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	assert.Equal(t, "Alpha", list[0].Name, "ordered by lower(name)")
+	assert.Equal(t, "beta", list[1].Name)
+	assert.Equal(t, q, list[1].Query)
+	assert.Equal(t, map[string]string{}, list[0].Query)
+	keys, err := w.svc.Views(ctx, ada, reports.PageSSHKeys)
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	assert.Equal(t, map[string]string{"os_user": "root"}, keys[0].Query)
+}

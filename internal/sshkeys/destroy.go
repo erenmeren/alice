@@ -43,10 +43,17 @@ WHERE k.retired_at IS NOT NULL AND p.destroyed_at IS NULL ORDER BY k.retired_at,
 	if err != nil {
 		return 0, fmt.Errorf("sshkeys: list retired keys: %w", err)
 	}
+	// The retention is read once per run and clamped: a stored value that overflows time.Duration
+	// must never become "destroy every retired key now" (irreversible).
+	g, err := settings.GetGeneral(ctx, s.pool)
+	if err != nil {
+		return 0, fmt.Errorf("sshkeys: read the retention setting: %w", err)
+	}
+	retention := time.Duration(min(max(g.RetiredKeyRetentionDays, 1), maxIntervalDays)) * 24 * time.Hour
 	n := 0
 	var errs []error
 	for _, id := range ids {
-		destroyed, err := s.destroyRetired(ctx, id)
+		destroyed, err := s.destroyRetired(ctx, id, retention)
 		if err != nil {
 			s.log.Error("could not destroy a retired key", "ssh_key_id", id.String(), "error_type", fmt.Sprintf("%T", err))
 			errs = append(errs, err)
@@ -177,7 +184,7 @@ AND a.object_id = $1::uuid::text)`, k.id).Scan(&done); err != nil {
 
 // destroyRetired decides one retired key under its row lock: reactivated when live, destroyed when
 // its retention has passed, otherwise left alone.
-func (s *Service) destroyRetired(ctx context.Context, id uuid.UUID) (bool, error) {
+func (s *Service) destroyRetired(ctx context.Context, id uuid.UUID, retention time.Duration) (bool, error) {
 	destroyed := false
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		now := s.clock.Now().UTC()
@@ -216,11 +223,6 @@ FROM ssh_keys k JOIN managed_private_keys p ON p.id = k.private_key_id WHERE k.i
 					"fingerprint": fingerprint, "location_count": strconv.Itoa(live)}})
 			return err
 		}
-		g, err := settings.GetGeneral(ctx, tx)
-		if err != nil {
-			return fmt.Errorf("sshkeys: read the retention setting: %w", err)
-		}
-		retention := time.Duration(g.RetiredKeyRetentionDays) * 24 * time.Hour
 		if inRun || retiredAt.After(now.Add(-retention)) {
 			return nil // an unfinished rotation still needs the key (defence in depth: Task 9 never retires one)
 		}

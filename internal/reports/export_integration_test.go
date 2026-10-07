@@ -120,6 +120,7 @@ func TestExportAuditsBeforeTheFirstByte(t *testing.T) {
 	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT details::text FROM audit_log WHERE action = 'inventory.exported'`).Scan(&details))
 	assert.Contains(t, details, `"kind": "certificates"`)
 	assert.Contains(t, details, `"expiry": "30"`)
+	assert.Contains(t, details, `"row_count": "`)
 	assert.Contains(t, details, `"q": "=cmd"`, "the filter is recorded as given (audit details are data, never a CSV)")
 }
 

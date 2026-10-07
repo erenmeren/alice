@@ -147,6 +147,7 @@ func (s *Service) export(ctx context.Context, a audit.Actor, details map[string]
 		}
 		cursor = next
 	}
+	details["row_count"] = strconv.Itoa(count) // what pass 1 counted; rows added since may be cut at the cap
 	if err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: a, Action: "inventory.exported", ObjectType: details["kind"],
 			Result: audit.Success, Details: details})

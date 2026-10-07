@@ -344,3 +344,20 @@ func TestDestroyFollowsTheRetentionSetting(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, n, "destroyed after 7 days, not 30")
 }
+
+// A stored retention far beyond the 3650-day limit is clamped on read; it must never overflow into "destroy now".
+func TestDestroyClampsAnAbsurdRetention(t *testing.T) {
+	e := newEnv(t)
+	k := e.generate("ci")
+	e.retireAt(k.ID, e.clock.Now())
+	require.NoError(t, settings.Set(e.ctx, e.db.App, settings.GeneralKey,
+		settings.General{RetiredKeyRetentionDays: 200000, Version: 1}, e.clock.Now()))
+	e.clock.Advance(365 * 24 * time.Hour)
+	n, err := e.svc.DestroyRetiredKeys(e.ctx)
+	require.NoError(t, err)
+	assert.Zero(t, n, "a year after retirement the key is kept")
+	e.clock.Advance(3650 * 24 * time.Hour)
+	n, err = e.svc.DestroyRetiredKeys(e.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "clamped to 3650 days")
+}
