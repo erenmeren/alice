@@ -4,8 +4,8 @@ import { Link } from 'react-router';
 import type { DashboardSummary } from '../../api/phase7';
 import { Widget } from './Widget';
 
-// CertificateCounts shows the exclusive expiry buckets (an expired certificate is in no other line); each line links
-// to the certificate list with the matching filter.
+// CertificateCounts shows cumulative windows with the list filter's own meaning (expiry=N lists everything that ends
+// before now + N days, the expired included), so each count equals the rows its link opens.
 export function CertificateCounts({ counts }: { counts: DashboardSummary['certificates'] }) {
   const { t } = useTranslation();
   const lines = [
@@ -14,7 +14,8 @@ export function CertificateCounts({ counts }: { counts: DashboardSummary['certif
     { key: 'dashboard.within30', n: counts.within_30, color: 'yellow', to: '/certificates?expiry=30' },
     { key: 'dashboard.within60', n: counts.within_60, color: 'gray', to: '/certificates?expiry=60' },
   ];
-  const kv = counts.kv_within_30 + counts.kv_expired;
+  // Cumulative as well: kv_within_30 already includes the expired Key Vault items.
+  const kv = counts.kv_within_30;
   return (
     <Widget title={t('nav.certificates')} testId="dashboard-counts">
       <Stack gap="xs">

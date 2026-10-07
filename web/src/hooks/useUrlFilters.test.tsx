@@ -87,3 +87,19 @@ describe('useDebouncedParam', () => {
     expect(writes).toEqual([]);
   });
 });
+
+function Wired() {
+  const [params, setParams] = useSearchParams();
+  const [draft, change] = useDebouncedParam(params.get('q') ?? '', (v) => setParams({ q: v }), 10);
+  return <input aria-label="w" value={draft} onChange={(e) => change(e.currentTarget.value)} />;
+}
+
+describe('useDebouncedParam with the address', () => {
+  it('keeps a trailing space while the written value lands in the address', async () => {
+    const router = createMemoryRouter([{ path: '*', element: <Wired /> }], { initialEntries: ['/x'] });
+    render(<RouterProvider router={router} />);
+    await userEvent.type(screen.getByLabelText('w'), 'foo ');
+    await waitFor(() => expect(router.state.location.search).toBe('?q=foo'));
+    expect(screen.getByLabelText('w')).toHaveValue('foo ');
+  });
+});

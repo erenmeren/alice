@@ -46,7 +46,8 @@ export function useDebouncedParam(urlValue: string, write: (value: string) => vo
   useEffect(() => () => window.clearTimeout(timer.current), []);
   if (seen !== urlValue) {
     setSeen(urlValue);
-    if (!pending) setDraft(urlValue);
+    // A trailing space is not part of the written value: do not take it away while the person types.
+    if (!pending && draft.trim() !== urlValue) setDraft(urlValue);
   }
   const change = useCallback(
     (value: string) => {

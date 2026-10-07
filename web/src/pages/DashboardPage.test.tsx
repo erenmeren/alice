@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { adminSession, auditorSession, operatorSession, sessionFor, sessionHandlers } from '../test/fixtures';
 import { renderRoute } from '../test/render';
@@ -6,7 +6,7 @@ import { server } from '../test/server';
 
 const summary = (over: Record<string, unknown> = {}) => ({
   generated_at: '2026-10-07T09:00:00Z',
-  certificates: { monitored: 8, expired: 1, within_7: 2, within_30: 3, within_60: 1, kv_expired: 0, kv_within_30: 2 },
+  certificates: { monitored: 8, expired: 1, within_7: 3, within_30: 6, within_60: 7, kv_expired: 0, kv_within_30: 2 },
   deployments: { failed_7d: 1, recent: [{ id: 'd1', certificate_name: 'api.seed.test', target_id: 't1', target_name: 'seed-web-1', status: 'failed', error_code: 'ngx.reload_failed', at: '2026-10-06T09:00:00Z' }] },
   targets: { total: 3, by_status: { ok: 2, host_key_changed: 1, unreachable: 0 } },
   license: { expired: false, phase: 'active', ends_at: '2026-11-16T09:00:00Z', days_left: 40 },
@@ -48,9 +48,9 @@ describe('DashboardPage', () => {
     await renderRoute('/');
     const counts = await screen.findByTestId('dashboard-counts');
     expect(within(counts).getByRole('link', { name: /Expired.*1/ })).toHaveAttribute('href', '/certificates?expiry=expired');
-    expect(within(counts).getByRole('link', { name: /Within 7 days.*2/ })).toHaveAttribute('href', '/certificates?expiry=7');
-    expect(within(counts).getByRole('link', { name: /In 8 to 30 days.*3/ })).toHaveAttribute('href', '/certificates?expiry=30');
-    expect(within(counts).getByRole('link', { name: /In 31 to 60 days.*1/ })).toHaveAttribute('href', '/certificates?expiry=60');
+    expect(within(counts).getByRole('link', { name: /Within 7 days.*3/ })).toHaveAttribute('href', '/certificates?expiry=7');
+    expect(within(counts).getByRole('link', { name: /Within 30 days.*6/ })).toHaveAttribute('href', '/certificates?expiry=30');
+    expect(within(counts).getByRole('link', { name: /Within 60 days.*7/ })).toHaveAttribute('href', '/certificates?expiry=60');
     expect(within(counts).getByText('Certificates in use: 8')).toBeInTheDocument();
     expect(within(counts).getByRole('link', { name: /Key Vault items expiring within 30 days: 2/ })).toHaveAttribute('href', '/key-vaults');
   });
@@ -119,6 +119,20 @@ describe('DashboardPage', () => {
     server.use(...sessionHandlers(adminSession), http.get('/api/v1/dashboard/summary', () => HttpResponse.json({ code: 'ALC-SYS-0001' }, { status: 500 })), ...handlers());
     await renderRoute('/');
     expect((await screen.findAllByRole('alert')).length).toBeGreaterThan(0);
+  });
+
+  it('marks the grid busy while loading and shows each failing query separately', async () => {
+    server.use(
+      ...sessionHandlers(adminSession),
+      http.get('/api/v1/dashboard/summary', () => HttpResponse.json({ error: { code: 'ALC-SYS-0001' } }, { status: 500 })),
+      http.get('/api/v1/alerts', () => HttpResponse.json({ error: { code: 'ALC-SYS-0001' } }, { status: 500 })),
+      ...handlers(),
+    );
+    await renderRoute('/');
+    expect(await screen.findByText('The dashboard could not be loaded.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThanOrEqual(2));
+    expect(await screen.findByTestId('expiring-list')).toBeInTheDocument();
+    expect(document.querySelector('[aria-busy="false"]')).not.toBeNull();
   });
 
   it('renders in Turkish', async () => {

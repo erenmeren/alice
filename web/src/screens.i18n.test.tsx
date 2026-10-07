@@ -155,7 +155,7 @@ const dataHandlers = [
   http.get('/api/v1/dashboard/summary', () =>
     HttpResponse.json({
       ...emptyDashboardSummary,
-      certificates: { monitored: 8, expired: 1, within_7: 2, within_30: 3, within_60: 1, kv_expired: 1, kv_within_30: 2 },
+      certificates: { monitored: 8, expired: 1, within_7: 3, within_30: 6, within_60: 7, kv_expired: 1, kv_within_30: 3 },
       deployments: { failed_7d: 1, recent: [{ id: 'd1', certificate_name: 'api.seed.test', target_id: 't1', target_name: 'seed-web-1', status: 'failed', error_code: '', at: '2026-10-06T09:00:00Z' }] },
       targets: { total: 3, by_status: { ok: 2, host_key_changed: 1 } },
       license: { expired: false, phase: 'grace', ends_at: '2026-11-16T09:00:00Z', days_left: 40 },

@@ -18,3 +18,11 @@ describe('SSH key query keys', () => {
     expect(keyFiles('t1').slice(0, 2)).toEqual(targetKey('t1'));
   });
 });
+
+describe('Phase 7 query keys', () => {
+  it('put the expiring list under the dashboard prefix, so one invalidation refreshes both', async () => {
+    const { DASHBOARD_KEY, EXPIRING_KEY, viewsKey } = await import('./queryKeys');
+    expect(EXPIRING_KEY.slice(0, DASHBOARD_KEY.length)).toEqual([...DASHBOARD_KEY]);
+    expect(viewsKey('certificates')).not.toEqual(viewsKey('ssh_keys'));
+  });
+});

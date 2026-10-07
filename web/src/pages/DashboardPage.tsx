@@ -14,6 +14,7 @@ import { LicenseCard } from '../components/dashboard/LicenseCard';
 import { RotationUpcoming } from '../components/dashboard/RotationUpcoming';
 import { TargetsByStatus } from '../components/dashboard/TargetsByStatus';
 import { ErrorAlert } from '../components/ErrorAlert';
+import { LoadingIndicator } from '../components/LoadingIndicator';
 
 // Background reads: they are polling, so they do not carry the activity mark (R39 item 1).
 const REFRESH_MS = 60_000;
@@ -34,6 +35,9 @@ export function DashboardPage() {
   if (version.isError) status = t('home.serverUnreachable');
 
   const s = summary.data;
+  const loading = summary.isPending || expiring.isPending || alerts.isPending;
+  // Each failing query shows its own error, so a partial dashboard says which part is missing.
+  const failed = [summary, expiring, alerts].filter((q) => q.isError);
   return (
     <Stack gap="md">
       <div>
@@ -45,8 +49,16 @@ export function DashboardPage() {
       <Text size="sm" c="gray.7" data-testid="server-status" aria-live="polite">
         {status}
       </Text>
-      <ErrorAlert error={summary.error ?? expiring.error ?? alerts.error} />
-      <SimpleGrid cols={{ base: 1, md: 2, xl: 3 }}>
+      {failed.length > 0 && (
+        <Stack gap="xs">
+          <Text fw={600}>{t('dashboard.loadFailed')}</Text>
+          {failed.map((q, i) => (
+            <ErrorAlert key={i} error={q.error} />
+          ))}
+        </Stack>
+      )}
+      {loading && <LoadingIndicator />}
+      <SimpleGrid cols={{ base: 1, md: 2, xl: 3 }} aria-busy={loading}>
         {s && <CertificateCounts counts={s.certificates} />}
         {expiring.data && <ExpiringList items={expiring.data.items} />}
         {s && <FailedDeployments deployments={s.deployments} />}
