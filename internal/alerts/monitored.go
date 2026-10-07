@@ -12,9 +12,11 @@ const maxListed = 10
 
 // itemsSQL is the one definition of "monitored" (R42 row 4): a certificate is monitored while a live location of a live
 // target holds it; a Key Vault certificate whose current version is such a certificate is covered by that
-// certificate's notice; keys and the vault's client secret are monitored while their vault is.
+// certificate's notice; keys and the vault's client secret are monitored while their vault is. live is NOT
+// MATERIALIZED: it is read once per certificate by the correlated subqueries, which must use the index on
+// certificate_locations (certificate_id) instead of scanning every location each time (R32: 5,000 certificates).
 const itemsSQL = `
-WITH live AS (
+WITH live AS NOT MATERIALIZED (
     SELECT l.certificate_id, l.servers, t.id AS target_id, t.name::text AS target_name
     FROM certificate_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
     WHERE l.missing_since IS NULL AND l.certificate_id IS NOT NULL
