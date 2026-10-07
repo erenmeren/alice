@@ -373,7 +373,8 @@ const alertsScanLock = "alerts.scan"
 // scan of a process that lost the lead may still run when the new leader starts one. The scan therefore holds a
 // session lock in the database and a second one skips: two overlapping scans could record a less urgent notice after
 // a more urgent one for the same expiry (their ledgers are read at the start of each scan). When the scan recorded
-// notices that reach nobody, it says so (warnIfNobodyIsEmailed).
+// notices that reach nobody, it says so (warnIfNobodyIsEmailed). A scan that fails after it recorded some notices skips
+// that check: the next successful scan's notices bring the warning (accepted; Task 13 review minor 5).
 func scanAlerts(ctx context.Context, svc *services, log *slog.Logger) error {
 	return runExclusive(ctx, svc.pool, alertsScanLock, log, func(ctx context.Context) error {
 		res, err := svc.alerts.Scan(ctx)
@@ -396,7 +397,10 @@ func scanAlerts(ctx context.Context, svc *services, log *slog.Logger) error {
 
 // runExclusive runs fn while a connection of its own holds the session advisory lock name. When another session holds
 // it, fn is skipped with an Info line (event "<name>_skipped") and nil is returned. The lock ends with the session, so
-// a process that dies never leaves it behind.
+// a process that dies never leaves it behind. The lock connection is idle while fn runs: if that one session ends
+// meanwhile (idle_session_timeout, a proxy's idle cut, a reset), the lock is gone and another process's run may have
+// overlapped. That cannot be prevented here, so the release step detects it (the unlock fails or finds no lock) and
+// logs a WARN (event "<name>_lock_lost").
 func runExclusive(ctx context.Context, pool *pgxpool.Pool, name string, log *slog.Logger, fn func(context.Context) error) error {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -414,7 +418,13 @@ func runExclusive(ctx context.Context, pool *pgxpool.Pool, name string, log *slo
 	defer func() {
 		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		if _, err := conn.Exec(uctx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, name); err != nil {
+		var held bool
+		err := conn.QueryRow(uctx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, name).Scan(&held)
+		if err != nil || !held {
+			log.Warn("scheduled task lost its lock while it ran; a run of another process may have overlapped it",
+				"job_type", name, "event", name+"_lock_lost")
+		}
+		if err != nil {
 			// Closing the session ends the lock; the pool then drops the connection.
 			_ = conn.Conn().Close(uctx)
 		}

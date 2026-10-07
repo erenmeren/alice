@@ -167,7 +167,8 @@ func (b *testMailbox) reset() {
 
 var e2eMailbox = &testMailbox{}
 
-// testMailer makes serve use the mailbox instead of SMTP.
+// testMailer makes serve use the mailbox instead of SMTP while no mail settings exist. Never set ALICE_SMTP_* in the e2e
+// compose: serve would import them as the mail settings and the mailbox would no longer receive anything.
 var testMailer notify.Mailer = e2eMailbox
 
 // resetSQL empties every application table. master_key_versions is kept because the master

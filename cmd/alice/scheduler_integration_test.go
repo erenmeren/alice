@@ -15,9 +15,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/audit"
 	"alice/internal/i18n"
 	"alice/internal/jobs"
 	"alice/internal/license"
+	"alice/internal/notify"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/config"
 	"alice/internal/platform/logging"
@@ -161,7 +163,7 @@ func TestRotationTasksCallTheirServiceFunctions(t *testing.T) {
 }
 
 // alertsStack is serve's services and scheduler on a fresh database, logging to a buffer the test reads.
-func alertsStack(t *testing.T) (*pgtest.DB, *jobs.Scheduler, *lockedBuffer) {
+func alertsStack(t *testing.T) (*pgtest.DB, *services, *jobs.Scheduler, *lockedBuffer) {
 	t.Helper()
 	d := pgtest.New(t)
 	ctx := context.Background()
@@ -178,7 +180,7 @@ func alertsStack(t *testing.T) (*pgtest.DB, *jobs.Scheduler, *lockedBuffer) {
 	require.NoError(t, err)
 	t.Cleanup(svc.sshPool.Close)
 	require.NoError(t, svc.license.Start(ctx))
-	return d, buildScheduler(svc, buildSender(d.App, svc, catalog, clock.Real{}, log), clock.Real{}, log), logs
+	return d, svc, buildScheduler(svc, buildSender(d.App, svc, catalog, clock.Real{}, log), clock.Real{}, log), logs
 }
 
 // seedExpiring puts a certificate expiring in left on a new server, so it is monitored.
@@ -195,7 +197,7 @@ func seedExpiring(t *testing.T, d *pgtest.DB, server, cn string, left time.Durat
 // Administrator holding an e-mail address, the notice is recorded but reaches nobody: the task says so in one WARN line
 // with an event name (Task 7 review carry), and says nothing once someone receives the notices.
 func TestAlertsScanTaskQueuesNoticesAndWarnsWithoutRecipients(t *testing.T) {
-	d, sched, logs := alertsStack(t)
+	d, svc, sched, logs := alertsStack(t)
 	ctx := context.Background()
 	admin := insertUser(t, d, "ada", "admin")
 	seedExpiring(t, d, "web-1", "www.example.test", 5*24*time.Hour)
@@ -213,10 +215,54 @@ func TestAlertsScanTaskQueuesNoticesAndWarnsWithoutRecipients(t *testing.T) {
 	require.NoError(t, sched.RunNow(ctx, jobs.AlertsScan.Name))
 	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM notifications_outbox WHERE template_key LIKE 'alert.%' AND to_address = 'ada@example.com'"))
 
+	// Administrators switched off and no extra address (a stored value; the settings form refuses it): nobody, so the
+	// line comes again although an Administrator has an address.
+	_, err = d.Owner.Exec(ctx, `INSERT INTO settings (key, value) VALUES ('notify.recipients', '{"administrators":false,"addresses":[],"version":1}')`)
+	require.NoError(t, err)
+	seedExpiring(t, d, "web-3", "shop.example.test", 4*24*time.Hour)
+	require.NoError(t, sched.RunNow(ctx, jobs.AlertsScan.Name))
+	assert.Equal(t, 2, strings.Count(logs.String(), `"event":"alerts.no_recipients"`))
+
+	// Extra addresses only (Administrators still off): the notice reaches the address, no line.
+	_, err = svc.notifySettings.SaveRecipients(ctx, audit.SystemActor("test"), 1, notify.Recipients{
+		Addresses: []notify.Address{{Email: "ops@example.com", Locale: "en"}}})
+	require.NoError(t, err)
+	seedExpiring(t, d, "web-4", "mail.example.test", 2*24*time.Hour)
+	require.NoError(t, sched.RunNow(ctx, jobs.AlertsScan.Name))
+	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM notifications_outbox WHERE template_key LIKE 'alert.%' AND to_address = 'ops@example.com'"))
+	assert.Equal(t, 2, strings.Count(logs.String(), `"event":"alerts.no_recipients"`))
+
 	// Nothing new is due: no notice, no recipient check, no line.
 	require.NoError(t, sched.RunNow(ctx, jobs.AlertsScan.Name))
-	assert.Equal(t, 2, countRows(t, d, "SELECT count(*) FROM alerts"))
-	assert.Equal(t, 1, strings.Count(logs.String(), `"event":"alerts.no_recipients"`))
+	assert.Equal(t, 4, countRows(t, d, "SELECT count(*) FROM alerts"))
+	assert.Equal(t, 2, strings.Count(logs.String(), `"event":"alerts.no_recipients"`))
+}
+
+// Task 13 review minor 3: when the lock's own session ends while the task runs, the lock is gone; the release step
+// notices it and says so (event <name>_lock_lost). A normal run logs no such line.
+func TestRunExclusiveReportsALostLock(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	logs := &lockedBuffer{}
+	log := logging.New(logs, slog.LevelInfo)
+	require.NoError(t, runExclusive(ctx, d.App, "test.exclusive", log, func(context.Context) error { return nil }))
+	assert.NotContains(t, logs.String(), "lock_lost")
+
+	ran := false
+	require.NoError(t, runExclusive(ctx, d.App, "test.exclusive", log, func(ctx context.Context) error {
+		ran = true
+		_, err := d.Owner.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks
+WHERE locktype = 'advisory' AND granted AND pid <> pg_backend_pid()`)
+		return err
+	}))
+	assert.True(t, ran)
+	assert.Contains(t, logs.String(), `"event":"test.exclusive_lock_lost"`)
+	assert.Regexp(t, `"level":"WARN","msg":"scheduled task lost its lock`, logs.String())
+
+	// The pool dropped the dead connection: the next run takes the lock again.
+	ran = false
+	require.NoError(t, runExclusive(ctx, d.App, "test.exclusive", log, func(context.Context) error { ran = true; return nil }))
+	assert.True(t, ran)
 }
 
 // One alerts.scan at a time, also across processes (Task 8 review carry: two overlapping scans could record a less
@@ -224,7 +270,7 @@ func TestAlertsScanTaskQueuesNoticesAndWarnsWithoutRecipients(t *testing.T) {
 // share its semaphore); the scan also holds a database lock, so a scan of another process (a leadership handover)
 // makes this one skip instead of overlapping.
 func TestAlertsScanRunsOneAtATime(t *testing.T) {
-	d, sched, logs := alertsStack(t)
+	d, _, sched, logs := alertsStack(t)
 	ctx := context.Background()
 	seedExpiring(t, d, "web-1", "www.example.test", 5*24*time.Hour)
 
