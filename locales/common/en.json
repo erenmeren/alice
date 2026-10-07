@@ -139,6 +139,11 @@
         "title": "Alice needs at least one active administrator.",
         "cause": "This change would leave no enabled local administrator who can sign in.",
         "action": "Give another person the Administrator role first, then try again."
+      },
+      "sso_user": {
+        "title": "This change is not possible for a single sign-on user.",
+        "cause": "The role of a single sign-on user comes from their groups, and they have no Alice password or authenticator.",
+        "action": "Change the user's groups at the identity provider; disable the user here if they must stop at once."
       }
     },
     "token": {
@@ -567,6 +572,70 @@
         "title": "Alice could not queue the email about the license renewal.",
         "cause": "Writing the email to Alice's outbox failed. A paused rotation continues only after that email is queued, and Alice tries again at every background check.",
         "action": "Check Alice's logs and its database, then choose Continue again once the email is queued."
+      },
+      "smtp_not_configured": {
+        "title": "Mail settings are missing.",
+        "cause": "Alice has no mail server to send through.",
+        "action": "Enter the mail server in Settings, then try again."
+      },
+      "smtp_connect": {
+        "title": "Alice could not reach the mail server.",
+        "cause": "The server name or port may be wrong, the server may be down, or a firewall blocks the connection.",
+        "action": "Check the server name and port, then send a test e-mail again."
+      },
+      "smtp_tls": {
+        "title": "The encrypted connection to the mail server failed.",
+        "cause": "The server does not offer the selected encryption (STARTTLS or TLS), or the handshake failed.",
+        "action": "Choose the encryption the server offers (port 587 usually uses STARTTLS, port 465 TLS), then try again."
+      },
+      "smtp_untrusted": {
+        "title": "Alice does not trust the mail server's certificate.",
+        "cause": "The certificate is not signed by a trusted authority, does not match the server name, or has expired. Its fingerprint is shown below.",
+        "action": "Check with your mail administrator that the fingerprint is the server's, then choose Trust this certificate, or add your organisation's certificate authority."
+      },
+      "smtp_auth": {
+        "title": "The mail server rejected the user name or password.",
+        "cause": "The sign-in data in the mail settings are wrong or the account is locked at the mail server.",
+        "action": "Enter the correct user name and password, then send a test e-mail again."
+      },
+      "smtp_rejected": {
+        "title": "The mail server refused the message.",
+        "cause": "The sender or recipient address is not accepted by the server.",
+        "action": "Check the sender address and the recipient, then try again."
+      },
+      "certificate_not_seen": {
+        "title": "Alice did not see this certificate recently.",
+        "cause": "Only a certificate that a test e-mail found in the last hour can be trusted.",
+        "action": "Send a test e-mail again, then trust the certificate it shows."
+      },
+      "smtp_address_refused": {
+        "title": "Alice does not connect to this mail server address.",
+        "cause": "The server name points to a link-local or cloud metadata address, which Alice never contacts.",
+        "action": "Use the mail server's normal address."
+      }
+    },
+    "export": {
+      "too_large": {
+        "title": "The export is too large.",
+        "cause": "An export holds at most {{max}} rows, and this filter matches more.",
+        "action": "Narrow the filter, for example by server or expiry, then export again."
+      },
+      "busy": {
+        "title": "Another export of yours is still running.",
+        "cause": "Each person can run one export at a time, and your previous export has not finished yet.",
+        "action": "Wait until the previous download has finished, then export again."
+      }
+    },
+    "views": {
+      "limit_reached": {
+        "title": "You have reached the limit of saved views.",
+        "cause": "A person can keep at most {{max}} saved views.",
+        "action": "Delete a view you no longer need, then save again."
+      },
+      "name_taken": {
+        "title": "A saved view with this name already exists.",
+        "cause": "Each of your views on a page needs its own name.",
+        "action": "Choose another name."
       }
     },
     "job": {
@@ -1091,6 +1160,50 @@
       "test": {
         "subject": "Alice test e-mail",
         "body": "This is a test e-mail from Alice. If you received it, Alice can send e-mails with the current mail settings."
+      }
+    },
+    "alert": {
+      "certificate_expiring": {
+        "subject": "Certificate expiring: {{name}} (days left: {{days}})",
+        "body": "The certificate {{name}} expires at {{expires_at}}. Days left: {{days}}.\n\nWebsites: {{websites}}\nServers: {{servers}}\nFingerprint (SHA-256): {{fingerprint}}\n\nRenew it and deploy the new certificate before then. The Dashboard in Alice lists every certificate that expires soon."
+      },
+      "certificate_expired": {
+        "subject": "Certificate expired: {{name}}",
+        "body": "The certificate {{name}} expired at {{expires_at}} and is still in use.\n\nWebsites: {{websites}}\nServers: {{servers}}\nFingerprint (SHA-256): {{fingerprint}}\n\nVisitors of these websites now see a security warning. Deploy a valid certificate as soon as possible."
+      },
+      "kv_certificate_expiring": {
+        "subject": "Key Vault certificate expiring: {{name}} (days left: {{days}})",
+        "body": "The certificate {{name}} in the Key Vault {{vault}} expires at {{expires_at}}. Days left: {{days}}.\n\nIf the vault renews it automatically, Alice deploys the new version where it is connected. Otherwise renew it in Azure before then."
+      },
+      "kv_certificate_expired": {
+        "subject": "Key Vault certificate expired: {{name}}",
+        "body": "The certificate {{name}} in the Key Vault {{vault}} expired at {{expires_at}}.\n\nRenew it in Azure; Alice deploys the new version where it is connected."
+      },
+      "kv_key_expiring": {
+        "subject": "Key Vault key expiring: {{name}} (days left: {{days}})",
+        "body": "The key {{name}} in the Key Vault {{vault}} expires at {{expires_at}}. Days left: {{days}}.\n\nApplications that use this key stop working with it after that time. Create a new key version in Azure before then."
+      },
+      "kv_key_expired": {
+        "subject": "Key Vault key expired: {{name}}",
+        "body": "The key {{name}} in the Key Vault {{vault}} expired at {{expires_at}}.\n\nCreate a new key version in Azure and update the applications that use it."
+      },
+      "kv_credential_expiring": {
+        "subject": "Key Vault sign-in secret expiring: {{vault}} (days left: {{days}})",
+        "body": "The client secret Alice uses to sign in to the Key Vault {{vault}} expires at {{expires_at}}. Days left: {{days}}.\n\nCreate a new client secret in Microsoft Entra ID and enter it on the vault's page in Alice before then. After that time Alice cannot read the vault."
+      },
+      "kv_credential_expired": {
+        "subject": "Key Vault sign-in secret expired: {{vault}}",
+        "body": "The client secret Alice uses to sign in to the Key Vault {{vault}} expired at {{expires_at}}.\n\nCreate a new client secret in Microsoft Entra ID and enter it on the vault's page in Alice."
+      },
+      "more": {
+        "subject": "More expiry notices: {{count}}",
+        "body": "In this check, {{count}} more items reached an expiry threshold. Alice did not send a separate e-mail for each of them.\n\nOpen the Dashboard in Alice to see them all."
+      }
+    },
+    "auth": {
+      "lockout": {
+        "subject": "Sign-in blocked: {{username}}",
+        "body": "After {{failed_logins}} failed sign-in attempts, Alice blocked sign-in for the account {{username}} for {{minutes}} minutes.\n\nIf this was not the account's owner, someone may be guessing the password. An administrator can end the block early on the host with the command alice admin unlock."
       }
     },
     "deployment": {

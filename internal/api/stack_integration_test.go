@@ -25,6 +25,7 @@ import (
 	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/alerts"
 	"alice/internal/audit"
 	"alice/internal/auth"
 	"alice/internal/i18n"
@@ -44,6 +45,7 @@ import (
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/nginx"
+	"alice/internal/reports"
 	"alice/internal/secrets"
 	"alice/internal/setup"
 	"alice/internal/sshkeys"
@@ -98,21 +100,26 @@ type exchange struct {
 func (e exchange) key() string { return e.method + " " + e.path }
 
 type stack struct {
-	t           *testing.T
-	db          *pgtest.DB
-	clock       *clock.Fake
-	keysDir     string
-	logs        *syncBuffer
-	trusted     []netip.Prefix
-	keyring     *secrets.Keyring
-	auth        *auth.Service
-	setup       *setup.Service
-	auditSvc    *audit.Service
-	license     *license.Service
-	inv         *inventory.Service
-	sshKeys     *sshkeys.Service // Phase 6: generated keys and rotation; its job handlers are on every runner (sshkeyjobs)
-	tick        *tickClock       // the Phase 6 services' clock: s.clock, moving 1 ms on every read while switched on
-	mailbox     *mailbox         // what deliverMail handed to the "SMTP server"
+	t        *testing.T
+	db       *pgtest.DB
+	clock    *clock.Fake
+	keysDir  string
+	logs     *syncBuffer
+	trusted  []netip.Prefix
+	keyring  *secrets.Keyring
+	auth     *auth.Service
+	setup    *setup.Service
+	auditSvc *audit.Service
+	license  *license.Service
+	inv      *inventory.Service
+	sshKeys  *sshkeys.Service // Phase 6: generated keys and rotation; its job handlers are on every runner (sshkeyjobs)
+	// Phase 7: mail settings, expiry thresholds, the dashboard, exports and saved views, wired as cmd/alice does (release:
+	// no dialer override and no fallback mailbox).
+	mail        *notify.Settings
+	alerts      *alerts.Service
+	reports     *reports.Service
+	tick        *tickClock // the Phase 6 services' clock: s.clock, moving 1 ms on every read while switched on
+	mailbox     *mailbox   // what deliverMail handed to the "SMTP server"
 	auditLog    *audit.Log
 	queue       *jobs.Queue
 	runner      *jobs.Runner
@@ -237,6 +244,13 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 		Notifier: notify.AdminNotifier{Clock: s.tick}, Log: log, HelperBudget: helperproto.HelperBudget,
 	})
 	s.auditLog = auditLog
+	catalog, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s.mail = notify.NewSettings(notify.SettingsConfig{Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Catalog: catalog, Log: log})
+	s.alerts = alerts.New(alerts.Config{Pool: s.db.App, Audit: auditLog, Clock: s.clock, License: s.license,
+		Notifier: notify.AdminNotifier{Clock: s.clock}, Log: log})
+	s.reports = reports.New(reports.Config{Pool: s.db.App, Clock: s.clock, Audit: auditLog, License: s.license, Alerts: s.alerts,
+		Delivery: s.mail, Inventory: s.inv})
 	s.runner = s.newRunner("", 0)
 }
 
@@ -283,6 +297,9 @@ func (s *stack) deps() Deps {
 		Jobs:           s.queue,
 		Providers:      s.registry,
 		SSHKeys:        s.sshKeys,
+		Mail:           s.mail,
+		Alerts:         s.alerts,
+		Reports:        s.reports,
 		TrustedProxies: s.trusted,
 	}
 }

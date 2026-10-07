@@ -441,7 +441,9 @@ func newAPIDeps(cfg config.Config, svc *services, health api.HealthChecker, cata
 		SSHKeys:        sshKeysAPI(svc),
 		TrustedProxies: cfg.TrustedProxies,
 		TestHandler:    testHandler,
-		// TODO(Task 14): Mail: svc.notifySettings, Alerts: svc.alerts, Reports: svc.reports (the api.Deps fields Task 14 adds).
+		Mail:           mailAPI(svc),
+		Alerts:         alertsAPI(svc),
+		Reports:        reportsAPI(svc),
 		// TODO(Task 15): SSO: svc.oidc (the api.Deps field Task 15 adds).
 	}
 }
@@ -453,6 +455,28 @@ func sshKeysAPI(svc *services) api.SSHKeysService {
 		return nil
 	}
 	return svc.sshkeys
+}
+
+// mailAPI, alertsAPI and reportsAPI keep a nil service a nil interface (C-s4-06), as sshKeysAPI does.
+func mailAPI(svc *services) api.MailService {
+	if svc.notifySettings == nil {
+		return nil
+	}
+	return svc.notifySettings
+}
+
+func alertsAPI(svc *services) api.AlertsService {
+	if svc.alerts == nil {
+		return nil
+	}
+	return svc.alerts
+}
+
+func reportsAPI(svc *services) api.ReportsService {
+	if svc.reports == nil {
+		return nil
+	}
+	return svc.reports
 }
 
 // waitForScheduler waits for running scheduled tasks to return, at most until ctx ends. It

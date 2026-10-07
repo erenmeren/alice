@@ -2,11 +2,14 @@ package notify_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/alerts"
+	"alice/internal/auth"
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/license"
@@ -273,4 +276,37 @@ func TestRotationTemplatesRender(t *testing.T) {
 	m := s.Render("ada@example.com", sshkeys.TemplatePausedLicense, "en", hostile)
 	assert.NotContains(t, m.Subject, "\n")
 	assert.NotContains(t, m.Body, "\nBcc:")
+}
+
+// C14: every alert and auth template exists in English and Turkish, uses only the params its sender passes, and keeps
+// its subject on one line; owner step 2 reads the website name and the date in the expiry e-mail.
+func TestAlertAndAuthTemplatesRenderInBothLanguages(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	params := map[string]string{"name": "www.example.com", "vault": "prod-vault", "days": "7", "expires_at": "2026-12-01 09:00 UTC",
+		"websites": "www.example.com, example.com", "servers": "web-01", "fingerprint": strings.Repeat("ab", 32), "count": "5",
+		"username": "ada", "failed_logins": "10", "minutes": "15", "license_note": "true", "license_url": "/license"}
+	for _, tpl := range append(alerts.Templates(), auth.Templates()...) {
+		for _, lang := range []string{"en", "tr"} {
+			m := s.Render("ada@example.com", tpl, lang, params)
+			assert.NotContains(t, m.Subject, "{{", "%s %s", tpl, lang)
+			assert.NotContains(t, m.Body, "{{", "%s %s", tpl, lang)
+			assert.NotContains(t, m.Subject, "email.", "%s %s: the key itself means a missing text", tpl, lang)
+			assert.NotContains(t, m.Body, "email.", "%s %s: the key itself means a missing text", tpl, lang)
+			assert.NotContains(t, m.Subject, "\n")
+		}
+	}
+	m := s.Render("ada@example.com", "alert.certificate_expiring", "en", params)
+	assert.Equal(t, "Certificate expiring: www.example.com (days left: 7)", m.Subject)
+	assert.Contains(t, m.Body, "Websites: www.example.com, example.com")
+	assert.Contains(t, m.Body, "2026-12-01 09:00 UTC", "owner step 2: the website name and the date")
+	tr := s.Render("ada@example.com", "alert.certificate_expiring", "tr", params)
+	assert.Equal(t, "Süresi dolmak üzere olan sertifika: www.example.com (kalan gün: 7)", tr.Subject)
+	assert.Contains(t, tr.Body, "Web siteleri: www.example.com, example.com")
+	lock := s.Render("ada@example.com", auth.TemplateLockout, "en", params)
+	assert.Equal(t, "Sign-in blocked: ada", lock.Subject)
+	assert.Contains(t, lock.Body, "After 10 failed sign-in attempts, Alice blocked sign-in for the account ada for 15 minutes.")
+	more := s.Render("ada@example.com", "alert.more", "tr", params)
+	assert.Equal(t, "Diğer süre dolumu bildirimleri: 5", more.Subject)
 }

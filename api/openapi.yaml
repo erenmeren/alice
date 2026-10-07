@@ -1580,9 +1580,9 @@ paths:
       x-permission: read
       parameters:
         - { name: target_id, in: query, required: false, schema: { type: string, format: uuid }, description: 'Certificates in use on this server' }
-        - { name: source, in: query, required: false, schema: { type: string, enum: [discovered, uploaded, csr] } }
+        - { name: source, in: query, required: false, schema: { type: string, enum: [discovered, uploaded, csr, azure_kv] } }
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 }, description: 'Part of the subject CN, a SAN, the label or the fingerprint' }
-        - { name: expiry, in: query, required: false, schema: { type: string, enum: [expired, "30", "60"] }, description: 'Expired, or expiring within 30 or 60 days (expired ones included)' }
+        - { name: expiry, in: query, required: false, schema: { type: string, enum: [expired, "7", "14", "30", "60", "90"] }, description: 'Expired (not_after at or before now), or expiring within 7, 14, 30, 60 or 90 days (before now + N days, expired ones included)' }
         - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
       responses:
@@ -2321,6 +2321,474 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/certificates/export:
+    get:
+      operationId: exportCertificates
+      summary: The certificate list as a CSV file, with the list's filters (no cursor, no limit)
+      description: >-
+        The whole list for the filters, in the list's order: UTF-8 with a byte order mark, a header row
+        (id,subject_cn,label,sans,issuer,serial,not_before,not_after,days_left,source,key_algorithm,key_bits,self_signed,chain_complete,fingerprint,location_count;
+        SANs separated by a space, times RFC 3339 UTC), then one row per certificate. Cells that start with =, +, -, @, a
+        tab or a carriage return get a leading apostrophe, so a spreadsheet never runs them as a formula. No private key
+        and no PEM is ever part of an export. The export is recorded in the audit log (inventory.exported with the
+        filters and the row count) before the first byte is sent. At most 50,000 rows: a filter that matches more is
+        refused with 409 ALC-RPT-0001 before anything is written (a JSON error, no file); Alice counts the rows first and
+        then streams them, so rows added between the count and the end of the file can make the file stop at 50,000
+        rows without an error. One export at a time per person (409 ALC-RPT-0004, retryable, Retry-After); at most 10
+        exports per minute per user or token (429). cursor or limit is refused with 422. Works while the license is
+        expired. A failure after the first byte aborts the connection: a cut file never looks complete.
+      x-permission: read
+      parameters:
+        - { name: target_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: source, in: query, required: false, schema: { type: string, enum: [discovered, uploaded, csr, azure_kv] } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
+        - { name: expiry, in: query, required: false, schema: { type: string, enum: [expired, "7", "14", "30", "60", "90"] } }
+      responses:
+        "200":
+          description: >-
+            The file, with Content-Disposition: attachment; filename="alice-certificates-<yyyy-mm-dd>.csv",
+            Cache-Control: no-store and X-Content-Type-Options: nosniff.
+          content:
+            text/csv:
+              schema: { type: string }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ssh-keys/export:
+    get:
+      operationId: exportSSHKeys
+      summary: The SSH key list as a CSV file, with the list's filters (no cursor, no limit)
+      description: >-
+        As GET /api/v1/certificates/export, with the header row
+        id,fingerprint,key_type,bits,comment,managed,platform_key,weak,location_count,target_count,missing,retired,first_seen_at
+        and the file name alice-ssh-keys-<yyyy-mm-dd>.csv. No key material besides the public fingerprint is exported.
+      x-permission: read
+      parameters:
+        - { name: target_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: os_user, in: query, required: false, schema: { type: string, maxLength: 32 } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
+        - { name: flag, in: query, required: false, schema: { type: string, enum: [weak, command, root_without_from, duplicate, cert_authority, security_key] } }
+        - { name: missing, in: query, required: false, schema: { type: boolean } }
+      responses:
+        "200":
+          description: The file (headers as the certificate export).
+          content:
+            text/csv:
+              schema: { type: string }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      summary: The Dashboard's figures, filtered for the caller's role
+      description: >-
+        The certificate counts are cumulative windows with the certificate list's meaning (expired: not_after at or
+        before now; within_N: not_after before now + N days, expired ones included), so each count equals the rows its
+        list link shows. kv_expired and kv_within_30 count Key Vault keys and client secrets. notifications is null
+        except for Administrators; audit is null for Operators (and before the first checkpoint); for Operators
+        license.phase is "" and license.ends_at and license.days_left are null.
+      x-permission: read
+      responses:
+        "200":
+          description: The summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DashboardSummary" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/dashboard/expiring:
+    get:
+      operationId: listExpiring
+      summary: Certificates in use and Key Vault certificates, keys and client secrets that expire soon, soonest first
+      x-permission: read
+      parameters:
+        - { name: days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 365, default: 30 }, description: 'Expiring within this many days (expired ones included)' }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: The items
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/ExpiringItem" } }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/alerts:
+    get:
+      operationId: listAlerts
+      summary: What needs attention now, newest first, filtered for the caller's role
+      description: >-
+        Servers whose identity changed or whose sign-in failed and failed deployments for everyone; a broken audit
+        chain for Administrators and Auditors; failing e-mail delivery for Administrators only.
+      x-permission: read
+      responses:
+        "200":
+          description: The conditions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Condition" } }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/notifications/status:
+    get:
+      operationId: getNotificationStatus
+      summary: The state behind the "E-mails could not be sent" banner
+      description: >-
+        Administrators get the delivery state (with the closed label of the last failure, for example smtp.auth); every
+        other role gets only {"failing": false}.
+      x-permission: read
+      responses:
+        "200":
+          description: The delivery state
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/Delivery" }
+                  - type: object
+                    required: [failing]
+                    additionalProperties: false
+                    properties:
+                      failing: { type: boolean, const: false }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/views:
+    get:
+      operationId: listViews
+      summary: The caller's saved views of one list page, by name
+      x-permission: session
+      parameters:
+        - { name: page, in: query, required: true, schema: { type: string, enum: [certificates, ssh_keys] } }
+      responses:
+        "200":
+          description: The views
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/View" } }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createView
+      summary: Save the current filters of a list page under a name (private to the caller)
+      description: >-
+        Keys are matched exactly; query holds only the page's filter keys (certificates: target_id, source, q, expiry;
+        ssh_keys: target_id, os_user, q, flag, missing), each value at most 200 characters. The name is 1 to 60
+        characters and unique per person and page in any letter case (409 ALC-RPT-0003). At most 50 views per person
+        (409 ALC-RPT-0002). Works while the license is expired.
+      x-permission: session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ViewInput" }
+      responses:
+        "201":
+          description: The saved view
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/View" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/views/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    delete:
+      operationId: deleteView
+      summary: Delete one of the caller's saved views (another person's view is not found)
+      x-permission: session
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/settings/smtp:
+    get:
+      operationId: getSMTPSettings
+      summary: The mail server settings (never the password)
+      description: ETag is the settings version, "0" when no mail server is configured.
+      x-permission: settings.manage
+      responses:
+        "200":
+          description: The settings
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SMTP" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putSMTPSettings
+      summary: Set the mail server (If-Match with the ETag is required; "0" for the first save)
+      description: >-
+        Keys are matched exactly. password: absent or null keeps the stored one, "" removes it, any other value replaces
+        it; it is stored sealed and never returned or logged. A user name needs a password: with a user name and no
+        stored or new password the answer is 422 with validation.required on password. 412 ALC-SYS-0008 when the
+        If-Match header is missing (answered first, before the body is read) or names another version. Changing the
+        server name or port forgets a certificate a test e-mail saw. Works while the license is expired.
+      x-permission: settings.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SMTPInput" }
+      responses:
+        "200":
+          description: The stored settings
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SMTP" }
+        "400": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteSMTPSettings
+      summary: Remove the mail settings and the stored password (If-Match required)
+      description: >-
+        E-mails are then recorded as skipped. The ALICE_SMTP_* variables are not imported again. 409 ALC-NTF-0002 when
+        nothing is configured.
+      x-permission: settings.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      responses:
+        "204": { description: Removed }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/settings/smtp/actions/test:
+    post:
+      operationId: sendTestMail
+      summary: Send a test e-mail now through the stored settings, in the caller's language
+      description: >-
+        At most 5 per minute per user (429). Every attempt is recorded in the audit log. Refusals carry no text of the
+        mail server: 409 ALC-NTF-0002 (not configured), 502 ALC-NTF-0003 (connection, retryable), 0004 (encryption),
+        0005 (certificate not trusted; params fingerprint, subject, not_after of the certificate the server presented,
+        which can then be trusted within one hour), 0006 (sign-in), 0007 (message refused), 409 ALC-NTF-0009 (address
+        Alice never connects to); 422 when to is not an address.
+      x-permission: settings.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to]
+              additionalProperties: false
+              properties:
+                to: { type: string, format: email, maxLength: 254 }
+      responses:
+        "200":
+          description: Sent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sent]
+                properties:
+                  sent: { type: boolean, const: true }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/settings/smtp/actions/trust:
+    post:
+      operationId: trustSMTPCertificate
+      summary: Trust exactly the certificate a failed test e-mail showed in the last hour (If-Match required)
+      description: >-
+        Alice then accepts the mail server only when it presents a certificate with this SHA-256 fingerprint (the name
+        and the expiry are not checked: the fingerprint is the decision). 409 ALC-NTF-0008 when no test e-mail to the
+        configured server and port saw this fingerprint in the last hour.
+      x-permission: settings.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fingerprint]
+              additionalProperties: false
+              properties:
+                fingerprint: { type: string, pattern: '^[0-9a-f]{64}$' }
+      responses:
+        "200":
+          description: The settings with the trusted certificate
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SMTP" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/settings/smtp/actions/untrust:
+    post:
+      operationId: untrustSMTPCertificate
+      summary: Stop trusting the pinned certificate (If-Match required; the body is empty or {})
+      x-permission: settings.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"4"'] } }
+      responses:
+        "200":
+          description: The settings without a trusted certificate
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SMTP" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/settings/notifications:
+    get:
+      operationId: getRecipients
+      summary: 'Who receives the e-mails Alice sends to Administrators (never saved: every Administrator, version 0)'
+      x-permission: settings.manage
+      responses:
+        "200":
+          description: The recipients
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Recipients" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putRecipients
+      summary: Set the recipients (If-Match required; "0" for the first save)
+      description: >-
+        At most 20 extra addresses, each a bare address with the language of what is sent to it; at least one source
+        (administrators or an address). Each address object has exactly the keys email and locale.
+      x-permission: settings.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecipientsInput" }
+      responses:
+        "200":
+          description: The stored recipients
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Recipients" }
+        "400": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/settings/alerts:
+    get:
+      operationId: getAlertSettings
+      summary: 'The expiry thresholds in days, largest first (never saved: 60, 30, 14, 7, 1 at version 0)'
+      x-permission: settings.manage
+      responses:
+        "200":
+          description: The thresholds
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlertSettings" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putAlertSettings
+      summary: Set the expiry thresholds (If-Match required; "0" for the first save)
+      description: >-
+        1 to 10 different whole days from 1 to 365; refusals are 422 field errors on thresholds_days
+        (validation.required, validation.too_long, validation.out_of_range, validation.duplicate).
+      x-permission: settings.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [thresholds_days]
+              additionalProperties: false
+              properties:
+                thresholds_days: { type: array, minItems: 1, maxItems: 10, items: { type: integer, minimum: 1, maximum: 365 } }
+      responses:
+        "200":
+          description: The stored thresholds
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlertSettings" }
+        "400": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/settings/general:
+    get:
+      operationId: getGeneralSettings
+      summary: Alice's own address and how long retired SSH private keys are kept
+      x-permission: settings.manage
+      responses:
+        "200":
+          description: The general settings
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GeneralSettings" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putGeneralSettings
+      summary: Set the general settings (If-Match required; "0" for the first save)
+      x-permission: settings.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [public_url, retired_key_retention_days]
+              additionalProperties: false
+              properties:
+                public_url: { type: string, description: '"" or https://host[:port] (no path other than /, no query, fragment or user info)' }
+                retired_key_retention_days: { type: integer, minimum: 1, maximum: 3650 }
+      responses:
+        "200":
+          description: The stored settings
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GeneralSettings" }
+        "400": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
 components:
@@ -3940,3 +4408,219 @@ components:
       properties:
         items: { type: array, items: { $ref: "#/components/schemas/Deployment" } }
         next_cursor: { type: [string, "null"] }
+    DashboardSummary:
+      type: object
+      required: [generated_at, certificates, deployments, targets, license, rotation, notifications, audit, attention]
+      properties:
+        generated_at: { type: string, format: date-time }
+        certificates:
+          type: object
+          required: [monitored, expired, within_7, within_30, within_60, kv_expired, kv_within_30]
+          properties:
+            monitored: { type: integer, description: Certificates in use }
+            expired: { type: integer }
+            within_7: { type: integer, description: 'Expiring within 7 days, expired ones included' }
+            within_30: { type: integer }
+            within_60: { type: integer }
+            kv_expired: { type: integer, description: Key Vault keys and client secrets that expired }
+            kv_within_30: { type: integer, description: 'Key Vault keys and client secrets expiring within 30 days, expired ones included' }
+        deployments:
+          type: object
+          required: [failed_7d, recent]
+          properties:
+            failed_7d: { type: integer }
+            recent:
+              type: array
+              maxItems: 5
+              items:
+                type: object
+                required: [id, certificate_name, target_id, target_name, status, error_code, at]
+                properties:
+                  id: { type: string, format: uuid }
+                  certificate_name: { type: string }
+                  target_id: { type: string, format: uuid }
+                  target_name: { type: string }
+                  status: { type: string, enum: [failed, rolled_back, rollback_failed, needs_attention] }
+                  error_code: { type: string }
+                  at: { type: string, format: date-time }
+        targets:
+          type: object
+          required: [total, by_status]
+          properties:
+            total: { type: integer }
+            by_status: { type: object, additionalProperties: { type: integer } }
+        license:
+          type: object
+          required: [expired, phase, ends_at, days_left]
+          properties:
+            expired: { type: boolean }
+            phase: { type: string, description: '"" for Operators' }
+            ends_at: { type: [string, "null"], format: date-time }
+            days_left: { type: [integer, "null"] }
+        rotation:
+          type: object
+          required: [upcoming, running, needs_attention]
+          properties:
+            upcoming:
+              type: array
+              maxItems: 5
+              items:
+                type: object
+                required: [policy_id, ssh_key_id, key_label, next_run_at]
+                properties:
+                  policy_id: { type: string, format: uuid }
+                  ssh_key_id: { type: string, format: uuid }
+                  key_label: { type: string }
+                  next_run_at: { type: string, format: date-time }
+            running: { type: integer }
+            needs_attention: { type: integer }
+        notifications:
+          description: Administrators only; null for every other role
+          oneOf:
+            - { type: "null" }
+            - { $ref: "#/components/schemas/Delivery" }
+        audit:
+          description: Administrators and Auditors; null for Operators and before the first checkpoint
+          oneOf:
+            - { type: "null" }
+            - type: object
+              required: [head_seq, head_hash, checked_at, intact]
+              properties:
+                head_seq: { type: integer }
+                head_hash: { type: string }
+                checked_at: { type: string, format: date-time }
+                intact: { type: boolean }
+        attention: { type: integer, description: The number of conditions GET /api/v1/alerts lists for the caller }
+    ExpiringItem:
+      type: object
+      required: [kind, object_id, name, expires_at, days_left, expired, fingerprint, websites, servers, target_ids, vault, vault_id]
+      properties:
+        kind: { type: string, enum: [certificate_expiry, kv_certificate_expiry, kv_key_expiry, kv_credential_expiry] }
+        object_id: { type: string, format: uuid, description: 'The certificate, Key Vault certificate or key, or (for a sign-in secret) the vault' }
+        name: { type: string }
+        expires_at: { type: string, format: date-time }
+        days_left: { type: integer, description: 'Whole days left, rounded up; 0 once expired' }
+        expired: { type: boolean }
+        fingerprint: { type: string, description: 'Certificates only; "" otherwise' }
+        websites: { type: array, maxItems: 10, items: { type: string } }
+        servers: { type: array, maxItems: 10, items: { type: string } }
+        target_ids: { type: array, items: { type: string, format: uuid } }
+        vault: { type: string }
+        vault_id: { type: [string, "null"], format: uuid, description: null for certificates }
+    Condition:
+      type: object
+      required: [kind, object_id, name, since, error_code]
+      properties:
+        kind: { type: string, enum: [host_key_changed, auth_failed, deployment_failed, audit_broken, notifications_failing] }
+        object_id: { type: string, description: 'The server or deployment; "" for audit_broken and notifications_failing' }
+        name: { type: string }
+        since: { type: string, format: date-time }
+        error_code: { type: string }
+    Delivery:
+      type: object
+      required: [failing, consecutive_failures, last_failure_at, last_failure_code, last_success_at, pending, failed_24h]
+      properties:
+        failing: { type: boolean, description: The last 3 or more send attempts all failed }
+        consecutive_failures: { type: integer }
+        last_failure_at: { type: [string, "null"], format: date-time }
+        last_failure_code: { type: string, description: 'The closed label of the last failure (smtp.connect, smtp.tls, smtp.untrusted, smtp.auth, smtp.rejected, smtp.address_refused, smtp.error); "" when none' }
+        last_success_at: { type: [string, "null"], format: date-time }
+        pending: { type: integer, description: E-mails waiting to be sent now }
+        failed_24h: { type: integer, description: 'E-mails that gave up recently (an approximate figure: queued within the last 48 hours and given up after 24 hours of retries)' }
+    View:
+      type: object
+      required: [id, page, name, query, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        page: { type: string, enum: [certificates, ssh_keys] }
+        name: { type: string }
+        query: { type: object, additionalProperties: { type: string } }
+        created_at: { type: string, format: date-time }
+    ViewInput:
+      type: object
+      required: [page, name, query]
+      additionalProperties: false
+      properties:
+        page: { type: string, enum: [certificates, ssh_keys] }
+        name: { type: string, minLength: 1, maxLength: 60 }
+        query: { type: object, additionalProperties: { type: string, maxLength: 200 } }
+    SMTP:
+      type: object
+      required: [configured, host, port, tls_mode, from, username, has_password, ca_pem, trusted_certificate, version, updated_at]
+      properties:
+        configured: { type: boolean }
+        host: { type: string }
+        port: { type: integer }
+        tls_mode: { type: string, description: 'starttls or tls; "" when not configured' }
+        from: { type: string }
+        username: { type: string }
+        has_password: { type: boolean, description: Whether a password is stored; the password itself is never returned }
+        ca_pem: { type: string, description: Extra certificate authorities the mail server's certificate may chain to }
+        trusted_certificate:
+          oneOf:
+            - { type: "null" }
+            - type: object
+              required: [fingerprint, subject, not_after, trusted_by, trusted_at]
+              properties:
+                fingerprint: { type: string }
+                subject: { type: string }
+                not_after: { type: string, format: date-time }
+                trusted_by: { type: string }
+                trusted_at: { type: string, format: date-time }
+        version: { type: integer }
+        updated_at: { type: [string, "null"], format: date-time }
+    SMTPInput:
+      type: object
+      required: [host, port, tls_mode, from, username, ca_pem]
+      additionalProperties: false
+      properties:
+        host: { type: string, minLength: 1, maxLength: 253 }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        tls_mode: { type: string, enum: [starttls, tls] }
+        from: { type: string, maxLength: 254 }
+        username: { type: string, maxLength: 255 }
+        password: { type: [string, "null"], writeOnly: true, maxLength: 1024, description: 'Request only; absent or null keeps the stored password, "" removes it' }
+        ca_pem: { type: string, maxLength: 65536, description: '"" or 1 to 20 PEM CERTIFICATE blocks' }
+    Recipients:
+      type: object
+      required: [administrators, addresses, version]
+      properties:
+        administrators: { type: boolean, description: 'Every enabled Administrator with an e-mail address, in their language' }
+        addresses:
+          type: array
+          items:
+            type: object
+            required: [email, locale]
+            properties:
+              email: { type: string }
+              locale: { type: string, enum: [en, tr] }
+        version: { type: integer }
+    RecipientsInput:
+      type: object
+      required: [administrators, addresses]
+      additionalProperties: false
+      properties:
+        administrators: { type: boolean }
+        addresses:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            required: [email, locale]
+            additionalProperties: false
+            properties:
+              email: { type: string, maxLength: 254 }
+              locale: { type: string, enum: [en, tr] }
+    AlertSettings:
+      type: object
+      required: [thresholds_days, version]
+      properties:
+        thresholds_days: { type: array, items: { type: integer } }
+        version: { type: integer }
+    GeneralSettings:
+      type: object
+      required: [public_url, retired_key_retention_days, version]
+      properties:
+        public_url: { type: string }
+        retired_key_retention_days: { type: integer }
+        version: { type: integer }

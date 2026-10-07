@@ -76,11 +76,12 @@ var phase6Table = []struct {
 	{"ALC-ROT-0025", "rotation.listing_incomplete", 409, false},
 }
 
-// phase6Codes are the codes of the areas ROT and NTF, and KEY from 0006 on (AllErrorCodes order).
+// phase6Codes are the codes of the area ROT, ALC-NTF-0001 (the later NTF codes are Phase 7's) and KEY from 0006 on
+// (AllErrorCodes order).
 func phase6Codes() []ErrorCode {
 	var out []ErrorCode
 	for _, ec := range AllErrorCodes() {
-		if strings.HasPrefix(ec.Code, "ALC-ROT-") || strings.HasPrefix(ec.Code, "ALC-NTF-") ||
+		if strings.HasPrefix(ec.Code, "ALC-ROT-") || ec.Code == "ALC-NTF-0001" ||
 			(strings.HasPrefix(ec.Code, "ALC-KEY-") && ec.Code >= "ALC-KEY-0006") {
 			out = append(out, ec)
 		}

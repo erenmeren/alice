@@ -417,7 +417,7 @@ func TestCertificateListQueryValidation(t *testing.T) {
 	}
 	h := NewHandler(d)
 	for q, field := range map[string]string{
-		"expiry=90": "expiry", "source=kv": "source", "limit=0": "limit", "limit=201": "limit", "limit=x": "limit",
+		"expiry=45": "expiry", "source=kv": "source", "limit=0": "limit", "limit=201": "limit", "limit=x": "limit",
 		"target_id=x": "target_id", "q=" + strings.Repeat("ş", 201): "q", "cursor=" + strings.Repeat("c", 513): "cursor",
 	} {
 		rec := call(h, http.MethodGet, "/api/v1/certificates?"+q, "auditor", "")

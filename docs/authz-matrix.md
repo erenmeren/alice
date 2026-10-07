@@ -66,6 +66,7 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | GET | `/api/v1/ssh-keys` | `read` | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/ssh-keys/platform-key` | `targets.manage` | no | yes | no | no | operate | no | yes |
 | GET | `/api/v1/ssh-keys/{id}` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/ssh-keys/export` | `read` | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/ssh-keys/locations/{id}/actions/remove` | `inventory.operate` | no | yes | yes | no | operate | no | no |
 | POST | `/api/v1/ssh-keys/generate` | `inventory.operate` | no | yes | yes | no | operate | no | no |
 | POST | `/api/v1/ssh-keys/{id}/actions/deploy` | `inventory.operate` | no | yes | yes | no | operate | no | no |
@@ -92,6 +93,7 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | POST | `/api/v1/jobs/{id}/actions/discard` | `jobs.confirm` | no | yes | no | no | no | no | yes |
 | GET | `/api/v1/certificates` | `read` | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/certificates/{id}` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/certificates/export` | `read` | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/certificates/upload` | `certificates.operate` | no | yes | yes | no | operate | no | no |
 | POST | `/api/v1/certificates/{id}/deploy` | `certificates.operate` | no | yes | yes | no | operate | no | no |
 | GET | `/api/v1/certificates/csr` | `read` | no | yes | yes | yes | read | no | yes |
@@ -119,6 +121,25 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | POST | `/api/v1/certificates/{id}/actions/import-to-key-vault` | `credentials.manage` | no | yes | no | no | no | yes | no |
 | GET | `/api/v1/targets/{id}/kv/imports` | `read` | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/targets/{id}/kv/imports/{import_id}` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/settings/smtp` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/smtp` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/settings/smtp` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/settings/smtp/actions/test` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/settings/smtp/actions/trust` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/settings/smtp/actions/untrust` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/settings/notifications` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/notifications` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/settings/alerts` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/alerts` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/settings/general` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/general` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/dashboard/summary` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/dashboard/expiring` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/alerts` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/notifications/status` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/views` | `session` | no | yes | yes | yes | no | no | yes |
+| POST | `/api/v1/views` | `session` | no | yes | yes | yes | no | no | yes |
+| DELETE | `/api/v1/views/{id}` | `session` | no | yes | yes | yes | no | no | yes |
 
 ## Notes
 
@@ -151,3 +172,10 @@ switching it on again (`POST /api/v1/rotation/policies/{id}/actions/enable`) nee
 Administrator's browser session with step-up. A scheduled run starts only after its notice email was delivered; Run now
 (`rotation.operate`) needs the digest of the preview the Administrator saw. Stop and undo
 (`POST /api/v1/rotation/runs/{id}/actions/abort`) is `rotation.manage`: automation may stop a run.
+
+**Dashboard, exports and settings (Phase 7).** The Dashboard's reads are `read` and filtered by role inside the service:
+`GET /api/v1/notifications/status` answers the delivery state to Administrators only (everyone else gets `{"failing": false}`),
+the summary's audit head is for Administrators and Auditors. The CSV exports are reads (they work in lock), at most 10 a
+minute per user or token and one at a time per person; each is recorded in the audit log before the first byte. Saved views
+are a signed-in person's own (`session`, no API token). Every `/api/v1/settings/...` route is `settings.manage`;
+`POST /api/v1/settings/smtp/actions/test` is limited to 5 a minute per user.

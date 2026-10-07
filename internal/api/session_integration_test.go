@@ -473,10 +473,16 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 			require.NotEmpty(t, id, "no record for %s", op.path)
 			path = strings.ReplaceAll(path, "{id}", id)
 		}
-		// The export is audited (SEC-075): exactly one audit.exported row is its only write.
-		wantAudit := 0
-		if op.path == "/api/v1/audit/export" {
-			path, wantAudit = path+"?format=json", 1
+		// The exports are audited (SEC-075): exactly one audit.exported or inventory.exported row is their only write.
+		wantAudit, wantAction := 0, ""
+		switch op.path {
+		case "/api/v1/audit/export":
+			path, wantAudit, wantAction = path+"?format=json", 1, "audit.exported"
+		case "/api/v1/certificates/export", "/api/v1/ssh-keys/export":
+			// Phase 7 (R42 row 16): an inventory export is audited before its first byte; that row is its only write.
+			wantAudit, wantAction = 1, "inventory.exported"
+		case "/api/v1/views":
+			path += "?page=certificates"
 		}
 		rec := c.do(http.MethodGet, path, nil)
 		assert.Equal(t, http.StatusOK, rec.Code, "%s: %s", op.key(), rec.Body.String())
@@ -485,7 +491,7 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 		assert.Equal(t, history, s.rowsChecksum("audit_log", "seq <= "+strconv.FormatInt(seq, 10)), "GET %s changed existing audit rows", path)
 		assert.Equal(t, int64(wantAudit), s.maxAuditSeq()-seq, "GET %s appended audit rows", path)
 		if wantAudit == 1 {
-			assert.Equal(t, 1, s.countWhere("audit_log", "seq = "+strconv.FormatInt(seq+1, 10)+" AND action = 'audit.exported'"))
+			assert.Equal(t, 1, s.countWhere("audit_log", "seq = "+strconv.FormatInt(seq+1, 10)+" AND action = '"+wantAction+"'"), path)
 		}
 		seq = s.maxAuditSeq()
 		history = s.rowsChecksum("audit_log", "true")

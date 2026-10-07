@@ -3,18 +3,23 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"alice/internal/alerts"
 	"alice/internal/audit"
 	"alice/internal/auth"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/license"
+	"alice/internal/notify"
+	"alice/internal/platform/settings"
 	"alice/internal/providers"
 	"alice/internal/rbac"
+	"alice/internal/reports"
 	"alice/internal/setup"
 	"alice/internal/sshkeys"
 )
@@ -1083,6 +1088,295 @@ func (f *fakeSSHKeys) Abort(ctx context.Context, a inventory.Actor, id uuid.UUID
 	f.record("Abort")
 	if f.AbortFn != nil {
 		return f.AbortFn(ctx, a, id)
+	}
+	return errNotConfigured
+}
+
+// phase7Fake counts the calls of a Phase 7 fake service (fakeMail, fakeAlerts, fakeReports).
+type phase7Fake struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (f *phase7Fake) record() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.n++
+}
+
+func (f *phase7Fake) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.n
+}
+
+func (f *phase7Fake) reset() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.n = 0
+}
+
+// fakeMail implements MailService: one function field per method (errNotConfigured when nil), a call counter.
+type fakeMail struct {
+	phase7Fake
+	SMTPFn           func(ctx context.Context) (notify.SMTPSettings, bool, error)
+	SaveSMTPFn       func(ctx context.Context, a audit.Actor, version int, in notify.SMTPInput) (notify.SMTPSettings, error)
+	DeleteSMTPFn     func(ctx context.Context, a audit.Actor, version int) error
+	TestMailFn       func(ctx context.Context, a audit.Actor, to, locale string) error
+	TrustFn          func(ctx context.Context, a audit.Actor, version int, fingerprint string) (notify.SMTPSettings, error)
+	UntrustFn        func(ctx context.Context, a audit.Actor, version int) (notify.SMTPSettings, error)
+	RecipientsFn     func(ctx context.Context) (notify.Recipients, error)
+	SaveRecipientsFn func(ctx context.Context, a audit.Actor, version int, r notify.Recipients) (notify.Recipients, error)
+	GeneralFn        func(ctx context.Context) (settings.General, error)
+	SaveGeneralFn    func(ctx context.Context, a audit.Actor, version int, g settings.General) (settings.General, error)
+	DeliveryFn       func(ctx context.Context) (notify.Delivery, error)
+}
+
+// succeed makes every method answer a harmless success.
+func (f *fakeMail) succeed() {
+	smtp := notify.SMTPSettings{Host: "smtp.example.com", Port: 587, TLSMode: "starttls", From: "alice@example.com", Version: 2}
+	f.SMTPFn = func(context.Context) (notify.SMTPSettings, bool, error) { return smtp, true, nil }
+	f.SaveSMTPFn = func(context.Context, audit.Actor, int, notify.SMTPInput) (notify.SMTPSettings, error) {
+		return smtp, nil
+	}
+	f.DeleteSMTPFn = func(context.Context, audit.Actor, int) error { return nil }
+	f.TestMailFn = func(context.Context, audit.Actor, string, string) error { return nil }
+	f.TrustFn = func(context.Context, audit.Actor, int, string) (notify.SMTPSettings, error) { return smtp, nil }
+	f.UntrustFn = func(context.Context, audit.Actor, int) (notify.SMTPSettings, error) { return smtp, nil }
+	f.RecipientsFn = func(context.Context) (notify.Recipients, error) { return notify.Recipients{Administrators: true}, nil }
+	f.SaveRecipientsFn = func(_ context.Context, _ audit.Actor, _ int, r notify.Recipients) (notify.Recipients, error) {
+		r.Version = 1
+		return r, nil
+	}
+	f.GeneralFn = func(context.Context) (settings.General, error) {
+		return settings.General{RetiredKeyRetentionDays: 30}, nil
+	}
+	f.SaveGeneralFn = func(_ context.Context, _ audit.Actor, _ int, g settings.General) (settings.General, error) {
+		g.Version = 1
+		return g, nil
+	}
+	f.DeliveryFn = func(context.Context) (notify.Delivery, error) { return notify.Delivery{}, nil }
+}
+
+func (f *fakeMail) SMTP(ctx context.Context) (notify.SMTPSettings, bool, error) {
+	f.record()
+	if f.SMTPFn != nil {
+		return f.SMTPFn(ctx)
+	}
+	return notify.SMTPSettings{}, false, errNotConfigured
+}
+
+func (f *fakeMail) SaveSMTP(ctx context.Context, a audit.Actor, version int, in notify.SMTPInput) (notify.SMTPSettings, error) {
+	f.record()
+	if f.SaveSMTPFn != nil {
+		return f.SaveSMTPFn(ctx, a, version, in)
+	}
+	return notify.SMTPSettings{}, errNotConfigured
+}
+
+func (f *fakeMail) DeleteSMTP(ctx context.Context, a audit.Actor, version int) error {
+	f.record()
+	if f.DeleteSMTPFn != nil {
+		return f.DeleteSMTPFn(ctx, a, version)
+	}
+	return errNotConfigured
+}
+
+func (f *fakeMail) TestMail(ctx context.Context, a audit.Actor, to, locale string) error {
+	f.record()
+	if f.TestMailFn != nil {
+		return f.TestMailFn(ctx, a, to, locale)
+	}
+	return errNotConfigured
+}
+
+func (f *fakeMail) Trust(ctx context.Context, a audit.Actor, version int, fingerprint string) (notify.SMTPSettings, error) {
+	f.record()
+	if f.TrustFn != nil {
+		return f.TrustFn(ctx, a, version, fingerprint)
+	}
+	return notify.SMTPSettings{}, errNotConfigured
+}
+
+func (f *fakeMail) Untrust(ctx context.Context, a audit.Actor, version int) (notify.SMTPSettings, error) {
+	f.record()
+	if f.UntrustFn != nil {
+		return f.UntrustFn(ctx, a, version)
+	}
+	return notify.SMTPSettings{}, errNotConfigured
+}
+
+func (f *fakeMail) Recipients(ctx context.Context) (notify.Recipients, error) {
+	f.record()
+	if f.RecipientsFn != nil {
+		return f.RecipientsFn(ctx)
+	}
+	return notify.Recipients{}, errNotConfigured
+}
+
+func (f *fakeMail) SaveRecipients(ctx context.Context, a audit.Actor, version int, r notify.Recipients) (notify.Recipients, error) {
+	f.record()
+	if f.SaveRecipientsFn != nil {
+		return f.SaveRecipientsFn(ctx, a, version, r)
+	}
+	return notify.Recipients{}, errNotConfigured
+}
+
+func (f *fakeMail) General(ctx context.Context) (settings.General, error) {
+	f.record()
+	if f.GeneralFn != nil {
+		return f.GeneralFn(ctx)
+	}
+	return settings.General{}, errNotConfigured
+}
+
+func (f *fakeMail) SaveGeneral(ctx context.Context, a audit.Actor, version int, g settings.General) (settings.General, error) {
+	f.record()
+	if f.SaveGeneralFn != nil {
+		return f.SaveGeneralFn(ctx, a, version, g)
+	}
+	return settings.General{}, errNotConfigured
+}
+
+func (f *fakeMail) Delivery(ctx context.Context) (notify.Delivery, error) {
+	f.record()
+	if f.DeliveryFn != nil {
+		return f.DeliveryFn(ctx)
+	}
+	return notify.Delivery{}, errNotConfigured
+}
+
+// fakeAlerts implements AlertsService.
+type fakeAlerts struct {
+	phase7Fake
+	ThresholdsFn     func(ctx context.Context) (alerts.ThresholdSettings, error)
+	SaveThresholdsFn func(ctx context.Context, a audit.Actor, version int, days []int) (alerts.ThresholdSettings, error)
+}
+
+func (f *fakeAlerts) succeed() {
+	f.ThresholdsFn = func(context.Context) (alerts.ThresholdSettings, error) {
+		return alerts.ThresholdSettings{Days: []int{60, 30, 14, 7, 1}}, nil
+	}
+	f.SaveThresholdsFn = func(_ context.Context, _ audit.Actor, version int, days []int) (alerts.ThresholdSettings, error) {
+		return alerts.ThresholdSettings{Days: days, Version: version + 1}, nil
+	}
+}
+
+func (f *fakeAlerts) Thresholds(ctx context.Context) (alerts.ThresholdSettings, error) {
+	f.record()
+	if f.ThresholdsFn != nil {
+		return f.ThresholdsFn(ctx)
+	}
+	return alerts.ThresholdSettings{}, errNotConfigured
+}
+
+func (f *fakeAlerts) SaveThresholds(ctx context.Context, a audit.Actor, version int, days []int) (alerts.ThresholdSettings, error) {
+	f.record()
+	if f.SaveThresholdsFn != nil {
+		return f.SaveThresholdsFn(ctx, a, version, days)
+	}
+	return alerts.ThresholdSettings{}, errNotConfigured
+}
+
+// fakeReports implements ReportsService; lastViewer is the viewer of the last Summary or Attention call.
+type fakeReports struct {
+	phase7Fake
+	lastViewer           reports.Viewer
+	SummaryFn            func(ctx context.Context, v reports.Viewer) (reports.Summary, error)
+	ExpiringFn           func(ctx context.Context, days, limit int) ([]alerts.Item, error)
+	AttentionFn          func(ctx context.Context, v reports.Viewer) ([]reports.Condition, error)
+	ExportCertificatesFn func(ctx context.Context, a audit.Actor, f inventory.CertificateFilter, w io.Writer) (int, error)
+	ExportSSHKeysFn      func(ctx context.Context, a audit.Actor, f inventory.KeyFilter, w io.Writer) (int, error)
+	ViewsFn              func(ctx context.Context, userID uuid.UUID, page string) ([]reports.View, error)
+	CreateViewFn         func(ctx context.Context, userID uuid.UUID, page, name string, query map[string]string) (reports.View, error)
+	DeleteViewFn         func(ctx context.Context, userID, id uuid.UUID) error
+}
+
+func (f *fakeReports) succeed() {
+	f.SummaryFn = func(context.Context, reports.Viewer) (reports.Summary, error) { return reports.Summary{}, nil }
+	f.ExpiringFn = func(context.Context, int, int) ([]alerts.Item, error) { return nil, nil }
+	f.AttentionFn = func(context.Context, reports.Viewer) ([]reports.Condition, error) { return nil, nil }
+	f.ExportCertificatesFn = func(_ context.Context, _ audit.Actor, _ inventory.CertificateFilter, w io.Writer) (int, error) {
+		_, err := w.Write([]byte("\xEF\xBB\xBFid\n"))
+		return 0, err
+	}
+	f.ExportSSHKeysFn = func(_ context.Context, _ audit.Actor, _ inventory.KeyFilter, w io.Writer) (int, error) {
+		_, err := w.Write([]byte("\xEF\xBB\xBFid\n"))
+		return 0, err
+	}
+	f.ViewsFn = func(context.Context, uuid.UUID, string) ([]reports.View, error) { return nil, nil }
+	f.CreateViewFn = func(_ context.Context, _ uuid.UUID, page, name string, query map[string]string) (reports.View, error) {
+		return reports.View{ID: uuid.New(), Page: page, Name: name, Query: query}, nil
+	}
+	f.DeleteViewFn = func(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+}
+
+func (f *fakeReports) Summary(ctx context.Context, v reports.Viewer) (reports.Summary, error) {
+	f.record()
+	f.mu.Lock()
+	f.lastViewer = v
+	f.mu.Unlock()
+	if f.SummaryFn != nil {
+		return f.SummaryFn(ctx, v)
+	}
+	return reports.Summary{}, errNotConfigured
+}
+
+func (f *fakeReports) Expiring(ctx context.Context, days, limit int) ([]alerts.Item, error) {
+	f.record()
+	if f.ExpiringFn != nil {
+		return f.ExpiringFn(ctx, days, limit)
+	}
+	return nil, errNotConfigured
+}
+
+func (f *fakeReports) Attention(ctx context.Context, v reports.Viewer) ([]reports.Condition, error) {
+	f.record()
+	f.mu.Lock()
+	f.lastViewer = v
+	f.mu.Unlock()
+	if f.AttentionFn != nil {
+		return f.AttentionFn(ctx, v)
+	}
+	return nil, errNotConfigured
+}
+
+func (f *fakeReports) ExportCertificates(ctx context.Context, a audit.Actor, fl inventory.CertificateFilter, w io.Writer) (int, error) {
+	f.record()
+	if f.ExportCertificatesFn != nil {
+		return f.ExportCertificatesFn(ctx, a, fl, w)
+	}
+	return 0, errNotConfigured
+}
+
+func (f *fakeReports) ExportSSHKeys(ctx context.Context, a audit.Actor, fl inventory.KeyFilter, w io.Writer) (int, error) {
+	f.record()
+	if f.ExportSSHKeysFn != nil {
+		return f.ExportSSHKeysFn(ctx, a, fl, w)
+	}
+	return 0, errNotConfigured
+}
+
+func (f *fakeReports) Views(ctx context.Context, userID uuid.UUID, page string) ([]reports.View, error) {
+	f.record()
+	if f.ViewsFn != nil {
+		return f.ViewsFn(ctx, userID, page)
+	}
+	return nil, errNotConfigured
+}
+
+func (f *fakeReports) CreateView(ctx context.Context, userID uuid.UUID, page, name string, query map[string]string) (reports.View, error) {
+	f.record()
+	if f.CreateViewFn != nil {
+		return f.CreateViewFn(ctx, userID, page, name, query)
+	}
+	return reports.View{}, errNotConfigured
+}
+
+func (f *fakeReports) DeleteView(ctx context.Context, userID, id uuid.UUID) error {
+	f.record()
+	if f.DeleteViewFn != nil {
+		return f.DeleteViewFn(ctx, userID, id)
 	}
 	return errNotConfigured
 }

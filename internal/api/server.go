@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/alerts"
 	"alice/internal/audit"
 	"alice/internal/auth"
 	"alice/internal/auth/ratelimit"
@@ -20,10 +22,13 @@ import (
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/license"
+	"alice/internal/notify"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
+	"alice/internal/platform/settings"
 	"alice/internal/providers"
 	"alice/internal/rbac"
+	"alice/internal/reports"
 	"alice/internal/setup"
 	"alice/internal/sshkeys"
 	"alice/internal/version"
@@ -183,6 +188,41 @@ type SSHKeysService interface {
 	Abort(ctx context.Context, a inventory.Actor, id uuid.UUID) error
 }
 
+// MailService is the part of *notify.Settings the HTTP layer uses (C7, Phase 7): the mail server, the test e-mail and
+// the certificate trust, the recipients of every e-mail, the general settings and the delivery state.
+type MailService interface {
+	SMTP(ctx context.Context) (notify.SMTPSettings, bool, error)
+	SaveSMTP(ctx context.Context, a audit.Actor, version int, in notify.SMTPInput) (notify.SMTPSettings, error)
+	DeleteSMTP(ctx context.Context, a audit.Actor, version int) error
+	TestMail(ctx context.Context, a audit.Actor, to, locale string) error
+	Trust(ctx context.Context, a audit.Actor, version int, fingerprint string) (notify.SMTPSettings, error)
+	Untrust(ctx context.Context, a audit.Actor, version int) (notify.SMTPSettings, error)
+	Recipients(ctx context.Context) (notify.Recipients, error)
+	SaveRecipients(ctx context.Context, a audit.Actor, version int, r notify.Recipients) (notify.Recipients, error)
+	General(ctx context.Context) (settings.General, error)
+	SaveGeneral(ctx context.Context, a audit.Actor, version int, g settings.General) (settings.General, error)
+	Delivery(ctx context.Context) (notify.Delivery, error)
+}
+
+// AlertsService is the part of *alerts.Service the HTTP layer uses (C8): the expiry thresholds setting.
+type AlertsService interface {
+	Thresholds(ctx context.Context) (alerts.ThresholdSettings, error)
+	SaveThresholds(ctx context.Context, a audit.Actor, version int, days []int) (alerts.ThresholdSettings, error)
+}
+
+// ReportsService is the part of *reports.Service the HTTP layer uses (C9): the dashboard, the CSV exports and the
+// saved views.
+type ReportsService interface {
+	Summary(ctx context.Context, v reports.Viewer) (reports.Summary, error)
+	Expiring(ctx context.Context, days, limit int) ([]alerts.Item, error)
+	Attention(ctx context.Context, v reports.Viewer) ([]reports.Condition, error)
+	ExportCertificates(ctx context.Context, a audit.Actor, f inventory.CertificateFilter, w io.Writer) (int, error)
+	ExportSSHKeys(ctx context.Context, a audit.Actor, f inventory.KeyFilter, w io.Writer) (int, error)
+	Views(ctx context.Context, userID uuid.UUID, page string) ([]reports.View, error)
+	CreateView(ctx context.Context, userID uuid.UUID, page, name string, query map[string]string) (reports.View, error)
+	DeleteView(ctx context.Context, userID, id uuid.UUID) error
+}
+
 // ProviderCatalog lists the compiled-in providers (providers.Registry).
 type ProviderCatalog interface {
 	List() []providers.Descriptor
@@ -204,6 +244,9 @@ type Deps struct {
 	Jobs           JobsService
 	Providers      ProviderCatalog
 	SSHKeys        SSHKeysService
+	Mail           MailService
+	Alerts         AlertsService
+	Reports        ReportsService
 	TrustedProxies []netip.Prefix
 	TestHandler    http.Handler // nil in release builds; mounted at "/test/" by the e2e build
 }
@@ -218,6 +261,8 @@ const (
 	limitMFA                        // 5 per minute per IP (verification codes)
 	limitHealth                     // 60 per minute per IP in a bucket of its own (public /healthz, AUD-16)
 	limitDownload                   // 5 per minute per user: private key downloads (SEC-022, R41 row 5)
+	limitTestMail                   // 5 per minute per user: test e-mails (C13)
+	limitExport                     // 10 per minute per user or token: CSV exports (C13)
 )
 
 // route is one documented operation. The route table is the single source of
@@ -251,6 +296,9 @@ type server struct {
 	healthz *ratelimit.Limiter // public /healthz, per IP: 60/min
 	// download: private key downloads per user: 5/min, besides the general limit (R41 row 5).
 	download *ratelimit.Limiter
+	// testMails: test e-mails per user: 5/min; export: CSV exports per user or token: 10/min (C13).
+	testMails *ratelimit.Limiter
+	export    *ratelimit.Limiter
 	// denials coalesces the guard's denial audit rows (AUD-06).
 	denials *denialCoalescer
 	// chainScan is the one slot for reading the whole audit chain (verification, export) in this
@@ -282,11 +330,13 @@ func newServer(d Deps) *server {
 		login:   ratelimit.New(d.Clock, 10, time.Minute),
 		mfa:     ratelimit.New(d.Clock, 5, time.Minute),
 
-		badCreds: ratelimit.New(d.Clock, 60, time.Minute),
-		recent:   ratelimit.NewRecent(d.Clock, recentLifetime, recentMax),
-		rotated:  ratelimit.NewRecent(d.Clock, rotatedLifetime, rotatedMax),
-		healthz:  ratelimit.New(d.Clock, 60, time.Minute),
-		download: ratelimit.New(d.Clock, 5, time.Minute),
+		badCreds:  ratelimit.New(d.Clock, 60, time.Minute),
+		recent:    ratelimit.NewRecent(d.Clock, recentLifetime, recentMax),
+		rotated:   ratelimit.NewRecent(d.Clock, rotatedLifetime, rotatedMax),
+		healthz:   ratelimit.New(d.Clock, 60, time.Minute),
+		download:  ratelimit.New(d.Clock, 5, time.Minute),
+		testMails: ratelimit.New(d.Clock, 5, time.Minute),
+		export:    ratelimit.New(d.Clock, 10, time.Minute),
 
 		denials:   newDenialCoalescer(d.Clock),
 		chainScan: make(chan struct{}, 1),
@@ -324,6 +374,8 @@ func (s *Server) ResetLimits() {
 	s.s.rotated.Reset()
 	s.s.healthz.Reset()
 	s.s.download.Reset()
+	s.s.testMails.Reset()
+	s.s.export.Reset()
 	s.s.denials.reset()
 }
 
@@ -424,6 +476,9 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.vaultRoutes()...)
 	routes = append(routes, s.bindingRoutes()...)
 	routes = append(routes, s.importRoutes()...)
+	routes = append(routes, s.settingsRoutes()...)
+	routes = append(routes, s.dashboardRoutes()...)
+	routes = append(routes, s.viewRoutes()...)
 	return routes
 }
 

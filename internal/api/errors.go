@@ -12,13 +12,16 @@ import (
 	"strconv"
 	"time"
 
+	"alice/internal/alerts/expiry"
 	"alice/internal/auth"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/license"
+	"alice/internal/notify"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/rbac"
+	"alice/internal/reports"
 	"alice/internal/setup"
 	"alice/internal/sshkeys"
 	"alice/internal/sshkeys/plan"
@@ -55,8 +58,11 @@ var (
 	ErrCurrentPasswordInvalid = ErrorCode{Code: "ALC-AUTH-0011", Reason: "auth.current_password_invalid", Status: http.StatusUnprocessableEntity}
 	ErrTryAgain               = ErrorCode{Code: "ALC-AUTH-0012", Reason: "auth.try_again", Status: http.StatusServiceUnavailable, Retryable: true}
 
-	ErrUsernameTaken        = ErrorCode{Code: "ALC-USR-0001", Reason: "user.username_taken", Status: http.StatusConflict}
-	ErrLastAdmin            = ErrorCode{Code: "ALC-USR-0002", Reason: "user.last_admin", Status: http.StatusConflict}
+	ErrUsernameTaken = ErrorCode{Code: "ALC-USR-0001", Reason: "user.username_taken", Status: http.StatusConflict}
+	ErrLastAdmin     = ErrorCode{Code: "ALC-USR-0002", Reason: "user.last_admin", Status: http.StatusConflict}
+	// ErrSSOUser: a role, password or authenticator change of a single sign-on user (Phase 7, C15; reason user.* as the
+	// other USR codes, cosmetic ruling C-s4-07).
+	ErrSSOUser              = ErrorCode{Code: "ALC-USR-0003", Reason: "user.sso_user", Status: http.StatusConflict}
 	ErrTokenScopeNotAllowed = ErrorCode{Code: "ALC-TOK-0001", Reason: "token.scope_not_allowed", Status: http.StatusUnprocessableEntity}
 	// ErrAuditBusy: another verification or export of the audit log is running in this process (AUD-06).
 	ErrAuditBusy = ErrorCode{Code: "ALC-AUD-0001", Reason: "audit.busy", Status: http.StatusServiceUnavailable, Retryable: true}
@@ -137,6 +143,23 @@ var (
 	// ErrNotifyQueueFailed: Alice could not queue an email (the renewal notice a paused rotation waits for); retried at
 	// every background check.
 	ErrNotifyQueueFailed = ErrorCode{Code: "ALC-NTF-0001", Reason: "notify.queue_failed", Status: http.StatusServiceUnavailable, Retryable: true}
+	// Phase 7 (C15): the mail settings and the test e-mail. No text of the mail server reaches an answer (F-63); an
+	// untrusted certificate carries its fingerprint, subject and expiry (F-62).
+	ErrSMTPNotConfigured  = ErrorCode{Code: "ALC-NTF-0002", Reason: "notify.smtp_not_configured", Status: http.StatusConflict}
+	ErrSMTPConnect        = ErrorCode{Code: "ALC-NTF-0003", Reason: "notify.smtp_connect", Status: http.StatusBadGateway, Retryable: true}
+	ErrSMTPTLS            = ErrorCode{Code: "ALC-NTF-0004", Reason: "notify.smtp_tls", Status: http.StatusBadGateway}
+	ErrSMTPUntrusted      = ErrorCode{Code: "ALC-NTF-0005", Reason: "notify.smtp_untrusted", Status: http.StatusBadGateway}
+	ErrSMTPAuth           = ErrorCode{Code: "ALC-NTF-0006", Reason: "notify.smtp_auth", Status: http.StatusBadGateway}
+	ErrSMTPRejected       = ErrorCode{Code: "ALC-NTF-0007", Reason: "notify.smtp_rejected", Status: http.StatusBadGateway}
+	ErrSMTPCertNotSeen    = ErrorCode{Code: "ALC-NTF-0008", Reason: "notify.certificate_not_seen", Status: http.StatusConflict}
+	ErrSMTPAddressRefused = ErrorCode{Code: "ALC-NTF-0009", Reason: "notify.smtp_address_refused", Status: http.StatusConflict}
+
+	// Phase 7 (C15): exports and saved views. ALC-RPT-0004 is the one-export-at-a-time refusal (reports.ErrExportBusy,
+	// S-10), in the 409 busy style of ALC-NGX-0008.
+	ErrExportTooLarge = ErrorCode{Code: "ALC-RPT-0001", Reason: "export.too_large", Status: http.StatusConflict}
+	ErrViewLimit      = ErrorCode{Code: "ALC-RPT-0002", Reason: "views.limit_reached", Status: http.StatusConflict}
+	ErrViewNameTaken  = ErrorCode{Code: "ALC-RPT-0003", Reason: "views.name_taken", Status: http.StatusConflict}
+	ErrExportBusy     = ErrorCode{Code: "ALC-RPT-0004", Reason: "export.busy", Status: http.StatusConflict, Retryable: true}
 
 	// Phase 6: rotation policies and runs (R41, C11). The run results (rotations.result_code) and the location
 	// errors (rotation_locations.error_code) are stored reasons; the API also answers the request refusals with them.
@@ -312,7 +335,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrNotFound, ErrUnavailable, ErrUnexpected, ErrBadRequest, ErrRateLimited, ErrValidation, ErrBodyTooLarge, ErrPreconditionFailed,
 		ErrUnauthenticated, ErrForbidden, ErrStepUpRequired, ErrCSRF, ErrInvalidCredentials, ErrMFAInvalid,
 		ErrMFAAlreadyEnrolled, ErrPasswordTooShort, ErrPasswordTooLong, ErrPasswordBreached, ErrCurrentPasswordInvalid, ErrTryAgain,
-		ErrUsernameTaken, ErrLastAdmin, ErrTokenScopeNotAllowed, ErrAuditBusy,
+		ErrUsernameTaken, ErrLastAdmin, ErrSSOUser, ErrTokenScopeNotAllowed, ErrAuditBusy,
 		ErrSetupCodeInvalid, ErrSetupLocked, ErrSetupSessionExpired, ErrSetupEnrollmentMissing,
 		ErrPassphraseTooShort, ErrPassphraseMismatch, ErrPassphraseAlreadySet, ErrSetupIncomplete, ErrSetupLicenseChoiceMissing,
 		ErrLicenseLocked,
@@ -325,6 +348,8 @@ func AllErrorCodes() []ErrorCode {
 		ErrKeyNotManaged, ErrKeyRetired, ErrKeyDestroyed, ErrKeyConnectionAccount, ErrKeyLoginFailed, ErrKeyGenerateBusy,
 		ErrKeyAddUndoFailed, ErrKeyNotAKeyFile, ErrKeyConnectionFilesUnknown, ErrKeyClockBehind, ErrKeyAddUncertain,
 		ErrKeyConnectionAccountFile, ErrKeyInRotation, ErrNotifyQueueFailed,
+		ErrSMTPNotConfigured, ErrSMTPConnect, ErrSMTPTLS, ErrSMTPUntrusted, ErrSMTPAuth, ErrSMTPRejected, ErrSMTPCertNotSeen,
+		ErrSMTPAddressRefused, ErrExportTooLarge, ErrViewLimit, ErrViewNameTaken, ErrExportBusy,
 		ErrRotPolicyExists, ErrRotInProgress, ErrRotPlanChanged, ErrRotNothingToRotate, ErrRotNotWaiting, ErrRotAddFailed,
 		ErrRotVerifyFailed, ErrRotUndoFailed, ErrRotRemoveIncomplete, ErrRotDecisionTimeout, ErrRotPausedLicense,
 		ErrRotCancelledLicense, ErrRotStopped, ErrRotPolicyOff, ErrRotNewKeyFailed, ErrRotRetriesExhausted,
@@ -509,6 +534,23 @@ var errorMap = []struct {
 	{plan.ErrRetired, ErrKeyRetired, nil},
 	{plan.ErrNothingToRotate, ErrRotNothingToRotate, nil},
 	{plan.ErrNewKeyType, ErrValidation, nil},
+	// Phase 7 (C15). An untrusted certificate (a *notify.CertError, or the bare sentinel) is also a TLS failure: it is
+	// matched first. A stale settings version is the precondition answer of every If-Match.
+	{auth.ErrSSOUser, ErrSSOUser, nil},
+	{notify.ErrNotConfigured, ErrSMTPNotConfigured, nil},
+	{notify.ErrSMTPUntrusted, ErrSMTPUntrusted, nil},
+	{notify.ErrSMTPConnect, ErrSMTPConnect, nil},
+	{notify.ErrSMTPTLS, ErrSMTPTLS, nil},
+	{notify.ErrSMTPAuth, ErrSMTPAuth, nil},
+	{notify.ErrSMTPRejected, ErrSMTPRejected, nil},
+	{notify.ErrCertNotSeen, ErrSMTPCertNotSeen, nil},
+	{notify.ErrAddressRefused, ErrSMTPAddressRefused, nil},
+	{notify.ErrVersion, ErrPreconditionFailed, nil},
+	{reports.ErrTooLarge, ErrExportTooLarge, map[string]string{"max": strconv.Itoa(reports.MaxExportRows)}},
+	{reports.ErrViewLimit, ErrViewLimit, map[string]string{"max": strconv.Itoa(reports.MaxViewsPerUser)}},
+	{reports.ErrViewName, ErrViewNameTaken, nil},
+	{reports.ErrExportBusy, ErrExportBusy, nil},
+	{reports.ErrNotFound, ErrNotFound, nil},
 }
 
 type errorPayload struct {
@@ -565,6 +607,12 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		s.writeError(w, r, ErrTryAgain)
 		return
 	}
+	if errors.Is(err, expiry.ErrThresholds) {
+		// C15: the thresholds rule as the form's field error.
+		s.writeErrorWith(w, r, ErrValidation, nil, []validate.FieldError{{Field: "thresholds_days", Code: validate.OutOfRange,
+			Params: map[string]string{"min": "1", "max": strconv.Itoa(expiry.MaxThresholdDays)}}})
+		return
+	}
 	if errors.Is(err, plan.ErrNewKeyType) {
 		// The planner's refusal of the policy's new key type: the form marks the field (review M13).
 		s.writeErrorWith(w, r, ErrValidation, nil, []validate.FieldError{{Field: "new_key_type", Code: validate.OneOf,
@@ -599,6 +647,8 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		w.Header().Set("Retry-After", "60") // the clock must pass the time Alice recorded last
 	case ErrRotNoticePending:
 		w.Header().Set("Retry-After", "60") // the sweep runs every minute
+	case ErrExportBusy:
+		w.Header().Set("Retry-After", "5") // the user's other export holds the slot until its last row is written
 	}
 	var refused *inventory.LocationRefusalError
 	if errors.As(err, &refused) {

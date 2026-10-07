@@ -239,6 +239,13 @@ switching it on again (` + "`POST /api/v1/rotation/policies/{id}/actions/enable`
 Administrator's browser session with step-up. A scheduled run starts only after its notice email was delivered; Run now
 (` + "`rotation.operate`" + `) needs the digest of the preview the Administrator saw. Stop and undo
 (` + "`POST /api/v1/rotation/runs/{id}/actions/abort`" + `) is ` + "`rotation.manage`" + `: automation may stop a run.
+
+**Dashboard, exports and settings (Phase 7).** The Dashboard's reads are ` + "`read`" + ` and filtered by role inside the service:
+` + "`GET /api/v1/notifications/status`" + ` answers the delivery state to Administrators only (everyone else gets ` + "`{\"failing\": false}`" + `),
+the summary's audit head is for Administrators and Auditors. The CSV exports are reads (they work in lock), at most 10 a
+minute per user or token and one at a time per person; each is recorded in the audit log before the first byte. Saved views
+are a signed-in person's own (` + "`session`" + `, no API token). Every ` + "`/api/v1/settings/...`" + ` route is ` + "`settings.manage`" + `;
+` + "`POST /api/v1/settings/smtp/actions/test`" + ` is limited to 5 a minute per user.
 `
 
 func TestAuthzMatrixDocIsCurrent(t *testing.T) {
@@ -376,6 +383,11 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.Session
 		case under(p, "/api/v1/settings"), p == "/api/v1/setup/recovery-passphrase", p == "/api/v1/setup/complete", p == "/api/v1/setup/evaluation":
 			want = rbac.SettingsManage
+		// Phase 7 (C13): the Dashboard's reads are read (the service filters by role); saved views are a person's own.
+		case under(p, "/api/v1/dashboard"), under(p, "/api/v1/alerts"), under(p, "/api/v1/notifications"):
+			want = rbac.Read
+		case under(p, "/api/v1/views"):
+			want = rbac.Session
 		case under(p, "/api/v1/audit"):
 			want = rbac.AuditRead
 		}
@@ -499,6 +511,27 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 		"POST /api/v1/rotation/runs/{id}/actions/finish-now",
 		"POST /api/v1/rotation/runs/{id}/actions/keep-old",
 		"POST /api/v1/rotation/runs/{id}/actions/abort",
+		"GET /api/v1/dashboard/summary",
+		"GET /api/v1/dashboard/expiring",
+		"GET /api/v1/alerts",
+		"GET /api/v1/notifications/status",
+		"GET /api/v1/certificates/export",
+		"GET /api/v1/ssh-keys/export",
+		"GET /api/v1/views",
+		"POST /api/v1/views",
+		"DELETE /api/v1/views/{id}",
+		"GET /api/v1/settings/smtp",
+		"PUT /api/v1/settings/smtp",
+		"DELETE /api/v1/settings/smtp",
+		"POST /api/v1/settings/smtp/actions/test",
+		"POST /api/v1/settings/smtp/actions/trust",
+		"POST /api/v1/settings/smtp/actions/untrust",
+		"GET /api/v1/settings/notifications",
+		"PUT /api/v1/settings/notifications",
+		"GET /api/v1/settings/alerts",
+		"PUT /api/v1/settings/alerts",
+		"GET /api/v1/settings/general",
+		"PUT /api/v1/settings/general",
 	} {
 		assert.Contains(t, table, k)
 	}
@@ -554,6 +587,14 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodPatch, pattern: "/api/v1/rotation/policies/{id}", perm: rbac.InventoryOperate},
 		{method: http.MethodGet, pattern: "/api/v1/rotation/runs", perm: rbac.RotationManage},
 		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/generate", perm: rbac.Read},
+		// Phase 7: settings behind less than settings.manage, the dashboard behind more than read, views for tokens.
+		{method: http.MethodPost, pattern: "/api/v1/settings/smtp/actions/test", perm: rbac.Session},
+		{method: http.MethodGet, pattern: "/api/v1/settings/smtp", perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/dashboard/summary", perm: rbac.AuditRead},
+		{method: http.MethodGet, pattern: "/api/v1/notifications/status", perm: rbac.SettingsManage},
+		{method: http.MethodGet, pattern: "/api/v1/alerts", perm: rbac.Session},
+		{method: http.MethodPost, pattern: "/api/v1/views", perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/certificates/export", perm: rbac.AuditRead},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))
 	good := []route{
@@ -592,6 +633,10 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodPatch, pattern: "/api/v1/rotation/policies/{id}", perm: rbac.RotationManage},
 		{method: http.MethodGet, pattern: "/api/v1/rotation/runs/{id}", perm: rbac.Read},
 		{method: http.MethodPost, pattern: "/api/v1/rotation/runs/{id}/actions/abort", perm: rbac.RotationManage},
+		{method: http.MethodPut, pattern: "/api/v1/settings/general", perm: rbac.SettingsManage},
+		{method: http.MethodGet, pattern: "/api/v1/dashboard/expiring", perm: rbac.Read},
+		{method: http.MethodDelete, pattern: "/api/v1/views/{id}", perm: rbac.Session},
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/export", perm: rbac.Read},
 	}
 	assert.Empty(t, routeRuleViolations(good))
 }
@@ -599,7 +644,9 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 // Route groups and how lock mode treats their state-changing operations (R9, R36 item 6).
 var (
 	lockAvailable = []string{"/api/v1/auth", "/api/v1/setup", "/api/v1/license", "/api/v1/users", "/api/v1/tokens",
-		"/api/v1/audit", "/api/v1/backup", "/api/v1/backups", "/api/v1/settings"}
+		"/api/v1/audit", "/api/v1/backup", "/api/v1/backups", "/api/v1/settings",
+		// Phase 7 (C13): the Dashboard, its conditions and the delivery state are reads; saved views change nothing outside Alice.
+		"/api/v1/dashboard", "/api/v1/alerts", "/api/v1/views", "/api/v1/notifications"}
 	lockRefused = []string{"/api/v1/targets", "/api/v1/certificates", "/api/v1/locations", "/api/v1/deployments",
 		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs", "/api/v1/key-vaults", "/api/v1/bindings"}
 	// lockAvailableRoutes are routes of a refused group that work in every license state because

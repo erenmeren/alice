@@ -139,6 +139,11 @@
         "title": "Alice'te en az bir etkin yönetici olmalıdır.",
         "cause": "Bu değişiklik, giriş yapabilecek etkin bir yerel yönetici bırakmaz.",
         "action": "Önce başka birine Yönetici rolü verin, sonra tekrar deneyin."
+      },
+      "sso_user": {
+        "title": "Bu değişiklik çoklu oturum açma kullanıcısı için yapılamaz.",
+        "cause": "Çoklu oturum açma kullanıcısının rolü gruplarından gelir ve Alice parolası ya da doğrulayıcısı yoktur.",
+        "action": "Kullanıcının gruplarını kimlik sağlayıcıda değiştirin; hemen durması gerekiyorsa kullanıcıyı burada devre dışı bırakın."
       }
     },
     "token": {
@@ -567,6 +572,70 @@
         "title": "Alice lisans yenilemesiyle ilgili e-postayı sıraya koyamadı.",
         "cause": "E-postayı Alice'in giden kutusuna yazmak başarısız oldu. Duraklatılan bir yenileme ancak bu e-posta sıraya konduktan sonra sürer ve Alice her arka plan denetiminde yeniden dener.",
         "action": "Alice'in günlüklerini ve veritabanını denetleyin, ardından e-posta sıraya konduğunda Devam et'i yeniden seçin."
+      },
+      "smtp_not_configured": {
+        "title": "Posta ayarları eksik.",
+        "cause": "Alice'in e-posta gönderebileceği bir posta sunucusu yok.",
+        "action": "Ayarlar'da posta sunucusunu girin, ardından yeniden deneyin."
+      },
+      "smtp_connect": {
+        "title": "Alice posta sunucusuna ulaşamadı.",
+        "cause": "Sunucu adı ya da bağlantı noktası yanlış olabilir, sunucu kapalı olabilir ya da bir güvenlik duvarı bağlantıyı engelliyor olabilir.",
+        "action": "Sunucu adını ve bağlantı noktasını denetleyin, ardından yeniden test e-postası gönderin."
+      },
+      "smtp_tls": {
+        "title": "Posta sunucusuyla şifreli bağlantı kurulamadı.",
+        "cause": "Sunucu seçilen şifrelemeyi (STARTTLS ya da TLS) sunmuyor ya da el sıkışma başarısız oldu.",
+        "action": "Sunucunun sunduğu şifrelemeyi seçin (587 numaralı bağlantı noktası genellikle STARTTLS, 465 TLS kullanır), ardından yeniden deneyin."
+      },
+      "smtp_untrusted": {
+        "title": "Alice posta sunucusunun sertifikasına güvenmiyor.",
+        "cause": "Sertifika güvenilen bir kuruluş tarafından imzalanmamış, sunucu adıyla eşleşmiyor ya da süresi dolmuş. Parmak izi aşağıda gösteriliyor.",
+        "action": "Parmak izinin sunucuya ait olduğunu posta yöneticinizle doğrulayın, ardından Bu sertifikaya güven'i seçin ya da kurumunuzun sertifika yetkilisini ekleyin."
+      },
+      "smtp_auth": {
+        "title": "Posta sunucusu kullanıcı adını ya da parolayı reddetti.",
+        "cause": "Posta ayarlarındaki oturum açma bilgileri yanlış ya da hesap posta sunucusunda kilitli.",
+        "action": "Doğru kullanıcı adını ve parolayı girin, ardından yeniden test e-postası gönderin."
+      },
+      "smtp_rejected": {
+        "title": "Posta sunucusu iletiyi reddetti.",
+        "cause": "Gönderen ya da alıcı adresi sunucu tarafından kabul edilmiyor.",
+        "action": "Gönderen adresini ve alıcıyı denetleyin, ardından yeniden deneyin."
+      },
+      "certificate_not_seen": {
+        "title": "Alice bu sertifikayı yakın zamanda görmedi.",
+        "cause": "Yalnızca son bir saat içinde bir test e-postasının bulduğu sertifikaya güvenilebilir.",
+        "action": "Yeniden test e-postası gönderin, ardından gösterdiği sertifikaya güvenin."
+      },
+      "smtp_address_refused": {
+        "title": "Alice bu posta sunucusu adresine bağlanmaz.",
+        "cause": "Sunucu adı, Alice'in hiçbir zaman bağlanmadığı bir bağlantı-yerel ya da bulut üst veri adresini gösteriyor.",
+        "action": "Posta sunucusunun olağan adresini kullanın."
+      }
+    },
+    "export": {
+      "too_large": {
+        "title": "Dışa aktarım çok büyük.",
+        "cause": "Bir dışa aktarım en çok {{max}} satır içerir ve bu filtre daha fazlasıyla eşleşiyor.",
+        "action": "Filtreyi daraltın, örneğin sunucuya ya da süre dolumuna göre, ardından yeniden dışa aktarın."
+      },
+      "busy": {
+        "title": "Başka bir dışa aktarımınız hâlâ sürüyor.",
+        "cause": "Her kişi aynı anda yalnızca bir dışa aktarım yapabilir ve önceki dışa aktarımınız henüz bitmedi.",
+        "action": "Önceki indirme bitene kadar bekleyin, ardından yeniden dışa aktarın."
+      }
+    },
+    "views": {
+      "limit_reached": {
+        "title": "Kayıtlı görünüm sınırına ulaştınız.",
+        "cause": "Bir kişi en çok {{max}} kayıtlı görünüm tutabilir.",
+        "action": "Artık gerekmeyen bir görünümü silin, ardından yeniden kaydedin."
+      },
+      "name_taken": {
+        "title": "Bu ada sahip bir kayıtlı görünüm zaten var.",
+        "cause": "Bir sayfadaki görünümlerinizin her birinin kendi adı olmalıdır.",
+        "action": "Başka bir ad seçin."
       }
     },
     "job": {
@@ -1091,6 +1160,50 @@
       "test": {
         "subject": "Alice test e-postası",
         "body": "Bu, Alice'ten gönderilen bir test e-postasıdır. Bu e-postayı aldıysanız Alice geçerli posta ayarlarıyla e-posta gönderebilir."
+      }
+    },
+    "alert": {
+      "certificate_expiring": {
+        "subject": "Süresi dolmak üzere olan sertifika: {{name}} (kalan gün: {{days}})",
+        "body": "{{name}} sertifikasının süresi şu zamanda doluyor: {{expires_at}}. Kalan gün: {{days}}.\n\nWeb siteleri: {{websites}}\nSunucular: {{servers}}\nParmak izi (SHA-256): {{fingerprint}}\n\nSertifikayı yenileyin ve yeni sertifikayı bu zamandan önce dağıtın. Alice'teki Pano, süresi yakında dolacak tüm sertifikaları listeler."
+      },
+      "certificate_expired": {
+        "subject": "Süresi dolan sertifika: {{name}}",
+        "body": "{{name}} sertifikasının süresi şu zamanda doldu ve sertifika hâlâ kullanılıyor: {{expires_at}}.\n\nWeb siteleri: {{websites}}\nSunucular: {{servers}}\nParmak izi (SHA-256): {{fingerprint}}\n\nBu web sitelerinin ziyaretçileri artık bir güvenlik uyarısı görüyor. Geçerli bir sertifikayı en kısa sürede dağıtın."
+      },
+      "kv_certificate_expiring": {
+        "subject": "Süresi dolmak üzere olan Key Vault sertifikası: {{name}} (kalan gün: {{days}})",
+        "body": "{{vault}} Key Vault'undaki {{name}} sertifikasının süresi şu zamanda doluyor: {{expires_at}}. Kalan gün: {{days}}.\n\nKasa sertifikayı kendiliğinden yeniliyorsa Alice yeni sürümü bağlı olduğu yerlere dağıtır. Aksi hâlde bu zamandan önce Azure'da yenileyin."
+      },
+      "kv_certificate_expired": {
+        "subject": "Süresi dolan Key Vault sertifikası: {{name}}",
+        "body": "{{vault}} Key Vault'undaki {{name}} sertifikasının süresi şu zamanda doldu: {{expires_at}}.\n\nSertifikayı Azure'da yenileyin; Alice yeni sürümü bağlı olduğu yerlere dağıtır."
+      },
+      "kv_key_expiring": {
+        "subject": "Süresi dolmak üzere olan Key Vault anahtarı: {{name}} (kalan gün: {{days}})",
+        "body": "{{vault}} Key Vault'undaki {{name}} anahtarının süresi şu zamanda doluyor: {{expires_at}}. Kalan gün: {{days}}.\n\nBu anahtarı kullanan uygulamalar bu zamandan sonra onunla çalışamaz. Bu zamandan önce Azure'da yeni bir anahtar sürümü oluşturun."
+      },
+      "kv_key_expired": {
+        "subject": "Süresi dolan Key Vault anahtarı: {{name}}",
+        "body": "{{vault}} Key Vault'undaki {{name}} anahtarının süresi şu zamanda doldu: {{expires_at}}.\n\nAzure'da yeni bir anahtar sürümü oluşturun ve onu kullanan uygulamaları güncelleyin."
+      },
+      "kv_credential_expiring": {
+        "subject": "Süresi dolmak üzere olan Key Vault oturum açma parolası: {{vault}} (kalan gün: {{days}})",
+        "body": "Alice'in {{vault}} Key Vault'unda oturum açmak için kullandığı istemci parolasının süresi şu zamanda doluyor: {{expires_at}}. Kalan gün: {{days}}.\n\nMicrosoft Entra ID'de yeni bir istemci parolası oluşturun ve bu zamandan önce Alice'te kasanın sayfasına girin. Bu zamandan sonra Alice kasayı okuyamaz."
+      },
+      "kv_credential_expired": {
+        "subject": "Süresi dolan Key Vault oturum açma parolası: {{vault}}",
+        "body": "Alice'in {{vault}} Key Vault'unda oturum açmak için kullandığı istemci parolasının süresi şu zamanda doldu: {{expires_at}}.\n\nMicrosoft Entra ID'de yeni bir istemci parolası oluşturun ve Alice'te kasanın sayfasına girin."
+      },
+      "more": {
+        "subject": "Diğer süre dolumu bildirimleri: {{count}}",
+        "body": "Bu denetimde {{count}} öğe daha bir süre dolumu eşiğine ulaştı. Alice bunların her biri için ayrı e-posta göndermedi.\n\nHepsini görmek için Alice'te Pano'yu açın."
+      }
+    },
+    "auth": {
+      "lockout": {
+        "subject": "Oturum açma engellendi: {{username}}",
+        "body": "{{failed_logins}} başarısız oturum açma denemesinden sonra Alice, {{username}} hesabı için oturum açmayı {{minutes}} dakika engelledi.\n\nBunlar hesabın sahibinin denemeleri değilse birisi parolayı tahmin etmeye çalışıyor olabilir. Bir yönetici engeli sunucuda alice admin unlock komutuyla daha erken kaldırabilir."
       }
     },
     "deployment": {

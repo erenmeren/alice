@@ -23,6 +23,8 @@ func (s *server) certificateRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/certificates", perm: rbac.Read, handler: s.listCertificates},
 		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", perm: rbac.Read, handler: s.getCertificate},
+		// Phase 7 (C13): the list as a CSV file, with the list's filters; a read, so it works in lock.
+		{method: http.MethodGet, pattern: "/api/v1/certificates/export", perm: rbac.Read, limit: limitExport, handler: s.exportCertificates},
 		{method: http.MethodPost, pattern: "/api/v1/certificates/upload", perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.uploadCertificate},
 		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/deploy", perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.deployCertificate},
 		{method: http.MethodGet, pattern: "/api/v1/certificates/csr", perm: rbac.Read, handler: s.listCSRs},
@@ -57,12 +59,33 @@ const (
 	maxCancelBody      = 4 << 10 // empty or {}
 )
 
+// certificateSources and expiryWindows are the list filter's values, the same as the inventory's (Task 10: the Key
+// Vault source and the 7, 14 and 90 day windows; B5).
 var (
-	certificateSources = []string{"discovered", "uploaded", "csr"}
-	expiryWindows      = []string{"expired", "30", "60"}
+	certificateSources = []string{"discovered", "uploaded", "csr", "azure_kv"}
+	expiryWindows      = []string{"expired", "7", "14", "30", "60", "90"}
 )
 
 func (s *server) listCertificates(w http.ResponseWriter, r *http.Request) {
+	f, ok := s.certificateFilter(w, r, true)
+	if !ok {
+		return
+	}
+	page, err := s.deps.Inventory.ListCertificates(r.Context(), f)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	items := make([]certificateDTO, 0, len(page.Items))
+	for _, c := range page.Items {
+		items = append(items, certificateJSON(c))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor(page.NextCursor)})
+}
+
+// certificateFilter reads the certificate list's filters: the list (paged) and its export, which is never a page and
+// refuses cursor and limit. It answers 422 itself.
+func (s *server) certificateFilter(w http.ResponseWriter, r *http.Request, paged bool) (inventory.CertificateFilter, bool) {
 	q := r.URL.Query()
 	var v validate.Errors
 	f := inventory.CertificateFilter{
@@ -70,8 +93,11 @@ func (s *server) listCertificates(w http.ResponseWriter, r *http.Request) {
 		Source:   q.Get("source"),
 		Query:    q.Get("q"),
 		Expiry:   q.Get("expiry"),
-		Cursor:   q.Get("cursor"),
-		Limit:    pageLimit(q.Get("limit"), &v),
+	}
+	if paged {
+		f.Cursor, f.Limit = q.Get("cursor"), pageLimit(q.Get("limit"), &v)
+	} else {
+		refusePaging(q, &v)
 	}
 	if f.Source != "" && !slices.Contains(certificateSources, f.Source) {
 		v.Add("source", validate.OneOf, map[string]string{"values": strings.Join(certificateSources, ", ")})
@@ -87,18 +113,9 @@ func (s *server) listCertificates(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := v.Err(); err != nil {
 		s.fail(w, r, err)
-		return
+		return inventory.CertificateFilter{}, false
 	}
-	page, err := s.deps.Inventory.ListCertificates(r.Context(), f)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	items := make([]certificateDTO, 0, len(page.Items))
-	for _, c := range page.Items {
-		items = append(items, certificateJSON(c))
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor(page.NextCursor)})
+	return f, true
 }
 
 // nextCursor is a list's next_cursor: null on the last page.

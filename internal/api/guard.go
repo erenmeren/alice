@@ -292,6 +292,24 @@ func (s *server) allowRate(w http.ResponseWriter, r *http.Request, class limitCl
 			key := "u:" + p.UserID.String()
 			checks = append(checks, func() (bool, time.Duration) { return s.download.Allow(key) })
 		}
+	case limitTestMail:
+		// Per user of a browser session, as the download: the permission (settings.manage) allows nothing else.
+		if p.Kind == rbac.UserSession && p.UserID != uuid.Nil {
+			key := "u:" + p.UserID.String()
+			checks = append(checks, func() (bool, time.Duration) { return s.testMails.Allow(key) })
+		}
+	case limitExport:
+		// Per user for a browser session, per token for a token: each identity has its own 10 a minute.
+		var key string
+		switch {
+		case p.Kind == rbac.UserSession && p.UserID != uuid.Nil:
+			key = "u:" + p.UserID.String()
+		case p.Kind == rbac.APIToken:
+			key = "t:" + p.TokenID.String()
+		}
+		if key != "" {
+			checks = append(checks, func() (bool, time.Duration) { return s.export.Allow(key) })
+		}
 	}
 	switch p.Kind {
 	case rbac.UserSession, rbac.PendingSession:

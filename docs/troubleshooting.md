@@ -467,6 +467,14 @@ is told to delete it.
 
 **What to do.** Give the Administrator role to another person first, then repeat the change.
 
+## ALC-USR-0003: This change is not possible for a single sign-on user
+
+**Meaning.** A role change, a password reset or an authenticator reset was refused for a user who signs in through an identity provider. (HTTP 409, reason `user.sso_user`.)
+
+**Likely cause.** The role of a single sign-on user comes from their groups, and they have no Alice password or authenticator.
+
+**What to do.** Change the user's groups at the identity provider; disable the user here if they must stop at once.
+
 ## ALC-TOK-0001: Token access not allowed
 
 **Meaning.** The requested token access exceeds what the owner's role allows (HTTP 422).
@@ -1031,6 +1039,102 @@ server again.
 **Likely cause.** Writing the email to Alice's outbox failed. A paused rotation continues only after that email is queued, and Alice tries again at every background check.
 
 **What to do.** Check Alice's logs and its database, then choose Continue again once the email is queued.
+
+## ALC-NTF-0002: Mail settings are missing
+
+**Meaning.** A test e-mail, removing the mail settings or trusting a certificate was refused because Alice has no mail server configured. (HTTP 409, reason `notify.smtp_not_configured`.)
+
+**Likely cause.** Alice has no mail server to send through. Without one, the e-mails of the expiry alerts, the lockout and the license are recorded as skipped and never sent.
+
+**What to do.** Enter the mail server in Settings, then try again.
+
+## ALC-NTF-0003: Alice could not reach the mail server
+
+**Meaning.** A test e-mail could not be sent because Alice found no connection to the mail server; scheduled e-mails fail with the label `smtp.connect` and are retried for 24 hours. (HTTP 502, reason `notify.smtp_connect`; retryable.)
+
+**Likely cause.** The server name or port may be wrong, the server may be down, or a firewall blocks the connection.
+
+**What to do.** Check the server name and port, then send a test e-mail again.
+
+## ALC-NTF-0004: The encrypted connection to the mail server failed
+
+**Meaning.** Alice connected to the mail server but could not set up encryption with it; nothing was sent (label `smtp.tls`). A certificate that is not trusted is ALC-NTF-0005 instead. (HTTP 502, reason `notify.smtp_tls`.)
+
+**Likely cause.** The server does not offer the selected encryption (STARTTLS or TLS), or the handshake failed.
+
+**What to do.** Choose the encryption the server offers (port 587 usually uses STARTTLS, port 465 TLS), then try again.
+
+## ALC-NTF-0005: Alice does not trust the mail server's certificate
+
+**Meaning.** The test e-mail stopped before anything was sent because the server's certificate did not verify (label `smtp.untrusted`). The answer carries the certificate's SHA-256 fingerprint, subject and expiry (params `fingerprint`, `subject`, `not_after`) and nothing else the server sent; Alice remembers that certificate for one hour so that it can be trusted. (HTTP 502, reason `notify.smtp_untrusted`.)
+
+**Likely cause.** The certificate is not signed by a trusted authority, does not match the server name, or has expired. Its fingerprint is shown below.
+
+**What to do.** Check with your mail administrator that the fingerprint is the server's, then choose Trust this certificate, or add your organisation's certificate authority. Trusting pins exactly this certificate: when the server gets a new one, send a test e-mail and trust the new one.
+
+## ALC-NTF-0006: The mail server rejected the user name or password
+
+**Meaning.** The mail server refused Alice's sign-in (label `smtp.auth`); nothing was sent. (HTTP 502, reason `notify.smtp_auth`.)
+
+**Likely cause.** The sign-in data in the mail settings are wrong or the account is locked at the mail server.
+
+**What to do.** Enter the correct user name and password, then send a test e-mail again. A user name always needs a password: saving one without a stored or new password is refused with a field error on `password`.
+
+## ALC-NTF-0007: The mail server refused the message
+
+**Meaning.** The mail server accepted the connection and the sign-in but refused the sender or the recipient (label `smtp.rejected`). (HTTP 502, reason `notify.smtp_rejected`.)
+
+**Likely cause.** The sender or recipient address is not accepted by the server.
+
+**What to do.** Check the sender address and the recipient, then try again.
+
+## ALC-NTF-0008: Alice did not see this certificate recently
+
+**Meaning.** Trust this certificate was refused: no failed test e-mail to the configured server and port showed a certificate with this fingerprint in the last hour. (HTTP 409, reason `notify.certificate_not_seen`.)
+
+**Likely cause.** Only a certificate that a test e-mail found in the last hour can be trusted. Changing the server name or port, or trusting the certificate once already, also ends that hour.
+
+**What to do.** Send a test e-mail again, then trust the certificate it shows.
+
+## ALC-NTF-0009: Alice does not connect to this mail server address
+
+**Meaning.** The mail server's name resolved to an address Alice never connects to (label `smtp.address_refused`); nothing was sent. (HTTP 409, reason `notify.smtp_address_refused`.)
+
+**Likely cause.** The server name points to a link-local or cloud metadata address, which Alice never contacts.
+
+**What to do.** Use the mail server's normal address.
+
+## ALC-RPT-0001: The export is too large
+
+**Meaning.** A CSV export was refused because its filter matches more than 50,000 rows (param `max`). Nothing was written and nothing was recorded in the audit log. (HTTP 409, reason `export.too_large`.)
+
+**Likely cause.** An export holds at most 50,000 rows, and this filter matches more. Alice counts the rows before it writes the file; when rows are added between that count and the end of the file, the file stops at 50,000 rows without an error, so an export of a list that grows right then can hold fewer rows than the list shows at the end.
+
+**What to do.** Narrow the filter, for example by server or expiry, then export again.
+
+## ALC-RPT-0002: You have reached the limit of saved views
+
+**Meaning.** Saving a view was refused: you already keep 50 saved views (param `max`), on both list pages together. (HTTP 409, reason `views.limit_reached`.)
+
+**Likely cause.** A person can keep at most 50 saved views.
+
+**What to do.** Delete a view you no longer need, then save again.
+
+## ALC-RPT-0003: A saved view with this name already exists
+
+**Meaning.** Saving a view was refused because one of your views on the same page has this name (upper and lower case count as the same). (HTTP 409, reason `views.name_taken`.)
+
+**Likely cause.** Each of your views on a page needs its own name.
+
+**What to do.** Choose another name.
+
+## ALC-RPT-0004: Another export of yours is still running
+
+**Meaning.** A CSV export was refused because the same person (or the same API token's owner) has an export running; nothing was written or recorded. (HTTP 409, reason `export.busy`; retryable, with Retry-After.)
+
+**Likely cause.** Each person can run one export at a time, and your previous export has not finished yet.
+
+**What to do.** Wait until the previous download has finished, then export again.
 
 ## ALC-ROT-0001: This key already has a rotation policy
 

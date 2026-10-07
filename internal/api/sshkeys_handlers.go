@@ -30,6 +30,8 @@ func (s *server) sshKeyRoutes() []route {
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys", perm: rbac.Read, handler: s.listSSHKeys},
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/platform-key", perm: rbac.TargetsManage, handler: s.platformKey},
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/{id}", perm: rbac.Read, handler: s.getSSHKey},
+		// Phase 7 (C13): the list as a CSV file, with the list's filters; a read, so it works in lock.
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/export", perm: rbac.Read, limit: limitExport, handler: s.exportSSHKeys},
 		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/locations/{id}/actions/remove", perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.removeKeyLocation},
 		// Phase 6 (C13): generation and deploy are Operators' too (R41 row 7); the private key leaves Alice only through
 		// the download, an Administrator's browser session with step-up, 5 per minute, allowed in lock (row 5).
@@ -79,31 +81,8 @@ func optionalUUID(raw, field string, v *validate.Errors) uuid.UUID {
 }
 
 func (s *server) listSSHKeys(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	var v validate.Errors
-	f := inventory.KeyFilter{
-		TargetID:       optionalUUID(q.Get("target_id"), "target_id", &v),
-		OSUser:         q.Get("os_user"),
-		Query:          q.Get("q"),
-		Flag:           q.Get("flag"),
-		IncludeMissing: parseBool(q.Get("missing"), "missing", &v),
-		Cursor:         q.Get("cursor"),
-		Limit:          pageLimit(q.Get("limit"), &v),
-	}
-	if len(f.OSUser) > maxOSUserBytes {
-		v.Add("os_user", validate.TooLong, map[string]string{"max": strconv.Itoa(maxOSUserBytes)})
-	}
-	if utf8.RuneCountInString(f.Query) > maxQueryRunes {
-		v.Add("q", validate.TooLong, map[string]string{"max": strconv.Itoa(maxQueryRunes)})
-	}
-	if f.Flag != "" && !slices.Contains(knownFlags, f.Flag) {
-		v.Add("flag", validate.OneOf, map[string]string{"values": strings.Join(knownFlags, ", ")})
-	}
-	if len(f.Cursor) > maxCursorBytes {
-		v.Add("cursor", validate.TooLong, map[string]string{"max": strconv.Itoa(maxCursorBytes)})
-	}
-	if err := v.Err(); err != nil {
-		s.fail(w, r, err)
+	f, ok := s.sshKeyFilter(w, r, true)
+	if !ok {
 		return
 	}
 	page, err := s.deps.Inventory.ListSSHKeys(r.Context(), f)
@@ -120,6 +99,42 @@ func (s *server) listSSHKeys(w http.ResponseWriter, r *http.Request) {
 		next = page.NextCursor
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
+}
+
+// sshKeyFilter reads the SSH key list's filters: the list (paged) and its export, which is never a page and refuses
+// cursor and limit. It answers 422 itself.
+func (s *server) sshKeyFilter(w http.ResponseWriter, r *http.Request, paged bool) (inventory.KeyFilter, bool) {
+	q := r.URL.Query()
+	var v validate.Errors
+	f := inventory.KeyFilter{
+		TargetID:       optionalUUID(q.Get("target_id"), "target_id", &v),
+		OSUser:         q.Get("os_user"),
+		Query:          q.Get("q"),
+		Flag:           q.Get("flag"),
+		IncludeMissing: parseBool(q.Get("missing"), "missing", &v),
+	}
+	if paged {
+		f.Cursor, f.Limit = q.Get("cursor"), pageLimit(q.Get("limit"), &v)
+	} else {
+		refusePaging(q, &v)
+	}
+	if len(f.OSUser) > maxOSUserBytes {
+		v.Add("os_user", validate.TooLong, map[string]string{"max": strconv.Itoa(maxOSUserBytes)})
+	}
+	if utf8.RuneCountInString(f.Query) > maxQueryRunes {
+		v.Add("q", validate.TooLong, map[string]string{"max": strconv.Itoa(maxQueryRunes)})
+	}
+	if f.Flag != "" && !slices.Contains(knownFlags, f.Flag) {
+		v.Add("flag", validate.OneOf, map[string]string{"values": strings.Join(knownFlags, ", ")})
+	}
+	if len(f.Cursor) > maxCursorBytes {
+		v.Add("cursor", validate.TooLong, map[string]string{"max": strconv.Itoa(maxCursorBytes)})
+	}
+	if err := v.Err(); err != nil {
+		s.fail(w, r, err)
+		return inventory.KeyFilter{}, false
+	}
+	return f, true
 }
 
 func (s *server) getSSHKey(w http.ResponseWriter, r *http.Request) {
