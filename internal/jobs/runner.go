@@ -388,7 +388,7 @@ func capFull(ctx context.Context, tx pgx.Tx, typ string, limit int) (bool, error
 // once per worker). A failed sweep is logged; always-class work is still claimed.
 func (r *Runner) sweepIfDue(ctx context.Context, now time.Time) {
 	r.sweepMu.Lock()
-	if !r.lastSweep.IsZero() && now.Sub(r.lastSweep) < r.cfg.Poll {
+	if !sweepDue(r.lastSweep, now, r.cfg.Poll) {
 		r.sweepMu.Unlock()
 		return
 	}
@@ -397,6 +397,13 @@ func (r *Runner) sweepIfDue(ctx context.Context, now time.Time) {
 	if err := r.sweepLocked(ctx, now); err != nil && ctx.Err() == nil {
 		r.cfg.Log.Error("holding queued work in lock failed", "error_type", fmt.Sprintf("%T", err))
 	}
+}
+
+// sweepDue says whether the lock sweep may run again: never swept, the last sweep is at least one poll interval ago, or
+// it lies in the future (the clock was set back): a future sweep never counts as recent, or work would not be held
+// until the clock caught up with it.
+func sweepDue(last, now time.Time, poll time.Duration) bool {
+	return last.IsZero() || now.Sub(last) >= poll || now.Before(last)
 }
 
 // sweepLocked holds queued external-change work for an Administrator's confirmation and
