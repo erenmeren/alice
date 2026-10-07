@@ -141,7 +141,8 @@ func goSources(t *testing.T, root string) []string {
 }
 
 // Global constraint: helperproto.ProbeTLSConfig is the only certificate check Alice skips; both
-// probes (TLSProber here, the helper's tls-probe) use it.
+// probes (TLSProber here, the helper's tls-probe) use it. Phase 7 adds exactly one more place, the pinned mail
+// server certificate of internal/notify (pinnedTLS), whose VerifyConnection accepts only the pinned leaf.
 func TestOnlyProbeTLSConfigSkipsVerification(t *testing.T) {
 	root, err := filepath.Abs("../../..")
 	require.NoError(t, err)
@@ -159,7 +160,15 @@ func TestOnlyProbeTLSConfigSkipsVerification(t *testing.T) {
 			found = append(found, f)
 		}
 	}
-	assert.Equal(t, []string{"internal/providers/linuxssh/helperproto/helperproto.go"}, found)
+	assert.Equal(t, []string{"internal/notify/pin.go", "internal/providers/linuxssh/helperproto/helperproto.go"}, found)
+	pin, err := os.ReadFile(filepath.Join(root, "internal", "notify", "pin.go")) //nolint:gosec // G304: a fixed source file of the repository
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(pin), needle), "notify skips the chain check in one place only")
+	fn := string(pin)[strings.Index(string(pin), "func pinnedTLS("):]
+	fn = fn[:strings.Index(fn, "\n}\n")]
+	assert.Contains(t, fn, needle, "the one place is pinnedTLS")
+	assert.Contains(t, fn, "VerifyConnection:", "pinnedTLS checks the pinned leaf itself")
+	assert.Contains(t, fn, "subtle.ConstantTimeCompare(", "pinnedTLS compares the pin")
 	for _, f := range []string{"probe.go", "../../../cmd/alice-helper/probe.go"} {
 		b, err := os.ReadFile(f) //nolint:gosec // G304: a fixed source file of the repository
 		require.NoError(t, err)
