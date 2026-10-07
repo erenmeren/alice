@@ -93,14 +93,19 @@ export function RotationPolicyPanel({ keyId, policyId, isAdmin }: { keyId: strin
           <Text size="sm">{p.interval_days === 1 ? t('rotation.everyDay') : t('rotation.every', { count: p.interval_days })}</Text>
           <Text size="sm">{t('rotation.overlap', { duration: durationText(t, p.overlap_minutes) })}</Text>
           <Text size="sm">{t('rotation.notifyBefore', { hours: p.notify_before_hours })}</Text>
-          <Switch
-            label={t('rotation.switch')}
-            checked={p.enabled}
-            onChange={(e) => void toggle(p, e.currentTarget.checked)}
-            disabled={!isAdmin || switching}
-            onLabel={t('rotation.on')}
-            offLabel={t('rotation.off')}
-          />
+          {/* The state is text beside the switch, not a label inside its track: Mantine draws the track label
+              in gray 6 on gray 3 (2.6:1), below WCAG AA; the switch itself tells a screen reader its state. */}
+          <Group gap="sm">
+            <Switch
+              label={t('rotation.switch')}
+              checked={p.enabled}
+              onChange={(e) => void toggle(p, e.currentTarget.checked)}
+              disabled={!isAdmin || switching}
+            />
+            <Text size="sm" data-testid="rotation-state">
+              {t(p.enabled ? 'rotation.on' : 'rotation.off')}
+            </Text>
+          </Group>
           {!p.enabled && <Text size="sm">{t('rotation.offHelp')}</Text>}
           {p.enabled && p.next_run_at && <Text size="sm">{t('rotation.nextRun', { date: formatDateTime(p.next_run_at, i18n.language) })}</Text>}
           {p.last_run_status && (

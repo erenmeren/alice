@@ -210,7 +210,8 @@ export function RotationRunPage() {
         <Alert color="red" role="alert">
           <Text size="sm">{t('rotation.pausedBanner')}</Text>
           {allowed.has('abort') && <Text size="sm">{t('rotation.licensePaused')}</Text>}
-          <Anchor component={Link} to="/license" size="sm">
+          {/* Black, underlined: the indigo link is 4.4:1 on the red tint (LicenseBanners does the same). */}
+          <Anchor component={Link} to="/license" size="sm" c="black" underline="always">
             {t('rotation.openLicense')}
           </Anchor>
         </Alert>
