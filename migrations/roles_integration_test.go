@@ -95,6 +95,9 @@ var explicitGrants = map[string][]string{
 	"public.audit_log":           {"INSERT", "SELECT"},
 	"public.master_key_versions": {"INSERT", "SELECT"},
 	"public.goose_db_version":    {"SELECT"},
+	// Phase 7 (R42): the notice ledger is append-only; sign-in states are inserted and deleted, never changed.
+	"public.alerts":            {"INSERT", "SELECT"},
+	"public.oidc_login_states": {"DELETE", "INSERT", "SELECT"},
 	// License data: uploaded files and their history are append-only for the application,
 	// so a compromised application cannot rewrite which licenses were installed (spec §16).
 	// The installation row's ID and timestamp are never updated (UPDATE is column-level, below).
