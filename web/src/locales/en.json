@@ -2193,7 +2193,13 @@
     "allowAdmin": "SSO users may be Admin",
     "allowAdminHelp": "Off by default: single sign-on users can then be at most Operators. The local administrator always signs in with the authenticator code.",
     "mfaNote": "Users who sign in with single sign-on confirm their identity at the identity provider. Make sure it requires multi-factor authentication.",
-    "deleteShort": "Delete"
+    "deleteShort": "Delete",
+    "switchOffTitle": "Switch off SSO users may be Admin?",
+    "switchOffText": "Every single sign-on user who is an Administrator becomes an Operator and is signed out. Switching the setting on again does not give the role back.",
+    "switchOffConfirm": "Switch off",
+    "removeMappingTitle": "Remove the mapping for {{group}}?",
+    "removeMappingText": "Members of this group no longer get this role when they sign in.",
+    "removeMappingConfirm": "Remove mapping"
   },
   "stepUp": {
     "ssoTitle": "Confirm at your identity provider",

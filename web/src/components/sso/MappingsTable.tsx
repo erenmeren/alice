@@ -2,9 +2,10 @@ import { Button, Code, Group, NativeSelect, Stack, Table, Text, TextInput, Visua
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { createMapping, deleteMapping, listMappings } from '../../api/sso';
+import { createMapping, deleteMapping, listMappings, type Mapping } from '../../api/sso';
 import { ssoMappingsKey } from '../../api/queryKeys';
 import type { Role } from '../../api/types';
+import { AppModal } from '../AppModal';
 import { ErrorAlert } from '../ErrorAlert';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { useStepUp } from '../StepUpProvider';
@@ -20,6 +21,7 @@ export function MappingsTable({ providerId }: { providerId: string }) {
   const client = useQueryClient();
   const [group, setGroup] = useState('');
   const [role, setRole] = useState<Role>('operator');
+  const [confirm, setConfirm] = useState<Mapping | null>(null);
   const key = ssoMappingsKey(providerId);
   const list = useQuery({ queryKey: key, queryFn: () => run(() => listMappings(providerId)) });
   const refresh = () => client.invalidateQueries({ queryKey: key });
@@ -69,7 +71,7 @@ export function MappingsTable({ providerId }: { providerId: string }) {
                     </Table.Td>
                     <Table.Td>{t(`enum.role.${m.role}`)}</Table.Td>
                     <Table.Td>
-                      <Button size="xs" variant="default" loading={remove.isPending && remove.variables === m.id} onClick={() => remove.mutate(m.id)} aria-label={t('sso.removeMapping', { group: m.group })}>
+                      <Button size="xs" variant="default" loading={remove.isPending && remove.variables === m.id} onClick={() => setConfirm(m)} aria-label={t('sso.removeMapping', { group: m.group })}>
                         <span aria-hidden>×</span>
                       </Button>
                     </Table.Td>
@@ -80,6 +82,27 @@ export function MappingsTable({ providerId }: { providerId: string }) {
           </Table.ScrollContainer>
         ))}
       <ErrorAlert error={remove.error} />
+      {confirm && (
+        <AppModal opened onClose={() => setConfirm(null)} title={t('sso.removeMappingTitle', { group: confirm.group })}>
+          <Stack gap="sm">
+            <Text size="sm">{t('sso.removeMappingText')}</Text>
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => setConfirm(null)}>
+                {t('ui.cancel')}
+              </Button>
+              <Button
+                color="red.9"
+                onClick={() => {
+                  remove.mutate(confirm.id);
+                  setConfirm(null);
+                }}
+              >
+                {t('sso.removeMappingConfirm')}
+              </Button>
+            </Group>
+          </Stack>
+        </AppModal>
+      )}
       <form onSubmit={submit}>
         <Group align="flex-end" gap="sm">
           <TextInput label={t('sso.group')} value={group} onChange={(e) => setGroup(e.currentTarget.value)} autoComplete="off" spellCheck={false} />

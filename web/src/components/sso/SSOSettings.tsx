@@ -21,6 +21,7 @@ export function SSOSettings() {
   const { run } = useStepUp();
   const client = useQueryClient();
   const [dialog, setDialog] = useState<Dialog | null>(null);
+  const [confirmOff, setConfirmOff] = useState(false);
   const settings = useQuery({ queryKey: SSO_SETTINGS_KEY, queryFn: () => run(getSSOSettings) });
   const providers = useQuery({ queryKey: SSO_PROVIDERS_KEY, queryFn: () => run(listProviders) });
   const allow = useMutation({
@@ -42,7 +43,7 @@ export function SSOSettings() {
             aria-describedby="sso-allow-admin-help"
             checked={settings.data.allow_admin_role}
             disabled={allow.isPending}
-            onChange={(e) => allow.mutate(e.currentTarget.checked)}
+            onChange={(e) => (e.currentTarget.checked ? allow.mutate(true) : setConfirmOff(true))}
           />
         )}
         <Text size="sm" c="gray.7" id="sso-allow-admin-help">
@@ -67,6 +68,27 @@ export function SSOSettings() {
         ))}
       </Stack>
 
+      {confirmOff && (
+        <AppModal opened onClose={() => setConfirmOff(false)} title={t('sso.switchOffTitle')}>
+          <Stack gap="sm">
+            <Text size="sm">{t('sso.switchOffText')}</Text>
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => setConfirmOff(false)}>
+                {t('ui.cancel')}
+              </Button>
+              <Button
+                color="red.9"
+                onClick={() => {
+                  setConfirmOff(false);
+                  allow.mutate(false);
+                }}
+              >
+                {t('sso.switchOffConfirm')}
+              </Button>
+            </Group>
+          </Stack>
+        </AppModal>
+      )}
       {dialog?.kind === 'form' && <ProviderDialog provider={dialog.provider} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'delete' && <DeleteDialog provider={dialog.provider} onClose={() => setDialog(null)} />}
     </Stack>

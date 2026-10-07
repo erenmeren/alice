@@ -8,6 +8,7 @@ import { useAuth } from '../../auth/AuthProvider';
 import { ErrorAlert } from '../ErrorAlert';
 import { fieldErrorsOf } from '../fieldErrors';
 import { LoadingIndicator } from '../LoadingIndicator';
+import { useStepUp } from '../StepUpProvider';
 import { SavedNote } from './SavedNote';
 import { TrustCertificateDialog } from './TrustCertificateDialog';
 import { useChange, useSetting } from './useSetting';
@@ -26,11 +27,12 @@ function MailPanel({ settings }: { settings: SMTPSettings }) {
   const { session } = useAuth();
   const [to, setTo] = useState(session?.user.email ?? '');
   const [showUntrusted, setShowUntrusted] = useState(false);
+  const { run } = useStepUp();
   const save = useChange('smtp', settings.version, saveSMTP);
   const trust = useChange('smtp', settings.version, trustSMTPCertificate);
   const untrust = useChange<SMTPSettings, void>('smtp', settings.version, (version) => untrustSMTPCertificate(version));
   const test = useMutation({
-    mutationFn: () => sendTestMail(to.trim()),
+    mutationFn: () => run(() => sendTestMail(to.trim())),
     onError: (e) => setShowUntrusted(isApiError(e, 'notify.smtp_untrusted')),
   });
   const untrusted = showUntrusted && isApiError(test.error, 'notify.smtp_untrusted') ? test.error : null;
@@ -38,7 +40,7 @@ function MailPanel({ settings }: { settings: SMTPSettings }) {
 
   return (
     <Stack gap="lg">
-      {/* Keyed by the version: a saved or re-read setting draws the form again, and a typed password is gone with it. */}
+      {/* Keyed by the version: a saved or re-read setting draws the form again, which empties the password field. */}
       <MailForm key={settings.version} settings={settings} onSave={(body) => save.mutate(body)} busy={save.isPending} fieldErrors={fieldErrorsOf(save.error, t, i18n)} />
       <SavedNote show={save.isSuccess} />
       <ErrorAlert error={save.error} />

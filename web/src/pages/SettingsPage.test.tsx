@@ -51,6 +51,23 @@ describe('SettingsPage, mail', () => {
     expect(await screen.findByText(/The test e-mail was sent to/)).toBeInTheDocument();
   });
 
+  it('asks for the code when the step-up window ended before the test e-mail, then sends it', async () => {
+    let tests = 0;
+    server.use(
+      ...sessionHandlers(steppedUp),
+      http.get('/api/v1/settings/smtp', () => HttpResponse.json(smtp())),
+      http.post('/api/v1/settings/smtp/actions/test', () => (++tests === 1 ? errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required') : HttpResponse.json({ sent: true }))),
+      http.post('/api/v1/auth/stepup', () => HttpResponse.json(steppedUp)),
+    );
+    await renderRoute('/settings?tab=mail');
+    await userEvent.click(await screen.findByRole('button', { name: 'Send test e-mail' }));
+    expect(await screen.findByRole('dialog', { name: "Confirm it's you" })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText('6-digit code'), '123456');
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    expect(await screen.findByText(/The test e-mail was sent to/)).toBeInTheDocument();
+    expect(tests).toBe(2);
+  });
+
   it('stops trusting a certificate', async () => {
     let ifMatch: string | null = null;
     server.use(

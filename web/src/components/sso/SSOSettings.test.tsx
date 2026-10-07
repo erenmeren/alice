@@ -69,6 +69,8 @@ describe('SSOSettings', () => {
     await waitFor(() => expect(created).toEqual({ provider_id: 'p1', group: 'g1', role: 'auditor' }));
     expect(screen.getByLabelText('Group')).toHaveValue('');
     await userEvent.click(await screen.findByRole('button', { name: 'Remove mapping for g1' }));
+    expect(deleted).toBe(''); // nothing is sent before the confirmation
+    await userEvent.click(within(await screen.findByRole('dialog', { name: 'Remove the mapping for g1?' })).getByRole('button', { name: 'Remove mapping' }));
     await waitFor(() => expect(deleted).toBe('m9?provider_id=p1'));
   });
 
@@ -91,6 +93,10 @@ describe('SSOSettings', () => {
     await waitFor(() => expect(screen.getByRole('switch', { name: 'SSO users may be Admin' })).toBeChecked());
     expect(puts[0]).toEqual({ body: { allow_admin_role: true }, ifMatch: '"0"' });
     await userEvent.click(screen.getByRole('switch', { name: 'SSO users may be Admin' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Switch off SSO users may be Admin?' });
+    expect(confirm).toHaveTextContent('becomes an Operator and is signed out');
+    expect(puts).toHaveLength(1);
+    await userEvent.click(within(confirm).getByRole('button', { name: 'Switch off' }));
     expect(await screen.findByText('SSO users may be Admin cannot be switched off yet.')).toBeInTheDocument();
     expect(puts[1].ifMatch).toBe('"1"');
     expect(screen.getByRole('switch', { name: 'SSO users may be Admin' })).toBeChecked();
@@ -197,5 +203,22 @@ describe('SSOSettings', () => {
     base([http.get('/api/v1/sso/providers', () => HttpResponse.json({ items: [] }))]);
     await renderRoute('/settings?tab=sso');
     expect(await screen.findByText('No identity provider is set up yet.')).toBeInTheDocument();
+  });
+
+  it('sends nothing when the switch-off is cancelled', async () => {
+    let puts = 0;
+    base([
+      http.get('/api/v1/sso/settings', () => settings(true, 2)),
+      http.put('/api/v1/sso/settings', () => {
+        puts++;
+        return settings(false, 3);
+      }),
+    ]);
+    await renderRoute('/settings?tab=sso');
+    await userEvent.click(await screen.findByRole('switch', { name: 'SSO users may be Admin' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(puts).toBe(0);
+    expect(screen.getByRole('switch', { name: 'SSO users may be Admin' })).toBeChecked();
   });
 });

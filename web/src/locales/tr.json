@@ -2193,7 +2193,13 @@
     "allowAdmin": "SSO kullanıcıları Yönetici olabilir",
     "allowAdminHelp": "Varsayılan olarak kapalı: çoklu oturum açma kullanıcıları bu durumda en çok Operatör olabilir. Yerel yönetici her zaman doğrulama koduyla oturum açar.",
     "mfaNote": "Çoklu oturum açmayla oturum açan kullanıcılar kimliklerini kimlik sağlayıcıda doğrular. Kimlik sağlayıcının çok adımlı doğrulama istediğinden emin olun.",
-    "deleteShort": "Sil"
+    "deleteShort": "Sil",
+    "switchOffTitle": "SSO kullanıcıları Yönetici olabilir ayarı kapatılsın mı?",
+    "switchOffText": "Yönetici olan her çoklu oturum açma kullanıcısı Operatör olur ve oturumu kapatılır. Ayarı yeniden açmak rolü geri vermez.",
+    "switchOffConfirm": "Kapat",
+    "removeMappingTitle": "{{group}} eşlemesi kaldırılsın mı?",
+    "removeMappingText": "Bu grubun üyeleri oturum açtıklarında artık bu rolü almaz.",
+    "removeMappingConfirm": "Eşlemeyi kaldır"
   },
   "stepUp": {
     "ssoTitle": "Kimlik sağlayıcınızda onaylayın",

@@ -38,6 +38,15 @@ describe('AlertSettings', () => {
     expect(screen.getByRole('button', { name: 'Add threshold' })).toBeDisabled();
   });
 
+  it('does not save while a threshold row is empty', async () => {
+    server.use(...sessionHandlers(steppedUp), http.get('/api/v1/settings/alerts', () => HttpResponse.json({ thresholds_days: [30], version: 1 })));
+    await renderRoute('/settings?tab=alerts');
+    await userEvent.click(await screen.findByRole('button', { name: 'Add threshold' }));
+    expect(screen.getByRole('button', { name: 'Save alert thresholds' })).toBeDisabled();
+    await userEvent.type(screen.getByLabelText('Threshold 2 (days)'), '7');
+    expect(screen.getByRole('button', { name: 'Save alert thresholds' })).toBeEnabled();
+  });
+
   it('shows the refusal of a bad value', async () => {
     server.use(
       ...sessionHandlers(steppedUp),

@@ -64,7 +64,7 @@ function ThresholdForm({ settings, busy, onSave }: { settings: AlertThresholds; 
           <Button variant="default" disabled={days.length >= MAX_THRESHOLDS} onClick={() => setDays((x) => [...x, ''])}>
             {t('settings.alerts.add')}
           </Button>
-          <Button type="submit" loading={busy}>
+          <Button type="submit" loading={busy} disabled={days.some((d) => d === '' || Number.isNaN(Number(d)))}>
             {t('settings.alerts.save')}
           </Button>
         </Group>

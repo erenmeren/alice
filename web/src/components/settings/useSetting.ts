@@ -18,6 +18,8 @@ export function useChange<T extends { version: number }, V>(name: Name, version:
   const { run } = useStepUp();
   const client = useQueryClient();
   return useMutation({
+    // gcTime 0: a finished change (which may carry a password) is not kept in the mutation cache after the form is gone.
+    gcTime: 0,
     mutationFn: (value: V) => run(() => send(version, value)),
     onSuccess: (data) => client.setQueryData(settingsKey(name), data),
     onError: (e) => {

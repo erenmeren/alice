@@ -23,9 +23,11 @@ export function ProviderDialog({ provider, onClose }: { provider: Provider | nul
   const [clientSecret, setClientSecret] = useState('');
   const [groupsClaim, setGroupsClaim] = useState(provider?.groups_claim ?? 'groups');
   const [caPem, setCaPem] = useState(provider?.ca_pem ?? '');
-  const [enabled, setEnabled] = useState(provider?.enabled ?? false) // a new provider starts switched off (the server's default too);
+  // A new provider starts switched off (the server's default too).
+  const [enabled, setEnabled] = useState(provider?.enabled ?? false);
 
   const save = useMutation({
+    gcTime: 0, // the client secret is a mutation variable: do not keep it in the mutation cache
     mutationFn: (secret: string) => {
       const body = { name: name.trim(), issuer_url: issuer.trim(), client_id: clientId.trim(), groups_claim: groupsClaim.trim(), ca_pem: caPem, enabled, ...(secret ? { client_secret: secret } : {}) };
       return run(() => (provider ? updateProvider(provider.id, provider.version, body) : createProvider(body)));
