@@ -117,7 +117,7 @@ func TestE2ETargetIsTestOnlyAndUnpublished(t *testing.T) {
 		names = append(names, name)
 	}
 	// The overlay adds the SSH target and the fake Azure service, nothing else; the release file has neither.
-	assert.ElementsMatch(t, []string{"alice", "sshtarget", "fakeazure"}, names, "the overlay adds only the SSH target (which also runs Nginx) and the fake Azure service")
+	assert.ElementsMatch(t, []string{"alice", "sshtarget", "fakeazure", "fakesmtp", "fakeidp"}, names, "the overlay adds only the SSH target (which also runs Nginx) and the fake Azure, SMTP and identity provider services")
 	_, fakeInBase := base.Services["fakeazure"]
 	assert.False(t, fakeInBase, "the release compose file has no fake Azure service")
 	// The e2e build answers the unauthenticated /test/* endpoints: it is published on loopback only (AUD-07).
@@ -353,23 +353,40 @@ func TestDockerfileInstructionsJoinContinuationLines(t *testing.T) {
 // The fake Azure image builds on the two base images deploy/Dockerfile already pins, by the same
 // digests: no new base image enters the supply chain.
 func TestFakeAzureDockerfileReusesTheReleaseBaseImages(t *testing.T) {
-	froms := func(path string) map[string]bool {
-		raw, err := os.ReadFile(path)
-		require.NoError(t, err)
-		out := map[string]bool{}
-		for _, l := range dockerfileInstructions(string(raw)) {
-			if ref, ok := strings.CutPrefix(l, "FROM "); ok {
-				out[strings.Fields(ref)[0]] = true
-			}
-		}
-		return out
-	}
-	release := froms("../../deploy/Dockerfile")
-	fake := froms("../../test/images/fakeazure/Dockerfile")
+	release := dockerfileFroms(t, "../../deploy/Dockerfile")
+	fake := dockerfileFroms(t, "../../test/images/fakeazure/Dockerfile")
 	require.Len(t, fake, 2, "a builder and a runtime image")
 	for ref := range fake {
 		assert.Contains(t, ref, "@sha256:")
 		assert.True(t, release[ref], "%s is not a base image of deploy/Dockerfile", ref)
+	}
+}
+
+// dockerfileFroms is the set of image references the FROM lines of a Dockerfile name.
+func dockerfileFroms(t *testing.T, path string) map[string]bool {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	out := map[string]bool{}
+	for _, l := range dockerfileInstructions(string(raw)) {
+		if ref, ok := strings.CutPrefix(l, "FROM "); ok {
+			out[strings.Fields(ref)[0]] = true
+		}
+	}
+	return out
+}
+
+// The mail and identity provider fakes' images build on the two base images deploy/Dockerfile pins, by the
+// same digests, and hold no key material (their certificates are generated when the container starts).
+func TestMailAndIdPFakeDockerfilesReuseTheReleaseBaseImages(t *testing.T) {
+	release := dockerfileFroms(t, "../../deploy/Dockerfile")
+	for _, f := range []string{"../../test/images/fakesmtp/Dockerfile", "../../test/images/fakeidp/Dockerfile"} {
+		froms := dockerfileFroms(t, f)
+		require.Len(t, froms, 2, "%s: a builder and a runtime image", f)
+		for from := range froms {
+			assert.Contains(t, from, "@sha256:", f)
+			assert.True(t, release[from], "%s uses only base images the release build pins: %s", f, from)
+		}
 	}
 }
 
@@ -388,4 +405,67 @@ func TestE2ETargetDockerfileUnlocksTheDeployAccount(t *testing.T) {
 	assert.Greater(t, unlock, add, "the deploy account is unlocked right after it is created")
 	assert.NotContains(t, src, "PRIVATE "+"KEY", "no key material in the Dockerfile")
 	assert.Contains(t, src, `rm -rf "$tmp"`, "the fixture keys' private halves are deleted in the layer that made them")
+}
+
+// The fake SMTP server exists only in the test overlay, publishes nothing, sits only on the internal backend
+// network and is hardened like the other services; port 2525 needs no sysctl and no capability.
+func TestE2EFakeSMTPIsTestOnlyAndHardened(t *testing.T) {
+	overlay := readCompose(t, "../../deploy/docker-compose.e2e.yml")
+	fake, ok := overlay.Services["fakesmtp"]
+	require.True(t, ok)
+	assert.Empty(t, fake.Ports, "the fake SMTP server publishes nothing")
+	assert.Equal(t, []string{"backend"}, fake.Networks.names())
+	assert.True(t, fake.ReadOnly)
+	assert.Equal(t, []string{"ALL"}, fake.CapDrop)
+	assert.Empty(t, fake.CapAdd)
+	assert.Empty(t, fake.Sysctls, "port 2525 needs no sysctl")
+	assert.Equal(t, []string{"no-new-privileges:true"}, fake.SecurityOpt)
+	assert.Regexp(t, `^[1-9][0-9]*:[1-9][0-9]*$`, fake.User)
+	assert.NotEmpty(t, fake.MemLimit)
+	assert.Positive(t, fake.PidsLimit)
+	assert.Equal(t, "alice-e2e-fakesmtp", fake.Image)
+	assert.Equal(t, "test/images/fakesmtp/Dockerfile", fake.Build.Dockerfile)
+	_, err := os.Stat("../../" + fake.Build.Dockerfile)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"serve", "--listen", ":2525", "--api", "127.0.0.1:8025", "--hostname", "fakesmtp"}, fake.Command)
+	assert.Equal(t, []string{"CMD", "/alice-fakesmtp", "ctl", "ping"}, fake.Healthcheck.Test)
+	assert.Equal(t, "service_healthy", overlay.Services["alice"].DependsOn["fakesmtp"].Condition)
+}
+
+// The fake identity provider exists only in the test overlay; it is the one fake published on the host, on
+// loopback only, because the browser reaches it there; its admin API stays on loopback inside the container.
+func TestE2EFakeIdPIsTestOnlyHardenedAndLoopbackPublished(t *testing.T) {
+	overlay := readCompose(t, "../../deploy/docker-compose.e2e.yml")
+	fake, ok := overlay.Services["fakeidp"]
+	require.True(t, ok)
+	assert.Equal(t, []any{"127.0.0.1:9444:9444"}, fake.Ports, "loopback only: the browser reaches it on this host")
+	assert.Equal(t, []string{"frontend"}, fake.Networks.names())
+	assert.Equal(t, []string{"idp.alice-e2e.test"}, fake.Networks["frontend"].Aliases)
+	assert.True(t, fake.ReadOnly)
+	assert.Equal(t, []string{"ALL"}, fake.CapDrop)
+	assert.Empty(t, fake.CapAdd)
+	assert.Empty(t, fake.Sysctls)
+	assert.Equal(t, []string{"no-new-privileges:true"}, fake.SecurityOpt)
+	assert.Regexp(t, `^[1-9][0-9]*:[1-9][0-9]*$`, fake.User)
+	assert.NotEmpty(t, fake.MemLimit)
+	assert.Positive(t, fake.PidsLimit)
+	assert.Equal(t, "alice-e2e-fakeidp", fake.Image)
+	assert.Equal(t, "test/images/fakeidp/Dockerfile", fake.Build.Dockerfile)
+	_, err := os.Stat("../../" + fake.Build.Dockerfile)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"serve", "--listen", ":9444", "--host", "idp.alice-e2e.test", "--admin", "127.0.0.1:9091", "--redirect-prefix", "https://localhost:"}, fake.Command,
+		"the admin API stays on loopback")
+	assert.Equal(t, []string{"CMD", "/alice-fakeidp", "ctl", "ping"}, fake.Healthcheck.Test)
+	assert.Equal(t, "service_healthy", overlay.Services["alice"].DependsOn["fakeidp"].Condition)
+}
+
+// A release Alice has no way to reach the mail or identity provider fakes.
+func TestReleaseComposeNeverMentionsTheMailAndIdPFakes(t *testing.T) {
+	for _, f := range []string{"../../deploy/docker-compose.yml", "../../deploy/Dockerfile"} {
+		raw, err := os.ReadFile(f)
+		require.NoError(t, err)
+		for _, word := range []string{"fakesmtp", "fakeidp", "idp.alice-e2e.test"} {
+			assert.NotContains(t, string(raw), word, f)
+		}
+	}
 }

@@ -101,6 +101,47 @@ if "${compose[@]}" config --services | grep -qx fakeazure; then
       "$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$alice" | grep -Ec '^(AZURE_SDK_GO_LOGGING|MSAL_FORCE_REGION|AZURE_REGIONAL_AUTHORITY_NAME)=' || true)" "0"
   fi
 fi
+# The e2e overlay adds the fake SMTP server (Phase 7 journeys): it must publish nothing, sit only on the internal
+# backend network, be read-only, drop every capability, run as a non-root user, have a pids limit and be healthy.
+if "${compose[@]}" config --services | grep -qx fakesmtp; then
+  smtp="$("${compose[@]}" ps -q fakesmtp)"
+  if [[ -z "$smtp" ]]; then
+    echo "FAIL: the e2e fake SMTP service is not running"; fail=1
+  else
+    check "fakesmtp publishes no ports" "$(docker port "$smtp" | wc -l | tr -d ' ')" "0"
+    check "fakesmtp is only on the internal backend network" \
+      "$(docker inspect -f '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}' "$smtp")" "${project}_backend "
+    check "fakesmtp root filesystem is read-only" "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$smtp")" "true"
+    check "fakesmtp drops all capabilities and adds none" \
+      "$(docker inspect -f '{{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}}' "$smtp")" '["ALL"] null'
+    check "fakesmtp has no-new-privileges" "$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$smtp")" '["no-new-privileges:true"]'
+    check "fakesmtp runs as a non-root user" \
+      "$(docker inspect -f '{{.Config.User}}' "$smtp" | grep -Ec '^[1-9][0-9]*:[1-9][0-9]*$' || true)" "1"
+    check "fakesmtp has a pids limit" "$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$smtp")" "128"
+    check "fakesmtp is healthy" "$(docker inspect -f '{{.State.Health.Status}}' "$smtp")" "healthy"
+  fi
+fi
+# The e2e overlay adds the fake identity provider (Phase 7 SSO journeys): the browser reaches it on this host, so it
+# is the one fake that publishes a port, and only 127.0.0.1:9444; it sits only on the frontend network and is hardened
+# like the others.
+if "${compose[@]}" config --services | grep -qx fakeidp; then
+  idp="$("${compose[@]}" ps -q fakeidp)"
+  if [[ -z "$idp" ]]; then
+    echo "FAIL: the e2e fake identity provider service is not running"; fail=1
+  else
+    check "fakeidp publishes exactly 127.0.0.1:9444" "$(docker port "$idp")" "9444/tcp -> 127.0.0.1:9444"
+    check "fakeidp is only on the frontend network" \
+      "$(docker inspect -f '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}' "$idp")" "${project}_frontend "
+    check "fakeidp root filesystem is read-only" "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$idp")" "true"
+    check "fakeidp drops all capabilities and adds none" \
+      "$(docker inspect -f '{{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}}' "$idp")" '["ALL"] null'
+    check "fakeidp has no-new-privileges" "$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$idp")" '["no-new-privileges:true"]'
+    check "fakeidp runs as a non-root user" \
+      "$(docker inspect -f '{{.Config.User}}' "$idp" | grep -Ec '^[1-9][0-9]*:[1-9][0-9]*$' || true)" "1"
+    check "fakeidp has a pids limit" "$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$idp")" "128"
+    check "fakeidp is healthy" "$(docker inspect -f '{{.State.Health.Status}}' "$idp")" "healthy"
+  fi
+fi
 # The test shims and the test PKI exist only in the SSH target, never in the Alice image.
 check "alice image has no systemctl shim" \
   "$(docker cp "$alice:/usr/bin/systemctl" - >/dev/null 2>&1 && echo present || echo absent)" "absent"

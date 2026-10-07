@@ -46,9 +46,10 @@ var testOnlyImports = []string{
 //
 // cmd/alice-fakeazure is a test tool, not a package of the product: it imports internal/testutil/fakekv, is
 // built into the e2e fake Azure image only and is no release binary (TestReleaseBinariesLinkNoTestPackages
-// lists the binaries that ship).
+// lists the binaries that ship). cmd/alice-fakesmtp and cmd/alice-fakeidp are the same kind of tool for the
+// mail and OpenID Connect fakes (internal/testutil/fakesmtp and fakeidp).
 var testOnlyDirs = []string{"internal/license/licensetest", "internal/testutil", "internal/providers/linuxssh/linuxsshtest",
-	"internal/providers/providertest", "cmd/alice-fakeazure"}
+	"internal/providers/providertest", "cmd/alice-fakeazure", "cmd/alice-fakesmtp", "cmd/alice-fakeidp"}
 
 // testTags maps the file-name marker of test-only code to the build tag it must require.
 var testTags = map[string]string{"_e2e": "e2e", "_testlicense": "testlicense"}
@@ -416,6 +417,14 @@ func TestReleaseBinariesLinkNoTestPackages(t *testing.T) {
 		assert.NotContains(t, goListDeps(t, tags, "./cmd/alice"), "alice/internal/testutil/fakekv", "tags %q", tags)
 	}
 	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakeazure"), "alice/internal/testutil/fakekv", "the fake tool is where the fake is linked")
+	// The mail and identity provider fakes are their own binaries too: no build of Alice links them.
+	for _, tags := range []string{"", "e2e testlicense"} {
+		deps := goListDeps(t, tags, "./cmd/alice")
+		assert.NotContains(t, deps, "alice/internal/testutil/fakesmtp", "tags %q", tags)
+		assert.NotContains(t, deps, "alice/internal/testutil/fakeidp", "tags %q", tags)
+	}
+	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakesmtp"), "alice/internal/testutil/fakesmtp")
+	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakeidp"), "alice/internal/testutil/fakeidp")
 }
 
 func TestRequires(t *testing.T) {
