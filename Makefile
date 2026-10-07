@@ -276,6 +276,10 @@ fuzz-ssh: ## Fuzz the authorized_keys and sshd configuration parsers for 60 s ea
 	go test -count=1 -run '^$$' -fuzz FuzzParseSSHDConfig -fuzztime 60s ./internal/providers/linuxssh/sshdconf/
 	go test -count=1 -run '^$$' -fuzz FuzzAuthorizedLine -fuzztime 60s ./internal/sshkeys/keymat/
 
+.PHONY: fuzz-oidc
+fuzz-oidc: ## Fuzz the ID token claim parser for 60 s (spec §25.6, Phase 7)
+	go test -count=1 -run '^$$' -fuzz FuzzParse -fuzztime 60s ./internal/auth/oidc/claims/
+
 .PHONY: fuzz-nginx
 fuzz-nginx: ## Fuzz the nginx -T parser for 60 s (spec §25.6)
 	go test -count=1 -run '^$$' -fuzz FuzzParseNginxConfig -fuzztime 60s ./internal/providers/nginx/nginxconf/
