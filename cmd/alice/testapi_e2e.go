@@ -176,6 +176,7 @@ rotation_op_ids, rotation_steps, rotation_locations, rotations, rotation_policie
 ssh_key_locations, ssh_keys, host_keys,
 deployment_steps, deployments, certificate_locations, csr_requests, certificates, managed_private_keys,
 kv_imports, bindings, kv_certificate_versions, kv_certificates, kv_keys, kv_secrets,
+oidc_login_states, oidc_group_mappings, oidc_providers, setting_secrets, saved_views, alerts,
 targets, credentials`
 
 // decodeTest reads a JSON body strictly; an empty body is an empty object.
