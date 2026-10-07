@@ -45,11 +45,16 @@ type recorder struct {
 	got      []queued
 	fail     error
 	failName string // fail only the notice of this item name
+	failOnce string // fail the next notice of this template, once
 }
 
 func (r *recorder) NotifyAdmins(_ context.Context, _ pgx.Tx, template string, params map[string]string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.failOnce != "" && template == r.failOnce {
+		r.failOnce = ""
+		return errors.New("queue failed")
+	}
 	if r.fail != nil || (r.failName != "" && params["name"] == r.failName) {
 		return errors.New("queue failed")
 	}
@@ -232,8 +237,8 @@ func TestEmailCapAndSummary(t *testing.T) {
 	assert.Equal(t, 5, res.Suppressed[alerts.KindCertificate])
 	tpls := r.templates()
 	require.Len(t, tpls, 21)
-	assert.Equal(t, "alert.more", tpls[20])
-	assert.Equal(t, "5", r.got[20].params["count"])
+	assert.Equal(t, "alert.more", tpls[0], "the summary commits first, with the over-cap rows")
+	assert.Equal(t, "5", r.got[0].params["count"])
 	var emailed, silent int
 	require.NoError(t, d.Owner.QueryRow(context.Background(),
 		`SELECT count(*) FILTER (WHERE emailed), count(*) FILTER (WHERE NOT emailed) FROM alerts`).Scan(&emailed, &silent))
@@ -509,4 +514,66 @@ func TestScanFailsOnACancelledContext(t *testing.T) {
 	assert.Error(t, err)
 	_, err = s.Items(ctx, alerts.Kinds(), t0, 0)
 	assert.Error(t, err)
+}
+
+// Review fix: over-cap rows and their summary commit together; a failed summary loses nothing.
+func TestFailedSummaryIsRetriedWithTheRightCount(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	clk := clock.NewFake(t0)
+	r := &recorder{failOnce: "alert.more"}
+	s := newService(t, d, clk, lic{}, r)
+	web := seedTarget(t, d, "web-01", "nginx", nil)
+	for i := 0; i < 25; i++ {
+		seedCert(t, d, "s"+uuid.NewString()[:8]+".example.com", t0.Add(time.Duration(i+1)*time.Hour), []uuid.UUID{web})
+	}
+	res, err := s.Scan(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, res.Queued[alerts.KindCertificate])
+	assert.Zero(t, res.Suppressed[alerts.KindCertificate])
+	assert.Equal(t, 1, res.Failed)
+	var n int
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT count(*) FROM alerts`).Scan(&n))
+	assert.Zero(t, n, "nothing of the kind was recorded: the next scan offers the same split")
+	res, err = s.Scan(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 20, res.Queued[alerts.KindCertificate])
+	assert.Equal(t, 5, res.Suppressed[alerts.KindCertificate])
+	tpls := r.templates()
+	require.Len(t, tpls, 21)
+	assert.Equal(t, "alert.more", tpls[0])
+	assert.Equal(t, "5", r.got[0].params["count"])
+	_, err = s.Scan(ctx)
+	require.NoError(t, err)
+	assert.Len(t, r.templates(), 21, "and nothing is sent again")
+}
+
+// Review fix: stored thresholds that fail the rules fall back to the defaults instead of failing every scan.
+func TestBadStoredThresholdsFallBackToTheDefaults(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	clk := clock.NewFake(t0)
+	r := &recorder{}
+	s := newService(t, d, clk, lic{}, r)
+	require.NoError(t, settings.Set(ctx, d.App, alerts.ThresholdsKey, map[string]any{"days": []int{0, 400, 7, 7}, "version": 3}, t0))
+	got, err := s.Thresholds(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, alerts.ThresholdSettings{Days: []int{60, 30, 14, 7, 1}, Version: 3}, got)
+	web := seedTarget(t, d, "web-01", "nginx", nil)
+	seedCert(t, d, "www.example.com", t0.Add(5*day), []uuid.UUID{web})
+	_, err = s.Scan(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int{"certificate_expiry:7": 1}, ledger(t, d))
+}
+
+// Review fix: an item exactly at the horizon is listed, like Level and Counts.
+func TestItemsHorizonIsInclusive(t *testing.T) {
+	d := pgtest.New(t)
+	clk := clock.NewFake(t0)
+	s := newService(t, d, clk, lic{}, &recorder{})
+	web := seedTarget(t, d, "web-01", "nginx", nil)
+	seedCert(t, d, "edge.example.com", t0.Add(30*day), []uuid.UUID{web})
+	items, err := s.Items(context.Background(), alerts.Kinds(), t0.Add(30*day), 0)
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
 }

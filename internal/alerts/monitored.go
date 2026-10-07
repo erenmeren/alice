@@ -28,26 +28,26 @@ SELECT 'certificate_expiry'::text AS kind, c.id AS object_id,
        array(SELECT DISTINCT x.target_id FROM live x WHERE x.certificate_id = c.id)::text[] AS target_ids,
        ''::text AS vault, NULL::uuid AS vault_id
 FROM certificates c
-WHERE 'certificate_expiry' = ANY ($1::text[]) AND c.not_after < $2::timestamptz
+WHERE 'certificate_expiry' = ANY ($1::text[]) AND c.not_after <= $2::timestamptz
   AND EXISTS (SELECT 1 FROM live x WHERE x.certificate_id = c.id)
 UNION ALL
 SELECT 'kv_certificate_expiry', kc.id, kc.name, kc.expires, '', '{}'::text[], '{}'::text[], '{}'::text[], t.name::text, t.id
 FROM kv_certificates kc JOIN targets t ON t.id = kc.target_id AND t.deleted_at IS NULL
 WHERE 'kv_certificate_expiry' = ANY ($1::text[]) AND kc.missing_since IS NULL AND kc.enabled AND kc.expires IS NOT NULL
-  AND kc.expires < $2::timestamptz
+  AND kc.expires <= $2::timestamptz
   AND NOT EXISTS (SELECT 1 FROM kv_certificate_versions v JOIN live x ON x.certificate_id = v.certificate_id
                   WHERE v.kv_certificate_id = kc.id AND v.version = kc.current_version)
 UNION ALL
 SELECT 'kv_key_expiry', k.id, k.name, k.expires, '', '{}'::text[], '{}'::text[], '{}'::text[], t.name::text, t.id
 FROM kv_keys k JOIN targets t ON t.id = k.target_id AND t.deleted_at IS NULL
 WHERE 'kv_key_expiry' = ANY ($1::text[]) AND k.missing_since IS NULL AND k.enabled AND k.expires IS NOT NULL
-  AND k.expires < $2::timestamptz
+  AND k.expires <= $2::timestamptz
 UNION ALL
 SELECT 'kv_credential_expiry', t.id, t.name::text, (cr.public_info->>'secret_expires_on')::timestamptz, '', '{}'::text[],
        '{}'::text[], '{}'::text[], t.name::text, t.id
 FROM targets t JOIN credentials cr ON cr.id = t.credential_id
 WHERE 'kv_credential_expiry' = ANY ($1::text[]) AND t.type = 'azure_key_vault' AND t.deleted_at IS NULL
-  AND cr.public_info ? 'secret_expires_on' AND (cr.public_info->>'secret_expires_on')::timestamptz < $2::timestamptz
+  AND cr.public_info ? 'secret_expires_on' AND (cr.public_info->>'secret_expires_on')::timestamptz <= $2::timestamptz
 ORDER BY 4, 2
 LIMIT NULLIF($3::int, 0)`
 

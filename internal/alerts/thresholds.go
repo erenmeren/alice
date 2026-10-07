@@ -36,7 +36,12 @@ func readThresholds(ctx context.Context, q db.Querier) (ThresholdSettings, error
 	if !ok || len(rec.Days) == 0 {
 		return ThresholdSettings{Days: slices.Clone(expiry.DefaultThresholds), Version: rec.Version}, nil
 	}
-	return ThresholdSettings(rec), nil
+	// Stored values that no longer pass the rules (edited by hand) must not fail every item of every scan.
+	days, err := expiry.Normalize(rec.Days)
+	if err != nil {
+		return ThresholdSettings{Days: slices.Clone(expiry.DefaultThresholds), Version: rec.Version}, nil
+	}
+	return ThresholdSettings{Days: days, Version: rec.Version}, nil
 }
 
 // SaveThresholds validates and stores the thresholds at version (0 = never saved).

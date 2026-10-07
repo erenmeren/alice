@@ -67,38 +67,43 @@ func (s *Service) Scan(ctx context.Context) (ScanResult, error) {
 		return res, err
 	}
 	note := noteFor(s.license.Snapshot().Eval.Locked(), g.PublicURL)
+	dueByKind := map[Kind][]dueItem{}
 	for _, it := range items {
-		level, due := expiry.Due(it.ExpiresAt, now, th.Days, sent[keyOf(it)])
-		if !due {
-			continue
-		}
-		emailed := res.Queued[it.Kind] < MaxEmailsPerScan
-		inserted, err := s.record(ctx, it, level, now, note, emailed)
-		if err != nil {
-			if ctx.Err() != nil {
-				return res, ctx.Err()
-			}
-			res.Failed++
-			s.log.Error("alerts: an expiry notice could not be recorded; the item is skipped", "kind", string(it.Kind),
-				"object_id", it.ObjectID.String(), "threshold_days", level, "error", err.Error())
-			continue
-		}
-		switch {
-		case !inserted: // another scan recorded this level first
-		case emailed:
-			res.Queued[it.Kind]++
-		default:
-			res.Suppressed[it.Kind]++
+		if level, due := expiry.Due(it.ExpiresAt, now, th.Days, sent[keyOf(it)]); due {
+			dueByKind[it.Kind] = append(dueByKind[it.Kind], dueItem{it, level})
 		}
 	}
 	for _, k := range Kinds() {
-		if n := res.Suppressed[k]; n > 0 {
-			if err := s.summarize(ctx, k, n, now, note); err != nil {
+		list := dueByKind[k]
+		if len(list) > MaxEmailsPerScan {
+			// The notices over the cap and their one summary commit together, before anything of this kind is sent: if
+			// that fails, nothing of the kind is recorded and the next scan offers the same split again.
+			n, err := s.recordSuppressed(ctx, k, list[MaxEmailsPerScan:], now, note)
+			if err != nil {
 				if ctx.Err() != nil {
 					return res, ctx.Err()
 				}
 				res.Failed++
-				s.log.Error("alerts: the summary of suppressed notices could not be queued", "kind", string(k), "error", err.Error())
+				s.log.Error("alerts: the suppressed notices and their summary could not be recorded; the kind is retried by the next scan",
+					"kind", string(k), "count", len(list)-MaxEmailsPerScan, "error", err.Error())
+				continue
+			}
+			res.Suppressed[k] = n
+			list = list[:MaxEmailsPerScan]
+		}
+		for _, d := range list {
+			inserted, err := s.record(ctx, d.it, d.level, now, note, true)
+			if err != nil {
+				if ctx.Err() != nil {
+					return res, ctx.Err()
+				}
+				res.Failed++
+				s.log.Error("alerts: an expiry notice could not be recorded; the item is skipped", "kind", string(d.it.Kind),
+					"object_id", d.it.ObjectID.String(), "threshold_days", d.level, "error", err.Error())
+				continue
+			}
+			if inserted { // else another scan recorded this level first
+				res.Queued[k]++
 			}
 		}
 	}
@@ -139,32 +144,17 @@ func (s *Service) sentLevels(ctx context.Context, items []Item) (map[ledgerKey][
 	return out, nil
 }
 
+type dueItem struct {
+	it    Item
+	level int
+}
+
 // record writes the ledger row and, only in the transaction that inserted it, queues the email and the audit row.
 func (s *Service) record(ctx context.Context, it Item, level int, now time.Time, note licenseNote, emailed bool) (bool, error) {
 	inserted := false
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var id uuid.UUID
-		err := tx.QueryRow(ctx, `INSERT INTO alerts (id, kind, object_id, subject, expires_at, threshold_days, license_locked, emailed, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-ON CONFLICT (kind, object_id, expires_at, threshold_days) DO NOTHING RETURNING id`,
-			uuid.Must(uuid.NewV7()), string(it.Kind), it.ObjectID, subjectOf(it), it.ExpiresAt, level, note.locked, emailed, now).Scan(&id)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("alerts: record the notice: %w", err)
-		}
-		inserted = true
-		if emailed {
-			if err := s.notifier.NotifyAdmins(ctx, tx, templateFor(it.Kind, level), paramsOf(it, now, level, note)); err != nil {
-				return fmt.Errorf("alerts: queue the notice: %w", err)
-			}
-		}
-		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("alerts"), Action: "alert.sent", ObjectType: string(it.Kind),
-			ObjectID: it.ObjectID.String(), Result: audit.Success, Details: map[string]string{
-				"kind": string(it.Kind), "object_id": it.ObjectID.String(), "threshold_days": strconv.Itoa(level),
-				"expires_at": it.ExpiresAt.Format(time.RFC3339), "locked": strconv.FormatBool(note.locked),
-				"emailed": strconv.FormatBool(emailed)}})
+		var err error
+		inserted, err = s.insertNotice(ctx, tx, it, level, now, note, emailed)
 		return err
 	})
 	if err != nil {
@@ -173,19 +163,64 @@ ON CONFLICT (kind, object_id, expires_at, threshold_days) DO NOTHING RETURNING i
 	return inserted, nil
 }
 
-// summarize queues the one "and N more" email of a kind.
-func (s *Service) summarize(ctx context.Context, k Kind, n int, _ time.Time, note licenseNote) error {
-	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+// insertNotice is the ledger insert (ON CONFLICT DO NOTHING RETURNING) with its email and audit row, inside tx.
+func (s *Service) insertNotice(ctx context.Context, tx pgx.Tx, it Item, level int, now time.Time, note licenseNote, emailed bool) (bool, error) {
+	var id uuid.UUID
+	err := tx.QueryRow(ctx, `INSERT INTO alerts (id, kind, object_id, subject, expires_at, threshold_days, license_locked, emailed, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT (kind, object_id, expires_at, threshold_days) DO NOTHING RETURNING id`,
+		uuid.Must(uuid.NewV7()), string(it.Kind), it.ObjectID, subjectOf(it), it.ExpiresAt, level, note.locked, emailed, now).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("alerts: record the notice: %w", err)
+	}
+	if emailed {
+		if err := s.notifier.NotifyAdmins(ctx, tx, templateFor(it.Kind, level), paramsOf(it, now, level, note)); err != nil {
+			return false, fmt.Errorf("alerts: queue the notice: %w", err)
+		}
+	}
+	_, err = s.audit.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("alerts"), Action: "alert.sent", ObjectType: string(it.Kind),
+		ObjectID: it.ObjectID.String(), Result: audit.Success, Details: map[string]string{
+			"kind": string(it.Kind), "object_id": it.ObjectID.String(), "threshold_days": strconv.Itoa(level),
+			"expires_at": it.ExpiresAt.Format(time.RFC3339), "locked": strconv.FormatBool(note.locked),
+			"emailed": strconv.FormatBool(emailed)}})
+	return err == nil, err
+}
+
+// recordSuppressed records the over-cap notices of a kind (not e-mailed one by one) and queues the one "and N more"
+// email with the number actually inserted, all in one transaction.
+func (s *Service) recordSuppressed(ctx context.Context, k Kind, due []dueItem, now time.Time, note licenseNote) (int, error) {
+	n := 0
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		n = 0
+		for _, d := range due {
+			ok, err := s.insertNotice(ctx, tx, d.it, d.level, now, note, false)
+			if err != nil {
+				return err
+			}
+			if ok {
+				n++
+			}
+		}
+		if n == 0 {
+			return nil
+		}
 		params := map[string]string{"count": strconv.Itoa(n), "kind": string(k)}
 		addNote(params, k, note)
 		if err := s.notifier.NotifyAdmins(ctx, tx, "alert.more", params); err != nil {
-			return err
+			return fmt.Errorf("alerts: queue the summary: %w", err)
 		}
 		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("alerts"), Action: "alert.summarized",
 			ObjectType: string(k), Result: audit.Success,
 			Details: map[string]string{"kind": string(k), "suppressed_count": strconv.Itoa(n)}})
 		return err
 	})
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // subjectOf is the item's name cut to the ledger's 300 runes (S-3); never empty.
