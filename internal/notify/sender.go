@@ -42,8 +42,11 @@ const (
 
 // Sender drains the outbox.
 type Sender struct {
-	Pool    *pgxpool.Pool
-	Mailer  Mailer // nil = SMTP is not configured: emails are recorded as skipped_no_smtp (L-18)
+	Pool   *pgxpool.Pool
+	Mailer Mailer // nil = SMTP is not configured: emails are recorded as skipped_no_smtp (L-18)
+	// Source, when set, is asked for the mailer of the current mail settings at every Drain and is preferred over
+	// Mailer (Phase 7).
+	Source  MailerSource
 	Catalog *i18n.Catalog
 	Clock   clock.Clock
 	Log     *slog.Logger
@@ -52,9 +55,18 @@ type Sender struct {
 // Drain handles every due email (sent, skipped, retried or given up) and returns how many.
 // Rows are claimed with FOR UPDATE SKIP LOCKED, so parallel drains never send twice.
 func (s *Sender) Drain(ctx context.Context) (int, error) {
+	mailer := s.Mailer
+	if s.Source != nil {
+		m, release, err := s.Source.Mailer(ctx)
+		if err != nil {
+			return 0, err // nothing was claimed, so nothing is marked
+		}
+		defer release()
+		mailer = m
+	}
 	n := 0
 	for {
-		handled, err := s.one(ctx)
+		handled, err := s.one(ctx, mailer)
 		if err != nil {
 			return n, err
 		}
@@ -65,7 +77,7 @@ func (s *Sender) Drain(ctx context.Context) (int, error) {
 	}
 }
 
-func (s *Sender) one(ctx context.Context) (bool, error) {
+func (s *Sender) one(ctx context.Context, mailer Mailer) (bool, error) {
 	handled := false
 	err := db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
 		now := s.Clock.Now().UTC()
@@ -85,7 +97,7 @@ WHERE status = 'pending' AND next_attempt_at <= $1 ORDER BY next_attempt_at, id 
 			return fmt.Errorf("notify: read the outbox: %w", err)
 		}
 		handled = true
-		if s.Mailer == nil {
+		if mailer == nil {
 			_, err := tx.Exec(ctx, `UPDATE notifications_outbox SET status = 'skipped_no_smtp', last_error_code = 'smtp.not_configured'
 WHERE id = $1`, id)
 			return err
@@ -96,7 +108,7 @@ WHERE id = $1`, id)
 			return err
 		}
 		sendCtx, cancel := context.WithTimeout(ctx, sendTimeout)
-		sendErr := s.Mailer.Send(sendCtx, s.Render(to, tpl, locale, params))
+		sendErr := mailer.Send(sendCtx, s.Render(to, tpl, locale, params))
 		cancel()
 		attempts++
 		if sendErr == nil {

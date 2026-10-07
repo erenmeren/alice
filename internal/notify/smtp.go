@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"alice/internal/platform/clock"
+	"alice/internal/platform/netaddr"
 	"alice/internal/secrets"
 )
 
@@ -29,11 +30,20 @@ var (
 	ErrSMTPTLS      = errors.New("notify: the mail server's encryption failed or is not offered")
 	ErrSMTPAuth     = errors.New("notify: the mail server rejected the user name or password")
 	ErrSMTPRejected = errors.New("notify: the mail server refused the message")
+
+	// Phase 7: a certificate that did not verify (wrapped by CertError together with ErrSMTPTLS) and a host on an
+	// address Alice never connects to (netaddr, A-14).
+	ErrSMTPUntrusted  = errors.New("notify: the mail server's certificate is not trusted")
+	ErrAddressRefused = errors.New("notify: the mail server's address is not one Alice connects to")
 )
 
 // ErrorCode is the fixed label of a send failure (notifications_outbox.last_error_code).
 func ErrorCode(err error) string {
 	switch {
+	case errors.Is(err, ErrAddressRefused):
+		return "smtp.address_refused"
+	case errors.Is(err, ErrSMTPUntrusted):
+		return "smtp.untrusted"
 	case errors.Is(err, ErrSMTPConnect):
 		return "smtp.connect"
 	case errors.Is(err, ErrSMTPTLS):
@@ -56,6 +66,9 @@ type SMTPConfig struct {
 	Password secrets.Plaintext
 	TLSMode  string         // "starttls" (default, port 587) or "tls" (implicit TLS, port 465)
 	RootCAs  *x509.CertPool // nil = the system's trusted roots
+	Pin      string         // lower-case hex SHA-256 of the one accepted leaf; "" = verify the chain (Phase 7)
+	// Dial connects; nil = netaddr.DialContext with a net.Dialer (A-14, R42 row 11; Phase 7).
+	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // SMTPMailer sends email over an encrypted SMTP connection. There is no plaintext mode.
@@ -94,8 +107,10 @@ func (m *SMTPMailer) Send(ctx context.Context, msg Message) error {
 		return fmt.Errorf("%w: the recipient address is not valid", ErrSMTPRejected)
 	}
 	addr := net.JoinHostPort(m.cfg.Host, strconv.Itoa(m.cfg.Port))
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	conn, err := m.dial(ctx, "tcp", addr)
+	if errors.Is(err, netaddr.ErrNotAllowed) {
+		return ErrAddressRefused
+	}
 	if err != nil {
 		return fmt.Errorf("%w (%s)", ErrSMTPConnect, addr)
 	}
@@ -103,11 +118,11 @@ func (m *SMTPMailer) Send(ctx context.Context, msg Message) error {
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
-	tlsCfg := &tls.Config{ServerName: m.cfg.Host, MinVersion: tls.VersionTLS12, RootCAs: m.cfg.RootCAs}
+	tlsCfg := m.tlsConfig()
 	if m.cfg.TLSMode == "tls" {
 		tc := tls.Client(conn, tlsCfg)
 		if err := tc.HandshakeContext(ctx); err != nil {
-			return ErrSMTPTLS
+			return tlsFailure(err)
 		}
 		conn = tc
 	}
@@ -121,7 +136,7 @@ func (m *SMTPMailer) Send(ctx context.Context, msg Message) error {
 			return fmt.Errorf("%w: STARTTLS is not offered", ErrSMTPTLS)
 		}
 		if err := c.StartTLS(tlsCfg); err != nil {
-			return ErrSMTPTLS
+			return tlsFailure(err)
 		}
 	}
 	if m.cfg.Username != "" {
@@ -147,6 +162,34 @@ func (m *SMTPMailer) Send(ctx context.Context, msg Message) error {
 	}
 	_ = c.Quit() // the message is accepted; a failing QUIT changes nothing
 	return nil
+}
+
+func (m *SMTPMailer) dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	if m.cfg.Dial != nil {
+		return m.cfg.Dial(ctx, network, addr)
+	}
+	return netaddr.DialContext(ctx, &net.Dialer{}, network, addr)
+}
+
+func (m *SMTPMailer) tlsConfig() *tls.Config {
+	if m.cfg.Pin != "" {
+		return pinnedTLS(m.cfg.Host, m.cfg.Pin)
+	}
+	return &tls.Config{ServerName: m.cfg.Host, MinVersion: tls.VersionTLS12, RootCAs: m.cfg.RootCAs}
+}
+
+// tlsFailure keeps a certificate problem's leaf (F-62: the Administrator sees what to trust) and nothing else of the
+// server's answer.
+func tlsFailure(err error) error {
+	var ce *CertError
+	if errors.As(err, &ce) {
+		return ce
+	}
+	var ve *tls.CertificateVerificationError
+	if errors.As(err, &ve) && len(ve.UnverifiedCertificates) > 0 {
+		return &CertError{Cert: infoOf(ve.UnverifiedCertificates[0])}
+	}
+	return ErrSMTPTLS
 }
 
 // compose builds a plain-text UTF-8 message. The subject is kept on one line and

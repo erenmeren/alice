@@ -1085,6 +1085,12 @@
   },
   "email": {
     "footer": "Bu ileti Alice tarafından otomatik olarak gönderildi. Lütfen yanıtlamayın.",
+    "notify": {
+      "test": {
+        "subject": "Alice test e-postası",
+        "body": "Bu, Alice'ten gönderilen bir test e-postasıdır. Bu e-postayı aldıysanız Alice geçerli posta ayarlarıyla e-posta gönderebilir."
+      }
+    },
     "deployment": {
       "failed": {
         "subject": "{{target_name}} sunucusunda sertifika dağıtımı başarısız oldu",

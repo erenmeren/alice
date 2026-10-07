@@ -1085,6 +1085,12 @@
   },
   "email": {
     "footer": "This message was sent automatically by Alice. Do not reply to it.",
+    "notify": {
+      "test": {
+        "subject": "Alice test e-mail",
+        "body": "This is a test e-mail from Alice. If you received it, Alice can send e-mails with the current mail settings."
+      }
+    },
     "deployment": {
       "failed": {
         "subject": "Certificate deployment failed on {{target_name}}",
