@@ -57,6 +57,11 @@ func TestEveryTargetInsertChecksTheLicense(t *testing.T) {
 			if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil
 			}
+			// Test-data helpers (internal/testutil/seed) write rows as the owner role and are never linked into a
+			// release binary; they have no license service to ask.
+			if strings.Contains(filepath.ToSlash(path), "/internal/testutil/") {
+				return nil
+			}
 			fset := token.NewFileSet()
 			f, err := parser.ParseFile(fset, path, nil, 0)
 			if err != nil {
