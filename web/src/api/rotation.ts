@@ -103,7 +103,9 @@ export interface RunStep {
   params: Record<string, string>;
 }
 
-export interface Run {
+// RunSummary is one run as the list answers it (rotationSummaryDTO): no decision deadline, plan digest, overlap,
+// change and skip counts, allowed actions, notice, places or steps; open the run (getRun) for those.
+export interface RunSummary {
   id: string;
   policy_id: string;
   old_ssh_key_id: string;
@@ -114,7 +116,7 @@ export interface Run {
   status: string;
   paused_license: boolean;
   awaiting_decision: boolean;
-  decision_due_at: string | null;
+  new_key_type: string;
   planned_for: string;
   notified_at: string;
   started_at: string | null;
@@ -122,19 +124,24 @@ export interface Run {
   overlap_until: string | null;
   finished_at: string | null;
   result: ErrorRef | null;
+  kept_count: number;
+  // Place counts are on every run. The buckets add up to total (verified: the new key works and the old key is not
+  // removed yet; removed; kept by an administrator; failed; skipped; undone; cancelled: never sent or refused at send
+  // time; in_flight). The server may add more, so any key can arrive.
+  location_counts: Record<string, number>;
+  version: number;
+}
+
+// Run is one run as getRun answers it (rotationDTO): the summary's fields and the detail's.
+export interface Run extends RunSummary {
+  decision_due_at: string | null;
   plan_digest: string;
-  new_key_type: string;
   overlap_minutes: number;
   change_count: number;
   skip_count: number;
-  kept_count: number;
   // actions_allowed is what the page may offer now; the page never works it out itself.
   actions_allowed: RunAction[];
-  // Place counts are on every run; the places and the steps only on the detail (a list item has neither).
-  // The buckets add up to total (verified: the new key works and the old key is not removed yet; removed; kept by an
-  // administrator; failed; skipped; undone; cancelled: never sent or refused at send time; in_flight). The server may add
-  // more, so any key can arrive.
-  location_counts: Record<string, number>;
+  // The places and the steps (a list item has neither).
   locations?: RunLocation[];
   steps?: RunStep[];
   // Why Continue is not offered yet, when the server says (the renewal notice); absent on older servers.
@@ -142,7 +149,6 @@ export interface Run {
   // notify.queue_failed) that it could not be queued. Both are error references or null; the page never infers them.
   notice_state?: ErrorRef | null;
   notice_error?: ErrorRef | null;
-  version: number;
 }
 
 export interface RunQuery {
@@ -173,7 +179,7 @@ export function listRuns(q: RunQuery = {}) {
   if (q.cursor) params.set('cursor', q.cursor);
   if (q.limit) params.set('limit', String(q.limit));
   const qs = params.toString();
-  return apiFetch<{ items: Run[]; next_cursor: string | null }>(`${v1}/runs${qs ? `?${qs}` : ''}`);
+  return apiFetch<{ items: RunSummary[]; next_cursor: string | null }>(`${v1}/runs${qs ? `?${qs}` : ''}`);
 }
 export const getRun = (id: string) => apiFetch<Run>(`${v1}/runs/${enc(id)}`);
 export const continueRun = (id: string) => apiFetch<void>(`${v1}/runs/${enc(id)}/actions/continue`, { method: 'POST' });
