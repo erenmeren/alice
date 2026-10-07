@@ -41,6 +41,9 @@ func (s *Service) ChangePassword(ctx context.Context, p Principal, current, next
 			if err != nil {
 				return err
 			}
+			if a.sso {
+				return ErrSSOUser
+			}
 			if a.hash == nil {
 				return ErrUnauthenticated
 			}

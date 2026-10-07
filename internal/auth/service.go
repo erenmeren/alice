@@ -53,8 +53,9 @@ type Config struct {
 	Keyring        *secrets.Keyring
 	Audit          *audit.Log
 	Clock          clock.Clock
-	Hasher         *Hasher // PasswordParams in production
-	RecoveryHasher *Hasher // RecoveryCodeParams in production
+	Hasher         *Hasher  // PasswordParams in production
+	RecoveryHasher *Hasher  // RecoveryCodeParams in production
+	Notifier       Notifier // nil: no lockout e-mail
 }
 
 // Service implements local authentication, sessions, MFA, users and API tokens.
@@ -65,6 +66,7 @@ type Service struct {
 	clock    clock.Clock
 	hasher   *Hasher
 	recovery *Hasher
+	notifier Notifier
 	csrfKey  []byte
 
 	// credSlots bounds concurrent credential checks (password, TOTP, recovery code) to the
@@ -85,6 +87,7 @@ func NewService(c Config) *Service {
 		clock:    c.Clock,
 		hasher:   c.Hasher,
 		recovery: c.RecoveryHasher,
+		notifier: c.Notifier,
 		csrfKey:  c.Keyring.Derive(secrets.LabelCSRF),
 
 		credSlots:   make(chan struct{}, c.Hasher.concurrency()),
@@ -101,17 +104,25 @@ type Meta struct {
 
 // User is the public view of an account. It never contains secrets.
 type User struct {
-	ID          uuid.UUID
-	Username    string
-	DisplayName string
-	Email       string
-	Role        rbac.Role
-	Locale      string
-	Disabled    bool
-	MFAEnrolled bool
-	LastLoginAt *time.Time
-	CreatedAt   time.Time
+	ID            uuid.UUID
+	Username      string
+	DisplayName   string
+	Email         string
+	Role          rbac.Role
+	Locale        string
+	Disabled      bool
+	MFAEnrolled   bool
+	LastLoginAt   *time.Time
+	CreatedAt     time.Time
+	AuthSource    string     // AuthLocal | AuthOIDC
+	SSOProviderID *uuid.UUID // the identity provider of an SSO user, nil for a local user
 }
+
+// Authentication sources of a user (users.auth_source).
+const (
+	AuthLocal = "local"
+	AuthOIDC  = "oidc"
+)
 
 // Principal is the authenticated caller of one request.
 type Principal struct {
@@ -125,6 +136,7 @@ type Principal struct {
 	StepUpUntil time.Time
 	TokenID     uuid.UUID
 	Scope       rbac.Scope
+	AuthSource  string // AuthLocal | AuthOIDC
 }
 
 // Subject converts the principal into the input of rbac.Decide.
@@ -168,6 +180,8 @@ type SessionInfo struct {
 	ExpiresAt     time.Time
 	IdleExpiresAt time.Time
 	StepUpUntil   *time.Time
+	AuthSource    string     // User.AuthSource
+	SSOProviderID *uuid.UUID // User.SSOProviderID
 }
 
 // SessionResult is returned whenever a new full session is issued.

@@ -7,11 +7,14 @@ import (
 	"context"
 	"net/netip"
 	"os"
+	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/require"
 
@@ -38,6 +41,47 @@ type env struct {
 	clk    *clock.Fake
 	db     *pgtest.DB
 	hasher *auth.Hasher
+	notes  *noteRecorder
+}
+
+// noteRecorder records the e-mails auth queues (the outbox is notify's).
+type noteRecorder struct {
+	mu   sync.Mutex
+	got  []string // template + " " + sorted params
+	fail error    // returned instead of recording, when set
+}
+
+func (n *noteRecorder) NotifyAdmins(_ context.Context, _ pgx.Tx, template string, params map[string]string) error {
+	if n.fail != nil {
+		return n.fail
+	}
+	keys := make([]string, 0, len(params))
+	for k, v := range params {
+		keys = append(keys, k+"="+v)
+	}
+	sort.Strings(keys)
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.got = append(n.got, template+" "+strings.Join(keys, ","))
+	return nil
+}
+
+func (n *noteRecorder) all() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]string(nil), n.got...)
+}
+
+// provider inserts an identity provider row (the SSO users' foreign key).
+func (e *env) provider(t *testing.T) uuid.UUID {
+	t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	_, err := e.db.Owner.Exec(e.ctx, `INSERT INTO oidc_providers (id, name, issuer_url, client_id, scopes, groups_claim,
+authorization_endpoint, token_endpoint, jwks_uri, enabled, created_at, updated_at) VALUES ($1, $2, 'https://idp.example.com',
+$2, '{openid}', 'groups', 'https://idp.example.com/a', 'https://idp.example.com/t', 'https://idp.example.com/j', true, now(), now())`,
+		id, "corp-"+id.String())
+	require.NoError(t, err)
+	return id
 }
 
 func newEnv(t *testing.T) *env {
@@ -48,8 +92,9 @@ func newEnv(t *testing.T) *env {
 	kr, err := secrets.NewKeyring(1, bytes.Repeat([]byte{7}, 32))
 	require.NoError(t, err)
 	h := auth.NewHasher(fastParams, 4)
-	svc := auth.NewService(auth.Config{Pool: d.App, Keyring: kr, Audit: audit.New(clk), Clock: clk, Hasher: h, RecoveryHasher: h})
-	return &env{ctx: context.Background(), svc: svc, clk: clk, db: d, hasher: h}
+	notes := &noteRecorder{}
+	svc := auth.NewService(auth.Config{Pool: d.App, Keyring: kr, Audit: audit.New(clk), Clock: clk, Hasher: h, RecoveryHasher: h, Notifier: notes})
+	return &env{ctx: context.Background(), svc: svc, clk: clk, db: d, hasher: h, notes: notes}
 }
 
 func code(t *testing.T, secret string, at time.Time) string {

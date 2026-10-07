@@ -287,6 +287,10 @@ func (s *Service) StepUp(ctx context.Context, p Principal, code string, m Meta) 
 			if err != nil {
 				return err
 			}
+			if a.sso {
+				// An SSO user steps up at the identity provider (StepUpOIDC); nothing is counted.
+				return ErrSSOUser
+			}
 			if reason := blockReason(a, s.clock.Now()); reason != "" {
 				failed = true
 				return s.auditFailure(ctx, tx, actor, "auth.stepup", p.UserID.String(), reason)

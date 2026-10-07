@@ -473,3 +473,18 @@ WHERE l.locktype = 'advisory' AND NOT l.granted AND db.datname = current_databas
 	require.NoError(t, err)
 	assert.True(t, rep.Intact)
 }
+
+// Phase 7 (C10): an identity provider's user is an actor of its own, accepted by Append and the
+// database CHECK alike.
+func TestOIDCActorIsAccepted(t *testing.T) {
+	d := pgtest.New(t)
+	l := audit.New(clock.NewFake(start))
+	ctx := context.Background()
+	require.NoError(t, db.InTx(ctx, d.App, func(tx pgx.Tx) error {
+		_, err := l.Append(ctx, tx, audit.Event{Actor: audit.Actor{Type: audit.ActorOIDC, Name: "ada"}, Action: "test.oidc", Result: audit.Failure})
+		return err
+	}))
+	var actorType, name string
+	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT actor_type, actor_name FROM audit_log WHERE action = 'test.oidc'").Scan(&actorType, &name))
+	assert.Equal(t, [2]string{"oidc", "ada"}, [2]string{actorType, name})
+}

@@ -180,6 +180,10 @@ func (s *Service) UpdateUser(ctx context.Context, p Principal, m Meta, id uuid.U
 			return err
 		}
 		roleChanged := in.Role != nil && *in.Role != cur.Role
+		if roleChanged && cur.AuthSource == AuthOIDC {
+			// An SSO user's role follows the group mappings at every sign-in (SEC-014).
+			return ErrSSOUser
+		}
 		disable := in.Disabled != nil && *in.Disabled && !cur.Disabled
 		if (roleChanged || disable) && slices.Contains(admins, id) && len(admins) <= 1 {
 			return ErrLastAdmin
@@ -241,10 +245,34 @@ func (s *Service) UpdateUser(ctx context.Context, p Principal, m Meta, id uuid.U
 		}
 		return User{}, ErrLastAdmin
 	}
-	if err != nil {
+	if err := s.auditSSORefusal(ctx, p, m, err, "user.updated", id); err != nil {
 		return User{}, err
 	}
 	return getUser(ctx, s.pool, id)
+}
+
+// refuseSSOUser returns ErrSSOUser for an SSO user: their password and MFA live at the
+// identity provider. The caller holds the user's row lock (adminChange).
+func refuseSSOUser(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
+	var source string
+	if err := tx.QueryRow(ctx, "SELECT auth_source FROM users WHERE id = $1", id).Scan(&source); err != nil {
+		return fmt.Errorf("read user: %w", err)
+	}
+	if source == AuthOIDC {
+		return ErrSSOUser
+	}
+	return nil
+}
+
+// auditSSORefusal audits an ErrSSOUser refusal like the action's other refusals (reason
+// sso_user) and returns err unchanged.
+func (s *Service) auditSSORefusal(ctx context.Context, p Principal, m Meta, err error, action string, id uuid.UUID) error {
+	if errors.Is(err, ErrSSOUser) {
+		if aerr := s.adminFailure(ctx, p, m, action, id.String(), "sso_user"); aerr != nil {
+			return aerr
+		}
+	}
+	return err
 }
 
 // adminChange runs fn for an existing user inside a transaction and audits action. It
@@ -271,6 +299,9 @@ func (s *Service) adminChange(ctx context.Context, actor audit.Actor, id uuid.UU
 }
 
 func resetMFA(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
+	if err := refuseSSOUser(ctx, tx, id); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, "DELETE FROM user_mfa WHERE user_id = $1", id); err != nil {
 		return fmt.Errorf("reset MFA: %w", err)
 	}
@@ -281,8 +312,10 @@ func resetMFA(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 }
 
 // ResetMFA removes a user's TOTP and recovery codes; they enroll again at next login.
+// An SSO user has no MFA here: ErrSSOUser.
 func (s *Service) ResetMFA(ctx context.Context, p Principal, m Meta, id uuid.UUID) error {
-	return s.adminChange(ctx, p.Actor(m), id, "user.mfa_reset", map[string]string{"via": "ui"}, func(tx pgx.Tx) error { return resetMFA(ctx, tx, id) })
+	err := s.adminChange(ctx, p.Actor(m), id, "user.mfa_reset", map[string]string{"via": "ui"}, func(tx pgx.Tx) error { return resetMFA(ctx, tx, id) })
+	return s.auditSSORefusal(ctx, p, m, err, "user.mfa_reset", id)
 }
 
 // ResetMFAByUsername is the host-root CLI break-glass path (R18).
@@ -328,7 +361,8 @@ func (s *Service) UnlockByUsername(ctx context.Context, username string) error {
 // ResetPassword sets a new password chosen by an administrator, clears the lockout, ends the
 // user's sessions and revokes every API token of the user, all in one transaction (AUD-12, R39):
 // it is the administrator's answer to a suspected takeover, and a token is another way in. A
-// user changing their own password (ChangePassword) keeps their tokens.
+// user changing their own password (ChangePassword) keeps their tokens. An SSO user has no
+// password here: ErrSSOUser.
 func (s *Service) ResetPassword(ctx context.Context, p Principal, m Meta, id uuid.UUID, password string) error {
 	if err := CheckPasswordPolicy(password); err != nil {
 		return err
@@ -340,13 +374,17 @@ func (s *Service) ResetPassword(ctx context.Context, p Principal, m Meta, id uui
 	now := s.clock.Now().UTC()
 	actor := p.Actor(m)
 	details := map[string]string{}
-	return s.adminChange(ctx, actor, id, "user.password_reset", details, func(tx pgx.Tx) error {
+	err = s.adminChange(ctx, actor, id, "user.password_reset", details, func(tx pgx.Tx) error {
+		if err := refuseSSOUser(ctx, tx, id); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `UPDATE users SET password_hash = $2, password_changed_at = $3, updated_at = $3,
 failed_logins = 0, locked_until = NULL WHERE id = $1`, id, hash, now); err != nil {
 			return fmt.Errorf("reset password: %w", err)
 		}
 		return s.signOutEverywhere(ctx, tx, actor, id, now, "password_reset", details)
 	})
+	return s.auditSSORefusal(ctx, p, m, err, "user.password_reset", id)
 }
 
 // RevokeSessions signs a user out everywhere: it ends every session and revokes every API

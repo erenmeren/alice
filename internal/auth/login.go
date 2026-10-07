@@ -38,6 +38,7 @@ type account struct {
 	disabled    bool
 	enrolled    bool
 	lockedUntil *time.Time
+	sso         bool // an SSO user: no password, no TOTP, never counted (C10)
 }
 
 // blocked reports whether the account is in a progressive delay or locked out at now.
@@ -48,10 +49,10 @@ func (a account) blocked(now time.Time) bool {
 // Account lock queries; both select the same columns for lockAccount.
 const (
 	lockAccountByNameSQL = `SELECT u.id, u.username::text, u.password_hash, u.disabled_at IS NOT NULL, u.locked_until,
-EXISTS (SELECT 1 FROM user_mfa m WHERE m.user_id = u.id AND m.enrolled_at IS NOT NULL)
+EXISTS (SELECT 1 FROM user_mfa m WHERE m.user_id = u.id AND m.enrolled_at IS NOT NULL), u.auth_source = 'oidc'
 FROM users u WHERE u.username = $1 AND u.auth_source = 'local' FOR UPDATE OF u`
 	lockAccountByIDSQL = `SELECT u.id, u.username::text, u.password_hash, u.disabled_at IS NOT NULL, u.locked_until,
-EXISTS (SELECT 1 FROM user_mfa m WHERE m.user_id = u.id AND m.enrolled_at IS NOT NULL)
+EXISTS (SELECT 1 FROM user_mfa m WHERE m.user_id = u.id AND m.enrolled_at IS NOT NULL), u.auth_source = 'oidc'
 FROM users u WHERE u.id = $1 FOR UPDATE OF u`
 )
 
@@ -64,7 +65,7 @@ FROM users u WHERE u.id = $1 FOR UPDATE OF u`
 func lockAccount(ctx context.Context, tx pgx.Tx, query string, arg any) (account, bool, error) {
 	var a account
 	err := tx.QueryRow(ctx, query, arg).Scan(
-		&a.id, &a.name, &a.hash, &a.disabled, &a.lockedUntil, &a.enrolled)
+		&a.id, &a.name, &a.hash, &a.disabled, &a.lockedUntil, &a.enrolled, &a.sso)
 	if err == nil || errors.Is(err, pgx.ErrNoRows) {
 		if rerr := endLockWaitLimit(ctx, tx); rerr != nil {
 			return account{}, false, rerr
@@ -152,6 +153,26 @@ func (s *Service) recordFailure(ctx context.Context, tx pgx.Tx, actor audit.Acto
 			Result: audit.Failure, Details: map[string]string{"failed_logins": strconv.Itoa(n), "minutes": strconv.Itoa(int(LockDuration / time.Minute))}}); err != nil {
 			return err
 		}
+		if err := s.notifyLockout(ctx, tx, userID, n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// notifyLockout queues the lockout e-mail to the Administrators in the lockout's own
+// transaction (SEC-020, R42 row 25): it is sent exactly when the lockout commits.
+func (s *Service) notifyLockout(ctx context.Context, tx pgx.Tx, userID uuid.UUID, failures int) error {
+	if s.notifier == nil {
+		return nil
+	}
+	var username string
+	if err := tx.QueryRow(ctx, "SELECT username::text FROM users WHERE id = $1", userID).Scan(&username); err != nil {
+		return fmt.Errorf("read locked user: %w", err)
+	}
+	if err := s.notifier.NotifyAdmins(ctx, tx, TemplateLockout, map[string]string{"username": username,
+		"minutes": strconv.Itoa(int(LockDuration / time.Minute)), "failed_logins": strconv.Itoa(failures)}); err != nil {
+		return fmt.Errorf("queue lockout e-mail: %w", err)
 	}
 	return nil
 }

@@ -1,0 +1,429 @@
+package auth
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"alice/internal/audit"
+	"alice/internal/platform/db"
+	"alice/internal/platform/settings"
+	"alice/internal/platform/validate"
+	"alice/internal/rbac"
+)
+
+// Errors of single sign-on (C10).
+var (
+	// ErrOIDCEmailInUse: the identity's e-mail address belongs to a local user (O-10, S-7).
+	ErrOIDCEmailInUse = errors.New("auth: the e-mail address belongs to a local user")
+	// ErrOIDCUserDisabled: the SSO user is disabled in Alice.
+	ErrOIDCUserDisabled = errors.New("auth: the SSO user is disabled")
+	// ErrOIDCOtherUser: a step-up was answered by another identity than the session's user.
+	ErrOIDCOtherUser = errors.New("auth: the step-up was answered for another identity")
+	// ErrNotSSOUser: an SSO step-up for a local user.
+	ErrNotSSOUser = errors.New("auth: not an SSO user")
+	// ErrSSOUser: a manual role change, password or MFA operation on an SSO user, whose role,
+	// password and second factor belong to the identity provider (ALC-USR-0003).
+	ErrSSOUser = errors.New("auth: the identity provider manages this SSO user")
+)
+
+// OIDCIdentity is a user the identity provider authenticated. SSO users are matched by
+// (ProviderID, Subject) only (S-8); Issuer is stored for display.
+type OIDCIdentity struct {
+	ProviderID  uuid.UUID
+	Issuer      string
+	Subject     string
+	Username    string // claims.Username
+	DisplayName string
+	Email       string
+}
+
+// sessionEndingReasons are the refusals that say the user no longer has access: they end the
+// user's sessions (O-08, R42 row 21). Other refusals (a bad token, an expired state, …) say
+// nothing about the user and are only audited.
+var sessionEndingReasons = []string{"no_access", "groups_overage", "provider_disabled"}
+
+// oidcIdentityLockNamespace is the first key of the per-identity advisory lock SignInOIDC takes,
+// so two first sign-ins of one identity provision one user (the second waits and finds it).
+const oidcIdentityLockNamespace int32 = 0x616c6332 // "alc2"
+
+// maxUsernameBytes is the longest user name (usernameRE: 64 ASCII characters).
+const maxUsernameBytes = 64
+
+// maxUsernameSuffix bounds the "-2" … "-99" suffixes tried for a taken user name.
+const maxUsernameSuffix = 99
+
+// ssoFallbackName is the user name of an identity that brought none.
+const ssoFallbackName = "sso-user"
+
+func oidcActor(userID uuid.UUID, name string, m Meta) audit.Actor {
+	return audit.Actor{Type: audit.ActorOIDC, ID: userID, Name: name, IP: m.IP, RequestID: m.RequestID}
+}
+
+// ssoUser is an SSO user's row, read under its row lock.
+type ssoUser struct {
+	id       uuid.UUID
+	username string
+	role     rbac.Role
+	email    string
+	disabled bool
+}
+
+// lockSSOUser reads the user of an identity with FOR UPDATE; found is false when there is none.
+func lockSSOUser(ctx context.Context, tx pgx.Tx, providerID uuid.UUID, subject string) (ssoUser, bool, error) {
+	var u ssoUser
+	var role string
+	err := tx.QueryRow(ctx, `SELECT id, username::text, role, email::text, disabled_at IS NOT NULL FROM users
+WHERE oidc_provider_id = $1 AND oidc_subject = $2 FOR UPDATE`, providerID, subject).Scan(&u.id, &u.username, &role, &u.email, &u.disabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ssoUser{}, false, nil
+	}
+	if err != nil {
+		return ssoUser{}, false, fmt.Errorf("read SSO user: %w", err)
+	}
+	u.role = rbac.Role(role)
+	return u, true, nil
+}
+
+// localEmailInUse reports whether a local user has the (non-empty) address; citext compares
+// it case-insensitively.
+func localEmailInUse(ctx context.Context, tx pgx.Tx, email string) (bool, error) {
+	if email == "" {
+		return false, nil
+	}
+	var used bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE auth_source = 'local' AND email = $1)`, email).Scan(&used); err != nil {
+		return false, fmt.Errorf("check e-mail: %w", err)
+	}
+	return used, nil
+}
+
+// cutBytes shortens s to at most n bytes on a rune boundary.
+func cutBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	s = s[:n]
+	for !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
+// freeUsername returns name, or name with the first free suffix -2 … -99, within 64 bytes;
+// user names compare case-insensitively (citext).
+func freeUsername(ctx context.Context, tx pgx.Tx, name string) (string, error) {
+	for i := 1; i <= maxUsernameSuffix; i++ {
+		candidate := cutBytes(name, maxUsernameBytes)
+		if i > 1 {
+			suffix := "-" + strconv.Itoa(i)
+			candidate = cutBytes(name, maxUsernameBytes-len(suffix)) + suffix
+		}
+		var taken bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM users WHERE username = $1)", candidate).Scan(&taken); err != nil {
+			return "", fmt.Errorf("check user name: %w", err)
+		}
+		if !taken {
+			return candidate, nil
+		}
+	}
+	return "", ErrUsernameTaken
+}
+
+// defaultLocale is the locale.default setting for a new SSO user, English when unset.
+func defaultLocale(ctx context.Context, tx pgx.Tx) (string, error) {
+	var loc string
+	found, err := settings.Get(ctx, tx, "locale.default", &loc)
+	if err != nil {
+		return "", err
+	}
+	if !found || !slices.Contains(SupportedLocales, loc) {
+		return "en", nil
+	}
+	return loc, nil
+}
+
+// normalized returns the identity's values as Alice stores them: an e-mail address that is
+// not a plain address is dropped, a blank display name becomes the user name, and the
+// display name is cut to its maximum length.
+func (id OIDCIdentity) normalized() (OIDCIdentity, error) {
+	if id.ProviderID == uuid.Nil || id.Subject == "" || !validate.StorableText(id.Subject) {
+		return OIDCIdentity{}, errors.New("auth: an SSO identity needs a provider and a subject")
+	}
+	if id.Username == "" || !validate.StorableText(id.Username) {
+		id.Username = ssoFallbackName
+	}
+	var v validate.Errors
+	validateEmail(&v, id.Email)
+	if v.Err() != nil || !validate.StorableText(id.Email) {
+		id.Email = ""
+	}
+	if !validate.StorableText(id.DisplayName) || strings.TrimSpace(id.DisplayName) == "" {
+		id.DisplayName = ""
+	}
+	if r := []rune(id.DisplayName); len(r) > maxDisplayName {
+		id.DisplayName = string(r[:maxDisplayName])
+	}
+	return id, nil
+}
+
+func checkRole(role rbac.Role) error {
+	if _, ok := rbac.ParseRole(string(role)); !ok {
+		return fmt.Errorf("auth: unknown role %q", role)
+	}
+	return nil
+}
+
+// SignInOIDC signs in the user of an identity the provider just authenticated, with the role
+// its group mappings resolved (C10). In one transaction it finds the user by provider and
+// subject or provisions one (never linking a local account: ErrOIDCEmailInUse), refuses a
+// disabled user, follows the provider's role, display name and e-mail (the e-mail under the
+// same collision rule, S-7), and opens a full session whose step-up window is open: the
+// identity provider has just authenticated the user.
+func (s *Service) SignInOIDC(ctx context.Context, id OIDCIdentity, role rbac.Role, m Meta) (SessionResult, error) {
+	id, err := id.normalized()
+	if err != nil {
+		return SessionResult{}, err
+	}
+	if err := checkRole(role); err != nil {
+		return SessionResult{}, err
+	}
+	var (
+		userID uuid.UUID
+		token  string
+	)
+	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1, hashtext($2))", oidcIdentityLockNamespace,
+			id.ProviderID.String()+"\n"+id.Subject); err != nil {
+			return fmt.Errorf("lock SSO identity: %w", err)
+		}
+		now := s.clock.Now().UTC()
+		u, found, err := lockSSOUser(ctx, tx, id.ProviderID, id.Subject)
+		if err != nil {
+			return err
+		}
+		var events []audit.Event
+		if !found {
+			if inUse, err := localEmailInUse(ctx, tx, id.Email); err != nil || inUse {
+				return cmpErr(err, ErrOIDCEmailInUse)
+			}
+			name, err := freeUsername(ctx, tx, id.Username)
+			if err != nil {
+				return err
+			}
+			locale, err := defaultLocale(ctx, tx)
+			if err != nil {
+				return err
+			}
+			u = ssoUser{id: uuid.Must(uuid.NewV7()), username: name, role: role}
+			if _, err := tx.Exec(ctx, `INSERT INTO users (id, username, email, display_name, auth_source, password_hash, role, role_source,
+locale, oidc_provider_id, oidc_issuer, oidc_subject, last_login_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, 'oidc', NULL, $5, 'oidc_mapping', $6, $7, $8, $9, $10, $10, $10)`,
+				u.id, name, id.Email, displayName(id, name), string(role), locale, id.ProviderID, id.Issuer, id.Subject, now); err != nil {
+				return fmt.Errorf("provision SSO user: %w", err)
+			}
+			events = append(events, audit.Event{Actor: oidcActor(u.id, name, m), Action: "user.provisioned", ObjectType: "user", ObjectID: u.id.String(),
+				Result: audit.Success, Details: map[string]string{"username": name, "role": string(role), "provider_id": id.ProviderID.String()}})
+		} else {
+			if u.disabled {
+				return ErrOIDCUserDisabled
+			}
+			if !strings.EqualFold(id.Email, u.email) {
+				if inUse, err := localEmailInUse(ctx, tx, id.Email); err != nil || inUse {
+					return cmpErr(err, ErrOIDCEmailInUse)
+				}
+			}
+			if _, err := tx.Exec(ctx, `UPDATE users SET role = $2, email = $3, display_name = $4, last_login_at = $5, updated_at = $5 WHERE id = $1`,
+				u.id, string(role), id.Email, displayName(id, u.username), now); err != nil {
+				return fmt.Errorf("update SSO user: %w", err)
+			}
+			if role != u.role {
+				events = append(events, roleSynced(u, role, m))
+			}
+		}
+		userID = u.id
+		if token, err = s.startFullSession(ctx, tx, u.id, m); err != nil {
+			return err
+		}
+		// Audit rows last, after every row lock of this transaction.
+		events = append(events, audit.Event{Actor: userActor(u.id, u.username, m), Action: "auth.login", ObjectType: "user", ObjectID: u.id.String(),
+			Result: audit.Success, Details: map[string]string{"method": "oidc", "provider_id": id.ProviderID.String(), "role": string(role)}})
+		return s.appendAll(ctx, tx, events)
+	})
+	if err != nil {
+		return SessionResult{}, err
+	}
+	return s.resultFor(ctx, userID, token, nil)
+}
+
+// cmpErr returns err when set, else refusal.
+func cmpErr(err, refusal error) error {
+	if err != nil {
+		return err
+	}
+	return refusal
+}
+
+func displayName(id OIDCIdentity, username string) string {
+	if id.DisplayName == "" {
+		return username
+	}
+	return id.DisplayName
+}
+
+func roleSynced(u ssoUser, role rbac.Role, m Meta) audit.Event {
+	return audit.Event{Actor: oidcActor(u.id, u.username, m), Action: "user.role_synced", ObjectType: "user", ObjectID: u.id.String(),
+		Result: audit.Success, Details: map[string]string{"from_role": string(u.role), "to_role": string(role)}}
+}
+
+func (s *Service) appendAll(ctx context.Context, tx pgx.Tx, events []audit.Event) error {
+	for _, e := range events {
+		if _, err := s.audit.Append(ctx, tx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// StepUpOIDC completes an SSO user's step-up: a fresh sign-in at the identity provider of the
+// same identity (SEC-009, R42 row 22). The session must still be live (S-1: a session ended by
+// RefuseOIDC, DemoteSSOAdmins, disabling or idle expiry is never resurrected) and the user
+// enabled; role is the one the group mappings resolved for this sign-in, synchronized as
+// SignInOIDC does. The session ID is rotated with a new 5-minute step-up window.
+func (s *Service) StepUpOIDC(ctx context.Context, sessionHash []byte, userID uuid.UUID, id OIDCIdentity, role rbac.Role, m Meta) (SessionResult, error) {
+	if err := checkRole(role); err != nil {
+		return SessionResult{}, err
+	}
+	var token string
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var (
+			u          ssoUser
+			source     string
+			providerID *uuid.UUID
+			subject    *string
+			curRole    string
+		)
+		err := tx.QueryRow(ctx, `SELECT username::text, role, auth_source, oidc_provider_id, oidc_subject, disabled_at IS NOT NULL
+FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&u.username, &curRole, &source, &providerID, &subject, &u.disabled)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrUnauthenticated
+		}
+		if err != nil {
+			return fmt.Errorf("read user: %w", err)
+		}
+		u.id, u.role = userID, rbac.Role(curRole)
+		switch {
+		case source != AuthOIDC:
+			return ErrNotSSOUser
+		case providerID == nil || *providerID != id.ProviderID || subject == nil || *subject != id.Subject:
+			return ErrOIDCOtherUser
+		case u.disabled:
+			return ErrOIDCUserDisabled
+		}
+		now := s.clock.Now().UTC()
+		live, err := sessionLive(ctx, tx, Principal{SessionHash: sessionHash, UserID: userID}, "full", now)
+		if err != nil {
+			return err
+		}
+		if !live {
+			return ErrUnauthenticated
+		}
+		var events []audit.Event
+		if role != u.role {
+			if _, err := tx.Exec(ctx, "UPDATE users SET role = $2, updated_at = $3 WHERE id = $1", userID, string(role), now); err != nil {
+				return fmt.Errorf("update SSO user: %w", err)
+			}
+			events = append(events, roleSynced(u, role, m))
+		}
+		stepUp := now.Add(StepUpWindow)
+		if token, err = s.rotateSession(ctx, tx, sessionHash, userID, &stepUp, m); err != nil {
+			return err
+		}
+		events = append(events, audit.Event{Actor: userActor(userID, u.username, m), Action: "auth.stepup", ObjectType: "user", ObjectID: userID.String(),
+			Result: audit.Success, Details: map[string]string{"method": "oidc"}})
+		return s.appendAll(ctx, tx, events)
+	})
+	if err != nil {
+		return SessionResult{}, err
+	}
+	return s.resultFor(ctx, userID, token, nil)
+}
+
+// RefuseOIDC records a refused SSO sign-in or step-up (auth.oidc.denied, result failure, with
+// the closed reason). For a known user and a reason that says the user no longer has access
+// (no_access, groups_overage, provider_disabled) it also ends all of that user's sessions in
+// the same transaction (O-08, R42 row 21). id may carry only the provider when the refusal
+// came before any identity was known.
+func (s *Service) RefuseOIDC(ctx context.Context, id OIDCIdentity, reason string, m Meta) error {
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var (
+			u     ssoUser
+			found bool
+			err   error
+		)
+		if id.ProviderID != uuid.Nil && id.Subject != "" && validate.StorableText(id.Subject) {
+			if u, found, err = lockSSOUser(ctx, tx, id.ProviderID, id.Subject); err != nil {
+				return err
+			}
+		}
+		name, objectID := id.Username, ""
+		if found {
+			name, objectID = u.username, u.id.String()
+		}
+		if name == "" || !validate.StorableText(name) {
+			name = unknownUserName
+		}
+		actor := oidcActor(u.id, name, m)
+		events := []audit.Event{{Actor: actor, Action: "auth.oidc.denied", ObjectType: "user", ObjectID: objectID,
+			Result: audit.Failure, Details: map[string]string{"provider_id": id.ProviderID.String(), "reason": reason}}}
+		if found && slices.Contains(sessionEndingReasons, reason) {
+			tag, err := tx.Exec(ctx, "UPDATE sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL", u.id, s.clock.Now().UTC())
+			if err != nil {
+				return fmt.Errorf("end sessions: %w", err)
+			}
+			events = append(events, audit.Event{Actor: actor, Action: "user.sessions_ended", ObjectType: "user", ObjectID: objectID,
+				Result: audit.Success, Details: map[string]string{"reason": reason, "ended_count": strconv.FormatInt(tag.RowsAffected(), 10)}})
+		}
+		return s.appendAll(ctx, tx, events)
+	})
+}
+
+// DemoteSSOAdmins makes every SSO Administrator an Auditor and ends their sessions, inside the
+// caller's transaction (switching "SSO users may be Admin" off, O-13, R42 row 24). Each
+// demotion is audited as user.demoted by a.
+func (s *Service) DemoteSSOAdmins(ctx context.Context, tx pgx.Tx, a audit.Actor) (demoted, ended int, err error) {
+	now := s.clock.Now().UTC()
+	// The rows are locked in ID order, so two demotions cannot deadlock each other.
+	rows, err := tx.Query(ctx, `UPDATE users SET role = 'auditor', updated_at = $1 WHERE id IN (
+SELECT id FROM users WHERE auth_source = 'oidc' AND role = 'admin' ORDER BY id FOR UPDATE) RETURNING id`, now)
+	if err != nil {
+		return 0, 0, fmt.Errorf("demote SSO administrators: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return 0, 0, fmt.Errorf("demote SSO administrators: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, 0, nil
+	}
+	slices.SortFunc(ids, func(x, y uuid.UUID) int { return bytes.Compare(x[:], y[:]) })
+	tag, err := tx.Exec(ctx, "UPDATE sessions SET revoked_at = $2 WHERE user_id = ANY($1) AND revoked_at IS NULL", ids, now)
+	if err != nil {
+		return 0, 0, fmt.Errorf("end sessions: %w", err)
+	}
+	for _, id := range ids {
+		if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: a, Action: "user.demoted", ObjectType: "user", ObjectID: id.String(),
+			Result: audit.Success, Details: map[string]string{"from_role": string(rbac.Admin), "to_role": string(rbac.Auditor)}}); err != nil {
+			return 0, 0, err
+		}
+	}
+	return len(ids), int(tag.RowsAffected()), nil
+}

@@ -113,9 +113,9 @@ func (s *Service) AuthenticatePassive(ctx context.Context, sessionToken string) 
 		revoked, disabled bool
 	)
 	err := s.pool.QueryRow(ctx, `SELECT s.kind, s.expires_at, s.idle_expires_at, s.stepup_until, s.revoked_at IS NOT NULL,
-u.id, u.username::text, u.display_name, u.role, u.locale, u.disabled_at IS NOT NULL
+u.id, u.username::text, u.display_name, u.role, u.locale, u.disabled_at IS NOT NULL, u.auth_source
 FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = $1`, h).Scan(
-		&kind, &expires, &idle, &stepUp, &revoked, &p.UserID, &p.Username, &p.DisplayName, &role, &p.Locale, &disabled)
+		&kind, &expires, &idle, &stepUp, &revoked, &p.UserID, &p.Username, &p.DisplayName, &role, &p.Locale, &disabled, &p.AuthSource)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Principal{}, ErrUnauthenticated
 	}
@@ -174,6 +174,7 @@ func (s *Service) SessionInfo(ctx context.Context, p Principal, sessionToken str
 		return SessionInfo{}, err
 	}
 	info.User = u
+	info.AuthSource, info.SSOProviderID = u.AuthSource, u.SSOProviderID
 	info.CSRFToken = s.CSRFToken(sessionToken)
 	info.ExpiresAt = info.ExpiresAt.UTC()
 	info.IdleExpiresAt = info.IdleExpiresAt.UTC()

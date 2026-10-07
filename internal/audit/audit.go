@@ -30,6 +30,9 @@ const (
 	ActorUser   ActorType = "user"
 	ActorToken  ActorType = "api_token"
 	ActorSystem ActorType = "system"
+	// ActorOIDC is an identity provider's user before (or without) a session: SSO
+	// provisioning, role synchronization and refused SSO sign-ins.
+	ActorOIDC ActorType = "oidc"
 )
 
 // Result is the outcome of an audited action.
