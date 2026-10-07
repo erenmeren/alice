@@ -176,7 +176,13 @@ describe('SSHKeysPage', () => {
     server.use(http.get('/api/v1/views', () => HttpResponse.json({ items: [] })));
     const { router } = await renderRoute('/ssh-keys?os_user=root&flag=weak');
     await waitFor(() => expect(queries.map((p) => `?${p.toString()}`)).toContain('?os_user=root&flag=weak'));
-    expect(screen.getByRole('link', { name: 'Export' })).toHaveAttribute('href', '/api/v1/ssh-keys/export?os_user=root&flag=weak');
+    let exported = '';
+    server.use(http.get('/api/v1/ssh-keys/export', ({ request }) => {
+      exported = new URL(request.url).search;
+      return new HttpResponse('a\r\n', { headers: { 'Content-Type': 'text/csv' } });
+    }));
+    await userEvent.click(screen.getByRole('button', { name: 'Export' }));
+    await waitFor(() => expect(exported).toBe('?os_user=root&flag=weak'));
     await userEvent.selectOptions(screen.getByLabelText('Finding'), 'duplicate');
     await waitFor(() => expect(router.state.location.search).toContain('flag=duplicate'));
     await waitFor(() => expect(queries.at(-1)?.get('flag')).toBe('duplicate'));

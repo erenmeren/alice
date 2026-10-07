@@ -7,6 +7,8 @@ import { viewsKey } from '../api/queryKeys';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 
+const MAX_NAME_RUNES = 60;
+
 interface Props {
   page: ViewPage;
   // keys are every filter key of the page; values are the filters now in the address (from useUrlFilters).
@@ -48,9 +50,11 @@ export function SavedViews({ page, keys, values, set }: Props) {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = name.trim();
-    if (trimmed) create.mutate(trimmed);
+    if (trimmed && !tooLong) create.mutate(trimmed);
   };
   const items = views.data?.items ?? [];
+  // The rule is 1 to 60 characters (runes): maxLength would count UTF-16 units and refuse an emoji name too early.
+  const tooLong = [...name.trim()].length > MAX_NAME_RUNES;
 
   return (
     <Stack gap="xs">
@@ -81,17 +85,18 @@ export function SavedViews({ page, keys, values, set }: Props) {
           {t('filters.saveView')}
         </Button>
       </Group>
-      <ErrorAlert error={views.error ?? remove.error} />
+      <ErrorAlert error={views.error} />
+      <ErrorAlert error={remove.error} />
       <AppModal opened={saving} onClose={() => setSaving(false)} title={t('filters.saveView')}>
         <form onSubmit={submit}>
           <Stack gap="sm">
-            <TextInput label={t('filters.viewName')} value={name} onChange={(e) => setName(e.currentTarget.value)} maxLength={60} data-autofocus />
+            <TextInput label={t('filters.viewName')} value={name} onChange={(e) => setName(e.currentTarget.value)} error={tooLong ? t('filters.viewNameTooLong') : undefined} data-autofocus />
             <ErrorAlert error={create.error} />
             <Group justify="flex-end">
               <Button variant="default" onClick={() => setSaving(false)}>
                 {t('ui.cancel')}
               </Button>
-              <Button type="submit" loading={create.isPending} disabled={!name.trim()}>
+              <Button type="submit" loading={create.isPending} disabled={!name.trim() || tooLong}>
                 {t('filters.saveView')}
               </Button>
             </Group>

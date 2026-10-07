@@ -242,4 +242,22 @@ describe('activity mark (AUD-01)', () => {
     server.use(http.post('/api/v1/echo', () => new HttpResponse('<html>', { headers: { 'Content-Type': 'text/html' } })));
     await expect(apiFetch<Blob>('/api/v1/echo', { method: 'POST', body: {}, responseType: 'blob' })).rejects.toMatchObject({ status: 200 });
   });
+
+  it('returns a Blob for a text/csv answer with responseType csv, and asks for csv', async () => {
+    let accept = '';
+    server.use(http.get('/api/v1/echo', ({ request }) => {
+      accept = request.headers.get('Accept') ?? '';
+      return new HttpResponse('a,b\n1,2\n', { headers: { 'Content-Type': 'text/csv; charset=utf-8' } });
+    }));
+    const blob = await apiFetch<Blob>('/api/v1/echo', { responseType: 'csv' });
+    expect(await blob.text()).toBe('a,b\n1,2\n');
+    expect(accept).toBe('text/csv, application/json');
+  });
+
+  it('never takes a JSON or an octet-stream answer for the csv file, and throws the error body', async () => {
+    server.use(http.get('/api/v1/echo', () => HttpResponse.json({ spa: true })));
+    await expect(apiFetch<Blob>('/api/v1/echo', { responseType: 'csv' })).rejects.toBeInstanceOf(ApiError);
+    server.use(http.get('/api/v1/echo', () => errorResponse(409, 'ALC-RPT-0001', 'export.too_large', { params: { max: '50000' } })));
+    await expect(apiFetch<Blob>('/api/v1/echo', { responseType: 'csv' })).rejects.toMatchObject({ status: 409, reason: 'export.too_large' });
+  });
 });

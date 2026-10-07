@@ -52,7 +52,7 @@ describe('DashboardPage', () => {
     expect(within(counts).getByRole('link', { name: /Within 30 days.*6/ })).toHaveAttribute('href', '/certificates?expiry=30');
     expect(within(counts).getByRole('link', { name: /Within 60 days.*7/ })).toHaveAttribute('href', '/certificates?expiry=60');
     expect(within(counts).getByText('Certificates in use: 8')).toBeInTheDocument();
-    expect(within(counts).getByRole('link', { name: /Key Vault items expiring within 30 days: 2/ })).toHaveAttribute('href', '/key-vaults');
+    expect(within(counts).getByRole('link', { name: /Key Vault keys and secrets expiring within 30 days: 2/ })).toHaveAttribute('href', '/key-vaults');
   });
 
   it('lists what expires soon, the expired one marked', async () => {

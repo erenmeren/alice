@@ -88,8 +88,8 @@ export interface FetchOptions {
   // keepalive lets the request finish after the page is closed (the activity flush on pagehide).
   keepalive?: boolean;
   // responseType 'blob' returns a successful answer as a Blob (a file download); an error answer is still read as
-  // text and parsed as always. The default is 'json'.
-  responseType?: 'json' | 'blob';
+  // text and parsed as always. 'csv' is the same for a text/csv answer (the list exports). The default is 'json'.
+  responseType?: 'json' | 'blob' | 'csv';
 }
 
 function parseRetryAfter(value: string | null): number | null {
@@ -108,8 +108,10 @@ function parseErrorBody(text: string): ApiErrorBody['error'] | null {
 
 export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
   const method = opts.method ?? 'GET';
-  const blob = opts.responseType === 'blob';
-  const headers: Record<string, string> = { ...opts.headers, Accept: blob ? 'application/octet-stream, application/json' : 'application/json' };
+  const csv = opts.responseType === 'csv';
+  const blob = opts.responseType === 'blob' || csv;
+  const accept = csv ? 'text/csv, application/json' : blob ? 'application/octet-stream, application/json' : 'application/json';
+  const headers: Record<string, string> = { ...opts.headers, Accept: accept };
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (method !== 'GET' && csrfToken) headers['X-CSRF-Token'] = csrfToken;
   const url = new URL(path, window.location.origin);
@@ -142,7 +144,8 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
   if (tookMark && (res.status === 429 || res.status >= 500)) returnActivity();
   if (res.status === 204) return undefined as T;
   // A successful answer is the file only when it says so: an HTML or JSON 200 (a proxy, an SPA fallback) is not a key.
-  const isFile = blob && res.ok && /^application\/octet-stream/i.test(res.headers.get('Content-Type') ?? '');
+  const fileType = csv ? /^text\/csv/i : /^application\/octet-stream/i;
+  const isFile = blob && res.ok && fileType.test(res.headers.get('Content-Type') ?? '');
   if (isFile) {
     try {
       return (await res.blob()) as T;

@@ -65,16 +65,55 @@ describe('SavedViews', () => {
     await waitFor(() => expect(deleted).toBe('v1'));
   });
 
-  it('shows the server error when saving is refused', async () => {
+  it.each([
+    ['ALC-RPT-0003', 'views.name_taken', undefined, 'A saved view with this name already exists.'],
+    ['ALC-RPT-0002', 'views.limit_reached', { max: '50' }, 'You have reached the limit of saved views.'],
+  ])('shows the text of %s when saving is refused', async (code, reason, params, title) => {
     base([
       http.get('/api/v1/views', () => HttpResponse.json({ items: [] })),
-      // A stand-in pair of the existing catalogue: the ALC-RPT-* pairs arrive with Task 14 (errorPairs.test.ts checks the Go table).
-      http.post('/api/v1/views', () => errorResponse(409, 'ALC-USR-0001', 'user.username_taken')),
+      http.post('/api/v1/views', () => errorResponse(409, code, reason, { params })),
     ]);
     await renderRoute('/certificates');
     await userEvent.click(await screen.findByRole('button', { name: 'Save view' }));
     await userEvent.type(within(await screen.findByRole('dialog')).getByLabelText('Name of the view'), 'Again');
     await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Save view' }));
-    expect(await within(screen.getByRole('dialog')).findByRole('alert')).toBeInTheDocument();
+    expect(await within(screen.getByRole('dialog')).findByText(title)).toBeInTheDocument();
+  });
+
+  it('shows a failed delete even when the list failed as well', async () => {
+    let reads = 0;
+    base([
+      http.get('/api/v1/views', () => (++reads === 1 ? HttpResponse.json({ items: [view] }) : errorResponse(500, 'ALC-SYS-0003', 'internal.unexpected'))),
+      http.delete('/api/v1/views/:id', () => errorResponse(404, 'ALC-SYS-0001', 'system.not_found')),
+    ]);
+    const { client } = await renderRoute('/certificates');
+    await userEvent.click(await screen.findByRole('button', { name: 'Saved views' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Delete view Web 1 soon' }));
+    await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
+    await client.invalidateQueries({ queryKey: ['views', 'certificates'] });
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2));
+  });
+
+  it('counts characters, not UTF-16 units: 60 emoji are allowed, 61 are refused on the field', async () => {
+    let posted: { name?: string } | undefined;
+    base([
+      http.get('/api/v1/views', () => HttpResponse.json({ items: [] })),
+      http.post('/api/v1/views', async ({ request }) => {
+        posted = (await request.json()) as { name?: string };
+        return HttpResponse.json({ id: 'v9', page: 'certificates', name: posted.name, query: {}, created_at: '2026-10-07T09:00:00Z' }, { status: 201 });
+      }),
+    ]);
+    await renderRoute('/certificates');
+    await userEvent.click(await screen.findByRole('button', { name: 'Save view' }));
+    const dialog = await screen.findByRole('dialog');
+    const field = within(dialog).getByLabelText('Name of the view');
+    await userEvent.click(field);
+    await userEvent.paste('😀'.repeat(61));
+    expect(within(dialog).getByText('A name can have at most 60 characters.')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Save view' })).toBeDisabled();
+    await userEvent.clear(field);
+    await userEvent.paste('😀'.repeat(60));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save view' }));
+    await waitFor(() => expect([...(posted?.name ?? '')]).toHaveLength(60));
   });
 });

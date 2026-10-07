@@ -44,7 +44,14 @@ export function CertificatesPage() {
   const client = useQueryClient();
   const navigate = useNavigate();
   const canOperate = session?.user.role === 'admin' || session?.user.role === 'operator';
-  const [filters, setFilters, clearFilters] = useUrlFilters(CERT_FILTER_KEYS);
+  const [urlFilters, setFilters, clearFilters] = useUrlFilters(CERT_FILTER_KEYS);
+  // A value in the address that is not one of the options (a typed link) is ignored: the list, the select, the export and a
+  // saved view then agree, and the select never says "all" over a filtered list.
+  const filters = {
+    ...urlFilters,
+    source: SOURCES.some((s) => s.value === urlFilters.source) ? urlFilters.source : '',
+    expiry: EXPIRIES.some((x) => x.value === urlFilters.expiry) ? urlFilters.expiry : '',
+  };
   const [search, onSearch, resetSearch] = useDebouncedParam(filters.q, (q) => setFilters({ q }));
   const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);

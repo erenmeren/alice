@@ -2042,7 +2042,7 @@
     "needsAttention": "Needs attention",
     "auditHead": "Audit log head",
     "auditHeadHelp": "Write down this value regularly outside Alice: it lets you prove later that no entry was removed.",
-    "kvExpiring": "Key Vault items expiring within 30 days: {{count}}",
+    "kvExpiring": "Key Vault keys and secrets expiring within 30 days: {{count}}",
     "auditBroken": "The last check found an integrity problem in the audit log. Open the Audit log and verify it.",
     "noFailed": "No deployment failed in the last 7 days.",
     "failedCount": "Failed deployments: {{count}}",
@@ -2076,6 +2076,7 @@
     "viewName": "Name of the view",
     "deleteView": "Delete view {{name}}",
     "clear": "Clear filters",
-    "noViews": "No saved views yet."
+    "noViews": "No saved views yet.",
+    "viewNameTooLong": "A name can have at most 60 characters."
   }
 }

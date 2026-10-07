@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { server } from '../test/server';
-import { createView, deleteView, exportUrl, getAlerts, getDashboardSummary, getExpiring, getNotificationStatus, listViews } from './phase7';
+import { createView, deleteView, exportPath, getAlerts, getDashboardSummary, getExpiring, getNotificationStatus, listViews } from './phase7';
 
 describe('phase7 calls', () => {
   it('hit the C13 paths', async () => {
@@ -38,9 +38,9 @@ describe('phase7 calls', () => {
     expect(body).toEqual({ page: 'certificates', name: 'n', query: { expiry: '7' } });
   });
 
-  it('exportUrl builds the query without empty values', () => {
-    expect(exportUrl('certificates', { target_id: 't', q: '', expiry: '30' })).toBe('/api/v1/certificates/export?target_id=t&expiry=30');
-    expect(exportUrl('ssh-keys', {})).toBe('/api/v1/ssh-keys/export');
-    expect(exportUrl('ssh-keys', { q: 'a b&c' })).toBe('/api/v1/ssh-keys/export?q=a+b%26c');
+  it('exportPath builds the query without empty values', () => {
+    expect(exportPath('certificates', { target_id: 't', q: '', expiry: '30' })).toBe('/api/v1/certificates/export?target_id=t&expiry=30');
+    expect(exportPath('ssh-keys', {})).toBe('/api/v1/ssh-keys/export');
+    expect(exportPath('ssh-keys', { q: 'a b&c' })).toBe('/api/v1/ssh-keys/export?q=a+b%26c');
   });
 });

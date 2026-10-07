@@ -6,12 +6,14 @@ import { Expiry } from '../Expiry';
 import { WRAP } from '../wrap';
 import { Widget } from './Widget';
 
-// itemPath is where an expiring item is managed: a certificate's page, a Key Vault certificate's page, else the vault.
+// itemPath is where an expiring item is managed, chosen by the item's kind and its vault (never by the shape of its id):
+// a certificate's page, a Key Vault certificate's page, a Key Vault key's vault. A kind this version does not know has no link.
 function itemPath(i: ExpiringItem): string | null {
   if (i.kind === 'certificate_expiry') return `/certificates/${encodeURIComponent(i.object_id)}`;
   if (!i.vault_id) return null;
   if (i.kind === 'kv_certificate_expiry') return `/key-vaults/${encodeURIComponent(i.vault_id)}/certificates/${encodeURIComponent(i.object_id)}`;
-  return `/key-vaults/${encodeURIComponent(i.vault_id)}`;
+  if (i.kind === 'kv_key_expiry') return `/key-vaults/${encodeURIComponent(i.vault_id)}`;
+  return null;
 }
 
 // where names the vault, else the websites other than the certificate's own name, else the servers.

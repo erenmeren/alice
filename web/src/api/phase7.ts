@@ -88,11 +88,13 @@ export const listViews = (page: ViewPage) => apiFetch<{ items: SavedView[] }>(`$
 export const createView = (body: { page: ViewPage; name: string; query: Record<string, string> }) => apiFetch<SavedView>(`${v1}/views`, { method: 'POST', body });
 export const deleteView = (id: string) => apiFetch<void>(`${v1}/views/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
-// exportUrl is the CSV download of a list with the same filters (no cursor, no limit). The browser downloads it with
-// the session cookie; the file never passes through the page's memory.
-export function exportUrl(kind: 'certificates' | 'ssh-keys', filters: Record<string, string>): string {
+// exportPath is the address of the CSV export of a list with the same filters (no cursor, no limit; empty values are dropped).
+export function exportPath(kind: 'certificates' | 'ssh-keys', filters: Record<string, string>): string {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(filters)) if (v) p.set(k, v);
   const qs = p.toString();
   return `${v1}/${kind}/export${qs ? `?${qs}` : ''}`;
 }
+
+// exportCsv fetches the export: the CSV as a Blob, or an ApiError for a refusal (409 too large or busy, 422, 429, 405).
+export const exportCsv = (kind: 'certificates' | 'ssh-keys', filters: Record<string, string>) => apiFetch<Blob>(exportPath(kind, filters), { responseType: 'csv' });

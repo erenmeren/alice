@@ -2042,7 +2042,7 @@
     "needsAttention": "İlgi bekleyenler",
     "auditHead": "Denetim kaydının son durumu",
     "auditHeadHelp": "Bu değeri düzenli olarak Alice dışında bir yere not edin: daha sonra hiçbir kaydın silinmediğini kanıtlamanızı sağlar.",
-    "kvExpiring": "30 gün içinde süresi dolacak Key Vault öğeleri: {{count}}",
+    "kvExpiring": "30 gün içinde süresi dolacak Key Vault anahtarları ve gizli değerleri: {{count}}",
     "auditBroken": "Son denetim, denetim kaydında bir bütünlük sorunu buldu. Denetim kaydını açın ve doğrulayın.",
     "noFailed": "Son 7 günde başarısız olan bir dağıtım yok.",
     "failedCount": "Başarısız dağıtımlar: {{count}}",
@@ -2076,6 +2076,7 @@
     "viewName": "Görünümün adı",
     "deleteView": "{{name}} görünümünü sil",
     "clear": "Filtreleri temizle",
-    "noViews": "Henüz kayıtlı görünüm yok."
+    "noViews": "Henüz kayıtlı görünüm yok.",
+    "viewNameTooLong": "Ad en çok 60 karakter olabilir."
   }
 }
