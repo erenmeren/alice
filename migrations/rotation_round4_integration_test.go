@@ -318,3 +318,18 @@ func TestRotationRemovalRefusesAPlaceOutsideTheRun(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, g.startRemoving(0, at(1), at(2)), "a place Alice removed does not block")
 }
+
+// FB-2, FB-11: the sweep's per-location step lookups and a policy's last-run lookup have their indexes.
+func TestRotationLookupIndexes(t *testing.T) {
+	db := pgtest.New(t)
+	for name, want := range map[string][]string{
+		"rotation_steps_location":   {"ON public.rotation_steps", "(location_id, name)", "WHERE (location_id IS NOT NULL)"},
+		"rotations_policy_finished": {"ON public.rotations", "(policy_id, finished_at DESC)"},
+	} {
+		var def string
+		require.NoError(t, db.Owner.QueryRow(context.Background(), "SELECT indexdef FROM pg_indexes WHERE indexname = $1", name).Scan(&def), name)
+		for _, w := range want {
+			assert.Contains(t, def, w, name)
+		}
+	}
+}

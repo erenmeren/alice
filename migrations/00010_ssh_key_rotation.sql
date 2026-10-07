@@ -215,6 +215,8 @@ CREATE UNIQUE INDEX rotations_one_live_per_key ON rotations (old_ssh_key_id)
 CREATE UNIQUE INDEX rotations_one_live_per_policy ON rotations (policy_id)
     WHERE status NOT IN ('completed', 'aborted', 'needs_attention', 'cancelled');
 CREATE INDEX rotations_live ON rotations (status) WHERE status NOT IN ('completed', 'aborted', 'needs_attention', 'cancelled');
+-- A policy's last finished run (policySelect's lateral lookup; FB-11).
+CREATE INDEX rotations_policy_finished ON rotations (policy_id, finished_at DESC);
 
 -- One location of the old key in a run (§13.6 items 3-6; R41 rows 19, 27, 29). The CHECKs and the trigger
 -- below carry the old-key rule: nothing is "removing" or "removed" without a verified and freshly
@@ -748,6 +750,9 @@ CREATE TABLE rotation_steps (
     params      jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(params) = 'object' AND octet_length(params::text) <= 4096),
     UNIQUE (rotation_id, n)
 );
+-- A location's steps (locSelect's retry count and add_answered lookup, read by the sweep and every location
+-- store call; FB-2): the table is append-only and grows with every run.
+CREATE INDEX rotation_steps_location ON rotation_steps (location_id, name) WHERE location_id IS NOT NULL;
 
 GRANT UPDATE (download_count, last_downloaded_at, destroyed_at, ciphertext, nonce, wrapped_dek, key_version)
     ON managed_private_keys TO alice_app;
@@ -785,6 +790,7 @@ REVOKE UPDATE (retired_at) ON ssh_keys FROM alice_app;
 REVOKE UPDATE (download_count, last_downloaded_at, destroyed_at, ciphertext, nonce, wrapped_dek, key_version)
     ON managed_private_keys FROM alice_app;
 DROP INDEX notifications_outbox_rotation_preview;
+DROP INDEX rotation_steps_location;
 DROP TABLE rotation_steps;
 DROP TABLE rotation_op_ids;
 DROP TRIGGER rotation_locations_guard ON rotation_locations;
@@ -792,6 +798,7 @@ DROP FUNCTION rotation_locations_guard();
 DROP TABLE rotation_locations;
 DROP TRIGGER rotations_guard ON rotations;
 DROP FUNCTION rotations_guard();
+DROP INDEX rotations_policy_finished;
 DROP TABLE rotations;
 DROP TRIGGER rotation_policies_key_check ON rotation_policies;
 DROP FUNCTION rotation_policies_check_key();
