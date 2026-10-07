@@ -44,6 +44,11 @@
         "title": "Someone changed this item while you were editing it.",
         "cause": "The item was changed after you opened it, so your change was not saved.",
         "action": "Reload the page, check the current values and make your change again."
+      },
+      "method_not_allowed": {
+        "title": "This request method is not accepted here.",
+        "cause": "An export is downloaded with GET only; a HEAD request would run the whole export and record it without sending the file.",
+        "action": "Download the file with GET, for example with the Export button."
       }
     },
     "internal": {

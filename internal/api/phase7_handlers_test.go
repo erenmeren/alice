@@ -767,3 +767,47 @@ func TestPhase7ServiceFailures(t *testing.T) {
 	rec = callWith(h, http.MethodGet, "/api/v1/ssh-keys?cursor="+strings.Repeat("c", 513), "admin", "", nil)
 	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 }
+
+// Task 14 review I1: 10 exports a minute per browser user and per API token, each identity on its own.
+func TestExportLimitIsPerUserAndPerToken(t *testing.T) {
+	d, _, _, fr := phase7Deps(t)
+	fr.succeed()
+	s := newServer(d)
+	h := s.handler(s.apiRoutes())
+	for i := 0; i < 10; i++ {
+		require.Equal(t, http.StatusOK, callWith(h, http.MethodGet, "/api/v1/certificates/export", "auditor", "", nil).Code, i)
+	}
+	rec := callWith(h, http.MethodGet, "/api/v1/certificates/export", "auditor", "", nil)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "the 11th export of the Auditor's session")
+	assert.Equal(t, http.StatusTooManyRequests, callWith(h, http.MethodGet, "/api/v1/ssh-keys/export", "auditor-stepup", "", nil).Code,
+		"another session of the same user shares the user's limit")
+	assert.Equal(t, http.StatusOK, callWith(h, http.MethodGet, "/api/v1/certificates/export", "admin", "", nil).Code,
+		"another user's session has its own limit")
+	assert.Equal(t, http.StatusOK, callWith(h, http.MethodGet, "/api/v1/certificates/export", "alice_read_auditor", "", nil).Code,
+		"the user's API token has its own limit")
+}
+
+// Task 14 review M6 (ruling): HEAD on an audited export is 405 and never runs the export nor writes an audit row.
+func TestHeadOnAuditedExportsIsRefused(t *testing.T) {
+	d, _, _, fr := phase7Deps(t)
+	fr.succeed()
+	fa := d.Audit.(*fakeAudit)
+	verified := false
+	fa.VerifyReadOnlyFn = func(context.Context) (audit.Report, error) {
+		verified = true
+		return audit.Report{}, nil
+	}
+	s := newServer(d)
+	h := s.handler(s.apiRoutes())
+	for _, path := range []string{"/api/v1/certificates/export", "/api/v1/ssh-keys/export", "/api/v1/audit/export?format=csv"} {
+		fr.reset()
+		rec := callWith(h, http.MethodHead, path, "admin", "", nil)
+		assert.Equal(t, http.StatusMethodNotAllowed, rec.Code, path)
+		assert.Equal(t, "GET", rec.Header().Get("Allow"), path)
+		assert.Zero(t, fr.calls(), path)
+	}
+	assert.False(t, verified, "the audit export did not start")
+	assert.Zero(t, fa.Count("audit.exported"))
+	assert.Equal(t, http.StatusOK, callWith(h, http.MethodHead, "/api/v1/dashboard/summary", "admin", "", nil).Code,
+		"other reads still answer HEAD")
+}

@@ -45,6 +45,8 @@ var (
 	ErrValidation         = ErrorCode{Code: "ALC-SYS-0006", Reason: "validation.failed", Status: http.StatusUnprocessableEntity}
 	ErrBodyTooLarge       = ErrorCode{Code: "ALC-SYS-0007", Reason: "system.body_too_large", Status: http.StatusRequestEntityTooLarge}
 	ErrPreconditionFailed = ErrorCode{Code: "ALC-SYS-0008", Reason: "system.precondition_failed", Status: http.StatusPreconditionFailed}
+	// ErrMethodNotAllowed: HEAD on an audited export (Phase 7, Task 14 review M6).
+	ErrMethodNotAllowed = ErrorCode{Code: "ALC-SYS-0009", Reason: "system.method_not_allowed", Status: http.StatusMethodNotAllowed}
 
 	ErrUnauthenticated        = ErrorCode{Code: "ALC-AUTH-0001", Reason: "auth.unauthenticated", Status: http.StatusUnauthorized}
 	ErrForbidden              = ErrorCode{Code: "ALC-AUTH-0002", Reason: "auth.forbidden", Status: http.StatusForbidden}
@@ -352,7 +354,7 @@ var (
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
 func AllErrorCodes() []ErrorCode {
 	return []ErrorCode{
-		ErrNotFound, ErrUnavailable, ErrUnexpected, ErrBadRequest, ErrRateLimited, ErrValidation, ErrBodyTooLarge, ErrPreconditionFailed,
+		ErrNotFound, ErrUnavailable, ErrUnexpected, ErrBadRequest, ErrRateLimited, ErrValidation, ErrBodyTooLarge, ErrPreconditionFailed, ErrMethodNotAllowed,
 		ErrUnauthenticated, ErrForbidden, ErrStepUpRequired, ErrCSRF, ErrInvalidCredentials, ErrMFAInvalid,
 		ErrMFAAlreadyEnrolled, ErrPasswordTooShort, ErrPasswordTooLong, ErrPasswordBreached, ErrCurrentPasswordInvalid, ErrTryAgain,
 		ErrUsernameTaken, ErrLastAdmin, ErrSSOUser, ErrTokenScopeNotAllowed, ErrAuditBusy,

@@ -31,7 +31,8 @@ func (s *server) sshKeyRoutes() []route {
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/platform-key", perm: rbac.TargetsManage, handler: s.platformKey},
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/{id}", perm: rbac.Read, handler: s.getSSHKey},
 		// Phase 7 (C13): the list as a CSV file, with the list's filters; a read, so it works in lock.
-		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/export", perm: rbac.Read, limit: limitExport, handler: s.exportSSHKeys},
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/export", perm: rbac.Read, limit: limitExport, getOnly: true,
+			handler: s.exportSSHKeys},
 		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/locations/{id}/actions/remove", perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.removeKeyLocation},
 		// Phase 6 (C13): generation and deploy are Operators' too (R41 row 7); the private key leaves Alice only through
 		// the download, an Administrator's browser session with step-up, 5 per minute, allowed in lock (row 5).

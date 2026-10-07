@@ -50,8 +50,9 @@ func (s *server) dashboardExpiring(w http.ResponseWriter, r *http.Request) {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 || n > maxExpiringDays {
 			v.Add("days", validate.OutOfRange, map[string]string{"min": "1", "max": strconv.Itoa(maxExpiringDays)})
+		} else {
+			days = n
 		}
-		days = n
 	}
 	limit := pageLimit(q.Get("limit"), &v)
 	if err := v.Err(); err != nil {

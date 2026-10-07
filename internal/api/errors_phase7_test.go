@@ -37,6 +37,8 @@ var phase7Table = []struct {
 	{"ALC-RPT-0001", "export.too_large", 409, false}, {"ALC-RPT-0002", "views.limit_reached", 409, false},
 	{"ALC-RPT-0003", "views.name_taken", 409, false}, {"ALC-RPT-0004", "export.busy", 409, true},
 	{"ALC-USR-0003", "user.sso_user", 409, false},
+	// Task 14 fix round (review M6): HEAD on an audited export.
+	{"ALC-SYS-0009", "system.method_not_allowed", 405, false},
 	// Task 15: single sign-on.
 	{"ALC-SSO-0001", "sso.discovery_failed", 502, true}, {"ALC-SSO-0002", "sso.admin_mapping_disabled", 409, false},
 	{"ALC-SSO-0003", "sso.admin_mappings_exist", 409, false}, {"ALC-SSO-0004", "sso.public_url_missing", 409, false},

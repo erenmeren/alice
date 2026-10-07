@@ -680,6 +680,14 @@ then becomes ALC-LIC-0001.
 
 **What to do.** Reload the page, check the current values and make your change again.
 
+## ALC-SYS-0009: This request method is not accepted here
+
+**Meaning.** A HEAD request to an export (`/api/v1/certificates/export`, `/api/v1/ssh-keys/export`, `/api/v1/audit/export`) was refused before anything ran; no audit row was written. (HTTP 405, reason `system.method_not_allowed`.)
+
+**Likely cause.** An export is downloaded with GET only; a HEAD request would run the whole export and record it without sending the file.
+
+**What to do.** Download the file with GET, for example with the Export button.
+
 ## ALC-TGT-0001: Server already exists
 
 **Meaning.** Another server already has this name, or the same address and SSH port (HTTP 409). Names are compared

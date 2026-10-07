@@ -24,7 +24,7 @@ import (
 func (s *server) auditRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/audit", perm: rbac.AuditRead, handler: s.listAudit},
-		{method: http.MethodGet, pattern: "/api/v1/audit/export", perm: rbac.AuditRead, handler: s.exportAudit},
+		{method: http.MethodGet, pattern: "/api/v1/audit/export", perm: rbac.AuditRead, getOnly: true, handler: s.exportAudit},
 		{method: http.MethodPost, pattern: "/api/v1/audit/verify", perm: rbac.AuditRead, lic: license.ClassAlways, handler: s.verifyAudit},
 	}
 }

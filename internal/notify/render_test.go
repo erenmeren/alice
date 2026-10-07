@@ -278,35 +278,68 @@ func TestRotationTemplatesRender(t *testing.T) {
 	assert.NotContains(t, m.Body, "\nBcc:")
 }
 
-// C14: every alert and auth template exists in English and Turkish, uses only the params its sender passes, and keeps
-// its subject on one line; owner step 2 reads the website name and the date in the expiry e-mail.
+// C14: every alert and auth template exists in English and Turkish and renders with exactly the params its sender
+// passes (alerts.paramsOf per kind and level, the summary's count and kind, the lockout's three), with and without the
+// license note; owner step 2 reads the website name and the date in the expiry e-mail.
 func TestAlertAndAuthTemplatesRenderInBothLanguages(t *testing.T) {
 	cat, err := i18n.Load(locales.FS)
 	require.NoError(t, err)
 	s := &notify.Sender{Catalog: cat}
-	params := map[string]string{"name": "www.example.com", "vault": "prod-vault", "days": "7", "expires_at": "2026-12-01 09:00 UTC",
-		"websites": "www.example.com, example.com", "servers": "web-01", "fingerprint": strings.Repeat("ab", 32), "count": "5",
-		"username": "ada", "failed_logins": "10", "minutes": "15", "license_note": "true", "license_url": "/license"}
-	for _, tpl := range append(alerts.Templates(), auth.Templates()...) {
-		for _, lang := range []string{"en", "tr"} {
-			m := s.Render("ada@example.com", tpl, lang, params)
-			assert.NotContains(t, m.Subject, "{{", "%s %s", tpl, lang)
-			assert.NotContains(t, m.Body, "{{", "%s %s", tpl, lang)
-			assert.NotContains(t, m.Subject, "email.", "%s %s: the key itself means a missing text", tpl, lang)
-			assert.NotContains(t, m.Body, "email.", "%s %s: the key itself means a missing text", tpl, lang)
-			assert.NotContains(t, m.Subject, "\n")
+	cert := map[string]string{"name": "www.example.com", "expires_at": "2026-12-01 09:00 UTC", "fingerprint": strings.Repeat("ab", 32),
+		"websites": "www.example.com, example.com", "servers": "web-01"}
+	kv := map[string]string{"name": "signing", "expires_at": "2026-12-01 09:00 UTC", "vault": "prod-vault"}
+	with := func(base map[string]string, extra ...string) map[string]string {
+		out := map[string]string{}
+		for k, v := range base {
+			out[k] = v
+		}
+		for i := 0; i+1 < len(extra); i += 2 {
+			out[extra[i]] = extra[i+1]
+		}
+		return out
+	}
+	params := map[string]map[string]string{
+		"alert.certificate_expiring":    with(cert, "days", "7"),
+		"alert.certificate_expired":     cert,
+		"alert.kv_certificate_expiring": with(kv, "days", "7"),
+		"alert.kv_certificate_expired":  kv,
+		"alert.kv_key_expiring":         with(kv, "days", "7"),
+		"alert.kv_key_expired":          kv,
+		"alert.kv_credential_expiring":  with(kv, "days", "7"),
+		"alert.kv_credential_expired":   kv,
+		"alert.more":                    {"count": "5", "kind": "certificate_expiry"},
+		auth.TemplateLockout:            {"username": "ada", "minutes": "15", "failed_logins": "10"},
+	}
+	templates := append(alerts.Templates(), auth.Templates()...)
+	require.Len(t, params, len(templates), "one params set per template")
+	for _, tpl := range templates {
+		p, ok := params[tpl]
+		require.True(t, ok, tpl)
+		note := "kv"
+		if strings.HasPrefix(tpl, "alert.certificate") {
+			note = "true"
+		}
+		for _, ps := range []map[string]string{p, with(p, "license_note", note, "license_url", "https://alice.example.com/license")} {
+			for _, lang := range []string{"en", "tr"} {
+				m := s.Render("ada@example.com", tpl, lang, ps)
+				assert.NotContains(t, m.Subject, "{{", "%s %s: a param its sender does not pass", tpl, lang)
+				assert.NotContains(t, m.Body, "{{", "%s %s: a param its sender does not pass", tpl, lang)
+				assert.NotContains(t, m.Subject, "email.", "%s %s: the key itself means a missing text", tpl, lang)
+				assert.NotContains(t, m.Body, "email.", "%s %s: the key itself means a missing text", tpl, lang)
+				assert.NotContains(t, m.Subject, "\n")
+			}
 		}
 	}
-	m := s.Render("ada@example.com", "alert.certificate_expiring", "en", params)
+	m := s.Render("ada@example.com", "alert.certificate_expiring", "en", params["alert.certificate_expiring"])
 	assert.Equal(t, "Certificate expiring: www.example.com (days left: 7)", m.Subject)
 	assert.Contains(t, m.Body, "Websites: www.example.com, example.com")
 	assert.Contains(t, m.Body, "2026-12-01 09:00 UTC", "owner step 2: the website name and the date")
-	tr := s.Render("ada@example.com", "alert.certificate_expiring", "tr", params)
+	tr := s.Render("ada@example.com", "alert.certificate_expiring", "tr", params["alert.certificate_expiring"])
 	assert.Equal(t, "Süresi dolmak üzere olan sertifika: www.example.com (kalan gün: 7)", tr.Subject)
 	assert.Contains(t, tr.Body, "Web siteleri: www.example.com, example.com")
-	lock := s.Render("ada@example.com", auth.TemplateLockout, "en", params)
+	lock := s.Render("ada@example.com", auth.TemplateLockout, "en", params[auth.TemplateLockout])
 	assert.Equal(t, "Sign-in blocked: ada", lock.Subject)
 	assert.Contains(t, lock.Body, "After 10 failed sign-in attempts, Alice blocked sign-in for the account ada for 15 minutes.")
-	more := s.Render("ada@example.com", "alert.more", "tr", params)
+	more := s.Render("ada@example.com", "alert.more", "tr", params["alert.more"])
 	assert.Equal(t, "Diğer süre dolumu bildirimleri: 5", more.Subject)
 }

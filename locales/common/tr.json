@@ -44,6 +44,11 @@
         "title": "Siz düzenlerken bu öğe değiştirildi.",
         "cause": "Öğe siz açtıktan sonra değişti, bu yüzden değişikliğiniz kaydedilmedi.",
         "action": "Sayfayı yeniden yükleyin, güncel değerleri kontrol edin ve değişikliğinizi yeniden yapın."
+      },
+      "method_not_allowed": {
+        "title": "Bu istek yöntemi burada kabul edilmiyor.",
+        "cause": "Dışa aktarım yalnızca GET ile indirilir; bir HEAD isteği dosyayı göndermeden tüm dışa aktarımı çalıştırır ve kaydeder.",
+        "action": "Dosyayı GET ile indirin, örneğin Dışa aktar düğmesiyle."
       }
     },
     "internal": {

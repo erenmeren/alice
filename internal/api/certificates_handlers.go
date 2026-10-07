@@ -24,7 +24,8 @@ func (s *server) certificateRoutes() []route {
 		{method: http.MethodGet, pattern: "/api/v1/certificates", perm: rbac.Read, handler: s.listCertificates},
 		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", perm: rbac.Read, handler: s.getCertificate},
 		// Phase 7 (C13): the list as a CSV file, with the list's filters; a read, so it works in lock.
-		{method: http.MethodGet, pattern: "/api/v1/certificates/export", perm: rbac.Read, limit: limitExport, handler: s.exportCertificates},
+		{method: http.MethodGet, pattern: "/api/v1/certificates/export", perm: rbac.Read, limit: limitExport, getOnly: true,
+			handler: s.exportCertificates},
 		{method: http.MethodPost, pattern: "/api/v1/certificates/upload", perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.uploadCertificate},
 		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/deploy", perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.deployCertificate},
 		{method: http.MethodGet, pattern: "/api/v1/certificates/csr", perm: rbac.Read, handler: s.listCSRs},

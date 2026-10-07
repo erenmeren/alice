@@ -624,6 +624,7 @@ paths:
         row is the second line. Cells that start with =, +, -, @, a tab or a carriage return get a leading
         apostrophe. One verification or export runs at a time per Alice process; another one is refused with
         503 ALC-AUD-0001 (retryable, Retry-After).
+        HEAD is refused with 405 ALC-SYS-0009 without verifying or recording anything.
       responses:
         "200":
           description: The log. Header X-Alice-Audit-Intact tells whether the chain verified.
@@ -639,6 +640,7 @@ paths:
                   entries: { type: array, items: { $ref: "#/components/schemas/AuditEntry" } }
         "422": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/audit/verify:
     post:
@@ -2337,7 +2339,8 @@ paths:
         refused with 409 ALC-RPT-0001 before anything is written (a JSON error, no file); Alice counts the rows first and
         then streams them, so rows added between the count and the end of the file can make the file stop at 50,000
         rows without an error. One export at a time per person (409 ALC-RPT-0004, retryable, Retry-After); at most 10
-        exports per minute per user or token (429). cursor or limit is refused with 422. Works while the license is
+        exports per minute per user or token (429). cursor or limit is refused with 422. HEAD is refused with 405
+        ALC-SYS-0009 without running the export. Works while the license is
         expired. A failure after the first byte aborts the connection: a cut file never looks complete.
       x-permission: read
       parameters:
@@ -2356,6 +2359,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/ssh-keys/export:
     get:
@@ -2381,6 +2385,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/dashboard/summary:
     get:
@@ -2390,7 +2395,7 @@ paths:
         The certificate counts are cumulative windows with the certificate list's meaning (expired: not_after at or
         before now; within_N: not_after before now + N days, expired ones included), so each count equals the rows its
         list link shows. kv_expired and kv_within_30 count Key Vault keys and client secrets. notifications is null
-        except for Administrators; audit is null for Operators (and before the first checkpoint); for Operators
+        except for Administrators and their API tokens; audit is null for Operators (and before the first checkpoint); for Operators
         license.phase is "" and license.ends_at and license.days_left are null.
       x-permission: read
       responses:
@@ -2444,8 +2449,8 @@ paths:
       operationId: getNotificationStatus
       summary: The state behind the "E-mails could not be sent" banner
       description: >-
-        Administrators get the delivery state (with the closed label of the last failure, for example smtp.auth); every
-        other role gets only {"failing": false}.
+        Administrators and their API tokens (a token acts with its owner's role) get the delivery state, with the closed
+        label of the last failure (for example smtp.auth); every other role gets only {"failing": false}.
       x-permission: read
       responses:
         "200":
@@ -4819,7 +4824,7 @@ components:
             running: { type: integer }
             needs_attention: { type: integer }
         notifications:
-          description: Administrators only; null for every other role
+          description: Administrators and their API tokens only; null for every other role
           oneOf:
             - { type: "null" }
             - { $ref: "#/components/schemas/Delivery" }

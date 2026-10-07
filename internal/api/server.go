@@ -299,7 +299,10 @@ type route struct {
 	// lic is how lock mode treats this operation. Every non-GET route declares it: ClassAlways
 	// for platform administration, ClassChange for changes to managed systems or inventory
 	// (refused while the license is expired, R9). GET routes leave it unset (reads stay available).
-	lic     license.Class
+	lic license.Class
+	// getOnly refuses HEAD (which the mux sends to a GET pattern) with 405: an audited export must never run, nor write
+	// its audit row, for a request that discards the body (Task 14 review M6).
+	getOnly bool
 	handler http.HandlerFunc
 }
 

@@ -38,6 +38,11 @@ func principalFrom(ctx context.Context) auth.Principal {
 func (s *server) guard(rt route) http.HandlerFunc {
 	policy, _ := rbac.PolicyFor(rt.perm) // register has checked the permission exists
 	return func(w http.ResponseWriter, r *http.Request) {
+		if rt.getOnly && r.Method == http.MethodHead {
+			w.Header().Set("Allow", http.MethodGet)
+			s.writeError(w, r, ErrMethodNotAllowed)
+			return
+		}
 		if s.refuseUnstorableQuery(w, r) {
 			return // AUD-13: query text PostgreSQL cannot store; nothing was looked up or counted
 		}
