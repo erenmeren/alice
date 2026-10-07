@@ -313,11 +313,19 @@ func (failingWriteAudit) Write(context.Context, audit.Event) error {
 	return errors.New("database down")
 }
 
-func TestCSVSafe(t *testing.T) {
-	for in, want := range map[string]string{
-		"=1+1": "'=1+1", "+1": "'+1", "-1": "'-1", "@SUM(A1)": "'@SUM(A1)", "\tx": "'\tx", "\rx": "'\rx",
-		"admin": "admin", "": "", "İzmir": "İzmir",
-	} {
-		assert.Equal(t, want, csvSafe(in), in)
-	}
+// The audit export uses the shared formula-safe writer (Phase 7, Task 3): a hostile actor name is neutralised and the
+// verification line still sits between the byte order mark and the header.
+func TestAuditCSVUsesCsvx(t *testing.T) {
+	report := audit.Report{Intact: true, Checked: 1, HeadSeq: 1, HeadHash: []byte{1}}
+	fa := &fakeAudit{IterateFn: func(_ context.Context, fn func(audit.Entry) error) error {
+		return fn(audit.Entry{Seq: 1, ActorType: audit.ActorUser, ActorName: "=HYPERLINK(\"x\")", Action: "auth.login",
+			Result: audit.Success, Hash: []byte{1}})
+	}}
+	s := newServer(Deps{Audit: fa})
+	rec := httptest.NewRecorder()
+	require.NoError(t, s.writeAuditCSV(context.Background(), rec, report))
+	body := rec.Body.String()
+	assert.True(t, strings.HasPrefix(body, "\xEF\xBB\xBF# alice audit export: intact=true"), body)
+	assert.Contains(t, body, "\nseq,at,actor_type,")
+	assert.Contains(t, body, `"'=HYPERLINK(""x"")"`)
 }

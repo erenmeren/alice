@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/license"
 	"alice/internal/platform/clock"
+	"alice/internal/platform/csvx"
 	"alice/internal/platform/validate"
 	"alice/internal/rbac"
 )
@@ -289,18 +289,18 @@ func csvVerificationLine(report audit.Report) string {
 }
 
 func (s *server) writeAuditCSV(ctx context.Context, w http.ResponseWriter, report audit.Report) error {
-	if _, err := w.Write([]byte("\xEF\xBB\xBF")); err != nil { // BOM so spreadsheet tools read UTF-8 (spec §10.5)
+	cw, err := csvx.NewWriter(w) // writes the BOM so spreadsheet tools read UTF-8 (spec §10.5)
+	if err != nil {
 		return err
 	}
 	if _, err := io.WriteString(w, csvVerificationLine(report)); err != nil {
 		return err
 	}
-	cw := csv.NewWriter(w)
 	header := []string{"seq", "at", "actor_type", "actor_id", "actor_name", "ip", "action", "object_type", "object_id", "result", "details", "request_id", "hash"}
 	if err := cw.Write(header); err != nil {
 		return err
 	}
-	err := s.deps.Audit.Iterate(ctx, func(e audit.Entry) error {
+	err = s.deps.Audit.Iterate(ctx, func(e audit.Entry) error {
 		d := auditEntryJSON(e)
 		details, err := json.Marshal(d.Details)
 		if err != nil {
@@ -317,29 +317,12 @@ func (s *server) writeAuditCSV(ctx context.Context, w http.ResponseWriter, repor
 			strconv.FormatInt(d.Seq, 10), d.At.Format(time.RFC3339Nano), d.ActorType, actorID, d.ActorName, ip,
 			d.Action, d.ObjectType, d.ObjectID, d.Result, string(details), d.RequestID, d.Hash,
 		}
-		for i := range rec {
-			rec[i] = csvSafe(rec[i])
-		}
 		return cw.Write(rec)
 	})
 	if err != nil {
 		return err
 	}
-	cw.Flush()
-	return cw.Error()
-}
-
-// csvSafe neutralises spreadsheet formula injection: a cell that starts with
-// = + - @ TAB or CR is prefixed with an apostrophe.
-func csvSafe(v string) string {
-	if v == "" {
-		return v
-	}
-	switch v[0] {
-	case '=', '+', '-', '@', '\t', '\r':
-		return "'" + v
-	}
-	return v
+	return cw.Flush()
 }
 
 func (s *server) writeAuditJSON(ctx context.Context, w http.ResponseWriter, report audit.Report) error {
