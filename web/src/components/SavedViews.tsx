@@ -59,7 +59,8 @@ export function SavedViews({ page, keys, values, set }: Props) {
   return (
     <Stack gap="xs">
       <Group gap="xs">
-        <Menu shadow="md" width={280} withinPortal>
+        {/* No focus placeholder: a role="menu" may hold menu items only (axe aria-required-children). */}
+        <Menu shadow="md" width={280} withinPortal withInitialFocusPlaceholder={false}>
           <Menu.Target>
             <Button variant="default">{t('filters.views')}</Button>
           </Menu.Target>
@@ -68,7 +69,7 @@ export function SavedViews({ page, keys, values, set }: Props) {
             {items.map((v) => (
               <Fragment key={v.id}>
                 <Menu.Item onClick={() => apply(v)}>{v.name}</Menu.Item>
-                <Menu.Item color="red" onClick={() => remove.mutate(v.id)}>
+                <Menu.Item c="red.9" onClick={() => remove.mutate(v.id)}>
                   {t('filters.deleteView', { name: v.name })}
                 </Menu.Item>
               </Fragment>

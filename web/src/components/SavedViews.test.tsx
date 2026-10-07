@@ -39,6 +39,16 @@ describe('SavedViews', () => {
     expect(new URLSearchParams(router.state.location.search).get('expiry')).toBe('30');
   });
 
+  it('holds only menu items in the open menu (axe aria-required-children) and draws the delete item in red 9 (axe color-contrast)', async () => {
+    base([http.get('/api/v1/views', () => HttpResponse.json({ items: [view] }))]);
+    await renderRoute('/certificates');
+    await userEvent.click(await screen.findByRole('button', { name: 'Saved views' }));
+    const menu = await screen.findByRole('menu');
+    expect([...menu.children].map((el) => el.getAttribute('role'))).toEqual(['menuitem', 'menuitem']);
+    // red 6 text is 3.3:1 on white; red 9 is above 4.5:1 (WCAG AA).
+    expect(within(menu).getByRole('menuitem', { name: 'Delete view Web 1 soon', hidden: true }).getAttribute('style')).toContain('color: var(--mantine-color-red-9)');
+  });
+
   it('clears every other filter key when a view is applied', async () => {
     base([http.get('/api/v1/views', () => HttpResponse.json({ items: [view] }))]);
     const { router } = await renderRoute('/certificates?source=csr&q=zzz');
