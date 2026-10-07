@@ -119,3 +119,29 @@ content_type, detected_at, certificate_id) VALUES ($1, $2, $3, repeat('b', 40), 
 VALUES ($1, $2, $3, true, $4, now(), now())`, kvKey, vault, keyName, keyExpires)
 	return
 }
+
+// Deployment inserts a finished deployment of cert on target (status failed, rolled_back or rollback_failed, finished at
+// at) or an unfinished one (needs_attention, created at at). The certificate needs a location on the target.
+func Deployment(ctx context.Context, pool *pgxpool.Pool, cert, target uuid.UUID, status, errorCode string, at time.Time) (uuid.UUID, error) {
+	var loc uuid.UUID
+	var fp string
+	if err := pool.QueryRow(ctx, `SELECT l.id, c.fingerprint_sha256 FROM certificate_locations l JOIN certificates c ON c.id = l.certificate_id
+WHERE l.certificate_id = $1 AND l.target_id = $2 LIMIT 1`, cert, target).Scan(&loc, &fp); err != nil {
+		return uuid.Nil, err
+	}
+	id := uuid.New()
+	state, finished := "done", &at
+	if status == "needs_attention" {
+		state, finished = "recovering", nil
+	}
+	_, err := pool.Exec(ctx, `INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, state, status, new_fingerprint,
+cert_path, key_path, error_code, created_at, finished_at) VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, '/etc/nginx/ssl/seed.crt',
+'/etc/nginx/ssl/seed.key', $8, $9, $10)`, id, cert, loc, target, state, status, fp, errorCode, at, finished)
+	return id, err
+}
+
+// SetStatus sets a target's status (for example host_key_changed or auth_failed).
+func SetStatus(ctx context.Context, pool *pgxpool.Pool, target uuid.UUID, status string) error {
+	_, err := pool.Exec(ctx, `UPDATE targets SET status = $2, updated_at = now() WHERE id = $1`, target, status)
+	return err
+}
