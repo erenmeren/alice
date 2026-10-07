@@ -293,6 +293,53 @@ in the task concerned.
 - 21:03 — the documentation part of Task 19 runs beside Task 18 — why: disjoint files, and the docs agent uses no
   Docker — cost: sentences that depend on the e2e outcome are checked again after it.
 
+## Final review (2026-10-07)
+
+The phase was resumed by a new controller session (Fable 5.1) on 2026-10-07 after the usage-limit stop of 2026-10-05
+21:23; Task 19's documentation commits had landed, Task 18 had been cut off mid-run with its files uncommitted.
+
+- 10:54 — Task 18's first run (retries 0) on the stack restarted without a rebuild: 15 passed, 1 failed, 4 skipped.
+  The e2e agent had marked two product defects `test.fixme`: D1, the rotation switch's track label "Off" at 2.55:1,
+  and D2, the indigo link in the red paused banner at 4.36:1 (axe color-contrast, serious). The failure was the test's
+  own race: a full page load right after the language choice cancelled `PUT /auth/locale`, and the next sign-in
+  applied the account's English. Ruling: the controller fixed all of it itself (fc16ef8: the state is a text beside
+  the switch, the AutoDeploySwitch pattern; the link black and underlined, the LicenseBanners pattern; f2eeb71:
+  `chooseLanguage` waits for the save's answer, the fixme markers removed, three `no-useless-assignment` errors
+  removed — `file = ''` cannot clear a JavaScript string, so the downloads are block-scoped constants with
+  `.finally(delete)`) — why: four small mechanical changes in files no agent owned any more — cost if wrong: the
+  rebuilt stack's runs show it. Three consecutive runs on the rebuilt image: 20 passed each.
+- 11:14 — the final whole-branch review at 8854791 (final-branch-review.md, Opus, read-only): "mergeable after
+  fixes"; Critical 0, Important 3, Minor 8. FB-1: old-key rule (2) was checked only among the run's own places in the
+  overlap-end decision, the store's send gate and the database guard, so a live place of the old key discovered in
+  the same file during the overlap (a new account reading a shared `AuthorizedKeysFile`) lost the old key without a
+  login with the new key ever tried for it. FB-2 and FB-11: no index behind `locSelect`'s `rotation_steps` subqueries
+  and the policy page's last-run lookup. FB-3: Task 18 uncommitted (closed above). FB-4: **Run now** loops on
+  `ALC-ROT-0003` while a notified scheduled run holds an older digest. FB-5, FB-8: documentation wording. FB-6: the
+  download dialog accepted reasons the server refuses, after wiping the passphrases. FB-7: every location job decodes
+  the whole run. FB-9: the run list typed as full runs. FB-10: the plan's Review Focus names a test that does not exist
+  (the two real tests pin the zeroing). Rulings: fix FB-1 in the three layers (the decision ends the place `kept_old`,
+  the store refuses, the guard raises `Z1011`), FB-2, FB-11, FB-6, FB-9, FB-5 and FB-8 in one dispatch; park FB-4 —
+  why: a scheduled run replans at its start and an Administrator can switch the policy off and on to cancel the
+  planned run, then **Run now** — cost: a confusing 409 loop until then; park FB-7 — why: bounded by the plan limit
+  and the job count, no safety effect — cost: a slow very large run; FB-10 needs no change (no document on the branch
+  quotes the name).
+- 11:40 — the fix round (fix-round-final-report.md, Opus): a76e747 (FB-1; red first at 8854791 in a detached
+  worktree: `TestOverlapEndKeepsOldForASiblingOutsideTheRun`, `TestBeginRemoveRefusesASiblingOutsideTheRun`,
+  `TestSiblingOfOldKeyDuringOverlapKeepsOld` — the old key left the file and one removal reached the server —,
+  `TestRotationRemovalRefusesAPlaceOutsideTheRun`), 8b113ac (FB-2, FB-11; `TestRotationLookupIndexes` red first),
+  a4359d2 (FB-6; Vitest red 3 first), fedc8c5 (FB-9), 5d6b45a (FB-5, FB-8). Green with `-race`: `sshkeys` 90.0 %,
+  `sshkeyjobs` 86.8 %, `migrations`, `api` 95.8 %. Ruling on the implementer's concern — a sibling that appears between
+  the sweep's decision and the removal job's send is refused by the store, and the place then ends `remove_failed`
+  and the run `needs_attention` with the old key in place, not `kept_old` — accepted — why: the decision layer catches
+  the ordinary case, the store and the guard are the backstop, and C8 has no `verified → kept_old` edge at send time
+  — cost: a `needs_attention` run in a race that needs a scan between the decision and the send. Known limitation.
+  The property test was not extended (its fault hook runs while the fake world is locked); the three targeted tests
+  cover the rule at each layer.
+- 11:40 — the committed spec's login check used `StrictHostKeyChecking=no`, which `TestNoCodeAcceptsAnyHostKey`
+  (SEC-080) refuses; the controller pinned the target's host key through a `known_hosts` file written from
+  `/etc/ssh/ssh_host_ed25519_key.pub` (9908446; a throwaway key reaches "Permission denied (publickey)" on the target,
+  not a host-key failure).
+
 ## Process
 
 - Models, as the ledger and the commit trailers state them: the plan was written by Opus 5.5; the pre-flight security
@@ -349,10 +396,11 @@ Commits per task (from `git log` and the ledger; a range includes the fix rounds
   d8e030c, 03332df. Task 15: 802ab49, dfade43, 3b26c23, 08a8e10, 2c47749.
 - Task 16: ed9ef93, 14f96f8. Task 17: 9b9a786, c28a2c5, 413d890, 754f8fc, e539f57, e2e8705. Controller: 6a32c97,
   c9ae2ab.
-- Task 18 (Playwright): running when this was written; its commits and result are added after it.
-- Task 19: the documentation (R41 and the spec pointers, the guides, the troubleshooting review, the changelog, this
-  document and the security review) is written; the coverage floors, the final whole-branch review, its fix dispatch
-  and the final `make ci` follow, and their results go into the `PENDING-FINAL-RUN` cells of the security review.
+- Task 18 (Playwright): f2eeb71, 9908446, with fc16ef8 for the two contrast defects it found (controller commits,
+  Fable 5.1); the e2e agent's model is not recorded.
+- Task 19: 5decc05, 2eaaf89, a0d20da, 94672f8, 8854791 (the documentation, Opus 5.5); the final whole-branch review and
+  its fix round a76e747, 8b113ac, a4359d2, fedc8c5, 5d6b45a (Opus 5.5); the coverage floors and the evidence of the
+  final `make ci` in the commits that close the phase (controller, Fable 5.1).
 
 ## Carried to later phases
 
@@ -373,6 +421,11 @@ docs/security/reviews/phase-6.md):
   minors; Task 17's retried-vault first page — unassigned.
 - A scheduled policy with an oversized plan logs at every tick without an email; a `needs_attention` run leaves the
   policy on the old key — found while writing these documents; unassigned.
+- From the final review: FB-4 (**Run now** answers `ALC-ROT-0003` while a notified scheduled run holds an older
+  digest; switch the policy off and on, or wait for the scheduled start, which replans); FB-7 (every location job
+  decodes the run's whole plan: quadratic on a run near the plan limit); a sibling place of the old key that appears
+  between the sweep's decision and the removal's send ends `remove_failed` → `needs_attention` instead of
+  `kept_old` — unassigned.
 - Phase 7: the certificate private-key download (carry 11); notification recipients and the 30-day retention as
   settings; cron-like schedules and partial-location policies have no phase named.
 - Phase 8: the helper scans all accounts more than once per key change (carry 4; about four scans per rotated place);
