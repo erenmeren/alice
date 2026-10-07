@@ -121,8 +121,9 @@ release-symcheck: ## Fail if the release build of alice links e2e-only test code
 	  ! grep -Eq " main\.$$s$$" bin/.symcheck-release.nm || { echo "release-symcheck: the release build links e2e-only main.$$s"; exit 1; }; \
 	done
 	@! grep -E ' $(E2E_SYMBOLS)' bin/.symcheck-release.nm || { echo "release-symcheck: the release build links e2e-only code"; exit 1; }
-	@go list -deps -tags "e2e testlicense" ./cmd/alice | grep -q '^alice/internal/testutil/seed$$' || { echo "release-symcheck: cannot see the seed package in the e2e build's dependencies"; exit 1; }
-	@! go list -deps ./cmd/alice | grep -E '^alice/internal/testutil/' || { echo "release-symcheck: the release build imports test-data code"; exit 1; }
+	@go list -deps -tags "e2e testlicense" ./cmd/alice > bin/.symcheck-e2e.deps && go list -deps ./cmd/alice > bin/.symcheck-release.deps
+	@grep -q '^alice/internal/testutil/seed$$' bin/.symcheck-e2e.deps || { echo "release-symcheck: cannot see the seed package in the e2e build's dependencies"; exit 1; }
+	@! grep -E '^alice/internal/testutil/' bin/.symcheck-release.deps || { echo "release-symcheck: the release build imports test-data code"; exit 1; }
 	@grep -Eq ' alice/internal/testutil/seed\.' bin/.symcheck-e2e.nm || { echo "release-symcheck: cannot see the seed package in the e2e build"; exit 1; }
 	@! grep -E ' alice/internal/testutil/' bin/.symcheck-release.nm || { echo "release-symcheck: the release build links test-data code"; exit 1; }
 	@go version -m bin/.symcheck-e2e | grep -Eq '^\s+build\s+-tags=.*testlicense' || { echo "release-symcheck: cannot see build tags in the build info"; exit 1; }
@@ -133,7 +134,7 @@ release-symcheck: ## Fail if the release build of alice links e2e-only test code
 	@! grep -aqF '$(TEST_ROUTE_MARKER)' bin/.symcheck-release || { echo "release-symcheck: the release build serves the e2e /test routes"; exit 1; }
 	@grep -aqF '$(E2E_AZURE_MARKER)' bin/.symcheck-e2e || { echo "release-symcheck: cannot see $(E2E_AZURE_MARKER) in the e2e build; update E2E_AZURE_MARKER"; exit 1; }
 	@! grep -aqF '$(E2E_AZURE_MARKER)' bin/.symcheck-release || { echo "release-symcheck: the release build knows where the fake Azure CA lives"; exit 1; }
-	@rm -f bin/.symcheck-release bin/.symcheck-e2e bin/.symcheck-release.nm bin/.symcheck-e2e.nm
+	@rm -f bin/.symcheck-release bin/.symcheck-e2e bin/.symcheck-release.nm bin/.symcheck-e2e.nm bin/.symcheck-release.deps bin/.symcheck-e2e.deps
 	@echo "release-symcheck: ok"
 
 .PHONY: licensectl
