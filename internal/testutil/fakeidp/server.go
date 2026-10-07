@@ -65,6 +65,7 @@ type Fault struct {
 	AuthorizeError string
 	ReplayCode     bool
 	Kid            string // overrides the kid in the header of an RS256 token
+	HMACKeyPEM     bool   // with Alg "HS256": key the MAC with the PEM text of the public key instead of its DER
 	HasGroups      bool   // the Entra "hasgroups" overage marker, without groups
 }
 
@@ -108,6 +109,7 @@ type Server struct {
 	down      bool
 	stats     Stats
 	lastForm  url.Values
+	lastQuery url.Values
 }
 
 func random(n int) string {
@@ -248,6 +250,17 @@ func (s *Server) LastTokenForm() url.Values {
 	return out
 }
 
+// LastAuthorizeQuery is a copy of the last authorization request's query (scope, nonce, prompt, max_age, acr_values…).
+func (s *Server) LastAuthorizeQuery() url.Values {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := url.Values{}
+	for k, v := range s.lastQuery {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
+}
+
 // RotateKey adds a signing key with a new kid; the old ones stay in the JWKS until DropOldKeys.
 func (s *Server) RotateKey() {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -264,7 +277,9 @@ func (s *Server) RotateKey() {
 func (s *Server) DropOldKeys() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.keys = s.keys[len(s.keys)-1:]
+	if len(s.keys) > 1 {
+		s.keys = s.keys[len(s.keys)-1:]
+	}
 }
 
 // SetJWKSMaxAge sets the max-age of the Cache-Control header of the JWKS answer (default 300 s); a negative value
@@ -391,6 +406,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stats.Authorize++
+	s.lastQuery = q
 	redirect := q.Get("redirect_uri")
 	if q.Get("client_id") != s.clientID || !s.redirectAllowed(redirect) {
 		http.Error(w, "unknown client or redirect_uri", http.StatusBadRequest)
@@ -402,7 +418,9 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vals := target.Query()
-	vals.Set("state", q.Get("state"))
+	if q.Has("state") {
+		vals.Set("state", q.Get("state"))
+	}
 	switch {
 	case s.fault.AuthorizeError != "":
 		vals.Set("error", s.fault.AuthorizeError)
@@ -427,6 +445,17 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	needSpare := s.fault.OtherKey
+	s.mu.Unlock()
+	var spare *rsa.PrivateKey // generated outside the lock: a 2048-bit key takes a while
+	if needSpare {
+		var err error
+		if spare, err = rsa.GenerateKey(rand.Reader, 2048); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+			return
+		}
+	}
+	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stats.Token++
 	s.lastForm = r.PostForm
@@ -449,7 +478,7 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.used = true
-	tok, err := s.idToken(g)
+	tok, err := s.idToken(g, spare)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
 		return

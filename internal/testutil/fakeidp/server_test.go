@@ -2,10 +2,13 @@ package fakeidp
 
 import (
 	"crypto"
+	"crypto/hmac"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
@@ -316,4 +319,150 @@ func TestChosenClaimsKidAndHasGroups(t *testing.T) {
 	c = verifyRS256(t, s, body["id_token"].(string))
 	assert.NotContains(t, c, "nonce")
 	assert.NotContains(t, c, "auth_time")
+}
+
+// rawToken posts form to /token with the client authentication chosen by auth.
+func rawToken(t *testing.T, s *Server, form url.Values, auth func(r *http.Request)) (int, map[string]any) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, s.Issuer()+"/token", strings.NewReader(form.Encode()))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	auth(req)
+	res, err := s.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = res.Body.Close() }()
+	var body map[string]any
+	b, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(b, &body))
+	return res.StatusCode, body
+}
+
+func freshCode(t *testing.T, s *Server, verifier string) string {
+	t.Helper()
+	cb, err := s.Authorize(authorizeURL(s, challengeOf(verifier)))
+	require.NoError(t, err)
+	u, err := url.Parse(cb)
+	require.NoError(t, err)
+	return u.Query().Get("code")
+}
+
+func tokenForm(code, verifier string) url.Values {
+	return url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {redirect}, "code_verifier": {verifier}}
+}
+
+// Review Important 1: the algorithm-confusion token is really keyed with the public key (DER by default, the PEM
+// text with Fault.HMACKeyPEM), so a verifier that is vulnerable to either form fails the negative test for a reason.
+func TestHS256ConfusionTokenIsKeyedWithThePublicKey(t *testing.T) {
+	for _, pemForm := range []bool{false, true} {
+		s, _ := start(t)
+		s.SetFault(Fault{Alg: "HS256", HMACKeyPEM: pemForm})
+		_, body := login(t, s, strings.Repeat("v", 43))
+		parts := strings.Split(body["id_token"].(string), ".")
+		require.Len(t, parts, 3)
+		der, err := x509.MarshalPKIXPublicKey(&s.keys[len(s.keys)-1].key.PublicKey)
+		require.NoError(t, err)
+		secret := der
+		if pemForm {
+			secret = pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+		}
+		mac := hmac.New(sha256.New, secret)
+		mac.Write([]byte(parts[0] + "." + parts[1]))
+		assert.Equal(t, b64(mac.Sum(nil)), parts[2], "pem=%v", pemForm)
+		other := hmac.New(sha256.New, []byte("another secret"))
+		other.Write([]byte(parts[0] + "." + parts[1]))
+		assert.NotEqual(t, b64(other.Sum(nil)), parts[2])
+	}
+}
+
+func TestTokenEndpointNegativePaths(t *testing.T) {
+	s, _ := start(t)
+	v := strings.Repeat("v", 43)
+	basic := func(r *http.Request) {
+		r.SetBasicAuth(url.QueryEscape(s.ClientID()), url.QueryEscape(s.ClientSecret()))
+	}
+
+	status, body := rawToken(t, s, tokenForm(freshCode(t, s, v), v), func(r *http.Request) {
+		r.SetBasicAuth(url.QueryEscape(s.ClientID()), "wrong")
+	})
+	assert.Equal(t, http.StatusUnauthorized, status)
+	assert.Equal(t, "invalid_client", body["error"])
+
+	form := tokenForm(freshCode(t, s, v), v)
+	form.Set("client_id", s.ClientID())
+	form.Set("client_secret", s.ClientSecret())
+	status, body = rawToken(t, s, form, func(*http.Request) {})
+	assert.Equal(t, http.StatusOK, status, "client_secret_post is accepted: %v", body)
+
+	form = tokenForm(freshCode(t, s, v), v)
+	form.Set("redirect_uri", "https://alice.example.test/other")
+	status, body = rawToken(t, s, form, basic)
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Equal(t, "invalid_grant", body["error"], "redirect_uri must equal the authorize request's")
+
+	form = tokenForm(freshCode(t, s, v), v)
+	form.Set("grant_type", "client_credentials")
+	status, body = rawToken(t, s, form, basic)
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Equal(t, "invalid_grant", body["error"])
+
+	status, body = rawToken(t, s, url.Values{"grant_type": {"authorization_code"}, "code": {"nope"}, "code_verifier": {v}}, basic)
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Equal(t, "invalid_grant", body["error"], "an unknown code")
+}
+
+func TestRedirectPrefixAndDown(t *testing.T) {
+	s := Start(t, Options{})
+	s.RegisterRedirectPrefix("https://localhost:")
+	withRedirect := func(uri string) string {
+		q := url.Values{"response_type": {"code"}, "client_id": {s.ClientID()}, "redirect_uri": {uri}, "scope": {"openid"},
+			"state": {"st"}, "nonce": {"no"}, "code_challenge": {challengeOf("v")}, "code_challenge_method": {"S256"}}
+		return s.Issuer() + "/authorize?" + q.Encode()
+	}
+	cb, err := s.Authorize(withRedirect("https://localhost:8443/api/v1/auth/oidc/p1/callback"))
+	require.NoError(t, err)
+	assert.Contains(t, cb, "code=")
+	_, err = s.Authorize(withRedirect("https://localhost.evil.example/cb"))
+	assert.Error(t, err, "the prefix includes the colon")
+	_, err = s.Authorize(withRedirect("http://localhost:8443/cb"))
+	assert.Error(t, err)
+
+	s.Down()
+	_, err = s.Authorize(withRedirect("https://localhost:8443/cb"))
+	assert.ErrorContains(t, err, "503")
+}
+
+// Review Important 3: a real IdP omits a nonce the request did not carry and echoes state only when sent; the
+// authorize query is recorded so step-up tests can assert prompt=login and max_age=0.
+func TestNonceStateAndAuthorizeQuery(t *testing.T) {
+	s, _ := start(t)
+	q := url.Values{"response_type": {"code"}, "client_id": {s.ClientID()}, "redirect_uri": {redirect}, "scope": {"openid email"},
+		"code_challenge": {challengeOf(strings.Repeat("v", 43))}, "code_challenge_method": {"S256"},
+		"prompt": {"login"}, "max_age": {"0"}, "acr_values": {"mfa"}}
+	cb, err := s.Authorize(s.Issuer() + "/authorize?" + q.Encode())
+	require.NoError(t, err)
+	u, err := url.Parse(cb)
+	require.NoError(t, err)
+	assert.False(t, u.Query().Has("state"), "no state sent, none echoed")
+	got := s.LastAuthorizeQuery()
+	assert.Equal(t, "login", got.Get("prompt"))
+	assert.Equal(t, "0", got.Get("max_age"))
+	assert.Equal(t, "mfa", got.Get("acr_values"))
+	assert.Equal(t, "openid email", got.Get("scope"))
+	got.Set("prompt", "none")
+	assert.Equal(t, "login", s.LastAuthorizeQuery().Get("prompt"), "a copy")
+
+	status, body := exchange(t, s, u.Query().Get("code"), strings.Repeat("v", 43))
+	require.Equal(t, http.StatusOK, status)
+	claims := verifyRS256(t, s, body["id_token"].(string))
+	assert.NotContains(t, claims, "nonce", "never nonce: \"\"")
+}
+
+func TestDropOldKeysAfterEveryKeyWasWithdrawn(t *testing.T) {
+	s, _ := start(t)
+	require.True(t, s.WithdrawKey("k1"))
+	assert.NotPanics(t, s.DropOldKeys)
+	assert.Empty(t, s.Kids())
+	s.RotateKey()
+	assert.Equal(t, []string{"k2"}, s.Kids())
 }

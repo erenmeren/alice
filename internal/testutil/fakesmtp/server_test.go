@@ -1,15 +1,20 @@
 package fakesmtp
 
 import (
+	"bufio"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/smtp"
+	"net/textproto"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,6 +58,15 @@ func send(t *testing.T, s *Server, auth smtp.Auth, to string) error {
 	return w.Close()
 }
 
+// codeOf is the SMTP reply code of err, or 0 when err is nil or not a reply.
+func codeOf(err error) int {
+	var te *textproto.Error
+	if errors.As(err, &te) {
+		return te.Code
+	}
+	return 0
+}
+
 func TestStoresDecodedMessagesOverSTARTTLS(t *testing.T) {
 	s := Start(t, Options{})
 	require.NoError(t, send(t, s, nil, "ops@example.com"))
@@ -71,8 +85,8 @@ func TestStoresDecodedMessagesOverSTARTTLS(t *testing.T) {
 func TestRequiresAuthWhenConfigured(t *testing.T) {
 	s := Start(t, Options{Username: "mailer", Password: "pw-1"})
 	host, _ := s.Addr()
-	assert.Error(t, send(t, s, nil, "ops@example.com"), "MAIL without AUTH")
-	assert.Error(t, send(t, s, smtp.PlainAuth("", "mailer", "wrong", host), "ops@example.com"))
+	assert.Equal(t, 530, codeOf(send(t, s, nil, "ops@example.com")), "MAIL without AUTH")
+	assert.Equal(t, 535, codeOf(send(t, s, smtp.PlainAuth("", "mailer", "wrong", host), "ops@example.com")))
 	require.NoError(t, send(t, s, smtp.PlainAuth("", "mailer", "pw-1", host), "ops@example.com"))
 	assert.True(t, s.Messages()[0].Authed)
 }
@@ -80,7 +94,7 @@ func TestRequiresAuthWhenConfigured(t *testing.T) {
 func TestFaultSwitches(t *testing.T) {
 	s := Start(t, Options{})
 	s.RejectRecipient("bad@example.com")
-	assert.Error(t, send(t, s, nil, "bad@example.com"))
+	assert.Equal(t, 550, codeOf(send(t, s, nil, "bad@example.com")))
 	require.NoError(t, send(t, s, nil, "ops@example.com"))
 	s.Down()
 	assert.Error(t, send(t, s, nil, "ops@example.com"), "connections are refused while down")
@@ -113,5 +127,59 @@ func TestMailHogAPI(t *testing.T) {
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/messages", nil))
 	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, s.Messages())
+}
+
+func TestImplicitTLSStoresSecureMessages(t *testing.T) {
+	s := Start(t, Options{Implicit: true})
+	host, port := s.Addr()
+	pool := x509.NewCertPool()
+	require.True(t, pool.AppendCertsFromPEM(s.CertPEM()))
+	conn, err := tls.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)), &tls.Config{ServerName: host, RootCAs: pool, MinVersion: tls.VersionTLS12})
+	require.NoError(t, err)
+	c, err := smtp.NewClient(conn, host)
+	require.NoError(t, err)
+	defer func() { _ = c.Close() }()
+	require.NoError(t, c.Mail("alice@example.com"))
+	require.NoError(t, c.Rcpt("ops@example.com"))
+	w, err := c.Data()
+	require.NoError(t, err)
+	_, err = w.Write([]byte(raw))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	require.Len(t, s.Messages(), 1)
+	assert.True(t, s.Messages()[0].Secure)
+	plain, err := net.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	require.NoError(t, err)
+	defer func() { _ = plain.Close() }()
+	require.NoError(t, plain.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
+	_, err = textproto.NewReader(bufio.NewReader(plain)).ReadLine()
+	assert.Error(t, err, "a plaintext client gets no SMTP banner from an implicit-TLS listener")
+}
+
+func TestNoStartTLSOffersNoUpgradeAndNoAuthInTheClear(t *testing.T) {
+	s := Start(t, Options{NoStartTLS: true, Username: "mailer", Password: "pw-1"})
+	assert.Equal(t, 503, codeOf(send(t, s, nil, "ops@example.com")), "STARTTLS is refused")
+
+	host, port := s.Addr()
+	conn, err := net.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	require.NoError(t, err)
+	tp := textproto.NewConn(conn)
+	defer func() { _ = tp.Close() }()
+	_, _, err = tp.ReadResponse(220)
+	require.NoError(t, err)
+	require.NoError(t, tp.PrintfLine("EHLO test"))
+	_, msg, err := tp.ReadResponse(250)
+	require.NoError(t, err)
+	assert.NotContains(t, msg, "STARTTLS")
+	assert.NotContains(t, msg, "AUTH", "AUTH is offered only inside TLS")
+	require.NoError(t, tp.PrintfLine("AUTH PLAIN %s", base64.StdEncoding.EncodeToString([]byte("\x00mailer\x00pw-1"))))
+	code, _, err := tp.ReadResponse(0)
+	if err != nil {
+		var te *textproto.Error
+		require.ErrorAs(t, err, &te)
+		code = te.Code
+	}
+	assert.Equal(t, 535, code, "the right password in the clear is still refused")
 	assert.Empty(t, s.Messages())
 }

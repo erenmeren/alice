@@ -8,11 +8,12 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"time"
 )
 
 // idToken builds the ID token of g with the current fault. The caller holds s.mu.
-func (s *Server) idToken(g *grant) (string, error) {
+func (s *Server) idToken(g *grant, spare *rsa.PrivateKey) (string, error) {
 	if len(s.keys) == 0 {
 		return "", errNoKey
 	}
@@ -21,8 +22,11 @@ func (s *Server) idToken(g *grant) (string, error) {
 	if f.ExpIn != 0 {
 		expIn = f.ExpIn
 	}
-	claims := map[string]any{"iss": s.issuer, "aud": s.clientID, "sub": l.Subject, "nonce": g.nonce,
+	claims := map[string]any{"iss": s.issuer, "aud": s.clientID, "sub": l.Subject,
 		"exp": now.Add(expIn).Unix(), "iat": now.Add(f.IatOffset).Unix(), "auth_time": g.authTime.Add(-f.AuthTimeAgo).Unix()}
+	if g.nonce != "" { // a real provider omits a nonce the request did not carry
+		claims["nonce"] = g.nonce
+	}
 	for k, v := range map[string]string{"email": l.Email, "name": l.Name, "preferred_username": l.Username} {
 		if v != "" {
 			claims[k] = v
@@ -92,14 +96,19 @@ func (s *Server) idToken(g *grant) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		mac := hmac.New(sha256.New, pub) // algorithm confusion: the public key as the HMAC secret (O-01)
+		secret := pub     // algorithm confusion: the public key's DER as the HMAC secret (C6, O-01)
+		if f.HMACKeyPEM { // the classic attack: the PEM text of the public key
+			secret = pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub})
+		}
+		mac := hmac.New(sha256.New, secret)
 		mac.Write([]byte(input))
 		return input + "." + b64(mac.Sum(nil)), nil
 	}
 	key := signer.key
 	if f.OtherKey {
-		if key, err = rsa.GenerateKey(rand.Reader, 2048); err != nil {
-			return "", err
+		key = spare
+		if key == nil {
+			return "", errNoKey
 		}
 	}
 	sum := sha256.Sum256([]byte(input))
