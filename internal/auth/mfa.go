@@ -343,13 +343,17 @@ func (s *Service) RegenerateRecoveryCodes(ctx context.Context, p Principal, m Me
 		// The user's row lock orders this after a concurrent sign-out-everywhere, password or
 		// MFA reset (FOR UPDATE); the session is then checked again, so a session ended in
 		// the meantime cannot leave fresh recovery codes behind (AUD-12).
-		var locked uuid.UUID
-		err := tx.QueryRow(ctx, "SELECT id FROM users WHERE id = $1 AND disabled_at IS NULL FOR SHARE", p.UserID).Scan(&locked)
+		var source string
+		err := tx.QueryRow(ctx, "SELECT auth_source FROM users WHERE id = $1 AND disabled_at IS NULL FOR SHARE", p.UserID).Scan(&source)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrUnauthenticated
 		}
 		if err != nil {
 			return fmt.Errorf("lock user: %w", err)
+		}
+		if source == AuthOIDC {
+			// An SSO user's second factor is the identity provider's: no recovery codes.
+			return ErrSSOUser
 		}
 		live, err := sessionLive(ctx, tx, p, "full", s.clock.Now().UTC())
 		if err != nil {

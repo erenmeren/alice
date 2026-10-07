@@ -22,6 +22,14 @@ func identity(p uuid.UUID, sub, user, email string) auth.OIDCIdentity {
 	return auth.OIDCIdentity{ProviderID: p, Issuer: "https://idp.example.com", Subject: sub, Username: user, DisplayName: "Ada Yılmaz", Email: email}
 }
 
+// allowAdmin stores the "SSO users may be Admin" switch as the oidc package does.
+func (e *env) allowAdmin(t *testing.T, allow bool) {
+	t.Helper()
+	_, err := e.db.Owner.Exec(e.ctx, `INSERT INTO settings (key, value, updated_at) VALUES ($1, jsonb_build_object('allow', $2::boolean, 'version', 1), now())
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, auth.SSOAllowAdminKey, allow)
+	require.NoError(t, err)
+}
+
 // liveSessions counts the sessions of a user that are not revoked.
 func (e *env) liveSessions(t *testing.T, userID uuid.UUID) int {
 	t.Helper()
@@ -132,9 +140,19 @@ func TestSignInOIDCLongNamesAndBlankDisplayName(t *testing.T) {
 	assert.Equal(t, strings.Repeat("b", 63), u.Username)
 
 	_, err = e.svc.SignInOIDC(e.ctx, identity(p, "", "x", ""), rbac.Operator, meta)
-	require.Error(t, err, "no subject")
+	require.ErrorIs(t, err, auth.ErrOIDCIdentityInvalid, "no subject")
+	_, err = e.svc.SignInOIDC(e.ctx, identity(p, strings.Repeat("s", 256), "x", ""), rbac.Operator, meta)
+	require.ErrorIs(t, err, auth.ErrOIDCIdentityInvalid, "a subject over 255 characters")
+	_, err = e.svc.SignInOIDC(e.ctx, identity(p, strings.Repeat("ş", 255), "x", ""), rbac.Operator, meta)
+	require.NoError(t, err, "255 characters fit")
+	longIss := identity(p, "sub-6", "x", "")
+	longIss.Issuer = "https://idp.example.com/" + strings.Repeat("i", 477)
+	_, err = e.svc.SignInOIDC(e.ctx, longIss, rbac.Operator, meta)
+	require.ErrorIs(t, err, auth.ErrOIDCIdentityInvalid, "an issuer over 500 characters")
 	_, err = e.svc.SignInOIDC(e.ctx, identity(p, "sub-3", "x", ""), rbac.Role("root"), meta)
-	require.Error(t, err, "an unknown role")
+	require.ErrorIs(t, err, auth.ErrOIDCIdentityInvalid, "an unknown role")
+	_, err = e.svc.StepUpOIDC(e.ctx, nil, uuid.Nil, identity(p, "sub-1", "x", ""), rbac.Role("root"), meta)
+	require.ErrorIs(t, err, auth.ErrOIDCIdentityInvalid, "an unknown role")
 }
 
 // S-8: two providers at one issuer never share users.
@@ -193,6 +211,7 @@ func TestS7EmailUpdateKeepsTheCollisionRule(t *testing.T) {
 
 func TestSSOUserRulesAndBreakGlass(t *testing.T) {
 	e := newEnv(t)
+	e.allowAdmin(t, true)
 	admin, _ := e.adminPrincipal(t)
 	p := e.provider(t)
 	res, err := e.svc.SignInOIDC(e.ctx, identity(p, "sub-1", "boss", "boss@example.com"), rbac.Admin, meta)
@@ -217,6 +236,11 @@ func TestSSOUserRulesAndBreakGlass(t *testing.T) {
 	_, err = e.svc.ChangePassword(e.ctx, sso, "x", adminPassword+" new", meta)
 	assert.ErrorIs(t, err, auth.ErrSSOUser)
 	assert.Zero(t, e.failedLogins(t, "boss"))
+	_, err = e.svc.RegenerateRecoveryCodes(e.ctx, sso, meta)
+	assert.ErrorIs(t, err, auth.ErrSSOUser, "no MFA material for an SSO user")
+	var codes int
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT count(*) FROM recovery_codes WHERE user_id = $1`, sso.UserID).Scan(&codes))
+	assert.Zero(t, codes)
 
 	// B-s3-01: checked while the SSO Administrator is still enabled.
 	_, err = e.svc.UpdateUser(e.ctx, admin, meta, admin.UserID, auth.UserUpdate{Role: ptr(rbac.Operator)})
@@ -336,6 +360,7 @@ func TestStepUpOIDCNeedsALiveSession(t *testing.T) {
 // O-13, R42 row 24: switching SSO Administrators off demotes them to Auditor and ends their sessions.
 func TestDemoteSSOAdmins(t *testing.T) {
 	e := newEnv(t)
+	e.allowAdmin(t, true)
 	p := e.provider(t)
 	res, err := e.svc.SignInOIDC(e.ctx, identity(p, "sub-1", "boss", ""), rbac.Admin, meta)
 	require.NoError(t, err)
@@ -421,6 +446,7 @@ func TestRefuseOIDCRevokesTokens(t *testing.T) {
 // stops working, a read token acts as an Auditor.
 func TestDemoteSSOAdminsCapsTokensByTheNewRole(t *testing.T) {
 	e := newEnv(t)
+	e.allowAdmin(t, true)
 	p := e.provider(t)
 	res, err := e.svc.SignInOIDC(e.ctx, identity(p, "sub-1", "boss", ""), rbac.Admin, meta)
 	require.NoError(t, err)
@@ -440,4 +466,51 @@ func TestDemoteSSOAdminsCapsTokensByTheNewRole(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, rbac.Auditor, tp.Role)
 	assert.Equal(t, rbac.DenyForbidden, rbac.Decide(rbac.UsersManage, tp.Subject(e.clk.Now())), "no Administrator permission is left")
+}
+
+// Review minor 2: the Admin cap is enforced in the sign-in's own transaction, so an "SSO users may be Admin" switched
+// off after the caller resolved the role (and after DemoteSSOAdmins ran) never yields an Administrator.
+func TestSignInOIDCCapsAdminWhileTheSwitchIsOff(t *testing.T) {
+	e := newEnv(t)
+	p := e.provider(t)
+	res, err := e.svc.SignInOIDC(e.ctx, identity(p, "sub-1", "boss", ""), rbac.Admin, meta)
+	require.NoError(t, err)
+	assert.Equal(t, rbac.Operator, e.principal(t, res.Token).Role, "no setting: the switch is off")
+
+	e.allowAdmin(t, true)
+	res, err = e.svc.SignInOIDC(e.ctx, identity(p, "sub-1", "boss", ""), rbac.Admin, meta)
+	require.NoError(t, err)
+	pr := e.principal(t, res.Token)
+	assert.Equal(t, rbac.Admin, pr.Role)
+
+	e.allowAdmin(t, false) // switched off after the caller resolved Admin
+	res, err = e.svc.SignInOIDC(e.ctx, identity(p, "sub-1", "boss", ""), rbac.Admin, meta)
+	require.NoError(t, err)
+	pr = e.principal(t, res.Token)
+	assert.Equal(t, rbac.Operator, pr.Role)
+
+	e.allowAdmin(t, true)
+	e.clk.Advance(time.Minute)
+	pr = e.principal(t, res.Token)
+	e.allowAdmin(t, false)
+	up, err := e.svc.StepUpOIDC(e.ctx, pr.SessionHash, pr.UserID, identity(p, "sub-1", "boss", ""), rbac.Admin, meta)
+	require.NoError(t, err)
+	assert.Equal(t, rbac.Operator, e.principal(t, up.Token).Role, "the step-up caps the same way")
+}
+
+// Review minor 4 (S-1, same user): SSO user B cannot step up on SSO user A's live session.
+func TestStepUpOIDCOnAnotherUsersSession(t *testing.T) {
+	e := newEnv(t)
+	p := e.provider(t)
+	resA, err := e.svc.SignInOIDC(e.ctx, identity(p, "sub-a", "ada", ""), rbac.Operator, meta)
+	require.NoError(t, err)
+	resB, err := e.svc.SignInOIDC(e.ctx, identity(p, "sub-b", "bob", ""), rbac.Operator, meta)
+	require.NoError(t, err)
+	a, b := e.principal(t, resA.Token), e.principal(t, resB.Token)
+	_, err = e.svc.StepUpOIDC(e.ctx, a.SessionHash, b.UserID, identity(p, "sub-b", "bob", ""), rbac.Operator, meta)
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	still := e.principal(t, resA.Token)
+	assert.Equal(t, a.UserID, still.UserID, "A's session is untouched")
+	assert.Equal(t, a.StepUpUntil, still.StepUpUntil)
+	assert.Zero(t, e.countAction(t, "auth.stepup", "success"))
 }

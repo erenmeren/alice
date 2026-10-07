@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -33,6 +34,19 @@ var (
 	// ErrSSOUser: a manual role change, password or MFA operation on an SSO user, whose role,
 	// password and second factor belong to the identity provider (ALC-USR-0003).
 	ErrSSOUser = errors.New("auth: the identity provider manages this SSO user")
+	// ErrOIDCIdentityInvalid: the caller passed an identity or role Alice cannot store (no provider or
+	// subject, a subject over 255 or an issuer over 500 characters, an unknown role).
+	ErrOIDCIdentityInvalid = errors.New("auth: the SSO identity or role is not valid")
+)
+
+// SSOAllowAdminKey is the setting "SSO users may be Admin" ({"allow": bool, "version": n}); the oidc
+// package writes it, SignInOIDC and StepUpOIDC read it to cap the role (O-13).
+const SSOAllowAdminKey = "sso.allow_admin_role"
+
+// Limits of the stored identity (migration 00011).
+const (
+	maxSubjectChars = 255
+	maxIssuerChars  = 500
 )
 
 // OIDCIdentity is a user the identity provider authenticated. SSO users are matched by
@@ -55,7 +69,7 @@ var sessionEndingReasons = []string{"no_access", "groups_overage", "provider_dis
 // so two first sign-ins of one identity provision one user (the second waits and finds it).
 const oidcIdentityLockNamespace int32 = 0x616c6332 // "alc2"
 
-// maxUsernameBytes is the longest user name (usernameRE: 64 ASCII characters).
+// maxUsernameBytes is the longest user name in bytes (an SSO user name is cut on a character boundary).
 const maxUsernameBytes = 64
 
 // maxUsernameSuffix bounds the "-2" … "-99" suffixes tried for a taken user name.
@@ -155,8 +169,9 @@ func defaultLocale(ctx context.Context, tx pgx.Tx) (string, error) {
 // not a plain address is dropped, a blank display name becomes the user name, and the
 // display name is cut to its maximum length.
 func (id OIDCIdentity) normalized() (OIDCIdentity, error) {
-	if id.ProviderID == uuid.Nil || id.Subject == "" || !validate.StorableText(id.Subject) {
-		return OIDCIdentity{}, errors.New("auth: an SSO identity needs a provider and a subject")
+	if id.ProviderID == uuid.Nil || id.Subject == "" || !validate.StorableText(id.Subject) || !validate.StorableText(id.Issuer) ||
+		utf8.RuneCountInString(id.Subject) > maxSubjectChars || utf8.RuneCountInString(id.Issuer) > maxIssuerChars {
+		return OIDCIdentity{}, ErrOIDCIdentityInvalid
 	}
 	if id.Username == "" || !validate.StorableText(id.Username) {
 		id.Username = ssoFallbackName
@@ -177,9 +192,34 @@ func (id OIDCIdentity) normalized() (OIDCIdentity, error) {
 
 func checkRole(role rbac.Role) error {
 	if _, ok := rbac.ParseRole(string(role)); !ok {
-		return fmt.Errorf("auth: unknown role %q", role)
+		return ErrOIDCIdentityInvalid
 	}
 	return nil
+}
+
+// capRole lowers Administrator to Operator while "SSO users may be Admin" is off. It reads the
+// switch FOR SHARE in the caller's transaction, so a switch-off (which locks the row FOR UPDATE and
+// demotes the SSO Administrators in its own transaction) and this sign-in are ordered: a role the
+// caller resolved before the switch went off never commits as Administrator after it (O-13).
+func capRole(ctx context.Context, tx pgx.Tx, role rbac.Role) (rbac.Role, error) {
+	if role != rbac.Admin {
+		return role, nil
+	}
+	var sw struct {
+		Allow bool `json:"allow"`
+	}
+	var raw []byte
+	err := tx.QueryRow(ctx, "SELECT value FROM settings WHERE key = $1 FOR SHARE", SSOAllowAdminKey).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return rbac.Operator, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read the SSO Admin switch: %w", err)
+	}
+	if err := json.Unmarshal(raw, &sw); err != nil || !sw.Allow {
+		return rbac.Operator, nil //nolint:nilerr // an unreadable switch is off
+	}
+	return role, nil
 }
 
 // SignInOIDC signs in the user of an identity the provider just authenticated, with the role
@@ -204,6 +244,9 @@ func (s *Service) SignInOIDC(ctx context.Context, id OIDCIdentity, role rbac.Rol
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1, hashtext($2))", oidcIdentityLockNamespace,
 			id.ProviderID.String()+"\n"+id.Subject); err != nil {
 			return fmt.Errorf("lock SSO identity: %w", err)
+		}
+		if role, err = capRole(ctx, tx, role); err != nil {
+			return err
 		}
 		now := s.clock.Now().UTC()
 		u, found, err := lockSSOUser(ctx, tx, id.ProviderID, id.Subject)
@@ -327,6 +370,9 @@ FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&u.username, &curRole, &sourc
 			return ErrOIDCOtherUser
 		case u.disabled:
 			return ErrOIDCUserDisabled
+		}
+		if role, err = capRole(ctx, tx, role); err != nil {
+			return err
 		}
 		now := s.clock.Now().UTC()
 		live, err := sessionLive(ctx, tx, Principal{SessionHash: sessionHash, UserID: userID}, "full", now)
