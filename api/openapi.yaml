@@ -2822,7 +2822,7 @@ paths:
         Stores a single-use sign-in state (10 minutes) and answers the provider's authorize address, with the
         __Host-alice_oidc cookie (Secure, HttpOnly, SameSite=Lax, Path=/, Max-Age 600) that binds the sign-in to this
         browser. The body is empty or {"next"}: a path inside Alice (anything else becomes /). 10 per minute per address
-        (429), as the sign-in form. 404 for an unknown provider, 403 ALC-SSO-0013 for a switched-off one, 409
+        (429), as the sign-in form. 404 for an unknown provider, 403 ALC-SSO-0013 for a switched-off one (provider IDs are random; the answer helps a person with a stale link), 409
         ALC-SSO-0004 while Alice's address is not set.
       x-permission: public
       requestBody:
@@ -2861,8 +2861,9 @@ paths:
         page the step-up started from with sso_error=<reason> (before any fragment); the reason is one of
         sso.no_access, sso.groups_overage, sso.email_in_use, sso.idp_unreachable, sso.login_invalid, sso.login_expired,
         sso.user_disabled, sso.provider_disabled, sso.stepup_other_user, sso.idp_error (ALC-SSO-0006..0015). Nothing of
-        the provider's answer is shown. 10 per minute per binding cookie (S-11); without the cookie, the anonymous limit
-        per address.
+        the provider's answer is shown. Limited to 10 per minute per binding cookie (one browser's retries) and to the
+        anonymous 60 per minute per address (S-11; not the sign-in form's 10, so the browsers behind one company address
+        still finish their sign-ins). HEAD is refused with 405 ALC-SYS-0009 without completing anything.
       x-permission: public
       parameters:
         - { name: code, in: query, required: false, schema: { type: string } }
@@ -2873,6 +2874,7 @@ paths:
           description: To the next page, or to the sign-in or step-up page with sso_error
           headers:
             Location: { schema: { type: string } }
+        "405": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/oidc/stepup:
@@ -2928,7 +2930,8 @@ paths:
       description: >-
         Keys are matched exactly. At most 5 providers (422 validation.out_of_range on name). 502 ALC-SSO-0001 when the
         discovery document or the key list cannot be read (param cause). The client secret is stored sealed and is never
-        returned or logged. A provider is switched on unless enabled is false. Works while the license is expired.
+        returned or logged. A provider is created switched off unless enabled is true (switch it on once Alice's address
+        is set and the provider is registered). Works while the license is expired.
       x-permission: sso.manage
       requestBody:
         required: true
@@ -3112,7 +3115,8 @@ paths:
       summary: Switch "SSO users may be Admin" (If-Match required; "0" for the first save)
       description: >-
         Switching it off is refused while groups are mapped to Administrator (409 ALC-SSO-0003); it then demotes SSO
-        Administrators to Operator and ends their sessions.
+        Administrators to Operator and ends their sessions. allow_admin_role is required (422 validation.required when it
+        is missing; null is 400): the switch is never turned off by an omitted key.
       x-permission: sso.manage
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
@@ -5020,7 +5024,7 @@ components:
         scopes: { type: array, minItems: 1, maxItems: 10, items: { type: string, pattern: '^[A-Za-z0-9_.:/-]{1,64}$' }, description: 'Must include openid; default openid, profile, email' }
         groups_claim: { type: string, pattern: '^[A-Za-z0-9_.:/-]{1,100}$', description: 'Default groups' }
         ca_pem: { type: string, maxLength: 65536 }
-        enabled: { type: boolean, default: true }
+        enabled: { type: boolean, default: false }
     IdentityProviderPatch:
       type: object
       additionalProperties: false

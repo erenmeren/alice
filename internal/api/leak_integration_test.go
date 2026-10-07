@@ -620,7 +620,7 @@ func TestUnexpectedErrorsAreLoggedWithoutTheirText(t *testing.T) {
 // forbiddenResponseFields may never appear in any response schema.
 var forbiddenResponseFields = []string{
 	"password", "current_password", "new_password", "password_hash", "passphrase", "passphrase_confirm",
-	"private_key", "token_hash", "totp_secret", "code_hash", "master_key",
+	"private_key", "token_hash", "totp_secret", "code_hash", "master_key", "client_secret",
 }
 
 // oneTimeFields may appear only in the responses of the listed operations.
@@ -633,7 +633,7 @@ var oneTimeFields = map[string]map[string]bool{
 }
 
 // identityProviderEndpointOps answer an identity provider, whose endpoints.token is the provider's token endpoint
-// address (C13), not an API token; the walker flattens nested names, so "token" is accepted there and nowhere else.
+// address (C13), not an API token: in these operations "token" is accepted when endpoints is its only parent.
 var identityProviderEndpointOps = only("GET /api/v1/sso/providers", "POST /api/v1/sso/providers", "GET /api/v1/sso/providers/{id}",
 	"PATCH /api/v1/sso/providers/{id}", "POST /api/v1/sso/providers/{id}/actions/refresh")
 
@@ -655,6 +655,12 @@ func asMap(v any) map[string]any {
 
 // schemaProperties collects every property name reachable from schema.
 func schemaProperties(schema any, schemas map[string]any, seen map[string]bool, out map[string]bool) {
+	schemaPropertiesIn(schema, schemas, seen, out, "")
+}
+
+// schemaPropertiesIn also records each property as "name@parent" (parent: the property whose object holds it, "" at the
+// top), so a rule can tell endpoints.token apart from a token field anywhere else.
+func schemaPropertiesIn(schema any, schemas map[string]any, seen map[string]bool, out map[string]bool, parent string) {
 	m := asMap(schema)
 	if m == nil {
 		return
@@ -663,21 +669,22 @@ func schemaProperties(schema any, schemas map[string]any, seen map[string]bool, 
 		name := path.Base(ref)
 		if strings.Contains(ref, "/schemas/") && !seen[name] {
 			seen[name] = true
-			schemaProperties(schemas[name], schemas, seen, out)
+			schemaPropertiesIn(schemas[name], schemas, seen, out, parent)
 		}
 		return
 	}
 	for name, prop := range asMap(m["properties"]) {
 		out[name] = true
-		schemaProperties(prop, schemas, seen, out)
+		out[name+"@"+parent] = true
+		schemaPropertiesIn(prop, schemas, seen, out, name)
 	}
 	for _, key := range []string{"items", "additionalProperties"} {
-		schemaProperties(m[key], schemas, seen, out)
+		schemaPropertiesIn(m[key], schemas, seen, out, parent)
 	}
 	for _, key := range []string{"allOf", "oneOf", "anyOf"} {
 		if list, ok := m[key].([]any); ok {
 			for _, sub := range list {
-				schemaProperties(sub, schemas, seen, out)
+				schemaPropertiesIn(sub, schemas, seen, out, parent)
 			}
 		}
 	}
@@ -731,7 +738,7 @@ func TestOpenAPIResponsesExposeNoSecretFields(t *testing.T) {
 			assert.False(t, fields[op][f], "%s exposes %q in a response", op, f)
 		}
 		for f, allowed := range oneTimeFields {
-			if fields[op][f] && (f != "token" || !identityProviderEndpointOps[op]) {
+			if fields[op][f] && (f != "token" || !identityProviderEndpointOps[op] || !onlyUnder(fields[op], "token", "endpoints")) {
 				assert.True(t, allowed[op], "%s exposes the one-time field %q", op, f)
 			}
 		}
@@ -742,6 +749,17 @@ func TestOpenAPIResponsesExposeNoSecretFields(t *testing.T) {
 		}
 	}
 	for op := range identityProviderEndpointOps {
-		assert.True(t, fields[op]["token"], "%s documents the provider's endpoints", op)
+		assert.True(t, fields[op]["token@endpoints"], "%s documents the provider's endpoints", op)
 	}
+	assert.False(t, onlyUnder(map[string]bool{"token@endpoints": true, "token@": true}, "token", "endpoints"), "a top-level token is seen")
+}
+
+// onlyUnder reports whether every occurrence of the property name in fields has the given parent.
+func onlyUnder(fields map[string]bool, name, parent string) bool {
+	for k := range fields {
+		if strings.HasPrefix(k, name+"@") && k != name+"@"+parent {
+			return false
+		}
+	}
+	return true
 }

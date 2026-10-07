@@ -493,6 +493,11 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 			rec := c.do(http.MethodGet, path, nil)
 			assert.Equal(t, http.StatusSeeOther, rec.Code, op.key())
 			assert.Equal(t, "/login?sso_error=sso.login_expired", rec.Header().Get("Location"))
+			// Its only write here (no state row to consume) is the one audited refusal (review M-8).
+			assert.Equal(t, before, snapshot(), "the callback changed stored state")
+			assert.Equal(t, history, s.rowsChecksum("audit_log", "seq <= "+strconv.FormatInt(seq, 10)), "the callback changed existing audit rows")
+			assert.Equal(t, int64(1), s.maxAuditSeq()-seq, "the callback appends exactly one audit row")
+			assert.Equal(t, 1, s.countWhere("audit_log", "seq = "+strconv.FormatInt(seq+1, 10)+" AND action = 'auth.oidc.denied'"))
 			before, seq = snapshot(), s.maxAuditSeq()
 			history = s.rowsChecksum("audit_log", "true")
 			continue

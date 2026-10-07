@@ -72,17 +72,28 @@ type providerBody struct {
 	Name         opt[string]   `json:"name"`
 	IssuerURL    opt[string]   `json:"issuer_url"`
 	ClientID     opt[string]   `json:"client_id"`
-	ClientSecret *secretText   `json:"client_secret"`
+	ClientSecret secretField   `json:"client_secret"`
 	Scopes       opt[[]string] `json:"scopes"`
 	GroupsClaim  opt[string]   `json:"groups_claim"`
 	CAPEM        opt[string]   `json:"ca_pem"`
 	Enabled      opt[bool]     `json:"enabled"`
 }
 
-func (b *providerBody) zero() {
-	if b.ClientSecret != nil {
-		b.ClientSecret.zero()
+func (b *providerBody) zero() { b.ClientSecret.zero() }
+
+// secretField is a secretText that records whether the key was given and refuses null (400), as every other provider
+// field does (review M-7). A value field: encoding/json calls UnmarshalJSON for null only on a non-pointer field.
+type secretField struct {
+	secretText
+	set bool
+}
+
+func (f *secretField) UnmarshalJSON(b []byte) error {
+	if bytes.Equal(b, []byte("null")) {
+		return errNullField
 	}
+	f.set = true
+	return f.secretText.UnmarshalJSON(b)
 }
 
 // failSSO answers a provider or mapping refusal; too many providers or mappings is a field error on field (C15).
@@ -113,7 +124,7 @@ func (s *server) listSSOProviders(w http.ResponseWriter, r *http.Request) {
 }
 
 // createSSOProvider adds an identity provider: the service reads its discovery document once and fixes its endpoints.
-// A provider is switched on unless the body says enabled false.
+// A provider is created switched off unless the body says enabled true (secure by default; review M-1).
 func (s *server) createSSOProvider(w http.ResponseWriter, r *http.Request) {
 	var req providerBody
 	defer req.zero()
@@ -121,12 +132,12 @@ func (s *server) createSSOProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := oidc.ProviderInput{Name: req.Name.Value, IssuerURL: req.IssuerURL.Value, ClientID: req.ClientID.Value, GroupsClaim: req.GroupsClaim.Value,
-		CAPEM: req.CAPEM.Value, Enabled: !req.Enabled.Set || req.Enabled.Value}
+		CAPEM: req.CAPEM.Value, Enabled: req.Enabled.Value}
 	if req.Scopes.Set {
 		in.Scopes = req.Scopes.Value
 	}
-	if req.ClientSecret != nil {
-		in.ClientSecret = secrets.NewPlaintext(*req.ClientSecret)
+	if req.ClientSecret.set {
+		in.ClientSecret = secrets.NewPlaintext(req.ClientSecret.secretText)
 	}
 	p, err := s.deps.SSO.CreateProvider(r.Context(), principalFrom(r.Context()).Actor(s.meta(r)), in)
 	req.zero()
@@ -170,8 +181,8 @@ func (s *server) updateSSOProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	patch := oidc.ProviderPatch{Name: req.Name.ptr(), IssuerURL: req.IssuerURL.ptr(), ClientID: req.ClientID.ptr(),
 		GroupsClaim: req.GroupsClaim.ptr(), CAPEM: req.CAPEM.ptr(), Scopes: req.Scopes.ptr(), Enabled: req.Enabled.ptr()}
-	if req.ClientSecret != nil {
-		secret := secrets.NewPlaintext(*req.ClientSecret)
+	if req.ClientSecret.set {
+		secret := secrets.NewPlaintext(req.ClientSecret.secretText)
 		patch.ClientSecret = &secret
 	}
 	p, err := s.deps.SSO.UpdateProvider(r.Context(), principalFrom(r.Context()).Actor(s.meta(r)), id, version, patch)
@@ -335,12 +346,17 @@ func (s *server) putSSOSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		AllowAdminRole bool `json:"allow_admin_role"`
+		AllowAdminRole opt[bool] `json:"allow_admin_role"`
 	}
 	if !s.decodeExact(w, r, &req, maxActionBody, "allow_admin_role") {
 		return
 	}
-	st, err := s.deps.SSO.SaveSettings(r.Context(), principalFrom(r.Context()).Actor(s.meta(r)), version, req.AllowAdminRole)
+	if !req.AllowAdminRole.Set {
+		// Never a silent switch-off, which would demote every SSO Administrator (review M-2).
+		s.fail(w, r, validate.Errors{{Field: "allow_admin_role", Code: validate.Required}})
+		return
+	}
+	st, err := s.deps.SSO.SaveSettings(r.Context(), principalFrom(r.Context()).Actor(s.meta(r)), version, req.AllowAdminRole.Value)
 	if err != nil {
 		s.fail(w, r, err)
 		return

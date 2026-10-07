@@ -198,5 +198,6 @@ are a signed-in person's own (`session`, no API token). Every `/api/v1/settings/
 **Single sign-on (Phase 7).** Every `/api/v1/sso/...` route is `sso.manage`: an Administrator's browser session with
 step-up, never an API token. The sign-in at an identity provider is public: the start is limited like the sign-in form (10 a
 minute per address); `GET /api/v1/auth/oidc/{id}/callback` is the only GET that changes state (it consumes the sign-in
-state and creates or steps up a session), is always answered with a 303 redirect and is limited per binding cookie. An SSO
+state and creates or steps up a session), is always answered with a 303 redirect (HEAD is 405) and is limited per binding
+cookie (10 a minute) and per address (the anonymous 60 a minute). An SSO
 user's step-up (`POST /api/v1/auth/oidc/stepup`) needs the user's own session.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -233,8 +234,9 @@ func TestOIDCCallbackRedirects(t *testing.T) {
 	assert.Equal(t, "/login?sso_error=sso.login_invalid", rec.Header().Get("Location"), "an unknown provider never shows a JSON page")
 }
 
-// S-11: the callback is limited per binding cookie, not per address: one browser's retries stop at 10 a minute while
-// other browsers behind the same address still finish their sign-ins.
+// S-11 and the Task 15 review I-1: the callback is limited per binding cookie (10 a minute: one browser's retries) and
+// still per address (the anonymous 60 a minute), so fresh cookies from one address cannot buy unlimited callbacks, while
+// the browsers of a company behind one address still finish their sign-ins.
 func TestOIDCCallbackIsLimitedPerBinding(t *testing.T) {
 	d, fs := ssoDeps(t)
 	fs.CompleteFn = func(context.Context, uuid.UUID, url.Values, string, auth.Meta) (oidc.Completion, error) {
@@ -243,13 +245,22 @@ func TestOIDCCallbackIsLimitedPerBinding(t *testing.T) {
 	s := newServer(d)
 	h := s.handler(s.apiRoutes())
 	cb := "/api/v1/auth/oidc/" + uuid.NewString() + "/callback?state=s"
+	cookie := func(v string) map[string]string { return map[string]string{"Cookie": "__Host-alice_oidc=" + v} }
 	for i := 0; i < 10; i++ {
-		require.Equal(t, http.StatusSeeOther, callWith(h, http.MethodGet, cb, "", "", map[string]string{"Cookie": "__Host-alice_oidc=one"}).Code)
+		require.Equal(t, http.StatusSeeOther, callWith(h, http.MethodGet, cb, "", "", cookie("one")).Code)
 	}
-	assert.Equal(t, http.StatusTooManyRequests, callWith(h, http.MethodGet, cb, "", "", map[string]string{"Cookie": "__Host-alice_oidc=one"}).Code)
+	assert.Equal(t, http.StatusTooManyRequests, callWith(h, http.MethodGet, cb, "", "", cookie("one")).Code, "one browser's retries")
 	for i := 0; i < 20; i++ {
-		assert.Equal(t, http.StatusSeeOther, callWith(h, http.MethodGet, cb, "", "", map[string]string{"Cookie": "__Host-alice_oidc=other-" + string(rune('a'+i))}).Code)
+		assert.Equal(t, http.StatusSeeOther, callWith(h, http.MethodGet, cb, "", "", cookie("browser-"+strconv.Itoa(i))).Code,
+			"other browsers behind the same address")
 	}
+
+	(&Server{s: s}).ResetLimits()
+	for i := 0; i < 60; i++ {
+		require.Equal(t, http.StatusSeeOther, callWith(h, http.MethodGet, cb, "", "", cookie("fresh-"+strconv.Itoa(i))).Code, i)
+	}
+	assert.Equal(t, http.StatusTooManyRequests, callWith(h, http.MethodGet, cb, "", "", cookie("fresh-60")).Code,
+		"the 61st callback from one address, each with its own cookie")
 }
 
 func TestOIDCStepUp(t *testing.T) {
@@ -300,7 +311,7 @@ func TestProviderSecretIsWriteOnly(t *testing.T) {
 	t.Cleanup(func() { onSecretBytes = nil })
 	fs.CreateProviderFn = func(_ context.Context, _ audit.Actor, in oidc.ProviderInput) (oidc.Provider, error) {
 		assert.Equal(t, "CANARY-cs", string(in.ClientSecret.Bytes()))
-		assert.True(t, in.Enabled, "a new provider is on unless the body says otherwise")
+		assert.False(t, in.Enabled, "a new provider is off unless the body says enabled true (review M-1)")
 		assert.Nil(t, in.Scopes, "no scopes: the service's defaults")
 		return oidc.Provider{ID: uuid.New(), Name: in.Name, HasClientSecret: true, Version: 1}, nil
 	}
@@ -400,13 +411,13 @@ func TestProviderHandlers(t *testing.T) {
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 	assert.Contains(t, rec.Body.String(), `{"field":"name","code":"validation.out_of_range","params":{"max":"5","min":"1"}}`)
 	fs.CreateProviderFn = func(_ context.Context, _ audit.Actor, in oidc.ProviderInput) (oidc.Provider, error) {
-		assert.False(t, in.Enabled)
+		assert.True(t, in.Enabled, "enabled true switches it on")
 		assert.Equal(t, []string{"openid", "groups"}, in.Scopes)
 		assert.Equal(t, "roles", in.GroupsClaim)
 		return oidc.Provider{}, validate.Errors{{Field: "issuer_url", Code: validate.Pattern}}
 	}
 	rec = callWith(h, http.MethodPost, "/api/v1/sso/providers", "admin-stepup",
-		`{"name":"N","issuer_url":"http://i","client_id":"c","client_secret":"s","enabled":false,"scopes":["openid","groups"],"groups_claim":"roles","ca_pem":""}`, nil)
+		`{"name":"N","issuer_url":"http://i","client_id":"c","client_secret":"s","enabled":true,"scopes":["openid","groups"],"groups_claim":"roles","ca_pem":""}`, nil)
 	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 
 	fs.RefreshProviderFn = func(_ context.Context, _ audit.Actor, id uuid.UUID, version int) (oidc.Provider, error) {
@@ -574,4 +585,35 @@ func TestSSOHandlerRefusals(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, callWith(h, http.MethodPut, "/api/v1/sso/settings", "admin-stepup", `{"allow":true}`, v).Code)
 	fs.BeginFn = func(context.Context, oidc.BeginInput) (oidc.Begin, error) { return oidc.Begin{}, nil }
 	assert.Equal(t, http.StatusBadRequest, callWith(h, http.MethodPost, "/api/v1/auth/oidc/stepup", "operator", `{"nxt":"/"}`, nil).Code)
+}
+
+// Task 15 review M-2, M-6, M-7.
+func TestSSOFixRoundRefusals(t *testing.T) {
+	d, fs := ssoDeps(t)
+	fs.succeed()
+	s := newServer(d)
+	h := s.handler(s.apiRoutes())
+	v := map[string]string{"If-Match": `"1"`}
+
+	// M-2: the switch is never turned off by an omitted key (switching off demotes every SSO Administrator).
+	fs.reset()
+	rec := callWith(h, http.MethodPut, "/api/v1/sso/settings", "admin-stepup", `{}`, v)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Contains(t, rec.Body.String(), `{"field":"allow_admin_role","code":"validation.required"}`)
+	assert.Equal(t, http.StatusBadRequest, callWith(h, http.MethodPut, "/api/v1/sso/settings", "admin-stepup", `{"allow_admin_role":null}`, v).Code)
+	assert.Zero(t, fs.calls())
+	assert.Equal(t, http.StatusOK, callWith(h, http.MethodPut, "/api/v1/sso/settings", "admin-stepup", `{"allow_admin_role":false}`, v).Code)
+
+	// M-7: a null client secret is refused like every other field.
+	fs.reset()
+	rec = callWith(h, http.MethodPatch, "/api/v1/sso/providers/"+uuid.NewString(), "admin-stepup", `{"client_secret":null}`, v)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Zero(t, fs.calls())
+
+	// M-6: HEAD on the callback never completes a sign-in.
+	fs.reset()
+	rec = callWith(h, http.MethodHead, "/api/v1/auth/oidc/"+uuid.NewString()+"/callback?code=c&state=s", "", "", nil)
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	assert.Equal(t, "GET", rec.Header().Get("Allow"))
+	assert.Zero(t, fs.calls())
 }

@@ -317,14 +317,13 @@ func (s *server) allowRate(w http.ResponseWriter, r *http.Request, class limitCl
 			checks = append(checks, func() (bool, time.Duration) { return s.export.Allow(key) })
 		}
 	case limitOIDCCallback:
-		// Per binding cookie (S-11): a guessed state is useless without the cookie, so the callback needs no
-		// per-address brute-force bucket; one browser's retries are bounded. Without the cookie the request is an
-		// ordinary anonymous one (the per-address bucket below).
+		// Per binding cookie (S-11): one browser's retries stop at 10 a minute. The anonymous per-address bucket below
+		// (60 a minute) still applies, so fresh cookies cannot buy unlimited callbacks (Task 15 review I-1); it is not
+		// the sign-in form's 10 a minute, so the browsers behind one company address still finish their sign-ins.
 		if c, err := r.Cookie(oidcCookie); err == nil && c.Value != "" {
 			sum := sha256.Sum256([]byte(c.Value))
 			key := "b:" + hex.EncodeToString(sum[:])
 			checks = append(checks, func() (bool, time.Duration) { return s.oidcCallbacks.Allow(key) })
-			failedCharged = true // replaces the anonymous per-address bucket
 		}
 	}
 	switch p.Kind {
