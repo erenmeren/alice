@@ -304,3 +304,8 @@ release-keycheck: ## Release gate: fails until the vendor's production license k
 coverage: ## Run all Go tests (with integration) under coverage and enforce coverage-floors.json (R36)
 	go test -race -count=1 -tags integration -coverprofile=coverage.out ./...
 	go run ./tools/covercheck -profile coverage.out -floors coverage-floors.json
+
+.PHONY: perf
+perf: ## Run the R32 performance test (5,000 certificates, 500 targets; needs Docker, nothing else using it)
+	go vet -tags 'integration perf' ./internal/api/
+	go test -count=1 -timeout 30m -tags 'integration perf' -run '^TestR32' -v ./internal/api/
