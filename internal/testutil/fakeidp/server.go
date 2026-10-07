@@ -110,7 +110,11 @@ type Server struct {
 	stats     Stats
 	lastForm  url.Values
 	lastQuery url.Values
+	issued    []Issued
 }
+
+// Issued is one successful token answer: the tokens the provider served (the API suite plants them as leak canaries).
+type Issued struct{ IDToken, AccessToken string }
 
 func random(n int) string {
 	b := make([]byte, n)
@@ -248,6 +252,13 @@ func (s *Server) LastTokenForm() url.Values {
 		out[k] = append([]string(nil), v...)
 	}
 	return out
+}
+
+// IssuedTokens lists every token answer served so far, oldest first.
+func (s *Server) IssuedTokens() []Issued {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Issued(nil), s.issued...)
 }
 
 // LastAuthorizeQuery is a copy of the last authorization request's query (scope, nonce, prompt, max_age, acr_values…).
@@ -483,7 +494,9 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"access_token": random(24), "token_type": "Bearer", "expires_in": 300, "id_token": tok})
+	access := random(24)
+	s.issued = append(s.issued, Issued{IDToken: tok, AccessToken: access})
+	writeJSON(w, http.StatusOK, map[string]any{"access_token": access, "token_type": "Bearer", "expires_in": 300, "id_token": tok})
 }
 
 var errNoKey = errors.New("fakeidp: no signing key")

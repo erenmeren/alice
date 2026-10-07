@@ -142,6 +142,12 @@ func TestDiscoveryAndAGoodLogin(t *testing.T) {
 	assert.Equal(t, []any{"ops"}, claims["groups"])
 	assert.Equal(t, float64(now.Add(5*time.Minute).Unix()), claims["exp"])
 	assert.Equal(t, "code_verifier", firstKey(s.LastTokenForm(), "code_verifier"))
+	// The tokens served are kept for the leak canaries of the API suite (IssuedTokens).
+	issued := s.IssuedTokens()
+	require.Len(t, issued, 1)
+	assert.Equal(t, body["id_token"], issued[0].IDToken)
+	assert.Equal(t, body["access_token"], issued[0].AccessToken)
+	assert.NotEmpty(t, issued[0].AccessToken)
 	st := s.Stats()
 	assert.Equal(t, 1, st.Authorize)
 	assert.Equal(t, 1, st.Token)
