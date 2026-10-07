@@ -172,7 +172,11 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	}()
 
 	clk := newClock()
-	svc, err := buildServices(ctx, pool, cfg, clk, log)
+	catalog, err := i18n.Load(locales.FS)
+	if err != nil {
+		return err
+	}
+	svc, err := buildServices(ctx, pool, cfg, catalog, clk, log)
 	if err != nil {
 		return err
 	}
@@ -183,14 +187,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	catalog, err := i18n.Load(locales.FS)
-	if err != nil {
-		return err
-	}
-	sender, err := buildSender(pool, cfg, catalog, clk, log)
-	if err != nil {
-		return err
-	}
+	sender := buildSender(pool, svc, catalog, clk, log)
 	hosts := append([]string{"localhost", "127.0.0.1"}, cfg.TLSHosts...)
 	if h, err := os.Hostname(); err == nil {
 		hosts = append(hosts, h)
@@ -201,6 +198,11 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	}
 	// The installation ID, the time record and the first evaluation exist before any request.
 	if err := svc.license.Start(ctx); err != nil {
+		return err
+	}
+	// ALICE_SMTP_* become the mail settings once, when none ever existed (S-12), before the scheduler sends
+	// anything. An unreadable password or CA file stops the start with the error, as the Phase 2 mailer did.
+	if _, err := svc.notifySettings.ImportEnv(ctx, cfg.SMTP, os.ReadFile); err != nil {
 		return err
 	}
 	// The platform SSH key exists before the wizard or a target needs it (R37 item 1). On a
@@ -439,6 +441,8 @@ func newAPIDeps(cfg config.Config, svc *services, health api.HealthChecker, cata
 		SSHKeys:        sshKeysAPI(svc),
 		TrustedProxies: cfg.TrustedProxies,
 		TestHandler:    testHandler,
+		// TODO(Task 14): Mail: svc.notifySettings, Alerts: svc.alerts, Reports: svc.reports (the api.Deps fields Task 14 adds).
+		// TODO(Task 15): SSO: svc.oidc (the api.Deps field Task 15 adds).
 	}
 }
 

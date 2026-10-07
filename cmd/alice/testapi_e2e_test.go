@@ -32,6 +32,7 @@ import (
 	"alice/internal/platform/netaddr"
 	"alice/internal/providers"
 	"alice/internal/testutil/pki"
+	"alice/internal/testutil/seed"
 	"alice/migrations"
 )
 
@@ -674,4 +675,53 @@ func TestRotationOverlapRouteNeedsTheDatabase(t *testing.T) {
 	h := testHandler(testDeps{Log: slog.New(slog.DiscardHandler)})
 	rec := postTest(t, h, "/test/rotation/overlap", `{"policy_id":"`+uuid.NewString()+`","minutes":1}`)
 	assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+}
+
+// The e2e build never ticks the expiry scan: the demo clock would otherwise send expiry notices between two
+// Playwright steps. The task stays scheduled (checkWiring, RunNow).
+func TestE2EBuildNeverTicksTheAlertScan(t *testing.T) {
+	assert.Greater(t, alertsScanEvery, 50*365*24*time.Hour, "journeys run alerts.scan with POST /test/scheduler/run")
+}
+
+// POST /test/seed/dashboard seeds C17's data set and answers what the dashboard must show: the body is exactly {},
+// 409 without a database, 500 (with no error text of the database) when the seed fails.
+func TestSeedDashboardEndpoint(t *testing.T) {
+	answer := seed.DashboardAnswer{Certificates: map[string]int{"monitored": 8}}
+	h := seedDashboardHandler(func(context.Context) (seed.DashboardAnswer, error) { return answer, nil }, slog.New(slog.DiscardHandler))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/test/seed/dashboard", strings.NewReader(`{}`))
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"certificates":{"monitored":8},"targets":null,"deployments":null,"expiring_30":null,"server_filter":null}`, rec.Body.String())
+	h = seedDashboardHandler(func(context.Context) (seed.DashboardAnswer, error) { return seed.DashboardAnswer{}, errNoTestDatabase },
+		slog.New(slog.DiscardHandler))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/test/seed/dashboard", strings.NewReader(`{}`)))
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/test/seed/dashboard", strings.NewReader(`{"x":1}`)))
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "the body is exactly {}")
+
+	h = seedDashboardHandler(func(context.Context) (seed.DashboardAnswer, error) {
+		return seed.DashboardAnswer{}, errors.New("duplicate key value violates unique constraint")
+	}, slog.New(slog.DiscardHandler))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/test/seed/dashboard", strings.NewReader(`{}`)))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "duplicate key")
+}
+
+// The route is served by the e2e test handler and needs the database.
+func TestSeedDashboardRouteNeedsTheDatabase(t *testing.T) {
+	h := testHandler(testDeps{Log: slog.New(slog.DiscardHandler)})
+	rec := postTest(t, h, "/test/seed/dashboard", `{}`)
+	assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+}
+
+// The e2e build's mail settings fall back to the test mailbox while no SMTP server is configured (the release build
+// has none: services_test.go), and dial like the release build, through netaddr (no override in any build).
+func TestE2EMailSettingsFallBackToTheMailbox(t *testing.T) {
+	cfg := notifySettingsConfig(nil, &services{}, nil, e2eClock, slog.New(slog.DiscardHandler))
+	assert.Same(t, e2eMailbox, cfg.Fallback)
+	assert.Nil(t, cfg.Dial)
 }

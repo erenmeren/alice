@@ -32,6 +32,7 @@ import (
 	"alice/internal/notify"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
+	"alice/internal/testutil/seed"
 )
 
 // versionSuffix marks the e2e build in "alice version" and /api/v1/version.
@@ -67,6 +68,10 @@ const (
 	rotationSweepEvery  = 100 * 365 * 24 * time.Hour
 	destroyRetiredEvery = 100 * 365 * 24 * time.Hour
 )
+
+// alertsScanEvery is the expiry scan's interval in the e2e build: in effect never. The demo clock would otherwise send
+// expiry notices between two Playwright steps; the journeys run alerts.scan with POST /test/scheduler/run.
+const alertsScanEvery = 100 * 365 * 24 * time.Hour
 
 // azureCAFile is where the fake Azure service (cmd/alice-fakeazure, compose service fakeazure) writes
 // its CA; compose shares the volume read-only with alice (R40 row 35). A variable only so the unit
@@ -418,6 +423,17 @@ func testHandler(d testDeps) http.Handler {
 		}
 		return setPolicyOverlap(ctx, d.OwnerURL, policy, minutes)
 	}, d.Log))
+	mux.Handle("POST /test/seed/dashboard", seedDashboardHandler(func(ctx context.Context) (seed.DashboardAnswer, error) {
+		if d.OwnerURL == "" {
+			return seed.DashboardAnswer{}, errNoTestDatabase
+		}
+		pool, err := pgxpool.New(ctx, d.OwnerURL)
+		if err != nil {
+			return seed.DashboardAnswer{}, err
+		}
+		defer pool.Close()
+		return seed.Dashboard(ctx, pool, e2eClock.Now().UTC())
+	}, d.Log))
 	mux.HandleFunc("/test/", func(w http.ResponseWriter, _ *http.Request) {
 		writeTestJSON(w, http.StatusNotFound, map[string]string{"error": "unknown test endpoint"})
 	})
@@ -670,6 +686,32 @@ WHERE id = $1 AND deleted_at IS NULL`, policy, minutes, e2eClock.Now().UTC())
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// seedDashboardHandler serves POST /test/seed/dashboard (body {}): it inserts contract C17's data set (seed.Dashboard)
+// as the owner role at the demo clock's now and answers what the dashboard and the certificate page must show for it,
+// so a journey asserts true numbers. 409 without a database; 400 for any other body. Test-only, so not audited.
+func seedDashboardHandler(run func(context.Context) (seed.DashboardAnswer, error), log *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serveSeedDashboard(w, r, run, log) })
+}
+
+// serveSeedDashboard is the body of seedDashboardHandler: a function of its own so make release-symcheck finds its
+// symbol (E2E_SYMBOLS) in the e2e build and refuses it in a release build.
+func serveSeedDashboard(w http.ResponseWriter, r *http.Request, run func(context.Context) (seed.DashboardAnswer, error), log *slog.Logger) {
+	var body struct{}
+	if !decodeTest(w, r, &body) {
+		return
+	}
+	a, err := run(r.Context())
+	switch {
+	case errors.Is(err, errNoTestDatabase):
+		writeTestJSON(w, http.StatusConflict, map[string]string{"error": "no database"})
+	case err != nil:
+		log.Error("test seed failed", "error_type", fmt.Sprintf("%T", err))
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "the seed failed"})
+	default:
+		writeTestJSON(w, http.StatusOK, a)
+	}
 }
 
 var (

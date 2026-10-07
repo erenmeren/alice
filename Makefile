@@ -92,8 +92,9 @@ build: web helper ## Build the alice binary with the embedded UI (and the helper
 
 # Release symbol guard: the release build (no tags) links no e2e-only code. The e2e build is the
 # positive control: release-symcheck checks EACH name (present in the e2e build, absent from the
-# release build), so a renamed or inlined symbol fails instead of hiding behind another one.
-E2E_SYMBOLS := main\.(damageLicenseFile|tamperNewestLicenseFile|resetInstall|e2eClock|e2eMailbox|drainJobs|runWithinBudget|drainMu|errDrainBudget|runScheduledTask|scheduled|serveRotationOverlap|setPolicyOverlap)$$
+# release build), so a renamed or inlined symbol fails instead of hiding behind another one. The
+# release build also links no alice/internal/testutil/ package (the e2e build links the seed one).
+E2E_SYMBOLS := main\.(damageLicenseFile|tamperNewestLicenseFile|resetInstall|e2eClock|e2eMailbox|drainJobs|runWithinBudget|drainMu|errDrainBudget|runScheduledTask|scheduled|serveRotationOverlap|setPolicyOverlap|serveSeedDashboard)$$
 
 # Test-only data a release binary must not hold (AUD-23): the label the test license signing key is
 # derived from (testKeyLabel in internal/license/keys_testlicense.go) and a route only the e2e build
@@ -119,6 +120,8 @@ release-symcheck: ## Fail if the release build of alice links e2e-only test code
 	  ! grep -Eq " main\.$$s$$" bin/.symcheck-release.nm || { echo "release-symcheck: the release build links e2e-only main.$$s"; exit 1; }; \
 	done
 	@! grep -E ' $(E2E_SYMBOLS)' bin/.symcheck-release.nm || { echo "release-symcheck: the release build links e2e-only code"; exit 1; }
+	@grep -Eq ' alice/internal/testutil/seed\.' bin/.symcheck-e2e.nm || { echo "release-symcheck: cannot see the seed package in the e2e build"; exit 1; }
+	@! grep -E ' alice/internal/testutil/' bin/.symcheck-release.nm || { echo "release-symcheck: the release build links test-data code"; exit 1; }
 	@go version -m bin/.symcheck-e2e | grep -Eq '^\s+build\s+-tags=.*testlicense' || { echo "release-symcheck: cannot see build tags in the build info"; exit 1; }
 	@! go version -m bin/.symcheck-release | grep -Eq '^\s+build\s+-tags=' || { echo "release-symcheck: the release build has build tags"; exit 1; }
 	@grep -aqF '$(TEST_LICENSE_LABEL)' bin/.symcheck-e2e || { echo "release-symcheck: cannot see the test key label in the e2e build; update TEST_LICENSE_LABEL"; exit 1; }

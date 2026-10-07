@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/alerts"
 	"alice/internal/audit"
 	"alice/internal/i18n"
 	"alice/internal/inventory"
@@ -30,7 +31,9 @@ import (
 	"alice/internal/platform/config"
 	"alice/internal/platform/logging"
 	"alice/internal/rbac"
+	"alice/internal/reports"
 	"alice/internal/testutil/pgtest"
+	"alice/internal/testutil/seed"
 	"alice/locales"
 )
 
@@ -58,13 +61,12 @@ func newE2EStack(t *testing.T) *e2eStack {
 	require.NoError(t, err)
 	ctx := context.Background()
 	log := logging.New(&lockedBuffer{}, slog.LevelInfo)
-	svc, err := buildServices(ctx, d.App, cfg, newClock(), log)
-	require.NoError(t, err)
-	require.NoError(t, svc.license.Start(ctx))
 	catalog, err := i18n.Load(locales.FS)
 	require.NoError(t, err)
-	sender, err := buildSender(d.App, cfg, catalog, newClock(), log)
+	svc, err := buildServices(ctx, d.App, cfg, catalog, newClock(), log)
 	require.NoError(t, err)
+	require.NoError(t, svc.license.Start(ctx))
+	sender := buildSender(d.App, svc, catalog, newClock(), log)
 	_, err = svc.inventory.EnsurePlatformKey(ctx)
 	require.NoError(t, err)
 	t.Cleanup(svc.sshPool.Close)
@@ -366,4 +368,66 @@ func TestZeroOverlapStillNeedsTheRecheck(t *testing.T) {
 		op, f.t0.Add(17*time.Minute))), "a re-check older than 15 minutes is not fresh")
 	require.NoError(t, f.locSet(`state = 'removing', remove_op_id = $2, remove_verified_at = reverified_at, remove_sent_at = $3`, op, f.t0.Add(2*time.Minute)),
 		"a fresh re-check allows the removal")
+}
+
+// B8 (pre-flight ruling) and C17: the answer of POST /test/seed/dashboard is what the wired dashboard, its expiring
+// list and the certificate page really show for the seeded rows, so the journeys assert true numbers. The certificate
+// counts are the dashboard's cumulative windows (Task 9: every certificate row with the list's predicates, expired ones
+// included), so each equals the rows its link opens; spare.seed.test is on no server, so it is counted by the windows
+// but neither monitored nor listed as expiring.
+func TestSeedDashboardMatchesTheDashboard(t *testing.T) {
+	s := newE2EStack(t)
+	ctx := context.Background()
+	rec := s.post("/test/seed/dashboard", `{}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var got seed.DashboardAnswer
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Equal(t, map[string]int{"monitored": 8, "expired": 1, "within_7": 4, "within_30": 7, "within_60": 8}, got.Certificates)
+	assert.Equal(t, map[string]int{"total": 3, "ok": 2, "host_key_changed": 1}, got.Targets)
+	assert.Equal(t, map[string]int{"failed_7d": 1}, got.Deployments)
+	assert.Equal(t, []string{"old.seed.test", "api.seed.test", "www.seed.test", "shop.seed.test", "mail.seed.test", "intra.seed.test"},
+		got.Expiring30)
+	require.NotNil(t, got.ServerFilter)
+	assert.Equal(t, "seed-web-1", got.ServerFilter.Target)
+	assert.Equal(t, []string{"old.seed.test", "api.seed.test", "www.seed.test", "shop.seed.test"}, got.ServerFilter.Expiry30)
+
+	sum, err := s.svc.reports.Summary(ctx, reports.Viewer{Role: rbac.Operator})
+	require.NoError(t, err)
+	assert.Equal(t, alerts.Counts{Monitored: got.Certificates["monitored"], Expired: got.Certificates["expired"],
+		Within7: got.Certificates["within_7"], Within30: got.Certificates["within_30"], Within60: got.Certificates["within_60"]},
+		sum.Certificates)
+	assert.Equal(t, got.Deployments["failed_7d"], sum.Deployments.Failed7d)
+	assert.Equal(t, got.Targets["total"], sum.Targets.Total)
+	for _, st := range []string{"ok", "host_key_changed"} {
+		assert.Equal(t, got.Targets[st], sum.Targets.ByStatus[st], st)
+	}
+
+	items, err := s.svc.reports.Expiring(ctx, 30, 200)
+	require.NoError(t, err)
+	var expiring []string
+	for _, it := range items {
+		expiring = append(expiring, it.Name)
+	}
+	assert.Equal(t, got.Expiring30, expiring)
+
+	// Each count is the number of rows its link opens on the certificate page.
+	for window, key := range map[string]string{"expired": "expired", "7": "within_7", "30": "within_30", "60": "within_60"} {
+		page, err := s.svc.inventory.ListCertificates(ctx, inventory.CertificateFilter{Expiry: window, Limit: 200})
+		require.NoError(t, err)
+		assert.Len(t, page.Items, got.Certificates[key], "expiry=%s", window)
+	}
+	var target uuid.UUID
+	require.NoError(t, s.d.Owner.QueryRow(ctx, `SELECT id FROM targets WHERE name = $1`, got.ServerFilter.Target).Scan(&target))
+	page, err := s.svc.inventory.ListCertificates(ctx, inventory.CertificateFilter{TargetID: target, Expiry: "30", Limit: 200})
+	require.NoError(t, err)
+	var onServer []string
+	for _, c := range page.Items {
+		onServer = append(onServer, c.SubjectCN)
+	}
+	assert.Equal(t, got.ServerFilter.Expiry30, onServer)
+
+	// The seed is one data set per installation: a second call fails (the target names are taken) without database text.
+	rec = s.post("/test/seed/dashboard", `{}`)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "duplicate")
 }

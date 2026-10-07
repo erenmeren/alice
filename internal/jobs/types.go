@@ -197,3 +197,7 @@ func MaxRunningFor(t Type) (int, bool) {
 	n, ok := maxRunning[t.Name]
 	return n, ok
 }
+
+// Phase 7 periodic task (R42 rows 3 and 5; §8.2 alerts.evaluate, §8.6 "not gated"): the expiry scan sends notices in
+// every license state (in lock with the license note, L-28).
+var AlertsScan = Register("alerts.scan", license.ClassAlways)

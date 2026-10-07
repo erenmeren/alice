@@ -12,7 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/alerts"
 	"alice/internal/audit"
+	"alice/internal/auth/oidc"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/jobs/kvjobs"
@@ -37,7 +39,8 @@ func wiringServices(t *testing.T) *services {
 	registerProviders(reg, pool, slog.New(slog.DiscardHandler))
 	return &services{license: &license.Service{}, inventory: &inventory.Service{}, queue: &jobs.Queue{},
 		registry: reg, sshPool: pool, auditLog: audit.New(clock.Real{}), audit: &audit.Service{},
-		sshkeys: sshkeys.New(sshkeys.Config{HelperBudget: helperproto.HelperBudget})}
+		sshkeys:        sshkeys.New(sshkeys.Config{HelperBudget: helperproto.HelperBudget}),
+		notifySettings: &notify.Settings{}, alerts: &alerts.Service{}, oidc: &oidc.Service{}}
 }
 
 // requireEveryFieldSet fails for a zero field of a dependency struct (a nil service, logger or
@@ -149,6 +152,7 @@ func TestCheckWiringRefusesAnIncompleteProduct(t *testing.T) {
 		assert.Contains(t, err.Error(), "queue job type "+typ+" has no handler")
 	}
 	assert.Contains(t, err.Error(), "periodic job type deployment.recovery_sweep is not scheduled")
+	assert.Contains(t, err.Error(), "periodic job type alerts.scan is not scheduled")
 	for _, typ := range []string{"kv.test_connection", "kv.poll", "kv.import"} {
 		assert.Contains(t, err.Error(), "queue job type "+typ+" has no handler")
 	}
@@ -165,6 +169,16 @@ func TestCheckWiringRefusesAnIncompleteProduct(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "queue job type target.discover has no handler")
 	assert.True(t, strings.HasPrefix(err.Error(), "alice is not completely wired"), err.Error())
+}
+
+// Phase 7: the expiry scan runs in every license state (class always), every 15 minutes in a release build.
+func TestAlertsScanIsWired(t *testing.T) {
+	assert.Equal(t, license.ClassAlways, jobs.AlertsScan.Class)
+	assert.Contains(t, periodicTypes, jobs.AlertsScan)
+	svc := wiringServices(t)
+	sched := buildScheduler(svc, nil, clock.Real{}, slog.New(slog.DiscardHandler))
+	assert.True(t, sched.Schedules(jobs.AlertsScan))
+	assert.Positive(t, alertsScanEvery, "the expiry scan has an interval in every build (release: services_test.go; e2e: testapi_e2e_test.go)")
 }
 
 // deployjobs.Register and kvjobs.Register panic on a missing dependency: a build that forgot one never

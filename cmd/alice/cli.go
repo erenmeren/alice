@@ -13,8 +13,10 @@ import (
 
 	"alice/internal/audit"
 	"alice/internal/auth"
+	"alice/internal/i18n"
 	"alice/internal/platform/config"
 	"alice/internal/setup"
+	"alice/locales"
 )
 
 // cliBudget bounds how long an operator command waits for the database.
@@ -131,7 +133,12 @@ func withPool(cfg config.Config, stderr io.Writer, fn func(ctx context.Context, 
 // withServices additionally loads the master key and wires the services.
 func withServices(cfg config.Config, stderr io.Writer, fn func(ctx context.Context, svc *services) int) int {
 	return withPool(cfg, stderr, func(ctx context.Context, pool *pgxpool.Pool) int {
-		svc, err := buildServices(ctx, pool, cfg, newClock(), slog.New(slog.DiscardHandler))
+		catalog, err := i18n.Load(locales.FS)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		svc, err := buildServices(ctx, pool, cfg, catalog, newClock(), slog.New(slog.DiscardHandler))
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1

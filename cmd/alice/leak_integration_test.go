@@ -132,6 +132,39 @@ func TestServeLogsNoDatabasePassword(t *testing.T) {
 	assert.Contains(t, logs.String(), "starting alice", "the configuration (with both URLs) was logged")
 	assert.Contains(t, logs.String(), "mail.example.invalid", "the SMTP configuration was logged")
 	assertNoDBPassword(t, "serve logs", logs.String(), ownerPW, appPW, smtpPW)
+
+	// ALICE_SMTP_* were imported once into the mail settings at the start (Phase 7, S-12): the password only as an
+	// envelope, the audit row without it.
+	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM settings WHERE key = 'notify.smtp'"))
+	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM audit_log WHERE action = 'settings.smtp_imported'"))
+	var sealed, audit string
+	require.NoError(t, d.Owner.QueryRow(context.Background(), `SELECT encode(ciphertext, 'escape') FROM setting_secrets
+WHERE key = 'notify.smtp.password'`).Scan(&sealed))
+	require.NoError(t, d.Owner.QueryRow(context.Background(), `SELECT string_agg(details::text, ' ') FROM audit_log`).Scan(&audit))
+	assertNoDBPassword(t, "the stored mail settings", sealed+" "+audit, smtpPW)
+}
+
+// The start stops with the error when ALICE_SMTP_PASSWORD_FILE cannot be read, as the Phase 2 mailer did: the import
+// runs before anything listens, and the error names the file, not a secret.
+func TestServeStopsWhenTheSMTPPasswordFileIsUnreadable(t *testing.T) {
+	d := pgtest.New(t)
+	missing := filepath.Join(t.TempDir(), "missing")
+	cfg, err := config.Load(env(map[string]string{
+		"ALICE_DATABASE_URL": d.AppURL, "ALICE_MIGRATE_DATABASE_URL": d.OwnerURL,
+		"ALICE_LISTEN_ADDR": "127.0.0.1:0", "ALICE_HEALTH_ADDR": "127.0.0.1:0",
+		"ALICE_KEYS_DIR": t.TempDir(), "ALICE_STATE_DIR": t.TempDir(),
+		"ALICE_SMTP_HOST": "mail.example.invalid", "ALICE_SMTP_FROM": "alice@example.com",
+		"ALICE_SMTP_USERNAME": "alice", "ALICE_SMTP_PASSWORD_FILE": missing,
+	}))
+	require.NoError(t, err)
+	logs := &lockedBuffer{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	err = serve(ctx, cfg, logging.New(logs, slog.LevelInfo))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SMTP password file")
+	assert.NotContains(t, logs.String(), "alice is ready")
+	assert.Zero(t, countRows(t, d, "SELECT count(*) FROM settings WHERE key = 'notify.smtp'"))
 }
 
 // Rejected passwords fail startup, migration and every CLI command with an

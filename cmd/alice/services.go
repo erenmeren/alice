@@ -1,19 +1,18 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"alice/internal/alerts"
 	"alice/internal/audit"
 	"alice/internal/auth"
+	"alice/internal/auth/oidc"
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
@@ -28,6 +27,7 @@ import (
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/helperproto"
+	"alice/internal/reports"
 	"alice/internal/secrets"
 	"alice/internal/setup"
 	"alice/internal/sshkeys"
@@ -62,12 +62,20 @@ type services struct {
 	registry  *providers.Registry
 	sshPool   *linuxssh.Pool
 	sshkeys   *sshkeys.Service // generated keys, their deploy, download and rotation (Phase 6)
+
+	// Phase 7 (contract C12).
+	notifySettings *notify.Settings // mail settings, recipients and delivery state; the sender's mailer source
+	alerts         *alerts.Service  // expiry notices (alerts.scan) and thresholds
+	reports        *reports.Service // dashboard, saved views, exports
+	oidc           *oidc.Service    // identity providers, group mappings, SSO sign-in
 }
 
 // buildServices loads (or, on a brand-new database, creates) the master key and wires the
-// services on the application pool. It starts nothing: serve calls license.Start. It does
-// not touch the email configuration, so the recovery commands work while it is broken.
-func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, clk serverClock, log *slog.Logger) (*services, error) {
+// services on the application pool. It starts nothing: serve calls license.Start and imports
+// ALICE_SMTP_* (notify.Settings.ImportEnv). It reads no mail configuration, so the recovery
+// commands work while it is broken. catalog renders the mail settings' test e-mail.
+func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, catalog *i18n.Catalog, clk serverClock,
+	log *slog.Logger) (*services, error) {
 	keyring, err := secrets.LoadOrCreateMasterKey(ctx, pool, cfg.KeysDir, clk.Now())
 	if err != nil {
 		return nil, err
@@ -81,6 +89,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		Clock:          clk,
 		Hasher:         passwords,
 		RecoveryHasher: auth.NewHasher(auth.RecoveryCodeParams, recoveryHashConcurrency),
+		Notifier:       notify.AdminNotifier{Clock: clk}, // the lockout e-mail (Phase 7)
 	})
 	lic := license.New(license.Config{
 		Pool:      pool,
@@ -123,7 +132,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		BackupKDF: secrets.BackupKDF,
 		License:   lic,
 	})
-	return &services{
+	svc := &services{
 		pool:      pool,
 		keyring:   keyring,
 		auditLog:  auditLog,
@@ -136,7 +145,43 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		registry:  registry,
 		sshPool:   sshPool,
 		sshkeys:   sshkeys.New(sshkeysConfig(pool, keyring, auditLog, clk, lic, inv, queue, log)),
-	}, nil
+	}
+	svc.notifySettings = notify.NewSettings(notifySettingsConfig(pool, svc, catalog, clk, log))
+	svc.alerts = alerts.New(alerts.Config{Pool: pool, Audit: auditLog, Clock: clk, License: lic,
+		Notifier: notify.AdminNotifier{Clock: clk}, Log: log})
+	svc.reports = reports.New(reports.Config{Pool: pool, Clock: clk, Audit: auditLog, License: lic, Alerts: svc.alerts,
+		Delivery: svc.notifySettings, Inventory: inv})
+	svc.oidc = oidc.New(oidcConfig(svc, clk, log))
+	return svc, nil
+}
+
+// notifySettingsConfig is the mail settings' configuration (TestReleaseMailSettingsHaveNoDialerOverrideOrFallback).
+// Dial stays nil in every build, so each SMTP connection goes through netaddr.DialContext and its address rule
+// (SEC-065); Fallback is the e2e build's mailbox and nil in a release build, where an e-mail without mail settings is
+// recorded as skipped (L-18). The SMTP password is sealed with serve's keyring.
+func notifySettingsConfig(pool *pgxpool.Pool, svc *services, catalog *i18n.Catalog, clk clock.Clock, log *slog.Logger) notify.SettingsConfig {
+	return notify.SettingsConfig{
+		Pool:     pool,
+		Keyring:  svc.keyring,
+		Audit:    svc.auditLog,
+		Clock:    clk,
+		Catalog:  catalog,
+		Fallback: testMailer,
+		Log:      log,
+	}
+}
+
+// oidcConfig is the SSO service's configuration. Dial stays nil, so discovery, key set and token requests to an
+// identity provider go through netaddr.DialContext (SEC-065); client secrets are sealed with serve's keyring.
+func oidcConfig(svc *services, clk clock.Clock, log *slog.Logger) oidc.Config {
+	return oidc.Config{
+		Pool:    svc.pool,
+		Keyring: svc.keyring,
+		Audit:   svc.auditLog,
+		Clock:   clk,
+		Auth:    svc.auth,
+		Log:     log,
+	}
 }
 
 // sshkeysConfig is the SSH key module's configuration (TestSSHKeysConfigIsTheProductionOne).
@@ -247,7 +292,10 @@ func kvDeps(svc *services, clk clock.Clock, log *slog.Logger) kvjobs.Deps {
 // so it must run in lock and gets no gate here beyond the scheduler's own; sshkey.destroy_retired
 // (ReadOnly, every destroyRetiredEvery) destroys retired private keys after 30 days, retires unused old
 // keys and reconciles deploys whose job ended without an outcome. The e2e build never ticks the three:
-// tests run them with POST /test/scheduler/run. The e2e tests use the same tasks.
+// tests run them with POST /test/scheduler/run. The expiry scan (alerts.scan, ClassAlways: the notices go
+// out in lock too, with the license note) runs every alertsScanEvery (15 minutes; never in the e2e build),
+// one scan at a time (scanAlerts); maintenance.cleanup also prunes expired SSO sign-in states. The e2e
+// tests use the same tasks.
 func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *slog.Logger) *jobs.Scheduler {
 	return jobs.NewScheduler(clk, svc.license, log,
 		// A failed evaluation is retried after 1, 2, 4, 8, then every 10 minutes (AUD-02): the gate refuses changes
@@ -261,7 +309,8 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 		jobs.Task{Type: jobs.MaintenanceCleanup, Every: time.Hour, Run: func(ctx context.Context) error {
 			_, sessionsErr := svc.auth.PruneExpired(ctx)
 			_, jobsErr := svc.queue.Prune(ctx, jobRetention)
-			return errors.Join(sessionsErr, jobsErr)
+			_, statesErr := svc.oidc.PruneStates(ctx) // expired SSO sign-in states (oidc.StateLifetime)
+			return errors.Join(sessionsErr, jobsErr, statesErr)
 		}},
 		jobs.Task{Type: jobs.DiscoverySchedule, Every: time.Minute, Run: func(ctx context.Context) error {
 			_, err := svc.inventory.ScheduleDiscovery(ctx)
@@ -285,17 +334,21 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 			_, err := svc.sshkeys.DestroyRetiredKeys(ctx)
 			return err
 		}},
+		jobs.Task{Type: jobs.AlertsScan, Every: alertsScanEvery, Run: func(ctx context.Context) error {
+			return scanAlerts(ctx, svc, log)
+		}},
 	)
 }
 
-// buildSender builds the email sender of serve (notify.send). Only serve sends email, so
-// only serve reads ALICE_SMTP_PASSWORD_FILE and ALICE_SMTP_CA_FILE.
-func buildSender(pool *pgxpool.Pool, cfg config.Config, catalog *i18n.Catalog, clk clock.Clock, log *slog.Logger) (*notify.Sender, error) {
-	mailer, err := newMailer(cfg, clk)
-	if err != nil {
-		return nil, err
+// buildSender builds the email sender of serve (notify.send). At every drain it asks the mail
+// settings for the mailer of the current configuration (Sender.Source): nothing is read from the
+// environment here any more (ALICE_SMTP_* are imported once at the start, notify.Settings.ImportEnv).
+func buildSender(pool *pgxpool.Pool, svc *services, catalog *i18n.Catalog, clk clock.Clock, log *slog.Logger) *notify.Sender {
+	sender := &notify.Sender{Pool: pool, Catalog: catalog, Clock: clk, Log: log}
+	if svc.notifySettings != nil { // a nil *notify.Settings must stay a nil interface
+		sender.Source = svc.notifySettings
 	}
-	return &notify.Sender{Pool: pool, Mailer: mailer, Catalog: catalog, Clock: clk, Log: log}, nil
+	return sender
 }
 
 // buildTime is the link-time build timestamp; the license time never falls below it (§16.5,
@@ -312,37 +365,87 @@ func buildTime(log *slog.Logger) time.Time {
 	return t.UTC()
 }
 
-// newMailer builds the SMTP mailer from ALICE_SMTP_*. Without a host it returns nil and the
-// sender records emails as skipped (L-18). The e2e build uses its test mailbox instead.
-func newMailer(cfg config.Config, clk clock.Clock) (notify.Mailer, error) {
-	if testMailer != nil {
-		return testMailer, nil
-	}
-	if !cfg.SMTP.Configured() {
-		return nil, nil
-	}
-	c := notify.SMTPConfig{Host: cfg.SMTP.Host, Port: cfg.SMTP.Port, From: cfg.SMTP.From, Username: cfg.SMTP.Username, TLSMode: cfg.SMTP.TLSMode}
-	if cfg.SMTP.PasswordFile != "" {
-		b, err := os.ReadFile(cfg.SMTP.PasswordFile) //nolint:gosec // G304: operator-supplied path from ALICE_SMTP_PASSWORD_FILE
+// alertsScanLock names the database lock one expiry scan holds while it runs.
+const alertsScanLock = "alerts.scan"
+
+// scanAlerts is the alerts.scan task: one expiry scan at a time. In one process the scheduler already runs a task
+// once at a time (a tick and RunNow share its semaphore); across processes only the scheduling leader ticks, but a
+// scan of a process that lost the lead may still run when the new leader starts one. The scan therefore holds a
+// session lock in the database and a second one skips: two overlapping scans could record a less urgent notice after
+// a more urgent one for the same expiry (their ledgers are read at the start of each scan). When the scan recorded
+// notices that reach nobody, it says so (warnIfNobodyIsEmailed).
+func scanAlerts(ctx context.Context, svc *services, log *slog.Logger) error {
+	return runExclusive(ctx, svc.pool, alertsScanLock, log, func(ctx context.Context) error {
+		res, err := svc.alerts.Scan(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("read ALICE_SMTP_PASSWORD_FILE %s: %w", cfg.SMTP.PasswordFile, errors.Unwrap(err))
+			return err
 		}
-		c.Password = secrets.NewPlaintext(bytes.TrimRight(b, "\r\n"))
-	}
-	if cfg.SMTP.CAFile != "" {
-		pem, err := os.ReadFile(cfg.SMTP.CAFile) //nolint:gosec // G304: operator-supplied path from ALICE_SMTP_CA_FILE
-		if err != nil {
-			return nil, fmt.Errorf("read ALICE_SMTP_CA_FILE %s: %w", cfg.SMTP.CAFile, errors.Unwrap(err))
+		notices := 0
+		for _, n := range res.Queued {
+			notices += n
 		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("ALICE_SMTP_CA_FILE %s holds no PEM certificate", cfg.SMTP.CAFile)
+		for _, n := range res.Suppressed {
+			notices += n
 		}
-		c.RootCAs = pool
-	}
-	m, err := notify.NewSMTPMailer(c, clk)
+		if notices > 0 {
+			warnIfNobodyIsEmailed(ctx, svc, notices, log)
+		}
+		return nil
+	})
+}
+
+// runExclusive runs fn while a connection of its own holds the session advisory lock name. When another session holds
+// it, fn is skipped with an Info line (event "<name>_skipped") and nil is returned. The lock ends with the session, so
+// a process that dies never leaves it behind.
+func runExclusive(ctx context.Context, pool *pgxpool.Pool, name string, log *slog.Logger, fn func(context.Context) error) error {
+	conn, err := pool.Acquire(ctx)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("lock %s: %w", name, err)
 	}
-	return m, nil
+	defer conn.Release()
+	var locked bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1, 0))`, name).Scan(&locked); err != nil {
+		return fmt.Errorf("lock %s: %w", name, err)
+	}
+	if !locked {
+		log.Info("scheduled task skipped: another process is running it", "job_type", name, "event", name+"_skipped")
+		return nil
+	}
+	defer func() {
+		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if _, err := conn.Exec(uctx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, name); err != nil {
+			// Closing the session ends the lock; the pool then drops the connection.
+			_ = conn.Conn().Close(uctx)
+		}
+	}()
+	return fn(ctx)
+}
+
+// warnIfNobodyIsEmailed logs a warning when the recipients setting reaches nobody: no extra address and no enabled
+// Administrator with an e-mail address (or Administrators switched off). The notices are then recorded (and listed
+// on the dashboard) but no e-mail is queued (Task 7 review: this must not happen silently). The Administrator
+// predicate is the one of notify's recipient list.
+func warnIfNobodyIsEmailed(ctx context.Context, svc *services, notices int, log *slog.Logger) {
+	r, err := svc.notifySettings.Recipients(ctx)
+	if err != nil {
+		log.Warn("alerts: the e-mail recipients could not be read", "error_type", fmt.Sprintf("%T", err))
+		return
+	}
+	if len(r.Addresses) > 0 {
+		return
+	}
+	if r.Administrators {
+		var admins int
+		if err := svc.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE role = 'admin' AND disabled_at IS NULL AND email <> ''`).
+			Scan(&admins); err != nil {
+			log.Warn("alerts: the e-mail recipients could not be read", "error_type", fmt.Sprintf("%T", err))
+			return
+		}
+		if admins > 0 {
+			return
+		}
+	}
+	log.Warn("alerts: expiry notices were recorded but no e-mail was queued: no enabled Administrator has an e-mail "+
+		"address and no other recipient is set (Settings, E-mail recipients)", "event", "alerts.no_recipients", "notices", notices)
 }
