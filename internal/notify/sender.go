@@ -125,6 +125,7 @@ WHERE id = $1`, id, now, attempts); err != nil {
 		if now.Sub(createdAt) >= GiveUpAfter {
 			status = "failed"
 			s.log().Error("email not sent after "+strconv.Itoa(attempts)+" attempts; giving up",
+				"event", "notify.gave_up",
 				"outbox_id", id.String(), "attempt", attempts, "reason", code)
 		} else {
 			s.log().Warn("email not sent; it will be retried", "outbox_id", id.String(), "attempt", attempts, "reason", code)

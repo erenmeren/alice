@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"fmt"
+	"net/mail"
 	"strconv"
 	"strings"
 
@@ -99,7 +100,7 @@ func validateRecipients(r Recipients) validate.Errors {
 	}
 	for i, ad := range r.Addresses {
 		field := "addresses." + strconv.Itoa(i)
-		if !validAddress(ad.Email) {
+		if !bareAddress(ad.Email) {
 			v.Add(field+".email", validate.Email, nil)
 		} else if repeated(r.Addresses[:i], ad.Email) {
 			v.Add(field+".email", validate.Duplicate, nil)
@@ -111,9 +112,31 @@ func validateRecipients(r Recipients) validate.Errors {
 	return v
 }
 
+// bareAddress accepts only the plain form local@domain: no display name, no angle brackets, so that the address in
+// the audit row and the one the mailer uses are the same text.
+func bareAddress(s string) bool {
+	if !validAddress(s) {
+		return false
+	}
+	a, err := mail.ParseAddress(s)
+	return err == nil && a.Name == "" && a.Address == s
+}
+
+// sameMailbox compares the parsed addresses, ignoring case, so that no form of one address is delivered twice.
+func sameMailbox(a, b string) bool {
+	return strings.EqualFold(mailbox(a), mailbox(b))
+}
+
+func mailbox(s string) string {
+	if a, err := mail.ParseAddress(s); err == nil {
+		return a.Address
+	}
+	return s
+}
+
 func repeated(before []Address, email string) bool {
 	for _, b := range before {
-		if strings.EqualFold(b.Email, email) {
+		if sameMailbox(b.Email, email) {
 			return true
 		}
 	}
@@ -152,7 +175,7 @@ WHERE role = 'admin' AND disabled_at IS NULL AND email <> '' ORDER BY username`)
 	for _, ad := range cfg.Addresses {
 		dup := false
 		for _, r := range out {
-			if strings.EqualFold(r.email, ad.Email) {
+			if sameMailbox(r.email, ad.Email) {
 				dup = true
 				break
 			}

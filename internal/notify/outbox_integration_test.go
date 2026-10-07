@@ -186,6 +186,7 @@ func TestDrainGivesUpAfterGiveUpAfter(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(logs.String(), "email not sent after "+strconv.Itoa(attempts)+" attempts; giving up"))
 	assert.Equal(t, attempts-1, strings.Count(logs.String(), "level=WARN"))
 	assert.Equal(t, 1, strings.Count(logs.String(), "level=ERROR"))
+	assert.Equal(t, 1, strings.Count(logs.String(), "event=notify.gave_up"))
 }
 
 // Two drains at once (for example during an update) never send an email twice.

@@ -122,3 +122,27 @@ func TestSaveGeneralValidates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, countAudit(t, h.d, "settings.general_changed"))
 }
+
+// Review fix: only the bare address form is accepted, and no mailbox is delivered twice in any form.
+func TestRecipientsRefuseDisplayNamesAndDeduplicateMailboxes(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	addUser(t, h.d, "ada", "admin", "ada@example.com", "tr", false)
+	for _, form := range []string{"Ada <ada@example.com>", "<ada@example.com>", `"Ada, Lovelace" <ada@example.com>`, "ada@example.com (Ada)"} {
+		_, err := h.s.SaveRecipients(ctx, h.who, 0, notify.Recipients{Administrators: true,
+			Addresses: []notify.Address{{Email: form, Locale: "en"}}})
+		var v validate.Errors
+		require.True(t, errors.As(err, &v), "%q: %v", form, err)
+		assert.Equal(t, "addresses.0.email", v[0].Field)
+	}
+	// A bare duplicate of an extra, in another case, is refused as before.
+	_, err := h.s.SaveRecipients(ctx, h.who, 0, notify.Recipients{Addresses: []notify.Address{
+		{Email: "ops@example.com", Locale: "en"}, {Email: "OPS@example.com", Locale: "tr"}}})
+	require.Error(t, err)
+	// Stored rows from before the rule (a display name) are still deduplicated at queue time.
+	raw := `{"administrators": true, "version": 1, "addresses": [{"email": "Ada <ADA@example.com>", "locale": "en"},
+{"email": "Ops <ops@example.com>", "locale": "en"}, {"email": "ops@example.com", "locale": "tr"}]}`
+	_, err = h.d.Owner.Exec(ctx, `INSERT INTO settings (key, value, updated_at) VALUES ('notify.recipients', $1::jsonb, now())`, raw)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Ops <ops@example.com>:en", "ada@example.com:tr"}, recipientsOfOneEmail(t, h))
+}
